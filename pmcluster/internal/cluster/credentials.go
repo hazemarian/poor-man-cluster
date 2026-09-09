@@ -227,7 +227,7 @@ func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedC
 	// boot; rotating it breaks collector ingestion without a destructive
 	// volume reset. Refuse instead of silently wedging the pipeline.
 	if name == "openobserve_token" {
-		return nil, fmt.Errorf("cannot rotate %q: OpenObserve caches this token in its data volume on first boot; rotating it would break collector ingestion without a volume reset. It is meant to stay fixed.", name)
+		return nil, fmt.Errorf("cannot rotate %q: OpenObserve caches this token in its data volume on first boot; rotating it would break collector ingestion without a volume reset (it is meant to stay fixed)", name)
 	}
 
 	existing, err := m.Store.GetCredential(ctx, name)

@@ -80,8 +80,8 @@ func TestClusterUp(t *testing.T) {
 
 	// ── First run: cluster up ─────────────────────────────────────────────────
 	const (
-		domain       = "example.test"
-		adminEmail   = "admin@example.test"
+		domain     = "example.test"
+		adminEmail = "admin@example.test"
 	)
 	upArgs := []string{
 		"cluster", "up",
@@ -130,7 +130,7 @@ func TestClusterUp(t *testing.T) {
 		for _, svc := range []struct {
 			stack   string
 			service string
-			wantRep int  // >= (global services may differ depending on node count)
+			wantRep int // >= (global services may differ depending on node count)
 		}{
 			{stack: "infra", service: "traefik", wantRep: 1},
 			{stack: "infra", service: "portainer", wantRep: 1},

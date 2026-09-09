@@ -3,8 +3,9 @@
 // Package e2e — webhook end-to-end tests.
 //
 // This file exercises the full webhook flow against a real Docker Swarm:
-//   pmcluster init → pmcluster webhook add → pmcluster serve → POST signed payload
-//   → assert stack deployed → verify last_used_at updated → bad-sig / bad-source 401s.
+//
+//	pmcluster init → pmcluster webhook add → pmcluster serve → POST signed payload
+//	→ assert stack deployed → verify last_used_at updated → bad-sig / bad-source 401s.
 //
 // Gated by PMCLUSTER_E2E_SWARM=1. Run via: PMCLUSTER_E2E_SWARM=1 make e2e
 package e2e

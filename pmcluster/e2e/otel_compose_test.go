@@ -15,8 +15,8 @@ import (
 
 // TestOtelComposeLogs validates the OTel collector pipeline outside of Swarm
 // using docker compose. It tests:
-//   1. filelog receiver → reads JSON log lines written to a shared file
-//   2. OTLP receiver → accepts OTLP log export from a test container
+//  1. filelog receiver → reads JSON log lines written to a shared file
+//  2. OTLP receiver → accepts OTLP log export from a test container
 //
 // Both pipelines export to debug exporter; we verify emitted log content.
 // No Swarm/VXLAN needed — runs on macOS too.

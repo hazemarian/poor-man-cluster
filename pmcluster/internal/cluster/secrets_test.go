@@ -285,4 +285,3 @@ func TestEnsureConfig_MintsNewVersionOnChange(t *testing.T) {
 		t.Error("old otel_config_v001 not GC'd after rotate")
 	}
 }
-

@@ -5,7 +5,8 @@
 // and verify graceful shutdown.
 //
 // Run via: make e2e
-//   (which executes: go test -timeout 10m -tags=e2e ./e2e/...)
+//
+//	(which executes: go test -timeout 10m -tags=e2e ./e2e/...)
 //
 // The test relies on the binary being buildable from source (it runs
 // `go build` itself via TestMain), so no prior `make build` is required.
@@ -403,11 +404,11 @@ func TestTokenRegex(t *testing.T) {
 		match bool
 	}{
 		{"   abc123DEF_-xyz_abc123DEF_-xyz_abc123DEF_-xy", "abc123DEF_-xyz_abc123DEF_-xyz_abc123DEF_-xy", true},
-		{"  short", "", false},    // only 2 spaces
-		{"    abc", "", false},    // 4 spaces (not 3)
-		{"   abc", "", false},     // token too short
-		{" token", "", false},     // 1 space
-		{"no-indent", "", false},  // no indent
+		{"  short", "", false},   // only 2 spaces
+		{"    abc", "", false},   // 4 spaces (not 3)
+		{"   abc", "", false},    // token too short
+		{" token", "", false},    // 1 space
+		{"no-indent", "", false}, // no indent
 	}
 	for _, tc := range cases {
 		m := tokenLineRe.FindStringSubmatch(tc.line)
