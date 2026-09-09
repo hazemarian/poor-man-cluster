@@ -32,6 +32,10 @@ services:
       - ZO_APP_NAME=openobserve
       - ZO_ROOT_USER_EMAIL=${OPENOBSERVE_ADMIN_EMAIL}
       - ZO_ROOT_USER_PASSWORD=__OPENOBSERVE_PASSWORD__
+      # Stable root API token the OTel collector uses for ingestion auth
+      # (Basic <email>:<token>). Set once on first boot like the password;
+      # never rotated, so the collector config stays content-stable.
+      - ZO_ROOT_USER_TOKEN=__OPENOBSERVE_TOKEN__
     volumes:
       - openobserve_data:/data
     networks:

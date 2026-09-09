@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -170,12 +171,15 @@ func TestEnsureConfig_CreatesWhenMissing(t *testing.T) {
 	f := newFakeDocker()
 	data := []byte("otel: config")
 
-	name, err := EnsureConfig(context.Background(), f, "otel_config", data, "v0.2.0")
+	name, created, err := EnsureConfig(context.Background(), f, "otel_config", data, "v0.2.0")
 	if err != nil {
 		t.Fatalf("EnsureConfig: %v", err)
 	}
 	if name != "otel_config_v001" {
 		t.Errorf("name = %q, want otel_config_v001", name)
+	}
+	if !created {
+		t.Error("created = false, want true for a fresh config")
 	}
 	spec, ok := f.configs[name]
 	if !ok {
@@ -198,12 +202,15 @@ func TestEnsureConfig_CreatesNewVersionWhenPreExisting(t *testing.T) {
 		Labels map[string]string
 	}{Name: "otel_config_v001", Data: []byte("original")}
 
-	name, err := EnsureConfig(context.Background(), f, "otel_config", []byte("new config data"), "v0.2.0")
+	name, created, err := EnsureConfig(context.Background(), f, "otel_config", []byte("new config data"), "v0.2.0")
 	if err != nil {
 		t.Fatalf("EnsureConfig: %v", err)
 	}
 	if name != "otel_config_v002" {
 		t.Errorf("name = %q, want otel_config_v002", name)
+	}
+	if !created {
+		t.Error("created = false, want true for a changed render")
 	}
 	if string(f.configs[name].Data) != "new config data" {
 		t.Errorf("config data = %q, want 'new config data'", f.configs[name].Data)
@@ -217,7 +224,7 @@ func TestEnsureConfig_CreatesNewVersionWhenPreExisting(t *testing.T) {
 func TestEnsureConfig_AttachesManagedLabel(t *testing.T) {
 	f := newFakeDocker()
 
-	name, err := EnsureConfig(context.Background(), f, "labeled-config", []byte("data"), "v0.2.0")
+	name, _, err := EnsureConfig(context.Background(), f, "labeled-config", []byte("data"), "v0.2.0")
 	if err != nil {
 		t.Fatalf("EnsureConfig: %v", err)
 	}
@@ -229,3 +236,53 @@ func TestEnsureConfig_AttachesManagedLabel(t *testing.T) {
 		t.Errorf("base label = %q, want 'labeled-config'", spec.Labels["pmcluster.base"])
 	}
 }
+
+func TestEnsureConfig_ReusesVersionWhenUnchanged(t *testing.T) {
+	f := newFakeDocker()
+	if err := f.ConfigCreate(context.Background(), docker.ConfigSpec{
+		Name: "otel_config_v001",
+		Data: []byte("same data"),
+	}); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	name, created, err := EnsureConfig(context.Background(), f, "otel_config", []byte("same data"), "v0.2.0")
+	if err != nil {
+		t.Fatalf("EnsureConfig: %v", err)
+	}
+	if created {
+		t.Error("created = true, want false (bytes unchanged → reuse)")
+	}
+	if name != "otel_config_v001" {
+		t.Errorf("name = %q, want otel_config_v001 (reused)", name)
+	}
+	if _, ok := f.configs["otel_config_v002"]; ok {
+		t.Error("otel_config_v002 was created despite unchanged bytes")
+	}
+}
+
+func TestEnsureConfig_MintsNewVersionOnChange(t *testing.T) {
+	f := newFakeDocker()
+	if err := f.ConfigCreate(context.Background(), docker.ConfigSpec{
+		Name: "otel_config_v001",
+		Data: []byte("original"),
+	}); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	name, created, err := EnsureConfig(context.Background(), f, "otel_config", []byte("changed"), "v0.2.0")
+	if err != nil {
+		t.Fatalf("EnsureConfig: %v", err)
+	}
+	if !created {
+		t.Error("created = false, want true (bytes changed → new version)")
+	}
+	if name != "otel_config_v002" {
+		t.Errorf("name = %q, want otel_config_v002", name)
+	}
+	// Old version GC'd.
+	if _, ok := f.configs["otel_config_v001"]; ok {
+		t.Error("old otel_config_v001 not GC'd after rotate")
+	}
+}
+

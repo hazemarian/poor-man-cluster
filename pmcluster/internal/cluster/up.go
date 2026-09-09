@@ -15,9 +15,11 @@ type UpInput struct {
 	// Either CertPath+KeyPath OR ACMEEmail must be set; mutually exclusive.
 	// CertPath/KeyPath: operator-provided PEM files loaded into Swarm secrets.
 	// ACMEEmail: Traefik issues + renews via Let's Encrypt HTTP-01.
+	// On a re-run these may be omitted to reuse the stored TLS state.
 	CertPath              string
 	KeyPath               string
 	ACMEEmail             string
+	ForceTLSMode          bool   // allow switching tls_mode on an already-installed cluster
 	TraefikAdminUser      string // defaults to "admin"
 	OpenObserveAdminEmail string
 	ConfigDir             string // ~/.pmcluster/config/ — user-editable templates
@@ -46,6 +48,18 @@ type UpDeps struct {
 // networks → TLS secrets → bootstrap creds → render configs → deploy
 // stacks (infra → observability → backup).
 func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
+	// Load persisted install state so an idempotent re-run can reuse the
+	// originally-chosen TLS mode and cert/key paths instead of re-minting.
+	state, err := loadTLSSettings(ctx, deps.Store)
+	if err != nil {
+		return nil, err
+	}
+	merged, err := mergeTLSState(in, state)
+	if err != nil {
+		return nil, err
+	}
+	in = merged
+
 	if err := validateUpInput(in); err != nil {
 		return nil, err
 	}
@@ -74,15 +88,18 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		step("TLS via Let's Encrypt (Traefik HTTP-01) — port 80 must be reachable from the internet")
 	} else {
 		step("Loading TLS cert/key into Swarm secrets")
-		certSecret, err = EnsureVersionedSecretFromFile(ctx, deps.Docker, "cert", in.CertPath)
+		var certCreated, keyCreated bool
+		certSecret, certCreated, err = EnsureVersionedSecretFromFile(ctx, deps.Docker, "cert", in.CertPath)
 		if err != nil {
 			return res, fmt.Errorf("ensure cert secret: %w", err)
 		}
-		keySecret, err = EnsureVersionedSecretFromFile(ctx, deps.Docker, "key", in.KeyPath)
+		keySecret, keyCreated, err = EnsureVersionedSecretFromFile(ctx, deps.Docker, "key", in.KeyPath)
 		if err != nil {
 			return res, fmt.Errorf("ensure key secret: %w", err)
 		}
-		res.NewSecrets = append(res.NewSecrets, certSecret, keySecret)
+		if certCreated || keyCreated {
+			res.NewSecrets = append(res.NewSecrets, certSecret, keySecret)
+		}
 	}
 
 	step("Bootstrapping managed credentials (Traefik / Portainer / OpenObserve)")
@@ -100,6 +117,11 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	}
 	res.BootstrapCredentials = creds
 	for name, c := range creds {
+		if name == "openobserve_token" {
+			// Internal ingestion credential — not a login; keep it out of
+			// the human-facing bootstrap summary.
+			continue
+		}
 		switch {
 		case c.NewlyCreated && c.SwarmSecretCreated:
 			res.NewSecrets = append(res.NewSecrets, c.SwarmSecretName)
@@ -137,10 +159,15 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	if openobsCred == nil {
 		return res, fmt.Errorf("internal: openobserve_admin credential missing after bootstrap")
 	}
+	ooToken := creds["openobserve_token"]
+	if ooToken == nil {
+		return res, fmt.Errorf("internal: openobserve_token credential missing after bootstrap")
+	}
 	render := RenderInput{
 		Domain:                   in.Domain,
 		OpenObserveAdminEmail:    openobsCred.Username,
 		OpenObserveAdminPassword: openobsCred.Password,
+		OpenObserveRootToken:     ooToken.Password,
 		ACMEEmail:                in.ACMEEmail,
 		ConfigDir:                in.ConfigDir,
 		CertSecretName:           certSecret,
@@ -151,22 +178,26 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	if err != nil {
 		return res, err
 	}
-	otelConfigName, err := EnsureConfig(ctx, deps.Docker, "pmcluster_otel_config", otelYAML, in.Version)
+	otelConfigName, otelConfigCreated, err := EnsureConfig(ctx, deps.Docker, "pmcluster_otel_config", otelYAML, in.Version)
 	if err != nil {
 		return res, err
 	}
-	res.NewConfigs = append(res.NewConfigs, otelConfigName)
+	if otelConfigCreated {
+		res.NewConfigs = append(res.NewConfigs, otelConfigName)
+	}
 	render.OTelConfigName = otelConfigName
 
 	traefikYAML, err := RenderTraefikDynamic(render)
 	if err != nil {
 		return res, err
 	}
-	traefikConfigName, err := EnsureConfig(ctx, deps.Docker, "pmcluster_traefik_dynamic", traefikYAML, in.Version)
+	traefikConfigName, traefikConfigCreated, err := EnsureConfig(ctx, deps.Docker, "pmcluster_traefik_dynamic", traefikYAML, in.Version)
 	if err != nil {
 		return res, err
 	}
-	res.NewConfigs = append(res.NewConfigs, traefikConfigName)
+	if traefikConfigCreated {
+		res.NewConfigs = append(res.NewConfigs, traefikConfigName)
+	}
 	render.TraefikConfigName = traefikConfigName
 
 	step("Deploying stacks (infra → observability → backup)")
@@ -187,8 +218,40 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		return res, fmt.Errorf("health check: %w", err)
 	}
 
+	// Persist the install inputs so `up` re-runs and `cluster update` can
+	// reuse them without re-passing/re-deriving TLS state.
+	if err := persistInstallState(ctx, deps, in); err != nil {
+		return res, err
+	}
+
 	step("Cluster up complete.")
 	return res, nil
+}
+
+// persistInstallState records the install inputs used on this (possibly
+// idempotent) bring-up: TLS mode + cert/key paths, domain, and OO admin email.
+func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
+	if deps.Store == nil {
+		return nil
+	}
+	state := tlsState{
+		Mode:      requestedTLSMode(in),
+		CertPath:  in.CertPath,
+		KeyPath:   in.KeyPath,
+		ACMEEmail: in.ACMEEmail,
+	}
+	if err := state.save(ctx, deps.Store); err != nil {
+		return fmt.Errorf("persist tls state: %w", err)
+	}
+	for k, v := range map[string]string{
+		settingDomain:  in.Domain,
+		settingOOEmail: in.OpenObserveAdminEmail,
+	} {
+		if err := deps.Store.SetSetting(ctx, k, v); err != nil {
+			return fmt.Errorf("persist %s: %w", k, err)
+		}
+	}
+	return nil
 }
 
 func validateUpInput(in UpInput) error {

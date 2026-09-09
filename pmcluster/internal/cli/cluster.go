@@ -22,6 +22,25 @@ var clusterCmd = &cobra.Command{
 	Short: "Manage the cluster lifecycle (bootstrap, status, teardown)",
 }
 
+var clusterUpdateCmd = &cobra.Command{
+	Use:   "update",
+	Short: "Re-provision OTel + Traefik configs (and cert/key) from your config files",
+	Long: `Targeted re-provisioning for config/cert changes — unlike ` + "`up`" + ` it does
+NOT re-run a full bring-up: no credential bootstrap, no volume reset, no
+full-stack redeploy.
+
+  - Re-reads ~/.pmcluster/config/otel-collector-config.yml + traefik-dynamic.yml
+    (your files are the source of truth; NEVER overwritten here)
+  - Content-aware: unchanged files reuse the current Docker config version
+  - Re-applies cert/key from the stored TLS paths when those files changed
+  - Re-deploys only observability (when the OTel config changed) and infra
+    (when the Traefik config or cert changed)
+
+Run this after editing a config, renewing your certificate, or upgrading the
+pmcluster binary.`,
+	RunE: runClusterUpdate,
+}
+
 var clusterUpCmd = &cobra.Command{
 	Use:   "up",
 	Short: "Bring the cluster up: preflight, secrets, networks, configs, stacks",
@@ -49,11 +68,98 @@ func init() {
 	clusterUpCmd.Flags().String("key", "", "path to TLS private key (PEM) — alternative to --acme-email")
 	clusterUpCmd.Flags().String("openobserve-email", "", "OpenObserve admin email (becomes admin login)")
 	clusterUpCmd.Flags().String("traefik-admin-user", "admin", "username for the Traefik dashboard basic-auth")
+	clusterUpCmd.Flags().Bool("force-tls-mode", false, "allow switching TLS mode on an already-installed cluster (cert <-> acme)")
 
 	clusterDownCmd.Flags().Bool("yes", false, "skip confirmation prompt")
 	clusterDownCmd.Flags().Bool("purge", false, "also remove pmcluster-managed secrets, configs, and networks")
 
-	clusterCmd.AddCommand(clusterUpCmd, clusterStatusCmd, clusterDownCmd)
+	clusterCmd.AddCommand(clusterUpCmd, clusterUpdateCmd, clusterStatusCmd, clusterDownCmd)
+}
+
+func runClusterUpdate(cmd *cobra.Command, _ []string) error {
+	defer initCLITelemetry()()
+
+	ctx := cmd.Context()
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
+		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
+	}
+
+	log, logCloser, err := logger.New(logger.Options{
+		LogsDir: cfg.LogsDir(),
+		Level:   cfg.LogLevel,
+		Console: false,
+	})
+	if err != nil {
+		return fmt.Errorf("init logger: %w", err)
+	}
+	defer func() { _ = logCloser.Close() }()
+	log.Info().Msg("cluster update: starting")
+	defer log.Info().Msg("cluster update: finished")
+
+	st, err := store.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
+	if err != nil {
+		return fmt.Errorf("open encryption key: %w", err)
+	}
+
+	dc, err := docker.New()
+	if err != nil {
+		return fmt.Errorf("docker client: %w", err)
+	}
+	defer func() { _ = dc.Close() }()
+
+	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
+
+	res, err := cluster.Update(ctx, cluster.UpdateDeps{
+		Store:    st,
+		Cipher:   cipher,
+		Docker:   dc,
+		Deployer: deployer,
+		Stdout:   cmd.OutOrStdout(),
+	}, cluster.UpdateInput{
+		ConfigDir: cfg.ConfigDir(),
+		Version:   buildinfo.Version,
+	})
+	if err != nil {
+		return err
+	}
+	printUpdateResult(cmd.OutOrStdout(), res)
+	return nil
+}
+
+func printUpdateResult(out io.Writer, res *cluster.UpdateResult) {
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "✔ pmcluster cluster update complete.")
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "  OTel collector config  : %s %s\n", res.OTelConfig, changedMarker(res.OTelCreated))
+	fmt.Fprintf(out, "  Traefik dynamic config : %s %s\n", res.TraefikConfig, changedMarker(res.TraefikCreated))
+	if res.CertSecret != "" {
+		fmt.Fprintf(out, "  TLS cert secret        : %s %s\n", res.CertSecret, changedMarker(res.CertCreated))
+		fmt.Fprintf(out, "  TLS key secret         : %s %s\n", res.KeySecret, changedMarker(res.KeyCreated))
+	}
+	fmt.Fprintf(out, "  Stacks re-deployed     : %v\n", res.StacksDeployed)
+	if len(res.StacksDeployed) == 0 {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "  (no config or certificate changes — nothing to redeploy)")
+	}
+}
+
+// changedMarker renders a small annotation for a changed/reused item.
+func changedMarker(changed bool) string {
+	if changed {
+		return "[rotated]"
+	}
+	return "[unchanged]"
 }
 
 func runClusterUp(cmd *cobra.Command, _ []string) error {
@@ -92,6 +198,7 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 	in.KeyPath, _ = cmd.Flags().GetString("key")
 	in.OpenObserveAdminEmail, _ = cmd.Flags().GetString("openobserve-email")
 	in.TraefikAdminUser, _ = cmd.Flags().GetString("traefik-admin-user")
+	in.ForceTLSMode, _ = cmd.Flags().GetBool("force-tls-mode")
 	in.ConfigDir = cfg.ConfigDir()
 
 	st, err := store.Open(cfg.DBPath())

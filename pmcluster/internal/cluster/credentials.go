@@ -223,6 +223,13 @@ func (m *CredentialsManager) ensure(ctx context.Context, spec bootstrapSpec) (*M
 // has the old value. Operator scales the consuming service to 0 and
 // re-runs.
 func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedCredential, error) {
+	// The OTel root token is set once and cached by OpenObserve on first
+	// boot; rotating it breaks collector ingestion without a destructive
+	// volume reset. Refuse instead of silently wedging the pipeline.
+	if name == "openobserve_token" {
+		return nil, fmt.Errorf("cannot rotate %q: OpenObserve caches this token in its data volume on first boot; rotating it would break collector ingestion without a volume reset. It is meant to stay fixed.", name)
+	}
+
 	existing, err := m.Store.GetCredential(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("lookup %s: %w", name, err)
@@ -306,6 +313,15 @@ func bootstrapSpecs() []bootstrapSpec {
 			name:            "openobserve_admin",
 			kind:            KindOpenObserve,
 			swarmSecretName: "zo_root_user_password",
+			format:          formatPlain,
+		},
+		// openobserve_token is the stable root API token the OTel collector
+		// uses for ingestion auth. It is set ONCE and never rotated (OO caches
+		// it in its data volume on first boot, like the password).
+		{
+			name:            "openobserve_token",
+			kind:            KindOpenObserve,
+			swarmSecretName: "zo_root_user_token",
 			format:          formatPlain,
 		},
 	}

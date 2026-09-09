@@ -166,6 +166,13 @@ func (f *fakeDocker) SecretList(_ context.Context, _, _ string) ([]string, error
 	return names, nil
 }
 
+func (f *fakeDocker) SecretInspect(_ context.Context, name string) (docker.SecretInspectResult, error) {
+	if s, ok := f.secrets[name]; ok {
+		return docker.SecretInspectResult{Labels: s.Labels, Data: s.Data}, nil
+	}
+	return docker.SecretInspectResult{}, fmt.Errorf("secret %q not found", name)
+}
+
 func (f *fakeDocker) ConfigList(_ context.Context, labelKey, labelValue string) ([]string, error) {
 	names := make([]string, 0, len(f.configs))
 	for n, c := range f.configs {
@@ -179,7 +186,7 @@ func (f *fakeDocker) ConfigList(_ context.Context, labelKey, labelValue string) 
 
 func (f *fakeDocker) ConfigInspect(_ context.Context, name string) (docker.ConfigInspectResult, error) {
 	if c, ok := f.configs[name]; ok {
-		return docker.ConfigInspectResult{Labels: c.Labels}, nil
+		return docker.ConfigInspectResult{Labels: c.Labels, Data: c.Data}, nil
 	}
 	return docker.ConfigInspectResult{}, fmt.Errorf("config %q not found", name)
 }

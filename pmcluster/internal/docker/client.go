@@ -46,11 +46,14 @@ type Client interface {
 	// labelKey="" means no filter.
 	SecretList(ctx context.Context, labelKey, labelValue string) ([]string, error)
 
+	// SecretInspect returns labels and content for a secret by name.
+	SecretInspect(ctx context.Context, name string) (SecretInspectResult, error)
+
 	// ConfigList returns all config names with the given label filter.
 	// labelKey="" means no filter.
 	ConfigList(ctx context.Context, labelKey, labelValue string) ([]string, error)
 
-	// ConfigInspect returns labels and metadata for a config by name.
+	// ConfigInspect returns labels and content for a config by name.
 	ConfigInspect(ctx context.Context, name string) (ConfigInspectResult, error)
 
 	Close() error
@@ -62,9 +65,18 @@ type Ping struct {
 	Experimental bool
 }
 
-// ConfigInspectResult carries the labels of a Docker config.
+// ConfigInspectResult carries the labels and raw content of a Docker config.
+// Data lets callers content-compare a rendered config against the currently
+// deployed version without round-tripping through Docker's raw API.
 type ConfigInspectResult struct {
 	Labels map[string]string
+	Data   []byte
+}
+
+// SecretInspectResult carries the labels and raw content of a Docker secret.
+type SecretInspectResult struct {
+	Labels map[string]string
+	Data   []byte
 }
 
 // Info is the subset of `docker info` pmcluster cares about.
@@ -214,6 +226,14 @@ func (r *realClient) SecretExists(ctx context.Context, name string) (bool, error
 		return false, nil
 	}
 	return false, fmt.Errorf("secret inspect %s: %w", name, err)
+}
+
+func (r *realClient) SecretInspect(ctx context.Context, name string) (SecretInspectResult, error) {
+	sec, _, err := r.c.SecretInspectWithRaw(ctx, name)
+	if err != nil {
+		return SecretInspectResult{}, fmt.Errorf("secret inspect: %w", err)
+	}
+	return SecretInspectResult{Labels: sec.Spec.Labels, Data: sec.Spec.Data}, nil
 }
 
 func (r *realClient) SecretCreate(ctx context.Context, spec SecretSpec) error {
@@ -390,7 +410,7 @@ func (r *realClient) ConfigInspect(ctx context.Context, name string) (ConfigInsp
 	if err != nil {
 		return ConfigInspectResult{}, fmt.Errorf("config inspect: %w", err)
 	}
-	return ConfigInspectResult{Labels: cfg.Spec.Labels}, nil
+	return ConfigInspectResult{Labels: cfg.Spec.Labels, Data: cfg.Spec.Data}, nil
 }
 
 // isNotFoundString is a fallback for older daemons whose error doesn't

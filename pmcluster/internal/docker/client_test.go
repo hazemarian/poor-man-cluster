@@ -103,6 +103,13 @@ func (f *fakeClient) SecretList(_ context.Context, _, _ string) ([]string, error
 	}
 	return names, nil
 }
+
+func (f *fakeClient) SecretInspect(_ context.Context, name string) (SecretInspectResult, error) {
+	if s, ok := f.secrets[name]; ok {
+		return SecretInspectResult{Labels: s.Labels, Data: s.Data}, nil
+	}
+	return SecretInspectResult{}, fmt.Errorf("secret %q not found", name)
+}
 func (f *fakeClient) ConfigList(_ context.Context, _, _ string) ([]string, error) {
 	names := make([]string, 0, len(f.configs))
 	for n := range f.configs {
@@ -113,7 +120,7 @@ func (f *fakeClient) ConfigList(_ context.Context, _, _ string) ([]string, error
 
 func (f *fakeClient) ConfigInspect(_ context.Context, name string) (ConfigInspectResult, error) {
 	if c, ok := f.configs[name]; ok {
-		return ConfigInspectResult{Labels: c.Labels}, nil
+		return ConfigInspectResult{Labels: c.Labels, Data: c.Data}, nil
 	}
 	return ConfigInspectResult{}, fmt.Errorf("config %q not found", name)
 }

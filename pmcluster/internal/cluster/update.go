@@ -1,0 +1,192 @@
+package cluster
+
+import (
+	"context"
+	"fmt"
+	"io"
+
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+)
+
+// UpdateInput carries the config-dir + build version for `cluster update`.
+// Unlike Up, UpdateInput carries no TLS/domain/credential fields — those are
+// read back from the persisted install state so update needs no re-bootstrap.
+type UpdateInput struct {
+	ConfigDir string // ~/.pmcluster/config/ — user-owned config files
+	Version   string
+}
+
+// UpdateResult reports which configs/secrets were rotated and which stacks
+// were re-deployed on this update. A no-op update (nothing changed) returns
+// empty/zero results and deploys nothing.
+type UpdateResult struct {
+	OTelConfig     string
+	OTelCreated    bool
+	TraefikConfig  string
+	TraefikCreated bool
+	CertSecret     string
+	KeySecret      string
+	CertCreated    bool
+	KeyCreated     bool
+	StacksDeployed []string
+}
+
+type UpdateDeps struct {
+	Store    *store.Store
+	Cipher   *credentials.Cipher
+	Docker   docker.Client
+	Deployer StackDeployer
+	Stdout   io.Writer // io.Discard in tests
+}
+
+// Update re-provisions the OTel collector + Traefik dynamic configs and the
+// TLS cert/key from the user-owned files under ConfigDir, pushing only what
+// changed into Docker, and re-deploying only the stack(s) whose inputs moved.
+//
+// It never re-bootstraps credentials, never resets volumes, and never writes
+// to the user's config files — those remain the source of truth. It is
+// content-aware end to end: unchanged inputs are reused (no new versions, no
+// redeploy) so a no-op update is just a report.
+func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult, error) {
+	out := io.Discard
+	if deps.Stdout != nil {
+		out = deps.Stdout
+	}
+	res := &UpdateResult{}
+	step := func(label string) { fmt.Fprintf(out, "▶ %s\n", label) }
+
+	step("Preflight: Docker reachable, Swarm active")
+	if err := Preflight(ctx, deps.Docker); err != nil {
+		return nil, err
+	}
+
+	// Persisted install state tells us what to re-provision without asking.
+	if deps.Store == nil {
+		return nil, fmt.Errorf("update requires a store (config_dir must be initialised via `pmcluster init`)")
+	}
+	state, err := loadTLSSettings(ctx, deps.Store)
+	if err != nil {
+		return nil, err
+	}
+	domain := deps.Store.GetSettingDefault(ctx, settingDomain, "")
+	if domain == "" {
+		return nil, fmt.Errorf("no persisted domain found — run `cluster up` before `cluster update`")
+	}
+
+	// OpenObserve admin credential (email + decrypted password) from the store.
+	ooCred, err := deps.Store.GetCredential(ctx, "openobserve_admin")
+	if err != nil {
+		return nil, fmt.Errorf("load openobserve_admin credential (run `cluster up` first): %w", err)
+	}
+	ooPass, err := deps.Cipher.Decrypt(ooCred.PasswordCiphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt openobserve_admin password: %w", err)
+	}
+
+	ooToken, err := deps.Store.GetCredential(ctx, "openobserve_token")
+	if err != nil {
+		return nil, fmt.Errorf("load openobserve_token credential (run `cluster up` first to mint the root token): %w", err)
+	}
+	ooTokenPlain, err := deps.Cipher.Decrypt(ooToken.PasswordCiphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt openobserve_token: %w", err)
+	}
+
+	render := RenderInput{
+		Domain:                   domain,
+		OpenObserveAdminEmail:    ooCred.Username,
+		OpenObserveAdminPassword: string(ooPass),
+		OpenObserveRootToken:     string(ooTokenPlain),
+		ACMEEmail:                state.ACMEEmail,
+		ConfigDir:                in.ConfigDir,
+	}
+
+	// TLS cert/key: content-aware re-apply from stored paths. Unchanged file
+	// bytes reuse the current version (no churn, no Traefik restart).
+	if state.Mode == "cert" && state.CertPath != "" && state.KeyPath != "" {
+		step("Re-applying TLS cert/key from stored paths (skips if unchanged)")
+		certName, certCreated, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, "cert", state.CertPath)
+		if err != nil {
+			return res, fmt.Errorf("ensure cert secret: %w", err)
+		}
+		keyName, keyCreated, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, "key", state.KeyPath)
+		if err != nil {
+			return res, fmt.Errorf("ensure key secret: %w", err)
+		}
+		res.CertSecret, res.KeySecret = certName, keyName
+		res.CertCreated, res.KeyCreated = certCreated, keyCreated
+		render.CertSecretName, render.KeySecretName = certName, keyName
+	} else {
+		// ACME (or missing paths): no cert/key to re-apply; the templates
+		// render the ACME path.
+		step("TLS mode is ACME (or no stored cert paths) — no cert/key to re-apply")
+	}
+
+	step("Rendering and provisioning OTel + Traefik configs (content-aware)")
+	otelYAML, err := RenderOTelCollectorConfig(render)
+	if err != nil {
+		return res, err
+	}
+	otelName, otelCreated, err := EnsureConfig(ctx, deps.Docker, "pmcluster_otel_config", otelYAML, in.Version)
+	if err != nil {
+		return res, err
+	}
+	res.OTelConfig, res.OTelCreated = otelName, otelCreated
+	render.OTelConfigName = otelName
+
+	traefikYAML, err := RenderTraefikDynamic(render)
+	if err != nil {
+		return res, err
+	}
+	traefikName, traefikCreated, err := EnsureConfig(ctx, deps.Docker, "pmcluster_traefik_dynamic", traefikYAML, in.Version)
+	if err != nil {
+		return res, err
+	}
+	res.TraefikConfig, res.TraefikCreated = traefikName, traefikCreated
+	render.TraefikConfigName = traefikName
+
+	// Re-deploy ONLY the stacks whose inputs moved. The config/cert NAMES are
+	// substituted into the compose, so a new version only takes effect when
+	// its stack re-deploys (which force-restarts just that stack's consumers).
+	// The backup stack is never touched by update.
+	certChanged := res.CertCreated || res.KeyCreated
+	if otelCreated {
+		step(fmt.Sprintf("OTel collector config changed → re-deploying %q", StackObservability))
+		if err := deployStack(ctx, out, deps.Deployer, StackObservability, render); err != nil {
+			return res, err
+		}
+		res.StacksDeployed = append(res.StacksDeployed, string(StackObservability))
+	}
+	if traefikCreated || certChanged {
+		reason := "Traefik dynamic config changed"
+		if certChanged {
+			reason = "certificate/key changed"
+		}
+		step(fmt.Sprintf("%s → re-deploying %q", reason, StackInfra))
+		if err := deployStack(ctx, out, deps.Deployer, StackInfra, render); err != nil {
+			return res, err
+		}
+		res.StacksDeployed = append(res.StacksDeployed, string(StackInfra))
+	}
+
+	if len(res.StacksDeployed) == 0 {
+		step("No config or certificate changes — nothing to redeploy.")
+	}
+	step("Cluster update complete.")
+	return res, nil
+}
+
+// deployStack renders and deploys a single stack, streaming progress.
+func deployStack(ctx context.Context, out io.Writer, d StackDeployer, s stackName, render RenderInput) error {
+	composeYAML, err := LoadComposeFile(s, render)
+	if err != nil {
+		return fmt.Errorf("load compose for %s: %w", s, err)
+	}
+	fmt.Fprintf(out, "  ▶ docker stack deploy %s\n", s)
+	if err := d.DeployStack(ctx, string(s), composeYAML); err != nil {
+		return fmt.Errorf("deploy %s: %w", s, err)
+	}
+	return nil
+}

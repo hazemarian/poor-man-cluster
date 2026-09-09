@@ -227,6 +227,11 @@ func TestBootstrap_LostDBRecovery(t *testing.T) {
 		Data   []byte
 		Labels map[string]string
 	}{Name: "zo_root_user_password", Data: []byte("oldoopass")}
+	f.secrets["zo_root_user_token"] = struct {
+		Name   string
+		Data   []byte
+		Labels map[string]string
+	}{Name: "zo_root_user_token", Data: []byte("oldtoken")}
 
 	// Store is fresh (lost-DB scenario).
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
