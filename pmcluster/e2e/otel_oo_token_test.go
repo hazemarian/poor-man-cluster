@@ -21,20 +21,24 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 )
 
-// TestE2EOpenObserveTokenIngestion validates the ZO_ROOT_USER_TOKEN decoupling
-// end-to-end against a REAL OpenObserve + REAL OTel collector:
+// TestE2EOpenObserveTokenIngestion validates the dedicated ingestion-token
+// decoupling end-to-end against a REAL OpenObserve + REAL OTel collector:
 //
-//  1. Boot OpenObserve (v0.92.2) with ZO_ROOT_USER_TOKEN set — provisioned on
-//     first boot, ignored by the collector.
-//  2. Run the OTel collector with the SAME config pmcluster renders for
-//     production (RenderOTelCollectorConfig → exporter reads
-//     `Authorization: Basic base64(email:root_token)` at openobserve:5081).
-//  3. Push one OTLP/HTTP log into the collector.
-//  4. Assert the log was ingested into OpenObserve (query its search API using
-//     the root token), and assert the collector did NOT log an auth/export error.
+//  1. Boot OpenObserve (v0.92.2) with NO root-token env — root email/password
+//     only. This mirrors the new design: we do NOT bake a token into the OO
+//     data volume.
+//  2. Create a dedicated INGESTION token via the OO API
+//     (POST /api/{org}/ingestion-tokens → an o2oi_... token), exactly as
+//     pmcluster's provisioner does.
+//  3. Render the collector config with the SAME function pmcluster uses
+//     (RenderOTelCollectorConfig → exporter reads
+//     `Authorization: Basic base64(<org>:<ingestion_token>)` at openobserve:5081),
+//     then start the collector.
+//  4. Push one OTLP/HTTP log into the collector and assert it was ingested via
+//     OO's search API; assert the collector logged no auth/export error.
 //
-// A second case sends the SAME log with the human password instead of the token;
-// OpenObserve must reject it (401/403), proving auth is enforced by the token.
+// A negative case sends a bogus credential and asserts OpenObserve rejects it
+// (401/403), proving ingestion auth is enforced by the token.
 func TestE2EOpenObserveTokenIngestion(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH")
@@ -46,31 +50,12 @@ func TestE2EOpenObserveTokenIngestion(t *testing.T) {
 	dir := t.TempDir()
 	email := "ops@example.com"
 	pass := "AdminPass123!"
-	token := "e2e-root-tok3n-0f-pmcluster"
 	marker := "OO_TOKEN_E2E_MARKER_42"
 	project := "oo-token-e2e"
 	// Use a free host port — an existing local OpenObserve may already hold 5080.
 	ooPort := hostPort(t)
-
-	// ── 1. The real pmcluster-rendered collector config (token auth) ──────
-	rendered, err := cluster.RenderOTelCollectorConfig(cluster.RenderInput{
-		Domain:                "localhost",
-		OpenObserveAdminEmail: email,
-		OpenObserveRootToken:  token,
-	})
-	if err != nil {
-		t.Fatalf("RenderOTelCollectorConfig: %v", err)
-	}
-	otelConfigPath := filepath.Join(dir, "otel-config.yaml")
-	if err := os.WriteFile(otelConfigPath, rendered, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// ── 2. Compose: openobserve + collector ────────────────────────────────
-	// The collector publishes its OTLP/HTTP port so this test can inject the
-	// marker ONLY after OpenObserve is healthy — making the delivery
-	// deterministic instead of racing OO's cold start.
 	collPort := hostPort(t)
+
 	compose := fmt.Sprintf(`
 services:
   openobserve:
@@ -81,7 +66,10 @@ services:
       - ZO_GRPC_PORT=5081
       - ZO_ROOT_USER_EMAIL=%s
       - ZO_ROOT_USER_PASSWORD=%s
-      - ZO_ROOT_USER_TOKEN=%s
+      # Deliberately NO ZO_ROOT_USER_TOKEN: OpenObserve caches root creds in its
+      # data volume on first boot and ignores env after. The collector instead
+      # uses a dedicated ingestion token created via the API and rendered into
+      # the collector config (pmcluster keeps pass + token in its own config).
     volumes:
       - oo_data:/data
     ports:
@@ -97,11 +85,8 @@ services:
     # read /var/run/docker.sock — same as the real production Swarm service.
     user: "0:0"
     command: ["--config=/etc/otel-config.yaml"]
-    # service_started (not healthy): "up -d" must return quickly; the test
-    # separately waits for OpenObserve to become healthy before delivering.
-    depends_on:
-      openobserve:
-        condition: service_started
+    # Started manually AFTER OpenObserve is healthy so the config (which embeds
+    # the freshly-minted ingestion token) exists before the collector boots.
     ports:
       - "%d:4318"
     volumes:
@@ -115,12 +100,13 @@ services:
 
 volumes:
   oo_data:
-`, email, pass, token, ooPort, collPort)
+`, email, pass, ooPort, collPort)
 
 	composePath := filepath.Join(dir, "docker-compose.yml")
 	if err := os.WriteFile(composePath, []byte(compose), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	otelConfigPath := filepath.Join(dir, "otel-config.yaml")
 
 	// Register cleanup BEFORE `up` so even a partial failure tears everything down.
 	t.Cleanup(func() {
@@ -132,19 +118,44 @@ volumes:
 		t.Logf("compose down: %s", strings.TrimSpace(string(out)))
 	})
 
-	t.Log("Starting docker compose (OpenObserve + collector)...")
+	// ── 2a. Boot OpenObserve only, and wait until it's healthy. ────────────
+	t.Log("Starting OpenObserve...")
 	upCtx, upCancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer upCancel()
-	upCmd := exec.CommandContext(upCtx, "docker", "compose", "-f", composePath, "-p", project, "up", "-d")
+	upCmd := exec.CommandContext(upCtx, "docker", "compose", "-f", composePath, "-p", project, "up", "-d", "openobserve")
 	upCmd.Env = append(os.Environ(), "OTEL_CONFIG="+otelConfigPath)
 	upOut, err := upCmd.CombinedOutput()
 	if err != nil {
 		t.Skipf("docker compose up failed (image pull / daemon issue — skipping): %v\n%s", err, upOut)
 	}
-	t.Logf("compose up ok")
-
-	// ── 3. Wait for OO to start, then deliver the marker ──────────────────
 	waitOOHealthy(t, ctx, ooPort, 240*time.Second)
+
+	// ── 2b. Mint a dedicated INGESTION token via the OO API (as pmcluster's
+	//        provisioner does), then render the collector config with it. ──
+	token := createIngestionToken(t, ctx, ooPort, email, pass)
+	rendered, err := cluster.RenderOTelCollectorConfig(cluster.RenderInput{
+		Domain:                    "localhost",
+		OpenObserveOrg:            "default",
+		OpenObserveIngestionToken: token,
+	})
+	if err != nil {
+		t.Fatalf("RenderOTelCollectorConfig: %v", err)
+	}
+	if err := os.WriteFile(otelConfigPath, rendered, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// ── 2c. Now boot the collector (its config now embeds the real token). ─
+	t.Log("Starting OTel collector...")
+	collCtx, collCancel := context.WithTimeout(ctx, 6*time.Minute)
+	defer collCancel()
+	collCmd := exec.CommandContext(collCtx, "docker", "compose", "-f", composePath, "-p", project, "up", "-d", "otel-collector")
+	collCmd.Env = append(os.Environ(), "OTEL_CONFIG="+otelConfigPath)
+	if out, err := collCmd.CombinedOutput(); err != nil {
+		t.Fatalf("docker compose up collector: %v\n%s", err, out)
+	}
+
+	// ── 3. Deliver the marker log to the collector ─────────────────────────
 	postOTLPToCollector(t, ctx, collPort, marker)
 	time.Sleep(8 * time.Second) // let the collector export + OO index
 
@@ -157,7 +168,7 @@ volumes:
 	} else if !strings.Contains(body, marker) {
 		t.Errorf("OO search did not contain marker %q.\nSearch body:\n%s", marker, body)
 	} else {
-		t.Logf("✅ OO ingested the log via Basic base64(email:root_token)")
+		t.Logf("✅ OO ingested the log via Basic base64(default:ingestion_token)")
 	}
 
 	// Assert the collector logged no export auth error.
@@ -245,6 +256,44 @@ func searchOpenObserve(t *testing.T, ctx context.Context, port int, password, sq
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode >= 200 && resp.StatusCode < 300, string(body)
+}
+
+// createIngestionToken mints a dedicated OO ingestion token via the API
+// (POST /api/{org}/ingestion-tokens) authenticated with the root admin —
+// exactly the call pmcluster's OpenObserveProvisioner makes.
+func createIngestionToken(t *testing.T, ctx context.Context, port int, rootEmail, rootPass string) string {
+	t.Helper()
+	payload := []byte(`{"name":"pmcluster-e2e","description":"e2e ingestion token"}`)
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, "POST", fmt.Sprintf("http://127.0.0.1:%d/api/default/ingestion-tokens", port), bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("create token request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(rootEmail+":"+rootPass)))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("create ingestion token: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create ingestion token: HTTP %d: %s", resp.StatusCode, body)
+	}
+	var parsed struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("decode token response: %v", err)
+	}
+	if parsed.Data.Token == "" {
+		t.Fatalf("ingestion token response missing token: %s", body)
+	}
+	t.Logf("minted ingestion token (%d chars, prefix o2oi_)", len(parsed.Data.Token))
+	return parsed.Data.Token
 }
 
 // postOTLPToOO sends a bare OTLP/HTTP log to OO with the given credentials,

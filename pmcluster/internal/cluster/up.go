@@ -42,11 +42,21 @@ type UpDeps struct {
 	Docker   docker.Client
 	Deployer StackDeployer
 	Stdout   io.Writer // io.Discard in tests
+
+	// Provisioner, when set, provisions the OpenObserve automation user +
+	// ingestion token via the OO API after the observability stack is up. Left
+	// nil (e.g. in tests) skips that network-dependent step.
+	Provisioner *OpenObserveProvisioner
 }
 
 // Up brings the cluster up end-to-end. Order matters: preflight →
 // networks → TLS secrets → bootstrap creds → render configs → deploy
 // stacks (infra → observability → backup).
+//
+// On a fresh install the dedicated OO ingestion token does not exist until
+// OpenObserve is up, so provisioning runs in a second phase after the first
+// deploy (see Provisioner). The collector config is then re-rendered with the
+// real token and observability is re-deployed.
 func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	// Load persisted install state so an idempotent re-run can reuse the
 	// originally-chosen TLS mode and cert/key paths instead of re-minting.
@@ -117,11 +127,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	}
 	res.BootstrapCredentials = creds
 	for name, c := range creds {
-		if name == "openobserve_token" {
-			// Internal ingestion credential — not a login; keep it out of
-			// the human-facing bootstrap summary.
-			continue
-		}
 		switch {
 		case c.NewlyCreated && c.SwarmSecretCreated:
 			res.NewSecrets = append(res.NewSecrets, c.SwarmSecretName)
@@ -159,26 +164,33 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	if openobsCred == nil {
 		return res, fmt.Errorf("internal: openobserve_admin credential missing after bootstrap")
 	}
-	ooToken := creds["openobserve_token"]
-	if ooToken == nil {
-		return res, fmt.Errorf("internal: openobserve_token credential missing after bootstrap")
-	}
-	render := RenderInput{
-		Domain:                   in.Domain,
-		OpenObserveAdminEmail:    openobsCred.Username,
-		OpenObserveAdminPassword: openobsCred.Password,
-		OpenObserveRootToken:     ooToken.Password,
-		ACMEEmail:                in.ACMEEmail,
-		ConfigDir:                in.ConfigDir,
-		CertSecretName:           certSecret,
-		KeySecretName:            keySecret,
-	}
 
-	otelYAML, err := RenderOTelCollectorConfig(render)
+	// The dedicated ingestion token (created via the OO API) may not exist on a
+	// fresh install — OpenObserve must be up before the API can mint it. When
+	// missing we render a placeholder in the first deploy pass and provision +
+	// re-render + re-deploy in phase 2 below.
+	storedToken, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
 	if err != nil {
 		return res, err
 	}
-	otelConfigName, otelConfigCreated, err := EnsureConfig(ctx, deps.Docker, "pmcluster_otel_config", otelYAML, in.Version)
+	needProvision := storedToken == ""
+
+	render := RenderInput{
+		Domain:                    in.Domain,
+		OpenObserveAdminEmail:     openobsCred.Username,
+		OpenObserveAdminPassword:  openobsCred.Password,
+		OpenObserveOrg:            "default",
+		OpenObserveIngestionToken: storedToken,
+		ACMEEmail:                 in.ACMEEmail,
+		ConfigDir:                 in.ConfigDir,
+		CertSecretName:            certSecret,
+		KeySecretName:             keySecret,
+	}
+	if needProvision {
+		render.OpenObserveIngestionToken = pendingIngestionToken
+	}
+
+	otelConfigName, otelConfigCreated, err := ensureOTelConfig(ctx, deps, in.Version, render)
 	if err != nil {
 		return res, err
 	}
@@ -202,13 +214,8 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 
 	step("Deploying stacks (infra → observability → backup)")
 	for _, s := range []stackName{StackInfra, StackObservability, StackBackup} {
-		composeYAML, err := LoadComposeFile(s, render)
-		if err != nil {
-			return res, fmt.Errorf("load compose for %s: %w", s, err)
-		}
-		fmt.Fprintf(out, "  ▶ docker stack deploy %s\n", s)
-		if err := deps.Deployer.DeployStack(ctx, string(s), composeYAML); err != nil {
-			return res, fmt.Errorf("deploy %s: %w", s, err)
+		if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
+			return res, err
 		}
 		res.StacksDeployed = append(res.StacksDeployed, string(s))
 	}
@@ -216,6 +223,38 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	step("Waiting for all services to become healthy")
 	if err := WaitHealthyStacks(ctx, deps.Docker, out); err != nil {
 		return res, fmt.Errorf("health check: %w", err)
+	}
+
+	// Phase 2 — provision the automation user + ingestion token once OO is up,
+	// then re-render the collector config with the REAL token and redeploy.
+	if needProvision && deps.Provisioner != nil {
+		step("Provisioning OpenObserve user + ingestion token")
+		if _, _, err := deps.Provisioner.EnsureUserAndToken(ctx); err != nil {
+			return res, err
+		}
+		realToken, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
+		if err != nil {
+			return res, err
+		}
+		if realToken != "" && realToken != pendingIngestionToken {
+			render.OpenObserveIngestionToken = realToken
+			otelConfigName, otelConfigCreated, err := ensureOTelConfig(ctx, deps, in.Version, render)
+			if err != nil {
+				return res, err
+			}
+			if otelConfigCreated {
+				res.NewConfigs = append(res.NewConfigs, otelConfigName)
+			}
+			render.OTelConfigName = otelConfigName
+			step("Re-deploying observability with the provisioned ingestion token")
+			if err := deployStack(ctx, out, deps.Deployer, StackObservability, render); err != nil {
+				return res, err
+			}
+			res.StacksDeployed = append(res.StacksDeployed, string(StackObservability))
+			if err := WaitHealthyStacks(ctx, deps.Docker, out); err != nil {
+				return res, fmt.Errorf("health check: %w", err)
+			}
+		}
 	}
 
 	// Persist the install inputs so `up` re-runs and `cluster update` can
@@ -252,6 +291,37 @@ func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
 		}
 	}
 	return nil
+}
+
+// loadStoredIngestionToken returns the plaintext OpenObserve ingestion token
+// from the store, or "" when it has not been provisioned yet (fresh install).
+func loadStoredIngestionToken(ctx context.Context, s *store.Store, c *credentials.Cipher) (string, error) {
+	if s == nil || c == nil {
+		return "", nil
+	}
+	cred, err := s.GetCredential(ctx, credOpenObserveToken)
+	if err != nil {
+		if err == store.ErrCredentialNotFound {
+			return "", nil
+		}
+		return "", fmt.Errorf("lookup %s: %w", credOpenObserveToken, err)
+	}
+	plain, err := c.Decrypt(cred.PasswordCiphertext)
+	if err != nil {
+		return "", fmt.Errorf("decrypt %s: %w", credOpenObserveToken, err)
+	}
+	return string(plain), nil
+}
+
+// ensureOTelConfig renders the collector config and ensures its versioned
+// Docker config exists, returning the (versioned) name and whether it was newly
+// created. Used by up/update so the collector's ingestion auth is content-aware.
+func ensureOTelConfig(ctx context.Context, deps UpDeps, version string, render RenderInput) (string, bool, error) {
+	otelYAML, err := RenderOTelCollectorConfig(render)
+	if err != nil {
+		return "", false, err
+	}
+	return EnsureConfig(ctx, deps.Docker, "pmcluster_otel_config", otelYAML, version)
 }
 
 func validateUpInput(in UpInput) error {

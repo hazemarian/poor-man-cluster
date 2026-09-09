@@ -39,6 +39,11 @@ type UpdateDeps struct {
 	Docker   docker.Client
 	Deployer StackDeployer
 	Stdout   io.Writer // io.Discard in tests
+
+	// Provisioner, when set and the ingestion token is missing (an interrupted
+	// `cluster up`), heals the store by provisioning the OO user + token before
+	// rendering. Left nil (e.g. in tests) skips that network-dependent step.
+	Provisioner *OpenObserveProvisioner
 }
 
 // Update re-provisions the OTel collector + Traefik dynamic configs and the
@@ -85,22 +90,36 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil, fmt.Errorf("decrypt openobserve_admin password: %w", err)
 	}
 
-	ooToken, err := deps.Store.GetCredential(ctx, "openobserve_token")
+	// The dedicated ingestion token (created via the OO API) is read from the
+	// store. If missing (an interrupted `cluster up`), heal it via the
+	// provisioner when one is injected, else fall back to the placeholder that
+	// `up` seeded — keeping update content-consistent so a no-op stays a no-op.
+	ooTokenPlain, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
 	if err != nil {
-		return nil, fmt.Errorf("load openobserve_token credential (run `cluster up` first to mint the root token): %w", err)
+		return nil, err
 	}
-	ooTokenPlain, err := deps.Cipher.Decrypt(ooToken.PasswordCiphertext)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt openobserve_token: %w", err)
+	if ooTokenPlain == "" && deps.Provisioner != nil {
+		step("Provisioning missing OpenObserve user + ingestion token")
+		if _, _, err := deps.Provisioner.EnsureUserAndToken(ctx); err != nil {
+			return nil, err
+		}
+		ooTokenPlain, err = loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if ooTokenPlain == "" {
+		ooTokenPlain = pendingIngestionToken
 	}
 
 	render := RenderInput{
-		Domain:                   domain,
-		OpenObserveAdminEmail:    ooCred.Username,
-		OpenObserveAdminPassword: string(ooPass),
-		OpenObserveRootToken:     string(ooTokenPlain),
-		ACMEEmail:                state.ACMEEmail,
-		ConfigDir:                in.ConfigDir,
+		Domain:                    domain,
+		OpenObserveAdminEmail:     ooCred.Username,
+		OpenObserveAdminPassword:  string(ooPass),
+		OpenObserveOrg:            "default",
+		OpenObserveIngestionToken: ooTokenPlain,
+		ACMEEmail:                 state.ACMEEmail,
+		ConfigDir:                 in.ConfigDir,
 	}
 
 	// TLS cert/key: content-aware re-apply from stored paths. Unchanged file

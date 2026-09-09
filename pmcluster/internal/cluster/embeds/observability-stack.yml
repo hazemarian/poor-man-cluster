@@ -32,10 +32,12 @@ services:
       - ZO_APP_NAME=openobserve
       - ZO_ROOT_USER_EMAIL=${OPENOBSERVE_ADMIN_EMAIL}
       - ZO_ROOT_USER_PASSWORD=__OPENOBSERVE_PASSWORD__
-      # Stable root API token the OTel collector uses for ingestion auth
-      # (Basic <email>:<token>). Set once on first boot like the password;
-      # never rotated, so the collector config stays content-stable.
-      - ZO_ROOT_USER_TOKEN=__OPENOBSERVE_TOKEN__
+      # Note: the root token env is intentionally absent — OpenObserve caches
+      # root creds in its data volume on first boot and ignores env after. The
+      # OTel collector instead uses a dedicated ingestion token (prefix o2oi_)
+      # created via the OO API and
+      # rendered into the collector config, so credentials stay in pmcluster
+      # config and never get baked into the OO volume.
     volumes:
       - openobserve_data:/data
     networks:

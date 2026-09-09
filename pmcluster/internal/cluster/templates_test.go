@@ -71,30 +71,26 @@ func TestLoadComposeFile_SubstitutesOpenObserveEmail(t *testing.T) {
 	_ = body
 }
 
-// TestLoadComposeFile_ObservabilitySetsRootToken verifies the observability
-// stack renders ZO_ROOT_USER_TOKEN and substitutes the __OPENOBSERVE_TOKEN__
-// placeholder so OpenObserve provisions the stable ingestion token on boot.
-func TestLoadComposeFile_ObservabilitySetsRootToken(t *testing.T) {
+// TestLoadComposeFile_ObservabilityOmitsRootToken verifies that fresh-install
+// observability does NOT bake ZO_ROOT_USER_TOKEN into the OpenObserve data
+// volume — the OTel collector instead uses a dedicated ingestion token created
+// via the OO API and rendered into the collector config, so credentials stay in
+// pmcluster config rather than the OO volume.
+func TestLoadComposeFile_ObservabilityOmitsRootToken(t *testing.T) {
 	in := RenderInput{
 		Domain:                "example.com",
 		OpenObserveAdminEmail: "ops@example.com",
-		OpenObserveRootToken:  "kn0wn-1ng3st10n-tok3n",
 	}
 	data, err := LoadComposeFile(StackObservability, in)
 	if err != nil {
 		t.Fatalf("LoadComposeFile: %v", err)
 	}
 	body := string(data)
-	if strings.Contains(body, "__OPENOBSERVE_TOKEN__") {
-		t.Error("__OPENOBSERVE_TOKEN__ placeholder was not substituted")
+	if strings.Contains(body, "ZO_ROOT_USER_TOKEN") {
+		t.Error("observability stack must NOT set ZO_ROOT_USER_TOKEN (baked into OO volume on first boot)")
 	}
-	for _, want := range []string{
-		"- ZO_ROOT_USER_TOKEN=kn0wn-1ng3st10n-tok3n",
-		"- ZO_ROOT_USER_EMAIL=ops@example.com",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("observability stack missing %q", want)
-		}
+	if !strings.Contains(body, "ZO_ROOT_USER_EMAIL=ops@example.com") {
+		t.Error("observability stack should still set ZO_ROOT_USER_EMAIL")
 	}
 }
 
@@ -108,13 +104,13 @@ func TestLoadComposeFile_UnknownStack(t *testing.T) {
 }
 
 // TestRenderOTelCollectorConfig_ContainsBasicAuth verifies that the rendered
-// OTel config contains Authorization: Basic <base64(email:root_token)> — i.e.
-// the STABLE root API token, not the rotating human password — and that
-// decoding the base64 yields the correct "email:token" string.
+// OTel config contains Authorization: Basic <base64(<org>:<ingestion_token>)> —
+// the dedicated INGESTION token (not the rotating human password) — and that
+// decoding the base64 yields the correct "org:token" string.
 func TestRenderOTelCollectorConfig_ContainsBasicAuth(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail: "admin@example.com",
-		OpenObserveRootToken:  "st1ableR00t-tok3n",
+		OpenObserveOrg:            "default",
+		OpenObserveIngestionToken: "st1ableR00t-tok3n",
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -147,7 +143,7 @@ func TestRenderOTelCollectorConfig_ContainsBasicAuth(t *testing.T) {
 		t.Fatalf("base64 decode of %q: %v", b64, err)
 	}
 
-	want := "admin@example.com:st1ableR00t-tok3n"
+	want := "default:st1ableR00t-tok3n"
 	if string(decoded) != want {
 		t.Errorf("decoded = %q, want %q", decoded, want)
 	}
@@ -157,9 +153,9 @@ func TestRenderOTelCollectorConfig_ContainsBasicAuth(t *testing.T) {
 // config never contains the human admin password (only the stable token).
 func TestRenderOTelCollectorConfig_DoesNotEmbedHumanPassword(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail:    "admin@example.com",
-		OpenObserveAdminPassword: "SOMEPASSWORD_SECRET",
-		OpenObserveRootToken:     "R00ttok3n",
+		OpenObserveAdminEmail:     "admin@example.com",
+		OpenObserveAdminPassword:  "SOMEPASSWORD_SECRET",
+		OpenObserveIngestionToken: "R00ttok3n",
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -170,27 +166,12 @@ func TestRenderOTelCollectorConfig_DoesNotEmbedHumanPassword(t *testing.T) {
 	}
 }
 
-// TestRenderOTelCollectorConfig_MissingEmail returns an error when email is
-// empty.
-func TestRenderOTelCollectorConfig_MissingEmail(t *testing.T) {
-	_, err := RenderOTelCollectorConfig(RenderInput{
-		OpenObserveAdminEmail: "",
-		OpenObserveRootToken:  "tok",
-	})
-	if err == nil {
-		t.Fatal("expected error when email is empty, got nil")
-	}
-}
-
-// TestRenderOTelCollectorConfig_MissingToken returns an error when the root
-// token is empty.
+// TestRenderOTelCollectorConfig_MissingToken returns an error when the
+// ingestion token is empty.
 func TestRenderOTelCollectorConfig_MissingToken(t *testing.T) {
-	_, err := RenderOTelCollectorConfig(RenderInput{
-		OpenObserveAdminEmail: "admin@x.com",
-		OpenObserveRootToken:  "",
-	})
+	_, err := RenderOTelCollectorConfig(RenderInput{OpenObserveIngestionToken: ""})
 	if err == nil {
-		t.Fatal("expected error when root token is empty, got nil")
+		t.Fatal("expected error when ingestion token is empty, got nil")
 	}
 }
 
@@ -198,8 +179,8 @@ func TestRenderOTelCollectorConfig_MissingToken(t *testing.T) {
 // has a minimal logs pipeline: filelog → resource → batch → OTLP exporter.
 func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail: "admin@x.com",
-		OpenObserveRootToken:  "tok",
+		OpenObserveAdminEmail:     "admin@x.com",
+		OpenObserveIngestionToken: "tok",
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -228,8 +209,8 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 // filelog receiver is configured with the correct glob patterns and operators.
 func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail: "admin@x.com",
-		OpenObserveRootToken:  "tok",
+		OpenObserveAdminEmail:     "admin@x.com",
+		OpenObserveIngestionToken: "tok",
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -288,8 +269,8 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 // the non-existent metric_labels_to_resource_attributes key.
 func TestRenderOTelCollectorConfig_DockerStatsLabels(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail: "admin@x.com",
-		OpenObserveRootToken:  "tok",
+		OpenObserveAdminEmail:     "admin@x.com",
+		OpenObserveIngestionToken: "tok",
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {

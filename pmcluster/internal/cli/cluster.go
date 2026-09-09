@@ -14,8 +14,22 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/logger"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/openobserve"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
+
+// ooProvisioner builds the OpenObserve user+token provisioner for `up`/`update`.
+// It reaches OpenObserve over the public edge (https://observ.<domain>) from
+// the manager host.
+func ooProvisioner(st *store.Store, cipher *credentials.Cipher, out io.Writer, domain string) *cluster.OpenObserveProvisioner {
+	return &cluster.OpenObserveProvisioner{
+		Store:  st,
+		Cipher: cipher,
+		Client: openobserve.NewClient("https://observ."+domain, "default"),
+		Org:    "default",
+		Stdout: out,
+	}
+}
 
 var clusterCmd = &cobra.Command{
 	Use:   "cluster",
@@ -120,12 +134,14 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
+	updateDomain := st.GetSettingDefault(ctx, "domain", "")
 	res, err := cluster.Update(ctx, cluster.UpdateDeps{
-		Store:    st,
-		Cipher:   cipher,
-		Docker:   dc,
-		Deployer: deployer,
-		Stdout:   cmd.OutOrStdout(),
+		Store:       st,
+		Cipher:      cipher,
+		Docker:      dc,
+		Deployer:    deployer,
+		Stdout:      cmd.OutOrStdout(),
+		Provisioner: ooProvisioner(st, cipher, cmd.OutOrStdout(), updateDomain),
 	}, cluster.UpdateInput{
 		ConfigDir: cfg.ConfigDir(),
 		Version:   buildinfo.Version,
@@ -221,11 +237,12 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
 	res, err := cluster.Up(ctx, cluster.UpDeps{
-		Store:    st,
-		Cipher:   cipher,
-		Docker:   dc,
-		Deployer: deployer,
-		Stdout:   cmd.OutOrStdout(),
+		Store:       st,
+		Cipher:      cipher,
+		Docker:      dc,
+		Deployer:    deployer,
+		Stdout:      cmd.OutOrStdout(),
+		Provisioner: ooProvisioner(st, cipher, cmd.OutOrStdout(), in.Domain),
 	}, in)
 	if err != nil {
 		return err

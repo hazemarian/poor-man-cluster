@@ -315,15 +315,11 @@ func bootstrapSpecs() []bootstrapSpec {
 			swarmSecretName: "zo_root_user_password",
 			format:          formatPlain,
 		},
-		// openobserve_token is the stable root API token the OTel collector
-		// uses for ingestion auth. It is set ONCE and never rotated (OO caches
-		// it in its data volume on first boot, like the password).
-		{
-			name:            "openobserve_token",
-			kind:            KindOpenObserve,
-			swarmSecretName: "zo_root_user_token",
-			format:          formatPlain,
-		},
+		// openobserve_user / openobserve_token are NOT bootstrap credentials:
+		// they are created against the OpenObserve API by OpenObserveProvisioner
+		// (automation admin user + dedicated ingestion token) and kept in the
+		// pmcluster store/config, never mirrored to a Swarm secret or baked into
+		// the OO data volume.
 	}
 }
 

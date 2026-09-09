@@ -49,12 +49,18 @@ type RenderInput struct {
 	OpenObserveAdminEmail    string
 	OpenObserveAdminPassword string
 
-	// OpenObserveRootToken is the stable root-user API token used by the
-	// OTel collector to authenticate ingestion (openobserve:5081). Unlike
-	// OpenObserveAdminPassword it never rotates, so the rendered collector
-	// config is stable across password rotations. Plaintext; read from the
+	// OpenObserveOrg is the OpenObserve organization segment used in the
+	// collector's ingestion basic-auth header (Basic base64(<org>:<token>)).
+	// Defaults to "default".
+	OpenObserveOrg string
+
+	// OpenObserveIngestionToken is the dedicated OpenObserve ingestion token
+	// (created via the OO API, prefix o2oi_) the OTel collector uses to
+	// authenticate ingestion (openobserve:5081). It is separate from the human
+	// admin password and never rotates, so the rendered collector config is
+	// stable across password rotations. Plaintext; read from the
 	// openobserve_token managed credential in up/update.
-	OpenObserveRootToken string
+	OpenObserveIngestionToken string
 
 	// ACMEEmail enables Let's Encrypt automation when non-empty. Mutually
 	// exclusive with operator-supplied cert/key (see cluster.UpInput).
@@ -133,7 +139,6 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	out := strings.ReplaceAll(rendered.String(), "${DOMAIN}", in.Domain)
 	out = strings.ReplaceAll(out, "${OPENOBSERVE_ADMIN_EMAIL}", in.OpenObserveAdminEmail)
 	out = strings.ReplaceAll(out, "__OPENOBSERVE_PASSWORD__", in.OpenObserveAdminPassword)
-	out = strings.ReplaceAll(out, "__OPENOBSERVE_TOKEN__", in.OpenObserveRootToken)
 	out = strings.ReplaceAll(out, "__OTEL_CONFIG_NAME__", in.OTelConfigName)
 	out = strings.ReplaceAll(out, "__TRAEFIK_CONFIG_NAME__", in.TraefikConfigName)
 	out = strings.ReplaceAll(out, "__CERT_SECRET__", in.CertSecretName)
@@ -142,16 +147,20 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 }
 
 // RenderOTelCollectorConfig fills in the OpenObserve `Authorization: Basic <b64>`
-// header value. The credential uses the STABLE root API token (not the rotating
-// human password) so the rendered config stays content-stable across password
-// rotations. OpenObserve's OTLP gRPC handler accepts
-// Basic <base64(email:root_token)>, validating the token slot against the root
-// user's stored token. Reads from disk first (ConfigDir), then embedded.
+// header value. The credential is the dedicated INGESTION token (created via the
+// OO API, prefix o2oi_), NOT the rotating human password, so the rendered config
+// stays content-stable across password rotations. OpenObserve authenticates OTLP
+// ingestion with Basic <base64(<org>:<ingestion_token>)>.
+// Reads from disk first (ConfigDir), then embedded.
 func RenderOTelCollectorConfig(in RenderInput) ([]byte, error) {
-	if in.OpenObserveAdminEmail == "" || in.OpenObserveRootToken == "" {
-		return nil, fmt.Errorf("RenderOTelCollectorConfig: OpenObserve email and root token are required")
+	org := in.OpenObserveOrg
+	if org == "" {
+		org = "default"
 	}
-	cred := in.OpenObserveAdminEmail + ":" + in.OpenObserveRootToken
+	if org == "" || in.OpenObserveIngestionToken == "" {
+		return nil, fmt.Errorf("RenderOTelCollectorConfig: OpenObserve org and ingestion token are required")
+	}
+	cred := org + ":" + in.OpenObserveIngestionToken
 	basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(cred))
 
 	body, err := readConfigFile("otel-collector-config.yml", in)

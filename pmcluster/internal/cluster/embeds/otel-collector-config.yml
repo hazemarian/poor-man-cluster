@@ -101,8 +101,9 @@ exporters:
     tls:
       insecure: true
     headers:
-      # Basic <base64(admin_email:root_token)> — the stable root API token,
-      # NOT the rotating human password. Keeps this config content-stable.
+      # Basic <base64(<org>:<ingestion_token>)> — the dedicated OO ingestion
+      # token (created via the OO API, prefix o2oi_), NOT the rotating human
+      # password. Keeps this config content-stable across password rotations.
       Authorization: "__BASIC_AUTH_PLACEHOLDER__"
       organization: "default"
 
