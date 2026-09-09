@@ -124,7 +124,27 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 
 	// TLS cert/key: content-aware re-apply from stored paths. Unchanged file
 	// bytes reuse the current version (no churn, no Traefik restart).
-	if state.Mode == "cert" && state.CertPath != "" && state.KeyPath != "" {
+	//
+	// The discriminator MUST mirror what the infra-stack template keys on: it
+	// renders the operator cert/key secret block whenever `.ACMEEmail` is empty
+	// (the [[ if not .ACMEEmail ]] branch) and the Let's Encrypt resolver/volume
+	// whenever `.ACMEEmail` is non-empty. Keying this off `state.Mode == "cert"`
+	// instead diverged: a box whose mode wasn't persisted (or was "acme" with an
+	// empty acme_email) took this branch's else, leaving CertSecretName/KeySecretName
+	// empty while the template still rendered the cert block → dangling `:` in the
+	// global secrets → invalid YAML on `cluster update`. So we gate on ACMEEmail:
+	// empty ACMEEmail ALWAYS requires a cert/key (loaded from stored paths, or a
+	// hard error if none are persisted), which is exactly what the template expects.
+	if render.ACMEEmail != "" {
+		// ACME: template renders the Let's Encrypt branch; no operator cert/key.
+		step("TLS via Let's Encrypt (ACME email set) — no operator cert/key to re-apply")
+	} else {
+		if state.CertPath == "" || state.KeyPath == "" {
+			// ACMEEmail empty means the template WILL emit the cert/key secret
+			// block. Without persisted paths rendering empty names would produce
+			// invalid YAML — fail loudly instead of emitting broken config.
+			return res, fmt.Errorf("TLS is not ACME (no ACME email) but no cert/key paths are persisted — run `cluster up` with --cert/--key (or --acme-email) before `cluster update`")
+		}
 		step("Re-applying TLS cert/key from stored paths (skips if unchanged)")
 		certName, certCreated, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, "cert", state.CertPath)
 		if err != nil {
@@ -137,10 +157,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		res.CertSecret, res.KeySecret = certName, keyName
 		res.CertCreated, res.KeyCreated = certCreated, keyCreated
 		render.CertSecretName, render.KeySecretName = certName, keyName
-	} else {
-		// ACME (or missing paths): no cert/key to re-apply; the templates
-		// render the ACME path.
-		step("TLS mode is ACME (or no stored cert paths) — no cert/key to re-apply")
 	}
 
 	step("Rendering and provisioning OTel + Traefik configs (content-aware)")

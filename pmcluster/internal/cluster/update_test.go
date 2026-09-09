@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
@@ -148,5 +149,123 @@ func TestUpdate_PasswordRotationDoesNotRedeployObservability(t *testing.T) {
 	deployer := deps.Deployer.(*recordingDeployer)
 	if len(deployer.deployedStacks) != 0 {
 		t.Errorf("expected NO stacks deployed on password-only rotation, got %v", deployer.deployedStacks)
+	}
+}
+
+// TestUpdate_TLSNotACMEWithoutCertPathsErrorsIfNoACMEEmail reproduces the latent
+// bug where `cluster update` keyed its TLS cert/ACME branch on state.Mode=="cert"
+// while the infra-stack template keys on ACMEEmail emptiness. On a box whose TLS
+// mode was never persisted (mode="", ACMEEmail="", no cert/key paths — the exact
+// situation on the live box before the workaround), the old code silently loaded
+// no cert/key, leaving __CERT_SECRET__/__KEY_SECRET__ empty while the template
+// still rendered the `[[ if not .ACMEEmail ]]` block → a dangling `:` in the
+// global secrets → invalid YAML on `cluster update`. The fix: an empty ACMEEmail
+// ALWAYS requires cert/key paths, so update must fail loudly here rather than
+// emit broken config.
+func TestUpdate_TLSNotACMEWithoutCertPathsErrorsIfNoACMEEmail(t *testing.T) {
+	dir := t.TempDir()
+	s, err := store.Open(filepath.Join(dir, "tls.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	cipher := openTestCipher(t, filepath.Join(dir, ".key"))
+
+	ctx := context.Background()
+	// Persist ONLY the domain — deliberately NO tls_mode / cert / key / acme
+	// rows, mimicking a box that predates TLS-state persistence.
+	if err := s.SetSetting(ctx, settingDomain, "test.example.com"); err != nil {
+		t.Fatalf("persist domain: %v", err)
+	}
+	ct, err := cipher.Encrypt([]byte("pass"))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if err := s.InsertCredential(ctx, &store.ManagedCredential{
+		Name: "openobserve_admin", Kind: string(KindOpenObserve),
+		Username: "ops@example.com", PasswordCiphertext: ct,
+	}); err != nil {
+		t.Fatalf("insert openobserve_admin: %v", err)
+	}
+
+	cfgDir := filepath.Join(dir, "config")
+	if err := EnsureConfigDir(cfgDir, "v0.3.0"); err != nil {
+		t.Fatalf("EnsureConfigDir: %v", err)
+	}
+
+	f := newFakeDocker()
+	f.info = goodSwarmInfo()
+	for _, name := range bundledServices {
+		f.services[name] = healthyService(name)
+	}
+
+	_, err = Update(ctx, UpdateDeps{
+		Store:    s,
+		Cipher:   cipher,
+		Docker:   f,
+		Deployer: &recordingDeployer{},
+		Stdout:   io.Discard,
+	}, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})
+	if err == nil {
+		t.Fatal("expected an error: ACMEEmail empty with no persisted cert/key paths must fail loudly, not emit invalid YAML")
+	}
+	if !strings.Contains(err.Error(), "no cert/key paths are persisted") {
+		t.Errorf("error should explain the missing cert/key paths, got: %v", err)
+	}
+}
+
+// TestUpdate_ACMEModeDoesNotRequireCertPaths ensures that a box in ACME mode
+// (ACMEEmail persisted non-empty) updates without demanding cert/key paths and
+// without a TLS error — update keys its branch on ACMEEmail exactly like the
+// infra template, so the two never diverge.
+func TestUpdate_ACMEModeDoesNotRequireCertPaths(t *testing.T) {
+	dir := t.TempDir()
+	s, err := store.Open(filepath.Join(dir, "tls.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	cipher := openTestCipher(t, filepath.Join(dir, ".key"))
+
+	ctx := context.Background()
+	if err := s.SetSetting(ctx, settingDomain, "test.example.com"); err != nil {
+		t.Fatalf("persist domain: %v", err)
+	}
+	if err := s.SetSetting(ctx, settingTLSMode, "acme"); err != nil {
+		t.Fatalf("persist tls_mode: %v", err)
+	}
+	if err := s.SetSetting(ctx, settingTLSACME, "ops@example.com"); err != nil {
+		t.Fatalf("persist acme email: %v", err)
+	}
+	ct, err := cipher.Encrypt([]byte("pass"))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if err := s.InsertCredential(ctx, &store.ManagedCredential{
+		Name: "openobserve_admin", Kind: string(KindOpenObserve),
+		Username: "ops@example.com", PasswordCiphertext: ct,
+	}); err != nil {
+		t.Fatalf("insert openobserve_admin: %v", err)
+	}
+
+	cfgDir := filepath.Join(dir, "config")
+	if err := EnsureConfigDir(cfgDir, "v0.3.0"); err != nil {
+		t.Fatalf("EnsureConfigDir: %v", err)
+	}
+
+	f := newFakeDocker()
+	f.info = goodSwarmInfo()
+	for _, name := range bundledServices {
+		f.services[name] = healthyService(name)
+	}
+
+	if _, err := Update(ctx, UpdateDeps{
+		Store:    s,
+		Cipher:   cipher,
+		Docker:   f,
+		Deployer: &recordingDeployer{},
+		Stdout:   io.Discard,
+	}, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("ACME-mode update should succeed without cert/key paths, got: %v", err)
 	}
 }
