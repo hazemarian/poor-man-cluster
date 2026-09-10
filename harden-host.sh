@@ -28,25 +28,27 @@ set -euo pipefail
 # internal services. Traefik reaches the pmcluster API via the docker gateway
 # host (host.docker.internal = the bridge GW IP), so this subnet class must be
 # allowed through to 9090/4318 while the WAN is not.
-DOCKER_SUBNETS="172.16.0.0/12"
+DOCKER_SUBNETS="${DOCKER_SUBNETS:-172.16.0.0/12}"
 
 # WAN-facing ports to keep publicly open.
-WAN_PORTS="22 80 443"
+WAN_PORTS="${WAN_PORTS:-22 80 443}"
 
 # Docker-PUBLISHED ports (reachable via docker-proxy) that must NOT be open to
 # the internet. 4318 = OTel collector OTLP (the obvious Traefik bypass).
 # Add any other published-but-private ports here as you expose them.
-RESTRICTED_DOCKER_PORTS="4318"
+RESTRICTED_DOCKER_PORTS="${RESTRICTED_DOCKER_PORTS:-4318}"
 
 # Host-bound control-plane ports that must not be WAN-reachable:
 #   9090 = pmcluster management API (bound on all interfaces, Traefik reaches
 #          it over the docker gateway so we only block the public side)
 #   2377 = Docker Swarm manager/join  7946 = Swarm gossip
-RESTRICTED_HOST_PORTS="9090 2377 7946"
+RESTRICTED_HOST_PORTS="${RESTRICTED_HOST_PORTS:-9090 2377 7946}"
 
 # Comma-separated peer IPs allowed to reach the swarm control plane
 # (add manager/worker nodes in a multi-node swarm; single-node → leave empty).
-SWARM_PEERS=
+# Export this when hardening each node: SWARM_PEERS=<ip-of-the-other-node>
+# Set via env so the committed file stays generic.
+SWARM_PEERS="${SWARM_PEERS:-}"
 
 # ───────────────────────────── Helpers ────────────────────────────
 info() { echo "==> $*"; }
@@ -86,16 +88,25 @@ apply_firewall() {
       ufw allow from "$sn" to any port "$p" proto tcp >/dev/null
     done
   done
-  # Swarm control plane: allow configured peers, deny everything else.
+  # Swarm control plane: allow configured peers FIRST (ufw matches top-down, so
+  # peer-specific allows must precede the catch-all denies or the deny wins and
+  # node-to-node swarm traffic is blocked).
+  if [ -n "$SWARM_PEERS" ]; then
+    for peer in $(ip_to_list "$SWARM_PEERS"); do
+      ufw allow from "$peer" to any port 2377 proto tcp >/dev/null # control plane
+      ufw allow from "$peer" to any port 7946 proto tcp >/dev/null # gossip
+      ufw allow from "$peer" to any port 7946 proto udp >/dev/null # gossip (udp)
+      ufw allow from "$peer" to any port 4789 proto udp >/dev/null # overlay VXLAN
+    done
+  fi
+  # Then deny everything else for these ports (still reachable from the docker
+  # subnets + peers above, blocked from the WAN). Numbers 9090/4318/2377/7946.
   ufw deny 9090/tcp  >/dev/null   # pmcluster API       — no WAN
   ufw deny 4318/tcp  >/dev/null   # OTLP (host path)    — no WAN
   ufw deny 2377/tcp  >/dev/null   # Swarm manager       — no WAN
   ufw deny 7946/tcp  >/dev/null   # Swarm gossip        — no WAN
-  if [ -n "$SWARM_PEERS" ]; then
-    for peer in $(ip_to_list "$SWARM_PEERS"); do
-      ufw allow from "$peer" to any port 2377,7946 proto tcp >/dev/null
-    done
-  fi
+  ufw deny 7946/udp  >/dev/null   # Swarm gossip (udp)  — no WAN
+  ufw deny 4789/udp  >/dev/null   # Overlay VXLAN       — no WAN
 
   info "Enabling ufw"
   echo y | ufw --force enable >/dev/null
@@ -128,11 +139,13 @@ apply_fail2ban() {
   info "Installing + starting fail2ban"
   apt-get install -y fail2ban >/dev/null
 
+  # NOTE: no inline comments in these values — fail2ban 1.1.0 mishandles them
+  # (findtime ends up "600  # over the last 10 min" → jail fails to start).
   cat > /etc/fail2ban/jail.local <<'EOF'
 [DEFAULT]
-bantime  = 3600          # ban for 1h
-findtime = 600           # over the last 10 min
-maxretry = 5             # after 5 failures
+bantime  = 3600
+findtime = 600
+maxretry = 5
 
 [sshd]
 enabled = true
