@@ -110,6 +110,13 @@ func interpolateService(name string, s *dsl.Service, subst func(string) (string,
 			return wrap(err, "expose.host")
 		}
 		s.Expose.Host = v
+		for i := range s.Expose.Aliases {
+			v, err := subst(s.Expose.Aliases[i])
+			if err != nil {
+				return wrap(err, fmt.Sprintf("expose.aliases[%d]", i))
+			}
+			s.Expose.Aliases[i] = v
+		}
 	}
 	return nil
 }

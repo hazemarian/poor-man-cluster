@@ -15,6 +15,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
@@ -113,6 +114,22 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		log.Warn().Err(cipherErr).Msg("encryption key not available; /webhook/* disabled")
 	}
 
+	hostCerts := &server.HostCertService{
+		Manager: tlscerts.New(cfg.ConfigDir()),
+		Refresh: func(ctx context.Context) error {
+			if cipher == nil {
+				return fmt.Errorf("encryption key unavailable; cannot refresh Traefik")
+			}
+			_, err := cluster.RefreshHostCerts(ctx, cluster.HostCertsDeps{
+				Store:    st,
+				Cipher:   cipher,
+				Docker:   dc,
+				Deployer: deployer,
+			}, cfg.ConfigDir(), buildinfo.Version)
+			return err
+		},
+	}
+
 	handler := server.New(server.Deps{
 		Lookup:        st,
 		Docker:        dc,
@@ -120,6 +137,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		DeployService: deploySvc,
 		Cipher:        cipher,
 		BackupTrigger: backup.LocalTrigger{Store: st},
+		HostCerts:     hostCerts,
 	})
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)

@@ -1,10 +1,22 @@
 package cluster
 
 import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/pem"
+	"math/big"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
 )
 
 // stacksWithDomain lists the bundled stacks that actually contain ${DOMAIN}
@@ -326,8 +338,10 @@ func TestRenderTraefikDynamic_EmptyDomain(t *testing.T) {
 	}
 }
 
-// TestRenderTraefikDynamic_ACMEMode verifies the ACME branch emits the
-// certResolver tag and drops the static-cert tls block.
+// TestRenderTraefikDynamic_ACMEMode verifies the ACME branch drops the
+// static-cert tls block and declares no file-provider router (the
+// pmcluster.<domain> router + its letsencrypt certResolver are mounted via
+// edge-stack.yml labels).
 func TestRenderTraefikDynamic_ACMEMode(t *testing.T) {
 	in := RenderInput{Domain: "x.example.com", ACMEEmail: "ops@example.com"}
 	data, err := RenderTraefikDynamic(in)
@@ -335,11 +349,14 @@ func TestRenderTraefikDynamic_ACMEMode(t *testing.T) {
 		t.Fatalf("RenderTraefikDynamic: %v", err)
 	}
 	body := string(data)
-	if !strings.Contains(body, "certResolver: letsencrypt") {
-		t.Errorf("ACME mode missing certResolver line:\n%s", body)
-	}
 	if strings.Contains(body, "/run/secrets/cert") || strings.Contains(body, "/run/secrets/key") {
 		t.Errorf("ACME mode must not reference static cert/key secrets:\n%s", body)
+	}
+	if strings.Contains(body, "routers:") {
+		t.Errorf("ACME mode file-provider should declare no routers (edge labels own the router):\n%s", body)
+	}
+	if !strings.Contains(body, "cors-default:") {
+		t.Errorf("ACME mode must still ship the shared middlewares:\n%s", body)
 	}
 }
 
@@ -357,6 +374,92 @@ func TestRenderTraefikDynamic_BYOMode(t *testing.T) {
 	}
 	if !strings.Contains(body, "/run/secrets/cert_v001") || !strings.Contains(body, "/run/secrets/key_v001") {
 		t.Errorf("BYO mode must reference static cert/key secrets:\n%s", body)
+	}
+}
+
+// selfSignedForHost generates a throwaway self-signed ECDSA cert/key for
+// host, used only to prove the dynamic-config render appends host certs.
+func selfSignedForHost(t *testing.T, host string) (certPEM, keyPEM string) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: host},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{host},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	certPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	keyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+	return certPEM, keyPEM
+}
+
+// TestRenderTraefikDynamic_AppendsHostCerts verifies that per-host certs
+// placed under the hosts dir are merged into the dynamic config's
+// tls.certificates (referencing the in-container mount root) WITHOUT
+// disturbing the cluster's own BYO default cert block, and that an empty
+// hosts dir leaves the rendered body untouched.
+func TestRenderTraefikDynamic_AppendsHostCerts(t *testing.T) {
+	cfgDir := t.TempDir()
+	hostsDir := tlscerts.HostsDir(cfgDir)
+	certPEM, keyPEM := selfSignedForHost(t, "idlibookfair.com")
+	if _, err := tlscerts.New(cfgDir).Put(context.Background(), "idlibookfair.com", certPEM, keyPEM); err != nil {
+		t.Fatalf("put host cert: %v", err)
+	}
+
+	in := RenderInput{
+		Domain:         "x.example.com",
+		ConfigDir:      cfgDir,
+		HostsDir:       hostsDir,
+		CertSecretName: "cert_v001",
+		KeySecretName:  "key_v001",
+	}
+	data, err := RenderTraefikDynamic(in)
+	if err != nil {
+		t.Fatalf("RenderTraefikDynamic: %v", err)
+	}
+	body := string(data)
+
+	// Host cert referenced at the in-container mount root.
+	if !strings.Contains(body, "certFile: /etc/traefik/hosts/idlibookfair.com/cert.pem") {
+		t.Errorf("host cert certFile missing:\n%s", body)
+	}
+	if !strings.Contains(body, "keyFile: /etc/traefik/hosts/idlibookfair.com/key.pem") {
+		t.Errorf("host cert keyFile missing:\n%s", body)
+	}
+	// Cluster's own BYO default cert block is preserved.
+	if !strings.Contains(body, "/run/secrets/cert_v001") || !strings.Contains(body, "/run/secrets/key_v001") {
+		t.Errorf("BYO default cert references dropped:\n%s", body)
+	}
+	// Exactly one tls: key in the merged doc.
+	if strings.Count(body, "tls:") != 1 {
+		t.Errorf("expected exactly one `tls:` key, got %d:\n%s", strings.Count(body, "tls:"), body)
+	}
+
+	// Empty hosts dir (no certs) → body unchanged.
+	in.HostsDir = filepath.Join(t.TempDir(), "missing")
+	data2, err := RenderTraefikDynamic(in)
+	if err != nil {
+		t.Fatalf("RenderTraefikDynamic (no hosts): %v", err)
+	}
+	if !strings.Contains(string(data2), "cors-default") {
+		t.Errorf("no-hosts render lost middlewares:\n%s", string(data2))
+	}
+	if strings.Contains(string(data2), "traefik/hosts") {
+		t.Errorf("no-hosts render should not reference host certs:\n%s", string(data2))
 	}
 }
 
@@ -444,8 +547,11 @@ func TestCORSOriginRegex_RejectsBadDomain(t *testing.T) {
 }
 
 // TestRenderTraefikDynamic_CORSWired verifies the rendered dynamic config
-// contains the cors-default middleware and the pmcluster router includes
-// it in its middlewares chain.
+// contains the cors-default middleware, its domain-based origin, and the
+// Access-Control-Allow-Credentials header. The shared middlewares live here
+// (referenced by routers mounted via stack labels, e.g. the edge console's
+// pmcluster.<domain> router in edge-stack.yml), so no router is declared in
+// this file itself.
 func TestRenderTraefikDynamic_CORSWired(t *testing.T) {
 	in := RenderInput{Domain: "example.com"}
 	data, err := RenderTraefikDynamic(in)
@@ -460,11 +566,12 @@ func TestRenderTraefikDynamic_CORSWired(t *testing.T) {
 	if !strings.Contains(body, `Access-Control-Allow-Origin: "https://example.com"`) {
 		t.Errorf("rendered config missing domain-based origin in cors-default:\n%s", body)
 	}
-	if !strings.Contains(body, "- cors-default") {
-		t.Errorf("rendered config missing cors-default in router middlewares list:\n%s", body)
-	}
 	if !strings.Contains(body, `Access-Control-Allow-Credentials: "true"`) {
 		t.Errorf("rendered config missing Access-Control-Allow-Credentials:\n%s", body)
+	}
+	// The pmcluster router is owned by edge-stack.yml labels now, not this file.
+	if strings.Contains(body, "routers:") {
+		t.Errorf("file-provider should declare no routers (edge owns pmcluster.<domain>):\n%s", body)
 	}
 }
 

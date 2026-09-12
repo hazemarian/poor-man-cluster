@@ -1,0 +1,46 @@
+{{define "tls"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1 style="margin:0 0 4px">TLS Certificates</h1>
+<p class="sub">Serve a customer's own domain on its own origin with its own
+real certificate. The cert and key are pasted as text here, stored by pmcluster
+under <code>~/.pmcluster/config/hosts/&lt;host&gt;/</code>, and served by Traefik for
+the matching SNI. The cluster's own default wildcard cert is never touched.</p>
+
+<div class="card">
+  <h2 style="margin-top:0">Add a per-host certificate</h2>
+  <form hx-post="/tls" hx-target="#view" hx-swap="innerHTML">
+    <label>Host (e.g. idlibookfair.com)</label>
+    <input type="text" name="host" placeholder="idlibookfair.com" required>
+    <label>Certificate (PEM text)</label>
+    <textarea name="cert" rows="6" placeholder="-----BEGIN CERTIFICATE-----" required></textarea>
+    <label>Private key (PEM text)</label>
+    <textarea name="key" rows="6" placeholder="-----BEGIN PRIVATE KEY-----" required></textarea>
+    <div style="margin-top:10px">
+      <button class="btn" type="submit" hx-disabled-elt="this">Store certificate</button>
+    </div>
+  </form>
+</div>
+
+<h2 style="margin-bottom:0">Stored certificates</h2>
+<div class="card" style="padding:6px 14px">
+{{if .Hosts}}
+<table>
+  <tr><th>Host</th><th>Expires</th><th>SANs</th><th></th></tr>
+  {{range .Hosts}}
+  <tr>
+    <td><code>{{.Host}}</code></td>
+    <td class="muted">{{.Expires}}</td>
+    <td class="muted">{{.SANs}}</td>
+    <td style="text-align:right">
+      <button class="btn danger" hx-post="/tls/remove/{{.Host}}" hx-target="#view" hx-swap="innerHTML">Remove</button>
+    </td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<div class="empty">No per-host certificates stored.</div>
+{{end}}
+</div>
+{{end}}

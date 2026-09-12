@@ -12,6 +12,18 @@
 #   PMCLUSTER_USER=deployer systemd service user (default: auto-detected)
 #   PMCLUSTER_REGISTRY=host=user=token,...  auto-configure registries
 #     (GHCR: PMCLUSTER_REGISTRY=ghcr.io=USERNAME=ghp_...)
+#
+# Cluster apply (auto-cluster up/update):
+#   CLUSTER_APPLY=auto|none   auto=up fresh / update existing (default auto)
+#   PMCLUSTER_DOMAIN=<domain>            required to auto 'cluster up' on a fresh box
+#   PMCLUSTER_CERT / PMCLUSTER_KEY       PEM file paths (BYO cert mode)
+#   PMCLUSTER_ACME_EMAIL=<you@host>      alt: Let's Encrypt mode
+#   PMCLUSTER_OPENOBSERVE_EMAIL=<you@host>
+#
+# On a fresh box with no cluster, install.sh runs 'pmcluster cluster up' using
+# the PMCLUSTER_* inputs; on a box where the 'infra' stack is already deployed
+# it runs 'pmcluster cluster update' to apply config changes. Set
+# CLUSTER_APPLY=none to skip both.
 
 set -euo pipefail
 
@@ -212,3 +224,66 @@ echo "  pmcluster serve               # start the daemon (supervise via systemd;
     echo "  pmcluster registry list"
   fi
 fi
+
+# --- Cluster apply (auto cluster up / update) ---
+# Decides to bring the cluster up on a fresh box, or update it when infra is
+# already deployed. Skipped entirely when CLUSTER_APPLY=none.
+#
+#   CLUSTER_APPLY=auto|none   (default auto)
+#   PMCLUSTER_DOMAIN=<domain>            required to auto 'cluster up' on a fresh box
+#   PMCLUSTER_CERT / PMCLUSTER_KEY       PEM file paths (BYO cert mode)
+#   PMCLUSTER_ACME_EMAIL=<you@host>      alt: Let's Encrypt mode
+#   PMCLUSTER_OPENOBSERVE_EMAIL=<you@host>
+CLUSTER_APPLY="${CLUSTER_APPLY:-auto}"
+PMCLUSTER_USER="${PMCLUSTER_USER:-${SUDO_USER:-$(id -un)}}"
+PMCLUSTER_HOME="$(eval echo ~${PMCLUSTER_USER})"
+
+run_cluster_apply() {
+  [ "$CLUSTER_APPLY" = "none" ] && { echo "→ CLUSTER_APPLY=none — skipping cluster up/update"; return 0; }
+
+  local CONFIG_FILE="${PMCLUSTER_HOME}/.pmcluster/config.yaml"
+
+  if [ -f "$CONFIG_FILE" ]; then
+    echo
+    echo "→ Cluster already exists at $CONFIG_FILE — running 'cluster update'"
+    if ! "$PREFIX/pmcluster" cluster update; then
+      echo "⚠  pmcluster cluster update failed (see output above)." >&2
+      return 1
+    fi
+    echo "→ cluster update complete."
+    return 0
+  fi
+
+  # Fresh box: need a domain to bring the cluster up.
+  if [ -z "${PMCLUSTER_DOMAIN:-}" ]; then
+    echo "→ No existing cluster and PMCLUSTER_DOMAIN is empty — skipping auto 'cluster up'."
+    echo "  Set PMCLUSTER_DOMAIN=<domain> to auto-provision, or run 'pmcluster init' + 'pmcluster cluster up' yourself."
+    return 0
+  fi
+
+  echo
+  echo "→ No existing cluster — bootstrapping with 'pmcluster init' + 'cluster up'"
+  if ! "$PREFIX/pmcluster" init; then
+    echo "⚠  pmcluster init failed (see output above)." >&2
+    return 1
+  fi
+
+  local UP_ARGS=(--domain="$PMCLUSTER_DOMAIN")
+  if [ -n "${PMCLUSTER_CERT:-}" ] && [ -n "${PMCLUSTER_KEY:-}" ]; then
+    UP_ARGS+=(--cert="$PMCLUSTER_CERT" --key="$PMCLUSTER_KEY")
+  elif [ -n "${PMCLUSTER_ACME_EMAIL:-}" ]; then
+    UP_ARGS+=(--acme-email="$PMCLUSTER_ACME_EMAIL")
+  fi
+  if [ -n "${PMCLUSTER_OPENOBSERVE_EMAIL:-}" ]; then
+    UP_ARGS+=(--openobserve-email="$PMCLUSTER_OPENOBSERVE_EMAIL")
+  fi
+
+  if ! "$PREFIX/pmcluster" cluster up "${UP_ARGS[@]}"; then
+    echo "⚠  pmcluster cluster up failed (see output above)." >&2
+    return 1
+  fi
+  echo "→ cluster up complete."
+  return 0
+}
+
+run_cluster_apply || true

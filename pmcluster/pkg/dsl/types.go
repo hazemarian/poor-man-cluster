@@ -69,6 +69,13 @@ type Expose struct {
 	Port int    `json:"port"` // container-side port
 	Host string `json:"host"` // FQDN; e.g. "api.${app}.${domain}"
 
+	// Aliases are extra hostnames that route to the same backend. Each
+	// alias emits its own Traefik router pointing at the same service.
+	// Typically a customer's own domain (e.g. "idlibookfair.com") serving
+	// the same app as the canonical ${domain} host. Supports ${app},
+	// ${env}, ${domain}, etc. like Host.
+	Aliases []string `json:"aliases,omitempty"`
+
 	// CORSDisabled opts the exposed router out of the cluster-wide
 	// cors-default Traefik middleware. Set this when the service owns
 	// CORS itself (e.g. multi-tenant dynamic origins) or when its host

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
@@ -123,6 +124,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		OpenObserveIngestionToken: ooTokenPlain,
 		ACMEEmail:                 state.ACMEEmail,
 		ConfigDir:                 in.ConfigDir,
+		HostsDir:                  tlscerts.HostsDir(in.ConfigDir),
 		EdgeImage:                 EdgeImageFor(),
 	}
 

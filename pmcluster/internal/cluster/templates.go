@@ -13,6 +13,8 @@ import (
 	"strings"
 	"text/template"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 )
 
@@ -106,6 +108,13 @@ type RenderInput struct {
 	// prefers a user-supplied copy from disk over the embedded default.
 	// If the disk file is missing it falls back to the embedded version.
 	ConfigDir string
+
+	// HostsDir is the per-host TLS certificate base directory
+	// (~/.pmcluster/config/hosts/). RenderTraefikDynamic appends every
+	// on-disk host cert to the dynamic config so Traefik serves them for
+	// the matching SNI (file-provider hot reload). Empty disables the
+	// append (host certs only appear when the feature is configured).
+	HostsDir string
 
 	// OTelConfigName is the versioned Docker config name for the OTel
 	// collector pipeline (e.g. pmcluster_otel_config_v003). Substituted
@@ -221,7 +230,9 @@ func RenderOTelCollectorConfig(in RenderInput) ([]byte, error) {
 }
 
 // RenderTraefikDynamic renders the Traefik file-provider config.
-// Reads from disk first (ConfigDir), then embedded.
+// Reads from disk first (ConfigDir), then embedded. After the template body
+// is rendered, any per-host certs under in.HostsDir are appended into the
+// same doc's tls.certificates list so Traefik serves them for their SNI.
 func RenderTraefikDynamic(in RenderInput) ([]byte, error) {
 	if in.Domain == "" {
 		return nil, fmt.Errorf("RenderTraefikDynamic: Domain is required")
@@ -240,7 +251,75 @@ func RenderTraefikDynamic(in RenderInput) ([]byte, error) {
 	if err := tmpl.Execute(&out, in); err != nil {
 		return nil, fmt.Errorf("execute traefik dynamic template: %w", err)
 	}
-	return out.Bytes(), nil
+	return appendHostCertificates(out.Bytes(), in.HostsDir)
+}
+
+// hostCertMountRoot is the path at which the host-certs directory is
+// bind-mounted inside the Traefik container (see infra-stack.yml). The
+// dynamic config references cert files relative to this root.
+const hostCertMountRoot = "/etc/traefik/hosts"
+
+// appendHostCertificates merges every on-disk per-host cert under hostsDir
+// into the rendered Traefik dynamic config's tls.certificates list. It uses
+// a YAML round-trip so there is exactly one `tls:` block and one
+// `tls.certificates` list — never a duplicate YAML key. When hostsDir is
+// empty, has no certs, or the body has no `tls:` yet, the appropriate list is
+// created or left untouched. The cluster's own default cert block (from the
+// template) is preserved verbatim in the list; host certs are additional
+// entries.
+func appendHostCertificates(body []byte, hostsDir string) ([]byte, error) {
+	if hostsDir == "" {
+		return body, nil
+	}
+	entries, err := os.ReadDir(hostsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return body, nil
+		}
+		return nil, fmt.Errorf("scan hosts dir %s: %w", hostsDir, err)
+	}
+	var additions []map[string]string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		certPath := filepath.Join(hostsDir, e.Name(), "cert.pem")
+		keyPath := filepath.Join(hostsDir, e.Name(), "key.pem")
+		if _, err := os.Stat(certPath); err != nil {
+			continue
+		}
+		if _, err := os.Stat(keyPath); err != nil {
+			continue
+		}
+		additions = append(additions, map[string]string{
+			"certFile": filepath.Join(hostCertMountRoot, e.Name(), "cert.pem"),
+			"keyFile":  filepath.Join(hostCertMountRoot, e.Name(), "key.pem"),
+		})
+	}
+	if len(additions) == 0 {
+		return body, nil
+	}
+
+	var doc map[string]any
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		return nil, fmt.Errorf("unmarshal rendered traefik dynamic config: %w", err)
+	}
+	tls, _ := doc["tls"].(map[string]any)
+	if tls == nil {
+		tls = map[string]any{}
+		doc["tls"] = tls
+	}
+	certs, _ := tls["certificates"].([]any)
+	for _, a := range additions {
+		certs = append(certs, a)
+	}
+	tls["certificates"] = certs
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("marshal traefik dynamic config with host certs: %w", err)
+	}
+	return out, nil
 }
 
 // configVersionHeader matches the first-line version comment in every

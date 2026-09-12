@@ -104,6 +104,21 @@ func TestTranslate_Golden(t *testing.T) {
 				"io.pmcluster.skip_filelog",
 			},
 		},
+		{
+			name: "aliases",
+			expectedContains: []string{
+				"traefik.http.routers.bookfair-api.rule: Host(`idlib-book-fair.nextrum-sy.com`)",
+				"traefik.http.routers.bookfair-api-alias0.rule: Host(`idlibookfair.com`)",
+				"traefik.http.routers.bookfair-api-alias1.rule: Host(`www.nextrum-sy.com`)",
+				// Alias routers reuse the same backend.
+				"traefik.http.services.bookfair-api.loadbalancer.server.port: \"8080\"",
+				// Per-app CORS middleware spanning host + aliases.
+				"traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolalloworiginlistregex: ^(https://idlib-book-fair\\.nextrum-sy\\.com|https://idlibookfair\\.com|https://www\\.nextrum-sy\\.com)$",
+				"traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolallowcredentials: \"true\"",
+				"traefik.http.routers.bookfair-api.middlewares: bookfair-api-cors@docker",
+				"traefik.http.routers.bookfair-api-alias0.middlewares: bookfair-api-cors@docker",
+			},
+		},
 	}
 
 	for _, tc := range cases {

@@ -1,0 +1,12 @@
+app: bookfair
+env: production
+domain: nextrum-sy.com
+services:
+  api:
+    image: nginx:latest
+    expose:
+      port: 8080
+      host: idlib-book-fair.${domain}
+      aliases:
+        - idlibookfair.com
+        - www.${domain}

@@ -123,6 +123,11 @@ func (a *App) Mount(engine *gin.Engine) {
 	stt := controllers.Settings{Controller: a.ctrl}
 	g.GET("/settings", stt.Page)
 	g.POST("/settings", stt.Save)
+
+	tlsC := controllers.TLS{Controller: a.ctrl}
+	g.GET("/tls", tlsC.Page)
+	g.POST("/tls", tlsC.Add)
+	g.POST("/tls/remove/:host", tlsC.Remove)
 }
 
 // Handler returns a gin engine with every UI route. The edge service mounts

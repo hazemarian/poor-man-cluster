@@ -49,6 +49,10 @@ type Deps struct {
 	DeployService *deploy.Service
 	Cipher        *credentials.Cipher
 	BackupTrigger api.BackupTrigger
+
+	// HostCerts exposes per-host TLS cert management under /api/tls/hosts.
+	// Optional; when nil those routes are omitted.
+	HostCerts *HostCertService
 }
 
 func New(d Deps) http.Handler {
@@ -101,6 +105,9 @@ func New(d Deps) http.Handler {
 			bh := &api.BackupsHandler{Store: d.Store, Trigger: d.BackupTrigger}
 			bh.Mount(r)
 			bh.MountStackScoped(r)
+		}
+		if d.HostCerts != nil {
+			d.HostCerts.Mount(r)
 		}
 	})
 

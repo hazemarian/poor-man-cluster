@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"fmt"
+	"strings"
 
 	"sigs.k8s.io/yaml"
 
@@ -232,17 +233,68 @@ func standardLabels(app *dsl.App, serviceName string) map[string]string {
 // dynamic file provider by pmcluster cluster up) is attached by
 // default. Services that own CORS themselves opt out via
 // expose.cors_disabled: true.
+//
+// When the service declares expose.aliases (extra hostnames routing to the
+// same backend), we emit one Traefik router per alias — all sharing the same
+// backend service — so a customer's own domain can serve the app alongside
+// the canonical ${domain} host. Because the aliases live on foreign domains
+// the cluster-wide cors-default regex doesn't cover, aliases force a per-app
+// CORS middleware whose origin regex spans the primary host AND every alias.
 func addTraefikLabels(labels map[string]string, app *dsl.App, serviceName string, exp *dsl.Expose) {
 	scope := app.Name + "-" + serviceName
 	labels["traefik.enable"] = "true"
+	labels["traefik.http.services."+scope+".loadbalancer.server.port"] = fmt.Sprintf("%d", exp.Port)
+	labels["traefik.docker.network"] = traefikNet
+
+	// Determine the middleware attached to every router: the per-app one when
+	// there are aliases (foreign origins) and CORS isn't disabled, else the
+	// cluster-wide cors-default.
+	middleware := "cors-default@file"
+	aliasCORS := len(exp.Aliases) > 0 && !exp.CORSDisabled
+	if aliasCORS {
+		corsName := scope + "-cors"
+		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolalloworiginlistregex"] = buildOriginRegex(exp)
+		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolallowcredentials"] = "true"
+		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolallowmethods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolallowheaders"] = "Content-Type,Authorization,X-Pmcluster-Signature,X-Request-Id"
+		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolmaxage"] = "600"
+		labels["traefik.http.middlewares."+corsName+".headers.addvaryheader"] = "true"
+		middleware = corsName + "@docker"
+	}
+
+	// Primary host router.
 	labels["traefik.http.routers."+scope+".rule"] = "Host(`" + exp.Host + "`)"
 	labels["traefik.http.routers."+scope+".entrypoints"] = "websecure"
 	labels["traefik.http.routers."+scope+".tls"] = "true"
 	if !exp.CORSDisabled {
-		labels["traefik.http.routers."+scope+".middlewares"] = "cors-default@file"
+		labels["traefik.http.routers."+scope+".middlewares"] = middleware
 	}
-	labels["traefik.http.services."+scope+".loadbalancer.server.port"] = fmt.Sprintf("%d", exp.Port)
-	labels["traefik.docker.network"] = traefikNet
+
+	// One router per alias, sharing the same backend service. Names are
+	// suffixed "-alias<i>" so they never collide with the primary router.
+	for i, alias := range exp.Aliases {
+		aliasScope := fmt.Sprintf("%s-alias%d", scope, i)
+		labels["traefik.http.routers."+aliasScope+".rule"] = "Host(`" + alias + "`)"
+		labels["traefik.http.routers."+aliasScope+".entrypoints"] = "websecure"
+		labels["traefik.http.routers."+aliasScope+".tls"] = "true"
+		if !exp.CORSDisabled {
+			labels["traefik.http.routers."+aliasScope+".middlewares"] = middleware
+		}
+	}
+}
+
+// buildOriginRegex produces the CORS Access-Control-Allow-Origin regex for
+// the primary host plus all aliases. Reverse-domains must be escaped for the
+// Traefik regexp matcher (dashes are already safe in a char class-free
+// alternation); we escape dots and treat each host as an exact origin match
+// for https://<host>.
+func buildOriginRegex(exp *dsl.Expose) string {
+	hosts := append([]string{exp.Host}, exp.Aliases...)
+	escaped := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		escaped = append(escaped, `https://`+strings.ReplaceAll(h, ".", `\.`))
+	}
+	return `^(` + strings.Join(escaped, `|`) + `)$`
 }
 
 func translateUpdate(u *dsl.Update) *composeUpdateConfig {

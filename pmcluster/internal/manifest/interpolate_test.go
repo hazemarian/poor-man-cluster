@@ -84,6 +84,28 @@ func TestInterpolate_DomainBuiltin(t *testing.T) {
 	}
 }
 
+func TestInterpolate_AliasesExpandBuiltins(t *testing.T) {
+	app := minimalApp(t)
+	app.Services["api"].Expose = &dsl.Expose{
+		Port:    8080,
+		Host:    "api.${domain}",
+		Aliases: []string{"idlibookfair.com", "www.${domain}"},
+	}
+	if err := Interpolate(app); err != nil {
+		t.Fatalf("Interpolate: %v", err)
+	}
+	got := app.Services["api"].Expose.Aliases
+	want := []string{"idlibookfair.com", "www.example.com"}
+	if len(got) != len(want) {
+		t.Fatalf("len(Aliases) = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Aliases[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestInterpolate_DefaultVersionLatest(t *testing.T) {
 	// Parse a manifest where version is not set — Interpolate should default it.
 	app, err := Parse([]byte(`

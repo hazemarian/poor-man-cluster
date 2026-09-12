@@ -213,3 +213,24 @@ func (c *Client) ListStackBackups(ctx context.Context, name string) ([]Backup, e
 	err := c.do(ctx, http.MethodGet, "/stacks/"+url.PathEscape(name)+"/backups", nil, &body)
 	return body.Backups, err
 }
+
+// ListHostCerts returns every per-host TLS certificate.
+func (c *Client) ListHostCerts(ctx context.Context) ([]HostCert, error) {
+	var out hostCertsResponse
+	err := c.do(ctx, http.MethodGet, "/tls/hosts", nil, &out)
+	return out.Hosts, err
+}
+
+// AddHostCert stores a per-host cert/key (text) and triggers the Traefik
+// refresh on the daemon.
+func (c *Client) AddHostCert(ctx context.Context, host, cert, key string) (*HostCert, error) {
+	body := map[string]string{"cert": cert, "key": key}
+	var out HostCert
+	err := c.do(ctx, http.MethodPut, "/tls/hosts/"+url.PathEscape(host), body, &out)
+	return &out, err
+}
+
+// RemoveHostCert deletes a per-host cert and triggers the Traefik refresh.
+func (c *Client) RemoveHostCert(ctx context.Context, host string) error {
+	return c.do(ctx, http.MethodDelete, "/tls/hosts/"+url.PathEscape(host), nil, nil)
+}

@@ -139,6 +139,36 @@ func TestValidate_ExposeValid(t *testing.T) {
 	mustPass(t, a)
 }
 
+func TestValidate_AliasesEmpty(t *testing.T) {
+	a := baseApp()
+	a.Services["api"].Expose = &dsl.Expose{
+		Port:    8080,
+		Host:    "api.example.com",
+		Aliases: []string{""},
+	}
+	mustFail(t, a, "expose.aliases[0]")
+}
+
+func TestValidate_AliasesInvalidHostname(t *testing.T) {
+	a := baseApp()
+	a.Services["api"].Expose = &dsl.Expose{
+		Port:    8080,
+		Host:    "api.example.com",
+		Aliases: []string{"not a hostname"},
+	}
+	mustFail(t, a, "expose.aliases[0]")
+}
+
+func TestValidate_AliasesValid(t *testing.T) {
+	a := baseApp()
+	a.Services["api"].Expose = &dsl.Expose{
+		Port:    8080,
+		Host:    "api.example.com",
+		Aliases: []string{"idlibookfair.com", "shop.example.org"},
+	}
+	mustPass(t, a)
+}
+
 func TestValidate_HealthcheckShorthandAndTestMutex(t *testing.T) {
 	a := baseApp()
 	a.Services["api"].Healthcheck = &dsl.Healthcheck{

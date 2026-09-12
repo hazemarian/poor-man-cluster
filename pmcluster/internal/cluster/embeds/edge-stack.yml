@@ -20,6 +20,12 @@ services:
   #                          the daemon (dedicated "edge" daemon user)
   # Standalone/local runs fall back to PMCLUSTER_UI_USER/PASS/SECRET and
   # PMCLUSTER_API_TOKEN env vars when no secrets are mounted.
+  #
+  # Routing: this service publishes itself to Traefik via stack labels — the
+  # pmcluster.<domain> origin serves the edge console + reverse proxy, replacing
+  # what was previously the direct daemon path and the edge.<domain> subdomain.
+  # The shared middlewares it references (cors-default) come from the file
+  # provider (traefik-dynamic.yml).
   pmcluster-edge:
     image: [[.EdgeImage]]
     environment:
@@ -57,17 +63,17 @@ services:
       placement:
         constraints: [node.role == manager]
       labels:
-        # Expose the edge console + reverse proxy at edge.<domain>, the same way
-        # other managed services (portainer, openobserve) are exposed. This lets
-        # you verify the edge BEFORE cutting pmcluster.<domain> over to it, so
-        # host.docker.internal:9090 stays the live public path in the meantime.
+        # Expose the edge console + reverse proxy at pmcluster.<domain>. This
+        # replaces the daemon-direct path AND the old edge.<domain> subdomain:
+        # pmcluster.<domain> is now the single public origin for the console
+        # + API + webhooks, shielded by the edge.
         - "traefik.enable=true"
-        - "traefik.http.routers.edge.rule=Host(`edge.${DOMAIN}`)"
-        - "traefik.http.routers.edge.entrypoints=websecure"
-        - "traefik.http.routers.edge.tls=true"
-        - "traefik.http.routers.edge.tls.certresolver=letsencrypt"
-        - "traefik.http.routers.edge.middlewares=cors-default@file"
-        - "traefik.http.services.edge.loadbalancer.server.port=8042"
+        - "traefik.http.routers.pmcluster.rule=Host(`pmcluster.${DOMAIN}`)"
+        - "traefik.http.routers.pmcluster.entrypoints=websecure"
+        - "traefik.http.routers.pmcluster.tls=true"
+        - "traefik.http.routers.pmcluster.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.pmcluster.middlewares=cors-default@file"
+        - "traefik.http.services.pmcluster.loadbalancer.server.port=8042"
       resources:
         reservations:
           cpus: '0.05'

@@ -82,6 +82,14 @@ func validateService(name string, s *dsl.Service) error {
 		if !hostnameRe.MatchString(s.Expose.Host) {
 			return fmt.Errorf("%s.expose.host: invalid hostname %q", prefix, s.Expose.Host)
 		}
+		for i, alias := range s.Expose.Aliases {
+			if alias == "" {
+				return fmt.Errorf("%s.expose.aliases[%d]: empty alias", prefix, i)
+			}
+			if !hostnameRe.MatchString(alias) {
+				return fmt.Errorf("%s.expose.aliases[%d]: invalid hostname %q", prefix, i, alias)
+			}
+		}
 	}
 	if s.Healthcheck != nil {
 		if err := validateHealthcheck(prefix, s.Healthcheck); err != nil {
