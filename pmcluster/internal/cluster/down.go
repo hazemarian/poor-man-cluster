@@ -51,8 +51,8 @@ func Down(ctx context.Context, deps DownDeps, in DownInput) (*DownResult, error)
 
 	// Stacks first — removing referenced secrets/configs/networks while
 	// services still hold them would error.
-	step("Removing stacks (infra, observability, backup)")
-	for _, s := range []string{"infra", "observability", "backup"} {
+	step("Removing stacks (infra, edge, observability, backup)")
+	for _, s := range []string{"infra", "edge", "observability", "backup"} {
 		if err := deps.Deployer.RemoveStack(ctx, s); err != nil {
 			fmt.Fprintf(out, "  ⚠ stack rm %s: %v\n", s, err)
 			continue

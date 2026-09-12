@@ -30,6 +30,9 @@ type UpdateResult struct {
 	KeySecret      string
 	CertCreated    bool
 	KeyCreated     bool
+	EdgeConfig     string
+	EdgeCreated    bool
+	EdgeDeployed   bool
 	StacksDeployed []string
 }
 
@@ -120,6 +123,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		OpenObserveIngestionToken: ooTokenPlain,
 		ACMEEmail:                 state.ACMEEmail,
 		ConfigDir:                 in.ConfigDir,
+		EdgeImage:                 EdgeImageFor(),
 	}
 
 	// TLS cert/key: content-aware re-apply from stored paths. Unchanged file
@@ -182,6 +186,15 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	res.TraefikConfig, res.TraefikCreated = traefikName, traefikCreated
 	render.TraefikConfigName = traefikName
 
+	// Edge content fingerprint: the edge-stack.yml embeds a version-keyed image
+	// tag, so a new EnsureConfig version means the rendered edge stack changed
+	// (pmcluster version bump or operator config edit) and edge must re-deploy.
+	edgeName, edgeCreated, err := ensureEdgeConfig(ctx, deps.Docker, in.Version, render)
+	if err != nil {
+		return res, err
+	}
+	res.EdgeConfig, res.EdgeCreated = edgeName, edgeCreated
+
 	// Re-deploy ONLY the stacks whose inputs moved. The config/cert NAMES are
 	// substituted into the compose, so a new version only takes effect when
 	// its stack re-deploys (which force-restarts just that stack's consumers).
@@ -204,6 +217,14 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			return res, err
 		}
 		res.StacksDeployed = append(res.StacksDeployed, string(StackInfra))
+	}
+	if edgeCreated {
+		step("pmcluster-edge stack content changed (new image tag / config edit) → re-deploying")
+		if err := deployStack(ctx, out, deps.Deployer, StackEdge, render); err != nil {
+			return res, err
+		}
+		res.StacksDeployed = append(res.StacksDeployed, string(StackEdge))
+		res.EdgeDeployed = true
 	}
 
 	if len(res.StacksDeployed) == 0 {

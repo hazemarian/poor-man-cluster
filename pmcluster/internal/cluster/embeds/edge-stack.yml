@@ -1,0 +1,88 @@
+## pmcluster-config-version: __PMCONFIG_VERSION__
+version: "3.9"
+
+services:
+  # pmcluster-edge — the edge service in front of the pmcluster daemon: the
+  # smart reverse proxy (per-real-IP throttling, connection/DDoS shield, IP
+  # blocklisting with auto-ban) plus the gin+HTMX operator console on the same
+  # origin. The console is served on its web routes; every other request is
+  # reversed to the daemon. Socketless, talks to the daemon over
+  # host.docker.internal:9090 (the same route Traefik used before this stack),
+  # so it removes the host-bound 9090 from the public path entirely.
+  #
+  # Console env (optional unless you use env-created users):
+  #   PMCLUSTER_UI_SECRET  — HMAC key for session cookies (REQUIRED in prod)
+  #   PMCLUSTER_UI_USER    — optional pre-seeded UI user
+  #   PMCLUSTER_UI_PASS    — its password (set both to create once)
+  #   PMCLUSTER_API_TOKEN  — pmcluster API Bearer token the console defaults to
+  #                          (also editable in the console's Settings page)
+  pmcluster-edge:
+    image: [[.EdgeImage]]
+    environment:
+      - LISTEN_ADDR=:8042
+      - UPSTREAM=http://host.docker.internal:9090
+      - DATA_DIR=/data
+      - PMCLUSTER_UI_SECRET=${PMCLUSTER_EDGE_UI_SECRET:-}
+      - PMCLUSTER_UI_USER=${PMCLUSTER_EDGE_UI_USER:-}
+      - PMCLUSTER_UI_PASS=${PMCLUSTER_EDGE_UI_PASS:-}
+      - PMCLUSTER_API_TOKEN=${PMCLUSTER_EDGE_API_TOKEN:-}
+      - API_RATE=200
+      - API_BURST=400
+      - WEBHOOK_RATE=40
+      - WEBHOOK_BURST=60
+      - MAX_CONCURRENT=128
+      - REQUEST_TIMEOUT=30s
+      - BAN_THRESHOLD=20
+      - BAN_DURATION=10m
+      - LOG_LEVEL=info
+    volumes:
+      - pmui-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - traefik-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8042/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      labels:
+        # Expose the edge console + reverse proxy at edge.<domain>, the same way
+        # other managed services (portainer, openobserve) are exposed. This lets
+        # you verify the edge BEFORE cutting pmcluster.<domain> over to it, so
+        # host.docker.internal:9090 stays the live public path in the meantime.
+        - "traefik.enable=true"
+        - "traefik.http.routers.edge.rule=Host(`edge.${DOMAIN}`)"
+        - "traefik.http.routers.edge.entrypoints=websecure"
+        - "traefik.http.routers.edge.tls=true"
+        - "traefik.http.routers.edge.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.edge.middlewares=cors-default@file"
+        - "traefik.http.services.edge.loadbalancer.server.port=8042"
+      resources:
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+        limits:
+          cpus: '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pmui-data:
+
+networks:
+  traefik-net:
+    external: true

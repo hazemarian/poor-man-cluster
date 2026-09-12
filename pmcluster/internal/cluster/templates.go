@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"encoding/base64"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 )
 
 // embeddedStacks holds the source-of-truth bundled compose and config files.
@@ -26,6 +29,7 @@ var ConfigFileNames = []string{
 	"infra-stack.yml",
 	"observability-stack.yml",
 	"backup-stack.yml",
+	"edge-stack.yml",
 	"otel-collector-config.yml",
 	"traefik-dynamic.yml",
 }
@@ -36,12 +40,39 @@ const (
 	StackInfra         stackName = "infra"
 	StackObservability stackName = "observability"
 	StackBackup        stackName = "backup"
+	StackEdge          stackName = "edge"
 )
 
 var composeFile = map[stackName]string{
 	StackInfra:         "infra-stack.yml",
 	StackObservability: "observability-stack.yml",
 	StackBackup:        "backup-stack.yml",
+	StackEdge:          "edge-stack.yml",
+}
+
+// EdgeImageBase is the image registry/repo prefix for the pmcluster-edge
+// container. The edge image is versioned independently of pmcluster — anyone
+// can build + push it on its own — so by default the edge stack pins :latest.
+const EdgeImageBase = "ghcr.io/nextrum-sy/pmcluster-edge"
+
+// EdgeImageEnv overrides the edge image reference in the rendered edge stack.
+// It's a way to pin a specific release (e.g. PMCLUSTER_EDGE_IMAGE=v0.2.21, or a
+// full custom ref like registry.example.com/pmcluster-edge:edge-1.2). When
+// unset, the stack uses EdgeImageBase:latest.
+const EdgeImageEnv = "PMCLUSTER_EDGE_IMAGE"
+
+// EdgeImageFor returns the pmcluster-edge image the edge stack should deploy:
+// EdgeImageBase:latest by default, or the value of EdgeImageEnv when set. A
+// bare value is treated as a tag suffix; a value containing a "/" is used as a
+// fully-qualified image reference.
+func EdgeImageFor() string {
+	if v := strings.TrimSpace(os.Getenv(EdgeImageEnv)); v != "" {
+		if strings.Contains(v, "/") {
+			return v
+		}
+		return EdgeImageBase + ":" + v
+	}
+	return EdgeImageBase + ":latest"
 }
 
 type RenderInput struct {
@@ -93,6 +124,11 @@ type RenderInput struct {
 	// KeySecretName is the versioned Swarm secret name for the TLS
 	// private key (e.g. key_v001). Substituted as __KEY_SECRET__.
 	KeySecretName string
+
+	// EdgeImage is the pmcluster-edge container image tag used by the
+	// embedded edge-stack.yml (e.g. ghcr.io/nextrum-sy/pmcluster-edge:v0.2.19).
+	// Rendered via the template body; set in up/update.
+	EdgeImage string
 }
 
 // readConfigFile loads a named file. When in.ConfigDir is set the disk
@@ -144,6 +180,19 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	out = strings.ReplaceAll(out, "__CERT_SECRET__", in.CertSecretName)
 	out = strings.ReplaceAll(out, "__KEY_SECRET__", in.KeySecretName)
 	return []byte(out), nil
+}
+
+// ensureEdgeConfig renders the edge-stack.yml (with the version-keyed image tag)
+// and ensures a versioned Docker config holding that body. The config is a pure
+// "has the edge input moved" content fingerprint — the edge stack never mounts
+// it. `cluster update` reads the returned created flag to decide whether the
+// edge stack needs to re-deploy, mirroring the OTel/Traefik content-aware path.
+func ensureEdgeConfig(ctx context.Context, d docker.Client, version string, render RenderInput) (string, bool, error) {
+	edgeYAML, err := LoadComposeFile(StackEdge, render)
+	if err != nil {
+		return "", false, err
+	}
+	return EnsureConfig(ctx, d, "pmcluster_edge", edgeYAML, version)
 }
 
 // RenderOTelCollectorConfig fills in the OpenObserve `Authorization: Basic <b64>`

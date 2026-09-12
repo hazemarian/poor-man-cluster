@@ -31,7 +31,7 @@ func TestDown_RemovesThreeStacks(t *testing.T) {
 		t.Fatalf("Down: %v", err)
 	}
 
-	wantStacks := []string{"infra", "observability", "backup"}
+	wantStacks := []string{"infra", "edge", "observability", "backup"}
 	if len(res.StacksRemoved) != len(wantStacks) {
 		t.Fatalf("StacksRemoved = %v, want %v", res.StacksRemoved, wantStacks)
 	}

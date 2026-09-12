@@ -1,0 +1,41 @@
+{{define "backups"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<div style="display:flex;justify-content:space-between;align-items:center">
+  <h1 style="margin:0">Backups</h1>
+  <button class="btn"
+          hx-post="/backups"
+          hx-target="#view"
+          hx-swap="innerHTML"
+          hx-disabled-elt="this">
+    Run backup now
+  </button>
+</div>
+<p class="sub">{{len .Backups}} recent backup(s)</p>
+
+{{if .Backups}}
+<div class="card" style="padding:6px 14px">
+<table>
+  <tr><th>ID</th><th>Stack</th><th>Status</th><th>Revision</th><th>Started</th><th>Finished</th><th>Archives</th></tr>
+  {{range .Backups}}
+  <tr>
+    <td><code>{{.ID}}</code></td>
+    <td>{{if .StackName}}{{.StackName}}{{else}}<span class="muted">(cluster)</span>{{end}}</td>
+    <td><span class="pill {{sp .Status}}">{{.Status}}</span></td>
+    <td>{{if .Revision}}{{.Revision}}{{else}}—{{end}}</td>
+    <td class="muted">{{ts .StartedAt}}</td>
+    <td class="muted">{{ts .FinishedAt}}</td>
+    <td class="muted">{{.Archives}}</td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{else}}
+<div class="card empty">No backups yet.</div>
+{{end}}
+
+{{if .Error}}
+<div class="card empty">If backups are not enabled on the daemon, this is expected.</div>
+{{end}}
+{{end}}

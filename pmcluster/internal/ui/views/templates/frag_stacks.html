@@ -1,0 +1,26 @@
+{{define "stacks"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1>Stacks</h1>
+<p class="sub">{{.Count}} deployed stack(s)</p>
+
+{{if .Stacks}}
+<div class="card" style="padding:6px 14px">
+<table>
+  <tr><th>Name</th><th>Revision</th><th>Repo</th><th>Updated</th><th></th></tr>
+  {{range .Stacks}}
+  <tr>
+    <td><a class="link" href="/stacks/{{.Name}}" hx-get="/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">{{.Name}}</a></td>
+    <td>{{.CurrentRevision}}</td>
+    <td class="muted">{{if .RepoURL}}<code>{{.RepoURL}}</code>{{else}}—{{end}}</td>
+    <td class="muted">{{ts .UpdatedAt}}</td>
+    <td><a class="btn sm ghost" href="/stacks/{{.Name}}" hx-get="/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">Details</a></td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{else}}
+<div class="card empty">No stacks yet. Deploy one from the Deploy tab.</div>
+{{end}}
+{{end}}

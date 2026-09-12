@@ -75,8 +75,9 @@ func TestUp_DeploysInCorrectOrder(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
-	// Three stacks must be deployed in the documented order.
-	wantOrder := []string{"infra", "observability", "backup"}
+	// Four stacks must be deployed in the documented order (edge right after
+	// infra so its route dependency comes up ASAP).
+	wantOrder := []string{"infra", "edge", "observability", "backup"}
 	if len(deployer.deployedStacks) != len(wantOrder) {
 		t.Fatalf("deployed %d stacks, want %d: %v",
 			len(deployer.deployedStacks), len(wantOrder), deployer.deployedStacks)

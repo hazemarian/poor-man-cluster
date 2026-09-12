@@ -1,0 +1,26 @@
+# pmcluster-edge — the smart reverse proxy AND operator console image.
+# Build context MUST be pmcluster/ (docker build -f Dockerfile.edge .).
+# Multi-stage: static CGO-disabled build (SQLite via modernc, no CGO), tiny
+# alpine runtime with ca-certs + busybox wget (used by the compose healthcheck).
+# The console persists its SQLite DB under /data.
+
+# syntax=docker/dockerfile:1
+
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/edge ./cmd/edge
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates wget \
+    && adduser -D -H -u 10001 pmedge \
+    && mkdir -p /data \
+    && chown pmedge /data
+COPY --from=build /out/edge /usr/local/bin/edge
+USER pmedge
+ENV DATA_DIR=/data
+# Everything else (proxy + console) comes from environment variables.
+EXPOSE 8042
+ENTRYPOINT ["/usr/local/bin/edge"]

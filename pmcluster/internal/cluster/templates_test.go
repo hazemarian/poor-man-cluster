@@ -23,7 +23,7 @@ func TestLoadComposeFile_KnownStacks(t *testing.T) {
 		OpenObserveAdminEmail: "ops@example.com",
 	}
 
-	stacks := []stackName{StackInfra, StackObservability, StackBackup}
+	stacks := []stackName{StackInfra, StackEdge, StackObservability, StackBackup}
 	for _, s := range stacks {
 		t.Run(string(s), func(t *testing.T) {
 			data, err := LoadComposeFile(s, in)
@@ -574,6 +574,30 @@ func TestShouldOverwriteConfig_StaleOrMissing(t *testing.T) {
 		old := []byte("## pmcluster-config-version: v0.2.0\nversion: \"3.9\"\n")
 		if shouldOverwriteConfig(old, "v0.1.12") {
 			t.Error("file with newer version should NOT be overwritten")
+		}
+	})
+}
+
+func TestEdgeImageFor(t *testing.T) {
+	t.Setenv(EdgeImageEnv, "")
+
+	t.Run("defaults to latest", func(t *testing.T) {
+		if got := EdgeImageFor(); got != EdgeImageBase+":latest" {
+			t.Errorf("EdgeImageFor() = %q, want %q", got, EdgeImageBase+":latest")
+		}
+	})
+
+	t.Run("env pin uses tag suffix", func(t *testing.T) {
+		t.Setenv(EdgeImageEnv, "v0.2.21")
+		if got := EdgeImageFor(); got != EdgeImageBase+":v0.2.21" {
+			t.Errorf("EdgeImageFor() = %q, want %q", got, EdgeImageBase+":v0.2.21")
+		}
+	})
+
+	t.Run("env pin accepts full image ref", func(t *testing.T) {
+		t.Setenv(EdgeImageEnv, "registry.example.com/pmcluster-edge:edge-1.2")
+		if got := EdgeImageFor(); got != "registry.example.com/pmcluster-edge:edge-1.2" {
+			t.Errorf("EdgeImageFor() = %q, want the custom ref", got)
 		}
 	})
 }

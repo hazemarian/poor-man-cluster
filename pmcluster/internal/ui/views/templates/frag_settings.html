@@ -1,0 +1,33 @@
+{{define "settings"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1>Settings</h1>
+<p class="sub">The UI talks to the pmcluster daemon over Bearer auth. Anything set here
+takes effect immediately, no restart.</p>
+
+<div class="card">
+  <form method="post" action="/settings" hx-post="/settings" hx-target="#view">
+    <label>API base URL</label>
+    <input name="api_url" placeholder="http://host.docker.internal:9090" value="{{.APIURL}}" autocomplete="off">
+    <p class="muted" style="margin:4px 0 0;font-size:12px">Env default: <code>{{.EnvAPIURL}}</code>. Leave the field as-is to keep the env value; empty overrides to blank.</p>
+
+    <label style="margin-top:16px">API token</label>
+    <input name="api_token" type="password" placeholder="pmc_…" value="{{if .HasToken}}•••set•••{{end}}" autocomplete="off">
+    <p class="muted" style="margin:4px 0 0;font-size:12px">Env default token is {{if .HasEnvToken}}configured{{else}}not set{{end}}. Saved overrides persist in the local store.</p>
+
+    <div class="row">
+      <button class="btn" type="submit">Save</button>
+      {{if .Configured}}<span class="pill good">connected</span>{{else}}<span class="pill warn">not configured</span>{{end}}
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">About</h2>
+  <p class="sub" style="margin:0">pmcluster operator console · version <code>{{.Version}}</code>
+  · signed in as <code>@{{.User}}</code>. Place this image inside the swarm
+  (<code>host.docker.internal:9090</code>) or anywhere on the internet pointing at a
+  reachable pmcluster API.</p>
+</div>
+{{end}}

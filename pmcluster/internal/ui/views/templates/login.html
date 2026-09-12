@@ -1,0 +1,39 @@
+{{define "login"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · pmcluster</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b0f14;--panel:#111722;--panel2:#0f1520;--line:#1e2733;--text:#dbe2ea;--muted:#7d899a;--accent:#4f9dff;--bad:#ff5c5c}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:
+      radial-gradient(800px 400px at 20% -10%,rgba(79,157,255,.14),transparent 60%),
+      radial-gradient(600px 300px at 90% 110%,rgba(68,212,123,.10),transparent 60%),
+      var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+    .card{width:380px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:30px}
+    .brand{font-size:20px;font-weight:700;text-align:center;margin-bottom:4px}
+    .brand .sub{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-top:2px}
+    .err{background:rgba(255,92,92,.12);color:var(--bad);border:1px solid rgba(255,92,92,.3);padding:10px 12px;border-radius:8px;font-size:13px;margin:16px 0}
+    label{font-size:12px;color:var(--muted);display:block;margin-top:14px}
+    input{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:11px 12px;font:inherit;margin-top:6px}
+    input:focus{border-color:var(--accent);outline:none}
+    button{margin-top:20px;width:100%;background:var(--accent);color:#04121f;font-weight:650;border:none;border-radius:8px;padding:11px;cursor:pointer;font-size:14px}
+    button:hover{filter:brightness(1.08)}
+    .foot{margin-top:16px;text-align:center;color:var(--muted);font-size:12px}
+  </style>
+</head>
+<body>
+  <form class="card" method="post" action="/login">
+    <div class="brand">pmcluster<span class="sub">operator console · {{.Version}}</span></div>
+    {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+    <label>Username</label>
+    <input name="username" autocomplete="username" autofocus required>
+    <label>Password</label>
+    <input type="password" name="password" autocomplete="current-password" required>
+    <button type="submit">Sign in</button>
+  </form>
+</body>
+</html>
+{{end}}

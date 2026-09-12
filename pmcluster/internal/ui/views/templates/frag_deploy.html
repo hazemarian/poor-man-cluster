@@ -1,0 +1,26 @@
+{{define "deploy"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+{{if .Result}}<div class="msg ok">Deployed <b>{{.Result.Stack}}</b> as revision {{.Result.Revision}}.</div>{{end}}
+
+<h1>Deploy a stack</h1>
+<p class="sub">Submit a pmcluster manifest exactly as the CI webhook would — image, environment, healthcheck, exposes. This calls the same <code>POST /api/stacks</code> the GitHub Actions pipeline uses.</p>
+
+<form method="post" action="/deploy" hx-post="/deploy" hx-target="#view">
+  <label>app</label>
+  <input name="app_name" placeholder="my-app" value="{{.Form.AppName}}">
+
+  <label>version (image tag)</label>
+  <input name="version" placeholder="v20260912-abc1234" value="{{.Form.Version}}">
+
+  <label>repo URL (metadata only, optional)</label>
+  <input name="repo_url" placeholder="https://github.com/org/repo" value="{{.Form.RepoURL}}">
+
+  <label>manifest (DSL YAML)</label>
+  <textarea name="manifest" rows="16" placeholder="app: my-app&#10;env: production&#10;domain: example.com&#10;registry: ghcr.io/org&#10;version: v1&#10;&#10;services:&#10;  web:&#10;    image: ghcr.io/org/my-app:${version}&#10;    replicas: 1&#10;    placement: manager&#10;    expose:&#10;      port: 3000&#10;      host: my-app.example.com&#10;    healthcheck:&#10;      type: http&#10;      path: /">{{.Form.Manifest}}</textarea>
+
+  <div class="row">
+    <button class="btn" type="submit" hx-disabled-elt="this">Deploy</button>
+  </div>
+</form>
+{{end}}

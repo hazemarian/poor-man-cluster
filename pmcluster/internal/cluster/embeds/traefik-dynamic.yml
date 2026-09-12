@@ -36,6 +36,13 @@ http:
     pmcluster:
       loadBalancer:
         servers:
+          # NOTE: still routing the public path DIRECTLY to the daemon on 9090
+          # until the pmcluster-edge smart proxy is verified end-to-end. Once
+          # the edge is confirmed working, flip this single line to:
+          #   http://edge_pmcluster-edge:8042
+          # (the edge then adds per-real-IP throttling, a connection/DDoS shield,
+          # IP blocklisting/auto-ban, and the HTMX dashboard, and forwards the
+          # API + webhook to the daemon over host.docker.internal:9090 itself).
           - url: "http://host.docker.internal:9090"
 [[- if not .ACMEEmail]]
 tls:

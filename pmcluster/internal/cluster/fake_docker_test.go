@@ -212,10 +212,11 @@ type recordingDeployer struct {
 type deployRecord struct {
 	Name    string
 	YAMLLen int
+	YAML    string
 }
 
 func (r *recordingDeployer) DeployStack(_ context.Context, name string, composeYAML []byte) error {
-	r.deployedStacks = append(r.deployedStacks, deployRecord{Name: name, YAMLLen: len(composeYAML)})
+	r.deployedStacks = append(r.deployedStacks, deployRecord{Name: name, YAMLLen: len(composeYAML), YAML: string(composeYAML)})
 	return nil
 }
 

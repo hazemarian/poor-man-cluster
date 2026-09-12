@@ -1,0 +1,49 @@
+{{define "stack"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1>Stack · {{.Detail.Stack.Name}}</h1>
+<p class="sub">
+  <a class="link" href="/stacks" hx-get="/stacks" hx-target="#view" hx-push-url="true">← all stacks</a>
+  · current revision <code>{{.Detail.Stack.CurrentRevision}}</code>
+  · {{if .Detail.Stack.RepoURL}}repo <code>{{.Detail.Stack.RepoURL}}</code>{{else}}no repo{{end}}
+  · updated {{ts .Detail.Stack.UpdatedAt}}
+</p>
+
+{{if .Detail.LastBackup}}
+<div class="card" style="display:flex;justify-content:space-between;align-items:center">
+  <div><b>Last backup:</b> <span class="pill {{sp .Detail.LastBackup.Status}}">{{.Detail.LastBackup.Status}}</span>
+  <span class="muted">started {{ts .Detail.LastBackup.StartedAt}}</span></div>
+  <a class="btn sm" href="/stacks/{{.Detail.Stack.Name}}/backups" hx-get="/stacks/{{.Detail.Stack.Name}}/backups" hx-target="#view">History</a>
+</div>
+{{end}}
+
+<h1>Revisions</h1>
+{{if .Detail.Revisions}}
+<div class="card" style="padding:6px 14px">
+<table>
+  <tr><th>Revision</th><th>Created</th><th></th></tr>
+  {{range .Detail.Revisions}}
+  <tr>
+    <td><code>{{.Revision}}</code>{{if eq .Revision $.Detail.Stack.CurrentRevision}} <span class="pill good">current</span>{{end}}</td>
+    <td class="muted">{{ts .CreatedAt}}</td>
+    <td style="text-align:right">
+      {{if ne .Revision $.Detail.Stack.CurrentRevision}}
+      <form method="post" action="/stacks/{{$.Detail.Stack.Name}}/rollback"
+            hx-post="/stacks/{{$.Detail.Stack.Name}}/rollback" hx-target="#view"
+            hx-confirm="Roll back {{$.Detail.Stack.Name}} to revision {{.Revision}}?">
+        <input type="hidden" name="revision" value="{{.Revision}}">
+        <button class="btn sm danger" type="submit">Roll back</button>
+      </form>
+      {{end}}
+      <a class="btn sm" href="/stacks/{{$.Detail.Stack.Name}}/revisions/{{.Revision}}"
+         hx-get="/stacks/{{$.Detail.Stack.Name}}/revisions/{{.Revision}}" hx-target="#view">View</a>
+    </td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{else}}
+<div class="card empty">No revisions recorded.</div>
+{{end}}
+{{end}}

@@ -1,0 +1,92 @@
+{{define "app"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>pmcluster · console</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    :root{color-scheme:dark;--bg:#0b0f14;--panel:#111722;--panel2:#0f1520;--line:#1e2733;--text:#dbe2ea;--muted:#7d899a;--accent:#4f9dff;--good:#44d47b;--warn:#ffb454;--bad:#ff5c5c;--radius:12px}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+    .app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+    .sidebar{background:var(--panel);border-right:1px solid var(--line);padding:18px 14px;display:flex;flex-direction:column;gap:18px;position:sticky;top:0;height:100vh}
+    .brand{font-size:17px;font-weight:700;letter-spacing:.2px;padding:4px 8px}
+    .brand .sub{font-size:12px;font-weight:500;color:var(--muted);display:block;margin-top:2px}
+    nav{display:flex;flex-direction:column;gap:3px}
+    nav a{border-radius:8px;padding:9px 11px;color:var(--muted);text-decoration:none;transition:.12s}
+    nav a:hover{background:var(--panel2);color:var(--text)}
+    .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:8px;padding:9px;border-top:1px solid var(--line)}
+    .user{color:var(--muted);font-size:12px;word-break:break-all}
+    .content{padding:22px 26px;max-width:1080px;min-width:0}
+    h1{font-size:20px;margin:0 0 4px;font-weight:650}
+    h2{font-size:15px;margin:22px 0 10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+    .sub{color:var(--muted);margin:0 0 20px}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+    .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+    .stat .label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+    .stat .value{font-size:22px;font-weight:700;margin-top:4px}
+    .stat .value small{font-size:12px;font-weight:500;color:var(--muted)}
+    table{width:100%;border-collapse:collapse}
+    th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+    th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+    tr:hover td{background:var(--panel2)}
+    .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;text-transform:capitalize}
+    .pill.good{background:rgba(68,212,123,.14);color:var(--good)}
+    .pill.warn{background:rgba(255,180,84,.14);color:var(--warn)}
+    .pill.bad{background:rgba(255,92,92,.14);color:var(--bad)}
+    .muted{color:var(--muted)}
+    .btn{background:var(--accent);color:#04121f;font-weight:650;border:none;border-radius:8px;padding:9px 15px;cursor:pointer;font-size:13px}
+    .btn:hover{filter:brightness(1.08)}
+    .btn.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+    .btn.danger{background:rgba(255,92,92,.14);color:var(--bad);border:1px solid rgba(255,92,92,.3)}
+    .btn.sm{padding:5px 10px;font-size:12px;border-radius:7px}
+    input,textarea,select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:10px 12px;font:inherit;margin-top:6px}
+    input:focus,textarea:focus{border-color:var(--accent);outline:none}
+    textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5}
+    label{font-size:12px;color:var(--muted);display:block;margin-top:12px}
+    .row{display:flex;gap:10px;align-items:center;margin-top:14px}
+    .msg{display:block;margin-top:12px;padding:10px 12px;border-radius:8px;font-size:13px}
+    .msg.ok{background:rgba(68,212,123,.12);color:var(--good)}
+    .msg.err{background:rgba(255,92,92,.12);color:var(--bad)}
+    code,pre{background:#0c1220;border:1px solid var(--line);border-radius:8px;padding:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:520px}
+    code{padding:2px 6px;border:none;background:var(--panel2)}
+    .flash{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:50;padding:11px 20px;border-radius:10px;font-weight:600;box-shadow:0 8px 30px rgba(0,0,0,.4)}
+    .flash.ok{background:#0d2b1a;color:var(--good);border:1px solid rgba(68,212,123,.4)}
+    .flash.err{background:#2b0d0d;color:var(--bad);border:1px solid rgba(255,92,92,.4)}
+    .empty{color:var(--muted);text-align:center;padding:26px}
+    a.link{color:var(--accent);text-decoration:none}
+    htmx .htmx-indicator{display:inline}
+    .htmx-indicator{display:none}
+    .spinner{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;display:inline-block;vertical-align:-3px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .toast{display:none}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">pmcluster<span class="sub">operator console</span></div>
+    <nav>
+      <a href="/overview" hx-get="/overview" hx-target="#view" hx-push-url="true">Overview</a>
+      <a href="/stacks"   hx-get="/stacks"    hx-target="#view" hx-push-url="true">Stacks</a>
+      <a href="/backups"  hx-get="/backups"   hx-target="#view" hx-push-url="true">Backups</a>
+      <a href="/deploy"   hx-get="/deploy"    hx-target="#view" hx-push-url="true">Deploy</a>
+      <a href="/settings" hx-get="/settings"  hx-target="#view" hx-push-url="true">Settings</a>
+    </nav>
+    <div class="side-foot">
+      <span class="user">@{{.User.Username}}</span>
+      <form method="post" action="/logout">
+        <button class="btn ghost" style="width:100%">Log out</button>
+      </form>
+    </div>
+  </aside>
+  <main class="content">
+    <section id="view" hx-get="/overview" hx-trigger="load"></section>
+  </main>
+</div>
+</body>
+</html>
+{{end}}

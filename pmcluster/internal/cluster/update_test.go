@@ -99,6 +99,69 @@ func TestUpdate_NoOpWhenNothingChanged(t *testing.T) {
 	}
 }
 
+// TestUpdate_DefaultEdgeImageLatest verifies the edge stack pins :latest by
+// default (decoupled from the pmcluster build version), so a version bump does
+// NOT churn the edge deploy.
+func TestUpdate_DefaultEdgeImageLatest(t *testing.T) {
+	t.Setenv(EdgeImageEnv, "")
+	deps, cfgDir := seedUpdateState(t)
+
+	// A pmcluster version bump with no PMCLUSTER_EDGE_IMAGE set must NOT deploy
+	// anything: the edge stays on :latest and everything else is unchanged.
+	res, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.1"})
+	if err != nil {
+		t.Fatalf("bump Update: %v", err)
+	}
+	if res.EdgeDeployed {
+		t.Error("version bump should NOT redeploy the edge when the image is pinned to :latest")
+	}
+	deployer := deps.Deployer.(*recordingDeployer)
+	if len(deployer.deployedStacks) != 0 {
+		t.Errorf("expected no stacks deployed on version bump, got %v", deployer.deployedStacks)
+	}
+}
+
+// TestUpdate_EdgeImagePinRedeploysEdge verifies setting PMCLUSTER_EDGE_IMAGE
+// (the way an operator ships a new edge release) changes the rendered edge
+// compose → a new edge content fingerprint → an edge-only redeploy.
+func TestUpdate_EdgeImagePinRedeploysEdge(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+
+	// Sanity: unchanged update with the env unset must NOT redeploy edge.
+	t.Setenv(EdgeImageEnv, "")
+	noopUp := &recordingDeployer{}
+	deps.Deployer = noopUp
+	if _, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.1"}); err != nil {
+		t.Fatalf("no-op Update: %v", err)
+	}
+	if len(noopUp.deployedStacks) != 0 {
+		t.Fatalf("expected no deploy on no-op update, got %v", noopUp.deployedStacks)
+	}
+
+	// Now pin a new edge tag → edge must be the ONLY stack re-deployed.
+	t.Setenv(EdgeImageEnv, "v9.9.9")
+	pinUp := &recordingDeployer{}
+	deps.Deployer = pinUp
+	res, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.1"})
+	if err != nil {
+		t.Fatalf("pin Update: %v", err)
+	}
+	if !res.EdgeCreated {
+		t.Error("expected edge content fingerprint to change when the edge image is pinned (EdgeCreated)")
+	}
+	if !res.EdgeDeployed {
+		t.Error("expected EdgeDeployed=true when the edge image is pinned")
+	}
+	if len(pinUp.deployedStacks) != 1 || pinUp.deployedStacks[0].Name != "edge" {
+		t.Errorf("expected only the edge stack re-deployed on image pin, got %v", pinUp.deployedStacks)
+	}
+	for _, d := range pinUp.deployedStacks {
+		if !strings.Contains(string(d.YAML), "ghcr.io/nextrum-sy/pmcluster-edge:v9.9.9") {
+			t.Errorf("edge stack should pin image :v9.9.9, got:\n%s", d.YAML)
+		}
+	}
+}
+
 func TestUpdate_ConfigsUseSeedVersionedNames(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 	res, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})

@@ -12,12 +12,13 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 )
 
-// bundledServices is the canonical list of services deployed by the three
+// bundledServices is the canonical list of services deployed by the four
 // bundled stacks. Used by WaitHealthyStacks to verify every service has at
 // least one running replica after cluster up.
 var bundledServices = []string{
 	"infra_traefik",
 	"infra_portainer",
+	"edge_pmcluster-edge",
 	"observability_openobserve",
 	"observability_otel-collector",
 	"backup_volume-backup",

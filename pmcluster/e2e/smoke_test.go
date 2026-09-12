@@ -34,6 +34,9 @@ import (
 // binaryPath is set by TestMain once the binary is built.
 var binaryPath string
 
+// edgeBinaryPath is set by TestMain once the cmd/edge binary is built.
+var edgeBinaryPath string
+
 // tokenLineRe matches the indented token line printed by pmcluster init / user create.
 // The token is 43+ base64url chars on a line that starts with exactly 3 spaces.
 var tokenLineRe = regexp.MustCompile(`^   ([A-Za-z0-9_-]{40,})$`)
@@ -68,11 +71,40 @@ func TestMain(m *testing.M) {
 		}
 	}
 
+	// Build the combined edge binary the same way (used by edge_test.go).
+	if p := os.Getenv("PMCLUSTER_EDGE_BIN"); p != "" {
+		edgeBinaryPath = p
+	} else {
+		tmp, err := os.CreateTemp("", "pmcluster-edge-e2e-*")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "e2e: create temp edge binary: %v\n", err)
+			os.Exit(1)
+		}
+		tmp.Close()
+		edgeBinaryPath = tmp.Name()
+
+		moduleRoot, err := findModuleRoot()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "e2e: locate module root: %v\n", err)
+			os.Exit(1)
+		}
+		buildCmd := exec.Command("go", "build", "-o", edgeBinaryPath, "./cmd/edge")
+		buildCmd.Dir = moduleRoot
+		out, err := buildCmd.CombinedOutput()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "e2e: edge go build failed: %v\n%s\n", err, out)
+			os.Exit(1)
+		}
+	}
+
 	code := m.Run()
 
-	// Clean up built binary only if we built it ourselves.
+	// Clean up built binaries only if we built them ourselves.
 	if os.Getenv("PMCLUSTER_BIN") == "" {
 		os.Remove(binaryPath)
+	}
+	if os.Getenv("PMCLUSTER_EDGE_BIN") == "" {
+		os.Remove(edgeBinaryPath)
 	}
 
 	os.Exit(code)

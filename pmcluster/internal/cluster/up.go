@@ -185,6 +185,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		ConfigDir:                 in.ConfigDir,
 		CertSecretName:            certSecret,
 		KeySecretName:             keySecret,
+		EdgeImage:                 EdgeImageFor(),
 	}
 	if needProvision {
 		render.OpenObserveIngestionToken = pendingIngestionToken
@@ -212,8 +213,22 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	}
 	render.TraefikConfigName = traefikConfigName
 
-	step("Deploying stacks (infra → observability → backup)")
-	for _, s := range []stackName{StackInfra, StackObservability, StackBackup} {
+	// Edge stack content fingerprint. The edge-stack.yml embeds a version-keyed
+	// image tag, so the rendered body changes whenever pmcluster bumps its version
+	// (or an operator edits edge-stack.yml in ConfigDir). EnsureConfig stores that
+	// body as a versioned Docker config purely as a "has the edge input moved"
+	// marker — the stack never mounts it — so `cluster update` can re-deploy edge
+	// only when it actually changed (mirroring the OTel/Traefik content-aware path).
+	edgeName, edgeCreated, err := ensureEdgeConfig(ctx, deps.Docker, in.Version, render)
+	if err != nil {
+		return res, err
+	}
+	if edgeCreated {
+		res.NewConfigs = append(res.NewConfigs, edgeName)
+	}
+
+	step("Deploying stacks (infra → edge → observability → backup)")
+	for _, s := range []stackName{StackInfra, StackEdge, StackObservability, StackBackup} {
 		if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
 			return res, err
 		}

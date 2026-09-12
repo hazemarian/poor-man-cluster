@@ -1,0 +1,16 @@
+{{define "revision"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1>Revision {{.Rev.Revision}} · {{.Rev.Stack}}</h1>
+<p class="sub">
+  <a class="link" href="/stacks/{{.Rev.Stack}}" hx-get="/stacks/{{.Rev.Stack}}" hx-target="#view">← stack</a>
+  · created {{ts .Rev.CreatedAt}}
+</p>
+
+<h2>Source manifest</h2>
+<pre>{{.Rev.SourceYAML}}</pre>
+
+<h2>Rendered manifest</h2>
+<pre>{{.Rev.RenderedYAML}}</pre>
+{{end}}
