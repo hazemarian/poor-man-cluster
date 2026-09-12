@@ -127,6 +127,12 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		HostsDir:                  tlscerts.HostsDir(in.ConfigDir),
 		EdgeImage:                 EdgeImageFor(),
 	}
+	// The infra stack bind-mounts HostsDir read-only into Traefik; Docker
+	// rejects a service bind mount whose source path doesn't exist, so ensure it
+	// before deploying any stack.
+	if err := tlscerts.EnsureHostsDir(in.ConfigDir); err != nil {
+		return res, fmt.Errorf("ensure hosts dir: %w", err)
+	}
 
 	// TLS cert/key: content-aware re-apply from stored paths. Unchanged file
 	// bytes reuse the current version (no churn, no Traefik restart).

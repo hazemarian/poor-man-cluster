@@ -38,6 +38,14 @@ const Subdir = "hosts"
 // dir. Keys and certs live at <configDir>/hosts/<host>/{cert.pem,key.pem}.
 func HostsDir(configDir string) string { return filepath.Join(configDir, Subdir) }
 
+// EnsureHostsDir guarantees the per-host certs base directory exists. The
+// infra stack bind-mounts this directory read-only into Traefik, and Docker
+// rejects service bind mounts whose source path is missing — so cluster
+// up/update must create it before `docker stack deploy`.
+func EnsureHostsDir(configDir string) error {
+	return os.MkdirAll(HostsDir(configDir), 0o700)
+}
+
 // hostRe bounds the folder name we derive from a host so no path traversal or
 // garbage can escape the hosts dir. It mirrors a DNS hostname (plus optional
 // leading '*.' for wildcard certs).

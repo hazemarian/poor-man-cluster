@@ -195,6 +195,12 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	if needProvision {
 		render.OpenObserveIngestionToken = pendingIngestionToken
 	}
+	// The infra stack bind-mounts HostsDir read-only into Traefik; Docker
+	// rejects a service bind mount whose source path doesn't exist, so ensure it
+	// before deploying any stack.
+	if err := tlscerts.EnsureHostsDir(in.ConfigDir); err != nil {
+		return res, fmt.Errorf("ensure hosts dir: %w", err)
+	}
 
 	otelConfigName, otelConfigCreated, err := ensureOTelConfig(ctx, deps, in.Version, render)
 	if err != nil {
