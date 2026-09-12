@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
@@ -17,6 +18,11 @@ const (
 	KindTraefikAdmin CredentialKind = "traefik"
 	KindPortainer    CredentialKind = "portainer"
 	KindOpenObserve  CredentialKind = "openobserve"
+	// KindEdge marks credentials consumed by the pmcluster-edge console (the
+	// operator UI). Unlike the other kinds these are never force-restarted by
+	// rotate: the console persists them once, so Swarm secrets only matter for
+	// fresh provisioned volumes.
+	KindEdge CredentialKind = "edge"
 )
 
 // ManagedCredential is the in-memory shape of a bootstrap credential. The
@@ -70,6 +76,9 @@ func (m *CredentialsManager) Bootstrap(ctx context.Context, in BootstrapInput) (
 		"traefik_dashboard": in.TraefikAdminUser,
 		"portainer":         "admin",
 		"openobserve_admin": in.OpenObserveAdminEmail,
+		"edge_admin":        "admin",
+		"edge_ui_secret":    "session",
+		"edge_api_token":    "edge",
 	}
 	specs := bootstrapSpecs()
 	for i := range specs {
@@ -100,6 +109,12 @@ type bootstrapSpec struct {
 	username        string
 	swarmSecretName string
 	format          secretFormat
+
+	// generate, when set, replaces RandomPassword as the fresh-mint value
+	// source. Used by edge_api_token, whose value must be a real daemon Bearer
+	// token (minted via auth.GenerateToken + inserted as a users row) rather
+	// than an arbitrary password. nil means mint via RandomPassword.
+	generate func(ctx context.Context, s *store.Store) (string, error)
 }
 
 // ensure is the get-or-create primitive: load from store and reconcile
@@ -178,9 +193,9 @@ func (m *CredentialsManager) ensure(ctx context.Context, spec bootstrapSpec) (*M
 		return nil, fmt.Errorf("lookup %s: %w", spec.name, err)
 	}
 
-	password, err := RandomPassword()
+	password, err := spec.generatePassword(ctx, m.Store)
 	if err != nil {
-		return nil, fmt.Errorf("generate password: %w", err)
+		return nil, fmt.Errorf("generate value for %s: %w", spec.name, err)
 	}
 	ciphertext, err := m.Cipher.Encrypt([]byte(password))
 	if err != nil {
@@ -228,6 +243,12 @@ func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedC
 	// volume reset. Refuse instead of silently wedging the pipeline.
 	if name == "openobserve_token" {
 		return nil, fmt.Errorf("cannot rotate %q: OpenObserve caches this token in its data volume on first boot; rotating it would break collector ingestion without a volume reset (it is meant to stay fixed)", name)
+	}
+	// The edge API token is minted as a real daemon "edge" user (hash in the
+	// users table). Rotating the stored value without rewriting the user row
+	// would leave the daemon rejecting the console's Bearer. Refuse.
+	if name == "edge_api_token" {
+		return nil, fmt.Errorf("cannot rotate %q: it is the daemon Bearer token for the %q user; rotating it would break the edge console's API access (remove the %q user row and the credential, then re-run to re-provision instead)", name, edgeAPITokenUser, edgeAPITokenUser)
 	}
 
 	existing, err := m.Store.GetCredential(ctx, name)
@@ -315,12 +336,75 @@ func bootstrapSpecs() []bootstrapSpec {
 			swarmSecretName: "zo_root_user_password",
 			format:          formatPlain,
 		},
+		// Edge console credentials. pmcluster mints all three and mirrors them
+		// to Swarm secrets the edge container mounts at /run/secrets/: the UI
+		// login password, the session-cookie HMAC key, and the daemon API token.
+		// The console stores them once on first boot; the secrets matter only
+		// for fresh provisioned volumes (see internal/ui + cmd/edge).
+		{
+			name:            "edge_admin",
+			kind:            KindEdge,
+			swarmSecretName: "edge_admin_password",
+			format:          formatPlain,
+		},
+		{
+			name:            "edge_ui_secret",
+			kind:            KindEdge,
+			swarmSecretName: "edge_ui_secret",
+			format:          formatPlain,
+		},
+		{
+			name:            "edge_api_token",
+			kind:            KindEdge,
+			swarmSecretName: "edge_api_token",
+			format:          formatPlain,
+			// A real daemon Bearer token: minted via auth.GenerateToken and
+			// registered as the "edge" user so the daemon accepts it.
+			generate: ensureEdgeAPIToken,
+		},
 		// openobserve_user / openobserve_token are NOT bootstrap credentials:
 		// they are created against the OpenObserve API by OpenObserveProvisioner
 		// (automation admin user + dedicated ingestion token) and kept in the
 		// pmcluster store/config, never mirrored to a Swarm secret or baked into
 		// the OO data volume.
 	}
+}
+
+// generatePassword returns the plaintext value to store for a freshly-minted
+// spec: the spec's custom generator when set (e.g. a real daemon token),
+// otherwise a random password.
+func (spec bootstrapSpec) generatePassword(ctx context.Context, s *store.Store) (string, error) {
+	if spec.generate != nil {
+		return spec.generate(ctx, s)
+	}
+	return RandomPassword()
+}
+
+// edgeAPITokenUser is the daemon user row that owns the edge console's API
+// token. The daemon authenticates the console's Bearer against this user.
+const edgeAPITokenUser = "edge"
+
+// ensureEdgeAPIToken mints a dedicated pmcluster API token for the edge console
+// and registers it as the "edge" daemon user so the daemon accepts it. Called
+// only on a fresh mint (missing managed credential); on re-runs the stored token
+// is reused and its user row already exists.
+func ensureEdgeAPIToken(ctx context.Context, s *store.Store) (string, error) {
+	token, err := auth.GenerateToken()
+	if err != nil {
+		return "", fmt.Errorf("generate api token: %w", err)
+	}
+	tokenID, secret := auth.SplitToken(token)
+	hash, err := auth.HashToken(secret)
+	if err != nil {
+		return "", fmt.Errorf("hash api token: %w", err)
+	}
+	if _, err := s.CreateUser(ctx, edgeAPITokenUser, tokenID, hash); err != nil {
+		if err == store.ErrUserExists {
+			return "", fmt.Errorf("daemon user %q already exists but the edge credential is missing (store+users diverged) — remove the %q user row from the store's users table or the %q credential, then re-run", edgeAPITokenUser, edgeAPITokenUser, "edge_api_token")
+		}
+		return "", fmt.Errorf("create %s user: %w", edgeAPITokenUser, err)
+	}
+	return token, nil
 }
 
 func serialisePassword(spec bootstrapSpec, username, password string) ([]byte, error) {

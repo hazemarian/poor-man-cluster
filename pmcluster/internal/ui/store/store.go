@@ -21,6 +21,14 @@ import (
 // ErrNotFound is returned when a user or setting doesn't exist.
 var ErrNotFound = errors.New("not found")
 
+// Settings keys for the console's pmcluster API override (the defaults come
+// from env / mounted Swarm secrets; these let the operator override in the UI,
+// or are seeded once on first boot).
+const (
+	KeyAPIURL = "pmcluster_api_url"
+	KeyToken  = "pmcluster_api_token"
+)
+
 // Store wraps the SQLite connection. All access is serialized by SQLite's
 // default; a single admin UI client makes contention negligible.
 type Store struct {
@@ -179,6 +187,20 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 		`INSERT INTO settings (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
 	return err
+}
+
+// SeedSettingOnce writes value under key only if the key has never been set.
+// This is how the API token provisioned by pmcluster is "stored once": it lands
+// in the console DB on first boot and is never re-seeded, so an operator's
+// explicit clear from Settings (SetSetting(key, "")) or subsequent edit is
+// respected and not overwritten on the next start.
+func (s *Store) SeedSettingOnce(ctx context.Context, key, value string) error {
+	if _, err := s.GetSetting(ctx, key); err == nil {
+		return nil // already set (any value, including an explicit clear)
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.SetSetting(ctx, key, value)
 }
 
 func boolInt(b bool) int {

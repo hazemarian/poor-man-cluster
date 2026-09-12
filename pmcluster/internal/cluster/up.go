@@ -147,6 +147,9 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			}
 		}
 	}
+	if creds["edge_admin"] != nil {
+		fmt.Fprintf(out, "  ✔ edge console credentials minted — retrieve the admin password with `pmcluster credentials show edge_admin`\n")
+	}
 
 	// When the OpenObserve admin email changes, the data volume must be
 	// reset so ZO_ROOT_USER_* env vars take effect on the next boot.

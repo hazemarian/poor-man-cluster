@@ -8,12 +8,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -42,6 +44,13 @@ func run() error {
 	// service, one upstream, one origin.
 	uiCfg := ui.FromEnv()
 	uiCfg.PMAPIURL = proxyCfg.Upstream
+	// When pmcluster has provisioned the console's credentials as mounted
+	// Swarm secrets (the default in the edge stack), prefer those over env so
+	// the operator never has to set them by hand. The console persists them
+	// ONCE into its volume-backed DB (see ui.NewApp); these files only matter
+	// on a fresh data volume. Standalone runs with no secrets fall through to
+	// env/config unchanged.
+	applyEdgeSecrets(&uiCfg)
 	if err := uiCfg.Validate(); err != nil {
 		return fmt.Errorf("ui config: %w", err)
 	}
@@ -93,6 +102,39 @@ func run() error {
 		log.Info().Msg("pmcluster-edge stopped")
 		return nil
 	}
+}
+
+// edgeSecretDir is where pmcluster mounts the console's Swarm secrets. Docker
+// Swarm mounts each secret as a file named after the secret.
+const edgeSecretDir = "/run/secrets"
+
+// applyEdgeSecrets overrides the console config from pmcluster-provisioned
+// Swarm secrets when they are mounted. It is a no-op on standalone/local runs
+// (no secrets dir), which keep the env-driven config.
+func applyEdgeSecrets(cfg *ui.Config) {
+	if secret, ok := readSecretFile("edge_ui_secret"); ok {
+		cfg.SessionSecret = secret
+	}
+	// The console admin password also implies a fixed "admin" login user; with
+	// both set the console skips the interactive /setup flow and logs in
+	// straight to the minted password (see ui.bootstrapUsers).
+	if pass, ok := readSecretFile("edge_admin_password"); ok {
+		cfg.EnvUser = "admin"
+		cfg.EnvPass = string(pass)
+	}
+	if token, ok := readSecretFile("edge_api_token"); ok {
+		cfg.PMAPIToken = string(token)
+	}
+}
+
+// readSecretFile returns the trimmed contents of a mounted Swarm secret, or ok
+// == false when the file is absent (not provisioned).
+func readSecretFile(name string) ([]byte, bool) {
+	data, err := os.ReadFile(filepath.Join(edgeSecretDir, name))
+	if err != nil {
+		return nil, false
+	}
+	return bytes.TrimSpace(data), true
 }
 
 // combineProxyAndUI builds one gin engine that serves the operator console on

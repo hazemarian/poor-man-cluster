@@ -10,22 +10,22 @@ services:
   # host.docker.internal:9090 (the same route Traefik used before this stack),
   # so it removes the host-bound 9090 from the public path entirely.
   #
-  # Console env (optional unless you use env-created users):
-  #   PMCLUSTER_UI_SECRET  — HMAC key for session cookies (REQUIRED in prod)
-  #   PMCLUSTER_UI_USER    — optional pre-seeded UI user
-  #   PMCLUSTER_UI_PASS    — its password (set both to create once)
-  #   PMCLUSTER_API_TOKEN  — pmcluster API Bearer token the console defaults to
-  #                          (also editable in the console's Settings page)
+  # Console credentials are provisioned by pmcluster (cluster up / update) and
+  # delivered as Swarm secrets mounted read-only at /run/secrets/. The edge
+  # container reads them on first boot and stores them ONCE into its SQLite DB
+  # on the pmui-data volume:
+  #   edge_admin_password  — console login password (user "admin")
+  #   edge_ui_secret       — HMAC key for session cookies
+  #   edge_api_token       — pmcluster API Bearer token the console uses to reach
+  #                          the daemon (dedicated "edge" daemon user)
+  # Standalone/local runs fall back to PMCLUSTER_UI_USER/PASS/SECRET and
+  # PMCLUSTER_API_TOKEN env vars when no secrets are mounted.
   pmcluster-edge:
     image: [[.EdgeImage]]
     environment:
       - LISTEN_ADDR=:8042
       - UPSTREAM=http://host.docker.internal:9090
       - DATA_DIR=/data
-      - PMCLUSTER_UI_SECRET=${PMCLUSTER_EDGE_UI_SECRET:-}
-      - PMCLUSTER_UI_USER=${PMCLUSTER_EDGE_UI_USER:-}
-      - PMCLUSTER_UI_PASS=${PMCLUSTER_EDGE_UI_PASS:-}
-      - PMCLUSTER_API_TOKEN=${PMCLUSTER_EDGE_API_TOKEN:-}
       - API_RATE=200
       - API_BURST=400
       - WEBHOOK_RATE=40
@@ -37,6 +37,10 @@ services:
       - LOG_LEVEL=info
     volumes:
       - pmui-data:/data
+    secrets:
+      - edge_admin_password
+      - edge_ui_secret
+      - edge_api_token
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -82,6 +86,14 @@ services:
 
 volumes:
   pmui-data:
+
+secrets:
+  edge_admin_password:
+    external: true
+  edge_ui_secret:
+    external: true
+  edge_api_token:
+    external: true
 
 networks:
   traefik-net:

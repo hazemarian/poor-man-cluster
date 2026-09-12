@@ -14,10 +14,11 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/views"
 )
 
-// Setting keys persisted in the local store.
+// Setting keys persisted in the local store. Defined in the store package so
+// the ui bootstrap seeds the same keys the controllers read.
 const (
-	keyAPIURL = "pmcluster_api_url"
-	keyToken  = "pmcluster_api_token"
+	keyAPIURL = store.KeyAPIURL
+	keyToken  = store.KeyToken
 )
 
 // Controller carries the shared dependencies every handler needs. References,

@@ -35,6 +35,22 @@ func NewApp(cfg Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
+	seedCtx := context.Background()
+	// Store the provisioned API URL/token ONCE (first boot) so they survive
+	// restarts and are visible/editable in Settings. Respects any existing
+	// value, including an operator's explicit clear.
+	if cfg.PMAPIToken != "" {
+		if err := st.SeedSettingOnce(seedCtx, store.KeyToken, cfg.PMAPIToken); err != nil {
+			_ = st.Close()
+			return nil, fmt.Errorf("seed api token: %w", err)
+		}
+	}
+	if cfg.PMAPIURL != "" {
+		if err := st.SeedSettingOnce(seedCtx, store.KeyAPIURL, cfg.PMAPIURL); err != nil {
+			_ = st.Close()
+			return nil, fmt.Errorf("seed api url: %w", err)
+		}
+	}
 	renderer, err := views.NewRenderer()
 	if err != nil {
 		_ = st.Close()

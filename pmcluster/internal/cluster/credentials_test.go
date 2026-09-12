@@ -68,7 +68,7 @@ func TestBootstrap_DefaultsTraefikAdminUser(t *testing.T) {
 	}
 }
 
-func TestBootstrap_ReturnsThreeCredentials(t *testing.T) {
+func TestBootstrap_ReturnsAllCredentials(t *testing.T) {
 	s, c := newTestDeps(t)
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
@@ -80,10 +80,57 @@ func TestBootstrap_ReturnsThreeCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
-	wantNames := []string{"traefik_dashboard", "portainer", "openobserve_admin"}
+	wantNames := []string{
+		"traefik_dashboard", "portainer", "openobserve_admin",
+		"edge_admin", "edge_ui_secret", "edge_api_token",
+	}
 	for _, name := range wantNames {
 		if _, ok := creds[name]; !ok {
 			t.Errorf("credential %q missing from result", name)
+		}
+	}
+}
+
+// TestBootstrap_EdgeAPIToken verifies the dedicated daemon user "edge" is
+// created for the console's API token, that the minted token clears
+// auth.VerifyToken against the stored hash, and that all three edge Swarm
+// secrets are provisioned.
+func TestBootstrap_EdgeAPIToken(t *testing.T) {
+	s, c := newTestDeps(t)
+	f := newFakeDocker()
+	f.info = goodSwarmInfo()
+
+	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
+	ctx := context.Background()
+	creds, err := mgr.Bootstrap(ctx, BootstrapInput{OpenObserveAdminEmail: "ops@example.com"})
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	// The daemon must accept the minted token as the "edge" user — this both
+	// proves the user row was created and that the value verifies.
+	token := creds["edge_api_token"].Password
+	user, err := s.UserByToken(ctx, token)
+	if err != nil {
+		t.Fatalf("daemon lookup should accept the edge token: %v", err)
+	}
+	if user.Name != "edge" {
+		t.Errorf("daemon authenticated user = %q, want %q", user.Name, "edge")
+	}
+
+	// Each edge Swarm secret should exist with the credential's plaintext.
+	for name, secret := range map[string]string{
+		"edge_admin_password": "edge_admin",
+		"edge_ui_secret":      "edge_ui_secret",
+		"edge_api_token":      "edge_api_token",
+	} {
+		spec, ok := f.secrets[name]
+		if !ok {
+			t.Errorf("edge swarm secret %q not created", name)
+			continue
+		}
+		if string(spec.Data) != creds[secret].Password {
+			t.Errorf("secret %q payload mismatch with credential %q", name, secret)
 		}
 	}
 }
@@ -232,6 +279,21 @@ func TestBootstrap_LostDBRecovery(t *testing.T) {
 		Data   []byte
 		Labels map[string]string
 	}{Name: "zo_root_user_token", Data: []byte("oldtoken")}
+	f.secrets["edge_admin_password"] = struct {
+		Name   string
+		Data   []byte
+		Labels map[string]string
+	}{Name: "edge_admin_password", Data: []byte("oldadminpass")}
+	f.secrets["edge_ui_secret"] = struct {
+		Name   string
+		Data   []byte
+		Labels map[string]string
+	}{Name: "edge_ui_secret", Data: []byte("olduisecret")}
+	f.secrets["edge_api_token"] = struct {
+		Name   string
+		Data   []byte
+		Labels map[string]string
+	}{Name: "edge_api_token", Data: []byte("oldapitoken")}
 
 	// Store is fresh (lost-DB scenario).
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
@@ -346,6 +408,20 @@ func TestRotate_HappyPath(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected 'infra_traefik' in forceUpdated, got %v", rec.forceUpdated)
+	}
+}
+
+// TestRotate_RefusesEdgeAPIToken ensures the edge console's daemon token is
+// not rotatable through the generic path (rotating the stored value without
+// rewriting the "edge" user's hash would break console auth).
+func TestRotate_RefusesEdgeAPIToken(t *testing.T) {
+	mgr, _, _ := bootstrapForRotate(t)
+	_, err := mgr.Rotate(context.Background(), "edge_api_token")
+	if err == nil {
+		t.Fatal("Rotate of edge_api_token should be refused")
+	}
+	if !strings.Contains(err.Error(), "cannot rotate") {
+		t.Errorf("error %q should say 'cannot rotate'", err.Error())
 	}
 }
 
