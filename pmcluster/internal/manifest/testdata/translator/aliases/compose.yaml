@@ -17,7 +17,7 @@ services:
         traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolallowcredentials: "true"
         traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolallowheaders: Content-Type,Authorization,X-Pmcluster-Signature,X-Request-Id
         traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolallowmethods: GET,POST,PUT,PATCH,DELETE,OPTIONS
-        traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolalloworiginlistregex: ^(https://idlib-book-fair\.nextrum-sy\.com|https://idlibookfair\.com|https://www\.nextrum-sy\.com)$
+        traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolalloworiginlistregex: ^(https://idlib-book-fair\.nextrum-sy\.com|https://idlibookfair\.com|https://www\.nextrum-sy\.com)$$
         traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolmaxage: "600"
         traefik.http.middlewares.bookfair-api-cors.headers.addvaryheader: "true"
         traefik.http.routers.bookfair-api-alias0.entrypoints: websecure

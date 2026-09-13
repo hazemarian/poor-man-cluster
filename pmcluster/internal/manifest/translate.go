@@ -253,7 +253,9 @@ func addTraefikLabels(labels map[string]string, app *dsl.App, serviceName string
 	aliasCORS := len(exp.Aliases) > 0 && !exp.CORSDisabled
 	if aliasCORS {
 		corsName := scope + "-cors"
-		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolalloworiginlistregex"] = buildOriginRegex(exp)
+		// docker stack deploy interpolates `$` in compose label values, so escape
+		// any literal dollar in the CORS regex (its `...$` terminator) as `$$`.
+		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolalloworiginlistregex"] = escapeCompose(buildOriginRegex(exp))
 		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolallowcredentials"] = "true"
 		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolallowmethods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
 		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolallowheaders"] = "Content-Type,Authorization,X-Pmcluster-Signature,X-Request-Id"
@@ -281,6 +283,12 @@ func addTraefikLabels(labels map[string]string, app *dsl.App, serviceName string
 			labels["traefik.http.routers."+aliasScope+".middlewares"] = middleware
 		}
 	}
+}
+
+// escapeCompose doubles every literal `$` so the value survives docker stack
+// deploy's interpolation pass unchanged (e.g. a trailing CORS regex `$`).
+func escapeCompose(s string) string {
+	return strings.ReplaceAll(s, "$", "$$")
 }
 
 // buildOriginRegex produces the CORS Access-Control-Allow-Origin regex for
