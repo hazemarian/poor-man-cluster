@@ -21,15 +21,15 @@ services:
         traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolmaxage: "600"
         traefik.http.middlewares.bookfair-api-cors.headers.addvaryheader: "true"
         traefik.http.routers.bookfair-api-alias0.entrypoints: websecure
-        traefik.http.routers.bookfair-api-alias0.middlewares: bookfair-api-cors@docker
+        traefik.http.routers.bookfair-api-alias0.middlewares: bookfair-api-cors@swarm
         traefik.http.routers.bookfair-api-alias0.rule: Host(`idlibookfair.com`)
         traefik.http.routers.bookfair-api-alias0.tls: "true"
         traefik.http.routers.bookfair-api-alias1.entrypoints: websecure
-        traefik.http.routers.bookfair-api-alias1.middlewares: bookfair-api-cors@docker
+        traefik.http.routers.bookfair-api-alias1.middlewares: bookfair-api-cors@swarm
         traefik.http.routers.bookfair-api-alias1.rule: Host(`www.nextrum-sy.com`)
         traefik.http.routers.bookfair-api-alias1.tls: "true"
         traefik.http.routers.bookfair-api.entrypoints: websecure
-        traefik.http.routers.bookfair-api.middlewares: bookfair-api-cors@docker
+        traefik.http.routers.bookfair-api.middlewares: bookfair-api-cors@swarm
         traefik.http.routers.bookfair-api.rule: Host(`idlib-book-fair.nextrum-sy.com`)
         traefik.http.routers.bookfair-api.tls: "true"
         traefik.http.services.bookfair-api.loadbalancer.server.port: "8080"

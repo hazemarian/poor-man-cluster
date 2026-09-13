@@ -261,7 +261,7 @@ func addTraefikLabels(labels map[string]string, app *dsl.App, serviceName string
 		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolallowheaders"] = "Content-Type,Authorization,X-Pmcluster-Signature,X-Request-Id"
 		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolmaxage"] = "600"
 		labels["traefik.http.middlewares."+corsName+".headers.addvaryheader"] = "true"
-		middleware = corsName + "@docker"
+		middleware = corsName + "@swarm"
 	}
 
 	// Primary host router.

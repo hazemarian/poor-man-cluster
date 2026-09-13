@@ -115,8 +115,8 @@ func TestTranslate_Golden(t *testing.T) {
 				// Per-app CORS middleware spanning host + aliases.
 				"traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolalloworiginlistregex: ^(https://idlib-book-fair\\.nextrum-sy\\.com|https://idlibookfair\\.com|https://www\\.nextrum-sy\\.com)$$",
 				"traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolallowcredentials: \"true\"",
-				"traefik.http.routers.bookfair-api.middlewares: bookfair-api-cors@docker",
-				"traefik.http.routers.bookfair-api-alias0.middlewares: bookfair-api-cors@docker",
+				"traefik.http.routers.bookfair-api.middlewares: bookfair-api-cors@swarm",
+				"traefik.http.routers.bookfair-api-alias0.middlewares: bookfair-api-cors@swarm",
 			},
 		},
 	}
