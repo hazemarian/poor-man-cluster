@@ -70,16 +70,17 @@ func (c TLS) Add(g *gin.Context) {
 	cert := g.PostForm("cert")
 	key := g.PostForm("key")
 
-	if configured && host != "" && cert != "" && key != "" {
+	switch {
+	case !configured:
+		d.Error = "pmcluster API not configured. Open Settings first."
+	case host == "" || cert == "" || key == "":
+		d.Error = "Host, certificate and key are all required."
+	default:
 		if _, err := c.API.AddHostCert(ctx, host, cert, key); err != nil {
 			d.Error = err.Error()
 		} else {
 			d.Msg = "Certificate for " + host + " stored and Traefik refreshed."
 		}
-	} else if !configured {
-		d.Error = "pmcluster API not configured. Open Settings first."
-	} else {
-		d.Error = "Host, certificate and key are all required."
 	}
 
 	hosts, err := c.API.ListHostCerts(ctx)

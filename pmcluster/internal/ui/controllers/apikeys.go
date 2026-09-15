@@ -56,7 +56,12 @@ func (c APIKeys) Add(g *gin.Context) {
 	d := apiKeysData{}
 	name := g.PostForm("name")
 
-	if configured && name != "" {
+	switch {
+	case !configured:
+		d.Error = "pmcluster API not configured. Open Settings first."
+	case name == "":
+		d.Error = "Name is required."
+	default:
 		created, err := c.API.CreateAPIKey(ctx, name)
 		if err != nil {
 			d.Error = err.Error()
@@ -65,10 +70,6 @@ func (c APIKeys) Add(g *gin.Context) {
 			d.Token = created.Token
 			d.Msg = "API key for " + created.Name + " created. Copy the token now — it is shown once."
 		}
-	} else if !configured {
-		d.Error = "pmcluster API not configured. Open Settings first."
-	} else {
-		d.Error = "Name is required."
 	}
 
 	d.Keys = c.fetch(ctx, &d)

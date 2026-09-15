@@ -66,7 +66,12 @@ func (c Webhooks) Add(g *gin.Context) {
 	source := g.PostForm("source")
 	desc := g.PostForm("description")
 
-	if configured && source != "" {
+	switch {
+	case !configured:
+		d.Error = "pmcluster API not configured. Open Settings first."
+	case source == "":
+		d.Error = "Source name is required."
+	default:
 		created, err := c.API.CreateWebhook(ctx, source, desc)
 		if err != nil {
 			d.Error = err.Error()
@@ -75,10 +80,6 @@ func (c Webhooks) Add(g *gin.Context) {
 			d.Secret = created.Secret
 			d.Msg = "Webhook source " + created.Source + " created. Copy the shared secret now — it is shown once."
 		}
-	} else if !configured {
-		d.Error = "pmcluster API not configured. Open Settings first."
-	} else {
-		d.Error = "Source name is required."
 	}
 
 	d.Sources = c.fetch(ctx, &d)
