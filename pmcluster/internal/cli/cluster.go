@@ -134,6 +134,16 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
+	// Refresh the on-disk config templates from this binary's embedded copies.
+	// After a pmcluster binary upgrade, stale configs (older version header)
+	// are overwritten so the re-render below picks up the new baked-in
+	// templates (e.g. a newer edge-stack.yml) and re-deploys the stacks that
+	// changed. Configs with the same or newer version header are preserved —
+	// operator edits remain the source of truth.
+	if err := cluster.EnsureConfigDir(cfg.ConfigDir(), buildinfo.Version); err != nil {
+		return fmt.Errorf("refresh config dir: %w", err)
+	}
+
 	updateDomain := st.GetSettingDefault(ctx, "domain", "")
 	res, err := cluster.Update(ctx, cluster.UpdateDeps{
 		Store:       st,

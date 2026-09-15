@@ -422,6 +422,23 @@ pmcluster node join-token worker           # get join token for new workers
 
 `cluster up` is idempotent (reconciles, never destroys). `cluster update` is the targeted path after editing an OTel/Traefik config or renewing a cert — it does not re-run credential bootstrap or a full redeploy.
 
+### Upgrading pmcluster / the edge service
+
+The edge image is pinned to `ghcr.io/nextrum-sy/pmcluster-edge:latest` by default (override with `PMCLUSTER_EDGE_IMAGE=<tag>`). The stack template lives **inside the pmcluster binary** (embedded `edge-stack.yml`). So the correct upgrade path is:
+
+1. **Build + publish the release first** — push a `v*` tag; the release workflow cross-compiles the binaries and pushes the new edge image to GHCR:
+   ```bash
+   git tag v0.2.29 && git push origin v0.2.29
+   ```
+2. **Update the binary with install.sh** — it installs the new binary and, because `~/.pmcluster/config.yaml` exists, automatically runs `pmcluster cluster update`:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | VERSION=v0.2.29 bash
+   # or simply: | bash   (resolves latest release)
+   ```
+3. `cluster update` **refreshes the on-disk templates** in `~/.pmcluster/config/` from the new binary's embedded copies (stale configs — older version header — are overwritten; operator edits with a newer header are preserved), then re-renders. Because the edge-stack.yml content changed, the **edge stack is re-deployed** automatically and pulls the new `:latest` image. OTel/Traefik/cert are re-applied content-aware as usual.
+
+Manual `docker service update --image ... edge_pmcluster-edge` is NOT the supported path — always use the tag → install.sh → `cluster update` flow. On a fresh box, install.sh runs `cluster up` instead (when `PMCLUSTER_DOMAIN` is set). Set `CLUSTER_APPLY=none` to skip the auto apply.
+
 ## Credentials
 
 ```bash
