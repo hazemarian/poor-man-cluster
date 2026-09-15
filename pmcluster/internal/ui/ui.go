@@ -128,6 +128,15 @@ func (a *App) Mount(engine *gin.Engine) {
 	g.GET("/tls", tlsC.Page)
 	g.POST("/tls", tlsC.Add)
 	g.POST("/tls/remove/:host", tlsC.Remove)
+
+	wh := controllers.Webhooks{Controller: a.ctrl}
+	g.GET("/webhooks", wh.Page)
+	g.POST("/webhooks", wh.Add)
+	g.POST("/webhooks/remove/:source", wh.Remove)
+
+	ak := controllers.APIKeys{Controller: a.ctrl}
+	g.GET("/apikeys", ak.Page)
+	g.POST("/apikeys", ak.Add)
 }
 
 // Handler returns a gin engine with every UI route. The edge service mounts

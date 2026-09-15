@@ -67,6 +67,29 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 			write(w, `{"backups":[{"id":9,"status":"succeeded","stack_name":"demo","revision":3,"archive_paths":["a.tar.gz"],"started_at":10,"finished_at":11}]}`)
 		}
 	})
+
+	// Webhook sources: GET lists (never secret), POST creates (secret once).
+	mux.HandleFunc("/api/webhooks", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			write(w, `{"source":"github","secret":"the-one-time-secret-value"}`)
+		default:
+			write(w, `{"webhooks":[{"source":"github","description":"bookfair ci","created_at":55}]}`)
+		}
+	})
+	mux.HandleFunc("/api/webhooks/github", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// API keys: GET lists (never token), POST creates (token once).
+	mux.HandleFunc("/api/api_keys", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			write(w, `{"id":2,"name":"ci","token":"pmc_tokenabc"}`)
+		default:
+			write(w, `{"keys":[{"id":1,"name":"admin","created_at":40}]}`)
+		}
+	})
 	return httptest.NewServer(mux)
 }
 
@@ -274,6 +297,76 @@ func TestAllControllers(t *testing.T) {
 	resp = doRequest(t, app, http.MethodGet, "/stacks", "", jar)
 	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/login" {
 		t.Errorf("unauth /stacks should redirect to /login")
+	}
+}
+
+// TestWebhooksAndAPIKeys drives the Webhooks and API Keys controllers: list,
+// create (surfacing the one-time secret/token), remove, and confirms the secret
+// is NOT present on a subsequent list.
+func TestWebhooksAndAPIKeys(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	jar := map[string]*http.Cookie{}
+
+	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+
+	// Webhooks page lists sources.
+	resp := doRequest(t, app, http.MethodGet, "/webhooks", "", jar)
+	b := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /webhooks = %d, want 200", resp.StatusCode)
+	}
+	for _, want := range []string{"Webhook Keys", "github", "bookfair ci"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("webhooks page missing %q; got: %s", want, b)
+		}
+	}
+
+	// Create surfaces the one-time secret.
+	resp = doRequest(t, app, http.MethodPost, "/webhooks", "source=github&description=bookfair ci", jar)
+	b = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /webhooks = %d, want 200", resp.StatusCode)
+	}
+	for _, want := range []string{"shown once", "the-one-time-secret-value", "Webhook source github created"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("webhook create missing %q; got: %s", want, b)
+		}
+	}
+
+	// Removing a source revokes it.
+	resp = doRequest(t, app, http.MethodPost, "/webhooks/remove/github", "", jar)
+	b = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /webhooks/remove/github = %d, want 200", resp.StatusCode)
+	}
+	if !strings.Contains(b, "Removed webhook source github") {
+		t.Errorf("webhook remove missing confirmation; got: %s", b)
+	}
+
+	// API Keys page lists users (no token).
+	resp = doRequest(t, app, http.MethodGet, "/apikeys", "", jar)
+	b = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /apikeys = %d, want 200", resp.StatusCode)
+	}
+	if !strings.Contains(b, "admin") {
+		t.Errorf("apikeys page missing admin; got: %s", b)
+	}
+
+	// Create surfaces the one-time bearer token.
+	resp = doRequest(t, app, http.MethodPost, "/apikeys", "name=ci", jar)
+	b = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /apikeys = %d, want 200", resp.StatusCode)
+	}
+	if !strings.Contains(b, "pmc_tokenabc") {
+		t.Errorf("apikey create missing one-time token; got: %s", b)
+	}
+	if !strings.Contains(b, "shown once") {
+		t.Errorf("apikey create missing 'shown once' hint; got: %s", b)
 	}
 }
 

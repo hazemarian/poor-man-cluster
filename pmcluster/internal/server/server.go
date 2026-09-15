@@ -109,6 +109,12 @@ func New(d Deps) http.Handler {
 		if d.HostCerts != nil {
 			d.HostCerts.Mount(r)
 		}
+		if d.Store != nil && d.Cipher != nil {
+			(&WebhookService{Store: d.Store, Cipher: d.Cipher}).Mount(r)
+		}
+		if d.Store != nil {
+			(&APIKeyService{Store: d.Store}).Mount(r)
+		}
 	})
 
 	// otelhttp wraps the whole router so every request produces a span

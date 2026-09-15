@@ -1,0 +1,58 @@
+{{define "webhooks"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1 style="margin:0 0 4px">Webhook Keys</h1>
+<p class="sub">Sources allowed to POST deploys to <code>/webhook/&lt;source&gt;</code> with
+HMAC-SHA256 signature verification. The shared secret is shown <strong>once</strong> on
+creation — copy it into your CI and sign every deploy with it.</p>
+
+{{if .Secret}}
+<div class="card">
+  <h2 style="margin-top:0">New webhook source created</h2>
+  <p class="sub">Source: <code>{{.Source}}</code> — copy this secret now, it won't be shown again.</p>
+  <pre style="user-select:all;overflow-x:auto">{{.Secret}}</pre>
+  <p class="sub">CI configuration:</p>
+  <pre style="overflow-x:auto">Endpoint : https://pmcluster.&lt;domain&gt;/webhook/{{.Source}}
+Method   : POST
+Header   : X-Pmcluster-Signature: sha256=&lt;hmac-sha256(body, secret)&gt;
+Header   : X-Pmcluster-Timestamp: &lt;unix-seconds&gt;
+Body     : {"app_name": "...", "version": "...", "manifest": "&lt;dsl-yaml&gt;"}</pre>
+</div>
+{{end}}
+
+<div class="card">
+  <h2 style="margin-top:0">Add a webhook source</h2>
+  <form hx-post="/webhooks" hx-target="#view" hx-swap="innerHTML">
+    <label>Source name (e.g. github-bookfair)</label>
+    <input type="text" name="source" placeholder="github-idlib-book-fair" required>
+    <label>Description</label>
+    <input type="text" name="description" placeholder="who/what uses this source">
+    <div style="margin-top:10px">
+      <button class="btn" type="submit" hx-disabled-elt="this">Create source</button>
+    </div>
+  </form>
+</div>
+
+<h2 style="margin-bottom:0">Configured sources</h2>
+<div class="card" style="padding:6px 14px">
+{{if .Sources}}
+<table>
+  <tr><th>Source</th><th>Description</th><th>Created</th><th>Last used</th><th></th></tr>
+  {{range .Sources}}
+  <tr>
+    <td><code>{{.Source}}</code></td>
+    <td class="muted">{{if .Description}}{{.Description}}{{else}}—{{end}}</td>
+    <td class="muted">{{ts .CreatedAt}}</td>
+    <td class="muted">{{ts .LastUsedAt}}</td>
+    <td style="text-align:right">
+      <button class="btn danger" hx-post="/webhooks/remove/{{.Source}}" hx-target="#view" hx-swap="innerHTML">Revoke</button>
+    </td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<div class="empty">No webhook sources configured.</div>
+{{end}}
+</div>
+{{end}}

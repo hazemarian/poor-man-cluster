@@ -37,6 +37,34 @@ func (s *Store) CreateUser(ctx context.Context, name, tokenID, tokenHash string)
 	return res.LastInsertId()
 }
 
+// UserRow is a lightweight non-secret user record for listing API keys in
+// the operator UI. It deliberately exposes no token material.
+type UserRow struct {
+	ID        int64
+	Name      string
+	CreatedAt int64
+}
+
+// ListUsers returns every user (id, name, created_at) ordered by name,
+// without any token/hash material.
+func (s *Store) ListUsers(ctx context.Context) ([]UserRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, created_at FROM users ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("query users: %w", err)
+	}
+	defer rows.Close()
+	var out []UserRow
+	for rows.Next() {
+		var u UserRow
+		if err := rows.Scan(&u.ID, &u.Name, &u.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan user: %w", err)
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {

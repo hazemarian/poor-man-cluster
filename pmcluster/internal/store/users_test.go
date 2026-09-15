@@ -230,6 +230,49 @@ func TestUserByTokenLegacy(t *testing.T) {
 	}
 }
 
+// TestListUsers covers the empty table and a populated list ordered by name.
+func TestListUsers(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	t.Run("empty returns no rows", func(t *testing.T) {
+		rows, err := s.ListUsers(ctx)
+		if err != nil {
+			t.Fatalf("ListUsers (empty): %v", err)
+		}
+		if len(rows) != 0 {
+			t.Errorf("ListUsers on empty DB = %d rows, want 0", len(rows))
+		}
+	})
+
+	// Insert names out of alphabetical order to prove ORDER BY name.
+	createV2User(t, s, "charlie")
+	createV2User(t, s, "alice")
+	createV2User(t, s, "bob")
+
+	t.Run("populated returns name-sorted rows", func(t *testing.T) {
+		rows, err := s.ListUsers(ctx)
+		if err != nil {
+			t.Fatalf("ListUsers (populated): %v", err)
+		}
+		if len(rows) != 3 {
+			t.Fatalf("ListUsers = %d rows, want 3", len(rows))
+		}
+		want := []string{"alice", "bob", "charlie"}
+		for i, row := range rows {
+			if row.Name != want[i] {
+				t.Errorf("row[%d].Name = %q, want %q", i, row.Name, want[i])
+			}
+			if row.ID <= 0 {
+				t.Errorf("row[%d].ID = %d, want > 0", i, row.ID)
+			}
+			if row.CreatedAt <= 0 {
+				t.Errorf("row[%d].CreatedAt = %d, want > 0", i, row.CreatedAt)
+			}
+		}
+	})
+}
+
 // TestUserByID covers the not-found (sql.ErrNoRows) path and the happy path.
 func TestUserByID(t *testing.T) {
 	s := openTestStore(t)

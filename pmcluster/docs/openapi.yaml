@@ -1,0 +1,764 @@
+openapi: 3.0.3
+info:
+  title: pmcluster daemon API
+  description: |
+    REST + webhook API for the pmcluster Docker Swarm control plane.
+
+    All `/api/*` routes require a Bearer token (an API user; see `POST /api/api_keys`
+    to mint one). The webhook receiver `/webhook/{source}` is intentionally NOT
+    Bearer-authenticated — its auth is an HMAC-SHA256 signature computed over the
+    (timestamp + body) with the source's shared secret. API users are minted with
+    `pmcluster user create` or `POST /api/api_keys`; webhook sources with
+    `pmcluster webhook add` or `POST /api/webhooks`.
+  version: "0.2.0"
+servers:
+  - url: https://pmcluster.example.com
+    description: Deployed daemon behind the edge gateway
+  - url: http://127.0.0.1:PORT
+    description: Local `pmcluster serve`
+paths:
+  /health:
+    get:
+      summary: Liveness probe (unauthenticated, no dependencies)
+      operationId: health
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /webhook/{source}:
+    post:
+      summary: Accept an HMAC-verified deploy from CI
+      description: |
+        Unauthenticated by bearer. Mutually authenticated by the HMAC signature.
+        Signature is HMAC-SHA256 over `<unix-seconds> + <json-body>` using the
+        source's shared secret, sent as `sha256=<hex>`.
+      operationId: webhookDeploy
+      security: []
+      parameters:
+        - name: source
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: X-Pmcluster-Signature
+          in: header
+          required: true
+          description: sha256=<hex-of-hmac>
+          schema:
+            type: string
+        - name: X-Pmcluster-Timestamp
+          in: header
+          required: true
+          description: Unix seconds; must be within 5 minutes of the server clock
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeployPayload"
+      responses:
+        "200":
+          description: Deploy accepted and applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeployResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Bad or missing signature (indistinguishable from unknown source)
+  /api/me:
+    get:
+      summary: Authenticated user profile
+      operationId: me
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The caller's user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+  /api/cluster/info:
+    get:
+      summary: Node + swarm summary
+      operationId: clusterInfo
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Node and swarm summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClusterInfo"
+  /api/nodes:
+    get:
+      summary: List swarm nodes
+      operationId: listNodes
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Swarm node list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nodes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Node"
+  /api/stacks:
+    get:
+      summary: List deployed stacks
+      operationId: listStacks
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Stack list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stacks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Stack"
+    post:
+      summary: Deploy a manifest (create or update a stack)
+      operationId: deploy
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeployPayload"
+      responses:
+        "200":
+          description: Deploy accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeployResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/stacks/{name}:
+    get:
+      summary: One stack's metadata and recent revisions
+      operationId: getStack
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Stack detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StackDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/stacks/{name}/revisions/{rev}:
+    get:
+      summary: One revision's full source and rendered YAML
+      operationId: getRevision
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: rev
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        "200":
+          description: Revision detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Revision"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/stacks/{name}/rollback:
+    post:
+      summary: Roll a stack back to a prior revision
+      operationId: rollback
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revision]
+              properties:
+                revision:
+                  type: integer
+                  format: int64
+      responses:
+        "200":
+          description: Rolled back
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RollbackResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/backups:
+    get:
+      summary: Recent backups across stacks
+      operationId: listBackups
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Backup list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  backups:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Backup"
+    post:
+      summary: Trigger a cluster-wide backup
+      operationId: createBackup
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Backup started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Backup"
+  /api/stacks/{name}/backups:
+    get:
+      summary: Backups for one stack
+      operationId: listStackBackups
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Stack backup list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  backups:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Backup"
+  /api/tls/hosts:
+    get:
+      summary: List per-host TLS certificates
+      operationId: listHostCerts
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Host certificate list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hosts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/HostCert"
+  /api/tls/hosts/{host}:
+    put:
+      summary: Store a per-host cert/key (as PEM text) and refresh Traefik
+      description: |
+        Cert and key arrive as PEM TEXT in the JSON body — never as a file upload.
+        Only reachable when per-host TLS is wired (HostCertService).
+      operationId: putHostCert
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: host
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cert, key]
+              properties:
+                cert:
+                  type: string
+                key:
+                  type: string
+      responses:
+        "200":
+          description: Stored (and Traefik refreshed)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HostCert"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          description: Stored but Traefik refresh failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Remove a per-host certificate
+      operationId: removeHostCert
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: host
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Removed
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/webhooks:
+    get:
+      summary: List webhook sources (without revealing secrets)
+      operationId: listWebhooks
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Webhook source list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhooks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Webhook"
+    post:
+      summary: Create a webhoook source (shared secret returned once)
+      description: The HMAC shared secret is generated on the daemon, stored encrypted,
+        and returned in the response body ONCE. It can never be read again.
+      operationId: createWebhook
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source:
+                  type: string
+                description:
+                  type: string
+      responses:
+        "201":
+          description: Created. `secret` is returned once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Source already exists
+  /api/webhooks/{source}:
+    delete:
+      summary: Revoke a webhook source
+      operationId: deleteWebhook
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: source
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Revoked (shared secret invalidated)
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/api_keys:
+    get:
+      summary: List API users (without token material)
+      operationId: listAPIKeys
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: API key list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/APIKey"
+    post:
+      summary: Create an API user (bearer token returned once)
+      description: The bearer token is generated, hashed (argon2id) at rest, and
+        returned in the response body ONCE. It can never be read again.
+      operationId: createAPIKey
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        "201":
+          description: Created. `token` is returned once.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKeyCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: User already exists
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: pmc_<token_id>_<secret>
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+    Health:
+      type: object
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        commit:
+          type: string
+    Me:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+    DeployPayload:
+      type: object
+      properties:
+        app_name:
+          type: string
+        repo_url:
+          type: string
+        version:
+          type: string
+        manifest:
+          type: string
+      required:
+        - manifest
+    DeployResult:
+      type: object
+      properties:
+        stack:
+          type: string
+        revision:
+          type: integer
+          format: int64
+    RollbackResult:
+      type: object
+      properties:
+        stack:
+          type: string
+        new_revision:
+          type: integer
+          format: int64
+        rolled_back_to:
+          type: integer
+          format: int64
+    ClusterInfo:
+      type: object
+      properties:
+        node_name:
+          type: string
+        server_version:
+          type: string
+        os:
+          type: string
+        arch:
+          type: string
+        cpus:
+          type: integer
+        memory_bytes:
+          type: integer
+          format: int64
+        swarm:
+          $ref: "#/components/schemas/SwarmInfo"
+    SwarmInfo:
+      type: object
+      properties:
+        state:
+          type: string
+        control_available:
+          type: boolean
+        managers:
+          type: integer
+        nodes:
+          type: integer
+    Node:
+      type: object
+      properties:
+        id:
+          type: string
+        hostname:
+          type: string
+        role:
+          type: string
+        availability:
+          type: string
+        status:
+          type: string
+        is_leader:
+          type: boolean
+        engine_version:
+          type: string
+        address:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
+    Stack:
+      type: object
+      properties:
+        name:
+          type: string
+        current_revision:
+          type: integer
+          format: int64
+        repo_url:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
+    StackDetail:
+      type: object
+      properties:
+        stack:
+          $ref: "#/components/schemas/Stack"
+        revisions:
+          type: array
+          items:
+            type: object
+            properties:
+              revision:
+                type: integer
+                format: int64
+              created_at:
+                type: integer
+                format: int64
+        last_backup:
+          $ref: "#/components/schemas/BackupSummary"
+    BackupSummary:
+      type: object
+      properties:
+        status:
+          type: string
+        started_at:
+          type: integer
+          format: int64
+        finished_at:
+          type: integer
+          format: int64
+        revision:
+          type: integer
+          format: int64
+        error_message:
+          type: string
+    Revision:
+      type: object
+      properties:
+        stack:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        created_at:
+          type: integer
+          format: int64
+        source_yaml:
+          type: string
+        rendered_yaml:
+          type: string
+        payload:
+          type: string
+    Backup:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        status:
+          type: string
+        stack_name:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        archive_paths:
+          type: array
+          items:
+            type: string
+        error_message:
+          type: string
+        started_at:
+          type: integer
+          format: int64
+        finished_at:
+          type: integer
+          format: int64
+    HostCert:
+      type: object
+      properties:
+        host:
+          type: string
+        sans:
+          type: array
+          items:
+            type: string
+        not_after:
+          type: string
+          format: date-time
+        not_before:
+          type: string
+          format: date-time
+        cert_file:
+          type: string
+        key_file:
+          type: string
+    Webhook:
+      type: object
+      properties:
+        source:
+          type: string
+        description:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+        last_used_at:
+          type: integer
+          format: int64
+    WebhookCreated:
+      type: object
+      properties:
+        source:
+          type: string
+        secret:
+          type: string
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+    APIKeyCreated:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        token:
+          type: string

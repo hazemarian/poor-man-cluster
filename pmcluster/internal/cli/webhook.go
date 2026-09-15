@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -54,7 +55,7 @@ func init() {
 }
 
 func runWebhookAdd(cmd *cobra.Command, args []string) error {
-	source := args[0]
+	source := strings.TrimSpace(args[0])
 	if source == "" {
 		return errors.New("source: required")
 	}

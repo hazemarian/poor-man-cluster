@@ -132,3 +132,35 @@ type HostCert struct {
 type hostCertsResponse struct {
 	Hosts []HostCert `json:"hosts"`
 }
+
+// Webhook is one deploy-webhook source row (no secret — the HMAC secret is
+// only returned once at creation via WebhookCreated).
+type Webhook struct {
+	Source      string `json:"source"`
+	Description string `json:"description,omitempty"`
+	CreatedAt   int64  `json:"created_at"`
+	LastUsedAt  int64  `json:"last_used_at,omitempty"`
+}
+
+// WebhookCreated is the POST /api/webhooks response — it carries the
+// one-time-only shared secret.
+type WebhookCreated struct {
+	Source string `json:"source"`
+	Secret string `json:"secret"`
+}
+
+// APIKey is one API user row (no token material — the token is only returned
+// once at creation via APIKeyCreated).
+type APIKey struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// APIKeyCreated is the POST /api/api_keys response — it carries the one-time
+// bearer token.
+type APIKeyCreated struct {
+	ID    int64  `json:"id"`
+	Name  string `json:"name"`
+	Token string `json:"token"`
+}

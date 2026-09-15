@@ -234,3 +234,42 @@ func (c *Client) AddHostCert(ctx context.Context, host, cert, key string) (*Host
 func (c *Client) RemoveHostCert(ctx context.Context, host string) error {
 	return c.do(ctx, http.MethodDelete, "/tls/hosts/"+url.PathEscape(host), nil, nil)
 }
+
+// ListWebhooks returns every deploy-webhook source (without secrets).
+func (c *Client) ListWebhooks(ctx context.Context) ([]Webhook, error) {
+	var body struct {
+		Webhooks []Webhook `json:"webhooks"`
+	}
+	err := c.do(ctx, http.MethodGet, "/webhooks", nil, &body)
+	return body.Webhooks, err
+}
+
+// CreateWebhook creates a webhook source and returns its one-time shared secret.
+func (c *Client) CreateWebhook(ctx context.Context, source, description string) (*WebhookCreated, error) {
+	body := map[string]string{"source": source, "description": description}
+	var out WebhookCreated
+	err := c.do(ctx, http.MethodPost, "/webhooks", body, &out)
+	return &out, err
+}
+
+// DeleteWebhook removes a webhook source, revoking its shared secret.
+func (c *Client) DeleteWebhook(ctx context.Context, source string) error {
+	return c.do(ctx, http.MethodDelete, "/webhooks/"+url.PathEscape(source), nil, nil)
+}
+
+// ListAPIKeys returns every API user (without token material).
+func (c *Client) ListAPIKeys(ctx context.Context) ([]APIKey, error) {
+	var body struct {
+		Keys []APIKey `json:"keys"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api_keys", nil, &body)
+	return body.Keys, err
+}
+
+// CreateAPIKey creates an API user and returns its one-time bearer token.
+func (c *Client) CreateAPIKey(ctx context.Context, name string) (*APIKeyCreated, error) {
+	body := map[string]string{"name": name}
+	var out APIKeyCreated
+	err := c.do(ctx, http.MethodPost, "/api_keys", body, &out)
+	return &out, err
+}
