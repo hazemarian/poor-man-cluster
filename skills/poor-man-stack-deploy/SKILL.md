@@ -409,6 +409,16 @@ pmcluster backup list                      # audit log of every triggered run
 pmcluster backup create                    # on-demand snapshot
 ```
 
+### Control-plane backups (pmcluster's own state)
+
+The backup stack ships a second agent, `control-plane-backup`, that runs **only on the manager node**. Every night it archives `~/.pmcluster` itself — `data.db` (users, API keys, webhook secrets, credentials, stack revisions), the `.encryption_key`, `config/`, and per-host TLS certs — into the same `/var/backups/docker-volumes` directory as the volume backups, with a `pmcluster-ctlplane-` prefix and 30-day retention.
+
+```bash
+ls /var/backups/docker-volumes/pmcluster-ctlplane-*   # control-plane archives
+```
+
+This closes the "lost manager disk = full re-bootstrap" gap: app volumes AND the control plane are both archived daily. The `backup` stack is rendered with the daemon's data dir (`${DATA_DIR}`), so the bind mount points at the real `~/.pmcluster` on the manager.
+
 ## Cluster Management
 
 ```bash

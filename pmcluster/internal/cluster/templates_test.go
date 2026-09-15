@@ -63,6 +63,47 @@ func TestLoadComposeFile_KnownStacks(t *testing.T) {
 	}
 }
 
+// TestLoadComposeFile_BackupControlPlane verifies the backup stack renders
+// the manager-only control-plane backup agent when DataDir is set, and omits
+// it (with no dangling placeholder) when it isn't.
+func TestLoadComposeFile_BackupControlPlane(t *testing.T) {
+	// DataDir set → control-plane agent present, bind mount substituted.
+	in := RenderInput{Domain: "example.com", DataDir: "/root/.pmcluster"}
+	data, err := LoadComposeFile(StackBackup, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile(backup): %v", err)
+	}
+	body := string(data)
+	for _, want := range []string{
+		"control-plane-backup",
+		"/root/.pmcluster:/backup/pmcluster:ro",
+		"BACKUP_SOURCES=/backup/pmcluster",
+		"pmcluster-ctlplane-",
+		"node.role == manager",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered backup stack missing %q", want)
+		}
+	}
+	if strings.Contains(body, "${DATA_DIR}") {
+		t.Error("${DATA_DIR} placeholder was not substituted")
+	}
+
+	// No DataDir → agent omitted, no dangling placeholder.
+	in2 := RenderInput{Domain: "example.com"}
+	data2, err := LoadComposeFile(StackBackup, in2)
+	if err != nil {
+		t.Fatalf("LoadComposeFile(backup, no DataDir): %v", err)
+	}
+	body2 := string(data2)
+	if strings.Contains(body2, "control-plane-backup") {
+		t.Error("control-plane-backup should be omitted when DataDir is empty")
+	}
+	if strings.Contains(body2, "${DATA_DIR}") {
+		t.Error("dangling ${DATA_DIR} placeholder in no-DataDir render")
+	}
+}
+
 // TestLoadComposeFile_SubstitutesOpenObserveEmail verifies the email
 // substitution specifically in the observability stack, which uses it.
 func TestLoadComposeFile_SubstitutesOpenObserveEmail(t *testing.T) {

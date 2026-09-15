@@ -109,6 +109,12 @@ type RenderInput struct {
 	// If the disk file is missing it falls back to the embedded version.
 	ConfigDir string
 
+	// DataDir is ~/.pmcluster/ — the parent of ConfigDir. Substituted as
+	// ${DATA_DIR} in compose files (the backup stack bind-mounts it into the
+	// control-plane backup agent so pmcluster's own state rides along in the
+	// nightly archive). Derived by callers via filepath.Dir(ConfigDir).
+	DataDir string
+
 	// HostsDir is the per-host TLS certificate base directory
 	// (~/.pmcluster/config/hosts/). RenderTraefikDynamic appends every
 	// on-disk host cert to the dynamic config so Traefik serves them for
@@ -183,6 +189,7 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	}
 	out := strings.ReplaceAll(rendered.String(), "${DOMAIN}", in.Domain)
 	out = strings.ReplaceAll(out, "${OPENOBSERVE_ADMIN_EMAIL}", in.OpenObserveAdminEmail)
+	out = strings.ReplaceAll(out, "${DATA_DIR}", in.DataDir)
 	out = strings.ReplaceAll(out, "__OPENOBSERVE_PASSWORD__", in.OpenObserveAdminPassword)
 	out = strings.ReplaceAll(out, "__OTEL_CONFIG_NAME__", in.OTelConfigName)
 	out = strings.ReplaceAll(out, "__TRAEFIK_CONFIG_NAME__", in.TraefikConfigName)

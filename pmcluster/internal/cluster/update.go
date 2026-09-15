@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
@@ -124,6 +125,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		OpenObserveIngestionToken: ooTokenPlain,
 		ACMEEmail:                 state.ACMEEmail,
 		ConfigDir:                 in.ConfigDir,
+		DataDir:                   filepath.Dir(in.ConfigDir),
 		HostsDir:                  tlscerts.HostsDir(in.ConfigDir),
 		EdgeImage:                 EdgeImageFor(),
 	}

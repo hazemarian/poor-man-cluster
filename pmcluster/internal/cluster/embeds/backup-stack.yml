@@ -39,3 +39,45 @@ services:
       
       # CONFIG: Sync timezone so 3 AM is actually 3 AM
       - /etc/localtime:/etc/localtime:ro
+
+[[ if .DataDir ]]
+  # The Control-Plane Backup Agent
+  # Runs ONLY on the manager node (where ~/.pmcluster lives). Archives the
+  # pmcluster control plane itself — SQLite DB (users, API keys, webhook
+  # secrets, credentials, stack revisions), the AES-GCM encryption key,
+  # TLS certs, and rendered configs — so a lost manager disk doesn't mean
+  # a full re-bootstrap. Written to the same /archive as volume backups
+  # with a distinct prefix and a longer retention (small, high-value).
+  control-plane-backup:
+    image: offen/docker-volume-backup:v2
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+    environment:
+      # Same nightly schedule as the volume backup agent.
+      - BACKUP_CRON_EXPRESSION=0 3 * * *
+      
+      # Distinct name so the two agents never overwrite each other.
+      - BACKUP_FILENAME=pmcluster-ctlplane-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz
+      
+      # Only the control-plane dir — NOT the docker volume directory.
+      - BACKUP_SOURCES=/backup/pmcluster
+      
+      # Retention: keep 30 days (a few MB, critical if disk dies).
+      - BACKUP_PRUNING_PREFIX=pmcluster-ctlplane-
+      - BACKUP_RETENTION_DAYS=30
+
+    volumes:
+      # SOURCE: the pmcluster data dir (rendered from the daemon's config).
+      # Includes data.db, .encryption_key, config/, hosts/ per-host certs.
+      - ${DATA_DIR}:/backup/pmcluster:ro
+      
+      # DESTINATION: same archive dir as the volume backups.
+      - /var/backups/docker-volumes:/archive
+      
+      # CONFIG: Sync timezone so 3 AM is actually 3 AM
+      - /etc/localtime:/etc/localtime:ro
+[[ end ]]

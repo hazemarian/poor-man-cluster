@@ -405,6 +405,8 @@ pmcluster backup create                       # on-demand snapshot
 pmcluster backup list                         # audit log of every triggered run
 ```
 
+In addition to the per-node app-volume agent, the backup stack runs a manager-only **control-plane agent** (`control-plane-backup`). Every night it archives `~/.pmcluster` itself — the SQLite DB (users, API keys, webhook secrets, credentials, revisions), the encryption key, TLS certs, and rendered configs — into the same `/var/backups/docker-volumes` directory under a `pmcluster-ctlplane-` prefix (30-day retention). This closes the "lost manager disk = full re-bootstrap" gap: app data and the control plane both ride along in the nightly archive.
+
 Restore is a known design gap, sketched in [`pmcluster/docs/restore-design.md`](pmcluster/docs/restore-design.md).
 
 ---

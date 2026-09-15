@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
@@ -187,6 +188,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		OpenObserveIngestionToken: storedToken,
 		ACMEEmail:                 in.ACMEEmail,
 		ConfigDir:                 in.ConfigDir,
+		DataDir:                   filepath.Dir(in.ConfigDir),
 		HostsDir:                  tlscerts.HostsDir(in.ConfigDir),
 		CertSecretName:            certSecret,
 		KeySecretName:             keySecret,
