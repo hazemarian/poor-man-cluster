@@ -273,3 +273,8 @@ func (c *Client) CreateAPIKey(ctx context.Context, name string) (*APIKeyCreated,
 	err := c.do(ctx, http.MethodPost, "/api_keys", body, &out)
 	return &out, err
 }
+
+// DeleteAPIKey removes an API user by id, revoking its bearer token.
+func (c *Client) DeleteAPIKey(ctx context.Context, id int64) error {
+	return c.do(ctx, http.MethodDelete, fmt.Sprintf("/api_keys/%d", id), nil, nil)
+}

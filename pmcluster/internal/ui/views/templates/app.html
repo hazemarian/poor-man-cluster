@@ -6,6 +6,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>pmcluster · console</title>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script>
+    function copyVal(btn) {
+      var v = btn.getAttribute('data-copy');
+      if (!v) return;
+      (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject())
+        .then(function(){ flash('Copied to clipboard'); })
+        .catch(function(){ selectAndCopy(btn, v); });
+    }
+    function selectAndCopy(btn, v) {
+      var ta = document.createElement('textarea');
+      ta.value = v; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); flash('Copied to clipboard'); } catch(e) {}
+      document.body.removeChild(ta);
+    }
+    function flash(msg) {
+      var el = document.createElement('div');
+      el.className = 'flash ok'; el.textContent = msg;
+      document.body.appendChild(el);
+      setTimeout(function(){ el.remove(); }, 2000);
+    }
+  </script>
   <style>
     :root{color-scheme:dark;--bg:#0b0f14;--panel:#111722;--panel2:#0f1520;--line:#1e2733;--text:#dbe2ea;--muted:#7d899a;--accent:#4f9dff;--good:#44d47b;--warn:#ffb454;--bad:#ff5c5c;--radius:12px}
     *{box-sizing:border-box}

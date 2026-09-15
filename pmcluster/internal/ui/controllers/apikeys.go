@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -70,6 +72,29 @@ func (c APIKeys) Add(g *gin.Context) {
 			d.Token = created.Token
 			d.Msg = "API key for " + created.Name + " created. Copy the token now — it is shown once."
 		}
+	}
+
+	d.Keys = c.fetch(ctx, &d)
+	c.Views.Fragment(g, "apikeys", d)
+}
+
+// Remove deletes an API user by id, revoking its bearer token immediately.
+func (c APIKeys) Remove(g *gin.Context) {
+	ctx := g.Request.Context()
+	_, _, configured := c.loadParams(ctx)
+	d := apiKeysData{}
+
+	id, err := strconv.ParseInt(g.Param("id"), 10, 64)
+	if configured && err == nil && id > 0 {
+		if err := c.API.DeleteAPIKey(ctx, id); err != nil {
+			d.Error = err.Error()
+		} else {
+			d.Msg = fmt.Sprintf("Removed API key %d.", id)
+		}
+	} else if !configured {
+		d.Error = "pmcluster API not configured. Open Settings first."
+	} else {
+		d.Error = "Invalid API key id."
 	}
 
 	d.Keys = c.fetch(ctx, &d)

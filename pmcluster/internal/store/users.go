@@ -13,6 +13,9 @@ import (
 // ErrUserExists is returned by CreateUser when the name is already taken.
 var ErrUserExists = errors.New("user already exists")
 
+// ErrUserNotFound is returned by DeleteUser/UserByID when no row matches.
+var ErrUserNotFound = errors.New("user not found")
+
 // CreateUser stores a user with a v2-format token.  tokenID is the hex
 // public-index part (from auth.SplitToken); tokenHash is the argon2id
 // hash of the secret.
@@ -166,6 +169,38 @@ func (s *Store) UserByID(ctx context.Context, id int64) (*auth.User, error) {
 		return nil, fmt.Errorf("query user: %w", err)
 	}
 	return &u, nil
+}
+
+// UserByName returns the non-secret row for a user looked up by name.
+// Returns ErrUserNotFound when no row matches.
+func (s *Store) UserByName(ctx context.Context, name string) (*UserRow, error) {
+	var u UserRow
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at FROM users WHERE name = ?`, name).
+		Scan(&u.ID, &u.Name, &u.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, fmt.Errorf("query user by name: %w", err)
+	}
+	return &u, nil
+}
+
+// DeleteUser removes a user row (revoking its bearer token immediately).
+// Returns ErrUserNotFound when no row matched.
+func (s *Store) DeleteUser(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
 }
 
 // isUniqueViolation matches modernc.org/sqlite's UNIQUE error strings.

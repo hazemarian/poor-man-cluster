@@ -137,6 +137,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	ak := controllers.APIKeys{Controller: a.ctrl}
 	g.GET("/apikeys", ak.Page)
 	g.POST("/apikeys", ak.Add)
+	g.POST("/apikeys/remove/:id", ak.Remove)
 }
 
 // Handler returns a gin engine with every UI route. The edge service mounts

@@ -482,6 +482,31 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "409":
           description: User already exists
+  /api/api_keys/{id}:
+    delete:
+      summary: Remove an API user (revoke its bearer token)
+      description: Deletes the user row; the bearer token stops working on the
+        next request. Refuses to remove the "edge" user (required by the operator
+        console) or the API key used to authenticate the request.
+      operationId: deleteAPIKey
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: API user id (see GET /api/api_keys)
+      responses:
+        "204":
+          description: Removed
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: API key not found
+        "409":
+          description: Refused — edge user or the key currently in use
 components:
   securitySchemes:
     bearerAuth:

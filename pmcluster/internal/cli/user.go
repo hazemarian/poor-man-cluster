@@ -41,8 +41,20 @@ var userListCmd = &cobra.Command{
 	RunE:    runUserList,
 }
 
+var userRemoveCmd = &cobra.Command{
+	Use:     "remove <name>",
+	Aliases: []string{"rm", "delete"},
+	Short:   "Remove an API user and revoke its bearer token immediately",
+	Long: `Deletes the user row so its bearer token stops working on the next
+request. Refuses to remove the "edge" user (the operator console's daemon
+token) or the user you are currently authenticated as (CLI writes directly
+to the store; the guard is enforced by name).`,
+	Args: cobra.ExactArgs(1),
+	RunE: runUserRemove,
+}
+
 func init() {
-	userCmd.AddCommand(userCreateCmd, userListCmd)
+	userCmd.AddCommand(userCreateCmd, userListCmd, userRemoveCmd)
 	rootCmd.AddCommand(userCmd)
 }
 
@@ -119,4 +131,50 @@ func runUserList(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintf(w, "%d\t%s\t%s\n", u.ID, u.Name, time.Unix(u.CreatedAt, 0).Format(time.RFC3339))
 	}
 	return w.Flush()
+}
+
+// edgeAPITokenUser mirrors the server-side guard: the "edge" user owns the
+// operator console's daemon token and must not be removable.
+const edgeAPITokenUser = "edge"
+
+// runUserRemove deletes a user by name. Mirrors the daemon's DELETE
+// /api/api_keys/{id} guard (edge user + last-user protection) for the
+// store-direct CLI path.
+func runUserRemove(cmd *cobra.Command, args []string) error {
+	name := strings.TrimSpace(args[0])
+	if name == "" {
+		return errors.New("name cannot be empty")
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
+		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
+	}
+
+	st, err := store.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	if name == edgeAPITokenUser {
+		return fmt.Errorf("the %q user is required by the operator console and cannot be removed", edgeAPITokenUser)
+	}
+
+	user, err := st.UserByName(cmd.Context(), name)
+	if err != nil {
+		if errors.Is(err, store.ErrUserNotFound) {
+			return fmt.Errorf("user %q not found", name)
+		}
+		return fmt.Errorf("lookup user: %w", err)
+	}
+
+	if err := st.DeleteUser(cmd.Context(), user.ID); err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "✅ User %q removed; its bearer token is revoked.\n", name)
+	return nil
 }

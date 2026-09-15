@@ -314,3 +314,62 @@ func TestUserByID(t *testing.T) {
 		}
 	})
 }
+
+func TestUserByName(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	t.Run("unknown name returns ErrUserNotFound", func(t *testing.T) {
+		_, err := s.UserByName(ctx, "nobody")
+		if !errors.Is(err, ErrUserNotFound) {
+			t.Errorf("UserByName(nobody) err = %v, want ErrUserNotFound", err)
+		}
+	})
+
+	t.Run("known name returns the non-secret row", func(t *testing.T) {
+		tok, _ := auth.GenerateToken()
+		tid, secret := auth.SplitToken(tok)
+		h, _ := auth.HashToken(secret)
+		id, err := s.CreateUser(ctx, "eve", tid, h)
+		if err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		u, err := s.UserByName(ctx, "eve")
+		if err != nil {
+			t.Fatalf("UserByName: %v", err)
+		}
+		if u.ID != id || u.Name != "eve" {
+			t.Errorf("UserByName = %+v, want id %d name eve", u, id)
+		}
+	})
+}
+
+func TestDeleteUser(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	t.Run("unknown id returns ErrUserNotFound", func(t *testing.T) {
+		if err := s.DeleteUser(ctx, 9999); !errors.Is(err, ErrUserNotFound) {
+			t.Errorf("DeleteUser(9999) err = %v, want ErrUserNotFound", err)
+		}
+	})
+
+	t.Run("delete revokes the user row", func(t *testing.T) {
+		tok, _ := auth.GenerateToken()
+		tid, secret := auth.SplitToken(tok)
+		h, _ := auth.HashToken(secret)
+		id, err := s.CreateUser(ctx, "frank", tid, h)
+		if err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+		if err := s.DeleteUser(ctx, id); err != nil {
+			t.Fatalf("DeleteUser: %v", err)
+		}
+		if _, err := s.UserByID(ctx, id); !errors.Is(err, sql.ErrNoRows) {
+			t.Errorf("UserByID after delete = %v, want sql.ErrNoRows", err)
+		}
+		if _, err := s.UserByName(ctx, "frank"); !errors.Is(err, ErrUserNotFound) {
+			t.Errorf("UserByName after delete = %v, want ErrUserNotFound", err)
+		}
+	})
+}

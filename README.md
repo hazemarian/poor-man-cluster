@@ -87,7 +87,7 @@ Single static binary, lives on the manager host. Replaces the bash setup script 
 - `pmcluster tls hosts add|list|remove` — per-host TLS certificates for customer domains served by Traefik (independent of the cluster wildcard cert)
 - `pmcluster backup create|list` — on-demand offen volume snapshots; deploys can opt-in via `backup_before_deploy: true`
 - `pmcluster node list|join-token` — wraps `docker node` for the read paths
-- `pmcluster user create <name>` / `user list` — issue API tokens for additional users (tokens print once, hashed at rest)
+- `pmcluster user create <name>` / `user list` / `user remove <name>` — issue and revoke API tokens for additional users (tokens print once, hashed at rest; remove instantly revokes)
 - `pmcluster logs [--tail=N] [--since=24h] [--follow]` — tail the JSON audit log at `~/.pmcluster/logs/`. Files rotate daily, swept after 14 days.
 
 ---

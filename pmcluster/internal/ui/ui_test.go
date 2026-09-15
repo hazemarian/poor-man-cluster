@@ -90,6 +90,9 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 			write(w, `{"keys":[{"id":1,"name":"admin","created_at":40}]}`)
 		}
 	})
+	mux.HandleFunc("/api/api_keys/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
 	return httptest.NewServer(mux)
 }
 
@@ -367,6 +370,26 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 	}
 	if !strings.Contains(b, "shown once") {
 		t.Errorf("apikey create missing 'shown once' hint; got: %s", b)
+	}
+	if !strings.Contains(b, "Copy token") {
+		t.Errorf("apikey create missing copy button; got: %s", b)
+	}
+
+	// Webhook create surfaces the one-time secret with a copy button.
+	resp = doRequest(t, app, http.MethodPost, "/webhooks", "source=github&description=bookfair ci", jar)
+	b = readBody(t, resp)
+	if !strings.Contains(b, "Copy secret") {
+		t.Errorf("webhook create missing copy button; got: %s", b)
+	}
+
+	// Removing an API key revokes it.
+	resp = doRequest(t, app, http.MethodPost, "/apikeys/remove/2", "", jar)
+	b = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /apikeys/remove/2 = %d, want 200", resp.StatusCode)
+	}
+	if !strings.Contains(b, "Removed API key 2") {
+		t.Errorf("apikey remove missing confirmation; got: %s", b)
 	}
 }
 

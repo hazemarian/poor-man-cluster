@@ -95,6 +95,7 @@ pmc_<hex_token_id>_<base64_secret>
 ```bash
 pmcluster user create my-user     # prints the token ONCE — save it
 pmcluster user list               # id, name, created (never token material)
+pmcluster user remove my-user     # revoke a token immediately (refuses "edge")
 ```
 
 All API requests pass the token as a Bearer header. Against the public origin:

@@ -1,9 +1,11 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -11,6 +13,11 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
+
+// edgeAPITokenUser is the daemon user row that owns the edge console's API
+// token. Deleting it would break console → daemon authentication, so the
+// API refuses to remove it.
+const edgeAPITokenUser = "edge"
 
 // APIKeyService exposes API-user (bearer token) management over the
 // Bearer-protected /api router. The bearer token is generated on the daemon,
@@ -24,6 +31,7 @@ type APIKeyService struct {
 func (a *APIKeyService) Mount(r chi.Router) {
 	r.Get("/api_keys", a.list)
 	r.Post("/api_keys", a.create)
+	r.Delete("/api_keys/{id}", a.remove)
 }
 
 type apiKeyRow struct {
@@ -85,4 +93,45 @@ func (a *APIKeyService) create(res http.ResponseWriter, req *http.Request) {
 	}
 
 	writeJSON(res, http.StatusCreated, map[string]any{"id": id, "name": name, "token": token})
+}
+
+// remove deletes an API user by id, revoking its bearer token immediately.
+// Guarded against removing the "edge" console user (would break the operator
+// console) and against removing the currently-authenticated user.
+func (a *APIKeyService) remove(res http.ResponseWriter, req *http.Request) {
+	idStr := chi.URLParam(req, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || id <= 0 {
+		writeErr(res, http.StatusBadRequest, "invalid user id")
+		return
+	}
+
+	user, err := a.Store.UserByID(req.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeErr(res, http.StatusNotFound, "api key not found")
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "lookup api key: "+err.Error())
+		return
+	}
+
+	if user.Name == edgeAPITokenUser {
+		writeErr(res, http.StatusConflict, "the 'edge' user is required by the operator console and cannot be removed")
+		return
+	}
+	if me := auth.FromContext(req.Context()); me != nil && me.ID == id {
+		writeErr(res, http.StatusConflict, "cannot remove the API key you are currently authenticated with")
+		return
+	}
+
+	if err := a.Store.DeleteUser(req.Context(), id); err != nil {
+		if errors.Is(err, store.ErrUserNotFound) {
+			writeErr(res, http.StatusNotFound, "api key not found")
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "delete api key: "+err.Error())
+		return
+	}
+	res.WriteHeader(http.StatusNoContent)
 }

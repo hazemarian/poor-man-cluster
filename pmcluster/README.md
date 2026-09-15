@@ -56,7 +56,7 @@ make build         # → ./bin/pmcluster
 | `rollback <stack> <rev>` | Roll back to a previous revision |
 | `backup create/list` | On-demand backups |
 | `webhook add/list/remove` | Manage HMAC webhook sources |
-| `user create/list` | Manage operator users (v2 tokens `pmc_<token_id>_<secret>`) |
+| `user create/list/remove` | Manage operator users (v2 tokens `pmc_<token_id>_<secret>`) |
 | `credentials list/show/rotate` | Bootstrap + edge credentials (AES-GCM encrypted) |
 | `registry add/list/remove` | Private registry credentials (docker login) |
 | `tls hosts add/list/remove` | Per-host TLS certificates for customer domains |

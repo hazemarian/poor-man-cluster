@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,7 +17,9 @@ import (
 )
 
 // newKeysServer wires a full store + cipher so the webhook/api-key services
-// mount, with a fake Bearer lookup (token "tok" → admin).
+// mount, with a fake Bearer lookup (token "tok" → admin, id 1). An "admin"
+// user row is seeded so newly created keys get id > 1 (mirroring production
+// where admin is the first user and the self-delete guard keys off id 1).
 func newKeysServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	dir := t.TempDir()
@@ -28,6 +32,7 @@ func newKeysServer(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatalf("credentials.Open: %v", err)
 	}
+	seedUser(t, st, "admin")
 	srv := httptest.NewServer(New(Deps{
 		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
 		Store:  st,
@@ -35,6 +40,25 @@ func newKeysServer(t *testing.T) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// seedUser creates a user row with a fresh v2 token.
+func seedUser(t *testing.T, st *store.Store, name string) int64 {
+	t.Helper()
+	tok, err := auth.GenerateToken()
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	tid, secret := auth.SplitToken(tok)
+	h, err := auth.HashToken(secret)
+	if err != nil {
+		t.Fatalf("HashToken: %v", err)
+	}
+	id, err := st.CreateUser(context.Background(), name, tid, h)
+	if err != nil {
+		t.Fatalf("CreateUser %q: %v", name, err)
+	}
+	return id
 }
 
 func decodeBody[T any](t *testing.T, resp *http.Response) T {
@@ -153,7 +177,7 @@ func TestAPIKeyAPI(t *testing.T) {
 		}
 	})
 
-	t.Run("empty list", func(t *testing.T) {
+	t.Run("list starts with seeded admin only", func(t *testing.T) {
 		resp := doJSON(t, http.MethodGet, base, "tok", nil)
 		defer resp.Body.Close()
 		list := decodeBody[struct {
@@ -162,8 +186,8 @@ func TestAPIKeyAPI(t *testing.T) {
 				Token string `json:"token"`
 			} `json:"keys"`
 		}](t, resp)
-		if len(list.Keys) != 0 {
-			t.Fatalf("keys = %d, want 0", len(list.Keys))
+		if len(list.Keys) != 1 || list.Keys[0].Name != "admin" {
+			t.Fatalf("keys = %+v, want single seeded admin", list.Keys)
 		}
 	})
 
@@ -213,6 +237,107 @@ func TestAPIKeyAPI(t *testing.T) {
 		}
 		if strings.Contains(s, token) {
 			t.Error("list leaked the bearer token")
+		}
+	})
+
+	var createdID int64
+	t.Run("delete by id → 204, then 404", func(t *testing.T) {
+		// Find the created user's id from the list.
+		resp := doJSON(t, http.MethodGet, base, "tok", nil)
+		list := decodeBody[struct {
+			Keys []struct {
+				ID   int64  `json:"id"`
+				Name string `json:"name"`
+			} `json:"keys"`
+		}](t, resp)
+		for _, k := range list.Keys {
+			if k.Name == "ci" {
+				createdID = k.ID
+			}
+		}
+		if createdID == 0 {
+			t.Fatal("created user ci not found in list")
+		}
+
+		del := doJSON(t, http.MethodDelete, base+"/"+strconv.FormatInt(createdID, 10), "tok", nil)
+		del.Body.Close()
+		if del.StatusCode != http.StatusNoContent {
+			t.Fatalf("delete status = %d, want 204", del.StatusCode)
+		}
+
+		again := doJSON(t, http.MethodDelete, base+"/"+strconv.FormatInt(createdID, 10), "tok", nil)
+		defer again.Body.Close()
+		if again.StatusCode != http.StatusNotFound {
+			t.Fatalf("second delete status = %d, want 404", again.StatusCode)
+		}
+	})
+
+	t.Run("delete invalid id → 400", func(t *testing.T) {
+		resp := doJSON(t, http.MethodDelete, base+"/abc", "tok", nil)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("delete invalid id status = %d, want 400", resp.StatusCode)
+		}
+	})
+}
+
+// TestAPIKeyDeleteGuards verifies the two refusal paths on DELETE
+// /api/api_keys/{id}: the "edge" console user and the currently-authenticated
+// user must survive deletion attempts.
+func TestAPIKeyDeleteGuards(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "data.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ciph, err := credentials.Open(filepath.Join(dir, ".enc_key"))
+	if err != nil {
+		t.Fatalf("credentials.Open: %v", err)
+	}
+
+	// "tok" authenticates as admin (id 1) — the self-delete target.
+	// Seed admin first so "edge" gets id 2 (distinct from self-delete id 1).
+	seedUser(t, st, "admin")
+	seedUser(t, st, "edge")
+
+	srv := httptest.NewServer(New(Deps{
+		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
+		Store:  st,
+		Cipher: ciph,
+	}))
+	t.Cleanup(srv.Close)
+	base := srv.URL + "/api/api_keys"
+
+	list := decodeBody[struct {
+		Keys []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"keys"`
+	}](t, doJSON(t, http.MethodGet, base, "tok", nil))
+	var edgeID int64
+	for _, k := range list.Keys {
+		if k.Name == "edge" {
+			edgeID = k.ID
+		}
+	}
+	if edgeID == 0 {
+		t.Fatal("edge user not found in list")
+	}
+
+	t.Run("delete edge user → 409", func(t *testing.T) {
+		resp := doJSON(t, http.MethodDelete, base+"/"+strconv.FormatInt(edgeID, 10), "tok", nil)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("delete edge status = %d, want 409", resp.StatusCode)
+		}
+	})
+
+	t.Run("delete self (admin id 1) → 409", func(t *testing.T) {
+		resp := doJSON(t, http.MethodDelete, base+"/1", "tok", nil)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("delete self status = %d, want 409", resp.StatusCode)
 		}
 	})
 }

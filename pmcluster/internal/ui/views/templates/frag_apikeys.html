@@ -12,6 +12,7 @@ hash — it cannot be retrieved again.</p>
   <h2 style="margin-top:0">New API key created</h2>
   <p class="sub">User: <code>{{.Name}}</code> — copy this bearer token now, it won't be shown again.</p>
   <pre style="user-select:all;overflow-x:auto">{{.Token}}</pre>
+  <button class="btn" type="button" data-copy="{{.Token}}" onclick="copyVal(this)">Copy token</button>
   <p class="sub">Usage:</p>
   <pre style="overflow-x:auto">curl -H "Authorization: Bearer &lt;token&gt;" https://pmcluster.&lt;domain&gt;/api/me</pre>
 </div>
@@ -32,12 +33,15 @@ hash — it cannot be retrieved again.</p>
 <div class="card" style="padding:6px 14px">
 {{if .Keys}}
 <table>
-  <tr><th>ID</th><th>Name</th><th>Created</th></tr>
+  <tr><th>ID</th><th>Name</th><th>Created</th><th></th></tr>
   {{range .Keys}}
   <tr>
     <td class="muted">{{.ID}}</td>
     <td><code>{{.Name}}</code></td>
     <td class="muted">{{ts .CreatedAt}}</td>
+    <td style="text-align:right">
+      <button class="btn danger sm" hx-post="/apikeys/remove/{{.ID}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Revoke API key {{.Name}}? Its bearer token stops working immediately.')">Revoke</button>
+    </td>
   </tr>
   {{end}}
 </table>

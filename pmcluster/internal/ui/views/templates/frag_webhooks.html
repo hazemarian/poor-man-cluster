@@ -12,6 +12,7 @@ creation — copy it into your CI and sign every deploy with it.</p>
   <h2 style="margin-top:0">New webhook source created</h2>
   <p class="sub">Source: <code>{{.Source}}</code> — copy this secret now, it won't be shown again.</p>
   <pre style="user-select:all;overflow-x:auto">{{.Secret}}</pre>
+  <button class="btn" type="button" data-copy="{{.Secret}}" onclick="copyVal(this)">Copy secret</button>
   <p class="sub">CI configuration:</p>
   <pre style="overflow-x:auto">Endpoint : https://pmcluster.&lt;domain&gt;/webhook/{{.Source}}
 Method   : POST
