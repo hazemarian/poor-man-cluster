@@ -1,20 +1,23 @@
 ---
 name: poor-man-stack-deploy
 description: >
-  Deploy services onto a Poor Man's Stack cluster using the pmcluster CLI or REST API.
-  Covers the pmcluster DSL manifest format, deploy/rollback/list/show commands, webhook
-  setup for CI, registry credential management, backup triggering, and cluster lifecycle
-  (up/down/status). Use when deploying applications to a Docker Swarm-based cluster
-  managed by pmcluster, or when setting up CI/CD pipelines targeting pmcluster.
+  Deploy services onto a Poor Man's Stack cluster using the pmcluster CLI, REST API,
+  or the operator console. Covers the pmcluster DSL manifest format, deploy/rollback/
+  list/show commands, webhook setup for CI (HMAC + required timestamp), registry
+  credential management, per-host TLS for customer domains, backup triggering, API
+  tokens, and cluster lifecycle (up/update/down/status). Use when deploying
+  applications to a Docker Swarm-based cluster managed by pmcluster, setting up
+  CI/CD pipelines targeting pmcluster, or operating the pmcluster-edge console.
   Do NOT use for Docker/Kubernetes deployments outside this stack.
-
-  As of v2 tokens (pmc_ prefix), webhook timestamps are required; see "CI/CD Webhook
-  Setup" and "Authentication" sections for breaking changes.
 ---
 
 # Poor Man's Stack — Deploy Skill
 
 Deploy applications to a Docker Swarm cluster managed by `pmcluster`, the control plane from [poor-man-stack](https://github.com/hazemarian/poor-man-stack).
+
+**Public origin:** everything (console + REST API + webhooks) is served at `https://pmcluster.<your-domain>` by the `pmcluster-edge` service. The daemon itself listens only on `http://127.0.0.1:9090` (host-local).
+
+Full references in the repo: [`docs/dsl.md`](https://github.com/hazemarian/poor-man-stack/blob/main/docs/dsl.md), [`docs/webhook.md`](https://github.com/hazemarian/poor-man-stack/blob/main/docs/webhook.md), [`pmcluster/docs/openapi.yaml`](https://github.com/hazemarian/poor-man-stack/blob/main/pmcluster/docs/openapi.yaml).
 
 ## Prerequisites
 
@@ -48,21 +51,30 @@ If the cluster is not up:
 
 ```bash
 pmcluster cluster up --domain=<your-domain> --cert=<cert.pem> --key=<key.pem> --openobserve-email=<you@host>
-# OR with Let's Encrypt:
+# OR with Let's Encrypt (HTTP-01; DNS must point here and port 80 reachable):
 pmcluster cluster up --domain=<your-domain> --acme-email=<you@host> --openobserve-email=<you@host>
 ```
 
-The daemon must be running for the REST API:
+`cluster up` deploys four stacks: `infra`, `edge`, `observability`, `backup`. It also mints the `edge_admin` console password and the `edge` daemon API token.
+
+The daemon must be running for the REST API / webhooks / console:
 
 ```bash
 pmcluster serve   # foreground; supervise via systemd for production
 ```
 
+## Operator Console
+
+`https://pmcluster.<domain>` is a gin + HTMX operator console for stacks (deploy/rollback), webhooks, API keys, per-host TLS, backups, and settings.
+
+- **Login:** user `admin`, password from `pmcluster credentials show edge_admin`.
+- It talks to the daemon with a dedicated `edge` API token; you don't manage that token manually.
+
+Prefer the console for interactive work; prefer the CLI/API for automation.
+
 ## Authentication & API Tokens
 
-pmcluster uses Bearer tokens for API authentication. Tokens are generated once by
-`pmcluster init` and printed to stdout — save them immediately; they cannot be
-recovered.
+pmcluster uses Bearer tokens for API authentication. Tokens are generated once by `pmcluster init` and printed to stdout — save them immediately; they cannot be recovered.
 
 ### Token Format
 
@@ -73,54 +85,54 @@ pmc_<hex_token_id>_<base64_secret>
 ```
 
 - `pmc_` — fixed prefix identifying v2 tokens
-- `hex_token_id` — 8 hex chars (4 random bytes), the public index used for fast
-  database lookup
-- `base64_secret` — 32 random bytes, base64url-encoded (~43 chars); this is the
-  sensitive part
+- `hex_token_id` — 8 hex chars (4 random bytes), the public index used for fast database lookup
+- `base64_secret` — 32 random bytes, base64url-encoded (~43 chars); this is the sensitive part
 
-**Breaking change**: Legacy tokens (plain base64 strings without the `pmc_`
-prefix) still work for now but trigger a slower fallback lookup. Operators
-should regenerate users to get v2 tokens.
+**Breaking change**: Legacy tokens (plain base64 strings without the `pmc_` prefix) still work but trigger a slower fallback lookup. Operators should regenerate users to get v2 tokens.
 
 ### Creating additional users
 
 ```bash
-pmcluster user create my-user
-# Prints the token ONCE — save it.
+pmcluster user create my-user     # prints the token ONCE — save it
+pmcluster user list               # id, name, created (never token material)
 ```
 
-All API requests pass the token as a Bearer header:
+All API requests pass the token as a Bearer header. Against the public origin:
 
 ```bash
-curl -H "Authorization: Bearer pmc_a1b2c3d4_..." http://localhost:8420/api/me
+curl -H "Authorization: Bearer pmc_a1b2c3d4_..." https://pmcluster.example.com/api/me
+# Daemon-local (e.g. on the manager host):
+curl -H "Authorization: Bearer pmc_a1b2c3d4_..." http://127.0.0.1:9090/api/me
 ```
 
 ### Rate Limiting
 
-The daemon enforces per-IP rate limits:
+The `pmcluster-edge` proxy enforces per-real-IP rate limits:
 
-| Path prefix   | Limit               |
-|---------------|---------------------|
-| `/api/*`      | 100 req/s, 200 burst |
-| `/webhook/*`  | 20 req/s, 30 burst   |
+| Path prefix   | Limit                |
+|---------------|----------------------|
+| `/api/*`      | 200 req/s, 400 burst |
+| `/webhook/*`  | 40 req/s, 60 burst   |
+| `/health`     | unlimited            |
 
-Exceeding the limit returns HTTP 429 with `Retry-After: 1`.
+Exceeding the limit returns HTTP 429 with `Retry-After: 1`. Repeated rate-limit trips or upstream auth/5xx failures can also get the IP auto-banned (HTTP 403) for a short window (default 10 min).
 
 ## Manifest DSL Format
 
-Create a `.yaml` manifest for each service. The schema:
+Create a `.yaml` manifest for each service. The schema (see [`docs/dsl.md`](https://github.com/hazemarian/poor-man-stack/blob/main/docs/dsl.md) for the full reference):
 
 ```yaml
-app: my-app                    # required — application name
+app: my-app                    # required — application/stack name
 env: production                # required — environment (staging/production/etc.)
 domain: example.com            # required — root domain for Traefik routing
 registry: ghcr.io/my-org       # optional — container registry
 version: latest                # optional — default image tag (overridable at deploy)
+repo_url: https://github.com/my-org/my-app   # optional — metadata only
+env_file: .env                 # optional — env file path
 
 backup_before_deploy: true     # optional — trigger offen volume snapshot before deploy
-strict_backup: true             # optional — abort deploy if the pre-deploy backup fails
-                                #   (requires backup_before_deploy: true; defaults to false,
-                                #    meaning backup failures are logged but non-blocking)
+strict_backup: true            # optional — abort deploy if the pre-deploy backup fails
+                               #   (requires backup_before_deploy: true)
 
 secrets:                       # optional — external Swarm secrets (must already exist)
   - my_app_db_password
@@ -134,45 +146,51 @@ services:                      # required — one or more service definitions
     # OR with variable substitution:
     # image: ${registry}/${app}:${version}
 
-    placement: manager         # optional — constrain to manager node
+    placement: manager         # optional — manager | worker | (empty)
+    replicas: 2                # optional — default 1 (ignored when run_once)
+    run_once: true             # optional — restart_policy: condition: none (jobs/migrations)
+    skip_filelog: true         # optional — exclude from OTel log tailing (app ships OTLP itself)
+    command: [./migrate]       # optional — override command (entrypoint also supported)
 
-    replicas: 2                # optional — default 1
+    expose:                    # optional — auto-wire Traefik
+      port: 8080               #   container-side port
+      host: api.${app}.${domain}
+      aliases: [api.customer.com]   # extra hostnames → own Traefik router
+      cors_disabled: false          # opt out of the CORS middleware
 
-    command: [./migrate]       # optional — override entrypoint/command
-
-    run_once: true             # optional — restart_policy: condition: none (for jobs/migrations)
-
-    expose:                    # optional — auto-wire Traefik route
-      port: 8080
-      host: api.${app}.${domain}   # variable substitution available
-
-    volumes:                   # optional — volume mounts
+    volumes:
       - db_data:/var/lib/postgresql/data
 
-    env:                       # optional — environment variables
+    env:
       POSTGRES_DB: my_app
       POSTGRES_USER: my_user
 
-    secrets:                   # optional — attach secrets
+    secrets:
       - my_app_db_password
 
-    healthcheck:               # optional
-      type: pg_isready         # or: http (requires path: /health)
+    healthcheck:
+      type: pg_isready         # or: http (uses expose.port; optional `path`, default /)
+      # full form also supported: test / interval / timeout / retries
+
+    update:                    # optional — Swarm rolling-update policy
+      parallelism: 1           #   default 1
+      delay: 10s               #   default 10s
+      order: start-first       #   start-first (default) | stop-first
 ```
 
 ### Variable Substitution
 
-These variables are auto-resolved: `${app}`, `${env}`, `${version}`, `${registry}`, `${domain}`. 
-
-OS environment variables: `${env:VAR_NAME}`.
+Auto-resolved: `${app}`, `${env}`, `${version}`, `${registry}`, `${domain}`. OS environment variables: `${env:VAR}` (error if unset).
 
 ### Validation Rules
 
-- Strict YAML — unknown top-level keys are rejected.
-- `app`, `env`, `domain`, `services` are required.
-- Unknown keys inside a service definition are rejected.
-- `expose` requires both `port` and `host`.
-- `healthcheck.type` must be `http` (with `path`) or `pg_isready`.
+- Strict YAML — unknown keys are rejected at every level.
+- `app` must match `^[a-z][a-z0-9_-]{0,62}$`; `env`, `domain`, `services` are required.
+- `image` is required per service.
+- `replicas` and `run_once` are mutually exclusive.
+- `expose` requires `port` (1..65535) and `host`.
+- `healthcheck.type` must be `http`, `pg_isready`, or empty (full form).
+- `update.order` must be `start-first` or `stop-first`.
 
 ## Deploy Workflow
 
@@ -198,6 +216,9 @@ pmcluster deploy ./manifest.yaml --version v1.2.3
 
 # Override app name:
 pmcluster deploy ./manifest.yaml --app custom-name
+
+# Attach a repo URL (metadata):
+pmcluster deploy ./manifest.yaml --repo https://github.com/org/repo
 ```
 
 Each deploy creates a new revision keyed by Unix timestamp.
@@ -222,36 +243,35 @@ Rollback creates a NEW revision (preserves audit trail) pointing at the old comp
 
 ## REST API Deploy (Remote / CI)
 
-When deploying from CI or a remote machine, use the REST API:
+When deploying from CI or a remote machine, use the REST API at the public origin:
 
 ```bash
+BASE=https://pmcluster.example.com
+
 # Deploy a manifest
-curl -X POST https://pmcluster.example.com/api/stacks \
+curl -X POST $BASE/api/stacks \
   -H "Authorization: Bearer <admin-token>" \
   -H "Content-Type: application/json" \
-  -d "{\"manifest\": $(jq -Rs . < manifest.yaml)}"
+  -d "{\"app_name\":\"my-app\",\"version\":\"v1.2.3\",\"manifest\": $(jq -Rs . < manifest.yaml)}"
 
 # List stacks
-curl https://pmcluster.example.com/api/stacks \
-  -H "Authorization: Bearer <admin-token>"
+curl $BASE/api/stacks -H "Authorization: Bearer <admin-token>"
 
 # Show a stack
-curl https://pmcluster.example.com/api/stacks/my-app \
-  -H "Authorization: Bearer <admin-token>"
+curl $BASE/api/stacks/my-app -H "Authorization: Bearer <admin-token>"
 
 # Rollback
-curl -X POST https://pmcluster.example.com/api/stacks/my-app/rollback \
+curl -X POST $BASE/api/stacks/my-app/rollback \
   -H "Authorization: Bearer <admin-token>" \
   -H "Content-Type: application/json" \
   -d '{"revision": 1719000000}'
 ```
 
+Other endpoints: `GET /api/cluster/info`, `GET /api/nodes`, `GET /api/stacks/{name}/revisions/{rev}`, `GET|POST /api/backups`, `GET|POST|DELETE /api/tls/hosts`, `GET|POST|DELETE /api/webhooks`, `GET|POST /api/api_keys`. Full spec in `pmcluster/docs/openapi.yaml`.
+
 ## CI/CD Webhook Setup
 
-Webhooks are authenticated via HMAC-SHA256, not Bearer tokens. Each webhook source
-has a shared secret; the CI system computes a signature over the request and pmcluster
-verifies it server-side. **Breaking change**: as of pmcluster v2, a timestamp header
-is required for replay protection.
+Webhooks are authenticated via HMAC-SHA256, not Bearer tokens. Each webhook source has a shared secret; the CI system computes a signature over the request and pmcluster verifies it server-side. **A timestamp header is required** for replay protection.
 
 ### 1. Create a webhook source on the manager
 
@@ -269,33 +289,87 @@ Two headers are required on every webhook request:
 | `X-Pmcluster-Timestamp`  | Unix seconds of the request              |
 | `X-Pmcluster-Signature`  | `sha256=<hex>` HMAC over timestamp+body  |
 
-**The HMAC input is**: `timestamp_as_decimal_string + body` (no separator).
-Timestamps more than 5 minutes old (or from the future) are rejected.
+**The HMAC input is**: `timestamp_as_decimal_string + body` (no separator). Timestamps more than 5 minutes old (or from the future) are rejected.
+
+Production pattern — build the body with `jq`, sign `timestamp + body`, POST, and fail the job on a non-200:
 
 ```yaml
+name: Deploy
+on:
+  push:
+    branches: [main]
+    paths: ["deploy/my-app.yaml"]
 jobs:
   deploy:
+    runs-on: ubuntu-24.04
     steps:
-      - name: Deploy to pmcluster
+      - uses: actions/checkout@v5
+      - name: Deploy via pmcluster webhook
+        env:
+          PMCLUSTER_WEBHOOK_URL: ${{ secrets.PMCLUSTER_WEBHOOK_URL }}
+          PMCLUSTER_WEBHOOK_SECRET: ${{ secrets.PMCLUSTER_WEBHOOK_SECRET }}
         run: |
+          FILE="deploy/my-app.yaml"
+          MANIFEST_CONTENT=$(cat "${FILE}")
+          APP=$(printf '%s' "${MANIFEST_CONTENT}" | grep '^app:' | awk '{print $2}')
+          VERSION=$(printf '%s' "${MANIFEST_CONTENT}" | grep '^version:' | awk '{print $2}')
+
+          BODY=$(jq -n --arg app_name "${APP}" --arg version "${VERSION}" \
+            --arg manifest "${MANIFEST_CONTENT}" \
+            '{app_name: $app_name, version: $version, manifest: $manifest}')
+
           TIMESTAMP=$(date +%s)
-          BODY='{"app": "my-app", "version": "${{ github.sha }}", "manifest": "'$(cat manifest.yaml | jq -Rs . | cut -c2- | rev | cut -c2- | rev)'"}'
-          SIG=$(echo -n "${TIMESTAMP}${BODY}" | openssl dgst -sha256 -hmac "${{ secrets.PMCLUSTER_WEBHOOK_SECRET }}" | awk '{print "sha256=" $2}')
-          curl -X POST https://pmcluster.example.com/webhook/github-prod \
+          SIG=$(printf '%s' "${TIMESTAMP}${BODY}" \
+            | openssl dgst -sha256 -hmac "$PMCLUSTER_WEBHOOK_SECRET" | awk '{print "sha256=" $2}')
+
+          HTTP_CODE=$(curl -s -o /tmp/resp.txt -w "%{http_code}" \
+            --connect-timeout 10 --max-time 30 \
+            -X POST "$PMCLUSTER_WEBHOOK_URL" \
             -H "X-Pmcluster-Timestamp: $TIMESTAMP" \
             -H "X-Pmcluster-Signature: $SIG" \
             -H "Content-Type: application/json" \
-            -d "$BODY"
+            -d "$BODY")
+
+          echo "HTTP ${HTTP_CODE}:"; cat /tmp/resp.txt
+          [ "$HTTP_CODE" = "200" ] || { echo "deploy failed"; exit 1; }
 ```
 
-### 3. Verify webhook
+The payload is `{"app_name","version","manifest","repo_url"?}` where `manifest` is the **entire manifest YAML as a string**.
 
-The webhook `source` is the name you gave it (`github-prod`). Requests with wrong
-secret, wrong source, bad/missing timestamp, or missing signature all return a
-generic 401 — no information leak.
+### 3. Responses
 
-List webhooks: `pmcluster webhook list`
-Remove: `pmcluster webhook remove github-prod`
+| Status | Meaning |
+|--------|---------|
+| `200` | Deploy accepted → `{"stack","revision"}` |
+| `400` | Missing source, bad JSON, or manifest validation failure |
+| `401` | Any HMAC failure (bad secret, unknown source, bad/missing timestamp, bad signature) |
+| `413` | Body > 1 MB |
+| `502` | `docker stack deploy` failed |
+| `429` | Edge rate limit — honor `Retry-After: 1` |
+
+All 401s are identical by design — no information leak. Use `pmcluster webhook list` to see `last_used_at`.
+
+List webhooks: `pmcluster webhook list` · Remove: `pmcluster webhook remove github-prod`
+
+Full guide: [`docs/webhook.md`](https://github.com/hazemarian/poor-man-stack/blob/main/docs/webhook.md).
+
+## Per-Host TLS (Customer Domains)
+
+Serve the same app on a customer's own domain with its own certificate:
+
+1. Add the hostname to the service's `expose.aliases` in the manifest (creates the Traefik router).
+2. Store the matching cert+key:
+
+```bash
+pmcluster tls hosts add api.customer.com --cert-file cert.pem --key-file key.pem
+# or inline text:
+pmcluster tls hosts add api.customer.com --cert "$(cat cert.pem)" --key "$(cat key.pem)"
+
+pmcluster tls hosts list                      # host, expiry, SANs
+pmcluster tls hosts remove api.customer.com
+```
+
+Adding/removing re-renders Traefik and re-deploys the infra stack; use `--no-refresh` to defer to `pmcluster cluster update`. The cluster's own wildcard cert is never touched.
 
 ## Private Registries
 
@@ -318,9 +392,7 @@ pmcluster registry list                   # verify
 
 ## Pre-Deploy Backups
 
-Add `backup_before_deploy: true` to a manifest to trigger an offen volume snapshot
-before deployment. By default the deploy proceeds even if the backup fails (best-effort
-semantics — a flaky backup shouldn't block urgent rollouts).
+Add `backup_before_deploy: true` to a manifest to trigger an offen volume snapshot before deployment. By default the deploy proceeds even if the backup fails (best-effort semantics).
 
 To abort the deploy on backup failure, also set `strict_backup: true`:
 
@@ -329,8 +401,7 @@ backup_before_deploy: true
 strict_backup: true   # abort the deploy if the backup fails
 ```
 
-The daemon flushes the SQLite WAL (PRAGMA wal_checkpoint) before triggering each
-backup to ensure the volume snapshot captures a consistent database state.
+The daemon flushes the SQLite WAL before triggering each backup so the snapshot captures a consistent database state.
 
 ```bash
 pmcluster backup list                      # audit log of every triggered run
@@ -341,19 +412,25 @@ pmcluster backup create                    # on-demand snapshot
 
 ```bash
 pmcluster cluster status                   # health overview
-pmcluster cluster down --yes               # remove all stacks
+pmcluster cluster update                   # re-provision configs/certs from ~/.pmcluster/config/*.yml (content-aware)
+pmcluster cluster down --yes               # remove all stacks (infra, edge, observability, backup)
 pmcluster cluster down --yes --purge       # also remove secrets, configs, networks
 pmcluster node list                        # Swarm nodes
 pmcluster node join-token worker           # get join token for new workers
 ```
+
+`cluster up` is idempotent (reconciles, never destroys). `cluster update` is the targeted path after editing an OTel/Traefik config or renewing a cert — it does not re-run credential bootstrap or a full redeploy.
 
 ## Credentials
 
 ```bash
 pmcluster credentials list                 # all managed bootstrap passwords
 pmcluster credentials show portainer       # show a specific one
+pmcluster credentials show edge_admin      # the operator console login password
 pmcluster credentials rotate portainer     # generate + apply a new password
 ```
+
+Managed credentials: `traefik_dashboard`, `portainer`, `openobserve_admin`, `edge_admin`, `edge_ui_secret`, `edge_api_token`. Edge credentials are persisted by the console on first boot, so `rotate` refuses them.
 
 ## Audit Logs
 
@@ -383,23 +460,20 @@ Run `pmcluster stack list` to see deployed stacks. Stack names come from the `ap
 Check the Swarm service logs: `docker service logs my-app_api --tail=50`. Inspect the translated compose: `pmcluster deploy ./manifest.yaml --dry-run`.
 
 ### Deploy blocked by strict backup failure
-If `strict_backup: true` is set and the pre-deploy backup fails, the deploy aborts.
-Check the backup audit log: `pmcluster backup list`. Fix the backup issue or
-remove `strict_backup: true` from the manifest to allow best-effort deploys.
+If `strict_backup: true` is set and the pre-deploy backup fails, the deploy aborts. Check `pmcluster backup list`. Fix the backup issue or remove `strict_backup: true`.
 
 ### Worker node can't pull images
-Ensure `pmcluster serve` is running (it replays registry credentials). Verify the registry was added: `pmcluster registry list`.
+Ensure `pmcluster serve` is running (it replays registry credentials). Verify with `pmcluster registry list`.
 
 ### Webhook returns 401
-Three common causes:
-1. **Missing/incorrect `X-Pmcluster-Timestamp` header** — now required. Must be
-   current unix seconds within a 5-minute window.
-2. **Wrong HMAC input** — the signature is now over `timestamp + body` (no
-   separator), not body alone.
-3. **Wrong webhook secret** — check with `pmcluster webhook list`; recreate with
-   `pmcluster webhook remove <source> && pmcluster webhook add <source>`.
+Common causes:
+1. **Missing/incorrect `X-Pmcluster-Timestamp`** — required; current unix seconds within ±5 min. Ensure CI clocks are NTP-synced.
+2. **Wrong HMAC input** — signature is over `timestamp + body` (no separator), using the timestamp exactly as sent.
+3. **Body mutated after signing** — sign the exact bytes you POST (`printf '%s'`, not `echo`; avoid re-serializing JSON).
+4. **Wrong webhook secret** — recreate with `pmcluster webhook remove <source> && pmcluster webhook add <source>` and update the CI secret.
 
-### Rate limited (HTTP 429)
-The API returns 429 when per-IP limits are exceeded. For bursty CI pipelines,
-space out requests or batch them. Limits: 100 req/s for `/api/*`, 20 req/s
-for `/webhook/*`.
+### Rate limited (HTTP 429) or banned (HTTP 403)
+The edge proxy throttles per real IP (`/api/*` 200/s, `/webhook/*` 40/s). Space out bursts. A 403 means the IP was auto-banned after repeated trips/failures; bans expire (default 10 min).
+
+### Console login fails
+Get the password with `pmcluster credentials show edge_admin`. If the `pmui-data` volume was wiped, the console re-reads the Swarm secret on next boot.

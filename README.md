@@ -6,6 +6,8 @@ This project gives you a full production cluster with HTTPS ingress, observabili
 
 The control plane is a single static Go 1.25 binary (`pmcluster`, ~25 MB, no cgo) that brings the cluster up, deploys applications via a small DSL with versioned rollbacks, accepts HMAC-verified webhooks from CI, manages registry credentials and bootstrap passwords, and ships its own JSON audit logs.
 
+In front of it sits **`pmcluster-edge`** — a small Go service deployed as a Swarm service that publishes `pmcluster.<domain>` as the single public origin for the **operator console** (a web UI for API keys, TLS, webhooks, stacks, and more), the REST API, and webhook receivers — all shielded by per-IP rate limiting, a connection shield, and automatic IP blocklisting.
+
 - **Design + trade-offs:** [RFC v2 — issue #1](https://github.com/hazemarian/poor-man-stack/issues/1) (what actually shipped)
 - **Phase-by-phase implementation log:** [`docs/refactor-plan.md`](docs/refactor-plan.md)
 
@@ -27,13 +29,17 @@ Internet
    │
    ▼
 Traefik (HTTPS ingress, auto-routes via Docker labels + file provider)
+   ├──▶ pmcluster-edge (:8042) ── pmcluster.<domain> origin
+   │        ├── operator console (gin + HTMX web UI)
+   │        └── smart reverse proxy ──▶ pmcluster daemon (host, 127.0.0.1:9090)
    ├──▶ Your App(s)
    ├──▶ Portainer (operator UI)
-   ├──▶ OpenObserve (observability UI)
-   └──▶ pmcluster (REST/webhook API; runs on the host, not in a container)
+   └──▶ OpenObserve (observability UI)
 
 Your App(s) ──OTLP──▶ OTel Collector ──▶ OpenObserve
 Traefik     ──OTLP──▶ OTel Collector ──▶ OpenObserve
+pmcluster-edge shields: per-real-IP rate limits, in-flight shield, timeouts,
+                       body caps, auto-ban of abusive IPs (403)
 
 Every node: OTel Collector + Backup Agent (global services)
 ```
@@ -57,20 +63,31 @@ Runs as a global service on every node. Auto-discovers containers via the Docker
 ### offen/docker-volume-backup — Automated Backups
 Runs as a global service on every node. Nightly tarballs of all Docker volumes, named with the node ID, 7-day retention, optional S3 upload.
 
+### pmcluster-edge — Smart Proxy & Operator Console
+A small Go service (gin + HTMX) deployed as the `pmcluster-edge` Swarm service on the manager. It owns the `pmcluster.<domain>` origin end to end:
+
+- **Operator console** — a web UI (user `admin`, password provisioned at `cluster up`) for managing API keys, users, webhooks, per-host TLS certificates, stacks (deploy/rollback), backups, and cluster settings.
+- **Smart reverse proxy** — everything the console doesn't handle is proxied to the pmcluster daemon (`host.docker.internal:9090`). The daemon's host-bound port is no longer exposed publicly.
+- **Edge hardening** — per-real-IP token-bucket rate limits (separate buckets for `/api/*` and `/webhook/*`), an in-flight request shield (503 when saturated), request timeouts, body size caps, and automatic IP blocklisting (403) after repeated abuse or upstream failures.
+
+Its image is built from `cmd/edge/` and published to GHCR; the embedded `edge-stack.yml` pins the version-keyed tag so `cluster up`/`cluster update` can detect and roll out upgrades.
+
 ### pmcluster — Control Plane (Go)
 Single static binary, lives on the manager host. Replaces the bash setup script and Portainer's GitOps role.
 
 - `pmcluster init` — creates `~/.pmcluster/` (SQLite + encryption key) and prints a one-time bootstrap admin token for the API
 - `pmcluster cluster up` — brings the cluster up: preflight, networks, TLS secrets, bootstrap credentials, OTel + Traefik configs, deploy stacks. Prints all bootstrap passwords in a clearly-marked block at the end.
+- `pmcluster cluster update` — targeted re-provisioning after you edit `~/.pmcluster/config/*.yml` or renew certs: content-aware, re-deploys only what changed (no credential bootstrap, no full redeploy)
 - `pmcluster cluster status` / `cluster down`
-- `pmcluster serve` — runs the long-running daemon (REST API + webhook receiver). Listens on `127.0.0.1:9090`; Traefik routes `pmcluster.<domain>` to it via `host.docker.internal:host-gateway`.
+- `pmcluster serve` — runs the long-running daemon (REST API + webhook receiver). Listens on `127.0.0.1:9090`; Traefik routes `pmcluster.<domain>` to it via `host.docker.internal:host-gateway`
 - `pmcluster deploy <file>` / `pmcluster stack list|show` / `pmcluster rollback <stack> <rev>` — DSL-based application deploys with versioned rollback
 - `pmcluster credentials list|show|rotate` — managed bootstrap passwords (Traefik / Portainer / OpenObserve)
 - `pmcluster registry add|list|remove` — Docker registry credentials, replayed on `serve` startup so private images keep pulling
-- `pmcluster webhook add|list|remove` — HMAC-signed webhook sources for CI integrations
+- `pmcluster webhook add|list|remove` — HMAC-signed webhook sources for CI integrations (timestamped to prevent replay)
+- `pmcluster tls hosts add|list|remove` — per-host TLS certificates for customer domains served by Traefik (independent of the cluster wildcard cert)
 - `pmcluster backup create|list` — on-demand offen volume snapshots; deploys can opt-in via `backup_before_deploy: true`
 - `pmcluster node list|join-token` — wraps `docker node` for the read paths
-- `pmcluster user create <name>` — issue API tokens for additional users
+- `pmcluster user create <name>` / `user list` — issue API tokens for additional users (tokens print once, hashed at rest)
 - `pmcluster logs [--tail=N] [--since=24h] [--follow]` — tail the JSON audit log at `~/.pmcluster/logs/`. Files rotate daily, swept after 14 days.
 
 ---
@@ -81,10 +98,13 @@ Single static binary, lives on the manager host. Replaces the bash setup script 
 poor-man-stack/
 ├── pmcluster/                          # Go control plane (Cobra CLI + HTTP daemon)
 │   ├── cmd/pmcluster/                  # entry point
+│   ├── cmd/edge/                       # pmcluster-edge binary (console + smart proxy)
 │   ├── internal/
 │   │   ├── cli/                        # Cobra command tree
 │   │   ├── config/, store/, auth/      # config, SQLite, bearer-token auth
 │   │   ├── server/, api/               # chi HTTP server + handlers
+│   │   ├── edgeproxy/                  # rate limit, shield, blocklist, real IP, proxy
+│   │   ├── ui/                         # operator console (gin + HTMX, controllers + templates)
 │   │   ├── docker/                     # SDK wrapper behind a small interface
 │   │   ├── cluster/                    # cluster lifecycle (preflight, networks,
 │   │   │                               # secrets, configs, stacks, up, down, status)
@@ -94,7 +114,9 @@ poor-man-stack/
 │   ├── migrations/                     # *.sql, embedded via //go:embed
 │   └── e2e/                            # smoke end-to-end tests
 ├── docs/
-│   └── refactor-plan.md                # Active refactor plan + status
+│   ├── refactor-plan.md                # Active refactor plan + status
+│   ├── webhook.md                      # Webhook integration guide for CI
+│   └── openapi.yaml                    # REST API spec (also at pmcluster/docs/)
 └── README.md
 ```
 
@@ -165,7 +187,7 @@ It will:
 3. Configure TLS — either wire ACME into Traefik (HTTP-01 via the `:80` entrypoint) or load the operator's cert/key into Swarm secrets
 4. Generate random bootstrap passwords for Traefik / Portainer / OpenObserve, store encrypted in SQLite, mirror to Swarm secrets
 5. Render the OTel + Traefik dynamic configs in-process and create them as Docker configs (Swarm replicates to every node)
-6. Deploy the `infra`, `observability`, and `backup` stacks via `docker stack deploy`
+6. Deploy the `infra`, `edge`, `observability`, and `backup` stacks via `docker stack deploy`
 
 The bootstrap passwords are printed **once** at the end. Save them, or retrieve them later:
 
@@ -178,7 +200,7 @@ Once DNS resolves, the dashboards are live at:
 - `https://traefik.<your-domain>` — Traefik dashboard
 - `https://portainer.<your-domain>` — Portainer
 - `https://observ.<your-domain>` — OpenObserve
-- `https://pmcluster.<your-domain>` — pmcluster API/UI (once `pmcluster serve` is running)
+- `https://pmcluster.<your-domain>` — **pmcluster operator console + API/webhooks** (served by `pmcluster-edge`; login as `admin` with the `edge_admin` bootstrap password from `pmcluster credentials show edge_admin`)
 
 ### 3. Run the pmcluster daemon
 
@@ -198,7 +220,20 @@ pmcluster logs --tail=200 | jq 'select(.level=="error")'
 
 JSON files live at `~/.pmcluster/logs/pmcluster-YYYY-MM-DD.log` and are swept after 14 days.
 
-### 4. Add worker nodes (optional)
+### 4. Use the operator console
+
+`cluster up` deploys `pmcluster-edge`, so `https://pmcluster.<your-domain>` is a full management UI as soon as DNS resolves:
+
+- **Stacks** — view deployed stacks and revision history, deploy new manifests, roll back
+- **Webhooks** — create/list/remove CI webhook sources (secrets shown once)
+- **API keys** — issue and revoke bearer tokens for other users/CI systems
+- **TLS** — manage per-host certificates for customer domains
+- **Backups** — trigger snapshots and view the audit log
+- **Settings / overview** — cluster info and management
+
+The console authenticates against a dedicated `edge` daemon user and stores its session state in its own SQLite volume; the login password is the `edge_admin` credential (`pmcluster credentials show edge_admin`).
+
+### 5. Add worker nodes (optional)
 
 On each additional machine — install Docker, then a single command:
 
@@ -227,7 +262,7 @@ The manager automatically schedules the OTel Collector and the volume backup age
 ## Tear Down
 
 ```bash
-pmcluster cluster down --yes              # removes infra/observability/backup stacks
+pmcluster cluster down --yes              # removes infra/edge/observability/backup stacks
 pmcluster cluster down --yes --purge      # also removes pmcluster-managed secrets,
                                           # configs, and overlay networks
 ```
@@ -240,24 +275,31 @@ pmcluster cluster down --yes --purge      # also removes pmcluster-managed secre
 
 `pmcluster deploy` accepts a small higher-level DSL and translates it to the verbose Docker Swarm Compose YAML, eliminating the boilerplate (Traefik labels, networks block, app/env/version labels, secret/network wiring, restart/update policies).
 
+> Full field-by-field reference: [`docs/dsl.md`](docs/dsl.md).
+
 ### Manifest shape
 
 ```yaml
-app: donation-campaign
-env: production
-domain: example.com
-registry: ghcr.io/nextrum-sy
-version: latest                # overridable via --version flag at deploy time
+app: donation-campaign           # required — stack name
+env: production                  # required — environment
+domain: example.com              # required — root domain for Traefik routing
+registry: ghcr.io/nextrum-sy     # optional — image registry prefix
+version: latest                  # optional — default image tag (overridable via --version)
+repo_url: https://github.com/... # optional — metadata only (shown in stack list)
+env_file: .env                   # optional — load env vars from a file
 
-secrets:
-  - donation_campaign_db_password   # external Swarm secret you've already created
+backup_before_deploy: true       # optional — snapshot volumes before deploy
+strict_backup: true              # optional — abort the deploy if that backup fails
 
-volumes: [db_data]
+secrets:                         # optional — external Swarm secrets (must pre-exist)
+  - donation_campaign_db_password
 
-services:
+volumes: [db_data]               # optional — named volumes to create
+
+services:                        # required — one or more services
   db:
     image: postgres:14-alpine
-    placement: manager
+    placement: manager           # optional — manager | worker
     volumes: [db_data:/var/lib/postgresql/data]
     env: { POSTGRES_DB: donation_campaign, POSTGRES_USER: user }
     secrets: [donation_campaign_db_password]
@@ -265,15 +307,28 @@ services:
 
   migration:
     image: ${registry}/${app}:${version}
-    command: [./migrate]
-    run_once: true                  # → restart_policy: condition: none
+    command: [./migrate]         # optional — override command (entrypoint also supported)
+    run_once: true               # optional → restart_policy: condition: none
 
   api:
     image: ${registry}/${app}:${version}
-    replicas: 2
-    expose: { port: 8080, host: api.${app}.${domain} }   # auto-wires Traefik
+    replicas: 2                  # optional — default 1 (ignored when run_once)
+    expose:                      # optional — auto-wires Traefik
+      port: 8080                 #   container-side port
+      host: api.${app}.${domain} #   primary FQDN
+      aliases:                   #   extra hostnames → their own Traefik router
+        - api.customer.com       #   (e.g. a customer's own domain)
+      cors_disabled: false       #   opt out of the cluster-wide CORS middleware
     healthcheck: { type: http, path: /health }
+    update:                      # optional — Swarm rolling-update tuning
+      parallelism: 1             #   default 1
+      delay: 10s                 #   default 10s
+      order: start-first         #   start-first (default) | stop-first
 ```
+
+**Service fields:** `image` (required), `replicas`, `run_once`, `placement`, `command`, `entrypoint`, `env`, `volumes`, `secrets`, `expose`, `healthcheck`, `update`, `skip_filelog` (exclude the service from the OTel log-tailing receiver when the app ships logs via OTLP itself).
+
+**Healthchecks:** `{ type: pg_isready }` (uses `$POSTGRES_USER`/`$POSTGRES_DB`) or `{ type: http, path: /health }` (defaults to `/`), or the full form (`test`, `interval`, `timeout`, `retries`).
 
 Substitution: `${app}`, `${env}`, `${version}`, `${registry}`, `${domain}`, plus `${env:VAR}` for OS env. Strict YAML — unknown keys are rejected.
 
@@ -310,17 +365,19 @@ Every deploy gets a unix-timestamp revision id. Rollback re-applies a stored rev
 pmcluster webhook add github-prod      # prints a 64-char hex secret ONCE; save it
 ```
 
-CI side — sign the request body with HMAC-SHA256 keyed by that secret string and POST to `/webhook/<source>`:
+CI side — sign the request with HMAC-SHA256 keyed by that secret string and POST to `/webhook/<source>`. Two headers are required: a current Unix-seconds timestamp and the signature over `timestamp + body` (no separator). Timestamps outside a 5-minute window are rejected, which blocks replay attacks.
 
 ```bash
-SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print "sha256=" $2}')
+TIMESTAMP=$(date +%s)
+SIG=$(printf '%s' "${TIMESTAMP}${BODY}" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print "sha256=" $2}')
 curl -X POST https://pmcluster.example.com/webhook/github-prod \
+     -H "X-Pmcluster-Timestamp: $TIMESTAMP" \
      -H "X-Pmcluster-Signature: $SIG" \
      -H "Content-Type: application/json" \
      -d "$BODY"
 ```
 
-The webhook returns the same generic 401 for "wrong secret", "wrong source", and "missing signature" — no information leak about which case tripped.
+The webhook returns the same generic 401 for "wrong secret", "wrong source", "bad/missing timestamp", and "missing signature" — no information leak about which case tripped. See [`docs/webhook.md`](docs/webhook.md) for the full integration guide and a GitHub Actions example.
 
 ### Private registries
 
@@ -352,14 +409,60 @@ Restore is a known design gap, sketched in [`pmcluster/docs/restore-design.md`](
 
 ---
 
+## Per-Host TLS (customer domains)
+
+An app can be reachable on a pmcluster subdomain *and* on a customer's own domain, each served over HTTPS with its own real certificate. Add the extra hostname as an `expose.aliases` entry in the manifest (that creates the Traefik router), then supply the matching certificate:
+
+```bash
+# Store a cert+key as text (paste inline) or from files:
+pmcluster tls hosts add api.customer.com --cert-file cert.pem --key-file key.pem
+pmcluster tls hosts add api.customer.com --cert "$(cat cert.pem)" --key "$(cat key.pem)"
+
+pmcluster tls hosts list                    # host, expiry, SANs
+pmcluster tls hosts remove api.customer.com
+```
+
+Certs are stored under `~/.pmcluster/config/hosts/<host>/`. Adding or removing one re-renders the Traefik dynamic config and re-deploys the infra stack so it takes effect immediately; pass `--no-refresh` to defer the refresh to the next `pmcluster cluster update`. The cluster's own wildcard certificate (`cluster up --cert/--key`) is never touched by these commands.
+
+---
+
+## REST API & API Keys
+
+The daemon exposes a JSON REST API under `/api/*` (Bearer auth) plus the unauthenticated `GET /health` liveness probe. The full spec lives at [`pmcluster/docs/openapi.yaml`](pmcluster/docs/openapi.yaml). Highlights:
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/me` | Current user |
+| `GET` | `/api/cluster/info` | Cluster + Swarm status |
+| `GET` | `/api/nodes` | Swarm nodes |
+| `GET`/`POST` | `/api/stacks` | List / deploy a stack |
+| `GET` | `/api/stacks/{name}` | Stack detail + revisions |
+| `GET` | `/api/stacks/{name}/revisions/{rev}` | A stored revision |
+| `POST` | `/api/stacks/{name}/rollback` | Roll back to a revision |
+| `GET`/`POST` | `/api/backups` | List / trigger backups |
+| `GET`/`PUT`/`DELETE` | `/api/tls/hosts` | Per-host TLS certs |
+| `GET`/`POST`/`DELETE` | `/api/webhooks` | Webhook sources |
+| `GET`/`POST` | `/api/api_keys` | API keys |
+
+API tokens are created with `pmcluster user create <name>` or the console. They use the format `pmc_<token_id>_<secret>` (a public 8-hex-char lookup id plus a base64url secret) so the daemon can find the row without scanning every user; the plaintext token is shown once and only a hash is stored.
+
+```bash
+curl -H "Authorization: Bearer pmc_a1b2c3d4_..." \
+  https://pmcluster.example.com/api/cluster/info
+```
+
+The edge proxy applies per-IP rate limits: `200 req/s` (burst 400) for `/api/*` and `40 req/s` (burst 60) for `/webhook/*`; exceeded requests get `429` with `Retry-After: 1`.
+
+---
+
 ## Minimum Hardware
 
 | Node | CPU | RAM | Notes |
 |------|-----|-----|-------|
-| Manager | 2 vCPU | 4 GB | Traefik + Portainer + OpenObserve + OTel Collector + Backup Agent + pmcluster |
+| Manager | 2 vCPU | 4 GB | Traefik + Portainer + OpenObserve + OTel Collector + Backup Agent + pmcluster-edge + pmcluster |
 | Worker | 1 vCPU | 1 GB | OTel Collector + Backup Agent + your application workloads |
 
-OpenObserve alone needs ~512 MB RAM at idle. On a manager with less than 4 GB it will compete with Portainer and Traefik under load.
+OpenObserve alone needs ~512 MB RAM at idle. On a manager with less than 4 GB it will compete with Portainer and Traefik under load. `pmcluster-edge` is tiny (64–256 MB, capped).
 
 ---
 
@@ -378,6 +481,8 @@ pmcluster cluster up \
   --openobserve-email=admin@example.com   # everything else preserved
 docker service update --force infra_traefik
 ```
+
+Switching an existing cluster between ACME and operator-cert mode requires `--force-tls-mode`. After renewing a certificate on disk, `pmcluster cluster update` re-applies the stored cert/key without a full bring-up. For per-host (customer-domain) certificates, use `pmcluster tls hosts …` — see [Per-Host TLS](#per-host-tls-customer-domains).
 
 ---
 
