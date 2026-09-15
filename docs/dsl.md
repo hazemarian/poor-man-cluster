@@ -93,6 +93,40 @@ services:
 | `healthcheck` | — | shorthand or full form (see below) |
 | `update` | `1` / `10s` / `start-first` | Swarm rolling-update policy (skipped for `run_once`) |
 
+### Referencing DB-backed secrets & configs in `env`
+
+`env` values can reference entries from pmcluster's DB-backed **secrets** and
+**configs** stores (managed via `pmcluster secret` / `pmcluster config` or the
+operator console) instead of hard-coding values:
+
+```yaml
+env:
+  ADMIN_PASS: secrets(app_secret)      # inject a stored secret's value
+  ADMIN_ENABLED: config(app_config)    # inject a stored config's content
+  DEBUG: "false"                       # plain values still work
+```
+
+Behavior:
+
+- `secrets(<name>)` — resolves to the secret's **mount path** `/run/secrets/<name>`
+  as the env value. The secret is **not** auto-mounted: you must list it in the
+  service's `secrets:` array too, or validation fails. Mounting the secret
+  explicitly puts its content at that path inside the container.
+- `config(<name>)` — resolves the DB config row and injects its content as the
+  env value.
+- The reference is resolved at deploy time against the DB — rotating the
+  secret/config and re-deploying picks up the new value.
+- Validation fails at parse time if the pattern is malformed
+  (`config(name` / `secrets()`), if a `secrets(name)` env ref is not mounted
+  in the service's `secrets:` array, and at deploy time if the named
+  secret/config doesn't exist.
+- Multi-line content cannot be injected as an env value (it would break the
+  compose `environment` block) — use the `secrets:` array to file-mount such
+  values instead.
+- `secrets(name)` in `env` is convenient, but note that env vars are visible
+  via `docker service inspect`; for truly sensitive values prefer the
+  `secrets:` array (write-only file mount).
+
 ### `expose`
 
 ```yaml

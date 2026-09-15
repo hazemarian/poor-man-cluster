@@ -1,0 +1,100 @@
+{{define "configs"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1 style="margin:0 0 4px">Configs</h1>
+<p class="sub">Non-secret values (templates, files, env blocks) stored in the daemon DB and
+versioned. Reference them from the DSL with <code>env: VAR: config(name)</code> to inject the
+value into a service's environment. Every edit records a version; rollback restores it.</p>
+
+<div class="card">
+  <h2 style="margin-top:0">Create a config</h2>
+  <form hx-post="/configs" hx-target="#view" hx-swap="innerHTML">
+    <div class="row" style="align-items:flex-start">
+      <div style="flex:1">
+        <label>Name</label>
+        <input type="text" name="name" placeholder="nginx_conf" required>
+      </div>
+      <div style="flex:1">
+        <label>Scope</label>
+        <select name="scope">
+          <option value="service" selected>service</option>
+          <option value="cluster">cluster</option>
+        </select>
+      </div>
+      <div style="flex:1">
+        <label>Kind</label>
+        <select name="kind">
+          <option value="file" selected>file</option>
+          <option value="template">template</option>
+          <option value="env">env</option>
+        </select>
+      </div>
+    </div>
+    <label>Content</label>
+    <textarea name="content" rows="4" placeholder="worker_processes 4;&#10;..."></textarea>
+    <div style="margin-top:10px">
+      <button class="btn" type="submit" hx-disabled-elt="this">Create config</button>
+    </div>
+  </form>
+</div>
+
+{{if .Editing}}
+<div class="card">
+  <h2 style="margin-top:0">Edit {{.Editing.Name}}</h2>
+  <p class="sub">Scope <code>{{.Editing.Scope}}</code> · kind <code>{{.Editing.Kind}}</code> ·
+    hash <code>{{.Editing.Hash}}</code> · updated {{ts .Editing.UpdatedAt}}</p>
+  <form hx-post="/configs/edit" hx-target="#view" hx-swap="innerHTML">
+    <input type="hidden" name="name" value="{{.Editing.Name}}">
+    <label>Content</label>
+    <textarea name="content" rows="8" style="white-space:pre">{{.Editing.Content}}</textarea>
+    <div style="margin-top:10px">
+      <button class="btn" type="submit" hx-disabled-elt="this">Save new version</button>
+    </div>
+  </form>
+  {{if .Versions}}
+  <h2 style="margin-top:20px">Version history</h2>
+  <div class="card" style="padding:6px 14px">
+  <table>
+    <tr><th>ID</th><th>Hash</th><th>Created</th><th></th></tr>
+    {{range .Versions}}
+    <tr>
+      <td class="muted">{{.ID}}</td>
+      <td class="muted"><code>{{.Hash}}</code></td>
+      <td class="muted">{{ts .CreatedAt}}</td>
+      <td style="text-align:right">
+        <button class="btn ghost sm" hx-post="/configs/rollback/{{$.Editing.Name}}/{{.ID}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Roll back {{$.Editing.Name}} to version {{.ID}}?')">Rollback</button>
+      </td>
+    </tr>
+    {{end}}
+  </table>
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+<h2 style="margin-bottom:0">Stored configs</h2>
+<div class="card" style="padding:6px 14px">
+{{if .Configs}}
+<table>
+  <tr><th>Name</th><th>Scope</th><th>Kind</th><th>Version</th><th>Hash</th><th>Updated</th><th></th></tr>
+  {{range .Configs}}
+  <tr>
+    <td><code>{{.Name}}</code></td>
+    <td><span class="pill {{if eq .Scope "cluster"}}warn{{else}}good{{end}}">{{.Scope}}</span></td>
+    <td class="muted">{{.Kind}}</td>
+    <td class="muted">{{.Version}}</td>
+    <td class="muted"><code>{{.Hash}}</code></td>
+    <td class="muted">{{ts .UpdatedAt}}</td>
+    <td style="text-align:right;white-space:nowrap">
+      <button class="btn ghost sm" hx-get="/configs?name={{.Name}}" hx-target="#view" hx-swap="innerHTML">Edit</button>
+      <button class="btn danger sm" hx-post="/configs/remove/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete config {{.Name}} and its history?')">Delete</button>
+    </td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<div class="empty">No configs created.</div>
+{{end}}
+</div>
+{{end}}

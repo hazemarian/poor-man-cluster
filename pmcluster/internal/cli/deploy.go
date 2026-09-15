@@ -78,7 +78,7 @@ func openDeploySvc(cmd *cobra.Command) (*deploy.Service, *store.Store, func(), e
 		return nil, nil, nil, err
 	}
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
-	svc := &deploy.Service{Store: st, Deployer: deployer, Backup: backup.LocalTrigger{Store: st}}
+	svc := &deploy.Service{Store: st, Deployer: deployer, Backup: backup.LocalTrigger{Store: st}, Resolver: &deploy.StoreConfigResolver{Store: st}}
 	return svc, st, func() { _ = st.Close() }, nil
 }
 

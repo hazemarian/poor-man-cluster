@@ -138,6 +138,18 @@ func (a *App) Mount(engine *gin.Engine) {
 	g.GET("/apikeys", ak.Page)
 	g.POST("/apikeys", ak.Add)
 	g.POST("/apikeys/remove/:id", ak.Remove)
+
+	sc := controllers.Secrets{Controller: a.ctrl}
+	g.GET("/secrets", sc.Page)
+	g.POST("/secrets", sc.Add)
+	g.POST("/secrets/remove/:name", sc.Remove)
+
+	cf := controllers.Configs{Controller: a.ctrl}
+	g.GET("/configs", cf.Page)
+	g.POST("/configs", cf.Add)
+	g.POST("/configs/edit", cf.Edit)
+	g.POST("/configs/remove/:name", cf.Remove)
+	g.POST("/configs/rollback/:name/:version_id", cf.Rollback)
 }
 
 // Handler returns a gin engine with every UI route. The edge service mounts

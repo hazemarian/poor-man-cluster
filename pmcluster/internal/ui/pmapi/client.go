@@ -278,3 +278,79 @@ func (c *Client) CreateAPIKey(ctx context.Context, name string) (*APIKeyCreated,
 func (c *Client) DeleteAPIKey(ctx context.Context, id int64) error {
 	return c.do(ctx, http.MethodDelete, fmt.Sprintf("/api_keys/%d", id), nil, nil)
 }
+
+// ListSecrets returns every stored secret (name, scope, hash — never payload).
+func (c *Client) ListSecrets(ctx context.Context) ([]Secret, error) {
+	var body struct {
+		Secrets []Secret `json:"secrets"`
+	}
+	err := c.do(ctx, http.MethodGet, "/secrets", nil, &body)
+	return body.Secrets, err
+}
+
+// CreateSecret stores a secret payload (encrypted at rest) and returns its row.
+func (c *Client) CreateSecret(ctx context.Context, scope, name, value string) (*Secret, error) {
+	body := map[string]string{"scope": scope, "name": name, "value": value}
+	var out Secret
+	err := c.do(ctx, http.MethodPost, "/secrets", body, &out)
+	return &out, err
+}
+
+// DeleteSecret removes a stored secret by name.
+func (c *Client) DeleteSecret(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, nil)
+}
+
+// ListConfigs returns every stored config (without content).
+func (c *Client) ListConfigs(ctx context.Context) ([]Config, error) {
+	var body struct {
+		Configs []Config `json:"configs"`
+	}
+	err := c.do(ctx, http.MethodGet, "/configs", nil, &body)
+	return body.Configs, err
+}
+
+// GetConfig returns one config including its content.
+func (c *Client) GetConfig(ctx context.Context, name string) (*Config, error) {
+	var out Config
+	err := c.do(ctx, http.MethodGet, "/configs/"+url.PathEscape(name), nil, &out)
+	return &out, err
+}
+
+// CreateConfig stores a config value.
+func (c *Client) CreateConfig(ctx context.Context, scope, name, kind, content string) (*Config, error) {
+	body := map[string]string{"scope": scope, "name": name, "kind": kind, "content": content}
+	var out Config
+	err := c.do(ctx, http.MethodPost, "/configs", body, &out)
+	return &out, err
+}
+
+// UpdateConfig replaces a config's content (old content is pushed to history).
+func (c *Client) UpdateConfig(ctx context.Context, name, content string) (*Config, error) {
+	body := map[string]string{"content": content}
+	var out Config
+	err := c.do(ctx, http.MethodPut, "/configs/"+url.PathEscape(name), body, &out)
+	return &out, err
+}
+
+// DeleteConfig removes a config and its version history.
+func (c *Client) DeleteConfig(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/configs/"+url.PathEscape(name), nil, nil)
+}
+
+// ConfigVersions returns a config's version history (newest first).
+func (c *Client) ConfigVersions(ctx context.Context, name string) ([]ConfigVersion, error) {
+	var body struct {
+		Versions []ConfigVersion `json:"versions"`
+	}
+	err := c.do(ctx, http.MethodGet, "/configs/"+url.PathEscape(name)+"/versions", nil, &body)
+	return body.Versions, err
+}
+
+// RollbackConfig restores a config to a prior version.
+func (c *Client) RollbackConfig(ctx context.Context, name string, versionID int64) (*Config, error) {
+	body := map[string]any{"version_id": versionID}
+	var out Config
+	err := c.do(ctx, http.MethodPost, "/configs/"+url.PathEscape(name)+"/rollback", body, &out)
+	return &out, err
+}

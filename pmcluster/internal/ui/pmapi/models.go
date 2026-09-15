@@ -164,3 +164,33 @@ type APIKeyCreated struct {
 	Name  string `json:"name"`
 	Token string `json:"token"`
 }
+
+// Secret is one row of GET /api/secrets. Payload is never returned — only the
+// content hash is exposed for verification.
+type Secret struct {
+	ID        int64  `json:"id"`
+	Scope     string `json:"scope"`
+	Name      string `json:"name"`
+	Hash      string `json:"hash"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// Config is one row of GET /api/configs.
+type Config struct {
+	ID        int64  `json:"id"`
+	Scope     string `json:"scope"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Version   string `json:"version"`
+	Hash      string `json:"hash"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+	Content   string `json:"content,omitempty"`
+}
+
+// ConfigVersion is one history row of GET /api/configs/{name}/versions.
+type ConfigVersion struct {
+	ID        int64  `json:"id"`
+	Hash      string `json:"hash"`
+	CreatedAt int64  `json:"created_at"`
+}

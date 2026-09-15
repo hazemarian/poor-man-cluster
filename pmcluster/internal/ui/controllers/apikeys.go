@@ -85,16 +85,17 @@ func (c APIKeys) Remove(g *gin.Context) {
 	d := apiKeysData{}
 
 	id, err := strconv.ParseInt(g.Param("id"), 10, 64)
-	if configured && err == nil && id > 0 {
+	switch {
+	case !configured:
+		d.Error = "pmcluster API not configured. Open Settings first."
+	case err != nil || id <= 0:
+		d.Error = "Invalid API key id."
+	default:
 		if err := c.API.DeleteAPIKey(ctx, id); err != nil {
 			d.Error = err.Error()
 		} else {
 			d.Msg = fmt.Sprintf("Removed API key %d.", id)
 		}
-	} else if !configured {
-		d.Error = "pmcluster API not configured. Open Settings first."
-	} else {
-		d.Error = "Invalid API key id."
 	}
 
 	d.Keys = c.fetch(ctx, &d)

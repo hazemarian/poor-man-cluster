@@ -239,14 +239,18 @@ func TestEnsureConfig_AttachesManagedLabel(t *testing.T) {
 
 func TestEnsureConfig_ReusesVersionWhenUnchanged(t *testing.T) {
 	f := newFakeDocker()
+	data := []byte("same data")
 	if err := f.ConfigCreate(context.Background(), docker.ConfigSpec{
 		Name: "otel_config_v001",
-		Data: []byte("same data"),
+		Data: data,
+		Labels: map[string]string{
+			"pmcluster.data_hash": dataHash(data),
+		},
 	}); err != nil {
 		t.Fatalf("seed config: %v", err)
 	}
 
-	name, created, err := EnsureConfig(context.Background(), f, "otel_config", []byte("same data"), "v0.2.0")
+	name, created, err := EnsureConfig(context.Background(), f, "otel_config", data, "v0.2.0")
 	if err != nil {
 		t.Fatalf("EnsureConfig: %v", err)
 	}
@@ -283,5 +287,66 @@ func TestEnsureConfig_MintsNewVersionOnChange(t *testing.T) {
 	// Old version GC'd.
 	if _, ok := f.configs["otel_config_v001"]; ok {
 		t.Error("old otel_config_v001 not GC'd after rotate")
+	}
+}
+
+// Regression test for the "new SSL config on every restart" bug: Docker never
+// returns secret payloads on inspect, so the old bytes.Equal comparison always
+// failed against a real daemon and minted a fresh cert_vNNN on every cluster
+// up/update. The reuse check must use the pmcluster.data_hash label.
+func TestEnsureVersionedSecret_ReusesUnchangedVersion(t *testing.T) {
+	f := newFakeDocker()
+	seed := []byte("-----BEGIN CERTIFICATE-----\nsame cert bytes\n-----END CERTIFICATE-----\n")
+	if err := f.SecretCreate(context.Background(), docker.SecretSpec{
+		Name: "cert_v001",
+		Data: seed,
+		Labels: map[string]string{
+			pmclusterLabel:        "true",
+			"pmcluster.base":      "cert",
+			"pmcluster.data_hash": dataHash(seed),
+		},
+	}); err != nil {
+		t.Fatalf("seed secret: %v", err)
+	}
+
+	name, created, err := EnsureVersionedSecret(context.Background(), f, "cert", seed)
+	if err != nil {
+		t.Fatalf("EnsureVersionedSecret: %v", err)
+	}
+	if created {
+		t.Error("created = true, want false (unchanged cert → reuse)")
+	}
+	if name != "cert_v001" {
+		t.Errorf("name = %q, want cert_v001 (reused)", name)
+	}
+	if _, ok := f.secrets["cert_v002"]; ok {
+		t.Error("cert_v002 was created despite unchanged bytes")
+	}
+}
+
+func TestEnsureVersionedSecret_MintsNewVersionOnChange(t *testing.T) {
+	f := newFakeDocker()
+	seed := []byte("old cert bytes")
+	if err := f.SecretCreate(context.Background(), docker.SecretSpec{
+		Name: "cert_v001",
+		Data: seed,
+		Labels: map[string]string{
+			pmclusterLabel:        "true",
+			"pmcluster.base":      "cert",
+			"pmcluster.data_hash": dataHash(seed),
+		},
+	}); err != nil {
+		t.Fatalf("seed secret: %v", err)
+	}
+
+	name, created, err := EnsureVersionedSecret(context.Background(), f, "cert", []byte("new cert bytes"))
+	if err != nil {
+		t.Fatalf("EnsureVersionedSecret: %v", err)
+	}
+	if !created {
+		t.Error("created = false, want true (cert changed → new version)")
+	}
+	if name != "cert_v002" {
+		t.Errorf("name = %q, want cert_v002", name)
 	}
 }

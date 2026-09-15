@@ -3,6 +3,7 @@ package manifest
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
@@ -70,6 +71,19 @@ func validateService(name string, s *dsl.Service) error {
 	for i, v := range s.Volumes {
 		if !strings.Contains(v, ":") {
 			return fmt.Errorf("%s.volumes[%d]: must be 'name:path' or '/host:/container', got %q", prefix, i, v)
+		}
+	}
+	for k, v := range s.Env {
+		if malformedEnvRef(v) {
+			return fmt.Errorf("%s.env.%s: malformed reference %q — expected config(name) or secrets(name)", prefix, k, v)
+		}
+		if ref, ok := parseEnvRef(v); ok && ref.Name == "" {
+			return fmt.Errorf("%s.env.%s: empty name in %s() reference", prefix, k, ref.Kind)
+		}
+		if ref, ok := parseEnvRef(v); ok && ref.Kind == "secrets" {
+			if !slices.Contains(s.Secrets, ref.Name) {
+				return fmt.Errorf("%s.env.%s: secrets(%s) is not mounted — add %q to the service secrets: array (env refs point at /run/secrets/<name>)", prefix, k, ref.Name, ref.Name)
+			}
 		}
 	}
 	if s.Expose != nil {

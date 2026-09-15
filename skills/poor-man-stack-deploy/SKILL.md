@@ -183,6 +183,28 @@ services:                      # required — one or more service definitions
 
 Auto-resolved: `${app}`, `${env}`, `${version}`, `${registry}`, `${domain}`. OS environment variables: `${env:VAR}` (error if unset).
 
+### DB-backed secrets & configs in `env`
+
+`env` values can reference pmcluster's DB stores instead of hard-coding values:
+
+```yaml
+env:
+  ADMIN_PASS: secrets(my_app_db_password)   # stored secret → mount path /run/secrets/...
+                                            # (must also be in the service secrets: array)
+  ADMIN_ENABLED: config(my_app_config)      # stored config content
+```
+
+- Secrets live **AES-256-GCM encrypted** in `data.db` (key `~/.pmcluster/.encryption_key`). The plaintext is shown **once** at creation; afterwards only the **sha256 hash** is shown.
+- Configs keep a full **version history**; `rollback` restores an old value.
+- Both have `cluster` (platform) and `service` (app) scopes. Resolved at **deploy time** against the DB — rotate then re-deploy to pick up the new value.
+- Management:
+  - `pmcluster secret create <name> [value]` (prompt/stdin ok) / `list` / `show <name>` / `verify <name> <value>` / `delete <name>`
+  - `pmcluster secret import-credentials` — mirror platform credentials into the secrets store
+  - `pmcluster config create|list|get|edit|history|rollback <name>`
+  - `pmcluster config import` — one-time import of on-disk `~/.pmcluster/config/*.yml` templates
+- The operator console has **Secrets** and **Configs** pages (list, create, edit, history, rollback).
+- Validation fails on malformed references (`config(name` / `secrets()`), on `secrets(name)` env refs that aren't mounted in the service `secrets:` array, and at deploy time if the named secret/config doesn't exist. Multi-line content can't be injected into env — file-mount it via the `secrets:` array instead.
+
 ### Validation Rules
 
 - Strict YAML — unknown keys are rejected at every level.

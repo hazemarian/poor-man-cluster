@@ -507,6 +507,271 @@ paths:
           description: API key not found
         "409":
           description: Refused — edge user or the key currently in use
+  /api/secrets:
+    get:
+      summary: List secrets (metadata + sha256 hash, never the plaintext)
+      operationId: listSecrets
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Secret metadata rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secrets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Secret"
+    post:
+      summary: Create a secret (value stored AES-GCM encrypted)
+      operationId: createSecret
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, value]
+              properties:
+                name:
+                  type: string
+                scope:
+                  type: string
+                  enum: [cluster, service]
+                  default: service
+                value:
+                  type: string
+      responses:
+        "201":
+          description: Created — returns the id, scope, name and hash
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Secret"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: A secret with that name already exists
+  /api/secrets/{name}:
+    delete:
+      summary: Delete a secret
+      operationId: deleteSecret
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Secret not found
+  /api/configs:
+    get:
+      summary: List configs (metadata + hash, no content)
+      operationId: listConfigs
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Config metadata rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Config"
+    post:
+      summary: Create a config
+      operationId: createConfig
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, content]
+              properties:
+                name:
+                  type: string
+                scope:
+                  type: string
+                  enum: [cluster, service]
+                  default: service
+                kind:
+                  type: string
+                  enum: [template, file, env]
+                  default: file
+                content:
+                  type: string
+      responses:
+        "201":
+          description: Created — returns metadata incl. hash
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Config"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: A config with that name already exists
+  /api/configs/{name}:
+    get:
+      summary: Get a config including its content
+      operationId: getConfig
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Config with content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Config"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      summary: Update a config's content (previous value is kept in history)
+      operationId: updateConfig
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+      responses:
+        "200":
+          description: Updated — returns name + new hash
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  hash:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Delete a config (versions are cascaded away)
+      operationId: deleteConfig
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/configs/{name}/versions:
+    get:
+      summary: List a config's version history (newest first)
+      operationId: listConfigVersions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Version history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ConfigVersion"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/configs/{name}/rollback:
+    post:
+      summary: Restore a config to a previous version
+      operationId: rollbackConfig
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version_id]
+              properties:
+                version_id:
+                  type: integer
+                  format: int64
+      responses:
+        "200":
+          description: Rolled back — returns name, new hash, and the version id
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  hash:
+                    type: string
+                  rolled_back_to:
+                    type: integer
+                    format: int64
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Config or version not found
 components:
   securitySchemes:
     bearerAuth:
@@ -787,3 +1052,59 @@ components:
           type: string
         token:
           type: string
+    Secret:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        scope:
+          type: string
+          enum: [cluster, service]
+        name:
+          type: string
+        hash:
+          type: string
+          description: sha256 hex fingerprint of the plaintext value
+        created_at:
+          type: integer
+          format: int64
+    Config:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        scope:
+          type: string
+          enum: [cluster, service]
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [template, file, env]
+        version:
+          type: string
+          description: last writing build version
+        hash:
+          type: string
+        content:
+          type: string
+          description: only present on get (single config); omitted on list
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
+    ConfigVersion:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        hash:
+          type: string
+        created_at:
+          type: integer
+          format: int64

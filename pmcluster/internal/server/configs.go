@@ -1,0 +1,229 @@
+package server
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+)
+
+// ConfigService exposes DB-backed config management over the Bearer-protected
+// /api router. Configs are the editable templates/values (cluster- or
+// service-scoped); each edit stores the previous value in the version history
+// so operators can roll back. The hash column tracks content identity — the
+// daemon's provisioning path uses it to decide whether a new Docker config is
+// needed.
+type ConfigService struct {
+	Store *store.Store
+}
+
+func (c *ConfigService) Mount(r chi.Router) {
+	r.Get("/configs", c.list)
+	r.Post("/configs", c.create)
+	r.Get("/configs/{name}", c.get)
+	r.Put("/configs/{name}", c.update)
+	r.Delete("/configs/{name}", c.remove)
+	r.Get("/configs/{name}/versions", c.versions)
+	r.Post("/configs/{name}/rollback", c.rollback)
+}
+
+type configRow struct {
+	ID        int64  `json:"id"`
+	Scope     string `json:"scope"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind"`
+	Version   string `json:"version"`
+	Hash      string `json:"hash"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
+}
+
+func (c *ConfigService) list(res http.ResponseWriter, req *http.Request) {
+	cfgs, err := c.Store.ListConfigs(req.Context())
+	if err != nil {
+		writeErr(res, http.StatusInternalServerError, "list configs: "+err.Error())
+		return
+	}
+	rows := make([]configRow, 0, len(cfgs))
+	for _, x := range cfgs {
+		rows = append(rows, configRow{
+			ID: x.ID, Scope: x.Scope, Name: x.Name, Kind: x.Kind,
+			Version: x.Version, Hash: x.Hash, CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt,
+		})
+	}
+	writeJSON(res, http.StatusOK, map[string]any{"configs": rows})
+}
+
+type createConfigRequest struct {
+	Scope   string `json:"scope"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	Content string `json:"content"`
+}
+
+func (c *ConfigService) create(res http.ResponseWriter, req *http.Request) {
+	var body createConfigRequest
+	dec := json.NewDecoder(http.MaxBytesReader(res, req.Body, 4<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeErr(res, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	scope := strings.TrimSpace(body.Scope)
+	kind := strings.TrimSpace(body.Kind)
+	if name == "" {
+		writeErr(res, http.StatusBadRequest, "name is required")
+		return
+	}
+	if scope == "" {
+		scope = "service"
+	}
+	if scope != "cluster" && scope != "service" {
+		writeErr(res, http.StatusBadRequest, "scope must be 'cluster' or 'service'")
+		return
+	}
+	if kind == "" {
+		kind = "file"
+	}
+	if kind != "template" && kind != "file" && kind != "env" {
+		writeErr(res, http.StatusBadRequest, "kind must be 'template', 'file' or 'env'")
+		return
+	}
+
+	id, err := c.Store.CreateConfig(req.Context(), scope, name, kind, body.Content, buildVersion())
+	if err != nil {
+		if errors.Is(err, store.ErrConfigExists) {
+			writeErr(res, http.StatusConflict, "config already exists: "+name)
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "create config: "+err.Error())
+		return
+	}
+	writeJSON(res, http.StatusCreated, map[string]any{
+		"id": id, "scope": scope, "name": name, "kind": kind,
+		"hash": store.ConfigHash(body.Content),
+	})
+}
+
+func (c *ConfigService) get(res http.ResponseWriter, req *http.Request) {
+	name := chi.URLParam(req, "name")
+	cfg, err := c.Store.GetConfig(req.Context(), name)
+	if err != nil {
+		if errors.Is(err, store.ErrConfigNotFound) {
+			writeErr(res, http.StatusNotFound, "config not found: "+name)
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "get config: "+err.Error())
+		return
+	}
+	writeJSON(res, http.StatusOK, map[string]any{
+		"id": cfg.ID, "scope": cfg.Scope, "name": cfg.Name, "kind": cfg.Kind,
+		"version": cfg.Version, "hash": cfg.Hash, "content": cfg.Content,
+	})
+}
+
+type updateConfigRequest struct {
+	Content string `json:"content"`
+}
+
+func (c *ConfigService) update(res http.ResponseWriter, req *http.Request) {
+	name := chi.URLParam(req, "name")
+	var body updateConfigRequest
+	dec := json.NewDecoder(http.MaxBytesReader(res, req.Body, 4<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeErr(res, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+
+	hash, err := c.Store.UpdateConfig(req.Context(), name, body.Content, buildVersion())
+	if err != nil {
+		if errors.Is(err, store.ErrConfigNotFound) {
+			writeErr(res, http.StatusNotFound, "config not found: "+name)
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "update config: "+err.Error())
+		return
+	}
+	writeJSON(res, http.StatusOK, map[string]any{"name": name, "hash": hash})
+}
+
+func (c *ConfigService) remove(res http.ResponseWriter, req *http.Request) {
+	name := chi.URLParam(req, "name")
+	if err := c.Store.DeleteConfig(req.Context(), name); err != nil {
+		if errors.Is(err, store.ErrConfigNotFound) {
+			writeErr(res, http.StatusNotFound, "config not found: "+name)
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "delete config: "+err.Error())
+		return
+	}
+	res.WriteHeader(http.StatusNoContent)
+}
+
+type configVersionRow struct {
+	ID        int64  `json:"id"`
+	Hash      string `json:"hash"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+func (c *ConfigService) versions(res http.ResponseWriter, req *http.Request) {
+	name := chi.URLParam(req, "name")
+	vers, err := c.Store.ListConfigVersions(req.Context(), name)
+	if err != nil {
+		if errors.Is(err, store.ErrConfigNotFound) {
+			writeErr(res, http.StatusNotFound, "config not found: "+name)
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "list config versions: "+err.Error())
+		return
+	}
+	rows := make([]configVersionRow, 0, len(vers))
+	for _, v := range vers {
+		rows = append(rows, configVersionRow{ID: v.ID, Hash: v.Hash, CreatedAt: v.CreatedAt})
+	}
+	writeJSON(res, http.StatusOK, map[string]any{"versions": rows})
+}
+
+type rollbackConfigRequest struct {
+	VersionID int64 `json:"version_id"`
+}
+
+func (c *ConfigService) rollback(res http.ResponseWriter, req *http.Request) {
+	name := chi.URLParam(req, "name")
+	var body rollbackConfigRequest
+	dec := json.NewDecoder(http.MaxBytesReader(res, req.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeErr(res, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if body.VersionID <= 0 {
+		writeErr(res, http.StatusBadRequest, "version_id is required")
+		return
+	}
+	hash, err := c.Store.RollbackConfig(req.Context(), name, body.VersionID)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrConfigNotFound):
+			writeErr(res, http.StatusNotFound, "config not found: "+name)
+		case errors.Is(err, store.ErrConfigVersionNotFound):
+			writeErr(res, http.StatusNotFound, "config version not found")
+		default:
+			writeErr(res, http.StatusInternalServerError, "rollback config: "+err.Error())
+		}
+		return
+	}
+	writeJSON(res, http.StatusOK, map[string]any{"name": name, "hash": hash, "rolled_back_to": body.VersionID})
+}
+
+// buildVersion returns the build version string used when writing config
+// rows. It is the running binary's version (buildinfo.Version), overridable
+// in tests via the setBuildVersion helper.
+var buildVersion = func() string { return buildinfo.Version }

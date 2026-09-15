@@ -104,9 +104,12 @@ func (f *fakeClient) SecretList(_ context.Context, _, _ string) ([]string, error
 	return names, nil
 }
 
+// SecretInspect mimics the real Docker API: secret payloads are write-only,
+// so inspect never returns Data (only labels survive). Callers that need to
+// compare content must use the pmcluster.data_hash label.
 func (f *fakeClient) SecretInspect(_ context.Context, name string) (SecretInspectResult, error) {
 	if s, ok := f.secrets[name]; ok {
-		return SecretInspectResult{Labels: s.Labels, Data: s.Data}, nil
+		return SecretInspectResult{Labels: s.Labels}, nil
 	}
 	return SecretInspectResult{}, fmt.Errorf("secret %q not found", name)
 }

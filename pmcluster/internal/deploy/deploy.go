@@ -87,6 +87,9 @@ type Service struct {
 	Store    *store.Store
 	Deployer cluster.StackDeployer
 	Backup   BackupTrigger
+	// Resolver resolves `env: X: config(name)` references against the
+	// DB config store. Nil disables config() resolution (translate error).
+	Resolver manifest.EnvResolver
 }
 
 func (s *Service) Deploy(ctx context.Context, p Payload) (res *DeployResult, retErr error) {
@@ -140,7 +143,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *DeployResult, ret
 		return nil, fmt.Errorf("validate: %w", err)
 	}
 
-	rendered, err := manifest.Translate(app)
+	rendered, err := manifest.TranslateWithResolver(ctx, app, s.Resolver)
 	if err != nil {
 		return nil, fmt.Errorf("translate: %w", err)
 	}

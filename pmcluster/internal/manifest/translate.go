@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -8,6 +9,15 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
 )
+
+// EnvResolver resolves `config(<name>)` references in service env values
+// against the DB-backed config store. Implemented by internal/deploy with a
+// *store.Store; nil means config() refs are rejected at translate time.
+type EnvResolver interface {
+	// ResolveConfig returns the content of a DB config by name.
+	// Errors (e.g. store.ErrConfigNotFound) propagate to the operator.
+	ResolveConfig(ctx context.Context, name string) (string, error)
+}
 
 // Shared external networks ensured by `pmcluster cluster up`; the
 // translator references them with `external: true`.
@@ -34,8 +44,15 @@ const (
 
 // Translate renders a validated, interpolated *dsl.App into compose v3.9
 // YAML. CALLER MUST run Parse → Interpolate → Validate first; Translate
-// does no validation itself.
+// does no validation itself. config() env references require a resolver;
+// pass nil to reject them at translate time.
 func Translate(app *dsl.App) ([]byte, error) {
+	return TranslateWithResolver(context.Background(), app, nil)
+}
+
+// TranslateWithResolver is Translate with DB-backed config resolution for
+// `env: X: config(name)` values.
+func TranslateWithResolver(ctx context.Context, app *dsl.App, res EnvResolver) ([]byte, error) {
 	cf := &composeFile{
 		Version:  "3.9",
 		Services: map[string]*composeService{},
@@ -49,7 +66,11 @@ func Translate(app *dsl.App) ([]byte, error) {
 	usesMonitoringNet := false
 
 	for name, svc := range app.Services {
-		cs := translateService(app, name, svc, privateNet, &usesTraefikNet, &usesMonitoringNet)
+		cs, err := translateService(ctx, app, name, svc, privateNet, res,
+			&usesTraefikNet, &usesMonitoringNet)
+		if err != nil {
+			return nil, err
+		}
 		cf.Services[name] = cs
 	}
 
@@ -71,8 +92,10 @@ func Translate(app *dsl.App) ([]byte, error) {
 	}
 
 	// Collect every secret referenced by any service AND by the top-level
-	// secrets: key.  This way secrets behave like volumes — referenced in a
-	// service → auto-declared at the top compose level with external: true.
+	// secrets: key.  This way secrets behave like volumes — referenced in
+	// a service → auto-declared at the top compose level with external:
+	// true.  Env refs (secrets(name)) are NOT auto-mounted; validation
+	// requires the operator to list the secret in the service secrets: too.
 	secretSet := map[string]struct{}{}
 	for _, svc := range app.Services {
 		for _, s := range svc.Secrets {
@@ -99,17 +122,24 @@ func Translate(app *dsl.App) ([]byte, error) {
 // translateService updates the uses*Net pointers so the top-level
 // networks block matches what services actually reference.
 func translateService(
+	ctx context.Context,
 	app *dsl.App,
 	name string,
 	s *dsl.Service,
 	privateNet string,
+	res EnvResolver,
 	usesTraefikNet, usesMonitoringNet *bool,
-) *composeService {
+) (*composeService, error) {
+	env, err := resolveServiceEnv(ctx, s.Env, res)
+	if err != nil {
+		return nil, fmt.Errorf("services.%s: %w", name, err)
+	}
+
 	cs := &composeService{
 		Image:       s.Image,
 		Command:     s.Command,
 		Entrypoint:  s.Entrypoint,
-		Environment: s.Env,
+		Environment: env,
 		Volumes:     s.Volumes,
 		Secrets:     s.Secrets,
 	}
@@ -127,7 +157,53 @@ func translateService(
 
 	cs.Deploy = translateDeploy(app, name, s)
 
-	return cs
+	return cs, nil
+}
+
+// resolveServiceEnv resolves config()/secrets() env references. Returns the
+// resolved env map.  It does NOT mount anything: validation guarantees the
+// operator listed every secrets(name) used in env in the service's own
+// `secrets:` array (so the /run/secrets/<name> path actually exists).
+//
+//   - config(name): value = config content from the DB (via EnvResolver).
+//     Multi-line content is rejected — compose environment values must be
+//     single-line; file-style content belongs in configs mounted as files.
+//   - secrets(name): value = /run/secrets/<name> (the mounted file path).
+//     The secret must already be mounted via the service secrets: array.
+func resolveServiceEnv(ctx context.Context, env map[string]string, res EnvResolver) (map[string]string, error) {
+	if len(env) == 0 {
+		return env, nil
+	}
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		ref, ok := parseEnvRef(v)
+		if !ok {
+			out[k] = v
+			continue
+		}
+		switch ref.Kind {
+		case "secrets":
+			if ref.Name == "" {
+				return nil, fmt.Errorf("env.%s: secrets() name is empty", k)
+			}
+			out[k] = secretMountPath(ref.Name)
+		case "config":
+			if res == nil {
+				return nil, fmt.Errorf("env.%s: config(%s) requires config resolution (not available)", k, ref.Name)
+			}
+			content, err := res.ResolveConfig(ctx, ref.Name)
+			if err != nil {
+				return nil, fmt.Errorf("env.%s: resolve config(%s): %w", k, ref.Name, err)
+			}
+			if strings.ContainsAny(content, "\r\n") {
+				return nil, fmt.Errorf("env.%s: config(%s) contains newlines — configs injected into env must be single-line; use a file config for multi-line content", k, ref.Name)
+			}
+			out[k] = content
+		default:
+			return nil, fmt.Errorf("env.%s: unknown reference kind %q", k, ref.Kind)
+		}
+	}
+	return out, nil
 }
 
 func translateHealthcheck(s *dsl.Service) *composeHealthcheck {

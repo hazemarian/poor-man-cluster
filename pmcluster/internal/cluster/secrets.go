@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -94,10 +93,17 @@ func EnsureVersionedSecret(ctx context.Context, d docker.Client, baseName string
 	}
 
 	// Reuse the current version when its content matches — no churn.
+	//
+	// NOTE: Docker never returns secret payloads on inspect (secrets are
+	// write-only by design), so payload comparisons against a real daemon
+	// always fail. We compare the pmcluster.data_hash label fingerprint
+	// instead, which is recorded at creation time.
 	if maxVer > 0 {
 		curName := fmt.Sprintf("%s_v%03d", baseName, maxVer)
-		if cur, err := d.SecretInspect(ctx, curName); err == nil && bytes.Equal(cur.Data, data) {
-			return curName, false, nil
+		if cur, err := d.SecretInspect(ctx, curName); err == nil {
+			if h, ok := cur.Labels["pmcluster.data_hash"]; ok && h == dataHash(data) {
+				return curName, false, nil
+			}
 		}
 	}
 
@@ -174,11 +180,17 @@ func EnsureConfig(ctx context.Context, d docker.Client, baseName string, data []
 		}
 	}
 
-	// Content-aware: reuse the current highest version when its bytes match.
+	// Content-aware: reuse the current highest version when its content
+	// matches. Compare the pmcluster.data_hash label fingerprint rather than
+	// the payload bytes — same reason as EnsureVersionedSecret: label-based
+	// comparison works uniformly whether or not the API returns config data,
+	// and keeps secrets/configs consistent.
 	if maxVer > 0 {
 		curName := fmt.Sprintf("%s_v%03d", baseName, maxVer)
-		if cur, err := d.ConfigInspect(ctx, curName); err == nil && bytes.Equal(cur.Data, data) {
-			return curName, false, nil
+		if cur, err := d.ConfigInspect(ctx, curName); err == nil {
+			if h, ok := cur.Labels["pmcluster.data_hash"]; ok && h == dataHash(data) {
+				return curName, false, nil
+			}
 		}
 	}
 

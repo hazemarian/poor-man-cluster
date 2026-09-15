@@ -332,6 +332,45 @@ services:                        # required — one or more services
 
 Substitution: `${app}`, `${env}`, `${version}`, `${registry}`, `${domain}`, plus `${env:VAR}` for OS env. Strict YAML — unknown keys are rejected.
 
+### DB-backed secrets & configs
+
+Beyond plain env values, `env` can reference entries from pmcluster's DB
+stores — managed with `pmcluster secret` / `pmcluster config` or the operator
+console (Secrets / Configs pages):
+
+```yaml
+env:
+  ADMIN_PASS: secrets(app_secret)     # stored secret → mount path /run/secrets/app_secret
+                                      # (must also be listed in the service secrets: array)
+  ADMIN_ENABLED: config(app_config)   # stored config content
+```
+
+- **Secrets** are stored **AES-256-GCM encrypted** in `data.db` (key:
+  `~/.pmcluster/.encryption_key`). The plaintext is shown **once** at creation;
+  afterwards only the **sha256 hash** is displayed (`pmcluster secret
+  list/show/verify`), and the UI lists every secret with its hash — never its
+  value.
+- **Configs** are stored in plain text with a full **version history**
+  (`pmcluster config history` / `rollback`). Editing a config records the
+  previous value; rolling back restores it. UI shows content, history, and a
+  rollback button.
+- Both come in two **scopes**: `cluster` (platform templates and credentials,
+  e.g. the on-disk `~/.pmcluster/config/*.yml` after `pmcluster config import`)
+  and `service` (user-created values referenced from manifests).
+- Deployment resolves `secrets()`/`config()` references against the DB at
+  deploy time — rotate, then re-deploy, and the new value flows in.
+- CLI cheat-sheet:
+  - `pmcluster secret create <name> [value]` / `list` / `show <name>` / `verify <name> <value>` / `delete <name>`
+  - `pmcluster secret import-credentials` — mirror the platform credentials
+    (portainer/edge/traefik/OpenObserve) into the secrets store
+  - `pmcluster config create|list|get|edit|history|rollback <name>`
+  - `pmcluster config import` — one-time import of the on-disk
+    `~/.pmcluster/config/*.yml` templates into the DB
+- REST API: `GET/POST /api/secrets`, `DELETE /api/secrets/{name}`,
+  `GET/POST /api/configs`, `GET/PUT/DELETE /api/configs/{name}`,
+  `GET /api/configs/{name}/versions`, `POST /api/configs/{name}/rollback`
+  (see `docs/openapi.yaml`).
+
 ### Deploy
 
 Locally, on the manager:

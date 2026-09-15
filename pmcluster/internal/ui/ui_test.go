@@ -93,6 +93,45 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/api_keys/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
+
+	// Secrets: GET lists (never payload), POST creates, DELETE removes.
+	mux.HandleFunc("/api/secrets", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			write(w, `{"id":7,"scope":"service","name":"db_pass","hash":"a1b2c3"}`)
+		default:
+			write(w, `{"secrets":[{"id":6,"scope":"cluster","name":"site_cert","hash":"abc123","created_at":60}]}`)
+		}
+	})
+	mux.HandleFunc("/api/secrets/db_pass", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	// Configs: GET list, GET one, POST create, PUT update, DELETE, versions, rollback.
+	mux.HandleFunc("/api/configs", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			write(w, `{"id":3,"scope":"service","name":"nginx_conf","kind":"file","version":"v0.2.30","hash":"h1","created_at":70,"updated_at":70}`)
+		default:
+			write(w, `{"configs":[{"id":2,"scope":"service","name":"app_env","kind":"env","version":"v0.2.30","hash":"h2","created_at":65,"updated_at":66}]}`)
+		}
+	})
+	mux.HandleFunc("/api/configs/nginx_conf", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			write(w, `{"name":"nginx_conf","hash":"h1-new"}`)
+		case http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			write(w, `{"id":3,"scope":"service","name":"nginx_conf","kind":"file","version":"v0.2.30","hash":"h1","created_at":70,"updated_at":70,"content":"worker_processes 4;"}`)
+		}
+	})
+	mux.HandleFunc("/api/configs/nginx_conf/versions", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"versions":[{"id":2,"hash":"h0","created_at":68},{"id":1,"hash":"h-1","created_at":60}]}`)
+	})
+	mux.HandleFunc("/api/configs/nginx_conf/rollback", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"name":"nginx_conf","hash":"h0","rolled_back_to":2}`)
+	})
 	return httptest.NewServer(mux)
 }
 
@@ -400,4 +439,69 @@ func readBody(t *testing.T, resp *http.Response) string {
 		t.Fatalf("read body: %v", err)
 	}
 	return string(b)
+}
+
+// TestSecretsAndConfigs drives the Secrets and Configs controllers: list,
+// create, edit, rollback, delete — exercising every new pmapi method
+// (ListSecrets/CreateSecret/DeleteSecret, ListConfigs/GetConfig/CreateConfig/
+// UpdateConfig/ConfigVersions/RollbackConfig/DeleteConfig).
+func TestSecretsAndConfigs(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	jar := map[string]*http.Cookie{}
+
+	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+
+	assertFragment := func(method, path, body string, want ...string) string {
+		t.Helper()
+		resp := doRequest(t, app, method, path, body, jar)
+		b := readBody(t, resp)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s %s = %d, want 200; body: %s", method, path, resp.StatusCode, b)
+		}
+		for _, w := range want {
+			if !strings.Contains(b, w) {
+				t.Errorf("%s %s missing %q; got: %s", method, path, w, b)
+			}
+		}
+		return b
+	}
+
+	// Secrets page lists stored secrets (hash shown, never payload).
+	assertFragment(http.MethodGet, "/secrets", "", "Secrets", "site_cert", "abc123", "cluster")
+
+	// Create a secret.
+	b := assertFragment(http.MethodPost, "/secrets",
+		"name=db_pass&scope=service&value=topsecret", "Secret db_pass created")
+	if strings.Contains(b, "topsecret") {
+		t.Errorf("secret value leaked back into the rendered page")
+	}
+
+	// Delete a secret.
+	assertFragment(http.MethodPost, "/secrets/remove/db_pass", "", "Deleted secret db_pass.")
+
+	// Configs page lists configs (no content shown by default).
+	assertFragment(http.MethodGet, "/configs", "", "Configs", "app_env", "env")
+
+	// Create a config.
+	assertFragment(http.MethodPost, "/configs",
+		"name=nginx_conf&scope=service&kind=file&content=worker_processes 4;",
+		"Config nginx_conf created", "config(nginx_conf)")
+
+	// Edit form loads content + version history via ?name=.
+	assertFragment(http.MethodGet, "/configs?name=nginx_conf", "", "Edit nginx_conf",
+		"worker_processes 4;", "Version history", "h0")
+
+	// Save a new version.
+	assertFragment(http.MethodPost, "/configs/edit",
+		"name=nginx_conf&content=worker_processes 8;", "Config nginx_conf updated")
+
+	// Rollback to version 2.
+	assertFragment(http.MethodPost, "/configs/rollback/nginx_conf/2", "",
+		"Config nginx_conf rolled back to version 2")
+
+	// Delete the config.
+	assertFragment(http.MethodPost, "/configs/remove/nginx_conf", "", "Deleted config nginx_conf.")
 }
