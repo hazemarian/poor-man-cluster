@@ -28,7 +28,8 @@ not store the plaintext.
 
 Note: this writes directly to ~/.pmcluster/data.db. SQLite WAL mode handles
 concurrent access with a running daemon, but if you suspect corruption you
-can stop pmcluster (brew services stop pmcluster), run this, then restart.`,
+can stop pmcluster (e.g. brew services stop pmcluster on macOS), run this,
+then restart.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runUserCreate,
 }

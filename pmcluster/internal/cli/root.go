@@ -21,10 +21,10 @@ same operations (pmcluster deploy, pmcluster rollback, etc.).
 Bootstrap flow:
 
   1. Operator: install Docker; docker swarm init --advertise-addr <ip>
-  2. Operator: brew install hazemarian/tap/pmcluster
+  2. Operator: install pmcluster — curl -fsSL .../install.sh | bash
   3. Operator: pmcluster init             # local state + admin token
   4. Operator: pmcluster cluster up       # creates secrets/networks, deploys stacks
-  5. Operator: brew services start pmcluster
+  5. Operator: pmcluster serve            # run the daemon (supervise via systemd)
 
 After bootstrap, application deployments arrive via webhook, REST API, or
 the pmcluster deploy CLI command.`,
