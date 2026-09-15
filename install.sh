@@ -190,8 +190,16 @@ UNIT
   # Otherwise the operator needs to run 'pmcluster init' + 'pmcluster cluster up'
   # first — we print the commands and let them decide.
   if [ -f "${PMCLUSTER_HOME}/.pmcluster/config.yaml" ]; then
-    systemctl start pmcluster
-    echo "→ pmcluster started (found existing config at ${PMCLUSTER_HOME}/.pmcluster)"
+    # A new binary was just installed above — restart if the service is already
+    # running so the daemon picks it up (systemctl start is a no-op on an active
+    # unit), otherwise start it fresh.
+    if systemctl is-active --quiet pmcluster; then
+      systemctl restart pmcluster
+      echo "→ pmcluster restarted with the new binary (found existing config at ${PMCLUSTER_HOME}/.pmcluster)"
+    else
+      systemctl start pmcluster
+      echo "→ pmcluster started (found existing config at ${PMCLUSTER_HOME}/.pmcluster)"
+    fi
   else
     echo "→ systemd unit installed but NOT started — run pmcluster init + cluster up first"
   fi
