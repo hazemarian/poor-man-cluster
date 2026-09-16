@@ -222,11 +222,14 @@ func TestClusterUp(t *testing.T) {
 		}
 	})
 
-	// ── Config update: second run updates Docker config objects ───────────
-	// Docker configs are immutable so pmcluster creates a new versioned
-	// name on each run (e.g. pmcluster_otel_config_v002). The compose files
-	// are rendered with the new name and services pick it up on redeploy.
-	t.Run("second cluster up updates docker configs and keeps services healthy", func(t *testing.T) {
+	// ── Config update: second run reuses identical configs ──────────────
+	// Docker configs are immutable, but pmcluster is content-aware: a
+	// second `cluster up` with unchanged inputs must reuse the same
+	// versioned name (e.g. pmcluster_otel_config_v001) rather than churn
+	// a new version every run. Configs/secrets carry a pmcluster.data_hash
+	// label; EnsureConfig reuses the current version when the label hash
+	// matches, and only mints _vNNN+1 when content actually changed.
+	t.Run("second cluster up reuses unchanged configs and keeps services healthy", func(t *testing.T) {
 		// Record current versioned config IDs before re-run (by prefix).
 		configsBefore := map[string]string{}
 		for _, prefix := range []string{"pmcluster_otel_config_v", "pmcluster_traefik_dynamic_v"} {
@@ -245,16 +248,17 @@ func TestClusterUp(t *testing.T) {
 			t.Fatalf("pmcluster cluster up (second run) exited %d:\n%s", code, out2)
 		}
 
-		// Verify config IDs changed (new version created, old GC'd).
+		// Verify config IDs are REUSED (content-aware: unchanged input →
+		// same version, no churn).
 		for _, prefix := range []string{"pmcluster_otel_config_v", "pmcluster_traefik_dynamic_v"} {
 			newID := dockerConfigIDByPrefix(t, ctx, prefix)
 			if newID == "" {
 				t.Fatalf("config with prefix %q not found after re-run", prefix)
 			}
-			if newID == configsBefore[prefix] {
-				t.Errorf("config with prefix %q ID did not change after re-deploy (old=%s, new=%s)", prefix, configsBefore[prefix], newID)
+			if newID != configsBefore[prefix] {
+				t.Errorf("config with prefix %q ID changed on unchanged re-run (old=%s, new=%s) — expected content-aware reuse", prefix, configsBefore[prefix], newID)
 			}
-			t.Logf("After:  config prefix=%s => ID=%s", prefix, newID)
+			t.Logf("After:  config prefix=%s => ID=%s (reused)", prefix, newID)
 		}
 
 		// Services must still be healthy after config update + re-deploy.
@@ -278,6 +282,49 @@ func TestClusterUp(t *testing.T) {
 		}
 		if !strings.Contains(out2, "cluster up complete") {
 			t.Errorf("expected 'cluster up complete' on second run; got:\n%s", out2)
+		}
+	})
+
+	// ── Config update: changed content mints a new version ───────────────────
+	// The flip side of content-aware reuse: when an operator edits a config
+	// template on disk (source of truth), the next `cluster up` must detect
+	// the new content hash and mint a fresh versioned Docker config.
+	t.Run("edited config file mints a new Docker config version", func(t *testing.T) {
+		cfgPath := homeDir + "/.pmcluster/config/otel-collector-config.yml"
+		old, err := os.ReadFile(cfgPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", cfgPath, err)
+		}
+
+		before := dockerConfigIDByPrefix(t, ctx, "pmcluster_otel_config_v")
+		if before == "" {
+			t.Fatalf("otel config not found before edit")
+		}
+
+		// Append a harmless comment to change the content hash.
+		edited := append([]byte("# operator edit — force a new version\n"), old...)
+		if err := os.WriteFile(cfgPath, edited, 0o644); err != nil {
+			t.Fatalf("write %s: %v", cfgPath, err)
+		}
+
+		out3, _, code := runCmdCtx(t, ctx, homeDir, upArgs...)
+		if code != 0 {
+			t.Fatalf("pmcluster cluster up after edit exited %d:\n%s", code, out3)
+		}
+
+		after := dockerConfigIDByPrefix(t, ctx, "pmcluster_otel_config_v")
+		if after == "" {
+			t.Fatalf("otel config not found after edit")
+		}
+		if after == before {
+			t.Errorf("otel config ID did not change after content edit (old=%s, new=%s)", before, after)
+		}
+		t.Logf("otel config rotated: %s → %s", before, after)
+
+		// Services must stay healthy after the config rotation + redeploy.
+		waitServiceHealthy(t, ctx, "observability_otel-collector", 1, 120*time.Second)
+		if !strings.Contains(out3, "cluster up complete") {
+			t.Errorf("expected 'cluster up complete' after edit; got:\n%s", out3)
 		}
 	})
 
