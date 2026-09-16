@@ -19,9 +19,11 @@ import (
 // call then answers "404 page not found" (Traefik's no-router response). Once
 // the router is registered the call succeeds, so a short bounded retry turns a
 // spurious fresh-cluster-up failure into a success. In steady state (long-
-// running OpenObserve) the first attempt just works.
+// running OpenObserve) the first attempt just works. The window is ~60s to
+// cover slow CI runners (image pulls, swarm reconcile) where router
+// registration can lag container health by more than the old 20s budget.
 const (
-	provisionRetryAttempts = 10
+	provisionRetryAttempts = 30
 	provisionRetryDelay    = 2 * time.Second
 )
 
