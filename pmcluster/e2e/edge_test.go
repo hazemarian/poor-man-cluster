@@ -102,6 +102,24 @@ func TestEdgeCombined(t *testing.T) {
 		proxied(t, "/health", http.StatusOK, `"poked_by":"daemon"`)
 	})
 
+	t.Run("local /healthz is answered by the edge itself", func(t *testing.T) {
+		resp, err := client.Get(base + "/healthz")
+		if err != nil {
+			t.Fatalf("GET /healthz: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /healthz status = %d, want 200", resp.StatusCode)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		if !strings.Contains(string(body), `"status":"ok"`) {
+			t.Errorf("GET /healthz body missing status ok; got: %s", body)
+		}
+		if strings.Contains(string(body), "poked_by") {
+			t.Errorf("GET /healthz was proxied to the daemon; must be answered locally: %s", body)
+		}
+	})
+
 	t.Run("proxy reverses /api/me to daemon", func(t *testing.T) {
 		proxied(t, "/api/me", http.StatusOK, `"name":"admin"`)
 	})

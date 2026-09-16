@@ -52,7 +52,7 @@ services:
     networks:
       - traefik-net
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8042/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8042/healthz"]
       interval: 15s
       timeout: 3s
       retries: 3

@@ -147,6 +147,17 @@ func combineProxyAndUI(proxyCfg edgeproxy.Config, app *ui.App) http.Handler {
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 
+	// Local liveness: /healthz is answered by the edge process itself and
+	// never proxied, so the Swarm healthcheck can tell "edge is down" apart
+	// from "daemon is down".  The proxied /health (daemon liveness) is kept
+	// for external monitoring via Traefik.
+	engine.GET("/healthz", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "ok",
+			"edge":   "pmcluster-edge",
+		})
+	})
+
 	// Operator console (gin + HTMX) on this origin.
 	app.Mount(engine)
 
