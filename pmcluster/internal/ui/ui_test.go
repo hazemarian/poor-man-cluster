@@ -119,7 +119,7 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		case http.MethodPost:
 			write(w, `{"id":3,"scope":"service","name":"nginx_conf","kind":"file","version":"v0.2.30","hash":"h1","created_at":70,"updated_at":70}`)
 		default:
-			write(w, `{"configs":[{"id":2,"scope":"service","name":"app_env","kind":"env","version":"v0.2.30","hash":"h2","created_at":65,"updated_at":66}]}`)
+			write(w, `{"configs":[{"id":2,"scope":"service","name":"app_env","kind":"env","version":"v0.2.30","hash":"h2","created_at":65,"updated_at":66},{"id":9,"scope":"cluster","name":"traefik-dynamic","kind":"template","version":"v0.2.40","hash":"h9","rendered":true,"created_at":65,"updated_at":66}]}`)
 		}
 	})
 	mux.HandleFunc("/api/configs/nginx_conf", func(w http.ResponseWriter, r *http.Request) {
@@ -489,7 +489,7 @@ func TestSecretsAndConfigs(t *testing.T) {
 	b := assertFragment(http.MethodGet, "/settings", "",
 		"Settings", "Cluster configs", "Cluster secrets", "site_cert",
 		"••••••••", "Apply to swarm", "Add Config", "Add Secret",
-		"Rendered cluster configs", "traefik-dynamic", "infra-stack")
+		"traefik-dynamic", `hx-get="/settings/rendered/traefik-dynamic"`)
 	if strings.Contains(b, "topsecret") || strings.Contains(b, "abc123") {
 		t.Errorf("secret value or hash leaked into the rendered page")
 	}

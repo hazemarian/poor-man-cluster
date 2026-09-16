@@ -18,25 +18,18 @@ import (
 type Settings struct{ *Controller }
 
 type settingsData struct {
-	APIURL          string
-	EnvAPIURL       string
-	HasToken        bool
-	HasEnvToken     bool
-	Configured      bool
-	Version         string
-	User            string
-	ClusterConfigs  []configRow
-	ClusterSecrets  []secretRow
-	Rendered        []renderedRow
-	RenderedName    string
-	RenderedContent string
-	ApplySummary    string
-	Error           string
-	Msg             string
-}
-
-type renderedRow struct {
-	Name string
+	APIURL         string
+	EnvAPIURL      string
+	HasToken       bool
+	HasEnvToken    bool
+	Configured     bool
+	Version        string
+	User           string
+	ClusterConfigs []configRow
+	ClusterSecrets []secretRow
+	ApplySummary   string
+	Error          string
+	Msg            string
 }
 
 // Page renders the settings fragment with current effective values plus the
@@ -56,15 +49,6 @@ func (c Settings) Page(g *gin.Context) {
 	}
 	if configured {
 		c.loadCluster(g, &d)
-		if rc, err := c.API.ListRenderedConfigs(g.Request.Context()); err != nil {
-			if d.Error == "" {
-				d.Error = err.Error()
-			}
-		} else {
-			for _, cfg := range rc {
-				d.Rendered = append(d.Rendered, renderedRow{Name: cfg.Name})
-			}
-		}
 	}
 	c.Views.Fragment(g, "settings", d)
 }
@@ -410,6 +394,12 @@ func (c Settings) RenderedGet(g *gin.Context) {
 			c.Views.Fragment(g, "settingsrendered", renderedData{Name: cfg.Name, Content: cfg.Content})
 			return
 		}
+	}
+	// The config row lives in the same table; the snapshot may simply not be
+	// recorded yet (fresh install before the first Apply to swarm).
+	if _, err := c.API.GetConfig(g.Request.Context(), name); err == nil {
+		c.Views.Fragment(g, "settingsrendered", renderedData{Name: name, Error: "No rendered snapshot yet — run Apply to swarm first."})
+		return
 	}
 	c.Views.Fragment(g, "settingsrendered", renderedData{Name: name, Error: "config not found"})
 }

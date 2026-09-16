@@ -40,6 +40,7 @@ type configRow struct {
 	Kind      string `json:"kind"`
 	Version   string `json:"version"`
 	Hash      string `json:"hash"`
+	Rendered  bool   `json:"rendered,omitempty"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
 }
@@ -54,7 +55,9 @@ func (c *ConfigService) list(res http.ResponseWriter, req *http.Request) {
 	for _, x := range cfgs {
 		rows = append(rows, configRow{
 			ID: x.ID, Scope: x.Scope, Stack: x.Stack, Name: x.Name, Kind: x.Kind,
-			Version: x.Version, Hash: x.Hash, CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt,
+			Version:  x.Version,
+			Hash:     x.Hash,
+			Rendered: x.RenderedContent != "", CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt,
 		})
 	}
 	writeJSON(res, http.StatusOK, map[string]any{"configs": rows})

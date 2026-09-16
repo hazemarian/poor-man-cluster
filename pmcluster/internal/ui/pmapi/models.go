@@ -208,6 +208,7 @@ type Config struct {
 	Kind      string `json:"kind"`
 	Version   string `json:"version"`
 	Hash      string `json:"hash"`
+	Rendered  bool   `json:"rendered,omitempty"`
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
 	Content   string `json:"content,omitempty"`

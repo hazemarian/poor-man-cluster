@@ -19,6 +19,7 @@ type configRow struct {
 	Kind      string
 	Version   string
 	Hash      string
+	Rendered  bool
 	CreatedAt int64
 	UpdatedAt int64
 	Content   string
@@ -33,7 +34,7 @@ type configVersionRow struct {
 func configRows(cfgs []pmapi.Config) []configRow {
 	out := make([]configRow, 0, len(cfgs))
 	for _, c := range cfgs {
-		out = append(out, configRow{ID: c.ID, Scope: c.Scope, Stack: c.Stack, Name: c.Name, Kind: c.Kind, Version: c.Version, Hash: c.Hash, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt, Content: c.Content})
+		out = append(out, configRow{ID: c.ID, Scope: c.Scope, Stack: c.Stack, Name: c.Name, Kind: c.Kind, Version: c.Version, Hash: c.Hash, Rendered: c.Rendered, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt, Content: c.Content})
 	}
 	return out
 }
