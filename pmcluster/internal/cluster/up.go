@@ -181,6 +181,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		OpenObserveIngestionToken: storedToken,
 		ACMEEmail:                 in.ACMEEmail,
 		ConfigDir:                 in.ConfigDir,
+		ConfigStore:               deps.Store,
 		DataDir:                   filepath.Dir(in.ConfigDir),
 		HostCerts:                 hostCerts,
 		CertSecretName:            certSecret,

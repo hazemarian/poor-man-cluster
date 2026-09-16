@@ -186,6 +186,7 @@ type APIKeyCreated struct {
 type Secret struct {
 	ID        int64  `json:"id"`
 	Scope     string `json:"scope"`
+	Stack     string `json:"stack,omitempty"`
 	Name      string `json:"name"`
 	Hash      string `json:"hash"`
 	CreatedAt int64  `json:"created_at"`
@@ -202,6 +203,7 @@ type SecretValue struct {
 type Config struct {
 	ID        int64  `json:"id"`
 	Scope     string `json:"scope"`
+	Stack     string `json:"stack,omitempty"`
 	Name      string `json:"name"`
 	Kind      string `json:"kind"`
 	Version   string `json:"version"`
@@ -209,6 +211,18 @@ type Config struct {
 	CreatedAt int64  `json:"created_at"`
 	UpdatedAt int64  `json:"updated_at"`
 	Content   string `json:"content,omitempty"`
+}
+
+// UpdateSummary is POST /api/update — the result of re-running `cluster
+// update` from the Settings page (applies edited cluster configs/secrets to
+// the Swarm side).
+type UpdateSummary struct {
+	OTelConfig     string   `json:"otel_config"`
+	TraefikConfig  string   `json:"traefik_config"`
+	CertSecret     string   `json:"cert_secret"`
+	KeySecret      string   `json:"key_secret"`
+	EdgeConfig     string   `json:"edge_config"`
+	StacksDeployed []string `json:"stacks_deployed"`
 }
 
 // ConfigVersion is one history row of GET /api/configs/{name}/versions.

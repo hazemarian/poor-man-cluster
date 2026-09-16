@@ -74,6 +74,7 @@ var configVersionsCmd = &cobra.Command{
 
 func init() {
 	configCreateCmd.Flags().String("scope", "service", "scope: cluster or service")
+	configCreateCmd.Flags().String("stack", "", "stack this config belongs to (service scope only)")
 	configCreateCmd.Flags().String("kind", "file", "kind: template, file, or env")
 	configCreateCmd.Flags().String("value", "", "config content (or pipe via stdin)")
 	configEditCmd.Flags().String("value", "", "new config content (or pipe via stdin)")
@@ -113,6 +114,7 @@ func runConfigCreate(cmd *cobra.Command, args []string) error {
 	default:
 		return fmt.Errorf("kind must be template, file, or env, got %q", kind)
 	}
+	stack, _ := cmd.Flags().GetString("stack")
 	value, err := readConfigValue(cmd.Flag("value").Value.String())
 	if err != nil {
 		return err
@@ -125,7 +127,7 @@ func runConfigCreate(cmd *cobra.Command, args []string) error {
 	defer func() { _ = st.Close() }()
 
 	ver := buildinfo.Version
-	if _, err := st.CreateConfig(cmd.Context(), scope, name, kind, value, ver); err != nil {
+	if _, err := st.CreateConfig(cmd.Context(), scope, stack, name, kind, value, ver); err != nil {
 		if errors.Is(err, store.ErrConfigExists) {
 			return fmt.Errorf("config %q already exists (use `pmcluster config edit %s`)", name, name)
 		}
@@ -143,7 +145,7 @@ func runConfigList(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	cfgs, err := st.ListConfigs(cmd.Context())
+	cfgs, err := st.ListConfigs(cmd.Context(), "", "")
 	if err != nil {
 		return fmt.Errorf("list configs: %w", err)
 	}

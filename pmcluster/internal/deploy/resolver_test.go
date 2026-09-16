@@ -11,7 +11,7 @@ func TestStoreConfigResolver(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("resolves existing config content", func(t *testing.T) {
-		_, err := s.CreateConfig(ctx, "service", "admin_flag", "env", "true", "v0.2.30")
+		_, err := s.CreateConfig(ctx, "service", "", "admin_flag", "env", "true", "v0.2.30")
 		if err != nil {
 			t.Fatalf("CreateConfig: %v", err)
 		}

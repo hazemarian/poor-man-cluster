@@ -149,10 +149,13 @@ Bearer-authenticated `/api/*` router built in `New(Deps)`.
 Services mounted under `/api`:
 - `apikeys.go` — GET/POST `/api_keys`, DELETE `/api_keys/{id}`.
 - `webhooks.go` — GET/POST `/webhooks`, DELETE `/webhooks/{source}`.
-- `secrets.go` — GET/POST `/secrets`, DELETE `/secrets/{name}`,
-  GET `/secrets/{name}/value` (decrypt + reveal).
-- `configs.go` — CRUD `/configs`, `/configs/{name}/versions`,
-  `/configs/{name}/rollback`.
+- `secrets.go` — GET/POST `/secrets` (`?scope=`/`?stack=` filters),
+  PUT/DELETE `/secrets/{name}` (edit value / delete), GET `/secrets/{name}/value`
+  (decrypt + reveal).
+- `configs.go` — CRUD `/configs` (`?scope=`/`?stack=` filters),
+  `/configs/{name}/versions`, `/configs/{name}/rollback`.
+- `update.go` — POST `/api/update` (runs `cluster update` on the daemon;
+  `Deps.Update` closure wired in `cli/serve.go`).
 - `tls.go` — GET/PUT/DELETE `/tls/hosts[/{host}]` (per-host certs, DB-backed).
 - `sitecert.go` — GET/PUT `/tls/site` (cluster's own cert).
 - Also stacks, backups, nodes, me, cluster/info.
@@ -167,8 +170,11 @@ exactly-once, idempotent). Repositories by file:
 - `users.go` — daemon users + v2 API tokens (`pmc_<id>_<secret>`), argon2id.
 - `credentials.go` — platform credentials, AES-GCM ciphertext.
 - `stacks.go`, `webhooks.go`, `registries.go`, `backups.go`, `settings.go`
-  (key/value), `configs.go` + `secrets.go` (migration 0008, DSL-backed),
-  `sitecerts.go` (migration 0009, cert metadata for main + per-host).
+  (key/value), `configs.go` + `secrets.go` (migration 0008, DSL-backed; rows
+  carry `scope` (cluster|service) + `stack` (owning stack, service scope);
+  `ListConfigs`/`ListSecrets` filter by `(scope, stack)`, `UpdateSecret`
+  replaces a value in place), `sitecerts.go` (migration 0009, cert metadata
+  for main + per-host).
 
 ### internal/auth — bearer-token auth
 `Bearer(lookup)` middleware; `auth.User{ID, Name}` on context.
@@ -254,11 +260,20 @@ real-IP extraction from trusted XFF (`RealIP`). `config.go` reads env
 `App` (in `ui.go`) wires: session auth (bcrypt, cookie), `store.Store` on the
 `edge_pmui-data` volume, `pmapi.Client` (talks to the daemon API), views
 renderer + fragment templates. Controllers in `controllers/` (`overview`,
-`stacks`, `webhooks`, `apikeys`, `secrets`, `configs`, `tls`, `backups`,
-`deploy`, `settings`, `auth`). Routes: `/healthz` answered locally, `/login`,
-`/setup`, `/` console pages, everything else reverse-proxied to the daemon.
+`stacks`, `stackconfigs`, `webhooks`, `apikeys`, `tls`, `backups`, `deploy`,
+`settings`, `auth`). Routes: `/healthz` answered locally, `/login`, `/setup`,
+`/` console pages, everything else reverse-proxied to the daemon.
 Templates in `views/templates/` (`app.html` shell + `frag_*.html`).
 `pmapi/` = generated-style REST client for the daemon API (models + methods).
+
+Console organization: **cluster-scope** configs + secrets (the platform's own
+templates/secrets) live on the **Settings** page, which also has the
+**Apply to swarm** button (`POST /api/update`) that re-runs `cluster update`
+so edits reach the swarm side. **Service-scope** configs + secrets for a stack
+live on `/stacks/<name>/config` (reached via the **Config** button in the
+stacks list); create forms prefill the `<stack>_` name prefix and record the
+owning stack. Secret values are revealed on demand with a confirmation prompt
+(`/secrets/reveal/:name`-style routes) and editable via `PUT /api/secrets/{name}`.
 
 ### internal/telemetry + internal/openobserve + internal/backup + internal/logger + internal/buildinfo
 - `telemetry`: OTel SDK init (metrics/traces → OTLP :4318 collector).
@@ -269,8 +284,9 @@ Templates in `views/templates/` (`app.html` shell + `frag_*.html`).
 ### migrations/ + internal/store/migrations.go
 0001 init (users, sessions), 0002 credentials, 0003 stacks/revisions,
 0004 webhooks/registries, 0005 backups, 0006 token_index, 0007 settings,
-0008 configs/config_versions/secrets, 0009 site_certs. `runMigrations` applies
-each once (schema_version table), each in its own transaction.
+0008 configs/config_versions/secrets, 0009 site_certs, 0010 stack columns on
+configs + secrets (service-scope rows carry their owning stack). `runMigrations`
+applies each once (schema_version table), each in its own transaction.
 
 ---
 
@@ -314,9 +330,12 @@ tls, middleware cors-default) so the app is served at
 ### Secrets & configs
 `pmcluster secret create|list|show|verify|delete` and
 `pmcluster config create|list|get|edit|history|rollback` (DB-backed, AES-GCM
-encrypted, sha256 hashes displayed, version history + rollback). Referenced
-from the DSL env via `config(name)` / `secrets(name)`. Console has Secrets +
-Configs pages (hash shown; value revealed on demand).
+encrypted, sha256 hashes displayed, version history + rollback; `create`
+takes `--scope` and `--stack`). Referenced from the DSL env via
+`config(name)` / `secrets(name)`. Console: cluster-scope values live on the
+**Settings** page (edit + **Apply to swarm** via `POST /api/update`);
+service-scope values live on `/stacks/<name>/config`. Hashes shown; values
+revealed on demand with confirmation, and editable in place.
 
 ### Edge proxy behavior
 Public origin → edge container → rate-limit per client IP → shield →

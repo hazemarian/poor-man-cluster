@@ -10,12 +10,15 @@ import (
 	"time"
 )
 
-// ConfigRow is a DB-backed config value (cluster- or service-scoped).
-// Content is the editable value; Version records the pmcluster build that
-// last wrote it; Hash is sha256(content) for change detection.
+// ConfigRow is a DB-backed config value. Scope is "cluster" (cluster-level,
+// applied by `cluster update`; Stack stays "") or "service" (belongs to one
+// application stack, resolved at deploy time). Content is the editable value;
+// Version records the pmcluster build that last wrote it; Hash is
+// sha256(content) for change detection.
 type ConfigRow struct {
 	ID        int64
 	Scope     string
+	Stack     string
 	Name      string
 	Kind      string
 	Content   string
@@ -53,12 +56,12 @@ func ConfigHash(content string) string {
 }
 
 // CreateConfig inserts a new config. Returns ErrConfigExists on name clash.
-func (s *Store) CreateConfig(ctx context.Context, scope, name, kind, content, version string) (int64, error) {
+func (s *Store) CreateConfig(ctx context.Context, scope, stack, name, kind, content, version string) (int64, error) {
 	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO configs (scope, name, kind, content, version, hash, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		scope, name, kind, content, version, ConfigHash(content), now, now,
+		`INSERT INTO configs (scope, stack, name, kind, content, version, hash, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		scope, stack, name, kind, content, version, ConfigHash(content), now, now,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -73,9 +76,9 @@ func (s *Store) CreateConfig(ctx context.Context, scope, name, kind, content, ve
 func (s *Store) GetConfig(ctx context.Context, name string) (*ConfigRow, error) {
 	var c ConfigRow
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, scope, name, kind, content, version, hash, created_at, updated_at
+		`SELECT id, scope, stack, name, kind, content, version, hash, created_at, updated_at
 		 FROM configs WHERE name = ?`, name,
-	).Scan(&c.ID, &c.Scope, &c.Name, &c.Kind, &c.Content,
+	).Scan(&c.ID, &c.Scope, &c.Stack, &c.Name, &c.Kind, &c.Content,
 		&c.Version, &c.Hash, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -86,11 +89,14 @@ func (s *Store) GetConfig(ctx context.Context, name string) (*ConfigRow, error) 
 	return &c, nil
 }
 
-// ListConfigs returns all configs ordered by scope then name.
-func (s *Store) ListConfigs(ctx context.Context) ([]*ConfigRow, error) {
+// ListConfigs returns configs matching the given scope/stack filters (empty
+// string = wildcard), ordered by scope then stack then name.
+func (s *Store) ListConfigs(ctx context.Context, scope, stack string) ([]*ConfigRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, scope, name, kind, content, version, hash, created_at, updated_at
-		 FROM configs ORDER BY scope, name`)
+		`SELECT id, scope, stack, name, kind, content, version, hash, created_at, updated_at
+		 FROM configs
+		 WHERE (?1 = '' OR scope = ?1) AND (?2 = '' OR stack = ?2)
+		 ORDER BY scope, stack, name`, scope, stack)
 	if err != nil {
 		return nil, fmt.Errorf("query configs: %w", err)
 	}
@@ -98,7 +104,7 @@ func (s *Store) ListConfigs(ctx context.Context) ([]*ConfigRow, error) {
 	var out []*ConfigRow
 	for rows.Next() {
 		var c ConfigRow
-		if err := rows.Scan(&c.ID, &c.Scope, &c.Name, &c.Kind, &c.Content,
+		if err := rows.Scan(&c.ID, &c.Scope, &c.Stack, &c.Name, &c.Kind, &c.Content,
 			&c.Version, &c.Hash, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan config: %w", err)
 		}

@@ -2,20 +2,18 @@
 {{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
 {{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
 
-<h1>Settings</h1>
-<p class="sub">The UI talks to the pmcluster daemon over Bearer auth. Anything set here
-takes effect immediately, no restart.</p>
+<h1 style="margin:0 0 4px">Settings</h1>
+<p class="sub">The UI talks to the pmcluster daemon over Bearer auth. Anything set here takes effect immediately, no restart.</p>
 
 <div class="card">
-  <form method="post" action="/settings" hx-post="/settings" hx-target="#view">
+  <h2 style="margin-top:0">Daemon connection</h2>
+  <form method="post" action="/settings" hx-post="/settings" hx-target="#view" hx-swap="innerHTML">
     <label>API base URL</label>
-    <input name="api_url" placeholder="http://host.docker.internal:9090" value="{{.APIURL}}" autocomplete="off">
-    <p class="muted" style="margin:4px 0 0;font-size:12px">Env default: <code>{{.EnvAPIURL}}</code>. Leave the field as-is to keep the env value; empty overrides to blank.</p>
-
-    <label style="margin-top:16px">API token</label>
-    <input name="api_token" type="password" placeholder="pmc_…" value="{{if .HasToken}}•••set•••{{end}}" autocomplete="off">
-    <p class="muted" style="margin:4px 0 0;font-size:12px">Env default token is {{if .HasEnvToken}}configured{{else}}not set{{end}}. Saved overrides persist in the local store.</p>
-
+    <input type="text" name="api_url" placeholder="http://host.docker.internal:9090" value="{{.APIURL}}">
+    <p class="muted" style="margin:4px 0 0">env default <code>{{.EnvAPIURL}}</code></p>
+    <label>API token</label>
+    <input type="password" name="api_token" placeholder="pmc_…" value="{{if .HasToken}}•••set•••{{end}}">
+    <p class="muted" style="margin:4px 0 0">Env default token is {{if .HasEnvToken}}configured{{else}}not set{{end}}.</p>
     <div class="row">
       <button class="btn" type="submit">Save</button>
       {{if .Configured}}<span class="pill good">connected</span>{{else}}<span class="pill warn">not configured</span>{{end}}
@@ -23,11 +21,142 @@ takes effect immediately, no restart.</p>
   </form>
 </div>
 
+{{if .Configured}}
+<div class="card">
+  <h2 style="margin-top:0">Apply to swarm</h2>
+  <p class="sub" style="margin-top:0">Re-runs <code>cluster update</code> on the daemon: content-aware re-render of the platform stacks (Traefik, OTel collector, edge). Cluster configs edited below are picked up here.</p>
+  <button class="btn" type="button" hx-post="/settings/apply" hx-target="#view" hx-swap="innerHTML">Apply to swarm</button>
+  {{if .ApplySummary}}<p class="msg ok" style="white-space:pre">{{.ApplySummary}}</p>{{end}}
+</div>
+
+<h2 style="margin-bottom:0">Cluster configs</h2>
+<div class="card" style="padding:6px 14px">
+  <form hx-post="/settings/configs/add" hx-target="#view" hx-swap="innerHTML">
+    <div class="row" style="align-items:flex-start">
+      <div style="flex:1">
+        <label>Name</label>
+        <input type="text" name="name" placeholder="traefik-dynamic" required>
+      </div>
+      <div style="flex:1">
+        <label>Kind</label>
+        <select name="kind">
+          <option value="template" selected>template</option>
+          <option value="file">file</option>
+          <option value="env">env</option>
+        </select>
+      </div>
+    </div>
+    <label>Content</label>
+    <textarea name="content" rows="4" style="white-space:pre" required></textarea>
+    <div style="margin-top:10px">
+      <button class="btn" type="submit" hx-disabled-elt="this">Create cluster config</button>
+    </div>
+  </form>
+</div>
+
+{{if .Editing}}
+<div class="card">
+  <h2 style="margin-top:0">Edit <code>{{.Editing.Name}}</code></h2>
+  <p class="sub" style="margin-top:0">Scope <code>{{.Editing.Scope}}</code> · kind <code>{{.Editing.Kind}}</code> · hash <code>{{.Editing.Hash}}</code> · updated {{ts .Editing.UpdatedAt}}</p>
+  <form hx-post="/settings/configs/edit" hx-target="#view" hx-swap="innerHTML">
+    <input type="hidden" name="name" value="{{.Editing.Name}}">
+    <label>Content</label>
+    <textarea name="content" rows="8" style="white-space:pre" required>{{.Editing.Content}}</textarea>
+    <div style="margin-top:10px">
+      <button class="btn" type="submit">Save new version</button>
+    </div>
+  </form>
+  {{if .Versions}}
+  <h2 style="margin-bottom:0">Version history</h2>
+  <table>
+    <tr><th>ID</th><th>Hash</th><th>Created</th><th></th></tr>
+    {{range .Versions}}
+    <tr>
+      <td>{{.ID}}</td>
+      <td class="muted"><code>{{.Hash}}</code></td>
+      <td class="muted">{{ts .CreatedAt}}</td>
+      <td style="text-align:right"><button class="btn ghost sm" hx-post="/settings/configs/rollback/{{$.Editing.Name}}/{{.ID}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Roll back {{$.Editing.Name}} to version {{.ID}}?')">Rollback</button></td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+</div>
+{{end}}
+
+<div class="card" style="padding:6px 14px">
+{{if .ClusterConfigs}}
+<table>
+  <tr><th>Name</th><th>Kind</th><th>Version</th><th>SHA-256</th><th>Updated</th><th></th></tr>
+  {{range .ClusterConfigs}}
+  <tr>
+    <td><code>{{.Name}}</code></td>
+    <td>{{.Kind}}</td>
+    <td class="muted">{{.Version}}</td>
+    <td class="muted"><code>{{.Hash}}</code></td>
+    <td class="muted">{{ts .UpdatedAt}}</td>
+    <td style="text-align:right;white-space:nowrap">
+      <button class="btn sm ghost" hx-get="/settings?edit={{.Name}}" hx-target="#view" hx-swap="innerHTML">Edit</button>
+      <button class="btn danger sm" hx-post="/settings/configs/remove/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete config {{.Name}} and its history?')">Delete</button>
+    </td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<div class="empty">No cluster configs yet. Create one above (e.g. a custom <code>traefik-dynamic</code> template) and it becomes the render source for <code>cluster update</code>.</div>
+{{end}}
+</div>
+
+<h2 style="margin-bottom:0">Cluster secrets</h2>
+<div class="card" style="padding:6px 14px">
+  <form hx-post="/settings/secrets/add" hx-target="#view" hx-swap="innerHTML">
+    <div class="row" style="align-items:flex-start">
+      <div style="flex:1">
+        <label>Name</label>
+        <input type="text" name="name" placeholder="registry_password" required>
+      </div>
+    </div>
+    <label>Value</label>
+    <textarea name="value" rows="2" placeholder="super-secret-value" required></textarea>
+    <div style="margin-top:10px">
+      <button class="btn" type="submit" hx-disabled-elt="this">Create cluster secret</button>
+    </div>
+  </form>
+</div>
+
+{{if .RevealName}}
+<div class="card">
+  <h2 style="margin-top:0">Value of <code>{{.RevealName}}</code></h2>
+  <pre id="secret-value">{{.RevealVal}}</pre>
+  <div style="margin-top:8px">
+    <button class="btn sm" type="button" data-copy="{{.RevealVal}}" onclick="copyVal(this)">Copy value</button>
+  </div>
+</div>
+{{end}}
+
+<div class="card" style="padding:6px 14px">
+{{if .ClusterSecrets}}
+<table>
+  <tr><th>Name</th><th>SHA-256</th><th>Created</th><th></th></tr>
+  {{range .ClusterSecrets}}
+  <tr>
+    <td><code>{{.Name}}</code></td>
+    <td class="muted"><code>{{.Hash}}</code></td>
+    <td class="muted">{{ts .CreatedAt}}</td>
+    <td style="text-align:right;white-space:nowrap">
+      <button class="btn sm ghost" hx-get="/settings/secrets/reveal/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Reveal secret {{.Name}}? Its value will be shown in the UI.')">Reveal</button>
+      <button class="btn danger sm" hx-post="/settings/secrets/remove/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete secret {{.Name}}?')">Delete</button>
+    </td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<div class="empty">No cluster secrets yet. Create one above — values are stored AES-256-GCM encrypted; only the hash is listed.</div>
+{{end}}
+</div>
+{{end}}
+
 <div class="card">
   <h2 style="margin-top:0">About</h2>
-  <p class="sub" style="margin:0">pmcluster operator console · version <code>{{.Version}}</code>
-  · signed in as <code>@{{.User}}</code>. Place this image inside the swarm
-  (<code>host.docker.internal:9090</code>) or anywhere on the internet pointing at a
-  reachable pmcluster API.</p>
+  <p class="sub" style="margin-bottom:0">version {{.Version}} · signed in as <code>@{{.User}}</code></p>
 </div>
 {{end}}

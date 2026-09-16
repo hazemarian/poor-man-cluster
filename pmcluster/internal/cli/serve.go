@@ -158,6 +158,21 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				}, cfg.ConfigDir(), buildinfo.Version, domain, certPEM, keyPEM, true)
 			},
 		},
+		Update: &server.UpdateService{
+			Update: func(ctx context.Context) (*cluster.UpdateResult, error) {
+				if cipher == nil {
+					return nil, fmt.Errorf("encryption key unavailable; cannot run cluster update")
+				}
+				return cluster.Update(ctx, cluster.UpdateDeps{
+					Store:       st,
+					Cipher:      cipher,
+					Docker:      dc,
+					Deployer:    deployer,
+					Provisioner: ooProvisioner(st, cipher, io.Discard, cluster.PersistedDomain(ctx, st)),
+					Stdout:      io.Discard,
+				}, cluster.UpdateInput{ConfigDir: cfg.ConfigDir(), Version: buildinfo.Version})
+			},
+		},
 	})
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)

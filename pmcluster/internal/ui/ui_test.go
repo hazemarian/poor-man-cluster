@@ -130,6 +130,9 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/configs/nginx_conf/rollback", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"name":"nginx_conf","hash":"h0","rolled_back_to":2}`)
 	})
+	mux.HandleFunc("/api/update", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"otel_config":"pmcluster_otel_config_v034","traefik_config":"pmcluster_traefik_dynamic_v044","cert_secret":"cert_v041","key_secret":"key_v041","edge_config":"pmcluster_edge_v005","stacks_deployed":["infra"]}`)
+	})
 
 	siteSoon := time.Now().AddDate(0, 0, 10).UTC().Format(time.RFC3339)
 	siteFar := time.Now().AddDate(1, 0, 0).UTC().Format(time.RFC3339)
@@ -439,10 +442,12 @@ func readBody(t *testing.T, resp *http.Response) string {
 	return string(b)
 }
 
-// TestSecretsAndConfigs drives the Secrets and Configs controllers: list,
-// create, edit, rollback, delete — exercising every new pmapi method
-// (ListSecrets/CreateSecret/DeleteSecret, ListConfigs/GetConfig/CreateConfig/
-// UpdateConfig/ConfigVersions/RollbackConfig/DeleteConfig).
+// TestSecretsAndConfigs drives the Settings cluster-scope sections and the
+// per-stack config page: list, create, edit, rollback, delete, secret reveal
+// (with confirmation) and the apply-to-swarm update — exercising every new
+// pmapi method (ListSecrets/CreateSecret/UpdateSecret/DeleteSecret/
+// RevealSecret, ListConfigs/GetConfig/CreateConfig/UpdateConfig/
+// ConfigVersions/RollbackConfig/DeleteConfig, TriggerUpdate).
 func TestSecretsAndConfigs(t *testing.T) {
 	daemon := fakeDaemon(t)
 	defer daemon.Close()
@@ -467,42 +472,78 @@ func TestSecretsAndConfigs(t *testing.T) {
 		return b
 	}
 
-	assertFragment(http.MethodGet, "/secrets", "", "Secrets", "site_cert", "abc123", "cluster")
+	// Settings surfaces the cluster-scope configs + secrets + apply button.
+	b := assertFragment(http.MethodGet, "/settings", "",
+		"Settings", "Cluster configs", "Cluster secrets", "site_cert", "abc123",
+		"Apply to swarm")
+	if strings.Contains(b, "topsecret") {
+		t.Errorf("secret value leaked into the rendered page")
+	}
 
-	b := assertFragment(http.MethodPost, "/secrets",
-		"name=db_pass&scope=service&value=topsecret", "Secret db_pass created")
+	// Cluster config lifecycle.
+	assertFragment(http.MethodPost, "/settings/configs/add",
+		"name=nginx_conf&kind=file&content=worker_processes 4;",
+		"Config nginx_conf created")
+
+	assertFragment(http.MethodGet, "/settings?edit=nginx_conf", "",
+		"Edit <code>nginx_conf</code>", "worker_processes 4;", "Version history", "h0")
+
+	assertFragment(http.MethodPost, "/settings/configs/edit",
+		"name=nginx_conf&content=worker_processes 8;", "Config nginx_conf updated")
+
+	assertFragment(http.MethodPost, "/settings/configs/rollback/nginx_conf/2", "",
+		"Config nginx_conf rolled back to version 2")
+
+	// Cluster secret lifecycle — value never leaks; reveal requires confirm.
+	b = assertFragment(http.MethodPost, "/settings/secrets/add",
+		"name=db_pass&value=topsecret", "Secret db_pass created")
 	if strings.Contains(b, "topsecret") {
 		t.Errorf("secret value leaked back into the rendered page")
 	}
 
-	assertFragment(http.MethodPost, "/secrets/remove/db_pass", "", "Deleted secret db_pass.")
-
-	assertFragment(http.MethodGet, "/secrets/reveal/db_pass", "",
+	assertFragment(http.MethodGet, "/settings/secrets/reveal/db_pass", "",
 		"Value of", "the-decrypted-value", "Copy value")
 
-	assertFragment(http.MethodGet, "/secrets?stack=demo", "", "Attaching to stack",
-		`value="demo_"`)
-	assertFragment(http.MethodGet, "/configs?stack=demo", "", "Attaching to stack",
-		`value="demo_"`)
+	assertFragment(http.MethodGet, "/settings", "",
+		`onclick="return confirm('Reveal secret site_cert`)
 
-	assertFragment(http.MethodGet, "/stacks", "", "demo", "+ Config", "+ Secret")
+	assertFragment(http.MethodPost, "/settings/secrets/remove/db_pass", "", "Deleted secret db_pass.")
 
-	assertFragment(http.MethodGet, "/configs", "", "Configs", "app_env", "env")
+	// Apply to swarm triggers a cluster update via the daemon.
+	assertFragment(http.MethodPost, "/settings/apply", "",
+		"Cluster update applied", "infra")
 
-	assertFragment(http.MethodPost, "/configs",
-		"name=nginx_conf&scope=service&kind=file&content=worker_processes 4;",
-		"Config nginx_conf created", "config(nginx_conf)")
+	// Per-stack config & secrets page.
+	assertFragment(http.MethodGet, "/stacks/demo/config", "",
+		"Config &amp; secrets", "demo", "app_env")
 
-	assertFragment(http.MethodGet, "/configs?name=nginx_conf", "", "Edit nginx_conf",
-		"worker_processes 4;", "Version history", "h0")
+	assertFragment(http.MethodPost, "/stacks/demo/configs/add",
+		"name=demo_nginx_conf&kind=file&content=worker_processes 4;",
+		"Config demo_nginx_conf created for stack demo")
 
-	assertFragment(http.MethodPost, "/configs/edit",
+	assertFragment(http.MethodGet, "/stacks/demo/config?edit=nginx_conf", "",
+		"Edit <code>nginx_conf</code>", "worker_processes 4;", "h0")
+
+	assertFragment(http.MethodPost, "/stacks/demo/configs/edit",
 		"name=nginx_conf&content=worker_processes 8;", "Config nginx_conf updated")
 
-	assertFragment(http.MethodPost, "/configs/rollback/nginx_conf/2", "",
-		"Config nginx_conf rolled back to version 2")
+	assertFragment(http.MethodPost, "/stacks/demo/configs/remove/nginx_conf", "",
+		"Deleted config nginx_conf.")
 
-	assertFragment(http.MethodPost, "/configs/remove/nginx_conf", "", "Deleted config nginx_conf.")
+	b = assertFragment(http.MethodPost, "/stacks/demo/secrets/add",
+		"name=demo_db&value=topsecret", "Secret demo_db created for stack demo")
+	if strings.Contains(b, "topsecret") {
+		t.Errorf("secret value leaked into the rendered page")
+	}
+
+	assertFragment(http.MethodGet, "/stacks/demo/secrets/reveal/db_pass", "",
+		"the-decrypted-value")
+
+	assertFragment(http.MethodGet, "/stacks/demo/config", "",
+		`onclick="return confirm('Reveal secret`)
+
+	assertFragment(http.MethodPost, "/stacks/demo/secrets/remove/db_pass", "",
+		"Deleted secret db_pass.")
 }
 
 func TestTLSMainAndHosts(t *testing.T) {

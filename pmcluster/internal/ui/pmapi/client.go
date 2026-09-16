@@ -294,20 +294,30 @@ func (c *Client) DeleteAPIKey(ctx context.Context, id int64) error {
 	return c.do(ctx, http.MethodDelete, fmt.Sprintf("/api_keys/%d", id), nil, nil)
 }
 
-// ListSecrets returns every stored secret (name, scope, hash — never payload).
-func (c *Client) ListSecrets(ctx context.Context) ([]Secret, error) {
+// ListSecrets returns the stored secrets matching scope and stack (empty
+// values match everything). Payload is never returned.
+func (c *Client) ListSecrets(ctx context.Context, scope, stack string) ([]Secret, error) {
 	var body struct {
 		Secrets []Secret `json:"secrets"`
 	}
-	err := c.do(ctx, http.MethodGet, "/secrets", nil, &body)
+	err := c.do(ctx, http.MethodGet, "/secrets?scope="+url.QueryEscape(scope)+"&stack="+url.QueryEscape(stack), nil, &body)
 	return body.Secrets, err
 }
 
 // CreateSecret stores a secret payload (encrypted at rest) and returns its row.
-func (c *Client) CreateSecret(ctx context.Context, scope, name, value string) (*Secret, error) {
-	body := map[string]string{"scope": scope, "name": name, "value": value}
+func (c *Client) CreateSecret(ctx context.Context, scope, stack, name, value string) (*Secret, error) {
+	body := map[string]string{"scope": scope, "stack": stack, "name": name, "value": value}
 	var out Secret
 	err := c.do(ctx, http.MethodPost, "/secrets", body, &out)
+	return &out, err
+}
+
+// UpdateSecret replaces a stored secret's payload (the value is encrypted at
+// rest; the row's scope/stack/name are preserved).
+func (c *Client) UpdateSecret(ctx context.Context, name, value string) (*Secret, error) {
+	body := map[string]string{"value": value}
+	var out Secret
+	err := c.do(ctx, http.MethodPut, "/secrets/"+url.PathEscape(name), body, &out)
 	return &out, err
 }
 
@@ -324,12 +334,13 @@ func (c *Client) RevealSecret(ctx context.Context, name string) (*SecretValue, e
 	return &out, err
 }
 
-// ListConfigs returns every stored config (without content).
-func (c *Client) ListConfigs(ctx context.Context) ([]Config, error) {
+// ListConfigs returns the stored configs matching scope and stack (empty
+// values match everything), without content.
+func (c *Client) ListConfigs(ctx context.Context, scope, stack string) ([]Config, error) {
 	var body struct {
 		Configs []Config `json:"configs"`
 	}
-	err := c.do(ctx, http.MethodGet, "/configs", nil, &body)
+	err := c.do(ctx, http.MethodGet, "/configs?scope="+url.QueryEscape(scope)+"&stack="+url.QueryEscape(stack), nil, &body)
 	return body.Configs, err
 }
 
@@ -341,8 +352,8 @@ func (c *Client) GetConfig(ctx context.Context, name string) (*Config, error) {
 }
 
 // CreateConfig stores a config value.
-func (c *Client) CreateConfig(ctx context.Context, scope, name, kind, content string) (*Config, error) {
-	body := map[string]string{"scope": scope, "name": name, "kind": kind, "content": content}
+func (c *Client) CreateConfig(ctx context.Context, scope, stack, name, kind, content string) (*Config, error) {
+	body := map[string]string{"scope": scope, "stack": stack, "name": name, "kind": kind, "content": content}
 	var out Config
 	err := c.do(ctx, http.MethodPost, "/configs", body, &out)
 	return &out, err
@@ -375,5 +386,13 @@ func (c *Client) RollbackConfig(ctx context.Context, name string, versionID int6
 	body := map[string]any{"version_id": versionID}
 	var out Config
 	err := c.do(ctx, http.MethodPost, "/configs/"+url.PathEscape(name)+"/rollback", body, &out)
+	return &out, err
+}
+
+// TriggerUpdate re-runs `cluster update` on the daemon (applies edited cluster
+// configs/secrets to the Swarm side) and returns the result summary.
+func (c *Client) TriggerUpdate(ctx context.Context) (*UpdateSummary, error) {
+	var out UpdateSummary
+	err := c.do(ctx, http.MethodPost, "/update", nil, &out)
 	return &out, err
 }

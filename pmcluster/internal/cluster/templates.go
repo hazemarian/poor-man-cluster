@@ -17,6 +17,7 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
 // embeddedStacks holds the source-of-truth bundled compose and config files.
@@ -121,6 +122,15 @@ type RenderInput struct {
 	// If the disk file is missing it falls back to the embedded version.
 	ConfigDir string
 
+	// ConfigStore is the daemon's store. When set, cluster-scope template
+	// configs recorded in the DB (scope "cluster", kind "template", stamped
+	// with the current build version) are the authoritative source for the
+	// platform config files — they are consulted BEFORE the disk copy and the
+	// embedded default, so editing a cluster config in the console and running
+	// `cluster update` re-renders + re-deploys the affected stack. Rows whose
+	// version does not match buildinfo.Version are stale and skipped.
+	ConfigStore *store.Store
+
 	// DataDir is ~/.pmcluster/ — the parent of ConfigDir. Substituted as
 	// ${DATA_DIR} in compose files (the backup stack bind-mounts it into the
 	// control-plane backup agent so pmcluster's own state rides along in the
@@ -158,11 +168,22 @@ type RenderInput struct {
 	EdgeImage string
 }
 
-// readConfigFile loads a named file. When in.ConfigDir is set the disk
-// copy at <ConfigDir>/<name> wins (if readable). Otherwise — or on any
-// disk error — the embedded fallback is used. Applies to stacks AND
-// standalone configs.
+// readConfigFile loads a named file. Resolution order:
+//  1. A cluster-scope template config in the DB whose name matches the file
+//     (basename without ".yml"), scope is "cluster", kind is "template" and
+//     version equals the current build version (ConfigStore set + row found).
+//  2. The disk copy at <ConfigDir>/<name> (when ConfigDir is set and readable).
+//  3. The embedded fallback.
+//
+// Applies to stacks AND standalone configs.
 func readConfigFile(name string, in RenderInput) (string, error) {
+	if in.ConfigStore != nil {
+		cfgName := strings.TrimSuffix(name, ".yml")
+		if row, err := in.ConfigStore.GetConfig(context.Background(), cfgName); err == nil &&
+			row.Scope == "cluster" && row.Kind == "template" && row.Version == buildinfo.Version {
+			return row.Content, nil
+		}
+	}
 	if in.ConfigDir != "" {
 		path := filepath.Join(in.ConfigDir, name)
 		if data, err := os.ReadFile(path); err == nil {

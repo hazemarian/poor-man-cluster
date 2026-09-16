@@ -576,6 +576,19 @@ paths:
       operationId: listSecrets
       security:
         - bearerAuth: []
+      parameters:
+        - name: scope
+          in: query
+          required: false
+          description: Filter by scope (cluster or service). Empty returns both.
+          schema:
+            type: string
+        - name: stack
+          in: query
+          required: false
+          description: Filter by owning stack (service-scope secrets). Empty returns all stacks.
+          schema:
+            type: string
       responses:
         "200":
           description: Secret metadata rows
@@ -607,6 +620,9 @@ paths:
                   type: string
                   enum: [cluster, service]
                   default: service
+                stack:
+                  type: string
+                  description: Owning stack (only valid for service scope)
                 value:
                   type: string
       responses:
@@ -621,6 +637,43 @@ paths:
         "409":
           description: A secret with that name already exists
   /api/secrets/{name}:
+    put:
+      summary: Update a secret's value (keeps scope, stack and name)
+      operationId: updateSecret
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value:
+                  type: string
+      responses:
+        "200":
+          description: Updated — returns name and new hash
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  hash:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Secret not found
     delete:
       summary: Delete a secret
       operationId: deleteSecret
@@ -645,6 +698,19 @@ paths:
       operationId: listConfigs
       security:
         - bearerAuth: []
+      parameters:
+        - name: scope
+          in: query
+          required: false
+          description: Filter by scope (cluster or service). Empty returns both.
+          schema:
+            type: string
+        - name: stack
+          in: query
+          required: false
+          description: Filter by owning stack (service-scope configs). Empty returns all stacks.
+          schema:
+            type: string
       responses:
         "200":
           description: Config metadata rows
@@ -676,6 +742,9 @@ paths:
                   type: string
                   enum: [cluster, service]
                   default: service
+                stack:
+                  type: string
+                  description: Owning stack (only valid for service scope)
                 kind:
                   type: string
                   enum: [template, file, env]
@@ -693,6 +762,36 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "409":
           description: A config with that name already exists
+  /api/update:
+    post:
+      summary: Trigger a content-aware cluster update (re-applies the platform stacks)
+      operationId: triggerUpdate
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Update summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  otel_config:
+                    type: string
+                  traefik_config:
+                    type: string
+                  cert_secret:
+                    type: string
+                  key_secret:
+                    type: string
+                  edge_config:
+                    type: string
+                  stacks_deployed:
+                    type: array
+                    items:
+                      type: string
+        "500":
+          description: Cluster update failed
   /api/configs/{name}:
     get:
       summary: Get a config including its content
@@ -1163,6 +1262,9 @@ components:
         scope:
           type: string
           enum: [cluster, service]
+        stack:
+          type: string
+          description: owning stack (service scope only); empty for cluster scope
         name:
           type: string
         hash:
@@ -1180,6 +1282,9 @@ components:
         scope:
           type: string
           enum: [cluster, service]
+        stack:
+          type: string
+          description: owning stack (service scope only); empty for cluster scope
         name:
           type: string
         kind:

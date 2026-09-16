@@ -110,6 +110,18 @@ func (a *App) Mount(engine *gin.Engine) {
 	g.POST("/stacks/:name/rollback", st.Rollback)
 	g.GET("/stacks/:name/backups", st.ShowBackups)
 
+	// Per-stack configs + secrets: service-scope rows belonging to that stack.
+	scc := controllers.StackConfigs{Controller: a.ctrl}
+	g.GET("/stacks/:name/config", scc.Page)
+	g.POST("/stacks/:name/configs/add", scc.AddConfig)
+	g.POST("/stacks/:name/configs/edit", scc.EditConfig)
+	g.POST("/stacks/:name/configs/rollback/:config_name/:version_id", scc.RollbackConfig)
+	g.POST("/stacks/:name/configs/remove/:config_name", scc.RemoveConfig)
+	g.POST("/stacks/:name/secrets/add", scc.AddSecret)
+	g.POST("/stacks/:name/secrets/edit", scc.EditSecret)
+	g.POST("/stacks/:name/secrets/remove/:secret_name", scc.RemoveSecret)
+	g.GET("/stacks/:name/secrets/reveal/:secret_name", scc.RevealSecret)
+
 	bk := controllers.Backups{Controller: a.ctrl}
 	g.GET("/backups", bk.List)
 	g.POST("/backups", bk.Create)
@@ -121,6 +133,17 @@ func (a *App) Mount(engine *gin.Engine) {
 	stt := controllers.Settings{Controller: a.ctrl}
 	g.GET("/settings", stt.Page)
 	g.POST("/settings", stt.Save)
+	// Cluster-scope configs + secrets live in Settings; "Apply to swarm"
+	// re-runs the cluster update so edits reach the swarm side.
+	g.POST("/settings/configs/add", stt.AddConfig)
+	g.POST("/settings/configs/edit", stt.EditConfig)
+	g.POST("/settings/configs/rollback/:name/:version_id", stt.RollbackConfig)
+	g.POST("/settings/configs/remove/:name", stt.RemoveConfig)
+	g.POST("/settings/secrets/add", stt.AddSecret)
+	g.POST("/settings/secrets/edit", stt.EditSecret)
+	g.POST("/settings/secrets/remove/:name", stt.RemoveSecret)
+	g.GET("/settings/secrets/reveal/:name", stt.RevealSecret)
+	g.POST("/settings/apply", stt.Apply)
 
 	tlsC := controllers.TLS{Controller: a.ctrl}
 	g.GET("/tls", tlsC.Page)
@@ -137,19 +160,6 @@ func (a *App) Mount(engine *gin.Engine) {
 	g.GET("/apikeys", ak.Page)
 	g.POST("/apikeys", ak.Add)
 	g.POST("/apikeys/remove/:id", ak.Remove)
-
-	sc := controllers.Secrets{Controller: a.ctrl}
-	g.GET("/secrets", sc.Page)
-	g.POST("/secrets", sc.Add)
-	g.GET("/secrets/reveal/:name", sc.Reveal)
-	g.POST("/secrets/remove/:name", sc.Remove)
-
-	cf := controllers.Configs{Controller: a.ctrl}
-	g.GET("/configs", cf.Page)
-	g.POST("/configs", cf.Add)
-	g.POST("/configs/edit", cf.Edit)
-	g.POST("/configs/remove/:name", cf.Remove)
-	g.POST("/configs/rollback/:name/:version_id", cf.Rollback)
 }
 
 // Handler returns a gin engine with every UI route. The edge service mounts

@@ -24,6 +24,7 @@ type SecretService struct {
 func (s *SecretService) Mount(r chi.Router) {
 	r.Get("/secrets", s.list)
 	r.Post("/secrets", s.create)
+	r.Put("/secrets/{name}", s.update)
 	r.Delete("/secrets/{name}", s.remove)
 	r.Get("/secrets/{name}/value", s.value)
 }
@@ -31,20 +32,22 @@ func (s *SecretService) Mount(r chi.Router) {
 type secretRow struct {
 	ID        int64  `json:"id"`
 	Scope     string `json:"scope"`
+	Stack     string `json:"stack,omitempty"`
 	Name      string `json:"name"`
 	Hash      string `json:"hash"`
 	CreatedAt int64  `json:"created_at"`
 }
 
 func (s *SecretService) list(res http.ResponseWriter, req *http.Request) {
-	secs, err := s.Store.ListSecrets(req.Context())
+	secs, err := s.Store.ListSecrets(req.Context(),
+		req.URL.Query().Get("scope"), req.URL.Query().Get("stack"))
 	if err != nil {
 		writeErr(res, http.StatusInternalServerError, "list secrets: "+err.Error())
 		return
 	}
 	rows := make([]secretRow, 0, len(secs))
 	for _, x := range secs {
-		rows = append(rows, secretRow{ID: x.ID, Scope: x.Scope, Name: x.Name, Hash: x.Hash, CreatedAt: x.CreatedAt})
+		rows = append(rows, secretRow{ID: x.ID, Scope: x.Scope, Stack: x.Stack, Name: x.Name, Hash: x.Hash, CreatedAt: x.CreatedAt})
 	}
 	writeJSON(res, http.StatusOK, map[string]any{"secrets": rows})
 }
@@ -52,6 +55,7 @@ func (s *SecretService) list(res http.ResponseWriter, req *http.Request) {
 type createSecretRequest struct {
 	Name  string `json:"name"`
 	Scope string `json:"scope"`
+	Stack string `json:"stack"`
 	Value string `json:"value"`
 }
 
@@ -65,6 +69,7 @@ func (s *SecretService) create(res http.ResponseWriter, req *http.Request) {
 	}
 	name := strings.TrimSpace(body.Name)
 	scope := strings.TrimSpace(body.Scope)
+	stack := strings.TrimSpace(body.Stack)
 	if name == "" {
 		writeErr(res, http.StatusBadRequest, "name is required")
 		return
@@ -74,6 +79,10 @@ func (s *SecretService) create(res http.ResponseWriter, req *http.Request) {
 	}
 	if scope != "cluster" && scope != "service" {
 		writeErr(res, http.StatusBadRequest, "scope must be 'cluster' or 'service'")
+		return
+	}
+	if stack != "" && scope != "service" {
+		writeErr(res, http.StatusBadRequest, "stack is only valid for service-scope secrets")
 		return
 	}
 	if body.Value == "" {
@@ -86,7 +95,7 @@ func (s *SecretService) create(res http.ResponseWriter, req *http.Request) {
 		writeErr(res, http.StatusInternalServerError, "encrypt secret: "+err.Error())
 		return
 	}
-	id, err := s.Store.CreateSecret(req.Context(), scope, name, payload, store.SecretHash(body.Value))
+	id, err := s.Store.CreateSecret(req.Context(), scope, stack, name, payload, store.SecretHash(body.Value))
 	if err != nil {
 		if errors.Is(err, store.ErrSecretExists) {
 			writeErr(res, http.StatusConflict, "secret already exists: "+name)
@@ -96,8 +105,47 @@ func (s *SecretService) create(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(res, http.StatusCreated, map[string]any{
-		"id": id, "scope": scope, "name": name, "hash": store.SecretHash(body.Value),
+		"id": id, "scope": scope, "stack": stack, "name": name, "hash": store.SecretHash(body.Value),
 	})
+}
+
+type updateSecretRequest struct {
+	Value string `json:"value"`
+}
+
+// update replaces a stored secret's value (new ciphertext + hash), keeping its
+// scope, stack, name and creation time. 404 when the secret is unknown.
+func (s *SecretService) update(res http.ResponseWriter, req *http.Request) {
+	name := chi.URLParam(req, "name")
+	if name == "" {
+		writeErr(res, http.StatusBadRequest, "secret name is required")
+		return
+	}
+	var body updateSecretRequest
+	dec := json.NewDecoder(http.MaxBytesReader(res, req.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeErr(res, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if body.Value == "" {
+		writeErr(res, http.StatusBadRequest, "value is required")
+		return
+	}
+	payload, err := s.Cipher.Encrypt([]byte(body.Value))
+	if err != nil {
+		writeErr(res, http.StatusInternalServerError, "encrypt secret: "+err.Error())
+		return
+	}
+	if err := s.Store.UpdateSecret(req.Context(), name, payload, store.SecretHash(body.Value)); err != nil {
+		if errors.Is(err, store.ErrSecretNotFound) {
+			writeErr(res, http.StatusNotFound, "secret not found: "+name)
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "update secret: "+err.Error())
+		return
+	}
+	writeJSON(res, http.StatusOK, map[string]any{"name": name, "hash": store.SecretHash(body.Value)})
 }
 
 // remove deletes a secret by name.

@@ -118,6 +118,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		OpenObserveIngestionToken: ooTokenPlain,
 		ACMEEmail:                 state.ACMEEmail,
 		ConfigDir:                 in.ConfigDir,
+		ConfigStore:               deps.Store,
 		DataDir:                   filepath.Dir(in.ConfigDir),
 		EdgeImage:                 EdgeImageFor(),
 	}

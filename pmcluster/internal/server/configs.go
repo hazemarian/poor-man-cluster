@@ -35,6 +35,7 @@ func (c *ConfigService) Mount(r chi.Router) {
 type configRow struct {
 	ID        int64  `json:"id"`
 	Scope     string `json:"scope"`
+	Stack     string `json:"stack,omitempty"`
 	Name      string `json:"name"`
 	Kind      string `json:"kind"`
 	Version   string `json:"version"`
@@ -44,7 +45,7 @@ type configRow struct {
 }
 
 func (c *ConfigService) list(res http.ResponseWriter, req *http.Request) {
-	cfgs, err := c.Store.ListConfigs(req.Context())
+	cfgs, err := c.Store.ListConfigs(req.Context(), req.URL.Query().Get("scope"), req.URL.Query().Get("stack"))
 	if err != nil {
 		writeErr(res, http.StatusInternalServerError, "list configs: "+err.Error())
 		return
@@ -52,7 +53,7 @@ func (c *ConfigService) list(res http.ResponseWriter, req *http.Request) {
 	rows := make([]configRow, 0, len(cfgs))
 	for _, x := range cfgs {
 		rows = append(rows, configRow{
-			ID: x.ID, Scope: x.Scope, Name: x.Name, Kind: x.Kind,
+			ID: x.ID, Scope: x.Scope, Stack: x.Stack, Name: x.Name, Kind: x.Kind,
 			Version: x.Version, Hash: x.Hash, CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt,
 		})
 	}
@@ -61,6 +62,7 @@ func (c *ConfigService) list(res http.ResponseWriter, req *http.Request) {
 
 type createConfigRequest struct {
 	Scope   string `json:"scope"`
+	Stack   string `json:"stack"`
 	Name    string `json:"name"`
 	Kind    string `json:"kind"`
 	Content string `json:"content"`
@@ -77,6 +79,7 @@ func (c *ConfigService) create(res http.ResponseWriter, req *http.Request) {
 	name := strings.TrimSpace(body.Name)
 	scope := strings.TrimSpace(body.Scope)
 	kind := strings.TrimSpace(body.Kind)
+	stack := strings.TrimSpace(body.Stack)
 	if name == "" {
 		writeErr(res, http.StatusBadRequest, "name is required")
 		return
@@ -88,6 +91,10 @@ func (c *ConfigService) create(res http.ResponseWriter, req *http.Request) {
 		writeErr(res, http.StatusBadRequest, "scope must be 'cluster' or 'service'")
 		return
 	}
+	if stack != "" && scope != "service" {
+		writeErr(res, http.StatusBadRequest, "stack is only valid for service-scope configs")
+		return
+	}
 	if kind == "" {
 		kind = "file"
 	}
@@ -96,7 +103,7 @@ func (c *ConfigService) create(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	id, err := c.Store.CreateConfig(req.Context(), scope, name, kind, body.Content, buildVersion())
+	id, err := c.Store.CreateConfig(req.Context(), scope, stack, name, kind, body.Content, buildVersion())
 	if err != nil {
 		if errors.Is(err, store.ErrConfigExists) {
 			writeErr(res, http.StatusConflict, "config already exists: "+name)
@@ -106,7 +113,7 @@ func (c *ConfigService) create(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(res, http.StatusCreated, map[string]any{
-		"id": id, "scope": scope, "name": name, "kind": kind,
+		"id": id, "scope": scope, "stack": stack, "name": name, "kind": kind,
 		"hash": store.ConfigHash(body.Content),
 	})
 }

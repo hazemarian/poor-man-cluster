@@ -17,8 +17,7 @@
     <td class="muted">{{ts .UpdatedAt}}</td>
     <td style="text-align:right; white-space:nowrap">
       <a class="btn sm ghost" href="/stacks/{{.Name}}" hx-get="/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">Details</a>
-      <a class="btn sm ghost" href="/configs?stack={{.Name}}" hx-get="/configs?stack={{.Name}}" hx-target="#view" hx-push-url="true">+ Config</a>
-      <a class="btn sm ghost" href="/secrets?stack={{.Name}}" hx-get="/secrets?stack={{.Name}}" hx-target="#view" hx-push-url="true">+ Secret</a>
+      <a class="btn sm ghost" href="/stacks/{{.Name}}/config" hx-get="/stacks/{{.Name}}/config" hx-target="#view" hx-push-url="true">Config</a>
     </td>
   </tr>
   {{end}}

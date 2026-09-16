@@ -69,6 +69,7 @@ var secretDeleteCmd = &cobra.Command{
 
 func init() {
 	secretCreateCmd.Flags().String("scope", "service", "scope: cluster or service")
+	secretCreateCmd.Flags().String("stack", "", "stack this secret belongs to (service scope only)")
 	secretCmd.AddCommand(secretCreateCmd, secretListCmd, secretShowCmd, secretVerifyCmd, secretDeleteCmd)
 	rootCmd.AddCommand(secretCmd)
 }
@@ -108,6 +109,7 @@ func runSecretCreate(cmd *cobra.Command, args []string) error {
 	default:
 		return fmt.Errorf("scope must be cluster or service, got %q", scope)
 	}
+	stack, _ := cmd.Flags().GetString("stack")
 
 	st, cfg, err := openStore()
 	if err != nil {
@@ -125,7 +127,7 @@ func runSecretCreate(cmd *cobra.Command, args []string) error {
 	}
 	hash := secretHash(value)
 
-	if _, err := st.CreateSecret(cmd.Context(), scope, name, ct, hash); err != nil {
+	if _, err := st.CreateSecret(cmd.Context(), scope, stack, name, ct, hash); err != nil {
 		if errors.Is(err, store.ErrSecretExists) {
 			return fmt.Errorf("secret %q already exists", name)
 		}
@@ -155,7 +157,7 @@ func runSecretList(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	secrets, err := st.ListSecrets(cmd.Context())
+	secrets, err := st.ListSecrets(cmd.Context(), "", "")
 	if err != nil {
 		return fmt.Errorf("list secrets: %w", err)
 	}

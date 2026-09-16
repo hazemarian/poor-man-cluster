@@ -337,7 +337,7 @@ Substitution: `${app}`, `${env}`, `${version}`, `${registry}`, `${domain}`, plus
 
 Beyond plain env values, `env` can reference entries from pmcluster's DB
 stores — managed with `pmcluster secret` / `pmcluster config` or the operator
-console (Secrets / Configs pages):
+console:
 
 ```yaml
 env:
@@ -351,26 +351,33 @@ env:
   afterwards only the **sha256 hash** is displayed (`pmcluster secret
   list/show/verify`), and the UI lists every secret with its hash — never its
   value. An authenticated operator can still **decrypt a value on demand**
-  (`GET /api/secrets/{name}/value`, or the *Reveal* button in the console)
-  when they need to rotate a value elsewhere.
+  (`GET /api/secrets/{name}/value`, or the *Reveal* button in the console,
+  which asks for confirmation first) when they need to rotate a value
+  elsewhere. Values can also be **edited** in place (`PUT /api/secrets/{name}`)
+  without recreating the secret.
 - **Configs** are stored in plain text with a full **version history**
   (`pmcluster config history` / `rollback`). Editing a config records the
   previous value; rolling back restores it. UI shows content, history, and a
   rollback button.
-- Both come in two **scopes**: `cluster` (platform templates and credentials)
-  and `service` (user-created values referenced from manifests).
-- The stack list offers per-row **+ Config** / **+ Secret** buttons that jump
-  to the corresponding page with the create form prefilled for that stack
-  (`?stack=<name>`), so attaching values to a specific app is two clicks.
-- Deployment resolves `secrets()`/`config()` references against the DB at
-  deploy time — rotate, then re-deploy, and the new value flows in.
-- CLI cheat-sheet:
-  - `pmcluster secret create <name> [value]` / `list` / `show <name>` / `verify <name> <value>` / `delete <name>`
-  - `pmcluster config create|list|get|edit|history|rollback <name>`
-- REST API: `GET/POST /api/secrets`, `DELETE /api/secrets/{name}`,
-  `GET/POST /api/configs`, `GET/PUT/DELETE /api/configs/{name}`,
-  `GET /api/configs/{name}/versions`, `POST /api/configs/{name}/rollback`
-  (see `docs/openapi.yaml`).
+- Both come in two **scopes**:
+  - **`cluster`** — the platform's own templates and secrets. These live in the
+    **Settings** page in the console. Editing a cluster config re-stamps it
+    with the current binary version, so the platform stacks render from it on
+    the next update; the **Apply to swarm** button (`POST /api/update`) runs
+    `cluster update` immediately so the change reaches the swarm side.
+  - **`service`** — values belonging to one stack, reached from the stacks
+    list via the **Config** button (page `/stacks/<name>/config`). Create
+    forms prefill the `<stack>_` name prefix and record the owning stack.
+- CLI cheat-sheet (both `create` commands accept `--stack <name>` for
+  service-scope values):
+  - `pmcluster secret create <name> [value] [--scope cluster|service] [--stack <name>]` / `list` / `show <name>` / `verify <name> <value>` / `delete <name>`
+  - `pmcluster config create|list|get|edit|history|rollback <name> [--scope ...] [--stack <name>]`
+- REST API: `GET/POST /api/secrets` (`?scope=`/`?stack=` filters),
+  `PUT/DELETE /api/secrets/{name}`, `GET /api/secrets/{name}/value`,
+  `GET/POST /api/configs` (`?scope=`/`?stack=` filters),
+  `GET/PUT/DELETE /api/configs/{name}`, `GET /api/configs/{name}/versions`,
+  `POST /api/configs/{name}/rollback`, and `POST /api/update` (apply platform
+  config to the swarm) — see `docs/openapi.yaml`.
 
 ### Deploy
 

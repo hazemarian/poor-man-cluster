@@ -58,6 +58,11 @@ type Deps struct {
 	// certificate under /api/tls/site. Optional; when nil those routes are
 	// omitted.
 	SiteCert *SiteCertService
+
+	// Update exposes POST /api/update, which re-runs `cluster update`
+	// (content-aware re-apply of the platform stacks). Optional; when nil
+	// the route is omitted.
+	Update *UpdateService
 }
 
 func New(d Deps) http.Handler {
@@ -110,6 +115,9 @@ func New(d Deps) http.Handler {
 		}
 		if d.SiteCert != nil {
 			d.SiteCert.Mount(r)
+		}
+		if d.Update != nil {
+			d.Update.Mount(r)
 		}
 		if d.Store != nil && d.Cipher != nil {
 			(&WebhookService{Store: d.Store, Cipher: d.Cipher}).Mount(r)

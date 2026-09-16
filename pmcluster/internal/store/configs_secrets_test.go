@@ -11,7 +11,7 @@ func TestConfigsCRUD(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("create + get roundtrip", func(t *testing.T) {
-		id, err := s.CreateConfig(ctx, "cluster", "traefik_dynamic", "template",
+		id, err := s.CreateConfig(ctx, "cluster", "", "traefik_dynamic", "template",
 			"http:\n  middlewares:\n    cors-default:\n      cors:\n        allowOrigins:\n          - \"https://example.com\"\n", "v0.2.30")
 		if err != nil {
 			t.Fatalf("CreateConfig: %v", err)
@@ -36,7 +36,7 @@ func TestConfigsCRUD(t *testing.T) {
 	})
 
 	t.Run("duplicate name returns ErrConfigExists", func(t *testing.T) {
-		_, err := s.CreateConfig(ctx, "cluster", "traefik_dynamic", "template", "x", "v0.2.30")
+		_, err := s.CreateConfig(ctx, "cluster", "", "traefik_dynamic", "template", "x", "v0.2.30")
 		if !errors.Is(err, ErrConfigExists) {
 			t.Errorf("CreateConfig dup err = %v, want ErrConfigExists", err)
 		}
@@ -50,10 +50,10 @@ func TestConfigsCRUD(t *testing.T) {
 	})
 
 	t.Run("list orders by scope then name", func(t *testing.T) {
-		_, _ = s.CreateConfig(ctx, "service", "nginx_conf", "file", "server {}", "v0.2.30")
-		_, _ = s.CreateConfig(ctx, "cluster", "otel_collector", "template", "receivers: {}", "v0.2.30")
+		_, _ = s.CreateConfig(ctx, "service", "", "nginx_conf", "file", "server {}", "v0.2.30")
+		_, _ = s.CreateConfig(ctx, "cluster", "", "otel_collector", "template", "receivers: {}", "v0.2.30")
 
-		cfgs, err := s.ListConfigs(ctx)
+		cfgs, err := s.ListConfigs(ctx, "", "")
 		if err != nil {
 			t.Fatalf("ListConfigs: %v", err)
 		}
@@ -74,7 +74,7 @@ func TestConfigUpdateVersionsRollback(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.CreateConfig(ctx, "service", "app_conf", "env", "LOG_LEVEL=info", "v0.2.30")
+	_, err := s.CreateConfig(ctx, "service", "", "app_conf", "env", "LOG_LEVEL=info", "v0.2.30")
 	if err != nil {
 		t.Fatalf("CreateConfig: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestConfigUpdateVersionsRollback(t *testing.T) {
 	})
 
 	t.Run("rollback with foreign version id fails", func(t *testing.T) {
-		_, _ = s.CreateConfig(ctx, "service", "other_conf", "file", "a", "v0.2.30")
+		_, _ = s.CreateConfig(ctx, "service", "", "other_conf", "file", "a", "v0.2.30")
 
 		appVers, _ := s.ListConfigVersions(ctx, "app_conf")
 		if len(appVers) > 0 {
@@ -158,7 +158,7 @@ func TestConfigDelete(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.CreateConfig(ctx, "service", "gone", "file", "x", "v0.2.30")
+	_, err := s.CreateConfig(ctx, "service", "", "gone", "file", "x", "v0.2.30")
 	if err != nil {
 		t.Fatalf("CreateConfig: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestSecretsCRUD(t *testing.T) {
 
 	t.Run("create + get roundtrip", func(t *testing.T) {
 		payload := []byte("\x01\x02\x03nonce+seal\x04")
-		id, err := s.CreateSecret(ctx, "service", "db_password", payload, "abc123hash")
+		id, err := s.CreateSecret(ctx, "service", "", "db_password", payload, "abc123hash")
 		if err != nil {
 			t.Fatalf("CreateSecret: %v", err)
 		}
@@ -211,7 +211,7 @@ func TestSecretsCRUD(t *testing.T) {
 	})
 
 	t.Run("duplicate name returns ErrSecretExists", func(t *testing.T) {
-		_, err := s.CreateSecret(ctx, "service", "db_password", []byte("x"), "h")
+		_, err := s.CreateSecret(ctx, "service", "", "db_password", []byte("x"), "h")
 		if !errors.Is(err, ErrSecretExists) {
 			t.Errorf("CreateSecret dup err = %v, want ErrSecretExists", err)
 		}
@@ -225,10 +225,10 @@ func TestSecretsCRUD(t *testing.T) {
 	})
 
 	t.Run("list excludes payload", func(t *testing.T) {
-		_, _ = s.CreateSecret(ctx, "cluster", "cert_nextrum", []byte("c"), "h1")
-		_, _ = s.CreateSecret(ctx, "service", "api_token", []byte("t"), "h2")
+		_, _ = s.CreateSecret(ctx, "cluster", "", "cert_nextrum", []byte("c"), "h1")
+		_, _ = s.CreateSecret(ctx, "service", "", "api_token", []byte("t"), "h2")
 
-		secrets, err := s.ListSecrets(ctx)
+		secrets, err := s.ListSecrets(ctx, "", "")
 		if err != nil {
 			t.Fatalf("ListSecrets: %v", err)
 		}
