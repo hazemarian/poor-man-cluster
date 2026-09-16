@@ -1,0 +1,74 @@
+# Real-cluster e2e — runs SEPARATELY from the main build gate.
+#
+# These tests boot a full Docker Swarm (cluster up, deploy pipeline, webhook,
+# secrets/configs) and are slow + resource-heavy. They run on every push/PR
+# that touches pmcluster code, but their result never blocks anything:
+# deployments (release.yml on tags) and the main CI gate (pmcluster.yml:
+# lint + build + unit tests + fast e2e) are completely independent of this
+# workflow.
+name: swarm-e2e
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pmcluster/**"
+      - ".github/workflows/swarm-e2e.yml"
+  pull_request:
+    paths:
+      - "pmcluster/**"
+      - ".github/workflows/swarm-e2e.yml"
+
+jobs:
+  swarm-e2e:
+    name: cluster up + deploy + webhook e2e (real swarm)
+    runs-on: ubuntu-latest
+    env:
+      # `secrets` can't be referenced in `if:` expressions, so expose the
+      # token's presence via a job env and gate the login step on it.
+      GH_PUSH: ${{ secrets.GH_Token != '' }}
+      # Pin where docker stores registry credentials so the e2e harness
+      # (which runs pmcluster with HOME=<temp>) can find them via
+      # DOCKER_CONFIG passthrough.  Must match the login step below.
+      DOCKER_CONFIG: /home/runner/.docker
+    defaults:
+      run:
+        working-directory: pmcluster
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: pmcluster/go.sum
+
+      # ubuntu-latest already has Docker + the docker CLI installed; no
+      # privileged container needed since we run dockerd on the host.
+      #
+      # The edge stack references ghcr.io/nextrum-sy/pmcluster-edge:latest
+      # (published by the release workflow), so log in to GHCR so the swarm
+      # can pull it during `cluster up`.  logout: false keeps the
+      # credentials around for the swarm e2e step that follows.
+      - name: Log in to GHCR
+        if: env.GH_PUSH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.GH_USER }}
+          password: ${{ secrets.GH_Token }}
+          logout: false
+
+      # The cluster up OpenObserve provisioner reaches OO over the public edge
+      # (https://observ.<domain>).  In CI the domain is example.test with no
+      # public DNS, so map it to localhost (Traefik listens on :443) and let
+      # the provisioner skip TLS verification for the self-signed e2e cert.
+      - name: Map observ.example.test to localhost
+        run: echo "127.0.0.1 observ.example.test" | sudo tee -a /etc/hosts
+
+      - name: swarm e2e
+        env:
+          PMCLUSTER_E2E_SWARM: "1"
+          PMCLUSTER_OO_INSECURE: "1"
+        run: make e2e
