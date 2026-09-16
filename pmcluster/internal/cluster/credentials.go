@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
@@ -283,73 +282,6 @@ func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedC
 		}
 	}
 
-	return &ManagedCredential{
-		Name:               existing.Name,
-		Kind:               CredentialKind(existing.Kind),
-		Username:           existing.Username,
-		Password:           password,
-		SwarmSecretName:    existing.SwarmSecretName,
-		NewlyCreated:       false,
-		SwarmSecretCreated: true,
-	}, nil
-}
-
-// Set re-encrypts a managed credential with the given plaintext value and
-// reconciles the matching stores so they all agree: the credential row, the
-// DB secrets row (console reveal) when one exists, and the Swarm secret
-// (created only when missing — Docker secrets are immutable while mounted).
-//
-// Unlike Rotate it neither mints a new password nor force-restarts the
-// consuming service. Use it to align a credential with a password that was
-// set out-of-band (e.g. an app's first-boot password) or to fix a
-// credential/secret divergence. Use Rotate when the password itself must
-// change end-to-end.
-func (m *CredentialsManager) Set(ctx context.Context, name, password string) (*ManagedCredential, error) {
-	if name == "openobserve_token" {
-		return nil, fmt.Errorf("cannot set %q: it is an ingestion token, not a managed credential", name)
-	}
-	if name == "edge_api_token" {
-		return nil, fmt.Errorf("cannot set %q: it is the daemon Bearer token for the %q user; changing it would break the edge console's API access", name, edgeAPITokenUser)
-	}
-	if strings.TrimSpace(password) == "" {
-		return nil, fmt.Errorf("password: required")
-	}
-
-	existing, err := m.Store.GetCredential(ctx, name)
-	if err != nil {
-		return nil, fmt.Errorf("lookup %s: %w", name, err)
-	}
-
-	ciphertext, err := m.Cipher.Encrypt([]byte(password))
-	if err != nil {
-		return nil, fmt.Errorf("encrypt: %w", err)
-	}
-	if err := m.Store.RotateCredential(ctx, name, ciphertext); err != nil {
-		return nil, fmt.Errorf("update credential row: %w", err)
-	}
-
-	secretUpdated := false
-	if m.Docker != nil {
-		spec, ok := specFor(name, existing)
-		if !ok {
-			return nil, fmt.Errorf("set %s: no spec for credential kind %q", name, existing.Kind)
-		}
-		payload, err := serialisePassword(spec, existing.Username, password)
-		if err != nil {
-			return nil, err
-		}
-		exists, err := m.Docker.SecretExists(ctx, existing.SwarmSecretName)
-		if err != nil {
-			return nil, fmt.Errorf("check swarm secret %s: %w", existing.SwarmSecretName, err)
-		}
-		if !exists {
-			if _, err := EnsureSecret(ctx, m.Docker, existing.SwarmSecretName, payload); err != nil {
-				return nil, fmt.Errorf("create swarm secret %s: %w", existing.SwarmSecretName, err)
-			}
-			secretUpdated = true
-		}
-	}
-
 	if _, err := m.Store.GetSecret(ctx, existing.SwarmSecretName); err == nil {
 		if err := m.Store.UpdateSecret(ctx, existing.SwarmSecretName, ciphertext, store.SecretHash(password)); err != nil {
 			return nil, fmt.Errorf("update db secret %s: %w", existing.SwarmSecretName, err)
@@ -365,7 +297,7 @@ func (m *CredentialsManager) Set(ctx context.Context, name, password string) (*M
 		Password:           password,
 		SwarmSecretName:    existing.SwarmSecretName,
 		NewlyCreated:       false,
-		SwarmSecretCreated: secretUpdated,
+		SwarmSecretCreated: true,
 	}, nil
 }
 

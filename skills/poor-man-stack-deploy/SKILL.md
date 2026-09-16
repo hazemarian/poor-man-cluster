@@ -494,7 +494,6 @@ Manual `docker service update --image ... edge_pmcluster-edge` is NOT the suppor
 pmcluster credentials list                 # all managed bootstrap passwords
 pmcluster credentials show portainer       # show a specific one
 pmcluster credentials show edge_admin      # the operator console login password
-pmcluster credentials set portainer VALUE  # sync credential + Swarm secret + console secrets row to a known value
 pmcluster credentials rotate portainer     # generate + apply a new password
 ```
 

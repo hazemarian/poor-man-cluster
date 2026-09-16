@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -42,23 +41,6 @@ Names: traefik_dashboard | portainer | openobserve_admin`,
 	RunE: runCredsShow,
 }
 
-var credsSetCmd = &cobra.Command{
-	Use:   "set <name> [value]",
-	Short: "Set a credential's password to a known value (syncs DB, Swarm secret, console secrets row)",
-	Long: `Re-encrypts the stored credential with the given value and reconciles
-the matching stores: the credential row, the console secrets row (so
-reveal matches), and the Swarm secret (created only when missing —
-Docker secrets are immutable while mounted).
-
-Use it to align a credential with a password set out-of-band (for
-example Portainer's first-boot password) or to repair a divergence
-between the stored credential and the Swarm secret.
-
-Names: traefik_dashboard | portainer | openobserve_admin`,
-	Args: cobra.RangeArgs(1, 2),
-	RunE: runCredsSet,
-}
-
 var credsRotateCmd = &cobra.Command{
 	Use:   "rotate <name>",
 	Short: "Generate a new password, swap the Swarm secret, restart the consuming service",
@@ -75,7 +57,7 @@ Names: traefik_dashboard | portainer | openobserve_admin`,
 }
 
 func init() {
-	credsCmd.AddCommand(credsListCmd, credsShowCmd, credsSetCmd, credsRotateCmd)
+	credsCmd.AddCommand(credsListCmd, credsShowCmd, credsRotateCmd)
 	rootCmd.AddCommand(credsCmd)
 }
 
@@ -138,66 +120,6 @@ func runCredsShow(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(cmd.OutOrStdout(),
 		"name:           %s\nkind:           %s\nusername:       %s\nswarm secret:   %s\npassword:       %s\n",
 		c.Name, c.Kind, c.Username, c.SwarmSecretName, string(plain))
-	return nil
-}
-
-func runCredsSet(cmd *cobra.Command, args []string) error {
-	name := strings.TrimSpace(args[0])
-	if name == "" {
-		return errors.New("name: required")
-	}
-	value := ""
-	if len(args) > 1 {
-		value = args[1]
-	}
-	value, err := readSecretValue(cmd, value)
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(value) == "" {
-		return errors.New("password: required")
-	}
-
-	st, cfg, err := openStore()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = st.Close() }()
-
-	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
-	if err != nil {
-		return fmt.Errorf("open encryption key: %w", err)
-	}
-	dc, err := docker.New()
-	if err != nil {
-		return fmt.Errorf("docker client: %w", err)
-	}
-	defer func() { _ = dc.Close() }()
-
-	mgr := &cluster.CredentialsManager{
-		Store:    st,
-		Cipher:   cipher,
-		Docker:   dc,
-		Deployer: cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
-	}
-	updated, err := mgr.Set(cmd.Context(), name, value)
-	if err != nil {
-		if errors.Is(err, store.ErrCredentialNotFound) {
-			return fmt.Errorf("credential %q not found (try `pmcluster credentials list`)", name)
-		}
-		return err
-	}
-
-	note := ""
-	if !updated.SwarmSecretCreated {
-		note = "\n   (swarm secret left unchanged — Docker secrets are immutable while\n    mounted; use `pmcluster credentials rotate` to change it end-to-end)"
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), `
-✅ Credential %q synced to the new value.
-
-   user:   %s
-   secret: %s%s
-`, updated.Name, updated.Username, updated.SwarmSecretName, note)
 	return nil
 }
 
