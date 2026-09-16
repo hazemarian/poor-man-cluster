@@ -156,6 +156,8 @@ func (a *App) Mount(engine *gin.Engine) {
 
 	tlsC := controllers.TLS{Controller: a.ctrl}
 	g.GET("/tls", tlsC.Page)
+	g.GET("/tls/site/new", tlsC.SiteNew)
+	g.GET("/tls/hosts/new", tlsC.HostNew)
 	g.POST("/tls", tlsC.Add)
 	g.POST("/tls/site", tlsC.SetSite)
 	g.POST("/tls/remove/:host", tlsC.Remove)

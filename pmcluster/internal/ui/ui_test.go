@@ -587,10 +587,32 @@ func TestTLSMainAndHosts(t *testing.T) {
 	for _, want := range []string{
 		"Main certificate", "nextrum-sy.com", "expires soon",
 		"Per-host certificates", "idlebbookfair.com",
-		"Upload / renew main certificate",
+		"Upload / renew", "Add certificate",
 	} {
 		if !strings.Contains(b, want) {
 			t.Errorf("tls page missing %q; got: %s", want, b)
+		}
+	}
+
+	resp = doRequest(t, app, http.MethodGet, "/tls/site/new", "", jar)
+	b = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /tls/site/new = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+	for _, want := range []string{"Upload / renew main certificate", `hx-post="/tls/site"`, `name="cert"`, `name="key"`} {
+		if !strings.Contains(b, want) {
+			t.Errorf("tls site form missing %q; got: %s", want, b)
+		}
+	}
+
+	resp = doRequest(t, app, http.MethodGet, "/tls/hosts/new", "", jar)
+	b = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /tls/hosts/new = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+	for _, want := range []string{"Add a per-host certificate", `hx-post="/tls"`, `name="host"`} {
+		if !strings.Contains(b, want) {
+			t.Errorf("tls host form missing %q; got: %s", want, b)
 		}
 	}
 
@@ -607,6 +629,9 @@ func TestTLSMainAndHosts(t *testing.T) {
 	resp = doRequest(t, app, http.MethodPost, "/tls/site",
 		"cert=-----BEGIN CERTIFICATE-----", jar)
 	b = readBody(t, resp)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("POST /tls/site missing key = %d, want 422; body: %s", resp.StatusCode, b)
+	}
 	if !strings.Contains(b, "Certificate and private key are both required.") {
 		t.Errorf("tls site missing-field error absent; got: %s", b)
 	}

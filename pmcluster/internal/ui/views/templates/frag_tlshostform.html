@@ -1,0 +1,17 @@
+{{define "tlshostform"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+<h2>Add a per-host certificate</h2>
+<p class="sub">A customer's own domain and its certificate. Stored as versioned Swarm secrets (<code>hostcert-&lt;host&gt;_vNNN</code> / <code>hostkey-&lt;host&gt;_vNNN</code>) with a DB metadata row — the same table and flow as the main certificate.</p>
+<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()">
+  <label>Host</label>
+  <input name="host" type="text" value="{{.Host}}" required placeholder="idlibookfair.com" autofocus>
+  <label>Certificate (PEM)</label>
+  <textarea name="cert" rows="8" required placeholder="-----BEGIN CERTIFICATE-----">{{.Cert}}</textarea>
+  <label>Private key (PEM)</label>
+  <textarea name="key" rows="8" required placeholder="-----BEGIN PRIVATE KEY-----">{{.Key}}</textarea>
+  <div class="row">
+    <button class="btn" type="submit">Store certificate</button>
+    <button class="btn ghost" type="button" onclick="closeModal()">Cancel</button>
+  </div>
+</form>
+{{end}}

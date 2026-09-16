@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"net/http"
 	"net/url"
 	"strconv"
 	"time"
@@ -34,6 +35,21 @@ type tlsData struct {
 	Hosts []tlsRow
 	Error string
 	Msg   string
+}
+
+type tlsSiteFormData struct {
+	Action string
+	Cert   string
+	Key    string
+	Error  string
+}
+
+type tlsHostFormData struct {
+	Action string
+	Host   string
+	Cert   string
+	Key    string
+	Error  string
 }
 
 type tlsSiteRow struct {
@@ -149,13 +165,46 @@ func (c TLS) Page(g *gin.Context) {
 	c.Views.Fragment(g, "tls", d)
 }
 
-// SetSite replaces the cluster's own (default) certificate.
+// SiteNew renders the modal form for uploading/renewing the main certificate.
+func (c TLS) SiteNew(g *gin.Context) {
+	d := tlsSiteFormData{Action: "/tls/site"}
+	if _, _, configured := c.loadParams(g.Request.Context()); !configured {
+		d.Error = "pmcluster API not configured. Open Settings first."
+	}
+	c.Views.Fragment(g, "tlssiteform", d)
+}
+
+// HostNew renders the modal form for adding a per-host certificate.
+func (c TLS) HostNew(g *gin.Context) {
+	d := tlsHostFormData{Action: "/tls"}
+	if _, _, configured := c.loadParams(g.Request.Context()); !configured {
+		d.Error = "pmcluster API not configured. Open Settings first."
+	}
+	c.Views.Fragment(g, "tlshostform", d)
+}
+
+func (c TLS) tlsSiteFormError(g *gin.Context, d tlsSiteFormData) {
+	g.Header("HX-Retarget", "#modal-body")
+	g.Status(http.StatusUnprocessableEntity)
+	c.Views.Fragment(g, "tlssiteform", d)
+}
+
+func (c TLS) tlsHostFormError(g *gin.Context, d tlsHostFormData) {
+	g.Header("HX-Retarget", "#modal-body")
+	g.Status(http.StatusUnprocessableEntity)
+	c.Views.Fragment(g, "tlshostform", d)
+}
+
+// SetSite replaces the cluster's own (default) certificate. On validation or
+// API failure the modal form is re-rendered (HX-Retarget) so the operator can
+// correct the input; on success the page fragment replaces #view and the
+// modal closes.
 func (c TLS) SetSite(g *gin.Context) {
 	ctx := g.Request.Context()
 	_, _, configured := c.loadParams(ctx)
-	d := tlsData{}
 	cert := g.PostForm("cert")
 	key := g.PostForm("key")
+	d := tlsSiteFormData{Action: "/tls/site", Cert: cert, Key: key}
 
 	switch {
 	case !configured:
@@ -167,22 +216,24 @@ func (c TLS) SetSite(g *gin.Context) {
 		if err != nil {
 			d.Error = err.Error()
 		} else {
-			d.Msg = "Site certificate for " + sc.Domain + " updated and Traefik refreshed."
+			page := tlsData{Msg: "Site certificate for " + sc.Domain + " updated and Traefik refreshed."}
+			c.fetch(g, &page)
+			c.Views.Fragment(g, "tls", page)
+			return
 		}
 	}
-
-	c.fetch(g, &d)
-	c.Views.Fragment(g, "tls", d)
+	c.tlsSiteFormError(g, d)
 }
 
-// Add stores a per-host certificate submitted as text.
+// Add stores a per-host certificate submitted as text. Same modal-error flow
+// as SetSite.
 func (c TLS) Add(g *gin.Context) {
 	ctx := g.Request.Context()
 	_, _, configured := c.loadParams(ctx)
-	d := tlsData{}
 	host := g.PostForm("host")
 	cert := g.PostForm("cert")
 	key := g.PostForm("key")
+	d := tlsHostFormData{Action: "/tls", Host: host, Cert: cert, Key: key}
 
 	switch {
 	case !configured:
@@ -193,12 +244,13 @@ func (c TLS) Add(g *gin.Context) {
 		if _, err := c.API.AddHostCert(ctx, host, cert, key); err != nil {
 			d.Error = err.Error()
 		} else {
-			d.Msg = "Certificate for " + host + " stored and Traefik refreshed."
+			page := tlsData{Msg: "Certificate for " + host + " stored and Traefik refreshed."}
+			c.fetch(g, &page)
+			c.Views.Fragment(g, "tls", page)
+			return
 		}
 	}
-
-	c.fetch(g, &d)
-	c.Views.Fragment(g, "tls", d)
+	c.tlsHostFormError(g, d)
 }
 
 // Remove deletes a per-host certificate.

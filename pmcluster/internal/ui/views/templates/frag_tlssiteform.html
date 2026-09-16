@@ -1,0 +1,15 @@
+{{define "tlssiteform"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+<h2>Upload / renew main certificate</h2>
+<p class="sub">The cluster's own default certificate, served for the cluster domain and any host without its own cert. Validated, stored as versioned Swarm secrets and applied to Traefik.</p>
+<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()">
+  <label>Certificate (PEM)</label>
+  <textarea name="cert" rows="8" required placeholder="-----BEGIN CERTIFICATE-----">{{.Cert}}</textarea>
+  <label>Private key (PEM)</label>
+  <textarea name="key" rows="8" required placeholder="-----BEGIN PRIVATE KEY-----">{{.Key}}</textarea>
+  <div class="row">
+    <button class="btn" type="submit">Store certificate</button>
+    <button class="btn ghost" type="button" onclick="closeModal()">Cancel</button>
+  </div>
+</form>
+{{end}}
