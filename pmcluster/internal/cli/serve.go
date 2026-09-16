@@ -173,6 +173,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				}, cluster.UpdateInput{ConfigDir: cfg.ConfigDir(), Version: buildinfo.Version})
 			},
 		},
+		Rendered: &server.RenderedConfigService{Store: st},
 	})
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)

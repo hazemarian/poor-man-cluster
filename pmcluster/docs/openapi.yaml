@@ -821,6 +821,31 @@ paths:
                       type: string
         "500":
           description: Cluster update failed
+  /api/cluster/rendered:
+    get:
+      summary: Stored rendered platform configs (post-substitution YAML sent to the Swarm, snapshotted into the database by every cluster update, read-only)
+      operationId: listRenderedConfigs
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Rendered configs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        content:
+                          type: string
+        "500":
+          description: Render failed
   /api/configs/{name}:
     get:
       summary: Get a config including its content

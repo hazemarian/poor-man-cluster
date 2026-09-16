@@ -153,6 +153,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	g.GET("/settings/secrets/new", stt.SecretNew)
 	g.GET("/settings/secrets/edit/:name", stt.SecretEdit)
 	g.POST("/settings/apply", stt.Apply)
+	g.GET("/settings/rendered/:name", stt.RenderedGet)
 
 	tlsC := controllers.TLS{Controller: a.ctrl}
 	g.GET("/tls", tlsC.Page)

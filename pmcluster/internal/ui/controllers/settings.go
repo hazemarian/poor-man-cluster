@@ -18,18 +18,25 @@ import (
 type Settings struct{ *Controller }
 
 type settingsData struct {
-	APIURL         string
-	EnvAPIURL      string
-	HasToken       bool
-	HasEnvToken    bool
-	Configured     bool
-	Version        string
-	User           string
-	ClusterConfigs []configRow
-	ClusterSecrets []secretRow
-	ApplySummary   string
-	Error          string
-	Msg            string
+	APIURL          string
+	EnvAPIURL       string
+	HasToken        bool
+	HasEnvToken     bool
+	Configured      bool
+	Version         string
+	User            string
+	ClusterConfigs  []configRow
+	ClusterSecrets  []secretRow
+	Rendered        []renderedRow
+	RenderedName    string
+	RenderedContent string
+	ApplySummary    string
+	Error           string
+	Msg             string
+}
+
+type renderedRow struct {
+	Name string
 }
 
 // Page renders the settings fragment with current effective values plus the
@@ -49,6 +56,15 @@ func (c Settings) Page(g *gin.Context) {
 	}
 	if configured {
 		c.loadCluster(g, &d)
+		if rc, err := c.API.ListRenderedConfigs(g.Request.Context()); err != nil {
+			if d.Error == "" {
+				d.Error = err.Error()
+			}
+		} else {
+			for _, cfg := range rc {
+				d.Rendered = append(d.Rendered, renderedRow{Name: cfg.Name})
+			}
+		}
 	}
 	c.Views.Fragment(g, "settings", d)
 }
@@ -373,6 +389,35 @@ func (c Settings) reloadSettings(g *gin.Context, d settingsData) {
 func (c Settings) redirectToSettings(g *gin.Context, msg string) {
 	d := settingsData{Msg: msg}
 	c.reloadSettings(g, d)
+}
+
+// RenderedGet shows one rendered platform config (the YAML after template
+// substitution — exactly what is sent to the Swarm) read-only.
+func (c Settings) RenderedGet(g *gin.Context) {
+	name := g.Param("name")
+	var errOut string
+	if !c.requireAPI(g, &errOut) {
+		c.Views.Fragment(g, "settingsrendered", renderedData{Name: name, Error: errOut})
+		return
+	}
+	rc, err := c.API.ListRenderedConfigs(g.Request.Context())
+	if err != nil {
+		c.Views.Fragment(g, "settingsrendered", renderedData{Name: name, Error: err.Error()})
+		return
+	}
+	for _, cfg := range rc {
+		if cfg.Name == name {
+			c.Views.Fragment(g, "settingsrendered", renderedData{Name: cfg.Name, Content: cfg.Content})
+			return
+		}
+	}
+	c.Views.Fragment(g, "settingsrendered", renderedData{Name: name, Error: "config not found"})
+}
+
+type renderedData struct {
+	Name    string
+	Content string
+	Error   string
 }
 
 func username(g *gin.Context) string {

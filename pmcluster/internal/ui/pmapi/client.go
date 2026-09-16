@@ -401,3 +401,14 @@ func (c *Client) TriggerUpdate(ctx context.Context) (*UpdateSummary, error) {
 	err := c.do(ctx, http.MethodPost, "/update", nil, &out)
 	return &out, err
 }
+
+// ListRenderedConfigs returns the platform configs (infra/observability/backup/
+// edge stacks, OTel collector config, Traefik dynamic config) after template
+// substitution — the exact YAML the daemon would send to the Swarm. Read-only.
+func (c *Client) ListRenderedConfigs(ctx context.Context) ([]RenderedConfig, error) {
+	var out renderedConfigsResponse
+	if err := c.do(ctx, http.MethodGet, "/cluster/rendered", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Configs, nil
+}

@@ -225,6 +225,18 @@ type UpdateSummary struct {
 	StacksDeployed []string `json:"stacks_deployed"`
 }
 
+// RenderedConfig is one of the cluster's platform configs after template
+// substitution — the YAML actually sent to the Swarm (stacks, collector config,
+// Traefik dynamic config). Read-only; rendered on demand from the daemon.
+type RenderedConfig struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+type renderedConfigsResponse struct {
+	Configs []RenderedConfig `json:"configs"`
+}
+
 // ConfigVersion is one history row of GET /api/configs/{name}/versions.
 type ConfigVersion struct {
 	ID        int64  `json:"id"`

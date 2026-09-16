@@ -198,7 +198,7 @@ env:
 - Management:
   - `pmcluster secret create <name> [value]` (prompt/stdin ok; `--scope` / `--stack` flags) / `list` / `show <name>` / `verify <name> <value>` / `delete <name>`
   - `pmcluster config create|list|get|edit|history|rollback <name>` (`--scope` / `--stack` flags)
-- The operator console manages them from **Settings** (cluster-scope configs/secrets — the platform's own templates; editing re-stamps the current binary version and **Apply to swarm** (`POST /api/update`) re-runs `cluster update`) and from **`/stacks/<name>/config`** (service-scope values for that stack, reached via the **Config** button in the stacks list). Create forms prefill the `<stack>_` name prefix.
+- The operator console manages them from **Settings** (cluster-scope configs/secrets — the platform's own templates; editing re-stamps the current binary version and **Apply to swarm** (`POST /api/update`) re-runs `cluster update`) and from **`/stacks/<name>/config`** (service-scope values for that stack, reached via the **Config** button in the stacks list). Create forms prefill the `<stack>_` name prefix. Every cluster update snapshots the rendered platform configs (post-substitution YAML) into the DB; they're viewable read-only from Settings → **Rendered cluster configs**.
 - Validation fails on malformed references (`config(name` / `secrets()`), on `secrets(name)` env refs that aren't mounted in the service `secrets:` array, and at deploy time if the named secret/config doesn't exist. Multi-line content can't be injected into env — file-mount it via the `secrets:` array instead.
 
 ### Validation Rules

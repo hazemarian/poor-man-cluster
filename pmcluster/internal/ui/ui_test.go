@@ -141,6 +141,9 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/update", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"otel_config":"pmcluster_otel_config_v034","traefik_config":"pmcluster_traefik_dynamic_v044","cert_secret":"cert_v041","key_secret":"key_v041","edge_config":"pmcluster_edge_v005","stacks_deployed":["infra"]}`)
 	})
+	mux.HandleFunc("/api/cluster/rendered", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"configs":[{"name":"traefik-dynamic","content":"tls:\n  certificates: []\n"},{"name":"infra-stack","content":"version: \"3.9\"\nservices:\n  portainer:\n    image: portainer/portainer-ce:2.39.5\n"}]}`)
+	})
 
 	siteSoon := time.Now().AddDate(0, 0, 10).UTC().Format(time.RFC3339)
 	siteFar := time.Now().AddDate(1, 0, 0).UTC().Format(time.RFC3339)
@@ -485,10 +488,15 @@ func TestSecretsAndConfigs(t *testing.T) {
 	// Secret values are masked; hashes are never listed.
 	b := assertFragment(http.MethodGet, "/settings", "",
 		"Settings", "Cluster configs", "Cluster secrets", "site_cert",
-		"••••••••", "Apply to swarm", "Add Config", "Add Secret")
+		"••••••••", "Apply to swarm", "Add Config", "Add Secret",
+		"Rendered cluster configs", "traefik-dynamic", "infra-stack")
 	if strings.Contains(b, "topsecret") || strings.Contains(b, "abc123") {
 		t.Errorf("secret value or hash leaked into the rendered page")
 	}
+
+	// Rendered configs view: the post-substitution YAML shown read-only.
+	assertFragment(http.MethodGet, "/settings/rendered/traefik-dynamic", "",
+		"Rendered config", "traefik-dynamic", "tls:", "certificates: []")
 
 	// Cluster config lifecycle — create/edit/rollback via modals.
 	assertFragment(http.MethodPost, "/settings/configs/add",

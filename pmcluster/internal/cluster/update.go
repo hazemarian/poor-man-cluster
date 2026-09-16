@@ -211,6 +211,19 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	if len(res.StacksDeployed) == 0 {
 		step("No config or certificate changes — nothing to redeploy.")
 	}
+
+	// Snapshot the rendered platform configs into the DB so the console can
+	// show exactly what is deployed without re-rendering on demand.
+	rendered, err := RenderClusterConfigs(ctx, deps, in)
+	if err != nil {
+		return res, fmt.Errorf("render platform configs for persistence: %w", err)
+	}
+	for name, content := range rendered {
+		if err := deps.Store.PutRenderedConfig(ctx, name, content); err != nil {
+			return res, fmt.Errorf("store rendered config %s: %w", name, err)
+		}
+	}
+
 	step("Cluster update complete.")
 	return res, nil
 }
@@ -226,4 +239,90 @@ func deployStack(ctx context.Context, out io.Writer, d StackDeployer, s stackNam
 		return fmt.Errorf("deploy %s: %w", s, err)
 	}
 	return nil
+}
+
+// RenderClusterConfigs renders the current platform configs (post-substitution
+// YAML) without deploying anything. It mirrors Update's render construction and
+// the idempotent TLS secret materialisation so the output matches what a
+// `cluster update` would deploy. Keep in sync with Update.
+func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) (map[string]string, error) {
+	if err := Preflight(ctx, deps.Docker); err != nil {
+		return nil, err
+	}
+	if deps.Store == nil {
+		return nil, fmt.Errorf("rendering configs requires a store (config_dir must be initialised via `pmcluster init`)")
+	}
+	state, err := loadTLSSettings(ctx, deps.Store)
+	if err != nil {
+		return nil, err
+	}
+	domain := deps.Store.GetSettingDefault(ctx, settingDomain, "")
+	if domain == "" {
+		return nil, fmt.Errorf("no persisted domain found — run `cluster up` before requesting rendered configs")
+	}
+	ooCred, err := deps.Store.GetCredential(ctx, "openobserve_admin")
+	if err != nil {
+		return nil, fmt.Errorf("load openobserve_admin credential (run `cluster up` first): %w", err)
+	}
+	ooPass, err := deps.Cipher.Decrypt(ooCred.PasswordCiphertext)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt openobserve_admin password: %w", err)
+	}
+	ooTokenPlain, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
+	if err != nil {
+		return nil, err
+	}
+	if ooTokenPlain == "" {
+		ooTokenPlain = pendingIngestionToken
+	}
+	render := RenderInput{
+		Domain:                    domain,
+		OpenObserveAdminEmail:     ooCred.Username,
+		OpenObserveAdminPassword:  string(ooPass),
+		OpenObserveOrg:            "default",
+		OpenObserveIngestionToken: ooTokenPlain,
+		ACMEEmail:                 state.ACMEEmail,
+		ConfigDir:                 in.ConfigDir,
+		ConfigStore:               deps.Store,
+		DataDir:                   filepath.Dir(in.ConfigDir),
+		EdgeImage:                 EdgeImageFor(),
+	}
+	hostCerts, err := loadHostCertEntries(ctx, deps.Store, domain)
+	if err != nil {
+		return nil, err
+	}
+	render.HostCerts = hostCerts
+	if render.ACMEEmail == "" {
+		if state.CertPath == "" || state.KeyPath == "" {
+			return nil, fmt.Errorf("TLS is not ACME (no ACME email) but no cert/key paths are persisted — run `cluster up` with --cert/--key (or --acme-email)")
+		}
+		certName, _, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, "cert", state.CertPath)
+		if err != nil {
+			return nil, err
+		}
+		keyName, _, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, "key", state.KeyPath)
+		if err != nil {
+			return nil, err
+		}
+		render.CertSecretName, render.KeySecretName = certName, keyName
+	}
+	out := make(map[string]string)
+	for _, s := range []stackName{StackInfra, StackObservability, StackBackup, StackEdge} {
+		y, err := LoadComposeFile(s, render)
+		if err != nil {
+			return nil, fmt.Errorf("render %s: %w", s, err)
+		}
+		out[string(s)+"-stack"] = string(y)
+	}
+	otelYAML, err := RenderOTelCollectorConfig(render)
+	if err != nil {
+		return nil, fmt.Errorf("render otel-collector-config: %w", err)
+	}
+	out["otel-collector-config"] = string(otelYAML)
+	traefikYAML, err := RenderTraefikDynamic(render)
+	if err != nil {
+		return nil, fmt.Errorf("render traefik-dynamic: %w", err)
+	}
+	out["traefik-dynamic"] = string(traefikYAML)
+	return out, nil
 }

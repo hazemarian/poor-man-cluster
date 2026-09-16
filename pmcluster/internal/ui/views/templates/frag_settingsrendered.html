@@ -1,0 +1,9 @@
+{{define "settingsrendered"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+<h2>Rendered config · <code>{{.Name}}</code></h2>
+<p class="sub">Read-only — the config after template substitution, exactly as it is sent to the Swarm.</p>
+<pre style="white-space:pre-wrap">{{.Content}}</pre>
+<div class="row">
+  <button class="btn ghost" type="button" onclick="closeModal()">Close</button>
+</div>
+{{end}}

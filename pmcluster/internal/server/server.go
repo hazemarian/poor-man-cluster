@@ -63,6 +63,10 @@ type Deps struct {
 	// (content-aware re-apply of the platform stacks). Optional; when nil
 	// the route is omitted.
 	Update *UpdateService
+
+	// Rendered exposes GET /api/cluster/rendered — the rendered platform
+	// configs (read-only). Optional; when nil the route is omitted.
+	Rendered *RenderedConfigService
 }
 
 func New(d Deps) http.Handler {
@@ -118,6 +122,9 @@ func New(d Deps) http.Handler {
 		}
 		if d.Update != nil {
 			d.Update.Mount(r)
+		}
+		if d.Rendered != nil {
+			d.Rendered.Mount(r)
 		}
 		if d.Store != nil && d.Cipher != nil {
 			(&WebhookService{Store: d.Store, Cipher: d.Cipher}).Mount(r)

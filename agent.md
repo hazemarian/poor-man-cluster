@@ -156,6 +156,9 @@ Services mounted under `/api`:
   `/configs/{name}/versions`, `/configs/{name}/rollback`.
 - `update.go` — POST `/api/update` (runs `cluster update` on the daemon;
   `Deps.Update` closure wired in `cli/serve.go`).
+- `rendered.go` — GET `/api/cluster/rendered` (stored rendered platform
+  configs, snapshotted into the DB by every `cluster update`; read-only;
+  `Deps.Rendered` wired with the store).
 - `tls.go` — GET/PUT/DELETE `/tls/hosts[/{host}]` (per-host certs, DB-backed).
 - `sitecert.go` — GET/PUT `/tls/site` (cluster's own cert).
 - `stacks.go` (`internal/api`) — GET/POST `/stacks`, GET `/stacks/{name}`,

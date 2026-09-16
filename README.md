@@ -365,6 +365,10 @@ env:
     with the current binary version, so the platform stacks render from it on
     the next update; the **Apply to swarm** button (`POST /api/update`) runs
     `cluster update` immediately so the change reaches the swarm side.
+  - Rendered platform configs (the post-substitution YAML actually sent to the
+    Swarm) are snapshotted into the database by every cluster update and shown
+    read-only on the **Settings** page under "Rendered cluster configs"
+    (`GET /api/cluster/rendered`).
   - **`service`** — values belonging to one stack, reached from the stacks
     list via the **Config** button (page `/stacks/<name>/config`). Create
     forms prefill the `<stack>_` name prefix and record the owning stack.

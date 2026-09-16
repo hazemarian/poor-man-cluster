@@ -90,6 +90,20 @@
   </div>
   {{end}}
 </div>
+<div class="section-head">
+  <h2>Rendered cluster configs</h2>
+</div>
+<div class="card">
+  {{if .Rendered}}
+  <div class="row" style="flex-wrap:wrap">
+    {{range .Rendered}}
+    <a class="btn sm ghost" hx-get="/settings/rendered/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">{{.Name}}</a>
+    {{end}}
+  </div>
+  {{else}}
+  <div class="empty">No rendered configs yet — run "Apply to swarm" first.</div>
+  {{end}}
+</div>
 {{end}}
 
 <div class="card">
