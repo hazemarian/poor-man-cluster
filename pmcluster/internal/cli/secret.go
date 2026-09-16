@@ -105,7 +105,11 @@ func runSecretCreate(cmd *cobra.Command, args []string) error {
 	if name == "" {
 		return errors.New("name: required")
 	}
-	value, err := readSecretValue(cmd, "")
+	value := ""
+	if len(args) > 1 {
+		value = args[1]
+	}
+	value, err := readSecretValue(cmd, value)
 	if err != nil {
 		return err
 	}
