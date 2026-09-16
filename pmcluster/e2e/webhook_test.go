@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -64,15 +65,22 @@ func extractWebhookSecret(t *testing.T, output string) string {
 // printed value verbatim into their CI's secret box and the openssl example
 // (`openssl dgst -sha256 -hmac "$SECRET"`) just works. We mirror that here:
 // the hex string IS the HMAC key, no decode step.
-func signPayload(t *testing.T, secret string, body []byte) string {
+//
+// The signature is computed over timestamp_decimal + body (replay protection),
+// matching internal/webhook — so signPayload also returns the timestamp to
+// send in the X-Pmcluster-Timestamp header.
+func signPayload(t *testing.T, secret string, body []byte) (sig string, timestamp string) {
 	t.Helper()
+	ts := time.Now().Unix()
+	tsStr := strconv.FormatInt(ts, 10)
 	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(tsStr))
 	mac.Write(body)
-	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil)), tsStr
 }
 
 // postWebhook sends a signed POST to /webhook/{source} and returns the response.
-func postWebhook(t *testing.T, baseURL, source, sig string, body []byte) *http.Response {
+func postWebhook(t *testing.T, baseURL, source, sig, ts string, body []byte) *http.Response {
 	t.Helper()
 	url := baseURL + "/webhook/" + source
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
@@ -81,6 +89,9 @@ func postWebhook(t *testing.T, baseURL, source, sig string, body []byte) *http.R
 	}
 	if sig != "" {
 		req.Header.Set("X-Pmcluster-Signature", sig)
+	}
+	if ts != "" {
+		req.Header.Set("X-Pmcluster-Timestamp", ts)
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
@@ -189,11 +200,11 @@ func TestWebhookE2E(t *testing.T) {
 	if err != nil {
 		t.Fatalf("json.Marshal payload: %v", err)
 	}
-	validSig := signPayload(t, hexSecret, payloadBytes)
+	validSig, validTS := signPayload(t, hexSecret, payloadBytes)
 
 	// ── Step 5: POST with valid HMAC → 200 + JSON {stack, revision} ──────────
 	t.Run("valid HMAC succeeds — 200 and stack+revision in response", func(t *testing.T) {
-		resp := postWebhook(t, baseURL, "github-prod", validSig, payloadBytes)
+		resp := postWebhook(t, baseURL, "github-prod", validSig, validTS, payloadBytes)
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
@@ -236,7 +247,7 @@ func TestWebhookE2E(t *testing.T) {
 	// ── Step 7: POST with wrong signature → 401 ───────────────────────────────
 	t.Run("wrong signature → 401", func(t *testing.T) {
 		wrongSig := "sha256=" + strings.Repeat("00", 32)
-		resp := postWebhook(t, baseURL, "github-prod", wrongSig, payloadBytes)
+		resp := postWebhook(t, baseURL, "github-prod", wrongSig, validTS, payloadBytes)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusUnauthorized {
 			body, _ := io.ReadAll(resp.Body)
@@ -247,7 +258,7 @@ func TestWebhookE2E(t *testing.T) {
 	// ── Step 8: POST to non-existent source with valid signature for github-prod → 401 ──
 	t.Run("unknown source → 401", func(t *testing.T) {
 		// The signature is valid for github-prod but the source name is wrong.
-		resp := postWebhook(t, baseURL, "never-existed", validSig, payloadBytes)
+		resp := postWebhook(t, baseURL, "never-existed", validSig, validTS, payloadBytes)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusUnauthorized {
 			body, _ := io.ReadAll(resp.Body)
