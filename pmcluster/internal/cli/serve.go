@@ -100,7 +100,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
-	deploySvc := &deploy.Service{Store: st, Deployer: deployer, Backup: backup.LocalTrigger{Store: st}, Resolver: &deploy.StoreConfigResolver{Store: st}}
+	deploySvc := &deploy.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backup.LocalTrigger{Store: st}, Resolver: &deploy.StoreConfigResolver{Store: st}}
 
 	cipher, cipherErr := credentials.Open(cfg.EncryptionKeyPath())
 	if cipherErr != nil {

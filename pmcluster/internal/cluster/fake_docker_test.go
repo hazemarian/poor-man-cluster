@@ -158,6 +158,14 @@ func (f *fakeDocker) VolumeRemove(_ context.Context, name string) error {
 	return nil
 }
 
+func (f *fakeDocker) VolumeList(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}
+
+func (f *fakeDocker) StackSecretNames(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+
 func (f *fakeDocker) SecretList(_ context.Context, _, _ string) ([]string, error) {
 	names := make([]string, 0, len(f.secrets))
 	for n := range f.secrets {

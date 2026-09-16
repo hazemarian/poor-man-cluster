@@ -285,7 +285,7 @@ curl -X POST $BASE/api/stacks/my-app/rollback \
   -H "Content-Type: application/json" \
   -d '{"revision": 1719000000}'
 
-# Remove a stack (docker stack rm + record cleanup)
+# Remove a stack (services, named volumes, mounted secrets, record + configs/secrets)
 curl -X DELETE $BASE/api/stacks/my-app -H "Authorization: Bearer <admin-token>"
 ```
 

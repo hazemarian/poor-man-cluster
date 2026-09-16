@@ -22,6 +22,7 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
@@ -86,7 +87,11 @@ type DeployResult struct {
 type Service struct {
 	Store    *store.Store
 	Deployer cluster.StackDeployer
-	Backup   BackupTrigger
+	// Docker is used by Undeploy to find + remove the stack's Swarm secrets
+	// and named volumes. Nil disables the swarm-asset cleanup (tests, CLI
+	// deploy command).
+	Docker docker.Client
+	Backup BackupTrigger
 	// Resolver resolves `env: X: config(name)` references against the
 	// DB config store. Nil disables config() resolution (translate error).
 	Resolver manifest.EnvResolver
@@ -279,9 +284,41 @@ func (s *Service) Undeploy(ctx context.Context, stackName string) (retErr error)
 		span.End()
 	}()
 
+	if _, err := s.Store.GetStack(ctx, stackName); err != nil {
+		return err // ErrStackNotFound → 404 for unknown stacks
+	}
+
+	// Collect the swarm assets the stack owns BEFORE removing its services:
+	// the secrets its services mount and the named volumes docker stack rm
+	// leaves behind (labelled com.docker.stack.namespace=<stack>).
+	var volumes, secretNames []string
+	if s.Docker != nil {
+		var err error
+		secretNames, err = s.Docker.StackSecretNames(ctx, stackName)
+		if err != nil {
+			return fmt.Errorf("collect stack secrets: %w", err)
+		}
+		volumes, err = s.Docker.VolumeList(ctx, docker.StackNamespaceLabel, stackName)
+		if err != nil {
+			return fmt.Errorf("collect stack volumes: %w", err)
+		}
+	}
+
 	if err := s.Deployer.RemoveStack(ctx, stackName); err != nil {
 		return fmt.Errorf("docker stack rm: %w", err)
 	}
+
+	if s.Docker != nil {
+		for _, v := range volumes {
+			_ = s.Docker.VolumeRemove(ctx, v)
+		}
+		for _, n := range secretNames {
+			_ = s.Docker.SecretRemove(ctx, n)
+		}
+	}
+
+	// Last: the DB record — stack + revisions (FK cascade) + the stack's
+	// service-scope configs and secrets.
 	if err := s.Store.DeleteStack(ctx, stackName); err != nil {
 		return fmt.Errorf("delete stack record: %w", err)
 	}

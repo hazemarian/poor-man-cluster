@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -47,6 +48,41 @@ func (r *recordingDeployer) PruneStaleContainers(_ context.Context, _ string, _ 
 
 // Ensure the interface is satisfied.
 var _ cluster.StackDeployer = (*recordingDeployer)(nil)
+
+// stubDocker is a test-local implementation of docker.Client that only
+// implements the surface Undeploy uses, recording calls. Everything else
+// embeds the interface (panics if invoked).
+type stubDocker struct {
+	docker.Client
+
+	secrets []string
+	volumes []string
+
+	removedSecrets []string
+	removedVolumes []string
+}
+
+func (d *stubDocker) StackSecretNames(_ context.Context, _ string) ([]string, error) {
+	out := make([]string, len(d.secrets))
+	copy(out, d.secrets)
+	return out, nil
+}
+
+func (d *stubDocker) VolumeList(_ context.Context, _, _ string) ([]string, error) {
+	out := make([]string, len(d.volumes))
+	copy(out, d.volumes)
+	return out, nil
+}
+
+func (d *stubDocker) SecretRemove(_ context.Context, name string) error {
+	d.removedSecrets = append(d.removedSecrets, name)
+	return nil
+}
+
+func (d *stubDocker) VolumeRemove(_ context.Context, name string) error {
+	d.removedVolumes = append(d.removedVolumes, name)
+	return nil
+}
 
 // openTestStore opens a fresh store in a temp dir for use in deploy tests.
 func openTestStore(t *testing.T) *store.Store {
@@ -356,16 +392,22 @@ func TestRollback_UnknownStack(t *testing.T) {
 	}
 }
 
-// TestUndeploy_HappyPath removes the swarm stack first (docker stack rm) and
-// deletes the stack row + its revisions from the store.
+// TestUndeploy_HappyPath removes the swarm stack first (docker stack rm),
+// then the stack's named volumes + mounted secrets (docker cleanup), then
+// deletes the stack row + revisions + service-scope configs/secrets.
 func TestUndeploy_HappyPath(t *testing.T) {
 	s := openTestStore(t)
 	dep := &recordingDeployer{}
+	dk := &stubDocker{secrets: []string{"donation_campaign_db_password"}, volumes: []string{"db_data"}}
 	svc := newService(s, dep)
+	svc.Docker = dk
 	ctx := context.Background()
 
 	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest}); err != nil {
 		t.Fatalf("Deploy: %v", err)
+	}
+	if _, err := s.CreateConfig(ctx, "service", "donation-campaign", "donation-campaign_env", "env", "A=1", "v1"); err != nil {
+		t.Fatalf("CreateConfig: %v", err)
 	}
 
 	if err := svc.Undeploy(ctx, "donation-campaign"); err != nil {
@@ -375,26 +417,57 @@ func TestUndeploy_HappyPath(t *testing.T) {
 	if len(dep.removed) != 1 || dep.removed[0] != "donation-campaign" {
 		t.Errorf("RemoveStack calls = %v, want [donation-campaign]", dep.removed)
 	}
+	if got := dk.removedVolumes; len(got) != 1 || got[0] != "db_data" {
+		t.Errorf("removedVolumes = %v, want [db_data]", got)
+	}
+	if got := dk.removedSecrets; len(got) != 1 || got[0] != "donation_campaign_db_password" {
+		t.Errorf("removedSecrets = %v, want [donation_campaign_db_password]", got)
+	}
+	if _, err := s.GetStack(ctx, "donation-campaign"); !errors.Is(err, store.ErrStackNotFound) {
+		t.Errorf("stack row still present after Undeploy: %v", err)
+	}
+	if _, err := s.GetConfig(ctx, "donation-campaign_env"); !errors.Is(err, store.ErrConfigNotFound) {
+		t.Errorf("stack config still present after Undeploy: %v", err)
+	}
+}
+
+// TestUndeploy_NoDocker skips the swarm-asset cleanup when no Docker client is
+// wired (CLI deploy command path) but still removes the stack record.
+func TestUndeploy_NoDocker(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if err := svc.Undeploy(ctx, "donation-campaign"); err != nil {
+		t.Fatalf("Undeploy: %v", err)
+	}
 	if _, err := s.GetStack(ctx, "donation-campaign"); !errors.Is(err, store.ErrStackNotFound) {
 		t.Errorf("stack row still present after Undeploy: %v", err)
 	}
 }
 
 // TestUndeploy_UnknownStack returns ErrStackNotFound when there is no stack
-// record. The swarm removal is attempted first (it is harmless and keeps the
-// store consistent if the swarm stack already exists), then the missing record
-// surfaces as ErrStackNotFound.
+// record. The existence check happens first, so no swarm call is made.
 func TestUndeploy_UnknownStack(t *testing.T) {
 	s := openTestStore(t)
 	dep := &recordingDeployer{}
+	dk := &stubDocker{secrets: []string{"s"}, volumes: []string{"v"}}
 	svc := newService(s, dep)
+	svc.Docker = dk
 
 	err := svc.Undeploy(context.Background(), "ghost-stack")
 	if !errors.Is(err, store.ErrStackNotFound) {
 		t.Errorf("Undeploy(ghost-stack) = %v, want ErrStackNotFound", err)
 	}
-	if len(dep.removed) != 1 || dep.removed[0] != "ghost-stack" {
-		t.Errorf("RemoveStack calls = %v, want [ghost-stack]", dep.removed)
+	if len(dep.removed) != 0 {
+		t.Errorf("RemoveStack calls = %v, want [] (no stack record)", dep.removed)
+	}
+	if len(dk.removedVolumes) != 0 || len(dk.removedSecrets) != 0 {
+		t.Errorf("cleanup ran for unknown stack: vols=%v secs=%v", dk.removedVolumes, dk.removedSecrets)
 	}
 }
 

@@ -160,7 +160,8 @@ Services mounted under `/api`:
 - `sitecert.go` — GET/PUT `/tls/site` (cluster's own cert).
 - `stacks.go` (`internal/api`) — GET/POST `/stacks`, GET `/stacks/{name}`,
   GET `/stacks/{name}/revisions/{rev}`, POST `/stacks/{name}/rollback`,
-  **DELETE `/stacks/{name}`** (undeploy: `docker stack rm` + `Store.DeleteStack`).
+  **DELETE `/stacks/{name}`** (full teardown via `deploy.Service.Undeploy`:
+  services, volumes, mounted secrets, record + configs/secrets).
 - Also backups, nodes, me, cluster/info.
 
 Every service follows the same shape: a struct with dependencies + a
@@ -173,7 +174,8 @@ exactly-once, idempotent). Repositories by file:
 - `users.go` — daemon users + v2 API tokens (`pmc_<id>_<secret>`), argon2id.
 - `credentials.go` — platform credentials, AES-GCM ciphertext.
 - `stacks.go` — stack records + revisions (unix-ts revisions, `NextFreeRevision`
-  collision avoidance, `DeleteStack` cascades revisions via FK).
+  collision avoidance, `DeleteStack` cascades revisions via FK and removes the
+  stack's service-scope configs + secrets).
 - `webhooks.go`, `registries.go`, `backups.go`, `settings.go`
   (key/value), `configs.go` + `secrets.go` (migration 0008, DSL-backed; rows
   carry `scope` (cluster|service) + `stack` (owning stack, service scope);
@@ -238,8 +240,11 @@ array). `translate.go` takes an optional `EnvResolver` (deploy.Service wires a
 webhooks. `Deploy(ctx, payload)` → parse/interpolate/validate/translate →
 `docker stack deploy` → records revision (unix timestamp + NextFreeRevision
 collision avoidance). `Rollback(ctx, stack, revision)`. `Undeploy(ctx, stack)`
-= `docker stack rm` first, then `Store.DeleteStack` (DB row + revisions via
-FK cascade) — backs the console Delete button and `DELETE /api/stacks/{name}`.
+= full teardown: `docker stack rm`, then remove the stack's named volumes
+(`VolumeList` by `com.docker.stack.namespace` label) and the Swarm secrets its
+services mount (`StackSecretNames`), then `Store.DeleteStack` (stack row +
+revisions via FK cascade + the stack's service-scope configs/secrets) — backs
+the console Delete button and `DELETE /api/stacks/{name}`.
 `Resolver` field for config()/secrets() env refs.
 
 ### internal/webhook — CI webhook receiver
@@ -250,11 +255,13 @@ Body: `DeployPayload{app_name, version, manifest, repo_url?}`.
 
 ### internal/docker — Docker/Swarm client wrapper
 Thin wrapper over the Docker SDK. Key surface: `ServiceList/Inspect`,
-`SecretList/Create/Remove`, `ConfigList/Create`, `StackDeploy` (`docker stack
-deploy -c -` with `--detach --resolve-image=always --with-registry-auth`),
-`ForceUpdateService` (retries on Swarm "update out of sequence"), network
-operations, container logs. `docker.New()` may return nil client on error
-(callers must nil-check).
+`SecretList/Create/Remove`, `StackSecretNames` (secrets a stack's services
+mount, by `com.docker.stack.namespace` label), `ConfigList/Create`,
+`VolumeList/Remove` (stack volumes by namespace label), `StackDeploy`
+(`docker stack deploy -c -` with `--detach --resolve-image=always
+--with-registry-auth`), `ForceUpdateService` (retries on Swarm "update out of
+sequence"), network operations, container logs. `docker.New()` may return nil
+client on error (callers must nil-check).
 
 ### internal/edgeproxy — smart reverse proxy
 `New(config)` → chi router: per-real-IP token-bucket rate limits (separate
@@ -282,7 +289,9 @@ stacks list); create forms prefill the `<stack>_` name prefix and record the
 owning stack. Secret values are revealed on demand with a confirmation prompt
 (`/secrets/reveal/:name`-style routes) and editable via `PUT /api/secrets/{name}`.
 The stacks list has a per-row **Delete** button (confirmation prompt) that
-undeploys the stack (`DELETE /api/stacks/{name}` → `deploy.Service.Undeploy`).
+fully tears the stack down (`DELETE /api/stacks/{name}` →
+`deploy.Service.Undeploy`: services, named volumes, mounted secrets, record +
+its service-scope configs/secrets).
 
 ### internal/telemetry + internal/openobserve + internal/backup + internal/logger + internal/buildinfo
 - `telemetry`: OTel SDK init (metrics/traces → OTLP :4318 collector).

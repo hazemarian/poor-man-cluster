@@ -404,7 +404,7 @@ pmcluster stack show donation-campaign    # metadata + recent revisions (→ mar
 pmcluster rollback donation-campaign 1778439014   # re-apply a stored revision
 ```
 
-Every deploy gets a unix-timestamp revision id. Rollback re-applies a stored revision as a NEW revision (preserves the audit trail — both deploys are recorded). The corresponding REST endpoints are `GET /api/stacks`, `GET /api/stacks/{name}`, `GET /api/stacks/{name}/revisions/{rev}`, `POST /api/stacks/{name}/rollback`. A stack can be removed (services `docker stack rm` + record cleanup) from the console's stacks list — `DELETE /api/stacks/{name}`.
+Every deploy gets a unix-timestamp revision id. Rollback re-applies a stored revision as a NEW revision (preserves the audit trail — both deploys are recorded). The corresponding REST endpoints are `GET /api/stacks`, `GET /api/stacks/{name}`, `GET /api/stacks/{name}/revisions/{rev}`, `POST /api/stacks/{name}/rollback`. A stack can be removed (services `docker stack rm`, named volumes, mounted Swarm secrets, plus the DB record, its revisions and its service-scope configs/secrets) from the console's stacks list — `DELETE /api/stacks/{name}`.
 
 ### Webhooks (CI integrations)
 
@@ -488,7 +488,7 @@ The daemon exposes a JSON REST API under `/api/*` (Bearer auth) plus the unauthe
 | `GET` | `/api/stacks/{name}` | Stack detail + revisions |
 | `GET` | `/api/stacks/{name}/revisions/{rev}` | A stored revision |
 | `POST` | `/api/stacks/{name}/rollback` | Roll back to a revision |
-| `DELETE` | `/api/stacks/{name}` | Remove a stack from the swarm + its record |
+| `DELETE` | `/api/stacks/{name}` | Remove a stack (services, volumes, secrets, record) |
 | `GET`/`POST` | `/api/backups` | List / trigger backups |
 | `GET`/`PUT`/`DELETE` | `/api/tls/hosts` | Per-host TLS certs |
 | `GET`/`PUT` | `/api/tls/site` | Cluster's own (main) certificate |

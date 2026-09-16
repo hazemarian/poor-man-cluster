@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 )
 
@@ -43,6 +44,15 @@ type Client interface {
 	JoinTokens(ctx context.Context) (JoinTokens, error)
 
 	SecretList(ctx context.Context, labelKey, labelValue string) ([]string, error)
+
+	// VolumeList returns the names of volumes carrying the label
+	// labelKey=labelValue.
+	VolumeList(ctx context.Context, labelKey, labelValue string) ([]string, error)
+
+	// StackSecretNames returns the deduplicated names of the Swarm secrets
+	// mounted by the stack's services — what a stack delete must remove from
+	// the swarm once the services are gone.
+	StackSecretNames(ctx context.Context, stackName string) ([]string, error)
 
 	SecretInspect(ctx context.Context, name string) (SecretInspectResult, error)
 
@@ -296,6 +306,48 @@ func (r *realClient) NetworkRemove(ctx context.Context, name string) error {
 
 func (r *realClient) VolumeRemove(ctx context.Context, name string) error {
 	return idempotentRemove(r.c.VolumeRemove(ctx, name, true), "volume", name)
+}
+
+// StackNamespaceLabel is the Docker label Docker attaches to every resource
+// (service, network, volume) created by `docker stack deploy` for a stack.
+// VolumeList filters on it to find a stack's named volumes for teardown.
+const StackNamespaceLabel = "com.docker.stack.namespace"
+
+func (r *realClient) VolumeList(ctx context.Context, labelKey, labelValue string) ([]string, error) {
+	vols, err := r.c.VolumeList(ctx, volume.ListOptions{
+		Filters: filters.NewArgs(filters.Arg("label", labelKey+"="+labelValue)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("docker volume ls: %w", err)
+	}
+	var out []string
+	for _, v := range vols.Volumes {
+		out = append(out, v.Name)
+	}
+	return out, nil
+}
+
+func (r *realClient) StackSecretNames(ctx context.Context, stackName string) ([]string, error) {
+	svcs, err := r.c.ServiceList(ctx, swarm.ServiceListOptions{
+		Filters: filters.NewArgs(filters.Arg("label", StackNamespaceLabel+"="+stackName)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("docker service ls %s: %w", stackName, err)
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, s := range svcs {
+		if s.Spec.TaskTemplate.ContainerSpec == nil {
+			continue
+		}
+		for _, sec := range s.Spec.TaskTemplate.ContainerSpec.Secrets {
+			if !seen[sec.SecretName] {
+				seen[sec.SecretName] = true
+				out = append(out, sec.SecretName)
+			}
+		}
+	}
+	return out, nil
 }
 
 func (r *realClient) ServiceList(ctx context.Context) ([]Service, error) {

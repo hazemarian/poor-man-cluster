@@ -178,6 +178,10 @@ paths:
           $ref: "#/components/responses/NotFound"
     delete:
       summary: Remove a deployed stack from the swarm and its record
+      description: >-
+        Removes the stack's services (`docker stack rm`), its named volumes and
+        the Swarm secrets its services mount, then deletes the stack record
+        along with its revisions and its service-scope configs/secrets.
       operationId: removeStack
       security:
         - bearerAuth: []

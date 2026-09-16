@@ -59,6 +59,12 @@ func (f *inMemoryDockerClient) SecretInspect(_ context.Context, _ string) (docke
 func (f *inMemoryDockerClient) ConfigRemove(_ context.Context, _ string) error  { return nil }
 func (f *inMemoryDockerClient) NetworkRemove(_ context.Context, _ string) error { return nil }
 func (f *inMemoryDockerClient) VolumeRemove(_ context.Context, _ string) error  { return nil }
+func (f *inMemoryDockerClient) VolumeList(_ context.Context, _, _ string) ([]string, error) {
+	return nil, nil
+}
+func (f *inMemoryDockerClient) StackSecretNames(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
 func (f *inMemoryDockerClient) ServiceList(_ context.Context) ([]docker.Service, error) {
 	return nil, nil
 }

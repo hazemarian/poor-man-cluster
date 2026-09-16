@@ -25,6 +25,10 @@ type fakeClient struct {
 	networks map[string]NetworkSpec
 	secrets  map[string]SecretSpec
 	configs  map[string]ConfigSpec
+
+	// volumes + stackSecrets back VolumeList / StackSecretNames.
+	volumes      []string
+	stackSecrets []string
 }
 
 func (f *fakeClient) Ping(_ context.Context) (Ping, error) {
@@ -102,6 +106,18 @@ func (f *fakeClient) SecretList(_ context.Context, _, _ string) ([]string, error
 		names = append(names, n)
 	}
 	return names, nil
+}
+
+func (f *fakeClient) VolumeList(_ context.Context, _, _ string) ([]string, error) {
+	out := make([]string, len(f.volumes))
+	copy(out, f.volumes)
+	return out, nil
+}
+
+func (f *fakeClient) StackSecretNames(_ context.Context, _ string) ([]string, error) {
+	out := make([]string, len(f.stackSecrets))
+	copy(out, f.stackSecrets)
+	return out, nil
 }
 
 // SecretInspect mimics the real Docker API: secret payloads are write-only,

@@ -135,10 +135,17 @@ func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
 	return out, rows.Err()
 }
 
-// DeleteStack removes the stack row and, via the ON DELETE CASCADE foreign
-// key on stack_revisions, its entire revision history. Returns
-// ErrStackNotFound when no such stack exists.
+// DeleteStack removes the stack row, its revisions (via the ON DELETE CASCADE
+// foreign key) and every service-scope config + secret the stack owns (a stack
+// owns those rows — deleting a stack must not leave orphaned configs/secrets).
+// Returns ErrStackNotFound when no such stack exists.
 func (s *Store) DeleteStack(ctx context.Context, name string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM configs WHERE stack = ?`, name); err != nil {
+		return fmt.Errorf("delete stack configs: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM secrets WHERE stack = ?`, name); err != nil {
+		return fmt.Errorf("delete stack secrets: %w", err)
+	}
 	res, err := s.db.ExecContext(ctx, `DELETE FROM stacks WHERE name = ?`, name)
 	if err != nil {
 		return fmt.Errorf("delete stack %s: %w", name, err)

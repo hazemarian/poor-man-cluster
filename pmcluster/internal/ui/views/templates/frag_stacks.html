@@ -18,7 +18,7 @@
     <td style="text-align:right; white-space:nowrap">
       <a class="btn sm ghost" href="/stacks/{{.Name}}" hx-get="/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">Details</a>
       <a class="btn sm ghost" href="/stacks/{{.Name}}/config" hx-get="/stacks/{{.Name}}/config" hx-target="#view" hx-push-url="true">Config</a>
-      <button class="btn danger sm" hx-post="/stacks/{{.Name}}/remove" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete stack {{.Name}}? Its services will be removed from the swarm.')">Delete</button>
+      <button class="btn danger sm" hx-post="/stacks/{{.Name}}/remove" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete stack {{.Name}}? Its services, volumes, configs and secrets will be removed from the swarm and the database.')">Delete</button>
     </td>
   </tr>
   {{end}}

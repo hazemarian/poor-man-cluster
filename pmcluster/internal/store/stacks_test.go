@@ -296,6 +296,18 @@ func TestDeleteStack_RemovesStackAndRevisions(t *testing.T) {
 		t.Fatalf("RecordDeploy v2: %v", err)
 	}
 
+	// The stack owns service-scope configs + secrets — deleting the stack
+	// must remove them too (no orphans).
+	if _, err := s.CreateConfig(ctx, "service", "mystack", "mystack_env", "env", "A=1", "v1"); err != nil {
+		t.Fatalf("CreateConfig: %v", err)
+	}
+	if _, err := s.CreateSecret(ctx, "service", "mystack", "mystack_db_pass", []byte("cipher"), "h1"); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+	if _, err := s.CreateConfig(ctx, "cluster", "", "traefik-dynamic", "template", "x", "v1"); err != nil {
+		t.Fatalf("CreateConfig cluster: %v", err)
+	}
+
 	if err := s.DeleteStack(ctx, "mystack"); err != nil {
 		t.Fatalf("DeleteStack: %v", err)
 	}
@@ -308,6 +320,16 @@ func TestDeleteStack_RemovesStackAndRevisions(t *testing.T) {
 	}
 	if _, err := s.GetRevision(ctx, "mystack", 1001); !errors.Is(err, ErrRevisionNotFound) {
 		t.Errorf("GetRevision(1001) after delete = %v, want ErrRevisionNotFound (cascade)", err)
+	}
+	if _, err := s.GetConfig(ctx, "mystack_env"); !errors.Is(err, ErrConfigNotFound) {
+		t.Errorf("GetConfig after delete = %v, want ErrConfigNotFound", err)
+	}
+	if _, err := s.GetSecret(ctx, "mystack_db_pass"); !errors.Is(err, ErrSecretNotFound) {
+		t.Errorf("GetSecret after delete = %v, want ErrSecretNotFound", err)
+	}
+	// Cluster-scope rows are untouched.
+	if _, err := s.GetConfig(ctx, "traefik-dynamic"); err != nil {
+		t.Errorf("GetConfig cluster row after delete: %v, want nil", err)
 	}
 }
 
