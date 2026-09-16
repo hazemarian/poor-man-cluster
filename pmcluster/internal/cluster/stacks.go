@@ -137,6 +137,16 @@ func (d *dockerCLIDeployer) RemoveStack(ctx context.Context, name string) error 
 	return nil
 }
 
+// forceUpdateRetries is how many times a single service's forced update is
+// retried when Swarm reports "update out of sequence" — a transient error
+// that occurs when `docker stack deploy` returns before the manager has
+// finished reconciling the stack's service specs, so the immediate
+// `docker service update --force` is racing an in-flight update.
+const forceUpdateRetries = 5
+
+// forceUpdateBackoff is the sleep between retries.
+const forceUpdateBackoff = 500 * time.Millisecond
+
 func (d *dockerCLIDeployer) ForceUpdateService(ctx context.Context, fullName string) error {
 	cmd := exec.CommandContext(ctx, "docker", "service", "update",
 		"--force",
@@ -145,6 +155,29 @@ func (d *dockerCLIDeployer) ForceUpdateService(ctx context.Context, fullName str
 	)
 	out, err := d.runWithOutput(cmd)
 	if err != nil {
+		// Swarm bumps the service spec version while the stack deploy is
+		// still settling; the update we just sent references a stale
+		// version.  Re-read the current spec and retry a bounded number
+		// of times — this is safe because the update is idempotent.
+		if strings.Contains(out, "update out of sequence") {
+			for i := 1; i <= forceUpdateRetries; i++ {
+				select {
+				case <-ctx.Done():
+					return fmt.Errorf("docker service update --force %s: %w", fullName, ctx.Err())
+				case <-time.After(forceUpdateBackoff):
+				}
+				if retryOut, retryErr := d.runWithOutput(exec.CommandContext(ctx, "docker", "service", "update",
+					"--force", "--detach=true", fullName)); retryErr == nil {
+					return nil
+				} else {
+					out = retryOut
+					err = retryErr
+					if !strings.Contains(retryOut, "update out of sequence") {
+						break
+					}
+				}
+			}
+		}
 		if out != "" {
 			return fmt.Errorf("docker service update --force %s: %s", fullName, out)
 		}
