@@ -180,6 +180,11 @@ func homeEnv(homeDir string) []string {
 		// `docker stack deploy --with-registry-auth` (run with HOME set to a
 		// temp dir below) can still reach GHCR.
 		"DOCKER_CONFIG",
+		// PMCLUSTER_OO_* let CI point the OpenObserve provisioner at a
+		// reachable origin (no public DNS for observ.<domain>) and skip TLS
+		// verification for the self-signed e2e certificate.
+		"PMCLUSTER_OO_URL",
+		"PMCLUSTER_OO_INSECURE",
 	} {
 		if v := os.Getenv(k); v != "" {
 			env = append(env, k+"="+v)

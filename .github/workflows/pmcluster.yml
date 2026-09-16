@@ -112,7 +112,15 @@ jobs:
           password: ${{ secrets.GH_Token }}
           logout: false
 
+      # The cluster up OpenObserve provisioner reaches OO over the public edge
+      # (https://observ.<domain>).  In CI the domain is example.test with no
+      # public DNS, so map it to localhost (Traefik listens on :443) and let
+      # the provisioner skip TLS verification for the self-signed e2e cert.
+      - name: Map observ.example.test to localhost
+        run: echo "127.0.0.1 observ.example.test" | sudo tee -a /etc/hosts
+
       - name: swarm e2e
         env:
           PMCLUSTER_E2E_SWARM: "1"
+          PMCLUSTER_OO_INSECURE: "1"
         run: make e2e

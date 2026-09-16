@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -21,11 +23,31 @@ import (
 // ooProvisioner builds the OpenObserve user+token provisioner for `up`/`update`.
 // It reaches OpenObserve over the public edge (https://observ.<domain>) from
 // the manager host.
+//
+// Env overrides (used by CI/e2e where observ.<domain> has no public DNS and
+// the certificate is self-signed):
+//
+//	PMCLUSTER_OO_URL       base URL of the OpenObserve API
+//	                       (default https://observ.<domain>)
+//	PMCLUSTER_OO_INSECURE  "1" skips TLS certificate verification
 func ooProvisioner(st *store.Store, cipher *credentials.Cipher, out io.Writer, domain string) *cluster.OpenObserveProvisioner {
+	baseURL := os.Getenv("PMCLUSTER_OO_URL")
+	if baseURL == "" {
+		baseURL = "https://observ." + domain
+	}
+	client := openobserve.NewClient(baseURL, "default")
+	if os.Getenv("PMCLUSTER_OO_INSECURE") == "1" {
+		client.HTTP = &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // opt-in env override for CI/e2e only
+			},
+		}
+	}
 	return &cluster.OpenObserveProvisioner{
 		Store:  st,
 		Cipher: cipher,
-		Client: openobserve.NewClient("https://observ."+domain, "default"),
+		Client: client,
 		Org:    "default",
 		Stdout: out,
 	}
