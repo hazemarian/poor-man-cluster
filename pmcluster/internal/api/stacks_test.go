@@ -2,7 +2,16 @@ package api
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
 // TestLastBackupJSON_NoneRecorded returns nil when the stack has no
@@ -94,5 +103,66 @@ func TestLastBackupJSON_MostRecentFirst(t *testing.T) {
 	}
 	if got["revision"] != int64(1700000099) {
 		t.Errorf("expected newest revision 1700000099, got %v", got["revision"])
+	}
+}
+
+// stubDeployer is a minimal cluster.StackDeployer for handler tests: it
+// records which stacks were removed.
+type stubDeployer struct {
+	removed []string
+}
+
+func (s *stubDeployer) DeployStack(context.Context, string, []byte) error { return nil }
+
+func (s *stubDeployer) RemoveStack(_ context.Context, name string) error {
+	s.removed = append(s.removed, name)
+	return nil
+}
+
+func (s *stubDeployer) ForceUpdateService(context.Context, string) error { return nil }
+
+func (s *stubDeployer) PruneStaleContainers(context.Context, string, string) error { return nil }
+
+var _ cluster.StackDeployer = (*stubDeployer)(nil)
+
+// TestRemoveStackHandler covers DELETE /api/stacks/{name}: a deployed stack is
+// removed from the swarm and deleted from the store (200), and an unknown
+// stack yields 404.
+func TestRemoveStackHandler(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	rev := &store.StackRevision{
+		StackName:    "demo",
+		Revision:     1000,
+		SourceYAML:   "app: demo",
+		RenderedYAML: "services: {}",
+	}
+	if err := st.RecordDeploy(ctx, rev, ""); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+
+	dep := &stubDeployer{}
+	h := &StacksHandler{Store: st, Service: &deploy.Service{Store: st, Deployer: dep}}
+
+	r := chi.NewRouter()
+	h.Mount(r)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/stacks/demo", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE /stacks/demo = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if len(dep.removed) != 1 || dep.removed[0] != "demo" {
+		t.Errorf("RemoveStack calls = %v, want [demo]", dep.removed)
+	}
+	if _, err := st.GetStack(ctx, "demo"); !errors.Is(err, store.ErrStackNotFound) {
+		t.Errorf("stack row still present after DELETE: %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/stacks/ghost", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("DELETE /stacks/ghost = %d, want 404; body: %s", rec.Code, rec.Body.String())
 	}
 }

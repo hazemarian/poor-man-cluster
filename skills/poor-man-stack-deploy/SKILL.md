@@ -65,7 +65,7 @@ pmcluster serve   # foreground; supervise via systemd for production
 
 ## Operator Console
 
-`https://pmcluster.<domain>` is a gin + HTMX operator console for stacks (deploy/rollback), webhooks, API keys, per-host TLS, backups, and settings.
+`https://pmcluster.<domain>` is a gin + HTMX operator console for stacks (deploy/rollback/delete), webhooks, API keys, per-host TLS, backups, and settings.
 
 - **Login:** user `admin`, password from `pmcluster credentials show edge_admin`.
 - It talks to the daemon with a dedicated `edge` API token; you don't manage that token manually.
@@ -284,9 +284,12 @@ curl -X POST $BASE/api/stacks/my-app/rollback \
   -H "Authorization: Bearer <admin-token>" \
   -H "Content-Type: application/json" \
   -d '{"revision": 1719000000}'
+
+# Remove a stack (docker stack rm + record cleanup)
+curl -X DELETE $BASE/api/stacks/my-app -H "Authorization: Bearer <admin-token>"
 ```
 
-Other endpoints: `GET /api/cluster/info`, `GET /api/nodes`, `GET /api/stacks/{name}/revisions/{rev}`, `GET|POST /api/backups`, `GET|POST|DELETE /api/tls/hosts`, `GET|POST|DELETE /api/webhooks`, `GET|POST /api/api_keys`. Full spec in `pmcluster/docs/openapi.yaml`.
+Other endpoints: `GET /api/cluster/info`, `GET /api/nodes`, `GET /api/stacks/{name}/revisions/{rev}`, `GET|POST /api/backups`, `GET|POST|DELETE /api/tls/hosts`, `GET|POST|DELETE /api/webhooks`, `GET|POST /api/api_keys`. Full spec in `pmcluster/docs/openapi.yaml`. The console's stacks list has a **Delete** button (with confirmation) per stack — same as `DELETE /api/stacks/{name}`.
 
 ## CI/CD Webhook Setup
 

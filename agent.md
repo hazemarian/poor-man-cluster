@@ -158,7 +158,10 @@ Services mounted under `/api`:
   `Deps.Update` closure wired in `cli/serve.go`).
 - `tls.go` — GET/PUT/DELETE `/tls/hosts[/{host}]` (per-host certs, DB-backed).
 - `sitecert.go` — GET/PUT `/tls/site` (cluster's own cert).
-- Also stacks, backups, nodes, me, cluster/info.
+- `stacks.go` (`internal/api`) — GET/POST `/stacks`, GET `/stacks/{name}`,
+  GET `/stacks/{name}/revisions/{rev}`, POST `/stacks/{name}/rollback`,
+  **DELETE `/stacks/{name}`** (undeploy: `docker stack rm` + `Store.DeleteStack`).
+- Also backups, nodes, me, cluster/info.
 
 Every service follows the same shape: a struct with dependencies + a
 `Mount(r chi.Router)` method; handlers return JSON via `writeJSON`/`writeErr`.
@@ -169,7 +172,9 @@ migrations (each in its own transaction, tracked in `schema_version` —
 exactly-once, idempotent). Repositories by file:
 - `users.go` — daemon users + v2 API tokens (`pmc_<id>_<secret>`), argon2id.
 - `credentials.go` — platform credentials, AES-GCM ciphertext.
-- `stacks.go`, `webhooks.go`, `registries.go`, `backups.go`, `settings.go`
+- `stacks.go` — stack records + revisions (unix-ts revisions, `NextFreeRevision`
+  collision avoidance, `DeleteStack` cascades revisions via FK).
+- `webhooks.go`, `registries.go`, `backups.go`, `settings.go`
   (key/value), `configs.go` + `secrets.go` (migration 0008, DSL-backed; rows
   carry `scope` (cluster|service) + `stack` (owning stack, service scope);
   `ListConfigs`/`ListSecrets` filter by `(scope, stack)`, `UpdateSecret`
@@ -232,8 +237,10 @@ array). `translate.go` takes an optional `EnvResolver` (deploy.Service wires a
 `deploy.Service` = single engine behind CLI deploy, `/api/stacks`, and
 webhooks. `Deploy(ctx, payload)` → parse/interpolate/validate/translate →
 `docker stack deploy` → records revision (unix timestamp + NextFreeRevision
-collision avoidance). `Rollback(ctx, stack, revision)`. `Resolver` field for
-config()/secrets() env refs.
+collision avoidance). `Rollback(ctx, stack, revision)`. `Undeploy(ctx, stack)`
+= `docker stack rm` first, then `Store.DeleteStack` (DB row + revisions via
+FK cascade) — backs the console Delete button and `DELETE /api/stacks/{name}`.
+`Resolver` field for config()/secrets() env refs.
 
 ### internal/webhook — CI webhook receiver
 `POST /webhook/{source}`. Auth = HMAC-SHA256 over
@@ -274,6 +281,8 @@ live on `/stacks/<name>/config` (reached via the **Config** button in the
 stacks list); create forms prefill the `<stack>_` name prefix and record the
 owning stack. Secret values are revealed on demand with a confirmation prompt
 (`/secrets/reveal/:name`-style routes) and editable via `PUT /api/secrets/{name}`.
+The stacks list has a per-row **Delete** button (confirmation prompt) that
+undeploys the stack (`DELETE /api/stacks/{name}` → `deploy.Service.Undeploy`).
 
 ### internal/telemetry + internal/openobserve + internal/backup + internal/logger + internal/buildinfo
 - `telemetry`: OTel SDK init (metrics/traces → OTLP :4318 collector).

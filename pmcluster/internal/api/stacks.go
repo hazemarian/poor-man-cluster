@@ -33,6 +33,7 @@ func (h *StacksHandler) Mount(r chi.Router) {
 	r.Get("/stacks/{name}", h.show)
 	r.Get("/stacks/{name}/revisions/{rev}", h.showRevision)
 	r.Post("/stacks/{name}/rollback", h.rollback)
+	r.Delete("/stacks/{name}", h.remove)
 }
 
 func (h *StacksHandler) deploy(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +67,19 @@ func (h *StacksHandler) list(w http.ResponseWriter, r *http.Request) {
 }
 
 // show returns metadata + the 20 most recent revisions.
+func (h *StacksHandler) remove(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if err := h.Service.Undeploy(r.Context(), name); err != nil {
+		if errors.Is(err, store.ErrStackNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "stack not found"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stack": name})
+}
+
 func (h *StacksHandler) show(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	st, err := h.Store.GetStack(r.Context(), name)

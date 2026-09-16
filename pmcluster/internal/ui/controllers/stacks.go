@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -36,6 +37,35 @@ func (c Stacks) List(g *gin.Context) {
 	stacks, err := c.API.ListStacks(ctx)
 	if err != nil {
 		d.Error = err.Error()
+		c.Views.Fragment(g, "stacks", d)
+		return
+	}
+	for _, s := range stacks {
+		d.Stacks = append(d.Stacks, stackRow{
+			Name: s.Name, CurrentRevision: s.CurrentRevision,
+			RepoURL: s.RepoURL, UpdatedAt: s.UpdatedAt,
+		})
+	}
+	d.Count = len(d.Stacks)
+	c.Views.Fragment(g, "stacks", d)
+}
+
+// Remove undeploys a stack from the Swarm and removes its record, then
+// re-renders the stacks table.
+func (c Stacks) Remove(g *gin.Context) {
+	ctx := g.Request.Context()
+	d := stackData{}
+	name := g.Param("name")
+	if err := c.API.DeleteStack(ctx, name); err != nil {
+		d.Error = err.Error()
+	} else {
+		d.Msg = fmt.Sprintf("Stack %s removed.", name)
+	}
+	stacks, err := c.API.ListStacks(ctx)
+	if err != nil {
+		if d.Error == "" {
+			d.Error = err.Error()
+		}
 		c.Views.Fragment(g, "stacks", d)
 		return
 	}

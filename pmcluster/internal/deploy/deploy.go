@@ -249,6 +249,45 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 	}, nil
 }
 
+// Undeploy removes a deployed stack from the swarm and deletes its record
+// (and, via the FK cascade, its revision history) from the store. It is the
+// single implementation behind DELETE /api/stacks/{name} and the console's
+// stack Delete button.
+func (s *Service) Undeploy(ctx context.Context, stackName string) (retErr error) {
+	counter, hist, tracer := instruments()
+	ctx, span := tracer.Start(ctx, "pmcluster.undeploy",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(
+			attribute.String("pmcluster.stack", stackName),
+		),
+	)
+	start := time.Now()
+	defer func() {
+		status := "ok"
+		if retErr != nil {
+			status = "error"
+			span.RecordError(retErr)
+			span.SetStatus(codes.Error, retErr.Error())
+		}
+		attrs := metric.WithAttributes(
+			attribute.String("stack", stackName),
+			attribute.String("status", status),
+			attribute.String("op", "undeploy"),
+		)
+		counter.Add(ctx, 1, attrs)
+		hist.Record(ctx, float64(time.Since(start).Milliseconds()), attrs)
+		span.End()
+	}()
+
+	if err := s.Deployer.RemoveStack(ctx, stackName); err != nil {
+		return fmt.Errorf("docker stack rm: %w", err)
+	}
+	if err := s.Store.DeleteStack(ctx, stackName); err != nil {
+		return fmt.Errorf("delete stack record: %w", err)
+	}
+	return nil
+}
+
 // runPreDeployBackup records its outcome in the audit table.  Returns an
 // error so callers can decide whether to abort the deploy.
 func (s *Service) runPreDeployBackup(ctx context.Context, stackName string, revision int64) error {

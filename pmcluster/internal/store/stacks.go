@@ -135,6 +135,20 @@ func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
 	return out, rows.Err()
 }
 
+// DeleteStack removes the stack row and, via the ON DELETE CASCADE foreign
+// key on stack_revisions, its entire revision history. Returns
+// ErrStackNotFound when no such stack exists.
+func (s *Store) DeleteStack(ctx context.Context, name string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM stacks WHERE name = ?`, name)
+	if err != nil {
+		return fmt.Errorf("delete stack %s: %w", name, err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrStackNotFound
+	}
+	return nil
+}
+
 // NextFreeRevision returns the smallest unused revision id ≥ candidate.
 // Lets callers pass time.Now().Unix() and survive sub-second collisions
 // from back-to-back deploys.

@@ -176,6 +176,31 @@ paths:
                 $ref: "#/components/schemas/StackDetail"
         "404":
           $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Remove a deployed stack from the swarm and its record
+      operationId: removeStack
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Stack removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stack:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/stacks/{name}/revisions/{rev}:
     get:
       summary: One revision's full source and rendered YAML

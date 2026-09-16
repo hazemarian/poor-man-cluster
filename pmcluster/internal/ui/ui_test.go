@@ -44,6 +44,10 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 	})
 
 	mux.HandleFunc("/api/stacks/demo", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		write(w, `{"stack":{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo"},"revisions":[{"revision":3,"created_at":30},{"revision":2,"created_at":20}],"last_backup":{"status":"succeeded","started_at":25}}`)
 	})
 	mux.HandleFunc("/api/stacks/demo/revisions/3", func(w http.ResponseWriter, r *http.Request) {
@@ -329,6 +333,7 @@ func TestAllControllers(t *testing.T) {
 	assertFragment(http.MethodGet, "/stacks/demo/backups", "", "Backups", "succeeded", "1 recent backup")
 
 	assertFragment(http.MethodPost, "/stacks/demo/rollback", "revision=2", "Stack · demo", "Rolled back demo to revision 2")
+	assertFragment(http.MethodPost, "/stacks/demo/remove", "", "Stacks", "Stack demo removed.")
 
 	assertFragment(http.MethodPost, "/backups", "", "Backups", "Backup triggered.")
 

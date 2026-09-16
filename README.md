@@ -66,7 +66,7 @@ Runs as a global service on every node. Nightly tarballs of all Docker volumes, 
 ### pmcluster-edge — Smart Proxy & Operator Console
 A small Go service (gin + HTMX) deployed as the `pmcluster-edge` Swarm service on the manager. It owns the `pmcluster.<domain>` origin end to end:
 
-- **Operator console** — a web UI (user `admin`, password provisioned at `cluster up`) for managing API keys, users, webhooks, per-host TLS certificates, stacks (deploy/rollback), backups, and cluster settings.
+- **Operator console** — a web UI (user `admin`, password provisioned at `cluster up`) for managing API keys, users, webhooks, per-host TLS certificates, stacks (deploy/rollback/delete), backups, and cluster settings.
 - **Smart reverse proxy** — everything the console doesn't handle is proxied to the pmcluster daemon (`host.docker.internal:9090`). The daemon's host-bound port is no longer exposed publicly.
 - **Edge hardening** — per-real-IP token-bucket rate limits (separate buckets for `/api/*` and `/webhook/*`), an in-flight request shield (503 when saturated), request timeouts, body size caps, and automatic IP blocklisting (403) after repeated abuse or upstream failures.
 
@@ -404,7 +404,7 @@ pmcluster stack show donation-campaign    # metadata + recent revisions (→ mar
 pmcluster rollback donation-campaign 1778439014   # re-apply a stored revision
 ```
 
-Every deploy gets a unix-timestamp revision id. Rollback re-applies a stored revision as a NEW revision (preserves the audit trail — both deploys are recorded). The corresponding REST endpoints are `GET /api/stacks`, `GET /api/stacks/{name}`, `GET /api/stacks/{name}/revisions/{rev}`, `POST /api/stacks/{name}/rollback`.
+Every deploy gets a unix-timestamp revision id. Rollback re-applies a stored revision as a NEW revision (preserves the audit trail — both deploys are recorded). The corresponding REST endpoints are `GET /api/stacks`, `GET /api/stacks/{name}`, `GET /api/stacks/{name}/revisions/{rev}`, `POST /api/stacks/{name}/rollback`. A stack can be removed (services `docker stack rm` + record cleanup) from the console's stacks list — `DELETE /api/stacks/{name}`.
 
 ### Webhooks (CI integrations)
 
@@ -488,6 +488,7 @@ The daemon exposes a JSON REST API under `/api/*` (Bearer auth) plus the unauthe
 | `GET` | `/api/stacks/{name}` | Stack detail + revisions |
 | `GET` | `/api/stacks/{name}/revisions/{rev}` | A stored revision |
 | `POST` | `/api/stacks/{name}/rollback` | Roll back to a revision |
+| `DELETE` | `/api/stacks/{name}` | Remove a stack from the swarm + its record |
 | `GET`/`POST` | `/api/backups` | List / trigger backups |
 | `GET`/`PUT`/`DELETE` | `/api/tls/hosts` | Per-host TLS certs |
 | `GET`/`PUT` | `/api/tls/site` | Cluster's own (main) certificate |

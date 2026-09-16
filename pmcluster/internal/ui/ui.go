@@ -109,6 +109,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	g.GET("/stacks/:name/revisions/:rev", st.ShowRevision)
 	g.POST("/stacks/:name/rollback", st.Rollback)
 	g.GET("/stacks/:name/backups", st.ShowBackups)
+	g.POST("/stacks/:name/remove", st.Remove)
 
 	// Per-stack configs + secrets: service-scope rows belonging to that stack.
 	scc := controllers.StackConfigs{Controller: a.ctrl}

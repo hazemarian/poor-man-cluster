@@ -13,10 +13,13 @@ import (
 )
 
 // recordingDeployer is a test-local implementation of cluster.StackDeployer.
-// It records every (stackName, composeYAML) call and returns a configurable error.
+// It records every (stackName, composeYAML) call and returns configurable
+// errors for deploy and remove independently.
 type recordingDeployer struct {
 	calls     []deployCall
-	returnErr error
+	removed   []string
+	err       error
+	removeErr error
 }
 
 type deployCall struct {
@@ -26,11 +29,12 @@ type deployCall struct {
 
 func (r *recordingDeployer) DeployStack(_ context.Context, name string, composeYAML []byte) error {
 	r.calls = append(r.calls, deployCall{name: name, yaml: composeYAML})
-	return r.returnErr
+	return r.err
 }
 
-func (r *recordingDeployer) RemoveStack(_ context.Context, _ string) error {
-	return nil
+func (r *recordingDeployer) RemoveStack(_ context.Context, name string) error {
+	r.removed = append(r.removed, name)
+	return r.removeErr
 }
 
 func (r *recordingDeployer) ForceUpdateService(_ context.Context, _ string) error {
@@ -242,7 +246,7 @@ func TestDeploy_VersionOverride(t *testing.T) {
 // deploys. The next successful deploy overwrites current_revision.
 func TestDeploy_DeployerError(t *testing.T) {
 	s := openTestStore(t)
-	dep := &recordingDeployer{returnErr: errors.New("docker daemon unavailable")}
+	dep := &recordingDeployer{err: errors.New("docker daemon unavailable")}
 	svc := newService(s, dep)
 	ctx := context.Background()
 
@@ -349,5 +353,68 @@ func TestRollback_UnknownStack(t *testing.T) {
 	_, err := svc.Rollback(ctx, "ghost-stack", 1234)
 	if !errors.Is(err, store.ErrRevisionNotFound) {
 		t.Errorf("Rollback(ghost-stack) = %v, want ErrRevisionNotFound", err)
+	}
+}
+
+// TestUndeploy_HappyPath removes the swarm stack first (docker stack rm) and
+// deletes the stack row + its revisions from the store.
+func TestUndeploy_HappyPath(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	if err := svc.Undeploy(ctx, "donation-campaign"); err != nil {
+		t.Fatalf("Undeploy: %v", err)
+	}
+
+	if len(dep.removed) != 1 || dep.removed[0] != "donation-campaign" {
+		t.Errorf("RemoveStack calls = %v, want [donation-campaign]", dep.removed)
+	}
+	if _, err := s.GetStack(ctx, "donation-campaign"); !errors.Is(err, store.ErrStackNotFound) {
+		t.Errorf("stack row still present after Undeploy: %v", err)
+	}
+}
+
+// TestUndeploy_UnknownStack returns ErrStackNotFound when there is no stack
+// record. The swarm removal is attempted first (it is harmless and keeps the
+// store consistent if the swarm stack already exists), then the missing record
+// surfaces as ErrStackNotFound.
+func TestUndeploy_UnknownStack(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+
+	err := svc.Undeploy(context.Background(), "ghost-stack")
+	if !errors.Is(err, store.ErrStackNotFound) {
+		t.Errorf("Undeploy(ghost-stack) = %v, want ErrStackNotFound", err)
+	}
+	if len(dep.removed) != 1 || dep.removed[0] != "ghost-stack" {
+		t.Errorf("RemoveStack calls = %v, want [ghost-stack]", dep.removed)
+	}
+}
+
+// TestUndeploy_DeployerError surfaces the docker stack rm failure and leaves
+// the stack row intact (nothing is deleted from the store).
+func TestUndeploy_DeployerError(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{removeErr: errors.New("docker daemon unavailable")}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	err := svc.Undeploy(ctx, "donation-campaign")
+	if err == nil || !strings.Contains(err.Error(), "docker stack rm") {
+		t.Errorf("Undeploy err = %v, want wrapped docker stack rm error", err)
+	}
+	if _, gErr := s.GetStack(ctx, "donation-campaign"); gErr != nil {
+		t.Errorf("stack row should survive a failed swarm removal: %v", gErr)
 	}
 }

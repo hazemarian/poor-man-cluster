@@ -281,6 +281,47 @@ func TestCascadeDelete_StackDeletesRevisions(t *testing.T) {
 	}
 }
 
+// TestDeleteStack_RemovesStackAndRevisions deletes a deployed stack via the
+// store API: the stack row AND its revisions (ON DELETE CASCADE) are gone.
+func TestDeleteStack_RemovesStackAndRevisions(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	rev := makeRevision("mystack", 1000, "src", "rendered")
+	if err := s.RecordDeploy(ctx, rev, "https://github.com/org/repo"); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+	rev2 := makeRevision("mystack", 1001, "src2", "rendered2")
+	if err := s.RecordDeploy(ctx, rev2, "https://github.com/org/repo"); err != nil {
+		t.Fatalf("RecordDeploy v2: %v", err)
+	}
+
+	if err := s.DeleteStack(ctx, "mystack"); err != nil {
+		t.Fatalf("DeleteStack: %v", err)
+	}
+
+	if _, err := s.GetStack(ctx, "mystack"); !errors.Is(err, ErrStackNotFound) {
+		t.Errorf("GetStack after delete = %v, want ErrStackNotFound", err)
+	}
+	if _, err := s.GetRevision(ctx, "mystack", 1000); !errors.Is(err, ErrRevisionNotFound) {
+		t.Errorf("GetRevision(1000) after delete = %v, want ErrRevisionNotFound (cascade)", err)
+	}
+	if _, err := s.GetRevision(ctx, "mystack", 1001); !errors.Is(err, ErrRevisionNotFound) {
+		t.Errorf("GetRevision(1001) after delete = %v, want ErrRevisionNotFound (cascade)", err)
+	}
+}
+
+// TestDeleteStack_UnknownStack verifies DeleteStack reports ErrStackNotFound
+// when no stack row matches.
+func TestDeleteStack_UnknownStack(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if err := s.DeleteStack(ctx, "ghost"); !errors.Is(err, ErrStackNotFound) {
+		t.Errorf("DeleteStack(ghost) = %v, want ErrStackNotFound", err)
+	}
+}
+
 // revisionsIDs is a debug helper that extracts revision IDs from a slice.
 func revisionsIDs(revs []*StackRevision) []int64 {
 	ids := make([]int64, len(revs))

@@ -187,6 +187,11 @@ func (c *Client) Rollback(ctx context.Context, name string, rev int64) (*Rollbac
 	return &r, err
 }
 
+// DeleteStack undeploys the stack from the Swarm and removes its record.
+func (c *Client) DeleteStack(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodDelete, "/stacks/"+url.PathEscape(name), nil, nil)
+}
+
 // ListBackups returns the most recent backups across stacks.
 func (c *Client) ListBackups(ctx context.Context, limit int) ([]Backup, error) {
 	var body struct {
