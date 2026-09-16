@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -15,15 +16,11 @@ import (
 type StackConfigs struct{ *Controller }
 
 type stackConfigsData struct {
-	Stack      string
-	Configs    []configRow
-	Editing    *configRow
-	Versions   []configVersionRow
-	Secrets    []secretRow
-	RevealName string
-	RevealVal  string
-	Msg        string
-	Error      string
+	Stack   string
+	Configs []configRow
+	Secrets []secretRow
+	Msg     string
+	Error   string
 }
 
 // Page renders the config + secrets page for one stack.
@@ -35,60 +32,103 @@ func (c StackConfigs) Page(g *gin.Context) {
 		return
 	}
 	c.fetch(ctx, &d)
-	if name := g.Query("edit"); name != "" {
-		if e, vs, err := c.loadConfigEdit(ctx, name); err == nil {
-			d.Editing, d.Versions = e, vs
-		}
-	}
 	c.Views.Fragment(g, "stackconfigs", d)
+}
+
+// ConfigNew renders the create-config form in the modal (service scope).
+func (c StackConfigs) ConfigNew(g *gin.Context) {
+	d := configFormData{Scope: "service", Stack: g.Param("name"), Kind: "file", Action: "/stacks/" + g.Param("name") + "/configs/add"}
+	if !c.requireAPI(g, &d.Error) {
+		c.configFormError(g, d)
+		return
+	}
+	c.configForm(g, d)
+}
+
+// ConfigEdit renders the edit-config form + version history in the modal.
+func (c StackConfigs) ConfigEdit(g *gin.Context) {
+	ctx := g.Request.Context()
+	d := configFormData{Scope: "service", Stack: g.Param("name"), Name: g.Param("config_name"), IsEdit: true, Action: "/stacks/" + g.Param("name") + "/configs/edit"}
+	if !c.requireAPI(g, &d.Error) {
+		c.configFormError(g, d)
+		return
+	}
+	row, vs, err := c.loadConfigEdit(ctx, d.Name)
+	if err != nil {
+		d.Error = err.Error()
+		c.configFormError(g, d)
+		return
+	}
+	d.Kind, d.Content, d.Versions = row.Kind, row.Content, vs
+	c.configForm(g, d)
+}
+
+// SecretNew renders the create-secret form in the modal (service scope).
+func (c StackConfigs) SecretNew(g *gin.Context) {
+	d := secretFormData{Scope: "service", Stack: g.Param("name"), Action: "/stacks/" + g.Param("name") + "/secrets/add"}
+	if !c.requireAPI(g, &d.Error) {
+		c.secretFormError(g, d)
+		return
+	}
+	c.secretForm(g, d)
+}
+
+// SecretEdit renders the edit-secret form in the modal.
+func (c StackConfigs) SecretEdit(g *gin.Context) {
+	d := secretFormData{Scope: "service", Stack: g.Param("name"), Name: g.Param("secret_name"), IsEdit: true, Action: "/stacks/" + g.Param("name") + "/secrets/edit"}
+	if !c.requireAPI(g, &d.Error) {
+		c.secretFormError(g, d)
+		return
+	}
+	c.secretForm(g, d)
 }
 
 // AddConfig creates a new service-scope config for this stack.
 func (c StackConfigs) AddConfig(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := stackConfigsData{Stack: g.Param("name")}
+	stack := g.Param("name")
+	d := configFormData{Scope: "service", Stack: stack, Action: "/stacks/" + stack + "/configs/add"}
 	name, kind, content := g.PostForm("name"), g.PostForm("kind"), g.PostForm("content")
 	if kind == "" {
 		kind = "file"
 	}
+	d.Name, d.Kind, d.Content = name, kind, content
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":
 		d.Error = "Name is required."
 	default:
-		_, err := c.API.CreateConfig(ctx, "service", d.Stack, name, kind, content)
-		if err != nil {
+		if _, err := c.API.CreateConfig(ctx, "service", stack, name, kind, content); err != nil {
 			d.Error = err.Error()
 		} else {
-			d.Msg = fmt.Sprintf("Config %s created for stack %s.", name, d.Stack)
+			c.fetch(g.Request.Context(), &stackConfigsData{})
+			c.Views.Fragment(g, "stackconfigs", stackConfigsData{Stack: stack, Msg: fmt.Sprintf("Config %s created for stack %s.", name, stack)})
+			return
 		}
 	}
-	c.fetch(ctx, &d)
-	c.Views.Fragment(g, "stackconfigs", d)
+	c.configFormError(g, d)
 }
 
 // EditConfig replaces a config's content, recording a new version.
 func (c StackConfigs) EditConfig(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := stackConfigsData{Stack: g.Param("name")}
+	stack := g.Param("name")
+	d := configFormData{Scope: "service", Stack: stack, IsEdit: true, Action: "/stacks/" + stack + "/configs/edit"}
 	name, content := g.PostForm("name"), g.PostForm("content")
+	d.Name, d.Content = name, content
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":
 		d.Error = "Invalid config name."
 	default:
-		_, err := c.API.UpdateConfig(ctx, name, content)
-		if err != nil {
+		if _, err := c.API.UpdateConfig(ctx, name, content); err != nil {
 			d.Error = err.Error()
 		} else {
-			d.Msg = fmt.Sprintf("Config %s updated — a new version was recorded.", name)
-			if e, vs, err := c.loadConfigEdit(ctx, name); err == nil {
-				d.Editing, d.Versions = e, vs
-			}
+			c.Views.Fragment(g, "stackconfigs", stackConfigsData{Stack: stack, Msg: fmt.Sprintf("Config %s updated — a new version was recorded.", name)})
+			return
 		}
 	}
-	c.fetch(ctx, &d)
-	c.Views.Fragment(g, "stackconfigs", d)
+	c.configFormError(g, d)
 }
 
 // RollbackConfig restores a config to a prior version.
@@ -106,9 +146,6 @@ func (c StackConfigs) RollbackConfig(g *gin.Context) {
 			d.Error = err.Error()
 		} else {
 			d.Msg = fmt.Sprintf("Config %s rolled back to version %d.", name, vid)
-			if e, vs, err := c.loadConfigEdit(ctx, name); err == nil {
-				d.Editing, d.Versions = e, vs
-			}
 		}
 	}
 	c.fetch(ctx, &d)
@@ -138,8 +175,10 @@ func (c StackConfigs) RemoveConfig(g *gin.Context) {
 // AddSecret stores a new service-scope secret for this stack.
 func (c StackConfigs) AddSecret(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := stackConfigsData{Stack: g.Param("name")}
+	stack := g.Param("name")
+	d := secretFormData{Scope: "service", Stack: stack, Action: "/stacks/" + stack + "/secrets/add"}
 	name, value := g.PostForm("name"), g.PostForm("value")
+	d.Name, d.Value = name, value
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":
@@ -147,22 +186,23 @@ func (c StackConfigs) AddSecret(g *gin.Context) {
 	case value == "":
 		d.Error = "Value is required."
 	default:
-		_, err := c.API.CreateSecret(ctx, "service", d.Stack, name, value)
-		if err != nil {
+		if _, err := c.API.CreateSecret(ctx, "service", stack, name, value); err != nil {
 			d.Error = err.Error()
 		} else {
-			d.Msg = fmt.Sprintf("Secret %s created for stack %s.", name, d.Stack)
+			c.Views.Fragment(g, "stackconfigs", stackConfigsData{Stack: stack, Msg: fmt.Sprintf("Secret %s created for stack %s.", name, stack)})
+			return
 		}
 	}
-	c.fetch(ctx, &d)
-	c.Views.Fragment(g, "stackconfigs", d)
+	c.secretFormError(g, d)
 }
 
 // EditSecret replaces a stored secret's value.
 func (c StackConfigs) EditSecret(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := stackConfigsData{Stack: g.Param("name")}
+	stack := g.Param("name")
+	d := secretFormData{Scope: "service", Stack: stack, IsEdit: true, Action: "/stacks/" + stack + "/secrets/edit"}
 	name, value := g.PostForm("name"), g.PostForm("value")
+	d.Name, d.Value = name, value
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":
@@ -173,11 +213,11 @@ func (c StackConfigs) EditSecret(g *gin.Context) {
 		if _, err := c.API.UpdateSecret(ctx, name, value); err != nil {
 			d.Error = err.Error()
 		} else {
-			d.Msg = fmt.Sprintf("Secret %s updated.", name)
+			c.Views.Fragment(g, "stackconfigs", stackConfigsData{Stack: stack, Msg: fmt.Sprintf("Secret %s updated.", name)})
+			return
 		}
 	}
-	c.fetch(ctx, &d)
-	c.Views.Fragment(g, "stackconfigs", d)
+	c.secretFormError(g, d)
 }
 
 // RemoveSecret deletes a stored secret by name.
@@ -200,26 +240,41 @@ func (c StackConfigs) RemoveSecret(g *gin.Context) {
 	c.Views.Fragment(g, "stackconfigs", d)
 }
 
-// RevealSecret decrypts and shows a stored secret's plaintext on explicit
-// request (the UI asks for confirmation first).
+// RevealSecret decrypts and shows a stored secret's plaintext in the modal on
+// explicit request (the UI asks for confirmation first).
 func (c StackConfigs) RevealSecret(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := stackConfigsData{Stack: g.Param("name")}
 	name := g.Param("secret_name")
-	switch {
-	case !c.requireAPI(g, &d.Error):
-	case name == "":
-		d.Error = "Invalid secret name."
-	default:
-		sv, err := c.API.RevealSecret(ctx, name)
-		if err != nil {
-			d.Error = err.Error()
-		} else {
-			d.RevealName, d.RevealVal = sv.Name, sv.Value
-		}
+	if !c.requireAPI(g, new(string)) {
+		c.Views.Fragment(g, "secretreveal", secretRevealData{Name: name, Error: "pmcluster API not configured. Open Settings first."})
+		return
 	}
-	c.fetch(ctx, &d)
-	c.Views.Fragment(g, "stackconfigs", d)
+	if name == "" {
+		c.Views.Fragment(g, "secretreveal", secretRevealData{Error: "Invalid secret name."})
+		return
+	}
+	sv, err := c.API.RevealSecret(ctx, name)
+	if err != nil {
+		c.Views.Fragment(g, "secretreveal", secretRevealData{Name: name, Error: err.Error()})
+		return
+	}
+	c.Views.Fragment(g, "secretreveal", secretRevealData{Name: sv.Name, Value: sv.Value})
+}
+
+// configFormError renders the config form with the error, keeping the modal
+// open (HX-Retarget + 422 so hx-on::after-request does not close it).
+func (c StackConfigs) configFormError(g *gin.Context, d configFormData) {
+	g.Header("HX-Retarget", "#modal-body")
+	g.Status(http.StatusUnprocessableEntity)
+	c.configForm(g, d)
+}
+
+// secretFormError renders the secret form with the error, keeping the modal
+// open (HX-Retarget + 422 so hx-on::after-request does not close it).
+func (c StackConfigs) secretFormError(g *gin.Context, d secretFormData) {
+	g.Header("HX-Retarget", "#modal-body")
+	g.Status(http.StatusUnprocessableEntity)
+	c.secretForm(g, d)
 }
 
 // fetch loads the stack's configs + secrets, recording the first error.

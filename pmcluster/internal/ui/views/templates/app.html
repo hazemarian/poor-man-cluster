@@ -26,6 +26,18 @@
       document.body.appendChild(el);
       setTimeout(function(){ el.remove(); }, 2000);
     }
+    function openModal() {
+      var m = document.getElementById('modal');
+      if (m) m.hidden = false;
+    }
+    function closeModal() {
+      var m = document.getElementById('modal');
+      if (m) m.hidden = true;
+      document.getElementById('modal-body').innerHTML = '';
+    }
+    document.addEventListener('keydown', function(e){
+      if (e.key === 'Escape') closeModal();
+    });
   </script>
   <style>
     :root{color-scheme:dark;--bg:#0b0f14;--panel:#111722;--panel2:#0f1520;--line:#1e2733;--text:#dbe2ea;--muted:#7d899a;--accent:#4f9dff;--good:#44d47b;--warn:#ffb454;--bad:#ff5c5c;--radius:12px}
@@ -84,6 +96,16 @@
     .spinner{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;display:inline-block;vertical-align:-3px}
     @keyframes spin{to{transform:rotate(360deg)}}
     .toast{display:none}
+    .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:40;display:flex;align-items:center;justify-content:center;padding:20px}
+    .modal-backdrop[hidden]{display:none}
+    .modal{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);max-width:560px;width:100%;max-height:80vh;overflow:auto;padding:20px;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+    .modal h2{margin-top:0}
+    .modal-close{position:absolute;top:10px;right:10px;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:15px}
+    .modal-close:hover{color:var(--text)}
+    .modal .row{margin-top:18px}
+    .secret-mask{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;color:var(--muted)}
+    .section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 10px}
+    .section-head h2{margin:0}
   </style>
 </head>
 <body>
@@ -110,6 +132,12 @@
   <main class="content">
     <section id="view" hx-get="/overview" hx-trigger="load"></section>
   </main>
+</div>
+<div id="modal" class="modal-backdrop" hidden onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal()">×</button>
+    <div id="modal-body"></div>
+  </div>
 </div>
 </body>
 </html>

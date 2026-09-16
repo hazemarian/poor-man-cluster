@@ -118,10 +118,14 @@ func (a *App) Mount(engine *gin.Engine) {
 	g.POST("/stacks/:name/configs/edit", scc.EditConfig)
 	g.POST("/stacks/:name/configs/rollback/:config_name/:version_id", scc.RollbackConfig)
 	g.POST("/stacks/:name/configs/remove/:config_name", scc.RemoveConfig)
+	g.GET("/stacks/:name/configs/new", scc.ConfigNew)
+	g.GET("/stacks/:name/configs/edit/:config_name", scc.ConfigEdit)
 	g.POST("/stacks/:name/secrets/add", scc.AddSecret)
 	g.POST("/stacks/:name/secrets/edit", scc.EditSecret)
 	g.POST("/stacks/:name/secrets/remove/:secret_name", scc.RemoveSecret)
 	g.GET("/stacks/:name/secrets/reveal/:secret_name", scc.RevealSecret)
+	g.GET("/stacks/:name/secrets/new", scc.SecretNew)
+	g.GET("/stacks/:name/secrets/edit/:secret_name", scc.SecretEdit)
 
 	bk := controllers.Backups{Controller: a.ctrl}
 	g.GET("/backups", bk.List)
@@ -140,10 +144,14 @@ func (a *App) Mount(engine *gin.Engine) {
 	g.POST("/settings/configs/edit", stt.EditConfig)
 	g.POST("/settings/configs/rollback/:name/:version_id", stt.RollbackConfig)
 	g.POST("/settings/configs/remove/:name", stt.RemoveConfig)
+	g.GET("/settings/configs/new", stt.ConfigNew)
+	g.GET("/settings/configs/edit/:name", stt.ConfigEdit)
 	g.POST("/settings/secrets/add", stt.AddSecret)
 	g.POST("/settings/secrets/edit", stt.EditSecret)
 	g.POST("/settings/secrets/remove/:name", stt.RemoveSecret)
 	g.GET("/settings/secrets/reveal/:name", stt.RevealSecret)
+	g.GET("/settings/secrets/new", stt.SecretNew)
+	g.GET("/settings/secrets/edit/:name", stt.SecretEdit)
 	g.POST("/settings/apply", stt.Apply)
 
 	tlsC := controllers.TLS{Controller: a.ctrl}

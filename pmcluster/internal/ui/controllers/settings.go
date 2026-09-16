@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -25,11 +26,7 @@ type settingsData struct {
 	Version        string
 	User           string
 	ClusterConfigs []configRow
-	Editing        *configRow
-	Versions       []configVersionRow
 	ClusterSecrets []secretRow
-	RevealName     string
-	RevealVal      string
 	ApplySummary   string
 	Error          string
 	Msg            string
@@ -52,11 +49,6 @@ func (c Settings) Page(g *gin.Context) {
 	}
 	if configured {
 		c.loadCluster(g, &d)
-	}
-	if name := g.Query("edit"); name != "" && configured {
-		if e, vs, err := c.loadConfigEdit(g.Request.Context(), name); err == nil {
-			d.Editing, d.Versions = e, vs
-		}
 	}
 	c.Views.Fragment(g, "settings", d)
 }
@@ -86,14 +78,44 @@ func (c Settings) Save(g *gin.Context) {
 	c.redirectToSettings(g, "Settings saved.")
 }
 
-// AddConfig creates a new cluster-scope config.
+// ConfigNew renders the create-config form into the modal.
+func (c Settings) ConfigNew(g *gin.Context) {
+	d := configFormData{Scope: "cluster", Kind: "template", Action: "/settings/configs/add"}
+	if !c.requireAPI(g, &d.Error) {
+		c.configFormError(g, d)
+		return
+	}
+	c.configForm(g, d)
+}
+
+// ConfigEdit renders the edit-config form (with version history) into the modal.
+func (c Settings) ConfigEdit(g *gin.Context) {
+	name := g.Param("name")
+	d := configFormData{Scope: "cluster", Name: name, Kind: "template", IsEdit: true, Action: "/settings/configs/edit"}
+	if !c.requireAPI(g, &d.Error) {
+		c.configFormError(g, d)
+		return
+	}
+	row, versions, err := c.loadConfigEdit(g.Request.Context(), name)
+	if err != nil {
+		d.Error = err.Error()
+		c.configFormError(g, d)
+		return
+	}
+	d.Name, d.Kind, d.Content, d.Versions = row.Name, row.Kind, row.Content, versions
+	c.configForm(g, d)
+}
+
+// AddConfig creates a new cluster-scope config. Validation/API failures are
+// returned as the form fragment (HX-Retarget #modal-body, 422) so the modal
+// stays open with the operator's input intact.
 func (c Settings) AddConfig(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := settingsData{}
 	name, kind, content := g.PostForm("name"), g.PostForm("kind"), g.PostForm("content")
 	if kind == "" {
 		kind = "template"
 	}
+	d := configFormData{Scope: "cluster", Name: name, Kind: kind, Content: content, Action: "/settings/configs/add"}
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":
@@ -102,10 +124,11 @@ func (c Settings) AddConfig(g *gin.Context) {
 		if _, err := c.API.CreateConfig(ctx, "cluster", "", name, kind, content); err != nil {
 			d.Error = err.Error()
 		} else {
-			d.Msg = fmt.Sprintf("Config %s created. It is applied by the next cluster update.", name)
+			c.redirectToSettings(g, fmt.Sprintf("Config %s created. It is applied by the next cluster update.", name))
+			return
 		}
 	}
-	c.reloadSettings(g, d)
+	c.configFormError(g, d)
 }
 
 // EditConfig replaces a cluster config's content, recording a new version and
@@ -113,8 +136,8 @@ func (c Settings) AddConfig(g *gin.Context) {
 // re-renders from it.
 func (c Settings) EditConfig(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := settingsData{}
 	name, content := g.PostForm("name"), g.PostForm("content")
+	d := configFormData{Scope: "cluster", Name: name, Kind: "template", Content: content, IsEdit: true, Action: "/settings/configs/edit"}
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":
@@ -123,13 +146,11 @@ func (c Settings) EditConfig(g *gin.Context) {
 		if _, err := c.API.UpdateConfig(ctx, name, content); err != nil {
 			d.Error = err.Error()
 		} else {
-			d.Msg = fmt.Sprintf("Config %s updated. Use \"Apply to swarm\" to re-render the platform.", name)
-			if e, vs, err := c.loadConfigEdit(ctx, name); err == nil {
-				d.Editing, d.Versions = e, vs
-			}
+			c.redirectToSettings(g, fmt.Sprintf("Config %s updated. Use \"Apply to swarm\" to re-render the platform.", name))
+			return
 		}
 	}
-	c.reloadSettings(g, d)
+	c.configFormError(g, d)
 }
 
 // RollbackConfig restores a cluster config to a prior version.
@@ -147,9 +168,6 @@ func (c Settings) RollbackConfig(g *gin.Context) {
 			d.Error = err.Error()
 		} else {
 			d.Msg = fmt.Sprintf("Config %s rolled back to version %d.", name, vid)
-			if e, vs, err := c.loadConfigEdit(ctx, name); err == nil {
-				d.Editing, d.Versions = e, vs
-			}
 		}
 	}
 	c.reloadSettings(g, d)
@@ -174,11 +192,33 @@ func (c Settings) RemoveConfig(g *gin.Context) {
 	c.reloadSettings(g, d)
 }
 
-// AddSecret stores a new cluster-scope secret.
+// SecretNew renders the create-secret form into the modal.
+func (c Settings) SecretNew(g *gin.Context) {
+	d := secretFormData{Scope: "cluster", Action: "/settings/secrets/add"}
+	if !c.requireAPI(g, &d.Error) {
+		c.secretFormError(g, d)
+		return
+	}
+	c.secretForm(g, d)
+}
+
+// SecretEdit renders the edit-secret form into the modal (the stored value is
+// never shown — editing replaces it).
+func (c Settings) SecretEdit(g *gin.Context) {
+	d := secretFormData{Scope: "cluster", Name: g.Param("name"), IsEdit: true, Action: "/settings/secrets/edit"}
+	if !c.requireAPI(g, &d.Error) {
+		c.secretFormError(g, d)
+		return
+	}
+	c.secretForm(g, d)
+}
+
+// AddSecret stores a new cluster-scope secret. Failures keep the modal open
+// with the form fragment.
 func (c Settings) AddSecret(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := settingsData{}
 	name, value := g.PostForm("name"), g.PostForm("value")
+	d := secretFormData{Scope: "cluster", Name: name, Value: value, Action: "/settings/secrets/add"}
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":
@@ -189,17 +229,18 @@ func (c Settings) AddSecret(g *gin.Context) {
 		if _, err := c.API.CreateSecret(ctx, "cluster", "", name, value); err != nil {
 			d.Error = err.Error()
 		} else {
-			d.Msg = fmt.Sprintf("Secret %s created. The value is stored encrypted; only its hash is shown.", name)
+			c.redirectToSettings(g, fmt.Sprintf("Secret %s created. The value is stored encrypted; only its hash is shown.", name))
+			return
 		}
 	}
-	c.reloadSettings(g, d)
+	c.secretFormError(g, d)
 }
 
 // EditSecret replaces a cluster secret's value.
 func (c Settings) EditSecret(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := settingsData{}
 	name, value := g.PostForm("name"), g.PostForm("value")
+	d := secretFormData{Scope: "cluster", Name: name, Value: value, IsEdit: true, Action: "/settings/secrets/edit"}
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":
@@ -210,10 +251,11 @@ func (c Settings) EditSecret(g *gin.Context) {
 		if _, err := c.API.UpdateSecret(ctx, name, value); err != nil {
 			d.Error = err.Error()
 		} else {
-			d.Msg = fmt.Sprintf("Secret %s updated.", name)
+			c.redirectToSettings(g, fmt.Sprintf("Secret %s updated.", name))
+			return
 		}
 	}
-	c.reloadSettings(g, d)
+	c.secretFormError(g, d)
 }
 
 // RemoveSecret deletes a cluster secret by name.
@@ -235,24 +277,27 @@ func (c Settings) RemoveSecret(g *gin.Context) {
 	c.reloadSettings(g, d)
 }
 
-// RevealSecret decrypts and shows a cluster secret's plaintext on explicit
-// request (the UI asks for confirmation first).
+// RevealSecret decrypts and shows a cluster secret's plaintext in the modal
+// (the UI asks for confirmation first). The value is never part of the page
+// fragment — it only exists inside the modal.
 func (c Settings) RevealSecret(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := settingsData{}
 	name := g.Param("name")
-	switch {
-	case !c.requireAPI(g, &d.Error):
-	case name == "":
-		d.Error = "Invalid secret name."
-	default:
-		if sv, err := c.API.RevealSecret(ctx, name); err != nil {
-			d.Error = err.Error()
-		} else {
-			d.RevealName, d.RevealVal = sv.Name, sv.Value
-		}
+	var errMsg string
+	if !c.requireAPI(g, &errMsg) {
+		c.Views.Fragment(g, "secretreveal", secretRevealData{Name: name, Error: errMsg})
+		return
 	}
-	c.reloadSettings(g, d)
+	if name == "" {
+		c.Views.Fragment(g, "secretreveal", secretRevealData{Name: name, Error: "Invalid secret name."})
+		return
+	}
+	sv, err := c.API.RevealSecret(ctx, name)
+	if err != nil {
+		c.Views.Fragment(g, "secretreveal", secretRevealData{Name: name, Error: err.Error()})
+		return
+	}
+	c.Views.Fragment(g, "secretreveal", secretRevealData{Name: sv.Name, Value: sv.Value})
 }
 
 // Apply triggers a full cluster update on the daemon (content-aware re-apply
@@ -273,6 +318,22 @@ func (c Settings) Apply(g *gin.Context) {
 		}
 	}
 	c.reloadSettings(g, d)
+}
+
+// configFormError keeps the modal open with the form fragment on a
+// validation/API failure (HX-Retarget sends the fragment to #modal-body; the
+// 422 status makes hx-on::after-request see event.detail.failed).
+func (c Settings) configFormError(g *gin.Context, d configFormData) {
+	g.Header("HX-Retarget", "#modal-body")
+	g.Status(http.StatusUnprocessableEntity)
+	c.configForm(g, d)
+}
+
+// secretFormError is the secret counterpart of configFormError.
+func (c Settings) secretFormError(g *gin.Context, d secretFormData) {
+	g.Header("HX-Retarget", "#modal-body")
+	g.Status(http.StatusUnprocessableEntity)
+	c.secretForm(g, d)
 }
 
 // loadCluster loads the cluster-scope configs and secrets into d.

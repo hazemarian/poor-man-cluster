@@ -3,6 +3,8 @@ package controllers
 import (
 	"context"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/pmapi"
 )
 
@@ -67,4 +69,28 @@ func (c *Controller) loadConfigEdit(ctx context.Context, name string) (*configRo
 		vs = configVersionRows(v)
 	}
 	return &row, vs, nil
+}
+
+// configFormData drives the shared config create/edit modal fragment
+// ("configform"). Action is the POST endpoint the form submits to.
+type configFormData struct {
+	Scope    string // cluster | service
+	Stack    string // owning stack (service scope)
+	Name     string
+	Kind     string // template | file | env
+	Content  string
+	IsEdit   bool
+	Versions []configVersionRow
+	Error    string
+	Action   string
+}
+
+// configForm renders the config modal fragment. Handlers use it for the
+// hx-get "new"/"edit" routes (plain 200 → openModal) and for validation
+// failures (422 + HX-Retarget so the error stays inside the modal).
+func (c *Controller) configForm(g *gin.Context, d configFormData) {
+	if d.Kind == "" {
+		d.Kind = "file"
+	}
+	c.Views.Fragment(g, "configform", d)
 }

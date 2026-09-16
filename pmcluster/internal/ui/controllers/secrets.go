@@ -3,6 +3,8 @@ package controllers
 import (
 	"context"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/pmapi"
 )
 
@@ -34,4 +36,32 @@ func (c *Controller) listSecretsFor(ctx context.Context, scope, stack string) ([
 		return nil, err
 	}
 	return secretRows(secs), nil
+}
+
+// secretFormData drives the shared secret create/edit modal fragment
+// ("secretform"). Action is the POST endpoint the form submits to. The stored
+// value is never shown in the form — editing replaces it with a new value.
+type secretFormData struct {
+	Scope  string // cluster | service
+	Stack  string // owning stack (service scope)
+	Name   string
+	Value  string
+	IsEdit bool
+	Action string
+	Error  string
+}
+
+// secretForm renders the secret modal fragment. Handlers use it for the
+// hx-get "new"/"edit" routes (plain 200 → openModal) and for validation
+// failures (422 + HX-Retarget so the error stays inside the modal).
+func (c *Controller) secretForm(g *gin.Context, d secretFormData) {
+	c.Views.Fragment(g, "secretform", d)
+}
+
+// secretRevealData drives the reveal modal fragment ("secretreveal") — the
+// value is shown on demand with a confirmation prompt, never in list copy.
+type secretRevealData struct {
+	Name  string
+	Value string
+	Error string
 }

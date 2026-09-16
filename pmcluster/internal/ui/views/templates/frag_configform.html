@@ -1,0 +1,40 @@
+{{define "configform"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+<h2>{{if .IsEdit}}Edit config{{else}}Add config{{end}}</h2>
+{{if .IsEdit}}<p class="sub">Scope <code>{{.Scope}}</code>{{if .Stack}} · stack <code>{{.Stack}}</code>{{end}} · kind <code>{{.Kind}}</code></p>{{end}}
+<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()">
+  <label>Name</label>
+  {{if .IsEdit}}
+  <input type="hidden" name="name" value="{{.Name}}">
+  <p class="muted"><code>{{.Name}}</code></p>
+  {{else}}
+  <input name="name" value="{{.Name}}" placeholder="my_config" required autofocus>
+  {{end}}
+  {{if not .IsEdit}}
+  <label>Kind</label>
+  <select name="kind">
+    {{$k := .Kind}}
+    <option value="file" {{if eq $k "file"}}selected{{end}}>file — literal value</option>
+    <option value="template" {{if eq $k "template"}}selected{{end}}>template — rendered by cluster update</option>
+    <option value="env" {{if eq $k "env"}}selected{{end}}>env — plain env value</option>
+  </select>
+  {{end}}
+  <label>Content</label>
+  <textarea name="content" rows="8" style="white-space:pre" required>{{.Content}}</textarea>
+  <div class="row">
+    <button class="btn" hx-disabled-elt="this">{{if .IsEdit}}Save new version{{else}}Create config{{end}}</button>
+    <button type="button" class="btn ghost" onclick="closeModal()">Cancel</button>
+  </div>
+</form>
+{{if .IsEdit}}{{if .Versions}}
+<h2>Version history</h2>
+<table>
+  <thead><tr><th>ID</th><th>Hash</th><th>Created</th><th></th></tr></thead>
+  <tbody>
+  {{range .Versions}}<tr><td>{{.ID}}</td><td><code>{{.Hash}}</code></td><td>{{ts .CreatedAt}}</td>
+    <td>{{if $.Stack}}<button class="btn ghost sm" hx-post="/stacks/{{$.Stack}}/configs/rollback/{{$.Name}}/{{.ID}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()" onclick="return confirm('Roll back {{$.Name}} to version {{.ID}}?')">Rollback</button>{{else}}<button class="btn ghost sm" hx-post="/settings/configs/rollback/{{$.Name}}/{{.ID}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()" onclick="return confirm('Roll back {{$.Name}} to version {{.ID}}?')">Rollback</button>{{end}}</td>
+  </tr>{{end}}
+  </tbody>
+</table>
+{{end}}{{end}}
+{{end}}

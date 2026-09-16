@@ -104,6 +104,10 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		}
 	})
 	mux.HandleFunc("/api/secrets/db_pass", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			write(w, `{"name":"db_pass","hash":"z9"}`)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("/api/secrets/db_pass/value", func(w http.ResponseWriter, r *http.Request) {
@@ -478,20 +482,22 @@ func TestSecretsAndConfigs(t *testing.T) {
 	}
 
 	// Settings surfaces the cluster-scope configs + secrets + apply button.
+	// Secret values are masked; hashes are never listed.
 	b := assertFragment(http.MethodGet, "/settings", "",
-		"Settings", "Cluster configs", "Cluster secrets", "site_cert", "abc123",
-		"Apply to swarm")
-	if strings.Contains(b, "topsecret") {
-		t.Errorf("secret value leaked into the rendered page")
+		"Settings", "Cluster configs", "Cluster secrets", "site_cert",
+		"••••••••", "Apply to swarm", "Add Config", "Add Secret")
+	if strings.Contains(b, "topsecret") || strings.Contains(b, "abc123") {
+		t.Errorf("secret value or hash leaked into the rendered page")
 	}
 
-	// Cluster config lifecycle.
+	// Cluster config lifecycle — create/edit/rollback via modals.
 	assertFragment(http.MethodPost, "/settings/configs/add",
 		"name=nginx_conf&kind=file&content=worker_processes 4;",
 		"Config nginx_conf created")
 
-	assertFragment(http.MethodGet, "/settings?edit=nginx_conf", "",
-		"Edit <code>nginx_conf</code>", "worker_processes 4;", "Version history", "h0")
+	assertFragment(http.MethodGet, "/settings/configs/edit/nginx_conf", "",
+		"Edit config", "worker_processes 4;", "Version history", "h0",
+		"/settings/configs/rollback/nginx_conf/2")
 
 	assertFragment(http.MethodPost, "/settings/configs/edit",
 		"name=nginx_conf&content=worker_processes 8;", "Config nginx_conf updated")
@@ -506,8 +512,14 @@ func TestSecretsAndConfigs(t *testing.T) {
 		t.Errorf("secret value leaked back into the rendered page")
 	}
 
+	assertFragment(http.MethodGet, "/settings/secrets/edit/db_pass", "",
+		"Edit secret", "Editing <code>db_pass</code>")
+
+	assertFragment(http.MethodPost, "/settings/secrets/edit",
+		"name=db_pass&value=newvalue", "Secret db_pass updated")
+
 	assertFragment(http.MethodGet, "/settings/secrets/reveal/db_pass", "",
-		"Value of", "the-decrypted-value", "Copy value")
+		"Secret ·", "the-decrypted-value", "Copy value")
 
 	assertFragment(http.MethodGet, "/settings", "",
 		`onclick="return confirm('Reveal secret site_cert`)
@@ -526,8 +538,9 @@ func TestSecretsAndConfigs(t *testing.T) {
 		"name=demo_nginx_conf&kind=file&content=worker_processes 4;",
 		"Config demo_nginx_conf created for stack demo")
 
-	assertFragment(http.MethodGet, "/stacks/demo/config?edit=nginx_conf", "",
-		"Edit <code>nginx_conf</code>", "worker_processes 4;", "h0")
+	assertFragment(http.MethodGet, "/stacks/demo/configs/edit/nginx_conf", "",
+		"Edit config", "worker_processes 4;", "h0",
+		"/stacks/demo/configs/rollback/nginx_conf/2")
 
 	assertFragment(http.MethodPost, "/stacks/demo/configs/edit",
 		"name=nginx_conf&content=worker_processes 8;", "Config nginx_conf updated")
@@ -541,8 +554,14 @@ func TestSecretsAndConfigs(t *testing.T) {
 		t.Errorf("secret value leaked into the rendered page")
 	}
 
+	assertFragment(http.MethodGet, "/stacks/demo/secrets/edit/db_pass", "",
+		"Edit secret", "Editing <code>db_pass</code>")
+
 	assertFragment(http.MethodGet, "/stacks/demo/secrets/reveal/db_pass", "",
 		"the-decrypted-value")
+
+	assertFragment(http.MethodGet, "/stacks/demo/secrets/new", "",
+		"Add secret", "/stacks/demo/secrets/add")
 
 	assertFragment(http.MethodGet, "/stacks/demo/config", "",
 		`onclick="return confirm('Reveal secret`)
