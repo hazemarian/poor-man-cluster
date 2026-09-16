@@ -75,20 +75,50 @@ func (d *dockerCLIDeployer) DeployStack(ctx context.Context, name string, compos
 	// (encrypted via swarm's own keys) so workers can pull private images.
 	// --resolve-image=always ensures new image digests are picked up
 	// even when the tag hasn't changed (e.g. 'latest' re-pushed).
-	cmd := exec.CommandContext(ctx, "docker", "stack", "deploy",
-		"--detach=true",
-		"--resolve-image=always",
-		"--with-registry-auth",
-		"-c", "-",
-		name,
-	)
-	cmd.Stdin = bytes.NewReader(composeYAML)
-	out, err := d.runWithOutput(cmd)
+	deploy := func() (string, error) {
+		cmd := exec.CommandContext(ctx, "docker", "stack", "deploy",
+			"--detach=true",
+			"--resolve-image=always",
+			"--with-registry-auth",
+			"-c", "-",
+			name,
+		)
+		cmd.Stdin = bytes.NewReader(composeYAML)
+		return d.runWithOutput(cmd)
+	}
+
+	out, err := deploy()
 	if err != nil {
-		if out != "" {
-			return fmt.Errorf("docker stack deploy %s: %s", name, out)
+		// `docker stack deploy` can race the previous deploy of the same
+		// stack: the manager bumps the service spec versions while the
+		// earlier stack deploy is still settling, so a follow-up deploy
+		// fails with "update out of sequence". This is transient — a
+		// bounded retry re-submits the same compose and succeeds.
+		if strings.Contains(out, "update out of sequence") {
+			for i := 1; i <= forceUpdateRetries; i++ {
+				select {
+				case <-ctx.Done():
+					return fmt.Errorf("docker stack deploy %s: %w", name, ctx.Err())
+				case <-time.After(forceUpdateBackoff):
+				}
+				if retryOut, retryErr := deploy(); retryErr == nil {
+					out, err = retryOut, nil
+					break
+				} else {
+					out = retryOut
+					err = retryErr
+					if !strings.Contains(retryOut, "update out of sequence") {
+						break
+					}
+				}
+			}
 		}
-		return fmt.Errorf("docker stack deploy %s: %w", name, err)
+		if err != nil {
+			if out != "" {
+				return fmt.Errorf("docker stack deploy %s: %s", name, out)
+			}
+			return fmt.Errorf("docker stack deploy %s: %w", name, err)
+		}
 	}
 
 	// Force a rolling update for every service in the stack so new images
