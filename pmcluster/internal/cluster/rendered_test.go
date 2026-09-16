@@ -44,14 +44,31 @@ func TestRenderClusterConfigs(t *testing.T) {
 // rendered platform configs into the database (the console reads them back).
 func TestUpdate_PersistsRenderedConfigs(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
 
-	if _, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+	// seedUpdateState's store has no platform config rows; create them so the
+	// render snapshots have a row to live on (SetRendered skips missing rows).
+	// Version v0.3.0 != buildinfo.Version ("dev" in tests), so these rows are
+	// not picked up as the render source — renders still come from disk.
+	names := []string{"infra-stack", "observability-stack", "backup-stack", "edge-stack", "otel-collector-config", "traefik-dynamic"}
+	for _, name := range names {
+		if _, err := deps.Store.CreateConfig(ctx, "cluster", "", name, "template", "source: "+name, "v0.3.0"); err != nil {
+			t.Fatalf("CreateConfig(%s): %v", name, err)
+		}
+	}
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
-	for _, name := range []string{"infra-stack", "observability-stack", "backup-stack", "edge-stack", "otel-collector-config", "traefik-dynamic"} {
-		if _, err := deps.Store.GetRenderedConfig(context.Background(), name); err != nil {
-			t.Errorf("rendered config %q not persisted after Update: %v", name, err)
+	for _, name := range names {
+		row, err := deps.Store.GetConfig(ctx, name)
+		if err != nil {
+			t.Errorf("config %q missing after Update: %v", name, err)
+			continue
+		}
+		if strings.TrimSpace(row.RenderedContent) == "" {
+			t.Errorf("rendered config %q not persisted after Update", name)
 		}
 	}
 }

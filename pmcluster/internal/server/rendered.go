@@ -33,7 +33,7 @@ func (s *RenderedConfigService) list(res http.ResponseWriter, req *http.Request)
 	}
 	configs := make([]map[string]string, 0, len(rows))
 	for _, row := range rows {
-		configs = append(configs, map[string]string{"name": row.Name, "content": row.Content})
+		configs = append(configs, map[string]string{"name": row.Name, "content": row.RenderedContent})
 	}
 	writeJSON(res, http.StatusOK, map[string]any{"configs": configs})
 }

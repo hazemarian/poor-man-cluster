@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -219,7 +220,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return res, fmt.Errorf("render platform configs for persistence: %w", err)
 	}
 	for name, content := range rendered {
-		if err := deps.Store.PutRenderedConfig(ctx, name, content); err != nil {
+		if err := deps.Store.SetRendered(ctx, name, content); err != nil && !errors.Is(err, store.ErrConfigNotFound) {
 			return res, fmt.Errorf("store rendered config %s: %w", name, err)
 		}
 	}

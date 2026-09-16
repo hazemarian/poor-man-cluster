@@ -20,8 +20,11 @@ func TestRenderedConfigsAPI(t *testing.T) {
 		"infra-stack":     "version: \"3.9\"\nservices: {}",
 		"traefik-dynamic": "tls:\n  certificates: []\n",
 	} {
-		if err := st.PutRenderedConfig(ctx, name, content); err != nil {
-			t.Fatalf("PutRenderedConfig(%s): %v", name, err)
+		if _, err := st.CreateConfig(ctx, "cluster", "", name, "template", content, "v0.2.39"); err != nil {
+			t.Fatalf("CreateConfig(%s): %v", name, err)
+		}
+		if err := st.SetRendered(ctx, name, content); err != nil {
+			t.Fatalf("SetRendered(%s): %v", name, err)
 		}
 	}
 

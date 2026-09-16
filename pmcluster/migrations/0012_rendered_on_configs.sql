@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS rendered_configs;
+ALTER TABLE configs ADD COLUMN rendered_content TEXT NOT NULL DEFAULT '';
+ALTER TABLE configs ADD COLUMN rendered_at INTEGER NOT NULL DEFAULT 0;
