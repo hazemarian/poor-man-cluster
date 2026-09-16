@@ -224,7 +224,7 @@ func runTLSList(cmd *cobra.Command, _ []string) error {
 	hosts := rows[:0]
 	for _, r := range rows {
 		if r.Domain == main {
-			continue // the cluster's own cert — see `pmcluster tls site show`
+			continue
 		}
 		hosts = append(hosts, r)
 	}
@@ -348,7 +348,6 @@ func runTLSSiteSet(cmd *cobra.Command, _ []string) error {
 		return errors.New("no persisted cluster domain found — run `pmcluster cluster up` first")
 	}
 
-	// Reuse the same --cert-file/--key-file/--cert/--key resolution as hosts add.
 	orig := tlsAddBinds
 	tlsAddBinds = tlsAddFlags{certFile: tlsSiteSetBinds.certFile, keyFile: tlsSiteSetBinds.keyFile, cert: tlsSiteSetBinds.cert, key: tlsSiteSetBinds.key}
 	cert, key, err := loadTLSPair()

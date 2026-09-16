@@ -62,14 +62,14 @@ func (b *blocklist) isBlocked(ip string) bool {
 	}
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
-		return true // unparseable remote -> fail closed
+		return true
 	}
 	for _, d := range b.denied {
 		if d.Contains(parsed) {
 			return true
 		}
 	}
-	// If an allowlist is configured, anything not inside it is blocked.
+
 	if len(b.allowed) > 0 {
 		for _, a := range b.allowed {
 			if a.Contains(parsed) {

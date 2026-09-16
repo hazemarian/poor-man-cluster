@@ -68,8 +68,7 @@ func LimitBody(max int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Body != nil && max > 0 {
-				// http.MaxBytesReader enforces the cap on read; the net/http
-				// server maps the read error it produces to a 413.
+
 				r.Body = http.MaxBytesReader(w, r.Body, max)
 			}
 			next.ServeHTTP(w, r)

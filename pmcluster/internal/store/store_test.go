@@ -19,7 +19,6 @@ func TestOpen_AppliesMigrations(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 
-	// schema_version should record exactly the embedded migrations.
 	var count int
 	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM schema_version`).Scan(&count); err != nil {
 		t.Fatalf("query schema_version: %v", err)
@@ -28,7 +27,6 @@ func TestOpen_AppliesMigrations(t *testing.T) {
 		t.Fatal("schema_version is empty — no migrations were applied")
 	}
 
-	// users table should exist and be empty.
 	var users int
 	if err := s.DB().QueryRow(`SELECT COUNT(*) FROM users`).Scan(&users); err != nil {
 		t.Fatalf("query users: %v", err)

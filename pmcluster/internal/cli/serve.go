@@ -62,9 +62,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		log.Warn().Err(err).Msg("log sweep had issues")
 	}
 
-	// Best-effort self-telemetry. Endpoint empty disables; an error
-	// from the exporter (e.g. malformed URL) shouldn't take down the
-	// daemon — operators can fix and restart.
 	telemetryShutdown, err := telemetry.Init(cmd.Context(), telemetry.Options{
 		Endpoint:       cfg.OTLPEndpoint,
 		ServiceName:    serviceName(),
@@ -89,16 +86,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	// Best-effort: daemon must start even when /var/run/docker.sock is
-	// temporarily missing. /api/cluster/info is omitted in that case.
 	dc, dockerErr := docker.New()
 	if dockerErr != nil {
 		log.Warn().Err(dockerErr).Msg("docker client init failed; /api/cluster/info disabled")
 	} else {
 		defer func() { _ = dc.Close() }()
-		// Warn if running Docker configs are from an older pmcluster version.
-		// This catches the case where the binary was upgraded but 'cluster up'
-		// wasn't re-run — the OTel/Traefik configs are still on the old version.
+
 		checkConfigVersions(cmd.Context(), dc, log)
 	}
 
@@ -187,10 +180,9 @@ var pmclusterConfigBases = []string{"pmcluster_otel_config", "pmcluster_traefik_
 // older version, it logs a WARN prompting 'pmcluster cluster up'.
 func checkConfigVersions(ctx context.Context, dc docker.Client, log zerolog.Logger) {
 	if buildinfo.Version == "" || buildinfo.Version == "dev" {
-		return // dev build, skip
+		return
 	}
 
-	// Fetch all pmcluster-managed configs in one call.
 	names, err := dc.ConfigList(ctx, cluster.PmclusterLabel, "true")
 	if err != nil {
 		log.Warn().Err(err).Msg("version check: cannot list Docker configs")
@@ -214,7 +206,7 @@ func checkConfigVersions(ctx context.Context, dc docker.Client, log zerolog.Logg
 				labelVer = inspect.Labels["pmcluster.version"]
 			}
 			if labelVer == "" {
-				// Config created before version labels existed.
+
 				log.Warn().
 					Str("config", name).
 					Str("running", buildinfo.Version).

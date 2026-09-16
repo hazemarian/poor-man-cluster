@@ -42,11 +42,11 @@ var edgeBinaryPath string
 var tokenLineRe = regexp.MustCompile(`^   ([A-Za-z0-9_-]{40,})$`)
 
 func TestMain(m *testing.M) {
-	// Allow overriding the binary via env (useful for local iteration).
+
 	if p := os.Getenv("PMCLUSTER_BIN"); p != "" {
 		binaryPath = p
 	} else {
-		// Build from source into a temp file.
+
 		tmp, err := os.CreateTemp("", "pmcluster-e2e-*")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "e2e: create temp binary: %v\n", err)
@@ -55,8 +55,6 @@ func TestMain(m *testing.M) {
 		tmp.Close()
 		binaryPath = tmp.Name()
 
-		// `go test` runs in pmcluster/e2e — go up one level so ./cmd/pmcluster
-		// resolves correctly. Use a fresh exec.Cmd with Dir set explicitly.
 		moduleRoot, err := findModuleRoot()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "e2e: locate module root: %v\n", err)
@@ -71,7 +69,6 @@ func TestMain(m *testing.M) {
 		}
 	}
 
-	// Build the combined edge binary the same way (used by edge_test.go).
 	if p := os.Getenv("PMCLUSTER_EDGE_BIN"); p != "" {
 		edgeBinaryPath = p
 	} else {
@@ -99,7 +96,6 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
-	// Clean up built binaries only if we built them ourselves.
 	if os.Getenv("PMCLUSTER_BIN") == "" {
 		os.Remove(binaryPath)
 	}
@@ -167,7 +163,6 @@ func homeEnv(homeDir string) []string {
 	env := []string{
 		"HOME=" + homeDir,
 		"PATH=" + os.Getenv("PATH"),
-		// PMCLUSTER_LISTEN_ADDR is set per-process by callers that need it.
 	}
 	for _, k := range []string{
 		"DOCKER_HOST",
@@ -175,14 +170,9 @@ func homeEnv(homeDir string) []string {
 		"DOCKER_CERT_PATH",
 		"DOCKER_API_VERSION",
 		"DOCKER_CONTEXT",
-		// DOCKER_CONFIG overrides where the docker CLI looks for registry
-		// credentials.  CI pins it to the runner's config so that
-		// `docker stack deploy --with-registry-auth` (run with HOME set to a
-		// temp dir below) can still reach GHCR.
+
 		"DOCKER_CONFIG",
-		// PMCLUSTER_OO_* let CI point the OpenObserve provisioner at a
-		// reachable origin (no public DNS for observ.<domain>) and skip TLS
-		// verification for the self-signed e2e certificate.
+
 		"PMCLUSTER_OO_URL",
 		"PMCLUSTER_OO_INSECURE",
 	} {
@@ -202,7 +192,7 @@ func waitHealthy(t *testing.T, addr string, proc *exec.Cmd, timeout time.Duratio
 	client := &http.Client{Timeout: 500 * time.Millisecond}
 
 	for time.Now().Before(deadline) {
-		// Detect premature exit.
+
 		if proc.ProcessState != nil && proc.ProcessState.Exited() {
 			t.Fatalf("serve process exited prematurely before /health became ready")
 		}
@@ -223,8 +213,6 @@ func waitHealthy(t *testing.T, addr string, proc *exec.Cmd, timeout time.Duratio
 func TestSmoke(t *testing.T) {
 	homeDir := t.TempDir()
 
-	// ── Step 1: pmcluster init ────────────────────────────────────────────────
-
 	stdout, _, code := runCmd(t, homeDir, "init")
 	if code != 0 {
 		t.Fatalf("pmcluster init exited %d; stdout:\n%s", code, stdout)
@@ -232,13 +220,11 @@ func TestSmoke(t *testing.T) {
 	adminToken := extractToken(t, stdout)
 	t.Logf("admin token extracted (len=%d)", len(adminToken))
 
-	// ── Step 2: start pmcluster serve ────────────────────────────────────────
-
 	addr := freePort(t)
 
 	var serveStdout bytes.Buffer
 	serveCmd := exec.Command(binaryPath, "serve")
-	serveCmd.Stdout = io.MultiWriter(&serveStdout, os.Stdout) // keep record + forward to test log
+	serveCmd.Stdout = io.MultiWriter(&serveStdout, os.Stdout)
 	serveCmd.Stderr = os.Stderr
 	serveCmd.Env = append(homeEnv(homeDir), "PMCLUSTER_LISTEN_ADDR="+addr)
 
@@ -246,11 +232,10 @@ func TestSmoke(t *testing.T) {
 		t.Fatalf("start serve: %v", err)
 	}
 
-	// Ensure the serve process is always cleaned up, even on test failure.
 	t.Cleanup(func() {
 		if serveCmd.Process != nil {
 			_ = serveCmd.Process.Signal(syscall.SIGTERM)
-			// Give it a moment; if it doesn't exit, kill it.
+
 			done := make(chan struct{})
 			go func() {
 				serveCmd.Wait() //nolint:errcheck
@@ -268,8 +253,6 @@ func TestSmoke(t *testing.T) {
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	base := "http://" + addr
-
-	// ── Step 3: GET /health → 200 with JSON {status:"ok", version, commit} ──
 
 	t.Run("health returns 200 and JSON fields", func(t *testing.T) {
 		resp, err := client.Get(base + "/health")
@@ -296,8 +279,6 @@ func TestSmoke(t *testing.T) {
 		}
 	})
 
-	// ── Step 4: GET /api/me without Authorization → 401 + WWW-Authenticate ──
-
 	t.Run("api/me without token returns 401 with WWW-Authenticate", func(t *testing.T) {
 		resp, err := client.Get(base + "/api/me")
 		if err != nil {
@@ -313,8 +294,6 @@ func TestSmoke(t *testing.T) {
 			t.Errorf("WWW-Authenticate = %q, want to contain Bearer realm", wwwAuth)
 		}
 	})
-
-	// ── Step 5: GET /api/me with admin token → 200 {id:1, name:"admin"} ─────
 
 	t.Run("api/me with admin token returns user", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodGet, base+"/api/me", nil)
@@ -341,8 +320,6 @@ func TestSmoke(t *testing.T) {
 		}
 	})
 
-	// ── Step 6: GET /api/me with wrong token → 401 ───────────────────────────
-
 	t.Run("api/me with wrong token returns 401", func(t *testing.T) {
 		req, _ := http.NewRequest(http.MethodGet, base+"/api/me", nil)
 		req.Header.Set("Authorization", "Bearer this-is-definitely-not-a-valid-token")
@@ -356,8 +333,6 @@ func TestSmoke(t *testing.T) {
 			t.Fatalf("status = %d, want 401", resp.StatusCode)
 		}
 	})
-
-	// ── Step 7: pmcluster user create alice, then /api/me with alice's token ─
 
 	t.Run("user create alice and authenticate", func(t *testing.T) {
 		aliceOut, _, code := runCmd(t, homeDir, "user", "create", "alice")
@@ -391,8 +366,6 @@ func TestSmoke(t *testing.T) {
 		}
 	})
 
-	// ── Step 8: re-run pmcluster init → must refuse (exits non-zero) ─────────
-
 	t.Run("re-running init is refused and mentions --force", func(t *testing.T) {
 		stdout, stderr, code := runCmd(t, homeDir, "init")
 		if code == 0 {
@@ -404,8 +377,6 @@ func TestSmoke(t *testing.T) {
 		}
 	})
 
-	// ── Step 9: SIGTERM → clean shutdown within 5 s ──────────────────────────
-
 	t.Run("SIGTERM causes clean shutdown", func(t *testing.T) {
 		if err := serveCmd.Process.Signal(syscall.SIGTERM); err != nil {
 			t.Fatalf("SIGTERM: %v", err)
@@ -416,7 +387,7 @@ func TestSmoke(t *testing.T) {
 
 		select {
 		case err := <-done:
-			// A nil error or an ExitError with code 0 both indicate clean exit.
+
 			if err != nil {
 				if exitErr, ok := err.(*exec.ExitError); ok {
 					if exitErr.ExitCode() != 0 {
@@ -446,11 +417,11 @@ func TestTokenRegex(t *testing.T) {
 		match bool
 	}{
 		{"   abc123DEF_-xyz_abc123DEF_-xyz_abc123DEF_-xy", "abc123DEF_-xyz_abc123DEF_-xyz_abc123DEF_-xy", true},
-		{"  short", "", false},   // only 2 spaces
-		{"    abc", "", false},   // 4 spaces (not 3)
-		{"   abc", "", false},    // token too short
-		{" token", "", false},    // 1 space
-		{"no-indent", "", false}, // no indent
+		{"  short", "", false},
+		{"    abc", "", false},
+		{"   abc", "", false},
+		{" token", "", false},
+		{"no-indent", "", false},
 	}
 	for _, tc := range cases {
 		m := tokenLineRe.FindStringSubmatch(tc.line)

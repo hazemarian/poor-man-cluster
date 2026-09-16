@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -73,24 +72,13 @@ var configVersionsCmd = &cobra.Command{
 	RunE:  runConfigHistory,
 }
 
-var configImportCmd = &cobra.Command{
-	Use:   "import",
-	Short: "Import the on-disk config templates (~/.pmcluster/config/*.yml) into the DB",
-	Long: `One-time migration helper. Reads every *.yml under the config directory
-and creates a matching cluster-scoped config row (kind: template) unless a
-config with that name already exists. Safe to run repeatedly — existing
-rows are left untouched.`,
-	Args: cobra.NoArgs,
-	RunE: runConfigImport,
-}
-
 func init() {
 	configCreateCmd.Flags().String("scope", "service", "scope: cluster or service")
 	configCreateCmd.Flags().String("kind", "file", "kind: template, file, or env")
 	configCreateCmd.Flags().String("value", "", "config content (or pipe via stdin)")
 	configEditCmd.Flags().String("value", "", "new config content (or pipe via stdin)")
 	configCmd.AddCommand(configCreateCmd, configListCmd, configGetCmd, configEditCmd,
-		configVersionsCmd, configRollbackCmd, configImportCmd)
+		configVersionsCmd, configRollbackCmd)
 	rootCmd.AddCommand(configCmd)
 }
 
@@ -136,9 +124,6 @@ func runConfigCreate(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	// Version tag from the binary's build info is used by the render pipeline;
-	// CLI-created configs carry the current version so they're never treated
-	// as stale templates.
 	ver := buildinfo.Version
 	if _, err := st.CreateConfig(cmd.Context(), scope, name, kind, value, ver); err != nil {
 		if errors.Is(err, store.ErrConfigExists) {
@@ -271,7 +256,7 @@ func runConfigRollback(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("version id must be an integer, got %q", args[1])
 		}
 	} else {
-		// Default: most recent version (first row of newest-first history).
+
 		vers, err := st.ListConfigVersions(cmd.Context(), name)
 		if err != nil {
 			if errors.Is(err, store.ErrConfigNotFound) {
@@ -298,47 +283,5 @@ func runConfigRollback(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Config %q rolled back (hash: %s).\n", name, shortHash(hash))
 	fmt.Fprintln(cmd.OutOrStdout(), "   Run `pmcluster cluster update` to apply it to the cluster.")
-	return nil
-}
-
-func runConfigImport(cmd *cobra.Command, _ []string) error {
-	st, cfg, err := openStore()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = st.Close() }()
-
-	dir := cfg.ConfigDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintln(cmd.OutOrStdout(), "(no config directory at", dir+", nothing to import)")
-			return nil
-		}
-		return fmt.Errorf("read config dir: %w", err)
-	}
-
-	created, skipped := 0, 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yml") {
-			continue
-		}
-		name := strings.TrimSuffix(e.Name(), ".yml")
-		content, err := os.ReadFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			return fmt.Errorf("read %s: %w", e.Name(), err)
-		}
-		if _, err := st.CreateConfig(cmd.Context(), "cluster", name, "template", string(content), buildinfo.Version); err != nil {
-			if errors.Is(err, store.ErrConfigExists) {
-				skipped++
-				continue
-			}
-			return fmt.Errorf("import %s: %w", e.Name(), err)
-		}
-		created++
-		fmt.Fprintf(cmd.OutOrStdout(), "  imported %s → config %q (cluster/template)\n", e.Name(), name)
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "✅ Import complete: %d created, %d already existed (left untouched).\n", created, skipped)
 	return nil
 }

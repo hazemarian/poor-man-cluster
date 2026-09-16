@@ -85,8 +85,6 @@ func runRegistryAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("open encryption key: %w", err)
 	}
 
-	// docker login first: bad credentials fail loud rather than being
-	// saved as garbage that breaks future deploys.
 	if err := dockerLogin(cmd, host, username, password); err != nil {
 		return fmt.Errorf("docker login %s: %w", host, err)
 	}

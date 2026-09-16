@@ -20,11 +20,11 @@ type UpInput struct {
 	CertPath              string
 	KeyPath               string
 	ACMEEmail             string
-	ForceTLSMode          bool   // allow switching tls_mode on an already-installed cluster
-	TraefikAdminUser      string // defaults to "admin"
+	ForceTLSMode          bool
+	TraefikAdminUser      string
 	OpenObserveAdminEmail string
-	ConfigDir             string // ~/.pmcluster/config/ — user-editable templates
-	Version               string // build version (e.g. "v0.2.12") — tagged onto Docker configs
+	ConfigDir             string
+	Version               string
 }
 
 // UpResult includes plaintext passwords for any credentials newly minted
@@ -42,7 +42,7 @@ type UpDeps struct {
 	Cipher   *credentials.Cipher
 	Docker   docker.Client
 	Deployer StackDeployer
-	Stdout   io.Writer // io.Discard in tests
+	Stdout   io.Writer
 
 	// Provisioner, when set, provisions the OpenObserve automation user +
 	// ingestion token via the OO API after the observability stack is up. Left
@@ -59,8 +59,7 @@ type UpDeps struct {
 // deploy (see Provisioner). The collector config is then re-rendered with the
 // real token and observability is re-deployed.
 func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
-	// Load persisted install state so an idempotent re-run can reuse the
-	// originally-chosen TLS mode and cert/key paths instead of re-minting.
+
 	state, err := loadTLSSettings(ctx, deps.Store)
 	if err != nil {
 		return nil, err
@@ -133,9 +132,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			res.NewSecrets = append(res.NewSecrets, c.SwarmSecretName)
 			fmt.Fprintf(out, "  ✓ %-20s newly created (swarm secret %s)\n", name, c.SwarmSecretName)
 		case c.NewlyCreated && !c.SwarmSecretCreated:
-			// "Lost DB, kept Swarm" recovery: pmcluster minted a new
-			// password but a Swarm secret with that name already existed.
-			// Store and Swarm now disagree.
+
 			fmt.Fprintf(out, "  ⚠ %-20s store updated, but Swarm secret %s pre-existed (passwords may diverge)\n", name, c.SwarmSecretName)
 		case !c.NewlyCreated && c.SwarmSecretCreated:
 			res.NewSecrets = append(res.NewSecrets, c.SwarmSecretName)
@@ -152,10 +149,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		fmt.Fprintf(out, "  ✔ edge console credentials minted — retrieve the admin password with `pmcluster credentials show edge_admin`\n")
 	}
 
-	// When the OpenObserve admin email changes, the data volume must be
-	// reset so ZO_ROOT_USER_* env vars take effect on the next boot.
-	// OpenObserve only reads those env vars on first run; after that the
-	// hashed password lives in the volume and ignores env updates.
 	if obsCred := creds["openobserve_admin"]; obsCred != nil && obsCred.UsernameChanged {
 		fmt.Fprintf(out, "  ⚠ OpenObserve email changed → resetting data volume so new credentials take effect\n")
 		if err := deps.Docker.VolumeRemove(ctx, "observability_openobserve_data"); err != nil {
@@ -169,22 +162,12 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		return res, fmt.Errorf("internal: openobserve_admin credential missing after bootstrap")
 	}
 
-	// The dedicated ingestion token (created via the OO API) may not exist on a
-	// fresh install — OpenObserve must be up before the API can mint it. When
-	// missing we render a placeholder in the first deploy pass and provision +
-	// re-render + re-deploy in phase 2 below.
 	storedToken, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
 	if err != nil {
 		return res, err
 	}
 	needProvision := storedToken == ""
 
-	// Migrate any legacy on-disk per-host certs into versioned Swarm secrets +
-	// DB metadata (idempotent); the Traefik dynamic config references secrets,
-	// never files. On a fresh install there is nothing to import.
-	if err := importHostCertsMetadata(ctx, deps.Store, deps.Docker, in.ConfigDir); err != nil {
-		return res, fmt.Errorf("import host certificates: %w", err)
-	}
 	hostCerts, err := loadHostCertEntries(ctx, deps.Store, in.Domain)
 	if err != nil {
 		return res, err
@@ -230,12 +213,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	}
 	render.TraefikConfigName = traefikConfigName
 
-	// Edge stack content fingerprint. The edge-stack.yml embeds a version-keyed
-	// image tag, so the rendered body changes whenever pmcluster bumps its version
-	// (or an operator edits edge-stack.yml in ConfigDir). EnsureConfig stores that
-	// body as a versioned Docker config purely as a "has the edge input moved"
-	// marker — the stack never mounts it — so `cluster update` can re-deploy edge
-	// only when it actually changed (mirroring the OTel/Traefik content-aware path).
 	edgeName, edgeCreated, err := ensureEdgeConfig(ctx, deps.Docker, in.Version, render)
 	if err != nil {
 		return res, err
@@ -257,8 +234,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		return res, fmt.Errorf("health check: %w", err)
 	}
 
-	// Phase 2 — provision the automation user + ingestion token once OO is up,
-	// then re-render the collector config with the REAL token and redeploy.
 	if needProvision && deps.Provisioner != nil {
 		step("Provisioning OpenObserve user + ingestion token")
 		if _, _, err := deps.Provisioner.EnsureUserAndToken(ctx); err != nil {
@@ -289,8 +264,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		}
 	}
 
-	// Persist the install inputs so `up` re-runs and `cluster update` can
-	// reuse them without re-passing/re-deriving TLS state.
 	if err := persistInstallState(ctx, deps, in); err != nil {
 		return res, err
 	}

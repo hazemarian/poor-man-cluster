@@ -77,7 +77,7 @@ func rateLimiter(apiLimiter, webhookLimiter *perIPRateLimiter) func(http.Handler
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := r.RemoteAddr
-			// Choose limiter based on path prefix.
+
 			lim := apiLimiter
 			if len(r.URL.Path) >= 8 && r.URL.Path[:8] == "/webhook" {
 				lim = webhookLimiter

@@ -92,12 +92,6 @@ func EnsureVersionedSecret(ctx context.Context, d docker.Client, baseName string
 		}
 	}
 
-	// Reuse the current version when its content matches — no churn.
-	//
-	// NOTE: Docker never returns secret payloads on inspect (secrets are
-	// write-only by design), so payload comparisons against a real daemon
-	// always fail. We compare the pmcluster.data_hash label fingerprint
-	// instead, which is recorded at creation time.
 	if maxVer > 0 {
 		curName := fmt.Sprintf("%s_v%03d", baseName, maxVer)
 		if cur, err := d.SecretInspect(ctx, curName); err == nil {
@@ -123,7 +117,6 @@ func EnsureVersionedSecret(ctx context.Context, d docker.Client, baseName string
 		return "", false, fmt.Errorf("create secret %s: %w", versionedName, err)
 	}
 
-	// GC old versions.
 	for _, name := range existing {
 		if !strings.HasPrefix(name, prefix) {
 			continue
@@ -132,7 +125,7 @@ func EnsureVersionedSecret(ctx context.Context, d docker.Client, baseName string
 			continue
 		}
 		if rmErr := d.SecretRemove(ctx, name); rmErr != nil {
-			_ = rmErr // old secret may still be in use; GC next time
+			_ = rmErr
 		}
 	}
 
@@ -155,14 +148,7 @@ func EnsureVersionedSecret(ctx context.Context, d docker.Client, baseName string
 // baseName is the logical name ("pmcluster_otel_config"). The versioned name
 // is baseName + "_v" + zero-padded sequence.
 func EnsureConfig(ctx context.Context, d docker.Client, baseName string, data []byte, version string) (versionedName string, created bool, err error) {
-	// List ALL configs, then own the ones matching our versioned name prefix
-	// by name rather than by label. We deliberately don't filter by the
-	// pmcluster label here: a matcher can end up without the label (e.g. a
-	// config created by a partially-finished run or a manual helper), and if
-	// we ignore it we'll try to recreate its version number and collide. By
-	// keying on the baseName_vNNN naming scheme we stay pmcluster-owned even
-	// when an orphan drops its label, and the orphan gets GC'd once a newer
-	// version takes over and it's no longer mounted.
+
 	existing, err := d.ConfigList(ctx, "", "")
 	if err != nil {
 		return "", false, fmt.Errorf("list configs: %w", err)
@@ -180,11 +166,6 @@ func EnsureConfig(ctx context.Context, d docker.Client, baseName string, data []
 		}
 	}
 
-	// Content-aware: reuse the current highest version when its content
-	// matches. Compare the pmcluster.data_hash label fingerprint rather than
-	// the payload bytes — same reason as EnsureVersionedSecret: label-based
-	// comparison works uniformly whether or not the API returns config data,
-	// and keeps secrets/configs consistent.
 	if maxVer > 0 {
 		curName := fmt.Sprintf("%s_v%03d", baseName, maxVer)
 		if cur, err := d.ConfigInspect(ctx, curName); err == nil {
@@ -211,7 +192,6 @@ func EnsureConfig(ctx context.Context, d docker.Client, baseName string, data []
 		return "", false, fmt.Errorf("create config %s: %w", versionedName, err)
 	}
 
-	// Garbage-collect old versions (keep only the one we just created).
 	for _, name := range existing {
 		if !strings.HasPrefix(name, prefix) {
 			continue
@@ -220,9 +200,7 @@ func EnsureConfig(ctx context.Context, d docker.Client, baseName string, data []
 			continue
 		}
 		if rmErr := d.ConfigRemove(ctx, name); rmErr != nil {
-			// Old config may still be in use; that's fine — it'll be
-			// cleaned up on the next cluster up after stacks redeploy.
-			// Don't fail the operation.
+
 			_ = rmErr
 		}
 	}
@@ -247,14 +225,8 @@ func RandomPassword() (string, error) {
 		return "", fmt.Errorf("read random bytes: %w", err)
 	}
 
-	// Base64-encode the random bytes, then append one guaranteed
-	// character of each required type.  The result is ~38 chars and
-	// always satisfies the OpenObserve password policy.
 	base := base64.RawURLEncoding.EncodeToString(buf)
 
-	// Pick one guaranteed char from each required set using the
-	// first few entropy bytes (we already consumed buf, so use the
-	// raw bytes directly before encoding for the indices).
 	guaranteed := []byte{
 		lowerLetters[int(buf[0])%len(lowerLetters)],
 		upperLetters[int(buf[1])%len(upperLetters)],
@@ -262,8 +234,6 @@ func RandomPassword() (string, error) {
 		special[int(buf[3])%len(special)],
 	}
 
-	// Shuffle the guaranteed chars into random positions in the base
-	// string to avoid predictable placement.
 	b := []byte(base)
 	for i, gc := range guaranteed {
 		pos := int(buf[4+i]) % len(b)

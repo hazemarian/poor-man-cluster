@@ -15,7 +15,7 @@ func TestBlocklist_DeniedCIDR(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "http://x/", nil)
-	req.RemoteAddr = "198.51.100.44:1" // from blocked CIDR
+	req.RemoteAddr = "198.51.100.44:1"
 	rw := httptest.NewRecorder()
 	h.ServeHTTP(rw, req)
 	if rw.Code != http.StatusForbidden {
@@ -23,7 +23,7 @@ func TestBlocklist_DeniedCIDR(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "http://x/", nil)
-	req.RemoteAddr = "203.0.113.9:1" // not blocked
+	req.RemoteAddr = "203.0.113.9:1"
 	rw = httptest.NewRecorder()
 	h.ServeHTTP(rw, req)
 	if rw.Code != http.StatusOK {
@@ -39,7 +39,7 @@ func TestBlocklist_AllowlistDeniesOutside(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "http://x/", nil)
-	req.RemoteAddr = "8.8.8.8:1" // outside allowlist
+	req.RemoteAddr = "8.8.8.8:1"
 	rw := httptest.NewRecorder()
 	h.ServeHTTP(rw, req)
 	if rw.Code != http.StatusForbidden {
@@ -59,7 +59,6 @@ func TestAutoBan_BansAfterThreshold(t *testing.T) {
 	sb := &sharedBan{store: newBanStore()}
 	clientIP := "198.51.100.77"
 
-	// Inner returns 401 (simulating an upstream auth/HMAC failure).
 	inner := AutoBan(cfg, sb)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}))
@@ -76,7 +75,6 @@ func TestAutoBan_BansAfterThreshold(t *testing.T) {
 		}
 	}
 
-	// After the threshold, the blocklist layer rejects the IP with 403.
 	block := RealIP(cfg.TrustedCIDRs)(Blocklist(cfg, sb)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})))

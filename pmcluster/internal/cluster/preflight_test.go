@@ -32,7 +32,7 @@ func TestPreflight_PingFails(t *testing.T) {
 
 func TestPreflight_InfoFails(t *testing.T) {
 	f := newFakeDocker()
-	// Ping succeeds, Info fails.
+
 	f.infoErr = errSentinel
 
 	err := Preflight(context.Background(), f)
@@ -85,7 +85,7 @@ func TestPreflight_WorkerNode(t *testing.T) {
 	f := newFakeDocker()
 	f.info = docker.Info{
 		SwarmLocalNodeState:   "active",
-		SwarmControlAvailable: false, // worker, not manager
+		SwarmControlAvailable: false,
 	}
 
 	err := Preflight(context.Background(), f)
@@ -118,7 +118,6 @@ func TestPreflightError_CarriesCauseAndRemediation(t *testing.T) {
 		Remediation: "do this to fix it",
 	}
 
-	// Error() includes both.
 	msg := pe.Error()
 	if !strings.Contains(msg, "root cause") {
 		t.Errorf("Error() = %q, missing 'root cause'", msg)
@@ -127,7 +126,6 @@ func TestPreflightError_CarriesCauseAndRemediation(t *testing.T) {
 		t.Errorf("Error() = %q, missing remediation", msg)
 	}
 
-	// Unwrap() returns the cause.
 	if !errors.Is(pe, cause) {
 		t.Error("errors.Is(pe, cause) = false, want true")
 	}

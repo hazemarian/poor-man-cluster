@@ -76,8 +76,6 @@ func (w *WebhookService) create(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// 32 bytes → 64 hex chars, matching the CLI so CI can paste the printed
-	// value verbatim. Stored as hex *string* and HMAC'd with that same string.
 	secretBytes := make([]byte, 32)
 	if _, err := rand.Read(secretBytes); err != nil {
 		writeErr(res, http.StatusInternalServerError, "generate secret: "+err.Error())

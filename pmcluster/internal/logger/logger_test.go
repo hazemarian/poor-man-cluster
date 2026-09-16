@@ -71,7 +71,7 @@ func TestNew_LevelFilter(t *testing.T) {
 func TestDailyFileWriter_Rotation(t *testing.T) {
 	dir := t.TempDir()
 	day1 := time.Date(2026, 5, 10, 23, 30, 0, 0, time.UTC)
-	day2 := day1.Add(2 * time.Hour) // crosses midnight UTC
+	day2 := day1.Add(2 * time.Hour)
 
 	now := day1
 	w, err := newDailyFileWriter(dir, func() time.Time { return now })
@@ -100,7 +100,6 @@ func TestSweep(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
 
-	// Create three files: one fresh, one at the cutoff, one well past.
 	fresh := "pmcluster-2026-05-09.log"
 	atCutoff := "pmcluster-" + now.AddDate(0, 0, -RetentionDays).Format("2006-01-02") + ".log"
 	stale := "pmcluster-2026-04-01.log"
@@ -109,7 +108,7 @@ func TestSweep(t *testing.T) {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	// Junk file should be ignored.
+
 	if err := os.WriteFile(filepath.Join(dir, "junk.txt"), []byte("y"), 0o600); err != nil {
 		t.Fatalf("write junk: %v", err)
 	}
@@ -121,8 +120,7 @@ func TestSweep(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, fresh)); err != nil {
 		t.Errorf("fresh file removed unexpectedly: %v", err)
 	}
-	// The cutoff file is "before(cutoff)" check uses strict Before, so
-	// at-cutoff file (== cutoff date) should NOT be deleted.
+
 	if _, err := os.Stat(filepath.Join(dir, atCutoff)); err != nil {
 		t.Errorf("at-cutoff file removed unexpectedly: %v", err)
 	}

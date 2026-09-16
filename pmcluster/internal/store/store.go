@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "modernc.org/sqlite" // pure-Go driver, no cgo
+	_ "modernc.org/sqlite"
 )
 
 // Store wraps *sql.DB and runs migrations on Open. Per-resource methods
@@ -30,8 +30,7 @@ func Open(dbPath string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	// Single writer connection avoids SQLITE_BUSY races between goroutines;
-	// WAL mode still allows concurrent reads.
+
 	db.SetMaxOpenConns(1)
 
 	if err := db.PingContext(context.Background()); err != nil {

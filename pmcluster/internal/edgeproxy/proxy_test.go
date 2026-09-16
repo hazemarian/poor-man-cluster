@@ -13,7 +13,7 @@ type observed struct {
 	gotXRealIP string
 	gotXFF     string
 	gotPath    string
-	gotConn    string // Connection header arriving at upstream
+	gotConn    string
 }
 
 // fakeDaemon returns an httptest server that records request headers and
@@ -41,7 +41,7 @@ func TestNew_ProxiesAPIPathAndRealIP(t *testing.T) {
 	h := New(cfg)
 
 	req := httptest.NewRequest(http.MethodGet, "http://pmcluster.example/api/stacks", nil)
-	req.RemoteAddr = "10.0.3.4:54321" // Traefik (trusted)
+	req.RemoteAddr = "10.0.3.4:54321"
 	req.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.3.4")
 	req.Header.Set("X-Forwarded-Proto", "https")
 	rw := httptest.NewRecorder()
@@ -75,7 +75,7 @@ func TestNew_StripsHopByHopHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://x/webhook/github", strings.NewReader("{}"))
 	req.RemoteAddr = "10.0.3.4:1"
 	req.Header.Set("X-Forwarded-For", "198.51.100.9, 10.0.3.4")
-	req.Header.Set("Connection", "keep-alive") // hop-by-hop, must not reach upstream
+	req.Header.Set("Connection", "keep-alive")
 	rw := httptest.NewRecorder()
 
 	h.ServeHTTP(rw, req)
@@ -117,7 +117,7 @@ func TestNew_WebhookRateLimitsPerIP(t *testing.T) {
 	if got := do("198.51.100.1"); got != http.StatusTooManyRequests {
 		t.Errorf("second burst-exceeding request = %d, want 429", got)
 	}
-	// Different client IP is isolated.
+
 	if got := do("198.51.100.2"); got != http.StatusOK {
 		t.Errorf("different client IP request = %d, want 200", got)
 	}

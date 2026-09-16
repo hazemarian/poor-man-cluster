@@ -65,20 +65,18 @@ services:
 // TestDeployPipeline exercises the full deploy → redeploy → rollback flow
 // against a real single-node Docker Swarm plus the HTTP API.
 func TestDeployPipeline(t *testing.T) {
-	// ── Guard: env var ────────────────────────────────────────────────────────
+
 	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
 		t.Skip("PMCLUSTER_E2E_SWARM is not set to 1; skipping deploy pipeline e2e (set it in CI or locally to enable)")
 	}
-	// ── Guard: docker binary ──────────────────────────────────────────────────
+
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH; skipping deploy pipeline e2e")
 	}
 
-	// Cap the whole test to 5 minutes.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// ── Swarm bootstrap ───────────────────────────────────────────────────────
 	weInitedSwarm := ensureSwarmActive(t, ctx)
 	if weInitedSwarm {
 		t.Cleanup(func() {
@@ -92,15 +90,12 @@ func TestDeployPipeline(t *testing.T) {
 		})
 	}
 
-	// ── Create shared overlay networks (external networks the DSL references) ─
-	// These are normally created by `pmcluster cluster up`, but we skip that
-	// heavy bundle here; the two networks are all the deploy pipeline needs.
 	for _, net := range []string{"traefik-net", "monitoring-net"} {
 		netCtx, netCancel := context.WithTimeout(ctx, 30*time.Second)
 		out, err := dockerRun(netCtx, "network", "create", "--driver=overlay", "--attachable", net)
 		netCancel()
 		if err != nil {
-			// Tolerate "already exists" so the test can re-run on the same host.
+
 			if !strings.Contains(out, "already exists") && !strings.Contains(err.Error(), "already exists") {
 				t.Fatalf("docker network create %s: %v\n%s", net, err, out)
 			}
@@ -121,7 +116,6 @@ func TestDeployPipeline(t *testing.T) {
 		}
 	})
 
-	// ── pmcluster init ────────────────────────────────────────────────────────
 	homeDir := t.TempDir()
 	initOut, _, initCode := runCmd(t, homeDir, "init")
 	if initCode != 0 {
@@ -130,21 +124,19 @@ func TestDeployPipeline(t *testing.T) {
 	adminToken := extractToken(t, initOut)
 	t.Logf("pmcluster init OK (home=%s, token_len=%d)", homeDir, len(adminToken))
 
-	// ── Cleanup stacks at the end ─────────────────────────────────────────────
 	t.Cleanup(func() {
 		t.Log("TestDeployPipeline: removing stacks e2etest and e2etest-api (cleanup)")
 		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cleanCancel()
-		// Remove both stacks; ignore errors (may not exist if sub-tests were skipped).
+
 		out, err := dockerRun(cleanCtx, "stack", "rm", "e2etest", "e2etest-api")
 		if err != nil {
 			t.Logf("docker stack rm: %v\n%s", err, out)
 		}
-		// Wait briefly for Swarm task drain.
+
 		time.Sleep(3 * time.Second)
 	})
 
-	// ── Write manifest files ──────────────────────────────────────────────────
 	manifestV1Path := homeDir + "/manifest_v1.yaml"
 	manifestV2Path := homeDir + "/manifest_v2.yaml"
 	manifestAPIPath := homeDir + "/manifest_api.yaml"
@@ -159,10 +151,8 @@ func TestDeployPipeline(t *testing.T) {
 		t.Fatalf("write manifest api: %v", err)
 	}
 
-	// ── Shared state across sub-tests ─────────────────────────────────────────
-	var rev1 int64 // captured in sub-test a, used in c
+	var rev1 int64
 
-	// ── a) Deploy a tiny exposed service via CLI ───────────────────────────────
 	t.Run("a-cli-deploy-v1", func(t *testing.T) {
 		deployOut, deployErr, code := runCmdCtx(t, ctx, homeDir, "deploy", manifestV1Path)
 		combined := deployOut + deployErr
@@ -171,18 +161,15 @@ func TestDeployPipeline(t *testing.T) {
 		}
 		t.Logf("deploy v1 output:\n%s", combined)
 
-		// Output must contain "Deployed e2etest" and a numeric revision.
 		if !strings.Contains(combined, "Deployed e2etest") {
 			t.Errorf("expected 'Deployed e2etest' in output; got:\n%s", combined)
 		}
-		// Extract revision from the output: "@ revision <N>"
+
 		rev1 = extractRevisionFromOutput(t, combined)
 		t.Logf("rev1=%d", rev1)
 
-		// Docker service e2etest_web must exist.
 		assertServiceExists(t, ctx, "e2etest", "e2etest_web")
 
-		// `pmcluster stack list` must include e2etest with a revision.
 		listOut, _, listCode := runCmdCtx(t, ctx, homeDir, "stack", "list")
 		if listCode != 0 {
 			t.Fatalf("pmcluster stack list exited %d:\n%s", listCode, listOut)
@@ -193,12 +180,11 @@ func TestDeployPipeline(t *testing.T) {
 		t.Logf("stack list output:\n%s", listOut)
 	})
 
-	// ── b) Re-deploy with replicas changed ────────────────────────────────────
 	t.Run("b-cli-redeploy-v2", func(t *testing.T) {
 		if rev1 == 0 {
 			t.Skip("rev1 not captured from sub-test a — skipping")
 		}
-		// Sleep 2s so the new revision id (unix-second) differs from rev1.
+
 		time.Sleep(2 * time.Second)
 
 		deployOut, deployErr, code := runCmdCtx(t, ctx, homeDir, "deploy", manifestV2Path)
@@ -214,7 +200,6 @@ func TestDeployPipeline(t *testing.T) {
 			t.Errorf("rev2 == rev1 (%d); expected a distinct unix-second revision", rev2)
 		}
 
-		// `pmcluster stack show e2etest` must list 2 revisions, new one marked current (→).
 		showOut, _, showCode := runCmdCtx(t, ctx, homeDir, "stack", "show", "e2etest")
 		if showCode != 0 {
 			t.Fatalf("pmcluster stack show exited %d:\n%s", showCode, showOut)
@@ -227,11 +212,9 @@ func TestDeployPipeline(t *testing.T) {
 			t.Errorf("expected '→' current-revision marker in stack show; got:\n%s", showOut)
 		}
 
-		// Docker service must now show replicas=2.
 		assertServiceReplicas(t, ctx, "e2etest_web", 2)
 	})
 
-	// ── c) Rollback to revision 1 ─────────────────────────────────────────────
 	t.Run("c-cli-rollback-to-rev1", func(t *testing.T) {
 		if rev1 == 0 {
 			t.Skip("rev1 not captured from sub-test a — skipping")
@@ -250,7 +233,6 @@ func TestDeployPipeline(t *testing.T) {
 			t.Errorf("rollback revision == rev1 (%d); expected a new timestamp", rev3)
 		}
 
-		// stack show must now list 3 revisions; current (→) is the newest rollback revision.
 		showOut, _, showCode := runCmdCtx(t, ctx, homeDir, "stack", "show", "e2etest")
 		if showCode != 0 {
 			t.Fatalf("pmcluster stack show exited %d:\n%s", showCode, showOut)
@@ -259,19 +241,17 @@ func TestDeployPipeline(t *testing.T) {
 		if !strings.Contains(showOut, "→") {
 			t.Errorf("expected '→' marker in stack show after rollback; got:\n%s", showOut)
 		}
-		// Verify the rev3 (new rollback revision) is marked current, not rev1.
+
 		rev3Str := fmt.Sprintf("→ %d", rev3)
 		if !strings.Contains(showOut, rev3Str) {
 			t.Errorf("expected rollback revision %d to be marked current (→); show output:\n%s", rev3, showOut)
 		}
 
-		// Docker service should be back to replicas=1.
 		assertServiceReplicas(t, ctx, "e2etest_web", 1)
 	})
 
-	// ── d) Rollback to nonexistent revision ───────────────────────────────────
 	t.Run("d-cli-rollback-nonexistent", func(t *testing.T) {
-		// Revision "1" is a unix timestamp in the year 1970 — guaranteed to not exist.
+
 		rbOut, rbErr, code := runCmdCtx(t, ctx, homeDir, "rollback", "e2etest", "1")
 		combined := rbOut + rbErr
 		if code == 0 {
@@ -283,11 +263,9 @@ func TestDeployPipeline(t *testing.T) {
 		}
 	})
 
-	// ── e) Deploy via the HTTP API (using a running daemon) ───────────────────
 	t.Run("e-api-deploy", func(t *testing.T) {
 		addr := freePort(t)
 
-		// Start `pmcluster serve` with the same HOME (it sees the bootstrap user).
 		var serveBuf bytes.Buffer
 		tw := newTestWriter(t)
 		serveCmd := exec.CommandContext(ctx, binaryPath, "serve")
@@ -316,7 +294,6 @@ func TestDeployPipeline(t *testing.T) {
 		base := "http://" + addr
 		hc := &http.Client{Timeout: 15 * time.Second}
 
-		// POST /api/stacks — deploy e2etest-api.
 		payload := map[string]string{"manifest": deployManifestAPI}
 		payloadBytes, _ := json.Marshal(payload)
 
@@ -349,10 +326,8 @@ func TestDeployPipeline(t *testing.T) {
 		apiRev, _ := deployResp["revision"].(float64)
 		t.Logf("API deployed e2etest-api @ revision %v", apiRev)
 
-		// Docker service e2etest-api_web must exist.
 		assertServiceExists(t, ctx, "e2etest-api", "e2etest-api_web")
 
-		// GET /api/stacks — both stacks must appear.
 		listReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/stacks", nil)
 		listReq.Header.Set("Authorization", "Bearer "+adminToken)
 		listResp, err := hc.Do(listReq)
@@ -372,7 +347,6 @@ func TestDeployPipeline(t *testing.T) {
 			t.Errorf("GET /api/stacks: expected 'e2etest-api' in response; got: %s", listBody)
 		}
 
-		// GET /api/stacks/e2etest-api — stack metadata + revisions.
 		showReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/stacks/e2etest-api", nil)
 		showReq.Header.Set("Authorization", "Bearer "+adminToken)
 		showResp, err := hc.Do(showReq)
@@ -394,7 +368,6 @@ func TestDeployPipeline(t *testing.T) {
 			t.Errorf("GET /api/stacks/e2etest-api: expected ≥1 revision; got %d", len(revisions))
 		}
 
-		// GET /api/stacks/e2etest-api/revisions/<rev> — source + rendered YAML.
 		if apiRev > 0 {
 			revURL := fmt.Sprintf("%s/api/stacks/e2etest-api/revisions/%d", base, int64(apiRev))
 			revReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, revURL, nil)
@@ -421,7 +394,6 @@ func TestDeployPipeline(t *testing.T) {
 			}
 		}
 
-		// POST /api/stacks/e2etest-api/rollback — rollback to the deployed revision.
 		if apiRev > 0 {
 			rbPayload := map[string]int64{"revision": int64(apiRev)}
 			rbBytes, _ := json.Marshal(rbPayload)
@@ -448,7 +420,6 @@ func TestDeployPipeline(t *testing.T) {
 			}
 		}
 
-		// SIGTERM the serve process; verify clean exit.
 		if err := serveCmd.Process.Signal(syscall.SIGTERM); err != nil {
 			t.Fatalf("SIGTERM serve: %v", err)
 		}
@@ -465,7 +436,7 @@ func TestDeployPipeline(t *testing.T) {
 					t.Errorf("serve Wait: %v", err)
 				}
 			}
-			// Check "stopped cleanly" in combined output.
+
 			if !strings.Contains(serveBuf.String(), "stopped cleanly") {
 				t.Errorf("expected 'stopped cleanly' in serve stdout; got:\n%s", serveBuf.String())
 			}
@@ -474,8 +445,6 @@ func TestDeployPipeline(t *testing.T) {
 		}
 	})
 }
-
-// ── helpers ───────────────────────────────────────────────────────────────────
 
 // extractRevisionFromOutput parses the *new* unix-timestamp revision id from
 // pmcluster CLI output. Two formats:
@@ -490,8 +459,6 @@ func TestDeployPipeline(t *testing.T) {
 func extractRevisionFromOutput(t *testing.T, output string) int64 {
 	t.Helper()
 
-	// Pass 1 — prefer "new revision <N>" (rollback case). Substring search so
-	// we don't depend on punctuation around it.
 	if idx := strings.Index(output, "new revision "); idx >= 0 {
 		tail := output[idx+len("new revision "):]
 		if n, ok := scanLeadingInt(tail); ok {
@@ -499,8 +466,6 @@ func extractRevisionFromOutput(t *testing.T, output string) int64 {
 		}
 	}
 
-	// Pass 2 — fall back to the first large integer next to the word "revision"
-	// (deploy case).
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.Contains(line, "revision") {
@@ -539,7 +504,7 @@ func scanLeadingInt(s string) (int64, bool) {
 // lists a service named <expectedService>.
 func assertServiceExists(t *testing.T, ctx context.Context, app, expectedService string) {
 	t.Helper()
-	// Give Swarm a moment to register the service — stack deploy is async.
+
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -553,7 +518,7 @@ func assertServiceExists(t *testing.T, ctx context.Context, app, expectedService
 		}
 		time.Sleep(2 * time.Second)
 	}
-	// Final attempt with output logged for debugging.
+
 	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	out, _ := dockerRun(checkCtx, "service", "ls",
 		"--filter", "label=application="+app,
@@ -584,7 +549,7 @@ func assertServiceReplicas(t *testing.T, ctx context.Context, serviceName string
 		}
 		time.Sleep(2 * time.Second)
 	}
-	// Final attempt logged.
+
 	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	out, _ := dockerRun(checkCtx,
 		"service", "inspect",

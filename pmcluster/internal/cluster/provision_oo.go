@@ -43,7 +43,7 @@ const (
 	// token and observability is re-deployed — so this is transient only.
 	pendingIngestionToken = "o2oi_pending-provisioning"
 
-	ingestionTokenName      = "pmcluster" // name of the dedicated OO ingestion token
+	ingestionTokenName      = "pmcluster"
 	automationUserLocalPart = "automation"
 )
 
@@ -55,7 +55,7 @@ type OpenObserveProvisioner struct {
 	Cipher *credentials.Cipher
 	Client *openobserve.Client
 	Stdout io.Writer
-	Org    string // OpenObserve org (default "default")
+	Org    string
 }
 
 func (p *OpenObserveProvisioner) org() string {
@@ -183,7 +183,7 @@ func (p *OpenObserveProvisioner) ensureToken(ctx context.Context, rootUser, root
 	created := &store.ManagedCredential{
 		Name:               credOpenObserveToken,
 		Kind:               string(KindOpenObserve),
-		Username:           p.org(), // OpenObserve authenticates ingestion as Basic <org>:<token>
+		Username:           p.org(),
 		PasswordCiphertext: ciphertext,
 	}
 	if err := p.Store.InsertCredential(ctx, created); err != nil {

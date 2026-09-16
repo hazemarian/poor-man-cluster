@@ -15,7 +15,7 @@ import (
 // TestResolve_VarsSet verifies that when the package-level ldflags targets are
 // non-default values, Resolve() returns them directly without VCS-info lookup.
 func TestResolve_VarsSet(t *testing.T) {
-	// Save originals so this test doesn't leak state to parallel tests.
+
 	origVersion := Version
 	origCommit := Commit
 	origDate := Date
@@ -45,8 +45,7 @@ func TestResolve_VarsSet(t *testing.T) {
 // injection, Resolve() never returns empty strings — it at least returns
 // the compiled-in defaults ("dev", "unknown", "unknown").
 func TestResolve_DefaultsReturnSomething(t *testing.T) {
-	// Keep the package vars at their compiled-in defaults (do NOT mutate them
-	// here so this test is safe to run alongside TestResolve_VarsSet).
+
 	v, c, d := Resolve()
 	if v == "" {
 		t.Error("Resolve() returned empty version")
@@ -77,7 +76,7 @@ func TestResolve_NonDevVersionSkipsVCSFallback(t *testing.T) {
 	Date = "2026-01-01T00:00:00Z"
 
 	v, c, d := Resolve()
-	// Must return exactly what was set — no VCS fallback must override them.
+
 	if v != "v2.0.0" || c != "deadbeef" || d != "2026-01-01T00:00:00Z" {
 		t.Errorf("Resolve() = (%q, %q, %q), want (v2.0.0, deadbeef, 2026-01-01T00:00:00Z)", v, c, d)
 	}

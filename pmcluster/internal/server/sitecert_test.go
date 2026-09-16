@@ -110,7 +110,7 @@ func TestSiteCertAPI(t *testing.T) {
 	})
 
 	t.Run("put success → 200 + row persisted", func(t *testing.T) {
-		rec.calls = 0 // prior subtests may have called apply
+		rec.calls = 0
 		resp := doJSON(t, http.MethodPut, base, "tok", map[string]any{"cert": cert, "key": key})
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -129,7 +129,6 @@ func TestSiteCertAPI(t *testing.T) {
 			t.Error("apply should receive the exact uploaded PEM bytes")
 		}
 
-		// The row is actually in the store (the service persists it).
 		row, err := st.GetSiteCert(context.Background(), "test.example.com")
 		if err != nil {
 			t.Fatalf("row not persisted: %v", err)

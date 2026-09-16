@@ -112,7 +112,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20)) // 4 MiB cap
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return err
 	}
@@ -124,8 +124,6 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	}
 	return json.Unmarshal(data, out)
 }
-
-// ---- typed endpoint methods ----
 
 // Me returns the authenticated daemon user.
 func (c *Client) Me(ctx context.Context) (*Me, error) {

@@ -7,18 +7,14 @@ import (
 
 func TestParse_EmptyInput(t *testing.T) {
 	_, err := Parse([]byte(""))
-	// sigs.k8s.io/yaml converts empty YAML to JSON "null", which then
-	// decodes to a nil pointer — either way the app is useless, but we
-	// accept the nil-without-error form because the validator will catch it.
-	// The important property is: no panic.
+
 	if err != nil {
 		t.Logf("Parse(\"\") returned err (acceptable): %v", err)
 	}
 }
 
 func TestParse_PlainText(t *testing.T) {
-	// A string that is not YAML (or is not a map at the top level) should
-	// produce a parse/decode error, not a panic.
+
 	_, err := Parse([]byte("not yaml at all: :::"))
 	if err == nil {
 		t.Fatal("expected error parsing malformed YAML, got nil")
@@ -26,8 +22,7 @@ func TestParse_PlainText(t *testing.T) {
 }
 
 func TestParse_TopLevelArray(t *testing.T) {
-	// YAML that is a sequence (array) at the top level cannot decode into
-	// a struct — should return a decode error.
+
 	_, err := Parse([]byte("- item1\n- item2\n"))
 	if err == nil {
 		t.Fatal("expected error for top-level array, got nil")
@@ -67,7 +62,7 @@ services:
 	if err == nil {
 		t.Fatal("expected error for unknown service key, got nil")
 	}
-	// The error should mention the bad key.
+
 	if !strings.Contains(err.Error(), "repalicas") {
 		t.Errorf("error should mention unknown key 'repalicas', got: %v", err)
 	}

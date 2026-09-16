@@ -158,8 +158,7 @@ secrets:
   [[- end]]
 
 # Docker config (replicated to every node by Swarm), created+managed by
-# pmcluster cluster up. Replaces the bind-mounted ./traefik-dynamic.yml
-# from the legacy bash setup.
+# pmcluster cluster up.
 configs:
   __TRAEFIK_CONFIG_NAME__:
     external: true

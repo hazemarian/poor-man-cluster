@@ -42,7 +42,7 @@ type User struct {
 	Username     string
 	PasswordHash string
 	PasswordSet  bool
-	CreatedAt    int64 // unix epoch seconds
+	CreatedAt    int64
 }
 
 // Open creates (if needed) and opens the SQLite DB under dataDir.
@@ -54,7 +54,7 @@ func Open(dataDir string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	db.SetMaxOpenConns(1) // SQLite writes are serialized; keep it simple.
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(`
 		PRAGMA journal_mode=WAL;
 		CREATE TABLE IF NOT EXISTS users (
@@ -77,8 +77,6 @@ func Open(dataDir string) (*Store, error) {
 
 // Close releases the underlying connection.
 func (s *Store) Close() error { return s.db.Close() }
-
-// ---- users ----
 
 // GetByUsername returns a user or ErrNotFound.
 func (s *Store) GetByUsername(ctx context.Context, username string) (*User, error) {
@@ -126,7 +124,7 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash string, p
 		 VALUES (?, ?, ?, ?)`, username, passwordHash, boolInt(passwordSet), time.Now().Unix()); err != nil {
 		return nil, err
 	}
-	return s.GetByUsername(ctx, username) // re-read for the full row incl. id
+	return s.GetByUsername(ctx, username)
 }
 
 // SetPassword sets (or replaces) a password hash and marks it set.
@@ -150,8 +148,6 @@ func (s *Store) CreateEnvUser(ctx context.Context, username, passwordHash string
 	}
 	return true, nil
 }
-
-// ---- settings ----
 
 // GetSetting returns a setting value or ErrNotFound.
 func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
@@ -196,7 +192,7 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 // respected and not overwritten on the next start.
 func (s *Store) SeedSettingOnce(ctx context.Context, key, value string) error {
 	if _, err := s.GetSetting(ctx, key); err == nil {
-		return nil // already set (any value, including an explicit clear)
+		return nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return err
 	}

@@ -64,8 +64,7 @@ func (c Overview) Fragment(g *gin.Context) {
 			})
 		}
 	}
-	// Report the first hard failure so misconfig is visible (membership is the
-	// most useful call for that; fall through to the first error otherwise).
+
 	switch {
 	case err != nil:
 		d.Error = err.Error()

@@ -60,7 +60,7 @@ func TestMergeTLSState_SameModeAllowsFlags(t *testing.T) {
 }
 
 func TestMergeTLSState_RefusesModeFlipUnlessForced(t *testing.T) {
-	// Stored=acme but operator requests cert without --force-tls-mode.
+
 	in := UpInput{CertPath: "/c.pem", KeyPath: "/k.pem"}
 	state := tlsState{Mode: "acme", ACMEEmail: "a@b.c"}
 	if _, err := mergeTLSState(in, state); err == nil {

@@ -46,7 +46,7 @@ func (c Settings) Save(g *gin.Context) {
 	clearToken := g.PostForm("clear_token") == "1"
 
 	if apiURL == "" {
-		// Blank reverts to the env default by removing any override.
+
 		_ = c.Store.SetSetting(ctx, keyAPIURL, "")
 		c.API.SetBase(c.EnvAPI)
 	} else {

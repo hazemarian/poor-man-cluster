@@ -88,8 +88,6 @@ pmc_<hex_token_id>_<base64_secret>
 - `hex_token_id` — 8 hex chars (4 random bytes), the public index used for fast database lookup
 - `base64_secret` — 32 random bytes, base64url-encoded (~43 chars); this is the sensitive part
 
-**Breaking change**: Legacy tokens (plain base64 strings without the `pmc_` prefix) still work but trigger a slower fallback lookup. Operators should regenerate users to get v2 tokens.
-
 ### Creating additional users
 
 ```bash
@@ -149,7 +147,7 @@ services:                      # required — one or more service definitions
 
     placement: manager         # optional — manager | worker | (empty)
     replicas: 2                # optional — default 1 (ignored when run_once)
-    run_once: true             # optional — restart_policy: condition: none (jobs/migrations)
+    run_once: true             # optional — restart_policy: condition: none (one-off jobs)
     skip_filelog: true         # optional — exclude from OTel log tailing (app ships OTLP itself)
     command: [./migrate]       # optional — override command (entrypoint also supported)
 
@@ -199,9 +197,7 @@ env:
 - Both have `cluster` (platform) and `service` (app) scopes. Resolved at **deploy time** against the DB — rotate then re-deploy to pick up the new value.
 - Management:
   - `pmcluster secret create <name> [value]` (prompt/stdin ok) / `list` / `show <name>` / `verify <name> <value>` / `delete <name>`
-  - `pmcluster secret import-credentials` — mirror platform credentials into the secrets store
   - `pmcluster config create|list|get|edit|history|rollback <name>`
-  - `pmcluster config import` — one-time import of on-disk `~/.pmcluster/config/*.yml` templates
 - The operator console has **Secrets** and **Configs** pages (list, create, edit, history, rollback).
 - Validation fails on malformed references (`config(name` / `secrets()`), on `secrets(name)` env refs that aren't mounted in the service `secrets:` array, and at deploy time if the named secret/config doesn't exist. Multi-line content can't be injected into env — file-mount it via the `secrets:` array instead.
 
@@ -392,7 +388,7 @@ pmcluster tls site set --cert-file new.pem --key-file new.key.pem
 
 The pair is validated against the persisted cluster domain, written to `~/.pmcluster/config/site/{cert,key}.pem` (0600), materialized as `cert_vN`/`key_vN` Swarm secrets, wired into the Traefik dynamic config, and its metadata recorded in the DB. Same flow via the console TLS page (**Main certificate** card) or `PUT /api/tls/site`.
 
-Certificates within **30 days** of expiry are flagged in the console and warned about on every `cluster up`/`cluster update` — operator certs are not auto-renewed. (ACME-mode clusters renew automatically; no row is recorded.) The pre-existing certificate is imported into the DB automatically (once, idempotently) on the first `cluster up`/`cluster update` after upgrade.
+Certificates within **30 days** of expiry are flagged in the console and warned about on every `cluster up`/`cluster update` — operator certs are not auto-renewed. (ACME-mode clusters renew automatically; no row is recorded.)
 
 ### Per-host TLS (customer domains)
 
@@ -410,7 +406,7 @@ pmcluster tls hosts list                      # host, expiry, SANs, secret names
 pmcluster tls hosts remove api.customer.com
 ```
 
-Adding/removing re-renders Traefik and re-deploys the infra stack; use `--no-refresh` to defer to `pmcluster cluster update`. The cluster's own wildcard cert is never touched. On upgrade, any certs left in the legacy `~/.pmcluster/config/hosts/<host>/` directory are migrated into secrets + DB exactly once (then the directory is removed).
+Adding/removing re-renders Traefik and re-deploys the infra stack; use `--no-refresh` to defer to `pmcluster cluster update`. The cluster's own wildcard cert is never touched.
 
 ## Private Registries
 

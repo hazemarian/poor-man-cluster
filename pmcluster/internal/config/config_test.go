@@ -10,7 +10,7 @@ import (
 // (Phase 1.7) should expand with: env-var overrides, malformed YAML,
 // invalid log_level, --config flag pointing at non-default path.
 func TestLoad_Defaults(t *testing.T) {
-	// Use a fresh HOME so we don't pick up the real user's config.
+
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 

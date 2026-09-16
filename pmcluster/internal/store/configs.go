@@ -15,9 +15,9 @@ import (
 // last wrote it; Hash is sha256(content) for change detection.
 type ConfigRow struct {
 	ID        int64
-	Scope     string // "cluster" | "service"
+	Scope     string
 	Name      string
-	Kind      string // "template" | "file" | "env"
+	Kind      string
 	Content   string
 	Version   string
 	Hash      string
@@ -117,7 +117,6 @@ func (s *Store) UpdateConfig(ctx context.Context, name, newContent, version stri
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Read current row inside the tx (content needed for history).
 	var (
 		id      int64
 		content string
@@ -135,7 +134,7 @@ func (s *Store) UpdateConfig(ctx context.Context, name, newContent, version stri
 
 	newHash := ConfigHash(newContent)
 	if newHash == hash {
-		// No-op edit — nothing to version or reapply.
+
 		return hash, nil
 	}
 
@@ -212,7 +211,6 @@ func (s *Store) RollbackConfig(ctx context.Context, name string, versionID int64
 		return "", fmt.Errorf("query config: %w", err)
 	}
 
-	// The version row must belong to this config.
 	var (
 		oldContent string
 		oldHash    string

@@ -113,9 +113,7 @@ func toLogValue(v any) log.Value {
 	case bool:
 		return log.BoolValue(x)
 	case float64:
-		// Distinguish ints from floats. JSON numbers come back as float64
-		// from encoding/json; reconstruct int64 when the value is whole
-		// and fits — keeps the OTel side from showing "5.0" for "5".
+
 		if x == float64(int64(x)) {
 			return log.Int64Value(int64(x))
 		}
@@ -123,7 +121,7 @@ func toLogValue(v any) log.Value {
 	case nil:
 		return log.StringValue("")
 	default:
-		// Arrays, nested objects, etc.: serialize back to JSON.
+
 		b, err := json.Marshal(x)
 		if err != nil {
 			return log.StringValue("")

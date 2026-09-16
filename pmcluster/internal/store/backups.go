@@ -11,10 +11,10 @@ import (
 // Backup is one row in the backups audit table.
 type Backup struct {
 	ID           int64
-	StackName    sql.NullString // NULL for on-demand backups
+	StackName    sql.NullString
 	Revision     sql.NullInt64
-	Status       string // "pending" | "succeeded" | "failed"
-	ArchivePaths string // comma-separated
+	Status       string
+	ArchivePaths string
 	ErrorMessage string
 	StartedAt    int64
 	FinishedAt   sql.NullInt64

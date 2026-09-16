@@ -35,37 +35,26 @@ func New(cfg Config) http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)
 
-	// Resolve the real client IP from Traefik's X-Forwarded-For before any
-	// protection middleware that keys on it.
 	r.Use(RealIP(cfg.TrustedCIDRs))
 
-	// Shared ban store: blocklist reads it, auto-ban writes it. Created once so
-	// a ban takes effect at the blocklist layer on the very next request.
 	sb := &sharedBan{store: newBanStore()}
 
-	// Outer protection stack (outer -> inner).
 	r.Use(Blocklist(cfg, sb))
 	r.Use(ConnectionShield(cfg))
 	r.Use(AutoBan(cfg, sb))
 	r.Use(RateLimiter(cfg))
 	r.Use(RequestTimeout(cfg.RequestTimeout))
 
-	// Build the reverse proxy to the pmcluster daemon.
 	upstream, err := url.Parse(cfg.Upstream)
 	if err != nil {
-		// Config was validated in cmd/edge; a parse failure here is a coding
-		// error, so panic loudly rather than serving a dead proxy silently.
+
 		panic("edgeproxy: invalid upstream: " + err.Error())
 	}
 	proxy := reverseProxy(upstream)
 	proxy.ErrorLog = log.New(os.Stderr, "edgeproxy: ", log.LstdFlags)
 
-	// Health is proxied (the daemon answers /health) and exempt from rate limit.
 	r.Get("/health", http.HandlerFunc(proxy.ServeHTTP))
 
-	// API + webhook reverse proxy. Everything else (unknown/UI paths) is not
-	// proxied — the gin engine serves the console routes ahead of this handler,
-	// and any remaining path is a 404 rather than an opaque pass-through.
 	r.Handle("/api/*", http.HandlerFunc(proxy.ServeHTTP))
 	r.Handle("/webhook/*", http.HandlerFunc(proxy.ServeHTTP))
 

@@ -112,27 +112,25 @@ func TestTranslate_DonationCampaignSmoke(t *testing.T) {
 		}
 	}
 
-	// Structural assertions covering the most important translator outputs.
 	mustContain(`version: "3.9"`)
-	mustContain(`donation-campaign-net`)             // private overlay
-	mustContain(`traefik-net`)                       // exposed services join it
-	mustContain(`monitoring-net`)                    // exposed services join it
-	mustContain(`external: true`)                    // external networks/secrets
-	mustContain(`donation_campaign_db_password`)     // secret declaration
-	mustContain(`db_data`)                           // local volume
-	mustContain(`pg_isready`)                        // shorthand expansion
-	mustContain(`wget -q --spider`)                  // http healthcheck shorthand
-	mustContain(`api.donation-campaign.example.com`) // interpolated host
+	mustContain(`donation-campaign-net`)
+	mustContain(`traefik-net`)
+	mustContain(`monitoring-net`)
+	mustContain(`external: true`)
+	mustContain(`donation_campaign_db_password`)
+	mustContain(`db_data`)
+	mustContain(`pg_isready`)
+	mustContain(`wget -q --spider`)
+	mustContain(`api.donation-campaign.example.com`)
 	mustContain(`traefik.http.routers.donation-campaign-api.rule`)
-	mustContain(`condition: none`)                // run_once → restart none
-	mustContain(`condition: on-failure`)          // default for normal services
-	mustContain(`order: start-first`)             // default update order
-	mustContain(`replicas: 2`)                    // explicit replicas
-	mustContain(`application: donation-campaign`) // standard label
-	mustContain(`environment: production`)        // standard label
-	mustContain(`version: latest`)                // standard label
+	mustContain(`condition: none`)
+	mustContain(`condition: on-failure`)
+	mustContain(`order: start-first`)
+	mustContain(`replicas: 2`)
+	mustContain(`application: donation-campaign`)
+	mustContain(`environment: production`)
+	mustContain(`version: latest`)
 
-	// Print once for human inspection during dev (use -v to see).
 	t.Logf("translated compose:\n%s", body)
 }
 
@@ -170,7 +168,7 @@ services:
 	if strings.Contains(string(out), "cors-default@file") {
 		t.Errorf("cors_disabled: true should omit cors-default middleware, got:\n%s", out)
 	}
-	// Sanity: the rest of the Traefik labels should still be present.
+
 	if !strings.Contains(string(out), "traefik.http.routers.my-app-api.rule") {
 		t.Errorf("expected Traefik router rule label, got:\n%s", out)
 	}

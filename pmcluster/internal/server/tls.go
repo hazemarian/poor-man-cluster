@@ -24,7 +24,7 @@ import (
 // refreshes Traefik. The list endpoint returns every stored row EXCEPT the
 // cluster's own domain (that one is served by /api/tls/site).
 type HostCertService struct {
-	Store *store.Store // required: listing + metadata persistence
+	Store *store.Store
 
 	// Apply uploads a per-host cert for host and returns the stored metadata
 	// row. It is the single implementation behind PUT /api/tls/hosts/{host}
@@ -56,7 +56,7 @@ func (h *HostCertService) list(w http.ResponseWriter, r *http.Request) {
 	hosts := make([]hostCertResponse, 0, len(rows))
 	for _, row := range rows {
 		if row.Domain == main {
-			continue // the cluster's own cert is served by /api/tls/site
+			continue
 		}
 		hosts = append(hosts, hostCertResponseFromRow(&row))
 	}
@@ -106,8 +106,7 @@ func (h *HostCertService) put(w http.ResponseWriter, r *http.Request) {
 	}
 	got, err := h.Apply(r.Context(), host, req.Cert, req.Key)
 	if err != nil {
-		// Validation failures (bad PEM, mismatch, domain not covered,
-		// invalid host) are client errors; refresh failures are server errors.
+
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "does not cover") || strings.Contains(err.Error(), "valid pair") ||
 			strings.Contains(err.Error(), "PEM") || strings.Contains(err.Error(), "invalid host") {

@@ -73,7 +73,6 @@ func TestRecordDeploy_SecondRevision(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	// First deploy.
 	rev1 := makeRevision("mystack", 1000, "src-v1", "rendered-v1")
 	if err := s.RecordDeploy(ctx, rev1, "https://git/repo"); err != nil {
 		t.Fatalf("RecordDeploy v1: %v", err)
@@ -83,10 +82,8 @@ func TestRecordDeploy_SecondRevision(t *testing.T) {
 		t.Fatalf("GetStack after v1: %v", err)
 	}
 
-	// Sleep a tick to ensure updated_at can change in Unix-second granularity.
 	time.Sleep(time.Second + 10*time.Millisecond)
 
-	// Second deploy.
 	rev2 := makeRevision("mystack", 2000, "src-v2", "rendered-v2")
 	if err := s.RecordDeploy(ctx, rev2, "https://git/repo"); err != nil {
 		t.Fatalf("RecordDeploy v2: %v", err)
@@ -99,16 +96,15 @@ func TestRecordDeploy_SecondRevision(t *testing.T) {
 	if st2.CurrentRevision != 2000 {
 		t.Errorf("current_revision = %d, want 2000", st2.CurrentRevision)
 	}
-	// created_at must not change on re-deploy.
+
 	if st2.CreatedAt != st1.CreatedAt {
 		t.Errorf("created_at changed: was %d, now %d", st1.CreatedAt, st2.CreatedAt)
 	}
-	// updated_at should advance (at least 1 second passed).
+
 	if st2.UpdatedAt <= st1.UpdatedAt {
 		t.Errorf("updated_at did not advance: was %d, still %d", st1.UpdatedAt, st2.UpdatedAt)
 	}
 
-	// Both revisions must be retrievable.
 	if _, err := s.GetRevision(ctx, "mystack", 1000); err != nil {
 		t.Errorf("GetRevision(1000): %v", err)
 	}
@@ -124,13 +120,11 @@ func TestRecordDeploy_RepoURLPreservedOnEmptyUpdate(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	// First deploy sets the repo URL.
 	rev1 := makeRevision("mystack", 1000, "src", "rendered")
 	if err := s.RecordDeploy(ctx, rev1, "https://git/original"); err != nil {
 		t.Fatalf("RecordDeploy v1: %v", err)
 	}
 
-	// Second deploy sends empty repoURL — should NOT overwrite.
 	rev2 := makeRevision("mystack", 2000, "src2", "rendered2")
 	if err := s.RecordDeploy(ctx, rev2, ""); err != nil {
 		t.Fatalf("RecordDeploy v2: %v", err)
@@ -161,13 +155,11 @@ func TestGetRevision_NotFound(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	// Stack doesn't exist at all.
 	_, err := s.GetRevision(ctx, "ghost", 9999)
 	if !errors.Is(err, ErrRevisionNotFound) {
 		t.Errorf("GetRevision(ghost, 9999) err = %v, want ErrRevisionNotFound", err)
 	}
 
-	// Stack exists but the revision doesn't.
 	rev := makeRevision("mystack", 1000, "src", "rendered")
 	if err := s.RecordDeploy(ctx, rev, ""); err != nil {
 		t.Fatalf("RecordDeploy: %v", err)
@@ -189,7 +181,7 @@ func TestListStacks_OrderedByName(t *testing.T) {
 		if err := s.RecordDeploy(ctx, rev, ""); err != nil {
 			t.Fatalf("RecordDeploy(%s): %v", name, err)
 		}
-		// Small sleep so revision IDs (unix millis) differ.
+
 		time.Sleep(2 * time.Millisecond)
 	}
 
@@ -229,7 +221,7 @@ func TestListRevisions_NewestFirst(t *testing.T) {
 		if len(revs) != 3 {
 			t.Fatalf("len = %d, want 3", len(revs))
 		}
-		// newest first
+
 		if revs[0].Revision != 300 || revs[1].Revision != 200 || revs[2].Revision != 100 {
 			t.Errorf("order wrong: %v", revisionsIDs(revs))
 		}
@@ -270,23 +262,19 @@ func TestCascadeDelete_StackDeletesRevisions(t *testing.T) {
 		t.Fatalf("RecordDeploy: %v", err)
 	}
 
-	// Confirm the revision is there.
 	if _, err := s.GetRevision(ctx, "doomed", 5000); err != nil {
 		t.Fatalf("GetRevision before delete: %v", err)
 	}
 
-	// Delete the parent stack row.
 	if _, err := s.DB().ExecContext(ctx, `DELETE FROM stacks WHERE name = 'doomed'`); err != nil {
 		t.Fatalf("DELETE FROM stacks: %v", err)
 	}
 
-	// The revision should be gone too (ON DELETE CASCADE).
 	_, err := s.GetRevision(ctx, "doomed", 5000)
 	if !errors.Is(err, ErrRevisionNotFound) {
 		t.Errorf("GetRevision after cascade delete = %v, want ErrRevisionNotFound", err)
 	}
 
-	// The stack row itself should be gone.
 	_, err = s.GetStack(ctx, "doomed")
 	if !errors.Is(err, ErrStackNotFound) {
 		t.Errorf("GetStack after delete = %v, want ErrStackNotFound", err)

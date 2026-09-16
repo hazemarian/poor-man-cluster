@@ -157,7 +157,6 @@ func validPayload(t *testing.T) []byte {
 func TestHandlerReceive(t *testing.T) {
 	const sourceName = "github-prod"
 
-	// We want to verify that ALL 401 bodies are identical.
 	var firstUnauthorizedBody string
 
 	checkUnauthorized := func(t *testing.T, resp *http.Response, label string) {
@@ -194,8 +193,7 @@ func TestHandlerReceive(t *testing.T) {
 		srv, _ := buildHandler(t, st, c, dep)
 
 		body := validPayload(t)
-		// Old-style sig over just the body (no timestamp) — still returns 401
-		// because the timestamp header is now required.
+
 		mac := hmac.New(sha256.New, secret)
 		mac.Write(body)
 		sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
@@ -252,7 +250,7 @@ func TestHandlerReceive(t *testing.T) {
 		body := validPayload(t)
 		ts := time.Now().Unix()
 		sig := computeHMAC(secret, body, ts)
-		// Strip the "sha256=" prefix to make it malformed.
+
 		malformed := strings.TrimPrefix(sig, "sha256=")
 
 		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/webhook/"+sourceName, bytes.NewReader(body))
@@ -285,7 +283,7 @@ func TestHandlerReceive(t *testing.T) {
 		srv, _ := buildHandler(t, st, c, dep)
 
 		body := validPayload(t)
-		// "sha256=abc" is valid hex but only 3 bytes — sha256 requires 32.
+
 		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/webhook/"+sourceName, bytes.NewReader(body))
 		req.Header.Set(TimestampHeader, nowTimestamp())
 		req.Header.Set(SignatureHeader, "sha256=abc")
@@ -301,7 +299,7 @@ func TestHandlerReceive(t *testing.T) {
 		srv, _ := buildHandler(t, st, c, dep)
 
 		body := validPayload(t)
-		// 64 valid hex chars but wrong HMAC.
+
 		wrongSig := "sha256=" + strings.Repeat("ab", 32)
 		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/webhook/"+sourceName, bytes.NewReader(body))
 		req.Header.Set(TimestampHeader, nowTimestamp())
@@ -365,7 +363,6 @@ func TestHandlerReceive(t *testing.T) {
 			t.Errorf("stack = %v, want 'whoami-webhook'", result["stack"])
 		}
 
-		// Deploy was actually called.
 		if len(dep.deployed) == 0 {
 			t.Error("expected recordingDeployer.deployed to be non-empty")
 		}
@@ -373,7 +370,6 @@ func TestHandlerReceive(t *testing.T) {
 			t.Errorf("deployed name = %q, want 'whoami-webhook'", dep.deployed[0].Name)
 		}
 
-		// Store has the new revision.
 		ctx := context.Background()
 		stacks, err := st.ListStacks(ctx)
 		if err != nil {
@@ -438,18 +434,15 @@ func TestHandlerReceive(t *testing.T) {
 		st, c, dep, secret := testDeps(t, sourceName)
 		srv, _ := buildHandler(t, st, c, dep)
 
-		// Construct a body > 1MB. It needs to be valid JSON and correctly signed
-		// so the size check (not the parse or auth) is what trips.
-		// We build a JSON payload with a very large manifest field.
-		padding := strings.Repeat("x", MaxBodyBytes) // over the limit
+		padding := strings.Repeat("x", MaxBodyBytes)
 		p := deploy.Payload{Manifest: padding}
 		body, err := json.Marshal(p)
 		if err != nil {
 			t.Fatalf("json.Marshal: %v", err)
 		}
-		// Ensure it really is > MaxBodyBytes.
+
 		if len(body) <= MaxBodyBytes {
-			// Add more padding in case JSON encoding overhead helped.
+
 			p.AppName = strings.Repeat("y", MaxBodyBytes-len(body)+1)
 			body, err = json.Marshal(p)
 			if err != nil {
@@ -477,7 +470,6 @@ func TestHandlerReceive(t *testing.T) {
 		st, c, dep, secret := testDeps(t, sourceName)
 		srv, _ := buildHandler(t, st, c, dep)
 
-		// Before: last_used_at is NULL.
 		ctx := context.Background()
 		before, err := st.GetWebhookSource(ctx, sourceName)
 		if err != nil {
@@ -502,7 +494,6 @@ func TestHandlerReceive(t *testing.T) {
 			t.Fatalf("expected 200, got %d", resp.StatusCode)
 		}
 
-		// After: last_used_at should be set.
 		after, err := st.GetWebhookSource(ctx, sourceName)
 		if err != nil {
 			t.Fatalf("GetWebhookSource (after): %v", err)
@@ -518,7 +509,7 @@ func TestHandlerReceive(t *testing.T) {
 
 		ctx := context.Background()
 		body := validPayload(t)
-		// Send with a wrong signature so we get a 401.
+
 		wrongSig := "sha256=" + strings.Repeat("00", 32)
 		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/webhook/"+sourceName, bytes.NewReader(body))
 		req.Header.Set(TimestampHeader, nowTimestamp())
@@ -541,11 +532,8 @@ func TestHandlerReceive(t *testing.T) {
 		}
 	})
 
-	// Verify all 401s were truly indistinguishable (checked inline above via
-	// the shared firstUnauthorizedBody variable — the check itself happens in
-	// each sub-test). This is a summary assertion.
 	if firstUnauthorizedBody == "" {
-		// The 401 sub-tests ran and set the body; if empty, none ran.
+
 		t.Log("note: 401 body comparison across sub-tests uses shared variable — see sub-test 'missing signature header'")
 	} else {
 		t.Logf("all 401 bodies matched: %q", firstUnauthorizedBody)
@@ -559,7 +547,6 @@ func TestHandlerReceive_BodySizeExact(t *testing.T) {
 	st, c, dep, secret := testDeps(t, sourceName)
 	srv, _ := buildHandler(t, st, c, dep)
 
-	// Build a body that is exactly MaxBodyBytes.
 	smallBody := validPayload(t)
 	if len(smallBody) >= MaxBodyBytes {
 		t.Skip("validPayload already exceeds MaxBodyBytes — test not applicable")
@@ -585,7 +572,6 @@ func TestComputeHMACMatchesProduction(t *testing.T) {
 	body := []byte(`{"manifest":"app: test\n"}`)
 	ts := int64(1710000000)
 
-	// Use our test helper.
 	sig := computeHMAC(secret, body, ts)
 	if !strings.HasPrefix(sig, "sha256=") {
 		t.Fatalf("sig = %q, want 'sha256=' prefix", sig)
@@ -596,7 +582,6 @@ func TestComputeHMACMatchesProduction(t *testing.T) {
 		t.Fatalf("decode hex: %v", err)
 	}
 
-	// Compute independently — must match fmt.Fprint(timestamp) + body.
 	mac := hmac.New(sha256.New, secret)
 	fmt.Fprint(mac, ts)
 	mac.Write(body)

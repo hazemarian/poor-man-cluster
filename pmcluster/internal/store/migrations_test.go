@@ -36,12 +36,11 @@ func TestRunMigrations_Idempotent(t *testing.T) {
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_version`).Scan(&count); err != nil {
 		t.Fatalf("query schema_version: %v", err)
 	}
-	// Exactly one entry per embedded *.sql file — not one per call.
+
 	if count == 0 {
 		t.Fatal("schema_version is empty after runMigrations")
 	}
 
-	// Run again: count must not change.
 	if err := runMigrations(db); err != nil {
 		t.Fatalf("runMigrations (4th pass): %v", err)
 	}
@@ -67,8 +66,6 @@ func TestRunMigrations_LexOrder(t *testing.T) {
 		t.Fatalf("runMigrations: %v", err)
 	}
 
-	// Retrieve applied versions in insertion order (sqlite preserves rowid order
-	// for INTEGER PRIMARY KEY; here version is TEXT PK so we rely on rowid).
 	rows, err := db.Query(`SELECT version FROM schema_version ORDER BY rowid`)
 	if err != nil {
 		t.Fatalf("query schema_version: %v", err)
@@ -91,7 +88,6 @@ func TestRunMigrations_LexOrder(t *testing.T) {
 		t.Fatal("no versions recorded in schema_version")
 	}
 
-	// Verify lexicographic order is respected across the recorded versions.
 	for i := 1; i < len(versions); i++ {
 		if versions[i] < versions[i-1] {
 			t.Errorf("schema_version order violated: %q comes after %q",
@@ -99,7 +95,6 @@ func TestRunMigrations_LexOrder(t *testing.T) {
 		}
 	}
 
-	// The first embedded migration must be "0001_init" (no .sql suffix stored).
 	if versions[0] != "0001_init" {
 		t.Errorf("first schema_version version = %q, want %q", versions[0], "0001_init")
 	}
@@ -115,7 +110,6 @@ func TestRunMigrations_SchemaVersion_MatchesFiles(t *testing.T) {
 		t.Fatalf("runMigrations: %v", err)
 	}
 
-	// listMigrations returns filenames; strip .sql to get expected versions.
 	files, err := listMigrations()
 	if err != nil {
 		t.Fatalf("listMigrations: %v", err)
@@ -131,7 +125,7 @@ func TestRunMigrations_SchemaVersion_MatchesFiles(t *testing.T) {
 	}
 
 	for _, f := range files {
-		version := f[:len(f)-len(".sql")] // trim ".sql"
+		version := f[:len(f)-len(".sql")]
 		var applied int
 		if err := db.QueryRow(
 			`SELECT COUNT(*) FROM schema_version WHERE version = ?`, version,
@@ -150,7 +144,6 @@ func TestRunMigrations_SchemaVersion_MatchesFiles(t *testing.T) {
 func TestApplyMigration_MalformedBodyRolledBack(t *testing.T) {
 	db := openRawDB(t)
 
-	// Bootstrap schema_version so applyMigration can INSERT into it.
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (version TEXT PRIMARY KEY, applied_at INTEGER NOT NULL) STRICT`); err != nil {
 		t.Fatalf("create schema_version: %v", err)
 	}
@@ -161,7 +154,6 @@ func TestApplyMigration_MalformedBodyRolledBack(t *testing.T) {
 		t.Fatal("expected error from applyMigration with malformed SQL, got nil")
 	}
 
-	// The failed migration must NOT have been recorded.
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM schema_version WHERE version = 'test_bad'`).Scan(&count); err != nil {
 		t.Fatalf("query schema_version: %v", err)
@@ -193,7 +185,6 @@ func TestApplyMigration_HappyPath(t *testing.T) {
 		t.Errorf("expected 1 schema_version row for test_good, got %d", count)
 	}
 
-	// The table created by the migration should actually exist.
 	if _, err := db.Exec(`INSERT INTO test_table (id) VALUES (1)`); err != nil {
 		t.Errorf("table test_table was not created: %v", err)
 	}

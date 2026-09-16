@@ -44,7 +44,7 @@ func TestDown_RemovesThreeStacks(t *testing.T) {
 
 func TestDown_NoPurge_PreservesSecretsConfigsNetworks(t *testing.T) {
 	f := newFakeDocker()
-	// Pre-populate resources.
+
 	f.secrets["admin_credentials"] = struct {
 		Name   string
 		Data   []byte
@@ -72,7 +72,6 @@ func TestDown_NoPurge_PreservesSecretsConfigsNetworks(t *testing.T) {
 		t.Errorf("networks removed without --purge: %v", res.NetworksRemoved)
 	}
 
-	// Resources must still be present.
 	if _, ok := f.secrets["admin_credentials"]; !ok {
 		t.Error("admin_credentials secret removed without --purge")
 	}
@@ -85,7 +84,6 @@ func TestDown_Purge_RemovesAllManagedResources(t *testing.T) {
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
 
-	// Pre-populate all managed resources.
 	for _, name := range pmclusterManagedSecrets {
 		f.secrets[name] = struct {
 			Name   string
@@ -93,9 +91,7 @@ func TestDown_Purge_RemovesAllManagedResources(t *testing.T) {
 			Labels map[string]string
 		}{Name: name}
 	}
-	// Configs are now discovered via ConfigList (versioned). Seed two,
-	// each carrying the managed label so the purge's label filter finds them
-	// (mirrors how production pmcluster-managed configs are labelled).
+
 	f.configs["pmcluster_otel_config_v001"] = struct {
 		Name   string
 		Data   []byte
@@ -115,25 +111,22 @@ func TestDown_Purge_RemovesAllManagedResources(t *testing.T) {
 	}
 
 	deployer := &recordingDeployer{}
-	// Use a cancelled context so waitTeardownSettle returns immediately.
+
 	res, err := Down(cancelledCtx(), makeDownDeps(f, deployer), DownInput{Purge: true})
 	if err != nil {
 		t.Fatalf("Down (purge): %v", err)
 	}
 
-	// Five managed secrets.
 	if len(res.SecretsRemoved) != len(pmclusterManagedSecrets) {
 		t.Errorf("SecretsRemoved = %v (len %d), want %d",
 			res.SecretsRemoved, len(res.SecretsRemoved), len(pmclusterManagedSecrets))
 	}
 
-	// Two managed configs.
 	if len(res.ConfigsRemoved) != 2 {
 		t.Errorf("ConfigsRemoved = %v (len %d), want 2",
 			res.ConfigsRemoved, len(res.ConfigsRemoved))
 	}
 
-	// Two overlay networks.
 	if len(res.NetworksRemoved) != len(pmclusterManagedNetworks) {
 		t.Errorf("NetworksRemoved = %v (len %d), want %d",
 			res.NetworksRemoved, len(res.NetworksRemoved), len(pmclusterManagedNetworks))
@@ -145,7 +138,7 @@ func TestDown_Purge_RemovesAllManagedResources(t *testing.T) {
 // always succeed (they no-op on missing names), mirroring the production
 // client's idempotent behaviour.
 func TestDown_Idempotent(t *testing.T) {
-	f := newFakeDocker() // empty — no stacks, secrets, configs, networks
+	f := newFakeDocker()
 	deployer := &recordingDeployer{}
 
 	_, err := Down(cancelledCtx(), makeDownDeps(f, deployer), DownInput{Purge: true})

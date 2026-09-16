@@ -21,9 +21,9 @@ type Stack struct {
 type StackRevision struct {
 	StackName    string
 	Revision     int64
-	SourceYAML   string         // operator-submitted DSL
-	RenderedYAML string         // what pmcluster piped to `docker stack deploy`
-	PayloadJSON  sql.NullString // full webhook/API envelope, for audit
+	SourceYAML   string
+	RenderedYAML string
+	PayloadJSON  sql.NullString
 	CreatedAt    int64
 }
 
@@ -41,8 +41,6 @@ func (s *Store) RecordDeploy(ctx context.Context, rev *StackRevision, repoURL st
 
 	now := time.Now().Unix()
 
-	// Try inserting the revision first; if the FK fails this is a brand
-	// new stack and we recover by inserting the parent then retrying.
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO stack_revisions
 		   (stack_name, revision, source_yaml, rendered_yaml, payload_json, created_at)
@@ -88,8 +86,7 @@ func (s *Store) RecordDeploy(ctx context.Context, rev *StackRevision, repoURL st
 		return fmt.Errorf("rows affected: %w", err)
 	}
 	if n == 0 {
-		// Defensive: revision insert worked (FK satisfied) but parent
-		// disappeared — race with a concurrent delete. Re-create.
+
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO stacks (name, current_revision, repo_url, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?)`,

@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// Note: openTestStore is defined in users_test.go (same package) and shared.
-
 func TestCreateRegistry_HappyPath(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -68,13 +66,11 @@ func TestUpdateRegistry_HappyPath(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	// Insert first.
 	r := &Registry{Host: "quay.io", Username: "original", PasswordCiphertext: []byte("old-cipher")}
 	if err := s.CreateRegistry(ctx, r); err != nil {
 		t.Fatalf("CreateRegistry: %v", err)
 	}
 
-	// Update username + ciphertext.
 	updated := &Registry{Host: "quay.io", Username: "rotated", PasswordCiphertext: []byte("new-cipher")}
 	if err := s.UpdateRegistry(ctx, updated); err != nil {
 		t.Fatalf("UpdateRegistry: %v", err)

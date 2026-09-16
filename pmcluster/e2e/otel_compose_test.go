@@ -30,7 +30,6 @@ func TestOtelComposeLogs(t *testing.T) {
 
 	dir := t.TempDir()
 
-	// ── OTel config ───────────────────────────────────────────────────
 	otelConfig := `
 receivers:
   filelog:
@@ -79,7 +78,6 @@ service:
 		t.Fatal(err)
 	}
 
-	// ── Compose file ──────────────────────────────────────────────────
 	compose := `
 services:
   stdout-app:
@@ -143,7 +141,6 @@ volumes:
 		t.Fatal(err)
 	}
 
-	// ── Run compose ───────────────────────────────────────────────────
 	t.Log("Starting docker compose...")
 	upCtx, upCancel := context.WithTimeout(ctx, 90*time.Second)
 	defer upCancel()
@@ -167,7 +164,6 @@ volumes:
 		t.Logf("compose down: %s", strings.TrimSpace(string(out)))
 	})
 
-	// ── Wait for apps + collect logs ──────────────────────────────────
 	t.Log("Waiting for test apps to write logs...")
 	time.Sleep(20 * time.Second)
 
@@ -181,7 +177,6 @@ volumes:
 	}
 	collectorLogs := string(logOut)
 
-	// ── Verify filelog pipeline ───────────────────────────────────────
 	if strings.Contains(collectorLogs, "STDOUT_LOG_ENTRY") {
 		t.Log("✅ filelog pipeline: found STDOUT_LOG_ENTRY in collector output!")
 	} else {
@@ -193,14 +188,12 @@ volumes:
 		t.Logf("Collector logs tail:\n%s", tail)
 	}
 
-	// ── Verify OTLP pipeline ──────────────────────────────────────────
 	if strings.Contains(collectorLogs, "OTLP_LOG_ENTRY") {
 		t.Log("✅ OTLP pipeline: found OTLP_LOG_ENTRY in collector output!")
 	} else {
 		t.Error("OTLP pipeline: OTLP_LOG_ENTRY NOT found in collector output")
 	}
 
-	// ── Verify specific content ───────────────────────────────────────
 	if strings.Contains(collectorLogs, "STDOUT_LOG_ENTRY_1_FROM_E2E_COMPOSE") {
 		t.Log("✅ filelog: specific entry STDOUT_LOG_ENTRY_1 confirmed!")
 	}
@@ -225,10 +218,6 @@ func TestOtelComposeExclude(t *testing.T) {
 
 	dir := t.TempDir()
 
-	// OTel config that EXCLUDES logs from containers whose path
-	// contains "excluded-app". In Swarm, the exclude pattern would
-	// be derived from `skip_filelog: true` and use the container
-	// name (e.g. *excluded-app*). Here we simulate it with a label.
 	otelConfig := `
 receivers:
   filelog:
@@ -358,7 +347,6 @@ volumes:
 	}
 	collectorLogs := string(logOut)
 
-	// Included entries must appear.
 	if strings.Contains(collectorLogs, "INCLUDED_ENTRY") {
 		t.Log("✅ INCLUDED entries found (expected)")
 	} else {
@@ -370,7 +358,6 @@ volumes:
 		t.Logf("Collector logs tail:\n%s", tail)
 	}
 
-	// Excluded entries must NOT appear.
 	if strings.Contains(collectorLogs, "EXCLUDED_ENTRY") {
 		t.Error("EXCLUDED entries FOUND — filelog receiver did not exclude them!")
 	} else {
@@ -396,22 +383,17 @@ func TestOtelComposeSkipFilelogFilter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// On macOS Docker Desktop, bind mounts only work from /Users, /tmp,
-	// /Volumes, and /private. t.TempDir() uses /var/folders which Docker
-	// cannot access. Use /tmp which is always shared.
 	dir, err := os.MkdirTemp("/tmp", "pmcluster-e2e-filter-*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	// ── Pre-create log files in the temp dir ──────────────────────────
 	logsDir := filepath.Join(dir, "logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	// normal.log: should appear in collector output
 	normalLog := filepath.Join(logsDir, "normal.log")
 	for i := 1; i <= 5; i++ {
 		entry := fmt.Sprintf(`{"log":"NORMAL_ENTRY_%d","stream":"stdout","time":"%s"}`,
@@ -424,7 +406,6 @@ func TestOtelComposeSkipFilelogFilter(t *testing.T) {
 		f.Close()
 	}
 
-	// skip.log: should be DROPPED by the filter processor
 	skipLog := filepath.Join(logsDir, "skip.log")
 	for i := 1; i <= 5; i++ {
 		entry := fmt.Sprintf(`{"log":"SKIPFILELOG_ENTRY_%d","stream":"stdout","time":"%s"}`,
@@ -437,7 +418,6 @@ func TestOtelComposeSkipFilelogFilter(t *testing.T) {
 	}
 	t.Logf("Pre-created %s and %s", normalLog, skipLog)
 
-	// Verify files exist and are accessible from inside a container.
 	verifyCtx, verifyCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer verifyCancel()
 	verifyCmd := exec.CommandContext(verifyCtx, "docker", "run", "--rm",
@@ -450,10 +430,6 @@ func TestOtelComposeSkipFilelogFilter(t *testing.T) {
 		t.Logf("Files accessible in container:\n%s", string(verifyOut))
 	}
 
-	// ── OTel config ───────────────────────────────────────────────────
-	// Uses include_file_path so log.file.path attribute is available.
-	// Filters by file path instead of body-content transform — simpler
-	// and avoids OTTL transform+filter interaction issues on some versions.
 	otelConfig := `
 receivers:
   filelog:
@@ -499,12 +475,11 @@ service:
 		t.Fatal(err)
 	}
 
-	// ── Run OTel collector container ───────────────────────────────────
 	runCtx, runCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer runCancel()
 
 	containerName := "otel-filter-e2e-" + t.Name()
-	// Clean up old container if somehow still running.
+
 	exec.CommandContext(runCtx, "docker", "rm", "-f", containerName).Run()
 
 	runCmd := exec.CommandContext(runCtx, "docker", "run", "-d",
@@ -526,7 +501,6 @@ service:
 		exec.CommandContext(cleanCtx, "docker", "rm", "-f", containerName).Run()
 	})
 
-	// Wait for collector to start, read files, and process.
 	time.Sleep(8 * time.Second)
 
 	logCtx, logCancel := context.WithTimeout(ctx, 15*time.Second)
@@ -538,7 +512,6 @@ service:
 	}
 	collectorLogs := string(logOut)
 
-	// ── Verify normal entries (no skip_filelog) appear ────────────────
 	hasNormalBody := strings.Contains(collectorLogs, "Body: Str(NORMAL_ENTRY_")
 	if hasNormalBody {
 		t.Log("✅ NORMAL entries found (expected — no skip_filelog label)")
@@ -551,9 +524,6 @@ service:
 		t.Logf("Collector logs tail:\n%s", tail)
 	}
 
-	// ── Verify skipped entries (skip_filelog: true) are FILTERED ──────
-	// Use a unique pattern that cannot appear elsewhere (not even as a
-	// substring of echo commands). Check specific numbered entries.
 	hasSkipfilelogBody := strings.Contains(collectorLogs, "Body: Str(SKIPFILELOG_ENTRY_")
 	if hasSkipfilelogBody {
 		t.Error("SKIPFILELOG entries FOUND — filter/skip_filelog processor failed to drop them!")
@@ -561,7 +531,6 @@ service:
 		t.Log("✅ SKIPFILELOG entries correctly absent (filter/skip_filelog processor working)")
 	}
 
-	// ── Specifically confirm NORMAL_ENTRY_1 and SKIPFILELOG_ENTRY_1 ───
 	if strings.Contains(collectorLogs, "Body: Str(NORMAL_ENTRY_1") {
 		t.Log("✅ NORMAL_ENTRY_1 confirmed in output")
 	} else {

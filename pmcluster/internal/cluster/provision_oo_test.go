@@ -18,8 +18,8 @@ import (
 // provisioner. It tracks created users/tokens and is concurrency-safe.
 type fakeOOServer struct {
 	mu        sync.Mutex
-	users     []map[string]string // email->role
-	tokens    []map[string]string // name->token
+	users     []map[string]string
+	tokens    []map[string]string
 	userPosts int
 	tokPosts  int
 }
@@ -109,7 +109,6 @@ func TestProvision_EnsureUserAndToken_IsIdempotent(t *testing.T) {
 		Client: openobserve.NewClient(srv.URL, "default"),
 	}
 
-	// First run creates user + token.
 	user1, tok1, err := p.EnsureUserAndToken(context.Background())
 	if err != nil {
 		t.Fatalf("first EnsureUserAndToken: %v", err)
@@ -124,7 +123,6 @@ func TestProvision_EnsureUserAndToken_IsIdempotent(t *testing.T) {
 		t.Errorf("first run: userPosts=%d tokPosts=%d, want 1/1", fake.userPosts, fake.tokPosts)
 	}
 
-	// Second run must reuse both — no new API calls, same stored values.
 	user2, tok2, err := p.EnsureUserAndToken(context.Background())
 	if err != nil {
 		t.Fatalf("second EnsureUserAndToken: %v", err)
@@ -151,7 +149,6 @@ func TestProvision_EnsureUserAndToken_IsIdempotent(t *testing.T) {
 		t.Error("token ciphertext changed between runs — was re-minted")
 	}
 
-	// The stored token's username should be the org ("default").
 	if tok2.Username != "default" {
 		t.Errorf("token credential username = %q, want default (org)", tok2.Username)
 	}

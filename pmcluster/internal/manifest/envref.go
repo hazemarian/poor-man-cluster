@@ -19,7 +19,7 @@ var envRefRe = regexp.MustCompile(`^(config|secrets)\(([^)]+)\)$`)
 
 // envRef describes a parsed config()/secrets() env reference.
 type envRef struct {
-	Kind string // "config" | "secrets"
+	Kind string
 	Name string
 }
 

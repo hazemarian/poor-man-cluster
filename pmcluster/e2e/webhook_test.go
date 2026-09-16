@@ -103,20 +103,18 @@ func postWebhook(t *testing.T, baseURL, source, sig, ts string, body []byte) *ht
 
 // TestWebhookE2E exercises the full webhook flow against a real Docker Swarm.
 func TestWebhookE2E(t *testing.T) {
-	// ── Guard: env var ────────────────────────────────────────────────────────
+
 	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
 		t.Skip("PMCLUSTER_E2E_SWARM is not set to 1; skipping webhook e2e")
 	}
-	// ── Guard: docker binary ──────────────────────────────────────────────────
+
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH; skipping webhook e2e")
 	}
 
-	// Cap the whole test to 5 minutes.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// ── Swarm bootstrap ───────────────────────────────────────────────────────
 	weInitedSwarm := ensureSwarmActive(t, ctx)
 	if weInitedSwarm {
 		t.Cleanup(func() {
@@ -130,7 +128,6 @@ func TestWebhookE2E(t *testing.T) {
 		})
 	}
 
-	// ── Ensure shared overlay networks exist (normally created by cluster up) ─
 	for _, net := range []string{"traefik-net", "monitoring-net"} {
 		netCtx, netCancel := context.WithTimeout(ctx, 30*time.Second)
 		out, err := dockerRun(netCtx, "network", "create", "--driver=overlay", "--attachable", net)
@@ -147,7 +144,6 @@ func TestWebhookE2E(t *testing.T) {
 		}
 	})
 
-	// ── Step 1: pmcluster init ────────────────────────────────────────────────
 	homeDir := t.TempDir()
 	initOut, _, code := runCmd(t, homeDir, "init")
 	if code != 0 {
@@ -155,7 +151,6 @@ func TestWebhookE2E(t *testing.T) {
 	}
 	t.Logf("pmcluster init OK (home=%s)", homeDir)
 
-	// ── Step 2: pmcluster webhook add github-prod ─────────────────────────────
 	webhookOut, _, code := runCmd(t, homeDir, "webhook", "add", "github-prod")
 	if code != 0 {
 		t.Fatalf("pmcluster webhook add exited %d:\n%s", code, webhookOut)
@@ -163,7 +158,6 @@ func TestWebhookE2E(t *testing.T) {
 	hexSecret := extractWebhookSecret(t, webhookOut)
 	t.Logf("webhook secret extracted (len=%d)", len(hexSecret))
 
-	// ── Step 3: start pmcluster serve ────────────────────────────────────────
 	addr := freePort(t)
 	serveCmd := exec.Command(binaryPath, "serve")
 	serveCmd.Stdout = io.MultiWriter(os.Stdout)
@@ -192,7 +186,6 @@ func TestWebhookE2E(t *testing.T) {
 	baseURL := "http://" + addr
 	t.Logf("pmcluster serve ready at %s", baseURL)
 
-	// ── Step 4: build a signed valid payload ─────────────────────────────────
 	payload := map[string]any{
 		"manifest": webhookManifest,
 	}
@@ -202,7 +195,6 @@ func TestWebhookE2E(t *testing.T) {
 	}
 	validSig, validTS := signPayload(t, hexSecret, payloadBytes)
 
-	// ── Step 5: POST with valid HMAC → 200 + JSON {stack, revision} ──────────
 	t.Run("valid HMAC succeeds — 200 and stack+revision in response", func(t *testing.T) {
 		resp := postWebhook(t, baseURL, "github-prod", validSig, validTS, payloadBytes)
 		defer resp.Body.Close()
@@ -228,10 +220,8 @@ func TestWebhookE2E(t *testing.T) {
 		t.Logf("deploy response: stack=%v revision=%v", result["stack"], result["revision"])
 	})
 
-	// Allow swarm a moment to settle.
 	time.Sleep(3 * time.Second)
 
-	// ── Step 6: assert docker service ls shows the deployed service ───────────
 	t.Run("docker service ls shows whoami-webhook_web", func(t *testing.T) {
 		svcCtx, svcCancel := context.WithTimeout(ctx, 30*time.Second)
 		defer svcCancel()
@@ -244,7 +234,6 @@ func TestWebhookE2E(t *testing.T) {
 		}
 	})
 
-	// ── Step 7: POST with wrong signature → 401 ───────────────────────────────
 	t.Run("wrong signature → 401", func(t *testing.T) {
 		wrongSig := "sha256=" + strings.Repeat("00", 32)
 		resp := postWebhook(t, baseURL, "github-prod", wrongSig, validTS, payloadBytes)
@@ -255,9 +244,8 @@ func TestWebhookE2E(t *testing.T) {
 		}
 	})
 
-	// ── Step 8: POST to non-existent source with valid signature for github-prod → 401 ──
 	t.Run("unknown source → 401", func(t *testing.T) {
-		// The signature is valid for github-prod but the source name is wrong.
+
 		resp := postWebhook(t, baseURL, "never-existed", validSig, validTS, payloadBytes)
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusUnauthorized {
@@ -266,7 +254,6 @@ func TestWebhookE2E(t *testing.T) {
 		}
 	})
 
-	// ── Step 9: pmcluster webhook list → last_used_at not "—" ────────────────
 	t.Run("webhook list shows last_used_at is set after successful POST", func(t *testing.T) {
 		listOut, _, code := runCmd(t, homeDir, "webhook", "list")
 		if code != 0 {
@@ -274,17 +261,13 @@ func TestWebhookE2E(t *testing.T) {
 		}
 		t.Logf("webhook list output:\n%s", listOut)
 
-		// The list shows github-prod. After a successful POST, last_used_at
-		// should NOT be "—" (which is what the CLI prints for NULL).
 		lines := strings.Split(listOut, "\n")
 		found := false
 		for _, line := range lines {
 			if strings.Contains(line, "github-prod") {
 				found = true
 				if strings.Contains(line, "—") || strings.Contains(line, "-") {
-					// If the line still contains the null placeholder, that's a problem.
-					// However the CLI may use "—" (em dash) for NULL. We check for
-					// a non-null timestamp format: at least 4 consecutive digits.
+
 					hasTimestamp := false
 					for i := 0; i+3 < len(line); i++ {
 						if line[i] >= '0' && line[i] <= '9' &&
@@ -307,7 +290,6 @@ func TestWebhookE2E(t *testing.T) {
 		}
 	})
 
-	// ── Cleanup: remove the deployed stack ───────────────────────────────────
 	t.Cleanup(func() {
 		t.Log("TestWebhookE2E: removing whoami-webhook stack (cleanup)")
 		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 30*time.Second)

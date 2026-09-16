@@ -156,12 +156,6 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
-	// Refresh the on-disk config templates from this binary's embedded copies.
-	// After a pmcluster binary upgrade, stale configs (older version header)
-	// are overwritten so the re-render below picks up the new baked-in
-	// templates (e.g. a newer edge-stack.yml) and re-deploys the stacks that
-	// changed. Configs with the same or newer version header are preserved —
-	// operator edits remain the source of truth.
 	if err := cluster.EnsureConfigDir(cfg.ConfigDir(), buildinfo.Version); err != nil {
 		return fmt.Errorf("refresh config dir: %w", err)
 	}
@@ -223,8 +217,6 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
 	}
 
-	// Console=false: cluster up uses fmt.Fprint for human progress; logger
-	// only writes to the audit file here.
 	log, logCloser, err := logger.New(logger.Options{
 		LogsDir: cfg.LogsDir(),
 		Level:   cfg.LogLevel,

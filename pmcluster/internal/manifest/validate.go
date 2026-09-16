@@ -124,12 +124,12 @@ func validateService(name string, s *dsl.Service) error {
 func validateHealthcheck(prefix string, h *dsl.Healthcheck) error {
 	switch h.Type {
 	case "":
-		// Full-form: require Test to be set if anything else is.
+
 		if len(h.Test) == 0 && (h.Interval != "" || h.Timeout != "" || h.Retries != 0) {
 			return fmt.Errorf("%s.healthcheck: full-form requires `test` when interval/timeout/retries are set", prefix)
 		}
 	case "pg_isready", "http":
-		// Shorthand — Test/Interval/Timeout/Retries should be empty (translator fills them).
+
 		if len(h.Test) > 0 {
 			return fmt.Errorf("%s.healthcheck: shorthand `type: %s` cannot be combined with explicit `test`", prefix, h.Type)
 		}

@@ -49,7 +49,7 @@ func (a *Auth) sign(s Session) string {
 	raw, _ := json.Marshal(s)
 	body := base64.RawURLEncoding.EncodeToString(raw)
 	mac := hmac.New(sha256.New, a.secret)
-	mac.Write([]byte(body)) // same message Verify recomputes over parts[0]
+	mac.Write([]byte(body))
 	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	return body + "." + sig
 }
@@ -124,7 +124,7 @@ func (a *Auth) Require() gin.HandlerFunc {
 			a.redirect(c, a.target(c.Request.Context()))
 			return
 		}
-		// A user who hasn't chosen a password yet must finish setup first.
+
 		if !u.PasswordSet && a.NudgeSetup != nil {
 			if need, e := a.NudgeSetup(c.Request.Context()); e == nil && need {
 				a.redirect(c, "/setup")

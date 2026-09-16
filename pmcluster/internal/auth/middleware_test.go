@@ -118,7 +118,7 @@ func TestBearer_LookupReturnsError(t *testing.T) {
 // but no match in the store) results in 401.
 func TestBearer_LookupReturnsNilUser(t *testing.T) {
 	lookup := &fakeLookup{fn: func(_ context.Context, _ string) (*User, error) {
-		return nil, nil // token not found, no error
+		return nil, nil
 	}}
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer unknown-token")

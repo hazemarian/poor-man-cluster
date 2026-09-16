@@ -86,7 +86,6 @@ func TestNodesHandler_HappyPath(t *testing.T) {
 		}
 	}
 
-	// Verify first node (manager / leader).
 	checkNodeField(t, 0, "id", "node1abc")
 	checkNodeField(t, 0, "hostname", "manager-01")
 	checkNodeField(t, 0, "role", "manager")
@@ -98,7 +97,6 @@ func TestNodesHandler_HappyPath(t *testing.T) {
 	checkNodeField(t, 0, "created_at", float64(now))
 	checkNodeField(t, 0, "updated_at", float64(now+60))
 
-	// Verify second node (worker / non-leader).
 	checkNodeField(t, 1, "id", "node2xyz")
 	checkNodeField(t, 1, "hostname", "worker-01")
 	checkNodeField(t, 1, "role", "worker")

@@ -25,7 +25,7 @@ func TestWaitHealthyStacks_AllHealthy(t *testing.T) {
 
 func TestWaitHealthyStacks_TimesOutWithMissingService(t *testing.T) {
 	f := newFakeDocker()
-	// Only seed 4 of 5 services — "backup_volume-backup" is missing.
+
 	for _, name := range bundledServices[:4] {
 		f.services[name] = docker.Service{Name: name, Replicas: 1, Desired: 1}
 	}

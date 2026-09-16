@@ -24,8 +24,7 @@ const goldenDir = "testdata/translator"
 func TestTranslate_Golden(t *testing.T) {
 	cases := []struct {
 		name string
-		// expectedContains verifies key structural substrings even in
-		// update mode, as a sanity guard.
+
 		expectedContains []string
 	}{
 		{
@@ -94,9 +93,7 @@ func TestTranslate_Golden(t *testing.T) {
 			expectedContains: []string{
 				"batch-job-net",
 				"condition: none",
-				// run_once jobs must NOT have update_config or replicas
 			},
-			// Absence checks done inline in the test body below for this case.
 		},
 		{
 			name: "skip-filelog",
@@ -110,9 +107,9 @@ func TestTranslate_Golden(t *testing.T) {
 				"traefik.http.routers.bookfair-api.rule: Host(`idlib-book-fair.nextrum-sy.com`)",
 				"traefik.http.routers.bookfair-api-alias0.rule: Host(`idlibookfair.com`)",
 				"traefik.http.routers.bookfair-api-alias1.rule: Host(`www.nextrum-sy.com`)",
-				// Alias routers reuse the same backend.
+
 				"traefik.http.services.bookfair-api.loadbalancer.server.port: \"8080\"",
-				// Per-app CORS middleware spanning host + aliases.
+
 				"traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolalloworiginlistregex: ^(https://idlib-book-fair\\.nextrum-sy\\.com|https://idlibookfair\\.com|https://www\\.nextrum-sy\\.com)$$",
 				"traefik.http.middlewares.bookfair-api-cors.headers.accesscontrolallowcredentials: \"true\"",
 				"traefik.http.routers.bookfair-api.middlewares: bookfair-api-cors@swarm",
@@ -154,7 +151,6 @@ func TestTranslate_Golden(t *testing.T) {
 				t.Logf("updated %s", goldenPath)
 			}
 
-			// Sanity: verify key substrings regardless of update mode.
 			gotStr := string(got)
 			for _, substr := range tc.expectedContains {
 				if !containsSubstr(gotStr, substr) {
@@ -162,14 +158,12 @@ func TestTranslate_Golden(t *testing.T) {
 				}
 			}
 
-			// For runonce-job: verify no update_config and no replicas entry.
 			if tc.name == "runonce-job" {
 				if containsSubstr(gotStr, "update_config") {
 					t.Errorf("runonce job should not have update_config:\n%s", gotStr)
 				}
 			}
 
-			// If golden file exists, compare byte-for-byte.
 			want, err := os.ReadFile(goldenPath)
 			if err != nil {
 				if os.IsNotExist(err) {

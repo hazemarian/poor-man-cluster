@@ -17,8 +17,8 @@ type APIKeys struct{ *Controller }
 
 type apiKeysData struct {
 	Keys  []apiKeyRow
-	Token string // one-time token from the last create, shown once
-	Name  string // which user the one-time token belongs to
+	Token string
+	Name  string
 	Error string
 	Msg   string
 }

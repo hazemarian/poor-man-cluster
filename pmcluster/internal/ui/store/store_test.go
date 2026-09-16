@@ -54,7 +54,6 @@ func TestSeedSettingOnce_DoesNotOverwriteExisting(t *testing.T) {
 		t.Errorf("value = %q, want %q (must be stored once, not reseeded)", got, "first")
 	}
 
-	// An explicit clear from Settings must also not be reseeded.
 	if err := s.SetSetting(ctx, KeyToken, ""); err != nil {
 		t.Fatalf("clear: %v", err)
 	}

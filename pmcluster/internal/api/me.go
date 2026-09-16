@@ -11,7 +11,7 @@ import (
 func Me(w http.ResponseWriter, r *http.Request) {
 	u := auth.FromContext(r.Context())
 	if u == nil {
-		// Defensive: if Me is wired without Bearer, fail loud.
+
 		http.Error(w, "missing authenticated user (server misconfiguration)", http.StatusInternalServerError)
 		return
 	}

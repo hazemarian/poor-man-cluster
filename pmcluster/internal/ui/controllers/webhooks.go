@@ -16,8 +16,8 @@ type Webhooks struct{ *Controller }
 
 type webhooksData struct {
 	Sources []webhookRow
-	Secret  string // one-time secret from the last create, shown once
-	Source  string // which source the one-time secret belongs to
+	Secret  string
+	Source  string
 	Error   string
 	Msg     string
 }

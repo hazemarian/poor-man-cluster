@@ -32,9 +32,9 @@ func TestInit_EmptyEndpointReturnsNoop(t *testing.T) {
 func TestInit_MalformedEndpoint(t *testing.T) {
 	for _, bad := range []string{
 		"not-a-url",
-		"127.0.0.1:4318",  // missing scheme
-		"ftp://host:4318", // unsupported scheme
-		"http://",         // missing host
+		"127.0.0.1:4318",
+		"ftp://host:4318",
+		"http://",
 	} {
 		t.Run(bad, func(t *testing.T) {
 			_, err := Init(context.Background(), Options{Endpoint: bad})
@@ -71,17 +71,11 @@ func TestInit_ValidEndpointSetsGlobals(t *testing.T) {
 		_ = shutdown(ctx)
 	})
 
-	// Globals should now be non-noop. The way to verify is to start a
-	// span / record a metric and confirm the SDK doesn't drop it on the
-	// floor — but the SDK exposes no introspection. Best we can do is
-	// confirm the providers are wired by checking they're non-nil and
-	// distinct from the noop default after Init.
 	tp := otel.GetTracerProvider()
 	if tp == nil {
 		t.Fatal("global tracer provider is nil after Init")
 	}
-	// Span creation + immediate End triggers nothing visible without
-	// shutdown, but it shouldn't panic.
+
 	_, span := tp.Tracer("test").Start(context.Background(), "smoke")
 	span.End()
 }

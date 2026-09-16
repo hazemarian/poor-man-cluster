@@ -15,7 +15,7 @@ import (
 // Unlike Up, UpdateInput carries no TLS/domain/credential fields — those are
 // read back from the persisted install state so update needs no re-bootstrap.
 type UpdateInput struct {
-	ConfigDir string // ~/.pmcluster/config/ — user-owned config files
+	ConfigDir string
 	Version   string
 }
 
@@ -42,7 +42,7 @@ type UpdateDeps struct {
 	Cipher   *credentials.Cipher
 	Docker   docker.Client
 	Deployer StackDeployer
-	Stdout   io.Writer // io.Discard in tests
+	Stdout   io.Writer
 
 	// Provisioner, when set and the ingestion token is missing (an interrupted
 	// `cluster up`), heals the store by provisioning the OO user + token before
@@ -71,7 +71,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil, err
 	}
 
-	// Persisted install state tells us what to re-provision without asking.
 	if deps.Store == nil {
 		return nil, fmt.Errorf("update requires a store (config_dir must be initialised via `pmcluster init`)")
 	}
@@ -84,7 +83,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil, fmt.Errorf("no persisted domain found — run `cluster up` before `cluster update`")
 	}
 
-	// OpenObserve admin credential (email + decrypted password) from the store.
 	ooCred, err := deps.Store.GetCredential(ctx, "openobserve_admin")
 	if err != nil {
 		return nil, fmt.Errorf("load openobserve_admin credential (run `cluster up` first): %w", err)
@@ -94,10 +92,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil, fmt.Errorf("decrypt openobserve_admin password: %w", err)
 	}
 
-	// The dedicated ingestion token (created via the OO API) is read from the
-	// store. If missing (an interrupted `cluster up`), heal it via the
-	// provisioner when one is injected, else fall back to the placeholder that
-	// `up` seeded — keeping update content-consistent so a no-op stays a no-op.
 	ooTokenPlain, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
 	if err != nil {
 		return nil, err
@@ -128,39 +122,16 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		EdgeImage:                 EdgeImageFor(),
 	}
 
-	// Migrate any legacy on-disk per-host certs into versioned Swarm secrets +
-	// DB metadata (idempotent); the Traefik dynamic config references secrets,
-	// never files.
-	if err := importHostCertsMetadata(ctx, deps.Store, deps.Docker, in.ConfigDir); err != nil {
-		return res, fmt.Errorf("import host certificates: %w", err)
-	}
 	hostCerts, err := loadHostCertEntries(ctx, deps.Store, domain)
 	if err != nil {
 		return res, err
 	}
 	render.HostCerts = hostCerts
 
-	// TLS cert/key: content-aware re-apply from stored paths. Unchanged file
-	// bytes reuse the current version (no churn, no Traefik restart).
-	//
-	// The discriminator MUST mirror what the infra-stack template keys on: it
-	// renders the operator cert/key secret block whenever `.ACMEEmail` is empty
-	// (the [[ if not .ACMEEmail ]] branch) and the Let's Encrypt resolver/volume
-	// whenever `.ACMEEmail` is non-empty. Keying this off `state.Mode == "cert"`
-	// instead diverged: a box whose mode wasn't persisted (or was "acme" with an
-	// empty acme_email) took this branch's else, leaving CertSecretName/KeySecretName
-	// empty while the template still rendered the cert block → dangling `:` in the
-	// global secrets → invalid YAML on `cluster update`. So we gate on ACMEEmail:
-	// empty ACMEEmail ALWAYS requires a cert/key (loaded from stored paths, or a
-	// hard error if none are persisted), which is exactly what the template expects.
 	if render.ACMEEmail != "" {
-		// ACME: template renders the Let's Encrypt branch; no operator cert/key.
 		step("TLS via Let's Encrypt (ACME email set) — no operator cert/key to re-apply")
 	} else {
 		if state.CertPath == "" || state.KeyPath == "" {
-			// ACMEEmail empty means the template WILL emit the cert/key secret
-			// block. Without persisted paths rendering empty names would produce
-			// invalid YAML — fail loudly instead of emitting broken config.
 			return res, fmt.Errorf("TLS is not ACME (no ACME email) but no cert/key paths are persisted — run `cluster up` with --cert/--key (or --acme-email) before `cluster update`")
 		}
 		step("Re-applying TLS cert/key from stored paths (skips if unchanged)")
@@ -176,16 +147,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		res.CertCreated, res.KeyCreated = certCreated, keyCreated
 		render.CertSecretName, render.KeySecretName = certName, keyName
 
-		// One-time metadata import: seed the site_certs DB row from the
-		// currently applied cert/key files (the "migration of the existing
-		// SSL"). Idempotent — a row already present is left untouched, so this
-		// only ever records the pre-existing certificate once per domain.
-		if err := importSiteCertMetadata(ctx, deps.Store, state.CertPath, state.KeyPath, domain, certName, keyName); err != nil {
-			return res, fmt.Errorf("import site certificate metadata: %w", err)
-		}
-
-		// Surface upcoming expiry on every up/update so renewal isn't a
-		// surprise (operator certs are not auto-renewed).
 		warnSiteCertExpiry(ctx, deps.Store, domain, deps.Stdout)
 	}
 
@@ -212,19 +173,12 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	res.TraefikConfig, res.TraefikCreated = traefikName, traefikCreated
 	render.TraefikConfigName = traefikName
 
-	// Edge content fingerprint: the edge-stack.yml embeds a version-keyed image
-	// tag, so a new EnsureConfig version means the rendered edge stack changed
-	// (pmcluster version bump or operator config edit) and edge must re-deploy.
 	edgeName, edgeCreated, err := ensureEdgeConfig(ctx, deps.Docker, in.Version, render)
 	if err != nil {
 		return res, err
 	}
 	res.EdgeConfig, res.EdgeCreated = edgeName, edgeCreated
 
-	// Re-deploy ONLY the stacks whose inputs moved. The config/cert NAMES are
-	// substituted into the compose, so a new version only takes effect when
-	// its stack re-deploys (which force-restarts just that stack's consumers).
-	// The backup stack is never touched by update.
 	certChanged := res.CertCreated || res.KeyCreated
 	if otelCreated {
 		step(fmt.Sprintf("OTel collector config changed → re-deploying %q", StackObservability))

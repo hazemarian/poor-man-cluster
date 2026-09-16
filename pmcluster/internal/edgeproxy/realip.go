@@ -39,7 +39,7 @@ func RealIP(trusted []string) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			client := hostOnly(r.RemoteAddr) // immediate peer (Traefik)
+			client := hostOnly(r.RemoteAddr)
 			for _, hop := range reverse(xff(r)) {
 				if isTrusted(client) {
 					client = hop

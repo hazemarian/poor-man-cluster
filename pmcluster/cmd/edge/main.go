@@ -40,16 +40,9 @@ func run() error {
 		return err
 	}
 
-	// The operator console shares the edge's upstream (the daemon): one
-	// service, one upstream, one origin.
 	uiCfg := ui.FromEnv()
 	uiCfg.PMAPIURL = proxyCfg.Upstream
-	// When pmcluster has provisioned the console's credentials as mounted
-	// Swarm secrets (the default in the edge stack), prefer those over env so
-	// the operator never has to set them by hand. The console persists them
-	// ONCE into its volume-backed DB (see ui.NewApp); these files only matter
-	// on a fresh data volume. Standalone runs with no secrets fall through to
-	// env/config unchanged.
+
 	applyEdgeSecrets(&uiCfg)
 	if err := uiCfg.Validate(); err != nil {
 		return fmt.Errorf("ui config: %w", err)
@@ -115,9 +108,7 @@ func applyEdgeSecrets(cfg *ui.Config) {
 	if secret, ok := readSecretFile("edge_ui_secret"); ok {
 		cfg.SessionSecret = secret
 	}
-	// The console admin password also implies a fixed "admin" login user; with
-	// both set the console skips the interactive /setup flow and logs in
-	// straight to the minted password (see ui.bootstrapUsers).
+
 	if pass, ok := readSecretFile("edge_admin_password"); ok {
 		cfg.EnvUser = "admin"
 		cfg.EnvPass = string(pass)
@@ -147,10 +138,6 @@ func combineProxyAndUI(proxyCfg edgeproxy.Config, app *ui.App) http.Handler {
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 
-	// Local liveness: /healthz is answered by the edge process itself and
-	// never proxied, so the Swarm healthcheck can tell "edge is down" apart
-	// from "daemon is down".  The proxied /health (daemon liveness) is kept
-	// for external monitoring via Traefik.
 	engine.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"status": "ok",
@@ -158,11 +145,8 @@ func combineProxyAndUI(proxyCfg edgeproxy.Config, app *ui.App) http.Handler {
 		})
 	})
 
-	// Operator console (gin + HTMX) on this origin.
 	app.Mount(engine)
 
-	// Every path the console doesn't claim is reversed to pmcluster through the
-	// protection stack: /api/*, /webhook/*, /health and anything else.
 	engine.NoRoute(gin.WrapH(edgeproxy.New(proxyCfg)))
 	return engine
 }

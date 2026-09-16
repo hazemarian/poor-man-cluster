@@ -48,82 +48,6 @@ func genCert(t *testing.T, host string) (certPEM, keyPEM string) {
 	return certPEM, keyPEM
 }
 
-// TestImportSiteCertMetadata_OnceOnly verifies the idempotent "migration of the
-// existing SSL": the first import seeds the row, later runs are no-ops, and an
-// unparseable pair is skipped silently (best-effort metadata only).
-func TestImportSiteCertMetadata_OnceOnly(t *testing.T) {
-	dir := t.TempDir()
-	s, err := store.Open(filepath.Join(dir, "seed.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	ctx := context.Background()
-	certPEM, keyPEM := genCert(t, "test.example.com")
-	certPath := writeTempFile(t, dir, "cert.pem", []byte(certPEM))
-	keyPath := writeTempFile(t, dir, "key.pem", []byte(keyPEM))
-
-	if err := importSiteCertMetadata(ctx, s, certPath, keyPath, "test.example.com", "cert_v001", "key_v001"); err != nil {
-		t.Fatalf("first import: %v", err)
-	}
-	row, err := s.GetSiteCert(ctx, "test.example.com")
-	if err != nil {
-		t.Fatalf("get after import: %v", err)
-	}
-	if row.CertSecret != "cert_v001" || row.KeySecret != "key_v001" {
-		t.Errorf("secrets not recorded: cert=%q key=%q", row.CertSecret, row.KeySecret)
-	}
-	if row.CertHash != store.ConfigHash(certPEM) || row.KeyHash != store.ConfigHash(keyPEM) {
-		t.Errorf("hashes not recorded: cert=%q key=%q", row.CertHash, row.KeyHash)
-	}
-	if row.Domain != "test.example.com" {
-		t.Errorf("domain = %q", row.Domain)
-	}
-	if row.NotAfter.IsZero() || !row.NotAfter.After(time.Now()) {
-		t.Errorf("NotAfter should be populated and in the future, got %v", row.NotAfter)
-	}
-
-	// Second import (different secret names) must be a no-op — row unchanged.
-	if err := importSiteCertMetadata(ctx, s, certPath, keyPath, "test.example.com", "cert_v002", "key_v002"); err != nil {
-		t.Fatalf("second import: %v", err)
-	}
-	row2, err := s.GetSiteCert(ctx, "test.example.com")
-	if err != nil {
-		t.Fatalf("get after second import: %v", err)
-	}
-	if row2.CertSecret != "cert_v001" {
-		t.Errorf("second import should be a no-op, cert secret changed to %q", row2.CertSecret)
-	}
-}
-
-// TestImportSiteCertMetadata_SkipsUnparseable verifies best-effort behavior:
-// a pair that fails ParseAndCheck (placeholder bytes, wrong domain) leaves the
-// row absent with no error.
-func TestImportSiteCertMetadata_SkipsUnparseable(t *testing.T) {
-	dir := t.TempDir()
-	s, err := store.Open(filepath.Join(dir, "seed.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-
-	ctx := context.Background()
-	certPath := writeTempFile(t, dir, "cert.pem", []byte("CERT"))
-	keyPath := writeTempFile(t, dir, "key.pem", []byte("KEY"))
-	if err := importSiteCertMetadata(ctx, s, certPath, keyPath, "test.example.com", "cert_v001", "key_v001"); err != nil {
-		t.Fatalf("import of unparseable pair should not error, got: %v", err)
-	}
-	if _, err := s.GetSiteCert(ctx, "test.example.com"); !errors.Is(err, store.ErrSiteCertNotFound) {
-		t.Fatalf("expected ErrSiteCertNotFound (unparseable pair must not seed), got: %v", err)
-	}
-
-	// Nil inputs also no-op cleanly.
-	if err := importSiteCertMetadata(ctx, s, "", "", "test.example.com", "", ""); err != nil {
-		t.Fatalf("empty inputs should no-op, got: %v", err)
-	}
-}
-
 // TestApplySiteCert_EndToEnd exercises the full site-cert apply path: the pair
 // is validated for the persisted domain, written as the local source of truth
 // under <configDir>/site/, the TLS state is re-pointed, Traefik is refreshed
@@ -139,7 +63,6 @@ func TestApplySiteCert_EndToEnd(t *testing.T) {
 		t.Fatalf("ApplyCert: %v", err)
 	}
 
-	// Local source-of-truth files written.
 	certPath := filepath.Join(SiteCertDir(cfgDir), "cert.pem")
 	keyPath := filepath.Join(SiteCertDir(cfgDir), "key.pem")
 	for _, p := range []string{certPath, keyPath} {
@@ -153,7 +76,6 @@ func TestApplySiteCert_EndToEnd(t *testing.T) {
 		t.Error("local site cert files do not match the uploaded PEMs")
 	}
 
-	// TLS state re-pointed at the local copies.
 	state, err := loadTLSSettings(ctx, deps.Store)
 	if err != nil {
 		t.Fatalf("load tls settings: %v", err)
@@ -162,7 +84,6 @@ func TestApplySiteCert_EndToEnd(t *testing.T) {
 		t.Errorf("tls state not re-pointed: %+v", state)
 	}
 
-	// Metadata stored.
 	if row.Domain != "test.example.com" {
 		t.Errorf("row domain = %q", row.Domain)
 	}
@@ -173,8 +94,6 @@ func TestApplySiteCert_EndToEnd(t *testing.T) {
 		t.Errorf("cert hash mismatch")
 	}
 
-	// Idempotence: applying the SAME cert again must still succeed (content-
-	// aware pipeline reuses the secret versions) and keep the same row secrets.
 	row2, err := ApplyCert(ctx, scdeps, cfgDir, "v0.3.0", "test.example.com", certPEM, keyPEM, true)
 	if err != nil {
 		t.Fatalf("second ApplyCert: %v", err)
@@ -220,12 +139,15 @@ func TestGetSiteCert(t *testing.T) {
 		t.Fatalf("nil store should report ErrSiteCertNotFound, got: %v", err)
 	}
 
-	// After seeding via the import path, the getter returns the row.
 	certPEM, keyPEM := genCert(t, "test.example.com")
-	certPath := writeTempFile(t, dir, "cert.pem", []byte(certPEM))
-	keyPath := writeTempFile(t, dir, "key.pem", []byte(keyPEM))
-	if err := importSiteCertMetadata(ctx, s, certPath, keyPath, "test.example.com", "cert_v001", "key_v001"); err != nil {
-		t.Fatalf("import: %v", err)
+	now := time.Now().UTC()
+	if err := s.PutSiteCert(ctx, store.SiteCertRow{
+		Domain: "test.example.com", CertSecret: "cert_v001", KeySecret: "key_v001",
+		NotBefore: now, NotAfter: now.Add(24 * time.Hour), SANs: []string{"test.example.com"},
+		CertHash: store.ConfigHash(certPEM), KeyHash: store.ConfigHash(keyPEM),
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
 	row, err := GetSiteCert(ctx, s, "test.example.com")
 	if err != nil {

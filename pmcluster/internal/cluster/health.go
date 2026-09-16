@@ -71,16 +71,14 @@ func WaitHealthyStacks(ctx context.Context, d docker.Client, w io.Writer) error 
 			continue
 		}
 
-		// Build a lookup map: name → healthy?
 		unhealthy = unhealthy[:0]
 		for _, s := range svcs {
-			// A service is healthy if it has reached its desired replica count.
-			// Global services show 0/0 until they start scheduling, so treat 0 desired as "not yet".
+
 			isHealthy := s.Desired > 0 && s.Replicas >= s.Desired
 			if isHealthy {
 				continue
 			}
-			// Only track bundled services.
+
 			found := false
 			for _, name := range bundledServices {
 				if s.Name == name {
@@ -117,7 +115,6 @@ func WaitHealthyStacks(ctx context.Context, d docker.Client, w io.Writer) error 
 			return fmt.Errorf("timed out after %v waiting for services to become healthy", defaultHealthTimeout)
 		}
 
-		// Print a compact status line so the operator sees progress.
 		statuses := make([]string, 0, len(bundledServices))
 		for _, name := range bundledServices {
 			if healthyMap[name] {
@@ -154,14 +151,13 @@ func printUnhealthyLogs(ctx context.Context, unhealthy []string, w io.Writer) {
 		return
 	}
 	fmt.Fprintln(w, "  ── Unhealthy services diagnostics ──")
-	// Use a short, independent context so we don't block on a dead ctx.
+
 	logCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	for _, name := range unhealthy {
 		fmt.Fprintf(w, "\n  ─── %s ───\n", name)
 
-		// First: task status (error messages from failed tasks).
 		psOut, err := servicePS(logCtx, name, 3)
 		if err != nil {
 			fmt.Fprintf(w, "  (failed to fetch task info: %v)\n", err)
@@ -175,7 +171,6 @@ func printUnhealthyLogs(ctx context.Context, unhealthy []string, w io.Writer) {
 			}
 		}
 
-		// Then: container logs (if any container managed to start).
 		logOut, err := serviceLogs(logCtx, name, 20)
 		if err != nil {
 			fmt.Fprintf(w, "  (failed to fetch logs: %v)\n", err)
@@ -211,7 +206,7 @@ func servicePS(ctx context.Context, name string, limit int) (string, error) {
 		return buf.String(), err
 	}
 	out := buf.String()
-	// Limit to first `limit` non-empty lines.
+
 	lines := strings.Split(out, "\n")
 	result := make([]string, 0, limit)
 	for _, line := range lines {

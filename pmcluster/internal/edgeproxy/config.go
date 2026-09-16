@@ -22,8 +22,8 @@ import (
 // Config holds every tunable for the edge service. Fields are populated from
 // environment variables by FromEnv, with sane defaults for a manager node.
 type Config struct {
-	ListenAddr string // HTTP listen address (default ":8042")
-	Upstream   string // pmcluster daemon base URL (default "http://host.docker.internal:9090")
+	ListenAddr string
+	Upstream   string
 
 	// Per-IP rate limits (token bucket), keyed by the real client IP. Separate
 	// buckets for /api and /webhook so a noisy CI webhook can't starve the API.
@@ -33,9 +33,9 @@ type Config struct {
 	WebhookBurst int
 
 	// Connection/DDoS shield.
-	MaxConcurrent  int           // max in-flight proxied requests (0 = unlimited)
-	RequestTimeout time.Duration // per-request deadline to upstream
-	MaxBodyBytes   int64         // max request body forwarded (0 = default 1 MiB)
+	MaxConcurrent  int
+	RequestTimeout time.Duration
+	MaxBodyBytes   int64
 
 	// IP trust + blocklisting. TrustedCIDRs are proxies we accept
 	// X-Forwarded-For from (Traefik runs in an overlay). AllowedCIDRs, when
@@ -60,7 +60,7 @@ const (
 	defaultWebhookRate    = 40.0
 	defaultWebhookBurst   = 60
 	defaultMaxConcurrent  = 128
-	defaultMaxBodyBytes   = 1 << 20 // 1 MiB (webhook already caps here)
+	defaultMaxBodyBytes   = 1 << 20
 	defaultRequestTimeout = 30 * time.Second
 	defaultBanThreshold   = 20
 	defaultBanDuration    = 10 * time.Minute

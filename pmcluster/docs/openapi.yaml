@@ -302,7 +302,7 @@ paths:
         Returns metadata for the cluster's own-domain certificate (domain,
         secret names, validity window, SANs, hashes). The PEM bytes themselves
         live in versioned Swarm secrets and are never returned. 404 until a
-        certificate has been imported or uploaded.
+        certificate has been uploaded.
       operationId: getSiteCert
       security:
         - bearerAuth: []

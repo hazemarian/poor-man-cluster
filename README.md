@@ -357,8 +357,7 @@ env:
   (`pmcluster config history` / `rollback`). Editing a config records the
   previous value; rolling back restores it. UI shows content, history, and a
   rollback button.
-- Both come in two **scopes**: `cluster` (platform templates and credentials,
-  e.g. the on-disk `~/.pmcluster/config/*.yml` after `pmcluster config import`)
+- Both come in two **scopes**: `cluster` (platform templates and credentials)
   and `service` (user-created values referenced from manifests).
 - The stack list offers per-row **+ Config** / **+ Secret** buttons that jump
   to the corresponding page with the create form prefilled for that stack
@@ -367,11 +366,7 @@ env:
   deploy time — rotate, then re-deploy, and the new value flows in.
 - CLI cheat-sheet:
   - `pmcluster secret create <name> [value]` / `list` / `show <name>` / `verify <name> <value>` / `delete <name>`
-  - `pmcluster secret import-credentials` — mirror the platform credentials
-    (portainer/edge/traefik/OpenObserve) into the secrets store
   - `pmcluster config create|list|get|edit|history|rollback <name>`
-  - `pmcluster config import` — one-time import of the on-disk
-    `~/.pmcluster/config/*.yml` templates into the DB
 - REST API: `GET/POST /api/secrets`, `DELETE /api/secrets/{name}`,
   `GET/POST /api/configs`, `GET/PUT/DELETE /api/configs/{name}`,
   `GET /api/configs/{name}/versions`, `POST /api/configs/{name}/rollback`

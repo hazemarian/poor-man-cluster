@@ -121,7 +121,6 @@ func TestBackupsAPI_GetListsAndFiltersByStack(t *testing.T) {
 	srv := httptest.NewServer(mountBackups(h))
 	defer srv.Close()
 
-	// All backups
 	resp, err := http.Get(srv.URL + "/backups")
 	if err != nil {
 		t.Fatalf("get all: %v", err)
@@ -137,7 +136,6 @@ func TestBackupsAPI_GetListsAndFiltersByStack(t *testing.T) {
 		t.Errorf("all returned %d, want 2", len(listAll.Backups))
 	}
 
-	// Stack-scoped
 	resp2, err := http.Get(srv.URL + "/stacks/alpha/backups")
 	if err != nil {
 		t.Fatalf("get alpha: %v", err)

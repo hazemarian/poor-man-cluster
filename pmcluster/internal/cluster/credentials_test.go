@@ -39,7 +39,7 @@ func TestBootstrap_RequiresOpenObserveEmail(t *testing.T) {
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	_, err := mgr.Bootstrap(context.Background(), BootstrapInput{
 		TraefikAdminUser:      "admin",
-		OpenObserveAdminEmail: "", // missing
+		OpenObserveAdminEmail: "",
 	})
 	if err == nil {
 		t.Fatal("Bootstrap: expected error when OpenObserveAdminEmail is empty")
@@ -53,7 +53,7 @@ func TestBootstrap_DefaultsTraefikAdminUser(t *testing.T) {
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	creds, err := mgr.Bootstrap(context.Background(), BootstrapInput{
-		TraefikAdminUser:      "", // should default to "admin"
+		TraefikAdminUser:      "",
 		OpenObserveAdminEmail: "ops@example.com",
 	})
 	if err != nil {
@@ -107,8 +107,6 @@ func TestBootstrap_EdgeAPIToken(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 
-	// The daemon must accept the minted token as the "edge" user — this both
-	// proves the user row was created and that the value verifies.
 	token := creds["edge_api_token"].Password
 	user, err := s.UserByToken(ctx, token)
 	if err != nil {
@@ -118,7 +116,6 @@ func TestBootstrap_EdgeAPIToken(t *testing.T) {
 		t.Errorf("daemon authenticated user = %q, want %q", user.Name, "edge")
 	}
 
-	// Each edge Swarm secret should exist with the credential's plaintext.
 	for name, secret := range map[string]string{
 		"edge_admin_password": "edge_admin",
 		"edge_ui_secret":      "edge_ui_secret",
@@ -165,13 +162,11 @@ func TestBootstrap_ReRun_NotNewlyCreated(t *testing.T) {
 	in := BootstrapInput{OpenObserveAdminEmail: "ops@example.com"}
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 
-	// First run.
 	first, err := mgr.Bootstrap(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Bootstrap (first): %v", err)
 	}
 
-	// Second run with same store + docker.
 	second, err := mgr.Bootstrap(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Bootstrap (second): %v", err)
@@ -184,7 +179,7 @@ func TestBootstrap_ReRun_NotNewlyCreated(t *testing.T) {
 		if cr.SwarmSecretCreated {
 			t.Errorf("%s: SwarmSecretCreated = true on re-run, want false", name)
 		}
-		// Password must match first run.
+
 		if cr.Password != first[name].Password {
 			t.Errorf("%s: password changed between runs", name)
 		}
@@ -204,7 +199,6 @@ func TestBootstrap_TraefikSecretIsHtpasswd(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 
-	// The Swarm secret payload for admin_credentials should start with "admin:".
 	spec, ok := f.secrets["admin_credentials"]
 	if !ok {
 		t.Fatal("admin_credentials secret not found in fake docker")
@@ -227,7 +221,6 @@ func TestBootstrap_PortainerAndOpenObserveSecretsArePlaintext(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 
-	// portainer secret payload == plaintext password.
 	portainerCred := creds["portainer"]
 	portainerSpec, ok := f.secrets["portainer_admin_password"]
 	if !ok {
@@ -238,7 +231,6 @@ func TestBootstrap_PortainerAndOpenObserveSecretsArePlaintext(t *testing.T) {
 			portainerSpec.Data, portainerCred.Password)
 	}
 
-	// openobserve secret payload == plaintext password.
 	ooCred := creds["openobserve_admin"]
 	ooSpec, ok := f.secrets["zo_root_user_password"]
 	if !ok {
@@ -258,7 +250,6 @@ func TestBootstrap_LostDBRecovery(t *testing.T) {
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
 
-	// Pre-populate Swarm secrets as if a prior install ran.
 	f.secrets["admin_credentials"] = struct {
 		Name   string
 		Data   []byte
@@ -295,7 +286,6 @@ func TestBootstrap_LostDBRecovery(t *testing.T) {
 		Labels map[string]string
 	}{Name: "edge_api_token", Data: []byte("oldapitoken")}
 
-	// Store is fresh (lost-DB scenario).
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	creds, err := mgr.Bootstrap(context.Background(), BootstrapInput{
 		OpenObserveAdminEmail: "ops@example.com",
@@ -313,10 +303,6 @@ func TestBootstrap_LostDBRecovery(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Rotate tests
-// ---------------------------------------------------------------------------
 
 // bootstrapForRotate is a shared helper that bootstraps all three credentials
 // and returns the manager + the fakeDocker for use in Rotate tests.
@@ -341,7 +327,6 @@ func TestRotate_HappyPath(t *testing.T) {
 	mgr, f, rec := bootstrapForRotate(t)
 	ctx := context.Background()
 
-	// Get the original ciphertext for the traefik credential.
 	originalCred, err := mgr.Store.GetCredential(ctx, "traefik_dashboard")
 	if err != nil {
 		t.Fatalf("GetCredential (before rotate): %v", err)
@@ -349,7 +334,6 @@ func TestRotate_HappyPath(t *testing.T) {
 	originalCiphertext := make([]byte, len(originalCred.PasswordCiphertext))
 	copy(originalCiphertext, originalCred.PasswordCiphertext)
 
-	// Remember which secrets existed before rotation.
 	oldSecretData, ok := f.secrets["admin_credentials"]
 	if !ok {
 		t.Fatal("admin_credentials secret should exist after Bootstrap")
@@ -360,7 +344,6 @@ func TestRotate_HappyPath(t *testing.T) {
 		t.Fatalf("Rotate: %v", err)
 	}
 
-	// Returned ManagedCredential assertions.
 	if newCred.Name != "traefik_dashboard" {
 		t.Errorf("Name = %q, want 'traefik_dashboard'", newCred.Name)
 	}
@@ -380,7 +363,6 @@ func TestRotate_HappyPath(t *testing.T) {
 		t.Error("returned Password should be non-empty")
 	}
 
-	// Store row's ciphertext should have changed.
 	updatedCred, err := mgr.Store.GetCredential(ctx, "traefik_dashboard")
 	if err != nil {
 		t.Fatalf("GetCredential (after rotate): %v", err)
@@ -389,7 +371,6 @@ func TestRotate_HappyPath(t *testing.T) {
 		t.Error("PasswordCiphertext should have changed after Rotate")
 	}
 
-	// The new secret in fakeDocker should differ from the old one.
 	newSecretData, ok := f.secrets["admin_credentials"]
 	if !ok {
 		t.Fatal("admin_credentials secret should still exist after re-creation")
@@ -398,7 +379,6 @@ func TestRotate_HappyPath(t *testing.T) {
 		t.Error("Swarm secret payload should have changed after Rotate")
 	}
 
-	// The consuming service (infra_traefik) should have been force-updated.
 	found := false
 	for _, svc := range rec.forceUpdated {
 		if svc == "infra_traefik" {
@@ -442,7 +422,6 @@ func TestRotate_SecretRemoveFails(t *testing.T) {
 	mgr, f, _ := bootstrapForRotate(t)
 	ctx := context.Background()
 
-	// Inject an error on SecretRemove for the traefik secret.
 	injectErr := errors.New("secret is in use by a running service")
 	f.secretRemoveErr = map[string]error{
 		"admin_credentials": injectErr,
@@ -452,7 +431,7 @@ func TestRotate_SecretRemoveFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("Rotate should return error when SecretRemove fails")
 	}
-	// The error message should mention "is the consuming service still using it".
+
 	if !strings.Contains(err.Error(), "is the consuming service still using it") {
 		t.Errorf("error %q should mention 'is the consuming service still using it'", err.Error())
 	}
@@ -462,8 +441,7 @@ func TestRotate_SecretRemoveFails(t *testing.T) {
 }
 
 func TestRotate_SpecNotFound_ReturnsError(t *testing.T) {
-	// Insert a credential with a name that is not in bootstrapSpecs.
-	// Rotate should return an error because specFor will fail.
+
 	s, c := newTestDeps(t)
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
@@ -472,13 +450,12 @@ func TestRotate_SpecNotFound_ReturnsError(t *testing.T) {
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f, Deployer: rec}
 	ctx := context.Background()
 
-	// Manually insert a credential with an unknown name.
 	password := []byte("some-random-password")
 	ciphertext, err := c.Encrypt(password)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
 	}
-	// Create the swarm secret first so SecretRemove doesn't fail for a missing-secret reason.
+
 	if err := f.SecretCreate(ctx, docker.SecretSpec{Name: "unknown_swarm_secret", Data: password}); err != nil {
 		t.Fatalf("SecretCreate: %v", err)
 	}
@@ -492,12 +469,11 @@ func TestRotate_SpecNotFound_ReturnsError(t *testing.T) {
 		t.Fatalf("InsertCredential: %v", err)
 	}
 
-	// Rotate should fail because specFor("unknown_thing") returns false.
 	_, err = mgr.Rotate(ctx, "unknown_thing")
 	if err == nil {
 		t.Fatal("Rotate should return error when credential kind has no spec")
 	}
-	// The error should mention the missing spec.
+
 	if !strings.Contains(err.Error(), "no spec for credential kind") {
 		t.Errorf("expected 'no spec for credential kind' in error, got: %v", err)
 	}

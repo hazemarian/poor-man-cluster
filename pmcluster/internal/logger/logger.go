@@ -121,7 +121,7 @@ func New(opts Options) (zerolog.Logger, io.Closer, error) {
 		if out == nil {
 			out = os.Stdout
 		}
-		// Format: "2026-05-10T22:14:08+02:00 INF preflight passed"
+
 		console := zerolog.ConsoleWriter{
 			Out:        out,
 			TimeFormat: time.RFC3339,
@@ -138,9 +138,6 @@ func New(opts Options) (zerolog.Logger, io.Closer, error) {
 		closer = fw
 	}
 
-	// OTel logs sink. Always wired; when the global LoggerProvider is
-	// noop (telemetry.Init not run or endpoint empty) Emit is a no-op,
-	// so this costs nothing in one-shot CLI commands.
 	writers = append(writers, newOTelWriter())
 
 	if len(writers) == 0 {
@@ -163,8 +160,7 @@ func Sweep(dir string, now time.Time) error {
 		}
 		return fmt.Errorf("sweep: read %s: %w", dir, err)
 	}
-	// Cutoff at midnight UTC so a file dated exactly RetentionDays ago
-	// is kept — we're comparing date stamps, not wall clocks.
+
 	cutoff := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -RetentionDays)
 	var problems []string
 	for _, e := range entries {
@@ -172,7 +168,7 @@ func Sweep(dir string, now time.Time) error {
 			continue
 		}
 		name := e.Name()
-		// Expected shape: pmcluster-YYYY-MM-DD.log
+
 		if !strings.HasPrefix(name, "pmcluster-") || !strings.HasSuffix(name, ".log") {
 			continue
 		}

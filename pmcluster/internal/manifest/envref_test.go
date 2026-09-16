@@ -38,14 +38,14 @@ func TestEnvRef_Parse(t *testing.T) {
 	for v, want := range map[string]bool{
 		"config(my_conf)":  true,
 		"secrets(db_pass)": true,
-		"config( a )":      true, // spaces trimmed
+		"config( a )":      true,
 		"plain-value":      false,
 		"${ENV_VAR}":       false,
 		"config(":          false,
-		"config()":         false, // empty name → not a valid ref (malformedEnvRef catches)
-		"prefix config(x)": false, // not exact-match → literal
-		"config(x) suffix": false, // not exact-match → literal
-		"secrets()":        false, // empty name → not a valid ref
+		"config()":         false,
+		"prefix config(x)": false,
+		"config(x) suffix": false,
+		"secrets()":        false,
 	} {
 		_, ok := parseEnvRef(v)
 		if ok != want {
@@ -76,7 +76,7 @@ func TestTranslate_SecretsEnvRef(t *testing.T) {
 		"DB_PASSWORD": "secrets(db_pass)",
 		"PLAIN":       "hello",
 	})
-	app.Services["web"].Secrets = []string{"db_pass"} // mounted explicitly
+	app.Services["web"].Secrets = []string{"db_pass"}
 
 	out, err := Translate(app)
 	if err != nil {
@@ -90,7 +90,7 @@ func TestTranslate_SecretsEnvRef(t *testing.T) {
 	if !strings.Contains(s, "PLAIN: hello") {
 		t.Errorf("expected plain env preserved:\n%s", s)
 	}
-	// Secret declared at top-level external AND attached to service.
+
 	if !strings.Contains(s, "secrets:") || !strings.Contains(s, "external: true") {
 		t.Errorf("expected external secrets block:\n%s", s)
 	}

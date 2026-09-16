@@ -125,7 +125,6 @@ func TestDeploy_HappyPath(t *testing.T) {
 		t.Errorf("result.StackName = %q, want donation-campaign", result.StackName)
 	}
 
-	// Deployer received exactly one call.
 	if len(dep.calls) != 1 {
 		t.Fatalf("deployer received %d calls, want 1", len(dep.calls))
 	}
@@ -136,7 +135,6 @@ func TestDeploy_HappyPath(t *testing.T) {
 		t.Error("deployer received empty compose YAML")
 	}
 
-	// Store has the stack row.
 	st, err := s.GetStack(ctx, "donation-campaign")
 	if err != nil {
 		t.Fatalf("GetStack: %v", err)
@@ -145,7 +143,6 @@ func TestDeploy_HappyPath(t *testing.T) {
 		t.Errorf("store current_revision = %d, want %d", st.CurrentRevision, result.Revision)
 	}
 
-	// Store has the revision row.
 	rev, err := s.GetRevision(ctx, "donation-campaign", result.Revision)
 	if err != nil {
 		t.Fatalf("GetRevision: %v", err)
@@ -182,7 +179,7 @@ func TestDeploy_InvalidYAML(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid YAML, got nil")
 	}
-	// Should mention parse somewhere.
+
 	if !strings.Contains(err.Error(), "parse") {
 		t.Logf("parse error (ok): %v", err)
 	}
@@ -207,11 +204,10 @@ func TestDeploy_AppNameOverride(t *testing.T) {
 		t.Errorf("result.StackName = %q, want custom-name", result.StackName)
 	}
 
-	// Stack must be stored under override name.
 	if _, err := s.GetStack(ctx, "custom-name"); err != nil {
 		t.Errorf("GetStack(custom-name): %v", err)
 	}
-	// Not under the original manifest name.
+
 	if _, err := s.GetStack(ctx, "donation-campaign"); !errors.Is(err, store.ErrStackNotFound) {
 		t.Errorf("GetStack(donation-campaign) = %v, want ErrStackNotFound", err)
 	}
@@ -258,7 +254,6 @@ func TestDeploy_DeployerError(t *testing.T) {
 		t.Errorf("error = %q, should mention docker stack deploy", err.Error())
 	}
 
-	// The stack and revision must be in the store despite the deploy failure.
 	st, stErr := s.GetStack(ctx, "donation-campaign")
 	if errors.Is(stErr, store.ErrStackNotFound) {
 		t.Fatal("stack row missing after deployer error — should be recorded")
@@ -280,7 +275,6 @@ func TestRollback_HappyPath(t *testing.T) {
 	svc := newService(s, dep)
 	ctx := context.Background()
 
-	// Deploy v1.
 	r1, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest, Version: "v1"})
 	if err != nil {
 		t.Fatalf("Deploy v1: %v", err)
@@ -288,10 +282,8 @@ func TestRollback_HappyPath(t *testing.T) {
 	rev1 := r1.Revision
 	rendered1 := string(r1.RenderedYAML)
 
-	// Sleep 2s so v2 gets a different unix-timestamp revision id.
 	time.Sleep(2 * time.Second)
 
-	// Deploy v2.
 	r2, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest, Version: "v2"})
 	if err != nil {
 		t.Fatalf("Deploy v2: %v", err)
@@ -301,28 +293,22 @@ func TestRollback_HappyPath(t *testing.T) {
 		t.Fatalf("v2 revision = v1 revision (%d) — timestamps must differ", rev1)
 	}
 
-	// Sleep 2s so the rollback gets a fresh unix-second timestamp (distinct
-	// from both rev1 and rev2).
 	time.Sleep(2 * time.Second)
 
-	// Rollback to v1.
 	rr, err := svc.Rollback(ctx, "donation-campaign", rev1)
 	if err != nil {
 		t.Fatalf("Rollback: %v", err)
 	}
 
-	// The rollback creates a NEW revision (distinct from rev1 and rev2).
 	if rr.Revision == rev1 || rr.Revision == rev2 {
 		t.Errorf("rollback revision = %d, want a new id (not rev1=%d or rev2=%d)",
 			rr.Revision, rev1, rev2)
 	}
 
-	// RenderedYAML of the rollback matches v1.
 	if string(rr.RenderedYAML) != rendered1 {
 		t.Errorf("rollback RenderedYAML differs from v1 RenderedYAML")
 	}
 
-	// Stack's current_revision = new rollback revision (NOT rev1).
 	st, err := s.GetStack(ctx, "donation-campaign")
 	if err != nil {
 		t.Fatalf("GetStack: %v", err)
@@ -341,7 +327,6 @@ func TestRollback_UnknownRevision(t *testing.T) {
 	svc := newService(s, dep)
 	ctx := context.Background()
 
-	// Deploy once so the stack exists.
 	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest}); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}

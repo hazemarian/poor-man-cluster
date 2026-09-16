@@ -1,9 +1,5 @@
 package pmapi
 
-// This file mirrors the JSON shapes returned by the pmcluster daemon
-// (internal/api). The UI decodes into these so controllers render typed data
-// rather than raw JSON.
-
 // Me is GET /api/me — the authenticated daemon user.
 type Me struct {
 	ID   int64  `json:"id"`

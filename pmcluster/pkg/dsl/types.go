@@ -11,13 +11,13 @@ package dsl
 
 // App is the top-level manifest. Exactly one per file.
 type App struct {
-	Name    string `json:"app"`     // stack name; also drives ${app} substitution
-	Env     string `json:"env"`     // e.g. "production"
-	Domain  string `json:"domain"`  // base domain; ${domain} in Expose.Host
-	Version string `json:"version"` // image tag; ${version}; defaults to "latest"
+	Name    string `json:"app"`
+	Env     string `json:"env"`
+	Domain  string `json:"domain"`
+	Version string `json:"version"`
 
-	Registry string `json:"registry,omitempty"` // ${registry} for `${registry}/${app}:${version}`
-	RepoURL  string `json:"repo_url,omitempty"` // metadata only; pmcluster never reads from git
+	Registry string `json:"registry,omitempty"`
+	RepoURL  string `json:"repo_url,omitempty"`
 	EnvFile  string `json:"env_file,omitempty"`
 
 	// Secrets and Volumes are listed at App level so the translator can
@@ -42,7 +42,7 @@ type Service struct {
 	// Image supports ${app}, ${env}, ${version}, ${registry}, ${env:VAR}.
 	Image string `json:"image"`
 
-	Replicas *int `json:"replicas,omitempty"` // default 1; ignored when RunOnce
+	Replicas *int `json:"replicas,omitempty"`
 	// RunOnce → restart_policy: condition: none. For migrations.
 	RunOnce bool `json:"run_once,omitempty"`
 
@@ -50,14 +50,14 @@ type Service struct {
 	// Set true when the service sends logs directly via OTLP (gRPC/HTTP).
 	SkipFilelog bool `json:"skip_filelog,omitempty"`
 
-	Placement string `json:"placement,omitempty"` // "manager" | "worker" | ""
+	Placement string `json:"placement,omitempty"`
 
 	Command    []string `json:"command,omitempty"`
 	Entrypoint []string `json:"entrypoint,omitempty"`
 
 	Env     map[string]string `json:"env,omitempty"`
-	Volumes []string          `json:"volumes,omitempty"` // "name:path" or "/host:/container"
-	Secrets []string          `json:"secrets,omitempty"` // subset of App.Secrets
+	Volumes []string          `json:"volumes,omitempty"`
+	Secrets []string          `json:"secrets,omitempty"`
 
 	// Expose triggers Traefik label injection + traefik-net membership.
 	Expose      *Expose      `json:"expose,omitempty"`
@@ -66,8 +66,8 @@ type Service struct {
 }
 
 type Expose struct {
-	Port int    `json:"port"` // container-side port
-	Host string `json:"host"` // FQDN; e.g. "api.${app}.${domain}"
+	Port int    `json:"port"`
+	Host string `json:"host"`
 
 	// Aliases are extra hostnames that route to the same backend. Each
 	// alias emits its own Traefik router pointing at the same service.
@@ -90,7 +90,7 @@ type Healthcheck struct {
 	//   "pg_isready" → CMD-SHELL pg_isready -U $POSTGRES_USER -d $POSTGRES_DB
 	//   "http"       → wget -q --spider http://127.0.0.1:<port>/<Path>
 	Type string `json:"type,omitempty"`
-	Path string `json:"path,omitempty"` // for Type="http"; defaults to "/"
+	Path string `json:"path,omitempty"`
 
 	Test     []string `json:"test,omitempty"`
 	Interval string   `json:"interval,omitempty"`
@@ -100,7 +100,7 @@ type Healthcheck struct {
 
 // Update is Swarm's rolling-update policy.
 type Update struct {
-	Parallelism int    `json:"parallelism,omitempty"` // default 1
-	Delay       string `json:"delay,omitempty"`       // default "10s"
-	Order       string `json:"order,omitempty"`       // "start-first" (default) | "stop-first"
+	Parallelism int    `json:"parallelism,omitempty"`
+	Delay       string `json:"delay,omitempty"`
+	Order       string `json:"order,omitempty"`
 }

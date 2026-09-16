@@ -70,8 +70,7 @@ func RateLimiter(cfg Config) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := realIP(r.Context())
 			lim := api
-			// /health (daemon liveness, probed by Traefik + the stack healthcheck)
-			// is exempt so a throttled client can never wedge health reporting.
+
 			if pathHasPrefix(r.URL.Path, "/health") {
 				next.ServeHTTP(w, r)
 				return

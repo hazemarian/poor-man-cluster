@@ -42,18 +42,12 @@ type Client interface {
 	NodeList(ctx context.Context) ([]Node, error)
 	JoinTokens(ctx context.Context) (JoinTokens, error)
 
-	// SecretList returns all secret names with the given label filter.
-	// labelKey="" means no filter.
 	SecretList(ctx context.Context, labelKey, labelValue string) ([]string, error)
 
-	// SecretInspect returns labels and content for a secret by name.
 	SecretInspect(ctx context.Context, name string) (SecretInspectResult, error)
 
-	// ConfigList returns all config names with the given label filter.
-	// labelKey="" means no filter.
 	ConfigList(ctx context.Context, labelKey, labelValue string) ([]string, error)
 
-	// ConfigInspect returns labels and content for a config by name.
 	ConfigInspect(ctx context.Context, name string) (ConfigInspectResult, error)
 
 	Close() error
@@ -87,8 +81,8 @@ type Info struct {
 	Architecture          string
 	NCPU                  int
 	MemTotal              int64
-	SwarmLocalNodeState   string // "inactive" | "pending" | "active" | "error" | "locked"
-	SwarmControlAvailable bool   // true on a manager
+	SwarmLocalNodeState   string
+	SwarmControlAvailable bool
 	SwarmManagers         int
 	SwarmNodes            int
 }
@@ -122,20 +116,20 @@ type ConfigSpec struct {
 type Service struct {
 	ID       string
 	Name     string
-	Replicas uint64 // current running replicas
-	Desired  uint64 // desired replicas from the spec
+	Replicas uint64
+	Desired  uint64
 }
 
 type Node struct {
 	ID            string
 	Hostname      string
-	Role          string // "manager" | "worker"
-	Availability  string // "active" | "pause" | "drain"
-	Status        string // "ready" | "down" | "unknown"
+	Role          string
+	Availability  string
+	Status        string
 	IsLeader      bool
 	EngineVersion string
-	Address       string // "ip:2377"; blank for non-managers
-	CreatedAt     int64  // unix seconds
+	Address       string
+	CreatedAt     int64
 	UpdatedAt     int64
 }
 
@@ -316,10 +310,7 @@ func (r *realClient) ServiceList(ctx context.Context) ([]Service, error) {
 		if spec.Mode.Replicated != nil && spec.Mode.Replicated.Replicas != nil {
 			desired = *spec.Mode.Replicated.Replicas
 		}
-		// For global services, desired is tracked implicitly (1 per node
-		// matching placement constraints). We set it to the running count
-		// so the health check treats "running on every eligible node" as
-		// healthy.
+
 		if spec.Mode.Global != nil {
 			desired = s.ServiceStatus.RunningTasks
 		}

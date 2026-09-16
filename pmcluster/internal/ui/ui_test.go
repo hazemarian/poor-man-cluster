@@ -34,7 +34,6 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"nodes":[{"hostname":"manager-1","role":"manager","status":"ready","is_leader":true,"engine_version":"28.5"}]}`)
 	})
 
-	// Stacks index: GET lists, POST deploys.
 	mux.HandleFunc("/api/stacks", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -43,23 +42,22 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 			write(w, `{"stack":"demo","revision":3}`)
 		}
 	})
-	// Stack detail + its revisions.
+
 	mux.HandleFunc("/api/stacks/demo", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"stack":{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo"},"revisions":[{"revision":3,"created_at":30},{"revision":2,"created_at":20}],"last_backup":{"status":"succeeded","started_at":25}}`)
 	})
 	mux.HandleFunc("/api/stacks/demo/revisions/3", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"stack":"demo","revision":3,"created_at":30,"source_yaml":"app: demo\nversion: v3\n","rendered_yaml":"services:\n  demo:\n","payload":"{}"}`)
 	})
-	// Rollback (POST only).
+
 	mux.HandleFunc("/api/stacks/demo/rollback", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"stack":"demo","new_revision":3,"rolled_back_to":2}`)
 	})
-	// Per-stack backups.
+
 	mux.HandleFunc("/api/stacks/demo/backups", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"backups":[{"id":9,"status":"succeeded","stack_name":"demo","revision":3,"archive_paths":["a.tar.gz"],"started_at":10,"finished_at":11}]}`)
 	})
 
-	// Cluster-wide backups: GET lists, POST triggers.
 	mux.HandleFunc("/api/backups", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
@@ -69,7 +67,6 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		}
 	})
 
-	// Webhook sources: GET lists (never secret), POST creates (secret once).
 	mux.HandleFunc("/api/webhooks", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
@@ -82,7 +79,6 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// API keys: GET lists (never token), POST creates (token once).
 	mux.HandleFunc("/api/api_keys", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
@@ -95,7 +91,6 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// Secrets: GET lists (never payload), POST creates, DELETE removes.
 	mux.HandleFunc("/api/secrets", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
@@ -111,7 +106,6 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"name":"db_pass","value":"the-decrypted-value"}`)
 	})
 
-	// Configs: GET list, GET one, POST create, PUT update, DELETE, versions, rollback.
 	mux.HandleFunc("/api/configs", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
@@ -137,8 +131,6 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"name":"nginx_conf","hash":"h0","rolled_back_to":2}`)
 	})
 
-	// TLS: the cluster's own (default) cert metadata + per-host certs. Dates are
-	// computed relative to now so the expiry-warning assertions stay valid.
 	siteSoon := time.Now().AddDate(0, 0, 10).UTC().Format(time.RFC3339)
 	siteFar := time.Now().AddDate(1, 0, 0).UTC().Format(time.RFC3339)
 	mux.HandleFunc("/api/tls/site", func(w http.ResponseWriter, r *http.Request) {
@@ -169,7 +161,7 @@ func newTestApp(t *testing.T, daemon *httptest.Server) *App {
 	cfg.DataDir = t.TempDir()
 	cfg.PMAPIURL = daemon.URL
 	cfg.PMAPIToken = "pmc_test"
-	cfg.SessionSecret = []byte("0123456789abcdefgh") // >= 16 bytes
+	cfg.SessionSecret = []byte("0123456789abcdefgh")
 	cfg.CookieName = "pmui_session"
 	app, err := NewApp(cfg)
 	if err != nil {
@@ -208,7 +200,6 @@ func TestBootstrap_Setup_Login_Overview(t *testing.T) {
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
 
-	// Fresh cluster: first password setup is required.
 	resp := doRequest(t, app, http.MethodGet, "/setup", "", jar)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /setup = %d, want 200", resp.StatusCode)
@@ -218,20 +209,17 @@ func TestBootstrap_Setup_Login_Overview(t *testing.T) {
 		t.Errorf("setup page missing prompt, got: %s", body)
 	}
 
-	// Set the password (8+ chars, matching).
 	resp = doRequest(t, app, http.MethodPost, "/setup",
 		"password=supersecret&confirm=supersecret", jar)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /setup = %d, want 200", resp.StatusCode)
 	}
 
-	// Bad login refuses.
 	resp = doRequest(t, app, http.MethodPost, "/login", "username=admin&password=wrong", jar)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(readBody(t, resp), "Invalid username") {
 		t.Errorf("bad login should show an error")
 	}
 
-	// Good login issues a session cookie.
 	resp = doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("POST /login = %d, want 302", resp.StatusCode)
@@ -241,16 +229,14 @@ func TestBootstrap_Setup_Login_Overview(t *testing.T) {
 		t.Fatalf("no session cookie issued after login")
 	}
 
-	// Unauthenticated access to a fragment redirects to /login.
 	delete(jar, app.Auth.CookieName())
 	resp = doRequest(t, app, http.MethodGet, "/overview", "", jar)
 	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/login" {
 		t.Errorf("unauth /overview should redirect to /login")
 	}
-	doRequest(t, app, http.MethodGet, "/overview", "", jar) // still unauthenticated here
+	doRequest(t, app, http.MethodGet, "/overview", "", jar)
 	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
 
-	// Authed fragment renders cluster data.
 	resp = doRequest(t, app, http.MethodGet, "/overview", "", jar)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /overview = %d, want 200", resp.StatusCode)
@@ -329,31 +315,23 @@ func TestAllControllers(t *testing.T) {
 		return b
 	}
 
-	// Setup + login bootstrap.
 	login()
 
-	// App shell (GET /) and fragment (GET /overview) — Me/ClusterInfo/Nodes.
 	assertFragment(http.MethodGet, "/", "", "")
 	assertFragment(http.MethodGet, "/overview", "", "manager-1", "Cluster overview")
 
-	// Stacks list / detail / revision / backups — ListStacks/GetStack/
-	// GetRevision/ListStackBackups.
 	assertFragment(http.MethodGet, "/stacks", "", "Stacks", "demo", "3")
 	assertFragment(http.MethodGet, "/stacks/demo", "", "Stack · demo", "Last backup:", "succeeded")
 	assertFragment(http.MethodGet, "/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source manifest")
 	assertFragment(http.MethodGet, "/stacks/demo/backups", "", "Backups", "succeeded", "1 recent backup")
 
-	// Rollback (POST) — client.Rollback + re-render detail.
 	assertFragment(http.MethodPost, "/stacks/demo/rollback", "revision=2", "Stack · demo", "Rolled back demo to revision 2")
 
-	// Backup trigger + list — CreateBackup/ListBackups.
 	assertFragment(http.MethodPost, "/backups", "", "Backups", "Backup triggered.")
 
-	// Deploy page + submit — Deploy (already covered by TestDeploy_SendsManifest).
 	assertFragment(http.MethodGet, "/deploy", "", "Deploy")
 	assertFragment(http.MethodGet, "/settings", "", "Settings")
 
-	// Logout clears the session and redirects.
 	resp := doRequest(t, app, http.MethodPost, "/logout", "", jar)
 	if resp.StatusCode != http.StatusFound {
 		t.Errorf("POST /logout = %d, want 302", resp.StatusCode)
@@ -362,7 +340,6 @@ func TestAllControllers(t *testing.T) {
 		t.Error("logout did not clear the session cookie")
 	}
 
-	// After logout, protected routes bounce to /login.
 	delete(jar, app.Auth.CookieName())
 	resp = doRequest(t, app, http.MethodGet, "/stacks", "", jar)
 	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/login" {
@@ -382,7 +359,6 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
 	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
 
-	// Webhooks page lists sources.
 	resp := doRequest(t, app, http.MethodGet, "/webhooks", "", jar)
 	b := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
@@ -394,7 +370,6 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 		}
 	}
 
-	// Create surfaces the one-time secret.
 	resp = doRequest(t, app, http.MethodPost, "/webhooks", "source=github&description=bookfair ci", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
@@ -406,7 +381,6 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 		}
 	}
 
-	// Removing a source revokes it.
 	resp = doRequest(t, app, http.MethodPost, "/webhooks/remove/github", "", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
@@ -416,7 +390,6 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 		t.Errorf("webhook remove missing confirmation; got: %s", b)
 	}
 
-	// API Keys page lists users (no token).
 	resp = doRequest(t, app, http.MethodGet, "/apikeys", "", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
@@ -426,7 +399,6 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 		t.Errorf("apikeys page missing admin; got: %s", b)
 	}
 
-	// Create surfaces the one-time bearer token.
 	resp = doRequest(t, app, http.MethodPost, "/apikeys", "name=ci", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
@@ -442,14 +414,12 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 		t.Errorf("apikey create missing copy button; got: %s", b)
 	}
 
-	// Webhook create surfaces the one-time secret with a copy button.
 	resp = doRequest(t, app, http.MethodPost, "/webhooks", "source=github&description=bookfair ci", jar)
 	b = readBody(t, resp)
 	if !strings.Contains(b, "Copy secret") {
 		t.Errorf("webhook create missing copy button; got: %s", b)
 	}
 
-	// Removing an API key revokes it.
 	resp = doRequest(t, app, http.MethodPost, "/apikeys/remove/2", "", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
@@ -497,53 +467,41 @@ func TestSecretsAndConfigs(t *testing.T) {
 		return b
 	}
 
-	// Secrets page lists stored secrets (hash shown, never payload).
 	assertFragment(http.MethodGet, "/secrets", "", "Secrets", "site_cert", "abc123", "cluster")
 
-	// Create a secret.
 	b := assertFragment(http.MethodPost, "/secrets",
 		"name=db_pass&scope=service&value=topsecret", "Secret db_pass created")
 	if strings.Contains(b, "topsecret") {
 		t.Errorf("secret value leaked back into the rendered page")
 	}
 
-	// Delete a secret.
 	assertFragment(http.MethodPost, "/secrets/remove/db_pass", "", "Deleted secret db_pass.")
 
-	// Revealing a secret shows the decrypted plaintext + a copy button.
 	assertFragment(http.MethodGet, "/secrets/reveal/db_pass", "",
 		"Value of", "the-decrypted-value", "Copy value")
 
-	// Per-stack attach: ?stack= prefills the create forms.
 	assertFragment(http.MethodGet, "/secrets?stack=demo", "", "Attaching to stack",
 		`value="demo_"`)
 	assertFragment(http.MethodGet, "/configs?stack=demo", "", "Attaching to stack",
 		`value="demo_"`)
 
-	// The stacks list offers per-row + Config / + Secret attach buttons.
 	assertFragment(http.MethodGet, "/stacks", "", "demo", "+ Config", "+ Secret")
 
-	// Configs page lists configs (no content shown by default).
 	assertFragment(http.MethodGet, "/configs", "", "Configs", "app_env", "env")
 
-	// Create a config.
 	assertFragment(http.MethodPost, "/configs",
 		"name=nginx_conf&scope=service&kind=file&content=worker_processes 4;",
 		"Config nginx_conf created", "config(nginx_conf)")
 
-	// Edit form loads content + version history via ?name=.
 	assertFragment(http.MethodGet, "/configs?name=nginx_conf", "", "Edit nginx_conf",
 		"worker_processes 4;", "Version history", "h0")
 
-	// Save a new version.
 	assertFragment(http.MethodPost, "/configs/edit",
 		"name=nginx_conf&content=worker_processes 8;", "Config nginx_conf updated")
 
-	// Rollback to version 2.
 	assertFragment(http.MethodPost, "/configs/rollback/nginx_conf/2", "",
 		"Config nginx_conf rolled back to version 2")
 
-	// Delete the config.
 	assertFragment(http.MethodPost, "/configs/remove/nginx_conf", "", "Deleted config nginx_conf.")
 }
 
@@ -556,7 +514,6 @@ func TestTLSMainAndHosts(t *testing.T) {
 	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
 	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
 
-	// TLS page shows both the main cert (with expiry warning) and per-host certs.
 	resp := doRequest(t, app, http.MethodGet, "/tls", "", jar)
 	b := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
@@ -572,7 +529,6 @@ func TestTLSMainAndHosts(t *testing.T) {
 		}
 	}
 
-	// Uploading a new main certificate refreshes the page with a confirmation.
 	resp = doRequest(t, app, http.MethodPost, "/tls/site",
 		"cert=-----BEGIN CERTIFICATE-----&key=-----BEGIN PRIVATE KEY-----", jar)
 	b = readBody(t, resp)
@@ -583,7 +539,6 @@ func TestTLSMainAndHosts(t *testing.T) {
 		t.Errorf("tls site upload missing confirmation; got: %s", b)
 	}
 
-	// Missing key is rejected before hitting the daemon.
 	resp = doRequest(t, app, http.MethodPost, "/tls/site",
 		"cert=-----BEGIN CERTIFICATE-----", jar)
 	b = readBody(t, resp)
@@ -591,7 +546,6 @@ func TestTLSMainAndHosts(t *testing.T) {
 		t.Errorf("tls site missing-field error absent; got: %s", b)
 	}
 
-	// Adding a per-host cert still works.
 	resp = doRequest(t, app, http.MethodPost, "/tls",
 		"host=idlebbookfair.com&cert=-----BEGIN CERTIFICATE-----&key=-----BEGIN PRIVATE KEY-----", jar)
 	b = readBody(t, resp)

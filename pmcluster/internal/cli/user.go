@@ -80,7 +80,7 @@ func runUserCreate(cmd *cobra.Command, args []string) error {
 
 	token, err := createUser(cmd.Context(), st, name)
 	if err != nil {
-		// Surface the user-already-exists case with a friendlier message.
+
 		if errors.Is(err, store.ErrUserExists) {
 			return fmt.Errorf("user %q already exists", name)
 		}

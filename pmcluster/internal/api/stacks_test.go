@@ -82,7 +82,6 @@ func TestLastBackupJSON_MostRecentFirst(t *testing.T) {
 	old, _ := st.CreateBackup(ctx, "my-stack", 1700000000)
 	_ = st.FinishBackup(ctx, old, "succeeded", "", "")
 
-	// Second backup with a later started_at — newer.
 	newer, _ := st.CreateBackup(ctx, "my-stack", 1700000099)
 	_ = st.FinishBackup(ctx, newer, "failed", "", "boom")
 

@@ -1,14 +1,5 @@
 package manifest
 
-// compose.go — typed Docker Swarm Compose v3.9 schema (the subset
-// pmcluster emits). Used purely for marshalling translated manifests; we
-// never parse compose YAML ourselves (Docker reads it from `docker stack
-// deploy`).
-//
-// Field declaration order = output order (sigs.k8s.io/yaml respects struct
-// field order via JSON tags). Map values get sorted alphabetically by the
-// JSON encoder, which is what we want for stable golden files.
-
 // composeFile is the top-level Docker Compose document.
 type composeFile struct {
 	Version  string                     `json:"version"`

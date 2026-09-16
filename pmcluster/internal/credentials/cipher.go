@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	keyBytes   = 32 // AES-256
-	nonceBytes = 12 // GCM standard
+	keyBytes   = 32
+	nonceBytes = 12
 )
 
 // ErrInvalidCiphertext: malformed input or GCM auth tag mismatch.
@@ -90,7 +90,7 @@ func loadOrCreateKey(path string) ([]byte, error) {
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
 		return nil, fmt.Errorf("generate key: %w", err)
 	}
-	// O_EXCL: never overwrite an existing key file.
+
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create key file: %w", err)

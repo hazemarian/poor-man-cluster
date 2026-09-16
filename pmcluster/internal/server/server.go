@@ -32,11 +32,11 @@ import (
 // and standard Docker bridge/overlay gateways.  Traefik runs on the
 // same Swarm node, so its IP is typically within the Docker networks.
 var trustedProxyCIDRs = []string{
-	"127.0.0.1/8",    // localhost
-	"::1/128",        // localhost IPv6
-	"10.0.0.0/8",     // Docker default bridge + Swarm overlay default
-	"172.16.0.0/12",  // Docker bridge (older default)
-	"192.168.0.0/16", // Docker bridge (legacy)
+	"127.0.0.1/8",
+	"::1/128",
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
 }
 
 // Deps bundles the collaborators a fully-wired server needs. Optional
@@ -63,16 +63,11 @@ type Deps struct {
 func New(d Deps) http.Handler {
 	r := chi.NewRouter()
 
-	// RealIP first so later middleware (including rate limiter) sees
-	// the true client address.  Only trust known proxy CIDRs (Docker
-	// networks, localhost) — prevents IP spoofing from untrusted callers.
 	r.Use(trustedRealIP)
 	r.Use(middleware.RequestID)
-	// Map the final HTTP status code onto the otelhttp server span's status
-	// (otelhttp leaves it unset otherwise). Runs inside the server span.
+
 	r.Use(httpStatusSpan)
 
-	// Per-IP rate limiting: separate buckets for API and webhook paths.
 	cfg := defaultRateConfig()
 	r.Use(rateLimiter(
 		newPerIPRateLimiter(rate.Limit(cfg.generalRate), cfg.generalBurst),
@@ -84,7 +79,6 @@ func New(d Deps) http.Handler {
 
 	r.Get("/health", api.Health)
 
-	// /webhook/{source} sits OUTSIDE /api — HMAC IS the auth, no Bearer.
 	if d.Store != nil && d.Cipher != nil && d.DeployService != nil {
 		(&webhook.Handler{
 			Store:   d.Store,
@@ -131,10 +125,6 @@ func New(d Deps) http.Handler {
 		}
 	})
 
-	// otelhttp wraps the whole router so every request produces a span
-	// + http.server.* metrics keyed by route template (chi populates
-	// the route on the context, otelhttp picks it up via the
-	// http.route attribute it sets after the chi pattern matches).
 	return otelhttp.NewHandler(r, "pmcluster.http")
 }
 
@@ -212,7 +202,7 @@ func parseTrustedCIDRs() []*net.IPNet {
 // realIPFromTrusted extracts the real client IP from proxy headers only
 // when the remote peer is a trusted proxy.
 func realIPFromTrusted(r *http.Request, trustedNets []*net.IPNet) string {
-	// Parse the remote address (strip port).
+
 	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		remoteIP = r.RemoteAddr
@@ -222,7 +212,6 @@ func realIPFromTrusted(r *http.Request, trustedNets []*net.IPNet) string {
 		return ""
 	}
 
-	// Only trust proxy headers from known proxy networks.
 	trusted := false
 	for _, n := range trustedNets {
 		if n.Contains(rIP) {
@@ -234,13 +223,12 @@ func realIPFromTrusted(r *http.Request, trustedNets []*net.IPNet) string {
 		return ""
 	}
 
-	// Same precedence order as chi's RealIP.
 	for _, hdr := range []string{"True-Client-IP", "X-Real-IP", "X-Forwarded-For"} {
 		v := r.Header.Get(hdr)
 		if v == "" {
 			continue
 		}
-		// X-Forwarded-For: take the first (leftmost) IP.
+
 		if hdr == "X-Forwarded-For" {
 			if idx := strings.IndexByte(v, ','); idx >= 0 {
 				v = v[:idx]

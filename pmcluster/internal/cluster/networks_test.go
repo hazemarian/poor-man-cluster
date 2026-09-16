@@ -22,7 +22,7 @@ func TestEnsureNetwork_CreatesWhenMissing(t *testing.T) {
 
 func TestEnsureNetwork_NoOpWhenPreExisting(t *testing.T) {
 	f := newFakeDocker()
-	// Pre-populate to simulate "already exists".
+
 	f.networks["traefik-net"] = struct {
 		Name       string
 		Driver     string
@@ -66,7 +66,6 @@ func TestEnsureBundledNetworks_CreatesBoth(t *testing.T) {
 		t.Fatalf("EnsureBundledNetworks: %v", err)
 	}
 
-	// Both networks should be newly created.
 	if len(names) != 2 {
 		t.Errorf("created = %v (len %d), want 2 names", names, len(names))
 	}
@@ -87,7 +86,7 @@ func TestEnsureBundledNetworks_CreatesBoth(t *testing.T) {
 
 func TestEnsureBundledNetworks_OnePreExisting(t *testing.T) {
 	f := newFakeDocker()
-	// traefik-net already exists.
+
 	f.networks["traefik-net"] = struct {
 		Name       string
 		Driver     string
@@ -99,7 +98,6 @@ func TestEnsureBundledNetworks_OnePreExisting(t *testing.T) {
 		t.Fatalf("EnsureBundledNetworks: %v", err)
 	}
 
-	// Only monitoring-net should be newly created.
 	if len(names) != 1 {
 		t.Errorf("created = %v, want [monitoring-net]", names)
 	}

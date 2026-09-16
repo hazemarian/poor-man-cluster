@@ -23,7 +23,7 @@ import (
 // <configDir>/site/, re-materializes the versioned Swarm secrets, refreshes
 // Traefik and persists the metadata for expiry monitoring.
 type SiteCertService struct {
-	Store *store.Store // required: domain lookup + metadata persistence
+	Store *store.Store
 
 	// Apply uploads a new site cert for domain and returns the stored metadata
 	// row. It is the single implementation behind PUT /api/tls/site and the
@@ -102,8 +102,7 @@ func (s *SiteCertService) put(w http.ResponseWriter, r *http.Request) {
 	}
 	row, err := s.Apply(r.Context(), domain, req.Cert, req.Key)
 	if err != nil {
-		// Validation failures (bad PEM, mismatch, domain not covered) are
-		// client errors; refresh failures are infrastructure errors.
+
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "does not cover") || strings.Contains(err.Error(), "valid pair") || strings.Contains(err.Error(), "PEM") {
 			status = http.StatusBadRequest

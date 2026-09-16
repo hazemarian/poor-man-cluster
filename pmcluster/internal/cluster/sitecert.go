@@ -2,7 +2,6 @@ package cluster
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -87,8 +86,6 @@ func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domai
 	}
 	domain = strings.ToLower(domain)
 
-	// Validate the pair and that the leaf covers the target domain (CN or
-	// SAN), then extract metadata for storage + expiry monitoring.
 	info, err := tlscerts.ParseAndCheck(certPEM, keyPEM, domain)
 	if err != nil {
 		return nil, fmt.Errorf("validate certificate: %w", err)
@@ -97,8 +94,7 @@ func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domai
 	mainCert := domain == PersistedDomain(ctx, deps.Store)
 	var certName, keyName string
 	if mainCert {
-		// Main-domain flow: stable local copy + persisted TLS state. The
-		// Update refresh (below) materializes cert_vN/key_vN from those files.
+
 		if err := EnsureSiteCertDir(configDir); err != nil {
 			return nil, fmt.Errorf("ensure site cert dir: %w", err)
 		}
@@ -110,15 +106,13 @@ func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domai
 		if err := writeSiteCertFile(certPath, certPEM); err != nil {
 			return nil, err
 		}
-		// Re-point the persisted TLS state at the local copies (mode stays
-		// "cert"; an ACME-mode cluster switches to operator certs).
+
 		state := tlsState{Mode: "cert", CertPath: certPath, KeyPath: keyPath}
 		if err := state.save(ctx, deps.Store); err != nil {
 			return nil, err
 		}
 	} else {
-		// Per-host flow: materialize the versioned secrets directly — the
-		// render picks them up on the next refresh via the DB row.
+
 		var err error
 		certName, _, err = EnsureVersionedSecret(ctx, deps.Docker, hostSecretBase("cert", domain), []byte(certPEM))
 		if err != nil {
@@ -130,9 +124,6 @@ func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domai
 		}
 	}
 
-	// Refresh Traefik through the full Update pipeline: content-aware secret
-	// materialization, dynamic-config re-render, infra re-deploy only when the
-	// content moved.
 	if refresh {
 		res, err := Update(ctx, UpdateDeps{
 			Store:       deps.Store,
@@ -146,8 +137,7 @@ func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domai
 			return nil, err
 		}
 		if mainCert {
-			// The Update pipeline materialized the main cert from the local
-			// copy — record the actual versioned secret names.
+
 			certName, keyName = res.CertSecret, res.KeySecret
 		}
 	}
@@ -186,12 +176,12 @@ func RemoveCert(ctx context.Context, deps SiteCertDeps, configDir, version, doma
 	}
 	row, err := deps.Store.GetSiteCert(ctx, domain)
 	if err != nil {
-		return err // ErrSiteCertNotFound propagates to the caller (404)
+		return err
 	}
 	if err := deps.Store.DeleteSiteCert(ctx, domain); err != nil {
 		return fmt.Errorf("delete certificate metadata: %w", err)
 	}
-	// Best-effort secret GC — a leftover version is harmless.
+
 	_ = deps.Docker.SecretRemove(ctx, row.CertSecret)
 	_ = deps.Docker.SecretRemove(ctx, row.KeySecret)
 
@@ -221,51 +211,6 @@ func GetSiteCert(ctx context.Context, st *store.Store, domain string) (*store.Si
 		return nil, err
 	}
 	return &row, nil
-}
-
-// importSiteCertMetadata seeds the site_certs DB row from the currently
-// applied TLS cert/key files when the row is absent — the idempotent
-// "migration of the existing SSL" step. It is called from the Update pipeline
-// after the cert/key secrets are materialized, so any `cluster up`/`update`
-// on an upgraded binary imports the pre-existing certificate exactly once.
-func importSiteCertMetadata(ctx context.Context, st *store.Store, certPath, keyPath, domain, certSecret, keySecret string) error {
-	if st == nil || certPath == "" || keyPath == "" || domain == "" || certSecret == "" || keySecret == "" {
-		return nil
-	}
-	if _, err := st.GetSiteCert(ctx, domain); err == nil {
-		return nil // already imported
-	} else if !errors.Is(err, store.ErrSiteCertNotFound) {
-		return err
-	}
-	certPEM, err := os.ReadFile(certPath)
-	if err != nil {
-		return fmt.Errorf("read site cert for import: %w", err)
-	}
-	keyPEM, err := os.ReadFile(keyPath)
-	if err != nil {
-		return fmt.Errorf("read site key for import: %w", err)
-	}
-	info, err := tlscerts.ParseAndCheck(string(certPEM), string(keyPEM), domain)
-	if err != nil {
-		// Best-effort import: the metadata is auxiliary (expiry monitoring).
-		// The cert/key secrets were already materialized by the caller, so a
-		// pair that doesn't parse (or doesn't cover the domain) just leaves
-		// the DB row absent — the operator can upload a proper cert later.
-		return nil
-	}
-	now := time.Now().UTC()
-	return st.PutSiteCert(ctx, store.SiteCertRow{
-		Domain:     domain,
-		CertSecret: certSecret,
-		KeySecret:  keySecret,
-		NotBefore:  info.NotBefore,
-		NotAfter:   info.NotAfter,
-		SANs:       info.SANs,
-		CertHash:   store.ConfigHash(string(certPEM)),
-		KeyHash:    store.ConfigHash(string(keyPEM)),
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	})
 }
 
 // siteCertExpiryWarnDays is how close to expiry (in days) a site certificate

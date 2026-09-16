@@ -8,7 +8,7 @@ import (
 )
 
 type StatusReport struct {
-	Preflight     error // nil iff all preflight checks pass
+	Preflight     error
 	NodeName      string
 	ServerVersion string
 	SwarmState    string

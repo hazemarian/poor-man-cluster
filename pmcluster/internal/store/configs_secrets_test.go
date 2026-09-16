@@ -60,7 +60,7 @@ func TestConfigsCRUD(t *testing.T) {
 		if len(cfgs) != 3 {
 			t.Fatalf("ListConfigs = %d rows, want 3", len(cfgs))
 		}
-		// cluster rows first (otel_collector before traefik_dynamic), then service.
+
 		want := []string{"otel_collector", "traefik_dynamic", "nginx_conf"}
 		for i, w := range want {
 			if cfgs[i].Name != w {
@@ -136,8 +136,7 @@ func TestConfigUpdateVersionsRollback(t *testing.T) {
 
 	t.Run("rollback with foreign version id fails", func(t *testing.T) {
 		_, _ = s.CreateConfig(ctx, "service", "other_conf", "file", "a", "v0.2.30")
-		// no versions yet — construct a cross-config check by rolling
-		// other_conf back to app_conf's version id.
+
 		appVers, _ := s.ListConfigVersions(ctx, "app_conf")
 		if len(appVers) > 0 {
 			_, err := s.RollbackConfig(ctx, "other_conf", appVers[0].ID)
@@ -171,7 +170,7 @@ func TestConfigDelete(t *testing.T) {
 	if _, err := s.GetConfig(ctx, "gone"); !errors.Is(err, ErrConfigNotFound) {
 		t.Errorf("GetConfig after delete = %v, want ErrConfigNotFound", err)
 	}
-	// History rows cascade-deleted.
+
 	vers, err := s.ListConfigVersions(ctx, "gone")
 	if !errors.Is(err, ErrConfigNotFound) {
 		t.Errorf("ListConfigVersions after delete = %v, want ErrConfigNotFound", err)
@@ -190,7 +189,7 @@ func TestSecretsCRUD(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("create + get roundtrip", func(t *testing.T) {
-		payload := []byte("\x01\x02\x03nonce+seal\x04") // opaque ciphertext, never validated here
+		payload := []byte("\x01\x02\x03nonce+seal\x04")
 		id, err := s.CreateSecret(ctx, "service", "db_password", payload, "abc123hash")
 		if err != nil {
 			t.Fatalf("CreateSecret: %v", err)
@@ -236,7 +235,7 @@ func TestSecretsCRUD(t *testing.T) {
 		if len(secrets) != 3 {
 			t.Fatalf("ListSecrets = %d rows, want 3", len(secrets))
 		}
-		// cluster first, then service (alphabetical within scope).
+
 		want := []string{"cert_nextrum", "api_token", "db_password"}
 		for i, w := range want {
 			if secrets[i].Name != w {

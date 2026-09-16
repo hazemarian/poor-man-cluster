@@ -89,12 +89,10 @@ func (s *Store) UserByToken(ctx context.Context, token string) (*auth.User, erro
 	tokenID, secret := auth.SplitToken(token)
 
 	if tokenID != "" {
-		// v2 path — indexed lookup by token_id.
+
 		return s.userByTokenID(ctx, tokenID, secret)
 	}
 
-	// Legacy fallback — O(N) scan.  This still works but is slow under
-	// multi-user scenarios.  Operators should migrate to v2 tokens.
 	return s.userByTokenLegacy(ctx, token)
 }
 
@@ -110,13 +108,13 @@ func (s *Store) userByTokenID(ctx context.Context, tokenID, secret string) (*aut
 	).Scan(&u.ID, &u.Name, &hash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil // unknown token_id, not an error
+			return nil, nil
 		}
 		return nil, fmt.Errorf("query user by token_id: %w", err)
 	}
 	ok, err := auth.VerifyToken(secret, hash)
 	if err != nil {
-		// Corrupt hash row — log-worthy but return nil to avoid lockout.
+
 		return nil, nil
 	}
 	if !ok {
@@ -144,7 +142,7 @@ func (s *Store) userByTokenLegacy(ctx context.Context, token string) (*auth.User
 		}
 		ok, err := auth.VerifyToken(token, hash)
 		if err != nil {
-			// A single bad row mustn't lock out every other user.
+
 			continue
 		}
 		if ok {

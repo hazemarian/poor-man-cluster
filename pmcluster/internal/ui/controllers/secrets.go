@@ -16,8 +16,8 @@ type Secrets struct{ *Controller }
 
 type secretsData struct {
 	Secrets    []secretRow
-	Stack      string // when set (per-stack attach), prefill the create form
-	RevealName string // when set, show the revealed plaintext for this secret
+	Stack      string
+	RevealName string
 	RevealVal  string
 	Msg        string
 	Error      string

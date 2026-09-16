@@ -168,7 +168,7 @@ func readConfigFile(name string, in RenderInput) (string, error) {
 		if data, err := os.ReadFile(path); err == nil {
 			return string(data), nil
 		}
-		// Disk missing/unreadable → fall through to embedded.
+
 	}
 	body, err := fs.ReadFile(embeddedStacks, embeddedDir+"/"+name)
 	if err != nil {
@@ -189,8 +189,7 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Custom delims so offen's runtime `{{ .Node.ID }}` template syntax
-	// in backup-stack.yml is left untouched.
+
 	tmpl, err := template.New(string(name)).Delims("[[", "]]").Parse(body)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s template: %w", fname, err)
@@ -352,7 +351,7 @@ func EnsureConfigDir(configDir string, version string) error {
 		if err != nil {
 			return fmt.Errorf("read embedded %s: %w", name, err)
 		}
-		// Inject the actual build version into the placeholder.
+
 		seeded := strings.Replace(string(body), "__PMCONFIG_VERSION__", version, 1)
 		if err := os.WriteFile(dest, []byte(seeded), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", dest, err)
@@ -369,7 +368,7 @@ func shouldOverwriteConfig(disk []byte, currentVersion string) bool {
 	firstLine, _, _ := strings.Cut(string(disk), "\n")
 	matches := configVersionHeader.FindStringSubmatch(strings.TrimSpace(firstLine))
 	if len(matches) < 2 {
-		return true // no version header — overwrite to add one
+		return true
 	}
 	diskVersion := matches[1]
 	return Compare(diskVersion, currentVersion) < 0
@@ -388,7 +387,7 @@ var validDomain = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9]
 // Returns -1 if a < b, 0 if equal, 1 if a > b. Pre-release tags and
 // build metadata are not handled — we only ship tagged releases.
 func Compare(a, b string) int {
-	// Strip leading 'v' so both "v0.1.12" and "0.1.12" compare correctly.
+
 	normalize := strings.TrimPrefix(a, "v")
 	normalizeB := strings.TrimPrefix(b, "v")
 
@@ -421,7 +420,7 @@ func Compare(a, b string) int {
 // parseSegment converts a version segment to an int, ignoring any
 // trailing pre-release suffix (e.g. "12-alpha" → 12).
 func parseSegment(s string) int {
-	// Take only leading digits.
+
 	var n int
 	for _, ch := range s {
 		if ch < '0' || ch > '9' {
@@ -434,13 +433,10 @@ func parseSegment(s string) int {
 
 func CORSOriginRegex(domain string) string {
 	if !validDomain.MatchString(domain) {
-		// Match nothing — callers should validate Domain upstream;
-		// this keeps the template render-safe in the worst case.
+
 		return `^$`
 	}
 	escaped := regexp.QuoteMeta(strings.ToLower(domain))
-	// Each subdomain label must start with an alphanumeric (no leading
-	// hyphen — RFC 1123) to avoid letting weird-but-not-quite-impossible
-	// origins through.
+
 	return `^https://([a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)*\.)?` + escaped + `$`
 }

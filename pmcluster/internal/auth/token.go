@@ -28,14 +28,14 @@ import (
 )
 
 const (
-	rawTokenBytes = 32 // 256 bits → ~43 base64url chars
-	rawIDBytes    = 4  // 4 bytes → 8 hex chars
+	rawTokenBytes = 32
+	rawIDBytes    = 4
 )
 
 // argon2id parameters per OWASP 2024 guidance for interactive auth.
 const (
 	argonTime    uint32 = 2
-	argonMemory  uint32 = 64 * 1024 // KiB → 64 MiB
+	argonMemory  uint32 = 64 * 1024
 	argonThreads uint8  = 1
 	argonSaltLen uint32 = 16
 	argonKeyLen  uint32 = 32

@@ -72,15 +72,12 @@ func runWebhookAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("open encryption key: %w", err)
 	}
 
-	// 32 bytes → 64 hex chars. CI tools handle hex secrets natively.
 	secretBytes := make([]byte, 32)
 	if _, err := rand.Read(secretBytes); err != nil {
 		return fmt.Errorf("generate secret: %w", err)
 	}
 	secretHex := hex.EncodeToString(secretBytes)
 
-	// Store the hex *string* (not raw bytes) so the operator can paste the
-	// printed value verbatim into CI; HMAC keys with the same string.
 	ciphertext, err := cipher.Encrypt([]byte(secretHex))
 	if err != nil {
 		return fmt.Errorf("encrypt secret: %w", err)

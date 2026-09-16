@@ -52,7 +52,7 @@ func TestE2EOpenObserveTokenIngestion(t *testing.T) {
 	pass := "AdminPass123!"
 	marker := "OO_TOKEN_E2E_MARKER_42"
 	project := "oo-token-e2e"
-	// Use a free host port — an existing local OpenObserve may already hold 5080.
+
 	ooPort := hostPort(t)
 	collPort := hostPort(t)
 
@@ -108,7 +108,6 @@ volumes:
 	}
 	otelConfigPath := filepath.Join(dir, "otel-config.yaml")
 
-	// Register cleanup BEFORE `up` so even a partial failure tears everything down.
 	t.Cleanup(func() {
 		downCtx, downCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer downCancel()
@@ -118,7 +117,6 @@ volumes:
 		t.Logf("compose down: %s", strings.TrimSpace(string(out)))
 	})
 
-	// ── 2a. Boot OpenObserve only, and wait until it's healthy. ────────────
 	t.Log("Starting OpenObserve...")
 	upCtx, upCancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer upCancel()
@@ -130,8 +128,6 @@ volumes:
 	}
 	waitOOHealthy(t, ctx, ooPort, 240*time.Second)
 
-	// ── 2b. Mint a dedicated INGESTION token via the OO API (as pmcluster's
-	//        provisioner does), then render the collector config with it. ──
 	token := createIngestionToken(t, ctx, ooPort, email, pass)
 	rendered, err := cluster.RenderOTelCollectorConfig(cluster.RenderInput{
 		Domain:                    "localhost",
@@ -145,7 +141,6 @@ volumes:
 		t.Fatal(err)
 	}
 
-	// ── 2c. Now boot the collector (its config now embeds the real token). ─
 	t.Log("Starting OTel collector...")
 	collCtx, collCancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer collCancel()
@@ -155,21 +150,13 @@ volumes:
 		t.Fatalf("docker compose up collector: %v\n%s", err, out)
 	}
 
-	// ── 3. Deliver the marker log to the collector ─────────────────────────
 	postOTLPToCollector(t, ctx, collPort, marker)
-	time.Sleep(8 * time.Second) // let the collector export + OO index
+	time.Sleep(8 * time.Second)
 
-	// ── 4. Assert the marker was ingested (query OO's search API) ───────────
-	// Note: OO's REST search API authenticates with the human PASSWORD (the
-	// token only authenticates OTLP ingestion) and requires a start_time window.
 	ingested, body := searchOpenObserve(t, ctx, ooPort, pass, "select * from \"default\" ORDER BY _timestamp DESC", 15, 5)
 	if !ingested {
 		t.Errorf("OO did NOT ingest the marker %q (search via root admin password).\nSearch body:\n%s", marker, body)
-		// Diagnose a genuine ingest failure: surface any collector auth/export
-		// error so the test says why. This scan is intentionally limited to the
-		// failure path — on the success path the marker proves the ingestion
-		// token works end-to-end, and a retryable 4xx that resolves after the
-		// collector's backoff (e.g. on a separate signal stream) is not a defect.
+
 		collectorLogs := containerLogs(t, ctx, project+"-otel-collector-1")
 		for _, bad := range []string{"401", "403", "PermissionDenied", "Unauthenticated", "Failed to export"} {
 			if strings.Contains(collectorLogs, bad) {
@@ -182,14 +169,6 @@ volumes:
 		t.Logf("✅ OO ingested the log via Basic base64(default:ingestion_token)")
 	}
 
-	// ── 5. Negative: auth still enforced — a bogus credential is rejected ──
-	// Note: OO's HTTP OTLP endpoint accepts EITHER root credential (token or
-	// password), so we CANNOT assert "password is rejected" here. What we can
-	// assert — and what proves auth is on — is that a credential matching
-	// neither root password nor node token is rejected with 401/403. The real
-	// decoupling guarantee (the collector's gRPC path REQUIRES the token, so a
-	// password rotation never invalidates the collector config) is covered
-	// upstream by unit tests + the positive ingestion above.
 	if ok, code := postOTLPToOO(t, ctx, ooPort, email, "definitely-not-a-root-cred3ntial", "oops-wrong-cred"); ok {
 		t.Errorf("OpenObserve ACCEPTED (HTTP %d) an OTLP ingest with a bogus credential — auth is not enforced", code)
 	} else {
@@ -236,8 +215,8 @@ func searchOpenObserve(t *testing.T, ctx context.Context, port int, password, sq
 	payload, _ := json.Marshal(map[string]any{
 		"query": map[string]any{
 			"sql":        sql,
-			"start_time": now - 24*60*60*1_000_000, // 24h ago
-			"end_time":   now + 60*1_000_000,       // a minute ahead
+			"start_time": now - 24*60*60*1_000_000,
+			"end_time":   now + 60*1_000_000,
 		},
 		"from": from, "size": size,
 	})

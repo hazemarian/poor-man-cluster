@@ -12,7 +12,7 @@ import (
 
 // fakeLookup is the minimal auth.Lookup for integration tests — no DB needed.
 type fakeLookup struct {
-	users map[string]*auth.User // token → user
+	users map[string]*auth.User
 }
 
 func (f *fakeLookup) UserByToken(_ context.Context, token string) (*auth.User, error) {

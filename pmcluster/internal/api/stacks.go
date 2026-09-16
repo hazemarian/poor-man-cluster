@@ -84,8 +84,7 @@ func (h *StacksHandler) show(w http.ResponseWriter, r *http.Request) {
 	}
 	revsJSON := make([]map[string]any, 0, len(revs))
 	for _, rv := range revs {
-		// Listing skips source/rendered YAML; clients fetch one via
-		// revisions/{rev} when they need the body.
+
 		revsJSON = append(revsJSON, map[string]any{
 			"revision":   rv.Revision,
 			"created_at": rv.CreatedAt,

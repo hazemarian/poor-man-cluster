@@ -128,7 +128,7 @@ func TestValidate_ExposeHostEmpty(t *testing.T) {
 
 func TestValidate_ExposeHostInvalidHostname(t *testing.T) {
 	a := baseApp()
-	// A hostname with spaces is clearly invalid.
+
 	a.Services["api"].Expose = &dsl.Expose{Port: 8080, Host: "not valid hostname"}
 	mustFail(t, a, "expose.host: invalid hostname")
 }

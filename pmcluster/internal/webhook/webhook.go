@@ -95,9 +95,7 @@ func (h *Handler) Mount(r chi.Router) {
 //   - 502: docker stack deploy returned an error.
 func (h *Handler) receive(w http.ResponseWriter, r *http.Request) {
 	source := chi.URLParam(r, "source")
-	// record() centralises the metric so every return path ticks once
-	// with a coarse status. Per-failure detail stays out — exposing it
-	// would defeat the "all 401s identical" invariant.
+
 	record := func(status string) {
 		webhookCounter().Add(r.Context(), 1,
 			metric.WithAttributes(
@@ -133,9 +131,6 @@ func (h *Handler) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark used AFTER HMAC verifies, regardless of deploy outcome — useful
-	// for "is this CI integration actually hitting us" (a malformed payload
-	// from a known source still counts as proof-of-life).
 	_ = h.Store.MarkWebhookSourceUsed(r.Context(), source)
 
 	var p deploy.Payload
@@ -181,12 +176,11 @@ func parseTimestamp(header string) (int64, error) {
 //
 // and the timestamp must be within MaxClockSkew of the server's clock.
 func (h *Handler) verifyHMAC(ctx context.Context, source string, timestamp int64, body []byte, sigHeader string, tsErr error) error {
-	// Fail fast on missing/bad timestamp — same 401 path.
+
 	if tsErr != nil {
 		return tsErr
 	}
 
-	// Reject stale/future timestamps.
 	now := time.Now().Unix()
 	delta := now - timestamp
 	if delta < 0 {
@@ -218,9 +212,8 @@ func (h *Handler) verifyHMAC(ctx context.Context, source string, timestamp int64
 		return fmt.Errorf("decrypt secret for %s: %w", source, err)
 	}
 
-	// HMAC over timestamp_decimal + body.
 	mac := hmac.New(sha256.New, secret)
-	fmt.Fprint(mac, timestamp) // decimal string of unix seconds
+	fmt.Fprint(mac, timestamp)
 	mac.Write(body)
 	got := mac.Sum(nil)
 

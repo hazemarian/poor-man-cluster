@@ -49,8 +49,6 @@ func Down(ctx context.Context, deps DownDeps, in DownInput) (*DownResult, error)
 	res := &DownResult{}
 	step := func(label string) { fmt.Fprintf(out, "▶ %s\n", label) }
 
-	// Stacks first — removing referenced secrets/configs/networks while
-	// services still hold them would error.
 	step("Removing stacks (infra, edge, observability, backup)")
 	for _, s := range []string{"infra", "edge", "observability", "backup"} {
 		if err := deps.Deployer.RemoveStack(ctx, s); err != nil {
@@ -65,8 +63,6 @@ func Down(ctx context.Context, deps DownDeps, in DownInput) (*DownResult, error)
 		return res, nil
 	}
 
-	// Let Swarm release references; otherwise secret/config removal races
-	// against still-terminating tasks.
 	fmt.Fprintln(out, "  Waiting briefly for stack teardown to settle…")
 	waitTeardownSettle(ctx)
 
@@ -79,7 +75,6 @@ func Down(ctx context.Context, deps DownDeps, in DownInput) (*DownResult, error)
 		res.SecretsRemoved = append(res.SecretsRemoved, name)
 	}
 
-	// Remove versioned cert/key secrets (cert_v001, key_v001, etc.)
 	allSecrets, err := deps.Docker.SecretList(ctx, pmclusterLabel, "true")
 	if err != nil {
 		fmt.Fprintf(out, "  ⚠ secret list: %v\n", err)

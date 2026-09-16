@@ -30,7 +30,6 @@ func TestOpen_CreatesNewKeyFile(t *testing.T) {
 		t.Errorf("key file mode = %o, want 0600", info.Mode().Perm())
 	}
 
-	// The file must be exactly keyBytes (32) long.
 	data, err := os.ReadFile(keyPath)
 	if err != nil {
 		t.Fatalf("ReadFile key: %v", err)
@@ -46,7 +45,6 @@ func TestOpen_ReadsExistingKeyFile(t *testing.T) {
 	dir := t.TempDir()
 	keyPath := filepath.Join(dir, ".encryption_key")
 
-	// Write a known 32-byte key.
 	key := make([]byte, keyBytes)
 	for i := range key {
 		key[i] = byte(i)
@@ -63,7 +61,6 @@ func TestOpen_ReadsExistingKeyFile(t *testing.T) {
 		t.Fatal("Open returned nil Cipher")
 	}
 
-	// File must be unchanged.
 	got, err := os.ReadFile(keyPath)
 	if err != nil {
 		t.Fatalf("ReadFile after Open: %v", err)
@@ -164,7 +161,6 @@ func TestDecrypt_TamperedCiphertext(t *testing.T) {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
-	// Flip a byte in the middle (after the 12-byte nonce, inside the sealed data).
 	tampered := make([]byte, len(ct))
 	copy(tampered, ct)
 	mid := nonceBytes + len(ct[nonceBytes:])/2

@@ -55,8 +55,6 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	// Defensive: refuse to overwrite if the DB has any users (e.g.
-	// migration left a row behind).
 	count, err := st.CountUsers(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("count users: %w", err)

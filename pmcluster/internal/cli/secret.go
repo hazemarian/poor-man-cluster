@@ -67,20 +67,9 @@ var secretDeleteCmd = &cobra.Command{
 	RunE:  runSecretDelete,
 }
 
-var secretImportCmd = &cobra.Command{
-	Use:   "import-credentials",
-	Short: "Import the platform credentials (portainer/edge/traefik/OO) as cluster secrets",
-	Long: `One-time migration helper. Reads the managed_credentials table (the
-encrypted platform passwords pmcluster already generates) and mirrors each
-one into the secrets table with scope=cluster, using the Swarm secret name.
-Safe to run repeatedly — existing secret names are left untouched.`,
-	Args: cobra.NoArgs,
-	RunE: runSecretImportCredentials,
-}
-
 func init() {
 	secretCreateCmd.Flags().String("scope", "service", "scope: cluster or service")
-	secretCmd.AddCommand(secretCreateCmd, secretListCmd, secretShowCmd, secretVerifyCmd, secretDeleteCmd, secretImportCmd)
+	secretCmd.AddCommand(secretCreateCmd, secretListCmd, secretShowCmd, secretVerifyCmd, secretDeleteCmd)
 	rootCmd.AddCommand(secretCmd)
 }
 
@@ -244,56 +233,6 @@ func runSecretDelete(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("delete secret: %w", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Secret %q deleted.\n", name)
-	return nil
-}
-
-func runSecretImportCredentials(cmd *cobra.Command, _ []string) error {
-	st, cfg, err := openStore()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = st.Close() }()
-
-	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
-	if err != nil {
-		return fmt.Errorf("open encryption key: %w", err)
-	}
-
-	creds, err := st.ListCredentials(cmd.Context())
-	if err != nil {
-		return fmt.Errorf("list credentials: %w", err)
-	}
-	if len(creds) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "(no platform credentials to import)")
-		return nil
-	}
-
-	created, skipped := 0, 0
-	for _, c := range creds {
-		plain, err := cipher.Decrypt(c.PasswordCiphertext)
-		if err != nil {
-			return fmt.Errorf("decrypt credential %q: %w", c.Name, err)
-		}
-		// Credentials are normally mirrored to a Swarm secret whose name we
-		// reuse. A few (e.g. the OpenObserve ingestion token) are only stored
-		// in the DB — fall back to the credential name so the secret never
-		// lands with an empty name.
-		name := c.SwarmSecretName
-		if name == "" {
-			name = c.Name
-		}
-		if _, err := st.CreateSecret(cmd.Context(), "cluster", name, c.PasswordCiphertext, secretHash(string(plain))); err != nil {
-			if errors.Is(err, store.ErrSecretExists) {
-				skipped++
-				continue
-			}
-			return fmt.Errorf("import credential %q: %w", c.Name, err)
-		}
-		created++
-		fmt.Fprintf(cmd.OutOrStdout(), "  imported credential %q → secret %q (cluster)\n", c.Name, name)
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "✅ Import complete: %d created, %d already existed (left untouched).\n", created, skipped)
 	return nil
 }
 

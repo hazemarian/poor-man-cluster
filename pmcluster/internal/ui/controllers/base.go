@@ -29,8 +29,8 @@ type Controller struct {
 	Views    *views.Renderer
 	Auth     *middleware.Auth
 	Version  string
-	EnvAPI   string // API base URL from env (fallback when no override set)
-	EnvToken string // API token from env (fallback)
+	EnvAPI   string
+	EnvToken string
 }
 
 // loadParams reads the stored overrides and the env fallbacks into the running

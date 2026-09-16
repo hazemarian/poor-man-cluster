@@ -25,7 +25,6 @@ func TestGenerateToken_RandomAndLongEnough(t *testing.T) {
 		t.Errorf("token too short: %d chars", len(a))
 	}
 
-	// v2 format: pmc_<8 hex>_<base64 secret>
 	if !strings.HasPrefix(a, v2TokenPrefix) {
 		t.Errorf("token missing v2 prefix: %s", a)
 	}
@@ -40,14 +39,14 @@ func TestGenerateToken_RandomAndLongEnough(t *testing.T) {
 	if len(tid) != 8 {
 		t.Errorf("token_id length = %d, want 8", len(tid))
 	}
-	// Verify the token_id is valid hex.
+
 	if _, err := hex.DecodeString(tid); err != nil {
 		t.Errorf("token_id is not valid hex: %s", tid)
 	}
 }
 
 func TestSplitToken_Legacy(t *testing.T) {
-	// A legacy token is just a bare base64 string — no prefix, no underscore.
+
 	tid, sec := SplitToken("some-old-plain-token")
 	if tid != "" {
 		t.Errorf("legacy SplitToken: tokenID = %q, want empty", tid)
@@ -63,8 +62,6 @@ func TestHashAndVerify_RoundTrip(t *testing.T) {
 		t.Fatalf("gen: %v", err)
 	}
 
-	// Split the token and hash only the secret part — that's what the store
-	// should do.
 	_, secret := SplitToken(tok)
 	h, err := HashToken(secret)
 	if err != nil {
@@ -74,7 +71,6 @@ func TestHashAndVerify_RoundTrip(t *testing.T) {
 		t.Errorf("missing hash prefix: %s", h)
 	}
 
-	// Verify with the full token — the verifier also uses only the secret.
 	ok, err := VerifyToken(secret, h)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
@@ -116,7 +112,7 @@ func TestFastHash(t *testing.T) {
 	if len(h) != 64 {
 		t.Errorf("FastHash length = %d, want 64", len(h))
 	}
-	// Deterministic.
+
 	if FastHash("hello") != h {
 		t.Error("FastHash is not deterministic")
 	}

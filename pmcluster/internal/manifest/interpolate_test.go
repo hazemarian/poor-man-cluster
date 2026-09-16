@@ -107,7 +107,7 @@ func TestInterpolate_AliasesExpandBuiltins(t *testing.T) {
 }
 
 func TestInterpolate_DefaultVersionLatest(t *testing.T) {
-	// Parse a manifest where version is not set — Interpolate should default it.
+
 	app, err := Parse([]byte(`
 app: my-app
 env: staging

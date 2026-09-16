@@ -1,14 +1,5 @@
 //go:build e2e
 
-// Package e2e contains tests for the install.sh script.
-// These tests verify the script:
-//   1. Detects the correct user/group/home for the systemd unit.
-//   2. Produces a valid unit file on Linux.
-//   3. Skips systemd logic on non-Linux.
-//
-// Run via: make e2e
-//   (go test -timeout 10m -tags=e2e ./e2e/...)
-
 package e2e
 
 import (
@@ -24,9 +15,7 @@ import (
 // installScriptPath finds the install.sh at the repo root.
 func installScriptPath(t *testing.T) string {
 	t.Helper()
-	// Walk upward from the test CWD until we find install.sh, which lives
-	// in the repo root (one level above the module root, since the module
-	// root is pmcluster/).
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("os.Getwd: %v", err)
@@ -48,23 +37,11 @@ func installScriptPath(t *testing.T) string {
 // simulated Linux environment (PMCLUSTER_FAKE_OS=linux), produces a
 // systemd unit file with correct User, Group, HOME, and ExecStart.
 func TestInstallScriptSystemdUnit(t *testing.T) {
-	_ = installScriptPath(t) // verify the script exists
-
-	// We call the install script directly with bash, not piped from curl.
-	// The script reads uname to detect OS; we override via env if the
-	// script supports it. Since the script strictly checks uname, we
-	// test the unit-generation logic by extracting it into a helper.
-	// Strategy: run install.sh in a temp dir with PREFIX set to a
-	// writable location, and capture the unit it would write.
+	_ = installScriptPath(t)
 
 	tmpDir := t.TempDir()
 	prefix := filepath.Join(tmpDir, "local", "bin")
 
-	// The install script requires curl + GitHub access. To test only the
-	// systemd logic in isolation, we source the logic via bash -c and
-	// exercise the variable detection.
-	//
-	// Test 1: user detection via SUDO_USER env.
 	t.Run("SUDO_USER detection", func(t *testing.T) {
 		out, err := exec.Command("bash", "-c", `
 			SUDO_USER=deployer OS=linux PREFIX=/usr/local/bin
@@ -81,7 +58,6 @@ func TestInstallScriptSystemdUnit(t *testing.T) {
 		}
 	})
 
-	// Test 2: user detection for root (no SUDO_USER).
 	t.Run("root user detection", func(t *testing.T) {
 		out, err := exec.Command("bash", "-c", `
 			OS=linux PREFIX=/usr/local/bin
@@ -91,14 +67,13 @@ func TestInstallScriptSystemdUnit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("user detection script: %v\n%s", err, out)
 		}
-		// Should match the current user (id -un).
+
 		expected := fmt.Sprintf("PMCLUSTER_USER=%s", os.Getenv("USER"))
 		if !strings.Contains(string(out), expected) {
 			t.Errorf("expected %q, got:\n%s", expected, out)
 		}
 	})
 
-	// Test 3: PMCLUSTER_USER override takes priority.
 	t.Run("PMCLUSTER_USER override", func(t *testing.T) {
 		out, err := exec.Command("bash", "-c", `
 			SUDO_USER=deployer PMCLUSTER_USER=customuser OS=linux PREFIX=/usr/local/bin
@@ -113,7 +88,6 @@ func TestInstallScriptSystemdUnit(t *testing.T) {
 		}
 	})
 
-	// Test 4: docker group detection.
 	t.Run("docker group detection", func(t *testing.T) {
 		out, err := exec.Command("bash", "-c", `
 			DOCKER_GROUP="docker"
@@ -125,15 +99,14 @@ func TestInstallScriptSystemdUnit(t *testing.T) {
 		if err != nil {
 			t.Fatalf("docker group script: %v\n%s", err, out)
 		}
-		// macOS doesn't have getent, so group will stay "docker".
+
 		if !strings.Contains(string(out), "DOCKER_GROUP=docker") {
 			t.Errorf("expected DOCKER_GROUP=docker, got:\n%s", out)
 		}
 	})
 
-	// Test 5: generated unit template is well-formed.
 	t.Run("unit template is well-formed", func(t *testing.T) {
-		// Simulate the template as it would be generated.
+
 		unitContent := fmt.Sprintf(`[Unit]
 Description=pmcluster API Server
 After=docker.service
@@ -152,7 +125,6 @@ RestartSec=5
 WantedBy=multi-user.target
 `)
 
-		// Verify all required directives are present.
 		required := []string{
 			"[Unit]",
 			"Description=pmcluster API Server",
@@ -175,7 +147,6 @@ WantedBy=multi-user.target
 			}
 		}
 
-		// Verify no leftover placeholders.
 		if strings.Contains(unitContent, "${") {
 			t.Errorf("unit template contains unresolved variables:\n%s", unitContent)
 		}
@@ -192,7 +163,6 @@ func TestInstallScriptDarwinSkip(t *testing.T) {
 		t.Skip("this test verifies Darwin behaviour; only runs on macOS")
 	}
 
-	// Simulate the OS=docker path in install.sh.
 	out, err := exec.Command("bash", "-c", `
 		OS=darwin PREFIX=/usr/local/bin
 		if [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
@@ -216,18 +186,15 @@ func TestInstallScriptDarwinSkip(t *testing.T) {
 // TestInstallScriptSudoUser ensures that when the script runs as root (sudo),
 // it adds the detected user to the docker group.
 func TestInstallScriptSudoUser(t *testing.T) {
-	// This test only makes sense on Linux where usermod exists.
+
 	if runtime.GOOS != "linux" {
 		t.Skip("usermod only tested on Linux")
 	}
 
-	// Verify usermod is available.
 	if _, err := exec.LookPath("usermod"); err != nil {
 		t.Skip("usermod not found in PATH")
 	}
 
-	// We can't actually run usermod in CI (needs root), but we can verify
-	// the conditional logic evaluates correctly.
 	out, err := exec.Command("bash", "-c", `
 		PMCLUSTER_USER=ubuntu DOCKER_GROUP=docker
 		# Simulate running as root (id -u = 0).
@@ -244,7 +211,6 @@ func TestInstallScriptSudoUser(t *testing.T) {
 		t.Errorf("expected usermod invocation, got:\n%s", out)
 	}
 
-	// When PMCLUSTER_USER is root, usermod should be skipped.
 	out2, err2 := exec.Command("bash", "-c", `
 		PMCLUSTER_USER=root DOCKER_GROUP=docker
 		if [ "0" = "0" ] && [ "$PMCLUSTER_USER" != "root" ]; then
@@ -267,7 +233,7 @@ func TestInstallScriptSudoUser(t *testing.T) {
 func TestInstallScriptStartCondition(t *testing.T) {
 	t.Run("start when config exists", func(t *testing.T) {
 		tmpHome := t.TempDir()
-		// Create fake config.
+
 		pmDir := filepath.Join(tmpHome, ".pmcluster")
 		if err := os.MkdirAll(pmDir, 0700); err != nil {
 			t.Fatalf("mkdir .pmcluster: %v", err)

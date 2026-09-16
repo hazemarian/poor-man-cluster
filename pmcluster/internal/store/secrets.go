@@ -16,7 +16,7 @@ import (
 // be verified and displayed without ever being revealed.
 type SecretRow struct {
 	ID        int64
-	Scope     string // "cluster" | "service"
+	Scope     string
 	Name      string
 	Payload   []byte
 	Hash      string

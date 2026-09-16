@@ -36,9 +36,7 @@ func NewApp(cfg Config) (*App, error) {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
 	seedCtx := context.Background()
-	// Store the provisioned API URL/token ONCE (first boot) so they survive
-	// restarts and are visible/editable in Settings. Respects any existing
-	// value, including an operator's explicit clear.
+
 	if cfg.PMAPIToken != "" {
 		if err := st.SeedSettingOnce(seedCtx, store.KeyToken, cfg.PMAPIToken); err != nil {
 			_ = st.Close()
@@ -74,7 +72,7 @@ func NewApp(cfg Config) (*App, error) {
 		}
 		fu, err := st.FirstUser(ctx)
 		if err != nil {
-			return false, nil // let login flow explain
+			return false, nil
 		}
 		return !fu.PasswordSet, nil
 	}

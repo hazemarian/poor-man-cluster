@@ -111,7 +111,7 @@ func dailyLogFiles(dir string) ([]string, error) {
 			files = append(files, filepath.Join(dir, name))
 		}
 	}
-	sort.Strings(files) // YYYY-MM-DD sorts chronologically as ASCII
+	sort.Strings(files)
 	return files, nil
 }
 
@@ -125,7 +125,7 @@ func readLogLines(path string, sinceCutoff time.Time) ([]string, error) {
 
 	var out []string
 	scan := bufio.NewScanner(f)
-	scan.Buffer(make([]byte, 64*1024), 1024*1024) // 1 MB max line length
+	scan.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scan.Scan() {
 		line := scan.Text()
 		if !sinceCutoff.IsZero() {
@@ -202,7 +202,7 @@ func followLogs(ctx context.Context, dir string, out io.Writer) error {
 			if err != nil {
 				return fmt.Errorf("open %s: %w", latest, err)
 			}
-			// Seek to end so we only emit lines added after this point.
+
 			if _, err := nf.Seek(0, io.SeekEnd); err != nil {
 				_ = nf.Close()
 				return fmt.Errorf("seek %s: %w", latest, err)

@@ -45,7 +45,7 @@ type tlsSiteRow struct {
 	Updated   string
 	DaysLeft  int
 	Note      string
-	Expiring  bool // expiring within expiryWarnDays
+	Expiring  bool
 	Expired   bool
 }
 

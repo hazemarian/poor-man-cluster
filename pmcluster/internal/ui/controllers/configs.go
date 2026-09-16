@@ -18,9 +18,9 @@ type Configs struct{ *Controller }
 
 type configsData struct {
 	Configs  []configRow
-	Editing  *configRow // the config currently being edited (from GET ?name=)
+	Editing  *configRow
 	Versions []configVersionRow
-	Stack    string // when set (per-stack attach), prefill the create form
+	Stack    string
 	Msg      string
 	Error    string
 }

@@ -17,13 +17,8 @@ type StackDeployer interface {
 	DeployStack(ctx context.Context, name string, composeYAML []byte) error
 	RemoveStack(ctx context.Context, name string) error
 
-	// ForceUpdateService restarts all tasks of a service in place; used to
-	// make tasks re-mount a freshly-rotated secret. fullName is "<stack>_<service>".
 	ForceUpdateService(ctx context.Context, fullName string) error
 
-	// PruneStaleContainers removes stopped containers belonging to the
-	// given stack that exited more than olderThan ago (e.g. 10m). Scoped
-	// to a single stack — does NOT touch containers from other stacks.
 	PruneStaleContainers(ctx context.Context, stackName string, olderThan string) error
 }
 
@@ -46,7 +41,7 @@ func NewDockerCLIDeployer(w io.Writer) StackDeployer {
 // and failure.
 func (d *dockerCLIDeployer) runWithOutput(cmd *exec.Cmd) (string, error) {
 	var buf bytes.Buffer
-	// Tee: live progress to the caller's writer AND capture for inspection.
+
 	if d.stdout != nil {
 		cmd.Stdout = io.MultiWriter(&buf, d.stdout)
 		cmd.Stderr = io.MultiWriter(&buf, d.stderr)
@@ -71,10 +66,7 @@ func trimOutput(s string) string {
 }
 
 func (d *dockerCLIDeployer) DeployStack(ctx context.Context, name string, composeYAML []byte) error {
-	// --with-registry-auth forwards ~/.docker/config.json to all nodes
-	// (encrypted via swarm's own keys) so workers can pull private images.
-	// --resolve-image=always ensures new image digests are picked up
-	// even when the tag hasn't changed (e.g. 'latest' re-pushed).
+
 	deploy := func() (string, error) {
 		cmd := exec.CommandContext(ctx, "docker", "stack", "deploy",
 			"--detach=true",
@@ -89,11 +81,7 @@ func (d *dockerCLIDeployer) DeployStack(ctx context.Context, name string, compos
 
 	out, err := deploy()
 	if err != nil {
-		// `docker stack deploy` can race the previous deploy of the same
-		// stack: the manager bumps the service spec versions while the
-		// earlier stack deploy is still settling, so a follow-up deploy
-		// fails with "update out of sequence". This is transient — a
-		// bounded retry re-submits the same compose and succeeds.
+
 		if strings.Contains(out, "update out of sequence") {
 			for i := 1; i <= forceUpdateRetries; i++ {
 				select {
@@ -121,9 +109,6 @@ func (d *dockerCLIDeployer) DeployStack(ctx context.Context, name string, compos
 		}
 	}
 
-	// Force a rolling update for every service in the stack so new images
-	// take effect even when the service config hasn't changed (Docker
-	// Swarm sometimes skips the update when only the image digest differs).
 	if err := d.forceUpdateStackServices(ctx, name); err != nil {
 		return err
 	}
@@ -185,10 +170,7 @@ func (d *dockerCLIDeployer) ForceUpdateService(ctx context.Context, fullName str
 	)
 	out, err := d.runWithOutput(cmd)
 	if err != nil {
-		// Swarm bumps the service spec version while the stack deploy is
-		// still settling; the update we just sent references a stale
-		// version.  Re-read the current spec and retry a bounded number
-		// of times — this is safe because the update is idempotent.
+
 		if strings.Contains(out, "update out of sequence") {
 			for i := 1; i <= forceUpdateRetries; i++ {
 				select {
@@ -217,12 +199,6 @@ func (d *dockerCLIDeployer) ForceUpdateService(ctx context.Context, fullName str
 }
 
 func (d *dockerCLIDeployer) PruneStaleContainers(ctx context.Context, stackName string, olderThan string) error {
-	// List exited containers whose name starts with "<stack>_" (Docker Swarm
-	// naming: <stack>_<service>.<slot>.<task-id>).  Filtering by name scopes
-	// cleanup to the stack being deployed — we never touch other stacks.
-	//
-	// Use docker inspect to check the FinishedAt timestamp so we only
-	// remove containers that have been stopped longer than olderThan.
 
 	listCmd := exec.CommandContext(ctx, "docker", "container", "ls", "-a",
 		"--filter", "status=exited",
@@ -234,7 +210,6 @@ func (d *dockerCLIDeployer) PruneStaleContainers(ctx context.Context, stackName 
 		return fmt.Errorf("docker container ls (stale %s): %s", stackName, listOut)
 	}
 
-	// Parse the olderThan duration string (e.g. "10m", "1h").
 	dur, err := parseDuration(olderThan)
 	if err != nil {
 		return fmt.Errorf("prune: invalid duration %q: %w", olderThan, err)
@@ -246,25 +221,24 @@ func (d *dockerCLIDeployer) PruneStaleContainers(ctx context.Context, stackName 
 			continue
 		}
 
-		// Check if this container has been stopped long enough.
 		inspectCmd := exec.CommandContext(ctx, "docker", "inspect",
 			"--format", "{{.State.FinishedAt}}", id)
 		finishedAt, err := d.runWithOutput(inspectCmd)
 		if err != nil {
-			continue // best-effort
+			continue
 		}
 
 		t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(finishedAt))
 		if err != nil {
-			continue // best-effort
+			continue
 		}
 
 		if time.Since(t) < dur {
-			continue // not stale enough yet
+			continue
 		}
 
 		rmCmd := exec.CommandContext(ctx, "docker", "rm", id)
-		_, _ = d.runWithOutput(rmCmd) // best-effort; prunes exited containers
+		_, _ = d.runWithOutput(rmCmd)
 	}
 	return nil
 }

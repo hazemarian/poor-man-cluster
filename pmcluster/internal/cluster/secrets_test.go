@@ -47,7 +47,7 @@ func TestEnsureSecret_NoOpWhenPreExisting(t *testing.T) {
 	if created {
 		t.Error("created = true, want false for pre-existing secret")
 	}
-	// Data must not be modified.
+
 	if string(f.secrets["my-secret"].Data) != "original" {
 		t.Error("EnsureSecret modified the existing secret data")
 	}
@@ -143,17 +143,14 @@ func TestHtpasswdLine_Format(t *testing.T) {
 		t.Fatalf("HtpasswdLine: %v", err)
 	}
 
-	// Must end with a newline.
 	if !strings.HasSuffix(line, "\n") {
 		t.Errorf("HtpasswdLine does not end with newline: %q", line)
 	}
 
-	// Must start with "admin:".
 	if !strings.HasPrefix(line, "admin:") {
 		t.Errorf("HtpasswdLine does not start with 'admin:': %q", line)
 	}
 
-	// Extract the hash portion (strip "admin:" prefix and trailing newline).
 	trimmed := strings.TrimSuffix(line, "\n")
 	parts := strings.SplitN(trimmed, ":", 2)
 	if len(parts) != 2 {
@@ -161,7 +158,6 @@ func TestHtpasswdLine_Format(t *testing.T) {
 	}
 	hash := parts[1]
 
-	// bcrypt.CompareHashAndPassword must succeed.
 	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte("s3cr3t")); err != nil {
 		t.Errorf("bcrypt comparison failed: %v", err)
 	}
@@ -188,7 +184,7 @@ func TestEnsureConfig_CreatesWhenMissing(t *testing.T) {
 	if string(spec.Data) != "otel: config" {
 		t.Errorf("config data = %q, want 'otel: config'", spec.Data)
 	}
-	// Verify version label.
+
 	if spec.Labels["pmcluster.version"] != "v0.2.0" {
 		t.Errorf("version label = %q, want 'v0.2.0'", spec.Labels["pmcluster.version"])
 	}
@@ -215,7 +211,7 @@ func TestEnsureConfig_CreatesNewVersionWhenPreExisting(t *testing.T) {
 	if string(f.configs[name].Data) != "new config data" {
 		t.Errorf("config data = %q, want 'new config data'", f.configs[name].Data)
 	}
-	// Old version should be garbage-collected.
+
 	if _, exists := f.configs["otel_config_v001"]; exists {
 		t.Error("old config version otel_config_v001 was not removed")
 	}
@@ -284,7 +280,7 @@ func TestEnsureConfig_MintsNewVersionOnChange(t *testing.T) {
 	if name != "otel_config_v002" {
 		t.Errorf("name = %q, want otel_config_v002", name)
 	}
-	// Old version GC'd.
+
 	if _, ok := f.configs["otel_config_v001"]; ok {
 		t.Error("old otel_config_v001 not GC'd after rotate")
 	}

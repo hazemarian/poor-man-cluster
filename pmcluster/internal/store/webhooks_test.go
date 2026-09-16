@@ -136,7 +136,6 @@ func TestDeleteWebhookSource_HappyPath(t *testing.T) {
 		t.Fatalf("DeleteWebhookSource: %v", err)
 	}
 
-	// Verify it is gone.
 	_, err := s.GetWebhookSource(ctx, "to-delete")
 	if err != ErrWebhookSourceNotFound {
 		t.Errorf("expected ErrWebhookSourceNotFound after delete, got %v", err)
@@ -177,7 +176,6 @@ func TestMarkWebhookSourceUsed_PopulatesLastUsedAt(t *testing.T) {
 		t.Fatalf("CreateWebhookSource: %v", err)
 	}
 
-	// Before marking: last_used_at is NULL.
 	before, err := s.GetWebhookSource(ctx, "src")
 	if err != nil {
 		t.Fatalf("GetWebhookSource (before): %v", err)
@@ -190,7 +188,6 @@ func TestMarkWebhookSourceUsed_PopulatesLastUsedAt(t *testing.T) {
 		t.Fatalf("MarkWebhookSourceUsed: %v", err)
 	}
 
-	// After marking: last_used_at is set.
 	after, err := s.GetWebhookSource(ctx, "src")
 	if err != nil {
 		t.Fatalf("GetWebhookSource (after): %v", err)
@@ -207,7 +204,6 @@ func TestMarkWebhookSourceUsed_UnknownSource_NoError(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	// Best-effort: must not return an error for an unknown source.
 	err := s.MarkWebhookSourceUsed(ctx, "ghost")
 	if err != nil {
 		t.Errorf("MarkWebhookSourceUsed on unknown source: %v (want nil — best effort)", err)

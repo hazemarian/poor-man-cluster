@@ -36,7 +36,7 @@ type ManagedCredential struct {
 	SwarmSecretName    string
 	NewlyCreated       bool
 	SwarmSecretCreated bool
-	UsernameChanged    bool // true when username was updated on this bootstrap
+	UsernameChanged    bool
 }
 
 type BootstrapInput struct {
@@ -48,7 +48,7 @@ type CredentialsManager struct {
 	Store    *store.Store
 	Cipher   *credentials.Cipher
 	Docker   docker.Client
-	Deployer StackDeployer // only required for Rotate's force-restart step
+	Deployer StackDeployer
 }
 
 // consumingService maps each managed credential to the swarm service that
@@ -99,8 +99,8 @@ func (m *CredentialsManager) Bootstrap(ctx context.Context, in BootstrapInput) (
 type secretFormat int
 
 const (
-	formatPlain    secretFormat = iota // raw password bytes
-	formatHtpasswd                     // "user:bcrypt(password)\n"
+	formatPlain secretFormat = iota
+	formatHtpasswd
 )
 
 type bootstrapSpec struct {
@@ -140,9 +140,6 @@ func (m *CredentialsManager) ensure(ctx context.Context, spec bootstrapSpec) (*M
 			return nil, fmt.Errorf("decrypt %s: %w", spec.name, err)
 		}
 
-		// OpenObserve ignores env-vars after first boot, so when the
-		// email changes we must also rotate the password.  The caller
-		// (up.go) resets the data volume so the new pair takes effect.
 		if usernameChanged && spec.kind == KindOpenObserve {
 			newPass, err := RandomPassword()
 			if err != nil {
@@ -170,8 +167,6 @@ func (m *CredentialsManager) ensure(ctx context.Context, spec bootstrapSpec) (*M
 			return nil, fmt.Errorf("ensure swarm secret %s: %w", existing.SwarmSecretName, err)
 		}
 
-		// Persist the updated username to the store if it changed (and
-		// we haven't already via the rotate path above).
 		if usernameChanged && spec.kind != KindOpenObserve {
 			if updateErr := m.Store.UpdateCredentialUsername(ctx, spec.name, username); updateErr != nil {
 				return nil, fmt.Errorf("update username for %s: %w", spec.name, updateErr)
@@ -238,15 +233,11 @@ func (m *CredentialsManager) ensure(ctx context.Context, spec bootstrapSpec) (*M
 // has the old value. Operator scales the consuming service to 0 and
 // re-runs.
 func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedCredential, error) {
-	// The OTel root token is set once and cached by OpenObserve on first
-	// boot; rotating it breaks collector ingestion without a destructive
-	// volume reset. Refuse instead of silently wedging the pipeline.
+
 	if name == "openobserve_token" {
 		return nil, fmt.Errorf("cannot rotate %q: OpenObserve caches this token in its data volume on first boot; rotating it would break collector ingestion without a volume reset (it is meant to stay fixed)", name)
 	}
-	// The edge API token is minted as a real daemon "edge" user (hash in the
-	// users table). Rotating the stored value without rewriting the user row
-	// would leave the daemon rejecting the console's Bearer. Refuse.
+
 	if name == "edge_api_token" {
 		return nil, fmt.Errorf("cannot rotate %q: it is the daemon Bearer token for the %q user; rotating it would break the edge console's API access (remove the %q user row and the credential, then re-run to re-provision instead)", name, edgeAPITokenUser, edgeAPITokenUser)
 	}
@@ -277,8 +268,6 @@ func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedC
 		return nil, err
 	}
 
-	// Order matters: Docker refuses to remove a secret in use, so this
-	// fails loud if the consuming service is still running.
 	if err := m.Docker.SecretRemove(ctx, existing.SwarmSecretName); err != nil {
 		return nil, fmt.Errorf("remove old swarm secret %s (is the consuming service still using it?): %w", existing.SwarmSecretName, err)
 	}
@@ -286,8 +275,6 @@ func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedC
 		return nil, fmt.Errorf("re-create swarm secret %s: %w", existing.SwarmSecretName, err)
 	}
 
-	// Best-effort: when no service mapping exists, the secret is still in
-	// place and will be picked up on the next deploy.
 	if svc, ok := consumingService[name]; ok && m.Deployer != nil {
 		if err := m.Deployer.ForceUpdateService(ctx, svc); err != nil {
 			return nil, fmt.Errorf("force-restart %s: %w (new secret IS in place; operator may restart manually)", svc, err)
@@ -336,11 +323,7 @@ func bootstrapSpecs() []bootstrapSpec {
 			swarmSecretName: "zo_root_user_password",
 			format:          formatPlain,
 		},
-		// Edge console credentials. pmcluster mints all three and mirrors them
-		// to Swarm secrets the edge container mounts at /run/secrets/: the UI
-		// login password, the session-cookie HMAC key, and the daemon API token.
-		// The console stores them once on first boot; the secrets matter only
-		// for fresh provisioned volumes (see internal/ui + cmd/edge).
+
 		{
 			name:            "edge_admin",
 			kind:            KindEdge,
@@ -358,15 +341,9 @@ func bootstrapSpecs() []bootstrapSpec {
 			kind:            KindEdge,
 			swarmSecretName: "edge_api_token",
 			format:          formatPlain,
-			// A real daemon Bearer token: minted via auth.GenerateToken and
-			// registered as the "edge" user so the daemon accepts it.
+
 			generate: ensureEdgeAPIToken,
 		},
-		// openobserve_user / openobserve_token are NOT bootstrap credentials:
-		// they are created against the OpenObserve API by OpenObserveProvisioner
-		// (automation admin user + dedicated ingestion token) and kept in the
-		// pmcluster store/config, never mirrored to a Swarm secret or baked into
-		// the OO data volume.
 	}
 }
 

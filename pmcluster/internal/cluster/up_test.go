@@ -31,8 +31,7 @@ func newUpDeps(t *testing.T) (UpDeps, *fakeDocker, *recordingDeployer) {
 
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
-	// Pre-seed bundled services as healthy so WaitHealthyStacks passes in
-	// unit tests (real Docker not available). Each service reports 1/1 replicas.
+
 	for _, name := range bundledServices {
 		f.services[name] = docker.Service{Name: name, Replicas: 1, Desired: 1}
 	}
@@ -75,8 +74,6 @@ func TestUp_DeploysInCorrectOrder(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
-	// Four stacks must be deployed in the documented order (edge right after
-	// infra so its route dependency comes up ASAP).
 	wantOrder := []string{"infra", "edge", "observability", "backup"}
 	if len(deployer.deployedStacks) != len(wantOrder) {
 		t.Fatalf("deployed %d stacks, want %d: %v",
@@ -133,7 +130,7 @@ func TestUp_IncludesCertKeyAndCredentialSecrets(t *testing.T) {
 func TestUp_ValidationError_MissingDomain(t *testing.T) {
 	deps, f, deployer := newUpDeps(t)
 	in := UpInput{
-		Domain:                "", // missing
+		Domain:                "",
 		CertPath:              "/some/cert",
 		KeyPath:               "/some/key",
 		OpenObserveAdminEmail: "ops@example.com",
@@ -144,7 +141,6 @@ func TestUp_ValidationError_MissingDomain(t *testing.T) {
 		t.Fatal("Up: expected error for missing domain, got nil")
 	}
 
-	// Docker must not have been touched.
 	if len(f.networks) > 0 || len(f.secrets) > 0 || len(deployer.deployedStacks) > 0 {
 		t.Error("Up touched docker resources despite validation failure")
 	}
@@ -195,7 +191,7 @@ func TestUp_PreflightFailure_TouchesNothing(t *testing.T) {
 	keyPath := writeTempFile(t, dir, "key.pem", []byte("KEY"))
 
 	deps, f, deployer := newUpDeps(t)
-	// Make Ping fail so preflight aborts immediately.
+
 	f.pingErr = errSentinel
 
 	_, err := Up(context.Background(), deps, UpInput{

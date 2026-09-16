@@ -28,7 +28,6 @@ func TestSiteCertsCRUD(t *testing.T) {
 		UpdatedAt:  now,
 	}
 
-	// Put then get roundtrip.
 	if err := s.PutSiteCert(ctx, row); err != nil {
 		t.Fatalf("PutSiteCert: %v", err)
 	}
@@ -55,7 +54,6 @@ func TestSiteCertsCRUD(t *testing.T) {
 		t.Errorf("hashes = %s/%s, want aa11/bb22", got.CertHash, got.KeyHash)
 	}
 
-	// Put again with new secrets/hashes: updated_at bumps, created_at stays.
 	later := now.Add(time.Hour)
 	row2 := row
 	row2.CertSecret = "cert_v013"
@@ -79,7 +77,6 @@ func TestSiteCertsCRUD(t *testing.T) {
 		t.Errorf("UpdatedAt = %v, want %v", got2.UpdatedAt, later)
 	}
 
-	// Delete then get → not found.
 	if err := s.DeleteSiteCert(ctx, "example.com"); err != nil {
 		t.Fatalf("DeleteSiteCert: %v", err)
 	}
@@ -87,12 +84,10 @@ func TestSiteCertsCRUD(t *testing.T) {
 		t.Errorf("GetSiteCert after delete: err = %v, want ErrSiteCertNotFound", err)
 	}
 
-	// Delete of a missing row is a no-op.
 	if err := s.DeleteSiteCert(ctx, "example.com"); err != nil {
 		t.Errorf("DeleteSiteCert (missing): %v", err)
 	}
 
-	// Get of a never-stored domain → ErrSiteCertNotFound.
 	if _, err := s.GetSiteCert(ctx, "other.com"); !errors.Is(err, ErrSiteCertNotFound) {
 		t.Errorf("GetSiteCert (never stored): err = %v, want ErrSiteCertNotFound", err)
 	}

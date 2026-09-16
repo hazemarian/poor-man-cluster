@@ -45,7 +45,6 @@ func TestLoadComposeFile_KnownStacks(t *testing.T) {
 			}
 			body := string(data)
 
-			// No un-substituted placeholders should remain.
 			if strings.Contains(body, "${DOMAIN}") {
 				t.Error("${DOMAIN} placeholder was not substituted")
 			}
@@ -53,7 +52,6 @@ func TestLoadComposeFile_KnownStacks(t *testing.T) {
 				t.Error("${OPENOBSERVE_ADMIN_EMAIL} placeholder was not substituted")
 			}
 
-			// For stacks that actually use ${DOMAIN}, verify substitution.
 			if stacksWithDomain[s] && !strings.Contains(body, "example.com") {
 				t.Error("substituted domain 'example.com' not found in output")
 			}
@@ -65,7 +63,7 @@ func TestLoadComposeFile_KnownStacks(t *testing.T) {
 // the manager-only control-plane backup agent when DataDir is set, and omits
 // it (with no dangling placeholder) when it isn't.
 func TestLoadComposeFile_BackupControlPlane(t *testing.T) {
-	// DataDir set → control-plane agent present, bind mount substituted.
+
 	in := RenderInput{Domain: "example.com", DataDir: "/root/.pmcluster"}
 	data, err := LoadComposeFile(StackBackup, in)
 	if err != nil {
@@ -87,7 +85,6 @@ func TestLoadComposeFile_BackupControlPlane(t *testing.T) {
 		t.Error("${DATA_DIR} placeholder was not substituted")
 	}
 
-	// No DataDir → agent omitted, no dangling placeholder.
 	in2 := RenderInput{Domain: "example.com"}
 	data2, err := LoadComposeFile(StackBackup, in2)
 	if err != nil {
@@ -117,8 +114,7 @@ func TestLoadComposeFile_SubstitutesOpenObserveEmail(t *testing.T) {
 	if strings.Contains(body, "${OPENOBSERVE_ADMIN_EMAIL}") {
 		t.Error("${OPENOBSERVE_ADMIN_EMAIL} placeholder was not substituted in observability stack")
 	}
-	// Verify our substituted email appears somewhere (it may or may not be in
-	// this stack, but at least no placeholder should remain).
+
 	_ = body
 }
 
@@ -194,20 +190,17 @@ func TestRenderOTelCollectorConfig_ContainsBasicAuth(t *testing.T) {
 	}
 	body := string(data)
 
-	// Verify the Authorization header placeholder is gone.
 	if strings.Contains(body, "__BASIC_AUTH_PLACEHOLDER__") {
 		t.Error("__BASIC_AUTH_PLACEHOLDER__ not substituted")
 	}
 
-	// The template wraps the value in quotes: Authorization: "Basic <b64>"
-	// Find the Authorization line with the quoted value.
 	const prefix = `Authorization: "Basic `
 	idx := strings.Index(body, prefix)
 	if idx < 0 {
 		t.Fatalf("%q not found in rendered config", prefix)
 	}
 	rest := body[idx+len(prefix):]
-	// The base64 value ends at the closing quote.
+
 	end := strings.Index(rest, `"`)
 	if end < 0 {
 		end = len(rest)
@@ -264,18 +257,16 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 	}
 	body := string(data)
 
-	// Must NOT contain obsolete processors.
 	for _, bad := range []string{"drop()", "filter/noise:", "transform:", "recombine"} {
 		if strings.Contains(body, bad) {
 			t.Errorf("rendered config should not contain obsolete processor: %q", bad)
 		}
 	}
 
-	// Logs pipeline uses resourcedetection → resource → filter/skip_filelog for label-based enrichment.
 	if !strings.Contains(body, "[resourcedetection, resource, filter/skip_filelog, batch]") {
 		t.Error("logs pipeline must include resourcedetection + resource + filter/skip_filelog before batch")
 	}
-	// Metrics pipeline uses resourcedetection → resource → transform/metrics.
+
 	if !strings.Contains(body, "[resourcedetection, resource, transform/metrics, batch]") {
 		t.Error("metrics pipeline must include resourcedetection + resource + transform/metrics before batch")
 	}
@@ -294,12 +285,10 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 	}
 	body := string(data)
 
-	// Must use static filelog (not receiver_creator).
 	if strings.Contains(body, "receiver_creator") {
 		t.Error("rendered config should not contain receiver_creator")
 	}
 
-	// Filelog receiver with glob patterns.
 	for _, want := range []string{
 		`/var/lib/docker/containers/*/*-json.log`,
 		`exclude:`,
@@ -313,27 +302,23 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 		}
 	}
 
-	// Must NOT contain the old observer-based approach.
 	if strings.Contains(body, "docker_observer") {
 		t.Error("rendered config should not contain docker_observer")
 	}
 
-	// Must contain the filter/skip_filelog processor with the correct OTTL
-	// expression that matches the `io.pmcluster.skip_filelog` container label.
 	if !strings.Contains(body, "filter/skip_filelog") {
 		t.Error("rendered config should contain filter/skip_filelog processor")
 	}
-	// The rendered YAML escapes dots in the label key with \\.
-	// In the raw template output, dots are preceded by two backslashes.
+
 	skipFilelogExpr := "container.labels.io" + "\\" + "\\" + ".pmcluster" + "\\" + "\\" + ".skip_filelog"
 	if !strings.Contains(body, skipFilelogExpr) {
 		t.Error("rendered config should contain the OTTL filter for io.pmcluster.skip_filelog label")
 	}
-	// The logs pipeline must include filter/skip_filelog before batch.
+
 	if !strings.Contains(body, "processors: [resourcedetection, resource, filter/skip_filelog, batch]") {
 		t.Error("logs pipeline should list filter/skip_filelog processor before batch")
 	}
-	// Verify no old placeholder remains.
+
 	if strings.Contains(body, "__FILELOG_EXCLUDE_PATTERNS__") {
 		t.Error("rendered config should NOT contain __FILELOG_EXCLUDE_PATTERNS__ (label-based approach replaces it)")
 	}
@@ -363,12 +348,11 @@ func TestRenderOTelCollectorConfig_DockerStatsLabels(t *testing.T) {
 			t.Errorf("rendered config missing expected docker_stats mapping: %q", want)
 		}
 	}
-	// The phantom key must not appear as an actual option (with colon); a
-	// comment may mention it, so only match the YAML key form.
+
 	if strings.Contains(body, "metric_labels_to_resource_attributes:") {
 		t.Error("rendered config should NOT contain the non-existent metric_labels_to_resource_attributes option")
 	}
-	// transform/metrics must guard against clobbering the label-derived values.
+
 	for _, want := range []string{`conditions:`, `resource.attributes["service.name"] != nil`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("transform/metrics missing guard condition: %q", want)
@@ -495,7 +479,6 @@ func TestRenderTraefikDynamic_AppendsHostCerts(t *testing.T) {
 	}
 	body := string(data)
 
-	// Host certs referenced at /run/secrets/<versioned secret>.
 	if !strings.Contains(body, "certFile: /run/secrets/hostcert-idlibookfair-com_v001") {
 		t.Errorf("host cert certFile missing:\n%s", body)
 	}
@@ -505,16 +488,15 @@ func TestRenderTraefikDynamic_AppendsHostCerts(t *testing.T) {
 	if !strings.Contains(body, "certFile: /run/secrets/hostcert-abbas-example-com_v007") {
 		t.Errorf("second host cert certFile missing:\n%s", body)
 	}
-	// Cluster's own BYO default cert block is preserved.
+
 	if !strings.Contains(body, "/run/secrets/cert_v001") || !strings.Contains(body, "/run/secrets/key_v001") {
 		t.Errorf("BYO default cert references dropped:\n%s", body)
 	}
-	// Exactly one tls: key in the merged doc.
+
 	if strings.Count(body, "tls:") != 1 {
 		t.Errorf("expected exactly one `tls:` key, got %d:\n%s", strings.Count(body, "tls:"), body)
 	}
 
-	// No host certs → body unchanged.
 	in.HostCerts = nil
 	data2, err := RenderTraefikDynamic(in)
 	if err != nil {
@@ -580,14 +562,14 @@ func TestCORSOriginRegex_MatchesSubdomains(t *testing.T) {
 	}
 
 	deny := []string{
-		"http://example.com",           // wrong scheme
-		"https://example.com:8080",     // port not allowed
-		"https://evil.com",             // different domain
-		"https://example.com.evil.com", // suffix-attack
-		"https://EXAMPLE.COM",          // case mismatch (Traefik regex is case-sensitive; Origin is lowercase per RFC 6454)
-		"https://example.com/",         // trailing slash means a path component is in the Origin
-		"https://-bad.example.com",     // leading hyphen
-		"https://foo..example.com",     // empty label
+		"http://example.com",
+		"https://example.com:8080",
+		"https://evil.com",
+		"https://example.com.evil.com",
+		"https://EXAMPLE.COM",
+		"https://example.com/",
+		"https://-bad.example.com",
+		"https://foo..example.com",
 	}
 	for _, o := range deny {
 		if re.MatchString(o) {
@@ -634,7 +616,7 @@ func TestRenderTraefikDynamic_CORSWired(t *testing.T) {
 	if !strings.Contains(body, `Access-Control-Allow-Credentials: "true"`) {
 		t.Errorf("rendered config missing Access-Control-Allow-Credentials:\n%s", body)
 	}
-	// The pmcluster router is owned by edge-stack.yml labels now, not this file.
+
 	if strings.Contains(body, "routers:") {
 		t.Errorf("file-provider should declare no routers (edge owns pmcluster.<domain>):\n%s", body)
 	}
@@ -705,10 +687,10 @@ func TestCompare_Versions(t *testing.T) {
 		{"v0.1.11", "v0.1.12", -1},
 		{"v0.2.0", "v0.1.99", 1},
 		{"v1.0.0", "v0.99.99", 1},
-		{"v0.1.11", "0.1.12", -1},       // leading v optional
-		{"dev", "v0.1.0", -1},           // "dev" → [0], "v0.1.0" → [0,1,0], so dev < 0.1.0
-		{"v0.10.0", "v0.2.0", 1},        // 10 > 2 numerically
-		{"v0.1.12-alpha", "v0.1.11", 1}, // pre-release ignored, 12 > 11
+		{"v0.1.11", "0.1.12", -1},
+		{"dev", "v0.1.0", -1},
+		{"v0.10.0", "v0.2.0", 1},
+		{"v0.1.12-alpha", "v0.1.11", 1},
 	}
 	for _, tt := range tests {
 		got := Compare(tt.a, tt.b)

@@ -29,7 +29,7 @@ import (
 
 // TestSecretsConfigsE2E runs the DB-backed secrets & configs flow end to end.
 func TestSecretsConfigsE2E(t *testing.T) {
-	// ── Guards ────────────────────────────────────────────────────────────────
+
 	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
 		t.Skip("PMCLUSTER_E2E_SWARM is not set to 1; skipping secrets/configs e2e")
 	}
@@ -40,7 +40,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
-	// ── Swarm bootstrap ───────────────────────────────────────────────────────
 	weInitedSwarm := ensureSwarmActive(t, ctx)
 	if weInitedSwarm {
 		t.Cleanup(func() {
@@ -53,7 +52,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 		})
 	}
 
-	// ── Overlay networks the DSL references ───────────────────────────────────
 	for _, net := range []string{"traefik-net", "monitoring-net"} {
 		netCtx, netCancel := context.WithTimeout(ctx, 30*time.Second)
 		out, err := dockerRun(netCtx, "network", "create", "--driver=overlay", "--attachable", net)
@@ -78,7 +76,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 		}
 	})
 
-	// ── pmcluster init ────────────────────────────────────────────────────────
 	homeDir := t.TempDir()
 	initOut, _, initCode := runCmd(t, homeDir, "init")
 	if initCode != 0 {
@@ -87,7 +84,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 	_ = extractToken(t, initOut)
 	t.Logf("pmcluster init OK (home=%s)", homeDir)
 
-	// ── Shared constants ──────────────────────────────────────────────────────
 	const (
 		secretName  = "e2e_db_pass"
 		secretValue = "s3cr3t-value-123"
@@ -97,7 +93,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 		appName     = "e2esecrets"
 	)
 
-	// Cleanup the Swarm secret + stack regardless of how far the test got.
 	t.Cleanup(func() {
 		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cleanCancel()
@@ -112,7 +107,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 		time.Sleep(3 * time.Second)
 	})
 
-	// ── a) secret create — value shown once, hash displayed ───────────────────
 	t.Run("a-secret-create", func(t *testing.T) {
 		out, errOut, code := runCmd(t, homeDir, "secret", "create", secretName, secretValue)
 		combined := out + errOut
@@ -134,7 +128,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 		t.Logf("secret create OK:\n%s", combined)
 	})
 
-	// ── b) secret list — name + scope + short hash, never plaintext ───────────
 	t.Run("b-secret-list-no-leak", func(t *testing.T) {
 		out, _, code := runCmd(t, homeDir, "secret", "list")
 		if code != 0 {
@@ -151,7 +144,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 		}
 	})
 
-	// ── c) secret show + verify ───────────────────────────────────────────────
 	t.Run("c-secret-show-verify", func(t *testing.T) {
 		out, _, code := runCmd(t, homeDir, "secret", "show", secretName)
 		if code != 0 {
@@ -164,12 +156,11 @@ func TestSecretsConfigsE2E(t *testing.T) {
 			t.Errorf("secret show leaked plaintext!\n%s", out)
 		}
 
-		// Correct value → match.
 		okOut, _, okCode := runCmd(t, homeDir, "secret", "verify", secretName, secretValue)
 		if okCode != 0 || !strings.Contains(okOut, "hash matches") {
 			t.Errorf("verify with correct value should match; code=%d out:\n%s", okCode, okOut)
 		}
-		// Wrong value → non-zero exit + mismatch message.
+
 		badOut, badErr, badCode := runCmd(t, homeDir, "secret", "verify", secretName, "wrong-value")
 		if badCode == 0 {
 			t.Errorf("verify with wrong value should fail; got:\n%s%s", badOut, badErr)
@@ -179,7 +170,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 		}
 	})
 
-	// ── d) config create/get/list ─────────────────────────────────────────────
 	t.Run("d-config-create-get", func(t *testing.T) {
 		out, _, code := runCmd(t, homeDir, "config", "create", configName,
 			"--scope", "service", "--kind", "env", "--value", configV1)
@@ -210,7 +200,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 		}
 	})
 
-	// ── e) config edit → history → rollback ───────────────────────────────────
 	t.Run("e-config-edit-history-rollback", func(t *testing.T) {
 		editOut, _, editCode := runCmd(t, homeDir, "config", "edit", configName, "--value", configV2)
 		if editCode != 0 {
@@ -220,13 +209,11 @@ func TestSecretsConfigsE2E(t *testing.T) {
 			t.Errorf("expected updated confirmation; got:\n%s", editOut)
 		}
 
-		// After the edit, the config holds the new value.
 		getOut, _, getCode := runCmd(t, homeDir, "config", "get", configName)
 		if getCode != 0 || !strings.Contains(getOut, configV2) {
 			t.Errorf("config get should show edited value %q; code=%d out:\n%s", configV2, getCode, getOut)
 		}
 
-		// History must now contain exactly one previous version (the original).
 		histOut, _, histCode := runCmd(t, homeDir, "config", "history", configName)
 		if histCode != 0 {
 			t.Fatalf("pmcluster config history exited %d:\n%s", histCode, histOut)
@@ -235,7 +222,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 			t.Errorf("expected history table header; got:\n%s", histOut)
 		}
 
-		// Roll back (default = most recent version) → original value restored.
 		rbOut, _, rbCode := runCmd(t, homeDir, "config", "rollback", configName)
 		if rbCode != 0 {
 			t.Fatalf("pmcluster config rollback exited %d:\n%s", rbCode, rbOut)
@@ -249,7 +235,6 @@ func TestSecretsConfigsE2E(t *testing.T) {
 		}
 	})
 
-	// ── f) validation: secrets() env ref without service mount must fail ──────
 	t.Run("f-validate-unmounted-secret-ref", func(t *testing.T) {
 		manifestPath := homeDir + "/bad_secret_ref.yaml"
 		manifest := `app: e2ebadref
@@ -278,10 +263,8 @@ services:
 		t.Logf("validation correctly rejected unmounted secrets() ref (exit %d)", code)
 	})
 
-	// ── g) real deploy with secrets() + config() env refs ─────────────────────
 	t.Run("g-deploy-with-env-refs", func(t *testing.T) {
-		// The DSL marks secrets external:true — the Swarm secret must exist.
-		// Pipe the value in via stdin (docker secret create <name> -).
+
 		secCtx, secCancel := context.WithTimeout(ctx, 30*time.Second)
 		secCmd := exec.CommandContext(secCtx, "docker", "secret", "create", secretName, "-")
 		secCmd.Stdin = strings.NewReader(secretValue)
@@ -291,7 +274,7 @@ services:
 		secErr := secCmd.Run()
 		secCancel()
 		if secErr != nil {
-			// "already exists" is fine on re-runs.
+
 			if !strings.Contains(secBuf.String(), "already exists") && !strings.Contains(secErr.Error(), "already exists") {
 				t.Fatalf("docker secret create %s: %v\n%s", secretName, secErr, secBuf.String())
 			}
@@ -330,11 +313,8 @@ services:
 		}
 		t.Logf("deploy with env refs OK:\n%s", combined)
 
-		// Service must exist.
 		assertServiceExists(t, ctx, appName, appName+"_web")
 
-		// Inspect the running service spec — DB_PASS must resolve to the mount
-		// path and ADMIN_ENABLED to the config content.
 		deadline := time.Now().Add(60 * time.Second)
 		var envSpec string
 		var err error
@@ -360,7 +340,6 @@ services:
 			t.Errorf("service env missing ADMIN_ENABLED=%s (config content); got:\n%s", configV1, envSpec)
 		}
 
-		// The secret must be mounted (in the service's secrets list).
 		mountOut, mountErr := dockerRun(ctx, "service", "inspect",
 			"--format", "{{range .Spec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}} {{end}}",
 			appName+"_web")

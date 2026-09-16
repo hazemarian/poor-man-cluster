@@ -14,8 +14,6 @@ import (
 // against the DB-backed config store. Implemented by internal/deploy with a
 // *store.Store; nil means config() refs are rejected at translate time.
 type EnvResolver interface {
-	// ResolveConfig returns the content of a DB config by name.
-	// Errors (e.g. store.ErrConfigNotFound) propagate to the operator.
 	ResolveConfig(ctx context.Context, name string) (string, error)
 }
 
@@ -60,8 +58,6 @@ func TranslateWithResolver(ctx context.Context, app *dsl.App, res EnvResolver) (
 
 	privateNet := app.Name + privateNetSuffix
 
-	// Only emit shared networks at the top level if at least one service
-	// references them.
 	usesTraefikNet := false
 	usesMonitoringNet := false
 
@@ -91,11 +87,6 @@ func TranslateWithResolver(ctx context.Context, app *dsl.App, res EnvResolver) (
 		cf.Networks[monitoringNet] = &composeNetwork{External: true}
 	}
 
-	// Collect every secret referenced by any service AND by the top-level
-	// secrets: key.  This way secrets behave like volumes — referenced in
-	// a service → auto-declared at the top compose level with external:
-	// true.  Env refs (secrets(name)) are NOT auto-mounted; validation
-	// requires the operator to list the secret in the service secrets: too.
 	secretSet := map[string]struct{}{}
 	for _, svc := range app.Services {
 		for _, s := range svc.Secrets {
@@ -144,8 +135,6 @@ func translateService(
 		Secrets:     s.Secrets,
 	}
 
-	// Exposed services join traefik-net (so Traefik can reach them) and
-	// monitoring-net (so OTel can scrape them) on top of the private overlay.
 	cs.Networks = []string{privateNet}
 	if s.Expose != nil {
 		cs.Networks = append(cs.Networks, traefikNet, monitoringNet)
@@ -214,8 +203,7 @@ func translateHealthcheck(s *dsl.Service) *composeHealthcheck {
 
 	switch h.Type {
 	case "pg_isready":
-		// $$ escapes Compose's deploy-time ${VAR} interpolation so
-		// POSTGRES_USER/POSTGRES_DB resolve at runtime inside the container.
+
 		return &composeHealthcheck{
 			Test:     []string{"CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"},
 			Interval: "10s",
@@ -231,10 +219,7 @@ func translateHealthcheck(s *dsl.Service) *composeHealthcheck {
 		if path == "" {
 			path = "/"
 		}
-		// Use 127.0.0.1 (not "localhost"): inside containers localhost can
-		// resolve to IPv6 ::1 while apps commonly bind IPv4 0.0.0.0 only, so a
-		// localhost probe gets "connection refused" and the task is flagged
-		// unhealthy and restart-looped by Swarm even though the app is fine.
+
 		test := fmt.Sprintf("wget -q --spider http://127.0.0.1:%d%s", port, path)
 		return &composeHealthcheck{
 			Test:     []string{"CMD-SHELL", test},
@@ -276,8 +261,6 @@ func translateDeploy(app *dsl.App, name string, s *dsl.Service) *composeDeploy {
 		d.Placement = &composePlacement{Constraints: []string{"node.role == worker"}}
 	}
 
-	// Defaults apply even when Update is nil so re-deploys roll cleanly;
-	// run-once jobs have no update lifecycle.
 	if !s.RunOnce {
 		d.UpdateConfig = translateUpdate(s.Update)
 	}
@@ -322,15 +305,11 @@ func addTraefikLabels(labels map[string]string, app *dsl.App, serviceName string
 	labels["traefik.http.services."+scope+".loadbalancer.server.port"] = fmt.Sprintf("%d", exp.Port)
 	labels["traefik.docker.network"] = traefikNet
 
-	// Determine the middleware attached to every router: the per-app one when
-	// there are aliases (foreign origins) and CORS isn't disabled, else the
-	// cluster-wide cors-default.
 	middleware := "cors-default@file"
 	aliasCORS := len(exp.Aliases) > 0 && !exp.CORSDisabled
 	if aliasCORS {
 		corsName := scope + "-cors"
-		// docker stack deploy interpolates `$` in compose label values, so escape
-		// any literal dollar in the CORS regex (its `...$` terminator) as `$$`.
+
 		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolalloworiginlistregex"] = escapeCompose(buildOriginRegex(exp))
 		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolallowcredentials"] = "true"
 		labels["traefik.http.middlewares."+corsName+".headers.accesscontrolallowmethods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
@@ -340,7 +319,6 @@ func addTraefikLabels(labels map[string]string, app *dsl.App, serviceName string
 		middleware = corsName + "@swarm"
 	}
 
-	// Primary host router.
 	labels["traefik.http.routers."+scope+".rule"] = "Host(`" + exp.Host + "`)"
 	labels["traefik.http.routers."+scope+".entrypoints"] = "websecure"
 	labels["traefik.http.routers."+scope+".tls"] = "true"
@@ -348,8 +326,6 @@ func addTraefikLabels(labels map[string]string, app *dsl.App, serviceName string
 		labels["traefik.http.routers."+scope+".middlewares"] = middleware
 	}
 
-	// One router per alias, sharing the same backend service. Names are
-	// suffixed "-alias<i>" so they never collide with the primary router.
 	for i, alias := range exp.Aliases {
 		aliasScope := fmt.Sprintf("%s-alias%d", scope, i)
 		labels["traefik.http.routers."+aliasScope+".rule"] = "Host(`" + alias + "`)"

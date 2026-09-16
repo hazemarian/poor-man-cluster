@@ -69,9 +69,9 @@ type BackupTrigger interface {
 // Payload is the canonical deploy request. JSON shape is shared by the
 // REST handler and the webhook receiver.
 type Payload struct {
-	AppName  string `json:"app_name,omitempty"` // overrides manifest's `app:`
-	RepoURL  string `json:"repo_url,omitempty"` // metadata only, never fetched
-	Version  string `json:"version,omitempty"`  // overrides manifest's `version:`
+	AppName  string `json:"app_name,omitempty"`
+	RepoURL  string `json:"repo_url,omitempty"`
+	Version  string `json:"version,omitempty"`
 	Manifest string `json:"manifest"`
 }
 
@@ -98,8 +98,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *DeployResult, ret
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
 	start := time.Now()
-	// stackName isn't known until after Parse; record what we can on
-	// the span/metrics from a deferred closure.
+
 	stackName := ""
 	defer func() {
 		status := "ok"
@@ -164,8 +163,6 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *DeployResult, ret
 		return nil, fmt.Errorf("record deploy: %w", err)
 	}
 
-	// Run pre-deploy backup.  Best-effort by default; abort if
-	// strict_backup: true and the backup fails.
 	if app.BackupBeforeDeploy {
 		backupErr := s.runPreDeployBackup(ctx, app.Name, revision)
 		if backupErr != nil && app.StrictBackup {
@@ -174,17 +171,10 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *DeployResult, ret
 	}
 
 	if err := s.Deployer.DeployStack(ctx, app.Name, rendered); err != nil {
-		// "Recorded but not applied" is intentional — operator can see
-		// what was attempted and re-deploy or rollback.
+
 		return nil, fmt.Errorf("docker stack deploy: %w", err)
 	}
 
-	// Prune stopped containers belonging to THIS stack that exited more
-	// than 10 minutes ago.  Docker Swarm keeps old task containers after
-	// rolling updates; they accumulate disk space and stale container log
-	// files that the OTel filelog receiver still watches.  Scoped to the
-	// deployed stack only — never touches containers from other stacks.
-	// Best-effort — don't fail the deploy if pruning errors out.
 	_ = s.Deployer.PruneStaleContainers(ctx, app.Name, "10m")
 
 	return &DeployResult{

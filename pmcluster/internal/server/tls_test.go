@@ -106,7 +106,7 @@ func newHostTLSServer(t *testing.T) (*httptest.Server, *int, *store.Store) {
 			Remove: func(ctx context.Context, host string) error {
 				refreshes++
 				if _, err := st.GetSiteCert(ctx, host); err != nil {
-					return err // ErrSiteCertNotFound → 404, mirroring RemoveCert
+					return err
 				}
 				return st.DeleteSiteCert(ctx, host)
 			},
@@ -318,7 +318,7 @@ func TestHostCertAPI_ApplyError_ReportsError(t *testing.T) {
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", resp.StatusCode)
 	}
-	// Row not persisted.
+
 	if _, err := st.GetSiteCert(context.Background(), "fail.example.com"); err == nil {
 		t.Errorf("row should not persist when Apply fails")
 	}

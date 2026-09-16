@@ -104,7 +104,6 @@ func TestCreateUser_UniqueTokenID(t *testing.T) {
 		t.Fatalf("first CreateUser: %v", err)
 	}
 
-	// Re-hash the same secret with a different user name and same token_id.
 	h2, _ := auth.HashToken(secret)
 	_, err = s.CreateUser(ctx, "bob", tid, h2)
 	if err == nil {
@@ -152,7 +151,6 @@ func TestUserByToken(t *testing.T) {
 		}
 	})
 
-	// Set up three v2 users.
 	tokAlice, _, _ := createV2User(t, s, "alice")
 	tokBob, _, _ := createV2User(t, s, "bob")
 	tokCarol, _, _ := createV2User(t, s, "carol")
@@ -199,7 +197,6 @@ func TestUserByTokenLegacy(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	// Insert a legacy-style user: empty tokenID, hash of a plain token.
 	legacyToken := "old-plain-legacy-token"
 	h, err := auth.HashToken(legacyToken)
 	if err != nil {
@@ -220,7 +217,6 @@ func TestUserByTokenLegacy(t *testing.T) {
 		t.Errorf("legacy user.Name = %q, want 'legacy-user'", u.Name)
 	}
 
-	// Unknown legacy token still returns nil.
 	u, err = s.UserByToken(ctx, "nonexistent-legacy-token")
 	if err != nil {
 		t.Fatalf("UserByToken (legacy unknown): %v", err)
@@ -245,7 +241,6 @@ func TestListUsers(t *testing.T) {
 		}
 	})
 
-	// Insert names out of alphabetical order to prove ORDER BY name.
 	createV2User(t, s, "charlie")
 	createV2User(t, s, "alice")
 	createV2User(t, s, "bob")

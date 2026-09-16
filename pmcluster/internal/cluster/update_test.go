@@ -108,8 +108,6 @@ func TestUpdate_VersionBumpRedeploysEdgeWithPinnedTag(t *testing.T) {
 	t.Setenv(EdgeImageEnv, "")
 	deps, cfgDir := seedUpdateState(t)
 
-	// A pmcluster version bump with no PMCLUSTER_EDGE_IMAGE set must re-deploy
-	// the edge: its image tag follows the binary version (e.g. :v0.3.1).
 	origVersion := buildinfo.Version
 	t.Cleanup(func() { buildinfo.Version = origVersion })
 	buildinfo.Version = "v0.3.1"
@@ -136,7 +134,6 @@ func TestUpdate_VersionBumpRedeploysEdgeWithPinnedTag(t *testing.T) {
 func TestUpdate_EdgeImagePinRedeploysEdge(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 
-	// Sanity: unchanged update with the env unset must NOT redeploy edge.
 	t.Setenv(EdgeImageEnv, "")
 	noopUp := &recordingDeployer{}
 	deps.Deployer = noopUp
@@ -147,7 +144,6 @@ func TestUpdate_EdgeImagePinRedeploysEdge(t *testing.T) {
 		t.Fatalf("expected no deploy on no-op update, got %v", noopUp.deployedStacks)
 	}
 
-	// Now pin a new edge tag → edge must be the ONLY stack re-deployed.
 	t.Setenv(EdgeImageEnv, "v9.9.9")
 	pinUp := &recordingDeployer{}
 	deps.Deployer = pinUp
@@ -177,8 +173,7 @@ func TestUpdate_ConfigsUseSeedVersionedNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	// After the seed up created pmcluster_otel_config_v001, an unchanged
-	// update must reuse that same version rather than minting v002.
+
 	if res.OTelConfig != "pmcluster_otel_config_v001" {
 		t.Errorf("OTelConfig = %q, want pmcluster_otel_config_v001 (reused)", res.OTelConfig)
 	}
@@ -244,8 +239,7 @@ func TestUpdate_TLSNotACMEWithoutCertPathsErrorsIfNoACMEEmail(t *testing.T) {
 	cipher := openTestCipher(t, filepath.Join(dir, ".key"))
 
 	ctx := context.Background()
-	// Persist ONLY the domain — deliberately NO tls_mode / cert / key / acme
-	// rows, mimicking a box that predates TLS-state persistence.
+
 	if err := s.SetSetting(ctx, settingDomain, "test.example.com"); err != nil {
 		t.Fatalf("persist domain: %v", err)
 	}

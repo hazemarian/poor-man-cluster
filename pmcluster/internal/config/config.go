@@ -13,9 +13,9 @@ import (
 
 // Config is the resolved runtime config; constructed via Load.
 type Config struct {
-	ListenAddr string `mapstructure:"listen_addr"` // default 127.0.0.1:9090
-	DataDir    string `mapstructure:"data_dir"`    // default $HOME/.pmcluster
-	LogLevel   string `mapstructure:"log_level"`   // debug|info|warn|error
+	ListenAddr string `mapstructure:"listen_addr"`
+	DataDir    string `mapstructure:"data_dir"`
+	LogLevel   string `mapstructure:"log_level"`
 
 	// OTLPEndpoint is the base URL of the OTel Collector that
 	// pmcluster's own daemon ships traces/metrics/logs to. The
@@ -55,8 +55,7 @@ func Load(configPath string) (*Config, error) {
 	v := viper.New()
 	v.SetEnvPrefix("PMCLUSTER")
 	v.AutomaticEnv()
-	// SetDefault is required for AutomaticEnv to bind the keys —
-	// otherwise viper has no idea PMCLUSTER_LISTEN_ADDR maps to listen_addr.
+
 	v.SetDefault("listen_addr", cfg.ListenAddr)
 	v.SetDefault("data_dir", cfg.DataDir)
 	v.SetDefault("log_level", cfg.LogLevel)

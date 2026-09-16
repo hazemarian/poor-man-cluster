@@ -21,7 +21,7 @@ const (
 
 // tlsState is the persisted TLS install state.
 type tlsState struct {
-	Mode      string // "cert" | "acme" | "" when never installed
+	Mode      string
 	CertPath  string
 	KeyPath   string
 	ACMEEmail string

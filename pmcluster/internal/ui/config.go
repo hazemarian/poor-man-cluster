@@ -16,15 +16,15 @@ import (
 
 // Config holds every tunable for the UI service, sourced from the environment.
 type Config struct {
-	ListenAddr      string        // HTTP listen address (default ":8080")
-	DataDir         string        // directory holding the SQLite DB (default "./data")
-	PMAPIURL        string        // default pmcluster API base URL
-	PMAPIToken      string        // default API Bearer token (overridable from Settings)
-	EnvUser         string        // optional: pre-seed a user from env
-	EnvPass         string        // optional: password for the env-seeded user
-	SessionSecret   []byte        // HMAC key for session cookies
-	CookieName      string        // session cookie name (default "pmui_session")
-	UpstreamTimeout time.Duration // per-call timeout to the pmcluster API
+	ListenAddr      string
+	DataDir         string
+	PMAPIURL        string
+	PMAPIToken      string
+	EnvUser         string
+	EnvPass         string
+	SessionSecret   []byte
+	CookieName      string
+	UpstreamTimeout time.Duration
 	AppVersion      string
 }
 

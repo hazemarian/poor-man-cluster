@@ -31,11 +31,10 @@ const edgeAdminToken = "pmc-e2e-test-token"
 
 // TestEdgeCombined verifies the combined console + reverse-proxy edge.
 func TestEdgeCombined(t *testing.T) {
-	// ── Step 1: fake pmcluster daemon ────────────────────────────────────────
+
 	daemon := newFakeDaemon(t)
 	defer daemon.Close()
 
-	// ── Step 2: start the combined edge binary ───────────────────────────────
 	dataDir := t.TempDir()
 	edgeAddr := freePort(t)
 
@@ -75,12 +74,11 @@ func TestEdgeCombined(t *testing.T) {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse // don't follow; assert on redirects
+			return http.ErrUseLastResponse
 		},
 	}
 	base := "http://" + edgeAddr
 
-	// Helper asserting an arbitrary path reaches the fake daemon (proxied).
 	proxied := func(t *testing.T, path string, wantStatus int, wantBody string) {
 		t.Helper()
 		resp, err := client.Get(base + path)
@@ -97,7 +95,6 @@ func TestEdgeCombined(t *testing.T) {
 		}
 	}
 
-	// ── Step 3: reverse proxy reaches the daemon ─────────────────────────────
 	t.Run("proxy reverses /health to daemon", func(t *testing.T) {
 		proxied(t, "/health", http.StatusOK, `"poked_by":"daemon"`)
 	})
@@ -128,7 +125,6 @@ func TestEdgeCombined(t *testing.T) {
 		proxied(t, "/some/deep/path", http.StatusNotFound, "")
 	})
 
-	// ── Step 4: console routes are served locally, not proxied ─────────────
 	t.Run("GET / redirects to /setup on first run", func(t *testing.T) {
 		resp, err := client.Get(base + "/")
 		if err != nil {
@@ -145,17 +141,16 @@ func TestEdgeCombined(t *testing.T) {
 	})
 
 	t.Run("GET /setup serves the setup page", func(t *testing.T) {
-		proxied(t, "/setup", http.StatusOK, "setup") // rendered locally
+		proxied(t, "/setup", http.StatusOK, "setup")
 	})
 
-	// ── Step 5: probe /stacks is proxied (not a console route) ──────────────
 	t.Run("GET /stacks without session redirects to login (local route)", func(t *testing.T) {
 		resp, err := client.Get(base + "/stacks")
 		if err != nil {
 			t.Fatalf("GET /stacks: %v", err)
 		}
 		defer resp.Body.Close()
-		// /stacks is a protected console route -> bounces to /login.
+
 		if resp.StatusCode != http.StatusFound && resp.StatusCode != http.StatusOK {
 			t.Errorf("status = %d, want redirect or login", resp.StatusCode)
 		}
@@ -179,8 +174,8 @@ func TestEdgeRateLimit(t *testing.T) {
 		"DATA_DIR="+dataDir,
 		"PMCLUSTER_UI_SECRET=0123456789abcdef0123456789abcdef",
 		"PMCLUSTER_API_TOKEN="+edgeAdminToken,
-		"API_RATE=1",  // 1 request/sec
-		"API_BURST=2", // burst of 2 -> 3rd immediate request is 429
+		"API_RATE=1",
+		"API_BURST=2",
 		"WEBHOOK_RATE=40",
 		"WEBHOOK_BURST=60",
 	)
@@ -238,7 +233,6 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 		_ = json.NewEncoder(w).Encode(v)
 	}
 
-	// All /api and /health and catch-all paths get canned responses.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
 			write(w, map[string]any{"status": "ok", "poked_by": "daemon"})
@@ -246,8 +240,7 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 		}
 		switch r.URL.Path {
 		case "/api/me":
-			// Auth enforcement is the daemon's job (covered by smoke_test); this
-			// fake is lenient so we can assert on the proxy pass-through alone.
+
 			write(w, map[string]any{"id": 1, "name": "admin"})
 		case "/api/cluster/info":
 			write(w, map[string]any{"node_name": "e2e", "server_version": "25.0.0", "os": "linux", "arch": "amd64", "cpus": 4, "memory_bytes": 8266366976, "swarm": map[string]any{"state": "active", "control_available": true, "managers": 1, "nodes": 2}})
@@ -256,7 +249,7 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 		case "/api/stacks":
 			write(w, []map[string]any{})
 		default:
-			// Used to prove the catch-all NotFound reversal reaches the daemon.
+
 			write(w, map[string]any{"marker": "proxy-catch-all"})
 		}
 	})

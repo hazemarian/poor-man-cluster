@@ -89,8 +89,7 @@ type LocalTrigger struct {
 }
 
 func (lt LocalTrigger) Trigger(ctx context.Context) ([]string, error) {
-	// Flush SQLite WAL before the volume snapshot to avoid incomplete
-	// database state in the backup tarball.
+
 	if lt.Store != nil {
 		if err := lt.Store.WALCheckpoint(ctx); err != nil {
 			return nil, fmt.Errorf("wal checkpoint before backup: %w", err)
@@ -155,8 +154,7 @@ func findLocalContainer(ctx context.Context) (string, error) {
 	if id == "" {
 		return "", errors.New("no offen backup container running on this host (is the backup stack deployed?)")
 	}
-	// Defensive: mode=global should give one container per node, but trim
-	// to the first line if Docker ever returns more.
+
 	if idx := strings.IndexByte(id, '\n'); idx >= 0 {
 		id = id[:idx]
 	}

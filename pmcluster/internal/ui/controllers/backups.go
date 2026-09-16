@@ -11,7 +11,7 @@ type Backups struct{ *Controller }
 
 type backupsData struct {
 	Backups []backupRow
-	Name    string // when scoped to a stack
+	Name    string
 	Error   string
 	Msg     string
 }

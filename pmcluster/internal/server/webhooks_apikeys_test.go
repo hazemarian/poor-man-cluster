@@ -242,7 +242,7 @@ func TestAPIKeyAPI(t *testing.T) {
 
 	var createdID int64
 	t.Run("delete by id → 204, then 404", func(t *testing.T) {
-		// Find the created user's id from the list.
+
 		resp := doJSON(t, http.MethodGet, base, "tok", nil)
 		list := decodeBody[struct {
 			Keys []struct {
@@ -296,8 +296,6 @@ func TestAPIKeyDeleteGuards(t *testing.T) {
 		t.Fatalf("credentials.Open: %v", err)
 	}
 
-	// "tok" authenticates as admin (id 1) — the self-delete target.
-	// Seed admin first so "edge" gets id 2 (distinct from self-delete id 1).
 	seedUser(t, st, "admin")
 	seedUser(t, st, "edge")
 
