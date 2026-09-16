@@ -57,7 +57,7 @@ make build         # → ./bin/pmcluster
 | `backup create/list` | On-demand backups |
 | `webhook add/list/remove` | Manage HMAC webhook sources |
 | `user create/list/remove` | Manage operator users (v2 tokens `pmc_<token_id>_<secret>`) |
-| `credentials list/show/rotate` | Bootstrap + edge credentials (AES-GCM encrypted) |
+| `credentials list/show/set/rotate` | Bootstrap + edge credentials (AES-GCM encrypted); `set` syncs credential + Swarm secret + console secrets row |
 | `registry add/list/remove` | Private registry credentials (docker login) |
 | `tls hosts add/list/remove` | Per-host TLS certificates for customer domains |
 | `node list/join-token` | Node and join-token management |

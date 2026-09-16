@@ -81,7 +81,7 @@ Single static binary, lives on the manager host. Replaces the bash setup script 
 - `pmcluster cluster status` / `cluster down`
 - `pmcluster serve` — runs the long-running daemon (REST API + webhook receiver). Listens on `127.0.0.1:9090`; Traefik routes `pmcluster.<domain>` to it via `host.docker.internal:host-gateway`
 - `pmcluster deploy <file>` / `pmcluster stack list|show` / `pmcluster rollback <stack> <rev>` — DSL-based application deploys with versioned rollback
-- `pmcluster credentials list|show|rotate` — managed bootstrap passwords (Traefik / Portainer / OpenObserve)
+- `pmcluster credentials list|show|set|rotate` — managed bootstrap passwords (Traefik / Portainer / OpenObserve); `set` syncs the stored credential, its Swarm secret and the console secrets row to a known value
 - `pmcluster registry add|list|remove` — Docker registry credentials, replayed on `serve` startup so private images keep pulling
 - `pmcluster webhook add|list|remove` — HMAC-signed webhook sources for CI integrations (timestamped to prevent replay)
 - `pmcluster tls hosts add|list|remove` — per-host TLS certificates for customer domains served by Traefik (independent of the cluster wildcard cert)

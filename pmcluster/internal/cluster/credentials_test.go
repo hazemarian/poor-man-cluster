@@ -478,3 +478,101 @@ func TestRotate_SpecNotFound_ReturnsError(t *testing.T) {
 		t.Errorf("expected 'no spec for credential kind' in error, got: %v", err)
 	}
 }
+
+func TestSet_SyncsAllStores(t *testing.T) {
+	mgr, f, _ := bootstrapForRotate(t)
+	ctx := context.Background()
+
+	orig, err := mgr.Store.GetCredential(ctx, "portainer")
+	if err != nil {
+		t.Fatalf("GetCredential: %v", err)
+	}
+
+	// Seed a DB secrets row mirroring the import flow: name == SwarmSecretName,
+	// payload == the credential's ciphertext.
+	if _, err := mgr.Store.CreateSecret(ctx, "cluster", "", "portainer_admin_password",
+		orig.PasswordCiphertext, store.SecretHash("old-password")); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+
+	oldSecretData := f.secrets["portainer_admin_password"].Data
+
+	const want = "f3ZHGAraOKtuF1ocYswzVzsle7BopnY-"
+	updated, err := mgr.Set(ctx, "portainer", want)
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if updated.Name != "portainer" || updated.Password != want || updated.Username != "admin" {
+		t.Errorf("updated = %+v, want name=portainer password=%q username=admin", updated, want)
+	}
+	if updated.SwarmSecretCreated {
+		t.Error("SwarmSecretCreated = true, want false (secret pre-existed and is immutable)")
+	}
+
+	cred, err := mgr.Store.GetCredential(ctx, "portainer")
+	if err != nil {
+		t.Fatalf("GetCredential after Set: %v", err)
+	}
+	plain, err := mgr.Cipher.Decrypt(cred.PasswordCiphertext)
+	if err != nil {
+		t.Fatalf("decrypt credential: %v", err)
+	}
+	if string(plain) != want {
+		t.Errorf("credential password = %q, want %q", plain, want)
+	}
+	if !cred.RotatedAt.Valid {
+		t.Error("RotatedAt should be stamped after Set")
+	}
+
+	sec, err := mgr.Store.GetSecret(ctx, "portainer_admin_password")
+	if err != nil {
+		t.Fatalf("GetSecret: %v", err)
+	}
+	secPlain, err := mgr.Cipher.Decrypt(sec.Payload)
+	if err != nil {
+		t.Fatalf("decrypt db secret: %v", err)
+	}
+	if string(secPlain) != want {
+		t.Errorf("db secret value = %q, want %q", secPlain, want)
+	}
+
+	if got := f.secrets["portainer_admin_password"].Data; string(got) != string(oldSecretData) {
+		t.Errorf("swarm secret changed (got %q, want %q) — secrets are immutable while mounted", got, oldSecretData)
+	}
+}
+
+func TestSet_CreatesMissingSwarmSecret(t *testing.T) {
+	mgr, f, _ := bootstrapForRotate(t)
+	ctx := context.Background()
+
+	if err := f.SecretRemove(ctx, "portainer_admin_password"); err != nil {
+		t.Fatalf("SecretRemove: %v", err)
+	}
+
+	const want = "mypassword123"
+	updated, err := mgr.Set(ctx, "portainer", want)
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if !updated.SwarmSecretCreated {
+		t.Error("SwarmSecretCreated = false, want true (secret was missing and got created)")
+	}
+	if _, ok := f.secrets["portainer_admin_password"]; !ok {
+		t.Fatal("portainer_admin_password secret should be recreated")
+	}
+}
+
+func TestSet_GuardsAndValidation(t *testing.T) {
+	mgr, _, _ := bootstrapForRotate(t)
+	ctx := context.Background()
+
+	if _, err := mgr.Set(ctx, "edge_api_token", "x"); err == nil {
+		t.Error("Set(edge_api_token) should be refused")
+	}
+	if _, err := mgr.Set(ctx, "missing_cred", "x"); !errors.Is(err, store.ErrCredentialNotFound) {
+		t.Errorf("Set(missing) err = %v, want ErrCredentialNotFound", err)
+	}
+	if _, err := mgr.Set(ctx, "portainer", "   "); err == nil {
+		t.Error("Set with blank password should fail")
+	}
+}
