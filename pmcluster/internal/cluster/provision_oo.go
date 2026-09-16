@@ -5,10 +5,24 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/openobserve"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+)
+
+// provisionRetryAttempts / provisionRetryDelay bound how long EnsureUserAndToken
+// keeps retrying OpenObserve API calls. On a FRESH `cluster up` there is a
+// window where OpenObserve is healthy (its container is up) but Traefik has not
+// yet registered the router for observ.<domain> — the very first provisioning
+// call then answers "404 page not found" (Traefik's no-router response). Once
+// the router is registered the call succeeds, so a short bounded retry turns a
+// spurious fresh-cluster-up failure into a success. In steady state (long-
+// running OpenObserve) the first attempt just works.
+const (
+	provisionRetryAttempts = 10
+	provisionRetryDelay    = 2 * time.Second
 )
 
 // provisionedOpenObserveCreds are the managed credentials the provisioner owns.
@@ -62,6 +76,27 @@ func (p *OpenObserveProvisioner) printf(format string, args ...any) {
 // password rotation never re-mints the token and never changes the collector
 // config — the whole point of the decoupling.
 func (p *OpenObserveProvisioner) EnsureUserAndToken(ctx context.Context) (userCred, tokenCred *store.ManagedCredential, err error) {
+	var lastErr error
+	for attempt := 1; attempt <= provisionRetryAttempts; attempt++ {
+		if attempt > 1 {
+			p.printf("  ⏳ OpenObserve not ready yet (attempt %d/%d)…\n", attempt, provisionRetryAttempts)
+			select {
+			case <-ctx.Done():
+				return nil, nil, fmt.Errorf("provision OpenObserve: %w", ctx.Err())
+			case <-time.After(provisionRetryDelay):
+			}
+		}
+		userCred, tokenCred, lastErr = p.ensureUserAndTokenOnce(ctx)
+		if lastErr == nil {
+			return userCred, tokenCred, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("provision OpenObserve after %d attempts: %w", provisionRetryAttempts, lastErr)
+}
+
+// ensureUserAndTokenOnce performs a single provisioning pass. Idempotent: any
+// rows already present are reused untouched (see EnsureUserAndToken).
+func (p *OpenObserveProvisioner) ensureUserAndTokenOnce(ctx context.Context) (userCred, tokenCred *store.ManagedCredential, err error) {
 	root, err := p.Store.GetCredential(ctx, "openobserve_admin")
 	if err != nil {
 		return nil, nil, fmt.Errorf("load openobserve_admin (run bootstrap first): %w", err)
