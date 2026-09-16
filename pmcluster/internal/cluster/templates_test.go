@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
 )
 
@@ -729,7 +730,19 @@ func TestShouldOverwriteConfig_StaleOrMissing(t *testing.T) {
 func TestEdgeImageFor(t *testing.T) {
 	t.Setenv(EdgeImageEnv, "")
 
-	t.Run("defaults to latest", func(t *testing.T) {
+	t.Run("defaults to the release version tag", func(t *testing.T) {
+		origVersion := buildinfo.Version
+		t.Cleanup(func() { buildinfo.Version = origVersion })
+		buildinfo.Version = "v0.2.30"
+		if got := EdgeImageFor(); got != EdgeImageBase+":v0.2.30" {
+			t.Errorf("EdgeImageFor() = %q, want %q", got, EdgeImageBase+":v0.2.30")
+		}
+	})
+
+	t.Run("dev builds fall back to latest", func(t *testing.T) {
+		origVersion := buildinfo.Version
+		t.Cleanup(func() { buildinfo.Version = origVersion })
+		buildinfo.Version = "dev"
 		if got := EdgeImageFor(); got != EdgeImageBase+":latest" {
 			t.Errorf("EdgeImageFor() = %q, want %q", got, EdgeImageBase+":latest")
 		}

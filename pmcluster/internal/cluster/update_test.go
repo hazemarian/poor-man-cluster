@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
@@ -99,25 +100,33 @@ func TestUpdate_NoOpWhenNothingChanged(t *testing.T) {
 	}
 }
 
-// TestUpdate_DefaultEdgeImageLatest verifies the edge stack pins :latest by
-// default (decoupled from the pmcluster build version), so a version bump does
-// NOT churn the edge deploy.
-func TestUpdate_DefaultEdgeImageLatest(t *testing.T) {
+// TestUpdate_VersionBumpRedeploysEdgeWithPinnedTag verifies the edge stack
+// pins the pmcluster release tag by default, so a version bump re-renders the
+// edge stack with the new tag and re-deploys the edge. This keeps the edge
+// image in lock-step with the binary (no more stale :latest on nodes).
+func TestUpdate_VersionBumpRedeploysEdgeWithPinnedTag(t *testing.T) {
 	t.Setenv(EdgeImageEnv, "")
 	deps, cfgDir := seedUpdateState(t)
 
-	// A pmcluster version bump with no PMCLUSTER_EDGE_IMAGE set must NOT deploy
-	// anything: the edge stays on :latest and everything else is unchanged.
+	// A pmcluster version bump with no PMCLUSTER_EDGE_IMAGE set must re-deploy
+	// the edge: its image tag follows the binary version (e.g. :v0.3.1).
+	origVersion := buildinfo.Version
+	t.Cleanup(func() { buildinfo.Version = origVersion })
+	buildinfo.Version = "v0.3.1"
+
 	res, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.1"})
 	if err != nil {
 		t.Fatalf("bump Update: %v", err)
 	}
-	if res.EdgeDeployed {
-		t.Error("version bump should NOT redeploy the edge when the image is pinned to :latest")
+	if !res.EdgeCreated {
+		t.Error("version bump should re-render the edge stack (new pinned tag → EdgeCreated)")
+	}
+	if !res.EdgeDeployed {
+		t.Error("version bump should re-deploy the edge with the new pinned tag")
 	}
 	deployer := deps.Deployer.(*recordingDeployer)
-	if len(deployer.deployedStacks) != 0 {
-		t.Errorf("expected no stacks deployed on version bump, got %v", deployer.deployedStacks)
+	if len(deployer.deployedStacks) != 1 || deployer.deployedStacks[0].Name != "edge" {
+		t.Errorf("expected only the edge stack to be deployed on version bump, got %v", deployer.deployedStacks)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 )
 
@@ -53,26 +54,37 @@ var composeFile = map[stackName]string{
 }
 
 // EdgeImageBase is the image registry/repo prefix for the pmcluster-edge
-// container. The edge image is versioned independently of pmcluster — anyone
-// can build + push it on its own — so by default the edge stack pins :latest.
+// container. The edge image is published alongside pmcluster (the release
+// pipeline builds + pushes it for every tag), so the edge stack pins the
+// matching release tag by default.
 const EdgeImageBase = "ghcr.io/nextrum-sy/pmcluster-edge"
 
 // EdgeImageEnv overrides the edge image reference in the rendered edge stack.
 // It's a way to pin a specific release (e.g. PMCLUSTER_EDGE_IMAGE=v0.2.21, or a
 // full custom ref like registry.example.com/pmcluster-edge:edge-1.2). When
-// unset, the stack uses EdgeImageBase:latest.
+// unset, the stack uses EdgeImageBase:<buildinfo.Version>.
 const EdgeImageEnv = "PMCLUSTER_EDGE_IMAGE"
 
 // EdgeImageFor returns the pmcluster-edge image the edge stack should deploy:
-// EdgeImageBase:latest by default, or the value of EdgeImageEnv when set. A
-// bare value is treated as a tag suffix; a value containing a "/" is used as a
+// EdgeImageBase:<release version> by default (dev builds fall back to
+// EdgeImageBase:latest), or the value of EdgeImageEnv when set. A bare value
+// is treated as a tag suffix; a value containing a "/" is used as a
 // fully-qualified image reference.
+//
+// Pinning the release tag (instead of a mutable :latest) keeps the edge image
+// in lock-step with the pmcluster binary that rendered the stack: a binary
+// upgrade renders a new edge stack with the new version tag, so `cluster
+// update` re-deploys the edge even on nodes whose local :latest cache is
+// stale.
 func EdgeImageFor() string {
 	if v := strings.TrimSpace(os.Getenv(EdgeImageEnv)); v != "" {
 		if strings.Contains(v, "/") {
 			return v
 		}
 		return EdgeImageBase + ":" + v
+	}
+	if tag := buildinfo.Version; tag != "" && tag != "dev" {
+		return EdgeImageBase + ":" + tag
 	}
 	return EdgeImageBase + ":latest"
 }
