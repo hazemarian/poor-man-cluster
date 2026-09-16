@@ -274,7 +274,15 @@ func runSecretImportCredentials(cmd *cobra.Command, _ []string) error {
 		if err != nil {
 			return fmt.Errorf("decrypt credential %q: %w", c.Name, err)
 		}
-		if _, err := st.CreateSecret(cmd.Context(), "cluster", c.SwarmSecretName, c.PasswordCiphertext, secretHash(string(plain))); err != nil {
+		// Credentials are normally mirrored to a Swarm secret whose name we
+		// reuse. A few (e.g. the OpenObserve ingestion token) are only stored
+		// in the DB — fall back to the credential name so the secret never
+		// lands with an empty name.
+		name := c.SwarmSecretName
+		if name == "" {
+			name = c.Name
+		}
+		if _, err := st.CreateSecret(cmd.Context(), "cluster", name, c.PasswordCiphertext, secretHash(string(plain))); err != nil {
 			if errors.Is(err, store.ErrSecretExists) {
 				skipped++
 				continue
@@ -282,7 +290,7 @@ func runSecretImportCredentials(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("import credential %q: %w", c.Name, err)
 		}
 		created++
-		fmt.Fprintf(cmd.OutOrStdout(), "  imported credential %q → secret %q (cluster)\n", c.Name, c.SwarmSecretName)
+		fmt.Fprintf(cmd.OutOrStdout(), "  imported credential %q → secret %q (cluster)\n", c.Name, name)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Import complete: %d created, %d already existed (left untouched).\n", created, skipped)
