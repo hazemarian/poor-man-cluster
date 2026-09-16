@@ -17,12 +17,12 @@ jobs:
     name: cross-compile and publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0   # `git describe --tags` needs full history
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.25"
           cache: true
@@ -78,7 +78,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # The pmcluster-edge image pushes to ghcr.io/nextrum-sy (not this repo's
       # namespace), so it needs a PAT (GH_Token) scoped to that org with
@@ -86,7 +86,7 @@ jobs:
       # release workflow continues to publish the cross-compiled binaries.
       - name: Log in to GHCR
         if: env.GH_PUSH == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ secrets.GH_USER }}
@@ -94,7 +94,7 @@ jobs:
 
       - name: Build and push
         if: env.GH_PUSH == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: pmcluster
           file: pmcluster/Dockerfile.edge
