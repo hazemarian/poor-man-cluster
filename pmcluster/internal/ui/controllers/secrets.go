@@ -15,9 +15,12 @@ import (
 type Secrets struct{ *Controller }
 
 type secretsData struct {
-	Secrets []secretRow
-	Msg     string
-	Error   string
+	Secrets    []secretRow
+	Stack      string // when set (per-stack attach), prefill the create form
+	RevealName string // when set, show the revealed plaintext for this secret
+	RevealVal  string
+	Msg        string
+	Error      string
 }
 
 type secretRow struct {
@@ -40,7 +43,7 @@ func secretRows(secs []pmapi.Secret) []secretRow {
 func (c Secrets) Page(g *gin.Context) {
 	ctx := g.Request.Context()
 	_, _, configured := c.loadParams(ctx)
-	d := secretsData{}
+	d := secretsData{Stack: g.Query("stack")}
 	if !configured {
 		d.Error = "pmcluster API not configured. Open Settings first."
 		c.Views.Fragment(g, "secrets", d)
@@ -100,6 +103,32 @@ func (c Secrets) Remove(g *gin.Context) {
 			d.Error = err.Error()
 		} else {
 			d.Msg = fmt.Sprintf("Deleted secret %s.", name)
+		}
+	}
+
+	d.Secrets = c.fetch(ctx, &d)
+	c.Views.Fragment(g, "secrets", d)
+}
+
+// Reveal decrypts and shows a stored secret's plaintext on explicit request.
+func (c Secrets) Reveal(g *gin.Context) {
+	ctx := g.Request.Context()
+	_, _, configured := c.loadParams(ctx)
+	d := secretsData{}
+	name := g.Param("name")
+
+	switch {
+	case !configured:
+		d.Error = "pmcluster API not configured. Open Settings first."
+	case name == "":
+		d.Error = "Invalid secret name."
+	default:
+		sv, err := c.API.RevealSecret(ctx, name)
+		if err != nil {
+			d.Error = err.Error()
+		} else {
+			d.RevealName = sv.Name
+			d.RevealVal = sv.Value
 		}
 	}
 

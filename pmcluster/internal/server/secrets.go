@@ -25,6 +25,7 @@ func (s *SecretService) Mount(r chi.Router) {
 	r.Get("/secrets", s.list)
 	r.Post("/secrets", s.create)
 	r.Delete("/secrets/{name}", s.remove)
+	r.Get("/secrets/{name}/value", s.value)
 }
 
 type secretRow struct {
@@ -115,4 +116,29 @@ func (s *SecretService) remove(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	res.WriteHeader(http.StatusNoContent)
+}
+
+// value decrypts and returns the plaintext of a stored secret. Only the
+// authenticated operator can read it; the value is never cached server-side.
+func (s *SecretService) value(res http.ResponseWriter, req *http.Request) {
+	name := chi.URLParam(req, "name")
+	if name == "" {
+		writeErr(res, http.StatusBadRequest, "secret name is required")
+		return
+	}
+	sec, err := s.Store.GetSecret(req.Context(), name)
+	if err != nil {
+		if errors.Is(err, store.ErrSecretNotFound) {
+			writeErr(res, http.StatusNotFound, "secret not found: "+name)
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "get secret: "+err.Error())
+		return
+	}
+	plain, err := s.Cipher.Decrypt(sec.Payload)
+	if err != nil {
+		writeErr(res, http.StatusInternalServerError, "decrypt secret: "+err.Error())
+		return
+	}
+	writeJSON(res, http.StatusOK, map[string]any{"name": sec.Name, "value": string(plain)})
 }

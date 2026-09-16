@@ -171,6 +171,18 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		res.CertSecret, res.KeySecret = certName, keyName
 		res.CertCreated, res.KeyCreated = certCreated, keyCreated
 		render.CertSecretName, render.KeySecretName = certName, keyName
+
+		// One-time metadata import: seed the site_certs DB row from the
+		// currently applied cert/key files (the "migration of the existing
+		// SSL"). Idempotent — a row already present is left untouched, so this
+		// only ever records the pre-existing certificate once per domain.
+		if err := importSiteCertMetadata(ctx, deps.Store, state.CertPath, state.KeyPath, domain, certName, keyName); err != nil {
+			return res, fmt.Errorf("import site certificate metadata: %w", err)
+		}
+
+		// Surface upcoming expiry on every up/update so renewal isn't a
+		// surprise (operator certs are not auto-renewed).
+		warnSiteCertExpiry(ctx, deps.Store, domain, deps.Stdout)
 	}
 
 	step("Rendering and provisioning OTel + Traefik configs (content-aware)")

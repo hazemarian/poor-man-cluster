@@ -85,6 +85,7 @@ Single static binary, lives on the manager host. Replaces the bash setup script 
 - `pmcluster registry add|list|remove` — Docker registry credentials, replayed on `serve` startup so private images keep pulling
 - `pmcluster webhook add|list|remove` — HMAC-signed webhook sources for CI integrations (timestamped to prevent replay)
 - `pmcluster tls hosts add|list|remove` — per-host TLS certificates for customer domains served by Traefik (independent of the cluster wildcard cert)
+- `pmcluster tls site show|set` — inspect or rotate the cluster's own (main) certificate in place, with expiry metadata
 - `pmcluster backup create|list` — on-demand offen volume snapshots; deploys can opt-in via `backup_before_deploy: true`
 - `pmcluster node list|join-token` — wraps `docker node` for the read paths
 - `pmcluster user create <name>` / `user list` / `user remove <name>` — issue and revoke API tokens for additional users (tokens print once, hashed at rest; remove instantly revokes)
@@ -227,7 +228,7 @@ JSON files live at `~/.pmcluster/logs/pmcluster-YYYY-MM-DD.log` and are swept af
 - **Stacks** — view deployed stacks and revision history, deploy new manifests, roll back
 - **Webhooks** — create/list/remove CI webhook sources (secrets shown once)
 - **API keys** — issue and revoke bearer tokens for other users/CI systems
-- **TLS** — manage per-host certificates for customer domains
+- **TLS** — rotate the cluster's own (main) certificate and manage per-host certificates for customer domains, with expiry warnings
 - **Backups** — trigger snapshots and view the audit log
 - **Settings / overview** — cluster info and management
 
@@ -349,7 +350,9 @@ env:
   `~/.pmcluster/.encryption_key`). The plaintext is shown **once** at creation;
   afterwards only the **sha256 hash** is displayed (`pmcluster secret
   list/show/verify`), and the UI lists every secret with its hash — never its
-  value.
+  value. An authenticated operator can still **decrypt a value on demand**
+  (`GET /api/secrets/{name}/value`, or the *Reveal* button in the console)
+  when they need to rotate a value elsewhere.
 - **Configs** are stored in plain text with a full **version history**
   (`pmcluster config history` / `rollback`). Editing a config records the
   previous value; rolling back restores it. UI shows content, history, and a
@@ -357,6 +360,9 @@ env:
 - Both come in two **scopes**: `cluster` (platform templates and credentials,
   e.g. the on-disk `~/.pmcluster/config/*.yml` after `pmcluster config import`)
   and `service` (user-created values referenced from manifests).
+- The stack list offers per-row **+ Config** / **+ Secret** buttons that jump
+  to the corresponding page with the create form prefilled for that stack
+  (`?stack=<name>`), so attaching values to a specific app is two clicks.
 - Deployment resolves `secrets()`/`config()` references against the DB at
   deploy time — rotate, then re-deploy, and the new value flows in.
 - CLI cheat-sheet:
@@ -482,6 +488,10 @@ The daemon exposes a JSON REST API under `/api/*` (Bearer auth) plus the unauthe
 | `POST` | `/api/stacks/{name}/rollback` | Roll back to a revision |
 | `GET`/`POST` | `/api/backups` | List / trigger backups |
 | `GET`/`PUT`/`DELETE` | `/api/tls/hosts` | Per-host TLS certs |
+| `GET`/`PUT` | `/api/tls/site` | Cluster's own (main) certificate |
+| `GET`/`POST` | `/api/secrets` | DB-backed secrets (list/create) |
+| `GET`/`POST` | `/api/configs` | DB-backed configs (list/create) |
+| `GET`/`PUT`/`DELETE` | `/api/configs/{name}` | Config content + versions/rollback |
 | `GET`/`POST`/`DELETE` | `/api/webhooks` | Webhook sources |
 | `GET`/`POST` | `/api/api_keys` | API keys |
 
@@ -524,6 +534,23 @@ docker service update --force infra_traefik
 ```
 
 Switching an existing cluster between ACME and operator-cert mode requires `--force-tls-mode`. After renewing a certificate on disk, `pmcluster cluster update` re-applies the stored cert/key without a full bring-up. For per-host (customer-domain) certificates, use `pmcluster tls hosts …` — see [Per-Host TLS](#per-host-tls-customer-domains).
+
+### Renewing the main certificate in place
+
+The cluster's own (main) certificate can be rotated without a full bring-up, from any of the three entry points — the result is identical: the pair is validated against the cluster domain, written to `~/.pmcluster/config/site/{cert,key}.pem`, materialized as versioned Swarm secrets (`cert_vN`/`key_vN`), wired into the Traefik dynamic config, and its metadata (validity window, SANs, hashes) recorded in the DB for expiry monitoring.
+
+```bash
+# CLI — status + upload
+pmcluster tls site show                                    # domain, expiry, SANs, secret names, hashes
+pmcluster tls site set --cert-file new.pem --key-file new.key.pem
+
+# REST API
+curl -X PUT https://pmcluster.<domain>/api/tls/site \
+  -H "Authorization: Bearer $PMC_TOKEN" -H 'Content-Type: application/json' \
+  -d "$(jq -n --rawfile c new.pem --rawfile k new.key.pem '{cert:$c,key:$k}')"
+```
+
+The operator console exposes the same flow on the **TLS** page (a *Main certificate* card above the per-host list), including the current expiry. Certificates within **30 days** of expiry are flagged in the console and warned about on every `cluster up`/`cluster update` — operator certs are not auto-renewed, so this is the reminder to rotate. (ACME-mode clusters renew automatically and have no such row.)
 
 ---
 

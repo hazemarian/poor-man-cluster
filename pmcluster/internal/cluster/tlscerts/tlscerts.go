@@ -220,6 +220,34 @@ type certPair struct {
 	leaf *x509.Certificate
 }
 
+// PairInfo is the metadata extracted from a validated cert/key pair — the
+// fields pmcluster persists for expiry monitoring and display.
+type PairInfo struct {
+	SANs      []string
+	NotBefore time.Time
+	NotAfter  time.Time
+}
+
+// ParseAndCheck validates that certPEM and keyPEM form a matching X.509 pair
+// and that the leaf certificate covers host (honouring CN and wildcard SANs).
+// It returns the extracted metadata on success. Exported for the site-cert
+// path (cluster's own domain) which does not use the per-host file manager.
+func ParseAndCheck(certPEM, keyPEM, host string) (PairInfo, error) {
+	parsed, err := parsePair(certPEM, keyPEM)
+	if err != nil {
+		return PairInfo{}, err
+	}
+	if !hostCoveredByCert(parsed.leaf, host) {
+		return PairInfo{}, fmt.Errorf("certificate for %q does not cover host %q (SANs: %s)",
+			host, host, strings.Join(parsed.leaf.DNSNames, ", "))
+	}
+	return PairInfo{
+		SANs:      append([]string(nil), parsed.leaf.DNSNames...),
+		NotBefore: parsed.leaf.NotBefore,
+		NotAfter:  parsed.leaf.NotAfter,
+	}, nil
+}
+
 // parsePair validates that certPEM and keyPEM form a matching X.509 pair and
 // returns the parsed leaf certificate.
 func parsePair(certPEM, keyPEM string) (*certPair, error) {

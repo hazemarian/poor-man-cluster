@@ -16,6 +16,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
 // tlsCmd groups the per-host TLS certificate commands.
@@ -34,6 +35,46 @@ The cluster's own default wildcard cert (set via 'pmcluster cluster up
 var tlsHostsCmd = &cobra.Command{
 	Use:   "hosts",
 	Short: "Per-host TLS certificate store",
+}
+
+// tlsSiteCmd manages the cluster's OWN (main-domain) TLS certificate — the
+// default cert served by Traefik for the cluster's domain (e.g. nextrum-sy.com).
+var tlsSiteCmd = &cobra.Command{
+	Use:   "site",
+	Short: "Manage the cluster's own TLS certificate",
+	Long: `Manages the certificate Traefik serves for the cluster's own domain
+(the one persisted by 'pmcluster cluster up --domain').
+
+  pmcluster tls site              show the current certificate metadata
+  pmcluster tls site set --cert-file cert.pem --key-file key.pem
+  pmcluster tls site set --cert "$(cat cert.pem)" --key "$(cat key.pem)"
+
+Uploading validates the pair (PEM match + the cert must cover the cluster's
+domain), stores a local copy under ~/.pmcluster/config/site/, re-materializes
+the cert_vN/key_vN Swarm secrets, refreshes Traefik and records the metadata
+(expiry, hashes) for monitoring.`,
+}
+
+var tlsSiteShowCmd = &cobra.Command{
+	Use:   "show",
+	Short: "Show the cluster's own TLS certificate metadata",
+	RunE:  runTLSSiteShow,
+}
+
+type tlsSiteSetFlags struct {
+	certFile string
+	keyFile  string
+	cert     string
+	key      string
+}
+
+var tlsSiteSetBinds tlsSiteSetFlags
+
+var tlsSiteSetCmd = &cobra.Command{
+	Use:   "set",
+	Short: "Upload a new certificate for the cluster's own domain",
+	Args:  cobra.NoArgs,
+	RunE:  runTLSSiteSet,
 }
 
 type tlsAddFlags struct {
@@ -85,6 +126,12 @@ func init() {
 
 	tlsHostsCmd.AddCommand(tlsAddCmd, tlsListCmd, tlsRemoveCmd)
 	tlsCmd.AddCommand(tlsHostsCmd)
+	tlsSiteSetCmd.Flags().StringVar(&tlsSiteSetBinds.certFile, "cert-file", "", "path to the certificate PEM file")
+	tlsSiteSetCmd.Flags().StringVar(&tlsSiteSetBinds.keyFile, "key-file", "", "path to the private key PEM file")
+	tlsSiteSetCmd.Flags().StringVar(&tlsSiteSetBinds.cert, "cert", "", "certificate PEM text")
+	tlsSiteSetCmd.Flags().StringVar(&tlsSiteSetBinds.key, "key", "", "private key PEM text")
+	tlsSiteCmd.AddCommand(tlsSiteShowCmd, tlsSiteSetCmd)
+	tlsCmd.AddCommand(tlsSiteCmd)
 	rootCmd.AddCommand(tlsCmd)
 }
 
@@ -227,4 +274,105 @@ func refreshHostCerts(cmd *cobra.Command, cfg *config.Config) (bool, error) {
 		Docker:   dc,
 		Deployer: cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
 	}, cfg.ConfigDir(), buildinfo.Version)
+}
+
+// siteCertDeps builds the collaborators needed by the site-cert commands.
+func siteCertDeps(cmd *cobra.Command, cfg *config.Config, domain string) (*store.Store, *credentials.Cipher, docker.Client, error) {
+	st, _, err := openStore()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
+	if err != nil {
+		_ = st.Close()
+		return nil, nil, nil, fmt.Errorf("open encryption key: %w", err)
+	}
+	dc, err := docker.New()
+	if err != nil {
+		_ = st.Close()
+		return nil, nil, nil, fmt.Errorf("docker client: %w", err)
+	}
+	return st, cipher, dc, nil
+}
+
+func runTLSSiteShow(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	st, _, _, err := siteCertDeps(cmd, cfg, "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	domain := cluster.PersistedDomain(cmd.Context(), st)
+	if domain == "" {
+		return errors.New("no persisted cluster domain found — run `pmcluster cluster up` first")
+	}
+	row, err := cluster.GetSiteCert(cmd.Context(), st, domain)
+	if err != nil {
+		if errors.Is(err, store.ErrSiteCertNotFound) {
+			fmt.Fprintf(cmd.OutOrStdout(), "No site certificate recorded yet for %s.\n", domain)
+			fmt.Fprintf(cmd.OutOrStdout(), "Upload one with `pmcluster tls site set --cert-file cert.pem --key-file key.pem`.\n")
+			return nil
+		}
+		return fmt.Errorf("get site cert: %w", err)
+	}
+
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "Domain:\t%s\n", row.Domain)
+	fmt.Fprintf(w, "Not before:\t%s\n", row.NotBefore.UTC().Format(time.RFC3339))
+	fmt.Fprintf(w, "Expires:\t%s\n", row.NotAfter.UTC().Format(time.RFC3339))
+	fmt.Fprintf(w, "SANs:\t%s\n", strings.Join(row.SANs, ", "))
+	fmt.Fprintf(w, "Cert secret:\t%s\n", row.CertSecret)
+	fmt.Fprintf(w, "Key secret:\t%s\n", row.KeySecret)
+	fmt.Fprintf(w, "Cert hash:\t%s\n", row.CertHash)
+	fmt.Fprintf(w, "Key hash:\t%s\n", row.KeyHash)
+	fmt.Fprintf(w, "Updated:\t%s\n", row.UpdatedAt.UTC().Format(time.RFC3339))
+	return w.Flush()
+}
+
+func runTLSSiteSet(cmd *cobra.Command, _ []string) error {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	st, cipher, dc, err := siteCertDeps(cmd, cfg, "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	defer func() { _ = dc.Close() }()
+
+	domain := cluster.PersistedDomain(cmd.Context(), st)
+	if domain == "" {
+		return errors.New("no persisted cluster domain found — run `pmcluster cluster up` first")
+	}
+
+	// Reuse the same --cert-file/--key-file/--cert/--key resolution as hosts add.
+	orig := tlsAddBinds
+	tlsAddBinds = tlsAddFlags{certFile: tlsSiteSetBinds.certFile, keyFile: tlsSiteSetBinds.keyFile, cert: tlsSiteSetBinds.cert, key: tlsSiteSetBinds.key}
+	cert, key, err := loadTLSPair()
+	tlsAddBinds = orig
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Uploading certificate for %s …\n", domain)
+	row, err := cluster.ApplySiteCert(cmd.Context(), cluster.SiteCertDeps{
+		Store:       st,
+		Cipher:      cipher,
+		Docker:      dc,
+		Deployer:    cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
+		Provisioner: ooProvisioner(st, cipher, cmd.OutOrStdout(), domain),
+	}, cfg.ConfigDir(), buildinfo.Version, domain, cert, key)
+	if err != nil {
+		return fmt.Errorf("apply site cert: %w", err)
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "✓ Site certificate updated for %s (expires %s)\n",
+		row.Domain, row.NotAfter.UTC().Format(time.RFC3339))
+	fmt.Fprintf(cmd.OutOrStdout(), "  secrets: %s / %s\n", row.CertSecret, row.KeySecret)
+	return nil
 }

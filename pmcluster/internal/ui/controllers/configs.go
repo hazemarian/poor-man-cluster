@@ -20,6 +20,7 @@ type configsData struct {
 	Configs  []configRow
 	Editing  *configRow // the config currently being edited (from GET ?name=)
 	Versions []configVersionRow
+	Stack    string // when set (per-stack attach), prefill the create form
 	Msg      string
 	Error    string
 }
@@ -63,7 +64,7 @@ func configVersionRows(vs []pmapi.ConfigVersion) []configVersionRow {
 func (c Configs) Page(g *gin.Context) {
 	ctx := g.Request.Context()
 	_, _, configured := c.loadParams(ctx)
-	d := configsData{}
+	d := configsData{Stack: g.Query("stack")}
 	if !configured {
 		d.Error = "pmcluster API not configured. Open Settings first."
 		c.Views.Fragment(g, "configs", d)

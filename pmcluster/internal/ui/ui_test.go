@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeDaemon simulates the pmcluster /api endpoints the UI drives. It returns
@@ -106,6 +107,9 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/secrets/db_pass", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("/api/secrets/db_pass/value", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"name":"db_pass","value":"the-decrypted-value"}`)
+	})
 
 	// Configs: GET list, GET one, POST create, PUT update, DELETE, versions, rollback.
 	mux.HandleFunc("/api/configs", func(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +135,30 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/api/configs/nginx_conf/rollback", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"name":"nginx_conf","hash":"h0","rolled_back_to":2}`)
+	})
+
+	// TLS: the cluster's own (default) cert metadata + per-host certs. Dates are
+	// computed relative to now so the expiry-warning assertions stay valid.
+	siteSoon := time.Now().AddDate(0, 0, 10).UTC().Format(time.RFC3339)
+	siteFar := time.Now().AddDate(1, 0, 0).UTC().Format(time.RFC3339)
+	mux.HandleFunc("/api/tls/site", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			write(w, `{"domain":"nextrum-sy.com","cert_secret":"cert_v041","key_secret":"key_v041","not_before":"2026-09-01T00:00:00Z","not_after":"`+siteFar+`","sans":["nextrum-sy.com","*.nextrum-sy.com"],"cert_hash":"cafe1234","key_hash":"beef5678","created_at":"2026-09-12T00:00:00Z","updated_at":"2026-09-16T00:00:00Z"}`)
+		default:
+			write(w, `{"domain":"nextrum-sy.com","cert_secret":"cert_v041","key_secret":"key_v041","not_before":"2026-09-01T00:00:00Z","not_after":"`+siteSoon+`","sans":["nextrum-sy.com"],"cert_hash":"cafe1234","key_hash":"beef5678","created_at":"2026-09-12T00:00:00Z","updated_at":"2026-09-16T00:00:00Z"}`)
+		}
+	})
+	mux.HandleFunc("/api/tls/hosts", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"hosts":[{"host":"idlebbookfair.com","sans":["idlebbookfair.com","www.idlebbookfair.com"],"not_after":"`+siteFar+`","not_before":"2026-01-01T00:00:00Z","cert_file":"/x/cert.pem","key_file":"/x/key.pem"}]}`)
+	})
+	mux.HandleFunc("/api/tls/hosts/", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			write(w, `{"host":"idlebbookfair.com","sans":["idlebbookfair.com"],"not_after":"`+siteFar+`","not_before":"2026-01-01T00:00:00Z","cert_file":"/x/cert.pem","key_file":"/x/key.pem"}`)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
 	})
 	return httptest.NewServer(mux)
 }
@@ -482,6 +510,19 @@ func TestSecretsAndConfigs(t *testing.T) {
 	// Delete a secret.
 	assertFragment(http.MethodPost, "/secrets/remove/db_pass", "", "Deleted secret db_pass.")
 
+	// Revealing a secret shows the decrypted plaintext + a copy button.
+	assertFragment(http.MethodGet, "/secrets/reveal/db_pass", "",
+		"Value of", "the-decrypted-value", "Copy value")
+
+	// Per-stack attach: ?stack= prefills the create forms.
+	assertFragment(http.MethodGet, "/secrets?stack=demo", "", "Attaching to stack",
+		`value="demo_"`)
+	assertFragment(http.MethodGet, "/configs?stack=demo", "", "Attaching to stack",
+		`value="demo_"`)
+
+	// The stacks list offers per-row + Config / + Secret attach buttons.
+	assertFragment(http.MethodGet, "/stacks", "", "demo", "+ Config", "+ Secret")
+
 	// Configs page lists configs (no content shown by default).
 	assertFragment(http.MethodGet, "/configs", "", "Configs", "app_env", "env")
 
@@ -504,4 +545,57 @@ func TestSecretsAndConfigs(t *testing.T) {
 
 	// Delete the config.
 	assertFragment(http.MethodPost, "/configs/remove/nginx_conf", "", "Deleted config nginx_conf.")
+}
+
+func TestTLSMainAndHosts(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	jar := map[string]*http.Cookie{}
+
+	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+
+	// TLS page shows both the main cert (with expiry warning) and per-host certs.
+	resp := doRequest(t, app, http.MethodGet, "/tls", "", jar)
+	b := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /tls = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+	for _, want := range []string{
+		"Main certificate", "nextrum-sy.com", "expires soon",
+		"Per-host certificates", "idlebbookfair.com",
+		"Upload / renew main certificate",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("tls page missing %q; got: %s", want, b)
+		}
+	}
+
+	// Uploading a new main certificate refreshes the page with a confirmation.
+	resp = doRequest(t, app, http.MethodPost, "/tls/site",
+		"cert=-----BEGIN CERTIFICATE-----&key=-----BEGIN PRIVATE KEY-----", jar)
+	b = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /tls/site = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+	if !strings.Contains(b, "Site certificate for nextrum-sy.com updated") {
+		t.Errorf("tls site upload missing confirmation; got: %s", b)
+	}
+
+	// Missing key is rejected before hitting the daemon.
+	resp = doRequest(t, app, http.MethodPost, "/tls/site",
+		"cert=-----BEGIN CERTIFICATE-----", jar)
+	b = readBody(t, resp)
+	if !strings.Contains(b, "Certificate and private key are both required.") {
+		t.Errorf("tls site missing-field error absent; got: %s", b)
+	}
+
+	// Adding a per-host cert still works.
+	resp = doRequest(t, app, http.MethodPost, "/tls",
+		"host=idlebbookfair.com&cert=-----BEGIN CERTIFICATE-----&key=-----BEGIN PRIVATE KEY-----", jar)
+	b = readBody(t, resp)
+	if !strings.Contains(b, "Certificate for idlebbookfair.com stored") {
+		t.Errorf("per-host add missing confirmation; got: %s", b)
+	}
 }

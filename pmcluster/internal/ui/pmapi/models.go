@@ -133,6 +133,21 @@ type hostCertsResponse struct {
 	Hosts []HostCert `json:"hosts"`
 }
 
+// SiteCert is GET/PUT /api/tls/site — metadata for the cluster's own
+// (default/wildcard) certificate. Times are RFC3339 strings.
+type SiteCert struct {
+	Domain     string   `json:"domain"`
+	CertSecret string   `json:"cert_secret"`
+	KeySecret  string   `json:"key_secret"`
+	NotBefore  string   `json:"not_before"`
+	NotAfter   string   `json:"not_after"`
+	SANs       []string `json:"sans"`
+	CertHash   string   `json:"cert_hash"`
+	KeyHash    string   `json:"key_hash"`
+	CreatedAt  string   `json:"created_at"`
+	UpdatedAt  string   `json:"updated_at"`
+}
+
 // Webhook is one deploy-webhook source row (no secret — the HMAC secret is
 // only returned once at creation via WebhookCreated).
 type Webhook struct {
@@ -173,6 +188,13 @@ type Secret struct {
 	Name      string `json:"name"`
 	Hash      string `json:"hash"`
 	CreatedAt int64  `json:"created_at"`
+}
+
+// SecretValue is GET /api/secrets/{name}/value — the decrypted plaintext,
+// returned only to the authenticated operator on explicit request.
+type SecretValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // Config is one row of GET /api/configs.

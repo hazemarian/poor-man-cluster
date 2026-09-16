@@ -376,7 +376,25 @@ List webhooks: `pmcluster webhook list` · Remove: `pmcluster webhook remove git
 
 Full guide: [`docs/webhook.md`](https://github.com/hazemarian/poor-man-stack/blob/main/docs/webhook.md).
 
-## Per-Host TLS (Customer Domains)
+## TLS Certificates
+
+There are two independent certificate flows — the cluster's own (main) certificate and per-host certificates for customer domains. Both validate the PEM pair, materialize versioned Swarm secrets and refresh Traefik; only the target differs.
+
+### Main certificate (the cluster's own domain)
+
+Rotate the cluster's own certificate in place — no full bring-up:
+
+```bash
+pmcluster tls site show                                    # domain, expiry, SANs, secret names, hashes
+pmcluster tls site set --cert-file new.pem --key-file new.key.pem
+# or inline: pmcluster tls site set --cert "$(cat new.pem)" --key "$(cat new.key.pem)"
+```
+
+The pair is validated against the persisted cluster domain, written to `~/.pmcluster/config/site/{cert,key}.pem` (0600), materialized as `cert_vN`/`key_vN` Swarm secrets, wired into the Traefik dynamic config, and its metadata recorded in the DB. Same flow via the console TLS page (**Main certificate** card) or `PUT /api/tls/site`.
+
+Certificates within **30 days** of expiry are flagged in the console and warned about on every `cluster up`/`cluster update` — operator certs are not auto-renewed. (ACME-mode clusters renew automatically; no row is recorded.) The pre-existing certificate is imported into the DB automatically (once, idempotently) on the first `cluster up`/`cluster update` after upgrade.
+
+### Per-host TLS (customer domains)
 
 Serve the same app on a customer's own domain with its own certificate:
 

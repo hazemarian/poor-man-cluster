@@ -15,7 +15,11 @@
     <td>{{.CurrentRevision}}</td>
     <td class="muted">{{if .RepoURL}}<code>{{.RepoURL}}</code>{{else}}—{{end}}</td>
     <td class="muted">{{ts .UpdatedAt}}</td>
-    <td><a class="btn sm ghost" href="/stacks/{{.Name}}" hx-get="/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">Details</a></td>
+    <td style="text-align:right; white-space:nowrap">
+      <a class="btn sm ghost" href="/stacks/{{.Name}}" hx-get="/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">Details</a>
+      <a class="btn sm ghost" href="/configs?stack={{.Name}}" hx-get="/configs?stack={{.Name}}" hx-target="#view" hx-push-url="true">+ Config</a>
+      <a class="btn sm ghost" href="/secrets?stack={{.Name}}" hx-get="/secrets?stack={{.Name}}" hx-target="#view" hx-push-url="true">+ Secret</a>
+    </td>
   </tr>
   {{end}}
 </table>

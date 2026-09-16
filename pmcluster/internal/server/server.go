@@ -53,6 +53,11 @@ type Deps struct {
 	// HostCerts exposes per-host TLS cert management under /api/tls/hosts.
 	// Optional; when nil those routes are omitted.
 	HostCerts *HostCertService
+
+	// SiteCert exposes management of the cluster's own (main-domain) TLS
+	// certificate under /api/tls/site. Optional; when nil those routes are
+	// omitted.
+	SiteCert *SiteCertService
 }
 
 func New(d Deps) http.Handler {
@@ -108,6 +113,9 @@ func New(d Deps) http.Handler {
 		}
 		if d.HostCerts != nil {
 			d.HostCerts.Mount(r)
+		}
+		if d.SiteCert != nil {
+			d.SiteCert.Mount(r)
 		}
 		if d.Store != nil && d.Cipher != nil {
 			(&WebhookService{Store: d.Store, Cipher: d.Cipher}).Mount(r)

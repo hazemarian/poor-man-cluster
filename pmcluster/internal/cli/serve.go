@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -138,6 +139,21 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		Cipher:        cipher,
 		BackupTrigger: backup.LocalTrigger{Store: st},
 		HostCerts:     hostCerts,
+		SiteCert: &server.SiteCertService{
+			Store: st,
+			Apply: func(ctx context.Context, domain, certPEM, keyPEM string) (*store.SiteCertRow, error) {
+				if cipher == nil {
+					return nil, fmt.Errorf("encryption key unavailable; cannot refresh Traefik")
+				}
+				return cluster.ApplySiteCert(ctx, cluster.SiteCertDeps{
+					Store:       st,
+					Cipher:      cipher,
+					Docker:      dc,
+					Deployer:    deployer,
+					Provisioner: ooProvisioner(st, cipher, io.Discard, domain),
+				}, cfg.ConfigDir(), buildinfo.Version, domain, certPEM, keyPEM)
+			},
+		},
 	})
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)

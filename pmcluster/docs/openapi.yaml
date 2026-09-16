@@ -295,6 +295,62 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Backup"
+  /api/tls/site:
+    get:
+      summary: Get the cluster's own (default) certificate metadata
+      description: |
+        Returns metadata for the cluster's own-domain certificate (domain,
+        secret names, validity window, SANs, hashes). The PEM bytes themselves
+        live in versioned Swarm secrets and are never returned. 404 until a
+        certificate has been imported or uploaded.
+      operationId: getSiteCert
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Site certificate metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteCert"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      summary: Upload/renew the cluster's own cert/key (as PEM text) and refresh Traefik
+      description: |
+        Cert and key arrive as PEM TEXT in the JSON body — never as a file upload.
+        The pair is validated against the cluster's persisted domain, written as
+        the local source of truth under ~/.pmcluster/config/site/, materialized as
+        versioned Swarm secrets (cert_vN/key_vN), wired into the Traefik dynamic
+        config, and its metadata recorded for expiry monitoring.
+      operationId: putSiteCert
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cert, key]
+              properties:
+                cert:
+                  type: string
+                key:
+                  type: string
+      responses:
+        "200":
+          description: Uploaded and Traefik refreshed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteCert"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /api/tls/hosts:
     get:
       summary: List per-host TLS certificates
@@ -1011,6 +1067,35 @@ components:
           type: string
         key_file:
           type: string
+    SiteCert:
+      type: object
+      properties:
+        domain:
+          type: string
+        cert_secret:
+          type: string
+        key_secret:
+          type: string
+        not_before:
+          type: string
+          format: date-time
+        not_after:
+          type: string
+          format: date-time
+        sans:
+          type: array
+          items:
+            type: string
+        cert_hash:
+          type: string
+        key_hash:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     Webhook:
       type: object
       properties:

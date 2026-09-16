@@ -9,11 +9,12 @@ value into a service's environment. Every edit records a version; rollback resto
 
 <div class="card">
   <h2 style="margin-top:0">Create a config</h2>
+  {{if .Stack}}<p class="sub" style="margin-top:0">Attaching to stack <code>{{.Stack}}</code> — the name is prefilled; keep the <code>{{.Stack}}_</code> prefix so it's clear which app it belongs to.</p>{{end}}
   <form hx-post="/configs" hx-target="#view" hx-swap="innerHTML">
     <div class="row" style="align-items:flex-start">
       <div style="flex:1">
         <label>Name</label>
-        <input type="text" name="name" placeholder="nginx_conf" required>
+        <input type="text" name="name" placeholder="nginx_conf" value="{{if .Stack}}{{.Stack}}_{{end}}" required>
       </div>
       <div style="flex:1">
         <label>Scope</label>

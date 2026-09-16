@@ -3,10 +3,54 @@
 {{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
 
 <h1 style="margin:0 0 4px">TLS Certificates</h1>
-<p class="sub">Serve a customer's own domain on its own origin with its own
-real certificate. The cert and key are pasted as text here, stored by pmcluster
-under <code>~/.pmcluster/config/hosts/&lt;host&gt;/</code>, and served by Traefik for
-the matching SNI. The cluster's own default wildcard cert is never touched.</p>
+<p class="sub">Serve the cluster's own domain and each customer's domain with its
+own real certificate. The cert and key are pasted as text here; pmcluster
+validates the pair, materializes it as versioned Swarm secrets and refreshes
+Traefik. Certificates expiring within 30 days are flagged below.</p>
+
+<h2 style="margin-bottom:0">Main certificate</h2>
+<p class="sub" style="margin-top:2px">The cluster's own default certificate,
+served for <code>{{if .Site}}{{.Site.Domain}}{{else}}the cluster domain{{end}}</code> and any
+host without its own certificate.</p>
+
+{{if .Site}}
+{{if .Site.Expired}}<div class="msg err">Site certificate for {{.Site.Domain}} has expired ({{.Site.Note}}). Upload a renewed certificate below.</div>
+{{else if .Site.Expiring}}<div class="msg err">Site certificate for {{.Site.Domain}} expires soon ({{.Site.Note}}). Upload a renewed certificate below.</div>{{end}}
+<div class="card" style="padding:6px 14px">
+<table>
+  <tr><th>Domain</th><th>Expires</th><th>Remaining</th><th>SANs</th><th>Cert hash</th><th>Updated</th></tr>
+  <tr>
+    <td><code>{{.Site.Domain}}</code></td>
+    <td class="muted">{{.Site.Expires}}</td>
+    <td class="{{if .Site.Expiring}}err{{else}}muted{{end}}">{{.Site.Note}}</td>
+    <td class="muted">{{.Site.SANs}}</td>
+    <td class="muted"><code>{{.Site.CertHash}}</code></td>
+    <td class="muted">{{.Site.Updated}}</td>
+  </tr>
+</table>
+</div>
+{{else}}
+<div class="card" style="padding:6px 14px"><div class="empty">No site certificate recorded yet.</div></div>
+{{end}}
+
+<div class="card">
+  <h2 style="margin-top:0">Upload / renew main certificate</h2>
+  <form hx-post="/tls/site" hx-target="#view" hx-swap="innerHTML">
+    <label>Certificate (PEM text)</label>
+    <textarea name="cert" rows="6" placeholder="-----BEGIN CERTIFICATE-----" required></textarea>
+    <label>Private key (PEM text)</label>
+    <textarea name="key" rows="6" placeholder="-----BEGIN PRIVATE KEY-----" required></textarea>
+    <div style="margin-top:10px">
+      <button class="btn" type="submit" hx-disabled-elt="this">Store certificate</button>
+    </div>
+  </form>
+</div>
+
+<h2 style="margin-bottom:0">Per-host certificates</h2>
+<p class="sub" style="margin-top:2px">Serve a customer's own domain on its own
+origin with its own real certificate. The cert and key are pasted as text here,
+stored by pmcluster under <code>~/.pmcluster/config/hosts/&lt;host&gt;/</code>, and served by
+Traefik for the matching SNI. The main certificate is never touched.</p>
 
 <div class="card">
   <h2 style="margin-top:0">Add a per-host certificate</h2>
@@ -27,11 +71,12 @@ the matching SNI. The cluster's own default wildcard cert is never touched.</p>
 <div class="card" style="padding:6px 14px">
 {{if .Hosts}}
 <table>
-  <tr><th>Host</th><th>Expires</th><th>SANs</th><th></th></tr>
+  <tr><th>Host</th><th>Expires</th><th>Remaining</th><th>SANs</th><th></th></tr>
   {{range .Hosts}}
   <tr>
     <td><code>{{.Host}}</code></td>
     <td class="muted">{{.Expires}}</td>
+    <td class="{{if .Expiring}}err{{else}}muted{{end}}">{{.Note}}</td>
     <td class="muted">{{.SANs}}</td>
     <td style="text-align:right">
       <button class="btn danger" hx-post="/tls/remove/{{.Host}}" hx-target="#view" hx-swap="innerHTML">Remove</button>

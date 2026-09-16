@@ -127,6 +127,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	tlsC := controllers.TLS{Controller: a.ctrl}
 	g.GET("/tls", tlsC.Page)
 	g.POST("/tls", tlsC.Add)
+	g.POST("/tls/site", tlsC.SetSite)
 	g.POST("/tls/remove/:host", tlsC.Remove)
 
 	wh := controllers.Webhooks{Controller: a.ctrl}
@@ -142,6 +143,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	sc := controllers.Secrets{Controller: a.ctrl}
 	g.GET("/secrets", sc.Page)
 	g.POST("/secrets", sc.Add)
+	g.GET("/secrets/reveal/:name", sc.Reveal)
 	g.POST("/secrets/remove/:name", sc.Remove)
 
 	cf := controllers.Configs{Controller: a.ctrl}

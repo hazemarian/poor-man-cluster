@@ -235,6 +235,23 @@ func (c *Client) RemoveHostCert(ctx context.Context, host string) error {
 	return c.do(ctx, http.MethodDelete, "/tls/hosts/"+url.PathEscape(host), nil, nil)
 }
 
+// GetSiteCert returns the cluster's own (default) certificate metadata.
+func (c *Client) GetSiteCert(ctx context.Context) (*SiteCert, error) {
+	var out SiteCert
+	err := c.do(ctx, http.MethodGet, "/tls/site", nil, &out)
+	return &out, err
+}
+
+// UpdateSiteCert uploads a new default certificate + key (PEM text). The daemon
+// validates the pair against the cluster domain, materializes it as versioned
+// Swarm secrets, refreshes Traefik and records the metadata.
+func (c *Client) UpdateSiteCert(ctx context.Context, cert, key string) (*SiteCert, error) {
+	body := map[string]string{"cert": cert, "key": key}
+	var out SiteCert
+	err := c.do(ctx, http.MethodPut, "/tls/site", body, &out)
+	return &out, err
+}
+
 // ListWebhooks returns every deploy-webhook source (without secrets).
 func (c *Client) ListWebhooks(ctx context.Context) ([]Webhook, error) {
 	var body struct {
@@ -299,6 +316,14 @@ func (c *Client) CreateSecret(ctx context.Context, scope, name, value string) (*
 // DeleteSecret removes a stored secret by name.
 func (c *Client) DeleteSecret(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, nil)
+}
+
+// RevealSecret returns the decrypted plaintext of a stored secret. The daemon
+// decrypts it on demand; the value is never cached client-side.
+func (c *Client) RevealSecret(ctx context.Context, name string) (*SecretValue, error) {
+	var out SecretValue
+	err := c.do(ctx, http.MethodGet, "/secrets/"+url.PathEscape(name)+"/value", nil, &out)
+	return &out, err
 }
 
 // ListConfigs returns every stored config (without content).
