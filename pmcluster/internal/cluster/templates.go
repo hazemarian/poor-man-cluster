@@ -202,12 +202,23 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	out := strings.ReplaceAll(rendered.String(), "${DOMAIN}", in.Domain)
 	out = strings.ReplaceAll(out, "${OPENOBSERVE_ADMIN_EMAIL}", in.OpenObserveAdminEmail)
 	out = strings.ReplaceAll(out, "${DATA_DIR}", in.DataDir)
-	out = strings.ReplaceAll(out, "__OPENOBSERVE_PASSWORD__", in.OpenObserveAdminPassword)
+	out = strings.ReplaceAll(out, "__OPENOBSERVE_PASSWORD__", escapeComposeDollar(in.OpenObserveAdminPassword))
 	out = strings.ReplaceAll(out, "__OTEL_CONFIG_NAME__", in.OTelConfigName)
 	out = strings.ReplaceAll(out, "__TRAEFIK_CONFIG_NAME__", in.TraefikConfigName)
 	out = strings.ReplaceAll(out, "__CERT_SECRET__", in.CertSecretName)
 	out = strings.ReplaceAll(out, "__KEY_SECRET__", in.KeySecretName)
 	return []byte(out), nil
+}
+
+// escapeComposeDollar doubles every "$" so Docker Compose/Swarm variable
+// interpolation (which `docker stack deploy -c` performs on the rendered file)
+// emits a literal "$". Generated passwords include the special charset
+// "!@#$%^&*", so a raw "$" would otherwise be treated as an interpolation
+// sigil and silently truncate the value — e.g. a ZO_ROOT_USER_PASSWORD of
+// "ab$cd" would be rendered as "ab", leaving OpenObserve with a root password
+// that no longer matches the stored credential (401 on provisioning).
+func escapeComposeDollar(s string) string {
+	return strings.ReplaceAll(s, "$", "$$")
 }
 
 // ensureEdgeConfig renders the edge-stack.yml (with the version-keyed image tag)

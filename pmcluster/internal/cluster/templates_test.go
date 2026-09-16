@@ -125,6 +125,31 @@ func TestLoadComposeFile_SubstitutesOpenObserveEmail(t *testing.T) {
 	_ = body
 }
 
+// TestLoadComposeFile_EscapesDollarInOpenObservePassword verifies that a
+// generated OpenObserve root password containing "$" (RandomPassword's special
+// charset includes "!@#$%^&*") is doubled to "$$" in the rendered compose file
+// so `docker stack deploy` interpolation emits a literal "$" — otherwise the
+// env value would be truncated and OO's root password would no longer match
+// the stored credential (HTTP 401 on provisioning).
+func TestLoadComposeFile_EscapesDollarInOpenObservePassword(t *testing.T) {
+	in := RenderInput{
+		Domain:                   "example.com",
+		OpenObserveAdminEmail:    "ops@example.com",
+		OpenObserveAdminPassword: "ab$cd",
+	}
+	data, err := LoadComposeFile(StackObservability, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile: %v", err)
+	}
+	body := string(data)
+	if strings.Contains(body, "ab$cd") {
+		t.Error("raw '$' was not escaped in ZO_ROOT_USER_PASSWORD (docker stack deploy would interpolate it)")
+	}
+	if !strings.Contains(body, "ab$$cd") {
+		t.Error("expected 'ab$$cd' in rendered observability stack after $-escaping")
+	}
+}
+
 // TestLoadComposeFile_ObservabilityOmitsRootToken verifies that fresh-install
 // observability does NOT bake ZO_ROOT_USER_TOKEN into the OpenObserve data
 // volume — the OTel collector instead uses a dedicated ingestion token created
