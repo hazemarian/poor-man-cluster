@@ -79,6 +79,10 @@ jobs:
       # `secrets` can't be referenced in `if:` expressions, so expose the
       # token's presence via a job env and gate the login step on it.
       GH_PUSH: ${{ secrets.GH_Token != '' }}
+      # Pin where docker stores registry credentials so the e2e harness
+      # (which runs pmcluster with HOME=<temp>) can find them via
+      # DOCKER_CONFIG passthrough.  Must match the login step below.
+      DOCKER_CONFIG: /home/runner/.docker
     defaults:
       run:
         working-directory: pmcluster
@@ -97,7 +101,8 @@ jobs:
       #
       # The edge stack references ghcr.io/nextrum-sy/pmcluster-edge:latest
       # (published by the release workflow), so log in to GHCR so the swarm
-      # can pull it during `cluster up`.
+      # can pull it during `cluster up`.  logout: false keeps the
+      # credentials around for the swarm e2e step that follows.
       - name: Log in to GHCR
         if: env.GH_PUSH == 'true'
         uses: docker/login-action@v3
@@ -105,6 +110,7 @@ jobs:
           registry: ghcr.io
           username: ${{ secrets.GH_USER }}
           password: ${{ secrets.GH_Token }}
+          logout: false
 
       - name: swarm e2e
         env:

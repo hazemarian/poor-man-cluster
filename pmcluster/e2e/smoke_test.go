@@ -175,6 +175,11 @@ func homeEnv(homeDir string) []string {
 		"DOCKER_CERT_PATH",
 		"DOCKER_API_VERSION",
 		"DOCKER_CONTEXT",
+		// DOCKER_CONFIG overrides where the docker CLI looks for registry
+		// credentials.  CI pins it to the runner's config so that
+		// `docker stack deploy --with-registry-auth` (run with HOME set to a
+		// temp dir below) can still reach GHCR.
+		"DOCKER_CONFIG",
 	} {
 		if v := os.Getenv(k); v != "" {
 			env = append(env, k+"="+v)
