@@ -354,6 +354,13 @@ paths:
   /api/tls/hosts:
     get:
       summary: List per-host TLS certificates
+      description: |
+        Per-host certificates live in the SAME table and flow as the cluster's
+        own certificate: the PEM bytes are versioned Swarm secrets
+        (hostcert-<host>_vNNN / hostkey-<host>_vNNN) and this list returns the
+        DB metadata for every row except the cluster's own domain (which is
+        served by GET /api/tls/site). Nothing is ever read from the manager's
+        filesystem.
       operationId: listHostCerts
       security:
         - bearerAuth: []
@@ -1063,10 +1070,20 @@ components:
         not_before:
           type: string
           format: date-time
-        cert_file:
+        cert_secret:
           type: string
-        key_file:
+        key_secret:
           type: string
+        cert_hash:
+          type: string
+        key_hash:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     SiteCert:
       type: object
       properties:

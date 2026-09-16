@@ -16,7 +16,6 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
@@ -116,18 +115,30 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	hostCerts := &server.HostCertService{
-		Manager: tlscerts.New(cfg.ConfigDir()),
-		Refresh: func(ctx context.Context) error {
+		Store: st,
+		Apply: func(ctx context.Context, host, certPEM, keyPEM string) (*store.SiteCertRow, error) {
+			if cipher == nil {
+				return nil, fmt.Errorf("encryption key unavailable; cannot refresh Traefik")
+			}
+			return cluster.ApplyCert(ctx, cluster.SiteCertDeps{
+				Store:       st,
+				Cipher:      cipher,
+				Docker:      dc,
+				Deployer:    deployer,
+				Provisioner: ooProvisioner(st, cipher, io.Discard, cluster.PersistedDomain(ctx, st)),
+			}, cfg.ConfigDir(), buildinfo.Version, host, certPEM, keyPEM, true)
+		},
+		Remove: func(ctx context.Context, host string) error {
 			if cipher == nil {
 				return fmt.Errorf("encryption key unavailable; cannot refresh Traefik")
 			}
-			_, err := cluster.RefreshHostCerts(ctx, cluster.HostCertsDeps{
-				Store:    st,
-				Cipher:   cipher,
-				Docker:   dc,
-				Deployer: deployer,
-			}, cfg.ConfigDir(), buildinfo.Version)
-			return err
+			return cluster.RemoveCert(ctx, cluster.SiteCertDeps{
+				Store:       st,
+				Cipher:      cipher,
+				Docker:      dc,
+				Deployer:    deployer,
+				Provisioner: ooProvisioner(st, cipher, io.Discard, cluster.PersistedDomain(ctx, st)),
+			}, cfg.ConfigDir(), buildinfo.Version, host, true)
 		},
 	}
 
@@ -145,13 +156,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				if cipher == nil {
 					return nil, fmt.Errorf("encryption key unavailable; cannot refresh Traefik")
 				}
-				return cluster.ApplySiteCert(ctx, cluster.SiteCertDeps{
+				return cluster.ApplyCert(ctx, cluster.SiteCertDeps{
 					Store:       st,
 					Cipher:      cipher,
 					Docker:      dc,
 					Deployer:    deployer,
 					Provisioner: ooProvisioner(st, cipher, io.Discard, domain),
-				}, cfg.ConfigDir(), buildinfo.Version, domain, certPEM, keyPEM)
+				}, cfg.ConfigDir(), buildinfo.Version, domain, certPEM, keyPEM, true)
 			},
 		},
 	})

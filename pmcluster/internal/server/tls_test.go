@@ -14,12 +14,25 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
+
+// openServerStore opens a fresh store in a temp dir for one test.
+func openServerStore(t *testing.T) *store.Store {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
+}
 
 func genCert(t *testing.T, host string) (certPEM, keyPEM string) {
 	t.Helper()
@@ -49,19 +62,58 @@ func genCert(t *testing.T, host string) (certPEM, keyPEM string) {
 	return certPEM, keyPEM
 }
 
-func newTLSServer(t *testing.T) (*httptest.Server, *int, *tlscerts.Manager) {
+// newHostTLSServer builds a server with a real store + a recording Apply that
+// persists rows via st.PutSiteCert (mirroring cluster.ApplyCert) and a
+// Remove that deletes rows + secrets via st.DeleteSiteCert.
+func newHostTLSServer(t *testing.T) (*httptest.Server, *int, *store.Store) {
 	t.Helper()
-	mgr := tlscerts.New(t.TempDir())
+	st := openServerStore(t)
 	refreshes := 0
+	applyCalls := 0
 	srv := httptest.NewServer(New(Deps{
 		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {Name: "admin"}}},
+		Store:  st,
 		HostCerts: &HostCertService{
-			Manager: mgr,
-			Refresh: func(context.Context) error { refreshes++; return nil },
+			Store: st,
+			Apply: func(ctx context.Context, host, certPEM, keyPEM string) (*store.SiteCertRow, error) {
+				applyCalls++
+				if err := tlscerts.Validate(host); err != nil {
+					return nil, err
+				}
+				info, err := tlscerts.ParseAndCheck(certPEM, keyPEM, host)
+				if err != nil {
+					return nil, err
+				}
+				refreshes++
+				now := time.Now().UTC()
+				row := store.SiteCertRow{
+					Domain:     host,
+					CertSecret: "hostcert-" + host + "_v001",
+					KeySecret:  "hostkey-" + host + "_v001",
+					NotBefore:  info.NotBefore,
+					NotAfter:   info.NotAfter,
+					SANs:       info.SANs,
+					CertHash:   store.ConfigHash(certPEM),
+					KeyHash:    store.ConfigHash(keyPEM),
+					CreatedAt:  now,
+					UpdatedAt:  now,
+				}
+				if err := st.PutSiteCert(ctx, row); err != nil {
+					return nil, err
+				}
+				return &row, nil
+			},
+			Remove: func(ctx context.Context, host string) error {
+				refreshes++
+				if _, err := st.GetSiteCert(ctx, host); err != nil {
+					return err // ErrSiteCertNotFound → 404, mirroring RemoveCert
+				}
+				return st.DeleteSiteCert(ctx, host)
+			},
 		},
 	}))
 	t.Cleanup(srv.Close)
-	return srv, &refreshes, mgr
+	return srv, &refreshes, st
 }
 
 func doJSON(t *testing.T, method, url, token string, body any) *http.Response {
@@ -88,7 +140,7 @@ func doJSON(t *testing.T, method, url, token string, body any) *http.Response {
 }
 
 func TestHostCertAPI_CRUDAndAuth(t *testing.T) {
-	srv, refreshes, _ := newTLSServer(t)
+	srv, refreshes, st := newHostTLSServer(t)
 	base := srv.URL + "/api/tls/hosts"
 	cert, key := genCert(t, "idlibookfair.com")
 
@@ -107,7 +159,7 @@ func TestHostCertAPI_CRUDAndAuth(t *testing.T) {
 			t.Fatalf("status = %d", resp.StatusCode)
 		}
 		var out struct {
-			Hosts []tlscerts.HostCert `json:"hosts"`
+			Hosts []hostCertResponse `json:"hosts"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&out)
 		if len(out.Hosts) != 0 {
@@ -115,7 +167,7 @@ func TestHostCertAPI_CRUDAndAuth(t *testing.T) {
 		}
 	})
 
-	t.Run("put valid → 200 + refresh", func(t *testing.T) {
+	t.Run("put valid → 200 + row persisted", func(t *testing.T) {
 		resp := doJSON(t, http.MethodPut, base+"/idlibookfair.com", "tok",
 			map[string]string{"cert": cert, "key": key})
 		defer resp.Body.Close()
@@ -124,8 +176,16 @@ func TestHostCertAPI_CRUDAndAuth(t *testing.T) {
 			_, _ = b.ReadFrom(resp.Body)
 			t.Fatalf("status = %d, body=%s", resp.StatusCode, b.String())
 		}
+		var out hostCertResponse
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		if out.Host != "idlibookfair.com" || out.CertSecret == "" || out.KeySecret == "" || out.CertHash == "" {
+			t.Errorf("response = %+v, want host+secrets+hash", out)
+		}
 		if *refreshes != 1 {
 			t.Errorf("refreshes = %d, want 1", *refreshes)
+		}
+		if _, err := st.GetSiteCert(context.Background(), "idlibookfair.com"); err != nil {
+			t.Errorf("row not persisted: %v", err)
 		}
 	})
 
@@ -133,7 +193,7 @@ func TestHostCertAPI_CRUDAndAuth(t *testing.T) {
 		resp := doJSON(t, http.MethodGet, base, "tok", nil)
 		defer resp.Body.Close()
 		var out struct {
-			Hosts []tlscerts.HostCert `json:"hosts"`
+			Hosts []hostCertResponse `json:"hosts"`
 		}
 		_ = json.NewDecoder(resp.Body).Decode(&out)
 		if len(out.Hosts) != 1 || out.Hosts[0].Host != "idlibookfair.com" {
@@ -189,15 +249,65 @@ func TestHostCertAPI_CRUDAndAuth(t *testing.T) {
 	})
 }
 
-// TestHostCertAPI_RefreshFails_Reports503 verifies a failed refresh surfaces
-// as 503 (the on-disk write is kept, so a retry re-triggers it).
-func TestHostCertAPI_RefreshFails_Reports503(t *testing.T) {
-	mgr := tlscerts.New(t.TempDir())
+// TestHostCertAPI_ListExcludesClusterDomain verifies the list endpoint omits
+// the cluster's own-domain row (that one is served by /api/tls/site).
+func TestHostCertAPI_ListExcludesClusterDomain(t *testing.T) {
+	st := openServerStore(t)
+	ctx := context.Background()
+	_ = st.SetSetting(ctx, "domain", "nextrum-sy.com")
+	now := time.Now().UTC()
+	if err := st.PutSiteCert(ctx, store.SiteCertRow{
+		Domain: "nextrum-sy.com", CertSecret: "cert_v001", KeySecret: "key_v001",
+		NotBefore: now, NotAfter: now.Add(24 * time.Hour), SANs: []string{"nextrum-sy.com"},
+		CertHash: "a", KeyHash: "b", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed main row: %v", err)
+	}
+	if err := st.PutSiteCert(ctx, store.SiteCertRow{
+		Domain: "idlibookfair.com", CertSecret: "hostcert-idlibookfair-com_v001", KeySecret: "hostkey-idlibookfair-com_v001",
+		NotBefore: now, NotAfter: now.Add(24 * time.Hour), SANs: []string{"idlibookfair.com"},
+		CertHash: "c", KeyHash: "d", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed host row: %v", err)
+	}
+
 	srv := httptest.NewServer(New(Deps{
 		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {Name: "admin"}}},
+		Store:  st,
 		HostCerts: &HostCertService{
-			Manager: mgr,
-			Refresh: func(context.Context) error { return errors.New("simulated refresh failure") },
+			Store: st,
+			Apply: func(context.Context, string, string, string) (*store.SiteCertRow, error) {
+				return nil, errors.New("unused")
+			},
+			Remove: func(context.Context, string) error { return nil },
+		},
+	}))
+	t.Cleanup(srv.Close)
+
+	resp := doJSON(t, http.MethodGet, srv.URL+"/api/tls/hosts", "tok", nil)
+	defer resp.Body.Close()
+	var out struct {
+		Hosts []hostCertResponse `json:"hosts"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if len(out.Hosts) != 1 || out.Hosts[0].Host != "idlibookfair.com" {
+		t.Errorf("hosts = %+v, want only idlibookfair.com (main row excluded)", out.Hosts)
+	}
+}
+
+// TestHostCertAPI_RefreshFails_Reports503 verifies an Apply failure surfaces
+// as an error response (the row is not persisted).
+func TestHostCertAPI_ApplyError_ReportsError(t *testing.T) {
+	st := openServerStore(t)
+	srv := httptest.NewServer(New(Deps{
+		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {Name: "admin"}}},
+		Store:  st,
+		HostCerts: &HostCertService{
+			Store: st,
+			Apply: func(context.Context, string, string, string) (*store.SiteCertRow, error) {
+				return nil, errors.New("simulated refresh failure")
+			},
+			Remove: func(context.Context, string) error { return nil },
 		},
 	}))
 	t.Cleanup(srv.Close)
@@ -205,12 +315,11 @@ func TestHostCertAPI_RefreshFails_Reports503(t *testing.T) {
 	resp := doJSON(t, http.MethodPut, srv.URL+"/api/tls/hosts/fail.example.com", "tok",
 		map[string]string{"cert": cert, "key": key})
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", resp.StatusCode)
 	}
-	// Cert remains on disk.
-	list, err := mgr.List(context.Background())
-	if err != nil || len(list) != 1 {
-		t.Errorf("cert should persist after failed refresh; list=%+v err=%v", list, err)
+	// Row not persisted.
+	if _, err := st.GetSiteCert(context.Background(), "fail.example.com"); err == nil {
+		t.Errorf("row should not persist when Apply fails")
 	}
 }

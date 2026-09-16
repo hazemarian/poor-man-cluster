@@ -134,9 +134,9 @@ func TestApplySiteCert_EndToEnd(t *testing.T) {
 	ctx := context.Background()
 	certPEM, keyPEM := genCert(t, "test.example.com")
 	scdeps := SiteCertDeps{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer, Provisioner: deps.Provisioner}
-	row, err := ApplySiteCert(ctx, scdeps, cfgDir, "v0.3.0", "test.example.com", certPEM, keyPEM)
+	row, err := ApplyCert(ctx, scdeps, cfgDir, "v0.3.0", "test.example.com", certPEM, keyPEM, true)
 	if err != nil {
-		t.Fatalf("ApplySiteCert: %v", err)
+		t.Fatalf("ApplyCert: %v", err)
 	}
 
 	// Local source-of-truth files written.
@@ -175,9 +175,9 @@ func TestApplySiteCert_EndToEnd(t *testing.T) {
 
 	// Idempotence: applying the SAME cert again must still succeed (content-
 	// aware pipeline reuses the secret versions) and keep the same row secrets.
-	row2, err := ApplySiteCert(ctx, scdeps, cfgDir, "v0.3.0", "test.example.com", certPEM, keyPEM)
+	row2, err := ApplyCert(ctx, scdeps, cfgDir, "v0.3.0", "test.example.com", certPEM, keyPEM, true)
 	if err != nil {
-		t.Fatalf("second ApplySiteCert: %v", err)
+		t.Fatalf("second ApplyCert: %v", err)
 	}
 	if row2.CertSecret != row.CertSecret || row2.KeySecret != row.KeySecret {
 		t.Errorf("idempotent re-apply should reuse secret versions: before %q/%q after %q/%q",
@@ -194,7 +194,7 @@ func TestApplySiteCert_RejectsWrongDomain(t *testing.T) {
 	ctx := context.Background()
 	certPEM, keyPEM := genCert(t, "other.example.net")
 	scdeps := SiteCertDeps{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer, Provisioner: deps.Provisioner}
-	_, err := ApplySiteCert(ctx, scdeps, cfgDir, "v0.3.0", "test.example.com", certPEM, keyPEM)
+	_, err := ApplyCert(ctx, scdeps, cfgDir, "v0.3.0", "test.example.com", certPEM, keyPEM, true)
 	if err == nil {
 		t.Fatal("expected an error: cert for other.example.net must not be accepted for test.example.com")
 	}

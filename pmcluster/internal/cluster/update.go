@@ -6,7 +6,6 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
@@ -126,15 +125,20 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		ACMEEmail:                 state.ACMEEmail,
 		ConfigDir:                 in.ConfigDir,
 		DataDir:                   filepath.Dir(in.ConfigDir),
-		HostsDir:                  tlscerts.HostsDir(in.ConfigDir),
 		EdgeImage:                 EdgeImageFor(),
 	}
-	// The infra stack bind-mounts HostsDir read-only into Traefik; Docker
-	// rejects a service bind mount whose source path doesn't exist, so ensure it
-	// before deploying any stack.
-	if err := tlscerts.EnsureHostsDir(in.ConfigDir); err != nil {
-		return res, fmt.Errorf("ensure hosts dir: %w", err)
+
+	// Migrate any legacy on-disk per-host certs into versioned Swarm secrets +
+	// DB metadata (idempotent); the Traefik dynamic config references secrets,
+	// never files.
+	if err := importHostCertsMetadata(ctx, deps.Store, deps.Docker, in.ConfigDir); err != nil {
+		return res, fmt.Errorf("import host certificates: %w", err)
 	}
+	hostCerts, err := loadHostCertEntries(ctx, deps.Store, domain)
+	if err != nil {
+		return res, err
+	}
+	render.HostCerts = hostCerts
 
 	// TLS cert/key: content-aware re-apply from stored paths. Unchanged file
 	// bytes reuse the current version (no churn, no Traefik restart).

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -117,22 +116,16 @@ func (s *SiteCertService) put(w http.ResponseWriter, r *http.Request) {
 
 // siteCertResponseFromRow converts a stored row into its JSON shape.
 func siteCertResponseFromRow(row *store.SiteCertRow) siteCertResponse {
-	rf := func(t time.Time) string {
-		if t.IsZero() {
-			return ""
-		}
-		return t.UTC().Format("2006-01-02T15:04:05Z")
-	}
 	return siteCertResponse{
 		Domain:     row.Domain,
 		CertSecret: row.CertSecret,
 		KeySecret:  row.KeySecret,
-		NotBefore:  rf(row.NotBefore),
-		NotAfter:   rf(row.NotAfter),
+		NotBefore:  rfTime(row.NotBefore),
+		NotAfter:   rfTime(row.NotAfter),
 		SANs:       row.SANs,
 		CertHash:   row.CertHash,
 		KeyHash:    row.KeyHash,
-		CreatedAt:  rf(row.CreatedAt),
-		UpdatedAt:  rf(row.UpdatedAt),
+		CreatedAt:  rfTime(row.CreatedAt),
+		UpdatedAt:  rfTime(row.UpdatedAt),
 	}
 }

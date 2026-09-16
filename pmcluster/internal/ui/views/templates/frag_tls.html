@@ -49,7 +49,9 @@ host without its own certificate.</p>
 <h2 style="margin-bottom:0">Per-host certificates</h2>
 <p class="sub" style="margin-top:2px">Serve a customer's own domain on its own
 origin with its own real certificate. The cert and key are pasted as text here,
-stored by pmcluster under <code>~/.pmcluster/config/hosts/&lt;host&gt;/</code>, and served by
+stored by pmcluster as versioned Swarm secrets (`hostcert-&lt;host&gt;_vNNN` /
+`hostkey-&lt;host&gt;_vNNN`) with a DB metadata row — the same table and flow as the
+main certificate — and served by
 Traefik for the matching SNI. The main certificate is never touched.</p>
 
 <div class="card">

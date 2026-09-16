@@ -469,7 +469,7 @@ pmcluster tls hosts list                    # host, expiry, SANs
 pmcluster tls hosts remove api.customer.com
 ```
 
-Certs are stored under `~/.pmcluster/config/hosts/<host>/`. Adding or removing one re-renders the Traefik dynamic config and re-deploys the infra stack so it takes effect immediately; pass `--no-refresh` to defer the refresh to the next `pmcluster cluster update`. The cluster's own wildcard certificate (`cluster up --cert/--key`) is never touched by these commands.
+Per-host certs use the same table and flow as the cluster's own certificate: the PEM bytes become versioned Swarm secrets (`hostcert-<host>_vNNN` / `hostkey-<host>_vNNN`) and the metadata (expiry, SANs, hashes) is recorded in the `site_certs` DB table — they are **never** written to the manager's filesystem. Adding or removing one re-renders the Traefik dynamic config and re-deploys the infra stack so it takes effect immediately; pass `--no-refresh` to defer the refresh to the next `pmcluster cluster update`. The cluster's own wildcard certificate (`cluster up --cert/--key`) is never touched by these commands.
 
 ---
 

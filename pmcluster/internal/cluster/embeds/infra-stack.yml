@@ -42,14 +42,6 @@ services:
       - "443:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      [[- if and .ConfigDir .HostsDir]]
-      # Per-host TLS certs (~/.pmcluster/config/hosts) mounted read-only so
-      # Traefik can serve bring-your-own per-host certs (dynamic config's
-      # tls.certificates reference /etc/traefik/hosts/<host>/cert.pem). The
-      # hosts dir is on the manager node's host FS, so this is a host bind
-      # mount; file-content changes are picked up via the file-provider watch.
-      - [[.HostsDir]]:/etc/traefik/hosts:ro
-      [[- end]]
       [[- if .ACMEEmail]]
       - traefik_acme:/letsencrypt
       [[- end]]

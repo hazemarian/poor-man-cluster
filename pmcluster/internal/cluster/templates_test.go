@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -10,14 +9,12 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"math/big"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
 )
 
 // stacksWithDomain lists the bundled stacks that actually contain ${DOMAIN}
@@ -475,24 +472,22 @@ func selfSignedForHost(t *testing.T, host string) (certPEM, keyPEM string) {
 }
 
 // TestRenderTraefikDynamic_AppendsHostCerts verifies that per-host certs
-// placed under the hosts dir are merged into the dynamic config's
-// tls.certificates (referencing the in-container mount root) WITHOUT
+// recorded in the DB (as versioned Swarm secrets) are merged into the dynamic
+// config's tls.certificates (referencing /run/secrets/<name>) WITHOUT
 // disturbing the cluster's own BYO default cert block, and that an empty
-// hosts dir leaves the rendered body untouched.
+// list leaves the rendered body untouched.
 func TestRenderTraefikDynamic_AppendsHostCerts(t *testing.T) {
 	cfgDir := t.TempDir()
-	hostsDir := tlscerts.HostsDir(cfgDir)
-	certPEM, keyPEM := selfSignedForHost(t, "idlibookfair.com")
-	if _, err := tlscerts.New(cfgDir).Put(context.Background(), "idlibookfair.com", certPEM, keyPEM); err != nil {
-		t.Fatalf("put host cert: %v", err)
-	}
 
 	in := RenderInput{
 		Domain:         "x.example.com",
 		ConfigDir:      cfgDir,
-		HostsDir:       hostsDir,
 		CertSecretName: "cert_v001",
 		KeySecretName:  "key_v001",
+		HostCerts: []HostCertEntry{
+			{Host: "idlibookfair.com", CertSecret: "hostcert-idlibookfair-com_v001", KeySecret: "hostkey-idlibookfair-com_v001"},
+			{Host: "abbas.example.com", CertSecret: "hostcert-abbas-example-com_v007", KeySecret: "hostkey-abbas-example-com_v007"},
+		},
 	}
 	data, err := RenderTraefikDynamic(in)
 	if err != nil {
@@ -500,12 +495,15 @@ func TestRenderTraefikDynamic_AppendsHostCerts(t *testing.T) {
 	}
 	body := string(data)
 
-	// Host cert referenced at the in-container mount root.
-	if !strings.Contains(body, "certFile: /etc/traefik/hosts/idlibookfair.com/cert.pem") {
+	// Host certs referenced at /run/secrets/<versioned secret>.
+	if !strings.Contains(body, "certFile: /run/secrets/hostcert-idlibookfair-com_v001") {
 		t.Errorf("host cert certFile missing:\n%s", body)
 	}
-	if !strings.Contains(body, "keyFile: /etc/traefik/hosts/idlibookfair.com/key.pem") {
+	if !strings.Contains(body, "keyFile: /run/secrets/hostkey-idlibookfair-com_v001") {
 		t.Errorf("host cert keyFile missing:\n%s", body)
+	}
+	if !strings.Contains(body, "certFile: /run/secrets/hostcert-abbas-example-com_v007") {
+		t.Errorf("second host cert certFile missing:\n%s", body)
 	}
 	// Cluster's own BYO default cert block is preserved.
 	if !strings.Contains(body, "/run/secrets/cert_v001") || !strings.Contains(body, "/run/secrets/key_v001") {
@@ -516,8 +514,8 @@ func TestRenderTraefikDynamic_AppendsHostCerts(t *testing.T) {
 		t.Errorf("expected exactly one `tls:` key, got %d:\n%s", strings.Count(body, "tls:"), body)
 	}
 
-	// Empty hosts dir (no certs) → body unchanged.
-	in.HostsDir = filepath.Join(t.TempDir(), "missing")
+	// No host certs → body unchanged.
+	in.HostCerts = nil
 	data2, err := RenderTraefikDynamic(in)
 	if err != nil {
 		t.Fatalf("RenderTraefikDynamic (no hosts): %v", err)
@@ -525,7 +523,7 @@ func TestRenderTraefikDynamic_AppendsHostCerts(t *testing.T) {
 	if !strings.Contains(string(data2), "cors-default") {
 		t.Errorf("no-hosts render lost middlewares:\n%s", string(data2))
 	}
-	if strings.Contains(string(data2), "traefik/hosts") {
+	if strings.Contains(string(data2), "traefik/hosts") || strings.Contains(string(data2), "hostcert-") {
 		t.Errorf("no-hosts render should not reference host certs:\n%s", string(data2))
 	}
 }

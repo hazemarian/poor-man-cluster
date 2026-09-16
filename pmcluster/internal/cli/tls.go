@@ -12,7 +12,6 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
@@ -25,11 +24,13 @@ var tlsCmd = &cobra.Command{
 	Short: "Manage per-host TLS certificates served by Traefik",
 	Long: `A customer's own domain can serve the same app that lives on a
 pmcluster subdomain, on its own origin with its own real certificate. These
-commands store per-host certs (as text) under ~/.pmcluster/config/hosts/<host>/
-and refresh Traefik so it serves them for the matching SNI.
+commands store per-host certs as versioned Swarm secrets + a site_certs DB
+row (the SAME table and flow as the cluster's own certificate) and refresh
+Traefik so it serves them for the matching SNI.
 
-The cluster's own default wildcard cert (set via 'pmcluster cluster up
---cert/--key') is never touched by these commands.`,
+The cluster's own default wildcard cert is managed with 'pmcluster tls site'
+(set via 'pmcluster cluster up --cert/--key') and is never touched by the
+'pmcluster tls hosts' commands.`,
 }
 
 var tlsHostsCmd = &cobra.Command{
@@ -90,7 +91,10 @@ var tlsAddBinds tlsAddFlags
 var tlsAddCmd = &cobra.Command{
 	Use:   "add <host>",
 	Short: "Store a per-host certificate (text) and refresh Traefik",
-	Long: `Stores cert+key for <host> under ~/.pmcluster/config/hosts/<host>/.
+	Long: `Stores cert+key for <host> as versioned Swarm secrets
+(hostcert-<host>_vNNN / hostkey-<host>_vNNN) with a site_certs DB metadata
+row — the same table and flow as the cluster's own certificate. Per-host
+certs are never written to the manager's filesystem.
 
 The cert/key are provided as TEXT (paste them inline) or from PEM files:
 
@@ -172,26 +176,30 @@ func runTLSAdd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	mgr := tlscerts.New(cfg.ConfigDir())
-	hc, err := mgr.Put(cmd.Context(), host, cert, key)
+	st, cipher, dc, err := siteCertDeps(cmd, cfg, "")
 	if err != nil {
-		return fmt.Errorf("store cert: %w", err)
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	defer func() { _ = dc.Close() }()
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Uploading certificate for %s …\n", host)
+	row, err := cluster.ApplyCert(cmd.Context(), cluster.SiteCertDeps{
+		Store:       st,
+		Cipher:      cipher,
+		Docker:      dc,
+		Deployer:    cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
+		Provisioner: ooProvisioner(st, cipher, cmd.OutOrStdout(), cluster.PersistedDomain(cmd.Context(), st)),
+	}, cfg.ConfigDir(), buildinfo.Version, host, cert, key, !tlsAddBinds.noRefresh)
+	if err != nil {
+		return fmt.Errorf("apply cert: %w", err)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "✓ Stored certificate for %s (expires %s)\n",
-		hc.Host, hc.NotAfter.Format(time.RFC3339))
+		row.Domain, row.NotAfter.UTC().Format(time.RFC3339))
+	fmt.Fprintf(cmd.OutOrStdout(), "  secrets: %s / %s\n", row.CertSecret, row.KeySecret)
 
-	if !tlsAddBinds.noRefresh {
-		created, err := refreshHostCerts(cmd, cfg)
-		if err != nil {
-			return err
-		}
-		if created {
-			fmt.Fprintln(cmd.OutOrStdout(), "✓ Traefik config updated and infra stack re-deployed")
-		} else {
-			fmt.Fprintln(cmd.OutOrStdout(), "✓ Traefik config already up to date (no change detected)")
-		}
-	} else {
+	if tlsAddBinds.noRefresh {
 		fmt.Fprintln(cmd.OutOrStdout(), "→ Skipping refresh (--no-refresh). Run `pmcluster cluster update` to apply.")
 	}
 	return nil
@@ -202,19 +210,33 @@ func runTLSList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	mgr := tlscerts.New(cfg.ConfigDir())
-	hosts, err := mgr.List(cmd.Context())
+	st, _, _, err := siteCertDeps(cmd, cfg, "")
 	if err != nil {
-		return fmt.Errorf("list host certs: %w", err)
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	rows, err := st.ListSiteCerts(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("list certificates: %w", err)
+	}
+	main := cluster.PersistedDomain(cmd.Context(), st)
+	hosts := rows[:0]
+	for _, r := range rows {
+		if r.Domain == main {
+			continue // the cluster's own cert — see `pmcluster tls site show`
+		}
+		hosts = append(hosts, r)
 	}
 	if len(hosts) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "(no per-host certificates stored — use `pmcluster tls hosts add <host>`.)")
 		return nil
 	}
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "HOST\tEXPIRES\tSANS")
+	fmt.Fprintln(w, "HOST\tEXPIRES\tSANS\tCERT SECRET\tKEY SECRET")
 	for _, h := range hosts {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", h.Host, h.NotAfter.Format(time.RFC3339), strings.Join(h.SANs, ", "))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", h.Domain, h.NotAfter.UTC().Format(time.RFC3339),
+			strings.Join(h.SANs, ", "), h.CertSecret, h.KeySecret)
 	}
 	return w.Flush()
 }
@@ -225,58 +247,34 @@ func runTLSRemove(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	mgr := tlscerts.New(cfg.ConfigDir())
-	removed, err := mgr.Remove(cmd.Context(), host)
+	st, cipher, dc, err := siteCertDeps(cmd, cfg, "")
 	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	defer func() { _ = dc.Close() }()
+
+	err = cluster.RemoveCert(cmd.Context(), cluster.SiteCertDeps{
+		Store:       st,
+		Cipher:      cipher,
+		Docker:      dc,
+		Deployer:    cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
+		Provisioner: ooProvisioner(st, cipher, cmd.OutOrStdout(), cluster.PersistedDomain(cmd.Context(), st)),
+	}, cfg.ConfigDir(), buildinfo.Version, host, !tlsAddBinds.noRefresh)
+	if err != nil {
+		if errors.Is(err, store.ErrSiteCertNotFound) {
+			return fmt.Errorf("no certificate stored for %q", host)
+		}
 		return fmt.Errorf("remove cert: %w", err)
 	}
-	if !removed {
-		return fmt.Errorf("no certificate stored for %q", host)
-	}
 	fmt.Fprintf(cmd.OutOrStdout(), "✓ Removed certificate for %s\n", host)
-
-	if !tlsAddBinds.noRefresh {
-		created, err := refreshHostCerts(cmd, cfg)
-		if err != nil {
-			return err
-		}
-		if created {
-			fmt.Fprintln(cmd.OutOrStdout(), "✓ Traefik config updated and infra stack re-deployed")
-		}
-	} else {
+	if tlsAddBinds.noRefresh {
 		fmt.Fprintln(cmd.OutOrStdout(), "→ Skipping refresh (--no-refresh). Run `pmcluster cluster update` to apply.")
 	}
 	return nil
 }
 
-// refreshHostCerts re-renders Traefik (including per-host certs) and re-deploys
-// the infra stack when the dynamic config changed.
-func refreshHostCerts(cmd *cobra.Command, cfg *config.Config) (bool, error) {
-	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
-	if err != nil {
-		return false, fmt.Errorf("open encryption key: %w", err)
-	}
-	dc, err := docker.New()
-	if err != nil {
-		return false, fmt.Errorf("docker client: %w", err)
-	}
-	defer func() { _ = dc.Close() }()
-
-	st, _, err := openStore()
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = st.Close() }()
-
-	return cluster.RefreshHostCerts(cmd.Context(), cluster.HostCertsDeps{
-		Store:    st,
-		Cipher:   cipher,
-		Docker:   dc,
-		Deployer: cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
-	}, cfg.ConfigDir(), buildinfo.Version)
-}
-
-// siteCertDeps builds the collaborators needed by the site-cert commands.
+// siteCertDeps builds the collaborators needed by the TLS commands.
 func siteCertDeps(cmd *cobra.Command, cfg *config.Config, domain string) (*store.Store, *credentials.Cipher, docker.Client, error) {
 	st, _, err := openStore()
 	if err != nil {
@@ -360,13 +358,13 @@ func runTLSSiteSet(cmd *cobra.Command, _ []string) error {
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Uploading certificate for %s …\n", domain)
-	row, err := cluster.ApplySiteCert(cmd.Context(), cluster.SiteCertDeps{
+	row, err := cluster.ApplyCert(cmd.Context(), cluster.SiteCertDeps{
 		Store:       st,
 		Cipher:      cipher,
 		Docker:      dc,
 		Deployer:    cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
 		Provisioner: ooProvisioner(st, cipher, cmd.OutOrStdout(), domain),
-	}, cfg.ConfigDir(), buildinfo.Version, domain, cert, key)
+	}, cfg.ConfigDir(), buildinfo.Version, domain, cert, key, true)
 	if err != nil {
 		return fmt.Errorf("apply site cert: %w", err)
 	}

@@ -1,14 +1,12 @@
-// Package tlscerts manages per-host TLS certificates for the cluster.
+// Package tlscerts validates TLS certificate/key pairs and provides the
+// legacy per-host certificate file manager.
 //
-// A customer's own domain (e.g. idlibookfair.com) can serve the same app that
-// lives on a pmcluster-managed subdomain, on its own origin with its own real
-// certificate. pmcluster stores each per-host cert/key as text on the host
-// filesystem — under <configDir>/hosts/<host>/cert.pem + key.pem (0600) — and
-// Traefik serves them for the matching SNI.
-//
-// This is bring-your-own-cert: pmcluster never issues certificates and never
-// touches the cluster's own default wildcard cert/key (that one remains part
-// of the Traefik static/infra config, managed via `cluster up --cert/--key`).
+// Per-host certificates are now stored as versioned Swarm secrets with a
+// site_certs DB row — the same table and flow as the cluster's own
+// certificate — and are never read from the manager's filesystem. This
+// package's Manager/HostsDir remain only as the one-time migration path that
+// imports certs left in the legacy <configDir>/hosts/ directory into
+// secrets + DB. Validate + ParseAndCheck are used by every certificate flow.
 //
 // Paths are deliberately ops-invisible: the caller (CLI, daemon API, edge UI)
 // supplies cert + key as text; the manager writes, validates, lists and removes

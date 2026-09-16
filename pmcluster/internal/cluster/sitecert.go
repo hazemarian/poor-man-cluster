@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
@@ -54,74 +55,108 @@ func EnsureSiteCertDir(configDir string) error {
 	return os.MkdirAll(SiteCertDir(configDir), 0o755)
 }
 
-// ApplySiteCert validates certPEM/keyPEM for the cluster's own domain, writes
-// them as the local source of truth under <configDir>/site/, re-points the
-// persisted TLS state at those files, refreshes Traefik via the Update
-// pipeline (materializing cert_vN/key_vN + re-rendering the dynamic config),
-// and persists the certificate metadata in the store for expiry monitoring.
+// ApplyCert validates certPEM/keyPEM for the target domain and uploads it —
+// the SINGLE flow behind both the cluster's own certificate (domain == the
+// persisted cluster domain) and per-host (bring-your-own) certificates. It is
+// the "same table, same flow" contract: every certificate gets a
+// site_certs DB row; the only divergence is at Traefik render time, where the
+// main-domain row feeds the template's default-cert block and every other row
+// becomes an extra tls.certificates entry referencing its own secrets.
 //
-// It is the single implementation behind the CLI (`pmcluster tls site`) and
-// the daemon API (PUT /api/tls/site). Requires the cluster to be up.
-func ApplySiteCert(ctx context.Context, deps SiteCertDeps, configDir, version, domain, certPEM, keyPEM string) (*store.SiteCertRow, error) {
+// Main domain: writes the stable local copy under <configDir>/site/ (the
+// source of truth `cluster update` re-materializes from), re-points the
+// persisted TLS state at those files, and materializes cert_vN/key_vN.
+// Per-host: no files are ever written — the cert/key live only in versioned
+// Swarm secrets (hostcert-<host>_vNNN / hostkey-<host>_vNNN) + the DB row.
+//
+// Unless refresh is false, the full Update pipeline re-renders + re-deploys
+// Traefik (content-aware: unchanged inputs deploy nothing). Requires the
+// cluster to be up.
+func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domain, certPEM, keyPEM string, refresh bool) (*store.SiteCertRow, error) {
 	if deps.Store == nil {
-		return nil, fmt.Errorf("apply site cert requires a store (run `pmcluster init` + `pmcluster cluster up` first)")
+		return nil, fmt.Errorf("apply certificate requires a store (run `pmcluster init` + `pmcluster cluster up` first)")
 	}
 	if domain == "" {
 		domain = deps.Store.GetSettingDefault(ctx, settingDomain, "")
 		if domain == "" {
-			return nil, fmt.Errorf("no persisted domain found — run `cluster up` before managing the site certificate")
+			return nil, fmt.Errorf("no persisted domain found — run `cluster up` before managing certificates")
+		}
+	}
+	if err := tlscerts.Validate(domain); err != nil {
+		return nil, err
+	}
+	domain = strings.ToLower(domain)
+
+	// Validate the pair and that the leaf covers the target domain (CN or
+	// SAN), then extract metadata for storage + expiry monitoring.
+	info, err := tlscerts.ParseAndCheck(certPEM, keyPEM, domain)
+	if err != nil {
+		return nil, fmt.Errorf("validate certificate: %w", err)
+	}
+
+	mainCert := domain == PersistedDomain(ctx, deps.Store)
+	var certName, keyName string
+	if mainCert {
+		// Main-domain flow: stable local copy + persisted TLS state. The
+		// Update refresh (below) materializes cert_vN/key_vN from those files.
+		if err := EnsureSiteCertDir(configDir); err != nil {
+			return nil, fmt.Errorf("ensure site cert dir: %w", err)
+		}
+		certPath := filepath.Join(SiteCertDir(configDir), "cert.pem")
+		keyPath := filepath.Join(SiteCertDir(configDir), "key.pem")
+		if err := writeSiteCertFile(keyPath, keyPEM); err != nil {
+			return nil, err
+		}
+		if err := writeSiteCertFile(certPath, certPEM); err != nil {
+			return nil, err
+		}
+		// Re-point the persisted TLS state at the local copies (mode stays
+		// "cert"; an ACME-mode cluster switches to operator certs).
+		state := tlsState{Mode: "cert", CertPath: certPath, KeyPath: keyPath}
+		if err := state.save(ctx, deps.Store); err != nil {
+			return nil, err
+		}
+	} else {
+		// Per-host flow: materialize the versioned secrets directly — the
+		// render picks them up on the next refresh via the DB row.
+		var err error
+		certName, _, err = EnsureVersionedSecret(ctx, deps.Docker, hostSecretBase("cert", domain), []byte(certPEM))
+		if err != nil {
+			return nil, fmt.Errorf("ensure host cert secret: %w", err)
+		}
+		keyName, _, err = EnsureVersionedSecret(ctx, deps.Docker, hostSecretBase("key", domain), []byte(keyPEM))
+		if err != nil {
+			return nil, fmt.Errorf("ensure host key secret: %w", err)
 		}
 	}
 
-	// Validate the pair and that the leaf covers the cluster's own domain
-	// (CN or SAN), then extract metadata for storage + expiry monitoring.
-	info, err := tlscerts.ParseAndCheck(certPEM, keyPEM, domain)
-	if err != nil {
-		return nil, fmt.Errorf("validate site certificate: %w", err)
-	}
-
-	// Stable local copy: <configDir>/site/cert.pem + key.pem (0600). Written
-	// key-first, atomic rename per file, mirroring the per-host cert manager.
-	if err := EnsureSiteCertDir(configDir); err != nil {
-		return nil, fmt.Errorf("ensure site cert dir: %w", err)
-	}
-	certPath := filepath.Join(SiteCertDir(configDir), "cert.pem")
-	keyPath := filepath.Join(SiteCertDir(configDir), "key.pem")
-	if err := writeSiteCertFile(keyPath, keyPEM); err != nil {
-		return nil, err
-	}
-	if err := writeSiteCertFile(certPath, certPEM); err != nil {
-		return nil, err
-	}
-
-	// Re-point the persisted TLS state at the local copies (mode stays "cert";
-	// an ACME-mode cluster switches to operator certs — allowed via this API,
-	// which is explicit about the intent, unlike a bare `cluster up`).
-	state := tlsState{Mode: "cert", CertPath: certPath, KeyPath: keyPath}
-	if err := state.save(ctx, deps.Store); err != nil {
-		return nil, err
-	}
-
 	// Refresh Traefik through the full Update pipeline: content-aware secret
-	// materialization (cert_vN/key_vN), dynamic-config re-render, infra
-	// re-deploy only when the content moved.
-	res, err := Update(ctx, UpdateDeps{
-		Store:       deps.Store,
-		Cipher:      deps.Cipher,
-		Docker:      deps.Docker,
-		Deployer:    deps.Deployer,
-		Provisioner: deps.Provisioner,
-		Stdout:      io.Discard,
-	}, UpdateInput{ConfigDir: configDir, Version: version})
-	if err != nil {
-		return nil, err
+	// materialization, dynamic-config re-render, infra re-deploy only when the
+	// content moved.
+	if refresh {
+		res, err := Update(ctx, UpdateDeps{
+			Store:       deps.Store,
+			Cipher:      deps.Cipher,
+			Docker:      deps.Docker,
+			Deployer:    deps.Deployer,
+			Provisioner: deps.Provisioner,
+			Stdout:      io.Discard,
+		}, UpdateInput{ConfigDir: configDir, Version: version})
+		if err != nil {
+			return nil, err
+		}
+		if mainCert {
+			// The Update pipeline materialized the main cert from the local
+			// copy — record the actual versioned secret names.
+			certName, keyName = res.CertSecret, res.KeySecret
+		}
 	}
 
 	now := time.Now().UTC()
 	row := store.SiteCertRow{
 		Domain:     domain,
-		CertSecret: res.CertSecret,
-		KeySecret:  res.KeySecret,
+		CertSecret: certName,
+		KeySecret:  keyName,
 		NotBefore:  info.NotBefore,
 		NotAfter:   info.NotAfter,
 		SANs:       info.SANs,
@@ -131,9 +166,48 @@ func ApplySiteCert(ctx context.Context, deps SiteCertDeps, configDir, version, d
 		UpdatedAt:  now,
 	}
 	if err := deps.Store.PutSiteCert(ctx, row); err != nil {
-		return nil, fmt.Errorf("store site certificate metadata: %w", err)
+		return nil, fmt.Errorf("store certificate metadata: %w", err)
 	}
 	return &row, nil
+}
+
+// RemoveCert deletes a per-host (bring-your-own) certificate: drops the
+// site_certs DB row, removes its versioned Swarm secrets (best-effort) and —
+// unless refresh is false — re-renders + re-deploys Traefik so the cert stops
+// being served. Returns store.ErrSiteCertNotFound when the host had no stored
+// cert. The cluster's OWN certificate cannot be removed (replace it instead).
+func RemoveCert(ctx context.Context, deps SiteCertDeps, configDir, version, domain string, refresh bool) error {
+	if deps.Store == nil {
+		return fmt.Errorf("remove certificate requires a store (run `pmcluster init` + `pmcluster cluster up` first)")
+	}
+	domain = strings.ToLower(domain)
+	if domain == PersistedDomain(ctx, deps.Store) {
+		return fmt.Errorf("cannot remove the cluster's own certificate (%s) — replace it with `pmcluster tls site set`", domain)
+	}
+	row, err := deps.Store.GetSiteCert(ctx, domain)
+	if err != nil {
+		return err // ErrSiteCertNotFound propagates to the caller (404)
+	}
+	if err := deps.Store.DeleteSiteCert(ctx, domain); err != nil {
+		return fmt.Errorf("delete certificate metadata: %w", err)
+	}
+	// Best-effort secret GC — a leftover version is harmless.
+	_ = deps.Docker.SecretRemove(ctx, row.CertSecret)
+	_ = deps.Docker.SecretRemove(ctx, row.KeySecret)
+
+	if refresh {
+		if _, err := Update(ctx, UpdateDeps{
+			Store:       deps.Store,
+			Cipher:      deps.Cipher,
+			Docker:      deps.Docker,
+			Deployer:    deps.Deployer,
+			Provisioner: deps.Provisioner,
+			Stdout:      io.Discard,
+		}, UpdateInput{ConfigDir: configDir, Version: version}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // GetSiteCert returns the stored metadata for the cluster's own domain, or

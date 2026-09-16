@@ -396,7 +396,7 @@ Certificates within **30 days** of expiry are flagged in the console and warned 
 
 ### Per-host TLS (customer domains)
 
-Serve the same app on a customer's own domain with its own certificate:
+Serve the same app on a customer's own domain with its own certificate. Per-host certs use the **same table and flow as the main certificate** — the PEM bytes become versioned Swarm secrets and the metadata lands in the same `site_certs` DB table (the cluster's own domain is just one row among them). The only difference is at Traefik render time: the main-domain row feeds the default-cert block, every other row becomes an extra `tls.certificates` entry referencing its own secrets (`hostcert-<host>_vNNN` / `hostkey-<host>_vNNN`). Per-host certs are **never written to the manager's filesystem**.
 
 1. Add the hostname to the service's `expose.aliases` in the manifest (creates the Traefik router).
 2. Store the matching cert+key:
@@ -406,11 +406,11 @@ pmcluster tls hosts add api.customer.com --cert-file cert.pem --key-file key.pem
 # or inline text:
 pmcluster tls hosts add api.customer.com --cert "$(cat cert.pem)" --key "$(cat key.pem)"
 
-pmcluster tls hosts list                      # host, expiry, SANs
+pmcluster tls hosts list                      # host, expiry, SANs, secret names
 pmcluster tls hosts remove api.customer.com
 ```
 
-Adding/removing re-renders Traefik and re-deploys the infra stack; use `--no-refresh` to defer to `pmcluster cluster update`. The cluster's own wildcard cert is never touched.
+Adding/removing re-renders Traefik and re-deploys the infra stack; use `--no-refresh` to defer to `pmcluster cluster update`. The cluster's own wildcard cert is never touched. On upgrade, any certs left in the legacy `~/.pmcluster/config/hosts/<host>/` directory are migrated into secrets + DB exactly once (then the directory is removed).
 
 ## Private Registries
 
@@ -451,7 +451,7 @@ pmcluster backup create                    # on-demand snapshot
 
 ### Control-plane backups (pmcluster's own state)
 
-The backup stack ships a second agent, `control-plane-backup`, that runs **only on the manager node**. Every night it archives `~/.pmcluster` itself — `data.db` (users, API keys, webhook secrets, credentials, stack revisions), the `.encryption_key`, `config/`, and per-host TLS certs — into the same `/var/backups/docker-volumes` directory as the volume backups, with a `pmcluster-ctlplane-` prefix and 30-day retention.
+The backup stack ships a second agent, `control-plane-backup`, that runs **only on the manager node**. Every night it archives `~/.pmcluster` itself — `data.db` (users, API keys, webhook secrets, credentials, stack revisions, TLS metadata), the `.encryption_key`, and `config/` — into the same `/var/backups/docker-volumes` directory as the volume backups, with a `pmcluster-ctlplane-` prefix and 30-day retention.
 
 ```bash
 ls /var/backups/docker-volumes/pmcluster-ctlplane-*   # control-plane archives

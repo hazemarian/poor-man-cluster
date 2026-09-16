@@ -6,7 +6,6 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
@@ -180,6 +179,17 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	}
 	needProvision := storedToken == ""
 
+	// Migrate any legacy on-disk per-host certs into versioned Swarm secrets +
+	// DB metadata (idempotent); the Traefik dynamic config references secrets,
+	// never files. On a fresh install there is nothing to import.
+	if err := importHostCertsMetadata(ctx, deps.Store, deps.Docker, in.ConfigDir); err != nil {
+		return res, fmt.Errorf("import host certificates: %w", err)
+	}
+	hostCerts, err := loadHostCertEntries(ctx, deps.Store, in.Domain)
+	if err != nil {
+		return res, err
+	}
+
 	render := RenderInput{
 		Domain:                    in.Domain,
 		OpenObserveAdminEmail:     openobsCred.Username,
@@ -189,19 +199,13 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		ACMEEmail:                 in.ACMEEmail,
 		ConfigDir:                 in.ConfigDir,
 		DataDir:                   filepath.Dir(in.ConfigDir),
-		HostsDir:                  tlscerts.HostsDir(in.ConfigDir),
+		HostCerts:                 hostCerts,
 		CertSecretName:            certSecret,
 		KeySecretName:             keySecret,
 		EdgeImage:                 EdgeImageFor(),
 	}
 	if needProvision {
 		render.OpenObserveIngestionToken = pendingIngestionToken
-	}
-	// The infra stack bind-mounts HostsDir read-only into Traefik; Docker
-	// rejects a service bind mount whose source path doesn't exist, so ensure it
-	// before deploying any stack.
-	if err := tlscerts.EnsureHostsDir(in.ConfigDir); err != nil {
-		return res, fmt.Errorf("ensure hosts dir: %w", err)
 	}
 
 	otelConfigName, otelConfigCreated, err := ensureOTelConfig(ctx, deps, in.Version, render)

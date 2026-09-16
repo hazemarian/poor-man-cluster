@@ -150,12 +150,12 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		}
 	})
 	mux.HandleFunc("/api/tls/hosts", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"hosts":[{"host":"idlebbookfair.com","sans":["idlebbookfair.com","www.idlebbookfair.com"],"not_after":"`+siteFar+`","not_before":"2026-01-01T00:00:00Z","cert_file":"/x/cert.pem","key_file":"/x/key.pem"}]}`)
+		write(w, `{"hosts":[{"host":"idlebbookfair.com","sans":["idlebbookfair.com","www.idlebbookfair.com"],"not_after":"`+siteFar+`","not_before":"2026-01-01T00:00:00Z","cert_secret":"hostcert-idlebbookfair-com_v001","key_secret":"hostkey-idlebbookfair-com_v001","cert_hash":"aa11","key_hash":"bb22","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}`)
 	})
 	mux.HandleFunc("/api/tls/hosts/", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPut:
-			write(w, `{"host":"idlebbookfair.com","sans":["idlebbookfair.com"],"not_after":"`+siteFar+`","not_before":"2026-01-01T00:00:00Z","cert_file":"/x/cert.pem","key_file":"/x/key.pem"}`)
+			write(w, `{"host":"idlebbookfair.com","sans":["idlebbookfair.com"],"not_after":"`+siteFar+`","not_before":"2026-01-01T00:00:00Z","cert_secret":"hostcert-idlebbookfair-com_v001","key_secret":"hostkey-idlebbookfair-com_v001","cert_hash":"aa11","key_hash":"bb22","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`)
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}

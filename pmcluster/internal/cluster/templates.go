@@ -127,12 +127,12 @@ type RenderInput struct {
 	// nightly archive). Derived by callers via filepath.Dir(ConfigDir).
 	DataDir string
 
-	// HostsDir is the per-host TLS certificate base directory
-	// (~/.pmcluster/config/hosts/). RenderTraefikDynamic appends every
-	// on-disk host cert to the dynamic config so Traefik serves them for
-	// the matching SNI (file-provider hot reload). Empty disables the
-	// append (host certs only appear when the feature is configured).
-	HostsDir string
+	// HostCerts lists the per-host (bring-your-own) certificates recorded in
+	// the DB. RenderTraefikDynamic appends each one's versioned Swarm secret
+	// names to the dynamic config's tls.certificates so Traefik serves them
+	// for the matching SNI. Per-host certs are never read from the filesystem
+	// (they live only in Swarm secrets + DB metadata).
+	HostCerts []HostCertEntry
 
 	// OTelConfigName is the versioned Docker config name for the OTel
 	// collector pipeline (e.g. pmcluster_otel_config_v003). Substituted
@@ -261,8 +261,9 @@ func RenderOTelCollectorConfig(in RenderInput) ([]byte, error) {
 
 // RenderTraefikDynamic renders the Traefik file-provider config.
 // Reads from disk first (ConfigDir), then embedded. After the template body
-// is rendered, any per-host certs under in.HostsDir are appended into the
-// same doc's tls.certificates list so Traefik serves them for their SNI.
+// is rendered, every per-host cert in in.HostCerts is appended into the same
+// doc's tls.certificates list (referencing its versioned Swarm secret) so
+// Traefik serves it for the matching SNI.
 func RenderTraefikDynamic(in RenderInput) ([]byte, error) {
 	if in.Domain == "" {
 		return nil, fmt.Errorf("RenderTraefikDynamic: Domain is required")
@@ -281,53 +282,28 @@ func RenderTraefikDynamic(in RenderInput) ([]byte, error) {
 	if err := tmpl.Execute(&out, in); err != nil {
 		return nil, fmt.Errorf("execute traefik dynamic template: %w", err)
 	}
-	return appendHostCertificates(out.Bytes(), in.HostsDir)
+	return appendHostCertSecrets(out.Bytes(), in.HostCerts)
 }
 
-// hostCertMountRoot is the path at which the host-certs directory is
-// bind-mounted inside the Traefik container (see infra-stack.yml). The
-// dynamic config references cert files relative to this root.
-const hostCertMountRoot = "/etc/traefik/hosts"
-
-// appendHostCertificates merges every on-disk per-host cert under hostsDir
-// into the rendered Traefik dynamic config's tls.certificates list. It uses
-// a YAML round-trip so there is exactly one `tls:` block and one
-// `tls.certificates` list — never a duplicate YAML key. When hostsDir is
-// empty, has no certs, or the body has no `tls:` yet, the appropriate list is
-// created or left untouched. The cluster's own default cert block (from the
+// appendHostCertSecrets merges every per-host cert's versioned Swarm secret
+// into the rendered Traefik dynamic config's tls.certificates list. Traefik
+// reads Swarm secrets as files under /run/secrets/<name>, so each entry
+// references /run/secrets/<certSecret> + /run/secrets/<keySecret>. It uses a
+// YAML round-trip so there is exactly one `tls:` block and one
+// `tls.certificates` list — never a duplicate YAML key. With no host certs the
+// body is returned untouched. The cluster's own default cert block (from the
 // template) is preserved verbatim in the list; host certs are additional
 // entries.
-func appendHostCertificates(body []byte, hostsDir string) ([]byte, error) {
-	if hostsDir == "" {
+func appendHostCertSecrets(body []byte, entries []HostCertEntry) ([]byte, error) {
+	if len(entries) == 0 {
 		return body, nil
 	}
-	entries, err := os.ReadDir(hostsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return body, nil
-		}
-		return nil, fmt.Errorf("scan hosts dir %s: %w", hostsDir, err)
-	}
-	var additions []map[string]string
+	additions := make([]map[string]string, 0, len(entries))
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		certPath := filepath.Join(hostsDir, e.Name(), "cert.pem")
-		keyPath := filepath.Join(hostsDir, e.Name(), "key.pem")
-		if _, err := os.Stat(certPath); err != nil {
-			continue
-		}
-		if _, err := os.Stat(keyPath); err != nil {
-			continue
-		}
 		additions = append(additions, map[string]string{
-			"certFile": filepath.Join(hostCertMountRoot, e.Name(), "cert.pem"),
-			"keyFile":  filepath.Join(hostCertMountRoot, e.Name(), "key.pem"),
+			"certFile": "/run/secrets/" + e.CertSecret,
+			"keyFile":  "/run/secrets/" + e.KeySecret,
 		})
-	}
-	if len(additions) == 0 {
-		return body, nil
 	}
 
 	var doc map[string]any

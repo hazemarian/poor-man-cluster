@@ -117,15 +117,20 @@ type RollbackResult struct {
 	RolledBackTo int64  `json:"rolled_back_to"`
 }
 
-// HostCert is one per-host TLS certificate managed via /api/tls/hosts. Times
-// are RFC3339 strings (Go json marshals time.Time as such).
+// HostCert is one per-host TLS certificate managed via /api/tls/hosts. Per-host
+// certs live in versioned Swarm secrets + a site_certs DB row (the same table
+// and flow as the cluster's own certificate); times are RFC3339 strings.
 type HostCert struct {
-	Host      string   `json:"host"`
-	SANs      []string `json:"sans"`
-	NotAfter  string   `json:"not_after"`
-	NotBefore string   `json:"not_before"`
-	CertFile  string   `json:"cert_file"`
-	KeyFile   string   `json:"key_file"`
+	Host       string   `json:"host"`
+	SANs       []string `json:"sans"`
+	NotAfter   string   `json:"not_after"`
+	NotBefore  string   `json:"not_before"`
+	CertSecret string   `json:"cert_secret"`
+	KeySecret  string   `json:"key_secret"`
+	CertHash   string   `json:"cert_hash"`
+	KeyHash    string   `json:"key_hash"`
+	CreatedAt  string   `json:"created_at"`
+	UpdatedAt  string   `json:"updated_at"`
 }
 
 // hostCertsResponse is GET /api/tls/hosts.

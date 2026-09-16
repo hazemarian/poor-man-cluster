@@ -72,7 +72,7 @@ services:
 
     volumes:
       # SOURCE: the pmcluster data dir (rendered from the daemon's config).
-      # Includes data.db, .encryption_key, config/, hosts/ per-host certs.
+      # Includes data.db, .encryption_key, config/ (incl. main-cert local copy).
       - ${DATA_DIR}:/backup/pmcluster:ro
       
       # DESTINATION: same archive dir as the volume backups.
