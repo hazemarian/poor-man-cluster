@@ -9,7 +9,7 @@ The control plane is a single static Go 1.25 binary (`pmcluster`, ~25 MB, no cgo
 In front of it sits **`pmcluster-edge`** — a small Go service deployed as a Swarm service that publishes `pmcluster.<domain>` as the single public origin for the **operator console** (a web UI for API keys, TLS, webhooks, stacks, and more), the REST API, and webhook receivers — all shielded by per-IP rate limiting, a connection shield, and automatic IP blocklisting.
 
 - **Design + trade-offs:** [RFC v2 — issue #1](https://github.com/hazemarian/poor-man-stack/issues/1) (what actually shipped)
-- **Current release:** [v0.2.27](https://github.com/hazemarian/poor-man-stack/releases)
+- **Current release:** [v0.2.41](https://github.com/hazemarian/poor-man-stack/releases)
 
 ---
 
@@ -95,24 +95,39 @@ Single static binary, lives on the manager host. Replaces the bash setup script 
 
 ## Repository Structure
 
+The Go code follows a **domain-first (DDD) layout**: one package per bounded
+context (`apikeys`, `webhooks`, `secrets`, `configs`, `backups`, `certs`,
+`stacks`, `cluster`), each owning its model types, port (interface), local
+adapter and REST handler. Consumers depend only on ports; `internal/cli` and
+`internal/server` are the two composition roots; `internal/remote` is a single
+REST-client family that implements the same ports against the daemon API (so
+the CLI can run off-node with `--api-url`). See
+`pmcluster/internal/ARCHITECTURE.md` for the dependency-rule and domain
+inventory.
+
 ```
 poor-man-stack/
 ├── pmcluster/                          # Go control plane (Cobra CLI + HTTP daemon)
 │   ├── cmd/pmcluster/                  # entry point
 │   ├── cmd/edge/                       # pmcluster-edge binary (console + smart proxy)
 │   ├── internal/
-│   │   ├── cli/                        # Cobra command tree
-│   │   ├── config/, store/, auth/      # config, SQLite, bearer-token auth
-│   │   ├── server/, api/               # chi HTTP server + handlers
+│   │   ├── cli/                        # Cobra command tree + backend.go (the single
+│   │   │                               #   local-vs-remote switchpoint)
+│   │   ├── server/                     # daemon composition root (chi; Deps = ports only)
+│   │   ├── api/                        # infra endpoints only (health, me, nodes, cluster/info)
+│   │   ├── remote/                     # one shared REST-client family (off-node adapters)
+│   │   ├── apikeys/ webhooks/ secrets/ configs/ backups/ certs/ stacks/ cluster/
+│   │   │                               # domain packages: model + port + local + http
+│   │   ├── workflow/                   # named-step runner (up 10, update 8, deploy 5, …)
 │   │   ├── edgeproxy/                  # rate limit, shield, blocklist, real IP, proxy
 │   │   ├── ui/                         # operator console (gin + HTMX, controllers + templates)
 │   │   ├── docker/                     # SDK wrapper behind a small interface
-│   │   ├── cluster/                    # cluster lifecycle (preflight, networks,
-│   │   │                               # secrets, configs, stacks, up, down, status)
-│   │   │   └── embeds/                 # bundled compose YAMLs (//go:embed)
+│   │   ├── cluster/embeds/             # bundled compose YAMLs (//go:embed)
+│   │   ├── config/, store/, auth/      # config, SQLite, bearer-token auth
 │   │   ├── credentials/                # AES-GCM encryption for stored creds
 │   │   └── buildinfo/                  # version/commit/date with VCS fallback
-│   ├── migrations/                     # *.sql, embedded via //go:embed
+│   ├── ARCHITECTURE.md                 # dependency rule + domain inventory
+│   ├── migrations/                     # *.sql (0001..0010), embedded via //go:embed
 │   └── e2e/                            # smoke end-to-end tests
 ├── docs/
 │   ├── dsl.md                          # Deploy DSL reference
@@ -142,7 +157,7 @@ One-line install (latest release):
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | bash
 ```
 
-The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-stack/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.27`).
+The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-stack/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.41`).
 
 **With private registry credentials (GHCR, Docker Hub, etc.):**
 
@@ -409,6 +424,33 @@ pmcluster rollback donation-campaign 1778439014   # re-apply a stored revision
 ```
 
 Every deploy gets a unix-timestamp revision id. Rollback re-applies a stored revision as a NEW revision (preserves the audit trail — both deploys are recorded). The corresponding REST endpoints are `GET /api/stacks`, `GET /api/stacks/{name}`, `GET /api/stacks/{name}/revisions/{rev}`, `POST /api/stacks/{name}/rollback`. A stack can be removed (services `docker stack rm`, named volumes, mounted Swarm secrets, plus the DB record, its revisions and its service-scope configs/secrets) from the console's stacks list — `DELETE /api/stacks/{name}`.
+
+### Remote CLI (off-node)
+
+The CLI is a thin consumer of the same service ports as the daemon API, so it
+can run **on any machine** against a reachable daemon — no need for the node's
+SQLite or Docker socket:
+
+```bash
+export PMCLUSTER_API_URL=https://pmcluster.example.com   # or --api-url
+export PMCLUSTER_API_TOKEN=pmc_...                       # or --api-token
+
+pmcluster --api-url "$PMCLUSTER_API_URL" --api-token "$PMCLUSTER_API_TOKEN" \
+  stack list
+pmcluster ... deploy ./donation-campaign.yaml
+pmcluster ... secret list
+pmcluster ... config list
+pmcluster ... tls site show
+pmcluster ... backup create
+pmcluster ... user create ci-bot
+```
+
+Tokens come from `pmcluster user create <name>` (or the console); every
+data command (`config`, `secret`, `webhook`, `user`, `backup`, `deploy`,
+`stack`, `rollback`, `tls`) switches between the local core and the REST API
+through one backend factory in the binary. Bootstrap/repair commands
+(`init`, `cluster *`, `credentials *`, `node`, `registry`, `logs`, `serve`)
+stay local — they need the manager's filesystem and Docker socket by design.
 
 ### Webhooks (CI integrations)
 

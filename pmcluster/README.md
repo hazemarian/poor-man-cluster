@@ -70,27 +70,37 @@ make build         # → ./bin/pmcluster
 cmd/pmcluster/         entry point
 cmd/edge/              pmcluster-edge binary (console + smart proxy)
 internal/
-  cli/                 Cobra command tree (init, serve, cluster, deploy, tls, …)
-  config/              viper-backed config loading
+  cli/                 Cobra command tree + THE backend factory (backend.go:
+                       local vs remote via --api-url) — one switchpoint
+  server/              chi HTTP composition root: Deps = domain ports only,
+                       New() mounts each domain's handler
+  api/                 infra-only endpoints (health, me, nodes, cluster-info)
+  remote/              shared REST-client family (off-node adapters for every
+                       domain port; used by the CLI in --api-url mode)
+  apikeys/             domain: API tokens — model, port, local + http
+  webhooks/            domain: webhook sources + HMAC receiver (SourceReader port)
+  secrets/             domain: encrypted secrets — model, port, local + http
+  configs/             domain: versioned configs + rendered snapshots (Renderer port)
+  backups/             domain: volume backup audit + offen trigger
+  certs/               domain: TLS certificates (site + per-host)
+  stacks/              domain: deploy engine + read side (Deployer + Reader ports)
+  cluster/             domain: platform lifecycle (up/update/down/status) + credentials
+    embeds/            bundled compose YAMLs (infra, edge, observability, backup, Traefik)
   store/               SQLite (modernc.org/sqlite) + embedded migrations
   auth/                bearer tokens, argon2id hashing
-  server/              chi HTTP server wiring
-  api/                 REST handlers
-  webhook/             webhook receivers (HMAC verification)
-  deploy/              deploy orchestration (three entry points → one engine)
+  config/              viper-backed config loading
   docker/              Docker SDK wrapper
-  cluster/             cluster lifecycle: preflight, secrets, networks, configs, stacks
-    embeds/            bundled compose YAMLs (infra, edge, observability, backup, Traefik)
-  credentials/         AES-GCM-encrypted credential storage
+  credentials/         AES-GCM cipher (encryption key)
   registry/            registry credential storage
   manifest/            DSL parser + translator → Docker Swarm Compose
   edgeproxy/           rate limit, shield, blocklist, real-IP, proxy (edge)
   ui/                  operator console (gin + HTMX, controllers + templates)
-  backup/              backup orchestration
+  workflow/            named-step runner (up 10 / update 8 / deploy 5 steps)
   openobserve/         OpenObserve provisioning (users, tokens, datasources)
   telemetry/           OTLP metrics wiring
   logger/              structured JSON audit logs
   buildinfo/           version/commit/date with VCS fallback
+  ARCHITECTURE.md      dependency rule + domain inventory
 pkg/dsl/               public DSL types
 migrations/            *.sql, embedded via //go:embed
 e2e/                   end-to-end tests (cluster up, deploy, webhook, edge, otel)
