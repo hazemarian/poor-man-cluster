@@ -114,7 +114,7 @@ repo root (this dir)
 └── pmcluster/                 # THE GO MODULE
     ├── cmd/pmcluster/main.go  # daemon binary entrypoint
     ├── cmd/edge/main.go       # edge console+proxy binary entrypoint
-    ├── migrations/            # SQL migrations 0001..0009 (schema_version-tracked)
+    ├── migrations/            # SQL migrations 0001..0010 (schema_version-tracked)
     ├── e2e/                   # swarm e2e tests (//go:build e2e)
     ├── docs/openapi.yaml      # REST API spec
     └── internal/              # all packages (§5)
@@ -199,42 +199,39 @@ prints `▶ <name>` and wraps the first error with the step name). Shared by
 (3) and `undeploy` (3) — the step lists are the public progress output.
 
 ### internal/api
-Small HTTP handlers shared by the daemon (`/health`), plus the deploy payload
-types used by API/webhook/CLI.
+Infra-only endpoints shared by the daemon: `/health`, `/api/me`, `/api/cluster/info`, `/api/nodes`. Domain REST surfaces live inside the domain packages (see below).
 
-### internal/server — the daemon REST API (chi)
-Bearer-authenticated `/api/*` router built in `New(Deps)`.
-`Deps` (in `server.go`) holds the **ports** (`DeployService stacks.Deployer`,
-`Configs configs.Service`, `Secrets secrets.Service`, `Webhooks
-webhooks.Service` + `WebhookSources webhooks.SourceReader`, `APIKeys
-apikeys.Service`, `Backups backups.Service`) plus `Lookup` (auth), `Docker`,
-`Store`, `Cipher`, and the optional service structs `HostCerts`, `SiteCert`,
-`Update`.
-All service handlers take `Svc` (a port) — e.g. `ConfigService{Svc}`, and
-mounts are conditional on the dep being non-nil.
-Services mounted under `/api`:
-- `apikeys.go` — GET/POST `/api_keys`, DELETE `/api_keys/{id}`.
-- `webhooks.go` — GET/POST `/webhooks`, DELETE `/webhooks/{source}`.
-- `secrets.go` — GET/POST `/secrets` (`?scope=`/`?stack=` filters),
-  PUT/DELETE `/secrets/{name}` (edit value / delete), GET `/secrets/{name}/value`
-  (decrypt + reveal).
-- `configs.go` — CRUD `/configs` (`?scope=`/`?stack=` filters),
-  `/configs/{name}/versions`, `/configs/{name}/rollback`.
-- `update.go` — POST `/api/update` (runs `cluster update` on the daemon;
-  `Deps.Update` closure wired in `cli/serve.go`).
-- `rendered.go` — GET `/api/cluster/rendered` (stored rendered platform
-  configs, snapshotted into the DB by every `cluster update`; read-only;
-  `Deps.Rendered` wired with the store).
-- `tls.go` — GET/PUT/DELETE `/tls/hosts[/{host}]` (per-host certs, DB-backed).
-- `sitecert.go` — GET/PUT `/tls/site` (cluster's own cert).
-- `stacks.go` (`internal/api`) — GET/POST `/stacks`, GET `/stacks/{name}`,
-  GET `/stacks/{name}/revisions/{rev}`, POST `/stacks/{name}/rollback`,
-  **DELETE `/stacks/{name}`** (full teardown via `deploy.Service.Undeploy`:
-  services, volumes, mounted secrets, record + configs/secrets).
-- Also backups, nodes, me, cluster/info.
+### internal/server — the daemon composition root (chi)
+Bearer-authenticated `/api/*` router built in `New(Deps)`. **`server` holds no
+domain logic** — it only assembles. `Deps` (in `server.go`) holds the **ports**:
+`DeployService stacks.Deployer`, `Configs configs.Service`, `Secrets
+secrets.Service`, `Webhooks webhooks.Service` + `WebhookSources
+webhooks.SourceReader`, `APIKeys apikeys.Service`, `Backups backups.Service`,
+`HostCerts *certs.HTTP` + `SiteCert *certs.HTTP` (the cert REST handlers),
+`Update *UpdateService` (cluster update via the `cluster.Service` port), plus
+the two infra fields `Lookup` (auth) and `Docker`. `New()` mounts the domain
+handlers itself — each domain package exports its own `Mount` methods, e.g.:
+- `apikeys.HTTP{Svc}` → `Mount(r)` = GET/POST `/api_keys`, DELETE `/api_keys/{id}`.
+- `webhooks.HTTP{Svc}` → GET/POST `/webhooks`, DELETE `/webhooks/{source}`.
+- `webhooks.Receiver{Sources, Deploy}` → POST `/webhook/{source}` (HMAC
+  receiver; needs `WebhookSources` + `DeployService`).
+- `secrets.HTTP{Svc}` → GET/POST `/secrets` (`?scope=`/`?stack=` filters),
+  PUT/DELETE `/secrets/{name}`, GET `/secrets/{name}/value` (reveal).
+- `configs.HTTP{Svc}` → CRUD `/configs` (`?scope=`/`?stack=` filters),
+  `/configs/{name}/versions`, `/configs/{name}/rollback`, **and**
+  GET `/api/cluster/rendered` (stored rendered platform configs).
+- `backups.HTTP{Svc}` → GET/POST `/api/backups` + stack-scoped
+  `/api/stacks/{name}/backups`.
+- `certs.HTTP{Svc}` → `MountHosts(r)` (GET/PUT/DELETE `/api/tls/hosts[/{host}]`)
+  + `MountSite(r)` (GET/PUT `/api/tls/site`).
+- `stacks.HTTP{Deploy, Read, Backups}` → GET/POST `/api/stacks`,
+  GET `/api/stacks/{name}`, GET `/api/stacks/{name}/revisions/{rev}`,
+  POST `/api/stacks/{name}/rollback`, **DELETE `/api/stacks/{name}`** (full
+  teardown via `stacks.Service.Undeploy`: services, volumes, mounted secrets,
+  record + configs/secrets).
 
-Every service follows the same shape: a struct with dependencies + a
-`Mount(r chi.Router)` method; handlers return JSON via `writeJSON`/`writeErr`.
+All handlers follow the same shape: struct with a port dep + `Mount(r chi.Router)`;
+JSON via `writeJSON`/`writeErr` (`server/write.go`).
 
 ### internal/store — SQLite persistence
 `Store` wraps `modernc.org/sqlite`. `Store.Open(dbPath)` applies embedded
@@ -304,10 +301,10 @@ networks, Traefik labels, cors middleware, healthchecks, restart/update
 policies). `env` values may reference DB-backed values:
 `config(<name>)` (injects content) and `secrets(<name>)` (resolves to
 `/run/secrets/<name>` — requires the secret to be in the service's `secrets:`
-array). `translate.go` takes an optional `EnvResolver` (deploy.Service wires a
-`StoreConfigResolver` from `internal/deploy/resolver.go`).
+array). `translate.go` takes an optional `EnvResolver` (the stacks engine wires a
+`StoreConfigResolver` from `internal/stacks/resolver.go`).
 
-### internal/deploy — deploy service
+### internal/stacks — the deploy engine (deploy + read side)
 `stacks.Service` = single engine behind CLI deploy, `/api/stacks`, and
 webhooks; it **implements `stacks.Deployer`** and runs its methods as
 named workflows (`deploy` 5 steps, `rollback` 3, `undeploy` 3 — via
@@ -320,13 +317,18 @@ the Swarm secrets its services mount (`StackSecretNames`), then
 `Store.DeleteStack` (stack row + revisions via FK cascade + the stack's
 service-scope configs/secrets) — backs the console Delete button and
 `DELETE /api/stacks/{name}`.
+`Local{Store}` is the read-side adapter (implements `Reader`).
 `Resolver` field for config()/secrets() env refs.
 
-### internal/webhook — CI webhook receiver
+### internal/webhooks — webhook sources + HMAC receiver
+`Receiver{Sources webhooks.SourceReader, Deploy stacks.Deployer}` answers
 `POST /webhook/{source}`. Auth = HMAC-SHA256 over
 `timestamp_decimal + raw_body` (headers `X-Pmcluster-Timestamp` ±5min window,
 `X-Pmcluster-Signature: sha256=<hex>`). Every failure → generic 401.
 Body: `DeployPayload{app_name, version, manifest, repo_url?}`.
+The receiver reads the HMAC secret via the `SourceReader` port (never touches
+store/cipher directly). `Local{Store,Cipher}` implements both `Service`
+(source management) and `SourceReader`.
 
 ### internal/docker — Docker/Swarm client wrapper
 Thin wrapper over the Docker SDK. Key surface: `ServiceList/Inspect`,
@@ -365,14 +367,19 @@ owning stack. Secret values are revealed on demand with a confirmation prompt
 (`/secrets/reveal/:name`-style routes) and editable via `PUT /api/secrets/{name}`.
 The stacks list has a per-row **Delete** button (confirmation prompt) that
 fully tears the stack down (`DELETE /api/stacks/{name}` →
-`deploy.Service.Undeploy`: services, named volumes, mounted secrets, record +
+`stacks.Service.Undeploy`: services, named volumes, mounted secrets, record +
 its service-scope configs/secrets).
 
-### internal/telemetry + internal/openobserve + internal/backup + internal/logger + internal/buildinfo
+### internal/telemetry + internal/openobserve + internal/backups + internal/logger + internal/buildinfo
 - `telemetry`: OTel SDK init (metrics/traces → OTLP :4318 collector).
 - `openobserve`: thin OO API client (`EnsureUser`, `EnsureIngestionToken`).
-- `backup`: `LocalTrigger` (spawns the volume-backup container).
+- `backups`: `trigger.go` holds `LocalTrigger` (spawns the volume-backup
+  container) + `RecordOutcome` metrics; the domain package is described above.
 - `logger`: zerolog setup. `buildinfo`: `Version`/`Commit` vars (ldflags).
+
+### internal/ARCHITECTURE.md
+One-page dependency-rule + domain-inventory doc; read it before touching the
+package layout.
 
 ### migrations/ + internal/store/migrations.go
 0001 init (users, sessions), 0002 credentials, 0003 stacks/revisions,
@@ -403,7 +410,7 @@ with the binary.
 
 ### Deploying an app
 DSL manifest → `pmcluster deploy m.yaml` OR `POST /api/stacks` OR webhook
-(HMAC-signed CI). All three hit `deploy.Service.Deploy`. The translator emits
+(HMAC-signed CI). All three hit `stacks.Service.Deploy`. The translator emits
 compose with Traefik labels (`Host(<expose.host>)`, entrypoints websecure,
 tls, middleware cors-default) so the app is served at
 `https://<expose.host>/`.
@@ -452,15 +459,15 @@ auto-ban → forward to daemon. The console UI is served by the same process.
 | Add a local adapter | the domain package's `<domain>.go`/`local.go` + construct in `internal/cli/backend.go` and `internal/cli/serve.go` |
 | Add a remote adapter | `internal/remote/<domain>.go` (DTO + `Client.do`) + a `backend<Domain>` branch in `internal/cli/backend.go` |
 | Add a CLI command | new file in `internal/cli/`, register in `init()`; add OpenAPI row if it has an API twin |
-| Add a REST endpoint | `internal/server/<name>.go` (struct + `Mount`), wire in `server.New` + `cli/serve.go` Deps |
+| Add a REST endpoint | the domain package's `http.go` (struct + `Mount`), wire in `server.New` (Deps) + `cli/serve.go` |
 | Add a console page | `internal/ui/controllers/<name>.go`, route in `internal/ui/ui.go`, template `views/templates/frag_<name>.html`, nav in `app.html`, pmapi method in `internal/ui/pmapi/` |
 | Add a DB table | new `migrations/00NN_*.sql` + `internal/store/<name>.go` repo + tests |
 | Change compose the platform deploys | `internal/cluster/embeds/*.yml` (+ `templates.go` `[[ ]]`/`${}` substitution) |
 | Change the edge proxy policy | `internal/edgeproxy/*.go` + env defaults in `embeds/edge-stack.yml` |
 | Change the DSL schema | `pkg/dsl/types.go`, then `internal/manifest/{validate,translate,interpolate}.go`, docs in `docs/dsl.md` |
 | Add a platform credential | `internal/cluster/credentials.go` spec + `internal/store/credentials.go` |
-| Change cert flow | `internal/cluster/sitecert.go` (ApplyCert/RemoveCert) + `server/{tls,sitecert}.go` |
-| Change auth model | `internal/auth/`, `internal/store/users.go`, token minting in `internal/server/apikeys.go` |
+| Change cert flow | `internal/certs/` (port + `local.go` wrapping `internal/cluster/sitecert.go`) |
+| Change auth model | `internal/auth/`, `internal/store/users.go`, token minting in `internal/apikeys/local.go` |
 
 ---
 
