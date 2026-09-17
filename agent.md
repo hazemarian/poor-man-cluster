@@ -135,10 +135,12 @@ Key commands (all in `internal/cli/`):
 - The `serve` command (`serve.go`) wires the daemon: opens store, docker
   client, deploy service, and calls `server.New` — **this is where new daemon
   dependencies are injected**.
-- `backend.go` — the CLI backend factory. Every data command resolves its
-  service through a `backendX(cmd)` helper that returns the **local** adapter
-  (`internal/service/impl`) or the **remote** adapter
-  (`internal/service/remote`) when `--api-url`/`PMCLUSTER_API_URL` is set.
+- `backend.go` — the CLI backend factory AND the **single local/remote
+  switchpoint**. Every data command resolves its service through a
+  `backendX(cmd)` helper that returns the **local** adapter (each domain
+  package owns its own, e.g. `configs.NewLocal`) or the **remote** adapter
+  (`internal/remote`, one shared REST-client family) when
+  `--api-url`/`PMCLUSTER_API_URL` is set.
 - Remote mode: persistent flags `--api-url` (+ `--api-token`, default
   `PMCLUSTER_API_TOKEN`) let the CLI run off-node against the daemon API.
   Commands with a REST twin (`config`, `secret`, `webhook`, `user`, `backup`,
@@ -148,41 +150,47 @@ Key commands (all in `internal/cli/`):
 - `config.Config` (from `internal/config`) carries `DBPath`, `ConfigDir`,
   `EncryptionKeyPath`, `ListenAddr`, `Domain`.
 
-### internal/service — ports (the service layer)
-Interfaces only, no implementation imports. These are the **ports** of the
-Clean Architecture layout: every consumer (CLI, daemon API, webhook) depends on
-these interfaces, never on the concrete adapters. Ports:
-- `DeployService` (deploy.go) — `Deploy`, `Rollback`, `Undeploy`.
-- `ClusterService` (cluster.go) — `Up`, `Update`, `Down`, `Status`.
-- `ConfigsService` (configs.go), `SecretsService` (secrets.go) — CRUD + list
-  filters + `SetRendered`/`ListRendered`, `Reveal`, `Update`.
-- `TLSService` (tls.go) — `SiteCert`, `ApplyHostCert`(+refresh),
-  `RemoveHostCert`(+refresh), `GetSiteCert`, `List`, `MainDomain`.
-- `remaining.go` — `WebhooksService`, `APIKeysService`, `BackupsService`,
-  `CredentialsService`, `StacksService` + sentinels (`ErrEdgeUserProtected`,
-  `ErrSelfDelete`, `ErrBackupTriggerNotConfigured`).
+### Domain packages — one bounded context per package
+Each domain owns its model types, port (interface), local adapter and REST
+handler, all in one package. Consumers (CLI, daemon API, webhook, console)
+depend only on the port, never on a concrete adapter, so any port can be
+backed by the local core or by the daemon REST API without changing the
+consumer. Ports by package:
+- `stacks` — the deploy engine + read side. Ports: `Deployer`
+  (`Deploy`/`Rollback`/`Undeploy`) and `Reader` (`Get`/`List`/`Revisions`);
+  `Service` is the concrete engine (satisfies both), `Local` the read-side
+  adapter.
+- `cluster` — `Service` (`Up`, `Update`, `Down`, `Status`) and
+  `CredentialsService` (platform credential CRUD/rotate).
+- `configs` — `Service` (config CRUD + list filters + `SetRendered`/
+  `ListRendered`).
+- `secrets` — `Service` (CRUD + `Reveal`, `Update`).
+- `certs` — `Service` (site + per-host TLS: `SiteCert`, `ApplyHostCert`
+  (+refresh), `RemoveHostCert`(+refresh), `GetSiteCert`, `List`, `MainDomain`).
+- `webhooks` — `Service` + `SourceReader` (decrypted HMAC secret material).
+- `apikeys` — `Service` (edge-user + self-delete guards live here) +
+  sentinels (`ErrEdgeUserProtected`, `ErrSelfDelete`).
+- `backups` — `Service` (`Trigger`/`List`/`ListForStack`) + sentinel
+  `ErrTriggerNotConfigured`.
 
-### internal/service/impl — local adapters
-The on-node implementations of the ports (each wraps the store, cipher, docker
-client, or cluster package):
-`Configs{Store}`, `Secrets{Store,Cipher}` (encrypt/decrypt inside),
-`Cluster{}` (pass-through to `cluster.Up/Update/Down/Status`),
-`Stacks{Store}`, `Webhooks{Store,Cipher}`, `APIKeys{Store}` (edge-user +
-self-delete guards live here), `Backups{Store,Run}` (records outcome rows),
-`Credentials{Store,Cipher,Rotator}`, `TLS{Store,Cipher,Docker,Deployer,
-Provisioner,ConfigDir,Version}`. Constructors: `NewConfigs(st)`, `NewSecrets`,
-`NewCluster()`, `NewStacks`, `NewWebhooks`, `NewAPIKeys`, `NewBackups`,
-`NewCredentials`, `NewTLS`.
+### Domain local adapters (on-node)
+Each domain package owns its on-node adapter (wrapping the store, cipher,
+docker client, or cluster package). Constructors: `configs.NewLocal(st)`,
+`secrets.NewLocal(st, cipher)`, `certs.NewLocal(...)`,
+`webhooks.NewLocal(st, cipher)`, `apikeys.NewLocal(st)`,
+`backups.NewLocal(st, trigger)`, `cluster.NewService()` /
+`cluster.NewCredentials(...)`, and `stacks` builds `&stacks.Service{...}`
+directly (its `Local` covers the read side).
 
-### internal/service/remote — remote adapters (HTTP)
-The off-node implementations of the same ports, talking to the daemon REST
+### internal/remote — remote adapters (HTTP)
+The off-node implementations of the domain ports, talking to the daemon REST
 API. `Client{http,base,tok}` + `do()` (Bearer, 8MB cap) + `mapError` (status +
-body → the store/service sentinels, so callers can `errors.Is`).
-`Configs{c}`, `Secrets{c}` (`Get` = list-then-find; `Reveal` via
-`/secrets/{name}/value`), `Stacks{c}` + `Deploy{c}` (`POST/DELETE /api/stacks`),
-`Webhooks{c}`, `APIKeys{c}`, `Backups{c}`, `TLS{c}`. `SetRendered` returns an
-error ("internal cluster-update operation not available over the remote API").
-`ClusterService`/`CredentialsService` have **no** remote adapters yet.
+body → the store/domain sentinels, so callers can `errors.Is`).
+`NewStacks` + `NewDeploy` (stacks), `NewConfigs`, `NewSecrets` (`Get` =
+list-then-find; `Reveal` via `/secrets/{name}/value`), `NewWebhooks`,
+`NewAPIKeys`, `NewBackups`, `NewTLS`. `SetRendered` returns an error
+("internal cluster-update operation not available over the remote API").
+`cluster.Service`/`CredentialsService` have **no** remote adapters yet.
 
 ### internal/workflow — named-step runner
 `Step{Name,Run}` + `Workflow{out,steps}` (`NewWorkflow(out)`, `Add`, `Run`
@@ -196,10 +204,12 @@ types used by API/webhook/CLI.
 
 ### internal/server — the daemon REST API (chi)
 Bearer-authenticated `/api/*` router built in `New(Deps)`.
-`Deps` (in `server.go`) holds the **ports** (`DeployService`,
-`ConfigsService`, `SecretsService`, `WebhooksService`, `APIKeysService`,
-`BackupsService`) plus `Lookup` (auth), `Docker`, `Store`, `Cipher`, and the
-optional service structs `HostCerts`, `SiteCert`, `Update`, `Rendered`.
+`Deps` (in `server.go`) holds the **ports** (`DeployService stacks.Deployer`,
+`Configs configs.Service`, `Secrets secrets.Service`, `Webhooks
+webhooks.Service` + `WebhookSources webhooks.SourceReader`, `APIKeys
+apikeys.Service`, `Backups backups.Service`) plus `Lookup` (auth), `Docker`,
+`Store`, `Cipher`, and the optional service structs `HostCerts`, `SiteCert`,
+`Update`.
 All service handlers take `Svc` (a port) — e.g. `ConfigService{Svc}`, and
 mounts are conditional on the dep being non-nil.
 Services mounted under `/api`:
@@ -298,8 +308,8 @@ array). `translate.go` takes an optional `EnvResolver` (deploy.Service wires a
 `StoreConfigResolver` from `internal/deploy/resolver.go`).
 
 ### internal/deploy — deploy service
-`deploy.Service` = single engine behind CLI deploy, `/api/stacks`, and
-webhooks; it **implements `service.DeployService`** and runs its methods as
+`stacks.Service` = single engine behind CLI deploy, `/api/stacks`, and
+webhooks; it **implements `stacks.Deployer`** and runs its methods as
 named workflows (`deploy` 5 steps, `rollback` 3, `undeploy` 3 — via
 `internal/workflow`). `Deploy(ctx, payload)` → parse/interpolate/validate/
 translate → `docker stack deploy` → records revision (unix timestamp +
@@ -438,9 +448,9 @@ auto-ban → forward to daemon. The console UI is served by the same process.
 
 | Task | Where |
 |---|---|
-| Add a service port | `internal/service/<domain>.go` interface + `internal/service/remaining.go` if it's one of the "remaining" domains |
-| Add a local adapter | `internal/service/impl/<domain>.go` + construct in `internal/cli/backend.go` and `internal/cli/serve.go` |
-| Add a remote adapter | `internal/service/remote/<domain>.go` (DTO + `Client.do`) + a `backend<Domain>` branch in `internal/cli/backend.go` |
+| Add a service port | new package under `internal/<domain>/` with the port interface (e.g. `stacks.Deployer`, `configs.Service`); or extend an existing domain package |
+| Add a local adapter | the domain package's `<domain>.go`/`local.go` + construct in `internal/cli/backend.go` and `internal/cli/serve.go` |
+| Add a remote adapter | `internal/remote/<domain>.go` (DTO + `Client.do`) + a `backend<Domain>` branch in `internal/cli/backend.go` |
 | Add a CLI command | new file in `internal/cli/`, register in `init()`; add OpenAPI row if it has an API twin |
 | Add a REST endpoint | `internal/server/<name>.go` (struct + `Mount`), wire in `server.New` + `cli/serve.go` Deps |
 | Add a console page | `internal/ui/controllers/<name>.go`, route in `internal/ui/ui.go`, template `views/templates/frag_<name>.html`, nav in `app.html`, pmapi method in `internal/ui/pmapi/` |

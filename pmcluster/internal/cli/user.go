@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -78,12 +77,7 @@ func runUserCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	base := ""
-	if rc := remoteClient(cmd); rc != nil {
-		base = apiURL
-	} else if cfg := loadConfig(cmd); cfg != nil {
-		base = "http://" + cfg.ListenAddr
-	}
+	base := apiBaseURL(cmd)
 	fmt.Fprintf(cmd.OutOrStdout(), `
 ✅ User %q created.
 
@@ -155,7 +149,7 @@ func runUserRemove(cmd *cobra.Command, args []string) error {
 	}
 
 	if err := svc.Delete(cmd.Context(), id); err != nil {
-		if errors.Is(err, service.ErrEdgeUserProtected) {
+		if errors.Is(err, apikeys.ErrEdgeUserProtected) {
 			return fmt.Errorf("the %q user is required by the operator console and cannot be removed", name)
 		}
 		if errors.Is(err, store.ErrUserNotFound) {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
@@ -253,7 +253,7 @@ func TestRemoteErrorMapping(t *testing.T) {
 	}
 
 	err = NewAPIKeys(c).Delete(ctx, 1)
-	if !isErr(err, service.ErrEdgeUserProtected) {
+	if !isErr(err, apikeys.ErrEdgeUserProtected) {
 		t.Fatalf("edge delete = %v, want ErrEdgeUserProtected", err)
 	}
 

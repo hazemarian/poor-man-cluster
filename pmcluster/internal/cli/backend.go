@@ -14,6 +14,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
 
@@ -110,6 +111,40 @@ func backendTLS(cmd *cobra.Command) (certs.Service, func(), error) {
 		return nil, nil, err
 	}
 	return tlsService(cmd, st, cipher, dc, loadConfig(cmd)), func() { _ = st.Close(); _ = dc.Close() }, nil
+}
+
+func backendDeploy(cmd *cobra.Command) (stacks.Deployer, func(), error) {
+	if rc := remoteClient(cmd); rc != nil {
+		return remote.NewDeploy(rc), func() {}, nil
+	}
+	svc, _, closeFn, err := openDeploySvc(cmd)
+	if err != nil {
+		return nil, nil, err
+	}
+	return svc, closeFn, nil
+}
+
+func backendStacks(cmd *cobra.Command) (stacks.Reader, func(), error) {
+	if rc := remoteClient(cmd); rc != nil {
+		return remote.NewStacks(rc), func() {}, nil
+	}
+	svc, _, closeFn, err := openDeploySvc(cmd)
+	if err != nil {
+		return nil, nil, err
+	}
+	return svc, closeFn, nil
+}
+
+// apiBaseURL returns the base URL shown in helper text: the remote API URL in
+// remote mode, or the local daemon's listen address otherwise.
+func apiBaseURL(cmd *cobra.Command) string {
+	if remoteClient(cmd) != nil {
+		return apiURL
+	}
+	if cfg := loadConfig(cmd); cfg != nil {
+		return "http://" + cfg.ListenAddr
+	}
+	return ""
 }
 
 // loadConfig returns the effective CLI config for commands that need one.

@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -111,7 +111,7 @@ func mapError(status int, body string) error {
 	case status == http.StatusConflict && has("authenticated"):
 		return apikeys.ErrSelfDelete
 	case status == http.StatusServiceUnavailable:
-		return service.ErrBackupTriggerNotConfigured
+		return backups.ErrTriggerNotConfigured
 	}
 	return base
 }
