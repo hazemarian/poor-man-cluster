@@ -3,15 +3,13 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
 )
 
 var backupCmd = &cobra.Command{
@@ -52,33 +50,14 @@ func runBackupCreate(cmd *cobra.Command, _ []string) error {
 
 	timeout, _ := cmd.Flags().GetDuration("timeout")
 
-	if rc := remoteClient(cmd); rc != nil {
-		ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-		defer cancel()
-		id, paths, err := remote.NewBackups(rc).Trigger(ctx, "", 0)
-		if err != nil {
-			return fmt.Errorf("backup failed: %w", err)
-		}
-		printBackupResult(cmd, id, paths)
-		return nil
-	}
-
-	st, _, err := openStore()
+	svc, closeFn, err := backendBackups(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 	defer cancel()
-
-	svc := impl.NewBackups(st, func(ctx context.Context) ([]string, error) {
-		res, err := backup.Trigger(ctx)
-		if res == nil {
-			return nil, err
-		}
-		return res.ArchivePaths, err
-	})
 
 	id, paths, err := svc.Trigger(ctx, "", 0)
 	if err != nil {
@@ -103,28 +82,20 @@ func printBackupResult(cmd *cobra.Command, id int64, paths []string) {
 func runBackupList(cmd *cobra.Command, _ []string) error {
 	limit, _ := cmd.Flags().GetInt("limit")
 
-	if rc := remoteClient(cmd); rc != nil {
-		rows, err := remote.NewBackups(rc).List(cmd.Context(), limit)
-		if err != nil {
-			return fmt.Errorf("list backups: %w", err)
-		}
-		return printBackups(cmd, rows)
-	}
-
-	st, _, err := openStore()
+	svc, closeFn, err := backendBackups(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	rows, err := impl.NewBackups(st, nil).List(cmd.Context(), limit)
+	rows, err := svc.List(cmd.Context(), limit)
 	if err != nil {
 		return fmt.Errorf("list backups: %w", err)
 	}
 	return printBackups(cmd, rows)
 }
 
-func printBackups(cmd *cobra.Command, rows []*store.Backup) error {
+func printBackups(cmd *cobra.Command, rows []backups.Run) error {
 	if len(rows) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "(no backups recorded yet)")
 		return nil
@@ -134,20 +105,20 @@ func printBackups(cmd *cobra.Command, rows []*store.Backup) error {
 	fmt.Fprintln(w, "ID\tSTATUS\tSTACK\tREVISION\tSTARTED\tFINISHED\tNOTES")
 	for _, b := range rows {
 		stack := "—"
-		if b.StackName.Valid {
-			stack = b.StackName.String
+		if b.StackName != "" {
+			stack = b.StackName
 		}
 		rev := "—"
-		if b.Revision.Valid {
-			rev = fmt.Sprintf("%d", b.Revision.Int64)
+		if b.Revision != 0 {
+			rev = fmt.Sprintf("%d", b.Revision)
 		}
 		finished := "—"
-		if b.FinishedAt.Valid {
-			finished = time.Unix(b.FinishedAt.Int64, 0).Format(time.RFC3339)
+		if b.FinishedAt != 0 {
+			finished = time.Unix(b.FinishedAt, 0).Format(time.RFC3339)
 		}
 		notes := b.ErrorMessage
 		if notes == "" {
-			notes = b.ArchivePaths
+			notes = strings.Join(b.ArchivePaths, ",")
 		}
 		if len(notes) > 60 {
 			notes = notes[:57] + "..."

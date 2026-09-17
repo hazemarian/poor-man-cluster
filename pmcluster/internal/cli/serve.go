@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
@@ -105,7 +105,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
-	deploySvc := &deploy.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backup.LocalTrigger{Store: st}, Resolver: &deploy.StoreConfigResolver{Store: st}}
+	deploySvc := &deploy.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &deploy.StoreConfigResolver{Store: st}}
 
 	cipher, cipherErr := credentials.Open(cfg.EncryptionKeyPath())
 	if cipherErr != nil {
@@ -122,7 +122,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		Store:         st,
 		DeployService: deploySvc,
 		Cipher:        cipher,
-		Backups:       impl.NewBackups(st, backup.LocalTrigger{Store: st}.Trigger),
+		Backups:       backups.NewLocal(st, backups.LocalTrigger{Store: st}.Trigger),
 		HostCerts:     &server.HostCertService{Svc: tlsSvc},
 		SiteCert:      &server.SiteCertService{Svc: tlsSvc},
 		Update: &server.UpdateService{

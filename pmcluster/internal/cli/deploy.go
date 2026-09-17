@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
@@ -79,7 +79,7 @@ func openDeploySvc(cmd *cobra.Command) (*deploy.Service, *store.Store, func(), e
 		return nil, nil, nil, err
 	}
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
-	svc := &deploy.Service{Store: st, Deployer: deployer, Backup: backup.LocalTrigger{Store: st}, Resolver: &deploy.StoreConfigResolver{Store: st}}
+	svc := &deploy.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &deploy.StoreConfigResolver{Store: st}}
 	return svc, st, func() { _ = st.Close() }, nil
 }
 
@@ -231,11 +231,11 @@ func runStackShow(cmd *cobra.Command, args []string) error {
 	return w.Flush()
 }
 
-func formatLastBackupRow(b *store.Backup) string {
+func formatLastBackupRow(b backups.Run) string {
 	ts := time.Unix(b.StartedAt, 0).Format(time.RFC3339)
 	revPart := ""
-	if b.Revision.Valid {
-		revPart = fmt.Sprintf(" (rev %d)", b.Revision.Int64)
+	if b.Revision != 0 {
+		revPart = fmt.Sprintf(" (rev %d)", b.Revision)
 	}
 	errPart := ""
 	if b.Status == "failed" && b.ErrorMessage != "" {

@@ -1,4 +1,4 @@
-package api
+package backups
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -26,7 +25,7 @@ func newTestStore(t *testing.T) *store.Store {
 	return s
 }
 
-func mountBackups(h *BackupsHandler) http.Handler {
+func mountBackups(h *HTTP) http.Handler {
 	r := chi.NewRouter()
 	h.Mount(r)
 	h.MountStackScoped(r)
@@ -35,7 +34,7 @@ func mountBackups(h *BackupsHandler) http.Handler {
 
 func TestBackupsAPI_PostCreatesAndRecords(t *testing.T) {
 	st := newTestStore(t)
-	h := &BackupsHandler{Svc: impl.NewBackups(st, func(_ context.Context) ([]string, error) {
+	h := &HTTP{Svc: NewLocal(st, func(_ context.Context) ([]string, error) {
 		return []string{"/archive/x.tar.gz"}, nil
 	})}
 	srv := httptest.NewServer(mountBackups(h))
@@ -68,7 +67,7 @@ func TestBackupsAPI_PostCreatesAndRecords(t *testing.T) {
 
 func TestBackupsAPI_PostFailureRecordsAndReturns502(t *testing.T) {
 	st := newTestStore(t)
-	h := &BackupsHandler{Svc: impl.NewBackups(st, func(_ context.Context) ([]string, error) {
+	h := &HTTP{Svc: NewLocal(st, func(_ context.Context) ([]string, error) {
 		return nil, errors.New("offen blew up")
 	})}
 	srv := httptest.NewServer(mountBackups(h))
@@ -91,7 +90,7 @@ func TestBackupsAPI_PostFailureRecordsAndReturns502(t *testing.T) {
 
 func TestBackupsAPI_PostNoTriggerReturns503(t *testing.T) {
 	st := newTestStore(t)
-	h := &BackupsHandler{Svc: impl.NewBackups(st, nil)}
+	h := &HTTP{Svc: NewLocal(st, nil)}
 	srv := httptest.NewServer(mountBackups(h))
 	defer srv.Close()
 
@@ -115,7 +114,7 @@ func TestBackupsAPI_GetListsAndFiltersByStack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &BackupsHandler{Svc: impl.NewBackups(st, nil)}
+	h := &HTTP{Svc: NewLocal(st, nil)}
 	srv := httptest.NewServer(mountBackups(h))
 	defer srv.Close()
 
@@ -125,7 +124,7 @@ func TestBackupsAPI_GetListsAndFiltersByStack(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var listAll struct {
-		Backups []backupDTO `json:"backups"`
+		Backups []Run `json:"backups"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&listAll); err != nil {
 		t.Fatalf("decode all: %v", err)
@@ -140,7 +139,7 @@ func TestBackupsAPI_GetListsAndFiltersByStack(t *testing.T) {
 	}
 	defer resp2.Body.Close()
 	var listStack struct {
-		Backups []backupDTO `json:"backups"`
+		Backups []Run `json:"backups"`
 	}
 	if err := json.NewDecoder(resp2.Body).Decode(&listStack); err != nil {
 		t.Fatalf("decode stack: %v", err)

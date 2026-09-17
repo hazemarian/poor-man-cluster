@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
@@ -87,6 +88,17 @@ func backendAPIKeys(cmd *cobra.Command) (apikeys.Service, func(), error) {
 		return nil, nil, err
 	}
 	return apikeys.NewLocal(st), func() { _ = st.Close() }, nil
+}
+
+func backendBackups(cmd *cobra.Command) (backups.Service, func(), error) {
+	if rc := remoteClient(cmd); rc != nil {
+		return remote.NewBackups(rc), func() {}, nil
+	}
+	st, _, err := openStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	return backups.NewLocal(st, backups.LocalTrigger{Store: st}.Trigger), func() { _ = st.Close() }, nil
 }
 
 func backendTLS(cmd *cobra.Command) (service.TLSService, func(), error) {

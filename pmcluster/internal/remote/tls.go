@@ -118,14 +118,3 @@ func parseRFC3339(s string) time.Time {
 	}
 	return t
 }
-
-func joinStrings(items []string) string {
-	out := ""
-	for i, s := range items {
-		if i > 0 {
-			out += ","
-		}
-		out += s
-	}
-	return out
-}

@@ -21,7 +21,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/manifest"
@@ -64,7 +64,7 @@ func instruments() (metric.Int64Counter, metric.Float64Histogram, trace.Tracer) 
 	return deploysTotal, deployDurationMs, deployTracer
 }
 
-// BackupTrigger is implemented by internal/backup; abstracted so tests
+// BackupTrigger is implemented by internal/backups; abstracted so tests
 // can stub it without spinning up offen.
 type BackupTrigger interface {
 	Trigger(ctx context.Context) (archivePaths []string, err error)
@@ -404,16 +404,16 @@ func (s *Service) runPreDeployBackup(ctx context.Context, stackName string, revi
 	}
 	if s.Backup == nil {
 		_ = s.Store.FinishBackup(ctx, id, "failed", "", "no BackupTrigger configured (deploy.Service.Backup is nil)")
-		backup.RecordOutcome(ctx, backup.KindPreDeploy, backup.StatusFailed)
+		backups.RecordOutcome(ctx, backups.KindPreDeploy, backups.StatusFailed)
 		return fmt.Errorf("no backup trigger configured")
 	}
 	paths, err := s.Backup.Trigger(ctx)
 	if err != nil {
 		_ = s.Store.FinishBackup(ctx, id, "failed", strings.Join(paths, ","), err.Error())
-		backup.RecordOutcome(ctx, backup.KindPreDeploy, backup.StatusFailed)
+		backups.RecordOutcome(ctx, backups.KindPreDeploy, backups.StatusFailed)
 		return fmt.Errorf("backup trigger: %w", err)
 	}
 	_ = s.Store.FinishBackup(ctx, id, "succeeded", strings.Join(paths, ","), "")
-	backup.RecordOutcome(ctx, backup.KindPreDeploy, backup.StatusSucceeded)
+	backups.RecordOutcome(ctx, backups.KindPreDeploy, backups.StatusSucceeded)
 	return nil
 }

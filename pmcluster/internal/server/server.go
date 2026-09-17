@@ -21,6 +21,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/api"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
@@ -51,7 +52,7 @@ type Deps struct {
 	Store         *store.Store
 	DeployService service.DeployService
 	Cipher        *credentials.Cipher
-	Backups       service.BackupsService
+	Backups       backups.Service
 
 	// HostCerts exposes per-host TLS cert management under /api/tls/hosts.
 	// Optional; when nil those routes are omitted.
@@ -129,7 +130,7 @@ func New(d Deps) http.Handler {
 			}).Mount(r)
 		}
 		if d.Backups != nil {
-			bh := &api.BackupsHandler{Svc: d.Backups}
+			bh := &backups.HTTP{Svc: d.Backups}
 			bh.Mount(r)
 			bh.MountStackScoped(r)
 		}

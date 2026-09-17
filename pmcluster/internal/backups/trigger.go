@@ -1,7 +1,4 @@
-// Package backup triggers an on-demand offen backup via `docker exec`
-// against the local container. Multi-node fan-out is out of scope; the
-// nightly cron on every node still runs unchanged.
-package backup
+package backups
 
 import (
 	"bytes"
@@ -39,7 +36,7 @@ var (
 
 func instruments() (metric.Int64Counter, metric.Int64Gauge) {
 	instrOnce.Do(func() {
-		meter := otel.Meter("github.com/hazemarian/poor-man-stack/pmcluster/internal/backup")
+		meter := otel.Meter("github.com/hazemarian/poor-man-stack/pmcluster/internal/backups")
 		var err error
 		backupsTotal, err = meter.Int64Counter(
 			"pmcluster.backups.total",
@@ -75,15 +72,16 @@ func RecordOutcome(ctx context.Context, kind, status string) {
 // ServiceName matches the bundled backup-stack.yml (<stack>_<service>).
 const ServiceName = "backup_volume-backup"
 
-// WALCheckpointer is implemented by *store.Store so backup.Trigger can
-// flush SQLite WAL before taking a volume snapshot.
+// WALCheckpointer is implemented by *store.Store so Trigger can flush
+// SQLite WAL before taking a volume snapshot.
 type WALCheckpointer interface {
 	WALCheckpoint(ctx context.Context) error
 }
 
-// LocalTrigger satisfies deploy.BackupTrigger via the package-level Trigger.
-// If a WALCheckpointer is set, it is called before the backup exec to flush
-// pending transactions from the WAL to the main DB file.
+// LocalTrigger satisfies the deploy package's BackupTrigger consumer
+// interface via the package-level Trigger. If a WALCheckpointer is set, it
+// is called before the backup exec to flush pending transactions from the
+// WAL to the main DB file.
 type LocalTrigger struct {
 	Store WALCheckpointer
 }
@@ -105,6 +103,8 @@ func (lt LocalTrigger) Trigger(ctx context.Context) ([]string, error) {
 	return res.ArchivePaths, nil
 }
 
+// Result carries the stdout/stderr of a backup exec plus the archive paths
+// parsed out of it.
 type Result struct {
 	ArchivePaths []string
 	Stdout       string
