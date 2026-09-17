@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -72,22 +71,12 @@ func runWebhookAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("open encryption key: %w", err)
 	}
 
-	secretBytes := make([]byte, 32)
-	if _, err := rand.Read(secretBytes); err != nil {
-		return fmt.Errorf("generate secret: %w", err)
-	}
-	secretHex := hex.EncodeToString(secretBytes)
-
-	ciphertext, err := cipher.Encrypt([]byte(secretHex))
+	secretHex, err := impl.NewWebhooks(st, cipher).Create(cmd.Context(), source, desc)
 	if err != nil {
-		return fmt.Errorf("encrypt secret: %w", err)
-	}
-
-	if err := st.CreateWebhookSource(cmd.Context(), source, desc, ciphertext); err != nil {
 		if errors.Is(err, store.ErrWebhookSourceExists) {
 			return fmt.Errorf("webhook source %q already exists", source)
 		}
-		return err
+		return fmt.Errorf("create webhook source: %w", err)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), `
@@ -117,7 +106,7 @@ func runWebhookList(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	sources, err := st.ListWebhookSources(cmd.Context())
+	sources, err := impl.NewWebhooks(st, nil).List(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("list webhook sources: %w", err)
 	}
@@ -154,7 +143,7 @@ func runWebhookRemove(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	if err := st.DeleteWebhookSource(cmd.Context(), source); err != nil {
+	if err := impl.NewWebhooks(st, nil).Delete(cmd.Context(), source); err != nil {
 		if errors.Is(err, store.ErrWebhookSourceNotFound) {
 			return fmt.Errorf("webhook source %q not found", source)
 		}

@@ -68,6 +68,14 @@ type Deps struct {
 	// configs (read-only). Optional; when nil the route is omitted.
 	Rendered *RenderedConfigService
 
+	// Webhooks exposes webhook-source management under /api/webhooks.
+	// Optional; when nil those routes are omitted.
+	Webhooks *WebhookService
+
+	// APIKeys exposes API-token (user) management under /api/api_keys.
+	// Optional; when nil those routes are omitted.
+	APIKeys *APIKeyService
+
 	// Configs exposes config CRUD via the configs service. Optional; when
 	// nil those routes are omitted.
 	Configs service.ConfigsService
@@ -134,11 +142,11 @@ func New(d Deps) http.Handler {
 		if d.Rendered != nil {
 			d.Rendered.Mount(r)
 		}
-		if d.Store != nil && d.Cipher != nil {
-			(&WebhookService{Store: d.Store, Cipher: d.Cipher}).Mount(r)
+		if d.Webhooks != nil {
+			d.Webhooks.Mount(r)
 		}
-		if d.Store != nil {
-			(&APIKeyService{Store: d.Store}).Mount(r)
+		if d.APIKeys != nil {
+			d.APIKeys.Mount(r)
 		}
 		if d.Secrets != nil {
 			(&SecretService{Svc: d.Secrets}).Mount(r)

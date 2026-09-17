@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -78,7 +80,7 @@ func runUserCreate(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	token, err := createUser(cmd.Context(), st, name)
+	_, token, err := impl.NewAPIKeys(st).Create(cmd.Context(), name)
 	if err != nil {
 
 		if errors.Is(err, store.ErrUserExists) {
@@ -116,7 +118,7 @@ func runUserList(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	users, err := st.ListUsers(cmd.Context())
+	users, err := impl.NewAPIKeys(st).List(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("list users: %w", err)
 	}
@@ -133,13 +135,8 @@ func runUserList(cmd *cobra.Command, _ []string) error {
 	return w.Flush()
 }
 
-// edgeAPITokenUser mirrors the server-side guard: the "edge" user owns the
-// operator console's daemon token and must not be removable.
-const edgeAPITokenUser = "edge"
-
-// runUserRemove deletes a user by name. Mirrors the daemon's DELETE
-// /api/api_keys/{id} guard (edge user + last-user protection) for the
-// store-direct CLI path.
+// runUserRemove deletes a user by name. The edge-user + self-delete guards
+// live in the APIKeys service (shared with the daemon API).
 func runUserRemove(cmd *cobra.Command, args []string) error {
 	name := strings.TrimSpace(args[0])
 	if name == "" {
@@ -160,19 +157,28 @@ func runUserRemove(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	if name == edgeAPITokenUser {
-		return fmt.Errorf("the %q user is required by the operator console and cannot be removed", edgeAPITokenUser)
+	users, err := impl.NewAPIKeys(st).List(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("list users: %w", err)
+	}
+	var id int64
+	for _, u := range users {
+		if u.Name == name {
+			id = u.ID
+			break
+		}
+	}
+	if id == 0 {
+		return fmt.Errorf("user %q not found", name)
 	}
 
-	user, err := st.UserByName(cmd.Context(), name)
-	if err != nil {
+	if err := impl.NewAPIKeys(st).Delete(cmd.Context(), id); err != nil {
+		if errors.Is(err, service.ErrEdgeUserProtected) {
+			return fmt.Errorf("the %q user is required by the operator console and cannot be removed", name)
+		}
 		if errors.Is(err, store.ErrUserNotFound) {
 			return fmt.Errorf("user %q not found", name)
 		}
-		return fmt.Errorf("lookup user: %w", err)
-	}
-
-	if err := st.DeleteUser(cmd.Context(), user.ID); err != nil {
 		return fmt.Errorf("delete user: %w", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ User %q removed; its bearer token is revoked.\n", name)

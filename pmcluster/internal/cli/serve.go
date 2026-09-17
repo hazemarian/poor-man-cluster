@@ -176,6 +176,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		},
 		Rendered: &server.RenderedConfigService{Store: st},
 		Configs:  impl.NewConfigs(st),
+		Webhooks: &server.WebhookService{Svc: impl.NewWebhooks(st, cipher)},
+		APIKeys:  &server.APIKeyService{Svc: impl.NewAPIKeys(st)},
 	}
 	if cipher != nil {
 		deps.Secrets = impl.NewSecrets(st, cipher)
