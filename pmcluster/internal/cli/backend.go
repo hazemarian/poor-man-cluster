@@ -10,7 +10,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/remote"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
 )
 
 // remoteClient returns an HTTP client for the daemon API when remote mode is
