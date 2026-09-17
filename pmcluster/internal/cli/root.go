@@ -9,6 +9,12 @@ import (
 // commands that load configuration (serve, cluster up, etc.).
 var configPath string
 
+// apiURL and apiToken enable remote mode: every command that has a service
+// counterpart talks to the daemon REST API instead of the local store, so the
+// CLI can run off the cluster node. Set via --api-url/--api-token flags or
+// PMCLUSTER_API_URL / PMCLUSTER_API_TOKEN env vars.
+var apiURL, apiToken string
+
 // rootCmd is the top-level pmcluster command.
 var rootCmd = &cobra.Command{
 	Use:   "pmcluster",
@@ -38,6 +44,18 @@ func init() {
 		"config",
 		"",
 		`config file path (default: $HOME/.pmcluster/config.yaml)`,
+	)
+	rootCmd.PersistentFlags().StringVar(
+		&apiURL,
+		"api-url",
+		"",
+		"daemon API base URL (remote mode; default: $PMCLUSTER_API_URL)",
+	)
+	rootCmd.PersistentFlags().StringVar(
+		&apiToken,
+		"api-token",
+		"",
+		"daemon API bearer token (remote mode; default: $PMCLUSTER_API_TOKEN)",
 	)
 
 	rootCmd.AddCommand(versionCmd)

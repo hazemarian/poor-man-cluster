@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -121,14 +120,14 @@ func runConfigCreate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	st, _, err := openStore()
+	svc, closeFn, err := backendConfigs(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
 	ver := buildinfo.Version
-	if _, err := impl.NewConfigs(st).Create(cmd.Context(), scope, stack, name, kind, value, ver); err != nil {
+	if _, err := svc.Create(cmd.Context(), scope, stack, name, kind, value, ver); err != nil {
 		if errors.Is(err, store.ErrConfigExists) {
 			return fmt.Errorf("config %q already exists (use `pmcluster config edit %s`)", name, name)
 		}
@@ -140,13 +139,13 @@ func runConfigCreate(cmd *cobra.Command, args []string) error {
 }
 
 func runConfigList(cmd *cobra.Command, _ []string) error {
-	st, _, err := openStore()
+	svc, closeFn, err := backendConfigs(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	cfgs, err := impl.NewConfigs(st).List(cmd.Context(), "", "")
+	cfgs, err := svc.List(cmd.Context(), "", "")
 	if err != nil {
 		return fmt.Errorf("list configs: %w", err)
 	}
@@ -167,13 +166,13 @@ func runConfigList(cmd *cobra.Command, _ []string) error {
 
 func runConfigGet(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	st, _, err := openStore()
+	svc, closeFn, err := backendConfigs(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	c, err := impl.NewConfigs(st).Get(cmd.Context(), name)
+	c, err := svc.Get(cmd.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			return fmt.Errorf("config %q not found", name)
@@ -196,13 +195,13 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	st, _, err := openStore()
+	svc, closeFn, err := backendConfigs(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	hash, err := impl.NewConfigs(st).Update(cmd.Context(), name, value, buildinfo.Version)
+	hash, err := svc.Update(cmd.Context(), name, value, buildinfo.Version)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			return fmt.Errorf("config %q not found", name)
@@ -217,13 +216,13 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 
 func runConfigHistory(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	st, _, err := openStore()
+	svc, closeFn, err := backendConfigs(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	vers, err := impl.NewConfigs(st).ListVersions(cmd.Context(), name)
+	vers, err := svc.ListVersions(cmd.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			return fmt.Errorf("config %q not found", name)
@@ -246,11 +245,11 @@ func runConfigHistory(cmd *cobra.Command, args []string) error {
 
 func runConfigRollback(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	st, _, err := openStore()
+	svc, closeFn, err := backendConfigs(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
 	var versionID int64
 	if len(args) == 2 {
@@ -260,7 +259,7 @@ func runConfigRollback(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 
-		vers, err := impl.NewConfigs(st).ListVersions(cmd.Context(), name)
+		vers, err := svc.ListVersions(cmd.Context(), name)
 		if err != nil {
 			if errors.Is(err, store.ErrConfigNotFound) {
 				return fmt.Errorf("config %q not found", name)
@@ -273,7 +272,7 @@ func runConfigRollback(cmd *cobra.Command, args []string) error {
 		versionID = vers[0].ID
 	}
 
-	hash, err := impl.NewConfigs(st).Rollback(cmd.Context(), name, versionID)
+	hash, err := svc.Rollback(cmd.Context(), name, versionID)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			return fmt.Errorf("config %q not found", name)

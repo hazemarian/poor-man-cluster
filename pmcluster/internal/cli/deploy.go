@@ -14,6 +14,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/remote"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -91,22 +92,27 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("read manifest %s: %w", manifestPath, err)
 	}
 
-	svc, _, closeFn, err := openDeploySvc(cmd)
-	if err != nil {
-		return err
-	}
-	defer closeFn()
-
 	appOverride, _ := cmd.Flags().GetString("app")
 	repo, _ := cmd.Flags().GetString("repo")
 	version, _ := cmd.Flags().GetString("version")
-
-	res, err := svc.Deploy(cmd.Context(), deploy.Payload{
+	payload := deploy.Payload{
 		AppName:  appOverride,
 		RepoURL:  repo,
 		Version:  version,
 		Manifest: string(manifestBytes),
-	})
+	}
+
+	var res *deploy.DeployResult
+	if rc := remoteClient(cmd); rc != nil {
+		res, err = remote.NewDeploy(rc).Deploy(cmd.Context(), payload)
+	} else {
+		svc, _, closeFn, openErr := openDeploySvc(cmd)
+		if openErr != nil {
+			return openErr
+		}
+		defer closeFn()
+		res, err = svc.Deploy(cmd.Context(), payload)
+	}
 	if err != nil {
 		return err
 	}
@@ -119,13 +125,18 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 }
 
 func runStackList(cmd *cobra.Command, _ []string) error {
-	_, st, closeFn, err := openDeploySvc(cmd)
-	if err != nil {
-		return err
+	var stacks []*store.Stack
+	var err error
+	if rc := remoteClient(cmd); rc != nil {
+		stacks, err = remote.NewStacks(rc).List(cmd.Context())
+	} else {
+		_, st, closeFn, openErr := openDeploySvc(cmd)
+		if openErr != nil {
+			return openErr
+		}
+		defer closeFn()
+		stacks, err = st.ListStacks(cmd.Context())
 	}
-	defer closeFn()
-
-	stacks, err := st.ListStacks(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("list stacks: %w", err)
 	}
@@ -151,22 +162,46 @@ func runStackList(cmd *cobra.Command, _ []string) error {
 
 func runStackShow(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	_, st, closeFn, err := openDeploySvc(cmd)
-	if err != nil {
-		return err
-	}
-	defer closeFn()
 
-	s, err := st.GetStack(cmd.Context(), name)
-	if err != nil {
-		if errors.Is(err, store.ErrStackNotFound) {
-			return fmt.Errorf("stack %q not found", name)
+	var s *store.Stack
+	var revs []*store.StackRevision
+	var lastBackup string
+	if rc := remoteClient(cmd); rc != nil {
+		var err error
+		s, err = remote.NewStacks(rc).Get(cmd.Context(), name)
+		if err != nil {
+			if errors.Is(err, store.ErrStackNotFound) {
+				return fmt.Errorf("stack %q not found", name)
+			}
+			return err
 		}
-		return err
-	}
-	revs, err := st.ListRevisions(cmd.Context(), name, 20)
-	if err != nil {
-		return fmt.Errorf("list revisions: %w", err)
+		revs, err = remote.NewStacks(rc).Revisions(cmd.Context(), name, 20)
+		if err != nil {
+			return fmt.Errorf("list revisions: %w", err)
+		}
+		backups, err := remote.NewBackups(rc).ListForStack(cmd.Context(), name)
+		if err == nil && len(backups) > 0 {
+			lastBackup = formatLastBackupRow(backups[0])
+		}
+	} else {
+		_, st, closeFn, openErr := openDeploySvc(cmd)
+		if openErr != nil {
+			return openErr
+		}
+		defer closeFn()
+		var err error
+		s, err = st.GetStack(cmd.Context(), name)
+		if err != nil {
+			if errors.Is(err, store.ErrStackNotFound) {
+				return fmt.Errorf("stack %q not found", name)
+			}
+			return err
+		}
+		revs, err = st.ListRevisions(cmd.Context(), name, 20)
+		if err != nil {
+			return fmt.Errorf("list revisions: %w", err)
+		}
+		lastBackup = formatLastBackup(cmd.Context(), st, name)
 	}
 
 	out := cmd.OutOrStdout()
@@ -177,7 +212,10 @@ func runStackShow(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(out, "Created:          %s\n", time.Unix(s.CreatedAt, 0).Format(time.RFC3339))
 	fmt.Fprintf(out, "Updated:          %s\n", time.Unix(s.UpdatedAt, 0).Format(time.RFC3339))
-	fmt.Fprintf(out, "Last backup:      %s\n", formatLastBackup(cmd.Context(), st, name))
+	if lastBackup == "" {
+		lastBackup = "(none recorded)"
+	}
+	fmt.Fprintf(out, "Last backup:      %s\n", lastBackup)
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "Recent revisions (%d):\n", len(revs))
 
@@ -191,6 +229,19 @@ func runStackShow(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(w, "%s%d\t%s\n", marker, r.Revision, time.Unix(r.CreatedAt, 0).Format(time.RFC3339))
 	}
 	return w.Flush()
+}
+
+func formatLastBackupRow(b *store.Backup) string {
+	ts := time.Unix(b.StartedAt, 0).Format(time.RFC3339)
+	revPart := ""
+	if b.Revision.Valid {
+		revPart = fmt.Sprintf(" (rev %d)", b.Revision.Int64)
+	}
+	errPart := ""
+	if b.Status == "failed" && b.ErrorMessage != "" {
+		errPart = " — " + b.ErrorMessage
+	}
+	return fmt.Sprintf("%s @ %s%s%s", b.Status, ts, revPart, errPart)
 }
 
 // formatLastBackup returns a one-line summary of the most recent backup
@@ -227,13 +278,17 @@ func runRollback(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("revision must be an integer: %w", err)
 	}
 
-	svc, _, closeFn, err := openDeploySvc(cmd)
-	if err != nil {
-		return err
+	var res *deploy.DeployResult
+	if rc := remoteClient(cmd); rc != nil {
+		res, err = remote.NewDeploy(rc).Rollback(cmd.Context(), name, rev)
+	} else {
+		svc, _, closeFn, openErr := openDeploySvc(cmd)
+		if openErr != nil {
+			return openErr
+		}
+		defer closeFn()
+		res, err = svc.Rollback(cmd.Context(), name, rev)
 	}
-	defer closeFn()
-
-	res, err := svc.Rollback(cmd.Context(), name, rev)
 	if err != nil {
 		if errors.Is(err, store.ErrRevisionNotFound) {
 			return fmt.Errorf("revision %d not found for stack %q", rev, name)

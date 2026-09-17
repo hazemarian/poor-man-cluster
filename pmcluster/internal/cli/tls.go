@@ -169,24 +169,18 @@ func loadTLSPair() (cert, key string, err error) {
 
 func runTLSAdd(cmd *cobra.Command, args []string) error {
 	host := args[0]
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
 	cert, key, err := loadTLSPair()
 	if err != nil {
 		return err
 	}
 
-	st, cipher, dc, err := siteCertDeps(cmd, cfg, "")
+	svc, closeFn, err := backendTLS(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
-	defer func() { _ = dc.Close() }()
+	defer closeFn()
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Uploading certificate for %s …\n", host)
-	svc := tlsService(cmd, st, cipher, dc, cfg)
 	row, err := svc.ApplyHostCert(cmd.Context(), host, cert, key, !tlsAddBinds.noRefresh)
 	if err != nil {
 		return fmt.Errorf("apply cert: %w", err)
@@ -203,17 +197,12 @@ func runTLSAdd(cmd *cobra.Command, args []string) error {
 }
 
 func runTLSList(cmd *cobra.Command, _ []string) error {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	st, _, _, err := siteCertDeps(cmd, cfg, "")
+	svc, closeFn, err := backendTLS(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	svc := tlsService(cmd, st, nil, nil, cfg)
 	rows, err := svc.List(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("list certificates: %w", err)
@@ -244,18 +233,13 @@ func runTLSList(cmd *cobra.Command, _ []string) error {
 
 func runTLSRemove(cmd *cobra.Command, args []string) error {
 	host := args[0]
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	st, cipher, dc, err := siteCertDeps(cmd, cfg, "")
+	svc, closeFn, err := backendTLS(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
-	defer func() { _ = dc.Close() }()
+	defer closeFn()
 
-	err = tlsService(cmd, st, cipher, dc, cfg).RemoveHostCert(cmd.Context(), host, !tlsAddBinds.noRefresh)
+	err = svc.RemoveHostCert(cmd.Context(), host, !tlsAddBinds.noRefresh)
 	if err != nil {
 		if errors.Is(err, store.ErrSiteCertNotFound) {
 			return fmt.Errorf("no certificate stored for %q", host)
@@ -296,17 +280,12 @@ func tlsService(cmd *cobra.Command, st *store.Store, cipher *credentials.Cipher,
 }
 
 func runTLSSiteShow(cmd *cobra.Command, _ []string) error {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	st, _, _, err := siteCertDeps(cmd, cfg, "")
+	svc, closeFn, err := backendTLS(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	svc := tlsService(cmd, st, nil, nil, cfg)
 	domain, err := svc.MainDomain(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("cluster domain: %w", err)
@@ -338,18 +317,12 @@ func runTLSSiteShow(cmd *cobra.Command, _ []string) error {
 }
 
 func runTLSSiteSet(cmd *cobra.Command, _ []string) error {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-	st, cipher, dc, err := siteCertDeps(cmd, cfg, "")
+	svc, closeFn, err := backendTLS(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
-	defer func() { _ = dc.Close() }()
+	defer closeFn()
 
-	svc := tlsService(cmd, st, cipher, dc, cfg)
 	domain, err := svc.MainDomain(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("cluster domain: %w", err)

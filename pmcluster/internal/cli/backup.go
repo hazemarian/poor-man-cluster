@@ -10,6 +10,8 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/remote"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
 var backupCmd = &cobra.Command{
@@ -50,6 +52,17 @@ func runBackupCreate(cmd *cobra.Command, _ []string) error {
 
 	timeout, _ := cmd.Flags().GetDuration("timeout")
 
+	if rc := remoteClient(cmd); rc != nil {
+		ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+		defer cancel()
+		id, paths, err := remote.NewBackups(rc).Trigger(ctx, "", 0)
+		if err != nil {
+			return fmt.Errorf("backup failed: %w", err)
+		}
+		printBackupResult(cmd, id, paths)
+		return nil
+	}
+
 	st, _, err := openStore()
 	if err != nil {
 		return err
@@ -71,6 +84,11 @@ func runBackupCreate(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("backup failed (recorded as id=%d): %w", id, err)
 	}
+	printBackupResult(cmd, id, paths)
+	return nil
+}
+
+func printBackupResult(cmd *cobra.Command, id int64, paths []string) {
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Backup id=%d succeeded.\n", id)
 	if len(paths) > 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "Archives:")
@@ -80,11 +98,18 @@ func runBackupCreate(cmd *cobra.Command, _ []string) error {
 	} else {
 		fmt.Fprintln(cmd.OutOrStdout(), "(no archive paths parsed from offen output — see /var/backups/docker-volumes/ on the host)")
 	}
-	return nil
 }
 
 func runBackupList(cmd *cobra.Command, _ []string) error {
 	limit, _ := cmd.Flags().GetInt("limit")
+
+	if rc := remoteClient(cmd); rc != nil {
+		rows, err := remote.NewBackups(rc).List(cmd.Context(), limit)
+		if err != nil {
+			return fmt.Errorf("list backups: %w", err)
+		}
+		return printBackups(cmd, rows)
+	}
 
 	st, _, err := openStore()
 	if err != nil {
@@ -96,6 +121,10 @@ func runBackupList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("list backups: %w", err)
 	}
+	return printBackups(cmd, rows)
+}
+
+func printBackups(cmd *cobra.Command, rows []*store.Backup) error {
 	if len(rows) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "(no backups recorded yet)")
 		return nil

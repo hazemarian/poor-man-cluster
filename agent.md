@@ -135,8 +135,60 @@ Key commands (all in `internal/cli/`):
 - The `serve` command (`serve.go`) wires the daemon: opens store, docker
   client, deploy service, and calls `server.New` — **this is where new daemon
   dependencies are injected**.
+- `backend.go` — the CLI backend factory. Every data command resolves its
+  service through a `backendX(cmd)` helper that returns the **local** adapter
+  (`internal/service/impl`) or the **remote** adapter
+  (`internal/service/remote`) when `--api-url`/`PMCLUSTER_API_URL` is set.
+- Remote mode: persistent flags `--api-url` (+ `--api-token`, default
+  `PMCLUSTER_API_TOKEN`) let the CLI run off-node against the daemon API.
+  Commands with a REST twin (`config`, `secret`, `webhook`, `user`, `backup`,
+  `deploy`, `stack`, `rollback`, `tls`) work remotely; bootstrap/repair
+  commands (`init`, `cluster *`, `credentials *`, `node`, `registry`, `logs`,
+  `serve`) are local-only (they need the node's SQLite + Docker socket).
 - `config.Config` (from `internal/config`) carries `DBPath`, `ConfigDir`,
   `EncryptionKeyPath`, `ListenAddr`, `Domain`.
+
+### internal/service — ports (the service layer)
+Interfaces only, no implementation imports. These are the **ports** of the
+Clean Architecture layout: every consumer (CLI, daemon API, webhook) depends on
+these interfaces, never on the concrete adapters. Ports:
+- `DeployService` (deploy.go) — `Deploy`, `Rollback`, `Undeploy`.
+- `ClusterService` (cluster.go) — `Up`, `Update`, `Down`, `Status`.
+- `ConfigsService` (configs.go), `SecretsService` (secrets.go) — CRUD + list
+  filters + `SetRendered`/`ListRendered`, `Reveal`, `Update`.
+- `TLSService` (tls.go) — `SiteCert`, `ApplyHostCert`(+refresh),
+  `RemoveHostCert`(+refresh), `GetSiteCert`, `List`, `MainDomain`.
+- `remaining.go` — `WebhooksService`, `APIKeysService`, `BackupsService`,
+  `CredentialsService`, `StacksService` + sentinels (`ErrEdgeUserProtected`,
+  `ErrSelfDelete`, `ErrBackupTriggerNotConfigured`).
+
+### internal/service/impl — local adapters
+The on-node implementations of the ports (each wraps the store, cipher, docker
+client, or cluster package):
+`Configs{Store}`, `Secrets{Store,Cipher}` (encrypt/decrypt inside),
+`Cluster{}` (pass-through to `cluster.Up/Update/Down/Status`),
+`Stacks{Store}`, `Webhooks{Store,Cipher}`, `APIKeys{Store}` (edge-user +
+self-delete guards live here), `Backups{Store,Run}` (records outcome rows),
+`Credentials{Store,Cipher,Rotator}`, `TLS{Store,Cipher,Docker,Deployer,
+Provisioner,ConfigDir,Version}`. Constructors: `NewConfigs(st)`, `NewSecrets`,
+`NewCluster()`, `NewStacks`, `NewWebhooks`, `NewAPIKeys`, `NewBackups`,
+`NewCredentials`, `NewTLS`.
+
+### internal/service/remote — remote adapters (HTTP)
+The off-node implementations of the same ports, talking to the daemon REST
+API. `Client{http,base,tok}` + `do()` (Bearer, 8MB cap) + `mapError` (status +
+body → the store/service sentinels, so callers can `errors.Is`).
+`Configs{c}`, `Secrets{c}` (`Get` = list-then-find; `Reveal` via
+`/secrets/{name}/value`), `Stacks{c}` + `Deploy{c}` (`POST/DELETE /api/stacks`),
+`Webhooks{c}`, `APIKeys{c}`, `Backups{c}`, `TLS{c}`. `SetRendered` returns an
+error ("internal cluster-update operation not available over the remote API").
+`ClusterService`/`CredentialsService` have **no** remote adapters yet.
+
+### internal/workflow — named-step runner
+`Step{Name,Run}` + `Workflow{out,steps}` (`NewWorkflow(out)`, `Add`, `Run`
+prints `▶ <name>` and wraps the first error with the step name). Shared by
+`cluster up` (10 steps), `cluster update` (8 steps), `deploy` (5), `rollback`
+(3) and `undeploy` (3) — the step lists are the public progress output.
 
 ### internal/api
 Small HTTP handlers shared by the daemon (`/health`), plus the deploy payload
@@ -144,8 +196,12 @@ types used by API/webhook/CLI.
 
 ### internal/server — the daemon REST API (chi)
 Bearer-authenticated `/api/*` router built in `New(Deps)`.
-`Deps` (in `server.go`) holds: `Lookup` (auth), `Docker`, `Store`,
-`DeployService`, `Cipher`, `BackupTrigger`, `HostCerts`, `SiteCert`.
+`Deps` (in `server.go`) holds the **ports** (`DeployService`,
+`ConfigsService`, `SecretsService`, `WebhooksService`, `APIKeysService`,
+`BackupsService`) plus `Lookup` (auth), `Docker`, `Store`, `Cipher`, and the
+optional service structs `HostCerts`, `SiteCert`, `Update`, `Rendered`.
+All service handlers take `Svc` (a port) — e.g. `ConfigService{Svc}`, and
+mounts are conditional on the dep being non-nil.
 Services mounted under `/api`:
 - `apikeys.go` — GET/POST `/api_keys`, DELETE `/api_keys/{id}`.
 - `webhooks.go` — GET/POST `/webhooks`, DELETE `/webhooks/{source}`.
@@ -198,13 +254,16 @@ token id (no O(N) argon2 scan).
 ### internal/cluster — cluster orchestration (the core)
 `UpDeps`/`UpdateDeps`/`SiteCertDeps`/`HostCertsDeps` bundle `Store, Cipher,
 Docker, Deployer, Provisioner` (+ `Stdout` where verbose).
-- `up.go` — `cluster up`: idempotent bootstrap; renders 4 embedded stacks in
-  order `infra → edge → observability → backup`, provisions OpenObserve
+- `up.go` — `cluster up`: idempotent bootstrap, run as a **workflow of 10
+  named steps** (preflight → networks → TLS → credentials → render configs →
+  deploy infra→edge→observability→backup → wait health → provision OO →
+  persist settings); renders 4 embedded stacks, provisions OpenObserve
   user+token, waits for health, saves settings.
-- `update.go` — `cluster update`: content-aware re-apply. Loads TLS state +
-  domain + OO credential; re-materializes cert/key secrets; renders OTel +
-  Traefik dynamic + edge configs; re-deploys only stacks whose content moved
-  (configs are versioned `*_vNNN` and compared by hash label).
+- `update.go` — `cluster update`: content-aware re-apply, run as a **workflow
+  of 8 named steps**. Loads TLS state + domain + OO credential; re-materializes
+  cert/key secrets; renders OTel + Traefik dynamic + edge configs; re-deploys
+  only stacks whose content moved (configs are versioned `*_vNNN` and compared
+  by hash label); snapshots rendered configs into the DB.
 - `down.go` — teardown (removes stacks, secrets, configs, networks).
 - `secrets.go` — `EnsureVersionedSecret`, `EnsureVersionedSecretFromFile`,
   `EnsureSecret`, `RandomPassword`; versioning via `pmcluster.data_hash` label
@@ -240,14 +299,17 @@ array). `translate.go` takes an optional `EnvResolver` (deploy.Service wires a
 
 ### internal/deploy — deploy service
 `deploy.Service` = single engine behind CLI deploy, `/api/stacks`, and
-webhooks. `Deploy(ctx, payload)` → parse/interpolate/validate/translate →
-`docker stack deploy` → records revision (unix timestamp + NextFreeRevision
-collision avoidance). `Rollback(ctx, stack, revision)`. `Undeploy(ctx, stack)`
-= full teardown: `docker stack rm`, then remove the stack's named volumes
-(`VolumeList` by `com.docker.stack.namespace` label) and the Swarm secrets its
-services mount (`StackSecretNames`), then `Store.DeleteStack` (stack row +
-revisions via FK cascade + the stack's service-scope configs/secrets) — backs
-the console Delete button and `DELETE /api/stacks/{name}`.
+webhooks; it **implements `service.DeployService`** and runs its methods as
+named workflows (`deploy` 5 steps, `rollback` 3, `undeploy` 3 — via
+`internal/workflow`). `Deploy(ctx, payload)` → parse/interpolate/validate/
+translate → `docker stack deploy` → records revision (unix timestamp +
+NextFreeRevision collision avoidance). `Rollback(ctx, stack, revision)`.
+`Undeploy(ctx, stack)` = full teardown: `docker stack rm`, then remove the
+stack's named volumes (`VolumeList` by `com.docker.stack.namespace` label) and
+the Swarm secrets its services mount (`StackSecretNames`), then
+`Store.DeleteStack` (stack row + revisions via FK cascade + the stack's
+service-scope configs/secrets) — backs the console Delete button and
+`DELETE /api/stacks/{name}`.
 `Resolver` field for config()/secrets() env refs.
 
 ### internal/webhook — CI webhook receiver
@@ -336,6 +398,14 @@ compose with Traefik labels (`Host(<expose.host>)`, entrypoints websecure,
 tls, middleware cors-default) so the app is served at
 `https://<expose.host>/`.
 
+### Remote CLI (off-node)
+Set `--api-url https://pmcluster.<domain>` (or `PMCLUSTER_API_URL`) plus
+`--api-token pmc_...` (or `PMCLUSTER_API_TOKEN`). Commands then run against
+the daemon API instead of the local store/docker: `pmcluster --api-url ... \
+--api-token ... config list`, `deploy`, `stack list`, `rollback`, `secret ...`,
+`webhook ...`, `user create`, `backup create`, `tls ...`. Bootstrap/repair
+commands stay local.
+
 ### TLS management
 - Cluster's own cert: `pmcluster tls site set|show` / PUT `/api/tls/site` /
   console. Applies via `cluster.ApplyCert` with `refresh=true`: writes local
@@ -368,6 +438,9 @@ auto-ban → forward to daemon. The console UI is served by the same process.
 
 | Task | Where |
 |---|---|
+| Add a service port | `internal/service/<domain>.go` interface + `internal/service/remaining.go` if it's one of the "remaining" domains |
+| Add a local adapter | `internal/service/impl/<domain>.go` + construct in `internal/cli/backend.go` and `internal/cli/serve.go` |
+| Add a remote adapter | `internal/service/remote/<domain>.go` (DTO + `Client.do`) + a `backend<Domain>` branch in `internal/cli/backend.go` |
 | Add a CLI command | new file in `internal/cli/`, register in `init()`; add OpenAPI row if it has an API twin |
 | Add a REST endpoint | `internal/server/<name>.go` (struct + `Mount`), wire in `server.New` + `cli/serve.go` Deps |
 | Add a console page | `internal/ui/controllers/<name>.go`, route in `internal/ui/ui.go`, template `views/templates/frag_<name>.html`, nav in `app.html`, pmapi method in `internal/ui/pmapi/` |
@@ -417,11 +490,11 @@ image pin, console 302, `pmcluster tls site show`.
 
 ---
 
-## 10. Production facts (as of v0.2.33)
+## 10. Production facts (as of v0.2.41)
 
 - Node `root@82.165.128.237`, SSH key `~/.ssh/pmcluster_ed25519`, `rg` NOT
   installed (use `grep`), `sqlite3` available.
-- Daemon `v0.2.33`, edge pinned `:v0.2.33`, domain `nextrum-sy.com`.
+- Daemon `v0.2.41`, edge pinned `:v0.2.41`, domain `nextrum-sy.com`.
 - Console login: admin / `wfO1C3yY1CGVLfWEnKA-BJHMWUmoqMl$4Kb0`
   (that's the `edge_admin` credential).
 - `site_certs` rows: `nextrum-sy.com` (cert_v041/key_v041) +

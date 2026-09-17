@@ -11,8 +11,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -112,19 +110,15 @@ func runSecretCreate(cmd *cobra.Command, args []string) error {
 	}
 	stack, _ := cmd.Flags().GetString("stack")
 
-	st, cfg, err := openStore()
+	svc, closeFn, err := backendSecrets(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
-	if err != nil {
-		return fmt.Errorf("open encryption key: %w", err)
-	}
 	hash := secretHash(value)
 
-	if _, err := impl.NewSecrets(st, cipher).Create(cmd.Context(), scope, stack, name, value); err != nil {
+	if _, err := svc.Create(cmd.Context(), scope, stack, name, value); err != nil {
 		if errors.Is(err, store.ErrSecretExists) {
 			return fmt.Errorf("secret %q already exists", name)
 		}
@@ -148,13 +142,13 @@ Use it in a manifest:
 }
 
 func runSecretList(cmd *cobra.Command, _ []string) error {
-	st, _, err := openStore()
+	svc, closeFn, err := backendSecrets(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	secrets, err := impl.NewSecrets(st, nil).List(cmd.Context(), "", "")
+	secrets, err := svc.List(cmd.Context(), "", "")
 	if err != nil {
 		return fmt.Errorf("list secrets: %w", err)
 	}
@@ -174,13 +168,13 @@ func runSecretList(cmd *cobra.Command, _ []string) error {
 
 func runSecretShow(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	st, _, err := openStore()
+	svc, closeFn, err := backendSecrets(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	s, err := impl.NewSecrets(st, nil).Get(cmd.Context(), name)
+	s, err := svc.Get(cmd.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrSecretNotFound) {
 			return fmt.Errorf("secret %q not found", name)
@@ -196,13 +190,13 @@ func runSecretShow(cmd *cobra.Command, args []string) error {
 
 func runSecretVerify(cmd *cobra.Command, args []string) error {
 	name, value := args[0], args[1]
-	st, _, err := openStore()
+	svc, closeFn, err := backendSecrets(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	s, err := impl.NewSecrets(st, nil).Get(cmd.Context(), name)
+	s, err := svc.Get(cmd.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrSecretNotFound) {
 			return fmt.Errorf("secret %q not found", name)
@@ -219,13 +213,13 @@ func runSecretVerify(cmd *cobra.Command, args []string) error {
 
 func runSecretDelete(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	st, _, err := openStore()
+	svc, closeFn, err := backendSecrets(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	if err := impl.NewSecrets(st, nil).Delete(cmd.Context(), name); err != nil {
+	if err := svc.Delete(cmd.Context(), name); err != nil {
 		if errors.Is(err, store.ErrSecretNotFound) {
 			return fmt.Errorf("secret %q not found", name)
 		}

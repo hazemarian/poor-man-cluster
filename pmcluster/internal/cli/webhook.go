@@ -9,8 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -60,18 +58,13 @@ func runWebhookAdd(cmd *cobra.Command, args []string) error {
 	}
 	desc, _ := cmd.Flags().GetString("description")
 
-	st, cfg, err := openStore()
+	svc, closeFn, err := backendWebhooks(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
-	if err != nil {
-		return fmt.Errorf("open encryption key: %w", err)
-	}
-
-	secretHex, err := impl.NewWebhooks(st, cipher).Create(cmd.Context(), source, desc)
+	secretHex, err := svc.Create(cmd.Context(), source, desc)
 	if err != nil {
 		if errors.Is(err, store.ErrWebhookSourceExists) {
 			return fmt.Errorf("webhook source %q already exists", source)
@@ -100,13 +93,13 @@ Example signing in shell:
 }
 
 func runWebhookList(cmd *cobra.Command, _ []string) error {
-	st, _, err := openStore()
+	svc, closeFn, err := backendWebhooks(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	sources, err := impl.NewWebhooks(st, nil).List(cmd.Context())
+	sources, err := svc.List(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("list webhook sources: %w", err)
 	}
@@ -137,13 +130,13 @@ func runWebhookList(cmd *cobra.Command, _ []string) error {
 
 func runWebhookRemove(cmd *cobra.Command, args []string) error {
 	source := args[0]
-	st, _, err := openStore()
+	svc, closeFn, err := backendWebhooks(cmd)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer closeFn()
 
-	if err := impl.NewWebhooks(st, nil).Delete(cmd.Context(), source); err != nil {
+	if err := svc.Delete(cmd.Context(), source); err != nil {
 		if errors.Is(err, store.ErrWebhookSourceNotFound) {
 			return fmt.Errorf("webhook source %q not found", source)
 		}

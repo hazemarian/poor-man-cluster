@@ -116,6 +116,37 @@ The `pmcluster-edge` proxy enforces per-real-IP rate limits:
 
 Exceeding the limit returns HTTP 429 with `Retry-After: 1`. Repeated rate-limit trips or upstream auth/5xx failures can also get the IP auto-banned (HTTP 403) for a short window (default 10 min).
 
+## Remote CLI mode (run off-node)
+
+Every data command can run against the daemon API instead of a local
+`~/.pmcluster` + Docker socket. Set the API base URL and a bearer token:
+
+```bash
+export PMCLUSTER_API_URL=https://pmcluster.nextrum-sy.com   # or --api-url
+export PMCLUSTER_API_TOKEN=pmc_<id>_<secret>                # or --api-token
+
+# Now all of these work from any machine:
+pmcluster config list
+pmcluster secret list --scope service
+pmcluster deploy app.yaml
+pmcluster stack list
+pmcluster rollback my-app 1789626082
+pmcluster webhook list
+pmcluster user create ci-bot
+pmcluster backup create
+pmcluster tls site show
+```
+
+- The token comes from `pmcluster user create <name>` (or the `edge` daemon
+  token from `pmcluster credentials show edge_api_token`).
+- **Local-only** (need the node's SQLite + Docker socket): `init`,
+  `cluster up/update/status/down`, `credentials *`, `node`, `registry`,
+  `logs`, `serve`.
+- Remote `tls hosts add` uploads PEM text and refreshes Traefik through the
+  daemon; remote `config edit` re-stamps the current binary version, then run
+  the console **Apply to swarm** (or `cluster update` on the node) to reach
+  the swarm.
+
 ## Manifest DSL Format
 
 Create a `.yaml` manifest for each service. The schema (see [`docs/dsl.md`](https://github.com/hazemarian/poor-man-stack/blob/main/docs/dsl.md) for the full reference):
