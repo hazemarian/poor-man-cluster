@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,7 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -18,17 +17,11 @@ import (
 // per-host certs, but for the cluster's domain (e.g. nextrum-sy.com).
 //
 // The cert/key arrive as TEXT (the operator or edge UI pastes the PEM). The
-// Apply function (wired in serve.go from cluster.ApplySiteCert) validates the
-// pair against the persisted domain, writes the local copy under
-// <configDir>/site/, re-materializes the versioned Swarm secrets, refreshes
-// Traefik and persists the metadata for expiry monitoring.
+// service validates the pair against the persisted domain, writes the local
+// copy under <configDir>/site/, re-materializes the versioned Swarm secrets,
+// refreshes Traefik and persists the metadata for expiry monitoring.
 type SiteCertService struct {
-	Store *store.Store
-
-	// Apply uploads a new site cert for domain and returns the stored metadata
-	// row. It is the single implementation behind PUT /api/tls/site and the
-	// CLI; the daemon only knows its signature.
-	Apply func(ctx context.Context, domain, certPEM, keyPEM string) (*store.SiteCertRow, error)
+	Svc service.TLSService
 }
 
 func (s *SiteCertService) Mount(r chi.Router) {
@@ -37,16 +30,20 @@ func (s *SiteCertService) Mount(r chi.Router) {
 }
 
 func (s *SiteCertService) get(w http.ResponseWriter, r *http.Request) {
-	if s.Store == nil {
-		writeErr(w, http.StatusInternalServerError, "store unavailable")
+	if s.Svc == nil {
+		writeErr(w, http.StatusInternalServerError, "site-cert service not wired")
 		return
 	}
-	domain := cluster.PersistedDomain(r.Context(), s.Store)
+	domain, err := s.Svc.MainDomain(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "resolve cluster domain: "+err.Error())
+		return
+	}
 	if domain == "" {
 		writeErr(w, http.StatusNotFound, "no persisted cluster domain found — run `pmcluster cluster up` first")
 		return
 	}
-	row, err := s.Store.GetSiteCert(r.Context(), domain)
+	row, err := s.Svc.GetSiteCert(r.Context(), domain)
 	if err != nil {
 		if errors.Is(err, store.ErrSiteCertNotFound) {
 			writeErr(w, http.StatusNotFound, "no site certificate stored for "+domain)
@@ -55,7 +52,7 @@ func (s *SiteCertService) get(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "get site cert: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, siteCertResponseFromRow(&row))
+	writeJSON(w, http.StatusOK, siteCertResponseFromRow(row))
 }
 
 type putSiteCertRequest struct {
@@ -79,11 +76,15 @@ type siteCertResponse struct {
 }
 
 func (s *SiteCertService) put(w http.ResponseWriter, r *http.Request) {
-	if s.Store == nil || s.Apply == nil {
-		writeErr(w, http.StatusInternalServerError, "site-cert service not fully wired")
+	if s.Svc == nil {
+		writeErr(w, http.StatusInternalServerError, "site-cert service not wired")
 		return
 	}
-	domain := cluster.PersistedDomain(r.Context(), s.Store)
+	domain, err := s.Svc.MainDomain(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "resolve cluster domain: "+err.Error())
+		return
+	}
 	if domain == "" {
 		writeErr(w, http.StatusNotFound, "no persisted cluster domain found — run `pmcluster cluster up` first")
 		return
@@ -100,9 +101,8 @@ func (s *SiteCertService) put(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "cert and key are both required")
 		return
 	}
-	row, err := s.Apply(r.Context(), domain, req.Cert, req.Key)
+	row, err := s.Svc.SiteCert(r.Context(), domain, req.Cert, req.Key)
 	if err != nil {
-
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "does not cover") || strings.Contains(err.Error(), "valid pair") || strings.Contains(err.Error(), "PEM") {
 			status = http.StatusBadRequest

@@ -15,6 +15,8 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -184,13 +186,8 @@ func runTLSAdd(cmd *cobra.Command, args []string) error {
 	defer func() { _ = dc.Close() }()
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Uploading certificate for %s …\n", host)
-	row, err := cluster.ApplyCert(cmd.Context(), cluster.SiteCertDeps{
-		Store:       st,
-		Cipher:      cipher,
-		Docker:      dc,
-		Deployer:    cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
-		Provisioner: ooProvisioner(st, cipher, cmd.OutOrStdout(), cluster.PersistedDomain(cmd.Context(), st)),
-	}, cfg.ConfigDir(), buildinfo.Version, host, cert, key, !tlsAddBinds.noRefresh)
+	svc := tlsService(cmd, st, cipher, dc, cfg)
+	row, err := svc.ApplyHostCert(cmd.Context(), host, cert, key, !tlsAddBinds.noRefresh)
 	if err != nil {
 		return fmt.Errorf("apply cert: %w", err)
 	}
@@ -216,11 +213,15 @@ func runTLSList(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	rows, err := st.ListSiteCerts(cmd.Context())
+	svc := tlsService(cmd, st, nil, nil, cfg)
+	rows, err := svc.List(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("list certificates: %w", err)
 	}
-	main := cluster.PersistedDomain(cmd.Context(), st)
+	main, err := svc.MainDomain(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("cluster domain: %w", err)
+	}
 	hosts := rows[:0]
 	for _, r := range rows {
 		if r.Domain == main {
@@ -254,13 +255,7 @@ func runTLSRemove(cmd *cobra.Command, args []string) error {
 	defer func() { _ = st.Close() }()
 	defer func() { _ = dc.Close() }()
 
-	err = cluster.RemoveCert(cmd.Context(), cluster.SiteCertDeps{
-		Store:       st,
-		Cipher:      cipher,
-		Docker:      dc,
-		Deployer:    cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
-		Provisioner: ooProvisioner(st, cipher, cmd.OutOrStdout(), cluster.PersistedDomain(cmd.Context(), st)),
-	}, cfg.ConfigDir(), buildinfo.Version, host, !tlsAddBinds.noRefresh)
+	err = tlsService(cmd, st, cipher, dc, cfg).RemoveHostCert(cmd.Context(), host, !tlsAddBinds.noRefresh)
 	if err != nil {
 		if errors.Is(err, store.ErrSiteCertNotFound) {
 			return fmt.Errorf("no certificate stored for %q", host)
@@ -293,6 +288,13 @@ func siteCertDeps(cmd *cobra.Command, cfg *config.Config, domain string) (*store
 	return st, cipher, dc, nil
 }
 
+// tlsService builds the local TLS service adapter used by the tls commands.
+func tlsService(cmd *cobra.Command, st *store.Store, cipher *credentials.Cipher, dc docker.Client, cfg *config.Config) service.TLSService {
+	return impl.NewTLS(st, cipher, dc, cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
+		ooProvisioner(st, cipher, cmd.OutOrStdout(), cluster.PersistedDomain(cmd.Context(), st)),
+		cfg.ConfigDir(), buildinfo.Version)
+}
+
 func runTLSSiteShow(cmd *cobra.Command, _ []string) error {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -304,11 +306,15 @@ func runTLSSiteShow(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	domain := cluster.PersistedDomain(cmd.Context(), st)
+	svc := tlsService(cmd, st, nil, nil, cfg)
+	domain, err := svc.MainDomain(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("cluster domain: %w", err)
+	}
 	if domain == "" {
 		return errors.New("no persisted cluster domain found — run `pmcluster cluster up` first")
 	}
-	row, err := cluster.GetSiteCert(cmd.Context(), st, domain)
+	row, err := svc.GetSiteCert(cmd.Context(), domain)
 	if err != nil {
 		if errors.Is(err, store.ErrSiteCertNotFound) {
 			fmt.Fprintf(cmd.OutOrStdout(), "No site certificate recorded yet for %s.\n", domain)
@@ -343,7 +349,11 @@ func runTLSSiteSet(cmd *cobra.Command, _ []string) error {
 	defer func() { _ = st.Close() }()
 	defer func() { _ = dc.Close() }()
 
-	domain := cluster.PersistedDomain(cmd.Context(), st)
+	svc := tlsService(cmd, st, cipher, dc, cfg)
+	domain, err := svc.MainDomain(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("cluster domain: %w", err)
+	}
 	if domain == "" {
 		return errors.New("no persisted cluster domain found — run `pmcluster cluster up` first")
 	}
@@ -357,13 +367,7 @@ func runTLSSiteSet(cmd *cobra.Command, _ []string) error {
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Uploading certificate for %s …\n", domain)
-	row, err := cluster.ApplyCert(cmd.Context(), cluster.SiteCertDeps{
-		Store:       st,
-		Cipher:      cipher,
-		Docker:      dc,
-		Deployer:    cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
-		Provisioner: ooProvisioner(st, cipher, cmd.OutOrStdout(), domain),
-	}, cfg.ConfigDir(), buildinfo.Version, domain, cert, key, true)
+	row, err := svc.SiteCert(cmd.Context(), domain, cert, key)
 	if err != nil {
 		return fmt.Errorf("apply site cert: %w", err)
 	}

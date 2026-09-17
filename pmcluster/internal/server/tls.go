@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -23,17 +22,11 @@ import (
 // pair, materializes hostcert-<host>_vNNN / hostkey-<host>_vNNN secrets and
 // refreshes Traefik. The list endpoint returns every stored row EXCEPT the
 // cluster's own domain (that one is served by /api/tls/site).
+//
+// The handler only knows the service port; the implementation (local core or
+// a remote adapter) is chosen by the caller.
 type HostCertService struct {
-	Store *store.Store
-
-	// Apply uploads a per-host cert for host and returns the stored metadata
-	// row. It is the single implementation behind PUT /api/tls/hosts/{host}
-	// and the CLI; the daemon only knows its signature.
-	Apply func(ctx context.Context, host, certPEM, keyPEM string) (*store.SiteCertRow, error)
-
-	// Remove deletes the per-host cert (metadata + secrets) and refreshes
-	// Traefik. Returns store.ErrSiteCertNotFound when nothing is stored.
-	Remove func(ctx context.Context, host string) error
+	Svc service.TLSService
 }
 
 func (h *HostCertService) Mount(r chi.Router) {
@@ -43,16 +36,20 @@ func (h *HostCertService) Mount(r chi.Router) {
 }
 
 func (h *HostCertService) list(w http.ResponseWriter, r *http.Request) {
-	if h.Store == nil {
-		writeErr(w, http.StatusInternalServerError, "store unavailable")
+	if h.Svc == nil {
+		writeErr(w, http.StatusInternalServerError, "host-cert service not wired")
 		return
 	}
-	rows, err := h.Store.ListSiteCerts(r.Context())
+	rows, err := h.Svc.List(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "list host certs: "+err.Error())
 		return
 	}
-	main := cluster.PersistedDomain(r.Context(), h.Store)
+	main, err := h.Svc.MainDomain(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "resolve cluster domain: "+err.Error())
+		return
+	}
 	hosts := make([]hostCertResponse, 0, len(rows))
 	for _, row := range rows {
 		if row.Domain == main {
@@ -84,8 +81,8 @@ type hostCertResponse struct {
 }
 
 func (h *HostCertService) put(w http.ResponseWriter, r *http.Request) {
-	if h.Store == nil || h.Apply == nil {
-		writeErr(w, http.StatusInternalServerError, "host-cert service not fully wired")
+	if h.Svc == nil {
+		writeErr(w, http.StatusInternalServerError, "host-cert service not wired")
 		return
 	}
 	host := chi.URLParam(r, "host")
@@ -104,9 +101,8 @@ func (h *HostCertService) put(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "cert and key are both required")
 		return
 	}
-	got, err := h.Apply(r.Context(), host, req.Cert, req.Key)
+	got, err := h.Svc.ApplyHostCert(r.Context(), host, req.Cert, req.Key, true)
 	if err != nil {
-
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "does not cover") || strings.Contains(err.Error(), "valid pair") ||
 			strings.Contains(err.Error(), "PEM") || strings.Contains(err.Error(), "invalid host") {
@@ -119,8 +115,8 @@ func (h *HostCertService) put(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HostCertService) remove(w http.ResponseWriter, r *http.Request) {
-	if h.Store == nil || h.Remove == nil {
-		writeErr(w, http.StatusInternalServerError, "host-cert service not fully wired")
+	if h.Svc == nil {
+		writeErr(w, http.StatusInternalServerError, "host-cert service not wired")
 		return
 	}
 	host := chi.URLParam(r, "host")
@@ -128,7 +124,7 @@ func (h *HostCertService) remove(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "host is required")
 		return
 	}
-	if err := h.Remove(r.Context(), host); err != nil {
+	if err := h.Svc.RemoveHostCert(r.Context(), host, true); err != nil {
 		if errors.Is(err, store.ErrSiteCertNotFound) {
 			writeErr(w, http.StatusNotFound, "no cert stored for host "+host)
 			return

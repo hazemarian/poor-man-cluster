@@ -108,33 +108,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		log.Warn().Err(cipherErr).Msg("encryption key not available; /webhook/* disabled")
 	}
 
-	hostCerts := &server.HostCertService{
-		Store: st,
-		Apply: func(ctx context.Context, host, certPEM, keyPEM string) (*store.SiteCertRow, error) {
-			if cipher == nil {
-				return nil, fmt.Errorf("encryption key unavailable; cannot refresh Traefik")
-			}
-			return cluster.ApplyCert(ctx, cluster.SiteCertDeps{
-				Store:       st,
-				Cipher:      cipher,
-				Docker:      dc,
-				Deployer:    deployer,
-				Provisioner: ooProvisioner(st, cipher, io.Discard, cluster.PersistedDomain(ctx, st)),
-			}, cfg.ConfigDir(), buildinfo.Version, host, certPEM, keyPEM, true)
-		},
-		Remove: func(ctx context.Context, host string) error {
-			if cipher == nil {
-				return fmt.Errorf("encryption key unavailable; cannot refresh Traefik")
-			}
-			return cluster.RemoveCert(ctx, cluster.SiteCertDeps{
-				Store:       st,
-				Cipher:      cipher,
-				Docker:      dc,
-				Deployer:    deployer,
-				Provisioner: ooProvisioner(st, cipher, io.Discard, cluster.PersistedDomain(ctx, st)),
-			}, cfg.ConfigDir(), buildinfo.Version, host, true)
-		},
-	}
+	tlsSvc := impl.NewTLS(st, cipher, dc, deployer,
+		ooProvisioner(st, cipher, io.Discard, cluster.PersistedDomain(context.Background(), st)),
+		cfg.ConfigDir(), buildinfo.Version)
 
 	deps := server.Deps{
 		Lookup:        st,
@@ -143,22 +119,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		DeployService: deploySvc,
 		Cipher:        cipher,
 		Backups:       impl.NewBackups(st, backup.LocalTrigger{Store: st}.Trigger),
-		HostCerts:     hostCerts,
-		SiteCert: &server.SiteCertService{
-			Store: st,
-			Apply: func(ctx context.Context, domain, certPEM, keyPEM string) (*store.SiteCertRow, error) {
-				if cipher == nil {
-					return nil, fmt.Errorf("encryption key unavailable; cannot refresh Traefik")
-				}
-				return cluster.ApplyCert(ctx, cluster.SiteCertDeps{
-					Store:       st,
-					Cipher:      cipher,
-					Docker:      dc,
-					Deployer:    deployer,
-					Provisioner: ooProvisioner(st, cipher, io.Discard, domain),
-				}, cfg.ConfigDir(), buildinfo.Version, domain, certPEM, keyPEM, true)
-			},
-		},
+		HostCerts:     &server.HostCertService{Svc: tlsSvc},
+		SiteCert:      &server.SiteCertService{Svc: tlsSvc},
 		Update: &server.UpdateService{
 			Update: func(ctx context.Context) (*cluster.UpdateResult, error) {
 				if cipher == nil {

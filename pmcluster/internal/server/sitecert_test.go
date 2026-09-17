@@ -29,8 +29,8 @@ func newSiteCertServer(t *testing.T) (*httptest.Server, *store.Store, *siteCertA
 		t.Fatalf("persist domain: %v", err)
 	}
 
-	rec := &siteCertApplyRecorder{store: st}
-	sc := &SiteCertService{Store: st, Apply: rec.apply}
+	rec := &siteCertApplyRecorder{store: st, main: "test.example.com"}
+	sc := &SiteCertService{Svc: rec}
 
 	srv := httptest.NewServer(New(Deps{
 		Lookup:   &fakeLookup{users: map[string]*auth.User{"tok": {Name: "admin"}}},
@@ -42,11 +42,50 @@ func newSiteCertServer(t *testing.T) (*httptest.Server, *store.Store, *siteCertA
 
 type siteCertApplyRecorder struct {
 	store   *store.Store
+	main    string
 	calls   int
 	domain  string
 	certPEM string
 	keyPEM  string
 	err     error
+}
+
+// SiteCert and ApplyHostCert satisfy service.TLSService; the handler only
+// knows the port.
+func (r *siteCertApplyRecorder) SiteCert(ctx context.Context, domain, certPEM, keyPEM string) (*store.SiteCertRow, error) {
+	return r.apply(ctx, domain, certPEM, keyPEM)
+}
+
+func (r *siteCertApplyRecorder) ApplyHostCert(ctx context.Context, host, certPEM, keyPEM string, _ bool) (*store.SiteCertRow, error) {
+	return r.apply(ctx, host, certPEM, keyPEM)
+}
+
+func (r *siteCertApplyRecorder) RemoveHostCert(ctx context.Context, host string, _ bool) error {
+	if _, err := r.store.GetSiteCert(ctx, host); err != nil {
+		return err
+	}
+	return r.store.DeleteSiteCert(ctx, host)
+}
+
+func (r *siteCertApplyRecorder) List(ctx context.Context) ([]store.SiteCertRow, error) {
+	rows, err := r.store.ListSiteCerts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.SiteCertRow, 0, len(rows))
+	return append(out, rows...), nil
+}
+
+func (r *siteCertApplyRecorder) GetSiteCert(ctx context.Context, domain string) (*store.SiteCertRow, error) {
+	row, err := r.store.GetSiteCert(ctx, domain)
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (r *siteCertApplyRecorder) MainDomain(ctx context.Context) (string, error) {
+	return r.main, nil
 }
 
 func (r *siteCertApplyRecorder) apply(ctx context.Context, domain, certPEM, keyPEM string) (*store.SiteCertRow, error) {

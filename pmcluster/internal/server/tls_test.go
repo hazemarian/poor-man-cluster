@@ -71,49 +71,92 @@ func newHostTLSServer(t *testing.T) (*httptest.Server, *int, *store.Store) {
 	refreshes := 0
 	applyCalls := 0
 	srv := httptest.NewServer(New(Deps{
-		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {Name: "admin"}}},
-		Store:  st,
-		HostCerts: &HostCertService{
-			Store: st,
-			Apply: func(ctx context.Context, host, certPEM, keyPEM string) (*store.SiteCertRow, error) {
-				applyCalls++
-				if err := tlscerts.Validate(host); err != nil {
-					return nil, err
-				}
-				info, err := tlscerts.ParseAndCheck(certPEM, keyPEM, host)
-				if err != nil {
-					return nil, err
-				}
-				refreshes++
-				now := time.Now().UTC()
-				row := store.SiteCertRow{
-					Domain:     host,
-					CertSecret: "hostcert-" + host + "_v001",
-					KeySecret:  "hostkey-" + host + "_v001",
-					NotBefore:  info.NotBefore,
-					NotAfter:   info.NotAfter,
-					SANs:       info.SANs,
-					CertHash:   store.ConfigHash(certPEM),
-					KeyHash:    store.ConfigHash(keyPEM),
-					CreatedAt:  now,
-					UpdatedAt:  now,
-				}
-				if err := st.PutSiteCert(ctx, row); err != nil {
-					return nil, err
-				}
-				return &row, nil
-			},
-			Remove: func(ctx context.Context, host string) error {
-				refreshes++
-				if _, err := st.GetSiteCert(ctx, host); err != nil {
-					return err
-				}
-				return st.DeleteSiteCert(ctx, host)
-			},
-		},
+		Lookup:    &fakeLookup{users: map[string]*auth.User{"tok": {Name: "admin"}}},
+		Store:     st,
+		HostCerts: &HostCertService{Svc: &hostTLSSvc{store: st, refreshes: &refreshes, applyCalls: &applyCalls}},
 	}))
 	t.Cleanup(srv.Close)
 	return srv, &refreshes, st
+}
+
+// hostTLSSvc implements service.TLSService for the host-cert tests with the
+// same recording semantics as the old Apply/Remove closures.
+type hostTLSSvc struct {
+	store      *store.Store
+	refreshes  *int
+	applyCalls *int
+	fail       error
+}
+
+func (h *hostTLSSvc) SiteCert(ctx context.Context, domain, certPEM, keyPEM string) (*store.SiteCertRow, error) {
+	return nil, nil
+}
+
+func (h *hostTLSSvc) ApplyHostCert(ctx context.Context, host, certPEM, keyPEM string, _ bool) (*store.SiteCertRow, error) {
+	if h.fail != nil {
+		return nil, h.fail
+	}
+	if h.applyCalls != nil {
+		*h.applyCalls++
+	}
+	if err := tlscerts.Validate(host); err != nil {
+		return nil, err
+	}
+	info, err := tlscerts.ParseAndCheck(certPEM, keyPEM, host)
+	if err != nil {
+		return nil, err
+	}
+	if h.refreshes != nil {
+		*h.refreshes++
+	}
+	now := time.Now().UTC()
+	row := store.SiteCertRow{
+		Domain:     host,
+		CertSecret: "hostcert-" + host + "_v001",
+		KeySecret:  "hostkey-" + host + "_v001",
+		NotBefore:  info.NotBefore,
+		NotAfter:   info.NotAfter,
+		SANs:       info.SANs,
+		CertHash:   store.ConfigHash(certPEM),
+		KeyHash:    store.ConfigHash(keyPEM),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := h.store.PutSiteCert(ctx, row); err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (h *hostTLSSvc) RemoveHostCert(ctx context.Context, host string, _ bool) error {
+	if h.refreshes != nil {
+		*h.refreshes++
+	}
+	if _, err := h.store.GetSiteCert(ctx, host); err != nil {
+		return err
+	}
+	return h.store.DeleteSiteCert(ctx, host)
+}
+
+func (h *hostTLSSvc) List(ctx context.Context) ([]store.SiteCertRow, error) {
+	rows, err := h.store.ListSiteCerts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.SiteCertRow, 0, len(rows))
+	return append(out, rows...), nil
+}
+
+func (h *hostTLSSvc) GetSiteCert(ctx context.Context, domain string) (*store.SiteCertRow, error) {
+	row, err := h.store.GetSiteCert(ctx, domain)
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (h *hostTLSSvc) MainDomain(ctx context.Context) (string, error) {
+	return h.store.GetSettingDefault(ctx, "domain", ""), nil
 }
 
 func doJSON(t *testing.T, method, url, token string, body any) *http.Response {
@@ -272,15 +315,9 @@ func TestHostCertAPI_ListExcludesClusterDomain(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(New(Deps{
-		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {Name: "admin"}}},
-		Store:  st,
-		HostCerts: &HostCertService{
-			Store: st,
-			Apply: func(context.Context, string, string, string) (*store.SiteCertRow, error) {
-				return nil, errors.New("unused")
-			},
-			Remove: func(context.Context, string) error { return nil },
-		},
+		Lookup:    &fakeLookup{users: map[string]*auth.User{"tok": {Name: "admin"}}},
+		Store:     st,
+		HostCerts: &HostCertService{Svc: &hostTLSSvc{store: st}},
 	}))
 	t.Cleanup(srv.Close)
 
@@ -300,15 +337,9 @@ func TestHostCertAPI_ListExcludesClusterDomain(t *testing.T) {
 func TestHostCertAPI_ApplyError_ReportsError(t *testing.T) {
 	st := openServerStore(t)
 	srv := httptest.NewServer(New(Deps{
-		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {Name: "admin"}}},
-		Store:  st,
-		HostCerts: &HostCertService{
-			Store: st,
-			Apply: func(context.Context, string, string, string) (*store.SiteCertRow, error) {
-				return nil, errors.New("simulated refresh failure")
-			},
-			Remove: func(context.Context, string) error { return nil },
-		},
+		Lookup:    &fakeLookup{users: map[string]*auth.User{"tok": {Name: "admin"}}},
+		Store:     st,
+		HostCerts: &HostCertService{Svc: &hostTLSSvc{store: st, fail: errors.New("simulated refresh failure")}},
 	}))
 	t.Cleanup(srv.Close)
 	cert, key := genCert(t, "fail.example.com")
