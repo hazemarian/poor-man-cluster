@@ -50,14 +50,16 @@ type UpDeps struct {
 	Provisioner *OpenObserveProvisioner
 }
 
-// Up brings the cluster up end-to-end. Order matters: preflight →
-// networks → TLS secrets → bootstrap creds → render configs → deploy
-// stacks (infra → observability → backup).
+// Up brings the cluster up end-to-end as a sequence of named steps: preflight
+// → overlay networks → TLS secrets → bootstrap credentials → rendered configs
+// → stack deploys (infra → edge → observability → backup) → health wait →
+// OpenObserve provisioning (second phase, when the ingestion token is fresh)
+// → install state persistence.
 //
 // On a fresh install the dedicated OO ingestion token does not exist until
 // OpenObserve is up, so provisioning runs in a second phase after the first
-// deploy (see Provisioner). The collector config is then re-rendered with the
-// real token and observability is re-deployed.
+// deploy (see UpDeps.Provisioner). The collector config is then re-rendered
+// with the real token and observability is re-deployed.
 func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 
 	state, err := loadTLSSettings(ctx, deps.Store)
@@ -79,197 +81,213 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	}
 
 	res := &UpResult{}
-	step := func(label string) { fmt.Fprintf(out, "▶ %s\n", label) }
+	var (
+		certSecret, keySecret string
+		creds                 map[string]*ManagedCredential
+		needProvision         bool
+		render                RenderInput
+		otelConfigName        string
+		otelConfigCreated     bool
+	)
 
-	step("Preflight: Docker reachable, Swarm active, this node is a manager")
-	if err := Preflight(ctx, deps.Docker); err != nil {
-		return nil, err
-	}
-
-	step("Ensuring overlay networks")
-	created, err := EnsureBundledNetworks(ctx, deps.Docker)
-	if err != nil {
-		return res, fmt.Errorf("ensure networks: %w", err)
-	}
-	res.NewNetworks = created
-
-	var certSecret, keySecret string
-	if in.ACMEEmail != "" {
-		step("TLS via Let's Encrypt (Traefik HTTP-01) — port 80 must be reachable from the internet")
-	} else {
-		step("Loading TLS cert/key into Swarm secrets")
+	wf := NewWorkflow(out)
+	wf.Add("Preflight: Docker reachable, Swarm active, this node is a manager", func(ctx context.Context) error {
+		return Preflight(ctx, deps.Docker)
+	})
+	wf.Add("Ensuring overlay networks", func(ctx context.Context) error {
+		created, err := EnsureBundledNetworks(ctx, deps.Docker)
+		if err != nil {
+			return fmt.Errorf("ensure networks: %w", err)
+		}
+		res.NewNetworks = created
+		return nil
+	})
+	wf.Add("TLS certificate (Let's Encrypt or operator cert/key)", func(ctx context.Context) error {
+		if in.ACMEEmail != "" {
+			fmt.Fprintf(out, "  ▶ TLS via Let's Encrypt (Traefik HTTP-01) — port 80 must be reachable from the internet\n")
+			return nil
+		}
 		var certCreated, keyCreated bool
 		certSecret, certCreated, err = EnsureVersionedSecretFromFile(ctx, deps.Docker, "cert", in.CertPath)
 		if err != nil {
-			return res, fmt.Errorf("ensure cert secret: %w", err)
+			return fmt.Errorf("ensure cert secret: %w", err)
 		}
 		keySecret, keyCreated, err = EnsureVersionedSecretFromFile(ctx, deps.Docker, "key", in.KeyPath)
 		if err != nil {
-			return res, fmt.Errorf("ensure key secret: %w", err)
+			return fmt.Errorf("ensure key secret: %w", err)
 		}
 		if certCreated || keyCreated {
 			res.NewSecrets = append(res.NewSecrets, certSecret, keySecret)
 		}
-	}
-
-	step("Bootstrapping managed credentials (Traefik / Portainer / OpenObserve)")
-	credMgr := &CredentialsManager{
-		Store:  deps.Store,
-		Cipher: deps.Cipher,
-		Docker: deps.Docker,
-	}
-	creds, err := credMgr.Bootstrap(ctx, BootstrapInput{
-		TraefikAdminUser:      in.TraefikAdminUser,
-		OpenObserveAdminEmail: in.OpenObserveAdminEmail,
+		return nil
 	})
-	if err != nil {
-		return res, fmt.Errorf("bootstrap credentials: %w", err)
-	}
-	res.BootstrapCredentials = creds
-	for name, c := range creds {
-		switch {
-		case c.NewlyCreated && c.SwarmSecretCreated:
-			res.NewSecrets = append(res.NewSecrets, c.SwarmSecretName)
-			fmt.Fprintf(out, "  ✓ %-20s newly created (swarm secret %s)\n", name, c.SwarmSecretName)
-		case c.NewlyCreated && !c.SwarmSecretCreated:
-
-			fmt.Fprintf(out, "  ⚠ %-20s store updated, but Swarm secret %s pre-existed (passwords may diverge)\n", name, c.SwarmSecretName)
-		case !c.NewlyCreated && c.SwarmSecretCreated:
-			res.NewSecrets = append(res.NewSecrets, c.SwarmSecretName)
-			fmt.Fprintf(out, "  ✓ %-20s already in store; Swarm secret %s recreated\n", name, c.SwarmSecretName)
-		default:
-			if c.UsernameChanged {
-				fmt.Fprintf(out, "  ✓ %-20s username updated to %s\n", name, c.Username)
-			} else {
-				fmt.Fprintf(out, "  ✓ %-20s already present\n", name)
+	wf.Add("Bootstrapping managed credentials (Traefik / Portainer / OpenObserve)", func(ctx context.Context) error {
+		credMgr := &CredentialsManager{
+			Store:  deps.Store,
+			Cipher: deps.Cipher,
+			Docker: deps.Docker,
+		}
+		creds, err = credMgr.Bootstrap(ctx, BootstrapInput{
+			TraefikAdminUser:      in.TraefikAdminUser,
+			OpenObserveAdminEmail: in.OpenObserveAdminEmail,
+		})
+		if err != nil {
+			return fmt.Errorf("bootstrap credentials: %w", err)
+		}
+		res.BootstrapCredentials = creds
+		for name, c := range creds {
+			switch {
+			case c.NewlyCreated && c.SwarmSecretCreated:
+				res.NewSecrets = append(res.NewSecrets, c.SwarmSecretName)
+				fmt.Fprintf(out, "  ✓ %-20s newly created (swarm secret %s)\n", name, c.SwarmSecretName)
+			case c.NewlyCreated && !c.SwarmSecretCreated:
+				fmt.Fprintf(out, "  ⚠ %-20s store updated, but Swarm secret %s pre-existed (passwords may diverge)\n", name, c.SwarmSecretName)
+			case !c.NewlyCreated && c.SwarmSecretCreated:
+				res.NewSecrets = append(res.NewSecrets, c.SwarmSecretName)
+				fmt.Fprintf(out, "  ✓ %-20s already in store; Swarm secret %s recreated\n", name, c.SwarmSecretName)
+			default:
+				if c.UsernameChanged {
+					fmt.Fprintf(out, "  ✓ %-20s username updated to %s\n", name, c.Username)
+				} else {
+					fmt.Fprintf(out, "  ✓ %-20s already present\n", name)
+				}
 			}
 		}
-	}
-	if creds["edge_admin"] != nil {
-		fmt.Fprintf(out, "  ✔ edge console credentials minted — retrieve the admin password with `pmcluster credentials show edge_admin`\n")
-	}
-
-	if obsCred := creds["openobserve_admin"]; obsCred != nil && obsCred.UsernameChanged {
-		fmt.Fprintf(out, "  ⚠ OpenObserve email changed → resetting data volume so new credentials take effect\n")
-		if err := deps.Docker.VolumeRemove(ctx, "observability_openobserve_data"); err != nil {
-			return res, fmt.Errorf("reset openobserve data volume: %w (manual: docker volume rm observability_openobserve_data)", err)
+		if creds["edge_admin"] != nil {
+			fmt.Fprintf(out, "  ✔ edge console credentials minted — retrieve the admin password with `pmcluster credentials show edge_admin`\n")
 		}
-	}
-
-	step("Rendering and creating Docker configs (OTel pipeline, Traefik dynamic)")
-	openobsCred := creds["openobserve_admin"]
-	if openobsCred == nil {
-		return res, fmt.Errorf("internal: openobserve_admin credential missing after bootstrap")
-	}
-
-	storedToken, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
-	if err != nil {
-		return res, err
-	}
-	needProvision := storedToken == ""
-
-	hostCerts, err := loadHostCertEntries(ctx, deps.Store, in.Domain)
-	if err != nil {
-		return res, err
-	}
-
-	render := RenderInput{
-		Domain:                    in.Domain,
-		OpenObserveAdminEmail:     openobsCred.Username,
-		OpenObserveAdminPassword:  openobsCred.Password,
-		OpenObserveOrg:            "default",
-		OpenObserveIngestionToken: storedToken,
-		ACMEEmail:                 in.ACMEEmail,
-		ConfigDir:                 in.ConfigDir,
-		ConfigStore:               deps.Store,
-		DataDir:                   filepath.Dir(in.ConfigDir),
-		HostCerts:                 hostCerts,
-		CertSecretName:            certSecret,
-		KeySecretName:             keySecret,
-		EdgeImage:                 EdgeImageFor(),
-	}
-	if needProvision {
-		render.OpenObserveIngestionToken = pendingIngestionToken
-	}
-
-	otelConfigName, otelConfigCreated, err := ensureOTelConfig(ctx, deps, in.Version, render)
-	if err != nil {
-		return res, err
-	}
-	if otelConfigCreated {
-		res.NewConfigs = append(res.NewConfigs, otelConfigName)
-	}
-	render.OTelConfigName = otelConfigName
-
-	traefikYAML, err := RenderTraefikDynamic(render)
-	if err != nil {
-		return res, err
-	}
-	traefikConfigName, traefikConfigCreated, err := EnsureConfig(ctx, deps.Docker, "pmcluster_traefik_dynamic", traefikYAML, in.Version)
-	if err != nil {
-		return res, err
-	}
-	if traefikConfigCreated {
-		res.NewConfigs = append(res.NewConfigs, traefikConfigName)
-	}
-	render.TraefikConfigName = traefikConfigName
-
-	edgeName, edgeCreated, err := ensureEdgeConfig(ctx, deps.Docker, in.Version, render)
-	if err != nil {
-		return res, err
-	}
-	if edgeCreated {
-		res.NewConfigs = append(res.NewConfigs, edgeName)
-	}
-
-	step("Deploying stacks (infra → edge → observability → backup)")
-	for _, s := range []stackName{StackInfra, StackEdge, StackObservability, StackBackup} {
-		if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
-			return res, err
+		if obsCred := creds["openobserve_admin"]; obsCred != nil && obsCred.UsernameChanged {
+			fmt.Fprintf(out, "  ⚠ OpenObserve email changed → resetting data volume so new credentials take effect\n")
+			if err := deps.Docker.VolumeRemove(ctx, "observability_openobserve_data"); err != nil {
+				return fmt.Errorf("reset openobserve data volume: %w (manual: docker volume rm observability_openobserve_data)", err)
+			}
 		}
-		res.StacksDeployed = append(res.StacksDeployed, string(s))
-	}
+		return nil
+	})
+	wf.Add("Rendering and creating Docker configs (OTel pipeline, Traefik dynamic)", func(ctx context.Context) error {
+		openobsCred := creds["openobserve_admin"]
+		if openobsCred == nil {
+			return fmt.Errorf("internal: openobserve_admin credential missing after bootstrap")
+		}
+		storedToken, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
+		if err != nil {
+			return err
+		}
+		needProvision = storedToken == ""
 
-	step("Waiting for all services to become healthy")
-	if err := WaitHealthyStacks(ctx, deps.Docker, out); err != nil {
-		return res, fmt.Errorf("health check: %w", err)
-	}
+		hostCerts, err := loadHostCertEntries(ctx, deps.Store, in.Domain)
+		if err != nil {
+			return err
+		}
 
-	if needProvision && deps.Provisioner != nil {
-		step("Provisioning OpenObserve user + ingestion token")
+		render = RenderInput{
+			Domain:                    in.Domain,
+			OpenObserveAdminEmail:     openobsCred.Username,
+			OpenObserveAdminPassword:  openobsCred.Password,
+			OpenObserveOrg:            "default",
+			OpenObserveIngestionToken: storedToken,
+			ACMEEmail:                 in.ACMEEmail,
+			ConfigDir:                 in.ConfigDir,
+			ConfigStore:               deps.Store,
+			DataDir:                   filepath.Dir(in.ConfigDir),
+			HostCerts:                 hostCerts,
+			CertSecretName:            certSecret,
+			KeySecretName:             keySecret,
+			EdgeImage:                 EdgeImageFor(),
+		}
+		if needProvision {
+			render.OpenObserveIngestionToken = pendingIngestionToken
+		}
+
+		otelConfigName, otelConfigCreated, err = ensureOTelConfig(ctx, deps, in.Version, render)
+		if err != nil {
+			return err
+		}
+		if otelConfigCreated {
+			res.NewConfigs = append(res.NewConfigs, otelConfigName)
+		}
+		render.OTelConfigName = otelConfigName
+
+		traefikYAML, err := RenderTraefikDynamic(render)
+		if err != nil {
+			return err
+		}
+		traefikConfigName, traefikConfigCreated, err := EnsureConfig(ctx, deps.Docker, "pmcluster_traefik_dynamic", traefikYAML, in.Version)
+		if err != nil {
+			return err
+		}
+		if traefikConfigCreated {
+			res.NewConfigs = append(res.NewConfigs, traefikConfigName)
+		}
+		render.TraefikConfigName = traefikConfigName
+
+		edgeName, edgeCreated, err := ensureEdgeConfig(ctx, deps.Docker, in.Version, render)
+		if err != nil {
+			return err
+		}
+		if edgeCreated {
+			res.NewConfigs = append(res.NewConfigs, edgeName)
+		}
+		return nil
+	})
+	wf.Add("Deploying stacks (infra → edge → observability → backup)", func(ctx context.Context) error {
+		for _, s := range []stackName{StackInfra, StackEdge, StackObservability, StackBackup} {
+			if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
+				return err
+			}
+			res.StacksDeployed = append(res.StacksDeployed, string(s))
+		}
+		return nil
+	})
+	wf.Add("Waiting for all services to become healthy", func(ctx context.Context) error {
+		if err := WaitHealthyStacks(ctx, deps.Docker, out); err != nil {
+			return fmt.Errorf("health check: %w", err)
+		}
+		return nil
+	})
+	wf.Add("Provisioning OpenObserve user + ingestion token", func(ctx context.Context) error {
+		if !needProvision || deps.Provisioner == nil {
+			return nil
+		}
 		if _, _, err := deps.Provisioner.EnsureUserAndToken(ctx); err != nil {
-			return res, err
+			return err
 		}
 		realToken, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
 		if err != nil {
-			return res, err
+			return err
 		}
-		if realToken != "" && realToken != pendingIngestionToken {
-			render.OpenObserveIngestionToken = realToken
-			otelConfigName, otelConfigCreated, err := ensureOTelConfig(ctx, deps, in.Version, render)
-			if err != nil {
-				return res, err
-			}
-			if otelConfigCreated {
-				res.NewConfigs = append(res.NewConfigs, otelConfigName)
-			}
-			render.OTelConfigName = otelConfigName
-			step("Re-deploying observability with the provisioned ingestion token")
-			if err := deployStack(ctx, out, deps.Deployer, StackObservability, render); err != nil {
-				return res, err
-			}
-			res.StacksDeployed = append(res.StacksDeployed, string(StackObservability))
-			if err := WaitHealthyStacks(ctx, deps.Docker, out); err != nil {
-				return res, fmt.Errorf("health check: %w", err)
-			}
+		if realToken == "" || realToken == pendingIngestionToken {
+			return nil
 		}
-	}
+		render.OpenObserveIngestionToken = realToken
+		otelConfigName, otelConfigCreated, err = ensureOTelConfig(ctx, deps, in.Version, render)
+		if err != nil {
+			return err
+		}
+		if otelConfigCreated {
+			res.NewConfigs = append(res.NewConfigs, otelConfigName)
+		}
+		render.OTelConfigName = otelConfigName
+		fmt.Fprintf(out, "  ▶ Re-deploying observability with the provisioned ingestion token\n")
+		if err := deployStack(ctx, out, deps.Deployer, StackObservability, render); err != nil {
+			return err
+		}
+		res.StacksDeployed = append(res.StacksDeployed, string(StackObservability))
+		if err := WaitHealthyStacks(ctx, deps.Docker, out); err != nil {
+			return fmt.Errorf("health check: %w", err)
+		}
+		return nil
+	})
+	wf.Add("Persisting install state", func(ctx context.Context) error {
+		return persistInstallState(ctx, deps, in)
+	})
+	wf.Add("Cluster up complete.", func(ctx context.Context) error {
+		return nil
+	})
 
-	if err := persistInstallState(ctx, deps, in); err != nil {
+	if err := wf.Run(ctx); err != nil {
 		return res, err
 	}
-
-	step("Cluster up complete.")
 	return res, nil
 }
 

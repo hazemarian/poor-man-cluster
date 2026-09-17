@@ -164,7 +164,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				if cipher == nil {
 					return nil, fmt.Errorf("encryption key unavailable; cannot run cluster update")
 				}
-				return cluster.Update(ctx, cluster.UpdateDeps{
+				return impl.NewCluster().Update(ctx, cluster.UpdateDeps{
 					Store:       st,
 					Cipher:      cipher,
 					Docker:      dc,
