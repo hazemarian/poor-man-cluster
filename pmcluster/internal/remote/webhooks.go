@@ -2,19 +2,17 @@ package remote
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
 	"net/url"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
 
-// Webhooks is the HTTP adapter for service.WebhooksService.
+// Webhooks is the HTTP adapter for webhooks.Service.
 type Webhooks struct{ c *Client }
 
 // NewWebhooks builds the remote webhooks adapter.
-func NewWebhooks(c *Client) service.WebhooksService { return &Webhooks{c: c} }
+func NewWebhooks(c *Client) webhooks.Service { return &Webhooks{c: c} }
 
 type webhookDTO struct {
 	Source      string `json:"source"`
@@ -41,26 +39,18 @@ func (a *Webhooks) Create(ctx context.Context, source, description string) (stri
 	return out.Secret, err
 }
 
-func (a *Webhooks) List(ctx context.Context) ([]*store.WebhookSource, error) {
+func (a *Webhooks) List(ctx context.Context) ([]webhooks.Source, error) {
 	var out webhookListDTO
 	if err := a.c.do(ctx, http.MethodGet, "/webhooks", nil, &out); err != nil {
 		return nil, err
 	}
-	sources := make([]*store.WebhookSource, 0, len(out.Webhooks))
+	sources := make([]webhooks.Source, 0, len(out.Webhooks))
 	for _, d := range out.Webhooks {
-		var desc sql.NullString
-		if d.Description != "" {
-			desc = sql.NullString{String: d.Description, Valid: true}
-		}
-		var used sql.NullInt64
-		if d.LastUsedAt != 0 {
-			used = sql.NullInt64{Int64: d.LastUsedAt, Valid: true}
-		}
-		sources = append(sources, &store.WebhookSource{
+		sources = append(sources, webhooks.Source{
 			Source:      d.Source,
-			Description: desc,
+			Description: d.Description,
 			CreatedAt:   d.CreatedAt,
-			LastUsedAt:  used,
+			LastUsedAt:  d.LastUsedAt,
 		})
 	}
 	return sources, nil

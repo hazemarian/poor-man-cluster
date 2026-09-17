@@ -12,6 +12,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
 
 // remoteClient returns an HTTP client for the daemon API when remote mode is
@@ -59,7 +60,7 @@ func backendSecrets(cmd *cobra.Command) (service.SecretsService, func(), error) 
 	return impl.NewSecrets(st, cipher), func() { _ = st.Close() }, nil
 }
 
-func backendWebhooks(cmd *cobra.Command) (service.WebhooksService, func(), error) {
+func backendWebhooks(cmd *cobra.Command) (webhooks.Service, func(), error) {
 	if rc := remoteClient(cmd); rc != nil {
 		return remote.NewWebhooks(rc), func() {}, nil
 	}
@@ -73,7 +74,7 @@ func backendWebhooks(cmd *cobra.Command) (service.WebhooksService, func(), error
 		_ = st.Close()
 		return nil, nil, err
 	}
-	return impl.NewWebhooks(st, cipher), func() { _ = st.Close() }, nil
+	return webhooks.NewLocal(st, cipher), func() { _ = st.Close() }, nil
 }
 
 func backendAPIKeys(cmd *cobra.Command) (apikeys.Service, func(), error) {

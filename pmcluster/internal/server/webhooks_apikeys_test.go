@@ -16,6 +16,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
 
 // newKeysServer wires a full store + cipher so the webhook/api-key services
@@ -41,7 +42,7 @@ func newKeysServer(t *testing.T) *httptest.Server {
 		Cipher:   ciph,
 		Configs:  impl.NewConfigs(st),
 		Secrets:  impl.NewSecrets(st, ciph),
-		Webhooks: &WebhookService{Svc: impl.NewWebhooks(st, ciph)},
+		Webhooks: webhooks.NewLocal(st, ciph),
 		APIKeys:  apikeys.NewLocal(st),
 	}))
 	t.Cleanup(srv.Close)

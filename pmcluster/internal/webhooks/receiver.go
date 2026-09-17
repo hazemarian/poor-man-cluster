@@ -1,17 +1,4 @@
-// Package webhook implements the HMAC-verified deploy webhook receiver.
-//
-// Endpoint: POST /webhook/{source}
-//
-//	Body:     deploy.Payload as JSON
-//	Header:   X-Pmcluster-Signature: sha256=<hex>
-//	Header:   X-Pmcluster-Timestamp: <unix-seconds>    (REQUIRED for replay protection)
-//
-// The signature is HMAC-SHA256 over (timestamp + body) with the shared
-// secret stored under the named source.  Constant-time comparison on the
-// hex-decoded digest.  Requests older than 5 minutes are rejected.
-// The endpoint is unauthenticated (no Bearer token); the HMAC IS the auth.
-// CI systems can post freely as long as they hold the source's shared secret.
-package webhook
+package webhooks
 
 import (
 	"context"
@@ -33,11 +20,32 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
+
+// Receiver is the HMAC-verified deploy webhook receiver.
+//
+// Endpoint: POST /webhook/{source}
+//
+//	Body:     deploy.Payload as JSON
+//	Header:   X-Pmcluster-Signature: sha256=<hex>
+//	Header:   X-Pmcluster-Timestamp: <unix-seconds>    (REQUIRED for replay protection)
+//
+// The signature is HMAC-SHA256 over (timestamp + body) with the shared
+// secret stored under the named source.  Constant-time comparison on the
+// hex-decoded digest.  Requests older than 5 minutes are rejected.
+// The endpoint is unauthenticated (no Bearer token); the HMAC IS the auth.
+// CI systems can post freely as long as they hold the source's shared secret.
+type Receiver struct {
+	Sources SourceReader
+	Deploy  Deployer
+}
+
+// Mount registers POST /webhook/{source}. Caller MUST place this outside
+// the Bearer-protected /api subtree — HMAC IS the auth.
+func (h *Receiver) Mount(r chi.Router) {
+	r.Post("/webhook/{source}", h.receive)
+}
 
 // instruments is lazily-built so importing this package doesn't bind to
 // the noop MeterProvider before telemetry.Init runs.
@@ -48,7 +56,7 @@ var (
 
 func webhookCounter() metric.Int64Counter {
 	instrOnce.Do(func() {
-		meter := otel.Meter("github.com/hazemarian/poor-man-stack/pmcluster/internal/webhook")
+		meter := otel.Meter("github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks")
 		var err error
 		webhookRequests, err = meter.Int64Counter(
 			"pmcluster.webhook.requests.total",
@@ -77,24 +85,12 @@ const MaxClockSkew = 5 * time.Minute
 // 1 MB leaves headroom and bounds HMAC compute cost from hostile callers.
 const MaxBodyBytes = 1 << 20
 
-type Handler struct {
-	Store   *store.Store
-	Cipher  *credentials.Cipher
-	Service service.DeployService
-}
-
-// Mount registers POST /webhook/{source}. Caller MUST place this outside
-// the Bearer-protected /api subtree — HMAC IS the auth.
-func (h *Handler) Mount(r chi.Router) {
-	r.Post("/webhook/{source}", h.receive)
-}
-
 // HTTP status discipline:
 //   - 401: any HMAC failure mode (missing/invalid sig, bad timestamp, unknown source).
 //     Same status for all so an attacker can't distinguish the cases.
 //   - 400: body too large, malformed JSON, or deploy validation failure.
 //   - 502: docker stack deploy returned an error.
-func (h *Handler) receive(w http.ResponseWriter, r *http.Request) {
+func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	source := chi.URLParam(r, "source")
 
 	record := func(status string) {
@@ -132,7 +128,7 @@ func (h *Handler) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.Store.MarkWebhookSourceUsed(r.Context(), source)
+	_ = h.Sources.MarkUsed(r.Context(), source)
 
 	var p deploy.Payload
 	if err := json.Unmarshal(body, &p); err != nil {
@@ -141,7 +137,7 @@ func (h *Handler) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.Service.Deploy(r.Context(), p)
+	res, err := h.Deploy.Deploy(r.Context(), p)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		record("server_error")
@@ -176,7 +172,7 @@ func parseTimestamp(header string) (int64, error) {
 //	timestamp_as_decimal_string + body
 //
 // and the timestamp must be within MaxClockSkew of the server's clock.
-func (h *Handler) verifyHMAC(ctx context.Context, source string, timestamp int64, body []byte, sigHeader string, tsErr error) error {
+func (h *Receiver) verifyHMAC(ctx context.Context, source string, timestamp int64, body []byte, sigHeader string, tsErr error) error {
 
 	if tsErr != nil {
 		return tsErr
@@ -203,14 +199,9 @@ func (h *Handler) verifyHMAC(ctx context.Context, source string, timestamp int64
 		return errors.New("signature must be 64 hex chars after sha256=")
 	}
 
-	src, err := h.Store.GetWebhookSource(ctx, source)
+	secret, err := h.Sources.Secret(ctx, source)
 	if err != nil {
 		return err
-	}
-
-	secret, err := h.Cipher.Decrypt(src.SecretCiphertext)
-	if err != nil {
-		return fmt.Errorf("decrypt secret for %s: %w", source, err)
 	}
 
 	mac := hmac.New(sha256.New, secret)
@@ -222,10 +213,4 @@ func (h *Handler) verifyHMAC(ctx context.Context, source string, timestamp int64
 		return errors.New("signature mismatch")
 	}
 	return nil
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
 }

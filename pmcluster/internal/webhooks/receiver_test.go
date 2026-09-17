@@ -1,4 +1,4 @@
-package webhook
+package webhooks
 
 import (
 	"bytes"
@@ -96,18 +96,17 @@ func testDeps(t *testing.T, sourceName string) (*store.Store, *credentials.Ciphe
 	return s, c, rec, secret
 }
 
-// buildHandler constructs a chi-backed httptest.Server using the Handler under
-// test. Returns the server URL and the handler.
-func buildHandler(t *testing.T, st *store.Store, c *credentials.Cipher, dep *recordingDeployer) (*httptest.Server, *Handler) {
+// buildHandler constructs a chi-backed httptest.Server using the Receiver under
+// test. Returns the server URL and the receiver.
+func buildHandler(t *testing.T, st *store.Store, c *credentials.Cipher, dep *recordingDeployer) (*httptest.Server, *Receiver) {
 	t.Helper()
 	deploySvc := &deploy.Service{
 		Store:    st,
 		Deployer: dep,
 	}
-	h := &Handler{
-		Store:   st,
-		Cipher:  c,
-		Service: deploySvc,
+	h := &Receiver{
+		Sources: NewLocal(st, c),
+		Deploy:  deploySvc,
 	}
 	r := chi.NewRouter()
 	h.Mount(r)

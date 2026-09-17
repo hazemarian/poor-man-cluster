@@ -25,7 +25,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhook"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
 
 // trustedProxyCIDRs are the networks pmcluster trusts to set
@@ -71,7 +71,12 @@ type Deps struct {
 
 	// Webhooks exposes webhook-source management under /api/webhooks.
 	// Optional; when nil those routes are omitted.
-	Webhooks *WebhookService
+	Webhooks webhooks.Service
+
+	// WebhookSources supplies the receiver with the decrypted secret
+	// material for HMAC verification. Local-only by design; when nil the
+	// /webhook receiver is omitted.
+	WebhookSources webhooks.SourceReader
 
 	// APIKeys exposes API-token (user) management under /api/api_keys.
 	// Optional; when nil those routes are omitted.
@@ -105,11 +110,10 @@ func New(d Deps) http.Handler {
 
 	r.Get("/health", api.Health)
 
-	if d.Store != nil && d.Cipher != nil && d.DeployService != nil {
-		(&webhook.Handler{
-			Store:   d.Store,
-			Cipher:  d.Cipher,
-			Service: d.DeployService,
+	if d.WebhookSources != nil && d.DeployService != nil {
+		(&webhooks.Receiver{
+			Sources: d.WebhookSources,
+			Deploy:  d.DeployService,
 		}).Mount(r)
 	}
 
@@ -144,7 +148,7 @@ func New(d Deps) http.Handler {
 			d.Rendered.Mount(r)
 		}
 		if d.Webhooks != nil {
-			d.Webhooks.Mount(r)
+			(&webhooks.HTTP{Svc: d.Webhooks}).Mount(r)
 		}
 		if d.APIKeys != nil {
 			(&apikeys.HTTP{Svc: d.APIKeys}).Mount(r)

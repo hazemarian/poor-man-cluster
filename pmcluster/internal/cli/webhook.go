@@ -112,12 +112,12 @@ func runWebhookList(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintln(w, "SOURCE\tCREATED\tLAST USED\tDESCRIPTION")
 	for _, s := range sources {
 		lastUsed := "—"
-		if s.LastUsedAt.Valid {
-			lastUsed = time.Unix(s.LastUsedAt.Int64, 0).Format(time.RFC3339)
+		if s.LastUsedAt != 0 {
+			lastUsed = time.Unix(s.LastUsedAt, 0).Format(time.RFC3339)
 		}
 		desc := "—"
-		if s.Description.Valid && s.Description.String != "" {
-			desc = s.Description.String
+		if s.Description != "" {
+			desc = s.Description
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 			s.Source,

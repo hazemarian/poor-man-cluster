@@ -26,6 +26,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/telemetry"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
 
 var serveCmd = &cobra.Command{
@@ -137,10 +138,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				}, cluster.UpdateInput{ConfigDir: cfg.ConfigDir(), Version: buildinfo.Version})
 			},
 		},
-		Rendered: &server.RenderedConfigService{Store: st},
-		Configs:  impl.NewConfigs(st),
-		Webhooks: &server.WebhookService{Svc: impl.NewWebhooks(st, cipher)},
-		APIKeys:  apikeys.NewLocal(st),
+		Rendered:       &server.RenderedConfigService{Store: st},
+		Configs:        impl.NewConfigs(st),
+		Webhooks:       webhooks.NewLocal(st, cipher),
+		WebhookSources: webhooks.NewLocal(st, cipher),
+		APIKeys:        apikeys.NewLocal(st),
 	}
 	if cipher != nil {
 		deps.Secrets = impl.NewSecrets(st, cipher)
