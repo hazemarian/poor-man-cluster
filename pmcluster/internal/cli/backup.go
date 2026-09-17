@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 )
 
 var backupCmd = &cobra.Command{
@@ -58,30 +59,22 @@ func runBackupCreate(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 	defer cancel()
 
-	id, err := st.CreateBackup(ctx, "", 0)
-	if err != nil {
-		return fmt.Errorf("record backup: %w", err)
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "Triggering backup (id=%d, timeout=%s)...\n", id, timeout)
-	res, err := backup.Trigger(ctx)
-	if err != nil {
-		paths := ""
-		if res != nil {
-			paths = joinPaths(res.ArchivePaths)
+	svc := impl.NewBackups(st, func(ctx context.Context) ([]string, error) {
+		res, err := backup.Trigger(ctx)
+		if res == nil {
+			return nil, err
 		}
-		_ = st.FinishBackup(ctx, id, "failed", paths, err.Error())
-		backup.RecordOutcome(ctx, backup.KindOnDemand, backup.StatusFailed)
+		return res.ArchivePaths, err
+	})
+
+	id, paths, err := svc.Trigger(ctx, "", 0)
+	if err != nil {
 		return fmt.Errorf("backup failed (recorded as id=%d): %w", id, err)
 	}
-	if err := st.FinishBackup(ctx, id, "succeeded", joinPaths(res.ArchivePaths), ""); err != nil {
-		return fmt.Errorf("record finish: %w", err)
-	}
-	backup.RecordOutcome(ctx, backup.KindOnDemand, backup.StatusSucceeded)
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Backup id=%d succeeded.\n", id)
-	if len(res.ArchivePaths) > 0 {
+	if len(paths) > 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "Archives:")
-		for _, p := range res.ArchivePaths {
+		for _, p := range paths {
 			fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", p)
 		}
 	} else {
@@ -99,7 +92,7 @@ func runBackupList(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	rows, err := st.ListBackups(cmd.Context(), limit)
+	rows, err := impl.NewBackups(st, nil).List(cmd.Context(), limit)
 	if err != nil {
 		return fmt.Errorf("list backups: %w", err)
 	}
@@ -136,15 +129,4 @@ func runBackupList(cmd *cobra.Command, _ []string) error {
 		)
 	}
 	return w.Flush()
-}
-
-func joinPaths(paths []string) string {
-	out := ""
-	for i, p := range paths {
-		if i > 0 {
-			out += ","
-		}
-		out += p
-	}
-	return out
 }

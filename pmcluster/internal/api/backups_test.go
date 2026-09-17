@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -25,13 +26,6 @@ func newTestStore(t *testing.T) *store.Store {
 	return s
 }
 
-type stubTrigger struct {
-	paths []string
-	err   error
-}
-
-func (s stubTrigger) Trigger(_ context.Context) ([]string, error) { return s.paths, s.err }
-
 func mountBackups(h *BackupsHandler) http.Handler {
 	r := chi.NewRouter()
 	h.Mount(r)
@@ -41,7 +35,9 @@ func mountBackups(h *BackupsHandler) http.Handler {
 
 func TestBackupsAPI_PostCreatesAndRecords(t *testing.T) {
 	st := newTestStore(t)
-	h := &BackupsHandler{Store: st, Trigger: stubTrigger{paths: []string{"/archive/x.tar.gz"}}}
+	h := &BackupsHandler{Svc: impl.NewBackups(st, func(_ context.Context) ([]string, error) {
+		return []string{"/archive/x.tar.gz"}, nil
+	})}
 	srv := httptest.NewServer(mountBackups(h))
 	defer srv.Close()
 
@@ -72,7 +68,9 @@ func TestBackupsAPI_PostCreatesAndRecords(t *testing.T) {
 
 func TestBackupsAPI_PostFailureRecordsAndReturns502(t *testing.T) {
 	st := newTestStore(t)
-	h := &BackupsHandler{Store: st, Trigger: stubTrigger{err: errors.New("offen blew up")}}
+	h := &BackupsHandler{Svc: impl.NewBackups(st, func(_ context.Context) ([]string, error) {
+		return nil, errors.New("offen blew up")
+	})}
 	srv := httptest.NewServer(mountBackups(h))
 	defer srv.Close()
 
@@ -93,7 +91,7 @@ func TestBackupsAPI_PostFailureRecordsAndReturns502(t *testing.T) {
 
 func TestBackupsAPI_PostNoTriggerReturns503(t *testing.T) {
 	st := newTestStore(t)
-	h := &BackupsHandler{Store: st, Trigger: nil}
+	h := &BackupsHandler{Svc: impl.NewBackups(st, nil)}
 	srv := httptest.NewServer(mountBackups(h))
 	defer srv.Close()
 
@@ -117,7 +115,7 @@ func TestBackupsAPI_GetListsAndFiltersByStack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	h := &BackupsHandler{Store: st}
+	h := &BackupsHandler{Svc: impl.NewBackups(st, nil)}
 	srv := httptest.NewServer(mountBackups(h))
 	defer srv.Close()
 

@@ -142,7 +142,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		Store:         st,
 		DeployService: deploySvc,
 		Cipher:        cipher,
-		BackupTrigger: backup.LocalTrigger{Store: st},
+		Backups:       impl.NewBackups(st, backup.LocalTrigger{Store: st}.Trigger),
 		HostCerts:     hostCerts,
 		SiteCert: &server.SiteCertService{
 			Store: st,

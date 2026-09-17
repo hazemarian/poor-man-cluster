@@ -1,27 +1,21 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
-// BackupTrigger mirrors deploy.BackupTrigger so api doesn't import deploy.
-type BackupTrigger interface {
-	Trigger(ctx context.Context) ([]string, error)
-}
-
-// BackupsHandler — Trigger is optional; POST /api/backups returns 503 when nil.
+// BackupsHandler exposes the on-demand volume backup pipeline over HTTP.
 type BackupsHandler struct {
-	Store   *store.Store
-	Trigger BackupTrigger
+	Svc service.BackupsService
 }
 
 func (h *BackupsHandler) Mount(r chi.Router) {
@@ -50,6 +44,7 @@ func toDTO(b *store.Backup) backupDTO {
 	d := backupDTO{
 		ID:           b.ID,
 		Status:       b.Status,
+		ArchivePaths: splitArchivePaths(b.ArchivePaths),
 		ErrorMessage: b.ErrorMessage,
 		StartedAt:    b.StartedAt,
 	}
@@ -62,20 +57,14 @@ func toDTO(b *store.Backup) backupDTO {
 	if b.FinishedAt.Valid {
 		d.FinishedAt = b.FinishedAt.Int64
 	}
-	if b.ArchivePaths != "" {
-		d.ArchivePaths = splitArchivePaths(b.ArchivePaths)
-	}
 	return d
 }
 
 func splitArchivePaths(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		if p != "" {
-			out = append(out, p)
-		}
+	if s == "" {
+		return nil
 	}
-	return out
+	return strings.Split(s, ",")
 }
 
 func (h *BackupsHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +74,7 @@ func (h *BackupsHandler) list(w http.ResponseWriter, r *http.Request) {
 			limit = n
 		}
 	}
-	rows, err := h.Store.ListBackups(r.Context(), limit)
+	rows, err := h.Svc.List(r.Context(), limit)
 	if err != nil {
 		writeBackupErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -99,7 +88,7 @@ func (h *BackupsHandler) list(w http.ResponseWriter, r *http.Request) {
 
 func (h *BackupsHandler) listForStack(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	rows, err := h.Store.ListBackupsForStack(r.Context(), name)
+	rows, err := h.Svc.ListForStack(r.Context(), name)
 	if err != nil {
 		writeBackupErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -112,27 +101,15 @@ func (h *BackupsHandler) listForStack(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BackupsHandler) create(w http.ResponseWriter, r *http.Request) {
-	if h.Trigger == nil {
-		writeBackupErr(w, http.StatusServiceUnavailable, "backup trigger not configured")
-		return
-	}
-	id, err := h.Store.CreateBackup(r.Context(), "", 0)
+	id, paths, err := h.Svc.Trigger(r.Context(), "", 0)
 	if err != nil {
-		writeBackupErr(w, http.StatusInternalServerError, "record backup: "+err.Error())
-		return
-	}
-	paths, err := h.Trigger.Trigger(r.Context())
-	if err != nil {
-		_ = h.Store.FinishBackup(r.Context(), id, "failed", strings.Join(paths, ","), err.Error())
-		backup.RecordOutcome(r.Context(), backup.KindOnDemand, backup.StatusFailed)
+		if errors.Is(err, service.ErrBackupTriggerNotConfigured) {
+			writeBackupErr(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		writeBackupErr(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	if err := h.Store.FinishBackup(r.Context(), id, "succeeded", strings.Join(paths, ","), ""); err != nil {
-		writeBackupErr(w, http.StatusInternalServerError, "record finish: "+err.Error())
-		return
-	}
-	backup.RecordOutcome(r.Context(), backup.KindOnDemand, backup.StatusSucceeded)
 	writeBackupJSON(w, http.StatusOK, map[string]any{
 		"id":            id,
 		"status":        "succeeded",
@@ -140,12 +117,12 @@ func (h *BackupsHandler) create(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func writeBackupJSON(w http.ResponseWriter, status int, body any) {
+func writeBackupJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func writeBackupErr(w http.ResponseWriter, status int, msg string) {
-	writeBackupJSON(w, status, map[string]string{"error": msg})
+	writeBackupJSON(w, status, map[string]any{"error": msg})
 }

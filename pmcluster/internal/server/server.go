@@ -48,7 +48,7 @@ type Deps struct {
 	Store         *store.Store
 	DeployService service.DeployService
 	Cipher        *credentials.Cipher
-	BackupTrigger api.BackupTrigger
+	Backups       service.BackupsService
 
 	// HostCerts exposes per-host TLS cert management under /api/tls/hosts.
 	// Optional; when nil those routes are omitted.
@@ -125,8 +125,8 @@ func New(d Deps) http.Handler {
 				Service: d.DeployService,
 			}).Mount(r)
 		}
-		if d.Store != nil {
-			bh := &api.BackupsHandler{Store: d.Store, Trigger: d.BackupTrigger}
+		if d.Backups != nil {
+			bh := &api.BackupsHandler{Svc: d.Backups}
 			bh.Mount(r)
 			bh.MountStackScoped(r)
 		}
