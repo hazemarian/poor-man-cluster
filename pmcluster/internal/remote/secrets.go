@@ -5,17 +5,17 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
-// Secrets is the HTTP adapter for service.SecretsService. The payload
-// (AES-GCM ciphertext) never crosses the wire; only the revealed value is
-// fetched on demand.
+// Secrets is the HTTP adapter for secrets.Service. The payload (AES-GCM
+// ciphertext) never crosses the wire; only the revealed value is fetched on
+// demand.
 type Secrets struct{ c *Client }
 
 // NewSecrets builds the remote secrets adapter.
-func NewSecrets(c *Client) service.SecretsService { return &Secrets{c: c} }
+func NewSecrets(c *Client) secrets.Service { return &Secrets{c: c} }
 
 type secretRowDTO struct {
 	ID        int64  `json:"id"`
@@ -50,14 +50,14 @@ func (a *Secrets) Create(ctx context.Context, scope, stack, name, value string) 
 
 // Get returns the secret's metadata row. The API has no dedicated metadata
 // endpoint, so the row is looked up from the list.
-func (a *Secrets) Get(ctx context.Context, name string) (*store.SecretRow, error) {
+func (a *Secrets) Get(ctx context.Context, name string) (*secrets.Secret, error) {
 	rows, err := a.List(ctx, "", "")
 	if err != nil {
 		return nil, err
 	}
 	for _, r := range rows {
 		if r.Name == name {
-			return r, nil
+			return &r, nil
 		}
 	}
 	return nil, store.ErrSecretNotFound
@@ -71,7 +71,7 @@ func (a *Secrets) Reveal(ctx context.Context, name string) (string, error) {
 	return out.Value, nil
 }
 
-func (a *Secrets) List(ctx context.Context, scope, stack string) ([]*store.SecretRow, error) {
+func (a *Secrets) List(ctx context.Context, scope, stack string) ([]secrets.Secret, error) {
 	q := url.Values{}
 	if scope != "" {
 		q.Set("scope", scope)
@@ -83,9 +83,9 @@ func (a *Secrets) List(ctx context.Context, scope, stack string) ([]*store.Secre
 	if err := a.c.do(ctx, http.MethodGet, "/secrets?"+q.Encode(), nil, &out); err != nil {
 		return nil, err
 	}
-	rows := make([]*store.SecretRow, 0, len(out.Secrets))
+	rows := make([]secrets.Secret, 0, len(out.Secrets))
 	for _, d := range out.Secrets {
-		rows = append(rows, &store.SecretRow{
+		rows = append(rows, secrets.Secret{
 			ID: d.ID, Scope: d.Scope, Stack: d.Stack, Name: d.Name,
 			Hash: d.Hash, CreatedAt: d.CreatedAt,
 		})

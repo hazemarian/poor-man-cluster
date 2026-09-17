@@ -22,6 +22,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/logger"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/server"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
@@ -145,7 +146,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		APIKeys:        apikeys.NewLocal(st),
 	}
 	if cipher != nil {
-		deps.Secrets = impl.NewSecrets(st, cipher)
+		deps.Secrets = secrets.NewLocal(st, cipher)
 	}
 	handler := server.New(deps)
 

@@ -10,6 +10,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
@@ -43,7 +44,7 @@ func backendConfigs(cmd *cobra.Command) (service.ConfigsService, func(), error) 
 	return impl.NewConfigs(st), func() { _ = st.Close() }, nil
 }
 
-func backendSecrets(cmd *cobra.Command) (service.SecretsService, func(), error) {
+func backendSecrets(cmd *cobra.Command) (secrets.Service, func(), error) {
 	if rc := remoteClient(cmd); rc != nil {
 		return remote.NewSecrets(rc), func() {}, nil
 	}
@@ -57,7 +58,7 @@ func backendSecrets(cmd *cobra.Command) (service.SecretsService, func(), error) 
 		_ = st.Close()
 		return nil, nil, err
 	}
-	return impl.NewSecrets(st, cipher), func() { _ = st.Close() }, nil
+	return secrets.NewLocal(st, cipher), func() { _ = st.Close() }, nil
 }
 
 func backendWebhooks(cmd *cobra.Command) (webhooks.Service, func(), error) {

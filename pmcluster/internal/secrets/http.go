@@ -1,4 +1,4 @@
-package server
+package secrets
 
 import (
 	"encoding/json"
@@ -8,19 +8,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
-// SecretService exposes DB-backed secret management over the Bearer-protected
-// /api router. The plaintext value is encrypted (AES-GCM) at rest via Cipher
-// and only ever appears in the create request body; every other read returns
-// the name/scope/hash metadata without revealing the payload.
-type SecretService struct {
-	Svc service.SecretsService
+// HTTP exposes the secrets domain over the Bearer-protected /api router. The
+// plaintext value only ever appears in the create request body; every other
+// read returns the name/scope/hash metadata without revealing the payload.
+type HTTP struct {
+	Svc Service
 }
 
-func (s *SecretService) Mount(r chi.Router) {
+// Mount registers the secrets routes under /api.
+func (s *HTTP) Mount(r chi.Router) {
 	r.Get("/secrets", s.list)
 	r.Post("/secrets", s.create)
 	r.Put("/secrets/{name}", s.update)
@@ -37,7 +36,7 @@ type secretRow struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
-func (s *SecretService) list(res http.ResponseWriter, req *http.Request) {
+func (s *HTTP) list(res http.ResponseWriter, req *http.Request) {
 	secs, err := s.Svc.List(req.Context(),
 		req.URL.Query().Get("scope"), req.URL.Query().Get("stack"))
 	if err != nil {
@@ -46,7 +45,7 @@ func (s *SecretService) list(res http.ResponseWriter, req *http.Request) {
 	}
 	rows := make([]secretRow, 0, len(secs))
 	for _, x := range secs {
-		rows = append(rows, secretRow{ID: x.ID, Scope: x.Scope, Stack: x.Stack, Name: x.Name, Hash: x.Hash, CreatedAt: x.CreatedAt})
+		rows = append(rows, secretRow(x))
 	}
 	writeJSON(res, http.StatusOK, map[string]any{"secrets": rows})
 }
@@ -58,7 +57,7 @@ type createSecretRequest struct {
 	Value string `json:"value"`
 }
 
-func (s *SecretService) create(res http.ResponseWriter, req *http.Request) {
+func (s *HTTP) create(res http.ResponseWriter, req *http.Request) {
 	var body createSecretRequest
 	dec := json.NewDecoder(http.MaxBytesReader(res, req.Body, 1<<20))
 	dec.DisallowUnknownFields()
@@ -109,7 +108,7 @@ type updateSecretRequest struct {
 
 // update replaces a stored secret's value (new ciphertext + hash), keeping its
 // scope, stack, name and creation time. 404 when the secret is unknown.
-func (s *SecretService) update(res http.ResponseWriter, req *http.Request) {
+func (s *HTTP) update(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
 	if name == "" {
 		writeErr(res, http.StatusBadRequest, "secret name is required")
@@ -138,7 +137,7 @@ func (s *SecretService) update(res http.ResponseWriter, req *http.Request) {
 }
 
 // remove deletes a secret by name.
-func (s *SecretService) remove(res http.ResponseWriter, req *http.Request) {
+func (s *HTTP) remove(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
 	if name == "" {
 		writeErr(res, http.StatusBadRequest, "secret name is required")
@@ -157,7 +156,7 @@ func (s *SecretService) remove(res http.ResponseWriter, req *http.Request) {
 
 // value decrypts and returns the plaintext of a stored secret. Only the
 // authenticated operator can read it; the value is never cached server-side.
-func (s *SecretService) value(res http.ResponseWriter, req *http.Request) {
+func (s *HTTP) value(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
 	if name == "" {
 		writeErr(res, http.StatusBadRequest, "secret name is required")
@@ -173,4 +172,16 @@ func (s *SecretService) value(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(res, http.StatusOK, map[string]any{"name": name, "value": plain})
+}
+
+func writeJSON(res http.ResponseWriter, status int, v any) {
+	res.Header().Set("Content-Type", "application/json")
+	res.WriteHeader(status)
+	if err := json.NewEncoder(res).Encode(v); err != nil {
+		http.Error(res, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func writeErr(res http.ResponseWriter, status int, msg string) {
+	writeJSON(res, status, map[string]any{"error": msg})
 }
