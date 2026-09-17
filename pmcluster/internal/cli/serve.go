@@ -26,7 +26,6 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/server"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/telemetry"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
@@ -131,7 +130,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				if cipher == nil {
 					return nil, fmt.Errorf("encryption key unavailable; cannot run cluster update")
 				}
-				return impl.NewCluster().Update(ctx, cluster.UpdateDeps{
+				return cluster.NewService().Update(ctx, cluster.UpdateDeps{
 					Store:       st,
 					Cipher:      cipher,
 					Docker:      dc,

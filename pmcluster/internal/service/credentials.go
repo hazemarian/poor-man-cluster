@@ -1,17 +1,10 @@
+// Package service is the compatibility shim for the domain ports.
+// CredentialsService now lives in internal/cluster beside CredentialsManager;
+// this alias keeps older consumers compiling during the migration.
 package service
 
-import (
-	"context"
+import "github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
-)
-
-// CredentialsService manages the platform bootstrap credentials (Traefik,
-// Portainer, OpenObserve, edge) with rotation.
-type CredentialsService interface {
-	Get(ctx context.Context, name string) (*store.ManagedCredential, error)
-	List(ctx context.Context) ([]*store.ManagedCredential, error)
-	Reveal(ctx context.Context, name string) (string, error)
-	Rotate(ctx context.Context, name string) (*cluster.ManagedCredential, error)
-}
+// CredentialsService is the bootstrap-credentials port (see
+// cluster.CredentialsService).
+type CredentialsService = cluster.CredentialsService

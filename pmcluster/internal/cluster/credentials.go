@@ -407,3 +407,71 @@ func serialisePassword(spec bootstrapSpec, username, password string) ([]byte, e
 		return nil, fmt.Errorf("unknown secret format %d", spec.format)
 	}
 }
+
+// CredentialsService is the port for managing the platform bootstrap
+// credentials (Traefik, Portainer, OpenObserve, edge). Get and List return
+// the encrypted store rows; Reveal decrypts a password; Rotate delegates to
+// the injected rotator (the CLI composes CredentialsManager with its Docker
+// client and deployer). Credentials are local-only — there is no REST route.
+type CredentialsService interface {
+	Get(ctx context.Context, name string) (*store.ManagedCredential, error)
+	List(ctx context.Context) ([]*store.ManagedCredential, error)
+	Reveal(ctx context.Context, name string) (string, error)
+	Rotate(ctx context.Context, name string) (*ManagedCredential, error)
+}
+
+// credentialRotator rotates a managed credential end-to-end (credential row,
+// swarm secret and the daemon secrets row). CredentialsManager satisfies it;
+// the CLI composes it with its Docker client and deployer.
+type credentialRotator interface {
+	Rotate(ctx context.Context, name string) (*ManagedCredential, error)
+}
+
+// Credentials is the local adapter for the CredentialsService port. It reads
+// encrypted rows from the store, reveals plaintext via the encryption key,
+// and delegates rotation to the injected rotator (nil disables rotation).
+type Credentials struct {
+	Store   *store.Store
+	Cipher  *credentials.Cipher
+	Rotator credentialRotator
+}
+
+// NewCredentials builds the local CredentialsService adapter.
+func NewCredentials(st *store.Store, cipher *credentials.Cipher, rotator credentialRotator) CredentialsService {
+	return &Credentials{Store: st, Cipher: cipher, Rotator: rotator}
+}
+
+// Get returns the stored credential row (password ciphertext only).
+func (c *Credentials) Get(ctx context.Context, name string) (*store.ManagedCredential, error) {
+	return c.Store.GetCredential(ctx, name)
+}
+
+// List returns all managed credentials.
+func (c *Credentials) List(ctx context.Context) ([]*store.ManagedCredential, error) {
+	return c.Store.ListCredentials(ctx)
+}
+
+// Reveal decrypts the credential's password.
+func (c *Credentials) Reveal(ctx context.Context, name string) (string, error) {
+	if c.Cipher == nil {
+		return "", fmt.Errorf("encryption key unavailable")
+	}
+	cred, err := c.Store.GetCredential(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	plain, err := c.Cipher.Decrypt(cred.PasswordCiphertext)
+	if err != nil {
+		return "", fmt.Errorf("decrypt credential %s: %w", name, err)
+	}
+	return string(plain), nil
+}
+
+// Rotate delegates to the injected rotator (the CLI composes
+// CredentialsManager with Docker + deployer).
+func (c *Credentials) Rotate(ctx context.Context, name string) (*ManagedCredential, error) {
+	if c.Rotator == nil {
+		return nil, fmt.Errorf("credential rotation not configured")
+	}
+	return c.Rotator.Rotate(ctx, name)
+}

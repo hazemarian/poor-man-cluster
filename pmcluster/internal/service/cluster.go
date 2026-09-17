@@ -1,21 +1,12 @@
+// Package service is the port shim of the pmcluster domain.
+//
+// The package is being dissolved into per-domain packages; these aliases keep
+// existing consumers compiling while the migration is in progress. Each
+// interface's real home is its domain package (internal/cluster,
+// internal/apikeys, ...). No implementation lives here.
 package service
 
-import (
-	"context"
+import "github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
-)
-
-// ClusterService manages the platform itself: bringing the Swarm up, applying
-// changes (cluster update), tearing it down and reporting status. The local
-// adapter wraps the cluster package functions; a later remote adapter will
-// proxy to the daemon API. The dep structs (UpDeps, UpdateDeps, DownDeps)
-// carry the Docker/deployer/provisioner wiring and are supplied by the
-// adapter's constructor.
-type ClusterService interface {
-	Up(ctx context.Context, deps cluster.UpDeps, in cluster.UpInput) (*cluster.UpResult, error)
-	Update(ctx context.Context, deps cluster.UpdateDeps, in cluster.UpdateInput) (*cluster.UpdateResult, error)
-	Down(ctx context.Context, deps cluster.DownDeps, in cluster.DownInput) (*cluster.DownResult, error)
-	Status(ctx context.Context, d docker.Client) (*cluster.StatusReport, error)
-}
+// ClusterService is the platform-lifecycle port (see cluster.Service).
+type ClusterService = cluster.Service

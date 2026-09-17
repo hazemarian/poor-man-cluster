@@ -17,7 +17,6 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/openobserve"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -162,7 +161,7 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 	}
 
 	updateDomain := st.GetSettingDefault(ctx, "domain", "")
-	res, err := impl.NewCluster().Update(ctx, cluster.UpdateDeps{
+	res, err := cluster.NewService().Update(ctx, cluster.UpdateDeps{
 		Store:       st,
 		Cipher:      cipher,
 		Docker:      dc,
@@ -261,7 +260,7 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
-	res, err := impl.NewCluster().Up(ctx, cluster.UpDeps{
+	res, err := cluster.NewService().Up(ctx, cluster.UpDeps{
 		Store:       st,
 		Cipher:      cipher,
 		Docker:      dc,
@@ -358,7 +357,7 @@ func runClusterStatus(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = dc.Close() }()
 
-	report, err := impl.NewCluster().Status(cmd.Context(), dc)
+	report, err := cluster.NewService().Status(cmd.Context(), dc)
 	if err != nil {
 		return err
 	}
@@ -399,7 +398,7 @@ func runClusterDown(cmd *cobra.Command, _ []string) error {
 	defer func() { _ = dc.Close() }()
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
-	res, err := impl.NewCluster().Down(cmd.Context(), cluster.DownDeps{
+	res, err := cluster.NewService().Down(cmd.Context(), cluster.DownDeps{
 		Docker:   dc,
 		Deployer: deployer,
 		Stdout:   cmd.OutOrStdout(),
