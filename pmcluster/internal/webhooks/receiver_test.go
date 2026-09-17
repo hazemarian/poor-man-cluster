@@ -22,7 +22,7 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -100,7 +100,7 @@ func testDeps(t *testing.T, sourceName string) (*store.Store, *credentials.Ciphe
 // test. Returns the server URL and the receiver.
 func buildHandler(t *testing.T, st *store.Store, c *credentials.Cipher, dep *recordingDeployer) (*httptest.Server, *Receiver) {
 	t.Helper()
-	deploySvc := &deploy.Service{
+	deploySvc := &stacks.Service{
 		Store:    st,
 		Deployer: dep,
 	}
@@ -142,10 +142,10 @@ services:
       host: web.whoami-webhook.example.test
 `
 
-// validPayload returns a JSON-encoded deploy.Payload using validManifest.
+// validPayload returns a JSON-encoded stacks.Payload using validManifest.
 func validPayload(t *testing.T) []byte {
 	t.Helper()
-	p := deploy.Payload{Manifest: validManifest}
+	p := stacks.Payload{Manifest: validManifest}
 	b, err := json.Marshal(p)
 	if err != nil {
 		t.Fatalf("json.Marshal payload: %v", err)
@@ -434,7 +434,7 @@ func TestHandlerReceive(t *testing.T) {
 		srv, _ := buildHandler(t, st, c, dep)
 
 		padding := strings.Repeat("x", MaxBodyBytes)
-		p := deploy.Payload{Manifest: padding}
+		p := stacks.Payload{Manifest: padding}
 		body, err := json.Marshal(p)
 		if err != nil {
 			t.Fatalf("json.Marshal: %v", err)

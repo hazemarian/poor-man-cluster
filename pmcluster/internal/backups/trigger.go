@@ -78,7 +78,7 @@ type WALCheckpointer interface {
 	WALCheckpoint(ctx context.Context) error
 }
 
-// LocalTrigger satisfies the deploy package's BackupTrigger consumer
+// LocalTrigger satisfies the stacks package's BackupTrigger consumer
 // interface via the package-level Trigger. If a WALCheckpointer is set, it
 // is called before the backup exec to flush pending transactions from the
 // WAL to the main DB file.

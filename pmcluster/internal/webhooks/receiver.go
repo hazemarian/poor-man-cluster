@@ -20,14 +20,14 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 )
 
 // Receiver is the HMAC-verified deploy webhook receiver.
 //
 // Endpoint: POST /webhook/{source}
 //
-//	Body:     deploy.Payload as JSON
+//	Body:     stacks.Payload as JSON
 //	Header:   X-Pmcluster-Signature: sha256=<hex>
 //	Header:   X-Pmcluster-Timestamp: <unix-seconds>    (REQUIRED for replay protection)
 //
@@ -130,7 +130,7 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 
 	_ = h.Sources.MarkUsed(r.Context(), source)
 
-	var p deploy.Payload
+	var p stacks.Payload
 	if err := json.Unmarshal(body, &p); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
 		record("bad_request")

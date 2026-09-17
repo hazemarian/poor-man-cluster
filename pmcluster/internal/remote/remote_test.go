@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -183,12 +183,12 @@ func TestRemoteStacksAndDeploy(t *testing.T) {
 
 	ctx := context.Background()
 
-	stacks, err := NewStacks(c).List(ctx)
-	if err != nil || len(stacks) != 1 || stacks[0].Name != "demo" {
-		t.Fatalf("List = %+v, err %v", stacks, err)
+	ss, err := NewStacks(c).List(ctx)
+	if err != nil || len(ss) != 1 || ss[0].Name != "demo" {
+		t.Fatalf("List = %+v, err %v", ss, err)
 	}
-	if !stacks[0].RepoURL.Valid || stacks[0].RepoURL.String != "https://github.com/x/y" {
-		t.Fatalf("List repo = %+v", stacks[0].RepoURL)
+	if ss[0].RepoURL != "https://github.com/x/y" {
+		t.Fatalf("List repo = %+v", ss[0].RepoURL)
 	}
 
 	s, err := NewStacks(c).Get(ctx, "demo")
@@ -201,7 +201,7 @@ func TestRemoteStacksAndDeploy(t *testing.T) {
 		t.Fatalf("Revisions = %+v, err %v", revs, err)
 	}
 
-	res, err := NewDeploy(c).Deploy(ctx, deploy.Payload{AppName: "demo", Manifest: "app: demo"})
+	res, err := NewDeploy(c).Deploy(ctx, stacks.Payload{AppName: "demo", Manifest: "app: demo"})
 	if err != nil || res.StackName != "demo" || res.Revision != 1001 {
 		t.Fatalf("Deploy = %+v, err %v", res, err)
 	}

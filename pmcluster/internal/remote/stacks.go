@@ -2,20 +2,17 @@ package remote
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
 	"net/url"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 )
 
-// Stacks is the HTTP adapter for service.StacksService.
+// Stacks is the HTTP adapter for stacks.Reader.
 type Stacks struct{ c *Client }
 
 // NewStacks builds the remote stacks adapter.
-func NewStacks(c *Client) service.StacksService { return &Stacks{c: c} }
+func NewStacks(c *Client) stacks.Reader { return &Stacks{c: c} }
 
 type stackDTO struct {
 	Name            string `json:"name"`
@@ -39,34 +36,35 @@ type stackDetailDTO struct {
 	Revisions []revisionMetaDTO `json:"revisions"`
 }
 
-func (a *Stacks) List(ctx context.Context) ([]*store.Stack, error) {
+func (a *Stacks) List(ctx context.Context) ([]stacks.Stack, error) {
 	var out stackListDTO
 	if err := a.c.do(ctx, http.MethodGet, "/stacks", nil, &out); err != nil {
 		return nil, err
 	}
-	stacks := make([]*store.Stack, 0, len(out.Stacks))
+	ss := make([]stacks.Stack, 0, len(out.Stacks))
 	for _, d := range out.Stacks {
-		stacks = append(stacks, d.stack())
+		ss = append(ss, d.stack())
 	}
-	return stacks, nil
+	return ss, nil
 }
 
-func (a *Stacks) Get(ctx context.Context, name string) (*store.Stack, error) {
+func (a *Stacks) Get(ctx context.Context, name string) (*stacks.Stack, error) {
 	var out stackDetailDTO
 	if err := a.c.do(ctx, http.MethodGet, "/stacks/"+url.PathEscape(name), nil, &out); err != nil {
 		return nil, err
 	}
-	return out.Stack.stack(), nil
+	s := out.Stack.stack()
+	return &s, nil
 }
 
-func (a *Stacks) Revisions(ctx context.Context, name string, limit int) ([]*store.StackRevision, error) {
+func (a *Stacks) Revisions(ctx context.Context, name string, limit int) ([]stacks.Revision, error) {
 	var out stackDetailDTO
 	if err := a.c.do(ctx, http.MethodGet, "/stacks/"+url.PathEscape(name), nil, &out); err != nil {
 		return nil, err
 	}
-	revs := make([]*store.StackRevision, 0, len(out.Revisions))
+	revs := make([]stacks.Revision, 0, len(out.Revisions))
 	for _, m := range out.Revisions {
-		revs = append(revs, &store.StackRevision{
+		revs = append(revs, stacks.Revision{
 			StackName: name,
 			Revision:  m.Revision,
 			CreatedAt: m.CreatedAt,
@@ -75,25 +73,21 @@ func (a *Stacks) Revisions(ctx context.Context, name string, limit int) ([]*stor
 	return revs, nil
 }
 
-func (d stackDTO) stack() *store.Stack {
-	var repo sql.NullString
-	if d.RepoURL != "" {
-		repo = sql.NullString{String: d.RepoURL, Valid: true}
-	}
-	return &store.Stack{
+func (d stackDTO) stack() stacks.Stack {
+	return stacks.Stack{
 		Name:            d.Name,
 		CurrentRevision: d.CurrentRevision,
-		RepoURL:         repo,
+		RepoURL:         d.RepoURL,
 		CreatedAt:       d.CreatedAt,
 		UpdatedAt:       d.UpdatedAt,
 	}
 }
 
-// Deploy is the HTTP adapter for service.DeployService.
+// Deploy is the HTTP adapter for stacks.Deployer.
 type Deploy struct{ c *Client }
 
 // NewDeploy builds the remote deploy adapter.
-func NewDeploy(c *Client) service.DeployService { return &Deploy{c: c} }
+func NewDeploy(c *Client) stacks.Deployer { return &Deploy{c: c} }
 
 type deployResultDTO struct {
 	Stack        string `json:"stack"`
@@ -102,7 +96,7 @@ type deployResultDTO struct {
 	RolledBackTo int64  `json:"rolled_back_to"`
 }
 
-func (a *Deploy) Deploy(ctx context.Context, p deploy.Payload) (*deploy.DeployResult, error) {
+func (a *Deploy) Deploy(ctx context.Context, p stacks.Payload) (*stacks.Result, error) {
 	var out deployResultDTO
 	if err := a.c.do(ctx, http.MethodPost, "/stacks", map[string]string{
 		"app_name": p.AppName,
@@ -112,10 +106,10 @@ func (a *Deploy) Deploy(ctx context.Context, p deploy.Payload) (*deploy.DeployRe
 	}, &out); err != nil {
 		return nil, err
 	}
-	return &deploy.DeployResult{StackName: out.Stack, Revision: out.Revision}, nil
+	return &stacks.Result{StackName: out.Stack, Revision: out.Revision}, nil
 }
 
-func (a *Deploy) Rollback(ctx context.Context, stackName string, sourceRevision int64) (*deploy.DeployResult, error) {
+func (a *Deploy) Rollback(ctx context.Context, stackName string, sourceRevision int64) (*stacks.Result, error) {
 	var out deployResultDTO
 	if err := a.c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(stackName)+"/rollback", map[string]int64{
 		"revision": sourceRevision,
@@ -126,7 +120,7 @@ func (a *Deploy) Rollback(ctx context.Context, stackName string, sourceRevision 
 	if out.NewRevision != 0 {
 		rev = out.NewRevision
 	}
-	return &deploy.DeployResult{StackName: out.Stack, Revision: rev}, nil
+	return &stacks.Result{StackName: out.Stack, Revision: rev}, nil
 }
 
 func (a *Deploy) Undeploy(ctx context.Context, stackName string) error {

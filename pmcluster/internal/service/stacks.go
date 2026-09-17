@@ -1,14 +1,7 @@
 package service
 
-import (
-	"context"
+import "github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
-)
-
-// StacksService is the read side of deployed stacks.
-type StacksService interface {
-	Get(ctx context.Context, name string) (*store.Stack, error)
-	List(ctx context.Context) ([]*store.Stack, error)
-	Revisions(ctx context.Context, name string, limit int) ([]*store.StackRevision, error)
-}
+// StacksService is the read side of deployed stacks, aliased to stacks.Reader
+// while consumers migrate to the domain package.
+type StacksService = stacks.Reader

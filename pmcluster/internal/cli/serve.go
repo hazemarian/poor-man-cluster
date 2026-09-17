@@ -21,11 +21,11 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/server"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/telemetry"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
@@ -105,7 +105,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
-	deploySvc := &deploy.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &deploy.StoreConfigResolver{Store: st}}
+	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st}}
 
 	cipher, cipherErr := credentials.Open(cfg.EncryptionKeyPath())
 	if cipherErr != nil {

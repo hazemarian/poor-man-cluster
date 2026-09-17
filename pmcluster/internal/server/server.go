@@ -27,7 +27,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
@@ -51,7 +51,7 @@ type Deps struct {
 	Lookup        auth.Lookup
 	Docker        docker.Client
 	Store         *store.Store
-	DeployService service.DeployService
+	DeployService stacks.Deployer
 	Cipher        *credentials.Cipher
 	Backups       backups.Service
 
@@ -125,9 +125,10 @@ func New(d Deps) http.Handler {
 			r.Get("/nodes", api.NodesHandler(d.Docker))
 		}
 		if d.Store != nil && d.DeployService != nil {
-			(&api.StacksHandler{
-				Store:   d.Store,
-				Service: d.DeployService,
+			(&stacks.HTTP{
+				Deploy:  d.DeployService,
+				Read:    stacks.Local{Store: d.Store},
+				Backups: d.Backups,
 			}).Mount(r)
 		}
 		if d.Backups != nil {

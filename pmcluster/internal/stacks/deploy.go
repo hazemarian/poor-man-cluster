@@ -1,9 +1,4 @@
-// Package deploy is the shared engine behind the REST, webhook, and CLI
-// deploy paths. Pipeline:
-//
-//	Payload → Parse → (override version) → Interpolate → Validate
-//	        → Translate → RecordDeploy → DeployStack
-package deploy
+package stacks
 
 import (
 	"context"
@@ -42,7 +37,7 @@ var (
 
 func instruments() (metric.Int64Counter, metric.Float64Histogram, trace.Tracer) {
 	instrOnce.Do(func() {
-		meter := otel.Meter("github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy")
+		meter := otel.Meter("github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks")
 		var err error
 		deploysTotal, err = meter.Int64Counter(
 			"pmcluster.deploys.total",
@@ -59,7 +54,7 @@ func instruments() (metric.Int64Counter, metric.Float64Histogram, trace.Tracer) 
 		if err != nil {
 			deployDurationMs, _ = otel.Meter("noop").Float64Histogram("noop")
 		}
-		deployTracer = otel.Tracer("github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy")
+		deployTracer = otel.Tracer("github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks")
 	})
 	return deploysTotal, deployDurationMs, deployTracer
 }
@@ -68,21 +63,6 @@ func instruments() (metric.Int64Counter, metric.Float64Histogram, trace.Tracer) 
 // can stub it without spinning up offen.
 type BackupTrigger interface {
 	Trigger(ctx context.Context) (archivePaths []string, err error)
-}
-
-// Payload is the canonical deploy request. JSON shape is shared by the
-// REST handler and the webhook receiver.
-type Payload struct {
-	AppName  string `json:"app_name,omitempty"`
-	RepoURL  string `json:"repo_url,omitempty"`
-	Version  string `json:"version,omitempty"`
-	Manifest string `json:"manifest"`
-}
-
-type DeployResult struct {
-	StackName    string
-	Revision     int64
-	RenderedYAML []byte
 }
 
 // Service bundles deploy-pipeline dependencies. Backup is optional;
@@ -103,7 +83,7 @@ type Service struct {
 	Stdout io.Writer
 }
 
-func (s *Service) Deploy(ctx context.Context, p Payload) (res *DeployResult, retErr error) {
+func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr error) {
 	counter, hist, tracer := instruments()
 	ctx, span := tracer.Start(ctx, "pmcluster.deploy",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -216,7 +196,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *DeployResult, ret
 		return nil, err
 	}
 
-	return &DeployResult{
+	return &Result{
 		StackName:    app.Name,
 		Revision:     revision,
 		RenderedYAML: rendered,
@@ -225,7 +205,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *DeployResult, ret
 
 // Rollback re-applies a stored revision as a NEW revision so the audit
 // trail records both deploys. PayloadJSON carries a rollback_of marker.
-func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision int64) (res *DeployResult, retErr error) {
+func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision int64) (res *Result, retErr error) {
 	counter, hist, tracer := instruments()
 	ctx, span := tracer.Start(ctx, "pmcluster.rollback",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -304,7 +284,7 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 		return nil, err
 	}
 
-	return &DeployResult{
+	return &Result{
 		StackName:    stackName,
 		Revision:     revision,
 		RenderedYAML: []byte(row.RenderedYAML),
@@ -403,7 +383,7 @@ func (s *Service) runPreDeployBackup(ctx context.Context, stackName string, revi
 		return fmt.Errorf("create backup record: %w", err)
 	}
 	if s.Backup == nil {
-		_ = s.Store.FinishBackup(ctx, id, "failed", "", "no BackupTrigger configured (deploy.Service.Backup is nil)")
+		_ = s.Store.FinishBackup(ctx, id, "failed", "", "no BackupTrigger configured (stacks.Service.Backup is nil)")
 		backups.RecordOutcome(ctx, backups.KindPreDeploy, backups.StatusFailed)
 		return fmt.Errorf("no backup trigger configured")
 	}

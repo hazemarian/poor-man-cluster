@@ -13,7 +13,7 @@ package webhooks
 import (
 	"context"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 )
 
 // Source is one configured webhook source. Description is empty when unset;
@@ -41,8 +41,8 @@ type SourceReader interface {
 }
 
 // Deployer is the narrow deploy surface the receiver needs: validate a
-// payload and deploy it. Satisfied by deploy.Service (and, in phase 10 of the
-// restructure, by the stacks domain's Deployer port).
+// payload and deploy it. Satisfied by stacks.Service (the stacks domain's
+// Deployer port).
 type Deployer interface {
-	Deploy(ctx context.Context, p deploy.Payload) (*deploy.DeployResult, error)
+	Deploy(ctx context.Context, p stacks.Payload) (*stacks.Result, error)
 }

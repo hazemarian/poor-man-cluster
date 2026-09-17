@@ -11,7 +11,7 @@ import (
 )
 
 // EnvResolver resolves `config(<name>)` references in service env values
-// against the DB-backed config store. Implemented by internal/deploy with a
+// against the DB-backed config store. Implemented by internal/stacks with a
 // *store.Store; nil means config() refs are rejected at translate time.
 type EnvResolver interface {
 	ResolveConfig(ctx context.Context, name string) (string, error)

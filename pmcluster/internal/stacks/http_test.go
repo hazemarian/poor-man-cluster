@@ -1,4 +1,4 @@
-package api
+package stacks
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -29,7 +29,7 @@ func newTestStore(t *testing.T) *store.Store {
 // backup history yet.
 func TestLastBackupJSON_NoneRecorded(t *testing.T) {
 	st := newTestStore(t)
-	got := lastBackupJSON(context.Background(), st, "no-such-stack")
+	got := lastBackupJSON(context.Background(), backups.NewLocal(st, nil), "no-such-stack")
 	if got != nil {
 		t.Errorf("expected nil for unknown stack, got %v", got)
 	}
@@ -49,7 +49,7 @@ func TestLastBackupJSON_Succeeded(t *testing.T) {
 		t.Fatalf("FinishBackup: %v", err)
 	}
 
-	got := lastBackupJSON(ctx, st, "my-stack")
+	got := lastBackupJSON(ctx, backups.NewLocal(st, nil), "my-stack")
 	if got == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -81,7 +81,7 @@ func TestLastBackupJSON_Failed(t *testing.T) {
 		t.Fatalf("FinishBackup: %v", err)
 	}
 
-	got := lastBackupJSON(ctx, st, "my-stack")
+	got := lastBackupJSON(ctx, backups.NewLocal(st, nil), "my-stack")
 	if got == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -105,7 +105,7 @@ func TestLastBackupJSON_MostRecentFirst(t *testing.T) {
 	newer, _ := st.CreateBackup(ctx, "my-stack", 1700000099)
 	_ = st.FinishBackup(ctx, newer, "failed", "", "boom")
 
-	got := lastBackupJSON(ctx, st, "my-stack")
+	got := lastBackupJSON(ctx, backups.NewLocal(st, nil), "my-stack")
 	if got == nil {
 		t.Fatal("expected non-nil result")
 	}
@@ -154,7 +154,8 @@ func TestRemoveStackHandler(t *testing.T) {
 	}
 
 	dep := &stubDeployer{}
-	h := &StacksHandler{Store: st, Service: &deploy.Service{Store: st, Deployer: dep}}
+	svc := &Service{Store: st, Deployer: dep}
+	h := &HTTP{Deploy: svc, Read: Local{Store: st}}
 
 	r := chi.NewRouter()
 	h.Mount(r)
