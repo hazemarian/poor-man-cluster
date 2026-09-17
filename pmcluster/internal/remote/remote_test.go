@@ -102,12 +102,8 @@ func TestRemoteConfigs(t *testing.T) {
 	if err != nil || len(rendered) != 1 || rendered[0].Name != "traefik-dynamic" {
 		t.Fatalf("ListRendered = %+v, err %v", rendered, err)
 	}
-	if !strings.Contains(rendered[0].RenderedContent, "certificates: []") {
-		t.Fatalf("ListRendered content = %q", rendered[0].RenderedContent)
-	}
-
-	if err := svc.SetRendered(ctx, "app_env", "x"); err == nil {
-		t.Fatal("SetRendered over remote should fail")
+	if !strings.Contains(rendered[0].Rendered, "certificates: []") {
+		t.Fatalf("ListRendered content = %q", rendered[0].Rendered)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/api"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
@@ -66,10 +67,6 @@ type Deps struct {
 	// the route is omitted.
 	Update *UpdateService
 
-	// Rendered exposes GET /api/cluster/rendered — the rendered platform
-	// configs (read-only). Optional; when nil the route is omitted.
-	Rendered *RenderedConfigService
-
 	// Webhooks exposes webhook-source management under /api/webhooks.
 	// Optional; when nil those routes are omitted.
 	Webhooks webhooks.Service
@@ -85,7 +82,7 @@ type Deps struct {
 
 	// Configs exposes config CRUD via the configs service. Optional; when
 	// nil those routes are omitted.
-	Configs service.ConfigsService
+	Configs configs.Service
 
 	// Secrets exposes secret management via the secrets service. Optional;
 	// when nil those routes are omitted.
@@ -145,9 +142,6 @@ func New(d Deps) http.Handler {
 		if d.Update != nil {
 			d.Update.Mount(r)
 		}
-		if d.Rendered != nil {
-			d.Rendered.Mount(r)
-		}
 		if d.Webhooks != nil {
 			(&webhooks.HTTP{Svc: d.Webhooks}).Mount(r)
 		}
@@ -158,7 +152,7 @@ func New(d Deps) http.Handler {
 			(&secrets.HTTP{Svc: d.Secrets}).Mount(r)
 		}
 		if d.Configs != nil {
-			(&ConfigService{Svc: d.Configs}).Mount(r)
+			(&configs.HTTP{Svc: d.Configs}).Mount(r)
 		}
 	})
 

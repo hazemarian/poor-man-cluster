@@ -18,6 +18,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
@@ -139,8 +140,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				}, cluster.UpdateInput{ConfigDir: cfg.ConfigDir(), Version: buildinfo.Version})
 			},
 		},
-		Rendered:       &server.RenderedConfigService{Store: st},
-		Configs:        impl.NewConfigs(st),
+		Configs:        configs.NewLocal(st),
 		Webhooks:       webhooks.NewLocal(st, cipher),
 		WebhookSources: webhooks.NewLocal(st, cipher),
 		APIKeys:        apikeys.NewLocal(st),

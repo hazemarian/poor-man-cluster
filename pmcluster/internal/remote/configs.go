@@ -2,19 +2,17 @@ package remote
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/url"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 )
 
-// Configs is the HTTP adapter for service.ConfigsService.
+// Configs is the HTTP adapter for configs.Service.
 type Configs struct{ c *Client }
 
 // NewConfigs builds the remote configs adapter.
-func NewConfigs(c *Client) service.ConfigsService { return &Configs{c: c} }
+func NewConfigs(c *Client) configs.Service { return &Configs{c: c} }
 
 type configRowDTO struct {
 	ID        int64  `json:"id"`
@@ -73,15 +71,15 @@ func (a *Configs) Create(ctx context.Context, scope, stack, name, kind, content,
 	return out.ID, err
 }
 
-func (a *Configs) Get(ctx context.Context, name string) (*store.ConfigRow, error) {
+func (a *Configs) Get(ctx context.Context, name string) (*configs.Config, error) {
 	var dto configRowDTO
 	if err := a.c.do(ctx, http.MethodGet, "/configs/"+url.PathEscape(name), nil, &dto); err != nil {
 		return nil, err
 	}
-	return dto.row(), nil
+	return dto.model(), nil
 }
 
-func (a *Configs) List(ctx context.Context, scope, stack string) ([]*store.ConfigRow, error) {
+func (a *Configs) List(ctx context.Context, scope, stack string) ([]configs.Config, error) {
 	q := url.Values{}
 	if scope != "" {
 		q.Set("scope", scope)
@@ -93,9 +91,9 @@ func (a *Configs) List(ctx context.Context, scope, stack string) ([]*store.Confi
 	if err := a.c.do(ctx, http.MethodGet, "/configs?"+q.Encode(), nil, &out); err != nil {
 		return nil, err
 	}
-	rows := make([]*store.ConfigRow, 0, len(out.Configs))
+	rows := make([]configs.Config, 0, len(out.Configs))
 	for i := range out.Configs {
-		rows = append(rows, out.Configs[i].row())
+		rows = append(rows, *out.Configs[i].model())
 	}
 	return rows, nil
 }
@@ -124,38 +122,32 @@ func (a *Configs) Delete(ctx context.Context, name string) error {
 	return a.c.do(ctx, http.MethodDelete, "/configs/"+url.PathEscape(name), nil, nil)
 }
 
-func (a *Configs) ListVersions(ctx context.Context, name string) ([]*store.ConfigVersionRow, error) {
+func (a *Configs) ListVersions(ctx context.Context, name string) ([]configs.ConfigVersion, error) {
 	var out configVersionsDTO
 	if err := a.c.do(ctx, http.MethodGet, "/configs/"+url.PathEscape(name)+"/versions", nil, &out); err != nil {
 		return nil, err
 	}
-	rows := make([]*store.ConfigVersionRow, 0, len(out.Versions))
+	rows := make([]configs.ConfigVersion, 0, len(out.Versions))
 	for _, v := range out.Versions {
-		rows = append(rows, &store.ConfigVersionRow{ID: v.ID, Hash: v.Hash, CreatedAt: v.CreatedAt})
+		rows = append(rows, configs.ConfigVersion{ID: v.ID, Hash: v.Hash, CreatedAt: v.CreatedAt})
 	}
 	return rows, nil
 }
 
-// SetRendered is an internal snapshot operation performed by cluster update
-// on the daemon; it has no API endpoint and is not supported remotely.
-func (a *Configs) SetRendered(ctx context.Context, name, content string) error {
-	return errors.New("set-rendered is an internal cluster-update operation and is not available over the remote API")
-}
-
-func (a *Configs) ListRendered(ctx context.Context) ([]*store.ConfigRow, error) {
+func (a *Configs) ListRendered(ctx context.Context) ([]configs.Config, error) {
 	var out renderedConfigsDTO
 	if err := a.c.do(ctx, http.MethodGet, "/cluster/rendered", nil, &out); err != nil {
 		return nil, err
 	}
-	rows := make([]*store.ConfigRow, 0, len(out.Configs))
+	rows := make([]configs.Config, 0, len(out.Configs))
 	for _, rc := range out.Configs {
-		rows = append(rows, &store.ConfigRow{Name: rc.Name, RenderedContent: rc.Content})
+		rows = append(rows, configs.Config{Name: rc.Name, Rendered: rc.Content})
 	}
 	return rows, nil
 }
 
-func (d configRowDTO) row() *store.ConfigRow {
-	return &store.ConfigRow{
+func (d configRowDTO) model() *configs.Config {
+	return &configs.Config{
 		ID:        d.ID,
 		Scope:     d.Scope,
 		Stack:     d.Stack,
@@ -163,8 +155,8 @@ func (d configRowDTO) row() *store.ConfigRow {
 		Kind:      d.Kind,
 		Version:   d.Version,
 		Hash:      d.Hash,
+		Content:   d.Content,
 		CreatedAt: d.CreatedAt,
 		UpdatedAt: d.UpdatedAt,
-		Content:   d.Content,
 	}
 }

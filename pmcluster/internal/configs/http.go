@@ -1,4 +1,4 @@
-package server
+package configs
 
 import (
 	"encoding/json"
@@ -9,21 +9,16 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
-// ConfigService exposes DB-backed config management over the Bearer-protected
-// /api router. Configs are the editable templates/values (cluster- or
-// service-scoped); each edit stores the previous value in the version history
-// so operators can roll back. The hash column tracks content identity — the
-// daemon's provisioning path uses it to decide whether a new Docker config is
-// needed.
-type ConfigService struct {
-	Svc service.ConfigsService
+// HTTP exposes the configs service over the Bearer-protected /api router:
+// config CRUD + version history, and the read-only rendered snapshots.
+type HTTP struct {
+	Svc Service
 }
 
-func (c *ConfigService) Mount(r chi.Router) {
+func (c *HTTP) Mount(r chi.Router) {
 	r.Get("/configs", c.list)
 	r.Post("/configs", c.create)
 	r.Get("/configs/{name}", c.get)
@@ -31,6 +26,7 @@ func (c *ConfigService) Mount(r chi.Router) {
 	r.Delete("/configs/{name}", c.remove)
 	r.Get("/configs/{name}/versions", c.versions)
 	r.Post("/configs/{name}/rollback", c.rollback)
+	r.Get("/cluster/rendered", c.rendered)
 }
 
 type configRow struct {
@@ -46,7 +42,7 @@ type configRow struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
-func (c *ConfigService) list(res http.ResponseWriter, req *http.Request) {
+func (c *HTTP) list(res http.ResponseWriter, req *http.Request) {
 	cfgs, err := c.Svc.List(req.Context(), req.URL.Query().Get("scope"), req.URL.Query().Get("stack"))
 	if err != nil {
 		writeErr(res, http.StatusInternalServerError, "list configs: "+err.Error())
@@ -56,9 +52,8 @@ func (c *ConfigService) list(res http.ResponseWriter, req *http.Request) {
 	for _, x := range cfgs {
 		rows = append(rows, configRow{
 			ID: x.ID, Scope: x.Scope, Stack: x.Stack, Name: x.Name, Kind: x.Kind,
-			Version:  x.Version,
-			Hash:     x.Hash,
-			Rendered: x.RenderedContent != "", CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt,
+			Version: x.Version, Hash: x.Hash, Rendered: x.Rendered != "",
+			CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt,
 		})
 	}
 	writeJSON(res, http.StatusOK, map[string]any{"configs": rows})
@@ -72,7 +67,7 @@ type createConfigRequest struct {
 	Content string `json:"content"`
 }
 
-func (c *ConfigService) create(res http.ResponseWriter, req *http.Request) {
+func (c *HTTP) create(res http.ResponseWriter, req *http.Request) {
 	var body createConfigRequest
 	dec := json.NewDecoder(http.MaxBytesReader(res, req.Body, 4<<20))
 	dec.DisallowUnknownFields()
@@ -122,7 +117,7 @@ func (c *ConfigService) create(res http.ResponseWriter, req *http.Request) {
 	})
 }
 
-func (c *ConfigService) get(res http.ResponseWriter, req *http.Request) {
+func (c *HTTP) get(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
 	cfg, err := c.Svc.Get(req.Context(), name)
 	if err != nil {
@@ -143,7 +138,7 @@ type updateConfigRequest struct {
 	Content string `json:"content"`
 }
 
-func (c *ConfigService) update(res http.ResponseWriter, req *http.Request) {
+func (c *HTTP) update(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
 	var body updateConfigRequest
 	dec := json.NewDecoder(http.MaxBytesReader(res, req.Body, 4<<20))
@@ -165,7 +160,7 @@ func (c *ConfigService) update(res http.ResponseWriter, req *http.Request) {
 	writeJSON(res, http.StatusOK, map[string]any{"name": name, "hash": hash})
 }
 
-func (c *ConfigService) remove(res http.ResponseWriter, req *http.Request) {
+func (c *HTTP) remove(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
 	if err := c.Svc.Delete(req.Context(), name); err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
@@ -184,7 +179,7 @@ type configVersionRow struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
-func (c *ConfigService) versions(res http.ResponseWriter, req *http.Request) {
+func (c *HTTP) versions(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
 	vers, err := c.Svc.ListVersions(req.Context(), name)
 	if err != nil {
@@ -197,7 +192,7 @@ func (c *ConfigService) versions(res http.ResponseWriter, req *http.Request) {
 	}
 	rows := make([]configVersionRow, 0, len(vers))
 	for _, v := range vers {
-		rows = append(rows, configVersionRow{ID: v.ID, Hash: v.Hash, CreatedAt: v.CreatedAt})
+		rows = append(rows, configVersionRow(v))
 	}
 	writeJSON(res, http.StatusOK, map[string]any{"versions": rows})
 }
@@ -206,7 +201,7 @@ type rollbackConfigRequest struct {
 	VersionID int64 `json:"version_id"`
 }
 
-func (c *ConfigService) rollback(res http.ResponseWriter, req *http.Request) {
+func (c *HTTP) rollback(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
 	var body rollbackConfigRequest
 	dec := json.NewDecoder(http.MaxBytesReader(res, req.Body, 1<<20))
@@ -234,7 +229,30 @@ func (c *ConfigService) rollback(res http.ResponseWriter, req *http.Request) {
 	writeJSON(res, http.StatusOK, map[string]any{"name": name, "hash": hash, "rolled_back_to": body.VersionID})
 }
 
+func (c *HTTP) rendered(res http.ResponseWriter, req *http.Request) {
+	rows, err := c.Svc.ListRendered(req.Context())
+	if err != nil {
+		writeErr(res, http.StatusInternalServerError, "list rendered configs: "+err.Error())
+		return
+	}
+	configs := make([]map[string]string, 0, len(rows))
+	for _, row := range rows {
+		configs = append(configs, map[string]string{"name": row.Name, "content": row.Rendered})
+	}
+	writeJSON(res, http.StatusOK, map[string]any{"configs": configs})
+}
+
 // buildVersion returns the build version string used when writing config
 // rows. It is the running binary's version (buildinfo.Version), overridable
 // in tests via the setBuildVersion helper.
 var buildVersion = func() string { return buildinfo.Version }
+
+func writeJSON(res http.ResponseWriter, status int, v any) {
+	res.Header().Set("Content-Type", "application/json")
+	res.WriteHeader(status)
+	_ = json.NewEncoder(res).Encode(v)
+}
+
+func writeErr(res http.ResponseWriter, status int, msg string) {
+	writeJSON(res, status, map[string]string{"error": msg})
+}

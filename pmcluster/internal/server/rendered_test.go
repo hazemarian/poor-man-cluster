@@ -8,11 +8,12 @@ import (
 	"testing"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 )
 
-// TestRenderedConfigsAPI exercises GET /api/cluster/rendered: auth and the
-// read-only listing of the rendered platform configs snapshotted by cluster
-// update.
+// TestRenderedConfigsAPI exercises GET /api/cluster/rendered — served by the
+// configs handler via ListRendered: auth and the read-only listing of the
+// rendered platform configs snapshotted by cluster update.
 func TestRenderedConfigsAPI(t *testing.T) {
 	st := openServerStore(t)
 	ctx := context.Background()
@@ -29,8 +30,8 @@ func TestRenderedConfigsAPI(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(New(Deps{
-		Lookup:   &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
-		Rendered: &RenderedConfigService{Store: st},
+		Lookup:  &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
+		Configs: configs.NewLocal(st),
 	}))
 	defer srv.Close()
 	url := srv.URL + "/api/cluster/rendered"
@@ -55,7 +56,7 @@ func TestRenderedConfigsAPI(t *testing.T) {
 }
 
 // TestRenderedConfigsAPI_NotWired covers the optional-service pattern: with no
-// Rendered dependency the route is omitted.
+// Configs dependency the rendered route is omitted.
 func TestRenderedConfigsAPI_NotWired(t *testing.T) {
 	srv := httptest.NewServer(New(Deps{
 		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
@@ -64,22 +65,5 @@ func TestRenderedConfigsAPI_NotWired(t *testing.T) {
 	resp := doJSON(t, http.MethodGet, srv.URL+"/api/cluster/rendered", "tok", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET (not wired) = %d, want 404 (route omitted)", resp.StatusCode)
-	}
-}
-
-// TestRenderedConfigsAPI_NoStore covers the internal guard when the service is
-// mounted without a store.
-func TestRenderedConfigsAPI_NoStore(t *testing.T) {
-	srv := httptest.NewServer(New(Deps{
-		Lookup:   &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
-		Rendered: &RenderedConfigService{},
-	}))
-	defer srv.Close()
-	resp := doJSON(t, http.MethodGet, srv.URL+"/api/cluster/rendered", "tok", nil)
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("GET (no store) = %d, want 500", resp.StatusCode)
-	}
-	if !strings.Contains(readBody(t, resp), "rendered-config service not wired") {
-		t.Errorf("expected wiring error message")
 	}
 }

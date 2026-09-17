@@ -13,9 +13,9 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
@@ -41,7 +41,7 @@ func newKeysServer(t *testing.T) *httptest.Server {
 		Lookup:   &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
 		Store:    st,
 		Cipher:   ciph,
-		Configs:  impl.NewConfigs(st),
+		Configs:  configs.NewLocal(st),
 		Secrets:  secrets.NewLocal(st, ciph),
 		Webhooks: webhooks.NewLocal(st, ciph),
 		APIKeys:  apikeys.NewLocal(st),

@@ -8,11 +8,11 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
 
@@ -33,7 +33,7 @@ func remoteClient(cmd *cobra.Command) *remote.Client {
 // backendXxx helpers return the service for the active backend plus a cleanup
 // func (a no-op in remote mode, where no local store is opened).
 
-func backendConfigs(cmd *cobra.Command) (service.ConfigsService, func(), error) {
+func backendConfigs(cmd *cobra.Command) (configs.Service, func(), error) {
 	if rc := remoteClient(cmd); rc != nil {
 		return remote.NewConfigs(rc), func() {}, nil
 	}
@@ -41,7 +41,7 @@ func backendConfigs(cmd *cobra.Command) (service.ConfigsService, func(), error) 
 	if err != nil {
 		return nil, nil, err
 	}
-	return impl.NewConfigs(st), func() { _ = st.Close() }, nil
+	return configs.NewLocal(st), func() { _ = st.Close() }, nil
 }
 
 func backendSecrets(cmd *cobra.Command) (secrets.Service, func(), error) {
