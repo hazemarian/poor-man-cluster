@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -19,7 +20,7 @@ import (
 // daemon's provisioning path uses it to decide whether a new Docker config is
 // needed.
 type ConfigService struct {
-	Store *store.Store
+	Svc service.ConfigsService
 }
 
 func (c *ConfigService) Mount(r chi.Router) {
@@ -46,7 +47,7 @@ type configRow struct {
 }
 
 func (c *ConfigService) list(res http.ResponseWriter, req *http.Request) {
-	cfgs, err := c.Store.ListConfigs(req.Context(), req.URL.Query().Get("scope"), req.URL.Query().Get("stack"))
+	cfgs, err := c.Svc.List(req.Context(), req.URL.Query().Get("scope"), req.URL.Query().Get("stack"))
 	if err != nil {
 		writeErr(res, http.StatusInternalServerError, "list configs: "+err.Error())
 		return
@@ -106,7 +107,7 @@ func (c *ConfigService) create(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	id, err := c.Store.CreateConfig(req.Context(), scope, stack, name, kind, body.Content, buildVersion())
+	id, err := c.Svc.Create(req.Context(), scope, stack, name, kind, body.Content, buildVersion())
 	if err != nil {
 		if errors.Is(err, store.ErrConfigExists) {
 			writeErr(res, http.StatusConflict, "config already exists: "+name)
@@ -123,7 +124,7 @@ func (c *ConfigService) create(res http.ResponseWriter, req *http.Request) {
 
 func (c *ConfigService) get(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
-	cfg, err := c.Store.GetConfig(req.Context(), name)
+	cfg, err := c.Svc.Get(req.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			writeErr(res, http.StatusNotFound, "config not found: "+name)
@@ -152,7 +153,7 @@ func (c *ConfigService) update(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	hash, err := c.Store.UpdateConfig(req.Context(), name, body.Content, buildVersion())
+	hash, err := c.Svc.Update(req.Context(), name, body.Content, buildVersion())
 	if err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			writeErr(res, http.StatusNotFound, "config not found: "+name)
@@ -166,7 +167,7 @@ func (c *ConfigService) update(res http.ResponseWriter, req *http.Request) {
 
 func (c *ConfigService) remove(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
-	if err := c.Store.DeleteConfig(req.Context(), name); err != nil {
+	if err := c.Svc.Delete(req.Context(), name); err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			writeErr(res, http.StatusNotFound, "config not found: "+name)
 			return
@@ -185,7 +186,7 @@ type configVersionRow struct {
 
 func (c *ConfigService) versions(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
-	vers, err := c.Store.ListConfigVersions(req.Context(), name)
+	vers, err := c.Svc.ListVersions(req.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			writeErr(res, http.StatusNotFound, "config not found: "+name)
@@ -218,7 +219,7 @@ func (c *ConfigService) rollback(res http.ResponseWriter, req *http.Request) {
 		writeErr(res, http.StatusBadRequest, "version_id is required")
 		return
 	}
-	hash, err := c.Store.RollbackConfig(req.Context(), name, body.VersionID)
+	hash, err := c.Svc.Rollback(req.Context(), name, body.VersionID)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrConfigNotFound):

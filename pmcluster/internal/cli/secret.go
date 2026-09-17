@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -121,13 +122,9 @@ func runSecretCreate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("open encryption key: %w", err)
 	}
-	ct, err := cipher.Encrypt([]byte(value))
-	if err != nil {
-		return fmt.Errorf("encrypt: %w", err)
-	}
 	hash := secretHash(value)
 
-	if _, err := st.CreateSecret(cmd.Context(), scope, stack, name, ct, hash); err != nil {
+	if _, err := impl.NewSecrets(st, cipher).Create(cmd.Context(), scope, stack, name, value); err != nil {
 		if errors.Is(err, store.ErrSecretExists) {
 			return fmt.Errorf("secret %q already exists", name)
 		}
@@ -157,7 +154,7 @@ func runSecretList(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	secrets, err := st.ListSecrets(cmd.Context(), "", "")
+	secrets, err := impl.NewSecrets(st, nil).List(cmd.Context(), "", "")
 	if err != nil {
 		return fmt.Errorf("list secrets: %w", err)
 	}
@@ -183,7 +180,7 @@ func runSecretShow(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	s, err := st.GetSecret(cmd.Context(), name)
+	s, err := impl.NewSecrets(st, nil).Get(cmd.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrSecretNotFound) {
 			return fmt.Errorf("secret %q not found", name)
@@ -205,7 +202,7 @@ func runSecretVerify(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	s, err := st.GetSecret(cmd.Context(), name)
+	s, err := impl.NewSecrets(st, nil).Get(cmd.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrSecretNotFound) {
 			return fmt.Errorf("secret %q not found", name)
@@ -228,7 +225,7 @@ func runSecretDelete(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	if err := st.DeleteSecret(cmd.Context(), name); err != nil {
+	if err := impl.NewSecrets(st, nil).Delete(cmd.Context(), name); err != nil {
 		if errors.Is(err, store.ErrSecretNotFound) {
 			return fmt.Errorf("secret %q not found", name)
 		}

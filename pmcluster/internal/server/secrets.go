@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -17,8 +17,7 @@ import (
 // and only ever appears in the create request body; every other read returns
 // the name/scope/hash metadata without revealing the payload.
 type SecretService struct {
-	Store  *store.Store
-	Cipher *credentials.Cipher
+	Svc service.SecretsService
 }
 
 func (s *SecretService) Mount(r chi.Router) {
@@ -39,7 +38,7 @@ type secretRow struct {
 }
 
 func (s *SecretService) list(res http.ResponseWriter, req *http.Request) {
-	secs, err := s.Store.ListSecrets(req.Context(),
+	secs, err := s.Svc.List(req.Context(),
 		req.URL.Query().Get("scope"), req.URL.Query().Get("stack"))
 	if err != nil {
 		writeErr(res, http.StatusInternalServerError, "list secrets: "+err.Error())
@@ -90,12 +89,7 @@ func (s *SecretService) create(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	payload, err := s.Cipher.Encrypt([]byte(body.Value))
-	if err != nil {
-		writeErr(res, http.StatusInternalServerError, "encrypt secret: "+err.Error())
-		return
-	}
-	id, err := s.Store.CreateSecret(req.Context(), scope, stack, name, payload, store.SecretHash(body.Value))
+	id, err := s.Svc.Create(req.Context(), scope, stack, name, body.Value)
 	if err != nil {
 		if errors.Is(err, store.ErrSecretExists) {
 			writeErr(res, http.StatusConflict, "secret already exists: "+name)
@@ -132,12 +126,7 @@ func (s *SecretService) update(res http.ResponseWriter, req *http.Request) {
 		writeErr(res, http.StatusBadRequest, "value is required")
 		return
 	}
-	payload, err := s.Cipher.Encrypt([]byte(body.Value))
-	if err != nil {
-		writeErr(res, http.StatusInternalServerError, "encrypt secret: "+err.Error())
-		return
-	}
-	if err := s.Store.UpdateSecret(req.Context(), name, payload, store.SecretHash(body.Value)); err != nil {
+	if err := s.Svc.Update(req.Context(), name, body.Value); err != nil {
 		if errors.Is(err, store.ErrSecretNotFound) {
 			writeErr(res, http.StatusNotFound, "secret not found: "+name)
 			return
@@ -155,7 +144,7 @@ func (s *SecretService) remove(res http.ResponseWriter, req *http.Request) {
 		writeErr(res, http.StatusBadRequest, "secret name is required")
 		return
 	}
-	if err := s.Store.DeleteSecret(req.Context(), name); err != nil {
+	if err := s.Svc.Delete(req.Context(), name); err != nil {
 		if errors.Is(err, store.ErrSecretNotFound) {
 			writeErr(res, http.StatusNotFound, "secret not found: "+name)
 			return
@@ -174,19 +163,14 @@ func (s *SecretService) value(res http.ResponseWriter, req *http.Request) {
 		writeErr(res, http.StatusBadRequest, "secret name is required")
 		return
 	}
-	sec, err := s.Store.GetSecret(req.Context(), name)
+	plain, err := s.Svc.Reveal(req.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrSecretNotFound) {
 			writeErr(res, http.StatusNotFound, "secret not found: "+name)
 			return
 		}
-		writeErr(res, http.StatusInternalServerError, "get secret: "+err.Error())
+		writeErr(res, http.StatusInternalServerError, "reveal secret: "+err.Error())
 		return
 	}
-	plain, err := s.Cipher.Decrypt(sec.Payload)
-	if err != nil {
-		writeErr(res, http.StatusInternalServerError, "decrypt secret: "+err.Error())
-		return
-	}
-	writeJSON(res, http.StatusOK, map[string]any{"name": sec.Name, "value": string(plain)})
+	writeJSON(res, http.StatusOK, map[string]any{"name": name, "value": plain})
 }

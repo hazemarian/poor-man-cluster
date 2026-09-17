@@ -13,6 +13,7 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -34,9 +35,11 @@ func newKeysServer(t *testing.T) *httptest.Server {
 	}
 	seedUser(t, st, "admin")
 	srv := httptest.NewServer(New(Deps{
-		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
-		Store:  st,
-		Cipher: ciph,
+		Lookup:  &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
+		Store:   st,
+		Cipher:  ciph,
+		Configs: impl.NewConfigs(st),
+		Secrets: impl.NewSecrets(st, ciph),
 	}))
 	t.Cleanup(srv.Close)
 	return srv

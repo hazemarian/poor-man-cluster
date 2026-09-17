@@ -21,8 +21,8 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/api"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhook"
 )
@@ -46,7 +46,7 @@ type Deps struct {
 	Lookup        auth.Lookup
 	Docker        docker.Client
 	Store         *store.Store
-	DeployService *deploy.Service
+	DeployService service.DeployService
 	Cipher        *credentials.Cipher
 	BackupTrigger api.BackupTrigger
 
@@ -67,6 +67,14 @@ type Deps struct {
 	// Rendered exposes GET /api/cluster/rendered — the rendered platform
 	// configs (read-only). Optional; when nil the route is omitted.
 	Rendered *RenderedConfigService
+
+	// Configs exposes config CRUD via the configs service. Optional; when
+	// nil those routes are omitted.
+	Configs service.ConfigsService
+
+	// Secrets exposes secret management via the secrets service. Optional;
+	// when nil those routes are omitted.
+	Secrets service.SecretsService
 }
 
 func New(d Deps) http.Handler {
@@ -132,11 +140,11 @@ func New(d Deps) http.Handler {
 		if d.Store != nil {
 			(&APIKeyService{Store: d.Store}).Mount(r)
 		}
-		if d.Store != nil && d.Cipher != nil {
-			(&SecretService{Store: d.Store, Cipher: d.Cipher}).Mount(r)
+		if d.Secrets != nil {
+			(&SecretService{Svc: d.Secrets}).Mount(r)
 		}
-		if d.Store != nil {
-			(&ConfigService{Store: d.Store}).Mount(r)
+		if d.Configs != nil {
+			(&ConfigService{Svc: d.Configs}).Mount(r)
 		}
 	})
 

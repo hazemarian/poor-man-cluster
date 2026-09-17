@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -127,7 +128,7 @@ func runConfigCreate(cmd *cobra.Command, args []string) error {
 	defer func() { _ = st.Close() }()
 
 	ver := buildinfo.Version
-	if _, err := st.CreateConfig(cmd.Context(), scope, stack, name, kind, value, ver); err != nil {
+	if _, err := impl.NewConfigs(st).Create(cmd.Context(), scope, stack, name, kind, value, ver); err != nil {
 		if errors.Is(err, store.ErrConfigExists) {
 			return fmt.Errorf("config %q already exists (use `pmcluster config edit %s`)", name, name)
 		}
@@ -145,7 +146,7 @@ func runConfigList(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	cfgs, err := st.ListConfigs(cmd.Context(), "", "")
+	cfgs, err := impl.NewConfigs(st).List(cmd.Context(), "", "")
 	if err != nil {
 		return fmt.Errorf("list configs: %w", err)
 	}
@@ -172,7 +173,7 @@ func runConfigGet(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	c, err := st.GetConfig(cmd.Context(), name)
+	c, err := impl.NewConfigs(st).Get(cmd.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			return fmt.Errorf("config %q not found", name)
@@ -201,7 +202,7 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	hash, err := st.UpdateConfig(cmd.Context(), name, value, buildinfo.Version)
+	hash, err := impl.NewConfigs(st).Update(cmd.Context(), name, value, buildinfo.Version)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			return fmt.Errorf("config %q not found", name)
@@ -222,7 +223,7 @@ func runConfigHistory(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	vers, err := st.ListConfigVersions(cmd.Context(), name)
+	vers, err := impl.NewConfigs(st).ListVersions(cmd.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			return fmt.Errorf("config %q not found", name)
@@ -259,7 +260,7 @@ func runConfigRollback(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 
-		vers, err := st.ListConfigVersions(cmd.Context(), name)
+		vers, err := impl.NewConfigs(st).ListVersions(cmd.Context(), name)
 		if err != nil {
 			if errors.Is(err, store.ErrConfigNotFound) {
 				return fmt.Errorf("config %q not found", name)
@@ -272,7 +273,7 @@ func runConfigRollback(cmd *cobra.Command, args []string) error {
 		versionID = vers[0].ID
 	}
 
-	hash, err := st.RollbackConfig(cmd.Context(), name, versionID)
+	hash, err := impl.NewConfigs(st).Rollback(cmd.Context(), name, versionID)
 	if err != nil {
 		if errors.Is(err, store.ErrConfigNotFound) {
 			return fmt.Errorf("config %q not found", name)

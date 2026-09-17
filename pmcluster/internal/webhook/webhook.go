@@ -35,6 +35,7 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -79,7 +80,7 @@ const MaxBodyBytes = 1 << 20
 type Handler struct {
 	Store   *store.Store
 	Cipher  *credentials.Cipher
-	Service *deploy.Service
+	Service service.DeployService
 }
 
 // Mount registers POST /webhook/{source}. Caller MUST place this outside

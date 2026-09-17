@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/deploy"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -23,7 +24,7 @@ import (
 //	POST /api/stacks/{name}/rollback              — body {revision: N}
 type StacksHandler struct {
 	Store   *store.Store
-	Service *deploy.Service
+	Service service.DeployService
 }
 
 // Mount expects to be wrapped with Bearer auth in the parent router.

@@ -22,6 +22,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/server"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/telemetry"
 )
@@ -135,7 +136,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		},
 	}
 
-	handler := server.New(server.Deps{
+	deps := server.Deps{
 		Lookup:        st,
 		Docker:        dc,
 		Store:         st,
@@ -174,7 +175,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			},
 		},
 		Rendered: &server.RenderedConfigService{Store: st},
-	})
+		Configs:  impl.NewConfigs(st),
+	}
+	if cipher != nil {
+		deps.Secrets = impl.NewSecrets(st, cipher)
+	}
+	handler := server.New(deps)
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
