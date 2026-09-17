@@ -1,5 +1,4 @@
-// Package impl holds the local adapters that implement the service ports.
-package impl
+package certs
 
 import (
 	"context"
@@ -8,13 +7,12 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
-// TLS applies and removes the cluster's TLS certificates by materialising
+// Local applies and removes the cluster's TLS certificates by materialising
 // them as versioned Swarm secrets and refreshing Traefik.
-type TLS struct {
+type Local struct {
 	Store       *store.Store
 	Cipher      *credentials.Cipher
 	Docker      docker.Client
@@ -24,16 +22,16 @@ type TLS struct {
 	Version     string
 }
 
-// NewTLS returns the local TLS adapter.
-func NewTLS(
+// NewLocal returns the local certs adapter.
+func NewLocal(
 	st *store.Store,
 	cipher *credentials.Cipher,
 	dc docker.Client,
 	deployer cluster.StackDeployer,
 	provisioner *cluster.OpenObserveProvisioner,
 	configDir, version string,
-) service.TLSService {
-	return &TLS{
+) *Local {
+	return &Local{
 		Store:       st,
 		Cipher:      cipher,
 		Docker:      dc,
@@ -44,7 +42,10 @@ func NewTLS(
 	}
 }
 
-func (t *TLS) deps() cluster.SiteCertDeps {
+// Compile-time proof that Local implements the port.
+var _ Service = (*Local)(nil)
+
+func (t *Local) deps() cluster.SiteCertDeps {
 	return cluster.SiteCertDeps{
 		Store:       t.Store,
 		Cipher:      t.Cipher,
@@ -56,7 +57,7 @@ func (t *TLS) deps() cluster.SiteCertDeps {
 
 // ready reports whether the adapter can refresh Traefik (it needs the
 // encryption key to materialise the versioned Swarm secrets).
-func (t *TLS) ready() error {
+func (t *Local) ready() error {
 	if t.Cipher == nil {
 		return errors.New("encryption key unavailable; cannot refresh Traefik")
 	}
@@ -64,23 +65,31 @@ func (t *TLS) ready() error {
 }
 
 // SiteCert applies the cluster's own (main-domain) certificate.
-func (t *TLS) SiteCert(ctx context.Context, domain, certPEM, keyPEM string) (*store.SiteCertRow, error) {
+func (t *Local) SiteCert(ctx context.Context, domain, certPEM, keyPEM string) (*Cert, error) {
 	if err := t.ready(); err != nil {
 		return nil, err
 	}
-	return cluster.ApplyCert(ctx, t.deps(), t.ConfigDir, t.Version, domain, certPEM, keyPEM, true)
+	row, err := cluster.ApplyCert(ctx, t.deps(), t.ConfigDir, t.Version, domain, certPEM, keyPEM, true)
+	if err != nil {
+		return nil, err
+	}
+	return rowModel(row), nil
 }
 
 // ApplyHostCert applies a per-host (customer-domain) certificate.
-func (t *TLS) ApplyHostCert(ctx context.Context, host, certPEM, keyPEM string, refresh bool) (*store.SiteCertRow, error) {
+func (t *Local) ApplyHostCert(ctx context.Context, host, certPEM, keyPEM string, refresh bool) (*Cert, error) {
 	if err := t.ready(); err != nil {
 		return nil, err
 	}
-	return cluster.ApplyCert(ctx, t.deps(), t.ConfigDir, t.Version, host, certPEM, keyPEM, refresh)
+	row, err := cluster.ApplyCert(ctx, t.deps(), t.ConfigDir, t.Version, host, certPEM, keyPEM, refresh)
+	if err != nil {
+		return nil, err
+	}
+	return rowModel(row), nil
 }
 
 // RemoveHostCert removes a per-host certificate.
-func (t *TLS) RemoveHostCert(ctx context.Context, host string, refresh bool) error {
+func (t *Local) RemoveHostCert(ctx context.Context, host string, refresh bool) error {
 	if err := t.ready(); err != nil {
 		return err
 	}
@@ -88,26 +97,48 @@ func (t *TLS) RemoveHostCert(ctx context.Context, host string, refresh bool) err
 }
 
 // GetSiteCert returns the stored metadata for one certificate.
-func (t *TLS) GetSiteCert(ctx context.Context, domain string) (*store.SiteCertRow, error) {
+func (t *Local) GetSiteCert(ctx context.Context, domain string) (*Cert, error) {
 	row, err := t.Store.GetSiteCert(ctx, domain)
 	if err != nil {
 		return nil, err
 	}
-	return &row, nil
+	return rowModel(&row), nil
 }
 
 // List returns all stored certificates (main + per-host rows).
-func (t *TLS) List(ctx context.Context) ([]store.SiteCertRow, error) {
+func (t *Local) List(ctx context.Context) ([]Cert, error) {
 	rows, err := t.Store.ListSiteCerts(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]store.SiteCertRow, 0, len(rows))
-	out = append(out, rows...)
-	return out, nil
+	return rowModels(rows), nil
 }
 
 // MainDomain is the cluster's own domain (its default certificate).
-func (t *TLS) MainDomain(ctx context.Context) (string, error) {
+func (t *Local) MainDomain(ctx context.Context) (string, error) {
 	return cluster.PersistedDomain(ctx, t.Store), nil
+}
+
+// rowModel converts a persisted site_certs row into the domain model.
+func rowModel(row *store.SiteCertRow) *Cert {
+	return &Cert{
+		Domain:     row.Domain,
+		CertSecret: row.CertSecret,
+		KeySecret:  row.KeySecret,
+		NotBefore:  row.NotBefore,
+		NotAfter:   row.NotAfter,
+		SANs:       row.SANs,
+		CertHash:   row.CertHash,
+		KeyHash:    row.KeyHash,
+		CreatedAt:  row.CreatedAt,
+		UpdatedAt:  row.UpdatedAt,
+	}
+}
+
+func rowModels(rows []store.SiteCertRow) []Cert {
+	out := make([]Cert, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, *rowModel(&r))
+	}
+	return out
 }

@@ -11,12 +11,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/certs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -272,9 +271,9 @@ func siteCertDeps(cmd *cobra.Command, cfg *config.Config, domain string) (*store
 	return st, cipher, dc, nil
 }
 
-// tlsService builds the local TLS service adapter used by the tls commands.
-func tlsService(cmd *cobra.Command, st *store.Store, cipher *credentials.Cipher, dc docker.Client, cfg *config.Config) service.TLSService {
-	return impl.NewTLS(st, cipher, dc, cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
+// tlsService builds the local certs service adapter used by the tls commands.
+func tlsService(cmd *cobra.Command, st *store.Store, cipher *credentials.Cipher, dc docker.Client, cfg *config.Config) certs.Service {
+	return certs.NewLocal(st, cipher, dc, cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
 		ooProvisioner(st, cipher, cmd.OutOrStdout(), cluster.PersistedDomain(cmd.Context(), st)),
 		cfg.ConfigDir(), buildinfo.Version)
 }

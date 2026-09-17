@@ -1,15 +1,60 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
+
+// openServerStore opens a fresh store in a temp dir for one test.
+func openServerStore(t *testing.T) *store.Store {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
+}
+
+// doJSON performs a JSON request against the server with an optional bearer
+// token and optional body, returning the raw response.
+func doJSON(t *testing.T, method, url, token string, body any) *http.Response {
+	t.Helper()
+	var rd io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		rd = bytes.NewReader(b)
+	}
+	req, err := http.NewRequest(method, url, rd)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	return resp
+}
 
 // TestRenderedConfigsAPI exercises GET /api/cluster/rendered — served by the
 // configs handler via ListRendered: auth and the read-only listing of the

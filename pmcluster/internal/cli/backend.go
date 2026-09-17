@@ -8,12 +8,12 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/certs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
 
@@ -101,7 +101,7 @@ func backendBackups(cmd *cobra.Command) (backups.Service, func(), error) {
 	return backups.NewLocal(st, backups.LocalTrigger{Store: st}.Trigger), func() { _ = st.Close() }, nil
 }
 
-func backendTLS(cmd *cobra.Command) (service.TLSService, func(), error) {
+func backendTLS(cmd *cobra.Command) (certs.Service, func(), error) {
 	if rc := remoteClient(cmd); rc != nil {
 		return remote.NewTLS(rc), func() {}, nil
 	}

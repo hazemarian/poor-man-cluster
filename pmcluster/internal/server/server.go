@@ -22,6 +22,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/certs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
@@ -56,12 +57,12 @@ type Deps struct {
 
 	// HostCerts exposes per-host TLS cert management under /api/tls/hosts.
 	// Optional; when nil those routes are omitted.
-	HostCerts *HostCertService
+	HostCerts *certs.HTTP
 
 	// SiteCert exposes management of the cluster's own (main-domain) TLS
 	// certificate under /api/tls/site. Optional; when nil those routes are
 	// omitted.
-	SiteCert *SiteCertService
+	SiteCert *certs.HTTP
 
 	// Update exposes POST /api/update, which re-runs `cluster update`
 	// (content-aware re-apply of the platform stacks). Optional; when nil
@@ -135,10 +136,10 @@ func New(d Deps) http.Handler {
 			bh.MountStackScoped(r)
 		}
 		if d.HostCerts != nil {
-			d.HostCerts.Mount(r)
+			d.HostCerts.MountHosts(r)
 		}
 		if d.SiteCert != nil {
-			d.SiteCert.Mount(r)
+			d.SiteCert.MountSite(r)
 		}
 		if d.Update != nil {
 			d.Update.Mount(r)

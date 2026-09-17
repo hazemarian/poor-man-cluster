@@ -6,15 +6,17 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/certs"
 )
 
-// TLS is the HTTP adapter for service.TLSService.
+// TLS is the HTTP adapter for certs.Service.
 type TLS struct{ c *Client }
 
-// NewTLS builds the remote TLS adapter.
-func NewTLS(c *Client) service.TLSService { return &TLS{c: c} }
+// NewTLS builds the remote certs adapter.
+func NewTLS(c *Client) certs.Service { return &TLS{c: c} }
+
+// Compile-time proof that TLS implements the port.
+var _ certs.Service = (*TLS)(nil)
 
 type certDTO struct {
 	Domain     string   `json:"domain,omitempty"`
@@ -34,7 +36,7 @@ type certListDTO struct {
 	Hosts []certDTO `json:"hosts"`
 }
 
-func (a *TLS) SiteCert(ctx context.Context, domain, certPEM, keyPEM string) (*store.SiteCertRow, error) {
+func (a *TLS) SiteCert(ctx context.Context, domain, certPEM, keyPEM string) (*certs.Cert, error) {
 	var out certDTO
 	if err := a.c.do(ctx, http.MethodPut, "/tls/site", map[string]string{
 		"cert": certPEM,
@@ -42,10 +44,10 @@ func (a *TLS) SiteCert(ctx context.Context, domain, certPEM, keyPEM string) (*st
 	}, &out); err != nil {
 		return nil, err
 	}
-	return out.row(), nil
+	return out.model(), nil
 }
 
-func (a *TLS) ApplyHostCert(ctx context.Context, host, certPEM, keyPEM string, refresh bool) (*store.SiteCertRow, error) {
+func (a *TLS) ApplyHostCert(ctx context.Context, host, certPEM, keyPEM string, refresh bool) (*certs.Cert, error) {
 	var out certDTO
 	if err := a.c.do(ctx, http.MethodPut, "/tls/hosts/"+url.PathEscape(host), map[string]string{
 		"cert": certPEM,
@@ -53,7 +55,7 @@ func (a *TLS) ApplyHostCert(ctx context.Context, host, certPEM, keyPEM string, r
 	}, &out); err != nil {
 		return nil, err
 	}
-	return out.row(), nil
+	return out.model(), nil
 }
 
 func (a *TLS) RemoveHostCert(ctx context.Context, host string, refresh bool) error {
@@ -62,24 +64,24 @@ func (a *TLS) RemoveHostCert(ctx context.Context, host string, refresh bool) err
 
 // GetSiteCert returns the cluster's main certificate. The API serves the
 // persisted cluster domain, so the domain argument is informational.
-func (a *TLS) GetSiteCert(ctx context.Context, domain string) (*store.SiteCertRow, error) {
+func (a *TLS) GetSiteCert(ctx context.Context, domain string) (*certs.Cert, error) {
 	var out certDTO
 	if err := a.c.do(ctx, http.MethodGet, "/tls/site", nil, &out); err != nil {
 		return nil, err
 	}
-	return out.row(), nil
+	return out.model(), nil
 }
 
 // List returns the per-host certificates (the API already excludes the
 // cluster's own domain server-side).
-func (a *TLS) List(ctx context.Context) ([]store.SiteCertRow, error) {
+func (a *TLS) List(ctx context.Context) ([]certs.Cert, error) {
 	var out certListDTO
 	if err := a.c.do(ctx, http.MethodGet, "/tls/hosts", nil, &out); err != nil {
 		return nil, err
 	}
-	rows := make([]store.SiteCertRow, 0, len(out.Hosts))
+	rows := make([]certs.Cert, 0, len(out.Hosts))
 	for _, d := range out.Hosts {
-		rows = append(rows, *d.row())
+		rows = append(rows, *d.model())
 	}
 	return rows, nil
 }
@@ -88,13 +90,13 @@ func (a *TLS) List(ctx context.Context) ([]store.SiteCertRow, error) {
 func (a *TLS) MainDomain(ctx context.Context) (string, error) {
 	row, err := a.GetSiteCert(ctx, "")
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 	return row.Domain, nil
 }
 
-func (d certDTO) row() *store.SiteCertRow {
-	return &store.SiteCertRow{
+func (d certDTO) model() *certs.Cert {
+	return &certs.Cert{
 		Domain:     d.Domain,
 		CertSecret: d.CertSecret,
 		KeySecret:  d.KeySecret,

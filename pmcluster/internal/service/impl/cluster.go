@@ -1,3 +1,4 @@
+// Package impl holds the local adapters that implement the service ports.
 package impl
 
 import (

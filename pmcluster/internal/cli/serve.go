@@ -16,6 +16,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/certs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
@@ -112,7 +113,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		log.Warn().Err(cipherErr).Msg("encryption key not available; /webhook/* disabled")
 	}
 
-	tlsSvc := impl.NewTLS(st, cipher, dc, deployer,
+	tlsSvc := certs.NewLocal(st, cipher, dc, deployer,
 		ooProvisioner(st, cipher, io.Discard, cluster.PersistedDomain(context.Background(), st)),
 		cfg.ConfigDir(), buildinfo.Version)
 
@@ -123,8 +124,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		DeployService: deploySvc,
 		Cipher:        cipher,
 		Backups:       backups.NewLocal(st, backups.LocalTrigger{Store: st}.Trigger),
-		HostCerts:     &server.HostCertService{Svc: tlsSvc},
-		SiteCert:      &server.SiteCertService{Svc: tlsSvc},
+		HostCerts:     &certs.HTTP{Svc: tlsSvc},
+		SiteCert:      &certs.HTTP{Svc: tlsSvc},
 		Update: &server.UpdateService{
 			Update: func(ctx context.Context) (*cluster.UpdateResult, error) {
 				if cipher == nil {
