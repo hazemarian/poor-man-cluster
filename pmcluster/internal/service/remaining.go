@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -52,7 +53,8 @@ type BackupsService interface {
 type CredentialsService interface {
 	Get(ctx context.Context, name string) (*store.ManagedCredential, error)
 	List(ctx context.Context) ([]*store.ManagedCredential, error)
-	Rotate(ctx context.Context, name string) (password string, err error)
+	Reveal(ctx context.Context, name string) (string, error)
+	Rotate(ctx context.Context, name string) (*cluster.ManagedCredential, error)
 }
 
 // StacksService is the read side of deployed stacks.

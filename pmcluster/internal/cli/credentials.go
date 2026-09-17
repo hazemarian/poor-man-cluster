@@ -13,6 +13,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -68,7 +69,7 @@ func runCredsList(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	creds, err := st.ListCredentials(cmd.Context())
+	creds, err := impl.NewCredentials(st, nil, nil).List(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("list credentials: %w", err)
 	}
@@ -100,19 +101,20 @@ func runCredsShow(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	c, err := st.GetCredential(cmd.Context(), name)
+	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
+	if err != nil {
+		return fmt.Errorf("open encryption key: %w", err)
+	}
+	svc := impl.NewCredentials(st, cipher, nil)
+
+	c, err := svc.Get(cmd.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrCredentialNotFound) {
 			return fmt.Errorf("credential %q not found (try `pmcluster credentials list`)", name)
 		}
 		return fmt.Errorf("get credential: %w", err)
 	}
-
-	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
-	if err != nil {
-		return fmt.Errorf("open encryption key: %w", err)
-	}
-	plain, err := cipher.Decrypt(c.PasswordCiphertext)
+	plain, err := svc.Reveal(cmd.Context(), name)
 	if err != nil {
 		return fmt.Errorf("decrypt: %w", err)
 	}
@@ -147,7 +149,7 @@ func runCredsRotate(cmd *cobra.Command, args []string) error {
 		Docker:   dc,
 		Deployer: cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
 	}
-	rotated, err := mgr.Rotate(cmd.Context(), name)
+	rotated, err := impl.NewCredentials(st, cipher, mgr).Rotate(cmd.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrCredentialNotFound) {
 			return fmt.Errorf("credential %q not found", name)
