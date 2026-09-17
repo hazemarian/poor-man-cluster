@@ -9,6 +9,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/workflow"
 )
 
 type UpInput struct {
@@ -90,7 +91,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		otelConfigCreated     bool
 	)
 
-	wf := NewWorkflow(out)
+	wf := workflow.NewWorkflow(out)
 	wf.Add("Preflight: Docker reachable, Swarm active, this node is a manager", func(ctx context.Context) error {
 		return Preflight(ctx, deps.Docker)
 	})

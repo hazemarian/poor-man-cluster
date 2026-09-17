@@ -1,4 +1,7 @@
-package cluster
+// Package workflow runs named steps in order with visible progress. It is
+// the shared engine behind cluster up, cluster update and the deploy
+// pipeline.
+package workflow
 
 import (
 	"context"
@@ -14,10 +17,10 @@ type Step struct {
 }
 
 // Workflow runs named steps in order, streaming a "▶ <name>" progress line
-// per step to its output. It is the shared engine behind `cluster up` and
-// `cluster update`: each phase of those operations is one step, so progress
-// is visible, cancellation is honoured via ctx, and failures point at the
-// exact phase that went wrong.
+// per step to its output. It is the shared engine behind `cluster up`,
+// `cluster update` and the deploy pipeline: each phase of those operations
+// is one step, so progress is visible, cancellation is honoured via ctx, and
+// failures point at the exact phase that went wrong.
 type Workflow struct {
 	out   io.Writer
 	steps []Step

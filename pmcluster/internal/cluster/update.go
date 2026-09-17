@@ -10,6 +10,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/workflow"
 )
 
 // UpdateInput carries the config-dir + build version for `cluster update`.
@@ -73,7 +74,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		render       RenderInput
 	)
 
-	wf := NewWorkflow(out)
+	wf := workflow.NewWorkflow(out)
 	wf.Add("Preflight: Docker reachable, Swarm active", func(ctx context.Context) error {
 		return Preflight(ctx, deps.Docker)
 	})

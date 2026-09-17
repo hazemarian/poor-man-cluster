@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,8 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/workflow"
+	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
 )
 
 // Instruments are lazily-initialised so importing this package never
@@ -95,6 +98,9 @@ type Service struct {
 	// Resolver resolves `env: X: config(name)` references against the
 	// DB config store. Nil disables config() resolution (translate error).
 	Resolver manifest.EnvResolver
+	// Stdout receives workflow step markers (▶ ...) for the deploy pipeline.
+	// Nil disables the output.
+	Stdout io.Writer
 }
 
 func (s *Service) Deploy(ctx context.Context, p Payload) (res *DeployResult, retErr error) {
@@ -129,58 +135,86 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *DeployResult, ret
 		return nil, fmt.Errorf("manifest: required")
 	}
 
-	app, err := manifest.Parse([]byte(p.Manifest))
-	if err != nil {
-		return nil, fmt.Errorf("parse manifest: %w", err)
+	out := io.Discard
+	if s.Stdout != nil {
+		out = s.Stdout
 	}
-	if p.AppName != "" {
-		app.Name = p.AppName
-	}
-	if p.Version != "" {
-		app.Version = p.Version
-	}
-	stackName = app.Name
-	if err := manifest.Interpolate(app); err != nil {
-		return nil, fmt.Errorf("interpolate: %w", err)
-	}
-	if err := manifest.Validate(app); err != nil {
-		return nil, fmt.Errorf("validate: %w", err)
-	}
+	wf := workflow.NewWorkflow(out)
 
-	rendered, err := manifest.TranslateWithResolver(ctx, app, s.Resolver)
-	if err != nil {
-		return nil, fmt.Errorf("translate: %w", err)
-	}
+	var (
+		app      *dsl.App
+		rendered []byte
+		revision int64
+	)
 
-	revision, err := s.Store.NextFreeRevision(ctx, app.Name, time.Now().Unix())
-	if err != nil {
-		return nil, fmt.Errorf("assign revision: %w", err)
-	}
-	payloadJSON, _ := json.Marshal(p)
-	rev := &store.StackRevision{
-		StackName:    app.Name,
-		Revision:     revision,
-		SourceYAML:   p.Manifest,
-		RenderedYAML: string(rendered),
-		PayloadJSON:  sql.NullString{String: string(payloadJSON), Valid: true},
-	}
-	if err := s.Store.RecordDeploy(ctx, rev, p.RepoURL); err != nil {
-		return nil, fmt.Errorf("record deploy: %w", err)
-	}
-
-	if app.BackupBeforeDeploy {
-		backupErr := s.runPreDeployBackup(ctx, app.Name, revision)
-		if backupErr != nil && app.StrictBackup {
-			return nil, fmt.Errorf("pre-deploy backup failed (strict_backup is set): %w", backupErr)
+	wf.Add("Parsing manifest (DSL)", func(ctx context.Context) error {
+		parsed, err := manifest.Parse([]byte(p.Manifest))
+		if err != nil {
+			return fmt.Errorf("parse manifest: %w", err)
 		}
+		if p.AppName != "" {
+			parsed.Name = p.AppName
+		}
+		if p.Version != "" {
+			parsed.Version = p.Version
+		}
+		stackName = parsed.Name
+		app = parsed
+		return nil
+	})
+	wf.Add("Interpolating and validating manifest", func(ctx context.Context) error {
+		if err := manifest.Interpolate(app); err != nil {
+			return fmt.Errorf("interpolate: %w", err)
+		}
+		if err := manifest.Validate(app); err != nil {
+			return fmt.Errorf("validate: %w", err)
+		}
+		return nil
+	})
+	wf.Add("Translating to Compose (resolving configs/secrets)", func(ctx context.Context) error {
+		y, err := manifest.TranslateWithResolver(ctx, app, s.Resolver)
+		if err != nil {
+			return fmt.Errorf("translate: %w", err)
+		}
+		rendered = y
+		return nil
+	})
+	wf.Add("Recording revision", func(ctx context.Context) error {
+		next, err := s.Store.NextFreeRevision(ctx, app.Name, time.Now().Unix())
+		if err != nil {
+			return fmt.Errorf("assign revision: %w", err)
+		}
+		revision = next
+		payloadJSON, _ := json.Marshal(p)
+		rev := &store.StackRevision{
+			StackName:    app.Name,
+			Revision:     revision,
+			SourceYAML:   p.Manifest,
+			RenderedYAML: string(rendered),
+			PayloadJSON:  sql.NullString{String: string(payloadJSON), Valid: true},
+		}
+		if err := s.Store.RecordDeploy(ctx, rev, p.RepoURL); err != nil {
+			return fmt.Errorf("record deploy: %w", err)
+		}
+		return nil
+	})
+	wf.Add("Deploying stack to the swarm", func(ctx context.Context) error {
+		if app.BackupBeforeDeploy {
+			backupErr := s.runPreDeployBackup(ctx, app.Name, revision)
+			if backupErr != nil && app.StrictBackup {
+				return fmt.Errorf("pre-deploy backup failed (strict_backup is set): %w", backupErr)
+			}
+		}
+		if err := s.Deployer.DeployStack(ctx, app.Name, rendered); err != nil {
+			return fmt.Errorf("docker stack deploy: %w", err)
+		}
+		_ = s.Deployer.PruneStaleContainers(ctx, app.Name, "10m")
+		return nil
+	})
+
+	if err := wf.Run(ctx); err != nil {
+		return nil, err
 	}
-
-	if err := s.Deployer.DeployStack(ctx, app.Name, rendered); err != nil {
-
-		return nil, fmt.Errorf("docker stack deploy: %w", err)
-	}
-
-	_ = s.Deployer.PruneStaleContainers(ctx, app.Name, "10m")
 
 	return &DeployResult{
 		StackName:    app.Name,
@@ -218,39 +252,62 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 		span.End()
 	}()
 
-	src, err := s.Store.GetRevision(ctx, stackName, sourceRevision)
-	if err != nil {
-		return nil, err
+	out := io.Discard
+	if s.Stdout != nil {
+		out = s.Stdout
 	}
+	wf := workflow.NewWorkflow(out)
 
-	revision, err := s.Store.NextFreeRevision(ctx, stackName, time.Now().Unix())
-	if err != nil {
-		return nil, fmt.Errorf("assign revision: %w", err)
-	}
-	rolledBackPayload, _ := json.Marshal(map[string]any{
-		"rollback_of": sourceRevision,
-		"original":    json.RawMessage(src.PayloadJSON.String),
+	var (
+		row      *store.StackRevision
+		revision int64
+	)
+
+	wf.Add("Loading source revision", func(ctx context.Context) error {
+		src, err := s.Store.GetRevision(ctx, stackName, sourceRevision)
+		if err != nil {
+			return err
+		}
+		row = src
+		return nil
+	})
+	wf.Add("Recording rollback revision", func(ctx context.Context) error {
+		next, err := s.Store.NextFreeRevision(ctx, stackName, time.Now().Unix())
+		if err != nil {
+			return fmt.Errorf("assign revision: %w", err)
+		}
+		revision = next
+		rolledBackPayload, _ := json.Marshal(map[string]any{
+			"rollback_of": sourceRevision,
+			"original":    json.RawMessage(row.PayloadJSON.String),
+		})
+		rev := &store.StackRevision{
+			StackName:    stackName,
+			Revision:     revision,
+			SourceYAML:   row.SourceYAML,
+			RenderedYAML: row.RenderedYAML,
+			PayloadJSON:  sql.NullString{String: string(rolledBackPayload), Valid: true},
+		}
+		if err := s.Store.RecordDeploy(ctx, rev, ""); err != nil {
+			return fmt.Errorf("record rollback: %w", err)
+		}
+		return nil
+	})
+	wf.Add("Re-deploying stack from stored YAML", func(ctx context.Context) error {
+		if err := s.Deployer.DeployStack(ctx, stackName, []byte(row.RenderedYAML)); err != nil {
+			return fmt.Errorf("docker stack deploy (rollback): %w", err)
+		}
+		return nil
 	})
 
-	rev := &store.StackRevision{
-		StackName:    stackName,
-		Revision:     revision,
-		SourceYAML:   src.SourceYAML,
-		RenderedYAML: src.RenderedYAML,
-		PayloadJSON:  sql.NullString{String: string(rolledBackPayload), Valid: true},
-	}
-	if err := s.Store.RecordDeploy(ctx, rev, ""); err != nil {
-		return nil, fmt.Errorf("record rollback: %w", err)
-	}
-
-	if err := s.Deployer.DeployStack(ctx, stackName, []byte(src.RenderedYAML)); err != nil {
-		return nil, fmt.Errorf("docker stack deploy (rollback): %w", err)
+	if err := wf.Run(ctx); err != nil {
+		return nil, err
 	}
 
 	return &DeployResult{
 		StackName:    stackName,
 		Revision:     revision,
-		RenderedYAML: []byte(src.RenderedYAML),
+		RenderedYAML: []byte(row.RenderedYAML),
 	}, nil
 }
 
@@ -285,42 +342,55 @@ func (s *Service) Undeploy(ctx context.Context, stackName string) (retErr error)
 	}()
 
 	if _, err := s.Store.GetStack(ctx, stackName); err != nil {
-		return err // ErrStackNotFound → 404 for unknown stacks
+		return err // ErrStackNotFound → 404 for unknown stacks (before any swarm mutation)
 	}
 
-	// Collect the swarm assets the stack owns BEFORE removing its services:
-	// the secrets its services mount and the named volumes docker stack rm
-	// leaves behind (labelled com.docker.stack.namespace=<stack>).
+	out := io.Discard
+	if s.Stdout != nil {
+		out = s.Stdout
+	}
+	wf := workflow.NewWorkflow(out)
+
 	var volumes, secretNames []string
-	if s.Docker != nil {
-		var err error
-		secretNames, err = s.Docker.StackSecretNames(ctx, stackName)
+
+	wf.Add("Collecting stack secrets and volumes", func(ctx context.Context) error {
+		if s.Docker == nil {
+			return nil
+		}
+		names, err := s.Docker.StackSecretNames(ctx, stackName)
 		if err != nil {
 			return fmt.Errorf("collect stack secrets: %w", err)
 		}
-		volumes, err = s.Docker.VolumeList(ctx, docker.StackNamespaceLabel, stackName)
+		vs, err := s.Docker.VolumeList(ctx, docker.StackNamespaceLabel, stackName)
 		if err != nil {
 			return fmt.Errorf("collect stack volumes: %w", err)
 		}
-	}
-
-	if err := s.Deployer.RemoveStack(ctx, stackName); err != nil {
-		return fmt.Errorf("docker stack rm: %w", err)
-	}
-
-	if s.Docker != nil {
-		for _, v := range volumes {
-			_ = s.Docker.VolumeRemove(ctx, v)
+		secretNames, volumes = names, vs
+		return nil
+	})
+	wf.Add("Removing stack services and swarm assets", func(ctx context.Context) error {
+		if err := s.Deployer.RemoveStack(ctx, stackName); err != nil {
+			return fmt.Errorf("docker stack rm: %w", err)
 		}
-		for _, n := range secretNames {
-			_ = s.Docker.SecretRemove(ctx, n)
+		if s.Docker != nil {
+			for _, v := range volumes {
+				_ = s.Docker.VolumeRemove(ctx, v)
+			}
+			for _, n := range secretNames {
+				_ = s.Docker.SecretRemove(ctx, n)
+			}
 		}
-	}
+		return nil
+	})
+	wf.Add("Deleting stack record", func(ctx context.Context) error {
+		if err := s.Store.DeleteStack(ctx, stackName); err != nil {
+			return fmt.Errorf("delete stack record: %w", err)
+		}
+		return nil
+	})
 
-	// Last: the DB record — stack + revisions (FK cascade) + the stack's
-	// service-scope configs and secrets.
-	if err := s.Store.DeleteStack(ctx, stackName); err != nil {
-		return fmt.Errorf("delete stack record: %w", err)
+	if err := wf.Run(ctx); err != nil {
+		return err
 	}
 	return nil
 }
