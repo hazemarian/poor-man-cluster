@@ -6,11 +6,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
 )
 
 // remoteClient returns an HTTP client for the daemon API when remote mode is
@@ -75,7 +76,7 @@ func backendWebhooks(cmd *cobra.Command) (service.WebhooksService, func(), error
 	return impl.NewWebhooks(st, cipher), func() { _ = st.Close() }, nil
 }
 
-func backendAPIKeys(cmd *cobra.Command) (service.APIKeysService, func(), error) {
+func backendAPIKeys(cmd *cobra.Command) (apikeys.Service, func(), error) {
 	if rc := remoteClient(cmd); rc != nil {
 		return remote.NewAPIKeys(rc), func() {}, nil
 	}
@@ -83,7 +84,7 @@ func backendAPIKeys(cmd *cobra.Command) (service.APIKeysService, func(), error) 
 	if err != nil {
 		return nil, nil, err
 	}
-	return impl.NewAPIKeys(st), func() { _ = st.Close() }, nil
+	return apikeys.NewLocal(st), func() { _ = st.Close() }, nil
 }
 
 func backendTLS(cmd *cobra.Command) (service.TLSService, func(), error) {

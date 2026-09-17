@@ -1,10 +1,9 @@
-package impl
+package apikeys
 
 import (
 	"context"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -12,20 +11,20 @@ import (
 // with; it must never be deletable.
 const edgeAPITokenUser = "edge"
 
-// APIKeys is the local adapter for the API-key (daemon user) use case.
-type APIKeys struct {
+// Local is the on-node adapter backed by the SQLite store.
+type Local struct {
 	Store *store.Store
 }
 
-// NewAPIKeys wires the local API-key adapter.
-func NewAPIKeys(st *store.Store) service.APIKeysService {
-	return &APIKeys{Store: st}
+// NewLocal wires the local api-keys adapter.
+func NewLocal(st *store.Store) Service {
+	return &Local{Store: st}
 }
 
 // Create mints a pmc_<tokenID>_<secret> bearer token and stores only the
 // token id plus an argon2id hash of the secret. The plaintext token is
 // returned exactly once.
-func (a *APIKeys) Create(ctx context.Context, name string) (int64, string, error) {
+func (a *Local) Create(ctx context.Context, name string) (int64, string, error) {
 	token, _ := auth.GenerateToken()
 	tokenID, secret := auth.SplitToken(token)
 	hash, _ := auth.HashToken(secret)
@@ -37,22 +36,30 @@ func (a *APIKeys) Create(ctx context.Context, name string) (int64, string, error
 }
 
 // List returns all daemon users (API keys).
-func (a *APIKeys) List(ctx context.Context) ([]store.UserRow, error) {
-	return a.Store.ListUsers(ctx)
+func (a *Local) List(ctx context.Context) ([]APIKey, error) {
+	rows, err := a.Store.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]APIKey, 0, len(rows))
+	for _, r := range rows {
+		keys = append(keys, APIKey{ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt})
+	}
+	return keys, nil
 }
 
 // Delete removes a daemon user by id. The operator-console user and the
 // caller's own key are protected.
-func (a *APIKeys) Delete(ctx context.Context, id int64) error {
+func (a *Local) Delete(ctx context.Context, id int64) error {
 	user, err := a.Store.UserByID(ctx, id)
 	if err != nil {
 		return err
 	}
 	if user.Name == edgeAPITokenUser {
-		return service.ErrEdgeUserProtected
+		return ErrEdgeUserProtected
 	}
 	if me := auth.FromContext(ctx); me != nil && me.ID == id {
-		return service.ErrSelfDelete
+		return ErrSelfDelete
 	}
 	return a.Store.DeleteUser(ctx, id)
 }

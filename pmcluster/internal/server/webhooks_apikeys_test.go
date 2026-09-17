@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
@@ -41,7 +42,7 @@ func newKeysServer(t *testing.T) *httptest.Server {
 		Configs:  impl.NewConfigs(st),
 		Secrets:  impl.NewSecrets(st, ciph),
 		Webhooks: &WebhookService{Svc: impl.NewWebhooks(st, ciph)},
-		APIKeys:  &APIKeyService{Svc: impl.NewAPIKeys(st)},
+		APIKeys:  apikeys.NewLocal(st),
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -308,7 +309,7 @@ func TestAPIKeyDeleteGuards(t *testing.T) {
 		Lookup:  &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
 		Store:   st,
 		Cipher:  ciph,
-		APIKeys: &APIKeyService{Svc: impl.NewAPIKeys(st)},
+		APIKeys: apikeys.NewLocal(st),
 	}))
 	t.Cleanup(srv.Close)
 	base := srv.URL + "/api/api_keys"

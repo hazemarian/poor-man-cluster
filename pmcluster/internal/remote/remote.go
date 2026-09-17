@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
@@ -106,9 +107,9 @@ func mapError(status int, body string) error {
 	case status == http.StatusConflict && has("secret"):
 		return store.ErrSecretExists
 	case status == http.StatusConflict && has("edge"):
-		return service.ErrEdgeUserProtected
+		return apikeys.ErrEdgeUserProtected
 	case status == http.StatusConflict && has("authenticated"):
-		return service.ErrSelfDelete
+		return apikeys.ErrSelfDelete
 	case status == http.StatusServiceUnavailable:
 		return service.ErrBackupTriggerNotConfigured
 	}

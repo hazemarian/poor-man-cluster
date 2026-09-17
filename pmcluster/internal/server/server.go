@@ -19,6 +19,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/api"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
@@ -74,7 +75,7 @@ type Deps struct {
 
 	// APIKeys exposes API-token (user) management under /api/api_keys.
 	// Optional; when nil those routes are omitted.
-	APIKeys *APIKeyService
+	APIKeys apikeys.Service
 
 	// Configs exposes config CRUD via the configs service. Optional; when
 	// nil those routes are omitted.
@@ -146,7 +147,7 @@ func New(d Deps) http.Handler {
 			d.Webhooks.Mount(r)
 		}
 		if d.APIKeys != nil {
-			d.APIKeys.Mount(r)
+			(&apikeys.HTTP{Svc: d.APIKeys}).Mount(r)
 		}
 		if d.Secrets != nil {
 			(&SecretService{Svc: d.Secrets}).Mount(r)

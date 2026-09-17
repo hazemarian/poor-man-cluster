@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backup"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
@@ -139,7 +140,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		Rendered: &server.RenderedConfigService{Store: st},
 		Configs:  impl.NewConfigs(st),
 		Webhooks: &server.WebhookService{Svc: impl.NewWebhooks(st, cipher)},
-		APIKeys:  &server.APIKeyService{Svc: impl.NewAPIKeys(st)},
+		APIKeys:  apikeys.NewLocal(st),
 	}
 	if cipher != nil {
 		deps.Secrets = impl.NewSecrets(st, cipher)

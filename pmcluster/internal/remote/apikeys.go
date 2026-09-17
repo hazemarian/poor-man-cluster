@@ -5,15 +5,14 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 )
 
-// APIKeys is the HTTP adapter for service.APIKeysService.
+// APIKeys is the HTTP adapter for the apikeys domain Service port.
 type APIKeys struct{ c *Client }
 
 // NewAPIKeys builds the remote api-keys adapter.
-func NewAPIKeys(c *Client) service.APIKeysService { return &APIKeys{c: c} }
+func NewAPIKeys(c *Client) apikeys.Service { return &APIKeys{c: c} }
 
 type apiKeyDTO struct {
 	ID        int64  `json:"id"`
@@ -39,14 +38,14 @@ func (a *APIKeys) Create(ctx context.Context, name string) (int64, string, error
 	return out.ID, out.Token, nil
 }
 
-func (a *APIKeys) List(ctx context.Context) ([]store.UserRow, error) {
+func (a *APIKeys) List(ctx context.Context) ([]apikeys.APIKey, error) {
 	var out apiKeyListDTO
 	if err := a.c.do(ctx, http.MethodGet, "/api_keys", nil, &out); err != nil {
 		return nil, err
 	}
-	keys := make([]store.UserRow, 0, len(out.Keys))
+	keys := make([]apikeys.APIKey, 0, len(out.Keys))
 	for _, d := range out.Keys {
-		keys = append(keys, store.UserRow{ID: d.ID, Name: d.Name, CreatedAt: d.CreatedAt})
+		keys = append(keys, apikeys.APIKey{ID: d.ID, Name: d.Name, CreatedAt: d.CreatedAt})
 	}
 	return keys, nil
 }

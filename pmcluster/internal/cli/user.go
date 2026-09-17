@@ -3,17 +3,14 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/service/impl"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -67,52 +64,26 @@ func runUserCreate(cmd *cobra.Command, args []string) error {
 		return errors.New("name cannot be empty")
 	}
 
-	addr := ""
-	if rc := remoteClient(cmd); rc != nil {
-		svc := remote.NewAPIKeys(rc)
-		_, token, err := svc.Create(cmd.Context(), name)
-		if err != nil {
-			if errors.Is(err, store.ErrUserExists) {
-				return fmt.Errorf("user %q already exists", name)
-			}
-			return err
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), `
-✅ User %q created.
-
-🔑 Bearer token (shown once — save it now):
-
-   %s
-
-   curl -H "Authorization: Bearer %s" %s/api/me
-`, name, token, token, apiURL)
-		return nil
-	}
-
-	cfg, err := config.Load(configPath)
+	svc, closeFn, err := backendAPIKeys(cmd)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
-	}
-	addr = cfg.ListenAddr
+	defer closeFn()
 
-	st, err := store.Open(cfg.DBPath())
+	_, token, err := svc.Create(cmd.Context(), name)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
-	}
-	defer func() { _ = st.Close() }()
-
-	_, token, err := impl.NewAPIKeys(st).Create(cmd.Context(), name)
-	if err != nil {
-
 		if errors.Is(err, store.ErrUserExists) {
 			return fmt.Errorf("user %q already exists", name)
 		}
 		return err
 	}
 
+	base := ""
+	if rc := remoteClient(cmd); rc != nil {
+		base = apiURL
+	} else if cfg := loadConfig(cmd); cfg != nil {
+		base = "http://" + cfg.ListenAddr
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), `
 ✅ User %q created.
 
@@ -120,44 +91,28 @@ func runUserCreate(cmd *cobra.Command, args []string) error {
 
    %s
 
-   curl -H "Authorization: Bearer %s" http://%s/api/me
-`, name, token, token, addr)
+   curl -H "Authorization: Bearer %s" %s/api/me
+`, name, token, token, base)
 	return nil
 }
 
 // runUserList prints each API user's id/name/created without any token
 // material (tokens are hashed at rest and never returned on read).
 func runUserList(cmd *cobra.Command, _ []string) error {
-	if rc := remoteClient(cmd); rc != nil {
-		users, err := remote.NewAPIKeys(rc).List(cmd.Context())
-		if err != nil {
-			return fmt.Errorf("list users: %w", err)
-		}
-		return printUsers(cmd, users)
-	}
-
-	cfg, err := config.Load(configPath)
+	svc, closeFn, err := backendAPIKeys(cmd)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
-	}
+	defer closeFn()
 
-	st, err := store.Open(cfg.DBPath())
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
-	}
-	defer func() { _ = st.Close() }()
-
-	users, err := impl.NewAPIKeys(st).List(cmd.Context())
+	users, err := svc.List(cmd.Context())
 	if err != nil {
 		return fmt.Errorf("list users: %w", err)
 	}
 	return printUsers(cmd, users)
 }
 
-func printUsers(cmd *cobra.Command, users []store.UserRow) error {
+func printUsers(cmd *cobra.Command, users []apikeys.APIKey) error {
 	if len(users) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "(no API users — use `pmcluster user create <name>`)")
 		return nil
