@@ -119,15 +119,20 @@
       <a href="/web/backups"  hx-get="/web/backups"   hx-target="#view" hx-push-url="true">Backups</a>
       <a href="/web/tls"      hx-get="/web/tls"       hx-target="#view" hx-push-url="true">TLS</a>
       <a href="/web/webhooks" hx-get="/web/webhooks"  hx-target="#view" hx-push-url="true">Webhooks</a>
+      {{if and (not .LoginDisabled) (eq .User.Role "admin")}}
+      <a href="/web/users"    hx-get="/web/users"     hx-target="#view" hx-push-url="true">Users</a>
       <a href="/web/apikeys"  hx-get="/web/apikeys"   hx-target="#view" hx-push-url="true">API Keys</a>
+      {{end}}
       <a href="/web/deploy"   hx-get="/web/deploy"    hx-target="#view" hx-push-url="true">Deploy</a>
       <a href="/web/settings" hx-get="/web/settings"  hx-target="#view" hx-push-url="true">Settings</a>
     </nav>
     <div class="side-foot">
       <span class="user">@{{.User.Username}}</span>
+      {{if not .LoginDisabled}}
       <form method="post" action="/web/logout">
         <button class="btn ghost" style="width:100%">Log out</button>
       </form>
+      {{end}}
     </div>
   </aside>
   <main class="content">

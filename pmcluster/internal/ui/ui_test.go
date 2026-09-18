@@ -240,12 +240,12 @@ func TestBootstrap_Setup_Login_Overview(t *testing.T) {
 		t.Fatalf("GET /setup = %d, want 200", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "Set an admin password") {
+	if !strings.Contains(string(body), "Create the admin account") {
 		t.Errorf("setup page missing prompt, got: %s", body)
 	}
 
 	resp = doRequest(t, app, http.MethodPost, "/web/setup",
-		"password=supersecret&confirm=supersecret", jar)
+		"username=admin&password=supersecret&confirm=supersecret", jar)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /setup = %d, want 200", resp.StatusCode)
 	}
@@ -289,7 +289,7 @@ func TestDeploy_SendsManifest(t *testing.T) {
 	defer daemon.Close()
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
-	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
 	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
 	form := url.Values{"app_name": {"demo"}, "manifest": {"app: demo\nversion: v1\n"}}
@@ -308,7 +308,7 @@ func TestSettings_RoundTrip(t *testing.T) {
 	defer daemon.Close()
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
-	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
 	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
 	resp := doRequest(t, app, http.MethodPost, "/web/settings",
@@ -331,7 +331,7 @@ func TestAllControllers(t *testing.T) {
 	jar := map[string]*http.Cookie{}
 
 	login := func() {
-		doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+		doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
 		doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 	}
 
@@ -393,7 +393,7 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
 
-	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
 	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
 	resp := doRequest(t, app, http.MethodGet, "/web/webhooks", "", jar)
@@ -488,7 +488,7 @@ func TestSecretsAndConfigs(t *testing.T) {
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
 
-	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
 	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
 	assertFragment := func(method, path, body string, want ...string) string {
@@ -606,7 +606,7 @@ func TestTLSMainAndHosts(t *testing.T) {
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
 
-	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
 	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
 	resp := doRequest(t, app, http.MethodGet, "/web/tls", "", jar)
@@ -682,7 +682,7 @@ func TestServicesUI(t *testing.T) {
 	jar := map[string]*http.Cookie{}
 
 	// login
-	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
 	resp := doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("login = %d, want 302", resp.StatusCode)
@@ -738,7 +738,7 @@ func TestFragmentRefreshRendersAppShell(t *testing.T) {
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
 
-	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
 	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
 	fullPage := func(path string) string {
@@ -791,5 +791,274 @@ func TestFragmentRefreshRendersAppShell(t *testing.T) {
 	}
 	if strings.Contains(b, "<style>") || strings.Contains(b, "operator console") {
 		t.Errorf("HX GET /stacks should return the bare fragment, got the shell")
+	}
+}
+
+// setupUsersAndLogin performs first-run setup (creates the admin) then logs in,
+// returning the cookie jar. Extra users can be created via POST /web/users/add.
+func setupUsersAndLogin(t *testing.T, app *App) map[string]*http.Cookie {
+	t.Helper()
+	jar := map[string]*http.Cookie{}
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
+	resp := doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("admin login = %d, want 302", resp.StatusCode)
+	}
+	return jar
+}
+
+func addUser(t *testing.T, app *App, jar map[string]*http.Cookie, username, role, password string) {
+	t.Helper()
+	form := url.Values{"username": {username}, "role": {role}, "password": {password}}
+	resp := doRequest(t, app, http.MethodPost, "/web/users/add", form.Encode(), jar)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("add user %s = %d, want 200", username, resp.StatusCode)
+	}
+}
+
+func loginAs(t *testing.T, app *App, username, password string) map[string]*http.Cookie {
+	t.Helper()
+	jar := map[string]*http.Cookie{}
+	resp := doRequest(t, app, http.MethodPost, "/web/login", "username="+username+"&password="+password, jar)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("login %s = %d, want 302 (body: %s)", username, resp.StatusCode, readBody(t, resp))
+	}
+	return jar
+}
+
+// TestRBAC_ViewerIsReadOnly verifies the viewer role can read everything but
+// cannot mutate anything (403 on operator/admin routes).
+func TestRBAC_ViewerIsReadOnly(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	adminJar := setupUsersAndLogin(t, app)
+	addUser(t, app, adminJar, "carol", "viewer", "viewerpass1")
+
+	jar := loginAs(t, app, "carol", "viewerpass1")
+
+	// Reads: 200.
+	for _, path := range []string{
+		"/web/overview", "/web/stacks", "/web/services", "/web/backups",
+		"/web/deploy", "/web/tls", "/web/webhooks", "/web/settings",
+	} {
+		resp := doRequest(t, app, http.MethodGet, path, "", jar)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("viewer GET %s = %d, want 200", path, resp.StatusCode)
+		}
+	}
+
+	// Mutations: 403.
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPost, "/web/stacks/demo/rollback"},
+		{http.MethodPost, "/web/stacks/demo/sync"},
+		{http.MethodPost, "/web/stacks/demo/remove"},
+		{http.MethodPost, "/web/services/demo/web/restart"},
+		{http.MethodPost, "/web/services/demo/web/exec"},
+		{http.MethodPost, "/web/backups"},
+		{http.MethodPost, "/web/deploy"},
+		{http.MethodPost, "/web/settings"},
+		{http.MethodPost, "/web/settings/apply"},
+		{http.MethodPost, "/web/tls"},
+		{http.MethodPost, "/web/webhooks"},
+		{http.MethodPost, "/web/apikeys"},
+		{http.MethodGet, "/web/users"},
+		{http.MethodGet, "/web/users/new"},
+	} {
+		resp := doRequest(t, app, tc.method, tc.path, "", jar)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("viewer %s %s = %d, want 403", tc.method, tc.path, resp.StatusCode)
+		}
+	}
+
+	// Admin-only reads: 403.
+	for _, path := range []string{"/web/apikeys"} {
+		resp := doRequest(t, app, http.MethodGet, path, "", jar)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("viewer GET %s = %d, want 403", path, resp.StatusCode)
+		}
+	}
+}
+
+// TestRBAC_OperatorCanMutateButNotAdmin verifies the operator role gets all
+// mutations but is blocked from admin-only surfaces (API keys, settings apply,
+// users CRUD).
+func TestRBAC_OperatorCanMutateButNotAdmin(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	adminJar := setupUsersAndLogin(t, app)
+	addUser(t, app, adminJar, "bob", "operator", "operatorpass1")
+
+	jar := loginAs(t, app, "bob", "operatorpass1")
+
+	// Operator mutations succeed.
+	for _, tc := range []struct{ method, path, body string }{
+		{http.MethodPost, "/web/stacks/demo/rollback", ""},
+		{http.MethodPost, "/web/services/demo/web/restart", ""},
+		{http.MethodPost, "/web/backups", ""},
+		{http.MethodPost, "/web/tls", "host=idlebbookfair.com&cert=-----BEGIN CERTIFICATE-----&key=-----BEGIN PRIVATE KEY-----"},
+		{http.MethodPost, "/web/webhooks", ""},
+	} {
+		resp := doRequest(t, app, tc.method, tc.path, tc.body, jar)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("operator %s %s = %d, want 200", tc.method, tc.path, resp.StatusCode)
+		}
+	}
+
+	// Admin-only surfaces: 403.
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodPost, "/web/settings/apply"},
+		{http.MethodGet, "/web/apikeys"},
+		{http.MethodPost, "/web/apikeys"},
+		{http.MethodGet, "/web/users"},
+		{http.MethodGet, "/web/users/new"},
+		{http.MethodGet, "/web/users/edit/2"},
+	} {
+		resp := doRequest(t, app, tc.method, tc.path, "", jar)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("operator %s %s = %d, want 403", tc.method, tc.path, resp.StatusCode)
+		}
+	}
+}
+
+// TestUsers_CRUDAndGuards exercises the full users admin surface: create,
+// edit (role + password), self-demote guard, self-delete guard, and
+// last-admin delete guard.
+func TestUsers_CRUDAndGuards(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	adminJar := setupUsersAndLogin(t, app)
+
+	// List shows the admin.
+	resp := doRequest(t, app, http.MethodGet, "/web/users", "", adminJar)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /users = %d, want 200", resp.StatusCode)
+	}
+	if b := readBody(t, resp); !strings.Contains(b, "admin") {
+		t.Errorf("users list missing admin; got: %s", b)
+	}
+
+	// Create with short password → 422 modal.
+	form := url.Values{"username": {"dave"}, "role": {"operator"}, "password": {"short"}}
+	resp = doRequest(t, app, http.MethodPost, "/web/users/add", form.Encode(), adminJar)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("short-password create = %d, want 422", resp.StatusCode)
+	}
+
+	// Create with bad role → 422.
+	form.Set("password", "password123")
+	form.Set("role", "root")
+	resp = doRequest(t, app, http.MethodPost, "/web/users/add", form.Encode(), adminJar)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("bad-role create = %d, want 422", resp.StatusCode)
+	}
+
+	// Create operator + viewer.
+	addUser(t, app, adminJar, "dave", "operator", "password123")
+	addUser(t, app, adminJar, "erin", "viewer", "password123")
+
+	// Edit dave → viewer role.
+	resp = doRequest(t, app, http.MethodGet, "/web/users/edit/2", "", adminJar)
+	if b := readBody(t, resp); !strings.Contains(b, "dave") {
+		t.Errorf("edit form missing dave; got: %s", b)
+	}
+	form = url.Values{"id": {"2"}, "role": {"viewer"}}
+	resp = doRequest(t, app, http.MethodPost, "/web/users/edit", form.Encode(), adminJar)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("edit role = %d, want 200", resp.StatusCode)
+	}
+
+	// Self-demote guard: admin editing own id (1) to viewer → 422.
+	form = url.Values{"id": {"1"}, "role": {"viewer"}}
+	resp = doRequest(t, app, http.MethodPost, "/web/users/edit", form.Encode(), adminJar)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("self-demote = %d, want 422", resp.StatusCode)
+	}
+
+	// Self-delete guard: admin removing own id (1) → error, still exists.
+	resp = doRequest(t, app, http.MethodPost, "/web/users/remove/1", "", adminJar)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("self-delete = %d, want 200 (fragment with error)", resp.StatusCode)
+	}
+	if b := readBody(t, resp); !strings.Contains(b, "cannot delete your own account") {
+		t.Errorf("self-delete guard message absent; got: %s", b)
+	}
+
+	// Last-admin delete guard: only admin left after removing others.
+	// dave+erin are the only non-admins; deleting them is fine, then only
+	// admin remains and deleting admin was already blocked above.
+	doRequest(t, app, http.MethodPost, "/web/users/remove/2", "", adminJar)
+	doRequest(t, app, http.MethodPost, "/web/users/remove/3", "", adminJar)
+	if b := readBody(t, doRequest(t, app, http.MethodGet, "/web/users", "", adminJar)); !strings.Contains(b, "admin") {
+		t.Errorf("users list broken after deletes; got: %s", b)
+	}
+
+	// A viewer cannot reach the users page at all (403).
+	addUser(t, app, adminJar, "frank", "viewer", "password123")
+	frankJar := loginAs(t, app, "frank", "password123")
+	resp = doRequest(t, app, http.MethodGet, "/web/users", "", frankJar)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("viewer GET /users = %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestLoginDisabled_PassThrough verifies EDGE_LOGIN_DISABLED mode: Require()
+// treats every request as an authenticated admin, /web/ renders the console
+// without a cookie, and admin-only surfaces (users) are reachable.
+func TestLoginDisabled_PassThrough(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+
+	cfg := FromEnv()
+	cfg.DataDir = t.TempDir()
+	cfg.PMAPIURL = daemon.URL
+	cfg.PMAPIToken = "pmc_test"
+	cfg.SessionSecret = []byte("0123456789abcdefgh")
+	cfg.CookieName = "pmui_session"
+	cfg.LoginDisabled = true
+	app, err := NewApp(cfg)
+	if err != nil {
+		t.Fatalf("NewApp(login disabled): %v", err)
+	}
+	jar := map[string]*http.Cookie{}
+
+	// No cookie, no session: console shell renders directly.
+	resp := doRequest(t, app, http.MethodGet, "/web/", "", jar)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /web/ = %d, want 200", resp.StatusCode)
+	}
+	b := readBody(t, resp)
+	for _, want := range []string{"<style>", "operator console", "Overview"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("login-disabled /web/ missing %q", want)
+		}
+	}
+	if strings.Contains(b, "Log out") {
+		t.Errorf("login-disabled shell must not show the Log out form")
+	}
+	if strings.Contains(b, "/users") && strings.Contains(b, "Users") {
+		// Users CRUD link is hidden in login-disabled mode (Traefik gates /web).
+		t.Errorf("login-disabled shell must hide the Users link")
+	}
+
+	// Admin-only routes are reachable without login.
+	resp = doRequest(t, app, http.MethodGet, "/web/users", "", jar)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /users (login disabled) = %d, want 200", resp.StatusCode)
+	}
+
+	// /web/login redirects to the console root.
+	resp = doRequest(t, app, http.MethodGet, "/web/login", "", jar)
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/web/" {
+		t.Errorf("GET /login (login disabled) = %d Location=%q, want 302 → /web/",
+			resp.StatusCode, resp.Header.Get("Location"))
+	}
+
+	// Mutations work without login.
+	resp = doRequest(t, app, http.MethodPost, "/web/stacks/demo/rollback", "", jar)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("POST rollback (login disabled) = %d, want 200", resp.StatusCode)
 	}
 }

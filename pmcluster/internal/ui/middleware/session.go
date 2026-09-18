@@ -40,6 +40,10 @@ type Auth struct {
 	cookie string
 	// setupRequired returns true while the bootstrap admin has no password yet.
 	NudgeSetup func(c context.Context) (bool, error)
+	// LoginDisabled skips session auth entirely: every request passes through
+	// as a synthetic admin (the Traefik admin-auth gate protects /web/* in this
+	// mode) and the setup/login pages are hidden.
+	LoginDisabled bool
 }
 
 // NewAuth wires session auth around the store. secret is the HMAC key.
@@ -111,9 +115,17 @@ func (a *Auth) ClearCookie(c *gin.Context) {
 
 // Require is gin middleware that allows only valid sessions. Unauthenticated
 // requests redirect to /login (using HX-Redirect for HTMX partial loads so the
-// SPA-style sidebar navigation lands on the login page).
+// SPA-style sidebar navigation lands on the login page). With LoginDisabled the
+// gate is open: every request is treated as an authenticated admin.
 func (a *Auth) Require() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if a.LoginDisabled {
+			c.Set(ctxUserKey, &store.User{
+				ID: 1, Username: "admin", PasswordSet: true, Role: store.RoleAdmin,
+			})
+			c.Next()
+			return
+		}
 		ck, err := c.Cookie(a.cookie)
 		if err != nil {
 			a.redirect(c, a.target(c.Request.Context()))
@@ -141,7 +153,47 @@ func (a *Auth) Require() gin.HandlerFunc {
 	}
 }
 
+// roleRank returns the numeric precedence of a role (admin > operator >
+// viewer). Unknown roles rank as viewer.
+func roleRank(role string) int {
+	switch role {
+	case store.RoleAdmin:
+		return 3
+	case store.RoleOperator:
+		return 2
+	case store.RoleViewer:
+		return 1
+	}
+	return 1
+}
+
+// RequireRole returns gin middleware that allows only sessions whose user holds
+// at least the given role. It must run after Require (the user is read from
+// context). Insufficient role yields a 403 (HX-Redirect to the overview for
+// HTMX so the SPA doesn't get stuck on a forbidden fragment).
+func (a *Auth) RequireRole(minRole string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		u := CurrentUser(c)
+		if u == nil || roleRank(u.Role) < roleRank(minRole) {
+			if c.GetHeader("HX-Request") != "" {
+				c.Header("HX-Redirect", WebBase+"/")
+				c.AbortWithStatus(http.StatusForbidden)
+				return
+			}
+			http.Error(c.Writer, "forbidden: insufficient role", http.StatusForbidden)
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 func (a *Auth) target(ctx context.Context) string {
+	if a.LoginDisabled {
+		// No login/setup in this mode — unauthenticated (should never happen,
+		// Require bypasses) lands on the console root.
+		return WebBase + "/"
+	}
 	if a.NudgeSetup != nil {
 		if need, err := a.NudgeSetup(ctx); err == nil && need {
 			return WebBase + "/setup"

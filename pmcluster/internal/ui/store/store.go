@@ -35,6 +35,15 @@ type Store struct {
 	db *sql.DB
 }
 
+// Roles define what a console user may do (RBAC). Roles are hierarchical:
+// admin can do everything, operator everything except user/api-key
+// management, viewer read-only.
+const (
+	RoleAdmin    = "admin"
+	RoleOperator = "operator"
+	RoleViewer   = "viewer"
+)
+
 // User is a UI login. PasswordHash is a bcrypt hash; PasswordSet is true once a
 // password has been chosen (either from env bootstrap or the first-load setup).
 type User struct {
@@ -42,6 +51,7 @@ type User struct {
 	Username     string
 	PasswordHash string
 	PasswordSet  bool
+	Role         string
 	CreatedAt    int64
 }
 
@@ -62,6 +72,7 @@ func Open(dataDir string) (*Store, error) {
 			username      TEXT NOT NULL UNIQUE,
 			password_hash TEXT NOT NULL DEFAULT '',
 			password_set  INTEGER NOT NULL DEFAULT 0,
+			role          TEXT NOT NULL DEFAULT 'operator',
 			created_at    INTEGER NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS settings (
@@ -72,7 +83,44 @@ func Open(dataDir string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := ensureRoleColumn(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate role column: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+// ensureRoleColumn upgrades pre-RBAC databases: adds the role column if it is
+// missing and promotes the existing first user (the original bootstrap admin)
+// to the admin role so existing installs keep an administrator.
+func ensureRoleColumn(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(users)`)
+	if err != nil {
+		return err
+	}
+	hasRole := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if name == "role" {
+			hasRole = true
+		}
+	}
+	_ = rows.Close()
+	if hasRole {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'operator'`); err != nil {
+		return err
+	}
+	// Promote the lowest-ID user (the pre-RBAC bootstrap admin) to admin.
+	_, err = db.Exec(`UPDATE users SET role = 'admin' WHERE id = (SELECT MIN(id) FROM users)`)
+	return err
 }
 
 // Close releases the underlying connection.
@@ -82,9 +130,25 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) GetByUsername(ctx context.Context, username string) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, password_set, created_at
+		`SELECT id, username, password_hash, password_set, role, created_at
 		   FROM users WHERE username = ?`, username).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.CreatedAt)
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// GetByID returns a user by primary key or ErrNotFound.
+func (s *Store) GetByID(ctx context.Context, id int64) (*User, error) {
+	u := &User{}
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, username, password_hash, password_set, role, created_at
+		   FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -98,9 +162,9 @@ func (s *Store) GetByUsername(ctx context.Context, username string) (*User, erro
 func (s *Store) FirstUser(ctx context.Context) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, password_set, created_at
+		`SELECT id, username, password_hash, password_set, role, created_at
 		   FROM users ORDER BY id LIMIT 1`).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.CreatedAt)
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -110,6 +174,26 @@ func (s *Store) FirstUser(ctx context.Context) (*User, error) {
 	return u, nil
 }
 
+// ListUsers returns every user ordered by id.
+func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, username, password_hash, password_set, role, created_at
+		   FROM users ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		u := &User{}
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 // CountUsers returns the number of stored users.
 func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	var n int
@@ -117,14 +201,54 @@ func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// CountAdmins returns the number of users holding the admin role.
+func (s *Store) CountAdmins(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = ?`, RoleAdmin).Scan(&n)
+	return n, err
+}
+
 // CreateUser inserts a user and returns the stored row.
-func (s *Store) CreateUser(ctx context.Context, username, passwordHash string, passwordSet bool) (*User, error) {
+func (s *Store) CreateUser(ctx context.Context, username, passwordHash string, passwordSet bool, role string) (*User, error) {
+	if role == "" {
+		role = RoleOperator
+	}
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (username, password_hash, password_set, created_at)
-		 VALUES (?, ?, ?, ?)`, username, passwordHash, boolInt(passwordSet), time.Now().Unix()); err != nil {
+		`INSERT INTO users (username, password_hash, password_set, role, created_at)
+		 VALUES (?, ?, ?, ?, ?)`, username, passwordHash, boolInt(passwordSet), role, time.Now().Unix()); err != nil {
 		return nil, err
 	}
 	return s.GetByUsername(ctx, username)
+}
+
+// UpdateUser updates a user's role and optionally its password. A non-empty
+// passwordHash replaces the stored hash and marks it set; an empty hash leaves
+// the password untouched.
+func (s *Store) UpdateUser(ctx context.Context, id int64, role, passwordHash string) error {
+	if role == "" {
+		role = RoleOperator
+	}
+	if passwordHash != "" {
+		_, err := s.db.ExecContext(ctx,
+			`UPDATE users SET role = ?, password_hash = ?, password_set = 1 WHERE id = ?`,
+			role, passwordHash, id)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET role = ? WHERE id = ?`, role, id)
+	return err
+}
+
+// DeleteUser removes a user by id.
+func (s *Store) DeleteUser(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // SetPassword sets (or replaces) a password hash and marks it set.
@@ -137,13 +261,15 @@ func (s *Store) SetPassword(ctx context.Context, username, passwordHash string) 
 
 // CreateEnvUser seeds the env-configured user if it doesn't already exist.
 // Returns true if a new user was created. PasswordSetup is always true here.
+// The env user is the operator console's bootstrap identity, so it is created
+// with the admin role.
 func (s *Store) CreateEnvUser(ctx context.Context, username, passwordHash string) (bool, error) {
 	if _, err := s.GetByUsername(ctx, username); err == nil {
 		return false, nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return false, err
 	}
-	if _, err := s.CreateUser(ctx, username, passwordHash, true); err != nil {
+	if _, err := s.CreateUser(ctx, username, passwordHash, true, RoleAdmin); err != nil {
 		return false, err
 	}
 	return true, nil

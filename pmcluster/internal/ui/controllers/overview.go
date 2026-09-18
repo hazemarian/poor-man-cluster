@@ -12,7 +12,11 @@ type Overview struct{ *Controller }
 // App renders the HTMX application shell (sidebar + empty #view). All data
 // loads via fragment requests from the shell itself.
 func (c Overview) App(g *gin.Context) {
-	c.Views.Page(g, "app", gin.H{"User": middleware.CurrentUser(g), "Version": c.Version})
+	c.Views.Page(g, "app", gin.H{
+		"User":          middleware.CurrentUser(g),
+		"Version":       c.Version,
+		"LoginDisabled": c.Auth.LoginDisabled,
+	})
 }
 
 type overviewData struct {

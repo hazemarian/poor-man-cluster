@@ -1,0 +1,38 @@
+{{define "users"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1 style="margin:0 0 4px">Users</h1>
+<p class="sub">Console accounts and their roles. Roles are hierarchical:
+<strong>admin</strong> &gt; <strong>operator</strong> &gt; <strong>viewer</strong>. Operators can mutate stacks,
+services, configs and secrets; viewers are read-only; admins additionally manage API
+keys, users and cluster settings.</p>
+
+<div class="card">
+  <div class="section-head">
+    <h2 style="margin:0">Accounts ({{.Count}})</h2>
+    <button class="btn sm" hx-get="/web/users/new" hx-target="#modal-body" hx-on::after-request="openModal()">New user</button>
+  </div>
+{{if .Users}}
+<table>
+  <tr><th>ID</th><th>Username</th><th>Role</th><th>Created</th><th></th></tr>
+  {{range .Users}}
+  <tr>
+    <td class="muted">{{.ID}}</td>
+    <td><code>{{.Username}}</code>{{if eq .Username $.Current}} <span class="pill good">you</span>{{end}}</td>
+    <td><span class="pill {{if eq .Role "admin"}}good{{else if eq .Role "operator"}}warn{{else}}muted{{end}}">{{.Role}}</span></td>
+    <td class="muted">{{ts .CreatedAt}}</td>
+    <td style="text-align:right;white-space:nowrap">
+      <button class="btn ghost sm" hx-get="/web/users/edit/{{.ID}}" hx-target="#modal-body" hx-on::after-request="openModal()">Edit</button>
+      {{if ne .Username $.Current}}
+      <button class="btn danger sm" hx-post="/web/users/remove/{{.ID}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete user {{.Username}}? This cannot be undone.')">Delete</button>
+      {{end}}
+    </td>
+  </tr>
+  {{end}}
+</table>
+{{else}}
+<div class="empty">No users. Run the first-run setup to create the admin account.</div>
+{{end}}
+</div>
+{{end}}

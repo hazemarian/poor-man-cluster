@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,7 +15,8 @@ import (
 // Auth handles sign-in, the first-run password setup, and sign-out.
 type Auth struct{ *Controller }
 
-// needSetup reports whether a bootstrap admin still awaits a password (first run).
+// needSetup reports whether a first admin still needs to be created (first run:
+// zero users, or the bootstrap admin has no password yet).
 func (c Auth) needSetup(ctx context.Context) (bool, error) {
 	n, err := c.Store.CountUsers(ctx)
 	if err != nil {
@@ -35,13 +37,22 @@ type loginData struct {
 	Error   string
 }
 
-// LoginPage renders the sign-in form.
+// LoginPage renders the sign-in form. When EDGE_LOGIN_DISABLED is set the
+// console is fully open (Traefik admin-auth gates it), so the form bounces.
 func (c Auth) LoginPage(g *gin.Context) {
+	if c.Auth.LoginDisabled {
+		redirect(g, WebBase+"/")
+		return
+	}
 	c.Views.Page(g, "login", loginData{Version: c.Version})
 }
 
 // Login verifies credentials and issues a session cookie.
 func (c Auth) Login(g *gin.Context) {
+	if c.Auth.LoginDisabled {
+		redirect(g, WebBase+"/")
+		return
+	}
 	username := g.PostForm("username")
 	password := g.PostForm("password")
 
@@ -54,50 +65,59 @@ func (c Auth) Login(g *gin.Context) {
 	redirect(g, WebBase+"/")
 }
 
-// SetupPage renders the first-run set-password form. It only makes sense while
-// the bootstrap admin has no password; otherwise bounce to login.
+// SetupPage renders the first-run create-admin form. It only makes sense while
+// no admin exists yet; otherwise bounce to login (or /web/ when login is
+// disabled).
 func (c Auth) SetupPage(g *gin.Context) {
+	if c.Auth.LoginDisabled {
+		redirect(g, WebBase+"/")
+		return
+	}
 	need, err := c.needSetup(g.Request.Context())
 	if err != nil || !need {
 		redirect(g, WebBase+"/login")
 		return
 	}
-	uname := ""
-	if fu, e := c.Store.FirstUser(g.Request.Context()); e == nil {
-		uname = fu.Username
-	}
-	c.Views.Page(g, "setup", gin.H{"Username": uname})
+	c.Views.Page(g, "setup", gin.H{})
 }
 
-// Setup sets the bootstrap admin's password on first run.
+// Setup creates the first admin account on first run (username + password).
 func (c Auth) Setup(g *gin.Context) {
+	if c.Auth.LoginDisabled {
+		redirect(g, WebBase+"/")
+		return
+	}
 	need, err := c.needSetup(g.Request.Context())
 	if err != nil || !need {
 		redirect(g, WebBase+"/login")
 		return
 	}
+	uname := strings.TrimSpace(g.PostForm("username"))
 	pass := g.PostForm("password")
 	confirm := g.PostForm("confirm")
-	if len(pass) < 8 || pass != confirm {
-		c.Views.Page(g, "setup", gin.H{"Error": "Password must be at least 8 characters and match the confirmation."})
+	if uname == "" || len(pass) < 8 || pass != confirm {
+		c.Views.Page(g, "setup", gin.H{
+			"Error":   "Username is required; password must be at least 8 characters and match the confirmation.",
+			"Payload": gin.H{"Username": uname},
+		})
 		return
 	}
-	fu, err := c.Store.FirstUser(g.Request.Context())
-	if err != nil {
-		http.Error(g.Writer, "no user to set a password for", http.StatusInternalServerError)
+	if _, err := c.Store.CreateUser(g.Request.Context(), uname, hashPassword(pass), true, store.RoleAdmin); err != nil {
+		c.Views.Page(g, "setup", gin.H{"Error": "Could not create admin: " + err.Error()})
 		return
 	}
-	if err := c.Store.SetPassword(g.Request.Context(), fu.Username, hashPassword(pass)); err != nil {
-		http.Error(g.Writer, "could not save password", http.StatusInternalServerError)
-		return
-	}
-	c.Auth.SetCookie(g, fu.Username, 7*24*time.Hour)
-	c.Views.Page(g, "setup", gin.H{"Username": fu.Username, "Done": true})
+	c.Auth.SetCookie(g, uname, 7*24*time.Hour)
+	c.Views.Page(g, "setup", gin.H{"Username": uname, "Done": true})
 }
 
-// Logout clears the session cookie and returns to the sign-in screen.
+// Logout clears the session cookie and returns to the sign-in screen (or the
+// console root when login is disabled).
 func (c Auth) Logout(g *gin.Context) {
 	c.Auth.ClearCookie(g)
+	if c.Auth.LoginDisabled {
+		redirect(g, WebBase+"/")
+		return
+	}
 	redirect(g, WebBase+"/login")
 }
 

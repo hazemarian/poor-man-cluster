@@ -11,6 +11,7 @@ package ui
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,13 @@ type Config struct {
 	CookieName      string
 	UpstreamTimeout time.Duration
 	AppVersion      string
+	// LoginDisabled (EDGE_LOGIN_DISABLED) turns off the console's own session
+	// login. This is the deployed-edge mode: Traefik's admin-auth gate protects
+	// /web/*, so the console skips its own login, the user CRUD page and the
+	// first-run setup page are hidden, and Require() lets every request through
+	// as a synthetic admin. Local/standalone deployments leave it unset so
+	// login + setup + user CRUD work normally.
+	LoginDisabled bool
 }
 
 const (
@@ -47,7 +55,16 @@ func FromEnv() Config {
 		CookieName:      envOr("SESSION_COOKIE", defaultCookieName),
 		UpstreamTimeout: envDur("UPSTREAM_TIMEOUT", defaultTimeout),
 		AppVersion:      envOr("APP_VERSION", "dev"),
+		LoginDisabled:   envBool("EDGE_LOGIN_DISABLED"),
 	}
+}
+
+func envBool(key string) bool {
+	switch strings.ToLower(os.Getenv(key)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // Validate checks required config before serving. The session secret is always

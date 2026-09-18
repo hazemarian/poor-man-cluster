@@ -30,14 +30,21 @@
     {{if .Done}}
       <div class="ok">Password set. Redirecting to sign-in…</div>
     {{else}}
-      <p class="hint">This is the first run. Set an admin password to unlock the
-      operator console for <b>{{.Username}}</b>.</p>
+      <p class="hint">This is the first run. Create the admin account that unlocks
+      the operator console.</p>
       {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
-      <label>New password</label>
-      <input type="password" name="password" autocomplete="new-password" required autofocus minlength="8">
+      {{if .Payload}}
+      <label>Username</label>
+      <input type="text" name="username" value="{{.Payload.Username}}" autocomplete="username" required autofocus>
+      {{else}}
+      <label>Username</label>
+      <input type="text" name="username" placeholder="admin" autocomplete="username" required autofocus>
+      {{end}}
+      <label>Password</label>
+      <input type="password" name="password" autocomplete="new-password" required minlength="8">
       <label>Confirm password</label>
       <input type="password" name="confirm" autocomplete="new-password" required minlength="8">
-      <button type="submit">Set password</button>
+      <button type="submit">Create admin</button>
     {{end}}
   </form>
 </body>
