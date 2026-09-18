@@ -122,7 +122,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		}
 		return nil
 	})
-	wf.Add("Bootstrapping managed credentials (Traefik / Portainer / OpenObserve)", func(ctx context.Context) error {
+	wf.Add("Bootstrapping managed credentials (Traefik / OpenObserve / edge)", func(ctx context.Context) error {
 		credMgr := &CredentialsManager{
 			Store:  deps.Store,
 			Cipher: deps.Cipher,

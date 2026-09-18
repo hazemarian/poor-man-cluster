@@ -130,6 +130,22 @@ func (f *fakeDocker) ServiceList(_ context.Context) ([]docker.Service, error) {
 	return out, nil
 }
 
+// ServiceInspect/Tasks/Logs/Restart/Exec are unused by the cluster package;
+// stub them so this fake keeps satisfying the growing interface.
+func (f *fakeDocker) ServiceInspect(_ context.Context, _ string) (docker.ServiceInspectResult, error) {
+	return docker.ServiceInspectResult{}, nil
+}
+func (f *fakeDocker) ServiceTasks(_ context.Context, _ string) ([]docker.ServiceTask, error) {
+	return nil, nil
+}
+func (f *fakeDocker) ServiceLogs(_ context.Context, _ string, _ int) ([]docker.LogLine, error) {
+	return nil, nil
+}
+func (f *fakeDocker) ServiceRestart(_ context.Context, _ string) error { return nil }
+func (f *fakeDocker) ServiceExec(_ context.Context, _ string, _ []string) (*docker.ExecResult, error) {
+	return nil, nil
+}
+
 func (f *fakeDocker) SecretRemove(_ context.Context, name string) error {
 	if f.secretRemoveErr != nil {
 		if err, ok := f.secretRemoveErr[name]; ok {

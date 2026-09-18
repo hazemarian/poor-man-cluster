@@ -17,7 +17,6 @@ import (
 // least one running replica after cluster up.
 var bundledServices = []string{
 	"infra_traefik",
-	"infra_portainer",
 	"edge_pmcluster-edge",
 	"observability_openobserve",
 	"observability_otel-collector",

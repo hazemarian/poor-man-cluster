@@ -988,6 +988,205 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           description: Config or version not found
+  /api/services:
+    get:
+      summary: List every swarm service with live replica health
+      operationId: listServices
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: All services across all stacks
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  services:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Service"
+  /api/services/{stack}:
+    get:
+      summary: List one stack's services
+      operationId: listStackServices
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Services belonging to the stack
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  services:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Service"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/services/{stack}/{service}/tasks:
+    get:
+      summary: Task (replica) history for a service — crash/restart visibility
+      operationId: serviceTasks
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service:
+                    type: string
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServiceTask"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Service not found or does not belong to the stack
+  /api/services/{stack}/{service}/logs:
+    get:
+      summary: Tail a service's stdout/stderr
+      operationId: serviceLogs
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tail
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2000
+            default: 200
+      responses:
+        "200":
+          description: Interleaved log lines
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service:
+                    type: string
+                  logs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServiceLogLine"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Service not found or does not belong to the stack
+  /api/services/{stack}/{service}/restart:
+    post:
+      summary: Force a rolling restart of a service (whitelisted, no raw Docker passthrough)
+      operationId: restartService
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Restart triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service:
+                    type: string
+                  restarted:
+                    type: boolean
+                    const: true
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Service not found or does not belong to the stack
+  /api/services/{stack}/{service}/exec:
+    post:
+      summary: Run a non-interactive command in a running task of the service
+      operationId: execService
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [argv]
+              properties:
+                argv:
+                  type: array
+                  items:
+                    type: string
+                    maxLength: 200
+                  minItems: 1
+                  maxItems: 16
+      responses:
+        "200":
+          description: Command output + exit code (exec runs on the daemon's node only)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Service not found, does not belong to the stack, or no task on this node
 components:
   securitySchemes:
     bearerAuth:
@@ -1369,3 +1568,71 @@ components:
         created_at:
           type: integer
           format: int64
+    Service:
+      type: object
+      properties:
+        name:
+          type: string
+          description: full swarm service name (stack_service)
+        stack:
+          type: string
+          description: stack namespace from the com.docker.stack.namespace label; empty for unstacked services
+        replicas:
+          type: integer
+          format: int64
+          description: currently running tasks
+        desired:
+          type: integer
+          format: int64
+          description: desired replicas (global services report running tasks)
+        image:
+          type: string
+        mode:
+          type: string
+          enum: [replicated, global]
+        updated:
+          type: integer
+          format: int64
+          description: last service spec update (unix seconds)
+    ServiceTask:
+      type: object
+      properties:
+        task_id:
+          type: string
+        node:
+          type: string
+          description: swarm node hostname running the task
+        slot:
+          type: integer
+          format: int64
+        state:
+          type: string
+          description: swarm task state (running, failed, rejected, shutdown, ...)
+        error:
+          type: string
+          description: task error message, when failed/rejected
+        started_at:
+          type: integer
+          format: int64
+        finished_at:
+          type: integer
+          format: int64
+    ServiceLogLine:
+      type: object
+      properties:
+        stream:
+          type: string
+          enum: [stdout, stderr]
+        line:
+          type: string
+    ExecResult:
+      type: object
+      properties:
+        service:
+          type: string
+        exit_code:
+          type: integer
+        stdout:
+          type: string
+        stderr:
+          type: string

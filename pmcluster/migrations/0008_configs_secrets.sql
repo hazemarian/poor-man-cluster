@@ -6,7 +6,7 @@
 --
 -- Two scopes:
 --   'cluster'  — platform-owned: traefik_dynamic, otel, edge/backup stacks,
---                site cert/key, per-host certs, portainer/edge/OO creds.
+--                site cert/key, per-host certs, edge/OO creds.
 --   'service'  — app-owned: user-created configs and secrets referenced in
 --                the deploy DSL via env: X: config(name) / secrets(name).
 --

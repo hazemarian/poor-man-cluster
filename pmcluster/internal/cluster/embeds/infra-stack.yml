@@ -95,46 +95,7 @@ services:
       - __KEY_SECRET__
       [[- end]]
 
-  # Portainer Management
-  portainer:
-    image: portainer/portainer-ce:2.39.5
-    command:
-      - "--admin-password-file=/run/secrets/portainer_admin_password"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - portainer_data:/data
-    networks:
-      - traefik-net
-    deploy:
-      placement:
-        constraints: [node.role == manager]
-      resources:
-        reservations:
-          cpus: '0.1'
-          memory: 128M
-        limits:
-          cpus: '0.25'
-          memory: 256M
-      labels:
-        - "traefik.enable=true"
-        - "traefik.http.routers.portainer.rule=Host(`portainer.${DOMAIN}`)"
-        - "traefik.http.routers.portainer.entrypoints=websecure"
-        - "traefik.http.routers.portainer.tls=true"
-        [[- if .ACMEEmail]]
-        - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
-        [[- end]]
-        - "traefik.http.routers.portainer.middlewares=cors-default@file"
-        - "traefik.http.services.portainer.loadbalancer.server.port=9000"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    secrets:
-      - portainer_admin_password
-
 volumes:
-  portainer_data:
   [[- if .ACMEEmail]]
   traefik_acme:
   [[- end]]
@@ -147,8 +108,6 @@ networks:
 
 secrets:
   admin_credentials:
-    external: true
-  portainer_admin_password:
     external: true
   [[- if not .ACMEEmail]]
   __CERT_SECRET__:

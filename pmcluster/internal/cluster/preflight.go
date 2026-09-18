@@ -1,5 +1,5 @@
 // Package cluster owns the lifecycle of the bundled Docker Swarm cluster
-// (Traefik, Portainer, OpenObserve, OTel Collector, volume backup).
+// (Traefik, OpenObserve, OTel Collector, volume backup).
 // All operations are idempotent — re-running cluster up reconciles state,
 // never destroys or rotates.
 package cluster

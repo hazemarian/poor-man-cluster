@@ -1,0 +1,54 @@
+{{define "servicedetail"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1>Service · {{.Stack}}_{{.Service}}</h1>
+<p class="sub">
+  <a class="link" href="/services" hx-get="/services" hx-target="#view" hx-push-url="true">← all services</a>
+</p>
+
+<div class="card" style="padding:8px 14px; display:flex; gap:8px; align-items:center">
+  <a class="btn sm {{if eq .Tab "tasks"}}active{{end}}" href="/services/{{.Stack}}/{{.Service}}/tasks" hx-get="/services/{{.Stack}}/{{.Service}}/tasks" hx-target="#view" hx-push-url="true">Tasks</a>
+  <a class="btn sm {{if eq .Tab "logs"}}active{{end}}" href="/services/{{.Stack}}/{{.Service}}/logs" hx-get="/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true">Logs</a>
+  <button class="btn sm danger" hx-post="/services/{{.Stack}}/{{.Service}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="Force a rolling restart of {{.Stack}}_{{.Service}}?">Restart</button>
+  <form style="display:flex; gap:6px; flex:1" hx-post="/services/{{.Stack}}/{{.Service}}/exec" hx-target="#view" hx-swap="innerHTML">
+    <input type="text" name="argv" placeholder="exec command (e.g. whoami or sh -c &quot;cat /etc/hosts&quot;)" style="flex:1">
+    <button class="btn sm" type="submit">Exec</button>
+  </form>
+</div>
+
+{{if eq .Tab "tasks"}}
+<h1>Tasks</h1>
+{{if .Tasks}}
+<div class="card" style="padding:6px 14px">
+<table>
+  <tr><th>Task</th><th>Node</th><th>Slot</th><th>State</th><th>Error</th><th>Started</th></tr>
+  {{range .Tasks}}
+  <tr>
+    <td><code>{{.TaskID}}</code></td>
+    <td>{{if .Node}}{{.Node}}{{else}}<span class="muted">—</span>{{end}}</td>
+    <td>{{.Slot}}</td>
+    <td><span class="pill {{if eq .State "running"}}good{{else if eq .State "failed"}}bad{{else}}muted{{end}}">{{.State}}</span></td>
+    <td class="muted">{{if .Error}}{{.Error}}{{else}}—{{end}}</td>
+    <td class="muted">{{ts .Start}}</td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{else}}
+<div class="card empty">No tasks recorded.</div>
+{{end}}
+{{end}}
+
+{{if eq .Tab "logs"}}
+<h1>Logs (tail 200)</h1>
+{{if .Logs}}
+<div class="card" style="padding:8px 14px">
+<pre style="max-height:60vh; overflow:auto; margin:0"><code>{{range .Logs}}<span class="{{if eq .Stream "stderr"}}log-err{{end}}">{{.Line}}</span>
+{{end}}</code></pre>
+</div>
+{{else}}
+<div class="card empty">No log output.</div>
+{{end}}
+{{end}}
+{{end}}

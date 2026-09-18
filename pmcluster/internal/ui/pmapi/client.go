@@ -412,3 +412,51 @@ func (c *Client) ListRenderedConfigs(ctx context.Context) ([]RenderedConfig, err
 	}
 	return out.Configs, nil
 }
+
+// ListServices returns every swarm service (all stacks), or one stack's
+// services when stack is non-empty.
+func (c *Client) ListServices(ctx context.Context, stack string) ([]Service, error) {
+	var body struct {
+		Services []Service `json:"services"`
+	}
+	path := "/services"
+	if stack != "" {
+		path += "/" + url.PathEscape(stack)
+	}
+	err := c.do(ctx, http.MethodGet, path, nil, &body)
+	return body.Services, err
+}
+
+// ServiceTasks returns a service's task (crash/restart) history.
+func (c *Client) ServiceTasks(ctx context.Context, stack, service string) ([]ServiceTask, error) {
+	var body struct {
+		Tasks []ServiceTask `json:"tasks"`
+	}
+	err := c.do(ctx, http.MethodGet, svcPath(stack, service)+"/tasks", nil, &body)
+	return body.Tasks, err
+}
+
+// ServiceLogs tails a service's stdout/stderr.
+func (c *Client) ServiceLogs(ctx context.Context, stack, service string, tail int) ([]ServiceLogLine, error) {
+	var body struct {
+		Logs []ServiceLogLine `json:"logs"`
+	}
+	err := c.do(ctx, http.MethodGet, svcPath(stack, service)+"/logs?tail="+strconv.Itoa(tail), nil, &body)
+	return body.Logs, err
+}
+
+// RestartService forces a rolling restart of a service.
+func (c *Client) RestartService(ctx context.Context, stack, service string) error {
+	return c.do(ctx, http.MethodPost, svcPath(stack, service)+"/restart", nil, nil)
+}
+
+// ExecService runs a non-interactive command in a service's running task.
+func (c *Client) ExecService(ctx context.Context, stack, service string, argv []string) (*ExecResult, error) {
+	var out ExecResult
+	err := c.do(ctx, http.MethodPost, svcPath(stack, service)+"/exec", map[string]any{"argv": argv}, &out)
+	return &out, err
+}
+
+func svcPath(stack, service string) string {
+	return "/services/" + url.PathEscape(stack) + "/" + url.PathEscape(service)
+}

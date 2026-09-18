@@ -9,7 +9,7 @@ import (
 )
 
 // ManagedCredential is the persisted form of a credential pmcluster owns
-// for one of the bundled components (Traefik admin, Portainer admin, etc.).
+// for one of the bundled components (Traefik admin, OpenObserve, edge console).
 //
 // PasswordCiphertext is opaque — callers decrypt via the credentials package.
 type ManagedCredential struct {

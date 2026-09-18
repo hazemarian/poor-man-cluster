@@ -1,13 +1,13 @@
 -- 0002_credentials.sql — managed credentials for bundled stacks (Phase 2).
 --
 -- pmcluster generates random passwords for components it bundles
--- (Traefik dashboard, Portainer, OpenObserve) on first `cluster up`,
+-- (Traefik dashboard, OpenObserve, edge console) on first `cluster up`,
 -- stores them encrypted here, AND mirrors them to Docker Swarm secrets
 -- so the services can consume them.
 --
 -- name              — pmcluster's internal identifier
---                     (e.g. "traefik_dashboard", "portainer", "openobserve_admin")
--- kind              — short tag for the consumer ("traefik", "portainer", "openobserve")
+--                     (e.g. "traefik_dashboard", "openobserve_admin")
+-- kind              — short tag for the consumer ("traefik", "openobserve")
 -- username          — plaintext (not sensitive on its own)
 -- password_ciphertext — AES-256-GCM ciphertext (nonce || sealed)
 -- swarm_secret_name — the Docker Swarm secret that holds the same value

@@ -68,6 +68,19 @@ func (f *inMemoryDockerClient) StackSecretNames(_ context.Context, _ string) ([]
 func (f *inMemoryDockerClient) ServiceList(_ context.Context) ([]docker.Service, error) {
 	return nil, nil
 }
+func (f *inMemoryDockerClient) ServiceInspect(_ context.Context, _ string) (docker.ServiceInspectResult, error) {
+	return docker.ServiceInspectResult{}, nil
+}
+func (f *inMemoryDockerClient) ServiceTasks(_ context.Context, _ string) ([]docker.ServiceTask, error) {
+	return nil, nil
+}
+func (f *inMemoryDockerClient) ServiceLogs(_ context.Context, _ string, _ int) ([]docker.LogLine, error) {
+	return nil, nil
+}
+func (f *inMemoryDockerClient) ServiceRestart(_ context.Context, _ string) error { return nil }
+func (f *inMemoryDockerClient) ServiceExec(_ context.Context, _ string, _ []string) (*docker.ExecResult, error) {
+	return nil, nil
+}
 func (f *inMemoryDockerClient) ConfigList(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }

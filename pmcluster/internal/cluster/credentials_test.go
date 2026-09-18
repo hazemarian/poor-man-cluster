@@ -81,7 +81,7 @@ func TestBootstrap_ReturnsAllCredentials(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 	wantNames := []string{
-		"traefik_dashboard", "portainer", "openobserve_admin",
+		"traefik_dashboard", "openobserve_admin",
 		"edge_admin", "edge_ui_secret", "edge_api_token",
 	}
 	for _, name := range wantNames {
@@ -208,7 +208,7 @@ func TestBootstrap_TraefikSecretIsHtpasswd(t *testing.T) {
 	}
 }
 
-func TestBootstrap_PortainerAndOpenObserveSecretsArePlaintext(t *testing.T) {
+func TestBootstrap_OpenObserveSecretIsPlaintext(t *testing.T) {
 	s, c := newTestDeps(t)
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
@@ -219,16 +219,6 @@ func TestBootstrap_PortainerAndOpenObserveSecretsArePlaintext(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
-	}
-
-	portainerCred := creds["portainer"]
-	portainerSpec, ok := f.secrets["portainer_admin_password"]
-	if !ok {
-		t.Fatal("portainer_admin_password secret not found in fake docker")
-	}
-	if string(portainerSpec.Data) != portainerCred.Password {
-		t.Errorf("portainer secret payload = %q, want plaintext password %q",
-			portainerSpec.Data, portainerCred.Password)
 	}
 
 	ooCred := creds["openobserve_admin"]
@@ -255,11 +245,6 @@ func TestBootstrap_LostDBRecovery(t *testing.T) {
 		Data   []byte
 		Labels map[string]string
 	}{Name: "admin_credentials", Data: []byte("admin:oldhash\n")}
-	f.secrets["portainer_admin_password"] = struct {
-		Name   string
-		Data   []byte
-		Labels map[string]string
-	}{Name: "portainer_admin_password", Data: []byte("oldpass")}
 	f.secrets["zo_root_user_password"] = struct {
 		Name   string
 		Data   []byte
@@ -486,24 +471,24 @@ func TestRotate_SyncsDbSecret(t *testing.T) {
 	mgr, f, _ := bootstrapForRotate(t)
 	ctx := context.Background()
 
-	orig, err := mgr.Store.GetCredential(ctx, "portainer")
+	orig, err := mgr.Store.GetCredential(ctx, "openobserve_admin")
 	if err != nil {
 		t.Fatalf("GetCredential: %v", err)
 	}
 
-	if _, err := mgr.Store.CreateSecret(ctx, "cluster", "", "portainer_admin_password",
+	if _, err := mgr.Store.CreateSecret(ctx, "cluster", "", "zo_root_user_password",
 		orig.PasswordCiphertext, store.SecretHash("old-password")); err != nil {
 		t.Fatalf("CreateSecret: %v", err)
 	}
 
-	oldSecretData := f.secrets["portainer_admin_password"].Data
+	oldSecretData := f.secrets["zo_root_user_password"].Data
 
-	newCred, err := mgr.Rotate(ctx, "portainer")
+	newCred, err := mgr.Rotate(ctx, "openobserve_admin")
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
 
-	cred, err := mgr.Store.GetCredential(ctx, "portainer")
+	cred, err := mgr.Store.GetCredential(ctx, "openobserve_admin")
 	if err != nil {
 		t.Fatalf("GetCredential after Rotate: %v", err)
 	}
@@ -515,7 +500,7 @@ func TestRotate_SyncsDbSecret(t *testing.T) {
 		t.Errorf("credential password = %q, want %q", plain, newCred.Password)
 	}
 
-	sec, err := mgr.Store.GetSecret(ctx, "portainer_admin_password")
+	sec, err := mgr.Store.GetSecret(ctx, "zo_root_user_password")
 	if err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
@@ -530,7 +515,7 @@ func TestRotate_SyncsDbSecret(t *testing.T) {
 		t.Errorf("db secret hash = %q, want %q", sec.Hash, store.SecretHash(newCred.Password))
 	}
 
-	if string(f.secrets["portainer_admin_password"].Data) == string(oldSecretData) {
+	if string(f.secrets["zo_root_user_password"].Data) == string(oldSecretData) {
 		t.Error("swarm secret payload should have changed after Rotate")
 	}
 }

@@ -14,7 +14,7 @@ loop.
 Poor Man's Stack is a self-hosted, single-node-friendly deployment platform
 built on **Docker Swarm**. A single Go binary called `pmcluster` is the control
 plane: it bootstraps a Swarm cluster, provisions the infrastructure services
-(Traefik, Portainer, OpenObserve, OTel collector, backups), accepts application
+(Traefik, OpenObserve, OTel collector, backups), accepts application
 deployments through a YAML DSL, and manages TLS, secrets, configs, API keys,
 webhooks and backups — via a CLI, a REST API, and an operator console.
 
@@ -61,8 +61,8 @@ nodes), domain `nextrum-sy.com`, console at `https://pmcluster.nextrum-sy.com/`.
                     │
         ┌───────────┼───────────────────────┐
         ▼           ▼                       ▼
-  App stacks   pmcluster-edge (:8042)   Portainer (infra)
-  (deployed    ┌────────────────────┐     (read/operate UI)
+  App stacks   pmcluster-edge (:8042)   OpenObserve
+  (deployed    ┌────────────────────┐     (observability)
    apps)       │ operator console   │
                │  (gin + HTMX)      │
                │ smart reverse proxy│
@@ -280,8 +280,8 @@ Docker, Deployer, Provisioner` (+ `Stdout` where verbose).
   (so offen's `{{ .Node.ID }}` survives) and `${DOMAIN}`-style substitution;
   `RenderTraefikDynamic` + `appendHostCertSecrets`; `EdgeImageFor()` (edge
   image pinned to the release version tag).
-- `embeds/` — the embedded compose templates: `infra-stack.yml` (Traefik +
-  Portainer), `edge-stack.yml`, `observability-stack.yml` (OpenObserve + OTel),
+- `embeds/` — the embedded compose templates: `infra-stack.yml` (Traefik),
+  `edge-stack.yml`, `observability-stack.yml` (OpenObserve + OTel),
   `backup-stack.yml` (volume + control-plane backup agents),
   `traefik-dynamic.yml`, `otel-collector-config.yml`.
 - `sitecert.go` — `ApplyCert`/`RemoveCert`/`GetSiteCert`/`PersistedDomain`/
@@ -291,7 +291,7 @@ Docker, Deployer, Provisioner` (+ `Stdout` where verbose).
 - `tlscerts/` — `Validate` (hostname), `ParseAndCheck` (PEM pair validation
   + SAN/CN coverage). No filesystem management (removed).
 - `health.go` — `WaitHealthyStacks` polls the bundled services.
-- `credentials.go` — platform credential specs (edge_admin, portainer, OO…).
+- `credentials.go` — platform credential specs (edge_admin, OO…).
 
 ### internal/manifest + internal/dsl — the deployment DSL
 Pipeline: `Parse` (strict YAML, unknown keys rejected) → `Interpolate`
@@ -507,11 +507,11 @@ image pin, console 302, `pmcluster tls site show`.
 
 ---
 
-## 10. Production facts (as of v0.2.41)
+## 10. Production facts (as of v0.2.42)
 
 - Node `root@82.165.128.237`, SSH key `~/.ssh/pmcluster_ed25519`, `rg` NOT
   installed (use `grep`), `sqlite3` available.
-- Daemon `v0.2.41`, edge pinned `:v0.2.41`, domain `nextrum-sy.com`.
+- Daemon `v0.2.42`, edge pinned `:v0.2.42`, domain `nextrum-sy.com`.
 - Console login: admin / `wfO1C3yY1CGVLfWEnKA-BJHMWUmoqMl$4Kb0`
   (that's the `edge_admin` credential).
 - `site_certs` rows: `nextrum-sy.com` (cert_v041/key_v041) +

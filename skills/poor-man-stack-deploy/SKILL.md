@@ -508,11 +508,11 @@ The edge image is pinned to `ghcr.io/nextrum-sy/pmcluster-edge:latest` by defaul
 
 1. **Build + publish the release first** — push a `v*` tag; the release workflow cross-compiles the binaries and pushes the new edge image to GHCR:
    ```bash
-   git tag v0.2.29 && git push origin v0.2.29
+   git tag v0.2.42 && git push origin v0.2.42
    ```
 2. **Update the binary with install.sh** — it installs the new binary and, because `~/.pmcluster/config.yaml` exists, automatically runs `pmcluster cluster update`:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | VERSION=v0.2.29 bash
+   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | VERSION=v0.2.42 bash
    # or simply: | bash   (resolves latest release)
    ```
 3. `cluster update` **refreshes the on-disk templates** in `~/.pmcluster/config/` from the new binary's embedded copies (stale configs — older version header — are overwritten; operator edits with a newer header are preserved), then re-renders. Because the edge-stack.yml content changed, the **edge stack is re-deployed** automatically and pulls the new `:latest` image. OTel/Traefik/cert are re-applied content-aware as usual.
@@ -523,12 +523,12 @@ Manual `docker service update --image ... edge_pmcluster-edge` is NOT the suppor
 
 ```bash
 pmcluster credentials list                 # all managed bootstrap passwords
-pmcluster credentials show portainer       # show a specific one
+pmcluster credentials show openobserve_admin  # show a specific one
 pmcluster credentials show edge_admin      # the operator console login password
-pmcluster credentials rotate portainer     # generate + apply a new password
+pmcluster credentials rotate openobserve_admin # generate + apply a new password
 ```
 
-Managed credentials: `traefik_dashboard`, `portainer`, `openobserve_admin`, `edge_admin`, `edge_ui_secret`, `edge_api_token`. Edge credentials are persisted by the console on first boot, so `rotate` refuses them.
+Managed credentials: `traefik_dashboard`, `openobserve_admin`, `edge_admin`, `edge_ui_secret`, `edge_api_token`. Edge credentials are persisted by the console on first boot, so `rotate` refuses them.
 
 ## Audit Logs
 

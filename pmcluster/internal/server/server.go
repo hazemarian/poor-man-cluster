@@ -27,6 +27,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/services"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
@@ -89,6 +90,11 @@ type Deps struct {
 	// Secrets exposes secret management via the secrets service. Optional;
 	// when nil those routes are omitted.
 	Secrets secrets.Service
+
+	// Services exposes whitelisted per-service operations (list, task
+	// history, logs, restart, exec) under /api/services. Optional; when nil
+	// those routes are omitted.
+	Services services.Service
 }
 
 func New(d Deps) http.Handler {
@@ -156,6 +162,9 @@ func New(d Deps) http.Handler {
 		}
 		if d.Configs != nil {
 			(&configs.HTTP{Svc: d.Configs}).Mount(r)
+		}
+		if d.Services != nil {
+			(&services.HTTP{Svc: d.Services}).Mount(r)
 		}
 	})
 

@@ -31,7 +31,6 @@ type DownDeps struct {
 // (cert_v*, key_v*) are discovered via label and removed separately.
 var pmclusterManagedSecrets = []string{
 	"admin_credentials",
-	"portainer_admin_password",
 	"zo_root_user_password",
 }
 

@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,24 @@ type fakeClient struct {
 	// volumes + stackSecrets back VolumeList / StackSecretNames.
 	volumes      []string
 	stackSecrets []string
+
+	// services back the service-ops surface (ServiceInspect/Tasks/Logs/
+	// Restart/Exec). Nil maps are lazily initialised on first write.
+	services       map[string]ServiceInspectResult
+	serviceTasks   map[string][]ServiceTask
+	serviceLogs    map[string][]LogLine
+	serviceRestart int           // count of ServiceRestart calls
+	execResults    []*ExecResult // queue of exec results, consumed in order
+	execErr        error
+}
+
+// AddService registers a swarm service for the service-ops tests.
+func (f *fakeClient) AddService(name string, res ServiceInspectResult) {
+	if f.services == nil {
+		f.services = make(map[string]ServiceInspectResult)
+	}
+	res.Name = name
+	f.services[name] = res
 }
 
 func (f *fakeClient) Ping(_ context.Context) (Ping, error) {
@@ -97,8 +116,73 @@ func (f *fakeClient) VolumeRemove(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeClient) NodeList(_ context.Context) ([]Node, error)       { return nil, nil }
-func (f *fakeClient) ServiceList(_ context.Context) ([]Service, error) { return nil, nil }
+func (f *fakeClient) NodeList(_ context.Context) ([]Node, error) { return nil, nil }
+
+func (f *fakeClient) ServiceList(_ context.Context) ([]Service, error) {
+	out := make([]Service, 0, len(f.services))
+	for _, s := range f.services {
+		out = append(out, Service{
+			ID:    s.ID,
+			Name:  s.Name,
+			Stack: s.Labels[StackNamespaceLabel],
+			Image: s.Image,
+		})
+	}
+	return out, nil
+}
+
+func (f *fakeClient) ServiceInspect(_ context.Context, name string) (ServiceInspectResult, error) {
+	if s, ok := f.services[name]; ok {
+		return s, nil
+	}
+	// Also resolve by service ID if it matches a registered service's ID.
+	for _, s := range f.services {
+		if s.ID == name {
+			return s, nil
+		}
+	}
+	return ServiceInspectResult{}, fmt.Errorf("service %q not found", name)
+}
+
+func (f *fakeClient) ServiceTasks(_ context.Context, serviceID string) ([]ServiceTask, error) {
+	svc, err := f.ServiceInspect(context.Background(), serviceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ServiceTask, len(f.serviceTasks[svc.Name]))
+	copy(out, f.serviceTasks[svc.Name])
+	return out, nil
+}
+
+func (f *fakeClient) ServiceLogs(_ context.Context, serviceID string, _ int) ([]LogLine, error) {
+	svc, err := f.ServiceInspect(context.Background(), serviceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]LogLine, len(f.serviceLogs[svc.Name]))
+	copy(out, f.serviceLogs[svc.Name])
+	return out, nil
+}
+
+func (f *fakeClient) ServiceRestart(_ context.Context, serviceID string) error {
+	if _, err := f.ServiceInspect(context.Background(), serviceID); err != nil {
+		return err
+	}
+	f.serviceRestart++
+	return nil
+}
+
+func (f *fakeClient) ServiceExec(_ context.Context, serviceID string, _ []string) (*ExecResult, error) {
+	if f.execErr != nil {
+		return nil, f.execErr
+	}
+	if len(f.execResults) == 0 {
+		return nil, fmt.Errorf("service %q: no running task on this node", serviceID)
+	}
+	res := f.execResults[0]
+	f.execResults = f.execResults[1:]
+	return res, nil
+}
 func (f *fakeClient) JoinTokens(_ context.Context) (JoinTokens, error) { return JoinTokens{}, nil }
 func (f *fakeClient) SecretList(_ context.Context, _, _ string) ([]string, error) {
 	names := make([]string, 0, len(f.secrets))
@@ -262,5 +346,104 @@ func TestFakeClient_TableDriven(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSplitLines verifies the log-line splitter drops empty lines and tags
+// the stream correctly.
+func TestSplitLines(t *testing.T) {
+	got := splitLines("stdout", "a\nb\n\n")
+	if len(got) != 2 {
+		t.Fatalf("got %d lines, want 2: %+v", len(got), got)
+	}
+	if got[0] != (LogLine{Stream: "stdout", Line: "a"}) {
+		t.Errorf("got[0] = %+v", got[0])
+	}
+	if got[1] != (LogLine{Stream: "stdout", Line: "b"}) {
+		t.Errorf("got[1] = %+v", got[1])
+	}
+}
+
+// TestDemuxLines verifies the multiplexed-stream parser preserves stream tags
+// and interleaved order, and caps the tail.
+func TestDemuxLines(t *testing.T) {
+	// Frame format: [stream(1) pad(3) size(4 big-endian)][payload].
+	frame := func(stream byte, payload string) []byte {
+		b := make([]byte, 8+len(payload))
+		b[0] = stream
+		b[4] = byte(len(payload) >> 24)
+		b[5] = byte(len(payload) >> 16)
+		b[6] = byte(len(payload) >> 8)
+		b[7] = byte(len(payload))
+		copy(b[8:], payload)
+		return b
+	}
+	var stream []byte
+	stream = append(stream, frame(1, "out1\n")...)
+	stream = append(stream, frame(2, "err1\n")...)
+	stream = append(stream, frame(1, "out2\n")...)
+
+	lines, err := demuxLines(bytes.NewReader(stream), 100)
+	if err != nil {
+		t.Fatalf("demuxLines: %v", err)
+	}
+	want := []LogLine{
+		{Stream: "stdout", Line: "out1"},
+		{Stream: "stderr", Line: "err1"},
+		{Stream: "stdout", Line: "out2"},
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("got %d lines, want %d: %+v", len(lines), len(want), lines)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Errorf("lines[%d] = %+v, want %+v", i, lines[i], want[i])
+		}
+	}
+
+	// Tail cap: only the last 2 lines survive.
+	lines, err = demuxLines(bytes.NewReader(stream), 2)
+	if err != nil {
+		t.Fatalf("demuxLines tail: %v", err)
+	}
+	if len(lines) != 2 || lines[0] != (LogLine{Stream: "stderr", Line: "err1"}) {
+		t.Errorf("tail lines = %+v, want [err1 out2]", lines)
+	}
+}
+
+// TestFakeClient_ServiceOps verifies the fake's service-ops surface.
+func TestFakeClient_ServiceOps(t *testing.T) {
+	f := &fakeClient{}
+	f.AddService("demo_web", ServiceInspectResult{
+		ID:     "svc-1",
+		Image:  "ghcr.io/nextrum-sy/demo:latest",
+		Labels: map[string]string{StackNamespaceLabel: "demo"},
+	})
+	f.serviceTasks = map[string][]ServiceTask{
+		"demo_web": {{TaskID: "t1", State: "running"}},
+	}
+	f.serviceLogs = map[string][]LogLine{
+		"demo_web": {{Stream: "stdout", Line: "hello"}},
+	}
+	f.execResults = []*ExecResult{{ExitCode: 0, Stdout: "ok"}}
+
+	if svc, err := f.ServiceInspect(context.Background(), "demo_web"); err != nil || svc.Image == "" {
+		t.Errorf("ServiceInspect = %+v, %v", svc, err)
+	}
+	if tasks, err := f.ServiceTasks(context.Background(), "svc-1"); err != nil || len(tasks) != 1 {
+		t.Errorf("ServiceTasks = %+v, %v", tasks, err)
+	}
+	if logs, err := f.ServiceLogs(context.Background(), "demo_web", 10); err != nil || len(logs) != 1 {
+		t.Errorf("ServiceLogs = %+v, %v", logs, err)
+	}
+	if err := f.ServiceRestart(context.Background(), "demo_web"); err != nil || f.serviceRestart != 1 {
+		t.Errorf("ServiceRestart err=%v calls=%d", err, f.serviceRestart)
+	}
+	res, err := f.ServiceExec(context.Background(), "demo_web", []string{"whoami"})
+	if err != nil || res == nil || res.Stdout != "ok" {
+		t.Errorf("ServiceExec = %+v, %v", res, err)
+	}
+	if list, err := f.ServiceList(context.Background()); err != nil || len(list) != 1 || list[0].Stack != "demo" {
+		t.Errorf("ServiceList = %+v, %v", list, err)
 	}
 }

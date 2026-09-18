@@ -36,7 +36,7 @@ var credsShowCmd = &cobra.Command{
 	Long: `Decrypts via ~/.pmcluster/.encryption_key and prints to stdout. Treat
 the output as sensitive.
 
-Names: traefik_dashboard | portainer | openobserve_admin`,
+Names: traefik_dashboard | openobserve_admin`,
 	Args: cobra.ExactArgs(1),
 	RunE: runCredsShow,
 }
@@ -51,7 +51,7 @@ If the consuming service is still running with the secret mounted,
 SecretRemove fails ("secret in use"). Scale the service to 0
 (docker service scale <name>=0), rotate, then scale back.
 
-Names: traefik_dashboard | portainer | openobserve_admin`,
+Names: traefik_dashboard | openobserve_admin`,
 	Args: cobra.ExactArgs(1),
 	RunE: runCredsRotate,
 }

@@ -120,7 +120,6 @@ func TestClusterUp(t *testing.T) {
 			wantRep int
 		}{
 			{stack: "infra", service: "traefik", wantRep: 1},
-			{stack: "infra", service: "portainer", wantRep: 1},
 			{stack: "observability", service: "openobserve", wantRep: 1},
 			{stack: "observability", service: "otel-collector", wantRep: 1},
 			{stack: "backup", service: "volume-backup", wantRep: 1},
@@ -145,7 +144,6 @@ func TestClusterUp(t *testing.T) {
 			"admin_credentials",
 			"cert",
 			"key",
-			"portainer_admin_password",
 			"zo_root_user_password",
 		} {
 			if !strings.Contains(out, secret) {
@@ -179,17 +177,17 @@ func TestClusterUp(t *testing.T) {
 			t.Fatalf("pmcluster credentials list exited %d:\n%s", code, out)
 		}
 
-		for _, name := range []string{"traefik_dashboard", "portainer", "openobserve_admin"} {
+		for _, name := range []string{"traefik_dashboard", "openobserve_admin"} {
 			if !strings.Contains(out, name) {
 				t.Errorf("credentials list: %q not found; output:\n%s", name, out)
 			}
 		}
 	})
 
-	t.Run("credentials show portainer prints non-empty password", func(t *testing.T) {
-		out, _, code := runCmd(t, homeDir, "credentials", "show", "portainer")
+	t.Run("credentials show openobserve prints non-empty password", func(t *testing.T) {
+		out, _, code := runCmd(t, homeDir, "credentials", "show", "openobserve_admin")
 		if code != 0 {
-			t.Fatalf("pmcluster credentials show portainer exited %d:\n%s", code, out)
+			t.Fatalf("pmcluster credentials show openobserve_admin exited %d:\n%s", code, out)
 		}
 		if !strings.Contains(out, "password:") {
 			t.Errorf("expected 'password:' line in credentials show output; got:\n%s", out)
@@ -241,7 +239,6 @@ func TestClusterUp(t *testing.T) {
 			wantRep int
 		}{
 			{stack: "infra", service: "traefik", wantRep: 1},
-			{stack: "infra", service: "portainer", wantRep: 1},
 			{stack: "observability", service: "openobserve", wantRep: 1},
 			{stack: "observability", service: "otel-collector", wantRep: 1},
 		} {

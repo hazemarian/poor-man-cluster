@@ -4,8 +4,8 @@ Single-binary control plane for the [poor-man-stack](../README.md) Docker Swarm 
 It owns cluster bootstrap, application deploys (via a small DSL that translates to
 Compose), HMAC-verified webhooks for CI, registry credentials, bootstrap-password
 generation, per-host TLS certificates, API tokens, on-demand offen backups, and
-structured JSON audit logs. It replaces the old `bin/setup.sh` and Portainer's
-GitOps role.
+structured JSON audit logs. It replaces the old `bin/setup.sh` and owns
+deployment end to end.
 
 The daemon listens on `127.0.0.1:9090` (host-only). Public access goes through
 [`pmcluster-edge`](../README.md) — a Swarm service that publishes
@@ -18,7 +18,7 @@ The daemon listens on `127.0.0.1:9090` (host-only). Public access goes through
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | bash
 ```
 
-Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.27`.
+Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.42`.
 On Linux, `install.sh` also drops a systemd unit at `contrib/systemd/pmcluster.service`.
 
 ## Quick start

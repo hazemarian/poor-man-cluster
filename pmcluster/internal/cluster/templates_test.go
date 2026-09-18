@@ -527,7 +527,6 @@ func TestLoadComposeFile_InfraACMEMode(t *testing.T) {
 		"--certificatesresolvers.letsencrypt.acme.httpchallenge=true",
 		"traefik_acme:/letsencrypt",
 		"traefik.http.routers.traefik.tls.certresolver=letsencrypt",
-		"traefik.http.routers.portainer.tls.certresolver=letsencrypt",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("ACME-mode infra stack missing %q", want)

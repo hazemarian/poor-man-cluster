@@ -1,0 +1,33 @@
+{{define "services"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1>Services</h1>
+<p class="sub">{{.Count}} swarm service(s) · live replica health (replaces Portainer's service view)</p>
+
+{{if .Services}}
+<div class="card" style="padding:6px 14px">
+<table>
+  <tr><th>Service</th><th>Stack</th><th>Replicas</th><th>Image</th><th>Mode</th><th>Updated</th><th></th></tr>
+  {{range .Services}}
+  <tr>
+    <td><code>{{.Name}}</code></td>
+    <td>{{if .Stack}}<span class="pill">{{.Stack}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+    <td><span class="{{if and (gt .Desired 0) (lt .Replicas .Desired)}}pill bad{{else if gt .Desired 0}}pill good{{end}}">{{.Replicas}}/{{.Desired}}</span></td>
+    <td class="muted">{{if .Image}}<code>{{.Image}}</code>{{else}}—{{end}}</td>
+    <td class="muted">{{if .Mode}}{{.Mode}}{{else}}—{{end}}</td>
+    <td class="muted">{{ts .Updated}}</td>
+    <td style="text-align:right; white-space:nowrap">
+      {{if .Stack}}
+      <a class="btn sm ghost" href="/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-get="/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true">Tasks</a>
+      <a class="btn sm ghost" href="/services/{{.Stack}}/{{.ServiceName}}/logs" hx-get="/services/{{.Stack}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true">Logs</a>
+      {{end}}
+    </td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{else}}
+<div class="card empty">No swarm services.</div>
+{{end}}
+{{end}}

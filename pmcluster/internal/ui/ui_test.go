@@ -142,7 +142,7 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"otel_config":"pmcluster_otel_config_v034","traefik_config":"pmcluster_traefik_dynamic_v044","cert_secret":"cert_v041","key_secret":"key_v041","edge_config":"pmcluster_edge_v005","stacks_deployed":["infra"]}`)
 	})
 	mux.HandleFunc("/api/cluster/rendered", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"configs":[{"name":"traefik-dynamic","content":"tls:\n  certificates: []\n"},{"name":"infra-stack","content":"version: \"3.9\"\nservices:\n  portainer:\n    image: portainer/portainer-ce:2.39.5\n"}]}`)
+		write(w, `{"configs":[{"name":"traefik-dynamic","content":"tls:\n  certificates: []\n"},{"name":"infra-stack","content":"version: \"3.9\"\nservices:\n  traefik:\n    image: traefik:v3.6.5\n"}]}`)
 	})
 
 	siteSoon := time.Now().AddDate(0, 0, 10).UTC().Format(time.RFC3339)
@@ -165,6 +165,23 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}
+	})
+
+	// Service ops (the Portainer replacement).
+	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"services":[{"name":"demo_web","stack":"demo","replicas":2,"desired":2,"image":"ghcr.io/nextrum-sy/demo:1.0","mode":"replicated","updated":70},{"name":"infra_traefik","stack":"infra","replicas":1,"desired":1,"image":"traefik:v3","mode":"global","updated":71}]}`)
+	})
+	mux.HandleFunc("/api/services/demo/web/tasks", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"service":"demo_web","tasks":[{"task_id":"t1","node":"mgr","slot":1,"state":"running","error":"","started_at":65,"finished_at":0}]}`)
+	})
+	mux.HandleFunc("/api/services/demo/web/logs", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"service":"demo_web","logs":[{"stream":"stdout","line":"listening on :8080"}]}`)
+	})
+	mux.HandleFunc("/api/services/demo/web/restart", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"service":"demo_web","restarted":true}`)
+	})
+	mux.HandleFunc("/api/services/demo/web/exec", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"service":"demo_web","exit_code":0,"stdout":"root","stderr":""}`)
 	})
 	return httptest.NewServer(mux)
 }
@@ -649,5 +666,58 @@ func TestTLSMainAndHosts(t *testing.T) {
 	b = readBody(t, resp)
 	if !strings.Contains(b, "Certificate for idlebbookfair.com stored") {
 		t.Errorf("per-host add missing confirmation; got: %s", b)
+	}
+}
+
+func TestServicesUI(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+
+	app := newTestApp(t, daemon)
+	jar := map[string]*http.Cookie{}
+
+	// login
+	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
+	resp := doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("login = %d, want 302", resp.StatusCode)
+	}
+
+	// services list
+	resp = doRequest(t, app, http.MethodGet, "/services", "", jar)
+	body, _ := io.ReadAll(resp.Body)
+	s := string(body)
+	if !strings.Contains(s, "demo_web") || !strings.Contains(s, "infra_traefik") {
+		t.Errorf("services list missing rows; got: %s", s)
+	}
+	if !strings.Contains(s, "demo") || !strings.Contains(s, "2/2") {
+		t.Errorf("services list missing stack/replica info; got: %s", s)
+	}
+
+	// tasks fragment for demo_web (unqualified: stack=demo, service=web)
+	resp = doRequest(t, app, http.MethodGet, "/services/demo/web/tasks", "", jar)
+	body, _ = io.ReadAll(resp.Body)
+	s = string(body)
+	if !strings.Contains(s, "t1") || !strings.Contains(s, "running") {
+		t.Errorf("tasks fragment missing task row; got: %s", s)
+	}
+	if !strings.Contains(s, "Restart") {
+		t.Errorf("tasks fragment missing restart button; got: %s", s)
+	}
+
+	// logs fragment
+	resp = doRequest(t, app, http.MethodGet, "/services/demo/web/logs", "", jar)
+	body, _ = io.ReadAll(resp.Body)
+	s = string(body)
+	if !strings.Contains(s, "listening on :8080") {
+		t.Errorf("logs fragment missing output; got: %s", s)
+	}
+
+	// exec
+	resp = doRequest(t, app, http.MethodPost, "/services/demo/web/exec", "argv=whoami", jar)
+	body, _ = io.ReadAll(resp.Body)
+	s = string(body)
+	if !strings.Contains(s, "root") {
+		t.Errorf("exec fragment missing output; got: %s", s)
 	}
 }

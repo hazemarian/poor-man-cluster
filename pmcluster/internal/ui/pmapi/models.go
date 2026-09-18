@@ -244,3 +244,39 @@ type ConfigVersion struct {
 	Hash      string `json:"hash"`
 	CreatedAt int64  `json:"created_at"`
 }
+
+// Service is one row of GET /api/services (or GET /api/services/{stack}).
+type Service struct {
+	Name     string `json:"name"`
+	Stack    string `json:"stack"`
+	Replicas uint64 `json:"replicas"`
+	Desired  uint64 `json:"desired"`
+	Image    string `json:"image"`
+	Mode     string `json:"mode"`
+	Updated  int64  `json:"updated"`
+}
+
+// ServiceTask is one row of GET /api/services/{stack}/{svc}/tasks.
+type ServiceTask struct {
+	TaskID     string `json:"task_id"`
+	Node       string `json:"node"`
+	Slot       int64  `json:"slot"`
+	State      string `json:"state"`
+	Error      string `json:"error"`
+	StartedAt  int64  `json:"started_at"`
+	FinishedAt int64  `json:"finished_at"`
+}
+
+// ServiceLogLine is one row of GET /api/services/{stack}/{svc}/logs.
+type ServiceLogLine struct {
+	Stream string `json:"stream"`
+	Line   string `json:"line"`
+}
+
+// ExecResult is POST /api/services/{stack}/{svc}/exec.
+type ExecResult struct {
+	Service  string `json:"service"`
+	ExitCode int    `json:"exit_code"`
+	Stdout   string `json:"stdout"`
+	Stderr   string `json:"stderr"`
+}

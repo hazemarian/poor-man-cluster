@@ -17,7 +17,6 @@ type CredentialKind string
 
 const (
 	KindTraefikAdmin CredentialKind = "traefik"
-	KindPortainer    CredentialKind = "portainer"
 	KindOpenObserve  CredentialKind = "openobserve"
 	// KindEdge marks credentials consumed by the pmcluster-edge console (the
 	// operator UI). Unlike the other kinds these are never force-restarted by
@@ -57,7 +56,6 @@ type CredentialsManager struct {
 // deploy` produces. Keep in sync with the bundled stacks.
 var consumingService = map[string]string{
 	"traefik_dashboard": "infra_traefik",
-	"portainer":         "infra_portainer",
 	"openobserve_admin": "observability_openobserve",
 }
 
@@ -75,7 +73,6 @@ func (m *CredentialsManager) Bootstrap(ctx context.Context, in BootstrapInput) (
 
 	usernameFor := map[string]string{
 		"traefik_dashboard": in.TraefikAdminUser,
-		"portainer":         "admin",
 		"openobserve_admin": in.OpenObserveAdminEmail,
 		"edge_admin":        "admin",
 		"edge_ui_secret":    "session",
@@ -321,12 +318,6 @@ func bootstrapSpecs() []bootstrapSpec {
 			format:          formatHtpasswd,
 		},
 		{
-			name:            "portainer",
-			kind:            KindPortainer,
-			swarmSecretName: "portainer_admin_password",
-			format:          formatPlain,
-		},
-		{
 			name:            "openobserve_admin",
 			kind:            KindOpenObserve,
 			swarmSecretName: "zo_root_user_password",
@@ -409,7 +400,7 @@ func serialisePassword(spec bootstrapSpec, username, password string) ([]byte, e
 }
 
 // CredentialsService is the port for managing the platform bootstrap
-// credentials (Traefik, Portainer, OpenObserve, edge). Get and List return
+// credentials (Traefik, OpenObserve, edge). Get and List return
 // the encrypted store rows; Reveal decrypts a password; Rotate delegates to
 // the injected rotator (the CLI composes CredentialsManager with its Docker
 // client and deployer). Credentials are local-only — there is no REST route.

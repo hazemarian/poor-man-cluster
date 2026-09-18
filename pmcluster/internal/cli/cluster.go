@@ -88,7 +88,7 @@ var clusterUpCmd = &cobra.Command{
       --acme-email <you@host>   Let's Encrypt via Traefik HTTP-01
                                 (DNS must point here AND port 80 must be reachable)
       --cert <pem> --key <pem>  Operator-supplied certificate
-  - Generate random bootstrap credentials for traefik/portainer/openobserve
+  - Generate random bootstrap credentials for traefik/openobserve/edge
     (encrypted in SQLite + mirrored to Swarm secrets; existing values preserved)
   - Render OTel + Traefik dynamic configs in-process; ship as Docker configs
   - Deploy infra/observability/backup stacks via 'docker stack deploy'
@@ -297,7 +297,7 @@ func printUpResult(out io.Writer, in cluster.UpInput, res *cluster.UpResult) {
 		fmt.Fprintln(out, "🔑 BOOTSTRAP CREDENTIALS — save these somewhere safe")
 		fmt.Fprintln(out, "════════════════════════════════════════════════════════════════════")
 		fmt.Fprintln(out)
-		order := []string{"traefik_dashboard", "portainer", "openobserve_admin"}
+		order := []string{"traefik_dashboard", "openobserve_admin"}
 		for _, name := range order {
 			c := res.BootstrapCredentials[name]
 			if c == nil {
@@ -322,10 +322,9 @@ func printUpResult(out io.Writer, in cluster.UpInput, res *cluster.UpResult) {
 	}
 
 	fmt.Fprintf(out, "Dashboards (once DNS resolves):\n")
-	fmt.Fprintf(out, "  Traefik    https://traefik.%s\n", in.Domain)
-	fmt.Fprintf(out, "  Portainer  https://portainer.%s\n", in.Domain)
+	fmt.Fprintf(out, "  Traefik     https://traefik.%s\n", in.Domain)
 	fmt.Fprintf(out, "  OpenObserve https://observ.%s\n", in.Domain)
-	fmt.Fprintf(out, "  pmcluster  https://pmcluster.%s   (after `pmcluster serve` is supervised)\n", in.Domain)
+	fmt.Fprintf(out, "  pmcluster   https://pmcluster.%s   (after `pmcluster serve` is supervised)\n", in.Domain)
 	fmt.Fprintln(out)
 }
 

@@ -266,3 +266,80 @@ func TestRemoteErrorMapping(t *testing.T) {
 func isErr(err, target error) bool {
 	return err != nil && strings.Contains(err.Error(), target.Error())
 }
+
+func TestRemoteServices(t *testing.T) {
+	srv, c := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/services":
+			writeJSON(w, http.StatusOK, map[string]any{"services": []map[string]any{
+				{"name": "demo_web", "stack": "demo", "replicas": 2, "desired": 2, "image": "img:1", "mode": "replicated", "updated": 1700000000},
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/services/demo":
+			writeJSON(w, http.StatusOK, map[string]any{"services": []map[string]any{
+				{"name": "demo_web", "stack": "demo", "replicas": 2, "desired": 2, "image": "img:1", "mode": "replicated", "updated": 1700000000},
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/services/demo/web/tasks":
+			writeJSON(w, http.StatusOK, map[string]any{"tasks": []map[string]any{
+				{"task_id": "t1", "node": "mgr", "slot": 1, "state": "running", "error": "", "started_at": 1700000000, "finished_at": 0},
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/services/demo/web/logs":
+			writeJSON(w, http.StatusOK, map[string]any{"logs": []map[string]any{
+				{"stream": "stdout", "line": "hello"},
+			}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/services/demo/web/restart":
+			writeJSON(w, http.StatusOK, map[string]any{"service": "demo_web", "restarted": true})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/services/demo/web/exec":
+			var in struct {
+				Argv []string `json:"argv"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			if len(in.Argv) == 0 {
+				http.Error(w, "argv: required", http.StatusBadRequest)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"service": "demo_web", "exit_code": 0, "stdout": "root", "stderr": ""})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+
+	a := NewServices(c)
+
+	list, err := a.List(context.Background(), "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || list[0].Name != "demo_web" || list[0].Stack != "demo" {
+		t.Errorf("List = %+v", list)
+	}
+
+	demo, err := a.List(context.Background(), "demo")
+	if err != nil || len(demo) != 1 {
+		t.Errorf("List(demo) = %+v, %v", demo, err)
+	}
+
+	tasks, err := a.Tasks(context.Background(), "demo", "web")
+	if err != nil || len(tasks) != 1 || tasks[0].State != "running" {
+		t.Errorf("Tasks = %+v, %v", tasks, err)
+	}
+
+	logs, err := a.Logs(context.Background(), "demo", "web", 50)
+	if err != nil || len(logs) != 1 || logs[0].Line != "hello" {
+		t.Errorf("Logs = %+v, %v", logs, err)
+	}
+
+	if err := a.Restart(context.Background(), "demo", "web"); err != nil {
+		t.Errorf("Restart: %v", err)
+	}
+
+	res, err := a.Exec(context.Background(), "demo", "web", []string{"whoami"})
+	if err != nil || res.Stdout != "root" || res.ExitCode != 0 {
+		t.Errorf("Exec = %+v, %v", res, err)
+	}
+
+	_, err = a.Exec(context.Background(), "demo", "web", nil)
+	if err == nil || !strings.Contains(err.Error(), "argv") {
+		t.Errorf("Exec(nil argv) err = %v, want argv error", err)
+	}
+}

@@ -2,6 +2,8 @@
 package cli
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 )
 
@@ -57,6 +59,15 @@ func init() {
 		"",
 		"daemon API bearer token (remote mode; default: $PMCLUSTER_API_TOKEN)",
 	)
+
+	// Env-var defaults for remote mode (documented in the README + deploy
+	// skill). Flags take precedence over these when explicitly set.
+	if v := os.Getenv("PMCLUSTER_API_URL"); v != "" && apiURL == "" {
+		apiURL = v
+	}
+	if v := os.Getenv("PMCLUSTER_API_TOKEN"); v != "" && apiToken == "" {
+		apiToken = v
+	}
 
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(initCmd)

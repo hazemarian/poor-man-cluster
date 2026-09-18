@@ -111,6 +111,15 @@ func (a *App) Mount(engine *gin.Engine) {
 	g.GET("/stacks/:name/backups", st.ShowBackups)
 	g.POST("/stacks/:name/remove", st.Remove)
 
+	// Service ops (the Portainer replacement): list, tasks, logs, restart,
+	// exec. All go through the daemon's whitelisted /api/services routes.
+	svc := controllers.Services{Controller: a.ctrl}
+	g.GET("/services", svc.List)
+	g.GET("/services/:stack/:service/tasks", svc.Tasks)
+	g.GET("/services/:stack/:service/logs", svc.Logs)
+	g.POST("/services/:stack/:service/restart", svc.Restart)
+	g.POST("/services/:stack/:service/exec", svc.Exec)
+
 	// Per-stack configs + secrets: service-scope rows belonging to that stack.
 	scc := controllers.StackConfigs{Controller: a.ctrl}
 	g.GET("/stacks/:name/config", scc.Page)

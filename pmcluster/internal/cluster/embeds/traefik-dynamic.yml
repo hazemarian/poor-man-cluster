@@ -7,7 +7,7 @@ http:
       basicAuth:
         usersFile: /run/secrets/admin_credentials
     # cors-default: applied to every exposed/app router emitted by the manifest
-    # translator plus those mounted via stack labels (edge console, portainer,
+    # translator plus those mounted via stack labels (edge console,
     # openobserve). Origins are restricted to
     # https://<any-subdomain>.<cluster-domain> + https://<cluster-domain>
     # via a regex derived from cluster up --domain. Echoed origins keep

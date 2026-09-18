@@ -9,7 +9,7 @@ The control plane is a single static Go 1.25 binary (`pmcluster`, ~25 MB, no cgo
 In front of it sits **`pmcluster-edge`** — a small Go service deployed as a Swarm service that publishes `pmcluster.<domain>` as the single public origin for the **operator console** (a web UI for API keys, TLS, webhooks, stacks, and more), the REST API, and webhook receivers — all shielded by per-IP rate limiting, a connection shield, and automatic IP blocklisting.
 
 - **Design + trade-offs:** [RFC v2 — issue #1](https://github.com/hazemarian/poor-man-stack/issues/1) (what actually shipped)
-- **Current release:** [v0.2.41](https://github.com/hazemarian/poor-man-stack/releases)
+- **Current release:** [v0.2.42](https://github.com/hazemarian/poor-man-stack/releases)
 
 ---
 
@@ -22,7 +22,7 @@ Two overlay networks connect everything:
 - **`traefik-net`** — application traffic between Traefik and your services
 - **`monitoring-net`** — telemetry (logs, metrics, traces) between services and OpenObserve
 
-All sensitive credentials are stored as Docker Swarm secrets (encrypted at rest and in transit) AND mirrored encrypted in `pmcluster`'s SQLite for retrieval. The bootstrap admin passwords for Traefik/Portainer/OpenObserve are generated randomly on first `cluster up` — no `.env` editing required.
+All sensitive credentials are stored as Docker Swarm secrets (encrypted at rest and in transit) AND mirrored encrypted in `pmcluster`'s SQLite for retrieval. The bootstrap admin passwords for Traefik/OpenObserve/edge are generated randomly on first `cluster up` — no `.env` editing required.
 
 ```
 Internet
@@ -33,7 +33,7 @@ Traefik (HTTPS ingress, auto-routes via Docker labels + file provider)
    │        ├── operator console (gin + HTMX web UI)
    │        └── smart reverse proxy ──▶ pmcluster daemon (host, 127.0.0.1:9090)
    ├──▶ Your App(s)
-   ├──▶ Portainer (operator UI)
+   ├──▶ pmcluster operator console (via pmcluster-edge)
    └──▶ OpenObserve (observability UI)
 
 Your App(s) ──OTLP──▶ OTel Collector ──▶ OpenObserve
@@ -51,8 +51,8 @@ Every node: OTel Collector + Backup Agent (global services)
 ### Traefik — Ingress & API Gateway
 Sits at the edge and routes HTTPS traffic to the right service based on Docker labels (for swarm services) and a file provider (for the pmcluster route + TLS certificates). TLS certs are loaded from Swarm secrets. Built-in OpenTelemetry support sends traces and metrics to the collector.
 
-### Portainer — Operator UI
-Read/operate UI for the cluster: view services, restart, exec into containers, tail logs. **Not used for GitOps anymore** — `pmcluster` owns deployment. May be replaced by something smaller (Komodo is a candidate) later.
+### pmcluster operator console — Service & Platform UI
+Web UI (served by `pmcluster-edge` on the `pmcluster.<domain>` origin) for day-to-day operations: view stacks and **services** (live replica health, task/crash history, tailed logs), **restart** services, run one-off `exec` commands, manage webhooks/API keys/TLS/backups, and edit cluster settings. No Portainer — its role is fully covered here plus the `pmcluster service` CLI.
 
 ### OpenObserve — Observability (Logs, Metrics, Traces)
 Lightweight all-in-one observability platform. Single binary, one UI, ~140× lower storage cost than Elasticsearch-based stacks. Receives OTLP from the OTel Collector.
@@ -73,7 +73,7 @@ A small Go service (gin + HTMX) deployed as the `pmcluster-edge` Swarm service o
 Its image is built from `cmd/edge/` and published to GHCR; the embedded `edge-stack.yml` pins the version-keyed tag so `cluster up`/`cluster update` can detect and roll out upgrades.
 
 ### pmcluster — Control Plane (Go)
-Single static binary, lives on the manager host. Replaces the bash setup script and Portainer's GitOps role.
+Single static binary, lives on the manager host. Replaces the bash setup script and owns deployment end to end.
 
 - `pmcluster init` — creates `~/.pmcluster/` (SQLite + encryption key) and prints a one-time bootstrap admin token for the API
 - `pmcluster cluster up` — brings the cluster up: preflight, networks, TLS secrets, bootstrap credentials, OTel + Traefik configs, deploy stacks. Prints all bootstrap passwords in a clearly-marked block at the end.
@@ -81,7 +81,8 @@ Single static binary, lives on the manager host. Replaces the bash setup script 
 - `pmcluster cluster status` / `cluster down`
 - `pmcluster serve` — runs the long-running daemon (REST API + webhook receiver). Listens on `127.0.0.1:9090`; Traefik routes `pmcluster.<domain>` to it via `host.docker.internal:host-gateway`
 - `pmcluster deploy <file>` / `pmcluster stack list|show` / `pmcluster rollback <stack> <rev>` — DSL-based application deploys with versioned rollback
-- `pmcluster credentials list|show|rotate` — managed bootstrap passwords (Traefik / Portainer / OpenObserve)
+- `pmcluster credentials list|show|rotate` — managed bootstrap passwords (Traefik / OpenObserve / edge)
+- `pmcluster service list|ps|tasks|logs|restart|exec` — whitelisted service operations (replica health, crash history, log tailing, restart, non-interactive exec) working locally or over the remote API
 - `pmcluster registry add|list|remove` — Docker registry credentials, replayed on `serve` startup so private images keep pulling
 - `pmcluster webhook add|list|remove` — HMAC-signed webhook sources for CI integrations (timestamped to prevent replay)
 - `pmcluster tls hosts add|list|remove` — per-host TLS certificates for customer domains served by Traefik (independent of the cluster wildcard cert)
@@ -157,7 +158,7 @@ One-line install (latest release):
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | bash
 ```
 
-The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-stack/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.41`).
+The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-stack/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.42`).
 
 **With private registry credentials (GHCR, Docker Hub, etc.):**
 
@@ -201,7 +202,7 @@ It will:
 1. Preflight (Docker reachable, Swarm active, this node is a manager)
 2. Create the `traefik-net` and `monitoring-net` overlay networks
 3. Configure TLS — either wire ACME into Traefik (HTTP-01 via the `:80` entrypoint) or load the operator's cert/key into Swarm secrets
-4. Generate random bootstrap passwords for Traefik / Portainer / OpenObserve, store encrypted in SQLite, mirror to Swarm secrets
+4. Generate random bootstrap passwords for Traefik / OpenObserve / the edge console, store encrypted in SQLite, mirror to Swarm secrets
 5. Render the OTel + Traefik dynamic configs in-process and create them as Docker configs (Swarm replicates to every node)
 6. Deploy the `infra`, `edge`, `observability`, and `backup` stacks via `docker stack deploy`
 
@@ -209,14 +210,17 @@ The bootstrap passwords are printed **once** at the end. Save them, or retrieve 
 
 ```bash
 pmcluster credentials list
-pmcluster credentials show portainer
+pmcluster credentials show openobserve_admin
 ```
 
 Once DNS resolves, the dashboards are live at:
 - `https://traefik.<your-domain>` — Traefik dashboard
-- `https://portainer.<your-domain>` — Portainer
 - `https://observ.<your-domain>` — OpenObserve
 - `https://pmcluster.<your-domain>` — **pmcluster operator console + API/webhooks** (served by `pmcluster-edge`; login as `admin` with the `edge_admin` bootstrap password from `pmcluster credentials show edge_admin`)
+
+Service-level operations (replica health, task history, logs, restart, exec)
+are handled by pmcluster itself — see the `pmcluster service` CLI group and the
+**Services** tab in the operator console. There is no Portainer.
 
 ### 3. Run the pmcluster daemon
 
@@ -559,10 +563,10 @@ The edge proxy applies per-IP rate limits: `200 req/s` (burst 400) for `/api/*` 
 
 | Node | CPU | RAM | Notes |
 |------|-----|-----|-------|
-| Manager | 2 vCPU | 4 GB | Traefik + Portainer + OpenObserve + OTel Collector + Backup Agent + pmcluster-edge + pmcluster |
+| Manager | 2 vCPU | 4 GB | Traefik + OpenObserve + OTel Collector + Backup Agent + pmcluster-edge + pmcluster |
 | Worker | 1 vCPU | 1 GB | OTel Collector + Backup Agent + your application workloads |
 
-OpenObserve alone needs ~512 MB RAM at idle. On a manager with less than 4 GB it will compete with Portainer and Traefik under load. `pmcluster-edge` is tiny (64–256 MB, capped).
+OpenObserve alone needs ~512 MB RAM at idle. On a manager with less than 4 GB it will compete with Traefik under load. `pmcluster-edge` is tiny (64–256 MB, capped).
 
 ---
 
