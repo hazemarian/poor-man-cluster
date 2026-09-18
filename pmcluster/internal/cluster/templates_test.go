@@ -890,3 +890,96 @@ func TestPruneCandidates(t *testing.T) {
 		}
 	})
 }
+
+// TestRenderRefResolver verifies the cluster-side resolver maps the logical
+// config()/secrets() names to the versioned Docker artifact names from the
+// render, and rejects unknown references.
+func TestRenderRefResolver(t *testing.T) {
+	r := &renderRefResolver{render: RenderInput{
+		OTelConfigName:    "pmcluster_otel_config_v046",
+		TraefikConfigName: "pmcluster_traefik_dynamic_v044",
+		CertSecretName:    "cert_v042",
+		KeySecretName:     "key_v042",
+	}}
+
+	for name, want := range map[string]string{
+		"pmcluster_otel_config":     "pmcluster_otel_config_v046",
+		"pmcluster_traefik_dynamic": "pmcluster_traefik_dynamic_v044",
+	} {
+		got, err := r.ResolveConfig(context.Background(), name)
+		if err != nil {
+			t.Errorf("ResolveConfig(%q): %v", name, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("ResolveConfig(%q) = %q, want %q", name, got, want)
+		}
+	}
+
+	for name, want := range map[string]string{
+		"cert": "cert_v042",
+		"key":  "key_v042",
+	} {
+		got, err := r.ResolveSecret(context.Background(), name)
+		if err != nil {
+			t.Errorf("ResolveSecret(%q): %v", name, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("ResolveSecret(%q) = %q, want %q", name, got, want)
+		}
+	}
+
+	if _, err := r.ResolveConfig(context.Background(), "nope"); err == nil {
+		t.Error("ResolveConfig(unknown) should error")
+	}
+	if _, err := r.ResolveSecret(context.Background(), "nope"); err == nil {
+		t.Error("ResolveSecret(unknown) should error")
+	}
+}
+
+// TestLoadComposeFile_ResolvesConfigSecretRefs verifies the infra and
+// observability stacks substitute config()/secrets() refs with the versioned
+// artifact names and leave no raw references behind.
+func TestLoadComposeFile_ResolvesConfigSecretRefs(t *testing.T) {
+	in := RenderInput{
+		Domain:                "example.com",
+		OpenObserveAdminEmail: "ops@example.com",
+		OTelConfigName:        "pmcluster_otel_config_v046",
+		TraefikConfigName:     "pmcluster_traefik_dynamic_v044",
+		CertSecretName:        "cert_v042",
+		KeySecretName:         "key_v042",
+	}
+
+	for _, s := range []stackName{StackInfra, StackObservability} {
+		data, err := LoadComposeFile(s, in)
+		if err != nil {
+			t.Fatalf("LoadComposeFile(%q): %v", s, err)
+		}
+		body := string(data)
+		for _, unresolved := range []string{"config(", "secrets(", "__OTEL_CONFIG_NAME__", "__TRAEFIK_CONFIG_NAME__", "__CERT_SECRET__", "__KEY_SECRET__"} {
+			if strings.Contains(body, unresolved) {
+				t.Errorf("%s: unresolved %q in output:\n%s", s, unresolved, body)
+			}
+		}
+	}
+
+	infra, err := LoadComposeFile(StackInfra, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	infraBody := string(infra)
+	for _, want := range []string{"pmcluster_traefik_dynamic_v044", "cert_v042", "key_v042"} {
+		if !strings.Contains(infraBody, want) {
+			t.Errorf("infra-stack missing %q in output", want)
+		}
+	}
+
+	obs, err := LoadComposeFile(StackObservability, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(obs), "pmcluster_otel_config_v046") {
+		t.Errorf("observability-stack missing otel config name in output")
+	}
+}

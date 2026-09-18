@@ -45,7 +45,7 @@ services:
       - traefik_acme:/letsencrypt
       [[- end]]
     configs:
-      - source: __TRAEFIK_CONFIG_NAME__
+      - source: config(pmcluster_traefik_dynamic)
         target: /etc/traefik/dynamic/conf.yml
     # host.docker.internal lets Traefik reach pmcluster (host process,
     # brew-installed) at host.docker.internal:9090 on Linux.
@@ -90,8 +90,8 @@ services:
     secrets:
       - admin_credentials
       [[- if not .ACMEEmail]]
-      - __CERT_SECRET__
-      - __KEY_SECRET__
+      - secrets(cert)
+      - secrets(key)
       [[- end]]
 
 volumes:
@@ -111,14 +111,14 @@ secrets:
   admin_credentials:
     external: true
   [[- if not .ACMEEmail]]
-  __CERT_SECRET__:
+  secrets(cert):
     external: true
-  __KEY_SECRET__:
+  secrets(key):
     external: true
   [[- end]]
 
 # Docker config (replicated to every node by Swarm), created+managed by
 # pmcluster cluster up.
 configs:
-  __TRAEFIK_CONFIG_NAME__:
+  config(pmcluster_traefik_dynamic):
     external: true

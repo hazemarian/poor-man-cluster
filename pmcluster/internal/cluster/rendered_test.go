@@ -27,9 +27,14 @@ func TestRenderClusterConfigs(t *testing.T) {
 		}
 	}
 
-	for _, placeholder := range []string{"[[.", "${DOMAIN}", "__OTEL_CONFIG_NAME__", "__TRAEFIK_CONFIG_NAME__"} {
-		if strings.Contains(out["traefik-dynamic"], placeholder) {
-			t.Errorf("traefik-dynamic still contains placeholder %q", placeholder)
+	// No unresolved DSL refs may survive in any rendered config. The
+	// config()/secrets() references (formerly __X__ placeholders) must be
+	// substituted with real artifact names by the time a stack renders.
+	for key, content := range out {
+		for _, placeholder := range []string{"[[.", "${DOMAIN}", "config(", "secrets("} {
+			if strings.Contains(content, placeholder) {
+				t.Errorf("%s still contains unresolved %q", key, placeholder)
+			}
 		}
 	}
 

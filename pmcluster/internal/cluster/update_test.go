@@ -242,7 +242,7 @@ func TestUpdate_PasswordRotationDoesNotRedeployObservability(t *testing.T) {
 // while the infra-stack template keys on ACMEEmail emptiness. On a box whose TLS
 // mode was never persisted (mode="", ACMEEmail="", no cert/key paths — the exact
 // situation on the live box before the workaround), the old code silently loaded
-// no cert/key, leaving __CERT_SECRET__/__KEY_SECRET__ empty while the template
+// no cert/key, leaving secrets(cert)/secrets(key) empty while the template
 // still rendered the `[[ if not .ACMEEmail ]]` block → a dangling `:` in the
 // global secrets → invalid YAML on `cluster update`. The fix: an empty ACMEEmail
 // ALWAYS requires cert/key paths, so update must fail loudly here rather than

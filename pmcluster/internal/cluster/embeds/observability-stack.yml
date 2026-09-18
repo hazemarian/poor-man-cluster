@@ -76,7 +76,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /etc/localtime:/etc/localtime:ro
     configs:
-      - source: __OTEL_CONFIG_NAME__
+      - source: config(pmcluster_otel_config)
         target: /etc/otel-collector-config.yaml
     networks:
       - monitoring-net
@@ -101,5 +101,5 @@ secrets:
 # every node by Swarm itself, so the otel-collector global service can mount
 # the config without bind-mount-from-disk multi-node fragility.
 configs:
-  __OTEL_CONFIG_NAME__:
+  config(pmcluster_otel_config):
     external: true

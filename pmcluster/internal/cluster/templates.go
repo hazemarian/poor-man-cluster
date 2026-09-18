@@ -17,6 +17,7 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -145,21 +146,21 @@ type RenderInput struct {
 	HostCerts []HostCertEntry
 
 	// OTelConfigName is the versioned Docker config name for the OTel
-	// collector pipeline (e.g. pmcluster_otel_config_v003). Substituted
-	// as __OTEL_CONFIG_NAME__ in compose files.
+	// collector pipeline (e.g. pmcluster_otel_config_v003). Resolved from
+	// `config(pmcluster_otel_config)` in compose files.
 	OTelConfigName string
 
 	// TraefikConfigName is the versioned Docker config name for the
-	// Traefik dynamic file-provider config. Substituted as
-	// __TRAEFIK_CONFIG_NAME__ in compose files.
+	// Traefik dynamic file-provider config. Resolved from
+	// `config(pmcluster_traefik_dynamic)` in compose files.
 	TraefikConfigName string
 
 	// CertSecretName is the versioned Swarm secret name for the TLS
-	// certificate (e.g. cert_v001). Substituted as __CERT_SECRET__.
+	// certificate (e.g. cert_v001). Resolved from `secrets(cert)`.
 	CertSecretName string
 
 	// KeySecretName is the versioned Swarm secret name for the TLS
-	// private key (e.g. key_v001). Substituted as __KEY_SECRET__.
+	// private key (e.g. key_v001). Resolved from `secrets(key)`.
 	KeySecretName string
 
 	// EdgeImage is the pmcluster-edge container image tag used by the
@@ -192,10 +193,50 @@ func readConfigFile(name string, in RenderInput) (string, error) {
 	return string(body), nil
 }
 
+// renderRefResolver resolves config()/secrets() references in platform stack
+// templates to the versioned Docker artifact names computed by up/update. It
+// implements manifest.RefResolver so the platform templates use the SAME
+// config(name)/secrets(name) reference syntax as the DSL env values — one
+// mechanism for replacing configs and secrets everywhere.
+type renderRefResolver struct {
+	render RenderInput
+}
+
+// configNameAliases maps a logical config() name to the RenderInput field
+// holding that config's versioned Docker config name.
+var configNameAliases = map[string]func(RenderInput) string{
+	"pmcluster_otel_config":     func(r RenderInput) string { return r.OTelConfigName },
+	"pmcluster_traefik_dynamic": func(r RenderInput) string { return r.TraefikConfigName },
+}
+
+// secretNameAliases maps a logical secrets() name to the RenderInput field
+// holding that secret's versioned Swarm secret name.
+var secretNameAliases = map[string]func(RenderInput) string{
+	"cert": func(r RenderInput) string { return r.CertSecretName },
+	"key":  func(r RenderInput) string { return r.KeySecretName },
+}
+
+func (r *renderRefResolver) ResolveConfig(_ context.Context, name string) (string, error) {
+	fn, ok := configNameAliases[name]
+	if !ok {
+		return "", fmt.Errorf("resolve config(%s): no such platform config (known: pmcluster_otel_config, pmcluster_traefik_dynamic)", name)
+	}
+	return fn(r.render), nil
+}
+
+func (r *renderRefResolver) ResolveSecret(_ context.Context, name string) (string, error) {
+	fn, ok := secretNameAliases[name]
+	if !ok {
+		return "", fmt.Errorf("resolve secrets(%s): no such platform secret (known: cert, key)", name)
+	}
+	return fn(r.render), nil
+}
+
 // LoadComposeFile renders a stack YAML: text/template first (for
 // [[if .ACMEEmail]] blocks), then ${DOMAIN}/${OPENOBSERVE_ADMIN_EMAIL}
-// substitution. Reads the template from the store when a current-version
-// cluster-scope row exists, else the embedded default.
+// substitution, then config()/secrets() reference resolution. Reads the
+// template from the store when a current-version cluster-scope row exists,
+// else the embedded default.
 func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	fname, ok := composeFile[name]
 	if !ok {
@@ -218,11 +259,11 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	out = strings.ReplaceAll(out, "${OPENOBSERVE_ADMIN_EMAIL}", in.OpenObserveAdminEmail)
 	out = strings.ReplaceAll(out, "${DATA_DIR}", in.DataDir)
 	out = strings.ReplaceAll(out, "__OPENOBSERVE_PASSWORD__", escapeComposeDollar(in.OpenObserveAdminPassword))
-	out = strings.ReplaceAll(out, "__OTEL_CONFIG_NAME__", in.OTelConfigName)
-	out = strings.ReplaceAll(out, "__TRAEFIK_CONFIG_NAME__", in.TraefikConfigName)
-	out = strings.ReplaceAll(out, "__CERT_SECRET__", in.CertSecretName)
-	out = strings.ReplaceAll(out, "__KEY_SECRET__", in.KeySecretName)
-	return []byte(out), nil
+	resolved, err := manifest.ReplaceRefs(context.Background(), out, &renderRefResolver{render: in})
+	if err != nil {
+		return nil, fmt.Errorf("resolve config()/secrets() in %s: %w", fname, err)
+	}
+	return []byte(resolved), nil
 }
 
 // escapeComposeDollar doubles every "$" so Docker Compose/Swarm variable
