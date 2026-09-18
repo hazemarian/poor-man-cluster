@@ -40,7 +40,13 @@ the pmcluster deploy CLI command.`,
 	SilenceErrors: true,
 }
 
+// initVersion wires Cobra's built-in --version flag (auto-registered when
+// Command.Version is non-empty; prints via the template below). The value is
+// resolved at run time so ldflags/buildinfo stamps are honored.
 func init() {
+	rootCmd.Version = versionString()
+	rootCmd.SetVersionTemplate(`pmcluster {{.Version}}
+`)
 	rootCmd.PersistentFlags().StringVar(
 		&configPath,
 		"config",

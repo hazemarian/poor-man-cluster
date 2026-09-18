@@ -9,6 +9,12 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 )
 
+// versionString returns the resolved version stamp for the --version flag.
+func versionString() string {
+	v, _, _ := buildinfo.Resolve()
+	return v
+}
+
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print pmcluster version information",
