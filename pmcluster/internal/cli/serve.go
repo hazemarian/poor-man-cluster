@@ -25,6 +25,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/server"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/services"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/telemetry"
@@ -144,6 +145,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		Webhooks:       webhooks.NewLocal(st, cipher),
 		WebhookSources: webhooks.NewLocal(st, cipher),
 		APIKeys:        apikeys.NewLocal(st),
+		Services:       &services.Local{Docker: dc},
 	}
 	if cipher != nil {
 		deps.Secrets = secrets.NewLocal(st, cipher)
