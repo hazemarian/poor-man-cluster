@@ -191,6 +191,7 @@ func (h *HTTP) sync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"stack":    res.StackName,
 		"revision": res.Revision,
+		"changed":  res.Changed,
 	})
 }
 

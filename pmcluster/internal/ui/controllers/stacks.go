@@ -184,8 +184,12 @@ func (c Stacks) Sync(g *gin.Context) {
 	c.loadParams(ctx)
 	res, err := c.API.SyncStack(ctx, name)
 	msg := "Synced " + name
-	if err == nil && res != nil && res.Revision > 0 {
-		msg = "Synced " + name + " — revision " + strconv.FormatInt(res.Revision, 10)
+	if err == nil && res != nil {
+		if res.Changed {
+			msg = "Synced " + name + " — revision " + strconv.FormatInt(res.Revision, 10)
+		} else {
+			msg = "Synced " + name + " — no changes (already up to date)"
+		}
 	}
 	c.renderStack(g, name, stackDetailData{Msg: msg, Error: errStringIf(err)})
 }

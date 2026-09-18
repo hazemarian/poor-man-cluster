@@ -59,7 +59,7 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 	})
 
 	mux.HandleFunc("/api/stacks/demo/sync", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"stack":"demo","revision":4}`)
+		write(w, `{"stack":"demo","revision":4,"changed":true}`)
 	})
 
 	mux.HandleFunc("/api/stacks/demo/backups", func(w http.ResponseWriter, r *http.Request) {

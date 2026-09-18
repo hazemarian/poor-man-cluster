@@ -471,6 +471,148 @@ func TestUndeploy_UnknownStack(t *testing.T) {
 	}
 }
 
+// TestSync_NoOpWhenNothingChanged verifies that syncing a stack whose source
+// manifest re-translates to the same rendered compose is a no-op: no new
+// revision, no Docker call, Changed=false.
+func TestSync_NoOpWhenNothingChanged(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	res, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	revBefore := res.Revision
+
+	got, err := svc.Sync(ctx, "donation-campaign")
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if got.Changed {
+		t.Error("Sync reported Changed=true on identical rendered content")
+	}
+	if got.Revision != revBefore {
+		t.Errorf("Sync revision = %d, want %d (no new revision)", got.Revision, revBefore)
+	}
+	if len(dep.calls) != 1 {
+		t.Errorf("deployer received %d calls, want 1 (sync must not re-deploy)", len(dep.calls))
+	}
+	st, err := s.GetStack(ctx, "donation-campaign")
+	if err != nil {
+		t.Fatalf("GetStack: %v", err)
+	}
+	if st.CurrentRevision != revBefore {
+		t.Errorf("current_revision = %d, want %d (no new revision recorded)", st.CurrentRevision, revBefore)
+	}
+}
+
+// TestSync_NoOpWithoutStoredHash verifies the safety guard: a revision recorded
+// before the rendered_hash feature (empty hash) must NOT be treated as a
+// no-op — sync re-deploys to establish a hash baseline.
+func TestSync_NoOpWithoutStoredHash(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	if err := s.RecordDeploy(ctx, &store.StackRevision{
+		StackName:    "legacy",
+		Revision:     1000,
+		SourceYAML:   "app: legacy\nenv: production\ndomain: example.test\nservices:\n  web:\n    image: nginx\n",
+		RenderedYAML: "services:\n  web:\n    image: nginx\n",
+	}, ""); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+
+	got, err := svc.Sync(ctx, "legacy")
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if !got.Changed {
+		t.Error("Sync with empty stored hash should re-deploy, not report no-change")
+	}
+	if len(dep.calls) != 1 {
+		t.Errorf("deployer received %d calls, want 1", len(dep.calls))
+	}
+}
+
+// TestSync_RedeploysWhenConfigChanged verifies that a config() edit in the DB
+// changes the rendered compose, so sync re-deploys and records a new revision.
+func TestSync_RedeploysWhenConfigChanged(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	const manifest = `
+app: cfg-app
+env: production
+domain: example.test
+services:
+  web:
+    image: nginx
+    env:
+      ADMIN_FLAG: config(admin_flag)
+`
+	// Seed the config the manifest references.
+	if _, err := s.CreateConfig(ctx, "service", "", "admin_flag", "env", "false", "v0.2.50"); err != nil {
+		t.Fatalf("CreateConfig: %v", err)
+	}
+	svc.Resolver = &StoreConfigResolver{Store: s}
+
+	res, err := svc.Deploy(ctx, Payload{Manifest: manifest})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	revBefore := res.Revision
+	if len(dep.calls) != 1 {
+		t.Fatalf("deployer received %d calls, want 1", len(dep.calls))
+	}
+
+	// Operator edits the config in the DB — rendered output must now differ.
+	if _, err := s.UpdateConfig(ctx, "admin_flag", "true", "v0.2.50"); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	got, err := svc.Sync(ctx, "cfg-app")
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if !got.Changed {
+		t.Error("Sync reported Changed=false despite config edit changing rendered output")
+	}
+	if got.Revision == revBefore {
+		t.Error("Sync should have recorded a new revision after a config change")
+	}
+	if len(dep.calls) != 2 {
+		t.Errorf("deployer received %d calls, want 2 (redeploy after config change)", len(dep.calls))
+	}
+	if !strings.Contains(string(dep.calls[1].yaml), "ADMIN_FLAG: \"true\"") {
+		t.Errorf("redeployed compose does not contain the updated config value: %s", dep.calls[1].yaml)
+	}
+}
+
+// TestSync_UnknownStackErrors verifies sync on a stack with no revisions
+// returns a clear error.
+func TestSync_UnknownStackErrors(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+
+	_, err := svc.Sync(context.Background(), "ghost")
+	if err == nil {
+		t.Fatal("Sync on unknown stack should error")
+	}
+	if !strings.Contains(err.Error(), "no revisions") {
+		t.Errorf("error should mention missing revisions: %v", err)
+	}
+	if len(dep.calls) != 0 {
+		t.Errorf("deployer received %d calls, want 0", len(dep.calls))
+	}
+}
+
 // TestUndeploy_DeployerError surfaces the docker stack rm failure and leaves
 // the stack row intact (nothing is deleted from the store).
 func TestUndeploy_DeployerError(t *testing.T) {

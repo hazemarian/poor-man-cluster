@@ -94,6 +94,7 @@ type deployResultDTO struct {
 	Revision     int64  `json:"revision"`
 	NewRevision  int64  `json:"new_revision"`
 	RolledBackTo int64  `json:"rolled_back_to"`
+	Changed      bool   `json:"changed"`
 }
 
 func (a *Deploy) Deploy(ctx context.Context, p stacks.Payload) (*stacks.Result, error) {
@@ -128,7 +129,7 @@ func (a *Deploy) Sync(ctx context.Context, stackName string) (*stacks.Result, er
 	if err := a.c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(stackName)+"/sync", nil, &out); err != nil {
 		return nil, err
 	}
-	return &stacks.Result{StackName: out.Stack, Revision: out.Revision}, nil
+	return &stacks.Result{StackName: out.Stack, Revision: out.Revision, Changed: out.Changed}, nil
 }
 
 func (a *Deploy) Undeploy(ctx context.Context, stackName string) error {

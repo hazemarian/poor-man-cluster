@@ -113,6 +113,55 @@ func TestRecordDeploy_SecondRevision(t *testing.T) {
 	}
 }
 
+// TestRecordDeploy_RenderedHashRoundTrip verifies the rendered_hash column is
+// persisted on RecordDeploy and read back by GetRevision and ListRevisions.
+func TestRecordDeploy_RenderedHashRoundTrip(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	rev := makeRevision("mystack", 1000, "source: yaml", "rendered: yaml")
+	rev.RenderedHash = ConfigHash("rendered: yaml")
+	if err := s.RecordDeploy(ctx, rev, ""); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+
+	r, err := s.GetRevision(ctx, "mystack", 1000)
+	if err != nil {
+		t.Fatalf("GetRevision: %v", err)
+	}
+	if r.RenderedHash != rev.RenderedHash {
+		t.Errorf("GetRevision.RenderedHash = %q, want %q", r.RenderedHash, rev.RenderedHash)
+	}
+
+	rev2 := makeRevision("mystack", 1001, "source: yaml", "rendered: yaml v2")
+	rev2.RenderedHash = ConfigHash("rendered: yaml v2")
+	if err := s.RecordDeploy(ctx, rev2, ""); err != nil {
+		t.Fatalf("RecordDeploy v2: %v", err)
+	}
+
+	revs, err := s.ListRevisions(ctx, "mystack", 0)
+	if err != nil {
+		t.Fatalf("ListRevisions: %v", err)
+	}
+	if len(revs) != 2 {
+		t.Fatalf("len(revs) = %d, want 2", len(revs))
+	}
+	// Newest first: rev2 then rev.
+	if revs[0].RenderedHash != rev2.RenderedHash || revs[1].RenderedHash != rev.RenderedHash {
+		t.Errorf("ListRevisions hashes = [%q, %q], want [%q, %q]",
+			revs[0].RenderedHash, revs[1].RenderedHash, rev2.RenderedHash, rev.RenderedHash)
+	}
+
+	// Limited list keeps the hashes too.
+	one, err := s.ListRevisions(ctx, "mystack", 1)
+	if err != nil {
+		t.Fatalf("ListRevisions(1): %v", err)
+	}
+	if len(one) != 1 || one[0].RenderedHash != rev2.RenderedHash {
+		t.Errorf("ListRevisions(1) hash = %v, want [%q]", one, rev2.RenderedHash)
+	}
+}
+
 // TestRecordDeploy_RepoURLPreservedOnEmptyUpdate verifies that passing an
 // empty repoURL on a subsequent deploy preserves the existing value via the
 // COALESCE(NULLIF(?, ”), repo_url) clause.

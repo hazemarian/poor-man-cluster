@@ -25,6 +25,10 @@ type Result struct {
 	StackName    string
 	Revision     int64
 	RenderedYAML []byte
+	// Changed is false when a sync re-translated the latest source manifest
+	// and the rendered compose matched the stored rendered_hash — nothing
+	// was deployed and no new revision was recorded.
+	Changed bool
 }
 
 // Stack is a deployed stack's metadata. RepoURL is empty when unset.

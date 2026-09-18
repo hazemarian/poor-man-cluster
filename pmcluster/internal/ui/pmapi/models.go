@@ -104,6 +104,7 @@ type DeployPayload struct {
 type DeployResult struct {
 	Stack    string `json:"stack"`
 	Revision int64  `json:"revision"`
+	Changed  bool   `json:"changed"`
 }
 
 // RollbackResult is the POST /api/stacks/{name}/rollback response.

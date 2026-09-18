@@ -171,6 +171,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 			Revision:     revision,
 			SourceYAML:   p.Manifest,
 			RenderedYAML: string(rendered),
+			RenderedHash: store.ConfigHash(string(rendered)),
 			PayloadJSON:  sql.NullString{String: string(payloadJSON), Valid: true},
 		}
 		if err := s.Store.RecordDeploy(ctx, rev, p.RepoURL); err != nil {
@@ -200,6 +201,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		StackName:    app.Name,
 		Revision:     revision,
 		RenderedYAML: rendered,
+		Changed:      true,
 	}, nil
 }
 
@@ -219,6 +221,38 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 		return nil, fmt.Errorf("stack %q has no revisions — deploy it first", stackName)
 	}
 	latest := revs[0]
+
+	// Re-translate the stored source manifest. If the rendered compose is
+	// byte-identical to the latest stored revision (rendered_hash), there is
+	// nothing to apply — config()/secrets() edits in the DB did not change
+	// the output, so no new revision and no Docker call.
+	parsed, err := manifest.Parse([]byte(latest.SourceYAML))
+	if err == nil {
+		parsed.Name = stackName // mirror Deploy's AppName override
+		if err = manifest.Interpolate(parsed); err == nil {
+			if err = manifest.Validate(parsed); err == nil {
+				var rendered []byte
+				rendered, err = manifest.TranslateWithResolver(ctx, parsed, s.Resolver)
+				if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
+					return &Result{
+						StackName:    stackName,
+						Revision:     latest.Revision,
+						RenderedYAML: rendered,
+					}, nil
+				}
+			}
+		}
+	}
+	if err != nil {
+		// The stored manifest failed to re-translate (e.g. an operator edit
+		// removed a config the manifest references). Fall back to the normal
+		// deploy path so the pipeline surfaces the precise error.
+		return s.Deploy(ctx, Payload{
+			AppName:  stackName,
+			Manifest: latest.SourceYAML,
+		})
+	}
+
 	return s.Deploy(ctx, Payload{
 		AppName:  stackName,
 		Manifest: latest.SourceYAML,
@@ -286,6 +320,7 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 			Revision:     revision,
 			SourceYAML:   row.SourceYAML,
 			RenderedYAML: row.RenderedYAML,
+			RenderedHash: row.RenderedHash,
 			PayloadJSON:  sql.NullString{String: string(rolledBackPayload), Valid: true},
 		}
 		if err := s.Store.RecordDeploy(ctx, rev, ""); err != nil {
@@ -308,6 +343,7 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 		StackName:    stackName,
 		Revision:     revision,
 		RenderedYAML: []byte(row.RenderedYAML),
+		Changed:      true,
 	}, nil
 }
 

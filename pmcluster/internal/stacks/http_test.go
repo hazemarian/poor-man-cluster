@@ -3,9 +3,11 @@ package stacks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -226,5 +228,46 @@ func TestSyncStackHandler(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/stacks/ghost/sync", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("POST /stacks/ghost/sync = %d, want 400 (no revisions); body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSyncStackHandler_NoOp verifies POST /stacks/{name}/sync returns
+// changed:false and does not re-deploy when re-translation matches the stored
+// rendered_hash.
+func TestSyncStackHandler_NoOp(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	const manifest = "app: demo\nenv: production\ndomain: example.test\nservices:\n  web:\n    image: nginx\n"
+
+	dep := &stubDeployer{}
+	svc := &Service{Store: st, Deployer: dep}
+
+	// Deploy once to establish the real rendered output + hash baseline.
+	res, err := svc.Deploy(ctx, Payload{AppName: "demo", Manifest: manifest})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if len(dep.deployed) != 1 {
+		t.Fatalf("deployer received %d calls, want 1", len(dep.deployed))
+	}
+
+	h := &HTTP{Deploy: svc, Read: Local{Store: st}}
+	r := chi.NewRouter()
+	h.Mount(r)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/stacks/demo/sync", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /stacks/demo/sync = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if len(dep.deployed) != 1 {
+		t.Errorf("sync re-deployed on unchanged rendered content: %v", dep.deployed)
+	}
+	if !strings.Contains(rec.Body.String(), `"changed":false`) {
+		t.Errorf("response body = %s, want changed:false", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), fmt.Sprintf(`"revision":%d`, res.Revision)) {
+		t.Errorf("response body = %s, want original revision %d preserved", rec.Body.String(), res.Revision)
 	}
 }
