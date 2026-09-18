@@ -1,4 +1,4 @@
-package manifest
+package refs
 
 import (
 	"context"
@@ -83,5 +83,46 @@ func TestReplaceRefs_ResolverError(t *testing.T) {
 	_, err := ReplaceRefs(context.Background(), "x: config(pmcluster_otel_config)", r)
 	if err == nil {
 		t.Fatal("expected error from resolver")
+	}
+}
+
+// TestParseEnvRef checks the whole-value env ref parser accepts/rejects the
+// right shapes.
+func TestParseEnvRef(t *testing.T) {
+	for v, want := range map[string]bool{
+		"config(my_conf)":  true,
+		"secrets(db_pass)": true,
+		"config( a )":      true,
+		"plain-value":      false,
+		"${ENV_VAR}":       false,
+		"config(":          false,
+		"config()":         false,
+		"prefix config(x)": false,
+		"config(x) suffix": false,
+		"secrets()":        false,
+	} {
+		_, ok := ParseEnvRef(v)
+		if ok != want {
+			t.Errorf("ParseEnvRef(%q) ok=%v, want %v", v, ok, want)
+		}
+	}
+}
+
+func TestMalformedEnvRef(t *testing.T) {
+	for _, v := range []string{"config(", "secrets(abc", "config(,", "config())", "secrets()} x"} {
+		if !MalformedEnvRef(v) {
+			t.Errorf("MalformedEnvRef(%q) = false, want true", v)
+		}
+	}
+	for _, v := range []string{"plain", "config(ok)", "secrets(ok)", "CONFIG(x)"} {
+		if MalformedEnvRef(v) {
+			t.Errorf("MalformedEnvRef(%q) = true, want false", v)
+		}
+	}
+}
+
+func TestSecretMountPath(t *testing.T) {
+	if got := SecretMountPath("db_pass"); got != "/run/secrets/db_pass" {
+		t.Errorf("SecretMountPath = %q, want /run/secrets/db_pass", got)
 	}
 }

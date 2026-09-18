@@ -1,4 +1,14 @@
-package manifest
+// Package refs is the shared config()/secrets() reference language used
+// across the control plane. The DSL env values (internal/manifest) and the
+// platform stack templates (internal/cluster) both resolve references through
+// this package — one mechanism for replacing configs and secrets everywhere.
+//
+// Two reference shapes exist:
+//
+//   - inline references embedded in compose text (`config(x):` as a YAML key,
+//     `- source: secrets(y)` as a list item) resolved via ReplaceRefs;
+//   - whole-value env references (`env: KEY: config(x)`) parsed via ParseEnvRef.
+package refs
 
 import (
 	"context"

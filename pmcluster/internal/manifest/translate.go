@@ -7,6 +7,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/refs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
 )
 
@@ -165,7 +166,7 @@ func resolveServiceEnv(ctx context.Context, env map[string]string, res EnvResolv
 	}
 	out := make(map[string]string, len(env))
 	for k, v := range env {
-		ref, ok := parseEnvRef(v)
+		ref, ok := refs.ParseEnvRef(v)
 		if !ok {
 			out[k] = v
 			continue
@@ -175,7 +176,7 @@ func resolveServiceEnv(ctx context.Context, env map[string]string, res EnvResolv
 			if ref.Name == "" {
 				return nil, fmt.Errorf("env.%s: secrets() name is empty", k)
 			}
-			out[k] = secretMountPath(ref.Name)
+			out[k] = refs.SecretMountPath(ref.Name)
 		case "config":
 			if res == nil {
 				return nil, fmt.Errorf("env.%s: config(%s) requires config resolution (not available)", k, ref.Name)

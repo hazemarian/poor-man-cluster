@@ -33,40 +33,6 @@ func svcWithEnv(env map[string]string) *dsl.Service {
 	return &dsl.Service{Image: "nginx", Env: env}
 }
 
-// TestEnvRef_Parse checks the ref parser accepts/rejects the right shapes.
-func TestEnvRef_Parse(t *testing.T) {
-	for v, want := range map[string]bool{
-		"config(my_conf)":  true,
-		"secrets(db_pass)": true,
-		"config( a )":      true,
-		"plain-value":      false,
-		"${ENV_VAR}":       false,
-		"config(":          false,
-		"config()":         false,
-		"prefix config(x)": false,
-		"config(x) suffix": false,
-		"secrets()":        false,
-	} {
-		_, ok := parseEnvRef(v)
-		if ok != want {
-			t.Errorf("parseEnvRef(%q) ok=%v, want %v", v, ok, want)
-		}
-	}
-}
-
-func TestEnvRef_Malformed(t *testing.T) {
-	for _, v := range []string{"config(", "secrets(abc", "config(,", "config())", "secrets()} x"} {
-		if !malformedEnvRef(v) {
-			t.Errorf("malformedEnvRef(%q) = false, want true", v)
-		}
-	}
-	for _, v := range []string{"plain", "config(ok)", "secrets(ok)", "CONFIG(x)"} {
-		if malformedEnvRef(v) {
-			t.Errorf("malformedEnvRef(%q) = true, want false", v)
-		}
-	}
-}
-
 // TestTranslate_SecretsEnvRef verifies secrets(name) resolves to the mount
 // path. The secret is NOT auto-mounted — validation requires the operator
 // to list it in the service secrets: array first.

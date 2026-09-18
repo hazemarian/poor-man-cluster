@@ -17,7 +17,7 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/refs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -195,7 +195,7 @@ func readConfigFile(name string, in RenderInput) (string, error) {
 
 // renderRefResolver resolves config()/secrets() references in platform stack
 // templates to the versioned Docker artifact names computed by up/update. It
-// implements manifest.RefResolver so the platform templates use the SAME
+// implements refs.RefResolver so the platform templates use the SAME
 // config(name)/secrets(name) reference syntax as the DSL env values — one
 // mechanism for replacing configs and secrets everywhere.
 type renderRefResolver struct {
@@ -259,7 +259,7 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	out = strings.ReplaceAll(out, "${OPENOBSERVE_ADMIN_EMAIL}", in.OpenObserveAdminEmail)
 	out = strings.ReplaceAll(out, "${DATA_DIR}", in.DataDir)
 	out = strings.ReplaceAll(out, "__OPENOBSERVE_PASSWORD__", escapeComposeDollar(in.OpenObserveAdminPassword))
-	resolved, err := manifest.ReplaceRefs(context.Background(), out, &renderRefResolver{render: in})
+	resolved, err := refs.ReplaceRefs(context.Background(), out, &renderRefResolver{render: in})
 	if err != nil {
 		return nil, fmt.Errorf("resolve config()/secrets() in %s: %w", fname, err)
 	}

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/refs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
 )
 
@@ -74,13 +75,13 @@ func validateService(name string, s *dsl.Service) error {
 		}
 	}
 	for k, v := range s.Env {
-		if malformedEnvRef(v) {
+		if refs.MalformedEnvRef(v) {
 			return fmt.Errorf("%s.env.%s: malformed reference %q — expected config(name) or secrets(name)", prefix, k, v)
 		}
-		if ref, ok := parseEnvRef(v); ok && ref.Name == "" {
+		if ref, ok := refs.ParseEnvRef(v); ok && ref.Name == "" {
 			return fmt.Errorf("%s.env.%s: empty name in %s() reference", prefix, k, ref.Kind)
 		}
-		if ref, ok := parseEnvRef(v); ok && ref.Kind == "secrets" {
+		if ref, ok := refs.ParseEnvRef(v); ok && ref.Kind == "secrets" {
 			if !slices.Contains(s.Secrets, ref.Name) {
 				return fmt.Errorf("%s.env.%s: secrets(%s) is not mounted — add %q to the service secrets: array (env refs point at /run/secrets/<name>)", prefix, k, ref.Name, ref.Name)
 			}
