@@ -205,6 +205,26 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 
 // Rollback re-applies a stored revision as a NEW revision so the audit
 // trail records both deploys. PayloadJSON carries a rollback_of marker.
+// Sync re-runs the deploy pipeline for an existing stack from its latest
+// stored source manifest. Config()/secrets() references are resolved again
+// against the DB, so edits to a stack's configs are applied to the running
+// stack. This is the k8s-style reconcile: applying the stored desired state
+// after the underlying inputs changed. It records a new revision.
+func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
+	revs, err := s.Store.ListRevisions(ctx, stackName, 1)
+	if err != nil {
+		return nil, fmt.Errorf("load latest revision: %w", err)
+	}
+	if len(revs) == 0 {
+		return nil, fmt.Errorf("stack %q has no revisions — deploy it first", stackName)
+	}
+	latest := revs[0]
+	return s.Deploy(ctx, Payload{
+		AppName:  stackName,
+		Manifest: latest.SourceYAML,
+	})
+}
+
 func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision int64) (res *Result, retErr error) {
 	counter, hist, tracer := instruments()
 	ctx, span := tracer.Start(ctx, "pmcluster.rollback",

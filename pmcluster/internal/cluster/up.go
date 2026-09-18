@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -76,6 +77,20 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	if err := validateUpInput(in); err != nil {
 		return nil, err
 	}
+
+	// cluster up is init-only: it must never touch a cluster that is already
+	// running. A persisted domain or TLS state means `cluster update` owns the
+	// cluster from here on.
+	if deps.Store != nil {
+		installed, err := clusterInstalled(ctx, deps.Store)
+		if err != nil {
+			return nil, err
+		}
+		if installed {
+			return nil, fmt.Errorf("cluster already initialised — run `pmcluster cluster update` instead (cluster up is for fresh installs only)")
+		}
+	}
+
 	out := io.Discard
 	if deps.Stdout != nil {
 		out = deps.Stdout
@@ -95,8 +110,8 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	wf.Add("Preflight: Docker reachable, Swarm active, this node is a manager", func(ctx context.Context) error {
 		return Preflight(ctx, deps.Docker)
 	})
-	wf.Add("Syncing platform config files (disk + store)", func(ctx context.Context) error {
-		syncRes, err := SyncPlatformConfigs(ctx, deps.Store, in.ConfigDir, in.Version)
+	wf.Add("Syncing platform config templates into the store", func(ctx context.Context) error {
+		syncRes, err := SyncPlatformConfigs(ctx, deps.Store, in.Version)
 		if err != nil {
 			return err
 		}
@@ -122,11 +137,11 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			return nil
 		}
 		var certCreated, keyCreated bool
-		certSecret, certCreated, err = EnsureVersionedSecretFromFile(ctx, deps.Docker, "cert", in.CertPath)
+		certSecret, certCreated, err = EnsureVersionedSecretFromFile(ctx, deps.Docker, deps.Store, "cert", in.CertPath)
 		if err != nil {
 			return fmt.Errorf("ensure cert secret: %w", err)
 		}
-		keySecret, keyCreated, err = EnsureVersionedSecretFromFile(ctx, deps.Docker, "key", in.KeyPath)
+		keySecret, keyCreated, err = EnsureVersionedSecretFromFile(ctx, deps.Docker, deps.Store, "key", in.KeyPath)
 		if err != nil {
 			return fmt.Errorf("ensure key secret: %w", err)
 		}
@@ -289,6 +304,21 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		res.StacksDeployed = append(res.StacksDeployed, string(StackObservability))
 		if err := WaitHealthyStacks(ctx, deps.Docker, out); err != nil {
 			return fmt.Errorf("health check: %w", err)
+		}
+		return nil
+	})
+	wf.Add("Snapshotting rendered configs into the store", func(ctx context.Context) error {
+		if deps.Store == nil {
+			return nil
+		}
+		rendered, err := renderPlatformConfigs(render)
+		if err != nil {
+			return fmt.Errorf("render platform configs for persistence: %w", err)
+		}
+		for name, content := range rendered {
+			if err := deps.Store.SetRendered(ctx, name, string(content)); err != nil && !errors.Is(err, store.ErrConfigNotFound) {
+				return fmt.Errorf("store rendered config %s: %w", name, err)
+			}
 		}
 		return nil
 	})

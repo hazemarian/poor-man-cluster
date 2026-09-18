@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -287,11 +288,17 @@ func TestEnsureConfig_MintsNewVersionOnChange(t *testing.T) {
 }
 
 // Regression test for the "new SSL config on every restart" bug: Docker never
-// returns secret payloads on inspect, so the old bytes.Equal comparison always
-// failed against a real daemon and minted a fresh cert_vNNN on every cluster
-// up/update. The reuse check must use the pmcluster.data_hash label.
+// returns secret payloads on inspect, so comparing the bytes read back from
+// Docker always failed against a real daemon and minted a fresh cert_vNNN on
+// every cluster up/update. The reuse check must hash the incoming bytes and
+// compare against the data-hash persisted in the store (DB = source of truth).
 func TestEnsureVersionedSecret_ReusesUnchangedVersion(t *testing.T) {
 	f := newFakeDocker()
+	s, err := store.Open(filepath.Join(t.TempDir(), "reuse.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
 	seed := []byte("-----BEGIN CERTIFICATE-----\nsame cert bytes\n-----END CERTIFICATE-----\n")
 	if err := f.SecretCreate(context.Background(), docker.SecretSpec{
 		Name: "cert_v001",
@@ -304,8 +311,12 @@ func TestEnsureVersionedSecret_ReusesUnchangedVersion(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed secret: %v", err)
 	}
+	// The data-hash recorded in the store when the version was minted.
+	if err := s.SetSetting(context.Background(), secretHashKey("cert"), dataHash(seed)); err != nil {
+		t.Fatalf("seed hash: %v", err)
+	}
 
-	name, created, err := EnsureVersionedSecret(context.Background(), f, "cert", seed)
+	name, created, err := EnsureVersionedSecret(context.Background(), f, s, "cert", seed)
 	if err != nil {
 		t.Fatalf("EnsureVersionedSecret: %v", err)
 	}
@@ -322,6 +333,11 @@ func TestEnsureVersionedSecret_ReusesUnchangedVersion(t *testing.T) {
 
 func TestEnsureVersionedSecret_MintsNewVersionOnChange(t *testing.T) {
 	f := newFakeDocker()
+	s, err := store.Open(filepath.Join(t.TempDir(), "mint.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
 	seed := []byte("old cert bytes")
 	if err := f.SecretCreate(context.Background(), docker.SecretSpec{
 		Name: "cert_v001",
@@ -334,8 +350,11 @@ func TestEnsureVersionedSecret_MintsNewVersionOnChange(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed secret: %v", err)
 	}
+	if err := s.SetSetting(context.Background(), secretHashKey("cert"), dataHash(seed)); err != nil {
+		t.Fatalf("seed hash: %v", err)
+	}
 
-	name, created, err := EnsureVersionedSecret(context.Background(), f, "cert", []byte("new cert bytes"))
+	name, created, err := EnsureVersionedSecret(context.Background(), f, s, "cert", []byte("new cert bytes"))
 	if err != nil {
 		t.Fatalf("EnsureVersionedSecret: %v", err)
 	}

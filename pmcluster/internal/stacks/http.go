@@ -33,6 +33,7 @@ func (h *HTTP) Mount(r chi.Router) {
 	r.Get("/stacks", h.list)
 	r.Get("/stacks/{name}", h.show)
 	r.Get("/stacks/{name}/revisions/{rev}", h.showRevision)
+	r.Post("/stacks/{name}/sync", h.sync)
 	r.Post("/stacks/{name}/rollback", h.rollback)
 	r.Delete("/stacks/{name}", h.remove)
 }
@@ -172,6 +173,24 @@ func (h *HTTP) showRevision(w http.ResponseWriter, r *http.Request) {
 		"source_yaml":   rv.SourceYAML,
 		"rendered_yaml": rv.RenderedYAML,
 		"payload":       rv.PayloadJSON,
+	})
+}
+
+// sync re-runs the deploy pipeline from the stack's latest stored manifest.
+func (h *HTTP) sync(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	res, err := h.Deploy.Sync(r.Context(), name)
+	if err != nil {
+		if errors.Is(err, store.ErrStackNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "stack not found"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"stack":    res.StackName,
+		"revision": res.Revision,
 	})
 }
 

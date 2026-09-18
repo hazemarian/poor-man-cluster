@@ -120,10 +120,14 @@ func TestLastBackupJSON_MostRecentFirst(t *testing.T) {
 // stubDeployer is a minimal cluster.StackDeployer for handler tests: it
 // records which stacks were removed.
 type stubDeployer struct {
-	removed []string
+	removed  []string
+	deployed []string
 }
 
-func (s *stubDeployer) DeployStack(context.Context, string, []byte) error { return nil }
+func (s *stubDeployer) DeployStack(ctx context.Context, name string, _ []byte) error {
+	s.deployed = append(s.deployed, name)
+	return nil
+}
 
 func (s *stubDeployer) RemoveStack(_ context.Context, name string) error {
 	s.removed = append(s.removed, name)
@@ -176,5 +180,51 @@ func TestRemoveStackHandler(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/stacks/ghost", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("DELETE /stacks/ghost = %d, want 404; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSyncStackHandler verifies POST /stacks/{name}/sync re-runs the deploy
+// pipeline from the latest stored manifest and records a new revision.
+func TestSyncStackHandler(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	rev := &store.StackRevision{
+		StackName:    "demo",
+		Revision:     1000,
+		SourceYAML:   "app: demo\nenv: production\ndomain: example.test\nservices:\n  web:\n    image: nginx\n",
+		RenderedYAML: "services:\n  web:\n    image: nginx\n",
+	}
+	if err := st.RecordDeploy(ctx, rev, ""); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+
+	dep := &stubDeployer{}
+	svc := &Service{Store: st, Deployer: dep}
+	h := &HTTP{Deploy: svc, Read: Local{Store: st}}
+
+	r := chi.NewRouter()
+	h.Mount(r)
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/stacks/demo/sync", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /stacks/demo/sync = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if len(dep.deployed) == 0 {
+		t.Fatal("sync did not re-deploy the stack")
+	}
+	stk, err := st.GetStack(ctx, "demo")
+	if err != nil {
+		t.Fatalf("GetStack: %v", err)
+	}
+	if stk.CurrentRevision <= 1000 {
+		t.Errorf("CurrentRevision = %d, want > 1000 (new revision recorded)", stk.CurrentRevision)
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/stacks/ghost/sync", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("POST /stacks/ghost/sync = %d, want 400 (no revisions); body: %s", rec.Code, rec.Body.String())
 	}
 }

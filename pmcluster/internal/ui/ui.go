@@ -107,6 +107,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	g.GET("/stacks", st.List)
 	g.GET("/stacks/:name", st.Show)
 	g.GET("/stacks/:name/revisions/:rev", st.ShowRevision)
+	g.POST("/stacks/:name/sync", st.Sync)
 	g.POST("/stacks/:name/rollback", st.Rollback)
 	g.GET("/stacks/:name/backups", st.ShowBackups)
 	g.POST("/stacks/:name/remove", st.Remove)

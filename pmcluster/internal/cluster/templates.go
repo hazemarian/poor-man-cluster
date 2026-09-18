@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
@@ -118,9 +117,9 @@ type RenderInput struct {
 	// RenderTraefikDynamic derives it from Domain via CORSOriginRegex().
 	CORSOriginRegex string
 
-	// ConfigDir is ~/.pmcluster/config/. When non-empty, config loading
-	// prefers a user-supplied copy from disk over the embedded default.
-	// If the disk file is missing it falls back to the embedded version.
+	// ConfigDir is ~/.pmcluster/config/. It is no longer consulted for config
+	// loading (the DB is the only store) but remains in RenderInput so callers
+	// can derive DataDir via filepath.Dir(ConfigDir).
 	ConfigDir string
 
 	// ConfigStore is the daemon's store. When set, cluster-scope template
@@ -173,10 +172,11 @@ type RenderInput struct {
 //  1. A cluster-scope template config in the DB whose name matches the file
 //     (basename without ".yml"), scope is "cluster", kind is "template" and
 //     version equals the current build version (ConfigStore set + row found).
-//  2. The disk copy at <ConfigDir>/<name> (when ConfigDir is set and readable).
-//  3. The embedded fallback.
+//  2. The embedded fallback.
 //
-// Applies to stacks AND standalone configs.
+// The database is the single source of truth for platform configs — there is
+// no disk copy to consult (config files were removed; the store's rendered
+// snapshots carry the applied state). Applies to stacks AND standalone configs.
 func readConfigFile(name string, in RenderInput) (string, error) {
 	if in.ConfigStore != nil {
 		cfgName := strings.TrimSuffix(name, ".yml")
@@ -184,13 +184,6 @@ func readConfigFile(name string, in RenderInput) (string, error) {
 			row.Scope == "cluster" && row.Kind == "template" && row.Version == buildinfo.Version {
 			return row.Content, nil
 		}
-	}
-	if in.ConfigDir != "" {
-		path := filepath.Join(in.ConfigDir, name)
-		if data, err := os.ReadFile(path); err == nil {
-			return string(data), nil
-		}
-
 	}
 	body, err := fs.ReadFile(embeddedStacks, embeddedDir+"/"+name)
 	if err != nil {
@@ -201,7 +194,8 @@ func readConfigFile(name string, in RenderInput) (string, error) {
 
 // LoadComposeFile renders a stack YAML: text/template first (for
 // [[if .ACMEEmail]] blocks), then ${DOMAIN}/${OPENOBSERVE_ADMIN_EMAIL}
-// substitution. Reads from disk first (ConfigDir), then embedded.
+// substitution. Reads the template from the store when a current-version
+// cluster-scope row exists, else the embedded default.
 func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	fname, ok := composeFile[name]
 	if !ok {
@@ -260,7 +254,6 @@ func ensureEdgeConfig(ctx context.Context, d docker.Client, version string, rend
 // OO API, prefix o2oi_), NOT the rotating human password, so the rendered config
 // stays content-stable across password rotations. OpenObserve authenticates OTLP
 // ingestion with Basic <base64(<org>:<ingestion_token>)>.
-// Reads from disk first (ConfigDir), then embedded.
 func RenderOTelCollectorConfig(in RenderInput) ([]byte, error) {
 	org := in.OpenObserveOrg
 	if org == "" {
@@ -280,11 +273,10 @@ func RenderOTelCollectorConfig(in RenderInput) ([]byte, error) {
 	return []byte(rendered), nil
 }
 
-// RenderTraefikDynamic renders the Traefik file-provider config.
-// Reads from disk first (ConfigDir), then embedded. After the template body
-// is rendered, every per-host cert in in.HostCerts is appended into the same
-// doc's tls.certificates list (referencing its versioned Swarm secret) so
-// Traefik serves it for the matching SNI.
+// RenderTraefikDynamic renders the Traefik file-provider config. After the
+// template body is rendered, every per-host cert in in.HostCerts is appended
+// into the same doc's tls.certificates list (referencing its versioned Swarm
+// secret) so Traefik serves it for the matching SNI.
 func RenderTraefikDynamic(in RenderInput) ([]byte, error) {
 	if in.Domain == "" {
 		return nil, fmt.Errorf("RenderTraefikDynamic: Domain is required")
@@ -349,95 +341,40 @@ func appendHostCertSecrets(body []byte, entries []HostCertEntry) ([]byte, error)
 	return out, nil
 }
 
-// configVersionHeader matches the first-line version comment in every
-// embedded config file. Group 1 captures the version string (e.g. "v0.1.12").
-var configVersionHeader = regexp.MustCompile(`^## pmcluster-config-version: (.+)$`)
-
-// EnsureConfigDir creates ~/.pmcluster/config/ and seeds it with the
-// embedded defaults. When a file already exists on disk, its first-line
-// version comment is compared against the current build version. If the
-// disk copy is older (or missing a version), it's overwritten; otherwise
-// operator edits are preserved.
-func EnsureConfigDir(configDir string, version string) error {
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		return fmt.Errorf("create config dir %s: %w", configDir, err)
-	}
-	for _, name := range ConfigFileNames {
-		dest := filepath.Join(configDir, name)
-		if data, err := os.ReadFile(dest); err == nil {
-			if !shouldOverwriteConfig(data, version) {
-				continue
-			}
-		}
-		body, err := fs.ReadFile(embeddedStacks, embeddedDir+"/"+name)
-		if err != nil {
-			return fmt.Errorf("read embedded %s: %w", name, err)
-		}
-
-		seeded := strings.Replace(string(body), "__PMCONFIG_VERSION__", version, 1)
-		if err := os.WriteFile(dest, []byte(seeded), 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", dest, err)
-		}
-	}
-	return nil
-}
-
-// shouldOverwriteConfig returns true when the on-disk config is stale
-// relative to the current build version. A config without a recognised
-// version header is treated as stale so it's upgraded on first init
-// after this feature lands.
-func shouldOverwriteConfig(disk []byte, currentVersion string) bool {
-	firstLine, _, _ := strings.Cut(string(disk), "\n")
-	matches := configVersionHeader.FindStringSubmatch(strings.TrimSpace(firstLine))
-	if len(matches) < 2 {
-		return true
-	}
-	diskVersion := matches[1]
-	return Compare(diskVersion, currentVersion) < 0
-}
-
 // ConfigSyncResult reports which cluster-scope template rows were reconciled
 // by SyncClusterConfigs, so callers can surface it in workflow output.
 type ConfigSyncResult struct {
 	Created   []string // rows inserted (fresh install / first sync)
 	Updated   []string // stale rows overwritten with the current build content
-	Preserved []string // current-version rows left alone (console edits), mirrored to disk
+	Preserved []string // current-version rows left alone (console edits)
 }
 
-// SyncPlatformConfigs refreshes the on-disk config dir AND reconciles the
-// cluster-scope template rows in the store with the current build version. It
-// is the single entry point `cluster up` and `cluster update` call so both
-// the files and the DB always carry the current build's configs (modulo
-// operator edits). With a nil store or empty config dir it degrades to
-// EnsureConfigDir alone.
-func SyncPlatformConfigs(ctx context.Context, st *store.Store, configDir, version string) (*ConfigSyncResult, error) {
-	if configDir == "" {
-		return &ConfigSyncResult{}, nil
-	}
-	if err := EnsureConfigDir(configDir, version); err != nil {
-		return nil, err
-	}
+// SyncPlatformConfigs reconciles the cluster-scope template rows in the store
+// with the current build version. It is the single entry point `cluster up`
+// and `cluster update` call so the DB always carries the current build's
+// configs (modulo operator edits at the current version). The DB is the only
+// store for platform configs — no files are written or mirrored to disk. With
+// a nil store it degrades to a no-op.
+func SyncPlatformConfigs(ctx context.Context, st *store.Store, version string) (*ConfigSyncResult, error) {
 	if st == nil {
 		return &ConfigSyncResult{}, nil
 	}
-	return SyncClusterConfigs(ctx, st, configDir, version)
+	return SyncClusterConfigs(ctx, st, version)
 }
 
 // SyncClusterConfigs reconciles the cluster-scope template rows (one per
-// ConfigFileNames entry) in the store with the current build version. The DB
-// is the source of truth for platform configs:
+// ConfigFileNames entry) in the store with the current build version, k8s
+// style: the embedded template is the desired state, the DB row is the live
+// state, and this loop brings the two together.
 //
-//   - a row already stamped with the current build version is authoritative
-//     (it may hold a console edit) and its content is mirrored back to disk;
-//   - a missing or stale row is (re)written from the freshest available
-//     source — the current-version disk copy (EnsureConfigDir just refreshed
-//     it, preserving any operator edit) or the embedded default stamped with
-//     the build version — and that content is also written back to disk so
-//     file and DB never diverge.
+//   - a missing row is created from the embedded default (desired state);
+//   - a row stamped with the current build version is authoritative — it may
+//     hold a console edit and is preserved as-is;
+//   - a stale row (older build version) is refreshed from the embedded default
+//     so platform configs always track the shipped templates.
 //
-// Must run after EnsureConfigDir (or use SyncPlatformConfigs). Rows whose
-// scope/kind is not cluster/template are left untouched.
-func SyncClusterConfigs(ctx context.Context, st *store.Store, configDir, version string) (*ConfigSyncResult, error) {
+// Rows whose scope/kind is not cluster/template are left untouched.
+func SyncClusterConfigs(ctx context.Context, st *store.Store, version string) (*ConfigSyncResult, error) {
 	res := &ConfigSyncResult{}
 	for _, name := range ConfigFileNames {
 		cfgName := strings.TrimSuffix(name, ".yml")
@@ -446,23 +383,17 @@ func SyncClusterConfigs(ctx context.Context, st *store.Store, configDir, version
 		switch {
 		case err == nil && row.Scope == "cluster" && row.Kind == "template":
 			if row.Version == version {
-				// DB is current + authoritative → mirror to disk.
-				if err := writeConfigFile(configDir, name, row.Content); err != nil {
-					return nil, err
-				}
+				// DB is current + authoritative (possibly a console edit).
 				res.Preserved = append(res.Preserved, cfgName)
 				continue
 			}
-			// Stale row → adopt the freshest content and rewrite DB + disk.
-			content, err := freshConfigContent(configDir, name, version)
+			// Stale row → adopt the embedded default and rewrite the DB row.
+			content, err := embeddedConfigContent(name)
 			if err != nil {
 				return nil, err
 			}
 			if _, err := st.UpdateConfig(ctx, cfgName, content, version); err != nil {
 				return nil, fmt.Errorf("update cluster config %s: %w", cfgName, err)
-			}
-			if err := writeConfigFile(configDir, name, content); err != nil {
-				return nil, err
 			}
 			res.Updated = append(res.Updated, cfgName)
 		case err == nil:
@@ -470,15 +401,12 @@ func SyncClusterConfigs(ctx context.Context, st *store.Store, configDir, version
 			// Never clobber a user's config.
 			continue
 		case errors.Is(err, store.ErrConfigNotFound):
-			content, err := freshConfigContent(configDir, name, version)
+			content, err := embeddedConfigContent(name)
 			if err != nil {
 				return nil, err
 			}
 			if _, err := st.CreateConfig(ctx, "cluster", "", cfgName, "template", content, version); err != nil {
 				return nil, fmt.Errorf("create cluster config %s: %w", cfgName, err)
-			}
-			if err := writeConfigFile(configDir, name, content); err != nil {
-				return nil, err
 			}
 			res.Created = append(res.Created, cfgName)
 		default:
@@ -488,31 +416,15 @@ func SyncClusterConfigs(ctx context.Context, st *store.Store, configDir, version
 	return res, nil
 }
 
-// freshConfigContent returns the content a config file should carry: the disk
-// copy when present (EnsureConfigDir already refreshed or preserved it), else
-// the embedded default stamped with the build version.
-func freshConfigContent(configDir, name, version string) (string, error) {
-	if configDir != "" {
-		if data, err := os.ReadFile(filepath.Join(configDir, name)); err == nil {
-			return string(data), nil
-		}
-	}
+// embeddedConfigContent returns the embedded default body for a config file.
+// Templates carry no version header — the DB row's version column is the only
+// version signal.
+func embeddedConfigContent(name string) (string, error) {
 	body, err := fs.ReadFile(embeddedStacks, embeddedDir+"/"+name)
 	if err != nil {
 		return "", fmt.Errorf("read embedded %s: %w", name, err)
 	}
-	return strings.Replace(string(body), "__PMCONFIG_VERSION__", version, 1), nil
-}
-
-// writeConfigFile writes content to <configDir>/<name>.
-func writeConfigFile(configDir, name, content string) error {
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		return fmt.Errorf("create config dir %s: %w", configDir, err)
-	}
-	if err := os.WriteFile(filepath.Join(configDir, name), []byte(content), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", name, err)
-	}
-	return nil
+	return string(body), nil
 }
 
 // validDomain matches a DNS host: dot-separated labels of letters,

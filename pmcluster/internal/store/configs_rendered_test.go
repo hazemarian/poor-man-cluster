@@ -47,6 +47,9 @@ func TestSetRenderedAndList(t *testing.T) {
 	if row.RenderedContent != "version: \"3.9\"\nservices: {}" || row.RenderedAt == 0 {
 		t.Errorf("GetConfig rendered fields wrong: content=%q at=%d", row.RenderedContent, row.RenderedAt)
 	}
+	if row.RenderedHash != ConfigHash(row.RenderedContent) {
+		t.Errorf("GetConfig rendered_hash = %q, want %q", row.RenderedHash, ConfigHash(row.RenderedContent))
+	}
 
 	list, err = st.ListRenderedConfigs(ctx)
 	if err != nil {

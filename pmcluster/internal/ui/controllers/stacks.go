@@ -175,6 +175,21 @@ func (c Stacks) Rollback(g *gin.Context) {
 	c.renderStack(g, name, stackDetailData{Msg: msg, Error: errStringIf(err)})
 }
 
+// Sync re-runs the deploy pipeline from the stack's latest stored manifest,
+// then re-renders its detail. The console "sync" button — k8s-style reconcile:
+// config edits stored in the DB are re-resolved and applied to the stack.
+func (c Stacks) Sync(g *gin.Context) {
+	ctx := g.Request.Context()
+	name := g.Param("name")
+	c.loadParams(ctx)
+	res, err := c.API.SyncStack(ctx, name)
+	msg := "Synced " + name
+	if err == nil && res != nil && res.Revision > 0 {
+		msg = "Synced " + name + " — revision " + strconv.FormatInt(res.Revision, 10)
+	}
+	c.renderStack(g, name, stackDetailData{Msg: msg, Error: errStringIf(err)})
+}
+
 // ShowBackups renders backups scoped to one stack.
 func (c Stacks) ShowBackups(g *gin.Context) {
 	ctx := g.Request.Context()

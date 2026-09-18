@@ -204,7 +204,7 @@ func TestClusterUp(t *testing.T) {
 		}
 	})
 
-	t.Run("second cluster up reuses unchanged configs and keeps services healthy", func(t *testing.T) {
+	t.Run("second cluster up errors (init-only) and cluster update is a content-aware no-op", func(t *testing.T) {
 
 		configsBefore := map[string]string{}
 		for _, prefix := range []string{"pmcluster_otel_config_v", "pmcluster_traefik_dynamic_v"} {
@@ -216,16 +216,25 @@ func TestClusterUp(t *testing.T) {
 			t.Logf("Before: config prefix=%s => ID=%s", prefix, id)
 		}
 
-		t.Log("Running: pmcluster cluster up (second run — config update)…")
+		t.Log("Running: pmcluster cluster up (second run — must refuse: init-only)…")
 		out2, _, code := runCmdCtx(t, ctx, homeDir, upArgs...)
-		if code != 0 {
-			t.Fatalf("pmcluster cluster up (second run) exited %d:\n%s", code, out2)
+		if code == 0 {
+			t.Fatalf("pmcluster cluster up (second run) exited 0 — expected init-only error:\n%s", out2)
+		}
+		if !strings.Contains(out2, "cluster already initialised") {
+			t.Errorf("expected 'cluster already initialised' error on second up; got:\n%s", out2)
+		}
+
+		t.Log("Running: pmcluster cluster update (no changes — content-aware no-op)…")
+		updateOut, _, updateCode := runCmdCtx(t, ctx, homeDir, "cluster", "update")
+		if updateCode != 0 {
+			t.Fatalf("pmcluster cluster update exited %d:\n%s", updateCode, updateOut)
 		}
 
 		for _, prefix := range []string{"pmcluster_otel_config_v", "pmcluster_traefik_dynamic_v"} {
 			newID := dockerConfigIDByPrefix(t, ctx, prefix)
 			if newID == "" {
-				t.Fatalf("config with prefix %q not found after re-run", prefix)
+				t.Fatalf("config with prefix %q not found after cluster update", prefix)
 			}
 			if newID != configsBefore[prefix] {
 				t.Errorf("config with prefix %q ID changed on unchanged re-run (old=%s, new=%s) — expected content-aware reuse", prefix, configsBefore[prefix], newID)
@@ -246,34 +255,38 @@ func TestClusterUp(t *testing.T) {
 			waitServiceHealthy(t, ctx, fullName, svc.wantRep, 120*time.Second)
 		}
 
-		if strings.Contains(out2, "newly created") {
-			t.Errorf("expected NO 'newly created' on second run; got:\n%s", out2)
-		}
-		if !strings.Contains(out2, "cluster up complete") {
-			t.Errorf("expected 'cluster up complete' on second run; got:\n%s", out2)
+		if strings.Contains(updateOut, "re-deploying") {
+			t.Errorf("expected NO re-deploys on unchanged cluster update; got:\n%s", updateOut)
 		}
 	})
 
-	t.Run("edited config file mints a new Docker config version", func(t *testing.T) {
-		cfgPath := homeDir + "/.pmcluster/config/otel-collector-config.yml"
-		old, err := os.ReadFile(cfgPath)
-		if err != nil {
-			t.Fatalf("read %s: %v", cfgPath, err)
-		}
-
+	t.Run("edited config in store mints a new Docker config version on cluster update", func(t *testing.T) {
 		before := dockerConfigIDByPrefix(t, ctx, "pmcluster_otel_config_v")
 		if before == "" {
 			t.Fatalf("otel config not found before edit")
 		}
 
-		edited := append([]byte("# operator edit — force a new version\n"), old...)
-		if err := os.WriteFile(cfgPath, edited, 0o644); err != nil {
-			t.Fatalf("write %s: %v", cfgPath, err)
+		getOut, _, getCode := runCmdCtx(t, ctx, homeDir, "config", "get", "otel-collector-config")
+		if getCode != 0 {
+			t.Fatalf("pmcluster config get exited %d:\n%s", getCode, getOut)
+		}
+		// Strip the "# name (scope...)" header line; the content follows.
+		lines := strings.SplitN(getOut, "\n", 2)
+		if len(lines) != 2 {
+			t.Fatalf("unexpected config get output:\n%s", getOut)
+		}
+		oldContent := lines[1]
+
+		edited := "# operator edit — force a new version\n" + oldContent
+		editOut, _, editCode := runCmdCtx(t, ctx, homeDir,
+			"config", "edit", "otel-collector-config", "--value", edited)
+		if editCode != 0 {
+			t.Fatalf("pmcluster config edit exited %d:\n%s", editCode, editOut)
 		}
 
-		out3, _, code := runCmdCtx(t, ctx, homeDir, upArgs...)
-		if code != 0 {
-			t.Fatalf("pmcluster cluster up after edit exited %d:\n%s", code, out3)
+		updateOut, _, updateCode := runCmdCtx(t, ctx, homeDir, "cluster", "update")
+		if updateCode != 0 {
+			t.Fatalf("pmcluster cluster update after edit exited %d:\n%s", updateCode, updateOut)
 		}
 
 		after := dockerConfigIDByPrefix(t, ctx, "pmcluster_otel_config_v")
@@ -286,8 +299,8 @@ func TestClusterUp(t *testing.T) {
 		t.Logf("otel config rotated: %s → %s", before, after)
 
 		waitServiceHealthy(t, ctx, "observability_otel-collector", 1, 120*time.Second)
-		if !strings.Contains(out3, "cluster up complete") {
-			t.Errorf("expected 'cluster up complete' after edit; got:\n%s", out3)
+		if !strings.Contains(updateOut, "re-deploying") {
+			t.Errorf("expected re-deploy after store edit; got:\n%s", updateOut)
 		}
 	})
 

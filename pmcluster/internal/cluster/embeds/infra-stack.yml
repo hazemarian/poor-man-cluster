@@ -1,4 +1,3 @@
-## pmcluster-config-version: __PMCONFIG_VERSION__
 version: "3.9"
 services:
   # Traefik Gateway

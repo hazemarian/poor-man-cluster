@@ -47,9 +47,13 @@ type Revision struct {
 	CreatedAt    int64
 }
 
-// Deployer is the write side: deploy, roll back and remove stacks.
+// Deployer is the write side: deploy, sync, roll back and remove stacks.
 type Deployer interface {
 	Deploy(ctx context.Context, p Payload) (*Result, error)
+	// Sync re-runs the deploy pipeline for an existing stack from its latest
+	// stored source manifest, re-resolving config()/secrets() references
+	// against the DB. Used by the console "sync" button (k8s-style reconcile).
+	Sync(ctx context.Context, stackName string) (*Result, error)
 	Rollback(ctx context.Context, stackName string, sourceRevision int64) (*Result, error)
 	Undeploy(ctx context.Context, stackName string) error
 }

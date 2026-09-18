@@ -15,10 +15,29 @@ import (
 )
 
 // dataHash returns the stable hex sha256 of a config/secret's payload, used
-// as a content fingerprint (pmcluster.data_hash label) for at-a-glance diffing.
+// as a content fingerprint. Versioned configs/secrets are compared by hashing
+// the actual bytes (never by trusting the pmcluster.data_hash label).
 func dataHash(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
+}
+
+// secretHashStore persists the data-hash of the current versioned secret.
+// Docker's secret API is write-only — SecretInspect never returns the payload
+// (neither a real daemon nor a fake can read it back) — so the reuse check
+// cannot hash Docker's view of the bytes. Instead the hash is stored in the
+// DB when a version is minted and compared against on subsequent runs. This
+// is the same "hash the data, compare with the stored hash" rule applied to
+// configs, with the DB as the source of truth.
+type secretHashStore interface {
+	GetSettingDefault(ctx context.Context, key, fallback string) string
+	SetSetting(ctx context.Context, key, value string) error
+}
+
+// secretHashKey returns the settings key that holds the data-hash of the
+// current version of baseName's versioned secret.
+func secretHashKey(baseName string) string {
+	return "secret_data_hash:" + baseName
 }
 
 // EnsureSecret creates a Swarm secret if one with this name doesn't
@@ -60,13 +79,14 @@ func EnsureSecretFromFile(ctx context.Context, d docker.Client, name, path strin
 // EnsureVersionedSecretFromFile reads a file and provisions a versioned
 // Swarm secret (e.g. cert_v001, cert_v002). Returns the versioned name and
 // whether a new version was created (false when the file's bytes are unchanged
-// and the current version is reused).
-func EnsureVersionedSecretFromFile(ctx context.Context, d docker.Client, baseName, path string) (versionedName string, created bool, err error) {
+// and the current version is reused). hs records the data-hash of the minted
+// version so the reuse check works despite Docker's write-only secret API.
+func EnsureVersionedSecretFromFile(ctx context.Context, d docker.Client, hs secretHashStore, baseName, path string) (versionedName string, created bool, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", false, fmt.Errorf("read %s: %w", path, err)
 	}
-	return EnsureVersionedSecret(ctx, d, baseName, data)
+	return EnsureVersionedSecret(ctx, d, hs, baseName, data)
 }
 
 // EnsureVersionedSecret provisions a versioned Swarm secret (e.g. cert_v001)
@@ -74,7 +94,12 @@ func EnsureVersionedSecretFromFile(ctx context.Context, d docker.Client, baseNam
 // highest version already holds exactly these bytes, that version is reused
 // (created=false, no GC) so unchanged certs don't mint fresh versions. Same
 // pattern as EnsureConfig.
-func EnsureVersionedSecret(ctx context.Context, d docker.Client, baseName string, data []byte) (versionedName string, created bool, err error) {
+//
+// Because Docker secrets are write-only, "holds exactly these bytes" is
+// decided by comparing dataHash(data) with the data-hash persisted in the DB
+// (secretHashStore) when the current version was minted — never by inspecting
+// the secret from Docker and never by trusting the pmcluster.data_hash label.
+func EnsureVersionedSecret(ctx context.Context, d docker.Client, hs secretHashStore, baseName string, data []byte) (versionedName string, created bool, err error) {
 	existing, err := d.SecretList(ctx, pmclusterLabel, "true")
 	if err != nil {
 		return "", false, fmt.Errorf("list secrets: %w", err)
@@ -94,10 +119,15 @@ func EnsureVersionedSecret(ctx context.Context, d docker.Client, baseName string
 
 	if maxVer > 0 {
 		curName := fmt.Sprintf("%s_v%03d", baseName, maxVer)
-		if cur, err := d.SecretInspect(ctx, curName); err == nil {
-			if h, ok := cur.Labels["pmcluster.data_hash"]; ok && h == dataHash(data) {
-				return curName, false, nil
-			}
+		stored := ""
+		if hs != nil {
+			stored = hs.GetSettingDefault(ctx, secretHashKey(baseName), "")
+		}
+		// Content is compared by hashing the actual bytes and checking against
+		// the stored DB hash — never by trusting the pmcluster.data_hash label
+		// and never by reading the secret back from Docker (write-only API).
+		if stored != "" && stored == dataHash(data) {
+			return curName, false, nil
 		}
 	}
 
@@ -115,6 +145,11 @@ func EnsureVersionedSecret(ctx context.Context, d docker.Client, baseName string
 	})
 	if err != nil {
 		return "", false, fmt.Errorf("create secret %s: %w", versionedName, err)
+	}
+	if hs != nil {
+		if err := hs.SetSetting(ctx, secretHashKey(baseName), dataHash(data)); err != nil {
+			return "", false, fmt.Errorf("record secret data hash for %s: %w", baseName, err)
+		}
 	}
 
 	for _, name := range existing {
@@ -169,7 +204,10 @@ func EnsureConfig(ctx context.Context, d docker.Client, baseName string, data []
 	if maxVer > 0 {
 		curName := fmt.Sprintf("%s_v%03d", baseName, maxVer)
 		if cur, err := d.ConfigInspect(ctx, curName); err == nil {
-			if h, ok := cur.Labels["pmcluster.data_hash"]; ok && h == dataHash(data) {
+			// Content is compared by hashing the actual config bytes, never by
+			// trusting the pmcluster.data_hash label — the label could be
+			// stale, missing, or wrong, and the bytes are the source of truth.
+			if dataHash(cur.Data) == dataHash(data) {
 				return curName, false, nil
 			}
 		}

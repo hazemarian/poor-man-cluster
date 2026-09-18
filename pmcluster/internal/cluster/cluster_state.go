@@ -19,6 +19,26 @@ const (
 	settingOOEmail     = "oo_admin_email"
 )
 
+// clusterInstalled reports whether this store already holds a live cluster.
+// `cluster up` is init-only, so it refuses to run when either the persisted
+// domain/TLS install state or the cluster-scope platform config rows exist.
+func clusterInstalled(ctx context.Context, st *store.Store) (bool, error) {
+	if st == nil {
+		return false, nil
+	}
+	if st.GetSettingDefault(ctx, settingDomain, "") != "" {
+		return true, nil
+	}
+	if st.GetSettingDefault(ctx, settingTLSMode, "") != "" {
+		return true, nil
+	}
+	rows, err := st.ListConfigs(ctx, "cluster", "")
+	if err != nil {
+		return false, fmt.Errorf("list cluster configs: %w", err)
+	}
+	return len(rows) > 0, nil
+}
+
 // tlsState is the persisted TLS install state.
 type tlsState struct {
 	Mode      string

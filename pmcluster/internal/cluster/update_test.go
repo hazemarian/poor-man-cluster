@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,8 +47,8 @@ func seedUpdateState(t *testing.T) (UpdateDeps, string) {
 	cipher := openTestCipher(t, filepath.Join(dir, ".key"))
 
 	cfgDir := filepath.Join(dir, "config")
-	if err := EnsureConfigDir(cfgDir, "v0.3.0"); err != nil {
-		t.Fatalf("EnsureConfigDir: %v", err)
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
 	}
 
 	certPath := writeTempFile(t, dir, "cert.pem", []byte("CERT"))
@@ -124,17 +125,17 @@ func TestUpdate_VersionBumpRedeploysEdgeWithPinnedTag(t *testing.T) {
 	if !res.EdgeDeployed {
 		t.Error("version bump should re-deploy the edge with the new pinned tag")
 	}
-	if !res.OTelCreated || !res.TraefikCreated {
-		t.Error("version bump should rotate OTel + Traefik configs (version-stamped templates)")
+	if res.OTelCreated || res.TraefikCreated {
+		t.Error("version bump must NOT rotate OTel + Traefik configs (no version stamping — content is hash-compared)")
 	}
 	deployer := deps.Deployer.(*recordingDeployer)
 	got := make([]string, 0, len(deployer.deployedStacks))
 	for _, d := range deployer.deployedStacks {
 		got = append(got, d.Name)
 	}
-	want := []string{"observability", "infra", "edge"}
+	want := []string{"edge"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("version bump should re-deploy %v (configs rotated + edge repinned), got %v", want, got)
+		t.Errorf("version bump should re-deploy %v (edge image repinned, configs content-stable), got %v", want, got)
 	}
 }
 
@@ -193,11 +194,12 @@ func TestUpdate_ConfigsUseSeedVersionedNames(t *testing.T) {
 	}
 }
 
-// TestUpdate_PasswordRotationDoesNotRedeployObservability verifies the core
-// decoupling: because the OTel collector authenticates with the STABLE root
-// token (not the human password), rotating the OO password must NOT re-render
-// the collector config nor re-deploy observability — that is the whole point
-// of the token move.
+// TestUpdate_PasswordRotationRedeploysObservability verifies the render-level
+// semantics: the OTel collector config authenticates with the STABLE root token
+// (never the human password), so it is NOT re-created on a password rotation.
+// The observability stack compose embeds ZO_ROOT_USER_PASSWORD directly, so its
+// rendered content DOES change and observability IS re-deployed — applying the
+// new password to the running service.
 func TestUpdate_PasswordRotationDoesNotRedeployObservability(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 
@@ -225,8 +227,13 @@ func TestUpdate_PasswordRotationDoesNotRedeployObservability(t *testing.T) {
 		t.Errorf("OTelConfig = %q, want pmcluster_otel_config_v001 (unchanged)", res.OTelConfig)
 	}
 	deployer := deps.Deployer.(*recordingDeployer)
-	if len(deployer.deployedStacks) != 0 {
-		t.Errorf("expected NO stacks deployed on password-only rotation, got %v", deployer.deployedStacks)
+	if len(deployer.deployedStacks) != 1 || deployer.deployedStacks[0].Name != "observability" {
+		t.Errorf("expected ONLY observability re-deployed (password env changed), got %v", deployer.deployedStacks)
+	}
+	for _, d := range deployer.deployedStacks {
+		if !strings.Contains(string(d.YAML), newPass) {
+			t.Errorf("observability re-deploy must carry the NEW password in ZO_ROOT_USER_PASSWORD")
+		}
 	}
 }
 
@@ -266,8 +273,8 @@ func TestUpdate_TLSNotACMEWithoutCertPathsErrorsIfNoACMEEmail(t *testing.T) {
 	}
 
 	cfgDir := filepath.Join(dir, "config")
-	if err := EnsureConfigDir(cfgDir, "v0.3.0"); err != nil {
-		t.Fatalf("EnsureConfigDir: %v", err)
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
 	}
 
 	f := newFakeDocker()
@@ -326,8 +333,8 @@ func TestUpdate_ACMEModeDoesNotRequireCertPaths(t *testing.T) {
 	}
 
 	cfgDir := filepath.Join(dir, "config")
-	if err := EnsureConfigDir(cfgDir, "v0.3.0"); err != nil {
-		t.Fatalf("EnsureConfigDir: %v", err)
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
 	}
 
 	f := newFakeDocker()

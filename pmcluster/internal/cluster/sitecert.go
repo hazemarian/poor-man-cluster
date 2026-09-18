@@ -114,11 +114,11 @@ func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domai
 	} else {
 
 		var err error
-		certName, _, err = EnsureVersionedSecret(ctx, deps.Docker, hostSecretBase("cert", domain), []byte(certPEM))
+		certName, _, err = EnsureVersionedSecret(ctx, deps.Docker, deps.Store, hostSecretBase("cert", domain), []byte(certPEM))
 		if err != nil {
 			return nil, fmt.Errorf("ensure host cert secret: %w", err)
 		}
-		keyName, _, err = EnsureVersionedSecret(ctx, deps.Docker, hostSecretBase("key", domain), []byte(keyPEM))
+		keyName, _, err = EnsureVersionedSecret(ctx, deps.Docker, deps.Store, hostSecretBase("key", domain), []byte(keyPEM))
 		if err != nil {
 			return nil, fmt.Errorf("ensure host key secret: %w", err)
 		}

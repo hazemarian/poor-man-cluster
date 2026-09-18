@@ -10,6 +10,14 @@
   · updated {{ts .Detail.Stack.UpdatedAt}}
 </p>
 
+<div class="card" style="display:flex;justify-content:space-between;align-items:center">
+  <div class="muted">Re-apply the latest manifest — picks up config/secret edits from the store.</div>
+  <form method="post" action="/stacks/{{.Detail.Stack.Name}}/sync"
+        hx-post="/stacks/{{.Detail.Stack.Name}}/sync" hx-target="#view">
+    <button class="btn sm" type="submit">Sync</button>
+  </form>
+</div>
+
 {{if .Detail.LastBackup}}
 <div class="card" style="display:flex;justify-content:space-between;align-items:center">
   <div><b>Last backup:</b> <span class="pill {{sp .Detail.LastBackup.Status}}">{{.Detail.LastBackup.Status}}</span>

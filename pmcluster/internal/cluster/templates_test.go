@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"math/big"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -706,38 +705,6 @@ func TestCompare_Versions(t *testing.T) {
 	}
 }
 
-// TestShouldOverwriteConfig_StaleOrMissing exercises the version-based
-// overwrite decision logic.
-func TestShouldOverwriteConfig_StaleOrMissing(t *testing.T) {
-	t.Run("missing version header", func(t *testing.T) {
-		old := []byte("version: \"3.9\"\nservices:\n  foo:\n")
-		if !shouldOverwriteConfig(old, "v0.1.12") {
-			t.Error("file with no version header should be overwritten")
-		}
-	})
-
-	t.Run("older version", func(t *testing.T) {
-		old := []byte("## pmcluster-config-version: v0.1.9\nversion: \"3.9\"\n")
-		if !shouldOverwriteConfig(old, "v0.1.12") {
-			t.Error("file with older version should be overwritten")
-		}
-	})
-
-	t.Run("same version", func(t *testing.T) {
-		old := []byte("## pmcluster-config-version: v0.1.12\nversion: \"3.9\"\n")
-		if shouldOverwriteConfig(old, "v0.1.12") {
-			t.Error("file with same version should NOT be overwritten")
-		}
-	})
-
-	t.Run("newer version", func(t *testing.T) {
-		old := []byte("## pmcluster-config-version: v0.2.0\nversion: \"3.9\"\n")
-		if shouldOverwriteConfig(old, "v0.1.12") {
-			t.Error("file with newer version should NOT be overwritten")
-		}
-	})
-}
-
 func TestEdgeImageFor(t *testing.T) {
 	t.Setenv(EdgeImageEnv, "")
 
@@ -781,16 +748,15 @@ func TestSyncClusterConfigs(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	cfgDir := filepath.Join(dir, "config")
 
 	// Seed a stale infra-stack row exactly like the server's v0.2.31 leftovers
 	// (contains Portainer, stamped with an old version).
-	staleContent := "## pmcluster-config-version: v0.2.31\nservices:\n  portainer:\n    image: portainer/portainer-ce:2.39.5\n"
+	staleContent := "services:\n  portainer:\n    image: portainer/portainer-ce:2.39.5\n"
 	if _, err := s.CreateConfig(context.Background(), "cluster", "", "infra-stack", "template", staleContent, "v0.2.31"); err != nil {
 		t.Fatalf("create stale row: %v", err)
 	}
 
-	res, err := SyncPlatformConfigs(context.Background(), s, cfgDir, "v0.2.45")
+	res, err := SyncPlatformConfigs(context.Background(), s, "v0.2.45")
 	if err != nil {
 		t.Fatalf("SyncPlatformConfigs: %v", err)
 	}
@@ -809,9 +775,6 @@ func TestSyncClusterConfigs(t *testing.T) {
 		if r.Kind != "template" {
 			t.Errorf("row %s kind = %s, want template", r.Name, r.Kind)
 		}
-		if !strings.Contains(r.Content, "pmcluster-config-version: v0.2.45") {
-			t.Errorf("row %s content not stamped with current version", r.Name)
-		}
 	}
 	infra, err := s.GetConfig(context.Background(), "infra-stack")
 	if err != nil {
@@ -819,14 +782,6 @@ func TestSyncClusterConfigs(t *testing.T) {
 	}
 	if strings.Contains(infra.Content, "portainer") {
 		t.Error("stale portainer content survived the sync")
-	}
-	// Disk must mirror the DB (source of truth = DB).
-	disk, err := os.ReadFile(filepath.Join(cfgDir, "infra-stack.yml"))
-	if err != nil {
-		t.Fatalf("read disk infra-stack.yml: %v", err)
-	}
-	if string(disk) != infra.Content {
-		t.Error("disk file does not mirror DB content")
 	}
 	if len(res.Updated) != 1 || res.Updated[0] != "infra-stack" {
 		t.Errorf("res.Updated = %v, want exactly [infra-stack]", res.Updated)
@@ -836,7 +791,7 @@ func TestSyncClusterConfigs(t *testing.T) {
 	}
 
 	// Re-run: everything is current → nothing churned, all preserved.
-	res2, err := SyncPlatformConfigs(context.Background(), s, cfgDir, "v0.2.45")
+	res2, err := SyncPlatformConfigs(context.Background(), s, "v0.2.45")
 	if err != nil {
 		t.Fatalf("second SyncPlatformConfigs: %v", err)
 	}
@@ -855,28 +810,27 @@ func TestSyncClusterConfigs_ConsoleEditPreserved(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	cfgDir := filepath.Join(dir, "config")
 
 	// First sync seeds all rows at the current version.
-	if _, err := SyncPlatformConfigs(context.Background(), s, cfgDir, "v0.2.45"); err != nil {
+	if _, err := SyncPlatformConfigs(context.Background(), s, "v0.2.45"); err != nil {
 		t.Fatalf("seed sync: %v", err)
 	}
 
 	// Simulate a console edit: row is updated and re-stamped with the same
 	// current version.
-	custom := "## pmcluster-config-version: v0.2.45\n# operator edit\n"
+	custom := "version: \"3.9\"\nservices:\n  edge:\n    image: custom/edge:1.0\n"
 	if _, err := s.UpdateConfig(context.Background(), "edge-stack", custom, "v0.2.45"); err != nil {
 		t.Fatalf("console edit: %v", err)
 	}
 
-	res, err := SyncPlatformConfigs(context.Background(), s, cfgDir, "v0.2.45")
+	res, err := SyncPlatformConfigs(context.Background(), s, "v0.2.45")
 	if err != nil {
 		t.Fatalf("re-sync: %v", err)
 	}
 	if len(res.Created)+len(res.Updated) != 0 {
 		t.Errorf("sync churned console-edited row: created=%v updated=%v", res.Created, res.Updated)
 	}
-	// The edit must survive AND be mirrored to disk (DB authoritative).
+	// The edit must survive (DB authoritative at the current version).
 	row, err := s.GetConfig(context.Background(), "edge-stack")
 	if err != nil {
 		t.Fatalf("get edge-stack: %v", err)
@@ -884,27 +838,12 @@ func TestSyncClusterConfigs_ConsoleEditPreserved(t *testing.T) {
 	if row.Content != custom {
 		t.Errorf("console edit lost: %q", row.Content)
 	}
-	disk, err := os.ReadFile(filepath.Join(cfgDir, "edge-stack.yml"))
-	if err != nil {
-		t.Fatalf("read disk edge-stack.yml: %v", err)
-	}
-	if string(disk) != custom {
-		t.Error("disk does not mirror console-edited DB row")
-	}
 }
 
 func TestSyncPlatformConfigs_NilStore(t *testing.T) {
-	dir := t.TempDir()
-	cfgDir := filepath.Join(dir, "config")
-	res, err := SyncPlatformConfigs(context.Background(), nil, cfgDir, "v0.2.45")
+	res, err := SyncPlatformConfigs(context.Background(), nil, "v0.2.45")
 	if err != nil {
 		t.Fatalf("SyncPlatformConfigs(nil store): %v", err)
-	}
-	// Degrades to EnsureConfigDir: all files seeded on disk.
-	for _, name := range ConfigFileNames {
-		if _, err := os.Stat(filepath.Join(cfgDir, name)); err != nil {
-			t.Errorf("config %s not seeded: %v", name, err)
-		}
 	}
 	if len(res.Created)+len(res.Updated)+len(res.Preserved) != 0 {
 		t.Errorf("nil-store result should be empty, got %+v", res)

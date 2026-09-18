@@ -58,6 +58,10 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"stack":"demo","new_revision":3,"rolled_back_to":2}`)
 	})
 
+	mux.HandleFunc("/api/stacks/demo/sync", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"stack":"demo","revision":4}`)
+	})
+
 	mux.HandleFunc("/api/stacks/demo/backups", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"backups":[{"id":9,"status":"succeeded","stack_name":"demo","revision":3,"archive_paths":["a.tar.gz"],"started_at":10,"finished_at":11}]}`)
 	})
@@ -357,6 +361,7 @@ func TestAllControllers(t *testing.T) {
 	assertFragment(http.MethodGet, "/stacks/demo/backups", "", "Backups", "succeeded", "1 recent backup")
 
 	assertFragment(http.MethodPost, "/stacks/demo/rollback", "revision=2", "Stack · demo", "Rolled back demo to revision 2")
+	assertFragment(http.MethodPost, "/stacks/demo/sync", "", "Stack · demo", "Synced demo — revision 4")
 	assertFragment(http.MethodPost, "/stacks/demo/remove", "", "Stacks", "Stack demo removed.")
 
 	assertFragment(http.MethodPost, "/backups", "", "Backups", "Backup triggered.")

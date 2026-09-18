@@ -54,13 +54,15 @@ type UpdateDeps struct {
 
 // Update re-provisions the OTel collector + Traefik dynamic configs and the
 // TLS cert/key, pushing only what changed into Docker, and re-deploying only
-// the stack(s) whose inputs moved.
+// the stack(s) whose rendered content moved.
 //
-// It first syncs the platform config templates (disk + store) to the current
-// build version — the DB is the source of truth, so stale rows are refreshed
-// and the disk mirror is kept in lock-step. It never re-bootstraps credentials
-// and never resets volumes. It is content-aware end to end: unchanged inputs
-// are reused (no new versions, no redeploy) so a no-op update is just a report.
+// It first syncs the platform config templates into the store to the current
+// build version — the DB is the single source of truth, so stale rows are
+// refreshed from the embedded defaults and console edits at the current
+// version are preserved. It never re-bootstraps credentials and never resets
+// volumes. It is content-aware end to end: each stack's freshly rendered
+// compose is hashed and compared against the stored rendered_hash, so an
+// unchanged stack is not redeployed (a no-op update is just a report).
 func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult, error) {
 	out := io.Discard
 	if deps.Stdout != nil {
@@ -80,8 +82,8 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return Preflight(ctx, deps.Docker)
 	})
 
-	wf.Add("Syncing platform config files (disk + store)", func(ctx context.Context) error {
-		syncRes, err := SyncPlatformConfigs(ctx, deps.Store, in.ConfigDir, in.Version)
+	wf.Add("Syncing platform config templates into the store", func(ctx context.Context) error {
+		syncRes, err := SyncPlatformConfigs(ctx, deps.Store, in.Version)
 		if err != nil {
 			return err
 		}
@@ -162,11 +164,11 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		if state.CertPath == "" || state.KeyPath == "" {
 			return fmt.Errorf("TLS is not ACME (no ACME email) but no cert/key paths are persisted — run `cluster up` with --cert/--key (or --acme-email) before `cluster update`")
 		}
-		certName, certCreated, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, "cert", state.CertPath)
+		certName, certCreated, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, deps.Store, "cert", state.CertPath)
 		if err != nil {
 			return fmt.Errorf("ensure cert secret: %w", err)
 		}
-		keyName, keyCreated, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, "key", state.KeyPath)
+		keyName, keyCreated, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, deps.Store, "key", state.KeyPath)
 		if err != nil {
 			return fmt.Errorf("ensure key secret: %w", err)
 		}
@@ -208,49 +210,55 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil
 	})
 
-	wf.Add("Re-deploying stacks whose inputs changed", func(ctx context.Context) error {
-		certChanged := res.CertCreated || res.KeyCreated
-		if res.OTelCreated {
-			fmt.Fprintf(out, "  ▶ %s changed → re-deploying %q\n", "OTel collector config", StackObservability)
-			if err := deployStack(ctx, out, deps.Deployer, StackObservability, render); err != nil {
-				return err
-			}
-			res.StacksDeployed = append(res.StacksDeployed, string(StackObservability))
-		}
-		if res.TraefikCreated || certChanged {
-			reason := "Traefik dynamic config changed"
-			if certChanged {
-				reason = "certificate/key changed"
-			}
-			fmt.Fprintf(out, "  ▶ %s → re-deploying %q\n", reason, StackInfra)
-			if err := deployStack(ctx, out, deps.Deployer, StackInfra, render); err != nil {
-				return err
-			}
-			res.StacksDeployed = append(res.StacksDeployed, string(StackInfra))
-		}
-		if res.EdgeCreated {
-			fmt.Fprintf(out, "  ▶ pmcluster-edge stack content changed (new image tag / config edit) → re-deploying\n")
-			if err := deployStack(ctx, out, deps.Deployer, StackEdge, render); err != nil {
-				return err
-			}
-			res.StacksDeployed = append(res.StacksDeployed, string(StackEdge))
-			res.EdgeDeployed = true
-		}
-		if len(res.StacksDeployed) == 0 {
-			fmt.Fprintf(out, "  ▶ No config or certificate changes — nothing to redeploy.\n")
-		}
-		return nil
-	})
-
-	wf.Add("Snapshotting rendered configs into the store", func(ctx context.Context) error {
-		rendered, err := RenderClusterConfigs(ctx, deps, in)
+	wf.Add("Reconciling platform stacks (rendered content vs stored hash)", func(ctx context.Context) error {
+		// Render all six platform configs with the fully-populated render
+		// (config names + cert secrets substituted) so the snapshots are
+		// valid YAML and comparable across runs.
+		rendered, err := renderPlatformConfigs(render)
 		if err != nil {
-			return fmt.Errorf("render platform configs for persistence: %w", err)
+			return err
 		}
+
+		// Per-stack re-deploy decision: hash the freshly rendered compose and
+		// compare it with the stored rendered_hash of the matching config row.
+		// Any change in the stack template, the versioned Docker config name it
+		// mounts, the edge image tag, or the TLS secret names it references
+		// shows up here — the DB hash is the single source of truth.
+		var redeploy []stackName
+		for _, s := range []stackName{StackObservability, StackInfra, StackEdge, StackBackup} {
+			cfgName := string(s) + "-stack"
+			fresh := rendered[cfgName]
+			row, err := deps.Store.GetConfig(ctx, cfgName)
+			if err != nil && !errors.Is(err, store.ErrConfigNotFound) {
+				return fmt.Errorf("read rendered hash for %s: %w", cfgName, err)
+			}
+			if row != nil && row.RenderedHash == store.ConfigHash(string(fresh)) {
+				continue
+			}
+			redeploy = append(redeploy, s)
+		}
+
+		// Snapshot every rendered config into the store (rendered_content +
+		// rendered_hash) so the console reads them back and the next update
+		// has a baseline to compare against.
 		for name, content := range rendered {
-			if err := deps.Store.SetRendered(ctx, name, content); err != nil && !errors.Is(err, store.ErrConfigNotFound) {
+			if err := deps.Store.SetRendered(ctx, name, string(content)); err != nil && !errors.Is(err, store.ErrConfigNotFound) {
 				return fmt.Errorf("store rendered config %s: %w", name, err)
 			}
+		}
+
+		for _, s := range redeploy {
+			fmt.Fprintf(out, "  ▶ %s content changed → re-deploying\n", string(s))
+			if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
+				return err
+			}
+			res.StacksDeployed = append(res.StacksDeployed, string(s))
+			if s == StackEdge {
+				res.EdgeDeployed = true
+			}
+		}
+		if len(redeploy) == 0 {
+			fmt.Fprintf(out, "  ▶ No rendered content changed — nothing to redeploy.\n")
 		}
 		return nil
 	})
@@ -261,6 +269,32 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return res, err
 	}
 	return res, nil
+}
+
+// renderPlatformConfigs renders all six platform configs (four stack composes
+// plus otel-collector-config and traefik-dynamic) with a fully populated
+// render — the versioned Docker config names, TLS secret names and edge image
+// tag are substituted, so every snapshot is valid YAML and stable across runs.
+func renderPlatformConfigs(render RenderInput) (map[string][]byte, error) {
+	out := make(map[string][]byte, 6)
+	for _, s := range []stackName{StackInfra, StackObservability, StackBackup, StackEdge} {
+		y, err := LoadComposeFile(s, render)
+		if err != nil {
+			return nil, fmt.Errorf("render %s: %w", s, err)
+		}
+		out[string(s)+"-stack"] = y
+	}
+	otelYAML, err := RenderOTelCollectorConfig(render)
+	if err != nil {
+		return nil, fmt.Errorf("render otel-collector-config: %w", err)
+	}
+	out["otel-collector-config"] = otelYAML
+	traefikYAML, err := RenderTraefikDynamic(render)
+	if err != nil {
+		return nil, fmt.Errorf("render traefik-dynamic: %w", err)
+	}
+	out["traefik-dynamic"] = traefikYAML
+	return out, nil
 }
 
 // deployStack renders and deploys a single stack, streaming progress.
@@ -277,9 +311,10 @@ func deployStack(ctx context.Context, out io.Writer, d StackDeployer, s stackNam
 }
 
 // RenderClusterConfigs renders the current platform configs (post-substitution
-// YAML) without deploying anything. It mirrors Update's render construction and
-// the idempotent TLS secret materialisation so the output matches what a
-// `cluster update` would deploy. Keep in sync with Update.
+// YAML) without deploying any stack. It mirrors Update's render construction —
+// including the versioned Docker config names for OTel/Traefik/edge — so the
+// output matches what a `cluster update` would deploy and is valid YAML.
+// Keep in sync with Update.
 func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) (map[string]string, error) {
 	if err := Preflight(ctx, deps.Docker); err != nil {
 		return nil, err
@@ -331,33 +366,50 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		if state.CertPath == "" || state.KeyPath == "" {
 			return nil, fmt.Errorf("TLS is not ACME (no ACME email) but no cert/key paths are persisted — run `cluster up` with --cert/--key (or --acme-email)")
 		}
-		certName, _, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, "cert", state.CertPath)
+		certName, _, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, deps.Store, "cert", state.CertPath)
 		if err != nil {
 			return nil, err
 		}
-		keyName, _, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, "key", state.KeyPath)
+		keyName, _, err := EnsureVersionedSecretFromFile(ctx, deps.Docker, deps.Store, "key", state.KeyPath)
 		if err != nil {
 			return nil, err
 		}
 		render.CertSecretName, render.KeySecretName = certName, keyName
 	}
-	out := make(map[string]string)
-	for _, s := range []stackName{StackInfra, StackObservability, StackBackup, StackEdge} {
-		y, err := LoadComposeFile(s, render)
-		if err != nil {
-			return nil, fmt.Errorf("render %s: %w", s, err)
-		}
-		out[string(s)+"-stack"] = string(y)
-	}
+
+	// Materialise the versioned Docker config names so the rendered stacks
+	// reference real configs (valid YAML) and the snapshots are hashable.
 	otelYAML, err := RenderOTelCollectorConfig(render)
 	if err != nil {
-		return nil, fmt.Errorf("render otel-collector-config: %w", err)
+		return nil, err
 	}
-	out["otel-collector-config"] = string(otelYAML)
+	otelName, _, err := EnsureConfig(ctx, deps.Docker, "pmcluster_otel_config", otelYAML, in.Version)
+	if err != nil {
+		return nil, err
+	}
+	render.OTelConfigName = otelName
 	traefikYAML, err := RenderTraefikDynamic(render)
 	if err != nil {
-		return nil, fmt.Errorf("render traefik-dynamic: %w", err)
+		return nil, err
 	}
-	out["traefik-dynamic"] = string(traefikYAML)
+	traefikName, _, err := EnsureConfig(ctx, deps.Docker, "pmcluster_traefik_dynamic", traefikYAML, in.Version)
+	if err != nil {
+		return nil, err
+	}
+	render.TraefikConfigName = traefikName
+	edgeName, _, err := ensureEdgeConfig(ctx, deps.Docker, in.Version, render)
+	if err != nil {
+		return nil, err
+	}
+	_ = edgeName
+
+	rendered, err := renderPlatformConfigs(render)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rendered))
+	for name, content := range rendered {
+		out[name] = string(content)
+	}
 	return out, nil
 }

@@ -187,6 +187,14 @@ func (c *Client) Rollback(ctx context.Context, name string, rev int64) (*Rollbac
 	return &r, err
 }
 
+// SyncStack re-runs the deploy pipeline from the stack's latest stored
+// manifest (k8s-style reconcile after config edits).
+func (c *Client) SyncStack(ctx context.Context, name string) (*DeployResult, error) {
+	var r DeployResult
+	err := c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(name)+"/sync", nil, &r)
+	return &r, err
+}
+
 // DeleteStack undeploys the stack from the Swarm and removes its record.
 func (c *Client) DeleteStack(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, "/stacks/"+url.PathEscape(name), nil, nil)

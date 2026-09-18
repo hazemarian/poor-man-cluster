@@ -123,6 +123,14 @@ func (a *Deploy) Rollback(ctx context.Context, stackName string, sourceRevision 
 	return &stacks.Result{StackName: out.Stack, Revision: rev}, nil
 }
 
+func (a *Deploy) Sync(ctx context.Context, stackName string) (*stacks.Result, error) {
+	var out deployResultDTO
+	if err := a.c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(stackName)+"/sync", nil, &out); err != nil {
+		return nil, err
+	}
+	return &stacks.Result{StackName: out.Stack, Revision: out.Revision}, nil
+}
+
 func (a *Deploy) Undeploy(ctx context.Context, stackName string) error {
 	return a.c.do(ctx, http.MethodDelete, "/stacks/"+url.PathEscape(stackName), nil, nil)
 }

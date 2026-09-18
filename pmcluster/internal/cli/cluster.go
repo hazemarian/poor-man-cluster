@@ -159,10 +159,6 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
-	if err := cluster.EnsureConfigDir(cfg.ConfigDir(), buildinfo.Version); err != nil {
-		return fmt.Errorf("refresh config dir: %w", err)
-	}
-
 	updateDomain := st.GetSettingDefault(ctx, "domain", "")
 	res, err := cluster.NewService().Update(ctx, cluster.UpdateDeps{
 		Store:       st,
