@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"sigs.k8s.io/yaml"
 )
 
 // StackDeployer applies a compose file to the swarm under a given stack
@@ -109,11 +111,73 @@ func (d *dockerCLIDeployer) DeployStack(ctx context.Context, name string, compos
 		}
 	}
 
+	if err := d.pruneStackServices(ctx, name, composeYAML); err != nil {
+		return err
+	}
+
 	if err := d.forceUpdateStackServices(ctx, name); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// pruneStackServices removes services that belong to the stack but are no
+// longer declared in the compose file. Modern `docker stack deploy` only
+// adds/updates services — it never removes ones dropped from the compose — so
+// a service deleted from the YAML (e.g. Portainer in v0.2.43) would otherwise
+// keep running forever. This restores the legacy prune behaviour for ALL stack
+// deploys (platform + app): diff the stack's live service list against the
+// compose's top-level `services:` keys and `docker service rm` the leftovers.
+func (d *dockerCLIDeployer) pruneStackServices(ctx context.Context, stackName string, composeYAML []byte) error {
+	listCmd := exec.CommandContext(ctx, "docker", "stack", "services",
+		"--format", "{{.Name}}", stackName)
+	listOut, err := d.runWithOutput(listCmd)
+	if err != nil {
+		return fmt.Errorf("docker stack services %s (prune): %s", stackName, listOut)
+	}
+	live := strings.Split(strings.TrimSpace(listOut), "\n")
+	remove, err := pruneCandidates(stackName, composeYAML, live)
+	if err != nil {
+		return err
+	}
+	for _, fullName := range remove {
+		rmCmd := exec.CommandContext(ctx, "docker", "service", "rm", fullName)
+		if rmOut, rmErr := d.runWithOutput(rmCmd); rmErr != nil {
+			return fmt.Errorf("docker service rm %s: %s", fullName, rmOut)
+		}
+	}
+	return nil
+}
+
+// pruneCandidates computes which live stack services should be removed given
+// the compose's declared services: every live full name (stack_service) that
+// is NOT in the compose. Safe by construction: when the compose declares no
+// services (parse surprise) nothing is pruned — a running stack must never be
+// wiped by a bad parse.
+func pruneCandidates(stackName string, composeYAML []byte, live []string) ([]string, error) {
+	var doc struct {
+		Services map[string]any `json:"services"`
+	}
+	if err := yaml.Unmarshal(composeYAML, &doc); err != nil {
+		return nil, fmt.Errorf("parse compose for %s (prune): %w", stackName, err)
+	}
+	if len(doc.Services) == 0 {
+		return nil, nil
+	}
+	wanted := make(map[string]bool, len(doc.Services))
+	for svc := range doc.Services {
+		wanted[stackName+"_"+svc] = true
+	}
+	var remove []string
+	for _, fullName := range live {
+		fullName = strings.TrimSpace(fullName)
+		if fullName == "" || wanted[fullName] {
+			continue
+		}
+		remove = append(remove, fullName)
+	}
+	return remove, nil
 }
 
 // forceUpdateStackServices lists services belonging to a stack and

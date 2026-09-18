@@ -65,12 +65,15 @@ var clusterUpdateCmd = &cobra.Command{
 NOT re-run a full bring-up: no credential bootstrap, no volume reset, no
 full-stack redeploy.
 
-  - Re-reads ~/.pmcluster/config/otel-collector-config.yml + traefik-dynamic.yml
-    (your files are the source of truth; NEVER overwritten here)
-  - Content-aware: unchanged files reuse the current Docker config version
+  - Syncs the six platform config templates into the store + ~/.pmcluster/config/
+    (the store is the source of truth; stale rows are refreshed to the current
+    build, and your edits at the current version are preserved + mirrored)
+  - Re-reads otel-collector-config.yml + traefik-dynamic.yml
+  - Content-aware: unchanged inputs reuse the current Docker config version
   - Re-applies cert/key from the stored TLS paths when those files changed
-  - Re-deploys only observability (when the OTel config changed) and infra
-    (when the Traefik config or cert changed)
+  - Re-deploys observability (OTel changed), infra (Traefik/cert changed,
+    and removes services that dropped out of the compose — no more drift),
+    and edge (new image tag or config edit)
 
 Run this after editing a config, renewing your certificate, or upgrading the
 pmcluster binary.`,

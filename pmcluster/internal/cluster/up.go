@@ -95,6 +95,19 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	wf.Add("Preflight: Docker reachable, Swarm active, this node is a manager", func(ctx context.Context) error {
 		return Preflight(ctx, deps.Docker)
 	})
+	wf.Add("Syncing platform config files (disk + store)", func(ctx context.Context) error {
+		syncRes, err := SyncPlatformConfigs(ctx, deps.Store, in.ConfigDir, in.Version)
+		if err != nil {
+			return err
+		}
+		for _, n := range syncRes.Created {
+			fmt.Fprintf(out, "  ✓ %s recorded in store\n", n)
+		}
+		for _, n := range syncRes.Updated {
+			fmt.Fprintf(out, "  ✓ %s updated in store\n", n)
+		}
+		return nil
+	})
 	wf.Add("Ensuring overlay networks", func(ctx context.Context) error {
 		created, err := EnsureBundledNetworks(ctx, deps.Docker)
 		if err != nil {

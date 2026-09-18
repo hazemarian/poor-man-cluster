@@ -5,6 +5,7 @@ import (
 	"context"
 	"embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -393,6 +394,125 @@ func shouldOverwriteConfig(disk []byte, currentVersion string) bool {
 	}
 	diskVersion := matches[1]
 	return Compare(diskVersion, currentVersion) < 0
+}
+
+// ConfigSyncResult reports which cluster-scope template rows were reconciled
+// by SyncClusterConfigs, so callers can surface it in workflow output.
+type ConfigSyncResult struct {
+	Created   []string // rows inserted (fresh install / first sync)
+	Updated   []string // stale rows overwritten with the current build content
+	Preserved []string // current-version rows left alone (console edits), mirrored to disk
+}
+
+// SyncPlatformConfigs refreshes the on-disk config dir AND reconciles the
+// cluster-scope template rows in the store with the current build version. It
+// is the single entry point `cluster up` and `cluster update` call so both
+// the files and the DB always carry the current build's configs (modulo
+// operator edits). With a nil store or empty config dir it degrades to
+// EnsureConfigDir alone.
+func SyncPlatformConfigs(ctx context.Context, st *store.Store, configDir, version string) (*ConfigSyncResult, error) {
+	if configDir == "" {
+		return &ConfigSyncResult{}, nil
+	}
+	if err := EnsureConfigDir(configDir, version); err != nil {
+		return nil, err
+	}
+	if st == nil {
+		return &ConfigSyncResult{}, nil
+	}
+	return SyncClusterConfigs(ctx, st, configDir, version)
+}
+
+// SyncClusterConfigs reconciles the cluster-scope template rows (one per
+// ConfigFileNames entry) in the store with the current build version. The DB
+// is the source of truth for platform configs:
+//
+//   - a row already stamped with the current build version is authoritative
+//     (it may hold a console edit) and its content is mirrored back to disk;
+//   - a missing or stale row is (re)written from the freshest available
+//     source — the current-version disk copy (EnsureConfigDir just refreshed
+//     it, preserving any operator edit) or the embedded default stamped with
+//     the build version — and that content is also written back to disk so
+//     file and DB never diverge.
+//
+// Must run after EnsureConfigDir (or use SyncPlatformConfigs). Rows whose
+// scope/kind is not cluster/template are left untouched.
+func SyncClusterConfigs(ctx context.Context, st *store.Store, configDir, version string) (*ConfigSyncResult, error) {
+	res := &ConfigSyncResult{}
+	for _, name := range ConfigFileNames {
+		cfgName := strings.TrimSuffix(name, ".yml")
+
+		row, err := st.GetConfig(ctx, cfgName)
+		switch {
+		case err == nil && row.Scope == "cluster" && row.Kind == "template":
+			if row.Version == version {
+				// DB is current + authoritative → mirror to disk.
+				if err := writeConfigFile(configDir, name, row.Content); err != nil {
+					return nil, err
+				}
+				res.Preserved = append(res.Preserved, cfgName)
+				continue
+			}
+			// Stale row → adopt the freshest content and rewrite DB + disk.
+			content, err := freshConfigContent(configDir, name, version)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := st.UpdateConfig(ctx, cfgName, content, version); err != nil {
+				return nil, fmt.Errorf("update cluster config %s: %w", cfgName, err)
+			}
+			if err := writeConfigFile(configDir, name, content); err != nil {
+				return nil, err
+			}
+			res.Updated = append(res.Updated, cfgName)
+		case err == nil:
+			// Name is taken by a non-cluster config (e.g. a service config).
+			// Never clobber a user's config.
+			continue
+		case errors.Is(err, store.ErrConfigNotFound):
+			content, err := freshConfigContent(configDir, name, version)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := st.CreateConfig(ctx, "cluster", "", cfgName, "template", content, version); err != nil {
+				return nil, fmt.Errorf("create cluster config %s: %w", cfgName, err)
+			}
+			if err := writeConfigFile(configDir, name, content); err != nil {
+				return nil, err
+			}
+			res.Created = append(res.Created, cfgName)
+		default:
+			return nil, fmt.Errorf("read cluster config %s: %w", cfgName, err)
+		}
+	}
+	return res, nil
+}
+
+// freshConfigContent returns the content a config file should carry: the disk
+// copy when present (EnsureConfigDir already refreshed or preserved it), else
+// the embedded default stamped with the build version.
+func freshConfigContent(configDir, name, version string) (string, error) {
+	if configDir != "" {
+		if data, err := os.ReadFile(filepath.Join(configDir, name)); err == nil {
+			return string(data), nil
+		}
+	}
+	body, err := fs.ReadFile(embeddedStacks, embeddedDir+"/"+name)
+	if err != nil {
+		return "", fmt.Errorf("read embedded %s: %w", name, err)
+	}
+	return strings.Replace(string(body), "__PMCONFIG_VERSION__", version, 1), nil
+}
+
+// writeConfigFile writes content to <configDir>/<name>.
+func writeConfigFile(configDir, name, content string) error {
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		return fmt.Errorf("create config dir %s: %w", configDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, name), []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", name, err)
+	}
+	return nil
 }
 
 // validDomain matches a DNS host: dot-separated labels of letters,

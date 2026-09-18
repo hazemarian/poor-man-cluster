@@ -46,16 +46,12 @@ func TestUpdate_PersistsRenderedConfigs(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 	ctx := context.Background()
 
-	// seedUpdateState's store has no platform config rows; create them so the
-	// render snapshots have a row to live on (SetRendered skips missing rows).
-	// Version v0.3.0 != buildinfo.Version ("dev" in tests), so these rows are
-	// not picked up as the render source — renders still come from disk.
+	// seedUpdateState's Up already synced the six cluster template rows into
+	// the store. Version v0.3.0 != buildinfo.Version ("dev" in tests), so these
+	// rows are not picked up as the render source — renders come from disk —
+	// but they give the render snapshots a row to live on (SetRendered skips
+	// missing rows).
 	names := []string{"infra-stack", "observability-stack", "backup-stack", "edge-stack", "otel-collector-config", "traefik-dynamic"}
-	for _, name := range names {
-		if _, err := deps.Store.CreateConfig(ctx, "cluster", "", name, "template", "source: "+name, "v0.3.0"); err != nil {
-			t.Fatalf("CreateConfig(%s): %v", name, err)
-		}
-	}
 
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)

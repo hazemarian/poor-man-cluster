@@ -53,13 +53,14 @@ type UpdateDeps struct {
 }
 
 // Update re-provisions the OTel collector + Traefik dynamic configs and the
-// TLS cert/key from the user-owned files under ConfigDir, pushing only what
-// changed into Docker, and re-deploying only the stack(s) whose inputs moved.
+// TLS cert/key, pushing only what changed into Docker, and re-deploying only
+// the stack(s) whose inputs moved.
 //
-// It never re-bootstraps credentials, never resets volumes, and never writes
-// to the user's config files — those remain the source of truth. It is
-// content-aware end to end: unchanged inputs are reused (no new versions, no
-// redeploy) so a no-op update is just a report.
+// It first syncs the platform config templates (disk + store) to the current
+// build version — the DB is the source of truth, so stale rows are refreshed
+// and the disk mirror is kept in lock-step. It never re-bootstraps credentials
+// and never resets volumes. It is content-aware end to end: unchanged inputs
+// are reused (no new versions, no redeploy) so a no-op update is just a report.
 func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult, error) {
 	out := io.Discard
 	if deps.Stdout != nil {
@@ -77,6 +78,20 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	wf := workflow.NewWorkflow(out)
 	wf.Add("Preflight: Docker reachable, Swarm active", func(ctx context.Context) error {
 		return Preflight(ctx, deps.Docker)
+	})
+
+	wf.Add("Syncing platform config files (disk + store)", func(ctx context.Context) error {
+		syncRes, err := SyncPlatformConfigs(ctx, deps.Store, in.ConfigDir, in.Version)
+		if err != nil {
+			return err
+		}
+		for _, n := range syncRes.Created {
+			fmt.Fprintf(out, "  ✓ %s recorded in store\n", n)
+		}
+		for _, n := range syncRes.Updated {
+			fmt.Fprintf(out, "  ✓ %s updated in store\n", n)
+		}
+		return nil
 	})
 
 	wf.Add("Loading persisted install state (domain, TLS, credentials)", func(ctx context.Context) error {

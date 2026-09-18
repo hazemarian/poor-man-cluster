@@ -103,7 +103,9 @@ func TestUpdate_NoOpWhenNothingChanged(t *testing.T) {
 // TestUpdate_VersionBumpRedeploysEdgeWithPinnedTag verifies the edge stack
 // pins the pmcluster release tag by default, so a version bump re-renders the
 // edge stack with the new tag and re-deploys the edge. This keeps the edge
-// image in lock-step with the binary (no more stale :latest on nodes).
+// image in lock-step with the binary (no more stale :latest on nodes). Since
+// the config templates are stamped with the build version, a version bump also
+// rotates the OTel + Traefik configs → observability + infra re-deploy too.
 func TestUpdate_VersionBumpRedeploysEdgeWithPinnedTag(t *testing.T) {
 	t.Setenv(EdgeImageEnv, "")
 	deps, cfgDir := seedUpdateState(t)
@@ -122,22 +124,31 @@ func TestUpdate_VersionBumpRedeploysEdgeWithPinnedTag(t *testing.T) {
 	if !res.EdgeDeployed {
 		t.Error("version bump should re-deploy the edge with the new pinned tag")
 	}
+	if !res.OTelCreated || !res.TraefikCreated {
+		t.Error("version bump should rotate OTel + Traefik configs (version-stamped templates)")
+	}
 	deployer := deps.Deployer.(*recordingDeployer)
-	if len(deployer.deployedStacks) != 1 || deployer.deployedStacks[0].Name != "edge" {
-		t.Errorf("expected only the edge stack to be deployed on version bump, got %v", deployer.deployedStacks)
+	got := make([]string, 0, len(deployer.deployedStacks))
+	for _, d := range deployer.deployedStacks {
+		got = append(got, d.Name)
+	}
+	want := []string{"observability", "infra", "edge"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("version bump should re-deploy %v (configs rotated + edge repinned), got %v", want, got)
 	}
 }
 
 // TestUpdate_EdgeImagePinRedeploysEdge verifies setting PMCLUSTER_EDGE_IMAGE
 // (the way an operator ships a new edge release) changes the rendered edge
-// compose → a new edge content fingerprint → an edge-only redeploy.
+// compose → a new edge content fingerprint → an edge-only redeploy (no version
+// bump in play, so the OTel/Traefik configs are untouched).
 func TestUpdate_EdgeImagePinRedeploysEdge(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 
 	t.Setenv(EdgeImageEnv, "")
 	noopUp := &recordingDeployer{}
 	deps.Deployer = noopUp
-	if _, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.1"}); err != nil {
+	if _, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("no-op Update: %v", err)
 	}
 	if len(noopUp.deployedStacks) != 0 {
@@ -147,7 +158,7 @@ func TestUpdate_EdgeImagePinRedeploysEdge(t *testing.T) {
 	t.Setenv(EdgeImageEnv, "v9.9.9")
 	pinUp := &recordingDeployer{}
 	deps.Deployer = pinUp
-	res, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.1"})
+	res, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})
 	if err != nil {
 		t.Fatalf("pin Update: %v", err)
 	}
