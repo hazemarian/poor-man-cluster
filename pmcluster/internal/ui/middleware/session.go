@@ -22,6 +22,11 @@ import (
 
 const ctxUserKey = "pmui:user"
 
+// WebBase is the URL prefix the operator console is mounted under
+// (pmcluster.<domain>/web/*). Session redirects (setup nudges, login bounces)
+// land under it so they stay inside Traefik's admin-auth gate.
+const WebBase = "/web"
+
 // Session is the signed payload stored in the cookie.
 type Session struct {
 	Username string `json:"u"`
@@ -127,7 +132,7 @@ func (a *Auth) Require() gin.HandlerFunc {
 
 		if !u.PasswordSet && a.NudgeSetup != nil {
 			if need, e := a.NudgeSetup(c.Request.Context()); e == nil && need {
-				a.redirect(c, "/setup")
+				a.redirect(c, WebBase+"/setup")
 				return
 			}
 		}
@@ -136,15 +141,13 @@ func (a *Auth) Require() gin.HandlerFunc {
 	}
 }
 
-// target picks where an unauthenticated visitor should land: the first-run
-// setup (nudge a password) when the bootstrap admin has none, else the login.
 func (a *Auth) target(ctx context.Context) string {
 	if a.NudgeSetup != nil {
 		if need, err := a.NudgeSetup(ctx); err == nil && need {
-			return "/setup"
+			return WebBase + "/setup"
 		}
 	}
-	return "/login"
+	return WebBase + "/login"
 }
 
 func (a *Auth) redirect(c *gin.Context, to string) {

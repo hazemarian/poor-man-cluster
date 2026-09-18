@@ -7,6 +7,7 @@
 package views
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
 	"html/template"
@@ -22,6 +23,11 @@ var files embed.FS
 // Renderer executes HTML templates from the embedded FS.
 type Renderer struct {
 	tmpl *template.Template
+	// ShellData builds the data object for the app shell (sidebar + styles)
+	// when a fragment route is hit with a full page load — a browser refresh
+	// or deep link. When nil, fragment routes always render bare partials
+	// (used by login/setup, which have their own documents).
+	ShellData func(c *gin.Context) gin.H
 }
 
 // NewRenderer parses all embedded templates and their helper funcs.
@@ -42,8 +48,22 @@ func (r *Renderer) Page(c *gin.Context, name string, data any) {
 	r.execute(c, name, data)
 }
 
-// Fragment renders a partial to be swapped in by HTMX.
+// Fragment renders a partial to be swapped in by HTMX. When the request is a
+// full page load (no HX-Request header — a browser refresh or deep link on a
+// fragment URL) and ShellData is set, it renders the app shell with the
+// fragment embedded in #view so navigation styles survive a refresh.
 func (r *Renderer) Fragment(c *gin.Context, name string, data any) {
+	if r.ShellData != nil && c.GetHeader("HX-Request") == "" {
+		var buf bytes.Buffer
+		if err := r.tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+			http.Error(c.Writer, "template error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		shell := r.ShellData(c)
+		shell["ViewContent"] = template.HTML(buf.String())
+		r.execute(c, "app", shell)
+		return
+	}
 	r.execute(c, name, data)
 }
 

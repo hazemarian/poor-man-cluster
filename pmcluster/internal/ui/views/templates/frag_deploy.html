@@ -6,7 +6,7 @@
 <h1>Deploy a stack</h1>
 <p class="sub">Submit a pmcluster manifest exactly as the CI webhook would — image, environment, healthcheck, exposes. This calls the same <code>POST /api/stacks</code> the GitHub Actions pipeline uses.</p>
 
-<form method="post" action="/deploy" hx-post="/deploy" hx-target="#view">
+<form method="post" action="/web/deploy" hx-post="/web/deploy" hx-target="#view">
   <label>app</label>
   <input name="app_name" placeholder="my-app" value="{{.Form.AppName}}">
 

@@ -37,7 +37,7 @@ func (c StackConfigs) Page(g *gin.Context) {
 
 // ConfigNew renders the create-config form in the modal (service scope).
 func (c StackConfigs) ConfigNew(g *gin.Context) {
-	d := configFormData{Scope: "service", Stack: g.Param("name"), Kind: "file", Action: "/stacks/" + g.Param("name") + "/configs/add"}
+	d := configFormData{Scope: "service", Stack: g.Param("name"), Kind: "file", Action: WebBase + "/stacks/" + g.Param("name") + "/configs/add"}
 	if !c.requireAPI(g, &d.Error) {
 		c.configFormError(g, d)
 		return
@@ -48,7 +48,7 @@ func (c StackConfigs) ConfigNew(g *gin.Context) {
 // ConfigEdit renders the edit-config form + version history in the modal.
 func (c StackConfigs) ConfigEdit(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := configFormData{Scope: "service", Stack: g.Param("name"), Name: g.Param("config_name"), IsEdit: true, Action: "/stacks/" + g.Param("name") + "/configs/edit"}
+	d := configFormData{Scope: "service", Stack: g.Param("name"), Name: g.Param("config_name"), IsEdit: true, Action: WebBase + "/stacks/" + g.Param("name") + "/configs/edit"}
 	if !c.requireAPI(g, &d.Error) {
 		c.configFormError(g, d)
 		return
@@ -65,7 +65,7 @@ func (c StackConfigs) ConfigEdit(g *gin.Context) {
 
 // SecretNew renders the create-secret form in the modal (service scope).
 func (c StackConfigs) SecretNew(g *gin.Context) {
-	d := secretFormData{Scope: "service", Stack: g.Param("name"), Action: "/stacks/" + g.Param("name") + "/secrets/add"}
+	d := secretFormData{Scope: "service", Stack: g.Param("name"), Action: WebBase + "/stacks/" + g.Param("name") + "/secrets/add"}
 	if !c.requireAPI(g, &d.Error) {
 		c.secretFormError(g, d)
 		return
@@ -75,7 +75,7 @@ func (c StackConfigs) SecretNew(g *gin.Context) {
 
 // SecretEdit renders the edit-secret form in the modal.
 func (c StackConfigs) SecretEdit(g *gin.Context) {
-	d := secretFormData{Scope: "service", Stack: g.Param("name"), Name: g.Param("secret_name"), IsEdit: true, Action: "/stacks/" + g.Param("name") + "/secrets/edit"}
+	d := secretFormData{Scope: "service", Stack: g.Param("name"), Name: g.Param("secret_name"), IsEdit: true, Action: WebBase + "/stacks/" + g.Param("name") + "/secrets/edit"}
 	if !c.requireAPI(g, &d.Error) {
 		c.secretFormError(g, d)
 		return
@@ -87,7 +87,7 @@ func (c StackConfigs) SecretEdit(g *gin.Context) {
 func (c StackConfigs) AddConfig(g *gin.Context) {
 	ctx := g.Request.Context()
 	stack := g.Param("name")
-	d := configFormData{Scope: "service", Stack: stack, Action: "/stacks/" + stack + "/configs/add"}
+	d := configFormData{Scope: "service", Stack: stack, Action: WebBase + "/stacks/" + stack + "/configs/add"}
 	name, kind, content := g.PostForm("name"), g.PostForm("kind"), g.PostForm("content")
 	if kind == "" {
 		kind = "file"
@@ -113,7 +113,7 @@ func (c StackConfigs) AddConfig(g *gin.Context) {
 func (c StackConfigs) EditConfig(g *gin.Context) {
 	ctx := g.Request.Context()
 	stack := g.Param("name")
-	d := configFormData{Scope: "service", Stack: stack, IsEdit: true, Action: "/stacks/" + stack + "/configs/edit"}
+	d := configFormData{Scope: "service", Stack: stack, IsEdit: true, Action: WebBase + "/stacks/" + stack + "/configs/edit"}
 	name, content := g.PostForm("name"), g.PostForm("content")
 	d.Name, d.Content = name, content
 	switch {
@@ -176,7 +176,7 @@ func (c StackConfigs) RemoveConfig(g *gin.Context) {
 func (c StackConfigs) AddSecret(g *gin.Context) {
 	ctx := g.Request.Context()
 	stack := g.Param("name")
-	d := secretFormData{Scope: "service", Stack: stack, Action: "/stacks/" + stack + "/secrets/add"}
+	d := secretFormData{Scope: "service", Stack: stack, Action: WebBase + "/stacks/" + stack + "/secrets/add"}
 	name, value := g.PostForm("name"), g.PostForm("value")
 	d.Name, d.Value = name, value
 	switch {
@@ -200,7 +200,7 @@ func (c StackConfigs) AddSecret(g *gin.Context) {
 func (c StackConfigs) EditSecret(g *gin.Context) {
 	ctx := g.Request.Context()
 	stack := g.Param("name")
-	d := secretFormData{Scope: "service", Stack: stack, IsEdit: true, Action: "/stacks/" + stack + "/secrets/edit"}
+	d := secretFormData{Scope: "service", Stack: stack, IsEdit: true, Action: WebBase + "/stacks/" + stack + "/secrets/edit"}
 	name, value := g.PostForm("name"), g.PostForm("value")
 	d.Name, d.Value = name, value
 	switch {

@@ -113,25 +113,25 @@
   <aside class="sidebar">
     <div class="brand">pmcluster<span class="sub">operator console</span></div>
     <nav>
-      <a href="/overview" hx-get="/overview" hx-target="#view" hx-push-url="true">Overview</a>
-      <a href="/stacks"   hx-get="/stacks"    hx-target="#view" hx-push-url="true">Stacks</a>
-      <a href="/services" hx-get="/services"  hx-target="#view" hx-push-url="true">Services</a>
-      <a href="/backups"  hx-get="/backups"   hx-target="#view" hx-push-url="true">Backups</a>
-      <a href="/tls"      hx-get="/tls"       hx-target="#view" hx-push-url="true">TLS</a>
-      <a href="/webhooks" hx-get="/webhooks"  hx-target="#view" hx-push-url="true">Webhooks</a>
-      <a href="/apikeys"  hx-get="/apikeys"   hx-target="#view" hx-push-url="true">API Keys</a>
-      <a href="/deploy"   hx-get="/deploy"    hx-target="#view" hx-push-url="true">Deploy</a>
-      <a href="/settings" hx-get="/settings"  hx-target="#view" hx-push-url="true">Settings</a>
+      <a href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true">Overview</a>
+      <a href="/web/stacks"   hx-get="/web/stacks"    hx-target="#view" hx-push-url="true">Stacks</a>
+      <a href="/web/services" hx-get="/web/services"  hx-target="#view" hx-push-url="true">Services</a>
+      <a href="/web/backups"  hx-get="/web/backups"   hx-target="#view" hx-push-url="true">Backups</a>
+      <a href="/web/tls"      hx-get="/web/tls"       hx-target="#view" hx-push-url="true">TLS</a>
+      <a href="/web/webhooks" hx-get="/web/webhooks"  hx-target="#view" hx-push-url="true">Webhooks</a>
+      <a href="/web/apikeys"  hx-get="/web/apikeys"   hx-target="#view" hx-push-url="true">API Keys</a>
+      <a href="/web/deploy"   hx-get="/web/deploy"    hx-target="#view" hx-push-url="true">Deploy</a>
+      <a href="/web/settings" hx-get="/web/settings"  hx-target="#view" hx-push-url="true">Settings</a>
     </nav>
     <div class="side-foot">
       <span class="user">@{{.User.Username}}</span>
-      <form method="post" action="/logout">
+      <form method="post" action="/web/logout">
         <button class="btn ghost" style="width:100%">Log out</button>
       </form>
     </div>
   </aside>
   <main class="content">
-    <section id="view" hx-get="/overview" hx-trigger="load"></section>
+    <section id="view">{{if .ViewContent}}{{.ViewContent}}{{else}}<span hx-get="/web/overview" hx-trigger="load"></span>{{end}}</section>
   </main>
 </div>
 <div id="modal" class="modal-backdrop" hidden onclick="if(event.target===this)closeModal()">

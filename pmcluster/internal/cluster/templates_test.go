@@ -624,6 +624,50 @@ func TestRenderTraefikDynamic_CORSWired(t *testing.T) {
 	}
 }
 
+// TestRenderTraefikDynamic_AutoAuthMiddleware verifies the openobserve-auto-auth
+// middleware is rendered when OpenObserveBasicAuth is set (Traefik injects the
+// OO root Basic header AFTER admin-auth lets the operator through) and is
+// OMITTED when empty (no OO credentials yet — avoids a public root credential).
+func TestRenderTraefikDynamic_AutoAuthMiddleware(t *testing.T) {
+	in := RenderInput{Domain: "example.com", OpenObserveBasicAuth: "Basic dXNlckBleGFtcGxlLmNvbTpzZWNyZXQ="}
+	data, err := RenderTraefikDynamic(in)
+	if err != nil {
+		t.Fatalf("RenderTraefikDynamic: %v", err)
+	}
+	body := string(data)
+	if !strings.Contains(body, "customRequestHeaders") {
+		t.Errorf("rendered config missing openobserve-auto-auth middleware:\n%s", body)
+	}
+	if !strings.Contains(body, `Authorization: "Basic dXNlckBleGFtcGxlLmNvbTpzZWNyZXQ="`) {
+		t.Errorf("rendered config missing injected Authorization header:\n%s", body)
+	}
+
+	inEmpty := RenderInput{Domain: "example.com"}
+	dataEmpty, err := RenderTraefikDynamic(inEmpty)
+	if err != nil {
+		t.Fatalf("RenderTraefikDynamic (empty auth): %v", err)
+	}
+	if strings.Contains(string(dataEmpty), "customRequestHeaders") || strings.Contains(string(dataEmpty), `Authorization:`) {
+		t.Errorf("empty OpenObserveBasicAuth must OMIT the auto-auth middleware:\n%s", string(dataEmpty))
+	}
+}
+
+// TestOpenObserveBasicAuth verifies the base64 header computation: empty email
+// or password yields an empty string (middleware omitted), otherwise
+// "Basic base64(email:password)".
+func TestOpenObserveBasicAuth(t *testing.T) {
+	if got := openObserveBasicAuth("", "pw"); got != "" {
+		t.Errorf("empty email: got %q, want empty", got)
+	}
+	if got := openObserveBasicAuth("admin@example.com", ""); got != "" {
+		t.Errorf("empty password: got %q, want empty", got)
+	}
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("admin@example.com:secret"))
+	if got := openObserveBasicAuth("admin@example.com", "secret"); got != want {
+		t.Errorf("openObserveBasicAuth = %q, want %q", got, want)
+	}
+}
+
 // TestRenderTraefikDynamic_CORSOverride verifies that changing the domain
 // updates the Access-Control-Allow-Origin header.
 func TestRenderTraefikDynamic_CORSOverride(t *testing.T) {

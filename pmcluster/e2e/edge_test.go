@@ -125,10 +125,25 @@ func TestEdgeCombined(t *testing.T) {
 		proxied(t, "/some/deep/path", http.StatusNotFound, "")
 	})
 
-	t.Run("GET / redirects to /setup on first run", func(t *testing.T) {
+	t.Run("GET / redirects to /web/ (console under /web, gated by Traefik admin-auth)", func(t *testing.T) {
 		resp, err := client.Get(base + "/")
 		if err != nil {
 			t.Fatalf("GET /: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusFound {
+			t.Fatalf("status = %d, want 302", resp.StatusCode)
+		}
+		loc := resp.Header.Get("Location")
+		if !strings.Contains(loc, "/web/") {
+			t.Errorf("Location = %q, want /web/", loc)
+		}
+	})
+
+	t.Run("GET /web/ redirects to /setup on first run", func(t *testing.T) {
+		resp, err := client.Get(base + "/web/")
+		if err != nil {
+			t.Fatalf("GET /web/: %v", err)
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusFound {
@@ -140,14 +155,14 @@ func TestEdgeCombined(t *testing.T) {
 		}
 	})
 
-	t.Run("GET /setup serves the setup page", func(t *testing.T) {
-		proxied(t, "/setup", http.StatusOK, "setup")
+	t.Run("GET /web/setup serves the setup page", func(t *testing.T) {
+		proxied(t, "/web/setup", http.StatusOK, "setup")
 	})
 
-	t.Run("GET /stacks without session redirects to login (local route)", func(t *testing.T) {
-		resp, err := client.Get(base + "/stacks")
+	t.Run("GET /web/stacks without session redirects to login (local route)", func(t *testing.T) {
+		resp, err := client.Get(base + "/web/stacks")
 		if err != nil {
-			t.Fatalf("GET /stacks: %v", err)
+			t.Fatalf("GET /web/stacks: %v", err)
 		}
 		defer resp.Body.Close()
 

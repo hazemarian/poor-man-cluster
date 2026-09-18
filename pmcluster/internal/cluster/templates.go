@@ -167,6 +167,25 @@ type RenderInput struct {
 	// embedded edge-stack.yml (e.g. ghcr.io/nextrum-sy/pmcluster-edge:v0.2.19).
 	// Rendered via the template body; set in up/update.
 	EdgeImage string
+
+	// OpenObserveBasicAuth is the HTTP Basic Authorization header value for
+	// the OpenObserve root user ("Basic base64(email:password)"), rendered
+	// into the traefik-dynamic config as the openobserve-auto-auth
+	// middleware. Traefik injects it on every request to the observ. router
+	// AFTER admin-auth has let the operator through, so the OpenObserve
+	// console is auto-authenticated without its own login prompt. Set in
+	// up/update from the managed openobserve_admin credential.
+	OpenObserveBasicAuth string
+}
+
+// openObserveBasicAuth computes the HTTP Basic Authorization header value
+// ("Basic base64(email:password)") for the OpenObserve root user. Empty email
+// or password yields an empty string so the auto-auth middleware is omitted.
+func openObserveBasicAuth(email, password string) string {
+	if email == "" || password == "" {
+		return ""
+	}
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+password))
 }
 
 // readConfigFile loads a named file. Resolution order:

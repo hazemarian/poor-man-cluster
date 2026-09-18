@@ -21,7 +21,7 @@ services:
         [[- if .ACMEEmail]]
         - "traefik.http.routers.openobserve.tls.certresolver=letsencrypt"
         [[- end]]
-        - "traefik.http.routers.openobserve.middlewares=cors-default@file"
+        - "traefik.http.routers.openobserve.middlewares=cors-default@file,admin-auth@file,openobserve-auto-auth@file"
         - "traefik.swarm.network=traefik-net"
     environment:
       - ZO_DATA_DIR=/data

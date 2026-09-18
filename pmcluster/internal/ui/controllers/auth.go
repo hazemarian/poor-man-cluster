@@ -51,7 +51,7 @@ func (c Auth) Login(g *gin.Context) {
 		return
 	}
 	c.Auth.SetCookie(g, u.Username, 7*24*time.Hour)
-	redirect(g, "/")
+	redirect(g, WebBase+"/")
 }
 
 // SetupPage renders the first-run set-password form. It only makes sense while
@@ -59,7 +59,7 @@ func (c Auth) Login(g *gin.Context) {
 func (c Auth) SetupPage(g *gin.Context) {
 	need, err := c.needSetup(g.Request.Context())
 	if err != nil || !need {
-		redirect(g, "/login")
+		redirect(g, WebBase+"/login")
 		return
 	}
 	uname := ""
@@ -73,7 +73,7 @@ func (c Auth) SetupPage(g *gin.Context) {
 func (c Auth) Setup(g *gin.Context) {
 	need, err := c.needSetup(g.Request.Context())
 	if err != nil || !need {
-		redirect(g, "/login")
+		redirect(g, WebBase+"/login")
 		return
 	}
 	pass := g.PostForm("password")
@@ -98,7 +98,7 @@ func (c Auth) Setup(g *gin.Context) {
 // Logout clears the session cookie and returns to the sign-in screen.
 func (c Auth) Logout(g *gin.Context) {
 	c.Auth.ClearCookie(g)
-	redirect(g, "/login")
+	redirect(g, WebBase+"/login")
 }
 
 func hashPassword(p string) string {

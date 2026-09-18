@@ -80,7 +80,7 @@ func (c Settings) Save(g *gin.Context) {
 
 // ConfigNew renders the create-config form into the modal.
 func (c Settings) ConfigNew(g *gin.Context) {
-	d := configFormData{Scope: "cluster", Kind: "template", Action: "/settings/configs/add"}
+	d := configFormData{Scope: "cluster", Kind: "template", Action: WebBase + "/settings/configs/add"}
 	if !c.requireAPI(g, &d.Error) {
 		c.configFormError(g, d)
 		return
@@ -91,7 +91,7 @@ func (c Settings) ConfigNew(g *gin.Context) {
 // ConfigEdit renders the edit-config form (with version history) into the modal.
 func (c Settings) ConfigEdit(g *gin.Context) {
 	name := g.Param("name")
-	d := configFormData{Scope: "cluster", Name: name, Kind: "template", IsEdit: true, Action: "/settings/configs/edit"}
+	d := configFormData{Scope: "cluster", Name: name, Kind: "template", IsEdit: true, Action: WebBase + "/settings/configs/edit"}
 	if !c.requireAPI(g, &d.Error) {
 		c.configFormError(g, d)
 		return
@@ -115,7 +115,7 @@ func (c Settings) AddConfig(g *gin.Context) {
 	if kind == "" {
 		kind = "template"
 	}
-	d := configFormData{Scope: "cluster", Name: name, Kind: kind, Content: content, Action: "/settings/configs/add"}
+	d := configFormData{Scope: "cluster", Name: name, Kind: kind, Content: content, Action: WebBase + "/settings/configs/add"}
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":
@@ -137,7 +137,7 @@ func (c Settings) AddConfig(g *gin.Context) {
 func (c Settings) EditConfig(g *gin.Context) {
 	ctx := g.Request.Context()
 	name, content := g.PostForm("name"), g.PostForm("content")
-	d := configFormData{Scope: "cluster", Name: name, Kind: "template", Content: content, IsEdit: true, Action: "/settings/configs/edit"}
+	d := configFormData{Scope: "cluster", Name: name, Kind: "template", Content: content, IsEdit: true, Action: WebBase + "/settings/configs/edit"}
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":
@@ -194,7 +194,7 @@ func (c Settings) RemoveConfig(g *gin.Context) {
 
 // SecretNew renders the create-secret form into the modal.
 func (c Settings) SecretNew(g *gin.Context) {
-	d := secretFormData{Scope: "cluster", Action: "/settings/secrets/add"}
+	d := secretFormData{Scope: "cluster", Action: WebBase + "/settings/secrets/add"}
 	if !c.requireAPI(g, &d.Error) {
 		c.secretFormError(g, d)
 		return
@@ -205,7 +205,7 @@ func (c Settings) SecretNew(g *gin.Context) {
 // SecretEdit renders the edit-secret form into the modal (the stored value is
 // never shown — editing replaces it).
 func (c Settings) SecretEdit(g *gin.Context) {
-	d := secretFormData{Scope: "cluster", Name: g.Param("name"), IsEdit: true, Action: "/settings/secrets/edit"}
+	d := secretFormData{Scope: "cluster", Name: g.Param("name"), IsEdit: true, Action: WebBase + "/settings/secrets/edit"}
 	if !c.requireAPI(g, &d.Error) {
 		c.secretFormError(g, d)
 		return
@@ -218,7 +218,7 @@ func (c Settings) SecretEdit(g *gin.Context) {
 func (c Settings) AddSecret(g *gin.Context) {
 	ctx := g.Request.Context()
 	name, value := g.PostForm("name"), g.PostForm("value")
-	d := secretFormData{Scope: "cluster", Name: name, Value: value, Action: "/settings/secrets/add"}
+	d := secretFormData{Scope: "cluster", Name: name, Value: value, Action: WebBase + "/settings/secrets/add"}
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":
@@ -240,7 +240,7 @@ func (c Settings) AddSecret(g *gin.Context) {
 func (c Settings) EditSecret(g *gin.Context) {
 	ctx := g.Request.Context()
 	name, value := g.PostForm("name"), g.PostForm("value")
-	d := secretFormData{Scope: "cluster", Name: name, Value: value, IsEdit: true, Action: "/settings/secrets/edit"}
+	d := secretFormData{Scope: "cluster", Name: name, Value: value, IsEdit: true, Action: WebBase + "/settings/secrets/edit"}
 	switch {
 	case !c.requireAPI(g, &d.Error):
 	case name == "":

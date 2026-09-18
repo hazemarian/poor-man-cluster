@@ -7,7 +7,7 @@
 
 <div class="section-head">
   <h2>Main certificate</h2>
-  <button class="btn" hx-get="/tls/site/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Upload / renew</button>
+  <button class="btn" hx-get="/web/tls/site/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Upload / renew</button>
 </div>
 <p class="sub">The cluster's own default certificate — served for {{if .Site}}{{.Site.Domain}}{{else}}the cluster domain{{end}} and every host without its own certificate.</p>
 
@@ -25,13 +25,13 @@
 </div>
 {{else}}
 <div class="card empty">No site certificate recorded yet.
-  <button class="btn sm" hx-get="/tls/site/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Upload certificate</button>
+  <button class="btn sm" hx-get="/web/tls/site/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Upload certificate</button>
 </div>
 {{end}}
 
 <div class="section-head">
   <h2>Per-host certificates</h2>
-  <button class="btn" hx-get="/tls/hosts/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add certificate</button>
+  <button class="btn" hx-get="/web/tls/hosts/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add certificate</button>
 </div>
 <p class="sub">Customer domains on their own origin — stored as versioned Swarm secrets (hostcert-&lt;host&gt;_vNNN / hostkey-&lt;host&gt;_vNNN) with a DB row, the same table and flow as the main certificate. The main certificate is never touched.</p>
 
@@ -45,14 +45,14 @@
       <td class="muted">{{.Expires}}</td>
       <td {{if .Expiring}}class="err"{{else}}class="muted"{{end}}>{{.Note}}</td>
       <td class="muted">{{.SANs}}</td>
-      <td style="text-align:right"><button class="btn danger sm" hx-post="/tls/remove/{{.Host}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Remove certificate for {{.Host}}?');">Remove</button></td>
+      <td style="text-align:right"><button class="btn danger sm" hx-post="/web/tls/remove/{{.Host}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Remove certificate for {{.Host}}?');">Remove</button></td>
     </tr>
     {{end}}
   </table>
 </div>
 {{else}}
 <div class="card empty">No per-host certificates stored.
-  <button class="btn sm" hx-get="/tls/hosts/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add certificate</button>
+  <button class="btn sm" hx-get="/web/tls/hosts/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add certificate</button>
 </div>
 {{end}}
 {{end}}

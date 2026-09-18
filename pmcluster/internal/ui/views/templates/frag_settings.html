@@ -7,7 +7,7 @@
 
 <div class="card">
   <h2>Daemon connection</h2>
-  <form method="post" action="/settings" hx-post="/settings" hx-target="#view" hx-swap="innerHTML">
+  <form method="post" action="/web/settings" hx-post="/web/settings" hx-target="#view" hx-swap="innerHTML">
     <label>API base URL</label>
     <input name="api_url" placeholder="http://host.docker.internal:9090" value="{{.APIURL}}" />
     <p class="muted">Env default <code>{{.EnvAPIURL}}</code></p>
@@ -25,13 +25,13 @@
 <div class="card">
   <h2>Apply to swarm</h2>
   <p class="sub">Re-runs <code>cluster update</code> so edited cluster configs are re-rendered on the swarm side.</p>
-  <button class="btn" hx-post="/settings/apply" hx-target="#view" hx-swap="innerHTML">Apply to swarm</button>
+  <button class="btn" hx-post="/web/settings/apply" hx-target="#view" hx-swap="innerHTML">Apply to swarm</button>
   {{if .ApplySummary}}<p class="msg ok" style="white-space:pre">{{.ApplySummary}}</p>{{end}}
 </div>
 
 <div class="section-head">
   <h2>Cluster configs</h2>
-  <button class="btn" hx-get="/settings/configs/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add Config</button>
+  <button class="btn" hx-get="/web/settings/configs/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add Config</button>
 </div>
 <div class="card">
   {{if .ClusterConfigs}}
@@ -45,9 +45,9 @@
         <td class="muted">{{.Version}}</td>
         <td class="muted">{{ts .UpdatedAt}}</td>
         <td style="white-space:nowrap;text-align:right">
-          <button class="btn ghost sm" hx-get="/settings/configs/edit/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Edit</button>
-          {{if .Rendered}}<button class="btn ghost sm" hx-get="/settings/rendered/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Rendered</button>{{end}}
-          <button class="btn danger sm" hx-post="/settings/configs/remove/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete config {{.Name}} and its history?')">Delete</button>
+          <button class="btn ghost sm" hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Edit</button>
+          {{if .Rendered}}<button class="btn ghost sm" hx-get="/web/settings/rendered/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Rendered</button>{{end}}
+          <button class="btn danger sm" hx-post="/web/settings/configs/remove/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete config {{.Name}} and its history?')">Delete</button>
         </td>
       </tr>
       {{end}}
@@ -56,14 +56,14 @@
   {{else}}
   <div class="empty">
     No cluster configs yet.
-    <div class="row" style="justify-content:center"><button class="btn" hx-get="/settings/configs/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add your first config</button></div>
+    <div class="row" style="justify-content:center"><button class="btn" hx-get="/web/settings/configs/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add your first config</button></div>
   </div>
   {{end}}
 </div>
 
 <div class="section-head">
   <h2>Cluster secrets</h2>
-  <button class="btn" hx-get="/settings/secrets/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add Secret</button>
+  <button class="btn" hx-get="/web/settings/secrets/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add Secret</button>
 </div>
 <div class="card">
   {{if .ClusterSecrets}}
@@ -76,9 +76,9 @@
         <td><span class="secret-mask">••••••••</span></td>
         <td class="muted">{{ts .CreatedAt}}</td>
         <td style="white-space:nowrap;text-align:right">
-          <button class="btn ghost sm" hx-get="/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" onclick="return confirm('Reveal secret {{.Name}}? Its value will be shown in the UI.')">Reveal</button>
-          <button class="btn ghost sm" hx-get="/settings/secrets/edit/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Edit</button>
-          <button class="btn danger sm" hx-post="/settings/secrets/remove/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete secret {{.Name}}?')">Delete</button>
+          <button class="btn ghost sm" hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" onclick="return confirm('Reveal secret {{.Name}}? Its value will be shown in the UI.')">Reveal</button>
+          <button class="btn ghost sm" hx-get="/web/settings/secrets/edit/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Edit</button>
+          <button class="btn danger sm" hx-post="/web/settings/secrets/remove/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete secret {{.Name}}?')">Delete</button>
         </td>
       </tr>
       {{end}}
@@ -87,7 +87,7 @@
   {{else}}
   <div class="empty">
     No cluster secrets yet — values are stored AES-256-GCM encrypted and revealed only on demand.
-    <div class="row" style="justify-content:center"><button class="btn" hx-get="/settings/secrets/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add your first secret</button></div>
+    <div class="row" style="justify-content:center"><button class="btn" hx-get="/web/settings/secrets/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add your first secret</button></div>
   </div>
   {{end}}
 </div>

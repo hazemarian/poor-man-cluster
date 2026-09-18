@@ -167,7 +167,7 @@ func (c TLS) Page(g *gin.Context) {
 
 // SiteNew renders the modal form for uploading/renewing the main certificate.
 func (c TLS) SiteNew(g *gin.Context) {
-	d := tlsSiteFormData{Action: "/tls/site"}
+	d := tlsSiteFormData{Action: WebBase + "/tls/site"}
 	if _, _, configured := c.loadParams(g.Request.Context()); !configured {
 		d.Error = "pmcluster API not configured. Open Settings first."
 	}
@@ -176,7 +176,7 @@ func (c TLS) SiteNew(g *gin.Context) {
 
 // HostNew renders the modal form for adding a per-host certificate.
 func (c TLS) HostNew(g *gin.Context) {
-	d := tlsHostFormData{Action: "/tls"}
+	d := tlsHostFormData{Action: WebBase + "/tls"}
 	if _, _, configured := c.loadParams(g.Request.Context()); !configured {
 		d.Error = "pmcluster API not configured. Open Settings first."
 	}
@@ -204,7 +204,7 @@ func (c TLS) SetSite(g *gin.Context) {
 	_, _, configured := c.loadParams(ctx)
 	cert := g.PostForm("cert")
 	key := g.PostForm("key")
-	d := tlsSiteFormData{Action: "/tls/site", Cert: cert, Key: key}
+	d := tlsSiteFormData{Action: WebBase + "/tls/site", Cert: cert, Key: key}
 
 	switch {
 	case !configured:
@@ -233,7 +233,7 @@ func (c TLS) Add(g *gin.Context) {
 	host := g.PostForm("host")
 	cert := g.PostForm("cert")
 	key := g.PostForm("key")
-	d := tlsHostFormData{Action: "/tls", Host: host, Cert: cert, Key: key}
+	d := tlsHostFormData{Action: WebBase + "/tls", Host: host, Cert: cert, Key: key}
 
 	switch {
 	case !configured:

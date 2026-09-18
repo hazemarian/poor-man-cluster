@@ -24,7 +24,7 @@ Body     : {"app_name": "...", "version": "...", "manifest": "&lt;dsl-yaml&gt;"}
 
 <div class="card">
   <h2 style="margin-top:0">Add a webhook source</h2>
-  <form hx-post="/webhooks" hx-target="#view" hx-swap="innerHTML">
+  <form hx-post="/web/webhooks" hx-target="#view" hx-swap="innerHTML">
     <label>Source name (e.g. github-bookfair)</label>
     <input type="text" name="source" placeholder="github-idlib-book-fair" required>
     <label>Description</label>
@@ -47,7 +47,7 @@ Body     : {"app_name": "...", "version": "...", "manifest": "&lt;dsl-yaml&gt;"}
     <td class="muted">{{ts .CreatedAt}}</td>
     <td class="muted">{{ts .LastUsedAt}}</td>
     <td style="text-align:right">
-      <button class="btn danger" hx-post="/webhooks/remove/{{.Source}}" hx-target="#view" hx-swap="innerHTML">Revoke</button>
+      <button class="btn danger" hx-post="/web/webhooks/remove/{{.Source}}" hx-target="#view" hx-swap="innerHTML">Revoke</button>
     </td>
   </tr>
   {{end}}

@@ -4,7 +4,7 @@
 
 <h1>Stack · {{.Detail.Stack.Name}}</h1>
 <p class="sub">
-  <a class="link" href="/stacks" hx-get="/stacks" hx-target="#view" hx-push-url="true">← all stacks</a>
+  <a class="link" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">← all stacks</a>
   · current revision <code>{{.Detail.Stack.CurrentRevision}}</code>
   · {{if .Detail.Stack.RepoURL}}repo <code>{{.Detail.Stack.RepoURL}}</code>{{else}}no repo{{end}}
   · updated {{ts .Detail.Stack.UpdatedAt}}
@@ -12,8 +12,8 @@
 
 <div class="card" style="display:flex;justify-content:space-between;align-items:center">
   <div class="muted">Re-apply the latest manifest — picks up config/secret edits from the store.</div>
-  <form method="post" action="/stacks/{{.Detail.Stack.Name}}/sync"
-        hx-post="/stacks/{{.Detail.Stack.Name}}/sync" hx-target="#view">
+  <form method="post" action="/web/stacks/{{.Detail.Stack.Name}}/sync"
+        hx-post="/web/stacks/{{.Detail.Stack.Name}}/sync" hx-target="#view">
     <button class="btn sm" type="submit">Sync</button>
   </form>
 </div>
@@ -22,7 +22,7 @@
 <div class="card" style="display:flex;justify-content:space-between;align-items:center">
   <div><b>Last backup:</b> <span class="pill {{sp .Detail.LastBackup.Status}}">{{.Detail.LastBackup.Status}}</span>
   <span class="muted">started {{ts .Detail.LastBackup.StartedAt}}</span></div>
-  <a class="btn sm" href="/stacks/{{.Detail.Stack.Name}}/backups" hx-get="/stacks/{{.Detail.Stack.Name}}/backups" hx-target="#view">History</a>
+  <a class="btn sm" href="/web/stacks/{{.Detail.Stack.Name}}/backups" hx-get="/web/stacks/{{.Detail.Stack.Name}}/backups" hx-target="#view">History</a>
 </div>
 {{end}}
 
@@ -37,15 +37,15 @@
     <td class="muted">{{ts .CreatedAt}}</td>
     <td style="text-align:right">
       {{if ne .Revision $.Detail.Stack.CurrentRevision}}
-      <form method="post" action="/stacks/{{$.Detail.Stack.Name}}/rollback"
-            hx-post="/stacks/{{$.Detail.Stack.Name}}/rollback" hx-target="#view"
+      <form method="post" action="/web/stacks/{{$.Detail.Stack.Name}}/rollback"
+            hx-post="/web/stacks/{{$.Detail.Stack.Name}}/rollback" hx-target="#view"
             hx-confirm="Roll back {{$.Detail.Stack.Name}} to revision {{.Revision}}?">
         <input type="hidden" name="revision" value="{{.Revision}}">
         <button class="btn sm danger" type="submit">Roll back</button>
       </form>
       {{end}}
-      <a class="btn sm" href="/stacks/{{$.Detail.Stack.Name}}/revisions/{{.Revision}}"
-         hx-get="/stacks/{{$.Detail.Stack.Name}}/revisions/{{.Revision}}" hx-target="#view">View</a>
+      <a class="btn sm" href="/web/stacks/{{$.Detail.Stack.Name}}/revisions/{{.Revision}}"
+         hx-get="/web/stacks/{{$.Detail.Stack.Name}}/revisions/{{.Revision}}" hx-target="#view">View</a>
     </td>
   </tr>
   {{end}}

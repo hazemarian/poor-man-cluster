@@ -54,6 +54,11 @@ func NewApp(cfg Config) (*App, error) {
 		_ = st.Close()
 		return nil, fmt.Errorf("renderer: %w", err)
 	}
+	// Full page loads of fragment routes (browser refresh / deep link) embed
+	// the fragment into the app shell so the console keeps its styles.
+	renderer.ShellData = func(c *gin.Context) gin.H {
+		return gin.H{"User": middleware.CurrentUser(c), "Version": cfg.AppVersion}
+	}
 	api := pmapi.New(cfg.PMAPIURL, cfg.PMAPIToken, cfg.UpstreamTimeout)
 
 	if err := bootstrapUsers(context.Background(), st, cfg); err != nil {
@@ -88,15 +93,28 @@ func NewApp(cfg Config) (*App, error) {
 // Mount registers every UI route on the provided gin engine. This is how the
 // edge service combines the operator console with its reverse proxy on one
 // HTTP listener.
+// WebBase is the URL prefix the operator console is mounted under. Traefik
+// gates /web/* with the admin-auth middleware (basicAuth against the
+// admin_credentials secret) so the console is only reachable through the
+// cluster admin gate; /api/* and /webhook/* fall through to the edge proxy and
+// keep their own Bearer/webhook auth.
+const WebBase = controllers.WebBase
+
 func (a *App) Mount(engine *gin.Engine) {
 	auth := controllers.Auth{Controller: a.ctrl}
-	engine.GET("/login", auth.LoginPage)
-	engine.POST("/login", auth.Login)
-	engine.GET("/setup", auth.SetupPage)
-	engine.POST("/setup", auth.Setup)
-	engine.POST("/logout", auth.Logout)
+	// The bare origin redirects to the console so pmcluster.<domain> still
+	// lands on the UI (Traefik routes the non-/web root to the edge; the edge
+	// bounces it here).
+	engine.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, WebBase+"/")
+	})
+	engine.GET(WebBase+"/login", auth.LoginPage)
+	engine.POST(WebBase+"/login", auth.Login)
+	engine.GET(WebBase+"/setup", auth.SetupPage)
+	engine.POST(WebBase+"/setup", auth.Setup)
+	engine.POST(WebBase+"/logout", auth.Logout)
 
-	g := engine.Group("")
+	g := engine.Group(WebBase)
 	g.Use(a.ctrl.Auth.Require())
 
 	ov := controllers.Overview{Controller: a.ctrl}

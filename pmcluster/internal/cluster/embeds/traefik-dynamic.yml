@@ -5,6 +5,18 @@ http:
     admin-auth:
       basicAuth:
         usersFile: /run/secrets/admin_credentials
+    # openobserve-auto-auth: injected AFTER admin-auth has let the operator
+    # through, so OpenObserve auto-authenticates every request (its UI's
+    # session-check API honours HTTP Basic auth) and its own login page is
+    # never shown. MUST stay paired with admin-auth — alone it is a public
+    # root credential. The value is base64(<OO root email>:<OO root
+    # password>), rendered from the managed openobserve_admin credential.
+    [[- if .OpenObserveBasicAuth]]
+    openobserve-auto-auth:
+      headers:
+        customRequestHeaders:
+          Authorization: "[[.OpenObserveBasicAuth]]"
+    [[- end]]
     # cors-default: applied to every exposed/app router emitted by the manifest
     # translator plus those mounted via stack labels (edge console,
     # openobserve). Origins are restricted to

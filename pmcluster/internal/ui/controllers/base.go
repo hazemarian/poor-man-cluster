@@ -21,6 +21,12 @@ const (
 	keyToken  = store.KeyToken
 )
 
+// WebBase is the URL prefix the operator console is mounted under
+// (pmcluster.<domain>/web/*). Traefik gates the /web prefix with the
+// admin-auth middleware; the edge's /api and /webhook routes are outside it.
+// Every template path and redirect the controllers emit must start here.
+const WebBase = "/web"
+
 // Controller carries the shared dependencies every handler needs. References,
 // not ownership: it is constructed once in the ui package and passed around.
 type Controller struct {

@@ -20,7 +20,7 @@ hash — it cannot be retrieved again.</p>
 
 <div class="card">
   <h2 style="margin-top:0">Create an API key</h2>
-  <form hx-post="/apikeys" hx-target="#view" hx-swap="innerHTML">
+  <form hx-post="/web/apikeys" hx-target="#view" hx-swap="innerHTML">
     <label>Name</label>
     <input type="text" name="name" placeholder="ci-deployer" required>
     <div style="margin-top:10px">
@@ -40,7 +40,7 @@ hash — it cannot be retrieved again.</p>
     <td><code>{{.Name}}</code></td>
     <td class="muted">{{ts .CreatedAt}}</td>
     <td style="text-align:right">
-      <button class="btn danger sm" hx-post="/apikeys/remove/{{.ID}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Revoke API key {{.Name}}? Its bearer token stops working immediately.')">Revoke</button>
+      <button class="btn danger sm" hx-post="/web/apikeys/remove/{{.ID}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Revoke API key {{.Name}}? Its bearer token stops working immediately.')">Revoke</button>
     </td>
   </tr>
   {{end}}

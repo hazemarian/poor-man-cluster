@@ -235,7 +235,7 @@ func TestBootstrap_Setup_Login_Overview(t *testing.T) {
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
 
-	resp := doRequest(t, app, http.MethodGet, "/setup", "", jar)
+	resp := doRequest(t, app, http.MethodGet, "/web/setup", "", jar)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /setup = %d, want 200", resp.StatusCode)
 	}
@@ -244,18 +244,18 @@ func TestBootstrap_Setup_Login_Overview(t *testing.T) {
 		t.Errorf("setup page missing prompt, got: %s", body)
 	}
 
-	resp = doRequest(t, app, http.MethodPost, "/setup",
+	resp = doRequest(t, app, http.MethodPost, "/web/setup",
 		"password=supersecret&confirm=supersecret", jar)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /setup = %d, want 200", resp.StatusCode)
 	}
 
-	resp = doRequest(t, app, http.MethodPost, "/login", "username=admin&password=wrong", jar)
+	resp = doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=wrong", jar)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(readBody(t, resp), "Invalid username") {
 		t.Errorf("bad login should show an error")
 	}
 
-	resp = doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+	resp = doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("POST /login = %d, want 302", resp.StatusCode)
 	}
@@ -265,14 +265,14 @@ func TestBootstrap_Setup_Login_Overview(t *testing.T) {
 	}
 
 	delete(jar, app.Auth.CookieName())
-	resp = doRequest(t, app, http.MethodGet, "/overview", "", jar)
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/login" {
+	resp = doRequest(t, app, http.MethodGet, "/web/overview", "", jar)
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/web/login" {
 		t.Errorf("unauth /overview should redirect to /login")
 	}
-	doRequest(t, app, http.MethodGet, "/overview", "", jar)
-	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+	doRequest(t, app, http.MethodGet, "/web/overview", "", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
-	resp = doRequest(t, app, http.MethodGet, "/overview", "", jar)
+	resp = doRequest(t, app, http.MethodGet, "/web/overview", "", jar)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /overview = %d, want 200", resp.StatusCode)
 	}
@@ -289,11 +289,11 @@ func TestDeploy_SendsManifest(t *testing.T) {
 	defer daemon.Close()
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
-	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
-	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
 	form := url.Values{"app_name": {"demo"}, "manifest": {"app: demo\nversion: v1\n"}}
-	resp := doRequest(t, app, http.MethodPost, "/deploy", form.Encode(), jar)
+	resp := doRequest(t, app, http.MethodPost, "/web/deploy", form.Encode(), jar)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /deploy = %d, want 200", resp.StatusCode)
 	}
@@ -308,10 +308,10 @@ func TestSettings_RoundTrip(t *testing.T) {
 	defer daemon.Close()
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
-	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
-	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
-	resp := doRequest(t, app, http.MethodPost, "/settings",
+	resp := doRequest(t, app, http.MethodPost, "/web/settings",
 		"api_url=http://override:9999&api_token=pmc_overridden", jar)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /settings = %d, want 200", resp.StatusCode)
@@ -331,8 +331,8 @@ func TestAllControllers(t *testing.T) {
 	jar := map[string]*http.Cookie{}
 
 	login := func() {
-		doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
-		doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+		doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+		doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 	}
 
 	assertFragment := func(method, path, body string, want ...string) string {
@@ -352,24 +352,24 @@ func TestAllControllers(t *testing.T) {
 
 	login()
 
-	assertFragment(http.MethodGet, "/", "", "")
-	assertFragment(http.MethodGet, "/overview", "", "manager-1", "Cluster overview")
+	assertFragment(http.MethodGet, "/web/", "", "operator console", "Overview", "Log out")
+	assertFragment(http.MethodGet, "/web/overview", "", "manager-1", "Cluster overview")
 
-	assertFragment(http.MethodGet, "/stacks", "", "Stacks", "demo", "3")
-	assertFragment(http.MethodGet, "/stacks/demo", "", "Stack · demo", "Last backup:", "succeeded")
-	assertFragment(http.MethodGet, "/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source manifest")
-	assertFragment(http.MethodGet, "/stacks/demo/backups", "", "Backups", "succeeded", "1 recent backup")
+	assertFragment(http.MethodGet, "/web/stacks", "", "Stacks", "demo", "3")
+	assertFragment(http.MethodGet, "/web/stacks/demo", "", "Stack · demo", "Last backup:", "succeeded")
+	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source manifest")
+	assertFragment(http.MethodGet, "/web/stacks/demo/backups", "", "Backups", "succeeded", "1 recent backup")
 
-	assertFragment(http.MethodPost, "/stacks/demo/rollback", "revision=2", "Stack · demo", "Rolled back demo to revision 2")
-	assertFragment(http.MethodPost, "/stacks/demo/sync", "", "Stack · demo", "Synced demo — revision 4")
-	assertFragment(http.MethodPost, "/stacks/demo/remove", "", "Stacks", "Stack demo removed.")
+	assertFragment(http.MethodPost, "/web/stacks/demo/rollback", "revision=2", "Stack · demo", "Rolled back demo to revision 2")
+	assertFragment(http.MethodPost, "/web/stacks/demo/sync", "", "Stack · demo", "Synced demo — revision 4")
+	assertFragment(http.MethodPost, "/web/stacks/demo/remove", "", "Stacks", "Stack demo removed.")
 
-	assertFragment(http.MethodPost, "/backups", "", "Backups", "Backup triggered.")
+	assertFragment(http.MethodPost, "/web/backups", "", "Backups", "Backup triggered.")
 
-	assertFragment(http.MethodGet, "/deploy", "", "Deploy")
-	assertFragment(http.MethodGet, "/settings", "", "Settings")
+	assertFragment(http.MethodGet, "/web/deploy", "", "Deploy")
+	assertFragment(http.MethodGet, "/web/settings", "", "Settings")
 
-	resp := doRequest(t, app, http.MethodPost, "/logout", "", jar)
+	resp := doRequest(t, app, http.MethodPost, "/web/logout", "", jar)
 	if resp.StatusCode != http.StatusFound {
 		t.Errorf("POST /logout = %d, want 302", resp.StatusCode)
 	}
@@ -378,8 +378,8 @@ func TestAllControllers(t *testing.T) {
 	}
 
 	delete(jar, app.Auth.CookieName())
-	resp = doRequest(t, app, http.MethodGet, "/stacks", "", jar)
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/login" {
+	resp = doRequest(t, app, http.MethodGet, "/web/stacks", "", jar)
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/web/login" {
 		t.Errorf("unauth /stacks should redirect to /login")
 	}
 }
@@ -393,10 +393,10 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
 
-	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
-	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
-	resp := doRequest(t, app, http.MethodGet, "/webhooks", "", jar)
+	resp := doRequest(t, app, http.MethodGet, "/web/webhooks", "", jar)
 	b := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /webhooks = %d, want 200", resp.StatusCode)
@@ -407,7 +407,7 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 		}
 	}
 
-	resp = doRequest(t, app, http.MethodPost, "/webhooks", "source=github&description=bookfair ci", jar)
+	resp = doRequest(t, app, http.MethodPost, "/web/webhooks", "source=github&description=bookfair ci", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /webhooks = %d, want 200", resp.StatusCode)
@@ -418,7 +418,7 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 		}
 	}
 
-	resp = doRequest(t, app, http.MethodPost, "/webhooks/remove/github", "", jar)
+	resp = doRequest(t, app, http.MethodPost, "/web/webhooks/remove/github", "", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /webhooks/remove/github = %d, want 200", resp.StatusCode)
@@ -427,7 +427,7 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 		t.Errorf("webhook remove missing confirmation; got: %s", b)
 	}
 
-	resp = doRequest(t, app, http.MethodGet, "/apikeys", "", jar)
+	resp = doRequest(t, app, http.MethodGet, "/web/apikeys", "", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /apikeys = %d, want 200", resp.StatusCode)
@@ -436,7 +436,7 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 		t.Errorf("apikeys page missing admin; got: %s", b)
 	}
 
-	resp = doRequest(t, app, http.MethodPost, "/apikeys", "name=ci", jar)
+	resp = doRequest(t, app, http.MethodPost, "/web/apikeys", "name=ci", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /apikeys = %d, want 200", resp.StatusCode)
@@ -451,13 +451,13 @@ func TestWebhooksAndAPIKeys(t *testing.T) {
 		t.Errorf("apikey create missing copy button; got: %s", b)
 	}
 
-	resp = doRequest(t, app, http.MethodPost, "/webhooks", "source=github&description=bookfair ci", jar)
+	resp = doRequest(t, app, http.MethodPost, "/web/webhooks", "source=github&description=bookfair ci", jar)
 	b = readBody(t, resp)
 	if !strings.Contains(b, "Copy secret") {
 		t.Errorf("webhook create missing copy button; got: %s", b)
 	}
 
-	resp = doRequest(t, app, http.MethodPost, "/apikeys/remove/2", "", jar)
+	resp = doRequest(t, app, http.MethodPost, "/web/apikeys/remove/2", "", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /apikeys/remove/2 = %d, want 200", resp.StatusCode)
@@ -488,8 +488,8 @@ func TestSecretsAndConfigs(t *testing.T) {
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
 
-	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
-	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
 	assertFragment := func(method, path, body string, want ...string) string {
 		t.Helper()
@@ -508,95 +508,95 @@ func TestSecretsAndConfigs(t *testing.T) {
 
 	// Settings surfaces the cluster-scope configs + secrets + apply button.
 	// Secret values are masked; hashes are never listed.
-	b := assertFragment(http.MethodGet, "/settings", "",
+	b := assertFragment(http.MethodGet, "/web/settings", "",
 		"Settings", "Cluster configs", "Cluster secrets", "site_cert",
 		"••••••••", "Apply to swarm", "Add Config", "Add Secret",
-		"traefik-dynamic", `hx-get="/settings/rendered/traefik-dynamic"`)
+		"traefik-dynamic", `hx-get="/web/settings/rendered/traefik-dynamic"`)
 	if strings.Contains(b, "topsecret") || strings.Contains(b, "abc123") {
 		t.Errorf("secret value or hash leaked into the rendered page")
 	}
 
 	// Rendered configs view: the post-substitution YAML shown read-only.
-	assertFragment(http.MethodGet, "/settings/rendered/traefik-dynamic", "",
+	assertFragment(http.MethodGet, "/web/settings/rendered/traefik-dynamic", "",
 		"Rendered config", "traefik-dynamic", "tls:", "certificates: []")
 
 	// Cluster config lifecycle — create/edit/rollback via modals.
-	assertFragment(http.MethodPost, "/settings/configs/add",
+	assertFragment(http.MethodPost, "/web/settings/configs/add",
 		"name=nginx_conf&kind=file&content=worker_processes 4;",
 		"Config nginx_conf created")
 
-	assertFragment(http.MethodGet, "/settings/configs/edit/nginx_conf", "",
+	assertFragment(http.MethodGet, "/web/settings/configs/edit/nginx_conf", "",
 		"Edit config", "worker_processes 4;", "Version history", "h0",
-		"/settings/configs/rollback/nginx_conf/2")
+		"/web/settings/configs/rollback/nginx_conf/2")
 
-	assertFragment(http.MethodPost, "/settings/configs/edit",
+	assertFragment(http.MethodPost, "/web/settings/configs/edit",
 		"name=nginx_conf&content=worker_processes 8;", "Config nginx_conf updated")
 
-	assertFragment(http.MethodPost, "/settings/configs/rollback/nginx_conf/2", "",
+	assertFragment(http.MethodPost, "/web/settings/configs/rollback/nginx_conf/2", "",
 		"Config nginx_conf rolled back to version 2")
 
 	// Cluster secret lifecycle — value never leaks; reveal requires confirm.
-	b = assertFragment(http.MethodPost, "/settings/secrets/add",
+	b = assertFragment(http.MethodPost, "/web/settings/secrets/add",
 		"name=db_pass&value=topsecret", "Secret db_pass created")
 	if strings.Contains(b, "topsecret") {
 		t.Errorf("secret value leaked back into the rendered page")
 	}
 
-	assertFragment(http.MethodGet, "/settings/secrets/edit/db_pass", "",
+	assertFragment(http.MethodGet, "/web/settings/secrets/edit/db_pass", "",
 		"Edit secret", "Editing <code>db_pass</code>")
 
-	assertFragment(http.MethodPost, "/settings/secrets/edit",
+	assertFragment(http.MethodPost, "/web/settings/secrets/edit",
 		"name=db_pass&value=newvalue", "Secret db_pass updated")
 
-	assertFragment(http.MethodGet, "/settings/secrets/reveal/db_pass", "",
+	assertFragment(http.MethodGet, "/web/settings/secrets/reveal/db_pass", "",
 		"Secret ·", "the-decrypted-value", "Copy value")
 
-	assertFragment(http.MethodGet, "/settings", "",
+	assertFragment(http.MethodGet, "/web/settings", "",
 		`onclick="return confirm('Reveal secret site_cert`)
 
-	assertFragment(http.MethodPost, "/settings/secrets/remove/db_pass", "", "Deleted secret db_pass.")
+	assertFragment(http.MethodPost, "/web/settings/secrets/remove/db_pass", "", "Deleted secret db_pass.")
 
 	// Apply to swarm triggers a cluster update via the daemon.
-	assertFragment(http.MethodPost, "/settings/apply", "",
+	assertFragment(http.MethodPost, "/web/settings/apply", "",
 		"Cluster update applied", "infra")
 
 	// Per-stack config & secrets page.
-	assertFragment(http.MethodGet, "/stacks/demo/config", "",
+	assertFragment(http.MethodGet, "/web/stacks/demo/config", "",
 		"Config &amp; secrets", "demo", "app_env")
 
-	assertFragment(http.MethodPost, "/stacks/demo/configs/add",
+	assertFragment(http.MethodPost, "/web/stacks/demo/configs/add",
 		"name=demo_nginx_conf&kind=file&content=worker_processes 4;",
 		"Config demo_nginx_conf created for stack demo")
 
-	assertFragment(http.MethodGet, "/stacks/demo/configs/edit/nginx_conf", "",
+	assertFragment(http.MethodGet, "/web/stacks/demo/configs/edit/nginx_conf", "",
 		"Edit config", "worker_processes 4;", "h0",
-		"/stacks/demo/configs/rollback/nginx_conf/2")
+		"/web/stacks/demo/configs/rollback/nginx_conf/2")
 
-	assertFragment(http.MethodPost, "/stacks/demo/configs/edit",
+	assertFragment(http.MethodPost, "/web/stacks/demo/configs/edit",
 		"name=nginx_conf&content=worker_processes 8;", "Config nginx_conf updated")
 
-	assertFragment(http.MethodPost, "/stacks/demo/configs/remove/nginx_conf", "",
+	assertFragment(http.MethodPost, "/web/stacks/demo/configs/remove/nginx_conf", "",
 		"Deleted config nginx_conf.")
 
-	b = assertFragment(http.MethodPost, "/stacks/demo/secrets/add",
+	b = assertFragment(http.MethodPost, "/web/stacks/demo/secrets/add",
 		"name=demo_db&value=topsecret", "Secret demo_db created for stack demo")
 	if strings.Contains(b, "topsecret") {
 		t.Errorf("secret value leaked into the rendered page")
 	}
 
-	assertFragment(http.MethodGet, "/stacks/demo/secrets/edit/db_pass", "",
+	assertFragment(http.MethodGet, "/web/stacks/demo/secrets/edit/db_pass", "",
 		"Edit secret", "Editing <code>db_pass</code>")
 
-	assertFragment(http.MethodGet, "/stacks/demo/secrets/reveal/db_pass", "",
+	assertFragment(http.MethodGet, "/web/stacks/demo/secrets/reveal/db_pass", "",
 		"the-decrypted-value")
 
-	assertFragment(http.MethodGet, "/stacks/demo/secrets/new", "",
-		"Add secret", "/stacks/demo/secrets/add")
+	assertFragment(http.MethodGet, "/web/stacks/demo/secrets/new", "",
+		"Add secret", "/web/stacks/demo/secrets/add")
 
-	assertFragment(http.MethodGet, "/stacks/demo/config", "",
+	assertFragment(http.MethodGet, "/web/stacks/demo/config", "",
 		`onclick="return confirm('Reveal secret`)
 
-	assertFragment(http.MethodPost, "/stacks/demo/secrets/remove/db_pass", "",
+	assertFragment(http.MethodPost, "/web/stacks/demo/secrets/remove/db_pass", "",
 		"Deleted secret db_pass.")
 }
 
@@ -606,10 +606,10 @@ func TestTLSMainAndHosts(t *testing.T) {
 	app := newTestApp(t, daemon)
 	jar := map[string]*http.Cookie{}
 
-	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
-	doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
-	resp := doRequest(t, app, http.MethodGet, "/tls", "", jar)
+	resp := doRequest(t, app, http.MethodGet, "/web/tls", "", jar)
 	b := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /tls = %d, want 200; body: %s", resp.StatusCode, b)
@@ -624,29 +624,29 @@ func TestTLSMainAndHosts(t *testing.T) {
 		}
 	}
 
-	resp = doRequest(t, app, http.MethodGet, "/tls/site/new", "", jar)
+	resp = doRequest(t, app, http.MethodGet, "/web/tls/site/new", "", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /tls/site/new = %d, want 200; body: %s", resp.StatusCode, b)
 	}
-	for _, want := range []string{"Upload / renew main certificate", `hx-post="/tls/site"`, `name="cert"`, `name="key"`} {
+	for _, want := range []string{"Upload / renew main certificate", `hx-post="/web/tls/site"`, `name="cert"`, `name="key"`} {
 		if !strings.Contains(b, want) {
 			t.Errorf("tls site form missing %q; got: %s", want, b)
 		}
 	}
 
-	resp = doRequest(t, app, http.MethodGet, "/tls/hosts/new", "", jar)
+	resp = doRequest(t, app, http.MethodGet, "/web/tls/hosts/new", "", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /tls/hosts/new = %d, want 200; body: %s", resp.StatusCode, b)
 	}
-	for _, want := range []string{"Add a per-host certificate", `hx-post="/tls"`, `name="host"`} {
+	for _, want := range []string{"Add a per-host certificate", `hx-post="/web/tls"`, `name="host"`} {
 		if !strings.Contains(b, want) {
 			t.Errorf("tls host form missing %q; got: %s", want, b)
 		}
 	}
 
-	resp = doRequest(t, app, http.MethodPost, "/tls/site",
+	resp = doRequest(t, app, http.MethodPost, "/web/tls/site",
 		"cert=-----BEGIN CERTIFICATE-----&key=-----BEGIN PRIVATE KEY-----", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
@@ -656,7 +656,7 @@ func TestTLSMainAndHosts(t *testing.T) {
 		t.Errorf("tls site upload missing confirmation; got: %s", b)
 	}
 
-	resp = doRequest(t, app, http.MethodPost, "/tls/site",
+	resp = doRequest(t, app, http.MethodPost, "/web/tls/site",
 		"cert=-----BEGIN CERTIFICATE-----", jar)
 	b = readBody(t, resp)
 	if resp.StatusCode != http.StatusUnprocessableEntity {
@@ -666,7 +666,7 @@ func TestTLSMainAndHosts(t *testing.T) {
 		t.Errorf("tls site missing-field error absent; got: %s", b)
 	}
 
-	resp = doRequest(t, app, http.MethodPost, "/tls",
+	resp = doRequest(t, app, http.MethodPost, "/web/tls",
 		"host=idlebbookfair.com&cert=-----BEGIN CERTIFICATE-----&key=-----BEGIN PRIVATE KEY-----", jar)
 	b = readBody(t, resp)
 	if !strings.Contains(b, "Certificate for idlebbookfair.com stored") {
@@ -682,14 +682,14 @@ func TestServicesUI(t *testing.T) {
 	jar := map[string]*http.Cookie{}
 
 	// login
-	doRequest(t, app, http.MethodPost, "/setup", "password=supersecret&confirm=supersecret", jar)
-	resp := doRequest(t, app, http.MethodPost, "/login", "username=admin&password=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	resp := doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("login = %d, want 302", resp.StatusCode)
 	}
 
 	// services list
-	resp = doRequest(t, app, http.MethodGet, "/services", "", jar)
+	resp = doRequest(t, app, http.MethodGet, "/web/services", "", jar)
 	body, _ := io.ReadAll(resp.Body)
 	s := string(body)
 	if !strings.Contains(s, "demo_web") || !strings.Contains(s, "infra_traefik") {
@@ -700,7 +700,7 @@ func TestServicesUI(t *testing.T) {
 	}
 
 	// tasks fragment for demo_web (unqualified: stack=demo, service=web)
-	resp = doRequest(t, app, http.MethodGet, "/services/demo/web/tasks", "", jar)
+	resp = doRequest(t, app, http.MethodGet, "/web/services/demo/web/tasks", "", jar)
 	body, _ = io.ReadAll(resp.Body)
 	s = string(body)
 	if !strings.Contains(s, "t1") || !strings.Contains(s, "running") {
@@ -711,7 +711,7 @@ func TestServicesUI(t *testing.T) {
 	}
 
 	// logs fragment
-	resp = doRequest(t, app, http.MethodGet, "/services/demo/web/logs", "", jar)
+	resp = doRequest(t, app, http.MethodGet, "/web/services/demo/web/logs", "", jar)
 	body, _ = io.ReadAll(resp.Body)
 	s = string(body)
 	if !strings.Contains(s, "listening on :8080") {
@@ -719,10 +719,77 @@ func TestServicesUI(t *testing.T) {
 	}
 
 	// exec
-	resp = doRequest(t, app, http.MethodPost, "/services/demo/web/exec", "argv=whoami", jar)
+	resp = doRequest(t, app, http.MethodPost, "/web/services/demo/web/exec", "argv=whoami", jar)
 	body, _ = io.ReadAll(resp.Body)
 	s = string(body)
 	if !strings.Contains(s, "root") {
 		t.Errorf("exec fragment missing output; got: %s", s)
+	}
+}
+
+// TestFragmentRefreshRendersAppShell covers the deep-link refresh bug: a
+// browser refresh on an HTMX fragment URL (e.g. /stacks) is a full page load
+// (no HX-Request header) and must return the app shell with the fragment
+// embedded in #view — styles and sidebar survive the refresh. HTMX partial
+// loads (with HX-Request) must keep returning the bare fragment.
+func TestFragmentRefreshRendersAppShell(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	jar := map[string]*http.Cookie{}
+
+	doRequest(t, app, http.MethodPost, "/web/setup", "password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
+
+	fullPage := func(path string) string {
+		t.Helper()
+		resp := doRequest(t, app, http.MethodGet, path, "", jar)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, resp.StatusCode)
+		}
+		return readBody(t, resp)
+	}
+	hxPartial := func(path string) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "http://x"+path, nil)
+		req.Header.Set("HX-Request", "true")
+		if ck, ok := jar[app.Auth.CookieName()]; ok {
+			req.AddCookie(ck)
+		}
+		rr := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rr, req)
+		for _, c := range rr.Result().Cookies() {
+			jar[c.Name] = c
+		}
+		if rr.Code != http.StatusOK {
+			t.Fatalf("HX GET %s = %d, want 200", path, rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	// Full page load of a fragment URL: app shell (style block + sidebar +
+	// nav) wrapping the fragment content in #view.
+	b := fullPage("/web/stacks")
+	for _, want := range []string{
+		"<style>", "operator console", "Overview", "Stacks", "Services",
+		`id="view"`, "demo", "Log out",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("full-page GET /stacks missing %q", want)
+		}
+	}
+	if strings.Contains(b, `<span hx-get="/web/overview" hx-trigger="load">`) {
+		t.Errorf("full-page GET /stacks must not auto-load overview over the embedded fragment")
+	}
+
+	// HTMX partial load of the same URL: bare fragment, no shell.
+	b = hxPartial("/web/stacks")
+	for _, want := range []string{"demo", "Stacks"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("HX GET /stacks missing %q", want)
+		}
+	}
+	if strings.Contains(b, "<style>") || strings.Contains(b, "operator console") {
+		t.Errorf("HX GET /stacks should return the bare fragment, got the shell")
 	}
 }

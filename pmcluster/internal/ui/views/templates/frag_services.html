@@ -19,8 +19,8 @@
     <td class="muted">{{ts .Updated}}</td>
     <td style="text-align:right; white-space:nowrap">
       {{if .Stack}}
-      <a class="btn sm ghost" href="/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-get="/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true">Tasks</a>
-      <a class="btn sm ghost" href="/services/{{.Stack}}/{{.ServiceName}}/logs" hx-get="/services/{{.Stack}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true">Logs</a>
+      <a class="btn sm ghost" href="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true">Tasks</a>
+      <a class="btn sm ghost" href="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true">Logs</a>
       {{end}}
     </td>
   </tr>

@@ -213,6 +213,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			Domain:                    in.Domain,
 			OpenObserveAdminEmail:     openobsCred.Username,
 			OpenObserveAdminPassword:  openobsCred.Password,
+			OpenObserveBasicAuth:      openObserveBasicAuth(openobsCred.Username, openobsCred.Password),
 			OpenObserveOrg:            "default",
 			OpenObserveIngestionToken: storedToken,
 			ACMEEmail:                 in.ACMEEmail,

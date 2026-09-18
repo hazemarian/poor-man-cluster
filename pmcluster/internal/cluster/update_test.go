@@ -197,9 +197,11 @@ func TestUpdate_ConfigsUseSeedVersionedNames(t *testing.T) {
 // TestUpdate_PasswordRotationRedeploysObservability verifies the render-level
 // semantics: the OTel collector config authenticates with the STABLE root token
 // (never the human password), so it is NOT re-created on a password rotation.
-// The observability stack compose embeds ZO_ROOT_USER_PASSWORD directly, so its
-// rendered content DOES change and observability IS re-deployed — applying the
-// new password to the running service.
+// The observability stack compose embeds ZO_ROOT_USER_PASSWORD directly AND the
+// traefik-dynamic config embeds the OO root credentials in the
+// openobserve-auto-auth middleware, so both stacks' rendered content changes
+// and BOTH observability + infra are re-deployed — applying the new password
+// to the running service and to the Traefik-injected Authorization header.
 func TestUpdate_PasswordRotationDoesNotRedeployObservability(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 
@@ -227,13 +229,32 @@ func TestUpdate_PasswordRotationDoesNotRedeployObservability(t *testing.T) {
 		t.Errorf("OTelConfig = %q, want pmcluster_otel_config_v001 (unchanged)", res.OTelConfig)
 	}
 	deployer := deps.Deployer.(*recordingDeployer)
-	if len(deployer.deployedStacks) != 1 || deployer.deployedStacks[0].Name != "observability" {
-		t.Errorf("expected ONLY observability re-deployed (password env changed), got %v", deployer.deployedStacks)
+	if len(deployer.deployedStacks) != 2 {
+		t.Fatalf("expected observability + infra re-deployed (password env + auto-auth middleware changed), got %v", deployer.deployedStacks)
 	}
+	if !res.TraefikCreated {
+		t.Error("traefik-dynamic config should be re-created (openobserve-auto-auth middleware embeds the NEW password)")
+	}
+	var observability, infra string
 	for _, d := range deployer.deployedStacks {
-		if !strings.Contains(string(d.YAML), newPass) {
-			t.Errorf("observability re-deploy must carry the NEW password in ZO_ROOT_USER_PASSWORD")
+		switch d.Name {
+		case "observability":
+			observability = d.YAML
+		case "infra":
+			infra = d.YAML
 		}
+	}
+	if observability == "" {
+		t.Fatal("observability was not re-deployed")
+	}
+	if infra == "" {
+		t.Fatal("infra was not re-deployed")
+	}
+	// LoadComposeFile escapes '$' as '$$' for Docker Compose variable
+	// safety (escapeComposeDollar), so assert on the escaped form —
+	// a raw "$" in a random password would otherwise flake the match.
+	if !strings.Contains(string(observability), escapeComposeDollar(newPass)) {
+		t.Errorf("observability re-deploy must carry the NEW password in ZO_ROOT_USER_PASSWORD")
 	}
 }
 
