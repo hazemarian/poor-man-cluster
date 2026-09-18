@@ -664,6 +664,9 @@ func TestLoadComposeFile_InfraBYOMode(t *testing.T) {
 	if strings.Contains(s, "traefik_acme") {
 		t.Errorf("BYO-mode infra stack must not declare the ACME volume")
 	}
+	if !strings.Contains(s, "  {}\n") {
+		t.Errorf("BYO-mode infra stack must render an empty volumes mapping (not volumes: null):\n%s", s)
+	}
 	for _, want := range []string{
 		"  cert_v001:\n    external: true",
 		"  key_v001:\n    external: true",

@@ -98,6 +98,8 @@ services:
 volumes:
   [[- if .ACMEEmail]]
   traefik_acme:
+  [[- else]]
+  {}
   [[- end]]
 
 networks:
