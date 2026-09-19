@@ -203,10 +203,22 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 		"OAUTH2_PROXY_CLIENT_SECRET: \"client-secret\"",
 		"OAUTH2_PROXY_GITHUB_ORG: \"nextrum-s\"",
 		"OAUTH2_PROXY_COOKIE_SECRET: \"cookie-secret\"",
+		// The forwardAuth start redirect is host-relative to the request it
+		// intercepted, so /oauth2/* must resolve on every gated host too.
+		"Host(`pmcluster.example.com`) && PathPrefix(`/oauth2`)",
+		"Host(`observ.example.com`) && PathPrefix(`/oauth2`)",
+		// Shared cookie so the sso.<domain> callback session works on all hosts.
+		"OAUTH2_PROXY_COOKIE_DOMAIN: \".example.com\"",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("sso-stack render missing %q", want)
 		}
+	}
+	// The cluster uses its own operator-supplied certificate (BYO mode): the
+	// ACME resolver is only declared when .ACMEEmail is set, so no router may
+	// reference it here.
+	if strings.Contains(body, "certresolver=letsencrypt") {
+		t.Error("sso-stack render must not reference the letsencrypt resolver with BYO certs")
 	}
 	for _, bad := range []string{"pmcluster.example.com/oauth2", "__SSO", "[[."} {
 		if strings.Contains(body, bad) {

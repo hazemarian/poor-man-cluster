@@ -2,15 +2,21 @@
 #
 # Deployed only when SSO is enabled (sso_enabled setting + PMCLUSTER_SSO_ENABLED).
 # oauth2-proxy terminates the OAuth flow with the provider (GitHub) and exposes
-# /oauth2/* on the sso.<domain> subdomain. Traefik's sso-auth forwardAuth
-# middleware points at this service; the provider's callback URL is
-# https://sso.<domain>/oauth2/callback.
+# /oauth2/* endpoints. Traefik's sso-auth forwardAuth middleware points at this
+# service; the provider's callback URL is https://sso.<domain>/oauth2/callback.
 #
 # oauth2-proxy runs INSIDE the swarm, bound to the traefik-net overlay network
 # (no published ports). Traefik reaches it by service DNS name
 # sso_oauth2-proxy:4180 — both from the forwardAuth middleware and from the
-# sso.<domain> router that serves the /oauth2/* endpoints (sign-in, callback,
-# session check).
+# /oauth2/* routers below.
+#
+# oauth2-proxy serves the OAuth endpoints on EVERY gated host, not just the
+# sso.<domain> subdomain: the forwardAuth 302 that starts the flow uses the
+# ORIGINAL request's host (e.g. pmcluster.<domain> or observ.<domain>), so
+# /oauth2/start must resolve on those hosts too or Traefik 404s it. Each gated
+# host gets a dedicated PathPrefix(/oauth2) router with an explicit priority
+# higher than the host's catch-all router, and NO auth middleware (the flow
+# itself is the auth).
 #
 # Authentication is the provider's (GitHub); once the operator signs in with
 # GitHub, oauth2-proxy injects X-Forwarded-User / X-Forwarded-Email headers
@@ -38,6 +44,11 @@ services:
       OAUTH2_PROXY_UPSTREAMS: "static://202"
       OAUTH2_PROXY_COOKIE_SECURE: "true"
       OAUTH2_PROXY_COOKIE_SAMESITE: "lax"
+      # The session cookie must be valid on EVERY gated host (pmcluster.,
+      # observ., sso.) — the callback lands on sso.<domain> but the operator is
+      # then redirected back to pmcluster.<domain>/web/. A leading-dot domain
+      # makes the cookie shared across all subdomains of <domain>.
+      OAUTH2_PROXY_COOKIE_DOMAIN: ".[[.Domain]]"
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       # Redirect URI must match the GitHub OAuth app callback exactly. The
       # callback + sign-in endpoints are served at the sso.<domain> subdomain
@@ -54,16 +65,39 @@ services:
       restart_policy:
         condition: any
       labels:
-        # Expose the OAuth endpoints at sso.<domain> — the dedicated SSO
-        # subdomain. No auth middleware here: oauth2-proxy itself owns the
-        # entire flow (it 302s to GitHub, serves the callback, and validates
-        # the session cookie on every /oauth2/* request).
+        # The dedicated SSO subdomain — callback + sign-in land here.
+        # No auth middleware: oauth2-proxy itself owns the entire flow (it 302s
+        # to GitHub, serves the callback, and validates the session cookie on
+        # every /oauth2/* request).
         - "traefik.enable=true"
         - "traefik.http.routers.sso.rule=Host(`sso.${DOMAIN}`)"
         - "traefik.http.routers.sso.entrypoints=websecure"
         - "traefik.http.routers.sso.tls=true"
+        [[- if .ACMEEmail]]
         - "traefik.http.routers.sso.tls.certresolver=letsencrypt"
+        [[- end]]
         - "traefik.http.services.sso.loadbalancer.server.port=4180"
+        # /oauth2/* must ALSO resolve on every host the forwardAuth middleware
+        # gates — oauth2-proxy's start redirect is host-relative to the request
+        # it intercepted (pmcluster.<domain>, observ.<domain>). Each router is
+        # pinned above the host's catch-all with an explicit priority and no
+        # auth middleware.
+        - "traefik.http.routers.sso-pmcluster.rule=Host(`pmcluster.${DOMAIN}`) && PathPrefix(`/oauth2`)"
+        - "traefik.http.routers.sso-pmcluster.entrypoints=websecure"
+        - "traefik.http.routers.sso-pmcluster.tls=true"
+        [[- if .ACMEEmail]]
+        - "traefik.http.routers.sso-pmcluster.tls.certresolver=letsencrypt"
+        [[- end]]
+        - "traefik.http.routers.sso-pmcluster.priority=1000"
+        - "traefik.http.routers.sso-pmcluster.service=sso"
+        - "traefik.http.routers.sso-observ.rule=Host(`observ.${DOMAIN}`) && PathPrefix(`/oauth2`)"
+        - "traefik.http.routers.sso-observ.entrypoints=websecure"
+        - "traefik.http.routers.sso-observ.tls=true"
+        [[- if .ACMEEmail]]
+        - "traefik.http.routers.sso-observ.tls.certresolver=letsencrypt"
+        [[- end]]
+        - "traefik.http.routers.sso-observ.priority=1000"
+        - "traefik.http.routers.sso-observ.service=sso"
     secrets:
       - sso_cookie_secret
 
