@@ -17,6 +17,8 @@ type HTTP struct {
 func (h *HTTP) Mount(r chi.Router) {
 	r.Get("/backups", h.list)
 	r.Post("/backups", h.create)
+	r.Get("/backups/{id}/files", h.browse)
+	r.Post("/backups/{id}/restore", h.restore)
 }
 
 // MountStackScoped is split out so the route can attach to the same
@@ -65,6 +67,41 @@ func (h *HTTP) create(w http.ResponseWriter, r *http.Request) {
 		"status":        "succeeded",
 		"archive_paths": paths,
 	})
+}
+
+func (h *HTTP) browse(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid backup id")
+		return
+	}
+	run, files, err := h.Svc.Browse(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run": run, "files": files})
+}
+
+func (h *HTTP) restore(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid backup id")
+		return
+	}
+	var body struct {
+		DestRoot string `json:"dest_root"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.DestRoot == "" {
+		body.DestRoot = "/var/stack/data"
+	}
+	n, err := h.Svc.Restore(r.Context(), id, body.DestRoot)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"restored": n, "dest_root": body.DestRoot})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

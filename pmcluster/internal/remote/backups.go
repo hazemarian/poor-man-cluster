@@ -49,6 +49,32 @@ func (a *Backups) ListForStack(ctx context.Context, stackName string) ([]backups
 	return out.Backups, nil
 }
 
+func (a *Backups) Browse(ctx context.Context, id int64) (*backups.Run, []backups.FileEntry, error) {
+	var out backupBrowseDTO
+	if err := a.c.do(ctx, http.MethodGet, "/backups/"+strconv.FormatInt(id, 10)+"/files", nil, &out); err != nil {
+		return nil, nil, err
+	}
+	return out.Run, out.Files, nil
+}
+
+func (a *Backups) Restore(ctx context.Context, id int64, destRoot string) (int, error) {
+	var out backupRestoreDTO
+	body := map[string]any{"dest_root": destRoot}
+	if err := a.c.do(ctx, http.MethodPost, "/backups/"+strconv.FormatInt(id, 10)+"/restore", body, &out); err != nil {
+		return 0, err
+	}
+	return out.Restored, nil
+}
+
 type backupListDTO struct {
 	Backups []backups.Run `json:"backups"`
+}
+
+type backupBrowseDTO struct {
+	Run   *backups.Run        `json:"run"`
+	Files []backups.FileEntry `json:"files"`
+}
+
+type backupRestoreDTO struct {
+	Restored int `json:"restored"`
 }

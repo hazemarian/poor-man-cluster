@@ -34,4 +34,9 @@ type Service interface {
 	List(ctx context.Context, limit int) ([]Run, error)
 	// ListForStack returns the backup runs recorded for a single stack.
 	ListForStack(ctx context.Context, stackName string) ([]Run, error)
+	// Browse lists the archive contents of one backup run.
+	Browse(ctx context.Context, id int64) (*Run, []FileEntry, error)
+	// Restore extracts every archive of a successful stack-scoped backup
+	// run back under destRoot.
+	Restore(ctx context.Context, id int64, destRoot string) (restoredFiles int, err error)
 }

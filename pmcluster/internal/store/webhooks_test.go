@@ -209,3 +209,48 @@ func TestMarkWebhookSourceUsed_UnknownSource_NoError(t *testing.T) {
 		t.Errorf("MarkWebhookSourceUsed on unknown source: %v (want nil — best effort)", err)
 	}
 }
+
+func TestRecordWebhookDelivery_RoundTrip(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	for _, d := range []*WebhookDelivery{
+		{Source: "github-prod", Status: "accepted", StackName: "abbas", Revision: 1789849639, RepoURL: "https://github.com/nextrum-sy/abbas", File: "deploy/deploy.yaml"},
+		{Source: "github-prod", Status: "bad_request", StackName: "abbas", Error: "deploy provenance required"},
+		{Source: "github-cms", Status: "unauthorized"},
+	} {
+		if err := s.RecordWebhookDelivery(ctx, d); err != nil {
+			t.Fatalf("RecordWebhookDelivery: %v", err)
+		}
+	}
+
+	got, err := s.ListWebhookDeliveries(ctx, "github-prod", 0)
+	if err != nil {
+		t.Fatalf("ListWebhookDeliveries: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].StackName != "abbas" || got[0].Status != "bad_request" || got[0].Error == "" {
+		t.Errorf("newest-first ordering wrong: %+v", got[0])
+	}
+	if got[1].Revision != 1789849639 || got[1].File != "deploy/deploy.yaml" {
+		t.Errorf("second delivery provenance wrong: %+v", got[1])
+	}
+
+	limited, err := s.ListWebhookDeliveries(ctx, "github-prod", 1)
+	if err != nil {
+		t.Fatalf("ListWebhookDeliveries limited: %v", err)
+	}
+	if len(limited) != 1 || limited[0].Status != "bad_request" {
+		t.Errorf("limit=1 got %d rows (want 1, newest first)", len(limited))
+	}
+
+	other, err := s.ListWebhookDeliveries(ctx, "github-cms", 0)
+	if err != nil {
+		t.Fatalf("ListWebhookDeliveries github-cms: %v", err)
+	}
+	if len(other) != 1 || other[0].Status != "unauthorized" {
+		t.Errorf("source-scoped query wrong: %+v", other)
+	}
+}

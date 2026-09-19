@@ -2,6 +2,7 @@ package stacks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -187,6 +188,125 @@ func TestDeploy_HappyPath(t *testing.T) {
 	}
 	if rev.RenderedYAML != string(result.RenderedYAML) {
 		t.Errorf("stored RenderedYAML differs from returned RenderedYAML")
+	}
+}
+
+// TestDeploy_RecordsPipelineSteps verifies the stored payload_json captures
+// the ordered deploy step names in the envelope shape alongside the payload.
+func TestDeploy_RecordsPipelineSteps(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	res, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	rev, err := s.GetRevision(ctx, "donation-campaign", res.Revision)
+	if err != nil {
+		t.Fatalf("GetRevision: %v", err)
+	}
+
+	var env struct {
+		Payload json.RawMessage `json:"payload"`
+		Steps   []string        `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(rev.PayloadJSON.String), &env); err != nil {
+		t.Fatalf("unmarshal payload_json: %v", err)
+	}
+	if len(env.Steps) == 0 {
+		t.Fatalf("payload_json has no steps: %s", rev.PayloadJSON.String)
+	}
+	want := []string{
+		"Parsing manifest (DSL)",
+		"Interpolating and validating manifest",
+		"Translating to Compose (resolving configs/secrets)",
+		"Recording revision",
+		"Deploying stack to the swarm",
+	}
+	if len(env.Steps) != len(want) {
+		t.Fatalf("steps = %v, want %v", env.Steps, want)
+	}
+	for i := range want {
+		if env.Steps[i] != want[i] {
+			t.Errorf("steps[%d] = %q, want %q", i, env.Steps[i], want[i])
+		}
+	}
+
+	var p Payload
+	if err := json.Unmarshal(env.Payload, &p); err != nil {
+		t.Fatalf("unmarshal embedded payload: %v", err)
+	}
+	if p.Manifest != donationCampaignManifest {
+		t.Errorf("embedded payload manifest mismatch")
+	}
+}
+
+// TestDecodeStoredPayload covers both the legacy (raw payload) and envelope
+// (payload + steps) shapes of payload_json.
+func TestDecodeStoredPayload(t *testing.T) {
+	legacy := `{"app_name":"demo","manifest":"app: demo"}`
+	p, steps := decodeStoredPayload(legacy)
+	if p.AppName != "demo" || p.Manifest != "app: demo" {
+		t.Errorf("legacy decode = %+v", p)
+	}
+	if steps != nil {
+		t.Errorf("legacy decode steps = %v, want nil", steps)
+	}
+
+	envelope := `{"payload":{"app_name":"demo","manifest":"app: demo"},"steps":["a","b"]}`
+	p, steps = decodeStoredPayload(envelope)
+	if p.AppName != "demo" || p.Manifest != "app: demo" {
+		t.Errorf("envelope decode payload = %+v", p)
+	}
+	if len(steps) != 2 || steps[0] != "a" || steps[1] != "b" {
+		t.Errorf("envelope decode steps = %v, want [a b]", steps)
+	}
+
+	if p, steps := decodeStoredPayload(""); p.Manifest != "" || steps != nil {
+		t.Errorf("empty decode = %+v, %v; want zero payload and nil steps", p, steps)
+	}
+}
+
+// TestRollback_PreservesOriginalPayload verifies that rolling back from a
+// revision recorded with the envelope shape still reconstructs "original" as
+// the legacy payload (backward-compatible reconstruction).
+func TestRollback_PreservesOriginalPayload(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	r1, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest, Version: "v1"})
+	if err != nil {
+		t.Fatalf("Deploy v1: %v", err)
+	}
+	time.Sleep(2 * time.Second)
+
+	rr, err := svc.Rollback(ctx, "donation-campaign", r1.Revision)
+	if err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+
+	rev, err := s.GetRevision(ctx, "donation-campaign", rr.Revision)
+	if err != nil {
+		t.Fatalf("GetRevision: %v", err)
+	}
+	var rb struct {
+		RollbackOf int64           `json:"rollback_of"`
+		Original   json.RawMessage `json:"original"`
+	}
+	if err := json.Unmarshal([]byte(rev.PayloadJSON.String), &rb); err != nil {
+		t.Fatalf("unmarshal rollback payload: %v", err)
+	}
+	var original Payload
+	if err := json.Unmarshal(rb.Original, &original); err != nil {
+		t.Fatalf("rollback 'original' is not a legacy payload: %v", err)
+	}
+	if original.Manifest != donationCampaignManifest || original.Version != "v1" {
+		t.Errorf("rollback original = %+v, want v1 payload", original)
 	}
 }
 

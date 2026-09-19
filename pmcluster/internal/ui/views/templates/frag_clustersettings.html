@@ -1,0 +1,85 @@
+{{define "clustersettings"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1 style="margin:0 0 4px">Cluster settings</h1>
+<p class="sub">
+  <a class="link" href="/web/settings" hx-get="/web/settings" hx-target="#view">← settings</a>
+  · Edits are saved to the daemon but <strong>not</strong> applied — run
+  <code>cluster update</code> (the "Apply to swarm" button on the Settings page)
+  to push them to the swarm.
+</p>
+
+<div class="card">
+  <form hx-post="/web/settings/cluster" hx-target="#view" hx-swap="innerHTML">
+    <div class="grid">
+      <div>
+        <label>Volume root</label>
+        <input type="text" name="volume_root" value="{{.Settings.volume_root}}" placeholder="/var/stack/data" />
+      </div>
+      <div>
+        <label>Backup on all nodes</label>
+        <select name="backup_all_nodes">
+          <option value="false" {{if ne .Settings.backup_all_nodes "true"}}selected{{end}}>false</option>
+          <option value="true" {{if eq .Settings.backup_all_nodes "true"}}selected{{end}}>true</option>
+        </select>
+      </div>
+      <div>
+        <label>Edge login disabled</label>
+        <select name="edge_login_disabled">
+          <option value="true" {{if ne .Settings.edge_login_disabled "false"}}selected{{end}}>true</option>
+          <option value="false" {{if eq .Settings.edge_login_disabled "false"}}selected{{end}}>false</option>
+        </select>
+      </div>
+      <div>
+        <label>Domain</label>
+        <input type="text" name="domain" value="{{.Settings.domain}}" placeholder="pmcluster.example.com" />
+      </div>
+      <div>
+        <label>Admin email</label>
+        <input type="text" name="oo_admin_email" value="{{.Settings.oo_admin_email}}" placeholder="admin@example.com" />
+      </div>
+      <div>
+        <label>Traefik admin user</label>
+        <input type="text" name="traefik_admin_user" value="{{.Settings.traefik_admin_user}}" placeholder="admin" />
+      </div>
+    </div>
+
+    <h2>SSO</h2>
+    <div class="grid">
+      <div>
+        <label>SSO enabled</label>
+        <select name="sso_enabled">
+          <option value="false" {{if ne .Settings.sso_enabled "true"}}selected{{end}}>false</option>
+          <option value="true" {{if eq .Settings.sso_enabled "true"}}selected{{end}}>true</option>
+        </select>
+      </div>
+      <div>
+        <label>Provider</label>
+        <input type="text" name="sso_provider" value="{{.Settings.sso_provider}}" placeholder="github" />
+      </div>
+      <div>
+        <label>Client ID</label>
+        <input type="text" name="sso_client_id" value="{{.Settings.sso_client_id}}" />
+      </div>
+      <div>
+        <label>Client secret</label>
+        <input type="password" name="sso_client_secret" value="" placeholder="{{if .HasClientSecret}}•••set•••{{end}}" />
+      </div>
+      <div>
+        <label>GitHub org</label>
+        <input type="text" name="sso_github_org" value="{{.Settings.sso_github_org}}" />
+      </div>
+      <div>
+        <label>Cookie expire</label>
+        <input type="text" name="sso_cookie_expire" value="{{.Settings.sso_cookie_expire}}" placeholder="1h" />
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="btn" type="submit" hx-disabled-elt="this">Save settings</button>
+    </div>
+    <p class="muted" style="margin-top:10px">Changes are stored by the daemon and applied by the next <code>cluster update</code>.</p>
+  </form>
+</div>
+{{end}}

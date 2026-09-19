@@ -1,0 +1,28 @@
+{{define "webhookdeliveries"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1>Webhook deliveries · <code>{{.Source}}</code></h1>
+<p class="sub">Latest 50 recorded delivery attempts, newest first. Accepts authenticate the sender and apply a deploy; failures record the reason.</p>
+
+{{if .Deliveries}}
+<div class="card" style="padding:6px 14px">
+<table>
+  <tr><th>Status</th><th>Stack</th><th>Revision</th><th>Repo</th><th>File</th><th>Error</th><th>When</th></tr>
+  {{range .Deliveries}}
+  <tr>
+    <td><span class="pill {{if eq .Status "accepted"}}good{{else if eq .Status "unauthorized"}}bad{{else if eq .Status "server_error"}}bad{{else}}warn{{end}}">{{.Status}}</span></td>
+    <td>{{if .StackName}}<code>{{.StackName}}</code>{{else}}—{{end}}</td>
+    <td>{{if .Revision}}{{.Revision}}{{else}}—{{end}}</td>
+    <td class="muted">{{if .RepoURL}}{{.RepoURL}}{{else}}—{{end}}</td>
+    <td class="muted">{{if .File}}<code>{{.File}}</code>{{else}}—{{end}}</td>
+    <td class="muted">{{if .Error}}{{.Error}}{{else}}—{{end}}</td>
+    <td class="muted">{{ts .CreatedAt}}</td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{else}}
+<div class="card empty">No deliveries recorded for this source yet.</div>
+{{end}}
+{{end}}

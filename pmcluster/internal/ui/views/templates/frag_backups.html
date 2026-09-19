@@ -17,7 +17,7 @@
 {{if .Backups}}
 <div class="card" style="padding:6px 14px">
 <table>
-  <tr><th>ID</th><th>Stack</th><th>Status</th><th>Revision</th><th>Started</th><th>Finished</th><th>Archives</th></tr>
+  <tr><th>ID</th><th>Stack</th><th>Status</th><th>Revision</th><th>Started</th><th>Finished</th><th>Archives</th><th></th></tr>
   {{range .Backups}}
   <tr>
     <td><code>{{.ID}}</code></td>
@@ -27,6 +27,10 @@
     <td class="muted">{{ts .StartedAt}}</td>
     <td class="muted">{{ts .FinishedAt}}</td>
     <td class="muted">{{.Archives}}</td>
+    <td style="text-align:right">
+      <a class="btn sm ghost" href="/web/backups/{{.ID}}/files"
+         hx-get="/web/backups/{{.ID}}/files" hx-target="#view" hx-push-url="true">Browse</a>
+    </td>
   </tr>
   {{end}}
 </table>

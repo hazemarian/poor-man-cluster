@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -124,7 +125,24 @@ func (c Stacks) ShowRevision(g *gin.Context) {
 		c.Views.Fragment(g, "revision", gin.H{"Error": err.Error()})
 		return
 	}
-	c.Views.Fragment(g, "revision", gin.H{"Rev": rv})
+	c.Views.Fragment(g, "revision", gin.H{"Rev": rv, "Steps": revisionSteps(rv.Payload)})
+}
+
+// canonicalPipelineSteps is the fallback when a revision predates the step
+// recording feature (its payload_json is the legacy shape with no "steps").
+var canonicalPipelineSteps = []string{"Parse", "Interpolate", "Validate", "Translate", "Record", "Deploy"}
+
+// revisionSteps extracts the deploy pipeline step names from a revision's
+// stored payload JSON (envelope shape: {"payload":{...},"steps":[...]}).
+// Falls back to the canonical names for legacy payloads.
+func revisionSteps(payload string) []string {
+	var env struct {
+		Steps []string `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(payload), &env); err == nil && len(env.Steps) > 0 {
+		return env.Steps
+	}
+	return canonicalPipelineSteps
 }
 
 // renderStack loads stack detail and renders the fragment (with optional Msg).

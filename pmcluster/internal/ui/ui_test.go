@@ -51,7 +51,10 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"stack":{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo"},"revisions":[{"revision":3,"created_at":30},{"revision":2,"created_at":20}],"last_backup":{"status":"succeeded","started_at":25}}`)
 	})
 	mux.HandleFunc("/api/stacks/demo/revisions/3", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"stack":"demo","revision":3,"created_at":30,"source_yaml":"app: demo\nversion: v3\n","rendered_yaml":"services:\n  demo:\n","payload":"{}"}`)
+		write(w, `{"stack":"demo","revision":3,"created_at":30,"source_yaml":"app: demo\nversion: v3\n","rendered_yaml":"services:\n  demo:\n","payload":"{\"payload\":{},\"steps\":[\"Parsing manifest (DSL)\",\"Interpolating and validating manifest\",\"Deploying stack to the swarm\"]}"}`)
+	})
+	mux.HandleFunc("/api/stacks/demo/revisions/2", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"stack":"demo","revision":2,"created_at":20,"source_yaml":"app: demo\nversion: v2\n","rendered_yaml":"services:\n  demo:\n","payload":"{}"}`)
 	})
 
 	mux.HandleFunc("/api/stacks/demo/rollback", func(w http.ResponseWriter, r *http.Request) {
@@ -147,6 +150,14 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/api/cluster/rendered", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"configs":[{"name":"traefik-dynamic","content":"tls:\n  certificates: []\n"},{"name":"infra-stack","content":"version: \"3.9\"\nservices:\n  traefik:\n    image: traefik:v3.6.5\n"}]}`)
+	})
+
+	mux.HandleFunc("/api/cluster/settings", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"settings":{"volume_root":"/var/stack/data","backup_all_nodes":"true","sso_enabled":"false","sso_provider":"github","sso_client_id":"client-id-123","sso_client_secret":"secret123","sso_github_org":"nextrum-sy","sso_cookie_expire":"1h","edge_login_disabled":"true","domain":"nextrum-sy.com","oo_admin_email":"admin@example.com","traefik_admin_user":"admin"}}`)
+	})
+
+	mux.HandleFunc("/api/usage", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"configs":{"c1":["alpha","beta"],"c2":["beta"]},"secrets":{"s1":["alpha"],"s2":["beta"]}}`)
 	})
 
 	siteSoon := time.Now().AddDate(0, 0, 10).UTC().Format(time.RFC3339)
@@ -321,6 +332,45 @@ func TestSettings_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestClusterSettingsUI drives the admin-only cluster settings edit surface:
+// the form renders the known fields (masking the SSO client secret), and the
+// save POST round-trips through the daemon.
+func TestClusterSettingsUI(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	jar := map[string]*http.Cookie{}
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
+
+	resp := doRequest(t, app, http.MethodGet, "/web/settings/cluster", "", jar)
+	b := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /web/settings/cluster = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+	for _, want := range []string{
+		"Cluster settings", "volume_root", "backup_all_nodes",
+		"sso_client_secret", "Save settings", "cluster update", "/var/stack/data",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("cluster settings page missing %q; got: %s", want, b)
+		}
+	}
+	if strings.Contains(b, "secret123") {
+		t.Errorf("sso_client_secret leaked into the rendered page")
+	}
+
+	resp = doRequest(t, app, http.MethodPost, "/web/settings/cluster",
+		"volume_root=/var/stack/data&backup_all_nodes=true&sso_enabled=false&sso_provider=github&sso_client_id=client-id-123&sso_client_secret=&sso_github_org=nextrum-sy&sso_cookie_expire=1h&edge_login_disabled=true&domain=nextrum-sy.com&oo_admin_email=admin@example.com&traefik_admin_user=admin", jar)
+	b = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /web/settings/cluster = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+	if !strings.Contains(b, "Cluster settings saved") {
+		t.Errorf("save confirmation missing; got: %s", b)
+	}
+}
+
 // TestAllControllers exercises every UI route, which drives every pmapi client
 // method (Me, ClusterInfo, Nodes, ListStacks, GetStack, GetRevision, Deploy,
 // Rollback, ListBackups, CreateBackup, ListStackBackups) and every controller.
@@ -357,7 +407,8 @@ func TestAllControllers(t *testing.T) {
 
 	assertFragment(http.MethodGet, "/web/stacks", "", "Stacks", "demo", "3")
 	assertFragment(http.MethodGet, "/web/stacks/demo", "", "Stack · demo", "Last backup:", "succeeded")
-	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source manifest")
+	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source manifest", "Pipeline", "Parsing manifest (DSL)")
+	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/2", "", "Revision 2 · demo", "Pipeline", "Parse", "Deploy")
 	assertFragment(http.MethodGet, "/web/stacks/demo/backups", "", "Backups", "succeeded", "1 recent backup")
 
 	assertFragment(http.MethodPost, "/web/stacks/demo/rollback", "revision=2", "Stack · demo", "Rolled back demo to revision 2")
@@ -671,6 +722,30 @@ func TestTLSMainAndHosts(t *testing.T) {
 	b = readBody(t, resp)
 	if !strings.Contains(b, "Certificate for idlebbookfair.com stored") {
 		t.Errorf("per-host add missing confirmation; got: %s", b)
+	}
+}
+
+// TestUsageUI drives the viewer-only usage page: the config → stacks and
+// secret → stacks tables render the reference graph with stack pills.
+func TestUsageUI(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	jar := map[string]*http.Cookie{}
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
+
+	resp := doRequest(t, app, http.MethodGet, "/web/usage", "", jar)
+	b := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /web/usage = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+	for _, want := range []string{
+		"Usage", "Config → Stacks", "Secret → Stacks", "c1", "c2", "alpha", "beta", "s1", "s2",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("usage page missing %q; got: %s", want, b)
+		}
 	}
 }
 

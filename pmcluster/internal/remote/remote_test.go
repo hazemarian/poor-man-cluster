@@ -343,3 +343,48 @@ func TestRemoteServices(t *testing.T) {
 		t.Errorf("Exec(nil argv) err = %v, want argv error", err)
 	}
 }
+
+// TestRemoteClusterSettingsAndUsage covers the two new read/write surfaces
+// added alongside the cluster settings editor and the usage graph.
+func TestRemoteClusterSettingsAndUsage(t *testing.T) {
+	srv, c := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/cluster/settings":
+			writeJSON(w, http.StatusOK, map[string]any{"settings": map[string]string{"volume_root": "/var/stack/data", "domain": "example.com"}})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/cluster/settings":
+			var in clusterSettingsDTO
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			writeJSON(w, http.StatusOK, map[string]any{"settings": in.Settings})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/usage":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"configs": map[string][]string{"c1": {"alpha", "beta"}},
+				"secrets": map[string][]string{"s1": {"alpha"}},
+			})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+	ctx := context.Background()
+
+	cs := NewClusterSettings(c)
+	got, err := cs.GetClusterSettings(ctx)
+	if err != nil || got["volume_root"] != "/var/stack/data" || got["domain"] != "example.com" {
+		t.Fatalf("GetClusterSettings = %+v, err %v", got, err)
+	}
+	updated, err := cs.UpdateClusterSettings(ctx, map[string]string{"domain": "nextrum-sy.com"})
+	if err != nil || updated["domain"] != "nextrum-sy.com" {
+		t.Fatalf("UpdateClusterSettings = %+v, err %v", updated, err)
+	}
+
+	u, err := NewUsage(c).Get(ctx)
+	if err != nil {
+		t.Fatalf("Usage.Get: %v", err)
+	}
+	if len(u.Configs["c1"]) != 2 || u.Configs["c1"][1] != "beta" {
+		t.Errorf("usage configs[c1] = %v, want [alpha beta]", u.Configs["c1"])
+	}
+	if len(u.Secrets["s1"]) != 1 || u.Secrets["s1"][0] != "alpha" {
+		t.Errorf("usage secrets[s1] = %v, want [alpha]", u.Secrets["s1"])
+	}
+}

@@ -1,6 +1,8 @@
 package controllers
 
 import (
+	"strconv"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/pmapi"
@@ -31,6 +33,70 @@ func backupRowFrom(b pmapi.Backup) backupRow {
 		ID: b.ID, Status: b.Status, StackName: b.StackName, Revision: b.Revision,
 		StartedAt: b.StartedAt, FinishedAt: b.FinishedAt, Archives: len(b.ArchivePaths),
 	}
+}
+
+type backupBrowseData struct {
+	Run   *pmapi.Backup
+	Files []pmapi.BackupFile
+	Error string
+	Msg   string
+}
+
+// Browse renders the file listing of one backup run.
+func (c Backups) Browse(g *gin.Context) {
+	ctx := g.Request.Context()
+	_, _, configured := c.loadParams(ctx)
+	d := backupBrowseData{}
+	if !configured {
+		d.Error = "pmcluster API not configured. Open Settings first."
+		c.Views.Fragment(g, "backupbrowse", d)
+		return
+	}
+	id, err := strconv.ParseInt(g.Param("id"), 10, 64)
+	if err != nil {
+		d.Error = "invalid backup id"
+		c.Views.Fragment(g, "backupbrowse", d)
+		return
+	}
+	run, files, err := c.API.BrowseBackup(ctx, id)
+	if err != nil {
+		d.Error = err.Error()
+		c.Views.Fragment(g, "backupbrowse", d)
+		return
+	}
+	d.Run, d.Files = run, files
+	c.Views.Fragment(g, "backupbrowse", d)
+}
+
+// Restore extracts a backup run's archives back into the volume root and
+// re-renders the browse view.
+func (c Backups) Restore(g *gin.Context) {
+	ctx := g.Request.Context()
+	_, _, configured := c.loadParams(ctx)
+	d := backupBrowseData{}
+	if !configured {
+		d.Error = "pmcluster API not configured. Open Settings first."
+		c.Views.Fragment(g, "backupbrowse", d)
+		return
+	}
+	id, err := strconv.ParseInt(g.Param("id"), 10, 64)
+	if err != nil {
+		d.Error = "invalid backup id"
+		c.Views.Fragment(g, "backupbrowse", d)
+		return
+	}
+	n, err := c.API.RestoreBackup(ctx, id, "/var/stack/data")
+	if err != nil {
+		d.Error = err.Error()
+	} else {
+		d.Msg = "Restored " + strconv.Itoa(n) + " file(s) under /var/stack/data."
+	}
+	run, files, err := c.API.BrowseBackup(ctx, id)
+	if err != nil && d.Error == "" {
+		d.Error = err.Error()
+	}
+	d.Run, d.Files = run, files
+	c.Views.Fragment(g, "backupbrowse", d)
 }
 
 // List renders the recent backups table.

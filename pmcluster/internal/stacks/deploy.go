@@ -129,6 +129,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		app      *dsl.App
 		rendered []byte
 		revision int64
+		steps    []string
 	)
 
 	wf.Add("Parsing manifest (DSL)", func(ctx context.Context) error {
@@ -169,7 +170,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 			return fmt.Errorf("assign revision: %w", err)
 		}
 		revision = next
-		payloadJSON, _ := json.Marshal(p)
+		payloadJSON, _ := json.Marshal(payloadEnvelope{Payload: p, Steps: steps})
 		rev := &store.StackRevision{
 			StackName:    app.Name,
 			Revision:     revision,
@@ -197,6 +198,10 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		_ = s.Deployer.PruneStaleContainers(ctx, app.Name, "10m")
 		return nil
 	})
+
+	// Snapshot the step names in order (all steps are added before Run) so the
+	// revision records the pipeline it ran.
+	steps = wf.Steps()
 
 	if err := wf.Run(ctx); err != nil {
 		return nil, err
@@ -264,6 +269,42 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 	})
 }
 
+// payloadEnvelope is the persisted shape of payload_json since the pipeline
+// steps feature: the deploy payload plus the ordered step names. Legacy
+// revisions store just the payload itself (no envelope).
+type payloadEnvelope struct {
+	Payload Payload  `json:"payload"`
+	Steps   []string `json:"steps"`
+}
+
+// decodeStoredPayload reads a stored payload_json into (payload, steps). It
+// accepts both the envelope shape ({"payload":{...},"steps":[...]}) and the
+// legacy shape (the raw JSON *is* the payload). An empty or unparseable value
+// yields a zero payload with no steps.
+func decodeStoredPayload(raw string) (Payload, []string) {
+	if raw == "" {
+		return Payload{}, nil
+	}
+	var env payloadEnvelope
+	if err := json.Unmarshal([]byte(raw), &env); err == nil && hasJSONKey(raw, "payload") {
+		return env.Payload, env.Steps
+	}
+	var p Payload
+	if err := json.Unmarshal([]byte(raw), &p); err == nil {
+		return p, nil
+	}
+	return Payload{}, nil
+}
+
+func hasJSONKey(raw, key string) bool {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return false
+	}
+	_, ok := m[key]
+	return ok
+}
+
 func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision int64) (res *Result, retErr error) {
 	counter, hist, tracer := instruments()
 	ctx, span := tracer.Start(ctx, "pmcluster.rollback",
@@ -316,9 +357,10 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 			return fmt.Errorf("assign revision: %w", err)
 		}
 		revision = next
+		srcPayload, _ := decodeStoredPayload(row.PayloadJSON.String)
 		rolledBackPayload, _ := json.Marshal(map[string]any{
 			"rollback_of": sourceRevision,
-			"original":    json.RawMessage(row.PayloadJSON.String),
+			"original":    srcPayload,
 		})
 		rev := &store.StackRevision{
 			StackName:    stackName,

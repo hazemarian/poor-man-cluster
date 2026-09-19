@@ -43,7 +43,7 @@ func (a *Local) List(ctx context.Context) ([]APIKey, error) {
 	}
 	keys := make([]APIKey, 0, len(rows))
 	for _, r := range rows {
-		keys = append(keys, APIKey{ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt})
+		keys = append(keys, APIKey{ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt, LastUsedAt: r.LastUsedAt})
 	}
 	return keys, nil
 }

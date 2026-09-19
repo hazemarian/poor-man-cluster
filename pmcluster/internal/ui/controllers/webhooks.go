@@ -15,11 +15,12 @@ import (
 type Webhooks struct{ *Controller }
 
 type webhooksData struct {
-	Sources []webhookRow
-	Secret  string
-	Source  string
-	Error   string
-	Msg     string
+	Sources    []webhookRow
+	Deliveries []deliveryRow
+	Source     string
+	Secret     string
+	Error      string
+	Msg        string
 }
 
 // webhookRow carries raw epoch int64 timestamps; the template renders them via
@@ -29,6 +30,36 @@ type webhookRow struct {
 	Description string
 	CreatedAt   int64
 	LastUsedAt  int64
+}
+
+// deliveryRow is one recorded webhook delivery attempt, rendered in the
+// per-source history table.
+type deliveryRow struct {
+	ID        int64
+	Status    string
+	StackName string
+	Revision  int64
+	RepoURL   string
+	File      string
+	Error     string
+	CreatedAt int64
+}
+
+func deliveryRows(ds []pmapi.WebhookDelivery) []deliveryRow {
+	out := make([]deliveryRow, 0, len(ds))
+	for _, d := range ds {
+		out = append(out, deliveryRow{
+			ID:        d.ID,
+			Status:    d.Status,
+			StackName: d.StackName,
+			Revision:  d.Revision,
+			RepoURL:   d.RepoURL,
+			File:      d.File,
+			Error:     d.Error,
+			CreatedAt: d.CreatedAt,
+		})
+	}
+	return out
 }
 
 func webhookRows(srcs []pmapi.Webhook) []webhookRow {
@@ -120,4 +151,23 @@ func (c Webhooks) fetch(ctx context.Context, d *webhooksData) []webhookRow {
 		return nil
 	}
 	return webhookRows(srcs)
+}
+
+// Deliveries renders the recorded delivery history for one source, newest
+// first (limit clamped to the daemon page size).
+func (c Webhooks) Deliveries(g *gin.Context) {
+	ctx := g.Request.Context()
+	_, _, configured := c.loadParams(ctx)
+	d := webhooksData{Source: g.Param("source")}
+	if configured && d.Source != "" {
+		ds, err := c.API.ListWebhookDeliveries(ctx, d.Source, 50)
+		if err != nil {
+			d.Error = err.Error()
+		} else {
+			d.Deliveries = deliveryRows(ds)
+		}
+	} else if !configured {
+		d.Error = "pmcluster API not configured. Open Settings first."
+	}
+	c.Views.Fragment(g, "webhookdeliveries", d)
 }

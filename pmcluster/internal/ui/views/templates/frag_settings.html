@@ -29,6 +29,12 @@
   {{if .ApplySummary}}<p class="msg ok" style="white-space:pre">{{.ApplySummary}}</p>{{end}}
 </div>
 
+<div class="card">
+  <h2>Cluster settings</h2>
+  <p class="sub">Storage root, backups, SSO and domain settings. Saved by the daemon and applied on the next <code>cluster update</code>.</p>
+  <button class="btn" hx-get="/web/settings/cluster" hx-target="#view" hx-swap="innerHTML" hx-push-url="true">Edit cluster settings</button>
+</div>
+
 <div class="section-head">
   <h2>Cluster configs</h2>
   <button class="btn" hx-get="/web/settings/configs/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add Config</button>

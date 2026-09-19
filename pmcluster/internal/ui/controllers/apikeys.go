@@ -24,15 +24,16 @@ type apiKeysData struct {
 }
 
 type apiKeyRow struct {
-	ID        int64
-	Name      string
-	CreatedAt int64
+	ID         int64
+	Name       string
+	CreatedAt  int64
+	LastUsedAt int64
 }
 
 func apiKeyRows(keys []pmapi.APIKey) []apiKeyRow {
 	out := make([]apiKeyRow, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, apiKeyRow{ID: k.ID, Name: k.Name, CreatedAt: k.CreatedAt})
+		out = append(out, apiKeyRow{ID: k.ID, Name: k.Name, CreatedAt: k.CreatedAt, LastUsedAt: k.LastUsedAt})
 	}
 	return out
 }

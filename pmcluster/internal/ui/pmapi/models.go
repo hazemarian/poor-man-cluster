@@ -93,6 +93,13 @@ type Backup struct {
 	FinishedAt   int64    `json:"finished_at"`
 }
 
+// BackupFile is one entry inside a backup archive listing.
+type BackupFile struct {
+	Path  string `json:"path"`
+	Size  int64  `json:"size"`
+	IsDir bool   `json:"is_dir"`
+}
+
 // DeployPayload is POST /api/stacks body.
 type DeployPayload struct {
 	AppName  string `json:"app_name,omitempty"`
@@ -168,12 +175,26 @@ type WebhookCreated struct {
 	Secret string `json:"secret"`
 }
 
+// WebhookDelivery is one recorded delivery attempt for a webhook source.
+type WebhookDelivery struct {
+	ID        int64  `json:"id"`
+	Source    string `json:"source"`
+	Status    string `json:"status"`
+	StackName string `json:"stack_name,omitempty"`
+	Revision  int64  `json:"revision,omitempty"`
+	RepoURL   string `json:"repo_url,omitempty"`
+	File      string `json:"file,omitempty"`
+	Error     string `json:"error,omitempty"`
+	CreatedAt int64  `json:"created_at"`
+}
+
 // APIKey is one API user row (no token material — the token is only returned
 // once at creation via APIKeyCreated).
 type APIKey struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	CreatedAt int64  `json:"created_at"`
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	CreatedAt  int64  `json:"created_at"`
+	LastUsedAt int64  `json:"last_used_at"`
 }
 
 // APIKeyCreated is the POST /api/api_keys response — it carries the one-time
@@ -239,6 +260,17 @@ type RenderedConfig struct {
 
 type renderedConfigsResponse struct {
 	Configs []RenderedConfig `json:"configs"`
+}
+
+// ClusterSettings is GET/PUT /api/cluster/settings — the editable cluster
+// settings keyed by name (e.g. "volume_root", "sso_enabled", "domain").
+type ClusterSettings map[string]string
+
+// Usage is GET /api/usage — which stacks reference which configs and secrets,
+// computed from the latest rendered compose per stack.
+type Usage struct {
+	Configs map[string][]string `json:"configs"`
+	Secrets map[string][]string `json:"secrets"`
 }
 
 // ConfigVersion is one history row of GET /api/configs/{name}/versions.

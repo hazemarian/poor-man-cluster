@@ -40,6 +40,16 @@ func (w *Workflow) Add(name string, run func(ctx context.Context) error) *Workfl
 	return w
 }
 
+// Steps returns the ordered step names added so far. It is a snapshot — later
+// Add calls are not reflected in a previously returned slice.
+func (w *Workflow) Steps() []string {
+	out := make([]string, 0, len(w.steps))
+	for _, s := range w.steps {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
 // Run executes every step in order. Each step's name is printed as a
 // "▶ <name>" progress line before it runs. The first error stops the run
 // and is wrapped with the failing step's name. Run is safe to call once.

@@ -1,0 +1,44 @@
+{{define "usage"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+
+<h1 style="margin:0 0 4px">Usage</h1>
+<p class="sub">Which stacks reference which configs and secrets, computed from each stack's latest rendered compose.</p>
+
+<div class="card">
+  <h2 style="margin-top:0">Config → Stacks</h2>
+  {{if .Configs}}
+  <table>
+    <thead><tr><th>Config</th><th>Used by</th></tr></thead>
+    <tbody>
+      {{range $name, $stacks := .Configs}}
+      <tr>
+        <td><code>{{$name}}</code></td>
+        <td>{{range $stacks}}<span class="pill good">{{.}}</span> {{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">No configs referenced by any stack.</div>
+  {{end}}
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">Secret → Stacks</h2>
+  {{if .Secrets}}
+  <table>
+    <thead><tr><th>Secret</th><th>Used by</th></tr></thead>
+    <tbody>
+      {{range $name, $stacks := .Secrets}}
+      <tr>
+        <td><code>{{$name}}</code></td>
+        <td>{{range $stacks}}<span class="pill warn">{{.}}</span> {{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="empty">No secrets referenced by any stack.</div>
+  {{end}}
+</div>
+{{end}}

@@ -46,7 +46,8 @@ Body     : {"app_name": "...", "version": "...", "manifest": "&lt;dsl-yaml&gt;"}
     <td class="muted">{{if .Description}}{{.Description}}{{else}}—{{end}}</td>
     <td class="muted">{{ts .CreatedAt}}</td>
     <td class="muted">{{ts .LastUsedAt}}</td>
-    <td style="text-align:right">
+    <td style="text-align:right; white-space:nowrap">
+      <a class="btn sm ghost" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true">History</a>
       <button class="btn danger" hx-post="/web/webhooks/remove/{{.Source}}" hx-target="#view" hx-swap="innerHTML">Revoke</button>
     </td>
   </tr>

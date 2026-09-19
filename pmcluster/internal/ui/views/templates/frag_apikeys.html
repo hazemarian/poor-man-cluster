@@ -33,12 +33,13 @@ hash — it cannot be retrieved again.</p>
 <div class="card" style="padding:6px 14px">
 {{if .Keys}}
 <table>
-  <tr><th>ID</th><th>Name</th><th>Created</th><th></th></tr>
+  <tr><th>ID</th><th>Name</th><th>Created</th><th>Last used</th><th></th></tr>
   {{range .Keys}}
   <tr>
     <td class="muted">{{.ID}}</td>
     <td><code>{{.Name}}</code></td>
     <td class="muted">{{ts .CreatedAt}}</td>
+    <td class="muted">{{if gt .LastUsedAt 0}}{{ts .LastUsedAt}}{{else}}—{{end}}</td>
     <td style="text-align:right">
       <button class="btn danger sm" hx-post="/web/apikeys/remove/{{.ID}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Revoke API key {{.Name}}? Its bearer token stops working immediately.')">Revoke</button>
     </td>

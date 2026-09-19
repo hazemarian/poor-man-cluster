@@ -368,3 +368,65 @@ func TestDeleteUser(t *testing.T) {
 		}
 	})
 }
+
+// TestTouchUserAndLastUsedRoundTrip verifies that a successful token lookup
+// (both the v2 and legacy paths) records last_used_at, that TouchUser works
+// directly, and that ListUsers surfaces the value.
+func TestTouchUserAndLastUsedRoundTrip(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	// A fresh user reports 0 (never used).
+	tokV2, _, _ := createV2User(t, s, "alice")
+	rows, err := s.ListUsers(ctx)
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	if len(rows) != 1 || rows[0].LastUsedAt != 0 {
+		t.Fatalf("fresh user LastUsedAt = %+v, want 0", rows)
+	}
+
+	// A v2 token lookup touches the user.
+	u, err := s.UserByToken(ctx, tokV2)
+	if err != nil || u == nil {
+		t.Fatalf("UserByToken: %v, %+v", err, u)
+	}
+	rows, err = s.ListUsers(ctx)
+	if err != nil {
+		t.Fatalf("ListUsers after v2 lookup: %v", err)
+	}
+	if rows[0].LastUsedAt == 0 {
+		t.Errorf("LastUsedAt still 0 after successful v2 token lookup")
+	}
+
+	// Direct TouchUser round-trips (and returns nil for a missing id).
+	if err := s.TouchUser(ctx, u.ID); err != nil {
+		t.Fatalf("TouchUser: %v", err)
+	}
+	if err := s.TouchUser(ctx, 9999); err != nil {
+		t.Errorf("TouchUser(unknown id) = %v, want nil (best-effort)", err)
+	}
+
+	// A legacy token lookup also touches its user.
+	legacyToken := "old-plain-legacy-token"
+	lh, err := auth.HashToken(legacyToken)
+	if err != nil {
+		t.Fatalf("HashToken: %v", err)
+	}
+	if _, err := s.CreateUser(ctx, "legacy-user", "", lh); err != nil {
+		t.Fatalf("CreateUser (legacy): %v", err)
+	}
+	lu, err := s.UserByToken(ctx, legacyToken)
+	if err != nil || lu == nil {
+		t.Fatalf("UserByToken (legacy): %v, %+v", err, lu)
+	}
+	rows, err = s.ListUsers(ctx)
+	if err != nil {
+		t.Fatalf("ListUsers after legacy lookup: %v", err)
+	}
+	for _, r := range rows {
+		if r.Name == "legacy-user" && r.LastUsedAt == 0 {
+			t.Errorf("legacy user LastUsedAt still 0 after successful legacy lookup")
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
@@ -58,4 +59,47 @@ func (a *Webhooks) List(ctx context.Context) ([]webhooks.Source, error) {
 
 func (a *Webhooks) Delete(ctx context.Context, source string) error {
 	return a.c.do(ctx, http.MethodDelete, "/webhooks/"+url.PathEscape(source), nil, nil)
+}
+
+type deliveryDTO struct {
+	ID        int64  `json:"id"`
+	Source    string `json:"source"`
+	Status    string `json:"status"`
+	StackName string `json:"stack_name,omitempty"`
+	Revision  int64  `json:"revision,omitempty"`
+	RepoURL   string `json:"repo_url,omitempty"`
+	File      string `json:"file,omitempty"`
+	Error     string `json:"error,omitempty"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+type deliveryListDTO struct {
+	Deliveries []deliveryDTO `json:"deliveries"`
+}
+
+// Deliveries fetches delivery history for a source. limit <= 0 requests all.
+func (a *Webhooks) Deliveries(ctx context.Context, source string, limit int) ([]webhooks.Delivery, error) {
+	path := "/webhooks/" + url.PathEscape(source) + "/deliveries"
+	if limit > 0 {
+		path += "?limit=" + strconv.Itoa(limit)
+	}
+	var out deliveryListDTO
+	if err := a.c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	ds := make([]webhooks.Delivery, 0, len(out.Deliveries))
+	for _, d := range out.Deliveries {
+		ds = append(ds, webhooks.Delivery{
+			ID:        d.ID,
+			Source:    d.Source,
+			Status:    d.Status,
+			StackName: d.StackName,
+			Revision:  d.Revision,
+			RepoURL:   d.RepoURL,
+			File:      d.File,
+			Error:     d.Error,
+			CreatedAt: d.CreatedAt,
+		})
+	}
+	return ds, nil
 }

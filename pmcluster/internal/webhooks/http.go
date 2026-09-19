@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -23,6 +24,7 @@ func (w *HTTP) Mount(r chi.Router) {
 	r.Get("/webhooks", w.list)
 	r.Post("/webhooks", w.create)
 	r.Delete("/webhooks/{source}", w.remove)
+	r.Get("/webhooks/{source}/deliveries", w.deliveries)
 }
 
 type webhookRow struct {
@@ -92,6 +94,44 @@ func (w *HTTP) remove(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	res.WriteHeader(http.StatusNoContent)
+}
+
+type deliveryRow struct {
+	ID        int64  `json:"id"`
+	Source    string `json:"source"`
+	Status    string `json:"status"`
+	StackName string `json:"stack_name,omitempty"`
+	Revision  int64  `json:"revision,omitempty"`
+	RepoURL   string `json:"repo_url,omitempty"`
+	File      string `json:"file,omitempty"`
+	Error     string `json:"error,omitempty"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// deliveries returns delivery history for a source (newest first).
+// Optional query param ?limit= clamps the result (default 50).
+func (w *HTTP) deliveries(res http.ResponseWriter, req *http.Request) {
+	source := chi.URLParam(req, "source")
+	if source == "" {
+		writeErr(res, http.StatusBadRequest, "source is required")
+		return
+	}
+	limit := 50
+	if v := req.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+	ds, err := w.Svc.Deliveries(req.Context(), source, limit)
+	if err != nil {
+		writeErr(res, http.StatusInternalServerError, "list webhook deliveries: "+err.Error())
+		return
+	}
+	rows := make([]deliveryRow, 0, len(ds))
+	for _, d := range ds {
+		rows = append(rows, deliveryRow(d))
+	}
+	writeJSON(res, http.StatusOK, map[string]any{"deliveries": rows})
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

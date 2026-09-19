@@ -90,3 +90,30 @@ func TestLocalDeleteOrdinaryUser(t *testing.T) {
 		t.Errorf("List after delete = %+v, want empty", keys)
 	}
 }
+
+func TestLocalListSurfacesLastUsedAt(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	svc := NewLocal(st)
+
+	id, token, err := svc.Create(ctx, "alice")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Authenticating with the token must bump last_used_at.
+	if _, err := st.UserByToken(ctx, token); err != nil {
+		t.Fatalf("UserByToken: %v", err)
+	}
+
+	keys, err := svc.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(keys) != 1 || keys[0].ID != id {
+		t.Fatalf("List = %+v, want single alice/%d", keys, id)
+	}
+	if keys[0].LastUsedAt == 0 {
+		t.Errorf("LastUsedAt = 0 after auth, want non-zero")
+	}
+}

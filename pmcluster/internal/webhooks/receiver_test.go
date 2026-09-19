@@ -107,6 +107,7 @@ func buildHandler(t *testing.T, st *store.Store, c *credentials.Cipher, dep *rec
 	h := &Receiver{
 		Sources: NewLocal(st, c),
 		Deploy:  deploySvc,
+		Record:  NewLocal(st, c),
 	}
 	r := chi.NewRouter()
 	h.Mount(r)
@@ -194,6 +195,74 @@ func TestHandlerRequiresProvenance(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "provenance required") {
 		t.Errorf("400 body = %q, want 'provenance required'", b)
+	}
+}
+
+// TestHandlerRecordsDeliveries asserts the receiver persists one delivery row
+// per attempt — success and failure alike — with provenance captured.
+func TestHandlerRecordsDeliveries(t *testing.T) {
+	const sourceName = "github-prod"
+
+	st, c, dep, secret := testDeps(t, sourceName)
+	srv, _ := buildHandler(t, st, c, dep)
+	ctx := context.Background()
+
+	post := func(body []byte) int {
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/webhook/"+sourceName, bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		now := time.Now().Unix()
+		req.Header.Set("X-Pmcluster-Timestamp", strconv.FormatInt(now, 10))
+		req.Header.Set("X-Pmcluster-Signature", computeHMAC(secret, body, now))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		defer resp.Body.Close()
+		io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+
+	// 1. Successful deploy → accepted delivery with provenance.
+	body := validPayload(t)
+	if code := post(body); code != http.StatusOK {
+		t.Fatalf("success POST = %d, want 200", code)
+	}
+
+	// 2. Payload missing provenance → bad_request delivery.
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	delete(payload, "repo_url")
+	delete(payload, "file")
+	noProv, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if code := post(noProv); code != http.StatusBadRequest {
+		t.Fatalf("no-provenance POST = %d, want 400", code)
+	}
+
+	// 3. Assert the recorded rows.
+	ds, err := NewLocal(st, c).Deliveries(ctx, sourceName, 0)
+	if err != nil {
+		t.Fatalf("Deliveries: %v", err)
+	}
+	if len(ds) != 2 {
+		t.Fatalf("got %d deliveries, want 2", len(ds))
+	}
+	// Newest first: the bad_request arrived second.
+	if ds[0].Status != "bad_request" || ds[1].Status != "accepted" {
+		t.Errorf("statuses = [%s %s], want [bad_request accepted]", ds[0].Status, ds[1].Status)
+	}
+	if ds[1].StackName == "" || ds[1].Revision == 0 {
+		t.Errorf("accepted delivery = %+v, want stack name with revision", ds[1])
+	}
+	if ds[0].Error == "" {
+		t.Error("bad_request delivery should carry the provenance error")
 	}
 }
 

@@ -29,9 +29,10 @@ func (h *HTTP) Mount(r chi.Router) {
 }
 
 type apiKeyRow struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	CreatedAt int64  `json:"created_at"`
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	CreatedAt  int64  `json:"created_at"`
+	LastUsedAt int64  `json:"last_used_at"`
 }
 
 func (h *HTTP) list(res http.ResponseWriter, req *http.Request) {

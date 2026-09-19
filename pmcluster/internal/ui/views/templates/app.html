@@ -155,6 +155,9 @@
     .timeline li.current::before{background:var(--good);border-color:var(--good)}
     .timeline li .t-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
     .timeline li .t-meta{color:var(--muted);font-size:12px}
+    /* Deploy pipeline step list (revision view). */
+    .pipeline{list-style:none;margin:0 0 20px;padding:0;display:flex;flex-direction:column;gap:6px}
+    .pipeline li{color:var(--muted);font-size:13px}
     /* Search filter boxes. */
     .filter-box{max-width:340px;margin-bottom:12px}
     .filter-box input{margin-top:0}
@@ -181,6 +184,7 @@
       <a href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true">Overview</a>
       <a href="/web/stacks"   hx-get="/web/stacks"    hx-target="#view" hx-push-url="true">Stacks</a>
       <a href="/web/services" hx-get="/web/services"  hx-target="#view" hx-push-url="true">Services</a>
+      <a href="/web/usage"    hx-get="/web/usage"     hx-target="#view" hx-push-url="true">Usage</a>
       <a href="/web/backups"  hx-get="/web/backups"   hx-target="#view" hx-push-url="true">Backups</a>
       <a href="/web/tls"      hx-get="/web/tls"       hx-target="#view" hx-push-url="true">TLS</a>
       <a href="/web/webhooks" hx-get="/web/webhooks"  hx-target="#view" hx-push-url="true">Webhooks</a>

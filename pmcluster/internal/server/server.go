@@ -117,9 +117,11 @@ func New(d Deps) http.Handler {
 	r.Get("/health", api.Health)
 
 	if d.WebhookSources != nil && d.DeployService != nil {
+		rec, _ := d.WebhookSources.(webhooks.Recorder)
 		(&webhooks.Receiver{
 			Sources: d.WebhookSources,
 			Deploy:  d.DeployService,
+			Record:  rec,
 		}).Mount(r)
 	}
 
@@ -129,6 +131,10 @@ func New(d Deps) http.Handler {
 		if d.Docker != nil {
 			r.Get("/cluster/info", api.ClusterInfoHandler(d.Docker))
 			r.Get("/nodes", api.NodesHandler(d.Docker))
+		}
+		if d.Store != nil {
+			(&clusterSettingsHTTP{Store: d.Store}).Mount(r)
+			(&usageHTTP{Store: d.Store}).Mount(r)
 		}
 		if d.Store != nil && d.DeployService != nil {
 			(&stacks.HTTP{

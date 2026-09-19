@@ -8,6 +8,13 @@
   · created {{ts .Rev.CreatedAt}}
 </p>
 
+<h2>Pipeline</h2>
+<ol class="pipeline">
+  {{range .Steps}}
+  <li><span class="pill warn">▶</span> {{.}}</li>
+  {{end}}
+</ol>
+
 <h2>Source manifest</h2>
 <pre>{{.Rev.SourceYAML}}</pre>
 

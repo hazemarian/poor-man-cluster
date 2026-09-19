@@ -152,6 +152,7 @@ func (a *App) Mount(engine *gin.Engine) {
 
 	bk := controllers.Backups{Controller: a.ctrl}
 	vr.GET("/backups", bk.List)
+	vr.GET("/backups/:id/files", bk.Browse)
 
 	dp := controllers.Deploy{Controller: a.ctrl}
 	vr.GET("/deploy", dp.Page)
@@ -173,6 +174,10 @@ func (a *App) Mount(engine *gin.Engine) {
 
 	wh := controllers.Webhooks{Controller: a.ctrl}
 	vr.GET("/webhooks", wh.Page)
+	vr.GET("/webhooks/:source/deliveries", wh.Deliveries)
+
+	usg := controllers.Usage{Controller: a.ctrl}
+	vr.GET("/usage", usg.Page)
 
 	// ---- operator: mutations (sync/rollback/remove, service ops, backups,
 	// deploy submit, configs/secrets edits, tls, webhooks) ----
@@ -196,6 +201,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	op.GET("/stacks/:name/secrets/reveal/:secret_name", scc.RevealSecret)
 
 	op.POST("/backups", bk.Create)
+	op.POST("/backups/:id/restore", bk.Restore)
 
 	op.POST("/deploy", dp.Submit)
 
@@ -226,6 +232,8 @@ func (a *App) Mount(engine *gin.Engine) {
 
 	ad.POST("/settings", stt.Save)
 	ad.POST("/settings/apply", stt.Apply)
+	ad.GET("/settings/cluster", stt.ClusterSettingsPage)
+	ad.POST("/settings/cluster", stt.ClusterSettingsSave)
 
 	us := controllers.Users{Controller: a.ctrl}
 	ad.GET("/users", us.List)

@@ -107,3 +107,55 @@ func (s *Store) MarkWebhookSourceUsed(ctx context.Context, source string) error 
 	)
 	return err
 }
+
+// WebhookDelivery is one recorded delivery against a webhook source:
+// the outcome status plus deploy provenance when the request made it to deploy.
+type WebhookDelivery struct {
+	ID        int64
+	Source    string
+	Status    string // accepted | unauthorized | bad_request | server_error
+	StackName string
+	Revision  int64
+	RepoURL   string
+	File      string
+	Error     string
+	CreatedAt int64
+}
+
+// RecordWebhookDelivery persists one delivery outcome. Best-effort —
+// recording must never fail the webhook request itself.
+func (s *Store) RecordWebhookDelivery(ctx context.Context, d *WebhookDelivery) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO webhook_deliveries (source, status, stack_name, revision, repo_url, file, error, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.Source, d.Status, d.StackName, d.Revision, d.RepoURL, d.File, d.Error, time.Now().Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("insert webhook delivery: %w", err)
+	}
+	return nil
+}
+
+// ListWebhookDeliveries returns the most recent deliveries for a source,
+// newest first, limited to `limit` rows (0 = no limit).
+func (s *Store) ListWebhookDeliveries(ctx context.Context, source string, limit int) ([]*WebhookDelivery, error) {
+	q := `SELECT id, source, status, stack_name, revision, repo_url, file, error, created_at
+		  FROM webhook_deliveries WHERE source = ? ORDER BY created_at DESC, id DESC`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q, source)
+	if err != nil {
+		return nil, fmt.Errorf("query webhook deliveries: %w", err)
+	}
+	defer rows.Close()
+	var out []*WebhookDelivery
+	for rows.Next() {
+		var d WebhookDelivery
+		if err := rows.Scan(&d.ID, &d.Source, &d.Status, &d.StackName, &d.Revision, &d.RepoURL, &d.File, &d.Error, &d.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan webhook delivery: %w", err)
+		}
+		out = append(out, &d)
+	}
+	return out, rows.Err()
+}

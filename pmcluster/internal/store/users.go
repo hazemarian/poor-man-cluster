@@ -43,16 +43,17 @@ func (s *Store) CreateUser(ctx context.Context, name, tokenID, tokenHash string)
 // UserRow is a lightweight non-secret user record for listing API keys in
 // the operator UI. It deliberately exposes no token material.
 type UserRow struct {
-	ID        int64
-	Name      string
-	CreatedAt int64
+	ID         int64
+	Name       string
+	CreatedAt  int64
+	LastUsedAt int64
 }
 
-// ListUsers returns every user (id, name, created_at) ordered by name,
-// without any token/hash material.
+// ListUsers returns every user (id, name, created_at, last_used_at) ordered
+// by name, without any token/hash material.
 func (s *Store) ListUsers(ctx context.Context) ([]UserRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, created_at FROM users ORDER BY name`)
+		`SELECT id, name, created_at, last_used_at FROM users ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
@@ -60,7 +61,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]UserRow, error) {
 	var out []UserRow
 	for rows.Next() {
 		var u UserRow
-		if err := rows.Scan(&u.ID, &u.Name, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.CreatedAt, &u.LastUsedAt); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		out = append(out, u)
@@ -88,12 +89,22 @@ func (s *Store) CountUsers(ctx context.Context) (int, error) {
 func (s *Store) UserByToken(ctx context.Context, token string) (*auth.User, error) {
 	tokenID, secret := auth.SplitToken(token)
 
+	var (
+		u   *auth.User
+		err error
+	)
 	if tokenID != "" {
-
-		return s.userByTokenID(ctx, tokenID, secret)
+		u, err = s.userByTokenID(ctx, tokenID, secret)
+	} else {
+		u, err = s.userByTokenLegacy(ctx, token)
 	}
-
-	return s.userByTokenLegacy(ctx, token)
+	// Best-effort last-used tracking on every successful lookup (both the v2
+	// and legacy paths). The touch must never fail auth, so its error is
+	// deliberately ignored.
+	if u != nil {
+		_ = s.TouchUser(ctx, u.ID)
+	}
+	return u, err
 }
 
 // userByTokenID does a single-row lookup by the public token_id and
@@ -173,8 +184,8 @@ func (s *Store) UserByID(ctx context.Context, id int64) (*auth.User, error) {
 // Returns ErrUserNotFound when no row matches.
 func (s *Store) UserByName(ctx context.Context, name string) (*UserRow, error) {
 	var u UserRow
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at FROM users WHERE name = ?`, name).
-		Scan(&u.ID, &u.Name, &u.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, last_used_at FROM users WHERE name = ?`, name).
+		Scan(&u.ID, &u.Name, &u.CreatedAt, &u.LastUsedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUserNotFound
@@ -182,6 +193,18 @@ func (s *Store) UserByName(ctx context.Context, name string) (*UserRow, error) {
 		return nil, fmt.Errorf("query user by name: %w", err)
 	}
 	return &u, nil
+}
+
+// TouchUser records a successful API-key use for a user, best-effort. The
+// returned error is intentionally ignorable: last-used tracking must never
+// break authentication.
+func (s *Store) TouchUser(ctx context.Context, id int64) error {
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE users SET last_used_at = ? WHERE id = ?`, time.Now().Unix(), id,
+	); err != nil {
+		return fmt.Errorf("touch user: %w", err)
+	}
+	return nil
 }
 
 // DeleteUser removes a user row (revoking its bearer token immediately).

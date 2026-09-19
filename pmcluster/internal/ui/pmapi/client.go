@@ -225,6 +225,26 @@ func (c *Client) ListStackBackups(ctx context.Context, name string) ([]Backup, e
 	return body.Backups, err
 }
 
+// BrowseBackup lists the archive contents of one backup run.
+func (c *Client) BrowseBackup(ctx context.Context, id int64) (*Backup, []BackupFile, error) {
+	var body struct {
+		Run   *Backup      `json:"run"`
+		Files []BackupFile `json:"files"`
+	}
+	err := c.do(ctx, http.MethodGet, "/backups/"+strconv.FormatInt(id, 10)+"/files", nil, &body)
+	return body.Run, body.Files, err
+}
+
+// RestoreBackup extracts a backup run's archives back under destRoot.
+func (c *Client) RestoreBackup(ctx context.Context, id int64, destRoot string) (int, error) {
+	var body struct {
+		Restored int `json:"restored"`
+	}
+	err := c.do(ctx, http.MethodPost, "/backups/"+strconv.FormatInt(id, 10)+"/restore",
+		map[string]any{"dest_root": destRoot}, &body)
+	return body.Restored, err
+}
+
 // ListHostCerts returns every per-host TLS certificate.
 func (c *Client) ListHostCerts(ctx context.Context) ([]HostCert, error) {
 	var out hostCertsResponse
@@ -283,6 +303,20 @@ func (c *Client) CreateWebhook(ctx context.Context, source, description string) 
 // DeleteWebhook removes a webhook source, revoking its shared secret.
 func (c *Client) DeleteWebhook(ctx context.Context, source string) error {
 	return c.do(ctx, http.MethodDelete, "/webhooks/"+url.PathEscape(source), nil, nil)
+}
+
+// ListWebhookDeliveries returns the recorded delivery history for a source,
+// newest first. limit <= 0 returns the daemon's default page size.
+func (c *Client) ListWebhookDeliveries(ctx context.Context, source string, limit int) ([]WebhookDelivery, error) {
+	path := "/webhooks/" + url.PathEscape(source) + "/deliveries"
+	if limit > 0 {
+		path += "?limit=" + strconv.Itoa(limit)
+	}
+	var body struct {
+		Deliveries []WebhookDelivery `json:"deliveries"`
+	}
+	err := c.do(ctx, http.MethodGet, path, nil, &body)
+	return body.Deliveries, err
 }
 
 // ListAPIKeys returns every API user (without token material).
@@ -419,6 +453,32 @@ func (c *Client) ListRenderedConfigs(ctx context.Context) ([]RenderedConfig, err
 		return nil, err
 	}
 	return out.Configs, nil
+}
+
+// GetClusterSettings returns the editable cluster settings.
+func (c *Client) GetClusterSettings(ctx context.Context) (ClusterSettings, error) {
+	var body struct {
+		Settings ClusterSettings `json:"settings"`
+	}
+	err := c.do(ctx, http.MethodGet, "/cluster/settings", nil, &body)
+	return body.Settings, err
+}
+
+// UpdateClusterSettings persists cluster settings and returns the updated map.
+// The daemon rejects unknown keys with a 400.
+func (c *Client) UpdateClusterSettings(ctx context.Context, settings map[string]string) (ClusterSettings, error) {
+	var body struct {
+		Settings ClusterSettings `json:"settings"`
+	}
+	err := c.do(ctx, http.MethodPut, "/cluster/settings", map[string]any{"settings": settings}, &body)
+	return body.Settings, err
+}
+
+// GetUsage returns the config/secret → stacks reference graph.
+func (c *Client) GetUsage(ctx context.Context) (*Usage, error) {
+	var out Usage
+	err := c.do(ctx, http.MethodGet, "/usage", nil, &out)
+	return &out, err
 }
 
 // ListServices returns every swarm service (all stacks), or one stack's

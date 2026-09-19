@@ -39,6 +39,9 @@ import (
 type Receiver struct {
 	Sources SourceReader
 	Deploy  Deployer
+	// Record receives every delivery outcome. Optional (nil disables history)
+	// and best-effort: a recording failure must never change the response.
+	Record Recorder
 }
 
 // Mount registers POST /webhook/{source}. Caller MUST place this outside
@@ -102,9 +105,32 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
+	// recordDelivery persists one outcome to delivery history when a recorder
+	// is wired. Best-effort by contract — never fails the request.
+	recordDelivery := func(status string, p *stacks.Payload, deployErr error, res *stacks.Result) {
+		if h.Record == nil {
+			return
+		}
+		d := &Delivery{Source: source, Status: status}
+		if p != nil {
+			d.StackName = p.AppName
+			d.RepoURL = p.RepoURL
+			d.File = p.File
+		}
+		if res != nil {
+			d.StackName = res.StackName
+			d.Revision = res.Revision
+		}
+		if deployErr != nil {
+			d.Error = deployErr.Error()
+		}
+		_ = h.Record.Record(r.Context(), d)
+	}
+
 	if source == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "source required"})
 		record("bad_request")
+		recordDelivery("bad_request", nil, nil, nil)
 		return
 	}
 
@@ -112,11 +138,13 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "read body: " + err.Error()})
 		record("bad_request")
+		recordDelivery("bad_request", nil, nil, nil)
 		return
 	}
 	if len(body) > MaxBodyBytes {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "body too large"})
 		record("bad_request")
+		recordDelivery("bad_request", nil, nil, nil)
 		return
 	}
 
@@ -125,6 +153,7 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	if err := h.verifyHMAC(r.Context(), source, timestamp, body, r.Header.Get(SignatureHeader), tsErr); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 		record("unauthorized")
+		recordDelivery("unauthorized", nil, nil, nil)
 		return
 	}
 
@@ -134,6 +163,7 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	if err := json.Unmarshal(body, &p); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
 		record("bad_request")
+		recordDelivery("bad_request", nil, nil, nil)
 		return
 	}
 
@@ -141,10 +171,10 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	// produced this deploy. Without them a revision cannot be traced back to
 	// its source (and the console cannot offer a git-backed sync later).
 	if p.RepoURL == "" || p.File == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{
-			"error": "deploy provenance required: 'repo_url' and 'file' must identify the source repository and manifest path",
-		})
+		provErr := fmt.Errorf("deploy provenance required: 'repo_url' and 'file' must identify the source repository and manifest path")
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": provErr.Error()})
 		record("bad_request")
+		recordDelivery("bad_request", &p, provErr, nil)
 		return
 	}
 
@@ -152,6 +182,7 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		record("server_error")
+		recordDelivery("server_error", &p, err, nil)
 		return
 	}
 
@@ -160,6 +191,7 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 		"revision": res.Revision,
 	})
 	record("accepted")
+	recordDelivery("accepted", &p, nil, res)
 }
 
 // parseTimestamp returns the unix-seconds value.  If the header is empty

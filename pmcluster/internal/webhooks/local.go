@@ -77,3 +77,39 @@ func (w *Local) Secret(ctx context.Context, source string) ([]byte, error) {
 func (w *Local) MarkUsed(ctx context.Context, source string) error {
 	return w.Store.MarkWebhookSourceUsed(ctx, source)
 }
+
+// Record persists one webhook delivery outcome (best-effort by contract).
+func (w *Local) Record(ctx context.Context, d *Delivery) error {
+	return w.Store.RecordWebhookDelivery(ctx, &store.WebhookDelivery{
+		Source:    d.Source,
+		Status:    d.Status,
+		StackName: d.StackName,
+		Revision:  d.Revision,
+		RepoURL:   d.RepoURL,
+		File:      d.File,
+		Error:     d.Error,
+	})
+}
+
+// Deliveries returns the most recent delivery history for a source.
+func (w *Local) Deliveries(ctx context.Context, source string, limit int) ([]Delivery, error) {
+	rows, err := w.Store.ListWebhookDeliveries(ctx, source, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Delivery, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Delivery{
+			ID:        r.ID,
+			Source:    r.Source,
+			Status:    r.Status,
+			StackName: r.StackName,
+			Revision:  r.Revision,
+			RepoURL:   r.RepoURL,
+			File:      r.File,
+			Error:     r.Error,
+			CreatedAt: r.CreatedAt,
+		})
+	}
+	return out, nil
+}

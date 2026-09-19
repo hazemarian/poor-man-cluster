@@ -320,6 +320,96 @@ func (c Settings) Apply(g *gin.Context) {
 	c.reloadSettings(g, d)
 }
 
+// clusterSettingKeys are the editable cluster settings, in form order. They
+// must mirror the daemon's /api/cluster/settings allowlist exactly.
+var clusterSettingKeys = []string{
+	"volume_root",
+	"backup_all_nodes",
+	"sso_enabled",
+	"sso_provider",
+	"sso_client_id",
+	"sso_client_secret",
+	"sso_github_org",
+	"sso_cookie_expire",
+	"edge_login_disabled",
+	"domain",
+	"oo_admin_email",
+	"traefik_admin_user",
+}
+
+type clusterSettingsData struct {
+	Settings        map[string]string
+	HasClientSecret bool
+	Error           string
+	Msg             string
+}
+
+// maskClusterSettings hides sso_client_secret from the rendered form: the
+// daemon returns it (so edits round-trip), but the console only ever shows it
+// masked.
+func maskClusterSettings(settings map[string]string) (map[string]string, bool) {
+	if settings == nil {
+		return nil, false
+	}
+	out := make(map[string]string, len(settings))
+	for k, v := range settings {
+		if k == "sso_client_secret" {
+			continue
+		}
+		out[k] = v
+	}
+	return out, settings["sso_client_secret"] != ""
+}
+
+// ClusterSettingsPage renders the editable cluster settings form (admin-only).
+func (c Settings) ClusterSettingsPage(g *gin.Context) {
+	d := clusterSettingsData{}
+	if !c.requireAPI(g, &d.Error) {
+		c.Views.Fragment(g, "clustersettings", d)
+		return
+	}
+	settings, err := c.API.GetClusterSettings(g.Request.Context())
+	if err != nil {
+		d.Error = err.Error()
+		c.Views.Fragment(g, "clustersettings", d)
+		return
+	}
+	d.Settings, d.HasClientSecret = maskClusterSettings(settings)
+	c.Views.Fragment(g, "clustersettings", d)
+}
+
+// ClusterSettingsSave persists the edited cluster settings (admin-only). The
+// changes are stored but NOT applied — `cluster update` (Apply to swarm)
+// applies them.
+func (c Settings) ClusterSettingsSave(g *gin.Context) {
+	ctx := g.Request.Context()
+	d := clusterSettingsData{}
+	if !c.requireAPI(g, &d.Error) {
+		c.Views.Fragment(g, "clustersettings", d)
+		return
+	}
+
+	settings := make(map[string]string, len(clusterSettingKeys))
+	for _, k := range clusterSettingKeys {
+		settings[k] = g.PostForm(k)
+	}
+	// The password field is left empty when the operator didn't change the
+	// secret — omit it so the stored secret is preserved.
+	if settings["sso_client_secret"] == "" {
+		delete(settings, "sso_client_secret")
+	}
+
+	updated, err := c.API.UpdateClusterSettings(ctx, settings)
+	if err != nil {
+		d.Error = err.Error()
+		d.Settings, d.HasClientSecret = maskClusterSettings(settings)
+	} else {
+		d.Settings, d.HasClientSecret = maskClusterSettings(updated)
+		d.Msg = "Cluster settings saved. Use \"Apply to swarm\" (cluster update) to apply them."
+	}
+	c.Views.Fragment(g, "clustersettings", d)
+}
+
 // configFormError keeps the modal open with the form fragment on a
 // validation/API failure (HX-Retarget sends the fragment to #modal-body; the
 // 422 status makes hx-on::after-request see event.detail.failed).

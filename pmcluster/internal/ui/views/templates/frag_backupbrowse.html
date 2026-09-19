@@ -1,0 +1,43 @@
+{{define "backupbrowse"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+
+<h1>Backup {{if .Run}}<code>{{.Run.ID}}</code>{{end}} — files</h1>
+<p class="sub">
+  {{if .Run}}{{if .Run.StackName}}stack <code>{{.Run.StackName}}</code> · {{end}}status <span class="pill {{sp .Run.Status}}">{{.Run.Status}}</span> · {{ts .Run.StartedAt}}{{end}}
+  · read-only listing of the archive contents
+</p>
+
+{{if .Run}}{{if and (eq .Run.Status "succeeded") .Run.StackName}}
+<div class="card" style="display:flex;gap:10px;align-items:center">
+  <span class="muted">Restore this backup back under <code>/var/stack/data/{{.Run.StackName}}</code>?</span>
+  <button class="btn danger sm"
+          hx-post="/web/backups/{{.Run.ID}}/restore"
+          hx-target="#view"
+          hx-confirm="Restore backup {{.Run.ID}} into /var/stack/data/{{.Run.StackName}}? Existing files with the same names will be overwritten.">
+    Restore
+  </button>
+</div>
+{{end}}{{end}}
+
+{{if .Files}}
+<div class="card" style="padding:6px 14px">
+<table>
+  <tr><th>Path</th><th>Type</th><th>Size</th></tr>
+  {{range .Files}}
+  <tr>
+    <td><code>{{.Path}}</code></td>
+    <td>{{if .IsDir}}dir{{else}}file{{end}}</td>
+    <td class="muted">{{if lt .Size 0}}missing{{else}}{{tb .Size}}{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+</div>
+{{else if not .Error}}
+<div class="card empty">No files listed for this backup.</div>
+{{end}}
+
+<div class="row">
+  <a class="btn ghost" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true">Back</a>
+</div>
+{{end}}

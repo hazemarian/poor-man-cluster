@@ -19,9 +19,10 @@ var ErrSelfDelete = errors.New("cannot remove the API key you are currently auth
 // APIKey is a daemon bearer-token user. The token itself is never stored;
 // only its id and an argon2id hash of the secret are kept.
 type APIKey struct {
-	ID        int64
-	Name      string
-	CreatedAt int64
+	ID         int64
+	Name       string
+	CreatedAt  int64
+	LastUsedAt int64
 }
 
 // Service manages daemon API tokens (users). Tokens are shown once at

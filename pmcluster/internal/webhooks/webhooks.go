@@ -31,6 +31,9 @@ type Service interface {
 	Create(ctx context.Context, source, description string) (secret string, err error)
 	List(ctx context.Context) ([]Source, error)
 	Delete(ctx context.Context, source string) error
+	// Deliveries returns the most recent delivery history for a source
+	// (newest first). limit <= 0 means no limit.
+	Deliveries(ctx context.Context, source string, limit int) ([]Delivery, error)
 }
 
 // SourceReader provides the receiver with the decrypted secret material for
@@ -45,4 +48,26 @@ type SourceReader interface {
 // Deployer port).
 type Deployer interface {
 	Deploy(ctx context.Context, p stacks.Payload) (*stacks.Result, error)
+}
+
+// Delivery is one recorded delivery against a webhook source: the outcome
+// status plus deploy provenance when the request made it to deploy.
+type Delivery struct {
+	ID        int64
+	Source    string
+	Status    string // accepted | unauthorized | bad_request | server_error
+	StackName string
+	Revision  int64
+	RepoURL   string
+	File      string
+	Error     string
+	CreatedAt int64
+}
+
+// Recorder persists webhook delivery history. Best-effort by contract —
+// recording failures must never fail the request itself. Implemented by the
+// store-backed local adapter; the remote client cannot record (deliveries
+// happen on the daemon node).
+type Recorder interface {
+	Record(ctx context.Context, d *Delivery) error
 }
