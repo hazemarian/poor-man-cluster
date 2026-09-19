@@ -25,11 +25,10 @@ const siteCertDir = "site"
 // SiteCertDeps bundles the collaborators a site-cert apply/refresh needs. It
 // mirrors HostCertsDeps — the site-cert flow reuses the full Update pipeline.
 type SiteCertDeps struct {
-	Store       *store.Store
-	Cipher      *credentials.Cipher
-	Docker      docker.Client
-	Deployer    StackDeployer
-	Provisioner *OpenObserveProvisioner
+	Store    *store.Store
+	Cipher   *credentials.Cipher
+	Docker   docker.Client
+	Deployer StackDeployer
 }
 
 // SiteCertDir returns <configDir>/site — the local home of the cluster's own
@@ -126,12 +125,11 @@ func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domai
 
 	if refresh {
 		res, err := Update(ctx, UpdateDeps{
-			Store:       deps.Store,
-			Cipher:      deps.Cipher,
-			Docker:      deps.Docker,
-			Deployer:    deps.Deployer,
-			Provisioner: deps.Provisioner,
-			Stdout:      io.Discard,
+			Store:    deps.Store,
+			Cipher:   deps.Cipher,
+			Docker:   deps.Docker,
+			Deployer: deps.Deployer,
+			Stdout:   io.Discard,
 		}, UpdateInput{ConfigDir: configDir, Version: version})
 		if err != nil {
 			return nil, err
@@ -187,12 +185,11 @@ func RemoveCert(ctx context.Context, deps SiteCertDeps, configDir, version, doma
 
 	if refresh {
 		if _, err := Update(ctx, UpdateDeps{
-			Store:       deps.Store,
-			Cipher:      deps.Cipher,
-			Docker:      deps.Docker,
-			Deployer:    deps.Deployer,
-			Provisioner: deps.Provisioner,
-			Stdout:      io.Discard,
+			Store:    deps.Store,
+			Cipher:   deps.Cipher,
+			Docker:   deps.Docker,
+			Deployer: deps.Deployer,
+			Stdout:   io.Discard,
 		}, UpdateInput{ConfigDir: configDir, Version: version}); err != nil {
 			return err
 		}

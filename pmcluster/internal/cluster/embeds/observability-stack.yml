@@ -21,7 +21,11 @@ services:
         [[- if .ACMEEmail]]
         - "traefik.http.routers.openobserve.tls.certresolver=letsencrypt"
         [[- end]]
+        [[- if .SSOEnabled]]
+        - "traefik.http.routers.openobserve.middlewares=cors-default@file,sso-auth@file,openobserve-auto-auth@file"
+        [[- else]]
         - "traefik.http.routers.openobserve.middlewares=cors-default@file,admin-auth@file,openobserve-auto-auth@file"
+        [[- end]]
         - "traefik.swarm.network=traefik-net"
     environment:
       - ZO_DATA_DIR=/data
@@ -33,10 +37,9 @@ services:
       - ZO_ROOT_USER_PASSWORD=__OPENOBSERVE_PASSWORD__
       # Note: the root token env is intentionally absent — OpenObserve caches
       # root creds in its data volume on first boot and ignores env after. The
-      # OTel collector instead uses a dedicated ingestion token (prefix o2oi_)
-      # created via the OO API and
-      # rendered into the collector config, so credentials stay in pmcluster
-      # config and never get baked into the OO volume.
+      # OTel collector authenticates ingestion with the ROOT admin email:password
+      # (Basic base64(email:password)) — the same credentials OpenObserve runs
+      # with (ZO_ROOT_USER_EMAIL / ZO_ROOT_USER_PASSWORD). No provisioning API.
     volumes:
       - openobserve_data:/data
     networks:

@@ -40,12 +40,13 @@ services:
       - BAN_THRESHOLD=20
       - BAN_DURATION=10m
       - LOG_LEVEL=info
-      # Traefik admin-auth gates /web/* (see the router labels below), so the
-      # console's own session login is redundant in the swarm deployment.
+      # Traefik admin-auth (or SSO) gates /web/* (see the router labels below),
+      # so the console's own session login is redundant in the swarm deployment.
       # EDGE_LOGIN_DISABLED makes Require() pass through as a synthetic admin and
       # hides the login/setup pages and the Users CRUD from the nav. Local
-      # standalone runs leave it unset and keep the password login.
-      - EDGE_LOGIN_DISABLED=true
+      # standalone runs leave it unset (EdgeLoginDisabled=false) to keep the
+      # password login.
+      - EDGE_LOGIN_DISABLED=[[.EdgeLoginDisabled]]
     volumes:
       - pmui-data:/data
     secrets:
@@ -75,14 +76,20 @@ services:
         - "traefik.enable=true"
         # The operator console lives under /web. Traefik gates it with the
         # admin-auth middleware (shared htpasswd via the admin_credentials
-        # secret). Everything else (/api + /webhook) falls through to the edge
-        # reverse proxy and keeps its own Bearer / webhook-signature auth —
-        # no admin-auth there, so the daemon API stays machine-accessible.
+        # secret) — or with the sso-auth forwardAuth middleware when SSO is
+        # enabled (oauth2-proxy). Everything else (/api + /webhook) falls
+        # through to the edge reverse proxy and keeps its own Bearer /
+        # webhook-signature auth — no admin-auth there, so the daemon API
+        # stays machine-accessible.
         - "traefik.http.routers.pmcluster-web.rule=Host(`pmcluster.${DOMAIN}`) && PathPrefix(`/web`)"
         - "traefik.http.routers.pmcluster-web.entrypoints=websecure"
         - "traefik.http.routers.pmcluster-web.tls=true"
         - "traefik.http.routers.pmcluster-web.tls.certresolver=letsencrypt"
+        [[- if .SSOEnabled]]
+        - "traefik.http.routers.pmcluster-web.middlewares=cors-default@file,sso-auth@file"
+        [[- else]]
         - "traefik.http.routers.pmcluster-web.middlewares=cors-default@file,admin-auth@file"
+        [[- end]]
         - "traefik.http.routers.pmcluster-api.rule=Host(`pmcluster.${DOMAIN}`) && !PathPrefix(`/web`)"
         - "traefik.http.routers.pmcluster-api.entrypoints=websecure"
         - "traefik.http.routers.pmcluster-api.tls=true"

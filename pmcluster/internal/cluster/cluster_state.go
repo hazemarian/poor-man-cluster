@@ -11,13 +11,53 @@ import (
 // `up` (idempotent re-runs) and `update` (knows what to re-provision without
 // re-bootstrapping).
 const (
-	settingTLSMode     = "tls_mode"
-	settingTLSCertPath = "tls_cert_path"
-	settingTLSKeyPath  = "tls_key_path"
-	settingTLSACME     = "tls_acme_email"
-	settingDomain      = "domain"
-	settingOOEmail     = "oo_admin_email"
+	settingTLSMode          = "tls_mode"
+	settingTLSCertPath      = "tls_cert_path"
+	settingTLSKeyPath       = "tls_key_path"
+	settingTLSACME          = "tls_acme_email"
+	settingDomain           = "domain"
+	settingOOEmail          = "oo_admin_email"
+	settingTraefikAdminUser = "traefik_admin_user"
+
+	// SSO settings. SSO is a feature flag (settingSSOEnabled): when enabled the
+	// Traefik admin-auth basicAuth middleware is swapped for a forwardAuth
+	// middleware pointing at the oauth2-proxy sidecar (sso stack), so identity
+	// comes from the OAuth provider (GitHub) instead of the htpasswd file.
+	settingSSOEnabled      = "sso_enabled"
+	settingSSOProvider     = "sso_provider"
+	settingSSOClientID     = "sso_client_id"
+	settingSSOClientSecret = "sso_client_secret"
+	settingSSOGitHubOrg    = "sso_github_org"
+
+	// settingEdgeLoginDisabled controls the edge console's own session login.
+	// Default "true" in swarm deployments: Traefik admin-auth (or SSO) already
+	// gates /web, so the console login + Users CRUD are hidden. Local standalone
+	// runs leave it unset (or "false") to keep password login.
+	settingEdgeLoginDisabled = "edge_login_disabled"
 )
+
+// Setting* accessors expose the persisted settings keys for CLI surfaces
+// (e.g. the interactive `pmcluster setup` wizard) that read/write them
+// directly instead of through the cluster workflow.
+func SettingDomain() string            { return settingDomain }
+func SettingTLSMode() string           { return settingTLSMode }
+func SettingTLSCertPath() string       { return settingTLSCertPath }
+func SettingTLSKeyPath() string        { return settingTLSKeyPath }
+func SettingTLSACME() string           { return settingTLSACME }
+func SettingOOEmail() string           { return settingOOEmail }
+func SettingTraefikAdminUser() string  { return settingTraefikAdminUser }
+func SettingSSOEnabled() string        { return settingSSOEnabled }
+func SettingSSOProvider() string       { return settingSSOProvider }
+func SettingSSOClientID() string       { return settingSSOClientID }
+func SettingSSOClientSecret() string   { return settingSSOClientSecret }
+func SettingSSOGitHubOrg() string      { return settingSSOGitHubOrg }
+func SettingEdgeLoginDisabled() string { return settingEdgeLoginDisabled }
+
+// ClusterInstalled reports whether this store already holds a live cluster.
+func ClusterInstalled(ctx context.Context, st *store.Store) bool {
+	ok, err := clusterInstalled(ctx, st)
+	return err == nil && ok
+}
 
 // clusterInstalled reports whether this store already holds a live cluster.
 // `cluster up` is init-only, so it refuses to run when either the persisted
@@ -76,6 +116,73 @@ func (t tlsState) save(ctx context.Context, st *store.Store) error {
 		}
 	}
 	return nil
+}
+
+// TLSState is the exported view of the persisted TLS install state, used by
+// CLI surfaces (the `pmcluster setup` wizard) to write the TLS mode before
+// handing off to cluster up/update.
+type TLSState struct {
+	Mode      string
+	CertPath  string
+	KeyPath   string
+	ACMEEmail string
+}
+
+// Save persists the TLS install state into the store settings.
+func (t TLSState) Save(ctx context.Context, st *store.Store) error {
+	return tlsState(t).save(ctx, st)
+}
+
+// ssoState is the persisted SSO install state. SSO is opt-in via the
+// sso_enabled flag; the provider is always "github" for now (the only
+// provider oauth2-proxy is configured with).
+type ssoState struct {
+	Enabled      bool
+	Provider     string
+	ClientID     string
+	ClientSecret string
+	GitHubOrg    string
+}
+
+// loadSSOSettings reads the persisted SSO state (all empty when never set).
+func loadSSOSettings(ctx context.Context, st *store.Store) (ssoState, error) {
+	if st == nil {
+		return ssoState{}, nil
+	}
+	return ssoState{
+		Enabled:      st.GetSettingDefault(ctx, settingSSOEnabled, "") == "true",
+		Provider:     st.GetSettingDefault(ctx, settingSSOProvider, ""),
+		ClientID:     st.GetSettingDefault(ctx, settingSSOClientID, ""),
+		ClientSecret: st.GetSettingDefault(ctx, settingSSOClientSecret, ""),
+		GitHubOrg:    st.GetSettingDefault(ctx, settingSSOGitHubOrg, ""),
+	}, nil
+}
+
+func (s ssoState) validate() error {
+	if !s.Enabled {
+		return nil
+	}
+	if s.Provider == "" {
+		return fmt.Errorf("SSO is enabled but no provider is configured (only \"github\" is supported)")
+	}
+	if s.Provider != "github" {
+		return fmt.Errorf("SSO provider %q is not supported (only \"github\" is supported)", s.Provider)
+	}
+	if s.ClientID == "" || s.ClientSecret == "" {
+		return fmt.Errorf("SSO provider %q requires client ID + client secret", s.Provider)
+	}
+	return nil
+}
+
+// loadEdgeLoginDisabled reports whether the edge console's own session login
+// is disabled (default true — the swarm deployment always gates /web behind
+// Traefik admin-auth or SSO, so the console login is redundant; local standalone
+// runs set edge_login_disabled=false to keep password login).
+func loadEdgeLoginDisabled(ctx context.Context, st *store.Store) bool {
+	if st == nil {
+		return true
+	}
+	return st.GetSettingDefault(ctx, settingEdgeLoginDisabled, "true") == "true"
 }
 
 // requestedTLSMode derives the TLS mode the operator asked for on this run,

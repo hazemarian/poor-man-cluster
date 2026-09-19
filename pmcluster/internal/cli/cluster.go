@@ -1,10 +1,9 @@
 package cli
 
 import (
-	"crypto/tls"
+	"context"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"time"
 
@@ -16,42 +15,8 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/logger"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/openobserve"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
-
-// ooProvisioner builds the OpenObserve user+token provisioner for `up`/`update`.
-// It reaches OpenObserve over the public edge (https://observ.<domain>) from
-// the manager host.
-//
-// Env overrides (used by CI/e2e where observ.<domain> has no public DNS and
-// the certificate is self-signed):
-//
-//	PMCLUSTER_OO_URL       base URL of the OpenObserve API
-//	                       (default https://observ.<domain>)
-//	PMCLUSTER_OO_INSECURE  "1" skips TLS certificate verification
-func ooProvisioner(st *store.Store, cipher *credentials.Cipher, out io.Writer, domain string) *cluster.OpenObserveProvisioner {
-	baseURL := os.Getenv("PMCLUSTER_OO_URL")
-	if baseURL == "" {
-		baseURL = "https://observ." + domain
-	}
-	client := openobserve.NewClient(baseURL, "default")
-	if os.Getenv("PMCLUSTER_OO_INSECURE") == "1" {
-		client.HTTP = &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // opt-in env override for CI/e2e only
-			},
-		}
-	}
-	return &cluster.OpenObserveProvisioner{
-		Store:  st,
-		Cipher: cipher,
-		Client: client,
-		Org:    "default",
-		Stdout: out,
-	}
-}
 
 var clusterCmd = &cobra.Command{
 	Use:   "cluster",
@@ -146,6 +111,13 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
+	// No persisted cluster state? There is nothing to update — guide the
+	// operator into the setup wizard (fresh installs must provision first).
+	if st.GetSettingDefault(ctx, "domain", "") == "" {
+		fmt.Fprintln(cmd.OutOrStdout(), "No cluster configuration found — starting the interactive setup wizard (`pmcluster setup`).")
+		return runSetup(cmd, nil)
+	}
+
 	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
 	if err != nil {
 		return fmt.Errorf("open encryption key: %w", err)
@@ -159,14 +131,12 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
-	updateDomain := st.GetSettingDefault(ctx, "domain", "")
 	res, err := cluster.NewService().Update(ctx, cluster.UpdateDeps{
-		Store:       st,
-		Cipher:      cipher,
-		Docker:      dc,
-		Deployer:    deployer,
-		Stdout:      cmd.OutOrStdout(),
-		Provisioner: ooProvisioner(st, cipher, cmd.OutOrStdout(), updateDomain),
+		Store:    st,
+		Cipher:   cipher,
+		Docker:   dc,
+		Deployer: deployer,
+		Stdout:   cmd.OutOrStdout(),
 	}, cluster.UpdateInput{
 		ConfigDir: cfg.ConfigDir(),
 		Version:   buildinfo.Version,
@@ -206,8 +176,6 @@ func changedMarker(changed bool) string {
 func runClusterUp(cmd *cobra.Command, _ []string) error {
 	defer initCLITelemetry()()
 
-	ctx := cmd.Context()
-
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -215,6 +183,44 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
 		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
 	}
+
+	in := cluster.UpInput{}
+	in.Version = buildinfo.Version
+	in.Domain, _ = cmd.Flags().GetString("domain")
+	in.ACMEEmail, _ = cmd.Flags().GetString("acme-email")
+	in.CertPath, _ = cmd.Flags().GetString("cert")
+	in.KeyPath, _ = cmd.Flags().GetString("key")
+	in.OpenObserveAdminEmail, _ = cmd.Flags().GetString("openobserve-email")
+	in.TraefikAdminUser, _ = cmd.Flags().GetString("traefik-admin-user")
+	in.ForceTLSMode, _ = cmd.Flags().GetBool("force-tls-mode")
+	in.ConfigDir = cfg.ConfigDir()
+
+	return runUp(cmd, cfg, in)
+}
+
+// clusterUpHasInput reports whether the operator supplied any provisioning
+// input for `cluster up`, either via flags (--domain/--acme-email/--cert/--key)
+// or from previously persisted store settings. When neither exists the command
+// falls back to the interactive setup wizard.
+func clusterUpHasInput(cmd *cobra.Command, st *store.Store, ctx context.Context) bool {
+	if cmd.Flags().Changed("domain") ||
+		cmd.Flags().Changed("acme-email") ||
+		cmd.Flags().Changed("cert") ||
+		cmd.Flags().Changed("key") {
+		return true
+	}
+	return st.GetSettingDefault(ctx, "domain", "") != ""
+}
+
+// runUp executes the `cluster up` workflow with an explicit UpInput: opens the
+// store / cipher / docker / deployer, fills any empty UpInput fields from the
+// stored settings (so the `pmcluster setup` wizard only has to persist the
+// settings it wants Up to read), runs the workflow and prints the result.
+// Shared by runClusterUp and the setup wizard's fresh-install handoff.
+func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
+	defer initCLITelemetry()()
+
+	ctx := cmd.Context()
 
 	log, logCloser, err := logger.New(logger.Options{
 		LogsDir: cfg.LogsDir(),
@@ -229,22 +235,31 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 	log.Info().Msg("cluster up: starting")
 	defer log.Info().Msg("cluster up: finished")
 
-	in := cluster.UpInput{}
-	in.Version = buildinfo.Version
-	in.Domain, _ = cmd.Flags().GetString("domain")
-	in.ACMEEmail, _ = cmd.Flags().GetString("acme-email")
-	in.CertPath, _ = cmd.Flags().GetString("cert")
-	in.KeyPath, _ = cmd.Flags().GetString("key")
-	in.OpenObserveAdminEmail, _ = cmd.Flags().GetString("openobserve-email")
-	in.TraefikAdminUser, _ = cmd.Flags().GetString("traefik-admin-user")
-	in.ForceTLSMode, _ = cmd.Flags().GetBool("force-tls-mode")
-	in.ConfigDir = cfg.ConfigDir()
-
 	st, err := store.Open(cfg.DBPath())
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer func() { _ = st.Close() }()
+
+	// No provisioning input at all (no flags, nothing stored)? Drop into the
+	// interactive setup wizard instead of failing cryptically. `cluster up`
+	// with env/flags supplied proceeds as usual.
+	if !clusterUpHasInput(cmd, st, ctx) {
+		fmt.Fprintln(cmd.OutOrStdout(), "No cluster configuration found — starting the interactive setup wizard (`pmcluster setup`).")
+		return runSetup(cmd, nil)
+	}
+
+	// Fill fields from stored settings when not already set (e.g. after the
+	// `pmcluster setup` wizard persisted them).
+	if in.Domain == "" {
+		in.Domain = st.GetSettingDefault(ctx, "domain", "")
+	}
+	if in.OpenObserveAdminEmail == "" {
+		in.OpenObserveAdminEmail = st.GetSettingDefault(ctx, "oo_admin_email", "")
+	}
+	if in.TraefikAdminUser == "" {
+		in.TraefikAdminUser = st.GetSettingDefault(ctx, cluster.SettingTraefikAdminUser(), "admin")
+	}
 
 	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
 	if err != nil {
@@ -260,12 +275,11 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
 	res, err := cluster.NewService().Up(ctx, cluster.UpDeps{
-		Store:       st,
-		Cipher:      cipher,
-		Docker:      dc,
-		Deployer:    deployer,
-		Stdout:      cmd.OutOrStdout(),
-		Provisioner: ooProvisioner(st, cipher, cmd.OutOrStdout(), in.Domain),
+		Store:    st,
+		Cipher:   cipher,
+		Docker:   dc,
+		Deployer: deployer,
+		Stdout:   cmd.OutOrStdout(),
 	}, in)
 	if err != nil {
 		return err

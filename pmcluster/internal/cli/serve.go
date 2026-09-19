@@ -114,7 +114,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	tlsSvc := certs.NewLocal(st, cipher, dc, deployer,
-		ooProvisioner(st, cipher, io.Discard, cluster.PersistedDomain(context.Background(), st)),
 		cfg.ConfigDir(), buildinfo.Version)
 
 	deps := server.Deps{
@@ -132,12 +131,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 					return nil, fmt.Errorf("encryption key unavailable; cannot run cluster update")
 				}
 				return cluster.NewService().Update(ctx, cluster.UpdateDeps{
-					Store:       st,
-					Cipher:      cipher,
-					Docker:      dc,
-					Deployer:    deployer,
-					Provisioner: ooProvisioner(st, cipher, io.Discard, cluster.PersistedDomain(ctx, st)),
-					Stdout:      io.Discard,
+					Store:    st,
+					Cipher:   cipher,
+					Docker:   dc,
+					Deployer: deployer,
+					Stdout:   io.Discard,
 				}, cluster.UpdateInput{ConfigDir: cfg.ConfigDir(), Version: buildinfo.Version})
 			},
 		},

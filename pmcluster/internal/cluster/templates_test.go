@@ -179,13 +179,12 @@ func TestLoadComposeFile_UnknownStack(t *testing.T) {
 }
 
 // TestRenderOTelCollectorConfig_ContainsBasicAuth verifies that the rendered
-// OTel config contains Authorization: Basic <base64(<org>:<ingestion_token>)> —
-// the dedicated INGESTION token (not the rotating human password) — and that
-// decoding the base64 yields the correct "org:token" string.
+// OTel config contains Authorization: Basic <base64(admin email:admin password)> —
+// the ROOT admin credentials (the same ones OpenObserve itself runs with), and
+// that decoding the base64 yields the correct "email:password" string.
 func TestRenderOTelCollectorConfig_ContainsBasicAuth(t *testing.T) {
 	in := RenderInput{
-		OpenObserveOrg:            "default",
-		OpenObserveIngestionToken: "st1ableR00t-tok3n",
+		OpenObserveBasicAuth: openObserveBasicAuth("admin@example.com", "s3cret-Pass"),
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -215,35 +214,41 @@ func TestRenderOTelCollectorConfig_ContainsBasicAuth(t *testing.T) {
 		t.Fatalf("base64 decode of %q: %v", b64, err)
 	}
 
-	want := "default:st1ableR00t-tok3n"
+	want := "admin@example.com:s3cret-Pass"
 	if string(decoded) != want {
 		t.Errorf("decoded = %q, want %q", decoded, want)
 	}
 }
 
-// TestRenderOTelCollectorConfig_DoesNotEmbedHumanPassword verifies the rendered
-// config never contains the human admin password (only the stable token).
-func TestRenderOTelCollectorConfig_DoesNotEmbedHumanPassword(t *testing.T) {
+// TestRenderOTelCollectorConfig_EmbedsAdminPassword verifies the rendered
+// config embeds the ROOT admin password (base64) — by design the collector
+// authenticates with the same credentials OpenObserve runs with, so there is
+// one password everywhere and no provisioning API calls.
+func TestRenderOTelCollectorConfig_EmbedsAdminPassword(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail:     "admin@example.com",
-		OpenObserveAdminPassword:  "SOMEPASSWORD_SECRET",
-		OpenObserveIngestionToken: "R00ttok3n",
+		OpenObserveAdminEmail:    "admin@example.com",
+		OpenObserveAdminPassword: "SOMEPASSWORD_SECRET",
+		OpenObserveBasicAuth:     openObserveBasicAuth("admin@example.com", "SOMEPASSWORD_SECRET"),
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
 		t.Fatalf("RenderOTelCollectorConfig: %v", err)
 	}
+	b64 := base64.StdEncoding.EncodeToString([]byte("admin@example.com:SOMEPASSWORD_SECRET"))
+	if !strings.Contains(string(data), b64) {
+		t.Errorf("rendered OTel config must embed the admin basic auth %q", b64)
+	}
 	if strings.Contains(string(data), "SOMEPASSWORD_SECRET") {
-		t.Error("rendered OTel config must NOT embed the rotating human password")
+		t.Error("rendered OTel config must NOT embed the raw admin password (only base64)")
 	}
 }
 
-// TestRenderOTelCollectorConfig_MissingToken returns an error when the
-// ingestion token is empty.
-func TestRenderOTelCollectorConfig_MissingToken(t *testing.T) {
-	_, err := RenderOTelCollectorConfig(RenderInput{OpenObserveIngestionToken: ""})
+// TestRenderOTelCollectorConfig_MissingBasicAuth returns an error when the
+// admin basic auth value is empty.
+func TestRenderOTelCollectorConfig_MissingBasicAuth(t *testing.T) {
+	_, err := RenderOTelCollectorConfig(RenderInput{})
 	if err == nil {
-		t.Fatal("expected error when ingestion token is empty, got nil")
+		t.Fatal("expected error when admin basic auth is empty, got nil")
 	}
 }
 
@@ -251,8 +256,8 @@ func TestRenderOTelCollectorConfig_MissingToken(t *testing.T) {
 // has a minimal logs pipeline: filelog → resource → batch → OTLP exporter.
 func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail:     "admin@x.com",
-		OpenObserveIngestionToken: "tok",
+		OpenObserveAdminEmail: "admin@x.com",
+		OpenObserveBasicAuth:  openObserveBasicAuth("admin@x.com", "pw"),
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -279,8 +284,8 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 // filelog receiver is configured with the correct glob patterns and operators.
 func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail:     "admin@x.com",
-		OpenObserveIngestionToken: "tok",
+		OpenObserveAdminEmail: "admin@x.com",
+		OpenObserveBasicAuth:  openObserveBasicAuth("admin@x.com", "pw"),
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -333,8 +338,8 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 // the non-existent metric_labels_to_resource_attributes key.
 func TestRenderOTelCollectorConfig_DockerStatsLabels(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail:     "admin@x.com",
-		OpenObserveIngestionToken: "tok",
+		OpenObserveAdminEmail: "admin@x.com",
+		OpenObserveBasicAuth:  openObserveBasicAuth("admin@x.com", "pw"),
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {

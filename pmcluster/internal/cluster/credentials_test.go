@@ -270,6 +270,11 @@ func TestBootstrap_LostDBRecovery(t *testing.T) {
 		Data   []byte
 		Labels map[string]string
 	}{Name: "edge_api_token", Data: []byte("oldapitoken")}
+	f.secrets["sso_cookie_secret"] = struct {
+		Name   string
+		Data   []byte
+		Labels map[string]string
+	}{Name: "sso_cookie_secret", Data: []byte("oldssosecret")}
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	creds, err := mgr.Bootstrap(context.Background(), BootstrapInput{

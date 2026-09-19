@@ -1,0 +1,61 @@
+# sso-stack.yml — oauth2-proxy sidecar (SSO gate).
+#
+# Deployed only when SSO is enabled (sso_enabled setting + PMCLUSTER_SSO_ENABLED).
+# oauth2-proxy terminates the OAuth flow with the provider (GitHub) and exposes
+# /oauth2/* on the Traefik network. Traefik's sso-auth forwardAuth middleware
+# points at this service; the provider's callback URL is
+# https://pmcluster.<domain>/oauth2/callback.
+#
+# oauth2-proxy runs INSIDE the swarm, bound to the traefik-net overlay network
+# (no published ports). Traefik reaches it by service DNS name
+# sso_oauth2-proxy:4180.
+#
+# Authentication is the provider's (GitHub); once the operator signs in with
+# GitHub, oauth2-proxy injects X-Forwarded-User / X-Forwarded-Email headers
+# that Traefik passes to the downstream console + OpenObserve.
+
+services:
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+    networks:
+      - traefik-net
+    environment:
+      # Provider (only github is supported today).
+      OAUTH2_PROXY_PROVIDER: github
+      # OAuth application credentials (rendered from the sso_* settings).
+      OAUTH2_PROXY_CLIENT_ID: "[[.SSOClientID]]"
+      OAUTH2_PROXY_CLIENT_SECRET: "[[.SSOClientSecret]]"
+      [[- if .SSOGitHubOrg]]
+      OAUTH2_PROXY_GITHUB_ORG: "[[.SSOGitHubOrg]]"
+      [[- end]]
+      # Cookie encryption secret (managed credential sso_cookie_secret).
+      OAUTH2_PROXY_COOKIE_SECRET: "[[.SSOCookieSecret]]"
+      # oauth2-proxy owns /oauth2 on the Traefik network; upstream responses
+      # are never served (Traefik forwardAuth only asks "is this user OK?").
+      OAUTH2_PROXY_HTTP_ADDRESS: "http://:4180"
+      OAUTH2_PROXY_UPSTREAMS: "static://202"
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_SAMESITE: "lax"
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Redirect URI must match the GitHub OAuth app callback exactly.
+      OAUTH2_PROXY_REDIRECT_URL: "https://pmcluster.[[.Domain]]/oauth2/callback"
+      # Allow the callback + auth endpoints through without a session.
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "false"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+    secrets:
+      - sso_cookie_secret
+
+networks:
+  traefik-net:
+    external: true
+
+secrets:
+  sso_cookie_secret:
+    external: true

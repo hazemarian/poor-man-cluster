@@ -45,11 +45,6 @@ type UpdateDeps struct {
 	Docker   docker.Client
 	Deployer StackDeployer
 	Stdout   io.Writer
-
-	// Provisioner, when set and the ingestion token is missing (an interrupted
-	// `cluster up`), heals the store by provisioning the OO user + token before
-	// rendering. Left nil (e.g. in tests) skips that network-dependent step.
-	Provisioner *OpenObserveProvisioner
 }
 
 // Update re-provisions the OTel collector + Traefik dynamic configs and the
@@ -71,10 +66,11 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	res := &UpdateResult{}
 
 	var (
-		state        tlsState
-		domain       string
-		ooTokenPlain string
-		render       RenderInput
+		state     tlsState
+		domain    string
+		render    RenderInput
+		sso       ssoState
+		ssoSecret string
 	)
 
 	wf := workflow.NewWorkflow(out)
@@ -112,7 +108,31 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil
 	})
 
-	wf.Add("Loading OpenObserve credentials + ingestion token", func(ctx context.Context) error {
+	wf.Add("Loading SSO settings + cookie secret", func(ctx context.Context) error {
+		var err error
+		sso, err = loadSSOSettings(ctx, deps.Store)
+		if err != nil {
+			return err
+		}
+		if err := sso.validate(); err != nil {
+			return err
+		}
+		ssoSecret = ""
+		if sso.Enabled {
+			cookieCred, err := deps.Store.GetCredential(ctx, "sso_cookie_secret")
+			if err != nil {
+				return fmt.Errorf("load sso_cookie_secret credential (SSO enabled — run `cluster up` or rotate sso_cookie_secret first): %w", err)
+			}
+			plain, err := deps.Cipher.Decrypt(cookieCred.PasswordCiphertext)
+			if err != nil {
+				return fmt.Errorf("decrypt sso_cookie_secret: %w", err)
+			}
+			ssoSecret = string(plain)
+		}
+		return nil
+	})
+
+	wf.Add("Loading OpenObserve credentials", func(ctx context.Context) error {
 		ooCred, err := deps.Store.GetCredential(ctx, "openobserve_admin")
 		if err != nil {
 			return fmt.Errorf("load openobserve_admin credential (run `cluster up` first): %w", err)
@@ -121,34 +141,22 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		if err != nil {
 			return fmt.Errorf("decrypt openobserve_admin password: %w", err)
 		}
-		ooTokenPlain, err = loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
-		if err != nil {
-			return err
-		}
-		if ooTokenPlain == "" && deps.Provisioner != nil {
-			if _, _, err := deps.Provisioner.EnsureUserAndToken(ctx); err != nil {
-				return err
-			}
-			ooTokenPlain, err = loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
-			if err != nil {
-				return err
-			}
-		}
-		if ooTokenPlain == "" {
-			ooTokenPlain = pendingIngestionToken
-		}
 		render = RenderInput{
-			Domain:                    domain,
-			OpenObserveAdminEmail:     ooCred.Username,
-			OpenObserveAdminPassword:  string(ooPass),
-			OpenObserveBasicAuth:      openObserveBasicAuth(ooCred.Username, string(ooPass)),
-			OpenObserveOrg:            "default",
-			OpenObserveIngestionToken: ooTokenPlain,
-			ACMEEmail:                 state.ACMEEmail,
-			ConfigDir:                 in.ConfigDir,
-			ConfigStore:               deps.Store,
-			DataDir:                   filepath.Dir(in.ConfigDir),
-			EdgeImage:                 EdgeImageFor(),
+			Domain:                   domain,
+			OpenObserveAdminEmail:    ooCred.Username,
+			OpenObserveAdminPassword: string(ooPass),
+			OpenObserveBasicAuth:     openObserveBasicAuth(ooCred.Username, string(ooPass)),
+			ACMEEmail:                state.ACMEEmail,
+			ConfigDir:                in.ConfigDir,
+			ConfigStore:              deps.Store,
+			DataDir:                  filepath.Dir(in.ConfigDir),
+			EdgeImage:                EdgeImageFor(),
+			EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
+			SSOEnabled:               sso.Enabled,
+			SSOCookieSecret:          ssoSecret,
+			SSOClientID:              sso.ClientID,
+			SSOClientSecret:          sso.ClientSecret,
+			SSOGitHubOrg:             sso.GitHubOrg,
 		}
 		hostCerts, err := loadHostCertEntries(ctx, deps.Store, domain)
 		if err != nil {
@@ -226,7 +234,11 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// mounts, the edge image tag, or the TLS secret names it references
 		// shows up here — the DB hash is the single source of truth.
 		var redeploy []stackName
-		for _, s := range []stackName{StackObservability, StackInfra, StackEdge, StackBackup} {
+		order := []stackName{StackObservability, StackInfra, StackEdge, StackBackup}
+		if sso.Enabled {
+			order = append(order, StackSSO)
+		}
+		for _, s := range order {
 			cfgName := string(s) + "-stack"
 			fresh := rendered[cfgName]
 			row, err := deps.Store.GetConfig(ctx, cfgName)
@@ -278,7 +290,11 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 // tag are substituted, so every snapshot is valid YAML and stable across runs.
 func renderPlatformConfigs(render RenderInput) (map[string][]byte, error) {
 	out := make(map[string][]byte, 6)
-	for _, s := range []stackName{StackInfra, StackObservability, StackBackup, StackEdge} {
+	stacks := []stackName{StackInfra, StackObservability, StackBackup, StackEdge}
+	if render.SSOEnabled {
+		stacks = append(stacks, StackSSO)
+	}
+	for _, s := range stacks {
 		y, err := LoadComposeFile(s, render)
 		if err != nil {
 			return nil, fmt.Errorf("render %s: %w", s, err)
@@ -339,25 +355,36 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 	if err != nil {
 		return nil, fmt.Errorf("decrypt openobserve_admin password: %w", err)
 	}
-	ooTokenPlain, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
+	render := RenderInput{
+		Domain:                   domain,
+		OpenObserveAdminEmail:    ooCred.Username,
+		OpenObserveAdminPassword: string(ooPass),
+		OpenObserveBasicAuth:     openObserveBasicAuth(ooCred.Username, string(ooPass)),
+		ACMEEmail:                state.ACMEEmail,
+		ConfigDir:                in.ConfigDir,
+		ConfigStore:              deps.Store,
+		DataDir:                  filepath.Dir(in.ConfigDir),
+		EdgeImage:                EdgeImageFor(),
+		EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
+	}
+	sso, err := loadSSOSettings(ctx, deps.Store)
 	if err != nil {
 		return nil, err
 	}
-	if ooTokenPlain == "" {
-		ooTokenPlain = pendingIngestionToken
-	}
-	render := RenderInput{
-		Domain:                    domain,
-		OpenObserveAdminEmail:     ooCred.Username,
-		OpenObserveAdminPassword:  string(ooPass),
-		OpenObserveBasicAuth:      openObserveBasicAuth(ooCred.Username, string(ooPass)),
-		OpenObserveOrg:            "default",
-		OpenObserveIngestionToken: ooTokenPlain,
-		ACMEEmail:                 state.ACMEEmail,
-		ConfigDir:                 in.ConfigDir,
-		ConfigStore:               deps.Store,
-		DataDir:                   filepath.Dir(in.ConfigDir),
-		EdgeImage:                 EdgeImageFor(),
+	render.SSOEnabled = sso.Enabled
+	render.SSOClientID = sso.ClientID
+	render.SSOClientSecret = sso.ClientSecret
+	render.SSOGitHubOrg = sso.GitHubOrg
+	if sso.Enabled {
+		cookieCred, err := deps.Store.GetCredential(ctx, "sso_cookie_secret")
+		if err != nil {
+			return nil, fmt.Errorf("load sso_cookie_secret credential (SSO enabled): %w", err)
+		}
+		plain, err := deps.Cipher.Decrypt(cookieCred.PasswordCiphertext)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt sso_cookie_secret: %w", err)
+		}
+		render.SSOCookieSecret = string(plain)
 	}
 	hostCerts, err := loadHostCertEntries(ctx, deps.Store, domain)
 	if err != nil {

@@ -100,9 +100,11 @@ exporters:
     tls:
       insecure: true
     headers:
-      # Basic <base64(<org>:<ingestion_token>)> — the dedicated OO ingestion
-      # token (created via the OO API, prefix o2oi_), NOT the rotating human
-      # password. Keeps this config content-stable across password rotations.
+      # Basic <base64(<admin email>:<admin password>)> — the ROOT admin
+      # credentials OpenObserve itself runs with (ZO_ROOT_USER_EMAIL /
+      # ZO_ROOT_USER_PASSWORD from the openobserve_admin credential + the
+      # zo_root_user_password Swarm secret). One password everywhere; no
+      # provisioning API calls.
       Authorization: "__BASIC_AUTH_PLACEHOLDER__"
       organization: "default"
 

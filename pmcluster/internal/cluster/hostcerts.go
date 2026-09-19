@@ -14,11 +14,10 @@ import (
 // HostCertsDeps bundles the collaborators a per-host cert refresh needs.
 // It mirrors UpdateDeps minus stdout (refresh is silent).
 type HostCertsDeps struct {
-	Store       *store.Store
-	Cipher      *credentials.Cipher
-	Docker      docker.Client
-	Deployer    StackDeployer
-	Provisioner *OpenObserveProvisioner
+	Store    *store.Store
+	Cipher   *credentials.Cipher
+	Docker   docker.Client
+	Deployer StackDeployer
 }
 
 // HostCertEntry is one per-host cert's versioned Swarm secret names, used by
@@ -90,12 +89,11 @@ func RefreshHostCerts(ctx context.Context, deps HostCertsDeps, configDir, versio
 		return false, fmt.Errorf("refresh host certs requires a store (run `pmcluster init` + `pmcluster cluster up` first)")
 	}
 	res, err := Update(ctx, UpdateDeps{
-		Store:       deps.Store,
-		Cipher:      deps.Cipher,
-		Docker:      deps.Docker,
-		Deployer:    deps.Deployer,
-		Provisioner: deps.Provisioner,
-		Stdout:      io.Discard,
+		Store:    deps.Store,
+		Cipher:   deps.Cipher,
+		Docker:   deps.Docker,
+		Deployer: deps.Deployer,
+		Stdout:   io.Discard,
 	}, UpdateInput{ConfigDir: configDir, Version: version})
 	if err != nil {
 		return false, err

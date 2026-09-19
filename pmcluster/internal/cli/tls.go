@@ -274,7 +274,6 @@ func siteCertDeps(cmd *cobra.Command, cfg *config.Config, domain string) (*store
 // tlsService builds the local certs service adapter used by the tls commands.
 func tlsService(cmd *cobra.Command, st *store.Store, cipher *credentials.Cipher, dc docker.Client, cfg *config.Config) certs.Service {
 	return certs.NewLocal(st, cipher, dc, cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
-		ooProvisioner(st, cipher, cmd.OutOrStdout(), cluster.PersistedDomain(cmd.Context(), st)),
 		cfg.ConfigDir(), buildinfo.Version)
 }
 

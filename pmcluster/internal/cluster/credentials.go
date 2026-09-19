@@ -2,6 +2,8 @@ package cluster
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 
@@ -23,6 +25,9 @@ const (
 	// rotate: the console persists them once, so Swarm secrets only matter for
 	// fresh provisioned volumes.
 	KindEdge CredentialKind = "edge"
+	// KindSSO marks credentials consumed by the oauth2-proxy sidecar (the sso
+	// stack). Currently only the cookie secret.
+	KindSSO CredentialKind = "sso"
 )
 
 // ManagedCredential is the in-memory shape of a bootstrap credential. The
@@ -57,6 +62,7 @@ type CredentialsManager struct {
 var consumingService = map[string]string{
 	"traefik_dashboard": "infra_traefik",
 	"openobserve_admin": "observability_openobserve",
+	"sso_cookie_secret": "sso_oauth2-proxy",
 }
 
 // Bootstrap ensures every bundled component has a credential. Idempotent:
@@ -77,6 +83,7 @@ func (m *CredentialsManager) Bootstrap(ctx context.Context, in BootstrapInput) (
 		"edge_admin":        "admin",
 		"edge_ui_secret":    "session",
 		"edge_api_token":    "edge",
+		"sso_cookie_secret": "sso",
 	}
 	specs := bootstrapSpecs()
 	for i := range specs {
@@ -232,10 +239,6 @@ func (m *CredentialsManager) ensure(ctx context.Context, spec bootstrapSpec) (*M
 // re-runs.
 func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedCredential, error) {
 
-	if name == "openobserve_token" {
-		return nil, fmt.Errorf("cannot rotate %q: OpenObserve caches this token in its data volume on first boot; rotating it would break collector ingestion without a volume reset (it is meant to stay fixed)", name)
-	}
-
 	if name == "edge_api_token" {
 		return nil, fmt.Errorf("cannot rotate %q: it is the daemon Bearer token for the %q user; rotating it would break the edge console's API access (remove the %q user row and the credential, then re-run to re-provision instead)", name, edgeAPITokenUser, edgeAPITokenUser)
 	}
@@ -344,6 +347,18 @@ func bootstrapSpecs() []bootstrapSpec {
 
 			generate: ensureEdgeAPIToken,
 		},
+		{
+			// oauth2-proxy cookie encryption secret. oauth2-proxy requires a
+			// base64-encoded value of at least 32 bytes; the generated value
+			// below is exactly that shape. Only consumed when the sso stack is
+			// deployed (sso_enabled).
+			name:            "sso_cookie_secret",
+			kind:            KindSSO,
+			swarmSecretName: "sso_cookie_secret",
+			format:          formatPlain,
+
+			generate: randomCookieSecret,
+		},
 	}
 }
 
@@ -382,6 +397,17 @@ func ensureEdgeAPIToken(ctx context.Context, s *store.Store) (string, error) {
 		return "", fmt.Errorf("create %s user: %w", edgeAPITokenUser, err)
 	}
 	return token, nil
+}
+
+// randomCookieSecret generates a base64-encoded 32-byte random value — the
+// shape oauth2-proxy's OAUTH2_PROXY_COOKIE_SECRET requires. base64.URLEncoding
+// avoids the +/ characters that would need escaping in compose/secrets.
+func randomCookieSecret(ctx context.Context, s *store.Store) (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("read random cookie secret bytes: %w", err)
+	}
+	return base64.URLEncoding.EncodeToString(buf), nil
 }
 
 func serialisePassword(spec bootstrapSpec, username, password string) ([]byte, error) {

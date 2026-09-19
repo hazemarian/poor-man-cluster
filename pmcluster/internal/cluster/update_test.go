@@ -194,15 +194,17 @@ func TestUpdate_ConfigsUseSeedVersionedNames(t *testing.T) {
 	}
 }
 
-// TestUpdate_PasswordRotationRedeploysObservability verifies the render-level
-// semantics: the OTel collector config authenticates with the STABLE root token
-// (never the human password), so it is NOT re-created on a password rotation.
-// The observability stack compose embeds ZO_ROOT_USER_PASSWORD directly AND the
-// traefik-dynamic config embeds the OO root credentials in the
-// openobserve-auto-auth middleware, so both stacks' rendered content changes
-// and BOTH observability + infra are re-deployed — applying the new password
-// to the running service and to the Traefik-injected Authorization header.
-func TestUpdate_PasswordRotationDoesNotRedeployObservability(t *testing.T) {
+// TestUpdate_PasswordRotationRedeploysObservabilityAndInfra verifies the
+// render-level semantics: the OTel collector config authenticates with the ROOT
+// admin credentials (Basic base64(email:password)) — the same ones OpenObserve
+// itself runs with — so a password rotation DOES re-create the OTel config and
+// re-deploy observability. The observability stack compose embeds
+// ZO_ROOT_USER_PASSWORD directly AND the traefik-dynamic config embeds the OO
+// root credentials in the openobserve-auto-auth middleware, so both stacks'
+// rendered content changes and BOTH observability + infra are re-deployed —
+// applying the new password to the running service and to the Traefik-injected
+// Authorization header.
+func TestUpdate_PasswordRotationRedeploysObservabilityAndInfra(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 
 	ctx := context.Background()
@@ -222,11 +224,11 @@ func TestUpdate_PasswordRotationDoesNotRedeployObservability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if res.OTelCreated {
-		t.Error("OTel config should NOT be re-created after a password rotation (collector uses the stable token)")
+	if !res.OTelCreated {
+		t.Error("OTel config should be re-created after a password rotation (collector embeds the admin basic auth)")
 	}
-	if res.OTelConfig != "pmcluster_otel_config_v001" {
-		t.Errorf("OTelConfig = %q, want pmcluster_otel_config_v001 (unchanged)", res.OTelConfig)
+	if res.OTelConfig == "pmcluster_otel_config_v001" {
+		t.Error("OTelConfig should have been minted to a new version after rotation")
 	}
 	deployer := deps.Deployer.(*recordingDeployer)
 	if len(deployer.deployedStacks) != 2 {

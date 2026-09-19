@@ -45,23 +45,18 @@ type UpDeps struct {
 	Docker   docker.Client
 	Deployer StackDeployer
 	Stdout   io.Writer
-
-	// Provisioner, when set, provisions the OpenObserve automation user +
-	// ingestion token via the OO API after the observability stack is up. Left
-	// nil (e.g. in tests) skips that network-dependent step.
-	Provisioner *OpenObserveProvisioner
 }
 
 // Up brings the cluster up end-to-end as a sequence of named steps: preflight
 // → overlay networks → TLS secrets → bootstrap credentials → rendered configs
 // → stack deploys (infra → edge → observability → backup) → health wait →
-// OpenObserve provisioning (second phase, when the ingestion token is fresh)
-// → install state persistence.
+// install state persistence.
 //
-// On a fresh install the dedicated OO ingestion token does not exist until
-// OpenObserve is up, so provisioning runs in a second phase after the first
-// deploy (see UpDeps.Provisioner). The collector config is then re-rendered
-// with the real token and observability is re-deployed.
+// OpenObserve runs with the admin email:password (ZO_ROOT_USER_EMAIL /
+// ZO_ROOT_USER_PASSWORD from the openobserve_admin credential + the
+// zo_root_user_password Swarm secret). The OTel collector and the Traefik
+// openobserve-auto-auth middleware use the SAME admin credentials — no
+// provisioning API calls, no automation user, no ingestion token.
 func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 
 	state, err := loadTLSSettings(ctx, deps.Store)
@@ -100,10 +95,11 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	var (
 		certSecret, keySecret string
 		creds                 map[string]*ManagedCredential
-		needProvision         bool
 		render                RenderInput
 		otelConfigName        string
 		otelConfigCreated     bool
+		sso                   ssoState
+		ssoSecret             string
 	)
 
 	wf := workflow.NewWorkflow(out)
@@ -198,11 +194,24 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		if openobsCred == nil {
 			return fmt.Errorf("internal: openobserve_admin credential missing after bootstrap")
 		}
-		storedToken, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
+
+		sso, err = loadSSOSettings(ctx, deps.Store)
 		if err != nil {
 			return err
 		}
-		needProvision = storedToken == ""
+		if err := sso.validate(); err != nil {
+			return err
+		}
+		ssoSecret = ""
+		if sso.Enabled {
+			// sso_cookie_secret is minted by the credentials bootstrap; pull
+			// its plaintext so oauth2-proxy gets a stable cookie secret.
+			cookieCred, ok := creds["sso_cookie_secret"]
+			if !ok || cookieCred == nil {
+				return fmt.Errorf("internal: sso_cookie_secret credential missing after bootstrap (SSO enabled)")
+			}
+			ssoSecret = cookieCred.Password
+		}
 
 		hostCerts, err := loadHostCertEntries(ctx, deps.Store, in.Domain)
 		if err != nil {
@@ -210,23 +219,24 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		}
 
 		render = RenderInput{
-			Domain:                    in.Domain,
-			OpenObserveAdminEmail:     openobsCred.Username,
-			OpenObserveAdminPassword:  openobsCred.Password,
-			OpenObserveBasicAuth:      openObserveBasicAuth(openobsCred.Username, openobsCred.Password),
-			OpenObserveOrg:            "default",
-			OpenObserveIngestionToken: storedToken,
-			ACMEEmail:                 in.ACMEEmail,
-			ConfigDir:                 in.ConfigDir,
-			ConfigStore:               deps.Store,
-			DataDir:                   filepath.Dir(in.ConfigDir),
-			HostCerts:                 hostCerts,
-			CertSecretName:            certSecret,
-			KeySecretName:             keySecret,
-			EdgeImage:                 EdgeImageFor(),
-		}
-		if needProvision {
-			render.OpenObserveIngestionToken = pendingIngestionToken
+			Domain:                   in.Domain,
+			OpenObserveAdminEmail:    openobsCred.Username,
+			OpenObserveAdminPassword: openobsCred.Password,
+			OpenObserveBasicAuth:     openObserveBasicAuth(openobsCred.Username, openobsCred.Password),
+			ACMEEmail:                in.ACMEEmail,
+			ConfigDir:                in.ConfigDir,
+			ConfigStore:              deps.Store,
+			DataDir:                  filepath.Dir(in.ConfigDir),
+			HostCerts:                hostCerts,
+			CertSecretName:           certSecret,
+			KeySecretName:            keySecret,
+			EdgeImage:                EdgeImageFor(),
+			EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
+			SSOEnabled:               sso.Enabled,
+			SSOCookieSecret:          ssoSecret,
+			SSOClientID:              sso.ClientID,
+			SSOClientSecret:          sso.ClientSecret,
+			SSOGitHubOrg:             sso.GitHubOrg,
 		}
 
 		otelConfigName, otelConfigCreated, err = ensureOTelConfig(ctx, deps, in.Version, render)
@@ -261,7 +271,13 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		return nil
 	})
 	wf.Add("Deploying stacks (infra → edge → observability → backup)", func(ctx context.Context) error {
-		for _, s := range []stackName{StackInfra, StackEdge, StackObservability, StackBackup} {
+		stacks := []stackName{StackInfra, StackEdge, StackObservability, StackBackup}
+		if sso.Enabled {
+			// sso (oauth2-proxy) is deployed alongside the platform stacks so
+			// Traefik's forwardAuth middleware has a live backend.
+			stacks = append(stacks, StackSSO)
+		}
+		for _, s := range stacks {
 			if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
 				return err
 			}
@@ -270,39 +286,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		return nil
 	})
 	wf.Add("Waiting for all services to become healthy", func(ctx context.Context) error {
-		if err := WaitHealthyStacks(ctx, deps.Docker, out); err != nil {
-			return fmt.Errorf("health check: %w", err)
-		}
-		return nil
-	})
-	wf.Add("Provisioning OpenObserve user + ingestion token", func(ctx context.Context) error {
-		if !needProvision || deps.Provisioner == nil {
-			return nil
-		}
-		if _, _, err := deps.Provisioner.EnsureUserAndToken(ctx); err != nil {
-			return err
-		}
-		realToken, err := loadStoredIngestionToken(ctx, deps.Store, deps.Cipher)
-		if err != nil {
-			return err
-		}
-		if realToken == "" || realToken == pendingIngestionToken {
-			return nil
-		}
-		render.OpenObserveIngestionToken = realToken
-		otelConfigName, otelConfigCreated, err = ensureOTelConfig(ctx, deps, in.Version, render)
-		if err != nil {
-			return err
-		}
-		if otelConfigCreated {
-			res.NewConfigs = append(res.NewConfigs, otelConfigName)
-		}
-		render.OTelConfigName = otelConfigName
-		fmt.Fprintf(out, "  ▶ Re-deploying observability with the provisioned ingestion token\n")
-		if err := deployStack(ctx, out, deps.Deployer, StackObservability, render); err != nil {
-			return err
-		}
-		res.StacksDeployed = append(res.StacksDeployed, string(StackObservability))
 		if err := WaitHealthyStacks(ctx, deps.Docker, out); err != nil {
 			return fmt.Errorf("health check: %w", err)
 		}
@@ -360,26 +343,6 @@ func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
 		}
 	}
 	return nil
-}
-
-// loadStoredIngestionToken returns the plaintext OpenObserve ingestion token
-// from the store, or "" when it has not been provisioned yet (fresh install).
-func loadStoredIngestionToken(ctx context.Context, s *store.Store, c *credentials.Cipher) (string, error) {
-	if s == nil || c == nil {
-		return "", nil
-	}
-	cred, err := s.GetCredential(ctx, credOpenObserveToken)
-	if err != nil {
-		if err == store.ErrCredentialNotFound {
-			return "", nil
-		}
-		return "", fmt.Errorf("lookup %s: %w", credOpenObserveToken, err)
-	}
-	plain, err := c.Decrypt(cred.PasswordCiphertext)
-	if err != nil {
-		return "", fmt.Errorf("decrypt %s: %w", credOpenObserveToken, err)
-	}
-	return string(plain), nil
 }
 
 // ensureOTelConfig renders the collector config and ensures its versioned

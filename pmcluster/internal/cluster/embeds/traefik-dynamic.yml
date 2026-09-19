@@ -2,15 +2,30 @@
 # replicated to every Swarm node automatically.
 http:
   middlewares:
+[[- if .SSOEnabled]]
+    # SSO gate (oauth2-proxy). When SSO is enabled the pmcluster-web +
+    # observ. routers use this forwardAuth instead of the htpasswd
+    # admin-auth below. oauth2-proxy runs in the sso stack on traefik-net;
+    # X-Forwarded-User / X-Forwarded-Email are passed to the downstream
+    # console + OpenObserve.
+    sso-auth:
+      forwardAuth:
+        address: "http://sso_oauth2-proxy:4180"
+        authResponseHeaders:
+          - X-Forwarded-User
+          - X-Forwarded-Email
+          - X-Forwarded-Preferred-Username
+[[- else]]
     admin-auth:
       basicAuth:
         usersFile: /run/secrets/admin_credentials
-    # openobserve-auto-auth: injected AFTER admin-auth has let the operator
-    # through, so OpenObserve auto-authenticates every request (its UI's
-    # session-check API honours HTTP Basic auth) and its own login page is
-    # never shown. MUST stay paired with admin-auth — alone it is a public
-    # root credential. The value is base64(<OO root email>:<OO root
-    # password>), rendered from the managed openobserve_admin credential.
+[[- end]]
+    # openobserve-auto-auth: injected AFTER admin-auth (or sso-auth) has let
+    # the operator through, so OpenObserve auto-authenticates every request
+    # (its UI's session-check API honours HTTP Basic auth) and its own login
+    # page is never shown. MUST stay paired with the gate middleware — alone
+    # it is a public root credential. The value is base64(<OO root email>:<OO
+    # root password>), rendered from the managed openobserve_admin credential.
     [[- if .OpenObserveBasicAuth]]
     openobserve-auto-auth:
       headers:

@@ -21,25 +21,22 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 )
 
-// TestE2EOpenObserveTokenIngestion validates the dedicated ingestion-token
-// decoupling end-to-end against a REAL OpenObserve + REAL OTel collector:
+// TestE2EOpenObserveAdminAuthIngestion validates the ROOT-admin basic-auth
+// ingestion model end-to-end against a REAL OpenObserve + REAL OTel collector:
 //
-//  1. Boot OpenObserve (v0.92.2) with NO root-token env — root email/password
-//     only. This mirrors the new design: we do NOT bake a token into the OO
-//     data volume.
-//  2. Create a dedicated INGESTION token via the OO API
-//     (POST /api/{org}/ingestion-tokens → an o2oi_... token), exactly as
-//     pmcluster's provisioner does.
-//  3. Render the collector config with the SAME function pmcluster uses
+//  1. Boot OpenObserve (v0.92.2) with ZO_ROOT_USER_EMAIL + ZO_ROOT_USER_PASSWORD
+//     (the same way pmcluster's observability stack runs it).
+//  2. Render the collector config with the SAME function pmcluster uses
 //     (RenderOTelCollectorConfig → exporter reads
-//     `Authorization: Basic base64(<org>:<ingestion_token>)` at openobserve:5081),
-//     then start the collector.
-//  4. Push one OTLP/HTTP log into the collector and assert it was ingested via
+//     `Authorization: Basic base64(<admin email>:<admin password>)` at
+//     openobserve:5081), then start the collector. NO provisioning API calls —
+//     the collector authenticates with the root admin credentials.
+//  3. Push one OTLP/HTTP log into the collector and assert it was ingested via
 //     OO's search API; assert the collector logged no auth/export error.
 //
-// A negative case sends a bogus credential and asserts OpenObserve rejects it
-// (401/403), proving ingestion auth is enforced by the token.
-func TestE2EOpenObserveTokenIngestion(t *testing.T) {
+// A negative case sends a bogus credential straight to OO's OTLP endpoint and
+// asserts OpenObserve rejects it (401/403), proving ingestion auth is enforced.
+func TestE2EOpenObserveAdminAuthIngestion(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH")
 	}
@@ -128,11 +125,10 @@ volumes:
 	}
 	waitOOHealthy(t, ctx, ooPort, 240*time.Second)
 
-	token := createIngestionToken(t, ctx, ooPort, email, pass)
 	rendered, err := cluster.RenderOTelCollectorConfig(cluster.RenderInput{
-		Domain:                    "localhost",
-		OpenObserveOrg:            "default",
-		OpenObserveIngestionToken: token,
+		Domain: "localhost",
+		OpenObserveBasicAuth: "Basic " +
+			base64.StdEncoding.EncodeToString([]byte(email+":"+pass)),
 	})
 	if err != nil {
 		t.Fatalf("RenderOTelCollectorConfig: %v", err)
@@ -166,7 +162,7 @@ volumes:
 	} else if !strings.Contains(body, marker) {
 		t.Errorf("OO search did not contain marker %q.\nSearch body:\n%s", marker, body)
 	} else {
-		t.Logf("✅ OO ingested the log via Basic base64(default:ingestion_token)")
+		t.Logf("✅ OO ingested the log via Basic base64(admin email:admin password)")
 	}
 
 	if ok, code := postOTLPToOO(t, ctx, ooPort, email, "definitely-not-a-root-cred3ntial", "oops-wrong-cred"); ok {
@@ -238,44 +234,6 @@ func searchOpenObserve(t *testing.T, ctx context.Context, port int, password, sq
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode >= 200 && resp.StatusCode < 300, string(body)
-}
-
-// createIngestionToken mints a dedicated OO ingestion token via the API
-// (POST /api/{org}/ingestion-tokens) authenticated with the root admin —
-// exactly the call pmcluster's OpenObserveProvisioner makes.
-func createIngestionToken(t *testing.T, ctx context.Context, port int, rootEmail, rootPass string) string {
-	t.Helper()
-	payload := []byte(`{"name":"pmcluster-e2e","description":"e2e ingestion token"}`)
-	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, "POST", fmt.Sprintf("http://127.0.0.1:%d/api/default/ingestion-tokens", port), bytes.NewReader(payload))
-	if err != nil {
-		t.Fatalf("create token request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(rootEmail+":"+rootPass)))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("create ingestion token: %v", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("create ingestion token: HTTP %d: %s", resp.StatusCode, body)
-	}
-	var parsed struct {
-		Data struct {
-			Token string `json:"token"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		t.Fatalf("decode token response: %v", err)
-	}
-	if parsed.Data.Token == "" {
-		t.Fatalf("ingestion token response missing token: %s", body)
-	}
-	t.Logf("minted ingestion token (%d chars, prefix o2oi_)", len(parsed.Data.Token))
-	return parsed.Data.Token
 }
 
 // postOTLPToOO sends a bare OTLP/HTTP log to OO with the given credentials,

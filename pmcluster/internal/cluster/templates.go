@@ -35,6 +35,7 @@ var ConfigFileNames = []string{
 	"observability-stack.yml",
 	"backup-stack.yml",
 	"edge-stack.yml",
+	"sso-stack.yml",
 	"otel-collector-config.yml",
 	"traefik-dynamic.yml",
 }
@@ -46,6 +47,7 @@ const (
 	StackObservability stackName = "observability"
 	StackBackup        stackName = "backup"
 	StackEdge          stackName = "edge"
+	StackSSO           stackName = "sso"
 )
 
 var composeFile = map[stackName]string{
@@ -53,6 +55,7 @@ var composeFile = map[stackName]string{
 	StackObservability: "observability-stack.yml",
 	StackBackup:        "backup-stack.yml",
 	StackEdge:          "edge-stack.yml",
+	StackSSO:           "sso-stack.yml",
 }
 
 // EdgeImageBase is the image registry/repo prefix for the pmcluster-edge
@@ -96,18 +99,14 @@ type RenderInput struct {
 	OpenObserveAdminEmail    string
 	OpenObserveAdminPassword string
 
-	// OpenObserveOrg is the OpenObserve organization segment used in the
-	// collector's ingestion basic-auth header (Basic base64(<org>:<token>)).
-	// Defaults to "default".
-	OpenObserveOrg string
-
-	// OpenObserveIngestionToken is the dedicated OpenObserve ingestion token
-	// (created via the OO API, prefix o2oi_) the OTel collector uses to
-	// authenticate ingestion (openobserve:5081). It is separate from the human
-	// admin password and never rotates, so the rendered collector config is
-	// stable across password rotations. Plaintext; read from the
-	// openobserve_token managed credential in up/update.
-	OpenObserveIngestionToken string
+	// OpenObserveBasicAuth is the "Basic base64(email:password)" header value
+	// for the OpenObserve ROOT admin user — the same credentials OpenObserve
+	// itself runs with (ZO_ROOT_USER_EMAIL / ZO_ROOT_USER_PASSWORD, from the
+	// openobserve_admin managed credential + the zo_root_user_password Swarm
+	// secret). It authenticates the OTel collector's ingestion
+	// (openobserve:5081) AND the Traefik openobserve-auto-auth middleware, so
+	// one password everywhere — no provisioning API calls.
+	OpenObserveBasicAuth string
 
 	// ACMEEmail enables Let's Encrypt automation when non-empty. Mutually
 	// exclusive with operator-supplied cert/key (see cluster.UpInput).
@@ -168,14 +167,29 @@ type RenderInput struct {
 	// Rendered via the template body; set in up/update.
 	EdgeImage string
 
-	// OpenObserveBasicAuth is the HTTP Basic Authorization header value for
-	// the OpenObserve root user ("Basic base64(email:password)"), rendered
-	// into the traefik-dynamic config as the openobserve-auto-auth
-	// middleware. Traefik injects it on every request to the observ. router
-	// AFTER admin-auth has let the operator through, so the OpenObserve
-	// console is auto-authenticated without its own login prompt. Set in
-	// up/update from the managed openobserve_admin credential.
-	OpenObserveBasicAuth string
+	// SSOEnabled flips the Traefik gate from basicAuth (htpasswd) to
+	// forwardAuth (oauth2-proxy). When true, the pmcluster-web + observ.
+	// routers use the sso-auth forwardAuth middleware and the sso stack is
+	// deployed. When false, admin-auth gates them as before.
+	SSOEnabled bool
+
+	// SSOCookieSecret is oauth2-proxy's cookie encryption secret (base64,
+	// 32+ bytes). Set in up/update from the managed sso_cookie_secret
+	// credential. Used only when SSOEnabled.
+	SSOCookieSecret string
+
+	// SSOClientID / SSOClientSecret are the OAuth provider (GitHub)
+	// application credentials. SSOGitHubOrg restricts sign-in to members of
+	// a GitHub org (optional). Used only when SSOEnabled.
+	SSOClientID     string
+	SSOClientSecret string
+	SSOGitHubOrg    string
+
+	// EdgeLoginDisabled is rendered into the edge stack's
+	// EDGE_LOGIN_DISABLED env var. Default true in swarm deployments (Traefik
+	// admin-auth or SSO already gates /web, so the console's own login +
+	// Users CRUD are hidden); false keeps the password login (local runs).
+	EdgeLoginDisabled bool
 }
 
 // openObserveBasicAuth computes the HTTP Basic Authorization header value
@@ -310,26 +324,22 @@ func ensureEdgeConfig(ctx context.Context, d docker.Client, version string, rend
 }
 
 // RenderOTelCollectorConfig fills in the OpenObserve `Authorization: Basic <b64>`
-// header value. The credential is the dedicated INGESTION token (created via the
-// OO API, prefix o2oi_), NOT the rotating human password, so the rendered config
-// stays content-stable across password rotations. OpenObserve authenticates OTLP
-// ingestion with Basic <base64(<org>:<ingestion_token>)>.
+// RenderOTelCollectorConfig renders the OTel collector pipeline config. The
+// exporter's Authorization header is the ROOT admin basic auth
+// (Basic base64(<admin email>:<admin password>)) — the exact credentials
+// OpenObserve runs with (ZO_ROOT_USER_EMAIL / ZO_ROOT_USER_PASSWORD from the
+// openobserve_admin credential + zo_root_user_password Swarm secret), so the
+// collector authenticates ingestion without any provisioning API calls.
+// OpenObserve accepts the root user's email:password on its OTLP endpoint.
 func RenderOTelCollectorConfig(in RenderInput) ([]byte, error) {
-	org := in.OpenObserveOrg
-	if org == "" {
-		org = "default"
+	if in.OpenObserveBasicAuth == "" {
+		return nil, fmt.Errorf("RenderOTelCollectorConfig: OpenObserve admin basic auth is required")
 	}
-	if org == "" || in.OpenObserveIngestionToken == "" {
-		return nil, fmt.Errorf("RenderOTelCollectorConfig: OpenObserve org and ingestion token are required")
-	}
-	cred := org + ":" + in.OpenObserveIngestionToken
-	basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(cred))
-
 	body, err := readConfigFile("otel-collector-config.yml", in)
 	if err != nil {
 		return nil, err
 	}
-	rendered := strings.ReplaceAll(body, "__BASIC_AUTH_PLACEHOLDER__", basicAuth)
+	rendered := strings.ReplaceAll(body, "__BASIC_AUTH_PLACEHOLDER__", in.OpenObserveBasicAuth)
 	return []byte(rendered), nil
 }
 

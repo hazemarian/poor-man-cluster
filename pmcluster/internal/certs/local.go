@@ -13,13 +13,12 @@ import (
 // Local applies and removes the cluster's TLS certificates by materialising
 // them as versioned Swarm secrets and refreshing Traefik.
 type Local struct {
-	Store       *store.Store
-	Cipher      *credentials.Cipher
-	Docker      docker.Client
-	Deployer    cluster.StackDeployer
-	Provisioner *cluster.OpenObserveProvisioner
-	ConfigDir   string
-	Version     string
+	Store     *store.Store
+	Cipher    *credentials.Cipher
+	Docker    docker.Client
+	Deployer  cluster.StackDeployer
+	ConfigDir string
+	Version   string
 }
 
 // NewLocal returns the local certs adapter.
@@ -28,17 +27,15 @@ func NewLocal(
 	cipher *credentials.Cipher,
 	dc docker.Client,
 	deployer cluster.StackDeployer,
-	provisioner *cluster.OpenObserveProvisioner,
 	configDir, version string,
 ) *Local {
 	return &Local{
-		Store:       st,
-		Cipher:      cipher,
-		Docker:      dc,
-		Deployer:    deployer,
-		Provisioner: provisioner,
-		ConfigDir:   configDir,
-		Version:     version,
+		Store:     st,
+		Cipher:    cipher,
+		Docker:    dc,
+		Deployer:  deployer,
+		ConfigDir: configDir,
+		Version:   version,
 	}
 }
 
@@ -47,11 +44,10 @@ var _ Service = (*Local)(nil)
 
 func (t *Local) deps() cluster.SiteCertDeps {
 	return cluster.SiteCertDeps{
-		Store:       t.Store,
-		Cipher:      t.Cipher,
-		Docker:      t.Docker,
-		Deployer:    t.Deployer,
-		Provisioner: t.Provisioner,
+		Store:    t.Store,
+		Cipher:   t.Cipher,
+		Docker:   t.Docker,
+		Deployer: t.Deployer,
 	}
 }
 

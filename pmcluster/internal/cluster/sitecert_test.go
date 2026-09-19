@@ -57,7 +57,7 @@ func TestApplySiteCert_EndToEnd(t *testing.T) {
 
 	ctx := context.Background()
 	certPEM, keyPEM := genCert(t, "test.example.com")
-	scdeps := SiteCertDeps{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer, Provisioner: deps.Provisioner}
+	scdeps := SiteCertDeps{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer}
 	row, err := ApplyCert(ctx, scdeps, cfgDir, "v0.3.0", "test.example.com", certPEM, keyPEM, true)
 	if err != nil {
 		t.Fatalf("ApplyCert: %v", err)
@@ -112,7 +112,7 @@ func TestApplySiteCert_RejectsWrongDomain(t *testing.T) {
 
 	ctx := context.Background()
 	certPEM, keyPEM := genCert(t, "other.example.net")
-	scdeps := SiteCertDeps{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer, Provisioner: deps.Provisioner}
+	scdeps := SiteCertDeps{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer}
 	_, err := ApplyCert(ctx, scdeps, cfgDir, "v0.3.0", "test.example.com", certPEM, keyPEM, true)
 	if err == nil {
 		t.Fatal("expected an error: cert for other.example.net must not be accepted for test.example.com")
