@@ -14,8 +14,11 @@ type Stack struct {
 	Name            string
 	CurrentRevision int64
 	RepoURL         sql.NullString
-	CreatedAt       int64
-	UpdatedAt       int64
+	// SourceFile is the manifest path inside the repo (e.g. deploy/test-lms.yaml)
+	// that produced the current revision; empty when deployed without provenance.
+	SourceFile string
+	CreatedAt  int64
+	UpdatedAt  int64
 }
 
 type StackRevision struct {
@@ -27,8 +30,10 @@ type StackRevision struct {
 	// re-translated manifest that hashes identically to the latest revision
 	// is a no-op — no new revision and no Docker call.
 	RenderedHash string
-	PayloadJSON  sql.NullString
-	CreatedAt    int64
+	// SourceFile is the manifest path inside the source repo for THIS revision.
+	SourceFile  string
+	PayloadJSON sql.NullString
+	CreatedAt   int64
 }
 
 var ErrStackNotFound = errors.New("stack not found")
@@ -47,27 +52,27 @@ func (s *Store) RecordDeploy(ctx context.Context, rev *StackRevision, repoURL st
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO stack_revisions
-		   (stack_name, revision, source_yaml, rendered_yaml, rendered_hash, payload_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		   (stack_name, revision, source_yaml, rendered_yaml, rendered_hash, source_file, payload_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		rev.StackName, rev.Revision, rev.SourceYAML, rev.RenderedYAML, rev.RenderedHash,
-		nullableString(rev.PayloadJSON.String, rev.PayloadJSON.Valid), now,
+		rev.SourceFile, nullableString(rev.PayloadJSON.String, rev.PayloadJSON.Valid), now,
 	); err != nil {
 		if !isForeignKeyViolation(err) {
 			return fmt.Errorf("insert revision: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO stacks (name, current_revision, repo_url, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?)`,
-			rev.StackName, rev.Revision, nullableString(repoURL, repoURL != ""), now, now,
+			`INSERT INTO stacks (name, current_revision, repo_url, source_file, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			rev.StackName, rev.Revision, nullableString(repoURL, repoURL != ""), rev.SourceFile, now, now,
 		); err != nil {
 			return fmt.Errorf("insert stack: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO stack_revisions
-			   (stack_name, revision, source_yaml, rendered_yaml, rendered_hash, payload_json, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			   (stack_name, revision, source_yaml, rendered_yaml, rendered_hash, source_file, payload_json, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			rev.StackName, rev.Revision, rev.SourceYAML, rev.RenderedYAML, rev.RenderedHash,
-			nullableString(rev.PayloadJSON.String, rev.PayloadJSON.Valid), now,
+			rev.SourceFile, nullableString(rev.PayloadJSON.String, rev.PayloadJSON.Valid), now,
 		); err != nil {
 			return fmt.Errorf("insert revision (after parent): %w", err)
 		}
@@ -78,9 +83,10 @@ func (s *Store) RecordDeploy(ctx context.Context, rev *StackRevision, repoURL st
 	}
 
 	res, err := tx.ExecContext(ctx,
-		`UPDATE stacks SET current_revision = ?, updated_at = ?, repo_url = COALESCE(NULLIF(?, ''), repo_url)
+		`UPDATE stacks SET current_revision = ?, updated_at = ?, repo_url = COALESCE(NULLIF(?, ''), repo_url),
+		 source_file = COALESCE(NULLIF(?, ''), source_file)
 		 WHERE name = ?`,
-		rev.Revision, now, repoURL, rev.StackName,
+		rev.Revision, now, repoURL, rev.SourceFile, rev.StackName,
 	)
 	if err != nil {
 		return fmt.Errorf("update stack: %w", err)
@@ -92,9 +98,9 @@ func (s *Store) RecordDeploy(ctx context.Context, rev *StackRevision, repoURL st
 	if n == 0 {
 
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO stacks (name, current_revision, repo_url, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?)`,
-			rev.StackName, rev.Revision, nullableString(repoURL, repoURL != ""), now, now,
+			`INSERT INTO stacks (name, current_revision, repo_url, source_file, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			rev.StackName, rev.Revision, nullableString(repoURL, repoURL != ""), rev.SourceFile, now, now,
 		); err != nil {
 			return fmt.Errorf("re-insert stack: %w", err)
 		}
@@ -109,8 +115,8 @@ func (s *Store) RecordDeploy(ctx context.Context, rev *StackRevision, repoURL st
 func (s *Store) GetStack(ctx context.Context, name string) (*Stack, error) {
 	var st Stack
 	err := s.db.QueryRowContext(ctx,
-		`SELECT name, current_revision, repo_url, created_at, updated_at FROM stacks WHERE name = ?`, name,
-	).Scan(&st.Name, &st.CurrentRevision, &st.RepoURL, &st.CreatedAt, &st.UpdatedAt)
+		`SELECT name, current_revision, repo_url, source_file, created_at, updated_at FROM stacks WHERE name = ?`, name,
+	).Scan(&st.Name, &st.CurrentRevision, &st.RepoURL, &st.SourceFile, &st.CreatedAt, &st.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrStackNotFound
@@ -122,7 +128,7 @@ func (s *Store) GetStack(ctx context.Context, name string) (*Stack, error) {
 
 func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT name, current_revision, repo_url, created_at, updated_at FROM stacks ORDER BY name`,
+		`SELECT name, current_revision, repo_url, source_file, created_at, updated_at FROM stacks ORDER BY name`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query stacks: %w", err)
@@ -131,7 +137,7 @@ func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
 	var out []*Stack
 	for rows.Next() {
 		var st Stack
-		if err := rows.Scan(&st.Name, &st.CurrentRevision, &st.RepoURL, &st.CreatedAt, &st.UpdatedAt); err != nil {
+		if err := rows.Scan(&st.Name, &st.CurrentRevision, &st.RepoURL, &st.SourceFile, &st.CreatedAt, &st.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan stack: %w", err)
 		}
 		out = append(out, &st)
@@ -185,10 +191,10 @@ func (s *Store) NextFreeRevision(ctx context.Context, stackName string, candidat
 func (s *Store) GetRevision(ctx context.Context, stackName string, revision int64) (*StackRevision, error) {
 	var r StackRevision
 	err := s.db.QueryRowContext(ctx,
-		`SELECT stack_name, revision, source_yaml, rendered_yaml, rendered_hash, payload_json, created_at
+		`SELECT stack_name, revision, source_yaml, rendered_yaml, rendered_hash, source_file, payload_json, created_at
 		 FROM stack_revisions WHERE stack_name = ? AND revision = ?`,
 		stackName, revision,
-	).Scan(&r.StackName, &r.Revision, &r.SourceYAML, &r.RenderedYAML, &r.RenderedHash, &r.PayloadJSON, &r.CreatedAt)
+	).Scan(&r.StackName, &r.Revision, &r.SourceYAML, &r.RenderedYAML, &r.RenderedHash, &r.SourceFile, &r.PayloadJSON, &r.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRevisionNotFound
@@ -205,13 +211,13 @@ func (s *Store) ListRevisions(ctx context.Context, stackName string, limit int) 
 	var err error
 	if limit > 0 {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT stack_name, revision, source_yaml, rendered_yaml, rendered_hash, payload_json, created_at
+			`SELECT stack_name, revision, source_yaml, rendered_yaml, rendered_hash, source_file, payload_json, created_at
 			 FROM stack_revisions WHERE stack_name = ? ORDER BY revision DESC LIMIT ?`,
 			stackName, limit,
 		)
 	} else {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT stack_name, revision, source_yaml, rendered_yaml, rendered_hash, payload_json, created_at
+			`SELECT stack_name, revision, source_yaml, rendered_yaml, rendered_hash, source_file, payload_json, created_at
 			 FROM stack_revisions WHERE stack_name = ? ORDER BY revision DESC`,
 			stackName,
 		)
@@ -223,7 +229,7 @@ func (s *Store) ListRevisions(ctx context.Context, stackName string, limit int) 
 	var out []*StackRevision
 	for rows.Next() {
 		var r StackRevision
-		if err := rows.Scan(&r.StackName, &r.Revision, &r.SourceYAML, &r.RenderedYAML, &r.RenderedHash, &r.PayloadJSON, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.StackName, &r.Revision, &r.SourceYAML, &r.RenderedYAML, &r.RenderedHash, &r.SourceFile, &r.PayloadJSON, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan revision: %w", err)
 		}
 		out = append(out, &r)

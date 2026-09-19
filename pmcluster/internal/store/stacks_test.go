@@ -20,6 +20,7 @@ func makeRevision(stackName string, revision int64, source, rendered string) *St
 		SourceYAML:   source,
 		RenderedYAML: rendered,
 		PayloadJSON:  sql.NullString{String: `{"test":true}`, Valid: true},
+		SourceFile:   "deploy/mystack.yaml",
 	}
 }
 
@@ -47,6 +48,9 @@ func TestRecordDeploy_HappyPath(t *testing.T) {
 	if !st.RepoURL.Valid || st.RepoURL.String != "https://github.com/org/repo" {
 		t.Errorf("stack.RepoURL = %v, want valid https://github.com/org/repo", st.RepoURL)
 	}
+	if st.SourceFile != "deploy/mystack.yaml" {
+		t.Errorf("stack.SourceFile = %q, want deploy/mystack.yaml", st.SourceFile)
+	}
 
 	r, err := s.GetRevision(ctx, "mystack", 1000)
 	if err != nil {
@@ -63,6 +67,9 @@ func TestRecordDeploy_HappyPath(t *testing.T) {
 	}
 	if r.RenderedYAML != "rendered: yaml" {
 		t.Errorf("revision.RenderedYAML = %q, want 'rendered: yaml'", r.RenderedYAML)
+	}
+	if r.SourceFile != "deploy/mystack.yaml" {
+		t.Errorf("revision.SourceFile = %q, want deploy/mystack.yaml", r.SourceFile)
 	}
 }
 

@@ -16,6 +16,9 @@
   <label>repo URL (metadata only, optional)</label>
   <input name="repo_url" placeholder="https://github.com/org/repo" value="{{.Form.RepoURL}}">
 
+  <label>manifest file path (provenance, optional)</label>
+  <input name="file" placeholder="deploy/my-app.yaml" value="{{.Form.File}}">
+
   <label>manifest (DSL YAML)</label>
   <textarea name="manifest" rows="16" placeholder="app: my-app&#10;env: production&#10;domain: example.com&#10;registry: ghcr.io/org&#10;version: v1&#10;&#10;services:&#10;  web:&#10;    image: ghcr.io/org/my-app:${version}&#10;    replicas: 1&#10;    placement: manager&#10;    expose:&#10;      port: 3000&#10;      host: my-app.example.com&#10;    healthcheck:&#10;      type: http&#10;      path: /">{{.Form.Manifest}}</textarea>
 

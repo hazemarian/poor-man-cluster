@@ -14,8 +14,11 @@ import "context"
 // Payload is the canonical deploy request. JSON shape is shared by the REST
 // handler and the webhook receiver.
 type Payload struct {
-	AppName  string `json:"app_name,omitempty"`
-	RepoURL  string `json:"repo_url,omitempty"`
+	AppName string `json:"app_name,omitempty"`
+	RepoURL string `json:"repo_url,omitempty"`
+	// File is the manifest path inside the source repo (e.g. deploy/test-lms.yaml).
+	// Recorded for provenance so a revision can be traced back to its source.
+	File     string `json:"file,omitempty"`
 	Version  string `json:"version,omitempty"`
 	Manifest string `json:"manifest"`
 }
@@ -31,11 +34,13 @@ type Result struct {
 	Changed bool
 }
 
-// Stack is a deployed stack's metadata. RepoURL is empty when unset.
+// Stack is a deployed stack's metadata. RepoURL is empty when unset; SourceFile
+// is the manifest path inside that repo (deploy/test-lms.yaml).
 type Stack struct {
 	Name            string
 	CurrentRevision int64
 	RepoURL         string
+	SourceFile      string
 	CreatedAt       int64
 	UpdatedAt       int64
 }

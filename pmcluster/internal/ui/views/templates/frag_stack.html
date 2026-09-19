@@ -7,6 +7,7 @@
   <a class="link" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">← all stacks</a>
   · current revision <code>{{.Detail.Stack.CurrentRevision}}</code>
   · {{if .Detail.Stack.RepoURL}}repo <code>{{.Detail.Stack.RepoURL}}</code>{{else}}no repo{{end}}
+  {{if .Detail.Stack.SourceFile}}· file <code>{{.Detail.Stack.SourceFile}}</code>{{end}}
   · updated {{ts .Detail.Stack.UpdatedAt}}
 </p>
 

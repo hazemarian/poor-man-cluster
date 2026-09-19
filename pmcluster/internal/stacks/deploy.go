@@ -176,6 +176,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 			SourceYAML:   p.Manifest,
 			RenderedYAML: string(rendered),
 			RenderedHash: store.ConfigHash(string(rendered)),
+			SourceFile:   p.File,
 			PayloadJSON:  sql.NullString{String: string(payloadJSON), Valid: true},
 		}
 		if err := s.Store.RecordDeploy(ctx, rev, p.RepoURL); err != nil {

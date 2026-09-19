@@ -230,6 +230,7 @@ func stackJSON(s Stack) map[string]any {
 		"name":             s.Name,
 		"current_revision": s.CurrentRevision,
 		"repo_url":         s.RepoURL,
+		"source_file":      s.SourceFile,
 		"created_at":       s.CreatedAt,
 		"updated_at":       s.UpdatedAt,
 	}

@@ -21,6 +21,7 @@ type stackRow struct {
 	Name            string
 	CurrentRevision int64
 	RepoURL         string
+	SourceFile      string
 	UpdatedAt       int64
 }
 
@@ -43,7 +44,7 @@ func (c Stacks) List(g *gin.Context) {
 	for _, s := range stacks {
 		d.Stacks = append(d.Stacks, stackRow{
 			Name: s.Name, CurrentRevision: s.CurrentRevision,
-			RepoURL: s.RepoURL, UpdatedAt: s.UpdatedAt,
+			RepoURL: s.RepoURL, SourceFile: s.SourceFile, UpdatedAt: s.UpdatedAt,
 		})
 	}
 	d.Count = len(d.Stacks)
@@ -72,7 +73,7 @@ func (c Stacks) Remove(g *gin.Context) {
 	for _, s := range stacks {
 		d.Stacks = append(d.Stacks, stackRow{
 			Name: s.Name, CurrentRevision: s.CurrentRevision,
-			RepoURL: s.RepoURL, UpdatedAt: s.UpdatedAt,
+			RepoURL: s.RepoURL, SourceFile: s.SourceFile, UpdatedAt: s.UpdatedAt,
 		})
 	}
 	d.Count = len(d.Stacks)
@@ -144,7 +145,7 @@ func (c Stacks) renderStack(g *gin.Context, name string, base stackDetailData) {
 	sd := &stackDetail{
 		Stack: stackRow{
 			Name: det.Stack.Name, CurrentRevision: det.Stack.CurrentRevision,
-			RepoURL: det.Stack.RepoURL, UpdatedAt: det.Stack.UpdatedAt,
+			RepoURL: det.Stack.RepoURL, SourceFile: det.Stack.SourceFile, UpdatedAt: det.Stack.UpdatedAt,
 		},
 	}
 	for _, r := range det.Revisions {

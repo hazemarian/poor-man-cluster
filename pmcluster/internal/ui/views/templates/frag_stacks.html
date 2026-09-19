@@ -8,12 +8,13 @@
 {{if .Stacks}}
 <div class="card" style="padding:6px 14px">
 <table>
-  <tr><th>Name</th><th>Revision</th><th>Repo</th><th>Updated</th><th></th></tr>
+  <tr><th>Name</th><th>Revision</th><th>Repo</th><th>File</th><th>Updated</th><th></th></tr>
   {{range .Stacks}}
   <tr>
     <td><a class="link" href="/web/stacks/{{.Name}}" hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">{{.Name}}</a></td>
     <td>{{.CurrentRevision}}</td>
     <td class="muted">{{if .RepoURL}}<code>{{.RepoURL}}</code>{{else}}—{{end}}</td>
+    <td class="muted">{{if .SourceFile}}<code>{{.SourceFile}}</code>{{else}}—{{end}}</td>
     <td class="muted">{{ts .UpdatedAt}}</td>
     <td style="text-align:right; white-space:nowrap">
       <a class="btn sm ghost" href="/web/stacks/{{.Name}}" hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">Details</a>

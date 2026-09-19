@@ -137,6 +137,17 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Webhook deploys must carry provenance: which repo + which manifest file
+	// produced this deploy. Without them a revision cannot be traced back to
+	// its source (and the console cannot offer a git-backed sync later).
+	if p.RepoURL == "" || p.File == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "deploy provenance required: 'repo_url' and 'file' must identify the source repository and manifest path",
+		})
+		record("bad_request")
+		return
+	}
+
 	res, err := h.Deploy.Deploy(r.Context(), p)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})

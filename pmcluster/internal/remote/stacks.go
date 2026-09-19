@@ -18,6 +18,7 @@ type stackDTO struct {
 	Name            string `json:"name"`
 	CurrentRevision int64  `json:"current_revision"`
 	RepoURL         string `json:"repo_url"`
+	SourceFile      string `json:"source_file"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`
 }
@@ -78,6 +79,7 @@ func (d stackDTO) stack() stacks.Stack {
 		Name:            d.Name,
 		CurrentRevision: d.CurrentRevision,
 		RepoURL:         d.RepoURL,
+		SourceFile:      d.SourceFile,
 		CreatedAt:       d.CreatedAt,
 		UpdatedAt:       d.UpdatedAt,
 	}
@@ -102,6 +104,7 @@ func (a *Deploy) Deploy(ctx context.Context, p stacks.Payload) (*stacks.Result, 
 	if err := a.c.do(ctx, http.MethodPost, "/stacks", map[string]string{
 		"app_name": p.AppName,
 		"repo_url": p.RepoURL,
+		"file":     p.File,
 		"version":  p.Version,
 		"manifest": p.Manifest,
 	}, &out); err != nil {

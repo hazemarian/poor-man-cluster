@@ -20,6 +20,7 @@ type deployForm struct {
 	AppName  string
 	Version  string
 	RepoURL  string
+	File     string
 	Manifest string
 }
 
@@ -34,6 +35,7 @@ func (c Deploy) Page(g *gin.Context) {
 		AppName: g.DefaultQuery("app", ""),
 		Version: g.DefaultQuery("version", ""),
 		RepoURL: g.DefaultQuery("repo", ""),
+		File:    g.DefaultQuery("file", ""),
 	}})
 }
 
@@ -44,6 +46,7 @@ func (c Deploy) Submit(g *gin.Context) {
 		AppName:  g.PostForm("app_name"),
 		Version:  g.PostForm("version"),
 		RepoURL:  g.PostForm("repo_url"),
+		File:     g.PostForm("file"),
 		Manifest: g.PostForm("manifest"),
 	}
 	d := deployData{Form: f}
@@ -64,6 +67,7 @@ func (c Deploy) Submit(g *gin.Context) {
 		AppName:  f.AppName,
 		Version:  f.Version,
 		RepoURL:  f.RepoURL,
+		File:     f.File,
 		Manifest: f.Manifest,
 	})
 	if err != nil {

@@ -63,6 +63,7 @@ var rollbackCmd = &cobra.Command{
 func init() {
 	deployCmd.Flags().String("app", "", "override the manifest's app name (multi-tenant deploys)")
 	deployCmd.Flags().String("repo", "", "repository URL (audit metadata only — not fetched)")
+	deployCmd.Flags().String("file", "", "manifest path inside the source repo (provenance, e.g. deploy/test-lms.yaml)")
 	deployCmd.Flags().String("version", "", "override the manifest's version (image tag)")
 
 	stackCmd.AddCommand(stackListCmd, stackShowCmd)
@@ -93,10 +94,12 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 
 	appOverride, _ := cmd.Flags().GetString("app")
 	repo, _ := cmd.Flags().GetString("repo")
+	file, _ := cmd.Flags().GetString("file")
 	version, _ := cmd.Flags().GetString("version")
 	payload := stacks.Payload{
 		AppName:  appOverride,
 		RepoURL:  repo,
+		File:     file,
 		Version:  version,
 		Manifest: string(manifestBytes),
 	}
@@ -136,15 +139,15 @@ func runStackList(cmd *cobra.Command, _ []string) error {
 	}
 
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tREVISION\tUPDATED\tREPO")
+	fmt.Fprintln(w, "NAME\tREVISION\tUPDATED\tREPO\tFILE")
 	for _, s := range list {
 		repo := "—"
 		if s.RepoURL != "" {
 			repo = s.RepoURL
 		}
-		fmt.Fprintf(w, "%s\t%d\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\n",
 			s.Name, s.CurrentRevision,
-			time.Unix(s.UpdatedAt, 0).Format(time.RFC3339), repo,
+			time.Unix(s.UpdatedAt, 0).Format(time.RFC3339), repo, s.SourceFile,
 		)
 	}
 	return w.Flush()
@@ -184,6 +187,9 @@ func runStackShow(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(out, "Current revision: %d (%s)\n", s.CurrentRevision, time.Unix(s.CurrentRevision, 0).Format(time.RFC3339))
 	if s.RepoURL != "" {
 		fmt.Fprintf(out, "Repo:             %s\n", s.RepoURL)
+	}
+	if s.SourceFile != "" {
+		fmt.Fprintf(out, "File:             %s\n", s.SourceFile)
 	}
 	fmt.Fprintf(out, "Created:          %s\n", time.Unix(s.CreatedAt, 0).Format(time.RFC3339))
 	fmt.Fprintf(out, "Updated:          %s\n", time.Unix(s.UpdatedAt, 0).Format(time.RFC3339))

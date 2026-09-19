@@ -44,6 +44,7 @@ type Stack struct {
 	Name            string `json:"name"`
 	CurrentRevision int64  `json:"current_revision"`
 	RepoURL         string `json:"repo_url"`
+	SourceFile      string `json:"source_file"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`
 }
@@ -96,6 +97,7 @@ type Backup struct {
 type DeployPayload struct {
 	AppName  string `json:"app_name,omitempty"`
 	RepoURL  string `json:"repo_url,omitempty"`
+	File     string `json:"file,omitempty"`
 	Version  string `json:"version,omitempty"`
 	Manifest string `json:"manifest"`
 }

@@ -145,12 +145,56 @@ services:
 // validPayload returns a JSON-encoded stacks.Payload using validManifest.
 func validPayload(t *testing.T) []byte {
 	t.Helper()
-	p := stacks.Payload{Manifest: validManifest}
+	p := stacks.Payload{Manifest: validManifest, RepoURL: "https://github.com/org/repo", File: "deploy/app.yaml"}
 	b, err := json.Marshal(p)
 	if err != nil {
 		t.Fatalf("json.Marshal payload: %v", err)
 	}
 	return b
+}
+
+// TestHandlerRequiresProvenance verifies webhook deploys without repo_url/file
+// are rejected (user m2930: provenance is required in the payload).
+func TestHandlerRequiresProvenance(t *testing.T) {
+	const sourceName = "github-prod"
+
+	st, c, _, secret := testDeps(t, sourceName)
+	srv, _ := buildHandler(t, st, c, &recordingDeployer{})
+	_ = srv
+
+	body := validPayload(t)
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	delete(payload, "repo_url")
+	delete(payload, "file")
+	noProvenance, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/webhook/"+sourceName, bytes.NewReader(noProvenance))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	now := time.Now().Unix()
+	req.Header.Set("X-Pmcluster-Timestamp", strconv.FormatInt(now, 10))
+	req.Header.Set("X-Pmcluster-Signature", computeHMAC(secret, noProvenance, now))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", resp.StatusCode, b)
+	}
+	if !strings.Contains(string(b), "provenance required") {
+		t.Errorf("400 body = %q, want 'provenance required'", b)
+	}
 }
 
 func TestHandlerReceive(t *testing.T) {
