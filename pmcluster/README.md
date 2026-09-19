@@ -166,6 +166,7 @@ stack (Traefik labels, networks, secrets, restart/update policies included).
 - Top-level [README](../README.md) — architecture, getting started, TLS, backups
 - [DSL reference](../docs/dsl.md)
 - [Webhook integration guide](../docs/webhook.md)
+- [Storage & database architecture guide](../docs/storage-and-databases.md)
 - [REST API spec](docs/openapi.yaml)
 - [Restore design](docs/restore-design.md)
 - [RFC v2 (issue #1)](https://github.com/hazemarian/poor-man-stack/issues/1)

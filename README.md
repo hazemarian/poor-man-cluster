@@ -146,6 +146,7 @@ poor-man-stack/
 ├── docs/
 │   ├── dsl.md                          # Deploy DSL reference
 │   ├── webhook.md                      # Webhook integration guide for CI
+│   ├── storage-and-databases.md        # Storage & database architecture guide
 │   └── openapi.yaml                    # REST API spec (also at pmcluster/docs/)
 └── README.md
 ```
@@ -530,6 +531,12 @@ pmcluster backup list                         # audit log of every triggered run
 In addition to the per-node app-volume agent, the backup stack runs a manager-only **control-plane agent** (`control-plane-backup`). Every night it archives `~/.pmcluster` itself — the SQLite DB (users, API keys, webhook secrets, credentials, revisions), the encryption key, TLS certs, and rendered configs — into the same `/var/backups/docker-volumes` directory under a `pmcluster-ctlplane-` prefix (30-day retention). This closes the "lost manager disk = full re-bootstrap" gap: app data and the control plane both ride along in the nightly archive.
 
 Restore is a known design gap, sketched in [`pmcluster/docs/restore-design.md`](pmcluster/docs/restore-design.md).
+
+## Storage & Databases
+
+pmcluster standardizes on a **single host root mount** at `/var/stack/data` for all application data. How you configure, format, or replicate the underlying host storage is entirely up to you — from a single VPS local SSD to multi-node replicated disks. Databases run **inside the cluster** (no managed DB services), with replication handled either at the database level (CockroachDB / MariaDB Galera / Patroni) or the OS block level (DRBD + LINSTOR), and every byte is backed offsite to S3-compatible storage (R2 / S3 / Hetzner Storage Box) by the backup containers.
+
+The full decision flowchart, storage matrix, database strategies, backup rules for replicated environments, and a quickstart example stack live in [`docs/storage-and-databases.md`](docs/storage-and-databases.md).
 
 ---
 
