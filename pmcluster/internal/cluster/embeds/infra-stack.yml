@@ -86,7 +86,16 @@ services:
         [[- if .ACMEEmail]]
         - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
         [[- end]]
+        # The gate middleware must match the dynamic config: SSO swaps
+        # the htpasswd gate (admin-auth) for forwardAuth (sso-auth), so the
+        # dashboard router references whichever one is active — a hardcoded
+        # reference to the other would point at a nonexistent middleware
+        # and 404.
+        [[- if .SSOEnabled]]
+        - "traefik.http.routers.traefik.middlewares=sso-auth@file,cors-default@file"
+        [[- else]]
         - "traefik.http.routers.traefik.middlewares=admin-auth@file,cors-default@file"
+        [[- end]]
     secrets:
       - admin_credentials
       [[- if not .ACMEEmail]]

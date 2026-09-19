@@ -1098,7 +1098,7 @@ func TestShellExternalLinks(t *testing.T) {
 	for _, want := range []string{
 		"External",
 		`href="https://observ.example.com"`,
-		`href="https://traefik.example.com"`,
+		`href="https://traefik.example.com/dashboard/"`,
 	} {
 		if !strings.Contains(withDomain, want) {
 			t.Errorf("shell with ClusterDomain missing %q", want)

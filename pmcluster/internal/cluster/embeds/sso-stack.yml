@@ -56,6 +56,15 @@ services:
       # callback (start on pmcluster. → callback on sso. → CSRF token lost).
       OAUTH2_PROXY_COOKIE_DOMAINS: ".[[.Domain]]"
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      # Trust Traefik's X-Forwarded-* headers so oauth2-proxy builds the
+      # post-login redirect from the ORIGINAL request's host + path (e.g.
+      # https://pmcluster.<domain>/web/) instead of a path-only rd that
+      # resolves to the callback host (sso.<domain>) and lands on the static
+      # "Authenticated" page. Whitelist-domain allows the redirect target to
+      # be any subdomain of <domain> (the flow hops pmcluster./observ. →
+      # sso. → back to the original host).
+      OAUTH2_PROXY_TRUST_FORWARD_HEADER: "true"
+      OAUTH2_PROXY_WHITELIST_DOMAIN: ".[[.Domain]]"
       # Redirect URI must match the GitHub OAuth app callback exactly. The
       # callback + sign-in endpoints are served at the sso.<domain> subdomain
       # (this service's Traefik router below).

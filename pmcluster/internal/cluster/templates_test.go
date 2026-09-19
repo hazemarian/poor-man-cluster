@@ -209,6 +209,11 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 		"Host(`observ.example.com`) && PathPrefix(`/oauth2`)",
 		// Shared cookie so the sso.<domain> callback session works on all hosts.
 		"OAUTH2_PROXY_COOKIE_DOMAINS: \".example.com\"",
+		// Trust X-Forwarded-* so the post-login redirect goes back to the
+		// ORIGINAL host (pmcluster./observ.) instead of the sso. callback host;
+		// whitelist-domain allows the cross-subdomain hop.
+		"OAUTH2_PROXY_TRUST_FORWARD_HEADER: \"true\"",
+		"OAUTH2_PROXY_WHITELIST_DOMAIN: \".example.com\"",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("sso-stack render missing %q", want)
@@ -775,6 +780,35 @@ func TestLoadComposeFile_InfraBYOMode(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("BYO-mode infra stack missing %q", want)
 		}
+	}
+	// The dashboard router gate must match the active auth: SSO off → htpasswd.
+	if !strings.Contains(s, "traefik.http.routers.traefik.middlewares=admin-auth@file,cors-default@file") {
+		t.Errorf("BYO-mode infra stack must gate the dashboard with admin-auth (SSO off):\n%s", s)
+	}
+	if strings.Contains(s, "sso-auth@file") {
+		t.Errorf("BYO-mode infra stack must NOT reference sso-auth when SSO is disabled")
+	}
+}
+
+// TestLoadComposeFile_InfraSSOMode verifies the dashboard router swaps its gate
+// to sso-auth when SSO is enabled (admin-auth is not rendered in the dynamic
+// config in that mode, so a hardcoded reference would 404 the dashboard).
+func TestLoadComposeFile_InfraSSOMode(t *testing.T) {
+	body, err := LoadComposeFile(StackInfra, RenderInput{
+		Domain:         "x.example.com",
+		CertSecretName: "cert_v001",
+		KeySecretName:  "key_v001",
+		SSOEnabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("LoadComposeFile: %v", err)
+	}
+	s := string(body)
+	if !strings.Contains(s, "traefik.http.routers.traefik.middlewares=sso-auth@file,cors-default@file") {
+		t.Errorf("SSO-mode infra stack must gate the dashboard with sso-auth:\n%s", s)
+	}
+	if strings.Contains(s, "admin-auth@file") {
+		t.Errorf("SSO-mode infra stack must NOT reference admin-auth (not rendered in dynamic config)")
 	}
 }
 
