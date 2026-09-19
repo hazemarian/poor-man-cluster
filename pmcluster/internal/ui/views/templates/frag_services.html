@@ -2,12 +2,16 @@
 {{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
 {{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
 
+<div hx-get="/web/services" hx-trigger="every 15s" hx-swap="outerHTML">
 <h1>Services</h1>
-<p class="sub">{{.Count}} swarm service(s) · live replica health (replaces Portainer's service view)</p>
+<p class="sub"><span class="live-dot"></span>live · {{.Count}} swarm service(s) · live replica health (replaces Portainer's service view)</p>
 
 {{if .Services}}
+<div class="filter-box">
+  <input id="services-filter" placeholder="Filter services…" oninput="filterTable('services-filter')">
+</div>
 <div class="card" style="padding:6px 14px">
-<table>
+<table data-filter-table="services-filter">
   <tr><th>Service</th><th>Stack</th><th>Replicas</th><th>Image</th><th>Mode</th><th>Updated</th><th></th></tr>
   {{range .Services}}
   <tr>
@@ -30,4 +34,5 @@
 {{else}}
 <div class="card empty">No swarm services.</div>
 {{end}}
+</div>
 {{end}}

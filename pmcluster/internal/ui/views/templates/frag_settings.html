@@ -97,4 +97,16 @@
   <h2>About</h2>
   <p class="sub">version {{.Version}} · signed in as <code>@{{.User}}</code></p>
 </div>
+
+{{if .Configured}}
+<div class="card">
+  <h2>Cluster status</h2>
+  <div class="grid">
+    <div class="stat"><div class="label">Daemon connection</div><div class="value"><span class="pill good">connected</span></div></div>
+    <div class="stat"><div class="label">Cluster configs</div><div class="value">{{len .ClusterConfigs}}</div></div>
+    <div class="stat"><div class="label">Cluster secrets</div><div class="value">{{len .ClusterSecrets}}</div></div>
+  </div>
+  <p class="muted" style="margin:10px 0 0">Storage root and backup placement are configured during <code>pmcluster setup</code> (<code>--volume-root</code>, <code>--backup-all-nodes</code>) and applied to the swarm via <b>Apply to swarm</b>.</p>
+</div>
+{{end}}
 {{end}}

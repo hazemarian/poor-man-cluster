@@ -29,15 +29,16 @@
 
 <h1>Revisions</h1>
 {{if .Detail.Revisions}}
-<div class="card" style="padding:6px 14px">
-<table>
-  <tr><th>Revision</th><th>Created</th><th></th></tr>
+<div class="card" style="padding:14px 18px">
+<ul class="timeline">
   {{range .Detail.Revisions}}
-  <tr>
-    <td><code>{{.Revision}}</code>{{if eq .Revision $.Detail.Stack.CurrentRevision}} <span class="pill good">current</span>{{end}}</td>
-    <td class="muted">{{ts .CreatedAt}}</td>
-    <td style="text-align:right">
+  <li class="{{if eq .Revision $.Detail.Stack.CurrentRevision}}current{{end}}">
+    <div class="t-head">
+      <code>{{.Revision}}</code>
+      {{if eq .Revision $.Detail.Stack.CurrentRevision}}<span class="pill good">current</span>{{end}}
+      <span class="t-meta">{{ts .CreatedAt}}</span>
       {{if ne .Revision $.Detail.Stack.CurrentRevision}}
+      <span style="flex:1"></span>
       <form method="post" action="/web/stacks/{{$.Detail.Stack.Name}}/rollback"
             hx-post="/web/stacks/{{$.Detail.Stack.Name}}/rollback" hx-target="#view"
             hx-confirm="Roll back {{$.Detail.Stack.Name}} to revision {{.Revision}}?">
@@ -47,10 +48,10 @@
       {{end}}
       <a class="btn sm" href="/web/stacks/{{$.Detail.Stack.Name}}/revisions/{{.Revision}}"
          hx-get="/web/stacks/{{$.Detail.Stack.Name}}/revisions/{{.Revision}}" hx-target="#view">View</a>
-    </td>
-  </tr>
+    </div>
+  </li>
   {{end}}
-</table>
+</ul>
 </div>
 {{else}}
 <div class="card empty">No revisions recorded.</div>

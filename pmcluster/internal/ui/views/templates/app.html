@@ -20,12 +20,52 @@
       try { document.execCommand('copy'); flash('Copied to clipboard'); } catch(e) {}
       document.body.removeChild(ta);
     }
-    function flash(msg) {
+    function toast(msg, kind) {
+      kind = kind || 'ok';
       var el = document.createElement('div');
-      el.className = 'flash ok'; el.textContent = msg;
-      document.body.appendChild(el);
-      setTimeout(function(){ el.remove(); }, 2000);
+      el.className = 'toast show ' + kind;
+      el.textContent = msg;
+      document.getElementById('toasts').appendChild(el);
+      setTimeout(function(){ el.classList.remove('show'); el.classList.add('hide'); }, 3200);
+      setTimeout(function(){ el.remove(); }, 3600);
     }
+    function flash(msg) { toast(msg, 'ok'); }
+
+    // Active nav highlighting: compare the browser path against each nav href.
+    function updateActiveNav() {
+      var path = location.pathname;
+      document.querySelectorAll('nav a[href]').forEach(function(a) {
+        var href = a.getAttribute('href');
+        if (!href || href.indexOf('http') === 0) return;
+        var active = path === href ||
+          (href !== '/web/overview' && path.indexOf(href) === 0);
+        a.classList.toggle('active', active);
+      });
+    }
+    document.addEventListener('htmx:afterSwap', updateActiveNav);
+    document.addEventListener('htmx:pushUrl', function(){ setTimeout(updateActiveNav, 0); });
+    window.addEventListener('load', updateActiveNav);
+
+    // Global loading indicator while any HTMX request is in flight.
+    document.addEventListener('htmx:beforeRequest', function(){ document.body.classList.add('loading'); });
+    document.addEventListener('htmx:afterRequest',  function(){ document.body.classList.remove('loading'); });
+    // Surface failed requests as error toasts.
+    document.addEventListener('htmx:responseError', function(evt){
+      var d = evt.detail;
+      toast('Request failed: ' + d.xhr.status + (d.xhr.responseText ? ' — ' + d.xhr.responseText.slice(0, 160) : ''), 'err');
+    });
+
+    // Generic table filter: <input data-filter="list-id"> filters the first
+    // <table data-filter-table="list-id"> below it.
+    function filterTable(id) {
+      var q = (document.getElementById(id).value || '').toLowerCase();
+      var table = document.querySelector('[data-filter-table="' + id + '"]');
+      if (!table) return;
+      table.querySelectorAll('tbody tr').forEach(function(tr){
+        tr.style.display = tr.textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+      });
+    }
+
     function openModal() {
       var m = document.getElementById('modal');
       if (m) m.hidden = false;
@@ -50,6 +90,7 @@
     nav{display:flex;flex-direction:column;gap:3px}
     nav a{border-radius:8px;padding:9px 11px;color:var(--muted);text-decoration:none;transition:.12s}
     nav a:hover{background:var(--panel2);color:var(--text)}
+    nav a.active{background:rgba(79,157,255,.12);color:var(--accent);font-weight:600}
     .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:8px;padding:9px;border-top:1px solid var(--line)}
     .user{color:var(--muted);font-size:12px;word-break:break-all}
     .content{padding:22px 26px;max-width:1080px;min-width:0}
@@ -76,6 +117,7 @@
     .btn.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
     .btn.danger{background:rgba(255,92,92,.14);color:var(--bad);border:1px solid rgba(255,92,92,.3)}
     .btn.sm{padding:5px 10px;font-size:12px;border-radius:7px}
+    .btn.active{background:rgba(79,157,255,.15);color:var(--accent);border-color:var(--accent)}
     input,textarea,select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:10px 12px;font:inherit;margin-top:6px}
     input:focus,textarea:focus{border-color:var(--accent);outline:none}
     textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5}
@@ -95,7 +137,30 @@
     .htmx-indicator{display:none}
     .spinner{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;display:inline-block;vertical-align:-3px}
     @keyframes spin{to{transform:rotate(360deg)}}
+    /* Global top progress bar while a request is in flight. */
+    body.loading::before{content:'';position:fixed;top:0;left:0;height:2px;width:100%;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:progress 1.2s ease-in-out infinite;z-index:60}
+    @keyframes progress{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
     .toast{display:none}
+    #toasts{position:fixed;bottom:18px;right:18px;z-index:70;display:flex;flex-direction:column;gap:8px}
+    #toasts .toast{display:block;padding:11px 16px;border-radius:10px;font-weight:600;font-size:13px;box-shadow:0 8px 30px rgba(0,0,0,.45);max-width:380px;word-break:break-word;animation:toastIn .18s ease-out}
+    #toasts .toast.ok{background:#0d2b1a;color:var(--good);border:1px solid rgba(68,212,123,.4)}
+    #toasts .toast.err{background:#2b0d0d;color:var(--bad);border:1px solid rgba(255,92,92,.4)}
+    #toasts .toast.hide{opacity:0;transition:opacity .3s}
+    @keyframes toastIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+    /* Revision timeline. */
+    .timeline{list-style:none;margin:0;padding:0;position:relative}
+    .timeline::before{content:'';position:absolute;left:9px;top:6px;bottom:6px;width:2px;background:var(--line)}
+    .timeline li{position:relative;padding:0 0 14px 32px}
+    .timeline li::before{content:'';position:absolute;left:4px;top:5px;width:12px;height:12px;border-radius:50%;background:var(--panel2);border:2px solid var(--accent)}
+    .timeline li.current::before{background:var(--good);border-color:var(--good)}
+    .timeline li .t-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    .timeline li .t-meta{color:var(--muted);font-size:12px}
+    /* Search filter boxes. */
+    .filter-box{max-width:340px;margin-bottom:12px}
+    .filter-box input{margin-top:0}
+    /* Live dot for polled surfaces. */
+    .live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);margin-right:6px;animation:pulse 2s infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
     .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:40;display:flex;align-items:center;justify-content:center;padding:20px}
     .modal-backdrop[hidden]{display:none}
     .modal{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);max-width:560px;width:100%;max-height:80vh;overflow:auto;padding:20px;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.5)}
@@ -144,6 +209,7 @@
     <section id="view">{{if .ViewContent}}{{.ViewContent}}{{else}}<span hx-get="/web/overview" hx-trigger="load"></span>{{end}}</section>
   </main>
 </div>
+<div id="toasts"></div>
 <div id="modal" class="modal-backdrop" hidden onclick="if(event.target===this)closeModal()">
   <div class="modal">
     <button class="modal-close" onclick="closeModal()">×</button>

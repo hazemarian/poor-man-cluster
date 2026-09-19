@@ -41,14 +41,17 @@
 {{end}}
 
 {{if eq .Tab "logs"}}
-<h1>Logs (tail 200)</h1>
+<h1>Logs (tail 200) <span class="live-dot"></span></h1>
 {{if .Logs}}
-<div class="card" style="padding:8px 14px">
+<div class="card" style="padding:8px 14px"
+     hx-get="/web/services/{{.Stack}}/{{.Service}}/logs?tail=200"
+     hx-trigger="every 3s" hx-swap="innerHTML">
 <pre style="max-height:60vh; overflow:auto; margin:0"><code>{{range .Logs}}<span class="{{if eq .Stream "stderr"}}log-err{{end}}">{{.Line}}</span>
 {{end}}</code></pre>
 </div>
 {{else}}
-<div class="card empty">No log output.</div>
+<div class="card empty" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs?tail=200"
+     hx-trigger="every 3s" hx-swap="innerHTML">No log output.</div>
 {{end}}
 {{end}}
 {{end}}
