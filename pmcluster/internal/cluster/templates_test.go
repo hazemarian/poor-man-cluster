@@ -208,7 +208,7 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 		"Host(`pmcluster.example.com`) && PathPrefix(`/oauth2`)",
 		"Host(`observ.example.com`) && PathPrefix(`/oauth2`)",
 		// Shared cookie so the sso.<domain> callback session works on all hosts.
-		"OAUTH2_PROXY_COOKIE_DOMAIN: \".example.com\"",
+		"OAUTH2_PROXY_COOKIE_DOMAINS: \".example.com\"",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("sso-stack render missing %q", want)

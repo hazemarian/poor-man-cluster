@@ -48,7 +48,13 @@ services:
       # observ., sso.) — the callback lands on sso.<domain> but the operator is
       # then redirected back to pmcluster.<domain>/web/. A leading-dot domain
       # makes the cookie shared across all subdomains of <domain>.
-      OAUTH2_PROXY_COOKIE_DOMAIN: ".[[.Domain]]"
+      #
+      # NOTE: the env var is OAUTH2_PROXY_COOKIE_DOMAINS (PLURAL) — the TOML
+      # config key is cookie_domains (a list). The singular
+      # OAUTH2_PROXY_COOKIE_DOMAIN is silently ignored by recent oauth2-proxy
+      # images, leaving the cookie host-bound and breaking the cross-host CSRF
+      # callback (start on pmcluster. → callback on sso. → CSRF token lost).
+      OAUTH2_PROXY_COOKIE_DOMAINS: ".[[.Domain]]"
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
       # Redirect URI must match the GitHub OAuth app callback exactly. The
       # callback + sign-in endpoints are served at the sso.<domain> subdomain
