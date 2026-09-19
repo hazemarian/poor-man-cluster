@@ -264,6 +264,35 @@ paths:
                 $ref: "#/components/schemas/RollbackResult"
         "400":
           $ref: "#/components/responses/BadRequest"
+  /api/stacks/{name}/sync:
+    post:
+      summary: Re-apply a stack's stored manifest (k8s-style sync)
+      description: |
+        Re-translates the latest stored source manifest against the current
+        DB configs/secrets and re-deploys when the rendered compose changed.
+        When sha256(rendered) equals the latest revision's stored
+        rendered_hash, this is a no-op (changed=false, no new revision, no
+        Docker call).
+      operationId: syncStack
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Synced
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Stack not found
   /api/backups:
     get:
       summary: Recent backups across stacks
@@ -717,6 +746,37 @@ paths:
       responses:
         "204":
           description: Deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Secret not found
+  /api/secrets/{name}/value:
+    get:
+      summary: Reveal a secret's plaintext value
+      description: |
+        Returns the decrypted plaintext value of a secret (operator-facing;
+        used by the console Reveal button). Requires an operator/admin role.
+      operationId: revealSecretValue
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Secret value
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  value:
+                    type: string
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
@@ -1261,6 +1321,17 @@ components:
         rolled_back_to:
           type: integer
           format: int64
+    SyncResult:
+      type: object
+      properties:
+        stack:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        changed:
+          type: boolean
+          description: false when the re-render matched the stored rendered_hash (no-op)
     ClusterInfo:
       type: object
       properties:
