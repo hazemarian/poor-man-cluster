@@ -114,6 +114,12 @@ func (c Services) Logs(g *gin.Context) {
 			d.Logs = append(d.Logs, serviceLogRow{Stream: ln.Stream, Line: ln.Line})
 		}
 	}
+	// Polling requests (the logs panel's hx-trigger="every 3s") ask for the
+	// logs-only fragment so the innerHTML swap never re-embeds the whole page.
+	if g.Query("fragment") == "logs" {
+		c.Views.Fragment(g, "servicelogs", d)
+		return
+	}
 	c.Views.Fragment(g, "servicedetail", d)
 }
 

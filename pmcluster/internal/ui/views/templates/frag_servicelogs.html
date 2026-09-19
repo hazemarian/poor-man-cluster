@@ -1,0 +1,9 @@
+{{define "servicelogs"}}
+{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{if .Logs}}
+<pre style="max-height:60vh; overflow:auto; margin:0"><code>{{range .Logs}}<span class="{{if eq .Stream "stderr"}}log-err{{end}}">{{.Line}}</span>
+{{end}}</code></pre>
+{{else}}
+<div class="card empty">No log output.</div>
+{{end}}
+{{end}}
