@@ -813,8 +813,8 @@ func TestLoadComposeFile_InfraSSOMode(t *testing.T) {
 	}
 }
 
-// TestCompare_Versions exercises the semver comparison used by
-// EnsureConfigDir to decide whether a disk config is stale.
+// TestCompare_Versions exercises the semver comparison used by the config
+// sync / version-gating logic.
 func TestCompare_Versions(t *testing.T) {
 	tests := []struct {
 		a, b string
