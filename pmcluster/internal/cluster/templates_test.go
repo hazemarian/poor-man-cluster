@@ -214,7 +214,7 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 		// instead of the sso. callback host; whitelist-domain allows the
 		// cross-subdomain hop.
 		"OAUTH2_PROXY_REVERSE_PROXY: \"true\"",
-		"OAUTH2_PROXY_WHITELIST_DOMAIN: \".example.com\"",
+		"OAUTH2_PROXY_WHITELIST_DOMAINS: \".example.com\"",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("sso-stack render missing %q", want)
