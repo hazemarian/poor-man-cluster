@@ -78,6 +78,10 @@ type Service struct {
 	// Resolver resolves `env: X: config(name)` references against the
 	// DB config store. Nil disables config() resolution (translate error).
 	Resolver manifest.EnvResolver
+	// VolumeRoot forces every container volume under this host directory
+	// (subpaths /<app>/<name>). Empty falls back to
+	// manifest.DefaultVolumeRoot (/var/stack/data). Applied by the writer.
+	VolumeRoot string
 	// Stdout receives workflow step markers (▶ ...) for the deploy pipeline.
 	// Nil disables the output.
 	Stdout io.Writer
@@ -152,7 +156,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		return nil
 	})
 	wf.Add("Translating to Compose (resolving configs/secrets)", func(ctx context.Context) error {
-		y, err := manifest.TranslateWithResolver(ctx, app, s.Resolver)
+		y, err := manifest.TranslateIR(ctx, app, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot})
 		if err != nil {
 			return fmt.Errorf("translate: %w", err)
 		}
@@ -232,7 +236,7 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 		if err = manifest.Interpolate(parsed); err == nil {
 			if err = manifest.Validate(parsed); err == nil {
 				var rendered []byte
-				rendered, err = manifest.TranslateWithResolver(ctx, parsed, s.Resolver)
+				rendered, err = manifest.TranslateIR(ctx, parsed, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot})
 				if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
 					return &Result{
 						StackName:    stackName,

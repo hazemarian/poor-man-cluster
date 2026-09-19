@@ -94,3 +94,7 @@ version: "3.9"
 volumes:
   db_data:
     driver: local
+    driver_opts:
+      device: /var/stack/data/donation-campaign/db_data
+      o: bind
+      type: none

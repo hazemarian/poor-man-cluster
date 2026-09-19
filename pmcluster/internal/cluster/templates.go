@@ -193,6 +193,11 @@ type RenderInput struct {
 	// admin-auth or SSO already gates /web, so the console's own login +
 	// Users CRUD are hidden); false keeps the password login (local runs).
 	EdgeLoginDisabled bool
+
+	// BackupAllNodes runs the volume-backup agent as a global service on
+	// every swarm node. When false (default) it is manager-only — required
+	// when replicated disks are in use (see docs/storage-and-databases.md).
+	BackupAllNodes bool
 }
 
 // openObserveBasicAuth computes the HTTP Basic Authorization header value

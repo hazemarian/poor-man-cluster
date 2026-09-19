@@ -3,6 +3,7 @@ package manifest
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 
 	"sigs.k8s.io/yaml"
@@ -11,10 +12,26 @@ import (
 // ComposeWriter renders an IR into Docker Compose v3.9 YAML — the swarm
 // backend's artifact. This is the ONLY writer today; Terraform/Helm writers
 // can be added against the same IR without touching the translator.
-type ComposeWriter struct{}
+//
+// VolumeRoot is the single host directory every container volume is forced
+// under: named volumes are declared with a bind driver_opts pointing at
+// <root>/<app>/<name> (so Docker's first-use ownership copy still runs for
+// DB images), and bind mounts are relocated to <root>/<app>/<basename>.
+// Empty means the default /var/stack/data.
+type ComposeWriter struct {
+	VolumeRoot string
+}
+
+// DefaultVolumeRoot is where every container volume lands unless the
+// operator overrides the volume_root setting.
+const DefaultVolumeRoot = "/var/stack/data"
 
 // Write implements Writer.
-func (ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
+func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
+	root := w.VolumeRoot
+	if root == "" {
+		root = DefaultVolumeRoot
+	}
 	cf := &composeFile{
 		Version:  "3.9",
 		Services: map[string]*composeService{},
@@ -29,7 +46,7 @@ func (ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 
 	for i := range ir.Services {
 		s := &ir.Services[i]
-		cs, err := composeServiceFromIR(s, app, privateNet, &usesTraefikNet, &usesMonitoringNet)
+		cs, err := composeServiceFromIR(s, app, privateNet, root, &usesTraefikNet, &usesMonitoringNet)
 		if err != nil {
 			return nil, err
 		}
@@ -39,7 +56,14 @@ func (ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 	if len(ir.Volumes) > 0 {
 		cf.Volumes = map[string]*composeVolume{}
 		for _, v := range ir.Volumes {
-			cf.Volumes[v] = &composeVolume{Driver: "local"}
+			cf.Volumes[v] = &composeVolume{
+				Driver: "local",
+				DriverOpts: map[string]string{
+					"type":   "none",
+					"o":      "bind",
+					"device": root + "/" + ir.Name + "/" + v,
+				},
+			}
 		}
 	}
 
@@ -71,7 +95,7 @@ func (ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 func composeServiceFromIR(
 	s *IRService,
 	app irApp,
-	privateNet string,
+	privateNet, volumeRoot string,
 	usesTraefikNet, usesMonitoringNet *bool,
 ) (*composeService, error) {
 	cs := &composeService{
@@ -79,7 +103,7 @@ func composeServiceFromIR(
 		Command:     s.Command,
 		Entrypoint:  s.Entrypoint,
 		Environment: s.Env,
-		Volumes:     s.Volumes,
+		Volumes:     relocateVolumes(volumeRoot, app.name, s.Volumes),
 		Secrets:     s.Secrets,
 	}
 
@@ -94,6 +118,24 @@ func composeServiceFromIR(
 	cs.Deploy = composeDeployFromIR(app, s)
 
 	return cs, nil
+}
+
+// relocateVolumes forces every container volume under the single volume
+// root. A source starting with '/' is a host bind mount and is relocated to
+// <root>/<app>/<basename>; anything else is a named volume (declared by the
+// writer with a bind driver_opts) and is left untouched in the service —
+// the mount source is resolved by the volume declaration.
+func relocateVolumes(root, app string, volumes []string) []string {
+	out := make([]string, len(volumes))
+	for i, v := range volumes {
+		src, rest, ok := strings.Cut(v, ":")
+		if ok && strings.HasPrefix(src, "/") {
+			out[i] = root + "/" + app + "/" + path.Base(src) + ":" + rest
+			continue
+		}
+		out[i] = v
+	}
+	return out
 }
 
 // irApp is the minimal app identity the compose writer stamps onto services.

@@ -13,6 +13,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -67,6 +68,8 @@ func init() {
 	setupCmd.Flags().String("sso-github-org", "", "restrict SSO to a GitHub org (optional; default: $PMCLUSTER_SSO_GITHUB_ORG)")
 	setupCmd.Flags().String("sso-cookie-expire", "", "SSO session cookie lifetime (default 1h; default: $PMCLUSTER_SSO_COOKIE_EXPIRE)")
 	setupCmd.Flags().Bool("edge-login-enabled", false, "keep the edge console password login (default: disabled behind SSO/admin-auth; default: $PMCLUSTER_EDGE_LOGIN_ENABLED)")
+	setupCmd.Flags().String("volume-root", "", "host dir every container volume is forced under (default /var/stack/data)")
+	setupCmd.Flags().Bool("backup-all-nodes", false, "run the backup agent on every node (default: manager-only)")
 }
 
 // setupAnswers is the collected wizard state.
@@ -86,6 +89,9 @@ type setupAnswers struct {
 	SSOCookieExpire string
 
 	EdgeLoginEnabled bool
+
+	VolumeRoot     string
+	BackupAllNodes bool
 }
 
 // ask prompts for a free-form value with a default; returns the trimmed answer.
@@ -170,6 +176,8 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 			a.SSOCookieExpire = ask(r, out, "Session cookie lifetime (e.g. 1h)", st.GetSettingDefault(ctx, cluster.SettingSSOCookieExpire(), "1h"))
 		}
 		a.EdgeLoginEnabled = askYesNo(r, out, "Keep edge console password login?", false)
+		a.VolumeRoot = ask(r, out, "Container volume root dir", st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot))
+		a.BackupAllNodes = askYesNo(r, out, "Run backup agent on every node?", false)
 	} else {
 		a.Domain, _ = cmd.Flags().GetString("domain")
 		a.ACMEEmail, _ = cmd.Flags().GetString("acme-email")
@@ -187,6 +195,8 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.SSOGitHubOrg, _ = cmd.Flags().GetString("sso-github-org")
 		a.SSOCookieExpire, _ = cmd.Flags().GetString("sso-cookie-expire")
 		a.EdgeLoginEnabled, _ = cmd.Flags().GetBool("edge-login-enabled")
+		a.VolumeRoot, _ = cmd.Flags().GetString("volume-root")
+		a.BackupAllNodes, _ = cmd.Flags().GetBool("backup-all-nodes")
 
 		// Env-var overrides for SSO settings so they can be changed from the
 		// shell / CI without editing the wizard (same precedence model as
@@ -315,6 +325,8 @@ func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswer
 		cluster.SettingSSOGitHubOrg():      a.SSOGitHubOrg,
 		cluster.SettingSSOCookieExpire():   a.SSOCookieExpire,
 		cluster.SettingEdgeLoginDisabled(): boolSetting(!a.EdgeLoginEnabled),
+		cluster.SettingVolumeRoot():        a.VolumeRoot,
+		cluster.SettingBackupAllNodes():    boolSetting(a.BackupAllNodes),
 	}
 	for k, v := range setting {
 		if err := st.SetSetting(ctx, k, v); err != nil {
@@ -337,6 +349,8 @@ func persistSetup(ctx context.Context, st *store.Store, a setupAnswers) error {
 		cluster.SettingSSOGitHubOrg():      a.SSOGitHubOrg,
 		cluster.SettingSSOCookieExpire():   a.SSOCookieExpire,
 		cluster.SettingEdgeLoginDisabled(): boolSetting(!a.EdgeLoginEnabled),
+		cluster.SettingVolumeRoot():        a.VolumeRoot,
+		cluster.SettingBackupAllNodes():    boolSetting(a.BackupAllNodes),
 	}
 	for k, v := range setting {
 		if err := st.SetSetting(ctx, k, v); err != nil {

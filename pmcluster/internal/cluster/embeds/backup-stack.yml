@@ -1,12 +1,21 @@
 version: "3.9"
 
 services:
-  # The Global Backup Agent
-  # Runs on EVERY node automatically
+  # The Backup Agent
+  # Global by default (one copy per node); manager-only when replicated disks
+  # are in use (see docs/storage-and-databases.md).
   volume-backup:
     image: offen/docker-volume-backup:v2
     deploy:
+[[ if .BackupAllNodes ]]
       mode: global  # <--- The Magic: Ensures 1 copy per node
+[[ else ]]
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+[[ end ]]
       restart_policy:
         condition: on-failure
     environment:
@@ -29,13 +38,17 @@ services:
       # - AWS_ENDPOINT=http://minio:9000
       
     volumes:
-      # SOURCE: Mount the host's volume directory so the container can read it
-      - /var/lib/docker/volumes:/backup/my-volumes:ro
-      
-      # DESTINATION: Where to save the .tar.gz files locally?
-      # (This folder will be created on the Host machine)
-      - /var/backups/docker-volumes:/archive
-      
+      # SOURCE: the standardized single storage root — every container volume
+      # lives under /var/stack/data/<app>/<name>, so backing up the root
+      # captures all app data.
+      - /var/stack/data:/backup/data:ro
+
+      # DESTINATION: per-node local archive. The bind path is host-local, so
+      # each node writes to ITS OWN /var/stack/backup (the manager's copy is
+      # the "node 0" archive by construction). Node identity is kept in the
+      # filename via {{ .Node.ID }}.
+      - /var/stack/backup:/archive
+
       # CONFIG: Sync timezone so 3 AM is actually 3 AM
       - /etc/localtime:/etc/localtime:ro
 
@@ -74,8 +87,9 @@ services:
       # Includes data.db, .encryption_key, config/ (incl. main-cert local copy).
       - ${DATA_DIR}:/backup/pmcluster:ro
       
-      # DESTINATION: same archive dir as the volume backups.
-      - /var/backups/docker-volumes:/archive
+      # DESTINATION: same per-node archive root as the volume backups
+      # (the manager's /var/stack/backup is the "node 0" archive).
+      - /var/stack/backup:/archive
       
       # CONFIG: Sync timezone so 3 AM is actually 3 AM
       - /etc/localtime:/etc/localtime:ro

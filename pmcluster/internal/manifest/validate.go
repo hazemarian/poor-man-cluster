@@ -47,11 +47,6 @@ func Validate(app *dsl.App) error {
 			return fmt.Errorf("secrets[%d]: empty name", i)
 		}
 	}
-	for i, name := range app.Volumes {
-		if name == "" {
-			return fmt.Errorf("volumes[%d]: empty name", i)
-		}
-	}
 	return nil
 }
 

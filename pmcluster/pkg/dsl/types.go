@@ -20,10 +20,11 @@ type App struct {
 	RepoURL  string `json:"repo_url,omitempty"`
 	EnvFile  string `json:"env_file,omitempty"`
 
-	// Secrets and Volumes are listed at App level so the translator can
-	// emit the matching top-level blocks (secrets: external: true, etc.).
+	// Secrets are listed at App level so the translator can emit the
+	// matching top-level block (secrets: external: true, etc.). Volumes are
+	// declared per-service only — the writer auto-declares named volumes and
+	// relocates every volume under the volume_root (/var/stack/data by default).
 	Secrets []string `json:"secrets,omitempty"`
-	Volumes []string `json:"volumes,omitempty"`
 
 	Services map[string]*Service `json:"services"`
 

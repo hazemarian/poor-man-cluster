@@ -42,3 +42,7 @@ version: "3.9"
 volumes:
   data_vol:
     driver: local
+    driver_opts:
+      device: /var/stack/data/vault-app/data_vol
+      o: bind
+      type: none

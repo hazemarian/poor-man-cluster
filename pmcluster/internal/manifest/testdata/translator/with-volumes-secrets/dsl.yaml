@@ -3,8 +3,6 @@ env: staging
 domain: example.com
 secrets:
   - vault_token
-volumes:
-  - data_vol
 services:
   server:
     image: vault:1.15

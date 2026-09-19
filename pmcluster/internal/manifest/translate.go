@@ -92,7 +92,24 @@ func BuildIR(ctx context.Context, app *dsl.App, res EnvResolver) (*IR, error) {
 		ir.Services = append(ir.Services, *is)
 	}
 
-	ir.Volumes = append(ir.Volumes, app.Volumes...)
+	// Named volumes are auto-collected from the services — the app-level
+	// volumes list was removed from the DSL (service volumes are the single
+	// source of truth; the writer declares + relocates them).
+	namedSet := map[string]struct{}{}
+	for _, svc := range app.Services {
+		for _, v := range svc.Volumes {
+			src := v
+			if i := strings.IndexByte(src, ':'); i >= 0 {
+				src = v[:i]
+			}
+			if src != "" && !strings.HasPrefix(src, "/") {
+				namedSet[src] = struct{}{}
+			}
+		}
+	}
+	for n := range namedSet {
+		ir.Volumes = append(ir.Volumes, n)
+	}
 
 	secretSet := map[string]struct{}{}
 	for _, svc := range app.Services {

@@ -46,13 +46,6 @@ func Interpolate(app *dsl.App) error {
 		}
 		app.Secrets[i] = v
 	}
-	for i := range app.Volumes {
-		v, err := subst(app.Volumes[i])
-		if err != nil {
-			return err
-		}
-		app.Volumes[i] = v
-	}
 
 	for name, svc := range app.Services {
 		if err := interpolateService(name, svc, subst); err != nil {

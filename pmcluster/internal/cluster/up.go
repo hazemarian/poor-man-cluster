@@ -232,6 +232,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			KeySecretName:            keySecret,
 			EdgeImage:                EdgeImageFor(),
 			EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
+			BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 			SSOEnabled:               sso.Enabled,
 			SSOCookieSecret:          ssoSecret,
 			SSOClientID:              sso.ClientID,

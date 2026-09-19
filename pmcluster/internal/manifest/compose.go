@@ -54,8 +54,9 @@ type composeUpdateConfig struct {
 }
 
 type composeVolume struct {
-	Driver   string `json:"driver,omitempty"`
-	External bool   `json:"external,omitempty"`
+	Driver     string            `json:"driver,omitempty"`
+	External   bool              `json:"external,omitempty"`
+	DriverOpts map[string]string `json:"driver_opts,omitempty"`
 }
 
 type composeNetwork struct {

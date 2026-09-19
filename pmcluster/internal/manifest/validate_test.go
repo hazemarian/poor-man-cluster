@@ -228,9 +228,3 @@ func TestValidate_SecretEmptyName(t *testing.T) {
 	a.Secrets = []string{"valid-secret", ""}
 	mustFail(t, a, "secrets[1]: empty name")
 }
-
-func TestValidate_VolumeEmptyName(t *testing.T) {
-	a := baseApp()
-	a.Volumes = []string{""}
-	mustFail(t, a, "volumes[0]: empty name")
-}

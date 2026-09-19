@@ -5,8 +5,6 @@ registry: ghcr.io/nextrum-sy
 version: latest
 secrets:
   - donation_campaign_db_password
-volumes:
-  - db_data
 services:
   db:
     image: postgres:14-alpine

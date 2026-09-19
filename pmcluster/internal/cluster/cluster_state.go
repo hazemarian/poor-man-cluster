@@ -36,6 +36,15 @@ const (
 	// gates /web, so the console login + Users CRUD are hidden. Local standalone
 	// runs leave it unset (or "false") to keep password login.
 	settingEdgeLoginDisabled = "edge_login_disabled"
+
+	// settingVolumeRoot is the single host directory every container volume is
+	// forced under (subpaths /<app>/<name>). Defaults to /var/stack/data.
+	settingVolumeRoot = "volume_root"
+
+	// settingBackupAllNodes makes the backup agent run on every swarm node
+	// (manager-only by default). When replicated disks are in use it must stay
+	// false — see docs/storage-and-databases.md.
+	settingBackupAllNodes = "backup_all_nodes"
 )
 
 // Setting* accessors expose the persisted settings keys for CLI surfaces
@@ -55,6 +64,8 @@ func SettingSSOClientSecret() string   { return settingSSOClientSecret }
 func SettingSSOGitHubOrg() string      { return settingSSOGitHubOrg }
 func SettingSSOCookieExpire() string   { return settingSSOCookieExpire }
 func SettingEdgeLoginDisabled() string { return settingEdgeLoginDisabled }
+func SettingVolumeRoot() string        { return settingVolumeRoot }
+func SettingBackupAllNodes() string    { return settingBackupAllNodes }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {
@@ -198,6 +209,16 @@ func loadEdgeLoginDisabled(ctx context.Context, st *store.Store) bool {
 		return true
 	}
 	return st.GetSettingDefault(ctx, settingEdgeLoginDisabled, "true") == "true"
+}
+
+// loadBackupAllNodes reports whether the volume-backup agent should run on
+// every swarm node (false = manager-only, the default and the required mode
+// when disks are synchronously replicated — see storage guide).
+func loadBackupAllNodes(ctx context.Context, st *store.Store) bool {
+	if st == nil {
+		return false
+	}
+	return st.GetSettingDefault(ctx, settingBackupAllNodes, "") == "true"
 }
 
 // requestedTLSMode derives the TLS mode the operator asked for on this run,

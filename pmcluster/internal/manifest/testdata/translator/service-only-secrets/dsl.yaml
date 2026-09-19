@@ -3,8 +3,6 @@ env: production
 domain: nextrum-sy.com
 registry: ghcr.io/nextrum-sy
 version: v20260705-test
-volumes:
-  - abbas_data
 services:
   abbas:
     image: ghcr.io/nextrum-sy/abbas:v20260705-test

@@ -24,7 +24,8 @@ type IR struct {
 	// Services is the ordered set of translated services.
 	Services []IRService
 
-	// Volumes is the set of named volumes the app declares.
+	// Volumes is the set of named volumes the app's services reference
+	// (auto-collected; writers relocate them under the volume root).
 	Volumes []string
 
 	// Secrets is the union of service- and app-level secret names.

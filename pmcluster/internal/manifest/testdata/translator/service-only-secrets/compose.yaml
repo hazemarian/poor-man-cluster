@@ -56,3 +56,7 @@ version: "3.9"
 volumes:
   abbas_data:
     driver: local
+    driver_opts:
+      device: /var/stack/data/abbas/abbas_data
+      o: bind
+      type: none
