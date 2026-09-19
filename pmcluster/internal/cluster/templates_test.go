@@ -209,10 +209,11 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 		"Host(`observ.example.com`) && PathPrefix(`/oauth2`)",
 		// Shared cookie so the sso.<domain> callback session works on all hosts.
 		"OAUTH2_PROXY_COOKIE_DOMAINS: \".example.com\"",
-		// Trust X-Forwarded-* so the post-login redirect goes back to the
-		// ORIGINAL host (pmcluster./observ.) instead of the sso. callback host;
-		// whitelist-domain allows the cross-subdomain hop.
-		"OAUTH2_PROXY_TRUST_FORWARD_HEADER: \"true\"",
+		// Trust X-Forwarded-* (via --reverse-proxy, the v7 flag name) so the
+		// post-login redirect goes back to the ORIGINAL host (pmcluster./observ.)
+		// instead of the sso. callback host; whitelist-domain allows the
+		// cross-subdomain hop.
+		"OAUTH2_PROXY_REVERSE_PROXY: \"true\"",
 		"OAUTH2_PROXY_WHITELIST_DOMAIN: \".example.com\"",
 	} {
 		if !strings.Contains(body, want) {
