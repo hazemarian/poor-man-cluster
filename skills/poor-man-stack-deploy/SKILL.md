@@ -47,13 +47,28 @@ pmcluster init
 
 Install env vars: `VERSION` (pin release), `PREFIX` (install path), `PMCLUSTER_USER` (systemd user), `PMCLUSTER_REGISTRY` (comma-separated `host=user=token` entries).
 
-If the cluster is not up:
+If the cluster is not up, run the **interactive setup wizard** or bring it up with flags:
 
 ```bash
-pmcluster cluster up --domain=<your-domain> --cert=<cert.pem> --key=<key.pem> --openobserve-email=<you@host>
-# OR with Let's Encrypt (HTTP-01; DNS must point here and port 80 reachable):
-pmcluster cluster up --domain=<your-domain> --acme-email=<you@host> --openobserve-email=<you@host>
+# Interactive wizard (recommended) — prompts for domain, TLS, admin user, SSO, etc.:
+pmcluster setup
+
+# Non-interactive: flags for every prompt:
+pmcluster setup --domain=example.com --acme-email=you@host \
+  --traefik-admin-user=admin --sso-enabled --sso-client-id=... --sso-client-secret=...
 ```
+
+The wizard persists settings, then runs `cluster up` (fresh install) or `cluster update` (existing cluster).
+
+Alternatively, use `cluster up` directly with flags:
+
+```bash
+pmcluster cluster up --domain=<your-domain> --cert=<cert.pem> --key=<key.pem>
+# OR with Let's Encrypt (HTTP-01; DNS must point here and port 80 reachable):
+pmcluster cluster up --domain=<your-domain> --acme-email=<you@host>
+```
+
+> **`cluster up` is init-only.** It refuses to run on an already-initialised cluster — use `cluster update` instead. When no data flags are supplied, it falls back to the interactive setup wizard.
 
 `cluster up` deploys four stacks: `infra`, `edge`, `observability`, `backup`. It also mints the `edge_admin` console password and the `edge` daemon API token.
 
@@ -65,12 +80,43 @@ pmcluster serve   # foreground; supervise via systemd for production
 
 ## Operator Console
 
-`https://pmcluster.<domain>` is a gin + HTMX operator console for stacks (deploy/rollback/delete), webhooks, API keys, per-host TLS, backups, and settings.
+`https://pmcluster.<domain>` is a gin + HTMX operator console for stacks (deploy/rollback/delete), webhooks, API keys, per-host TLS, backups, and settings. The stacks list has a **Sync** button per stack that re-deploys from the stored manifest (skipping no-ops when rendered content is unchanged) and a **Delete** button (with confirmation).
 
 - **Login:** user `admin`, password from `pmcluster credentials show edge_admin`.
 - It talks to the daemon with a dedicated `edge` API token; you don't manage that token manually.
+- **Behind SSO:** When SSO is enabled, the console's own password login is disabled (`EDGE_LOGIN_DISABLED=true`). Users authenticate through the Traefik SSO gate instead.
 
 Prefer the console for interactive work; prefer the CLI/API for automation.
+
+## Traefik Dashboard
+
+The Traefik dashboard is at `https://traefik.<domain>/dashboard/`. The router rule is `Host(...) && (PathPrefix(/api) || PathPrefix(/dashboard))`. Without SSO it is gated by `admin-auth` (htpasswd basicAuth); with SSO enabled it is gated by `sso-auth` (forwardAuth through oauth2-proxy).
+
+## SSO (Single Sign-On)
+
+When enabled during `pmcluster setup`, the `sso` stack deploys [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) at `sso.<domain>`. GitHub OAuth with optional org restriction.
+
+- **Callback URL:** `https://sso.<domain>/oauth2/callback`
+- **Traefik middleware switch:** admin-auth (htpasswd basicAuth) → sso-auth (forwardAuth through oauth2-proxy). The `traefik_dashboard` credential is no longer used for gating.
+- **oauth2-proxy env vars (critical — plural forms required):**
+  - `OAUTH2_PROXY_COOKIE_DOMAINS` (plural — singular `COOKIE_DOMAIN` is silently ignored in v7)
+  - `OAUTH2_PROXY_WHITELIST_DOMAINS` (plural — singular is silently ignored in v7)
+  - `OAUTH2_PROXY_REVERSE_PROXY: "true"` (requires `trusted-proxy-ip` / `TRUSTED_PROXY_CIDRS` for hardening)
+- **Console behind SSO:** `EDGE_LOGIN_DISABLED=true` — the edge console's own login page is bypassed; Traefik's SSO gate handles identity. Console is at `https://pmcluster.<domain>/web/`.
+
+### Enabling SSO on an existing cluster
+
+```bash
+pmcluster setup --sso-enabled --sso-client-id=<id> --sso-client-secret=<secret> [--sso-github-org=<org>]
+# then:
+pmcluster cluster update
+```
+
+The `sso_cookie_secret` credential is minted automatically by credential bootstrap. oauth2-proxy needs a base64-encoded 32+ byte cookie secret.
+
+## OpenObserve
+
+OpenObserve is deployed by the `observability` stack at `observ.<domain>`. There is **no provisioning API or ingestion token** — both the OTel collector and the Traefik auto-auth header use the root admin credential (`openobserve_admin` / `zo_root_user_password` secret). The observability UI is gated by the same admin-auth or sso-auth middleware as the console (no separate OpenObserve login prompt).
 
 ## Authentication & API Tokens
 
@@ -493,14 +539,14 @@ This closes the "lost manager disk = full re-bootstrap" gap: app volumes AND the
 
 ```bash
 pmcluster cluster status                   # health overview
-pmcluster cluster update                   # re-provision configs/certs from ~/.pmcluster/config/*.yml (content-aware)
-pmcluster cluster down --yes               # remove all stacks (infra, edge, observability, backup)
+pmcluster cluster update                   # content-aware reconcile (DB is source of truth)
+pmcluster cluster down --yes               # remove all stacks (infra, edge, observability, backup, sso)
 pmcluster cluster down --yes --purge       # also remove secrets, configs, networks
 pmcluster node list                        # Swarm nodes
 pmcluster node join-token worker           # get join token for new workers
 ```
 
-`cluster up` is idempotent (reconciles, never destroys). `cluster update` is the targeted path after editing an OTel/Traefik config or renewing a cert — it does not re-run credential bootstrap or a full redeploy.
+`cluster up` is init-only — it refuses to run on an already-initialised cluster (run `cluster update` instead). `cluster update` is the content-aware reconcile: the DB is the source of truth for all platform configs (there are no `~/.pmcluster/config/*.yml` disk files). It compares `rendered_hash` to decide which platform stacks (observability / infra / edge / backup / +sso) need re-deploying. Drift-prune removes services that were dropped from a compose. It is idempotent — a second run with no changes reports `No rendered content changed — nothing to redeploy.`
 
 ### Upgrading pmcluster / the edge service
 
@@ -508,14 +554,14 @@ The edge image is pinned to `ghcr.io/nextrum-sy/pmcluster-edge:latest` by defaul
 
 1. **Build + publish the release first** — push a `v*` tag; the release workflow cross-compiles the binaries and pushes the new edge image to GHCR:
    ```bash
-   git tag v0.2.42 && git push origin v0.2.42
+   git tag v0.2.60 && git push origin v0.2.60
    ```
 2. **Update the binary with install.sh** — it installs the new binary and, because `~/.pmcluster/config.yaml` exists, automatically runs `pmcluster cluster update`:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | VERSION=v0.2.42 bash
+   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | VERSION=v0.2.60 bash
    # or simply: | bash   (resolves latest release)
    ```
-3. `cluster update` **refreshes the on-disk templates** in `~/.pmcluster/config/` from the new binary's embedded copies (stale configs — older version header — are overwritten; operator edits with a newer header are preserved), then re-renders. Because the edge-stack.yml content changed, the **edge stack is re-deployed** automatically and pulls the new `:latest` image. OTel/Traefik/cert are re-applied content-aware as usual.
+3. `cluster update` **refreshes the on-disk templates** in `~/.pmcluster/config/` from the new binary's embedded copies (stale configs — older version header — are overwritten; operator edits with a newer header are preserved), then re-renders. Because the edge-stack.yml content changed, the **edge stack is re-deployed** automatically and pulls the new `:latest` image. OTel/Traefik/cert are re-applied content-aware as usual. A second `cluster update` with no changes reports `No rendered content changed — nothing to redeploy.`
 
 Manual `docker service update --image ... edge_pmcluster-edge` is NOT the supported path — always use the tag → install.sh → `cluster update` flow. On a fresh box, install.sh runs `cluster up` instead (when `PMCLUSTER_DOMAIN` is set). Set `CLUSTER_APPLY=none` to skip the auto apply.
 
@@ -528,7 +574,9 @@ pmcluster credentials show edge_admin      # the operator console login password
 pmcluster credentials rotate openobserve_admin # generate + apply a new password
 ```
 
-Managed credentials: `traefik_dashboard`, `openobserve_admin`, `edge_admin`, `edge_ui_secret`, `edge_api_token`. Edge credentials are persisted by the console on first boot, so `rotate` refuses them.
+Managed credentials: `traefik_dashboard`, `openobserve_admin`, `edge_admin`, `edge_ui_secret`, `edge_api_token`, `sso_cookie_secret` (SSO only). Edge credentials are persisted by the console on first boot, so `rotate` refuses them.
+
+To extract just the password value: `pmcluster credentials show edge_admin | awk -F": *" '/^password/{print $2}'`.
 
 ## Audit Logs
 
@@ -549,7 +597,10 @@ Run `docker swarm init --advertise-addr <ip>` on the manager. Pmcluster never in
 Ensure Docker engine is running and the current user has permission (`docker info`).
 
 ### "secret already exists"
-`pmcluster cluster up` is idempotent — re-run it. It reconciles, never destroys.
+`pmcluster cluster up` is idempotent — re-run it. It reconciles, never destroys. Note: `cluster up` is init-only and will refuse to run on an already-initialised cluster; use `cluster update` instead.
+
+### "cluster already initialised"
+`cluster up` is init-only — it refuses to run when a cluster already exists. Use `pmcluster cluster update` instead.
 
 ### "no such stack"
 Run `pmcluster stack list` to see deployed stacks. Stack names come from the `app` field in manifests.
@@ -575,3 +626,12 @@ The edge proxy throttles per real IP (`/api/*` 200/s, `/webhook/*` 40/s). Space 
 
 ### Console login fails
 Get the password with `pmcluster credentials show edge_admin`. If the `pmui-data` volume was wiped, the console re-reads the Swarm secret on next boot.
+
+### After SSO-related sso-stack/edge redeploy: initial 404/403
+After enabling or updating SSO, Traefik label convergence takes ~45–60 seconds. Initial 404/403 errors on `pmcluster.<domain>` or `observ.<domain>` are expected during this window. Wait and retry.
+
+### oauth2-proxy not proxying (SSO enabled but login loop)
+Ensure `OAUTH2_PROXY_COOKIE_DOMAINS` and `OAUTH2_PROXY_WHITELIST_DOMAINS` are **plural** (the singular forms are silently ignored in oauth2-proxy v7). Also verify `OAUTH2_PROXY_REVERSE_PROXY: "true"` is set and the edge container has `trusted-proxy-ip` / `TRUSTED_PROXY_CIDRS` configured for hardening.
+
+### Edge image not updating after upgrade
+The edge image tag is pinned to the release version (`ghcr.io/nextrum-sy/pmcluster-edge:latest` by default). If the tag doesn't match, override with `PMCLUSTER_EDGE_IMAGE=<tag>`. Always use the `install.sh` → `cluster update` flow rather than `docker service update --image` directly.

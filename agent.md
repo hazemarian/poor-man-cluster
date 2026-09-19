@@ -21,10 +21,11 @@ webhooks and backups — via a CLI, a REST API, and an operator console.
 A second Go binary, `pmcluster-edge`, runs as a Swarm service and is the public
 origin for the whole platform: it is both an **operator console** (gin + HTMX)
 and a **smart reverse proxy** (rate limits, in-flight shield, auto-ban) that
-forwards the daemon's API and webhooks.
+ forwards the daemon's API and webhooks.
 
 Production reference: manager node `root@82.165.128.237` (Docker Swarm, 2
-nodes), domain `nextrum-sy.com`, console at `https://pmcluster.nextrum-sy.com/`.
+nodes), domain `nextrum-sy.com`, console at `https://pmcluster.nextrum-sy.com/web/`.
+SSO live via GitHub (org `nextrum-sy`), oauth2-proxy on `https://sso.nextrum-sy.com`.
 
 ---
 
@@ -76,6 +77,7 @@ nodes), domain `nextrum-sy.com`, console at `https://pmcluster.nextrum-sy.com/`.
                └── docker SDK → Swarm services/secrets/configs
                └── AES-GCM key ~/.pmcluster/.encryption_key
 
+    SSO:        oauth2-proxy (sso stack, sso.<domain>) → GitHub OAuth
     Observability: apps → OTLP :4317 → otel-collector (global) → OpenObserve
     Backups:       offen/docker-volume-backup agents (volumes + control plane)
 ```
@@ -114,7 +116,7 @@ repo root (this dir)
 └── pmcluster/                 # THE GO MODULE
     ├── cmd/pmcluster/main.go  # daemon binary entrypoint
     ├── cmd/edge/main.go       # edge console+proxy binary entrypoint
-    ├── migrations/            # SQL migrations 0001..0010 (schema_version-tracked)
+    ├── migrations/            # SQL migrations 0001..0014 (schema_version-tracked)
     ├── e2e/                   # swarm e2e tests (//go:build e2e)
     ├── docs/openapi.yaml      # REST API spec
     └── internal/              # all packages (§5)
@@ -129,9 +131,13 @@ repo root (this dir)
 Key commands (all in `internal/cli/`):
 - `cluster up|status|down|update` (`cluster.go`) — bootstrap/apply/teardown.
 - `deploy <manifest.yaml>` (`deploy.go`) — the DSL deploy entry point.
+- `setup` (`setup.go`) — interactive wizard: collect cluster config then hand
+  off to `cluster up` (fresh install) or `cluster update` (existing cluster).
+- `service list|ps|tasks|logs|restart|exec` (`service.go`) — per-service
+  operations that replace Portainer.
 - `stack list|show`, `rollback`, `logs`, `backup`, `node`, `registry`,
-  `credentials`, `user`, `webhook`, `api-key`, `tls`, `secret`, `config`,
-  `serve`, `version`, `completion`, `init`.
+  `credentials`, `user`, `webhook`, `tls`, `secret`, `config`,
+  `serve`, `version`.
 - The `serve` command (`serve.go`) wires the daemon: opens store, docker
   client, deploy service, and calls `server.New` — **this is where new daemon
   dependencies are injected**.
@@ -157,7 +163,7 @@ depend only on the port, never on a concrete adapter, so any port can be
 backed by the local core or by the daemon REST API without changing the
 consumer. Ports by package:
 - `stacks` — the deploy engine + read side. Ports: `Deployer`
-  (`Deploy`/`Rollback`/`Undeploy`) and `Reader` (`Get`/`List`/`Revisions`);
+  (`Deploy`/`Sync`/`Rollback`/`Undeploy`) and `Reader` (`Get`/`List`/`Revisions`);
   `Service` is the concrete engine (satisfies both), `Local` the read-side
   adapter.
 - `cluster` — `Service` (`Up`, `Update`, `Down`, `Status`) and
@@ -172,6 +178,9 @@ consumer. Ports by package:
   sentinels (`ErrEdgeUserProtected`, `ErrSelfDelete`).
 - `backups` — `Service` (`Trigger`/`List`/`ListForStack`) + sentinel
   `ErrTriggerNotConfigured`.
+- `services` — `Service` (`Reader` + `Ops` + `Logs`): list swarm services,
+  task history, log tailing, forced restart, non-interactive exec. Replaces
+  Portainer.
 
 ### Domain local adapters (on-node)
 Each domain package owns its on-node adapter (wrapping the store, cipher,
@@ -179,8 +188,8 @@ docker client, or cluster package). Constructors: `configs.NewLocal(st)`,
 `secrets.NewLocal(st, cipher)`, `certs.NewLocal(...)`,
 `webhooks.NewLocal(st, cipher)`, `apikeys.NewLocal(st)`,
 `backups.NewLocal(st, trigger)`, `cluster.NewService()` /
-`cluster.NewCredentials(...)`, and `stacks` builds `&stacks.Service{...}`
-directly (its `Local` covers the read side).
+`cluster.NewCredentials(...)`, `services.Local{Docker: dc}`, and `stacks`
+builds `&stacks.Service{...}` directly (its `Local` covers the read side).
 
 ### internal/remote — remote adapters (HTTP)
 The off-node implementations of the domain ports, talking to the daemon REST
@@ -188,14 +197,27 @@ API. `Client{http,base,tok}` + `do()` (Bearer, 8MB cap) + `mapError` (status +
 body → the store/domain sentinels, so callers can `errors.Is`).
 `NewStacks` + `NewDeploy` (stacks), `NewConfigs`, `NewSecrets` (`Get` =
 list-then-find; `Reveal` via `/secrets/{name}/value`), `NewWebhooks`,
-`NewAPIKeys`, `NewBackups`, `NewTLS`. `SetRendered` returns an error
-("internal cluster-update operation not available over the remote API").
+`NewAPIKeys`, `NewBackups`, `NewTLS`, `NewServices`. `SetRendered` returns an
+error ("internal cluster-update operation not available over the remote API").
 `cluster.Service`/`CredentialsService` have **no** remote adapters yet.
+
+### internal/refs — shared config()/secrets() reference language
+Leaf package used by BOTH `internal/manifest` (DSL env values) and
+`internal/cluster` (platform template refs). Provides:
+- `RefResolver` interface: `ResolveConfig`/`ResolveSecret`.
+- `ReplaceRefs(ctx, text, r)` — inline scanner rewrites every
+  `config(name)`/`secrets(name)` in compose text.
+- `ParseEnvRef(v)` — whole-value env parser (`env: KEY: config(x)`).
+- `MalformedEnvRef(v)` — detects typos (e.g. `config(foo` without closing paren).
+- `SecretMountPath(name)` — returns `/run/secrets/<name>`.
+Imports: refs ← manifest, refs ← cluster (the `renderRefResolver` in
+templates.go), refs ← stacks/resolver.go is NOT a direct import (the
+StoreConfigResolver implements manifest.EnvResolver, not refs.RefResolver).
 
 ### internal/workflow — named-step runner
 `Step{Name,Run}` + `Workflow{out,steps}` (`NewWorkflow(out)`, `Add`, `Run`
 prints `▶ <name>` and wraps the first error with the step name). Shared by
-`cluster up` (10 steps), `cluster update` (8 steps), `deploy` (5), `rollback`
+`cluster up` (10 steps), `cluster update` (7 steps), `deploy` (5), `rollback`
 (3) and `undeploy` (3) — the step lists are the public progress output.
 
 ### internal/api
@@ -208,7 +230,8 @@ domain logic** — it only assembles. `Deps` (in `server.go`) holds the **ports*
 secrets.Service`, `Webhooks webhooks.Service` + `WebhookSources
 webhooks.SourceReader`, `APIKeys apikeys.Service`, `Backups backups.Service`,
 `HostCerts *certs.HTTP` + `SiteCert *certs.HTTP` (the cert REST handlers),
-`Update *UpdateService` (cluster update via the `cluster.Service` port), plus
+`Update *UpdateService` (cluster update via the `cluster.Service` port),
+`Services services.Service`, plus
 the two infra fields `Lookup` (auth) and `Docker`. `New()` mounts the domain
 handlers itself — each domain package exports its own `Mount` methods, e.g.:
 - `apikeys.HTTP{Svc}` → `Mount(r)` = GET/POST `/api_keys`, DELETE `/api_keys/{id}`.
@@ -226,9 +249,15 @@ handlers itself — each domain package exports its own `Mount` methods, e.g.:
   + `MountSite(r)` (GET/PUT `/api/tls/site`).
 - `stacks.HTTP{Deploy, Read, Backups}` → GET/POST `/api/stacks`,
   GET `/api/stacks/{name}`, GET `/api/stacks/{name}/revisions/{rev}`,
-  POST `/api/stacks/{name}/rollback`, **DELETE `/api/stacks/{name}`** (full
+  POST `/api/stacks/{name}/rollback`, POST `/api/stacks/{name}/sync`,
+  **DELETE `/api/stacks/{name}`** (full
   teardown via `stacks.Service.Undeploy`: services, volumes, mounted secrets,
   record + configs/secrets).
+- `services.HTTP{Svc}` → GET `/api/services`,
+  GET `/api/services/{stack}`, GET `/api/services/{stack}/{service}/tasks`,
+  GET `/api/services/{stack}/{service}/logs?tail=N`,
+  POST `/api/services/{stack}/{service}/restart`,
+  POST `/api/services/{stack}/{service}/exec` (body `{argv:[...]}`).
 
 All handlers follow the same shape: struct with a port dep + `Mount(r chi.Router)`;
 JSON via `writeJSON`/`writeErr` (`server/write.go`).
@@ -241,13 +270,19 @@ exactly-once, idempotent). Repositories by file:
 - `credentials.go` — platform credentials, AES-GCM ciphertext.
 - `stacks.go` — stack records + revisions (unix-ts revisions, `NextFreeRevision`
   collision avoidance, `DeleteStack` cascades revisions via FK and removes the
-  stack's service-scope configs + secrets).
+  stack's service-scope configs + secrets). `StackRevision` carries
+  `RenderedHash` (sha256 of rendered compose) for no-op deploy detection.
 - `webhooks.go`, `registries.go`, `backups.go`, `settings.go`
   (key/value), `configs.go` + `secrets.go` (migration 0008, DSL-backed; rows
   carry `scope` (cluster|service) + `stack` (owning stack, service scope);
   `ListConfigs`/`ListSecrets` filter by `(scope, stack)`, `UpdateSecret`
   replaces a value in place), `sitecerts.go` (migration 0009, cert metadata
   for main + per-host).
+- `configs.go` — `ConfigRow` carries `RenderedHash` (sha256 of last
+  rendered snapshot). `SetRendered(ctx, name, content)` stores
+  `rendered_content` + `rendered_hash` + `rendered_at`. `ConfigHash(content)`
+  computes sha256 hex. `ListRenderedConfigs` returns configs with a
+  rendered snapshot.
 
 ### internal/auth — bearer-token auth
 `Bearer(lookup)` middleware; `auth.User{ID, Name}` on context.
@@ -260,17 +295,23 @@ token id (no O(N) argon2 scan).
 
 ### internal/cluster — cluster orchestration (the core)
 `UpDeps`/`UpdateDeps`/`SiteCertDeps`/`HostCertsDeps` bundle `Store, Cipher,
-Docker, Deployer, Provisioner` (+ `Stdout` where verbose).
+Docker, Deployer` (+ `Stdout` where verbose).
 - `up.go` — `cluster up`: idempotent bootstrap, run as a **workflow of 10
-  named steps** (preflight → networks → TLS → credentials → render configs →
-  deploy infra→edge→observability→backup → wait health → provision OO →
-  persist settings); renders 4 embedded stacks, provisions OpenObserve
-  user+token, waits for health, saves settings.
+  named steps** (preflight → sync platform configs → networks → TLS →
+  credentials → render configs → deploy stacks → wait health →
+  snapshot rendered configs → persist install state). Renders embedded
+  stacks, waits for health, saves settings. **Init-only**: errors
+  "cluster already initialised" if domain/TLS state already persisted.
 - `update.go` — `cluster update`: content-aware re-apply, run as a **workflow
-  of 8 named steps**. Loads TLS state + domain + OO credential; re-materializes
-  cert/key secrets; renders OTel + Traefik dynamic + edge configs; re-deploys
-  only stacks whose content moved (configs are versioned `*_vNNN` and compared
-  by hash label); snapshots rendered configs into the DB.
+  of 7 named steps**. Loads persisted install state + SSO settings (self-heals
+  missing `sso_cookie_secret` via `CredentialsManager.Ensure`). Loads OO
+  credentials, re-materializes cert/key secrets, renders OTel + Traefik
+  dynamic + edge configs. Content-aware per-stack reconcile: hashes freshly
+  rendered compose against `store.ConfigHash(fresh)` vs
+  `configs.rendered_hash` — deploys only changed stacks (order:
+  observability → infra → edge → backup, + sso when enabled). `SetRendered`
+  all; drift-prune (`pruneStackServices`) removes services dropped from a
+  compose.
 - `down.go` — teardown (removes stacks, secrets, configs, networks).
 - `secrets.go` — `EnsureVersionedSecret`, `EnsureVersionedSecretFromFile`,
   `EnsureSecret`, `RandomPassword`; versioning via `pmcluster.data_hash` label
@@ -279,29 +320,45 @@ Docker, Deployer, Provisioner` (+ `Stdout` where verbose).
 - `templates.go` — `RenderInput` + `LoadComposeFile` with `[[ ]]` delimiters
   (so offen's `{{ .Node.ID }}` survives) and `${DOMAIN}`-style substitution;
   `RenderTraefikDynamic` + `appendHostCertSecrets`; `EdgeImageFor()` (edge
-  image pinned to the release version tag).
+  image pinned to the release version tag). `ConfigFileNames` is 7
+  (`infra-stack.yml`, `observability-stack.yml`, `backup-stack.yml`,
+  `edge-stack.yml`, `sso-stack.yml`, `otel-collector-config.yml`,
+  `traefik-dynamic.yml`). `readConfigFile` resolution = DB
+  cluster/template/current-version row → embedded (NO disk files; DB is source
+  of truth). `SyncClusterConfigs`/`SyncPlatformConfigs` k8s-style reconcile
+  (create missing / refresh stale / preserve current-version rows).
+  `EnsureConfig`/`EnsureVersionedSecret` hash data (no labels).
+  `renderRefResolver` implements `refs.RefResolver` so platform templates use
+  the same `config(name)`/`secrets(name)` syntax as the DSL.
 - `embeds/` — the embedded compose templates: `infra-stack.yml` (Traefik),
   `edge-stack.yml`, `observability-stack.yml` (OpenObserve + OTel),
   `backup-stack.yml` (volume + control-plane backup agents),
-  `traefik-dynamic.yml`, `otel-collector-config.yml`.
+  `sso-stack.yml` (oauth2-proxy), `traefik-dynamic.yml`,
+  `otel-collector-config.yml`.
 - `sitecert.go` — `ApplyCert`/`RemoveCert`/`GetSiteCert`/`PersistedDomain`/
   `warnSiteCertExpiry` (one flow for main + per-host certs).
 - `hostcerts.go` — `HostCertEntry`, `hostSecretBase`, `loadHostCertEntries`,
   `RefreshHostCerts`.
-- `tlscerts/` — `Validate` (hostname), `ParseAndCheck` (PEM pair validation
-  + SAN/CN coverage). No filesystem management (removed).
 - `health.go` — `WaitHealthyStacks` polls the bundled services.
-- `credentials.go` — platform credential specs (edge_admin, OO…).
+- `credentials.go` — platform credential specs (`edge_admin`,
+  `openobserve_admin`, `traefik_dashboard`, `sso_cookie_secret`).
+  `CredentialsManager` with `Bootstrap`, `Ensure`, `Rotate`. `Ensure` is
+  idempotent: creates only when missing (used by `cluster update` to self-heal
+  `sso_cookie_secret`).
+- `stacks.go` — `StackDeployer` interface + `dockerCLIDeployer` (shells out
+  to `docker stack deploy -c -`). `pruneStackServices` removes services that
+  belong to a stack but are no longer in the compose (drift-prune).
 
-### internal/manifest + internal/dsl — the deployment DSL
+### internal/manifest + pkg/dsl — the deployment DSL
 Pipeline: `Parse` (strict YAML, unknown keys rejected) → `Interpolate`
 (`${app} ${env} ${version} ${registry} ${domain}` + `${env:VAR}`) → `Validate`
-(required fields, mount rules) → `Translate` (→ Compose v3.9, auto-injects
-networks, Traefik labels, cors middleware, healthchecks, restart/update
-policies). `env` values may reference DB-backed values:
-`config(<name>)` (injects content) and `secrets(<name>)` (resolves to
+(required fields, mount rules, malformed ref detection) → `TranslateWithResolver`
+(→ Compose v3.9, auto-injects networks, Traefik labels, cors middleware,
+healthchecks, restart/update policies). `env` values may reference DB-backed
+values: `config(<name>)` (injects content) and `secrets(<name>)` (resolves to
 `/run/secrets/<name>` — requires the secret to be in the service's `secrets:`
-array). `translate.go` takes an optional `EnvResolver` (the stacks engine wires a
+array). Reference resolution goes through `internal/refs` (shared package).
+`TranslateWithResolver` takes an `EnvResolver` (the stacks engine wires a
 `StoreConfigResolver` from `internal/stacks/resolver.go`).
 
 ### internal/stacks — the deploy engine (deploy + read side)
@@ -317,8 +374,19 @@ the Swarm secrets its services mount (`StackSecretNames`), then
 `Store.DeleteStack` (stack row + revisions via FK cascade + the stack's
 service-scope configs/secrets) — backs the console Delete button and
 `DELETE /api/stacks/{name}`.
+`Sync(ctx, stackName)` re-translates the stored source manifest against the
+DB and **skips the deploy** when the rendered compose hashes identically to the
+latest revision's `rendered_hash` — a no-op when nothing changed.
+`Resolver` field for config()/secrets() env refs (via `StoreConfigResolver`).
 `Local{Store}` is the read-side adapter (implements `Reader`).
-`Resolver` field for config()/secrets() env refs.
+
+### internal/services — service ops domain
+Whitelisted per-service operations (replacing Portainer). Port interfaces:
+`Reader` (List, Tasks), `Ops` (Restart, Exec), `Logs` (Logs) — bundled into
+`Service` interface. `Local{Docker}` implements all three via the Docker SDK.
+`http.go` serves the REST surface under `/api/services` (list, per-stack list,
+tasks, logs, restart, exec). `remote.NewServices(rc)` for off-node access.
+No raw Docker passthrough — every operation is a fixed, code-reviewed SDK call.
 
 ### internal/webhooks — webhook sources + HMAC receiver
 `Receiver{Sources webhooks.SourceReader, Deploy stacks.Deployer}` answers
@@ -348,14 +416,25 @@ real-IP extraction from trusted XFF (`RealIP`). `config.go` reads env
 (`API_RATE`, `WEBHOOK_RATE`, `MAX_CONCURRENT`, `BAN_THRESHOLD`, …).
 
 ### internal/ui — operator console (gin + HTMX)
-`App` (in `ui.go`) wires: session auth (bcrypt, cookie), `store.Store` on the
-`edge_pmui-data` volume, `pmapi.Client` (talks to the daemon API), views
-renderer + fragment templates. Controllers in `controllers/` (`overview`,
-`stacks`, `stackconfigs`, `webhooks`, `apikeys`, `tls`, `backups`, `deploy`,
-`settings`, `auth`). Routes: `/healthz` answered locally, `/login`, `/setup`,
+`App` (in `ui.go`) wires: session auth (HMAC-signed cookies, bcrypt), the
+console's own `store.Store` (separate SQLite DB for users + settings),
+`pmapi.Client` (talks to the daemon API), views renderer + fragment templates.
+Controllers in `controllers/` (`overview`, `stacks`, `stackconfigs`,
+`services`, `webhooks`, `apikeys`, `tls`, `backups`, `deploy`, `settings`,
+`users`, `auth`). Routes: `/healthz` answered locally, `/login`, `/setup`,
 `/` console pages, everything else reverse-proxied to the daemon.
 Templates in `views/templates/` (`app.html` shell + `frag_*.html`).
 `pmapi/` = generated-style REST client for the daemon API (models + methods).
+
+RBAC roles (`admin > operator > viewer`):
+- **viewer**: all GET page/fragment routes (read-only console).
+- **operator**: mutations (sync/rollback/remove, service ops, backups, deploy
+  submit, configs/secrets edits, tls, webhooks).
+- **admin**: API keys, settings save/apply, and the users CRUD.
+
+Auth middleware: `Require()` + `RequireRole(minRole)`. `LoginDisabled` mode
+(EDGE_LOGIN_DISABLED=true): every request passes through as a synthetic admin
+(the Traefik admin-auth gate protects `/web/*` in this mode).
 
 Console organization: **cluster-scope** configs + secrets (the platform's own
 templates/secrets) live on the **Settings** page, which also has the
@@ -368,14 +447,22 @@ owning stack. Secret values are revealed on demand with a confirmation prompt
 The stacks list has a per-row **Delete** button (confirmation prompt) that
 fully tears the stack down (`DELETE /api/stacks/{name}` →
 `stacks.Service.Undeploy`: services, named volumes, mounted secrets, record +
-its service-scope configs/secrets).
+its service-scope configs/secrets). External nav links to
+`https://observ.<domain>` + `https://traefik.<domain>/dashboard/`.
 
-### internal/telemetry + internal/openobserve + internal/backups + internal/logger + internal/buildinfo
+### internal/ui/store — console's own persistence
+Separate SQLite DB (`pmcluster-ui.db`) for users + settings. `User` carries a
+`Role` column (`admin`/`operator`/`viewer`); pre-RBAC databases are migrated
+via `ensureRoleColumn` (adds column + promotes first user to admin).
+Methods: `ListUsers`, `GetByID`, `CountAdmins`, `UpdateUser`, `DeleteUser`,
+`CreateUser(role)`, `SetPassword`, `CreateEnvUser`.
+
+### internal/telemetry + internal/backups + internal/logger + internal/buildinfo
 - `telemetry`: OTel SDK init (metrics/traces → OTLP :4318 collector).
-- `openobserve`: thin OO API client (`EnsureUser`, `EnsureIngestionToken`).
 - `backups`: `trigger.go` holds `LocalTrigger` (spawns the volume-backup
   container) + `RecordOutcome` metrics; the domain package is described above.
-- `logger`: zerolog setup. `buildinfo`: `Version`/`Commit` vars (ldflags).
+- `logger`: zerolog setup. `buildinfo`: `Version`/`Commit`/`Date` vars
+  (ldflags); `buildinfo.Resolve()` used by `--version`.
 
 ### internal/ARCHITECTURE.md
 One-page dependency-rule + domain-inventory doc; read it before touching the
@@ -385,22 +472,30 @@ package layout.
 0001 init (users, sessions), 0002 credentials, 0003 stacks/revisions,
 0004 webhooks/registries, 0005 backups, 0006 token_index, 0007 settings,
 0008 configs/config_versions/secrets, 0009 site_certs, 0010 stack columns on
-configs + secrets (service-scope rows carry their owning stack). `runMigrations`
-applies each once (schema_version table), each in its own transaction.
+configs + secrets (service-scope rows carry their owning stack), 0011
+rendered_configs (rendered_content + rendered_at), 0012
+rendered_on_configs (adds rendered columns to configs), 0013
+rendered_hash (rendered_hash column on configs for change detection), 0014
+rendered_hash_stacks (rendered_hash on stack_revisions for no-op sync).
+`runMigrations` applies each once (schema_version table), each in its own
+transaction.
 
 ---
 
 ## 6. Key runtime flows
 
 ### Bootstrap
-`install.sh` → `pmcluster init` (seeds `~/.pmcluster/`, key, admin user) →
-`pmcluster cluster up --domain <d> [--cert/--key | --acme-email]`
-(deploys infra→edge→observability→backup) → daemon runs via systemd/brew
-(`pmcluster serve`).
+`install.sh` → `pmcluster init` (seeds `~/.pmcluster/`, key, admin token) →
+`pmcluster setup` (interactive wizard: domain, TLS, SSO, edge login) →
+`pmcluster cluster up` (deploys infra→edge→observability→backup, +sso when
+enabled) → daemon runs via systemd/brew (`pmcluster serve`).
+`cluster up` is init-only: it errors "cluster already initialised" if
+domain/TLS state is already persisted — ongoing reconcile is `cluster update`.
+`setup` fallback: `cluster up`/`cluster update` with no data invoke the wizard.
 
 ### Upgrading the platform
-Push a `v*` tag → `release.yml` publishes binaries + edge image
-(`ghcr.io/nextrum-sy/pmcluster-edge:<v>` + `:latest`). On the node:
+Push a `v*` tag → `release.yml` cross-compiles 4 tarballs + SHA256SUMS +
+builds/pushes `ghcr.io/nextrum-sy/pmcluster-edge:<v>` + `:latest`. On the node:
 `curl -fsSL .../install.sh | VERSION=vX bash` → installs the new binary,
 restarts the daemon, and auto-runs `pmcluster cluster update` (because a
 config exists). `cluster update` re-renders the embedded edge-stack (image
@@ -410,18 +505,38 @@ with the binary.
 
 ### Deploying an app
 DSL manifest → `pmcluster deploy m.yaml` OR `POST /api/stacks` OR webhook
-(HMAC-signed CI). All three hit `stacks.Service.Deploy`. The translator emits
-compose with Traefik labels (`Host(<expose.host>)`, entrypoints websecure,
-tls, middleware cors-default) so the app is served at
-`https://<expose.host>/`.
+(HMAC-signed CI). All three hit `stacks.Service.Deploy`. Pipeline:
+Parse → Interpolate → Validate → TranslateWithResolver (resolves
+config()/secrets() from DB) → RecordDeploy (revision w/ rendered_hash) →
+DeployStack + drift-prune. The translator emits compose with Traefik labels
+(`Host(<expose.host>)`, entrypoints websecure, tls, middleware cors-default)
+so the app is served at `https://<expose.host>/`.
+Sync re-translates the stored source manifest and **skips** when the rendered
+compose hashes identically to the latest revision's `rendered_hash`.
+
+### SSO (single sign-on)
+When SSO is enabled via `pmcluster setup --sso-enabled`:
+- The SSO stack (oauth2-proxy) is deployed alongside the platform stacks.
+- Traefik's `/web/*` and `observ.<domain>` routers use a `forwardAuth`
+  middleware pointing at the oauth2-proxy sidecar (`sso.<domain>`, `/oauth2/*`
+  resolves on every gated host).
+- The OAuth provider is GitHub, restricted to an optional org.
+- The edge console's own login is disabled (EDGE_LOGIN_DISABLED=true);
+  RBAC roles are still enforced when it is enabled.
+- Cookie secret is a managed credential (`sso_cookie_secret`); `cluster update`
+  self-heals it when missing via `CredentialsManager.Ensure`.
+
+Without SSO: Traefik admin-auth basicAuth (`htpasswd` from
+`admin_credentials` secret) gates `/web/*` + `observ.<domain>` + traefik
+dashboard.
 
 ### Remote CLI (off-node)
 Set `--api-url https://pmcluster.<domain>` (or `PMCLUSTER_API_URL`) plus
 `--api-token pmc_...` (or `PMCLUSTER_API_TOKEN`). Commands then run against
 the daemon API instead of the local store/docker: `pmcluster --api-url ... \
 --api-token ... config list`, `deploy`, `stack list`, `rollback`, `secret ...`,
-`webhook ...`, `user create`, `backup create`, `tls ...`. Bootstrap/repair
-commands stay local.
+`webhook ...`, `user create`, `backup create`, `tls ...`, `service ...`.
+Bootstrap/repair commands stay local.
 
 ### TLS management
 - Cluster's own cert: `pmcluster tls site set|show` / PUT `/api/tls/site` /
@@ -433,7 +548,7 @@ commands stay local.
   `hostkey-<host>_vN`, row in `site_certs`, rendered as extra
   `tls.certificates` entries referencing `/run/secrets/...`.
 - Expiry warnings: console flags certs ≤30 days out; `cluster update` prints
-  ⚠ lines.
+  warning lines.
 
 ### Secrets & configs
 `pmcluster secret create|list|show|verify|delete` and
@@ -455,19 +570,19 @@ auto-ban → forward to daemon. The console UI is served by the same process.
 
 | Task | Where |
 |---|---|
-| Add a service port | new package under `internal/<domain>/` with the port interface (e.g. `stacks.Deployer`, `configs.Service`); or extend an existing domain package |
-| Add a local adapter | the domain package's `<domain>.go`/`local.go` + construct in `internal/cli/backend.go` and `internal/cli/serve.go` |
-| Add a remote adapter | `internal/remote/<domain>.go` (DTO + `Client.do`) + a `backend<Domain>` branch in `internal/cli/backend.go` |
-| Add a CLI command | new file in `internal/cli/`, register in `init()`; add OpenAPI row if it has an API twin |
+| Add a CLI command | new file in `internal/cli/`, register in `init()` via `rootCmd.AddCommand()`; add OpenAPI row if it has an API twin |
 | Add a REST endpoint | the domain package's `http.go` (struct + `Mount`), wire in `server.New` (Deps) + `cli/serve.go` |
-| Add a console page | `internal/ui/controllers/<name>.go`, route in `internal/ui/ui.go`, template `views/templates/frag_<name>.html`, nav in `app.html`, pmapi method in `internal/ui/pmapi/` |
+| Add a console page | `internal/ui/controllers/<name>.go`, route in `internal/ui/ui.go` Mount (viewer GET / operator POST), template `views/templates/frag_<name>.html`, nav in `app.html`, pmapi method in `internal/ui/pmapi/` |
 | Add a DB table | new `migrations/00NN_*.sql` + `internal/store/<name>.go` repo + tests |
-| Change compose the platform deploys | `internal/cluster/embeds/*.yml` (+ `templates.go` `[[ ]]`/`${}` substitution) |
+| Add a platform config | `ConfigFileNames` in `templates.go` + embed file in `internal/cluster/embeds/` + sync logic in `SyncClusterConfigs` |
+| Change compose the platform deploys | `internal/cluster/embeds/*.yml` (+ `templates.go` `[[ ]]`/`${}` substitution + `refs.ReplaceRefs`) |
 | Change the edge proxy policy | `internal/edgeproxy/*.go` + env defaults in `embeds/edge-stack.yml` |
 | Change the DSL schema | `pkg/dsl/types.go`, then `internal/manifest/{validate,translate,interpolate}.go`, docs in `docs/dsl.md` |
 | Add a platform credential | `internal/cluster/credentials.go` spec + `internal/store/credentials.go` |
 | Change cert flow | `internal/certs/` (port + `local.go` wrapping `internal/cluster/sitecert.go`) |
 | Change auth model | `internal/auth/`, `internal/store/users.go`, token minting in `internal/apikeys/local.go` |
+| Change console auth | `internal/ui/middleware/session.go` (Require/RequireRole) + `traefik-dynamic.yml` + embeds conditionals |
+| Add a config()/secrets() reference target | `internal/refs/refs.go` (RefResolver), `internal/cluster/templates.go` (configNameAliases / secretNameAliases maps) |
 
 ---
 
@@ -482,6 +597,8 @@ auto-ban → forward to daemon. The console UI is served by the same process.
   services map them to HTTP statuses. Wrapped with `%w`.
 - **Content-awareness**: configs/secrets are versioned `*_vNNN` and compared
   by `pmcluster.data_hash` label — never re-mint what didn't change.
+  Platform stack deploys compare `store.ConfigHash(fresh render)` against
+  `configs.rendered_hash` — skip when identical.
 - **Lint** (`pmcluster/.golangci.yml`): errcheck, govet, ineffassign,
   staticcheck, unused, misspell, gocritic, revive.
 - **Tests**: stdlib only; `httptest` for servers; e2e gated with
@@ -493,28 +610,34 @@ auto-ban → forward to daemon. The console UI is served by the same process.
 
 From `pmcluster/`:
 ```
-go build ./...
-go vet ./...
-go vet -tags e2e ./e2e/
-go test ./...                # ~26 packages
-golangci-lint run ./...
-gofmt -l .                   # must be empty
+make vet
+make build
+go test -race -count=1 ./...
+golangci-lint run
 ```
-CI mirrors this: `pmcluster.yml` (gate), `swarm-e2e.yml` (informational real
-swarm), `release.yml` (tags → binaries + edge image). Release flow for the
-node: tag → `install.sh | VERSION=vX bash` → verify daemon `/health`, edge
-image pin, console 302, `pmcluster tls site show`.
+E2e tests:
+```
+go test -timeout 10m -tags=e2e -count=1 ./e2e/...
+```
+CI workflows: `pmcluster.yml` (lint+build+unit+smoke e2e) gates main;
+`swarm-e2e.yml` (non-blocking real-swarm e2e); `release.yml` on v* tags
+cross-compiles 4 tarballs + SHA256SUMS + builds/pushes pmcluster-edge image
+to `ghcr.io/nextrum-sy`.
+
+Release flow for the node: tag → `install.sh | VERSION=vX bash` → verify
+daemon `/health`, edge image pin, console 302 → `/web/`, `pmcluster tls site show`.
 
 ---
 
-## 10. Production facts (as of v0.2.42)
+## 10. Production facts (as of v0.2.60)
 
 - Node `root@82.165.128.237`, SSH key `~/.ssh/pmcluster_ed25519`, `rg` NOT
   installed (use `grep`), `sqlite3` available.
-- Daemon `v0.2.42`, edge pinned `:v0.2.42`, domain `nextrum-sy.com`.
-- Console login: admin / `wfO1C3yY1CGVLfWEnKA-BJHMWUmoqMl$4Kb0`
-  (that's the `edge_admin` credential).
-- `site_certs` rows: `nextrum-sy.com` (cert_v041/key_v041) +
-  `idlebbookfair.com` (hostcert-idlebbookfair-com_v001/hostkey-..._v001).
-- Live Traefik dynamic config `pmcluster_traefik_dynamic_v043` references
-  those secrets.
+- Daemon `v0.2.60`, edge pinned to matching release tag, domain `nextrum-sy.com`.
+- Console at `https://pmcluster.nextrum-sy.com/web/`.
+- SSO live: GitHub OAuth (org `nextrum-sy`), oauth2-proxy on
+  `https://sso.nextrum-sy.com`, `EDGE_LOGIN_DISABLED=true`.
+- OpenObserve root admin email: `admin@nextrum-sy.com` (derived from domain).
+  Auth = root admin email:password (NOT provisioning API / ingestion token).
+- `site_certs` rows: `nextrum-sy.com` + `idlebbookfair.com` (per-host cert).
+- Traefik admin-auth gates `/web/*` + `observ.<domain>` + traefik dashboard.

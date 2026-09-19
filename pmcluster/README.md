@@ -3,9 +3,9 @@
 Single-binary control plane for the [poor-man-stack](../README.md) Docker Swarm cluster.
 It owns cluster bootstrap, application deploys (via a small DSL that translates to
 Compose), HMAC-verified webhooks for CI, registry credentials, bootstrap-password
-generation, per-host TLS certificates, API tokens, on-demand offen backups, and
-structured JSON audit logs. It replaces the old `bin/setup.sh` and owns
-deployment end to end.
+generation, per-host TLS certificates, API tokens, on-demand offen backups,
+structured JSON audit logs, RBAC users, and service operations (replacing
+Portainer). It replaces the old `bin/setup.sh` and owns deployment end to end.
 
 The daemon listens on `127.0.0.1:9090` (host-only). Public access goes through
 [`pmcluster-edge`](../README.md) — a Swarm service that publishes
@@ -18,7 +18,7 @@ The daemon listens on `127.0.0.1:9090` (host-only). Public access goes through
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | bash
 ```
 
-Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.42`.
+Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.60`.
 On Linux, `install.sh` also drops a systemd unit at `contrib/systemd/pmcluster.service`.
 
 ## Quick start
@@ -50,7 +50,8 @@ make build         # → ./bin/pmcluster
 |---------|---------|
 | `init` | Bootstrap config (flags: `--admin-name`, `--force` destructive) |
 | `serve` | Run the HTTP daemon (REST API + webhook receiver) |
-| `cluster up/status/down/update` | Bring the stack up idempotently, show status, tear down, or content-aware re-provision |
+| `cluster up/update/down/status` | Bring the stack up (init-only), content-aware reconcile (DB source of truth, `rendered_hash`), tear down, or show status |
+| `setup` | Interactive wizard: collect cluster config then run cluster up/update |
 | `deploy <manifest.yaml>` | DSL-based deploy (flags: `--app`, `--repo`, `--version`) |
 | `stack list/show` | List or inspect deployed stacks |
 | `rollback <stack> <rev>` | Roll back to a previous revision |
@@ -62,6 +63,10 @@ make build         # → ./bin/pmcluster
 | `tls hosts add/list/remove` | Per-host TLS certificates for customer domains |
 | `node list/join-token` | Node and join-token management |
 | `logs` | Cluster/service logs (flags: `--follow`, `--since`, `--tail`, `--all-files`) |
+| `secret` | Manage DB-backed secrets (AES-GCM encrypted, shown as hashes) |
+| `config` | Manage DB-backed configs (cluster templates & service configs) |
+| `service list/tasks/logs/restart/exec` | Whitelisted per-service operations (replaces Portainer) |
+| `completion` | Generate autocompletion scripts for the specified shell |
 | `version` | Binary version |
 
 ## Layout
@@ -83,9 +88,13 @@ internal/
   configs/             domain: versioned configs + rendered snapshots (Renderer port)
   backups/             domain: volume backup audit + offen trigger
   certs/               domain: TLS certificates (site + per-host)
-  stacks/              domain: deploy engine + read side (Deployer + Reader ports)
+  stacks/              domain: deploy engine + read side (Deploy + Sync + Rollback + Undeploy)
   cluster/             domain: platform lifecycle (up/update/down/status) + credentials
     embeds/            bundled compose YAMLs (infra, edge, observability, backup, Traefik)
+  refs/                shared config()/secrets() reference language (RefResolver,
+                       ReplaceRefs, ParseEnvRef, SecretMountPath)
+  services/            domain: per-service operations (list, tasks, logs, restart,
+                       exec) — replaces Portainer; local + remote adapters
   store/               SQLite (modernc.org/sqlite) + embedded migrations
   auth/                bearer tokens, argon2id hashing
   config/              viper-backed config loading
@@ -94,17 +103,18 @@ internal/
   registry/            registry credential storage
   manifest/            DSL parser + translator → Docker Swarm Compose
   edgeproxy/           rate limit, shield, blocklist, real-IP, proxy (edge)
-  ui/                  operator console (gin + HTMX, controllers + templates)
+  ui/                  operator console (/web base path, RBAC, HTMX); users table
+                       with role column; external links observ.<domain> +
+                       traefik.<domain>/dashboard/
   workflow/            named-step runner (up 10 / update 8 / deploy 5 steps)
-  openobserve/         OpenObserve provisioning (users, tokens, datasources)
   telemetry/           OTLP metrics wiring
   logger/              structured JSON audit logs
-  buildinfo/           version/commit/date with VCS fallback
+  buildinfo/           version/commit/date with VCS fallback (Resolve())
   ARCHITECTURE.md      dependency rule + domain inventory
 pkg/dsl/               public DSL types
 migrations/            *.sql, embedded via //go:embed
 e2e/                   end-to-end tests (cluster up, deploy, webhook, edge, otel)
-hack/                  dev utilities (e.g. OpenObserve creds)
+hack/                  dev utilities
 docs/                  openapi.yaml (REST API spec), restore-design.md
 ```
 
@@ -116,7 +126,7 @@ make e2e            # docker-in-docker end-to-end suite
 ```
 
 `e2e/` covers cluster-up against a real Swarm, DSL deploys, webhook delivery,
-the edge proxy/console, and OpenObserve provisioning. The same suite runs in
+the edge proxy/console, and observability. The same suite runs in
 CI on every PR (`PMCLUSTER_E2E_SWARM=1`).
 
 ## REST API

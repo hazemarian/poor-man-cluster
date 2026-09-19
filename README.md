@@ -9,7 +9,7 @@ The control plane is a single static Go 1.25 binary (`pmcluster`, ~25 MB, no cgo
 In front of it sits **`pmcluster-edge`** — a small Go service deployed as a Swarm service that publishes `pmcluster.<domain>` as the single public origin for the **operator console** (a web UI for API keys, TLS, webhooks, stacks, and more), the REST API, and webhook receivers — all shielded by per-IP rate limiting, a connection shield, and automatic IP blocklisting.
 
 - **Design + trade-offs:** [RFC v2 — issue #1](https://github.com/hazemarian/poor-man-stack/issues/1) (what actually shipped)
-- **Current release:** [v0.2.42](https://github.com/hazemarian/poor-man-stack/releases)
+- **Current release:** [v0.2.60](https://github.com/hazemarian/poor-man-stack/releases)
 
 ---
 
@@ -22,19 +22,23 @@ Two overlay networks connect everything:
 - **`traefik-net`** — application traffic between Traefik and your services
 - **`monitoring-net`** — telemetry (logs, metrics, traces) between services and OpenObserve
 
-All sensitive credentials are stored as Docker Swarm secrets (encrypted at rest and in transit) AND mirrored encrypted in `pmcluster`'s SQLite for retrieval. The bootstrap admin passwords for Traefik/OpenObserve/edge are generated randomly on first `cluster up` — no `.env` editing required.
+All sensitive credentials are stored as Docker Swarm secrets (encrypted at rest and in transit) AND mirrored encrypted in `pmcluster`'s SQLite for retrieval. Platform configs (Traefik dynamic, OTel collector, observability stack, etc.) are stored **only in the DB** — no `~/.pmcluster/config/*.yml` disk files. On each `cluster update`, configs are rendered from embedded templates, hashed, and compared against the stored `rendered_hash`; only changed stacks are re-deployed. Drift-prune removes services that were dropped from a compose. The bootstrap admin passwords for Traefik/OpenObserve/edge are generated randomly on first `cluster up` — no `.env` editing required.
 
 ```
 Internet
    │
    ▼
 Traefik (HTTPS ingress, auto-routes via Docker labels + file provider)
-   ├──▶ pmcluster-edge (:8042) ── pmcluster.<domain> origin
-   │        ├── operator console (gin + HTMX web UI)
-   │        └── smart reverse proxy ──▶ pmcluster daemon (host, 127.0.0.1:9090)
-   ├──▶ Your App(s)
-   ├──▶ pmcluster operator console (via pmcluster-edge)
-   └──▶ OpenObserve (observability UI)
+   ├──▶ pmcluster.<domain>
+   │        ├── /web/*  ──▶ pmcluster-edge ──▶ operator console (gin + HTMX)
+   │        │             gated by admin-auth (htpasswd) or sso-auth (forwardAuth)
+   │        └── /api/*  ──▶ pmcluster-edge ──▶ pmcluster daemon (127.0.0.1:9090)
+   ├──▶ observ.<domain> ──▶ OpenObserve
+   │        gated by admin-auth + openobserve-auto-auth (no login prompt)
+   ├──▶ traefik.<domain>/dashboard/ ──▶ Traefik dashboard
+   │        gated by admin-auth or sso-auth
+   ├──▶ sso.<domain> ──▶ oauth2-proxy (SSO, optional)
+   └──▶ Your App(s)
 
 Your App(s) ──OTLP──▶ OTel Collector ──▶ OpenObserve
 Traefik     ──OTLP──▶ OTel Collector ──▶ OpenObserve
@@ -52,10 +56,15 @@ Every node: OTel Collector + Backup Agent (global services)
 Sits at the edge and routes HTTPS traffic to the right service based on Docker labels (for swarm services) and a file provider (for the pmcluster route + TLS certificates). TLS certs are loaded from Swarm secrets. Built-in OpenTelemetry support sends traces and metrics to the collector.
 
 ### pmcluster operator console — Service & Platform UI
-Web UI (served by `pmcluster-edge` on the `pmcluster.<domain>` origin) for day-to-day operations: view stacks and **services** (live replica health, task/crash history, tailed logs), **restart** services, run one-off `exec` commands, manage webhooks/API keys/TLS/backups, and edit cluster settings. No Portainer — its role is fully covered here plus the `pmcluster service` CLI.
+Web UI (served by `pmcluster-edge` on the `pmcluster.<domain>` origin) for day-to-day operations: view stacks and **services** (live replica health, task/crash history, tailed logs), **restart** services, run one-off `exec` commands, manage webhooks/API keys/TLS/backups, manage **users** with **RBAC roles** (admin > operator > viewer), and edit cluster settings. The console lives under `/web` and is gated by Traefik's `admin-auth` (htpasswd) middleware — or by `sso-auth` (oauth2-proxy forwardAuth) when GitHub SSO is enabled. When behind the auth gate, the console's own login page is disabled (`EDGE_LOGIN_DISABLED=true`) and the Users CRUD is hidden from the nav. No Portainer — its role is fully covered here plus the `pmcluster service` CLI.
+
+### oauth2-proxy (SSO, optional)
+When GitHub SSO is enabled via `pmcluster setup --sso-enabled`, an `oauth2-proxy` sidecar runs in its own stack (`sso.<domain>`) on the manager. It performs GitHub OAuth (with optional org restriction) and exposes `/oauth2/*` endpoints. Traefik's `sso-auth` forwardAuth middleware replaces `admin-auth` on the console (`/web/*`), OpenObserve (`observ.<domain>`), and the Traefik dashboard (`traefik.<domain>`). The `/oauth2/*` path resolves on every gated host so the OAuth redirect loop works correctly. The cookie is shared across all `<domain>` subdomains (`OAUTH2_PROXY_COOKIE_DOMAINS`). When SSO is on, the edge console's own login is disabled — you authenticate through GitHub.
 
 ### OpenObserve — Observability (Logs, Metrics, Traces)
 Lightweight all-in-one observability platform. Single binary, one UI, ~140× lower storage cost than Elasticsearch-based stacks. Receives OTLP from the OTel Collector.
+
+No provisioning API or automation user — the OTel collector and the Traefik auto-auth middleware both use the **root admin credentials** (the `openobserve_admin` managed credential / `zo_root_user_password` Swarm secret). OpenObserve's own login page is never shown: it is gated by `admin-auth` (or `sso-auth`) plus a static `openobserve-auto-auth` middleware that injects a Basic `Authorization` header on every request.
 
 ### OpenTelemetry Collector — Telemetry Aggregation
 Runs as a global service on every node. Auto-discovers containers via the Docker observer, tails their logs, enriches with Swarm metadata, collects Docker resource metrics, forwards everything to OpenObserve. The pipeline config is generated by pmcluster and shipped as a Docker config (replicated to every node by Swarm itself).
@@ -76,8 +85,9 @@ Its image is built from `cmd/edge/` and published to GHCR; the embedded `edge-st
 Single static binary, lives on the manager host. Replaces the bash setup script and owns deployment end to end.
 
 - `pmcluster init` — creates `~/.pmcluster/` (SQLite + encryption key) and prints a one-time bootstrap admin token for the API
-- `pmcluster cluster up` — brings the cluster up: preflight, networks, TLS secrets, bootstrap credentials, OTel + Traefik configs, deploy stacks. Prints all bootstrap passwords in a clearly-marked block at the end.
-- `pmcluster cluster update` — targeted re-provisioning after you edit `~/.pmcluster/config/*.yml` or renew certs: content-aware, re-deploys only what changed (no credential bootstrap, no full redeploy)
+- `pmcluster setup` — **interactive wizard**: collects domain, TLS (LE or BYO), Traefik admin user, SSO enable (GitHub creds + org), edge login preference, then runs `cluster up` (fresh) or `cluster update` (existing). All questions have matching flags for scripted use.
+- `pmcluster cluster up` — **init-only**: brings a fresh cluster up (prevents re-running if a cluster already exists — run `cluster update` instead). Configs are stored in the DB only (no `~/.pmcluster/config/*.yml` disk files); rendered at deploy time from embedded templates.
+- `pmcluster cluster update` — **content-aware reconcile**: DB is the source of truth. Compares rendered compose hashes (`rendered_hash`) against stored values; re-deploys only changed stacks. Drift-prune removes services dropped from a compose.
 - `pmcluster cluster status` / `cluster down`
 - `pmcluster serve` — runs the long-running daemon (REST API + webhook receiver). Listens on `127.0.0.1:9090`; Traefik routes `pmcluster.<domain>` to it via `host.docker.internal:host-gateway`
 - `pmcluster deploy <file>` / `pmcluster stack list|show` / `pmcluster rollback <stack> <rev>` — DSL-based application deploys with versioned rollback
@@ -89,8 +99,11 @@ Single static binary, lives on the manager host. Replaces the bash setup script 
 - `pmcluster tls site show|set` — inspect or rotate the cluster's own (main) certificate in place, with expiry metadata
 - `pmcluster backup create|list` — on-demand offen volume snapshots; deploys can opt-in via `backup_before_deploy: true`
 - `pmcluster node list|join-token` — wraps `docker node` for the read paths
-- `pmcluster user create <name>` / `user list` / `user remove <name>` — issue and revoke API tokens for additional users (tokens print once, hashed at rest; remove instantly revokes)
+- `pmcluster secret create|list|show|verify|delete` — DB-backed secrets (AES-256-GCM encrypted, shown as hashes)
+- `pmcluster config create|list|get|edit|history|rollback` — DB-backed configs with version history
+- `pmcluster user create|list|edit|remove` — issue and manage API tokens for additional users (RBAC roles: admin/operator/viewer; tokens print once, hashed at rest)
 - `pmcluster logs [--tail=N] [--since=24h] [--follow]` — tail the JSON audit log at `~/.pmcluster/logs/`. Files rotate daily, swept after 14 days.
+- `pmcluster version` — prints version, commit, and build date (also accessible via `--version` flag)
 
 ---
 
@@ -158,7 +171,7 @@ One-line install (latest release):
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | bash
 ```
 
-The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-stack/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.42`).
+The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-stack/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.60`).
 
 **With private registry credentials (GHCR, Docker Hub, etc.):**
 
@@ -179,24 +192,33 @@ sudo install -m 0755 bin/pmcluster /usr/local/bin/
 
 ### 2. Bring the cluster up
 
+**Interactive (recommended):**
+
+```bash
+pmcluster init                          # creates ~/.pmcluster, prints admin token
+pmcluster setup                         # interactive wizard — collects all settings
+```
+
+The setup wizard walks you through domain, TLS, Traefik admin user, SSO (optional GitHub OAuth), and edge login preference, then runs `cluster up` (fresh) or `cluster update` (existing cluster). All questions have flags for scripted use — see `pmcluster setup --help`.
+
+**Manual / scripted:**
+
 ```bash
 pmcluster init                          # creates ~/.pmcluster, prints admin token
 
 # Let's Encrypt (recommended)
 pmcluster cluster up \
   --domain=example.com \
-  --acme-email=ops@example.com \
-  --openobserve-email=admin@example.com
+  --acme-email=ops@example.com
 
 # OR operator-supplied cert
 pmcluster cluster up \
   --domain=example.com \
   --cert=/path/to/cert.pem \
-  --key=/path/to/key.pem \
-  --openobserve-email=admin@example.com
+  --key=/path/to/key.pem
 ```
 
-`cluster up` is idempotent — re-runs reconcile, never destroy or rotate.
+`cluster up` is **init-only** — if a cluster already exists it will error and tell you to run `cluster update`. This prevents accidental re-bootstrapping. Configs are stored **only in the SQLite DB** (no `~/.pmcluster/config/*.yml` disk files); they are rendered at deploy time from embedded templates.
 
 It will:
 1. Preflight (Docker reachable, Swarm active, this node is a manager)
@@ -204,7 +226,7 @@ It will:
 3. Configure TLS — either wire ACME into Traefik (HTTP-01 via the `:80` entrypoint) or load the operator's cert/key into Swarm secrets
 4. Generate random bootstrap passwords for Traefik / OpenObserve / the edge console, store encrypted in SQLite, mirror to Swarm secrets
 5. Render the OTel + Traefik dynamic configs in-process and create them as Docker configs (Swarm replicates to every node)
-6. Deploy the `infra`, `edge`, `observability`, and `backup` stacks via `docker stack deploy`
+6. Deploy the `infra`, `edge`, `observability`, `backup`, and (if SSO enabled) `sso` stacks via `docker stack deploy`
 
 The bootstrap passwords are printed **once** at the end. Save them, or retrieve them later:
 
@@ -214,9 +236,9 @@ pmcluster credentials show openobserve_admin
 ```
 
 Once DNS resolves, the dashboards are live at:
-- `https://traefik.<your-domain>` — Traefik dashboard
-- `https://observ.<your-domain>` — OpenObserve
-- `https://pmcluster.<your-domain>` — **pmcluster operator console + API/webhooks** (served by `pmcluster-edge`; login as `admin` with the `edge_admin` bootstrap password from `pmcluster credentials show edge_admin`)
+- `https://traefik.<your-domain>` — Traefik dashboard (gated by admin-auth or sso-auth)
+- `https://observ.<your-domain>` — OpenObserve (gated by admin-auth + auto-auth header; no login prompt)
+- `https://pmcluster.<your-domain>` — **pmcluster operator console + API/webhooks** (served by `pmcluster-edge`); the `/web/*` routes are gated by admin-auth or sso-auth, the `/api/*` and `/webhook/*` routes use their own Bearer / webhook-signature auth
 
 Service-level operations (replica health, task history, logs, restart, exec)
 are handled by pmcluster itself — see the `pmcluster service` CLI group and the
@@ -245,13 +267,16 @@ JSON files live at `~/.pmcluster/logs/pmcluster-YYYY-MM-DD.log` and are swept af
 `cluster up` deploys `pmcluster-edge`, so `https://pmcluster.<your-domain>` is a full management UI as soon as DNS resolves:
 
 - **Stacks** — view deployed stacks and revision history, deploy new manifests, roll back
+- **Services** — live replica health, task/crash history, log tailing, restart, exec
 - **Webhooks** — create/list/remove CI webhook sources (secrets shown once)
 - **API keys** — issue and revoke bearer tokens for other users/CI systems
 - **TLS** — rotate the cluster's own (main) certificate and manage per-host certificates for customer domains, with expiry warnings
 - **Backups** — trigger snapshots and view the audit log
-- **Settings / overview** — cluster info and management
+- **Users** — manage console accounts with RBAC roles (admin > operator > viewer); admins only. Hidden from nav when behind SSO/admin-auth.
+- **Settings / overview** — cluster info and management (incl. "Apply to swarm" sync button)
+- **External** — nav links to `https://observ.<domain>` (OpenObserve) and `https://traefik.<domain>/dashboard/` (Traefik dashboard)
 
-The console authenticates against a dedicated `edge` daemon user and stores its session state in its own SQLite volume; the login password is the `edge_admin` credential (`pmcluster credentials show edge_admin`).
+The console authenticates against a dedicated `edge` daemon user and stores its session state in its own SQLite volume. When the console is deployed behind Traefik's `admin-auth` or `sso-auth` gate (`/web/*`), its own login page is disabled (`EDGE_LOGIN_DISABLED=true`) — you authenticate at the Traefik level and the console runs as a synthetic admin session.
 
 ### 5. Add worker nodes (optional)
 
@@ -578,11 +603,7 @@ OpenObserve alone needs ~512 MB RAM at idle. On a manager with less than 4 GB it
 
 ```bash
 docker secret rm cert key
-pmcluster cluster up \
-  --domain=example.com \
-  --cert=/path/to/new.pem \
-  --key=/path/to/new.key.pem \
-  --openobserve-email=admin@example.com   # everything else preserved
+pmcluster cluster update                 # re-applies stored cert/key from the DB
 docker service update --force infra_traefik
 ```
 
@@ -590,7 +611,7 @@ Switching an existing cluster between ACME and operator-cert mode requires `--fo
 
 ### Renewing the main certificate in place
 
-The cluster's own (main) certificate can be rotated without a full bring-up, from any of the three entry points — the result is identical: the pair is validated against the cluster domain, written to `~/.pmcluster/config/site/{cert,key}.pem`, materialized as versioned Swarm secrets (`cert_vN`/`key_vN`), wired into the Traefik dynamic config, and its metadata (validity window, SANs, hashes) recorded in the DB for expiry monitoring.
+The cluster's own (main) certificate can be rotated without a full bring-up, from any of the three entry points — the result is identical: the pair is validated against the cluster domain, stored in the DB, materialized as versioned Swarm secrets (`cert_vN`/`key_vN`), wired into the Traefik dynamic config, and its metadata (validity window, SANs, hashes) recorded in the DB for expiry monitoring.
 
 ```bash
 # CLI — status + upload

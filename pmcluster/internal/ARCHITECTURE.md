@@ -33,7 +33,8 @@ cli ──► remote ──► domain packages (ports) ◄── server
 | `configs` | `Config`, `ConfigVersion` | `Service` (Create/Get/List/Update/Rollback/Delete/ListVersions/ListRendered) · `Renderer` (SetRendered, **local-only**) | `GET/POST /api/configs`, `GET/PUT/DELETE /api/configs/{name}`, `GET /api/configs/{name}/versions`, `POST /api/configs/{name}/rollback`, `GET /api/cluster/rendered` |
 | `backups` | `Run` | `Service` (Trigger/List/ListForStack) · sentinel `ErrTriggerNotConfigured` | `GET/POST /api/backups`, `GET /api/stacks/{name}/backups` |
 | `certs` | `Cert` | `Service` (SiteCert/ApplyHostCert/RemoveHostCert/GetSiteCert/List/MainDomain) | `GET /api/tls/hosts`, `PUT/DELETE /api/tls/hosts/{host}`, `GET/PUT /api/tls/site` |
-| `stacks` | `Payload`, `Result`, `Stack`, `Revision` | `Deployer` (Deploy/Rollback/Undeploy) · `Reader` (Get/List/Revisions) | `POST/GET /api/stacks`, `GET/DELETE /api/stacks/{name}`, `GET /api/stacks/{name}/revisions/{rev}`, `POST /api/stacks/{name}/rollback` |
+| `stacks` | `Payload`, `Result`, `Stack`, `Revision` | `Deployer` (Deploy/Sync/Rollback/Undeploy) · `Reader` (Get/List/Revisions) | `POST/GET /api/stacks`, `GET/DELETE /api/stacks/{name}`, `GET /api/stacks/{name}/revisions/{rev}`, `POST /api/stacks/{name}/rollback`, `POST /api/stacks/{name}/sync` |
+| `services` | `ServiceSummary`, `TaskRun`, `ExecResult`, `LogLine` | `Reader` (List/Tasks) · `Ops` (Restart/Exec) · `Logs` · `Service` (Reader+Ops+Logs) | `GET /api/services`, `GET /api/services/{stack}`, `GET /api/services/{stack}/{service}/tasks`, `GET /api/services/{stack}/{service}/logs`, `POST /api/services/{stack}/{service}/restart`, `POST /api/services/{stack}/{service}/exec` |
 | `cluster` | — (engine) | `Service` (Up/Update/Down/Status) · `CredentialsService` | none (local-only) |
 
 ## Composition roots
@@ -55,6 +56,7 @@ type Deps struct {
     APIKeys       apikeys.Service
     Configs       configs.Service
     Secrets       secrets.Service
+    Services      services.Service       // per-service ops (/api/services)
 }
 ```
 
@@ -62,9 +64,11 @@ type Deps struct {
 returns the local adapter when `--api-url`/`PMCLUSTER_API_URL` is unset, or a
 `remote.NewXxx` client otherwise. Remote-capable helpers: `backendConfigs`,
 `backendSecrets`, `backendWebhooks`, `backendAPIKeys`, `backendBackups`,
-`backendTLS`, `backendDeploy`, `backendStacks`. The cluster lifecycle
-(`cluster.go`) and credentials (`credentials.go`) commands are **always
-local** — they run the engine directly, not through `backend.go`.
+`backendTLS`, `backendDeploy`, `backendStacks`, `backendServices`. The cluster
+lifecycle (`cluster.go`) and credentials (`credentials.go`) commands are
+**always local** — they run the engine directly, not through `backend.go`.
+The `setup` wizard (`setup.go`) falls back to `runClusterUp`/`runClusterUpdate`
+for fresh installs and updates respectively.
 
 ## Local-only vs remote-capable
 
@@ -79,8 +83,17 @@ local** — they run the engine directly, not through `backend.go`.
   operation only `cluster update` performs locally against the store.
 
 Everything else (`apikeys`, `webhooks.Service`, `secrets`, `configs.Service`,
-`backups`, `certs.Service`, `stacks.Deployer` + `stacks.Reader`) has a
-`remote` adapter in `internal/remote`.
+`backups`, `certs.Service`, `stacks.Deployer` + `stacks.Reader`,
+`services`) has a `remote` adapter in `internal/remote`.
+
+## Leaf packages
+
+`internal/refs` is a leaf package (no domain port, no adapter). It provides
+the shared `config()/secrets()` reference language consumed by
+`internal/manifest` (DSL env values) and `internal/cluster` (platform
+templates via `renderRefResolver`). Key exports: `RefResolver` interface
+(`ResolveConfig`, `ResolveSecret`), `ReplaceRefs` inline scanner,
+`ParseEnvRef`, `MalformedEnvRef`, `SecretMountPath`.
 
 ## Wire invariants
 
@@ -91,3 +104,6 @@ Everything else (`apikeys`, `webhooks.Service`, `secrets`, `configs.Service`,
   substring, so CLI error handling is identical local vs remote.
 - Models carry no `sql.Null*`; the local adapters are the only place that
   maps store rows (which do use `sql.Null*`) into domain models.
+- `stacks.Result.Changed` is `false` when a sync re-translates the latest
+  stored source manifest and `sha256(rendered)` matches the stored
+  `rendered_hash` — no new revision recorded, no stack deployed.
