@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -237,7 +237,7 @@ func TestEnsureConfig_AttachesManagedLabel(t *testing.T) {
 func TestEnsureConfig_ReusesVersionWhenUnchanged(t *testing.T) {
 	f := newFakeDocker()
 	data := []byte("same data")
-	if err := f.ConfigCreate(context.Background(), docker.ConfigSpec{
+	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
 		Name: "otel_config_v001",
 		Data: data,
 		Labels: map[string]string{
@@ -264,7 +264,7 @@ func TestEnsureConfig_ReusesVersionWhenUnchanged(t *testing.T) {
 
 func TestEnsureConfig_MintsNewVersionOnChange(t *testing.T) {
 	f := newFakeDocker()
-	if err := f.ConfigCreate(context.Background(), docker.ConfigSpec{
+	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
 		Name: "otel_config_v001",
 		Data: []byte("original"),
 	}); err != nil {
@@ -300,7 +300,7 @@ func TestEnsureVersionedSecret_ReusesUnchangedVersion(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	seed := []byte("-----BEGIN CERTIFICATE-----\nsame cert bytes\n-----END CERTIFICATE-----\n")
-	if err := f.SecretCreate(context.Background(), docker.SecretSpec{
+	if err := f.SecretCreate(context.Background(), runtime.SecretSpec{
 		Name: "cert_v001",
 		Data: seed,
 		Labels: map[string]string{
@@ -339,7 +339,7 @@ func TestEnsureVersionedSecret_MintsNewVersionOnChange(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	seed := []byte("old cert bytes")
-	if err := f.SecretCreate(context.Background(), docker.SecretSpec{
+	if err := f.SecretCreate(context.Background(), runtime.SecretSpec{
 		Name: "cert_v001",
 		Data: seed,
 		Labels: map[string]string{

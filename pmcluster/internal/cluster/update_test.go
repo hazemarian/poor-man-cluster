@@ -11,7 +11,7 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -29,8 +29,8 @@ func openTestCipher(t *testing.T, path string) *credentials.Cipher {
 	return c
 }
 
-func healthyService(name string) docker.Service {
-	return docker.Service{Name: name, Replicas: 1, Desired: 1}
+func healthyService(name string) runtime.Service {
+	return runtime.Service{Name: name, Replicas: 1, Desired: 1}
 }
 
 // seedUpdateState runs a real Up with a fresh fake docker + deployer, then

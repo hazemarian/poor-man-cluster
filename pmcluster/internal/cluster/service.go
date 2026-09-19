@@ -3,7 +3,7 @@ package cluster
 import (
 	"context"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 // Service is the platform-lifecycle port: bringing the Swarm up, applying
@@ -16,7 +16,7 @@ type Service interface {
 	Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error)
 	Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult, error)
 	Down(ctx context.Context, deps DownDeps, in DownInput) (*DownResult, error)
-	Status(ctx context.Context, d docker.Client) (*StatusReport, error)
+	Status(ctx context.Context, d runtime.Client) (*StatusReport, error)
 }
 
 // Local is the thin binding adapter that satisfies Service by delegating to
@@ -43,6 +43,6 @@ func (l *Local) Down(ctx context.Context, deps DownDeps, in DownInput) (*DownRes
 }
 
 // Status reports the cluster health (see Status).
-func (l *Local) Status(ctx context.Context, d docker.Client) (*StatusReport, error) {
+func (l *Local) Status(ctx context.Context, d runtime.Client) (*StatusReport, error) {
 	return Status(ctx, d)
 }

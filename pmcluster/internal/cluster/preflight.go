@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 // PreflightError pairs a low-level cause with an operator-facing
@@ -30,7 +30,7 @@ func (e *PreflightError) Unwrap() error { return e.Cause }
 
 // Preflight checks (in order): docker reachable, swarm active, this
 // node is a manager. Returns the first failure as *PreflightError.
-func Preflight(ctx context.Context, d docker.Client) error {
+func Preflight(ctx context.Context, d runtime.Client) error {
 	if _, err := d.Ping(ctx); err != nil {
 		return &PreflightError{
 			Cause: err,

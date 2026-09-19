@@ -7,13 +7,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 func TestNodesHandler_HappyPath(t *testing.T) {
 	now := int64(1_700_000_000)
 	fake := &inMemoryDockerClient{
-		nodeListResult: []docker.Node{
+		nodeListResult: []runtime.Node{
 			{
 				ID:            "node1abc",
 				Hostname:      "manager-01",
@@ -128,7 +128,7 @@ func TestNodesHandler_DockerError_502(t *testing.T) {
 
 func TestNodesHandler_EmptyNodeList(t *testing.T) {
 	fake := &inMemoryDockerClient{
-		nodeListResult: []docker.Node{},
+		nodeListResult: []runtime.Node{},
 	}
 
 	h := NodesHandler(fake)

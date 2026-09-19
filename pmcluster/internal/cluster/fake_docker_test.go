@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
-// fakeDocker is a minimal in-process implementation of docker.Client for
+// fakeDocker is a minimal in-process implementation of runtime.Client for
 // cluster-package tests. It tracks state in plain maps/slices and can be
 // pre-populated to simulate "already exists" conditions.
 //
@@ -18,13 +18,13 @@ type fakeDocker struct {
 	// Controls for Ping / Info.
 	pingErr error
 	infoErr error
-	info    docker.Info
+	info    runtime.Info
 
 	// In-memory resources, keyed by name.
-	networks map[string]docker.NetworkSpec
-	secrets  map[string]docker.SecretSpec
-	configs  map[string]docker.ConfigSpec
-	services map[string]docker.Service
+	networks map[string]runtime.NetworkSpec
+	secrets  map[string]runtime.SecretSpec
+	configs  map[string]runtime.ConfigSpec
+	services map[string]runtime.Service
 
 	// Removal tracking — appended to on each Remove call.
 	removedSecrets  []string
@@ -47,16 +47,16 @@ type fakeDocker struct {
 
 func newFakeDocker() *fakeDocker {
 	return &fakeDocker{
-		networks: make(map[string]docker.NetworkSpec),
-		secrets:  make(map[string]docker.SecretSpec),
-		configs:  make(map[string]docker.ConfigSpec),
-		services: make(map[string]docker.Service),
+		networks: make(map[string]runtime.NetworkSpec),
+		secrets:  make(map[string]runtime.SecretSpec),
+		configs:  make(map[string]runtime.ConfigSpec),
+		services: make(map[string]runtime.Service),
 	}
 }
 
 // goodSwarmInfo returns an Info that satisfies all preflight checks.
-func goodSwarmInfo() docker.Info {
-	return docker.Info{
+func goodSwarmInfo() runtime.Info {
+	return runtime.Info{
 		Name:                  "test-node",
 		ServerVersion:         "27.0.0",
 		SwarmLocalNodeState:   "active",
@@ -66,11 +66,11 @@ func goodSwarmInfo() docker.Info {
 	}
 }
 
-func (f *fakeDocker) Ping(_ context.Context) (docker.Ping, error) {
-	return docker.Ping{APIVersion: "1.45", OSType: "linux"}, f.pingErr
+func (f *fakeDocker) Ping(_ context.Context) (runtime.Ping, error) {
+	return runtime.Ping{APIVersion: "1.45", OSType: "linux"}, f.pingErr
 }
 
-func (f *fakeDocker) Info(_ context.Context) (docker.Info, error) {
+func (f *fakeDocker) Info(_ context.Context) (runtime.Info, error) {
 	return f.info, f.infoErr
 }
 
@@ -82,7 +82,7 @@ func (f *fakeDocker) NetworkExists(_ context.Context, name string) (bool, error)
 	return ok, nil
 }
 
-func (f *fakeDocker) NetworkCreate(_ context.Context, spec docker.NetworkSpec) error {
+func (f *fakeDocker) NetworkCreate(_ context.Context, spec runtime.NetworkSpec) error {
 	if f.networkCreateErr != nil {
 		return f.networkCreateErr
 	}
@@ -98,7 +98,7 @@ func (f *fakeDocker) SecretExists(_ context.Context, name string) (bool, error) 
 	return ok, nil
 }
 
-func (f *fakeDocker) SecretCreate(_ context.Context, spec docker.SecretSpec) error {
+func (f *fakeDocker) SecretCreate(_ context.Context, spec runtime.SecretSpec) error {
 	if f.secretCreateErr != nil {
 		return f.secretCreateErr
 	}
@@ -114,7 +114,7 @@ func (f *fakeDocker) ConfigExists(_ context.Context, name string) (bool, error) 
 	return ok, nil
 }
 
-func (f *fakeDocker) ConfigCreate(_ context.Context, spec docker.ConfigSpec) error {
+func (f *fakeDocker) ConfigCreate(_ context.Context, spec runtime.ConfigSpec) error {
 	if f.configCreateErr != nil {
 		return f.configCreateErr
 	}
@@ -122,8 +122,8 @@ func (f *fakeDocker) ConfigCreate(_ context.Context, spec docker.ConfigSpec) err
 	return nil
 }
 
-func (f *fakeDocker) ServiceList(_ context.Context) ([]docker.Service, error) {
-	out := make([]docker.Service, 0, len(f.services))
+func (f *fakeDocker) ServiceList(_ context.Context) ([]runtime.Service, error) {
+	out := make([]runtime.Service, 0, len(f.services))
 	for _, s := range f.services {
 		out = append(out, s)
 	}
@@ -132,17 +132,17 @@ func (f *fakeDocker) ServiceList(_ context.Context) ([]docker.Service, error) {
 
 // ServiceInspect/Tasks/Logs/Restart/Exec are unused by the cluster package;
 // stub them so this fake keeps satisfying the growing interface.
-func (f *fakeDocker) ServiceInspect(_ context.Context, _ string) (docker.ServiceInspectResult, error) {
-	return docker.ServiceInspectResult{}, nil
+func (f *fakeDocker) ServiceInspect(_ context.Context, _ string) (runtime.ServiceInspectResult, error) {
+	return runtime.ServiceInspectResult{}, nil
 }
-func (f *fakeDocker) ServiceTasks(_ context.Context, _ string) ([]docker.ServiceTask, error) {
+func (f *fakeDocker) ServiceTasks(_ context.Context, _ string) ([]runtime.ServiceTask, error) {
 	return nil, nil
 }
-func (f *fakeDocker) ServiceLogs(_ context.Context, _ string, _ int) ([]docker.LogLine, error) {
+func (f *fakeDocker) ServiceLogs(_ context.Context, _ string, _ int) ([]runtime.LogLine, error) {
 	return nil, nil
 }
 func (f *fakeDocker) ServiceRestart(_ context.Context, _ string) error { return nil }
-func (f *fakeDocker) ServiceExec(_ context.Context, _ string, _ []string) (*docker.ExecResult, error) {
+func (f *fakeDocker) ServiceExec(_ context.Context, _ string, _ []string) (*runtime.ExecResult, error) {
 	return nil, nil
 }
 
@@ -193,11 +193,11 @@ func (f *fakeDocker) SecretList(_ context.Context, _, _ string) ([]string, error
 // SecretInspect mimics the real Docker API: secret payloads are write-only,
 // so inspect never returns Data (only labels survive). Callers that need to
 // compare content must use the pmcluster.data_hash label.
-func (f *fakeDocker) SecretInspect(_ context.Context, name string) (docker.SecretInspectResult, error) {
+func (f *fakeDocker) SecretInspect(_ context.Context, name string) (runtime.SecretInspectResult, error) {
 	if s, ok := f.secrets[name]; ok {
-		return docker.SecretInspectResult{Labels: s.Labels}, nil
+		return runtime.SecretInspectResult{Labels: s.Labels}, nil
 	}
-	return docker.SecretInspectResult{}, fmt.Errorf("secret %q not found", name)
+	return runtime.SecretInspectResult{}, fmt.Errorf("secret %q not found", name)
 }
 
 func (f *fakeDocker) ConfigList(_ context.Context, labelKey, labelValue string) ([]string, error) {
@@ -211,22 +211,22 @@ func (f *fakeDocker) ConfigList(_ context.Context, labelKey, labelValue string) 
 	return names, nil
 }
 
-func (f *fakeDocker) ConfigInspect(_ context.Context, name string) (docker.ConfigInspectResult, error) {
+func (f *fakeDocker) ConfigInspect(_ context.Context, name string) (runtime.ConfigInspectResult, error) {
 	if c, ok := f.configs[name]; ok {
-		return docker.ConfigInspectResult{Labels: c.Labels, Data: c.Data}, nil
+		return runtime.ConfigInspectResult{Labels: c.Labels, Data: c.Data}, nil
 	}
-	return docker.ConfigInspectResult{}, fmt.Errorf("config %q not found", name)
+	return runtime.ConfigInspectResult{}, fmt.Errorf("config %q not found", name)
 }
 
-func (f *fakeDocker) NodeList(_ context.Context) ([]docker.Node, error) { return nil, nil }
-func (f *fakeDocker) JoinTokens(_ context.Context) (docker.JoinTokens, error) {
-	return docker.JoinTokens{}, nil
+func (f *fakeDocker) NodeList(_ context.Context) ([]runtime.Node, error) { return nil, nil }
+func (f *fakeDocker) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
+	return runtime.JoinTokens{}, nil
 }
 
 func (f *fakeDocker) Close() error { return nil }
 
 // Compile-time assertion.
-var _ docker.Client = (*fakeDocker)(nil)
+var _ runtime.Client = (*fakeDocker)(nil)
 
 // recordingDeployer captures deploy/remove calls for order + count assertions.
 type recordingDeployer struct {

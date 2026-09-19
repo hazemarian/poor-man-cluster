@@ -9,7 +9,7 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -52,7 +52,7 @@ type BootstrapInput struct {
 type CredentialsManager struct {
 	Store    *store.Store
 	Cipher   *credentials.Cipher
-	Docker   docker.Client
+	Docker   runtime.Client
 	Deployer StackDeployer
 }
 

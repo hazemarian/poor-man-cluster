@@ -4,12 +4,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 func TestStatus_PopulatedFromFakeDocker(t *testing.T) {
 	f := newFakeDocker()
-	f.info = docker.Info{
+	f.info = runtime.Info{
 		Name:                  "manager-node",
 		ServerVersion:         "27.0.0",
 		SwarmLocalNodeState:   "active",
@@ -58,7 +58,7 @@ func TestStatus_PreflightNilWhenHealthy(t *testing.T) {
 
 func TestStatus_PreflightNonNilWhenSwarmInactive(t *testing.T) {
 	f := newFakeDocker()
-	f.info = docker.Info{
+	f.info = runtime.Info{
 		Name:                  "solo-node",
 		ServerVersion:         "27.0.0",
 		SwarmLocalNodeState:   "inactive",

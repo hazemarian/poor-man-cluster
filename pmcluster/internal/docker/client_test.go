@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 // fakeClient is an in-process implementation of the Client interface that lets
@@ -14,18 +16,18 @@ import (
 // It is defined here in the docker package so it lives alongside the real
 // client and can be imported by other packages' tests.
 type fakeClient struct {
-	pingResult Ping
+	pingResult runtime.Ping
 	pingErr    error
-	infoResult Info
+	infoResult runtime.Info
 	infoErr    error
 	closed     bool
 
 	// In-memory stores for the cluster bootstrap surface (Phase 2).
 	// Nil maps are lazily initialised on first write so simple
 	// instantiation (`&fakeClient{}`) keeps working.
-	networks map[string]NetworkSpec
-	secrets  map[string]SecretSpec
-	configs  map[string]ConfigSpec
+	networks map[string]runtime.NetworkSpec
+	secrets  map[string]runtime.SecretSpec
+	configs  map[string]runtime.ConfigSpec
 
 	// volumes + stackSecrets back VolumeList / StackSecretNames.
 	volumes      []string
@@ -33,28 +35,28 @@ type fakeClient struct {
 
 	// services back the service-ops surface (ServiceInspect/Tasks/Logs/
 	// Restart/Exec). Nil maps are lazily initialised on first write.
-	services       map[string]ServiceInspectResult
-	serviceTasks   map[string][]ServiceTask
-	serviceLogs    map[string][]LogLine
-	serviceRestart int           // count of ServiceRestart calls
-	execResults    []*ExecResult // queue of exec results, consumed in order
+	services       map[string]runtime.ServiceInspectResult
+	serviceTasks   map[string][]runtime.ServiceTask
+	serviceLogs    map[string][]runtime.LogLine
+	serviceRestart int                   // count of ServiceRestart calls
+	execResults    []*runtime.ExecResult // queue of exec results, consumed in order
 	execErr        error
 }
 
 // AddService registers a swarm service for the service-ops tests.
-func (f *fakeClient) AddService(name string, res ServiceInspectResult) {
+func (f *fakeClient) AddService(name string, res runtime.ServiceInspectResult) {
 	if f.services == nil {
-		f.services = make(map[string]ServiceInspectResult)
+		f.services = make(map[string]runtime.ServiceInspectResult)
 	}
 	res.Name = name
 	f.services[name] = res
 }
 
-func (f *fakeClient) Ping(_ context.Context) (Ping, error) {
+func (f *fakeClient) Ping(_ context.Context) (runtime.Ping, error) {
 	return f.pingResult, f.pingErr
 }
 
-func (f *fakeClient) Info(_ context.Context) (Info, error) {
+func (f *fakeClient) Info(_ context.Context) (runtime.Info, error) {
 	return f.infoResult, f.infoErr
 }
 
@@ -63,9 +65,9 @@ func (f *fakeClient) NetworkExists(_ context.Context, name string) (bool, error)
 	return ok, nil
 }
 
-func (f *fakeClient) NetworkCreate(_ context.Context, spec NetworkSpec) error {
+func (f *fakeClient) NetworkCreate(_ context.Context, spec runtime.NetworkSpec) error {
 	if f.networks == nil {
-		f.networks = make(map[string]NetworkSpec)
+		f.networks = make(map[string]runtime.NetworkSpec)
 	}
 	f.networks[spec.Name] = spec
 	return nil
@@ -76,9 +78,9 @@ func (f *fakeClient) SecretExists(_ context.Context, name string) (bool, error) 
 	return ok, nil
 }
 
-func (f *fakeClient) SecretCreate(_ context.Context, spec SecretSpec) error {
+func (f *fakeClient) SecretCreate(_ context.Context, spec runtime.SecretSpec) error {
 	if f.secrets == nil {
-		f.secrets = make(map[string]SecretSpec)
+		f.secrets = make(map[string]runtime.SecretSpec)
 	}
 	f.secrets[spec.Name] = spec
 	return nil
@@ -89,9 +91,9 @@ func (f *fakeClient) ConfigExists(_ context.Context, name string) (bool, error) 
 	return ok, nil
 }
 
-func (f *fakeClient) ConfigCreate(_ context.Context, spec ConfigSpec) error {
+func (f *fakeClient) ConfigCreate(_ context.Context, spec runtime.ConfigSpec) error {
 	if f.configs == nil {
-		f.configs = make(map[string]ConfigSpec)
+		f.configs = make(map[string]runtime.ConfigSpec)
 	}
 	f.configs[spec.Name] = spec
 	return nil
@@ -116,22 +118,22 @@ func (f *fakeClient) VolumeRemove(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeClient) NodeList(_ context.Context) ([]Node, error) { return nil, nil }
+func (f *fakeClient) NodeList(_ context.Context) ([]runtime.Node, error) { return nil, nil }
 
-func (f *fakeClient) ServiceList(_ context.Context) ([]Service, error) {
-	out := make([]Service, 0, len(f.services))
+func (f *fakeClient) ServiceList(_ context.Context) ([]runtime.Service, error) {
+	out := make([]runtime.Service, 0, len(f.services))
 	for _, s := range f.services {
-		out = append(out, Service{
+		out = append(out, runtime.Service{
 			ID:    s.ID,
 			Name:  s.Name,
-			Stack: s.Labels[StackNamespaceLabel],
+			Stack: s.Labels[runtime.StackNamespaceLabel],
 			Image: s.Image,
 		})
 	}
 	return out, nil
 }
 
-func (f *fakeClient) ServiceInspect(_ context.Context, name string) (ServiceInspectResult, error) {
+func (f *fakeClient) ServiceInspect(_ context.Context, name string) (runtime.ServiceInspectResult, error) {
 	if s, ok := f.services[name]; ok {
 		return s, nil
 	}
@@ -141,25 +143,25 @@ func (f *fakeClient) ServiceInspect(_ context.Context, name string) (ServiceInsp
 			return s, nil
 		}
 	}
-	return ServiceInspectResult{}, fmt.Errorf("service %q not found", name)
+	return runtime.ServiceInspectResult{}, fmt.Errorf("service %q not found", name)
 }
 
-func (f *fakeClient) ServiceTasks(_ context.Context, serviceID string) ([]ServiceTask, error) {
+func (f *fakeClient) ServiceTasks(_ context.Context, serviceID string) ([]runtime.ServiceTask, error) {
 	svc, err := f.ServiceInspect(context.Background(), serviceID)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]ServiceTask, len(f.serviceTasks[svc.Name]))
+	out := make([]runtime.ServiceTask, len(f.serviceTasks[svc.Name]))
 	copy(out, f.serviceTasks[svc.Name])
 	return out, nil
 }
 
-func (f *fakeClient) ServiceLogs(_ context.Context, serviceID string, _ int) ([]LogLine, error) {
+func (f *fakeClient) ServiceLogs(_ context.Context, serviceID string, _ int) ([]runtime.LogLine, error) {
 	svc, err := f.ServiceInspect(context.Background(), serviceID)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]LogLine, len(f.serviceLogs[svc.Name]))
+	out := make([]runtime.LogLine, len(f.serviceLogs[svc.Name]))
 	copy(out, f.serviceLogs[svc.Name])
 	return out, nil
 }
@@ -172,7 +174,7 @@ func (f *fakeClient) ServiceRestart(_ context.Context, serviceID string) error {
 	return nil
 }
 
-func (f *fakeClient) ServiceExec(_ context.Context, serviceID string, _ []string) (*ExecResult, error) {
+func (f *fakeClient) ServiceExec(_ context.Context, serviceID string, _ []string) (*runtime.ExecResult, error) {
 	if f.execErr != nil {
 		return nil, f.execErr
 	}
@@ -183,7 +185,9 @@ func (f *fakeClient) ServiceExec(_ context.Context, serviceID string, _ []string
 	f.execResults = f.execResults[1:]
 	return res, nil
 }
-func (f *fakeClient) JoinTokens(_ context.Context) (JoinTokens, error) { return JoinTokens{}, nil }
+func (f *fakeClient) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
+	return runtime.JoinTokens{}, nil
+}
 func (f *fakeClient) SecretList(_ context.Context, _, _ string) ([]string, error) {
 	names := make([]string, 0, len(f.secrets))
 	for n := range f.secrets {
@@ -207,11 +211,11 @@ func (f *fakeClient) StackSecretNames(_ context.Context, _ string) ([]string, er
 // SecretInspect mimics the real Docker API: secret payloads are write-only,
 // so inspect never returns Data (only labels survive). Callers that need to
 // compare content must use the pmcluster.data_hash label.
-func (f *fakeClient) SecretInspect(_ context.Context, name string) (SecretInspectResult, error) {
+func (f *fakeClient) SecretInspect(_ context.Context, name string) (runtime.SecretInspectResult, error) {
 	if s, ok := f.secrets[name]; ok {
-		return SecretInspectResult{Labels: s.Labels}, nil
+		return runtime.SecretInspectResult{Labels: s.Labels}, nil
 	}
-	return SecretInspectResult{}, fmt.Errorf("secret %q not found", name)
+	return runtime.SecretInspectResult{}, fmt.Errorf("secret %q not found", name)
 }
 func (f *fakeClient) ConfigList(_ context.Context, _, _ string) ([]string, error) {
 	names := make([]string, 0, len(f.configs))
@@ -221,11 +225,11 @@ func (f *fakeClient) ConfigList(_ context.Context, _, _ string) ([]string, error
 	return names, nil
 }
 
-func (f *fakeClient) ConfigInspect(_ context.Context, name string) (ConfigInspectResult, error) {
+func (f *fakeClient) ConfigInspect(_ context.Context, name string) (runtime.ConfigInspectResult, error) {
 	if c, ok := f.configs[name]; ok {
-		return ConfigInspectResult{Labels: c.Labels, Data: c.Data}, nil
+		return runtime.ConfigInspectResult{Labels: c.Labels, Data: c.Data}, nil
 	}
-	return ConfigInspectResult{}, fmt.Errorf("config %q not found", name)
+	return runtime.ConfigInspectResult{}, fmt.Errorf("config %q not found", name)
 }
 
 func (f *fakeClient) Close() error {
@@ -233,15 +237,15 @@ func (f *fakeClient) Close() error {
 	return nil
 }
 
-// Compile-time assertion: fakeClient satisfies the Client interface.
-var _ Client = (*fakeClient)(nil)
+// Compile-time assertion: fakeClient satisfies the runtime.Client interface.
+var _ runtime.Client = (*fakeClient)(nil)
 
 // TestFakeClient_InterfaceConsumable verifies that fakeClient satisfies Client
-// and that the Ping / Info / Close methods route calls and return values correctly.
+// and that the runtime.Ping / runtime.Info / Close methods route calls and return values correctly.
 func TestFakeClient_InterfaceConsumable(t *testing.T) {
 	f := &fakeClient{
-		pingResult: Ping{APIVersion: "1.45", OSType: "linux", Experimental: false},
-		infoResult: Info{
+		pingResult: runtime.Ping{APIVersion: "1.45", OSType: "linux", Experimental: false},
+		infoResult: runtime.Info{
 			Name:                  "test-node",
 			ServerVersion:         "26.0.0",
 			OperatingSystem:       "Alpine Linux",
@@ -257,27 +261,27 @@ func TestFakeClient_InterfaceConsumable(t *testing.T) {
 
 	p, err := f.Ping(context.Background())
 	if err != nil {
-		t.Fatalf("Ping: %v", err)
+		t.Fatalf("runtime.Ping: %v", err)
 	}
 	if p.APIVersion != "1.45" {
-		t.Errorf("Ping.APIVersion = %q, want 1.45", p.APIVersion)
+		t.Errorf("runtime.Ping.APIVersion = %q, want 1.45", p.APIVersion)
 	}
 	if p.OSType != "linux" {
-		t.Errorf("Ping.OSType = %q, want linux", p.OSType)
+		t.Errorf("runtime.Ping.OSType = %q, want linux", p.OSType)
 	}
 
 	info, err := f.Info(context.Background())
 	if err != nil {
-		t.Fatalf("Info: %v", err)
+		t.Fatalf("runtime.Info: %v", err)
 	}
 	if info.Name != "test-node" {
-		t.Errorf("Info.Name = %q, want test-node", info.Name)
+		t.Errorf("runtime.Info.Name = %q, want test-node", info.Name)
 	}
 	if info.NCPU != 4 {
-		t.Errorf("Info.NCPU = %d, want 4", info.NCPU)
+		t.Errorf("runtime.Info.NCPU = %d, want 4", info.NCPU)
 	}
 	if info.SwarmLocalNodeState != "active" {
-		t.Errorf("Info.SwarmLocalNodeState = %q, want active", info.SwarmLocalNodeState)
+		t.Errorf("runtime.Info.SwarmLocalNodeState = %q, want active", info.SwarmLocalNodeState)
 	}
 
 	if err := f.Close(); err != nil {
@@ -293,7 +297,7 @@ func TestFakeClient_PingError(t *testing.T) {
 	f := &fakeClient{pingErr: errors.New("connection refused")}
 	_, err := f.Ping(context.Background())
 	if err == nil {
-		t.Fatal("expected error from Ping, got nil")
+		t.Fatal("expected error from runtime.Ping, got nil")
 	}
 }
 
@@ -302,7 +306,7 @@ func TestFakeClient_InfoError(t *testing.T) {
 	f := &fakeClient{infoErr: errors.New("dial unix /var/run/docker.sock: no such file")}
 	_, err := f.Info(context.Background())
 	if err == nil {
-		t.Fatal("expected error from Info, got nil")
+		t.Fatal("expected error from runtime.Info, got nil")
 	}
 }
 
@@ -311,13 +315,13 @@ func TestFakeClient_InfoError(t *testing.T) {
 func TestFakeClient_TableDriven(t *testing.T) {
 	cases := []struct {
 		name       string
-		info       Info
+		info       runtime.Info
 		infoErr    error
 		wantErrNil bool
 	}{
 		{
 			name: "happy path",
-			info: Info{Name: "node-a", SwarmLocalNodeState: "active"},
+			info: runtime.Info{Name: "node-a", SwarmLocalNodeState: "active"},
 		},
 		{
 			name:    "docker unreachable",
@@ -325,7 +329,7 @@ func TestFakeClient_TableDriven(t *testing.T) {
 		},
 		{
 			name: "swarm inactive",
-			info: Info{Name: "node-b", SwarmLocalNodeState: "inactive"},
+			info: runtime.Info{Name: "node-b", SwarmLocalNodeState: "inactive"},
 		},
 	}
 
@@ -356,10 +360,10 @@ func TestSplitLines(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("got %d lines, want 2: %+v", len(got), got)
 	}
-	if got[0] != (LogLine{Stream: "stdout", Line: "a"}) {
+	if got[0] != (runtime.LogLine{Stream: "stdout", Line: "a"}) {
 		t.Errorf("got[0] = %+v", got[0])
 	}
-	if got[1] != (LogLine{Stream: "stdout", Line: "b"}) {
+	if got[1] != (runtime.LogLine{Stream: "stdout", Line: "b"}) {
 		t.Errorf("got[1] = %+v", got[1])
 	}
 }
@@ -387,7 +391,7 @@ func TestDemuxLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("demuxLines: %v", err)
 	}
-	want := []LogLine{
+	want := []runtime.LogLine{
 		{Stream: "stdout", Line: "out1"},
 		{Stream: "stderr", Line: "err1"},
 		{Stream: "stdout", Line: "out2"},
@@ -406,7 +410,7 @@ func TestDemuxLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("demuxLines tail: %v", err)
 	}
-	if len(lines) != 2 || lines[0] != (LogLine{Stream: "stderr", Line: "err1"}) {
+	if len(lines) != 2 || lines[0] != (runtime.LogLine{Stream: "stderr", Line: "err1"}) {
 		t.Errorf("tail lines = %+v, want [err1 out2]", lines)
 	}
 }
@@ -414,18 +418,18 @@ func TestDemuxLines(t *testing.T) {
 // TestFakeClient_ServiceOps verifies the fake's service-ops surface.
 func TestFakeClient_ServiceOps(t *testing.T) {
 	f := &fakeClient{}
-	f.AddService("demo_web", ServiceInspectResult{
+	f.AddService("demo_web", runtime.ServiceInspectResult{
 		ID:     "svc-1",
 		Image:  "ghcr.io/nextrum-sy/demo:latest",
-		Labels: map[string]string{StackNamespaceLabel: "demo"},
+		Labels: map[string]string{runtime.StackNamespaceLabel: "demo"},
 	})
-	f.serviceTasks = map[string][]ServiceTask{
+	f.serviceTasks = map[string][]runtime.ServiceTask{
 		"demo_web": {{TaskID: "t1", State: "running"}},
 	}
-	f.serviceLogs = map[string][]LogLine{
+	f.serviceLogs = map[string][]runtime.LogLine{
 		"demo_web": {{Stream: "stdout", Line: "hello"}},
 	}
-	f.execResults = []*ExecResult{{ExitCode: 0, Stdout: "ok"}}
+	f.execResults = []*runtime.ExecResult{{ExitCode: 0, Stdout: "ok"}}
 
 	if svc, err := f.ServiceInspect(context.Background(), "demo_web"); err != nil || svc.Image == "" {
 		t.Errorf("ServiceInspect = %+v, %v", svc, err)

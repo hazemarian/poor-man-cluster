@@ -6,7 +6,7 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -15,7 +15,7 @@ import (
 type Local struct {
 	Store     *store.Store
 	Cipher    *credentials.Cipher
-	Docker    docker.Client
+	Docker    runtime.Client
 	Deployer  cluster.StackDeployer
 	ConfigDir string
 	Version   string
@@ -25,7 +25,7 @@ type Local struct {
 func NewLocal(
 	st *store.Store,
 	cipher *credentials.Cipher,
-	dc docker.Client,
+	dc runtime.Client,
 	deployer cluster.StackDeployer,
 	configDir, version string,
 ) *Local {

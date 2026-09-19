@@ -23,6 +23,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/logger"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/server"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/services"
@@ -168,7 +169,7 @@ var pmclusterConfigBases = []string{"pmcluster_otel_config", "pmcluster_traefik_
 // checkConfigVersions compares the running binary version against the
 // pmcluster.version label on managed Docker configs. If any config is on an
 // older version, it logs a WARN prompting 'pmcluster cluster up'.
-func checkConfigVersions(ctx context.Context, dc docker.Client, log zerolog.Logger) {
+func checkConfigVersions(ctx context.Context, dc runtime.Client, log zerolog.Logger) {
 	if buildinfo.Version == "" || buildinfo.Version == "dev" {
 		return
 	}

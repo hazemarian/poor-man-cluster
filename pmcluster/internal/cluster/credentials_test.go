@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -446,7 +446,7 @@ func TestRotate_SpecNotFound_ReturnsError(t *testing.T) {
 		t.Fatalf("Encrypt: %v", err)
 	}
 
-	if err := f.SecretCreate(ctx, docker.SecretSpec{Name: "unknown_swarm_secret", Data: password}); err != nil {
+	if err := f.SecretCreate(ctx, runtime.SecretSpec{Name: "unknown_swarm_secret", Data: password}); err != nil {
 		t.Fatalf("SecretCreate: %v", err)
 	}
 	if err := s.InsertCredential(ctx, &store.ManagedCredential{

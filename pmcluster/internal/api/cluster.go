@@ -3,10 +3,10 @@ package api
 import (
 	"net/http"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
-func ClusterInfoHandler(d docker.Client) http.HandlerFunc {
+func ClusterInfoHandler(d runtime.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		info, err := d.Info(r.Context())
 		if err != nil {

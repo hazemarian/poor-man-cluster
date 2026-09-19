@@ -25,7 +25,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/certs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/services"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
@@ -50,7 +50,7 @@ var trustedProxyCIDRs = []string{
 // can wire a partial server.
 type Deps struct {
 	Lookup        auth.Lookup
-	Docker        docker.Client
+	Docker        runtime.Client
 	Store         *store.Store
 	DeployService stacks.Deployer
 	Cipher        *credentials.Cipher

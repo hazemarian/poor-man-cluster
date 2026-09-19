@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 func TestPreflight_PingFails(t *testing.T) {
@@ -61,7 +61,7 @@ func TestPreflight_SwarmNotActive(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.state, func(t *testing.T) {
 			f := newFakeDocker()
-			f.info = docker.Info{
+			f.info = runtime.Info{
 				SwarmLocalNodeState:   tc.state,
 				SwarmControlAvailable: true,
 			}
@@ -83,7 +83,7 @@ func TestPreflight_SwarmNotActive(t *testing.T) {
 
 func TestPreflight_WorkerNode(t *testing.T) {
 	f := newFakeDocker()
-	f.info = docker.Info{
+	f.info = runtime.Info{
 		SwarmLocalNodeState:   "active",
 		SwarmControlAvailable: false,
 	}

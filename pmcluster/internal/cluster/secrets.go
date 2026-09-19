@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -47,7 +47,7 @@ func secretHashKey(baseName string) string {
 //
 // pmcluster-managed secrets carry the pmclusterLabel so `cluster down
 // --purge` can target them without touching operator-created secrets.
-func EnsureSecret(ctx context.Context, d docker.Client, name string, data []byte) (created bool, err error) {
+func EnsureSecret(ctx context.Context, d runtime.Client, name string, data []byte) (created bool, err error) {
 	exists, err := d.SecretExists(ctx, name)
 	if err != nil {
 		return false, fmt.Errorf("check secret %s: %w", name, err)
@@ -55,7 +55,7 @@ func EnsureSecret(ctx context.Context, d docker.Client, name string, data []byte
 	if exists {
 		return false, nil
 	}
-	err = d.SecretCreate(ctx, docker.SecretSpec{
+	err = d.SecretCreate(ctx, runtime.SecretSpec{
 		Name: name,
 		Data: data,
 		Labels: map[string]string{
@@ -68,7 +68,7 @@ func EnsureSecret(ctx context.Context, d docker.Client, name string, data []byte
 	return true, nil
 }
 
-func EnsureSecretFromFile(ctx context.Context, d docker.Client, name, path string) (bool, error) {
+func EnsureSecretFromFile(ctx context.Context, d runtime.Client, name, path string) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false, fmt.Errorf("read %s: %w", path, err)
@@ -81,7 +81,7 @@ func EnsureSecretFromFile(ctx context.Context, d docker.Client, name, path strin
 // whether a new version was created (false when the file's bytes are unchanged
 // and the current version is reused). hs records the data-hash of the minted
 // version so the reuse check works despite Docker's write-only secret API.
-func EnsureVersionedSecretFromFile(ctx context.Context, d docker.Client, hs secretHashStore, baseName, path string) (versionedName string, created bool, err error) {
+func EnsureVersionedSecretFromFile(ctx context.Context, d runtime.Client, hs secretHashStore, baseName, path string) (versionedName string, created bool, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", false, fmt.Errorf("read %s: %w", path, err)
@@ -99,7 +99,7 @@ func EnsureVersionedSecretFromFile(ctx context.Context, d docker.Client, hs secr
 // decided by comparing dataHash(data) with the data-hash persisted in the DB
 // (secretHashStore) when the current version was minted — never by inspecting
 // the secret from Docker and never by trusting the pmcluster.data_hash label.
-func EnsureVersionedSecret(ctx context.Context, d docker.Client, hs secretHashStore, baseName string, data []byte) (versionedName string, created bool, err error) {
+func EnsureVersionedSecret(ctx context.Context, d runtime.Client, hs secretHashStore, baseName string, data []byte) (versionedName string, created bool, err error) {
 	existing, err := d.SecretList(ctx, pmclusterLabel, "true")
 	if err != nil {
 		return "", false, fmt.Errorf("list secrets: %w", err)
@@ -134,7 +134,7 @@ func EnsureVersionedSecret(ctx context.Context, d docker.Client, hs secretHashSt
 	newVer := maxVer + 1
 	versionedName = fmt.Sprintf("%s_v%03d", baseName, newVer)
 
-	err = d.SecretCreate(ctx, docker.SecretSpec{
+	err = d.SecretCreate(ctx, runtime.SecretSpec{
 		Name: versionedName,
 		Data: data,
 		Labels: map[string]string{
@@ -182,7 +182,7 @@ func EnsureVersionedSecret(ctx context.Context, d docker.Client, hs secretHashSt
 //
 // baseName is the logical name ("pmcluster_otel_config"). The versioned name
 // is baseName + "_v" + zero-padded sequence.
-func EnsureConfig(ctx context.Context, d docker.Client, baseName string, data []byte, version string) (versionedName string, created bool, err error) {
+func EnsureConfig(ctx context.Context, d runtime.Client, baseName string, data []byte, version string) (versionedName string, created bool, err error) {
 
 	existing, err := d.ConfigList(ctx, "", "")
 	if err != nil {
@@ -216,7 +216,7 @@ func EnsureConfig(ctx context.Context, d docker.Client, baseName string, data []
 	newVer := maxVer + 1
 	versionedName = fmt.Sprintf("%s_v%03d", baseName, newVer)
 
-	err = d.ConfigCreate(ctx, docker.ConfigSpec{
+	err = d.ConfigCreate(ctx, runtime.ConfigSpec{
 		Name: versionedName,
 		Data: data,
 		Labels: map[string]string{

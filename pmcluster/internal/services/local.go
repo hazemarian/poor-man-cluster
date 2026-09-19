@@ -5,18 +5,18 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 // stackNameRe matches stack names as produced by the deploy pipeline.
 var stackNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
 // Local is the node-side adapter: it talks to the Docker daemon through the
-// whitelisted docker.Client surface. Every call resolves the full swarm
+// whitelisted runtime.Client surface. Every call resolves the full swarm
 // service name from the (stack, service) pair and verifies the service really
 // belongs to that stack before acting.
 type Local struct {
-	Docker docker.Client
+	Docker runtime.Client
 }
 
 // List returns every swarm service, optionally filtered to one stack's
@@ -145,7 +145,7 @@ func (l Local) resolve(ctx context.Context, stack, service string) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("service %q: %w", full, err)
 	}
-	if svc.Labels[docker.StackNamespaceLabel] != stack {
+	if svc.Labels[runtime.StackNamespaceLabel] != stack {
 		return "", fmt.Errorf("service %q does not belong to stack %q", full, stack)
 	}
 	return svc.ID, nil

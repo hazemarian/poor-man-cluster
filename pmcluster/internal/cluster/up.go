@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/workflow"
 )
@@ -42,7 +42,7 @@ type UpResult struct {
 type UpDeps struct {
 	Store    *store.Store
 	Cipher   *credentials.Cipher
-	Docker   docker.Client
+	Docker   runtime.Client
 	Deployer StackDeployer
 	Stdout   io.Writer
 }

@@ -16,8 +16,8 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/refs"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -318,7 +318,7 @@ func escapeComposeDollar(s string) string {
 // "has the edge input moved" content fingerprint — the edge stack never mounts
 // it. `cluster update` reads the returned created flag to decide whether the
 // edge stack needs to re-deploy, mirroring the OTel/Traefik content-aware path.
-func ensureEdgeConfig(ctx context.Context, d docker.Client, version string, render RenderInput) (string, bool, error) {
+func ensureEdgeConfig(ctx context.Context, d runtime.Client, version string, render RenderInput) (string, bool, error) {
 	edgeYAML, err := LoadComposeFile(StackEdge, render)
 	if err != nil {
 		return "", false, err

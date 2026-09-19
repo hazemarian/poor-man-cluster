@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 var nodeCmd = &cobra.Command{
@@ -39,7 +40,7 @@ func init() {
 	rootCmd.AddCommand(nodeCmd)
 }
 
-func openDocker() (docker.Client, error) {
+func openDocker() (runtime.Client, error) {
 	dc, err := docker.New()
 	if err != nil {
 		return nil, fmt.Errorf("docker client: %w", err)

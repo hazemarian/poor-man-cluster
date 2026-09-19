@@ -5,33 +5,33 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
-// stubDocker embeds the docker.Client interface and overrides the service-ops
+// stubDocker embeds the runtime.Client interface and overrides the service-ops
 // methods so the services local adapter can be tested without Docker.
 type stubDocker struct {
-	docker.Client
-	services      map[string]docker.ServiceInspectResult
-	list          []docker.Service
-	tasks         map[string][]docker.ServiceTask
-	logs          map[string][]docker.LogLine
+	runtime.Client
+	services      map[string]runtime.ServiceInspectResult
+	list          []runtime.Service
+	tasks         map[string][]runtime.ServiceTask
+	logs          map[string][]runtime.LogLine
 	restartCalled []string
-	execResult    *docker.ExecResult
+	execResult    *runtime.ExecResult
 	execErr       error
 }
 
-func (s *stubDocker) ServiceList(context.Context) ([]docker.Service, error) { return s.list, nil }
+func (s *stubDocker) ServiceList(context.Context) ([]runtime.Service, error) { return s.list, nil }
 
-func (s *stubDocker) ServiceInspect(_ context.Context, name string) (docker.ServiceInspectResult, error) {
+func (s *stubDocker) ServiceInspect(_ context.Context, name string) (runtime.ServiceInspectResult, error) {
 	svc, ok := s.services[name]
 	if !ok {
-		return docker.ServiceInspectResult{}, errors.New("service not found")
+		return runtime.ServiceInspectResult{}, errors.New("service not found")
 	}
 	return svc, nil
 }
 
-func (s *stubDocker) ServiceTasks(_ context.Context, id string) ([]docker.ServiceTask, error) {
+func (s *stubDocker) ServiceTasks(_ context.Context, id string) ([]runtime.ServiceTask, error) {
 	for _, svc := range s.services {
 		if svc.ID == id {
 			return s.tasks[svc.Name], nil
@@ -40,7 +40,7 @@ func (s *stubDocker) ServiceTasks(_ context.Context, id string) ([]docker.Servic
 	return nil, errors.New("service not found")
 }
 
-func (s *stubDocker) ServiceLogs(_ context.Context, id string, _ int) ([]docker.LogLine, error) {
+func (s *stubDocker) ServiceLogs(_ context.Context, id string, _ int) ([]runtime.LogLine, error) {
 	for _, svc := range s.services {
 		if svc.ID == id {
 			return s.logs[svc.Name], nil
@@ -59,7 +59,7 @@ func (s *stubDocker) ServiceRestart(_ context.Context, id string) error {
 	return errors.New("service not found")
 }
 
-func (s *stubDocker) ServiceExec(_ context.Context, id string, _ []string) (*docker.ExecResult, error) {
+func (s *stubDocker) ServiceExec(_ context.Context, id string, _ []string) (*runtime.ExecResult, error) {
 	for _, svc := range s.services {
 		if svc.ID == id {
 			if s.execErr != nil {
@@ -73,24 +73,24 @@ func (s *stubDocker) ServiceExec(_ context.Context, id string, _ []string) (*doc
 
 func newStub() *stubDocker {
 	s := &stubDocker{
-		services: map[string]docker.ServiceInspectResult{},
-		tasks:    map[string][]docker.ServiceTask{},
-		logs:     map[string][]docker.LogLine{},
-		list: []docker.Service{
+		services: map[string]runtime.ServiceInspectResult{},
+		tasks:    map[string][]runtime.ServiceTask{},
+		logs:     map[string][]runtime.LogLine{},
+		list: []runtime.Service{
 			{Name: "demo_web", Stack: "demo", Replicas: 2, Desired: 2, Image: "ghcr.io/nextrum-sy/demo:1.0", Mode: "replicated"},
 			{Name: "demo_db", Stack: "demo", Replicas: 1, Desired: 1, Mode: "replicated"},
 			{Name: "infra_traefik", Stack: "infra", Replicas: 1, Desired: 1, Mode: "global"},
 			{Name: "external", Stack: "", Replicas: 1, Desired: 1},
 		},
 	}
-	s.services["demo_web"] = docker.ServiceInspectResult{
-		ID: "svc-web", Name: "demo_web", Labels: map[string]string{docker.StackNamespaceLabel: "demo"},
+	s.services["demo_web"] = runtime.ServiceInspectResult{
+		ID: "svc-web", Name: "demo_web", Labels: map[string]string{runtime.StackNamespaceLabel: "demo"},
 	}
-	s.services["demo_db"] = docker.ServiceInspectResult{
-		ID: "svc-db", Name: "demo_db", Labels: map[string]string{docker.StackNamespaceLabel: "demo"},
+	s.services["demo_db"] = runtime.ServiceInspectResult{
+		ID: "svc-db", Name: "demo_db", Labels: map[string]string{runtime.StackNamespaceLabel: "demo"},
 	}
-	s.tasks["demo_web"] = []docker.ServiceTask{{TaskID: "t1", State: "running", Node: "mgr"}}
-	s.logs["demo_web"] = []docker.LogLine{{Stream: "stdout", Line: "hi"}}
+	s.tasks["demo_web"] = []runtime.ServiceTask{{TaskID: "t1", State: "running", Node: "mgr"}}
+	s.logs["demo_web"] = []runtime.LogLine{{Stream: "stdout", Line: "hi"}}
 	return s
 }
 
@@ -169,7 +169,7 @@ func TestLocalRestart(t *testing.T) {
 
 func TestLocalExec(t *testing.T) {
 	stub := newStub()
-	stub.execResult = &docker.ExecResult{ExitCode: 0, Stdout: "root"}
+	stub.execResult = &runtime.ExecResult{ExitCode: 0, Stdout: "root"}
 	l := Local{Docker: stub}
 	res, err := l.Exec(context.Background(), "demo", "web", []string{"whoami"})
 	if err != nil {

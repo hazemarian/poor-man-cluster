@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 type StatusReport struct {
@@ -18,7 +18,7 @@ type StatusReport struct {
 }
 
 // Status runs Preflight (read-only) and returns a snapshot.
-func Status(ctx context.Context, d docker.Client) (*StatusReport, error) {
+func Status(ctx context.Context, d runtime.Client) (*StatusReport, error) {
 	preflight := Preflight(ctx, d)
 
 	info, infoErr := d.Info(ctx)

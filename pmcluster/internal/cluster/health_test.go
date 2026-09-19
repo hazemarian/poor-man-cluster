@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 func TestWaitHealthyStacks_AllHealthy(t *testing.T) {
 	f := newFakeDocker()
 	for _, name := range bundledServices {
-		f.services[name] = docker.Service{Name: name, Replicas: 1, Desired: 1}
+		f.services[name] = runtime.Service{Name: name, Replicas: 1, Desired: 1}
 	}
 	var buf bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -27,7 +27,7 @@ func TestWaitHealthyStacks_TimesOutWithMissingService(t *testing.T) {
 	f := newFakeDocker()
 
 	for _, name := range bundledServices[:4] {
-		f.services[name] = docker.Service{Name: name, Replicas: 1, Desired: 1}
+		f.services[name] = runtime.Service{Name: name, Replicas: 1, Desired: 1}
 	}
 	var buf bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -42,7 +42,7 @@ func TestWaitHealthyStacks_TimesOutWithMissingService(t *testing.T) {
 func TestWaitHealthyStacks_TimesOutWithUnhealthyReplicas(t *testing.T) {
 	f := newFakeDocker()
 	for _, name := range bundledServices {
-		f.services[name] = docker.Service{Name: name, Replicas: 0, Desired: 1}
+		f.services[name] = runtime.Service{Name: name, Replicas: 0, Desired: 1}
 	}
 	var buf bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)

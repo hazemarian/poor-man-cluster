@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 // bundledServices is the canonical list of services deployed by the four
@@ -37,7 +37,7 @@ const (
 // each unhealthy service so the operator can diagnose the problem.
 //
 // Progress is written to w (nil ok — uses io.Discard).
-func WaitHealthyStacks(ctx context.Context, d docker.Client, w io.Writer) error {
+func WaitHealthyStacks(ctx context.Context, d runtime.Client, w io.Writer) error {
 	if w == nil {
 		w = io.Discard
 	}

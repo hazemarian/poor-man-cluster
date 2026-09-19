@@ -3,12 +3,12 @@ package api
 import (
 	"net/http"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 // NodesHandler returns the list of swarm nodes (one row per `docker node ls`
 // entry). Read-only — pmcluster doesn't promote/demote/drain via the API.
-func NodesHandler(d docker.Client) http.HandlerFunc {
+func NodesHandler(d runtime.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		nodes, err := d.NodeList(r.Context())
 		if err != nil {

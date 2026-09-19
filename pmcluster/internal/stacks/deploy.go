@@ -18,8 +18,8 @@ import (
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/workflow"
 	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
@@ -73,7 +73,7 @@ type Service struct {
 	// Docker is used by Undeploy to find + remove the stack's Swarm secrets
 	// and named volumes. Nil disables the swarm-asset cleanup (tests, CLI
 	// deploy command).
-	Docker docker.Client
+	Docker runtime.Client
 	Backup BackupTrigger
 	// Resolver resolves `env: X: config(name)` references against the
 	// DB config store. Nil disables config() resolution (translate error).
@@ -397,7 +397,7 @@ func (s *Service) Undeploy(ctx context.Context, stackName string) (retErr error)
 		if err != nil {
 			return fmt.Errorf("collect stack secrets: %w", err)
 		}
-		vs, err := s.Docker.VolumeList(ctx, docker.StackNamespaceLabel, stackName)
+		vs, err := s.Docker.VolumeList(ctx, runtime.StackNamespaceLabel, stackName)
 		if err != nil {
 			return fmt.Errorf("collect stack volumes: %w", err)
 		}

@@ -16,6 +16,7 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -253,7 +254,7 @@ func runTLSRemove(cmd *cobra.Command, args []string) error {
 }
 
 // siteCertDeps builds the collaborators needed by the TLS commands.
-func siteCertDeps(cmd *cobra.Command, cfg *config.Config, domain string) (*store.Store, *credentials.Cipher, docker.Client, error) {
+func siteCertDeps(cmd *cobra.Command, cfg *config.Config, domain string) (*store.Store, *credentials.Cipher, runtime.Client, error) {
 	st, _, err := openStore()
 	if err != nil {
 		return nil, nil, nil, err
@@ -272,7 +273,7 @@ func siteCertDeps(cmd *cobra.Command, cfg *config.Config, domain string) (*store
 }
 
 // tlsService builds the local certs service adapter used by the tls commands.
-func tlsService(cmd *cobra.Command, st *store.Store, cipher *credentials.Cipher, dc docker.Client, cfg *config.Config) certs.Service {
+func tlsService(cmd *cobra.Command, st *store.Store, cipher *credentials.Cipher, dc runtime.Client, cfg *config.Config) certs.Service {
 	return certs.NewLocal(st, cipher, dc, cluster.NewDockerCLIDeployer(cmd.OutOrStdout()),
 		cfg.ConfigDir(), buildinfo.Version)
 }

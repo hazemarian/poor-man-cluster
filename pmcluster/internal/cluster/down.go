@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 type DownInput struct {
@@ -22,7 +22,7 @@ type DownResult struct {
 }
 
 type DownDeps struct {
-	Docker   docker.Client
+	Docker   runtime.Client
 	Deployer StackDeployer
 	Stdout   io.Writer
 }

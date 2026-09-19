@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
 // pmclusterLabel is set on every Docker resource pmcluster creates so we
@@ -20,7 +20,7 @@ const PmclusterLabel = pmclusterLabel
 // Idempotent: repeated calls are safe and cheap (one inspect, no recreate).
 // Existing networks are NEVER reconfigured — if an operator pre-created the
 // network with different settings, pmcluster respects their choice.
-func EnsureNetwork(ctx context.Context, d docker.Client, name string) (created bool, err error) {
+func EnsureNetwork(ctx context.Context, d runtime.Client, name string) (created bool, err error) {
 	exists, err := d.NetworkExists(ctx, name)
 	if err != nil {
 		return false, fmt.Errorf("check network %s: %w", name, err)
@@ -28,7 +28,7 @@ func EnsureNetwork(ctx context.Context, d docker.Client, name string) (created b
 	if exists {
 		return false, nil
 	}
-	err = d.NetworkCreate(ctx, docker.NetworkSpec{
+	err = d.NetworkCreate(ctx, runtime.NetworkSpec{
 		Name:       name,
 		Driver:     "overlay",
 		Attachable: true,
@@ -42,7 +42,7 @@ func EnsureNetwork(ctx context.Context, d docker.Client, name string) (created b
 // EnsureBundledNetworks creates the two overlay networks the bundled stacks
 // need: traefik-net (ingress) and monitoring-net (telemetry).
 // Returns the names of any newly created networks.
-func EnsureBundledNetworks(ctx context.Context, d docker.Client) ([]string, error) {
+func EnsureBundledNetworks(ctx context.Context, d runtime.Client) ([]string, error) {
 	var created []string
 	for _, name := range []string{"traefik-net", "monitoring-net"} {
 		isNew, err := EnsureNetwork(ctx, d, name)

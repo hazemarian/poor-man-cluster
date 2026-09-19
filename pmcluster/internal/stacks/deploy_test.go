@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
@@ -49,11 +49,11 @@ func (r *recordingDeployer) PruneStaleContainers(_ context.Context, _ string, _ 
 // Ensure the interface is satisfied.
 var _ cluster.StackDeployer = (*recordingDeployer)(nil)
 
-// stubDocker is a test-local implementation of docker.Client that only
+// stubDocker is a test-local implementation of runtime.Client that only
 // implements the surface Undeploy uses, recording calls. Everything else
 // embeds the interface (panics if invoked).
 type stubDocker struct {
-	docker.Client
+	runtime.Client
 
 	secrets []string
 	volumes []string

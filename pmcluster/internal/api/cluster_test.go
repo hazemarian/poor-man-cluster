@@ -8,53 +8,53 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 )
 
-// inMemoryDockerClient is a local fake that implements docker.Client for use
+// inMemoryDockerClient is a local fake that implements runtime.Client for use
 // in the api package tests without importing the docker package's test file.
 // (The canonical fake lives in docker/client_test.go; this copy lives here
 // to keep api tests self-contained and avoid a test-only import cycle.)
 type inMemoryDockerClient struct {
-	infoResult     docker.Info
+	infoResult     runtime.Info
 	infoErr        error
-	nodeListResult []docker.Node
+	nodeListResult []runtime.Node
 	nodeListErr    error
 }
 
-func (f *inMemoryDockerClient) Ping(_ context.Context) (docker.Ping, error) {
-	return docker.Ping{}, nil
+func (f *inMemoryDockerClient) Ping(_ context.Context) (runtime.Ping, error) {
+	return runtime.Ping{}, nil
 }
-func (f *inMemoryDockerClient) Info(_ context.Context) (docker.Info, error) {
+func (f *inMemoryDockerClient) Info(_ context.Context) (runtime.Info, error) {
 	return f.infoResult, f.infoErr
 }
 
 // Network/Secret methods are unused by /api/cluster/info; stub them so this
-// fake satisfies the docker.Client interface as it grows in later phases.
+// fake satisfies the runtime.Client interface as it grows in later phases.
 func (f *inMemoryDockerClient) NetworkExists(_ context.Context, _ string) (bool, error) {
 	return false, nil
 }
-func (f *inMemoryDockerClient) NetworkCreate(_ context.Context, _ docker.NetworkSpec) error {
+func (f *inMemoryDockerClient) NetworkCreate(_ context.Context, _ runtime.NetworkSpec) error {
 	return nil
 }
 func (f *inMemoryDockerClient) SecretExists(_ context.Context, _ string) (bool, error) {
 	return false, nil
 }
-func (f *inMemoryDockerClient) SecretCreate(_ context.Context, _ docker.SecretSpec) error {
+func (f *inMemoryDockerClient) SecretCreate(_ context.Context, _ runtime.SecretSpec) error {
 	return nil
 }
 func (f *inMemoryDockerClient) ConfigExists(_ context.Context, _ string) (bool, error) {
 	return false, nil
 }
-func (f *inMemoryDockerClient) ConfigCreate(_ context.Context, _ docker.ConfigSpec) error {
+func (f *inMemoryDockerClient) ConfigCreate(_ context.Context, _ runtime.ConfigSpec) error {
 	return nil
 }
 func (f *inMemoryDockerClient) SecretRemove(_ context.Context, _ string) error { return nil }
 func (f *inMemoryDockerClient) SecretList(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
-func (f *inMemoryDockerClient) SecretInspect(_ context.Context, _ string) (docker.SecretInspectResult, error) {
-	return docker.SecretInspectResult{}, nil
+func (f *inMemoryDockerClient) SecretInspect(_ context.Context, _ string) (runtime.SecretInspectResult, error) {
+	return runtime.SecretInspectResult{}, nil
 }
 func (f *inMemoryDockerClient) ConfigRemove(_ context.Context, _ string) error  { return nil }
 func (f *inMemoryDockerClient) NetworkRemove(_ context.Context, _ string) error { return nil }
@@ -65,42 +65,42 @@ func (f *inMemoryDockerClient) VolumeList(_ context.Context, _, _ string) ([]str
 func (f *inMemoryDockerClient) StackSecretNames(_ context.Context, _ string) ([]string, error) {
 	return nil, nil
 }
-func (f *inMemoryDockerClient) ServiceList(_ context.Context) ([]docker.Service, error) {
+func (f *inMemoryDockerClient) ServiceList(_ context.Context) ([]runtime.Service, error) {
 	return nil, nil
 }
-func (f *inMemoryDockerClient) ServiceInspect(_ context.Context, _ string) (docker.ServiceInspectResult, error) {
-	return docker.ServiceInspectResult{}, nil
+func (f *inMemoryDockerClient) ServiceInspect(_ context.Context, _ string) (runtime.ServiceInspectResult, error) {
+	return runtime.ServiceInspectResult{}, nil
 }
-func (f *inMemoryDockerClient) ServiceTasks(_ context.Context, _ string) ([]docker.ServiceTask, error) {
+func (f *inMemoryDockerClient) ServiceTasks(_ context.Context, _ string) ([]runtime.ServiceTask, error) {
 	return nil, nil
 }
-func (f *inMemoryDockerClient) ServiceLogs(_ context.Context, _ string, _ int) ([]docker.LogLine, error) {
+func (f *inMemoryDockerClient) ServiceLogs(_ context.Context, _ string, _ int) ([]runtime.LogLine, error) {
 	return nil, nil
 }
 func (f *inMemoryDockerClient) ServiceRestart(_ context.Context, _ string) error { return nil }
-func (f *inMemoryDockerClient) ServiceExec(_ context.Context, _ string, _ []string) (*docker.ExecResult, error) {
+func (f *inMemoryDockerClient) ServiceExec(_ context.Context, _ string, _ []string) (*runtime.ExecResult, error) {
 	return nil, nil
 }
 func (f *inMemoryDockerClient) ConfigList(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }
-func (f *inMemoryDockerClient) ConfigInspect(_ context.Context, _ string) (docker.ConfigInspectResult, error) {
-	return docker.ConfigInspectResult{}, nil
+func (f *inMemoryDockerClient) ConfigInspect(_ context.Context, _ string) (runtime.ConfigInspectResult, error) {
+	return runtime.ConfigInspectResult{}, nil
 }
-func (f *inMemoryDockerClient) NodeList(_ context.Context) ([]docker.Node, error) {
+func (f *inMemoryDockerClient) NodeList(_ context.Context) ([]runtime.Node, error) {
 	return f.nodeListResult, f.nodeListErr
 }
-func (f *inMemoryDockerClient) JoinTokens(_ context.Context) (docker.JoinTokens, error) {
-	return docker.JoinTokens{}, nil
+func (f *inMemoryDockerClient) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
+	return runtime.JoinTokens{}, nil
 }
 func (f *inMemoryDockerClient) Close() error { return nil }
 
-var _ docker.Client = (*inMemoryDockerClient)(nil)
+var _ runtime.Client = (*inMemoryDockerClient)(nil)
 
 // TestClusterInfoHandler_HappyPath verifies 200 and a well-shaped JSON body.
 func TestClusterInfoHandler_HappyPath(t *testing.T) {
 	fake := &inMemoryDockerClient{
-		infoResult: docker.Info{
+		infoResult: runtime.Info{
 			Name:                  "mgr-01",
 			ServerVersion:         "27.0.0",
 			OperatingSystem:       "Ubuntu 22.04",
