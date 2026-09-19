@@ -1,51 +1,34 @@
-package server
+package usage
 
 import (
 	"context"
-	"net/http"
 	"sort"
 
-	"github.com/go-chi/chi/v5"
 	"sigs.k8s.io/yaml"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
 
-// usageHTTP exposes GET /api/usage: which stacks reference which configs and
-// secrets, computed from the latest rendered compose of each stack.
-type usageHTTP struct {
+// Local is the store-backed adapter for the usage port. It reads the latest
+// rendered compose of every stack and extracts its configs:/secrets:
+// references.
+type Local struct {
 	Store *store.Store
 }
 
-func (h *usageHTTP) Mount(r chi.Router) {
-	r.Get("/usage", h.get)
-}
+// NewLocal builds the local usage adapter.
+func NewLocal(st *store.Store) *Local { return &Local{Store: st} }
 
-func (h *usageHTTP) get(w http.ResponseWriter, r *http.Request) {
-	configs, secrets, err := computeUsage(r.Context(), h.Store)
+// Get computes the config/secret → stacks reference graph.
+func (l *Local) Get(ctx context.Context) (*Usage, error) {
+	stacks, err := l.Store.ListStacks(ctx)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "compute usage: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"configs": configs,
-		"secrets": secrets,
-	})
-}
-
-// computeUsage maps config/secret name → the stacks that reference it, from
-// the latest rendered compose of each stack. Both maps are keyed
-// alphabetically (encoding/json sorts map keys) and the stack lists are
-// deduped + sorted.
-func computeUsage(ctx context.Context, st *store.Store) (map[string][]string, map[string][]string, error) {
-	stacks, err := st.ListStacks(ctx)
-	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	configs := map[string]map[string]bool{}
 	secrets := map[string]map[string]bool{}
 	for _, s := range stacks {
-		rev, err := st.GetRevision(ctx, s.Name, s.CurrentRevision)
+		rev, err := l.Store.GetRevision(ctx, s.Name, s.CurrentRevision)
 		if err != nil {
 			continue // stack with no stored latest revision — skip
 		}
@@ -63,7 +46,10 @@ func computeUsage(ctx context.Context, st *store.Store) (map[string][]string, ma
 			secrets[n][s.Name] = true
 		}
 	}
-	return flattenUsage(configs), flattenUsage(secrets), nil
+	return &Usage{
+		Configs: flatten(configs),
+		Secrets: flatten(secrets),
+	}, nil
 }
 
 // parseComposeReferences extracts the names referenced by a rendered compose's
@@ -85,7 +71,7 @@ func parseComposeReferences(rendered []byte) (configs, secrets []string) {
 	return configs, secrets
 }
 
-func flattenUsage(m map[string]map[string]bool) map[string][]string {
+func flatten(m map[string]map[string]bool) map[string][]string {
 	out := make(map[string][]string, len(m))
 	for name, stacks := range m {
 		list := make([]string, 0, len(stacks))

@@ -27,9 +27,11 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/server"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/services"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/settings"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/telemetry"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/usage"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
 
@@ -124,6 +126,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		DeployService: deploySvc,
 		Cipher:        cipher,
 		Backups:       backups.NewLocal(st, backups.LocalTrigger{Store: st}.Trigger),
+		Settings:      settings.NewLocal(st),
+		Usage:         usage.NewLocal(st),
 		HostCerts:     &certs.HTTP{Svc: tlsSvc},
 		SiteCert:      &certs.HTTP{Svc: tlsSvc},
 		Update: &server.UpdateService{

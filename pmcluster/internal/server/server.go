@@ -28,8 +28,10 @@ import (
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/services"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/settings"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/usage"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
 )
 
@@ -55,6 +57,14 @@ type Deps struct {
 	DeployService stacks.Deployer
 	Cipher        *credentials.Cipher
 	Backups       backups.Service
+
+	// Settings exposes the editable cluster settings surface under
+	// /api/cluster/settings. Optional; when nil those routes are omitted.
+	Settings settings.Service
+
+	// Usage exposes the config/secret → stacks reference graph under
+	// /api/usage. Optional; when nil that route is omitted.
+	Usage usage.Service
 
 	// HostCerts exposes per-host TLS cert management under /api/tls/hosts.
 	// Optional; when nil those routes are omitted.
@@ -133,8 +143,8 @@ func New(d Deps) http.Handler {
 			r.Get("/nodes", api.NodesHandler(d.Docker))
 		}
 		if d.Store != nil {
-			(&clusterSettingsHTTP{Store: d.Store}).Mount(r)
-			(&usageHTTP{Store: d.Store}).Mount(r)
+			(&settings.HTTP{Svc: d.Settings}).Mount(r)
+			(&usage.HTTP{Svc: d.Usage}).Mount(r)
 		}
 		if d.Store != nil && d.DeployService != nil {
 			(&stacks.HTTP{
