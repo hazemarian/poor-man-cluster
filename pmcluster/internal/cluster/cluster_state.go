@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 )
@@ -28,6 +29,7 @@ const (
 	settingSSOClientID     = "sso_client_id"
 	settingSSOClientSecret = "sso_client_secret"
 	settingSSOGitHubOrg    = "sso_github_org"
+	settingSSOCookieExpire = "sso_cookie_expire"
 
 	// settingEdgeLoginDisabled controls the edge console's own session login.
 	// Default "true" in swarm deployments: Traefik admin-auth (or SSO) already
@@ -51,6 +53,7 @@ func SettingSSOProvider() string       { return settingSSOProvider }
 func SettingSSOClientID() string       { return settingSSOClientID }
 func SettingSSOClientSecret() string   { return settingSSOClientSecret }
 func SettingSSOGitHubOrg() string      { return settingSSOGitHubOrg }
+func SettingSSOCookieExpire() string   { return settingSSOCookieExpire }
 func SettingEdgeLoginDisabled() string { return settingEdgeLoginDisabled }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
@@ -142,7 +145,15 @@ type ssoState struct {
 	ClientID     string
 	ClientSecret string
 	GitHubOrg    string
+	// CookieExpire is the oauth2-proxy session cookie lifetime (e.g. "1h",
+	// "24h", "168h"). Default "1h" so a member removed from the GitHub org
+	// loses access within the hour instead of keeping a 7-day session.
+	CookieExpire string
 }
+
+// defaultSSOCookieExpire is the tightened default session lifetime used when
+// sso_cookie_expire is unset (oauth2-proxy's own default is 168h).
+const defaultSSOCookieExpire = "1h"
 
 // loadSSOSettings reads the persisted SSO state (all empty when never set).
 func loadSSOSettings(ctx context.Context, st *store.Store) (ssoState, error) {
@@ -155,6 +166,7 @@ func loadSSOSettings(ctx context.Context, st *store.Store) (ssoState, error) {
 		ClientID:     st.GetSettingDefault(ctx, settingSSOClientID, ""),
 		ClientSecret: st.GetSettingDefault(ctx, settingSSOClientSecret, ""),
 		GitHubOrg:    st.GetSettingDefault(ctx, settingSSOGitHubOrg, ""),
+		CookieExpire: st.GetSettingDefault(ctx, settingSSOCookieExpire, defaultSSOCookieExpire),
 	}, nil
 }
 
@@ -170,6 +182,9 @@ func (s ssoState) validate() error {
 	}
 	if s.ClientID == "" || s.ClientSecret == "" {
 		return fmt.Errorf("SSO provider %q requires client ID + client secret", s.Provider)
+	}
+	if _, err := time.ParseDuration(s.CookieExpire); err != nil {
+		return fmt.Errorf("SSO cookie expire %q is not a valid duration (e.g. 1h, 24h, 168h): %w", s.CookieExpire, err)
 	}
 	return nil
 }

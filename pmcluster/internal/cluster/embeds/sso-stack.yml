@@ -44,6 +44,11 @@ services:
       OAUTH2_PROXY_UPSTREAMS: "static://202"
       OAUTH2_PROXY_COOKIE_SECURE: "true"
       OAUTH2_PROXY_COOKIE_SAMESITE: "lax"
+      # Session cookie lifetime — tightened from oauth2-proxy's 168h default
+      # so a member removed from the GitHub org loses access within the hour.
+      # Configurable via `pmcluster setup --sso-cookie-expire` /
+      # $PMCLUSTER_SSO_COOKIE_EXPIRE (e.g. "1h", "24h", "168h").
+      OAUTH2_PROXY_COOKIE_EXPIRE: "[[.SSOCookieExpire]]"
       # The session cookie must be valid on EVERY gated host (pmcluster.,
       # observ., sso.) — the callback lands on sso.<domain> but the operator is
       # then redirected back to pmcluster.<domain>/web/. A leading-dot domain

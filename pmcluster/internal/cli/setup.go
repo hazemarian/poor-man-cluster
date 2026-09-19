@@ -31,15 +31,23 @@ answers into the store settings:
   - TLS: Let's Encrypt (--acme-email) or operator-supplied cert/key (--cert/--key)
   - Traefik admin user
   - SSO: enable GitHub sign-in via an OAuth2 proxy (--sso-enabled,
-    --sso-client-id, --sso-client-secret, --sso-github-org)
+    --sso-client-id, --sso-client-secret, --sso-github-org, --sso-cookie-expire)
   - Edge console login (EDGE_LOGIN_DISABLED)
 
 The OpenObserve admin email is derived automatically (admin@<domain>) — it is
 hidden behind the admin-auth / SSO gate, so there is no prompt for it.
 
+Every SSO question also has an env-var override for scripting/CI:
+$PMCLUSTER_SSO_ENABLED, $PMCLUSTER_SSO_CLIENT_ID, $PMCLUSTER_SSO_CLIENT_SECRET,
+$PMCLUSTER_SSO_GITHUB_ORG, $PMCLUSTER_SSO_COOKIE_EXPIRE, $PMCLUSTER_EDGE_LOGIN_ENABLED.
+
 On a fresh install it then runs 'pmcluster cluster up'; on an existing
 cluster it runs 'pmcluster cluster update'. Every question has a matching
-flag so the wizard can be skipped entirely in scripts.`,
+flag so the wizard can be skipped entirely in scripts. SSO settings also
+honor env-var overrides when their flags are absent: PMCLUSTER_SSO_ENABLED,
+PMCLUSTER_SSO_CLIENT_ID, PMCLUSTER_SSO_CLIENT_SECRET, PMCLUSTER_SSO_GITHUB_ORG
+and PMCLUSTER_EDGE_LOGIN_ENABLED (so the GitHub org can be changed from the
+shell without touching the wizard).`,
 	RunE: runSetup,
 }
 
@@ -53,11 +61,12 @@ func init() {
 	setupCmd.Flags().String("key", "", "operator-supplied TLS key PEM path")
 	setupCmd.Flags().String("openobserve-email", "", "OpenObserve admin email (default admin@<domain>)")
 	setupCmd.Flags().String("traefik-admin-user", "", "Traefik dashboard admin user")
-	setupCmd.Flags().Bool("sso-enabled", false, "enable GitHub SSO via OAuth2 proxy")
-	setupCmd.Flags().String("sso-client-id", "", "GitHub OAuth app client ID (SSO)")
-	setupCmd.Flags().String("sso-client-secret", "", "GitHub OAuth app client secret (SSO)")
-	setupCmd.Flags().String("sso-github-org", "", "restrict SSO to a GitHub org (optional)")
-	setupCmd.Flags().Bool("edge-login-enabled", false, "keep the edge console password login (default: disabled behind SSO/admin-auth)")
+	setupCmd.Flags().Bool("sso-enabled", false, "enable GitHub SSO via OAuth2 proxy (default: $PMCLUSTER_SSO_ENABLED)")
+	setupCmd.Flags().String("sso-client-id", "", "GitHub OAuth app client ID (SSO; default: $PMCLUSTER_SSO_CLIENT_ID)")
+	setupCmd.Flags().String("sso-client-secret", "", "GitHub OAuth app client secret (SSO; default: $PMCLUSTER_SSO_CLIENT_SECRET)")
+	setupCmd.Flags().String("sso-github-org", "", "restrict SSO to a GitHub org (optional; default: $PMCLUSTER_SSO_GITHUB_ORG)")
+	setupCmd.Flags().String("sso-cookie-expire", "", "SSO session cookie lifetime (default 1h; default: $PMCLUSTER_SSO_COOKIE_EXPIRE)")
+	setupCmd.Flags().Bool("edge-login-enabled", false, "keep the edge console password login (default: disabled behind SSO/admin-auth; default: $PMCLUSTER_EDGE_LOGIN_ENABLED)")
 }
 
 // setupAnswers is the collected wizard state.
@@ -74,6 +83,7 @@ type setupAnswers struct {
 	SSOClientID     string
 	SSOClientSecret string
 	SSOGitHubOrg    string
+	SSOCookieExpire string
 
 	EdgeLoginEnabled bool
 }
@@ -157,6 +167,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 			a.SSOClientID = ask(r, out, "GitHub OAuth client ID", "")
 			a.SSOClientSecret = ask(r, out, "GitHub OAuth client secret", "")
 			a.SSOGitHubOrg = ask(r, out, "Restrict to GitHub org (optional)", st.GetSettingDefault(ctx, cluster.SettingSSOGitHubOrg(), ""))
+			a.SSOCookieExpire = ask(r, out, "Session cookie lifetime (e.g. 1h)", st.GetSettingDefault(ctx, cluster.SettingSSOCookieExpire(), "1h"))
 		}
 		a.EdgeLoginEnabled = askYesNo(r, out, "Keep edge console password login?", false)
 	} else {
@@ -174,7 +185,49 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.SSOClientID, _ = cmd.Flags().GetString("sso-client-id")
 		a.SSOClientSecret, _ = cmd.Flags().GetString("sso-client-secret")
 		a.SSOGitHubOrg, _ = cmd.Flags().GetString("sso-github-org")
+		a.SSOCookieExpire, _ = cmd.Flags().GetString("sso-cookie-expire")
 		a.EdgeLoginEnabled, _ = cmd.Flags().GetBool("edge-login-enabled")
+
+		// Env-var overrides for SSO settings so they can be changed from the
+		// shell / CI without editing the wizard (same precedence model as
+		// PMCLUSTER_API_URL in root.go): explicit flags win, then env vars,
+		// then persisted settings.
+		if !cmd.Flags().Changed("sso-enabled") {
+			if v := os.Getenv("PMCLUSTER_SSO_ENABLED"); v != "" {
+				a.SSOEnabled = envBool(v)
+			}
+		}
+		if !cmd.Flags().Changed("sso-client-id") {
+			if v := os.Getenv("PMCLUSTER_SSO_CLIENT_ID"); v != "" {
+				a.SSOClientID = v
+			}
+		}
+		if !cmd.Flags().Changed("sso-client-secret") {
+			if v := os.Getenv("PMCLUSTER_SSO_CLIENT_SECRET"); v != "" {
+				a.SSOClientSecret = v
+			}
+		}
+		if !cmd.Flags().Changed("sso-github-org") {
+			if v := os.Getenv("PMCLUSTER_SSO_GITHUB_ORG"); v != "" {
+				a.SSOGitHubOrg = v
+			}
+		}
+		if !cmd.Flags().Changed("sso-cookie-expire") {
+			if v := os.Getenv("PMCLUSTER_SSO_COOKIE_EXPIRE"); v != "" {
+				a.SSOCookieExpire = v
+			}
+		}
+		if a.SSOCookieExpire == "" {
+			// Default to the tightened 1h session (oauth2-proxy's own
+			// default is 168h). Kept as the stored fallback so unset SSO
+			// deployments converge to the shorter lifetime.
+			a.SSOCookieExpire = "1h"
+		}
+		if !cmd.Flags().Changed("edge-login-enabled") {
+			if v := os.Getenv("PMCLUSTER_EDGE_LOGIN_ENABLED"); v != "" {
+				a.EdgeLoginEnabled = envBool(v)
+			}
+		}
 		if a.SSOEnabled {
 			a.SSOProvider = "github"
 		}
@@ -238,6 +291,17 @@ func defaultOOEmail(domain string) string {
 	return "admin@" + domain
 }
 
+// envBool parses a boolean env var the same way the edge config does
+// (1/true/yes/on are true).
+func envBool(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 // persistSetupSecretsOnly persists the settings the Up/Update render pipeline
 // reads from the store (SSO + edge login). Domain / OO email / TLS state are
 // intentionally excluded: on a fresh install Up receives them through
@@ -249,6 +313,7 @@ func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswer
 		cluster.SettingSSOClientID():       a.SSOClientID,
 		cluster.SettingSSOClientSecret():   a.SSOClientSecret,
 		cluster.SettingSSOGitHubOrg():      a.SSOGitHubOrg,
+		cluster.SettingSSOCookieExpire():   a.SSOCookieExpire,
 		cluster.SettingEdgeLoginDisabled(): boolSetting(!a.EdgeLoginEnabled),
 	}
 	for k, v := range setting {
@@ -270,6 +335,7 @@ func persistSetup(ctx context.Context, st *store.Store, a setupAnswers) error {
 		cluster.SettingSSOClientID():       a.SSOClientID,
 		cluster.SettingSSOClientSecret():   a.SSOClientSecret,
 		cluster.SettingSSOGitHubOrg():      a.SSOGitHubOrg,
+		cluster.SettingSSOCookieExpire():   a.SSOCookieExpire,
 		cluster.SettingEdgeLoginDisabled(): boolSetting(!a.EdgeLoginEnabled),
 	}
 	for k, v := range setting {

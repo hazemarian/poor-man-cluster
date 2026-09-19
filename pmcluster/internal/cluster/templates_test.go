@@ -188,6 +188,7 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 		SSOClientSecret: "client-secret",
 		SSOCookieSecret: "cookie-secret",
 		SSOGitHubOrg:    "nextrum-s",
+		SSOCookieExpire: "1h",
 	}
 	data, err := LoadComposeFile(StackSSO, in)
 	if err != nil {
@@ -215,6 +216,7 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 		// cross-subdomain hop.
 		"OAUTH2_PROXY_REVERSE_PROXY: \"true\"",
 		"OAUTH2_PROXY_WHITELIST_DOMAINS: \".example.com\"",
+		"OAUTH2_PROXY_COOKIE_EXPIRE: \"1h\"",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("sso-stack render missing %q", want)

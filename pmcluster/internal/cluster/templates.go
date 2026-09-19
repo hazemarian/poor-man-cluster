@@ -180,10 +180,13 @@ type RenderInput struct {
 
 	// SSOClientID / SSOClientSecret are the OAuth provider (GitHub)
 	// application credentials. SSOGitHubOrg restricts sign-in to members of
-	// a GitHub org (optional). Used only when SSOEnabled.
+	// a GitHub org (optional). SSOCookieExpire is the oauth2-proxy session
+	// cookie lifetime (e.g. "1h", "24h", "168h"); default 1h so org-removed
+	// members lose access quickly. Used only when SSOEnabled.
 	SSOClientID     string
 	SSOClientSecret string
 	SSOGitHubOrg    string
+	SSOCookieExpire string
 
 	// EdgeLoginDisabled is rendered into the edge stack's
 	// EDGE_LOGIN_DISABLED env var. Default true in swarm deployments (Traefik

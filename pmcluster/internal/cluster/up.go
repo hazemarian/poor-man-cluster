@@ -237,6 +237,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			SSOClientID:              sso.ClientID,
 			SSOClientSecret:          sso.ClientSecret,
 			SSOGitHubOrg:             sso.GitHubOrg,
+			SSOCookieExpire:          sso.CookieExpire,
 		}
 
 		otelConfigName, otelConfigCreated, err = ensureOTelConfig(ctx, deps, in.Version, render)
