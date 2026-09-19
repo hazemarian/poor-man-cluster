@@ -2,21 +2,11 @@
 {{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
 {{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
 
-<div hx-get="/web/overview" hx-trigger="every 30s" hx-swap="outerHTML">
+<div hx-get="/web/overview" hx-trigger="every 30s" hx-target="#overview-body" hx-swap="innerHTML">
+<div id="overview-body">
 {{if .Info}}
 <h1>Cluster overview</h1>
-<p class="sub"><span class="live-dot"></span>live · last refreshed <span id="overview-last-refresh">just now</span> · Daemon <code>{{.Info.NodeName}}</code> · engine v{{.Info.ServerVersion}} · {{.Info.OS}} / {{.Info.Arch}}</p>
-<script>
-  (function(){
-    var el = document.getElementById('overview-last-refresh');
-    if (!el) return;
-    function tick(){ el.textContent = new Date().toLocaleTimeString(); }
-    tick();
-    document.body.addEventListener('htmx:afterSwap', function(e){
-      if (e.detail && e.detail.target && e.detail.target.querySelector && e.detail.target.querySelector('#overview-last-refresh')) tick();
-    });
-  })();
-</script>
+<p class="sub"><span class="live-dot"></span>live · Daemon <code>{{.Info.NodeName}}</code> · engine v{{.Info.ServerVersion}} · {{.Info.OS}} / {{.Info.Arch}}</p>
 <div class="grid">
   <div class="stat"><div class="label">Swarm state</div><div class="value"><span class="pill {{sp .Info.SwarmState}}">{{.Info.SwarmState}}</span></div></div>
   <div class="stat"><div class="label">Nodes</div><div class="value">{{.Info.SwarmNodes}}</div></div>
@@ -47,5 +37,6 @@
 {{if and .Me (not .Info) (not .Nodes)}}
 <div class="card">Connected to the pmcluster API as <code>@{{.Me.Name}}</code>.</div>
 {{end}}
+</div>
 </div>
 {{end}}

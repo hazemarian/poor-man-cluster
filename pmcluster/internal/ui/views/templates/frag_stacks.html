@@ -2,10 +2,11 @@
 {{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
 {{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
 
-<div hx-get="/web/stacks" hx-trigger="every 30s" hx-swap="outerHTML">
+<div hx-get="/web/stacks" hx-trigger="every 30s" hx-target="#stacks-body" hx-swap="innerHTML">
 <h1>Stacks</h1>
 <p class="sub"><span class="live-dot"></span>live · {{.Count}} deployed stack(s)</p>
 
+<div id="stacks-body">
 {{if .Stacks}}
 <div class="filter-box">
   <input id="stacks-filter" placeholder="Filter stacks…" oninput="filterTable('stacks-filter')">
@@ -32,5 +33,6 @@
 {{else}}
 <div class="card empty">No stacks yet. Deploy one from the Deploy tab.</div>
 {{end}}
+</div>
 </div>
 {{end}}
