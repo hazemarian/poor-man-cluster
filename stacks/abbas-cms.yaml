@@ -1,0 +1,37 @@
+app: abbas-cms
+env: production
+domain: nextrum-sy.com
+registry: ghcr.io/nextrum-sy
+version: v20260904-4b43963
+
+services:
+  web:
+    image: ${registry}/simple-cms:${version}
+    placement: manager
+    replicas: 1
+
+    expose:
+      port: 8080
+      host: abbas-cms.${domain}
+
+    volumes:
+      - abbas-cms-data:/app/data
+
+    env:
+      PORT: ":8080"
+      DATA_DIR: /app/data
+      DB_PATH: /app/data/cms.db
+      GIN_MODE: release
+      SESSION_SECRET: "change-me-to-a-random-secret-3"
+      PUBLIC_URL: "https://abbas-cms.nextrum-sy.com"
+      LANGS: "en,ar"
+      ECOMMERCE: "false"
+      ADMIN_USER: "admin"
+      ADMIN_PASSWORD: "Admin@123!"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
+      OTEL_SERVICE_NAME: "abbas-cms"
+
+    healthcheck:
+      type: http
+      path: /health
+# test: v0.2.10 auto-prune + transform/metrics

@@ -1,0 +1,36 @@
+app: jammo-cms
+env: production
+domain: nextrum-sy.com
+registry: ghcr.io/nextrum-sy
+version: v20260904-4b43963
+
+services:
+  web:
+    image: ${registry}/simple-cms:${version}
+    placement: manager
+    replicas: 1
+
+    expose:
+      port: 8080
+      host: jammo-cms.${domain}
+
+    volumes:
+      - jammo-cms-data:/app/data
+
+    env:
+      PORT: ":8080"
+      DATA_DIR: /app/data
+      DB_PATH: /app/data/cms.db
+      GIN_MODE: release
+      SESSION_SECRET: "change-me-to-a-random-secret-2"
+      PUBLIC_URL: "https://jammo-cms.nextrum-sy.com"
+      LANGS: "en,ar"
+      ECOMMERCE: "true"
+      ADMIN_USER: "admin"
+      ADMIN_PASSWORD: "Admin@123!"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "otel-collector:4317"
+      OTEL_SERVICE_NAME: "jammo-cms"
+
+    healthcheck:
+      type: http
+      path: /health

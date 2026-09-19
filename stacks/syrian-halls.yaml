@@ -1,0 +1,26 @@
+app: syrian-halls
+env: production
+domain: nextrum-sy.com
+registry: ghcr.io/nextrum-sy
+version: v20260904-0c29ee3
+
+services:
+  web:
+    image: ghcr.io/nextrum-sy/syrian-halls:${version}
+    placement: manager
+    replicas: 1
+
+    expose:
+      port: 3000
+      host: syrian-halls.${domain}
+
+    env:
+      PORT: "3000"
+      NODE_ENV: "production"
+      ADMIN_EMAIL: "admin@syria.sy"
+      ADMIN_PASSWORD_HASH: "scrypt:16384:8:1:64:ejeiivJnQWInRnMeoDRF/A==:jns40YdP2LCMPsWCVJEtKf97uYuohtfigtGLtUUm/oCDaV9ZpUPMKuQqlA9JIsFxkM0qtoi6sEWOIRGDvzRD9Q=="
+      AUTH_SECRET: "sP4ds9Vime3VMKKxnwsGeioHO79QazVXAMscXCmvWqo="
+
+    healthcheck:
+      type: http
+      path: /login

@@ -1,0 +1,19 @@
+app: demoenv
+env: production
+domain: nextrum-sy.com
+services:
+  web:
+    image: nginx:alpine
+    placement: manager
+    command:
+      - sh
+      - -c
+      - "printenv | sort > /usr/share/nginx/html/env.txt; exec nginx -g 'daemon off;'"
+    env:
+      DATABASE_URL: config(demoenv_app_env)
+      DB_PASS: secrets(demoenv_db_pass)
+    secrets:
+      - demoenv_db_pass
+    expose:
+      port: 80
+      host: demoenv.nextrum-sy.com
