@@ -120,14 +120,25 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		ssoSecret = ""
 		if sso.Enabled {
 			cookieCred, err := deps.Store.GetCredential(ctx, "sso_cookie_secret")
-			if err != nil {
-				return fmt.Errorf("load sso_cookie_secret credential (SSO enabled — run `cluster up` or rotate sso_cookie_secret first): %w", err)
+			switch {
+			case errors.Is(err, store.ErrCredentialNotFound):
+				// SSO enabled on a cluster whose bootstrap predates the
+				// credential — self-heal by minting it now (idempotent).
+				mgr := &CredentialsManager{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer}
+				mc, cerr := mgr.Ensure(ctx, "sso_cookie_secret")
+				if cerr != nil {
+					return fmt.Errorf("bootstrap sso_cookie_secret (SSO enabled): %w", cerr)
+				}
+				ssoSecret = mc.Password
+			case err != nil:
+				return fmt.Errorf("load sso_cookie_secret credential (SSO enabled): %w", err)
+			default:
+				plain, derr := deps.Cipher.Decrypt(cookieCred.PasswordCiphertext)
+				if derr != nil {
+					return fmt.Errorf("decrypt sso_cookie_secret: %w", derr)
+				}
+				ssoSecret = string(plain)
 			}
-			plain, err := deps.Cipher.Decrypt(cookieCred.PasswordCiphertext)
-			if err != nil {
-				return fmt.Errorf("decrypt sso_cookie_secret: %w", err)
-			}
-			ssoSecret = string(plain)
 		}
 		return nil
 	})
@@ -377,14 +388,23 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 	render.SSOGitHubOrg = sso.GitHubOrg
 	if sso.Enabled {
 		cookieCred, err := deps.Store.GetCredential(ctx, "sso_cookie_secret")
-		if err != nil {
+		switch {
+		case errors.Is(err, store.ErrCredentialNotFound):
+			mgr := &CredentialsManager{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer}
+			mc, cerr := mgr.Ensure(ctx, "sso_cookie_secret")
+			if cerr != nil {
+				return nil, fmt.Errorf("bootstrap sso_cookie_secret (SSO enabled): %w", cerr)
+			}
+			render.SSOCookieSecret = mc.Password
+		case err != nil:
 			return nil, fmt.Errorf("load sso_cookie_secret credential (SSO enabled): %w", err)
+		default:
+			plain, derr := deps.Cipher.Decrypt(cookieCred.PasswordCiphertext)
+			if derr != nil {
+				return nil, fmt.Errorf("decrypt sso_cookie_secret: %w", derr)
+			}
+			render.SSOCookieSecret = string(plain)
 		}
-		plain, err := deps.Cipher.Decrypt(cookieCred.PasswordCiphertext)
-		if err != nil {
-			return nil, fmt.Errorf("decrypt sso_cookie_secret: %w", err)
-		}
-		render.SSOCookieSecret = string(plain)
 	}
 	hostCerts, err := loadHostCertEntries(ctx, deps.Store, domain)
 	if err != nil {

@@ -101,6 +101,29 @@ func (m *CredentialsManager) Bootstrap(ctx context.Context, in BootstrapInput) (
 	return out, nil
 }
 
+// Ensure get-or-creates a single named managed credential, mirroring
+// Bootstrap's behavior for one entry. Idempotent: an existing row is reused
+// and only the Swarm secret is reconciled. Used when a component that owns a
+// credential (e.g. the sso stack's cookie secret) is enabled on an existing
+// cluster whose bootstrap predates it — cluster update self-heals the missing
+// credential instead of requiring a fresh `cluster up`.
+func (m *CredentialsManager) Ensure(ctx context.Context, name string) (*ManagedCredential, error) {
+	spec, ok := specFor(name, nil)
+	if !ok {
+		return nil, fmt.Errorf("ensure %s: no bootstrap spec for credential", name)
+	}
+	usernames := map[string]string{
+		"traefik_dashboard": "admin",
+		"openobserve_admin": "",
+		"edge_admin":        "admin",
+		"edge_ui_secret":    "session",
+		"edge_api_token":    "edge",
+		"sso_cookie_secret": "sso",
+	}
+	spec.username = usernames[spec.name]
+	return m.ensure(ctx, spec)
+}
+
 type secretFormat int
 
 const (

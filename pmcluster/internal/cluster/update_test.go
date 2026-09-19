@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -98,6 +99,77 @@ func TestUpdate_NoOpWhenNothingChanged(t *testing.T) {
 	}
 	if res.OTelCreated || res.TraefikCreated || res.CertCreated || res.KeyCreated {
 		t.Errorf("no-op update reported changes: %+v", res)
+	}
+}
+
+// TestUpdate_EnablingSSOSelfHealsMissingCookieSecret verifies that enabling
+// SSO on an existing cluster whose bootstrap predates the sso_cookie_secret
+// credential self-heals: cluster update mints the credential + Swarm secret
+// (idempotent Ensure) instead of erroring, and deploys the sso stack.
+func TestUpdate_EnablingSSOSelfHealsMissingCookieSecret(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	// Simulate a cluster whose bootstrap predates the SSO credential: the
+	// seed Up created it via Bootstrap, so remove the row + Swarm secret to
+	// reproduce the legacy state cluster update must self-heal.
+	if _, err := deps.Store.GetCredential(ctx, "sso_cookie_secret"); err != nil {
+		t.Fatalf("seed should have bootstrapped sso_cookie_secret: %v", err)
+	}
+	if _, err := deps.Store.DB().ExecContext(ctx, "DELETE FROM managed_credentials WHERE name = ?", "sso_cookie_secret"); err != nil {
+		t.Fatalf("delete sso_cookie_secret row: %v", err)
+	}
+	if err := deps.Docker.SecretRemove(ctx, "sso_cookie_secret"); err != nil {
+		t.Fatalf("remove sso_cookie_secret swarm secret: %v", err)
+	}
+
+	for k, v := range map[string]string{
+		SettingSSOEnabled():      "true",
+		SettingSSOProvider():     "github",
+		SettingSSOClientID():     "client-id",
+		SettingSSOClientSecret(): "client-secret",
+		SettingSSOGitHubOrg():    "nextrum-s",
+	} {
+		if err := deps.Store.SetSetting(ctx, k, v); err != nil {
+			t.Fatalf("set %s: %v", k, err)
+		}
+	}
+
+	res, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})
+	if err != nil {
+		t.Fatalf("Update with SSO enabled: %v", err)
+	}
+
+	mc, err := deps.Store.GetCredential(ctx, "sso_cookie_secret")
+	if err != nil {
+		t.Fatalf("sso_cookie_secret credential should have been minted: %v", err)
+	}
+	if mc.SwarmSecretName != "sso_cookie_secret" {
+		t.Errorf("SwarmSecretName = %q, want sso_cookie_secret", mc.SwarmSecretName)
+	}
+
+	deployer := deps.Deployer.(*recordingDeployer)
+	var ssoDeployed bool
+	for _, d := range deployer.deployedStacks {
+		if d.Name == "sso" {
+			ssoDeployed = true
+			for _, want := range []string{"client-id", "client-secret", "nextrum-s", "sso_cookie_secret", "sso.test.example.com"} {
+				if !strings.Contains(d.YAML, want) {
+					t.Errorf("sso deploy YAML missing %q", want)
+				}
+			}
+		}
+	}
+	if !ssoDeployed {
+		t.Errorf("expected sso stack deployed, got %v", deployer.deployedStacks)
+	}
+	if !slices.Contains(res.StacksDeployed, "sso") {
+		t.Errorf("UpdateResult.StacksDeployed should include sso, got %v", res.StacksDeployed)
+	}
+
+	// Second run: credential now exists, Ensure is a no-op, sso still converges.
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("second Update with SSO enabled: %v", err)
 	}
 }
 
