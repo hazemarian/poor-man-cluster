@@ -5,13 +5,31 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-stack/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-stack/pmcluster/internal/workflow"
 )
+
+// backupRootDir is the host-local archive every backup agent writes to. In a
+// multi-node cluster each node has its own copy (the manager's is the
+// "node 0" archive) — see docs/storage-and-databases.md.
+const backupRootDir = "/var/stack/backup"
+
+// ensureStorageDirs creates the volume root and the backup archive dir on the
+// host. Overridden in tests to keep them hermetic (t.TempDir).
+var ensureStorageDirs = func(volumeRoot string) error {
+	for _, dir := range []string{volumeRoot, backupRootDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create storage dir %s: %w", dir, err)
+		}
+	}
+	return nil
+}
 
 type UpInput struct {
 	Domain string
@@ -27,6 +45,9 @@ type UpInput struct {
 	OpenObserveAdminEmail string
 	ConfigDir             string
 	Version               string
+	// VolumeRoot is the single host dir every container volume is forced
+	// under (default manifest.DefaultVolumeRoot /var/stack/data).
+	VolumeRoot string
 }
 
 // UpResult includes plaintext passwords for any credentials newly minted
@@ -105,6 +126,18 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	wf := workflow.NewWorkflow(out)
 	wf.Add("Preflight: Docker reachable, Swarm active, this node is a manager", func(ctx context.Context) error {
 		return Preflight(ctx, deps.Docker)
+	})
+	wf.Add("Ensuring storage root directories (/var/stack/data, /var/stack/backup)", func(ctx context.Context) error {
+		root := in.VolumeRoot
+		if root == "" {
+			root = manifest.DefaultVolumeRoot
+		}
+		if err := ensureStorageDirs(root); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "  ✓ %s ready\n", root)
+		fmt.Fprintf(out, "  ✓ %s ready\n", backupRootDir)
+		return nil
 	})
 	wf.Add("Syncing platform config templates into the store", func(ctx context.Context) error {
 		syncRes, err := SyncPlatformConfigs(ctx, deps.Store, in.Version)

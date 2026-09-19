@@ -40,6 +40,7 @@ func healthyService(name string) runtime.Service {
 func seedUpdateState(t *testing.T) (UpdateDeps, string) {
 	t.Helper()
 	dir := t.TempDir()
+	ensureStorageDirs = func(string) error { return nil }
 	s, err := store.Open(filepath.Join(dir, "seed.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)

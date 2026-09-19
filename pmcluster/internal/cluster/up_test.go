@@ -17,6 +17,7 @@ import (
 func newUpDeps(t *testing.T) (UpDeps, *fakeDocker, *recordingDeployer) {
 	t.Helper()
 	dir := t.TempDir()
+	ensureStorageDirs = func(string) error { return nil }
 
 	s, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {

@@ -260,6 +260,9 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 	if in.TraefikAdminUser == "" {
 		in.TraefikAdminUser = st.GetSettingDefault(ctx, cluster.SettingTraefikAdminUser(), "admin")
 	}
+	if in.VolumeRoot == "" {
+		in.VolumeRoot = st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), "")
+	}
 
 	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
 	if err != nil {
