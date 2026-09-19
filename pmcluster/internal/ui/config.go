@@ -27,6 +27,12 @@ type Config struct {
 	CookieName      string
 	UpstreamTimeout time.Duration
 	AppVersion      string
+	// ClusterDomain (PMCLUSTER_DOMAIN) is the public cluster domain (e.g.
+	// example.com). The console renders external links to OpenObserve
+	// (observ.<domain>) and the Traefik dashboard (traefik.<domain>) from it.
+	// Set by the edge stack template ([[.Domain]]); local standalone runs leave
+	// it empty and the links are hidden.
+	ClusterDomain string
 	// LoginDisabled (EDGE_LOGIN_DISABLED) turns off the console's own session
 	// login. This is the deployed-edge mode: Traefik's admin-auth gate protects
 	// /web/*, so the console skips its own login, the user CRUD page and the
@@ -55,6 +61,7 @@ func FromEnv() Config {
 		CookieName:      envOr("SESSION_COOKIE", defaultCookieName),
 		UpstreamTimeout: envDur("UPSTREAM_TIMEOUT", defaultTimeout),
 		AppVersion:      envOr("APP_VERSION", "dev"),
+		ClusterDomain:   envOr("PMCLUSTER_DOMAIN", ""),
 		LoginDisabled:   envBool("EDGE_LOGIN_DISABLED"),
 	}
 }

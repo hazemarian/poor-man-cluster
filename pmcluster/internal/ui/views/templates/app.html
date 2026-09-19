@@ -125,6 +125,11 @@
       {{end}}
       <a href="/web/deploy"   hx-get="/web/deploy"    hx-target="#view" hx-push-url="true">Deploy</a>
       <a href="/web/settings" hx-get="/web/settings"  hx-target="#view" hx-push-url="true">Settings</a>
+      {{if .Domain}}
+      <div style="margin:6px 11px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">External</div>
+      <a href="https://observ.{{.Domain}}" target="_blank" rel="noopener">OpenObserve ↗</a>
+      <a href="https://traefik.{{.Domain}}" target="_blank" rel="noopener">Traefik ↗</a>
+      {{end}}
     </nav>
     <div class="side-foot">
       <span class="user">@{{.User.Username}}</span>

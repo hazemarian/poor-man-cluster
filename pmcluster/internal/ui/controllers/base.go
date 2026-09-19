@@ -35,6 +35,7 @@ type Controller struct {
 	Views    *views.Renderer
 	Auth     *middleware.Auth
 	Version  string
+	Domain   string
 	EnvAPI   string
 	EnvToken string
 }

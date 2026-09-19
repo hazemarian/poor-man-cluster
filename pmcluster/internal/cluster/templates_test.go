@@ -178,6 +178,43 @@ func TestLoadComposeFile_UnknownStack(t *testing.T) {
 	}
 }
 
+// TestLoadComposeFile_SSOStack verifies the sso-stack renders the oauth2-proxy
+// sidecar with the sso.<domain> Traefik router and the matching callback URL.
+func TestLoadComposeFile_SSOStack(t *testing.T) {
+	in := RenderInput{
+		Domain:          "example.com",
+		SSOEnabled:      true,
+		SSOClientID:     "client-id",
+		SSOClientSecret: "client-secret",
+		SSOCookieSecret: "cookie-secret",
+		SSOGitHubOrg:    "nextrum-s",
+	}
+	data, err := LoadComposeFile(StackSSO, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile(StackSSO): %v", err)
+	}
+	body := string(data)
+
+	for _, want := range []string{
+		"Host(`sso.example.com`)",
+		"traefik.http.services.sso.loadbalancer.server.port=4180",
+		"OAUTH2_PROXY_REDIRECT_URL: \"https://sso.example.com/oauth2/callback\"",
+		"OAUTH2_PROXY_CLIENT_ID: \"client-id\"",
+		"OAUTH2_PROXY_CLIENT_SECRET: \"client-secret\"",
+		"OAUTH2_PROXY_GITHUB_ORG: \"nextrum-s\"",
+		"OAUTH2_PROXY_COOKIE_SECRET: \"cookie-secret\"",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("sso-stack render missing %q", want)
+		}
+	}
+	for _, bad := range []string{"pmcluster.example.com/oauth2", "__SSO", "[[."} {
+		if strings.Contains(body, bad) {
+			t.Errorf("sso-stack render should not contain %q", bad)
+		}
+	}
+}
+
 // TestRenderOTelCollectorConfig_ContainsBasicAuth verifies that the rendered
 // OTel config contains Authorization: Basic <base64(admin email:admin password)> —
 // the ROOT admin credentials (the same ones OpenObserve itself runs with), and

@@ -2,13 +2,15 @@
 #
 # Deployed only when SSO is enabled (sso_enabled setting + PMCLUSTER_SSO_ENABLED).
 # oauth2-proxy terminates the OAuth flow with the provider (GitHub) and exposes
-# /oauth2/* on the Traefik network. Traefik's sso-auth forwardAuth middleware
-# points at this service; the provider's callback URL is
-# https://pmcluster.<domain>/oauth2/callback.
+# /oauth2/* on the sso.<domain> subdomain. Traefik's sso-auth forwardAuth
+# middleware points at this service; the provider's callback URL is
+# https://sso.<domain>/oauth2/callback.
 #
 # oauth2-proxy runs INSIDE the swarm, bound to the traefik-net overlay network
 # (no published ports). Traefik reaches it by service DNS name
-# sso_oauth2-proxy:4180.
+# sso_oauth2-proxy:4180 — both from the forwardAuth middleware and from the
+# sso.<domain> router that serves the /oauth2/* endpoints (sign-in, callback,
+# session check).
 #
 # Authentication is the provider's (GitHub); once the operator signs in with
 # GitHub, oauth2-proxy injects X-Forwarded-User / X-Forwarded-Email headers
@@ -37,8 +39,10 @@ services:
       OAUTH2_PROXY_COOKIE_SECURE: "true"
       OAUTH2_PROXY_COOKIE_SAMESITE: "lax"
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
-      # Redirect URI must match the GitHub OAuth app callback exactly.
-      OAUTH2_PROXY_REDIRECT_URL: "https://pmcluster.[[.Domain]]/oauth2/callback"
+      # Redirect URI must match the GitHub OAuth app callback exactly. The
+      # callback + sign-in endpoints are served at the sso.<domain> subdomain
+      # (this service's Traefik router below).
+      OAUTH2_PROXY_REDIRECT_URL: "https://sso.[[.Domain]]/oauth2/callback"
       # Allow the callback + auth endpoints through without a session.
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "false"
     deploy:
@@ -49,6 +53,17 @@ services:
           - node.role == manager
       restart_policy:
         condition: any
+      labels:
+        # Expose the OAuth endpoints at sso.<domain> — the dedicated SSO
+        # subdomain. No auth middleware here: oauth2-proxy itself owns the
+        # entire flow (it 302s to GitHub, serves the callback, and validates
+        # the session cookie on every /oauth2/* request).
+        - "traefik.enable=true"
+        - "traefik.http.routers.sso.rule=Host(`sso.${DOMAIN}`)"
+        - "traefik.http.routers.sso.entrypoints=websecure"
+        - "traefik.http.routers.sso.tls=true"
+        - "traefik.http.routers.sso.tls.certresolver=letsencrypt"
+        - "traefik.http.services.sso.loadbalancer.server.port=4180"
     secrets:
       - sso_cookie_secret
 

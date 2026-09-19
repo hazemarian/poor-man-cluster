@@ -61,6 +61,7 @@ func NewApp(cfg Config) (*App, error) {
 			"User":          middleware.CurrentUser(c),
 			"Version":       cfg.AppVersion,
 			"LoginDisabled": cfg.LoginDisabled,
+			"Domain":        cfg.ClusterDomain,
 		}
 	}
 	api := pmapi.New(cfg.PMAPIURL, cfg.PMAPIToken, cfg.UpstreamTimeout)
@@ -89,7 +90,8 @@ func NewApp(cfg Config) (*App, error) {
 
 	ctrl := &controllers.Controller{
 		Store: st, API: api, Views: renderer, Auth: auth,
-		Version: cfg.AppVersion, EnvAPI: cfg.PMAPIURL, EnvToken: cfg.PMAPIToken,
+		Version: cfg.AppVersion, Domain: cfg.ClusterDomain,
+		EnvAPI: cfg.PMAPIURL, EnvToken: cfg.PMAPIToken,
 	}
 
 	return &App{Cfg: cfg, Store: st, API: api, Auth: auth, ctrl: ctrl}, nil

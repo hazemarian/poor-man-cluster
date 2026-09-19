@@ -16,6 +16,7 @@ func (c Overview) App(g *gin.Context) {
 		"User":          middleware.CurrentUser(g),
 		"Version":       c.Version,
 		"LoginDisabled": c.Auth.LoginDisabled,
+		"Domain":        c.Domain,
 	})
 }
 

@@ -1062,3 +1062,53 @@ func TestLoginDisabled_PassThrough(t *testing.T) {
 		t.Errorf("POST rollback (login disabled) = %d, want 200", resp.StatusCode)
 	}
 }
+
+// TestShellExternalLinks verifies the console shell renders the OpenObserve +
+// Traefik external links when ClusterDomain is set, and hides them when it is
+// empty (local/standalone runs).
+func TestShellExternalLinks(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+
+	cfg := FromEnv()
+	cfg.DataDir = t.TempDir()
+	cfg.PMAPIURL = daemon.URL
+	cfg.PMAPIToken = "pmc_test"
+	cfg.SessionSecret = []byte("0123456789abcdefgh")
+	cfg.CookieName = "pmui_session"
+
+	shell := func(clusterDomain string) string {
+		t.Helper()
+		cfg.ClusterDomain = clusterDomain
+		app, err := NewApp(cfg)
+		if err != nil {
+			t.Fatalf("NewApp: %v", err)
+		}
+		jar := map[string]*http.Cookie{}
+		doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
+		doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
+		resp := doRequest(t, app, http.MethodGet, "/web/", "", jar)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /web/ = %d, want 200", resp.StatusCode)
+		}
+		return readBody(t, resp)
+	}
+
+	withDomain := shell("example.com")
+	for _, want := range []string{
+		"External",
+		`href="https://observ.example.com"`,
+		`href="https://traefik.example.com"`,
+	} {
+		if !strings.Contains(withDomain, want) {
+			t.Errorf("shell with ClusterDomain missing %q", want)
+		}
+	}
+
+	withoutDomain := shell("")
+	for _, bad := range []string{"External", "observ.", "traefik."} {
+		if strings.Contains(withoutDomain, bad) {
+			t.Errorf("shell without ClusterDomain must not contain %q", bad)
+		}
+	}
+}

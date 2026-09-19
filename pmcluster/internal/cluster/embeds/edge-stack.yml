@@ -31,6 +31,10 @@ services:
       - LISTEN_ADDR=:8042
       - UPSTREAM=http://host.docker.internal:9090
       - DATA_DIR=/data
+      # Public cluster domain — the console renders external links to
+      # OpenObserve (observ.<domain>) and the Traefik dashboard
+      # (traefik.<domain>) from it.
+      - PMCLUSTER_DOMAIN=[[.Domain]]
       - API_RATE=200
       - API_BURST=400
       - WEBHOOK_RATE=40
