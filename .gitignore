@@ -31,6 +31,12 @@ pmcluster/bin/
 pmcluster/coverage.out
 pmcluster/coverage.html
 
+# Local console state (per-machine UI database)
+pmcluster/data/
+
+# Design capture set — process artifacts, not shipped assets
+pmcluster/docs/redesign/
+
 # OS generated files
 .DS_Store
 .DS_Store?
