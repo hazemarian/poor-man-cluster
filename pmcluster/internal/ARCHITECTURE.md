@@ -28,14 +28,14 @@ cli ──► remote ──► domain packages (ports) ◄── server
 | domain | models | ports | REST routes |
 | --- | --- | --- | --- |
 | `apikeys` | `APIKey` | `Service` (Create/List/Delete) · sentinels `ErrEdgeUserProtected`, `ErrSelfDelete` | `GET/POST /api/api_keys`, `DELETE /api/api_keys/{id}` |
-| `webhooks` | `Source` | `Service` (Create/List/Delete) · `SourceReader` (Secret/MarkUsed, **local-only**) | `GET/POST /api/webhooks`, `DELETE /api/webhooks/{source}`, `POST /webhook/{source}` (HMAC receiver, unauthenticated) |
+| `webhooks` | `Source` | `Service` (Create/List/Delete) · `SourceReader` (Secret/MarkUsed, **local-only**) | `GET/POST /api/webhooks`, `DELETE /api/webhooks/{source}`, `POST /webhook/{source}` (HMAC receiver, unauthenticated), `GET /api/webhooks/{source}/deliveries` |
 | `secrets` | `Secret` | `Service` (Create/Get/Reveal/List/Update/Delete) | `GET/POST /api/secrets`, `PUT/DELETE /api/secrets/{name}`, `GET /api/secrets/{name}/value` |
 | `configs` | `Config`, `ConfigVersion` | `Service` (Create/Get/List/Update/Rollback/Delete/ListVersions/ListRendered) · `Renderer` (SetRendered, **local-only**) | `GET/POST /api/configs`, `GET/PUT/DELETE /api/configs/{name}`, `GET /api/configs/{name}/versions`, `POST /api/configs/{name}/rollback`, `GET /api/cluster/rendered` |
-| `backups` | `Run` | `Service` (Trigger/List/ListForStack) · sentinel `ErrTriggerNotConfigured` | `GET/POST /api/backups`, `GET /api/stacks/{name}/backups` |
+| `backups` | `Run` | `Service` (Trigger/List/ListForStack/ListFiles/Restore) · sentinel `ErrTriggerNotConfigured` | `GET/POST /api/backups`, `GET /api/stacks/{name}/backups`, `GET /api/backups/{id}/files`, `POST /api/backups/{id}/restore` |
 | `certs` | `Cert` | `Service` (SiteCert/ApplyHostCert/RemoveHostCert/GetSiteCert/List/MainDomain) | `GET /api/tls/hosts`, `PUT/DELETE /api/tls/hosts/{host}`, `GET/PUT /api/tls/site` |
 | `stacks` | `Payload`, `Result`, `Stack`, `Revision` | `Deployer` (Deploy/Sync/Rollback/Undeploy) · `Reader` (Get/List/Revisions) | `POST/GET /api/stacks`, `GET/DELETE /api/stacks/{name}`, `GET /api/stacks/{name}/revisions/{rev}`, `POST /api/stacks/{name}/rollback`, `POST /api/stacks/{name}/sync` |
 | `services` | `ServiceSummary`, `TaskRun`, `ExecResult`, `LogLine` | `Reader` (List/Tasks) · `Ops` (Restart/Exec) · `Logs` · `Service` (Reader+Ops+Logs) | `GET /api/services`, `GET /api/services/{stack}`, `GET /api/services/{stack}/{service}/tasks`, `GET /api/services/{stack}/{service}/logs`, `POST /api/services/{stack}/{service}/restart`, `POST /api/services/{stack}/{service}/exec` |
-| `cluster` | — (engine) | `Service` (Up/Update/Down/Status) · `CredentialsService` | none (local-only) |
+| `cluster` | — (engine) | `Service` (Up/Update/Down/Status) · `CredentialsService` | `GET /api/cluster/settings`, `PUT /api/cluster/settings`, `GET /api/usage` |
 
 ## Composition roots
 
@@ -76,7 +76,8 @@ for fresh installs and updates respectively.
 
 - `cluster.Service` and `cluster.CredentialsService` — there are no REST
   endpoints for bring-up/tear-down or bootstrap-credential rotation; these run
-  only on the node holding the Docker socket.
+  only on the node holding the Docker socket. (Settings and usage live in the
+  `settings` and `usage` domain packages; their REST handlers are remote-capable.)
 - `webhooks.SourceReader` — the decrypted HMAC secret never crosses the wire;
   the receiver runs on the daemon.
 - `configs.Renderer` — `SetRendered` snapshots post-substitution content, an

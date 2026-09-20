@@ -44,10 +44,18 @@ var webhookRemoveCmd = &cobra.Command{
 	RunE:  runWebhookRemove,
 }
 
+var webhookDeliveriesCmd = &cobra.Command{
+	Use:   "deliveries <source>",
+	Short: "Show the recent delivery history for a webhook source",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runWebhookDeliveries,
+}
+
 func init() {
 	webhookAddCmd.Flags().String("description", "", "human-readable note about who/what uses this source")
+	webhookDeliveriesCmd.Flags().Int("limit", 50, "max deliveries to show (1-500)")
 
-	webhookCmd.AddCommand(webhookAddCmd, webhookListCmd, webhookRemoveCmd)
+	webhookCmd.AddCommand(webhookAddCmd, webhookListCmd, webhookRemoveCmd, webhookDeliveriesCmd)
 	rootCmd.AddCommand(webhookCmd)
 }
 
@@ -144,4 +152,54 @@ func runWebhookRemove(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Webhook source %q removed.\n", source)
 	return nil
+}
+
+func runWebhookDeliveries(cmd *cobra.Command, args []string) error {
+	source := args[0]
+	limit, _ := cmd.Flags().GetInt("limit")
+
+	svc, closeFn, err := backendWebhooks(cmd)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	deliveries, err := svc.Deliveries(cmd.Context(), source, limit)
+	if err != nil {
+		return fmt.Errorf("list deliveries for %q: %w", source, err)
+	}
+	if len(deliveries) == 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "(no deliveries recorded for %q)\n", source)
+		return nil
+	}
+
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tSTATUS\tSTACK\tREVISION\tREPO\tFILE\tWHEN\tERROR")
+	for _, d := range deliveries {
+		stack := "—"
+		if d.StackName != "" {
+			stack = d.StackName
+		}
+		rev := "—"
+		if d.Revision != 0 {
+			rev = fmt.Sprintf("%d", d.Revision)
+		}
+		repo := "—"
+		if d.RepoURL != "" {
+			repo = d.RepoURL
+		}
+		file := "—"
+		if d.File != "" {
+			file = d.File
+		}
+		errTxt := "—"
+		if d.Error != "" {
+			errTxt = d.Error
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			d.ID, d.Status, stack, rev, repo, file,
+			time.Unix(d.CreatedAt, 0).Format(time.RFC3339), errTxt,
+		)
+	}
+	return w.Flush()
 }

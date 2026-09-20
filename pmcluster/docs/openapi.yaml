@@ -557,6 +557,191 @@ paths:
           description: Revoked (shared secret invalidated)
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/webhooks/{source}/deliveries:
+    get:
+      summary: List webhook delivery history for a source
+      description: >-
+        Newest-first delivery log (accepted, unauthorized, bad_request,
+        server_error) for the given webhook source, with deploy provenance
+        (stack, revision, repo, file) captured on successful deliveries.
+      operationId: listWebhookDeliveries
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: source
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+      responses:
+        "200":
+          description: Delivery list (newest first)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deliveries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WebhookDelivery"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/backups/{id}/files:
+    get:
+      summary: Browse a backup archive's contents
+      description: >-
+        Lists the files and directories inside a backup run's archive(s)
+        without restoring anything. Archives are plain directories or
+        tar/tar.gz files under the backup root.
+      operationId: browseBackup
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Backup run + file listing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run:
+                    $ref: "#/components/schemas/Backup"
+                  files:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BackupFile"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/backups/{id}/restore:
+    post:
+      summary: Restore a backup into the volume root
+      description: >-
+        Extracts every archive of a SUCCEEDED, stack-scoped backup run back
+        under the destination root (default /var/stack/data/<stack>). Refuses
+        non-succeeded runs and runs not tied to a stack.
+      operationId: restoreBackup
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dest_root:
+                  type: string
+                  default: /var/stack/data
+      responses:
+        "200":
+          description: Restore result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  restored:
+                    type: integer
+                    description: Number of files restored
+                  dest_root:
+                    type: string
+        "400":
+          description: Run is not restorable (not succeeded or not stack-scoped)
+  /api/cluster/settings:
+    get:
+      summary: Read cluster settings
+      description: >-
+        Returns all allowlisted cluster settings (volume_root,
+        backup_all_nodes, sso_*, edge_login_disabled, domain, oo_admin_email,
+        traefik_admin_user). Empty string means unset.
+      operationId: getClusterSettings
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Settings map
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings:
+                    type: object
+                    additionalProperties:
+                      type: string
+    put:
+      summary: Update cluster settings
+      description: >-
+        Persists the given settings keys. Unknown keys are rejected (400) and
+        the write is atomic. Does NOT redeploy — run `pmcluster cluster
+        update` (or the console Apply) for changes to take effect.
+      operationId: updateClusterSettings
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [settings]
+              properties:
+                settings:
+                  type: object
+                  additionalProperties:
+                    type: string
+      responses:
+        "200":
+          description: Updated settings map
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  settings:
+                    type: object
+                    additionalProperties:
+                      type: string
+        "400":
+          description: Unknown or empty setting key
+  /api/usage:
+    get:
+      summary: Secret and config usage graph
+      description: >-
+        Aggregates which deployed stacks reference which Docker configs and
+        secrets, parsed from the latest revision's rendered compose for each
+        stack.
+      operationId: getUsage
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Usage map
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Usage"
   /api/api_keys:
     get:
       summary: List API users (without token material)
@@ -1332,6 +1517,59 @@ components:
         changed:
           type: boolean
           description: false when the re-render matched the stored rendered_hash (no-op)
+    WebhookDelivery:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        source:
+          type: string
+        status:
+          type: string
+          enum: [accepted, unauthorized, bad_request, server_error]
+        stack_name:
+          type: string
+        revision:
+          type: integer
+          format: int64
+        repo_url:
+          type: string
+        file:
+          type: string
+        error:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+    BackupFile:
+      type: object
+      properties:
+        path:
+          type: string
+        size:
+          type: integer
+          format: int64
+          description: -1 when the archive path is missing on disk
+        is_dir:
+          type: boolean
+    Usage:
+      type: object
+      properties:
+        configs:
+          type: object
+          description: Docker config name -> stacks referencing it
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        secrets:
+          type: object
+          description: Swarm secret name -> stacks referencing it
+          additionalProperties:
+            type: array
+            items:
+              type: string
     ClusterInfo:
       type: object
       properties:

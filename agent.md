@@ -135,8 +135,9 @@ Key commands (all in `internal/cli/`):
   off to `cluster up` (fresh install) or `cluster update` (existing cluster).
 - `service list|ps|tasks|logs|restart|exec` (`service.go`) — per-service
   operations that replace Portainer.
-- `stack list|show`, `rollback`, `logs`, `backup`, `node`, `registry`,
-  `credentials`, `user`, `webhook`, `tls`, `secret`, `config`,
+- `stack list|show`, `rollback`, `logs`, `backup` (`create|list|browse|restore`),
+  `node`, `registry`, `credentials`, `user`, `webhook` (`add|list|remove|deliveries`),
+  `tls`, `secret`, `config`, `cluster` (`settings|get|set`), `usage`,
   `serve`, `version`.
 - The `serve` command (`serve.go`) wires the daemon: opens store, docker
   client, deploy service, and calls `server.New` — **this is where new daemon
@@ -176,7 +177,7 @@ consumer. Ports by package:
 - `webhooks` — `Service` + `SourceReader` (decrypted HMAC secret material).
 - `apikeys` — `Service` (edge-user + self-delete guards live here) +
   sentinels (`ErrEdgeUserProtected`, `ErrSelfDelete`).
-- `backups` — `Service` (`Trigger`/`List`/`ListForStack`) + sentinel
+- `backups` — `Service` (`Trigger`/`List`/`ListForStack`/`ListFiles`/`Restore`) + sentinel
   `ErrTriggerNotConfigured`.
 - `services` — `Service` (`Reader` + `Ops` + `Logs`): list swarm services,
   task history, log tailing, forced restart, non-interactive exec. Replaces
@@ -236,6 +237,7 @@ the two infra fields `Lookup` (auth) and `Docker`. `New()` mounts the domain
 handlers itself — each domain package exports its own `Mount` methods, e.g.:
 - `apikeys.HTTP{Svc}` → `Mount(r)` = GET/POST `/api_keys`, DELETE `/api_keys/{id}`.
 - `webhooks.HTTP{Svc}` → GET/POST `/webhooks`, DELETE `/webhooks/{source}`.
+- `webhooks.DeliveriesHTTP{Svc}` → GET `/api/webhooks/{source}/deliveries`.
 - `webhooks.Receiver{Sources, Deploy}` → POST `/webhook/{source}` (HMAC
   receiver; needs `WebhookSources` + `DeployService`).
 - `secrets.HTTP{Svc}` → GET/POST `/secrets` (`?scope=`/`?stack=` filters),
@@ -244,7 +246,8 @@ handlers itself — each domain package exports its own `Mount` methods, e.g.:
   `/configs/{name}/versions`, `/configs/{name}/rollback`, **and**
   GET `/api/cluster/rendered` (stored rendered platform configs).
 - `backups.HTTP{Svc}` → GET/POST `/api/backups` + stack-scoped
-  `/api/stacks/{name}/backups`.
+  `/api/stacks/{name}/backups` + GET `/api/backups/{id}/files` +
+  POST `/api/backups/{id}/restore`.
 - `certs.HTTP{Svc}` → `MountHosts(r)` (GET/PUT/DELETE `/api/tls/hosts[/{host}]`)
   + `MountSite(r)` (GET/PUT `/api/tls/site`).
 - `stacks.HTTP{Deploy, Read, Backups}` → GET/POST `/api/stacks`,
@@ -258,6 +261,9 @@ handlers itself — each domain package exports its own `Mount` methods, e.g.:
   GET `/api/services/{stack}/{service}/logs?tail=N`,
   POST `/api/services/{stack}/{service}/restart`,
   POST `/api/services/{stack}/{service}/exec` (body `{argv:[...]}`).
+- `settings.HTTP{Svc settings.Service}` → GET `/api/cluster/settings` +
+  PUT `/api/cluster/settings` (12 allowlisted keys; atomic; no redeploy).
+- `usage.HTTP{Svc usage.Service}` → GET `/api/usage`.
 
 All handlers follow the same shape: struct with a port dep + `Mount(r chi.Router)`;
 JSON via `writeJSON`/`writeErr` (`server/write.go`).
@@ -629,11 +635,11 @@ daemon `/health`, edge image pin, console 302 → `/web/`, `pmcluster tls site s
 
 ---
 
-## 10. Production facts (as of v0.2.60)
+## 10. Production facts (as of v0.2.71)
 
 - Node `root@82.165.128.237`, SSH key `~/.ssh/pmcluster_ed25519`, `rg` NOT
   installed (use `grep`), `sqlite3` available.
-- Daemon `v0.2.60`, edge pinned to matching release tag, domain `nextrum-sy.com`.
+- Daemon `v0.2.71`, edge pinned to matching release tag, domain `nextrum-sy.com`.
 - Console at `https://pmcluster.nextrum-sy.com/web/`.
 - SSO live: GitHub OAuth (org `nextrum-sy`), oauth2-proxy on
   `https://sso.nextrum-sy.com`, `EDGE_LOGIN_DISABLED=true`.

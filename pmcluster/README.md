@@ -18,7 +18,7 @@ The daemon listens on `127.0.0.1:9090` (host-only). Public access goes through
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | bash
 ```
 
-Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.60`.
+Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.71`.
 On Linux, `install.sh` also drops a systemd unit at `contrib/systemd/pmcluster.service`.
 
 ## Quick start
@@ -51,12 +51,13 @@ make build         # → ./bin/pmcluster
 | `init` | Bootstrap config (flags: `--admin-name`, `--force` destructive) |
 | `serve` | Run the HTTP daemon (REST API + webhook receiver) |
 | `cluster up/update/down/status` | Bring the stack up (init-only), content-aware reconcile (DB source of truth, `rendered_hash`), tear down, or show status |
+| `cluster settings/get/set` | List, get, or set cluster settings (12 allowlisted keys; secret keys masked) |
 | `setup` | Interactive wizard: collect cluster config then run cluster up/update |
 | `deploy <manifest.yaml>` | DSL-based deploy (flags: `--app`, `--repo`, `--version`) |
 | `stack list/show` | List or inspect deployed stacks |
 | `rollback <stack> <rev>` | Roll back to a previous revision |
-| `backup create/list` | On-demand backups |
-| `webhook add/list/remove` | Manage HMAC webhook sources |
+| `backup create/list/browse/restore` | On-demand backups; `browse <id>` lists archive files (TYPE/SIZE/PATH); `restore <id>` extracts to `dest_root/<stack>` |
+| `webhook add/list/remove/deliveries` | Manage HMAC webhook sources; `deliveries <source>` shows newest-first delivery history |
 | `user create/list/remove` | Manage operator users (v2 tokens `pmc_<token_id>_<secret>`) |
 | `credentials list/show/rotate` | Bootstrap + edge credentials (AES-GCM encrypted) |
 | `registry add/list/remove` | Private registry credentials (docker login) |
@@ -66,6 +67,7 @@ make build         # → ./bin/pmcluster
 | `secret` | Manage DB-backed secrets (AES-GCM encrypted, shown as hashes) |
 | `config` | Manage DB-backed configs (cluster templates & service configs) |
 | `service list/tasks/logs/restart/exec` | Whitelisted per-service operations (replaces Portainer) |
+| `usage` | Config/secret usage graph: which stacks reference each config/secret |
 | `completion` | Generate autocompletion scripts for the specified shell |
 | `version` | Binary version |
 

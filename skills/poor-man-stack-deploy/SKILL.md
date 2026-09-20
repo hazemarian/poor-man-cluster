@@ -178,9 +178,14 @@ pmcluster deploy app.yaml
 pmcluster stack list
 pmcluster rollback my-app 1789626082
 pmcluster webhook list
+pmcluster webhook deliveries github-prod
 pmcluster user create ci-bot
 pmcluster backup create
+pmcluster backup browse <id>
+pmcluster backup restore <id>
 pmcluster tls site show
+pmcluster cluster settings
+pmcluster usage
 ```
 
 - The token comes from `pmcluster user create <name>` (or the `edge` daemon
@@ -366,7 +371,7 @@ curl -X POST $BASE/api/stacks/my-app/rollback \
 curl -X DELETE $BASE/api/stacks/my-app -H "Authorization: Bearer <admin-token>"
 ```
 
-Other endpoints: `GET /api/cluster/info`, `GET /api/nodes`, `GET /api/stacks/{name}/revisions/{rev}`, `GET|POST /api/backups`, `GET|POST|DELETE /api/tls/hosts`, `GET|POST|DELETE /api/webhooks`, `GET|POST /api/api_keys`. Full spec in `pmcluster/docs/openapi.yaml`. The console's stacks list has a **Delete** button (with confirmation) per stack — same as `DELETE /api/stacks/{name}`.
+Other endpoints: `GET /api/cluster/info`, `GET /api/nodes`, `GET /api/stacks/{name}/revisions/{rev}`, `GET|POST /api/backups`, `GET /api/backups/{id}/files`, `POST /api/backups/{id}/restore`, `GET|POST|DELETE /api/tls/hosts`, `GET|POST|DELETE /api/webhooks`, `GET /api/webhooks/{source}/deliveries`, `GET|POST /api/api_keys`, `GET /api/cluster/settings`, `PUT /api/cluster/settings`, `GET /api/usage`. Full spec in `pmcluster/docs/openapi.yaml`. The console's stacks list has a **Delete** button (with confirmation) per stack — same as `DELETE /api/stacks/{name}`.
 
 ## CI/CD Webhook Setup
 
@@ -554,11 +559,11 @@ The edge image is pinned to `ghcr.io/nextrum-sy/pmcluster-edge:latest` by defaul
 
 1. **Build + publish the release first** — push a `v*` tag; the release workflow cross-compiles the binaries and pushes the new edge image to GHCR:
    ```bash
-   git tag v0.2.60 && git push origin v0.2.60
+   git tag v0.2.71 && git push origin v0.2.71
    ```
 2. **Update the binary with install.sh** — it installs the new binary and, because `~/.pmcluster/config.yaml` exists, automatically runs `pmcluster cluster update`:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | VERSION=v0.2.60 bash
+   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | VERSION=v0.2.71 bash
    # or simply: | bash   (resolves latest release)
    ```
 3. `cluster update` **refreshes the on-disk templates** in `~/.pmcluster/config/` from the new binary's embedded copies (stale configs — older version header — are overwritten; operator edits with a newer header are preserved), then re-renders. Because the edge-stack.yml content changed, the **edge stack is re-deployed** automatically and pulls the new `:latest` image. OTel/Traefik/cert are re-applied content-aware as usual. A second `cluster update` with no changes reports `No rendered content changed — nothing to redeploy.`

@@ -9,7 +9,7 @@ The control plane is a single static Go 1.25 binary (`pmcluster`, ~25 MB, no cgo
 In front of it sits **`pmcluster-edge`** — a small Go service deployed as a Swarm service that publishes `pmcluster.<domain>` as the single public origin for the **operator console** (a web UI for API keys, TLS, webhooks, stacks, and more), the REST API, and webhook receivers — all shielded by per-IP rate limiting, a connection shield, and automatic IP blocklisting.
 
 - **Design + trade-offs:** [RFC v2 — issue #1](https://github.com/hazemarian/poor-man-stack/issues/1) (what actually shipped)
-- **Current release:** [v0.2.60](https://github.com/hazemarian/poor-man-stack/releases)
+- **Current release:** [v0.2.71](https://github.com/hazemarian/poor-man-stack/releases)
 
 ---
 
@@ -88,20 +88,22 @@ Single static binary, lives on the manager host. Replaces the bash setup script 
 - `pmcluster setup` — **interactive wizard**: collects domain, TLS (LE or BYO), Traefik admin user, SSO enable (GitHub creds + org), edge login preference, then runs `cluster up` (fresh) or `cluster update` (existing). All questions have matching flags for scripted use.
 - `pmcluster cluster up` — **init-only**: brings a fresh cluster up (prevents re-running if a cluster already exists — run `cluster update` instead). Configs are stored in the DB only (no `~/.pmcluster/config/*.yml` disk files); rendered at deploy time from embedded templates.
 - `pmcluster cluster update` — **content-aware reconcile**: DB is the source of truth. Compares rendered compose hashes (`rendered_hash`) against stored values; re-deploys only changed stacks. Drift-prune removes services dropped from a compose.
+- `pmcluster cluster settings` — list all cluster settings (KEY/VALUE; secret-typed keys masked); `pmcluster cluster settings get <key>`; `pmcluster cluster settings set key=value ...`
 - `pmcluster cluster status` / `cluster down`
 - `pmcluster serve` — runs the long-running daemon (REST API + webhook receiver). Listens on `127.0.0.1:9090`; Traefik routes `pmcluster.<domain>` to it via `host.docker.internal:host-gateway`
 - `pmcluster deploy <file>` / `pmcluster stack list|show` / `pmcluster rollback <stack> <rev>` — DSL-based application deploys with versioned rollback
 - `pmcluster credentials list|show|rotate` — managed bootstrap passwords (Traefik / OpenObserve / edge)
 - `pmcluster service list|ps|tasks|logs|restart|exec` — whitelisted service operations (replica health, crash history, log tailing, restart, non-interactive exec) working locally or over the remote API
 - `pmcluster registry add|list|remove` — Docker registry credentials, replayed on `serve` startup so private images keep pulling
-- `pmcluster webhook add|list|remove` — HMAC-signed webhook sources for CI integrations (timestamped to prevent replay)
+- `pmcluster webhook add|list|remove|deliveries` — HMAC-signed webhook sources for CI integrations (timestamped to prevent replay); `deliveries <source>` shows newest-first delivery history (ID/STATUS/STACK/REVISION/REPO/FILE/WHEN/ERROR)
 - `pmcluster tls hosts add|list|remove` — per-host TLS certificates for customer domains served by Traefik (independent of the cluster wildcard cert)
 - `pmcluster tls site show|set` — inspect or rotate the cluster's own (main) certificate in place, with expiry metadata
-- `pmcluster backup create|list` — on-demand offen volume snapshots; deploys can opt-in via `backup_before_deploy: true`
+- `pmcluster backup create|list|browse|restore` — on-demand offen volume snapshots; deploys can opt-in via `backup_before_deploy: true`; `browse <id>` lists files inside a backup archive (TYPE/SIZE/PATH); `restore <id>` extracts a SUCCEEDED, stack-scoped backup back under `dest_root/<stack>`
 - `pmcluster node list|join-token` — wraps `docker node` for the read paths
 - `pmcluster secret create|list|show|verify|delete` — DB-backed secrets (AES-256-GCM encrypted, shown as hashes)
 - `pmcluster config create|list|get|edit|history|rollback` — DB-backed configs with version history
 - `pmcluster user create|list|edit|remove` — issue and manage API tokens for additional users (RBAC roles: admin/operator/viewer; tokens print once, hashed at rest)
+- `pmcluster usage` — secret/config usage graph: CONFIG/USED BY + SECRET/USED BY
 - `pmcluster logs [--tail=N] [--since=24h] [--follow]` — tail the JSON audit log at `~/.pmcluster/logs/`. Files rotate daily, swept after 14 days.
 - `pmcluster version` — prints version, commit, and build date (also accessible via `--version` flag)
 
@@ -172,7 +174,7 @@ One-line install (latest release):
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | bash
 ```
 
-The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-stack/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.60`).
+The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-stack/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.71`).
 
 **With private registry credentials (GHCR, Docker Hub, etc.):**
 
@@ -566,18 +568,24 @@ The daemon exposes a JSON REST API under `/api/*` (Bearer auth) plus the unauthe
 | `GET` | `/api/me` | Current user |
 | `GET` | `/api/cluster/info` | Cluster + Swarm status |
 | `GET` | `/api/nodes` | Swarm nodes |
+| `GET` | `/api/usage` | Config/secret usage graph (which stacks reference each) |
+| `GET` | `/api/cluster/settings` | List all cluster settings (12 allowlisted keys) |
+| `PUT` | `/api/cluster/settings` | Atomic update of cluster settings (does NOT redeploy) |
 | `GET`/`POST` | `/api/stacks` | List / deploy a stack |
 | `GET` | `/api/stacks/{name}` | Stack detail + revisions |
 | `GET` | `/api/stacks/{name}/revisions/{rev}` | A stored revision |
 | `POST` | `/api/stacks/{name}/rollback` | Roll back to a revision |
 | `DELETE` | `/api/stacks/{name}` | Remove a stack (services, volumes, secrets, record) |
 | `GET`/`POST` | `/api/backups` | List / trigger backups |
+| `GET` | `/api/backups/{id}/files` | List files inside a backup run's archive |
+| `POST` | `/api/backups/{id}/restore` | Restore a backup to a destination root |
 | `GET`/`PUT`/`DELETE` | `/api/tls/hosts` | Per-host TLS certs |
 | `GET`/`PUT` | `/api/tls/site` | Cluster's own (main) certificate |
 | `GET`/`POST` | `/api/secrets` | DB-backed secrets (list/create) |
 | `GET`/`POST` | `/api/configs` | DB-backed configs (list/create) |
 | `GET`/`PUT`/`DELETE` | `/api/configs/{name}` | Config content + versions/rollback |
 | `GET`/`POST`/`DELETE` | `/api/webhooks` | Webhook sources |
+| `GET` | `/api/webhooks/{source}/deliveries` | Webhook delivery history (newest first) |
 | `GET`/`POST` | `/api/api_keys` | API keys |
 
 API tokens are created with `pmcluster user create <name>` or the console. They use the format `pmc_<token_id>_<secret>` (a public 8-hex-char lookup id plus a base64url secret) so the daemon can find the row without scanning every user; the plaintext token is shown once and only a hash is stored.
