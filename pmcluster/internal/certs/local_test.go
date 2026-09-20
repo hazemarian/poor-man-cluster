@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Local is exercised against a real store. ApplyHostCert / RemoveHostCert /

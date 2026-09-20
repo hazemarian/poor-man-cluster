@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/usage"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/usage"
 )
 
 // Usage is the HTTP adapter for GET /api/usage — the config/secret → stacks

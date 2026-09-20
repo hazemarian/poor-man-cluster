@@ -36,7 +36,7 @@ var (
 
 func instruments() (metric.Int64Counter, metric.Int64Gauge) {
 	instrOnce.Do(func() {
-		meter := otel.Meter("github.com/hazemarian/poor-man-stack/pmcluster/internal/backups")
+		meter := otel.Meter("github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups")
 		var err error
 		backupsTotal, err = meter.Int64Counter(
 			"pmcluster.backups.total",

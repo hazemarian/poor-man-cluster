@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Local is the store-backed adapter for the settings port.

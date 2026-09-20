@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
 
 var envVarRe = regexp.MustCompile(`\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}`)

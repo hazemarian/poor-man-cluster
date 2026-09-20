@@ -22,8 +22,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/edgeproxy"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/edgeproxy"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui"
 )
 
 func main() {

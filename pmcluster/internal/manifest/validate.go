@@ -6,8 +6,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/refs"
-	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/refs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
 
 // nameRe enforces lowercase + digits + dashes/underscores for `app:` and

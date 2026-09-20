@@ -1,4 +1,4 @@
-module github.com/hazemarian/poor-man-stack/pmcluster
+module github.com/hazemarian/poor-man-cluster/pmcluster
 
 go 1.25.5
 

@@ -7,10 +7,10 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/workflow"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/workflow"
 )
 
 // UpdateInput carries the config-dir + build version for `cluster update`.

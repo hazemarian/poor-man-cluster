@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 func TestStatus_PopulatedFromFakeDocker(t *testing.T) {

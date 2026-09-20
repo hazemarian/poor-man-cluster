@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 // PreflightError pairs a low-level cause with an operator-facing

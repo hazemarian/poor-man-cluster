@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 )
 
 // TestE2EOpenObserveAdminAuthIngestion validates the ROOT-admin basic-auth

@@ -20,7 +20,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 )
 
 // Receiver is the HMAC-verified deploy webhook receiver.
@@ -59,7 +59,7 @@ var (
 
 func webhookCounter() metric.Int64Counter {
 	instrOnce.Do(func() {
-		meter := otel.Meter("github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks")
+		meter := otel.Meter("github.com/hazemarian/poor-man-cluster/pmcluster/internal/webhooks")
 		var err error
 		webhookRequests, err = meter.Int64Counter(
 			"pmcluster.webhook.requests.total",

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cli"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cli"
 )
 
 func main() {

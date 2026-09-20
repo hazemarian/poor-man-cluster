@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/settings"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/usage"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/remote"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/settings"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/usage"
 )
 
 var clusterSettingsCmd = &cobra.Command{

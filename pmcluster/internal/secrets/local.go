@@ -3,8 +3,8 @@ package secrets
 import (
 	"context"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Local implements Service against the local store and the AES-GCM cipher.

@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 // NodesHandler returns the list of swarm nodes (one row per `docker node ls`

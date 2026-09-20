@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 )
 
 func requestWithUser(u *auth.User) *http.Request {

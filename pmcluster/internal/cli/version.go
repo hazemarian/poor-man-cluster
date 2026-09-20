@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 )
 
 // versionString returns the resolved version stamp for the --version flag.

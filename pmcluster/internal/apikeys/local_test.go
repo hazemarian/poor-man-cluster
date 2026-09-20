@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 func openTestStore(t *testing.T) *store.Store {

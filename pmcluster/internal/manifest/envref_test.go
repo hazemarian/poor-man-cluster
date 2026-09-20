@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
 
 // fakeResolver serves canned config content for resolver tests.

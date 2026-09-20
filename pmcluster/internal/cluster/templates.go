@@ -15,10 +15,10 @@ import (
 
 	"sigs.k8s.io/yaml"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/refs"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/refs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // embeddedStacks holds the source-of-truth bundled compose and config files.
@@ -62,7 +62,7 @@ var composeFile = map[stackName]string{
 // container. The edge image is published alongside pmcluster (the release
 // pipeline builds + pushes it for every tag), so the edge stack pins the
 // matching release tag by default.
-const EdgeImageBase = "ghcr.io/nextrum-sy/pmcluster-edge"
+const EdgeImageBase = "ghcr.io/hazemarian/pmcluster-edge"
 
 // EdgeImageEnv overrides the edge image reference in the rendered edge stack.
 // It's a way to pin a specific release (e.g. PMCLUSTER_EDGE_IMAGE=v0.2.21, or a
@@ -163,7 +163,7 @@ type RenderInput struct {
 	KeySecretName string
 
 	// EdgeImage is the pmcluster-edge container image tag used by the
-	// embedded edge-stack.yml (e.g. ghcr.io/nextrum-sy/pmcluster-edge:v0.2.19).
+	// embedded edge-stack.yml (e.g. ghcr.io/hazemarian/pmcluster-edge:v0.2.19).
 	// Rendered via the template body; set in up/update.
 	EdgeImage string
 

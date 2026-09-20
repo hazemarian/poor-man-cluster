@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 func ClusterInfoHandler(d runtime.Client) http.HandlerFunc {

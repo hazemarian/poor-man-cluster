@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 )
 
 // ErrUserExists is returned by CreateUser when the name is already taken.

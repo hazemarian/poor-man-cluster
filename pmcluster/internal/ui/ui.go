@@ -10,11 +10,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/controllers"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/middleware"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/pmapi"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/store"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/views"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/controllers"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views"
 )
 
 // App ties the store, pmapi client, renderer, session auth and controllers

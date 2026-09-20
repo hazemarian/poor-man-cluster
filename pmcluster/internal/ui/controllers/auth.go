@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 )
 
 // Auth handles sign-in, the first-run password setup, and sign-out.

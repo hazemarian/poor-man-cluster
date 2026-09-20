@@ -3,8 +3,8 @@ package apikeys
 import (
 	"context"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // edgeAPITokenUser is the daemon user the operator console authenticates

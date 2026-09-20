@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/webhooks"
 )
 
 // Webhooks is the HTTP adapter for webhooks.Service.

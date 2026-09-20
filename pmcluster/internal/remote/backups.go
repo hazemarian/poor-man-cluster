@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 )
 
 // Backups is the HTTP adapter for backups.Service.

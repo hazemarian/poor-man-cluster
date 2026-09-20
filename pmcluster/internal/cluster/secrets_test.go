@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
 

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/apikeys"
 )
 
 // APIKeys is the HTTP adapter for the apikeys domain Service port.

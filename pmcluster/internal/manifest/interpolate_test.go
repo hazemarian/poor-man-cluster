@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
 
 // minimalApp returns a *dsl.App with just enough fields to pass Interpolate

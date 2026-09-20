@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 func openTestStore(t *testing.T, path string) (*store.Store, error) {
@@ -246,7 +246,7 @@ func TestUpdate_EdgeImagePinRedeploysEdge(t *testing.T) {
 		t.Errorf("expected only the edge stack re-deployed on image pin, got %v", pinUp.deployedStacks)
 	}
 	for _, d := range pinUp.deployedStacks {
-		if !strings.Contains(string(d.YAML), "ghcr.io/nextrum-sy/pmcluster-edge:v9.9.9") {
+		if !strings.Contains(string(d.YAML), "ghcr.io/hazemarian/pmcluster-edge:v9.9.9") {
 			t.Errorf("edge stack should pin image :v9.9.9, got:\n%s", d.YAML)
 		}
 	}

@@ -2,7 +2,7 @@
 # Targets: build, test, e2e, lint, tidy, clean, install
 
 BINARY      := pmcluster
-PKG         := github.com/hazemarian/poor-man-stack/pmcluster
+PKG         := github.com/hazemarian/poor-man-cluster/pmcluster
 CMD         := ./cmd/pmcluster
 BIN_DIR     := bin
 OUT         := $(BIN_DIR)/$(BINARY)

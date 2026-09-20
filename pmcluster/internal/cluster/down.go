@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 type DownInput struct {

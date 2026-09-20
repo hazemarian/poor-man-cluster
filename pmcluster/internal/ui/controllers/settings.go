@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/middleware"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
 )
 
 // Settings shows and edits the pmcluster API connection plus the cluster-scope

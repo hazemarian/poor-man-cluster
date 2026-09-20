@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/migrations"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/migrations"
 )
 
 // runMigrations applies every embedded *.sql file under pmcluster/migrations

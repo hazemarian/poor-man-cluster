@@ -15,7 +15,7 @@ The daemon listens on `127.0.0.1:9090` (host-only). Public access goes through
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | bash
 ```
 
 Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.71`.
@@ -171,4 +171,4 @@ stack (Traefik labels, networks, secrets, restart/update policies included).
 - [Storage & database architecture guide](../docs/storage-and-databases.md)
 - [REST API spec](docs/openapi.yaml)
 - [Restore design](docs/restore-design.md)
-- [RFC v2 (issue #1)](https://github.com/hazemarian/poor-man-stack/issues/1)
+- [RFC v2 (issue #1)](https://github.com/hazemarian/poor-man-cluster/issues/1)

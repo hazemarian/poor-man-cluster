@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Secrets is the HTTP adapter for secrets.Service. The payload (AES-GCM

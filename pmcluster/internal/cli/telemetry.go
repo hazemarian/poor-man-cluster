@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/buildinfo"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/telemetry"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 )
 
 // initCLITelemetry wires OTel for one-shot CLI commands so the internal spans

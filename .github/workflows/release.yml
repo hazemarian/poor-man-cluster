@@ -35,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          PKG=github.com/hazemarian/poor-man-stack/pmcluster
+          PKG=github.com/hazemarian/poor-man-cluster/pmcluster
           DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           COMMIT=$(git rev-parse --short HEAD)
           LDFLAGS="-s -w \
@@ -67,42 +67,29 @@ jobs:
   edge-image:
     name: build and push pmcluster-edge image
     runs-on: ubuntu-latest
-    # Requires a GHCR PAT with `packages:write` (e.g. GH_Token) — skip with a
-    # clear status when it's not configured rather than failing the release.
+    # Pushes to ghcr.io/<this repo owner>/pmcluster-edge using the built-in
+    # GITHUB_TOKEN (permissions: packages: write) — no PAT required for
+    # packages owned by the same account/repo.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    env:
-      # `secrets` can't be referenced in `if:` expressions, so expose the token's
-      # presence via a job env and gate steps on env.GH_PUSH instead.
-      GH_PUSH: ${{ secrets.GH_Token != '' }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v6
 
-      # The pmcluster-edge image pushes to ghcr.io/nextrum-sy (not this repo's
-      # namespace), so it needs a PAT (GH_Token) scoped to that org with
-      # `packages:write`. Until it's configured these steps are skipped — the
-      # release workflow continues to publish the cross-compiled binaries.
       - name: Log in to GHCR
-        if: env.GH_PUSH == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
-          username: ${{ secrets.GH_USER }}
-          password: ${{ secrets.GH_Token }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
-        if: env.GH_PUSH == 'true'
         uses: docker/build-push-action@v7
         with:
           context: pmcluster
           file: pmcluster/Dockerfile.edge
           push: true
           tags: |
-            ghcr.io/nextrum-sy/pmcluster-edge:${{ github.ref_name }}
-            ghcr.io/nextrum-sy/pmcluster-edge:latest
-
-      - name: Warn about missing GHCR token
-        if: env.GH_PUSH == 'false'
-        run: echo "::warning::GH_Token not configured — skipping pmcluster-edge image push"
+            ghcr.io/hazemarian/pmcluster-edge:${{ github.ref_name }}
+            ghcr.io/hazemarian/pmcluster-edge:latest

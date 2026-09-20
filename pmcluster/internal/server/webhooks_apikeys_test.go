@@ -11,13 +11,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/apikeys"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/webhooks"
 )
 
 // newKeysServer wires a full store + cipher so the webhook/api-key services

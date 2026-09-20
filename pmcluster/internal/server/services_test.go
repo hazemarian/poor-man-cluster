@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/services"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 )
 
 // fakeServices is a deterministic in-memory services.Service.

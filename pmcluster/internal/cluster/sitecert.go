@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster/tlscerts"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster/tlscerts"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // siteCertDir is the subdirectory of the config dir where the cluster's own

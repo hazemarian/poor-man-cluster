@@ -3,8 +3,8 @@
 # /usr/local/bin (override with PREFIX=/path/to/dir).
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | VERSION=v0.2.0 bash
+#   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | VERSION=v0.2.0 bash
 #
 # Optional env vars:
 #   VERSION=v0.2.0          pin a specific release (default: latest)
@@ -27,7 +27,7 @@
 
 set -euo pipefail
 
-REPO="hazemarian/poor-man-stack"
+REPO="hazemarian/poor-man-cluster"
 PREFIX="${PREFIX:-/usr/local/bin}"
 VERSION="${VERSION:-latest}"
 

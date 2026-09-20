@@ -3,7 +3,7 @@ package configs
 import (
 	"context"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Local implements Service and Renderer against the local store.

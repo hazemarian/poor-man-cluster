@@ -3,7 +3,7 @@ package stacks
 import (
 	"context"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Local is the read-side adapter: it maps store rows into the stacks domain

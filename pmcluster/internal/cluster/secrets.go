@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"golang.org/x/crypto/bcrypt"
 )
 

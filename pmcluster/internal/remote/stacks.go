@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 )
 
 // Stacks is the HTTP adapter for stacks.Reader.

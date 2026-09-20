@@ -8,10 +8,10 @@ package controllers
 import (
 	"context"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/middleware"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/pmapi"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/store"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/views"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views"
 )
 
 // Setting keys persisted in the local store. Defined in the store package so

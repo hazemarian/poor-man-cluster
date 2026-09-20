@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // genCert mints a self-signed ECDSA P-256 cert whose SANs cover host.

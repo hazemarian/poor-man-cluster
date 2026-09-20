@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/certs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/certs"
 )
 
 // TLS is the HTTP adapter for certs.Service.

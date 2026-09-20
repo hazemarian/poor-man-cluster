@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 )
 
 // Me returns the authenticated user's basic profile. Always behind the

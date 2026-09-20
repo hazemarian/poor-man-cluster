@@ -13,11 +13,11 @@ description: >
 
 # Poor Man's Stack — Deploy Skill
 
-Deploy applications to a Docker Swarm cluster managed by `pmcluster`, the control plane from [poor-man-stack](https://github.com/hazemarian/poor-man-stack).
+Deploy applications to a Docker Swarm cluster managed by `pmcluster`, the control plane from [poor-man-stack](https://github.com/hazemarian/poor-man-cluster).
 
 **Public origin:** everything (console + REST API + webhooks) is served at `https://pmcluster.<your-domain>` by the `pmcluster-edge` service. The daemon itself listens only on `http://127.0.0.1:9090` (host-local).
 
-Full references in the repo: [`docs/dsl.md`](https://github.com/hazemarian/poor-man-stack/blob/main/docs/dsl.md), [`docs/webhook.md`](https://github.com/hazemarian/poor-man-stack/blob/main/docs/webhook.md), [`pmcluster/docs/openapi.yaml`](https://github.com/hazemarian/poor-man-stack/blob/main/pmcluster/docs/openapi.yaml).
+Full references in the repo: [`docs/dsl.md`](https://github.com/hazemarian/poor-man-cluster/blob/main/docs/dsl.md), [`docs/webhook.md`](https://github.com/hazemarian/poor-man-cluster/blob/main/docs/webhook.md), [`pmcluster/docs/openapi.yaml`](https://github.com/hazemarian/poor-man-cluster/blob/main/pmcluster/docs/openapi.yaml).
 
 ## Prerequisites
 
@@ -36,11 +36,11 @@ If pmcluster is not installed:
 
 ```bash
 # Basic install:
-curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | bash
 pmcluster init
 
 # With private registry credentials (e.g. GHCR):
-curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | \
+curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | \
   PMCLUSTER_REGISTRY="ghcr.io=my-username=ghp_abc123" bash
 pmcluster init
 ```
@@ -200,7 +200,7 @@ pmcluster usage
 
 ## Manifest DSL Format
 
-Create a `.yaml` manifest for each service. The schema (see [`docs/dsl.md`](https://github.com/hazemarian/poor-man-stack/blob/main/docs/dsl.md) for the full reference):
+Create a `.yaml` manifest for each service. The schema (see [`docs/dsl.md`](https://github.com/hazemarian/poor-man-cluster/blob/main/docs/dsl.md) for the full reference):
 
 ```yaml
 app: my-app                    # required — application/stack name
@@ -455,7 +455,7 @@ All 401s are identical by design — no information leak. Use `pmcluster webhook
 
 List webhooks: `pmcluster webhook list` · Remove: `pmcluster webhook remove github-prod`
 
-Full guide: [`docs/webhook.md`](https://github.com/hazemarian/poor-man-stack/blob/main/docs/webhook.md).
+Full guide: [`docs/webhook.md`](https://github.com/hazemarian/poor-man-cluster/blob/main/docs/webhook.md).
 
 ## TLS Certificates
 
@@ -555,7 +555,7 @@ pmcluster node join-token worker           # get join token for new workers
 
 ### Upgrading pmcluster / the edge service
 
-The edge image is pinned to `ghcr.io/nextrum-sy/pmcluster-edge:latest` by default (override with `PMCLUSTER_EDGE_IMAGE=<tag>`). The stack template lives **inside the pmcluster binary** (embedded `edge-stack.yml`). So the correct upgrade path is:
+The edge image is pinned to `ghcr.io/hazemarian/pmcluster-edge:latest` by default (override with `PMCLUSTER_EDGE_IMAGE=<tag>`). The stack template lives **inside the pmcluster binary** (embedded `edge-stack.yml`). So the correct upgrade path is:
 
 1. **Build + publish the release first** — push a `v*` tag; the release workflow cross-compiles the binaries and pushes the new edge image to GHCR:
    ```bash
@@ -563,7 +563,7 @@ The edge image is pinned to `ghcr.io/nextrum-sy/pmcluster-edge:latest` by defaul
    ```
 2. **Update the binary with install.sh** — it installs the new binary and, because `~/.pmcluster/config.yaml` exists, automatically runs `pmcluster cluster update`:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-stack/main/install.sh | VERSION=v0.2.71 bash
+   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | VERSION=v0.2.71 bash
    # or simply: | bash   (resolves latest release)
    ```
 3. `cluster update` **refreshes the on-disk templates** in `~/.pmcluster/config/` from the new binary's embedded copies (stale configs — older version header — are overwritten; operator edits with a newer header are preserved), then re-renders. Because the edge-stack.yml content changed, the **edge stack is re-deployed** automatically and pulls the new `:latest` image. OTel/Traefik/cert are re-applied content-aware as usual. A second `cluster update` with no changes reports `No rendered content changed — nothing to redeploy.`
@@ -639,4 +639,4 @@ After enabling or updating SSO, Traefik label convergence takes ~45–60 seconds
 Ensure `OAUTH2_PROXY_COOKIE_DOMAINS` and `OAUTH2_PROXY_WHITELIST_DOMAINS` are **plural** (the singular forms are silently ignored in oauth2-proxy v7). Also verify `OAUTH2_PROXY_REVERSE_PROXY: "true"` is set and the edge container has `trusted-proxy-ip` / `TRUSTED_PROXY_CIDRS` configured for hardening.
 
 ### Edge image not updating after upgrade
-The edge image tag is pinned to the release version (`ghcr.io/nextrum-sy/pmcluster-edge:latest` by default). If the tag doesn't match, override with `PMCLUSTER_EDGE_IMAGE=<tag>`. Always use the `install.sh` → `cluster update` flow rather than `docker service update --image` directly.
+The edge image tag is pinned to the release version (`ghcr.io/hazemarian/pmcluster-edge:latest` by default). If the tag doesn't match, override with `PMCLUSTER_EDGE_IMAGE=<tag>`. Always use the `install.sh` → `cluster update` flow rather than `docker service update --image` directly.

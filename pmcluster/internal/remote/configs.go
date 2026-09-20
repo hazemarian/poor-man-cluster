@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
 )
 
 // Configs is the HTTP adapter for configs.Service.

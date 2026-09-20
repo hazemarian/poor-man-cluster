@@ -13,7 +13,7 @@ package webhooks
 import (
 	"context"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 )
 
 // Source is one configured webhook source. Description is empty when unset;

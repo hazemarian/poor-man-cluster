@@ -24,9 +24,6 @@ jobs:
     name: cluster up + deploy + webhook e2e (real swarm)
     runs-on: ubuntu-latest
     env:
-      # `secrets` can't be referenced in `if:` expressions, so expose the
-      # token's presence via a job env and gate the login step on it.
-      GH_PUSH: ${{ secrets.GH_Token != '' }}
       # Pin where docker stores registry credentials so the e2e harness
       # (which runs pmcluster with HOME=<temp>) can find them via
       # DOCKER_CONFIG passthrough.  Must match the login step below.
@@ -47,17 +44,16 @@ jobs:
       # ubuntu-latest already has Docker + the docker CLI installed; no
       # privileged container needed since we run dockerd on the host.
       #
-      # The edge stack references ghcr.io/nextrum-sy/pmcluster-edge:latest
+      # The edge stack references ghcr.io/hazemarian/pmcluster-edge:latest
       # (published by the release workflow), so log in to GHCR so the swarm
       # can pull it during `cluster up`.  logout: false keeps the
       # credentials around for the swarm e2e step that follows.
       - name: Log in to GHCR
-        if: env.GH_PUSH == 'true'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
-          username: ${{ secrets.GH_USER }}
-          password: ${{ secrets.GH_Token }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
           logout: false
 
       # The cluster up OpenObserve provisioner reaches OO over the public edge

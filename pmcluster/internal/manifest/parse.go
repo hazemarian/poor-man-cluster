@@ -11,7 +11,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
 
 // Parse is strict — unknown keys are errors so typos like `repalicas: 2`

@@ -16,13 +16,13 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/manifest"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/workflow"
-	"github.com/hazemarian/poor-man-stack/pmcluster/pkg/dsl"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/workflow"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
 
 // Instruments are lazily-initialised so importing this package never
@@ -37,7 +37,7 @@ var (
 
 func instruments() (metric.Int64Counter, metric.Float64Histogram, trace.Tracer) {
 	instrOnce.Do(func() {
-		meter := otel.Meter("github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks")
+		meter := otel.Meter("github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks")
 		var err error
 		deploysTotal, err = meter.Int64Counter(
 			"pmcluster.deploys.total",
@@ -54,7 +54,7 @@ func instruments() (metric.Int64Counter, metric.Float64Histogram, trace.Tracer) 
 		if err != nil {
 			deployDurationMs, _ = otel.Meter("noop").Float64Histogram("noop")
 		}
-		deployTracer = otel.Tracer("github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks")
+		deployTracer = otel.Tracer("github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks")
 	})
 	return deploysTotal, deployDurationMs, deployTracer
 }

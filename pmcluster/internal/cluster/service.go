@@ -3,7 +3,7 @@ package cluster
 import (
 	"context"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 // Service is the platform-lifecycle port: bringing the Swarm up, applying

@@ -8,8 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/middleware"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 )
 
 // Users lists and manages console accounts and their RBAC roles. Admin-only

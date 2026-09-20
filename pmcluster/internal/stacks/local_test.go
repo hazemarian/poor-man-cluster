@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 func seedDeploy(t *testing.T, st *store.Store, name string, revision int64, source, rendered string) {

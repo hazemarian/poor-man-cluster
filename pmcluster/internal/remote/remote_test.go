@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/apikeys"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // fakeDaemon is a minimal httptest server emulating the pmcluster daemon

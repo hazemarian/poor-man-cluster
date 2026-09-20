@@ -24,7 +24,7 @@ type otelWriter struct {
 func newOTelWriter() *otelWriter {
 	return &otelWriter{
 		logger: global.GetLoggerProvider().Logger(
-			"github.com/hazemarian/poor-man-stack/pmcluster/internal/logger",
+			"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger",
 		),
 	}
 }

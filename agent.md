@@ -23,9 +23,9 @@ origin for the whole platform: it is both an **operator console** (gin + HTMX)
 and a **smart reverse proxy** (rate limits, in-flight shield, auto-ban) that
  forwards the daemon's API and webhooks.
 
-Production reference: manager node `root@82.165.128.237` (Docker Swarm, 2
-nodes), domain `nextrum-sy.com`, console at `https://pmcluster.nextrum-sy.com/web/`.
-SSO live via GitHub (org `nextrum-sy`), oauth2-proxy on `https://sso.nextrum-sy.com`.
+Production reference: a manager node running Docker Swarm (N nodes), a
+public domain with wildcard TLS, console at `https://pmcluster.<domain>/web/`,
+and optionally SSO via GitHub (oauth2-proxy on `https://sso.<domain>`).
 
 ---
 
@@ -33,7 +33,7 @@ SSO live via GitHub (org `nextrum-sy`), oauth2-proxy on `https://sso.nextrum-sy.
 
 | Area | Choice | Notes |
 |---|---|---|
-| Language | Go 1.25 | module `github.com/hazemarian/poor-man-stack/pmcluster` (root: `pmcluster/` dir) |
+| Language | Go 1.25 | module `github.com/hazemarian/poor-man-cluster/pmcluster` (root: `pmcluster/` dir) |
 | CLI | `spf13/cobra` | all `pmcluster` subcommands; `cobra.Command` tree built in `init()` funcs |
 | Config | `spf13/viper` | global `--config` flag → `config.Config` |
 | Daemon HTTP API | `go-chi/chi/v5` | REST router in `internal/server`; JSON via `writeJSON`/`writeErr` |
@@ -501,7 +501,7 @@ domain/TLS state is already persisted — ongoing reconcile is `cluster update`.
 
 ### Upgrading the platform
 Push a `v*` tag → `release.yml` cross-compiles 4 tarballs + SHA256SUMS +
-builds/pushes `ghcr.io/nextrum-sy/pmcluster-edge:<v>` + `:latest`. On the node:
+builds/pushes `ghcr.io/hazemarian/pmcluster-edge:<v>` + `:latest`. On the node:
 `curl -fsSL .../install.sh | VERSION=vX bash` → installs the new binary,
 restarts the daemon, and auto-runs `pmcluster cluster update` (because a
 config exists). `cluster update` re-renders the embedded edge-stack (image
@@ -635,15 +635,20 @@ daemon `/health`, edge image pin, console 302 → `/web/`, `pmcluster tls site s
 
 ---
 
-## 10. Production facts (as of v0.2.71)
+## 10. Production facts (reference deployment)
 
-- Node `root@82.165.128.237`, SSH key `~/.ssh/pmcluster_ed25519`, `rg` NOT
+These mirror a typical live installation — operators should substitute their
+own values (manager node, domain, GitHub org, root admin email).
+
+- Manager node `root@<manager-ip>` (SSH key `~/.ssh/pmcluster_ed25519`), `rg` NOT
   installed (use `grep`), `sqlite3` available.
-- Daemon `v0.2.71`, edge pinned to matching release tag, domain `nextrum-sy.com`.
-- Console at `https://pmcluster.nextrum-sy.com/web/`.
-- SSO live: GitHub OAuth (org `nextrum-sy`), oauth2-proxy on
-  `https://sso.nextrum-sy.com`, `EDGE_LOGIN_DISABLED=true`.
-- OpenObserve root admin email: `admin@nextrum-sy.com` (derived from domain).
+- Daemon pinned to the release tag, edge pinned to matching release tag,
+  domain `<domain>`.
+- Console at `https://pmcluster.<domain>/web/`.
+- SSO live: GitHub OAuth (org `<github-org>`), oauth2-proxy on
+  `https://sso.<domain>`, `EDGE_LOGIN_DISABLED=true`.
+- OpenObserve root admin email: `admin@<domain>` (derived from domain).
   Auth = root admin email:password (NOT provisioning API / ingestion token).
-- `site_certs` rows: `nextrum-sy.com` + `idlebbookfair.com` (per-host cert).
-- Traefik admin-auth gates `/web/*` + `observ.<domain>` + traefik dashboard.
+- `site_certs` rows: `<domain>` + per-host certs for extra subdomains.
+- Traefik auth gates `/web/*` + `observ.<domain>` + traefik dashboard
+  (basicAuth when SSO disabled, forwardAuth via oauth2-proxy when enabled).

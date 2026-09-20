@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 // pmclusterLabel is set on every Docker resource pmcluster creates so we

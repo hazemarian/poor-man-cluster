@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 // bundledServices is the canonical list of services deployed by the four

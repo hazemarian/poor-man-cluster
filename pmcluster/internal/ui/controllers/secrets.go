@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/pmapi"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 )
 
 // secretRow is a stored secret as shown in the UI — payload never leaves the

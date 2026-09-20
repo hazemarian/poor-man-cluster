@@ -6,16 +6,16 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/apikeys"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/backups"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/certs"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/config"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/credentials"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/secrets"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/stacks"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/webhooks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/apikeys"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/certs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/remote"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/webhooks"
 )
 
 // remoteClient returns an HTTP client for the daemon API when remote mode is

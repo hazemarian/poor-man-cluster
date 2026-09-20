@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/services"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 )
 
 // Services is the HTTP adapter for the whitelisted service ops.

@@ -7,9 +7,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/docker"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/remote"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/services"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/remote"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 )
 
 var serviceCmd = &cobra.Command{

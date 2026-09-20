@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 func TestWaitHealthyStacks_AllHealthy(t *testing.T) {

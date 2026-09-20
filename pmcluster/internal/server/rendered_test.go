@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/auth"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/configs"
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // openServerStore opens a fresh store in a temp dir for one test.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/settings"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/settings"
 )
 
 // ClusterSettings is the HTTP adapter for the editable cluster settings

@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/pmapi"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 )
 
 // configRow is a stored config as shown in the UI (content only when loaded

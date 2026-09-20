@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // cluster_settings keys persisted on a successful `up` and read back by both

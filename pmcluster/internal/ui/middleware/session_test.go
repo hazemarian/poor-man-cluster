@@ -8,7 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/hazemarian/poor-man-stack/pmcluster/internal/ui/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 )
 
 // newAuth builds an Auth over an in-memory store with no users (RequireRole is

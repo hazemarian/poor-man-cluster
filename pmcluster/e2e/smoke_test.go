@@ -96,7 +96,7 @@ func TestMain(m *testing.M) {
 
 	// The swarm-tier tests deploy the pmcluster-edge image through
 	// `docker stack deploy`, which resolves the image reference at the Docker
-	// registry. The published ghcr.io/nextrum-sy/pmcluster-edge:latest tag is
+	// registry. The published ghcr.io/hazemarian/pmcluster-edge:latest tag is
 	// only updated by CI and may be stale or private (403 on pull), so a swarm
 	// test could end up running an outdated edge binary — and worse, a locally
 	// cached copy of an old image whose healthcheck endpoint differs from the
