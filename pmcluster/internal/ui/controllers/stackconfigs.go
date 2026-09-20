@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strconv"
 
@@ -10,29 +9,35 @@ import (
 )
 
 // StackConfigs is the per-stack config + secrets page, reachable from the
-// stacks list and stack detail at /stacks/{name}/config. It manages only the
-// service-scope configs and secrets that belong to that stack — referenced
-// from the DSL via env: VAR: config(<name>) / secrets(<name>).
+// stacks list and the stack inspector at /stacks/{name}/config. It manages
+// only the service-scope configs and secrets that belong to that stack —
+// referenced from the DSL via env: VAR: config(<name>) / secrets(<name>).
+//
+// The page keeps three answers apart: values, "unknown" (the API did not
+// answer for that source) and "empty" (it answered with nothing). v1 printed
+// an empty table for all three.
 type StackConfigs struct{ *Controller }
 
 type stackConfigsData struct {
 	Stack   string
 	Configs []configRow
 	Secrets []secretRow
-	Msg     string
-	Error   string
+
+	ConfigsKnown bool
+	SecretsKnown bool
+
+	MsgKey  string
+	MsgArg0 string
+	MsgArg1 string
+
+	ErrKey string
+	ErrRaw string
 }
 
 // Page renders the config + secrets page for one stack.
 func (c StackConfigs) Page(g *gin.Context) {
-	ctx := g.Request.Context()
 	d := stackConfigsData{Stack: g.Param("name")}
-	if !c.requireAPI(g, &d.Error) {
-		c.Views.Fragment(g, "stackconfigs", d)
-		return
-	}
-	c.fetch(ctx, &d)
-	c.Views.Fragment(g, "stackconfigs", d)
+	c.renderPage(g, d)
 }
 
 // ConfigNew renders the create-config form in the modal (service scope).
@@ -101,8 +106,12 @@ func (c StackConfigs) AddConfig(g *gin.Context) {
 		if _, err := c.API.CreateConfig(ctx, "service", stack, name, kind, content); err != nil {
 			d.Error = err.Error()
 		} else {
-			c.fetch(g.Request.Context(), &stackConfigsData{})
-			c.Views.Fragment(g, "stackconfigs", stackConfigsData{Stack: stack, Msg: fmt.Sprintf("Config %s created for stack %s.", name, stack)})
+			// Re-read the page for this stack: v1 rendered a page that had
+			// never been loaded, so the config it had just created was missing
+			// from its own success screen.
+			c.renderPage(g, stackConfigsData{
+				Stack: stack, MsgKey: "stackconfigs.msg_config_added", MsgArg0: name, MsgArg1: stack,
+			})
 			return
 		}
 	}
@@ -124,7 +133,9 @@ func (c StackConfigs) EditConfig(g *gin.Context) {
 		if _, err := c.API.UpdateConfig(ctx, name, content); err != nil {
 			d.Error = err.Error()
 		} else {
-			c.Views.Fragment(g, "stackconfigs", stackConfigsData{Stack: stack, Msg: fmt.Sprintf("Config %s updated — a new version was recorded.", name)})
+			c.renderPage(g, stackConfigsData{
+				Stack: stack, MsgKey: "stackconfigs.msg_config_edited", MsgArg0: name,
+			})
 			return
 		}
 	}
@@ -134,42 +145,51 @@ func (c StackConfigs) EditConfig(g *gin.Context) {
 // RollbackConfig restores a config to a prior version.
 func (c StackConfigs) RollbackConfig(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := stackConfigsData{Stack: g.Param("name")}
+	stack := g.Param("name")
 	name := g.Param("config_name")
 	vid, err := strconv.ParseInt(g.Param("version_id"), 10, 64)
+	d := stackConfigsData{Stack: stack}
+	_, _, configured := c.loadParams(ctx)
+
 	switch {
-	case !c.requireAPI(g, &d.Error):
+	case !configured:
+		d.ErrKey = "err.api_not_configured"
+	case name == "":
+		d.ErrKey = "stackconfigs.err_bad_name"
 	case err != nil || vid <= 0:
-		d.Error = "Invalid version id."
+		d.ErrKey = "stackconfigs.err_bad_version"
 	default:
 		if _, err := c.API.RollbackConfig(ctx, name, vid); err != nil {
-			d.Error = err.Error()
+			d.ErrKey, d.ErrRaw = "err.config_rollback", err.Error()
 		} else {
-			d.Msg = fmt.Sprintf("Config %s rolled back to version %d.", name, vid)
+			d.MsgKey, d.MsgArg0 = "stackconfigs.msg_config_rolled", name
+			d.MsgArg1 = strconv.FormatInt(vid, 10)
 		}
 	}
-	c.fetch(ctx, &d)
-	c.Views.Fragment(g, "stackconfigs", d)
+	c.renderPage(g, d)
 }
 
 // RemoveConfig deletes a config and its version history.
 func (c StackConfigs) RemoveConfig(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := stackConfigsData{Stack: g.Param("name")}
+	stack := g.Param("name")
 	name := g.Param("config_name")
+	d := stackConfigsData{Stack: stack}
+	_, _, configured := c.loadParams(ctx)
+
 	switch {
-	case !c.requireAPI(g, &d.Error):
+	case !configured:
+		d.ErrKey = "err.api_not_configured"
 	case name == "":
-		d.Error = "Invalid config name."
+		d.ErrKey = "stackconfigs.err_bad_name"
 	default:
 		if err := c.API.DeleteConfig(ctx, name); err != nil {
-			d.Error = err.Error()
+			d.ErrKey, d.ErrRaw = "err.config_remove", err.Error()
 		} else {
-			d.Msg = fmt.Sprintf("Deleted config %s.", name)
+			d.MsgKey, d.MsgArg0 = "stackconfigs.msg_config_removed", name
 		}
 	}
-	c.fetch(ctx, &d)
-	c.Views.Fragment(g, "stackconfigs", d)
+	c.renderPage(g, d)
 }
 
 // AddSecret stores a new service-scope secret for this stack.
@@ -189,7 +209,9 @@ func (c StackConfigs) AddSecret(g *gin.Context) {
 		if _, err := c.API.CreateSecret(ctx, "service", stack, name, value); err != nil {
 			d.Error = err.Error()
 		} else {
-			c.Views.Fragment(g, "stackconfigs", stackConfigsData{Stack: stack, Msg: fmt.Sprintf("Secret %s created for stack %s.", name, stack)})
+			c.renderPage(g, stackConfigsData{
+				Stack: stack, MsgKey: "stackconfigs.msg_secret_added", MsgArg0: name, MsgArg1: stack,
+			})
 			return
 		}
 	}
@@ -213,7 +235,9 @@ func (c StackConfigs) EditSecret(g *gin.Context) {
 		if _, err := c.API.UpdateSecret(ctx, name, value); err != nil {
 			d.Error = err.Error()
 		} else {
-			c.Views.Fragment(g, "stackconfigs", stackConfigsData{Stack: stack, Msg: fmt.Sprintf("Secret %s updated.", name)})
+			c.renderPage(g, stackConfigsData{
+				Stack: stack, MsgKey: "stackconfigs.msg_secret_edited", MsgArg0: name,
+			})
 			return
 		}
 	}
@@ -223,21 +247,24 @@ func (c StackConfigs) EditSecret(g *gin.Context) {
 // RemoveSecret deletes a stored secret by name.
 func (c StackConfigs) RemoveSecret(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := stackConfigsData{Stack: g.Param("name")}
+	stack := g.Param("name")
 	name := g.Param("secret_name")
+	d := stackConfigsData{Stack: stack}
+	_, _, configured := c.loadParams(ctx)
+
 	switch {
-	case !c.requireAPI(g, &d.Error):
+	case !configured:
+		d.ErrKey = "err.api_not_configured"
 	case name == "":
-		d.Error = "Invalid secret name."
+		d.ErrKey = "stackconfigs.err_bad_name"
 	default:
 		if err := c.API.DeleteSecret(ctx, name); err != nil {
-			d.Error = err.Error()
+			d.ErrKey, d.ErrRaw = "err.secret_remove", err.Error()
 		} else {
-			d.Msg = fmt.Sprintf("Deleted secret %s.", name)
+			d.MsgKey, d.MsgArg0 = "stackconfigs.msg_secret_removed", name
 		}
 	}
-	c.fetch(ctx, &d)
-	c.Views.Fragment(g, "stackconfigs", d)
+	c.renderPage(g, d)
 }
 
 // RevealSecret decrypts and shows a stored secret's plaintext in the modal on
@@ -261,6 +288,20 @@ func (c StackConfigs) RevealSecret(g *gin.Context) {
 	c.Views.Fragment(g, "secretreveal", secretRevealData{Name: sv.Name, Value: sv.Value})
 }
 
+// renderPage loads a stack's configs + secrets and renders the page with the
+// message or error it was handed. An action error wins over a read error: the
+// action is what the operator just did.
+func (c StackConfigs) renderPage(g *gin.Context, d stackConfigsData) {
+	ctx := g.Request.Context()
+	if _, _, configured := c.loadParams(ctx); !configured {
+		d.ErrKey = "err.api_not_configured"
+		c.Views.Fragment(g, "stackconfigs", d)
+		return
+	}
+	c.fetch(ctx, &d)
+	c.Views.Fragment(g, "stackconfigs", d)
+}
+
 // configFormError renders the config form with the error, keeping the modal
 // open (HX-Retarget + 422 so hx-on::after-request does not close it).
 func (c StackConfigs) configFormError(g *gin.Context, d configFormData) {
@@ -277,18 +318,26 @@ func (c StackConfigs) secretFormError(g *gin.Context, d secretFormData) {
 	c.secretForm(g, d)
 }
 
-// fetch loads the stack's configs + secrets, recording the first error.
+// fetch loads the stack's configs + secrets. Each source records its own
+// unknown state, so a failed call empties neither table silently.
 func (c StackConfigs) fetch(ctx context.Context, d *stackConfigsData) {
 	cfgs, err := c.listConfigsFor(ctx, "service", d.Stack)
-	if err != nil && d.Error == "" {
-		d.Error = err.Error()
+	if err != nil {
+		if d.ErrKey == "" {
+			d.ErrKey, d.ErrRaw = "err.stackconfigs_configs", err.Error()
+		}
 	} else {
+		d.ConfigsKnown = true
 		d.Configs = cfgs
 	}
+
 	secs, err := c.listSecretsFor(ctx, "service", d.Stack)
-	if err != nil && d.Error == "" {
-		d.Error = err.Error()
+	if err != nil {
+		if d.ErrKey == "" {
+			d.ErrKey, d.ErrRaw = "err.stackconfigs_secrets", err.Error()
+		}
 	} else {
+		d.SecretsKnown = true
 		d.Secrets = secs
 	}
 }

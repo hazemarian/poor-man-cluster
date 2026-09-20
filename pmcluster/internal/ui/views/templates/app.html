@@ -1,225 +1,220 @@
 {{define "app"}}
 <!doctype html>
-<html lang="en">
+<html class="console" lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>pmcluster · console</title>
-  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="/web/static/favicon.svg" type="image/svg+xml">
+  <title>{{T .Crumb}} · {{T "app.title"}}</title>
   <script>
-    function copyVal(btn) {
-      var v = btn.getAttribute('data-copy');
-      if (!v) return;
-      (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject())
-        .then(function(){ flash('Copied to clipboard'); })
-        .catch(function(){ selectAndCopy(btn, v); });
-    }
-    function selectAndCopy(btn, v) {
-      var ta = document.createElement('textarea');
-      ta.value = v; document.body.appendChild(ta); ta.select();
-      try { document.execCommand('copy'); flash('Copied to clipboard'); } catch(e) {}
-      document.body.removeChild(ta);
-    }
-    function toast(msg, kind) {
-      kind = kind || 'ok';
-      var el = document.createElement('div');
-      el.className = 'toast show ' + kind;
-      el.textContent = msg;
-      document.getElementById('toasts').appendChild(el);
-      setTimeout(function(){ el.classList.remove('show'); el.classList.add('hide'); }, 3200);
-      setTimeout(function(){ el.remove(); }, 3600);
-    }
-    function flash(msg) { toast(msg, 'ok'); }
-
-    // Active nav highlighting: compare the browser path against each nav href.
-    function updateActiveNav() {
-      var path = location.pathname;
-      document.querySelectorAll('nav a[href]').forEach(function(a) {
-        var href = a.getAttribute('href');
-        if (!href || href.indexOf('http') === 0) return;
-        var active = path === href ||
-          (href !== '/web/overview' && path.indexOf(href) === 0);
-        a.classList.toggle('active', active);
-      });
-    }
-    document.addEventListener('htmx:afterSwap', updateActiveNav);
-    document.addEventListener('htmx:pushUrl', function(){ setTimeout(updateActiveNav, 0); });
-    window.addEventListener('load', updateActiveNav);
-
-    // Global loading indicator while any HTMX request is in flight.
-    document.addEventListener('htmx:beforeRequest', function(){ document.body.classList.add('loading'); });
-    document.addEventListener('htmx:afterRequest',  function(){ document.body.classList.remove('loading'); });
-    // Surface failed requests as error toasts.
-    document.addEventListener('htmx:responseError', function(evt){
-      var d = evt.detail;
-      toast('Request failed: ' + d.xhr.status + (d.xhr.responseText ? ' — ' + d.xhr.responseText.slice(0, 160) : ''), 'err');
-    });
-
-    // Generic table filter: <input data-filter="list-id"> filters the first
-    // <table data-filter-table="list-id"> below it.
-    function filterTable(id) {
-      var q = (document.getElementById(id).value || '').toLowerCase();
-      var table = document.querySelector('[data-filter-table="' + id + '"]');
-      if (!table) return;
-      table.querySelectorAll('tbody tr').forEach(function(tr){
-        tr.style.display = tr.textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
-      });
-    }
-
-    function openModal() {
-      var m = document.getElementById('modal');
-      if (m) m.hidden = false;
-    }
-    function closeModal() {
-      var m = document.getElementById('modal');
-      if (m) m.hidden = true;
-      document.getElementById('modal-body').innerHTML = '';
-    }
-    document.addEventListener('keydown', function(e){
-      if (e.key === 'Escape') closeModal();
-    });
+    // Theme is applied before first paint so a light-theme operator never sees
+    // a dark flash. The server already set data-theme from the cookie; this
+    // covers the case where localStorage is newer than the cookie.
+    (function () {
+      try {
+        var t = localStorage.getItem('pmc_theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    })();
   </script>
-  <style>
-    :root{color-scheme:dark;--bg:#0b0f14;--panel:#111722;--panel2:#0f1520;--line:#1e2733;--text:#dbe2ea;--muted:#7d899a;--accent:#4f9dff;--good:#44d47b;--warn:#ffb454;--bad:#ff5c5c;--radius:12px}
-    *{box-sizing:border-box}
-    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
-    .app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
-    .sidebar{background:var(--panel);border-right:1px solid var(--line);padding:18px 14px;display:flex;flex-direction:column;gap:18px;position:sticky;top:0;height:100vh}
-    .brand{font-size:17px;font-weight:700;letter-spacing:.2px;padding:4px 8px}
-    .brand .sub{font-size:12px;font-weight:500;color:var(--muted);display:block;margin-top:2px}
-    nav{display:flex;flex-direction:column;gap:3px}
-    nav a{border-radius:8px;padding:9px 11px;color:var(--muted);text-decoration:none;transition:.12s}
-    nav a:hover{background:var(--panel2);color:var(--text)}
-    nav a.active{background:rgba(79,157,255,.12);color:var(--accent);font-weight:600}
-    .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:8px;padding:9px;border-top:1px solid var(--line)}
-    .user{color:var(--muted);font-size:12px;word-break:break-all}
-    .content{padding:22px 26px;max-width:1080px;min-width:0}
-    h1{font-size:20px;margin:0 0 4px;font-weight:650}
-    h2{font-size:15px;margin:22px 0 10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px}
-    .sub{color:var(--muted);margin:0 0 20px}
-    .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
-    .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
-    .stat .label{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
-    .stat .value{font-size:22px;font-weight:700;margin-top:4px}
-    .stat .value small{font-size:12px;font-weight:500;color:var(--muted)}
-    table{width:100%;border-collapse:collapse}
-    th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
-    th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
-    tr:hover td{background:var(--panel2)}
-    .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600;text-transform:capitalize}
-    .pill.good{background:rgba(68,212,123,.14);color:var(--good)}
-    .pill.warn{background:rgba(255,180,84,.14);color:var(--warn)}
-    .pill.bad{background:rgba(255,92,92,.14);color:var(--bad)}
-    .muted{color:var(--muted)}
-    .btn{background:var(--accent);color:#04121f;font-weight:650;border:none;border-radius:8px;padding:9px 15px;cursor:pointer;font-size:13px}
-    .btn:hover{filter:brightness(1.08)}
-    .btn.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
-    .btn.danger{background:rgba(255,92,92,.14);color:var(--bad);border:1px solid rgba(255,92,92,.3)}
-    .btn.sm{padding:5px 10px;font-size:12px;border-radius:7px}
-    .btn.active{background:rgba(79,157,255,.15);color:var(--accent);border-color:var(--accent)}
-    input,textarea,select{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:10px 12px;font:inherit;margin-top:6px}
-    input:focus,textarea:focus{border-color:var(--accent);outline:none}
-    textarea{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5}
-    label{font-size:12px;color:var(--muted);display:block;margin-top:12px}
-    .row{display:flex;gap:10px;align-items:center;margin-top:14px}
-    .msg{display:block;margin-top:12px;padding:10px 12px;border-radius:8px;font-size:13px}
-    .msg.ok{background:rgba(68,212,123,.12);color:var(--good)}
-    .msg.err{background:rgba(255,92,92,.12);color:var(--bad)}
-    code,pre{background:#0c1220;border:1px solid var(--line);border-radius:8px;padding:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:520px}
-    code{padding:2px 6px;border:none;background:var(--panel2)}
-    .flash{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:50;padding:11px 20px;border-radius:10px;font-weight:600;box-shadow:0 8px 30px rgba(0,0,0,.4)}
-    .flash.ok{background:#0d2b1a;color:var(--good);border:1px solid rgba(68,212,123,.4)}
-    .flash.err{background:#2b0d0d;color:var(--bad);border:1px solid rgba(255,92,92,.4)}
-    .empty{color:var(--muted);text-align:center;padding:26px}
-    a.link{color:var(--accent);text-decoration:none}
-    htmx .htmx-indicator{display:inline}
-    .htmx-indicator{display:none}
-    .spinner{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;display:inline-block;vertical-align:-3px}
-    @keyframes spin{to{transform:rotate(360deg)}}
-    /* Global top progress bar while a request is in flight. */
-    body.loading::before{content:'';position:fixed;top:0;left:0;height:2px;width:100%;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:progress 1.2s ease-in-out infinite;z-index:60}
-    @keyframes progress{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
-    .toast{display:none}
-    #toasts{position:fixed;bottom:18px;right:18px;z-index:70;display:flex;flex-direction:column;gap:8px}
-    #toasts .toast{display:block;padding:11px 16px;border-radius:10px;font-weight:600;font-size:13px;box-shadow:0 8px 30px rgba(0,0,0,.45);max-width:380px;word-break:break-word;animation:toastIn .18s ease-out}
-    #toasts .toast.ok{background:#0d2b1a;color:var(--good);border:1px solid rgba(68,212,123,.4)}
-    #toasts .toast.err{background:#2b0d0d;color:var(--bad);border:1px solid rgba(255,92,92,.4)}
-    #toasts .toast.hide{opacity:0;transition:opacity .3s}
-    @keyframes toastIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-    /* Revision timeline. */
-    .timeline{list-style:none;margin:0;padding:0;position:relative}
-    .timeline::before{content:'';position:absolute;left:9px;top:6px;bottom:6px;width:2px;background:var(--line)}
-    .timeline li{position:relative;padding:0 0 14px 32px}
-    .timeline li::before{content:'';position:absolute;left:4px;top:5px;width:12px;height:12px;border-radius:50%;background:var(--panel2);border:2px solid var(--accent)}
-    .timeline li.current::before{background:var(--good);border-color:var(--good)}
-    .timeline li .t-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-    .timeline li .t-meta{color:var(--muted);font-size:12px}
-    /* Deploy pipeline step list (revision view). */
-    .pipeline{list-style:none;margin:0 0 20px;padding:0;display:flex;flex-direction:column;gap:6px}
-    .pipeline li{color:var(--muted);font-size:13px}
-    /* Search filter boxes. */
-    .filter-box{max-width:340px;margin-bottom:12px}
-    .filter-box input{margin-top:0}
-    /* Live dot for polled surfaces. */
-    .live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--good);margin-right:6px;animation:pulse 2s infinite}
-    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-    .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:40;display:flex;align-items:center;justify-content:center;padding:20px}
-    .modal-backdrop[hidden]{display:none}
-    .modal{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);max-width:560px;width:100%;max-height:80vh;overflow:auto;padding:20px;position:relative;box-shadow:0 20px 60px rgba(0,0,0,.5)}
-    .modal h2{margin-top:0}
-    .modal-close{position:absolute;top:10px;right:10px;background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;width:30px;height:30px;cursor:pointer;font-size:15px}
-    .modal-close:hover{color:var(--text)}
-    .modal .row{margin-top:18px}
-    .secret-mask{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:2px;color:var(--muted)}
-    .section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 10px}
-    .section-head h2{margin:0}
-  </style>
+  <link rel="stylesheet" href="/web/static/fonts.css">
+  <link rel="stylesheet" href="/web/static/base.css">
+  <link rel="stylesheet" href="/web/static/components.css">
+  <link rel="stylesheet" href="/web/static/patterns.css">
+  <script src="/web/static/vendor/htmx.min.js"></script>
+  <script src="/web/static/preferences.js" defer></script>
 </head>
-<body>
+<body
+  data-t-copied="{{T "common.copied"}}"
+  data-t-copyfail="{{T "err.copy_failed"}}"
+  data-t-loading="{{T "common.loading"}}">
+{{template "icons" .}}
+<a class="skip-link" href="#main-content">{{T "nav.skip_content"}}</a>
+
 <div class="app">
-  <aside class="sidebar">
-    <div class="brand">pmcluster<span class="sub">operator console</span></div>
-    <nav>
-      <a href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true">Overview</a>
-      <a href="/web/stacks"   hx-get="/web/stacks"    hx-target="#view" hx-push-url="true">Stacks</a>
-      <a href="/web/services" hx-get="/web/services"  hx-target="#view" hx-push-url="true">Services</a>
-      <a href="/web/usage"    hx-get="/web/usage"     hx-target="#view" hx-push-url="true">Usage</a>
-      <a href="/web/backups"  hx-get="/web/backups"   hx-target="#view" hx-push-url="true">Backups</a>
-      <a href="/web/tls"      hx-get="/web/tls"       hx-target="#view" hx-push-url="true">TLS</a>
-      <a href="/web/webhooks" hx-get="/web/webhooks"  hx-target="#view" hx-push-url="true">Webhooks</a>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+      <span class="mark" aria-hidden="true">{{icon "stacks"}}</span>
+      <span class="brand">{{T "app.title"}}<small>{{T "brand.sub"}}</small></span>
+      <button class="icon-btn sidebar-close" type="button" data-drawer-close aria-label="{{T "nav.close"}}" title="{{T "nav.close"}}">{{icon "close"}}</button>
+    </div>
+
+    <nav class="nav" aria-label="{{T "nav.menu"}}">
+      <p class="nav-label" id="nav-cluster">{{T "nav.group.cluster"}}</p>
+      <a class="nav-item" href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
+      <a class="nav-item" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
+      <a class="nav-item" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
+
+      <p class="nav-label" id="nav-delivery">{{T "nav.group.delivery"}}</p>
+      <a class="nav-item" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
+      <a class="nav-item" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-nav="webhooks">{{icon "webhooks"}}<span>{{T "nav.webhooks"}}</span></a>
+
+      <p class="nav-label" id="nav-trust">{{T "nav.group.trust"}}</p>
+      <a class="nav-item" href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
+      <a class="nav-item" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-nav="backups">{{icon "backups"}}<span>{{T "nav.backups"}}</span></a>
+
       {{if and (not .LoginDisabled) (eq .User.Role "admin")}}
-      <a href="/web/users"    hx-get="/web/users"     hx-target="#view" hx-push-url="true">Users</a>
-      <a href="/web/apikeys"  hx-get="/web/apikeys"   hx-target="#view" hx-push-url="true">API Keys</a>
+      <p class="nav-label" id="nav-access">{{T "nav.group.access"}}</p>
+      <a class="nav-item" href="/web/users" hx-get="/web/users" hx-target="#view" hx-push-url="true" data-nav="users">{{icon "users"}}<span>{{T "nav.users"}}</span></a>
+      <a class="nav-item" href="/web/apikeys" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-nav="apikeys">{{icon "keys"}}<span>{{T "nav.apikeys"}}</span></a>
       {{end}}
-      <a href="/web/deploy"   hx-get="/web/deploy"    hx-target="#view" hx-push-url="true">Deploy</a>
-      <a href="/web/settings" hx-get="/web/settings"  hx-target="#view" hx-push-url="true">Settings</a>
+
+      <p class="nav-label" id="nav-system">{{T "nav.group.system"}}</p>
+      <a class="nav-item" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-nav="settings">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+
       {{if .Domain}}
-      <div style="margin:6px 11px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">External</div>
-      <a href="https://observ.{{.Domain}}" target="_blank" rel="noopener">OpenObserve ↗</a>
-      <a href="https://traefik.{{.Domain}}/dashboard/" target="_blank" rel="noopener">Traefik ↗</a>
+      <p class="nav-label">{{T "nav.group.external"}}</p>
+      <a class="nav-item" href="https://observ.{{.Domain}}" target="_blank" rel="noopener">{{icon "external"}}<span>{{T "nav.observ"}}</span></a>
+      <a class="nav-item" href="https://traefik.{{.Domain}}/dashboard/" target="_blank" rel="noopener">{{icon "external"}}<span>{{T "nav.traefik"}}</span></a>
       {{end}}
     </nav>
-    <div class="side-foot">
-      <span class="user">@{{.User.Username}}</span>
+
+    <div class="sidebar-foot">
       {{if not .LoginDisabled}}
-      <form method="post" action="/web/logout">
-        <button class="btn ghost" style="width:100%">Log out</button>
-      </form>
+      <div class="foot-row">
+        <span class="who" lang="en" dir="ltr"><span class="avatar">{{printf "%.1s" .User.Username}}</span><span class="who-name">@{{.User.Username}}</span></span>
+        <form method="post" action="/web/logout">
+          <button class="btn btn-ghost btn-sm" type="submit" aria-label="{{T "nav.logout"}}" title="{{T "nav.logout"}}">{{icon "logout"}}<span>{{T "nav.logout"}}</span></button>
+        </form>
+      </div>
       {{end}}
     </div>
   </aside>
-  <main class="content">
-    <section id="view">{{if .ViewContent}}{{.ViewContent}}{{else}}<span hx-get="/web/overview" hx-trigger="load"></span>{{end}}</section>
-  </main>
+
+  <div class="scrim" data-drawer-close hidden></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn only-sm" type="button" data-drawer-open aria-label="{{T "nav.menu"}}">{{icon "menu"}}</button>
+      <nav class="crumbs" aria-label="{{T "nav.overview"}}">
+        <span>{{T "app.title"}}</span>
+        <span class="sep" aria-hidden="true">{{icon "chevron"}}</span>
+        <strong id="crumb-now">{{T .Crumb}}</strong>
+      </nav>
+      <div class="topbar-end">
+        {{template "preferences" .Path}}
+      </div>
+    </header>
+
+    <main class="content" id="main-content" tabindex="-1">
+      <section id="view" data-view>{{if .ViewContent}}{{.ViewContent}}{{else}}<div class="panel skeleton-block" hx-get="/web/overview" hx-trigger="load"><span class="spinner"></span> {{T "common.loading"}}</div>{{end}}</section>
+    </main>
+  </div>
 </div>
-<div id="toasts"></div>
-<div id="modal" class="modal-backdrop" hidden onclick="if(event.target===this)closeModal()">
-  <div class="modal">
-    <button class="modal-close" onclick="closeModal()">×</button>
+
+<nav class="tabbar" aria-label="{{T "nav.menu"}}">
+  <a href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
+  <a href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
+  <a href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
+  <a href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
+  <a href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
+</nav>
+
+<div class="modal-backdrop" id="modal" hidden onclick="if(event.target===this)closeModal()">
+  <div class="modal" role="dialog" aria-modal="true">
+    <button class="modal-close" type="button" onclick="closeModal()" aria-label="{{T "common.close"}}">{{icon "close"}}</button>
     <div id="modal-body"></div>
   </div>
 </div>
+
+<script>
+  var T = {
+    copied: document.body.dataset.tCopied,
+    copyFailed: document.body.dataset.tCopyfail
+  };
+
+  function flash(msg, kind) {
+    var el = document.createElement('div');
+    el.className = 'flash ' + (kind || 'ok');
+    el.setAttribute('role', 'status');
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function () { el.remove(); }, 2600);
+  }
+
+  function copyVal(btn) {
+    var v = btn.getAttribute('data-copy');
+    if (!v) return;
+    (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject())
+      .then(function () { flash(T.copied, 'ok'); })
+      .catch(function () { selectAndCopy(btn, v); });
+  }
+
+  function selectAndCopy(btn, v) {
+    var ta = document.createElement('textarea');
+    ta.value = v;
+    ta.setAttribute('readonly', 'readonly');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); flash(T.copied, 'ok'); }
+    catch (e) { flash(T.copyFailed, 'err'); }
+    document.body.removeChild(ta);
+  }
+
+  function openModal() {
+    var m = document.getElementById('modal');
+    if (m) { m.hidden = false; document.body.classList.add('modal-open'); }
+  }
+  function closeModal() {
+    var m = document.getElementById('modal');
+    if (m) { m.hidden = true; document.body.classList.remove('modal-open'); }
+    var b = document.getElementById('modal-body');
+    if (b) b.innerHTML = '';
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { closeModal(); closeDrawer(); }
+  });
+
+  /* ---- off-canvas drawer (below 768px) ---- */
+  function openDrawer() {
+    document.getElementById('sidebar').classList.add('is-open');
+    var s = document.querySelector('.scrim');
+    if (s) s.hidden = false;
+  }
+  function closeDrawer() {
+    document.getElementById('sidebar').classList.remove('is-open');
+    var s = document.querySelector('.scrim');
+    if (s) s.hidden = true;
+  }
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('[data-drawer-open]')) openDrawer();
+    if (e.target.closest('[data-drawer-close]')) closeDrawer();
+  });
+
+  /* ---- active navigation ----
+     Fragments are swapped by htmx, so the shell cannot re-render its own
+     active state server-side on every navigation. Keep it synced here. */
+  function syncNav(path) {
+    var seg = (path || location.pathname).replace(/^\/web\/?/, '').split('/')[0] || 'overview';
+    var label = null;
+    document.querySelectorAll('[data-nav]').forEach(function (a) {
+      var on = a.getAttribute('data-nav') === seg;
+      a.classList.toggle('is-active', on);
+      if (on) a.setAttribute('aria-current', 'page');
+      else a.removeAttribute('aria-current');
+      if (on) label = a.querySelector('span');
+    });
+    if (label) {
+      var crumb = document.getElementById('crumb-now');
+      if (crumb) crumb.textContent = label.textContent;
+      document.title = label.textContent + ' · {{T "app.title"}}';
+    }
+    closeDrawer();
+  }
+  document.addEventListener('htmx:afterSwap', function (e) {
+    if (e.target && e.target.id === 'view') {
+      syncNav(location.pathname);
+      e.target.querySelectorAll('[data-focus]').forEach(function (el) { el.focus(); });
+    }
+  });
+  document.addEventListener('htmx:responseError', function () {
+    flash('{{T "err.upstream"}}', 'err');
+  });
+  syncNav(location.pathname);
+</script>
 </body>
 </html>
 {{end}}

@@ -1,38 +1,165 @@
 {{define "users"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+{{/* Console accounts.
+     Three states: rows / unknown (the store could not be read) / empty (the store
+     answered and holds no accounts). A failed read never renders as an empty table.
 
-<h1 style="margin:0 0 4px">Users</h1>
-<p class="sub">Console accounts and their roles. Roles are hierarchical:
-<strong>admin</strong> &gt; <strong>operator</strong> &gt; <strong>viewer</strong>. Operators can mutate stacks,
-services, configs and secrets; viewers are read-only; admins additionally manage API
-keys, users and cluster settings.</p>
-
-<div class="card">
-  <div class="section-head">
-    <h2 style="margin:0">Accounts ({{.Count}})</h2>
-    <button class="btn sm" hx-get="/web/users/new" hx-target="#modal-body" hx-on::after-request="openModal()">New user</button>
+     Lock-out safety: delete on your own row and on the last admin is rendered
+     disabled with the reason in its title, and the controller refuses the same two
+     cases server-side. */}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "users.title"}}</h1>
+    <p class="sub">{{T "users.sub"}}</p>
   </div>
-{{if .Users}}
-<table>
-  <tr><th>ID</th><th>Username</th><th>Role</th><th>Created</th><th></th></tr>
-  {{range .Users}}
-  <tr>
-    <td class="muted">{{.ID}}</td>
-    <td><code>{{.Username}}</code>{{if eq .Username $.Current}} <span class="pill good">you</span>{{end}}</td>
-    <td><span class="pill {{if eq .Role "admin"}}good{{else if eq .Role "operator"}}warn{{else}}muted{{end}}">{{.Role}}</span></td>
-    <td class="muted">{{ts .CreatedAt}}</td>
-    <td style="text-align:right;white-space:nowrap">
-      <button class="btn ghost sm" hx-get="/web/users/edit/{{.ID}}" hx-target="#modal-body" hx-on::after-request="openModal()">Edit</button>
-      {{if ne .Username $.Current}}
-      <button class="btn danger sm" hx-post="/web/users/remove/{{.ID}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete user {{.Username}}? This cannot be undone.')">Delete</button>
-      {{end}}
-    </td>
-  </tr>
-  {{end}}
-</table>
-{{else}}
-<div class="empty">No users. Run the first-run setup to create the admin account.</div>
+  <div class="ph-actions">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/users" hx-target="#view" hx-push-url="true">
+      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
+    </button>
+    {{if not .Disabled}}
+    <button type="button" class="btn btn-primary btn-sm" hx-get="/web/users/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">
+      {{icon "plus"}}<span>{{T "users.new"}}</span>
+    </button>
+    {{end}}
+  </div>
+</div>
+
+{{/* A failed store read is one sentence plus the raw payload, folded away. */}}
+{{if .ErrKey}}
+<div class="banner bad">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T .ErrKey}}</p>
+    <p>{{T "err.banner_body"}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/users" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+  </div>
+</div>
 {{end}}
+
+{{/* Login bypass is a configuration state, not a failure: the accounts exist,
+     they are simply not consulted while it is on. */}}
+{{if .Disabled}}
+<div class="banner warn">
+  {{icon "lock"}}
+  <div class="b-body">
+    <p class="b-title">{{T "users.login_disabled"}}</p>
+    <p>{{T "users.login_disabled_body"}}</p>
+  </div>
+</div>
+{{end}}
+
+{{if .MsgKey}}
+<div class="msg ok">{{TF .MsgKey .MsgArg .MsgArg2}}</div>
+{{end}}
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "users.accounts"}}</h2>
+    <div class="ph-actions">
+      {{if .Known}}<span class="pill plain">{{P .Count "plural.accounts"}}</span>
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+    </div>
+  </div>
+
+  <div class="panel-body tight">
+    {{if .Known}}
+      {{if .Rows}}
+      <div class="table-wrap only-md">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{{T "common.username"}}</th>
+              <th>{{T "common.role"}}</th>
+              <th>{{T "common.created"}}</th>
+              <th><span class="sr-only">{{T "common.actions"}}</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Rows}}
+            <tr>
+              <td>
+                <span class="mono iso" dir="ltr">{{.Username}}</span>
+                {{if .IsSelf}} <span class="pill accent">{{T "users.you"}}</span>{{end}}
+              </td>
+              <td>
+                {{if eq .Role "admin"}}<span class="pill good">{{T "st.admin"}}
+                {{else if eq .Role "operator"}}<span class="pill accent">{{T "st.operator"}}
+                {{else if eq .Role "viewer"}}<span class="pill plain">{{T "st.viewer"}}
+                {{else}}<span class="pill plain"><span class="mono">{{.Role}}</span>{{end}}
+                {{if .RoleLocked}} {{icon "lock"}}{{end}}</span>
+              </td>
+              <td class="muted num">{{ts .CreatedAt}}</td>
+              <td>
+                <div class="row-actions">
+                  <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/users/edit/{{.ID}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">{{T "common.edit"}}</button>
+                  {{if .CanDelete}}
+                  <button type="button" class="btn btn-danger btn-sm" hx-post="/web/users/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "users.delete_confirm" .Username}}">{{T "common.delete"}}</button>
+                  {{else}}
+                  <button type="button" class="btn btn-danger btn-sm" disabled title="{{T .DeleteBlockKey}}">{{T "common.delete"}}</button>
+                  {{end}}
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+
+      {{/* Phones get the same fields as key/value rows, with the actions in a
+           full-width bar (44px targets) instead of a dense table. */}}
+      <div class="only-sm">
+        {{range .Rows}}
+        <div class="kv">
+          <div class="kv-row"><span class="k">{{T "common.username"}}</span><span class="v"><span class="mono iso" dir="ltr">{{.Username}}</span>{{if .IsSelf}} <span class="pill accent">{{T "users.you"}}</span>{{end}}</span></div>
+          <div class="kv-row"><span class="k">{{T "common.role"}}</span><span class="v">
+            {{if eq .Role "admin"}}<span class="pill good">{{T "st.admin"}}
+            {{else if eq .Role "operator"}}<span class="pill accent">{{T "st.operator"}}
+            {{else if eq .Role "viewer"}}<span class="pill plain">{{T "st.viewer"}}
+            {{else}}<span class="pill plain"><span class="mono">{{.Role}}</span>{{end}}
+            {{if .RoleLocked}} {{icon "lock"}}{{end}}</span>
+          </span></div>
+          <div class="kv-row"><span class="k">{{T "common.created"}}</span><span class="v muted num">{{ts .CreatedAt}}</span></div>
+          <div class="action-bar">
+            <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/users/edit/{{.ID}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">{{T "common.edit"}}</button>
+            {{if .CanDelete}}
+            <button type="button" class="btn btn-danger btn-sm" hx-post="/web/users/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "users.delete_confirm" .Username}}">{{T "common.delete"}}</button>
+            {{else}}
+            <button type="button" class="btn btn-danger btn-sm" disabled title="{{T .DeleteBlockKey}}">{{T "common.delete"}}</button>
+            {{end}}
+          </div>
+        </div>
+        {{end}}
+      </div>
+      {{else}}
+      <div class="empty">
+        <i class="ic">{{icon "users"}}</i>
+        <h3>{{T "users.empty_title"}}</h3>
+        <p>{{T "users.empty_body"}}</p>
+        <div class="empty-actions">
+          {{if not .Disabled}}
+          <button type="button" class="btn btn-primary btn-sm" hx-get="/web/users/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">{{T "users.new"}}</button>
+          {{else}}
+          <a class="btn btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{T "nav.settings"}}</a>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
+    {{else}}
+    <div class="empty">
+      <i class="ic">{{icon "alert"}}</i>
+      <h3>{{T "users.unknown_title"}}</h3>
+      <p>{{T "users.unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/users" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+      </div>
+    </div>
+    {{end}}
+  </div>
+
+  <div class="panel-foot">
+    <span>{{T "users.roles_help"}}</span>
+  </div>
 </div>
 {{end}}

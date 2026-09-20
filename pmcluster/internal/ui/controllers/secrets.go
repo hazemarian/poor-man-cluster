@@ -48,8 +48,14 @@ type secretFormData struct {
 	Value  string
 	IsEdit bool
 	Action string
+	ErrKey string
+	ErrRaw string
 	Error  string
 }
+
+// fail records a failed save: key is the dictionary entry the modal translates
+// and raw is the upstream text its <details> disclosure shows.
+func (d *secretFormData) fail(key, raw string) { d.ErrKey, d.ErrRaw = key, raw }
 
 // secretForm renders the secret modal fragment. Handlers use it for the
 // hx-get "new"/"edit" routes (plain 200 → openModal) and for validation
@@ -60,8 +66,18 @@ func (c *Controller) secretForm(g *gin.Context, d secretFormData) {
 
 // secretRevealData drives the reveal modal fragment ("secretreveal") — the
 // value is shown on demand with a confirmation prompt, never in list copy.
+//
+// ErrKey/ErrRaw describe a failed reveal; Error is the pre-i18n prose field kept
+// for callers this file does not own, and is rendered as a last resort so a
+// refusal can never come back as an empty modal.
 type secretRevealData struct {
-	Name  string
-	Value string
-	Error string
+	Name   string
+	Value  string
+	ErrKey string
+	ErrRaw string
+	Error  string
 }
+
+// fail records a failed reveal: key is the dictionary entry the modal translates
+// and raw is the upstream text its <details> disclosure shows.
+func (d *secretRevealData) fail(key, raw string) { d.ErrKey, d.ErrRaw = key, raw }

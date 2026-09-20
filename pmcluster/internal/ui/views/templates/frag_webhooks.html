@@ -1,60 +1,265 @@
 {{define "webhooks"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+{{/* Deploy-webhook sources.
 
-<h1 style="margin:0 0 4px">Webhook Keys</h1>
-<p class="sub">Sources allowed to POST deploys to <code>/webhook/&lt;source&gt;</code> with
-HMAC-SHA256 signature verification. The shared secret is shown <strong>once</strong> on
-creation — copy it into your CI and sign every deploy with it.</p>
+     The list panel renders three distinct states: rows, unknown (the list call
+     failed — an empty table would claim the cluster accepts no webhooks), and
+     empty-but-actionable (a real link to the form below). The shared secret
+     exists in exactly one response, so it gets its own panel with the copy
+     control and the endpoint it is meant for — and it is simply absent on every
+     later render. */}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "webhooks.title"}}</h1>
+    <p class="sub">{{if .Configured}}{{T "webhooks.sub"}}{{else}}{{T "webhooks.not_configured_body"}}{{end}}</p>
+  </div>
+  <div class="ph-actions">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">
+      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
+    </button>
+    <button type="button" class="btn btn-primary btn-sm" data-focus onclick="document.getElementById('wh-source').focus()">
+      {{icon "plus"}}<span>{{T "webhooks.add_title"}}</span>
+    </button>
+  </div>
+</div>
 
+{{if .MsgKey}}
+<div class="msg ok">{{TF .MsgKey .MsgArg}}</div>
+{{end}}
+
+{{if .ErrKey}}
+<div class="banner bad">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T .ErrKey}}</p>
+    {{if eq .ErrKey "err.api_not_configured"}}
+    <p>{{T "webhooks.not_configured_body"}}</p>
+    {{else}}
+    <p>{{T "err.banner_body"}}</p>
+    {{end}}
+    {{if .ErrRaw}}
+    <details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>
+    {{end}}
+  </div>
+  <div class="b-actions">
+    {{if eq .ErrKey "err.api_not_configured"}}
+    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+    {{else}}
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+{{/* The one and only render that carries the secret. */}}
 {{if .Secret}}
-<div class="card">
-  <h2 style="margin-top:0">New webhook source created</h2>
-  <p class="sub">Source: <code>{{.Source}}</code> — copy this secret now, it won't be shown again.</p>
-  <pre style="user-select:all;overflow-x:auto">{{.Secret}}</pre>
-  <button class="btn" type="button" data-copy="{{.Secret}}" onclick="copyVal(this)">Copy secret</button>
-  <p class="sub">CI configuration:</p>
-  <pre style="overflow-x:auto">Endpoint : https://pmcluster.&lt;domain&gt;/webhook/{{.Source}}
-Method   : POST
-Header   : X-Pmcluster-Signature: sha256=&lt;hmac-sha256(body, secret)&gt;
-Header   : X-Pmcluster-Timestamp: &lt;unix-seconds&gt;
-Body     : {"app_name": "...", "version": "...", "manifest": "&lt;dsl-yaml&gt;"}</pre>
-</div>
-{{end}}
-
-<div class="card">
-  <h2 style="margin-top:0">Add a webhook source</h2>
-  <form hx-post="/web/webhooks" hx-target="#view" hx-swap="innerHTML">
-    <label>Source name (e.g. github-bookfair)</label>
-    <input type="text" name="source" placeholder="github-idlib-book-fair" required>
-    <label>Description</label>
-    <input type="text" name="description" placeholder="who/what uses this source">
-    <div style="margin-top:10px">
-      <button class="btn" type="submit" hx-disabled-elt="this">Create source</button>
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{TF "webhooks.secret_title" .SecretSource}}</h2>
+    <div class="ph-actions"><span class="pill warn"><i class="dot"></i>{{T "webhooks.secret_pill"}}</span></div>
+  </div>
+  <div class="panel-body">
+    <p>{{T "webhooks.secret_body"}}</p>
+    <div class="input-group">
+      <input id="wh-secret" class="finput mono iso" dir="ltr" readonly value="{{.Secret}}">
+      <button type="button" class="btn" data-copy="{{.Secret}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "webhooks.secret_copy"}}</span></button>
     </div>
-  </form>
+    <div class="kv">
+      <div class="kv-row"><span class="k">{{T "webhooks.col_source"}}</span><span class="v mono">{{.SecretSource}}</span></div>
+      <div class="kv-row"><span class="k">{{T "webhooks.secret_endpoint"}}</span><span class="v">
+        {{if .SecretEndpt}}<span class="mono iso" dir="ltr">POST {{.SecretEndpt}}</span>
+        {{else}}<span class="muted">{{T "webhooks.secret_endpoint_unknown"}}</span>{{end}}
+      </span></div>
+    </div>
+    <p class="muted mt-16">{{T "webhooks.secret_usage"}}</p>
+  </div>
+</div>
+{{end}}
+
+<div class="stats">
+  <div class="stat{{if not .Known}} is-unknown{{end}}">
+    <div class="stat-l">{{icon "webhooks"}}{{T "webhooks.st_sources"}}</div>
+    {{if .Known}}
+    <div class="stat-v num">{{P .Count "plural.sources"}}</div>
+    <div class="stat-f">{{T "webhooks.st_sources_foot"}}</div>
+    {{else}}
+    <div class="stat-v">—</div>
+    <div class="stat-f">{{T "webhooks.st_unknown_foot"}}</div>
+    {{end}}
+  </div>
+
+  <div class="stat{{if not .DomainKnown}} is-unknown{{end}}">
+    <div class="stat-l">{{icon "external"}}{{T "webhooks.st_endpoint"}}</div>
+    {{if .DomainKnown}}
+    <div class="stat-v"><span class="mono iso" dir="ltr">{{.Base}}/webhook/</span></div>
+    <div class="stat-f">{{T "webhooks.st_endpoint_foot"}}</div>
+    {{else}}
+    <div class="stat-v">—</div>
+    <div class="stat-f">{{T "webhooks.st_endpoint_unknown_foot"}}</div>
+    {{end}}
+  </div>
+
+  <div class="stat">
+    <div class="stat-l">{{icon "lock"}}{{T "webhooks.d_sig"}}</div>
+    <div class="stat-v"><span class="mono iso" dir="ltr">X-Pmcluster-Signature</span></div>
+    <div class="stat-f">{{T "webhooks.st_sig_foot"}}</div>
+  </div>
+
+  <div class="stat">
+    <div class="stat-l">{{icon "clock"}}{{T "webhooks.d_skew"}}</div>
+    <div class="stat-v num">{{T "webhooks.d_skew_v"}}</div>
+    <div class="stat-f">{{T "webhooks.st_skew_foot"}}</div>
+  </div>
 </div>
 
-<h2 style="margin-bottom:0">Configured sources</h2>
-<div class="card" style="padding:6px 14px">
-{{if .Sources}}
-<table>
-  <tr><th>Source</th><th>Description</th><th>Created</th><th>Last used</th><th></th></tr>
-  {{range .Sources}}
-  <tr>
-    <td><code>{{.Source}}</code></td>
-    <td class="muted">{{if .Description}}{{.Description}}{{else}}—{{end}}</td>
-    <td class="muted">{{ts .CreatedAt}}</td>
-    <td class="muted">{{ts .LastUsedAt}}</td>
-    <td style="text-align:right; white-space:nowrap">
-      <a class="btn sm ghost" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true">History</a>
-      <button class="btn danger" hx-post="/web/webhooks/remove/{{.Source}}" hx-target="#view" hx-swap="innerHTML">Revoke</button>
-    </td>
-  </tr>
-  {{end}}
-</table>
-{{else}}
-<div class="empty">No webhook sources configured.</div>
-{{end}}
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "webhooks.keys_title"}}</h2>
+    <div class="ph-actions">
+      {{if .Known}}<span class="pill plain">{{P .Count "plural.sources"}}</span>
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+    </div>
+  </div>
+
+  <div class="panel-body tight">
+    {{if not .Configured}}
+    <div class="empty">
+      <i class="ic">{{icon "settings"}}</i>
+      <h3>{{T "err.api_not_configured"}}</h3>
+      <p>{{T "webhooks.not_configured_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+      </div>
+    </div>
+    {{else if .Known}}
+      {{if .Sources}}
+      <div class="table-wrap only-md">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{{T "webhooks.col_source"}}</th>
+              <th>{{T "webhooks.f_desc"}}</th>
+              <th>{{T "webhooks.col_last"}}</th>
+              <th>{{T "common.created"}}</th>
+              <th><span class="sr-only">{{T "common.actions"}}</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Sources}}
+            <tr>
+              <td><span class="mono">{{.Source}}</span></td>
+              <td>{{if .Description}}{{.Description}}{{else}}<span class="muted">{{T "common.none"}}</span>{{end}}</td>
+              <td class="muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "webhooks.never_used"}}{{end}}</td>
+              <td class="muted num">{{ts .CreatedAt}}</td>
+              <td>
+                <div class="row-actions">
+                  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Source}}" onclick="copyVal(this)" title="{{T "webhooks.copy_source"}}">{{icon "copy"}}<span class="sr-only">{{T "webhooks.copy_source"}}</span></button>
+                  {{if .Endpoint}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Endpoint}}" onclick="copyVal(this)" title="{{T "webhooks.copy_endpoint"}}">{{icon "external"}}<span class="sr-only">{{T "webhooks.copy_endpoint"}}</span></button>{{end}}
+                  <form hx-post="/web/webhooks/remove/{{.Source}}" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "webhooks.revoke_confirm" .Source}}">
+                    <button type="submit" class="btn btn-danger btn-sm">{{icon "trash"}}<span>{{T "webhooks.revoke"}}</span></button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="only-sm">
+        {{range .Sources}}
+        <div class="kv">
+          <div class="kv-row"><span class="k">{{T "webhooks.col_source"}}</span><span class="v mono">{{.Source}}</span></div>
+          <div class="kv-row"><span class="k">{{T "webhooks.f_desc"}}</span><span class="v">{{if .Description}}{{.Description}}{{else}}<span class="muted">{{T "common.none"}}</span>{{end}}</span></div>
+          <div class="kv-row"><span class="k">{{T "webhooks.col_last"}}</span><span class="v muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "webhooks.never_used"}}{{end}}</span></div>
+          <div class="kv-row"><span class="k">{{T "common.created"}}</span><span class="v muted num">{{ts .CreatedAt}}</span></div>
+          <div class="action-bar">
+            <button type="button" class="btn btn-sm" data-copy="{{.Source}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "webhooks.copy_source"}}</span></button>
+            {{if .Endpoint}}<button type="button" class="btn btn-sm" data-copy="{{.Endpoint}}" onclick="copyVal(this)">{{icon "external"}}<span>{{T "webhooks.copy_endpoint"}}</span></button>{{end}}
+            <form hx-post="/web/webhooks/remove/{{.Source}}" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "webhooks.revoke_confirm" .Source}}">
+              <button type="submit" class="btn btn-danger btn-sm">{{icon "trash"}}<span>{{T "webhooks.revoke"}}</span></button>
+            </form>
+          </div>
+        </div>
+        {{end}}
+      </div>
+      {{else}}
+      <div class="empty">
+        <i class="ic">{{icon "webhooks"}}</i>
+        <h3>{{T "webhooks.empty_title"}}</h3>
+        <p>{{T "webhooks.empty_body"}}</p>
+        <div class="empty-actions">
+          <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('wh-source').focus()">{{icon "plus"}}<span>{{T "webhooks.empty_action"}}</span></button>
+        </div>
+      </div>
+      {{end}}
+    {{else}}
+    <div class="empty">
+      <i class="ic">{{icon "alert"}}</i>
+      <h3>{{T "webhooks.unknown_title"}}</h3>
+      <p>{{T "webhooks.unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+      </div>
+    </div>
+    {{end}}
+  </div>
+
+  <div class="panel-foot">
+    <span>{{T "webhooks.keys_foot"}}</span>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "webhooks.add_title"}}</h2>
+  </div>
+  <div class="panel-body">
+    <p class="muted">{{T "webhooks.add_sub"}}</p>
+    <form hx-post="/web/webhooks" hx-target="#view" hx-swap="innerHTML" hx-disabled-elt="find button[type='submit']">
+      <div class="form-grid">
+        <div class="field">
+          <label for="wh-source">{{T "webhooks.f_source"}}</label>
+          <input id="wh-source" class="finput mono" name="source" value="{{.Form.Source}}" placeholder="{{T "webhooks.ph_source"}}" autocomplete="off" required data-focus>
+          <span class="hint">{{T "webhooks.f_source_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="wh-desc">{{T "webhooks.f_desc"}}</label>
+          <input id="wh-desc" class="finput" name="description" value="{{.Form.Description}}" placeholder="{{T "webhooks.ph_desc"}}" autocomplete="off">
+          <span class="hint">{{T "webhooks.f_desc_hint"}}</span>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">{{icon "plus"}}<span>{{T "webhooks.create_action"}}</span></button>
+        <span class="hint">{{T "webhooks.create_missing"}}</span>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "webhooks.delivery_title"}}</h2>
+  </div>
+  <div class="panel-body">
+    <p class="muted">{{T "webhooks.delivery_sub"}}</p>
+    <div class="kv">
+      <div class="kv-row"><span class="k">{{T "webhooks.d_method"}}</span><span class="v mono iso" dir="ltr">POST</span></div>
+      <div class="kv-row"><span class="k">{{T "webhooks.d_path"}}</span><span class="v mono iso" dir="ltr">/webhook/&lt;source&gt;</span></div>
+      <div class="kv-row"><span class="k">{{T "webhooks.d_sig"}}</span><span class="v mono iso" dir="ltr">X-Pmcluster-Signature: sha256=&lt;hex&gt;</span></div>
+      <div class="kv-row"><span class="k">{{T "webhooks.d_ts"}}</span><span class="v mono iso" dir="ltr">X-Pmcluster-Timestamp: &lt;unix-seconds&gt;</span></div>
+      <div class="kv-row"><span class="k">{{T "webhooks.d_skew"}}</span><span class="v num">{{T "webhooks.d_skew_v"}}</span></div>
+      <div class="kv-row"><span class="k">{{T "webhooks.d_body"}}</span><span class="v">{{T "webhooks.d_body_v"}}</span></div>
+    </div>
+    <p class="muted mt-16">{{T "webhooks.d_note"}}</p>
+    <pre dir="ltr">ts=$(date +%s)
+sig=$(printf '%s%s' "$ts" "$body" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $NF}')
+curl -fsS -X POST "$WEBHOOK_URL" \
+  -H "X-Pmcluster-Timestamp: $ts" \
+  -H "X-Pmcluster-Signature: sha256=$sig" \
+  --data-binary "$body"</pre>
+  </div>
+  <div class="panel-foot">
+    <span>{{T "webhooks.d_snippet"}}</span>
+  </div>
 </div>
 {{end}}

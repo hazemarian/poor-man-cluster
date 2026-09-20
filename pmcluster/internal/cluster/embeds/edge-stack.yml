@@ -85,7 +85,7 @@ services:
         # through to the edge reverse proxy and keeps its own Bearer /
         # webhook-signature auth — no admin-auth there, so the daemon API
         # stays machine-accessible.
-        - "traefik.http.routers.pmcluster-web.rule=Host(`pmcluster.${DOMAIN}`) && (Path(`/web`) || PathPrefix(`/web/`))"
+        - "traefik.http.routers.pmcluster-web.rule=Host(`pmcluster.${DOMAIN}`) && (PathPrefix(`/web/`) || Path(`/web`))"
         - "traefik.http.routers.pmcluster-web.entrypoints=websecure"
         - "traefik.http.routers.pmcluster-web.tls=true"
         - "traefik.http.routers.pmcluster-web.tls.certresolver=letsencrypt"
@@ -94,7 +94,7 @@ services:
         [[- else]]
         - "traefik.http.routers.pmcluster-web.middlewares=cors-default@file,admin-auth@file"
         [[- end]]
-        - "traefik.http.routers.pmcluster-api.rule=Host(`pmcluster.${DOMAIN}`) && !(Path(`/web`) || PathPrefix(`/web/`))"
+        - "traefik.http.routers.pmcluster-api.rule=Host(`pmcluster.${DOMAIN}`) && !PathPrefix(`/web/`) && !Path(`/web`)"
         - "traefik.http.routers.pmcluster-api.entrypoints=websecure"
         - "traefik.http.routers.pmcluster-api.tls=true"
         - "traefik.http.routers.pmcluster-api.tls.certresolver=letsencrypt"

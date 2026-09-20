@@ -1,15 +1,22 @@
 {{define "tlssiteform"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-<h2>Upload / renew main certificate</h2>
-<p class="sub">The cluster's own default certificate, served for the cluster domain and any host without its own cert. Validated, stored as versioned Swarm secrets and applied to Traefik.</p>
+{{if .ErrKey}}<div class="msg err">{{T .ErrKey}}</div>{{end}}
+{{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+<h2>{{T "tls.form_site_title"}}</h2>
+<p class="sub">{{T "tls.form_site_sub"}}</p>
 <form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()">
-  <label>Certificate (PEM)</label>
-  <textarea name="cert" rows="8" required placeholder="-----BEGIN CERTIFICATE-----">{{.Cert}}</textarea>
-  <label>Private key (PEM)</label>
-  <textarea name="key" rows="8" required placeholder="-----BEGIN PRIVATE KEY-----">{{.Key}}</textarea>
-  <div class="row">
-    <button class="btn" type="submit">Store certificate</button>
-    <button class="btn ghost" type="button" onclick="closeModal()">Cancel</button>
+  <div class="field">
+    <label for="site-cert">{{T "tls.form_cert_label"}}</label>
+    <textarea id="site-cert" name="cert" class="mono" dir="ltr" rows="8" required placeholder="-----BEGIN CERTIFICATE-----">{{.Cert}}</textarea>
+    <p class="muted">{{T "tls.form_cert_hint"}}</p>
+  </div>
+  <div class="field">
+    <label for="site-key">{{T "tls.form_key_label"}}</label>
+    <textarea id="site-key" name="key" class="mono" dir="ltr" rows="8" required placeholder="-----BEGIN PRIVATE KEY-----">{{.Key}}</textarea>
+    <p class="muted">{{T "tls.form_key_hint"}}</p>
+  </div>
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary" hx-disabled-elt="this">{{icon "lock"}}<span>{{T "tls.form_submit_site"}}</span></button>
+    <button type="button" class="btn btn-ghost" onclick="closeModal()">{{T "common.cancel"}}</button>
   </div>
 </form>
 {{end}}

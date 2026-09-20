@@ -32,9 +32,15 @@ func (c Auth) needSetup(ctx context.Context) (bool, error) {
 	return !fu.PasswordSet, nil
 }
 
-type loginData struct {
-	Version string
-	Error   string
+// authPage is the data both standalone auth screens render. Failures travel as
+// i18n keys rather than finished sentences: the template localizes them, and
+// the form can name exactly which rule broke instead of one catch-all line.
+type authPage struct {
+	Version  string
+	Failure  string // i18n key under auth.err.*
+	Detail   string // {0} argument for the TF form of Failure
+	Username string // echoed back so a failed attempt does not lose the input
+	Done     bool
 }
 
 // LoginPage renders the sign-in form. When EDGE_LOGIN_DISABLED is set the
@@ -44,7 +50,7 @@ func (c Auth) LoginPage(g *gin.Context) {
 		redirect(g, WebBase+"/")
 		return
 	}
-	c.Views.Page(g, "login", loginData{Version: c.Version})
+	c.Views.Page(g, "login", authPage{Version: c.Version})
 }
 
 // Login verifies credentials and issues a session cookie.
@@ -58,7 +64,9 @@ func (c Auth) Login(g *gin.Context) {
 
 	u, err := c.Store.GetByUsername(g.Request.Context(), username)
 	if err != nil || !u.PasswordSet || !checkPassword(u, password) {
-		c.Views.Page(g, "login", loginData{Version: c.Version, Error: "Invalid username or password."})
+		// One wording for both wrong-username and wrong-password: the form must
+		// not confirm which accounts exist.
+		c.Views.Page(g, "login", authPage{Version: c.Version, Failure: "auth.bad_credentials"})
 		return
 	}
 	c.Auth.SetCookie(g, u.Username, 7*24*time.Hour)
@@ -78,7 +86,7 @@ func (c Auth) SetupPage(g *gin.Context) {
 		redirect(g, WebBase+"/login")
 		return
 	}
-	c.Views.Page(g, "setup", gin.H{})
+	c.Views.Page(g, "setup", authPage{})
 }
 
 // Setup creates the first admin account on first run (username + password).
@@ -95,19 +103,37 @@ func (c Auth) Setup(g *gin.Context) {
 	uname := strings.TrimSpace(g.PostForm("username"))
 	pass := g.PostForm("password")
 	confirm := g.PostForm("confirm")
-	if uname == "" || len(pass) < 8 || pass != confirm {
-		c.Views.Page(g, "setup", gin.H{
-			"Error":   "Username is required; password must be at least 8 characters and match the confirmation.",
-			"Payload": gin.H{"Username": uname},
-		})
+	if key, bad := validateNewAdmin(uname, pass, confirm); bad {
+		c.Views.Page(g, "setup", authPage{Version: c.Version, Failure: key, Username: uname})
 		return
 	}
 	if _, err := c.Store.CreateUser(g.Request.Context(), uname, hashPassword(pass), true, store.RoleAdmin); err != nil {
-		c.Views.Page(g, "setup", gin.H{"Error": "Could not create admin: " + err.Error()})
+		c.Views.Page(g, "setup", authPage{
+			Version:  c.Version,
+			Failure:  "auth.err.create_failed",
+			Detail:   err.Error(),
+			Username: uname,
+		})
 		return
 	}
 	c.Auth.SetCookie(g, uname, 7*24*time.Hour)
-	c.Views.Page(g, "setup", gin.H{"Username": uname, "Done": true})
+	c.Views.Page(g, "setup", authPage{Version: c.Version, Username: uname, Done: true})
+}
+
+// validateNewAdmin returns the i18n key of the first broken rule, so the form
+// can say which one it was. Keep minPassword in step with the template's
+// minlength attribute.
+func validateNewAdmin(username, password, confirm string) (key string, bad bool) {
+	const minPassword = 8
+	switch {
+	case username == "":
+		return "auth.err.username_required", true
+	case len(password) < minPassword:
+		return "auth.err.password_short", true
+	case password != confirm:
+		return "auth.err.password_mismatch", true
+	}
+	return "", false
 }
 
 // Logout clears the session cookie and returns to the sign-in screen (or the

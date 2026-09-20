@@ -1,0 +1,14 @@
+{{define "preferences"}}
+<div class="preferences" role="group" aria-label="{{T "preferences.label"}}">
+  <a class="preference-control" data-language-switch hx-boost="false"
+     href="/web/lang/{{if RTL}}en{{else}}ar{{end}}?next={{. | urlquery}}"
+     hreflang="{{if RTL}}en{{else}}ar{{end}}" lang="{{if RTL}}en{{else}}ar{{end}}"
+     aria-label="{{if RTL}}{{T "preferences.english"}}{{else}}{{T "preferences.arabic"}}{{end}}">
+    {{icon "globe"}}<span>{{if RTL}}English{{else}}العربية{{end}}</span>
+  </a>
+  <button class="preference-control" type="button" data-theme-toggle>
+    <span class="theme-dark-only" title="{{T "preferences.to_light"}}">{{icon "sun"}}<span>{{T "preferences.light"}}</span><span class="sr-only"> — {{T "preferences.to_light"}}</span></span>
+    <span class="theme-light-only" title="{{T "preferences.to_dark"}}">{{icon "moon"}}<span>{{T "preferences.dark"}}</span><span class="sr-only"> — {{T "preferences.to_dark"}}</span></span>
+  </button>
+</div>
+{{end}}

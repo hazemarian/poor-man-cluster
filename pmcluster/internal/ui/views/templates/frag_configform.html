@@ -1,40 +1,117 @@
 {{define "configform"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-<h2>{{if .IsEdit}}Edit config{{else}}Add config{{end}}</h2>
-{{if .IsEdit}}<p class="sub">Scope <code>{{.Scope}}</code>{{if .Stack}} · stack <code>{{.Stack}}</code>{{end}} · kind <code>{{.Kind}}</code></p>{{end}}
-<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()">
-  <label>Name</label>
+{{/*
+  One config, in a modal: the body plus its version history. Shared by the
+  cluster-scope list on Settings and the per-service list on a stack, so every URL
+  comes from the data (.Action, .Stack) and never from a hard-coded page.
+*/}}
+<h2>{{if .IsEdit}}{{T "configs.form_edit"}}{{else}}{{T "configs.form_new"}}{{end}}</h2>
+<p class="sub">{{if .IsEdit}}{{T "configs.form_sub_edit"}}{{else}}{{T "configs.form_sub_new"}}{{end}}</p>
+
+{{if .ErrKey}}
+<div class="msg err">{{T .ErrKey}}</div>
+{{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+{{else if .Error}}
+<div class="msg err">{{.Error}}</div>
+{{end}}
+
+<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-disabled-elt="find button[type=submit]"
+      hx-on::after-request="if(!event.detail.failed)closeModal()">
   {{if .IsEdit}}
   <input type="hidden" name="name" value="{{.Name}}">
-  <p class="muted"><code>{{.Name}}</code></p>
+  <div class="kv">
+    <div class="kv-row"><span class="k">{{T "configs.form_name"}}</span><span class="v mono">{{.Name}}</span></div>
+    <div class="kv-row"><span class="k">{{T "configs.form_scope"}}</span><span class="v">{{if .Stack}}{{TF "configs.meta_stack" .Stack}}{{else}}{{T "configs.scope_cluster"}}{{end}}</span></div>
+  </div>
+  <div class="field">
+    <label for="config-kind">{{T "configs.form_kind"}}</label>
+    <select id="config-kind" class="selectbox" name="kind">
+      <option value="file" {{if eq .Kind "file"}}selected{{end}}>{{T "configs.kind_file"}}</option>
+      <option value="template" {{if eq .Kind "template"}}selected{{end}}>{{T "configs.kind_template"}}</option>
+      <option value="env" {{if eq .Kind "env"}}selected{{end}}>{{T "configs.kind_env"}}</option>
+    </select>
+    <span class="hint">{{T "configs.form_name_hint"}}</span>
+  </div>
   {{else}}
-  <input name="name" value="{{.Name}}" placeholder="my_config" required autofocus>
+  <div class="field">
+    <label for="config-name">{{T "configs.form_name"}}</label>
+    <input id="config-name" class="finput mono" type="text" name="name" required dir="ltr" autocomplete="off" spellcheck="false" value="{{.Name}}">
+    <span class="hint">{{T "configs.form_name_hint"}}</span>
+  </div>
+  <div class="field">
+    <label for="config-kind">{{T "configs.form_kind"}}</label>
+    <select id="config-kind" class="selectbox" name="kind">
+      <option value="file" {{if eq .Kind "file"}}selected{{end}}>{{T "configs.kind_file"}}</option>
+      <option value="template" {{if eq .Kind "template"}}selected{{end}}>{{T "configs.kind_template"}}</option>
+      <option value="env" {{if eq .Kind "env"}}selected{{end}}>{{T "configs.kind_env"}}</option>
+    </select>
+  </div>
   {{end}}
-  {{if not .IsEdit}}
-  <label>Kind</label>
-  <select name="kind">
-    {{$k := .Kind}}
-    <option value="file" {{if eq $k "file"}}selected{{end}}>file — literal value</option>
-    <option value="template" {{if eq $k "template"}}selected{{end}}>template — rendered by cluster update</option>
-    <option value="env" {{if eq $k "env"}}selected{{end}}>env — plain env value</option>
-  </select>
-  {{end}}
-  <label>Content</label>
-  <textarea name="content" rows="8" style="white-space:pre" required>{{.Content}}</textarea>
-  <div class="row">
-    <button class="btn" hx-disabled-elt="this">{{if .IsEdit}}Save new version{{else}}Create config{{end}}</button>
-    <button type="button" class="btn ghost" onclick="closeModal()">Cancel</button>
+
+  <div class="field">
+    <label for="config-content">{{T "configs.form_content"}}</label>
+    <textarea id="config-content" class="mono" name="content" rows="12" dir="ltr" spellcheck="false">{{.Content}}</textarea>
+    <span class="hint">{{T "configs.form_content_hint"}}</span>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{icon "check"}}<span>{{if .IsEdit}}{{T "configs.form_save_version"}}{{else}}{{T "configs.form_create"}}{{end}}</span></button>
+    <button type="button" class="btn" onclick="closeModal()">{{T "common.cancel"}}</button>
   </div>
 </form>
-{{if .IsEdit}}{{if .Versions}}
-<h2>Version history</h2>
-<table>
-  <thead><tr><th>ID</th><th>Hash</th><th>Created</th><th></th></tr></thead>
-  <tbody>
-  {{range .Versions}}<tr><td>{{.ID}}</td><td><code>{{.Hash}}</code></td><td>{{ts .CreatedAt}}</td>
-    <td>{{if $.Stack}}<button class="btn ghost sm" hx-post="/web/stacks/{{$.Stack}}/configs/rollback/{{$.Name}}/{{.ID}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()" onclick="return confirm('Roll back {{$.Name}} to version {{.ID}}?')">Rollback</button>{{else}}<button class="btn ghost sm" hx-post="/web/settings/configs/rollback/{{$.Name}}/{{.ID}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()" onclick="return confirm('Roll back {{$.Name}} to version {{.ID}}?')">Rollback</button>{{end}}</td>
-  </tr>{{end}}
-  </tbody>
-</table>
-{{end}}{{end}}
+
+{{if .IsEdit}}
+<h3 class="mt-24">{{T "configs.form_versions"}}</h3>
+{{if .Versions}}
+<p class="hint">{{T "configs.restore_hint"}}</p>
+
+<div class="table-wrap only-md">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{T "common.id"}}</th>
+        <th>{{T "configs.form_hash"}}</th>
+        <th>{{T "common.created"}}</th>
+        <th>{{T "common.actions"}}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Versions}}
+      <tr>
+        <td class="num">{{.ID}}</td>
+        <td><span class="mono">{{.Hash}}</span></td>
+        <td class="iso muted">{{ts .CreatedAt}}</td>
+        <td>
+          <div class="row-actions">
+            <button type="button" class="btn btn-ghost btn-sm" title="{{T "configs.form_restore"}}"
+                    hx-post="{{if $.Stack}}/web/stacks/{{$.Stack}}/configs/rollback/{{$.Name}}/{{.ID}}{{else}}/web/settings/configs/rollback/{{$.Name}}/{{.ID}}{{end}}"
+                    hx-target="#view" hx-confirm="{{TF "configs.restore_confirm" $.Name .ID}}">
+              {{icon "rollback"}}<span class="sr-only">{{T "configs.form_restore"}}</span>
+            </button>
+          </div>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<div class="kv only-sm">
+  {{range .Versions}}
+  <div class="kv-row">
+    <span class="k">#{{.ID}} · {{ts .CreatedAt}}</span>
+    <span class="v mono">{{.Hash}}</span>
+  </div>
+  <div class="form-actions">
+    <button type="button" class="btn btn-danger"
+            hx-post="{{if $.Stack}}/web/stacks/{{$.Stack}}/configs/rollback/{{$.Name}}/{{.ID}}{{else}}/web/settings/configs/rollback/{{$.Name}}/{{.ID}}{{end}}"
+            hx-target="#view" hx-confirm="{{TF "configs.restore_confirm" $.Name .ID}}">
+      {{icon "rollback"}}<span>{{T "configs.form_restore"}}</span>
+    </button>
+  </div>
+  {{end}}
+</div>
+{{else}}
+<p class="muted">{{T "configs.versions_empty"}}</p>
+{{end}}
+{{end}}
 {{end}}

@@ -1,27 +1,63 @@
 {{define "userform"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{/* Create / edit one console account. Rendered into #modal-body.
+     The role select is pinned to admin while the account is your own or the last
+     admin: the controller refuses a self-demote anyway, so the UI does not offer it. */}}
+<h2>{{T .TitleKey}}</h2>
+<p class="sub">{{T .SubKey}}</p>
 
-<h2 style="margin-top:0">{{if .IsEdit}}Edit user {{.Username}}{{else}}New user{{end}}</h2>
-<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed)closeModal()">
+{{if .ErrKey}}
+<div class="banner bad">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T .ErrKey}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+</div>
+{{else if .Error}}
+<div class="banner bad">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T "users.err_save"}}</p>
+    <details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.Error}}</pre></details>
+  </div>
+</div>
+{{end}}
+
+<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML"
+      hx-on::after-request="if(event.detail.failed){document.getElementById('modal-body').innerHTML=event.detail.xhr.responseText;openModal();}else{closeModal();}">
   {{if .IsEdit}}<input type="hidden" name="id" value="{{.ID}}">{{end}}
-  <label>Username</label>
-  <input type="text" name="username" value="{{.Username}}" {{if .IsEdit}}disabled{{end}} required>
-  <label>Role</label>
-  <select name="role">
-    <option value="admin"{{if eq .Role "admin"}} selected{{end}}>admin</option>
-    <option value="operator"{{if eq .Role "operator"}} selected{{end}}>operator</option>
-    <option value="viewer"{{if eq .Role "viewer"}} selected{{end}}>viewer</option>
-  </select>
-  {{if .IsEdit}}
-  <label>Reset password <span class="muted">(leave blank to keep the current password)</span></label>
-  <input type="password" name="password" placeholder="••••••••">
-  {{else}}
-  <label>Password</label>
-  <input type="password" name="password" placeholder="at least 8 characters" required>
-  {{end}}
-  <div class="row">
-    <button class="btn" type="submit" hx-disabled-elt="this">{{if .IsEdit}}Save{{else}}Create user{{end}}</button>
-    <button class="btn ghost" type="button" onclick="closeModal()">Cancel</button>
+  <div class="field">
+    <label for="user-username">{{T "common.username"}}</label>
+    <input id="user-username" class="finput" name="username" value="{{.Username}}" autocomplete="off" required data-focus>
+  </div>
+
+  <div class="field">
+    <label for="user-password">{{if .IsEdit}}{{T "users.password_new"}}{{else}}{{T "common.password"}}{{end}}</label>
+    <input id="user-password" class="finput" type="password" name="password" autocomplete="new-password"{{if not .IsEdit}} required{{end}}>
+    <span class="hint">{{T "users.hint_password"}}{{if .IsEdit}} {{T "users.hint_password_keep"}}{{end}}</span>
+  </div>
+
+  <div class="field">
+    <label for="user-role">{{T "common.role"}}</label>
+    {{if .RoleLocked}}
+    <input type="hidden" name="role" value="{{.Role}}">
+    <select id="user-role" class="selectbox" disabled>
+      {{if eq .Role "admin"}}<option>{{T "st.admin"}}</option>{{end}}
+      {{if eq .Role "operator"}}<option>{{T "st.operator"}}</option>{{end}}
+      {{if eq .Role "viewer"}}<option>{{T "st.viewer"}}</option>{{end}}
+    </select>
+    <span class="hint">{{T "users.role_locked"}}</span>
+    {{else}}
+    <select id="user-role" class="selectbox" name="role">
+      {{range .Roles}}<option value="{{.}}"{{if eq . $.Role}} selected{{end}}>{{if eq . "admin"}}{{T "st.admin"}}{{else if eq . "operator"}}{{T "st.operator"}}{{else if eq . "viewer"}}{{T "st.viewer"}}{{else}}{{.}}{{end}}</option>{{end}}
+    </select>
+    <span class="hint">{{T "users.roles_help"}}</span>
+    {{end}}
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{if .IsEdit}}{{T "users.form_save"}}{{else}}{{T "users.form_create"}}{{end}}</button>
+    <button type="button" class="btn btn-ghost" onclick="closeModal()">{{T "common.cancel"}}</button>
   </div>
 </form>
 {{end}}

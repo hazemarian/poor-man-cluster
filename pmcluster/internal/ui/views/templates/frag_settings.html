@@ -1,118 +1,276 @@
 {{define "settings"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+{{/*
+  Settings owns three jobs: point the console at a daemon, push a platform update
+  through that daemon, and read/create the cluster-scope configs and secrets the
+  daemon holds.
 
-<h1>Settings</h1>
-<p class="sub">The UI talks to the pmcluster daemon over Bearer auth. Anything set here takes effect immediately, no restart.</p>
-
-<div class="card">
-  <h2>Daemon connection</h2>
-  <form method="post" action="/web/settings" hx-post="/web/settings" hx-target="#view" hx-swap="innerHTML">
-    <label>API base URL</label>
-    <input name="api_url" placeholder="http://host.docker.internal:9090" value="{{.APIURL}}" />
-    <p class="muted">Env default <code>{{.EnvAPIURL}}</code></p>
-    <label>API token</label>
-    <input name="api_token" type="password" placeholder="pmc_…" value="{{if .HasToken}}•••set•••{{end}}" />
-    <p class="muted">Env default token is {{if .HasEnvToken}}configured{{else}}not set{{end}}.</p>
-    <div class="row">
-      <button class="btn" type="submit">Save</button>
-      {{if .Configured}}<span class="pill good">connected</span>{{else}}<span class="pill warn">not configured</span>{{end}}
-    </div>
-  </form>
-</div>
-
-{{if .Configured}}
-<div class="card">
-  <h2>Apply to swarm</h2>
-  <p class="sub">Re-runs <code>cluster update</code> so edited cluster configs are re-rendered on the swarm side.</p>
-  <button class="btn" hx-post="/web/settings/apply" hx-target="#view" hx-swap="innerHTML">Apply to swarm</button>
-  {{if .ApplySummary}}<p class="msg ok" style="white-space:pre">{{.ApplySummary}}</p>{{end}}
-</div>
-
-<div class="card">
-  <h2>Cluster settings</h2>
-  <p class="sub">Storage root, backups, SSO and domain settings. Saved by the daemon and applied on the next <code>cluster update</code>.</p>
-  <button class="btn" hx-get="/web/settings/cluster" hx-target="#view" hx-swap="innerHTML" hx-push-url="true">Edit cluster settings</button>
-</div>
-
-<div class="section-head">
-  <h2>Cluster configs</h2>
-  <button class="btn" hx-get="/web/settings/configs/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add Config</button>
-</div>
-<div class="card">
-  {{if .ClusterConfigs}}
-  <table>
-    <thead><tr><th>Name</th><th>Kind</th><th>Version</th><th>Updated</th><th></th></tr></thead>
-    <tbody>
-      {{range .ClusterConfigs}}
-      <tr>
-        <td><code>{{.Name}}</code></td>
-        <td><span class="pill {{if eq .Kind "template"}}warn{{else}}good{{end}}">{{.Kind}}</span></td>
-        <td class="muted">{{.Version}}</td>
-        <td class="muted">{{ts .UpdatedAt}}</td>
-        <td style="white-space:nowrap;text-align:right">
-          <button class="btn ghost sm" hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Edit</button>
-          {{if .Rendered}}<button class="btn ghost sm" hx-get="/web/settings/rendered/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Rendered</button>{{end}}
-          <button class="btn danger sm" hx-post="/web/settings/configs/remove/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete config {{.Name}} and its history?')">Delete</button>
-        </td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
-  {{else}}
-  <div class="empty">
-    No cluster configs yet.
-    <div class="row" style="justify-content:center"><button class="btn" hx-get="/web/settings/configs/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add your first config</button></div>
+  Layout order follows that job order. Every list has the same three states:
+  rows / unknown (the daemon did not answer — never rendered as "empty") /
+  empty-but-actionable. Raw upstream text always sits inside a <details>
+  disclosure, never in place of the human sentence.
+*/}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "settings.title"}}</h1>
+    <p class="sub">{{T "settings.sub"}}</p>
   </div>
-  {{end}}
+  <div class="ph-actions">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+  </div>
 </div>
 
-<div class="section-head">
-  <h2>Cluster secrets</h2>
-  <button class="btn" hx-get="/web/settings/secrets/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add Secret</button>
-</div>
-<div class="card">
-  {{if .ClusterSecrets}}
-  <table>
-    <thead><tr><th>Name</th><th>Value</th><th>Created</th><th></th></tr></thead>
-    <tbody>
-      {{range .ClusterSecrets}}
-      <tr>
-        <td><code>{{.Name}}</code></td>
-        <td><span class="secret-mask">••••••••</span></td>
-        <td class="muted">{{ts .CreatedAt}}</td>
-        <td style="white-space:nowrap;text-align:right">
-          <button class="btn ghost sm" hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" onclick="return confirm('Reveal secret {{.Name}}? Its value will be shown in the UI.')">Reveal</button>
-          <button class="btn ghost sm" hx-get="/web/settings/secrets/edit/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Edit</button>
-          <button class="btn danger sm" hx-post="/web/settings/secrets/remove/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete secret {{.Name}}?')">Delete</button>
-        </td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
-  {{else}}
-  <div class="empty">
-    No cluster secrets yet — values are stored AES-256-GCM encrypted and revealed only on demand.
-    <div class="row" style="justify-content:center"><button class="btn" hx-get="/web/settings/secrets/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add your first secret</button></div>
+{{if .ErrKey}}
+<div class="banner bad">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T .ErrKey}}</p>
+    <p>{{T "err.banner_body"}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
   </div>
-  {{end}}
 </div>
 {{end}}
 
-<div class="card">
-  <h2>About</h2>
-  <p class="sub">version {{.Version}} · signed in as <code>@{{.User}}</code></p>
+{{if .MsgKey}}{{if .MsgArg2}}<div class="msg ok">{{TF .MsgKey .MsgArg .MsgArg2}}</div>{{else if .MsgArg}}<div class="msg ok">{{TF .MsgKey .MsgArg}}</div>{{else}}<div class="msg ok">{{T .MsgKey}}</div>{{end}}{{end}}
+
+<div class="stats">
+  <div class="stat">
+    <div class="stat-l">{{icon "server"}}<span>{{T "settings.conn_state"}}</span></div>
+    <div class="stat-v">
+      {{if .Configured}}<span class="pill good"><i class="dot"></i>{{T "settings.conn_ok"}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{T "settings.conn_missing"}}</span>{{end}}
+    </div>
+    {{if not .Configured}}<div class="stat-f">{{T "settings.conn_missing_body"}}</div>{{end}}
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{icon "external"}}<span>{{T "settings.api_url"}}</span></div>
+    <div class="stat-v mono iso trunc" dir="ltr" title="{{.APIURL}}">{{if .APIURL}}{{.APIURL}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+    <div class="stat-f">{{if .EnvAPIURL}}{{TF "settings.api_url_hint" .EnvAPIURL}}{{else}}{{T "settings.api_url_hint_none"}}{{end}}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{icon "lock"}}<span>{{T "settings.api_token"}}</span></div>
+    <div class="stat-v">{{if .HasToken}}<span class="mono secret-mask">{{T "settings.config_masked"}}</span>{{else}}{{T "common.none"}}{{end}}</div>
+    <div class="stat-f">{{if .HasEnvToken}}{{T "settings.api_token_env"}}{{else if .HasToken}}{{T "settings.api_token_set"}}{{else}}{{T "settings.api_token_none"}}{{end}}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{icon "info"}}<span>{{T "settings.about_version"}}</span></div>
+    <div class="stat-v mono iso" dir="ltr">{{.Version}}</div>
+    <div class="stat-f">{{if .User}}{{TF "settings.about_signed" .User}}{{end}}</div>
+  </div>
+</div>
+
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "settings.daemon_title"}}</h2>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "settings.daemon_sub"}}</p>
+    <form class="form" hx-post="/web/settings" hx-target="#view" hx-push-url="true" hx-disabled-elt="find button">
+      <div class="form-grid">
+        <div class="field">
+          <label for="settings-api-url">{{T "settings.api_url"}}</label>
+          <input id="settings-api-url" class="finput mono" type="text" name="api_url" dir="ltr" autocomplete="off" spellcheck="false" value="{{.APIURL}}">
+          <span class="hint">{{if .EnvAPIURL}}{{TF "settings.api_url_hint" .EnvAPIURL}}{{else}}{{T "settings.api_url_hint_none"}}{{end}}</span>
+        </div>
+        <div class="field">
+          <label for="settings-api-token">{{T "settings.api_token"}}</label>
+          <input id="settings-api-token" class="finput mono" type="password" name="api_token" dir="ltr" autocomplete="new-password" spellcheck="false"
+                 placeholder="{{if .HasToken}}{{T "settings.api_token_set"}}{{else}}{{T "settings.api_token_none"}}{{end}}">
+          <span class="hint">{{T "settings.api_token_hint"}}</span>
+          {{if .HasEnvToken}}<span class="hint">{{T "settings.api_token_env"}}</span>{{end}}
+        </div>
+      </div>
+      <label class="check">
+        <input type="checkbox" name="clear_token" value="1">
+        <span>{{T "settings.api_token_clear"}}</span>
+      </label>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">{{icon "check"}}<span>{{T "settings.save"}}</span></button>
+      </div>
+    </form>
+  </div>
 </div>
 
 {{if .Configured}}
-<div class="card">
-  <h2>Cluster status</h2>
-  <div class="grid">
-    <div class="stat"><div class="label">Daemon connection</div><div class="value"><span class="pill good">connected</span></div></div>
-    <div class="stat"><div class="label">Cluster configs</div><div class="value">{{len .ClusterConfigs}}</div></div>
-    <div class="stat"><div class="label">Cluster secrets</div><div class="value">{{len .ClusterSecrets}}</div></div>
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "settings.apply_title"}}</h2>
   </div>
-  <p class="muted" style="margin:10px 0 0">Storage root and backup placement are configured during <code>pmcluster setup</code> (<code>--volume-root</code>, <code>--backup-all-nodes</code>) and applied to the swarm via <b>Apply to swarm</b>.</p>
+  <div class="panel-body">
+    <p class="sub">{{T "settings.apply_sub"}}</p>
+    {{if .ApplyDone}}
+    <div class="msg ok">{{TF "settings.apply_summary" .ApplyOTel .ApplyTraefik .ApplyCert .ApplyEdge .ApplyStacks}}</div>
+    {{end}}
+    <div class="action-bar">
+      <button type="button" class="btn btn-primary"
+              hx-post="/web/settings/apply" hx-target="#view" hx-push-url="true" hx-disabled-elt="this">
+        {{icon "restore"}}<span>{{T "settings.apply_action"}}</span>
+      </button>
+      <span class="muted">{{T "settings.apply_hint"}}</span>
+    </div>
+  </div>
+</div>
+
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "settings.configs_title"}}</h2>
+    <div class="ph-actions">
+      <button type="button" class="btn btn-sm" hx-get="/web/settings/configs/new" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.add_config"}}</span></button>
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "settings.configs_sub"}}</p>
+    {{if not .ConfigsKnown}}
+      <div class="empty">
+        {{icon "alert"}}
+        <h3>{{T "settings.configs_unknown_title"}}</h3>
+        <p>{{if .ConfigsErrKey}}{{T .ConfigsErrKey}}{{else}}{{T "settings.configs_unknown_body"}}{{end}}</p>
+        {{if .ConfigsErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ConfigsErrRaw}}</pre></details>{{end}}
+        <div class="empty-actions">
+          <button type="button" class="btn btn-sm" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+          <button type="button" class="btn btn-sm" onclick="closeModal();document.getElementById('settings-api-url').focus()">{{icon "settings"}}<span>{{T "settings.api_url"}}</span></button>
+        </div>
+      </div>
+    {{else if .ClusterConfigs}}
+      <div class="table-wrap only-md">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{{T "common.name"}}</th>
+              <th>{{T "settings.config_kind"}}</th>
+              <th>{{T "settings.col_version"}}</th>
+              <th>{{T "settings.col_updated"}}</th>
+              <th class="num"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .ClusterConfigs}}
+            <tr>
+              <td><span class="mono">{{.Name}}</span></td>
+              <td>{{if eq .Kind "template"}}{{T "configs.kind_template"}}{{else if eq .Kind "env"}}{{T "configs.kind_env"}}{{else}}{{T "configs.kind_file"}}{{end}}</td>
+              <td class="mono iso" dir="ltr">{{if .Version}}{{.Version}}{{else}}{{T "common.unknown"}}{{end}}</td>
+              <td class="muted iso" dir="ltr">{{ts .UpdatedAt}}</td>
+              <td>
+                <div class="row-actions">
+                  {{if .Rendered}}<button type="button" class="btn btn-ghost btn-sm" title="{{T "settings.rendered_title"}}" hx-get="/web/settings/rendered/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "file"}}<span class="sr-only">{{T "settings.rendered"}}</span></button>{{end}}
+                  <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "settings"}}<span class="sr-only">{{T "common.edit"}}</span></button>
+                  <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/settings/configs/remove/{{.Name}}"
+                          hx-confirm="{{TF "settings.delete_config_confirm" .Name}}" hx-target="#view">{{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span></button>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      <div class="only-sm">
+        {{range .ClusterConfigs}}
+        <div class="kv">
+          <div class="kv-row"><span class="k">{{T "common.name"}}</span><span class="v mono">{{.Name}}</span></div>
+          <div class="kv-row"><span class="k">{{T "settings.config_kind"}}</span><span class="v">{{if eq .Kind "template"}}{{T "configs.kind_template"}}{{else if eq .Kind "env"}}{{T "configs.kind_env"}}{{else}}{{T "configs.kind_file"}}{{end}}</span></div>
+          <div class="kv-row"><span class="k">{{T "settings.col_version"}}</span><span class="v mono iso" dir="ltr">{{if .Version}}{{.Version}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
+          <div class="kv-row"><span class="k">{{T "settings.col_updated"}}</span><span class="v muted iso" dir="ltr">{{ts .UpdatedAt}}</span></div>
+        </div>
+        <div class="action-bar">
+          {{if .Rendered}}<button type="button" class="btn btn-sm" hx-get="/web/settings/rendered/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "file"}}<span>{{T "settings.rendered"}}</span></button>{{end}}
+          <button type="button" class="btn btn-sm" hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "settings"}}<span>{{T "common.edit"}}</span></button>
+          <button type="button" class="btn btn-danger btn-sm" hx-post="/web/settings/configs/remove/{{.Name}}"
+                  hx-confirm="{{TF "settings.delete_config_confirm" .Name}}" hx-target="#view">{{icon "trash"}}<span>{{T "common.delete"}}</span></button>
+        </div>
+        {{end}}
+      </div>
+    {{else}}
+      <div class="empty">
+        {{icon "file"}}
+        <h3>{{T "settings.configs_empty_title"}}</h3>
+        <p>{{T "settings.configs_empty_body"}}</p>
+        <div class="empty-actions">
+          <button type="button" class="btn btn-primary btn-sm" hx-get="/web/settings/configs/new" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.add_config"}}</span></button>
+        </div>
+      </div>
+    {{end}}
+  </div>
+</div>
+
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "settings.secrets_title"}}</h2>
+    <div class="ph-actions">
+      <button type="button" class="btn btn-sm" hx-get="/web/settings/secrets/new" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.add_secret"}}</span></button>
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "settings.secrets_sub"}}</p>
+    {{if not .SecretsKnown}}
+      <div class="empty">
+        {{icon "alert"}}
+        <h3>{{T "settings.secrets_unknown_title"}}</h3>
+        <p>{{if .SecretsErrKey}}{{T .SecretsErrKey}}{{else}}{{T "settings.secrets_unknown_body"}}{{end}}</p>
+        {{if .SecretsErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.SecretsErrRaw}}</pre></details>{{end}}
+        <div class="empty-actions">
+          <button type="button" class="btn btn-sm" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+        </div>
+      </div>
+    {{else if .ClusterSecrets}}
+      <div class="table-wrap only-md">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{{T "common.name"}}</th>
+              <th>{{T "common.value"}}</th>
+              <th>{{T "common.created"}}</th>
+              <th class="num"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .ClusterSecrets}}
+            <tr>
+              <td><span class="mono">{{.Name}}</span></td>
+              <td><span class="secret-mask mono" aria-label="{{T "settings.secret_hidden"}}">{{T "settings.config_masked"}}</span></td>
+              <td class="muted iso" dir="ltr">{{ts .CreatedAt}}</td>
+              <td>
+                <div class="row-actions">
+                  <button type="button" class="btn btn-ghost btn-sm" title="{{T "settings.reveal"}}"
+                          hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body"
+                          hx-on::after-request="if(!event.detail.failed)openModal()"
+                          onclick="return confirm('{{TF "settings.reveal_confirm" .Name}}')">{{icon "lock"}}<span class="sr-only">{{T "settings.reveal"}}</span></button>
+                  <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/secrets/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "settings"}}<span class="sr-only">{{T "common.edit"}}</span></button>
+                  <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/settings/secrets/remove/{{.Name}}"
+                          hx-confirm="{{TF "settings.delete_secret_confirm" .Name}}" hx-target="#view">{{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span></button>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      <div class="only-sm">
+        {{range .ClusterSecrets}}
+        <div class="kv">
+          <div class="kv-row"><span class="k">{{T "common.name"}}</span><span class="v mono">{{.Name}}</span></div>
+          <div class="kv-row"><span class="k">{{T "common.value"}}</span><span class="v"><span class="secret-mask mono">{{T "settings.config_masked"}}</span></span></div>
+          <div class="kv-row"><span class="k">{{T "common.created"}}</span><span class="v muted iso" dir="ltr">{{ts .CreatedAt}}</span></div>
+        </div>
+        <div class="action-bar">
+          <button type="button" class="btn btn-sm"
+                  hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body"
+                  hx-on::after-request="if(!event.detail.failed)openModal()"
+                  onclick="return confirm('{{TF "settings.reveal_confirm" .Name}}')">{{icon "lock"}}<span>{{T "settings.reveal"}}</span></button>
+          <button type="button" class="btn btn-sm" hx-get="/web/settings/secrets/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "settings"}}<span>{{T "common.edit"}}</span></button>
+          <button type="button" class="btn btn-danger btn-sm" hx-post="/web/settings/secrets/remove/{{.Name}}"
+                  hx-confirm="{{TF "settings.delete_secret_confirm" .Name}}" hx-target="#view">{{icon "trash"}}<span>{{T "common.delete"}}</span></button>
+        </div>
+        {{end}}
+      </div>
+    {{else}}
+      <div class="empty">
+        {{icon "lock"}}
+        <h3>{{T "settings.secrets_empty_title"}}</h3>
+        <p>{{T "settings.secrets_empty_body"}}</p>
+        <div class="empty-actions">
+          <button type="button" class="btn btn-primary btn-sm" hx-get="/web/settings/secrets/new" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.add_secret"}}</span></button>
+        </div>
+      </div>
+    {{end}}
+  </div>
 </div>
 {{end}}
 {{end}}

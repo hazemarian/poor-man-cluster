@@ -1,38 +1,319 @@
 {{define "stacks"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+{{/* The stacks index. A stack opens in the inspector at the bottom of this
+     page rather than in a drawer over it: the shell's off-canvas drawer belongs
+     to the sidebar, and the operator needs the list and the open stack at the
+     same time. Every action answers with this whole page, so the table never
+     disappears under the operator's hands. */}}
 
-<div hx-get="/web/stacks" hx-trigger="every 30s" hx-target="#stacks-body" hx-swap="innerHTML">
-<h1>Stacks</h1>
-<p class="sub"><span class="live-dot"></span>live · {{.Count}} deployed stack(s)</p>
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "stacks.title"}}</h1>
+    <p class="sub">
+      {{- if .Known -}}
+        {{- if .Filtered -}}
+          {{TF "stacks.showing" (P .Count "plural.stacks") (P .Total "plural.stacks")}}
+        {{- else -}}
+          {{TF "stacks.sub" (P .Total "plural.stacks") (ts .LastUpdated)}}
+        {{- end -}}
+      {{- else -}}
+        {{T "stacks.sub_unknown"}}
+      {{- end -}}
+    </p>
+  </div>
+  <div class="ph-actions">
+    <button type="button" class="btn btn-ghost btn-sm"
+            hx-get="/web/stacks{{if .Filtered}}?q={{.Query | urlquery}}{{end}}"
+            hx-target="#view" hx-push-url="true">
+      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
+    </button>
+    <a class="btn btn-primary btn-sm" href="/web/deploy"
+       hx-get="/web/deploy" hx-target="#view" hx-push-url="true">
+      {{icon "deploy"}}<span>{{T "nav.deploy"}}</span>
+    </a>
+  </div>
+</div>
 
-<div id="stacks-body">
-{{if .Stacks}}
-<div class="filter-box">
-  <input id="stacks-filter" placeholder="Filter stacks…" oninput="filterTable('stacks-filter')">
+{{if .ErrKey}}
+<div class="banner bad">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T .ErrKey}}</p>
+    <p>{{T "err.banner_body"}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <a class="btn btn-ghost btn-sm" href="/web/settings"
+       hx-get="/web/settings" hx-target="#view" hx-push-url="true">
+      {{icon "settings"}}<span>{{T "nav.settings"}}</span>
+    </a>
+  </div>
 </div>
-<div class="card" style="padding:6px 14px">
-<table data-filter-table="stacks-filter">
-  <tr><th>Name</th><th>Revision</th><th>Repo</th><th>File</th><th>Updated</th><th></th></tr>
-  {{range .Stacks}}
-  <tr>
-    <td><a class="link" href="/web/stacks/{{.Name}}" hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">{{.Name}}</a></td>
-    <td>{{.CurrentRevision}}</td>
-    <td class="muted">{{if .RepoURL}}<code>{{.RepoURL}}</code>{{else}}—{{end}}</td>
-    <td class="muted">{{if .SourceFile}}<code>{{.SourceFile}}</code>{{else}}—{{end}}</td>
-    <td class="muted">{{ts .UpdatedAt}}</td>
-    <td style="text-align:right; white-space:nowrap">
-      <a class="btn sm ghost" href="/web/stacks/{{.Name}}" hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">Details</a>
-      <a class="btn sm ghost" href="/web/stacks/{{.Name}}/config" hx-get="/web/stacks/{{.Name}}/config" hx-target="#view" hx-push-url="true">Config</a>
-      <button class="btn danger sm" hx-post="/web/stacks/{{.Name}}/remove" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete stack {{.Name}}? Its services, volumes, configs and secrets will be removed from the swarm and the database.')">Delete</button>
-    </td>
-  </tr>
-  {{end}}
-</table>
-</div>
-{{else}}
-<div class="card empty">No stacks yet. Deploy one from the Deploy tab.</div>
 {{end}}
+
+{{if .MsgKey}}
+<div class="banner ok">
+  {{icon "check-circle"}}
+  <div class="b-body">
+    <p class="b-title">{{TF .MsgKey .MsgArg0 .MsgArg1 .MsgArg2}}</p>
+  </div>
+  <div class="b-actions">
+    <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.banner').remove()">
+      {{icon "close"}}<span class="sr-only">{{T "common.dismiss"}}</span>
+    </button>
+  </div>
 </div>
+{{end}}
+
+<div class="stats">
+  <div class="stat{{if not .Known}} is-unknown{{end}}">
+    <span class="stat-l">{{T "stacks.stat_stacks"}}</span>
+    <span class="stat-v">{{if .Known}}{{.Total}}{{else}}{{T "common.unavailable"}}{{end}}</span>
+    <span class="stat-f">{{T "stacks.stat_stacks_f"}}</span>
+  </div>
+  <div class="stat{{if not .ServicesKnown}} is-unknown{{end}}">
+    <span class="stat-l">{{T "stacks.stat_replicas"}}</span>
+    <span class="stat-v">
+      {{- if .ServicesKnown -}}
+        {{N .TotalRunning}}<span class="muted"> / {{N .TotalDesired}}</span>
+      {{- else -}}
+        {{T "common.unavailable"}}
+      {{- end -}}
+    </span>
+    <span class="stat-f">{{T "stacks.stat_replicas_f"}}</span>
+  </div>
+  <div class="stat{{if not .Known}} is-unknown{{end}}">
+    <span class="stat-l">{{T "stacks.stat_git"}}</span>
+    <span class="stat-v">{{if .Known}}{{.RepoCount}}{{else}}{{T "common.unavailable"}}{{end}}</span>
+    <span class="stat-f">{{T "stacks.stat_git_f"}}</span>
+  </div>
+  <div class="stat{{if not .Known}} is-unknown{{end}}">
+    <span class="stat-l">{{T "stacks.stat_changed"}}</span>
+    <span class="stat-v stat-text">{{if and .Known .LastUpdated}}<bdi>{{ts .LastUpdated}}</bdi>{{else}}{{T "common.never"}}{{end}}</span>
+    <span class="stat-f">{{T "stacks.stat_changed_f"}}</span>
+  </div>
 </div>
+
+<form class="toolbar" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
+  <div class="search">
+    {{icon "search"}}
+    <input type="search" name="q" value="{{.Query}}" placeholder="{{T "stacks.search_ph"}}"
+           aria-label="{{T "stacks.search_ph"}}">
+  </div>
+  <button type="submit" class="btn btn-sm">{{icon "filter"}}<span>{{T "common.filter"}}</span></button>
+  {{if .Filtered}}
+  <a class="btn btn-ghost btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
+    {{icon "close"}}<span>{{T "stacks.clear_filter"}}</span>
+  </a>
+  {{end}}
+  <span class="spacer"></span>
+  {{if .Known}}<span class="pill plain">{{P .Total "plural.stacks"}}</span>{{end}}
+</form>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{T "stacks.list_title"}}</h2>
+    <div class="ph-actions">
+      {{if .Known}}
+        <span class="pill plain">{{P .Count "plural.stacks"}}</span>
+      {{else}}
+        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}
+    </div>
+  </div>
+
+  {{if not .Known}}
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "alert"}}
+      <h3>{{T "stacks.unknown_title"}}</h3>
+      <p>{{T "stacks.unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm"
+                hx-get="/web/stacks{{if .Filtered}}?q={{.Query | urlquery}}{{end}}"
+                hx-target="#view" hx-push-url="true">
+          {{icon "refresh"}}<span>{{T "common.retry"}}</span>
+        </button>
+        <a class="btn btn-ghost btn-sm" href="/web/settings"
+           hx-get="/web/settings" hx-target="#view" hx-push-url="true">
+          {{icon "settings"}}<span>{{T "nav.settings"}}</span>
+        </a>
+      </div>
+    </div>
+  </div>
+  {{else if .Count}}
+  <div class="table-wrap only-md">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{T "common.name"}}</th>
+          <th>{{T "common.revision"}}</th>
+          <th>{{T "common.status"}}</th>
+          <th>{{T "stacks.col_repo"}}</th>
+          <th>{{T "common.updated"}}</th>
+          <th><span class="sr-only">{{T "common.actions"}}</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Stacks}}
+        <tr>
+          <td>
+            <a class="btn-link" href="/web/stacks/{{.Name}}"
+               hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">
+              <span class="mono">{{.Name}}</span>
+            </a>
+          </td>
+          <td><span class="mono num" dir="ltr">{{N .CurrentRevision}}</span></td>
+          <td>
+            {{if $.ServicesKnown}}
+              {{if eq .State "none"}}
+                <span class="pill plain">{{T "stacks.state_none"}}</span>
+              {{else if eq .State "running"}}
+                <span class="pill good"><i class="dot"></i>{{T "st.running"}} {{N .Running}}/{{N .Desired}}</span>
+              {{else}}
+                <span class="pill warn"><i class="dot"></i>{{T "st.degraded"}} {{N .Running}}/{{N .Desired}}</span>
+              {{end}}
+            {{else}}
+              <span class="pill plain">{{T "common.unavailable"}}</span>
+            {{end}}
+          </td>
+          <td>
+            {{if .RepoURL}}
+              <span class="mono trunc">{{.RepoURL}}</span>
+            {{else}}
+              <span class="muted">{{T "stacks.repo_unset"}}</span>
+            {{end}}
+          </td>
+          <td>{{if .UpdatedAt}}<span class="muted">{{ts .UpdatedAt}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+          <td>
+            <div class="row-actions">
+              <form hx-post="/web/stacks/{{.Name}}/sync" hx-target="#view"
+                    hx-confirm="{{TF "stacks.confirm_sync" .Name}}">
+                <button type="submit" class="btn btn-ghost btn-sm" title="{{T "stacks.act_redeploy"}}">
+                  {{icon "play"}}<span class="sr-only">{{T "stacks.act_redeploy"}}</span>
+                </button>
+              </form>
+              <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Name}}/config"
+                 hx-get="/web/stacks/{{.Name}}/config" hx-target="#view" hx-push-url="true"
+                 title="{{T "stacks.act_config"}}">
+                {{icon "file"}}<span class="sr-only">{{T "stacks.act_config"}}</span>
+              </a>
+              <a class="btn btn-ghost btn-sm" href="/web/backups"
+                 hx-get="/web/backups" hx-target="#view" hx-push-url="true"
+                 title="{{T "stacks.act_backups"}}">
+                {{icon "backups"}}<span class="sr-only">{{T "stacks.act_backups"}}</span>
+              </a>
+              <form hx-post="/web/stacks/{{.Name}}/remove" hx-target="#view"
+                    hx-confirm="{{TF "stacks.confirm_delete" .Name}}">
+                <button type="submit" class="btn btn-danger btn-sm" title="{{T "common.delete"}}">
+                  {{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span>
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="only-sm">
+    {{range .Stacks}}
+    <div class="kv">
+      <div class="kv-row">
+        <span class="k">{{T "common.name"}}</span>
+        <span class="v">
+          <a class="btn-link" href="/web/stacks/{{.Name}}"
+             hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">
+            <span class="mono">{{.Name}}</span>
+          </a>
+        </span>
+      </div>
+      <div class="kv-row">
+        <span class="k">{{T "common.revision"}}</span>
+        <span class="v mono num" dir="ltr">{{N .CurrentRevision}}</span>
+      </div>
+      <div class="kv-row">
+        <span class="k">{{T "common.status"}}</span>
+        <span class="v">
+          {{if $.ServicesKnown}}
+            {{if eq .State "none"}}
+              <span class="pill plain">{{T "stacks.state_none"}}</span>
+            {{else if eq .State "running"}}
+              <span class="pill good"><i class="dot"></i>{{T "st.running"}} {{N .Running}}/{{N .Desired}}</span>
+            {{else}}
+              <span class="pill warn"><i class="dot"></i>{{T "st.degraded"}} {{N .Running}}/{{N .Desired}}</span>
+            {{end}}
+          {{else}}
+            <span class="pill plain">{{T "common.unavailable"}}</span>
+          {{end}}
+        </span>
+      </div>
+      <div class="kv-row">
+        <span class="k">{{T "stacks.col_repo"}}</span>
+        <span class="v">{{if .RepoURL}}<span class="mono trunc">{{.RepoURL}}</span>{{else}}<span class="muted">{{T "stacks.repo_unset"}}</span>{{end}}</span>
+      </div>
+      <div class="kv-row">
+        <span class="k">{{T "common.updated"}}</span>
+        <span class="v muted">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}—{{end}}</span>
+      </div>
+      <div class="action-bar">
+        <form hx-post="/web/stacks/{{.Name}}/sync" hx-target="#view"
+              hx-confirm="{{TF "stacks.confirm_sync" .Name}}">
+          <button type="submit" class="btn btn-sm" style="min-height:44px">
+            {{icon "play"}}<span>{{T "stacks.act_redeploy"}}</span>
+          </button>
+        </form>
+        <a class="btn btn-ghost btn-sm" style="min-height:44px" href="/web/stacks/{{.Name}}/config"
+           hx-get="/web/stacks/{{.Name}}/config" hx-target="#view" hx-push-url="true">
+          {{icon "file"}}<span>{{T "stacks.act_config"}}</span>
+        </a>
+        <a class="btn btn-ghost btn-sm" style="min-height:44px" href="/web/backups"
+           hx-get="/web/backups" hx-target="#view" hx-push-url="true">
+          {{icon "backups"}}<span>{{T "stacks.act_backups"}}</span>
+        </a>
+        <form hx-post="/web/stacks/{{.Name}}/remove" hx-target="#view"
+              hx-confirm="{{TF "stacks.confirm_delete" .Name}}">
+          <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px">
+            {{icon "trash"}}<span>{{T "common.delete"}}</span>
+          </button>
+        </form>
+      </div>
+    </div>
+    {{end}}
+  </div>
+  {{else if .Filtered}}
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "search"}}
+      <h3>{{TF "stacks.no_match_title" .Query}}</h3>
+      <p>{{T "stacks.no_match_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
+          {{T "stacks.clear_filter"}}
+        </a>
+      </div>
+    </div>
+  </div>
+  {{else}}
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "stacks"}}
+      <h3>{{T "stacks.empty_title"}}</h3>
+      <p>{{T "stacks.empty_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-primary btn-sm" href="/web/deploy"
+           hx-get="/web/deploy" hx-target="#view" hx-push-url="true">
+          {{icon "deploy"}}<span>{{T "nav.deploy"}}</span>
+        </a>
+        <a class="btn btn-ghost btn-sm" href="/web/webhooks"
+           hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">
+          {{icon "webhooks"}}<span>{{T "nav.webhooks"}}</span>
+        </a>
+      </div>
+    </div>
+  </div>
+  {{end}}
+</section>
+
+{{if .Open}}{{template "stack" .Open}}{{end}}
 {{end}}

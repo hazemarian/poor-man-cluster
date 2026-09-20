@@ -1,52 +1,97 @@
 {{define "setup"}}
 <!doctype html>
-<html lang="en">
+<html lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Set a password · pmcluster</title>
-  <style>
-    :root{color-scheme:dark;--bg:#0b0f14;--panel:#111722;--panel2:#0f1520;--line:#1e2733;--text:#dbe2ea;--muted:#7d899a;--accent:#4f9dff;--good:#44d47b;--bad:#ff5c5c}
-    *{box-sizing:border-box}
-    body{margin:0;min-height:100vh;display:grid;place-items:center;background:
-      radial-gradient(800px 400px at 20% -10%,rgba(79,157,255,.14),transparent 60%),
-      radial-gradient(600px 300px at 90% 110%,rgba(68,212,123,.10),transparent 60%),
-      var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
-    .card{width:400px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:30px}
-    .brand{font-size:20px;font-weight:700;text-align:center;margin-bottom:4px}
-    .hint{text-align:center;color:var(--muted);font-size:13px;margin:14px 0 4px;line-height:1.5}
-    .err{background:rgba(255,92,92,.12);color:var(--bad);border:1px solid rgba(255,92,92,.3);padding:10px 12px;border-radius:8px;font-size:13px;margin:12px 0}
-    .ok{color:var(--good);font-size:13px;text-align:center;margin:12px 0}
-    label{font-size:12px;color:var(--muted);display:block;margin-top:14px}
-    input{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:11px 12px;font:inherit;margin-top:6px}
-    input:focus{border-color:var(--accent);outline:none}
-    button{margin-top:20px;width:100%;background:var(--accent);color:#04121f;font-weight:650;border:none;border-radius:8px;padding:11px;cursor:pointer;font-size:14px}
-    button:hover{filter:brightness(1.08)}
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/web/static/favicon.svg" type="image/svg+xml">
+  {{if .Done}}<meta http-equiv="refresh" content="2;url=/web/overview">{{end}}
+  <title>{{T "auth.setup_title"}} · {{T "app.title"}}</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('pmc_theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/web/static/fonts.css">
+  <link rel="stylesheet" href="/web/static/base.css">
+  <link rel="stylesheet" href="/web/static/components.css">
+  <link rel="stylesheet" href="/web/static/patterns.css">
+  <script src="/web/static/preferences.js" defer></script>
 </head>
 <body>
-  <form class="card" method="post" action="/web/setup">
-    <div class="brand">pmcluster<span class="sub">welcome</span></div>
+{{template "icons" .}}
+
+<div class="doc">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <span class="mark" aria-hidden="true">{{icon "stacks"}}</span>
+      <span class="auth-word">{{T "app.title"}}</span>
+    </div>
+    <p class="auth-sub">{{T "auth.setup_brand"}}</p>
+
     {{if .Done}}
-      <div class="ok">Password set. Redirecting to sign-in…</div>
+    <div class="banner ok" role="status" aria-live="polite">
+      <span class="ic" aria-hidden="true">{{icon "check-circle"}}</span>
+      <div class="b-body">
+        <p class="b-title">{{T "auth.setup_done"}}</p>
+        <p>{{T "auth.setup_done_note"}}</p>
+      </div>
+    </div>
     {{else}}
-      <p class="hint">This is the first run. Create the admin account that unlocks
-      the operator console.</p>
-      {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
-      {{if .Payload}}
-      <label>Username</label>
-      <input type="text" name="username" value="{{.Payload.Username}}" autocomplete="username" required autofocus>
-      {{else}}
-      <label>Username</label>
-      <input type="text" name="username" placeholder="admin" autocomplete="username" required autofocus>
+    <form method="post" action="/web/setup">
+      {{if .Failure}}
+      <div class="banner bad" role="alert">
+        <span class="ic" aria-hidden="true">{{icon "alert"}}</span>
+        <div class="b-body">
+          <p class="b-title">{{if .Detail}}{{TF .Failure .Detail}}{{else}}{{T .Failure}}{{end}}</p>
+        </div>
+      </div>
       {{end}}
-      <label>Password</label>
-      <input type="password" name="password" autocomplete="new-password" required minlength="8">
-      <label>Confirm password</label>
-      <input type="password" name="confirm" autocomplete="new-password" required minlength="8">
-      <button type="submit">Create admin</button>
+
+      <p class="hint mt-0">{{T "auth.setup_intro"}}</p>
+
+      <ul class="setup-list">
+        <li><span class="ic" aria-hidden="true">{{icon "check"}}</span><span>{{T "auth.setup_req_admin"}}</span></li>
+        <li><span class="ic" aria-hidden="true">{{icon "check"}}</span><span>{{T "auth.setup_req_password"}}</span></li>
+        <li><span class="ic" aria-hidden="true">{{icon "check"}}</span><span>{{T "auth.setup_req_session"}}</span></li>
+      </ul>
+
+      <div class="field">
+        <label for="username">{{T "common.username"}}</label>
+        <input id="username" class="finput mono" type="text" name="username" value="{{.Username}}"
+               placeholder="admin" dir="ltr"
+               autocomplete="username" autocapitalize="off" spellcheck="false"
+               required autofocus>
+      </div>
+
+      <div class="field">
+        <label for="password">{{T "common.password"}}</label>
+        <input id="password" class="finput" type="password" name="password"
+               dir="ltr" autocomplete="new-password" minlength="8" required>
+        <span class="hint">{{T "auth.setup_password_hint"}}</span>
+      </div>
+
+      <div class="field">
+        <label for="confirm">{{T "auth.setup_confirm"}}</label>
+        <input id="confirm" class="finput" type="password" name="confirm"
+               dir="ltr" autocomplete="new-password" minlength="8" required>
+      </div>
+
+      <button class="btn btn-primary btn-block" type="submit">{{T "auth.setup_create"}}</button>
+    </form>
     {{end}}
-  </form>
+
+    <div class="auth-foot">
+      {{template "preferences" "/web/setup"}}
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
 {{end}}

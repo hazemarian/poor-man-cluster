@@ -1,45 +1,291 @@
 {{define "backups"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
-
-<div style="display:flex;justify-content:space-between;align-items:center">
-  <h1 style="margin:0">Backups</h1>
-  <button class="btn"
-          hx-post="/web/backups"
-          hx-target="#view"
-          hx-swap="innerHTML"
-          hx-disabled-elt="this">
-    Run backup now
-  </button>
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "nav.backups"}}</h1>
+    <p class="sub">{{if .Name}}<span class="mono iso" dir="ltr">{{.Name}}</span> · {{end}}{{if .RunsKnown}}{{T "backups.sub"}}{{else}}{{T "backups.sub_unknown"}}{{end}}</p>
+  </div>
+  <div class="ph-actions">
+    <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}">
+      <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
+    </form>
+    <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
+  </div>
 </div>
-<p class="sub">{{len .Backups}} recent backup(s)</p>
 
-{{if .Backups}}
-<div class="card" style="padding:6px 14px">
-<table>
-  <tr><th>ID</th><th>Stack</th><th>Status</th><th>Revision</th><th>Started</th><th>Finished</th><th>Archives</th><th></th></tr>
-  {{range .Backups}}
-  <tr>
-    <td><code>{{.ID}}</code></td>
-    <td>{{if .StackName}}{{.StackName}}{{else}}<span class="muted">(cluster)</span>{{end}}</td>
-    <td><span class="pill {{sp .Status}}">{{.Status}}</span></td>
-    <td>{{if .Revision}}{{.Revision}}{{else}}—{{end}}</td>
-    <td class="muted">{{ts .StartedAt}}</td>
-    <td class="muted">{{ts .FinishedAt}}</td>
-    <td class="muted">{{.Archives}}</td>
-    <td style="text-align:right">
-      <a class="btn sm ghost" href="/web/backups/{{.ID}}/files"
-         hx-get="/web/backups/{{.ID}}/files" hx-target="#view" hx-push-url="true">Browse</a>
-    </td>
-  </tr>
-  {{end}}
-</table>
+{{if .ErrKey}}
+<div class="banner bad">
+  <div class="b-body">
+    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
+    <p>{{T "err.banner_body"}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+  </div>
 </div>
-{{else}}
-<div class="card empty">No backups yet.</div>
+{{else if .Error}}
+<div class="banner bad">
+  <div class="b-body">
+    <div class="b-title">{{icon "alert"}}<span>{{T "err.upstream"}}</span></div>
+    <details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.Error}}</pre></details>
+  </div>
+</div>
+{{else if .MsgKey}}
+<div class="msg ok">{{T .MsgKey}}</div>
 {{end}}
 
-{{if .Error}}
-<div class="card empty">If backups are not enabled on the daemon, this is expected.</div>
+{{if .AtRisk}}
+<div class="banner warn">
+  <div class="b-body">
+    <div class="b-title">{{icon "alert"}}<span>{{TF "backups.risk_banner" (N .AtRisk)}}</span></div>
+    <p>{{T "backups.missed_meaning"}}</p>
+  </div>
+  <div class="b-actions">
+    <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}">
+      <button type="submit" class="btn btn-sm" hx-disabled-elt="this">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
+    </form>
+  </div>
+</div>
 {{end}}
+
+<div class="stats">
+  <div class="stat{{if not .RunsKnown}} is-unknown{{end}}">
+    <div class="stat-l">{{T "backups.stats_last_verified"}}</div>
+    <div class="stat-v">
+      {{if not .RunsKnown}}{{T "common.unavailable"}}
+      {{else if .HasLastVerified}}{{TF "backups.stats_last_verified_foot" (N .LastVerifiedDays)}}
+      {{else}}{{T "backups.coverage_none"}}{{end}}
+    </div>
+    <div class="stat-f">{{if .RunsKnown}}{{if not .HasLastVerified}}{{T "backups.stats_last_verified_none"}}{{end}}{{end}}</div>
+  </div>
+  <div class="stat is-unknown">
+    <div class="stat-l">{{T "backups.stats_schedule"}}</div>
+    <div class="stat-v">{{T "backups.stats_schedule_value"}}</div>
+    <div class="stat-f">{{T "backups.stats_schedule_foot"}}</div>
+  </div>
+  <div class="stat is-unknown">
+    <div class="stat-l">{{T "backups.stats_size"}}</div>
+    <div class="stat-v">{{T "backups.stats_size_value"}}</div>
+    <div class="stat-f">{{T "backups.stats_size_foot"}}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{T "backups.stats_retention"}}</div>
+    <div class="stat-v">{{TF "backups.stats_retention_value" (N .Limit)}}</div>
+    <div class="stat-f">{{T "backups.stats_retention_foot"}}</div>
+  </div>
+  <div class="stat{{if not .CoverageKnown}} is-unknown{{end}}">
+    <div class="stat-l">{{T "backups.stats_at_risk"}}</div>
+    <div class="stat-v">{{if .CoverageKnown}}{{N .AtRisk}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+    <div class="stat-f">{{if .CoverageKnown}}{{T "backups.stats_at_risk_foot"}}{{end}}</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "backups.coverage_title"}}</h2>
+    <div class="ph-actions">
+      {{if .CoverageKnown}}
+      <span class="pill {{if .AtRisk}}warn{{else}}good{{end}}"><i class="dot"></i>{{TF "backups.coverage_truncated" (N .Checked)}}</span>
+      {{else}}
+      <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "backups.coverage_sub"}}</p>
+
+    {{if .CoveragePartial}}
+    <div class="banner warn">
+      <div class="b-body">
+        <div class="b-title">{{icon "alert"}}<span>{{T "backups.coverage_warn"}}</span></div>
+        {{if .Unchecked}}<p>{{TF "backups.coverage_truncated" (N .Checked)}}</p>{{end}}
+      </div>
+    </div>
+    {{end}}
+
+    {{if not .CoverageKnown}}
+    <div class="empty">
+      {{icon "layers-off"}}
+      <h3>{{T "backups.rows_unknown_title"}}</h3>
+      <p>{{T "backups.rows_unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+      </div>
+    </div>
+    {{else if .Coverage}}
+    <div class="table-wrap only-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "backups.coverage_col_stack"}}</th>
+            <th>{{T "backups.coverage_col_current"}}</th>
+            <th>{{T "backups.coverage_col_last"}}</th>
+            <th>{{T "backups.coverage_col_state"}}</th>
+            <th>{{T "backups.coverage_col_at"}}</th>
+            <th><span class="sr-only">{{T "common.actions"}}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Coverage}}
+          <tr>
+            <td><a class="mono" href="/web/stacks/{{.Stack}}" hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true">{{.Stack}}</a></td>
+            <td class="num">{{N .Current}}</td>
+            <td class="num">{{if .HasLast}}{{N .LastRevision}}{{else}}{{T "backups.age_unknown"}}{{end}}</td>
+            <td>
+              <span class="pill {{.Pill}}"><i class="dot"></i>{{T .StateKey}}</span>
+              {{if .Stale}}<span class="pill warn"><i class="dot"></i>{{T "backups.stale_pill"}}</span>{{end}}
+            </td>
+            <td>
+              {{if .HasLastAt}}{{ts .LastAt}} <span class="muted">{{TF "backups.stats_last_verified_foot" (N .AgeDays)}}</span>
+              {{else}}<span class="muted">{{T "backups.age_unknown"}}</span>{{end}}
+            </td>
+            <td>
+              <div class="row-actions">
+                <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Stack}}" hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true">{{icon "stacks"}}<span class="sr-only">{{T "backups.stack_link"}}</span></a>
+              </div>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <div class="only-sm">
+      {{range .Coverage}}
+      <div class="kv">
+        <div class="kv-row"><span class="k">{{T "backups.coverage_col_stack"}}</span><span class="v mono">{{.Stack}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.coverage_col_state"}}</span><span class="v"><span class="pill {{.Pill}}"><i class="dot"></i>{{T .StateKey}}</span>{{if .Stale}} <span class="pill warn"><i class="dot"></i>{{T "backups.stale_pill"}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.coverage_col_current"}}</span><span class="v num">{{N .Current}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.coverage_col_last"}}</span><span class="v num">{{if .HasLast}}{{N .LastRevision}}{{else}}{{T "backups.age_unknown"}}{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.coverage_col_at"}}</span><span class="v">{{if .HasLastAt}}{{ts .LastAt}} <span class="muted">{{TF "backups.stats_last_verified_foot" (N .AgeDays)}}</span>{{else}}<span class="muted">{{T "backups.age_unknown"}}</span>{{end}}</span></div>
+        <div class="action-bar">
+          <a class="btn btn-sm" href="/web/stacks/{{.Stack}}" hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true">{{icon "stacks"}}<span>{{T "backups.stack_link"}}</span></a>
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">
+      {{icon "inbox"}}
+      <h3>{{T "backups.coverage_empty_title"}}</h3>
+      <p>{{T "backups.coverage_empty_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
+      </div>
+    </div>
+    {{end}}
+  </div>
+</div>
+
+{{$runs := .Runs}}{{if and (not $runs) .Backups}}{{$runs = .Backups}}{{end}}
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "backups.title_runs"}}</h2>
+    <div class="ph-actions">
+      {{if or .RunsKnown $runs}}<span class="pill plain"><i class="dot"></i>{{P (len $runs) "plural.backups"}}</span>
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+    </div>
+  </div>
+  <div class="panel-body">
+    {{if not (or .RunsKnown $runs)}}
+    <div class="empty">
+      {{icon "layers-off"}}
+      <h3>{{T "backups.rows_unknown_title"}}</h3>
+      <p>{{T "backups.rows_unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+      </div>
+    </div>
+    {{else if $runs}}
+    <div class="table-wrap only-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "backups.col_id"}}</th>
+            <th>{{T "backups.col_scope"}}</th>
+            <th>{{T "backups.col_started"}}</th>
+            <th>{{T "backups.col_finished"}}</th>
+            <th>{{T "backups.col_duration"}}</th>
+            <th>{{T "backups.col_state"}}</th>
+            <th>{{T "backups.col_archives"}}</th>
+            <th><span class="sr-only">{{T "common.actions"}}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range $runs}}
+          <tr>
+            <td class="num">{{N .ID}}</td>
+            <td>
+              {{if .Cluster}}<span class="pill plain"><i class="dot"></i>{{T "backups.scope_cluster"}}</span>
+              {{else}}<a class="mono" href="/web/stacks/{{.Stack}}" hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true">{{.Stack}}</a>{{end}}
+            </td>
+            <td>{{ts .Started}}</td>
+            <td>{{if .Running}}<span class="muted">{{T "backups.duration_unknown"}}</span>{{else}}{{ts .Finished}}{{end}}</td>
+            <td class="num">{{if .Running}}<span class="muted">{{T "backups.duration_unknown"}}</span>{{else}}{{P .DurationSeconds "plural.seconds"}}{{end}}</td>
+            <td>
+              {{if .StateKey}}<span class="pill {{.Pill}}"><i class="dot"></i>{{T .StateKey}}</span>
+              {{else}}<span class="pill plain"><i class="dot"></i>{{.Status}}</span>{{end}}
+              <div class="muted iso" dir="ltr">{{.Status}}</div>
+            </td>
+            <td class="num">{{N .Archives}}</td>
+            <td>
+              <div class="row-actions">
+                {{if .Archives}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.ArchivePaths}}" onclick="copyVal(this)" title="{{T "backups.archives_copy"}}">{{icon "copy"}}<span class="sr-only">{{T "backups.archives_copy"}}</span></button>{{end}}
+                <button type="button" class="btn btn-sm" disabled title="{{T "backups.restore_unavailable"}}">{{icon "restore"}}<span class="sr-only">{{T "backups.action_restore"}}</span></button>
+              </div>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <div class="only-sm">
+      {{range $runs}}
+      <div class="kv">
+        <div class="kv-row"><span class="k">{{T "backups.col_id"}}</span><span class="v num">{{N .ID}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.col_scope"}}</span><span class="v">{{if .Cluster}}{{T "backups.scope_cluster"}}{{else}}<span class="mono">{{.Stack}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.col_state"}}</span><span class="v">{{if .StateKey}}<span class="pill {{.Pill}}"><i class="dot"></i>{{T .StateKey}}</span>{{else}}<span class="pill plain"><i class="dot"></i>{{.Status}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.col_started"}}</span><span class="v">{{ts .Started}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.col_finished"}}</span><span class="v">{{if .Running}}<span class="muted">{{T "backups.duration_unknown"}}</span>{{else}}{{ts .Finished}}{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.col_duration"}}</span><span class="v">{{if .Running}}<span class="muted">{{T "backups.duration_unknown"}}</span>{{else}}{{P .DurationSeconds "plural.seconds"}}{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.col_archives"}}</span><span class="v">{{if .Archives}}{{TF "backups.archive_count" (N .Archives)}}{{else}}{{T "backups.no_archives"}}{{end}}</span></div>
+        {{if .RunError}}<div class="kv-row"><span class="k">{{T "backups.raw_error"}}</span><span class="v"><pre>{{.RunError}}</pre></span></div>{{end}}
+        <div class="action-bar">
+          {{if .Archives}}<button type="button" class="btn btn-sm" data-copy="{{.ArchivePaths}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "backups.archives_copy"}}</span></button>{{end}}
+          <button type="button" class="btn btn-sm" disabled title="{{T "backups.restore_unavailable"}}">{{icon "restore"}}<span>{{T "backups.action_restore"}}</span></button>
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">
+      {{icon "inbox"}}
+      <h3>{{T "backups.rows_empty_title"}}</h3>
+      <p>{{T "backups.rows_empty_body"}}</p>
+      <div class="empty-actions">
+        <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}">
+          <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
+        </form>
+      </div>
+    </div>
+    {{end}}
+
+    <details class="details">
+      <summary>{{T "backups.states_legend"}}</summary>
+      <div class="kv">
+        <div class="kv-row"><span class="k"><span class="pill good"><i class="dot"></i>{{T "st.verified"}}</span></span><span class="v">{{T "backups.verified_meaning"}}</span></div>
+        <div class="kv-row"><span class="k"><span class="pill warn"><i class="dot"></i>{{T "st.incomplete"}}</span></span><span class="v">{{T "backups.incomplete_meaning"}}</span></div>
+        <div class="kv-row"><span class="k"><span class="pill bad"><i class="dot"></i>{{T "st.missed"}}</span></span><span class="v">{{T "backups.missed_meaning"}}</span></div>
+      </div>
+      <p class="muted">{{T "backups.coverage_foot"}}</p>
+    </details>
+  </div>
+</div>
+
+<div class="banner info">
+  <div class="b-body">
+    <div class="b-title">{{icon "restore"}}<span>{{T "backups.action_restore"}}</span></div>
+    <p>{{T "backups.restore_unavailable"}}</p>
+    <p class="muted">{{T "backups.archives_label"}} — {{T "backups.col_archives"}}</p>
+  </div>
+</div>
 {{end}}
