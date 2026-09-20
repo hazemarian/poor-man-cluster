@@ -306,6 +306,12 @@ func (c Services) Logs(g *gin.Context) {
 		}
 	}
 	d.LogText = logText(d.Logs)
+	// A polling request (the panel's hx-trigger) asks for the log rows alone,
+	// so the swap never re-embeds the whole detail page into the panel.
+	if g.Query("fragment") == "logs" {
+		c.Views.Fragment(g, "servicelogs", d)
+		return
+	}
 	c.Views.Fragment(g, "servicedetail", d)
 }
 

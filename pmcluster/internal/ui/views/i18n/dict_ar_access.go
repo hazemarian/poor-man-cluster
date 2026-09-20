@@ -247,11 +247,22 @@ func init() {
 		"secrets.reveal_sub":      "تُعرض القيمة بعد فك التشفير أدناه، ولا تُعرض في أي مكان آخر في لوحة التحكم.",
 		"secrets.reveal_warning": "تعامل معها ككلمة مرور: فكل من يرى هذه الشاشة يستطيع قراءتها. " +
 			"أغلق النافذة عند الانتهاء.",
-		"secrets.err_action":         "تعذّر حفظ السرّ",
-		"secrets.err_reveal":         "تعذّر فك تشفير السرّ",
-		"secrets.err_name_required":  "الاسم مطلوب.",
-		"secrets.err_bad_name":       "اسم السرّ غير صالح.",
-		"secrets.err_value_required": "القيمة مطلوبة.",
+		"secrets.err_action":           "تعذّر حفظ السرّ",
+		"secrets.err_reveal":           "تعذّر فك تشفير السرّ",
+		"secrets.err_name_required":    "الاسم مطلوب.",
+		"secrets.err_bad_name":         "اسم السرّ غير صالح.",
+		"secrets.err_value_required":   "القيمة مطلوبة.",
+		"apikeys.col_last_used":        "آخر استخدام",
+		"apikeys.never_used":           "لم يُستخدم بعد",
+		"settings.cluster_card_title":  "إعدادات العنقود",
+		"settings.cluster_card_action": "فتح إعدادات العنقود",
+		"settings.cluster_card_body":   "إعدادات يحفظها الخادم للعنقود بأكمله: جذر الأحجام، ونطاق النسخ الاحتياطي، ودخول الحافة، والدخول الموحّد. وهي محفوظة على العنقود لا في هذا المتصفح.",
+		"settings.cluster_configs":     "تهيئات العنقود",
+		"settings.cluster_secrets":     "أسرار العنقود",
+		"settings.cluster_card_foot":   "تعديلها يحتاج دور المدير.",
+		"settings.err_cluster_read":    "تعذّرت قراءة إعدادات العنقود",
+		"settings.err_cluster_save":    "تعذّر حفظ إعدادات العنقود",
+		"settings.msg_cluster_saved":   "حُفظت إعدادات العنقود.",
 	})
 
 	// العبارات المعدودة التي يملكها هذا النطاق. plural.users / plural.keys /

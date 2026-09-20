@@ -276,3 +276,8 @@ func init() {
 		Few: "{n} أيام", Many: "{n} يومًا", Other: "{n} يوم",
 	})
 }
+
+// الاستخدام صفحة للقراءة فقط ضمن مجموعة العنقود.
+func init() {
+	register(AR, map[string]string{"nav.usage": "الاستخدام"})
+}

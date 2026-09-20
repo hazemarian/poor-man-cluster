@@ -45,6 +45,7 @@
       <a class="nav-item" href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
       <a class="nav-item" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
       <a class="nav-item" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
+      <a class="nav-item" href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage">{{icon "overview"}}<span>{{T "nav.usage"}}</span></a>
 
       <p class="nav-label" id="nav-delivery">{{T "nav.group.delivery"}}</p>
       <a class="nav-item" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
@@ -109,6 +110,7 @@
   <a href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
   <a href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
   <a href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
+  <a href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage">{{icon "overview"}}<span>{{T "nav.usage"}}</span></a>
 </nav>
 
 <div class="modal-backdrop" id="modal" hidden onclick="if(event.target===this)closeModal()">
@@ -152,6 +154,28 @@
     try { document.execCommand('copy'); flash(T.copied, 'ok'); }
     catch (e) { flash(T.copyFailed, 'err'); }
     document.body.removeChild(ta);
+  }
+
+  /* Auto-refresh toggle for the service logs.
+   *
+   * Pausing has to remove the trigger, not just hide the overlay: htmx reads
+   * hx-trigger when it processes an element, so an attribute that is gone is
+   * what stops the next fetch. htmx.process re-reads the node afterwards, and
+   * the original interval is kept in data-poll-trigger so resuming restores it
+   * rather than hard-coding 10s in two places. */
+  function togglePoll(btn) {
+    var el = document.getElementById(btn.getAttribute('data-poll-target'));
+    if (!el) return;
+    var paused = el.hasAttribute('data-poll-paused');
+    if (paused) {
+      el.setAttribute('hx-trigger', el.getAttribute('data-poll-trigger'));
+      el.removeAttribute('data-poll-paused');
+    } else {
+      el.setAttribute('data-poll-paused', '1');
+      el.removeAttribute('hx-trigger');
+    }
+    htmx.process(el);
+    btn.setAttribute('aria-pressed', paused ? 'false' : 'true');
   }
 
   function openModal() {

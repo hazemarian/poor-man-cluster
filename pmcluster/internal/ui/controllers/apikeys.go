@@ -25,6 +25,7 @@ type apiKeyRow struct {
 	ID          int64
 	Name        string
 	CreatedAt   int64
+	LastUsedAt  int64 // 0 means the daemon records no use yet
 	Prefix      string
 	JustCreated bool
 }
@@ -132,7 +133,9 @@ func (c APIKeys) loadKeys(ctx context.Context, d *apiKeysData) {
 	}
 	rows := make([]apiKeyRow, 0, len(keys))
 	for _, k := range keys {
-		rows = append(rows, apiKeyRow{ID: k.ID, Name: k.Name, CreatedAt: k.CreatedAt})
+		rows = append(rows, apiKeyRow{
+			ID: k.ID, Name: k.Name, CreatedAt: k.CreatedAt, LastUsedAt: k.LastUsedAt,
+		})
 	}
 	d.Keys, d.Count, d.Known = rows, len(rows), true
 }

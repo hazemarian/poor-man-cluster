@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 )
 
 // Settings shows and edits the pmcluster API connection plus the cluster-scope
@@ -59,6 +60,10 @@ type settingsData struct {
 	ApplyCert    string
 	ApplyEdge    string
 	ApplyStacks  string
+
+	// CanEditCluster gates the cluster-settings link: the route is admin-only,
+	// and a card that leads to a 403 is worse than no card.
+	CanEditCluster bool
 
 	ErrKey  string
 	ErrRaw  string
@@ -401,11 +406,20 @@ var clusterSettingKeys = []string{
 	"traefik_admin_user",
 }
 
+// clusterBoolSettings are the allowlisted settings that are flags rather than
+// strings, so the form and the save agree on what a cleared checkbox means.
+var clusterBoolSettings = map[string]bool{
+	"backup_all_nodes":    true,
+	"sso_enabled":         true,
+	"edge_login_disabled": true,
+}
+
 type clusterSettingsData struct {
 	Settings        map[string]string
 	HasClientSecret bool
-	Error           string
-	Msg             string
+	ErrKey          string
+	ErrRaw          string
+	MsgKey          string
 }
 
 // maskClusterSettings hides sso_client_secret from the rendered form: the
@@ -428,13 +442,14 @@ func maskClusterSettings(settings map[string]string) (map[string]string, bool) {
 // ClusterSettingsPage renders the editable cluster settings form (admin-only).
 func (c Settings) ClusterSettingsPage(g *gin.Context) {
 	d := clusterSettingsData{}
-	if !c.requireAPI(g, &d.Error) {
+	if _, _, configured := c.loadParams(g.Request.Context()); !configured {
+		d.ErrKey = "err.api_not_configured"
 		c.Views.Fragment(g, "clustersettings", d)
 		return
 	}
 	settings, err := c.API.GetClusterSettings(g.Request.Context())
 	if err != nil {
-		d.Error = err.Error()
+		d.ErrKey, d.ErrRaw = "settings.err_cluster_read", err.Error()
 		c.Views.Fragment(g, "clustersettings", d)
 		return
 	}
@@ -448,14 +463,25 @@ func (c Settings) ClusterSettingsPage(g *gin.Context) {
 func (c Settings) ClusterSettingsSave(g *gin.Context) {
 	ctx := g.Request.Context()
 	d := clusterSettingsData{}
-	if !c.requireAPI(g, &d.Error) {
+	if _, _, configured := c.loadParams(ctx); !configured {
+		d.ErrKey = "err.api_not_configured"
 		c.Views.Fragment(g, "clustersettings", d)
 		return
 	}
 
 	settings := make(map[string]string, len(clusterSettingKeys))
 	for _, k := range clusterSettingKeys {
-		settings[k] = g.PostForm(k)
+		v := g.PostForm(k)
+		// A checkbox that was cleared sends nothing, and storing "" would leave
+		// the daemon to decide what an empty flag means. Bools are written as
+		// the words the daemon reads: "true" or "false".
+		if clusterBoolSettings[k] {
+			v = "false"
+			if g.PostForm(k) != "" {
+				v = "true"
+			}
+		}
+		settings[k] = v
 	}
 	// The password field is left empty when the operator didn't change the
 	// secret — omit it so the stored secret is preserved.
@@ -465,11 +491,11 @@ func (c Settings) ClusterSettingsSave(g *gin.Context) {
 
 	updated, err := c.API.UpdateClusterSettings(ctx, settings)
 	if err != nil {
-		d.Error = err.Error()
+		d.ErrKey, d.ErrRaw = "settings.err_cluster_save", err.Error()
 		d.Settings, d.HasClientSecret = maskClusterSettings(settings)
 	} else {
 		d.Settings, d.HasClientSecret = maskClusterSettings(updated)
-		d.Msg = "Cluster settings saved. Use \"Apply to swarm\" (cluster update) to apply them."
+		d.MsgKey = "settings.msg_cluster_saved"
 	}
 	c.Views.Fragment(g, "clustersettings", d)
 }
@@ -501,6 +527,9 @@ func (c Settings) fill(g *gin.Context, d settingsData) settingsData {
 	d.Configured = configured
 	d.Version = c.Version
 	d.User = username(g)
+	if u := middleware.CurrentUser(g); u != nil && u.Role == store.RoleAdmin {
+		d.CanEditCluster = true
+	}
 	if _, err := c.Store.GetSetting(ctx, keyToken); err == nil {
 		d.HasToken = true
 	}

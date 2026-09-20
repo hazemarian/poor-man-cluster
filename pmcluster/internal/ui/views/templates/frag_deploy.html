@@ -138,6 +138,11 @@
           <input id="dp-repo" class="finput mono iso" dir="ltr" name="repo_url" value="{{.Form.RepoURL}}" placeholder="{{T "deploy.ph_repo"}}" autocomplete="off">
           <span class="hint">{{T "deploy.f_repo_hint"}}</span>
         </div>
+        <div class="field">
+          <label for="dp-file">{{T "deploy.f_file"}}</label>
+          <input id="dp-file" class="finput mono iso" dir="ltr" name="file" value="{{.Form.File}}" placeholder="{{T "deploy.ph_file"}}" autocomplete="off">
+          <span class="hint">{{T "deploy.f_file_hint"}}</span>
+        </div>
         <div class="field full">
           <label for="dp-manifest">{{T "deploy.f_manifest"}}</label>
           <textarea id="dp-manifest" class="mono" name="manifest" rows="10" spellcheck="false" dir="ltr" required placeholder="{{T "deploy.ph_manifest"}}">{{.Form.Manifest}}</textarea>

@@ -1,6 +1,8 @@
 package controllers
 
 import (
+	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -142,6 +144,118 @@ func backupRunRowFrom(b pmapi.Backup) backupRunRow {
 		row.DurationSeconds = b.FinishedAt - b.StartedAt
 	}
 	return row
+}
+
+// backupRestoreRoot is where a restore writes: the volume root the stack file
+// mounts on the daemon's node. The daemon takes an explicit dest_root, and the
+// console states it rather than sending an empty string, so the page can show
+// the operator where the files went.
+const backupRestoreRoot = "/var/stack/data"
+
+// backupBrowseData is the view model of frag_backupbrowse.html: one run's
+// archive listing, opened from the backups table.
+type backupBrowseData struct {
+	ID    int64
+	Run   *pmapi.Backup
+	Files []pmapi.BackupFile
+	Known bool
+	Count int64
+
+	// StateKey/Pill are the state word of the run, from the same mapping the
+	// runs table uses, so the two pages cannot disagree about a run.
+	StateKey string
+	Pill     string
+
+	// Restorable says whether the restore action is offered: a finished run that
+	// belongs to a stack. A cluster-scope run has no stack volumes to write into.
+	Restorable bool
+
+	// DestRoot is where a restore would write. It is read from the daemon's own
+	// volume_root setting when it reports one, so the confirmation names the
+	// directory the daemon will actually use rather than a guess.
+	DestRoot string
+
+	ErrKey   string
+	ErrRaw   string
+	MsgKey   string
+	MsgCount int64
+	MsgPath  string
+}
+
+// Browse renders the archive listing of one run.
+func (c Backups) Browse(g *gin.Context) {
+	ctx := g.Request.Context()
+	d := backupBrowseData{}
+	if !c.browseParams(g, &d) {
+		c.Views.Fragment(g, "backupbrowse", d)
+		return
+	}
+	c.loadBrowse(ctx, &d)
+	c.Views.Fragment(g, "backupbrowse", d)
+}
+
+// Restore extracts a run's archives back under backupRestoreRoot and re-renders
+// the listing, so the operator sees the state the daemon is in now.
+func (c Backups) Restore(g *gin.Context) {
+	ctx := g.Request.Context()
+	d := backupBrowseData{}
+	if !c.browseParams(g, &d) {
+		c.Views.Fragment(g, "backupbrowse", d)
+		return
+	}
+	n, err := c.API.RestoreBackup(ctx, d.ID, d.DestRoot)
+	if err != nil {
+		d.ErrKey, d.ErrRaw = "err.backup_restore", err.Error()
+	} else {
+		d.MsgKey, d.MsgCount, d.MsgPath = "backupbrowse.restored", int64(n), backupRestoreRoot
+	}
+	c.loadBrowse(ctx, &d)
+	c.Views.Fragment(g, "backupbrowse", d)
+}
+
+// browseParams records the two states that are not listing failures — no daemon
+// configured, and an id that is not a number — and resolves the run id.
+func (c Backups) browseParams(g *gin.Context, d *backupBrowseData) bool {
+	ctx := g.Request.Context()
+	_, _, configured := c.loadParams(ctx)
+	if !configured {
+		d.ErrKey = "err.api_not_configured"
+		return false
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(g.Param("id")), 10, 64)
+	if err != nil || id <= 0 {
+		d.ErrKey = "backupbrowse.err_id"
+		return false
+	}
+	d.ID = id
+	d.DestRoot = backupRestoreRoot
+	// Best effort: when the daemon reports its volume root, that is where a
+	// restore lands. A failed read is not an error here — the default stands and
+	// the page shows it, so the operator is never told a path that was not read.
+	if cs, err := c.API.GetClusterSettings(ctx); err == nil {
+		if vr := strings.TrimSpace(cs["volume_root"]); vr != "" {
+			d.DestRoot = vr
+		}
+	}
+	return true
+}
+
+// loadBrowse reads the run and its files. A failure never overwrites an error
+// the caller already recorded: a restore failure is the more specific answer.
+func (c Backups) loadBrowse(ctx context.Context, d *backupBrowseData) {
+	run, files, err := c.API.BrowseBackup(ctx, d.ID)
+	if err != nil {
+		if d.ErrKey == "" {
+			d.ErrKey, d.ErrRaw = "err.backup_browse", err.Error()
+		}
+		return
+	}
+	d.Run, d.Files, d.Known, d.Count = run, files, true, int64(len(files))
+	if run != nil {
+		d.StateKey, d.Pill, _ = backupState(*run)
+		d.Restorable = run.StackName != "" && run.FinishedAt > 0 &&
+			(d.StateKey == "st.verified" || d.StateKey == "st.incomplete")
+	}
 }
 
 // daysAgo converts a unix timestamp into whole days elapsed (never negative).

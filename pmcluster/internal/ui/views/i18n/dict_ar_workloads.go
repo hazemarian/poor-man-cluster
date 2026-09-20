@@ -127,5 +127,10 @@ func init() {
 		"err.config_remove":        "تعذّر حذف التهيئة.",
 		"err.config_rollback":      "تعذّر التراجع عن التهيئة.",
 		"err.secret_remove":        "تعذّر حذف السر.",
+		"stacks.col_file":          "الملف",
+		"stacks.file_unset":        "لم يُسجَّل ملف",
+		"revision.pipeline":        "مراحل التنفيذ",
+		"revision.pipeline_empty":  "لم تُسجّل هذه المراجعة أي مرحلة.",
+		"revision.pipeline_sub":    "المراحل التي نفّذها الخادم بهذا الترتيب.",
 	})
 }

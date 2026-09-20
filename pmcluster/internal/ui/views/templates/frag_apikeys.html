@@ -104,6 +104,7 @@
               <th>{{T "common.name"}}</th>
               <th>{{T "apikeys.col_token"}}</th>
               <th>{{T "common.created"}}</th>
+              <th>{{T "apikeys.col_last_used"}}</th>
               <th><span class="sr-only">{{T "common.actions"}}</span></th>
             </tr>
           </thead>
@@ -116,6 +117,7 @@
                 {{else}}<span class="secret-mask" title="{{T "apikeys.token_gone_hint"}}">••••••••</span> <span class="muted">{{T "apikeys.token_gone"}}</span>{{end}}
               </td>
               <td class="muted num">{{ts .CreatedAt}}</td>
+              <td class="muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "apikeys.never_used"}}{{end}}</td>
               <td>
                 <div class="row-actions">
                   <button type="button" class="btn btn-danger btn-sm" hx-post="/web/apikeys/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "apikeys.revoke_confirm" .Name}}">{{T "apikeys.revoke"}}</button>
@@ -137,6 +139,7 @@
             {{else}}<span class="secret-mask">••••••••</span> <span class="muted">{{T "apikeys.token_gone"}}</span>{{end}}
           </span></div>
           <div class="kv-row"><span class="k">{{T "common.created"}}</span><span class="v muted num">{{ts .CreatedAt}}</span></div>
+          <div class="kv-row"><span class="k">{{T "apikeys.col_last_used"}}</span><span class="v muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "apikeys.never_used"}}{{end}}</span></div>
           <div class="action-bar">
             <button type="button" class="btn btn-danger btn-sm" hx-post="/web/apikeys/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "apikeys.revoke_confirm" .Name}}">{{T "apikeys.revoke"}}</button>
           </div>

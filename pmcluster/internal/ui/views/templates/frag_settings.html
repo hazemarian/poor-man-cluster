@@ -89,6 +89,25 @@
   </div>
 </div>
 
+{{if .CanEditCluster}}
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "settings.cluster_card_title"}}</h2>
+    <div class="ph-actions">
+      <a class="btn btn-primary btn-sm" href="/web/settings/cluster" hx-get="/web/settings/cluster" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "settings.cluster_card_action"}}</span></a>
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "settings.cluster_card_body"}}</p>
+    <div class="kv">
+      <div class="kv-row"><span class="k">{{T "settings.cluster_configs"}}</span><span class="v num">{{if .ConfigsKnown}}{{N (len .ClusterConfigs)}}{{else}}{{T "common.unavailable"}}{{end}}</span></div>
+      <div class="kv-row"><span class="k">{{T "settings.cluster_secrets"}}</span><span class="v num">{{if .SecretsKnown}}{{N (len .ClusterSecrets)}}{{else}}{{T "common.unavailable"}}{{end}}</span></div>
+    </div>
+    <p class="muted">{{T "settings.cluster_card_foot"}}</p>
+  </div>
+</div>
+{{end}}
+
 {{if .Configured}}
 <div class="panel mt-24">
   <div class="panel-head">

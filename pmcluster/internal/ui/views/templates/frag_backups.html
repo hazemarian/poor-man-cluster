@@ -230,7 +230,7 @@
             <td>
               <div class="row-actions">
                 {{if .Archives}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.ArchivePaths}}" onclick="copyVal(this)" title="{{T "backups.archives_copy"}}">{{icon "copy"}}<span class="sr-only">{{T "backups.archives_copy"}}</span></button>{{end}}
-                <button type="button" class="btn btn-sm" disabled title="{{T "backups.restore_unavailable"}}">{{icon "restore"}}<span class="sr-only">{{T "backups.action_restore"}}</span></button>
+                <a class="btn btn-ghost btn-sm" href="/web/backups/{{.ID}}/files" hx-get="/web/backups/{{.ID}}/files" hx-target="#view" hx-push-url="true" title="{{T "backups.action_browse"}}">{{icon "file"}}<span class="sr-only">{{T "backups.action_browse"}}</span></a>
               </div>
             </td>
           </tr>
@@ -251,7 +251,7 @@
         {{if .RunError}}<div class="kv-row"><span class="k">{{T "backups.raw_error"}}</span><span class="v"><pre>{{.RunError}}</pre></span></div>{{end}}
         <div class="action-bar">
           {{if .Archives}}<button type="button" class="btn btn-sm" data-copy="{{.ArchivePaths}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "backups.archives_copy"}}</span></button>{{end}}
-          <button type="button" class="btn btn-sm" disabled title="{{T "backups.restore_unavailable"}}">{{icon "restore"}}<span>{{T "backups.action_restore"}}</span></button>
+          <a class="btn btn-sm" href="/web/backups/{{.ID}}/files" hx-get="/web/backups/{{.ID}}/files" hx-target="#view" hx-push-url="true">{{icon "file"}}<span>{{T "backups.action_browse"}}</span></a>
         </div>
       </div>
       {{end}}
@@ -277,6 +277,7 @@
         <div class="kv-row"><span class="k"><span class="pill bad"><i class="dot"></i>{{T "st.missed"}}</span></span><span class="v">{{T "backups.missed_meaning"}}</span></div>
       </div>
       <p class="muted">{{T "backups.coverage_foot"}}</p>
+      <p class="muted">{{T "backups.restore_note"}}</p>
     </details>
   </div>
 </div>

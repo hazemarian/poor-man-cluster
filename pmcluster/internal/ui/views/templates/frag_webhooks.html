@@ -154,6 +154,7 @@
                 <div class="row-actions">
                   <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Source}}" onclick="copyVal(this)" title="{{T "webhooks.copy_source"}}">{{icon "copy"}}<span class="sr-only">{{T "webhooks.copy_source"}}</span></button>
                   {{if .Endpoint}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Endpoint}}" onclick="copyVal(this)" title="{{T "webhooks.copy_endpoint"}}">{{icon "external"}}<span class="sr-only">{{T "webhooks.copy_endpoint"}}</span></button>{{end}}
+                  <a class="btn btn-ghost btn-sm" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true" title="{{T "webhooks.act_history"}}">{{icon "clock"}}<span class="sr-only">{{T "webhooks.act_history"}}</span></a>
                   <form hx-post="/web/webhooks/remove/{{.Source}}" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "webhooks.revoke_confirm" .Source}}">
                     <button type="submit" class="btn btn-danger btn-sm">{{icon "trash"}}<span>{{T "webhooks.revoke"}}</span></button>
                   </form>

@@ -11,7 +11,7 @@
 </div>
 
 {{if .ErrKey}}
-<div class="banner bad" style="margin-top:16px">
+<div class="banner bad mt-24">
   {{icon "alert"}}
   <div class="b-body">
     <p class="b-title">{{T .ErrKey}}</p>
@@ -21,6 +21,22 @@
 </div>
 {{else}}
 <p class="sub">{{TF "revision.sub" (ts .Created)}}</p>
+
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "revision.pipeline"}}</h2>
+  </div>
+  <div class="panel-body">
+    {{if .Steps}}
+    <ol class="pipeline">
+      {{range .Steps}}<li class="pipeline-step">{{.}}</li>{{end}}
+    </ol>
+    {{else}}
+    <p class="muted">{{T "revision.pipeline_empty"}}</p>
+    {{end}}
+    <p class="muted">{{T "revision.pipeline_sub"}}</p>
+  </div>
+</div>
 
 <div class="row mt-24">
   <h3>{{T "revision.source"}}</h3>

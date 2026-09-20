@@ -2,11 +2,14 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views"
 )
 
 // Stacks lists stacks, inspects one stack, and performs the stack-level writes
@@ -29,6 +32,7 @@ type stackInfo struct {
 	RepoURL         string
 	CreatedAt       int64
 	UpdatedAt       int64
+	SourceFile      string
 }
 
 // stackRow is one line of the stacks table. The replica counts come from the
@@ -137,6 +141,10 @@ type revisionData struct {
 
 	ErrKey string
 	ErrRaw string
+	// Steps are the pipeline stages the daemon recorded for this revision. A
+	// revision written before step recording carries none, and the page then
+	// names the canonical stages rather than drawing an empty row.
+	Steps []string
 }
 
 // List renders the stacks table, with one stack's inspector open when the URL
@@ -267,7 +275,34 @@ func (c Stacks) ShowRevision(g *gin.Context) {
 	d.Stack, d.Revision = rv.Stack, rv.Revision
 	d.Created = rv.CreatedAt
 	d.Source, d.Rendered = rv.SourceYAML, rv.RenderedYAML
+	d.Steps = revisionSteps(g, rv.Payload)
 	c.Views.Fragment(g, "revision", d)
+}
+
+// canonicalPipelineKeys are the deploy stages the daemon always runs, in order.
+// They are dictionary keys because they are UI copy: the names a recorded
+// revision carries are raw pipeline data and are printed as they are.
+var canonicalPipelineKeys = []string{
+	"deploy.step_parse", "deploy.step_interp", "deploy.step_translate",
+	"deploy.step_record", "deploy.step_apply",
+}
+
+// revisionSteps reads the stage names a revision recorded (the stored payload
+// is {"payload":{…},"steps":[…]}). Legacy payloads carry no steps and fall back
+// to the canonical stage names, translated for the request's language.
+func revisionSteps(g *gin.Context, payload string) []string {
+	var env struct {
+		Steps []string `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(payload), &env); err == nil && len(env.Steps) > 0 {
+		return env.Steps
+	}
+	l := views.Localize(g)
+	out := make([]string, 0, len(canonicalPipelineKeys))
+	for _, k := range canonicalPipelineKeys {
+		out = append(out, l.T(k))
+	}
+	return out
 }
 
 // renderIndex draws the stacks page, with the inspector for open loaded when a
@@ -305,6 +340,7 @@ func (c Stacks) stacksData(ctx context.Context, q string) stackData {
 			Name:            s.Name,
 			CurrentRevision: s.CurrentRevision,
 			RepoURL:         s.RepoURL,
+			SourceFile:      s.SourceFile,
 			CreatedAt:       s.CreatedAt,
 			UpdatedAt:       s.UpdatedAt,
 		}})
@@ -375,6 +411,7 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 		Name:            det.Stack.Name,
 		CurrentRevision: det.Stack.CurrentRevision,
 		RepoURL:         det.Stack.RepoURL,
+		SourceFile:      det.Stack.SourceFile,
 		CreatedAt:       det.Stack.CreatedAt,
 		UpdatedAt:       det.Stack.UpdatedAt,
 	}}

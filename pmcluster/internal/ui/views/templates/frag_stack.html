@@ -75,6 +75,10 @@
           {{end}}
         </span>
       </div>
+      <div class="kv-row">
+        <span class="k">{{T "stacks.col_file"}}</span>
+        <span class="v">{{if .Detail.Stack.SourceFile}}<span class="mono iso">{{.Detail.Stack.SourceFile}}</span>{{else}}<span class="muted">{{T "stacks.file_unset"}}</span>{{end}}</span>
+      </div>
     </div>
 
     <h3>{{T "stack.backup_title"}}</h3>

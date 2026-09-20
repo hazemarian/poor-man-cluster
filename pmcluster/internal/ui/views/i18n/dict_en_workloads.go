@@ -128,5 +128,10 @@ func init() {
 		"err.config_remove":        "The config could not be deleted.",
 		"err.config_rollback":      "The config could not be rolled back.",
 		"err.secret_remove":        "The secret could not be deleted.",
+		"stacks.col_file":          "File",
+		"stacks.file_unset":        "None recorded",
+		"revision.pipeline":        "Pipeline",
+		"revision.pipeline_empty":  "This revision recorded no stages.",
+		"revision.pipeline_sub":    "The stages the daemon ran, in order.",
 	})
 }

@@ -87,35 +87,23 @@
   <div class="panel-head">
     <h2>{{T "services.tab_logs"}}</h2>
     <div class="ph-actions">
+      {{/* Auto-refresh toggle. The label names the state it switches to, and
+           the button lives in the panel head — outside the region the poll
+           replaces — so its state survives every swap. */}}
+      <button type="button" class="btn btn-ghost btn-sm log-poll" data-poll-target="logs-body" data-poll-trigger="every 10s" aria-pressed="false" onclick="togglePoll(this)" title="{{T "services.logs_poll_hint"}}">
+        {{icon "refresh"}}<span class="when-live">{{T "services.logs_pause"}}</span><span class="when-paused">{{T "services.logs_resume"}}</span>
+      </button>
       {{if .LogText}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.LogText}}" onclick="copyVal(this)" title="{{T "common.copy"}}">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>{{end}}
       <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
     </div>
   </div>
   <div class="panel-body">
-    {{if not .LogsKnown}}
-    <div class="empty">
-      {{icon "layers-off"}}
-      <h3>{{T "services.logs_unknown_title"}}</h3>
-      <p>{{T "services.logs_unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-      </div>
+    {{/* The poll target: the fragment URL carries fragment=logs so a refresh
+         returns the log body alone, and the swap is innerHTML so this wrapper
+         (and its trigger) survives. */}}
+    <div id="logs-body" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs?fragment=logs&amp;tail={{.TailCount}}" hx-trigger="every 10s" hx-swap="innerHTML">
+      {{template "servicelogs" .}}
     </div>
-    {{else}}
-    {{if .ExecEmpty}}<div class="msg">{{T "services.exec_no_output"}}</div>{{end}}
-    <div class="log-toolbar">
-      <span class="muted">{{TF "services.logs_foot" .TailCount}}</span>
-    </div>
-    {{if .Logs}}
-    <div class="log">
-      {{range .Logs}}
-      <div class="ln{{if .IsErr}} err{{end}}"><span class="t">{{if .StreamKey}}{{T .StreamKey}}{{else}}{{.Stream}}{{end}}</span><span class="m">{{.Line}}</span></div>
-      {{end}}
-    </div>
-    {{else}}
-    <div class="log"><div class="log-empty">{{T "services.logs_empty_title"}} — {{T "services.logs_empty_body"}}</div></div>
-    {{end}}
-    {{end}}
   </div>
 </div>
 {{else}}

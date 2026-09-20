@@ -182,6 +182,12 @@ components:
     backgroundColor: "{colors.surface-input}"
     textColor: "{colors.text-primary}"
     typography: "{typography.mono-code}"
+  pipeline-stage:
+    backgroundColor: "{colors.surface-card}"
+    textColor: "{colors.text-secondary}"
+    typography: "{typography.body-sm}"
+    rounded: "{rounded.md}"
+    padding: "{spacing.s-2}"
 ---
 
 ## Overview
@@ -361,6 +367,9 @@ its own height allows without turning into a lozenge.
   `{typography.mono-code}`, `direction: ltr`, `unicode-bidi: isolate`.
 - **`kv` rows** — the mobile form of every table row. A table is never horizontally
   scrolled on a phone; it becomes label/value pairs.
+- **`pipeline-stage`** — the recorded deploy stages as a chain of chips on the revision
+  page: hairline border on `surface-card`, chevron drawn in the flow (`[dir="rtl"]` flips it),
+  so one template serves both directions.
 - **Empty state** — icon, one sentence, and the real primary action.
 - **Not built:** toasts, segmented controls, a deploy stepper, `.progress`/`.kpis`/
   `.capacity` blocks. Their selectors exist in CSS without a producer — see Open items.
@@ -452,12 +461,14 @@ its code-side prerequisite:
 - **TLS chain status as its own field**, distinct from expiry, plus SAN coverage and a live
   day countdown. Needs chain parsing persisted next to expiry — this is the screen that
   would have caught the live leaf-only incident without `openssl s_client`.
-- **Webhook delivery history** — per-delivery status and response code, last-delivery
-  timestamps, rotate/revoke per row, secret shown once at creation.
-- **Backups** — schedule with next run, last successful run with a staleness warning, size
-  and retention, restore/download/delete, and a loud *failed* / *missed* state.
-- **Users / API keys** — labelled actions column, `Edit` split into edit / reset password /
-  disable, self-demotion guard, status and last-login columns.
+- **Webhook sources** — a last-delivery timestamp and rotate/revoke per row (the delivery
+  history itself now ships, one source at a time, at `/web/webhooks/<source>/deliveries`).
+- **Backups** — a schedule with its next run, a staleness warning on the last success, size
+  and retention, download and delete, and a loud *failed* / *missed* state; browsing one
+  run's archive and restoring it now ship at `/web/backups/<id>/files`.
+- **Users / API keys** — a labelled actions column, `Edit` split into edit / reset password /
+  disable, a self-demotion guard, and status / last-login columns. Issued keys now carry a
+  last-used stamp.
 - **Login** — environment badge so nobody signs into the wrong cluster, password reveal, no
   build token in unauthenticated output.
 - **Search / ⌘K palette** over every destination.
@@ -467,7 +478,7 @@ its code-side prerequisite:
 ## Mapping to the code
 
 ```
-internal/ui/views/templates/*.html       25 templates; fragments define blocks, app/login/setup are shells
+internal/ui/views/templates/*.html       31 templates; fragments define blocks, app/login/setup are shells
 internal/ui/views/static/fonts.css       19 @font-face, 3 families, script subsets, swap
 internal/ui/views/static/base.css        tokens, reset, typography, shell
 internal/ui/views/static/components.css  buttons, panels, forms, kv, banner, pills
@@ -476,6 +487,7 @@ internal/ui/views/static/preferences.js theme + language controls
 internal/ui/views/render.go              ShellBase, Localize, func map, static handler
 internal/ui/views/i18n/*.go              dictionaries, formatter, plural rules
 internal/ui/controllers/*.go             page data; emits translation keys, never prose
+internal/ui/controllers/usage.go         the config/secret reference graph behind the usage page
 internal/cluster/embeds/edge-stack.yml   console/API routing on the edge
 docs/console-i18n-contract.md            the machine-enforced translation + markup contract
 ```

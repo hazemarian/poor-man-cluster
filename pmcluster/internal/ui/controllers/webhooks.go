@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 )
 
 // Webhooks lists deploy-webhook sources and lets the operator add and revoke
@@ -33,6 +35,15 @@ type webhooksData struct {
 	ErrRaw       string
 	MsgKey       string
 	MsgArg       string
+
+	// Source names the webhook source whose delivery history is open
+	// (frag_webhookdeliveries.html); empty everywhere else.
+	Source string
+
+	// Per-source delivery history (frag_webhookdeliveries.html).
+	Deliveries      []deliveryRow
+	DeliveriesKnown bool
+	DeliveryLimit   int64
 }
 
 type webhookForm struct {
@@ -171,4 +182,78 @@ func (c Webhooks) load(g *gin.Context, d *webhooksData) {
 			Endpoint:    endpointFor(base, s.Source),
 		})
 	}
+}
+
+// webhookDeliveryLimit is the history window the deliveries panel reads. The
+// daemon clamps it to its own page size, so this is a request, not a promise.
+const webhookDeliveryLimit = 50
+
+// deliveryRow is one recorded delivery attempt, rendered in a source's history
+// table. Status is the daemon's own word: an unknown status is shown as-is
+// rather than mapped onto a state this console does not know.
+type deliveryRow struct {
+	ID        int64
+	Status    string
+	StackName string
+	Revision  int64
+	RepoURL   string
+	File      string
+	Error     string
+	CreatedAt int64
+
+	// StateKey/Pill name the recorded status in the reader's language; a status
+	// the console does not know is printed as the daemon wrote it.
+	StateKey string
+	Pill     string
+}
+
+func deliveryRows(ds []pmapi.WebhookDelivery) []deliveryRow {
+	out := make([]deliveryRow, 0, len(ds))
+	for _, d := range ds {
+		key, pill := deliveryStatusKey(d.Status)
+		out = append(out, deliveryRow{
+			ID: d.ID, Status: d.Status, StackName: d.StackName,
+			Revision: d.Revision, RepoURL: d.RepoURL, File: d.File,
+			Error: d.Error, CreatedAt: d.CreatedAt,
+			StateKey: key, Pill: pill,
+		})
+	}
+	return out
+}
+
+// deliveryStatusKey maps a recorded status onto a state word and a pill. The
+// receiver's vocabulary is small but not fixed, so an unrecognised status is
+// shown raw rather than dropped.
+func deliveryStatusKey(status string) (key, pill string) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "accepted", "ok", "success", "succeeded", "delivered":
+		return "webhookdeliveries.status_accepted", "good"
+	case "unauthorized", "rejected", "bad_signature", "invalid_signature":
+		return "webhookdeliveries.status_unauthorized", "warn"
+	case "error", "failed", "failure":
+		return "webhookdeliveries.status_error", "bad"
+	}
+	return "", "plain"
+}
+
+// Deliveries renders the recorded delivery history for one source. A failed read
+// leaves DeliveriesKnown false, which the fragment renders as unknown — never as
+// "no deliveries", which would claim the receiver has been silent.
+func (c Webhooks) Deliveries(g *gin.Context) {
+	ctx := g.Request.Context()
+	_, _, configured := c.loadParams(ctx)
+	d := webhooksData{Source: g.Param("source"), Configured: configured, DeliveryLimit: webhookDeliveryLimit}
+	if !configured {
+		d.ErrKey = "err.api_not_configured"
+		c.Views.Fragment(g, "webhookdeliveries", d)
+		return
+	}
+	ds, err := c.API.ListWebhookDeliveries(ctx, d.Source, webhookDeliveryLimit)
+	if err != nil {
+		d.ErrKey, d.ErrRaw = "err.webhook_deliveries", err.Error()
+		c.Views.Fragment(g, "webhookdeliveries", d)
+		return
+	}
+	d.Deliveries, d.DeliveriesKnown = deliveryRows(ds), true
+	c.Views.Fragment(g, "webhookdeliveries", d)
 }

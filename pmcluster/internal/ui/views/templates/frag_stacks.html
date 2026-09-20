@@ -149,6 +149,7 @@
           <th>{{T "common.revision"}}</th>
           <th>{{T "common.status"}}</th>
           <th>{{T "stacks.col_repo"}}</th>
+          <th>{{T "stacks.col_file"}}</th>
           <th>{{T "common.updated"}}</th>
           <th><span class="sr-only">{{T "common.actions"}}</span></th>
         </tr>
@@ -183,6 +184,7 @@
               <span class="muted">{{T "stacks.repo_unset"}}</span>
             {{end}}
           </td>
+          <td>{{if .SourceFile}}<span class="mono iso">{{.SourceFile}}</span>{{else}}<span class="muted">{{T "stacks.file_unset"}}</span>{{end}}</td>
           <td>{{if .UpdatedAt}}<span class="muted">{{ts .UpdatedAt}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
           <td>
             <div class="row-actions">
@@ -251,6 +253,10 @@
       <div class="kv-row">
         <span class="k">{{T "stacks.col_repo"}}</span>
         <span class="v">{{if .RepoURL}}<span class="mono trunc">{{.RepoURL}}</span>{{else}}<span class="muted">{{T "stacks.repo_unset"}}</span>{{end}}</span>
+      </div>
+      <div class="kv-row">
+        <span class="k">{{T "stacks.col_file"}}</span>
+        <span class="v">{{if .SourceFile}}<span class="mono iso">{{.SourceFile}}</span>{{else}}<span class="muted">{{T "stacks.file_unset"}}</span>{{end}}</span>
       </div>
       <div class="kv-row">
         <span class="k">{{T "common.updated"}}</span>

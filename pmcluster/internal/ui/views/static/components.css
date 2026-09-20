@@ -453,3 +453,27 @@ kbd {
   .icon-btn, .modal-close { width: var(--touch); height: var(--touch); }
   .table .row-actions .btn, .table .row-actions .icon-btn { min-height: var(--touch); }
 }
+
+/* ---------- log auto-refresh control ---------- */
+/* The label names the state the button will switch to, so exactly one of the
+   two spans is shown: "auto-refresh" while polling runs (the pressed state),
+   "paused" once it is stopped. Both are real labels, not a hidden accessible
+   name — the button always reads as the action it offers. */
+.log-poll .when-paused { display: none; }
+.log-poll[aria-pressed="true"] .when-live { display: none; }
+.log-poll[aria-pressed="true"] .when-paused { display: inline; }
+.log-poll .when-live, .log-poll .when-paused { margin-inline-start: var(--s-1); }
+
+/* ---------- revision pipeline ---------- */
+/* The stages a deploy ran, in order. Each stage is a chip and the separator is
+   drawn in the flow rather than as a glyph in the markup, so the chain reads
+   left-to-right in English and right-to-left in Arabic without a second
+   template. */
+.pipeline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin: 0; padding: 0; list-style: none; }
+.pipeline-step {
+  display: inline-flex; align-items: center; padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border-default); border-radius: var(--r-md);
+  font-size: var(--fs-sm); color: var(--text-secondary);
+}
+.pipeline-step + .pipeline-step::before { content: "\2192"; color: var(--text-tertiary); margin-inline-end: var(--s-2); }
+[dir="rtl"] .pipeline-step + .pipeline-step::before { content: "\2190"; }

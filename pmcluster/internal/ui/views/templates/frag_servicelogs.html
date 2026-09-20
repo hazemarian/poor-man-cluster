@@ -1,9 +1,36 @@
 {{define "servicelogs"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Logs}}
-<pre style="max-height:60vh; overflow:auto; margin:0"><code>{{range .Logs}}<span class="{{if eq .Stream "stderr"}}log-err{{end}}">{{.Line}}</span>
-{{end}}</code></pre>
+{{/* The log body of the service logs tab — the lines and nothing else.
+
+     Two callers render it: the logs tab itself, and the poll that swaps this
+     markup back in (GET …/logs?fragment=logs). Everything outside the body —
+     panel head, tab bar, the auto-refresh control — stays put across a refresh,
+     so the buttons never move under the operator's cursor while reading.
+
+     A failed read and an empty log are different answers and are drawn
+     differently: "unknown" means the daemon did not report, "no output" means it
+     did and there was nothing to show. */}}
+{{if not .LogsKnown}}
+<div class="empty">
+  {{icon "layers-off"}}
+  <h3>{{T "services.logs_unknown_title"}}</h3>
+  <p>{{T "services.logs_unknown_body"}}</p>
+  <div class="empty-actions">
+    <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+  </div>
+</div>
 {{else}}
-<div class="card empty">No log output.</div>
+{{if .ExecEmpty}}<div class="msg">{{T "services.exec_no_output"}}</div>{{end}}
+<div class="log-toolbar">
+  <span class="muted">{{TF "services.logs_foot" .TailCount}}</span>
+</div>
+{{if .Logs}}
+<div class="log">
+  {{range .Logs}}
+  <div class="ln{{if .IsErr}} err{{end}}"><span class="t">{{if .StreamKey}}{{T .StreamKey}}{{else}}{{.Stream}}{{end}}</span><span class="m">{{.Line}}</span></div>
+  {{end}}
+</div>
+{{else}}
+<div class="log"><div class="log-empty">{{T "services.logs_empty_title"}} — {{T "services.logs_empty_body"}}</div></div>
+{{end}}
 {{end}}
 {{end}}
