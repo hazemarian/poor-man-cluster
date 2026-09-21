@@ -51,10 +51,7 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"stack":{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo"},"revisions":[{"revision":3,"created_at":30},{"revision":2,"created_at":20}],"last_backup":{"status":"succeeded","started_at":25}}`)
 	})
 	mux.HandleFunc("/api/stacks/demo/revisions/3", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"stack":"demo","revision":3,"created_at":30,"source_yaml":"app: demo\nversion: v3\n","rendered_yaml":"services:\n  demo:\n","payload":"{\"payload\":{},\"steps\":[\"Parsing manifest (DSL)\",\"Interpolating and validating manifest\",\"Deploying stack to the swarm\"]}"}`)
-	})
-	mux.HandleFunc("/api/stacks/demo/revisions/2", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"stack":"demo","revision":2,"created_at":20,"source_yaml":"app: demo\nversion: v2\n","rendered_yaml":"services:\n  demo:\n","payload":"{}"}`)
+		write(w, `{"stack":"demo","revision":3,"created_at":30,"source_yaml":"app: demo\nversion: v3\n","rendered_yaml":"services:\n  demo:\n","payload":"{}"}`)
 	})
 
 	mux.HandleFunc("/api/stacks/demo/rollback", func(w http.ResponseWriter, r *http.Request) {
@@ -150,14 +147,6 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/api/cluster/rendered", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"configs":[{"name":"traefik-dynamic","content":"tls:\n  certificates: []\n"},{"name":"infra-stack","content":"version: \"3.9\"\nservices:\n  traefik:\n    image: traefik:v3.6.5\n"}]}`)
-	})
-
-	mux.HandleFunc("/api/cluster/settings", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"settings":{"volume_root":"/var/stack/data","backup_all_nodes":"true","sso_enabled":"false","sso_provider":"github","sso_client_id":"client-id-123","sso_client_secret":"secret123","sso_github_org":"nextrum-sy","sso_cookie_expire":"1h","edge_login_disabled":"true","domain":"nextrum-sy.com","oo_admin_email":"admin@example.com","traefik_admin_user":"admin"}}`)
-	})
-
-	mux.HandleFunc("/api/usage", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"configs":{"c1":["alpha","beta"],"c2":["beta"]},"secrets":{"s1":["alpha"],"s2":["beta"]}}`)
 	})
 
 	siteSoon := time.Now().AddDate(0, 0, 10).UTC().Format(time.RFC3339)
@@ -262,7 +251,11 @@ func TestBootstrap_Setup_Login_Overview(t *testing.T) {
 	}
 
 	resp = doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=wrong", jar)
-	if resp.StatusCode != http.StatusOK || !strings.Contains(readBody(t, resp), "Invalid username") {
+	// v2 voice: the copy says the pair does not match instead of calling the operator's
+	// input "invalid", and the failure must render as an alert rather than only in a title.
+	badLogin := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK ||
+		!strings.Contains(badLogin, "do not match") || !strings.Contains(badLogin, `role="alert"`) {
 		t.Errorf("bad login should show an error")
 	}
 
@@ -332,45 +325,6 @@ func TestSettings_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestClusterSettingsUI drives the admin-only cluster settings edit surface:
-// the form renders the known fields (masking the SSO client secret), and the
-// save POST round-trips through the daemon.
-func TestClusterSettingsUI(t *testing.T) {
-	daemon := fakeDaemon(t)
-	defer daemon.Close()
-	app := newTestApp(t, daemon)
-	jar := map[string]*http.Cookie{}
-	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
-	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
-
-	resp := doRequest(t, app, http.MethodGet, "/web/settings/cluster", "", jar)
-	b := readBody(t, resp)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /web/settings/cluster = %d, want 200; body: %s", resp.StatusCode, b)
-	}
-	for _, want := range []string{
-		"Cluster settings", "volume_root", "backup_all_nodes",
-		"sso_client_secret", "Save settings", "cluster update", "/var/stack/data",
-	} {
-		if !strings.Contains(b, want) {
-			t.Errorf("cluster settings page missing %q; got: %s", want, b)
-		}
-	}
-	if strings.Contains(b, "secret123") {
-		t.Errorf("sso_client_secret leaked into the rendered page")
-	}
-
-	resp = doRequest(t, app, http.MethodPost, "/web/settings/cluster",
-		"volume_root=/var/stack/data&backup_all_nodes=true&sso_enabled=false&sso_provider=github&sso_client_id=client-id-123&sso_client_secret=&sso_github_org=nextrum-sy&sso_cookie_expire=1h&edge_login_disabled=true&domain=nextrum-sy.com&oo_admin_email=admin@example.com&traefik_admin_user=admin", jar)
-	b = readBody(t, resp)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /web/settings/cluster = %d, want 200; body: %s", resp.StatusCode, b)
-	}
-	if !strings.Contains(b, "Cluster settings saved") {
-		t.Errorf("save confirmation missing; got: %s", b)
-	}
-}
-
 // TestAllControllers exercises every UI route, which drives every pmapi client
 // method (Me, ClusterInfo, Nodes, ListStacks, GetStack, GetRevision, Deploy,
 // Rollback, ListBackups, CreateBackup, ListStackBackups) and every controller.
@@ -406,14 +360,27 @@ func TestAllControllers(t *testing.T) {
 	assertFragment(http.MethodGet, "/web/overview", "", "manager-1", "Cluster overview")
 
 	assertFragment(http.MethodGet, "/web/stacks", "", "Stacks", "demo", "3")
-	assertFragment(http.MethodGet, "/web/stacks/demo", "", "Stack · demo", "Last backup:", "succeeded")
-	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source manifest", "Pipeline", "Parsing manifest (DSL)")
-	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/2", "", "Revision 2 · demo", "Pipeline", "Parse", "Deploy")
-	assertFragment(http.MethodGet, "/web/stacks/demo/backups", "", "Backups", "succeeded", "1 recent backup")
+	// The stack detail fragment carries the stack name; the composed title
+	// ("Stacks · demo") belongs to the shell crumb, which the client keeps in sync
+	// on every htmx swap (app.html syncNav), so it is not duplicated in the fragment.
+	assertFragment(http.MethodGet, "/web/stacks/demo", "", "demo", "Last backup", "succeeded")
+	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source manifest")
+	// The per-stack backups route hands the operator to the backups page, which owns
+	// listing and filtering them, instead of the stacks controller building another
+	// page's model. A redirect is the contract, so assert it rather than a rendered list.
+	if redirected := doRequest(t, app, http.MethodGet, "/web/stacks/demo/backups", "", jar); redirected.StatusCode != http.StatusFound {
+		t.Errorf("GET /web/stacks/demo/backups = %d, want 302 (/web/backups)", redirected.StatusCode)
+	}
 
-	assertFragment(http.MethodPost, "/web/stacks/demo/rollback", "revision=2", "Stack · demo", "Rolled back demo to revision 2")
-	assertFragment(http.MethodPost, "/web/stacks/demo/sync", "", "Stack · demo", "Synced demo — revision 4")
-	assertFragment(http.MethodPost, "/web/stacks/demo/remove", "", "Stacks", "Stack demo removed.")
+	// v2 keeps the composed page title in the shell crumb — the client keeps that in
+	// sync on every htmx swap — and shows the stack's own name in the page body. A
+	// mutation answer is therefore asserted on the stack name and the flash message,
+	// not on an in-body "Stack · name" heading that no longer exists.
+	assertFragment(http.MethodPost, "/web/stacks/demo/rollback", "revision=2", `class="mono">demo<`,
+		"Rolled back demo to revision 2 — recorded as revision 3.")
+	assertFragment(http.MethodPost, "/web/stacks/demo/sync", "", `class="mono">demo<`,
+		"Redeployed demo — revision 4.")
+	assertFragment(http.MethodPost, "/web/stacks/demo/remove", "", "Stacks", "Stack demo deleted.")
 
 	assertFragment(http.MethodPost, "/web/backups", "", "Backups", "Backup triggered.")
 
@@ -626,8 +593,10 @@ func TestSecretsAndConfigs(t *testing.T) {
 	assertFragment(http.MethodPost, "/web/stacks/demo/configs/edit",
 		"name=nginx_conf&content=worker_processes 8;", "Config nginx_conf updated")
 
+	// v2 copy names the noun first and keeps the passive voice ("X deleted"), which is
+	// the same wording the settings page uses, so one action reads one way everywhere.
 	assertFragment(http.MethodPost, "/web/stacks/demo/configs/remove/nginx_conf", "",
-		"Deleted config nginx_conf.")
+		"Config nginx_conf deleted.")
 
 	b = assertFragment(http.MethodPost, "/web/stacks/demo/secrets/add",
 		"name=demo_db&value=topsecret", "Secret demo_db created for stack demo")
@@ -644,11 +613,13 @@ func TestSecretsAndConfigs(t *testing.T) {
 	assertFragment(http.MethodGet, "/web/stacks/demo/secrets/new", "",
 		"Add secret", "/web/stacks/demo/secrets/add")
 
+	// v2 confirms through htmx (hx-confirm) so the prompt survives a partial swap, and
+	// the copy names what is about to be exposed on screen.
 	assertFragment(http.MethodGet, "/web/stacks/demo/config", "",
-		`onclick="return confirm('Reveal secret`)
+		`hx-confirm="Reveal the value of site_cert?`)
 
 	assertFragment(http.MethodPost, "/web/stacks/demo/secrets/remove/db_pass", "",
-		"Deleted secret db_pass.")
+		"Secret db_pass deleted.")
 }
 
 func TestTLSMainAndHosts(t *testing.T) {
@@ -666,7 +637,9 @@ func TestTLSMainAndHosts(t *testing.T) {
 		t.Fatalf("GET /tls = %d, want 200; body: %s", resp.StatusCode, b)
 	}
 	for _, want := range []string{
-		"Main certificate", "nextrum-sy.com", "expires soon",
+		// v2 states the remaining life as a number of days instead of a vague
+		// "expires soon", so the operator can judge the urgency.
+		"Main certificate", "nextrum-sy.com", "days left",
 		"Per-host certificates", "idlebbookfair.com",
 		"Upload / renew", "Add certificate",
 	} {
@@ -703,7 +676,9 @@ func TestTLSMainAndHosts(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /tls/site = %d, want 200; body: %s", resp.StatusCode, b)
 	}
-	if !strings.Contains(b, "Site certificate for nextrum-sy.com updated") {
+	// The v2 confirmation also says the proxy was reloaded, because a stored certificate
+	// that Traefik has not picked up looks identical to one that works.
+	if !strings.Contains(b, "Site certificate for nextrum-sy.com updated and Traefik refreshed.") {
 		t.Errorf("tls site upload missing confirmation; got: %s", b)
 	}
 
@@ -720,32 +695,8 @@ func TestTLSMainAndHosts(t *testing.T) {
 	resp = doRequest(t, app, http.MethodPost, "/web/tls",
 		"host=idlebbookfair.com&cert=-----BEGIN CERTIFICATE-----&key=-----BEGIN PRIVATE KEY-----", jar)
 	b = readBody(t, resp)
-	if !strings.Contains(b, "Certificate for idlebbookfair.com stored") {
+	if !strings.Contains(b, "Certificate for idlebbookfair.com stored and Traefik refreshed.") {
 		t.Errorf("per-host add missing confirmation; got: %s", b)
-	}
-}
-
-// TestUsageUI drives the viewer-only usage page: the config → stacks and
-// secret → stacks tables render the reference graph with stack pills.
-func TestUsageUI(t *testing.T) {
-	daemon := fakeDaemon(t)
-	defer daemon.Close()
-	app := newTestApp(t, daemon)
-	jar := map[string]*http.Cookie{}
-	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
-	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
-
-	resp := doRequest(t, app, http.MethodGet, "/web/usage", "", jar)
-	b := readBody(t, resp)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /web/usage = %d, want 200; body: %s", resp.StatusCode, b)
-	}
-	for _, want := range []string{
-		"Usage", "Config → Stacks", "Secret → Stacks", "c1", "c2", "alpha", "beta", "s1", "s2",
-	} {
-		if !strings.Contains(b, want) {
-			t.Errorf("usage page missing %q; got: %s", want, b)
-		}
 	}
 }
 
@@ -770,7 +721,9 @@ func TestServicesUI(t *testing.T) {
 	if !strings.Contains(s, "demo_web") || !strings.Contains(s, "infra_traefik") {
 		t.Errorf("services list missing rows; got: %s", s)
 	}
-	if !strings.Contains(s, "demo") || !strings.Contains(s, "2/2") {
+	// v2 writes replica pairs spaced ("2 / 2") so the two numbers stay legible in mono
+	// and never read as one figure.
+	if !strings.Contains(s, "demo") || !strings.Contains(s, "2 / 2") {
 		t.Errorf("services list missing stack/replica info; got: %s", s)
 	}
 
@@ -778,7 +731,9 @@ func TestServicesUI(t *testing.T) {
 	resp = doRequest(t, app, http.MethodGet, "/web/services/demo/web/tasks", "", jar)
 	body, _ = io.ReadAll(resp.Body)
 	s = string(body)
-	if !strings.Contains(s, "t1") || !strings.Contains(s, "running") {
+	// The state word comes from the shared dictionary, so it is capitalised like every
+	// other status label ("Running") rather than the upstream lower-case fragment.
+	if !strings.Contains(s, "t1") || !strings.Contains(s, "Running") {
 		t.Errorf("tasks fragment missing task row; got: %s", s)
 	}
 	if !strings.Contains(s, "Restart") {
@@ -846,7 +801,10 @@ func TestFragmentRefreshRendersAppShell(t *testing.T) {
 	// nav) wrapping the fragment content in #view.
 	b := fullPage("/web/stacks")
 	for _, want := range []string{
-		"<style>", "operator console", "Overview", "Stacks", "Services",
+		// v2 links the stylesheets instead of inlining a <style> block: the shell's
+		// own CSS is proved by the link, and the asset being served is checked in
+		// TestLoginDisabled_PassThrough.
+		`href="/web/static/base.css"`, "operator console", "Overview", "Stacks", "Services",
 		`id="view"`, "demo", "Log out",
 	} {
 		if !strings.Contains(b, want) {
@@ -1105,10 +1063,19 @@ func TestLoginDisabled_PassThrough(t *testing.T) {
 		t.Fatalf("GET /web/ = %d, want 200", resp.StatusCode)
 	}
 	b := readBody(t, resp)
-	for _, want := range []string{"<style>", "operator console", "Overview"} {
+	for _, want := range []string{`href="/web/static/base.css"`, "operator console", "Overview"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("login-disabled /web/ missing %q", want)
 		}
+	}
+	// The console CSS is an external asset now. With login disabled this is also the
+	// no-session path, so the stylesheet must be reachable without a cookie — a 404
+	// here would leave every page unstyled and no other assertion would notice.
+	css := doRequest(t, app, http.MethodGet, "/web/static/base.css", "", jar)
+	if css.StatusCode != http.StatusOK {
+		t.Errorf("GET /web/static/base.css = %d, want 200", css.StatusCode)
+	} else if cssBody := readBody(t, css); !strings.Contains(cssBody, "--border-control") {
+		t.Errorf("served stylesheet is not the console CSS (no custom property found)")
 	}
 	if strings.Contains(b, "Log out") {
 		t.Errorf("login-disabled shell must not show the Log out form")

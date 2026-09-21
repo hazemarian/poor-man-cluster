@@ -1,42 +1,223 @@
 {{define "overview"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+<div class="page-head overview-head">
+  <div class="ph-text">
+    <h1>{{T "overview.title"}}</h1>
+    <p class="sub">
+      {{- if .InfoKnown}}{{TF "overview.sub" .Info.NodeName .Info.ServerVersion .Info.OS .Info.Arch}}
+      {{- else}}{{T "overview.sub_unknown"}}{{end}}
+    </p>
+  </div>
+  <div class="ph-actions">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/overview" hx-target="#view" hx-push-url="true">
+      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
+    </button>
+    <a class="btn btn-primary" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">
+      {{icon "deploy"}}<span>{{T "nav.deploy"}}</span>
+    </a>
+  </div>
+</div>
 
-<div hx-get="/web/overview" hx-trigger="every 30s" hx-target="#overview-body" hx-swap="innerHTML">
-<div id="overview-body">
-{{if .Info}}
-<h1>Cluster overview</h1>
-<p class="sub"><span class="live-dot"></span>live · Daemon <code>{{.Info.NodeName}}</code> · engine v{{.Info.ServerVersion}} · {{.Info.OS}} / {{.Info.Arch}}</p>
-<div class="grid">
-  <div class="stat"><div class="label">Swarm state</div><div class="value"><span class="pill {{sp .Info.SwarmState}}">{{.Info.SwarmState}}</span></div></div>
-  <div class="stat"><div class="label">Nodes</div><div class="value">{{.Info.SwarmNodes}}</div></div>
-  <div class="stat"><div class="label">Managers</div><div class="value">{{.Info.SwarmManagers}}</div></div>
-  <div class="stat"><div class="label">CPUs</div><div class="value">{{.Info.CPUs}}</div></div>
-  <div class="stat"><div class="label">Memory</div><div class="value">{{tb .Info.MemoryBytes}}</div></div>
+{{/* A failure is stated in one sentence, with the upstream payload folded away.
+     v1 printed the raw error — quotes, braces and internal CLI commands — as the
+     first thing an operator read. */}}
+{{if .ErrKey}}
+<div class="banner bad">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T .ErrKey}}</p>
+    <p>{{T "err.banner_body"}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{T "nav.settings"}}</a>
+  </div>
 </div>
 {{end}}
 
-{{if .Nodes}}
-<h1>Nodes</h1>
-<div class="card" style="padding:6px 14px">
-<table>
-  <tr><th>Hostname</th><th>Role</th><th>Status</th><th>Manager</th><th>Engine</th></tr>
-  {{range .Nodes}}
-  <tr>
-    <td><code>{{.Hostname}}</code></td>
-    <td>{{.Role}}</td>
-    <td><span class="pill {{sp .Status}}">{{.Status}}</span></td>
-    <td>{{if .IsLeader}}leader{{else}}{{.Availability}}{{end}}</td>
-    <td class="muted">{{.EngineVersion}}</td>
-  </tr>
+{{/* No swarm on this host is a normal state, not an error — but it is also not
+     "0 nodes". The metric strip below refuses to print zeroes for it. */}}
+{{if and .InfoKnown (not .Info.ControlAvailable)}}
+<div class="banner warn">
+  {{icon "info"}}
+  <div class="b-body">
+    <p class="b-title">{{T "err.not_manager"}}</p>
+    <p>{{T "overview.not_manager_body"}}</p>
+  </div>
+</div>
+{{end}}
+
+<div class="stats overview-stats">
+  <div class="stat{{if or (not .InfoKnown) (not .Info.ControlAvailable)}} is-unknown{{end}}">
+    <span class="stat-l">{{icon "overview"}}{{T "cluster.state"}}</span>
+    <span class="stat-v">
+      {{- if and .InfoKnown .Info.ControlAvailable}}
+        {{if eq .Info.SwarmState "active"}}<span class="pill good"><i class="dot"></i>{{T "st.active"}}</span>
+        {{else if eq .Info.SwarmState "pending"}}<span class="pill warn"><i class="dot"></i>{{T "st.pending"}}</span>
+        {{else if eq .Info.SwarmState "error"}}<span class="pill bad"><i class="dot"></i>{{T "st.error"}}</span>
+        {{else}}<span class="pill plain"><i class="dot"></i><span class="mono">{{.Info.SwarmState}}</span></span>{{end}}
+      {{- else}}{{T "common.unavailable"}}{{end}}
+    </span>
+    <span class="stat-f">{{T "cluster.state_foot"}}</span>
+  </div>
+  <div class="stat{{if or (not .InfoKnown) (not .Info.ControlAvailable)}} is-unknown{{end}}">
+    <span class="stat-l">{{icon "server"}}{{T "cluster.nodes"}}</span>
+    <span class="stat-v">{{if and .InfoKnown .Info.ControlAvailable}}{{N .Info.SwarmNodes}}{{else}}{{T "common.unavailable"}}{{end}}</span>
+    <span class="stat-f">{{T "cluster.nodes_foot"}}</span>
+  </div>
+  <div class="stat{{if or (not .InfoKnown) (not .Info.ControlAvailable)}} is-unknown{{end}}">
+    <span class="stat-l">{{icon "services"}}{{T "cluster.managers"}}</span>
+    <span class="stat-v">{{if and .InfoKnown .Info.ControlAvailable}}{{N .Info.SwarmManagers}}{{else}}{{T "common.unavailable"}}{{end}}</span>
+    <span class="stat-f">{{T "cluster.managers_foot"}}</span>
+  </div>
+  <div class="stat{{if not .InfoKnown}} is-unknown{{end}}">
+    <span class="stat-l">{{icon "cpu"}}{{T "cluster.cpus"}}</span>
+    <span class="stat-v">{{if .InfoKnown}}{{N .Info.CPUs}}{{else}}{{T "common.unavailable"}}{{end}}</span>
+    <span class="stat-f">{{T "cluster.host_cores"}}</span>
+  </div>
+  <div class="stat{{if not .InfoKnown}} is-unknown{{end}}">
+    <span class="stat-l">{{icon "db"}}{{T "cluster.memory"}}</span>
+    <span class="stat-v">{{if .InfoKnown}}{{tb .Info.MemoryBytes}}{{else}}{{T "common.unavailable"}}{{end}}</span>
+    <span class="stat-f">{{T "cluster.memory_foot"}}</span>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    {{icon "server"}}
+    <h2>{{T "overview.nodes_title"}}</h2>
+    <div class="ph-actions">
+      {{if .NodesKnown}}
+        <span class="pill plain">{{P (len .Nodes) "plural.nodes"}}</span>
+      {{else}}
+        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}
+    </div>
+  </div>
+
+  {{if not .NodesKnown}}
+    {{/* Same table, honest content: we did not get an answer, so there is no
+         answer to show. */}}
+    <div class="panel-body">
+      <div class="empty">
+        {{icon "inbox"}}
+        <h3>{{T "overview.nodes_unknown_title"}}</h3>
+        <p>{{T "overview.nodes_unknown_body"}}</p>
+      </div>
+    </div>
+  {{else if not .Nodes}}
+    <div class="panel-body">
+      <div class="empty">
+        {{icon "server"}}
+        <h3>{{T "overview.nodes_empty_title"}}</h3>
+        <p>{{T "overview.nodes_empty_body"}}</p>
+        <div class="empty-actions">
+          <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{T "nav.settings"}}</a>
+        </div>
+      </div>
+    </div>
+  {{else}}
+    <div class="table-wrap only-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "common.node"}}</th>
+            <th>{{T "common.role"}}</th>
+            <th>{{T "common.status"}}</th>
+            <th>{{T "common.availability"}}</th>
+            <th>{{T "cluster.engine"}}</th>
+            <th><span class="sr-only">{{T "common.actions"}}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Nodes}}
+          <tr>
+            <td>
+              <div class="node-identity">
+                <span class="node-glyph">{{icon "server"}}</span>
+                <span class="mono iso" dir="ltr">{{.Hostname}}</span>
+                {{if .IsLeader}} <span class="pill accent">{{T "st.leader"}}</span>{{end}}
+              </div>
+            </td>
+            <td>
+              {{if eq .Role "manager"}}<span class="pill plain">{{T "st.manager"}}</span>
+              {{else if eq .Role "worker"}}<span class="pill plain">{{T "st.worker"}}</span>
+              {{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}
+            </td>
+            <td>
+              {{if eq .Status "ready"}}<span class="pill good"><i class="dot"></i>{{T "st.ready"}}</span>
+              {{else if eq .Status "down"}}<span class="pill bad"><i class="dot"></i>{{T "st.down"}}</span>
+              {{else if eq .Status "draining"}}<span class="pill warn"><i class="dot"></i>{{T "st.draining"}}</span>
+              {{else if .Status}}<span class="pill plain"><i class="dot"></i><span class="mono iso">{{.Status}}</span></span>
+              {{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}
+            </td>
+            <td>
+              {{if eq .Availability "active"}}<span class="pill plain">{{T "st.avail_active"}}</span>
+              {{else if eq .Availability "pause"}}<span class="pill warn"><i class="dot"></i>{{T "st.avail_pause"}}</span>
+              {{else if eq .Availability "drain"}}<span class="pill warn"><i class="dot"></i>{{T "st.avail_drain"}}</span>
+              {{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}
+            </td>
+            <td class="mono iso num" dir="ltr">{{.EngineVersion}}</td>
+            <td>
+              <div class="row-actions">
+                <button type="button" class="icon-btn" data-copy="{{.Hostname}}" onclick="copyVal(this)"
+                        title="{{T "common.copy_hostname"}}" aria-label="{{T "common.copy_hostname"}}">{{icon "copy"}}</button>
+              </div>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+
+    {{/* Phones get the same fields as key/value rows: a six-column table at 390px
+         is unreadable however it is styled. */}}
+    <div class="only-sm">
+      {{range .Nodes}}
+      <div class="kv">
+        <div class="kv-row"><span class="k">{{T "common.node"}}</span><span class="v"><span class="mono iso" dir="ltr">{{.Hostname}}</span>{{if .IsLeader}} <span class="pill accent">{{T "st.leader"}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "common.role"}}</span><span class="v">{{if eq .Role "manager"}}{{T "st.manager"}}{{else if eq .Role "worker"}}{{T "st.worker"}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "common.status"}}</span><span class="v">{{if eq .Status "ready"}}<span class="pill good"><i class="dot"></i>{{T "st.ready"}}</span>{{else if eq .Status "down"}}<span class="pill bad"><i class="dot"></i>{{T "st.down"}}</span>{{else}}{{T "common.unknown"}}{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "common.availability"}}</span><span class="v">{{if eq .Availability "active"}}{{T "st.avail_active"}}{{else if eq .Availability "pause"}}{{T "st.avail_pause"}}{{else if eq .Availability "drain"}}{{T "st.avail_drain"}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "cluster.engine"}}</span><span class="v mono iso" dir="ltr">{{.EngineVersion}}</span></div>
+        <div class="kv-row">
+          <span class="k">{{T "common.actions"}}</span>
+          <span class="v"><button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Hostname}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "common.copy"}}</span></button></span>
+        </div>
+      </div>
+      {{end}}
+    </div>
   {{end}}
-</table>
 </div>
-{{end}}
 
-{{if and .Me (not .Info) (not .Nodes)}}
-<div class="card">Connected to the pmcluster API as <code>@{{.Me.Name}}</code>.</div>
-{{end}}
-</div>
-</div>
+<section class="workspace" aria-labelledby="workspace-title">
+  <div class="workspace-head">
+    <h2 id="workspace-title">{{T "overview.workspace"}}</h2>
+    <p>{{T "overview.workspace_sub"}}</p>
+  </div>
+  <div class="workspace-grid">
+    <a class="delivery-link" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">
+      <span class="delivery-symbol" aria-hidden="true">{{icon "terminal"}}</span>
+      <h3>{{T "overview.delivery_title"}}</h3>
+      <p>{{T "overview.delivery_body"}}</p>
+      <span class="delivery-action">{{T "nav.deploy"}}{{icon "chevron"}}</span>
+    </a>
+    <div class="workspace-links">
+      <a class="workspace-link" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
+        <span class="workspace-icon">{{icon "stacks"}}</span>
+        <span><strong>{{T "nav.stacks"}}</strong><small>{{T "overview.stacks_hint"}}</small></span>
+        <span class="flip">{{icon "chevron"}}</span>
+      </a>
+      <a class="workspace-link" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true">
+        <span class="workspace-icon">{{icon "services"}}</span>
+        <span><strong>{{T "nav.services"}}</strong><small>{{T "overview.services_hint"}}</small></span>
+        <span class="flip">{{icon "chevron"}}</span>
+      </a>
+      <a class="workspace-link" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true">
+        <span class="workspace-icon">{{icon "backups"}}</span>
+        <span><strong>{{T "nav.backups"}}</strong><small>{{T "overview.backups_hint"}}</small></span>
+        <span class="flip">{{icon "chevron"}}</span>
+      </a>
+    </div>
+  </div>
+</section>
 {{end}}

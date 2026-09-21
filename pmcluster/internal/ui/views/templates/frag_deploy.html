@@ -1,29 +1,338 @@
 {{define "deploy"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
-{{if .Result}}<div class="msg ok">Deployed <b>{{.Result.Stack}}</b> as revision {{.Result.Revision}}.</div>{{end}}
+{{/* Deploy a stack from a manifest.
 
-<h1>Deploy a stack</h1>
-<p class="sub">Submit a pmcluster manifest exactly as the CI webhook would — image, environment, healthcheck, exposes. This calls the same <code>POST /api/stacks</code> the GitHub Actions pipeline uses.</p>
+     Three states everywhere: the stack list is rows / unknown (the list call
+     failed — never drawn as an empty table) / empty-but-actionable, and the
+     target stack is named-and-present / named-but-new / not named at all. A
+     revision of 0 is never rendered: "unknown" and "the daemon says 0" are
+     different facts.
 
-<form method="post" action="/web/deploy" hx-post="/web/deploy" hx-target="#view">
-  <label>app</label>
-  <input name="app_name" placeholder="my-app" value="{{.Form.AppName}}">
-
-  <label>version (image tag)</label>
-  <input name="version" placeholder="v20260912-abc1234" value="{{.Form.Version}}">
-
-  <label>repo URL (metadata only, optional)</label>
-  <input name="repo_url" placeholder="https://github.com/org/repo" value="{{.Form.RepoURL}}">
-
-  <label>manifest file path (provenance, optional)</label>
-  <input name="file" placeholder="deploy/my-app.yaml" value="{{.Form.File}}">
-
-  <label>manifest (DSL YAML)</label>
-  <textarea name="manifest" rows="16" placeholder="app: my-app&#10;env: production&#10;domain: example.com&#10;registry: ghcr.io/org&#10;version: v1&#10;&#10;services:&#10;  web:&#10;    image: ghcr.io/org/my-app:${version}&#10;    replicas: 1&#10;    placement: manager&#10;    expose:&#10;      port: 3000&#10;      host: my-app.example.com&#10;    healthcheck:&#10;      type: http&#10;      path: /">{{.Form.Manifest}}</textarea>
-
-  <div class="row">
-    <button class="btn" type="submit" hx-disabled-elt="this">Deploy</button>
+     The console has no dry-run endpoint, so the review zone is the literal
+     request body: what this page posts is what the daemon receives. */}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "deploy.title"}}</h1>
+    <p class="sub">{{if .APIReady}}{{T "deploy.sub"}}{{else}}{{T "deploy.sub_not_configured"}}{{end}}</p>
   </div>
-</form>
+  <div class="ph-actions">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">
+      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
+    </button>
+    <a class="btn btn-ghost btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
+      {{icon "stacks"}}<span>{{T "deploy.open_stacks"}}</span>
+    </a>
+  </div>
+</div>
+
+{{if .ErrKey}}
+<div class="banner bad">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T .ErrKey}}</p>
+    {{if eq .ErrKey "err.api_not_configured"}}
+    <p>{{T "deploy.stacks_unknown_body"}}</p>
+    {{else}}
+    <p>{{T "err.banner_body"}}</p>
+    {{end}}
+    {{if .ErrRaw}}
+    <details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>
+    {{end}}
+  </div>
+  <div class="b-actions">
+    {{if eq .ErrKey "err.api_not_configured"}}
+    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+    {{else}}
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+{{if .Result}}
+<div class="banner ok">
+  {{icon "check-circle"}}
+  <div class="b-body">
+    <p class="b-title">{{T "deploy.result_title"}}</p>
+    <p>{{TF "deploy.result_body" .Result.Stack .Result.Revision}}</p>
+    {{if .Result.Changed}}<p>{{T "deploy.result_changed"}}</p>{{end}}
+    <p>{{T "deploy.result_hint"}}</p>
+  </div>
+  <div class="b-actions">
+    <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Result.Stack}}" hx-get="/web/stacks/{{.Result.Stack}}" hx-target="#view" hx-push-url="true">{{icon "stacks"}}<span>{{T "deploy.open_stack"}}</span></a>
+    <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Result.Stack}}/revisions/{{.Result.Revision}}" hx-get="/web/stacks/{{.Result.Stack}}/revisions/{{.Result.Revision}}" hx-target="#view" hx-push-url="true">{{icon "file"}}<span>{{T "deploy.view_revision"}}</span></a>
+  </div>
+</div>
+{{end}}
+
+<div class="stats">
+  <div class="stat">
+    <div class="stat-l">{{icon "deploy"}}{{T "deploy.st_target"}}</div>
+    {{if .Form.AppName}}
+    <div class="stat-v"><span class="mono">{{.Form.AppName}}</span></div>
+    <div class="stat-f">{{T "deploy.st_target_foot"}}</div>
+    {{else}}
+    <div class="stat-v muted">{{T "deploy.no_target"}}</div>
+    <div class="stat-f">{{T "deploy.st_named_foot"}}</div>
+    {{end}}
+  </div>
+
+  <div class="stat{{if or (not .TargetNamed) (not .TargetKnown)}} is-unknown{{end}}">
+    <div class="stat-l">{{icon "clock"}}{{T "deploy.st_revision"}}</div>
+    {{if and .TargetKnown (not .Target)}}
+    <div class="stat-v muted">{{T "deploy.st_revision_new"}}</div>
+    <div class="stat-f">{{T "deploy.st_revision_new_foot"}}</div>
+    {{else if .Target}}
+    <div class="stat-v num">{{N .Target.Revision}}</div>
+    <div class="stat-f">{{T "deploy.st_revision_foot"}}</div>
+    {{else}}
+    <div class="stat-v">—</div>
+    <div class="stat-f">{{T "deploy.st_unknown_foot"}}</div>
+    {{end}}
+  </div>
+
+  <div class="stat{{if or (not .TargetKnown) (not .Target)}} is-unknown{{end}}">
+    <div class="stat-l">{{icon "refresh"}}{{T "deploy.st_updated"}}</div>
+    {{if .Target}}
+    <div class="stat-v stat-text num"><bdi>{{ts .Target.UpdatedAt}}</bdi></div>
+    <div class="stat-f">{{T "deploy.st_updated_foot"}}</div>
+    {{else}}
+    <div class="stat-v">—</div>
+    <div class="stat-f">{{T "deploy.st_unknown_foot"}}</div>
+    {{end}}
+  </div>
+
+  <div class="stat{{if not .StacksKnown}} is-unknown{{end}}">
+    <div class="stat-l">{{icon "stacks"}}{{T "deploy.st_stacks"}}</div>
+    {{if .StacksKnown}}
+    <div class="stat-v num">{{P .StacksCount "plural.stacks"}}</div>
+    <div class="stat-f">{{T "deploy.st_stacks_foot"}}</div>
+    {{else}}
+    <div class="stat-v">—</div>
+    <div class="stat-f">{{T "deploy.st_unknown_foot"}}</div>
+    {{end}}
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "deploy.form_title"}}</h2>
+    <div class="ph-actions">
+      <span class="mono iso" dir="ltr">POST /api/stacks</span>
+    </div>
+  </div>
+  <div class="panel-body">
+    <form hx-post="/web/deploy" hx-target="#view" hx-swap="innerHTML" hx-disabled-elt="find button[type='submit']">
+      <div class="form-grid form-grid-2">
+        <div class="field">
+          <label for="dp-app">{{T "deploy.f_app"}}</label>
+          <input id="dp-app" class="finput" name="app_name" value="{{.Form.AppName}}" placeholder="{{T "deploy.ph_app"}}" autocomplete="off" data-focus>
+          <span class="hint">{{T "deploy.f_app_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="dp-version">{{T "deploy.f_version"}}</label>
+          <input id="dp-version" class="finput" name="version" value="{{.Form.Version}}" placeholder="{{T "deploy.ph_version"}}" autocomplete="off">
+          <span class="hint">{{T "deploy.f_version_hint"}}</span>
+        </div>
+        <div class="field full">
+          <label for="dp-repo">{{T "deploy.f_repo"}}</label>
+          <input id="dp-repo" class="finput mono iso" dir="ltr" name="repo_url" value="{{.Form.RepoURL}}" placeholder="{{T "deploy.ph_repo"}}" autocomplete="off">
+          <span class="hint">{{T "deploy.f_repo_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="dp-file">{{T "deploy.f_file"}}</label>
+          <input id="dp-file" class="finput mono iso" dir="ltr" name="file" value="{{.Form.File}}" placeholder="{{T "deploy.ph_file"}}" autocomplete="off">
+          <span class="hint">{{T "deploy.f_file_hint"}}</span>
+        </div>
+        <div class="field full">
+          <label for="dp-manifest">{{T "deploy.f_manifest"}}</label>
+          <textarea id="dp-manifest" class="mono" name="manifest" rows="10" spellcheck="false" dir="ltr" required placeholder="{{T "deploy.ph_manifest"}}">{{.Form.Manifest}}</textarea>
+          <span class="hint">{{T "deploy.f_manifest_hint"}}</span>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" hx-confirm="{{if .Form.AppName}}{{TF "deploy.confirm_named" .Form.AppName}}{{else}}{{T "deploy.confirm_new"}}{{end}}">
+          {{icon "deploy"}}<span>{{if .Form.AppName}}{{TF "deploy.submit_named" .Form.AppName}}{{else}}{{T "deploy.submit"}}{{end}}</span>
+        </button>
+        <span class="hint">{{T "deploy.submit_hint"}}</span>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "deploy.preview_title"}}</h2>
+    <div class="ph-actions">
+      <span class="pill plain mono" dir="ltr">JSON</span>
+    </div>
+  </div>
+  {{if .Form.Manifest}}
+  <div class="panel-body">
+    <p class="muted">{{T "deploy.preview_sub"}}</p>
+    <div class="kv">
+      <div class="kv-row"><span class="k">{{T "deploy.preview_method"}}</span><span class="v mono iso" dir="ltr">POST /api/stacks</span></div>
+      <div class="kv-row"><span class="k">{{T "deploy.preview_size"}}</span><span class="v num">{{tb (len .Form.Manifest)}}</span></div>
+    </div>
+    <pre dir="ltr">{{.Request}}</pre>
+    <div class="row mt-16">
+      <button type="button" class="btn btn-sm" data-copy="{{.Request}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
+    </div>
+  </div>
+  {{else}}
+  <div class="panel-body tight">
+    <div class="empty">
+      <i class="ic">{{icon "file"}}</i>
+      <h3>{{T "deploy.preview_empty_title"}}</h3>
+      <p>{{T "deploy.preview_empty_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('dp-manifest').focus()">{{T "deploy.preview_goto"}}</button>
+      </div>
+    </div>
+  </div>
+  {{end}}
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "deploy.pipeline_title"}}</h2>
+  </div>
+  <div class="panel-body">
+    <p class="muted">{{T "deploy.pipeline_sub"}}</p>
+    <div class="phases">
+      <div class="phase">
+        <div class="phase-mark">1</div>
+        <div class="phase-body">
+          <div class="phase-title">{{T "deploy.step_parse"}}</div>
+          <div class="phase-note">{{T "deploy.step_parse_note"}}</div>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-mark">2</div>
+        <div class="phase-body">
+          <div class="phase-title">{{T "deploy.step_interp"}}</div>
+          <div class="phase-note">{{T "deploy.step_interp_note"}}</div>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-mark">3</div>
+        <div class="phase-body">
+          <div class="phase-title">{{T "deploy.step_translate"}}</div>
+          <div class="phase-note">{{T "deploy.step_translate_note"}}</div>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-mark">4</div>
+        <div class="phase-body">
+          <div class="phase-title">{{T "deploy.step_record"}}</div>
+          <div class="phase-note">{{T "deploy.step_record_note"}}</div>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="phase-mark">5</div>
+        <div class="phase-body">
+          <div class="phase-title">{{T "deploy.step_apply"}}</div>
+          <div class="phase-note">{{T "deploy.step_apply_note"}}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="panel-foot"><span>{{T "deploy.pipeline_foot"}}</span></div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "deploy.stacks_title"}}</h2>
+    <div class="ph-actions">
+      {{if .StacksKnown}}
+      <span class="pill plain num">{{P .StacksCount "plural.stacks"}}</span>
+      {{else}}
+      <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}
+    </div>
+  </div>
+
+  <div class="panel-body tight">
+    {{if not .APIReady}}
+    <div class="empty">
+      <i class="ic">{{icon "settings"}}</i>
+      <h3>{{T "err.api_not_configured"}}</h3>
+      <p>{{T "deploy.stacks_unknown_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+      </div>
+    </div>
+    {{else if .StacksKnown}}
+      {{if .Stacks}}
+      <div class="table-wrap only-md">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{{T "deploy.col_stack"}}</th>
+              <th>{{T "common.revision"}}</th>
+              <th>{{T "deploy.f_repo"}}</th>
+              <th>{{T "common.updated"}}</th>
+              <th><span class="sr-only">{{T "common.actions"}}</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Stacks}}
+            <tr>
+              <td><span class="mono">{{.Name}}</span></td>
+              <td class="num">{{N .Revision}}</td>
+              <td>{{if .RepoURL}}<span class="mono iso trunc" dir="ltr">{{.RepoURL}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+              <td class="muted num">{{ts .UpdatedAt}}</td>
+              <td>
+                <div class="row-actions">
+                  <a class="btn btn-sm" href="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-get="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-target="#view" hx-push-url="true">{{icon "deploy"}}<span>{{T "deploy.row_deploy"}}</span></a>
+                  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Name}}" onclick="copyVal(this)" title="{{T "deploy.copy_name"}}">{{icon "copy"}}<span class="sr-only">{{T "deploy.copy_name"}}</span></button>
+                  <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Name}}" hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">{{T "deploy.open_stack"}}</a>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="only-sm">
+        {{range .Stacks}}
+        <div class="kv">
+          <div class="kv-row"><span class="k">{{T "deploy.col_stack"}}</span><span class="v mono">{{.Name}}</span></div>
+          <div class="kv-row"><span class="k">{{T "common.revision"}}</span><span class="v num">{{N .Revision}}</span></div>
+          <div class="kv-row"><span class="k">{{T "deploy.f_repo"}}</span><span class="v">{{if .RepoURL}}<span class="mono iso" dir="ltr">{{.RepoURL}}</span>{{else}}<span class="muted">—</span>{{end}}</span></div>
+          <div class="kv-row"><span class="k">{{T "common.updated"}}</span><span class="v muted num">{{ts .UpdatedAt}}</span></div>
+          <div class="action-bar">
+            <a class="btn btn-primary btn-sm" href="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-get="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-target="#view" hx-push-url="true">{{icon "deploy"}}<span>{{T "deploy.row_deploy"}}</span></a>
+            <a class="btn btn-sm" href="/web/stacks/{{.Name}}" hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">{{T "deploy.open_stack"}}</a>
+            <button type="button" class="btn btn-sm" data-copy="{{.Name}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
+          </div>
+        </div>
+        {{end}}
+      </div>
+      {{else}}
+      <div class="empty">
+        <i class="ic">{{icon "stacks"}}</i>
+        <h3>{{T "deploy.stacks_empty_title"}}</h3>
+        <p>{{T "deploy.stacks_empty_body"}}</p>
+        <div class="empty-actions">
+          <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('dp-manifest').focus()">{{T "deploy.preview_goto"}}</button>
+        </div>
+      </div>
+      {{end}}
+    {{else}}
+    <div class="empty">
+      <i class="ic">{{icon "alert"}}</i>
+      <h3>{{T "deploy.stacks_unknown_title"}}</h3>
+      <p>{{T "deploy.stacks_unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+      </div>
+    </div>
+    {{end}}
+  </div>
+
+  <div class="panel-foot">
+    <span>{{T "deploy.stacks_foot"}}</span>
+  </div>
+</div>
 {{end}}

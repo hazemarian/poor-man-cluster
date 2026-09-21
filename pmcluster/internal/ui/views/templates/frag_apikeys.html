@@ -1,53 +1,175 @@
 {{define "apikeys"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+{{/* API keys for automation.
+     Three states: rows / unknown (the list call failed) / empty (the daemon answered
+     with no keys) — plus "not configured", which is a different first action.
 
-<h1 style="margin:0 0 4px">API Keys</h1>
-<p class="sub">Bearer tokens that authenticate callers to the pmcluster daemon
-<code>/api</code>. The token is shown <strong>once</strong> on creation and stored only as a
-hash — it cannot be retrieved again.</p>
+     A token is shown exactly once, in the panel right after creation, and only as a
+     prefix anywhere else: the daemon stores a hash, so no page can re-display it. */}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "apikeys.title"}}</h1>
+    <p class="sub">{{T "apikeys.sub"}}</p>
+  </div>
+  <div class="ph-actions">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true">
+      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
+    </button>
+  </div>
+</div>
 
+{{if .ErrKey}}
+<div class="banner bad">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T .ErrKey}}</p>
+    <p>{{T "err.banner_body"}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+  </div>
+</div>
+{{end}}
+
+{{if .MsgKey}}
+<div class="msg ok">{{TF .MsgKey .MsgArg}}</div>
+{{end}}
+
+{{/* The one and only moment the full token exists in the console. */}}
 {{if .Token}}
-<div class="card">
-  <h2 style="margin-top:0">New API key created</h2>
-  <p class="sub">User: <code>{{.Name}}</code> — copy this bearer token now, it won't be shown again.</p>
-  <pre style="user-select:all;overflow-x:auto">{{.Token}}</pre>
-  <button class="btn" type="button" data-copy="{{.Token}}" onclick="copyVal(this)">Copy token</button>
-  <p class="sub">Usage:</p>
-  <pre style="overflow-x:auto">curl -H "Authorization: Bearer &lt;token&gt;" https://pmcluster.&lt;domain&gt;/api/me</pre>
-</div>
-{{end}}
-
-<div class="card">
-  <h2 style="margin-top:0">Create an API key</h2>
-  <form hx-post="/web/apikeys" hx-target="#view" hx-swap="innerHTML">
-    <label>Name</label>
-    <input type="text" name="name" placeholder="ci-deployer" required>
-    <div style="margin-top:10px">
-      <button class="btn" type="submit" hx-disabled-elt="this">Create key</button>
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{TF "apikeys.token_title" .TokenName}}</h2>
+    <div class="ph-actions"><span class="pill warn"><i class="dot"></i>{{T "apikeys.once_only"}}</span></div>
+  </div>
+  <div class="panel-body">
+    <p>{{T "apikeys.token_body"}}</p>
+    <div class="input-group">
+      <input id="apikey-token" class="finput mono iso" dir="ltr" readonly value="{{.Token}}">
+      <button type="button" class="btn" data-copy="{{.Token}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "apikeys.copy_token"}}</span></button>
     </div>
-  </form>
+    <div class="kv">
+      <div class="kv-row"><span class="k">{{T "apikeys.token_prefix"}}</span><span class="v mono iso" dir="ltr">{{.TokenPrefix}}…</span></div>
+      {{if .NewID}}<div class="kv-row"><span class="k">{{T "common.id"}}</span><span class="v num">{{.NewID}}</span></div>{{end}}
+    </div>
+    <p class="muted mt-16">{{T "apikeys.token_usage"}}</p>
+    <pre>Authorization: Bearer {{.TokenPrefix}}…</pre>
+  </div>
+</div>
+{{end}}
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "apikeys.create_title"}}</h2>
+  </div>
+  <div class="panel-body">
+    <form hx-post="/web/apikeys" hx-target="#view" hx-swap="innerHTML">
+      <div class="field">
+        <label for="apikey-name">{{T "common.name"}}</label>
+        <input id="apikey-name" class="finput" name="name" placeholder="{{T "apikeys.name_placeholder"}}" autocomplete="off" required data-focus>
+        <span class="hint">{{T "apikeys.create_sub"}}</span>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">{{icon "plus"}}<span>{{T "apikeys.create_action"}}</span></button>
+      </div>
+    </form>
+  </div>
 </div>
 
-<h2 style="margin-bottom:0">Existing API keys</h2>
-<div class="card" style="padding:6px 14px">
-{{if .Keys}}
-<table>
-  <tr><th>ID</th><th>Name</th><th>Created</th><th>Last used</th><th></th></tr>
-  {{range .Keys}}
-  <tr>
-    <td class="muted">{{.ID}}</td>
-    <td><code>{{.Name}}</code></td>
-    <td class="muted">{{ts .CreatedAt}}</td>
-    <td class="muted">{{if gt .LastUsedAt 0}}{{ts .LastUsedAt}}{{else}}—{{end}}</td>
-    <td style="text-align:right">
-      <button class="btn danger sm" hx-post="/web/apikeys/remove/{{.ID}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Revoke API key {{.Name}}? Its bearer token stops working immediately.')">Revoke</button>
-    </td>
-  </tr>
-  {{end}}
-</table>
-{{else}}
-<div class="empty">No API keys created.</div>
-{{end}}
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "apikeys.keys_title"}}</h2>
+    <div class="ph-actions">
+      {{if .Known}}<span class="pill plain">{{P .Count "plural.api_keys"}}</span>
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+    </div>
+  </div>
+
+  <div class="panel-body tight">
+    {{if not .Configured}}
+    <div class="empty">
+      <i class="ic">{{icon "settings"}}</i>
+      <h3>{{T "err.api_not_configured"}}</h3>
+      <p>{{T "apikeys.not_configured_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+      </div>
+    </div>
+    {{else if .Known}}
+      {{if .Keys}}
+      <div class="table-wrap only-md">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>{{T "common.name"}}</th>
+              <th>{{T "apikeys.col_token"}}</th>
+              <th>{{T "common.created"}}</th>
+              <th>{{T "apikeys.col_last_used"}}</th>
+              <th><span class="sr-only">{{T "common.actions"}}</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Keys}}
+            <tr>
+              <td><span class="mono">{{.Name}}</span>{{if .JustCreated}} <span class="pill accent">{{T "apikeys.just_created"}}</span>{{end}}</td>
+              <td>
+                {{if .Prefix}}<span class="mono iso" dir="ltr">{{.Prefix}}…</span>
+                {{else}}<span class="secret-mask" title="{{T "apikeys.token_gone_hint"}}">••••••••</span> <span class="muted">{{T "apikeys.token_gone"}}</span>{{end}}
+              </td>
+              <td class="muted num">{{ts .CreatedAt}}</td>
+              <td class="muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "apikeys.never_used"}}{{end}}</td>
+              <td>
+                <div class="row-actions">
+                  <button type="button" class="btn btn-danger btn-sm" hx-post="/web/apikeys/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "apikeys.revoke_confirm" .Name}}">{{T "apikeys.revoke"}}</button>
+                </div>
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="only-sm">
+        {{range .Keys}}
+        <div class="kv">
+          <div class="kv-row"><span class="k">{{T "common.name"}}</span><span class="v mono">{{.Name}}</span></div>
+          <div class="kv-row"><span class="k">{{T "common.id"}}</span><span class="v num">{{.ID}}</span></div>
+          <div class="kv-row"><span class="k">{{T "apikeys.col_token"}}</span><span class="v">
+            {{if .Prefix}}<span class="mono iso" dir="ltr">{{.Prefix}}…</span>
+            {{else}}<span class="secret-mask">••••••••</span> <span class="muted">{{T "apikeys.token_gone"}}</span>{{end}}
+          </span></div>
+          <div class="kv-row"><span class="k">{{T "common.created"}}</span><span class="v muted num">{{ts .CreatedAt}}</span></div>
+          <div class="kv-row"><span class="k">{{T "apikeys.col_last_used"}}</span><span class="v muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "apikeys.never_used"}}{{end}}</span></div>
+          <div class="action-bar">
+            <button type="button" class="btn btn-danger btn-sm" hx-post="/web/apikeys/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "apikeys.revoke_confirm" .Name}}">{{T "apikeys.revoke"}}</button>
+          </div>
+        </div>
+        {{end}}
+      </div>
+      {{else}}
+      <div class="empty">
+        <i class="ic">{{icon "keys"}}</i>
+        <h3>{{T "apikeys.empty_title"}}</h3>
+        <p>{{T "apikeys.empty_body"}}</p>
+        <div class="empty-actions">
+          <button type="button" class="btn btn-primary btn-sm" data-focus onclick="document.getElementById('apikey-name').focus()">{{T "apikeys.new"}}</button>
+        </div>
+      </div>
+      {{end}}
+    {{else}}
+    <div class="empty">
+      <i class="ic">{{icon "alert"}}</i>
+      <h3>{{T "apikeys.unknown_title"}}</h3>
+      <p>{{T "apikeys.unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+      </div>
+    </div>
+    {{end}}
+  </div>
+
+  <div class="panel-foot">
+    <span>{{T "apikeys.token_gone_hint"}}</span>
+  </div>
 </div>
 {{end}}

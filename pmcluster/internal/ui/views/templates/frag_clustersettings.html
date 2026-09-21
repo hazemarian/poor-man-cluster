@@ -1,85 +1,150 @@
 {{define "clustersettings"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+{{/* The daemon's editable cluster settings.
 
-<h1 style="margin:0 0 4px">Cluster settings</h1>
-<p class="sub">
-  <a class="link" href="/web/settings" hx-get="/web/settings" hx-target="#view">← settings</a>
-  · Edits are saved to the daemon but <strong>not</strong> applied — run
-  <code>cluster update</code> (the "Apply to swarm" button on the Settings page)
-  to push them to the swarm.
-</p>
-
-<div class="card">
-  <form hx-post="/web/settings/cluster" hx-target="#view" hx-swap="innerHTML">
-    <div class="grid">
-      <div>
-        <label>Volume root</label>
-        <input type="text" name="volume_root" value="{{.Settings.volume_root}}" placeholder="/var/stack/data" />
-      </div>
-      <div>
-        <label>Backup on all nodes</label>
-        <select name="backup_all_nodes">
-          <option value="false" {{if ne .Settings.backup_all_nodes "true"}}selected{{end}}>false</option>
-          <option value="true" {{if eq .Settings.backup_all_nodes "true"}}selected{{end}}>true</option>
-        </select>
-      </div>
-      <div>
-        <label>Edge login disabled</label>
-        <select name="edge_login_disabled">
-          <option value="true" {{if ne .Settings.edge_login_disabled "false"}}selected{{end}}>true</option>
-          <option value="false" {{if eq .Settings.edge_login_disabled "false"}}selected{{end}}>false</option>
-        </select>
-      </div>
-      <div>
-        <label>Domain</label>
-        <input type="text" name="domain" value="{{.Settings.domain}}" placeholder="pmcluster.example.com" />
-      </div>
-      <div>
-        <label>Admin email</label>
-        <input type="text" name="oo_admin_email" value="{{.Settings.oo_admin_email}}" placeholder="admin@example.com" />
-      </div>
-      <div>
-        <label>Traefik admin user</label>
-        <input type="text" name="traefik_admin_user" value="{{.Settings.traefik_admin_user}}" placeholder="admin" />
-      </div>
-    </div>
-
-    <h2>SSO</h2>
-    <div class="grid">
-      <div>
-        <label>SSO enabled</label>
-        <select name="sso_enabled">
-          <option value="false" {{if ne .Settings.sso_enabled "true"}}selected{{end}}>false</option>
-          <option value="true" {{if eq .Settings.sso_enabled "true"}}selected{{end}}>true</option>
-        </select>
-      </div>
-      <div>
-        <label>Provider</label>
-        <input type="text" name="sso_provider" value="{{.Settings.sso_provider}}" placeholder="github" />
-      </div>
-      <div>
-        <label>Client ID</label>
-        <input type="text" name="sso_client_id" value="{{.Settings.sso_client_id}}" />
-      </div>
-      <div>
-        <label>Client secret</label>
-        <input type="password" name="sso_client_secret" value="" placeholder="{{if .HasClientSecret}}•••set•••{{end}}" />
-      </div>
-      <div>
-        <label>GitHub org</label>
-        <input type="text" name="sso_github_org" value="{{.Settings.sso_github_org}}" />
-      </div>
-      <div>
-        <label>Cookie expire</label>
-        <input type="text" name="sso_cookie_expire" value="{{.Settings.sso_cookie_expire}}" placeholder="1h" />
-      </div>
-    </div>
-
-    <div class="row">
-      <button class="btn" type="submit" hx-disabled-elt="this">Save settings</button>
-    </div>
-    <p class="muted" style="margin-top:10px">Changes are stored by the daemon and applied by the next <code>cluster update</code>.</p>
-  </form>
+     These are the values the daemon writes into the stack files it generates, so
+     the page is a form rather than a settings dump: each field names what the
+     value changes. Saving stores the values; the swarm picks them up when the
+     cluster stack is updated from the Settings page, which the note at the end
+     says in as many words. */}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "clustersettings.title"}}</h1>
+    <p class="sub">{{T "clustersettings.sub"}}</p>
+  </div>
+  <div class="ph-actions">
+    <a class="btn btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "settings.title"}}</span></a>
+  </div>
 </div>
+
+{{if .ErrKey}}
+<div class="msg err">{{T .ErrKey}}</div>
+{{end}}
+{{if .MsgKey}}
+<div class="msg ok">{{T .MsgKey}}</div>
+{{end}}
+
+{{if not .Settings}}
+<div class="panel">
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "layers-off"}}
+      <h3>{{T "clustersettings.empty_title"}}</h3>
+      <p>{{T "clustersettings.empty_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-sm" href="/web/settings/cluster" hx-get="/web/settings/cluster" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
+      </div>
+    </div>
+  </div>
+</div>
+{{else}}
+<form class="form" hx-post="/web/settings/cluster" hx-target="#view" hx-push-url="true" hx-disabled-elt="find button">
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>{{T "clustersettings.sect_core"}}</h2>
+    </div>
+    <div class="panel-body">
+      <p class="sub">{{T "clustersettings.sect_core_sub"}}</p>
+      <div class="form-grid">
+        <div class="field">
+          <label for="cs-volume-root">{{T "clustersettings.volume_root"}}</label>
+          <input id="cs-volume-root" class="finput mono" type="text" name="volume_root" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "volume_root"}}">
+          <span class="hint">{{T "clustersettings.volume_root_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="cs-domain">{{T "clustersettings.domain"}}</label>
+          <input id="cs-domain" class="finput mono" type="text" name="domain" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "domain"}}">
+          <span class="hint">{{T "clustersettings.domain_hint"}}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>{{T "clustersettings.sect_backup"}}</h2>
+    </div>
+    <div class="panel-body">
+      <label class="check">
+        <input type="checkbox" name="backup_all_nodes" value="true"{{if eq (index .Settings "backup_all_nodes") "true"}} checked{{end}}>
+        <span>{{T "clustersettings.backup_all_nodes"}}</span>
+      </label>
+      <span class="hint">{{T "clustersettings.backup_all_nodes_hint"}}</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>{{T "clustersettings.sect_sso"}}</h2>
+    </div>
+    <div class="panel-body">
+      <p class="sub">{{T "clustersettings.sect_sso_sub"}}</p>
+      <label class="check">
+        <input type="checkbox" name="sso_enabled" value="true"{{if eq (index .Settings "sso_enabled") "true"}} checked{{end}}>
+        <span>{{T "clustersettings.sso_enabled"}}</span>
+      </label>
+      <span class="hint">{{T "clustersettings.sso_enabled_hint"}}</span>
+      <div class="form-grid">
+        <div class="field">
+          <label for="cs-sso-provider">{{T "clustersettings.sso_provider"}}</label>
+          <input id="cs-sso-provider" class="finput mono" type="text" name="sso_provider" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_provider"}}">
+          <span class="hint">{{T "clustersettings.sso_provider_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="cs-sso-client-id">{{T "clustersettings.sso_client_id"}}</label>
+          <input id="cs-sso-client-id" class="finput mono" type="text" name="sso_client_id" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_client_id"}}">
+          <span class="hint">{{T "clustersettings.sso_client_id_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="cs-sso-secret">{{T "clustersettings.sso_client_secret"}}</label>
+          <input id="cs-sso-secret" class="finput mono" type="password" name="sso_client_secret" dir="ltr" autocomplete="new-password" spellcheck="false"
+                 placeholder="{{if .HasClientSecret}}{{T "clustersettings.sso_secret_set"}}{{else}}{{T "clustersettings.sso_secret_none"}}{{end}}">
+          <span class="hint">{{T "clustersettings.sso_secret_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="cs-sso-org">{{T "clustersettings.sso_github_org"}}</label>
+          <input id="cs-sso-org" class="finput mono" type="text" name="sso_github_org" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_github_org"}}">
+          <span class="hint">{{T "clustersettings.sso_github_org_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="cs-sso-cookie">{{T "clustersettings.sso_cookie_expire"}}</label>
+          <input id="cs-sso-cookie" class="finput mono" type="text" name="sso_cookie_expire" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_cookie_expire"}}">
+          <span class="hint">{{T "clustersettings.sso_cookie_expire_hint"}}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>{{T "clustersettings.sect_edge"}}</h2>
+    </div>
+    <div class="panel-body">
+      <label class="check">
+        <input type="checkbox" name="edge_login_disabled" value="true"{{if eq (index .Settings "edge_login_disabled") "true"}} checked{{end}}>
+        <span>{{T "clustersettings.edge_login_disabled"}}</span>
+      </label>
+      <span class="hint">{{T "clustersettings.edge_login_disabled_hint"}}</span>
+      <div class="form-grid">
+        <div class="field">
+          <label for="cs-traefik-user">{{T "clustersettings.traefik_admin_user"}}</label>
+          <input id="cs-traefik-user" class="finput mono" type="text" name="traefik_admin_user" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "traefik_admin_user"}}">
+          <span class="hint">{{T "clustersettings.traefik_admin_user_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="cs-oo-email">{{T "clustersettings.oo_admin_email"}}</label>
+          <input id="cs-oo-email" class="finput mono" type="text" name="oo_admin_email" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "oo_admin_email"}}">
+          <span class="hint">{{T "clustersettings.oo_admin_email_hint"}}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{icon "check"}}<span>{{T "clustersettings.save"}}</span></button>
+  </div>
+</form>
+
+<p class="sub">{{T "clustersettings.foot"}}</p>
+{{end}}
 {{end}}

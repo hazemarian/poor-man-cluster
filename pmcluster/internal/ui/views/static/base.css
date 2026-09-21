@@ -1,0 +1,377 @@
+/* pmcluster console — base: tokens, reset, typography, shell layout.
+   Design direction v2: flat zinc surfaces, hairline separation, single indigo accent.
+   All box-direction properties are LOGICAL (inline-start/end) so the same sheet
+   renders correctly for LTR (en) and RTL (ar). */
+
+/* ---------- tokens ---------- */
+:root {
+  --bg-body: #0A0B0E;
+  --bg-sidebar: #0D0F15;
+  --bg-card: #101218;
+  --bg-elevated: #161922;
+  --bg-hover: #1A1E27;
+  --bg-tertiary: #1C2029;
+  /* The lead stat cell (first cell of the overview row) carries the node's
+     headline state, so its fill needs to read as one step above the card in
+     BOTH themes. --bg-elevated cannot serve: it is #FFFFFF in light, identical
+     to --bg-card, so the cell loses its lift. Dedicated token, measured at
+     ~1.17:1 against --bg-card in each theme. */
+  --bg-lead: #1C2130;
+
+  --border-subtle: #191C23;
+  --border-default: #23272F;
+  --border-active: #2C313B;
+  /* Form controls sit on --bg-tertiary inside a --bg-card panel, so a
+     --border-default hairline vanishes against its own fill. Controls take
+     this stronger hairline instead; panels keep --border-default. */
+  --border-control: #454C5A;
+  --shadow-overlay: 0 16px 40px rgba(0, 0, 0, .55);
+
+  --text-primary: #E9EBF0;
+  --text-secondary: #A5ACBA;
+  --text-tertiary: #8A93A3;
+
+  --accent: #6D7CFF;
+  --accent-hover: #5A67E8;
+  /* Filled accent surfaces carry white text, and #6D7CFF only reaches 3.5:1
+     against white. --accent-strong is the same hue darkened until white text
+     clears 4.5:1; --accent stays for text, icons, hairlines and focus rings. */
+  --accent-strong: #5460DC;
+  --accent-strong-hover: #4B57D6;
+  --accent-bg: rgba(109, 124, 255, .12);
+  --accent-border: rgba(109, 124, 255, .22);
+
+  --green: #3DDC97;  --green-bg: rgba(61, 220, 151, .12);  --green-border: rgba(61, 220, 151, .22);
+  --amber: #F5B945;  --amber-bg: rgba(245, 185, 69, .12);  --amber-border: rgba(245, 185, 69, .22);
+  --red:   #FB6F6F;  --red-bg:   rgba(251, 111, 111, .12); --red-border:   rgba(251, 111, 111, .22);
+  --cyan:  #49C7F0;  --cyan-bg:  rgba(73, 199, 240, .12);  --cyan-border:  rgba(73, 199, 240, .22);
+
+  --r-sm: 5px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px;
+  --sans: "IBM Plex Sans", "IBM Plex Sans Arabic", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --nav-w: 240px; --rail-w: 64px; --top-w: 72px; --content-max: 1440px;
+  --t: .15s cubic-bezier(.25, 1, .5, 1);
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg-body: #FBFBFC;
+  --bg-sidebar: #F5F6F8;
+  --bg-card: #FFFFFF;
+  --bg-elevated: #FFFFFF;
+  --bg-hover: #F1F2F5;
+  --bg-tertiary: #F4F5F7;
+  /* See :root — light needs a real step away from #FFFFFF, which --bg-elevated
+     cannot provide here. */
+  --bg-lead: #EBEEF4;
+
+  --border-subtle: #EDEEF1;
+  --border-default: #E4E6EA;
+  --border-active: #D3D7DE;
+  --border-control: #B9C0CB;
+  --shadow-overlay: 0 16px 40px rgba(20, 22, 26, .14);
+
+  --text-primary: #14161A;
+  --text-secondary: #5B616E;
+  --text-tertiary: #676E7C;
+
+  --accent: #4B57D6;
+  --accent-hover: #4049B8;
+  --accent-strong: #4049B8;
+  --accent-strong-hover: #39419F;
+  --accent-bg: rgba(75, 87, 214, .1);
+  --accent-border: rgba(75, 87, 214, .24);
+
+  /* Semantic text clears AA on its own tint, including hovered table rows. */
+  --green: #126C48;  --green-bg: rgba(18, 108, 72, .1);   --green-border: rgba(18, 108, 72, .24);
+  --amber: #8A5A08;  --amber-bg: rgba(138, 90, 8, .1);    --amber-border: rgba(138, 90, 8, .24);
+  --red:   #B32B2B;  --red-bg:   rgba(179, 43, 43, .1);   --red-border:   rgba(179, 43, 43, .24);
+  --cyan:  #16779B;  --cyan-bg:  rgba(22, 119, 155, .1);  --cyan-border:  rgba(22, 119, 155, .24);
+  color-scheme: light;
+}
+
+/* Type, spacing and control metrics are theme-independent, so they live in
+   their own block. Six UI steps, one page-title step, one metric step; the mono
+   face is sized separately because IBM Plex Mono runs ~4% wide at the same
+   nominal size, so 12.5px mono optically matches 13px sans. Spacing is a 4px
+   grid: paddings, gaps and margins below pick from --s-*, never a literal. */
+:root {
+  --fs-xs: 12px;      /* uppercase micro-labels, pills, badges, kbd */
+  --fs-sm: 13px;      /* meta, hints, table cells, panel footers, buttons */
+  --fs-body: 14px;    /* body copy, nav, form controls */
+  --fs-h3: 14px;      /* in-card sub-heading */
+  --fs-h2: 16px;      /* panel / section title */
+  --fs-h1: 30px;      /* page title */
+  --fs-metric: 32px;  /* the single large number in a stat */
+  --fs-code: 12.5px;  /* mono identifiers, payloads, logs */
+  --lh-snug: 1.3; --lh-body: 1.5; --lh-code: 1.6;
+
+  --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px; --s-5: 20px; --s-6: 24px;
+  --s-8: 32px; --s-10: 40px; --s-12: 48px;
+
+  /* Controls share a consistent baseline; coarse pointers get 44px targets. */
+  --control-h: 38px; --control-h-sm: 32px; --control-h-lg: 44px; --touch: 44px;
+  --fs-h1-sm: 26px;   /* page title at phone width */
+  --gap-icon: 6px;    /* icon-to-its-own-label, optically between --s-1 and --s-2 */
+}
+
+/* ---------- reset + base ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  font: 400 var(--fs-body)/var(--lh-body) var(--sans);
+  background: var(--bg-body);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4 { margin: 0; font-weight: 600; line-height: var(--lh-snug); text-wrap: balance; }
+h1 { font-size: var(--fs-h1); letter-spacing: -.035em; }
+h2 { font-size: var(--fs-h2); }
+h3 { font-size: var(--fs-h3); }
+p { margin: 0; text-wrap: pretty; }
+a { color: inherit; text-decoration: none; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+::selection { background: var(--accent-bg); }
+hr { border: 0; border-top: 1px solid var(--border-subtle); margin: 20px 0; }
+
+/* numbers are columns of data: tabular figures everywhere a value is rendered */
+.num, .stat-v, td.num, .mono { font-variant-numeric: tabular-nums; }
+.mono, code, pre, kbd, .ident { font-family: var(--mono); font-size: var(--fs-code); }
+
+/* LTR islands inside RTL text: revisions, digests, hostnames, IPs, paths */
+bdi, [dir="ltr"].iso { unicode-bidi: isolate; }
+.iso { font-family: var(--mono); font-size: var(--fs-code); direction: ltr; unicode-bidi: isolate; overflow-wrap: anywhere; }
+
+.muted { color: var(--text-secondary); }
+.tert { color: var(--text-tertiary); }
+.nowrap { white-space: nowrap; }
+.trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.ic { width: 16px; height: 16px; flex: none; stroke-width: 1.5; }
+.ic-sm { width: 14px; height: 14px; }
+[dir="rtl"] .flip { transform: scaleX(-1); }
+
+/* ---------- shell ---------- */
+/* The document owns page scrolling. Stop its edge bounce from pulling the
+   sticky sidebar and header with it; standalone auth pages are unaffected. */
+html.console { overscroll-behavior-y: none; }
+.app { display: grid; grid-template-columns: var(--nav-w) minmax(0, 1fr); min-height: 100dvh; }
+
+.sidebar {
+  background: var(--bg-sidebar);
+  border-inline-end: 1px solid var(--border-default);
+  display: flex; flex-direction: column;
+  position: sticky; top: 0; height: 100dvh; overflow: hidden;
+}
+.sidebar-head {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: 0 16px; height: var(--top-w); flex: none;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.mark { width: 34px; height: 34px; border-radius: 9px; background: var(--accent-bg); border: 1px solid var(--accent-border); flex: none; display: grid; place-items: center; color: var(--accent); }
+.mark .ic { width: 22px; height: 22px; }
+.brand { font-size: 17px; font-weight: 600; letter-spacing: -.025em; display: flex; flex-direction: column; }
+.brand small { font-size: var(--fs-xs); font-weight: 400; color: var(--text-tertiary); letter-spacing: 0; }
+
+/* The nav owns the scroll, not the sidebar: with the rail this long, a scrolling
+   sidebar pushed the footer (account + logout) below the fold, where the logout
+   button was clipped by 35px on a phone. Pinning head and foot keeps the actions
+   reachable and the nav scrolls between them. */
+.nav { display: flex; flex-direction: column; gap: 3px; padding: var(--s-5) var(--s-3); flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+/* The menu scrolls independently without bouncing or chaining to the page. */
+.nav { overscroll-behavior-y: none; }
+.nav-label {
+  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-tertiary); padding: 14px 10px 6px; font-weight: 500;
+}
+.nav-label:first-child { padding-top: 2px; }
+.nav-item {
+  display: flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-2) var(--s-3); border-radius: var(--r-md);
+  color: var(--text-secondary); font-size: 14px;
+  transition: color var(--t), background var(--t);
+  min-height: var(--control-h); position: relative;
+}
+.nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.nav-item.is-active { background: var(--accent-bg); color: var(--text-primary); font-weight: 500; box-shadow: inset 0 0 0 1px var(--accent-border); }
+/* Active row reads as a tinted fill + accent icon. No edge bar: it looked like a
+   stray line. */
+.nav-item.is-active .ic { color: var(--accent); opacity: 1; }
+.nav-item .ic { color: inherit; opacity: .85; }
+.nav-item .count { margin-inline-start: auto; font-size: var(--fs-xs); color: var(--text-tertiary); }
+.nav-item[data-ext] .ic { opacity: .6; }
+
+.sidebar-foot {
+  flex: none; padding: var(--s-3); border-top: 1px solid var(--border-subtle);
+  display: flex; flex-direction: column; gap: var(--s-3);
+}
+/* Account and logout share one line: the button hugs the inline end of the row
+   (margin-inline-start: auto keeps it correct under RTL), so it sits next to the
+   name instead of owning a full-width row of its own. */
+.foot-row { display: flex; align-items: center; gap: var(--s-2); }
+.foot-row .who { min-width: 0; }
+.foot-row form { flex: none; margin-inline-start: auto; }
+.sidebar-foot .who-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.who { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); color: var(--text-secondary); }
+.who .avatar {
+  width: 28px; height: 28px; border-radius: var(--r-md); flex: none;
+  background: var(--bg-tertiary); border: 1px solid var(--border-default);
+  display: grid; place-items: center; font-size: var(--fs-xs); color: var(--text-secondary);
+}
+
+.main { display: flex; flex-direction: column; min-width: 0; }
+.topbar {
+  height: var(--top-w); flex: none; position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: var(--s-3); padding: 0 var(--s-6);
+  background: color-mix(in srgb, var(--bg-body) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border-default);
+}
+.crumbs { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); color: var(--text-secondary); min-width: 0; }
+.crumbs .sep { color: var(--text-tertiary); }
+/* The trail reads right-to-left in RTL, so its separator has to point the
+   other way; without this the chevron contradicts the reading direction. */
+[dir="rtl"] .crumbs .sep :is(svg, i, img) { transform: scaleX(-1); }
+.crumbs strong { color: var(--text-primary); font-weight: 500; }
+.topbar-end { margin-inline-start: auto; display: flex; align-items: center; gap: var(--s-2); }
+
+.content { padding: var(--s-10) var(--s-10) var(--s-12); margin-inline: auto; max-width: var(--content-max); width: 100%; min-width: 0; }
+.content > :first-child { margin-top: 0; }
+/* one block rhythm inside a page section: nothing ever butts against its neighbour */
+.content #view > * + * { margin-top: var(--s-6); }
+
+/* page header: title, subtitle, actions — one shape on every page */
+.page-head {
+  display: flex; align-items: flex-start; gap: var(--s-4);
+  padding-bottom: var(--s-2); margin-bottom: var(--s-8);
+}
+.page-head .ph-text { min-width: 0; }
+.page-head .sub { color: var(--text-secondary); font-size: var(--fs-body); margin-top: var(--s-2); max-width: 65ch; }
+.page-head .ph-actions { margin-inline-start: auto; display: flex; gap: var(--s-2); align-items: center; flex: none; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 1023px) {
+  .app { grid-template-columns: var(--rail-w) minmax(0, 1fr); }
+  /* `.brand span` never matched anything: the wordmark is a bare text node inside
+     `.brand`, so the rule hid nothing and the wordmark overflowed the 64px rail.
+     Hide the whole block — the `.mark` glyph is the rail's logo. */
+  /* Icon-only rail — but the label must stay in the accessibility tree: `display: none`
+     removes it from the accessible name too, and axe then flags link-name on all 12 nav
+     links (and the logout button) at 900px. Clip it to 1px instead of removing it. */
+  .nav-label { display: none; }
+  .nav-item span, .sidebar-foot .btn span {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .brand { display: none; }
+  .sidebar-head { justify-content: center; padding: 0; }
+  .nav-item { justify-content: center; padding: var(--s-2); }
+  .sidebar-foot { align-items: center; }
+  /* Stack the account and logout action within the narrow rail. */
+  .foot-row { flex-direction: column; gap: var(--s-2); }
+  .foot-row form { margin-inline-start: 0; }
+  /* the avatar is a span too — only the name is dropped in the collapsed rail */
+  .who span:not(.avatar) { display: none; }
+  .content { padding: var(--s-5) var(--s-5) var(--s-10); }
+}
+@media (max-width: 767px) {
+  :root { --top-w: 60px; }
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .sidebar {
+    position: fixed; inset-block: 0; inset-inline-start: 0; width: 264px; z-index: 60;
+    transform: translateX(-100%); transition: transform .2s cubic-bezier(.25, 1, .5, 1);
+    box-shadow: var(--shadow-overlay); border-inline-end: 1px solid var(--border-default);
+  }
+  [dir="rtl"] .sidebar { transform: translateX(100%); }
+  body.nav-open .sidebar, .sidebar.is-open { transform: none; }
+  /* `display: revert` on `.brand` would fall back to the UA value for a span (inline)
+     and lose the stacked wordmark; restate the flex layout instead. The rail's clipped
+     label rules must be unwound here too, or the drawer keeps the 1px box and the text
+     stays invisible. */
+  .nav-label, .nav-item span, .sidebar-foot .btn span, .who span:not(.avatar) {
+    display: revert; position: static; width: auto; height: auto;
+    overflow: visible; clip-path: none; white-space: normal;
+  }
+  .brand { display: flex; }
+  .nav-label { padding: 14px 10px 6px; }
+  /* The full-width drawer has room for the account and logout in one row. */
+  .foot-row { flex-direction: row; }
+  .foot-row form { margin-inline-start: auto; }
+  .nav-item { justify-content: flex-start; padding: 10px 12px; min-height: 44px; }
+  .sidebar-head { justify-content: flex-start; padding: 0 16px; }
+  .sidebar-head .brand { flex: 1; min-width: 0; }
+  .sidebar-head .brand small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sidebar-foot { align-items: stretch; }
+  .content { padding: var(--s-4) var(--s-4) 96px; }
+  .topbar { padding: 0 var(--s-3); gap: var(--s-2); }
+  .crumbs { font-size: var(--fs-sm); }
+  .scrim {
+    position: fixed; inset: 0; background: rgba(0, 0, 0, .5); z-index: 55; display: none;
+  }
+  body.nav-open .scrim { display: block; }
+  .page-head { flex-direction: column; align-items: stretch; }
+  .page-head .ph-actions { margin-inline-start: 0; }
+  h1 { font-size: var(--fs-h1-sm); }
+}
+
+.skip-link { position: fixed; inset-block-start: var(--s-3); inset-inline-start: var(--s-3); z-index: 80; padding: var(--s-3) var(--s-4); background: var(--bg-elevated); border: 1px solid var(--accent); border-radius: var(--r-md); transform: translateY(-200%); }
+.skip-link:focus { transform: none; }
+.topbar-context { gap: var(--s-2); padding-inline-end: var(--s-4); border-inline-end: 1px solid var(--border-default); color: var(--text-tertiary); font-size: var(--fs-xs); }
+[dir="rtl"] h1 { letter-spacing: 0; }
+/* The rail is permanent from tablet up, so its close button would be a dead
+   control there; it exists only for the phone drawer. `.icon-btn` sets display:grid
+   from components.css, which loads after this file, so match on specificity rather
+   than rely on source order. */
+@media (min-width: 768px) { .scrim, .sidebar .sidebar-close { display: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* ---------- theme-dependent icon swap ---------- */
+/* One control, two glyphs: the button shows the sun while dark (click for
+   light) and the moon while light. Keeping both in the DOM lets the toggle
+   work before any JavaScript runs. */
+[data-theme="light"] .theme-dark-only { display: none; }
+[data-theme="dark"] .theme-light-only { display: none; }
+
+/* ---------- wide-screen-only chrome ---------- */
+.only-wide { display: none; }
+@media (min-width: 1024px) {
+  .only-wide { display: inline-flex; align-items: center; }
+}
+
+/* ---------- mobile tab bar ---------- */
+/* Phones get the five destinations an operator actually reaches for, pinned to
+   the thumb edge. The header menu opens the remaining destinations. */
+.tabbar { display: none; }
+@media (max-width: 767px) {
+  .tabbar {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    position: fixed;
+    inset-inline: 0;
+    inset-block-end: 0;
+    z-index: 58;
+    background: var(--bg-sidebar);
+    border-block-start: 1px solid var(--border-default);
+    padding-block: 6px calc(6px + env(safe-area-inset-bottom, 0px));
+  }
+  .tabbar a, .tabbar button {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    min-height: 48px; padding: 6px 2px;
+    font-size: var(--fs-xs); letter-spacing: .01em;
+    color: var(--text-tertiary); background: none; border: 0;
+    text-decoration: none; cursor: pointer;
+  }
+  .tabbar a.is-active, .tabbar button.is-active { color: var(--accent); }
+  .tabbar .ic { width: 20px; height: 20px; }
+}

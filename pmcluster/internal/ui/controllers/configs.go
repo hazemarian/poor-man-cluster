@@ -82,9 +82,15 @@ type configFormData struct {
 	Content  string
 	IsEdit   bool
 	Versions []configVersionRow
+	ErrKey   string
+	ErrRaw   string
 	Error    string
 	Action   string
 }
+
+// fail records a failed save: key is the dictionary entry the modal translates
+// and raw is the upstream text its <details> disclosure shows.
+func (d *configFormData) fail(key, raw string) { d.ErrKey, d.ErrRaw = key, raw }
 
 // configForm renders the config modal fragment. Handlers use it for the
 // hx-get "new"/"edit" routes (plain 200 → openModal) and for validation

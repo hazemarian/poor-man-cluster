@@ -1,9 +1,9 @@
 package controllers
 
 import (
-	"github.com/gin-gonic/gin"
+	"net/http"
 
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
+	"github.com/gin-gonic/gin"
 )
 
 // Overview renders the app shell and the cluster overview fragment.
@@ -11,21 +11,33 @@ type Overview struct{ *Controller }
 
 // App renders the HTMX application shell (sidebar + empty #view). All data
 // loads via fragment requests from the shell itself.
+//
+// The shell's data comes from the renderer's ShellData builder rather than a
+// hand-rolled map here: shell chrome (breadcrumb, title, language links, the
+// per-request refresh URL) is exactly what that builder exists for, and a
+// second copy of it drifts. Passing a map without "Crumb" is how this route
+// came to stream "invalid value; expected string" into the document title.
 func (c Overview) App(g *gin.Context) {
-	c.Views.Page(g, "app", gin.H{
-		"User":          middleware.CurrentUser(g),
-		"Version":       c.Version,
-		"LoginDisabled": c.Auth.LoginDisabled,
-		"Domain":        c.Domain,
-	})
+	if c.Views.ShellData == nil {
+		g.Status(http.StatusInternalServerError)
+		return
+	}
+	c.Views.Page(g, "app", c.Views.ShellData(g))
 }
 
 type overviewData struct {
 	Me    *meModel
 	Info  *infoModel
 	Nodes []nodeModel
-	Error string
-	Msg   string
+
+	// The v1 console rendered every failed call as a zero: a broken swarm query
+	// looked exactly like an empty cluster. These flags keep "we don't know"
+	// separate from "the answer is none", and ErrRaw keeps the payload for the
+	// operator who wants it without putting it in the reading path.
+	InfoKnown  bool
+	NodesKnown bool
+	ErrKey     string
+	ErrRaw     string
 }
 
 // meModel/infoModel/nodeModel are thin view aliases so templates don't import
@@ -35,14 +47,15 @@ type meModel struct {
 	Name string `json:"name"`
 }
 
-// Fragment renders cluster info + nodes, or an error if not configured.
+// Fragment renders cluster info + nodes, or a humanised failure with the raw
+// upstream payload folded away behind a disclosure.
 func (c Overview) Fragment(g *gin.Context) {
 	ctx := g.Request.Context()
 	_, _, configured := c.loadParams(ctx)
 
 	d := overviewData{}
 	if !configured {
-		d.Error = "pmcluster API not configured. Open Settings to set the API URL and token."
+		d.ErrKey = "err.api_not_configured"
 		c.Views.Fragment(g, "overview", d)
 		return
 	}
@@ -53,6 +66,7 @@ func (c Overview) Fragment(g *gin.Context) {
 	}
 	info, errI := c.API.ClusterInfo(ctx)
 	if errI == nil {
+		d.InfoKnown = true
 		d.Info = &infoModel{
 			NodeName: info.NodeName, ServerVersion: info.ServerVersion,
 			OS: info.OS, Arch: info.Arch, CPUs: info.CPUs, MemoryBytes: info.MemoryBytes,
@@ -62,6 +76,7 @@ func (c Overview) Fragment(g *gin.Context) {
 	}
 	nodes, errN := c.API.Nodes(ctx)
 	if errN == nil {
+		d.NodesKnown = true
 		for _, n := range nodes {
 			d.Nodes = append(d.Nodes, nodeModel{
 				Hostname: n.Hostname, Role: n.Role, Status: n.Status,
@@ -72,11 +87,11 @@ func (c Overview) Fragment(g *gin.Context) {
 
 	switch {
 	case err != nil:
-		d.Error = err.Error()
+		d.ErrKey, d.ErrRaw = "err.api_unreachable", err.Error()
 	case errI != nil:
-		d.Error = errI.Error()
+		d.ErrKey, d.ErrRaw = "err.cluster_info", errI.Error()
 	case errN != nil:
-		d.Error = errN.Error()
+		d.ErrKey, d.ErrRaw = "err.nodes", errN.Error()
 	}
 	c.Views.Fragment(g, "overview", d)
 }

@@ -1,23 +1,71 @@
 {{define "revision"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+{{/* One revision's manifests, rendered in the shell's modal. The source
+     manifest is what the operator wrote, the rendered one is what the daemon
+     actually applied: the diff between them is the answer to "why does the
+     cluster look like this?", so both are shown, verbatim, in fixed-width
+     blocks that scroll rather than wrap. */}}
 
-<h1>Revision {{.Rev.Revision}} · {{.Rev.Stack}}</h1>
-<p class="sub">
-  <a class="link" href="/web/stacks/{{.Rev.Stack}}" hx-get="/web/stacks/{{.Rev.Stack}}" hx-target="#view">← stack</a>
-  · created {{ts .Rev.CreatedAt}}
-</p>
+<div class="row">
+  <h2>{{TF "revision.title" .Revision .Stack}}</h2>
+  <span class="spacer"></span>
+</div>
 
-<h2>Pipeline</h2>
-<ol class="pipeline">
-  {{range .Steps}}
-  <li><span class="pill warn">▶</span> {{.}}</li>
+{{if .ErrKey}}
+<div class="banner bad mt-24">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T .ErrKey}}</p>
+    <p>{{T "err.banner_body"}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+</div>
+{{else}}
+<p class="sub">{{TF "revision.sub" (ts .Created)}}</p>
+
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "revision.pipeline"}}</h2>
+  </div>
+  <div class="panel-body">
+    {{if .Steps}}
+    <ol class="pipeline">
+      {{range .Steps}}<li class="pipeline-step">{{.}}</li>{{end}}
+    </ol>
+    {{else}}
+    <p class="muted">{{T "revision.pipeline_empty"}}</p>
+    {{end}}
+    <p class="muted">{{T "revision.pipeline_sub"}}</p>
+  </div>
+</div>
+
+<div class="row mt-24">
+  <h3>{{T "revision.source"}}</h3>
+  <span class="spacer"></span>
+  {{if .Source}}
+  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Source}}" onclick="copyVal(this)">
+    {{icon "copy"}}<span>{{T "common.copy"}}</span>
+  </button>
   {{end}}
-</ol>
+</div>
+{{if .Source}}
+<pre dir="ltr">{{.Source}}</pre>
+{{else}}
+<p class="muted">{{T "common.none"}}</p>
+{{end}}
 
-<h2>Source manifest</h2>
-<pre>{{.Rev.SourceYAML}}</pre>
-
-<h2>Rendered manifest</h2>
-<pre>{{.Rev.RenderedYAML}}</pre>
+<div class="row mt-24">
+  <h3>{{T "revision.rendered"}}</h3>
+  <span class="spacer"></span>
+  {{if .Rendered}}
+  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Rendered}}" onclick="copyVal(this)">
+    {{icon "copy"}}<span>{{T "common.copy"}}</span>
+  </button>
+  {{end}}
+</div>
+{{if .Rendered}}
+<pre dir="ltr">{{.Rendered}}</pre>
+{{else}}
+<p class="muted">{{T "common.none"}}</p>
+{{end}}
+{{end}}
 {{end}}

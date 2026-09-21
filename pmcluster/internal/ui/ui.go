@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +16,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views/i18n"
 )
 
 // App ties the store, pmapi client, renderer, session auth and controllers
@@ -56,13 +58,15 @@ func NewApp(cfg Config) (*App, error) {
 	}
 	// Full page loads of fragment routes (browser refresh / deep link) embed
 	// the fragment into the app shell so the console keeps its styles.
+	// ShellBase adds language, direction, theme and breadcrumb; the fields
+	// below are the ones only the app knows about.
 	renderer.ShellData = func(c *gin.Context) gin.H {
-		return gin.H{
-			"User":          middleware.CurrentUser(c),
-			"Version":       cfg.AppVersion,
-			"LoginDisabled": cfg.LoginDisabled,
-			"Domain":        cfg.ClusterDomain,
-		}
+		shell := views.ShellBase(c)
+		shell["User"] = middleware.CurrentUser(c)
+		shell["Version"] = cfg.AppVersion
+		shell["LoginDisabled"] = cfg.LoginDisabled
+		shell["Domain"] = cfg.ClusterDomain
+		return shell
 	}
 	api := pmapi.New(cfg.PMAPIURL, cfg.PMAPIToken, cfg.UpstreamTimeout)
 
@@ -114,6 +118,20 @@ func (a *App) Mount(engine *gin.Engine) {
 	// bounces it here).
 	engine.GET("/", func(c *gin.Context) {
 		c.Redirect(http.StatusFound, WebBase+"/")
+	})
+	// Console assets are public: the sign-in screen needs the stylesheet and
+	// the font stack before a session exists.
+	engine.GET(views.StaticBase+"/*filepath", views.StaticHandler())
+	// Language switch. Public, so it also works from the sign-in screen, and
+	// the target is constrained to the console to avoid an open redirect.
+	engine.GET(WebBase+"/lang/:code", func(c *gin.Context) {
+		lang := string(i18n.Parse(c.Param("code")))
+		c.SetCookie(views.CookieLang, lang, 31536000, WebBase, "", false, false)
+		next := c.Query("next")
+		if !strings.HasPrefix(next, WebBase) {
+			next = WebBase + "/"
+		}
+		c.Redirect(http.StatusFound, next)
 	})
 	engine.GET(WebBase+"/login", auth.LoginPage)
 	engine.POST(WebBase+"/login", auth.Login)

@@ -1,56 +1,229 @@
 {{define "servicedetail"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
-
-<h1>Service · {{.Stack}}_{{.Service}}</h1>
-<p class="sub">
-  <a class="link" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true">← all services</a>
-</p>
-
-<div class="card" style="padding:8px 14px; display:flex; gap:8px; align-items:center">
-  <a class="btn sm {{if eq .Tab "tasks"}}active{{end}}" href="/web/services/{{.Stack}}/{{.Service}}/tasks" hx-get="/web/services/{{.Stack}}/{{.Service}}/tasks" hx-target="#view" hx-push-url="true">Tasks</a>
-  <a class="btn sm {{if eq .Tab "logs"}}active{{end}}" href="/web/services/{{.Stack}}/{{.Service}}/logs" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true">Logs</a>
-  <button class="btn sm danger" hx-post="/web/services/{{.Stack}}/{{.Service}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="Force a rolling restart of {{.Stack}}_{{.Service}}?">Restart</button>
-  <form style="display:flex; gap:6px; flex:1" hx-post="/web/services/{{.Stack}}/{{.Service}}/exec" hx-target="#view" hx-swap="innerHTML">
-    <input type="text" name="argv" placeholder="exec command (e.g. whoami or sh -c &quot;cat /etc/hosts&quot;)" style="flex:1">
-    <button class="btn sm" type="submit">Exec</button>
-  </form>
+<div class="page-head">
+  <div class="ph-text">
+    <h1 class="mono iso" dir="ltr">{{.FullName}}</h1>
+    <p class="sub">{{TF "services.detail_sub" .FullName}}</p>
+  </div>
+  <div class="ph-actions">
+    <a class="btn btn-ghost btn-sm" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true">{{icon "services"}}<span>{{T "services.detail_back"}}</span></a>
+    <form hx-post="/web/services/{{.Stack}}/{{.Service}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .FullName}}">
+      <button type="submit" class="btn btn-sm" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
+    </form>
+    <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/{{.Tab}}" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
+  </div>
 </div>
 
-{{if eq .Tab "tasks"}}
-<h1>Tasks</h1>
-{{if .Tasks}}
-<div class="card" style="padding:6px 14px">
-<table>
-  <tr><th>Task</th><th>Node</th><th>Slot</th><th>State</th><th>Error</th><th>Started</th></tr>
-  {{range .Tasks}}
-  <tr>
-    <td><code>{{.TaskID}}</code></td>
-    <td>{{if .Node}}{{.Node}}{{else}}<span class="muted">—</span>{{end}}</td>
-    <td>{{.Slot}}</td>
-    <td><span class="pill {{if eq .State "running"}}good{{else if eq .State "failed"}}bad{{else}}muted{{end}}">{{.State}}</span></td>
-    <td class="muted">{{if .Error}}{{.Error}}{{else}}—{{end}}</td>
-    <td class="muted">{{ts .Start}}</td>
-  </tr>
-  {{end}}
-</table>
+{{if .ErrKey}}
+<div class="banner bad">
+  <div class="b-body">
+    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
+    <p>{{T "err.banner_body"}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/{{.Tab}}" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+  </div>
 </div>
-{{else}}
-<div class="card empty">No tasks recorded.</div>
 {{end}}
+
+{{if .MsgKey}}
+<div class="msg ok">{{TF .MsgKey .MsgA}}</div>
 {{end}}
+
+<div class="stats">
+  <div class="stat">
+    <div class="stat-l">{{T "services.col_replicas"}}</div>
+    {{if .SvcKnown}}
+    <div class="stat-v num">{{N .Svc.Replicas}} / {{N .Svc.Desired}}</div>
+    <div class="stat-f">
+      {{if .Svc.Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}}</span>
+      {{else if .Svc.Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>
+      {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{end}}
+    </div>
+    {{else}}
+    <div class="stat-v is-unknown">{{T "common.unavailable"}}</div>
+    <div class="stat-f">{{T "services.col_replicas"}}</div>
+    {{end}}
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{T "services.col_mode"}}</div>
+    {{if .SvcKnown}}
+    <div class="stat-v">{{if .Svc.Mode}}<span class="mono iso" dir="ltr">{{.Svc.Mode}}</span>{{else}}{{T "common.unknown"}}{{end}}</div>
+    <div class="stat-f">{{T "services.foot_replicas"}}</div>
+    {{else}}
+    <div class="stat-v is-unknown">{{T "common.unavailable"}}</div>
+    <div class="stat-f">{{T "services.detail_meta_unknown"}}</div>
+    {{end}}
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{T "services.col_image"}}</div>
+    {{if .SvcKnown}}
+    <div class="stat-v"><span class="mono iso trunc" dir="ltr" title="{{.Svc.Image}}">{{if .Svc.Image}}{{.Svc.Image}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
+    <div class="stat-f">{{T "services.col_image"}}</div>
+    {{else}}
+    <div class="stat-v is-unknown">{{T "common.unavailable"}}</div>
+    <div class="stat-f">{{T "services.detail_meta_unknown"}}</div>
+    {{end}}
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{T "services.col_updated"}}</div>
+    {{if .SvcKnown}}
+    <div class="stat-v"><span class="iso" dir="ltr">{{ts .Svc.Updated}}</span></div>
+    <div class="stat-f">{{T "services.col_updated"}}</div>
+    {{else}}
+    <div class="stat-v is-unknown">{{T "common.unavailable"}}</div>
+    <div class="stat-f">{{T "services.detail_meta_unknown"}}</div>
+    {{end}}
+  </div>
+</div>
+
+<div class="tabs">
+  <button type="button" class="tab{{if eq .Tab "tasks"}} is-active{{end}}" hx-get="/web/services/{{.Stack}}/{{.Service}}/tasks" hx-target="#view" hx-push-url="true">{{T "services.tab_tasks"}}</button>
+  <button type="button" class="tab{{if eq .Tab "logs"}} is-active{{end}}" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true">{{T "services.tab_logs"}}</button>
+</div>
 
 {{if eq .Tab "logs"}}
-<h1>Logs (tail 200) <span class="live-dot"></span></h1>
-<div class="card" style="padding:8px 14px"
-     hx-get="/web/services/{{.Stack}}/{{.Service}}/logs?tail=200&fragment=logs"
-     hx-trigger="every 3s" hx-swap="innerHTML">
-{{if .Logs}}
-<pre style="max-height:60vh; overflow:auto; margin:0"><code>{{range .Logs}}<span class="{{if eq .Stream "stderr"}}log-err{{end}}">{{.Line}}</span>
-{{end}}</code></pre>
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "services.tab_logs"}}</h2>
+    <div class="ph-actions">
+      {{/* Auto-refresh toggle. The label names the state it switches to, and
+           the button lives in the panel head — outside the region the poll
+           replaces — so its state survives every swap. */}}
+      <button type="button" class="btn btn-ghost btn-sm log-poll" data-poll-target="logs-body" data-poll-trigger="every 10s" aria-pressed="false" onclick="togglePoll(this)" title="{{T "services.logs_poll_hint"}}">
+        {{icon "refresh"}}<span class="when-live">{{T "services.logs_pause"}}</span><span class="when-paused">{{T "services.logs_resume"}}</span>
+      </button>
+      {{if .LogText}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.LogText}}" onclick="copyVal(this)" title="{{T "common.copy"}}">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>{{end}}
+      <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
+    </div>
+  </div>
+  <div class="panel-body">
+    {{/* The poll target: the fragment URL carries fragment=logs so a refresh
+         returns the log body alone, and the swap is innerHTML so this wrapper
+         (and its trigger) survives. */}}
+    <div id="logs-body" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs?fragment=logs&amp;tail={{.TailCount}}" hx-trigger="every 10s" hx-swap="innerHTML">
+      {{template "servicelogs" .}}
+    </div>
+  </div>
+</div>
 {{else}}
-<div class="card empty">No log output.</div>
-{{end}}
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "services.tab_tasks"}}</h2>
+    <div class="ph-actions">
+      {{if .TasksKnown}}<span class="pill plain"><i class="dot"></i>{{N (len .Tasks)}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "services.state_raw_foot"}}</p>
+
+    {{if not .TasksKnown}}
+    <div class="empty">
+      {{icon "layers-off"}}
+      <h3>{{T "services.tasks_unknown_title"}}</h3>
+      <p>{{T "services.tasks_unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/tasks" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+      </div>
+    </div>
+    {{else if .Tasks}}
+    <div class="table-wrap only-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "services.col_task"}}</th>
+            <th>{{T "common.node"}}</th>
+            <th class="num">{{T "services.col_slot"}}</th>
+            <th>{{T "services.col_state"}}</th>
+            <th>{{T "services.col_started"}}</th>
+            <th><span class="sr-only">{{T "common.actions"}}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Tasks}}
+          <tr>
+            <td><span class="mono iso" dir="ltr" title="{{.TaskID}}">{{printf "%.12s" .TaskID}}</span></td>
+            <td>{{if .Node}}<span class="mono" dir="ltr">{{.Node}}</span>{{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}</td>
+            <td class="num">{{N .Slot}}</td>
+            <td>
+              {{if .State}}<span class="pill {{.Pill}}"><i class="dot"></i>{{T .State}}</span>
+              {{else}}<span class="pill plain"><i class="dot"></i>{{.RawState}}</span>{{end}}
+              {{if .TaskError}}<div class="muted">{{T "services.task_error_label"}}</div>{{end}}
+            </td>
+            <td class="muted iso" dir="ltr">{{ts .Started}}</td>
+            <td>
+              <div class="row-actions">
+                <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.TaskID}}" onclick="copyVal(this)" title="{{T "common.copy"}}">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>
+              </div>
+            </td>
+          </tr>
+          {{if .TaskError}}
+          <tr>
+            <td colspan="6">
+              <details class="details">
+                <summary>{{T "services.task_error_label"}}</summary>
+                <pre>{{.TaskError}}</pre>
+              </details>
+            </td>
+          </tr>
+          {{end}}
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <div class="only-sm">
+      {{range .Tasks}}
+      <div class="kv">
+        <div class="kv-row"><span class="k">{{T "services.col_task"}}</span><span class="v mono iso" dir="ltr" title="{{.TaskID}}">{{printf "%.12s" .TaskID}}</span></div>
+        <div class="kv-row"><span class="k">{{T "common.node"}}</span><span class="v">{{if .Node}}<span class="mono" dir="ltr">{{.Node}}</span>{{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "services.col_slot"}}</span><span class="v num">{{N .Slot}}</span></div>
+        <div class="kv-row"><span class="k">{{T "services.col_state"}}</span><span class="v">
+          {{if .State}}<span class="pill {{.Pill}}"><i class="dot"></i>{{T .State}}</span>
+          {{else}}<span class="pill plain"><i class="dot"></i>{{.RawState}}</span>{{end}}
+        </span></div>
+        <div class="kv-row"><span class="k">{{T "services.col_started"}}</span><span class="v muted iso" dir="ltr">{{ts .Started}}</span></div>
+        {{if .TaskError}}
+        <div class="kv-row"><span class="k">{{T "services.task_error_label"}}</span><span class="v">
+          <details class="details"><summary>{{T "common.details"}}</summary><pre>{{.TaskError}}</pre></details>
+        </span></div>
+        {{end}}
+        <div class="action-bar">
+          <button type="button" class="btn btn-sm" data-copy="{{.TaskID}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">
+      {{icon "inbox"}}
+      <h3>{{T "services.tasks_empty_title"}}</h3>
+      <p>{{T "services.tasks_empty_body"}}</p>
+      <div class="empty-actions">
+        <form hx-post="/web/services/{{$.Stack}}/{{$.Service}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" $.FullName}}">
+          <button type="submit" class="btn btn-primary btn-sm">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
+        </form>
+      </div>
+    </div>
+    {{end}}
+  </div>
 </div>
 {{end}}
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "services.exec_title"}}</h2>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "services.exec_hint"}}</p>
+    <form hx-post="/web/services/{{.Stack}}/{{.Service}}/exec" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "services.exec_confirm_static"}}">
+      <div class="field">
+        <label for="svc-exec-argv">{{T "services.exec_label"}}</label>
+        <input id="svc-exec-argv" name="argv" class="finput mono" dir="ltr" value="{{.ExecArgv}}" placeholder="{{T "services.exec_placeholder"}}">
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" hx-disabled-elt="this">{{icon "play"}}<span>{{T "services.exec_submit"}}</span></button>
+      </div>
+    </form>
+  </div>
+</div>
 {{end}}

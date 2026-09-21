@@ -1,43 +1,149 @@
 {{define "backupbrowse"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+{{/* One run's archive listing, and the only place a restore is offered.
 
-<h1>Backup {{if .Run}}<code>{{.Run.ID}}</code>{{end}} — files</h1>
-<p class="sub">
-  {{if .Run}}{{if .Run.StackName}}stack <code>{{.Run.StackName}}</code> · {{end}}status <span class="pill {{sp .Run.Status}}">{{.Run.Status}}</span> · {{ts .Run.StartedAt}}{{end}}
-  · read-only listing of the archive contents
-</p>
-
-{{if .Run}}{{if and (eq .Run.Status "succeeded") .Run.StackName}}
-<div class="card" style="display:flex;gap:10px;align-items:center">
-  <span class="muted">Restore this backup back under <code>/var/stack/data/{{.Run.StackName}}</code>?</span>
-  <button class="btn danger sm"
-          hx-post="/web/backups/{{.Run.ID}}/restore"
-          hx-target="#view"
-          hx-confirm="Restore backup {{.Run.ID}} into /var/stack/data/{{.Run.StackName}}? Existing files with the same names will be overwritten.">
-    Restore
-  </button>
+     Restore is deliberately here rather than on the runs table: the listing is
+     what tells the operator what they are about to write, and the destination
+     comes from the daemon's own volume_root setting, so the confirmation names
+     a directory that was read rather than a value baked into the console. */}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{TF "backupbrowse.title" (N .ID)}}</h1>
+    <p class="sub">{{T "backupbrowse.sub"}}</p>
+  </div>
+  <div class="ph-actions">
+    <a class="btn btn-sm" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true">{{icon "backups"}}<span>{{T "nav.backups"}}</span></a>
+  </div>
 </div>
-{{end}}{{end}}
 
-{{if .Files}}
-<div class="card" style="padding:6px 14px">
-<table>
-  <tr><th>Path</th><th>Type</th><th>Size</th></tr>
-  {{range .Files}}
-  <tr>
-    <td><code>{{.Path}}</code></td>
-    <td>{{if .IsDir}}dir{{else}}file{{end}}</td>
-    <td class="muted">{{if lt .Size 0}}missing{{else}}{{tb .Size}}{{end}}</td>
-  </tr>
-  {{end}}
-</table>
+{{if .ErrKey}}
+<div class="banner bad">
+  <div class="b-body">
+    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
+    <p>{{if eq .ErrKey "err.api_not_configured"}}{{T "settings.conn_missing_body"}}{{else}}{{T "err.banner_body"}}{{end}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <a class="btn btn-sm" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true">{{icon "backups"}}<span>{{T "backupbrowse.back"}}</span></a>
+  </div>
 </div>
-{{else if not .Error}}
-<div class="card empty">No files listed for this backup.</div>
+{{else}}
+{{if .MsgKey}}
+<div class="banner ok">
+  <div class="b-body">
+    <div class="b-title">{{icon "check-circle"}}<span>{{TF .MsgKey (N .MsgCount) (printf "%s/%s" .DestRoot .Run.StackName)}}</span></div>
+    <p>{{T "backupbrowse.restore_followup"}}</p>
+  </div>
+</div>
+{{end}}
 {{end}}
 
-<div class="row">
-  <a class="btn ghost" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true">Back</a>
+{{if and (not .ErrKey) .Run}}
+<div class="stats">
+  <div class="stat">
+    <div class="stat-l">{{T "backups.col_state"}}</div>
+    <div class="stat-v stat-text">{{if .StateKey}}<span class="pill {{.Pill}}"><i class="dot"></i>{{T .StateKey}}</span>{{else}}<span class="pill plain"><i class="dot"></i>{{.Run.Status}}</span>{{end}}</div>
+    <div class="stat-f">{{T "backupbrowse.state_foot"}}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{T "backups.col_scope"}}</div>
+    <div class="stat-v stat-text">{{if .Run.StackName}}<a class="btn-link" href="/web/stacks/{{.Run.StackName}}" hx-get="/web/stacks/{{.Run.StackName}}" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.Run.StackName}}</span></a>{{else}}<span class="mono">{{T "backups.scope_cluster"}}</span>{{end}}</div>
+    <div class="stat-f">{{if .Run.StackName}}{{T "backups.stack_link"}}{{else}}{{T "backups.incomplete_meaning"}}{{end}}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{T "backups.col_started"}}</div>
+    <div class="stat-v stat-text">{{if .Run.StartedAt}}<span class="iso" dir="ltr">{{ts .Run.StartedAt}}</span>{{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}</div>
+    <div class="stat-f">{{T "backupbrowse.started_foot"}}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{T "backupbrowse.files_title"}}</div>
+    <div class="stat-v num">{{if .Known}}{{N .Count}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+    <div class="stat-f">{{T "backupbrowse.files_foot"}}</div>
+  </div>
 </div>
+{{end}}
+
+{{if and (not .ErrKey) .Known}}
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "backupbrowse.files_title"}}</h2>
+    <div class="ph-actions">
+      <span class="pill plain"><i class="dot"></i>{{P (len .Files) "plural.files"}}</span>
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "backupbrowse.files_sub"}}</p>
+    {{if .Files}}
+    <div class="table-wrap only-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "backupbrowse.col_path"}}</th>
+            <th>{{T "backupbrowse.col_kind"}}</th>
+            <th>{{T "backupbrowse.col_size"}}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Files}}
+          <tr>
+            <td><span class="mono iso">{{.Path}}</span></td>
+            <td>{{if .IsDir}}<span class="pill plain"><i class="dot"></i>{{T "backupbrowse.kind_dir"}}</span>{{else}}<span class="pill plain"><i class="dot"></i>{{T "backupbrowse.kind_file"}}</span>{{end}}</td>
+            <td class="num">{{if .IsDir}}<span class="muted">—</span>{{else}}{{tb .Size}}{{end}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <div class="only-sm">
+      {{range .Files}}
+      <div class="kv">
+        <div class="kv-row"><span class="k">{{T "backupbrowse.col_path"}}</span><span class="v mono iso">{{.Path}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backupbrowse.col_kind"}}</span><span class="v">{{if .IsDir}}{{T "backupbrowse.kind_dir"}}{{else}}{{T "backupbrowse.kind_file"}}{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backupbrowse.col_size"}}</span><span class="v num">{{if .IsDir}}<span class="muted">—</span>{{else}}{{tb .Size}}{{end}}</span></div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">
+      {{icon "inbox"}}
+      <h3>{{T "backupbrowse.empty_title"}}</h3>
+      <p>{{T "backupbrowse.empty_body"}}</p>
+    </div>
+    {{end}}
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "backupbrowse.restore_title"}}</h2>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "backupbrowse.restore_body"}}</p>
+    <div class="kv">
+      <div class="kv-row"><span class="k">{{T "backupbrowse.restore_dest"}}</span><span class="v mono iso">{{.DestRoot}}{{if .Run.StackName}}/{{.Run.StackName}}{{end}}</span></div>
+    </div>
+    {{if .Restorable}}
+    <div class="action-bar">
+      <button type="button" class="btn btn-primary" hx-post="/web/backups/{{.ID}}/restore" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" hx-confirm="{{TF "backupbrowse.restore_confirm" (N .ID) (printf "%s/%s" .DestRoot .Run.StackName)}}">{{icon "restore"}}<span>{{T "backupbrowse.restore_action"}}</span></button>
+    </div>
+    {{else}}
+    <div class="msg warn">{{T "backupbrowse.restore_blocked"}}</div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+{{if and (not .ErrKey) (not .Known)}}
+<div class="panel">
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "layers-off"}}
+      <h3>{{T "backupbrowse.unknown_title"}}</h3>
+      <p>{{T "backupbrowse.unknown_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-sm" href="/web/backups/{{.ID}}/files" hx-get="/web/backups/{{.ID}}/files" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
 {{end}}

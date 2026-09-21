@@ -1,28 +1,106 @@
 {{define "webhookdeliveries"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+{{/* Recorded delivery attempts for one source.
 
-<h1>Webhook deliveries · <code>{{.Source}}</code></h1>
-<p class="sub">Latest 50 recorded delivery attempts, newest first. Accepts authenticate the sender and apply a deploy; failures record the reason.</p>
+     The receiver keeps this log; the console only reads it. Three states are
+     kept apart: attempts, "the receiver has logged nothing" (which is not the
+     same as the source being wrong), and a failed read, which leaves the history
+     unknown — never empty. */}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{TF "webhookdeliveries.title" .Source}}</h1>
+    <p class="sub">{{if .DeliveriesKnown}}{{T "webhookdeliveries.sub"}}{{else}}{{T "webhookdeliveries.sub_unknown"}}{{end}}</p>
+  </div>
+  <div class="ph-actions">
+    <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">{{icon "webhooks"}}<span>{{T "nav.webhooks"}}</span></a>
+    <a class="btn btn-sm" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></a>
+  </div>
+</div>
 
-{{if .Deliveries}}
-<div class="card" style="padding:6px 14px">
-<table>
-  <tr><th>Status</th><th>Stack</th><th>Revision</th><th>Repo</th><th>File</th><th>Error</th><th>When</th></tr>
-  {{range .Deliveries}}
-  <tr>
-    <td><span class="pill {{if eq .Status "accepted"}}good{{else if eq .Status "unauthorized"}}bad{{else if eq .Status "server_error"}}bad{{else}}warn{{end}}">{{.Status}}</span></td>
-    <td>{{if .StackName}}<code>{{.StackName}}</code>{{else}}—{{end}}</td>
-    <td>{{if .Revision}}{{.Revision}}{{else}}—{{end}}</td>
-    <td class="muted">{{if .RepoURL}}{{.RepoURL}}{{else}}—{{end}}</td>
-    <td class="muted">{{if .File}}<code>{{.File}}</code>{{else}}—{{end}}</td>
-    <td class="muted">{{if .Error}}{{.Error}}{{else}}—{{end}}</td>
-    <td class="muted">{{ts .CreatedAt}}</td>
-  </tr>
-  {{end}}
-</table>
+{{if .ErrKey}}
+<div class="banner bad">
+  <div class="b-body">
+    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
+    <p>{{if eq .ErrKey "err.api_not_configured"}}{{T "settings.conn_missing_body"}}{{else}}{{T "err.banner_body"}}{{end}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">{{icon "webhooks"}}<span>{{T "webhooks.title"}}</span></a>
+  </div>
+</div>
+{{else if not .DeliveriesKnown}}
+<div class="panel">
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "layers-off"}}
+      <h3>{{T "webhookdeliveries.unknown_title"}}</h3>
+      <p>{{T "webhookdeliveries.unknown_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-sm" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
+      </div>
+    </div>
+  </div>
 </div>
 {{else}}
-<div class="card empty">No deliveries recorded for this source yet.</div>
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "webhookdeliveries.hist_title"}}</h2>
+    <div class="ph-actions">
+      {{if .Deliveries}}<span class="pill plain"><i class="dot"></i>{{P (len .Deliveries) "plural.webhooks"}}</span>
+      {{else}}<span class="pill plain"><i class="dot"></i>{{T "common.none"}}</span>{{end}}
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{TF "webhookdeliveries.foot" (N .DeliveryLimit)}}</p>
+    {{if .Deliveries}}
+    <div class="table-wrap only-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "webhookdeliveries.col_when"}}</th>
+            <th>{{T "webhookdeliveries.col_status"}}</th>
+            <th>{{T "webhookdeliveries.col_stack"}}</th>
+            <th>{{T "webhookdeliveries.col_revision"}}</th>
+            <th>{{T "webhookdeliveries.col_file"}}</th>
+            <th>{{T "webhookdeliveries.col_error"}}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Deliveries}}
+          <tr>
+            <td><span class="iso" dir="ltr">{{ts .CreatedAt}}</span></td>
+            <td>{{if .StateKey}}<span class="pill {{.Pill}}"><i class="dot"></i>{{T .StateKey}}</span>{{else}}<span class="pill plain"><i class="dot"></i>{{.Status}}</span>{{end}}</td>
+            <td>{{if .StackName}}<a class="btn-link" href="/web/stacks/{{.StackName}}" hx-get="/web/stacks/{{.StackName}}" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.StackName}}</span></a>{{else}}<span class="muted">{{T "common.none"}}</span>{{end}}</td>
+            <td class="num">{{if .Revision}}{{N .Revision}}{{else}}<span class="muted">—</span>{{end}}</td>
+            <td>{{if .File}}<span class="mono iso">{{.File}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+            <td>{{if .Error}}<span class="mono iso">{{.Error}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <div class="only-sm">
+      {{range .Deliveries}}
+      <div class="kv">
+        <div class="kv-row"><span class="k">{{T "webhookdeliveries.col_when"}}</span><span class="v iso" dir="ltr">{{ts .CreatedAt}}</span></div>
+        <div class="kv-row"><span class="k">{{T "webhookdeliveries.col_status"}}</span><span class="v">{{if .StateKey}}{{T .StateKey}}{{else}}{{.Status}}{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "webhookdeliveries.col_stack"}}</span><span class="v">{{if .StackName}}<a class="btn-link" href="/web/stacks/{{.StackName}}" hx-get="/web/stacks/{{.StackName}}" hx-target="#view" hx-push-url="true">{{.StackName}}</a>{{else}}{{T "common.none"}}{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "webhookdeliveries.col_revision"}}</span><span class="v num">{{if .Revision}}{{N .Revision}}{{else}}—{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "webhookdeliveries.col_file"}}</span><span class="v mono iso">{{if .File}}{{.File}}{{else}}—{{end}}</span></div>
+        {{if .Error}}<div class="kv-row"><span class="k">{{T "webhookdeliveries.col_error"}}</span><span class="v mono iso">{{.Error}}</span></div>{{end}}
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">
+      {{icon "inbox"}}
+      <h3>{{T "webhookdeliveries.empty_title"}}</h3>
+      <p>{{T "webhookdeliveries.empty_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">{{icon "webhooks"}}<span>{{T "webhooks.secret_endpoint"}}</span></a>
+      </div>
+    </div>
+    {{end}}
+  </div>
+</div>
 {{end}}
 {{end}}

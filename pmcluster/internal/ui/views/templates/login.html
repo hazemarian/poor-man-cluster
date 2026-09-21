@@ -1,39 +1,95 @@
 {{define "login"}}
 <!doctype html>
-<html lang="en">
+<html lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sign in · pmcluster</title>
-  <style>
-    :root{color-scheme:dark;--bg:#0b0f14;--panel:#111722;--panel2:#0f1520;--line:#1e2733;--text:#dbe2ea;--muted:#7d899a;--accent:#4f9dff;--bad:#ff5c5c}
-    *{box-sizing:border-box}
-    body{margin:0;min-height:100vh;display:grid;place-items:center;background:
-      radial-gradient(800px 400px at 20% -10%,rgba(79,157,255,.14),transparent 60%),
-      radial-gradient(600px 300px at 90% 110%,rgba(68,212,123,.10),transparent 60%),
-      var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
-    .card{width:380px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:30px}
-    .brand{font-size:20px;font-weight:700;text-align:center;margin-bottom:4px}
-    .brand .sub{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-top:2px}
-    .err{background:rgba(255,92,92,.12);color:var(--bad);border:1px solid rgba(255,92,92,.3);padding:10px 12px;border-radius:8px;font-size:13px;margin:16px 0}
-    label{font-size:12px;color:var(--muted);display:block;margin-top:14px}
-    input{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--text);padding:11px 12px;font:inherit;margin-top:6px}
-    input:focus{border-color:var(--accent);outline:none}
-    button{margin-top:20px;width:100%;background:var(--accent);color:#04121f;font-weight:650;border:none;border-radius:8px;padding:11px;cursor:pointer;font-size:14px}
-    button:hover{filter:brightness(1.08)}
-    .foot{margin-top:16px;text-align:center;color:var(--muted);font-size:12px}
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/web/static/favicon.svg" type="image/svg+xml">
+  <title>{{T "auth.signin_title"}} · {{T "app.title"}}</title>
+  <script>
+    // Applied before first paint: the sign-in page has no server-side session,
+    // so localStorage is the only thing that knows the operator's last theme.
+    (function () {
+      try {
+        var t = localStorage.getItem('pmc_theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/web/static/fonts.css">
+  <link rel="stylesheet" href="/web/static/base.css">
+  <link rel="stylesheet" href="/web/static/components.css">
+  <link rel="stylesheet" href="/web/static/patterns.css">
+  <script src="/web/static/preferences.js" defer></script>
 </head>
 <body>
-  <form class="card" method="post" action="/web/login">
-    <div class="brand">pmcluster<span class="sub">operator console · {{.Version}}</span></div>
-    {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
-    <label>Username</label>
-    <input name="username" autocomplete="username" autofocus required>
-    <label>Password</label>
-    <input type="password" name="password" autocomplete="current-password" required>
-    <button type="submit">Sign in</button>
-  </form>
+{{template "icons" .}}
+
+<main class="doc login-doc">
+  <section class="auth-intro" aria-labelledby="intro-title">
+    <div class="auth-brand">
+      <span class="mark" aria-hidden="true">{{icon "stacks"}}</span>
+      <span class="auth-word">{{T "app.title"}}</span>
+    </div>
+    <div class="auth-story">
+      <p class="auth-eyebrow">{{T "brand.sub"}}</p>
+      <h1 id="intro-title">{{T "auth.intro_title"}}</h1>
+      <p class="auth-description">{{T "auth.intro_body"}}</p>
+      <svg class="cluster-art" viewBox="0 0 480 200" fill="none" aria-hidden="true" focusable="false">
+        <path class="cluster-wire" d="M240 62v36m-156 0h312M84 98v34m156-34v34m156-34v34"/>
+        <g class="cluster-device"><rect x="185" y="12" width="110" height="50" rx="8"/><rect x="29" y="132" width="110" height="50" rx="8"/><rect x="185" y="132" width="110" height="50" rx="8"/><rect x="341" y="132" width="110" height="50" rx="8"/></g>
+        <g class="cluster-slot"><path d="M204 32h40m-40 10h24M48 152h40m-40 10h24M204 152h40m-40 10h24M360 152h40m-40 10h24"/></g>
+        <g class="cluster-led"><circle cx="275" cy="37" r="3"/><circle cx="119" cy="157" r="3"/><circle cx="275" cy="157" r="3"/><circle cx="431" cy="157" r="3"/><circle cx="240" cy="98" r="4"/></g>
+      </svg>
+    </div>
+    <p class="auth-intro-foot">{{T "auth.intro_foot"}}</p>
+  </section>
+  <div class="auth-form-side">
+  <div class="auth-card">
+    <div class="auth-heading">
+      <span class="auth-lock" aria-hidden="true">{{icon "lock"}}</span>
+      <h2>{{T "auth.welcome"}}</h2>
+      <p>{{T "auth.welcome_body"}}</p>
+    </div>
+
+    <form method="post" action="/web/login">
+      {{if .Failure}}
+      {{/* One sentence, no blame, and the same wording for a wrong username as
+           for a wrong password so the form never confirms an account exists. */}}
+      <div class="banner bad" role="alert">
+        <div class="b-body">
+          <p class="b-title">{{if .Detail}}{{TF .Failure .Detail}}{{else}}{{T .Failure}}{{end}}</p>
+        </div>
+      </div>
+      {{end}}
+
+      <div class="field">
+        <label for="username">{{T "common.username"}}</label>
+        <input id="username" class="finput mono" type="text" name="username"
+               dir="ltr" autocomplete="username" autocapitalize="off" spellcheck="false"
+               required autofocus>
+      </div>
+
+      <div class="field">
+        <label for="password">{{T "common.password"}}</label>
+        <input id="password" class="finput" type="password" name="password"
+               dir="ltr" autocomplete="current-password" required>
+      </div>
+
+      <button class="btn btn-primary btn-block" type="submit">{{T "auth.signin"}}</button>
+    </form>
+
+    <div class="auth-foot">
+      {{template "preferences" "/web/login"}}
+    </div>
+
+    <p class="auth-sub mt-16">{{T "auth.session_note"}}{{if .Version}} · <span class="mono iso num" dir="ltr">{{.Version}}</span>{{end}}</p>
+  </div>
+  </div>
+</main>
+
 </body>
 </html>
 {{end}}

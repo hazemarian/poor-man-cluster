@@ -1,44 +1,124 @@
 {{define "usage"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
+{{/* Config and secret usage.
 
-<h1 style="margin:0 0 4px">Usage</h1>
-<p class="sub">Which stacks reference which configs and secrets, computed from each stack's latest rendered compose.</p>
+     The page answers one question: what breaks if this name is deleted. The
+     daemon computes the graph from every stack's latest rendered compose, so
+     three states are kept apart — rows, a graph that really has no references
+     (actionable), and a failed read, which is unknown rather than empty.
 
-<div class="card">
-  <h2 style="margin-top:0">Config → Stacks</h2>
-  {{if .Configs}}
-  <table>
-    <thead><tr><th>Config</th><th>Used by</th></tr></thead>
-    <tbody>
-      {{range $name, $stacks := .Configs}}
-      <tr>
-        <td><code>{{$name}}</code></td>
-        <td>{{range $stacks}}<span class="pill good">{{.}}</span> {{end}}</td>
-      </tr>
-      {{end}}
-    </tbody>
-  </table>
-  {{else}}
-  <div class="empty">No configs referenced by any stack.</div>
-  {{end}}
+     Configs and secrets carry the same columns, so both tables are drawn by
+     "usage_group" below; only the headings and the rows differ. */}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "nav.usage"}}</h1>
+    <p class="sub">{{if .Known}}{{T "usage.sub"}}{{else}}{{T "usage.sub_unknown"}}{{end}}</p>
+  </div>
+  <div class="ph-actions">
+    <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
+  </div>
 </div>
 
-<div class="card">
-  <h2 style="margin-top:0">Secret → Stacks</h2>
-  {{if .Secrets}}
-  <table>
-    <thead><tr><th>Secret</th><th>Used by</th></tr></thead>
-    <tbody>
-      {{range $name, $stacks := .Secrets}}
-      <tr>
-        <td><code>{{$name}}</code></td>
-        <td>{{range $stacks}}<span class="pill warn">{{.}}</span> {{end}}</td>
-      </tr>
+{{if .ErrKey}}
+<div class="banner bad">
+  <div class="b-body">
+    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
+    <p>{{if eq .ErrKey "err.api_not_configured"}}{{T "settings.conn_missing_body"}}{{else}}{{T "err.banner_body"}}{{end}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+  </div>
+</div>
+{{else if not .Known}}
+<div class="panel">
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "layers-off"}}
+      <h3>{{T "usage.unknown_title"}}</h3>
+      <p>{{T "usage.unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+      </div>
+    </div>
+  </div>
+</div>
+{{else}}
+<div class="stats">
+  <div class="stat">
+    <div class="stat-l">{{T "usage.stat_configs"}}</div>
+    <div class="stat-v num">{{N .Configs.Total}}</div>
+    <div class="stat-f">{{TF "usage.stat_unused_foot" (N .Configs.Unused)}}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{T "usage.stat_secrets"}}</div>
+    <div class="stat-v num">{{N .Secrets.Total}}</div>
+    <div class="stat-f">{{TF "usage.stat_unused_foot" (N .Secrets.Unused)}}</div>
+  </div>
+  <div class="stat">
+    <div class="stat-l">{{T "usage.stat_unused"}}</div>
+    <div class="stat-v num">{{N .Unused}}</div>
+    <div class="stat-f">{{T "usage.stat_unused_body"}}</div>
+  </div>
+</div>
+
+{{template "usage_group" .Configs}}
+{{template "usage_group" .Secrets}}
+
+<p class="sub">{{T "usage.foot"}}</p>
+{{end}}
+{{end}}
+
+{{define "usage_group"}}
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T .TitleKey}}</h2>
+    <div class="ph-actions">
+      {{if .Rows}}<span class="pill plain"><i class="dot"></i>{{if eq .TitleKey "usage.configs_title"}}{{P (len .Rows) "plural.configs"}}{{else}}{{P (len .Rows) "plural.secrets"}}{{end}}</span>
+      {{else}}<span class="pill plain"><i class="dot"></i>{{T "common.none"}}</span>{{end}}
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T .SubKey}}</p>
+    {{if .Rows}}
+    <div class="table-wrap only-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "usage.col_name"}}</th>
+            <th>{{T "usage.col_stacks"}}</th>
+            <th>{{T "usage.col_count"}}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Rows}}
+          <tr>
+            <td><span class="mono iso">{{.Name}}</span>{{if .Unused}} <span class="pill warn"><i class="dot"></i>{{T "usage.unused_pill"}}</span>{{end}}</td>
+            <td>{{range $i, $s := .Stacks}}{{if $i}}<span class="muted">, </span>{{end}}<a class="btn-link" href="/web/stacks/{{$s}}" hx-get="/web/stacks/{{$s}}" hx-target="#view" hx-push-url="true"><span class="mono iso">{{$s}}</span></a>{{end}}{{if not .Stacks}}<span class="muted">{{T "usage.no_stacks"}}</span>{{end}}</td>
+            <td class="num">{{N .Count}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <div class="only-sm">
+      {{range .Rows}}
+      <div class="kv">
+        <div class="kv-row"><span class="k">{{T "usage.col_name"}}</span><span class="v mono iso">{{.Name}}</span></div>
+        <div class="kv-row"><span class="k">{{T "usage.col_stacks"}}</span><span class="v">{{range $i, $s := .Stacks}}{{if $i}}, {{end}}<a class="btn-link" href="/web/stacks/{{$s}}" hx-get="/web/stacks/{{$s}}" hx-target="#view" hx-push-url="true">{{$s}}</a>{{end}}{{if not .Stacks}}{{T "usage.no_stacks"}}{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "usage.col_count"}}</span><span class="v num">{{N .Count}}</span></div>
+      </div>
       {{end}}
-    </tbody>
-  </table>
-  {{else}}
-  <div class="empty">No secrets referenced by any stack.</div>
-  {{end}}
+    </div>
+    {{else}}
+    <div class="empty">
+      {{icon "inbox"}}
+      <h3>{{T "usage.empty_title"}}</h3>
+      <p>{{T "usage.empty_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+      </div>
+    </div>
+    {{end}}
+  </div>
 </div>
 {{end}}

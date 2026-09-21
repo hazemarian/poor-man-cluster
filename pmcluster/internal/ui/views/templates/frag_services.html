@@ -1,40 +1,162 @@
 {{define "services"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
-
-<div hx-get="/web/services" hx-trigger="every 15s" hx-target="#services-body" hx-swap="innerHTML">
-<h1>Services</h1>
-<p class="sub"><span class="live-dot"></span>live · {{.Count}} swarm service(s) · live replica health (replaces Portainer's service view)</p>
-
-<div id="services-body">
-{{if .Services}}
-<div class="filter-box">
-  <input id="services-filter" placeholder="Filter services…" oninput="filterTable('services-filter')">
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "nav.services"}}</h1>
+    <p class="sub">{{if .Known}}{{T "services.sub"}}{{else}}{{T "services.sub_unknown"}}{{end}}</p>
+  </div>
+  <div class="ph-actions">
+    <a class="btn btn-ghost btn-sm" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
+    <button type="button" class="btn btn-sm" hx-get="/web/services" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
+  </div>
 </div>
-<div class="card" style="padding:6px 14px">
-<table data-filter-table="services-filter">
-  <tr><th>Service</th><th>Stack</th><th>Replicas</th><th>Image</th><th>Mode</th><th>Updated</th><th></th></tr>
-  {{range .Services}}
-  <tr>
-    <td><code>{{.Name}}</code></td>
-    <td>{{if .Stack}}<span class="pill">{{.Stack}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
-    <td><span class="{{if and (gt .Desired 0) (lt .Replicas .Desired)}}pill bad{{else if gt .Desired 0}}pill good{{end}}">{{.Replicas}}/{{.Desired}}</span></td>
-    <td class="muted">{{if .Image}}<code>{{.Image}}</code>{{else}}—{{end}}</td>
-    <td class="muted">{{if .Mode}}{{.Mode}}{{else}}—{{end}}</td>
-    <td class="muted">{{ts .Updated}}</td>
-    <td style="text-align:right; white-space:nowrap">
-      {{if .Stack}}
-      <a class="btn sm ghost" href="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true">Tasks</a>
-      <a class="btn sm ghost" href="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true">Logs</a>
-      {{end}}
-    </td>
-  </tr>
-  {{end}}
-</table>
+
+{{if .ErrKey}}
+<div class="banner bad">
+  <div class="b-body">
+    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
+    <p>{{T "err.banner_body"}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <button type="button" class="btn btn-sm" hx-get="/web/services" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+  </div>
 </div>
-{{else}}
-<div class="card empty">No swarm services.</div>
 {{end}}
+
+{{if .MsgKey}}
+<div class="msg ok">{{TF .MsgKey .MsgA}}</div>
+{{end}}
+
+<div class="stats">
+  <div class="stat{{if not .Known}} is-unknown{{end}}">
+    <div class="stat-l">{{T "services.stats_total"}}</div>
+    <div class="stat-v">{{if .Known}}{{N .Count}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+    <div class="stat-f">{{if .Known}}{{P (len .Services) "plural.services"}}{{end}}</div>
+  </div>
+  <div class="stat{{if not .Known}} is-unknown{{end}}">
+    <div class="stat-l">{{T "services.stats_ready"}}</div>
+    <div class="stat-v">{{if .Known}}{{N .Ready}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+    <div class="stat-f">{{if .Known}}{{T "services.stats_ready_foot"}}{{end}}</div>
+  </div>
+  <div class="stat{{if not .Known}} is-unknown{{end}}">
+    <div class="stat-l">{{T "services.stats_short"}}</div>
+    <div class="stat-v">{{if .Known}}{{N .Short}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+    <div class="stat-f">{{if .Known}}{{T "services.stats_short_foot"}}{{end}}</div>
+  </div>
+  <div class="stat{{if not .Known}} is-unknown{{end}}">
+    <div class="stat-l">{{T "services.stats_stacks"}}</div>
+    <div class="stat-v">{{if .Known}}{{N .Stacks}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+    <div class="stat-f">{{if .Known}}{{T "services.stats_stacks_foot"}}{{end}}</div>
+  </div>
 </div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "services.title"}}</h2>
+    <div class="ph-actions">
+      {{if .Known}}
+      <span class="pill plain"><i class="dot"></i>{{P (len .Services) "plural.services"}}</span>
+      {{else}}
+      <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "services.foot_replicas"}}</p>
+
+    {{if not .Known}}
+    <div class="empty">
+      {{icon "layers-off"}}
+      <h3>{{T "services.unknown_title"}}</h3>
+      <p>{{T "services.unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/services" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+      </div>
+    </div>
+    {{else if .Services}}
+    <div class="table-wrap only-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "services.col_service"}}</th>
+            <th>{{T "services.col_stack"}}</th>
+            <th class="num">{{T "services.col_replicas"}}</th>
+            <th>{{T "services.col_mode"}}</th>
+            <th>{{T "services.col_updated"}}</th>
+            <th><span class="sr-only">{{T "common.actions"}}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Services}}
+          <tr>
+            <td>
+              {{if .Routable}}
+              <a class="mono iso" dir="ltr" href="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true">{{.ServiceName}}</a>
+              {{else}}
+              <span class="mono iso" dir="ltr">{{.ServiceName}}</span>
+              {{end}}
+              {{if .Image}}<div class="muted trunc" title="{{.Image}}">{{.Image}}</div>{{end}}
+            </td>
+            <td>{{if .Stack}}<span class="mono" dir="ltr">{{.Stack}}</span>{{else}}<span class="muted">{{T "services.no_stack"}}</span>{{end}}</td>
+            <td class="num">
+              <span class="num">{{N .Replicas}} / {{N .Desired}}</span>
+              {{if .Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}}</span>
+              {{else if .Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>
+              {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{end}}
+            </td>
+            <td>{{if .Mode}}<span class="mono iso" dir="ltr">{{.Mode}}</span>{{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}</td>
+            <td class="muted iso" dir="ltr">{{ts .Updated}}</td>
+            <td>
+              {{if .Routable}}
+              <div class="row-actions">
+                <a class="btn btn-ghost btn-sm" href="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true" title="{{T "services.action_tasks"}}">{{icon "server"}}<span class="sr-only">{{T "services.action_tasks"}}</span></a>
+                <a class="btn btn-ghost btn-sm" href="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true" title="{{T "services.action_logs"}}">{{icon "terminal"}}<span class="sr-only">{{T "services.action_logs"}}</span></a>
+                <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/services/{{.Stack}}/{{.ServiceName}}/restart" hx-target="#view" hx-confirm="{{TF "services.restart_confirm" .Name}}" hx-disabled-elt="this" title="{{T "services.action_restart"}}">{{icon "refresh"}}<span class="sr-only">{{T "services.action_restart"}}</span></button>
+              </div>
+              {{else}}
+              <span class="muted">{{T "services.no_stack"}}</span>
+              {{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <div class="only-sm">
+      {{range .Services}}
+      <div class="kv">
+        <div class="kv-row"><span class="k">{{T "services.col_service"}}</span><span class="v mono iso" dir="ltr">{{.ServiceName}}</span></div>
+        <div class="kv-row"><span class="k">{{T "services.col_stack"}}</span><span class="v">{{if .Stack}}<span class="mono" dir="ltr">{{.Stack}}</span>{{else}}<span class="muted">{{T "services.no_stack"}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "services.col_replicas"}}</span><span class="v"><span class="num">{{N .Replicas}} / {{N .Desired}}</span>
+          {{if .Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}}</span>
+          {{else if .Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>
+          {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "services.col_mode"}}</span><span class="v">{{if .Mode}}<span class="mono iso" dir="ltr">{{.Mode}}</span>{{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "services.col_updated"}}</span><span class="v muted iso" dir="ltr">{{ts .Updated}}</span></div>
+        <div class="kv-row"><span class="k">{{T "common.actions"}}</span><span class="v">
+          {{if .Routable}}
+          <div class="row-actions">
+            <a class="btn btn-ghost" href="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true">{{icon "server"}}<span>{{T "services.action_tasks"}}</span></a>
+            <a class="btn btn-ghost" href="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true">{{icon "terminal"}}<span>{{T "services.action_logs"}}</span></a>
+            <button type="button" class="btn btn-ghost" hx-post="/web/services/{{.Stack}}/{{.ServiceName}}/restart" hx-target="#view" hx-confirm="{{TF "services.restart_confirm" .Name}}" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
+          </div>
+          {{else}}
+          <span class="muted">{{T "services.no_stack"}}</span>
+          {{end}}
+        </span></div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">
+      {{icon "inbox"}}
+      <h3>{{T "services.empty_title"}}</h3>
+      <p>{{T "services.empty_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-primary btn-sm" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">{{icon "deploy"}}<span>{{T "services.empty_action"}}</span></a>
+      </div>
+    </div>
+    {{end}}
+  </div>
 </div>
 {{end}}

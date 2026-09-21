@@ -1,69 +1,305 @@
 {{define "stackconfigs"}}
-{{if .Error}}<div class="msg err">{{.Error}}</div>{{end}}
-{{if .Msg}}<div class="msg ok">{{.Msg}}</div>{{end}}
+{{/* One stack's service-scope configs and secrets. Two panels, two sources,
+     two unknown states: a configs read that fails must not empty the secrets
+     table, and neither may print 0 or an empty list as if it were an answer.
 
-<h1>Config &amp; secrets · <code>{{.Stack}}</code></h1>
-<p class="sub">Reference these from the stack's manifest with <code>env: VAR: config(name)</code> or <code>env: VAR: secrets(name)</code>. Values are stored AES-256-GCM encrypted; secrets are revealed only on demand.</p>
+     Secrets are never rendered back into the page here — the list shows a
+     masked value and the plaintext only appears in the modal after an explicit,
+     confirmed reveal. */}}
 
-<div class="section-head">
-  <h2>Configs</h2>
-  <button class="btn" hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add Config</button>
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{TF "stackconfigs.title" .Stack}}</h1>
+    <p class="sub">{{T "stackconfigs.sub"}}</p>
+  </div>
+  <div class="ph-actions">
+    <button type="button" class="btn btn-ghost btn-sm"
+            hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true">
+      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
+    </button>
+    <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Stack}}"
+       hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true">
+      {{icon "chevron"}}<span>{{T "common.back"}}</span>
+    </a>
+  </div>
 </div>
-<div class="card">
-  {{if .Configs}}
-  <table>
-    <thead><tr><th>Name</th><th>Kind</th><th>Version</th><th>Updated</th><th></th></tr></thead>
-    <tbody>
-      {{range .Configs}}
-      <tr>
-        <td><code>{{.Name}}</code></td>
-        <td><span class="pill {{if eq .Kind "template"}}warn{{else}}good{{end}}">{{.Kind}}</span></td>
-        <td class="muted">{{.Version}}</td>
-        <td class="muted">{{ts .UpdatedAt}}</td>
-        <td style="white-space:nowrap;text-align:right">
-          <button class="btn ghost sm" hx-get="/web/stacks/{{$.Stack}}/configs/edit/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Edit</button>
-          <button class="btn danger sm" hx-post="/web/stacks/{{$.Stack}}/configs/remove/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete config {{.Name}} and its history?')">Delete</button>
-        </td>
-      </tr>
+
+{{if .ErrKey}}
+<div class="banner bad">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T .ErrKey}}</p>
+    <p>{{T "err.banner_body"}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <button type="button" class="btn btn-ghost btn-sm"
+            hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true">
+      {{icon "refresh"}}<span>{{T "common.retry"}}</span>
+    </button>
+  </div>
+</div>
+{{end}}
+
+{{if .MsgKey}}
+<div class="banner ok">
+  {{icon "check-circle"}}
+  <div class="b-body">
+    <p class="b-title">{{TF .MsgKey .MsgArg0 .MsgArg1}}</p>
+  </div>
+</div>
+{{end}}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{T "stackconfigs.configs_title"}}</h2>
+    <div class="ph-actions">
+      {{if .ConfigsKnown}}
+        <span class="pill plain">{{P (len .Configs) "plural.configs"}}</span>
+      {{else}}
+        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
       {{end}}
-    </tbody>
-  </table>
+      <button type="button" class="btn btn-primary btn-sm"
+              hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" onclick="openModal()">
+        {{icon "plus"}}<span>{{T "configs.form_new"}}</span>
+      </button>
+    </div>
+  </div>
+
+  {{if not .ConfigsKnown}}
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "alert"}}
+      <h3>{{T "stackconfigs.configs_unknown_title"}}</h3>
+      <p>{{T "stackconfigs.configs_unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm"
+                hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true">
+          {{icon "refresh"}}<span>{{T "common.retry"}}</span>
+        </button>
+      </div>
+    </div>
+  </div>
+  {{else if .Configs}}
+  <div class="table-wrap only-md">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{T "common.name"}}</th>
+          <th>{{T "configs.form_kind"}}</th>
+          <th>{{T "common.version"}}</th>
+          <th>{{T "common.updated"}}</th>
+          <th><span class="sr-only">{{T "common.actions"}}</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Configs}}
+        <tr>
+          <td><span class="mono">{{.Name}}</span></td>
+          <td>
+            <span class="pill plain">
+              {{- if eq .Kind "file"}}{{T "configs.kind_file"}}
+              {{- else if eq .Kind "template"}}{{T "configs.kind_template"}}
+              {{- else if eq .Kind "env"}}{{T "configs.kind_env"}}
+              {{- else}}{{.Kind}}{{end -}}
+            </span>
+          </td>
+          <td><span class="mono num" dir="ltr">{{.Version}}</span></td>
+          <td><span class="muted">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}{{ts .CreatedAt}}{{end}}</span></td>
+          <td>
+            <div class="row-actions">
+              <a class="btn btn-ghost btn-sm" href="/web/stacks/{{$.Stack}}/configs/edit/{{.Name}}"
+                 hx-get="/web/stacks/{{$.Stack}}/configs/edit/{{.Name}}" hx-target="#modal-body"
+                 onclick="openModal()" title="{{T "common.edit"}}">
+                {{icon "file"}}<span class="sr-only">{{T "common.edit"}}</span>
+              </a>
+              <form hx-post="/web/stacks/{{$.Stack}}/configs/remove/{{.Name}}" hx-target="#view"
+                    hx-confirm="{{TF "stackconfigs.confirm_config_remove" .Name}}">
+                <button type="submit" class="btn btn-danger btn-sm" title="{{T "common.delete"}}">
+                  {{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span>
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="only-sm">
+    {{range .Configs}}
+    <div class="kv">
+      <div class="kv-row"><span class="k">{{T "common.name"}}</span><span class="v mono">{{.Name}}</span></div>
+      <div class="kv-row">
+        <span class="k">{{T "configs.form_kind"}}</span>
+        <span class="v">
+          <span class="pill plain">
+            {{- if eq .Kind "file"}}{{T "configs.kind_file"}}
+            {{- else if eq .Kind "template"}}{{T "configs.kind_template"}}
+            {{- else if eq .Kind "env"}}{{T "configs.kind_env"}}
+            {{- else}}{{.Kind}}{{end -}}
+          </span>
+        </span>
+      </div>
+      <div class="kv-row"><span class="k">{{T "common.version"}}</span><span class="v mono num" dir="ltr">{{.Version}}</span></div>
+      <div class="kv-row">
+        <span class="k">{{T "common.updated"}}</span>
+        <span class="v muted">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}{{ts .CreatedAt}}{{end}}</span>
+      </div>
+      <div class="action-bar">
+        <button type="button" class="btn btn-sm" style="min-height:44px"
+                hx-get="/web/stacks/{{$.Stack}}/configs/edit/{{.Name}}" hx-target="#modal-body"
+                onclick="openModal()">
+          {{icon "file"}}<span>{{T "common.edit"}}</span>
+        </button>
+        <form hx-post="/web/stacks/{{$.Stack}}/configs/remove/{{.Name}}" hx-target="#view"
+              hx-confirm="{{TF "stackconfigs.confirm_config_remove" .Name}}">
+          <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px">
+            {{icon "trash"}}<span>{{T "common.delete"}}</span>
+          </button>
+        </form>
+      </div>
+    </div>
+    {{end}}
+  </div>
   {{else}}
-  <div class="empty">
-    No configs for this stack yet.
-    <div class="row" style="justify-content:center"><button class="btn" hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add your first config</button></div>
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "file"}}
+      <h3>{{T "stackconfigs.configs_empty_title"}}</h3>
+      <p>{{T "stackconfigs.configs_empty_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-primary btn-sm"
+                hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" onclick="openModal()">
+          {{icon "plus"}}<span>{{T "configs.form_new"}}</span>
+        </button>
+      </div>
+    </div>
   </div>
   {{end}}
-</div>
+</section>
 
-<div class="section-head">
-  <h2>Secrets</h2>
-  <button class="btn" hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add Secret</button>
-</div>
-<div class="card">
-  {{if .Secrets}}
-  <table>
-    <thead><tr><th>Name</th><th>Value</th><th>Created</th><th></th></tr></thead>
-    <tbody>
-      {{range .Secrets}}
-      <tr>
-        <td><code>{{.Name}}</code></td>
-        <td><span class="secret-mask">••••••••</span></td>
-        <td class="muted">{{ts .CreatedAt}}</td>
-        <td style="white-space:nowrap;text-align:right">
-          <button class="btn ghost sm" hx-get="/web/stacks/{{$.Stack}}/secrets/reveal/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" onclick="return confirm('Reveal secret {{.Name}}? Its value will be shown in the UI.')">Reveal</button>
-          <button class="btn ghost sm" hx-get="/web/stacks/{{$.Stack}}/secrets/edit/{{.Name}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Edit</button>
-          <button class="btn danger sm" hx-post="/web/stacks/{{$.Stack}}/secrets/remove/{{.Name}}" hx-target="#view" hx-swap="innerHTML" onclick="return confirm('Delete secret {{.Name}}? Stacks referencing it may fail to redeploy.')">Delete</button>
-        </td>
-      </tr>
+<section class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "stackconfigs.secrets_title"}}</h2>
+    <div class="ph-actions">
+      {{if .SecretsKnown}}
+        <span class="pill plain">{{P (len .Secrets) "plural.secrets"}}</span>
+      {{else}}
+        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
       {{end}}
-    </tbody>
-  </table>
+      <button type="button" class="btn btn-primary btn-sm"
+              hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" onclick="openModal()">
+        {{icon "plus"}}<span>{{T "stackconfigs.form_new_secret"}}</span>
+      </button>
+    </div>
+  </div>
+
+  {{if not .SecretsKnown}}
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "alert"}}
+      <h3>{{T "stackconfigs.secrets_unknown_title"}}</h3>
+      <p>{{T "stackconfigs.secrets_unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm"
+                hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true">
+          {{icon "refresh"}}<span>{{T "common.retry"}}</span>
+        </button>
+      </div>
+    </div>
+  </div>
+  {{else if .Secrets}}
+  <div class="table-wrap only-md">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{T "common.name"}}</th>
+          <th>{{T "common.value"}}</th>
+          <th>{{T "common.created"}}</th>
+          <th><span class="sr-only">{{T "common.actions"}}</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Secrets}}
+        <tr>
+          <td><span class="mono">{{.Name}}</span></td>
+          <td><span class="secret-mask">••••••••<span class="sr-only">{{T "stackconfigs.secret_hidden"}}</span></span></td>
+          <td><span class="muted">{{if .CreatedAt}}{{ts .CreatedAt}}{{else}}—{{end}}</span></td>
+          <td>
+            <div class="row-actions">
+              <button type="button" class="btn btn-ghost btn-sm" title="{{T "stackconfigs.reveal"}}"
+                      hx-get="/web/stacks/{{$.Stack}}/secrets/reveal/{{.Name}}" hx-target="#modal-body"
+                      hx-confirm="{{TF "stackconfigs.confirm_reveal" .Name}}" onclick="openModal()">
+                {{icon "keys"}}<span class="sr-only">{{T "stackconfigs.reveal"}}</span>
+              </button>
+              <a class="btn btn-ghost btn-sm" href="/web/stacks/{{$.Stack}}/secrets/edit/{{.Name}}"
+                 hx-get="/web/stacks/{{$.Stack}}/secrets/edit/{{.Name}}" hx-target="#modal-body"
+                 onclick="openModal()" title="{{T "common.edit"}}">
+                {{icon "lock"}}<span class="sr-only">{{T "common.edit"}}</span>
+              </a>
+              <form hx-post="/web/stacks/{{$.Stack}}/secrets/remove/{{.Name}}" hx-target="#view"
+                    hx-confirm="{{TF "stackconfigs.confirm_secret_remove" .Name}}">
+                <button type="submit" class="btn btn-danger btn-sm" title="{{T "common.delete"}}">
+                  {{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span>
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="only-sm">
+    {{range .Secrets}}
+    <div class="kv">
+      <div class="kv-row"><span class="k">{{T "common.name"}}</span><span class="v mono">{{.Name}}</span></div>
+      <div class="kv-row">
+        <span class="k">{{T "common.value"}}</span>
+        <span class="v"><span class="secret-mask">••••••••<span class="sr-only">{{T "stackconfigs.secret_hidden"}}</span></span></span>
+      </div>
+      <div class="kv-row">
+        <span class="k">{{T "common.created"}}</span>
+        <span class="v muted">{{if .CreatedAt}}{{ts .CreatedAt}}{{else}}—{{end}}</span>
+      </div>
+      <div class="action-bar">
+        <button type="button" class="btn btn-sm" style="min-height:44px"
+                hx-get="/web/stacks/{{$.Stack}}/secrets/reveal/{{.Name}}" hx-target="#modal-body"
+                hx-confirm="{{TF "stackconfigs.confirm_reveal" .Name}}" onclick="openModal()">
+          {{icon "keys"}}<span>{{T "stackconfigs.reveal"}}</span>
+        </button>
+        <button type="button" class="btn btn-sm" style="min-height:44px"
+                hx-get="/web/stacks/{{$.Stack}}/secrets/edit/{{.Name}}" hx-target="#modal-body"
+                onclick="openModal()">
+          {{icon "lock"}}<span>{{T "common.edit"}}</span>
+        </button>
+        <form hx-post="/web/stacks/{{$.Stack}}/secrets/remove/{{.Name}}" hx-target="#view"
+              hx-confirm="{{TF "stackconfigs.confirm_secret_remove" .Name}}">
+          <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px">
+            {{icon "trash"}}<span>{{T "common.delete"}}</span>
+          </button>
+        </form>
+      </div>
+    </div>
+    {{end}}
+  </div>
   {{else}}
-  <div class="empty">
-    No secrets for this stack yet.
-    <div class="row" style="justify-content:center"><button class="btn" hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">Add your first secret</button></div>
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "keys"}}
+      <h3>{{T "stackconfigs.secrets_empty_title"}}</h3>
+      <p>{{T "stackconfigs.secrets_empty_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-primary btn-sm"
+                hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" onclick="openModal()">
+          {{icon "plus"}}<span>{{T "stackconfigs.form_new_secret"}}</span>
+        </button>
+      </div>
+    </div>
   </div>
   {{end}}
-</div>
+</section>
 {{end}}
