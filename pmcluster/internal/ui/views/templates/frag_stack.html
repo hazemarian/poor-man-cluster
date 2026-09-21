@@ -13,7 +13,7 @@
     <h2><span class="mono">{{if .Detail}}{{.Detail.Stack.Name}}{{else}}{{.Name}}{{end}}</span></h2>
     <div class="ph-actions">
       {{if .Detail}}
-        <span class="pill plain">{{T "common.revision"}} <span class="mono num" dir="ltr">{{N .Detail.Stack.CurrentRevision}}</span></span>
+        <span class="pill plain">{{T "common.revision"}} <span class="mono num" dir="ltr">{{N0 .Detail.Stack.CurrentRevision}}</span></span>
         <form hx-post="/web/stacks/{{.Detail.Stack.Name}}/sync" hx-target="#view"
               hx-confirm="{{TF "stacks.confirm_sync" .Detail.Stack.Name}}">
           <button type="submit" class="btn btn-primary btn-sm">
@@ -101,7 +101,7 @@
         {{if .Detail.LastBackup.Revision}}
         <div class="kv-row">
           <span class="k">{{T "common.revision"}}</span>
-          <span class="v mono num" dir="ltr">{{N .Detail.LastBackup.Revision}}</span>
+          <span class="v mono num" dir="ltr">{{N0 .Detail.LastBackup.Revision}}</span>
         </div>
         {{end}}
       </div>
@@ -122,7 +122,7 @@
         {{range .Detail.Revisions}}
         <div class="rev{{if .Current}} is-current{{end}}">
           <div class="rev-main">
-            <span class="rev-id" dir="ltr">{{N .Revision}}</span>
+            <span class="rev-id" dir="ltr">{{N0 .Revision}}</span>
             {{if .Current}}<span class="pill good"><i class="dot"></i>{{T "stack.rev_current"}}</span>{{end}}
           </div>
           <div class="rev-when">{{TF "stack.rev_when" (ts .CreatedAt)}}</div>

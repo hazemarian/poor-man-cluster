@@ -7,7 +7,7 @@
      a directory that was read rather than a value baked into the console. */}}
 <div class="page-head">
   <div class="ph-text">
-    <h1>{{TF "backupbrowse.title" (N .ID)}}</h1>
+    <h1>{{TF "backupbrowse.title" (N0 .ID)}}</h1>
     <p class="sub">{{T "backupbrowse.sub"}}</p>
   </div>
   <div class="ph-actions">
@@ -123,7 +123,7 @@
     </div>
     {{if .Restorable}}
     <div class="action-bar">
-      <button type="button" class="btn btn-primary" hx-post="/web/backups/{{.ID}}/restore" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" hx-confirm="{{TF "backupbrowse.restore_confirm" (N .ID) (printf "%s/%s" .DestRoot .Run.StackName)}}">{{icon "restore"}}<span>{{T "backupbrowse.restore_action"}}</span></button>
+      <button type="button" class="btn btn-primary" hx-post="/web/backups/{{.ID}}/restore" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" hx-confirm="{{TF "backupbrowse.restore_confirm" (N0 .ID) (printf "%s/%s" .DestRoot .Run.StackName)}}">{{icon "restore"}}<span>{{T "backupbrowse.restore_action"}}</span></button>
     </div>
     {{else}}
     <div class="msg warn">{{T "backupbrowse.restore_blocked"}}</div>

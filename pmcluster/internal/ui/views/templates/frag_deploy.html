@@ -82,7 +82,7 @@
     <div class="stat-v muted">{{T "deploy.st_revision_new"}}</div>
     <div class="stat-f">{{T "deploy.st_revision_new_foot"}}</div>
     {{else if .Target}}
-    <div class="stat-v num">{{N .Target.Revision}}</div>
+    <div class="stat-v num">{{N0 .Target.Revision}}</div>
     <div class="stat-f">{{T "deploy.st_revision_foot"}}</div>
     {{else}}
     <div class="stat-v">—</div>
@@ -278,7 +278,7 @@
             {{range .Stacks}}
             <tr>
               <td><span class="mono">{{.Name}}</span></td>
-              <td class="num">{{N .Revision}}</td>
+              <td class="num">{{N0 .Revision}}</td>
               <td>{{if .RepoURL}}<span class="mono iso trunc" dir="ltr">{{.RepoURL}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
               <td class="muted num">{{ts .UpdatedAt}}</td>
               <td>
@@ -298,7 +298,7 @@
         {{range .Stacks}}
         <div class="kv">
           <div class="kv-row"><span class="k">{{T "deploy.col_stack"}}</span><span class="v mono">{{.Name}}</span></div>
-          <div class="kv-row"><span class="k">{{T "common.revision"}}</span><span class="v num">{{N .Revision}}</span></div>
+          <div class="kv-row"><span class="k">{{T "common.revision"}}</span><span class="v num">{{N0 .Revision}}</span></div>
           <div class="kv-row"><span class="k">{{T "deploy.f_repo"}}</span><span class="v">{{if .RepoURL}}<span class="mono iso" dir="ltr">{{.RepoURL}}</span>{{else}}<span class="muted">—</span>{{end}}</span></div>
           <div class="kv-row"><span class="k">{{T "common.updated"}}</span><span class="v muted num">{{ts .UpdatedAt}}</span></div>
           <div class="action-bar">

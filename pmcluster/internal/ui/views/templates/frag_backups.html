@@ -130,7 +130,7 @@
           <tr>
             <td><a class="mono" href="/web/stacks/{{.Stack}}" hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true">{{.Stack}}</a></td>
             <td class="num">{{N .Current}}</td>
-            <td class="num">{{if .HasLast}}{{N .LastRevision}}{{else}}{{T "backups.age_unknown"}}{{end}}</td>
+            <td class="num">{{if .HasLast}}{{N0 .LastRevision}}{{else}}{{T "backups.age_unknown"}}{{end}}</td>
             <td>
               <span class="pill {{.Pill}}"><i class="dot"></i>{{T .StateKey}}</span>
               {{if .Stale}}<span class="pill warn"><i class="dot"></i>{{T "backups.stale_pill"}}</span>{{end}}
@@ -155,7 +155,7 @@
         <div class="kv-row"><span class="k">{{T "backups.coverage_col_stack"}}</span><span class="v mono">{{.Stack}}</span></div>
         <div class="kv-row"><span class="k">{{T "backups.coverage_col_state"}}</span><span class="v"><span class="pill {{.Pill}}"><i class="dot"></i>{{T .StateKey}}</span>{{if .Stale}} <span class="pill warn"><i class="dot"></i>{{T "backups.stale_pill"}}</span>{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "backups.coverage_col_current"}}</span><span class="v num">{{N .Current}}</span></div>
-        <div class="kv-row"><span class="k">{{T "backups.coverage_col_last"}}</span><span class="v num">{{if .HasLast}}{{N .LastRevision}}{{else}}{{T "backups.age_unknown"}}{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.coverage_col_last"}}</span><span class="v num">{{if .HasLast}}{{N0 .LastRevision}}{{else}}{{T "backups.age_unknown"}}{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "backups.coverage_col_at"}}</span><span class="v">{{if .HasLastAt}}{{ts .LastAt}} <span class="muted">{{TF "backups.stats_last_verified_foot" (N .AgeDays)}}</span>{{else}}<span class="muted">{{T "backups.age_unknown"}}</span>{{end}}</span></div>
         <div class="action-bar">
           <a class="btn btn-sm" href="/web/stacks/{{.Stack}}" hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true">{{icon "stacks"}}<span>{{T "backups.stack_link"}}</span></a>
@@ -213,7 +213,7 @@
         <tbody>
           {{range $runs}}
           <tr>
-            <td class="num">{{N .ID}}</td>
+            <td class="num">{{N0 .ID}}</td>
             <td>
               {{if .Cluster}}<span class="pill plain"><i class="dot"></i>{{T "backups.scope_cluster"}}</span>
               {{else}}<a class="mono" href="/web/stacks/{{.Stack}}" hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true">{{.Stack}}</a>{{end}}
@@ -241,7 +241,7 @@
     <div class="only-sm">
       {{range $runs}}
       <div class="kv">
-        <div class="kv-row"><span class="k">{{T "backups.col_id"}}</span><span class="v num">{{N .ID}}</span></div>
+        <div class="kv-row"><span class="k">{{T "backups.col_id"}}</span><span class="v num">{{N0 .ID}}</span></div>
         <div class="kv-row"><span class="k">{{T "backups.col_scope"}}</span><span class="v">{{if .Cluster}}{{T "backups.scope_cluster"}}{{else}}<span class="mono">{{.Stack}}</span>{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "backups.col_state"}}</span><span class="v">{{if .StateKey}}<span class="pill {{.Pill}}"><i class="dot"></i>{{T .StateKey}}</span>{{else}}<span class="pill plain"><i class="dot"></i>{{.Status}}</span>{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "backups.col_started"}}</span><span class="v">{{ts .Started}}</span></div>

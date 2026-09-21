@@ -70,7 +70,7 @@
             <td><span class="iso" dir="ltr">{{ts .CreatedAt}}</span></td>
             <td>{{if .StateKey}}<span class="pill {{.Pill}}"><i class="dot"></i>{{T .StateKey}}</span>{{else}}<span class="pill plain"><i class="dot"></i>{{.Status}}</span>{{end}}</td>
             <td>{{if .StackName}}<a class="btn-link" href="/web/stacks/{{.StackName}}" hx-get="/web/stacks/{{.StackName}}" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.StackName}}</span></a>{{else}}<span class="muted">{{T "common.none"}}</span>{{end}}</td>
-            <td class="num">{{if .Revision}}{{N .Revision}}{{else}}<span class="muted">—</span>{{end}}</td>
+            <td class="num">{{if .Revision}}{{N0 .Revision}}{{else}}<span class="muted">—</span>{{end}}</td>
             <td>{{if .File}}<span class="mono iso">{{.File}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
             <td>{{if .Error}}<span class="mono iso">{{.Error}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
           </tr>
@@ -84,7 +84,7 @@
         <div class="kv-row"><span class="k">{{T "webhookdeliveries.col_when"}}</span><span class="v iso" dir="ltr">{{ts .CreatedAt}}</span></div>
         <div class="kv-row"><span class="k">{{T "webhookdeliveries.col_status"}}</span><span class="v">{{if .StateKey}}{{T .StateKey}}{{else}}{{.Status}}{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "webhookdeliveries.col_stack"}}</span><span class="v">{{if .StackName}}<a class="btn-link" href="/web/stacks/{{.StackName}}" hx-get="/web/stacks/{{.StackName}}" hx-target="#view" hx-push-url="true">{{.StackName}}</a>{{else}}{{T "common.none"}}{{end}}</span></div>
-        <div class="kv-row"><span class="k">{{T "webhookdeliveries.col_revision"}}</span><span class="v num">{{if .Revision}}{{N .Revision}}{{else}}—{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "webhookdeliveries.col_revision"}}</span><span class="v num">{{if .Revision}}{{N0 .Revision}}{{else}}—{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "webhookdeliveries.col_file"}}</span><span class="v mono iso">{{if .File}}{{.File}}{{else}}—{{end}}</span></div>
         {{if .Error}}<div class="kv-row"><span class="k">{{T "webhookdeliveries.col_error"}}</span><span class="v mono iso">{{.Error}}</span></div>{{end}}
       </div>

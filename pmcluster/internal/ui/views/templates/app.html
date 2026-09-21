@@ -232,6 +232,11 @@
     if (e.target && e.target.id === 'view') {
       syncNav(location.pathname);
       e.target.querySelectorAll('[data-focus]').forEach(function (el) { el.focus(); });
+      // The stack inspector renders below the index (the operator keeps the
+      // list and the open stack on the same page). Bring it into view so a
+      // click on a stack name visibly lands on the details.
+      var detail = e.target.querySelector('#stack-detail');
+      if (detail) detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   });
   document.addEventListener('htmx:responseError', function () {

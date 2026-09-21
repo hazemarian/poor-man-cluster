@@ -136,6 +136,7 @@ func NewRenderer() (*Renderer, error) {
 		// data source, so every numeric helper takes any and coerces.
 		"P":     func(count any, key string, dualCase ...i18n.Case) string { return key },
 		"N":     func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"N0":    func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
 		"NF":    func(v any, decimals int) string { return strconv.FormatFloat(i18n.Float(v), 'f', decimals, 64) },
 		"DIR":   func() string { return "ltr" },
 		"LANG":  func() string { return string(i18n.Default) },
@@ -169,7 +170,11 @@ func (r *Renderer) withRequest(c *gin.Context) *template.Template {
 		"P": func(count any, key string, dualCase ...i18n.Case) string {
 			return l.P(int(i18n.Num(count)), key, dualCase...)
 		},
-		"N":     func(v any) string { return l.N(i18n.Num(v)) },
+		"N": func(v any) string { return l.N(i18n.Num(v)) },
+		// N0 is the ungrouped integer form of N: revision IDs and other opaque
+		// identifiers are never comma-grouped ("1,789,849,639" is a sum, not an
+		// ID). Counts and sizes use N (grouped) and NF.
+		"N0":    func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
 		"NF":    func(v any, decimals int) string { return l.NF(i18n.Float(v), decimals) },
 		"DIR":   l.Dir,
 		"LANG":  l.Lang,

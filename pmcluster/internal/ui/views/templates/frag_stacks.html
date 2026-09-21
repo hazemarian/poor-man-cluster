@@ -163,7 +163,7 @@
               <span class="mono">{{.Name}}</span>
             </a>
           </td>
-          <td><span class="mono num" dir="ltr">{{N .CurrentRevision}}</span></td>
+          <td><span class="mono num" dir="ltr">{{N0 .CurrentRevision}}</span></td>
           <td>
             {{if $.ServicesKnown}}
               {{if eq .State "none"}}
@@ -232,7 +232,7 @@
       </div>
       <div class="kv-row">
         <span class="k">{{T "common.revision"}}</span>
-        <span class="v mono num" dir="ltr">{{N .CurrentRevision}}</span>
+        <span class="v mono num" dir="ltr">{{N0 .CurrentRevision}}</span>
       </div>
       <div class="kv-row">
         <span class="k">{{T "common.status"}}</span>
