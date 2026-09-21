@@ -60,6 +60,38 @@ func (s *Store) FinishBackup(ctx context.Context, id int64, status, archivePaths
 	return nil
 }
 
+// RecordDiscoveredBackup inserts a row for an archive the daemon found on
+// disk (a scheduled offen run that never passed through Trigger). It is
+// idempotent: the partial unique index on filename makes a second record
+// for the same tarball a no-op. The archive path is stored verbatim.
+func (s *Store) RecordDiscoveredBackup(ctx context.Context, filename, archivePath string, at int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO backups (filename, status, archive_paths, started_at, finished_at)
+		 VALUES (?, 'succeeded', ?, ?, ?)`,
+		filename, archivePath, at, at,
+	)
+	if err != nil {
+		return fmt.Errorf("record discovered backup %s: %w", filename, err)
+	}
+	return nil
+}
+
+// BackupExistsByPath reports whether any row already references the given
+// archive path. Used by discovery to avoid double-recording a tarball that
+// an on-demand Trigger already captured (those rows carry an empty
+// filename, so the filename unique index alone cannot catch them).
+func (s *Store) BackupExistsByPath(ctx context.Context, archivePath string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM backups WHERE archive_paths LIKE '%' || ? || '%'`,
+		archivePath,
+	).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("query backup path: %w", err)
+	}
+	return n > 0, nil
+}
+
 // GetBackup fetches one backup row by id.
 func (s *Store) GetBackup(ctx context.Context, id int64) (*Backup, error) {
 	var b Backup

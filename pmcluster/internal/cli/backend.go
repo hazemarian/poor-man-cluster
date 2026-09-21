@@ -99,7 +99,7 @@ func backendBackups(cmd *cobra.Command) (backups.Service, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return backups.NewLocal(st, backups.LocalTrigger{Store: st}.Trigger), func() { _ = st.Close() }, nil
+	return &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: backups.DefaultArchiveDir}, func() { _ = st.Close() }, nil
 }
 
 func backendTLS(cmd *cobra.Command) (certs.Service, func(), error) {

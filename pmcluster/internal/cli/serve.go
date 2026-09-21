@@ -125,7 +125,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		Store:         st,
 		DeployService: deploySvc,
 		Cipher:        cipher,
-		Backups:       backups.NewLocal(st, backups.LocalTrigger{Store: st}.Trigger),
+		Backups:       &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: backups.DefaultArchiveDir},
 		Settings:      settings.NewLocal(st),
 		Usage:         usage.NewLocal(st),
 		HostCerts:     &certs.HTTP{Svc: tlsSvc},
