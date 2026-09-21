@@ -231,7 +231,7 @@ func restoreArchive(p, target string) (int, error) {
 		}
 		rel := archiveRelPath(hdr.Name)
 		name := filepath.Join(target, rel)
-		if !strings.HasPrefix(name, target+string(filepath.Separator)) {
+		if name != target && !strings.HasPrefix(name, target+string(filepath.Separator)) {
 			return count, fmt.Errorf("archive entry escapes restore dir: %s", hdr.Name)
 		}
 		switch hdr.Typeflag {

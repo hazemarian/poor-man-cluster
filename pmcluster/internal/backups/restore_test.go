@@ -13,6 +13,13 @@ import (
 // writeTarGz writes a real tar.gz archive containing the given entries under
 // an optional prefix (mirrors offen's baked-in `backup/data/` prefix).
 func writeTarGz(t *testing.T, dir, name, prefix string, files map[string]string) {
+	writeTarGzDirs(t, dir, name, prefix, files)
+}
+
+// writeTarGzDirs writes a tar.gz archive whose entries include the prefix
+// root directory itself, then every file — matching the layout the offen
+// agent produces.
+func writeTarGzDirs(t *testing.T, dir, name, prefix string, files map[string]string) {
 	t.Helper()
 	p := filepath.Join(dir, name)
 	f, err := os.Create(p)
@@ -22,6 +29,10 @@ func writeTarGz(t *testing.T, dir, name, prefix string, files map[string]string)
 	defer f.Close()
 	gz := gzip.NewWriter(f)
 	tw := tar.NewWriter(gz)
+	// Root dir entry for the prefix.
+	if err := tw.WriteHeader(&tar.Header{Name: prefix, Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
+		t.Fatalf("write prefix dir header: %v", err)
+	}
 	for rel, content := range files {
 		entry := rel
 		if prefix != "" {
@@ -49,8 +60,10 @@ func TestRestore_StripsDataPrefix(t *testing.T) {
 	dir := t.TempDir()
 	destRoot := t.TempDir()
 
-	// A scheduled whole-disk archive with offen's baked-in /backup/data prefix.
-	writeTarGz(t, dir, "backup-node1-2026-09-21T03-00-00.tar.gz", "backup/data", map[string]string{
+	// A scheduled whole-disk archive with offen's baked-in /backup/data prefix,
+	// including the root dir entry itself (maps to "." — must not trip the
+	// escape guard).
+	writeTarGzDirs(t, dir, "backup-node1-2026-09-21T03-00-00.tar.gz", "backup/data", map[string]string{
 		"abbas/abbas_data/abbas.db":     "db-bytes",
 		"demoenv/demoenv_data/notes.md": "note",
 	})
