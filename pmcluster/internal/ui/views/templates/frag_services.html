@@ -95,7 +95,7 @@
               {{else}}
               <span class="mono iso" dir="ltr">{{.ServiceName}}</span>
               {{end}}
-              {{if .Image}}<div class="muted trunc" title="{{.Image}}">{{.Image}}</div>{{end}}
+              {{if .Image}}<div class="muted trunc" title="{{.Image}}">{{shortImage .Image}}</div>{{end}}
             </td>
             <td>{{if .Stack}}<span class="mono" dir="ltr">{{.Stack}}</span>{{else}}<span class="muted">{{T "services.no_stack"}}</span>{{end}}</td>
             <td class="num">

@@ -134,14 +134,15 @@ func NewRenderer() (*Renderer, error) {
 		"TF":   func(key string, args ...any) string { return key },
 		// Numbers arrive as int, int64, uint64 or float64 depending on the
 		// data source, so every numeric helper takes any and coerces.
-		"P":     func(count any, key string, dualCase ...i18n.Case) string { return key },
-		"N":     func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
-		"N0":    func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
-		"NF":    func(v any, decimals int) string { return strconv.FormatFloat(i18n.Float(v), 'f', decimals, 64) },
-		"DIR":   func() string { return "ltr" },
-		"LANG":  func() string { return string(i18n.Default) },
-		"THEME": func() string { return "dark" },
-		"RTL":   func() bool { return false },
+		"P":          func(count any, key string, dualCase ...i18n.Case) string { return key },
+		"N":          func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"N0":         func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"NF":         func(v any, decimals int) string { return strconv.FormatFloat(i18n.Float(v), 'f', decimals, 64) },
+		"shortImage": func(v string) string { return v },
+		"DIR":        func() string { return "ltr" },
+		"LANG":       func() string { return string(i18n.Default) },
+		"THEME":      func() string { return "dark" },
+		"RTL":        func() bool { return false },
 	}).ParseFS(files, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -174,12 +175,13 @@ func (r *Renderer) withRequest(c *gin.Context) *template.Template {
 		// N0 is the ungrouped integer form of N: revision IDs and other opaque
 		// identifiers are never comma-grouped ("1,789,849,639" is a sum, not an
 		// ID). Counts and sizes use N (grouped) and NF.
-		"N0":    func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
-		"NF":    func(v any, decimals int) string { return l.NF(i18n.Float(v), decimals) },
-		"DIR":   l.Dir,
-		"LANG":  l.Lang,
-		"RTL":   l.IsRTL,
-		"THEME": func() string { return Theme(c) },
+		"N0":         func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"NF":         func(v any, decimals int) string { return l.NF(i18n.Float(v), decimals) },
+		"shortImage": shortImage,
+		"DIR":        l.Dir,
+		"LANG":       l.Lang,
+		"RTL":        l.IsRTL,
+		"THEME":      func() string { return Theme(c) },
 	})
 }
 
@@ -210,7 +212,17 @@ func (r *Renderer) Page(c *gin.Context, name string, data any) {
 	r.execute(c, name, data)
 }
 
-// Fragment renders a partial to be swapped in by HTMX. When the request is a
+// shortImage trims a container image reference for display: everything from
+// the "@" digest marker onward is dropped from the visible text. The full
+// reference (including the sha256 digest) stays available in the element's
+// title attribute, so hovering reveals it without widening the column.
+func shortImage(v string) string {
+	if i := strings.IndexByte(v, '@'); i >= 0 {
+		return v[:i]
+	}
+	return v
+}
+
 // full page load (no HX-Request header — a browser refresh or deep link on a
 // fragment URL) and ShellData is set, it renders the app shell with the
 // fragment embedded in #view so navigation styles survive a refresh.

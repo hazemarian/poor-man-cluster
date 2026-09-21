@@ -107,7 +107,7 @@
               {{else}}
               <span class="mono iso" dir="ltr">{{.ServiceName}}</span>
               {{end}}
-              {{if .Image}}<div class="muted trunc" title="{{.Image}}">{{.Image}}</div>{{end}}
+              {{if .Image}}<div class="muted trunc" title="{{.Image}}">{{shortImage .Image}}</div>{{end}}
             </td>
             <td class="num">
               <span class="num">{{N .Replicas}} / {{N .Desired}}</span>

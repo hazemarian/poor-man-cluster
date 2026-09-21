@@ -58,7 +58,7 @@
   <div class="stat">
     <div class="stat-l">{{T "services.col_image"}}</div>
     {{if .SvcKnown}}
-    <div class="stat-v"><span class="mono iso trunc" dir="ltr" title="{{.Svc.Image}}">{{if .Svc.Image}}{{.Svc.Image}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
+    <div class="stat-v"><span class="mono iso trunc" dir="ltr" title="{{.Svc.Image}}">{{if .Svc.Image}}{{shortImage .Svc.Image}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
     <div class="stat-f">{{T "services.col_image"}}</div>
     {{else}}
     <div class="stat-v is-unknown">{{T "common.unavailable"}}</div>
