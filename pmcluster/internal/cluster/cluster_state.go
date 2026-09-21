@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -45,27 +46,33 @@ const (
 	// (manager-only by default). When replicated disks are in use it must stay
 	// false — see docs/storage-and-databases.md.
 	settingBackupAllNodes = "backup_all_nodes"
+
+	// settingBackupRetentionDays is how long pmcluster keeps backup audit rows
+	// and their archives on disk before pruning them (default 15 days). The
+	// offen agent's own BACKUP_RETENTION_DAYS is rendered from this same value.
+	settingBackupRetentionDays = "backup_retention_days"
 )
 
 // Setting* accessors expose the persisted settings keys for CLI surfaces
 // (e.g. the interactive `pmcluster setup` wizard) that read/write them
 // directly instead of through the cluster workflow.
-func SettingDomain() string            { return settingDomain }
-func SettingTLSMode() string           { return settingTLSMode }
-func SettingTLSCertPath() string       { return settingTLSCertPath }
-func SettingTLSKeyPath() string        { return settingTLSKeyPath }
-func SettingTLSACME() string           { return settingTLSACME }
-func SettingOOEmail() string           { return settingOOEmail }
-func SettingTraefikAdminUser() string  { return settingTraefikAdminUser }
-func SettingSSOEnabled() string        { return settingSSOEnabled }
-func SettingSSOProvider() string       { return settingSSOProvider }
-func SettingSSOClientID() string       { return settingSSOClientID }
-func SettingSSOClientSecret() string   { return settingSSOClientSecret }
-func SettingSSOGitHubOrg() string      { return settingSSOGitHubOrg }
-func SettingSSOCookieExpire() string   { return settingSSOCookieExpire }
-func SettingEdgeLoginDisabled() string { return settingEdgeLoginDisabled }
-func SettingVolumeRoot() string        { return settingVolumeRoot }
-func SettingBackupAllNodes() string    { return settingBackupAllNodes }
+func SettingDomain() string              { return settingDomain }
+func SettingTLSMode() string             { return settingTLSMode }
+func SettingTLSCertPath() string         { return settingTLSCertPath }
+func SettingTLSKeyPath() string          { return settingTLSKeyPath }
+func SettingTLSACME() string             { return settingTLSACME }
+func SettingOOEmail() string             { return settingOOEmail }
+func SettingTraefikAdminUser() string    { return settingTraefikAdminUser }
+func SettingSSOEnabled() string          { return settingSSOEnabled }
+func SettingSSOProvider() string         { return settingSSOProvider }
+func SettingSSOClientID() string         { return settingSSOClientID }
+func SettingSSOClientSecret() string     { return settingSSOClientSecret }
+func SettingSSOGitHubOrg() string        { return settingSSOGitHubOrg }
+func SettingSSOCookieExpire() string     { return settingSSOCookieExpire }
+func SettingEdgeLoginDisabled() string   { return settingEdgeLoginDisabled }
+func SettingVolumeRoot() string          { return settingVolumeRoot }
+func SettingBackupAllNodes() string      { return settingBackupAllNodes }
+func SettingBackupRetentionDays() string { return settingBackupRetentionDays }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {
@@ -219,6 +226,27 @@ func loadBackupAllNodes(ctx context.Context, st *store.Store) bool {
 		return false
 	}
 	return st.GetSettingDefault(ctx, settingBackupAllNodes, "") == "true"
+}
+
+// defaultBackupRetentionDays is how many days backup audit rows + archives
+// are kept before pmcluster prunes them.
+const defaultBackupRetentionDays = 15
+
+// LoadBackupRetentionDays returns the persisted backup retention window in
+// days, falling back to defaultBackupRetentionDays when unset or unparseable.
+func LoadBackupRetentionDays(ctx context.Context, st *store.Store) int {
+	if st == nil {
+		return defaultBackupRetentionDays
+	}
+	v := st.GetSettingDefault(ctx, settingBackupRetentionDays, "")
+	if v == "" {
+		return defaultBackupRetentionDays
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return defaultBackupRetentionDays
+	}
+	return n
 }
 
 // requestedTLSMode derives the TLS mode the operator asked for on this run,

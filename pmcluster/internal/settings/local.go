@@ -22,6 +22,7 @@ func NewLocal(st *store.Store) *Local { return &Local{Store: st} }
 var clusterSettingKeys = []string{
 	cluster.SettingVolumeRoot(),
 	cluster.SettingBackupAllNodes(),
+	cluster.SettingBackupRetentionDays(),
 	cluster.SettingSSOEnabled(),
 	cluster.SettingSSOProvider(),
 	cluster.SettingSSOClientID(),

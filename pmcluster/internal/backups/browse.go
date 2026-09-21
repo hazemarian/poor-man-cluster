@@ -102,9 +102,13 @@ func listArchive(p string) ([]FileEntry, error) {
 	return out, nil
 }
 
-// Restore extracts every archive of a successful stack-scoped backup run
-// back under destRoot (the volume root, e.g. /var/stack/data). Runs that
-// are not tied to a stack are refused because their target is ambiguous.
+// Restore extracts every archive of a successful backup run back under
+// destRoot (the volume root, e.g. /var/stack/data). Both stack-scoped and
+// cluster-wide (whole-disk) runs are restorable: the offen agent archives
+// the entire volume root with a baked-in `backup/data/` prefix, so entries
+// are mapped back to destRoot after stripping that prefix. Control-plane
+// archives (whose entries live under `backup/pmcluster`) are refused — their
+// target is the control-plane data dir, not the volume root.
 func (l *Local) Restore(ctx context.Context, id int64, destRoot string) (int, error) {
 	row, err := l.Store.GetBackup(ctx, id)
 	if err != nil {
@@ -113,16 +117,15 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string) (int, er
 	if row.Status != "succeeded" {
 		return 0, fmt.Errorf("backup %d not restored: status is %q (only succeeded runs are restorable)", id, row.Status)
 	}
-	if !row.StackName.Valid || row.StackName.String == "" {
-		return 0, fmt.Errorf("backup %d not restored: it is not tied to a stack", id)
-	}
-	stack := row.StackName.String
-	target := filepath.Join(destRoot, stack)
+	target := destRoot
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return 0, fmt.Errorf("create restore dir: %w", err)
 	}
 	var restored int
 	for _, p := range splitArchivePaths(row.ArchivePaths) {
+		if err := refuseControlPlaneArchive(p); err != nil {
+			return restored, err
+		}
 		n, err := restoreArchive(p, target)
 		if err != nil {
 			return restored, fmt.Errorf("restore %s: %w", p, err)
@@ -130,6 +133,61 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string) (int, er
 		restored += n
 	}
 	return restored, nil
+}
+
+// refuseControlPlaneArchive inspects the first entry of an archive and errors
+// when it belongs to the control-plane subtree (`backup/pmcluster`), whose
+// data does not belong under the volume root.
+func refuseControlPlaneArchive(p string) error {
+	f, err := os.Open(p)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var tr *tar.Reader
+	switch {
+	case strings.HasSuffix(p, ".gz"):
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return fmt.Errorf("gzip open: %w", err)
+		}
+		defer func() { _ = gz.Close() }()
+		tr = tar.NewReader(gz)
+	default:
+		tr = tar.NewReader(f)
+	}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		name := strings.TrimPrefix(filepath.ToSlash(hdr.Name), "/")
+		if strings.HasPrefix(name, "backup/pmcluster") {
+			return fmt.Errorf("control-plane archive: cannot restore %s into the volume root", p)
+		}
+		if strings.HasPrefix(name, "backup/data") {
+			return nil // first real entry confirms a data archive
+		}
+	}
+}
+
+// archiveRelPath maps an archive entry to its path relative to the restore
+// target. The offen agent archives the volume root under a baked-in
+// `backup/data/` prefix (source mount /var/stack/data:/backup/data:ro), so
+// that prefix is stripped; entries without it are used as-is.
+func archiveRelPath(name string) string {
+	clean := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(name)), "/")
+	const prefix = "backup/data"
+	if clean == prefix {
+		return "."
+	}
+	if strings.HasPrefix(clean, prefix+"/") {
+		return strings.TrimPrefix(clean, prefix+"/")
+	}
+	return clean
 }
 
 func restoreArchive(p, target string) (int, error) {
@@ -171,7 +229,8 @@ func restoreArchive(p, target string) (int, error) {
 		if err != nil {
 			return count, err
 		}
-		name := filepath.Join(target, filepath.Clean(hdr.Name))
+		rel := archiveRelPath(hdr.Name)
+		name := filepath.Join(target, rel)
 		if !strings.HasPrefix(name, target+string(filepath.Separator)) {
 			return count, fmt.Errorf("archive entry escapes restore dir: %s", hdr.Name)
 		}

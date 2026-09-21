@@ -108,6 +108,41 @@ func (s *Store) GetBackup(ctx context.Context, id int64) (*Backup, error) {
 	return &b, nil
 }
 
+// ListBackupsOlderThan returns backups whose run started strictly before the
+// given unix time, oldest first. Used by the retention prune.
+func (s *Store) ListBackupsOlderThan(ctx context.Context, before int64) ([]*Backup, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, stack_name, revision, status, archive_paths, error_message, started_at, finished_at
+		   FROM backups WHERE started_at < ? ORDER BY started_at ASC, id ASC`, before,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query old backups: %w", err)
+	}
+	defer rows.Close()
+	var out []*Backup
+	for rows.Next() {
+		var b Backup
+		if err := rows.Scan(&b.ID, &b.StackName, &b.Revision, &b.Status, &b.ArchivePaths, &b.ErrorMessage, &b.StartedAt, &b.FinishedAt); err != nil {
+			return nil, fmt.Errorf("scan backup: %w", err)
+		}
+		out = append(out, &b)
+	}
+	return out, rows.Err()
+}
+
+// DeleteBackup removes one backup audit row. Returns ErrBackupNotFound when
+// no row matches.
+func (s *Store) DeleteBackup(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM backups WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete backup %d: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrBackupNotFound
+	}
+	return nil
+}
+
 // ListBackups returns the most recent backups, newest first. limit <= 0
 // returns all rows.
 func (s *Store) ListBackups(ctx context.Context, limit int) ([]*Backup, error) {
@@ -135,11 +170,13 @@ func (s *Store) ListBackups(ctx context.Context, limit int) ([]*Backup, error) {
 }
 
 // ListBackupsForStack returns backups associated with a specific stack,
-// newest first.
+// newest first. Cluster-wide (whole-disk) runs — rows with no stack name —
+// are included because they capture every stack's data; the caller renders
+// them as covering the stack.
 func (s *Store) ListBackupsForStack(ctx context.Context, stackName string) ([]*Backup, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, stack_name, revision, status, archive_paths, error_message, started_at, finished_at
-		   FROM backups WHERE stack_name = ? ORDER BY started_at DESC, id DESC`, stackName,
+		   FROM backups WHERE stack_name = ? OR stack_name IS NULL ORDER BY started_at DESC, id DESC`, stackName,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query backups for stack: %w", err)

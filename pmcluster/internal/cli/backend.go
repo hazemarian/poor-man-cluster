@@ -9,6 +9,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/certs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
@@ -99,7 +100,7 @@ func backendBackups(cmd *cobra.Command) (backups.Service, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: backups.DefaultArchiveDir}, func() { _ = st.Close() }, nil
+	return &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: backups.DefaultArchiveDir, RetentionDays: cluster.LoadBackupRetentionDays(cmd.Context(), st)}, func() { _ = st.Close() }, nil
 }
 
 func backendTLS(cmd *cobra.Command) (certs.Service, func(), error) {

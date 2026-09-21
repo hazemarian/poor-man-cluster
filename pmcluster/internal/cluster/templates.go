@@ -198,6 +198,11 @@ type RenderInput struct {
 	// every swarm node. When false (default) it is manager-only — required
 	// when replicated disks are in use (see docs/storage-and-databases.md).
 	BackupAllNodes bool
+
+	// BackupRetentionDays is how many days the offen agent keeps archives
+	// before pruning them (mirrors the backup_retention_days setting;
+	// pmcluster prunes its own audit rows on the same window).
+	BackupRetentionDays int
 }
 
 // openObserveBasicAuth computes the HTTP Basic Authorization header value

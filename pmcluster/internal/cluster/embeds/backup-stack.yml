@@ -26,9 +26,11 @@ services:
       # Result: backup-nodeID-2023-10-25.tar.gz
       - BACKUP_FILENAME=backup-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz
       
-      # 3. Retention: Delete backups older than 7 days
+      # 3. Retention: Delete backups older than the configured window
+      #    (backup_retention_days setting, default 15; pmcluster prunes its
+      #    own audit rows + archive files on the same schedule)
       - BACKUP_PRUNING_PREFIX=backup-
-      - BACKUP_RETENTION_DAYS=7
+      - BACKUP_RETENTION_DAYS=[[ if .BackupRetentionDays ]][[.BackupRetentionDays]][[ else ]]15[[ end ]]
 
       # 4. (Optional) S3 / Cloud Storage Config
       # Uncomment and fill these to send backups to the cloud

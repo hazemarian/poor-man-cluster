@@ -253,7 +253,9 @@ func (c Backups) loadBrowse(ctx context.Context, d *backupBrowseData) {
 	d.Run, d.Files, d.Known, d.Count = run, files, true, int64(len(files))
 	if run != nil {
 		d.StateKey, d.Pill, _ = backupState(*run)
-		d.Restorable = run.StackName != "" && run.FinishedAt > 0 &&
+		// Whole-disk (cluster-wide) runs are restorable too — the restore
+		// path maps their archives back into the volume root directly.
+		d.Restorable = run.FinishedAt > 0 &&
 			(d.StateKey == "st.verified" || d.StateKey == "st.incomplete")
 	}
 }

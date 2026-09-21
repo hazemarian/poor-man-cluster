@@ -23,6 +23,9 @@ type Local struct {
 	// through Trigger, so the console and CLI see the full backup picture.
 	// Empty disables discovery (used by tests and legacy callers).
 	ArchiveDir string
+	// RetentionDays prunes backup audit rows (and their archive files on
+	// disk) older than this many days. Zero disables pruning.
+	RetentionDays int
 }
 
 // DefaultArchiveDir is the archive root mounted into the bundled
@@ -129,9 +132,33 @@ func (l *Local) archiveCreatedAfter(ctx context.Context, at int64) string {
 	return filepath.Join(l.ArchiveDir, newest)
 }
 
+// prune removes backup audit rows older than RetentionDays together with
+// their archive files on disk. It never fails the caller: rows that cannot
+// be deleted are left in place and retried next time.
+func (l *Local) prune(ctx context.Context) {
+	if l.Store == nil || l.RetentionDays <= 0 {
+		return
+	}
+	before := time.Now().Add(-time.Duration(l.RetentionDays) * 24 * time.Hour).Unix()
+	rows, err := l.Store.ListBackupsOlderThan(ctx, before)
+	if err != nil {
+		return
+	}
+	for _, b := range rows {
+		for _, p := range splitArchivePaths(b.ArchivePaths) {
+			if p == "" {
+				continue
+			}
+			_ = os.Remove(p)
+		}
+		_ = l.Store.DeleteBackup(ctx, b.ID)
+	}
+}
+
 // List returns the most recent backup runs.
 func (l *Local) List(ctx context.Context, limit int) ([]Run, error) {
 	l.discover(ctx)
+	l.prune(ctx)
 	rows, err := l.Store.ListBackups(ctx, limit)
 	if err != nil {
 		return nil, err
@@ -139,9 +166,11 @@ func (l *Local) List(ctx context.Context, limit int) ([]Run, error) {
 	return runRows(rows), nil
 }
 
-// ListForStack returns the backup runs recorded for a single stack.
+// ListForStack returns the backup runs recorded for a single stack
+// (including cluster-wide runs that cover every stack).
 func (l *Local) ListForStack(ctx context.Context, stackName string) ([]Run, error) {
 	l.discover(ctx)
+	l.prune(ctx)
 	rows, err := l.Store.ListBackupsForStack(ctx, stackName)
 	if err != nil {
 		return nil, err
