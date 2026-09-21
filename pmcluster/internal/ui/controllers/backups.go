@@ -109,6 +109,20 @@ type backupCoverageRow struct {
 // backupState maps a recorded run onto a state word. A run only counts as
 // verified when the daemon says it succeeded AND an archive path was recorded —
 // exactly the definition the page spells out in its legend.
+// rowsCoverCluster reports whether the newest verified run (at verifiedAt) is
+// a whole-disk cluster-wide snapshot — a run with no stack name that captures
+// every stack's current data on disk, so it covers whatever revision is live.
+func rowsCoverCluster(rows []pmapi.Backup, verifiedAt int64) bool {
+	for _, r := range rows {
+		if r.StartedAt != verifiedAt {
+			continue
+		}
+		key, _, _ := backupState(r)
+		return key == "st.verified" && r.StackName == ""
+	}
+	return false
+}
+
 func backupState(b pmapi.Backup) (key, pill string, running bool) {
 	status := strings.ToLower(strings.TrimSpace(b.Status))
 	switch {
@@ -383,8 +397,13 @@ func (c Backups) coverage(g *gin.Context, d *backupsData) {
 			row.HasLast, row.LastRevision = true, verifiedRev
 		}
 
+		// A whole-disk (cluster-wide) run has no stack name and no revision —
+		// it snapshots every stack's current data on disk, so it verifies
+		// whatever revision is live right now.
+		clusterWide := hasVerified && rowsCoverCluster(rows, verifiedAt)
+
 		switch {
-		case hasVerified && verifiedRev == st.CurrentRevision:
+		case hasVerified && (clusterWide || verifiedRev == st.CurrentRevision):
 			row.StateKey, row.Pill, row.Verified = "backups.coverage_verified", "good", true
 		case hasVerified:
 			row.StateKey, row.Pill = "backups.coverage_behind", "warn"

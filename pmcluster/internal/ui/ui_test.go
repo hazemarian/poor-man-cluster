@@ -1155,3 +1155,43 @@ func TestShellExternalLinks(t *testing.T) {
 		}
 	}
 }
+
+// TestCoverageWholeDiskBackupVerified covers the fix where a whole-disk
+// (cluster-wide) run — no stack name, revision 0 — snapshots every stack's
+// current data, so it must count as verified coverage for the live revision
+// instead of being reported as "behind" / at risk.
+func TestCoverageWholeDiskBackupVerified(t *testing.T) {
+	mux := http.NewServeMux()
+	write := func(w http.ResponseWriter, body string) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, body) //nolint:errcheck
+	}
+	mux.HandleFunc("/api/stacks", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"stacks":[{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo","created_at":1,"updated_at":2}]}`)
+	})
+	mux.HandleFunc("/api/stacks/demo/backups", func(w http.ResponseWriter, r *http.Request) {
+		// Whole-disk run: stack_name empty, revision 0, real archive.
+		write(w, `{"backups":[{"id":7,"status":"succeeded","stack_name":"","revision":0,"archive_paths":["/var/stack/backup/backup-2026-09-22T03-00-00.tar.gz"],"started_at":100,"finished_at":101}]}`)
+	})
+	daemon := httptest.NewServer(mux)
+	defer daemon.Close()
+
+	app := newTestApp(t, daemon)
+	jar := map[string]*http.Cookie{}
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
+
+	resp := doRequest(t, app, http.MethodGet, "/web/backups", "", jar)
+	b := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /web/backups = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+	for _, want := range []string{"Verified", "demo"} {
+		if !strings.Contains(b, want) {
+			t.Errorf("coverage page missing %q", want)
+		}
+	}
+	if strings.Contains(b, "are running a revision that has no verified backup") {
+		t.Error("whole-disk backup must not flag the stack as at risk")
+	}
+}
