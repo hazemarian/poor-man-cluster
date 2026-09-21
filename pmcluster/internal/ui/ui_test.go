@@ -175,6 +175,9 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"services":[{"name":"demo_web","stack":"demo","replicas":2,"desired":2,"image":"ghcr.io/nextrum-sy/demo:1.0","mode":"replicated","updated":70},{"name":"infra_traefik","stack":"infra","replicas":1,"desired":1,"image":"traefik:v3","mode":"global","updated":71}]}`)
 	})
+	mux.HandleFunc("/api/services/demo", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"services":[{"name":"demo_web","stack":"demo","replicas":2,"desired":2,"image":"ghcr.io/nextrum-sy/demo:1.0","mode":"replicated","updated":70}]}`)
+	})
 	mux.HandleFunc("/api/services/demo/web/tasks", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"service":"demo_web","tasks":[{"task_id":"t1","node":"mgr","slot":1,"state":"running","error":"","started_at":65,"finished_at":0}]}`)
 	})
@@ -360,10 +363,10 @@ func TestAllControllers(t *testing.T) {
 	assertFragment(http.MethodGet, "/web/overview", "", "manager-1", "Cluster overview")
 
 	assertFragment(http.MethodGet, "/web/stacks", "", "Stacks", "demo", "3")
-	// The stack detail fragment carries the stack name; the composed title
-	// ("Stacks · demo") belongs to the shell crumb, which the client keeps in sync
-	// on every htmx swap (app.html syncNav), so it is not duplicated in the fragment.
-	assertFragment(http.MethodGet, "/web/stacks/demo", "", "demo", "Last backup", "succeeded")
+	// The stack detail is its own page: the head carries the stack name and the
+	// page shows the stack's services (replica health), its last backup and its
+	// revision history.
+	assertFragment(http.MethodGet, "/web/stacks/demo", "", `dir="ltr">demo<`, "Services in this stack", "web", "2 / 2", "Last backup", "succeeded", "Revision history")
 	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source manifest")
 	// The per-stack backups route hands the operator to the backups page, which owns
 	// listing and filtering them, instead of the stacks controller building another
@@ -372,13 +375,11 @@ func TestAllControllers(t *testing.T) {
 		t.Errorf("GET /web/stacks/demo/backups = %d, want 302 (/web/backups)", redirected.StatusCode)
 	}
 
-	// v2 keeps the composed page title in the shell crumb — the client keeps that in
-	// sync on every htmx swap — and shows the stack's own name in the page body. A
-	// mutation answer is therefore asserted on the stack name and the flash message,
-	// not on an in-body "Stack · name" heading that no longer exists.
-	assertFragment(http.MethodPost, "/web/stacks/demo/rollback", "revision=2", `class="mono">demo<`,
+	// A mutation answer is asserted on the stack name in the page head and the
+	// flash message, not on an in-body "Stack · name" heading that no longer exists.
+	assertFragment(http.MethodPost, "/web/stacks/demo/rollback", "revision=2", `dir="ltr">demo<`,
 		"Rolled back demo to revision 2 — recorded as revision 3.")
-	assertFragment(http.MethodPost, "/web/stacks/demo/sync", "", `class="mono">demo<`,
+	assertFragment(http.MethodPost, "/web/stacks/demo/sync", "", `dir="ltr">demo<`,
 		"Redeployed demo — revision 4.")
 	assertFragment(http.MethodPost, "/web/stacks/demo/remove", "", "Stacks", "Stack demo deleted.")
 

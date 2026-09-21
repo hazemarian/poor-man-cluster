@@ -59,6 +59,16 @@ func init() {
 		"stack.view_manifest":   "Manifests",
 		"stack.rollback":        "Roll back",
 
+		// The stack page's services section: replica health + logs/tasks.
+		"stack.back_all":               "All stacks",
+		"stack.about_title":            "About this stack",
+		"stack.services_title":         "Services in this stack",
+		"stack.services_hint":          "Replica health straight from the swarm; tasks, logs and one-shot commands open per service.",
+		"stack.services_none_title":    "No services",
+		"stack.services_none_body":     "The swarm is not running any service for this stack. Redeploying re-applies the manifest and schedules them.",
+		"stack.services_unknown_title": "Services unavailable",
+		"stack.services_unknown_body":  "The cluster API did not return this stack's services, so replica health is unknown rather than empty.",
+
 		"stack.confirm_rollback": "Roll back {0} to revision {1}? The daemon redeploys that revision's manifest and records a new revision for it.",
 
 		"stack.revs_empty_title": "No revisions yet",

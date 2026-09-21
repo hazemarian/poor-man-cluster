@@ -82,11 +82,6 @@ type stackData struct {
 	Known         bool
 	ServicesKnown bool
 
-	// Open is the inspector, already loaded, or nil when closed. It is part of
-	// the index render so an action, a deep link and a refresh all show the
-	// same page instead of a drawer floating over an empty view.
-	Open *stackDetailData
-
 	ErrKey string
 	ErrRaw string
 
@@ -121,14 +116,26 @@ type backupInfo struct {
 	ErrorMessage string
 }
 
-// stackDetailData is the inspector. It carries the stack name even when the
-// read failed, so the failed state can still say which stack it is about.
+// stackDetailData is the standalone stack page: what it is, its services with
+// replica health, its last backup and its revisions. It carries the stack name
+// even when the read failed, so the failed state can still say which stack it
+// is about.
 type stackDetailData struct {
 	Name   string
 	Detail *stackDetail
 
-	ErrKey string
-	ErrRaw string
+	// Services are this stack's swarm services with replica health, read from
+	// the daemon's service list. ServicesKnown separates "the read failed"
+	// from "the stack has no services".
+	Services      []serviceRow
+	ServicesKnown bool
+
+	ErrKey  string
+	ErrRaw  string
+	MsgKey  string
+	MsgArg0 string
+	MsgArg1 string
+	MsgArg2 string
 }
 
 // revisionData is one revision's manifests, rendered in the modal.
@@ -147,22 +154,24 @@ type revisionData struct {
 	Steps []string
 }
 
-// List renders the stacks table, with one stack's inspector open when the URL
-// asks for it (?open=name).
+// List renders the stacks table.
 func (c Stacks) List(g *gin.Context) {
 	d := c.stacksData(g.Request.Context(), g.Query("q"))
-	c.renderIndex(g, d, g.Query("open"))
+	c.renderIndex(g, d)
 }
 
-// Show serves /stacks/{name}. It renders the whole index with that stack open,
-// so a pasted or refreshed URL keeps the table it was opened from.
+// Show serves /stacks/{name} as its own page: the stack's info, its services
+// with replica health, its last backup and its revision history.
 func (c Stacks) Show(g *gin.Context) {
-	d := c.stacksData(g.Request.Context(), g.Query("q"))
-	c.renderIndex(g, d, g.Param("name"))
+	ctx := g.Request.Context()
+	name := g.Param("name")
+	d := c.loadStack(ctx, name)
+	c.Views.Fragment(g, "stack", d)
 }
 
-// Remove deletes a stack and re-renders the index it was deleted from. The
-// inspector stays closed: the stack it described no longer exists.
+// Remove deletes a stack and re-renders the list it was deleted from. When the
+// delete fails the stack is still there, so the stack page is re-rendered
+// instead of bouncing the operator to a list that still contains it.
 func (c Stacks) Remove(g *gin.Context) {
 	ctx := g.Request.Context()
 	name := g.Param("name")
@@ -176,28 +185,26 @@ func (c Stacks) Remove(g *gin.Context) {
 		msgKey, msgArg = "stacks.msg_removed", name
 	}
 
-	// The table is re-read either way: after a delete the row must be gone,
-	// and after a failure the operator still needs the list he was looking at.
-	d := c.stacksData(ctx, g.Query("q"))
-	if errKey != "" {
-		d.ErrKey, d.ErrRaw = errKey, errRaw
-	} else {
-		d.MsgKey, d.MsgArg0 = msgKey, msgArg
-	}
-	open := ""
 	if errKey != "" {
 		// The delete failed, so the stack is still there: leave the operator
-		// in the inspector he acted from instead of bouncing him to the list.
-		open = name
+		// on the page he acted from.
+		d := c.loadStack(ctx, name)
+		d.ErrKey, d.ErrRaw = errKey, errRaw
+		c.Views.Fragment(g, "stack", d)
+		return
 	}
-	c.renderIndex(g, d, open)
+
+	// The table is re-read either way: after a delete the row must be gone.
+	d := c.stacksData(ctx, g.Query("q"))
+	d.MsgKey, d.MsgArg0 = msgKey, msgArg
+	c.renderIndex(g, d)
 }
 
 // Sync (re)deploys a stack from its newest stored manifest.
 func (c Stacks) Sync(g *gin.Context) {
 	ctx := g.Request.Context()
 	name := g.Param("name")
-	d := c.stacksData(ctx, g.Query("q"))
+	d := c.loadStack(ctx, name)
 
 	if _, _, configured := c.loadParams(ctx); !configured {
 		d.ErrKey = "err.api_not_configured"
@@ -209,7 +216,7 @@ func (c Stacks) Sync(g *gin.Context) {
 	} else {
 		d.MsgKey, d.MsgArg0 = "stack.msg_synced_same", name
 	}
-	c.renderIndex(g, d, name)
+	c.Views.Fragment(g, "stack", d)
 }
 
 // Rollback redeploys a stack from an older revision's manifest. The API writes
@@ -218,7 +225,7 @@ func (c Stacks) Sync(g *gin.Context) {
 func (c Stacks) Rollback(g *gin.Context) {
 	ctx := g.Request.Context()
 	name := g.Param("name")
-	d := c.stacksData(ctx, g.Query("q"))
+	d := c.loadStack(ctx, name)
 
 	rev, err := strconv.ParseInt(strings.TrimSpace(g.PostForm("revision")), 10, 64)
 	switch {
@@ -241,7 +248,7 @@ func (c Stacks) Rollback(g *gin.Context) {
 			d.MsgArg2 = strconv.FormatInt(now, 10)
 		}
 	}
-	c.renderIndex(g, d, name)
+	c.Views.Fragment(g, "stack", d)
 }
 
 // ShowRevision renders one revision's source and rendered manifests. It is
@@ -305,14 +312,8 @@ func revisionSteps(g *gin.Context, payload string) []string {
 	return out
 }
 
-// renderIndex draws the stacks page, with the inspector for open loaded when a
-// name is given. An unread inspector is rendered as an unknown state rather
-// than as a stack with nothing in it.
-func (c Stacks) renderIndex(g *gin.Context, d stackData, open string) {
-	if name := strings.TrimSpace(open); name != "" {
-		sd := c.loadStack(g.Request.Context(), name)
-		d.Open = &sd
-	}
+// renderIndex draws the stacks page.
+func (c Stacks) renderIndex(g *gin.Context, d stackData) {
 	c.Views.Fragment(g, "stacks", d)
 }
 
@@ -392,7 +393,8 @@ func (c Stacks) stacksData(ctx context.Context, q string) stackData {
 	return d
 }
 
-// loadStack reads one stack's revisions and last backup for the inspector.
+// loadStack reads one stack's revisions, its last backup, and its services
+// (with replica health) for the stack page.
 func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 	d := stackDetailData{Name: name}
 
@@ -436,6 +438,30 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 		}
 	}
 	d.Detail = sd
+
+	// The stack's services, straight from the swarm. A read failure is not a
+	// page error: the detail above still stands, so the services panel renders
+	// as unknown instead of claiming an empty stack.
+	if svcs, err := c.API.ListServices(ctx, name); err == nil {
+		d.ServicesKnown = true
+		for _, s := range svcs {
+			row := serviceRow{
+				Name:        s.Name,
+				ServiceName: unqualifiedServiceName(s.Name, s.Stack),
+				Stack:       s.Stack,
+				Replicas:    int64(s.Replicas),
+				Desired:     int64(s.Desired),
+				Image:       s.Image,
+				Mode:        s.Mode,
+				Updated:     s.Updated,
+				Converged:   s.Desired > 0 && s.Replicas >= s.Desired,
+				Short:       s.Replicas < s.Desired,
+				Paused:      s.Desired == 0,
+				Routable:    s.Stack != "",
+			}
+			d.Services = append(d.Services, row)
+		}
+	}
 	return d
 }
 
