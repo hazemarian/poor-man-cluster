@@ -100,6 +100,22 @@ services:
         - "traefik.http.routers.pmcluster-api.tls.certresolver=letsencrypt"
         - "traefik.http.routers.pmcluster-api.middlewares=cors-default@file"
         - "traefik.http.services.pmcluster.loadbalancer.server.port=8042"
+        # OpenObserve SSO bridge: observ.<domain>/sso-bridge is served by the
+        # edge console (not OpenObserve) so its JS can write the localStorage
+        # envelope OO's SPA needs after the GitHub SSO gate. Same middlewares
+        # as the openobserve router (cors + the active auth gate); the path is
+        # specific enough to win over the openobserve router's Host-only rule.
+        - "traefik.http.routers.sso-bridge.rule=Host(`observ.${DOMAIN}`) && Path(`/sso-bridge`)"
+        - "traefik.http.routers.sso-bridge.entrypoints=websecure"
+        - "traefik.http.routers.sso-bridge.tls=true"
+        - "traefik.http.routers.sso-bridge.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.sso-bridge.priority=1000"
+        [[- if .SSOEnabled]]
+        - "traefik.http.routers.sso-bridge.middlewares=cors-default@file,sso-auth@file"
+        [[- else]]
+        - "traefik.http.routers.sso-bridge.middlewares=cors-default@file,admin-auth@file"
+        [[- end]]
+        - "traefik.http.routers.sso-bridge.service=pmcluster"
       resources:
         reservations:
           cpus: '0.05'

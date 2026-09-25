@@ -1118,3 +1118,50 @@ func TestLoadComposeFile_ResolvesConfigSecretRefs(t *testing.T) {
 		t.Errorf("observability-stack missing otel config name in output")
 	}
 }
+
+// TestLoadComposeFile_EdgeSSOBridge verifies the edge stack carries the
+// sso-bridge router labels that serve the OpenObserve SSO bootstrap page on
+// the observ origin.
+func TestLoadComposeFile_EdgeSSOBridge(t *testing.T) {
+	out, err := LoadComposeFile(StackEdge, RenderInput{
+		Domain:               "example.com",
+		EdgeImage:            "ghcr.io/hazemarian/pmcluster-edge:v9",
+		SSOEnabled:           true,
+		EdgeLoginDisabled:    true,
+		OpenObserveBasicAuth: "Basic abc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, want := range []string{
+		"traefik.http.routers.sso-bridge.rule=Host(`observ.example.com`) && Path(`/sso-bridge`)",
+		"traefik.http.routers.sso-bridge.entrypoints=websecure",
+		"traefik.http.routers.sso-bridge.tls=true",
+		"traefik.http.routers.sso-bridge.priority=1000",
+		"traefik.http.routers.sso-bridge.middlewares=cors-default@file,sso-auth@file",
+		"traefik.http.routers.sso-bridge.service=pmcluster",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("rendered edge-stack missing %q", want)
+		}
+	}
+}
+
+// TestLoadComposeFile_EdgeSSOBridgeAdminAuth checks the non-SSO branch uses
+// the admin-auth middleware for the bridge router.
+func TestLoadComposeFile_EdgeSSOBridgeAdminAuth(t *testing.T) {
+	out, err := LoadComposeFile(StackEdge, RenderInput{
+		Domain:            "example.com",
+		EdgeImage:         "ghcr.io/hazemarian/pmcluster-edge:v9",
+		SSOEnabled:        false,
+		EdgeLoginDisabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "traefik.http.routers.sso-bridge.middlewares=cors-default@file,admin-auth@file") {
+		t.Errorf("rendered edge-stack missing admin-auth bridge middleware:\n%s", s)
+	}
+}

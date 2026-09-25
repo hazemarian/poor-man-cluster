@@ -139,6 +139,12 @@ func (a *App) Mount(engine *gin.Engine) {
 	engine.POST(WebBase+"/setup", auth.Setup)
 	engine.POST(WebBase+"/logout", auth.Logout)
 
+	// OpenObserve SSO bridge: served publicly on the observ origin by the edge
+	// console. Writes the localStorage envelope OO's SPA needs (it cannot be
+	// gated by the console session — the browser has no edge session when it
+	// lands here; the Traefik sso-auth middleware upstream is the gate).
+	engine.GET("/sso-bridge", (controllers.SSOBridge{Controller: a.ctrl}).Page)
+
 	g := engine.Group(WebBase)
 	g.Use(a.ctrl.Auth.Require())
 

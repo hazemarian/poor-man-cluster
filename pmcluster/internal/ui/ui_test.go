@@ -1195,3 +1195,31 @@ func TestCoverageWholeDiskBackupVerified(t *testing.T) {
 		t.Error("whole-disk backup must not flag the stack as at risk")
 	}
 }
+
+// TestSSOBridge serves the OpenObserve bootstrap page publicly (no session
+// needed) and bakes the localStorage envelope the OO SPA expects.
+func TestSSOBridge(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	jar := map[string]*http.Cookie{}
+
+	// No login, no session — the bridge must be public.
+	resp := doRequest(t, app, http.MethodGet, "/sso-bridge", "", jar)
+	b := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /sso-bridge = %d, want 200; body: %s", resp.StatusCode, b)
+	}
+	for _, want := range []string{
+		"localStorage.setItem(\"userInfo\"",
+		"localStorage.setItem(\"currentuser\"",
+		"pgdata: {}",
+		`role: "root"`,
+		"location.replace(\"/web/\")",
+		"btoa(encodeURIComponent(s)",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("sso-bridge missing %q", want)
+		}
+	}
+}
