@@ -3,6 +3,8 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestRenderSystemdUnit(t *testing.T) {
@@ -64,4 +66,47 @@ func TestJoinCommandRegistration(t *testing.T) {
 	if !hasToken || !hasManager {
 		t.Errorf("joinCmd missing --token (hasToken=%v) or --manager (hasManager=%v)", hasToken, hasManager)
 	}
+}
+
+func TestJoinRoleFlagValidated(t *testing.T) {
+	// --role must be worker or manager.
+	for _, bad := range []string{"master", "", "swarm"} {
+		c := setupJoinTestCmd()
+		c.Flags().Set("role", bad)
+		c.Flags().Set("token", "SWMTKN-1-x")
+		c.Flags().Set("manager", "10.0.0.5:2377")
+		err := runJoin(c, nil)
+		if err == nil {
+			t.Fatalf("expected error for --role %q, got nil", bad)
+		}
+		if !strings.Contains(err.Error(), "--role must be 'worker' or 'manager'") {
+			t.Fatalf("unexpected error for --role %q: %v", bad, err)
+		}
+	}
+}
+
+func TestJoinRequiresTokenAndManager(t *testing.T) {
+	c := setupJoinTestCmd()
+	c.Flags().Set("role", "worker")
+	c.Flags().Set("token", "")
+	c.Flags().Set("manager", "10.0.0.5:2377")
+	if err := runJoin(c, nil); err == nil || !strings.Contains(err.Error(), "--token") {
+		t.Fatalf("expected --token error, got %v", err)
+	}
+	c = setupJoinTestCmd()
+	c.Flags().Set("role", "worker")
+	c.Flags().Set("token", "SWMTKN-1-x")
+	c.Flags().Set("manager", "")
+	if err := runJoin(c, nil); err == nil || !strings.Contains(err.Error(), "--manager") {
+		t.Fatalf("expected --manager error, got %v", err)
+	}
+}
+
+// setupJoinTestCmd returns a joinCmd clone whose flags are reset.
+func setupJoinTestCmd() *cobra.Command {
+	c := &cobra.Command{Use: "join"}
+	c.Flags().String("token", "", "")
+	c.Flags().String("manager", "", "")
+	c.Flags().String("role", "worker", "")
+	return c
 }
