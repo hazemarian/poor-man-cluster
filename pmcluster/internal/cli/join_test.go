@@ -32,6 +32,14 @@ func TestRenderSystemdUnit(t *testing.T) {
 	}
 }
 
+// Regression: the systemd unit must run `pmcluster serve`, never the bare
+// binary. A bare ExecStart prints help and exits, crash-looping the service.
+func TestDaemonExecStart_IncludesServe(t *testing.T) {
+	if got := daemonExecStart("/usr/local/bin/pmcluster"); got != "/usr/local/bin/pmcluster serve" {
+		t.Fatalf("daemonExecStart(/usr/local/bin/pmcluster) = %q, want %q", got, "/usr/local/bin/pmcluster serve")
+	}
+}
+
 func TestJoinCommandRegistration(t *testing.T) {
 	if joinCmd == nil {
 		t.Fatal("joinCmd is nil")

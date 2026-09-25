@@ -35,6 +35,13 @@ WantedBy=multi-user.target
 // daemonUnitPath is the systemd unit location. Overridable in tests.
 var daemonUnitPath = "/etc/systemd/system/pmcluster.service"
 
+// daemonExecStart returns the ExecStart command the systemd unit runs. The
+// daemon is the `serve` subcommand — the unit must never run the bare binary
+// (which would print help and exit, crash-looping the service).
+func daemonExecStart(exe string) string {
+	return exe + " serve"
+}
+
 // ensureDaemonRunning installs the pmcluster systemd unit (when missing or
 // stale) and starts/restarts the daemon. On non-Linux hosts or systems without
 // systemctl it prints a hint and returns nil — the daemon can always be run in
@@ -87,7 +94,7 @@ func ensureDaemonRunning(out io.Writer) error {
 		return fmt.Errorf("resolve binary path for unit: %w", err)
 	}
 
-	unit := renderSystemdUnit(pmUser, group, home, exe)
+	unit := renderSystemdUnit(pmUser, group, home, daemonExecStart(exe))
 
 	// Write the unit only when missing or changed (operator edits win).
 	existing, _ := os.ReadFile(daemonUnitPath)
