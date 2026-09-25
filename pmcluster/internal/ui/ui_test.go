@@ -1140,7 +1140,7 @@ func TestShellExternalLinks(t *testing.T) {
 	withDomain := shell("example.com")
 	for _, want := range []string{
 		"External",
-		`href="https://observ.example.com"`,
+		`href="https://observ.example.com/sso-bridge"`,
 		`href="https://traefik.example.com/dashboard/"`,
 	} {
 		if !strings.Contains(withDomain, want) {

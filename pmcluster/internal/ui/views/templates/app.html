@@ -66,7 +66,7 @@
 
       {{if .Domain}}
       <p class="nav-label">{{T "nav.group.external"}}</p>
-      <a class="nav-item" href="https://observ.{{.Domain}}" target="_blank" rel="noopener">{{icon "external"}}<span>{{T "nav.observ"}}</span></a>
+      <a class="nav-item" href="https://observ.{{.Domain}}/sso-bridge" target="_blank" rel="noopener" title="{{T "nav.observ_hint"}}">{{icon "external"}}<span>{{T "nav.observ"}}</span></a>
       <a class="nav-item" href="https://traefik.{{.Domain}}/dashboard/" target="_blank" rel="noopener">{{icon "external"}}<span>{{T "nav.traefik"}}</span></a>
       {{end}}
     </nav>
