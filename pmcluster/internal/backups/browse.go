@@ -190,7 +190,71 @@ func archiveRelPath(name string) string {
 	return clean
 }
 
+// ctlplaneRelPath maps a control-plane archive entry to its path relative to
+// the pmcluster data dir. The control-plane agent archives ${DATA_DIR} under
+// a baked-in `backup/pmcluster` prefix (source mount
+// <data-dir>:/backup/pmcluster:ro), so that prefix is stripped.
+func ctlplaneRelPath(name string) string {
+	clean := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(name)), "/")
+	const prefix = "backup/pmcluster"
+	if clean == prefix {
+		return "."
+	}
+	if strings.HasPrefix(clean, prefix+"/") {
+		return strings.TrimPrefix(clean, prefix+"/")
+	}
+	return clean
+}
+
+// RestoreControlPlane extracts a control-plane backup archive back into the
+// pmcluster data directory (the entry prefix `backup/pmcluster` is stripped,
+// so data.db / .encryption_key / config/ land at the right places). Used by
+// leader-aware failover: a standby manager that becomes swarm leader restores
+// the newest control-plane archive before serving when its local DB is
+// missing or older than the archive.
+func RestoreControlPlane(p, dataDir string) (int, error) {
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return 0, err
+	}
+	return restoreArchiveRel(p, dataDir, ctlplaneRelPath)
+}
+
+// NewestControlPlaneArchive returns the control-plane archive in dir with the
+// most recent modification time (i.e. the newest snapshot of ~/.pmcluster).
+// Returns "" when none exist.
+func NewestControlPlaneArchive(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	var newest string
+	var newestMod int64
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "pmcluster-ctlplane-") || !strings.HasSuffix(e.Name(), ".tar.gz") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Unix() > newestMod {
+			newestMod = info.ModTime().Unix()
+			newest = filepath.Join(dir, e.Name())
+		}
+	}
+	return newest, nil
+}
+
 func restoreArchive(p, target string) (int, error) {
+	return restoreArchiveRel(p, target, archiveRelPath)
+}
+
+// restoreArchiveRel extracts an archive into target, mapping every entry
+// through rel (the prefix-stripping mapper). Raw directories are copied tree.
+func restoreArchiveRel(p, target string, rel func(string) string) (int, error) {
 	info, err := os.Stat(p)
 	if err != nil {
 		return 0, err
@@ -229,7 +293,7 @@ func restoreArchive(p, target string) (int, error) {
 		if err != nil {
 			return count, err
 		}
-		rel := archiveRelPath(hdr.Name)
+		rel := rel(hdr.Name)
 		name := filepath.Join(target, rel)
 		if name != target && !strings.HasPrefix(name, target+string(filepath.Separator)) {
 			return count, fmt.Errorf("archive entry escapes restore dir: %s", hdr.Name)

@@ -101,6 +101,22 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	} else {
 		defer func() { _ = dc.Close() }()
 
+		// Leader-aware daemon: on a multi-manager cluster the daemon serves
+		// ONLY on the current Swarm leader; other managers stand by until
+		// Swarm elects them leader (failover). Standalone/local mode returns
+		// immediately.
+		if err := waitForSwarmLeadership(cmd.Context(), dc, log); err != nil {
+			return fmt.Errorf("standby: %w", err)
+		}
+
+		// Control-plane freshness: when this node was a standby and just
+		// became leader, restore the newest control-plane backup if the local
+		// DB is missing or older than it. Shared/replicated storage (LINSTOR)
+		// keeps the DB current on every manager — never clobber a fresh DB.
+		if _, err := ensureControlPlaneFresh(cmd.Context(), cfg, log); err != nil {
+			return fmt.Errorf("control-plane restore: %w", err)
+		}
+
 		checkConfigVersions(cmd.Context(), dc, log)
 	}
 

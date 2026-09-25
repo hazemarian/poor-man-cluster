@@ -173,3 +173,72 @@ func TestLocalPruneRemovesOldRowsAndFiles(t *testing.T) {
 		t.Errorf("new archive file must survive, err = %v", err)
 	}
 }
+
+func TestRestoreControlPlane_StripsPrefix(t *testing.T) {
+	dir := t.TempDir()
+	// Control-plane archive: offen mounts ${DATA_DIR}:/backup/pmcluster, so
+	// entries carry the backup/pmcluster/ prefix.
+	writeTarGzDirs(t, dir, "pmcluster-ctlplane-node1-2026-09-25T03-00-00.tar.gz", "backup/pmcluster", map[string]string{
+		"data.db":            "sqlite-bytes",
+		".encryption_key":    "key-material",
+		"config/config.yaml": "listen_addr: 0.0.0.0:9090",
+	})
+	newest, err := NewestControlPlaneArchive(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newest == "" {
+		t.Fatal("expected a control-plane archive to be found")
+	}
+	dataDir := t.TempDir()
+	n, err := RestoreControlPlane(newest, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 {
+		t.Fatalf("restored %d files, want 3", n)
+	}
+	// Files must land at dataDir/<rel> — no backup/pmcluster/ prefix.
+	for rel, want := range map[string]string{
+		"data.db":            "sqlite-bytes",
+		".encryption_key":    "key-material",
+		"config/config.yaml": "listen_addr: 0.0.0.0:9090",
+	} {
+		b, err := os.ReadFile(filepath.Join(dataDir, rel))
+		if err != nil {
+			t.Fatalf("read restored %s: %v", rel, err)
+		}
+		if string(b) != want {
+			t.Fatalf("restored %s = %q, want %q", rel, b, want)
+		}
+	}
+}
+
+func TestNewestControlPlaneArchive_PicksNewest(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "pmcluster-ctlplane-n1-2026-09-24T03-00-00.tar.gz")
+	newf := filepath.Join(dir, "pmcluster-ctlplane-n1-2026-09-25T03-00-00.tar.gz")
+	for _, p := range []string{old, newf} {
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Force the old one to be strictly older.
+	os.Chtimes(old, time.Now().Add(-48*time.Hour), time.Now().Add(-48*time.Hour))
+	got, err := NewestControlPlaneArchive(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != newf {
+		t.Fatalf("picked %q, want %q", got, newf)
+	}
+	// Empty dir → empty result, no error.
+	empty := t.TempDir()
+	got, err = NewestControlPlaneArchive(empty)
+	if err != nil {
+		t.Fatalf("empty dir should not error: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("empty dir returned %q, want ''", got)
+	}
+}
