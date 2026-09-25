@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,16 +33,22 @@ func TestIsSwarmLeader_HappyPath(t *testing.T) {
 		{ID: "n1", Hostname: "mgr1", IsLeader: false},
 		{ID: "n2", Hostname: "mgr2", IsLeader: true},
 	}}
-	leader, err := isSwarmLeader(context.Background(), f, "mgr2")
+	leader, found, err := isSwarmLeader(context.Background(), f, "mgr2")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("expected mgr2 to be found")
 	}
 	if !leader {
 		t.Fatal("expected mgr2 to be leader")
 	}
-	notLeader, err := isSwarmLeader(context.Background(), f, "mgr1")
+	notLeader, found, err := isSwarmLeader(context.Background(), f, "mgr1")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !found {
+		t.Fatal("expected mgr1 to be found")
 	}
 	if notLeader {
 		t.Fatal("expected mgr1 to not be leader")
@@ -52,8 +59,59 @@ func TestIsSwarmLeader_NodeNotFound(t *testing.T) {
 	f := &leaderFake{nodes: []runtime.Node{
 		{ID: "n1", Hostname: "mgr1", IsLeader: true},
 	}}
-	if _, err := isSwarmLeader(context.Background(), f, "ghost"); err == nil {
-		t.Fatal("expected error for unknown hostname")
+	leader, found, err := isSwarmLeader(context.Background(), f, "ghost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Fatal("expected ghost not to be found")
+	}
+	if leader {
+		t.Fatal("expected ghost not to be leader")
+	}
+}
+
+func TestWaitForSwarmLeadership_NodeListErrorServesImmediately(t *testing.T) {
+	// Docker unreachable (NodeList errors) must NOT block — standalone/local
+	// mode serves right away instead of standing by forever.
+	f := &leaderFake{nodeErr: errors.New("Cannot connect to the Docker daemon")}
+	if err := waitForSwarmLeadership(context.Background(), f, zerolog.Nop()); err != nil {
+		t.Fatalf("expected immediate return on NodeList error, got %v", err)
+	}
+}
+
+func TestWaitForSwarmLeadership_NodeNotInSwarmServesImmediately(t *testing.T) {
+	// A host that is not a swarm member (no node with our hostname) must not
+	// block — treat it as standalone/local.
+	f := &leaderFake{nodes: []runtime.Node{{ID: "n1", Hostname: "someone-else", IsLeader: true}}}
+	if err := waitForSwarmLeadership(context.Background(), f, zerolog.Nop()); err != nil {
+		t.Fatalf("expected immediate return for non-member, got %v", err)
+	}
+}
+
+func TestWaitForSwarmLeadership_NonLeaderStandby(t *testing.T) {
+	// A confirmed non-leader manager (this host in the node list, not leader)
+	// blocks in standby until cancelled.
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := &leaderFake{nodes: []runtime.Node{{ID: "n1", Hostname: host, IsLeader: false}}}
+	done := make(chan error, 1)
+	go func() {
+		done <- waitForSwarmLeadership(ctx, f, zerolog.Nop())
+	}()
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("expected standby to block, returned early: %v", err)
+	default:
+	}
+	cancel()
+	if err := <-done; err != context.Canceled {
+		t.Fatalf("expected context.Canceled after cancel, got %v", err)
 	}
 }
 

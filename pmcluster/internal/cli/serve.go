@@ -53,10 +53,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
-	}
-
 	log, logCloser, err := logger.New(logger.Options{
 		LogsDir: cfg.LogsDir(),
 		Level:   cfg.LogLevel,
@@ -89,12 +85,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 	}()
 
-	st, err := store.Open(cfg.DBPath())
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
-	}
-	defer func() { _ = st.Close() }()
-
 	dc, dockerErr := docker.New()
 	if dockerErr != nil {
 		log.Warn().Err(dockerErr).Msg("docker client init failed; /api/cluster/info disabled")
@@ -119,6 +109,19 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 		checkConfigVersions(cmd.Context(), dc, log)
 	}
+
+	// The store is opened only after the leadership + control-plane-restore
+	// block: a standby node (non-leader) has no local DB yet, and on promotion
+	// the restore must happen BEFORE the DB is opened so the restored control
+	// plane is what gets served.
+	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
+		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` (or `pmcluster join` on a joining node)", cfg.DataDir)
+	}
+	st, err := store.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer func() { _ = st.Close() }()
 
 	if err := replayRegistryLogins(cmd.Context(), st, cfg, log); err != nil {
 		log.Warn().Err(err).Msg("registry re-login had issues; private images may fail to pull")

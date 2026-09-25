@@ -25,7 +25,8 @@ var controlPlaneArchiveDir = backups.DefaultArchiveDir
 // Swarm leader (or the context is cancelled). Non-leader managers run as
 // standby: the daemon does NOT serve — it polls until Swarm elects this node
 // leader (failover), then the caller proceeds to open the store and serve.
-// When Docker is unavailable (standalone/local mode) it returns immediately.
+// It returns immediately when Docker is unavailable or the node is not a
+// swarm member (standalone/local mode) — only a confirmed non-leader blocks.
 func waitForSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Logger) error {
 	if dc == nil {
 		return nil
@@ -37,10 +38,16 @@ func waitForSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.
 	t := time.NewTicker(leaderPollInterval)
 	defer t.Stop()
 	for {
-		leader, err := isSwarmLeader(ctx, dc, host)
+		leader, found, err := isSwarmLeader(ctx, dc, host)
 		switch {
 		case err != nil:
-			log.Warn().Err(err).Msg("leader check failed; will retry")
+			// Docker unreachable: can't confirm swarm membership — treat as
+			// standalone/local and serve immediately.
+			log.Warn().Err(err).Msg("leader check unavailable; serving (standalone/local mode)")
+			return nil
+		case !found:
+			log.Warn().Str("node", host).Msg("node not in swarm node list; serving (standalone/local mode)")
+			return nil
 		case leader:
 			return nil
 		default:
@@ -56,17 +63,18 @@ func waitForSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.
 
 // isSwarmLeader reports whether the node with the given hostname is the
 // current Swarm leader, per the Raft-elected leader flag on the node list.
-func isSwarmLeader(ctx context.Context, dc runtime.Client, host string) (bool, error) {
+// found is false when the hostname is not present in the node list.
+func isSwarmLeader(ctx context.Context, dc runtime.Client, host string) (leader, found bool, err error) {
 	nodes, err := dc.NodeList(ctx)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	for _, n := range nodes {
 		if n.Hostname == host {
-			return n.IsLeader, nil
+			return n.IsLeader, true, nil
 		}
 	}
-	return false, fmt.Errorf("node %q not found in swarm node list", host)
+	return false, false, nil
 }
 
 // ensureControlPlaneFresh restores the newest control-plane archive when the

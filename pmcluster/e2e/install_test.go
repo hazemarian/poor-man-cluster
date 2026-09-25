@@ -34,8 +34,9 @@ func installScriptPath(t *testing.T) string {
 }
 
 // TestInstallScriptSystemdUnit validates that install.sh, when run in a
-// simulated Linux environment (PMCLUSTER_FAKE_OS=linux), produces a
-// systemd unit file with correct User, Group, HOME, and ExecStart.
+// simulated Linux environment (PMCLUSTER_FAKE_OS=linux), NO LONGER writes a
+// systemd unit file — daemon management moved to the CLI (cluster up/update,
+// join). install.sh only installs the binary + prints the daemon hints.
 func TestInstallScriptSystemdUnit(t *testing.T) {
 	_ = installScriptPath(t)
 
@@ -105,50 +106,26 @@ func TestInstallScriptSystemdUnit(t *testing.T) {
 		}
 	})
 
-	t.Run("unit template is well-formed", func(t *testing.T) {
-
-		unitContent := fmt.Sprintf(`[Unit]
-Description=pmcluster API Server
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=simple
-User=testuser
-Group=docker
-Environment=HOME=/home/testuser
-ExecStart=/usr/local/bin/pmcluster serve
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-`)
-
-		required := []string{
-			"[Unit]",
-			"Description=pmcluster API Server",
-			"After=docker.service",
-			"Requires=docker.service",
-			"[Service]",
-			"Type=simple",
-			"User=testuser",
-			"Group=docker",
-			"Environment=HOME=/home/testuser",
-			"ExecStart=/usr/local/bin/pmcluster serve",
-			"Restart=always",
-			"RestartSec=5",
-			"[Install]",
-			"WantedBy=multi-user.target",
+	t.Run("install.sh does not write the systemd unit", func(t *testing.T) {
+		// The systemd block was REMOVED from install.sh — the daemon is now
+		// managed by the CLI (cluster up/update, join). Assert the script no
+		// longer contains the ExecStart unit template.
+		data, err := os.ReadFile(installScriptPath(t))
+		if err != nil {
+			t.Fatalf("read install.sh: %v", err)
 		}
-		for _, r := range required {
-			if !strings.Contains(unitContent, r) {
-				t.Errorf("unit template missing: %q", r)
+		for _, forbidden := range []string{
+			"/etc/systemd/system/pmcluster.service",
+			"ExecStart=${PREFIX}/pmcluster serve",
+			"systemctl enable pmcluster",
+			"Installing systemd service",
+		} {
+			if strings.Contains(string(data), forbidden) {
+				t.Errorf("install.sh must not contain systemd management (%q) — moved to the CLI", forbidden)
 			}
 		}
-
-		if strings.Contains(unitContent, "${") {
-			t.Errorf("unit template contains unresolved variables:\n%s", unitContent)
+		if !strings.Contains(string(data), "pmcluster join") {
+			t.Errorf("install.sh should hint at 'pmcluster join' for swarm nodes")
 		}
 	})
 
@@ -156,30 +133,22 @@ WantedBy=multi-user.target
 	_ = prefix
 }
 
-// TestInstallScriptDarwinSkip ensures the systemd block is skipped on
-// non-Linux (macOS). On Darwin the script should print the manual "pmcluster serve" hint.
+// TestInstallScriptDarwinSkip ensures install.sh prints the foreground-daemon
+// hint on non-Linux (macOS) — it never installs systemd.
 func TestInstallScriptDarwinSkip(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("this test verifies Darwin behaviour; only runs on macOS")
 	}
 
-	out, err := exec.Command("bash", "-c", `
-		OS=darwin PREFIX=/usr/local/bin
-		if [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
-			echo "INSTALLED_SYSTEMD=yes"
-		else
-			echo "INSTALLED_SYSTEMD=no"
-			echo "pmcluster serve"
-		fi
-	`).CombinedOutput()
+	data, err := os.ReadFile(installScriptPath(t))
 	if err != nil {
-		t.Fatalf("darwin skip test: %v\n%s", err, out)
+		t.Fatalf("read install.sh: %v", err)
 	}
-	if strings.Contains(string(out), "INSTALLED_SYSTEMD=yes") {
-		t.Error("systemd block should not execute on Darwin")
+	if strings.Contains(string(data), "/etc/systemd/system/pmcluster.service") {
+		t.Error("install.sh must not reference systemd units (daemon is CLI-managed)")
 	}
-	if !strings.Contains(string(out), "pmcluster serve") {
-		t.Errorf("expected 'pmcluster serve' hint in fallback, got:\n%s", out)
+	if !strings.Contains(string(data), "pmcluster serve") {
+		t.Errorf("expected 'pmcluster serve' foreground hint in install.sh, got:\n%s", data)
 	}
 }
 

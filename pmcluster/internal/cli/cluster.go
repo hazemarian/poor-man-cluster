@@ -145,6 +145,12 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	printUpdateResult(cmd.OutOrStdout(), res)
+
+	// The daemon is managed by the CLI now (not install.sh): make sure it is
+	// installed + running with the current binary.
+	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+		return fmt.Errorf("ensure daemon running: %w", err)
+	}
 	return nil
 }
 
@@ -289,6 +295,12 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 	}
 
 	printUpResult(cmd.OutOrStdout(), in, res)
+
+	// The daemon is managed by the CLI now (not install.sh): make sure it is
+	// installed + running with the current binary.
+	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+		return fmt.Errorf("ensure daemon running: %w", err)
+	}
 	return nil
 }
 
