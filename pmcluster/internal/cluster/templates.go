@@ -108,6 +108,19 @@ type RenderInput struct {
 	// one password everywhere — no provisioning API calls.
 	OpenObserveBasicAuth string
 
+	// OpenObserveSessionCookie is the auth_tokens cookie value the OpenObserve
+	// SPA needs to consider a browser session authenticated. OO's web session
+	// is cookie-based, NOT header-based: the SPA self-navigates to /web/login
+	// when this cookie is absent even though the injected Authorization header
+	// authenticates the API. The value is a plain base64url JSON envelope —
+	// {"access_token":"Basic <base64(email:password)>","refresh_token":""} —
+	// with the SAME access_token as OpenObserveBasicAuth, so it is computed
+	// deterministically and stays correct across password rotations. It is
+	// injected as a Set-Cookie response header by the openobserve-auto-auth
+	// middleware (customResponseHeaders), giving the browser the session cookie
+	// without ever showing OO's login page.
+	OpenObserveSessionCookie string
+
 	// ACMEEmail enables Let's Encrypt automation when non-empty. Mutually
 	// exclusive with operator-supplied cert/key (see cluster.UpInput).
 	ACMEEmail string
@@ -213,6 +226,23 @@ func openObserveBasicAuth(email, password string) string {
 		return ""
 	}
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+password))
+}
+
+// openObserveSessionCookie computes the auth_tokens cookie value OpenObserve
+// issues on POST /auth/login. The cookie is a plain base64url JSON envelope
+// {"access_token":"Basic base64(email:password)","refresh_token":""} — the
+// access_token is exactly the OpenObserveBasicAuth header value, so the cookie
+// is deterministic from the same root credentials. Empty email or password
+// yields an empty string. (Verified live: a cookie computed this way is
+// byte-identical to the one OO mints and authenticates GET /api/default/users
+// with HTTP 200.)
+func openObserveSessionCookie(email, password string) string {
+	basic := openObserveBasicAuth(email, password)
+	if basic == "" {
+		return ""
+	}
+	env := `{"access_token":"` + basic + `","refresh_token":""}`
+	return base64.RawURLEncoding.EncodeToString([]byte(env))
 }
 
 // readConfigFile loads a named file. Resolution order:

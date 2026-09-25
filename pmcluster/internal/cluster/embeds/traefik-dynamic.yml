@@ -26,11 +26,21 @@ http:
     # page is never shown. MUST stay paired with the gate middleware — alone
     # it is a public root credential. The value is base64(<OO root email>:<OO
     # root password>), rendered from the managed openobserve_admin credential.
+    #
+    # The auth_tokens Set-Cookie response header is the SPA half of the fix:
+    # OO's web session is cookie-based (the SPA self-navigates to /web/login
+    # when the cookie is absent even though the header authenticates the API).
+    # The cookie value is the base64url JSON envelope OO itself would mint on
+    # POST /auth/login — {"access_token":"<the same Basic value>","refresh_token":""}
+    # — computed deterministically from the same credential, so it stays valid
+    # across password rotations. 30-day expiry mirrors OO's own session.
     [[- if .OpenObserveBasicAuth]]
     openobserve-auto-auth:
       headers:
         customRequestHeaders:
           Authorization: "[[.OpenObserveBasicAuth]]"
+        customResponseHeaders:
+          Set-Cookie: "auth_tokens=[[.OpenObserveSessionCookie]]; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000"
     [[- end]]
     # cors-default: applied to every exposed/app router emitted by the manifest
     # translator plus those mounted via stack labels (edge console,

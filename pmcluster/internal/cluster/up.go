@@ -256,6 +256,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			OpenObserveAdminEmail:    openobsCred.Username,
 			OpenObserveAdminPassword: openobsCred.Password,
 			OpenObserveBasicAuth:     openObserveBasicAuth(openobsCred.Username, openobsCred.Password),
+			OpenObserveSessionCookie: openObserveSessionCookie(openobsCred.Username, openobsCred.Password),
 			ACMEEmail:                in.ACMEEmail,
 			ConfigDir:                in.ConfigDir,
 			ConfigStore:              deps.Store,
