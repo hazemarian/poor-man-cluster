@@ -39,6 +39,8 @@ type UpdateResult struct {
 	StacksDeployed []string
 }
 
+// UpdateDeps are the collaborators Update needs to reconcile an existing
+// cluster: store, cipher, runtime client, deployer and output sink.
 type UpdateDeps struct {
 	Store    *store.Store
 	Cipher   *credentials.Cipher

@@ -8,12 +8,14 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
+// DownInput controls a cluster teardown.
 type DownInput struct {
 	// Purge removes pmcluster-managed secrets, configs, and the two
 	// overlay networks. SQLite state is never touched.
 	Purge bool
 }
 
+// DownResult reports what a teardown actually removed.
 type DownResult struct {
 	StacksRemoved   []string
 	SecretsRemoved  []string
@@ -21,6 +23,8 @@ type DownResult struct {
 	NetworksRemoved []string
 }
 
+// DownDeps are the collaborators Down needs: runtime client, deployer and
+// output sink.
 type DownDeps struct {
 	Docker   runtime.Client
 	Deployer StackDeployer

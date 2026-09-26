@@ -6,6 +6,8 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
+// ClusterInfoHandler answers GET /api/cluster/info with node and engine
+// state, or a 503 when Docker is unavailable.
 func ClusterInfoHandler(d runtime.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		info, err := d.Info(r.Context())

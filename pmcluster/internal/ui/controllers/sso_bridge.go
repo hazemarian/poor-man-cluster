@@ -59,6 +59,7 @@ func (b SSOBridge) Page(g *gin.Context) {
 	js := template.JS(`
 const email = "` + template.JS(email) + `";
 const now = Math.floor(Date.now() / 1000);
+// O is the user object written into OpenObserve's localStorage session.
 const O = {
   given_name: email,
   auth_time: now,
@@ -69,6 +70,7 @@ const O = {
   role: "root",
   pgdata: {}
 };
+// Iv is OpenObserve's base64url userInfo encoder (btoa of percent-encoded JSON).
 const Iv = s => btoa(encodeURIComponent(s).replace(/%([0-9A-F]{2})/g, (_, h) => String.fromCharCode(parseInt("0x" + h))));
 localStorage.setItem("userInfo", Iv(JSON.stringify(O)));
 localStorage.setItem("currentuser", JSON.stringify(O));

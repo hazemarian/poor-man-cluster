@@ -1,5 +1,5 @@
 ---
-name: poor-man-stack-deploy
+name: poor-man-cluster-deploy
 description: >
   Deploy services onto a Poor Man's Stack cluster using the pmcluster CLI, REST API,
   or the operator console. Covers the pmcluster DSL manifest format, deploy/rollback/
@@ -13,7 +13,7 @@ description: >
 
 # Poor Man's Stack — Deploy Skill
 
-Deploy applications to a Docker Swarm cluster managed by `pmcluster`, the control plane from [poor-man-stack](https://github.com/hazemarian/poor-man-cluster).
+Deploy applications to a Docker Swarm cluster managed by `pmcluster`, the control plane from [poor-man-cluster](https://github.com/hazemarian/poor-man-cluster).
 
 **Public origin:** everything (console + REST API + webhooks) is served at `https://pmcluster.<your-domain>` by the `pmcluster-edge` service. The daemon itself listens only on `http://127.0.0.1:9090` (host-local).
 

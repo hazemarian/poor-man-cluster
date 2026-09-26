@@ -20,7 +20,7 @@ var apiURL, apiToken string
 // rootCmd is the top-level pmcluster command.
 var rootCmd = &cobra.Command{
 	Use:   "pmcluster",
-	Short: "Control plane for the poor-man-stack Docker Swarm cluster",
+	Short: "Control plane for the poor-man-cluster Docker Swarm",
 	Long: `pmcluster is a single-binary control plane for a poor-man's Docker Swarm
 cluster. It bootstraps the cluster (pmcluster cluster up), serves a REST/webhook
 API for application deployments (pmcluster serve), and exposes a CLI for the

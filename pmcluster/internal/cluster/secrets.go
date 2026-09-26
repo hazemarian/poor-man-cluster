@@ -68,6 +68,8 @@ func EnsureSecret(ctx context.Context, d runtime.Client, name string, data []byt
 	return true, nil
 }
 
+// EnsureSecretFromFile creates or refreshes a Docker secret whose payload is
+// read from path, returning whether the secret was (re)created.
 func EnsureSecretFromFile(ctx context.Context, d runtime.Client, name, path string) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

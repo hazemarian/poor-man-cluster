@@ -107,6 +107,8 @@ type Deps struct {
 	Services services.Service
 }
 
+// New assembles the chi router from the optional Deps; every nil dependency
+// simply omits its routes.
 func New(d Deps) http.Handler {
 	r := chi.NewRouter()
 

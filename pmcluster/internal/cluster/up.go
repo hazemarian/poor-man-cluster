@@ -31,6 +31,7 @@ var ensureStorageDirs = func(volumeRoot string) error {
 	return nil
 }
 
+// UpInput carries the bootstrap parameters for a fresh cluster install.
 type UpInput struct {
 	Domain string
 	// Either CertPath+KeyPath OR ACMEEmail must be set; mutually exclusive.
@@ -60,6 +61,9 @@ type UpResult struct {
 	BootstrapCredentials map[string]*ManagedCredential
 }
 
+// UpDeps are the collaborators Up needs: the control-plane store, the
+// credential cipher, the runtime client, the stack deployer and a sink for
+// workflow output.
 type UpDeps struct {
 	Store    *store.Store
 	Cipher   *credentials.Cipher

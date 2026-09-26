@@ -7,6 +7,8 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
+// StatusReport summarises cluster state for the status command: preflight
+// result, node identity, engine version, and swarm membership.
 type StatusReport struct {
 	Preflight     error
 	NodeName      string

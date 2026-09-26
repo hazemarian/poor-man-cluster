@@ -94,6 +94,9 @@ func EdgeImageFor() string {
 	return EdgeImageBase + ":latest"
 }
 
+// RenderInput carries every value a platform stack template may reference,
+// resolved from the store, managed credentials, and the TLS state before the
+// cluster workflow renders the embedded compose files.
 type RenderInput struct {
 	Domain                   string
 	OpenObserveAdminEmail    string
@@ -597,6 +600,9 @@ func parseSegment(s string) int {
 	return n
 }
 
+// CORSOriginRegex builds a match-any-hostname regex for the given domain,
+// used for CORS allow-list middleware on routed services. An invalid domain
+// yields a match-nothing regex so routes stay closed.
 func CORSOriginRegex(domain string) string {
 	if !validDomain.MatchString(domain) {
 

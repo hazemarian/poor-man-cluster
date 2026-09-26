@@ -108,7 +108,7 @@ repo root (this dir)
 │   ├── webhook.md             # CI webhook integration guide
 │   └── dsl.md                 # DSL reference
 ├── install.sh                 # curl|bash installer (binary + systemd + auto cluster up/update)
-├── skills/poor-man-stack-deploy/SKILL.md   # deployment skill for agents
+├── skills/poor-man-cluster-deploy/SKILL.md   # deployment skill for agents
 ├── .github/workflows/
 │   ├── pmcluster.yml          # build gate: lint + build + unit + fast e2e
 │   ├── swarm-e2e.yml          # informational real-swarm e2e (never blocks)

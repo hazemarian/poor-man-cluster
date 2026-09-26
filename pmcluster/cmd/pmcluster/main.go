@@ -1,5 +1,5 @@
 // Command pmcluster is the control-plane CLI and HTTP daemon for the
-// poor-man-stack Docker Swarm cluster.
+// poor-man-cluster Docker Swarm cluster.
 package main
 
 import (

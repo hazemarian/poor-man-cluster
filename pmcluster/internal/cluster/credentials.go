@@ -44,11 +44,14 @@ type ManagedCredential struct {
 	UsernameChanged    bool
 }
 
+// BootstrapInput names the operator-facing accounts minted on first install.
 type BootstrapInput struct {
 	TraefikAdminUser      string
 	OpenObserveAdminEmail string
 }
 
+// CredentialsManager owns the managed-credential lifecycle: mint, rotate,
+// ensure, and mirror ciphertext into Swarm secrets.
 type CredentialsManager struct {
 	Store    *store.Store
 	Cipher   *credentials.Cipher

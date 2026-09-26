@@ -21,6 +21,8 @@ type Stack struct {
 	UpdatedAt  int64
 }
 
+// StackRevision records one deployed version of a stack: the source DSL, the
+// rendered compose, and the checksum used to skip no-op syncs.
 type StackRevision struct {
 	StackName    string
 	Revision     int64
@@ -36,7 +38,10 @@ type StackRevision struct {
 	CreatedAt   int64
 }
 
+// ErrStackNotFound indicates a stack row does not exist.
 var ErrStackNotFound = errors.New("stack not found")
+
+// ErrRevisionNotFound indicates a revision row does not exist.
 var ErrRevisionNotFound = errors.New("revision not found")
 
 // RecordDeploy atomically inserts the new revision and upserts the stack

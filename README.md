@@ -122,7 +122,7 @@ the CLI can run off-node with `--api-url`). See
 inventory.
 
 ```
-poor-man-stack/
+poor-man-cluster/
 ├── pmcluster/                          # Go control plane (Cobra CLI + HTTP daemon)
 │   ├── cmd/pmcluster/                  # entry point
 │   ├── cmd/edge/                       # pmcluster-edge binary (console + smart proxy)

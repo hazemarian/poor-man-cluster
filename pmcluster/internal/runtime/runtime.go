@@ -73,6 +73,7 @@ type Client interface {
 	Close() error
 }
 
+// Ping reports the engine's API version and OS type.
 type Ping struct {
 	APIVersion   string
 	OSType       string
@@ -176,6 +177,8 @@ type ExecResult struct {
 	Stderr   string
 }
 
+// Node describes one swarm node; IsLeader identifies the Raft leader the
+// control-plane daemon follows.
 type Node struct {
 	ID            string
 	Hostname      string
@@ -189,6 +192,7 @@ type Node struct {
 	UpdatedAt     int64
 }
 
+// JoinTokens carries the worker and manager join tokens for new nodes.
 type JoinTokens struct {
 	Worker  string
 	Manager string
