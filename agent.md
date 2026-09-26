@@ -628,7 +628,7 @@ go test -timeout 10m -tags=e2e -count=1 ./e2e/...
 CI workflows: `pmcluster.yml` (lint+build+unit+smoke e2e) gates main;
 `swarm-e2e.yml` (non-blocking real-swarm e2e); `release.yml` on v* tags
 cross-compiles 4 tarballs + SHA256SUMS + builds/pushes pmcluster-edge image
-to `ghcr.io/nextrum-sy`.
+to `ghcr.io/hazemarian/pmcluster-edge`.
 
 Release flow for the node: tag → `install.sh | VERSION=vX bash` → verify
 daemon `/health`, edge image pin, console 302 → `/web/`, `pmcluster tls site show`.

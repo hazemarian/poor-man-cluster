@@ -7,16 +7,16 @@ the whitelisted replacement so Portainer can be removed from the infra
 stack entirely.
 
 **Security invariant: no raw `docker <anything>` passthrough.** Arbitrary
-Docker API access is root-on-host. Every new endpoint maps to a fixed,
+Docker API access is root-on-host. Every endpoint maps to a fixed,
 code-reviewed Docker SDK call behind the existing Bearer auth and edge rate
 limiter. Nothing user-controlled ever reaches the daemon except a service
 name, a stack name, an integer tail count, and an argv slice for `exec`.
 
-**Status: implemented** (service-ops v0.2.43). The `services` domain, HTTP
-routes, remote adapter, CLI group, and console Services tab are all live and
-unit-tested; the `infra` stack no longer ships Portainer. Interactive
-`docker exec -it` and follow-mode log streaming remain out of scope (SSH is
-the path) — see §7.
+**Status: implemented.** The `services` domain, HTTP routes, remote
+adapter, CLI group, and console surface are live and unit-tested; the
+`infra` stack no longer ships Portainer. Interactive `docker exec -it`
+and follow-mode log streaming remain out of scope (SSH is the path) — see
+§7.
 
 ---
 
@@ -136,9 +136,12 @@ Validation rules (fail fast, before touching Docker):
 - `exec.argv` max 16 elements, each ≤ 200 bytes; empty argv → 400.
 - `tail` clamps to `[1, 2000]`.
 
-Rate limiting: these POSTs inherit the existing general per-IP limiter in
-`server.go`. Exec/restart are inherently safe because the call graph is
-fixed; the permissive burst is fine.
+Rate limiting: these POSTs are gated by the **edge proxy's** per-IP
+limiter (`internal/edgeproxy` — 200 req/s on `/api/*`, 40/s on
+`/webhook/*`, with auto-ban), not by anything in the daemon's
+`server.go`. The daemon on `127.0.0.1:9090` is deliberately unthrottled
+(host-local by design). Exec/restart are inherently safe because the call
+graph is fixed; the permissive burst is fine.
 
 ## 4. CLI commands (`internal/cli/service.go`, new file)
 
@@ -168,26 +171,29 @@ Notes:
   the remote adapter is the same `remote.Client.do` used by every other
   data command.
 
-## 5. Console buttons (`internal/ui`)
+## 5. Console surface (`internal/ui`)
 
-Extends the existing gin+HTMX pattern (`internal/ui/ui.go`, controllers,
-`internal/ui/pmapi/client.go`).
+The operator console (`pmcluster-edge`, served at
+`https://pmcluster.<domain>/web/`) exposes the service operations through
+the gin+HTMX SPA.
 
-- `pmapi/client.go`: `ListServices`, `ServiceTasks`, `ServiceLogs`,
-  `ServiceRestart`, `ServiceExec` — thin wrappers over `Client.do`, with
-  DTOs in `models.go`.
-- `frag_stack.html`: add a **Services** card listing the stack's services
-  with replica counts and a **Restart** button
-  (`hx-post="/stacks/{name}/services/{service}/restart"`, `hx-confirm`).
-- `frag_stacks.html`: add a "health" link from each stack row → services
-  view; keep the list uncluttered.
-- New controller `controllers/services.go` + routes in `ui.go`:
-  - `GET /stacks/{name}/services` — health table (service, replicas,
-    desired, image, restart button, "logs" link).
-  - `GET /stacks/{name}/services/{service}/logs` — tail pane.
-  - `POST /stacks/{name}/services/{service}/restart` — HTMX fragment re-render.
-- All fragments re-render into `#view` exactly like the existing
-  rollback/remove flows; zero JS beyond HTMX attributes.
+- **Stack detail page** — each stack has a standalone page at
+  `GET /web/stacks/{name}` (`internal/ui/controllers/stacks.go`). Its
+  **Services in this stack** panel lists the stack's swarm services with
+  replica health (pills: running / degraded / inactive), image (digest
+  trimmed via `shortImage`, full ref on hover), mode, and updated time.
+  Per service: **Tasks**, **Logs**, and **Restart** buttons.
+- **Service detail** — `GET /web/services/{stack}/{service}/tasks|logs`
+  (tabs), `POST /web/services/{stack}/{service}/restart|exec` (exec argv
+  form). Logs poll every 3s into a dedicated `frag_servicelogs.html`
+  fragment (`?tail=200&fragment=logs`) so the panel refreshes without
+  re-rendering the page.
+- **pmapi client** (`internal/ui/pmapi/client.go`): `ListServices`,
+  `ServiceTasks`, `ServiceLogs`, `RestartService`, `ExecService` — thin
+  wrappers over `Client.do`, DTOs in `models.go`.
+- All actions are HTMX fragments re-rendered into `#view`; zero JS beyond
+  HTMX attributes. All strings go through the i18n dictionaries
+  (`internal/ui/views/i18n`, see `docs/console-i18n-contract.md`).
 
 ## 6. Phase order (each lands green + unit tested)
 

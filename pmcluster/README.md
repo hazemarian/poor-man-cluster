@@ -1,6 +1,6 @@
 # pmcluster
 
-Single-binary control plane for the [poor-man-stack](../README.md) Docker Swarm cluster.
+Single-binary control plane for the [poor-man-cluster](../README.md) Docker Swarm cluster.
 It owns cluster bootstrap, application deploys (via a small DSL that translates to
 Compose), HMAC-verified webhooks for CI, registry credentials, bootstrap-password
 generation, per-host TLS certificates, API tokens, on-demand offen backups,
@@ -18,17 +18,27 @@ The daemon listens on `127.0.0.1:9090` (host-only). Public access goes through
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | bash
 ```
 
-Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.71`.
-On Linux, `install.sh` also drops a systemd unit at `contrib/systemd/pmcluster.service`.
+Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.84`.
+On Linux, `install.sh` only installs the binary — the daemon is started by the
+CLI itself: `cluster up`, `cluster update`, and `join` write
+`/etc/systemd/system/pmcluster.service` (`ExecStart=… pmcluster serve`) and
+( re)start it. `contrib/systemd/pmcluster.service` is a reference template for
+hand-rolled setups.
 
 ## Quick start
 
 ```bash
-docker swarm init                # 1. cluster
-pmcluster init                   # 2. bootstrap config (admin name, etc.)
-pmcluster cluster up             # 3. infra + edge + observability + backup stacks
-pmcluster serve                  # 4. run the daemon (supervise via systemd / brew services)
+docker swarm init                          # 1. cluster
+pmcluster init                             # 2. bootstrap config (admin name, etc.)
+pmcluster cluster up --openobserve-email=admin@example.com \
+    --acme-email=ops@example.com --domain=example.com   # 3. infra + edge + observability + backup stacks
+                                            #    (also installs + starts the daemon)
 ```
+
+`cluster up` requires `--openobserve-email` (the OpenObserve admin login, used
+by the OTel collector and the console's OpenObserve link); it installs and
+starts the daemon via systemd — no separate `pmcluster serve` step. The
+interactive `pmcluster setup` wizard collects the same inputs.
 
 After bootstrap, application deployments arrive via webhook, REST API, or CLI:
 `pmcluster deploy ./app.yaml`.
@@ -49,11 +59,12 @@ make build         # → ./bin/pmcluster
 | Command | Purpose |
 |---------|---------|
 | `init` | Bootstrap config (flags: `--admin-name`, `--force` destructive) |
-| `serve` | Run the HTTP daemon (REST API + webhook receiver) |
+| `serve` | Run the HTTP daemon (REST API + webhook receiver); leader-aware — serves only on the Swarm leader, standby on non-leader managers (15 s poll), standalone/local mode serves immediately |
 | `cluster up/update/down/status` | Bring the stack up (init-only), content-aware reconcile (DB source of truth, `rendered_hash`), tear down, or show status |
-| `cluster settings/get/set` | List, get, or set cluster settings (12 allowlisted keys; secret keys masked) |
+| `cluster settings/get/set` | List, get, or set cluster settings (13 allowlisted keys; secret keys masked) |
 | `setup` | Interactive wizard: collect cluster config then run cluster up/update |
-| `deploy <manifest.yaml>` | DSL-based deploy (flags: `--app`, `--repo`, `--version`) |
+| `join --role worker\|manager --token … --manager <host>:2377` | Join this host to the Swarm, verify the joined role, initialise local control-plane state, and start the daemon |
+| `deploy <manifest.yaml>` | DSL-based deploy (flags: `--app`, `--repo`, `--file`, `--version`) |
 | `stack list/show` | List or inspect deployed stacks |
 | `rollback <stack> <rev>` | Roll back to a previous revision |
 | `backup create/list/browse/restore` | On-demand backups; `browse <id>` lists archive files (TYPE/SIZE/PATH); `restore <id>` extracts to `dest_root/<stack>` |
@@ -62,6 +73,7 @@ make build         # → ./bin/pmcluster
 | `credentials list/show/rotate` | Bootstrap + edge credentials (AES-GCM encrypted) |
 | `registry add/list/remove` | Private registry credentials (docker login) |
 | `tls hosts add/list/remove` | Per-host TLS certificates for customer domains |
+| `tls site show/set` | Inspect or replace the cluster's site certificate |
 | `node list/join-token` | Node and join-token management |
 | `logs` | Cluster/service logs (flags: `--follow`, `--since`, `--tail`, `--all-files`) |
 | `secret` | Manage DB-backed secrets (AES-GCM encrypted, shown as hashes) |
@@ -108,7 +120,7 @@ internal/
   ui/                  operator console (/web base path, RBAC, HTMX); users table
                        with role column; external links observ.<domain> +
                        traefik.<domain>/dashboard/
-  workflow/            named-step runner (up 10 / update 8 / deploy 5 steps)
+  workflow/            named-step runner (up 12 / update 9 / deploy 5 steps)
   telemetry/           OTLP metrics wiring
   logger/              structured JSON audit logs
   buildinfo/           version/commit/date with VCS fallback (Resolve())
@@ -117,24 +129,25 @@ pkg/dsl/               public DSL types
 migrations/            *.sql, embedded via //go:embed
 e2e/                   end-to-end tests (cluster up, deploy, webhook, edge, otel)
 hack/                  dev utilities
-docs/                  openapi.yaml (REST API spec), restore-design.md
+docs/                  openapi.yaml (REST API spec), restore-design.md,
+                       service-ops-design.md, console-i18n-contract.md
 ```
 
 ## Testing
 
 ```bash
 make test           # unit tests
-make e2e            # docker-in-docker end-to-end suite
+make e2e            # end-to-end suite against a real Swarm (requires Docker, may be slow)
 ```
 
 `e2e/` covers cluster-up against a real Swarm, DSL deploys, webhook delivery,
 the edge proxy/console, and observability. The same suite runs in
-CI on every PR (`PMCLUSTER_E2E_SWARM=1`).
+CI on every PR (`PMCLUSTER_E2E_SWARM=1`, non-blocking).
 
 ## REST API
 
-The OpenAPI spec lives at [`docs/openapi.yaml`](docs/openapi.yaml) (also mirrored
-in the repo root `docs/`). All `/api/*` endpoints require a Bearer token
+The OpenAPI spec lives at [`docs/openapi.yaml`](docs/openapi.yaml). All
+`/api/*` endpoints require a Bearer token
 (`pmc_<token_id>_<secret>`); `/webhook/{source}` is authenticated by HMAC
 signature + timestamp. Public access goes through `pmcluster.<domain>`, or
 directly against the daemon at `http://127.0.0.1:9090` on the manager.
@@ -170,5 +183,8 @@ stack (Traefik labels, networks, secrets, restart/update policies included).
 - [Webhook integration guide](../docs/webhook.md)
 - [Storage & database architecture guide](../docs/storage-and-databases.md)
 - [REST API spec](docs/openapi.yaml)
-- [Restore design](docs/restore-design.md)
+- [Restore — shipped design & open gaps](docs/restore-design.md)
+- [Service operations design](docs/service-ops-design.md)
+- [Console i18n contract](docs/console-i18n-contract.md)
+- [Console design](DESIGN.md)
 - [RFC v2 (issue #1)](https://github.com/hazemarian/poor-man-cluster/issues/1)

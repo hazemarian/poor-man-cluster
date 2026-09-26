@@ -39,6 +39,27 @@ pmcluster webhook remove <source>      # revokes the secret immediately
 
 The same operations are available in the operator console (**Webhooks**) and over the REST API (`GET`/`POST /api/webhooks`, `DELETE /api/webhooks/{source}`).
 
+### Delivery history
+
+Every request the receiver handles — accepted or rejected — is recorded as a delivery with a status:
+
+| Status | Meaning |
+|--------|---------|
+| `accepted` | signature + provenance OK; the deploy was queued |
+| `unauthorized` | HMAC signature invalid / timestamp outside the ±5 minute window |
+| `bad_request` | provenance missing (`repo_url` + `file`) or body malformed |
+| `server_error` | deploy pipeline failed (e.g. invalid manifest) |
+
+View history per source:
+
+```bash
+pmcluster webhook deliveries <source> --limit 50     # newest first: ID/STATUS/STACK/REVISION/REPO/FILE/WHEN/ERROR
+```
+
+The same list is available in the operator console (**Webhooks → History**) and over the REST API (`GET /api/webhooks/{source}/deliveries?limit=50`).
+
+> **Troubleshooting tip:** if CI reports a failed deploy, check `pmcluster webhook deliveries <source>` first — a `bad_request` or `unauthorized` status tells you whether to fix the payload (provenance) or the signing before touching the app. Note that a webhook deploy always mints a **new revision** even if nothing changed — CI-side deduplication is the caller's job.
+
 ---
 
 ## 2. Request format
@@ -60,7 +81,8 @@ The body is a JSON `DeployPayload`:
   "app_name": "donation-campaign",
   "version": "v1.2.3",
   "manifest": "app: donation-campaign\nenv: production\n…",
-  "repo_url": "https://github.com/acme/donation-campaign"
+  "repo_url": "https://github.com/acme/donation-campaign",
+  "file": "deploy/donation-campaign.yaml"
 }
 ```
 
@@ -70,6 +92,7 @@ The body is a JSON `DeployPayload`:
 | `version` | yes | image tag to deploy |
 | `manifest` | yes | the **entire manifest YAML as a string** (not a nested object) |
 | `repo_url` | no | metadata, recorded with the revision |
+| `file` | no | manifest path inside the source repo, recorded with the revision (provenance) |
 
 ### Signature
 

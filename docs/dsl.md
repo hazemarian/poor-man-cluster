@@ -6,7 +6,7 @@
 Parse (strict YAML) → Interpolate (${…}) → Validate (semantics) → Translate (Compose v3.9)
 ```
 
-Use `pmcluster deploy <file> --dry-run` to see the generated Compose without applying it.
+Deploy with `pmcluster deploy <file>` (local) or push it through a webhook (CI/CD). To inspect the generated Compose, deploy once and open the revision's Rendered manifest in the console or `pmcluster stack show`.
 
 ---
 
@@ -23,8 +23,6 @@ env_file: .env                # optional — env file path (recorded; substituti
 
 secrets:                      # optional — external Swarm secrets (must already exist)
   - donation_campaign_db_password
-volumes:                      # optional — named volumes to create
-  - db_data
 
 backup_before_deploy: true    # optional — snapshot volumes before deploy
 strict_backup: true           # optional — abort the deploy if that backup fails
@@ -220,7 +218,7 @@ You never write these by hand; pmcluster adds them:
 
 - **Networks** — a private per-app overlay `<app>-net` (always) plus `traefik-net` and `monitoring-net` for exposed services.
 - **Secrets** — every referenced secret is declared `external: true` at the top level (they must exist in Swarm first).
-- **Volumes** — named volumes are declared with `driver: local`.
+- **Volumes** — named volumes are auto-collected from service mounts (no top-level declaration) and declared with `driver: local` plus `driver_opts {type: none, o: bind, device: /var/stack/data/<app>/<name>}` so every volume — named or host bind — is forced under the volume root (default `/var/stack/data`, configurable via `volume_root` / `setup --volume-root`). Host binds are relocated to `<root>/<app>/<basename>`. See [`docs/storage-and-databases.md`](storage-and-databases.md).
 - **Labels** — `service`, `application`, `environment`, and `version` on every service.
 - **Traefik** (exposed services) — router/service names scoped `<app>-<service>`; `entrypoints=websecure`, `tls=true`, load-balancer port, `traefik.docker.network=traefik-net`, and the CORS middleware.
 - **Restart policy** — `on-failure` by default; `none` for `run_once`.
@@ -237,16 +235,15 @@ The output is a `version: "3.9"` Compose file applied with `docker stack deploy`
 app: donation-campaign
 env: production
 domain: example.com
-registry: ghcr.io/nextrum-sy
+registry: ghcr.io/acme
 version: latest
-repo_url: https://github.com/nextrum-sy/donation-campaign
+repo_url: https://github.com/acme/donation-campaign
 
 backup_before_deploy: true
 strict_backup: false
 
 secrets:
   - donation_campaign_db_password
-volumes: [db_data]
 
 services:
   db:
@@ -282,7 +279,6 @@ services:
 Deploy it:
 
 ```bash
-pmcluster deploy ./donation-campaign.yaml --dry-run   # preview
 pmcluster deploy ./donation-campaign.yaml             # apply
 pmcluster deploy ./donation-campaign.yaml --version v1.2.3   # override version
 ```

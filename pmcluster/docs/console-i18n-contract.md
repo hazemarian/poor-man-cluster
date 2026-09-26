@@ -1,8 +1,12 @@
 # Console v2 + Arabic localisation — implementation contract
 
-Every console page is now rendered from the same token system, the same component
+Every console page is rendered from the same token system, the same component
 classes and the same translation layer. This file is the contract for any page work so
 the console does not drift back into per-page styling.
+
+**Status: enforced** — the i18n layer, the EN/AR dictionaries and the
+parity/coverage/keysource tests ship with the console. The keyboard
+shortcuts and §9 process history are a record, not requirements.
 
 ## 1. Translations
 
@@ -14,6 +18,7 @@ Templates never contain user-visible English. They call the per-request funcs:
 | `{{T .SomeDynamicKey}}` | dynamic key (e.g. shell breadcrumb) |
 | `{{P 3 "plural.stacks"}}` | count with the language's plural rules (§3) |
 | `{{N 1234}}` | grouped number, tabular figures |
+| `{{N0 1789929731}}` | ungrouped identifier (revision/backup IDs — never comma-separated) |
 | `{{TF "deploy.run_id" .Run.ID}}` | string with `{0}`, `{1}` placeholders |
 | `{{icon "logs"}}` | inline sprite icon from `frag_icons.html` |
 | `{{DIR}}` `{{LANG}}` `{{RTL}}` `{{THEME}}` | document direction / language / theme |
@@ -23,7 +28,11 @@ Keys are `namespace.thing`, one namespace per page (`overview.*`, `stacks.*`,
 `settings.*`, `login.*`, `setup.*`) plus the shared namespaces already defined:
 `nav.*`, `common.*`, `st.*`, `err.*`, `cluster.*`, `plural.*`.
 
-English entries go in `internal/ui/views/i18n/dict_en_<group>.go`:
+Entries live in `internal/ui/views/i18n/` as `dict_en_<group>.go` + `dict_ar_<group>.go`
+pairs. The **file groups** are: `workloads` (stacks/services/backups/usage),
+`auth` (login/setup/users/apikeys), `refinement` (tls/webhooks), `shell`
+(nav/common/errors), `runtime` (services/plural), `cluster` (cluster/settings),
+`access` (access-related dialogs), `delivery` (webhook deliveries).
 
 ```go
 package i18n

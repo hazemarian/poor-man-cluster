@@ -190,6 +190,12 @@ components:
     padding: "{spacing.s-2}"
 ---
 
+> **Status:** the Console v2 visual design ships with the edge console,
+> including the EN/AR i18n contract (`docs/console-i18n-contract.md`). This file is the
+> *design record*: token/type specs and layout rules stay authoritative; the "Designed, not
+> built" list at the bottom is being retired line by line as features ship. Last updated:
+> v0.2.84.
+
 ## Overview
 
 **A calm control plane.** A dark-first operator console that answers three questions in
@@ -423,9 +429,12 @@ primary destinations with 44px targets. Icon buttons and the drawer-close contro
 `inline-grid` so the icon centres to ±0.00px — a 38px block-level button put it 3px high,
 which vision review called "fine" and the DOM disproved.
 
-The one deliberate exception: **stacks open in an inspector at the bottom of their own
-page**, not in a drawer, because the operator needs the list and the open stack at the same
-time. The shell's drawer belongs to the sidebar.
+The one deliberate exception: **stacks open in a standalone detail page at
+`/web/stacks/<name>`**, not in a drawer and not appended to the list —
+the detail page carries the stack's services (replica health + logs), about/backup/revision
+panels, and is reached from the list via a plain navigation click; a
+scroll-into-view for the earlier inline-inspector variant). The shell's drawer belongs to
+the sidebar.
 
 `login.html` and `setup.html` are full standalone documents with their own head and auth
 footer. That is intentional, not duplication by accident.

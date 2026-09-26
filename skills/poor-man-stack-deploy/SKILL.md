@@ -63,19 +63,19 @@ The wizard persists settings, then runs `cluster up` (fresh install) or `cluster
 Alternatively, use `cluster up` directly with flags:
 
 ```bash
-pmcluster cluster up --domain=<your-domain> --cert=<cert.pem> --key=<key.pem>
+pmcluster cluster up --domain=<your-domain> --openobserve-email=admin@<your-domain> --cert=<cert.pem> --key=<key.pem>
 # OR with Let's Encrypt (HTTP-01; DNS must point here and port 80 reachable):
-pmcluster cluster up --domain=<your-domain> --acme-email=<you@host>
+pmcluster cluster up --domain=<your-domain> --openobserve-email=admin@<your-domain> --acme-email=<you@host>
 ```
 
 > **`cluster up` is init-only.** It refuses to run on an already-initialised cluster — use `cluster update` instead. When no data flags are supplied, it falls back to the interactive setup wizard.
 
-`cluster up` deploys four stacks: `infra`, `edge`, `observability`, `backup`. It also mints the `edge_admin` console password and the `edge` daemon API token.
+`cluster up` deploys four stacks: `infra`, `edge`, `observability`, `backup` (plus `sso` when enabled). It also mints the `edge_admin` console password and the `edge` daemon API token.
 
-The daemon must be running for the REST API / webhooks / console:
+The daemon runs as a systemd service. `cluster up`, `cluster update`, and `pmcluster join` install `/etc/systemd/system/pmcluster.service` and (re)start it — no manual unit management. `serve` is leader-aware: it serves on the Swarm leader and stands by (15s poll) on non-leader managers; on promotion it restores the control-plane database from the newest `pmcluster-ctlplane-*.tar.gz` archive only when the local DB is missing or older (safe with shared storage).
 
 ```bash
-pmcluster serve   # foreground; supervise via systemd for production
+pmcluster serve   # foreground fallback (non-Linux hosts / manual runs)
 ```
 
 ## Operator Console
@@ -168,7 +168,7 @@ Every data command can run against the daemon API instead of a local
 `~/.pmcluster` + Docker socket. Set the API base URL and a bearer token:
 
 ```bash
-export PMCLUSTER_API_URL=https://pmcluster.nextrum-sy.com   # or --api-url
+export PMCLUSTER_API_URL=https://pmcluster.example.com   # or --api-url
 export PMCLUSTER_API_TOKEN=pmc_<id>_<secret>                # or --api-token
 
 # Now all of these work from any machine:
@@ -218,9 +218,6 @@ strict_backup: true            # optional — abort deploy if the pre-deploy bac
 secrets:                       # optional — external Swarm secrets (must already exist)
   - my_app_db_password
 
-volumes:                       # optional — named volumes to create
-  - db_data
-
 services:                      # required — one or more service definitions
   service-name:
     image: postgres:14-alpine
@@ -258,6 +255,8 @@ services:                      # required — one or more service definitions
       delay: 10s               #   default 10s
       order: start-first       #   start-first (default) | stop-first
 ```
+
+Named volumes are **auto-collected** from service mounts — there is no top-level `volumes:` block (a top-level `volumes:` key is rejected by the strict DSL). Every container volume — named or bind — is forced under a single host root: `<volume_root>/<app>/<name>` (default `/var/stack/data`, configurable via `pmcluster setup --volume-root` or `cluster settings set volume_root=`). Named volumes keep named-volume semantics via `driver_opts {type:none, o:bind, device:<root>/<app>/<name>}` so Docker's first-use ownership copy still runs for DB images; host bind mounts are relocated to `<root>/<app>/<basename>`.
 
 ### Variable Substitution
 
@@ -299,13 +298,9 @@ env:
 
 Write a `.yaml` manifest file for your service. Start from the template above.
 
-### 2. Validate (dry-run)
+### 2. Validate
 
-```bash
-pmcluster deploy ./manifest.yaml --dry-run
-```
-
-This translates the DSL to Docker Compose and shows what would be applied without touching Swarm.
+`pmcluster deploy` validates and translates the DSL in one step; malformed manifests fail before any Swarm change. To inspect the generated Compose without deploying, deploy first and read the rendered manifest from the revision (`pmcluster stack show <app>` or the console's revision view).
 
 ### 3. Deploy
 
@@ -532,10 +527,10 @@ pmcluster backup create                    # on-demand snapshot
 
 ### Control-plane backups (pmcluster's own state)
 
-The backup stack ships a second agent, `control-plane-backup`, that runs **only on the manager node**. Every night it archives `~/.pmcluster` itself — `data.db` (users, API keys, webhook secrets, credentials, stack revisions, TLS metadata), the `.encryption_key`, and `config/` — into the same `/var/backups/docker-volumes` directory as the volume backups, with a `pmcluster-ctlplane-` prefix and 30-day retention.
+The backup stack ships a second agent, `control-plane-backup`, that runs **only on the manager node**. Every night it archives `~/.pmcluster` itself — `data.db` (users, API keys, webhook secrets, credentials, stack revisions, TLS metadata), the `.encryption_key`, and `config/` — into the same `/var/stack/backup` directory as the volume backups, with a `pmcluster-ctlplane-` prefix and 30-day retention.
 
 ```bash
-ls /var/backups/docker-volumes/pmcluster-ctlplane-*   # control-plane archives
+ls /var/stack/backup/pmcluster-ctlplane-*   # control-plane archives
 ```
 
 This closes the "lost manager disk = full re-bootstrap" gap: app volumes AND the control plane are both archived daily. The `backup` stack is rendered with the daemon's data dir (`${DATA_DIR}`), so the bind mount points at the real `~/.pmcluster` on the manager.
@@ -555,18 +550,18 @@ pmcluster node join-token worker           # get join token for new workers
 
 ### Upgrading pmcluster / the edge service
 
-The edge image is pinned to `ghcr.io/hazemarian/pmcluster-edge:latest` by default (override with `PMCLUSTER_EDGE_IMAGE=<tag>`). The stack template lives **inside the pmcluster binary** (embedded `edge-stack.yml`). So the correct upgrade path is:
+The edge image is pinned to the release version tag — `ghcr.io/hazemarian/pmcluster-edge:<version>` (override with `PMCLUSTER_EDGE_IMAGE=<tag>`). The stack template lives **inside the pmcluster binary** (embedded `edge-stack.yml`). So the correct upgrade path is:
 
 1. **Build + publish the release first** — push a `v*` tag; the release workflow cross-compiles the binaries and pushes the new edge image to GHCR:
    ```bash
-   git tag v0.2.71 && git push origin v0.2.71
+   git tag v0.2.84 && git push origin v0.2.84
    ```
 2. **Update the binary with install.sh** — it installs the new binary and, because `~/.pmcluster/config.yaml` exists, automatically runs `pmcluster cluster update`:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | VERSION=v0.2.71 bash
+   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | VERSION=v0.2.84 bash
    # or simply: | bash   (resolves latest release)
    ```
-3. `cluster update` **refreshes the on-disk templates** in `~/.pmcluster/config/` from the new binary's embedded copies (stale configs — older version header — are overwritten; operator edits with a newer header are preserved), then re-renders. Because the edge-stack.yml content changed, the **edge stack is re-deployed** automatically and pulls the new `:latest` image. OTel/Traefik/cert are re-applied content-aware as usual. A second `cluster update` with no changes reports `No rendered content changed — nothing to redeploy.`
+3. `cluster update` **re-syncs the platform config templates** from the new binary's embedded copies into the store (the DB is the source of truth; operator edits are preserved), then re-renders. Because the edge-stack.yml content changed, the **edge stack is re-deployed** automatically and pulls the new version-pinned image. OTel/Traefik/cert are re-applied content-aware as usual. A second `cluster update` with no changes reports `No rendered content changed — nothing to redeploy.`
 
 Manual `docker service update --image ... edge_pmcluster-edge` is NOT the supported path — always use the tag → install.sh → `cluster update` flow. On a fresh box, install.sh runs `cluster up` instead (when `PMCLUSTER_DOMAIN` is set). Set `CLUSTER_APPLY=none` to skip the auto apply.
 
@@ -602,7 +597,7 @@ Run `docker swarm init --advertise-addr <ip>` on the manager. Pmcluster never in
 Ensure Docker engine is running and the current user has permission (`docker info`).
 
 ### "secret already exists"
-`pmcluster cluster up` is idempotent — re-run it. It reconciles, never destroys. Note: `cluster up` is init-only and will refuse to run on an already-initialised cluster; use `cluster update` instead.
+`pmcluster cluster up` is init-only — it refuses to run on an already-initialised cluster. To reconcile an existing cluster, use `pmcluster cluster update` (content-aware, idempotent).
 
 ### "cluster already initialised"
 `cluster up` is init-only — it refuses to run when a cluster already exists. Use `pmcluster cluster update` instead.
@@ -611,7 +606,7 @@ Ensure Docker engine is running and the current user has permission (`docker inf
 Run `pmcluster stack list` to see deployed stacks. Stack names come from the `app` field in manifests.
 
 ### Deploy fails
-Check the Swarm service logs: `docker service logs my-app_api --tail=50`. Inspect the translated compose: `pmcluster deploy ./manifest.yaml --dry-run`.
+Check the Swarm service logs: `docker service logs my-app_api --tail=50`. Inspect the translated compose from the latest revision: `pmcluster stack show my-app`.
 
 ### Deploy blocked by strict backup failure
 If `strict_backup: true` is set and the pre-deploy backup fails, the deploy aborts. Check `pmcluster backup list`. Fix the backup issue or remove `strict_backup: true`.
@@ -639,4 +634,4 @@ After enabling or updating SSO, Traefik label convergence takes ~45–60 seconds
 Ensure `OAUTH2_PROXY_COOKIE_DOMAINS` and `OAUTH2_PROXY_WHITELIST_DOMAINS` are **plural** (the singular forms are silently ignored in oauth2-proxy v7). Also verify `OAUTH2_PROXY_REVERSE_PROXY: "true"` is set and the edge container has `trusted-proxy-ip` / `TRUSTED_PROXY_CIDRS` configured for hardening.
 
 ### Edge image not updating after upgrade
-The edge image tag is pinned to the release version (`ghcr.io/hazemarian/pmcluster-edge:latest` by default). If the tag doesn't match, override with `PMCLUSTER_EDGE_IMAGE=<tag>`. Always use the `install.sh` → `cluster update` flow rather than `docker service update --image` directly.
+The edge image tag is pinned to the release version (`ghcr.io/hazemarian/pmcluster-edge:<version>`). If the tag doesn't match, override with `PMCLUSTER_EDGE_IMAGE=<tag>`. Always use the `install.sh` → `cluster update` flow rather than `docker service update --image` directly.
