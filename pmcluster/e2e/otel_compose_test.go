@@ -21,9 +21,7 @@ import (
 // Both pipelines export to debug exporter; we verify emitted log content.
 // No Swarm/VXLAN needed — runs on macOS too.
 func TestOtelComposeLogs(t *testing.T) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker binary not on PATH")
-	}
+	requireDockerDaemon(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -209,9 +207,7 @@ volumes:
 // EXCLUDED log entries, but the OTel config excludes it via a path pattern.
 // The collector should NOT see those entries.
 func TestOtelComposeExclude(t *testing.T) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker binary not on PATH")
-	}
+	requireDockerDaemon(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -376,9 +372,7 @@ volumes:
 // container with a bind-mount to that directory. This avoids all timing
 // races and compose volume lifecycle issues.
 func TestOtelComposeSkipFilelogFilter(t *testing.T) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker binary not on PATH")
-	}
+	requireDockerDaemon(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

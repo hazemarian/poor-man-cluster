@@ -16,6 +16,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -144,6 +145,23 @@ func freePort(t *testing.T) string {
 	addr := l.Addr().String()
 	l.Close()
 	return addr
+}
+
+// requireDockerDaemon skips the test unless both the docker CLI is on PATH
+// AND a daemon answers `docker info`. The compose-based e2e tests exercise a
+// real daemon (containers, log shipping); on a dev box with no Docker daemon
+// running they must skip, not fail.
+func requireDockerDaemon(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker binary not on PATH")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "info").CombinedOutput()
+	if err != nil {
+		t.Skipf("docker daemon unreachable: %v\n%s", err, strings.TrimSpace(string(out)))
+	}
 }
 
 // extractToken scans text for the indented token line and returns the token.
