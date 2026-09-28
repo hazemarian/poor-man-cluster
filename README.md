@@ -85,7 +85,7 @@ Its image is built from `cmd/edge/` and published to GHCR; the embedded `edge-st
 Single static binary, lives on the manager host. Replaces the bash setup script and owns deployment end to end.
 
 - `pmcluster init` — creates `~/.pmcluster/` (SQLite + encryption key) and prints a one-time bootstrap admin token for the API
-- `pmcluster setup` — **interactive wizard**: collects domain, TLS (LE or BYO), Traefik admin user, SSO enable (GitHub creds + org), edge login preference, then runs `cluster up` (fresh) or `cluster update` (existing). All questions have matching flags for scripted use.
+- `pmcluster setup` — **interactive wizard**: collects domain, TLS (LE or BYO), Traefik admin user, SSO enable (GitHub creds + org), edge login preference, and the node hostname (applied via `hostnamectl` so the Swarm records the name your `placement:` pins refer to), then runs `cluster up` (fresh) or `cluster update` (existing). All questions have matching flags for scripted use.
 - `pmcluster cluster up` — **init-only**: brings a fresh cluster up (prevents re-running if a cluster already exists — run `cluster update` instead). Configs are stored in the DB only (no `~/.pmcluster/config/*.yml` disk files); rendered at deploy time from embedded templates.
 - `pmcluster cluster update` — **content-aware reconcile**: DB is the source of truth. Compares rendered compose hashes (`rendered_hash`) against stored values; re-deploys only changed stacks. Drift-prune removes services dropped from a compose.
 - `pmcluster cluster settings` — list all cluster settings (KEY/VALUE; secret-typed keys masked); `pmcluster cluster settings get <key>`; `pmcluster cluster settings set key=value ...`
@@ -202,7 +202,7 @@ pmcluster init                          # creates ~/.pmcluster, prints admin tok
 pmcluster setup                         # interactive wizard — collects all settings
 ```
 
-The setup wizard walks you through domain, TLS, Traefik admin user, SSO (optional GitHub OAuth), and edge login preference, then runs `cluster up` (fresh) or `cluster update` (existing cluster). All questions have flags for scripted use — see `pmcluster setup --help`.
+The setup wizard walks you through domain, TLS, Traefik admin user, SSO (optional GitHub OAuth), edge login preference, and the node hostname, then runs `cluster up` (fresh) or `cluster update` (existing cluster). All questions have flags for scripted use — see `pmcluster setup --help`.
 
 **Manual / scripted:**
 

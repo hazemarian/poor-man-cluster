@@ -50,7 +50,7 @@ Install env vars: `VERSION` (pin release), `PREFIX` (install path), `PMCLUSTER_U
 If the cluster is not up, run the **interactive setup wizard** or bring it up with flags:
 
 ```bash
-# Interactive wizard (recommended) — prompts for domain, TLS, admin user, SSO, etc.:
+# Interactive wizard (recommended) — prompts for domain, TLS, admin user, SSO, node hostname, etc.:
 pmcluster setup
 
 # Non-interactive: flags for every prompt:

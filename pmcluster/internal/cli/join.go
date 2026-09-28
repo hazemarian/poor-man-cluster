@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -13,6 +14,10 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
+
+// nodeNameRe mirrors the manifest placement-pin validation: a Docker node
+// hostname or node ID — letters, digits, dots, dashes, underscores.
+var nodeNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
 var joinCmd = &cobra.Command{
 	Use:   "join",
@@ -45,6 +50,7 @@ func init() {
 	joinCmd.Flags().String("token", "", "swarm join token (from 'docker swarm join-token worker|manager' on a manager)")
 	joinCmd.Flags().String("manager", "", "manager advertise address, e.g. 10.0.0.5:2377")
 	joinCmd.Flags().String("role", "worker", "role to join as: worker or manager (must match the token type)")
+	joinCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
 	rootCmd.AddCommand(joinCmd)
 }
 
@@ -52,6 +58,7 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 	token, _ := cmd.Flags().GetString("token")
 	manager, _ := cmd.Flags().GetString("manager")
 	role, _ := cmd.Flags().GetString("role")
+	hostname, _ := cmd.Flags().GetString("hostname")
 	switch role {
 	case "worker", "manager":
 	default:
@@ -62,6 +69,16 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 	}
 	if manager == "" {
 		return fmt.Errorf("join requires --manager (the manager advertise address, e.g. 10.0.0.5:2377)")
+	}
+
+	// Set the OS hostname before joining: the Swarm records the hostname at
+	// join time, and the leader-aware daemon matches os.Hostname() against the
+	// node list — so pinning (`placement: <hostname>`) only works reliably
+	// when the join-time hostname is the one you intend.
+	if hostname != "" {
+		if err := setNodeHostname(cmd.Context(), cmd.OutOrStdout(), hostname); err != nil {
+			return err
+		}
 	}
 
 	// Run docker swarm join via the docker CLI (transparent to the operator).
@@ -109,6 +126,37 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintln(cmd.OutOrStdout(), "  promote the node to manager:")
 		fmt.Fprintln(cmd.OutOrStdout(), "    docker node promote <hostname>   # then it may be elected leader")
 	}
+	return nil
+}
+
+// setNodeHostname sets the OS hostname so the node joins the Swarm under the
+// operator's chosen name (Swarm records the hostname at join time, and the
+// leader-aware daemon matches os.Hostname() against the node list). It is a
+// best-effort convenience: a failure to set the hostname is surfaced but is
+// NOT fatal to the join itself — the node can join under its current name.
+func setNodeHostname(ctx context.Context, out io.Writer, hostname string) error {
+	hostname = strings.TrimSpace(hostname)
+	if hostname == "" {
+		return nil
+	}
+	if !nodeNameRe.MatchString(hostname) {
+		return fmt.Errorf("invalid hostname %q — letters, digits, dots, dashes and underscores only", hostname)
+	}
+	current, err := os.Hostname()
+	if err == nil && current == hostname {
+		fmt.Fprintf(out, "✔ hostname already %q.\n", hostname)
+		return nil
+	}
+
+	// hostnamectl is the canonical Linux way; on other platforms (or when the
+	// command is missing) surface a hint and continue — the join still works,
+	// the node just keeps its current hostname.
+	hc := exec.CommandContext(ctx, "hostnamectl", "set-hostname", hostname)
+	if outB, err := hc.CombinedOutput(); err != nil {
+		fmt.Fprintf(out, "⚠ could not set hostname to %q (%s) — joining under the current hostname.\n", hostname, strings.TrimSpace(string(outB)))
+		return nil
+	}
+	fmt.Fprintf(out, "✔ hostname set to %q.\n", hostname)
 	return nil
 }
 

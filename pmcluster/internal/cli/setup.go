@@ -70,6 +70,7 @@ func init() {
 	setupCmd.Flags().Bool("edge-login-enabled", false, "keep the edge console password login (default: disabled behind SSO/admin-auth; default: $PMCLUSTER_EDGE_LOGIN_ENABLED)")
 	setupCmd.Flags().String("volume-root", "", "host dir every container volume is forced under (default /var/stack/data)")
 	setupCmd.Flags().Bool("backup-all-nodes", false, "run the backup agent on every node (default: manager-only)")
+	setupCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
 }
 
 // setupAnswers is the collected wizard state.
@@ -92,6 +93,12 @@ type setupAnswers struct {
 
 	VolumeRoot     string
 	BackupAllNodes bool
+
+	// NodeHostname is the name this node joins the Swarm under. It is applied
+	// with hostnamectl before the cluster comes up so the Swarm records the
+	// operator's chosen name (used by placement pins and the leader-aware
+	// daemon's hostname match).
+	NodeHostname string
 }
 
 // ask prompts for a free-form value with a default; returns the trimmed answer.
@@ -178,6 +185,8 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.EdgeLoginEnabled = askYesNo(r, out, "Keep edge console password login?", false)
 		a.VolumeRoot = ask(r, out, "Container volume root dir", st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot))
 		a.BackupAllNodes = askYesNo(r, out, "Run backup agent on every node?", false)
+		defHost, _ := os.Hostname()
+		a.NodeHostname = ask(r, out, "Hostname for this node (pins use placement: <hostname>)", defHost)
 	} else {
 		a.Domain, _ = cmd.Flags().GetString("domain")
 		a.ACMEEmail, _ = cmd.Flags().GetString("acme-email")
@@ -197,6 +206,10 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.EdgeLoginEnabled, _ = cmd.Flags().GetBool("edge-login-enabled")
 		a.VolumeRoot, _ = cmd.Flags().GetString("volume-root")
 		a.BackupAllNodes, _ = cmd.Flags().GetBool("backup-all-nodes")
+		a.NodeHostname, _ = cmd.Flags().GetString("hostname")
+		if a.NodeHostname == "" {
+			a.NodeHostname, _ = os.Hostname()
+		}
 
 		// Env-var overrides for SSO settings so they can be changed from the
 		// shell / CI without editing the wizard (same precedence model as
@@ -252,6 +265,18 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	}
 	if a.ACMEEmail == "" && (a.CertPath == "" || a.KeyPath == "") {
 		return fmt.Errorf("TLS mode required: either --acme-email or --cert/--key")
+	}
+
+	// Apply the operator's chosen hostname before the cluster comes up. The
+	// Swarm records the hostname at join/init time and the leader-aware
+	// daemon matches os.Hostname() against the node list, so getting the name
+	// right up front keeps `placement: <hostname>` pins valid. Best-effort:
+	// if hostnamectl is unavailable the setup continues under the current
+	// hostname.
+	if a.NodeHostname != "" {
+		if err := setNodeHostname(ctx, out, a.NodeHostname); err != nil {
+			return err
+		}
 	}
 
 	// The installed check must run BEFORE persisting — the wizard's own

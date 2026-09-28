@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"strings"
 	"testing"
 
@@ -53,18 +54,32 @@ func TestJoinCommandRegistration(t *testing.T) {
 		t.Error("joinCmd has no Short description")
 	}
 	// --token and --manager flags must exist.
-	var hasToken, hasManager bool
-	for _, f := range []string{"token", "manager"} {
+	var hasToken, hasManager, hasHostname bool
+	for _, f := range []string{"token", "manager", "hostname"} {
 		if joinCmd.Flags().Lookup(f) != nil {
-			if f == "token" {
+			switch f {
+			case "token":
 				hasToken = true
-			} else {
+			case "manager":
 				hasManager = true
+			case "hostname":
+				hasHostname = true
 			}
 		}
 	}
-	if !hasToken || !hasManager {
-		t.Errorf("joinCmd missing --token (hasToken=%v) or --manager (hasManager=%v)", hasToken, hasManager)
+	if !hasToken || !hasManager || !hasHostname {
+		t.Errorf("joinCmd missing --token (hasToken=%v), --manager (hasManager=%v), or --hostname (hasHostname=%v)", hasToken, hasManager, hasHostname)
+	}
+}
+
+// TestSetNodeHostname_RejectsGarbage asserts the hostname value is validated
+// before it reaches hostnamectl (and later lands verbatim in Swarm constraint
+// expressions and the node list match).
+func TestSetNodeHostname_RejectsGarbage(t *testing.T) {
+	for _, bad := range []string{"bad host!", "has/slash", "quote\"d", "a b", "$(rm)", "new\nline"} {
+		if err := setNodeHostname(t.Context(), io.Discard, bad); err == nil {
+			t.Errorf("expected error for hostname %q, got nil", bad)
+		}
 	}
 }
 
