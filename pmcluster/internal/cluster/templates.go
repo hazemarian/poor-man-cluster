@@ -219,6 +219,16 @@ type RenderInput struct {
 	// before pruning them (mirrors the backup_retention_days setting;
 	// pmcluster prunes its own audit rows on the same window).
 	BackupRetentionDays int
+
+	// PlatformNode pins every platform service (infra traefik, openobserve,
+	// edge console, backup agents, sso) to ONE specific node via the Swarm
+	// constraint `node.hostname == <value>`. Empty (default) keeps the role
+	// constraint `node.role == manager`. Set it when a platform service
+	// holds state on a node (e.g. /var/stack/data under the volume root) so
+	// adding another manager can never reschedule it to a node with empty
+	// storage. Mirrors the stateful-app placement rule — platform services
+	// are stateful too.
+	PlatformNode string
 }
 
 // openObserveBasicAuth computes the HTTP Basic Authorization header value

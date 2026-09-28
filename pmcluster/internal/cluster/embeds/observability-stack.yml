@@ -11,7 +11,11 @@ services:
       mode: replicated
       replicas: 1
       placement:
+[[ if .PlatformNode ]]
+        constraints: [node.hostname == [[.PlatformNode]]]
+[[ else ]]
         constraints: [node.role == manager]
+[[ end ]]
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.openobserve.rule=Host(`observ.${DOMAIN}`)"

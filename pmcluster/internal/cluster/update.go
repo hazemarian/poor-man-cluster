@@ -168,6 +168,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
 			BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 			BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
+			PlatformNode:             loadPlatformNode(ctx, deps.Store),
 			SSOEnabled:               sso.Enabled,
 			SSOCookieSecret:          ssoSecret,
 			SSOClientID:              sso.ClientID,
@@ -386,6 +387,7 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
 		BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 		BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
+		PlatformNode:             loadPlatformNode(ctx, deps.Store),
 	}
 	sso, err := loadSSOSettings(ctx, deps.Store)
 	if err != nil {

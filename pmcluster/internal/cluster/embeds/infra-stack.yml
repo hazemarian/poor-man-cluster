@@ -57,7 +57,11 @@ services:
     deploy:
       mode: global
       placement:
+[[ if .PlatformNode ]]
+        constraints: [node.hostname == [[.PlatformNode]]]
+[[ else ]]
         constraints: [node.role == manager]
+[[ end ]]
       resources:
         reservations:
           cpus: '0.1'

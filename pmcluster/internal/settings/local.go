@@ -33,6 +33,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingDomain(),
 	cluster.SettingOOEmail(),
 	cluster.SettingTraefikAdminUser(),
+	cluster.SettingPlatformNode(),
 }
 
 // Get returns the current value of every known setting ("" when unset).

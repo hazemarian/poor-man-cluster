@@ -92,7 +92,11 @@ services:
       replicas: 1
       placement:
         constraints:
+[[ if .PlatformNode ]]
+          - node.hostname == [[.PlatformNode]]
+[[ else ]]
           - node.role == manager
+[[ end ]]
       restart_policy:
         condition: any
       labels:

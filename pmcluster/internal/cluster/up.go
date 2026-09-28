@@ -276,6 +276,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
 			BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 			BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
+			PlatformNode:             loadPlatformNode(ctx, deps.Store),
 			SSOEnabled:               sso.Enabled,
 			SSOCookieSecret:          ssoSecret,
 			SSOClientID:              sso.ClientID,

@@ -51,6 +51,13 @@ const (
 	// and their archives on disk before pruning them (default 15 days). The
 	// offen agent's own BACKUP_RETENTION_DAYS is rendered from this same value.
 	settingBackupRetentionDays = "backup_retention_days"
+
+	// settingPlatformNode pins every platform service (traefik, openobserve,
+	// edge, backup, sso) to ONE specific node hostname. Empty keeps the role
+	// constraint node.role == manager. Set it to match the stateful-app
+	// placement rule so platform state under /var/stack/data can never be
+	// rescheduled to a node with empty storage.
+	settingPlatformNode = "platform_node"
 )
 
 // Setting* accessors expose the persisted settings keys for CLI surfaces
@@ -73,6 +80,7 @@ func SettingEdgeLoginDisabled() string   { return settingEdgeLoginDisabled }
 func SettingVolumeRoot() string          { return settingVolumeRoot }
 func SettingBackupAllNodes() string      { return settingBackupAllNodes }
 func SettingBackupRetentionDays() string { return settingBackupRetentionDays }
+func SettingPlatformNode() string        { return settingPlatformNode }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {
@@ -226,6 +234,15 @@ func loadBackupAllNodes(ctx context.Context, st *store.Store) bool {
 		return false
 	}
 	return st.GetSettingDefault(ctx, settingBackupAllNodes, "") == "true"
+}
+
+// loadPlatformNode returns the hostname platform services are pinned to
+// (empty = keep the node.role == manager constraint).
+func loadPlatformNode(ctx context.Context, st *store.Store) string {
+	if st == nil {
+		return ""
+	}
+	return st.GetSettingDefault(ctx, settingPlatformNode, "")
 }
 
 // defaultBackupRetentionDays is how many days backup audit rows + archives
