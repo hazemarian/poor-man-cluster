@@ -363,7 +363,7 @@ secrets:                         # optional — external Swarm secrets (must pre
 services:                        # required — one or more services
   db:
     image: postgres:14-alpine
-    placement: manager           # optional — manager | worker
+    placement: node-01      # stateful → pin to ONE specific node (not manager/worker)
     volumes: [db_data:/var/lib/postgresql/data]
     env: { POSTGRES_DB: donation_campaign, POSTGRES_USER: user }
     secrets: [donation_campaign_db_password]
@@ -555,6 +555,17 @@ Restore is **implemented**: `pmcluster backup restore <id>` extracts a SUCCEEDED
 ## Storage & Databases
 
 pmcluster standardizes on a **single host root mount** at `/var/stack/data` for all application data. How you configure, format, or replicate the underlying host storage is entirely up to you — from a single VPS local SSD to multi-node replicated disks. Databases run **inside the cluster** (no managed DB services), with replication handled either at the database level (CockroachDB / MariaDB Galera / Patroni) or the OS block level (DRBD + LINSTOR), and every byte is backed offsite to S3-compatible storage (R2 / S3 / Hetzner Storage Box) by the backup containers.
+
+**The zero-effort rule for stateful services:** if you have a stateful service (anything with a volume) and you do not want to deal with storage replication or mirroring at all, pin it to one specific node with `placement: <hostname>` — not `manager`/`worker`. It then runs on that node forever and its data never has to migrate; nothing else needs configuring. `manager`/`worker` allow any node of that role, which is unsafe for volumes once you have more than one node of that role.
+
+```yaml
+services:
+  db:                       # stateful — SQLite, Postgres, anything with a volume
+    image: ghcr.io/you/db
+    placement: node-01 # a SPECIFIC node hostname, not "manager"/"worker"
+    volumes:
+      - db_data:/var/lib/db
+```
 
 The full decision flowchart, storage matrix, database strategies, backup rules for replicated environments, and a quickstart example stack live in [`docs/storage-and-databases.md`](docs/storage-and-databases.md).
 

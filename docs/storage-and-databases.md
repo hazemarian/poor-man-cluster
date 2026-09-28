@@ -10,6 +10,32 @@ How you configure, format, or replicate the underlying host storage at `/var/sta
 
 ---
 
+## The zero-effort rule: pin stateful services to a specific node
+
+If you have a **stateful service** (anything that writes to a volume — a SQLite app, a database, a file store) and you **do not want to deal with storage replication, mirroring, or any of the machinery above**, the supported answer is deliberately simple:
+
+> **Pin the service to one specific node with `placement: <hostname>`.**
+
+That is the whole fix. The service runs on that one node forever, its volume-backed data lives under `/var/stack/data/<app>/<name>` on that node and never has to migrate, and nothing else needs to be configured — no NFS, no DRBD, no LINSTOR, no mirroring cron, no distributed database. The nightly backup agents still cover it.
+
+```yaml
+services:
+  db:                       # stateful: SQLite / Postgres / anything with a volume
+    image: ghcr.io/you/db
+    placement: node-01 # ← a SPECIFIC node hostname, not "manager"/"worker"
+    volumes:
+      - db_data:/var/lib/db
+```
+
+Why a specific node and not `manager` / `worker`?
+
+* `placement: manager` means *any* manager — if you later add a second manager (or promote the worker), Swarm may reschedule the task onto the other node, where its `/var/stack/data` is empty → the app starts with fresh data or fails on a missing bind source.
+* `placement: <hostname>` pins to exactly one machine. Swarm captures node hostnames at join time (`pmcluster join --hostname`), so the pin always refers to a real, stable name. `pmcluster cluster up` prints the available hostnames after deployment.
+
+This is the recommended default for every stateful workload on the platform. Only reach for the replication strategies in this document when a service genuinely must be able to run on *more than one* node.
+
+---
+
 ## Storage Decision Flowchart
 
 Use the flowchart below to choose the right storage paradigm for your workload:
@@ -24,7 +50,9 @@ flowchart TD
     LocalMount --> BackupLitestream[Pair with Litestream or pgBackRest to S3/R2]
 
     %% Multi Node Branch
-    MultiNode --> WorkloadType{What type of workload?}
+    MultiNode --> Stateful{Stateful service?<br/>writes to a volume}
+    Stateful -->|Yes, and you don't want<br/>storage machinery| Pin[Pin it: placement: &lt;hostname&gt;<br/>runs on one node, data never migrates]
+    Stateful -->|Yes, must run on<br/>any node| WorkloadType{What type of workload?}
 
     WorkloadType --> DBWorkload[Database / Transactional Data]
     WorkloadType --> SharedFiles[Shared Files / Media Uploads]

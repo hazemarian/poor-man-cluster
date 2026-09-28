@@ -224,7 +224,10 @@ services:                      # required — one or more service definitions
     # OR with variable substitution:
     # image: ${registry}/${app}:${version}
 
-    placement: manager         # optional — manager | worker | (empty)
+    placement: manager         # optional — manager | worker | <node hostname> | (empty)
+    #   stateful services (with a volume) should pin to ONE specific node
+    #   hostname (e.g. "node-01") so their data never has to migrate;
+    #   "manager"/"worker" allow any node of that role (unsafe for volumes)
     replicas: 2                # optional — default 1 (ignored when run_once)
     run_once: true             # optional — restart_policy: condition: none (one-off jobs)
     skip_filelog: true         # optional — exclude from OTel log tailing (app ships OTLP itself)

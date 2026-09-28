@@ -51,7 +51,10 @@ services:
     image: ${registry}/${app}:${version}   # required
     replicas: 2                            # optional, default 1 (≥ 0)
     run_once: false                        # optional — mutually exclusive with replicas
-    placement: manager                     # optional — manager | worker | <node hostname> | (empty)
+    placement: node-01                     # optional — manager | worker | <node hostname> | (empty)
+    #   stateful services (with a volume) should pin to ONE specific node
+    #   hostname so their data never has to migrate; "manager"/"worker"
+    #   allow any node of that role (unsafe for volumes)
     command: ["./server", "--port", "8080"]
     entrypoint: ["/bin/sh", "-c"]
     env:
@@ -248,7 +251,7 @@ secrets:
 services:
   db:
     image: postgres:14-alpine
-    placement: manager
+    placement: node-01        # stateful → pin to ONE specific node (not manager/worker)
     volumes: [db_data:/var/lib/postgresql/data]
     env:
       POSTGRES_DB: donation_campaign
