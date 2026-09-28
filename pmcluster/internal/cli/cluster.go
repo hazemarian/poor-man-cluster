@@ -74,6 +74,7 @@ func init() {
 	clusterUpCmd.Flags().String("openobserve-email", "", "OpenObserve admin email (becomes admin login)")
 	clusterUpCmd.Flags().String("traefik-admin-user", "admin", "username for the Traefik dashboard basic-auth")
 	clusterUpCmd.Flags().Bool("force-tls-mode", false, "allow switching TLS mode on an already-installed cluster (cert <-> acme)")
+	clusterUpCmd.Flags().String("swarm-advertise-addr", "", "advertise address passed to `docker swarm init` when this node is not yet in a Swarm (default: auto-detected node IP)")
 
 	clusterDownCmd.Flags().Bool("yes", false, "skip confirmation prompt")
 	clusterDownCmd.Flags().Bool("purge", false, "also remove pmcluster-managed secrets, configs, and networks")
@@ -201,6 +202,7 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 	in.TraefikAdminUser, _ = cmd.Flags().GetString("traefik-admin-user")
 	in.ForceTLSMode, _ = cmd.Flags().GetBool("force-tls-mode")
 	in.ConfigDir = cfg.ConfigDir()
+	in.SwarmAdvertiseAddr, _ = cmd.Flags().GetString("swarm-advertise-addr")
 
 	return runUp(cmd, cfg, in)
 }
@@ -281,6 +283,14 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 		return fmt.Errorf("docker client: %w", err)
 	}
 	defer func() { _ = dc.Close() }()
+
+	// First node: initialise the Swarm itself when it is not already part of
+	// one. The operator's hostname choice was applied by the setup wizard (or
+	// --hostname) before this point, so `docker swarm init` records the
+	// intended name — keeping `placement: <hostname>` pins valid.
+	if err := ensureSwarmInitialized(ctx, cmd.OutOrStdout(), in.SwarmAdvertiseAddr); err != nil {
+		return err
+	}
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 

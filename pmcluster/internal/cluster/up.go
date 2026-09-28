@@ -49,6 +49,10 @@ type UpInput struct {
 	// VolumeRoot is the single host dir every container volume is forced
 	// under (default manifest.DefaultVolumeRoot /var/stack/data).
 	VolumeRoot string
+	// SwarmAdvertiseAddr is passed to `docker swarm init` when this node is
+	// not yet part of a Swarm (first-node bootstrap). Empty lets Docker (or
+	// the CLI's detectNodeIP) pick the advertise address.
+	SwarmAdvertiseAddr string
 }
 
 // UpResult includes plaintext passwords for any credentials newly minted

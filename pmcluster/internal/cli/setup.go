@@ -71,6 +71,7 @@ func init() {
 	setupCmd.Flags().String("volume-root", "", "host dir every container volume is forced under (default /var/stack/data)")
 	setupCmd.Flags().Bool("backup-all-nodes", false, "run the backup agent on every node (default: manager-only)")
 	setupCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
+	setupCmd.Flags().String("swarm-advertise-addr", "", "advertise address passed to `docker swarm init` on a first node (default: auto-detected node IP)")
 }
 
 // setupAnswers is the collected wizard state.
@@ -96,9 +97,12 @@ type setupAnswers struct {
 
 	// NodeHostname is the name this node joins the Swarm under. It is applied
 	// with hostnamectl before the cluster comes up so the Swarm records the
-	// operator's chosen name (used by placement pins and the leader-aware
-	// daemon's hostname match).
+	// intended name (which the placement pins and the leader-aware daemon's
+	// hostname match).
 	NodeHostname string
+	// SwarmAdvertiseAddr is passed to `docker swarm init` on a first node that
+	// is not yet part of a Swarm. Empty lets Docker (or detectNodeIP) choose.
+	SwarmAdvertiseAddr string
 }
 
 // ask prompts for a free-form value with a default; returns the trimmed answer.
@@ -187,6 +191,11 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.BackupAllNodes = askYesNo(r, out, "Run backup agent on every node?", false)
 		defHost, _ := os.Hostname()
 		a.NodeHostname = ask(r, out, "Hostname for this node (pins use placement: <hostname>)", defHost)
+		if !swarmActive(ctx) {
+			defAdvertise := detectNodeIP()
+			advertise := ask(r, out, "Initialise Swarm on this node? advertise address (first node)", defAdvertise)
+			a.SwarmAdvertiseAddr = advertise
+		}
 	} else {
 		a.Domain, _ = cmd.Flags().GetString("domain")
 		a.ACMEEmail, _ = cmd.Flags().GetString("acme-email")
@@ -210,6 +219,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		if a.NodeHostname == "" {
 			a.NodeHostname, _ = os.Hostname()
 		}
+		a.SwarmAdvertiseAddr, _ = cmd.Flags().GetString("swarm-advertise-addr")
 
 		// Env-var overrides for SSO settings so they can be changed from the
 		// shell / CI without editing the wizard (same precedence model as
@@ -311,6 +321,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	in.OpenObserveAdminEmail = a.OpenObserveEmail
 	in.TraefikAdminUser = a.TraefikAdminUser
 	in.ConfigDir = cfg.ConfigDir()
+	in.SwarmAdvertiseAddr = a.SwarmAdvertiseAddr
 
 	fmt.Fprintln(out, "Fresh install — running `pmcluster cluster up` with the new settings.")
 	return runUp(cmd, cfg, in)

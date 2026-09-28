@@ -54,8 +54,10 @@ func Preflight(ctx context.Context, d runtime.Client) error {
 			Cause: errors.New("Swarm not active on this node (state: " + info.SwarmLocalNodeState + ")"),
 			Remediation: "Initialise Swarm before running pmcluster cluster up:\n" +
 				"  docker swarm init --advertise-addr <this-node-ip>\n\n" +
-				"pmcluster intentionally does NOT init Swarm — that decision " +
-				"belongs to the operator.",
+				"`pmcluster setup` (and `cluster up` on a first node) initialises the " +
+				"Swarm itself when this node is not already part of one — the CLI " +
+				"asks for the advertise address and runs docker swarm init before " +
+				"deploying.",
 		}
 	}
 
