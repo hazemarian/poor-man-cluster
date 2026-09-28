@@ -18,6 +18,11 @@ var nameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 // so we just require: at least one dot, no whitespace, no obvious garbage.
 var hostnameRe = regexp.MustCompile(`^[a-zA-Z0-9*]([a-zA-Z0-9.-]*\.[a-zA-Z]{2,})?$`)
 
+// nodeNameRe accepts Docker node hostnames and node IDs: letters, digits,
+// dots, dashes, underscores — no whitespace or characters that could break
+// out of the rendered placement constraint.
+var nodeNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+
 // Validate runs semantic checks against an interpolated manifest. Returns
 // the first failure with a path-prefixed error so the operator sees
 // `services.api.image: required` not just `required`.
@@ -62,7 +67,13 @@ func validateService(name string, s *dsl.Service) error {
 		return fmt.Errorf("%s: replicas and run_once are mutually exclusive", prefix)
 	}
 	if s.Placement != "" && s.Placement != "manager" && s.Placement != "worker" {
-		return fmt.Errorf("%s.placement: must be 'manager', 'worker', or empty (got %q)", prefix, s.Placement)
+		// Any other value is a node-hostname pin (node.hostname == <value>).
+		// Keep it a sane Docker hostname: letters, digits, dots and hyphens,
+		// no spaces or slash — the constraint value lands verbatim in the
+		// rendered Compose so it must not be able to smuggle YAML.
+		if !nodeNameRe.MatchString(s.Placement) {
+			return fmt.Errorf("%s.placement: must be 'manager', 'worker', a node hostname, or empty (got %q)", prefix, s.Placement)
+		}
 	}
 	for i, v := range s.Volumes {
 		if !strings.Contains(v, ":") {

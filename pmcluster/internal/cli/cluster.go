@@ -15,6 +15,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -295,6 +296,7 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 	}
 
 	printUpResult(cmd.OutOrStdout(), in, res)
+	printNodePins(cmd.OutOrStdout(), ctx, dc)
 
 	// The daemon is managed by the CLI now (not install.sh): make sure it is
 	// installed + running with the current binary.
@@ -302,6 +304,27 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 		return fmt.Errorf("ensure daemon running: %w", err)
 	}
 	return nil
+}
+
+// printNodePins lists the Swarm nodes and their hostnames so the operator can
+// pin stateful services to a specific node via `placement: <hostname>`.
+func printNodePins(out io.Writer, ctx context.Context, dc runtime.Client) {
+	nodes, err := dc.NodeList(ctx)
+	if err != nil || len(nodes) == 0 {
+		return // Node listing is informational; never fail the command on it.
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "  Swarm nodes (use the hostname in `placement:` to pin a stateful service):")
+	for _, n := range nodes {
+		role := "worker"
+		if n.IsLeader {
+			role = "manager (leader)"
+		} else if n.Role == "manager" {
+			role = "manager"
+		}
+		fmt.Fprintf(out, "    - %s   [%s]\n", n.Hostname, role)
+	}
+	fmt.Fprintln(out)
 }
 
 func printUpResult(out io.Writer, in cluster.UpInput, res *cluster.UpResult) {

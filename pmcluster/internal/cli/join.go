@@ -141,6 +141,20 @@ func prepareJoinState(ctx context.Context, out io.Writer, cfg *config.Config) er
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
 	}
+	// Every container volume on this platform is forced under the volume root
+	// (/var/stack/data) with a bind mount, and backup agents write tarballs to
+	// /var/stack/backup. Both must exist on the joined node BEFORE the Swarm
+	// scheduler can place tasks here — otherwise a task that lands on this
+	// node is rejected at volume-populate ("no such file or directory") and
+	// the service update pauses. Mirrors ensureStorageDirs in cluster up.
+	const volumeRoot = "/var/stack/data"
+	const backupRoot = "/var/stack/backup"
+	for _, dir := range []string{volumeRoot, backupRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create storage dir %s: %w", dir, err)
+		}
+	}
+	fmt.Fprintln(out, "✔ volume-root storage directories ready (/var/stack/data, /var/stack/backup).")
 	if err := writeDefaultConfig(cfg); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}

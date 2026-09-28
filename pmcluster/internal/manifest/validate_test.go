@@ -92,7 +92,7 @@ func TestValidate_ReplicasAndRunOnceMutex(t *testing.T) {
 
 func TestValidate_InvalidPlacement(t *testing.T) {
 	a := baseApp()
-	a.Services["api"].Placement = "somewhere"
+	a.Services["api"].Placement = "bad hostname!"
 	mustFail(t, a, "placement:")
 }
 
@@ -106,6 +106,27 @@ func TestValidate_ValidPlacementWorker(t *testing.T) {
 	a := baseApp()
 	a.Services["api"].Placement = "worker"
 	mustPass(t, a)
+}
+
+func TestValidate_ValidPlacementNodePin(t *testing.T) {
+	a := baseApp()
+	a.Services["api"].Placement = "node-1.example.com"
+	mustPass(t, a)
+}
+
+func TestTranslate_NodePinRendersHostnameConstraint(t *testing.T) {
+	a := baseApp()
+	a.Services["api"].Placement = "storage-01"
+	out, err := Translate(a)
+	if err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	if !strings.Contains(string(out), "node.hostname == storage-01") {
+		t.Fatalf("rendered compose missing node.hostname pin:\n%s", out)
+	}
+	if strings.Contains(string(out), "node.role") {
+		t.Fatalf("node pin must not also render a role constraint:\n%s", out)
+	}
 }
 
 func TestValidate_ExposePortZero(t *testing.T) {

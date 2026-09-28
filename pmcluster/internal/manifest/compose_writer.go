@@ -209,6 +209,13 @@ func composeDeployFromIR(app irApp, s *IRService) *composeDeploy {
 		d.Placement = &composePlacement{Constraints: []string{"node.role == manager"}}
 	case "worker":
 		d.Placement = &composePlacement{Constraints: []string{"node.role == worker"}}
+	default:
+		// Any other value is a node-hostname pin: the operator keeps a
+		// stateful service (with a volume) on one specific node so its
+		// data never has to migrate.
+		if s.Placement != "" {
+			d.Placement = &composePlacement{Constraints: []string{"node.hostname == " + s.Placement}}
+		}
 	}
 
 	if !s.RunOnce {

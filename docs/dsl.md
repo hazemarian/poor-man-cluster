@@ -51,7 +51,7 @@ services:
     image: ${registry}/${app}:${version}   # required
     replicas: 2                            # optional, default 1 (≥ 0)
     run_once: false                        # optional — mutually exclusive with replicas
-    placement: manager                     # optional — manager | worker | (empty)
+    placement: manager                     # optional — manager | worker | <node hostname> | (empty)
     command: ["./server", "--port", "8080"]
     entrypoint: ["/bin/sh", "-c"]
     env:
@@ -81,7 +81,7 @@ services:
 | `replicas` | `1` | must be ≥ 0; ignored when `run_once` is true |
 | `run_once` | `false` | `true` → `restart_policy: condition: none`; for migrations/jobs |
 | `skip_filelog` | `false` | excludes the service from the OTel log-tailing receiver (set when the app ships logs via OTLP itself) |
-| `placement` | (any) | `manager` → `node.role == manager`; `worker` → `node.role == worker` |
+| `placement` | (any) | `manager` → `node.role == manager`; `worker` → `node.role == worker`; **any other value → `node.hostname == <value>`** (pin a stateful service to one specific node so its volume-backed data never has to migrate) |
 | `command` | — | overrides the image's `CMD` |
 | `entrypoint` | — | overrides the image's `ENTRYPOINT` |
 | `env` | — | map of environment variables (values support substitution) |

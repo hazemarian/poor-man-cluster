@@ -51,6 +51,11 @@ type Service struct {
 	// Set true when the service sends logs directly via OTLP (gRPC/HTTP).
 	SkipFilelog bool `json:"skip_filelog,omitempty"`
 
+	// Placement pins the service to nodes: "manager" or "worker" are role
+	// constraints; any other value is treated as a node hostname and renders
+	// the Swarm constraint node.hostname == <value> — the supported way to
+	// pin a stateful service (with a volume) to one specific node so its
+	// data never has to migrate. Empty means anywhere.
 	Placement string `json:"placement,omitempty"`
 
 	Command    []string `json:"command,omitempty"`
