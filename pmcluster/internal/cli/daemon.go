@@ -35,6 +35,24 @@ WantedBy=multi-user.target
 // daemonUnitPath is the systemd unit location. Overridable in tests.
 var daemonUnitPath = "/etc/systemd/system/pmcluster.service"
 
+// systemctlFn runs a systemctl subcommand (sudo-prefixed when not root).
+// Overridable in tests to avoid touching the real init system.
+var systemctlFn = systemctlSudo
+
+// hostOS is the platform the daemon would run on. Overridable in tests to
+// exercise the Linux systemd flow on any host.
+var hostOS = runtime.GOOS
+
+// hasSystemctl reports whether systemctl exists on PATH. Overridable in tests.
+var hasSystemctl = func() bool {
+	_, err := exec.LookPath("systemctl")
+	return err == nil
+}
+
+// writeUnitFn writes the systemd unit file. Defaults to writeFileSudo (direct
+// when root, sudo-tee otherwise); overridable in tests to avoid sudo.
+var writeUnitFn = writeFileSudo
+
 // daemonExecStart returns the ExecStart command the systemd unit runs. The
 // daemon is the `serve` subcommand — the unit must never run the bare binary
 // (which would print help and exit, crash-looping the service).
@@ -50,11 +68,11 @@ func daemonExecStart(exe string) string {
 // Executed from `pmcluster cluster up`, `pmcluster cluster update` and
 // `pmcluster join`, so install.sh no longer needs to manage the service.
 func ensureDaemonRunning(out io.Writer) error {
-	if runtime.GOOS != "linux" {
+	if hostOS != "linux" {
 		fmt.Fprintln(out, "  (non-Linux host — start the daemon with: pmcluster serve)")
 		return nil
 	}
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	if !hasSystemctl() {
 		fmt.Fprintln(out, "  (systemctl not found — start the daemon with: pmcluster serve)")
 		return nil
 	}
@@ -99,18 +117,18 @@ func ensureDaemonRunning(out io.Writer) error {
 	// Write the unit only when missing or changed (operator edits win).
 	existing, _ := os.ReadFile(daemonUnitPath)
 	if string(existing) != unit {
-		if err := writeFileSudo(daemonUnitPath, []byte(unit), 0o644); err != nil {
+		if err := writeUnitFn(daemonUnitPath, []byte(unit), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", daemonUnitPath, err)
 		}
 		fmt.Fprintf(out, "→ installed systemd unit %s (user %s, group %s)\n", daemonUnitPath, pmUser, group)
 	}
 
 	for _, args := range [][]string{{"daemon-reload"}, {"enable", "pmcluster"}} {
-		if err := systemctlSudo(args...); err != nil {
+		if err := systemctlFn(args...); err != nil {
 			return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
 		}
 	}
-	if err := systemctlSudo("restart", "pmcluster"); err != nil {
+	if err := systemctlFn("restart", "pmcluster"); err != nil {
 		return fmt.Errorf("systemctl restart pmcluster: %w", err)
 	}
 	fmt.Fprintln(out, "→ pmcluster daemon started via systemd (pmcluster serve)")

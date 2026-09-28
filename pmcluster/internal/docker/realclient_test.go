@@ -175,6 +175,10 @@ func (m *mockDaemon) handler() http.Handler {
 				binary.BigEndian.PutUint32(frame[4:8], uint32(len(out)))
 				copy(frame[8:], out)
 				_, _ = conn.Write(frame)
+				// Give the client a moment to consume the frame before we
+				// close — closing with unread data in the kernel buffer
+				// surfaces as "connection reset by peer" under -race.
+				time.Sleep(10 * time.Millisecond)
 				return
 			}
 			w.WriteHeader(http.StatusOK)
