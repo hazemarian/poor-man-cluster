@@ -164,9 +164,9 @@ func (m *mockDaemon) handler() http.Handler {
 					http.Error(w, err.Error(), 500)
 					return
 				}
-				defer conn.Close()
 				_, _ = brw.WriteString("HTTP/1.1 101 UPGRADED\r\nContent-Type: application/vnd.docker.raw-stream\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
 				if err := brw.Flush(); err != nil {
+					_ = conn.Close()
 					return
 				}
 				out := "root\n"
@@ -175,10 +175,17 @@ func (m *mockDaemon) handler() http.Handler {
 				binary.BigEndian.PutUint32(frame[4:8], uint32(len(out)))
 				copy(frame[8:], out)
 				_, _ = conn.Write(frame)
-				// Give the client a moment to consume the frame before we
-				// close — closing with unread data in the kernel buffer
-				// surfaces as "connection reset by peer" under -race.
-				time.Sleep(10 * time.Millisecond)
+				// CloseWrite sends a clean FIN: the client's StdCopy sees
+				// EOF and returns. Closing the whole socket while the
+				// client still has unread buffered data would surface as
+				// "connection reset by peer" — timing-dependent and flaky
+				// under -race and in CI. The FIN handshake makes teardown
+				// deterministic on every host.
+				if tcp, ok := conn.(interface{ CloseWrite() error }); ok {
+					_ = tcp.CloseWrite()
+				}
+				time.Sleep(50 * time.Millisecond)
+				_ = conn.Close()
 				return
 			}
 			w.WriteHeader(http.StatusOK)
