@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -34,6 +35,10 @@ WantedBy=multi-user.target
 
 // daemonUnitPath is the systemd unit location. Overridable in tests.
 var daemonUnitPath = "/etc/systemd/system/pmcluster.service"
+
+// rootDataDir is where the daemon's state lives when it was initialised under
+// root (see ensureDaemonRunning's SUDO_USER fallback). Overridable in tests.
+var rootDataDir = "/root/.pmcluster"
 
 // systemctlFn runs a systemctl subcommand (sudo-prefixed when not root).
 // Overridable in tests to avoid touching the real init system.
@@ -78,7 +83,12 @@ func ensureDaemonRunning(out io.Writer) error {
 	}
 
 	// Resolve the user the daemon runs as: PMCLUSTER_USER, then SUDO_USER,
-	// then the current user (mirrors install.sh's detection order).
+	// then the current user (mirrors install.sh's detection order). A sudo
+	// invocation (e.g. "sudo pmcluster cluster update") would otherwise pick
+	// SUDO_USER even when the pmcluster state was initialised under root —
+	// the daemon then crash-loops on "read /root/.pmcluster/config.yaml:
+	// permission denied". When the resolved user's data dir does not exist but
+	// root's does, run as root.
 	pmUser := os.Getenv("PMCLUSTER_USER")
 	if pmUser == "" {
 		pmUser = os.Getenv("SUDO_USER")
@@ -97,6 +107,15 @@ func ensureDaemonRunning(out io.Writer) error {
 	}
 	if home == "" {
 		home = "/root"
+	}
+	if pmUser != "root" {
+		// The data dir always lives at <home>/.pmcluster (config.DBPath).
+		// If only the root copy exists, the daemon must run as root.
+		if _, err := os.Stat(filepath.Join(home, ".pmcluster")); os.IsNotExist(err) {
+			if _, rerr := os.Stat(rootDataDir); rerr == nil {
+				pmUser, home = "root", "/root"
+			}
+		}
 	}
 
 	// Docker group: most distros use "docker"; some use "docker-root".

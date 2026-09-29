@@ -149,3 +149,55 @@ func TestSystemctlSudoErrorWrapping(t *testing.T) {
 		t.Errorf("error should mention the command, got: %v", err)
 	}
 }
+
+// TestEnsureDaemonRunning_FallsBackToRootDataDir verifies the sudo trap: a
+// "sudo pmcluster cluster update" resolves SUDO_USER (e.g. wafaa) but the
+// pmcluster state was initialised under root — the unit must run as root so
+// the daemon can read /root/.pmcluster instead of crash-looping.
+func TestEnsureDaemonRunning_FallsBackToRootDataDir(t *testing.T) {
+	if os.Getenv("HOME") == "" {
+		t.Skip("no HOME to compare against")
+	}
+	oldPath := daemonUnitPath
+	oldSys := systemctlFn
+	oldHasSys := hasSystemctl
+	oldWrite := writeUnitFn
+	oldRoot := rootDataDir
+	oldHost := hostOS
+	oldSUDO := os.Getenv("SUDO_USER")
+	t.Cleanup(func() {
+		daemonUnitPath = oldPath
+		systemctlFn = oldSys
+		hasSystemctl = oldHasSys
+		writeUnitFn = oldWrite
+		rootDataDir = oldRoot
+		hostOS = oldHost
+		os.Setenv("SUDO_USER", oldSUDO)
+	})
+	hasSystemctl = func() bool { return true }
+	hostOS = "linux"
+	systemctlFn = func(...string) error { return nil }
+	daemonUnitPath = filepath.Join(t.TempDir(), "pmcluster.service")
+	// Simulate a root-initialised install: only /root/.pmcluster exists.
+	rootDataDir = filepath.Join(t.TempDir(), ".pmcluster")
+	if err := os.MkdirAll(rootDataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var wrote []byte
+	writeUnitFn = func(path string, data []byte, mode os.FileMode) error {
+		wrote = data
+		return nil
+	}
+
+	// SUDO_USER set but with no data dir of their own → root fallback.
+	os.Setenv("SUDO_USER", "sudoser")
+	t.Setenv("HOME", "/tmp/nonexistent-sudoser-home")
+	var out bytes.Buffer
+	if err := ensureDaemonRunning(&out); err != nil {
+		t.Fatalf("ensureDaemonRunning: %v", err)
+	}
+	if !bytes.Contains(wrote, []byte("User=root")) {
+		t.Errorf("unit must run as root when only /root/.pmcluster holds state:\n%s", wrote)
+	}
+}
