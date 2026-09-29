@@ -87,23 +87,27 @@ func ensureDaemonRunning(out io.Writer) error {
 	// invocation (e.g. "sudo pmcluster cluster update") would otherwise pick
 	// SUDO_USER even when the pmcluster state was initialised under root —
 	// the daemon then crash-loops on "read /root/.pmcluster/config.yaml:
-	// permission denied". When the resolved user's data dir does not exist but
-	// root's does, run as root.
+	// permission denied". The home is taken from the user's passwd entry
+	// (NOT the HOME env var, which sudo resets to /root): if the resolved
+	// user has no data dir of their own but root does, run as root.
 	pmUser := os.Getenv("PMCLUSTER_USER")
 	if pmUser == "" {
 		pmUser = os.Getenv("SUDO_USER")
 	}
-	home := os.Getenv("HOME")
+	home := ""
 	if pmUser == "" {
 		if u, err := user.Current(); err == nil {
 			pmUser = u.Username
-			if home == "" {
-				home = u.HomeDir
-			}
+			home = u.HomeDir
 		}
 	}
 	if pmUser == "" {
 		pmUser = "root"
+	}
+	if home == "" {
+		if u, err := user.Lookup(pmUser); err == nil {
+			home = u.HomeDir
+		}
 	}
 	if home == "" {
 		home = "/root"
