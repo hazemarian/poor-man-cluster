@@ -30,6 +30,7 @@ const (
 	settingSSOClientID     = "sso_client_id"
 	settingSSOClientSecret = "sso_client_secret"
 	settingSSOGitHubOrg    = "sso_github_org"
+	settingSSOGitHubRepos  = "sso_github_repos"
 	settingSSOCookieExpire = "sso_cookie_expire"
 
 	// settingEdgeLoginDisabled controls the edge console's own session login.
@@ -93,6 +94,7 @@ func SettingSSOProvider() string            { return settingSSOProvider }
 func SettingSSOClientID() string            { return settingSSOClientID }
 func SettingSSOClientSecret() string        { return settingSSOClientSecret }
 func SettingSSOGitHubOrg() string           { return settingSSOGitHubOrg }
+func SettingSSOGitHubRepos() string         { return settingSSOGitHubRepos }
 func SettingSSOCookieExpire() string        { return settingSSOCookieExpire }
 func SettingEdgeLoginDisabled() string      { return settingEdgeLoginDisabled }
 func SettingVolumeRoot() string             { return settingVolumeRoot }
@@ -197,6 +199,11 @@ type ssoState struct {
 	ClientID     string
 	ClientSecret string
 	GitHubOrg    string
+	// GitHubRepos optionally restricts sign-in to users with access to the
+	// given comma-separated repositories (e.g.
+	// "nextrum-sy/donation-campaign,nextrum-sy/donation-campaign-frontend").
+	// Rendered as oauth2-proxy's OAUTH2_PROXY_GITHUB_REPOS (plural) flag.
+	GitHubRepos string
 	// CookieExpire is the oauth2-proxy session cookie lifetime (e.g. "1h",
 	// "24h", "168h"). Default "1h" so a member removed from the GitHub org
 	// loses access within the hour instead of keeping a 7-day session.
@@ -218,6 +225,7 @@ func loadSSOSettings(ctx context.Context, st *store.Store) (ssoState, error) {
 		ClientID:     st.GetSettingDefault(ctx, settingSSOClientID, ""),
 		ClientSecret: st.GetSettingDefault(ctx, settingSSOClientSecret, ""),
 		GitHubOrg:    st.GetSettingDefault(ctx, settingSSOGitHubOrg, ""),
+		GitHubRepos:  st.GetSettingDefault(ctx, settingSSOGitHubRepos, ""),
 		CookieExpire: st.GetSettingDefault(ctx, settingSSOCookieExpire, defaultSSOCookieExpire),
 	}, nil
 }

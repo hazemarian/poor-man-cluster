@@ -178,6 +178,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			SSOClientID:     sso.ClientID,
 			SSOClientSecret: sso.ClientSecret,
 			SSOGitHubOrg:    sso.GitHubOrg,
+			SSOGitHubRepos:  sso.GitHubRepos,
 			SSOCookieExpire: sso.CookieExpire,
 		}
 		hostCerts, err := loadHostCertEntries(ctx, deps.Store, domain)
@@ -405,6 +406,7 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 	render.SSOClientID = sso.ClientID
 	render.SSOClientSecret = sso.ClientSecret
 	render.SSOGitHubOrg = sso.GitHubOrg
+	render.SSOGitHubRepos = sso.GitHubRepos
 	render.SSOCookieExpire = sso.CookieExpire
 	if sso.Enabled {
 		cookieCred, err := deps.Store.GetCredential(ctx, "sso_cookie_secret")

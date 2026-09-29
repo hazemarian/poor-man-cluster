@@ -28,6 +28,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingSSOClientID(),
 	cluster.SettingSSOClientSecret(),
 	cluster.SettingSSOGitHubOrg(),
+	cluster.SettingSSOGitHubRepos(),
 	cluster.SettingSSOCookieExpire(),
 	cluster.SettingEdgeLoginDisabled(),
 	cluster.SettingDomain(),

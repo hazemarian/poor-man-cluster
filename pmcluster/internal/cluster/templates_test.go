@@ -188,6 +188,7 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 		SSOClientSecret: "client-secret",
 		SSOCookieSecret: "cookie-secret",
 		SSOGitHubOrg:    "nextrum-s",
+		SSOGitHubRepos:  "nextrum-s/donation-campaign,nextrum-s/donation-campaign-frontend",
 		SSOCookieExpire: "1h",
 	}
 	data, err := LoadComposeFile(StackSSO, in)
@@ -203,6 +204,7 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 		"OAUTH2_PROXY_CLIENT_ID: \"client-id\"",
 		"OAUTH2_PROXY_CLIENT_SECRET: \"client-secret\"",
 		"OAUTH2_PROXY_GITHUB_ORG: \"nextrum-s\"",
+		"OAUTH2_PROXY_GITHUB_REPOS: \"nextrum-s/donation-campaign,nextrum-s/donation-campaign-frontend\"",
 		"OAUTH2_PROXY_COOKIE_SECRET: \"cookie-secret\"",
 		// The forwardAuth start redirect is host-relative to the request it
 		// intercepted, so /oauth2/* must resolve on every gated host too.
@@ -230,8 +232,25 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 	}
 	for _, bad := range []string{"pmcluster.example.com/oauth2", "__SSO", "[[."} {
 		if strings.Contains(body, bad) {
-			t.Errorf("sso-stack render should not contain %q", bad)
+			t.Errorf("sso-stack render contains forbidden %q", bad)
 		}
+	}
+
+	// Without SSOGitHubRepos the env line must be absent entirely.
+	noRepos, err := LoadComposeFile(StackSSO, RenderInput{
+		Domain:          "example.com",
+		SSOEnabled:      true,
+		SSOClientID:     "client-id",
+		SSOClientSecret: "client-secret",
+		SSOCookieSecret: "cookie-secret",
+		SSOGitHubOrg:    "nextrum-s",
+		SSOCookieExpire: "1h",
+	})
+	if err != nil {
+		t.Fatalf("LoadComposeFile(StackSSO, no repos): %v", err)
+	}
+	if strings.Contains(string(noRepos), "OAUTH2_PROXY_GITHUB_REPOS") {
+		t.Error("sso-stack render must omit OAUTH2_PROXY_GITHUB_REPOS when SSOGitHubRepos is empty")
 	}
 }
 

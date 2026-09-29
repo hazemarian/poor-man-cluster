@@ -32,7 +32,8 @@ answers into the store settings:
   - TLS: Let's Encrypt (--acme-email) or operator-supplied cert/key (--cert/--key)
   - Traefik admin user
   - SSO: enable GitHub sign-in via an OAuth2 proxy (--sso-enabled,
-    --sso-client-id, --sso-client-secret, --sso-github-org, --sso-cookie-expire)
+    --sso-client-id, --sso-client-secret, --sso-github-org,
+    --sso-github-repos, --sso-cookie-expire)
   - Edge console login (EDGE_LOGIN_DISABLED)
 
 The OpenObserve admin email is derived automatically (admin@<domain>) — it is
@@ -66,6 +67,7 @@ func init() {
 	setupCmd.Flags().String("sso-client-id", "", "GitHub OAuth app client ID (SSO; default: $PMCLUSTER_SSO_CLIENT_ID)")
 	setupCmd.Flags().String("sso-client-secret", "", "GitHub OAuth app client secret (SSO; default: $PMCLUSTER_SSO_CLIENT_SECRET)")
 	setupCmd.Flags().String("sso-github-org", "", "restrict SSO to a GitHub org (optional; default: $PMCLUSTER_SSO_GITHUB_ORG)")
+	setupCmd.Flags().String("sso-github-repos", "", "restrict SSO to users with access to these comma-separated repos, org/repo (optional; default: $PMCLUSTER_SSO_GITHUB_REPOS)")
 	setupCmd.Flags().String("sso-cookie-expire", "", "SSO session cookie lifetime (default 1h; default: $PMCLUSTER_SSO_COOKIE_EXPIRE)")
 	setupCmd.Flags().Bool("edge-login-enabled", false, "keep the edge console password login (default: disabled behind SSO/admin-auth; default: $PMCLUSTER_EDGE_LOGIN_ENABLED)")
 	setupCmd.Flags().String("volume-root", "", "host dir every container volume is forced under (default /var/stack/data)")
@@ -97,6 +99,7 @@ type setupAnswers struct {
 	SSOClientID     string
 	SSOClientSecret string
 	SSOGitHubOrg    string
+	SSOGitHubRepos  string
 	SSOCookieExpire string
 
 	EdgeLoginEnabled bool
@@ -203,6 +206,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 			a.SSOClientID = ask(r, out, "GitHub OAuth client ID", "")
 			a.SSOClientSecret = ask(r, out, "GitHub OAuth client secret", "")
 			a.SSOGitHubOrg = ask(r, out, "Restrict to GitHub org (optional)", st.GetSettingDefault(ctx, cluster.SettingSSOGitHubOrg(), ""))
+			a.SSOGitHubRepos = ask(r, out, "Restrict to GitHub repos, comma-separated (optional)", st.GetSettingDefault(ctx, cluster.SettingSSOGitHubRepos(), ""))
 			a.SSOCookieExpire = ask(r, out, "Session cookie lifetime (e.g. 1h)", st.GetSettingDefault(ctx, cluster.SettingSSOCookieExpire(), "1h"))
 		}
 		a.EdgeLoginEnabled = askYesNo(r, out, "Keep edge console password login?", false)
@@ -241,6 +245,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.SSOClientID, _ = cmd.Flags().GetString("sso-client-id")
 		a.SSOClientSecret, _ = cmd.Flags().GetString("sso-client-secret")
 		a.SSOGitHubOrg, _ = cmd.Flags().GetString("sso-github-org")
+		a.SSOGitHubRepos, _ = cmd.Flags().GetString("sso-github-repos")
 		a.SSOCookieExpire, _ = cmd.Flags().GetString("sso-cookie-expire")
 		a.EdgeLoginEnabled, _ = cmd.Flags().GetBool("edge-login-enabled")
 		a.VolumeRoot, _ = cmd.Flags().GetString("volume-root")
@@ -292,6 +297,11 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		if !cmd.Flags().Changed("sso-github-org") {
 			if v := os.Getenv("PMCLUSTER_SSO_GITHUB_ORG"); v != "" {
 				a.SSOGitHubOrg = v
+			}
+		}
+		if !cmd.Flags().Changed("sso-github-repos") {
+			if v := os.Getenv("PMCLUSTER_SSO_GITHUB_REPOS"); v != "" {
+				a.SSOGitHubRepos = v
 			}
 		}
 		if !cmd.Flags().Changed("sso-cookie-expire") {
@@ -408,6 +418,7 @@ func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswer
 		cluster.SettingSSOClientID():            a.SSOClientID,
 		cluster.SettingSSOClientSecret():        a.SSOClientSecret,
 		cluster.SettingSSOGitHubOrg():           a.SSOGitHubOrg,
+		cluster.SettingSSOGitHubRepos():         a.SSOGitHubRepos,
 		cluster.SettingSSOCookieExpire():        a.SSOCookieExpire,
 		cluster.SettingEdgeLoginDisabled():      boolSetting(!a.EdgeLoginEnabled),
 		cluster.SettingVolumeRoot():             a.VolumeRoot,
@@ -441,6 +452,7 @@ func persistSetup(ctx context.Context, st *store.Store, a setupAnswers) error {
 		cluster.SettingSSOClientID():            a.SSOClientID,
 		cluster.SettingSSOClientSecret():        a.SSOClientSecret,
 		cluster.SettingSSOGitHubOrg():           a.SSOGitHubOrg,
+		cluster.SettingSSOGitHubRepos():         a.SSOGitHubRepos,
 		cluster.SettingSSOCookieExpire():        a.SSOCookieExpire,
 		cluster.SettingEdgeLoginDisabled():      boolSetting(!a.EdgeLoginEnabled),
 		cluster.SettingVolumeRoot():             a.VolumeRoot,

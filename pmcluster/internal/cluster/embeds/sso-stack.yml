@@ -36,6 +36,13 @@ services:
       [[- if .SSOGitHubOrg]]
       OAUTH2_PROXY_GITHUB_ORG: "[[.SSOGitHubOrg]]"
       [[- end]]
+      [[- if .SSOGitHubRepos]]
+      # Restrict sign-in to users with access to these repositories
+      # (comma-separated "org/repo" list). NOTE: the env var is
+      # OAUTH2_PROXY_GITHUB_REPOS (PLURAL) — the singular form is silently
+      # ignored, matching the cookie/whitelist-domain plural trap.
+      OAUTH2_PROXY_GITHUB_REPOS: "[[.SSOGitHubRepos]]"
+      [[- end]]
       # Cookie encryption secret (managed credential sso_cookie_secret).
       OAUTH2_PROXY_COOKIE_SECRET: "[[.SSOCookieSecret]]"
       # oauth2-proxy owns /oauth2 on the Traefik network; upstream responses

@@ -196,12 +196,16 @@ type RenderInput struct {
 
 	// SSOClientID / SSOClientSecret are the OAuth provider (GitHub)
 	// application credentials. SSOGitHubOrg restricts sign-in to members of
-	// a GitHub org (optional). SSOCookieExpire is the oauth2-proxy session
-	// cookie lifetime (e.g. "1h", "24h", "168h"); default 1h so org-removed
-	// members lose access quickly. Used only when SSOEnabled.
+	// a GitHub org (optional); SSOGitHubRepos further restricts to users with
+	// access to the given comma-separated repositories (optional, rendered as
+	// oauth2-proxy's plural OAUTH2_PROXY_GITHUB_REPOS flag). SSOCookieExpire
+	// is the oauth2-proxy session cookie lifetime (e.g. "1h", "24h", "168h");
+	// default 1h so org-removed members lose access quickly. Used only when
+	// SSOEnabled.
 	SSOClientID     string
 	SSOClientSecret string
 	SSOGitHubOrg    string
+	SSOGitHubRepos  string
 	SSOCookieExpire string
 
 	// EdgeLoginDisabled is rendered into the edge stack's

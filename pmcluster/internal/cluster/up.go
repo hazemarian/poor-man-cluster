@@ -286,6 +286,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			SSOClientID:     sso.ClientID,
 			SSOClientSecret: sso.ClientSecret,
 			SSOGitHubOrg:    sso.GitHubOrg,
+			SSOGitHubRepos:  sso.GitHubRepos,
 			SSOCookieExpire: sso.CookieExpire,
 		}
 
