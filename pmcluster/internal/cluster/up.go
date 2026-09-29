@@ -259,6 +259,8 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			return err
 		}
 
+		ooL, ooM, ooT := loadOORetention(ctx, deps.Store)
+		s3b := loadBackupS3(ctx, deps.Store)
 		render = RenderInput{
 			Domain:                   in.Domain,
 			OpenObserveAdminEmail:    openobsCred.Username,
@@ -277,12 +279,14 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 			BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
 			PlatformNode:             loadPlatformNode(ctx, deps.Store),
-			SSOEnabled:               sso.Enabled,
-			SSOCookieSecret:          ssoSecret,
-			SSOClientID:              sso.ClientID,
-			SSOClientSecret:          sso.ClientSecret,
-			SSOGitHubOrg:             sso.GitHubOrg,
-			SSOCookieExpire:          sso.CookieExpire,
+			OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
+			BackupS3:        s3b,
+			SSOEnabled:      sso.Enabled,
+			SSOCookieSecret: ssoSecret,
+			SSOClientID:     sso.ClientID,
+			SSOClientSecret: sso.ClientSecret,
+			SSOGitHubOrg:    sso.GitHubOrg,
+			SSOCookieExpire: sso.CookieExpire,
 		}
 
 		otelConfigName, otelConfigCreated, err = ensureOTelConfig(ctx, deps, in.Version, render)

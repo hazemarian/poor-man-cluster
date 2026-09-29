@@ -36,12 +36,18 @@ services:
       - BACKUP_PRUNING_PREFIX=backup-
       - BACKUP_RETENTION_DAYS=[[ if .BackupRetentionDays ]][[.BackupRetentionDays]][[ else ]]15[[ end ]]
 
-      # 4. (Optional) S3 / Cloud Storage Config
-      # Uncomment and fill these to send backups to the cloud
-      # - AWS_S3_BUCKET_NAME=my-swarm-backups
-      # - AWS_ACCESS_KEY_ID=minioadmin
-      # - AWS_SECRET_ACCESS_KEY=minioadmin
-      # - AWS_ENDPOINT=http://minio:9000
+      # 4. Offsite (S3-compatible) upload — Cloudflare R2, MinIO, AWS S3.
+      #    Configured via pmcluster settings (backup_s3_*); when all of
+      #    endpoint/bucket/access-key/secret-key are set, every archive is
+      #    ALSO uploaded off-host (the local /var/stack/backup copy stays).
+      [[- if .BackupS3.Configured ]]
+      - AWS_S3_BUCKET_NAME=[[.BackupS3.Bucket]]
+      - AWS_ACCESS_KEY_ID=[[.BackupS3.AccessKey]]
+      - AWS_SECRET_ACCESS_KEY=[[.BackupS3.SecretKey]]
+      - AWS_ENDPOINT=[[.BackupS3.Endpoint]]
+      - AWS_REGION=[[.BackupS3.Region]]
+      - AWS_S3_FORCE_PATH_STYLE=true
+      [[- end ]]
       
     volumes:
       # SOURCE: the standardized single storage root — every container volume

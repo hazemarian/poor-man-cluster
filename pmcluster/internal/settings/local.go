@@ -34,6 +34,14 @@ var clusterSettingKeys = []string{
 	cluster.SettingOOEmail(),
 	cluster.SettingTraefikAdminUser(),
 	cluster.SettingPlatformNode(),
+	cluster.SettingOOLogsRetentionDays(),
+	cluster.SettingOOMetricsRetentionDays(),
+	cluster.SettingOOTracesRetentionDays(),
+	cluster.SettingBackupS3Endpoint(),
+	cluster.SettingBackupS3Bucket(),
+	cluster.SettingBackupS3AccessKey(),
+	cluster.SettingBackupS3SecretKey(),
+	cluster.SettingBackupS3Region(),
 }
 
 // Get returns the current value of every known setting ("" when unset).

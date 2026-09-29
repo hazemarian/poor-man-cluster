@@ -39,6 +39,12 @@ services:
       - ZO_APP_NAME=openobserve
       - ZO_ROOT_USER_EMAIL=${OPENOBSERVE_ADMIN_EMAIL}
       - ZO_ROOT_USER_PASSWORD=__OPENOBSERVE_PASSWORD__
+      # Stream retention (days). Bounded by pmcluster settings
+      # (oo_logs/metrics/traces_retention_days, default 7) — without a bound
+      # a metrics-heavy cluster silently grows into hundreds of GB.
+      - ZO_LOGS_RETENTION_DAYS=[[.OOLogsRetentionDays]]
+      - ZO_METRICS_RETENTION_DAYS=[[.OOMetricsRetentionDays]]
+      - ZO_TRACES_RETENTION_DAYS=[[.OOTracesRetentionDays]]
       # Note: the root token env is intentionally absent — OpenObserve caches
       # root creds in its data volume on first boot and ignores env after. The
       # OTel collector authenticates ingestion with the ROOT admin email:password

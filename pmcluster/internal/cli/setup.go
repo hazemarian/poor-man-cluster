@@ -70,6 +70,15 @@ func init() {
 	setupCmd.Flags().Bool("edge-login-enabled", false, "keep the edge console password login (default: disabled behind SSO/admin-auth; default: $PMCLUSTER_EDGE_LOGIN_ENABLED)")
 	setupCmd.Flags().String("volume-root", "", "host dir every container volume is forced under (default /var/stack/data)")
 	setupCmd.Flags().Bool("backup-all-nodes", false, "run the backup agent on every node (default: manager-only)")
+	setupCmd.Flags().String("backup-retention-days", "", "how many days backups are kept before pruning (default 15)")
+	setupCmd.Flags().String("oo-logs-retention-days", "", "OpenObserve log retention in days (default 7)")
+	setupCmd.Flags().String("oo-metrics-retention-days", "", "OpenObserve metric retention in days (default 7)")
+	setupCmd.Flags().String("oo-traces-retention-days", "", "OpenObserve trace retention in days (default 7)")
+	setupCmd.Flags().String("backup-s3-endpoint", "", "offsite S3-compatible endpoint for backup uploads (R2/MinIO/AWS; e.g. https://<account>.r2.cloudflarestorage.com)")
+	setupCmd.Flags().String("backup-s3-bucket", "", "offsite S3 bucket name for backup uploads")
+	setupCmd.Flags().String("backup-s3-access-key", "", "offsite S3 access key (default: $PMCLUSTER_BACKUP_S3_ACCESS_KEY)")
+	setupCmd.Flags().String("backup-s3-secret-key", "", "offsite S3 secret key (default: $PMCLUSTER_BACKUP_S3_SECRET_KEY)")
+	setupCmd.Flags().String("backup-s3-region", "", "offsite S3 region (default auto for R2)")
 	setupCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
 	setupCmd.Flags().String("swarm-advertise-addr", "", "advertise address passed to `docker swarm init` on a first node (default: auto-detected node IP)")
 }
@@ -94,6 +103,16 @@ type setupAnswers struct {
 
 	VolumeRoot     string
 	BackupAllNodes bool
+
+	BackupRetentionDays    string
+	OOLogsRetentionDays    string
+	OOMetricsRetentionDays string
+	OOTracesRetentionDays  string
+	BackupS3Endpoint       string
+	BackupS3Bucket         string
+	BackupS3AccessKey      string
+	BackupS3SecretKey      string
+	BackupS3Region         string
 
 	// NodeHostname is the name this node joins the Swarm under. It is applied
 	// with hostnamectl before the cluster comes up so the Swarm records the
@@ -189,6 +208,17 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.EdgeLoginEnabled = askYesNo(r, out, "Keep edge console password login?", false)
 		a.VolumeRoot = ask(r, out, "Container volume root dir", st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot))
 		a.BackupAllNodes = askYesNo(r, out, "Run backup agent on every node?", false)
+		a.BackupRetentionDays = ask(r, out, "Backup retention (days)", st.GetSettingDefault(ctx, cluster.SettingBackupRetentionDays(), "15"))
+		a.OOLogsRetentionDays = ask(r, out, "OpenObserve log retention (days)", st.GetSettingDefault(ctx, cluster.SettingOOLogsRetentionDays(), "7"))
+		a.OOMetricsRetentionDays = ask(r, out, "OpenObserve metric retention (days)", st.GetSettingDefault(ctx, cluster.SettingOOMetricsRetentionDays(), "7"))
+		a.OOTracesRetentionDays = ask(r, out, "OpenObserve trace retention (days)", st.GetSettingDefault(ctx, cluster.SettingOOTracesRetentionDays(), "7"))
+		if askYesNo(r, out, "Upload backups offsite (S3/R2)?", st.GetSettingDefault(ctx, cluster.SettingBackupS3Endpoint(), "") != "") {
+			a.BackupS3Endpoint = ask(r, out, "S3-compatible endpoint (R2: https://<account>.r2.cloudflarestorage.com)", st.GetSettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""))
+			a.BackupS3Bucket = ask(r, out, "S3 bucket name", st.GetSettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""))
+			a.BackupS3AccessKey = ask(r, out, "S3 access key", st.GetSettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""))
+			a.BackupS3SecretKey = ask(r, out, "S3 secret key", st.GetSettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""))
+			a.BackupS3Region = ask(r, out, "S3 region", st.GetSettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"))
+		}
 		defHost, _ := os.Hostname()
 		a.NodeHostname = ask(r, out, "Hostname for this node (pins use placement: <hostname>)", defHost)
 		if !swarmActive(ctx) {
@@ -215,6 +245,25 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.EdgeLoginEnabled, _ = cmd.Flags().GetBool("edge-login-enabled")
 		a.VolumeRoot, _ = cmd.Flags().GetString("volume-root")
 		a.BackupAllNodes, _ = cmd.Flags().GetBool("backup-all-nodes")
+		a.BackupRetentionDays, _ = cmd.Flags().GetString("backup-retention-days")
+		a.OOLogsRetentionDays, _ = cmd.Flags().GetString("oo-logs-retention-days")
+		a.OOMetricsRetentionDays, _ = cmd.Flags().GetString("oo-metrics-retention-days")
+		a.OOTracesRetentionDays, _ = cmd.Flags().GetString("oo-traces-retention-days")
+		a.BackupS3Endpoint, _ = cmd.Flags().GetString("backup-s3-endpoint")
+		a.BackupS3Bucket, _ = cmd.Flags().GetString("backup-s3-bucket")
+		a.BackupS3AccessKey, _ = cmd.Flags().GetString("backup-s3-access-key")
+		a.BackupS3SecretKey, _ = cmd.Flags().GetString("backup-s3-secret-key")
+		a.BackupS3Region, _ = cmd.Flags().GetString("backup-s3-region")
+		if !cmd.Flags().Changed("backup-s3-access-key") {
+			if v := os.Getenv("PMCLUSTER_BACKUP_S3_ACCESS_KEY"); v != "" {
+				a.BackupS3AccessKey = v
+			}
+		}
+		if !cmd.Flags().Changed("backup-s3-secret-key") {
+			if v := os.Getenv("PMCLUSTER_BACKUP_S3_SECRET_KEY"); v != "" {
+				a.BackupS3SecretKey = v
+			}
+		}
 		a.NodeHostname, _ = cmd.Flags().GetString("hostname")
 		if a.NodeHostname == "" {
 			a.NodeHostname, _ = os.Hostname()
@@ -354,15 +403,24 @@ func envBool(v string) bool {
 // UpInput and persists them itself.
 func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswers) error {
 	setting := map[string]string{
-		cluster.SettingSSOEnabled():        boolSetting(a.SSOEnabled),
-		cluster.SettingSSOProvider():       a.SSOProvider,
-		cluster.SettingSSOClientID():       a.SSOClientID,
-		cluster.SettingSSOClientSecret():   a.SSOClientSecret,
-		cluster.SettingSSOGitHubOrg():      a.SSOGitHubOrg,
-		cluster.SettingSSOCookieExpire():   a.SSOCookieExpire,
-		cluster.SettingEdgeLoginDisabled(): boolSetting(!a.EdgeLoginEnabled),
-		cluster.SettingVolumeRoot():        a.VolumeRoot,
-		cluster.SettingBackupAllNodes():    boolSetting(a.BackupAllNodes),
+		cluster.SettingSSOEnabled():             boolSetting(a.SSOEnabled),
+		cluster.SettingSSOProvider():            a.SSOProvider,
+		cluster.SettingSSOClientID():            a.SSOClientID,
+		cluster.SettingSSOClientSecret():        a.SSOClientSecret,
+		cluster.SettingSSOGitHubOrg():           a.SSOGitHubOrg,
+		cluster.SettingSSOCookieExpire():        a.SSOCookieExpire,
+		cluster.SettingEdgeLoginDisabled():      boolSetting(!a.EdgeLoginEnabled),
+		cluster.SettingVolumeRoot():             a.VolumeRoot,
+		cluster.SettingBackupAllNodes():         boolSetting(a.BackupAllNodes),
+		cluster.SettingBackupRetentionDays():    a.BackupRetentionDays,
+		cluster.SettingOOLogsRetentionDays():    a.OOLogsRetentionDays,
+		cluster.SettingOOMetricsRetentionDays(): a.OOMetricsRetentionDays,
+		cluster.SettingOOTracesRetentionDays():  a.OOTracesRetentionDays,
+		cluster.SettingBackupS3Endpoint():       a.BackupS3Endpoint,
+		cluster.SettingBackupS3Bucket():         a.BackupS3Bucket,
+		cluster.SettingBackupS3AccessKey():      a.BackupS3AccessKey,
+		cluster.SettingBackupS3SecretKey():      a.BackupS3SecretKey,
+		cluster.SettingBackupS3Region():         a.BackupS3Region,
 	}
 	for k, v := range setting {
 		if err := st.SetSetting(ctx, k, v); err != nil {
@@ -375,18 +433,27 @@ func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswer
 // persistSetup writes every collected answer into the store settings.
 func persistSetup(ctx context.Context, st *store.Store, a setupAnswers) error {
 	setting := map[string]string{
-		cluster.SettingDomain():            a.Domain,
-		cluster.SettingOOEmail():           a.OpenObserveEmail,
-		cluster.SettingTraefikAdminUser():  a.TraefikAdminUser,
-		cluster.SettingSSOEnabled():        boolSetting(a.SSOEnabled),
-		cluster.SettingSSOProvider():       a.SSOProvider,
-		cluster.SettingSSOClientID():       a.SSOClientID,
-		cluster.SettingSSOClientSecret():   a.SSOClientSecret,
-		cluster.SettingSSOGitHubOrg():      a.SSOGitHubOrg,
-		cluster.SettingSSOCookieExpire():   a.SSOCookieExpire,
-		cluster.SettingEdgeLoginDisabled(): boolSetting(!a.EdgeLoginEnabled),
-		cluster.SettingVolumeRoot():        a.VolumeRoot,
-		cluster.SettingBackupAllNodes():    boolSetting(a.BackupAllNodes),
+		cluster.SettingDomain():                 a.Domain,
+		cluster.SettingOOEmail():                a.OpenObserveEmail,
+		cluster.SettingTraefikAdminUser():       a.TraefikAdminUser,
+		cluster.SettingSSOEnabled():             boolSetting(a.SSOEnabled),
+		cluster.SettingSSOProvider():            a.SSOProvider,
+		cluster.SettingSSOClientID():            a.SSOClientID,
+		cluster.SettingSSOClientSecret():        a.SSOClientSecret,
+		cluster.SettingSSOGitHubOrg():           a.SSOGitHubOrg,
+		cluster.SettingSSOCookieExpire():        a.SSOCookieExpire,
+		cluster.SettingEdgeLoginDisabled():      boolSetting(!a.EdgeLoginEnabled),
+		cluster.SettingVolumeRoot():             a.VolumeRoot,
+		cluster.SettingBackupAllNodes():         boolSetting(a.BackupAllNodes),
+		cluster.SettingBackupRetentionDays():    a.BackupRetentionDays,
+		cluster.SettingOOLogsRetentionDays():    a.OOLogsRetentionDays,
+		cluster.SettingOOMetricsRetentionDays(): a.OOMetricsRetentionDays,
+		cluster.SettingOOTracesRetentionDays():  a.OOTracesRetentionDays,
+		cluster.SettingBackupS3Endpoint():       a.BackupS3Endpoint,
+		cluster.SettingBackupS3Bucket():         a.BackupS3Bucket,
+		cluster.SettingBackupS3AccessKey():      a.BackupS3AccessKey,
+		cluster.SettingBackupS3SecretKey():      a.BackupS3SecretKey,
+		cluster.SettingBackupS3Region():         a.BackupS3Region,
 	}
 	for k, v := range setting {
 		if err := st.SetSetting(ctx, k, v); err != nil {

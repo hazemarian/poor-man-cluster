@@ -1165,3 +1165,74 @@ func TestLoadComposeFile_EdgeSSOBridgeAdminAuth(t *testing.T) {
 		t.Errorf("rendered edge-stack missing admin-auth bridge middleware:\n%s", s)
 	}
 }
+
+// TestLoadComposeFile_OORetentionRenders verifies the OpenObserve stream
+// retention settings land as ZO_LOGS/METRICS/TRACES_RETENTION_DAYS env vars.
+func TestLoadComposeFile_OORetentionRenders(t *testing.T) {
+	in := RenderInput{
+		Domain:                 "example.com",
+		OpenObserveAdminEmail:  "ops@example.com",
+		OOLogsRetentionDays:    30,
+		OOMetricsRetentionDays: 14,
+		OOTracesRetentionDays:  10,
+	}
+	data, err := LoadComposeFile(StackObservability, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile: %v", err)
+	}
+	body := string(data)
+	for _, want := range []string{
+		"ZO_LOGS_RETENTION_DAYS=30",
+		"ZO_METRICS_RETENTION_DAYS=14",
+		"ZO_TRACES_RETENTION_DAYS=10",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered observability stack missing %q:\n%s", want, body)
+		}
+	}
+}
+
+// TestLoadComposeFile_BackupS3Renders verifies a configured offsite S3
+// destination lands as offen AWS_* env vars, and that an unset one leaves the
+// agent local-only.
+func TestLoadComposeFile_BackupS3Renders(t *testing.T) {
+	in := RenderInput{
+		Domain:              "example.com",
+		BackupRetentionDays: 15,
+		BackupS3: BackupS3{
+			Endpoint:  "https://acct.r2.cloudflarestorage.com",
+			Bucket:    "pmcluster-backups",
+			AccessKey: "ak",
+			SecretKey: "sk",
+			Region:    "auto",
+		},
+	}
+	data, err := LoadComposeFile(StackBackup, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile: %v", err)
+	}
+	body := string(data)
+	for _, want := range []string{
+		"AWS_S3_BUCKET_NAME=pmcluster-backups",
+		"AWS_ACCESS_KEY_ID=ak",
+		"AWS_SECRET_ACCESS_KEY=sk",
+		"AWS_ENDPOINT=https://acct.r2.cloudflarestorage.com",
+		"AWS_REGION=auto",
+		"AWS_S3_FORCE_PATH_STYLE=true",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered backup stack missing %q:\n%s", want, body)
+		}
+	}
+
+	// Unset destination: the agent stays local-only (no AWS_* lines).
+	in.BackupS3 = BackupS3{}
+	data, err = LoadComposeFile(StackBackup, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile: %v", err)
+	}
+	body = string(data)
+	if strings.Contains(body, "AWS_") {
+		t.Errorf("unconfigured backup stack must not emit AWS_* env:\n%s", body)
+	}
+}

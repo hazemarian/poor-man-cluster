@@ -154,6 +154,8 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		if err != nil {
 			return fmt.Errorf("decrypt openobserve_admin password: %w", err)
 		}
+		ooL, ooM, ooT := loadOORetention(ctx, deps.Store)
+		s3b := loadBackupS3(ctx, deps.Store)
 		render = RenderInput{
 			Domain:                   domain,
 			OpenObserveAdminEmail:    ooCred.Username,
@@ -169,12 +171,14 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 			BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
 			PlatformNode:             loadPlatformNode(ctx, deps.Store),
-			SSOEnabled:               sso.Enabled,
-			SSOCookieSecret:          ssoSecret,
-			SSOClientID:              sso.ClientID,
-			SSOClientSecret:          sso.ClientSecret,
-			SSOGitHubOrg:             sso.GitHubOrg,
-			SSOCookieExpire:          sso.CookieExpire,
+			OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
+			BackupS3:        s3b,
+			SSOEnabled:      sso.Enabled,
+			SSOCookieSecret: ssoSecret,
+			SSOClientID:     sso.ClientID,
+			SSOClientSecret: sso.ClientSecret,
+			SSOGitHubOrg:    sso.GitHubOrg,
+			SSOCookieExpire: sso.CookieExpire,
 		}
 		hostCerts, err := loadHostCertEntries(ctx, deps.Store, domain)
 		if err != nil {
@@ -373,6 +377,8 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 	if err != nil {
 		return nil, fmt.Errorf("decrypt openobserve_admin password: %w", err)
 	}
+	ooL, ooM, ooT := loadOORetention(ctx, deps.Store)
+	s3b := loadBackupS3(ctx, deps.Store)
 	render := RenderInput{
 		Domain:                   domain,
 		OpenObserveAdminEmail:    ooCred.Username,
@@ -388,6 +394,8 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 		BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
 		PlatformNode:             loadPlatformNode(ctx, deps.Store),
+		OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
+		BackupS3: s3b,
 	}
 	sso, err := loadSSOSettings(ctx, deps.Store)
 	if err != nil {

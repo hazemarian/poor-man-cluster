@@ -58,29 +58,55 @@ const (
 	// placement rule so platform state under /var/stack/data can never be
 	// rescheduled to a node with empty storage.
 	settingPlatformNode = "platform_node"
+
+	// OpenObserve stream retention (days). Unbounded retention is how a
+	// metrics-heavy cluster silently grows to hundreds of GB — the values
+	// render into ZO_LOGS/METRICS/TRACES_RETENTION_DAYS.
+	settingOOLogsRetentionDays    = "oo_logs_retention_days"
+	settingOOMetricsRetentionDays = "oo_metrics_retention_days"
+	settingOOTracesRetentionDays  = "oo_traces_retention_days"
+
+	// Offsite (S3/R2) backup destination for the volume-backup agent. When all
+	// five are set, offen also uploads every archive to the S3-compatible
+	// endpoint (Cloudflare R2, MinIO, AWS...). Stored like the other secret
+	// settings (sso_client_secret) — plaintext in the store, masked in the
+	// console.
+	settingBackupS3Endpoint  = "backup_s3_endpoint"
+	settingBackupS3Bucket    = "backup_s3_bucket"
+	settingBackupS3AccessKey = "backup_s3_access_key"
+	settingBackupS3SecretKey = "backup_s3_secret_key"
+	settingBackupS3Region    = "backup_s3_region"
 )
 
 // Setting* accessors expose the persisted settings keys for CLI surfaces
 // (e.g. the interactive `pmcluster setup` wizard) that read/write them
 // directly instead of through the cluster workflow.
-func SettingDomain() string              { return settingDomain }
-func SettingTLSMode() string             { return settingTLSMode }
-func SettingTLSCertPath() string         { return settingTLSCertPath }
-func SettingTLSKeyPath() string          { return settingTLSKeyPath }
-func SettingTLSACME() string             { return settingTLSACME }
-func SettingOOEmail() string             { return settingOOEmail }
-func SettingTraefikAdminUser() string    { return settingTraefikAdminUser }
-func SettingSSOEnabled() string          { return settingSSOEnabled }
-func SettingSSOProvider() string         { return settingSSOProvider }
-func SettingSSOClientID() string         { return settingSSOClientID }
-func SettingSSOClientSecret() string     { return settingSSOClientSecret }
-func SettingSSOGitHubOrg() string        { return settingSSOGitHubOrg }
-func SettingSSOCookieExpire() string     { return settingSSOCookieExpire }
-func SettingEdgeLoginDisabled() string   { return settingEdgeLoginDisabled }
-func SettingVolumeRoot() string          { return settingVolumeRoot }
-func SettingBackupAllNodes() string      { return settingBackupAllNodes }
-func SettingBackupRetentionDays() string { return settingBackupRetentionDays }
-func SettingPlatformNode() string        { return settingPlatformNode }
+func SettingDomain() string                 { return settingDomain }
+func SettingTLSMode() string                { return settingTLSMode }
+func SettingTLSCertPath() string            { return settingTLSCertPath }
+func SettingTLSKeyPath() string             { return settingTLSKeyPath }
+func SettingTLSACME() string                { return settingTLSACME }
+func SettingOOEmail() string                { return settingOOEmail }
+func SettingTraefikAdminUser() string       { return settingTraefikAdminUser }
+func SettingSSOEnabled() string             { return settingSSOEnabled }
+func SettingSSOProvider() string            { return settingSSOProvider }
+func SettingSSOClientID() string            { return settingSSOClientID }
+func SettingSSOClientSecret() string        { return settingSSOClientSecret }
+func SettingSSOGitHubOrg() string           { return settingSSOGitHubOrg }
+func SettingSSOCookieExpire() string        { return settingSSOCookieExpire }
+func SettingEdgeLoginDisabled() string      { return settingEdgeLoginDisabled }
+func SettingVolumeRoot() string             { return settingVolumeRoot }
+func SettingBackupAllNodes() string         { return settingBackupAllNodes }
+func SettingBackupRetentionDays() string    { return settingBackupRetentionDays }
+func SettingPlatformNode() string           { return settingPlatformNode }
+func SettingOOLogsRetentionDays() string    { return settingOOLogsRetentionDays }
+func SettingOOMetricsRetentionDays() string { return settingOOMetricsRetentionDays }
+func SettingOOTracesRetentionDays() string  { return settingOOTracesRetentionDays }
+func SettingBackupS3Endpoint() string       { return settingBackupS3Endpoint }
+func SettingBackupS3Bucket() string         { return settingBackupS3Bucket }
+func SettingBackupS3AccessKey() string      { return settingBackupS3AccessKey }
+func SettingBackupS3SecretKey() string      { return settingBackupS3SecretKey }
+func SettingBackupS3Region() string         { return settingBackupS3Region }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {
@@ -243,6 +269,65 @@ func loadPlatformNode(ctx context.Context, st *store.Store) string {
 		return ""
 	}
 	return st.GetSettingDefault(ctx, settingPlatformNode, "")
+}
+
+// defaultOORetentionDays is the OpenObserve stream retention fallback when
+// the setting is unset. Kept short: metrics are the disk hog (a histogram
+// stream can grow into tens of GB in weeks) — unbounded retention is how the
+// legacy cluster accumulated a 123G /data volume.
+const defaultOORetentionDays = 7
+
+// loadOORetention returns the OpenObserve log/metric/trace retention in days.
+// Each falls back to defaultOORetentionDays when unset or unparseable.
+func loadOORetention(ctx context.Context, st *store.Store) (logs, metrics, traces int) {
+	if st == nil {
+		return defaultOORetentionDays, defaultOORetentionDays, defaultOORetentionDays
+	}
+	parse := func(key string) int {
+		v := st.GetSettingDefault(ctx, key, "")
+		if v == "" {
+			return defaultOORetentionDays
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return defaultOORetentionDays
+		}
+		return n
+	}
+	return parse(settingOOLogsRetentionDays),
+		parse(settingOOMetricsRetentionDays),
+		parse(settingOOTracesRetentionDays)
+}
+
+// BackupS3 is the offsite backup destination for the volume-backup agent.
+// When Endpoint, Bucket, AccessKey and SecretKey are all non-empty, the offen
+// agent also uploads every archive to the S3-compatible endpoint (Cloudflare
+// R2, MinIO, AWS S3...). Region defaults to "auto" (R2) when empty.
+type BackupS3 struct {
+	Endpoint  string
+	Bucket    string
+	AccessKey string
+	SecretKey string
+	Region    string
+}
+
+// Configured reports whether a full offsite destination has been set.
+func (b BackupS3) Configured() bool {
+	return b.Endpoint != "" && b.Bucket != "" && b.AccessKey != "" && b.SecretKey != ""
+}
+
+// loadBackupS3 returns the persisted offsite backup destination.
+func loadBackupS3(ctx context.Context, st *store.Store) BackupS3 {
+	if st == nil {
+		return BackupS3{}
+	}
+	return BackupS3{
+		Endpoint:  st.GetSettingDefault(ctx, settingBackupS3Endpoint, ""),
+		Bucket:    st.GetSettingDefault(ctx, settingBackupS3Bucket, ""),
+		AccessKey: st.GetSettingDefault(ctx, settingBackupS3AccessKey, ""),
+		SecretKey: st.GetSettingDefault(ctx, settingBackupS3SecretKey, ""),
+		Region:    st.GetSettingDefault(ctx, settingBackupS3Region, "auto"),
+	}
 }
 
 // defaultBackupRetentionDays is how many days backup audit rows + archives

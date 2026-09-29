@@ -229,6 +229,19 @@ type RenderInput struct {
 	// storage. Mirrors the stateful-app placement rule — platform services
 	// are stateful too.
 	PlatformNode string
+
+	// OOLogsRetentionDays / OOMetricsRetentionDays / OOTracesRetentionDays
+	// bound how long OpenObserve keeps each stream type (rendered into
+	// ZO_LOGS/METRICS/TRACES_RETENTION_DAYS). Without a bound, a
+	// metrics-heavy cluster silently grows into hundreds of GB.
+	OOLogsRetentionDays    int
+	OOMetricsRetentionDays int
+	OOTracesRetentionDays  int
+
+	// BackupS3 is the offsite destination for the volume-backup agent. When
+	// Configured(), offen uploads every archive to the S3-compatible endpoint
+	// in addition to the local /var/stack/backup copy.
+	BackupS3 BackupS3
 }
 
 // openObserveBasicAuth computes the HTTP Basic Authorization header value
