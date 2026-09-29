@@ -38,9 +38,10 @@ import (
 var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Run the pmcluster HTTP daemon (REST API + webhook receiver)",
-	Long: `Starts the long-running pmcluster daemon. Listens on 127.0.0.1:9090 by
-default; Traefik (running in the swarm) routes pmcluster.<domain> to it via
-host.docker.internal:9090.
+	Long: `Starts the long-running pmcluster daemon. Listens on 0.0.0.0:9090 by
+default so the edge console container can reach it via
+host.docker.internal:9090 (the docker bridge gateway); Traefik (running in
+the swarm) routes pmcluster.<domain> to it as well.
 
 The data directory ($HOME/.pmcluster by default) must already be initialised
 via 'pmcluster init'.`,

@@ -18,8 +18,8 @@ func TestLoad_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.ListenAddr != "127.0.0.1:9090" {
-		t.Errorf("ListenAddr default = %q, want 127.0.0.1:9090", cfg.ListenAddr)
+	if cfg.ListenAddr != "0.0.0.0:9090" {
+		t.Errorf("ListenAddr default = %q, want 0.0.0.0:9090", cfg.ListenAddr)
 	}
 	wantData := filepath.Join(tmp, ".pmcluster")
 	if cfg.DataDir != wantData {

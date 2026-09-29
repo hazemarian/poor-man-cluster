@@ -36,7 +36,11 @@ func defaultConfig() (*Config, error) {
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
 	return &Config{
-		ListenAddr:   "127.0.0.1:9090",
+		// 0.0.0.0 so the edge console container can reach the daemon via
+		// host.docker.internal:9090 (the docker bridge gateway). Binding
+		// loopback (127.0.0.1) breaks the console with 'context deadline
+		// exceeded' on freshly initialised clusters.
+		ListenAddr:   "0.0.0.0:9090",
 		DataDir:      filepath.Join(home, ".pmcluster"),
 		LogLevel:     "info",
 		OTLPEndpoint: "http://127.0.0.1:4318",
