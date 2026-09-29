@@ -24,7 +24,11 @@
 
 services:
   oauth2-proxy:
-    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+    # Digest-pinned: quay.io rate-limits anonymous pulls of the bare :latest
+    # tag (403 Forbidden when the shared manifest cache is exhausted). The
+    # digest is what the reference cluster runs; pinning it keeps new clusters
+    # from depending on quay's rate-limiter for first-time pulls.
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest@sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded
     networks:
       - traefik-net
     environment:
