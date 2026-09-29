@@ -97,3 +97,40 @@ func TestEnsureVolumeDirs_SkipsNonBindVolumes(t *testing.T) {
 		t.Fatalf("EnsureVolumeDirs: %v", err)
 	}
 }
+
+// TestTranslate_CertResolverConditional asserts the tls.certresolver label is
+// emitted on exposed routers ONLY when the writer carries a resolver name
+// (ACME clusters). BYO-cert clusters leave it empty and must get NO label —
+// referencing a nonexistent letsencrypt resolver would break routing.
+func TestTranslate_CertResolverConditional(t *testing.T) {
+	app := baseApp()
+	app.Services = map[string]*dsl.Service{
+		"api": {
+			Image: "nginx:latest",
+			Expose: &dsl.Expose{
+				Port: 8080,
+				Host: "api.example.com",
+			},
+		},
+	}
+
+	// ACME cluster: resolver present.
+	out, err := TranslateIR(context.Background(), app, nil, &ComposeWriter{CertResolver: "letsencrypt"})
+	if err != nil {
+		t.Fatalf("TranslateIR (acme): %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "tls.certresolver: letsencrypt") {
+		t.Errorf("ACME render should carry tls.certresolver: letsencrypt:\n%s", s)
+	}
+
+	// BYO-cert cluster: no resolver label at all.
+	out, err = TranslateIR(context.Background(), app, nil, &ComposeWriter{})
+	if err != nil {
+		t.Fatalf("TranslateIR (byo): %v", err)
+	}
+	s = string(out)
+	if strings.Contains(s, "tls.certresolver") {
+		t.Errorf("BYO-cert render must NOT reference a letsencrypt resolver:\n%s", s)
+	}
+}

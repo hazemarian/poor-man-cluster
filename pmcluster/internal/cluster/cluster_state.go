@@ -371,6 +371,17 @@ func requestedTLSMode(in UpInput) string {
 	return ""
 }
 
+// CertResolverForMode returns the ACME resolver name to attach to DSL-exposed
+// Traefik routers for the given TLS mode ("acme" → "letsencrypt", anything
+// else → ""). BYO-cert clusters never define a letsencrypt resolver, so
+// emitting the label there would break routing.
+func CertResolverForMode(tlsMode string) string {
+	if tlsMode == "acme" {
+		return "letsencrypt"
+	}
+	return ""
+}
+
 // mergeTLSState reconciles the operator's requested input with the stored
 // install state so an idempotent re-run doesn't require re-passing the TLS
 // flags and can't silently flip the TLS mode.

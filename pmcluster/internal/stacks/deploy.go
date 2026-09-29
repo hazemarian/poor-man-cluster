@@ -84,6 +84,11 @@ type Service struct {
 	// (subpaths /<app>/<name>). Empty falls back to
 	// manifest.DefaultVolumeRoot (/var/stack/data). Applied by the writer.
 	VolumeRoot string
+	// CertResolver names the ACME resolver to attach to every exposed Traefik
+	// router as traefik.http.routers.<scope>.tls.certresolver ("letsencrypt"
+	// when the cluster uses ACME; empty for BYO-cert clusters — see
+	// manifest.ComposeWriter.CertResolver).
+	CertResolver string
 	// MkdirAll creates host directories for the volume-root bind targets
 	// before deploy (nil = os.MkdirAll). Overridable in tests.
 	MkdirAll func(string, os.FileMode) error
@@ -183,7 +188,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		return nil
 	})
 	wf.Add("Translating to Compose (resolving configs/secrets)", func(ctx context.Context) error {
-		y, err := manifest.TranslateIR(ctx, app, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot})
+		y, err := manifest.TranslateIR(ctx, app, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver})
 		if err != nil {
 			return fmt.Errorf("translate: %w", err)
 		}
@@ -278,7 +283,7 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 		if err = manifest.Interpolate(parsed); err == nil {
 			if err = manifest.Validate(parsed); err == nil {
 				var rendered []byte
-				rendered, err = manifest.TranslateIR(ctx, parsed, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot})
+				rendered, err = manifest.TranslateIR(ctx, parsed, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver})
 				if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
 					return &Result{
 						StackName:    stackName,

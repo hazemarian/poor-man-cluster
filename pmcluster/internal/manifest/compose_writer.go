@@ -21,6 +21,14 @@ import (
 // Empty means the default /var/stack/data.
 type ComposeWriter struct {
 	VolumeRoot string
+	// CertResolver names the ACME resolver to attach to every exposed Traefik
+	// router (and its aliases) as traefik.http.routers.<scope>.tls.certresolver.
+	// Empty means no certresolver label is emitted — required for BYO-cert
+	// clusters that never define a letsencrypt resolver. Traefik's
+	// entrypoint-default certresolver does NOT cascade to swarm-label routers,
+	// so ACME clusters MUST set this to their resolver name (e.g.
+	// "letsencrypt") or no certificate is ever issued for app domains.
+	CertResolver string
 }
 
 // DefaultVolumeRoot is where every container volume lands unless the
@@ -47,7 +55,7 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 
 	for i := range ir.Services {
 		s := &ir.Services[i]
-		cs, err := composeServiceFromIR(s, app, privateNet, root, &usesTraefikNet, &usesMonitoringNet)
+		cs, err := composeServiceFromIR(s, app, privateNet, root, w.CertResolver, &usesTraefikNet, &usesMonitoringNet)
 		if err != nil {
 			return nil, err
 		}
@@ -96,7 +104,7 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 func composeServiceFromIR(
 	s *IRService,
 	app irApp,
-	privateNet, volumeRoot string,
+	privateNet, volumeRoot, certResolver string,
 	usesTraefikNet, usesMonitoringNet *bool,
 ) (*composeService, error) {
 	cs := &composeService{
@@ -116,7 +124,7 @@ func composeServiceFromIR(
 	}
 
 	cs.Healthcheck = composeHealthcheckFromIR(s)
-	cs.Deploy = composeDeployFromIR(app, s)
+	cs.Deploy = composeDeployFromIR(app, s, certResolver)
 
 	if len(s.DependsOn) > 0 {
 		cs.DependsOn = s.DependsOn
@@ -192,7 +200,7 @@ func composeHealthcheckFromIR(s *IRService) *composeHealthcheck {
 	}
 }
 
-func composeDeployFromIR(app irApp, s *IRService) *composeDeploy {
+func composeDeployFromIR(app irApp, s *IRService, certResolver string) *composeDeploy {
 	d := &composeDeploy{
 		Labels: standardLabels(app, s.Name),
 	}
@@ -228,7 +236,7 @@ func composeDeployFromIR(app irApp, s *IRService) *composeDeploy {
 	}
 
 	if s.Expose != nil {
-		addTraefikLabels(d.Labels, app, s.Name, s.Expose)
+		addTraefikLabels(d.Labels, app, s.Name, s.Expose, certResolver)
 	}
 
 	if s.SkipFilelog {
@@ -261,7 +269,7 @@ func standardLabels(app irApp, serviceName string) map[string]string {
 // the canonical ${domain} host. Because the aliases live on foreign domains
 // the cluster-wide cors-default regex doesn't cover, aliases force a per-app
 // CORS middleware whose origin regex spans the primary host AND every alias.
-func addTraefikLabels(labels map[string]string, app irApp, serviceName string, exp *IRExpose) {
+func addTraefikLabels(labels map[string]string, app irApp, serviceName string, exp *IRExpose, certResolver string) {
 	scope := app.name + "-" + serviceName
 	labels["traefik.enable"] = "true"
 	labels["traefik.http.services."+scope+".loadbalancer.server.port"] = fmt.Sprintf("%d", exp.Port)
@@ -284,6 +292,14 @@ func addTraefikLabels(labels map[string]string, app irApp, serviceName string, e
 	labels["traefik.http.routers."+scope+".rule"] = "Host(`" + exp.Host + "`)"
 	labels["traefik.http.routers."+scope+".entrypoints"] = "websecure"
 	labels["traefik.http.routers."+scope+".tls"] = "true"
+	// Explicit certresolver, ONLY for ACME clusters: the platform stacks carry
+	// this label and the entrypoint-default resolver does not reliably cascade
+	// to swarm-label routers — without it ACME never issues a certificate for
+	// the app's domain and Traefik serves its self-signed default cert. But a
+	// BYO-cert cluster (no letsencrypt resolver exists) must NOT reference it.
+	if certResolver != "" {
+		labels["traefik.http.routers."+scope+".tls.certresolver"] = certResolver
+	}
 	if !exp.CORSDisabled {
 		labels["traefik.http.routers."+scope+".middlewares"] = middleware
 	}
@@ -293,6 +309,9 @@ func addTraefikLabels(labels map[string]string, app irApp, serviceName string, e
 		labels["traefik.http.routers."+aliasScope+".rule"] = "Host(`" + alias + "`)"
 		labels["traefik.http.routers."+aliasScope+".entrypoints"] = "websecure"
 		labels["traefik.http.routers."+aliasScope+".tls"] = "true"
+		if certResolver != "" {
+			labels["traefik.http.routers."+aliasScope+".tls.certresolver"] = certResolver
+		}
 		if !exp.CORSDisabled {
 			labels["traefik.http.routers."+aliasScope+".middlewares"] = middleware
 		}
