@@ -99,6 +99,8 @@ func init() {
 		"clustersettings.sso_secret_hint":          "Leave it empty to keep the stored secret. It is never shown again.",
 		"clustersettings.sso_github_org":           "GitHub organisation",
 		"clustersettings.sso_github_org_hint":      "Only members of this organisation may sign in. Leave it empty to accept any GitHub account.",
+		"clustersettings.sso_github_repos":         "GitHub repositories",
+		"clustersettings.sso_github_repos_hint":    "Comma-separated org/repo list (for example acme/app,acme/web). Only users with access to these repositories may sign in. Leave it empty to allow every organisation member.",
 		"clustersettings.sso_cookie_expire":        "Session lifetime",
 		"clustersettings.sso_cookie_expire_hint":   "How long one sign-in lasts, for example 24h or 720h.",
 		"clustersettings.sect_edge":                "Edge and built-in login",

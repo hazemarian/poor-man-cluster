@@ -399,6 +399,7 @@ var clusterSettingKeys = []string{
 	"sso_client_id",
 	"sso_client_secret",
 	"sso_github_org",
+	"sso_github_repos",
 	"sso_cookie_expire",
 	"edge_login_disabled",
 	"domain",

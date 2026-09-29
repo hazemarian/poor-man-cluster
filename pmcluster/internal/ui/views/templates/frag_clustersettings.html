@@ -107,6 +107,11 @@
           <span class="hint">{{T "clustersettings.sso_github_org_hint"}}</span>
         </div>
         <div class="field">
+          <label for="cs-sso-repos">{{T "clustersettings.sso_github_repos"}}</label>
+          <input id="cs-sso-repos" class="finput mono" type="text" name="sso_github_repos" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_github_repos"}}">
+          <span class="hint">{{T "clustersettings.sso_github_repos_hint"}}</span>
+        </div>
+        <div class="field">
           <label for="cs-sso-cookie">{{T "clustersettings.sso_cookie_expire"}}</label>
           <input id="cs-sso-cookie" class="finput mono" type="text" name="sso_cookie_expire" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_cookie_expire"}}">
           <span class="hint">{{T "clustersettings.sso_cookie_expire_hint"}}</span>

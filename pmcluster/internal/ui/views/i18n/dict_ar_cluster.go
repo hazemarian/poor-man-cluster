@@ -118,6 +118,8 @@ func init() {
 		"clustersettings.sso_secret_hint":          "اتركه فارغًا للإبقاء على السرّ المحفوظ. ولا يُعرض مرة أخرى.",
 		"clustersettings.sso_github_org":           "مؤسسة GitHub",
 		"clustersettings.sso_github_org_hint":      "لا يسجّل الدخول إلا أعضاء هذه المؤسسة. اتركه فارغًا لقبول أي حساب GitHub.",
+		"clustersettings.sso_github_repos":         "مستودعات GitHub",
+		"clustersettings.sso_github_repos_hint":    "قائمة مفصولة بفواصل بصيغة org/repo (مثال acme/app,acme/web). لا يسجّل الدخول إلا المستخدمون المخوّلون بهذه المستودعات. اتركه فارغًا لقبول جميع أعضاء المؤسسة.",
 		"clustersettings.sso_cookie_expire":        "مدة الجلسة",
 		"clustersettings.sso_cookie_expire_hint":   "كم يدوم تسجيل الدخول الواحد، مثل 24 ساعة أو 720 ساعة.",
 		"clustersettings.sect_edge":                "الحافة والدخول المدمج",
