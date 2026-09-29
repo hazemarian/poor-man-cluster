@@ -424,6 +424,9 @@ func RenderTraefikDynamic(in RenderInput) ([]byte, error) {
 	if in.Domain == "" {
 		return nil, fmt.Errorf("RenderTraefikDynamic: Domain is required")
 	}
+	if in.CORSOriginRegex == "" {
+		in.CORSOriginRegex = CORSOriginRegex(in.Domain)
+	}
 
 	body, err := readConfigFile("traefik-dynamic.yml", in)
 	if err != nil {

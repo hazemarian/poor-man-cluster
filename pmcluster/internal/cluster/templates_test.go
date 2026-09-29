@@ -457,7 +457,7 @@ func TestRenderTraefikDynamic_SubstitutesDomain(t *testing.T) {
 	if strings.Contains(body, "__DOMAIN__") {
 		t.Error("__DOMAIN__ placeholder was not substituted")
 	}
-	if !strings.Contains(body, "myapp.example.com") {
+	if !strings.Contains(body, "myapp.example.com") && !strings.Contains(body, `myapp\.example\.com`) {
 		t.Error("substituted domain not found in output")
 	}
 }
@@ -693,11 +693,14 @@ func TestRenderTraefikDynamic_CORSWired(t *testing.T) {
 	if !strings.Contains(body, "cors-default:") {
 		t.Errorf("rendered config missing cors-default middleware:\n%s", body)
 	}
-	if !strings.Contains(body, `Access-Control-Allow-Origin: "https://example.com"`) {
-		t.Errorf("rendered config missing domain-based origin in cors-default:\n%s", body)
+	if !strings.Contains(body, "accessControlAllowOriginListRegex") {
+		t.Errorf("rendered config missing accessControlAllowOriginListRegex:\n%s", body)
 	}
-	if !strings.Contains(body, `Access-Control-Allow-Credentials: "true"`) {
-		t.Errorf("rendered config missing Access-Control-Allow-Credentials:\n%s", body)
+	if !strings.Contains(body, `'^https://([a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)*\.)?example\.com$'`) {
+		t.Errorf("rendered config missing domain-based origin regex:\n%s", body)
+	}
+	if !strings.Contains(body, "accessControlAllowCredentials: true") {
+		t.Errorf("rendered config missing accessControlAllowCredentials:\n%s", body)
 	}
 
 	if strings.Contains(body, "routers:") {
@@ -750,7 +753,7 @@ func TestOpenObserveBasicAuth(t *testing.T) {
 }
 
 // TestRenderTraefikDynamic_CORSOverride verifies that changing the domain
-// updates the Access-Control-Allow-Origin header.
+// updates the CORS origin regex.
 func TestRenderTraefikDynamic_CORSOverride(t *testing.T) {
 	in := RenderInput{Domain: "other.com"}
 	data, err := RenderTraefikDynamic(in)
@@ -758,10 +761,10 @@ func TestRenderTraefikDynamic_CORSOverride(t *testing.T) {
 		t.Fatalf("RenderTraefikDynamic: %v", err)
 	}
 	body := string(data)
-	if !strings.Contains(body, `Access-Control-Allow-Origin: "https://other.com"`) {
-		t.Errorf("override origin not present:\n%s", body)
+	if !strings.Contains(body, `'^https://([a-z0-9][a-z0-9-]*(\.[a-z0-9][a-z0-9-]*)*\.)?other\.com$'`) {
+		t.Errorf("override origin regex not present:\n%s", body)
 	}
-	if strings.Contains(body, `Access-Control-Allow-Origin: "https://example.com"`) {
+	if strings.Contains(body, "example\\.com") {
 		t.Errorf("old domain should not appear")
 	}
 }

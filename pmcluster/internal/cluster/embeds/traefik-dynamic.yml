@@ -54,13 +54,20 @@ http:
     # so this file holds only shared middlewares, not the pmcluster router.
     cors-default:
       headers:
-        customResponseHeaders:
-          Access-Control-Allow-Origin: "https://[[.Domain]]"
-          Access-Control-Allow-Methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-          Access-Control-Allow-Headers: "Content-Type,Authorization,X-Pmcluster-Signature,X-Request-Id"
-          Access-Control-Allow-Credentials: "true"
-          Access-Control-Max-Age: "600"
-          Vary: "Origin"
+        # Traefik's native origin-list regex ECHOES the matched request origin
+        # back as Access-Control-Allow-Origin. This is the only way to keep
+        # allowCredentials valid while permitting every subdomain of the
+        # cluster domain (a fixed customResponseHeader would reject e.g.
+        # campaign.<domain> when the API lives on donation-campaign.<domain>).
+        accessControlAllowOriginListRegex:
+          - '[[.CORSOriginRegex]]'
+        accessControlAllowCredentials: true
+        accessControlAllowMethods:
+          - "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+        accessControlAllowHeaders:
+          - "Content-Type,Authorization,X-Pmcluster-Signature,X-Request-Id"
+        accessControlMaxAge: 600
+        addVaryHeader: true
 [[- if not .ACMEEmail]]
 tls:
   certificates:
