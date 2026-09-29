@@ -72,10 +72,14 @@ func (s *Store) GetSecret(ctx context.Context, name string) (*SecretRow, error) 
 // ListSecrets returns secrets filtered by scope and stack (empty values are
 // wildcards) ordered by scope then stack then name. The ciphertext payload is
 // deliberately excluded — callers wanting a value use GetSecret.
+//
+// A stack filter also matches unattached service-scope rows (stack = ”):
+// the DSL resolves secrets(name) by name only, so an unattached service
+// secret is usable by any stack and must stay visible on every stack's page.
 func (s *Store) ListSecrets(ctx context.Context, scope, stack string) ([]*SecretRow, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, scope, stack, name, hash, created_at FROM secrets
-		 WHERE (?1 = '' OR scope = ?1) AND (?2 = '' OR stack = ?2)
+		 WHERE (?1 = '' OR scope = ?1) AND (?2 = '' OR stack = ?2 OR (?2 != '' AND ?1 = 'service' AND stack = ''))
 		 ORDER BY scope, stack, name`, scope, stack)
 	if err != nil {
 		return nil, fmt.Errorf("query secrets: %w", err)

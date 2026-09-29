@@ -100,11 +100,15 @@ func (s *Store) GetConfig(ctx context.Context, name string) (*ConfigRow, error) 
 
 // ListConfigs returns configs matching the given scope/stack filters (empty
 // string = wildcard), ordered by scope then stack then name.
+//
+// A stack filter also matches unattached service-scope rows (stack = ”):
+// the DSL resolves config(name) by name only, so an unattached service config
+// is usable by any stack and must stay visible on every stack's page.
 func (s *Store) ListConfigs(ctx context.Context, scope, stack string) ([]*ConfigRow, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, scope, stack, name, kind, content, version, hash, created_at, updated_at, rendered_content, rendered_at, rendered_hash
 		 FROM configs
-		 WHERE (?1 = '' OR scope = ?1) AND (?2 = '' OR stack = ?2)
+		 WHERE (?1 = '' OR scope = ?1) AND (?2 = '' OR stack = ?2 OR (?2 != '' AND ?1 = 'service' AND stack = ''))
 		 ORDER BY scope, stack, name`, scope, stack)
 	if err != nil {
 		return nil, fmt.Errorf("query configs: %w", err)

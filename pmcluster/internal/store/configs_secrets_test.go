@@ -68,6 +68,59 @@ func TestConfigsCRUD(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("stack filter includes unattached service rows", func(t *testing.T) {
+		// A service-scope config created without --stack (CLI default) is
+		// resolved by name from any stack's DSL — it must show up under a
+		// stack-filtered listing, not just the "all" listing.
+		if _, err := s.CreateConfig(ctx, "service", "", "shared_api_key", "env", "KEY=v", "v0.2.30"); err != nil {
+			t.Fatalf("CreateConfig unattached: %v", err)
+		}
+		cfgs, err := s.ListConfigs(ctx, "service", "demo")
+		if err != nil {
+			t.Fatalf("ListConfigs(service, demo): %v", err)
+		}
+		found := false
+		for _, c := range cfgs {
+			if c.Name == "shared_api_key" {
+				found = true
+				if c.Stack != "" {
+					t.Errorf("shared_api_key stack = %q, want ''", c.Stack)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("ListConfigs(service, demo) missing unattached service row shared_api_key")
+		}
+		// Cluster-scope rows still excluded under a service filter.
+		for _, c := range cfgs {
+			if c.Scope != "service" {
+				t.Errorf("ListConfigs(service, demo) leaked %s/%s", c.Scope, c.Name)
+			}
+		}
+	})
+
+	t.Run("secrets stack filter includes unattached service rows", func(t *testing.T) {
+		if _, err := s.CreateSecret(ctx, "service", "", "shared_db_pass", []byte("cipher"), "h1"); err != nil {
+			t.Fatalf("CreateSecret unattached: %v", err)
+		}
+		secs, err := s.ListSecrets(ctx, "service", "demo")
+		if err != nil {
+			t.Fatalf("ListSecrets(service, demo): %v", err)
+		}
+		found := false
+		for _, sec := range secs {
+			if sec.Name == "shared_db_pass" {
+				found = true
+			}
+			if sec.Scope != "service" {
+				t.Errorf("ListSecrets(service, demo) leaked %s/%s", sec.Scope, sec.Name)
+			}
+		}
+		if !found {
+			t.Errorf("ListSecrets(service, demo) missing unattached service row shared_db_pass")
+		}
+	})
 }
 
 func TestConfigUpdateVersionsRollback(t *testing.T) {
