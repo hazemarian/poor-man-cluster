@@ -35,12 +35,13 @@ func TestTranslate_DependsOnEmitsComposeParity(t *testing.T) {
 	}
 	s := string(out)
 
-	// Compose-parity depends_on block present for the migration service.
+	// Compose-parity depends_on block present for the migration service
+	// (list form — compose v3.9 / docker stack deploy rejects the map form).
 	if !strings.Contains(s, "depends_on:") {
 		t.Errorf("rendered compose should contain a depends_on block:\n%s", s)
 	}
-	if !strings.Contains(s, "db:") || !strings.Contains(s, "condition: service_started") {
-		t.Errorf("depends_on should reference db with condition service_started:\n%s", s)
+	if !strings.Contains(s, "depends_on:\n    - db") {
+		t.Errorf("depends_on should reference db as a list item:\n%s", s)
 	}
 }
 

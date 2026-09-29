@@ -119,10 +119,7 @@ func composeServiceFromIR(
 	cs.Deploy = composeDeployFromIR(app, s)
 
 	if len(s.DependsOn) > 0 {
-		cs.DependsOn = make(map[string]dependsOn, len(s.DependsOn))
-		for _, dep := range s.DependsOn {
-			cs.DependsOn[dep] = dependsOn{Condition: "service_started"}
-		}
+		cs.DependsOn = s.DependsOn
 	}
 
 	return cs, nil

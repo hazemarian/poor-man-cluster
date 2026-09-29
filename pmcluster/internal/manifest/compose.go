@@ -17,15 +17,11 @@ type composeService struct {
 	Entrypoint  []string             `json:"entrypoint,omitempty"`
 	Environment map[string]string    `json:"environment,omitempty"`
 	Volumes     []string             `json:"volumes,omitempty"`
-	Networks    []string             `json:"networks,omitempty"`
-	Secrets     []string             `json:"secrets,omitempty"`
-	DependsOn   map[string]dependsOn `json:"depends_on,omitempty"`
+	Networks    []string    `json:"networks,omitempty"`
+	Secrets     []string    `json:"secrets,omitempty"`
+	DependsOn   []string    `json:"depends_on,omitempty"`
 	Healthcheck *composeHealthcheck  `json:"healthcheck,omitempty"`
 	Deploy      *composeDeploy       `json:"deploy,omitempty"`
-}
-
-type dependsOn struct {
-	Condition string `json:"condition"`
 }
 
 type composeHealthcheck struct {
