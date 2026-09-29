@@ -1,5 +1,5 @@
 networks:
-  skipfilelog-app-net:
+  net:
     driver: overlay
 services:
   otlp-service:
@@ -19,5 +19,5 @@ services:
         parallelism: 1
     image: myapp:latest
     networks:
-    - skipfilelog-app-net
+    - net
 version: "3.9"

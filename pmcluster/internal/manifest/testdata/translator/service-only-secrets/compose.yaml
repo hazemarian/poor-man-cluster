@@ -1,8 +1,8 @@
 networks:
-  abbas-net:
-    driver: overlay
   monitoring-net:
     external: true
+  net:
+    driver: overlay
   traefik-net:
     external: true
 secrets:
@@ -45,7 +45,7 @@ services:
       timeout: 5s
     image: ghcr.io/nextrum-sy/abbas:v20260705-test
     networks:
-    - abbas-net
+    - net
     - traefik-net
     - monitoring-net
     secrets:

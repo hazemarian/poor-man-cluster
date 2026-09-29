@@ -38,7 +38,7 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 		Services: map[string]*composeService{},
 	}
 
-	privateNet := ir.Name + privateNetSuffix
+	privateNet := privateNetName
 
 	usesTraefikNet := false
 	usesMonitoringNet := false

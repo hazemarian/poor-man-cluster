@@ -1,5 +1,5 @@
 networks:
-  minimal-app-net:
+  net:
     driver: overlay
 services:
   worker:
@@ -18,5 +18,5 @@ services:
         parallelism: 1
     image: busybox:latest
     networks:
-    - minimal-app-net
+    - net
 version: "3.9"

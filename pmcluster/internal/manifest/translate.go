@@ -23,9 +23,13 @@ const (
 	monitoringNet = "monitoring-net"
 )
 
-// privateNetSuffix forms the per-app inline overlay (e.g.
-// "donation-campaign-net").
-const privateNetSuffix = "-net"
+// privateNetName is the compose-internal name of the per-app inline overlay.
+// It stays FIXED (not "<app>-net") because `docker stack deploy` prefixes
+// every compose network with the stack name — an app-named network would
+// render as "<app>_<app>-net" (the app twice) and push long app names over
+// Docker's 63-character network-name limit. The deployed network is simply
+// "<app>_net", mirroring the "<app>_<service>" service convention.
+const privateNetName = "net"
 
 const (
 	labelService     = "service"

@@ -1,8 +1,8 @@
 networks:
-  bookfair-net:
-    driver: overlay
   monitoring-net:
     external: true
+  net:
+    driver: overlay
   traefik-net:
     external: true
 services:
@@ -43,7 +43,7 @@ services:
         parallelism: 1
     image: nginx:latest
     networks:
-    - bookfair-net
+    - net
     - traefik-net
     - monitoring-net
 version: "3.9"

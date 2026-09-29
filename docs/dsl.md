@@ -219,7 +219,7 @@ Unknown keys are rejected at every level — both top-level and inside a service
 
 You never write these by hand; pmcluster adds them:
 
-- **Networks** — a private per-app overlay `<app>-net` (always) plus `traefik-net` and `monitoring-net` for exposed services.
+- **Networks** — a private per-app overlay declared as `net` (Docker Swarm prefixes it with the stack name, so the deployed network is `<app>_net` — never `<app>_<app>-net`, which would repeat the app name and push long names over Docker's 63-char limit), plus `traefik-net` and `monitoring-net` for exposed services.
 - **Secrets** — every referenced secret is declared `external: true` at the top level (they must exist in Swarm first).
 - **Volumes** — named volumes are auto-collected from service mounts (no top-level declaration) and declared with `driver: local` plus `driver_opts {type: none, o: bind, device: /var/stack/data/<app>/<name>}` so every volume — named or host bind — is forced under the volume root (default `/var/stack/data`, configurable via `volume_root` / `setup --volume-root`). Host binds are relocated to `<root>/<app>/<basename>`. See [`docs/storage-and-databases.md`](storage-and-databases.md).
 - **Labels** — `service`, `application`, `environment`, and `version` on every service.

@@ -111,7 +111,7 @@ func TestTranslate_DonationCampaignSmoke(t *testing.T) {
 	}
 
 	mustContain(`version: "3.9"`)
-	mustContain(`donation-campaign-net`)
+	mustContain(`  net:`)
 	mustContain(`traefik-net`)
 	mustContain(`monitoring-net`)
 	mustContain(`external: true`)

@@ -1,8 +1,8 @@
 networks:
-  donation-campaign-net:
-    driver: overlay
   monitoring-net:
     external: true
+  net:
+    driver: overlay
   traefik-net:
     external: true
 secrets:
@@ -39,7 +39,7 @@ services:
       timeout: 5s
     image: ghcr.io/nextrum-sy/donation-campaign:latest
     networks:
-    - donation-campaign-net
+    - net
     - traefik-net
     - monitoring-net
   db:
@@ -71,7 +71,7 @@ services:
       timeout: 5s
     image: postgres:14-alpine
     networks:
-    - donation-campaign-net
+    - net
     secrets:
     - donation_campaign_db_password
     volumes:
@@ -89,7 +89,7 @@ services:
         condition: none
     image: ghcr.io/nextrum-sy/donation-campaign:latest
     networks:
-    - donation-campaign-net
+    - net
 version: "3.9"
 volumes:
   db_data:

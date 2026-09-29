@@ -1,5 +1,5 @@
 networks:
-  batch-job-net:
+  net:
     driver: overlay
 services:
   migrate:
@@ -17,5 +17,5 @@ services:
         condition: none
     image: alpine:3.19
     networks:
-    - batch-job-net
+    - net
 version: "3.9"

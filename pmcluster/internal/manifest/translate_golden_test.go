@@ -31,7 +31,7 @@ func TestTranslate_Golden(t *testing.T) {
 			name: "minimal",
 			expectedContains: []string{
 				`version: "3.9"`,
-				"minimal-app-net",
+				"  net:",
 				"busybox:latest",
 				"condition: on-failure",
 				"order: start-first",
@@ -52,7 +52,7 @@ func TestTranslate_Golden(t *testing.T) {
 		{
 			name: "donation-campaign",
 			expectedContains: []string{
-				"donation-campaign-net",
+				"  net:",
 				"traefik-net",
 				"monitoring-net",
 				"donation_campaign_db_password",
@@ -68,7 +68,7 @@ func TestTranslate_Golden(t *testing.T) {
 		{
 			name: "with-volumes-secrets",
 			expectedContains: []string{
-				"vault-app-net",
+				"  net:",
 				"vault_token",
 				"data_vol",
 				"vault status",
@@ -78,7 +78,7 @@ func TestTranslate_Golden(t *testing.T) {
 		{
 			name: "service-only-secrets",
 			expectedContains: []string{
-				"abbas-net",
+				"  net:",
 				"traefik-net",
 				"monitoring-net",
 				"abbas_session_secret",
@@ -91,7 +91,7 @@ func TestTranslate_Golden(t *testing.T) {
 		{
 			name: "runonce-job",
 			expectedContains: []string{
-				"batch-job-net",
+				"  net:",
 				"condition: none",
 			},
 		},

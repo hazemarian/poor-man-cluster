@@ -1,5 +1,5 @@
 networks:
-  vault-app-net:
+  net:
     driver: overlay
 secrets:
   vault_token:
@@ -33,7 +33,7 @@ services:
       timeout: 5s
     image: vault:1.15
     networks:
-    - vault-app-net
+    - net
     secrets:
     - vault_token
     volumes:
