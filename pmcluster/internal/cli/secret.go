@@ -11,6 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -125,8 +127,54 @@ func runSecretCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create secret: %w", err)
 	}
 
+	// The DSL renders secrets(name) as external:true — the container mounts
+	// a Docker SWARM secret, not the encrypted DB row. So the DB row alone is
+	// not enough: the same value must also exist as a swarm secret, otherwise
+	// the stack deploy fails with 'secret not found: <name>'. Mirror it into
+	// Docker when running on a node with daemon access (local mode). The DB
+	// row remains the encrypted source of truth for rotations/CLI display.
+	swarmMirrored := false
+	if rc := remoteClient(cmd); rc == nil {
+		dc, derr := docker.New()
+		if derr != nil {
+			// No daemon reachable — the operator may be on a user machine
+			// creating secrets to use on the cluster later. Warn, don't fail:
+			// the deploy on the manager would surface the missing secret.
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"   ⚠ docker daemon unreachable — swarm secret NOT mirrored (%v).\n"+
+					"     Deploying a stack that references %q will fail until you run:\n"+
+					"       printf '%s' | docker secret create %s -\n",
+				derr, name, value, name)
+		} else {
+			defer func() { _ = dc.Close() }()
+			exists, eerr := dc.SecretExists(cmd.Context(), name)
+			switch {
+			case eerr != nil:
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"   ⚠ could not check swarm secret %q (%v) — mirror skipped.\n", name, eerr)
+			case exists:
+				swarmMirrored = true
+			default:
+				if cerr := dc.SecretCreate(cmd.Context(), runtime.SecretSpec{
+					Name:   name,
+					Data:   []byte(value),
+					Labels: map[string]string{"pmcluster.secret": "true"},
+				}); cerr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"   ⚠ could not create swarm secret %q (%v) — mirror skipped.\n", name, cerr)
+				} else {
+					swarmMirrored = true
+				}
+			}
+		}
+	}
+
+	extra := ""
+	if swarmMirrored {
+		extra = " (+ mirrored to the Docker Swarm so containers can mount it)"
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), `
-✅ Secret %q created (scope: %s).
+✅ Secret %q created (scope: %s)%s.
 
 🔑 Value (shown once — save it now):
 
@@ -137,7 +185,7 @@ func runSecretCreate(cmd *cobra.Command, args []string) error {
 Use it in a manifest:
    env:
      %s_VALUE: secrets(%s)
-`, name, scope, value, hash, strings.ToUpper(strings.ReplaceAll(name, "-", "_")), name)
+`, name, scope, extra, value, hash, strings.ToUpper(strings.ReplaceAll(name, "-", "_")), name)
 	return nil
 }
 

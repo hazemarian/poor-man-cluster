@@ -66,6 +66,10 @@ type IRService struct {
 
 	// SkipFilelog opts the workload out of OTel filelog scraping.
 	SkipFilelog bool
+
+	// DependsOn lists sibling services this service waits for (compose
+	// parity + Swarm restart-on-failure retry semantics).
+	DependsOn []string
 }
 
 // IRExpose is the public-routing intent for a service.

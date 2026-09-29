@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +83,9 @@ type Service struct {
 	// (subpaths /<app>/<name>). Empty falls back to
 	// manifest.DefaultVolumeRoot (/var/stack/data). Applied by the writer.
 	VolumeRoot string
+	// MkdirAll creates host directories for the volume-root bind targets
+	// before deploy (nil = os.MkdirAll). Overridable in tests.
+	MkdirAll func(string, os.FileMode) error
 	// Stdout receives workflow step markers (▶ ...) for the deploy pipeline.
 	// Nil disables the output.
 	Stdout io.Writer
@@ -182,6 +186,16 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		}
 		if err := s.Store.RecordDeploy(ctx, rev, p.RepoURL); err != nil {
 			return fmt.Errorf("record deploy: %w", err)
+		}
+		return nil
+	})
+	wf.Add("Ensuring storage directories", func(ctx context.Context) error {
+		mkdirAll := s.MkdirAll
+		if mkdirAll == nil {
+			mkdirAll = os.MkdirAll
+		}
+		if err := manifest.EnsureVolumeDirs(rendered, mkdirAll); err != nil {
+			return err
 		}
 		return nil
 	})

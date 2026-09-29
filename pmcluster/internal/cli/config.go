@@ -72,6 +72,13 @@ var configVersionsCmd = &cobra.Command{
 	RunE:  runConfigHistory,
 }
 
+var configDeleteCmd = &cobra.Command{
+	Use:   "delete <name>",
+	Short: "Delete a config (removes the DB row)",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runConfigDelete,
+}
+
 func init() {
 	configCreateCmd.Flags().String("scope", "service", "scope: cluster or service")
 	configCreateCmd.Flags().String("stack", "", "stack this config belongs to (service scope only)")
@@ -79,20 +86,54 @@ func init() {
 	configCreateCmd.Flags().String("value", "", "config content (or pipe via stdin)")
 	configEditCmd.Flags().String("value", "", "new config content (or pipe via stdin)")
 	configCmd.AddCommand(configCreateCmd, configListCmd, configGetCmd, configEditCmd,
-		configVersionsCmd, configRollbackCmd)
+		configVersionsCmd, configRollbackCmd, configDeleteCmd)
 	rootCmd.AddCommand(configCmd)
 }
+
+// configValueStdin is the stdin source for readConfigValue — overridable in
+// tests; nil means os.Stdin.
+var configValueStdin io.Reader
+
+// statReader reports the file-info for a reader. A *os.File is inspected as
+// real stdin (char-device detection); any other reader (injected in tests) is
+// reported as a named pipe so the trim branch is exercised regardless of the
+// test runner's real stdin.
+func statReader(r io.Reader) (os.FileInfo, error) {
+	if f, ok := r.(*os.File); ok {
+		return f.Stat()
+	}
+	return pipeInfo{}, nil
+}
+
+// pipeInfo is a minimal FileInfo describing a named pipe (never a char
+// device), so injected stdin readers are always treated as piped input.
+type pipeInfo struct{}
+
+func (pipeInfo) Name() string       { return "pipe" }
+func (pipeInfo) Size() int64        { return 0 }
+func (pipeInfo) Mode() os.FileMode  { return os.ModeNamedPipe }
+func (pipeInfo) ModTime() time.Time { return time.Time{} }
+func (pipeInfo) IsDir() bool        { return false }
+func (pipeInfo) Sys() any           { return nil }
 
 func readConfigValue(arg string) (string, error) {
 	if arg != "" {
 		return arg, nil
 	}
-	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice == 0 {
-		b, err := io.ReadAll(io.LimitReader(os.Stdin, 4<<20))
+	in := configValueStdin
+	if in == nil {
+		in = os.Stdin
+	}
+	if fi, err := statReader(in); err == nil && fi.Mode()&os.ModeCharDevice == 0 {
+		b, err := io.ReadAll(io.LimitReader(in, 4<<20))
 		if err != nil {
 			return "", fmt.Errorf("read stdin: %w", err)
 		}
-		return string(b), nil
+		// Piped input (echo/printf | pmcluster config edit) carries a trailing
+		// newline; trim it so the stored config is exactly what the operator
+		// typed. Environment values must be single-line — a raw newline would
+		// later fail translation with 'config(...) contains newlines'.
+		return strings.TrimRight(string(b), "\r\n"), nil
 	}
 	return "", errors.New("no value given — pass --value or pipe the content via stdin")
 }
@@ -285,5 +326,26 @@ func runConfigRollback(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Config %q rolled back (hash: %s).\n", name, shortHash(hash))
 	fmt.Fprintln(cmd.OutOrStdout(), "   Run `pmcluster cluster update` to apply it to the cluster.")
+	return nil
+}
+
+// runConfigDelete removes a config row entirely. Unlike update/rollback it
+// drops the value AND its version history — the next cluster update simply
+// stops rendering that config.
+func runConfigDelete(cmd *cobra.Command, args []string) error {
+	name := args[0]
+	svc, closeFn, err := backendConfigs(cmd)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	if err := svc.Delete(cmd.Context(), name); err != nil {
+		if errors.Is(err, store.ErrConfigNotFound) {
+			return fmt.Errorf("config %q not found", name)
+		}
+		return fmt.Errorf("delete config: %w", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "✅ Config %q deleted.\n", name)
 	return nil
 }

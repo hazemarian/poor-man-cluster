@@ -12,15 +12,20 @@ type composeFile struct {
 // composeService is the per-service block. Fields are an opinionated
 // subset of the v3.9 spec — anything pmcluster doesn't emit is omitted.
 type composeService struct {
-	Image       string              `json:"image,omitempty"`
-	Command     []string            `json:"command,omitempty"`
-	Entrypoint  []string            `json:"entrypoint,omitempty"`
-	Environment map[string]string   `json:"environment,omitempty"`
-	Volumes     []string            `json:"volumes,omitempty"`
-	Networks    []string            `json:"networks,omitempty"`
-	Secrets     []string            `json:"secrets,omitempty"`
-	Healthcheck *composeHealthcheck `json:"healthcheck,omitempty"`
-	Deploy      *composeDeploy      `json:"deploy,omitempty"`
+	Image       string               `json:"image,omitempty"`
+	Command     []string             `json:"command,omitempty"`
+	Entrypoint  []string             `json:"entrypoint,omitempty"`
+	Environment map[string]string    `json:"environment,omitempty"`
+	Volumes     []string             `json:"volumes,omitempty"`
+	Networks    []string             `json:"networks,omitempty"`
+	Secrets     []string             `json:"secrets,omitempty"`
+	DependsOn   map[string]dependsOn `json:"depends_on,omitempty"`
+	Healthcheck *composeHealthcheck  `json:"healthcheck,omitempty"`
+	Deploy      *composeDeploy       `json:"deploy,omitempty"`
+}
+
+type dependsOn struct {
+	Condition string `json:"condition"`
 }
 
 type composeHealthcheck struct {

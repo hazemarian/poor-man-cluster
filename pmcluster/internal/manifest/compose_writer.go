@@ -3,6 +3,7 @@ package manifest
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 
@@ -116,6 +117,13 @@ func composeServiceFromIR(
 
 	cs.Healthcheck = composeHealthcheckFromIR(s)
 	cs.Deploy = composeDeployFromIR(app, s)
+
+	if len(s.DependsOn) > 0 {
+		cs.DependsOn = make(map[string]dependsOn, len(s.DependsOn))
+		for _, dep := range s.DependsOn {
+			cs.DependsOn[dep] = dependsOn{Condition: "service_started"}
+		}
+	}
 
 	return cs, nil
 }
@@ -332,4 +340,36 @@ func translateUpdate(u *IRUpdate) *composeUpdateConfig {
 		}
 	}
 	return out
+}
+
+// volumeDir is the subset of the compose volumes block the storage-dir
+// enforcer needs: each named volume's bind target on the host.
+type volumeDir struct {
+	DriverOpts map[string]string `json:"driver_opts,omitempty"`
+}
+
+// EnsureVolumeDirs creates the host directories every named volume in a
+// rendered compose binds to. The volume root design declares each named
+// volume with driver_opts {type:none, o:bind, device:<root>/<app>/<name>};
+// Docker refuses to start a task when the bind source does not exist
+// ('failed to populate volume: no such file or directory' → update paused).
+// cluster up / join create the roots, but per-app subdirs only exist after
+// the first deploy — so the deploy pipeline calls this before DeployStack.
+func EnsureVolumeDirs(composeYAML []byte, mkdirAll func(string, os.FileMode) error) error {
+	var doc struct {
+		Volumes map[string]volumeDir `json:"volumes"`
+	}
+	if err := yaml.Unmarshal(composeYAML, &doc); err != nil {
+		return fmt.Errorf("parse rendered compose volumes: %w", err)
+	}
+	for name, v := range doc.Volumes {
+		device := v.DriverOpts["device"]
+		if device == "" {
+			continue
+		}
+		if err := mkdirAll(device, 0o755); err != nil {
+			return fmt.Errorf("ensure volume dir for %q (%s): %w", name, device, err)
+		}
+	}
+	return nil
 }

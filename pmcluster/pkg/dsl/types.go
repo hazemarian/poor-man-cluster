@@ -69,6 +69,14 @@ type Service struct {
 	Expose      *Expose      `json:"expose,omitempty"`
 	Healthcheck *Healthcheck `json:"healthcheck,omitempty"`
 	Update      *Update      `json:"update,omitempty"`
+
+	// DependsOn lists sibling services (by name) this service waits for.
+	// Emitted as compose depends_on for compose parity; on the Swarm
+	// backend (which ignores depends_on in v3) the waiting service keeps
+	// restart_policy on-failure so it retries until the dependency is
+	// healthy — the pattern for run-once migrations that must wait for
+	// the database to accept connections.
+	DependsOn []string `json:"depends_on,omitempty"`
 }
 
 type Expose struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -138,7 +139,7 @@ services:
 
 // newService builds a Service with the given store and deployer.
 func newService(s *store.Store, d cluster.StackDeployer) *Service {
-	return &Service{Store: s, Deployer: d}
+	return &Service{Store: s, Deployer: d, MkdirAll: func(string, os.FileMode) error { return nil }}
 }
 
 // TestDeploy_HappyPath verifies the donation-campaign DSL goes through the
@@ -224,6 +225,7 @@ func TestDeploy_RecordsPipelineSteps(t *testing.T) {
 		"Interpolating and validating manifest",
 		"Translating to Compose (resolving configs/secrets)",
 		"Recording revision",
+		"Ensuring storage directories",
 		"Deploying stack to the swarm",
 	}
 	if len(env.Steps) != len(want) {

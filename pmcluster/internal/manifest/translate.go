@@ -146,6 +146,7 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 		RunOnce:     s.RunOnce,
 		Placement:   s.Placement,
 		SkipFilelog: s.SkipFilelog,
+		DependsOn:   s.DependsOn,
 	}
 
 	if s.Expose != nil {
