@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -149,6 +150,27 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		}
 		stackName = parsed.Name
 		app = parsed
+		return nil
+	})
+	wf.Add("Checking for app name conflicts", func(ctx context.Context) error {
+		existing, err := s.Store.GetStack(ctx, app.Name)
+		if err != nil {
+			if errors.Is(err, store.ErrStackNotFound) {
+				return nil
+			}
+			return fmt.Errorf("lookup existing stack: %w", err)
+		}
+		// Duplication guard: an app name may only be deployed from ONE source
+		// repo. Two different repos claiming the same app name would silently
+		// overwrite each other's services, volumes and Traefik routes, so we
+		// reject it. Same-repo redeploys (webhooks, sync) pass because their
+		// repo_url matches the recorded one; legacy rows with an empty repo_url
+		// and deploys without provenance are allowed to avoid blocking
+		// pre-provenance workflows.
+		if existing.RepoURL.Valid && existing.RepoURL.String != "" && p.RepoURL != "" &&
+			existing.RepoURL.String != p.RepoURL {
+			return fmt.Errorf("stack %q already exists from repo %q — deploy from a different app name or use the recorded source", app.Name, existing.RepoURL.String)
+		}
 		return nil
 	})
 	wf.Add("Interpolating and validating manifest", func(ctx context.Context) error {

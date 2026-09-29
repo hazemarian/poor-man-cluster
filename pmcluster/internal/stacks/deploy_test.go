@@ -222,6 +222,7 @@ func TestDeploy_RecordsPipelineSteps(t *testing.T) {
 	}
 	want := []string{
 		"Parsing manifest (DSL)",
+		"Checking for app name conflicts",
 		"Interpolating and validating manifest",
 		"Translating to Compose (resolving configs/secrets)",
 		"Recording revision",
@@ -370,6 +371,92 @@ func TestDeploy_AppNameOverride(t *testing.T) {
 
 	if _, err := s.GetStack(ctx, "donation-campaign"); !errors.Is(err, store.ErrStackNotFound) {
 		t.Errorf("GetStack(donation-campaign) = %v, want ErrStackNotFound", err)
+	}
+}
+
+// TestDeploy_ConflictingRepoRejected verifies the app-name duplication guard:
+// a second deploy of the same app name from a DIFFERENT repo must fail before
+// any stack/deployer side effects.
+func TestDeploy_ConflictingRepoRejected(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	if _, err := svc.Deploy(ctx, Payload{
+		Manifest: donationCampaignManifest,
+		RepoURL:  "https://github.com/nextrum-sy/donation-campaign",
+		File:     "deploy/stg/donation-campaign.yaml",
+	}); err != nil {
+		t.Fatalf("first Deploy: %v", err)
+	}
+
+	_, err := svc.Deploy(ctx, Payload{
+		Manifest: donationCampaignManifest,
+		RepoURL:  "https://github.com/other-org/donation-campaign",
+		File:     "deploy/stg/donation-campaign.yaml",
+	})
+	if err == nil {
+		t.Fatal("second Deploy from a different repo: expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "already exists from repo") {
+		t.Errorf("error = %q, want 'already exists from repo'", err)
+	}
+
+	// The conflicting deploy must not have recorded a new revision.
+	revs, err := s.ListRevisions(ctx, "donation-campaign", 10)
+	if err != nil {
+		t.Fatalf("ListRevisions: %v", err)
+	}
+	if len(revs) != 1 {
+		t.Errorf("revision count = %d, want 1 (conflicting deploy recorded nothing)", len(revs))
+	}
+	if len(dep.calls) != 1 {
+		t.Errorf("deployer calls = %d, want 1 (conflicting deploy never reached the swarm)", len(dep.calls))
+	}
+}
+
+// TestDeploy_SameRepoRedeployAllowed verifies that redeploying an existing app
+// name from the SAME repo (the normal webhook flow) is not blocked.
+func TestDeploy_SameRepoRedeployAllowed(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	repo := "https://github.com/nextrum-sy/donation-campaign"
+	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest, RepoURL: repo, File: "deploy/stg/donation-campaign.yaml"}); err != nil {
+		t.Fatalf("first Deploy: %v", err)
+	}
+
+	res, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest, RepoURL: repo, File: "deploy/stg/donation-campaign.yaml"})
+	if err != nil {
+		t.Fatalf("second Deploy from the same repo: %v", err)
+	}
+	if res.Revision == 0 {
+		t.Error("second Deploy revision is 0, want a new revision")
+	}
+}
+
+// TestDeploy_NoProvenanceAllowed verifies that a deploy with no repo_url (CLI
+// without --repo, or legacy pre-provenance stacks) is not blocked by the guard.
+func TestDeploy_NoProvenanceAllowed(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest, RepoURL: "https://github.com/nextrum-sy/donation-campaign"}); err != nil {
+		t.Fatalf("first Deploy: %v", err)
+	}
+
+	// No RepoURL on the second deploy — must not be blocked.
+	res, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest})
+	if err != nil {
+		t.Fatalf("Deploy without provenance: %v", err)
+	}
+	if res.Revision == 0 {
+		t.Error("Deploy revision is 0, want a new revision")
 	}
 }
 
