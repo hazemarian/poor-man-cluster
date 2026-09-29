@@ -242,3 +242,140 @@ func TestNewestControlPlaneArchive_PicksNewest(t *testing.T) {
 		t.Fatalf("empty dir returned %q, want ''", got)
 	}
 }
+
+// TestBrowse_TarGzListsEntries verifies listing a tar.gz archive produced by
+// the offen agent (with the baked-in backup/data/ prefix) returns each entry
+// relative to the archive root, with sizes and dir flags.
+func TestBrowse_TarGzListsEntries(t *testing.T) {
+	st := newTestStore(t)
+	dir := t.TempDir()
+	writeTarGzDirs(t, dir, "run.tar.gz", "backup/data", map[string]string{
+		"abbas/abbas_data/abbas.db": "sqlite",
+		"abbas/config.yaml":         "config",
+	})
+	svc := &Local{Store: st}
+	id, err := st.CreateBackup(context.Background(), "abbas", 1)
+	if err != nil {
+		t.Fatalf("CreateBackup: %v", err)
+	}
+	if err := st.FinishBackup(context.Background(), id, "succeeded", filepath.Join(dir, "run.tar.gz"), ""); err != nil {
+		t.Fatalf("FinishBackup: %v", err)
+	}
+
+	run, files, err := svc.Browse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Browse: %v", err)
+	}
+	if run.Status != "succeeded" {
+		t.Errorf("run.Status = %q, want succeeded", run.Status)
+	}
+	// Root dir entry + 2 files.
+	if len(files) != 3 {
+		t.Fatalf("files = %d, want 3 (root dir + 2 files)", len(files))
+	}
+	got := map[string]bool{}
+	for _, f := range files {
+		got[f.Path] = true
+		if f.IsDir && f.Path != "backup/data" {
+			t.Errorf("dir entry %q: only the prefix root should be a dir", f.Path)
+		}
+	}
+	if !got["backup/data/abbas/abbas_data/abbas.db"] || !got["backup/data/abbas/config.yaml"] {
+		t.Errorf("missing expected archive entries, got %v", got)
+	}
+}
+
+// TestBrowse_PlainDirWalksTree verifies listing a raw directory archive
+// (dir backup runs) walks the tree and reports relative paths.
+func TestBrowse_PlainDirWalksTree(t *testing.T) {
+	st := newTestStore(t)
+	dir := t.TempDir()
+	root := filepath.Join(dir, "raw-dir")
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sub", "file.txt"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	svc := &Local{Store: st}
+	id, _ := st.CreateBackup(context.Background(), "demo", 1)
+	if err := st.FinishBackup(context.Background(), id, "succeeded", root, ""); err != nil {
+		t.Fatalf("FinishBackup: %v", err)
+	}
+
+	_, files, err := svc.Browse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Browse: %v", err)
+	}
+	found := map[string]bool{}
+	for _, f := range files {
+		found[f.Path] = true
+	}
+	if !found["sub"] || !found["sub/file.txt"] {
+		t.Errorf("dir walk = %v, want sub + sub/file.txt", found)
+	}
+}
+
+// TestBrowse_MissingArchiveSurfacesErrorEntry verifies a missing archive file
+// yields a Size=-1 error entry rather than failing the whole browse.
+func TestBrowse_MissingArchiveSurfacesErrorEntry(t *testing.T) {
+	st := newTestStore(t)
+	svc := &Local{Store: st}
+	id, _ := st.CreateBackup(context.Background(), "demo", 1)
+	if err := st.FinishBackup(context.Background(), id, "succeeded", "/var/stack/backup/ghost.tar.gz", ""); err != nil {
+		t.Fatalf("FinishBackup: %v", err)
+	}
+	_, files, err := svc.Browse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Browse: %v", err)
+	}
+	if len(files) != 1 || files[0].Size != -1 || files[0].Path != "/var/stack/backup/ghost.tar.gz" {
+		t.Errorf("missing archive entry = %+v, want Size=-1", files)
+	}
+}
+
+// TestBrowse_PendingRunReturnsNoFiles verifies a pending (in-flight) run
+// browses to an empty file list.
+func TestBrowse_PendingRunReturnsNoFiles(t *testing.T) {
+	st := newTestStore(t)
+	svc := &Local{Store: st}
+	id, _ := st.CreateBackup(context.Background(), "demo", 1) // status defaults to pending
+	run, files, err := svc.Browse(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Browse: %v", err)
+	}
+	if run.Status != "pending" || len(files) != 0 {
+		t.Errorf("pending browse = status %q, %d files; want pending + 0", run.Status, len(files))
+	}
+}
+
+// TestRestore_CopyTreePreservesTree verifies restoring a raw directory
+// archive (copyTree path) recreates the nested structure under destRoot.
+func TestRestore_CopyTreePreservesTree(t *testing.T) {
+	st := newTestStore(t)
+	dir := t.TempDir()
+	root := filepath.Join(dir, "raw-stack")
+	if err := os.MkdirAll(filepath.Join(root, "data"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "data", "app.db"), []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	svc := &Local{Store: st}
+	id, _ := st.CreateBackup(context.Background(), "raw-stack", 1)
+	if err := st.FinishBackup(context.Background(), id, "succeeded", root, ""); err != nil {
+		t.Fatalf("FinishBackup: %v", err)
+	}
+
+	destRoot := t.TempDir()
+	n, err := svc.Restore(context.Background(), id, destRoot)
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if n < 1 {
+		t.Errorf("restored files = %d, want >= 1", n)
+	}
+	if _, err := os.Stat(filepath.Join(destRoot, "data", "app.db")); err != nil {
+		t.Errorf("restored app.db missing under %s/data: %v", destRoot, err)
+	}
+}

@@ -139,6 +139,12 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string) (int, er
 // when it belongs to the control-plane subtree (`backup/pmcluster`), whose
 // data does not belong under the volume root.
 func refuseControlPlaneArchive(p string) error {
+	// Raw directory backups are never control-plane archives — short-circuit
+	// before attempting to parse them as tar (which would fail with "is a
+	// directory" and make directory restores impossible).
+	if info, err := os.Stat(p); err == nil && info.IsDir() {
+		return nil
+	}
 	f, err := os.Open(p)
 	if err != nil {
 		return err

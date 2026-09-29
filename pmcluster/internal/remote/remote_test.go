@@ -388,3 +388,196 @@ func TestRemoteClusterSettingsAndUsage(t *testing.T) {
 		t.Errorf("usage secrets[s1] = %v, want [alpha]", u.Secrets["s1"])
 	}
 }
+
+// TestRemoteBackups exercises every backups adapter method against a fake
+// daemon: trigger, list (with and without limit), per-stack list, browse and
+// restore.
+func TestRemoteBackups(t *testing.T) {
+	srv, c := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/backups":
+			writeJSON(w, http.StatusCreated, map[string]any{"id": 7, "status": "succeeded", "archive_paths": []string{"/var/stack/backup/a.tar.gz"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/backups":
+			writeJSON(w, http.StatusOK, map[string]any{"backups": []map[string]any{
+				{"id": 7, "status": "succeeded", "stack_name": "demo", "started_at": 10, "finished_at": 20},
+				{"id": 8, "status": "failed", "error_message": "boom"},
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/stacks/demo/backups":
+			writeJSON(w, http.StatusOK, map[string]any{"backups": []map[string]any{{"id": 7, "status": "succeeded", "stack_name": "demo"}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/backups/7/files":
+			writeJSON(w, http.StatusOK, map[string]any{"run": map[string]any{"id": 7, "status": "succeeded"}, "files": []map[string]any{{"path": "demo/app.db", "size": 1024}}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/backups/7/restore":
+			writeJSON(w, http.StatusOK, map[string]any{"restored": 42, "dest_root": "/var/stack/data"})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+	ctx := context.Background()
+	b := NewBackups(c)
+
+	id, paths, err := b.Trigger(ctx, "demo", 5)
+	if err != nil || id != 7 || len(paths) != 1 || paths[0] != "/var/stack/backup/a.tar.gz" {
+		t.Fatalf("Trigger = %d %v %v, want 7 + archive path", id, paths, err)
+	}
+
+	all, err := b.List(ctx, 0)
+	if err != nil || len(all) != 2 || all[0].ID != 7 || all[1].Status != "failed" {
+		t.Fatalf("List = %+v, %v", all, err)
+	}
+	limited, err := b.List(ctx, 1)
+	if err != nil || len(limited) != 2 {
+		t.Fatalf("List(limit=1) = %d rows, %v (limit only affects the query string)", len(limited), err)
+	}
+
+	forStack, err := b.ListForStack(ctx, "demo")
+	if err != nil || len(forStack) != 1 || forStack[0].StackName != "demo" {
+		t.Fatalf("ListForStack = %+v, %v", forStack, err)
+	}
+
+	run, files, err := b.Browse(ctx, 7)
+	if err != nil || run.ID != 7 || len(files) != 1 || files[0].Path != "demo/app.db" {
+		t.Fatalf("Browse = %+v %+v %v", run, files, err)
+	}
+
+	n, err := b.Restore(ctx, 7, "/var/stack/data")
+	if err != nil || n != 42 {
+		t.Fatalf("Restore = %d, %v, want 42", n, err)
+	}
+}
+
+// TestRemoteTLS exercises SiteCert, ApplyHostCert, RemoveHostCert, GetSiteCert,
+// List and MainDomain against a fake daemon.
+func TestRemoteTLS(t *testing.T) {
+	certJSON := map[string]any{
+		"domain": "example.com", "cert_secret": "cert_v001", "key_secret": "key_v001",
+		"not_before": "2026-01-01T00:00:00Z", "not_after": "2026-12-31T00:00:00Z",
+		"sans": []string{"example.com"}, "cert_hash": "ch", "key_hash": "kh",
+		"created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-02T00:00:00Z",
+	}
+	srv, c := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/api/tls/site":
+			writeJSON(w, http.StatusOK, certJSON)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/tls/hosts/host-a.example.com":
+			writeJSON(w, http.StatusOK, certJSON)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/tls/hosts/host-a.example.com":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/tls/site":
+			writeJSON(w, http.StatusOK, certJSON)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/tls/hosts":
+			writeJSON(w, http.StatusOK, map[string]any{"hosts": []map[string]any{certJSON}})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+	ctx := context.Background()
+	tl := NewTLS(c)
+
+	if _, err := tl.SiteCert(ctx, "example.com", "CERT", "KEY"); err != nil {
+		t.Fatalf("SiteCert: %v", err)
+	}
+	if _, err := tl.ApplyHostCert(ctx, "host-a.example.com", "CERT", "KEY", false); err != nil {
+		t.Fatalf("ApplyHostCert: %v", err)
+	}
+	if err := tl.RemoveHostCert(ctx, "host-a.example.com", false); err != nil {
+		t.Fatalf("RemoveHostCert: %v", err)
+	}
+	site, err := tl.GetSiteCert(ctx, "example.com")
+	if err != nil || site.Domain != "example.com" || site.CertSecret != "cert_v001" {
+		t.Fatalf("GetSiteCert = %+v, %v", site, err)
+	}
+	if site.NotAfter.IsZero() {
+		t.Error("NotAfter parsed to zero time")
+	}
+	hosts, err := tl.List(ctx)
+	if err != nil || len(hosts) != 1 {
+		t.Fatalf("List = %+v, %v", hosts, err)
+	}
+	main, err := tl.MainDomain(ctx)
+	if err != nil || main != "example.com" {
+		t.Fatalf("MainDomain = %q, %v", main, err)
+	}
+}
+
+// TestRemoteWebhooksAndSettings covers webhook create/list/deliveries and the
+// settings Get/Update interface methods (beyond the alias methods already
+// tested).
+func TestRemoteWebhooksAndSettings(t *testing.T) {
+	srv, c := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/webhooks":
+			writeJSON(w, http.StatusCreated, map[string]any{"source": "github-prod", "secret": "sekret"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/webhooks":
+			writeJSON(w, http.StatusOK, map[string]any{"webhooks": []map[string]any{{"source": "github-prod", "description": "prod", "created_at": 10, "last_used_at": 20}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/webhooks/github-prod/deliveries":
+			writeJSON(w, http.StatusOK, map[string]any{"deliveries": []map[string]any{{"id": 3, "source": "github-prod", "status": "accepted", "stack_name": "abbas", "revision": 99, "created_at": 30}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/cluster/settings":
+			writeJSON(w, http.StatusOK, map[string]any{"settings": map[string]string{"domain": "example.com"}})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/cluster/settings":
+			writeJSON(w, http.StatusOK, map[string]any{"settings": map[string]string{"domain": "nextrum-sy.com"}})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+	ctx := context.Background()
+	wh := NewWebhooks(c)
+
+	secret, err := wh.Create(ctx, "github-prod", "prod")
+	if err != nil || secret != "sekret" {
+		t.Fatalf("Create = %q, %v", secret, err)
+	}
+	sources, err := wh.List(ctx)
+	if err != nil || len(sources) != 1 || sources[0].Source != "github-prod" {
+		t.Fatalf("List = %+v, %v", sources, err)
+	}
+	deliveries, err := wh.Deliveries(ctx, "github-prod", 10)
+	if err != nil || len(deliveries) != 1 || deliveries[0].Status != "accepted" || deliveries[0].Revision != 99 {
+		t.Fatalf("Deliveries = %+v, %v", deliveries, err)
+	}
+
+	cs := NewClusterSettings(c)
+	got, err := cs.Get(ctx)
+	if err != nil || got["domain"] != "example.com" {
+		t.Fatalf("Settings.Get = %+v, %v", got, err)
+	}
+	updated, err := cs.Update(ctx, map[string]string{"domain": "nextrum-sy.com"})
+	if err != nil || updated["domain"] != "nextrum-sy.com" {
+		t.Fatalf("Settings.Update = %+v, %v", updated, err)
+	}
+}
+
+// TestRemoteAPIKeysAndStackSync covers apikeys Create/List and Deploy.Sync.
+func TestRemoteAPIKeysAndStackSync(t *testing.T) {
+	srv, c := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/api_keys":
+			writeJSON(w, http.StatusCreated, map[string]any{"id": 5, "name": "ci", "token": "pmc_x_sec"})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/api_keys":
+			writeJSON(w, http.StatusOK, map[string]any{"keys": []map[string]any{{"id": 5, "name": "ci", "created_at": 11}}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/stacks/demo/sync":
+			writeJSON(w, http.StatusOK, map[string]any{"stack": "demo", "revision": 1789900000, "changed": true})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	})
+	defer srv.Close()
+	ctx := context.Background()
+	ak := NewAPIKeys(c)
+
+	id, token, err := ak.Create(ctx, "ci")
+	if err != nil || id != 5 || token != "pmc_x_sec" {
+		t.Fatalf("APIKeys.Create = %d %q %v", id, token, err)
+	}
+	keys, err := ak.List(ctx)
+	if err != nil || len(keys) != 1 || keys[0].ID != 5 {
+		t.Fatalf("APIKeys.List = %+v, %v", keys, err)
+	}
+
+	res, err := NewDeploy(c).Sync(ctx, "demo")
+	if err != nil || res.StackName != "demo" || res.Revision != 1789900000 || !res.Changed {
+		t.Fatalf("Sync = %+v, %v", res, err)
+	}
+}

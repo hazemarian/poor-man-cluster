@@ -1,12 +1,15 @@
 package backups
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -156,5 +159,118 @@ func TestSplitArchivePaths(t *testing.T) {
 	got := splitArchivePaths("/a,/b,/c")
 	if strings.Join(got, "|") != "/a|/b|/c" {
 		t.Errorf("split: %v", got)
+	}
+}
+
+// TestBackupsAPI_BrowseAndRestore verifies GET /backups/{id}/files lists a
+// tar.gz archive's entries and POST /backups/{id}/restore extracts it under
+// the requested dest_root.
+func TestBackupsAPI_BrowseAndRestore(t *testing.T) {
+	st := newTestStore(t)
+	dir := t.TempDir()
+	writeTarGzDirs(t, dir, "run.tar.gz", "backup/data", map[string]string{
+		"demo/app.db": "sqlite",
+	})
+	ctx := context.Background()
+	id, err := st.CreateBackup(ctx, "demo", 1)
+	if err != nil {
+		t.Fatalf("CreateBackup: %v", err)
+	}
+	if err := st.FinishBackup(ctx, id, "succeeded", filepath.Join(dir, "run.tar.gz"), ""); err != nil {
+		t.Fatalf("FinishBackup: %v", err)
+	}
+
+	h := &HTTP{Svc: NewLocal(st, nil)}
+	srv := httptest.NewServer(mountBackups(h))
+	defer srv.Close()
+
+	// Browse.
+	resp, err := http.Get(srv.URL + "/backups/" + strconv.FormatInt(id, 10) + "/files")
+	if err != nil {
+		t.Fatalf("browse get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("browse status = %d, want 200", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode browse: %v", err)
+	}
+	files, ok := body["files"].([]any)
+	if !ok || len(files) != 2 {
+		t.Fatalf("browse files = %v, want 2 entries (root dir + file)", body["files"])
+	}
+
+	// Restore into a temp dest.
+	dest := t.TempDir()
+	payload, _ := json.Marshal(map[string]string{"dest_root": dest})
+	rr, err := http.Post(srv.URL+"/backups/"+strconv.FormatInt(id, 10)+"/restore", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("restore post: %v", err)
+	}
+	defer rr.Body.Close()
+	if rr.StatusCode != http.StatusOK {
+		t.Fatalf("restore status = %d, want 200", rr.StatusCode)
+	}
+	var rb map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&rb); err != nil {
+		t.Fatalf("decode restore: %v", err)
+	}
+	if rb["restored"].(float64) < 1 || rb["dest_root"] != dest {
+		t.Errorf("restore body = %v, want restored>=1 + dest_root", rb)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "demo", "app.db")); err != nil {
+		t.Errorf("restored demo/app.db missing: %v", err)
+	}
+}
+
+// TestBackupsAPI_BrowseBadID verifies a non-numeric backup id → 400.
+func TestBackupsAPI_BrowseBadID(t *testing.T) {
+	st := newTestStore(t)
+	h := &HTTP{Svc: NewLocal(st, nil)}
+	srv := httptest.NewServer(mountBackups(h))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/backups/abc/files")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestBackupsAPI_RestoreFailedRunRejected verifies restoring a non-succeeded
+// run → 400 with a clear message.
+func TestBackupsAPI_RestoreFailedRunRejected(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	id, err := st.CreateBackup(ctx, "demo", 1)
+	if err != nil {
+		t.Fatalf("CreateBackup: %v", err)
+	}
+	if err := st.FinishBackup(ctx, id, "failed", "", "boom"); err != nil {
+		t.Fatalf("FinishBackup: %v", err)
+	}
+
+	h := &HTTP{Svc: NewLocal(st, nil)}
+	srv := httptest.NewServer(mountBackups(h))
+	defer srv.Close()
+
+	payload, _ := json.Marshal(map[string]string{"dest_root": t.TempDir()})
+	resp, err := http.Post(srv.URL+"/backups/"+strconv.FormatInt(id, 10)+"/restore", "application/json", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+	var body map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	if !strings.Contains(body["error"].(string), "only succeeded runs are restorable") {
+		t.Errorf("error = %v, want 'only succeeded runs are restorable'", body["error"])
 	}
 }
