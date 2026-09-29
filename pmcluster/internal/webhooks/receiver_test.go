@@ -710,3 +710,65 @@ func TestComputeHMACMatchesProduction(t *testing.T) {
 // Placeholder to ensure the package imports compile even if individual
 // sub-tests are skipped.
 var _ = fmt.Sprintf
+
+// TestWebhookConflictFromDifferentRepo verifies the app-name duplication guard
+// surfaces through the webhook receiver: a second deploy from a different repo
+// returns 502 and records a server_error delivery, and nothing is deployed.
+func TestWebhookConflictFromDifferentRepo(t *testing.T) {
+	const sourceName = "github-prod"
+	st, c, dep, secret := testDeps(t, sourceName)
+	srv, _ := buildHandler(t, st, c, dep)
+	ctx := context.Background()
+
+	post := func(body []byte) (int, string) {
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/webhook/"+sourceName, bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		now := time.Now().Unix()
+		req.Header.Set("X-Pmcluster-Timestamp", strconv.FormatInt(now, 10))
+		req.Header.Set("X-Pmcluster-Signature", computeHMAC(secret, body, now))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+
+	first := validPayload(t)
+	if code, body := post(first); code != http.StatusOK {
+		t.Fatalf("first webhook deploy = %d, want 200; body: %s", code, body)
+	}
+
+	conflict := &stacks.Payload{
+		Manifest: validManifest,
+		RepoURL:  "https://github.com/other-org/repo",
+		File:     "deploy/app.yaml",
+	}
+	b, _ := json.Marshal(conflict)
+	if code, body := post(b); code != http.StatusBadGateway {
+		t.Fatalf("conflicting webhook deploy = %d, want 502; body: %s", code, body)
+	} else if !strings.Contains(body, "already exists from repo") {
+		t.Errorf("502 body = %s, want 'already exists from repo'", body)
+	}
+
+	deliveries, err := NewLocal(st, c).Deliveries(ctx, sourceName, 0)
+	if err != nil {
+		t.Fatalf("Deliveries: %v", err)
+	}
+	if len(deliveries) != 2 {
+		t.Fatalf("delivery count = %d, want 2 (accepted + server_error)", len(deliveries))
+	}
+	if deliveries[0].Status != "server_error" {
+		t.Errorf("newest delivery status = %q, want server_error", deliveries[0].Status)
+	}
+	if !strings.Contains(deliveries[0].Error, "already exists from repo") {
+		t.Errorf("delivery error = %q, want 'already exists from repo'", deliveries[0].Error)
+	}
+	if len(dep.deployed) != 1 {
+		t.Errorf("deployer calls = %d, want 1 (conflict never reached the swarm)", len(dep.deployed))
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -269,5 +270,49 @@ func TestSyncStackHandler_NoOp(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), fmt.Sprintf(`"revision":%d`, res.Revision)) {
 		t.Errorf("response body = %s, want original revision %d preserved", rec.Body.String(), res.Revision)
+	}
+}
+
+// TestDeployConflictRejectedAtAPI verifies the app-name duplication guard
+// surfaces through the HTTP surface: a second deploy from a different repo
+// yields 400 with the conflict message, and nothing is deployed or recorded.
+func TestDeployConflictRejectedAtAPI(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	manifest := "app: demo\nenv: production\ndomain: example.test\nservices:\n  web:\n    image: nginx\n"
+
+	dep := &stubDeployer{}
+	svc := &Service{Store: st, Deployer: dep, MkdirAll: func(string, os.FileMode) error { return nil }}
+	h := &HTTP{Deploy: svc, Read: Local{Store: st}}
+
+	r := chi.NewRouter()
+	h.Mount(r)
+
+	first := `{"app_name":"demo","repo_url":"https://github.com/org/one","file":"deploy/a.yaml","manifest":` +
+		fmt.Sprintf("%q", manifest) + `}`
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/stacks", strings.NewReader(first)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first deploy = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+
+	conflict := `{"app_name":"demo","repo_url":"https://github.com/other/two","file":"deploy/b.yaml","manifest":` +
+		fmt.Sprintf("%q", manifest) + `}`
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/stacks", strings.NewReader(conflict)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("conflicting deploy = %d, want 400; body: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "already exists from repo") {
+		t.Errorf("body = %s, want 'already exists from repo'", rec.Body.String())
+	}
+
+	stk, err := st.GetStack(ctx, "demo")
+	if err != nil {
+		t.Fatalf("GetStack: %v", err)
+	}
+	if stk.CurrentRevision == 0 {
+		t.Error("stack missing after conflicting deploy")
 	}
 }
