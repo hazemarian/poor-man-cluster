@@ -45,6 +45,13 @@ type IRService struct {
 	Volumes []string
 	Secrets []string
 
+	// Port is the port this service listens on inside the container — the
+	// expose port when publicly reachable, else a well-known default from
+	// the image name. The depends_on wait wrapper uses it to probe the
+	// dependency with `nc -z <dep> <port>` so dependent jobs wait for a
+	// live connection, not just DNS. Zero = DNS-only wait.
+	Port int
+
 	// Expose, when non-nil, marks the service as publicly reachable and
 	// carries the routing intent (host, port, aliases, CORS).
 	Expose *IRExpose

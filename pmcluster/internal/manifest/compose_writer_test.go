@@ -46,10 +46,17 @@ func TestTranslate_DependsOnEmitsComposeParity(t *testing.T) {
 
 	// The migration command is wrapped with the swarm wait loop (docker stack
 	// deploy ignores depends_on; the wrapper blocks until db DNS resolves).
-	if !strings.Contains(s, `for d in db; do until getent hosts "$d"`) {
+	// Literal $ in the wrapper is doubled ($$) so docker stack deploy's own
+	// ${...} interpolation passes it through untouched.
+	if !strings.Contains(s, `for d in db; do until getent hosts "$$d"`) {
 		t.Errorf("migration command should be wrapped with the db wait loop:\n%s", s)
 	}
-	if !strings.Contains(s, `exec "$@"`) {
+	// postgres:14-alpine has a well-known port (5432), so the wait must also
+	// probe the connection — a DNS answer alone does not mean db is up.
+	if !strings.Contains(s, `nc -z "$$d" 5432`) {
+		t.Errorf("wait wrapper should probe the well-known postgres port:\n%s", s)
+	}
+	if !strings.Contains(s, `exec "$$@"`) {
 		t.Errorf("wait wrapper should exec the original command:\n%s", s)
 	}
 
@@ -88,11 +95,16 @@ func TestTranslate_DependsOnWrapsBakedEntrypoint(t *testing.T) {
 	s := string(out)
 
 	// The entrypoint carries the wait loop; the image's baked CMD flows
-	// through as "$@" untouched.
-	if !strings.Contains(s, `for d in db; do until getent hosts "$d"`) {
+	// through as "$@" untouched. Literal $ is doubled ($$) so docker stack
+	// deploy's ${...} interpolation leaves it alone.
+	if !strings.Contains(s, `for d in db; do until getent hosts "$$d"`) {
 		t.Errorf("migration entrypoint should carry the db wait loop:\n%s", s)
 	}
-	if !strings.Contains(s, `exec "$@"`) {
+	// postgres:14-alpine has a well-known port (5432) — the wait probes it.
+	if !strings.Contains(s, `nc -z "$$d" 5432`) {
+		t.Errorf("wait wrapper should probe the well-known postgres port:\n%s", s)
+	}
+	if !strings.Contains(s, `exec "$$@"`) {
 		t.Errorf("wait wrapper should exec the image's own command:\n%s", s)
 	}
 	if !strings.Contains(s, "entrypoint:") {
@@ -100,6 +112,28 @@ func TestTranslate_DependsOnWrapsBakedEntrypoint(t *testing.T) {
 	}
 	if !strings.Contains(s, "depends_on:\n    - db") {
 		t.Errorf("depends_on list form should still be emitted:\n%s", s)
+	}
+}
+
+// TestServicePortInfersDefault resolves the port a dependency listens on:
+// the expose port wins, then a well-known image default, else 0 (DNS-only).
+func TestServicePortInfersDefault(t *testing.T) {
+	cases := []struct {
+		name string
+		svc  dsl.Service
+		want int
+	}{
+		{"expose port wins", dsl.Service{Image: "ghcr.io/acme/app:1", Expose: &dsl.Expose{Port: 8080}}, 8080},
+		{"postgres well-known", dsl.Service{Image: "postgres:14-alpine"}, 5432},
+		{"redis well-known", dsl.Service{Image: "redis:7-alpine"}, 6379},
+		{"registry path stripped", dsl.Service{Image: "ghcr.io/org/postgres:16"}, 5432},
+		{"unknown image", dsl.Service{Image: "ghcr.io/acme/custom-app:1"}, 0},
+		{"empty image", dsl.Service{Image: ""}, 0},
+	}
+	for _, tc := range cases {
+		if got := servicePort(&tc.svc); got != tc.want {
+			t.Errorf("%s: servicePort() = %d, want %d", tc.name, got, tc.want)
+		}
 	}
 }
 
