@@ -52,7 +52,9 @@ func (r stackRow) State() string {
 	switch {
 	case r.Services == 0:
 		return "none"
-	case r.Desired > 0 && r.Running >= r.Desired:
+	case r.Desired == 0:
+		return "running"
+	case r.Running >= r.Desired:
 		return "running"
 	default:
 		return "degraded"
@@ -363,10 +365,18 @@ func (c Stacks) stacksData(ctx context.Context, q string) stackData {
 		d.ServicesKnown = true
 		for _, s := range svcs {
 			d.TotalServices++
+			if r, ok := byName[s.Stack]; ok {
+				r.Services++
+			}
+			// A completed one-shot job (run_once, 0 running of 1 desired)
+			// is a finished migration — it must not drag the stack state
+			// to "degraded". Count the service, skip its desired/running.
+			if s.RunOnce && s.Desired > 0 && s.Replicas == 0 {
+				continue
+			}
 			d.TotalRunning += int64(s.Replicas)
 			d.TotalDesired += int64(s.Desired)
 			if r, ok := byName[s.Stack]; ok {
-				r.Services++
 				r.Running += int64(s.Replicas)
 				r.Desired += int64(s.Desired)
 			}

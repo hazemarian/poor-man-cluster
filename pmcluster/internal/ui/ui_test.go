@@ -363,6 +363,10 @@ func TestAllControllers(t *testing.T) {
 	assertFragment(http.MethodGet, "/web/overview", "", "manager-1", "Cluster overview")
 
 	assertFragment(http.MethodGet, "/web/stacks", "", "Stacks", "demo", "3")
+	// The demo stack's only deficit is a completed run-once migration job
+	// (0 running of 1 desired) — it must not read as degraded: the list
+	// shows the healthy 2/2 and the stack state is "running".
+	assertFragment(http.MethodGet, "/web/stacks", "", "Running 2/2")
 	// The stack detail is its own page: the head carries the stack name and the
 	// page shows the stack's services (replica health), its last backup and its
 	// revision history.
