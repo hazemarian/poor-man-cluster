@@ -63,18 +63,20 @@ func TestTranslate_DependsOnEmitsComposeParity(t *testing.T) {
 	}
 }
 
-// TestTranslate_DependsOnNoCommandLeftUntouched asserts a service with
-// depends_on but NO explicit command is not wrapped (image-default entrypoint
-// stays intact) — only the compose-parity list form is emitted.
-func TestTranslate_DependsOnNoCommandLeftUntouched(t *testing.T) {
+// TestTranslate_DependsOnWrapsBakedEntrypoint asserts a service with
+// depends_on but NO explicit command/entrypoint gets its ENTRYPOINT wrapped
+// with the wait loop — compose forwards the image's baked CMD as "$@", so the
+// image's own runnable still runs after the dependency wait.
+func TestTranslate_DependsOnWrapsBakedEntrypoint(t *testing.T) {
 	app := baseApp()
 	app.Services = map[string]*dsl.Service{
 		"db": {
 			Image:   "postgres:14-alpine",
 			Volumes: []string{"db_data:/var/lib/postgresql/data"},
 		},
-		"api": {
-			Image:     "my-app:latest",
+		"migration": {
+			Image:     "my-app:latest", // image ships the migration in its baked CMD
+			RunOnce:   true,
 			DependsOn: []string{"db"},
 		},
 	}
@@ -85,8 +87,16 @@ func TestTranslate_DependsOnNoCommandLeftUntouched(t *testing.T) {
 	}
 	s := string(out)
 
-	if strings.Contains(s, "getent hosts") {
-		t.Errorf("api has no explicit command — should NOT be wrapped with the wait loop:\n%s", s)
+	// The entrypoint carries the wait loop; the image's baked CMD flows
+	// through as "$@" untouched.
+	if !strings.Contains(s, `for d in db; do until getent hosts "$d"`) {
+		t.Errorf("migration entrypoint should carry the db wait loop:\n%s", s)
+	}
+	if !strings.Contains(s, `exec "$@"`) {
+		t.Errorf("wait wrapper should exec the image's own command:\n%s", s)
+	}
+	if !strings.Contains(s, "entrypoint:") {
+		t.Errorf("no-command service should wrap via entrypoint:\n%s", s)
 	}
 	if !strings.Contains(s, "depends_on:\n    - db") {
 		t.Errorf("depends_on list form should still be emitted:\n%s", s)

@@ -140,12 +140,28 @@ func composeServiceFromIR(
 		// migration) can start before the dependency's service DNS resolves on
 		// the overlay and fail with "lookup <dep> ... no such host". Swarm
 		// never retries restart:none jobs, so the failure is permanent.
-		// Give the job a real wait: wrap its command in a POSIX sh loop that
-		// blocks until every dependency resolves via getent, then exec the
-		// original command. Only services with an explicit Command are
-		// wrapped (image-default entrypoints are left untouched).
-		if len(s.Command) > 0 {
+		// Give the job a real wait: wrap its runnable in a POSIX sh loop that
+		// blocks until every dependency resolves via getent, then execs the
+		// original command. Three shapes, depending on what the manifest
+		// declares:
+		//   - explicit command:      wrap the command (image CMD irrelevant).
+		//   - explicit entrypoint:   wrap the entrypoint; the image CMD flows
+		//                            through as "$@" (compose semantics).
+		//   - neither declared:      wrap the entrypoint so the image's BAKED
+		//                            command (its CMD) runs after the wait —
+		//                            compose passes the image CMD as "$@"
+		//                            whenever the entrypoint is overridden.
+		// Images whose runnable lives in a baked ENTRYPOINT (e.g. postgres'
+		// docker-entrypoint.sh) are the one unsafe shape: overriding the
+		// entrypoint skips their entrypoint logic. Declare an explicit
+		// `command:` in the DSL for those.
+		switch {
+		case len(s.Command) > 0:
 			cs.Command = waitForDepsCommand(s.DependsOn, s.Command)
+		case len(s.Entrypoint) > 0:
+			cs.Entrypoint = waitForDepsCommand(s.DependsOn, s.Entrypoint)
+		default:
+			cs.Entrypoint = waitForDepsEntrypoint(s.DependsOn)
 		}
 	}
 
@@ -157,6 +173,15 @@ func composeServiceFromIR(
 // wrapper is plain POSIX sh ("sh -c '...' sh <cmd>") so it works in both
 // busybox and glibc base images regardless of extra tooling.
 func waitForDepsCommand(deps, cmd []string) []string {
+	return append(waitForDepsEntrypoint(deps), cmd...)
+}
+
+// waitForDepsEntrypoint wraps an image's own runnable (its baked CMD) so the
+// container blocks until every service in deps resolves in the overlay DNS,
+// then execs what compose passes as "$@". Compose forwards the image CMD (or
+// the service's command) as "$@" whenever the entrypoint is overridden, so
+// exec'ing it here runs the image's original command untouched.
+func waitForDepsEntrypoint(deps []string) []string {
 	var sb strings.Builder
 	sb.WriteString("for d in")
 	for _, d := range deps {
@@ -164,8 +189,7 @@ func waitForDepsCommand(deps, cmd []string) []string {
 		sb.WriteString(d)
 	}
 	sb.WriteString("; do until getent hosts \"$d\" >/dev/null 2>&1; do sleep 2; done; done; exec \"$@\"")
-	wrapped := []string{"sh", "-c", sb.String(), "sh"}
-	return append(wrapped, cmd...)
+	return []string{"sh", "-c", sb.String(), "sh"}
 }
 
 // relocateVolumes forces every container volume under the single volume
