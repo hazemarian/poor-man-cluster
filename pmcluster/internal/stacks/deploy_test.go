@@ -19,10 +19,12 @@ import (
 // It records every (stackName, composeYAML) call and returns configurable
 // errors for deploy and remove independently.
 type recordingDeployer struct {
-	calls     []deployCall
-	removed   []string
-	err       error
-	removeErr error
+	calls        []deployCall
+	noPruneCalls []deployCall
+	pruned       []string
+	removed      []string
+	err          error
+	removeErr    error
 }
 
 type deployCall struct {
@@ -33,6 +35,16 @@ type deployCall struct {
 func (r *recordingDeployer) DeployStack(_ context.Context, name string, composeYAML []byte) error {
 	r.calls = append(r.calls, deployCall{name: name, yaml: composeYAML})
 	return r.err
+}
+
+func (r *recordingDeployer) DeployStackNoPrune(_ context.Context, name string, composeYAML []byte) error {
+	r.noPruneCalls = append(r.noPruneCalls, deployCall{name: name, yaml: composeYAML})
+	return r.err
+}
+
+func (r *recordingDeployer) PruneStack(_ context.Context, name string, _ []byte) error {
+	r.pruned = append(r.pruned, name)
+	return nil
 }
 
 func (r *recordingDeployer) RemoveStack(_ context.Context, name string) error {
@@ -515,14 +527,16 @@ func TestDeploy_DeployerError(t *testing.T) {
 
 // TestRollback_HappyPath deploys two revisions then rolls back to v1.
 // It verifies: a NEW revision is created, the new revision's RenderedYAML
-// matches v1's, and the stack's current_revision points to the new revision.
+// matches v1's (rollback re-translates the stored SOURCE manifest, never the
+// stored rendered YAML — the version override v2 applied is not part of the
+// source), and the stack's current_revision points to the new revision.
 func TestRollback_HappyPath(t *testing.T) {
 	s := openTestStore(t)
 	dep := &recordingDeployer{}
 	svc := newService(s, dep)
 	ctx := context.Background()
 
-	r1, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest, Version: "v1"})
+	r1, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest})
 	if err != nil {
 		t.Fatalf("Deploy v1: %v", err)
 	}
@@ -838,5 +852,158 @@ func TestUndeploy_DeployerError(t *testing.T) {
 	}
 	if _, gErr := s.GetStack(ctx, "donation-campaign"); gErr != nil {
 		t.Errorf("stack row should survive a failed swarm removal: %v", gErr)
+	}
+}
+
+// TestDeploy_OrderedLevels deploys a stack whose services form depends_on
+// levels (db ← migration, api) and verifies the deployer receives each level
+// as its own compose via DeployStackNoPrune, in topological order, followed by
+// exactly ONE PruneStack call with the full stack compose. The single-level
+// DeployStack path must NOT be used.
+func TestDeploy_OrderedLevels(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	const manifest = `
+app: ordered-app
+env: production
+domain: example.com
+services:
+  db:
+    image: postgres:14-alpine
+    volumes: [db_data:/var/lib/postgresql/data]
+  migration:
+    image: ghcr.io/acme/app:latest
+    command: [./migrate]
+    run_once: true
+    depends_on: [db]
+  api:
+    image: ghcr.io/acme/app:latest
+    replicas: 1
+    depends_on: [db]
+    expose:
+      port: 8080
+      host: api.ordered-app.example.com
+`
+
+	result, err := svc.Deploy(ctx, Payload{Manifest: manifest})
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if result.Revision == 0 {
+		t.Error("result.Revision is 0")
+	}
+
+	// Level 0 (db) + level 1 (migration, api) via the no-prune path.
+	if len(dep.noPruneCalls) != 2 {
+		t.Fatalf("DeployStackNoPrune calls = %d, want 2 (db then migration+api)", len(dep.noPruneCalls))
+	}
+	// Full-stack DeployStack must NOT run for an ordered deploy.
+	if len(dep.calls) != 0 {
+		t.Errorf("DeployStack (full) calls = %d, want 0 for an ordered deploy", len(dep.calls))
+	}
+	for i, call := range dep.noPruneCalls {
+		if call.name != "ordered-app" {
+			t.Errorf("noPrune call %d name = %q, want ordered-app", i, call.name)
+		}
+		if len(call.yaml) == 0 {
+			t.Errorf("noPrune call %d received empty compose", i)
+		}
+	}
+	// Level 0 must declare db; level 1 must declare migration + api.
+	if !strings.Contains(string(dep.noPruneCalls[0].yaml), "db:") {
+		t.Errorf("level 0 compose should declare db:\n%s", dep.noPruneCalls[0].yaml)
+	}
+	level1 := string(dep.noPruneCalls[1].yaml)
+	if !strings.Contains(level1, "migration:") || !strings.Contains(level1, "api:") {
+		t.Errorf("level 1 compose should declare migration + api:\n%s", level1)
+	}
+	if strings.Contains(string(dep.noPruneCalls[0].yaml), "migration:") {
+		t.Errorf("level 0 compose must not declare migration:\n%s", dep.noPruneCalls[0].yaml)
+	}
+
+	// Exactly one prune pass, with the full stack compose.
+	if len(dep.pruned) != 1 || dep.pruned[0] != "ordered-app" {
+		t.Errorf("PruneStack calls = %v, want exactly [ordered-app]", dep.pruned)
+	}
+}
+
+// TestDeploy_NoDepsUsesFullDeploy: a stack with no depends_on keeps the
+// today's single full DeployStack path (no per-level calls, no separate
+// prune).
+func TestDeploy_NoDepsUsesFullDeploy(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if len(dep.calls) != 1 {
+		t.Errorf("DeployStack calls = %d, want 1", len(dep.calls))
+	}
+	if len(dep.noPruneCalls) != 0 || len(dep.pruned) != 0 {
+		t.Errorf("no-deps stack must not use the ordered path (noPrune=%d prune=%d)", len(dep.noPruneCalls), len(dep.pruned))
+	}
+}
+
+// TestDeploy_CycleErrors: a depends_on cycle is rejected before any deploy.
+func TestDeploy_CycleErrors(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	const manifest = `
+app: cyc-app
+env: production
+domain: example.com
+services:
+  a:
+    image: nginx:latest
+    depends_on: [b]
+  b:
+    image: nginx:latest
+    depends_on: [a]
+`
+	_, err := svc.Deploy(ctx, Payload{Manifest: manifest})
+	if err == nil || !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("Deploy(cycle) = %v, want a cycle error", err)
+	}
+	if len(dep.calls) != 0 || len(dep.noPruneCalls) != 0 {
+		t.Errorf("cycle deploy must not reach the deployer (calls=%d noPrune=%d)", len(dep.calls), len(dep.noPruneCalls))
+	}
+}
+
+// TestDeploy_UnknownDepErrors: depends_on referencing a missing service is
+// rejected before any deploy.
+func TestDeploy_UnknownDepErrors(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	const manifest = `
+app: dep-app
+env: production
+domain: example.com
+services:
+  db:
+    image: postgres:14-alpine
+  migration:
+    image: ghcr.io/acme/app:latest
+    command: [./migrate]
+    run_once: true
+    depends_on: [ghost]
+`
+	_, err := svc.Deploy(ctx, Payload{Manifest: manifest})
+	if err == nil || !strings.Contains(err.Error(), "no such service") {
+		t.Fatalf("Deploy(unknown dep) = %v, want a no-such-service error", err)
+	}
+	if len(dep.calls) != 0 || len(dep.noPruneCalls) != 0 {
+		t.Errorf("unknown-dep deploy must not reach the deployer (calls=%d noPrune=%d)", len(dep.calls), len(dep.noPruneCalls))
 	}
 }

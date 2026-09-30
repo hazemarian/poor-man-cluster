@@ -50,6 +50,16 @@ func (r *recordingDeployer) DeployStack(_ context.Context, name string, composeY
 	return nil
 }
 
+func (r *recordingDeployer) DeployStackNoPrune(_ context.Context, name string, composeYAML []byte) error {
+	if r.deployErr != nil {
+		return r.deployErr
+	}
+	r.deployed = append(r.deployed, deployRecord{Name: name, YAML: string(composeYAML)})
+	return nil
+}
+
+func (r *recordingDeployer) PruneStack(_ context.Context, _ string, _ []byte) error { return nil }
+
 func (r *recordingDeployer) RemoveStack(_ context.Context, name string) error {
 	r.removed = append(r.removed, name)
 	return nil

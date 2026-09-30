@@ -233,6 +233,7 @@ type recordingDeployer struct {
 	deployedStacks []deployRecord
 	removedStacks  []string
 	forceUpdated   []string
+	prunedStacks   []string
 	removeErr      error
 }
 
@@ -244,6 +245,16 @@ type deployRecord struct {
 
 func (r *recordingDeployer) DeployStack(_ context.Context, name string, composeYAML []byte) error {
 	r.deployedStacks = append(r.deployedStacks, deployRecord{Name: name, YAMLLen: len(composeYAML), YAML: string(composeYAML)})
+	return nil
+}
+
+func (r *recordingDeployer) DeployStackNoPrune(_ context.Context, name string, composeYAML []byte) error {
+	r.deployedStacks = append(r.deployedStacks, deployRecord{Name: name, YAMLLen: len(composeYAML), YAML: string(composeYAML)})
+	return nil
+}
+
+func (r *recordingDeployer) PruneStack(_ context.Context, name string, _ []byte) error {
+	r.prunedStacks = append(r.prunedStacks, name)
 	return nil
 }
 

@@ -16,7 +16,20 @@ import (
 // name. Production impl shells out to the `docker` CLI because the SDK
 // has no high-level stack-deploy primitive.
 type StackDeployer interface {
+	// DeployStack applies the compose file and then reconciles the stack:
+	// drift-prune services dropped from the compose and force-update every
+	// remaining service. Used for full-stack deploys (cluster up/update and
+	// single-level app stacks).
 	DeployStack(ctx context.Context, name string, composeYAML []byte) error
+	// DeployStackNoPrune applies the compose file WITHOUT pruning or
+	// force-updating. Used by the ordered per-level app-stack deploy: each
+	// depends_on level is deployed separately, so pruning mid-way would
+	// remove not-yet-deployed sibling services.
+	DeployStackNoPrune(ctx context.Context, name string, composeYAML []byte) error
+	// PruneStack removes live stack services that are not declared in the
+	// compose file. Run once at the end of an ordered per-level deploy with
+	// the full stack compose.
+	PruneStack(ctx context.Context, name string, composeYAML []byte) error
 	RemoveStack(ctx context.Context, name string) error
 
 	ForceUpdateService(ctx context.Context, fullName string) error
@@ -68,7 +81,19 @@ func trimOutput(s string) string {
 }
 
 func (d *dockerCLIDeployer) DeployStack(ctx context.Context, name string, composeYAML []byte) error {
+	if err := d.deployStack(ctx, name, composeYAML); err != nil {
+		return err
+	}
+	if err := d.pruneStackServices(ctx, name, composeYAML); err != nil {
+		return err
+	}
+	return d.forceUpdateStackServices(ctx, name)
+}
 
+// deployStack runs `docker stack deploy` for the given compose (with the
+// "update out of sequence" retry). It does NOT prune or force-update —
+// those are the caller's choice (full-stack vs ordered per-level deploys).
+func (d *dockerCLIDeployer) deployStack(ctx context.Context, name string, composeYAML []byte) error {
 	deploy := func() (string, error) {
 		cmd := exec.CommandContext(ctx, "docker", "stack", "deploy",
 			"--detach=true",
@@ -83,7 +108,6 @@ func (d *dockerCLIDeployer) DeployStack(ctx context.Context, name string, compos
 
 	out, err := deploy()
 	if err != nil {
-
 		if strings.Contains(out, "update out of sequence") {
 			for i := 1; i <= forceUpdateRetries; i++ {
 				select {
@@ -110,16 +134,20 @@ func (d *dockerCLIDeployer) DeployStack(ctx context.Context, name string, compos
 			return fmt.Errorf("docker stack deploy %s: %w", name, err)
 		}
 	}
-
-	if err := d.pruneStackServices(ctx, name, composeYAML); err != nil {
-		return err
-	}
-
-	if err := d.forceUpdateStackServices(ctx, name); err != nil {
-		return err
-	}
-
 	return nil
+}
+
+// DeployStackNoPrune implements StackDeployer — the raw stack deploy with
+// no reconcile (see the interface doc for why the ordered deploy needs it).
+func (d *dockerCLIDeployer) DeployStackNoPrune(ctx context.Context, name string, composeYAML []byte) error {
+	return d.deployStack(ctx, name, composeYAML)
+}
+
+// PruneStack implements StackDeployer — drift-prune only (no deploy, no
+// force-update). Called once after an ordered per-level deploy with the
+// full stack compose so services dropped from the manifest are removed.
+func (d *dockerCLIDeployer) PruneStack(ctx context.Context, name string, composeYAML []byte) error {
+	return d.pruneStackServices(ctx, name, composeYAML)
 }
 
 // pruneStackServices removes services that belong to the stack but are no

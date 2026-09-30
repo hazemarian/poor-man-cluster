@@ -45,13 +45,6 @@ type IRService struct {
 	Volumes []string
 	Secrets []string
 
-	// Port is the port this service listens on inside the container — the
-	// expose port when publicly reachable, else a well-known default from
-	// the image name. The depends_on wait wrapper uses it to probe the
-	// dependency with `nc -z <dep> <port>` so dependent jobs wait for a
-	// live connection, not just DNS. Zero = DNS-only wait.
-	Port int
-
 	// Expose, when non-nil, marks the service as publicly reachable and
 	// carries the routing intent (host, port, aliases, CORS).
 	Expose *IRExpose
@@ -74,8 +67,11 @@ type IRService struct {
 	// SkipFilelog opts the workload out of OTel filelog scraping.
 	SkipFilelog bool
 
-	// DependsOn lists sibling services this service waits for (compose
-	// parity + Swarm restart-on-failure retry semantics).
+	// DependsOn lists sibling services this service must start AFTER — the
+	// deploy pipeline topologically orders services into levels from this
+	// and deploys level by level (waiting each level healthy before the
+	// next). Emitted into compose for parity; the Swarm scheduler itself
+	// ignores it.
 	DependsOn []string
 }
 

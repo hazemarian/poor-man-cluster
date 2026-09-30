@@ -136,50 +136,6 @@ func BuildIR(ctx context.Context, app *dsl.App, res EnvResolver) (*IR, error) {
 	return ir, nil
 }
 
-// knownPorts maps well-known image names to their default listening port.
-// Used to infer a dependency's port for the depends_on wait wrapper when the
-// manifest declares neither `port:` nor `expose` — so a run-once migration
-// waiting on `depends_on: [db]` probes postgres:5432 without any manifest
-// change. Lowercased image base names only.
-var knownPorts = map[string]int{
-	"postgres":      5432,
-	"mysql":         3306,
-	"mariadb":       3306,
-	"redis":         6379,
-	"mongo":         27017,
-	"nginx":         80,
-	"httpd":         80,
-	"rabbitmq":      5672,
-	"elasticsearch": 9200,
-	"memcached":     11211,
-}
-
-// servicePort resolves the port a service listens on: the expose port (a
-// publicly reachable service is reachable on that port), else a well-known
-// default inferred from the image name. Zero means "unknown — DNS-only
-// wait". The port feeds the depends_on wait wrapper's `nc -z <dep> <port>`
-// probe so a run-once migration waiting on `depends_on: [db]` waits for a
-// live postgres connection without any manifest change.
-func servicePort(s *dsl.Service) int {
-	if s.Expose != nil && s.Expose.Port > 0 {
-		return s.Expose.Port
-	}
-	// Strip registry + namespace prefix and tag: "ghcr.io/org/postgres:14"
-	// → "postgres". Take the last path segment; unresolved ${...}
-	// placeholders can't be inferred.
-	img := strings.ToLower(s.Image)
-	if i := strings.LastIndexByte(img, '/'); i >= 0 {
-		img = img[i+1:]
-	}
-	if i := strings.IndexByte(img, ':'); i >= 0 {
-		img = img[:i]
-	}
-	if p, ok := knownPorts[img]; ok {
-		return p
-	}
-	return 0
-}
-
 // translateService maps one DSL service to its IR entry, resolving
 // config()/secrets() env references.
 func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Service, res EnvResolver) (*IRService, error) {
@@ -193,7 +149,6 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 		Image:       s.Image,
 		Command:     s.Command,
 		Entrypoint:  s.Entrypoint,
-		Port:        servicePort(s),
 		Env:         env,
 		Volumes:     s.Volumes,
 		Secrets:     s.Secrets,

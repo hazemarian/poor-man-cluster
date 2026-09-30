@@ -12,7 +12,11 @@ import (
 
 // TestTranslate_DependsOnEmitsComposeParity builds a migration service that
 // depends on the db service and asserts the rendered compose carries the
-// depends_on block (condition service_started) for compose parity.
+// depends_on block (plain list form) for compose parity. Startup ordering is
+// NOT rendered into the artifact — the deploy pipeline orders services into
+// depends_on levels and deploys level by level (see ServiceLevels and the
+// stacks deploy path). The translation stays clean and image-agnostic: no
+// shell wrapper, no getent/nc probes, no image requirements.
 func TestTranslate_DependsOnEmitsComposeParity(t *testing.T) {
 	app := baseApp()
 	app.Services = map[string]*dsl.Service{
@@ -44,20 +48,13 @@ func TestTranslate_DependsOnEmitsComposeParity(t *testing.T) {
 		t.Errorf("depends_on should reference db as a list item:\n%s", s)
 	}
 
-	// The migration command is wrapped with the swarm wait loop (docker stack
-	// deploy ignores depends_on; the wrapper blocks until db DNS resolves).
-	// Literal $ in the wrapper is doubled ($$) so docker stack deploy's own
-	// ${...} interpolation passes it through untouched.
-	if !strings.Contains(s, `for d in db; do until getent hosts "$$d"`) {
-		t.Errorf("migration command should be wrapped with the db wait loop:\n%s", s)
-	}
-	// postgres:14-alpine has a well-known port (5432), so the wait must also
-	// probe the connection — a DNS answer alone does not mean db is up.
-	if !strings.Contains(s, `nc -z "$$d" 5432`) {
-		t.Errorf("wait wrapper should probe the well-known postgres port:\n%s", s)
-	}
-	if !strings.Contains(s, `exec "$$@"`) {
-		t.Errorf("wait wrapper should exec the original command:\n%s", s)
+	// NO wait wrapper may be rendered: the artifact must stay clean (the
+	// control plane orders the deploy). The old POSIX-sh getent/nc wrapper is
+	// gone entirely.
+	for _, leak := range []string{"sh -c", "getent", "nc -z", "exec \"$@\"", "sleep 2"} {
+		if strings.Contains(s, leak) {
+			t.Errorf("rendered compose must not contain a wait wrapper (%q):\n%s", leak, s)
+		}
 	}
 
 	// A run-once job that waits on dependencies gets a bounded on-failure
@@ -70,11 +67,12 @@ func TestTranslate_DependsOnEmitsComposeParity(t *testing.T) {
 	}
 }
 
-// TestTranslate_DependsOnWrapsBakedEntrypoint asserts a service with
-// depends_on but NO explicit command/entrypoint gets its ENTRYPOINT wrapped
-// with the wait loop — compose forwards the image's baked CMD as "$@", so the
-// image's own runnable still runs after the dependency wait.
-func TestTranslate_DependsOnWrapsBakedEntrypoint(t *testing.T) {
+// TestTranslate_DependsOnNoWrapperForBakedEntrypoint asserts a service with
+// depends_on but NO explicit command/entrypoint keeps its image untouched:
+// the rendered compose carries only the depends_on list, and no entrypoint
+// wrapper is emitted (the old sh-loop wrapper is gone). The image's baked
+// entrypoint/CMD run as shipped.
+func TestTranslate_DependsOnNoWrapperForBakedEntrypoint(t *testing.T) {
 	app := baseApp()
 	app.Services = map[string]*dsl.Service{
 		"db": {
@@ -94,45 +92,12 @@ func TestTranslate_DependsOnWrapsBakedEntrypoint(t *testing.T) {
 	}
 	s := string(out)
 
-	// The entrypoint carries the wait loop; the image's baked CMD flows
-	// through as "$@" untouched. Literal $ is doubled ($$) so docker stack
-	// deploy's ${...} interpolation leaves it alone.
-	if !strings.Contains(s, `for d in db; do until getent hosts "$$d"`) {
-		t.Errorf("migration entrypoint should carry the db wait loop:\n%s", s)
-	}
-	// postgres:14-alpine has a well-known port (5432) — the wait probes it.
-	if !strings.Contains(s, `nc -z "$$d" 5432`) {
-		t.Errorf("wait wrapper should probe the well-known postgres port:\n%s", s)
-	}
-	if !strings.Contains(s, `exec "$$@"`) {
-		t.Errorf("wait wrapper should exec the image's own command:\n%s", s)
-	}
-	if !strings.Contains(s, "entrypoint:") {
-		t.Errorf("no-command service should wrap via entrypoint:\n%s", s)
-	}
 	if !strings.Contains(s, "depends_on:\n    - db") {
 		t.Errorf("depends_on list form should still be emitted:\n%s", s)
 	}
-}
-
-// TestServicePortInfersDefault resolves the port a dependency listens on:
-// the expose port wins, then a well-known image default, else 0 (DNS-only).
-func TestServicePortInfersDefault(t *testing.T) {
-	cases := []struct {
-		name string
-		svc  dsl.Service
-		want int
-	}{
-		{"expose port wins", dsl.Service{Image: "ghcr.io/acme/app:1", Expose: &dsl.Expose{Port: 8080}}, 8080},
-		{"postgres well-known", dsl.Service{Image: "postgres:14-alpine"}, 5432},
-		{"redis well-known", dsl.Service{Image: "redis:7-alpine"}, 6379},
-		{"registry path stripped", dsl.Service{Image: "ghcr.io/org/postgres:16"}, 5432},
-		{"unknown image", dsl.Service{Image: "ghcr.io/acme/custom-app:1"}, 0},
-		{"empty image", dsl.Service{Image: ""}, 0},
-	}
-	for _, tc := range cases {
-		if got := servicePort(&tc.svc); got != tc.want {
-			t.Errorf("%s: servicePort() = %d, want %d", tc.name, got, tc.want)
+	for _, leak := range []string{"sh -c", "getent", "nc -z", "exec \"$@\"", "entrypoint:", "sleep 2"} {
+		if strings.Contains(s, leak) {
+			t.Errorf("no-command service must not get a wrapper (%q):\n%s", leak, s)
 		}
 	}
 }

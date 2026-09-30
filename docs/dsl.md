@@ -205,12 +205,14 @@ migration:
     - db
 ```
 
-**How it works on Swarm:** `docker stack deploy` parses `depends_on` and **ignores it** — the Swarm scheduler has no dependency graph, so every service is scheduled independently. The compose map/condition form (`db: {condition: service_healthy}`) is rejected outright ("must be a list"); only the list form is accepted. pmcluster therefore implements the wait at translation time:
+**How it works on Swarm:** `docker stack deploy` parses `depends_on` and **ignores it** — the Swarm scheduler has no dependency graph, so every service is scheduled independently. The compose map/condition form (`db: {condition: service_healthy}`) is rejected outright ("must be a list"); only the list form is accepted. pmcluster therefore enforces the ordering **in the control plane**, not in a rendered artifact:
 
-- A service with an explicit `command:` gets it wrapped in a POSIX wait loop — `until getent hosts <dep> && nc -z <dep> <port>; do sleep 2; done` for every dependency, then `exec "$@"` runs the real command.
-- A service with **no** `command:` gets its `entrypoint` wrapped the same way; the image's baked `CMD` flows through `$@`. (Exception: images whose runnable lives inside a *baked entrypoint* — e.g. Postgres's `docker-entrypoint.sh` — must declare an explicit `command:` so the wrapper lands in the right place.)
-- The wait probes the dependency's **port** when it is known: `expose.port` wins, otherwise a well-known image default (postgres `5432`, mysql/mariadb `3306`, redis `6379`, mongo `27017`, nginx/httpd `80`, rabbitmq `5672`, elasticsearch `9200`, memcached `11211`), otherwise DNS-only.
+- The deploy pipeline topologically sorts the stack's services into `depends_on` levels and deploys **level by level**: each level's services get their own compose rendered from the same intermediate representation, deployed via `docker stack deploy`, and waited for (long-running services until replicas ≥ desired; `run_once` jobs until their task completes) before the next level starts.
+- One drift-prune pass runs at the end with the full stack compose (partial deploys never prune, or they would remove not-yet-deployed sibling services).
+- `rendered_yaml` (stored whole-stack, hash-compared for sync no-ops) is an audit/display artifact only — it is never executed directly.
 - A `run_once` service with `depends_on` additionally gets `restart_policy: on-failure` with `max_attempts: 3`, so a transient failure retries instead of dying permanently.
+
+Because ordering lives in the deploy step, `depends_on` works for **any** image — no shell wrapper is injected, so baked-entrypoint images (Postgres, MySQL, …), distroless images without `sh`, and images with no declared `command:` all behave identically. A `depends_on` cycle or a reference to a service that does not exist in the manifest fails the deploy loudly before anything is created.
 
 ---
 
@@ -250,7 +252,7 @@ You never write these by hand; pmcluster adds them:
 - **Traefik** (exposed services) — router/service names scoped `<app>-<service>`; `entrypoints=websecure`, `tls=true`, load-balancer port, `traefik.docker.network=traefik-net`, and the CORS middleware.
 - **Restart policy** — `on-failure` by default; `none` for `run_once` (a `run_once` service with `depends_on` gets `on-failure` with `max_attempts: 3`).
 - **Deploy** — `replicas`, `placement` constraints (stateful services auto-pin to the platform node when `placement` is empty), and `update_config` defaults (`stop-first` for volume-holding services).
-- **`depends_on` wait** — dependent services get a generated wait wrapper (see [`depends_on`](#depends_on)).
+- **`depends_on` list** — emitted for compose parity; startup ordering is enforced by the control plane (see [`depends_on`](#depends_on)) — no wrapper is injected.
 - **`io.pmcluster.skip_filelog=true`** — when `skip_filelog: true`.
 
 The output is a `version: "3.9"` Compose file applied with `docker stack deploy`.

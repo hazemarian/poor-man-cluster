@@ -132,6 +132,13 @@ func (s *stubDeployer) DeployStack(ctx context.Context, name string, _ []byte) e
 	return nil
 }
 
+func (s *stubDeployer) DeployStackNoPrune(ctx context.Context, name string, _ []byte) error {
+	s.deployed = append(s.deployed, name)
+	return nil
+}
+
+func (s *stubDeployer) PruneStack(context.Context, string, []byte) error { return nil }
+
 func (s *stubDeployer) RemoveStack(_ context.Context, name string) error {
 	s.removed = append(s.removed, name)
 	return nil

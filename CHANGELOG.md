@@ -4,6 +4,14 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.118 (2026-10-01)
+
+- **`depends_on` now orders the deploy — no more rendered wait wrapper.** Docker Swarm parses and ignores compose `depends_on` (no dependency graph); the previous fix wrapped a dependent service's command/entrypoint in a POSIX `sh` loop (`getent`/`nc -z` probes). That wrapper was a runtime-ordering workaround encoded into a rendered artifact — it broke baked-entrypoint images, distroless images without `sh`, had no timeout, and made port/DNS assumptions. It is **removed**.
+- **Control-plane ordered deploy**: the pipeline topologically sorts the stack's services into `depends_on` levels (`manifest.ServiceLevels`, Kahn's algorithm — cycles and unknown dependencies fail loudly before anything is created), renders each level as its own compose (`IR.Subset`), deploys level-by-level via `docker stack deploy` (`DeployStackNoPrune` — partial deploys never drift-prune), waits each level healthy before the next (long-running services until replicas ≥ desired; `run_once` jobs until the task completes — failures stop the deploy with the task error), then runs **one** drift-prune pass (`PruneStack`) with the full stack compose. Single-level stacks keep today's full `DeployStack` path unchanged.
+- **Rollback re-translates the source**: `rollback` now re-translates the target revision's `source_yaml` with the current translator, records a fresh revision (new `rendered_hash`, `rollback_of` marker), and deploys through the ordered pipeline. Stored `rendered_yaml` is never executed (audit/display/hash only). A source that no longer validates under the current DSL fails loudly instead of silently deploying a stale translation. Deploy and sync already followed this invariant.
+- New `StackDeployer` interface methods `DeployStackNoPrune` + `PruneStack` (production + all test fakes).
+- Tests: `manifest.ServiceLevels`/`IR.Subset` (chain, fan-out, multi-level, cycle, unknown-dep, empty, subset recompute), ordered-deploy order + prune-once + cycle/unknown-dep rejection, rollback re-translate semantics.
+
 ## v0.2.115 (2026-09-30)
 
 - Console: the **API Keys** nav link is now visible for admins when `EDGE_LOGIN_DISABLED=true` (it was previously bundled with the Users CRUD link, which correctly stays hidden — the API Keys page is admin-only but not login-UI-gated). Regression test added.

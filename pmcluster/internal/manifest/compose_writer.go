@@ -59,20 +59,9 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 
 	app := irApp{name: ir.Name, env: ir.Env, version: ir.Version}
 
-	// depPorts maps every sibling service's name to the port it listens on
-	// (declared via the DSL `port:` field). The depends_on wait wrapper uses
-	// it to probe the dependency with `nc -z <dep> <port>` so a dependent
-	// job waits for a live connection — not just overlay DNS.
-	depPorts := map[string]int{}
-	for i := range ir.Services {
-		if p := ir.Services[i].Port; p > 0 {
-			depPorts[ir.Services[i].Name] = p
-		}
-	}
-
 	for i := range ir.Services {
 		s := &ir.Services[i]
-		cs, err := composeServiceFromIR(s, app, privateNet, root, w.CertResolver, w.PinNode, depPorts, &usesTraefikNet, &usesMonitoringNet)
+		cs, err := composeServiceFromIR(s, app, privateNet, root, w.CertResolver, w.PinNode, &usesTraefikNet, &usesMonitoringNet)
 		if err != nil {
 			return nil, err
 		}
@@ -122,7 +111,6 @@ func composeServiceFromIR(
 	s *IRService,
 	app irApp,
 	privateNet, volumeRoot, certResolver, pinNode string,
-	depPorts map[string]int,
 	usesTraefikNet, usesMonitoringNet *bool,
 ) (*composeService, error) {
 	volumes := relocateVolumes(volumeRoot, app.name, s.Volumes)
@@ -145,77 +133,17 @@ func composeServiceFromIR(
 	cs.Healthcheck = composeHealthcheckFromIR(s)
 	cs.Deploy = composeDeployFromIR(app, s, certResolver, pinNode, len(volumes) > 0)
 
+	// depends_on is emitted for compose parity ONLY. docker stack deploy
+	// parses and ignores it — the Swarm scheduler has no dependency graph.
+	// Startup ordering is enforced by the CONTROL PLANE, not by a rendered
+	// artifact: the deploy pipeline topologically sorts the stack's services
+	// into depends_on levels and deploys + waits for each level before the
+	// next (see internal/manifest.ServiceLevels and the stacks deploy path).
 	if len(s.DependsOn) > 0 {
 		cs.DependsOn = s.DependsOn
-		// docker stack deploy parses depends_on and IGNORES it — the Swarm
-		// scheduler has no dependency graph, so a one-shot job (e.g. a
-		// migration) can start before the dependency's service DNS resolves on
-		// the overlay and fail with "lookup <dep> ... no such host". Swarm
-		// never retries restart:none jobs, so the failure is permanent.
-		// Give the job a real wait: wrap its runnable in a POSIX sh loop that
-		// blocks until every dependency resolves via getent, then execs the
-		// original command. Three shapes, depending on what the manifest
-		// declares:
-		//   - explicit command:      wrap the command (image CMD irrelevant).
-		//   - explicit entrypoint:   wrap the entrypoint; the image CMD flows
-		//                            through as "$@" (compose semantics).
-		//   - neither declared:      wrap the entrypoint so the image's BAKED
-		//                            command (its CMD) runs after the wait —
-		//                            compose passes the image CMD as "$@"
-		//                            whenever the entrypoint is overridden.
-		// Images whose runnable lives in a baked ENTRYPOINT (e.g. postgres'
-		// docker-entrypoint.sh) are the one unsafe shape: overriding the
-		// entrypoint skips their entrypoint logic. Declare an explicit
-		// `command:` in the DSL for those.
-		switch {
-		case len(s.Command) > 0:
-			cs.Command = waitForDepsCommand(s.DependsOn, depPorts, s.Command)
-		case len(s.Entrypoint) > 0:
-			cs.Entrypoint = waitForDepsCommand(s.DependsOn, depPorts, s.Entrypoint)
-		default:
-			cs.Entrypoint = waitForDepsEntrypoint(s.DependsOn, depPorts)
-		}
 	}
 
 	return cs, nil
-}
-
-// waitForDepsCommand wraps cmd so the container blocks until every service in
-// deps is reachable — its name resolves in the overlay DNS and, when a port
-// is known, `nc -z <dep> <port>` connects — then execs the original command.
-// The wrapper is plain POSIX sh ("sh -c '...' sh <cmd>") so it works in both
-// busybox and glibc base images regardless of extra tooling.
-func waitForDepsCommand(deps []string, depPorts map[string]int, cmd []string) []string {
-	return append(waitForDepsEntrypoint(deps, depPorts), cmd...)
-}
-
-// waitForDepsEntrypoint wraps an image's own runnable (its baked CMD) so the
-// container blocks until every service in deps is reachable — name resolves
-// in the overlay DNS and, when a port is known, `nc -z <dep> <port>`
-// connects — then execs what compose passes as "$@". Compose forwards the
-// image CMD (or the service's command) as "$@" whenever the entrypoint is
-// overridden, so exec'ing it here runs the image's original command
-// untouched.
-func waitForDepsEntrypoint(deps []string, depPorts map[string]int) []string {
-	var sb strings.Builder
-	sb.WriteString("for d in")
-	for _, d := range deps {
-		sb.WriteString(" ")
-		sb.WriteString(d)
-	}
-	sb.WriteString("; do until getent hosts \"$d\" >/dev/null 2>&1")
-	for _, d := range deps {
-		if port, ok := depPorts[d]; ok {
-			fmt.Fprintf(&sb, " && nc -z \"$d\" %d >/dev/null 2>&1", port)
-		}
-	}
-	sb.WriteString("; do sleep 2; done; done; exec \"$@\"")
-	script := sb.String()
-	// docker stack deploy interpolates ${...} in the compose file itself, so
-	// every literal `$` in the wrapper must be doubled to survive it
-	// (escapeCompose — the same treatment the Traefik origin regex gets).
-	script = escapeCompose(script)
-	return []string{"sh", "-c", script, "sh"}
 }
 
 // relocateVolumes forces every container volume under the single volume

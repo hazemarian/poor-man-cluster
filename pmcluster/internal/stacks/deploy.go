@@ -143,6 +143,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 
 	var (
 		app      *dsl.App
+		ir       *manifest.IR
 		rendered []byte
 		revision int64
 		steps    []string
@@ -194,10 +195,19 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		return nil
 	})
 	wf.Add("Translating to Compose (resolving configs/secrets)", func(ctx context.Context) error {
-		y, err := manifest.TranslateIR(ctx, app, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode})
+		// Build the neutral IR first so the ordered per-level deploy can
+		// topologically sort services from depends_on and render each level
+		// as its own compose; the full render is what gets recorded.
+		built, err := manifest.BuildIR(ctx, app, s.Resolver)
 		if err != nil {
 			return fmt.Errorf("translate: %w", err)
 		}
+		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode}
+		y, err := writer.Write(ctx, built)
+		if err != nil {
+			return fmt.Errorf("translate: %w", err)
+		}
+		ir = built
 		rendered = y
 		return nil
 	})
@@ -233,17 +243,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		return nil
 	})
 	wf.Add("Deploying stack to the swarm", func(ctx context.Context) error {
-		if app.BackupBeforeDeploy {
-			backupErr := s.runPreDeployBackup(ctx, app.Name, revision)
-			if backupErr != nil && app.StrictBackup {
-				return fmt.Errorf("pre-deploy backup failed (strict_backup is set): %w", backupErr)
-			}
-		}
-		if err := s.Deployer.DeployStack(ctx, app.Name, rendered); err != nil {
-			return fmt.Errorf("docker stack deploy: %w", err)
-		}
-		_ = s.Deployer.PruneStaleContainers(ctx, app.Name, "10m")
-		return nil
+		return s.applyToSwarm(ctx, app, ir, rendered, revision)
 	})
 
 	// Snapshot the step names in order (all steps are added before Run) so the
@@ -331,6 +331,163 @@ func (s *Service) reconcileDeploy(ctx context.Context, stackName, sourceYAML str
 	return res, err
 }
 
+// applyToSwarm runs the ordered deploy for a translated stack: services are
+// topologically sorted into depends_on levels (manifest.ServiceLevels) and
+// deployed level-by-level, waiting for each level to become healthy before
+// the next. A single level — the common case — uses the full-stack
+// DeployStack path (deploy + drift-prune + force-update) unchanged. An
+// ordered multi-level deploy deploys each level WITHOUT pruning (a partial
+// compose must not remove not-yet-deployed siblings), then runs one
+// drift-prune pass with the full stack compose so services dropped from the
+// manifest are still removed. Startup ordering therefore lives in the
+// control plane, never in a rendered artifact — docker stack deploy parses
+// and ignores depends_on entirely.
+func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.IR, rendered []byte, revision int64) error {
+	if app.BackupBeforeDeploy {
+		backupErr := s.runPreDeployBackup(ctx, app.Name, revision)
+		if backupErr != nil && app.StrictBackup {
+			return fmt.Errorf("pre-deploy backup failed (strict_backup is set): %w", backupErr)
+		}
+	}
+
+	levels, err := manifest.ServiceLevels(ir)
+	if err != nil {
+		return err
+	}
+
+	if len(levels) <= 1 {
+		if err := s.Deployer.DeployStack(ctx, app.Name, rendered); err != nil {
+			return fmt.Errorf("docker stack deploy: %w", err)
+		}
+	} else {
+		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode}
+		for i, level := range levels {
+			levelYAML, err := writer.Write(ctx, ir.Subset(level))
+			if err != nil {
+				return fmt.Errorf("render depends_on level %d: %w", i, err)
+			}
+			if err := s.Deployer.DeployStackNoPrune(ctx, app.Name, levelYAML); err != nil {
+				return fmt.Errorf("docker stack deploy (depends_on level %d): %w", i, err)
+			}
+			if err := s.waitLevelHealthy(ctx, app.Name, level); err != nil {
+				return err
+			}
+		}
+		if err := s.Deployer.PruneStack(ctx, app.Name, rendered); err != nil {
+			return err
+		}
+	}
+
+	_ = s.Deployer.PruneStaleContainers(ctx, app.Name, "10m")
+	return nil
+}
+
+// deployWaitTimeout and deployWaitInterval bound how long an ordered
+// per-level deploy waits for a level's services to become healthy before
+// proceeding. Overridable in tests.
+var (
+	deployWaitTimeout  = 2 * time.Minute
+	deployWaitInterval = 2 * time.Second
+)
+
+// waitLevelHealthy blocks until every service in the level is ready: a
+// long-running service once Replicas >= Desired, a run-once job once its
+// task reaches a terminal state (completion = ready; failure = deploy
+// error, surfaced loudly). A nil Docker client (tests, standalone CLI)
+// skips the wait.
+func (s *Service) waitLevelHealthy(ctx context.Context, stackName string, level []string) error {
+	if s.Docker == nil {
+		return nil
+	}
+	deadline := time.Now().Add(deployWaitTimeout)
+	ticker := time.NewTicker(deployWaitInterval)
+	defer ticker.Stop()
+	for {
+		ready, err := s.levelReady(ctx, stackName, level)
+		if err != nil {
+			return err
+		}
+		if ready {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %s waiting for depends_on level [%s] to become ready", deployWaitTimeout, strings.Join(level, ", "))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// levelReady reports whether every service in the level is healthy (or the
+// level's services have not been created yet, which means not ready).
+func (s *Service) levelReady(ctx context.Context, stackName string, level []string) (bool, error) {
+	svcs, err := s.Docker.ServiceList(ctx)
+	if err != nil {
+		return false, fmt.Errorf("list services (depends_on wait): %w", err)
+	}
+	byName := make(map[string]runtime.Service, len(svcs))
+	for _, sv := range svcs {
+		byName[sv.Name] = sv
+	}
+	for _, name := range level {
+		full := stackName + "_" + name
+		sv, ok := byName[full]
+		if !ok {
+			return false, nil // not created yet
+		}
+		if sv.RunOnce {
+			done, err := s.runOnceDone(ctx, full)
+			if err != nil {
+				return false, err
+			}
+			if !done {
+				return false, nil
+			}
+			continue
+		}
+		if sv.Desired > 0 && sv.Replicas < sv.Desired {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// runOnceDone reports whether a one-shot job reached a terminal state:
+// completion means ready; a failed/rejected task with no running attempts
+// means the job failed and the deploy must stop with the task's error.
+func (s *Service) runOnceDone(ctx context.Context, fullName string) (bool, error) {
+	tasks, err := s.Docker.ServiceTasks(ctx, fullName)
+	if err != nil {
+		return false, fmt.Errorf("list tasks for %s (depends_on wait): %w", fullName, err)
+	}
+	if len(tasks) == 0 {
+		return false, nil
+	}
+	var terminal, failed bool
+	for _, t := range tasks {
+		switch t.State {
+		case "complete":
+			terminal = true
+		case "failed", "rejected":
+			terminal, failed = true, true
+		case "shutdown", "removed":
+			terminal = true
+		default: // running / new / pending / starting
+			return false, nil
+		}
+	}
+	if !terminal {
+		return false, nil
+	}
+	if failed {
+		return false, fmt.Errorf("run-once job %s failed during ordered deploy", fullName)
+	}
+	return true, nil
+}
+
 // payloadEnvelope is the persisted shape of payload_json since the pipeline
 // steps feature: the deploy payload plus the ordered step names. Legacy
 // revisions store just the payload itself (no envelope).
@@ -402,6 +559,9 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 
 	var (
 		row      *store.StackRevision
+		app      *dsl.App
+		ir       *manifest.IR
+		rendered []byte
 		revision int64
 	)
 
@@ -411,6 +571,40 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 			return err
 		}
 		row = src
+		return nil
+	})
+	wf.Add("Re-translating source manifest", func(ctx context.Context) error {
+		// Rollback re-translates the target revision's SOURCE manifest with
+		// the CURRENT translator — it never re-deploys the stored rendered
+		// YAML. The fresh translation is recorded as the new revision's
+		// rendered artifact, so every execution path (deploy, sync, rollback)
+		// follows today's rules (volume-root relocation, certresolver,
+		// auto-pin, stop-first ...). A source that no longer validates under
+		// the current DSL fails loudly here instead of silently deploying a
+		// stale translation.
+		parsed, err := manifest.Parse([]byte(row.SourceYAML))
+		if err != nil {
+			return fmt.Errorf("rollback source %d no longer parses: %w", sourceRevision, err)
+		}
+		parsed.Name = stackName // mirror Deploy's AppName override
+		if err := manifest.Interpolate(parsed); err != nil {
+			return fmt.Errorf("rollback source %d no longer interpolates: %w", sourceRevision, err)
+		}
+		if err := manifest.Validate(parsed); err != nil {
+			return fmt.Errorf("rollback source %d no longer validates: %w", sourceRevision, err)
+		}
+		built, err := manifest.BuildIR(ctx, parsed, s.Resolver)
+		if err != nil {
+			return fmt.Errorf("rollback source %d no longer translates: %w", sourceRevision, err)
+		}
+		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode}
+		y, err := writer.Write(ctx, built)
+		if err != nil {
+			return fmt.Errorf("rollback source %d no longer renders: %w", sourceRevision, err)
+		}
+		app = parsed
+		ir = built
+		rendered = y
 		return nil
 	})
 	wf.Add("Recording rollback revision", func(ctx context.Context) error {
@@ -428,8 +622,8 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 			StackName:    stackName,
 			Revision:     revision,
 			SourceYAML:   row.SourceYAML,
-			RenderedYAML: row.RenderedYAML,
-			RenderedHash: row.RenderedHash,
+			RenderedYAML: string(rendered),
+			RenderedHash: store.ConfigHash(string(rendered)),
 			PayloadJSON:  sql.NullString{String: string(rolledBackPayload), Valid: true},
 		}
 		if err := s.Store.RecordDeploy(ctx, rev, ""); err != nil {
@@ -437,11 +631,8 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 		}
 		return nil
 	})
-	wf.Add("Re-deploying stack from stored YAML", func(ctx context.Context) error {
-		if err := s.Deployer.DeployStack(ctx, stackName, []byte(row.RenderedYAML)); err != nil {
-			return fmt.Errorf("docker stack deploy (rollback): %w", err)
-		}
-		return nil
+	wf.Add("Re-deploying stack from source", func(ctx context.Context) error {
+		return s.applyToSwarm(ctx, app, ir, rendered, revision)
 	})
 
 	if err := wf.Run(ctx); err != nil {
@@ -451,7 +642,7 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 	return &Result{
 		StackName:    stackName,
 		Revision:     revision,
-		RenderedYAML: []byte(row.RenderedYAML),
+		RenderedYAML: rendered,
 		Changed:      true,
 	}, nil
 }

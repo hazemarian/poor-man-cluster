@@ -73,7 +73,7 @@ Legend: ⏱ effort is focused developer time. **Quick win** = simple + high valu
 
 ## ✅ Shipped already (do not re-propose)
 
-- depends_on real wait on Swarm (wait wrapper + port probe + on-failure retries) — v0.2.110–112
+- depends_on real wait on Swarm — **replaced in v0.2.118** by control-plane ordered deploys (topo-sorted levels, deploy+wait per level, prune once; no rendered wrapper — works for every image). The v0.2.110–112 shell-wrapper approach is superseded.
 - Stateful-aware defaults (auto stop-first + auto-pin for volume services) — v0.2.110
 - Registry-auth warning + image-freshness pills — v0.2.110
 - Paused updates surfaced in console — v0.2.110
@@ -81,3 +81,22 @@ Legend: ⏱ effort is focused developer time. **Quick win** = simple + high valu
 - Inventory page, retag scope/stack from console, stack-aware config resolution — v0.2.108
 - Run-once jobs shown as Complete (not Degraded) — v0.2.108/109.1
 - Runtime `NEXT_*` env injection for Next.js apps (app-side pattern) — donation-campaign-frontend
+
+---
+
+## Writer-portability notes (for when a second Writer lands)
+
+The isolation seam (DSL → `BuildIR` → neutral `IR` → `Writer.Write`) keeps intent in the
+IR and mechanism in the writer. A future Helm/Terraform writer reads the same IR and
+emits its own mechanisms. Known trade-offs, deliberately deferred (YAGNI):
+
+- **depends_on ordering** is enforced by the control-plane deploy pipeline (swarm
+  backend). A k8s writer would express the same IR intent as `initContainer` waits /
+  Job sequencing — the IR `DependsOn` field is the contract.
+- **`ComposeWriter.CertResolver` / `PinNode`** are writer configuration inputs (ACME
+  resolver name; default placement node). A k8s writer would map them to ingress
+  annotations / nodeSelector.
+- **`escapeCompose`** (doubling literal `$`) is a compose-interpolation concern — a
+  writer-local detail, not part of the IR.
+- The IR no longer carries a service port (the old port-probe was removed with the
+  wrapper) — port knowledge, when needed, is re-derived per writer.
