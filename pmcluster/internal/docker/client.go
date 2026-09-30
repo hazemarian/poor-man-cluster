@@ -12,6 +12,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -256,16 +257,38 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 		if rp := spec.TaskTemplate.RestartPolicy; rp != nil && rp.Condition == swarm.RestartPolicyConditionNone {
 			runOnce = true
 		}
+		// Best-effort local-image age: an old cached image (from a time when
+		// registry auth was missing or the image was never refreshed) is a
+		// silent-staleness signal the console should surface. Failure to
+		// inspect means the image is not cached locally — ImageCreated stays 0.
+		var imageCreated int64
+		if image != "" {
+			if img, err := r.c.ImageInspect(ctx, image); err == nil && img.Created != "" {
+				if t, err := time.Parse(time.RFC3339, img.Created); err == nil {
+					imageCreated = t.Unix()
+				}
+			}
+		}
+		// Surface a paused/rolling update: the orchestrator froze convergence
+		// because a task failed — the error string is the actionable detail.
+		updateState, updateError := "", ""
+		if us := s.UpdateStatus; us != nil {
+			updateState = string(us.State)
+			updateError = us.Message
+		}
 		out = append(out, runtime.Service{
-			ID:        s.ID,
-			Name:      s.Spec.Name,
-			Stack:     s.Spec.Labels[runtime.StackNamespaceLabel],
-			Replicas:  s.ServiceStatus.RunningTasks,
-			Desired:   desired,
-			Image:     image,
-			Mode:      mode,
-			RunOnce:   runOnce,
-			UpdatedAt: s.UpdatedAt.Unix(),
+			ID:           s.ID,
+			Name:         s.Spec.Name,
+			Stack:        s.Spec.Labels[runtime.StackNamespaceLabel],
+			Replicas:     s.ServiceStatus.RunningTasks,
+			Desired:      desired,
+			Image:        image,
+			Mode:         mode,
+			RunOnce:      runOnce,
+			ImageCreated: imageCreated,
+			UpdatedAt:    s.UpdatedAt.Unix(),
+			UpdateState:  updateState,
+			UpdateError:  updateError,
 		})
 	}
 	return out, nil

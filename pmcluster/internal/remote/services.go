@@ -16,14 +16,17 @@ type Services struct{ c *Client }
 func NewServices(c *Client) services.Service { return &Services{c: c} }
 
 type serviceDTO struct {
-	Name     string `json:"name"`
-	Stack    string `json:"stack"`
-	Replicas uint64 `json:"replicas"`
-	Desired  uint64 `json:"desired"`
-	Image    string `json:"image"`
-	Mode     string `json:"mode"`
-	RunOnce  bool   `json:"run_once"`
-	Updated  int64  `json:"updated"`
+	Name         string `json:"name"`
+	Stack        string `json:"stack"`
+	Replicas     uint64 `json:"replicas"`
+	Desired      uint64 `json:"desired"`
+	Image        string `json:"image"`
+	Mode         string `json:"mode"`
+	RunOnce      bool   `json:"run_once"`
+	ImageCreated int64  `json:"image_created"`
+	UpdateState  string `json:"update_state"`
+	UpdateError  string `json:"update_error"`
+	Updated      int64  `json:"updated"`
 }
 
 type serviceListDTO struct {
@@ -125,14 +128,17 @@ func (a *Services) Exec(ctx context.Context, stack, service string, argv []strin
 
 func (d serviceDTO) summary() services.ServiceSummary {
 	return services.ServiceSummary{
-		Name:     d.Name,
-		Stack:    d.Stack,
-		Replicas: d.Replicas,
-		Desired:  d.Desired,
-		Image:    d.Image,
-		Mode:     d.Mode,
-		RunOnce:  d.RunOnce,
-		Updated:  d.Updated,
+		Name:         d.Name,
+		Stack:        d.Stack,
+		Replicas:     d.Replicas,
+		Desired:      d.Desired,
+		Image:        d.Image,
+		Mode:         d.Mode,
+		RunOnce:      d.RunOnce,
+		ImageCreated: d.ImageCreated,
+		UpdateState:  d.UpdateState,
+		UpdateError:  d.UpdateError,
+		Updated:      d.Updated,
 	}
 }
 

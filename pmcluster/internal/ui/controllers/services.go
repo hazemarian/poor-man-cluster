@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -66,19 +67,22 @@ type servicesData struct {
 }
 
 type serviceRow struct {
-	Name        string // full swarm service name (stack_service)
-	ServiceName string // unqualified name (service), for URL params
-	Stack       string
-	Replicas    int64
-	Desired     int64
-	Image       string
-	Mode        string
-	Updated     int64
-	Converged   bool // desired > 0 and every replica is up
-	Short       bool // running fewer tasks than desired
-	Paused      bool // desired == 0
-	Complete    bool // one-shot job that already finished (0 running of 1 desired)
-	Routable    bool // belongs to a stack, so the per-service routes resolve
+	Name         string // full swarm service name (stack_service)
+	ServiceName  string // unqualified name (service), for URL params
+	Stack        string
+	Replicas     int64
+	Desired      int64
+	Image        string
+	Mode         string
+	Updated      int64
+	Converged    bool   // desired > 0 and every replica is up
+	Short        bool   // running fewer tasks than desired
+	Paused       bool   // desired == 0
+	Complete     bool   // one-shot job that already finished (0 running of 1 desired)
+	ImageAge     int64  // days since the local image was built; 0 when unknown or < 1 day
+	PausedUpdate bool   // swarm paused this service's update after a task failure
+	UpdateError  string // the orchestrator's reason for pausing
+	Routable     bool   // belongs to a stack, so the per-service routes resolve
 }
 
 // List renders the services table.
@@ -101,19 +105,22 @@ func (c Services) List(g *gin.Context) {
 	stacks := map[string]bool{}
 	for _, s := range svcs {
 		row := serviceRow{
-			Name:        s.Name,
-			ServiceName: unqualifiedServiceName(s.Name, s.Stack),
-			Stack:       s.Stack,
-			Replicas:    int64(s.Replicas),
-			Desired:     int64(s.Desired),
-			Image:       s.Image,
-			Mode:        s.Mode,
-			Updated:     s.Updated,
-			Converged:   s.Desired > 0 && s.Replicas >= s.Desired,
-			Short:       s.Replicas < s.Desired,
-			Paused:      s.Desired == 0,
-			Complete:    s.RunOnce && s.Desired > 0 && s.Replicas == 0,
-			Routable:    s.Stack != "",
+			Name:         s.Name,
+			ServiceName:  unqualifiedServiceName(s.Name, s.Stack),
+			Stack:        s.Stack,
+			Replicas:     int64(s.Replicas),
+			Desired:      int64(s.Desired),
+			Image:        s.Image,
+			Mode:         s.Mode,
+			Updated:      s.Updated,
+			Converged:    s.Desired > 0 && s.Replicas >= s.Desired,
+			Short:        s.Replicas < s.Desired,
+			Paused:       s.Desired == 0,
+			Complete:     s.RunOnce && s.Desired > 0 && s.Replicas == 0,
+			ImageAge:     imageAgeDays(s.ImageCreated),
+			PausedUpdate: s.UpdateState == "paused",
+			UpdateError:  s.UpdateError,
+			Routable:     s.Stack != "",
 		}
 		if row.Converged {
 			d.Ready++
@@ -163,16 +170,33 @@ type serviceDetailData struct {
 
 // serviceMeta is the replica/image card shown above the tabs.
 type serviceMeta struct {
-	Name      string
-	Image     string
-	Mode      string
-	Updated   int64
-	Replicas  int64
-	Desired   int64
-	Converged bool
-	Short     bool
-	Paused    bool
-	Complete  bool
+	Name         string
+	Image        string
+	Mode         string
+	Updated      int64
+	Replicas     int64
+	Desired      int64
+	Converged    bool
+	Short        bool
+	Paused       bool
+	Complete     bool
+	ImageAge     int64
+	PausedUpdate bool
+	UpdateError  string
+}
+
+// imageAgeDays returns whole days since a locally-cached image was built
+// (0 when the image is not cached or was built today). A large value means
+// the node is running a stale cached image — usually a registry-auth gap.
+func imageAgeDays(created int64) int64 {
+	if created <= 0 {
+		return 0
+	}
+	days := (time.Now().Unix() - created) / 86400
+	if days < 0 {
+		return 0
+	}
+	return days
 }
 
 type serviceTaskRow struct {
@@ -243,10 +267,13 @@ func (c Services) meta(ctx *gin.Context, stack, service string) (*serviceMeta, b
 		return &serviceMeta{
 			Name: s.Name, Image: s.Image, Mode: s.Mode, Updated: s.Updated,
 			Replicas: int64(s.Replicas), Desired: int64(s.Desired),
-			Converged: s.Desired > 0 && s.Replicas >= s.Desired,
-			Short:     s.Replicas < s.Desired,
-			Paused:    s.Desired == 0,
-			Complete:  s.RunOnce && s.Desired > 0 && s.Replicas == 0,
+			Converged:    s.Desired > 0 && s.Replicas >= s.Desired,
+			Short:        s.Replicas < s.Desired,
+			Paused:       s.Desired == 0,
+			Complete:     s.RunOnce && s.Desired > 0 && s.Replicas == 0,
+			ImageAge:     imageAgeDays(s.ImageCreated),
+			PausedUpdate: s.UpdateState == "paused",
+			UpdateError:  s.UpdateError,
 		}, true
 	}
 	return nil, false

@@ -37,14 +37,17 @@ func (l Local) List(ctx context.Context, stack string) ([]ServiceSummary, error)
 			continue
 		}
 		out = append(out, ServiceSummary{
-			Name:     s.Name,
-			Stack:    s.Stack,
-			Replicas: s.Replicas,
-			Desired:  s.Desired,
-			Image:    s.Image,
-			Mode:     s.Mode,
-			RunOnce:  s.RunOnce,
-			Updated:  s.UpdatedAt,
+			Name:         s.Name,
+			Stack:        s.Stack,
+			Replicas:     s.Replicas,
+			Desired:      s.Desired,
+			Image:        s.Image,
+			Mode:         s.Mode,
+			RunOnce:      s.RunOnce,
+			ImageCreated: s.ImageCreated,
+			UpdateState:  s.UpdateState,
+			UpdateError:  s.UpdateError,
+			Updated:      s.UpdatedAt,
 		})
 	}
 	return out, nil

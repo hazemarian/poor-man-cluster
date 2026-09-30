@@ -29,6 +29,12 @@ type ComposeWriter struct {
 	// so ACME clusters MUST set this to their resolver name (e.g.
 	// "letsencrypt") or no certificate is ever issued for app domains.
 	CertResolver string
+	// PinNode names the default node hostname that stateful services (any
+	// service with a volume mount) are pinned to when the manifest leaves
+	// placement empty. Set from the platform_node cluster setting. An empty
+	// value disables the auto-pin (services with volumes then schedule
+	// anywhere, exactly as today).
+	PinNode string
 }
 
 // DefaultVolumeRoot is where every container volume lands unless the
@@ -55,7 +61,7 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 
 	for i := range ir.Services {
 		s := &ir.Services[i]
-		cs, err := composeServiceFromIR(s, app, privateNet, root, w.CertResolver, &usesTraefikNet, &usesMonitoringNet)
+		cs, err := composeServiceFromIR(s, app, privateNet, root, w.CertResolver, w.PinNode, &usesTraefikNet, &usesMonitoringNet)
 		if err != nil {
 			return nil, err
 		}
@@ -104,15 +110,16 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 func composeServiceFromIR(
 	s *IRService,
 	app irApp,
-	privateNet, volumeRoot, certResolver string,
+	privateNet, volumeRoot, certResolver, pinNode string,
 	usesTraefikNet, usesMonitoringNet *bool,
 ) (*composeService, error) {
+	volumes := relocateVolumes(volumeRoot, app.name, s.Volumes)
 	cs := &composeService{
 		Image:       s.Image,
 		Command:     s.Command,
 		Entrypoint:  s.Entrypoint,
 		Environment: s.Env,
-		Volumes:     relocateVolumes(volumeRoot, app.name, s.Volumes),
+		Volumes:     volumes,
 		Secrets:     s.Secrets,
 	}
 
@@ -124,13 +131,41 @@ func composeServiceFromIR(
 	}
 
 	cs.Healthcheck = composeHealthcheckFromIR(s)
-	cs.Deploy = composeDeployFromIR(app, s, certResolver)
+	cs.Deploy = composeDeployFromIR(app, s, certResolver, pinNode, len(volumes) > 0)
 
 	if len(s.DependsOn) > 0 {
 		cs.DependsOn = s.DependsOn
+		// docker stack deploy parses depends_on and IGNORES it — the Swarm
+		// scheduler has no dependency graph, so a one-shot job (e.g. a
+		// migration) can start before the dependency's service DNS resolves on
+		// the overlay and fail with "lookup <dep> ... no such host". Swarm
+		// never retries restart:none jobs, so the failure is permanent.
+		// Give the job a real wait: wrap its command in a POSIX sh loop that
+		// blocks until every dependency resolves via getent, then exec the
+		// original command. Only services with an explicit Command are
+		// wrapped (image-default entrypoints are left untouched).
+		if len(s.Command) > 0 {
+			cs.Command = waitForDepsCommand(s.DependsOn, s.Command)
+		}
 	}
 
 	return cs, nil
+}
+
+// waitForDepsCommand wraps cmd so the container blocks until every service in
+// deps resolves in the overlay DNS, then execs the original command. The
+// wrapper is plain POSIX sh ("sh -c '...' sh <cmd>") so it works in both
+// busybox and glibc base images regardless of extra tooling.
+func waitForDepsCommand(deps, cmd []string) []string {
+	var sb strings.Builder
+	sb.WriteString("for d in")
+	for _, d := range deps {
+		sb.WriteString(" ")
+		sb.WriteString(d)
+	}
+	sb.WriteString("; do until getent hosts \"$d\" >/dev/null 2>&1; do sleep 2; done; done; exec \"$@\"")
+	wrapped := []string{"sh", "-c", sb.String(), "sh"}
+	return append(wrapped, cmd...)
 }
 
 // relocateVolumes forces every container volume under the single volume
@@ -200,12 +235,19 @@ func composeHealthcheckFromIR(s *IRService) *composeHealthcheck {
 	}
 }
 
-func composeDeployFromIR(app irApp, s *IRService, certResolver string) *composeDeploy {
+func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, stateful bool) *composeDeploy {
 	d := &composeDeploy{
 		Labels: standardLabels(app, s.Name),
 	}
 
 	switch {
+	case s.RunOnce && len(s.DependsOn) > 0:
+		// A one-shot job waiting on dependencies: the wait loop blocks until
+		// the dependency DNS resolves, but the job itself may still fail
+		// transiently (dependency accepted connections then died, a bad
+		// migration is retried before the operator intervenes). Bound the
+		// retries so the job eventually stops instead of churning forever.
+		d.RestartPolicy = &composeRestartPolicy{Condition: "on-failure", MaxAttempts: 3}
 	case s.RunOnce:
 		d.RestartPolicy = &composeRestartPolicy{Condition: "none"}
 	default:
@@ -222,17 +264,32 @@ func composeDeployFromIR(app irApp, s *IRService, certResolver string) *composeD
 		d.Placement = &composePlacement{Constraints: []string{"node.role == manager"}}
 	case "worker":
 		d.Placement = &composePlacement{Constraints: []string{"node.role == worker"}}
+	case "":
+		// A stateful service (one holding a volume) with no explicit
+		// placement is auto-pinned to the cluster's designated platform node
+		// when one is configured. Its data lives under /var/stack/data and
+		// only exists on that node — letting Swarm schedule it anywhere would
+		// either strand the data or start a fresh empty volume.
+		if stateful && pinNode != "" {
+			d.Placement = &composePlacement{Constraints: []string{"node.hostname == " + pinNode}}
+		}
 	default:
 		// Any other value is a node-hostname pin: the operator keeps a
 		// stateful service (with a volume) on one specific node so its
 		// data never has to migrate.
-		if s.Placement != "" {
-			d.Placement = &composePlacement{Constraints: []string{"node.hostname == " + s.Placement}}
-		}
+		d.Placement = &composePlacement{Constraints: []string{"node.hostname == " + s.Placement}}
 	}
 
 	if !s.RunOnce {
 		d.UpdateConfig = translateUpdate(s.Update)
+		// A stateful service should never be updated start-first: the old
+		// task's shutdown races the new task's startup on the same data dir
+		// (postgres deletes the freshly written postmaster.pid and the new
+		// instance immediately shuts down — every redeploy crashes the DB).
+		// Stop the old task fully before starting the replacement.
+		if stateful && d.UpdateConfig.Order == "start-first" {
+			d.UpdateConfig.Order = "stop-first"
+		}
 	}
 
 	if s.Expose != nil {

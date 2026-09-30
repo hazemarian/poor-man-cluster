@@ -31,7 +31,9 @@ type inventoryData struct {
 
 func (d *inventoryData) fail(key, raw string) { d.ErrKey, d.ErrRaw = key, raw }
 
-// Page renders the inventory fragment: every config and every secret.
+// Page renders the inventory fragment: every config and every secret, each
+// annotated with the stacks that reference it (from the usage graph) so a
+// delete or retag visibly shows what would break.
 func (c Inventory) Page(g *gin.Context) {
 	d := inventoryData{}
 	if c.apiRefused(g, &d) {
@@ -48,6 +50,16 @@ func (c Inventory) Page(g *gin.Context) {
 		d.SecretsErrKey, d.SecretsErrRaw = "inventory.err_secrets", err.Error()
 	} else {
 		d.Secrets, d.SecretsKnown = secs, true
+	}
+	// Annotate every row with the stacks that reference it. Best-effort: a
+	// failed usage call leaves the page readable without the column.
+	if u, err := c.API.GetUsage(ctx); err == nil && d.ConfigsKnown {
+		for i := range d.Configs {
+			d.Configs[i].References = u.Configs[d.Configs[i].Name]
+		}
+		for i := range d.Secrets {
+			d.Secrets[i].References = u.Secrets[d.Secrets[i].Name]
+		}
 	}
 	c.Views.Fragment(g, "inventory", d)
 }

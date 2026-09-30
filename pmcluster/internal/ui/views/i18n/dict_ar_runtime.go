@@ -41,6 +41,8 @@ func init() {
 		"services.action_logs":         "السجلات",
 		"services.action_restart":      "إعادة التشغيل",
 		"services.restart_confirm":     "إعادة تشغيل {0}؟ يستبدل Docker مهامها واحدة تلو الأخرى، فتواصل النسخ الأخرى تقديم الخدمة.",
+		"services.image_stale":         "الصورة عمرها {0} يومًا — تشغّل هذه العقدة صورة قديمة من الذاكرة المؤقتة (هل مفاتيح السجل مفقودة؟)",
+		"services.update_paused_hint":  "التحديث متوقف — فشلت مهمة؛ راجع تبويب المهام",
 		"services.foot_replicas":       "تُعرض النسخ بصيغة «قيد التشغيل / المطلوب».",
 		"services.no_stack":            "دون حزمة",
 		"services.unknown_title":       "قائمة الخدمات غير متاحة",

@@ -68,10 +68,18 @@ var secretDeleteCmd = &cobra.Command{
 	RunE:  runSecretDelete,
 }
 
+var secretEditCmd = &cobra.Command{
+	Use:   "edit <name>",
+	Short: "Update a secret's value (also mirrored to the Docker Swarm)",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runSecretEdit,
+}
+
 func init() {
 	secretCreateCmd.Flags().String("scope", "service", "scope: cluster or service")
 	secretCreateCmd.Flags().String("stack", "", "stack this secret belongs to (service scope only)")
-	secretCmd.AddCommand(secretCreateCmd, secretListCmd, secretShowCmd, secretVerifyCmd, secretDeleteCmd)
+	secretEditCmd.Flags().String("value", "", "new secret value (or pipe via stdin)")
+	secretCmd.AddCommand(secretCreateCmd, secretListCmd, secretShowCmd, secretVerifyCmd, secretEditCmd, secretDeleteCmd)
 	rootCmd.AddCommand(secretCmd)
 }
 
@@ -133,41 +141,7 @@ func runSecretCreate(cmd *cobra.Command, args []string) error {
 	// the stack deploy fails with 'secret not found: <name>'. Mirror it into
 	// Docker when running on a node with daemon access (local mode). The DB
 	// row remains the encrypted source of truth for rotations/CLI display.
-	swarmMirrored := false
-	if rc := remoteClient(cmd); rc == nil {
-		dc, derr := docker.New()
-		if derr != nil {
-			// No daemon reachable — the operator may be on a user machine
-			// creating secrets to use on the cluster later. Warn, don't fail:
-			// the deploy on the manager would surface the missing secret.
-			fmt.Fprintf(cmd.ErrOrStderr(),
-				"   ⚠ docker daemon unreachable — swarm secret NOT mirrored (%v).\n"+
-					"     Deploying a stack that references %q will fail until you run:\n"+
-					"       printf '%s' | docker secret create %s -\n",
-				derr, name, value, name)
-		} else {
-			defer func() { _ = dc.Close() }()
-			exists, eerr := dc.SecretExists(cmd.Context(), name)
-			switch {
-			case eerr != nil:
-				fmt.Fprintf(cmd.ErrOrStderr(),
-					"   ⚠ could not check swarm secret %q (%v) — mirror skipped.\n", name, eerr)
-			case exists:
-				swarmMirrored = true
-			default:
-				if cerr := dc.SecretCreate(cmd.Context(), runtime.SecretSpec{
-					Name:   name,
-					Data:   []byte(value),
-					Labels: map[string]string{"pmcluster.secret": "true"},
-				}); cerr != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(),
-						"   ⚠ could not create swarm secret %q (%v) — mirror skipped.\n", name, cerr)
-				} else {
-					swarmMirrored = true
-				}
-			}
-		}
-	}
+	swarmMirrored := mirrorSwarmSecret(cmd, name, value)
 
 	extra := ""
 	if swarmMirrored {
@@ -187,6 +161,55 @@ Use it in a manifest:
      %s_VALUE: secrets(%s)
 `, name, scope, extra, value, hash, strings.ToUpper(strings.ReplaceAll(name, "-", "_")), name)
 	return nil
+}
+
+// mirrorSwarmSecret makes the given value available to Docker Swarm under the
+// secret's name so `docker stack deploy` can mount it (DSL secrets(name)
+// renders external:true). Swarm secrets are immutable, so an existing secret
+// is removed and re-created with the new value. Best-effort: warnings to
+// stderr, never fails the command.
+func mirrorSwarmSecret(cmd *cobra.Command, name, value string) bool {
+	if rc := remoteClient(cmd); rc != nil {
+		return false // remote mode has no local daemon access
+	}
+	dc, derr := docker.New()
+	if derr != nil {
+		// No daemon reachable — the operator may be on a user machine
+		// creating secrets to use on the cluster later. Warn, don't fail:
+		// the deploy on the manager would surface the missing secret.
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"   ⚠ docker daemon unreachable — swarm secret NOT mirrored (%v).\n"+
+				"     Deploying a stack that references %q will fail until you run:\n"+
+				"       printf '%s' | docker secret create %s -\n",
+			derr, name, value, name)
+		return false
+	}
+	defer func() { _ = dc.Close() }()
+	ctx := cmd.Context()
+	exists, eerr := dc.SecretExists(ctx, name)
+	switch {
+	case eerr != nil:
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"   ⚠ could not check swarm secret %q (%v) — mirror skipped.\n", name, eerr)
+		return false
+	case exists:
+		// Swarm secrets are immutable — recreate with the new value.
+		if rerr := dc.SecretRemove(ctx, name); rerr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(),
+				"   ⚠ could not remove existing swarm secret %q (%v) — mirror skipped.\n", name, rerr)
+			return false
+		}
+	}
+	if cerr := dc.SecretCreate(ctx, runtime.SecretSpec{
+		Name:   name,
+		Data:   []byte(value),
+		Labels: map[string]string{"pmcluster.secret": "true"},
+	}); cerr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"   ⚠ could not create swarm secret %q (%v) — mirror skipped.\n", name, cerr)
+		return false
+	}
+	return true
 }
 
 func runSecretList(cmd *cobra.Command, _ []string) error {
@@ -274,6 +297,43 @@ func runSecretDelete(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("delete secret: %w", err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Secret %q deleted.\n", name)
+	return nil
+}
+
+func runSecretEdit(cmd *cobra.Command, args []string) error {
+	name := strings.TrimSpace(args[0])
+	if name == "" {
+		return errors.New("name: required")
+	}
+	value, _ := cmd.Flags().GetString("value")
+	value, err := readSecretValue(cmd, value)
+	if err != nil {
+		return err
+	}
+
+	svc, closeFn, err := backendSecrets(cmd)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	if err := svc.Update(cmd.Context(), name, value); err != nil {
+		if errors.Is(err, store.ErrSecretNotFound) {
+			return fmt.Errorf("secret %q not found", name)
+		}
+		return fmt.Errorf("update secret: %w", err)
+	}
+
+	// Keep the Docker Swarm mirror in sync — the new value must replace the
+	// old one or the next stack deploy mounts the stale secret.
+	swarmMirrored := mirrorSwarmSecret(cmd, name, value)
+
+	extra := ""
+	if swarmMirrored {
+		extra = " (+ mirrored to the Docker Swarm so containers mount the new value)"
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "✅ Secret %q updated (sha256: %s)%s.\n",
+		name, secretHash(value), extra)
 	return nil
 }
 

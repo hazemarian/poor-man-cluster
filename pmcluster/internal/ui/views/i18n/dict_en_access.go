@@ -247,6 +247,7 @@ func init() {
 		"inventory.secrets_title":         "Secrets",
 		"inventory.col_scope":             "Scope",
 		"inventory.col_stack":             "Stack",
+		"inventory.col_referenced_by":     "Referenced by",
 		"inventory.col_name":              "Name",
 		"inventory.scope_cluster":         "cluster",
 		"inventory.scope_service":         "service",

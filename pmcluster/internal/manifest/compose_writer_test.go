@@ -43,6 +43,54 @@ func TestTranslate_DependsOnEmitsComposeParity(t *testing.T) {
 	if !strings.Contains(s, "depends_on:\n    - db") {
 		t.Errorf("depends_on should reference db as a list item:\n%s", s)
 	}
+
+	// The migration command is wrapped with the swarm wait loop (docker stack
+	// deploy ignores depends_on; the wrapper blocks until db DNS resolves).
+	if !strings.Contains(s, `for d in db; do until getent hosts "$d"`) {
+		t.Errorf("migration command should be wrapped with the db wait loop:\n%s", s)
+	}
+	if !strings.Contains(s, `exec "$@"`) {
+		t.Errorf("wait wrapper should exec the original command:\n%s", s)
+	}
+
+	// A run-once job that waits on dependencies gets a bounded on-failure
+	// restart policy (so a transient failure retries, then stops).
+	if !strings.Contains(s, "condition: on-failure") {
+		t.Errorf("run-once + depends_on should use on-failure restart:\n%s", s)
+	}
+	if !strings.Contains(s, "max_attempts: 3") {
+		t.Errorf("run-once + depends_on should bound retries to 3:\n%s", s)
+	}
+}
+
+// TestTranslate_DependsOnNoCommandLeftUntouched asserts a service with
+// depends_on but NO explicit command is not wrapped (image-default entrypoint
+// stays intact) — only the compose-parity list form is emitted.
+func TestTranslate_DependsOnNoCommandLeftUntouched(t *testing.T) {
+	app := baseApp()
+	app.Services = map[string]*dsl.Service{
+		"db": {
+			Image:   "postgres:14-alpine",
+			Volumes: []string{"db_data:/var/lib/postgresql/data"},
+		},
+		"api": {
+			Image:     "my-app:latest",
+			DependsOn: []string{"db"},
+		},
+	}
+
+	out, err := TranslateIR(context.Background(), app, nil, nil)
+	if err != nil {
+		t.Fatalf("TranslateIR: %v", err)
+	}
+	s := string(out)
+
+	if strings.Contains(s, "getent hosts") {
+		t.Errorf("api has no explicit command — should NOT be wrapped with the wait loop:\n%s", s)
+	}
+	if !strings.Contains(s, "depends_on:\n    - db") {
+		t.Errorf("depends_on list form should still be emitted:\n%s", s)
+	}
 }
 
 // TestEnsureVolumeDirs_CreatesBindTargets renders a compose with a named
@@ -132,5 +180,65 @@ func TestTranslate_CertResolverConditional(t *testing.T) {
 	s = string(out)
 	if strings.Contains(s, "tls.certresolver") {
 		t.Errorf("BYO-cert render must NOT reference a letsencrypt resolver:\n%s", s)
+	}
+}
+
+// TestTranslate_StatefulDefaults asserts that a service holding a volume gets
+// stateful-aware defaults with NO manifest change: automatic stop-first update
+// ordering (kills the postgres postmaster.pid shutdown race on redeploys) and
+// auto-pinning to the platform node when no explicit placement is set.
+func TestTranslate_StatefulDefaults(t *testing.T) {
+	app := baseApp()
+	app.Services = map[string]*dsl.Service{
+		"db": {
+			Image:   "postgres:14-alpine",
+			Volumes: []string{"db_data:/var/lib/postgresql/data"},
+		},
+	}
+
+	out, err := TranslateIR(context.Background(), app, nil, &ComposeWriter{PinNode: "node-01"})
+	if err != nil {
+		t.Fatalf("TranslateIR: %v", err)
+	}
+	s := string(out)
+
+	// Stop-first: the old task shuts down fully before the replacement starts.
+	if !strings.Contains(s, "order: stop-first") {
+		t.Errorf("stateful service should default to stop-first update order:\n%s", s)
+	}
+
+	// Auto-pin: no explicit placement → pinned to the platform node.
+	if !strings.Contains(s, "node.hostname == node-01") {
+		t.Errorf("stateful service without placement should auto-pin to the platform node:\n%s", s)
+	}
+}
+
+// TestTranslate_StatefulDefaultsDisabled asserts that without a PinNode the
+// auto-pin is off (stateful services schedule anywhere) and stateless services
+// keep start-first ordering even when a PinNode is configured.
+func TestTranslate_StatefulDefaultsDisabled(t *testing.T) {
+	app := baseApp()
+	app.Services = map[string]*dsl.Service{
+		"db": {
+			Image:   "postgres:14-alpine",
+			Volumes: []string{"db_data:/var/lib/postgresql/data"},
+		},
+		"web": {
+			Image: "nginx:latest",
+		},
+	}
+
+	out, err := TranslateIR(context.Background(), app, nil, nil)
+	if err != nil {
+		t.Fatalf("TranslateIR: %v", err)
+	}
+	s := string(out)
+
+	if strings.Contains(s, "node.hostname") {
+		t.Errorf("no PinNode configured — stateful services must not be pinned:\n%s", s)
+	}
+	// Stateless web service keeps the start-first default.
+	if !strings.Contains(s, "order: start-first") {
+		t.Errorf("stateless service should keep start-first update order:\n%s", s)
 	}
 }

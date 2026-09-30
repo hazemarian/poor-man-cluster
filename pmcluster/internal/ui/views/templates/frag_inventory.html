@@ -60,6 +60,7 @@
           <th>{{T "settings.config_kind"}}</th>
           <th>{{T "settings.col_version"}}</th>
           <th>{{T "settings.col_updated"}}</th>
+          <th>{{T "inventory.col_referenced_by"}}</th>
           <th class="num"></th>
         </tr>
       </thead>
@@ -83,6 +84,10 @@
           </td>
           <td class="mono num" dir="ltr">{{if .Version}}{{.Version}}{{else}}{{T "common.unknown"}}{{end}}</td>
           <td class="muted iso" dir="ltr">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}{{ts .CreatedAt}}{{end}}</td>
+          <td>
+            {{- if .References}}{{range .References}}<a class="btn-link" href="/web/stacks/{{.}}/config" hx-get="/web/stacks/{{.}}/config" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.}}</span></a>{{" "}}{{end}}
+            {{- else}}<span class="muted">{{T "common.none"}}</span>{{end -}}
+          </td>
           <td>
             <div class="row-actions">
               <button type="button" class="btn btn-ghost btn-sm" title="{{T "common.edit"}}"
@@ -160,6 +165,7 @@
           <th>{{T "inventory.col_scope"}}</th>
           <th>{{T "inventory.col_stack"}}</th>
           <th>{{T "settings.col_updated"}}</th>
+          <th>{{T "inventory.col_referenced_by"}}</th>
           <th class="num"></th>
         </tr>
       </thead>
@@ -174,6 +180,10 @@
             {{else}}<span class="muted iso" dir="ltr">—</span>{{end}}
           </td>
           <td class="muted iso" dir="ltr">{{ts .CreatedAt}}</td>
+          <td>
+            {{- if .References}}{{range .References}}<a class="btn-link" href="/web/stacks/{{.}}/config" hx-get="/web/stacks/{{.}}/config" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.}}</span></a>{{" "}}{{end}}
+            {{- else}}<span class="muted">{{T "common.none"}}</span>{{end -}}
+          </td>
           <td>
             <div class="row-actions">
               <button type="button" class="btn btn-ghost btn-sm" title="{{T "settings.reveal"}}"

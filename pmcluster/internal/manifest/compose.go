@@ -45,7 +45,8 @@ type composePlacement struct {
 }
 
 type composeRestartPolicy struct {
-	Condition string `json:"condition,omitempty"`
+	Condition   string `json:"condition,omitempty"`
+	MaxAttempts int    `json:"max_attempts,omitempty"`
 }
 
 type composeUpdateConfig struct {

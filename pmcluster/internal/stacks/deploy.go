@@ -89,6 +89,11 @@ type Service struct {
 	// when the cluster uses ACME; empty for BYO-cert clusters — see
 	// manifest.ComposeWriter.CertResolver).
 	CertResolver string
+	// PinNode names the default node hostname stateful services (volume
+	// holders) with no explicit placement are pinned to — the platform_node
+	// cluster setting. Empty disables the auto-pin (see
+	// manifest.ComposeWriter.PinNode).
+	PinNode string
 	// MkdirAll creates host directories for the volume-root bind targets
 	// before deploy (nil = os.MkdirAll). Overridable in tests.
 	MkdirAll func(string, os.FileMode) error
@@ -188,7 +193,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		return nil
 	})
 	wf.Add("Translating to Compose (resolving configs/secrets)", func(ctx context.Context) error {
-		y, err := manifest.TranslateIR(ctx, app, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver})
+		y, err := manifest.TranslateIR(ctx, app, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode})
 		if err != nil {
 			return fmt.Errorf("translate: %w", err)
 		}
@@ -283,7 +288,7 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 		if err = manifest.Interpolate(parsed); err == nil {
 			if err = manifest.Validate(parsed); err == nil {
 				var rendered []byte
-				rendered, err = manifest.TranslateIR(ctx, parsed, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver})
+				rendered, err = manifest.TranslateIR(ctx, parsed, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode})
 				if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
 					return &Result{
 						StackName:    stackName,

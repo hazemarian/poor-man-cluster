@@ -96,14 +96,17 @@
               <span class="mono iso" dir="ltr">{{.ServiceName}}</span>
               {{end}}
               {{if .Image}}<div class="muted trunc" title="{{.Image}}">{{shortImage .Image}}</div>{{end}}
+              {{if gt .ImageAge 30}}<span class="pill warn">{{T "services.image_stale" (N .ImageAge)}}</span>{{end}}
             </td>
             <td>{{if .Stack}}<span class="mono" dir="ltr">{{.Stack}}</span>{{else}}<span class="muted">{{T "services.no_stack"}}</span>{{end}}</td>
             <td class="num">
               <span class="num">{{N .Replicas}} / {{N .Desired}}</span>
-              {{if .Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}}</span>
+              {{if .PausedUpdate}}<span class="pill bad"><i class="dot"></i>{{T "st.update_paused"}}</span>
+              {{else if .Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}}</span>
               {{else if .Complete}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>
               {{else if .Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>
               {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{end}}
+              {{if and .PausedUpdate .UpdateError}}<div class="muted warn-text trunc" title="{{.UpdateError}}">{{T "services.update_paused_hint"}}</div>{{end}}
             </td>
             <td>{{if .Mode}}<span class="mono iso" dir="ltr">{{.Mode}}</span>{{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}</td>
             <td class="muted iso" dir="ltr">{{ts .Updated}}</td>

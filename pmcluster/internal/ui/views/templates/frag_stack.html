@@ -108,6 +108,7 @@
               <span class="mono iso" dir="ltr">{{.ServiceName}}</span>
               {{end}}
               {{if .Image}}<div class="muted trunc" title="{{.Image}}">{{shortImage .Image}}</div>{{end}}
+              {{if gt .ImageAge 30}}<span class="pill warn">{{T "services.image_stale" (N .ImageAge)}}</span>{{end}}
             </td>
             <td class="num">
               <span class="num">{{N .Replicas}} / {{N .Desired}}</span>

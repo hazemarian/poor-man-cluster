@@ -35,6 +35,8 @@ func init() {
 		"services.action_logs":         "Logs",
 		"services.action_restart":      "Restart",
 		"services.restart_confirm":     "Restart {0}? Docker replaces its tasks one at a time, so the other replicas keep serving.",
+		"services.image_stale":         "Image {0} days old — this node is running a stale cached image (registry auth missing?)",
+		"services.update_paused_hint":  "update paused — a task failed; see the tasks tab",
 		"services.foot_replicas":       "Replicas are shown as running / desired.",
 		"services.no_stack":            "No stack",
 		"services.unknown_title":       "Service list unavailable",

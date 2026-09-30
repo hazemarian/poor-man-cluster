@@ -20,7 +20,7 @@ services:
         condition: on-failure
       update_config:
         delay: 10s
-        order: start-first
+        order: stop-first
         parallelism: 1
     environment:
       VAULT_DEV_ROOT_TOKEN_ID: devroot

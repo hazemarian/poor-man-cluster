@@ -135,15 +135,18 @@ type ConfigSpec struct {
 // cluster-up health check; the enriched fields (Stack, Image, Mode, UpdatedAt)
 // power the service-ops read surface.
 type Service struct {
-	ID        string
-	Name      string
-	Stack     string // StackNamespaceLabel ("" when not stack-managed)
-	Replicas  uint64
-	Desired   uint64
-	Image     string
-	Mode      string // "replicated" | "global" | ""
-	RunOnce   bool   // restart-policy "none": a one-shot job; 0 running replicas means it completed
-	UpdatedAt int64
+	ID           string
+	Name         string
+	Stack        string // StackNamespaceLabel ("" when not stack-managed)
+	Replicas     uint64
+	Desired      uint64
+	Image        string
+	Mode         string // "replicated" | "global" | ""
+	RunOnce      bool   // restart-policy "none": a one-shot job; 0 running replicas means it completed
+	ImageCreated int64  // unix seconds the local image was created; 0 when the image is not cached locally
+	UpdatedAt    int64
+	UpdateState  string // swarm UpdateStatus.State: "updating" | "paused" | "completed" | "rollback..." | "" (no update in flight)
+	UpdateError  string // the orchestrator's reason for pausing/rolling back ("" when none)
 }
 
 // ServiceInspectResult is a read-only snapshot of one cluster service.

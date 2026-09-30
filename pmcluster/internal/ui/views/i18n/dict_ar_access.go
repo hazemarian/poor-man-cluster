@@ -271,6 +271,7 @@ func init() {
 		"inventory.secrets_title":         "الأسرار",
 		"inventory.col_scope":             "النطاق",
 		"inventory.col_stack":             "الحزمة",
+		"inventory.col_referenced_by":     "تُستخدم في",
 		"inventory.col_name":              "الاسم",
 		"inventory.scope_cluster":         "عنقود",
 		"inventory.scope_service":         "حزمة",

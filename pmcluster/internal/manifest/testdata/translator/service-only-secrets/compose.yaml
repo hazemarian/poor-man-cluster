@@ -31,7 +31,7 @@ services:
         condition: on-failure
       update_config:
         delay: 10s
-        order: start-first
+        order: stop-first
         parallelism: 1
     environment:
       DB_PATH: /app/data/abbas.db

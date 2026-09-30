@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -108,6 +110,12 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Registry auth gap: a node without credentials for the app registry
+	// silently serves stale cached images (Docker never pulls when the image
+	// exists locally, and a private registry 401s any pull attempt). Surface
+	// the gap at join time instead of leaving it to bite a later deploy.
+	verifyRegistryAuth(cmd.OutOrStdout())
+
 	// Install + start the daemon (systemd on Linux, hint otherwise).
 	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
 		return err
@@ -158,6 +166,37 @@ func setNodeHostname(ctx context.Context, out io.Writer, hostname string) error 
 	}
 	fmt.Fprintf(out, "✔ hostname set to %q.\n", hostname)
 	return nil
+}
+
+// verifyRegistryAuth warns when the local Docker config has no registry
+// credentials. A node without credentials for a private app registry runs
+// whatever image happens to be cached locally — silently stale — because
+// Docker only pulls when the image is absent and private registries reject
+// anonymous pulls. Best-effort: only a warning, the join itself succeeds.
+func verifyRegistryAuth(out io.Writer) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	cfgPath := filepath.Join(home, ".docker", "config.json")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		fmt.Fprintln(out, "⚠ no docker registry credentials found (no ~/.docker/config.json).")
+		fmt.Fprintln(out, "  Private registries (e.g. ghcr.io/your-org) will silently fall back to stale")
+		fmt.Fprintln(out, "  cached images. Authenticate before deploying private images:")
+		fmt.Fprintln(out, "    docker login ghcr.io --username <user>")
+		return
+	}
+	var cfg struct {
+		Auths map[string]any `json:"auths"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil || len(cfg.Auths) == 0 {
+		fmt.Fprintln(out, "⚠ no docker registry credentials found (empty ~/.docker/config.json).")
+		fmt.Fprintln(out, "  Private registries will silently fall back to stale cached images.")
+		fmt.Fprintln(out, "    docker login ghcr.io --username <user>")
+		return
+	}
+	fmt.Fprintln(out, "✔ docker registry credentials present (private pulls will stay fresh).")
 }
 
 // verifyJoinedRole checks the node's actual Swarm role after joining and

@@ -282,14 +282,17 @@ type ConfigVersion struct {
 
 // Service is one row of GET /api/services (or GET /api/services/{stack}).
 type Service struct {
-	Name     string `json:"name"`
-	Stack    string `json:"stack"`
-	Replicas uint64 `json:"replicas"`
-	Desired  uint64 `json:"desired"`
-	Image    string `json:"image"`
-	Mode     string `json:"mode"`
-	RunOnce  bool   `json:"run_once"`
-	Updated  int64  `json:"updated"`
+	Name         string `json:"name"`
+	Stack        string `json:"stack"`
+	Replicas     uint64 `json:"replicas"`
+	Desired      uint64 `json:"desired"`
+	Image        string `json:"image"`
+	Mode         string `json:"mode"`
+	RunOnce      bool   `json:"run_once"`
+	ImageCreated int64  `json:"image_created"`
+	UpdateState  string `json:"update_state"`
+	UpdateError  string `json:"update_error"`
+	Updated      int64  `json:"updated"`
 }
 
 // ServiceTask is one row of GET /api/services/{stack}/{svc}/tasks.

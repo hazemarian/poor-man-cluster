@@ -12,17 +12,18 @@ import (
 // for editing). Scope "cluster" configs live in Settings; scope "service"
 // configs belong to the stack named in Stack.
 type configRow struct {
-	ID        int64
-	Scope     string
-	Stack     string
-	Name      string
-	Kind      string
-	Version   string
-	Hash      string
-	Rendered  bool
-	CreatedAt int64
-	UpdatedAt int64
-	Content   string
+	ID         int64
+	Scope      string
+	Stack      string
+	Name       string
+	Kind       string
+	Version    string
+	Hash       string
+	Rendered   bool
+	CreatedAt  int64
+	UpdatedAt  int64
+	Content    string
+	References []string // stacks whose rendered compose references this config (usage graph)
 }
 
 type configVersionRow struct {

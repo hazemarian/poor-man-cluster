@@ -129,7 +129,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
-	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st}, VolumeRoot: st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(cmd.Context(), cluster.SettingTLSMode(), ""))}
+	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st}, VolumeRoot: st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), "")}
 
 	cipher, cipherErr := credentials.Open(cfg.EncryptionKeyPath())
 	if cipherErr != nil {

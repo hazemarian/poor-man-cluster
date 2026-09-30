@@ -14,14 +14,17 @@ import "context"
 
 // ServiceSummary is one row of `pmcluster service ps` — replica health.
 type ServiceSummary struct {
-	Name     string // full swarm service name (stack_service)
-	Stack    string // com.docker.stack.namespace label ("" when not stack-managed)
-	Replicas uint64 // running tasks
-	Desired  uint64 // desired replica count
-	Image    string
-	Mode     string // "replicated" | "global" | ""
-	RunOnce  bool   // one-shot job (restart "none"): 0 running replicas means it completed
-	Updated  int64  // service spec update time (unix)
+	Name         string // full swarm service name (stack_service)
+	Stack        string // com.docker.stack.namespace label ("" when not stack-managed)
+	Replicas     uint64 // running tasks
+	Desired      uint64 // desired replica count
+	Image        string
+	Mode         string // "replicated" | "global" | ""
+	RunOnce      bool   // one-shot job (restart "none"): 0 running replicas means it completed
+	ImageCreated int64  // unix seconds the local image was created; 0 when not cached locally
+	UpdateState  string // swarm UpdateStatus.State ("updating"|"paused"|"completed"|"") — "" when no update in flight
+	UpdateError  string // orchestrator reason for a paused/rolling update
+	Updated      int64  // service spec update time (unix)
 }
 
 // TaskRun is one row of `docker service ps` — a task's lifecycle state.

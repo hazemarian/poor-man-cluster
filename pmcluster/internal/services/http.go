@@ -131,14 +131,17 @@ func serviceJSONList(svcs []ServiceSummary) []map[string]any {
 	out := make([]map[string]any, 0, len(svcs))
 	for _, s := range svcs {
 		out = append(out, map[string]any{
-			"name":     s.Name,
-			"stack":    s.Stack,
-			"replicas": s.Replicas,
-			"desired":  s.Desired,
-			"image":    s.Image,
-			"mode":     s.Mode,
-			"run_once": s.RunOnce,
-			"updated":  s.Updated,
+			"name":          s.Name,
+			"stack":         s.Stack,
+			"replicas":      s.Replicas,
+			"desired":       s.Desired,
+			"image":         s.Image,
+			"mode":          s.Mode,
+			"run_once":      s.RunOnce,
+			"image_created": s.ImageCreated,
+			"update_state":  s.UpdateState,
+			"update_error":  s.UpdateError,
+			"updated":       s.Updated,
 		})
 	}
 	return out

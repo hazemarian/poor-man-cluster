@@ -12,12 +12,13 @@ import (
 // daemon; only the content hash is displayed. Scope "cluster" secrets live in
 // Settings; scope "service" secrets belong to the stack named in Stack.
 type secretRow struct {
-	ID        int64
-	Scope     string
-	Stack     string
-	Name      string
-	Hash      string
-	CreatedAt int64
+	ID         int64
+	Scope      string
+	Stack      string
+	Name       string
+	Hash       string
+	CreatedAt  int64
+	References []string // stacks whose rendered compose references this secret (usage graph)
 }
 
 func secretRows(secs []pmapi.Secret) []secretRow {
