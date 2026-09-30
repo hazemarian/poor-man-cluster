@@ -288,6 +288,7 @@ type Service struct {
 	Desired  uint64 `json:"desired"`
 	Image    string `json:"image"`
 	Mode     string `json:"mode"`
+	RunOnce  bool   `json:"run_once"`
 	Updated  int64  `json:"updated"`
 }
 

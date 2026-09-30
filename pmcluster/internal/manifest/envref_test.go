@@ -12,7 +12,7 @@ import (
 // fakeResolver serves canned config content for resolver tests.
 type fakeResolver struct{ values map[string]string }
 
-func (f *fakeResolver) ResolveConfig(_ context.Context, name string) (string, error) {
+func (f *fakeResolver) ResolveConfig(_ context.Context, _ string, name string) (string, error) {
 	if v, ok := f.values[name]; ok {
 		return v, nil
 	}

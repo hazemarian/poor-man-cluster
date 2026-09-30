@@ -203,6 +203,10 @@ func (a *App) Mount(engine *gin.Engine) {
 	usg := controllers.Usage{Controller: a.ctrl}
 	vr.GET("/usage", usg.Page)
 
+	inv := controllers.Inventory{Controller: a.ctrl}
+	vr.GET("/inventory", inv.Page)
+	vr.GET("/inventory/retag/:kind/:name", inv.RetagForm)
+
 	// ---- operator: mutations (sync/rollback/remove, service ops, backups,
 	// deploy submit, configs/secrets edits, tls, webhooks) ----
 	op := g.Group("")
@@ -237,6 +241,8 @@ func (a *App) Mount(engine *gin.Engine) {
 	op.POST("/settings/secrets/edit", stt.EditSecret)
 	op.POST("/settings/secrets/remove/:name", stt.RemoveSecret)
 	op.GET("/settings/secrets/reveal/:name", stt.RevealSecret)
+
+	op.POST("/inventory/retag", inv.Retag)
 
 	op.POST("/tls", tlsC.Add)
 	op.POST("/tls/site", tlsC.SetSite)

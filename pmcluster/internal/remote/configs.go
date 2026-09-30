@@ -122,6 +122,14 @@ func (a *Configs) Delete(ctx context.Context, name string) error {
 	return a.c.do(ctx, http.MethodDelete, "/configs/"+url.PathEscape(name), nil, nil)
 }
 
+// Retag reassigns the config's scope and stack on the remote daemon.
+func (a *Configs) Retag(ctx context.Context, name, scope, stack string) error {
+	return a.c.do(ctx, http.MethodPut, "/configs/"+url.PathEscape(name)+"/stack", map[string]string{
+		"scope": scope,
+		"stack": stack,
+	}, nil)
+}
+
 func (a *Configs) ListVersions(ctx context.Context, name string) ([]configs.ConfigVersion, error) {
 	var out configVersionsDTO
 	if err := a.c.do(ctx, http.MethodGet, "/configs/"+url.PathEscape(name)+"/versions", nil, &out); err != nil {

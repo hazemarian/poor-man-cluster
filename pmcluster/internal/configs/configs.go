@@ -36,6 +36,9 @@ type Service interface {
 	Get(ctx context.Context, name string) (*Config, error)
 	List(ctx context.Context, scope, stack string) ([]Config, error)
 	Update(ctx context.Context, name, content, version string) (string, error)
+	// Retag reassigns a config's scope and stack (e.g. bind an accidentally
+	// unattached row to a stack). Returns ErrConfigNotFound when missing.
+	Retag(ctx context.Context, name, scope, stack string) error
 	Rollback(ctx context.Context, name string, versionID int64) (string, error)
 	Delete(ctx context.Context, name string) error
 	ListVersions(ctx context.Context, name string) ([]ConfigVersion, error)

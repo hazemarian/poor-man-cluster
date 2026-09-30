@@ -43,6 +43,7 @@ func (l Local) List(ctx context.Context, stack string) ([]ServiceSummary, error)
 			Desired:  s.Desired,
 			Image:    s.Image,
 			Mode:     s.Mode,
+			RunOnce:  s.RunOnce,
 			Updated:  s.UpdatedAt,
 		})
 	}

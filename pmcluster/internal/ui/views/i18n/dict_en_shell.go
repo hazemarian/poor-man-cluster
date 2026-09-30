@@ -127,6 +127,7 @@ func init() {
 		"st.failed":     "Failed",
 		"st.done":       "Done",
 		"st.degraded":   "Degraded",
+		"st.complete":   "Complete",
 		"st.draining":   "Draining",
 		"st.valid":      "Valid",
 		"st.expired":    "Expired",
@@ -201,7 +202,10 @@ func init() {
 	registerPlural(EN, "plural.days", PluralForms{One: "{n} day", Other: "{n} days"})
 }
 
-// Usage is a read-only page inside the cluster group.
+// Usage and Inventory are read-only pages inside the cluster group.
 func init() {
-	register(EN, map[string]string{"nav.usage": "Usage"})
+	register(EN, map[string]string{
+		"nav.usage":     "Usage",
+		"nav.inventory": "Configs & Secrets",
+	})
 }

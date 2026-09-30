@@ -137,6 +137,7 @@ func serviceJSONList(svcs []ServiceSummary) []map[string]any {
 			"desired":  s.Desired,
 			"image":    s.Image,
 			"mode":     s.Mode,
+			"run_once": s.RunOnce,
 			"updated":  s.Updated,
 		})
 	}

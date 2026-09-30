@@ -115,6 +115,26 @@ func (s *Store) UpdateSecret(ctx context.Context, name string, payload []byte, h
 	return nil
 }
 
+// UpdateSecretStack retags a secret row's scope and stack. This is how a row
+// created unattached (stack "") gets bound to a stack — or moved between them —
+// from the console or CLI, without touching its payload. Returns
+// ErrSecretNotFound when no row matched.
+func (s *Store) UpdateSecretStack(ctx context.Context, name, scope, stack string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE secrets SET scope = ?, stack = ? WHERE name = ?`, scope, stack, name)
+	if err != nil {
+		return fmt.Errorf("update secret stack: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrSecretNotFound
+	}
+	return nil
+}
+
 // DeleteSecret removes a secret. Returns ErrSecretNotFound when no row matched.
 func (s *Store) DeleteSecret(ctx context.Context, name string) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM secrets WHERE name = ?`, name)

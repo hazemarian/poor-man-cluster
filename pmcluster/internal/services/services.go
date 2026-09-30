@@ -20,6 +20,7 @@ type ServiceSummary struct {
 	Desired  uint64 // desired replica count
 	Image    string
 	Mode     string // "replicated" | "global" | ""
+	RunOnce  bool   // one-shot job (restart "none"): 0 running replicas means it completed
 	Updated  int64  // service spec update time (unix)
 }
 

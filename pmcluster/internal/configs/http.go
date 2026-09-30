@@ -23,6 +23,7 @@ func (c *HTTP) Mount(r chi.Router) {
 	r.Post("/configs", c.create)
 	r.Get("/configs/{name}", c.get)
 	r.Put("/configs/{name}", c.update)
+	r.Put("/configs/{name}/stack", c.retag)
 	r.Delete("/configs/{name}", c.remove)
 	r.Get("/configs/{name}/versions", c.versions)
 	r.Post("/configs/{name}/rollback", c.rollback)
@@ -132,6 +133,47 @@ func (c *HTTP) get(res http.ResponseWriter, req *http.Request) {
 		"id": cfg.ID, "scope": cfg.Scope, "name": cfg.Name, "kind": cfg.Kind,
 		"version": cfg.Version, "hash": cfg.Hash, "content": cfg.Content,
 	})
+}
+
+type retagConfigRequest struct {
+	Scope string `json:"scope"`
+	Stack string `json:"stack"`
+}
+
+// retag moves a config to a different scope/stack. It exists so an operator
+// can fix a config created without a stack tag from the console instead of
+// deleting and recreating it.
+func (c *HTTP) retag(res http.ResponseWriter, req *http.Request) {
+	name := chi.URLParam(req, "name")
+	var body retagConfigRequest
+	dec := json.NewDecoder(http.MaxBytesReader(res, req.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeErr(res, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	scope := strings.TrimSpace(body.Scope)
+	stack := strings.TrimSpace(body.Stack)
+	if scope == "" {
+		scope = "service"
+	}
+	if scope != "cluster" && scope != "service" {
+		writeErr(res, http.StatusBadRequest, "scope must be 'cluster' or 'service'")
+		return
+	}
+	if stack != "" && scope != "service" {
+		writeErr(res, http.StatusBadRequest, "stack is only valid for service-scope configs")
+		return
+	}
+	if err := c.Svc.Retag(req.Context(), name, scope, stack); err != nil {
+		if errors.Is(err, store.ErrConfigNotFound) {
+			writeErr(res, http.StatusNotFound, "config not found: "+name)
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "retag config: "+err.Error())
+		return
+	}
+	writeJSON(res, http.StatusOK, map[string]any{"name": name, "scope": scope, "stack": stack})
 }
 
 type updateConfigRequest struct {

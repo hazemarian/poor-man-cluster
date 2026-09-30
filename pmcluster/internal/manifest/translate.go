@@ -12,8 +12,13 @@ import (
 // EnvResolver resolves `config(<name>)` references in service env values
 // against the DB-backed config store. Implemented by internal/stacks with a
 // *store.Store; nil means config() refs are rejected at translate time.
+//
+// Resolutions are STACK-SCOPED: the caller passes the app (stack) being
+// translated, and implementations must never return a row tagged to a
+// different stack — cross-stack configs must not leak into another stack's
+// env. Rows with an empty stack are shared and usable by any stack.
 type EnvResolver interface {
-	ResolveConfig(ctx context.Context, name string) (string, error)
+	ResolveConfig(ctx context.Context, stack, name string) (string, error)
 }
 
 // Shared external networks ensured by `pmcluster cluster up`; the
@@ -134,7 +139,7 @@ func BuildIR(ctx context.Context, app *dsl.App, res EnvResolver) (*IR, error) {
 // translateService maps one DSL service to its IR entry, resolving
 // config()/secrets() env references.
 func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Service, res EnvResolver) (*IRService, error) {
-	env, err := resolveServiceEnv(ctx, s.Env, res)
+	env, err := resolveServiceEnv(ctx, app.Name, s.Env, res)
 	if err != nil {
 		return nil, fmt.Errorf("services.%s: %w", name, err)
 	}
@@ -193,17 +198,18 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 	return is, nil
 }
 
-// resolveServiceEnv resolves config()/secrets() env references. Returns the
-// resolved env map.  It does NOT mount anything: validation guarantees the
-// operator listed every secrets(name) used in env in the service's own
-// `secrets:` array (so the /run/secrets/<name> path actually exists).
+// resolveServiceEnv resolves config()/secrets() env references for the given
+// stack. Returns the resolved env map.  It does NOT mount anything:
+// validation guarantees the operator listed every secrets(name) used in env
+// in the service's own `secrets:` array (so the /run/secrets/<name> path
+// actually exists).
 //
 //   - config(name): value = config content from the DB (via EnvResolver).
 //     Multi-line content is rejected — compose environment values must be
 //     single-line; file-style content belongs in configs mounted as files.
 //   - secrets(name): value = /run/secrets/<name> (the mounted file path).
 //     The secret must already be mounted via the service secrets: array.
-func resolveServiceEnv(ctx context.Context, env map[string]string, res EnvResolver) (map[string]string, error) {
+func resolveServiceEnv(ctx context.Context, stack string, env map[string]string, res EnvResolver) (map[string]string, error) {
 	if len(env) == 0 {
 		return env, nil
 	}
@@ -224,7 +230,7 @@ func resolveServiceEnv(ctx context.Context, env map[string]string, res EnvResolv
 			if res == nil {
 				return nil, fmt.Errorf("env.%s: config(%s) requires config resolution (not available)", k, ref.Name)
 			}
-			content, err := res.ResolveConfig(ctx, ref.Name)
+			content, err := res.ResolveConfig(ctx, stack, ref.Name)
 			if err != nil {
 				return nil, fmt.Errorf("env.%s: resolve config(%s): %w", k, ref.Name, err)
 			}

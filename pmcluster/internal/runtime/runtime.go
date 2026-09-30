@@ -142,6 +142,7 @@ type Service struct {
 	Desired   uint64
 	Image     string
 	Mode      string // "replicated" | "global" | ""
+	RunOnce   bool   // restart-policy "none": a one-shot job; 0 running replicas means it completed
 	UpdatedAt int64
 }
 

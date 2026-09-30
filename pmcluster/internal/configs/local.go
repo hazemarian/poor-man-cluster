@@ -47,6 +47,11 @@ func (s *Local) Update(ctx context.Context, name, content, version string) (stri
 	return s.Store.UpdateConfig(ctx, name, content, version)
 }
 
+// Retag reassigns the config's scope and stack without touching its content.
+func (s *Local) Retag(ctx context.Context, name, scope, stack string) error {
+	return s.Store.UpdateConfigStack(ctx, name, scope, stack)
+}
+
 func (s *Local) Rollback(ctx context.Context, name string, versionID int64) (string, error) {
 	return s.Store.RollbackConfig(ctx, name, versionID)
 }

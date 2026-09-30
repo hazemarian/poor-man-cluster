@@ -381,6 +381,13 @@ func (c *Client) RevealSecret(ctx context.Context, name string) (*SecretValue, e
 	return &out, err
 }
 
+// RetagSecret moves a stored secret to a different scope/stack. It lets an
+// operator fix a secret created without a stack tag from the console.
+func (c *Client) RetagSecret(ctx context.Context, name, scope, stack string) error {
+	body := map[string]string{"scope": scope, "stack": stack}
+	return c.do(ctx, http.MethodPut, "/secrets/"+url.PathEscape(name)+"/stack", body, nil)
+}
+
 // ListConfigs returns the stored configs matching scope and stack (empty
 // values match everything), without content.
 func (c *Client) ListConfigs(ctx context.Context, scope, stack string) ([]Config, error) {
@@ -417,6 +424,13 @@ func (c *Client) UpdateConfig(ctx context.Context, name, content string) (*Confi
 // DeleteConfig removes a config and its version history.
 func (c *Client) DeleteConfig(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, "/configs/"+url.PathEscape(name), nil, nil)
+}
+
+// RetagConfig moves a stored config to a different scope/stack. It lets an
+// operator fix a config created without a stack tag from the console.
+func (c *Client) RetagConfig(ctx context.Context, name, scope, stack string) error {
+	body := map[string]string{"scope": scope, "stack": stack}
+	return c.do(ctx, http.MethodPut, "/configs/"+url.PathEscape(name)+"/stack", body, nil)
 }
 
 // ConfigVersions returns a config's version history (newest first).

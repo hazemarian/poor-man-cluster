@@ -263,6 +263,33 @@ func init() {
 		"settings.err_cluster_read":    "تعذّرت قراءة إعدادات العنقود",
 		"settings.err_cluster_save":    "تعذّر حفظ إعدادات العنقود",
 		"settings.msg_cluster_saved":   "حُفظت إعدادات العنقود.",
+
+		// ---------- المخزون: كل الإعدادات والأسرار عبر النطاقات ----------
+		"inventory.title":                 "الإعدادات والأسرار",
+		"inventory.sub":                   "كل إعداد وسر مخزَّن عبر العنقود وجميع الحزم. تبقى صفحات الحزم مركّزة: تُظهر الصفوف التابعة لكل حزمة بالإضافة إلى الصفوف المشتركة (غير المنسوبة).",
+		"inventory.configs_title":         "الإعدادات",
+		"inventory.secrets_title":         "الأسرار",
+		"inventory.col_scope":             "النطاق",
+		"inventory.col_stack":             "الحزمة",
+		"inventory.col_name":              "الاسم",
+		"inventory.scope_cluster":         "عنقود",
+		"inventory.scope_service":         "حزمة",
+		"inventory.configs_empty_title":   "لا توجد إعدادات بعد",
+		"inventory.configs_empty_body":    "تأتي المنصة بقوالبها الخاصة. أضف إعدادًا لتجاوز أحدها أو للاحتفاظ بقيمة بجانب الأسرار.",
+		"inventory.secrets_empty_title":   "لا توجد أسرار بعد",
+		"inventory.secrets_empty_body":    "لا تُسرد القيم أبدًا — فقط الأسماء ووقت الحفظ.",
+		"inventory.configs_unknown_title": "الإعدادات غير متاحة",
+		"inventory.configs_unknown_body":  "لم يستجب الخادم لطلب الإعدادات. هذه ليست قائمة فارغة.",
+		"inventory.secrets_unknown_title": "الأسرار غير متاحة",
+		"inventory.secrets_unknown_body":  "لم يستجب الخادم لطلب الأسرار. هذه ليست قائمة فارغة.",
+		"inventory.unknown_title":         "المخزون غير متاح",
+		"inventory.unknown_body":          "لم يستجب الخادم. هذه ليست قائمة فارغة.",
+		"inventory.err_configs":           "تعذّر تحميل الإعدادات",
+		"inventory.err_secrets":           "تعذّر تحميل الأسرار",
+		"inventory.retag_title":           "نقل إلى نطاق/حزمة أخرى",
+		"inventory.retag_sub":             "يصحّح إعدادًا أو سرًّا أُنشئ دون وسم حزمة — دون الحاجة إلى حذفه وإعادة إنشائه.",
+		"inventory.retag_stack_hint":      "اتركه فارغًا لمشاركة هذا الصف عبر كل الحزم، أو ضع اسم حزمة لوسمه.",
+		"inventory.retag_save":            "نقل",
 	})
 
 	// العبارات المعدودة التي يملكها هذا النطاق. plural.users / plural.keys /

@@ -29,5 +29,8 @@ type Service interface {
 	List(ctx context.Context, scope, stack string) ([]Secret, error)
 	// Update replaces a stored value in place.
 	Update(ctx context.Context, name, value string) error
+	// Retag reassigns a secret's scope and stack (e.g. bind an accidentally
+	// unattached row to a stack). Returns ErrSecretNotFound when missing.
+	Retag(ctx context.Context, name, scope, stack string) error
 	Delete(ctx context.Context, name string) error
 }

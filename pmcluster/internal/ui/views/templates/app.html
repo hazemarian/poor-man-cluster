@@ -46,6 +46,7 @@
       <a class="nav-item" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
       <a class="nav-item" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
       <a class="nav-item" href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage">{{icon "overview"}}<span>{{T "nav.usage"}}</span></a>
+      <a class="nav-item" href="/web/inventory" hx-get="/web/inventory" hx-target="#view" hx-push-url="true" data-nav="inventory">{{icon "file"}}<span>{{T "nav.inventory"}}</span></a>
 
       <p class="nav-label" id="nav-delivery">{{T "nav.group.delivery"}}</p>
       <a class="nav-item" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
@@ -239,7 +240,18 @@
       if (detail) detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   });
-  document.addEventListener('htmx:responseError', function () {
+  document.addEventListener('htmx:responseError', function (evt) {
+    // When the SSO session expires, oauth2-proxy answers with 401/403. Bounce
+    // back to the SSO sign-in so the operator lands on GitHub login instead of
+    // staring at an error toast. Only when htmx did not already send a
+    // redirect header (e.g. middleware-driven HX-Redirect).
+    var xhr = evt.detail && evt.detail.xhr;
+    var status = xhr ? xhr.status : 0;
+    if ((status === 401 || status === 403) && !(xhr && xhr.getResponseHeader && xhr.getResponseHeader('HX-Redirect'))) {
+      var rd = encodeURIComponent(location.pathname + location.search);
+      location.assign('/oauth2/start?rd=' + rd);
+      return;
+    }
     flash('{{T "err.upstream"}}', 'err');
   });
   syncNav(location.pathname);

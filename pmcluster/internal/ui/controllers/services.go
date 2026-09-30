@@ -77,6 +77,7 @@ type serviceRow struct {
 	Converged   bool // desired > 0 and every replica is up
 	Short       bool // running fewer tasks than desired
 	Paused      bool // desired == 0
+	Complete    bool // one-shot job that already finished (0 running of 1 desired)
 	Routable    bool // belongs to a stack, so the per-service routes resolve
 }
 
@@ -111,6 +112,7 @@ func (c Services) List(g *gin.Context) {
 			Converged:   s.Desired > 0 && s.Replicas >= s.Desired,
 			Short:       s.Replicas < s.Desired,
 			Paused:      s.Desired == 0,
+			Complete:    s.RunOnce && s.Desired > 0 && s.Replicas == 0,
 			Routable:    s.Stack != "",
 		}
 		if row.Converged {
@@ -170,6 +172,7 @@ type serviceMeta struct {
 	Converged bool
 	Short     bool
 	Paused    bool
+	Complete  bool
 }
 
 type serviceTaskRow struct {
@@ -243,6 +246,7 @@ func (c Services) meta(ctx *gin.Context, stack, service string) (*serviceMeta, b
 			Converged: s.Desired > 0 && s.Replicas >= s.Desired,
 			Short:     s.Replicas < s.Desired,
 			Paused:    s.Desired == 0,
+			Complete:  s.RunOnce && s.Desired > 0 && s.Replicas == 0,
 		}, true
 	}
 	return nil, false

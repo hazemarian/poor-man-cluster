@@ -68,6 +68,11 @@ func (s *Local) Update(ctx context.Context, name, value string) error {
 	return s.Store.UpdateSecret(ctx, name, payload, store.SecretHash(value))
 }
 
+// Retag reassigns the secret's scope and stack without touching its payload.
+func (s *Local) Retag(ctx context.Context, name, scope, stack string) error {
+	return s.Store.UpdateSecretStack(ctx, name, scope, stack)
+}
+
 func (s *Local) Delete(ctx context.Context, name string) error {
 	return s.Store.DeleteSecret(ctx, name)
 }

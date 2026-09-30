@@ -252,6 +252,10 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 		case spec.Mode.Global != nil:
 			mode = "global"
 		}
+		runOnce := false
+		if rp := spec.TaskTemplate.RestartPolicy; rp != nil && rp.Condition == swarm.RestartPolicyConditionNone {
+			runOnce = true
+		}
 		out = append(out, runtime.Service{
 			ID:        s.ID,
 			Name:      s.Spec.Name,
@@ -260,6 +264,7 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 			Desired:   desired,
 			Image:     image,
 			Mode:      mode,
+			RunOnce:   runOnce,
 			UpdatedAt: s.UpdatedAt.Unix(),
 		})
 	}

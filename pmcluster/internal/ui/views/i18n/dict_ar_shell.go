@@ -134,6 +134,7 @@ func init() {
 		"st.failed":     "فاشل",
 		"st.done":       "مكتمل",
 		"st.degraded":   "أداء متردٍّ",
+		"st.complete":   "مكتمل",
 		"st.draining":   "جارٍ الإخلاء",
 		"st.valid":      "صالحة",
 		"st.expired":    "منتهية الصلاحية",
@@ -278,7 +279,10 @@ func init() {
 	})
 }
 
-// الاستخدام صفحة للقراءة فقط ضمن مجموعة العنقود.
+// الاستخدام والمخزون صفحتان للقراءة فقط ضمن مجموعة العنقود.
 func init() {
-	register(AR, map[string]string{"nav.usage": "الاستخدام"})
+	register(AR, map[string]string{
+		"nav.usage":     "الاستخدام",
+		"nav.inventory": "الإعدادات والأسرار",
+	})
 }

@@ -112,6 +112,7 @@
             <td class="num">
               <span class="num">{{N .Replicas}} / {{N .Desired}}</span>
               {{if .Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}}</span>
+              {{else if .Complete}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>
               {{else if .Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>
               {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{end}}
             </td>
@@ -135,6 +136,7 @@
         <div class="kv-row"><span class="k">{{T "services.col_service"}}</span><span class="v mono iso" dir="ltr">{{.ServiceName}}</span></div>
         <div class="kv-row"><span class="k">{{T "services.col_replicas"}}</span><span class="v"><span class="num">{{N .Replicas}} / {{N .Desired}}</span>
           {{if .Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}}</span>
+          {{else if .Complete}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>
           {{else if .Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>
           {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "services.col_mode"}}</span><span class="v">{{if .Mode}}<span class="mono iso" dir="ltr">{{.Mode}}</span>{{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}</span></div>

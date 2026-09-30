@@ -37,6 +37,7 @@
     <div class="stat-v num">{{N .Svc.Replicas}} / {{N .Svc.Desired}}</div>
     <div class="stat-f">
       {{if .Svc.Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}}</span>
+      {{else if .Svc.Complete}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>
       {{else if .Svc.Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>
       {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{end}}
     </div>

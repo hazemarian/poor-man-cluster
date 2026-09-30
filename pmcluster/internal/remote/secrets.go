@@ -102,3 +102,11 @@ func (a *Secrets) Update(ctx context.Context, name, value string) error {
 func (a *Secrets) Delete(ctx context.Context, name string) error {
 	return a.c.do(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, nil)
 }
+
+// Retag reassigns the secret's scope and stack on the remote daemon.
+func (a *Secrets) Retag(ctx context.Context, name, scope, stack string) error {
+	return a.c.do(ctx, http.MethodPut, "/secrets/"+url.PathEscape(name)+"/stack", map[string]string{
+		"scope": scope,
+		"stack": stack,
+	}, nil)
+}

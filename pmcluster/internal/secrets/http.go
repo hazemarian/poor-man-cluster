@@ -23,6 +23,7 @@ func (s *HTTP) Mount(r chi.Router) {
 	r.Get("/secrets", s.list)
 	r.Post("/secrets", s.create)
 	r.Put("/secrets/{name}", s.update)
+	r.Put("/secrets/{name}/stack", s.retag)
 	r.Delete("/secrets/{name}", s.remove)
 	r.Get("/secrets/{name}/value", s.value)
 }
@@ -104,6 +105,51 @@ func (s *HTTP) create(res http.ResponseWriter, req *http.Request) {
 
 type updateSecretRequest struct {
 	Value string `json:"value"`
+}
+
+type retagSecretRequest struct {
+	Scope string `json:"scope"`
+	Stack string `json:"stack"`
+}
+
+// retag moves a secret to a different scope/stack. It exists so an operator
+// can fix a secret created without a stack tag from the console instead of
+// deleting and recreating it.
+func (s *HTTP) retag(res http.ResponseWriter, req *http.Request) {
+	name := chi.URLParam(req, "name")
+	if name == "" {
+		writeErr(res, http.StatusBadRequest, "secret name is required")
+		return
+	}
+	var body retagSecretRequest
+	dec := json.NewDecoder(http.MaxBytesReader(res, req.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeErr(res, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	scope := strings.TrimSpace(body.Scope)
+	stack := strings.TrimSpace(body.Stack)
+	if scope == "" {
+		scope = "service"
+	}
+	if scope != "cluster" && scope != "service" {
+		writeErr(res, http.StatusBadRequest, "scope must be 'cluster' or 'service'")
+		return
+	}
+	if stack != "" && scope != "service" {
+		writeErr(res, http.StatusBadRequest, "stack is only valid for service-scope secrets")
+		return
+	}
+	if err := s.Svc.Retag(req.Context(), name, scope, stack); err != nil {
+		if errors.Is(err, store.ErrSecretNotFound) {
+			writeErr(res, http.StatusNotFound, "secret not found: "+name)
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "retag secret: "+err.Error())
+		return
+	}
+	writeJSON(res, http.StatusOK, map[string]any{"name": name, "scope": scope, "stack": stack})
 }
 
 // update replaces a stored secret's value (new ciphertext + hash), keeping its

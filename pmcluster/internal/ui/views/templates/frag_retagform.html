@@ -1,0 +1,41 @@
+{{define "retagform"}}
+{{/*
+  Move a config or secret to a different scope/stack. Fixes rows created without
+  a stack tag (stack "") from the console instead of forcing delete + recreate.
+  The form posts to .Action (the shared /inventory/retag route) and re-renders
+  the inventory fragment on success.
+*/}}
+<h2>{{T "inventory.retag_title"}}</h2>
+<p class="sub">{{T "inventory.retag_sub"}}</p>
+
+{{if .Error}}
+<div class="msg err">{{.Error}}</div>
+{{end}}
+
+<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-disabled-elt="find button[type=submit]"
+      hx-on::after-request="if(!event.detail.failed)closeModal()">
+  <input type="hidden" name="kind" value="{{.Kind}}">
+  <input type="hidden" name="name" value="{{.Name}}">
+  <div class="kv">
+    <div class="kv-row"><span class="k">{{T "inventory.col_name"}}</span><span class="v mono" dir="ltr">{{.Name}}</span></div>
+    <div class="kv-row"><span class="k">{{T "inventory.col_scope"}}</span><span class="v">{{if eq .Scope "cluster"}}{{T "inventory.scope_cluster"}}{{else}}{{T "inventory.scope_service"}}{{end}}</span></div>
+  </div>
+  <div class="field">
+    <label for="retag-scope">{{T "inventory.col_scope"}}</label>
+    <select id="retag-scope" class="selectbox" name="scope">
+      <option value="service" {{if eq .Scope "service"}}selected{{end}}>{{T "inventory.scope_service"}}</option>
+      <option value="cluster" {{if eq .Scope "cluster"}}selected{{end}}>{{T "inventory.scope_cluster"}}</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="retag-stack">{{T "inventory.col_stack"}}</label>
+    <input id="retag-stack" class="finput mono" type="text" name="stack" dir="ltr" autocomplete="off" spellcheck="false" value="{{.Stack}}">
+    <span class="hint">{{T "inventory.retag_stack_hint"}}</span>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{icon "check"}}<span>{{T "inventory.retag_save"}}</span></button>
+    <button type="button" class="btn" onclick="closeModal()">{{T "common.cancel"}}</button>
+  </div>
+</form>
+{{end}}

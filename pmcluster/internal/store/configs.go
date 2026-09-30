@@ -98,6 +98,37 @@ func (s *Store) GetConfig(ctx context.Context, name string) (*ConfigRow, error) 
 	return &c, nil
 }
 
+// GetConfigForStack fetches the config <name> that stack <stack> is allowed to
+// resolve at deploy time. Resolution order:
+//
+//  1. a service-scope row tagged exactly with <stack> (own config), else
+//  2. a service-scope row with an empty stack (shared config, usable by any
+//     stack), else
+//  3. ErrConfigNotFound.
+//
+// A row tagged to a DIFFERENT stack is deliberately never returned: the DSL
+// resolves config(name) by name only, so without this guard a config created
+// for stack A would silently leak into stack B's env. Cross-stack rows make
+// the lookup fall through to shared/not-found instead.
+func (s *Store) GetConfigForStack(ctx context.Context, stack, name string) (*ConfigRow, error) {
+	var c ConfigRow
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, scope, stack, name, kind, content, version, hash, created_at, updated_at, rendered_content, rendered_at, rendered_hash
+		 FROM configs
+		 WHERE name = ? AND scope = 'service' AND (stack = ? OR stack = '')
+		 ORDER BY CASE WHEN stack = '' THEN 1 ELSE 0 END, id ASC
+		 LIMIT 1`, name, stack,
+	).Scan(&c.ID, &c.Scope, &c.Stack, &c.Name, &c.Kind, &c.Content,
+		&c.Version, &c.Hash, &c.CreatedAt, &c.UpdatedAt, &c.RenderedContent, &c.RenderedAt, &c.RenderedHash)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrConfigNotFound
+		}
+		return nil, fmt.Errorf("query config for stack: %w", err)
+	}
+	return &c, nil
+}
+
 // ListConfigs returns configs matching the given scope/stack filters (empty
 // string = wildcard), ordered by scope then stack then name.
 //
@@ -261,6 +292,26 @@ func (s *Store) RollbackConfig(ctx context.Context, name string, versionID int64
 		return "", fmt.Errorf("commit tx: %w", err)
 	}
 	return oldHash, nil
+}
+
+// UpdateConfigStack retags a config row's scope and stack. This is how a row
+// created unattached (stack "") gets bound to a stack — or moved between them —
+// from the console or CLI, without touching its content. Returns
+// ErrConfigNotFound when no row matched.
+func (s *Store) UpdateConfigStack(ctx context.Context, name, scope, stack string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE configs SET scope = ?, stack = ? WHERE name = ?`, scope, stack, name)
+	if err != nil {
+		return fmt.Errorf("update config stack: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrConfigNotFound
+	}
+	return nil
 }
 
 // DeleteConfig removes a config and its version history (CASCADE).

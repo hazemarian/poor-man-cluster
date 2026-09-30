@@ -388,6 +388,13 @@ func TestAllControllers(t *testing.T) {
 	assertFragment(http.MethodGet, "/web/deploy", "", "Deploy")
 	assertFragment(http.MethodGet, "/web/settings", "", "Settings")
 
+	// The inventory page shows every config and secret across scopes and
+	// stacks, with the Scope column making ownership explicit — the stack
+	// pages stay focused, this page is the "show me everything" surface.
+	assertFragment(http.MethodGet, "/web/inventory", "", "inventory",
+		"app_env", "traefik-dynamic", "site_cert",
+		"service", "cluster")
+
 	resp := doRequest(t, app, http.MethodPost, "/web/logout", "", jar)
 	if resp.StatusCode != http.StatusFound {
 		t.Errorf("POST /logout = %d, want 302", resp.StatusCode)

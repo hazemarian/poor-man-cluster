@@ -239,6 +239,33 @@ func init() {
 		"settings.err_cluster_read":    "The cluster settings could not be read",
 		"settings.err_cluster_save":    "The cluster settings could not be saved",
 		"settings.msg_cluster_saved":   "Cluster settings saved.",
+
+		// ---------- inventory: every config and secret across scopes ----------
+		"inventory.title":                 "Configs & Secrets",
+		"inventory.sub":                   "Every stored config and secret across the cluster and all stacks. Stack pages stay focused: they show the rows that belong to each stack, plus the shared (unattached) ones.",
+		"inventory.configs_title":         "Configs",
+		"inventory.secrets_title":         "Secrets",
+		"inventory.col_scope":             "Scope",
+		"inventory.col_stack":             "Stack",
+		"inventory.col_name":              "Name",
+		"inventory.scope_cluster":         "cluster",
+		"inventory.scope_service":         "service",
+		"inventory.configs_empty_title":   "No configs yet",
+		"inventory.configs_empty_body":    "The platform ships its own templates. Add a config to override one or to keep a value alongside the secrets.",
+		"inventory.secrets_empty_title":   "No secrets yet",
+		"inventory.secrets_empty_body":    "Values are never listed — only names and when they were stored.",
+		"inventory.configs_unknown_title": "Configs are unavailable",
+		"inventory.configs_unknown_body":  "The daemon did not answer the config request. This is not an empty list.",
+		"inventory.secrets_unknown_title": "Secrets are unavailable",
+		"inventory.secrets_unknown_body":  "The daemon did not answer the secret request. This is not an empty list.",
+		"inventory.unknown_title":         "Inventory unavailable",
+		"inventory.unknown_body":          "The daemon did not answer. This is not an empty list.",
+		"inventory.err_configs":           "The configs could not be loaded",
+		"inventory.err_secrets":           "The secrets could not be loaded",
+		"inventory.retag_title":           "Move to another scope/stack",
+		"inventory.retag_sub":             "Fixes a config or secret created without a stack tag — no need to delete and recreate it.",
+		"inventory.retag_stack_hint":      "Leave empty to share this row across every stack, or set a stack name to tag it.",
+		"inventory.retag_save":            "Move",
 	})
 
 	// New counted phrases owned by this domain. plural.users / plural.keys /

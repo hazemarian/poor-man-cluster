@@ -457,6 +457,7 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 				Converged:   s.Desired > 0 && s.Replicas >= s.Desired,
 				Short:       s.Replicas < s.Desired,
 				Paused:      s.Desired == 0,
+				Complete:    s.RunOnce && s.Desired > 0 && s.Replicas == 0,
 				Routable:    s.Stack != "",
 			}
 			d.Services = append(d.Services, row)
