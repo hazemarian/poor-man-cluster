@@ -456,6 +456,67 @@ func TestIsNotFoundString(t *testing.T) {
 	}
 }
 
+func TestRealClient_RunOnceDetection(t *testing.T) {
+	m := newMockDaemon()
+	maxAtt := uint64(3)
+	m.services = []swarm.Service{
+		{
+			ID: "svc-none",
+			Spec: swarm.ServiceSpec{
+				Annotations: swarm.Annotations{Name: "mig_plain", Labels: map[string]string{"com.docker.stack.namespace": "demo"}},
+				TaskTemplate: swarm.TaskSpec{
+					ContainerSpec: &swarm.ContainerSpec{Image: "app:migrate"},
+					RestartPolicy: &swarm.RestartPolicy{Condition: swarm.RestartPolicyConditionNone},
+				},
+				Mode: swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: uint64Ptr(1)}},
+			},
+			ServiceStatus: &swarm.ServiceStatus{RunningTasks: 0, DesiredTasks: 1},
+		},
+		{
+			ID: "svc-onfail",
+			Spec: swarm.ServiceSpec{
+				Annotations: swarm.Annotations{Name: "mig_depends", Labels: map[string]string{"com.docker.stack.namespace": "demo"}},
+				TaskTemplate: swarm.TaskSpec{
+					ContainerSpec: &swarm.ContainerSpec{Image: "app:migrate"},
+					RestartPolicy: &swarm.RestartPolicy{Condition: swarm.RestartPolicyConditionOnFailure, MaxAttempts: &maxAtt},
+				},
+				Mode: swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: uint64Ptr(1)}},
+			},
+			ServiceStatus: &swarm.ServiceStatus{RunningTasks: 0, DesiredTasks: 1},
+		},
+		{
+			ID: "svc-web",
+			Spec: swarm.ServiceSpec{
+				Annotations: swarm.Annotations{Name: "web", Labels: map[string]string{"com.docker.stack.namespace": "demo"}},
+				TaskTemplate: swarm.TaskSpec{
+					ContainerSpec: &swarm.ContainerSpec{Image: "app:web"},
+					RestartPolicy: &swarm.RestartPolicy{Condition: swarm.RestartPolicyConditionOnFailure},
+				},
+				Mode: swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: uint64Ptr(1)}},
+			},
+			ServiceStatus: &swarm.ServiceStatus{RunningTasks: 1, DesiredTasks: 1},
+		},
+	}
+	rc := realClientFromServer(t, m)
+	svcs, err := rc.ServiceList(context.Background())
+	if err != nil {
+		t.Fatalf("ServiceList: %v", err)
+	}
+	got := map[string]bool{}
+	for _, s := range svcs {
+		got[s.Name] = s.RunOnce
+	}
+	if !got["mig_plain"] {
+		t.Errorf("mig_plain (condition none) should be run-once")
+	}
+	if !got["mig_depends"] {
+		t.Errorf("mig_depends (on-failure + max_attempts 3) should be run-once")
+	}
+	if got["web"] {
+		t.Errorf("web (on-failure, no max_attempts) should NOT be run-once")
+	}
+}
+
 func TestIdempotentRemove(t *testing.T) {
 	if err := idempotentRemove(nil, "secret", "x"); err != nil {
 		t.Errorf("nil error should pass through as nil: %v", err)

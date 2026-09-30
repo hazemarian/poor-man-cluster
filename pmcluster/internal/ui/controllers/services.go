@@ -118,7 +118,7 @@ func (c Services) List(g *gin.Context) {
 			Paused:       s.Desired == 0,
 			Complete:     s.RunOnce && s.Desired > 0 && s.Replicas == 0,
 			ImageAge:     imageAgeDays(s.ImageCreated),
-			PausedUpdate: s.UpdateState == "paused",
+			PausedUpdate: s.UpdateState == "paused" && !completedRunOnce(s.RunOnce, s.Desired, s.Replicas),
 			UpdateError:  s.UpdateError,
 			Routable:     s.Stack != "",
 		}
@@ -183,6 +183,13 @@ type serviceMeta struct {
 	ImageAge     int64
 	PausedUpdate bool
 	UpdateError  string
+}
+
+// completedRunOnce reports whether a service is a one-shot job that already
+// finished (0 running of 1 desired). Such jobs are completed, never degraded
+// or paused.
+func completedRunOnce(runOnce bool, desired, replicas uint64) bool {
+	return runOnce && desired > 0 && replicas == 0
 }
 
 // imageAgeDays returns whole days since a locally-cached image was built
@@ -272,7 +279,7 @@ func (c Services) meta(ctx *gin.Context, stack, service string) (*serviceMeta, b
 			Paused:       s.Desired == 0,
 			Complete:     s.RunOnce && s.Desired > 0 && s.Replicas == 0,
 			ImageAge:     imageAgeDays(s.ImageCreated),
-			PausedUpdate: s.UpdateState == "paused",
+			PausedUpdate: s.UpdateState == "paused" && !completedRunOnce(s.RunOnce, s.Desired, s.Replicas),
 			UpdateError:  s.UpdateError,
 		}, true
 	}

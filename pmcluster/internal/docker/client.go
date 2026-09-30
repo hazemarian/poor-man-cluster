@@ -254,8 +254,18 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 			mode = "global"
 		}
 		runOnce := false
-		if rp := spec.TaskTemplate.RestartPolicy; rp != nil && rp.Condition == swarm.RestartPolicyConditionNone {
-			runOnce = true
+		if rp := spec.TaskTemplate.RestartPolicy; rp != nil {
+			// One-shot jobs: either the classic run-once shape (restart
+			// condition none) or the depends_on shape (restart on-failure with
+			// bounded retries, rendered by the manifest writer for run-once
+			// services that wait on a dependency). Both mean "a finished task
+			// is a completed job, not a degraded service".
+			switch {
+			case rp.Condition == swarm.RestartPolicyConditionNone:
+				runOnce = true
+			case rp.Condition == swarm.RestartPolicyConditionOnFailure && rp.MaxAttempts != nil && *rp.MaxAttempts > 0:
+				runOnce = true
+			}
 		}
 		// Best-effort local-image age: an old cached image (from a time when
 		// registry auth was missing or the image was never refreshed) is a
