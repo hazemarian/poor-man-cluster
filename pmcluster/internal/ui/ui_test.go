@@ -173,7 +173,7 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 
 	// Service ops (the Portainer replacement).
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"services":[{"name":"demo_web","stack":"demo","replicas":2,"desired":2,"image":"ghcr.io/nextrum-sy/demo:1.0","mode":"replicated","updated":70},{"name":"infra_traefik","stack":"infra","replicas":1,"desired":1,"image":"traefik:v3","mode":"global","updated":71}]}`)
+		write(w, `{"services":[{"name":"demo_web","stack":"demo","replicas":2,"desired":2,"image":"ghcr.io/nextrum-sy/demo:1.0","mode":"replicated","updated":70,"image_created":1788000000},{"name":"infra_traefik","stack":"infra","replicas":1,"desired":1,"image":"traefik:v3","mode":"global","updated":71}]}`)
 	})
 	mux.HandleFunc("/api/services/demo", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"services":[{"name":"demo_web","stack":"demo","replicas":2,"desired":2,"image":"ghcr.io/nextrum-sy/demo:1.0","mode":"replicated","updated":70}]}`)
@@ -737,6 +737,12 @@ func TestServicesUI(t *testing.T) {
 	// and never read as one figure.
 	if !strings.Contains(s, "demo") || !strings.Contains(s, "2 / 2") {
 		t.Errorf("services list missing stack/replica info; got: %s", s)
+	}
+	// regression: a service whose local image is >30 days old renders the stale
+	// pill via {{TF "services.image_stale" (N .ImageAge)}} without a template error
+	// (the old {{T ...}} two-arg form panicked → 500 on the live console).
+	if !strings.Contains(s, "days old") {
+		t.Errorf("services list missing stale-image pill for demo_web; got: %s", s)
 	}
 
 	// tasks fragment for demo_web (unqualified: stack=demo, service=web)

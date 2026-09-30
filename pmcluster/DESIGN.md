@@ -194,7 +194,7 @@ components:
 > including the EN/AR i18n contract (`docs/console-i18n-contract.md`). This file is the
 > *design record*: token/type specs and layout rules stay authoritative; the "Designed, not
 > built" list at the bottom is being retired line by line as features ship. Last updated:
-> v0.2.112.
+> v0.2.115.
 
 ## Overview
 

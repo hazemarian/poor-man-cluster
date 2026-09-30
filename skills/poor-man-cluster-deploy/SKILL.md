@@ -561,11 +561,11 @@ The edge image is pinned to the release version tag — `ghcr.io/hazemarian/pmcl
 
 1. **Build + publish the release first** — push a `v*` tag; the release workflow cross-compiles the binaries and pushes the new edge image to GHCR:
    ```bash
-   git tag v0.2.112 && git push origin v0.2.112
+   git tag v0.2.115 && git push origin v0.2.115
    ```
 2. **Update the binary with install.sh** — it installs the new binary and, because `~/.pmcluster/config.yaml` exists, automatically runs `pmcluster cluster update`:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | VERSION=v0.2.112 bash
+   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | VERSION=v0.2.115 bash
    # or simply: | bash   (resolves latest release)
    ```
 3. `cluster update` **re-syncs the platform config templates** from the new binary's embedded copies into the store (the DB is the source of truth; operator edits are preserved), then re-renders. Because the edge-stack.yml content changed, the **edge stack is re-deployed** automatically and pulls the new version-pinned image. OTel/Traefik/cert are re-applied content-aware as usual. A second `cluster update` with no changes reports `No rendered content changed — nothing to redeploy.`

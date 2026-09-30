@@ -4,6 +4,24 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.115 (2026-09-30)
+
+- Console: the **API Keys** nav link is now visible for admins when `EDGE_LOGIN_DISABLED=true` (it was previously bundled with the Users CRUD link, which correctly stays hidden — the API Keys page is admin-only but not login-UI-gated). Regression test added.
+
+## v0.2.114 (2026-09-30)
+
+- Usage graph now shows **linked configs** — the DSL resolves `config(name)` into env content at translation time, so rendered compose had no top-level `configs:` block and the usage page showed only secrets. The graph now unions `refs.FindAll(source_yaml)` (the authority for `config()`/`secrets()` refs) with rendered `configs:`/`secrets:` parsing.
+
+## v0.2.113 (2026-09-30)
+
+Quick wins from the improvement backlog (Q1–Q5; Q6 `deploy --compose` deferred):
+
+1. **CLI UpdateStatus column** — `pmcluster service list` / `ps` gained a `STATE` column (`PAUSED`, `PAUSED: <error>`, `UPDATING`, `-`) from the service update status.
+2. **Registry credentials on join** — `pmcluster join --copy-registry-creds <host>` ssh-fetches and merges the manager's `~/.docker/config.json`, and `--verify-registry-pull <image>` proves pulls work; both best-effort (the missing-auth silent-stale-image trap now has an explicit path).
+3. **Webhook delivery retry** — deploy failures retry 2× every 30s (detached 4-minute budget, so the retry outlives the request), and delivery rows record `retries`; one request still yields exactly one delivery row.
+4. **Per-stack API token scoping** — `pmcluster user create --stack <stack>` mints tokens that can only touch that stack's `/api/stacks/<name>` + `/api/services/<stack>` routes; everything else is `403 {"error":"token scoped to stack <x>"}`. Unscoped tokens unchanged. Migration 0020.
+5. **OpenObserve alerting metrics** — the daemon now emits OTLP metrics: `pmcluster.webhook.requests.total{source,status}`, `pmcluster.services.paused{scope}`, `pmcluster.services.stale_images{scope}` (image > 30 days old), `pmcluster.reconcile.total{stack,status}` — for OO-side alerting.
+
 ## v0.2.112 (2026-09-30)
 
 - Port-aware `depends_on` wait — the generated wait probe now connects to the dependency's service port (`nc -z`), not just its DNS name. Port resolution: `expose.port` wins, otherwise a well-known image default (postgres 5432, mysql/mariadb 3306, redis 6379, mongo 27017, nginx/httpd 80, rabbitmq 5672, elasticsearch 9200, memcached 11211), otherwise DNS-only.

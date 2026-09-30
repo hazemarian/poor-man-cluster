@@ -134,7 +134,8 @@ Key commands (all in `internal/cli/`):
 - `setup` (`setup.go`) — interactive wizard: collect cluster config then hand
   off to `cluster up` (fresh install) or `cluster update` (existing cluster).
 - `service list|ps|tasks|logs|restart|exec` (`service.go`) — per-service
-  operations that replace Portainer.
+  operations that replace Portainer. `list`/`ps` print a `STATE` column
+  (`PAUSED`/`PAUSED: <error>`/`UPDATING`/`-`) from the swarm update status.
 - `stack list|show`, `rollback`, `logs`, `backup` (`create|list|browse|restore`),
   `node`, `registry`, `credentials`, `user`, `webhook` (`add|list|remove|deliveries`),
   `tls`, `secret` (`create|edit|list|show|verify|delete` — `edit` mirrors the
@@ -143,7 +144,9 @@ Key commands (all in `internal/cli/`):
   `serve`, `version`.
 - `join` (`join.go`) — swarm join + local state init + daemon unit; warns via
   `verifyRegistryAuth` when the host has no `~/.docker/config.json` (stale
-  cached private images otherwise).
+  cached private images otherwise). Also `--copy-registry-creds <host>`
+  (ssh-fetch + merge the manager's `~/.docker/config.json`) and
+  `--verify-registry-pull <image>` (best-effort pull proof).
 - The `serve` command (`serve.go`) wires the daemon: opens store, docker
   client, deploy service, and calls `server.New` — **this is where new daemon
   dependencies are injected**.
@@ -216,6 +219,11 @@ Leaf package used by BOTH `internal/manifest` (DSL env values) and
 - `ParseEnvRef(v)` — whole-value env parser (`env: KEY: config(x)`).
 - `MalformedEnvRef(v)` — detects typos (e.g. `config(foo` without closing paren).
 - `SecretMountPath(name)` — returns `/run/secrets/<name>`.
+- `FindAll(text)` — returns every `config(...)`/`secrets(...)` reference in a
+  text, deduped per kind, in source order. Used by the usage graph: the DSL
+  resolves `config()` into env CONTENT at translation time (rendered compose
+  has no top-level `configs:` block for app stacks), so the true reference
+  graph is read from the SOURCE DSL manifest via `FindAll(source_yaml)`.
 Imports: refs ← manifest, refs ← cluster (the `renderRefResolver` in
 templates.go), refs ← stacks/resolver.go is NOT a direct import (the
 StoreConfigResolver implements manifest.EnvResolver, not refs.RefResolver).
@@ -296,9 +304,15 @@ exactly-once, idempotent). Repositories by file:
   rendered snapshot.
 
 ### internal/auth — bearer-token auth
-`Bearer(lookup)` middleware; `auth.User{ID, Name}` on context.
+`Bearer(lookup)` middleware; `auth.User{ID, Name, Stack}` on context.
 Token format: `pmc_<8-hex-token-id>_<base64url-secret>`; lookup is indexed by
-token id (no O(N) argon2 scan).
+token id (no O(N) argon2 scan). `Stack` scopes a token to one app stack:
+`internal/server/scope.go` `stackScopeGuard` (mounted right after `auth.Bearer`
+in the `/api` route group) restricts a scoped token to its own-stack
+`/api/stacks/{name}` + `/api/services/{stack}` routes and a matching
+`POST /api/stacks` deploy; everything else under `/api` returns
+`403 {"error":"token scoped to stack <x>"}` (fail-closed). Unscoped tokens
+(`stack=''`) are unchanged. Scope is set with `pmcluster user create --stack <s>`.
 
 ### internal/credentials — AES-GCM
 `Cipher` encrypts/decrypts secrets at rest with the key from
@@ -425,6 +439,14 @@ Body: `DeployPayload{app_name, version, manifest, repo_url?}`.
 The receiver reads the HMAC secret via the `SourceReader` port (never touches
 store/cipher directly). `Local{Store,Cipher}` implements both `Service`
 (source management) and `SourceReader`.
+Deploys are retried on transient failure: `webhooks/retry.go`
+`RetryDeployer` (default 2 retries, 30s apart; `Receiver.MaxRetries`/
+`RetryDelay` configurable, negative disables). The retry phase runs on
+`context.WithoutCancel` under a ~4-minute `deployPhaseBudget` (the chi
+`middleware.Timeout(30s)` is shorter than the retry window), and the delivery
+row records `retries=N` (accepted if a retry recovers, else
+`server_error, retries=2, error=<final>`); one request always yields exactly
+one delivery row (migration `0019_webhook_delivery_retries.sql`).
 
 ### internal/docker — Docker/Swarm client wrapper
 Thin wrapper over the Docker SDK. Key surface: `ServiceList/Inspect`,
@@ -487,6 +509,14 @@ Methods: `ListUsers`, `GetByID`, `CountAdmins`, `UpdateUser`, `DeleteUser`,
 
 ### internal/telemetry + internal/backups + internal/logger + internal/buildinfo
 - `telemetry`: OTel SDK init (metrics/traces → OTLP :4318 collector).
+  `metrics.go` adds alerting counters/gauges with lazy OTel instruments +
+  an injectable `Sample`/`SetSink` sink (hermetic tests, no exporter needed):
+  `pmcluster.webhook.requests.total{source,status}` (receiver exit paths),
+  `pmcluster.services.paused{scope}` + `pmcluster.services.stale_images{scope}`
+  (image age > 30d; emitted from the services list handlers),
+  `pmcluster.reconcile.total{stack,status}` (one per `stacks.Sync` run).
+  Existing `pmcluster.backups.total{kind,status}` +
+  `pmcluster.deploys.total{stack,status}` cover backup/deploy failures.
 - `backups`: `trigger.go` holds `LocalTrigger` (spawns the volume-backup
   container) + `RecordOutcome` metrics; the domain package is described above.
 - `logger`: zerolog setup. `buildinfo`: `Version`/`Commit`/`Date` vars

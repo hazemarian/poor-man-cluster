@@ -9,7 +9,7 @@ The control plane is a single static Go 1.25 binary (`pmcluster`, ~25 MB, no cgo
 In front of it sits **`pmcluster-edge`** — a small Go service deployed as a Swarm service that publishes `pmcluster.<domain>` as the single public origin for the **operator console** (a web UI for API keys, TLS, webhooks, stacks, and more), the REST API, and webhook receivers — all shielded by per-IP rate limiting, a connection shield, and automatic IP blocklisting.
 
 - **Design + trade-offs:** [RFC v2 — issue #1](https://github.com/hazemarian/poor-man-cluster/issues/1) (what actually shipped)
-- **Current release:** [v0.2.112](https://github.com/hazemarian/poor-man-cluster/releases)
+- **Current release:** [v0.2.115](https://github.com/hazemarian/poor-man-cluster/releases)
 
 ---
 
@@ -174,7 +174,7 @@ One-line install (latest release):
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | bash
 ```
 
-The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-cluster/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.112`).
+The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-cluster/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.115`).
 
 **With private registry credentials (GHCR, Docker Hub, etc.):**
 

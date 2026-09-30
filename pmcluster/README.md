@@ -18,7 +18,7 @@ The daemon listens on `127.0.0.1:9090` (host-only). Public access goes through
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | bash
 ```
 
-Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.112`.
+Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.115`.
 On Linux, `install.sh` only installs the binary — the daemon is started by the
 CLI itself: `cluster up`, `cluster update`, and `join` write
 `/etc/systemd/system/pmcluster.service` (`ExecStart=… pmcluster serve`) and

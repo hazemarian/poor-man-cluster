@@ -5,7 +5,7 @@
 > verified coverage). Archive discovery (migration 0018) and retention
 > pruning (`backup_retention_days`, default 15) removes rows and archive files.
 > The control-plane restore used by the leader-aware daemon
-> (`RestoreControlPlane`) shipped in v0.2.82. Last updated: v0.2.112.
+> (`RestoreControlPlane`) shipped in v0.2.82. Last updated: v0.2.115.
 
 The earlier "Phase 5 — design only" framing is obsolete: `pmcluster backup
 create`, the `backup_before_deploy: true` DSL hook, and the nightly offen
