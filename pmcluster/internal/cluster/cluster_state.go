@@ -77,6 +77,11 @@ const (
 	settingBackupS3AccessKey = "backup_s3_access_key"
 	settingBackupS3SecretKey = "backup_s3_secret_key"
 	settingBackupS3Region    = "backup_s3_region"
+
+	// Daemon log verbosity: "debug" | "info" | "warn" | "error". Rendered into
+	// nothing — the daemon reads it at startup AND applies it live when the
+	// console saves the cluster settings (runtime re-level via logger.SetLevel).
+	settingLogLevel = "log_level"
 )
 
 // Setting* accessors expose the persisted settings keys for CLI surfaces
@@ -109,6 +114,7 @@ func SettingBackupS3Bucket() string         { return settingBackupS3Bucket }
 func SettingBackupS3AccessKey() string      { return settingBackupS3AccessKey }
 func SettingBackupS3SecretKey() string      { return settingBackupS3SecretKey }
 func SettingBackupS3Region() string         { return settingBackupS3Region }
+func SettingLogLevel() string               { return settingLogLevel }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {

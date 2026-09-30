@@ -124,6 +124,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
+	// The persisted log_level cluster setting overrides the config-file
+	// default, so a console change survives daemon restarts. Invalid values
+	// are ignored here (a bad setting only surfaces at save time).
+	if lvl := st.GetSettingDefault(cmd.Context(), cluster.SettingLogLevel(), ""); lvl != "" {
+		_ = logger.SetLevel(lvl)
+	}
+
 	if err := replayRegistryLogins(cmd.Context(), st, cfg, log); err != nil {
 		log.Warn().Err(err).Msg("registry re-login had issues; private images may fail to pull")
 	}
@@ -146,10 +153,14 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		DeployService: deploySvc,
 		Cipher:        cipher,
 		Backups:       &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: backups.DefaultArchiveDir, RetentionDays: cluster.LoadBackupRetentionDays(cmd.Context(), st)},
-		Settings:      settings.NewLocal(st),
-		Usage:         usage.NewLocal(st),
-		HostCerts:     &certs.HTTP{Svc: tlsSvc},
-		SiteCert:      &certs.HTTP{Svc: tlsSvc},
+		Settings: func() *settings.Local {
+			l := settings.NewLocal(st)
+			l.ApplyLogLevel = logger.SetLevel
+			return l
+		}(),
+		Usage:     usage.NewLocal(st),
+		HostCerts: &certs.HTTP{Svc: tlsSvc},
+		SiteCert:  &certs.HTTP{Svc: tlsSvc},
 		Update: &server.UpdateService{
 			Update: func(ctx context.Context) (*cluster.UpdateResult, error) {
 				if cipher == nil {

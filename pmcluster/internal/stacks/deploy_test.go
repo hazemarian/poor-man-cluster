@@ -954,8 +954,9 @@ func TestDeploy_NoDepsUsesFullDeploy(t *testing.T) {
 }
 
 // TestDeploy_StructuredDebugLogs: the ordered-deploy report is emitted as
-// structured zerolog records at DEBUG level, carrying the per-level compose
-// YAML — and is filtered out entirely when the logger runs at info level.
+// structured zerolog records — the pipeline steps and service names at INFO
+// level (never the YAML bodies), plus the per-level compose YAML at DEBUG
+// level so info stays calm and debug carries everything.
 func TestDeploy_StructuredDebugLogs(t *testing.T) {
 	const manifest = `
 app: debug-app
@@ -1005,8 +1006,33 @@ services:
 			t.Errorf("debug log missing %q", want)
 		}
 	}
-	if infoBuf.Len() != 0 {
-		t.Errorf("info-level logger emitted %d bytes, want 0 — deploy report must be debug-only", infoBuf.Len())
+	if infoBuf.Len() == 0 {
+		t.Errorf("info-level logger emitted 0 bytes — the deploy pipeline must log its steps at info level")
+	}
+	inf := infoBuf.String()
+	for _, want := range []string{
+		"deploy — starting pipeline",
+		"deploy — manifest parsed",
+		"deploy stack — deploying depends_on level",
+		"deploy stack — waiting for level to become healthy",
+		"deploy stack — level healthy",
+		"deploy — completed",
+		`"stack":"debug-app"`, // app name attached to the completed record
+		"db",                  // service names in the info records
+		"migration",
+	} {
+		if !strings.Contains(inf, want) {
+			t.Errorf("info log missing %q", want)
+		}
+	}
+	for _, notWant := range []string{
+		"compose_yaml",
+		"postgres:14-alpine",
+		"driver_opts",
+	} {
+		if strings.Contains(inf, notWant) {
+			t.Errorf("info log must not contain %q (YAML stays debug-only)", notWant)
+		}
 	}
 }
 

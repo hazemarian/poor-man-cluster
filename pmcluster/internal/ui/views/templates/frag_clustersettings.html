@@ -141,6 +141,16 @@
           <input id="cs-oo-email" class="finput mono" type="text" name="oo_admin_email" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "oo_admin_email"}}">
           <span class="hint">{{T "clustersettings.oo_admin_email_hint"}}</span>
         </div>
+        <div class="field">
+          <label for="cs-log-level">{{T "clustersettings.log_level"}}</label>
+          <select id="cs-log-level" class="finput" name="log_level">
+            <option value="debug"{{if eq (index .Settings "log_level") "debug"}} selected{{end}}>debug</option>
+            <option value="info"{{if or (eq (index .Settings "log_level") "info") (eq (index .Settings "log_level") "")}} selected{{end}}>info</option>
+            <option value="warn"{{if eq (index .Settings "log_level") "warn"}} selected{{end}}>warn</option>
+            <option value="error"{{if eq (index .Settings "log_level") "error"}} selected{{end}}>error</option>
+          </select>
+          <span class="hint">{{T "clustersettings.log_level_hint"}}</span>
+        </div>
       </div>
     </div>
   </div>

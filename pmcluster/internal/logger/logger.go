@@ -111,6 +111,7 @@ func New(opts Options) (zerolog.Logger, io.Closer, error) {
 	}
 
 	level := parseLevel(opts.Level)
+	zerolog.SetGlobalLevel(level)
 	zerolog.TimeFieldFormat = time.RFC3339Nano
 
 	var writers []io.Writer
@@ -145,8 +146,26 @@ func New(opts Options) (zerolog.Logger, io.Closer, error) {
 	}
 
 	out := io.MultiWriter(writers...)
-	logger := zerolog.New(out).Level(level).With().Timestamp().Logger()
+	// Loggers are built at the minimum level and gated by the zerolog global
+	// level (SetGlobalLevel is the effective floor). That makes a runtime
+	// `SetLevel` re-level EVERY logger this package created — raising or
+	// lowering verbosity without a restart — because each event is filtered
+	// against GlobalLevel() at emit time (zerolog.should).
+	logger := zerolog.New(out).Level(zerolog.TraceLevel).With().Timestamp().Logger()
 	return logger, closer, nil
+}
+
+// SetLevel re-levels every logger created by this package at runtime. The
+// daemon exposes this through the console's cluster settings; it also applies
+// the process-global gate so deploy/audit/telemetry writers all follow.
+func SetLevel(level string) error {
+	switch strings.ToLower(level) {
+	case "debug", "info", "warn", "warning", "error":
+		zerolog.SetGlobalLevel(parseLevel(level))
+		return nil
+	default:
+		return fmt.Errorf("invalid log level %q (debug|info|warn|error)", level)
+	}
 }
 
 // Sweep deletes log files older than RetentionDays. Safe to call

@@ -11,6 +11,11 @@ import (
 // Local is the store-backed adapter for the settings port.
 type Local struct {
 	Store *store.Store
+
+	// ApplyLogLevel, when set, re-levels the running daemon's logger when a
+	// settings update changes log_level. Wired by the daemon composition root
+	// (logger.SetLevel); nil keeps the settings domain pure (persist-only).
+	ApplyLogLevel func(level string) error
 }
 
 // NewLocal builds the local settings adapter.
@@ -43,6 +48,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingBackupS3AccessKey(),
 	cluster.SettingBackupS3SecretKey(),
 	cluster.SettingBackupS3Region(),
+	cluster.SettingLogLevel(),
 }
 
 // Get returns the current value of every known setting ("" when unset).
@@ -73,6 +79,11 @@ func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 	for k, v := range values {
 		if err := l.Store.SetSetting(ctx, k, v); err != nil {
 			return nil, fmt.Errorf("set setting %s: %w", k, err)
+		}
+		if k == cluster.SettingLogLevel() && l.ApplyLogLevel != nil {
+			if err := l.ApplyLogLevel(v); err != nil {
+				return nil, fmt.Errorf("apply log level %q: %w", v, err)
+			}
 		}
 	}
 	return l.Get(ctx)

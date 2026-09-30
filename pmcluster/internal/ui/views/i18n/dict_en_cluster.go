@@ -110,6 +110,8 @@ func init() {
 		"clustersettings.traefik_admin_user_hint":  "User name for the edge's own dashboard, where it is exposed.",
 		"clustersettings.oo_admin_email":           "Admin email",
 		"clustersettings.oo_admin_email_hint":      "Address the daemon uses for its own notices.",
+		"clustersettings.log_level":                "Log level",
+		"clustersettings.log_level_hint":           "How much the daemon writes to its log file and OpenObserve. debug adds the full rendered compose per deploy level; info logs every deploy step with the service names.",
 		"clustersettings.save":                     "Save settings",
 		"clustersettings.foot":                     "Only the keys on this page can be edited from the console. Everything else is set in the daemon's environment or configuration file.",
 	})

@@ -158,6 +158,8 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		steps    []string
 	)
 
+	s.Log.Info().Str("source", p.File).Msg("deploy — starting pipeline")
+
 	wf.Add("Parsing manifest (DSL)", func(ctx context.Context) error {
 		parsed, err := manifest.Parse([]byte(p.Manifest))
 		if err != nil {
@@ -171,6 +173,7 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		}
 		stackName = parsed.Name
 		app = parsed
+		s.Log.Info().Str("stack", app.Name).Msg("deploy — manifest parsed")
 		return nil
 	})
 	wf.Add("Checking for app name conflicts", func(ctx context.Context) error {
@@ -263,6 +266,9 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		return nil, err
 	}
 
+	s.Log.Info().Str("stack", app.Name).Int64("revision", revision).
+		Strs("services", serviceNames(ir)).Msg("deploy — completed")
+
 	return &Result{
 		StackName:    app.Name,
 		Revision:     revision,
@@ -304,6 +310,8 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 				if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
 					// No drift: the stored manifest still renders to the
 					// already-deployed hash — nothing to apply.
+					s.Log.Info().Str("stack", stackName).Int64("revision", latest.Revision).
+						Msg("sync — no drift, rendered hash unchanged (nothing to apply)")
 					telemetry.RecordReconcile(ctx, stackName, telemetry.ReconcileInSync)
 					return &Result{
 						StackName:    stackName,
@@ -365,6 +373,8 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 	}
 
 	if len(levels) <= 1 {
+		s.Log.Info().Str("app", app.Name).Strs("services", serviceNames(ir)).
+			Msg("deploy stack — single level: full docker stack deploy (deploy + prune + force-update)")
 		s.Log.Debug().Str("app", app.Name).Strs("services", levels[0]).
 			Str("compose_yaml", string(rendered)).
 			Msg("deploy stack — single level: full docker stack deploy (deploy + prune + force-update)")
@@ -378,18 +388,26 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 			if err != nil {
 				return fmt.Errorf("render depends_on level %d: %w", i, err)
 			}
+			s.Log.Info().Str("app", app.Name).Int("level", i).Strs("services", level).
+				Msg("deploy stack — deploying depends_on level (per-service stack deploy, no prune)")
 			s.Log.Debug().Str("app", app.Name).Int("level", i).Strs("services", level).
 				Str("compose_yaml", string(levelYAML)).
 				Msg("deploy stack — per-service docker stack deploy (subset compose, no prune)")
 			if err := s.Deployer.DeployStackNoPrune(ctx, app.Name, levelYAML); err != nil {
 				return fmt.Errorf("docker stack deploy (depends_on level %d): %w", i, err)
 			}
+			s.Log.Info().Str("app", app.Name).Int("level", i).Strs("services", level).
+				Msg("deploy stack — waiting for level to become healthy")
 			s.Log.Debug().Str("app", app.Name).Int("level", i).Strs("services", level).
 				Msg("deploy stack — waiting for level to become healthy")
 			if err := s.waitLevelHealthy(ctx, app.Name, level); err != nil {
 				return err
 			}
+			s.Log.Info().Str("app", app.Name).Int("level", i).Strs("services", level).
+				Msg("deploy stack — level healthy")
 		}
+		s.Log.Info().Str("app", app.Name).Strs("services", serviceNames(ir)).
+			Msg("deploy stack — all levels healthy: one drift-prune pass with the full stack compose")
 		s.Log.Debug().Str("app", app.Name).
 			Str("compose_yaml", string(rendered)).
 			Msg("deploy stack — all levels healthy: one drift-prune pass with the full stack compose")
@@ -400,6 +418,16 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 
 	_ = s.Deployer.PruneStaleContainers(ctx, app.Name, "10m")
 	return nil
+}
+
+// serviceNames lists the stack's service names in manifest order, used for
+// the structured info-level deploy logs.
+func serviceNames(ir *manifest.IR) []string {
+	names := make([]string, 0, len(ir.Services))
+	for _, s := range ir.Services {
+		names = append(names, s.Name)
+	}
+	return names
 }
 
 // deployWaitTimeout and deployWaitInterval bound how long an ordered
@@ -667,6 +695,10 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 	if err := wf.Run(ctx); err != nil {
 		return nil, err
 	}
+
+	s.Log.Info().Str("stack", stackName).Int64("revision", revision).
+		Int64("rollback_of", sourceRevision).
+		Strs("services", serviceNames(ir)).Msg("rollback — completed")
 
 	return &Result{
 		StackName:    stackName,

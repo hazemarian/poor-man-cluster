@@ -4,6 +4,12 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.121 (2026-10-01)
+
+- **Deploy pipeline logs at `info`** — the whole deployment process is now visible at the default log level with the service names but without the aggressive per-level compose YAML: `deploy — starting pipeline`, `deploy — manifest parsed`, `deploy stack — deploying depends_on level`, `deploy stack — waiting for level to become healthy`, `deploy stack — level healthy`, `deploy stack — all levels healthy: one drift-prune pass`, `deploy — completed` (stack/revision/services), plus `rollback — completed` and the `sync — no drift` early-return. The full per-level `compose_yaml` stays `debug`-only.
+- **Runtime log-level setting** — new `log_level` cluster setting (debug/info/warn/error). Loggers are built at the minimum level and gated by the zerolog process-global level, so changing the setting applies **live** to the running daemon (console, daily log file, and the OpenObserve OTLP writer). The console's **Settings → Cluster settings** page gained a `Log level` select; the daemon also applies the persisted value at startup. Invalid values are rejected at save time.
+- Tests: info-vs-debug separation (YAML never leaks into info), settings log_level apply hook, UI select render + save.
+
 ## v0.2.120 (2026-10-01)
 
 - **Ordered-deploy visibility**: the deploy pipeline now emits structured zerolog diagnostics at `debug` level — one record per `depends_on` level with the level index, the service names, and the **full per-level subset compose YAML** (`compose_yaml`), plus single-level full-deploy and final drift-prune records. They reach the CLI console (`PMCLUSTER_LOG_LEVEL=debug pmcluster deploy …`), the daemon's daily log file, and OpenObserve through the existing OTel writer whenever `log_level=debug`; `info` and above stay clean. The earlier plain-text `▶ deploy …` markers are gone. Zero-value logger stays a no-op (tests unaffected).

@@ -99,6 +99,15 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
+	mux.HandleFunc("/api/cluster/settings", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusOK)
+			io.WriteString(w, `{"settings":{"domain":"example.com","log_level":"debug"}}`) //nolint:errcheck
+			return
+		}
+		io.WriteString(w, `{"settings":{"domain":"example.com","volume_root":"/var/stack/data","log_level":"debug"}}`) //nolint:errcheck
+	})
+
 	mux.HandleFunc("/api/secrets", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
@@ -1243,5 +1252,35 @@ func TestSSOBridge(t *testing.T) {
 		if !strings.Contains(b, want) {
 			t.Errorf("sso-bridge missing %q", want)
 		}
+	}
+}
+
+// TestClusterSettingsLogLevelSelect: the cluster settings form renders a
+// log_level select carrying the persisted value, and the save round-trips it
+// back to the daemon's PUT /api/cluster/settings.
+func TestClusterSettingsLogLevelSelect(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	jar := map[string]*http.Cookie{}
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
+
+	resp := doRequest(t, app, http.MethodGet, "/web/settings/cluster", "", jar)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /web/settings/cluster = %d, want 200", resp.StatusCode)
+	}
+	b := readBody(t, resp)
+	// fakeDaemon returns log_level=debug for GET — the select must show it.
+	for _, want := range []string{`name="log_level"`, `<option value="debug" selected>`, `<option value="info">`} {
+		if !strings.Contains(b, want) {
+			t.Errorf("cluster settings form missing %q", want)
+		}
+	}
+
+	// Saving the form sends log_level back to the daemon.
+	resp = doRequest(t, app, http.MethodPost, "/web/settings/cluster", "log_level=debug&domain=example.com&volume_root=/var/stack/data", jar)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /web/settings/cluster = %d, want 200", resp.StatusCode)
 	}
 }
