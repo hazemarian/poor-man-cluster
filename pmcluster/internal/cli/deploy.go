@@ -79,7 +79,7 @@ func openDeploySvc(cmd *cobra.Command) (*stacks.Service, *store.Store, func(), e
 		return nil, nil, nil, err
 	}
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
-	svc := &stacks.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st}, VolumeRoot: st.GetSettingDefault(context.Background(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(context.Background(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(context.Background(), cluster.SettingPlatformNode(), "")}
+	svc := &stacks.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st}, VolumeRoot: st.GetSettingDefault(context.Background(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(context.Background(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), Stdout: cmd.OutOrStdout()}
 	return svc, st, func() { _ = st.Close() }, nil
 }
 

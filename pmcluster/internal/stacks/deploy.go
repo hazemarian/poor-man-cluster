@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/workflow"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
+	"sigs.k8s.io/yaml"
 )
 
 // Instruments are lazily-initialised so importing this package never
@@ -368,6 +370,9 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 				return fmt.Errorf("render depends_on level %d: %w", i, err)
 			}
 			s.printf("▶ deploy %s: level %d [%s] — per-service docker stack deploy (subset compose, no prune)", app.Name, i, strings.Join(level, ", "))
+			if names, err := composeServiceNames(levelYAML); err == nil {
+				s.printf("  compose services: %s", strings.Join(names, ", "))
+			}
 			if err := s.Deployer.DeployStackNoPrune(ctx, app.Name, levelYAML); err != nil {
 				return fmt.Errorf("docker stack deploy (depends_on level %d): %w", i, err)
 			}
@@ -753,6 +758,24 @@ func (s *Service) printf(format string, args ...any) {
 		return
 	}
 	fmt.Fprintf(s.Stdout, format+"\n", args...)
+}
+
+// composeServiceNames returns the top-level `services:` keys of a rendered
+// compose file, used by the deploy report to prove each depends_on level's
+// subset compose declares only that level's services.
+func composeServiceNames(composeYAML []byte) ([]string, error) {
+	var doc struct {
+		Services map[string]any `json:"services"`
+	}
+	if err := yaml.Unmarshal(composeYAML, &doc); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(doc.Services))
+	for name := range doc.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func (s *Service) runPreDeployBackup(ctx context.Context, stackName string, revision int64) error {
