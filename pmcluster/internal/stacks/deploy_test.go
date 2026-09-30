@@ -1,6 +1,7 @@
 package stacks
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -947,6 +950,63 @@ func TestDeploy_NoDepsUsesFullDeploy(t *testing.T) {
 	}
 	if len(dep.noPruneCalls) != 0 || len(dep.pruned) != 0 {
 		t.Errorf("no-deps stack must not use the ordered path (noPrune=%d prune=%d)", len(dep.noPruneCalls), len(dep.pruned))
+	}
+}
+
+// TestDeploy_StructuredDebugLogs: the ordered-deploy report is emitted as
+// structured zerolog records at DEBUG level, carrying the per-level compose
+// YAML — and is filtered out entirely when the logger runs at info level.
+func TestDeploy_StructuredDebugLogs(t *testing.T) {
+	const manifest = `
+app: debug-app
+env: production
+domain: example.com
+services:
+  db:
+    image: postgres:14-alpine
+    volumes: [db_data:/var/lib/postgresql/data]
+  migration:
+    image: ghcr.io/acme/app:latest
+    command: [./migrate]
+    run_once: true
+    depends_on: [db]
+`
+
+	deploy := func(log zerolog.Logger) (string, error) {
+		s := openTestStore(t)
+		dep := &recordingDeployer{}
+		svc := newService(s, dep)
+		svc.Log = log
+		_, err := svc.Deploy(context.Background(), Payload{Manifest: manifest})
+		return "", err
+	}
+
+	var dbgBuf, infoBuf bytes.Buffer
+	dbgLog := zerolog.New(&dbgBuf).Level(zerolog.DebugLevel)
+	infoLog := zerolog.New(&infoBuf).Level(zerolog.InfoLevel)
+
+	if _, err := deploy(dbgLog); err != nil {
+		t.Fatalf("deploy (debug logger): %v", err)
+	}
+	if _, err := deploy(infoLog); err != nil {
+		t.Fatalf("deploy (info logger): %v", err)
+	}
+
+	out := dbgBuf.String()
+	for _, want := range []string{
+		"per-service docker stack deploy",
+		"waiting for level",
+		"one drift-prune pass",
+		"compose_yaml",       // the per-level + full compose YAML is logged
+		"postgres:14-alpine", // ... and its body is present
+		"depends_on",         // the subset compose keeps the depends_on list
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("debug log missing %q", want)
+		}
+	}
+	if infoBuf.Len() != 0 {
+		t.Errorf("info-level logger emitted %d bytes, want 0 — deploy report must be debug-only", infoBuf.Len())
 	}
 }
 

@@ -11,8 +11,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/rs/zerolog"
+
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -74,12 +77,21 @@ func init() {
 // openDeploySvc shares the boilerplate across the deploy/stack commands.
 // Caller MUST defer the returned closer.
 func openDeploySvc(cmd *cobra.Command) (*stacks.Service, *store.Store, func(), error) {
-	st, _, err := openStore()
+	st, cfg, err := openStore()
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// Local CLI deploys get a console logger honouring the configured
+	// log_level, so the ordered-level markers + per-level compose YAML are
+	// visible exactly when log_level=debug (and flow to OpenObserve via the
+	// logger's OTel writer). Errors here are non-fatal — a missing logger
+	// just means no structured deploy diagnostics.
+	log, _, logErr := logger.New(logger.Options{Console: true, Level: cfg.LogLevel, ConsoleOut: cmd.OutOrStdout()})
+	if logErr != nil {
+		log = zerolog.Nop()
+	}
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
-	svc := &stacks.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st}, VolumeRoot: st.GetSettingDefault(context.Background(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(context.Background(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), Stdout: cmd.OutOrStdout()}
+	svc := &stacks.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st}, VolumeRoot: st.GetSettingDefault(context.Background(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(context.Background(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), Stdout: cmd.OutOrStdout(), Log: log}
 	return svc, st, func() { _ = st.Close() }, nil
 }
 

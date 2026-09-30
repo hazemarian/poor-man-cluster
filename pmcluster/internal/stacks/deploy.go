@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +18,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/rs/zerolog"
+
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
@@ -27,7 +28,6 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/workflow"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
-	"sigs.k8s.io/yaml"
 )
 
 // Instruments are lazily-initialised so importing this package never
@@ -103,6 +103,13 @@ type Service struct {
 	// Stdout receives workflow step markers (▶ ...) for the deploy pipeline.
 	// Nil disables the output.
 	Stdout io.Writer
+	// Log is the structured (zerolog) logger for deploy diagnostics. The
+	// ordered-level markers and the per-level compose YAML are emitted at
+	// debug level, so they reach the console, the daily audit file and
+	// OpenObserve (via the logger's OTel writer) only when the configured
+	// log_level is "debug". The zero value disables structured deploy
+	// logging (tests, legacy callers).
+	Log zerolog.Logger
 }
 
 func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr error) {
@@ -358,7 +365,9 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 	}
 
 	if len(levels) <= 1 {
-		s.printf("▶ deploy %s: single level [%s] — full docker stack deploy (deploy + prune + force-update)", app.Name, strings.Join(levels[0], ", "))
+		s.Log.Debug().Str("app", app.Name).Strs("services", levels[0]).
+			Str("compose_yaml", string(rendered)).
+			Msg("deploy stack — single level: full docker stack deploy (deploy + prune + force-update)")
 		if err := s.Deployer.DeployStack(ctx, app.Name, rendered); err != nil {
 			return fmt.Errorf("docker stack deploy: %w", err)
 		}
@@ -369,19 +378,21 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 			if err != nil {
 				return fmt.Errorf("render depends_on level %d: %w", i, err)
 			}
-			s.printf("▶ deploy %s: level %d [%s] — per-service docker stack deploy (subset compose, no prune)", app.Name, i, strings.Join(level, ", "))
-			if names, err := composeServiceNames(levelYAML); err == nil {
-				s.printf("  compose services: %s", strings.Join(names, ", "))
-			}
+			s.Log.Debug().Str("app", app.Name).Int("level", i).Strs("services", level).
+				Str("compose_yaml", string(levelYAML)).
+				Msg("deploy stack — per-service docker stack deploy (subset compose, no prune)")
 			if err := s.Deployer.DeployStackNoPrune(ctx, app.Name, levelYAML); err != nil {
 				return fmt.Errorf("docker stack deploy (depends_on level %d): %w", i, err)
 			}
-			s.printf("▶ deploy %s: waiting for level %d [%s] to become healthy", app.Name, i, strings.Join(level, ", "))
+			s.Log.Debug().Str("app", app.Name).Int("level", i).Strs("services", level).
+				Msg("deploy stack — waiting for level to become healthy")
 			if err := s.waitLevelHealthy(ctx, app.Name, level); err != nil {
 				return err
 			}
 		}
-		s.printf("▶ deploy %s: all levels healthy — one drift-prune pass with the full stack compose", app.Name)
+		s.Log.Debug().Str("app", app.Name).
+			Str("compose_yaml", string(rendered)).
+			Msg("deploy stack — all levels healthy: one drift-prune pass with the full stack compose")
 		if err := s.Deployer.PruneStack(ctx, app.Name, rendered); err != nil {
 			return err
 		}
@@ -749,35 +760,8 @@ func (s *Service) Undeploy(ctx context.Context, stackName string) (retErr error)
 	return nil
 }
 
-// runPreDeployBackup records its outcome in the audit table.  Returns an
+// runPreDeployBackup records its outcome in the audit table. Returns an
 // error so callers can decide whether to abort the deploy.
-// printf streams a pipeline marker to s.Stdout when one is wired (CLI
-// deploys); nil Stdout (the daemon) discards it.
-func (s *Service) printf(format string, args ...any) {
-	if s.Stdout == nil {
-		return
-	}
-	fmt.Fprintf(s.Stdout, format+"\n", args...)
-}
-
-// composeServiceNames returns the top-level `services:` keys of a rendered
-// compose file, used by the deploy report to prove each depends_on level's
-// subset compose declares only that level's services.
-func composeServiceNames(composeYAML []byte) ([]string, error) {
-	var doc struct {
-		Services map[string]any `json:"services"`
-	}
-	if err := yaml.Unmarshal(composeYAML, &doc); err != nil {
-		return nil, err
-	}
-	names := make([]string, 0, len(doc.Services))
-	for name := range doc.Services {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names, nil
-}
-
 func (s *Service) runPreDeployBackup(ctx context.Context, stackName string, revision int64) error {
 	id, err := s.Store.CreateBackup(ctx, stackName, revision)
 	if err != nil {
