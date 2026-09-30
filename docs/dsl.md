@@ -82,9 +82,9 @@ services:
 |-------|---------|-------|
 | `image` | — | required; supports `${…}` substitution |
 | `replicas` | `1` | must be ≥ 0; ignored when `run_once` is true |
-| `run_once` | `false` | `true` → `restart_policy: condition: none`; for migrations/jobs |
+| `run_once` | `false` | `true` → one-shot job (`restart_policy: none`, or `on-failure` max 3 when `depends_on` is set); for migrations/jobs |
 | `skip_filelog` | `false` | excludes the service from the OTel log-tailing receiver (set when the app ships logs via OTLP itself) |
-| `placement` | (any) | `manager` → `node.role == manager`; `worker` → `node.role == worker`; **any other value → `node.hostname == <value>`** (pin a stateful service to one specific node so its volume-backed data never has to migrate) |
+| `placement` | (any) | `manager` → `node.role == manager`; `worker` → `node.role == worker`; **any other value → `node.hostname == <value>`** (pin a stateful service to one specific node so its volume-backed data never has to migrate); empty + a volume mount → auto-pinned to the platform node (`platform_node`) |
 | `command` | — | overrides the image's `CMD` |
 | `entrypoint` | — | overrides the image's `ENTRYPOINT` |
 | `env` | — | map of environment variables (values support substitution) |
@@ -92,7 +92,7 @@ services:
 | `secrets` | — | each must also be declared (or referenced) at the top level |
 | `expose` | — | presence triggers Traefik wiring + extra network membership |
 | `healthcheck` | — | shorthand or full form (see below) |
-| `update` | `1` / `10s` / `start-first` | Swarm rolling-update policy (skipped for `run_once`) |
+| `update` | `1` / `10s` / `start-first` | Swarm rolling-update policy (skipped for `run_once`); volume-holding services automatically use `stop-first` |
 
 ### Referencing DB-backed secrets & configs in `env`
 
@@ -188,6 +188,30 @@ update:
   order: start-first   # default; or stop-first
 ```
 
+Services that mount **volumes** are treated as stateful: pmcluster automatically uses `order: stop-first` (a start-first rollout races the old container's shutdown against the new start — e.g. old Postgres deletes the freshly written `postmaster.pid` and the replacement immediately shuts down) and, when `placement` is empty, pins them to the platform node (`platform_node` setting) so the volume-backed data never has to migrate. No manifest change needed.
+
+---
+
+### `depends_on`
+
+Optional list of services that must be running before this one starts (a `migration` before `db`, for example):
+
+```yaml
+migration:
+  image: ${registry}/app:${version}
+  command: ["./migrate"]
+  run_once: true
+  depends_on:
+    - db
+```
+
+**How it works on Swarm:** `docker stack deploy` parses `depends_on` and **ignores it** — the Swarm scheduler has no dependency graph, so every service is scheduled independently. The compose map/condition form (`db: {condition: service_healthy}`) is rejected outright ("must be a list"); only the list form is accepted. pmcluster therefore implements the wait at translation time:
+
+- A service with an explicit `command:` gets it wrapped in a POSIX wait loop — `until getent hosts <dep> && nc -z <dep> <port>; do sleep 2; done` for every dependency, then `exec "$@"` runs the real command.
+- A service with **no** `command:` gets its `entrypoint` wrapped the same way; the image's baked `CMD` flows through `$@`. (Exception: images whose runnable lives inside a *baked entrypoint* — e.g. Postgres's `docker-entrypoint.sh` — must declare an explicit `command:` so the wrapper lands in the right place.)
+- The wait probes the dependency's **port** when it is known: `expose.port` wins, otherwise a well-known image default (postgres `5432`, mysql/mariadb `3306`, redis `6379`, mongo `27017`, nginx/httpd `80`, rabbitmq `5672`, elasticsearch `9200`, memcached `11211`), otherwise DNS-only.
+- A `run_once` service with `depends_on` additionally gets `restart_policy: on-failure` with `max_attempts: 3`, so a transient failure retries instead of dying permanently.
+
 ---
 
 ## Variable substitution
@@ -224,8 +248,9 @@ You never write these by hand; pmcluster adds them:
 - **Volumes** — named volumes are auto-collected from service mounts (no top-level declaration) and declared with `driver: local` plus `driver_opts {type: none, o: bind, device: /var/stack/data/<app>/<name>}` so every volume — named or host bind — is forced under the volume root (default `/var/stack/data`, configurable via `volume_root` / `setup --volume-root`). Host binds are relocated to `<root>/<app>/<basename>`. See [`docs/storage-and-databases.md`](storage-and-databases.md).
 - **Labels** — `service`, `application`, `environment`, and `version` on every service.
 - **Traefik** (exposed services) — router/service names scoped `<app>-<service>`; `entrypoints=websecure`, `tls=true`, load-balancer port, `traefik.docker.network=traefik-net`, and the CORS middleware.
-- **Restart policy** — `on-failure` by default; `none` for `run_once`.
-- **Deploy** — `replicas`, `placement` constraints, and `update_config` defaults.
+- **Restart policy** — `on-failure` by default; `none` for `run_once` (a `run_once` service with `depends_on` gets `on-failure` with `max_attempts: 3`).
+- **Deploy** — `replicas`, `placement` constraints (stateful services auto-pin to the platform node when `placement` is empty), and `update_config` defaults (`stop-first` for volume-holding services).
+- **`depends_on` wait** — dependent services get a generated wait wrapper (see [`depends_on`](#depends_on)).
 - **`io.pmcluster.skip_filelog=true`** — when `skip_filelog: true`.
 
 The output is a `version: "3.9"` Compose file applied with `docker stack deploy`.

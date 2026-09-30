@@ -4,6 +4,33 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.112 (2026-09-30)
+
+- Port-aware `depends_on` wait — the generated wait probe now connects to the dependency's service port (`nc -z`), not just its DNS name. Port resolution: `expose.port` wins, otherwise a well-known image default (postgres 5432, mysql/mariadb 3306, redis 6379, mongo 27017, nginx/httpd 80, rabbitmq 5672, elasticsearch 9200, memcached 11211), otherwise DNS-only.
+- Wait scripts are `$`-escaped (`$$`) so `docker stack deploy` interpolation leaves them intact (the unescaped form broke the compose).
+
+## v0.2.111 (2026-09-30)
+
+- `depends_on` entrypoint wrap — services without an explicit `command:` get their ENTRYPOINT wrapped with the wait loop instead; the image's baked `CMD` flows through `$@`. Images whose runnable lives inside a baked entrypoint (e.g. Postgres) should declare an explicit `command:`.
+
+## v0.2.110 (2026-09-30)
+
+Five post-mortem hardening points:
+
+1. **`depends_on` → real Swarm wait** — `docker stack deploy` ignores `depends_on`, so dependent services with an explicit command get a generated POSIX wait wrapper (`until getent hosts <dep> ...`), and `run_once` services with dependencies get `restart_policy: on-failure` (`max_attempts: 3`) instead of dying permanently.
+2. **Stateful-aware defaults** — services that mount volumes automatically get `update: order: stop-first` (kills the Postgres `postmaster.pid` shutdown race) and auto-pin to the platform node (`platform_node` setting) when `placement` is empty. No manifest change needed.
+3. **Registry auth + image freshness** — `pmcluster join` warns when no Docker registry credentials exist (missing `~/.docker/config.json` → stale cached images); the console shows `Image N days old` pills for stale local images.
+4. **Paused updates surfaced** — Swarm's `UpdateStatus.State=paused` and the failure message are exposed through the services API and shown in the console (paused pill + hint), so updates that stall are no longer silent.
+5. **Config/secret lifecycle** — `pmcluster secret edit` mirrors the new value to the Swarm secret (immutable secrets are removed and recreated); the inventory page shows which stacks reference each config/secret ("Referenced by").
+
+## v0.2.109.1 (2026-09-30)
+
+- Fix(ui): the stacks list no longer shows completed run-once jobs (e.g. a finished migration) as Degraded — completed jobs are excluded from the health totals.
+
+## v0.2.109 (2026-09-30)
+
+- Test coverage: CLI config/secret CRUD run-path tests (cli coverage 11.6% → 19.7%); pmapi client tests against a fake daemon (0% → 75.9%).
+
 ## v0.2.84 (2026-09-25)
 
 - `pmcluster join --role worker|manager --token <token> --manager <host>:2377` — verify the

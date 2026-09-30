@@ -9,7 +9,7 @@ The control plane is a single static Go 1.25 binary (`pmcluster`, ~25 MB, no cgo
 In front of it sits **`pmcluster-edge`** — a small Go service deployed as a Swarm service that publishes `pmcluster.<domain>` as the single public origin for the **operator console** (a web UI for API keys, TLS, webhooks, stacks, and more), the REST API, and webhook receivers — all shielded by per-IP rate limiting, a connection shield, and automatic IP blocklisting.
 
 - **Design + trade-offs:** [RFC v2 — issue #1](https://github.com/hazemarian/poor-man-cluster/issues/1) (what actually shipped)
-- **Current release:** [v0.2.84](https://github.com/hazemarian/poor-man-cluster/releases)
+- **Current release:** [v0.2.112](https://github.com/hazemarian/poor-man-cluster/releases)
 
 ---
 
@@ -174,7 +174,7 @@ One-line install (latest release):
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | bash
 ```
 
-The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-cluster/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.84`).
+The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-cluster/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.112`).
 
 **With private registry credentials (GHCR, Docker Hub, etc.):**
 
@@ -372,7 +372,9 @@ services:                        # required — one or more services
   migration:
     image: ${registry}/${app}:${version}
     command: [./migrate]         # optional — override command (entrypoint also supported)
-    run_once: true               # optional → restart_policy: condition: none
+    run_once: true               # optional → one-shot job (restart: none)
+    depends_on:                  # optional — wait for these services before starting
+      - db                       #   pmcluster generates the wait (Swarm ignores depends_on)
 
   api:
     image: ${registry}/${app}:${version}
@@ -390,7 +392,11 @@ services:                        # required — one or more services
       order: start-first         #   start-first (default) | stop-first
 ```
 
-**Service fields:** `image` (required), `replicas`, `run_once`, `placement`, `command`, `entrypoint`, `env`, `volumes`, `secrets`, `expose`, `healthcheck`, `update`, `skip_filelog` (exclude the service from the OTel log-tailing receiver when the app ships logs via OTLP itself).
+**Service fields:** `image` (required), `replicas`, `run_once`, `placement`, `command`, `entrypoint`, `env`, `volumes`, `secrets`, `expose`, `healthcheck`, `update`, `depends_on`, `skip_filelog` (exclude the service from the OTel log-tailing receiver when the app ships logs via OTLP itself).
+
+**Stateful-aware defaults (no manifest change):** any service that mounts a **volume** is treated as stateful — it automatically gets `update: order: stop-first` (avoids the Postgres `postmaster.pid` shutdown race on redeploys) and, when `placement` is empty, is auto-pinned to the platform node (`platform_node` setting) so its data never has to migrate.
+
+**`depends_on` actually waits on Swarm:** `docker stack deploy` parses `depends_on` but ignores it (no dependency graph). pmcluster generates the wait instead — the dependent service's command or entrypoint is wrapped in a POSIX loop (`until getent hosts <dep> && nc -z <dep> <port>; do sleep 2; done`) that probes the dependency's DNS **and port** (port from `expose.port` or a well-known image default like postgres 5432, else DNS-only), then `exec`s the real command. `run_once` services with `depends_on` also get `restart_policy: on-failure` (max 3 retries).
 
 **Healthchecks:** `{ type: pg_isready }` (uses `$POSTGRES_USER`/`$POSTGRES_DB`) or `{ type: http, path: /health }` (defaults to `/`), or the full form (`test`, `interval`, `timeout`, `retries`).
 

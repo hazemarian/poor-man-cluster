@@ -137,8 +137,13 @@ Key commands (all in `internal/cli/`):
   operations that replace Portainer.
 - `stack list|show`, `rollback`, `logs`, `backup` (`create|list|browse|restore`),
   `node`, `registry`, `credentials`, `user`, `webhook` (`add|list|remove|deliveries`),
-  `tls`, `secret`, `config`, `cluster` (`settings|get|set`), `usage`,
+  `tls`, `secret` (`create|edit|list|show|verify|delete` — `edit` mirrors the
+  new value to the Swarm secret via `mirrorSwarmSecret`, immutable rm+recreate),
+  `config`, `cluster` (`settings|get|set`), `usage`,
   `serve`, `version`.
+- `join` (`join.go`) — swarm join + local state init + daemon unit; warns via
+  `verifyRegistryAuth` when the host has no `~/.docker/config.json` (stale
+  cached private images otherwise).
 - The `serve` command (`serve.go`) wires the daemon: opens store, docker
   client, deploy service, and calls `server.New` — **this is where new daemon
   dependencies are injected**.
@@ -367,6 +372,19 @@ array). Reference resolution goes through `internal/refs` (shared package).
 `TranslateWithResolver` takes an `EnvResolver` (the stacks engine wires a
 `StoreConfigResolver` from `internal/stacks/resolver.go`).
 
+**`compose_writer.go`** builds the Compose v3.9 from the IR. Notable
+behaviors: named volumes declared with bind `driver_opts` under the volume
+root; `depends_on` rendered as a plain list (stack deploy rejects the
+map/condition form); stateful-aware defaults — a service mounting volumes
+gets `update: order: stop-first` and auto-pins to `ComposeWriter.PinNode`
+(platform_node) when `placement` is empty; `depends_on` wait wrappers —
+`waitForDepsCommand`/`waitForDepsEntrypoint` generate a POSIX
+`until getent hosts <dep> && nc -z <dep> <port>; do sleep 2; done; exec "$@"`
+probe (port from `servicePort` in translate.go: `expose.port` wins, else a
+well-known image default from `knownPorts`, else DNS-only), `$`-escaped
+(`$$`) so stack-deploy interpolation leaves them intact; `run_once` with
+`depends_on` → `restart_policy on-failure max_attempts 3`.
+
 ### internal/stacks — the deploy engine (deploy + read side)
 `stacks.Service` = single engine behind CLI deploy, `/api/stacks`, and
 webhooks; it **implements `stacks.Deployer`** and runs its methods as
@@ -393,6 +411,10 @@ Whitelisted per-service operations (replacing Portainer). Port interfaces:
 `http.go` serves the REST surface under `/api/services` (list, per-stack list,
 tasks, logs, restart, exec). `remote.NewServices(rc)` for off-node access.
 No raw Docker passthrough — every operation is a fixed, code-reviewed SDK call.
+Each listed service also carries diagnostics: `ImageCreated` (unix seconds the
+local image was built; drives the console's stale-image pill), and
+`UpdateState`/`UpdateError` (Swarm `UpdateStatus.State/Message` — surfaces a
+paused rollout with the failing task's error in the console).
 
 ### internal/webhooks — webhook sources + HMAC receiver
 `Receiver{Sources webhooks.SourceReader, Deploy stacks.Deployer}` answers

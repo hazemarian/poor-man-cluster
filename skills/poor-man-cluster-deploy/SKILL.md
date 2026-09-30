@@ -276,7 +276,7 @@ env:
   ADMIN_ENABLED: config(my_app_config)      # stored config content
 ```
 
-- Secrets live **AES-256-GCM encrypted** in `data.db` (key `~/.pmcluster/.encryption_key`). The plaintext is shown **once** at creation; afterwards only the **sha256 hash** is shown. Values can be **revealed on demand** (with confirmation in the UI) and **edited** in place (`PUT /api/secrets/{name}`).
+- Secrets live **AES-256-GCM encrypted** in `data.db` (key `~/.pmcluster/.encryption_key`). The plaintext is shown **once** at creation; afterwards only the **sha256 hash** is shown. Values can be **revealed on demand** (with confirmation in the UI) and **edited** in place (`PUT /api/secrets/{name}`). `pmcluster secret edit <name> --value <v>` (or piped via stdin) updates the DB row **and mirrors the new value to the Docker Swarm secret** (Swarm secrets are immutable, so the old secret is removed and recreated — containers must be redeployed to mount the new value).
 - Configs keep a full **version history**; `rollback` restores an old value.
 - Both have `cluster` (platform) and `service` (app) scopes, plus an owning `stack` for service scope. Resolved at **deploy time** against the DB — rotate then re-deploy to pick up the new value.
 - Management:
@@ -510,6 +510,10 @@ pmcluster registry list                   # verify
 
 `pmcluster serve` auto-replays `docker login` for all persisted registries on startup, so worker nodes can pull private images even after a manager rebuild.
 
+**Registry auth on join:** `pmcluster join` warns when the host has no Docker registry credentials (`~/.docker/config.json` missing or empty) — without them, private images silently fall back to whatever stale cached copy exists. Authenticate before deploying private images: `docker login ghcr.io --username <user>` (a copy of the manager's config is sufficient).
+
+**Image freshness + paused updates in the console:** the services/stacks pages show a `⚠ Image N days old` pill when the node is running a stale cached image (registry auth missing is the usual cause), and an `Update paused` banner with the failing task's error when Swarm pauses a rollout — check the Tasks tab for the failing task.
+
 ## Pre-Deploy Backups
 
 Add `backup_before_deploy: true` to a manifest to trigger an offen volume snapshot before deployment. By default the deploy proceeds even if the backup fails (best-effort semantics).
@@ -557,11 +561,11 @@ The edge image is pinned to the release version tag — `ghcr.io/hazemarian/pmcl
 
 1. **Build + publish the release first** — push a `v*` tag; the release workflow cross-compiles the binaries and pushes the new edge image to GHCR:
    ```bash
-   git tag v0.2.84 && git push origin v0.2.84
+   git tag v0.2.112 && git push origin v0.2.112
    ```
 2. **Update the binary with install.sh** — it installs the new binary and, because `~/.pmcluster/config.yaml` exists, automatically runs `pmcluster cluster update`:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | VERSION=v0.2.84 bash
+   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | VERSION=v0.2.112 bash
    # or simply: | bash   (resolves latest release)
    ```
 3. `cluster update` **re-syncs the platform config templates** from the new binary's embedded copies into the store (the DB is the source of truth; operator edits are preserved), then re-renders. Because the edge-stack.yml content changed, the **edge stack is re-deployed** automatically and pulls the new version-pinned image. OTel/Traefik/cert are re-applied content-aware as usual. A second `cluster update` with no changes reports `No rendered content changed — nothing to redeploy.`
