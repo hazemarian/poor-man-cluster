@@ -56,9 +56,11 @@
       <a class="nav-item" href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
       <a class="nav-item" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-nav="backups">{{icon "backups"}}<span>{{T "nav.backups"}}</span></a>
 
-      {{if and (not .LoginDisabled) (eq .User.Role "admin")}}
+      {{if eq .User.Role "admin"}}
       <p class="nav-label" id="nav-access">{{T "nav.group.access"}}</p>
+      {{if not .LoginDisabled}}
       <a class="nav-item" href="/web/users" hx-get="/web/users" hx-target="#view" hx-push-url="true" data-nav="users">{{icon "users"}}<span>{{T "nav.users"}}</span></a>
+      {{end}}
       <a class="nav-item" href="/web/apikeys" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-nav="apikeys">{{icon "keys"}}<span>{{T "nav.apikeys"}}</span></a>
       {{end}}
 

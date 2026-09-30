@@ -1096,6 +1096,11 @@ func TestLoginDisabled_PassThrough(t *testing.T) {
 		// Users CRUD link is hidden in login-disabled mode (Traefik gates /web).
 		t.Errorf("login-disabled shell must hide the Users link")
 	}
+	// API Keys is admin-owned but must stay reachable when login is disabled —
+	// the nav link must render for admins even without the login/setup surface.
+	if !strings.Contains(b, `href="/web/apikeys"`) {
+		t.Errorf("login-disabled shell must keep the API Keys nav link")
+	}
 
 	// Admin-only routes are reachable without login.
 	resp = doRequest(t, app, http.MethodGet, "/web/users", "", jar)
