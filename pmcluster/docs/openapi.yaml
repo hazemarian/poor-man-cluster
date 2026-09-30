@@ -10,6 +10,12 @@ info:
     (timestamp + body) with the source's shared secret. API users are minted with
     `pmcluster user create` or `POST /api/api_keys`; webhook sources with
     `pmcluster webhook add` or `POST /api/webhooks`.
+
+    A token may be scoped to a single application stack (`stack` on create, or
+    `pmcluster user create <name> --stack <stack>`). A stack-scoped token may
+    only reach that stack's `/api/stacks/...` and `/api/services/...` routes;
+    every other `/api` route answers `403 {"error":"token scoped to stack <x>"}`.
+    Tokens without a scope keep full access.
   version: "0.2.0"
 servers:
   - url: https://pmcluster.example.com
@@ -763,7 +769,9 @@ paths:
     post:
       summary: Create an API user (bearer token returned once)
       description: The bearer token is generated, hashed (argon2id) at rest, and
-        returned in the response body ONCE. It can never be read again.
+        returned in the response body ONCE. It can never be read again. Pass
+        `stack` to scope the token to one application stack; omit it for an
+        unscoped token with full access.
       operationId: createAPIKey
       security:
         - bearerAuth: []
@@ -777,6 +785,9 @@ paths:
               properties:
                 name:
                   type: string
+                stack:
+                  type: string
+                  description: Optional stack scope; empty/absent = unscoped.
       responses:
         "201":
           description: Created. `token` is returned once.
@@ -1805,6 +1816,9 @@ components:
         created_at:
           type: integer
           format: int64
+        stack:
+          type: string
+          description: Optional stack scope; "" means unscoped (full access).
     APIKeyCreated:
       type: object
       properties:
@@ -1813,6 +1827,9 @@ components:
           format: int64
         name:
           type: string
+        stack:
+          type: string
+          description: Stack scope that was requested ("" = unscoped).
         token:
           type: string
     Secret:

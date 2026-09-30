@@ -12,15 +12,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 )
 
 // Receiver is the HMAC-verified deploy webhook receiver.
@@ -36,40 +33,30 @@ import (
 // hex-decoded digest.  Requests older than 5 minutes are rejected.
 // The endpoint is unauthenticated (no Bearer token); the HMAC IS the auth.
 // CI systems can post freely as long as they hold the source's shared secret.
+//
+// A deploy that fails is retried (see retry.go: default 2 extra attempts,
+// 30s apart) before the response is written; the delivery row records how
+// many retries were spent — see MaxRetries/RetryDelay to tune or disable.
 type Receiver struct {
 	Sources SourceReader
 	Deploy  Deployer
 	// Record receives every delivery outcome. Optional (nil disables history)
 	// and best-effort: a recording failure must never change the response.
 	Record Recorder
+
+	// MaxRetries is how many extra deploy attempts a failed deploy earns
+	// before the receiver gives up. Zero means DefaultDeployRetries (2);
+	// a negative value disables retries entirely.
+	MaxRetries int
+	// RetryDelay is the pause between attempts. Zero means
+	// DefaultDeployRetryDelay (30s).
+	RetryDelay time.Duration
 }
 
 // Mount registers POST /webhook/{source}. Caller MUST place this outside
 // the Bearer-protected /api subtree — HMAC IS the auth.
 func (h *Receiver) Mount(r chi.Router) {
 	r.Post("/webhook/{source}", h.receive)
-}
-
-// instruments is lazily-built so importing this package doesn't bind to
-// the noop MeterProvider before telemetry.Init runs.
-var (
-	instrOnce       sync.Once
-	webhookRequests metric.Int64Counter
-)
-
-func webhookCounter() metric.Int64Counter {
-	instrOnce.Do(func() {
-		meter := otel.Meter("github.com/hazemarian/poor-man-cluster/pmcluster/internal/webhooks")
-		var err error
-		webhookRequests, err = meter.Int64Counter(
-			"pmcluster.webhook.requests.total",
-			metric.WithDescription("Webhook receiver outcomes. Status is one of accepted|unauthorized|bad_request|server_error — never per-failure-mode to preserve the 401 indistinguishability invariant."),
-		)
-		if err != nil {
-			webhookRequests, _ = otel.Meter("noop").Int64Counter("noop")
-		}
-	})
-	return webhookRequests
 }
 
 // SignatureHeader format: "sha256=<lowercase-hex>". Matches GitHub/GitLab
@@ -92,26 +79,34 @@ const MaxBodyBytes = 1 << 20
 //   - 401: any HMAC failure mode (missing/invalid sig, bad timestamp, unknown source).
 //     Same status for all so an attacker can't distinguish the cases.
 //   - 400: body too large, malformed JSON, or deploy validation failure.
-//   - 502: docker stack deploy returned an error.
+//   - 502: docker stack deploy returned an error after the retry budget
+//     (MaxRetries) was spent; the body carries the retry count.
 func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	source := chi.URLParam(r, "source")
 
+	// record emits the pmcluster.webhook.requests.total counter for this
+	// outcome (Q5 alerting metric). It fires on EVERY exit path — success
+	// and failure alike, history or not — and runs before the response is
+	// written so the counter never lags the observable outcome. Best-effort
+	// by contract: a metric problem must never change the response.
 	record := func(status string) {
-		webhookCounter().Add(r.Context(), 1,
-			metric.WithAttributes(
-				attribute.String("source", source),
-				attribute.String("status", status),
-			),
-		)
+		telemetry.RecordWebhookDelivery(r.Context(), source, status)
 	}
 
 	// recordDelivery persists one outcome to delivery history when a recorder
-	// is wired. Best-effort by contract — never fails the request.
-	recordDelivery := func(status string, p *stacks.Payload, deployErr error, res *stacks.Result) {
+	// is wired. Best-effort by contract — never fails the request. retries is
+	// how many extra deploy attempts were made before this outcome (always 0
+	// for outcomes decided before the deploy step).
+	//
+	// The history write runs on a context detached from the request: the
+	// retry phase can outlast the router's per-request timeout (see
+	// deployPhaseBudget), and a caller that hung up must not cost us the
+	// delivery row. Trace values are kept; only cancellation is dropped.
+	recordDelivery := func(status string, p *stacks.Payload, deployErr error, res *stacks.Result, retries int) {
 		if h.Record == nil {
 			return
 		}
-		d := &Delivery{Source: source, Status: status}
+		d := &Delivery{Source: source, Status: status, Retries: retries}
 		if p != nil {
 			d.StackName = p.AppName
 			d.RepoURL = p.RepoURL
@@ -124,36 +119,36 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 		if deployErr != nil {
 			d.Error = deployErr.Error()
 		}
-		_ = h.Record.Record(r.Context(), d)
+		_ = h.Record.Record(context.WithoutCancel(r.Context()), d)
 	}
 
 	if source == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "source required"})
 		record("bad_request")
-		recordDelivery("bad_request", nil, nil, nil)
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "source required"})
+		recordDelivery("bad_request", nil, nil, nil, 0)
 		return
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBodyBytes+1))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "read body: " + err.Error()})
 		record("bad_request")
-		recordDelivery("bad_request", nil, nil, nil)
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "read body: " + err.Error()})
+		recordDelivery("bad_request", nil, nil, nil, 0)
 		return
 	}
 	if len(body) > MaxBodyBytes {
-		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "body too large"})
 		record("bad_request")
-		recordDelivery("bad_request", nil, nil, nil)
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]any{"error": "body too large"})
+		recordDelivery("bad_request", nil, nil, nil, 0)
 		return
 	}
 
 	timestamp, tsErr := parseTimestamp(r.Header.Get(TimestampHeader))
 
 	if err := h.verifyHMAC(r.Context(), source, timestamp, body, r.Header.Get(SignatureHeader), tsErr); err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 		record("unauthorized")
-		recordDelivery("unauthorized", nil, nil, nil)
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+		recordDelivery("unauthorized", nil, nil, nil, 0)
 		return
 	}
 
@@ -161,9 +156,9 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 
 	var p stacks.Payload
 	if err := json.Unmarshal(body, &p); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
 		record("bad_request")
-		recordDelivery("bad_request", nil, nil, nil)
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
+		recordDelivery("bad_request", nil, nil, nil, 0)
 		return
 	}
 
@@ -172,26 +167,40 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	// its source (and the console cannot offer a git-backed sync later).
 	if p.RepoURL == "" || p.File == "" {
 		provErr := fmt.Errorf("deploy provenance required: 'repo_url' and 'file' must identify the source repository and manifest path")
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": provErr.Error()})
 		record("bad_request")
-		recordDelivery("bad_request", &p, provErr, nil)
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": provErr.Error()})
+		recordDelivery("bad_request", &p, provErr, nil, 0)
 		return
 	}
 
-	res, err := h.Deploy.Deploy(r.Context(), p)
+	// Transient deploy failures spend the retry budget (default: 2 extra
+	// attempts, 30s apart) before this request resolves; the attempt that
+	// finally decides the outcome — and how many retries were burned getting
+	// there — is what lands on the delivery row. The phase runs detached from
+	// the request deadline (which is shorter than the retry window) under its
+	// own budget; see deployPhaseBudget.
+	rr := h.retryer()
+	phaseCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(r.Context()),
+		deployPhaseBudget(rr.Attempts, rr.Delay),
+	)
+	defer cancel()
+
+	res, retries, err := rr.DeployWithRetries(phaseCtx, p)
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		record("server_error")
-		recordDelivery("server_error", &p, err, nil)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "retries": retries})
+		recordDelivery("server_error", &p, err, nil, retries)
 		return
 	}
 
+	record("accepted")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"stack":    res.StackName,
 		"revision": res.Revision,
+		"retries":  retries,
 	})
-	record("accepted")
-	recordDelivery("accepted", &p, nil, res)
+	recordDelivery("accepted", &p, nil, res, retries)
 }
 
 // parseTimestamp returns the unix-seconds value.  If the header is empty

@@ -1,12 +1,16 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 )
 
 // HTTP serves the whitelisted service-ops REST surface (Bearer-auth wrapped
@@ -18,6 +22,9 @@ import (
 //	GET  /api/services/{stack}/{service}/logs?tail=N
 //	POST /api/services/{stack}/{service}/restart
 //	POST /api/services/{stack}/{service}/exec  — body {argv:[...]}
+//
+// Both list endpoints also record the Q5 alerting gauges (paused swarm
+// updates, stale images) — see observe.
 type HTTP struct {
 	Svc Service
 }
@@ -38,6 +45,7 @@ func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+	observe(r.Context(), scopeAll, svcs)
 	writeJSON(w, http.StatusOK, map[string]any{"services": serviceJSONList(svcs)})
 }
 
@@ -48,7 +56,38 @@ func (h *HTTP) listStack(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
+	observe(r.Context(), stack, svcs)
 	writeJSON(w, http.StatusOK, map[string]any{"stack": stack, "services": serviceJSONList(svcs)})
+}
+
+// scopeAll labels the alerting gauges emitted by the unfiltered listing;
+// stack-scoped listings use the stack name instead.
+const scopeAll = "all"
+
+// observe records the Q5 alerting gauges for one services listing:
+// services with a paused swarm update (pmcluster.services.paused) and
+// services running an image older than telemetry.StaleImageAge
+// (pmcluster.services.stale_images). scope is "all" or one stack name.
+//
+// The listing is the daemon's natural observation surface: the console and
+// `pmcluster service list` both poll it, so the gauges track reality without
+// a dedicated reconcile loop. Emitted before the response is written so the
+// reading never lags the observable outcome.
+func observe(ctx context.Context, scope string, svcs []ServiceSummary) {
+	now := time.Now().Unix()
+	staleBefore := now - int64(telemetry.StaleImageAge.Seconds())
+	var paused, stale int
+	for _, s := range svcs {
+		if s.UpdateState == "paused" {
+			paused++
+		}
+		// ImageCreated == 0 means "not cached locally" (unknown age) —
+		// never counted as stale.
+		if s.ImageCreated > 0 && s.ImageCreated < staleBefore {
+			stale++
+		}
+	}
+	telemetry.RecordServiceSnapshot(ctx, scope, paused, stale)
 }
 
 func (h *HTTP) tasks(w http.ResponseWriter, r *http.Request) {

@@ -33,6 +33,7 @@ type apiKeyRow struct {
 	Name       string `json:"name"`
 	CreatedAt  int64  `json:"created_at"`
 	LastUsedAt int64  `json:"last_used_at"`
+	Stack      string `json:"stack"`
 }
 
 func (h *HTTP) list(res http.ResponseWriter, req *http.Request) {
@@ -50,6 +51,9 @@ func (h *HTTP) list(res http.ResponseWriter, req *http.Request) {
 
 type createAPIKeyRequest struct {
 	Name string `json:"name"`
+	// Stack optionally scopes the new token to a single application stack.
+	// Empty/absent means unscoped (full access), the historical default.
+	Stack string `json:"stack"`
 }
 
 func (h *HTTP) create(res http.ResponseWriter, req *http.Request) {
@@ -65,8 +69,9 @@ func (h *HTTP) create(res http.ResponseWriter, req *http.Request) {
 		writeErr(res, http.StatusBadRequest, "name is required")
 		return
 	}
+	stack := strings.TrimSpace(body.Stack)
 
-	id, token, err := h.Svc.Create(req.Context(), name)
+	id, token, err := h.Svc.Create(req.Context(), name, stack)
 	if err != nil {
 		if errors.Is(err, store.ErrUserExists) {
 			writeErr(res, http.StatusConflict, "user already exists: "+name)
@@ -76,7 +81,7 @@ func (h *HTTP) create(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	writeJSON(res, http.StatusCreated, map[string]any{"id": id, "name": name, "token": token})
+	writeJSON(res, http.StatusCreated, map[string]any{"id": id, "name": name, "stack": stack, "token": token})
 }
 
 // remove deletes an API user by id, revoking its bearer token immediately.

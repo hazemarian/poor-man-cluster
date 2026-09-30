@@ -69,7 +69,7 @@ make build         # → ./bin/pmcluster
 | `rollback <stack> <rev>` | Roll back to a previous revision |
 | `backup create/list/browse/restore` | On-demand backups; `browse <id>` lists archive files (TYPE/SIZE/PATH); `restore <id>` extracts to `dest_root/<stack>` |
 | `webhook add/list/remove/deliveries` | Manage HMAC webhook sources; `deliveries <source>` shows newest-first delivery history |
-| `user create/list/remove` | Manage operator users (v2 tokens `pmc_<token_id>_<secret>`) |
+| `user create/list/remove` | Manage operator users (v2 tokens `pmc_<token_id>_<secret>`); `user create <name> --stack <stack>` mints a token confined to that one stack (403 everywhere else) |
 | `credentials list/show/rotate` | Bootstrap + edge credentials (AES-GCM encrypted) |
 | `registry add/list/remove` | Private registry credentials (docker login) |
 | `tls hosts add/list/remove` | Per-host TLS certificates for customer domains |

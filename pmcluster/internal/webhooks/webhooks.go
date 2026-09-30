@@ -61,6 +61,9 @@ type Delivery struct {
 	RepoURL   string
 	File      string
 	Error     string
+	// Retries counts the extra deploy attempts the receiver made before
+	// recording this row (0 = the first attempt decided the outcome).
+	Retries   int
 	CreatedAt int64
 }
 

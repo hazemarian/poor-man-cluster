@@ -25,6 +25,11 @@ var userCreateCmd = &cobra.Command{
 and prints the plaintext token ONCE on stdout. Save the token; pmcluster does
 not store the plaintext.
 
+With --stack the token is scoped to that one stack: it may only drive that
+stack's deploy/sync/rollback/delete and service endpoints (list, tasks, logs,
+restart, exec); every other API route answers 403. Without --stack the token
+is unscoped and keeps full access.
+
 Note: this writes directly to ~/.pmcluster/data.db. SQLite WAL mode handles
 concurrent access with a running daemon, but if you suspect corruption you
 can stop pmcluster (e.g. brew services stop pmcluster on macOS), run this,
@@ -53,6 +58,7 @@ to the store; the guard is enforced by name).`,
 }
 
 func init() {
+	userCreateCmd.Flags().String("stack", "", "scope the token to a single stack (e.g. --stack demo); empty = unscoped, full access")
 	userCmd.AddCommand(userCreateCmd, userListCmd, userRemoveCmd)
 	rootCmd.AddCommand(userCmd)
 }
@@ -62,6 +68,8 @@ func runUserCreate(cmd *cobra.Command, args []string) error {
 	if name == "" {
 		return errors.New("name cannot be empty")
 	}
+	stack, _ := cmd.Flags().GetString("stack")
+	stack = strings.TrimSpace(stack)
 
 	svc, closeFn, err := backendAPIKeys(cmd)
 	if err != nil {
@@ -69,7 +77,7 @@ func runUserCreate(cmd *cobra.Command, args []string) error {
 	}
 	defer closeFn()
 
-	_, token, err := svc.Create(cmd.Context(), name)
+	_, token, err := svc.Create(cmd.Context(), name, stack)
 	if err != nil {
 		if errors.Is(err, store.ErrUserExists) {
 			return fmt.Errorf("user %q already exists", name)
@@ -78,20 +86,25 @@ func runUserCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	base := apiBaseURL(cmd)
+	scope := "unscoped — may operate on every stack"
+	if stack != "" {
+		scope = fmt.Sprintf("scoped to stack %q — 403 everywhere else", stack)
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), `
-✅ User %q created.
+✅ User %q created (%s).
 
 🔑 Bearer token (shown once — save it now):
 
    %s
 
    curl -H "Authorization: Bearer %s" %s/api/me
-`, name, token, token, base)
+`, name, scope, token, token, base)
 	return nil
 }
 
-// runUserList prints each API user's id/name/created without any token
-// material (tokens are hashed at rest and never returned on read).
+// runUserList prints each API user's id/name/scope/created without any token
+// material (tokens are hashed at rest and never returned on read). The STACK
+// column shows the per-token stack scope, "-" when the token is unscoped.
 func runUserList(cmd *cobra.Command, _ []string) error {
 	svc, closeFn, err := backendAPIKeys(cmd)
 	if err != nil {
@@ -112,9 +125,13 @@ func printUsers(cmd *cobra.Command, users []apikeys.APIKey) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tNAME\tCREATED")
+	fmt.Fprintln(w, "ID\tNAME\tSTACK\tCREATED")
 	for _, u := range users {
-		fmt.Fprintf(w, "%d\t%s\t%s\n", u.ID, u.Name, time.Unix(u.CreatedAt, 0).Format(time.RFC3339))
+		scope := u.Stack
+		if scope == "" {
+			scope = "-"
+		}
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\n", u.ID, u.Name, scope, time.Unix(u.CreatedAt, 0).Format(time.RFC3339))
 	}
 	return w.Flush()
 }

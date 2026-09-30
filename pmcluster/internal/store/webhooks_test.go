@@ -254,3 +254,51 @@ func TestRecordWebhookDelivery_RoundTrip(t *testing.T) {
 		t.Errorf("source-scoped query wrong: %+v", other)
 	}
 }
+
+// TestRecordWebhookDelivery_RetriesRoundTrip covers migration 0019 through
+// the store: a delivery recorded with Retries=2 reads back with retries=2,
+// while a delivery that never retried (the field left unset by older call
+// sites) reads back as 0.
+func TestRecordWebhookDelivery_RetriesRoundTrip(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	exhausted := &WebhookDelivery{
+		Source:  "github-prod",
+		Status:  "server_error",
+		Retries: 2,
+		Error:   "docker stack deploy failed: final attempt",
+	}
+	firstTry := &WebhookDelivery{
+		Source:    "github-prod",
+		Status:    "accepted",
+		StackName: "abbas",
+		Revision:  7,
+		// Retries deliberately unset → 0.
+	}
+
+	if err := s.RecordWebhookDelivery(ctx, exhausted); err != nil {
+		t.Fatalf("RecordWebhookDelivery (retried): %v", err)
+	}
+	if err := s.RecordWebhookDelivery(ctx, firstTry); err != nil {
+		t.Fatalf("RecordWebhookDelivery (first try): %v", err)
+	}
+
+	got, err := s.ListWebhookDeliveries(ctx, "github-prod", 0)
+	if err != nil {
+		t.Fatalf("ListWebhookDeliveries: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	// Newest first: the first-try row was inserted last (same second, higher id).
+	if got[0].Status != "accepted" || got[0].Retries != 0 {
+		t.Errorf("first-try delivery = %+v, want status accepted with retries 0", got[0])
+	}
+	if got[1].Status != "server_error" || got[1].Retries != 2 {
+		t.Errorf("retried delivery = %+v, want status server_error with retries 2", got[1])
+	}
+	if got[1].Error != "docker stack deploy failed: final attempt" {
+		t.Errorf("retried delivery error = %q, want the final error message", got[1].Error)
+	}
+}

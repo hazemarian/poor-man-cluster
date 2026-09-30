@@ -551,12 +551,16 @@ func TestRemoteWebhooksAndSettings(t *testing.T) {
 
 // TestRemoteAPIKeysAndStackSync covers apikeys Create/List and Deploy.Sync.
 func TestRemoteAPIKeysAndStackSync(t *testing.T) {
+	var lastStack string // stack field the daemon saw on the last create
 	srv, c := fakeDaemon(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/api_keys":
-			writeJSON(w, http.StatusCreated, map[string]any{"id": 5, "name": "ci", "token": "pmc_x_sec"})
+			var in map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			lastStack = in["stack"]
+			writeJSON(w, http.StatusCreated, map[string]any{"id": 5, "name": in["name"], "stack": lastStack, "token": "pmc_x_sec"})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/api_keys":
-			writeJSON(w, http.StatusOK, map[string]any{"keys": []map[string]any{{"id": 5, "name": "ci", "created_at": 11}}})
+			writeJSON(w, http.StatusOK, map[string]any{"keys": []map[string]any{{"id": 5, "name": "ci", "created_at": 11, "stack": "demo"}}})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/stacks/demo/sync":
 			writeJSON(w, http.StatusOK, map[string]any{"stack": "demo", "revision": 1789900000, "changed": true})
 		default:
@@ -567,13 +571,29 @@ func TestRemoteAPIKeysAndStackSync(t *testing.T) {
 	ctx := context.Background()
 	ak := NewAPIKeys(c)
 
-	id, token, err := ak.Create(ctx, "ci")
+	id, token, err := ak.Create(ctx, "ci", "demo")
 	if err != nil || id != 5 || token != "pmc_x_sec" {
 		t.Fatalf("APIKeys.Create = %d %q %v", id, token, err)
 	}
+	if lastStack != "demo" {
+		t.Errorf("POST /api/api_keys stack = %q, want demo", lastStack)
+	}
+
+	// Unscoped creates must omit the field entirely so older daemons (which
+	// reject unknown JSON keys) keep accepting them.
+	if _, _, err := ak.Create(ctx, "plain"); err != nil {
+		t.Fatalf("APIKeys.Create (unscoped): %v", err)
+	}
+	if lastStack != "" {
+		t.Errorf("unscoped create sent stack = %q, want the field omitted", lastStack)
+	}
+
 	keys, err := ak.List(ctx)
 	if err != nil || len(keys) != 1 || keys[0].ID != 5 {
 		t.Fatalf("APIKeys.List = %+v, %v", keys, err)
+	}
+	if keys[0].Stack != "demo" {
+		t.Errorf("APIKeys.List stack = %q, want demo", keys[0].Stack)
 	}
 
 	res, err := NewDeploy(c).Sync(ctx, "demo")

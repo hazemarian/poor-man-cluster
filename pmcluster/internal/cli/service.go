@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -139,13 +140,50 @@ func runServicePs(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// stateCellMaxError bounds the update-error text appended to a PAUSED
+// marker so one bad row cannot blow out the table width.
+const stateCellMaxError = 80
+
+// serviceStateCell renders the rolling-update state for one service row.
+//
+//	"paused"    → "PAUSED: <error>" (error truncated to 80 runes)
+//	"updating"  → "UPDATING"
+//	"completed" / "" → "-" (no update in flight — nothing to flag)
+//
+// The orchestrator's error message often spans lines; whitespace is
+// flattened so a multi-line reason cannot break the tabwriter columns.
+func serviceStateCell(s services.ServiceSummary) string {
+	switch s.UpdateState {
+	case "paused":
+		if s.UpdateError == "" {
+			return "PAUSED"
+		}
+		err := strings.NewReplacer("\n", " ", "\t", " ", "\r", " ").Replace(s.UpdateError)
+		return "PAUSED: " + truncateRunes(err, stateCellMaxError)
+	case "updating":
+		return "UPDATING"
+	default: // "completed", "" and any unknown value: no marker
+		return "-"
+	}
+}
+
+// truncateRunes shortens s to at most n runes, appending "…" when cut.
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
 func printServices(cmd *cobra.Command, list []services.ServiceSummary) {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSTACK\tREPLICAS\tIMAGE\tMODE\tUPDATED")
+	fmt.Fprintln(w, "NAME\tSTACK\tREPLICAS\tIMAGE\tMODE\tSTATE\tUPDATED")
 	for _, s := range list {
-		fmt.Fprintf(w, "%s\t%s\t%d/%d\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%d/%d\t%s\t%s\t%s\t%s\n",
 			s.Name, s.Stack, s.Replicas, s.Desired,
 			s.Image, s.Mode,
+			serviceStateCell(s),
 			time.Unix(s.Updated, 0).Format(time.RFC3339),
 		)
 	}

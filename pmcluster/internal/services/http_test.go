@@ -8,9 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 )
 
 // fakeService implements Service with canned data and error injection.
@@ -212,5 +216,114 @@ func TestHTTP_RestartAndExec(t *testing.T) {
 	rec, _ = doJSON(t, mux, "POST", "/services/ghost/x/restart", "")
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown restart code = %d, want 400", rec.Code)
+	}
+}
+
+// sampleRecorder captures metric emissions through telemetry.SetSink so the
+// Q5 alerting gauges can be asserted hermetically — no OTLP collector and no
+// global MeterProvider mutation. The sink is process-wide, so it is restored
+// on cleanup; tests using it must not call t.Parallel.
+type sampleRecorder struct {
+	mu      sync.Mutex
+	got     []telemetry.Sample
+	restore func()
+}
+
+func newSampleRecorder(t *testing.T) *sampleRecorder {
+	t.Helper()
+	r := &sampleRecorder{}
+	r.restore = telemetry.SetSink(func(s telemetry.Sample) {
+		labels := make(map[string]string, len(s.Labels))
+		for k, v := range s.Labels {
+			labels[k] = v
+		}
+		r.mu.Lock()
+		r.got = append(r.got, telemetry.Sample{Name: s.Name, Value: s.Value, Labels: labels})
+		r.mu.Unlock()
+	})
+	t.Cleanup(func() { r.restore() })
+	return r
+}
+
+// lastByScope collapses a series of gauge samples to the latest reading per
+// scope label (gauges carry the most recent observation).
+func (r *sampleRecorder) lastByScope(name string) map[string]int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[string]int64{}
+	for _, s := range r.got {
+		if s.Name == name {
+			out[s.Labels["scope"]] = s.Value
+		}
+	}
+	return out
+}
+
+// TestHTTP_ListEmitsServiceGauges is the Q5 alerting contract for the
+// services listing: each list call records how many services have a paused
+// swarm update (pmcluster.services.paused) and how many run an image older
+// than telemetry.StaleImageAge (pmcluster.services.stale_images), labelled
+// by scope ("all" or the stack name). The gauges are emitted before the
+// response is written, so they are observable once the client sees the body.
+func TestHTTP_ListEmitsServiceGauges(t *testing.T) {
+	now := time.Now().Unix()
+	hour := int64(time.Hour.Seconds())
+	svcs := []ServiceSummary{
+		// Paused update + 60-day-old image → both gauges count it.
+		{Name: "demo_web", Stack: "demo", Replicas: 1, Desired: 1, Image: "nginx",
+			UpdateState: "paused", UpdateError: "task failed", ImageCreated: now - 60*24*hour},
+		// Update in flight, fresh image → neither gauge counts it.
+		{Name: "demo_worker", Stack: "demo", Replicas: 1, Desired: 1, Image: "redis",
+			UpdateState: "updating", ImageCreated: now - 2*24*hour},
+		// Healthy, image age unknown (0 = not cached locally) → not stale.
+		{Name: "infra_traefik", Stack: "infra", Replicas: 1, Desired: 1, Image: "traefik",
+			ImageCreated: 0},
+	}
+	mux := newServicesMux(&fakeService{listFn: func(_ context.Context, stack string) ([]ServiceSummary, error) {
+		if stack == "" {
+			return svcs, nil
+		}
+		var filtered []ServiceSummary
+		for _, s := range svcs {
+			if s.Stack == stack {
+				filtered = append(filtered, s)
+			}
+		}
+		return filtered, nil
+	}})
+
+	rec := newSampleRecorder(t)
+
+	for _, path := range []string{"/services", "/services/demo", "/services/infra"} {
+		listRec, _ := doJSON(t, mux, "GET", path, "")
+		if listRec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, listRec.Code)
+		}
+	}
+
+	paused := rec.lastByScope(telemetry.MetricServicesPaused)
+	stale := rec.lastByScope(telemetry.MetricStaleImages)
+
+	wantPaused := map[string]int64{"all": 1, "demo": 1, "infra": 0}
+	wantStale := map[string]int64{"all": 1, "demo": 1, "infra": 0}
+	for scope, want := range wantPaused {
+		if got, ok := paused[scope]; !ok {
+			t.Errorf("%s: no %s sample for scope %q (got %v)", telemetry.MetricServicesPaused, telemetry.MetricServicesPaused, scope, paused)
+		} else if got != want {
+			t.Errorf("%s[scope=%s] = %d, want %d", telemetry.MetricServicesPaused, scope, got, want)
+		}
+	}
+	if len(paused) != len(wantPaused) {
+		t.Errorf("%s scopes = %v, want %v", telemetry.MetricServicesPaused, paused, wantPaused)
+	}
+	for scope, want := range wantStale {
+		if got, ok := stale[scope]; !ok {
+			t.Errorf("%s: no sample for scope %q (got %v)", telemetry.MetricStaleImages, scope, stale)
+		} else if got != want {
+			t.Errorf("%s[scope=%s] = %d, want %d", telemetry.MetricStaleImages, scope, got, want)
+		}
+	}
+	if len(stale) != len(wantStale) {
+		t.Errorf("%s scopes = %v, want %v", telemetry.MetricStaleImages, stale, wantStale)
 	}
 }

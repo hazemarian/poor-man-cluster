@@ -88,6 +88,7 @@ func (w *Local) Record(ctx context.Context, d *Delivery) error {
 		RepoURL:   d.RepoURL,
 		File:      d.File,
 		Error:     d.Error,
+		Retries:   d.Retries,
 	})
 }
 
@@ -108,6 +109,7 @@ func (w *Local) Deliveries(ctx context.Context, source string, limit int) ([]Del
 			RepoURL:   r.RepoURL,
 			File:      r.File,
 			Error:     r.Error,
+			Retries:   r.Retries,
 			CreatedAt: r.CreatedAt,
 		})
 	}

@@ -23,6 +23,9 @@ type APIKey struct {
 	Name       string
 	CreatedAt  int64
 	LastUsedAt int64
+	// Stack is the optional per-token stack scope: a non-empty value binds
+	// the token to that one application stack ("" = unscoped).
+	Stack string
 }
 
 // Service manages daemon API tokens (users). Tokens are shown once at
@@ -30,7 +33,12 @@ type APIKey struct {
 type Service interface {
 	// Create mints a pmc_<tokenID>_<secret> token, stores the token id plus
 	// an argon2id hash, and returns the plaintext token exactly once.
-	Create(ctx context.Context, name string) (id int64, token string, err error)
+	//
+	// stack optionally scopes the token to a single application stack: pass
+	// one non-empty value ("demo") for a stack-scoped token, or omit it (or
+	// pass "") for the default unscoped token. Only the first non-empty
+	// value is used.
+	Create(ctx context.Context, name string, stack ...string) (id int64, token string, err error)
 	// List returns all users without any token material.
 	List(ctx context.Context) ([]APIKey, error)
 	// Delete revokes a user by id. The 'edge' console user and the caller's

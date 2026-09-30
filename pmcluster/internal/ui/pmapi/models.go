@@ -189,12 +189,14 @@ type WebhookDelivery struct {
 }
 
 // APIKey is one API user row (no token material — the token is only returned
-// once at creation via APIKeyCreated).
+// once at creation via APIKeyCreated). Stack is the optional per-token scope:
+// non-empty means the token may only drive that one stack.
 type APIKey struct {
 	ID         int64  `json:"id"`
 	Name       string `json:"name"`
 	CreatedAt  int64  `json:"created_at"`
 	LastUsedAt int64  `json:"last_used_at"`
+	Stack      string `json:"stack"`
 }
 
 // APIKeyCreated is the POST /api/api_keys response — it carries the one-time
@@ -202,6 +204,7 @@ type APIKey struct {
 type APIKeyCreated struct {
 	ID    int64  `json:"id"`
 	Name  string `json:"name"`
+	Stack string `json:"stack"`
 	Token string `json:"token"`
 }
 

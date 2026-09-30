@@ -23,6 +23,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/workflow"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
@@ -271,9 +272,11 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 	revs, err := s.Store.ListRevisions(ctx, stackName, 1)
 	if err != nil {
+		telemetry.RecordReconcile(ctx, stackName, telemetry.ReconcileError)
 		return nil, fmt.Errorf("load latest revision: %w", err)
 	}
 	if len(revs) == 0 {
+		telemetry.RecordReconcile(ctx, stackName, telemetry.ReconcileError)
 		return nil, fmt.Errorf("stack %q has no revisions — deploy it first", stackName)
 	}
 	latest := revs[0]
@@ -290,6 +293,9 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 				var rendered []byte
 				rendered, err = manifest.TranslateIR(ctx, parsed, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode})
 				if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
+					// No drift: the stored manifest still renders to the
+					// already-deployed hash — nothing to apply.
+					telemetry.RecordReconcile(ctx, stackName, telemetry.ReconcileInSync)
 					return &Result{
 						StackName:    stackName,
 						Revision:     latest.Revision,
@@ -299,20 +305,30 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 			}
 		}
 	}
-	if err != nil {
-		// The stored manifest failed to re-translate (e.g. an operator edit
-		// removed a config the manifest references). Fall back to the normal
-		// deploy path so the pipeline surfaces the precise error.
-		return s.Deploy(ctx, Payload{
-			AppName:  stackName,
-			Manifest: latest.SourceYAML,
-		})
-	}
 
-	return s.Deploy(ctx, Payload{
+	// Either the rendered hash drifted from the deployed revision (config()
+	// or secrets() inputs changed) or re-translation failed outright (e.g.
+	// an operator edit removed a referenced config) — both fall back to the
+	// normal deploy path, which re-applies the stored source and surfaces
+	// the precise error. The reconcile outcome counter below records which.
+	return s.reconcileDeploy(ctx, stackName, latest.SourceYAML)
+}
+
+// reconcileDeploy applies one Sync's stored source through the normal deploy
+// pipeline and records the pmcluster.reconcile.total outcome
+// (applied|error), so OpenObserve can alert on a reconcile that keeps
+// failing. Exactly one sample per reconcileDeploy call.
+func (s *Service) reconcileDeploy(ctx context.Context, stackName, sourceYAML string) (*Result, error) {
+	res, err := s.Deploy(ctx, Payload{
 		AppName:  stackName,
-		Manifest: latest.SourceYAML,
+		Manifest: sourceYAML,
 	})
+	status := telemetry.ReconcileApplied
+	if err != nil {
+		status = telemetry.ReconcileError
+	}
+	telemetry.RecordReconcile(ctx, stackName, status)
+	return res, err
 }
 
 // payloadEnvelope is the persisted shape of payload_json since the pipeline

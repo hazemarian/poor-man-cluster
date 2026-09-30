@@ -119,16 +119,22 @@ type WebhookDelivery struct {
 	RepoURL   string
 	File      string
 	Error     string
+	// Retries is how many extra deploy attempts the receiver made before
+	// recording this row (0 = the first attempt decided the outcome).
+	// Rows written before migration 0019 read back as 0.
+	Retries   int
 	CreatedAt int64
 }
 
 // RecordWebhookDelivery persists one delivery outcome. Best-effort —
-// recording must never fail the webhook request itself.
+// recording must never fail the webhook request itself. Retries defaults
+// to 0 for callers that do not set it (every outcome other than a retried
+// deploy).
 func (s *Store) RecordWebhookDelivery(ctx context.Context, d *WebhookDelivery) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO webhook_deliveries (source, status, stack_name, revision, repo_url, file, error, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.Source, d.Status, d.StackName, d.Revision, d.RepoURL, d.File, d.Error, time.Now().Unix(),
+		`INSERT INTO webhook_deliveries (source, status, stack_name, revision, repo_url, file, error, retries, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.Source, d.Status, d.StackName, d.Revision, d.RepoURL, d.File, d.Error, d.Retries, time.Now().Unix(),
 	)
 	if err != nil {
 		return fmt.Errorf("insert webhook delivery: %w", err)
@@ -139,7 +145,7 @@ func (s *Store) RecordWebhookDelivery(ctx context.Context, d *WebhookDelivery) e
 // ListWebhookDeliveries returns the most recent deliveries for a source,
 // newest first, limited to `limit` rows (0 = no limit).
 func (s *Store) ListWebhookDeliveries(ctx context.Context, source string, limit int) ([]*WebhookDelivery, error) {
-	q := `SELECT id, source, status, stack_name, revision, repo_url, file, error, created_at
+	q := `SELECT id, source, status, stack_name, revision, repo_url, file, error, retries, created_at
 		  FROM webhook_deliveries WHERE source = ? ORDER BY created_at DESC, id DESC`
 	if limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", limit)
@@ -152,7 +158,7 @@ func (s *Store) ListWebhookDeliveries(ctx context.Context, source string, limit 
 	var out []*WebhookDelivery
 	for rows.Next() {
 		var d WebhookDelivery
-		if err := rows.Scan(&d.ID, &d.Source, &d.Status, &d.StackName, &d.Revision, &d.RepoURL, &d.File, &d.Error, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.Source, &d.Status, &d.StackName, &d.Revision, &d.RepoURL, &d.File, &d.Error, &d.Retries, &d.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan webhook delivery: %w", err)
 		}
 		out = append(out, &d)

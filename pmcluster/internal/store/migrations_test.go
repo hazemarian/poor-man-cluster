@@ -189,3 +189,55 @@ func TestApplyMigration_HappyPath(t *testing.T) {
 		t.Errorf("table test_table was not created: %v", err)
 	}
 }
+
+// TestMigration0019_WebhookDeliveryRetries pins migration 0019: the version
+// is recorded exactly once, webhook_deliveries gains a retries column that
+// defaults to 0 for rows written without naming it (legacy inserts), and the
+// column accepts a real retry count.
+func TestMigration0019_WebhookDeliveryRetries(t *testing.T) {
+	db := openRawDB(t)
+
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("runMigrations: %v", err)
+	}
+
+	var applied int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM schema_version WHERE version = '0019_webhook_delivery_retries'`,
+	).Scan(&applied); err != nil {
+		t.Fatalf("query schema_version: %v", err)
+	}
+	if applied != 1 {
+		t.Errorf("0019_webhook_delivery_retries recorded %d times, want 1", applied)
+	}
+
+	// A pre-0019-shaped insert (no retries column) must read back as 0.
+	if _, err := db.Exec(
+		`INSERT INTO webhook_deliveries (source, status, stack_name, created_at)
+		 VALUES ('legacy', 'accepted', 'abbas', 1)`,
+	); err != nil {
+		t.Fatalf("insert legacy delivery: %v", err)
+	}
+	var legacy int
+	if err := db.QueryRow(`SELECT retries FROM webhook_deliveries WHERE source = 'legacy'`).Scan(&legacy); err != nil {
+		t.Fatalf("query legacy retries: %v", err)
+	}
+	if legacy != 0 {
+		t.Errorf("legacy row retries = %d, want 0 (column default)", legacy)
+	}
+
+	// And the column carries a retry count for retried deliveries.
+	if _, err := db.Exec(
+		`INSERT INTO webhook_deliveries (source, status, error, retries, created_at)
+		 VALUES ('retried', 'server_error', 'docker stack deploy failed', 2, 2)`,
+	); err != nil {
+		t.Fatalf("insert retried delivery: %v", err)
+	}
+	var retried int
+	if err := db.QueryRow(`SELECT retries FROM webhook_deliveries WHERE source = 'retried'`).Scan(&retried); err != nil {
+		t.Fatalf("query retried retries: %v", err)
+	}
+	if retried != 2 {
+		t.Errorf("retried row retries = %d, want 2", retried)
+	}
+}

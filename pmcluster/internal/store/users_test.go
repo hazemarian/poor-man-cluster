@@ -23,8 +23,9 @@ func openTestStore(t *testing.T) *Store {
 }
 
 // createV2User generates a v2 token and inserts the user, returning the
-// full token string, the tokenID, and the secret.
-func createV2User(t *testing.T, s *Store, name string) (token, tokenID, secret string) {
+// full token string, the tokenID, and the secret. An optional stack scopes
+// the token to that one stack (omit for an unscoped token).
+func createV2User(t *testing.T, s *Store, name string, stack ...string) (token, tokenID, secret string) {
 	t.Helper()
 	var err error
 	token, err = auth.GenerateToken()
@@ -36,7 +37,7 @@ func createV2User(t *testing.T, s *Store, name string) (token, tokenID, secret s
 	if err != nil {
 		t.Fatalf("HashToken: %v", err)
 	}
-	if _, err := s.CreateUser(context.Background(), name, tokenID, h); err != nil {
+	if _, err := s.CreateUser(context.Background(), name, tokenID, h, stack...); err != nil {
 		t.Fatalf("CreateUser(%q): %v", name, err)
 	}
 	return

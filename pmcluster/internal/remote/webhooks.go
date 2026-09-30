@@ -70,6 +70,7 @@ type deliveryDTO struct {
 	RepoURL   string `json:"repo_url,omitempty"`
 	File      string `json:"file,omitempty"`
 	Error     string `json:"error,omitempty"`
+	Retries   int    `json:"retries"`
 	CreatedAt int64  `json:"created_at"`
 }
 
@@ -98,6 +99,7 @@ func (a *Webhooks) Deliveries(ctx context.Context, source string, limit int) ([]
 			RepoURL:   d.RepoURL,
 			File:      d.File,
 			Error:     d.Error,
+			Retries:   d.Retries,
 			CreatedAt: d.CreatedAt,
 		})
 	}

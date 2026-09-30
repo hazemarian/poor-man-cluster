@@ -105,7 +105,11 @@ type deliveryRow struct {
 	RepoURL   string `json:"repo_url,omitempty"`
 	File      string `json:"file,omitempty"`
 	Error     string `json:"error,omitempty"`
-	CreatedAt int64  `json:"created_at"`
+	// Retries is how many extra deploy attempts preceded this outcome
+	// (0 = the first attempt decided it). Always present so old and new
+	// rows are distinguishable by value, not by field presence.
+	Retries   int   `json:"retries"`
+	CreatedAt int64 `json:"created_at"`
 }
 
 // deliveries returns delivery history for a source (newest first).

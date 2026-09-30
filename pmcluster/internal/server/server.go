@@ -134,11 +134,19 @@ func New(d Deps) http.Handler {
 			Sources: d.WebhookSources,
 			Deploy:  d.DeployService,
 			Record:  rec,
+			// Q3: transient deploy failures are retried up to 2 extra
+			// times, 30s apart; the retry count lands on the delivery row.
+			MaxRetries: webhooks.DefaultDeployRetries,
+			RetryDelay: webhooks.DefaultDeployRetryDelay,
 		}).Mount(r)
 	}
 
 	r.Route("/api", func(r chi.Router) {
 		r.Use(auth.Bearer(d.Lookup))
+		// Per-stack token scoping: after the token resolves to a user,
+		// refuse everything outside that stack when the user's token is
+		// stack-scoped (no-op for unscoped tokens).
+		r.Use(stackScopeGuard)
 		r.Get("/me", api.Me)
 		if d.Docker != nil {
 			r.Get("/cluster/info", api.ClusterInfoHandler(d.Docker))

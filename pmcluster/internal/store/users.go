@@ -20,16 +20,21 @@ var ErrUserNotFound = errors.New("user not found")
 // public-index part (from auth.SplitToken); tokenHash is the argon2id
 // hash of the secret.
 //
+// stack optionally scopes the token to ONE application stack: pass a single
+// non-empty value ("demo") to mint a stack-scoped token, or omit it (or pass
+// "") for the default unscoped token that may operate on every stack. Only
+// the first non-empty value is used; extra values are ignored.
+//
 // For legacy users (tokenID empty) the row is inserted with a NULL
 // token_id and will fall back to the O(N) scan path in UserByToken.
-func (s *Store) CreateUser(ctx context.Context, name, tokenID, tokenHash string) (int64, error) {
+func (s *Store) CreateUser(ctx context.Context, name, tokenID, tokenHash string, stack ...string) (int64, error) {
 	var tid sql.NullString
 	if tokenID != "" {
 		tid = sql.NullString{String: tokenID, Valid: true}
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (name, token_id, token_hash, created_at) VALUES (?, ?, ?, ?)`,
-		name, tid, tokenHash, time.Now().Unix(),
+		`INSERT INTO users (name, token_id, token_hash, created_at, stack) VALUES (?, ?, ?, ?, ?)`,
+		name, tid, tokenHash, time.Now().Unix(), firstStack(stack),
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -40,6 +45,17 @@ func (s *Store) CreateUser(ctx context.Context, name, tokenID, tokenHash string)
 	return res.LastInsertId()
 }
 
+// firstStack resolves the optional variadic stack scope: the first
+// non-empty value wins, "" when no scope was supplied.
+func firstStack(stack []string) string {
+	for _, s := range stack {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 // UserRow is a lightweight non-secret user record for listing API keys in
 // the operator UI. It deliberately exposes no token material.
 type UserRow struct {
@@ -47,13 +63,15 @@ type UserRow struct {
 	Name       string
 	CreatedAt  int64
 	LastUsedAt int64
+	// Stack is the optional per-token stack scope ("" = unscoped).
+	Stack string
 }
 
-// ListUsers returns every user (id, name, created_at, last_used_at) ordered
-// by name, without any token/hash material.
+// ListUsers returns every user (id, name, created_at, last_used_at, stack)
+// ordered by name, without any token/hash material.
 func (s *Store) ListUsers(ctx context.Context) ([]UserRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, name, created_at, last_used_at FROM users ORDER BY name`)
+		`SELECT id, name, created_at, last_used_at, stack FROM users ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
@@ -61,7 +79,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]UserRow, error) {
 	var out []UserRow
 	for rows.Next() {
 		var u UserRow
-		if err := rows.Scan(&u.ID, &u.Name, &u.CreatedAt, &u.LastUsedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.CreatedAt, &u.LastUsedAt, &u.Stack); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		out = append(out, u)
@@ -108,15 +126,16 @@ func (s *Store) UserByToken(ctx context.Context, token string) (*auth.User, erro
 }
 
 // userByTokenID does a single-row lookup by the public token_id and
-// verifies the argon2id hash against the secret.
+// verifies the argon2id hash against the secret. The row's stack scope (if
+// any) is carried onto the returned user for the middleware to enforce.
 func (s *Store) userByTokenID(ctx context.Context, tokenID, secret string) (*auth.User, error) {
 	var (
 		u    auth.User
 		hash string
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, token_hash FROM users WHERE token_id = ?`, tokenID,
-	).Scan(&u.ID, &u.Name, &hash)
+		`SELECT id, name, stack, token_hash FROM users WHERE token_id = ?`, tokenID,
+	).Scan(&u.ID, &u.Name, &u.Stack, &hash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -138,7 +157,7 @@ func (s *Store) userByTokenID(ctx context.Context, tokenID, secret string) (*aut
 // with pre-v2 tokens.  It iterates ALL user rows and runs argon2id against
 // each until a match is found.
 func (s *Store) userByTokenLegacy(ctx context.Context, token string) (*auth.User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, token_hash FROM users`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, stack, token_hash FROM users`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
@@ -148,7 +167,7 @@ func (s *Store) userByTokenLegacy(ctx context.Context, token string) (*auth.User
 			u    auth.User
 			hash string
 		)
-		if err := rows.Scan(&u.ID, &u.Name, &hash); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.Stack, &hash); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		ok, err := auth.VerifyToken(token, hash)
@@ -169,8 +188,8 @@ func (s *Store) userByTokenLegacy(ctx context.Context, token string) (*auth.User
 // UserByID returns (nil, sql.ErrNoRows) when not found.
 func (s *Store) UserByID(ctx context.Context, id int64) (*auth.User, error) {
 	var u auth.User
-	err := s.db.QueryRowContext(ctx, `SELECT id, name FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Name)
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, stack FROM users WHERE id = ?`, id).
+		Scan(&u.ID, &u.Name, &u.Stack)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
@@ -184,8 +203,9 @@ func (s *Store) UserByID(ctx context.Context, id int64) (*auth.User, error) {
 // Returns ErrUserNotFound when no row matches.
 func (s *Store) UserByName(ctx context.Context, name string) (*UserRow, error) {
 	var u UserRow
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, created_at, last_used_at FROM users WHERE name = ?`, name).
-		Scan(&u.ID, &u.Name, &u.CreatedAt, &u.LastUsedAt)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, name, created_at, last_used_at, stack FROM users WHERE name = ?`, name).
+		Scan(&u.ID, &u.Name, &u.CreatedAt, &u.LastUsedAt, &u.Stack)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUserNotFound

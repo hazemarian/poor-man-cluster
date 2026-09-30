@@ -11,6 +11,10 @@ import (
 type User struct {
 	ID   int64
 	Name string
+	// Stack optionally scopes this token to a single application stack
+	// (from users.stack). Empty means unscoped: the token may operate on
+	// every stack, exactly as before per-stack scoping existed.
+	Stack string
 }
 
 type ctxKey struct{}

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -20,6 +23,53 @@ import (
 // nodeNameRe mirrors the manifest placement-pin validation: a Docker node
 // hostname or node ID — letters, digits, dots, dashes, underscores.
 var nodeNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
+
+// --- overridable dependencies for the registry-credential helpers ------------
+// (package vars, same pattern as hostOS/systemctlFn/writeUnitFn in daemon.go,
+// so tests can fake the network calls without a real ssh/docker).
+
+// dockerConfigPathFn resolves the local Docker config file. Overridable so
+// the credential helpers write into a temp dir under test.
+var dockerConfigPathFn = func() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".docker", "config.json"), nil
+}
+
+// sshRemoteCatFn reads a file from a remote host over ssh:
+//
+//	ssh root@<host> 'cat /root/.docker/config.json'
+//
+// (the ssh-cat form — no scp dependency, only ssh). Overridable so tests can
+// fake the manager's config without a network.
+var sshRemoteCatFn = func(ctx context.Context, host, remotePath string) ([]byte, error) {
+	c := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=accept-new",
+		"root@"+host, "cat "+remotePath)
+	out, err := c.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+// dockerPullFn runs 'docker pull <image>'. Overridable so tests never touch a
+// real Docker daemon.
+var dockerPullFn = func(ctx context.Context, image string) error {
+	return exec.CommandContext(ctx, "docker", "pull", image).Run()
+}
+
+// Timeouts for the best-effort registry helpers: a hung ssh or pull must not
+// stall the join forever.
+var (
+	registryCopyTimeout = 60 * time.Second
+	registryPullTimeout = 2 * time.Minute
+)
 
 var joinCmd = &cobra.Command{
 	Use:   "join",
@@ -36,9 +86,20 @@ The daemon runs leader-aware: on the Swarm leader it serves; on every other
 manager it stands by until Swarm elects it leader (failover). On a pure worker
 node the daemon stays in standby.
 
+Registry credentials (both optional, never fatal to the join):
+  --copy-registry-creds <host>   ssh-copies the manager's ~/.docker/config.json
+                                 onto this node (auths are MERGED into any
+                                 existing config, which is backed up to
+                                 config.json.bak) so private-registry image
+                                 pulls stay fresh instead of going stale.
+  --verify-registry-pull <image> runs a best-effort 'docker pull <image>' after
+                                 joining to prove private pulls work.
+
 Examples:
   pmcluster join --role worker  --token SWMTKN-1-... --manager 82.165.128.237:2377
   pmcluster join --role manager --token SWMTKN-1-... --manager 82.165.128.237:2377
+  pmcluster join --role worker --token SWMTKN-1-... --manager 82.165.128.237:2377 \
+    --copy-registry-creds 82.165.128.237 --verify-registry-pull ghcr.io/your-org/app:1
 
 After a successful join the local state is initialised (data dir, config,
 database migrations) and the systemd unit is installed + started.
@@ -53,6 +114,8 @@ func init() {
 	joinCmd.Flags().String("manager", "", "manager advertise address, e.g. 10.0.0.5:2377")
 	joinCmd.Flags().String("role", "worker", "role to join as: worker or manager (must match the token type)")
 	joinCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
+	joinCmd.Flags().String("copy-registry-creds", "", "ssh-host to copy the manager's ~/.docker/config.json from (e.g. 82.165.128.237) so private registry pulls stay fresh")
+	joinCmd.Flags().String("verify-registry-pull", "", "after joining, best-effort 'docker pull <image>' to prove private registry credentials work (e.g. ghcr.io/your-org/app:1)")
 	rootCmd.AddCommand(joinCmd)
 }
 
@@ -61,6 +124,8 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 	manager, _ := cmd.Flags().GetString("manager")
 	role, _ := cmd.Flags().GetString("role")
 	hostname, _ := cmd.Flags().GetString("hostname")
+	copyCredsFrom, _ := cmd.Flags().GetString("copy-registry-creds")
+	verifyPullImage, _ := cmd.Flags().GetString("verify-registry-pull")
 	switch role {
 	case "worker", "manager":
 	default:
@@ -115,6 +180,21 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 	// exists locally, and a private registry 401s any pull attempt). Surface
 	// the gap at join time instead of leaving it to bite a later deploy.
 	verifyRegistryAuth(cmd.OutOrStdout())
+
+	// Q2 — registry credentials on join: optionally bring the manager's
+	// Docker config over and prove a private pull works. Both steps are
+	// strictly best-effort: a registry problem must never fail the join
+	// (verifyRegistryAuth above already warns when nothing is configured).
+	if copyCredsFrom != "" {
+		if copyRegistryCreds(cmd.Context(), cmd.OutOrStdout(), copyCredsFrom) {
+			// Re-check now that the config was (re)written, so the operator
+			// sees the credentials are actually in place.
+			verifyRegistryAuth(cmd.OutOrStdout())
+		}
+	}
+	if verifyPullImage != "" {
+		verifyRegistryPull(cmd.Context(), cmd.OutOrStdout(), verifyPullImage)
+	}
 
 	// Install + start the daemon (systemd on Linux, hint otherwise).
 	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
@@ -174,11 +254,10 @@ func setNodeHostname(ctx context.Context, out io.Writer, hostname string) error 
 // Docker only pulls when the image is absent and private registries reject
 // anonymous pulls. Best-effort: only a warning, the join itself succeeds.
 func verifyRegistryAuth(out io.Writer) {
-	home, err := os.UserHomeDir()
+	cfgPath, err := dockerConfigPathFn()
 	if err != nil {
 		return
 	}
-	cfgPath := filepath.Join(home, ".docker", "config.json")
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
 		fmt.Fprintln(out, "⚠ no docker registry credentials found (no ~/.docker/config.json).")
@@ -197,6 +276,142 @@ func verifyRegistryAuth(out io.Writer) {
 		return
 	}
 	fmt.Fprintln(out, "✔ docker registry credentials present (private pulls will stay fresh).")
+}
+
+// copyRegistryCreds copies the manager's ~/.docker/config.json onto this node
+// with `ssh root@<host> 'cat /root/.docker/config.json'` and installs it as
+// the local Docker config. When a local config already exists its auths are
+// MERGED with the copied ones (copied entries win per-registry; every other
+// local key such as credsStore survives) and the previous file is kept as
+// config.json.bak, so nothing on the node is silently lost.
+//
+// Best-effort: every failure only warns and returns false — the join itself
+// always succeeds.
+func copyRegistryCreds(ctx context.Context, out io.Writer, host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	fmt.Fprintf(out, "→ copying registry credentials from %s (ssh root@%s:cat /root/.docker/config.json)\n", host, host)
+
+	ctx, cancel := context.WithTimeout(ctx, registryCopyTimeout)
+	defer cancel()
+	remote, err := sshRemoteCatFn(ctx, host, "/root/.docker/config.json")
+	if err != nil {
+		fmt.Fprintf(out, "⚠ could not copy registry credentials from %s (%v) — joining without them.\n", host, err)
+		return false
+	}
+	remote = bytes.TrimSpace(remote)
+	if len(remote) == 0 {
+		fmt.Fprintf(out, "⚠ %s has no /root/.docker/config.json (empty) — joining without credentials.\n", host)
+		return false
+	}
+	if !json.Valid(remote) {
+		fmt.Fprintf(out, "⚠ %s returned a non-JSON docker config — joining without credentials.\n", host)
+		return false
+	}
+
+	cfgPath, err := dockerConfigPathFn()
+	if err != nil {
+		fmt.Fprintf(out, "⚠ could not resolve ~/.docker/config.json (%v) — joining without credentials.\n", err)
+		return false
+	}
+
+	merged := remote
+	if existing, err := os.ReadFile(cfgPath); err == nil && len(bytes.TrimSpace(existing)) > 0 {
+		merged, err = mergeDockerConfigs(existing, remote)
+		if err != nil {
+			fmt.Fprintf(out, "⚠ could not merge registry credentials into the existing docker config (%v).\n", err)
+			return false
+		}
+		// Keep the previous file around so the copy is reversible.
+		bakPath := cfgPath + ".bak"
+		if err := os.WriteFile(bakPath, existing, 0o600); err != nil {
+			fmt.Fprintf(out, "⚠ could not back up the existing docker config to %s (%v).\n", bakPath, err)
+		} else {
+			fmt.Fprintf(out, "  previous ~/.docker/config.json backed up to %s\n", bakPath)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		fmt.Fprintf(out, "⚠ could not create %s (%v) — joining without credentials.\n", filepath.Dir(cfgPath), err)
+		return false
+	}
+	if err := os.WriteFile(cfgPath, merged, 0o600); err != nil {
+		fmt.Fprintf(out, "⚠ could not write %s (%v) — joining without credentials.\n", cfgPath, err)
+		return false
+	}
+	fmt.Fprintf(out, "✔ registry credentials copied from %s\n", host)
+	return true
+}
+
+// mergeDockerConfigs folds the copied (remote) Docker config into the existing
+// local one: the local file is the base — so its non-auth keys and any
+// registry auths it already holds survive — and the remote fields overlay it,
+// with the remote auths winning per-registry on collision. Unknown keys from
+// both files (credsStore, HttpHeaders, ...) are preserved verbatim.
+func mergeDockerConfigs(local, remote []byte) ([]byte, error) {
+	decode := func(data []byte) (map[string]json.RawMessage, error) {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(data, &m); err != nil {
+			return nil, err
+		}
+		return m, nil
+	}
+	remoteM, err := decode(remote)
+	if err != nil {
+		return nil, fmt.Errorf("invalid remote docker config: %w", err)
+	}
+	merged, err := decode(local)
+	if err != nil {
+		// An unreadable local config must not block the copy — the .bak still
+		// holds the original bytes.
+		merged = map[string]json.RawMessage{}
+	}
+
+	auths := map[string]json.RawMessage{}
+	if raw, ok := merged["auths"]; ok {
+		_ = json.Unmarshal(raw, &auths)
+	}
+	var remoteAuths map[string]json.RawMessage
+	if raw, ok := remoteM["auths"]; ok {
+		_ = json.Unmarshal(raw, &remoteAuths)
+	}
+	for host, cred := range remoteAuths {
+		auths[host] = cred
+	}
+	for key, val := range remoteM {
+		if key == "auths" {
+			continue
+		}
+		merged[key] = val
+	}
+	encoded, err := json.Marshal(auths)
+	if err != nil {
+		return nil, err
+	}
+	merged["auths"] = encoded
+	return json.MarshalIndent(merged, "", "  ")
+}
+
+// verifyRegistryPull proves private-registry pulls work on this node by
+// running 'docker pull <image>' after any credential copy. Best-effort: a
+// failure only warns ('registry pull failed — check credentials') — a pull
+// problem must never fail the join.
+func verifyRegistryPull(ctx context.Context, out io.Writer, image string) {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return
+	}
+	fmt.Fprintf(out, "→ docker pull %s (verifying registry credentials)\n", image)
+	ctx, cancel := context.WithTimeout(ctx, registryPullTimeout)
+	defer cancel()
+	if err := dockerPullFn(ctx, image); err != nil {
+		fmt.Fprintln(out, "⚠ registry pull failed — check credentials.")
+		fmt.Fprintf(out, "  docker pull %s: %v\n", image, err)
+		return
+	}
+	fmt.Fprintln(out, "✔ registry pull succeeded (private image pulls will stay fresh).")
 }
 
 // verifyJoinedRole checks the node's actual Swarm role after joining and

@@ -23,19 +23,20 @@ func NewLocal(st *store.Store) Service {
 
 // Create mints a pmc_<tokenID>_<secret> bearer token and stores only the
 // token id plus an argon2id hash of the secret. The plaintext token is
-// returned exactly once.
-func (a *Local) Create(ctx context.Context, name string) (int64, string, error) {
+// returned exactly once. An optional stack scope binds the token to a
+// single application stack.
+func (a *Local) Create(ctx context.Context, name string, stack ...string) (int64, string, error) {
 	token, _ := auth.GenerateToken()
 	tokenID, secret := auth.SplitToken(token)
 	hash, _ := auth.HashToken(secret)
-	id, err := a.Store.CreateUser(ctx, name, tokenID, hash)
+	id, err := a.Store.CreateUser(ctx, name, tokenID, hash, stack...)
 	if err != nil {
 		return 0, "", err
 	}
 	return id, token, nil
 }
 
-// List returns all daemon users (API keys).
+// List returns all daemon users (API keys), including their stack scope.
 func (a *Local) List(ctx context.Context) ([]APIKey, error) {
 	rows, err := a.Store.ListUsers(ctx)
 	if err != nil {
@@ -43,7 +44,7 @@ func (a *Local) List(ctx context.Context) ([]APIKey, error) {
 	}
 	keys := make([]APIKey, 0, len(rows))
 	for _, r := range rows {
-		keys = append(keys, APIKey{ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt, LastUsedAt: r.LastUsedAt})
+		keys = append(keys, APIKey{ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt, LastUsedAt: r.LastUsedAt, Stack: r.Stack})
 	}
 	return keys, nil
 }

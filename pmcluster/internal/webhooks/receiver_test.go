@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 )
 
 // recordingDeployer records every DeployStack call and can optionally inject
@@ -108,6 +110,9 @@ func buildHandler(t *testing.T, st *store.Store, c *credentials.Cipher, dep *rec
 		Sources: NewLocal(st, c),
 		Deploy:  deploySvc,
 		Record:  NewLocal(st, c),
+		// Q3 retry policy is on by default (2 extra attempts); shrink the
+		// 30s production delay so failing-deploy tests don't wait a minute.
+		RetryDelay: time.Millisecond,
 	}
 	r := chi.NewRouter()
 	h.Mount(r)
@@ -770,5 +775,144 @@ func TestWebhookConflictFromDifferentRepo(t *testing.T) {
 	}
 	if len(dep.deployed) != 1 {
 		t.Errorf("deployer calls = %d, want 1 (conflict never reached the swarm)", len(dep.deployed))
+	}
+}
+
+// sampleRecorder captures metric emissions through telemetry.SetSink so the
+// Q5 alerting metrics can be asserted hermetically — no OTLP collector and
+// no global MeterProvider mutation. The sink is process-wide, so it is
+// restored on cleanup; tests using it must not call t.Parallel.
+type sampleRecorder struct {
+	mu      sync.Mutex
+	got     []telemetry.Sample
+	restore func()
+}
+
+func newSampleRecorder(t *testing.T) *sampleRecorder {
+	t.Helper()
+	r := &sampleRecorder{}
+	r.restore = telemetry.SetSink(func(s telemetry.Sample) {
+		labels := make(map[string]string, len(s.Labels))
+		for k, v := range s.Labels {
+			labels[k] = v
+		}
+		r.mu.Lock()
+		r.got = append(r.got, telemetry.Sample{Name: s.Name, Value: s.Value, Labels: labels})
+		r.mu.Unlock()
+	})
+	t.Cleanup(func() { r.restore() })
+	return r
+}
+
+// find returns the captured samples with the given metric name.
+func (r *sampleRecorder) find(name string) []telemetry.Sample {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []telemetry.Sample
+	for _, s := range r.got {
+		if s.Name == name {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// TestHandlerEmitsDeliveryMetric is the Q5 alerting contract: every delivery
+// outcome bumps pmcluster.webhook.requests.total with {source, status} — one
+// of accepted|unauthorized|bad_request|server_error — so OpenObserve can
+// alert on webhook failures. The sink is installed before the POSTs, and the
+// receiver records before writing the response, so by the time the client
+// sees a status the sample is already captured.
+func TestHandlerEmitsDeliveryMetric(t *testing.T) {
+	const okSource = "github-prod"
+	const failSource = "github-failing"
+
+	rec := newSampleRecorder(t)
+
+	st, c, dep, secret := testDeps(t, okSource)
+	srv, _ := buildHandler(t, st, c, dep)
+
+	// A second receiver whose deploys always fail → server_error outcomes.
+	st2, c2, dep2, secret2 := testDeps(t, failSource)
+	dep2.deployErr = errors.New("docker stack deploy failed")
+	srv2, _ := buildHandler(t, st2, c2, dep2)
+
+	post := func(server *httptest.Server, source string, secret []byte, body []byte, signOK bool) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/webhook/"+source, bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		now := time.Now().Unix()
+		req.Header.Set("X-Pmcluster-Timestamp", strconv.FormatInt(now, 10))
+		sig := computeHMAC(secret, body, now)
+		if !signOK {
+			sig = "sha256=" + strings.Repeat("00", 32)
+		}
+		req.Header.Set("X-Pmcluster-Signature", sig)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		defer resp.Body.Close()
+		io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+
+	body := validPayload(t)
+
+	// 1. accepted — valid HMAC + provenance.
+	if code := post(srv, okSource, secret, body, true); code != http.StatusOK {
+		t.Fatalf("accepted POST = %d, want 200", code)
+	}
+	// 2. unauthorized — wrong digest.
+	if code := post(srv, okSource, secret, body, false); code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized POST = %d, want 401", code)
+	}
+	// 3. bad_request — valid HMAC, missing provenance.
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	delete(payload, "repo_url")
+	delete(payload, "file")
+	noProv, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if code := post(srv, okSource, secret, noProv, true); code != http.StatusBadRequest {
+		t.Fatalf("no-provenance POST = %d, want 400", code)
+	}
+	// 4. server_error — deploy fails downstream.
+	if code := post(srv2, failSource, secret2, body, true); code != http.StatusBadGateway {
+		t.Fatalf("failing deploy POST = %d, want 502", code)
+	}
+
+	got := rec.find(telemetry.MetricWebhookRequests)
+	if len(got) != 4 {
+		t.Fatalf("captured %d %s samples, want 4: %+v", len(got), telemetry.MetricWebhookRequests, got)
+	}
+	want := map[string]int{
+		okSource + "/accepted":       1,
+		okSource + "/unauthorized":   1,
+		okSource + "/bad_request":    1,
+		failSource + "/server_error": 1,
+	}
+	for _, s := range got {
+		if s.Value != 1 {
+			t.Errorf("sample value = %d, want 1 (%+v)", s.Value, s.Labels)
+		}
+		key := s.Labels["source"] + "/" + s.Labels["status"]
+		if want[key] == 0 {
+			t.Errorf("unexpected source/status label pair: %q (labels %v)", key, s.Labels)
+			continue
+		}
+		want[key]--
+	}
+	for key, left := range want {
+		if left != 0 {
+			t.Errorf("missing %s sample (%d left)", key, left)
+		}
 	}
 }
