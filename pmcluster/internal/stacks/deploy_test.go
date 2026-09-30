@@ -1007,3 +1007,146 @@ services:
 		t.Errorf("unknown-dep deploy must not reach the deployer (calls=%d noPrune=%d)", len(dep.calls), len(dep.noPruneCalls))
 	}
 }
+
+// waitFake is a test-local runtime.Client that only implements the surface
+// waitLevelHealthy uses (ServiceList + ServiceTasks); everything else embeds
+// the interface and panics if invoked.
+type waitFake struct {
+	runtime.Client
+	svcs  []runtime.Service
+	tasks map[string][]runtime.ServiceTask
+}
+
+func (f *waitFake) ServiceList(context.Context) ([]runtime.Service, error) { return f.svcs, nil }
+
+func (f *waitFake) ServiceTasks(_ context.Context, id string) ([]runtime.ServiceTask, error) {
+	return f.tasks[id], nil
+}
+
+func task(id, state string, started int64) runtime.ServiceTask {
+	return runtime.ServiceTask{TaskID: id, State: state, StartedAt: started}
+}
+
+// waitService wires a Service with a Docker client so waitLevelHealthy
+// actually polls, using tight timeouts for fast tests.
+func waitService(t *testing.T, f *waitFake) *Service {
+	t.Helper()
+	oldTimeout, oldInterval := deployWaitTimeout, deployWaitInterval
+	deployWaitTimeout, deployWaitInterval = 400*time.Millisecond, 40*time.Millisecond
+	t.Cleanup(func() {
+		deployWaitTimeout, deployWaitInterval = oldTimeout, oldInterval
+	})
+	return &Service{Docker: f, MkdirAll: func(string, os.FileMode) error { return nil }}
+}
+
+// TestWaitLevelHealthy_RunOnceRetrySucceeded: a run-once job that failed once
+// then succeeded on retry leaves [failed, complete] task records. The deploy
+// must treat it as READY (the newest terminal task wins), not abort.
+func TestWaitLevelHealthy_RunOnceRetrySucceeded(t *testing.T) {
+	f := &waitFake{
+		svcs: []runtime.Service{
+			{Name: "demo_migration", RunOnce: true, Desired: 1, Replicas: 0},
+		},
+		tasks: map[string][]runtime.ServiceTask{
+			"demo_migration": {task("t1", "failed", 100), task("t2", "complete", 200)},
+		},
+	}
+	svc := waitService(t, f)
+	if err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"}); err != nil {
+		t.Fatalf("waitLevelHealthy([failed, complete]) = %v, want ready (nil)", err)
+	}
+}
+
+// TestWaitLevelHealthy_RunOnceAllFailed: every attempt failed -> the deploy
+// stops with the task error.
+func TestWaitLevelHealthy_RunOnceAllFailed(t *testing.T) {
+	f := &waitFake{
+		svcs: []runtime.Service{
+			{Name: "demo_migration", RunOnce: true, Desired: 1, Replicas: 0},
+		},
+		tasks: map[string][]runtime.ServiceTask{
+			"demo_migration": {task("t1", "failed", 100), task("t2", "rejected", 200)},
+		},
+	}
+	svc := waitService(t, f)
+	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"})
+	if err == nil || !strings.Contains(err.Error(), "failed during ordered deploy") {
+		t.Fatalf("waitLevelHealthy(all failed) = %v, want a run-once failure error", err)
+	}
+}
+
+// TestWaitLevelHealthy_RunOnceActiveAttempt: an attempt is in flight
+// (running), even alongside an older complete record from a previous deploy —
+// keep waiting (timeout), never abort and never report ready early.
+func TestWaitLevelHealthy_RunOnceActiveAttempt(t *testing.T) {
+	f := &waitFake{
+		svcs: []runtime.Service{
+			{Name: "demo_migration", RunOnce: true, Desired: 1, Replicas: 0},
+		},
+		tasks: map[string][]runtime.ServiceTask{
+			"demo_migration": {task("t1", "complete", 100), task("t2", "running", 200)},
+		},
+	}
+	svc := waitService(t, f)
+	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"})
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("waitLevelHealthy(running attempt) = %v, want a timeout (still waiting)", err)
+	}
+}
+
+// TestWaitLevelHealthy_RunOnceShutdownWithoutComplete: the job was stopped
+// mid-flight and never completed — an error, not readiness.
+func TestWaitLevelHealthy_RunOnceShutdownWithoutComplete(t *testing.T) {
+	f := &waitFake{
+		svcs: []runtime.Service{
+			{Name: "demo_migration", RunOnce: true, Desired: 1, Replicas: 0},
+		},
+		tasks: map[string][]runtime.ServiceTask{
+			"demo_migration": {task("t1", "shutdown", 100)},
+		},
+	}
+	svc := waitService(t, f)
+	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"})
+	if err == nil || !strings.Contains(err.Error(), "did not complete") {
+		t.Fatalf("waitLevelHealthy(shutdown only) = %v, want a did-not-complete error", err)
+	}
+}
+
+// TestWaitLevelHealthy_MixedLevel: a level containing a long-running service
+// (db, converged 1/1) AND a run-once job (migration, retried then complete)
+// is ready only when BOTH conditions hold.
+func TestWaitLevelHealthy_MixedLevel(t *testing.T) {
+	f := &waitFake{
+		svcs: []runtime.Service{
+			{Name: "demo_db", Desired: 1, Replicas: 1},
+			{Name: "demo_migration", RunOnce: true, Desired: 1, Replicas: 0},
+		},
+		tasks: map[string][]runtime.ServiceTask{
+			"demo_migration": {task("t1", "failed", 100), task("t2", "complete", 200)},
+		},
+	}
+	svc := waitService(t, f)
+	if err := svc.waitLevelHealthy(context.Background(), "demo", []string{"db", "migration"}); err != nil {
+		t.Fatalf("waitLevelHealthy(db 1/1 + migration complete) = %v, want ready", err)
+	}
+}
+
+// TestWaitLevelHealthy_MixedLevelDBPending: same level but db has not
+// converged (0/1) — keep waiting until the timeout, even though the migration
+// is already complete.
+func TestWaitLevelHealthy_MixedLevelDBPending(t *testing.T) {
+	f := &waitFake{
+		svcs: []runtime.Service{
+			{Name: "demo_db", Desired: 1, Replicas: 0},
+			{Name: "demo_migration", RunOnce: true, Desired: 1, Replicas: 0},
+		},
+		tasks: map[string][]runtime.ServiceTask{
+			"demo_migration": {task("t1", "complete", 100)},
+		},
+	}
+	svc := waitService(t, f)
+	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"db", "migration"})
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("waitLevelHealthy(db 0/1) = %v, want a timeout (db not ready)", err)
+	}
+}

@@ -356,6 +356,7 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 	}
 
 	if len(levels) <= 1 {
+		s.printf("▶ deploy %s: single level [%s] — full docker stack deploy (deploy + prune + force-update)", app.Name, strings.Join(levels[0], ", "))
 		if err := s.Deployer.DeployStack(ctx, app.Name, rendered); err != nil {
 			return fmt.Errorf("docker stack deploy: %w", err)
 		}
@@ -366,13 +367,16 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 			if err != nil {
 				return fmt.Errorf("render depends_on level %d: %w", i, err)
 			}
+			s.printf("▶ deploy %s: level %d [%s] — per-service docker stack deploy (subset compose, no prune)", app.Name, i, strings.Join(level, ", "))
 			if err := s.Deployer.DeployStackNoPrune(ctx, app.Name, levelYAML); err != nil {
 				return fmt.Errorf("docker stack deploy (depends_on level %d): %w", i, err)
 			}
+			s.printf("▶ deploy %s: waiting for level %d [%s] to become healthy", app.Name, i, strings.Join(level, ", "))
 			if err := s.waitLevelHealthy(ctx, app.Name, level); err != nil {
 				return err
 			}
 		}
+		s.printf("▶ deploy %s: all levels healthy — one drift-prune pass with the full stack compose", app.Name)
 		if err := s.Deployer.PruneStack(ctx, app.Name, rendered); err != nil {
 			return err
 		}
@@ -455,9 +459,14 @@ func (s *Service) levelReady(ctx context.Context, stackName string, level []stri
 	return true, nil
 }
 
-// runOnceDone reports whether a one-shot job reached a terminal state:
-// completion means ready; a failed/rejected task with no running attempts
-// means the job failed and the deploy must stop with the task's error.
+// runOnceDone reports whether a one-shot job is done. The rule: any ACTIVE
+// task (running/new/pending/starting) means the job is (re)starting — keep
+// waiting, because a fresh attempt supersedes every earlier record. With no
+// active task, the NEWEST terminal task decides: "complete" = ready; a
+// failed/rejected task means the deploy must stop with the task's error; a
+// shutdown/removed task (stopped mid-flight, never completed) is also an
+// error. This ordering is why a retried job that eventually succeeded
+// ([failed, complete]) is READY, while a job that only ever failed is not.
 func (s *Service) runOnceDone(ctx context.Context, fullName string) (bool, error) {
 	tasks, err := s.Docker.ServiceTasks(ctx, fullName)
 	if err != nil {
@@ -466,26 +475,30 @@ func (s *Service) runOnceDone(ctx context.Context, fullName string) (bool, error
 	if len(tasks) == 0 {
 		return false, nil
 	}
-	var terminal, failed bool
 	for _, t := range tasks {
 		switch t.State {
-		case "complete":
-			terminal = true
-		case "failed", "rejected":
-			terminal, failed = true, true
-		case "shutdown", "removed":
-			terminal = true
-		default: // running / new / pending / starting
-			return false, nil
+		case "running", "new", "pending", "starting":
+			return false, nil // an attempt is in flight — never ready yet
 		}
 	}
-	if !terminal {
+	// No active task: the newest terminal attempt decides. StartedAt breaks
+	// ties by TaskID so the comparison is deterministic.
+	latest := tasks[0]
+	for _, t := range tasks[1:] {
+		if t.StartedAt > latest.StartedAt || (t.StartedAt == latest.StartedAt && t.TaskID > latest.TaskID) {
+			latest = t
+		}
+	}
+	switch latest.State {
+	case "complete":
+		return true, nil
+	case "failed", "rejected":
+		return false, fmt.Errorf("run-once job %s failed during ordered deploy", fullName)
+	case "shutdown", "removed":
+		return false, fmt.Errorf("run-once job %s did not complete (task state %s)", fullName, latest.State)
+	default:
 		return false, nil
 	}
-	if failed {
-		return false, fmt.Errorf("run-once job %s failed during ordered deploy", fullName)
-	}
-	return true, nil
 }
 
 // payloadEnvelope is the persisted shape of payload_json since the pipeline
@@ -733,6 +746,15 @@ func (s *Service) Undeploy(ctx context.Context, stackName string) (retErr error)
 
 // runPreDeployBackup records its outcome in the audit table.  Returns an
 // error so callers can decide whether to abort the deploy.
+// printf streams a pipeline marker to s.Stdout when one is wired (CLI
+// deploys); nil Stdout (the daemon) discards it.
+func (s *Service) printf(format string, args ...any) {
+	if s.Stdout == nil {
+		return
+	}
+	fmt.Fprintf(s.Stdout, format+"\n", args...)
+}
+
 func (s *Service) runPreDeployBackup(ctx context.Context, stackName string, revision int64) error {
 	id, err := s.Store.CreateBackup(ctx, stackName, revision)
 	if err != nil {
