@@ -55,6 +55,45 @@ func TestLocalUsageParsesRenderedCompose(t *testing.T) {
 	}
 }
 
+// TestLocalUsageFindsDslSourceRefs is the regression test for the reported
+// bug: app stacks whose config() refs are resolved into env CONTENT at
+// translation time have NO top-level configs: block in the rendered compose,
+// so the usage graph must also scan the source DSL manifest.
+func TestLocalUsageFindsDslSourceRefs(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+
+	if err := st.RecordDeploy(ctx, &store.StackRevision{
+		StackName:    "donation-campaign",
+		Revision:     1,
+		SourceYAML:   "app: donation-campaign\nservices:\n  api:\n    env:\n      JWT_SECRET: config(donation_campaign_jwt_secret)\n      R2_KEY: config(donation_campaign_r2_access_key_id)\n",
+		RenderedYAML: "services:\n  api:\n    environment:\n      JWT_SECRET: real-jwt-value\n      R2_KEY: real-key\nsecrets:\n  donation_campaign_db_password:\n    external: true\n",
+		RenderedHash: "h1",
+	}, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	l := NewLocal(st)
+	got, err := l.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(got.Configs["donation_campaign_jwt_secret"]) != 1 || got.Configs["donation_campaign_jwt_secret"][0] != "donation-campaign" {
+		t.Errorf("configs[donation_campaign_jwt_secret] = %v, want [donation-campaign]", got.Configs["donation_campaign_jwt_secret"])
+	}
+	if len(got.Configs["donation_campaign_r2_access_key_id"]) != 1 {
+		t.Errorf("configs[r2_access_key_id] = %v, want [donation-campaign]", got.Configs["donation_campaign_r2_access_key_id"])
+	}
+	if len(got.Secrets["donation_campaign_db_password"]) != 1 {
+		t.Errorf("secrets[donation_campaign_db_password] = %v, want [donation-campaign]", got.Secrets["donation_campaign_db_password"])
+	}
+}
+
 // TestParseComposeReferences covers malformed and empty renders.
 func TestParseComposeReferences(t *testing.T) {
 	cfg, sec := parseComposeReferences([]byte("not: [valid yaml"))

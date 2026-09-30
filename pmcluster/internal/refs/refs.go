@@ -69,3 +69,32 @@ func ReplaceRefs(ctx context.Context, text string, r RefResolver) (string, error
 	})
 	return out, err
 }
+
+// FindAll extracts every config(...)/secrets(...) reference from text in
+// source order. Duplicate names are dropped. Used by the usage graph to see
+// which configs and secrets a stack's DSL manifest references — the DSL
+// resolves config() into env content at translation time, so the rendered
+// compose no longer carries a top-level configs: block for app stacks.
+func FindAll(text string) (configs, secrets []string) {
+	seenC, seenS := map[string]bool{}, map[string]bool{}
+	for _, m := range inlineRefRe.FindAllString(text, -1) {
+		sub := inlineRefRe.FindStringSubmatch(m)
+		if len(sub) != 3 {
+			continue
+		}
+		name := strings.TrimSpace(sub[2])
+		switch sub[1] {
+		case "config":
+			if !seenC[name] {
+				seenC[name] = true
+				configs = append(configs, name)
+			}
+		case "secrets":
+			if !seenS[name] {
+				seenS[name] = true
+				secrets = append(secrets, name)
+			}
+		}
+	}
+	return configs, secrets
+}

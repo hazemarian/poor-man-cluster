@@ -6,6 +6,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/refs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -32,14 +33,23 @@ func (l *Local) Get(ctx context.Context) (*Usage, error) {
 		if err != nil {
 			continue // stack with no stored latest revision — skip
 		}
+		// The rendered compose carries real top-level secrets:/configs:
+		// blocks (platform stacks, and app secrets rendered external:true).
 		cfgNames, secNames := parseComposeReferences([]byte(rev.RenderedYAML))
-		for _, n := range cfgNames {
+		// The source DSL manifest is the authority for config()/secrets()
+		// references: config() is resolved into env CONTENT at translation
+		// time, so the rendered compose has no top-level configs: block for
+		// app stacks. Union both sources so every reference is visible.
+		srcCfg, srcSec := refs.FindAll(rev.SourceYAML)
+		cfgNames = append(cfgNames, srcCfg...)
+		secNames = append(secNames, srcSec...)
+		for _, n := range dedupe(cfgNames) {
 			if configs[n] == nil {
 				configs[n] = map[string]bool{}
 			}
 			configs[n][s.Name] = true
 		}
-		for _, n := range secNames {
+		for _, n := range dedupe(secNames) {
 			if secrets[n] == nil {
 				secrets[n] = map[string]bool{}
 			}
@@ -50,6 +60,19 @@ func (l *Local) Get(ctx context.Context) (*Usage, error) {
 		Configs: flatten(configs),
 		Secrets: flatten(secrets),
 	}, nil
+}
+
+// dedupe returns names in order, keeping only the first occurrence.
+func dedupe(names []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // parseComposeReferences extracts the names referenced by a rendered compose's
