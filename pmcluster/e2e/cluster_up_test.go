@@ -15,6 +15,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -544,13 +545,21 @@ func dockerConfigIDByPrefix(t *testing.T, ctx context.Context, prefix string) st
 }
 
 // dockerConfigData inspects a Docker config by name and returns its content.
-// `--format {{.Spec.Data}}` renders the Go-template value of the []byte field
-// as RAW bytes (the base64 encoding only appears in the JSON API
-// representation), so the output is already plaintext — no decoding needed.
+// Docker configs store their payload in Spec.Data, a []byte. Go templates
+// render a []byte as a base64 JSON string via {{json .Spec.Data}} (rendering
+// {{.Spec.Data}} directly would print the raw byte-array literal), so we
+// decode the base64 to recover the plaintext compose/config body.
 func dockerConfigData(t *testing.T, ctx context.Context, name string) string {
 	t.Helper()
-	out := mustDockerRun(t, ctx, "config", "inspect", "--format", "{{.Spec.Data}}", name)
-	return strings.TrimSpace(out)
+	out := mustDockerRun(t, ctx, "config", "inspect", "--format", "{{json .Spec.Data}}", name)
+	out = strings.TrimSpace(out)
+	out = strings.TrimPrefix(out, `"`)
+	out = strings.TrimSuffix(out, `"`)
+	dec, err := base64.StdEncoding.DecodeString(out)
+	if err != nil {
+		t.Fatalf("docker config %s: decode data: %v (raw=%q)", name, err, out)
+	}
+	return string(dec)
 }
 
 // mustDockerRun runs docker and fails the test if it errors.
