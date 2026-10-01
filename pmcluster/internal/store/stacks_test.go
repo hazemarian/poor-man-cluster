@@ -454,6 +454,73 @@ func TestSetStackLastError_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestRecordStackError_JSONHistory verifies the last_error column behaves as a
+// JSON outcome history: failures append newest-first, a success entry masks
+// older failures for the display while the history is retained, the column is
+// capped, and unknown stacks error out.
+func TestRecordStackError_JSONHistory(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if err := s.RecordDeploy(ctx, makeRevision("mystack", 1000, "source: yaml", "rendered: yaml"), "https://git/repo"); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+
+	// Two failures, newest first.
+	if _, err := s.RecordStackError(ctx, "mystack", 1000, "boom one"); err != nil {
+		t.Fatalf("RecordStackError: %v", err)
+	}
+	if _, err := s.RecordStackError(ctx, "mystack", 1001, "boom two"); err != nil {
+		t.Fatalf("RecordStackError: %v", err)
+	}
+	entries, err := s.ListStackErrors(ctx, "mystack", 0)
+	if err != nil {
+		t.Fatalf("ListStackErrors: %v", err)
+	}
+	if len(entries) != 2 || entries[0].Error != "boom two" || entries[1].Error != "boom one" {
+		t.Errorf("history = %+v, want newest-first [boom two, boom one]", entries)
+	}
+	if entries[0].Revision != 1001 || entries[1].Revision != 1000 {
+		t.Errorf("history revisions = %+v, want [1001, 1000]", entries)
+	}
+
+	// A success entry masks the display but retains the failures.
+	if _, err := s.RecordStackError(ctx, "mystack", 1002, ""); err != nil {
+		t.Fatalf("RecordStackError success: %v", err)
+	}
+	st, err := s.GetStack(ctx, "mystack")
+	if err != nil {
+		t.Fatalf("GetStack: %v", err)
+	}
+	all := ParseStackErrors(st.LastError)
+	if len(all) != 3 || all[0].Error != "" {
+		t.Errorf("history after success = %q, want success entry newest", st.LastError)
+	}
+	seen := 0
+	for _, e := range all {
+		if e.Error != "" {
+			seen++
+		}
+	}
+	if seen != 2 {
+		t.Errorf("history after success retained %d failures, want 2", seen)
+	}
+
+	// limit caps the returned slice.
+	capped, err := s.ListStackErrors(ctx, "mystack", 2)
+	if err != nil {
+		t.Fatalf("ListStackErrors limited: %v", err)
+	}
+	if len(capped) != 2 {
+		t.Errorf("limited history len = %d, want 2", len(capped))
+	}
+
+	// Unknown stack.
+	if _, err := s.RecordStackError(ctx, "ghost", 1, "x"); !errors.Is(err, ErrStackNotFound) {
+		t.Errorf("RecordStackError(ghost) = %v, want ErrStackNotFound", err)
+	}
+}
+
 // revisionsIDs is a debug helper that extracts revision IDs from a slice.
 func revisionsIDs(revs []*StackRevision) []int64 {
 	ids := make([]int64, len(revs))

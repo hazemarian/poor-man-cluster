@@ -283,10 +283,10 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 				if err := s.applyToSwarm(applyCtx, app, ir, rendered, revision); err != nil {
 					s.Log.Error().Err(err).Str("stack", app.Name).
 						Int64("revision", revision).Msg("deploy — background apply failed")
-					_ = s.Store.SetStackLastError(applyCtx, app.Name, err.Error())
+					_, _ = s.Store.RecordStackError(applyCtx, app.Name, revision, err.Error())
 					return
 				}
-				_ = s.Store.SetStackLastError(applyCtx, app.Name, "")
+				_, _ = s.Store.RecordStackError(applyCtx, app.Name, revision, "")
 			}()
 			return nil
 		}
@@ -303,12 +303,12 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 		// app can be nil when the manifest failed to parse — nothing was
 		// recorded, so there is no stack to annotate.
 		if app != nil {
-			_ = s.Store.SetStackLastError(ctx, app.Name, err.Error())
+			_, _ = s.Store.RecordStackError(ctx, app.Name, revision, err.Error())
 		}
 		return nil, err
 	}
 	if app != nil {
-		_ = s.Store.SetStackLastError(ctx, app.Name, "")
+		_, _ = s.Store.RecordStackError(ctx, app.Name, revision, "")
 	}
 
 	if async {

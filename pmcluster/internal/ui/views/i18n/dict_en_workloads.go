@@ -70,6 +70,7 @@ func init() {
 		"stack.services_unknown_body":  "The cluster API did not return this stack's services, so replica health is unknown rather than empty.",
 		"stack.deploy_failed":          "Deploy failed",
 		"stack.deploy_failed_hint":     "The last deployment did not finish cleanly. Check the deploy logs (log_level=debug shows each level's compose) and the service tasks, then deploy again.",
+		"stack.error_history":          "Deploy error history",
 
 		"stack.confirm_rollback": "Roll back {0} to revision {1}? The daemon redeploys that revision's manifest and records a new revision for it.",
 

@@ -4,9 +4,15 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
-## v0.2.122 (2026-10-01)
+## v0.2.124 (2026-10-01)
 
-- **Fire-and-forget deploys** (webhooks + API): `DeployAsync` validates, checks conflicts, and records the revision **synchronously**, then applies the swarm deploy (ordered `depends_on` levels + health waits) in a **background goroutine** detached from the request. The webhook receiver and the `POST /api/stacks` handler now return **202 Accepted** immediately — a slow stack (e.g. a cold postgres that needs minutes to become healthy) no longer holds the request open or hits the 30s router deadline. Validation errors still surface synchronously (400/502). Delivery rows record `accepted` with the new revision at acceptance; the background apply outcome is observable via the stack's services and the deploy logs/telemetry.
+- **Stack deploy error history (JSON)**: `stacks.last_error` now holds a JSON array of deploy/apply outcomes, newest first, capped at 20 (`store.StackErrorEntry{revision, error, created_at}`, `RecordStackError`/`ListStackErrors`, `ParseStackErrors`). Every deploy/apply outcome — success and failure, sync and fire-and-forget — is prepended; a success entry has an empty `error` so the "Deploy failed" banner clears while the failure history is retained. The console stack detail page gains a **Deploy error history** panel (per-revision entries with rev id + timestamp); the stacks list pill still shows the newest failure. `/api/stacks` `last_error` is now an array. No new table (the v0.2.123 column is reused as the JSON store).
+
+## v0.2.123 (2026-10-01)
+
+- **Failed background deploys surface in the console**: new `stacks.last_error` column (migration 0021) records the most recent deploy/apply error and is cleared on the next successful apply. Set on both sync and fire-and-forget (webhook/API) failure paths, exposed through the daemon API → remote CLI → console as a red detail-page banner and a "Deploy failed" pill on the stacks list.
+
+## v0.2.122 (2026-10-01)
 - `stacks.Deployer` gained `DeployAsync`; `remote.Deploy` + `RetryDeployer` implement it. Receiver retry-on-transient-error (Q3, v0.2.113) is superseded — the apply is backgrounded once; `retryDeploy`'s unit tests remain.
 - Tests: `DeployAsync` returns early while the apply lands in the background, validation errors never start an apply, receiver 202 + delivery semantics, scope-guard HTTP tables expect 202 on deploys, metric labels reflect acceptance-time recording. `recordingDeployer` fakes are now mutex-guarded.
 

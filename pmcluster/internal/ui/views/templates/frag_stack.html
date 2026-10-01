@@ -72,6 +72,23 @@
 </div>
 {{end}}
 
+{{if and .Detail (gt (len .Detail.Stack.LastErrors) 1)}}
+<div class="card">
+  <h2 class="section-head">{{icon "clock"}}{{T "stack.error_history"}}</h2>
+  <ul class="timeline">
+    {{range .Detail.Stack.LastErrors}}{{if .Error}}
+    <li>
+      <div class="t-head">
+        <span class="pill bad">{{icon "alert-triangle"}}{{T "stack.deploy_failed"}}</span>
+        <span class="t-meta">rev {{N0 .Revision}} · {{ts .CreatedAt}}</span>
+      </div>
+      <p class="muted">{{.Error}}</p>
+    </li>
+    {{end}}{{end}}
+  </ul>
+</div>
+{{end}}
+
 {{if .Detail}}
 {{/* ---- services: replica health + logs/tasks, straight from the swarm ---- */}}
 <div class="panel">

@@ -9,7 +9,11 @@
 //	        → Translate → RecordDeploy → DeployStack
 package stacks
 
-import "context"
+import (
+	"context"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+)
 
 // Payload is the canonical deploy request. JSON shape is shared by the REST
 // handler and the webhook receiver.
@@ -35,15 +39,17 @@ type Result struct {
 }
 
 // Stack is a deployed stack's metadata. RepoURL is empty when unset; SourceFile
-// is the manifest path inside that repo (deploy/test-lms.yaml). LastError holds
-// the most recent deploy/apply error — fire-and-forget deploys apply in the
-// background, so failures surface here for the console instead of the response.
+// is the manifest path inside that repo (deploy/test-lms.yaml). StackErrors is
+// the deploy/apply outcome history, newest first (each entry carries the
+// revision it applied to; an empty Error means that apply succeeded) —
+// fire-and-forget deploys apply in the background, so failures surface here
+// for the console instead of the response.
 type Stack struct {
 	Name            string
 	CurrentRevision int64
 	RepoURL         string
 	SourceFile      string
-	LastError       string
+	StackErrors     []store.StackErrorEntry
 	CreatedAt       int64
 	UpdatedAt       int64
 }

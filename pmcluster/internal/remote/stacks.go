@@ -6,6 +6,7 @@ import (
 	"net/url"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Stacks is the HTTP adapter for stacks.Reader.
@@ -15,13 +16,13 @@ type Stacks struct{ c *Client }
 func NewStacks(c *Client) stacks.Reader { return &Stacks{c: c} }
 
 type stackDTO struct {
-	Name            string `json:"name"`
-	CurrentRevision int64  `json:"current_revision"`
-	RepoURL         string `json:"repo_url"`
-	SourceFile      string `json:"source_file"`
-	LastError       string `json:"last_error"`
-	CreatedAt       int64  `json:"created_at"`
-	UpdatedAt       int64  `json:"updated_at"`
+	Name            string                  `json:"name"`
+	CurrentRevision int64                   `json:"current_revision"`
+	RepoURL         string                  `json:"repo_url"`
+	SourceFile      string                  `json:"source_file"`
+	LastError       []store.StackErrorEntry `json:"last_error"`
+	CreatedAt       int64                   `json:"created_at"`
+	UpdatedAt       int64                   `json:"updated_at"`
 }
 
 type stackListDTO struct {
@@ -81,7 +82,7 @@ func (d stackDTO) stack() stacks.Stack {
 		CurrentRevision: d.CurrentRevision,
 		RepoURL:         d.RepoURL,
 		SourceFile:      d.SourceFile,
-		LastError:       d.LastError,
+		StackErrors:     d.LastError,
 		CreatedAt:       d.CreatedAt,
 		UpdatedAt:       d.UpdatedAt,
 	}

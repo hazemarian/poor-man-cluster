@@ -230,13 +230,15 @@ func (h *HTTP) rollback(w http.ResponseWriter, r *http.Request) {
 }
 
 // stackJSON keeps the Stack response shape identical across endpoints.
+// last_error carries the full outcome history (JSON array, newest first); the
+// console surfaces the newest entry and keeps the rest for the history panel.
 func stackJSON(s Stack) map[string]any {
 	return map[string]any{
 		"name":             s.Name,
 		"current_revision": s.CurrentRevision,
 		"repo_url":         s.RepoURL,
 		"source_file":      s.SourceFile,
-		"last_error":       s.LastError,
+		"last_error":       s.StackErrors,
 		"created_at":       s.CreatedAt,
 		"updated_at":       s.UpdatedAt,
 	}

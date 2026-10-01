@@ -1037,7 +1037,11 @@ func TestDeployAsync_ValidationIsSynchronous(t *testing.T) {
 
 // TestDeployAsync_BackgroundFailureRecordsLastError: when the background
 // apply fails, the stack's last_error is persisted so the console can surface
-// it even though the fire-and-forget response already returned 202.
+// it even though the fire-and-forget response already returned 202. The
+// outcome lands in the stack's JSON error history (newest first): the failed
+// apply appends an entry with the error; a later successful deploy appends a
+// success entry (empty Error) that masks older failures for the display while
+// the history is retained.
 func TestDeployAsync_BackgroundFailureRecordsLastError(t *testing.T) {
 	s := openTestStore(t)
 	dep := &recordingDeployer{err: errors.New("docker stack deploy: boom")}
@@ -1054,7 +1058,8 @@ func TestDeployAsync_BackgroundFailureRecordsLastError(t *testing.T) {
 	var err error
 	for time.Now().Before(deadline) {
 		st, err = s.GetStack(ctx, "donation-campaign")
-		if err == nil && st.LastError != "" {
+		entries := store.ParseStackErrors(st.LastError)
+		if err == nil && len(entries) > 0 && entries[0].Error != "" {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -1062,18 +1067,32 @@ func TestDeployAsync_BackgroundFailureRecordsLastError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetStack: %v", err)
 	}
-	if st.LastError != "docker stack deploy: docker stack deploy: boom" {
-		t.Errorf("stack.LastError = %q, want the background apply error", st.LastError)
+	entries := store.ParseStackErrors(st.LastError)
+	if len(entries) == 0 || entries[0].Error != "docker stack deploy: docker stack deploy: boom" {
+		t.Errorf("stack error history = %q, want the background apply error newest", st.LastError)
 	}
 
-	// A subsequent successful deploy clears it.
+	// A subsequent successful deploy appends a success entry (empty Error)
+	// that masks the failure for the display; the history stays.
 	dep.err = nil
 	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest}); err != nil {
 		t.Fatalf("Deploy after recovery: %v", err)
 	}
 	st, _ = s.GetStack(ctx, "donation-campaign")
-	if st.LastError != "" {
-		t.Errorf("stack.LastError after successful deploy = %q, want empty", st.LastError)
+	entries = store.ParseStackErrors(st.LastError)
+	if len(entries) == 0 || entries[0].Error != "" {
+		t.Errorf("stack error history after successful deploy = %q, want a success entry newest", st.LastError)
+	}
+	// The prior failure must still be retained in the history.
+	seen := false
+	for _, e := range entries {
+		if e.Error == "docker stack deploy: docker stack deploy: boom" {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		t.Errorf("stack error history after successful deploy = %q, want the prior failure retained", st.LastError)
 	}
 }
 

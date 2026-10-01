@@ -39,15 +39,23 @@ type Node struct {
 	UpdatedAt     int64  `json:"updated_at"`
 }
 
+// StackError is one deploy/apply outcome for a stack (newest first in a
+// stack's LastError history; an empty Error means that apply succeeded).
+type StackError struct {
+	Revision  int64  `json:"revision"`
+	Error     string `json:"error"`
+	CreatedAt int64  `json:"created_at"`
+}
+
 // Stack is one row of GET /api/stacks.
 type Stack struct {
-	Name            string `json:"name"`
-	CurrentRevision int64  `json:"current_revision"`
-	RepoURL         string `json:"repo_url"`
-	SourceFile      string `json:"source_file"`
-	LastError       string `json:"last_error"`
-	CreatedAt       int64  `json:"created_at"`
-	UpdatedAt       int64  `json:"updated_at"`
+	Name            string       `json:"name"`
+	CurrentRevision int64        `json:"current_revision"`
+	RepoURL         string       `json:"repo_url"`
+	SourceFile      string       `json:"source_file"`
+	LastError       []StackError `json:"last_error"`
+	CreatedAt       int64        `json:"created_at"`
+	UpdatedAt       int64        `json:"updated_at"`
 }
 
 // RevisionMeta is a lightweight revision entry (no YAML bodies).

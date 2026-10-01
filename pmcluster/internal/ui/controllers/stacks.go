@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views"
 )
 
@@ -33,8 +34,12 @@ type stackInfo struct {
 	CreatedAt       int64
 	UpdatedAt       int64
 	SourceFile      string
-	// LastError surfaces a failed background deploy/apply in the console
-	// (fire-and-forget deploys no longer return the apply error in the response).
+	// LastErrors is the deploy/apply outcome history (newest first) surfaced
+	// from the stack record — fire-and-forget deploys apply in the background
+	// so failures appear here instead of in the response.
+	LastErrors []pmapi.StackError
+	// LastError is the newest FAILED outcome's message ("" when the latest
+	// apply succeeded) — what the banner and list pill display.
 	LastError string
 }
 
@@ -347,7 +352,8 @@ func (c Stacks) stacksData(ctx context.Context, q string) stackData {
 			CurrentRevision: s.CurrentRevision,
 			RepoURL:         s.RepoURL,
 			SourceFile:      s.SourceFile,
-			LastError:       s.LastError,
+			LastErrors:      s.LastError,
+			LastError:       newestStackError(s.LastError),
 			CreatedAt:       s.CreatedAt,
 			UpdatedAt:       s.UpdatedAt,
 		}})
@@ -428,7 +434,8 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 		CurrentRevision: det.Stack.CurrentRevision,
 		RepoURL:         det.Stack.RepoURL,
 		SourceFile:      det.Stack.SourceFile,
-		LastError:       det.Stack.LastError,
+		LastErrors:      det.Stack.LastError,
+		LastError:       newestStackError(det.Stack.LastError),
 		CreatedAt:       det.Stack.CreatedAt,
 		UpdatedAt:       det.Stack.UpdatedAt,
 	}}
@@ -503,4 +510,17 @@ func backupTone(status string) string {
 // to the backups page, which owns listing and filtering them.
 func (c Stacks) ShowBackups(g *gin.Context) {
 	g.Redirect(http.StatusFound, WebBase+"/backups")
+}
+
+// newestStackError returns the newest FAILED outcome's message from a stack's
+// deploy/apply history, "" when every kept outcome succeeded. The history is
+// newest-first; a success entry (empty Error) masks any older failure for the
+// banner while the full history stays available for the detail panel.
+func newestStackError(errors []pmapi.StackError) string {
+	for _, e := range errors {
+		if e.Error != "" {
+			return e.Error
+		}
+	}
+	return ""
 }

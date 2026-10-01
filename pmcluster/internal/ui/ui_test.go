@@ -48,7 +48,7 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		write(w, `{"stack":{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo","last_error":"docker stack deploy (depends_on level 1): boom"},"revisions":[{"revision":3,"created_at":30},{"revision":2,"created_at":20}],"last_backup":{"status":"succeeded","started_at":25}}`)
+		write(w, `{"stack":{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo","last_error":[{"revision":2,"error":"docker stack deploy (depends_on level 1): boom","created_at":20}]},"revisions":[{"revision":3,"created_at":30},{"revision":2,"created_at":20}],"last_backup":{"status":"succeeded","started_at":25}}`)
 	})
 	mux.HandleFunc("/api/stacks/demo/revisions/3", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"stack":"demo","revision":3,"created_at":30,"source_yaml":"app: demo\nversion: v3\n","rendered_yaml":"services:\n  demo:\n","payload":"{}"}`)

@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -17,9 +19,11 @@ type Stack struct {
 	// SourceFile is the manifest path inside the repo (e.g. deploy/test-lms.yaml)
 	// that produced the current revision; empty when deployed without provenance.
 	SourceFile string
-	// LastError holds the most recent deploy/apply error ("" when the last
-	// deploy succeeded). Fire-and-forget deploys apply in the background, so
-	// failures surface here instead of in the HTTP response.
+	// LastError holds the deploy/apply outcome history for this stack as a
+	// JSON array of StackErrorEntry, newest first ("" when the last deploy
+	// succeeded and no prior failure is retained). Fire-and-forget deploys
+	// apply in the background, so failures surface here instead of in the
+	// HTTP response.
 	LastError string
 	CreatedAt int64
 	UpdatedAt int64
@@ -47,6 +51,34 @@ var ErrStackNotFound = errors.New("stack not found")
 
 // ErrRevisionNotFound indicates a revision row does not exist.
 var ErrRevisionNotFound = errors.New("revision not found")
+
+// StackErrorEntry is one deploy/apply outcome in a stack's error history.
+// The stacks.last_error column holds a JSON array of these, newest first;
+// an entry with an empty Error records a successful apply (which clears the
+// surfaced "latest error" while the history is retained).
+type StackErrorEntry struct {
+	Revision  int64  `json:"revision"`
+	Error     string `json:"error"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// StackErrorHistoryLimit caps how many outcomes the last_error column keeps.
+const StackErrorHistoryLimit = 20
+
+// ParseStackErrors decodes the last_error column (a JSON array of
+// StackErrorEntry, newest first) into a slice. Empty or malformed content
+// yields nil rather than an error so callers never fail on a legacy/blank row.
+func ParseStackErrors(raw string) []StackErrorEntry {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "[]" {
+		return nil
+	}
+	var out []StackErrorEntry
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	return out
+}
 
 // RecordDeploy atomically inserts the new revision and upserts the stack
 // row's current_revision pointer.
@@ -168,6 +200,51 @@ func (s *Store) SetStackLastError(ctx context.Context, name, lastError string) e
 		return ErrStackNotFound
 	}
 	return nil
+}
+
+// RecordStackError appends one deploy/apply outcome to the stack's error
+// history, stored as a JSON array in the stacks.last_error column (newest
+// first, capped at StackErrorHistoryLimit). An empty errMsg records a
+// successful apply — the "latest error" display clears while the history of
+// prior failures is retained. ErrStackNotFound when the stack does not exist.
+func (s *Store) RecordStackError(ctx context.Context, stackName string, revision int64, errMsg string) (int64, error) {
+	var raw string
+	if err := s.db.QueryRowContext(ctx, `SELECT last_error FROM stacks WHERE name = ?`, stackName).Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, ErrStackNotFound
+		}
+		return 0, fmt.Errorf("read stack last_error: %w", err)
+	}
+	entries := ParseStackErrors(raw)
+	entries = append([]StackErrorEntry{{Revision: revision, Error: errMsg, CreatedAt: time.Now().Unix()}}, entries...)
+	if len(entries) > StackErrorHistoryLimit {
+		entries = entries[:StackErrorHistoryLimit]
+	}
+	b, err := json.Marshal(entries)
+	if err != nil {
+		return 0, fmt.Errorf("marshal stack error history: %w", err)
+	}
+	if err := s.SetStackLastError(ctx, stackName, string(b)); err != nil {
+		return 0, err
+	}
+	return time.Now().Unix(), nil
+}
+
+// ListStackErrors decodes the newest `limit` outcomes from the stack's
+// last_error history column, newest first. limit <= 0 returns every kept row.
+func (s *Store) ListStackErrors(ctx context.Context, stackName string, limit int) ([]StackErrorEntry, error) {
+	var raw string
+	if err := s.db.QueryRowContext(ctx, `SELECT last_error FROM stacks WHERE name = ?`, stackName).Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrStackNotFound
+		}
+		return nil, fmt.Errorf("read stack last_error: %w", err)
+	}
+	entries := ParseStackErrors(raw)
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+	return entries, nil
 }
 
 // DeleteStack removes the stack row, its revisions (via the ON DELETE CASCADE
