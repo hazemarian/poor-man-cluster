@@ -4,6 +4,10 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.130 (2026-10-01)
+
+- **Badge status word: `deployed` → `healthy`.** A service can be unhealthy *after* it deploys (crash-loop, a bug) — so the green state now reads **`healthy`**, not `deployed`, across the stack badge, the per-service badge, the combined `/services` badge, the CLI help, and the console copy text. Semantics unchanged: green = deployed *and* healthy; `in progress` / `degraded` / `error` / `unknown` as before.
+
 ## v0.2.129 (2026-10-01)
 
 - **Combined stack + services badge.** `GET /api/public/badge/{stack}/services` returns ONE wide SVG showing the stack's main health first, then a segment per service (label = service name without the `stack_` prefix). Same status colors + no-auth + 60s cache. `pmcluster stack badge <stack> --services` prints the markdown; the console stack detail card gained a second copyable row for it. (Service-level badges from v0.2.128 ride along — both shipped in this release's binary.)

@@ -47,13 +47,13 @@ func TestStackBadge_StatusDerivation(t *testing.T) {
 		svcs  []services.ServiceSummary
 		want  string
 	}{
-		{"deployed", func() {}, svc.svcs, "deployed"},
+		{"healthy", func() {}, svc.svcs, "healthy"},
 		{"error on current revision", func() {
 			_, _ = st.RecordStackError(ctx, "demo", 1002, "docker stack deploy: boom")
 		}, svc.svcs, "error"},
 		{"stale error ignored (older revision)", func() {
 			// fresh stack: error on a non-current revision
-		}, svc.svcs, "deployed"},
+		}, svc.svcs, "healthy"},
 		{"in progress", func() {}, []services.ServiceSummary{
 			{Name: "demo_web", Desired: 1, Replicas: 1, UpdateState: "updating"},
 		}, "in progress"},
@@ -62,13 +62,13 @@ func TestStackBadge_StatusDerivation(t *testing.T) {
 		}, "error"},
 		{"completed run-once paused not error", func() {}, []services.ServiceSummary{
 			{Name: "demo_migrate", Desired: 1, Replicas: 0, RunOnce: true, UpdateState: "paused"},
-		}, "deployed"},
+		}, "healthy"},
 		{"degraded under-replicated", func() {}, []services.ServiceSummary{
 			{Name: "demo_web", Desired: 2, Replicas: 1},
 		}, "degraded"},
 		{"completed run-once not degraded", func() {}, []services.ServiceSummary{
 			{Name: "demo_migrate", Desired: 1, Replicas: 0, RunOnce: true},
-		}, "deployed"},
+		}, "healthy"},
 	}
 
 	for _, tc := range cases {
@@ -118,7 +118,7 @@ func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
 		t.Errorf("Content-Type = %q, want image/svg+xml", ct)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "<svg") || !strings.Contains(body, "deployed") {
+	if !strings.Contains(body, "<svg") || !strings.Contains(body, "healthy") {
 		t.Errorf("body missing SVG or status:\n%s", body)
 	}
 	if !strings.Contains(body, "#44d47b") {
@@ -137,7 +137,7 @@ func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
 	req3 := httptest.NewRequest(http.MethodGet, "/api/public/badge/demo/demo_web", nil)
 	rec3 := httptest.NewRecorder()
 	r.ServeHTTP(rec3, req3)
-	if !strings.Contains(rec3.Body.String(), "demo/demo_web: deployed") {
+	if !strings.Contains(rec3.Body.String(), "demo/demo_web: healthy") {
 		t.Errorf("service badge body missing label/status:\n%s", rec3.Body.String())
 	}
 	req4 := httptest.NewRequest(http.MethodGet, "/api/public/badge/demo/ghost_svc", nil)
@@ -155,7 +155,7 @@ func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
 		t.Fatalf("services badge status = %d, want 200", rec5.Code)
 	}
 	body5 := rec5.Body.String()
-	if !strings.Contains(body5, "demo: deployed") || !strings.Contains(body5, "web: deployed") {
+	if !strings.Contains(body5, "demo: healthy") || !strings.Contains(body5, "web: healthy") {
 		t.Errorf("combined badge missing main + service segments:\n%s", body5)
 	}
 	if !strings.Contains(body5, "·") {
@@ -177,10 +177,10 @@ func TestServiceBadge_StatusDerivation(t *testing.T) {
 		svc  services.ServiceSummary
 		want string
 	}{
-		{"deployed", services.ServiceSummary{Name: "demo_web", Desired: 1, Replicas: 1}, "deployed"},
+		{"healthy", services.ServiceSummary{Name: "demo_web", Desired: 1, Replicas: 1}, "healthy"},
 		{"in progress", services.ServiceSummary{Name: "demo_web", Desired: 1, Replicas: 1, UpdateState: "updating"}, "in progress"},
 		{"paused is error", services.ServiceSummary{Name: "demo_web", Desired: 1, Replicas: 1, UpdateState: "paused"}, "error"},
-		{"completed run-once paused is deployed", services.ServiceSummary{Name: "demo_migrate", Desired: 1, Replicas: 0, RunOnce: true, UpdateState: "paused"}, "deployed"},
+		{"completed run-once paused is deployed", services.ServiceSummary{Name: "demo_migrate", Desired: 1, Replicas: 0, RunOnce: true, UpdateState: "paused"}, "healthy"},
 		{"degraded", services.ServiceSummary{Name: "demo_web", Desired: 2, Replicas: 1}, "degraded"},
 	}
 

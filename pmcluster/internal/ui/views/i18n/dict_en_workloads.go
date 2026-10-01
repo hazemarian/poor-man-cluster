@@ -73,7 +73,7 @@ func init() {
 		"stack.error_history":          "Deploy error history",
 		"stack.badge":                  "Status badge",
 		"stack.badge_services":         "Services badge",
-		"stack.badge_hint":             "Paste this markdown into any GitHub README to show the stack's live status (deployed / in progress / degraded / error). The badge endpoint is public and reflects the latest deployment outcome.",
+		"stack.badge_hint":             "Paste this markdown into any GitHub README to show the stack's live status (healthy / in progress / degraded / error). The badge endpoint is public and reflects the latest deployment outcome.",
 
 		"stack.confirm_rollback": "Roll back {0} to revision {1}? The daemon redeploys that revision's manifest and records a new revision for it.",
 

@@ -60,7 +60,7 @@ var stackBadgeCmd = &cobra.Command{
 	Use:   "badge <stack-name>",
 	Short: "Print the README status-badge markdown for a stack",
 	Long: `Prints a markdown image line pointing at the stack's public status
-badge (deployed / in progress / degraded / error), e.g.:
+badge (healthy / in progress / degraded / error), e.g.:
 
   ![donation-campaign status](https://pmcluster.example.com/api/public/badge/donation-campaign)
 

@@ -15,7 +15,7 @@ import (
 // BadgeMount registers the PUBLIC stack-status badge route. It is mounted
 // outside the Bearer-authenticated /api group on purpose: README badges are
 // fetched by GitHub's camo proxy and browsers with no credentials. It only
-// reveals aggregate health (deployed / in progress / degraded / error) — the
+// reveals aggregate health (healthy / in progress / degraded / error) — the
 // same signal the console already shows — so it is safe to expose.
 func BadgeMount(r chi.Router, st *store.Store, svc services.Service) {
 	if st == nil || svc == nil {
@@ -113,7 +113,7 @@ func stackBadge(ctx context.Context, st *store.Store, svc services.Service, stac
 		}
 	}
 
-	return label, "deployed"
+	return label, "healthy"
 }
 
 // serviceBadge derives ONE service's health. Same rules as stackBadge but
@@ -140,7 +140,7 @@ func serviceBadge(ctx context.Context, st *store.Store, svc services.Service, st
 
 // serviceStatus maps one service summary to its badge status using the same
 // precedence as stackBadge: updating > paused (non run-once) > degraded >
-// deployed; a completed run-once job always reads deployed.
+// healthy; a completed run-once job always reads healthy.
 func serviceStatus(s services.ServiceSummary) string {
 	if s.UpdateState == "updating" {
 		return "in progress"
@@ -149,12 +149,12 @@ func serviceStatus(s services.ServiceSummary) string {
 		return "error"
 	}
 	if completedRunOnce(s) {
-		return "deployed" // finished one-shot job
+		return "healthy" // finished one-shot job
 	}
 	if s.Desired > 0 && s.Replicas < s.Desired {
 		return "degraded"
 	}
-	return "deployed"
+	return "healthy"
 }
 
 // badgeSegment is one label/status pair of a multi-segment badge.
@@ -183,7 +183,7 @@ func stackServicesBadge(ctx context.Context, st *store.Store, svc services.Servi
 
 // newestStackFailure returns the newest recorded failure whose revision
 // matches the current revision (errors-only history — a clean redeploy writes
-// nothing, so absence on the current revision means deployed).
+// nothing, so absence on the current revision means healthy).
 func newestStackFailure(errors []store.StackErrorEntry, currentRevision int64) string {
 	for _, e := range errors {
 		if e.Error != "" && e.Revision == currentRevision {
@@ -196,7 +196,7 @@ func newestStackFailure(errors []store.StackErrorEntry, currentRevision int64) s
 // writeBadge renders a shields.io-style flat SVG badge.
 func writeBadge(w http.ResponseWriter, label, status string) {
 	color := map[string]string{
-		"deployed":    "#44d47b",
+		"healthy":     "#44d47b",
 		"in progress": "#ffb454",
 		"degraded":    "#ff5c5c",
 		"error":       "#c62828",
@@ -261,7 +261,7 @@ func writeMultiBadge(w http.ResponseWriter, segs []badgeSegment) {
 	}
 	color := func(status string) string {
 		c, ok := map[string]string{
-			"deployed":    "#44d47b",
+			"healthy":     "#44d47b",
 			"in progress": "#ffb454",
 			"degraded":    "#ff5c5c",
 			"error":       "#c62828",
