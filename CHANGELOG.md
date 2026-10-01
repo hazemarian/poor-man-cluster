@@ -4,6 +4,14 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.132 (2026-10-01)
+
+- **Control loop (L1) — leader-only converge loop.** The Swarm-leader daemon now runs a reconcile loop (event-driven with a `reconcile_interval` safety tick, default 60s, `0` disables). Each pass: (a) re-renders the platform configs and re-deploys drifted stacks (the content-aware reconcile, no TLS/credential churn), (b) re-translates each app stack's latest source and syncs when the rendered hash drifted (no-op when unchanged), (c) writes a per-stack + per-service health snapshot to the new `stack_status` table. One pass at a time; the loop never restarts services — it only reports health.
+- **Badges now read the DB snapshot, never live Docker.** `/api/public/badge/*` reads the `stack_status` snapshot the loop writes (healthy / in progress / degraded / error / unknown), so a single badge fetch no longer queries the swarm and the badge reflects converged state rather than per-request flicker. Unknown when no snapshot exists yet.
+- **Leader channel.** `WatchSwarmLeadership` streams leadership changes; the daemon starts the reconcile loop and re-runs the control-plane restore check on promotion, stops the loop on leadership loss. The loop runs only on the leader node.
+- **Docker events stream.** `runtime.Client.Events` subscribes to the engine's event stream (neutral `Event` type: type/action/stack/service/node/timestamp) — the loop's primary trigger, with the interval tick as the safety net.
+- Migration `0022_stack_status.sql` (stack_status table: stack_name PK, status, services JSON, updated_at).
+
 ## v0.2.131 (2026-10-01)
 
 - **Badge endpoints answer HEAD too.** The public badge routes only registered `GET`; chi fell HEAD requests through to the Bearer-protected `/api` group, which answered `401` — and GitHub's camo image proxy (and some image tools) preflight with HEAD, so the badge was refused and rendered broken in READMEs. All three badge routes (`/api/public/badge/{stack}`, `.../services`, `.../{service}`) now register both `GET` and `HEAD` with the same handler. Regression test added.

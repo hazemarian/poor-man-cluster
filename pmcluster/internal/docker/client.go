@@ -16,6 +16,7 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
@@ -620,6 +621,84 @@ func (r *realClient) ConfigInspect(ctx context.Context, name string) (runtime.Co
 		return runtime.ConfigInspectResult{}, fmt.Errorf("config inspect: %w", err)
 	}
 	return runtime.ConfigInspectResult{Labels: cfg.Spec.Labels, Data: cfg.Spec.Data}, nil
+}
+
+// swarm attribute keys carried on event Actor.Attributes. Stack already has
+// runtime.StackNamespaceLabel (com.docker.stack.namespace); the service name
+// and node ID ride alongside it on swarm-scoped events.
+const (
+	swarmServiceNameLabel = "com.docker.swarm.service.name"
+	swarmNodeIDLabel      = "com.docker.swarm.node.id"
+)
+
+// eventFromMessage maps a raw Docker events.Message to a neutral runtime.Event,
+// enriching it with the swarm attribute labels the reconcile loop keys on.
+func eventFromMessage(msg events.Message) runtime.Event {
+	return runtime.Event{
+		Type:      string(msg.Type),
+		Action:    string(msg.Action),
+		Stack:     msg.Actor.Attributes[runtime.StackNamespaceLabel],
+		Service:   msg.Actor.Attributes[swarmServiceNameLabel],
+		NodeID:    msg.Actor.Attributes[swarmNodeIDLabel],
+		Timestamp: msg.Time,
+	}
+}
+
+// Events streams the daemon's event stream from `since` onward, mapping each
+// raw events.Message to a neutral runtime.Event. The returned event channel is
+// closed when ctx is cancelled or the source stream ends; a non-cancellation
+// error is delivered on the error channel first, then both channels close.
+func (r *realClient) Events(ctx context.Context, since time.Time) (<-chan runtime.Event, <-chan error) {
+	msgs, errs := r.c.Events(ctx, events.ListOptions{Since: since.Format(time.RFC3339)})
+
+	evCh := make(chan runtime.Event)
+	outErrs := make(chan error)
+
+	go func() {
+		defer close(evCh)
+		defer close(outErrs)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-msgs:
+				if !ok {
+					return
+				}
+				ev := eventFromMessage(msg)
+				select {
+				case evCh <- ev:
+				case <-ctx.Done():
+					return
+				}
+			case err, ok := <-errs:
+				if !ok {
+					return
+				}
+				if err == nil {
+					continue
+				}
+				// The SDK closes the stream with io.EOF once the daemon's
+				// event feed ends; that is a clean stop, not an error.
+				if errors.Is(err, io.EOF) {
+					return
+				}
+				// Cancellation is expected on ctx teardown and already
+				// handled by the ctx.Done() branch; swallow it here.
+				if ctx.Err() != nil {
+					return
+				}
+				// A genuine error: surface it once, then stop.
+				select {
+				case outErrs <- err:
+				case <-ctx.Done():
+				}
+				return
+			}
+		}
+	}()
+
+	return evCh, outErrs
 }
 
 // isNotFoundString is a fallback for older daemons whose error doesn't

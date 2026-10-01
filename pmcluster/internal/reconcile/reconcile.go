@@ -1,0 +1,263 @@
+// Package reconcile implements the control-plane converge loop (L1): the
+// daemon periodically re-derives desired state from the store and reports
+// actual health, applying ONLY drift (never restarts). It is the counterpart
+// to the badge surface — the loop writes stack_status snapshots to the DB and
+// the badge endpoint reads them, so badges never touch the Docker daemon.
+//
+// Three passes per run:
+//
+//	a) Platform reconcile — re-render the platform configs and compare each
+//	   stack's stored rendered_hash against the freshly rendered compose;
+//	   redeploy drifted stacks (the same content-aware decision cluster
+//	   update makes). Reuses cluster.Update's idempotent machinery (EnsureConfig
+//	   reuses by hash, TLS secrets reuse by version) so running it on a
+//	   converged cluster is a no-op.
+//
+//	b) App-stack drift — for every stack in the store, re-translate the latest
+//	   source manifest and Sync when the rendered hash differs. Sync already
+//	   no-ops on hash match, so a converged app stack is untouched.
+//
+//	c) Health snapshot — query the swarm for live service state and write a
+//	   stack_status row per stack (plus per-service statuses) so the badge
+//	   endpoint and the console read converged state from the DB.
+package reconcile
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/rs/zerolog"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+)
+
+// Status values shared with the badge surface (stack + service level).
+const (
+	StatusHealthy    = "healthy"
+	StatusInProgress = "in progress"
+	StatusDegraded   = "degraded"
+	StatusError      = "error"
+	StatusUnknown    = "unknown"
+)
+
+// completedRunOnce reports whether a one-shot job has finished: desired>0 but
+// 0 running replicas. Its stale UpdateStatus (swarm leaves "paused" behind
+// after a run-once task completes) must never drive error/degraded.
+func completedRunOnce(s services.ServiceSummary) bool {
+	return s.RunOnce && s.Desired > 0 && s.Replicas == 0
+}
+
+// ServiceStatus derives the badge status for one service, mirroring the
+// derivation the badge endpoint used before it moved to DB snapshots.
+func ServiceStatus(s services.ServiceSummary) string {
+	switch {
+	case s.UpdateState == "updating":
+		return StatusInProgress
+	case s.UpdateState == "paused" && !completedRunOnce(s):
+		return StatusError
+	case completedRunOnce(s):
+		return StatusHealthy
+	case s.Desired > 0 && s.Replicas < s.Desired:
+		return StatusDegraded
+	default:
+		return StatusHealthy
+	}
+}
+
+// StackStatus derives the aggregate status for a stack: an error outcome on
+// the CURRENT revision wins, otherwise the worst live service status wins.
+// A stack with no services reads unknown.
+func StackStatus(st store.Stack, services []services.ServiceSummary) string {
+	for _, e := range store.ParseStackErrors(st.LastError) {
+		if e.Error != "" && e.Revision == st.CurrentRevision {
+			return StatusError
+		}
+	}
+	if len(services) == 0 {
+		return StatusUnknown
+	}
+	worst := StatusHealthy
+	for _, s := range services {
+		st := ServiceStatus(s)
+		if rank(st) > rank(worst) {
+			worst = st
+		}
+	}
+	return worst
+}
+
+// rank orders statuses so the aggregate picks the worst.
+func rank(s string) int {
+	switch s {
+	case StatusError:
+		return 4
+	case StatusDegraded:
+		return 3
+	case StatusInProgress:
+		return 2
+	case StatusUnknown:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// Reconciler is the daemon-side converge loop. Create it, wire the deps, then
+// call RunOnce for a manual pass or Loop for the event-driven loop.
+type Reconciler struct {
+	Store         *store.Store
+	Docker        runtime.Client
+	DeployService *stacks.Service
+	Services      services.Service
+	Update        func(ctx context.Context, deps cluster.UpdateDeps, in cluster.UpdateInput) (*cluster.UpdateResult, error)
+	UpdateDeps    cluster.UpdateDeps
+	UpdateInput   cluster.UpdateInput
+	Log           zerolog.Logger
+	Interval      time.Duration // safety-net tick; 0 disables the tick
+
+	mu    sync.Mutex
+	runID int64
+}
+
+// RunOnce performs one converge pass. Safe to call concurrently (a second
+// call while one is running returns nil immediately).
+func (r *Reconciler) RunOnce(ctx context.Context) error {
+	if !r.mu.TryLock() {
+		return nil
+	}
+	defer r.mu.Unlock()
+	id := atomic.AddInt64(&r.runID, 1)
+	log := r.Log.With().Int64("run", id).Logger()
+
+	// (a) platform reconcile
+	if r.Update != nil {
+		res, err := r.Update(ctx, r.UpdateDeps, r.UpdateInput)
+		if err != nil {
+			log.Error().Err(err).Msg("reconcile — platform pass failed")
+		} else if len(res.StacksDeployed) > 0 {
+			log.Info().Strs("stacks", res.StacksDeployed).Msg("reconcile — platform pass redeployed drifted stacks")
+		}
+	}
+
+	// (b) app-stack drift
+	stacks, err := r.Store.ListStacks(ctx)
+	if err != nil {
+		return fmt.Errorf("list stacks for reconcile: %w", err)
+	}
+	for _, st := range stacks {
+		if _, err := r.DeployService.Sync(ctx, st.Name); err != nil {
+			log.Error().Err(err).Str("stack", st.Name).Msg("reconcile — app sync failed")
+		}
+	}
+
+	// (c) health snapshot
+	return r.snapshotHealth(ctx, log)
+}
+
+// snapshotHealth writes a stack_status row per store stack, with per-service
+// statuses derived from the live swarm. A stack the swarm no longer knows
+// reads unknown. Also clears status rows for stacks removed from the store.
+func (r *Reconciler) snapshotHealth(ctx context.Context, log zerolog.Logger) error {
+	stackRows, err := r.Store.ListStacks(ctx)
+	if err != nil {
+		return fmt.Errorf("list stacks for health snapshot: %w", err)
+	}
+	seen := map[string]bool{}
+	for _, st := range stackRows {
+		seen[st.Name] = true
+		svcs, err := r.Services.List(ctx, st.Name)
+		if err != nil {
+			log.Error().Err(err).Str("stack", st.Name).Msg("reconcile — service list failed")
+			if serr := r.Store.SetStackStatus(ctx, store.StackStatus{StackName: st.Name, Status: StatusUnknown, Services: map[string]string{}, UpdatedAt: time.Now().Unix()}); serr != nil {
+				log.Error().Err(serr).Str("stack", st.Name).Msg("reconcile — store stack status failed")
+			}
+			continue
+		}
+		svcStatus := map[string]string{}
+		for _, s := range svcs {
+			svcStatus[s.Name] = ServiceStatus(s)
+		}
+		status := StackStatus(*st, svcs)
+		if err := r.Store.SetStackStatus(ctx, store.StackStatus{StackName: st.Name, Status: status, Services: svcStatus, UpdatedAt: time.Now().Unix()}); err != nil {
+			log.Error().Err(err).Str("stack", st.Name).Msg("reconcile — store stack status failed")
+		}
+	}
+	// Tidy: remove snapshot rows for stacks no longer in the store.
+	rows, err := r.Store.ListStackStatuses(ctx)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if !seen[row.StackName] {
+			// Best-effort cleanup; SetStackStatus would re-add, so use the
+			// store's delete path.
+			if err := r.Store.DeleteStackStatus(ctx, row.StackName); err != nil && !errors.Is(err, store.ErrNotFound) {
+				log.Error().Err(err).Str("stack", row.StackName).Msg("reconcile — prune stale status failed")
+			}
+		}
+	}
+	return nil
+}
+
+// Loop runs reconcile passes until ctx is cancelled. It is event-driven when
+// Docker events are available (each swarm event triggers a debounced pass) and
+// falls back to the safety-net ticker (Interval; 0 disables the tick so the
+// loop is purely event-driven).
+func (r *Reconciler) Loop(ctx context.Context) {
+	log := r.Log.With().Str("component", "reconcile").Logger()
+	var evCh <-chan runtime.Event
+	if r.Docker != nil {
+		evCh, _ = r.Docker.Events(ctx, time.Now().Add(-time.Minute))
+	}
+	var ticker *time.Ticker
+	if r.Interval > 0 {
+		ticker = time.NewTicker(r.Interval)
+		defer ticker.Stop()
+	}
+	// Debounce: coalesce bursts of events into one pass.
+	var trigger <-chan time.Time
+	var timer *time.Timer
+	const debounce = 2 * time.Second
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info().Msg("reconcile loop stopped")
+			return
+		case <-evCh:
+			if timer == nil {
+				timer = time.NewTimer(debounce)
+				trigger = timer.C
+			}
+		case <-trigger:
+			timer.Stop()
+			timer = nil
+			trigger = nil
+			r.pass(ctx, log)
+		case <-tickIf(ticker, ctx):
+			r.pass(ctx, log)
+		}
+	}
+}
+
+// pass runs one guarded pass with error capture for the /health surface.
+func (r *Reconciler) pass(ctx context.Context, log zerolog.Logger) {
+	if err := r.RunOnce(ctx); err != nil {
+		log.Error().Err(err).Msg("reconcile pass failed")
+	}
+}
+
+// tickIf adapts a nil-safe ticker channel for the select.
+func tickIf(t *time.Ticker, ctx context.Context) <-chan time.Time {
+	if t == nil {
+		return nil
+	}
+	return t.C
+}

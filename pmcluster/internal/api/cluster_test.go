@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
@@ -92,6 +93,13 @@ func (f *inMemoryDockerClient) NodeList(_ context.Context) ([]runtime.Node, erro
 }
 func (f *inMemoryDockerClient) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
 	return runtime.JoinTokens{}, nil
+}
+func (f *inMemoryDockerClient) Events(_ context.Context, _ time.Time) (<-chan runtime.Event, <-chan error) {
+	evCh := make(chan runtime.Event)
+	close(evCh)
+	errCh := make(chan error)
+	close(errCh)
+	return evCh, errCh
 }
 func (f *inMemoryDockerClient) Close() error { return nil }
 

@@ -6,12 +6,17 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	_ "modernc.org/sqlite"
 )
+
+// ErrNotFound is the generic not-found sentinel for rows that do not have a
+// domain-specific error (e.g. the control loop's status snapshots).
+var ErrNotFound = errors.New("not found")
 
 // Store wraps *sql.DB and runs migrations on Open. Per-resource methods
 // live in sibling files.

@@ -8,104 +8,79 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
-// fakeBadgeSvc is a minimal services.Service stub: embeds the interface so the
-// unimplemented methods panic if ever called, and returns a canned List.
-type fakeBadgeSvc struct {
-	services.Service
-	svcs []services.ServiceSummary
-	err  error
-}
-
-func (f *fakeBadgeSvc) List(_ context.Context, _ string) ([]services.ServiceSummary, error) {
-	return f.svcs, f.err
-}
-
-func TestStackBadge_StatusDerivation(t *testing.T) {
+// badgeStore opens a fresh store with a seeded stack_status snapshot.
+func badgeStore(t *testing.T, status string, services map[string]string) *store.Store {
+	t.Helper()
 	st, err := store.Open(t.TempDir() + "/data.db")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer st.Close()
+	t.Cleanup(func() { _ = st.Close() })
+	if status != "" {
+		if err := st.SetStackStatus(context.Background(), store.StackStatus{
+			StackName: "demo", Status: status, Services: services, UpdatedAt: 1,
+		}); err != nil {
+			t.Fatalf("SetStackStatus: %v", err)
+		}
+	}
+	return st
+}
+
+func TestStackBadge_ReadsDBSnapshot(t *testing.T) {
 	ctx := context.Background()
 
-	// Seed a stack with a revision so CurrentRevision is set.
-	if err := st.RecordDeploy(ctx, &store.StackRevision{StackName: "demo", Revision: 1002, SourceYAML: "app: demo", RenderedYAML: "x: 1"}, ""); err != nil {
-		t.Fatalf("RecordDeploy: %v", err)
-	}
-
-	svc := &fakeBadgeSvc{svcs: []services.ServiceSummary{
-		{Name: "demo_web", Desired: 1, Replicas: 1},
-	}}
-
 	cases := []struct {
-		name  string
-		setup func()
-		svcs  []services.ServiceSummary
-		want  string
+		name   string
+		status string
+		want   string
 	}{
-		{"healthy", func() {}, svc.svcs, "healthy"},
-		{"error on current revision", func() {
-			_, _ = st.RecordStackError(ctx, "demo", 1002, "docker stack deploy: boom")
-		}, svc.svcs, "error"},
-		{"stale error ignored (older revision)", func() {
-			// fresh stack: error on a non-current revision
-		}, svc.svcs, "healthy"},
-		{"in progress", func() {}, []services.ServiceSummary{
-			{Name: "demo_web", Desired: 1, Replicas: 1, UpdateState: "updating"},
-		}, "in progress"},
-		{"paused is error", func() {}, []services.ServiceSummary{
-			{Name: "demo_web", Desired: 1, Replicas: 1, UpdateState: "paused"},
-		}, "error"},
-		{"completed run-once paused not error", func() {}, []services.ServiceSummary{
-			{Name: "demo_migrate", Desired: 1, Replicas: 0, RunOnce: true, UpdateState: "paused"},
-		}, "healthy"},
-		{"degraded under-replicated", func() {}, []services.ServiceSummary{
-			{Name: "demo_web", Desired: 2, Replicas: 1},
-		}, "degraded"},
-		{"completed run-once not degraded", func() {}, []services.ServiceSummary{
-			{Name: "demo_migrate", Desired: 1, Replicas: 0, RunOnce: true},
-		}, "healthy"},
+		{"healthy", "healthy", "healthy"},
+		{"in progress", "in progress", "in progress"},
+		{"degraded", "degraded", "degraded"},
+		{"error", "error", "error"},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Reset the stack error history for each case.
-			_ = st.SetStackLastError(ctx, "demo", "")
-			tc.setup()
-			svc.svcs = tc.svcs
-			_, status := stackBadge(ctx, st, svc, "demo")
+			st := badgeStore(t, tc.status, nil)
+			_, status := stackBadge(ctx, st, "demo")
 			if status != tc.want {
 				t.Errorf("status = %q, want %q", status, tc.want)
 			}
 		})
 	}
 
-	// Unknown stack → unknown.
-	_, status := stackBadge(ctx, st, svc, "ghost")
-	if status != "unknown" {
+	// No snapshot row → unknown (the loop has not written yet).
+	st := badgeStore(t, "", nil)
+	if _, status := stackBadge(ctx, st, "demo"); status != "unknown" {
+		t.Errorf("no-snapshot status = %q, want unknown", status)
+	}
+	if _, status := stackBadge(ctx, st, "ghost"); status != "unknown" {
 		t.Errorf("ghost status = %q, want unknown", status)
 	}
 }
 
-func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
-	st, err := store.Open(t.TempDir() + "/data.db")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
+func TestServiceBadge_ReadsDBSnapshot(t *testing.T) {
 	ctx := context.Background()
-	_ = st.RecordDeploy(ctx, &store.StackRevision{StackName: "demo", Revision: 1002, SourceYAML: "app: demo", RenderedYAML: "x: 1"}, "")
+	st := badgeStore(t, "healthy", map[string]string{"web": "healthy", "migrate": "healthy"})
 
-	svc := &fakeBadgeSvc{svcs: []services.ServiceSummary{
-		{Name: "demo_web", Desired: 1, Replicas: 1},
-	}}
+	if _, status := serviceBadge(ctx, st, "demo", "web"); status != "healthy" {
+		t.Errorf("web status = %q, want healthy", status)
+	}
+	if _, status := serviceBadge(ctx, st, "demo", "ghost_svc"); status != "unknown" {
+		t.Errorf("ghost service status = %q, want unknown", status)
+	}
+	if _, status := serviceBadge(ctx, st, "ghost", "web"); status != "unknown" {
+		t.Errorf("ghost stack status = %q, want unknown", status)
+	}
+}
 
+func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
+	st := badgeStore(t, "healthy", map[string]string{"web": "healthy"})
 	r := chi.NewRouter()
-	BadgeMount(r, st, svc)
+	BadgeMount(r, st)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/public/badge/demo", nil)
 	rec := httptest.NewRecorder()
@@ -122,7 +97,7 @@ func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
 		t.Errorf("body missing SVG or status:\n%s", body)
 	}
 	if !strings.Contains(body, "#44d47b") {
-		t.Errorf("body missing deployed color:\n%s", body)
+		t.Errorf("body missing healthy color:\n%s", body)
 	}
 
 	// HEAD must work too — GitHub camo / image tools preflight with HEAD and
@@ -146,10 +121,10 @@ func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
 	}
 
 	// Service-level badge route.
-	req3 := httptest.NewRequest(http.MethodGet, "/api/public/badge/demo/demo_web", nil)
+	req3 := httptest.NewRequest(http.MethodGet, "/api/public/badge/demo/web", nil)
 	rec3 := httptest.NewRecorder()
 	r.ServeHTTP(rec3, req3)
-	if !strings.Contains(rec3.Body.String(), "demo/demo_web: healthy") {
+	if !strings.Contains(rec3.Body.String(), "demo/web: healthy") {
 		t.Errorf("service badge body missing label/status:\n%s", rec3.Body.String())
 	}
 	req4 := httptest.NewRequest(http.MethodGet, "/api/public/badge/demo/ghost_svc", nil)
@@ -173,46 +148,16 @@ func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
 	if !strings.Contains(body5, "·") {
 		t.Errorf("combined badge missing segment separator:\n%s", body5)
 	}
-}
 
-func TestServiceBadge_StatusDerivation(t *testing.T) {
-	st, err := store.Open(t.TempDir() + "/data.db")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer st.Close()
-	ctx := context.Background()
-	_ = st.RecordDeploy(ctx, &store.StackRevision{StackName: "demo", Revision: 1002, SourceYAML: "app: demo", RenderedYAML: "x: 1"}, "")
-
-	cases := []struct {
-		name string
-		svc  services.ServiceSummary
-		want string
-	}{
-		{"healthy", services.ServiceSummary{Name: "demo_web", Desired: 1, Replicas: 1}, "healthy"},
-		{"in progress", services.ServiceSummary{Name: "demo_web", Desired: 1, Replicas: 1, UpdateState: "updating"}, "in progress"},
-		{"paused is error", services.ServiceSummary{Name: "demo_web", Desired: 1, Replicas: 1, UpdateState: "paused"}, "error"},
-		{"completed run-once paused is deployed", services.ServiceSummary{Name: "demo_migrate", Desired: 1, Replicas: 0, RunOnce: true, UpdateState: "paused"}, "healthy"},
-		{"degraded", services.ServiceSummary{Name: "demo_web", Desired: 2, Replicas: 1}, "degraded"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			svc := &fakeBadgeSvc{svcs: []services.ServiceSummary{tc.svc}}
-			_, status := serviceBadge(ctx, st, svc, "demo", tc.svc.Name)
-			if status != tc.want {
-				t.Errorf("status = %q, want %q", status, tc.want)
-			}
-		})
-	}
-
-	// Unknown service + unknown stack.
-	svc := &fakeBadgeSvc{svcs: []services.ServiceSummary{{Name: "demo_web", Desired: 1, Replicas: 1}}}
-	if _, status := serviceBadge(ctx, st, svc, "demo", "ghost"); status != "unknown" {
-		t.Errorf("ghost service status = %q, want unknown", status)
-	}
-	if _, status := serviceBadge(ctx, st, svc, "ghost", "demo_web"); status != "unknown" {
-		t.Errorf("ghost stack status = %q, want unknown", status)
+	// Error snapshot renders the dark-red color.
+	st2 := badgeStore(t, "error", map[string]string{"web": "error"})
+	r2 := chi.NewRouter()
+	BadgeMount(r2, st2)
+	req6 := httptest.NewRequest(http.MethodGet, "/api/public/badge/demo", nil)
+	rec6 := httptest.NewRecorder()
+	r2.ServeHTTP(rec6, req6)
+	if !strings.Contains(rec6.Body.String(), "error") || !strings.Contains(rec6.Body.String(), "#c62828") {
+		t.Errorf("error snapshot body missing error/color:\n%s", rec6.Body.String())
 	}
 }
 

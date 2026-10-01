@@ -82,6 +82,10 @@ const (
 	// nothing — the daemon reads it at startup AND applies it live when the
 	// console saves the cluster settings (runtime re-level via logger.SetLevel).
 	settingLogLevel = "log_level"
+
+	// settingReconcileInterval is how often the leader daemon runs the
+	// control-plane reconcile loop (0 disables the loop entirely).
+	settingReconcileInterval = "reconcile_interval"
 )
 
 // Setting* accessors expose the persisted settings keys for CLI surfaces
@@ -115,6 +119,7 @@ func SettingBackupS3AccessKey() string      { return settingBackupS3AccessKey }
 func SettingBackupS3SecretKey() string      { return settingBackupS3SecretKey }
 func SettingBackupS3Region() string         { return settingBackupS3Region }
 func SettingLogLevel() string               { return settingLogLevel }
+func SettingReconcileInterval() string      { return settingReconcileInterval }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {

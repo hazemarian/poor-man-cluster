@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/docker/docker/client"
 
@@ -33,6 +34,11 @@ type mockDaemon struct {
 	updateForce map[string]int
 	// execResults tracks ContainerExecCreate ids → exit codes.
 	execExit map[string]int
+	// events are streamed (newline-delimited JSON) by the /events endpoint.
+	events []events.Message
+	// holdEvents keeps the /events response open (blocking on the request
+	// context) after streaming, simulating a live daemon feed.
+	holdEvents bool
 }
 
 func newMockDaemon() *mockDaemon {
@@ -109,6 +115,33 @@ func (m *mockDaemon) handler() http.Handler {
 			defer m.mu.Unlock()
 			if err := json.NewEncoder(w).Encode(m.nodes); err != nil {
 				http.Error(w, err.Error(), 500)
+			}
+		})
+		inner.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+			// Stream the seeded events as newline-delimited JSON, flushing
+			// after each line so the SDK's decoder sees them incrementally.
+			// Returning closes the response body, which the SDK surfaces as
+			// io.EOF — the "clean stop" the adapter maps to channel close.
+			m.mu.Lock()
+			evs := make([]events.Message, len(m.events))
+			copy(evs, m.events)
+			m.mu.Unlock()
+
+			w.Header().Set("Content-Type", "application/json")
+			enc := json.NewEncoder(w)
+			flusher, _ := w.(http.Flusher)
+			for _, ev := range evs {
+				if err := enc.Encode(ev); err != nil {
+					return
+				}
+				if flusher != nil {
+					flusher.Flush()
+				}
+			}
+			if m.holdEvents {
+				// Keep the feed open until the client cancels the request,
+				// mirroring a live daemon that never closes its event stream.
+				<-r.Context().Done()
 			}
 		})
 		inner.HandleFunc("/tasks", func(w http.ResponseWriter, r *http.Request) {
@@ -530,3 +563,150 @@ func TestIdempotentRemove(t *testing.T) {
 }
 
 func uint64Ptr(v uint64) *uint64 { return &v }
+
+func TestRealClient_Events(t *testing.T) {
+	m := newMockDaemon()
+	m.events = []events.Message{
+		{
+			Type:   events.ServiceEventType,
+			Action: events.ActionCreate,
+			Actor: events.Actor{
+				ID: "svc-1",
+				Attributes: map[string]string{
+					"com.docker.stack.namespace":    "demo",
+					"com.docker.swarm.service.name": "demo_web",
+				},
+			},
+			Time: 1000,
+		},
+		{
+			Type:   events.ContainerEventType,
+			Action: events.ActionStart,
+			Actor: events.Actor{
+				ID: "task-1",
+				Attributes: map[string]string{
+					"com.docker.stack.namespace":    "demo",
+					"com.docker.swarm.service.name": "demo_web",
+					"com.docker.swarm.node.id":      "node-a",
+				},
+			},
+			Time: 1001,
+		},
+		{
+			Type:   events.ServiceEventType,
+			Action: events.ActionRemove,
+			Actor: events.Actor{
+				ID: "svc-1",
+				Attributes: map[string]string{
+					"com.docker.stack.namespace":    "demo",
+					"com.docker.swarm.service.name": "demo_web",
+				},
+			},
+			Time: 1002,
+		},
+	}
+	rc := realClientFromServer(t, m)
+
+	evCh, errCh := rc.Events(context.Background(), time.Now().Add(-time.Hour))
+
+	var got []runtime.Event
+	for ev := range evCh {
+		got = append(got, ev)
+	}
+	// The stream ended cleanly: no error should have been delivered, only a
+	// close (the defer closes errCh before evCh, so this read is safe).
+	if err, ok := <-errCh; ok {
+		t.Fatalf("unexpected error from event stream: %v", err)
+	}
+
+	if len(got) != 3 {
+		t.Fatalf("got %d events, want 3: %+v", len(got), got)
+	}
+	want := []runtime.Event{
+		{Type: "service", Action: "create", Stack: "demo", Service: "demo_web", Timestamp: 1000},
+		{Type: "container", Action: "start", Stack: "demo", Service: "demo_web", NodeID: "node-a", Timestamp: 1001},
+		{Type: "service", Action: "remove", Stack: "demo", Service: "demo_web", Timestamp: 1002},
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("event[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestRealClient_EventsCancelCloses(t *testing.T) {
+	m := newMockDaemon()
+	m.holdEvents = true
+	m.events = []events.Message{{
+		Type:   events.ServiceEventType,
+		Action: events.ActionCreate,
+		Actor: events.Actor{
+			ID: "svc-1",
+			Attributes: map[string]string{
+				"com.docker.stack.namespace":    "demo",
+				"com.docker.swarm.service.name": "demo_web",
+			},
+		},
+		Time: 1,
+	}}
+	rc := realClientFromServer(t, m)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	evCh, _ := rc.Events(ctx, time.Now().Add(-time.Hour))
+
+	// Receive the one seeded event to prove the stream is live.
+	ev, ok := <-evCh
+	if !ok {
+		t.Fatal("event channel closed before delivering the seeded event")
+	}
+	if ev.Type != "service" {
+		t.Errorf("event type = %q, want service", ev.Type)
+	}
+
+	cancel()
+
+	// The event channel must close once ctx is cancelled.
+	select {
+	case _, open := <-evCh:
+		if open {
+			t.Error("expected event channel to close after ctx cancel")
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("event channel did not close after ctx cancel")
+	}
+}
+
+func TestEventFromMessage(t *testing.T) {
+	msg := events.Message{
+		Type:   events.ServiceEventType,
+		Action: events.ActionUpdate,
+		Actor: events.Actor{
+			ID: "svc-9",
+			Attributes: map[string]string{
+				"com.docker.stack.namespace":    "demo",
+				"com.docker.swarm.service.name": "demo_api",
+				"com.docker.swarm.node.id":      "node-2",
+			},
+		},
+		Time: 4242,
+	}
+	got := eventFromMessage(msg)
+	want := runtime.Event{
+		Type:      "service",
+		Action:    "update",
+		Stack:     "demo",
+		Service:   "demo_api",
+		NodeID:    "node-2",
+		Timestamp: 4242,
+	}
+	if got != want {
+		t.Errorf("eventFromMessage = %+v, want %+v", got, want)
+	}
+
+	// A nil Attributes map must not panic and must map to empty fields.
+	empty := eventFromMessage(events.Message{Type: events.ContainerEventType, Action: events.ActionDie})
+	if empty.Stack != "" || empty.Service != "" || empty.NodeID != "" || empty.Timestamp != 0 {
+		t.Errorf("nil attributes should map to empty fields, got %+v", empty)
+	}
+}

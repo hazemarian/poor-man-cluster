@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/server"
@@ -189,6 +191,54 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Leader-only control loop: on becoming Swarm leader the daemon runs the
+	// reconcile loop (platform configs + app-stack drift + health snapshot)
+	// and the control-plane freshness restore; on losing leadership the loop
+	// stops. Non-manager/standalone nodes serve without the loop.
+	leadership := WatchSwarmLeadership(ctx, dc, log)
+	reconciler := &reconcile.Reconciler{
+		Store:         st,
+		Docker:        dc,
+		DeployService: deploySvc,
+		Services:      &services.Local{Docker: dc},
+		Update: func(ctx context.Context, deps cluster.UpdateDeps, in cluster.UpdateInput) (*cluster.UpdateResult, error) {
+			if cipher == nil {
+				return nil, fmt.Errorf("encryption key unavailable; cannot reconcile platform stacks")
+			}
+			return cluster.NewService().Update(ctx, deps, in)
+		},
+		UpdateDeps: cluster.UpdateDeps{
+			Store:    st,
+			Cipher:   cipher,
+			Docker:   dc,
+			Deployer: deployer,
+			Stdout:   io.Discard,
+		},
+		UpdateInput: cluster.UpdateInput{ConfigDir: cfg.ConfigDir(), Version: buildinfo.Version},
+		Log:         log,
+		Interval:    time.Duration(reconcileIntervalSeconds(cmd.Context(), st)) * time.Second,
+	}
+	var loopCancel context.CancelFunc
+	go func() {
+		for isLeader := range leadership {
+			if loopCancel != nil {
+				loopCancel()
+				loopCancel = nil
+			}
+			if isLeader {
+				log.Info().Msg("control loop: starting reconcile loop (leader)")
+				if _, err := ensureControlPlaneFresh(ctx, cfg, log); err != nil {
+					log.Error().Err(err).Msg("control-plane freshness check failed")
+				}
+				var loopCtx context.Context
+				loopCtx, loopCancel = context.WithCancel(ctx)
+				go reconciler.Loop(loopCtx)
+			} else {
+				log.Info().Msg("control loop: stopped (not the swarm leader)")
+			}
+		}
+	}()
+
 	log.Info().Str("addr", cfg.ListenAddr).Msg("pmcluster serve listening")
 	if err := server.Run(ctx, cfg.ListenAddr, handler); err != nil {
 		return fmt.Errorf("server: %w", err)
@@ -261,4 +311,22 @@ func serviceName() string {
 		return n
 	}
 	return "pmcluster"
+}
+
+// reconcileIntervalSeconds reads the persisted reconcile_interval setting
+// (seconds, 0 = the loop is disabled) with a default of 60.
+func reconcileIntervalSeconds(ctx context.Context, st *store.Store) int {
+	const def = 60
+	if st == nil {
+		return def
+	}
+	raw := st.GetSettingDefault(ctx, cluster.SettingReconcileInterval(), "")
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
 }

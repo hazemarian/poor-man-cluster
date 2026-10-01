@@ -129,8 +129,9 @@ func New(d Deps) http.Handler {
 	r.Get("/health", api.Health)
 
 	// Public stack-status badges for READMEs — no auth (GitHub camo fetches
-	// them). Aggregate health only, mounted outside the /api Bearer group.
-	BadgeMount(r, d.Store, d.Services)
+	// them). Aggregate health only, read from the DB snapshot the control
+	// loop writes (never live Docker), mounted outside the /api Bearer group.
+	BadgeMount(r, d.Store)
 
 	if d.WebhookSources != nil && d.DeployService != nil {
 		rec, _ := d.WebhookSources.(webhooks.Recorder)

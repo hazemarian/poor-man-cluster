@@ -77,6 +77,75 @@ func isSwarmLeader(ctx context.Context, dc runtime.Client, host string) (leader,
 	return false, false, nil
 }
 
+// WatchSwarmLeadership streams the node's leadership state: true when this
+// node becomes Swarm leader, false when it loses leadership. It emits an
+// initial value immediately (leader or not) so callers can start/stop the
+// leader-only control loop without waiting a full poll. The channel is
+// closed when the context is cancelled or Docker becomes unreachable.
+func WatchSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Logger) <-chan bool {
+	out := make(chan bool)
+	go func() {
+		defer close(out)
+		if dc == nil {
+			// Standalone/local mode: always "leader" of itself.
+			select {
+			case out <- true:
+			case <-ctx.Done():
+			}
+			return
+		}
+		host, err := os.Hostname()
+		if err != nil {
+			log.Error().Err(err).Msg("get hostname for leader watch")
+			return
+		}
+		t := time.NewTicker(leaderPollInterval)
+		defer t.Stop()
+		current := false
+		first := true
+		for {
+			leader, found, err := isSwarmLeader(ctx, dc, host)
+			switch {
+			case err != nil || !found:
+				// Docker unreachable / not a swarm member: standalone mode.
+				if current || first {
+					select {
+					case out <- true:
+					case <-ctx.Done():
+						return
+					}
+				}
+				current, first = true, false
+			case leader:
+				if !current || first {
+					log.Info().Str("node", host).Msg("became swarm leader — control loop active")
+					select {
+					case out <- true:
+					case <-ctx.Done():
+						return
+					}
+				}
+				current, first = false, false
+			default:
+				if current || first {
+					select {
+					case out <- false:
+					case <-ctx.Done():
+						return
+					}
+				}
+				current, first = false, false
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	return out
+}
+
 // ensureControlPlaneFresh restores the newest control-plane archive when the
 // local data.db is missing or older than that archive. When the local DB is
 // already at least as fresh as the newest archive (e.g. shared/replicated

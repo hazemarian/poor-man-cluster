@@ -2,13 +2,11 @@ package server
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -17,8 +15,12 @@ import (
 // fetched by GitHub's camo proxy and browsers with no credentials. It only
 // reveals aggregate health (healthy / in progress / degraded / error) — the
 // same signal the console already shows — so it is safe to expose.
-func BadgeMount(r chi.Router, st *store.Store, svc services.Service) {
-	if st == nil || svc == nil {
+//
+// The badge reads status ONLY from the DB snapshot the control loop writes
+// (stack_status): no live Docker queries per request, so README traffic never
+// stresses the swarm. A stack with no snapshot yet reads "unknown".
+func BadgeMount(r chi.Router, st *store.Store) {
+	if st == nil {
 		return
 	}
 	stackBadgeH := func(w http.ResponseWriter, r *http.Request) {
@@ -27,14 +29,14 @@ func BadgeMount(r chi.Router, st *store.Store, svc services.Service) {
 			writeBadge(w, "pmcluster", "unknown")
 			return
 		}
-		label, status := stackBadge(r.Context(), st, svc, stack)
+		label, status := stackBadge(r.Context(), st, stack)
 		writeBadge(w, label, status)
 	}
 	// Combined badge: main stack health + every service in one wide SVG.
 	// Registered before the {service} param route so the literal segment wins.
 	servicesBadgeH := func(w http.ResponseWriter, r *http.Request) {
 		stack := chi.URLParam(r, "stack")
-		segs := stackServicesBadge(r.Context(), st, svc, stack)
+		segs := stackServicesBadge(r.Context(), st, stack)
 		writeMultiBadge(w, segs)
 	}
 	// Service-level badge: /api/public/badge/{stack}/{service} — one service's
@@ -46,7 +48,7 @@ func BadgeMount(r chi.Router, st *store.Store, svc services.Service) {
 			writeBadge(w, "pmcluster", "unknown")
 			return
 		}
-		label, status := serviceBadge(r.Context(), st, svc, stack, service)
+		label, status := serviceBadge(r.Context(), st, stack, service)
 		writeBadge(w, label, status)
 	}
 	// GET + HEAD. GitHub's camo proxy and some image tools preflight with HEAD;
@@ -59,110 +61,33 @@ func BadgeMount(r chi.Router, st *store.Store, svc services.Service) {
 	}
 }
 
-// completedRunOnce reports whether a one-shot job has finished (its task
-// exited and swarm keeps a stale UpdateStatus around). Such services must
-// never drive the badge to error/degraded.
-func completedRunOnce(s services.ServiceSummary) bool {
-	return s.RunOnce && s.Desired > 0 && s.Replicas == 0
-}
-
-// stackBadge derives a stack's health status from its service replicas
-// (update state wins) and its recorded deploy errors (a failure on the
-// current revision trumps everything).
-func stackBadge(ctx context.Context, st *store.Store, svc services.Service, stack string) (label, status string) {
+// stackBadge derives a stack's health from the DB status snapshot the control
+// loop writes. No live Docker queries. Unknown when no snapshot exists yet.
+func stackBadge(ctx context.Context, st *store.Store, stack string) (label, status string) {
 	label = stack
-
-	// Deploy error on the current revision → error (dark red).
-	stRow, err := st.GetStack(ctx, stack)
-	if err == nil {
-		if errMsg := newestStackFailure(store.ParseStackErrors(stRow.LastError), stRow.CurrentRevision); errMsg != "" {
-			return label, "error"
-		}
-	}
-
-	// No stack row → unknown.
-	if err != nil {
-		if !errors.Is(err, store.ErrStackNotFound) {
-			return label, "unknown"
-		}
-		return label, "unknown"
-	}
-
-	svcs, err := svc.List(ctx, stack)
+	snap, err := st.GetStackStatus(ctx, stack)
 	if err != nil {
 		return label, "unknown"
 	}
-	if len(svcs) == 0 {
+	if snap.Status == "" {
 		return label, "unknown"
 	}
-
-	// Any service mid-update → in progress.
-	for _, s := range svcs {
-		if s.UpdateState == "updating" {
-			return label, "in progress"
-		}
-	}
-
-	// Any service paused → error (completed run-once jobs excluded — their
-	// stale paused marker is a finished-job artifact, not a failure).
-	for _, s := range svcs {
-		if s.UpdateState == "paused" && !completedRunOnce(s) {
-			return label, "error"
-		}
-	}
-
-	// Under-replicated (excluding completed run-once jobs) → degraded.
-	for _, s := range svcs {
-		if completedRunOnce(s) {
-			continue // finished one-shot job, not a failure
-		}
-		if s.Desired > 0 && s.Replicas < s.Desired {
-			return label, "degraded"
-		}
-	}
-
-	return label, "healthy"
+	return label, snap.Status
 }
 
-// serviceBadge derives ONE service's health. Same rules as stackBadge but
-// scoped to a single service; the service label reads <stack>/<service>.
-func serviceBadge(ctx context.Context, st *store.Store, svc services.Service, stack, service string) (label, status string) {
+// serviceBadge derives ONE service's health from the DB snapshot's per-service
+// map (keyed by the unqualified service name — the loop strips the stack_
+// prefix). Unknown when the stack or service has no snapshot entry.
+func serviceBadge(ctx context.Context, st *store.Store, stack, service string) (label, status string) {
 	label = stack + "/" + service
-
-	// The stack must exist (keeps the badge honest about the cluster view).
-	if _, err := st.GetStack(ctx, stack); err != nil {
-		return label, "unknown"
-	}
-
-	svcs, err := svc.List(ctx, stack)
+	snap, err := st.GetStackStatus(ctx, stack)
 	if err != nil {
 		return label, "unknown"
 	}
-	for i := range svcs {
-		if svcs[i].Name == service {
-			return label, serviceStatus(svcs[i])
-		}
+	if status, ok := snap.Services[service]; ok && status != "" {
+		return label, status
 	}
 	return label, "unknown"
-}
-
-// serviceStatus maps one service summary to its badge status using the same
-// precedence as stackBadge: updating > paused (non run-once) > degraded >
-// healthy; a completed run-once job always reads healthy.
-func serviceStatus(s services.ServiceSummary) string {
-	if s.UpdateState == "updating" {
-		return "in progress"
-	}
-	if s.UpdateState == "paused" && !completedRunOnce(s) {
-		return "error"
-	}
-	if completedRunOnce(s) {
-		return "healthy" // finished one-shot job
-	}
-	if s.Desired > 0 && s.Replicas < s.Desired {
-		return "degraded"
-	}
-	return "healthy"
 }
 
 // badgeSegment is one label/status pair of a multi-segment badge.
@@ -173,32 +98,19 @@ type badgeSegment struct {
 
 // stackServicesBadge builds the segment list for the combined badge: the first
 // segment carries the stack's overall health, then one segment per service
-// (label without the <stack>_ prefix). An unknown stack yields a single
-// unknown segment.
-func stackServicesBadge(ctx context.Context, st *store.Store, svc services.Service, stack string) []badgeSegment {
-	_, main := stackBadge(ctx, st, svc, stack)
+// (label without the <stack>_ prefix), from the DB snapshot only.
+func stackServicesBadge(ctx context.Context, st *store.Store, stack string) []badgeSegment {
+	_, main := stackBadge(ctx, st, stack)
 	segs := []badgeSegment{{Label: stack, Status: main}}
 
-	svcs, err := svc.List(ctx, stack)
+	snap, err := st.GetStackStatus(ctx, stack)
 	if err != nil {
 		return segs
 	}
-	for _, s := range svcs {
-		segs = append(segs, badgeSegment{Label: strings.TrimPrefix(s.Name, stack+"_"), Status: serviceStatus(s)})
+	for name, status := range snap.Services {
+		segs = append(segs, badgeSegment{Label: strings.TrimPrefix(name, stack+"_"), Status: status})
 	}
 	return segs
-}
-
-// newestStackFailure returns the newest recorded failure whose revision
-// matches the current revision (errors-only history — a clean redeploy writes
-// nothing, so absence on the current revision means healthy).
-func newestStackFailure(errors []store.StackErrorEntry, currentRevision int64) string {
-	for _, e := range errors {
-		if e.Error != "" && e.Revision == currentRevision {
-			return e.Error
-		}
-	}
-	return ""
 }
 
 // writeBadge renders a shields.io-style flat SVG badge.

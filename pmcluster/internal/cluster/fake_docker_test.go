@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
@@ -221,6 +222,16 @@ func (f *fakeDocker) ConfigInspect(_ context.Context, name string) (runtime.Conf
 func (f *fakeDocker) NodeList(_ context.Context) ([]runtime.Node, error) { return nil, nil }
 func (f *fakeDocker) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
 	return runtime.JoinTokens{}, nil
+}
+
+// Events is unused by the cluster package; return already-closed channels so
+// this fake keeps satisfying the interface as it grows.
+func (f *fakeDocker) Events(_ context.Context, _ time.Time) (<-chan runtime.Event, <-chan error) {
+	evCh := make(chan runtime.Event)
+	close(evCh)
+	errCh := make(chan error)
+	close(errCh)
+	return evCh, errCh
 }
 
 func (f *fakeDocker) Close() error { return nil }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
@@ -41,6 +42,12 @@ type fakeClient struct {
 	serviceRestart int                   // count of ServiceRestart calls
 	execResults    []*runtime.ExecResult // queue of exec results, consumed in order
 	execErr        error
+
+	// EventsCh / EventsErrCh are the settable channel pair Events returns,
+	// so tests can drive the stream deterministically. When nil, Events
+	// returns already-closed channels.
+	EventsCh    chan runtime.Event
+	EventsErrCh chan error
 }
 
 // AddService registers a swarm service for the service-ops tests.
@@ -230,6 +237,15 @@ func (f *fakeClient) ConfigInspect(_ context.Context, name string) (runtime.Conf
 		return runtime.ConfigInspectResult{Labels: c.Labels, Data: c.Data}, nil
 	}
 	return runtime.ConfigInspectResult{}, fmt.Errorf("config %q not found", name)
+}
+
+func (f *fakeClient) Events(_ context.Context, _ time.Time) (<-chan runtime.Event, <-chan error) {
+	if f.EventsCh == nil {
+		ch := make(chan runtime.Event)
+		close(ch)
+		return ch, nil
+	}
+	return f.EventsCh, f.EventsErrCh
 }
 
 func (f *fakeClient) Close() error {

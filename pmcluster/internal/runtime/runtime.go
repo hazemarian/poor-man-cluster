@@ -5,7 +5,10 @@
 // deliberately small and runtime-agnostic — no Docker SDK types leak through.
 package runtime
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Client is the contract pmcluster needs from an orchestrator daemon — a
 // subset of what Docker Swarm offers. *Exists/*Create methods collapse
@@ -69,6 +72,13 @@ type Client interface {
 	ConfigList(ctx context.Context, labelKey, labelValue string) ([]string, error)
 
 	ConfigInspect(ctx context.Context, name string) (ConfigInspectResult, error)
+
+	// Events streams swarm lifecycle events from `since` onward. The returned
+	// event channel is closed when ctx is cancelled or the source stream ends;
+	// errors (other than cancellation) are delivered on the error channel
+	// before the event channel closes. Safe to call concurrently with every
+	// other method on the client.
+	Events(ctx context.Context, since time.Time) (<-chan Event, <-chan error)
 
 	Close() error
 }
@@ -200,6 +210,20 @@ type Node struct {
 type JoinTokens struct {
 	Worker  string
 	Manager string
+}
+
+// Event is a swarm lifecycle event the reconcile loop watches (service
+// create/update/remove, task start/stop/die). It is a neutral, minimal
+// projection of the orchestrator's event stream: Stack is derived from the
+// com.docker.stack.namespace attribute, Service from com.docker.swarm.service.name,
+// NodeID from com.docker.swarm.node.id.
+type Event struct {
+	Type      string // "service" | "task" (or pass-through orchestrator types)
+	Action    string // orchestrator action string: create/update/remove/start/stop/die/kill
+	Stack     string // com.docker.stack.namespace ("" when not stack-managed)
+	Service   string // com.docker.swarm.service.name
+	NodeID    string // com.docker.swarm.node.id
+	Timestamp int64  // unix seconds the event was generated
 }
 
 // StackNamespaceLabel is the label attached to every resource (service,
