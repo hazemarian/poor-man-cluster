@@ -257,3 +257,28 @@ func TestSecretCRUD_RunPaths(t *testing.T) {
 		t.Fatal("show after delete: expected error")
 	}
 }
+
+// TestStackBadgeCommand covers the markdown the badge command prints and the
+// base-URL derivation (remote origin vs cluster domain).
+func TestStackBadgeCommand(t *testing.T) {
+	// Remote mode: the global apiURL provides the origin (no /api suffix).
+	prev := apiURL
+	apiURL = "https://pmcluster.example.com/api"
+	t.Cleanup(func() { apiURL = prev })
+
+	cmd, out, _ := newTestCmd("badge", nil, runStackBadge)
+	if err := cmd.RunE(cmd, []string{"demo"}); err != nil {
+		t.Fatalf("badge (remote): %v", err)
+	}
+	want := "![demo status](https://pmcluster.example.com/api/public/badge/demo)\n"
+	if out.String() != want {
+		t.Errorf("badge output = %q, want %q", out.String(), want)
+	}
+
+	// Missing origin → explicit error.
+	apiURL = ""
+	cmd2, out2, _ := newTestCmd("badge", nil, runStackBadge)
+	if err := cmd2.RunE(cmd2, []string{"demo"}); err == nil {
+		t.Errorf("badge without origin: want error, got nil (out=%q)", out2.String())
+	}
+}

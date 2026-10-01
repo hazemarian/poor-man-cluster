@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -55,6 +56,21 @@ var stackShowCmd = &cobra.Command{
 	RunE:  runStackShow,
 }
 
+var stackBadgeCmd = &cobra.Command{
+	Use:   "badge <stack-name>",
+	Short: "Print the README status-badge markdown for a stack",
+	Long: `Prints a markdown image line pointing at the stack's public status
+badge (deployed / in progress / degraded / error), e.g.:
+
+  ![donation-campaign status](https://pmcluster.example.com/api/public/badge/donation-campaign)
+
+Paste the line into any GitHub README. The badge endpoint is public and
+returns a small SVG derived from live swarm replica state + the stack's
+recorded deploy errors.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runStackBadge,
+}
+
 var rollbackCmd = &cobra.Command{
 	Use:   "rollback <stack-name> <revision>",
 	Short: "Re-apply a stored revision as a new revision",
@@ -69,7 +85,7 @@ func init() {
 	deployCmd.Flags().String("file", "", "manifest path inside the source repo (provenance, e.g. deploy/test-lms.yaml)")
 	deployCmd.Flags().String("version", "", "override the manifest's version (image tag)")
 
-	stackCmd.AddCommand(stackListCmd, stackShowCmd)
+	stackCmd.AddCommand(stackListCmd, stackShowCmd, stackBadgeCmd)
 
 	rootCmd.AddCommand(deployCmd, stackCmd, rollbackCmd)
 }
@@ -222,6 +238,43 @@ func runStackShow(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(w, "%s%d\t%s\n", marker, r.Revision, time.Unix(r.CreatedAt, 0).Format(time.RFC3339))
 	}
 	return w.Flush()
+}
+
+// runStackBadge prints the markdown image line for a stack's public status
+// badge. The base URL is the cluster's pmcluster.<domain> origin in local
+// mode, or the configured API URL origin in remote mode.
+func runStackBadge(cmd *cobra.Command, args []string) error {
+	name := args[0]
+
+	base := badgeBaseURL(cmd)
+	if base == "" {
+		return fmt.Errorf("cannot derive the public badge base URL — set PMCLUSTER_API_URL (remote) or run on a cluster with a configured domain")
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "![%s status](%s/api/public/badge/%s)\n", name, base, name)
+	return nil
+}
+
+// badgeBaseURL resolves the public origin used by README badges: the
+// configured API URL in remote mode (origin, no /api suffix), otherwise the
+// cluster's pmcluster.<domain> origin from the stored domain setting.
+func badgeBaseURL(cmd *cobra.Command) string {
+	if apiURL != "" {
+		origin := apiURL
+		origin = strings.TrimSuffix(origin, "/")
+		origin = strings.TrimSuffix(origin, "/api")
+		return origin
+	}
+	st, _, err := openStore()
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = st.Close() }()
+	domain := st.GetSettingDefault(cmd.Context(), cluster.SettingDomain(), "")
+	if domain == "" {
+		return ""
+	}
+	return "https://pmcluster." + domain
 }
 
 func formatLastBackupRow(b backups.Run) string {

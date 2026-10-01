@@ -64,6 +64,22 @@
 <div class="msg ok">{{TF .MsgKey .MsgArg0 .MsgArg1 .MsgArg2}}</div>
 {{end}}
 
+{{if and .Detail .Badge}}
+<div class="card">
+  <div class="card-inner">
+    <div class="kv-row">
+      <span class="k">{{icon "globe"}}{{T "stack.badge"}}</span>
+      <span class="v">
+        <code class="mono" dir="ltr" style="word-break:break-all">{{.Badge}}</code>
+        <button type="button" class="btn btn-ghost btn-sm" title="{{T "common.copy"}}"
+                data-copy="{{.Badge}}" onclick="copyVal(this)">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>
+      </span>
+    </div>
+    <p class="sub">{{T "stack.badge_hint"}}</p>
+  </div>
+</div>
+{{end}}
+
 {{if and .Detail .Detail.Stack.LastError}}
 <div class="msg err">
   <b>{{icon "alert-triangle"}}{{T "stack.deploy_failed"}}</b>

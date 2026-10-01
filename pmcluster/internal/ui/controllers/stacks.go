@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -136,6 +137,11 @@ type backupInfo struct {
 type stackDetailData struct {
 	Name   string
 	Detail *stackDetail
+
+	// Badge is the public status-badge markdown for this stack (ready to
+	// paste into a GitHub README). Empty when the console has no cluster
+	// domain configured (no PMCLUSTER_DOMAIN).
+	Badge string
 
 	// Services are this stack's swarm services with replica health, read from
 	// the daemon's service list. ServicesKnown separates "the read failed"
@@ -423,6 +429,10 @@ func (c Stacks) stacksData(ctx context.Context, q string) stackData {
 // (with replica health) for the stack page.
 func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 	d := stackDetailData{Name: name}
+
+	if c.Domain != "" {
+		d.Badge = fmt.Sprintf("![%s status](https://pmcluster.%s/api/public/badge/%s)", name, c.Domain, name)
+	}
 
 	if _, _, configured := c.loadParams(ctx); !configured {
 		d.ErrKey = "err.api_not_configured"

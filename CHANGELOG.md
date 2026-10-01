@@ -4,6 +4,12 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.127 (2026-10-01)
+
+- **Public stack-status badge for READMEs.** New unauthenticated endpoint `GET /api/public/badge/{stack}` returns a shields.io-style flat SVG reflecting the stack's live state: `deployed` (green), `in progress` (yellow — any service mid-update), `degraded` (red — under-replicated, excluding completed one-shot jobs), `error` (dark red — the current revision has a failed deploy outcome in the error history), or `unknown` (grey). Public on purpose: GitHub's README image proxy (camo) fetches it without credentials; cached 60s.
+- **`pmcluster stack badge <stack>`** prints the ready-to-paste markdown line (`![<stack> status](https://pmcluster.<domain>/api/public/badge/<stack>)` — remote-mode origin, or the cluster's configured domain).
+- **Copy badge from the console**: the stack detail page shows the markdown with a copy button (`data-copy`) when the console knows the cluster domain. EN/AR labels + hint added.
+
 ## v0.2.126 (2026-10-01)
 
 - **Errors-only deploy history — no empty writes.** `RecordStackError` now records **failures only** (an empty error writes nothing); a clean deploy leaves the history untouched. The console's "Deploy failed" banner/pill is keyed to the **current revision**: `newestStackError(errors, currentRevision)` shows the newest failed outcome only when it belongs to the current revision — so after a successful redeploy the banner clears (the clean deploy has no new entry) while older failures remain in the history panel for debugging. The revision join (v0.2.125) still surfaces per-execution errors (`""` = applied cleanly, derived from absence in the history). Tests updated for failures-only semantics.

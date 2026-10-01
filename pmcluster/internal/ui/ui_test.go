@@ -1284,3 +1284,42 @@ func TestClusterSettingsLogLevelSelect(t *testing.T) {
 		t.Fatalf("POST /web/settings/cluster = %d, want 200", resp.StatusCode)
 	}
 }
+
+// TestStackDetailBadge verifies the stack detail page renders the copyable
+// status-badge markdown when the console knows the cluster domain, and omits
+// the card entirely when it does not (local/standalone runs).
+func TestStackDetailBadge(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+
+	cfg := FromEnv()
+	cfg.DataDir = t.TempDir()
+	cfg.PMAPIURL = daemon.URL
+	cfg.PMAPIToken = "pmc_test"
+	cfg.SessionSecret = []byte("0123456789abcdefgh")
+	cfg.CookieName = "pmui_session"
+	cfg.ClusterDomain = "example.com"
+
+	app, err := NewApp(cfg)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	jar := map[string]*http.Cookie{}
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
+
+	resp := doRequest(t, app, http.MethodGet, "/web/stacks/demo", "", jar)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /web/stacks/demo = %d, want 200", resp.StatusCode)
+	}
+	body := readBody(t, resp)
+	for _, want := range []string{
+		"Status badge",
+		"![demo status](https://pmcluster.example.com/api/public/badge/demo)",
+		`data-copy="![demo status](https://pmcluster.example.com/api/public/badge/demo)"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("stack detail missing badge %q", want)
+		}
+	}
+}
