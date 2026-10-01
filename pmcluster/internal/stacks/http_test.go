@@ -2,6 +2,7 @@ package stacks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -190,6 +191,82 @@ func TestRemoveStackHandler(t *testing.T) {
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/stacks/ghost", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("DELETE /stacks/ghost = %d, want 404; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRevisionErrorJoin verifies each revision's outcome is JOINED from the
+// stack's error history (stacks.last_error JSON array) — no per-revision
+// storage. The list endpoint and the revision endpoint both expose the error.
+func TestRevisionErrorJoin(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	rev1 := &store.StackRevision{StackName: "demo", Revision: 1001, SourceYAML: "app: demo", RenderedYAML: "services: {}"}
+	if err := st.RecordDeploy(ctx, rev1, ""); err != nil {
+		t.Fatalf("RecordDeploy v1: %v", err)
+	}
+	rev2 := &store.StackRevision{StackName: "demo", Revision: 1002, SourceYAML: "app: demo", RenderedYAML: "services: {}"}
+	if err := st.RecordDeploy(ctx, rev2, ""); err != nil {
+		t.Fatalf("RecordDeploy v2: %v", err)
+	}
+	// A failed execution and a clean one, newest first.
+	if _, err := st.RecordStackError(ctx, "demo", 1002, "docker stack deploy: boom"); err != nil {
+		t.Fatalf("RecordStackError 1002: %v", err)
+	}
+	if _, err := st.RecordStackError(ctx, "demo", 1001, ""); err != nil {
+		t.Fatalf("RecordStackError 1001: %v", err)
+	}
+
+	dep := &stubDeployer{}
+	svc := &Service{Store: st, Deployer: dep}
+	h := &HTTP{Deploy: svc, Read: Local{Store: st}}
+
+	r := chi.NewRouter()
+	h.Mount(r)
+
+	// List endpoint joins per-revision errors.
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stacks/demo", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /stacks/demo = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var out struct {
+		Revisions []struct {
+			Revision int64  `json:"revision"`
+			Error    string `json:"error"`
+		} `json:"revisions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal list: %v", err)
+	}
+	if len(out.Revisions) != 2 {
+		t.Fatalf("revisions = %d, want 2", len(out.Revisions))
+	}
+	byRev := map[int64]string{}
+	for _, rv := range out.Revisions {
+		byRev[rv.Revision] = rv.Error
+	}
+	if byRev[1002] != "docker stack deploy: boom" {
+		t.Errorf("rev 1002 error = %q, want the joined failure", byRev[1002])
+	}
+	if byRev[1001] != "" {
+		t.Errorf("rev 1001 error = %q, want empty (clean execution)", byRev[1001])
+	}
+
+	// Revision detail endpoint also joins the error.
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stacks/demo/revisions/1002", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /stacks/demo/revisions/1002 = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var revOut struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &revOut); err != nil {
+		t.Fatalf("unmarshal revision: %v", err)
+	}
+	if revOut.Error != "docker stack deploy: boom" {
+		t.Errorf("revision detail error = %q, want the joined failure", revOut.Error)
 	}
 }
 

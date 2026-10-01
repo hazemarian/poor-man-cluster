@@ -63,6 +63,9 @@ type Revision struct {
 	RenderedYAML string
 	PayloadJSON  string
 	CreatedAt    int64
+	// Error is this deployment execution's outcome (joined from the stack's
+	// error history by revision): "" = applied cleanly, else the failure.
+	Error string
 }
 
 // Deployer is the write side: deploy, sync, roll back and remove stacks.

@@ -288,6 +288,7 @@
           <div class="rev-main">
             <span class="rev-id" dir="ltr">{{N0 .Revision}}</span>
             {{if .Current}}<span class="pill good"><i class="dot"></i>{{T "stack.rev_current"}}</span>{{end}}
+            {{if .Error}}<span class="pill bad" title="{{.Error}}"><i class="dot"></i>{{T "stack.deploy_failed"}}</span>{{end}}
           </div>
           <div class="rev-when">{{TF "stack.rev_when" (ts .CreatedAt)}}</div>
           <div class="rev-actions">

@@ -103,11 +103,19 @@ func (h *HTTP) show(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+	// Join each revision to its deploy outcome: the stack's error history
+	// (stacks.last_error JSON array, newest first) carries one entry per
+	// deployment execution keyed by revision — no per-revision storage.
+	revError := map[int64]string{}
+	for _, e := range st.StackErrors {
+		revError[e.Revision] = e.Error
+	}
 	revsJSON := make([]map[string]any, 0, len(revs))
 	for _, rv := range revs {
 		revsJSON = append(revsJSON, map[string]any{
 			"revision":   rv.Revision,
 			"created_at": rv.CreatedAt,
+			"error":      revError[rv.Revision],
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -154,6 +162,15 @@ func (h *HTTP) showRevision(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "revision must be an integer"})
 		return
 	}
+	st, err := h.Read.Get(r.Context(), name)
+	if err != nil {
+		if errors.Is(err, store.ErrStackNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "stack not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
 	revs, err := h.Read.Revisions(r.Context(), name, 0)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -171,6 +188,14 @@ func (h *HTTP) showRevision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rv := revs[idx]
+	// Join the execution's outcome from the stack error history.
+	revErr := ""
+	for _, e := range st.StackErrors {
+		if e.Revision == rev {
+			revErr = e.Error
+			break
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"stack":         rv.StackName,
 		"revision":      rv.Revision,
@@ -178,6 +203,7 @@ func (h *HTTP) showRevision(w http.ResponseWriter, r *http.Request) {
 		"source_yaml":   rv.SourceYAML,
 		"rendered_yaml": rv.RenderedYAML,
 		"payload":       rv.PayloadJSON,
+		"error":         revErr,
 	})
 }
 

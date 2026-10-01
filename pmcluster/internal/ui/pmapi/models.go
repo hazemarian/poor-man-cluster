@@ -62,6 +62,8 @@ type Stack struct {
 type RevisionMeta struct {
 	Revision  int64 `json:"revision"`
 	CreatedAt int64 `json:"created_at"`
+	// Error is this deployment execution's outcome ("" = applied cleanly).
+	Error string `json:"error"`
 }
 
 // StackDetail is GET /api/stacks/{name}.
@@ -88,6 +90,7 @@ type Revision struct {
 	SourceYAML   string `json:"source_yaml"`
 	RenderedYAML string `json:"rendered_yaml"`
 	Payload      string `json:"payload"`
+	Error        string `json:"error"`
 }
 
 // Backup is one row of GET /api/backups (and per-stack backups).

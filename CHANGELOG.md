@@ -4,6 +4,10 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.125 (2026-10-01)
+
+- **Deploy outcomes joined to each deployment execution.** The stack-level error history (`stacks.last_error` JSON array, keyed by revision) is now JOINED into the revision views — no extra storage. `GET /api/stacks/{name}` revisions and `GET /api/stacks/{name}/revisions/{rev}` each carry an `error` field (the matching history entry for that revision; `""` = that execution applied cleanly). The console revision timeline shows a "Deploy failed" pill on failed executions and the revision detail (modal) page shows the failure banner — so a stack whose current revision is clean but a previous one failed shows both states side by side. Plumbing: `stacks.Revision.Error` (domain + remote + pmapi), `revRow.Error`/`revisionData.Error` (controllers), templates (`frag_stack.html` timeline pill, `frag_revision.html` banner). Test: `TestRevisionErrorJoin` (list + detail endpoints join per-revision outcomes; no per-revision storage).
+
 ## v0.2.124 (2026-10-01)
 
 - **Stack deploy error history (JSON)**: `stacks.last_error` now holds a JSON array of deploy/apply outcomes, newest first, capped at 20 (`store.StackErrorEntry{revision, error, created_at}`, `RecordStackError`/`ListStackErrors`, `ParseStackErrors`). Every deploy/apply outcome — success and failure, sync and fire-and-forget — is prepended; a success entry has an empty `error` so the "Deploy failed" banner clears while the failure history is retained. The console stack detail page gains a **Deploy error history** panel (per-revision entries with rev id + timestamp); the stacks list pill still shows the newest failure. `/api/stacks` `last_error` is now an array. No new table (the v0.2.123 column is reused as the JSON store).

@@ -113,6 +113,9 @@ type revRow struct {
 	Revision  int64
 	CreatedAt int64
 	Current   bool
+	// Error is this deployment execution's outcome (joined from the stack's
+	// error history by revision): "" = applied cleanly, else the failure.
+	Error string
 }
 
 // backupInfo is the last backup of a stack, with the pill tone resolved here
@@ -155,6 +158,8 @@ type revisionData struct {
 	Created  int64
 	Source   string
 	Rendered string
+	// Error is this deployment execution's outcome ("" = applied cleanly).
+	Error string
 
 	ErrKey string
 	ErrRaw string
@@ -292,6 +297,7 @@ func (c Stacks) ShowRevision(g *gin.Context) {
 	d.Stack, d.Revision = rv.Stack, rv.Revision
 	d.Created = rv.CreatedAt
 	d.Source, d.Rendered = rv.SourceYAML, rv.RenderedYAML
+	d.Error = rv.Error
 	d.Steps = revisionSteps(g, rv.Payload)
 	c.Views.Fragment(g, "revision", d)
 }
@@ -447,6 +453,7 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 			Revision:  r.Revision,
 			CreatedAt: r.CreatedAt,
 			Current:   r.Revision == det.Stack.CurrentRevision,
+			Error:     r.Error,
 		})
 	}
 	if b := det.LastBackup; b != nil {

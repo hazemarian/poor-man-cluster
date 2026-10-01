@@ -30,8 +30,9 @@ type stackListDTO struct {
 }
 
 type revisionMetaDTO struct {
-	Revision  int64 `json:"revision"`
-	CreatedAt int64 `json:"created_at"`
+	Revision  int64  `json:"revision"`
+	CreatedAt int64  `json:"created_at"`
+	Error     string `json:"error"`
 }
 
 type stackDetailDTO struct {
@@ -71,6 +72,7 @@ func (a *Stacks) Revisions(ctx context.Context, name string, limit int) ([]stack
 			StackName: name,
 			Revision:  m.Revision,
 			CreatedAt: m.CreatedAt,
+			Error:     m.Error,
 		})
 	}
 	return revs, nil

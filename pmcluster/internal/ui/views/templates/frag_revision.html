@@ -22,6 +22,16 @@
 {{else}}
 <p class="sub">{{TF "revision.sub" (ts .Created)}}</p>
 
+{{if .Error}}
+<div class="banner bad mt-24">
+  {{icon "alert-triangle"}}
+  <div class="b-body">
+    <p class="b-title">{{T "stack.deploy_failed"}}</p>
+    <p class="muted">{{.Error}}</p>
+  </div>
+</div>
+{{end}}
+
 <div class="panel mt-24">
   <div class="panel-head">
     <h2>{{T "revision.pipeline"}}</h2>
