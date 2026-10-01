@@ -64,6 +64,14 @@
 <div class="msg ok">{{TF .MsgKey .MsgArg0 .MsgArg1 .MsgArg2}}</div>
 {{end}}
 
+{{if and .Detail .Detail.Stack.LastError}}
+<div class="msg err">
+  <b>{{icon "alert-triangle"}}{{T "stack.deploy_failed"}}</b>
+  <p class="muted">{{.Detail.Stack.LastError}}</p>
+  <p class="sub">{{T "stack.deploy_failed_hint"}}</p>
+</div>
+{{end}}
+
 {{if .Detail}}
 {{/* ---- services: replica health + logs/tasks, straight from the swarm ---- */}}
 <div class="panel">

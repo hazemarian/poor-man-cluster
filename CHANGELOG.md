@@ -24,6 +24,19 @@ and when.
 
 - **`run_once` wait edge case fixed**: a one-shot job that failed an attempt then succeeded on a retry left both `[failed, complete]` task records — the ordered-deploy wait loop previously aborted the deploy on any failed record. The wait now ignores records superseded by newer attempts (any active task keeps waiting), and with no active task the **newest terminal task** decides (ties by start time): `complete` → ready, `failed`/`rejected` → deploy error, `shutdown`/`removed` → "did not complete". Six new wait-path tests.
 
+## v0.2.123 (2026-10-01)
+
+- **Failed background deploys surface in the console**: fire-and-forget deploys (v0.2.122) apply in the background, so the apply error was only visible in the logs. The stack row now records the last deploy/apply error (`stacks.last_error`, migration 0021) — set when a deploy or its background apply fails and cleared on the next successful apply. Exposed as `last_error` in the stacks API, remote CLI and console: the stack detail page shows a "Deploy failed" banner with the error, and the stacks list shows a red pill per failed stack. Covers every trigger (webhook, API, CLI, sync, rollback).
+
+## v0.2.122 (2026-10-01)
+
+- **Fire-and-forget deploys**: `DeployAsync` validates (parse → conflict check → interpolate → validate → translate → record revision) synchronously, then applies the swarm deploy in the background on a detached context. The webhook receiver and `POST /api/stacks` return **202** `{status:accepted, stack, revision}` immediately; validation errors still return 400/502 synchronously; the delivery row records `accepted` at acceptance time. The receiver-side retryer is superseded. Deploy order (`depends_on` levels), wait-for-healthy and drift-prune are unchanged.
+
+## v0.2.121 (2026-10-01)
+
+- **Info-level deploy logs**: the whole deployment pipeline logs at `info` with the service names (start, per-level deploy, waiting, level healthy, prune, completed); the per-level compose YAML stays `debug`-only. Structured zerolog records reach the CLI console, the daemon log file and OpenObserve.
+- **Runtime log level**: new `log_level` cluster setting (console Settings → Cluster settings select, or `pmcluster cluster settings set log_level=debug`) applies live to the running daemon via the zerolog process-global — no restart. Loggers are built at the minimum level and gated by the global, so re-level works in both directions.
+
 ## v0.2.118 (2026-10-01)
 
 - **`depends_on` now orders the deploy — no more rendered wait wrapper.** Docker Swarm parses and ignores compose `depends_on` (no dependency graph); the previous fix wrapped a dependent service's command/entrypoint in a POSIX `sh` loop (`getent`/`nc -z` probes). That wrapper was a runtime-ordering workaround encoded into a rendered artifact — it broke baked-entrypoint images, distroless images without `sh`, had no timeout, and made port/DNS assumptions. It is **removed**.

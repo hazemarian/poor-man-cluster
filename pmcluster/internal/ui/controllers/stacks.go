@@ -33,6 +33,9 @@ type stackInfo struct {
 	CreatedAt       int64
 	UpdatedAt       int64
 	SourceFile      string
+	// LastError surfaces a failed background deploy/apply in the console
+	// (fire-and-forget deploys no longer return the apply error in the response).
+	LastError string
 }
 
 // stackRow is one line of the stacks table. The replica counts come from the
@@ -344,6 +347,7 @@ func (c Stacks) stacksData(ctx context.Context, q string) stackData {
 			CurrentRevision: s.CurrentRevision,
 			RepoURL:         s.RepoURL,
 			SourceFile:      s.SourceFile,
+			LastError:       s.LastError,
 			CreatedAt:       s.CreatedAt,
 			UpdatedAt:       s.UpdatedAt,
 		}})
@@ -424,6 +428,7 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 		CurrentRevision: det.Stack.CurrentRevision,
 		RepoURL:         det.Stack.RepoURL,
 		SourceFile:      det.Stack.SourceFile,
+		LastError:       det.Stack.LastError,
 		CreatedAt:       det.Stack.CreatedAt,
 		UpdatedAt:       det.Stack.UpdatedAt,
 	}}

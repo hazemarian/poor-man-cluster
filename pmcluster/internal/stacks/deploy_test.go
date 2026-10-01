@@ -1035,6 +1035,48 @@ func TestDeployAsync_ValidationIsSynchronous(t *testing.T) {
 	}
 }
 
+// TestDeployAsync_BackgroundFailureRecordsLastError: when the background
+// apply fails, the stack's last_error is persisted so the console can surface
+// it even though the fire-and-forget response already returned 202.
+func TestDeployAsync_BackgroundFailureRecordsLastError(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{err: errors.New("docker stack deploy: boom")}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	if _, err := svc.DeployAsync(ctx, Payload{Manifest: donationCampaignManifest}); err != nil {
+		t.Fatalf("DeployAsync: %v", err)
+	}
+
+	// The apply is backgrounded; wait for it to fail and persist.
+	deadline := time.Now().Add(2 * time.Second)
+	var st *store.Stack
+	var err error
+	for time.Now().Before(deadline) {
+		st, err = s.GetStack(ctx, "donation-campaign")
+		if err == nil && st.LastError != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("GetStack: %v", err)
+	}
+	if st.LastError != "docker stack deploy: docker stack deploy: boom" {
+		t.Errorf("stack.LastError = %q, want the background apply error", st.LastError)
+	}
+
+	// A subsequent successful deploy clears it.
+	dep.err = nil
+	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest}); err != nil {
+		t.Fatalf("Deploy after recovery: %v", err)
+	}
+	st, _ = s.GetStack(ctx, "donation-campaign")
+	if st.LastError != "" {
+		t.Errorf("stack.LastError after successful deploy = %q, want empty", st.LastError)
+	}
+}
+
 // TestDeploy_StructuredDebugLogs: the ordered-deploy report is emitted as
 // structured zerolog records — the pipeline steps and service names at INFO
 // level (never the YAML bodies), plus the per-level compose YAML at DEBUG

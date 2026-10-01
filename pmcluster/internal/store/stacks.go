@@ -17,8 +17,12 @@ type Stack struct {
 	// SourceFile is the manifest path inside the repo (e.g. deploy/test-lms.yaml)
 	// that produced the current revision; empty when deployed without provenance.
 	SourceFile string
-	CreatedAt  int64
-	UpdatedAt  int64
+	// LastError holds the most recent deploy/apply error ("" when the last
+	// deploy succeeded). Fire-and-forget deploys apply in the background, so
+	// failures surface here instead of in the HTTP response.
+	LastError string
+	CreatedAt int64
+	UpdatedAt int64
 }
 
 // StackRevision records one deployed version of a stack: the source DSL, the
@@ -120,8 +124,8 @@ func (s *Store) RecordDeploy(ctx context.Context, rev *StackRevision, repoURL st
 func (s *Store) GetStack(ctx context.Context, name string) (*Stack, error) {
 	var st Stack
 	err := s.db.QueryRowContext(ctx,
-		`SELECT name, current_revision, repo_url, source_file, created_at, updated_at FROM stacks WHERE name = ?`, name,
-	).Scan(&st.Name, &st.CurrentRevision, &st.RepoURL, &st.SourceFile, &st.CreatedAt, &st.UpdatedAt)
+		`SELECT name, current_revision, repo_url, source_file, last_error, created_at, updated_at FROM stacks WHERE name = ?`, name,
+	).Scan(&st.Name, &st.CurrentRevision, &st.RepoURL, &st.SourceFile, &st.LastError, &st.CreatedAt, &st.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrStackNotFound
@@ -133,7 +137,7 @@ func (s *Store) GetStack(ctx context.Context, name string) (*Stack, error) {
 
 func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT name, current_revision, repo_url, source_file, created_at, updated_at FROM stacks ORDER BY name`,
+		`SELECT name, current_revision, repo_url, source_file, last_error, created_at, updated_at FROM stacks ORDER BY name`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query stacks: %w", err)
@@ -142,12 +146,28 @@ func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
 	var out []*Stack
 	for rows.Next() {
 		var st Stack
-		if err := rows.Scan(&st.Name, &st.CurrentRevision, &st.RepoURL, &st.SourceFile, &st.CreatedAt, &st.UpdatedAt); err != nil {
+		if err := rows.Scan(&st.Name, &st.CurrentRevision, &st.RepoURL, &st.SourceFile, &st.LastError, &st.CreatedAt, &st.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan stack: %w", err)
 		}
 		out = append(out, &st)
 	}
 	return out, rows.Err()
+}
+
+// SetStackLastError records the most recent deploy/apply error for a stack
+// ("" clears it). ErrStackNotFound when the stack does not exist.
+func (s *Store) SetStackLastError(ctx context.Context, name, lastError string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE stacks SET last_error = ?, updated_at = ? WHERE name = ?`,
+		lastError, time.Now().Unix(), name,
+	)
+	if err != nil {
+		return fmt.Errorf("update stack last_error: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrStackNotFound
+	}
+	return nil
 }
 
 // DeleteStack removes the stack row, its revisions (via the ON DELETE CASCADE

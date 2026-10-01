@@ -135,6 +135,7 @@ func init() {
 		"st.done":          "مكتمل",
 		"st.degraded":      "أداء متردٍّ",
 		"st.complete":      "مكتمل",
+		"st.deploy_failed": "فشل النشر",
 		"st.update_paused": "التحديث متوقف",
 		"st.draining":      "جارٍ الإخلاء",
 		"st.valid":         "صالحة",

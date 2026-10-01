@@ -162,6 +162,7 @@
                hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">
               <span class="mono">{{.Name}}</span>
             </a>
+            {{if .LastError}}<span class="pill bad" title="{{.LastError}}"><i class="dot"></i>{{T "st.deploy_failed"}}</span>{{end}}
           </td>
           <td><span class="mono num" dir="ltr">{{N0 .CurrentRevision}}</span></td>
           <td>
@@ -228,6 +229,7 @@
              hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">
             <span class="mono">{{.Name}}</span>
           </a>
+          {{if .LastError}}<span class="pill bad" title="{{.LastError}}"><i class="dot"></i>{{T "st.deploy_failed"}}</span>{{end}}
         </span>
       </div>
       <div class="kv-row">

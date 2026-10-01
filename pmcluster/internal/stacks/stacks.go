@@ -35,12 +35,15 @@ type Result struct {
 }
 
 // Stack is a deployed stack's metadata. RepoURL is empty when unset; SourceFile
-// is the manifest path inside that repo (deploy/test-lms.yaml).
+// is the manifest path inside that repo (deploy/test-lms.yaml). LastError holds
+// the most recent deploy/apply error — fire-and-forget deploys apply in the
+// background, so failures surface here for the console instead of the response.
 type Stack struct {
 	Name            string
 	CurrentRevision int64
 	RepoURL         string
 	SourceFile      string
+	LastError       string
 	CreatedAt       int64
 	UpdatedAt       int64
 }

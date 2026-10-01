@@ -19,6 +19,7 @@ type stackDTO struct {
 	CurrentRevision int64  `json:"current_revision"`
 	RepoURL         string `json:"repo_url"`
 	SourceFile      string `json:"source_file"`
+	LastError       string `json:"last_error"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`
 }
@@ -80,6 +81,7 @@ func (d stackDTO) stack() stacks.Stack {
 		CurrentRevision: d.CurrentRevision,
 		RepoURL:         d.RepoURL,
 		SourceFile:      d.SourceFile,
+		LastError:       d.LastError,
 		CreatedAt:       d.CreatedAt,
 		UpdatedAt:       d.UpdatedAt,
 	}

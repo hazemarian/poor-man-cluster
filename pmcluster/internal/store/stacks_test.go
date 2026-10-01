@@ -400,6 +400,60 @@ func TestDeleteStack_UnknownStack(t *testing.T) {
 	}
 }
 
+// TestSetStackLastError_RoundTrip verifies a stack's last deploy/apply error
+// is persisted, read back, cleared, and that unknown stacks error out.
+func TestSetStackLastError_RoundTrip(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if err := s.RecordDeploy(ctx, makeRevision("mystack", 1000, "source: yaml", "rendered: yaml"), "https://git/repo"); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+
+	// Default is empty.
+	st, err := s.GetStack(ctx, "mystack")
+	if err != nil {
+		t.Fatalf("GetStack: %v", err)
+	}
+	if st.LastError != "" {
+		t.Errorf("LastError initial = %q, want empty", st.LastError)
+	}
+
+	if err := s.SetStackLastError(ctx, "mystack", "docker stack deploy (depends_on level 1): boom"); err != nil {
+		t.Fatalf("SetStackLastError: %v", err)
+	}
+	st, err = s.GetStack(ctx, "mystack")
+	if err != nil {
+		t.Fatalf("GetStack: %v", err)
+	}
+	if st.LastError != "docker stack deploy (depends_on level 1): boom" {
+		t.Errorf("LastError = %q, want the recorded apply error", st.LastError)
+	}
+
+	// ListStacks surfaces it too.
+	stacks, err := s.ListStacks(ctx)
+	if err != nil {
+		t.Fatalf("ListStacks: %v", err)
+	}
+	if len(stacks) != 1 || stacks[0].LastError == "" {
+		t.Errorf("ListStacks LastError not surfaced: %+v", stacks)
+	}
+
+	// Clearing on the next successful deploy.
+	if err := s.SetStackLastError(ctx, "mystack", ""); err != nil {
+		t.Fatalf("SetStackLastError clear: %v", err)
+	}
+	st, _ = s.GetStack(ctx, "mystack")
+	if st.LastError != "" {
+		t.Errorf("LastError after clear = %q, want empty", st.LastError)
+	}
+
+	// Unknown stack.
+	if err := s.SetStackLastError(ctx, "ghost", "x"); !errors.Is(err, ErrStackNotFound) {
+		t.Errorf("SetStackLastError(ghost) = %v, want ErrStackNotFound", err)
+	}
+}
+
 // revisionsIDs is a debug helper that extracts revision IDs from a slice.
 func revisionsIDs(revs []*StackRevision) []int64 {
 	ids := make([]int64, len(revs))

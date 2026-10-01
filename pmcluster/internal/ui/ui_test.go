@@ -48,7 +48,7 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		write(w, `{"stack":{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo"},"revisions":[{"revision":3,"created_at":30},{"revision":2,"created_at":20}],"last_backup":{"status":"succeeded","started_at":25}}`)
+		write(w, `{"stack":{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo","last_error":"docker stack deploy (depends_on level 1): boom"},"revisions":[{"revision":3,"created_at":30},{"revision":2,"created_at":20}],"last_backup":{"status":"succeeded","started_at":25}}`)
 	})
 	mux.HandleFunc("/api/stacks/demo/revisions/3", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"stack":"demo","revision":3,"created_at":30,"source_yaml":"app: demo\nversion: v3\n","rendered_yaml":"services:\n  demo:\n","payload":"{}"}`)
@@ -379,7 +379,7 @@ func TestAllControllers(t *testing.T) {
 	// The stack detail is its own page: the head carries the stack name and the
 	// page shows the stack's services (replica health), its last backup and its
 	// revision history.
-	assertFragment(http.MethodGet, "/web/stacks/demo", "", `dir="ltr">demo<`, "Services in this stack", "web", "2 / 2", "Last backup", "succeeded", "Revision history")
+	assertFragment(http.MethodGet, "/web/stacks/demo", "", `dir="ltr">demo<`, "Services in this stack", "web", "2 / 2", "Last backup", "succeeded", "Revision history", "Deploy failed", "docker stack deploy (depends_on level 1): boom")
 	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source manifest")
 	// The per-stack backups route hands the operator to the backups page, which owns
 	// listing and filtering them, instead of the stacks controller building another

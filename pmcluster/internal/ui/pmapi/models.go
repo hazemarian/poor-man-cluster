@@ -45,6 +45,7 @@ type Stack struct {
 	CurrentRevision int64  `json:"current_revision"`
 	RepoURL         string `json:"repo_url"`
 	SourceFile      string `json:"source_file"`
+	LastError       string `json:"last_error"`
 	CreatedAt       int64  `json:"created_at"`
 	UpdatedAt       int64  `json:"updated_at"`
 }

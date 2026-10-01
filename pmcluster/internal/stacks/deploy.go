@@ -276,13 +276,17 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 			// recording all ran synchronously above. The swarm apply (and its
 			// per-level health waits) continues in the background, detached
 			// from the caller so a slow stack never hits the request deadline.
-			// The apply outcome is observable via the stack's services + the
-			// deploy logs, and recorded in telemetry.
+			// The apply outcome is observable via the stack's services, the
+			// deploy logs, telemetry, and the stack's last_error field.
 			go func() {
-				if err := s.applyToSwarm(context.WithoutCancel(ctx), app, ir, rendered, revision); err != nil {
+				applyCtx := context.WithoutCancel(ctx)
+				if err := s.applyToSwarm(applyCtx, app, ir, rendered, revision); err != nil {
 					s.Log.Error().Err(err).Str("stack", app.Name).
 						Int64("revision", revision).Msg("deploy — background apply failed")
+					_ = s.Store.SetStackLastError(applyCtx, app.Name, err.Error())
+					return
 				}
+				_ = s.Store.SetStackLastError(applyCtx, app.Name, "")
 			}()
 			return nil
 		}
@@ -294,7 +298,17 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 	steps = wf.Steps()
 
 	if err := wf.Run(ctx); err != nil {
+		// Record the failure on the stack so the console surfaces it even when
+		// the caller (e.g. a fire-and-forget webhook) already got a 202.
+		// app can be nil when the manifest failed to parse — nothing was
+		// recorded, so there is no stack to annotate.
+		if app != nil {
+			_ = s.Store.SetStackLastError(ctx, app.Name, err.Error())
+		}
 		return nil, err
+	}
+	if app != nil {
+		_ = s.Store.SetStackLastError(ctx, app.Name, "")
 	}
 
 	if async {

@@ -74,6 +74,7 @@ func stackFromRow(row *store.Stack) Stack {
 		CurrentRevision: row.CurrentRevision,
 		RepoURL:         row.RepoURL.String,
 		SourceFile:      row.SourceFile,
+		LastError:       row.LastError,
 		CreatedAt:       row.CreatedAt,
 		UpdatedAt:       row.UpdatedAt,
 	}

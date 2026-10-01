@@ -128,6 +128,7 @@ func init() {
 		"st.done":          "Done",
 		"st.degraded":      "Degraded",
 		"st.complete":      "Complete",
+		"st.deploy_failed": "Deploy failed",
 		"st.update_paused": "Update paused",
 		"st.draining":      "Draining",
 		"st.valid":         "Valid",
