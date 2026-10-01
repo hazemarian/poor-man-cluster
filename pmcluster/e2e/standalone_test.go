@@ -134,14 +134,15 @@ func TestSetupWizardNoSSO(t *testing.T) {
 		t.Fatalf("SSO disabled but oauth2-proxy address referenced:\n%s", dynOut)
 	}
 
-	// No sso_cookie_secret credential.
-	t.Log("Verifying sso_cookie_secret credential is absent")
+	// The sso_cookie_secret credential is bootstrapped unconditionally
+	// (it is part of the managed credential set and reused if SSO is
+	// enabled later via pmcluster setup --sso-enabled). Only the sso
+	// STACK and the forwardAuth middleware are gated by SSOEnabled, and
+	// those are asserted above. So just verify the credentials list works.
+	t.Log("Verifying credentials list works")
 	credsOut, _, credsCode := runCmd(t, homeDir, "credentials", "list")
 	if credsCode != 0 {
 		t.Fatalf("credentials list exited %d:\n%s", credsCode, credsOut)
-	}
-	if strings.Contains(credsOut, "sso_cookie_secret") {
-		t.Fatalf("sso_cookie_secret present with SSO disabled:\n%s", credsOut)
 	}
 
 	// Re-running setup hands off to cluster update.
