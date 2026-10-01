@@ -30,6 +30,13 @@ func BadgeMount(r chi.Router, st *store.Store, svc services.Service) {
 		label, status := stackBadge(r.Context(), st, svc, stack)
 		writeBadge(w, label, status)
 	})
+	// Combined badge: main stack health + every service in one wide SVG.
+	// Registered before the {service} param route so the literal segment wins.
+	r.Get("/api/public/badge/{stack}/services", func(w http.ResponseWriter, r *http.Request) {
+		stack := chi.URLParam(r, "stack")
+		segs := stackServicesBadge(r.Context(), st, svc, stack)
+		writeMultiBadge(w, segs)
+	})
 	// Service-level badge: /api/public/badge/{stack}/{service} — one service's
 	// own health, so a README (or a services table) can badge each unit.
 	r.Get("/api/public/badge/{stack}/{service}", func(w http.ResponseWriter, r *http.Request) {
@@ -123,30 +130,55 @@ func serviceBadge(ctx context.Context, st *store.Store, svc services.Service, st
 	if err != nil {
 		return label, "unknown"
 	}
-	var found *services.ServiceSummary
 	for i := range svcs {
 		if svcs[i].Name == service {
-			found = &svcs[i]
-			break
+			return label, serviceStatus(svcs[i])
 		}
 	}
-	if found == nil {
-		return label, "unknown"
-	}
+	return label, "unknown"
+}
 
-	if found.UpdateState == "updating" {
-		return label, "in progress"
+// serviceStatus maps one service summary to its badge status using the same
+// precedence as stackBadge: updating > paused (non run-once) > degraded >
+// deployed; a completed run-once job always reads deployed.
+func serviceStatus(s services.ServiceSummary) string {
+	if s.UpdateState == "updating" {
+		return "in progress"
 	}
-	if found.UpdateState == "paused" && !completedRunOnce(*found) {
-		return label, "error"
+	if s.UpdateState == "paused" && !completedRunOnce(s) {
+		return "error"
 	}
-	if completedRunOnce(*found) {
-		return label, "deployed" // finished one-shot job
+	if completedRunOnce(s) {
+		return "deployed" // finished one-shot job
 	}
-	if found.Desired > 0 && found.Replicas < found.Desired {
-		return label, "degraded"
+	if s.Desired > 0 && s.Replicas < s.Desired {
+		return "degraded"
 	}
-	return label, "deployed"
+	return "deployed"
+}
+
+// badgeSegment is one label/status pair of a multi-segment badge.
+type badgeSegment struct {
+	Label  string
+	Status string
+}
+
+// stackServicesBadge builds the segment list for the combined badge: the first
+// segment carries the stack's overall health, then one segment per service
+// (label without the <stack>_ prefix). An unknown stack yields a single
+// unknown segment.
+func stackServicesBadge(ctx context.Context, st *store.Store, svc services.Service, stack string) []badgeSegment {
+	_, main := stackBadge(ctx, st, svc, stack)
+	segs := []badgeSegment{{Label: stack, Status: main}}
+
+	svcs, err := svc.List(ctx, stack)
+	if err != nil {
+		return segs
+	}
+	for _, s := range svcs {
+		segs = append(segs, badgeSegment{Label: strings.TrimPrefix(s.Name, stack+"_"), Status: serviceStatus(s)})
+	}
+	return segs
 }
 
 // newestStackFailure returns the newest recorded failure whose revision
@@ -218,4 +250,72 @@ func writeBadge(w http.ResponseWriter, label, status string) {
 func escapeXML(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&apos;")
 	return r.Replace(s)
+}
+
+// writeMultiBadge renders one wide flat-SVG badge with a segment per
+// label/status pair (typically: stack main health, then one per service).
+// Segments share the same visual language as writeBadge.
+func writeMultiBadge(w http.ResponseWriter, segs []badgeSegment) {
+	if len(segs) == 0 {
+		segs = []badgeSegment{{Label: "pmcluster", Status: "unknown"}}
+	}
+	color := func(status string) string {
+		c, ok := map[string]string{
+			"deployed":    "#44d47b",
+			"in progress": "#ffb454",
+			"degraded":    "#ff5c5c",
+			"error":       "#c62828",
+			"unknown":     "#7d899a",
+		}[status]
+		if !ok {
+			return "#7d899a"
+		}
+		return c
+	}
+
+	// Compute per-segment widths (label grey + status color) and total width.
+	type seg struct {
+		label, status string
+		labelW, statW int
+	}
+	parsed := make([]seg, 0, len(segs))
+	total := 0
+	for _, s := range segs {
+		lw := 8 + 6*len(s.Label)
+		sw := 8 + 6*len(s.Status)
+		parsed = append(parsed, seg{escapeXML(s.Label), escapeXML(s.Status), lw, sw})
+		total += lw + sw
+	}
+
+	const tmpl = `<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="20" role="img" aria-label="%s">
+  <linearGradient id="s" x2="0" y2="100%%">
+    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+    <stop offset="1" stop-opacity=".1"/>
+  </linearGradient>
+  <clipPath id="r"><rect width="%d" height="20" rx="3" fill="#fff"/></clipPath>
+  <g clip-path="url(#r)">%s</g>
+  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">%s</g>
+</svg>`
+
+	var rects, texts strings.Builder
+	x := 0
+	for _, s := range parsed {
+		fmt.Fprintf(&rects, `<rect x="%d" width="%d" height="20" fill="#555"/><rect x="%d" width="%d" height="20" fill="%s"/><rect x="%d" width="%d" height="20" fill="url(#s)"/>`,
+			x, s.labelW, x+s.labelW, s.statW, color(s.status), x, s.labelW+s.statW)
+		fmt.Fprintf(&texts, `<text x="%d" y="14" fill="#fff" fill-opacity=".6">%s</text><text x="%d" y="14">%s</text>`,
+			x+s.labelW/2, s.label, x+s.labelW+s.statW/2, s.status)
+		x += s.labelW + s.statW
+	}
+
+	aria := make([]string, 0, len(parsed))
+	for _, s := range parsed {
+		aria = append(aria, s.label+": "+s.status)
+	}
+	svg := fmt.Sprintf(tmpl, total, strings.Join(aria, " · "), total, rects.String(), texts.String())
+
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(svg)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprint(w, svg)
 }

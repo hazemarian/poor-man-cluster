@@ -146,6 +146,21 @@ func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
 	if !strings.Contains(rec4.Body.String(), "demo/ghost_svc: unknown") {
 		t.Errorf("ghost service badge body missing unknown status:\n%s", rec4.Body.String())
 	}
+
+	// Combined multi-segment badge: main health + one segment per service.
+	req5 := httptest.NewRequest(http.MethodGet, "/api/public/badge/demo/services", nil)
+	rec5 := httptest.NewRecorder()
+	r.ServeHTTP(rec5, req5)
+	if rec5.Code != http.StatusOK {
+		t.Fatalf("services badge status = %d, want 200", rec5.Code)
+	}
+	body5 := rec5.Body.String()
+	if !strings.Contains(body5, "demo: deployed") || !strings.Contains(body5, "web: deployed") {
+		t.Errorf("combined badge missing main + service segments:\n%s", body5)
+	}
+	if !strings.Contains(body5, "·") {
+		t.Errorf("combined badge missing segment separator:\n%s", body5)
+	}
 }
 
 func TestServiceBadge_StatusDerivation(t *testing.T) {

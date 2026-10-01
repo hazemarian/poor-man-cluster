@@ -4,6 +4,10 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.129 (2026-10-01)
+
+- **Combined stack + services badge.** `GET /api/public/badge/{stack}/services` returns ONE wide SVG showing the stack's main health first, then a segment per service (label = service name without the `stack_` prefix). Same status colors + no-auth + 60s cache. `pmcluster stack badge <stack> --services` prints the markdown; the console stack detail card gained a second copyable row for it. (Service-level badges from v0.2.128 ride along — both shipped in this release's binary.)
+
 ## v0.2.128 (2026-10-01)
 
 - **Service-level status badges.** `GET /api/public/badge/{stack}/{service}` returns the same flat SVG scoped to one service (label `stack/service`): `in progress` while updating, `error` when paused (excluding completed one-shot jobs), `deployed`/`degraded`/`unknown`. Same no-auth + 60s cache as the stack badge.

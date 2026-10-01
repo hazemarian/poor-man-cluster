@@ -143,6 +143,10 @@ type stackDetailData struct {
 	// domain configured (no PMCLUSTER_DOMAIN).
 	Badge string
 
+	// BadgeServices is the combined status-badge markdown: stack main health
+	// followed by one segment per service.
+	BadgeServices string
+
 	// Services are this stack's swarm services with replica health, read from
 	// the daemon's service list. ServicesKnown separates "the read failed"
 	// from "the stack has no services".
@@ -432,6 +436,7 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 
 	if c.Domain != "" {
 		d.Badge = fmt.Sprintf("![%s status](https://pmcluster.%s/api/public/badge/%s)", name, c.Domain, name)
+		d.BadgeServices = fmt.Sprintf("![%s services](https://pmcluster.%s/api/public/badge/%s/services)", name, c.Domain, name)
 	}
 
 	if _, _, configured := c.loadParams(ctx); !configured {

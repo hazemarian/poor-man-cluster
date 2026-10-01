@@ -64,6 +64,11 @@ badge (deployed / in progress / degraded / error), e.g.:
 
   ![donation-campaign status](https://pmcluster.example.com/api/public/badge/donation-campaign)
 
+With --services, prints the combined badge that shows the stack's main
+health followed by one segment per service:
+
+  ![donation-campaign services](https://pmcluster.example.com/api/public/badge/donation-campaign/services)
+
 Paste the line into any GitHub README. The badge endpoint is public and
 returns a small SVG derived from live swarm replica state + the stack's
 recorded deploy errors.`,
@@ -86,6 +91,7 @@ func init() {
 	deployCmd.Flags().String("version", "", "override the manifest's version (image tag)")
 
 	stackCmd.AddCommand(stackListCmd, stackShowCmd, stackBadgeCmd)
+	stackBadgeCmd.Flags().Bool("services", false, "print the combined badge: stack main health + one segment per service")
 
 	rootCmd.AddCommand(deployCmd, stackCmd, rollbackCmd)
 }
@@ -251,7 +257,14 @@ func runStackBadge(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("cannot derive the public badge base URL — set PMCLUSTER_API_URL (remote) or run on a cluster with a configured domain")
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "![%s status](%s/api/public/badge/%s)\n", name, base, name)
+	services, _ := cmd.Flags().GetBool("services")
+	path := "/api/public/badge/" + name
+	alt := name + " status"
+	if services {
+		path += "/services"
+		alt = name + " services"
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "![%s](%s%s)\n", alt, base, path)
 	return nil
 }
 
