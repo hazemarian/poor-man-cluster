@@ -63,6 +63,13 @@ jobs:
       - name: Map observ.example.test to localhost
         run: echo "127.0.0.1 observ.example.test" | sudo tee -a /etc/hosts
 
+      # cluster up creates the storage root dirs (/var/stack/data + /var/stack/backup)
+      # via ensureStorageDirs — the runner is not root, so pre-create them.
+      - name: Create storage root dirs
+        run: |
+          sudo mkdir -p /var/stack/data /var/stack/backup
+          sudo chmod 0777 /var/stack/data /var/stack/backup
+
       - name: swarm e2e
         env:
           PMCLUSTER_E2E_SWARM: "1"

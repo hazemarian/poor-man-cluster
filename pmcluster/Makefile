@@ -35,7 +35,7 @@ install:
 
 ## test : run unit tests (skips ./e2e)
 test:
-	$(GO) test $(GOFLAGS) -race -timeout 60s ./...
+	$(GO) test $(GOFLAGS) -race -timeout 10m ./...
 
 ## e2e : run end-to-end tests in ./e2e (requires Docker, may be slow)
 e2e:

@@ -114,8 +114,10 @@ func ensureDaemonRunning(out io.Writer) error {
 	}
 	if pmUser != "root" {
 		// The data dir always lives at <home>/.pmcluster (config.DBPath).
-		// If only the root copy exists, the daemon must run as root.
-		if _, err := os.Stat(filepath.Join(home, ".pmcluster")); os.IsNotExist(err) {
+		// If the resolved user has no accessible copy (missing OR
+		// permission-denied — /root is 0700, so non-root processes get
+		// EACCES, not ENOENT) but root does, the daemon must run as root.
+		if _, err := os.Stat(filepath.Join(home, ".pmcluster")); err != nil {
 			if _, rerr := os.Stat(rootDataDir); rerr == nil {
 				pmUser, home = "root", "/root"
 			}
