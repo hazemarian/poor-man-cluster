@@ -131,19 +131,28 @@ type Reconciler struct {
 // call while one is running returns nil immediately).
 func (r *Reconciler) RunOnce(ctx context.Context) error {
 	if !r.mu.TryLock() {
+		r.Log.Debug().Msg("reconcile — pass skipped: another pass is in flight")
 		return nil
 	}
 	defer r.mu.Unlock()
 	id := atomic.AddInt64(&r.runID, 1)
 	log := r.Log.With().Int64("run", id).Logger()
+	log.Info().Msg("reconcile — pass started")
+	defer func() {
+		log.Info().Msg("reconcile — pass completed")
+	}()
 
 	// (a) platform reconcile
 	if r.Update != nil {
+		log.Debug().Msg("reconcile — platform pass: re-rendering platform configs + comparing stored hashes")
 		res, err := r.Update(ctx, r.UpdateDeps, r.UpdateInput)
-		if err != nil {
+		switch {
+		case err != nil:
 			log.Error().Err(err).Msg("reconcile — platform pass failed")
-		} else if len(res.StacksDeployed) > 0 {
+		case len(res.StacksDeployed) > 0:
 			log.Info().Strs("stacks", res.StacksDeployed).Msg("reconcile — platform pass redeployed drifted stacks")
+		default:
+			log.Debug().Msg("reconcile — platform pass converged (no stack content changed)")
 		}
 	}
 
@@ -152,9 +161,16 @@ func (r *Reconciler) RunOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list stacks for reconcile: %w", err)
 	}
+	log.Debug().Int("stacks", len(stacks)).Msg("reconcile — app-stack drift pass: re-translating latest manifests")
 	for _, st := range stacks {
-		if _, err := r.DeployService.Sync(ctx, st.Name); err != nil {
-			log.Error().Err(err).Str("stack", st.Name).Msg("reconcile — app sync failed")
+		res, serr := r.DeployService.Sync(ctx, st.Name)
+		switch {
+		case serr != nil:
+			log.Error().Err(serr).Str("stack", st.Name).Msg("reconcile — app sync failed")
+		case res != nil && res.Changed:
+			log.Info().Str("stack", st.Name).Int64("revision", res.Revision).Msg("reconcile — app stack drifted, synced (new revision)")
+		default:
+			log.Debug().Str("stack", st.Name).Msg("reconcile — app stack converged (rendered hash unchanged, no-op)")
 		}
 	}
 
@@ -184,8 +200,14 @@ func (r *Reconciler) snapshotHealth(ctx context.Context, log zerolog.Logger) err
 		svcStatus := map[string]string{}
 		for _, s := range svcs {
 			svcStatus[s.Name] = ServiceStatus(s)
+			log.Debug().Str("stack", st.Name).Str("service", s.Name).
+				Str("status", ServiceStatus(s)).Uint64("replicas", s.Replicas).
+				Uint64("desired", s.Desired).Str("update_state", s.UpdateState).
+				Bool("run_once", s.RunOnce).Msg("reconcile — service status derived")
 		}
 		status := StackStatus(*st, svcs)
+		log.Debug().Str("stack", st.Name).Str("status", status).Int("services", len(svcs)).
+			Msg("reconcile — stack status derived")
 		if err := r.Store.SetStackStatus(ctx, store.StackStatus{StackName: st.Name, Status: status, Services: svcStatus, UpdatedAt: time.Now().Unix()}); err != nil {
 			log.Error().Err(err).Str("stack", st.Name).Msg("reconcile — store stack status failed")
 		}
@@ -201,9 +223,12 @@ func (r *Reconciler) snapshotHealth(ctx context.Context, log zerolog.Logger) err
 			// store's delete path.
 			if err := r.Store.DeleteStackStatus(ctx, row.StackName); err != nil && !errors.Is(err, store.ErrNotFound) {
 				log.Error().Err(err).Str("stack", row.StackName).Msg("reconcile — prune stale status failed")
+			} else {
+				log.Debug().Str("stack", row.StackName).Msg("reconcile — pruned stale stack status row")
 			}
 		}
 	}
+	log.Debug().Int("stacks", len(seen)).Int("status_rows", len(rows)).Msg("reconcile — health snapshot written")
 	return nil
 }
 
@@ -216,11 +241,13 @@ func (r *Reconciler) Loop(ctx context.Context) {
 	var evCh <-chan runtime.Event
 	if r.Docker != nil {
 		evCh, _ = r.Docker.Events(ctx, time.Now().Add(-time.Minute))
+		log.Debug().Msg("reconcile loop — watching Docker swarm events")
 	}
 	var ticker *time.Ticker
 	if r.Interval > 0 {
 		ticker = time.NewTicker(r.Interval)
 		defer ticker.Stop()
+		log.Debug().Dur("interval", r.Interval).Msg("reconcile loop — safety-net ticker armed")
 	}
 	// Debounce: coalesce bursts of events into one pass.
 	var trigger <-chan time.Time
@@ -231,8 +258,11 @@ func (r *Reconciler) Loop(ctx context.Context) {
 		case <-ctx.Done():
 			log.Info().Msg("reconcile loop stopped")
 			return
-		case <-evCh:
+		case ev := <-evCh:
+			log.Debug().Str("type", ev.Type).Str("action", ev.Action).Str("stack", ev.Stack).
+				Str("service", ev.Service).Msg("reconcile loop — swarm event received")
 			if timer == nil {
+				log.Debug().Dur("debounce", debounce).Msg("reconcile loop — debounce timer armed")
 				timer = time.NewTimer(debounce)
 				trigger = timer.C
 			}
@@ -240,8 +270,10 @@ func (r *Reconciler) Loop(ctx context.Context) {
 			timer.Stop()
 			timer = nil
 			trigger = nil
+			log.Debug().Msg("reconcile loop — debounce elapsed, running pass")
 			r.pass(ctx, log)
 		case <-tickIf(ticker, ctx):
+			log.Debug().Msg("reconcile loop — safety-net tick, running pass")
 			r.pass(ctx, log)
 		}
 	}

@@ -4,6 +4,10 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.134 (2026-10-01)
+
+- **Control-loop logging.** The reconcile loop now logs `info` for its lifecycle (pass started/completed, skipped-when-in-flight) and every actionable result (drifted app stack synced with its new revision, platform stacks redeployed), and `debug` for the detail (per-service and per-stack status derivation with replicas/desired/update-state/run-once, each Swarm event that triggers a pass, debounce/safety-tick arming, stale-row pruning, and no-op "converged" syncs). `info` stays clean for day-to-day logs; `debug` shows exactly what the loop is doing.
+
 ## v0.2.133 (2026-10-01)
 
 - **Swarm e2e for the control loop.** `TestControlLoopE2E` (PMCLUSTER_E2E_SWARM=1) drives a real single-node cluster through the loop: cluster up → `reconcile_interval=1` → serve → deploy a stack referencing a config → badge reads the DB snapshot and flips to `healthy` → edit the config (drift with no deploy trigger) → the loop auto-syncs it (revision advances) → scale the service to 0 → the badge flips to `degraded` → teardown. Covers loop snapshot writes, drift convergence, DB-driven badges, and non-restart semantics.
