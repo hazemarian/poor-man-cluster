@@ -191,6 +191,9 @@ func TestWebhookE2E(t *testing.T) {
 	t.Logf("pmcluster serve ready at %s", baseURL)
 
 	payload := map[string]any{
+		"app_name": "whoami-webhook",
+		"repo_url": "https://github.com/nextrum-sy/whoami-webhook",
+		"file":     "deploy/whoami-webhook.yaml",
 		"manifest": webhookManifest,
 	}
 	payloadBytes, err := json.Marshal(payload)
