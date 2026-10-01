@@ -168,7 +168,6 @@ func writeFileSudo(path string, data []byte, mode os.FileMode) error {
 	}
 	cmd := exec.Command("sudo", "tee", path)
 	cmd.Stdin = strings.NewReader(string(data))
-	cmd.Stdout = io.Discard
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("sudo tee %s: %w (%s)", path, err, strings.TrimSpace(string(out)))
 	}
