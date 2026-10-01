@@ -132,13 +132,31 @@ services:
 	t.Logf("drift auto-synced: revision %d -> %d (no deploy trigger)", before, currentRevisionViaCmd(t, homeDir))
 
 	// (3) Under-replication flips the badge to degraded (read from the DB).
-	// An unsatisfiable placement constraint keeps Desired=1 while Replicas
-	// drops to 0 (scale-to-0 would make Desired=0, which derives healthy).
-	if _, err := dockerRun(ctx, "service", "update", "--constraint-add", "node.hostname==no-such-node", "loop-demo_web"); err != nil {
-		t.Fatalf("add unsatisfiable constraint: %v", err)
+	// We make the DESIRED state unhealthy by re-deploying a manifest whose
+	// placement constraint can never be satisfied (Desired stays 1, Replicas
+	// drops to 0 — scale-to-0 would make Desired=0, which derives healthy).
+	// A manual `docker service update` is NOT used here: it would race the
+	// loop's own force-update ("update out of sequence") and get reverted by
+	// the next sync pass, since the loop converges to the stored source.
+	const degradedManifest = `app: loop-demo
+env: test
+domain: example.test
+services:
+  web:
+    image: nginx:1.27-alpine
+    placement: no-such-node
+    env:
+      GREETING: config(loop_greeting)
+`
+	degradedPath := homeDir + "/loop-demo-degraded.yaml"
+	if err := os.WriteFile(degradedPath, []byte(degradedManifest), 0o644); err != nil {
+		t.Fatalf("write degraded manifest: %v", err)
+	}
+	if out, errOut, code := runCmd(t, homeDir, "deploy", degradedPath); code != 0 {
+		t.Fatalf("deploy degraded manifest exited %d:\n%s\n%s", code, out, errOut)
 	}
 	waitBadgeStatus(t, base, "loop-demo", "degraded", "error")
-	t.Logf("badge after unsatisfiable constraint: loop-demo degraded/error")
+	t.Logf("badge after unsatisfiable placement: loop-demo degraded/error")
 
 	// Cleanup: remove the app stack and tear the cluster down.
 	if out, errOut, code := runCmd(t, homeDir, "stack", "remove", "loop-demo"); code != 0 {
