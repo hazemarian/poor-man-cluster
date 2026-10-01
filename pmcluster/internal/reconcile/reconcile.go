@@ -273,10 +273,15 @@ func (r *Reconciler) snapshotHealth(ctx context.Context, log zerolog.Logger) err
 
 // Loop runs reconcile passes until ctx is cancelled. It is event-driven when
 // Docker events are available (each swarm event triggers a debounced pass) and
-// falls back to the safety-net ticker (Interval; 0 disables the tick so the
-// loop is purely event-driven).
+// falls back to the safety-net ticker (Interval). Interval 0 (the default)
+// disables the loop entirely — daemons opt into convergence with
+// reconcile_interval > 0.
 func (r *Reconciler) Loop(ctx context.Context) {
 	log := r.Log.With().Str("component", "reconcile").Logger()
+	if r.Interval <= 0 {
+		log.Info().Msg("reconcile loop — disabled (reconcile_interval 0)")
+		return
+	}
 	var evCh <-chan runtime.Event
 	if r.Docker != nil {
 		evCh, _ = r.Docker.Events(ctx, time.Now().Add(-time.Minute))

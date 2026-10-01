@@ -15,6 +15,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -540,6 +541,19 @@ func dockerConfigIDByPrefix(t *testing.T, ctx context.Context, prefix string) st
 		return ""
 	}
 	return dockerConfigID(t, ctx, best)
+}
+
+// dockerConfigData inspects a Docker config by name and returns its
+// DECODED content. Docker stores config payloads base64-encoded, so callers
+// must not compare plaintext substrings against the raw inspect output.
+func dockerConfigData(t *testing.T, ctx context.Context, name string) string {
+	t.Helper()
+	out := mustDockerRun(t, ctx, "config", "inspect", "--format", "{{.Spec.Data}}", name)
+	dec, err := base64.StdEncoding.DecodeString(strings.TrimSpace(out))
+	if err != nil {
+		t.Fatalf("docker config %s: decode data: %v", name, err)
+	}
+	return string(dec)
 }
 
 // mustDockerRun runs docker and fails the test if it errors.

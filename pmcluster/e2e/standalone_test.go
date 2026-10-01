@@ -110,7 +110,7 @@ func TestSetupWizardNoSSO(t *testing.T) {
 	if traefikCfg == "" {
 		t.Fatal("pmcluster_traefik_dynamic_v* docker config not found")
 	}
-	dynOut := mustDockerRun(t, ctx, "config", "inspect", "--format", "{{json .Spec.Data}}", traefikCfg)
+	dynOut := dockerConfigData(t, ctx, traefikCfg)
 	if !strings.Contains(dynOut, "admin-auth") {
 		t.Fatalf("expected admin-auth middleware in rendered traefik dynamic config:\n%s", dynOut)
 	}

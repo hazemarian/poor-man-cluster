@@ -202,13 +202,13 @@ func TestWebhookE2E(t *testing.T) {
 	}
 	validSig, validTS := signPayload(t, hexSecret, payloadBytes)
 
-	t.Run("valid HMAC succeeds — 200 and stack+revision in response", func(t *testing.T) {
+	t.Run("valid HMAC succeeds — 202 accepted (fire-and-forget) and stack+revision in response", func(t *testing.T) {
 		resp := postWebhook(t, baseURL, "github-prod", validSig, validTS, payloadBytes)
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode != http.StatusAccepted {
 			body, _ := io.ReadAll(resp.Body)
-			t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, body)
+			t.Fatalf("status = %d, want 202; body: %s", resp.StatusCode, body)
 		}
 
 		var result map[string]any
@@ -220,6 +220,9 @@ func TestWebhookE2E(t *testing.T) {
 		}
 		if _, ok := result["revision"]; !ok {
 			t.Error("response missing 'revision' field")
+		}
+		if result["status"] != "accepted" {
+			t.Errorf("status = %v, want 'accepted'", result["status"])
 		}
 		if result["stack"] != "whoami-webhook" {
 			t.Errorf("stack = %v, want 'whoami-webhook'", result["stack"])
