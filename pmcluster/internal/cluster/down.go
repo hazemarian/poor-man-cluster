@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
@@ -112,6 +113,16 @@ func Down(ctx context.Context, deps DownDeps, in DownInput) (*DownResult, error)
 			continue
 		}
 		res.NetworksRemoved = append(res.NetworksRemoved, name)
+		// Overlay network removal is asynchronous in the swarm store: the
+		// remove call returns while the network can still be inspected in a
+		// "removing" state. If a subsequent `cluster up` runs before the
+		// removal completes, its existence check sees the stale network,
+		// skips creation, and the later stack deploy fails with "network X
+		// not found". Wait for the network to be fully gone so the next up
+		// deterministically recreates it.
+		if err := waitNetworkGone(ctx, deps.Docker, name, 15*time.Second); err != nil {
+			fmt.Fprintf(out, "  ⚠ %s: network still present after removal (%v)\n", name, err)
+		}
 	}
 
 	step("Purge complete (SQLite at ~/.pmcluster preserved — delete manually if desired)")
@@ -124,5 +135,31 @@ func waitTeardownSettle(ctx context.Context) {
 	select {
 	case <-timer.C:
 	case <-ctx.Done():
+	}
+}
+
+// waitNetworkGone polls the runtime client until the named overlay network
+// can no longer be inspected, or the deadline expires. Overlay network
+// removal in Swarm is asynchronous: NetworkRemove returns before the
+// network object leaves the store, so without this wait a fast-following
+// cluster up would see the stale network and skip recreating it.
+func waitNetworkGone(ctx context.Context, d runtime.Client, name string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		exists, err := d.NetworkExists(ctx, name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %s", timeout)
+		}
+		select {
+		case <-time.After(250 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }

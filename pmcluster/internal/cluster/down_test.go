@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"testing"
+	"time"
 )
 
 // cancelledCtx returns a context that is already cancelled so that
@@ -156,5 +157,63 @@ func TestDown_Idempotent_NoPurge(t *testing.T) {
 	_, err := Down(context.Background(), makeDownDeps(f, deployer), DownInput{Purge: false})
 	if err != nil {
 		t.Fatalf("Down (empty docker, no purge): %v", err)
+	}
+}
+
+// lingeringNetworkFake simulates Docker's asynchronous overlay network
+// removal: after NetworkRemove the network stays inspectable (removing
+// state) for a while before it disappears.
+type lingeringNetworkFake struct {
+	*fakeDocker
+	lingerFor time.Duration
+	removedAt time.Time
+}
+
+func (f *lingeringNetworkFake) NetworkRemove(_ context.Context, name string) error {
+	f.removedAt = time.Now()
+	return nil
+}
+
+func (f *lingeringNetworkFake) NetworkExists(_ context.Context, name string) (bool, error) {
+	if f.removedAt.IsZero() {
+		return true, nil
+	}
+	return time.Since(f.removedAt) < f.lingerFor, nil
+}
+
+func TestDown_Purge_WaitsForNetworkGone(t *testing.T) {
+	f := &lingeringNetworkFake{fakeDocker: newFakeDocker(), lingerFor: 400 * time.Millisecond}
+	deployer := &recordingDeployer{}
+
+	start := time.Now()
+	res, err := Down(context.Background(), DownDeps{Docker: f, Deployer: deployer, Stdout: io.Discard}, DownInput{Purge: true})
+	if err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+	if len(res.NetworksRemoved) != 2 {
+		t.Fatalf("expected 2 networks removed, got %v", res.NetworksRemoved)
+	}
+	elapsed := time.Since(start)
+	if elapsed < 400*time.Millisecond {
+		t.Fatalf("expected to wait for the lingering network removal, took %v", elapsed)
+	}
+}
+
+func TestWaitNetworkGone_TimesOut(t *testing.T) {
+	f := &lingeringNetworkFake{fakeDocker: newFakeDocker(), lingerFor: time.Hour}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	f.removedAt = time.Now()
+	err := waitNetworkGone(ctx, f, "monitoring-net", 15*time.Second)
+	if err == nil {
+		t.Fatal("expected timeout error for a network that never disappears")
+	}
+}
+
+func TestWaitNetworkGone_AlreadyGone(t *testing.T) {
+	f := newFakeDocker() // no networks exist
+	if err := waitNetworkGone(context.Background(), f, "monitoring-net", time.Second); err != nil {
+		t.Fatalf("expected nil for an already-gone network, got %v", err)
 	}
 }
