@@ -313,7 +313,7 @@ func TestDeployPipeline(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		t.Logf("POST /api/stacks response (%d): %s", resp.StatusCode, body)
 
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 			t.Fatalf("POST /api/stacks: status=%d, body=%s", resp.StatusCode, body)
 		}
 

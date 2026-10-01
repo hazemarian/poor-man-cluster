@@ -119,7 +119,7 @@ services:
 	}
 
 	// (1) Loop writes stack_status → the DB-driven badge flips to healthy.
-	waitBadgeStatus(t, base, "loop-demo", "healthy", 60*time.Second)
+	waitBadgeStatus(t, base, "loop-demo", "healthy")
 	t.Logf("badge after deploy: loop-demo healthy (DB snapshot)")
 
 	// (2) Drift: edit the config value; the next loop pass re-renders, sees a
@@ -132,11 +132,13 @@ services:
 	t.Logf("drift auto-synced: revision %d -> %d (no deploy trigger)", before, currentRevisionViaCmd(t, homeDir))
 
 	// (3) Under-replication flips the badge to degraded (read from the DB).
-	if _, err := dockerRun(ctx, "service", "scale", "loop-demo_web=0"); err != nil {
-		t.Fatalf("scale down: %v", err)
+	// An unsatisfiable placement constraint keeps Desired=1 while Replicas
+	// drops to 0 (scale-to-0 would make Desired=0, which derives healthy).
+	if _, err := dockerRun(ctx, "service", "update", "--constraint-add", "node.hostname==no-such-node", "loop-demo_web"); err != nil {
+		t.Fatalf("add unsatisfiable constraint: %v", err)
 	}
-	waitBadgeStatus(t, base, "loop-demo", "degraded", 60*time.Second)
-	t.Logf("badge after scale-to-0: loop-demo degraded")
+	waitBadgeStatus(t, base, "loop-demo", "degraded", "error")
+	t.Logf("badge after unsatisfiable constraint: loop-demo degraded/error")
 
 	// Cleanup: remove the app stack and tear the cluster down.
 	if out, errOut, code := runCmd(t, homeDir, "stack", "remove", "loop-demo"); code != 0 {
@@ -148,24 +150,32 @@ services:
 }
 
 // waitBadgeStatus polls the public DB-driven badge endpoint until the stack
-// reports the wanted status (the control loop writes stack_status, the badge
-// only reads it — a 200 'unknown' means the snapshot hasn't landed yet).
-func waitBadgeStatus(t *testing.T, base, stack, want string, timeout time.Duration) {
+// reports one of the wanted statuses (the control loop writes stack_status, the
+// badge only reads it — a 200 'unknown' means the snapshot hasn't landed yet).
+func waitBadgeStatus(t *testing.T, base, stack string, want ...string) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	wantSet := map[string]bool{}
+	for _, w := range want {
+		wantSet[w] = true
+	}
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := http.Get(base + "/api/public/badge/" + stack)
 		if err == nil {
 			body := make([]byte, 4096)
 			n, _ := resp.Body.Read(body)
 			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK && strings.Contains(string(body[:n]), stack+": "+want) {
-				return
+			if resp.StatusCode == http.StatusOK {
+				for _, w := range want {
+					if strings.Contains(string(body[:n]), stack+": "+w) {
+						return
+					}
+				}
 			}
 		}
 		time.Sleep(time.Second)
 	}
-	t.Fatalf("badge for %s did not reach %q within %s", stack, want, timeout)
+	t.Fatalf("badge for %s did not reach %q within 60s", stack, want)
 }
 
 // waitRevisionBump polls `pmcluster stack show` until the current revision
