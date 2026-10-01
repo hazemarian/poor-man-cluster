@@ -71,6 +71,17 @@ func TestSetupWizardNoSSO(t *testing.T) {
 	// setup/cluster up assertions below.
 	setReconcileInterval(t, homeDir, "0")
 
+	// Best-effort cluster teardown on ANY failure path so a mid-test abort can
+	// never leak platform stacks/networks into the next swarm test.
+	t.Cleanup(func() {
+		t.Log("TestSetupWizardNoSSO: running cluster down --yes --purge (cleanup)")
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cleanCancel()
+		if out, errOut, code := runCmdCtx(t, cleanCtx, homeDir, "cluster", "down", "--yes", "--purge"); code != 0 {
+			t.Logf("cluster down (cleanup) exited %d:\n%s\n%s", code, out, errOut)
+		}
+	})
+
 	certPath, keyPath := generateSelfSignedCert(t, homeDir)
 
 	setupArgs := []string{

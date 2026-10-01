@@ -222,12 +222,13 @@ func TestClusterUp(t *testing.T) {
 		}
 
 		t.Log("Running: pmcluster cluster up (second run — must refuse: init-only)…")
-		out2, _, code := runCmdCtx(t, ctx, homeDir, upArgs...)
+		out2, err2, code := runCmdCtx(t, ctx, homeDir, upArgs...)
 		if code == 0 {
 			t.Fatalf("pmcluster cluster up (second run) exited 0 — expected init-only error:\n%s", out2)
 		}
-		if !strings.Contains(out2, "cluster already initialised") {
-			t.Errorf("expected 'cluster already initialised' error on second up; got:\n%s", out2)
+		// The init-only error is written to stderr by the CLI.
+		if !strings.Contains(out2, "cluster already initialised") && !strings.Contains(err2, "cluster already initialised") {
+			t.Errorf("expected 'cluster already initialised' error on second up; got stdout:\n%s\nstderr:\n%s", out2, err2)
 		}
 
 		t.Log("Running: pmcluster cluster update (no changes — content-aware no-op)…")

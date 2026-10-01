@@ -54,6 +54,17 @@ func TestControlLoopE2E(t *testing.T) {
 		t.Fatalf("cluster up output missing completion marker:\n%s", upOut)
 	}
 
+	// Best-effort cluster teardown on ANY failure path so a mid-test abort can
+	// never leak platform stacks/networks into the next swarm test.
+	t.Cleanup(func() {
+		t.Log("TestControlLoopE2E: running cluster down --yes --purge (cleanup)")
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cleanCancel()
+		if out, errOut, code := runCmdCtx(t, cleanCtx, homeDir, "cluster", "down", "--yes", "--purge"); code != 0 {
+			t.Logf("cluster down (cleanup) exited %d:\n%s\n%s", code, out, errOut)
+		}
+	})
+
 	// Fast reconcile so the test converges within seconds.
 	if out, errOut, code := runCmd(t, homeDir, "cluster", "settings", "set", "reconcile_interval=1"); code != 0 {
 		t.Fatalf("set reconcile_interval exited %d:\n%s\n%s", code, out, errOut)
@@ -179,9 +190,12 @@ func currentRevisionViaCmd(t *testing.T, homeDir string) int64 {
 	}
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "Revision:") || strings.HasPrefix(line, "CurrentRevision:") {
+		// runStackShow prints "Current revision: N (RFC3339)".
+		if strings.HasPrefix(line, "Revision:") || strings.HasPrefix(line, "Current revision:") {
 			var rev int64
-			if _, err := fmt.Sscanf(strings.TrimSpace(strings.TrimPrefix(line, "Revision:")), "%d", &rev); err == nil {
+			val := strings.TrimSpace(strings.TrimPrefix(line, "Current revision:"))
+			val = strings.TrimSpace(strings.TrimPrefix(val, "Revision:"))
+			if _, err := fmt.Sscanf(val, "%d", &rev); err == nil {
 				return rev
 			}
 		}
