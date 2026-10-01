@@ -68,6 +68,10 @@ func TestClusterUp(t *testing.T) {
 	}
 	t.Logf("pmcluster init OK (home=%s)", homeDir)
 
+	// Disable the control loop so the auto-started daemon does not race the
+	// manual cluster update / deploy assertions below.
+	setReconcileInterval(t, homeDir, "0")
+
 	certPath, keyPath := generateSelfSignedCert(t, homeDir)
 	t.Logf("Generated self-signed cert: %s  key: %s", certPath, keyPath)
 

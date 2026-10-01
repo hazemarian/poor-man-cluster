@@ -67,6 +67,10 @@ func TestSetupWizardNoSSO(t *testing.T) {
 		t.Fatalf("pmcluster init exited %d:\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 
+	// Disable the control loop so the auto-started daemon does not race the
+	// setup/cluster up assertions below.
+	setReconcileInterval(t, homeDir, "0")
+
 	certPath, keyPath := generateSelfSignedCert(t, homeDir)
 
 	setupArgs := []string{

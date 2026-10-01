@@ -124,6 +124,10 @@ func TestDeployPipeline(t *testing.T) {
 	adminToken := extractToken(t, initOut)
 	t.Logf("pmcluster init OK (home=%s, token_len=%d)", homeDir, len(adminToken))
 
+	// Disable the control loop so the auto-started daemon does not race the
+	// manual deploy/rollback assertions below.
+	setReconcileInterval(t, homeDir, "0")
+
 	t.Cleanup(func() {
 		t.Log("TestDeployPipeline: removing stacks e2etest and e2etest-api (cleanup)")
 		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 2*time.Minute)

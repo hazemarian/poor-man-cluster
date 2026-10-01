@@ -178,6 +178,18 @@ func extractToken(t *testing.T, output string) string {
 
 // runCmd runs a pmcluster subcommand with the given HOME dir and returns
 // combined stdout+stderr as a string plus captured stdout separately.
+// setReconcileInterval pins the control-loop interval in the local store so a
+// daemon started by cluster up / serve does not race the test's manual
+// operations (cluster update, deploy, sync) with its own reconcile passes.
+// Pass "0" to disable the loop entirely (all swarm tests except
+// TestControlLoopE2E), or a small interval for tests that drive the loop.
+func setReconcileInterval(t *testing.T, homeDir, interval string) {
+	t.Helper()
+	if out, errOut, code := runCmd(t, homeDir, "cluster", "settings", "set", "reconcile_interval="+interval); code != 0 {
+		t.Fatalf("set reconcile_interval=%s exited %d:\n%s\n%s", interval, code, out, errOut)
+	}
+}
+
 func runCmd(t *testing.T, homeDir string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 	var stdoutBuf, stderrBuf bytes.Buffer

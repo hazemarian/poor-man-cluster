@@ -151,6 +151,10 @@ func TestWebhookE2E(t *testing.T) {
 	}
 	t.Logf("pmcluster init OK (home=%s)", homeDir)
 
+	// Disable the control loop so the auto-started daemon does not race the
+	// manual webhook deploy assertions below.
+	setReconcileInterval(t, homeDir, "0")
+
 	webhookOut, _, code := runCmd(t, homeDir, "webhook", "add", "github-prod")
 	if code != 0 {
 		t.Fatalf("pmcluster webhook add exited %d:\n%s", code, webhookOut)

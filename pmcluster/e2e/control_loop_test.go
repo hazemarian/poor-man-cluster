@@ -35,6 +35,10 @@ func TestControlLoopE2E(t *testing.T) {
 
 	homeDir := t.TempDir()
 	runCmd(t, homeDir, "init")
+	// Keep the auto-started daemon (systemd, started by cluster up) loop-free
+	// so it cannot race this test; the dedicated serve subprocess below is
+	// the only loop runner.
+	setReconcileInterval(t, homeDir, "0")
 	certPath, keyPath := generateSelfSignedCert(t, homeDir)
 
 	// Full cluster up (platform stacks) — the harness baseline.

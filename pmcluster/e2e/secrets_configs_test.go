@@ -84,6 +84,10 @@ func TestSecretsConfigsE2E(t *testing.T) {
 	_ = extractToken(t, initOut)
 	t.Logf("pmcluster init OK (home=%s)", homeDir)
 
+	// Disable the control loop so the auto-started daemon does not race the
+	// manual config/secret assertions below.
+	setReconcileInterval(t, homeDir, "0")
+
 	const (
 		secretName  = "e2e_db_pass"
 		secretValue = "s3cr3t-value-123"
