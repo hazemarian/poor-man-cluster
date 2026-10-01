@@ -219,8 +219,8 @@ func TestSetupWizardClusterUp(t *testing.T) {
 		t.Fatal("pmcluster_traefik_dynamic_v* docker config not found")
 	}
 	dynOut := dockerConfigData(t, ctx, traefikCfg)
-	if !strings.Contains(dynOut, "sso-auth") {
-		t.Fatalf("expected sso-auth middleware in rendered traefik dynamic config:\n%s", dynOut)
+	if !strings.Contains(dynOut, "forwardAuth") {
+		t.Fatalf("expected sso-auth forwardAuth middleware in rendered traefik dynamic config:\n%s", dynOut)
 	}
 	if !strings.Contains(dynOut, "sso_oauth2-proxy:4180") {
 		t.Fatalf("expected forwardAuth address sso_oauth2-proxy:4180:\n%s", dynOut)

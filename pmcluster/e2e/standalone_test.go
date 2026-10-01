@@ -125,7 +125,9 @@ func TestSetupWizardNoSSO(t *testing.T) {
 	if !strings.Contains(dynOut, "admin-auth") {
 		t.Fatalf("expected admin-auth middleware in rendered traefik dynamic config:\n%s", dynOut)
 	}
-	if strings.Contains(dynOut, "sso-auth") {
+	// sso-auth is a forwardAuth middleware; a bare "sso-auth" substring also
+	// appears inside config comments, so assert on the actual block marker.
+	if strings.Contains(dynOut, "forwardAuth") {
 		t.Fatalf("SSO disabled but sso-auth forwardAuth middleware present:\n%s", dynOut)
 	}
 	if strings.Contains(dynOut, "sso_oauth2-proxy") {
