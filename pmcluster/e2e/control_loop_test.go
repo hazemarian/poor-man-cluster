@@ -133,18 +133,18 @@ services:
 
 	// (3) Under-replication flips the badge to degraded (read from the DB).
 	// We make the DESIRED state unhealthy by re-deploying a manifest whose
-	// placement constraint can never be satisfied (Desired stays 1, Replicas
-	// drops to 0 — scale-to-0 would make Desired=0, which derives healthy).
-	// A manual `docker service update` is NOT used here: it would race the
-	// loop's own force-update ("update out of sequence") and get reverted by
-	// the next sync pass, since the loop converges to the stored source.
+	// image cannot be pulled (a nonexistent tag) — the new task is rejected,
+	// so Desired stays 1 while Replicas drops to 0 (scale-to-0 would make
+	// Desired=0, which derives healthy; an unsatisfiable placement would not
+	// apply either — start-first keeps the old task running at 1/1). The
+	// loop converges TO this state since it is the recorded manifest, and it
+	// snapshots the live under-replication as degraded.
 	const degradedManifest = `app: loop-demo
 env: test
 domain: example.test
 services:
   web:
-    image: nginx:1.27-alpine
-    placement: no-such-node
+    image: nginx:1.27-no-such-tag
     env:
       GREETING: config(loop_greeting)
 `
@@ -156,7 +156,7 @@ services:
 		t.Fatalf("deploy degraded manifest exited %d:\n%s\n%s", code, out, errOut)
 	}
 	waitBadgeStatus(t, base, "loop-demo", "degraded", "error")
-	t.Logf("badge after unsatisfiable placement: loop-demo degraded/error")
+	t.Logf("badge after un-pullable image: loop-demo degraded/error")
 
 	// Cleanup: remove the app stack and tear the cluster down.
 	if out, errOut, code := runCmd(t, homeDir, "stack", "remove", "loop-demo"); code != 0 {
