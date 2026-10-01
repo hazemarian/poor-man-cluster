@@ -30,6 +30,25 @@ func BadgeMount(r chi.Router, st *store.Store, svc services.Service) {
 		label, status := stackBadge(r.Context(), st, svc, stack)
 		writeBadge(w, label, status)
 	})
+	// Service-level badge: /api/public/badge/{stack}/{service} — one service's
+	// own health, so a README (or a services table) can badge each unit.
+	r.Get("/api/public/badge/{stack}/{service}", func(w http.ResponseWriter, r *http.Request) {
+		stack := chi.URLParam(r, "stack")
+		service := chi.URLParam(r, "service")
+		if stack == "" || service == "" {
+			writeBadge(w, "pmcluster", "unknown")
+			return
+		}
+		label, status := serviceBadge(r.Context(), st, svc, stack, service)
+		writeBadge(w, label, status)
+	})
+}
+
+// completedRunOnce reports whether a one-shot job has finished (its task
+// exited and swarm keeps a stale UpdateStatus around). Such services must
+// never drive the badge to error/degraded.
+func completedRunOnce(s services.ServiceSummary) bool {
+	return s.RunOnce && s.Desired > 0 && s.Replicas == 0
 }
 
 // stackBadge derives a stack's health status from its service replicas
@@ -69,16 +88,17 @@ func stackBadge(ctx context.Context, st *store.Store, svc services.Service, stac
 		}
 	}
 
-	// Any service paused → error.
+	// Any service paused → error (completed run-once jobs excluded — their
+	// stale paused marker is a finished-job artifact, not a failure).
 	for _, s := range svcs {
-		if s.UpdateState == "paused" {
+		if s.UpdateState == "paused" && !completedRunOnce(s) {
 			return label, "error"
 		}
 	}
 
 	// Under-replicated (excluding completed run-once jobs) → degraded.
 	for _, s := range svcs {
-		if s.RunOnce && s.Desired > 0 && s.Replicas == 0 {
+		if completedRunOnce(s) {
 			continue // finished one-shot job, not a failure
 		}
 		if s.Desired > 0 && s.Replicas < s.Desired {
@@ -86,6 +106,46 @@ func stackBadge(ctx context.Context, st *store.Store, svc services.Service, stac
 		}
 	}
 
+	return label, "deployed"
+}
+
+// serviceBadge derives ONE service's health. Same rules as stackBadge but
+// scoped to a single service; the service label reads <stack>/<service>.
+func serviceBadge(ctx context.Context, st *store.Store, svc services.Service, stack, service string) (label, status string) {
+	label = stack + "/" + service
+
+	// The stack must exist (keeps the badge honest about the cluster view).
+	if _, err := st.GetStack(ctx, stack); err != nil {
+		return label, "unknown"
+	}
+
+	svcs, err := svc.List(ctx, stack)
+	if err != nil {
+		return label, "unknown"
+	}
+	var found *services.ServiceSummary
+	for i := range svcs {
+		if svcs[i].Name == service {
+			found = &svcs[i]
+			break
+		}
+	}
+	if found == nil {
+		return label, "unknown"
+	}
+
+	if found.UpdateState == "updating" {
+		return label, "in progress"
+	}
+	if found.UpdateState == "paused" && !completedRunOnce(*found) {
+		return label, "error"
+	}
+	if completedRunOnce(*found) {
+		return label, "deployed" // finished one-shot job
+	}
+	if found.Desired > 0 && found.Replicas < found.Desired {
+		return label, "degraded"
+	}
 	return label, "deployed"
 }
 

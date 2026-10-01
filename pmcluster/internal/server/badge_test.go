@@ -60,6 +60,9 @@ func TestStackBadge_StatusDerivation(t *testing.T) {
 		{"paused is error", func() {}, []services.ServiceSummary{
 			{Name: "demo_web", Desired: 1, Replicas: 1, UpdateState: "paused"},
 		}, "error"},
+		{"completed run-once paused not error", func() {}, []services.ServiceSummary{
+			{Name: "demo_migrate", Desired: 1, Replicas: 0, RunOnce: true, UpdateState: "paused"},
+		}, "deployed"},
 		{"degraded under-replicated", func() {}, []services.ServiceSummary{
 			{Name: "demo_web", Desired: 2, Replicas: 1},
 		}, "degraded"},
@@ -128,6 +131,61 @@ func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
 	r.ServeHTTP(rec2, req2)
 	if !strings.Contains(rec2.Body.String(), "unknown") {
 		t.Errorf("ghost body missing unknown status:\n%s", rec2.Body.String())
+	}
+
+	// Service-level badge route.
+	req3 := httptest.NewRequest(http.MethodGet, "/api/public/badge/demo/demo_web", nil)
+	rec3 := httptest.NewRecorder()
+	r.ServeHTTP(rec3, req3)
+	if !strings.Contains(rec3.Body.String(), "demo/demo_web: deployed") {
+		t.Errorf("service badge body missing label/status:\n%s", rec3.Body.String())
+	}
+	req4 := httptest.NewRequest(http.MethodGet, "/api/public/badge/demo/ghost_svc", nil)
+	rec4 := httptest.NewRecorder()
+	r.ServeHTTP(rec4, req4)
+	if !strings.Contains(rec4.Body.String(), "demo/ghost_svc: unknown") {
+		t.Errorf("ghost service badge body missing unknown status:\n%s", rec4.Body.String())
+	}
+}
+
+func TestServiceBadge_StatusDerivation(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/data.db")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	_ = st.RecordDeploy(ctx, &store.StackRevision{StackName: "demo", Revision: 1002, SourceYAML: "app: demo", RenderedYAML: "x: 1"}, "")
+
+	cases := []struct {
+		name string
+		svc  services.ServiceSummary
+		want string
+	}{
+		{"deployed", services.ServiceSummary{Name: "demo_web", Desired: 1, Replicas: 1}, "deployed"},
+		{"in progress", services.ServiceSummary{Name: "demo_web", Desired: 1, Replicas: 1, UpdateState: "updating"}, "in progress"},
+		{"paused is error", services.ServiceSummary{Name: "demo_web", Desired: 1, Replicas: 1, UpdateState: "paused"}, "error"},
+		{"completed run-once paused is deployed", services.ServiceSummary{Name: "demo_migrate", Desired: 1, Replicas: 0, RunOnce: true, UpdateState: "paused"}, "deployed"},
+		{"degraded", services.ServiceSummary{Name: "demo_web", Desired: 2, Replicas: 1}, "degraded"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeBadgeSvc{svcs: []services.ServiceSummary{tc.svc}}
+			_, status := serviceBadge(ctx, st, svc, "demo", tc.svc.Name)
+			if status != tc.want {
+				t.Errorf("status = %q, want %q", status, tc.want)
+			}
+		})
+	}
+
+	// Unknown service + unknown stack.
+	svc := &fakeBadgeSvc{svcs: []services.ServiceSummary{{Name: "demo_web", Desired: 1, Replicas: 1}}}
+	if _, status := serviceBadge(ctx, st, svc, "demo", "ghost"); status != "unknown" {
+		t.Errorf("ghost service status = %q, want unknown", status)
+	}
+	if _, status := serviceBadge(ctx, st, svc, "ghost", "demo_web"); status != "unknown" {
+		t.Errorf("ghost stack status = %q, want unknown", status)
 	}
 }
 

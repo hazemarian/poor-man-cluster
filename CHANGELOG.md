@@ -4,6 +4,11 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.128 (2026-10-01)
+
+- **Service-level status badges.** `GET /api/public/badge/{stack}/{service}` returns the same flat SVG scoped to one service (label `stack/service`): `in progress` while updating, `error` when paused (excluding completed one-shot jobs), `deployed`/`degraded`/`unknown`. Same no-auth + 60s cache as the stack badge.
+- **Completed one-shot jobs no longer flag `error`.** The stack badge treated any service with a stale `update_state=paused` as failed — but Swarm leaves that marker behind when a `run_once` job finishes. A completed job (run_once, desired>0, 0 replicas) now reads as `deployed`. This is why the donation-campaign **prod** badge showed red despite a clean deploy history.
+
 ## v0.2.127 (2026-10-01)
 
 - **Public stack-status badge for READMEs.** New unauthenticated endpoint `GET /api/public/badge/{stack}` returns a shields.io-style flat SVG reflecting the stack's live state: `deployed` (green), `in progress` (yellow — any service mid-update), `degraded` (red — under-replicated, excluding completed one-shot jobs), `error` (dark red — the current revision has a failed deploy outcome in the error history), or `unknown` (grey). Public on purpose: GitHub's README image proxy (camo) fetches it without credentials; cached 60s.
