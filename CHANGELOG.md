@@ -4,6 +4,10 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.135 (2026-10-01)
+
+- **Control-loop OTLP traces.** The reconcile loop now emits OpenTelemetry spans through the existing telemetry pipeline (visible in OpenObserve once the collector is connected): a `pmcluster.reconcile` root span per pass with the `run_id` attribute, and a `pmcluster.reconcile.platform` child span for the platform-render/hash-compare pass carrying `stacks_redeployed` when drift is applied. Errors are recorded on the span with a non-OK status. Span creation is lazy and no-op until `telemetry.Init` wires the global provider (same pattern as the deploy/rollback tracers).
+
 ## v0.2.134 (2026-10-01)
 
 - **Control-loop logging.** The reconcile loop now logs `info` for its lifecycle (pass started/completed, skipped-when-in-flight) and every actionable result (drifted app stack synced with its new revision, platform stacks redeployed), and `debug` for the detail (per-service and per-stack status derivation with replicas/desired/update-state/run-once, each Swarm event that triggers a pass, debounce/safety-tick arming, stale-row pruning, and no-op "converged" syncs). `info` stays clean for day-to-day logs; `debug` shows exactly what the loop is doing.

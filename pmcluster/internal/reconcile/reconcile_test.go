@@ -225,3 +225,23 @@ func TestLoop_EventTriggersPass(t *testing.T) {
 func noopLogger() zerolog.Logger {
 	return zerolog.Nop()
 }
+
+// TestRunOnce_TracerNoopSafe: creating OTLP spans with the default no-op
+// provider (telemetry.Init never called in tests) must not panic and the pass
+// still completes.
+func TestRunOnce_TracerNoopSafe(t *testing.T) {
+	st := newTestStore(t)
+	dep := &recordingDeployer{}
+	svc := &stacks.Service{Store: st, Deployer: dep, MkdirAll: func(string, os.FileMode) error { return nil }}
+	if _, err := svc.Deploy(context.Background(), stacks.Payload{Manifest: "app: demo\ndomain: example.test\nenv: test\nservices:\n  web:\n    image: nginx\n"}); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	rec := &Reconciler{Store: st, DeployService: svc, Services: &fakeServices{svcs: []services.ServiceSummary{{Name: "demo_web", Stack: "demo", Desired: 1, Replicas: 1}}}, Log: zerolog.Nop(), Interval: time.Second}
+	if err := rec.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce with no-op tracer: %v", err)
+	}
+	snap, err := st.GetStackStatus(context.Background(), "demo")
+	if err != nil || snap.Status != StatusHealthy {
+		t.Fatalf("stack status after RunOnce = %v err %v, want healthy", snap.Status, err)
+	}
+}

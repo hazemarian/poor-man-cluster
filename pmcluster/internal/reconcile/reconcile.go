@@ -31,6 +31,10 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -38,6 +42,17 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
+
+// reconcileTracer is lazily created like the deploy/rollback tracers in
+// internal/stacks: no-op until telemetry.Init wires the global provider.
+var reconcileTracer trace.Tracer
+
+func tracer() trace.Tracer {
+	if reconcileTracer == nil {
+		reconcileTracer = otel.Tracer("github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile")
+	}
+	return reconcileTracer
+}
 
 // Status values shared with the badge surface (stack + service level).
 const (
@@ -137,23 +152,47 @@ func (r *Reconciler) RunOnce(ctx context.Context) error {
 	defer r.mu.Unlock()
 	id := atomic.AddInt64(&r.runID, 1)
 	log := r.Log.With().Int64("run", id).Logger()
+
+	// One root span per pass, with per-pass child spans for the three
+	// sub-passes. With telemetry uninitialized this is a no-op provider.
+	ctx, span := tracer().Start(ctx, "pmcluster.reconcile",
+		trace.WithAttributes(attribute.Int64("run_id", id)))
+	passErr := r.runPass(ctx, id, log)
+	if passErr != nil {
+		span.RecordError(passErr)
+		span.SetStatus(codes.Error, passErr.Error())
+	} else {
+		span.SetStatus(codes.Ok, "converged")
+	}
+	span.End()
+
+	log.Info().Msg("reconcile — pass completed")
+	return passErr
+}
+
+// runPass executes the three reconcile passes; returns the first error (or nil
+// when fully converged). Errors are recorded on the pass span but do not stop
+// the remaining passes — a failing platform pass still gets health snapshots.
+func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) error {
 	log.Info().Msg("reconcile — pass started")
-	defer func() {
-		log.Info().Msg("reconcile — pass completed")
-	}()
 
 	// (a) platform reconcile
 	if r.Update != nil {
+		_, platformSpan := tracer().Start(ctx, "pmcluster.reconcile.platform")
 		log.Debug().Msg("reconcile — platform pass: re-rendering platform configs + comparing stored hashes")
 		res, err := r.Update(ctx, r.UpdateDeps, r.UpdateInput)
 		switch {
 		case err != nil:
 			log.Error().Err(err).Msg("reconcile — platform pass failed")
+			platformSpan.RecordError(err)
+			platformSpan.SetStatus(codes.Error, err.Error())
 		case len(res.StacksDeployed) > 0:
+			platformSpan.SetAttributes(attribute.StringSlice("stacks_redeployed", res.StacksDeployed))
 			log.Info().Strs("stacks", res.StacksDeployed).Msg("reconcile — platform pass redeployed drifted stacks")
 		default:
 			log.Debug().Msg("reconcile — platform pass converged (no stack content changed)")
 		}
+		platformSpan.End()
 	}
 
 	// (b) app-stack drift
