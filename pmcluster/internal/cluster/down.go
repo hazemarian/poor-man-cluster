@@ -52,8 +52,8 @@ func Down(ctx context.Context, deps DownDeps, in DownInput) (*DownResult, error)
 	res := &DownResult{}
 	step := func(label string) { fmt.Fprintf(out, "▶ %s\n", label) }
 
-	step("Removing stacks (infra, edge, observability, backup)")
-	for _, s := range []string{"infra", "edge", "observability", "backup"} {
+	step("Removing stacks (infra, edge, observability, backup, sso)")
+	for _, s := range []string{"infra", "edge", "observability", "backup", "sso"} {
 		if err := deps.Deployer.RemoveStack(ctx, s); err != nil {
 			fmt.Fprintf(out, "  ⚠ stack rm %s: %v\n", s, err)
 			continue
