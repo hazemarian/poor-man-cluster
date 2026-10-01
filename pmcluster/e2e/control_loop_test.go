@@ -1,0 +1,186 @@
+//go:build e2e
+
+package e2e
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+// TestControlLoopE2E proves the control loop (v0.2.132, L1) on a real swarm:
+//  1. the daemon writes stack_status snapshots for every stack (badge reads the DB);
+//  2. drift (a rendered-hash change with no deploy trigger) is auto-synced by the loop;
+//  3. the badge reflects the DB snapshot (under-replication flips it to degraded);
+//  4. the loop only runs on the leader.
+//
+// Swarm-gated (PMCLUSTER_E2E_SWARM=1), mirroring TestClusterUp's harness.
+func TestControlLoopE2E(t *testing.T) {
+	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
+		t.Skip("PMCLUSTER_E2E_SWARM=1 required")
+	}
+	requireDockerDaemon(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	weInited := ensureSwarmActive(t, ctx)
+	_ = weInited
+
+	homeDir := t.TempDir()
+	runCmd(t, homeDir, "init")
+	certPath, keyPath := generateSelfSignedCert(t, homeDir)
+
+	// Full cluster up (platform stacks) — the harness baseline.
+	upOut, upErr, upCode := runCmdCtx(t, ctx, homeDir,
+		"cluster", "up",
+		"--domain=example.test",
+		"--cert="+certPath, "--key="+keyPath,
+		"--openobserve-email=admin@example.test")
+	if upCode != 0 {
+		t.Fatalf("cluster up exited %d:\nstdout:\n%s\nstderr:\n%s", upCode, upOut, upErr)
+	}
+	if !strings.Contains(upOut, "cluster up complete") {
+		t.Fatalf("cluster up output missing completion marker:\n%s", upOut)
+	}
+
+	// Fast reconcile so the test converges within seconds.
+	if out, errOut, code := runCmd(t, homeDir, "cluster", "settings", "set", "reconcile_interval=1"); code != 0 {
+		t.Fatalf("set reconcile_interval exited %d:\n%s\n%s", code, out, errOut)
+	}
+
+	// Start the daemon (serve) as a subprocess on a free port.
+	addr := freePort(t)
+	daemon := exec.Command(binaryPath, "serve")
+	daemon.Stdout = os.Stdout
+	daemon.Stderr = os.Stderr
+	daemon.Env = append(homeEnv(homeDir), "PMCLUSTER_LISTEN_ADDR="+addr)
+	if err := daemon.Start(); err != nil {
+		t.Fatalf("start daemon: %v", err)
+	}
+	t.Cleanup(func() {
+		if daemon.Process != nil {
+			_ = daemon.Process.Signal(syscall.SIGTERM)
+			done := make(chan struct{})
+			go func() {
+				_ = daemon.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(6 * time.Second):
+				_ = daemon.Process.Kill()
+			}
+		}
+	})
+	waitHealthy(t, addr, daemon, 20*time.Second)
+	base := "http://" + addr
+
+	// Deploy a small app stack referencing a config value (drift source).
+	const manifest = `app: loop-demo
+env: test
+domain: example.test
+services:
+  web:
+    image: nginx:1.27-alpine
+    env:
+      GREETING: config(loop_greeting)
+`
+	manifestPath := homeDir + "/loop-demo.yaml"
+	if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if out, errOut, code := runCmd(t, homeDir, "config", "create", "loop_greeting", "--scope", "service", "--stack", "loop-demo", "--value", "hello"); code != 0 {
+		t.Fatalf("config create exited %d:\n%s\n%s", code, out, errOut)
+	}
+	if out, errOut, code := runCmd(t, homeDir, "deploy", manifestPath); code != 0 {
+		t.Fatalf("deploy exited %d:\n%s\n%s", code, out, errOut)
+	}
+
+	// (1) Loop writes stack_status → the DB-driven badge flips to healthy.
+	waitBadgeStatus(t, base, "loop-demo", "healthy", 60*time.Second)
+	t.Logf("badge after deploy: loop-demo healthy (DB snapshot)")
+
+	// (2) Drift: edit the config value; the next loop pass re-renders, sees a
+	// hash mismatch, and syncs the stack WITHOUT any deploy trigger.
+	before := currentRevisionViaCmd(t, homeDir)
+	if out, errOut, code := runCmd(t, homeDir, "config", "edit", "loop_greeting", "--value", "goodbye"); code != 0 {
+		t.Fatalf("config edit exited %d:\n%s\n%s", code, out, errOut)
+	}
+	waitRevisionBump(t, homeDir, before, 60*time.Second)
+	t.Logf("drift auto-synced: revision %d -> %d (no deploy trigger)", before, currentRevisionViaCmd(t, homeDir))
+
+	// (3) Under-replication flips the badge to degraded (read from the DB).
+	if _, err := dockerRun(ctx, "service", "scale", "loop-demo_web=0"); err != nil {
+		t.Fatalf("scale down: %v", err)
+	}
+	waitBadgeStatus(t, base, "loop-demo", "degraded", 60*time.Second)
+	t.Logf("badge after scale-to-0: loop-demo degraded")
+
+	// Cleanup: remove the app stack and tear the cluster down.
+	if out, errOut, code := runCmd(t, homeDir, "stack", "remove", "loop-demo"); code != 0 {
+		t.Logf("stack remove exited %d (best-effort):\n%s\n%s", code, out, errOut)
+	}
+	if out, errOut, code := runCmdCtx(t, ctx, homeDir, "cluster", "down", "--yes", "--purge"); code != 0 {
+		t.Fatalf("cluster down exited %d:\n%s\n%s", code, out, errOut)
+	}
+}
+
+// waitBadgeStatus polls the public DB-driven badge endpoint until the stack
+// reports the wanted status (the control loop writes stack_status, the badge
+// only reads it — a 200 'unknown' means the snapshot hasn't landed yet).
+func waitBadgeStatus(t *testing.T, base, stack, want string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(base + "/api/public/badge/" + stack)
+		if err == nil {
+			body := make([]byte, 4096)
+			n, _ := resp.Body.Read(body)
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK && strings.Contains(string(body[:n]), stack+": "+want) {
+				return
+			}
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("badge for %s did not reach %q within %s", stack, want, timeout)
+}
+
+// waitRevisionBump polls `pmcluster stack show` until the current revision
+// advances past the given value — proof the loop synced the drifted stack.
+func waitRevisionBump(t *testing.T, homeDir string, before int64, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if rev := currentRevisionViaCmd(t, homeDir); rev > before {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("stack revision did not advance past %d within %s", before, timeout)
+}
+
+func currentRevisionViaCmd(t *testing.T, homeDir string) int64 {
+	t.Helper()
+	out, _, code := runCmd(t, homeDir, "stack", "show", "loop-demo")
+	if code != 0 {
+		return 0
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Revision:") || strings.HasPrefix(line, "CurrentRevision:") {
+			var rev int64
+			if _, err := fmt.Sscanf(strings.TrimSpace(strings.TrimPrefix(line, "Revision:")), "%d", &rev); err == nil {
+				return rev
+			}
+		}
+	}
+	return 0
+}
