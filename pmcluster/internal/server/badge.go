@@ -21,7 +21,7 @@ func BadgeMount(r chi.Router, st *store.Store, svc services.Service) {
 	if st == nil || svc == nil {
 		return
 	}
-	r.Get("/api/public/badge/{stack}", func(w http.ResponseWriter, r *http.Request) {
+	stackBadgeH := func(w http.ResponseWriter, r *http.Request) {
 		stack := chi.URLParam(r, "stack")
 		if stack == "" {
 			writeBadge(w, "pmcluster", "unknown")
@@ -29,17 +29,17 @@ func BadgeMount(r chi.Router, st *store.Store, svc services.Service) {
 		}
 		label, status := stackBadge(r.Context(), st, svc, stack)
 		writeBadge(w, label, status)
-	})
+	}
 	// Combined badge: main stack health + every service in one wide SVG.
 	// Registered before the {service} param route so the literal segment wins.
-	r.Get("/api/public/badge/{stack}/services", func(w http.ResponseWriter, r *http.Request) {
+	servicesBadgeH := func(w http.ResponseWriter, r *http.Request) {
 		stack := chi.URLParam(r, "stack")
 		segs := stackServicesBadge(r.Context(), st, svc, stack)
 		writeMultiBadge(w, segs)
-	})
+	}
 	// Service-level badge: /api/public/badge/{stack}/{service} — one service's
 	// own health, so a README (or a services table) can badge each unit.
-	r.Get("/api/public/badge/{stack}/{service}", func(w http.ResponseWriter, r *http.Request) {
+	serviceBadgeH := func(w http.ResponseWriter, r *http.Request) {
 		stack := chi.URLParam(r, "stack")
 		service := chi.URLParam(r, "service")
 		if stack == "" || service == "" {
@@ -48,7 +48,15 @@ func BadgeMount(r chi.Router, st *store.Store, svc services.Service) {
 		}
 		label, status := serviceBadge(r.Context(), st, svc, stack, service)
 		writeBadge(w, label, status)
-	})
+	}
+	// GET + HEAD. GitHub's camo proxy and some image tools preflight with HEAD;
+	// chi would otherwise fall the HEAD through to the Bearer /api group → 401
+	// → the badge is refused. Register both methods with the same handler.
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		r.Method(method, "/api/public/badge/{stack}", http.HandlerFunc(stackBadgeH))
+		r.Method(method, "/api/public/badge/{stack}/services", http.HandlerFunc(servicesBadgeH))
+		r.Method(method, "/api/public/badge/{stack}/{service}", http.HandlerFunc(serviceBadgeH))
+	}
 }
 
 // completedRunOnce reports whether a one-shot job has finished (its task

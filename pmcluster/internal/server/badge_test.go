@@ -125,6 +125,18 @@ func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
 		t.Errorf("body missing deployed color:\n%s", body)
 	}
 
+	// HEAD must work too — GitHub camo / image tools preflight with HEAD and
+	// chi would otherwise fall it through to the Bearer /api group (401).
+	reqH := httptest.NewRequest(http.MethodHead, "/api/public/badge/demo", nil)
+	recH := httptest.NewRecorder()
+	r.ServeHTTP(recH, reqH)
+	if recH.Code != http.StatusOK {
+		t.Errorf("HEAD status = %d, want 200", recH.Code)
+	}
+	if ct := recH.Header().Get("Content-Type"); ct != "image/svg+xml" {
+		t.Errorf("HEAD Content-Type = %q, want image/svg+xml", ct)
+	}
+
 	// Unknown stack still returns a valid SVG.
 	req2 := httptest.NewRequest(http.MethodGet, "/api/public/badge/ghost", nil)
 	rec2 := httptest.NewRecorder()

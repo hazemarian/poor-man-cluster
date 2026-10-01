@@ -4,6 +4,10 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.131 (2026-10-01)
+
+- **Badge endpoints answer HEAD too.** The public badge routes only registered `GET`; chi fell HEAD requests through to the Bearer-protected `/api` group, which answered `401` — and GitHub's camo image proxy (and some image tools) preflight with HEAD, so the badge was refused and rendered broken in READMEs. All three badge routes (`/api/public/badge/{stack}`, `.../services`, `.../{service}`) now register both `GET` and `HEAD` with the same handler. Regression test added.
+
 ## v0.2.130 (2026-10-01)
 
 - **Badge status word: `deployed` → `healthy`.** A service can be unhealthy *after* it deploys (crash-loop, a bug) — so the green state now reads **`healthy`**, not `deployed`, across the stack badge, the per-service badge, the combined `/services` badge, the CLI help, and the console copy text. Semantics unchanged: green = deployed *and* healthy; `in progress` / `degraded` / `error` / `unknown` as before.
