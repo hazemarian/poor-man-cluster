@@ -209,12 +209,10 @@ func TestRevisionErrorJoin(t *testing.T) {
 	if err := st.RecordDeploy(ctx, rev2, ""); err != nil {
 		t.Fatalf("RecordDeploy v2: %v", err)
 	}
-	// A failed execution and a clean one, newest first.
+	// A failed execution and a clean one. Only failures are recorded — the
+	// clean revision gets "" by absence from the history.
 	if _, err := st.RecordStackError(ctx, "demo", 1002, "docker stack deploy: boom"); err != nil {
 		t.Fatalf("RecordStackError 1002: %v", err)
-	}
-	if _, err := st.RecordStackError(ctx, "demo", 1001, ""); err != nil {
-		t.Fatalf("RecordStackError 1001: %v", err)
 	}
 
 	dep := &stubDeployer{}

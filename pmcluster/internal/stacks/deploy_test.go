@@ -1072,16 +1072,17 @@ func TestDeployAsync_BackgroundFailureRecordsLastError(t *testing.T) {
 		t.Errorf("stack error history = %q, want the background apply error newest", st.LastError)
 	}
 
-	// A subsequent successful deploy appends a success entry (empty Error)
-	// that masks the failure for the display; the history stays.
+	// A subsequent successful deploy writes NOTHING (only failures are
+	// recorded) — the display clears via the revision join (current revision
+	// has no failure entry), and the history still retains the prior failure.
 	dep.err = nil
 	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest}); err != nil {
 		t.Fatalf("Deploy after recovery: %v", err)
 	}
 	st, _ = s.GetStack(ctx, "donation-campaign")
 	entries = store.ParseStackErrors(st.LastError)
-	if len(entries) == 0 || entries[0].Error != "" {
-		t.Errorf("stack error history after successful deploy = %q, want a success entry newest", st.LastError)
+	if len(entries) == 0 || entries[0].Error == "" {
+		t.Errorf("stack error history after successful deploy = %q, want failures-only (prior failure still newest)", st.LastError)
 	}
 	// The prior failure must still be retained in the history.
 	seen := false

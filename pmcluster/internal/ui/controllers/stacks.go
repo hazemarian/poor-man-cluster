@@ -359,7 +359,7 @@ func (c Stacks) stacksData(ctx context.Context, q string) stackData {
 			RepoURL:         s.RepoURL,
 			SourceFile:      s.SourceFile,
 			LastErrors:      s.LastError,
-			LastError:       newestStackError(s.LastError),
+			LastError:       newestStackError(s.LastError, s.CurrentRevision),
 			CreatedAt:       s.CreatedAt,
 			UpdatedAt:       s.UpdatedAt,
 		}})
@@ -441,7 +441,7 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 		RepoURL:         det.Stack.RepoURL,
 		SourceFile:      det.Stack.SourceFile,
 		LastErrors:      det.Stack.LastError,
-		LastError:       newestStackError(det.Stack.LastError),
+		LastError:       newestStackError(det.Stack.LastError, det.Stack.CurrentRevision),
 		CreatedAt:       det.Stack.CreatedAt,
 		UpdatedAt:       det.Stack.UpdatedAt,
 	}}
@@ -519,14 +519,19 @@ func (c Stacks) ShowBackups(g *gin.Context) {
 	g.Redirect(http.StatusFound, WebBase+"/backups")
 }
 
-// newestStackError returns the newest FAILED outcome's message from a stack's
-// deploy/apply history, "" when every kept outcome succeeded. The history is
-// newest-first; a success entry (empty Error) masks any older failure for the
-// banner while the full history stays available for the detail panel.
-func newestStackError(errors []pmapi.StackError) string {
+// newestStackError returns the newest FAILED outcome's message for the
+// CURRENT revision, "" when the latest apply succeeded (only failures are
+// recorded, so a clean latest deploy has no history entry and clears the
+// banner). Older failures stay in the full history for the detail panel.
+func newestStackError(errors []pmapi.StackError, currentRevision int64) string {
 	for _, e := range errors {
 		if e.Error != "" {
-			return e.Error
+			if e.Revision == currentRevision {
+				return e.Error
+			}
+			// The newest failure is for an older revision — the latest
+			// deploy succeeded, so the banner stays clear.
+			return ""
 		}
 	}
 	return ""

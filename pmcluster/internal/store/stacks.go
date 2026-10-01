@@ -202,12 +202,17 @@ func (s *Store) SetStackLastError(ctx context.Context, name, lastError string) e
 	return nil
 }
 
-// RecordStackError appends one deploy/apply outcome to the stack's error
+// RecordStackError records ONE deploy/apply FAILURE in the stack's error
 // history, stored as a JSON array in the stacks.last_error column (newest
-// first, capped at StackErrorHistoryLimit). An empty errMsg records a
-// successful apply — the "latest error" display clears while the history of
-// prior failures is retained. ErrStackNotFound when the stack does not exist.
+// first, capped at StackErrorHistoryLimit). Only failures are recorded — a
+// clean apply writes nothing, so the history stays pure signal and the
+// revision join decides what to display. ErrStackNotFound when the stack does
+// not exist.
 func (s *Store) RecordStackError(ctx context.Context, stackName string, revision int64, errMsg string) (int64, error) {
+	if errMsg == "" {
+		// Clean apply — no history entry, no write.
+		return time.Now().Unix(), nil
+	}
 	var raw string
 	if err := s.db.QueryRowContext(ctx, `SELECT last_error FROM stacks WHERE name = ?`, stackName).Scan(&raw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

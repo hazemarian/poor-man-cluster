@@ -484,7 +484,7 @@ func TestRecordStackError_JSONHistory(t *testing.T) {
 		t.Errorf("history revisions = %+v, want [1001, 1000]", entries)
 	}
 
-	// A success entry masks the display but retains the failures.
+	// A clean apply writes NOTHING — no success entries in the history.
 	if _, err := s.RecordStackError(ctx, "mystack", 1002, ""); err != nil {
 		t.Fatalf("RecordStackError success: %v", err)
 	}
@@ -493,17 +493,11 @@ func TestRecordStackError_JSONHistory(t *testing.T) {
 		t.Fatalf("GetStack: %v", err)
 	}
 	all := ParseStackErrors(st.LastError)
-	if len(all) != 3 || all[0].Error != "" {
-		t.Errorf("history after success = %q, want success entry newest", st.LastError)
+	if len(all) != 2 {
+		t.Errorf("history after clean apply = %q, want unchanged failures-only [boom two, boom one]", st.LastError)
 	}
-	seen := 0
-	for _, e := range all {
-		if e.Error != "" {
-			seen++
-		}
-	}
-	if seen != 2 {
-		t.Errorf("history after success retained %d failures, want 2", seen)
+	if all[0].Error != "boom two" || all[1].Error != "boom one" {
+		t.Errorf("history after clean apply = %+v, want [boom two, boom one]", all)
 	}
 
 	// limit caps the returned slice.

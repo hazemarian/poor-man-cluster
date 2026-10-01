@@ -4,6 +4,10 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.126 (2026-10-01)
+
+- **Errors-only deploy history — no empty writes.** `RecordStackError` now records **failures only** (an empty error writes nothing); a clean deploy leaves the history untouched. The console's "Deploy failed" banner/pill is keyed to the **current revision**: `newestStackError(errors, currentRevision)` shows the newest failed outcome only when it belongs to the current revision — so after a successful redeploy the banner clears (the clean deploy has no new entry) while older failures remain in the history panel for debugging. The revision join (v0.2.125) still surfaces per-execution errors (`""` = applied cleanly, derived from absence in the history). Tests updated for failures-only semantics.
+
 ## v0.2.125 (2026-10-01)
 
 - **Deploy outcomes joined to each deployment execution.** The stack-level error history (`stacks.last_error` JSON array, keyed by revision) is now JOINED into the revision views — no extra storage. `GET /api/stacks/{name}` revisions and `GET /api/stacks/{name}/revisions/{rev}` each carry an `error` field (the matching history entry for that revision; `""` = that execution applied cleanly). The console revision timeline shows a "Deploy failed" pill on failed executions and the revision detail (modal) page shows the failure banner — so a stack whose current revision is clean but a previous one failed shows both states side by side. Plumbing: `stacks.Revision.Error` (domain + remote + pmapi), `revRow.Error`/`revisionData.Error` (controllers), templates (`frag_stack.html` timeline pill, `frag_revision.html` banner). Test: `TestRevisionErrorJoin` (list + detail endpoints join per-revision outcomes; no per-revision storage).
