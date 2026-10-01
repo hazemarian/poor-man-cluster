@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 // It records every (stackName, composeYAML) call and returns configurable
 // errors for deploy and remove independently.
 type recordingDeployer struct {
+	mu           sync.Mutex
 	calls        []deployCall
 	noPruneCalls []deployCall
 	pruned       []string
@@ -36,23 +38,49 @@ type deployCall struct {
 }
 
 func (r *recordingDeployer) DeployStack(_ context.Context, name string, composeYAML []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls = append(r.calls, deployCall{name: name, yaml: composeYAML})
 	return r.err
 }
 
 func (r *recordingDeployer) DeployStackNoPrune(_ context.Context, name string, composeYAML []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.noPruneCalls = append(r.noPruneCalls, deployCall{name: name, yaml: composeYAML})
 	return r.err
 }
 
 func (r *recordingDeployer) PruneStack(_ context.Context, name string, _ []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.pruned = append(r.pruned, name)
 	return nil
 }
 
 func (r *recordingDeployer) RemoveStack(_ context.Context, name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.removed = append(r.removed, name)
 	return r.removeErr
+}
+
+// callCount returns how many full DeployStack calls have landed, guarding the
+// shared slice for tests that read it while a background apply runs.
+func (r *recordingDeployer) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
+}
+
+// callNameAt returns the stack name of the i-th full DeployStack call.
+func (r *recordingDeployer) callNameAt(i int) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if i < 0 || i >= len(r.calls) {
+		return ""
+	}
+	return r.calls[i].name
 }
 
 func (r *recordingDeployer) ForceUpdateService(_ context.Context, _ string) error {
@@ -950,6 +978,60 @@ func TestDeploy_NoDepsUsesFullDeploy(t *testing.T) {
 	}
 	if len(dep.noPruneCalls) != 0 || len(dep.pruned) != 0 {
 		t.Errorf("no-deps stack must not use the ordered path (noPrune=%d prune=%d)", len(dep.noPruneCalls), len(dep.pruned))
+	}
+}
+
+// TestDeployAsync_ReturnsEarlyAndAppliesInBackground: DeployAsync validates,
+// records the revision, and returns immediately while the swarm apply runs in
+// a background goroutine (detached from the caller context). The result is
+// available with the new revision; the apply lands on the deployer shortly
+// after.
+func TestDeployAsync_ReturnsEarlyAndAppliesInBackground(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	start := time.Now()
+	res, err := svc.DeployAsync(ctx, Payload{Manifest: donationCampaignManifest})
+	if err != nil {
+		t.Fatalf("DeployAsync: %v", err)
+	}
+	if res == nil || res.StackName != "donation-campaign" || res.Revision == 0 {
+		t.Fatalf("DeployAsync result = %+v, want stack donation-campaign + revision", res)
+	}
+	// The apply is backgrounded — give it a bounded moment to reach the
+	// deployer, then confirm it did apply.
+	deadline := time.Now().Add(2 * time.Second)
+	for dep.callCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if dep.callCount() != 1 {
+		t.Errorf("DeployStack calls = %d, want 1 (background apply)", dep.callCount())
+	}
+	if dep.callNameAt(0) != "donation-campaign" {
+		t.Errorf("applied stack = %q, want donation-campaign", dep.callNameAt(0))
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("DeployAsync returned in %s — want immediate return while the apply is backgrounded", time.Since(start))
+	}
+}
+
+// TestDeployAsync_ValidationIsSynchronous: manifest validation errors surface
+// immediately from DeployAsync — the background apply never starts.
+func TestDeployAsync_ValidationIsSynchronous(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	_, err := svc.DeployAsync(ctx, Payload{Manifest: "app: broken\nservices:\n  web:\n    image: nginx\n    expose:\n      port: not-a-number"})
+	if err == nil {
+		t.Fatal("DeployAsync accepted an invalid manifest")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if len(dep.calls) != 0 {
+		t.Errorf("deployer called %d times on a validation error, want 0", len(dep.calls))
 	}
 }
 

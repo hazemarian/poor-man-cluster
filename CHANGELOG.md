@@ -4,6 +4,12 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.122 (2026-10-01)
+
+- **Fire-and-forget deploys** (webhooks + API): `DeployAsync` validates, checks conflicts, and records the revision **synchronously**, then applies the swarm deploy (ordered `depends_on` levels + health waits) in a **background goroutine** detached from the request. The webhook receiver and the `POST /api/stacks` handler now return **202 Accepted** immediately — a slow stack (e.g. a cold postgres that needs minutes to become healthy) no longer holds the request open or hits the 30s router deadline. Validation errors still surface synchronously (400/502). Delivery rows record `accepted` with the new revision at acceptance; the background apply outcome is observable via the stack's services and the deploy logs/telemetry.
+- `stacks.Deployer` gained `DeployAsync`; `remote.Deploy` + `RetryDeployer` implement it. Receiver retry-on-transient-error (Q3, v0.2.113) is superseded — the apply is backgrounded once; `retryDeploy`'s unit tests remain.
+- Tests: `DeployAsync` returns early while the apply lands in the background, validation errors never start an apply, receiver 202 + delivery semantics, scope-guard HTTP tables expect 202 on deploys, metric labels reflect acceptance-time recording. `recordingDeployer` fakes are now mutex-guarded.
+
 ## v0.2.121 (2026-10-01)
 
 - **Deploy pipeline logs at `info`** — the whole deployment process is now visible at the default log level with the service names but without the aggressive per-level compose YAML: `deploy — starting pipeline`, `deploy — manifest parsed`, `deploy stack — deploying depends_on level`, `deploy stack — waiting for level to become healthy`, `deploy stack — level healthy`, `deploy stack — all levels healthy: one drift-prune pass`, `deploy — completed` (stack/revision/services), plus `rollback — completed` and the `sync — no drift` early-return. The full per-level `compose_yaml` stays `debug`-only.

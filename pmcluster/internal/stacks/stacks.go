@@ -59,6 +59,11 @@ type Revision struct {
 // Deployer is the write side: deploy, sync, roll back and remove stacks.
 type Deployer interface {
 	Deploy(ctx context.Context, p Payload) (*Result, error)
+	// DeployAsync validates + records the revision synchronously, then applies
+	// the swarm deploy in the background. Used by the webhook receiver and the
+	// API deploy handler so callers can return early (202) while a slow stack
+	// (e.g. a cold postgres that takes minutes to become healthy) converges.
+	DeployAsync(ctx context.Context, p Payload) (*Result, error)
 	// Sync re-runs the deploy pipeline for an existing stack from its latest
 	// stored source manifest, re-resolving config()/secrets() references
 	// against the DB. Used by the console "sync" button (k8s-style reconcile).

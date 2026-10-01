@@ -300,8 +300,8 @@ func TestDeployConflictRejectedAtAPI(t *testing.T) {
 		fmt.Sprintf("%q", manifest) + `}`
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/stacks", strings.NewReader(first)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("first deploy = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("first deploy = %d, want 202 (fire-and-forget); body: %s", rec.Code, rec.Body.String())
 	}
 
 	conflict := `{"app_name":"demo","repo_url":"https://github.com/other/two","file":"deploy/b.yaml","manifest":` +

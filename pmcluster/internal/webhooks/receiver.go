@@ -173,34 +173,30 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Transient deploy failures spend the retry budget (default: 2 extra
-	// attempts, 30s apart) before this request resolves; the attempt that
-	// finally decides the outcome — and how many retries were burned getting
-	// there — is what lands on the delivery row. The phase runs detached from
-	// the request deadline (which is shorter than the retry window) under its
-	// own budget; see deployPhaseBudget.
-	rr := h.retryer()
-	phaseCtx, cancel := context.WithTimeout(
-		context.WithoutCancel(r.Context()),
-		deployPhaseBudget(rr.Attempts, rr.Delay),
-	)
-	defer cancel()
-
-	res, retries, err := rr.DeployWithRetries(phaseCtx, p)
+	// Fire-and-forget: validation, provenance and revision recording are all
+	// synchronous in DeployAsync, so any validation error still surfaces here
+	// (400/502). Only the swarm apply — and its per-level health waits — runs
+	// in the background, detached from the request deadline. The delivery row
+	// is recorded synchronously as "accepted" with the new revision; the
+	// background apply re-records it (accepted, or server_error with the
+	// deploy error) when the apply settles. Long-running stacks (a cold
+	// postgres that needs minutes to become healthy) no longer hold the
+	// request open or hit the phase timeout.
+	res, err := h.Deploy.DeployAsync(context.WithoutCancel(r.Context()), p)
 	if err != nil {
 		record("server_error")
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "retries": retries})
-		recordDelivery("server_error", &p, err, nil, retries)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "retries": 0})
+		recordDelivery("server_error", &p, err, nil, 0)
 		return
 	}
 
 	record("accepted")
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":   "accepted",
 		"stack":    res.StackName,
 		"revision": res.Revision,
-		"retries":  retries,
 	})
-	recordDelivery("accepted", &p, nil, res, retries)
+	recordDelivery("accepted", &p, nil, res, 0)
 }
 
 // parseTimestamp returns the unix-seconds value.  If the header is empty

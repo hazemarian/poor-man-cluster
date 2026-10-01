@@ -113,6 +113,12 @@ func (a *Deploy) Deploy(ctx context.Context, p stacks.Payload) (*stacks.Result, 
 	return &stacks.Result{StackName: out.Stack, Revision: out.Revision}, nil
 }
 
+// DeployAsync mirrors Deploy: the daemon decides whether the apply is
+// synchronous or backgrounded, so the remote adapter posts the same payload.
+func (a *Deploy) DeployAsync(ctx context.Context, p stacks.Payload) (*stacks.Result, error) {
+	return a.Deploy(ctx, p)
+}
+
 func (a *Deploy) Rollback(ctx context.Context, stackName string, sourceRevision int64) (*stacks.Result, error) {
 	var out deployResultDTO
 	if err := a.c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(stackName)+"/rollback", map[string]int64{

@@ -44,12 +44,17 @@ func (h *HTTP) deploy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
 		return
 	}
-	res, err := h.Deploy.Deploy(r.Context(), p)
+	// Fire-and-forget: validation + revision recording are synchronous, the
+	// swarm apply (and its per-level health waits) runs in the background, so
+	// a slow stack no longer hits the router's request deadline. 202 =
+	// accepted, applying.
+	res, err := h.Deploy.DeployAsync(r.Context(), p)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":   "accepted",
 		"stack":    res.StackName,
 		"revision": res.Revision,
 	})

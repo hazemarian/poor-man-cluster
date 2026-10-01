@@ -112,7 +112,23 @@ type Service struct {
 	Log zerolog.Logger
 }
 
-func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr error) {
+// Deploy runs the full deploy pipeline synchronously: parse, validate,
+// translate, record the revision, and apply to the swarm (ordered levels),
+// waiting for every level to become healthy before returning.
+func (s *Service) Deploy(ctx context.Context, p Payload) (*Result, error) {
+	return s.deploy(ctx, p, false)
+}
+
+// DeployAsync validates and records the revision synchronously, then applies
+// the swarm deploy in a background goroutine (detached from the caller's
+// context) so the caller can return 202 immediately. Long-running stacks
+// (e.g. a cold postgres that needs minutes to become healthy) no longer hit
+// the request deadline.
+func (s *Service) DeployAsync(ctx context.Context, p Payload) (*Result, error) {
+	return s.deploy(ctx, p, true)
+}
+
+func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Result, retErr error) {
 	counter, hist, tracer := instruments()
 	ctx, span := tracer.Start(ctx, "pmcluster.deploy",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -255,6 +271,21 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		return nil
 	})
 	wf.Add("Deploying stack to the swarm", func(ctx context.Context) error {
+		if async {
+			// Fire-and-forget: validation, conflict checks and revision
+			// recording all ran synchronously above. The swarm apply (and its
+			// per-level health waits) continues in the background, detached
+			// from the caller so a slow stack never hits the request deadline.
+			// The apply outcome is observable via the stack's services + the
+			// deploy logs, and recorded in telemetry.
+			go func() {
+				if err := s.applyToSwarm(context.WithoutCancel(ctx), app, ir, rendered, revision); err != nil {
+					s.Log.Error().Err(err).Str("stack", app.Name).
+						Int64("revision", revision).Msg("deploy — background apply failed")
+				}
+			}()
+			return nil
+		}
 		return s.applyToSwarm(ctx, app, ir, rendered, revision)
 	})
 
@@ -266,8 +297,13 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (res *Result, retErr er
 		return nil, err
 	}
 
-	s.Log.Info().Str("stack", app.Name).Int64("revision", revision).
-		Strs("services", serviceNames(ir)).Msg("deploy — completed")
+	if async {
+		s.Log.Info().Str("stack", app.Name).Int64("revision", revision).
+			Strs("services", serviceNames(ir)).Msg("deploy — accepted, applying in background")
+	} else {
+		s.Log.Info().Str("stack", app.Name).Int64("revision", revision).
+			Strs("services", serviceNames(ir)).Msg("deploy — completed")
+	}
 
 	return &Result{
 		StackName:    app.Name,

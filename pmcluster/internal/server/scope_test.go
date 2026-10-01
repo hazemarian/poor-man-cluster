@@ -173,14 +173,16 @@ func TestStackScopeGuard_UnscopedTokenPassesEverything(t *testing.T) {
 		}
 	}
 
-	// Deploy bodies still reach the handler untouched.
+	// Deploy bodies still reach the handler untouched (this mux only wires the
+	// scope guard, so the fallthrough handler answers 200 — the 202 status
+	// belongs to the real stacks deploy handler).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/stacks",
 		strings.NewReader(`{"app_name":"other","manifest":"app: other"}`))
 	req.Header.Set("Authorization", "Bearer open-token")
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("POST /api/stacks = %d, want 200", rec.Code)
+		t.Fatalf("POST /api/stacks = %d, want 200 (guard pass-through)", rec.Code)
 	}
 	if !strings.Contains(rec.Body.String(), `"manifest":"app: other"`) {
 		t.Errorf("deploy body altered by the guard: %s", rec.Body.String())
@@ -285,6 +287,10 @@ func (fakeDeployer) Deploy(_ context.Context, p stacks.Payload) (*stacks.Result,
 		name = app.Name
 	}
 	return &stacks.Result{StackName: name, Revision: 1700000001}, nil
+}
+
+func (fakeDeployer) DeployAsync(_ context.Context, p stacks.Payload) (*stacks.Result, error) {
+	return fakeDeployer{}.Deploy(context.Background(), p)
 }
 
 func (fakeDeployer) Sync(_ context.Context, stackName string) (*stacks.Result, error) {
@@ -406,23 +412,25 @@ func TestStackScopedTokenHTTP(t *testing.T) {
 		cases := []struct {
 			method, path string
 			body         any
+			want         int
 		}{
-			{http.MethodGet, "/api/stacks/demo", nil},
-			{http.MethodGet, "/api/stacks/demo/revisions/1700000000", nil},
-			{http.MethodPost, "/api/stacks/demo/sync", nil},
-			{http.MethodPost, "/api/stacks/demo/rollback", map[string]any{"revision": 1700000000}},
-			{http.MethodDelete, "/api/stacks/demo", nil},
-			{http.MethodGet, "/api/services/demo", nil},
-			{http.MethodGet, "/api/services/demo/web/tasks", nil},
-			{http.MethodGet, "/api/services/demo/web/logs?tail=10", nil},
-			{http.MethodPost, "/api/services/demo/web/restart", nil},
-			{http.MethodPost, "/api/services/demo/web/exec", map[string]any{"argv": []string{"whoami"}}},
-			{http.MethodPost, "/api/stacks", map[string]any{"app_name": "demo", "manifest": "app: demo"}},
-			{http.MethodPost, "/api/stacks", map[string]any{"manifest": "app: demo"}},
+			{http.MethodGet, "/api/stacks/demo", nil, http.StatusOK},
+			{http.MethodGet, "/api/stacks/demo/revisions/1700000000", nil, http.StatusOK},
+			{http.MethodPost, "/api/stacks/demo/sync", nil, http.StatusOK},
+			{http.MethodPost, "/api/stacks/demo/rollback", map[string]any{"revision": 1700000000}, http.StatusOK},
+			{http.MethodDelete, "/api/stacks/demo", nil, http.StatusOK},
+			{http.MethodGet, "/api/services/demo", nil, http.StatusOK},
+			{http.MethodGet, "/api/services/demo/web/tasks", nil, http.StatusOK},
+			{http.MethodGet, "/api/services/demo/web/logs?tail=10", nil, http.StatusOK},
+			{http.MethodPost, "/api/services/demo/web/restart", nil, http.StatusOK},
+			{http.MethodPost, "/api/services/demo/web/exec", map[string]any{"argv": []string{"whoami"}}, http.StatusOK},
+			// Fire-and-forget deploys return 202 accepted.
+			{http.MethodPost, "/api/stacks", map[string]any{"app_name": "demo", "manifest": "app: demo"}, http.StatusAccepted},
+			{http.MethodPost, "/api/stacks", map[string]any{"manifest": "app: demo"}, http.StatusAccepted},
 		}
 		for _, tc := range cases {
 			resp := doJSON(t, tc.method, base+tc.path, env.scoped, tc.body)
-			wantStatus(t, resp, http.StatusOK, tc.method+" "+tc.path)
+			wantStatus(t, resp, tc.want, tc.method+" "+tc.path)
 		}
 	})
 
@@ -456,20 +464,22 @@ func TestStackScopedTokenHTTP(t *testing.T) {
 		cases := []struct {
 			method, path string
 			body         any
+			want         int
 		}{
-			{http.MethodGet, "/api/me", nil},
-			{http.MethodGet, "/api/cluster/settings", nil},
-			{http.MethodGet, "/api/stacks", nil},
-			{http.MethodGet, "/api/stacks/other", nil},
-			{http.MethodPost, "/api/stacks/other/sync", nil},
-			{http.MethodGet, "/api/services", nil},
-			{http.MethodGet, "/api/services/other", nil},
-			{http.MethodGet, "/api/api_keys", nil},
-			{http.MethodPost, "/api/stacks", map[string]any{"app_name": "other", "manifest": "app: other"}},
+			{http.MethodGet, "/api/me", nil, http.StatusOK},
+			{http.MethodGet, "/api/cluster/settings", nil, http.StatusOK},
+			{http.MethodGet, "/api/stacks", nil, http.StatusOK},
+			{http.MethodGet, "/api/stacks/other", nil, http.StatusOK},
+			{http.MethodPost, "/api/stacks/other/sync", nil, http.StatusOK},
+			{http.MethodGet, "/api/services", nil, http.StatusOK},
+			{http.MethodGet, "/api/services/other", nil, http.StatusOK},
+			{http.MethodGet, "/api/api_keys", nil, http.StatusOK},
+			// Fire-and-forget deploys return 202 accepted.
+			{http.MethodPost, "/api/stacks", map[string]any{"app_name": "other", "manifest": "app: other"}, http.StatusAccepted},
 		}
 		for _, tc := range cases {
 			resp := doJSON(t, tc.method, base+tc.path, env.unscoped, tc.body)
-			wantStatus(t, resp, http.StatusOK, tc.method+" "+tc.path)
+			wantStatus(t, resp, tc.want, tc.method+" "+tc.path)
 		}
 	})
 

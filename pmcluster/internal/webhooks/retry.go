@@ -71,6 +71,12 @@ func (r *RetryDeployer) Deploy(ctx context.Context, p stacks.Payload) (*stacks.R
 	return res, err
 }
 
+// DeployAsync satisfies Deployer for the fire-and-forget path: validation is
+// synchronous, the swarm apply is backgrounded by the inner Deployer.
+func (r *RetryDeployer) DeployAsync(ctx context.Context, p stacks.Payload) (*stacks.Result, error) {
+	return r.Inner.DeployAsync(ctx, p)
+}
+
 // DeployWithRetries runs the underlying Deployer under the retry policy and
 // also reports the number of retries actually performed (0..Attempts).
 func (r *RetryDeployer) DeployWithRetries(ctx context.Context, p stacks.Payload) (*stacks.Result, int, error) {

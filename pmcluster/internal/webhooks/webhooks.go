@@ -45,9 +45,12 @@ type SourceReader interface {
 
 // Deployer is the narrow deploy surface the receiver needs: validate a
 // payload and deploy it. Satisfied by stacks.Service (the stacks domain's
-// Deployer port).
+// Deployer port). DeployAsync is the fire-and-forget variant: validation is
+// synchronous, the swarm apply runs in the background so a slow stack never
+// hits the receiver's request deadline.
 type Deployer interface {
 	Deploy(ctx context.Context, p stacks.Payload) (*stacks.Result, error)
+	DeployAsync(ctx context.Context, p stacks.Payload) (*stacks.Result, error)
 }
 
 // Delivery is one recorded delivery against a webhook source: the outcome

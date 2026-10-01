@@ -31,6 +31,7 @@ import (
 // recordingDeployer records every DeployStack call and can optionally inject
 // an error. It implements cluster.StackDeployer.
 type recordingDeployer struct {
+	mu        sync.Mutex
 	deployed  []deployRecord
 	deployErr error
 	removed   []string
@@ -46,6 +47,8 @@ func (r *recordingDeployer) DeployStack(_ context.Context, name string, composeY
 	if r.deployErr != nil {
 		return r.deployErr
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.deployed = append(r.deployed, deployRecord{Name: name, YAML: string(composeYAML)})
 	return nil
 }
@@ -54,6 +57,8 @@ func (r *recordingDeployer) DeployStackNoPrune(_ context.Context, name string, c
 	if r.deployErr != nil {
 		return r.deployErr
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.deployed = append(r.deployed, deployRecord{Name: name, YAML: string(composeYAML)})
 	return nil
 }
@@ -61,17 +66,39 @@ func (r *recordingDeployer) DeployStackNoPrune(_ context.Context, name string, c
 func (r *recordingDeployer) PruneStack(_ context.Context, _ string, _ []byte) error { return nil }
 
 func (r *recordingDeployer) RemoveStack(_ context.Context, name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.removed = append(r.removed, name)
 	return nil
 }
 
 func (r *recordingDeployer) ForceUpdateService(_ context.Context, fullName string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.updated = append(r.updated, fullName)
 	return nil
 }
 
 func (r *recordingDeployer) PruneStaleContainers(_ context.Context, _ string, _ string) error {
 	return nil
+}
+
+// deployedLen returns how many deploy calls landed (mutex-guarded for the
+// background-apply tests).
+func (r *recordingDeployer) deployedLen() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.deployed)
+}
+
+// deployedNameAt returns the stack name of the i-th deploy call.
+func (r *recordingDeployer) deployedNameAt(i int) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if i < 0 || i >= len(r.deployed) {
+		return ""
+	}
+	return r.deployed[i].Name
 }
 
 // Compile-time assertion.
@@ -242,8 +269,8 @@ func TestHandlerRecordsDeliveries(t *testing.T) {
 
 	// 1. Successful deploy → accepted delivery with provenance.
 	body := validPayload(t)
-	if code := post(body); code != http.StatusOK {
-		t.Fatalf("success POST = %d, want 200", code)
+	if code := post(body); code != http.StatusAccepted {
+		t.Fatalf("success POST = %d, want 202", code)
 	}
 
 	// 2. Payload missing provenance → bad_request delivery.
@@ -455,7 +482,7 @@ func TestHandlerReceive(t *testing.T) {
 		checkUnauthorized(t, resp, "unknown source")
 	})
 
-	t.Run("valid HMAC and valid manifest — 200 and deploy called", func(t *testing.T) {
+	t.Run("valid HMAC and valid manifest — 202 and deploy started", func(t *testing.T) {
 		st, c, dep, secret := testDeps(t, sourceName)
 		srv, _ := buildHandler(t, st, c, dep)
 
@@ -471,9 +498,9 @@ func TestHandlerReceive(t *testing.T) {
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode != http.StatusAccepted {
 			b, _ := io.ReadAll(resp.Body)
-			t.Fatalf("status = %d, want 200; body: %s", resp.StatusCode, b)
+			t.Fatalf("status = %d, want 202; body: %s", resp.StatusCode, b)
 		}
 
 		var result map[string]any
@@ -490,11 +517,16 @@ func TestHandlerReceive(t *testing.T) {
 			t.Errorf("stack = %v, want 'whoami-webhook'", result["stack"])
 		}
 
-		if len(dep.deployed) == 0 {
-			t.Error("expected recordingDeployer.deployed to be non-empty")
+		// The swarm apply runs in a background goroutine now; give it a
+		// bounded moment to reach the deployer.
+		deadline := time.Now().Add(2 * time.Second)
+		for dep.deployedLen() == 0 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
 		}
-		if dep.deployed[0].Name != "whoami-webhook" {
-			t.Errorf("deployed name = %q, want 'whoami-webhook'", dep.deployed[0].Name)
+		if dep.deployedLen() == 0 {
+			t.Error("expected recordingDeployer.deployed to be non-empty (async apply)")
+		} else if dep.deployedNameAt(0) != "whoami-webhook" {
+			t.Errorf("deployed name = %q, want 'whoami-webhook'", dep.deployedNameAt(0))
 		}
 
 		ctx := context.Background()
@@ -535,7 +567,7 @@ func TestHandlerReceive(t *testing.T) {
 		}
 	})
 
-	t.Run("valid HMAC + valid JSON but deploy fails — 502", func(t *testing.T) {
+	t.Run("valid HMAC + valid JSON, apply fails in the background — 202 accepted", func(t *testing.T) {
 		st, c, dep, secret := testDeps(t, sourceName)
 		dep.deployErr = errors.New("docker stack deploy failed")
 		srv, _ := buildHandler(t, st, c, dep)
@@ -551,9 +583,12 @@ func TestHandlerReceive(t *testing.T) {
 			t.Fatalf("POST: %v", err)
 		}
 		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusBadGateway {
+		// Fire-and-forget: validation + revision recording are synchronous,
+		// the docker-layer apply runs in the background — the request returns
+		// 202 accepted even when the apply later fails.
+		if resp.StatusCode != http.StatusAccepted {
 			b, _ := io.ReadAll(resp.Body)
-			t.Errorf("status = %d, want 502; body: %s", resp.StatusCode, b)
+			t.Errorf("status = %d, want 202; body: %s", resp.StatusCode, b)
 		}
 	})
 
@@ -617,8 +652,8 @@ func TestHandlerReceive(t *testing.T) {
 			t.Fatalf("POST: %v", err)
 		}
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("expected 202, got %d", resp.StatusCode)
 		}
 
 		after, err := st.GetWebhookSource(ctx, sourceName)
@@ -754,8 +789,8 @@ func TestWebhookConflictFromDifferentRepo(t *testing.T) {
 	}
 
 	first := validPayload(t)
-	if code, body := post(first); code != http.StatusOK {
-		t.Fatalf("first webhook deploy = %d, want 200; body: %s", code, body)
+	if code, body := post(first); code != http.StatusAccepted {
+		t.Fatalf("first webhook deploy = %d, want 202; body: %s", code, body)
 	}
 
 	conflict := &stacks.Payload{
@@ -873,8 +908,8 @@ func TestHandlerEmitsDeliveryMetric(t *testing.T) {
 	body := validPayload(t)
 
 	// 1. accepted — valid HMAC + provenance.
-	if code := post(srv, okSource, secret, body, true); code != http.StatusOK {
-		t.Fatalf("accepted POST = %d, want 200", code)
+	if code := post(srv, okSource, secret, body, true); code != http.StatusAccepted {
+		t.Fatalf("accepted POST = %d, want 202", code)
 	}
 	// 2. unauthorized — wrong digest.
 	if code := post(srv, okSource, secret, body, false); code != http.StatusUnauthorized {
@@ -894,9 +929,9 @@ func TestHandlerEmitsDeliveryMetric(t *testing.T) {
 	if code := post(srv, okSource, secret, noProv, true); code != http.StatusBadRequest {
 		t.Fatalf("no-provenance POST = %d, want 400", code)
 	}
-	// 4. server_error — deploy fails downstream.
-	if code := post(srv2, failSource, secret2, body, true); code != http.StatusBadGateway {
-		t.Fatalf("failing deploy POST = %d, want 502", code)
+	// 4. apply fails in the background — still accepted (fire-and-forget).
+	if code := post(srv2, failSource, secret2, body, true); code != http.StatusAccepted {
+		t.Fatalf("failing-deploy POST = %d, want 202", code)
 	}
 
 	got := rec.find(telemetry.MetricWebhookRequests)
@@ -904,10 +939,12 @@ func TestHandlerEmitsDeliveryMetric(t *testing.T) {
 		t.Fatalf("captured %d %s samples, want 4: %+v", len(got), telemetry.MetricWebhookRequests, got)
 	}
 	want := map[string]int{
-		okSource + "/accepted":       1,
-		okSource + "/unauthorized":   1,
-		okSource + "/bad_request":    1,
-		failSource + "/server_error": 1,
+		okSource + "/accepted":     1,
+		okSource + "/unauthorized": 1,
+		okSource + "/bad_request":  1,
+		// Fire-and-forget: the failure source's deploy is accepted synchronously;
+		// the background apply outcome is not part of this request's metrics.
+		failSource + "/accepted": 1,
 	}
 	for _, s := range got {
 		if s.Value != 1 {

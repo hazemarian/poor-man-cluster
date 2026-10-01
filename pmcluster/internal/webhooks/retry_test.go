@@ -28,6 +28,10 @@ func (f funcDeployer) Deploy(ctx context.Context, p stacks.Payload) (*stacks.Res
 	return f(ctx, p)
 }
 
+func (f funcDeployer) DeployAsync(ctx context.Context, p stacks.Payload) (*stacks.Result, error) {
+	return f(ctx, p)
+}
+
 // scriptedDeployer fails its first `failures` calls with err and succeeds
 // afterwards. failures < 0 means every call fails. Safe for concurrent use
 // (-race): the receiver test drives it from the server goroutine while the
@@ -49,6 +53,10 @@ func (d *scriptedDeployer) Deploy(_ context.Context, _ stacks.Payload) (*stacks.
 	}
 	res := d.result
 	return &res, nil
+}
+
+func (d *scriptedDeployer) DeployAsync(ctx context.Context, p stacks.Payload) (*stacks.Result, error) {
+	return d.Deploy(ctx, p)
 }
 
 func (d *scriptedDeployer) callCount() int {
@@ -290,33 +298,32 @@ func postSigned(t *testing.T, srv *httptest.Server, source string, secret, body 
 	return resp.StatusCode, string(b)
 }
 
-// TestReceiverRetriesThenRecordsAccepted: the deploy fails twice and
-// succeeds on the third attempt — the caller sees 200 and history holds
-// exactly ONE delivery row (one request = one row) with retries=2 and the
-// accepted status.
-func TestReceiverRetriesThenRecordsAccepted(t *testing.T) {
+// TestReceiverFireAndForgetAccepted: a successful DeployAsync returns 202
+// immediately (the swarm apply continues in the background) and records one
+// accepted delivery row with the new revision. Retries are no longer the
+// receiver's job — the retryDeploy unit tests cover the retry policy.
+func TestReceiverFireAndForgetAccepted(t *testing.T) {
 	const sourceName = "github-retry-ok"
 
 	dep := &scriptedDeployer{
-		failures: 2,
-		err:      errors.New("docker stack deploy failed"),
+		failures: 0,
 		result:   stacks.Result{StackName: "whoami-webhook", Revision: 7},
 	}
 	srv, st, c, secret := buildRetryHandler(t, sourceName, dep)
 
 	code, body := postSigned(t, srv, sourceName, secret, mustJSONPayload(t))
-	if code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (body: %s)", code, body)
+	if code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body: %s)", code, body)
 	}
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if parsed["retries"] != float64(2) {
-		t.Errorf("response retries = %v, want 2", parsed["retries"])
+	if parsed["status"] != "accepted" {
+		t.Errorf("response status = %v, want accepted", parsed["status"])
 	}
-	if got := dep.callCount(); got != 3 {
-		t.Errorf("deploy calls = %d, want 3", got)
+	if got := dep.callCount(); got != 1 {
+		t.Errorf("deploy calls = %d, want 1 (fire-and-forget starts the apply once)", got)
 	}
 
 	ds, err := NewLocal(st, c).Deliveries(context.Background(), sourceName, 0)
@@ -330,8 +337,8 @@ func TestReceiverRetriesThenRecordsAccepted(t *testing.T) {
 	if d.Status != "accepted" {
 		t.Errorf("status = %q, want accepted", d.Status)
 	}
-	if d.Retries != 2 {
-		t.Errorf("retries = %d, want 2", d.Retries)
+	if d.Retries != 0 {
+		t.Errorf("retries = %d, want 0", d.Retries)
 	}
 	if d.StackName != "whoami-webhook" || d.Revision != 7 {
 		t.Errorf("delivery = %+v, want stack whoami-webhook rev 7", d)
@@ -341,10 +348,10 @@ func TestReceiverRetriesThenRecordsAccepted(t *testing.T) {
 	}
 }
 
-// TestReceiverRetriesExhaustedRecordsServerError: every attempt fails — the
-// caller sees 502 plus the retry count, and history records one
-// server_error row with retries=2 and the final error message.
-func TestReceiverRetriesExhaustedRecordsServerError(t *testing.T) {
+// TestReceiverServerError: a DeployAsync validation/apply-start failure
+// surfaces synchronously as 502 with an empty retry count (fire-and-forget
+// does not retry at the receiver).
+func TestReceiverServerError(t *testing.T) {
 	const sourceName = "github-retry-fail"
 
 	dep := &scriptedDeployer{
@@ -361,11 +368,11 @@ func TestReceiverRetriesExhaustedRecordsServerError(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if parsed["retries"] != float64(2) {
-		t.Errorf("response retries = %v, want 2", parsed["retries"])
+	if parsed["retries"] != float64(0) {
+		t.Errorf("response retries = %v, want 0", parsed["retries"])
 	}
-	if got := dep.callCount(); got != 3 {
-		t.Errorf("deploy calls = %d, want 3 (1 + 2 retries)", got)
+	if got := dep.callCount(); got != 1 {
+		t.Errorf("deploy calls = %d, want 1 (no receiver-side retry)", got)
 	}
 
 	ds, err := NewLocal(st, c).Deliveries(context.Background(), sourceName, 0)
@@ -379,8 +386,8 @@ func TestReceiverRetriesExhaustedRecordsServerError(t *testing.T) {
 	if d.Status != "server_error" {
 		t.Errorf("status = %q, want server_error", d.Status)
 	}
-	if d.Retries != 2 {
-		t.Errorf("retries = %d, want 2 (budget exhausted)", d.Retries)
+	if d.Retries != 0 {
+		t.Errorf("retries = %d, want 0", d.Retries)
 	}
 	if d.Error != "docker stack deploy failed: swarm node busy" {
 		t.Errorf("error = %q, want the final error message", d.Error)
