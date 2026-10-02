@@ -43,6 +43,14 @@ func run() error {
 	uiCfg := ui.FromEnv()
 	uiCfg.PMAPIURL = proxyCfg.Upstream
 
+	// Cluster mode (EDGE_LOGIN_DISABLED) is stateless: the console is driven
+	// entirely by env (PMCLUSTER_API_URL + PMCLUSTER_API_TOKEN, synthetic admin
+	// behind the Traefik gate) so it needs no volume. Force an in-memory store;
+	// standalone/local runs keep their SQLite dataDir.
+	if uiCfg.LoginDisabled {
+		uiCfg.DataDir = ":memory:"
+	}
+
 	applyEdgeSecrets(&uiCfg)
 	if err := uiCfg.Validate(); err != nil {
 		return fmt.Errorf("ui config: %w", err)

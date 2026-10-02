@@ -16,6 +16,35 @@ func openStore(t *testing.T) *Store {
 	return s
 }
 
+// TestOpenInMemory verifies the :memory: dataDir mode used by the stateless
+// cluster-mode edge: no directory is created, the store works, and nothing
+// persists to disk.
+func TestOpenInMemory(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open :memory:: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	ctx := context.Background()
+
+	if _, err := s.CreateUser(ctx, "edge", "hash", true, RoleAdmin); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	if err := s.SeedSettingOnce(ctx, KeyToken, "pmc_x"); err != nil {
+		t.Fatalf("seed setting: %v", err)
+	}
+	u, err := s.GetByUsername(ctx, "edge")
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if u.Role != RoleAdmin {
+		t.Errorf("role = %q, want %q", u.Role, RoleAdmin)
+	}
+	if v, err := s.GetSetting(ctx, KeyToken); err != nil || v != "pmc_x" {
+		t.Errorf("setting = %q, err = %v; want pmc_x", v, err)
+	}
+}
+
 func TestUserRoleCRUD(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()

@@ -30,7 +30,11 @@ services:
     environment:
       - LISTEN_ADDR=:8042
       - UPSTREAM=http://host.docker.internal:9090
-      - DATA_DIR=/data
+      # Cluster mode (EDGE_LOGIN_DISABLED=true) is stateless: the console is
+      # driven entirely by env and uses an in-memory store, so no volume is
+      # needed. Standalone/local runs (EDGE_LOGIN_DISABLED=false) keep their
+      # SQLite state on the pmui-data volume.
+      - DATA_DIR=[[if .EdgeLoginDisabled]]:memory:[[else]]/data[[end]]
       # Public cluster domain — the console renders external links to
       # OpenObserve (observ.<domain>) and the Traefik dashboard
       # (traefik.<domain>) from it.
@@ -51,8 +55,10 @@ services:
       # standalone runs leave it unset (EdgeLoginDisabled=false) to keep the
       # password login.
       - EDGE_LOGIN_DISABLED=[[.EdgeLoginDisabled]]
+    [[- if not .EdgeLoginDisabled]]
     volumes:
       - pmui-data:/data
+    [[- end]]
     secrets:
       - edge_admin_password
       - edge_ui_secret
@@ -136,9 +142,10 @@ services:
         max-size: "10m"
         max-file: "3"
 
+[[- if not .EdgeLoginDisabled]]
 volumes:
   pmui-data:
-
+[[- end]]
 secrets:
   edge_admin_password:
     external: true

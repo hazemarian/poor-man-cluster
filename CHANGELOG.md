@@ -6,6 +6,17 @@ and when.
 
 ## v0.2.137 (2026-10-02)
 
+- **Edge console is stateless in cluster mode (Path 1, P1).** With
+  `EDGE_LOGIN_DISABLED=true` (the normal Swarm deployment, gated by Traefik
+  admin-auth/sso-auth) the edge console now runs **completely without the
+  `edge_pmui-data` volume**: its API link + token come from env vars
+  (`PMCLUSTER_API_URL` / `PMCLUSTER_API_TOKEN`), the SQLite store opens
+  in-memory (`:memory:`), the session is the synthetic admin, and nothing is
+  persisted or written back. Standalone runs (login enabled) keep the local
+  SQLite config file exactly as before. The edge stack template drops the
+  volume declaration and mount when login is disabled. This removes one more
+  stateful component from the cluster plane.
+
 - **Tailscale option (M3).** `pmcluster join`, `pmcluster cluster up` and
   `pmcluster setup` gained opt-in `--tailscale` (+ `--tailscale-auth-key`, default
   `$PMCLUSTER_TAILSCALE_AUTH_KEY`). When set, the node is brought onto a private

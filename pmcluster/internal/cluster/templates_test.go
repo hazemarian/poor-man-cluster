@@ -1188,6 +1188,49 @@ func TestLoadComposeFile_EdgeSSOBridgeAdminAuth(t *testing.T) {
 	}
 }
 
+// TestLoadComposeFile_EdgeStateless verifies cluster-mode edge (login disabled)
+// is stateless: DATA_DIR=:memory:, no pmui-data volume mount and no top-level
+// volumes block. Standalone mode (login enabled) keeps /data + the volume.
+func TestLoadComposeFile_EdgeStateless(t *testing.T) {
+	cluster, err := LoadComposeFile(StackEdge, RenderInput{
+		Domain:            "example.com",
+		EdgeImage:         "ghcr.io/hazemarian/pmcluster-edge:v9",
+		EdgeLoginDisabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := string(cluster)
+	for _, want := range []string{"DATA_DIR=:memory:"} {
+		if !strings.Contains(cs, want) {
+			t.Errorf("cluster-mode edge missing %q:\n%s", want, cs)
+		}
+	}
+	// The template comment mentions pmui-data for context, so assert on the
+	// actual mounts/declarations: the volume mount and the top-level volumes
+	// block must be absent.
+	for _, bad := range []string{"- pmui-data:/data", "\nvolumes:\n"} {
+		if strings.Contains(cs, bad) {
+			t.Errorf("cluster-mode edge must not contain %q:\n%s", bad, cs)
+		}
+	}
+
+	standalone, err := LoadComposeFile(StackEdge, RenderInput{
+		Domain:            "example.com",
+		EdgeImage:         "ghcr.io/hazemarian/pmcluster-edge:v9",
+		EdgeLoginDisabled: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ss := string(standalone)
+	for _, want := range []string{"DATA_DIR=/data", "pmui-data:/data", "pmui-data:"} {
+		if !strings.Contains(ss, want) {
+			t.Errorf("standalone-mode edge missing %q:\n%s", want, ss)
+		}
+	}
+}
+
 // TestLoadComposeFile_OORetentionRenders verifies the OpenObserve stream
 // retention settings land as ZO_LOGS/METRICS/TRACES_RETENTION_DAYS env vars.
 func TestLoadComposeFile_OORetentionRenders(t *testing.T) {

@@ -56,11 +56,21 @@ type User struct {
 }
 
 // Open creates (if needed) and opens the SQLite DB under dataDir.
+//
+// A dataDir of ":memory:" opens a purely in-memory database instead: no
+// directory is created and nothing is persisted. This is how the edge console
+// runs in cluster mode (EDGE_LOGIN_DISABLED) — it is stateless there, driven
+// entirely by the PMCLUSTER_API_URL / PMCLUSTER_API_TOKEN env vars, so it needs
+// no volume at all. Standalone/local runs pass a real dataDir and keep their
+// users + settings in SQLite.
 func Open(dataDir string) (*Store, error) {
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+	dsn := filepath.Join(dataDir, "pmcluster-ui.db")
+	if dataDir == ":memory:" {
+		dsn = ":memory:"
+	} else if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir data dir: %w", err)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dataDir, "pmcluster-ui.db"))
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
