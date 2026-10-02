@@ -77,19 +77,19 @@ flowchart LR
   that disk) — the workers add *recovery speed*, not zero-downtime failover.
 
 ### Option C — multi-node HA with a load balancer (the "single IP" dream)
-All nodes run Traefik; a load balancer (or DNS failover) fronts them; app
-data is replicated (LINSTOR/DRBD under `/var/stack/data`) so any node can
-serve any stack. **This is the only topology where the domain survives a node
-loss without manual intervention — and it is the last step of an HA build,
-not the first.**
+All **manager** nodes run Traefik; a load balancer (or DNS failover) fronts
+them; app data is replicated (LINSTOR/DRBD under `/var/stack/data`) so any
+node can serve any stack. **This is the only topology where the domain
+survives a node loss without manual intervention — and it is the last step of
+an HA build, not the first.**
 
 ```mermaid
 flowchart LR
     D["your.com (one A record)"]
     LB["Load balancer<br/>203.0.113.100"]
-    N1["Node 1 (leader)<br/>203.0.113.10<br/>traefik + stacks"]
-    N2["Node 2<br/>203.0.113.11<br/>traefik + stacks"]
-    N3["Node 3<br/>203.0.113.12<br/>traefik + stacks"]
+    N1["Manager 1 (leader)<br/>203.0.113.10<br/>traefik"]
+    N2["Manager 2<br/>203.0.113.11<br/>traefik"]
+    N3["Manager 3<br/>203.0.113.12<br/>traefik"]
     D -- "A record" --> LB
     LB -- "80/443, health-checked" --> N1
     LB -- "80/443, health-checked" --> N2
@@ -97,12 +97,26 @@ flowchart LR
     N1 --- N2 --- N3
 ```
 
+**How Traefik is actually deployed here:** the infra stack runs Traefik as a
+**`mode: global`** service constrained to `node.role == manager` — so **one
+instance runs on every manager automatically** (3 managers → 3 running
+Traefik instances from the start). Nothing is "spun up" when a manager dies:
+the surviving managers' Traefik instances are already running and keep
+serving. (A `replicas: 1` + manager-placement service would be the
+reschedule-on-failure model instead — Traefik is not configured that way.)
+This is the **default** behavior. If your cluster sets `platform_node`,
+Traefik is **pinned to that one node** (`node.hostname == platform_node`) —
+then only that node serves 80/443 and there is no automatic takeover, so
+Option C requires leaving `platform_node` unset (or set so every serving
+manager matches).
+
 - **DNS:** one `A` record → the LB IP (or a DNS-failover record).
 - **Requires, in order:** (1) 3+ managers (quorum 2/3 so the swarm survives a
   loss), (2) data replication so the surviving nodes hold the volumes,
-  (3) Traefik + edge running on every node, (4) the LB/DNS in front.
+  (3) Traefik + edge running on every **manager** (the default global
+  placement does this), (4) the LB/DNS in front.
 - **An LB alone does NOT give you HA** — it only redirects to whatever is
-  actually running. Without steps 1–3 it will happily route users to a healthy
+  actually running. Without steps 1–2 it will happily route users to a healthy
   node that has no copy of their data (see `storage-and-databases.md`).
 
 ### Option D — tailnet (Tailscale) instead of opening cluster ports
