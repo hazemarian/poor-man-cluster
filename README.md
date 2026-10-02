@@ -9,7 +9,7 @@ The control plane is a single static Go 1.25 binary (`pmcluster`, ~25 MB, no cgo
 In front of it sits **`pmcluster-edge`** — a small Go service deployed as a Swarm service that publishes `pmcluster.<domain>` as the single public origin for the **operator console** (a web UI for API keys, TLS, webhooks, stacks, and more), the REST API, and webhook receivers — all shielded by per-IP rate limiting, a connection shield, and automatic IP blocklisting.
 
 - **Design + trade-offs:** [RFC v2 — issue #1](https://github.com/hazemarian/poor-man-cluster/issues/1) (what actually shipped)
-- **Current release:** [v0.2.115](https://github.com/hazemarian/poor-man-cluster/releases)
+- **Current release:** [v0.2.137](https://github.com/hazemarian/poor-man-cluster/releases)
 
 ---
 
@@ -88,6 +88,7 @@ Single static binary, lives on the manager host. Replaces the bash setup script 
 - `pmcluster setup` — **interactive wizard**: collects domain, TLS (LE or BYO), Traefik admin user, SSO enable (GitHub creds + org), edge login preference, and the node hostname (applied via `hostnamectl` so the Swarm records the name your `placement:` pins refer to), then runs `cluster up` (fresh) or `cluster update` (existing). All questions have matching flags for scripted use.
 - `pmcluster cluster up` — **init-only**: brings a fresh cluster up (prevents re-running if a cluster already exists — run `cluster update` instead). Configs are stored in the DB only (no `~/.pmcluster/config/*.yml` disk files); rendered at deploy time from embedded templates.
 - `pmcluster cluster update` — **content-aware reconcile**: DB is the source of truth. Compares rendered compose hashes (`rendered_hash`) against stored values; re-deploys only changed stacks. Drift-prune removes services dropped from a compose.
+- The **control loop** (v0.2.132) — the Swarm-leader daemon runs a background reconcile loop (event-driven + a `reconcile_interval` safety tick, default 60s, `0` disables; see `pmcluster cluster settings`). Each pass re-renders the platform configs and re-deploys drifted stacks, re-translates each app stack's latest source and syncs when its rendered hash drifted, and writes a per-stack/per-service health snapshot to the `stack_status` table. One pass at a time; the loop never restarts services — it only reports health. Stacks whose latest deploy failed are marked accordingly (deploy errors also surface on the stack detail page).
 - `pmcluster cluster settings` — list all cluster settings (KEY/VALUE; secret-typed keys masked); `pmcluster cluster settings get <key>`; `pmcluster cluster settings set key=value ...`
 - `pmcluster cluster status` / `cluster down`
 - `pmcluster serve` — runs the long-running daemon (REST API + webhook receiver). Listens on `127.0.0.1:9090`; Traefik routes `pmcluster.<domain>` to it via `host.docker.internal:host-gateway`
@@ -98,7 +99,7 @@ Single static binary, lives on the manager host. Replaces the bash setup script 
 - `pmcluster webhook add|list|remove|deliveries` — HMAC-signed webhook sources for CI integrations (timestamped to prevent replay); `deliveries <source>` shows newest-first delivery history (ID/STATUS/STACK/REVISION/REPO/FILE/WHEN/ERROR)
 - `pmcluster tls hosts add|list|remove` — per-host TLS certificates for customer domains served by Traefik (independent of the cluster wildcard cert)
 - `pmcluster tls site show|set` — inspect or rotate the cluster's own (main) certificate in place, with expiry metadata
-- `pmcluster backup create|list|browse|restore` — on-demand offen volume snapshots; deploys can opt-in via `backup_before_deploy: true`; `browse <id>` lists files inside a backup archive (TYPE/SIZE/PATH); `restore <id>` extracts a SUCCEEDED, stack-scoped backup back under `dest_root/<stack>`
+- `pmcluster backup create|list|browse|restore` — on-demand offen volume snapshots; deploys can opt-in via `backup_before_deploy: true`; `browse <id>` lists files inside a backup archive (TYPE/SIZE/PATH); `restore <id>` extracts a SUCCEEDED, stack-scoped backup back under `dest_root/<stack>`, with `--volume <name>` for a single volume and `--from-s3` to force an offsite fetch
 - `pmcluster node list|join-token` — wraps `docker node` for the read paths
 - `pmcluster secret create|list|show|verify|delete` — DB-backed secrets (AES-256-GCM encrypted, shown as hashes)
 - `pmcluster config create|list|get|edit|history|rollback` — DB-backed configs with version history
@@ -174,7 +175,7 @@ One-line install (latest release):
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | bash
 ```
 
-The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-cluster/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.115`).
+The script picks the right `darwin|linux` × `arm64|amd64` archive from the [GitHub releases](https://github.com/hazemarian/poor-man-cluster/releases), verifies its SHA256, and drops the binary in `/usr/local/bin/pmcluster` (override with `PREFIX=…` or pin a version with `VERSION=v0.2.137`).
 
 **With private registry credentials (GHCR, Docker Hub, etc.):**
 
@@ -296,6 +297,7 @@ JSON files live at `~/.pmcluster/logs/pmcluster-YYYY-MM-DD.log` and are swept af
 - **Users** — manage console accounts with RBAC roles (admin > operator > viewer); admins only. Hidden from nav when behind SSO/admin-auth.
 - **Settings / overview** — cluster info and management (incl. "Apply to swarm" sync button)
 - **External** — nav links to `https://observ.<domain>` (OpenObserve) and `https://traefik.<domain>/dashboard/` (Traefik dashboard)
+- **Status badges** — every stack has a public, no-auth status badge endpoint at `https://pmcluster.<domain>/api/public/badge/<stack>` (flat SVG: healthy / in progress / degraded / error / unknown) that reads the control loop's `stack_status` DB snapshot. Paste it into any GitHub README — e.g. `![stack services](https://pmcluster.<domain>/api/public/badge/<stack>/services)` renders one badge with a segment per service. The console's stack page shows the copyable markdown (single + combined).
 
 The console authenticates against a dedicated `edge` daemon user and stores its session state in its own SQLite volume. When the console is deployed behind Traefik's `admin-auth` or `sso-auth` gate (`/web/*`), its own login page is disabled (`EDGE_LOGIN_DISABLED=true`) — you authenticate at the Traefik level and the console runs as a synthetic admin session.
 
@@ -304,14 +306,16 @@ The console authenticates against a dedicated `edge` daemon user and stores its 
 On each additional machine — install Docker, then a single command:
 
 ```bash
-docker swarm join --token <TOKEN> <MANAGER_IP>:2377
+pmcluster join --role worker --token <TOKEN> --manager <MANAGER_IP>:2377
 ```
 
-Get the token from the manager:
+`pmcluster join` joins the Swarm, initialises the local pmcluster state (data dir, config, DB migrations), installs the systemd daemon unit and starts it, and verifies the joined role. Get the token from the manager:
 
 ```bash
 docker swarm join-token worker
 ```
+
+To join over a private WireGuard tailnet instead of the public IP — `pmcluster join --role worker --token <TOKEN> --manager <MANAGER_IP>:2377 --tailscale --tailscale-auth-key tskey-...` — the node joins the tailnet, advertises its tailnet IPv4 to the Swarm, and node-to-node traffic (2377/7946/4789 + storage ports) needs no firewall rules. Opt-in; fails loudly on tailnet errors.
 
 The manager automatically schedules the OTel Collector and the volume backup agent on the new node. No script, no config file.
 
@@ -556,7 +560,12 @@ In addition to the per-node app-volume agent, the backup stack runs a manager-on
 
 Scheduled archives on disk are **discovered** into `pmcluster backup list` and the console (no DB rows for cron-only runs, migration 0018), and stale archives older than `backup_retention_days` are pruned automatically (row + file).
 
-Restore is **implemented**: `pmcluster backup restore <id>` extracts a SUCCEEDED stack-scoped run under the volume root with the archive's `/backup/data` prefix stripped; whole-disk runs restore to the volume root and cover every stack; control-plane archives are refused into the volume root. See [`pmcluster/docs/restore-design.md`](pmcluster/docs/restore-design.md) for the shipped design and remaining gaps.
+Restore is **implemented**: `pmcluster backup restore <id>` extracts a SUCCEEDED stack-scoped run under the volume root with the archive's `/backup/data` prefix stripped; whole-disk runs restore to the volume root and cover every stack; control-plane archives are refused into the volume root. Two knobs refine it:
+
+- `--volume <name>` restores a **single volume** only — matched as a full path segment inside the archive, so a per-volume restore never leaks entries from other volumes or stacks (a stack-scoped run's `--volume` is anchored to that run's stack; whole-disk runs accept `<app>/<volume>` to scope to one app).
+- Restores are **local-first**: an archive still on the node's archive dir restores from disk; when it is gone (pruned, or the node never held it) the archive is **fetched from the configured offsite S3 store** (`backup_s3_*` settings) via a minimal AWS SigV4 client (stdlib, path-style, R2-compatible). `--from-s3` forces the fetch even when a local copy exists. With no local archive and no S3 configured, the command fails loudly and says where the archive lives.
+
+See [`pmcluster/docs/restore-design.md`](pmcluster/docs/restore-design.md) for the shipped design and remaining gaps.
 
 ## Storage & Databases
 
@@ -604,7 +613,7 @@ The daemon exposes a JSON REST API under `/api/*` (Bearer auth) plus the unauthe
 | `GET` | `/api/cluster/info` | Cluster + Swarm status |
 | `GET` | `/api/nodes` | Swarm nodes |
 | `GET` | `/api/usage` | Config/secret usage graph (which stacks reference each) |
-| `GET` | `/api/cluster/settings` | List all cluster settings (13 allowlisted keys) |
+| `GET` | `/api/cluster/settings` | List all cluster settings (25 allowlisted keys) |
 | `PUT` | `/api/cluster/settings` | Atomic update of cluster settings (does NOT redeploy) |
 | `GET`/`POST` | `/api/stacks` | List / deploy a stack |
 | `GET` | `/api/stacks/{name}` | Stack detail + revisions |

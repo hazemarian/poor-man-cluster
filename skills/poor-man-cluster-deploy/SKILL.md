@@ -182,11 +182,31 @@ pmcluster webhook deliveries github-prod
 pmcluster user create ci-bot
 pmcluster backup create
 pmcluster backup browse <id>
-pmcluster backup restore <id>
+pmcluster backup restore <id> [--volume <name>] [--from-s3]
 pmcluster tls site show
 pmcluster cluster settings
 pmcluster usage
 ```
+
+Restore is **local-first**: an archive still on the node restores from disk; when
+it is gone the archive is fetched from the configured offsite S3 store
+(`backup_s3_*` settings, R2-compatible SigV4) — `--from-s3` forces the fetch.
+`--volume <name>` restores a single volume (anchored to the run's stack;
+whole-disk runs accept `<app>/<volume>`). With no local archive and no S3
+configured the command fails loudly and names where the archive lives.
+
+```bash
+pmcluster join --role worker --token <TOKEN> --manager <MANAGER>:2377 \
+  --tailscale --tailscale-auth-key tskey-...   # opt-in tailnet advertise-addr
+```
+
+The **control loop** (leader daemon) reconciles in the background:
+`reconcile_interval` (default 60s, `0` disables) + Swarm events. Each pass
+re-deploys drifted platform stacks, syncs app stacks whose rendered hash
+drifted, and writes a health snapshot to `stack_status` — the source for the
+public **status badges** at `https://pmcluster.<domain>/api/public/badge/<stack>`
+(and `/<stack>/services` for the combined per-service badge), which you can
+paste into any GitHub README.
 
 - The token comes from `pmcluster user create <name>` (or the `edge` daemon
   token from `pmcluster credentials show edge_api_token`).
@@ -561,11 +581,11 @@ The edge image is pinned to the release version tag — `ghcr.io/hazemarian/pmcl
 
 1. **Build + publish the release first** — push a `v*` tag; the release workflow cross-compiles the binaries and pushes the new edge image to GHCR:
    ```bash
-   git tag v0.2.115 && git push origin v0.2.115
+   git tag v0.2.137 && git push origin v0.2.137
    ```
 2. **Update the binary with install.sh** — it installs the new binary and, because `~/.pmcluster/config.yaml` exists, automatically runs `pmcluster cluster update`:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | VERSION=v0.2.115 bash
+   curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | VERSION=v0.2.137 bash
    # or simply: | bash   (resolves latest release)
    ```
 3. `cluster update` **re-syncs the platform config templates** from the new binary's embedded copies into the store (the DB is the source of truth; operator edits are preserved), then re-renders. Because the edge-stack.yml content changed, the **edge stack is re-deployed** automatically and pulls the new version-pinned image. OTel/Traefik/cert are re-applied content-aware as usual. A second `cluster update` with no changes reports `No rendered content changed — nothing to redeploy.`

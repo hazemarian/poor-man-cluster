@@ -18,7 +18,7 @@ The daemon listens on `127.0.0.1:9090` (host-only). Public access goes through
 curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | bash
 ```
 
-Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.115`.
+Privately install with `PREFIX=…` or pin a version with `VERSION=v0.2.137`.
 On Linux, `install.sh` only installs the binary — the daemon is started by the
 CLI itself: `cluster up`, `cluster update`, and `join` write
 `/etc/systemd/system/pmcluster.service` (`ExecStart=… pmcluster serve`) and
@@ -61,13 +61,13 @@ make build         # → ./bin/pmcluster
 | `init` | Bootstrap config (flags: `--admin-name`, `--force` destructive) |
 | `serve` | Run the HTTP daemon (REST API + webhook receiver); leader-aware — serves only on the Swarm leader, standby on non-leader managers (15 s poll), standalone/local mode serves immediately |
 | `cluster up/update/down/status` | Bring the stack up (init-only), content-aware reconcile (DB source of truth, `rendered_hash`), tear down, or show status |
-| `cluster settings/get/set` | List, get, or set cluster settings (13 allowlisted keys; secret keys masked) |
-| `setup` | Interactive wizard: collect cluster config then run cluster up/update |
-| `join --role worker\|manager --token … --manager <host>:2377` | Join this host to the Swarm, verify the joined role, initialise local control-plane state, and start the daemon |
+| `cluster settings/get/set` | List, get, or set cluster settings (25 allowlisted keys incl. `reconcile_interval`, `log_level`; secret keys masked) |
+| `setup` | Interactive wizard: collect cluster config then run cluster up/update (flags incl. `--tailscale`) |
+| `join --role worker\|manager --token … --manager <host>:2377` | Join this host to the Swarm, verify the joined role, initialise local control-plane state, and start the daemon (opt-in `--tailscale [--tailscale-auth-key]` advertises the tailnet IPv4 to the Swarm) |
 | `deploy <manifest.yaml>` | DSL-based deploy (flags: `--app`, `--repo`, `--file`, `--version`) |
 | `stack list/show` | List or inspect deployed stacks |
 | `rollback <stack> <rev>` | Roll back to a previous revision |
-| `backup create/list/browse/restore` | On-demand backups; `browse <id>` lists archive files (TYPE/SIZE/PATH); `restore <id>` extracts to `dest_root/<stack>` |
+| `backup create/list/browse/restore` | On-demand backups; `browse <id>` lists archive files (TYPE/SIZE/PATH); `restore <id>` extracts to `dest_root/<stack>` (flags: `--volume <name>` single-volume, `--from-s3` force offsite fetch) |
 | `webhook add/list/remove/deliveries` | Manage HMAC webhook sources; `deliveries <source>` shows newest-first delivery history |
 | `user create/list/remove` | Manage operator users (v2 tokens `pmc_<token_id>_<secret>`); `user create <name> --stack <stack>` mints a token confined to that one stack (403 everywhere else) |
 | `credentials list/show/rotate` | Bootstrap + edge credentials (AES-GCM encrypted) |

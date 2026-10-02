@@ -39,27 +39,16 @@ Legend: ⏱ effort is focused developer time. **Quick win** = simple + high valu
 
 ---
 
-## 🟡 Medium effort (worth it, plan a session each)
+## ✅ Shipped (do not re-propose)
 
-### M1. Health-gated updates + auto-rollback (was #2)
-- After deploy/sync, wait for all services healthy (bounded) before reporting success; on degradation auto-rollback to the previous revision (machinery exists in `stack_revisions`). Webhook delivery records `rollback` outcome.
-- ⏱ **~1-2 days.** Reuse `WaitHealthyStacks` + `Rollback`; new wired orchestration in deploy.go + tests. Needs care: rollback must respect stop-first/pinning.
-
-### M2. Backup restore completion (was #10)
-- Per-volume restore, worker-node restore, `--from-s3` (S3-enabled agents), cross-host archive transport.
-- ⏱ **~1-2 days.** browse.go/restore.go extension + S3 client + CLI flags + tests. Restore safety rules already exist.
-
-### M3. Tailscale option (was #11)
-- Optional Tailscale integration for control-plane/backup transport between nodes.
-- ⏱ **~1 day.** Daemon + join option to join a tailnet; keep SSH key transport as fallback. Needs a working Tailscale account to test.
+- **M1. Health-gated updates + auto-rollback** — superseded: the v0.2.118 depends_on **control-plane ordered deploys** (per-level topo-sort deploy + wait-healthy + prune-once) replaced the shell wait-wrapper; the v0.2.132 **control loop** continuously converges drift. Rollback re-translates source + records `rollback_of` + ordered per-level deploy.
+- **M2. Backup restore completion** — shipped v0.2.136 (restore_s3): per-volume restore (`--volume`, stack-anchored), offsite S3/R2 fallback (stdlib SigV4, local-first, loud no-S3 error), `--from-s3` force.
+- **M3. Tailscale option** — shipped v0.2.137: opt-in `--tailscale [--tailscale-auth-key]` on `join` / `cluster up` / `setup`, tailnet IPv4 advertised to the Swarm. Enabled live on the nextrum-sy nodes (100.82.72.107 / 100.77.123.88).
+- **L1. Continuous reconcile loop — self-heal** — shipped v0.2.132 (control loop): leader-only reconcile loop (Swarm events + `reconcile_interval` safety tick, default 60s, `0` disables) re-deploys drifted platform stacks, auto-syncs drifted app stacks, and writes the `stack_status` DB health snapshot; badges read the snapshot (never live Docker). Intensive logging v0.2.134, OTLP traces v0.2.135.
 
 ---
 
 ## 🔴 Large (bigger projects, schedule deliberately)
-
-### L1. Continuous reconcile loop — self-heal (was #1)
-- Daemon background loop re-rendering platform configs comparing `rendered_hash` + auto-sync app stacks by rendered hash + health self-heal (rate-limited force-update) + concurrency guard + backoff + `/health last_reconcile_at` + `pmcluster cluster reconcile`.
-- ⏱ **~2-3 days.** New `internal/reconcile` package; extract the update.go reconcile step for reuse; app-stack auto-sync via existing Sync; health loop. The biggest payoff but the biggest surface.
 
 ### L2. Control-plane DB snapshot into Raft-replicated Docker config (was #7)
 - Leader snapshots the failover-survivor kit into a `pmcluster_state` Docker config → replicated to all managers; `ensureControlPlaneFresh` restores from it. Security: split the encryption key into a second config.

@@ -268,6 +268,30 @@ handlers itself — each domain package exports its own `Mount` methods, e.g.:
 - `backups.HTTP{Svc}` → GET/POST `/api/backups` + stack-scoped
   `/api/stacks/{name}/backups` + GET `/api/backups/{id}/files` +
   POST `/api/backups/{id}/restore`.
+- `BadgeMount(r, st)` → public no-auth GET+HEAD `/api/public/badge/{stack}`,
+  `/api/public/badge/{stack}/services`, `/api/public/badge/{stack}/{service}`
+  (flat SVG status badges for READMEs). Reads **only** the `stack_status` DB
+  snapshot the reconcile loop writes — never live Docker.
+
+### internal/reconcile — the control loop (L1)
+`reconcile.go`: `Reconciler{Store, Docker, DeployService *stacks.Service,
+Services services.Service, Update func(ctx, cluster.UpdateDeps,
+cluster.UpdateInput) (*cluster.UpdateResult, error), UpdateDeps, UpdateInput,
+Log zerolog.Logger, Interval time.Duration, mu sync.Mutex, runID int64}`.
+- `RunOnce(ctx)` — one pass: (a) platform reconcile via `Update` (re-render +
+  hash-compare + redeploy drifted), (b) `ListStacks` → `DeployService.Sync`
+  each (no-op when the rendered hash matches), (c) `snapshotHealth` writes
+  `SetStackStatus` per stack (status + per-service map) and prunes stale
+  `stack_status` rows. Emits OTLP spans (`pmcluster.reconcile` root + a
+  `pmcluster.reconcile.platform` child) and `pmcluster.reconcile.total`
+  metrics; never restarts services — only reports.
+- `Loop(ctx)` — event-driven via `runtime.Client.Events` (Swarm events,
+  2s debounce) + an `Interval` safety ticker; one-pass-at-a-time guard.
+  Wired in `serve.go` on the leader node: `WatchSwarmLeadership` channel
+  starts/stops it and triggers `ensureControlPlaneFresh` on promotion.
+- `stack_status` table (migration 0022): `stack_status(stack_name PK,
+  status, services JSON, updated_at)` — the DB health snapshot badges + the
+  console read.
 - `certs.HTTP{Svc}` → `MountHosts(r)` (GET/PUT/DELETE `/api/tls/hosts[/{host}]`)
   + `MountSite(r)` (GET/PUT `/api/tls/site`).
 - `stacks.HTTP{Deploy, Read, Backups}` → GET/POST `/api/stacks`,
@@ -282,7 +306,7 @@ handlers itself — each domain package exports its own `Mount` methods, e.g.:
   POST `/api/services/{stack}/{service}/restart`,
   POST `/api/services/{stack}/{service}/exec` (body `{argv:[...]}`).
 - `settings.HTTP{Svc settings.Service}` → GET `/api/cluster/settings` +
-  PUT `/api/cluster/settings` (12 allowlisted keys; atomic; no redeploy).
+  PUT `/api/cluster/settings` (25 allowlisted keys; atomic; no redeploy).
 - `usage.HTTP{Svc usage.Service}` → GET `/api/usage`.
 
 All handlers follow the same shape: struct with a port dep + `Mount(r chi.Router)`;
