@@ -150,6 +150,9 @@ poor-man-cluster/
 │   ├── dsl.md                          # Deploy DSL reference
 │   ├── webhook.md                      # Webhook integration guide for CI
 │   ├── storage-and-databases.md        # Storage & database architecture guide
+│   ├── network-topology.md             # Topology options, firewall, DNS & load-balancer routing
+│   ├── control-loop-design.md          # Control-loop architecture & extension design
+│   ├── improvements.md                 # Shipped improvements + remaining backlog (L2/L3)
 │   └── openapi.yaml                    # REST API spec (also at pmcluster/docs/)
 └── README.md
 ```
@@ -326,6 +329,8 @@ The manager automatically schedules the OTel Collector and the volume backup age
 | 2377 | TCP | Swarm cluster management |
 | 7946 | TCP/UDP | Node-to-node communication |
 | 4789 | UDP | Overlay network traffic (VXLAN) |
+
+For the full topology options (single node → leader+workers → load-balanced HA), the DNS routing table per option, and how to point your domains at the cluster — see [`docs/network-topology.md`](docs/network-topology.md).
 
 ---
 
