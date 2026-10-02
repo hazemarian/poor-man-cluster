@@ -430,6 +430,49 @@ func TestRestore_NilDockerErrNoSnapshots(t *testing.T) {
 	}
 }
 
+// workerClient is a runtime.Client whose config operations fail with Docker's
+// "This node is not a swarm manager" error — a worker node cannot read or
+// write swarm configs.
+type workerClient struct {
+	runtime.Client
+}
+
+var errNotSwarmManager = errors.New("Error response from daemon: This node is not a swarm manager. Worker nodes can't be used to view or modify cluster state. Please run this command on a manager node or promote the current node to a manager.")
+
+func (workerClient) ConfigList(context.Context, string, string) ([]string, error) {
+	return nil, errNotSwarmManager
+}
+
+func (workerClient) ConfigInspect(context.Context, string) (runtime.ConfigInspectResult, error) {
+	return runtime.ConfigInspectResult{}, errNotSwarmManager
+}
+
+func (workerClient) ConfigCreate(context.Context, runtime.ConfigSpec) error {
+	return errNotSwarmManager
+}
+func (workerClient) ConfigRemove(context.Context, string) error { return errNotSwarmManager }
+
+func TestRestore_WorkerNodeFallsBack(t *testing.T) {
+	// A worker node (not a swarm manager) cannot list state configs. Restore
+	// must treat that as ErrNoSnapshots so the caller falls back to the
+	// tarball archive path — never a fatal startup error.
+	k := &Kit{Docker: workerClient{}, DataDir: t.TempDir(), Log: zerolog.Nop()}
+	if _, err := k.Restore(context.Background()); !errors.Is(err, ErrNoSnapshots) {
+		t.Fatalf("worker node must fall back (ErrNoSnapshots), got %v", err)
+	}
+}
+
+func TestSnapshot_WorkerNodeNoop(t *testing.T) {
+	// A worker node cannot list/create configs; Snapshot must no-op rather
+	// than return an error (the loop logs it as fatal-ish noise otherwise).
+	dataDir := t.TempDir()
+	writeKit(t, dataDir)
+	k := &Kit{Docker: workerClient{}, DataDir: dataDir, Log: zerolog.Nop()}
+	if err := k.Snapshot(context.Background()); err != nil {
+		t.Fatalf("worker node snapshot must no-op, got %v", err)
+	}
+}
+
 func keys(m map[string][]byte) []string {
 	var out []string
 	for k := range m {

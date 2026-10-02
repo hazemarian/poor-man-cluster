@@ -86,6 +86,16 @@ const (
 // archive path for clusters that predate Raft config snapshots.
 var ErrNoSnapshots = errors.New("no control-plane state config exists")
 
+// isNotSwarmManager reports whether err is Docker's "This node is not a
+// swarm manager" error. Worker nodes cannot list, inspect, or create swarm
+// configs, so the Raft-replicated control-plane kit is invisible to them:
+// Restore treats this like ErrNoSnapshots (tarball fallback) and Snapshot
+// no-ops, exactly as if Docker were unavailable. The message is stable
+// across Docker versions (daemon/cluster/errors.go errSwarmNotManager).
+func isNotSwarmManager(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "is not a swarm manager")
+}
+
 // Kit snapshots and restores the control-plane survivor kit via Docker
 // configs. Create one per daemon; Snapshot must only be called on the swarm
 // leader (Raft replication is the transport), while Restore is safe on any
@@ -119,6 +129,12 @@ func (k *Kit) Snapshot(ctx context.Context) error {
 
 	changed, err := k.needsSnapshot(ctx)
 	if err != nil {
+		if isNotSwarmManager(err) {
+			// Worker node: swarm configs are manager-only. Nothing to
+			// replicate to — behave like standalone mode.
+			log.Debug().Err(err).Msg("not a swarm manager; skipping control-plane snapshot")
+			return nil
+		}
 		return err
 	}
 	if !changed {
@@ -312,6 +328,12 @@ func (k *Kit) Restore(ctx context.Context) (bool, error) {
 
 	newest, err := k.newest(ctx, KindState)
 	if err != nil {
+		if isNotSwarmManager(err) {
+			// Worker node: cannot read swarm configs. Fall back to the
+			// tarball archive path like a pre-L2 / standalone cluster.
+			log.Debug().Err(err).Msg("not a swarm manager; no Raft state configs to restore")
+			return false, ErrNoSnapshots
+		}
 		return false, err
 	}
 	if newest == "" {
