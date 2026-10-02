@@ -75,6 +75,8 @@ func init() {
 	clusterUpCmd.Flags().String("traefik-admin-user", "admin", "username for the Traefik dashboard basic-auth")
 	clusterUpCmd.Flags().Bool("force-tls-mode", false, "allow switching TLS mode on an already-installed cluster (cert <-> acme)")
 	clusterUpCmd.Flags().String("swarm-advertise-addr", "", "advertise address passed to `docker swarm init` when this node is not yet in a Swarm (default: auto-detected node IP)")
+	clusterUpCmd.Flags().Bool("tailscale", false, "first node: bring this node onto a private WireGuard tailnet (tailscale CLI required) and init the Swarm advertising the tailnet IPv4")
+	clusterUpCmd.Flags().String("tailscale-auth-key", "", "tailnet auth key for 'tailscale up' (default: $PMCLUSTER_TAILSCALE_AUTH_KEY)")
 
 	clusterDownCmd.Flags().Bool("yes", false, "skip confirmation prompt")
 	clusterDownCmd.Flags().Bool("purge", false, "also remove pmcluster-managed secrets, configs, and networks")
@@ -203,6 +205,23 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 	in.ForceTLSMode, _ = cmd.Flags().GetBool("force-tls-mode")
 	in.ConfigDir = cfg.ConfigDir()
 	in.SwarmAdvertiseAddr, _ = cmd.Flags().GetString("swarm-advertise-addr")
+
+	// M3 — optional tailnet for a first node: when the operator opts in and did
+	// not already pin --swarm-advertise-addr, bring this node onto the tailnet
+	// and let `docker swarm init` advertise the tailnet IPv4. Explicit opt-in,
+	// so a tailnet failure fails the up (silent fallback to a public IP would
+	// defeat the purpose).
+	if ts, _ := cmd.Flags().GetBool("tailscale"); ts && in.SwarmAdvertiseAddr == "" {
+		authKey, _ := cmd.Flags().GetString("tailscale-auth-key")
+		if authKey == "" {
+			authKey = tailscaleAuthKeyFromEnv()
+		}
+		advertise, err := tailscaleReady(cmd.Context(), cmd.OutOrStdout(), authKey, "")
+		if err != nil {
+			return err
+		}
+		in.SwarmAdvertiseAddr = advertise
+	}
 
 	return runUp(cmd, cfg, in)
 }

@@ -82,7 +82,10 @@ func init() {
 	setupCmd.Flags().String("backup-s3-secret-key", "", "offsite S3 secret key (default: $PMCLUSTER_BACKUP_S3_SECRET_KEY)")
 	setupCmd.Flags().String("backup-s3-region", "", "offsite S3 region (default auto for R2)")
 	setupCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
+
 	setupCmd.Flags().String("swarm-advertise-addr", "", "advertise address passed to `docker swarm init` on a first node (default: auto-detected node IP)")
+	setupCmd.Flags().Bool("tailscale", false, "first node: bring this node onto a private WireGuard tailnet (tailscale CLI required) and init the Swarm advertising the tailnet IPv4")
+	setupCmd.Flags().String("tailscale-auth-key", "", "tailnet auth key for 'tailscale up' (default: $PMCLUSTER_TAILSCALE_AUTH_KEY)")
 }
 
 // setupAnswers is the collected wizard state.
@@ -274,6 +277,21 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 			a.NodeHostname, _ = os.Hostname()
 		}
 		a.SwarmAdvertiseAddr, _ = cmd.Flags().GetString("swarm-advertise-addr")
+
+		// M3 — optional tailnet for a first node: when the operator opts in and
+		// did not already pin --swarm-advertise-addr, bring this node onto the
+		// tailnet and let `docker swarm init` advertise the tailnet IPv4.
+		if ts, _ := cmd.Flags().GetBool("tailscale"); ts && a.SwarmAdvertiseAddr == "" {
+			authKey, _ := cmd.Flags().GetString("tailscale-auth-key")
+			if authKey == "" {
+				authKey = tailscaleAuthKeyFromEnv()
+			}
+			advertise, err := tailscaleReady(cmd.Context(), cmd.OutOrStdout(), authKey, a.NodeHostname)
+			if err != nil {
+				return err
+			}
+			a.SwarmAdvertiseAddr = advertise
+		}
 
 		// Env-var overrides for SSO settings so they can be changed from the
 		// shell / CI without editing the wizard (same precedence model as

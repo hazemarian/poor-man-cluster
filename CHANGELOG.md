@@ -4,6 +4,17 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.137 (2026-10-02)
+
+- **Tailscale option (M3).** `pmcluster join`, `pmcluster cluster up` and
+  `pmcluster setup` gained opt-in `--tailscale` (+ `--tailscale-auth-key`, default
+  `$PMCLUSTER_TAILSCALE_AUTH_KEY`). When set, the node is brought onto a private
+  WireGuard tailnet via the `tailscale` CLI (`tailscale up` then `tailscale ip -4`)
+  and the Swarm join/init advertises the **tailnet IPv4** — so node-to-node swarm
+  traffic (2377/7946/4789 + any storage ports) needs no firewall rules between
+  nodes. Explicit opt-in fails loudly on tailnet errors (a silent fallback to the
+  public IP would defeat the purpose). No change when the flag is absent.
+
 ## v0.2.136 (2026-10-01)
 
 - **Backup restore completion (M2).** `pmcluster backup restore <id>` gained two knobs and a resilient source story:

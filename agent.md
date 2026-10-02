@@ -147,6 +147,13 @@ Key commands (all in `internal/cli/`):
   cached private images otherwise). Also `--copy-registry-creds <host>`
   (ssh-fetch + merge the manager's `~/.docker/config.json`) and
   `--verify-registry-pull <image>` (best-effort pull proof).
+- Tailnet option (M3, `tailscale.go`) — opt-in `--tailscale` (+
+  `--tailscale-auth-key` / `$PMCLUSTER_TAILSCALE_AUTH_KEY`) on `join` and
+  `cluster up`/`setup`: brings the node onto a private WireGuard tailnet via the
+  `tailscale` CLI and advertises the tailnet IPv4 to the Swarm, so node-to-node
+  traffic (2377/7946/4789 + storage ports) needs no firewall rules. Failing
+  loudly on tailnet error (explicit opt-in; silent public-IP fallback would
+  defeat the purpose).
 - The `serve` command (`serve.go`) wires the daemon: opens store, docker
   client, deploy service, and calls `server.New` — **this is where new daemon
   dependencies are injected**.

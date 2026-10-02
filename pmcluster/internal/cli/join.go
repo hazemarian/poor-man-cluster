@@ -95,11 +95,23 @@ Registry credentials (both optional, never fatal to the join):
   --verify-registry-pull <image> runs a best-effort 'docker pull <image>' after
                                  joining to prove private pulls work.
 
+Tailnet (optional, M3):
+  --tailscale                    bring this node onto a private WireGuard
+                                 tailnet (tailscale CLI required) and join the
+                                 Swarm advertising the tailnet IPv4, so swarm
+                                 traffic needs no firewall rules between nodes.
+  --tailscale-auth-key <key>     tailnet auth key (default: $PMCLUSTER_TAILSCALE_AUTH_KEY).
+                                 When --tailscale is set, joining FAILS if the
+                                 tailnet can't be reached — a silent fallback to
+                                 the public IP would defeat the purpose.
+
 Examples:
   pmcluster join --role worker  --token SWMTKN-1-... --manager 82.165.128.237:2377
   pmcluster join --role manager --token SWMTKN-1-... --manager 82.165.128.237:2377
   pmcluster join --role worker --token SWMTKN-1-... --manager 82.165.128.237:2377 \
     --copy-registry-creds 82.165.128.237 --verify-registry-pull ghcr.io/your-org/app:1
+  pmcluster join --role worker --token SWMTKN-1-... --manager 100.64.0.1:2377 \
+    --tailscale --tailscale-auth-key tskey-...
 
 After a successful join the local state is initialised (data dir, config,
 database migrations) and the systemd unit is installed + started.
@@ -116,6 +128,8 @@ func init() {
 	joinCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
 	joinCmd.Flags().String("copy-registry-creds", "", "ssh-host to copy the manager's ~/.docker/config.json from (e.g. 82.165.128.237) so private registry pulls stay fresh")
 	joinCmd.Flags().String("verify-registry-pull", "", "after joining, best-effort 'docker pull <image>' to prove private registry credentials work (e.g. ghcr.io/your-org/app:1)")
+	joinCmd.Flags().Bool("tailscale", false, "join via a private WireGuard tailnet (advertise the tailnet IPv4 instead of the public IP)")
+	joinCmd.Flags().String("tailscale-auth-key", "", "tailnet auth key for 'tailscale up' (default: $PMCLUSTER_TAILSCALE_AUTH_KEY)")
 	rootCmd.AddCommand(joinCmd)
 }
 
@@ -126,6 +140,8 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 	hostname, _ := cmd.Flags().GetString("hostname")
 	copyCredsFrom, _ := cmd.Flags().GetString("copy-registry-creds")
 	verifyPullImage, _ := cmd.Flags().GetString("verify-registry-pull")
+	tailscaleOn, _ := cmd.Flags().GetBool("tailscale")
+	tailscaleAuthKey, _ := cmd.Flags().GetString("tailscale-auth-key")
 	switch role {
 	case "worker", "manager":
 	default:
@@ -148,8 +164,27 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
+	// M3 — optional tailnet: bring this node onto the tailnet and advertise the
+	// tailnet IPv4 to the Swarm so node-to-node traffic needs no firewall rules.
+	// Explicit opt-in: failing loudly is correct (a silent fallback to the
+	// public IP would defeat the purpose of --tailscale).
+	tailnetAdvertise := ""
+	if tailscaleOn {
+		if tailscaleAuthKey == "" {
+			tailscaleAuthKey = tailscaleAuthKeyFromEnv()
+		}
+		advertise, err := tailscaleReady(cmd.Context(), cmd.OutOrStdout(), tailscaleAuthKey, hostname)
+		if err != nil {
+			return err
+		}
+		tailnetAdvertise = advertise
+	}
+
 	// Run docker swarm join via the docker CLI (transparent to the operator).
 	joinArgs := []string{"swarm", "join", "--token", token, manager}
+	if tailnetAdvertise != "" {
+		joinArgs = []string{"swarm", "join", "--token", token, "--advertise-addr", tailnetAdvertise, manager}
+	}
 	jc := exec.CommandContext(cmd.Context(), "docker", joinArgs...)
 	jc.Stdout = cmd.OutOrStdout()
 	jc.Stderr = cmd.ErrOrStderr()
