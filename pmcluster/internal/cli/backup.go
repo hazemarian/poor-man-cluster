@@ -65,7 +65,10 @@ held it) the archive is fetched from the configured offsite S3 store
 (backup_s3_* settings) if one is set; otherwise the command fails loudly
 and tells you where the archive lives. --from-s3 forces the fetch.
 
---volume narrows the restore to one volume (e.g. db_data); without it the
+--volume narrows the restore to one volume (e.g. db_data). On a stack-scoped
+run the volume is anchored to that stack, so it can never pull another
+app's same-named volume; on a whole-disk run a bare volume name matches
+every app's volume, so scope it as <app>/<volume>. Without --volume the
 whole run is restored. Restores always run on the node that owns the
 target volume root.`,
 	RunE: runBackupRestore,

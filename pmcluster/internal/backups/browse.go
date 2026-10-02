@@ -140,7 +140,19 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 		var include func(string) bool
 		if opts.Volume != "" {
 			volume := opts.Volume
-			include = func(rel string) bool { return volumeMatch(rel, volume) }
+			if row.StackName.Valid && row.StackName.String != "" {
+				// Stack-scoped run: anchor the volume to THIS app, so a
+				// `--volume db_data` can never pull another app's same-named
+				// volume out of a multi-stack archive.
+				anchored := row.StackName.String + "/" + volume
+				include = func(rel string) bool {
+					return rel == anchored || strings.HasPrefix(rel, anchored+"/")
+				}
+			} else {
+				// Whole-disk run: match by segment (a bare volume name matches
+				// every app's volume; "<app>/<volume>" scopes to one app).
+				include = func(rel string) bool { return volumeMatch(rel, volume) }
+			}
 		}
 		n, err := restoreArchiveRelFiltered(src, target, archiveRelPath, include)
 		cleanup()

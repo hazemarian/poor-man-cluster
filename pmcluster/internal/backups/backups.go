@@ -45,8 +45,11 @@ type Service interface {
 
 // RestoreOptions narrows how a backup run is restored.
 type RestoreOptions struct {
-	// Volume restores only the entries that belong to one volume (matched by
-	// path segment, e.g. "db_data"); empty restores the whole run.
+	// Volume restores only the entries that belong to one volume. On a
+	// stack-scoped run the volume is anchored to that run's stack (so a bare
+	// "db_data" can never pull another app's same-named volume); on a
+	// whole-disk run a bare name matches every app's volume and "<app>/<volume>"
+	// scopes to one app. Empty restores the whole run.
 	Volume string
 	// FromS3 forces fetching the archives from the configured offsite S3
 	// store even when a local copy still exists.
