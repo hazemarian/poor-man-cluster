@@ -4,6 +4,13 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.136 (2026-10-01)
+
+- **Backup restore completion (M2).** `pmcluster backup restore <id>` gained two knobs and a resilient source story:
+  - `--volume <name>` (and `volume` on `POST /api/backups/{id}/restore`) restores only one volume — matched as a full path segment inside the archive, so a per-volume restore never leaks entries from other volumes or stacks. The console's Restore form gained the volume field.
+  - Restores are **local-first**: an archive still on the node's archive dir is restored from disk. When it is gone (pruned, or the node never held it) the archive is **fetched from the configured offsite S3 store** (`backup_s3_*` settings) — implemented with a minimal AWS SigV4 GET client (stdlib, path-style, R2-compatible; no new dependency). `--from-s3` forces the fetch even when a local copy exists. With no local archive and no S3 configured, the command fails loudly and says exactly where the archive lives (and that configuring `backup_s3_*` enables the fetch) instead of silently restoring nothing.
+  - Refused control-plane archives, the `/backup/data` prefix strip and the path-escape guard all still apply to whichever source the bytes came from.
+
 ## v0.2.135 (2026-10-01)
 
 - **Control-loop OTLP traces.** The reconcile loop now emits OpenTelemetry spans through the existing telemetry pipeline (visible in OpenObserve once the collector is connected): a `pmcluster.reconcile` root span per pass with the `run_id` attribute, and a `pmcluster.reconcile.platform` child span for the platform-render/hash-compare pass carrying `stacks_redeployed` when drift is applied. Errors are recorded on the span with a non-OK status. Span creation is lazy and no-op until `telemetry.Init` wires the global provider (same pattern as the deploy/rollback tracers).

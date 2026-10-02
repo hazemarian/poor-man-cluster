@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/apikeys"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -440,7 +441,7 @@ func TestRemoteBackups(t *testing.T) {
 		t.Fatalf("Browse = %+v %+v %v", run, files, err)
 	}
 
-	n, err := b.Restore(ctx, 7, "/var/stack/data")
+	n, err := b.Restore(ctx, 7, "/var/stack/data", backups.RestoreOptions{})
 	if err != nil || n != 42 {
 		t.Fatalf("Restore = %d, %v, want 42", n, err)
 	}

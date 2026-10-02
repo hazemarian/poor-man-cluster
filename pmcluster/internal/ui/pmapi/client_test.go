@@ -448,7 +448,7 @@ func TestPmapi_BackupsAndTLS(t *testing.T) {
 		t.Fatalf("BrowseBackup run=%+v files=%+v", run, files)
 	}
 
-	n, err := c.RestoreBackup(ctx, 1, "/var/stack/data")
+	n, err := c.RestoreBackup(ctx, 1, "/var/stack/data", "", false)
 	if err != nil {
 		t.Fatalf("RestoreBackup: %v", err)
 	}

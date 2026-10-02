@@ -26,6 +26,10 @@ type Local struct {
 	// RetentionDays prunes backup audit rows (and their archive files on
 	// disk) older than this many days. Zero disables pruning.
 	RetentionDays int
+	// S3 is the offsite object-store destination. When configured, restore
+	// falls back to fetching archives from it when the local copy is gone
+	// (or --from-s3 is explicit). Empty disables the S3 fallback.
+	S3 S3Config
 }
 
 // DefaultArchiveDir is the archive root mounted into the bundled

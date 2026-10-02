@@ -122,9 +122,25 @@
       <div class="kv-row"><span class="k">{{T "backupbrowse.restore_dest"}}</span><span class="v mono iso">{{.DestRoot}}{{if .Run.StackName}}/{{.Run.StackName}}{{end}}</span></div>
     </div>
     {{if .Restorable}}
-    <div class="action-bar">
-      <button type="button" class="btn btn-primary" hx-post="/web/backups/{{.ID}}/restore" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" hx-confirm="{{TF "backupbrowse.restore_confirm" (N0 .ID) (printf "%s/%s" .DestRoot .Run.StackName)}}">{{icon "restore"}}<span>{{T "backupbrowse.restore_action"}}</span></button>
-    </div>
+    <form hx-post="/web/backups/{{.ID}}/restore" hx-target="#view" hx-push-url="true" hx-disabled-elt=".btn-restore">
+      <div class="kv">
+        <div class="kv-row">
+          <span class="k">{{T "backupbrowse.restore_volume"}}</span>
+          <span class="v">
+            <input class="finput mono" type="text" name="volume" placeholder="db_data" value="" />
+          </span>
+        </div>
+        <div class="kv-row">
+          <span class="k">{{T "backupbrowse.restore_s3"}}</span>
+          <span class="v">
+            <label class="check"><input type="checkbox" name="from_s3" value="on" /><span>{{T "backupbrowse.restore_s3_label"}}</span></label>
+          </span>
+        </div>
+      </div>
+      <div class="action-bar">
+        <button type="submit" class="btn btn-primary btn-restore" hx-confirm="{{TF "backupbrowse.restore_confirm" (N0 .ID) (printf "%s/%s" .DestRoot .Run.StackName)}}">{{icon "restore"}}<span>{{T "backupbrowse.restore_action"}}</span></button>
+      </div>
+    </form>
     {{else}}
     <div class="msg warn">{{T "backupbrowse.restore_blocked"}}</div>
     {{end}}

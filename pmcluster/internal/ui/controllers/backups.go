@@ -217,7 +217,7 @@ func (c Backups) Restore(g *gin.Context) {
 		c.Views.Fragment(g, "backupbrowse", d)
 		return
 	}
-	n, err := c.API.RestoreBackup(ctx, d.ID, d.DestRoot)
+	n, err := c.API.RestoreBackup(ctx, d.ID, d.DestRoot, strings.TrimSpace(g.PostForm("volume")), g.PostForm("from_s3") == "on")
 	if err != nil {
 		d.ErrKey, d.ErrRaw = "err.backup_restore", err.Error()
 	} else {

@@ -100,7 +100,7 @@ func backendBackups(cmd *cobra.Command) (backups.Service, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: backups.DefaultArchiveDir, RetentionDays: cluster.LoadBackupRetentionDays(cmd.Context(), st)}, func() { _ = st.Close() }, nil
+	return &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: backups.DefaultArchiveDir, RetentionDays: cluster.LoadBackupRetentionDays(cmd.Context(), st), S3: backupS3FromSettings(cmd.Context(), st)}, func() { _ = st.Close() }, nil
 }
 
 func backendTLS(cmd *cobra.Command) (certs.Service, func(), error) {

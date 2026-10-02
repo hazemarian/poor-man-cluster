@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 var backupCmd = &cobra.Command{
@@ -51,12 +53,21 @@ archive path that no longer exists on disk.`,
 
 var backupRestoreCmd = &cobra.Command{
 	Use:   "restore <id>",
-	Short: "Restore a successful stack-scoped backup run into the data root",
+	Short: "Restore a successful backup run into the data root",
 	Args:  cobra.ExactArgs(1),
-	Long: `Extracts every archive of a SUCCESSFUL, stack-scoped backup run back
-under the data root (default /var/stack/data/<stack>/), overwriting
-existing files with the same names. Refuses runs that did not succeed
-and runs not tied to a stack.`,
+	Long: `Extracts the archives of a SUCCESSFUL backup run back under the data
+root (default /var/stack/data/), overwriting existing files with the same
+names. Refuses runs that did not succeed.
+
+Restores are local-first: an archive still present on this node's archive
+dir is restored from disk. When it is gone (pruned, or this node never
+held it) the archive is fetched from the configured offsite S3 store
+(backup_s3_* settings) if one is set; otherwise the command fails loudly
+and tells you where the archive lives. --from-s3 forces the fetch.
+
+--volume narrows the restore to one volume (e.g. db_data); without it the
+whole run is restored. Restores always run on the node that owns the
+target volume root.`,
 	RunE: runBackupRestore,
 }
 
@@ -64,9 +75,23 @@ func init() {
 	backupCreateCmd.Flags().Duration("timeout", 5*time.Minute, "max time to wait for the backup to finish")
 	backupListCmd.Flags().Int("limit", 20, "max rows to show (0 = all)")
 	backupRestoreCmd.Flags().String("dest-root", "/var/stack/data", "data root to restore into (<dest-root>/<stack>)")
+	backupRestoreCmd.Flags().String("volume", "", "restore only this volume (e.g. db_data); empty restores the whole run")
+	backupRestoreCmd.Flags().Bool("from-s3", false, "fetch the archive from the configured offsite S3 store even when a local copy exists")
 
 	backupCmd.AddCommand(backupCreateCmd, backupListCmd, backupBrowseCmd, backupRestoreCmd)
 	rootCmd.AddCommand(backupCmd)
+}
+
+// backupS3FromSettings converts the persisted backup_s3_* settings into the
+// S3Config the backups domain uses for its offsite restore fallback.
+func backupS3FromSettings(ctx context.Context, st *store.Store) backups.S3Config {
+	return backups.S3Config{
+		Endpoint:  st.GetSettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""),
+		Bucket:    st.GetSettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""),
+		AccessKey: st.GetSettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""),
+		SecretKey: st.GetSettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""),
+		Region:    st.GetSettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"),
+	}
 }
 
 func runBackupCreate(cmd *cobra.Command, _ []string) error {
@@ -210,6 +235,8 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("id: must be an integer (got %q)", args[0])
 	}
 	destRoot, _ := cmd.Flags().GetString("dest-root")
+	volume, _ := cmd.Flags().GetString("volume")
+	fromS3, _ := cmd.Flags().GetBool("from-s3")
 
 	svc, closeFn, err := backendBackups(cmd)
 	if err != nil {
@@ -217,7 +244,7 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 	}
 	defer closeFn()
 
-	restored, err := svc.Restore(cmd.Context(), id, destRoot)
+	restored, err := svc.Restore(cmd.Context(), id, destRoot, backups.RestoreOptions{Volume: volume, FromS3: fromS3})
 	if err != nil {
 		return fmt.Errorf("restore backup %d: %w", id, err)
 	}

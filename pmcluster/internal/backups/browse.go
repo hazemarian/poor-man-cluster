@@ -109,7 +109,13 @@ func listArchive(p string) ([]FileEntry, error) {
 // are mapped back to destRoot after stripping that prefix. Control-plane
 // archives (whose entries live under `backup/pmcluster`) are refused — their
 // target is the control-plane data dir, not the volume root.
-func (l *Local) Restore(ctx context.Context, id int64, destRoot string) (int, error) {
+//
+// The restore is local-first: an archive that still exists on this node's
+// archive dir is restored from disk. When it is gone (pruned, or this node
+// never held it) the archive is fetched from the configured offsite S3 store
+// instead; a missing local archive with no S3 configured is a loud error that
+// says where the archive lives.
+func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts RestoreOptions) (int, error) {
 	row, err := l.Store.GetBackup(ctx, id)
 	if err != nil {
 		return 0, fmt.Errorf("get backup: %w", err)
@@ -123,16 +129,72 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string) (int, er
 	}
 	var restored int
 	for _, p := range splitArchivePaths(row.ArchivePaths) {
-		if err := refuseControlPlaneArchive(p); err != nil {
+		src, cleanup, err := l.restoreSource(ctx, p, opts)
+		if err != nil {
 			return restored, err
 		}
-		n, err := restoreArchive(p, target)
+		if err := refuseControlPlaneArchive(src); err != nil {
+			cleanup()
+			return restored, err
+		}
+		var include func(string) bool
+		if opts.Volume != "" {
+			volume := opts.Volume
+			include = func(rel string) bool { return volumeMatch(rel, volume) }
+		}
+		n, err := restoreArchiveRelFiltered(src, target, archiveRelPath, include)
+		cleanup()
 		if err != nil {
 			return restored, fmt.Errorf("restore %s: %w", p, err)
 		}
 		restored += n
 	}
 	return restored, nil
+}
+
+// restoreSource resolves where an archive's bytes come from: the local file
+// (default), or a fetch from the configured offsite S3 store when the local
+// copy is gone or --from-s3 is explicit. The returned cleanup removes any
+// temporary file and is always safe to call.
+func (l *Local) restoreSource(ctx context.Context, p string, opts RestoreOptions) (string, func(), error) {
+	_, localErr := os.Stat(p)
+	localExists := localErr == nil
+
+	if opts.FromS3 && !l.S3.Configured() {
+		return "", func() {}, fmt.Errorf("offsite S3 restore requested but no S3 is configured — set the backup_s3_* settings (endpoint, bucket, access key, secret key)")
+	}
+	if !opts.FromS3 && localExists {
+		return p, func() {}, nil
+	}
+	if !opts.FromS3 && !l.S3.Configured() {
+		return "", func() {}, fmt.Errorf("archive %s not found locally and no offsite S3 is configured — restore on the node that holds %s, or configure backup_s3_* settings to fetch it", p, l.ArchiveDir)
+	}
+
+	tmp, err := os.CreateTemp("", "pmcluster-restore-*.tar.gz")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("temp file for s3 fetch: %w", err)
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	if err := fetchS3Object(ctx, l.S3, s3ObjectKey(p), tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", func() {}, err
+	}
+	return tmpPath, func() { _ = os.Remove(tmpPath) }, nil
+}
+
+// volumeMatch reports whether a restore-relative path belongs to the named
+// volume. A volume name is matched as a full path segment (including the
+// volume's own directory entry) so entries from different stacks or volumes
+// never leak into a per-volume restore. An empty volume matches everything.
+func volumeMatch(rel, volume string) bool {
+	if volume == "" {
+		return true
+	}
+	return rel == volume ||
+		strings.HasPrefix(rel, volume+"/") ||
+		strings.Contains(rel, "/"+volume+"/") ||
+		strings.HasSuffix(rel, "/"+volume)
 }
 
 // refuseControlPlaneArchive inspects the first entry of an archive and errors
@@ -254,20 +316,24 @@ func NewestControlPlaneArchive(dir string) (string, error) {
 	return newest, nil
 }
 
-func restoreArchive(p, target string) (int, error) {
-	return restoreArchiveRel(p, target, archiveRelPath)
-}
-
 // restoreArchiveRel extracts an archive into target, mapping every entry
 // through rel (the prefix-stripping mapper). Raw directories are copied tree.
 func restoreArchiveRel(p, target string, rel func(string) string) (int, error) {
+	return restoreArchiveRelFiltered(p, target, rel, nil)
+}
+
+// restoreArchiveRelFiltered is restoreArchiveRel with an optional per-entry
+// filter: entries whose mapped relative path is rejected by include are
+// skipped. A nil include restores everything. Filtering applies to tar
+// entries and to the recursive directory copy alike.
+func restoreArchiveRelFiltered(p, target string, rel func(string) string, include func(string) bool) (int, error) {
 	info, err := os.Stat(p)
 	if err != nil {
 		return 0, err
 	}
 	if info.IsDir() {
 		// Raw directory backup: copy the tree.
-		n, err := copyTree(p, target)
+		n, err := copyTreeFiltered(p, target, include)
 		return n, err
 	}
 	// tar / tar.gz archive.
@@ -299,8 +365,11 @@ func restoreArchiveRel(p, target string, rel func(string) string) (int, error) {
 		if err != nil {
 			return count, err
 		}
-		rel := rel(hdr.Name)
-		name := filepath.Join(target, rel)
+		r := rel(hdr.Name)
+		if include != nil && !include(r) {
+			continue
+		}
+		name := filepath.Join(target, r)
 		if name != target && !strings.HasPrefix(name, target+string(filepath.Separator)) {
 			return count, fmt.Errorf("archive entry escapes restore dir: %s", hdr.Name)
 		}
@@ -328,7 +397,9 @@ func restoreArchiveRel(p, target string, rel func(string) string) (int, error) {
 	return count, nil
 }
 
-func copyTree(src, dst string) (int, error) {
+// copyTreeFiltered copies a raw-directory backup tree into dst, skipping any
+// subtree whose relative path is rejected by include (nil copies everything).
+func copyTreeFiltered(src, dst string, include func(string) bool) (int, error) {
 	var count int
 	err := filepath.Walk(src, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
@@ -336,6 +407,12 @@ func copyTree(src, dst string) (int, error) {
 		}
 		rel, _ := filepath.Rel(src, path)
 		if rel == "." {
+			return nil
+		}
+		if include != nil && !include(rel) {
+			if fi.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		out := filepath.Join(dst, rel)

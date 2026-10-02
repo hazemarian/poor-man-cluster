@@ -57,9 +57,15 @@ func (a *Backups) Browse(ctx context.Context, id int64) (*backups.Run, []backups
 	return out.Run, out.Files, nil
 }
 
-func (a *Backups) Restore(ctx context.Context, id int64, destRoot string) (int, error) {
+func (a *Backups) Restore(ctx context.Context, id int64, destRoot string, opts backups.RestoreOptions) (int, error) {
 	var out backupRestoreDTO
 	body := map[string]any{"dest_root": destRoot}
+	if opts.Volume != "" {
+		body["volume"] = opts.Volume
+	}
+	if opts.FromS3 {
+		body["from_s3"] = true
+	}
 	if err := a.c.do(ctx, http.MethodPost, "/backups/"+strconv.FormatInt(id, 10)+"/restore", body, &out); err != nil {
 		return 0, err
 	}

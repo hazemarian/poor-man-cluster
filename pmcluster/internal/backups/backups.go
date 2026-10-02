@@ -36,7 +36,19 @@ type Service interface {
 	ListForStack(ctx context.Context, stackName string) ([]Run, error)
 	// Browse lists the archive contents of one backup run.
 	Browse(ctx context.Context, id int64) (*Run, []FileEntry, error)
-	// Restore extracts every archive of a successful stack-scoped backup
-	// run back under destRoot.
-	Restore(ctx context.Context, id int64, destRoot string) (restoredFiles int, err error)
+	// Restore extracts every archive of a successful backup run back under
+	// destRoot. Options narrow the restore (a single volume) and allow the
+	// archive to be fetched from the configured offsite S3 store when the
+	// local copy is gone.
+	Restore(ctx context.Context, id int64, destRoot string, opts RestoreOptions) (restoredFiles int, err error)
+}
+
+// RestoreOptions narrows how a backup run is restored.
+type RestoreOptions struct {
+	// Volume restores only the entries that belong to one volume (matched by
+	// path segment, e.g. "db_data"); empty restores the whole run.
+	Volume string
+	// FromS3 forces fetching the archives from the configured offsite S3
+	// store even when a local copy still exists.
+	FromS3 bool
 }

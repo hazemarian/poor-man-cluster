@@ -84,7 +84,7 @@ func TestRestore_StripsDataPrefix(t *testing.T) {
 		t.Fatalf("whole-disk row must have empty StackName, got %q", rows[0].StackName)
 	}
 
-	n, err := svc.Restore(ctx, rows[0].ID, destRoot)
+	n, err := svc.Restore(ctx, rows[0].ID, destRoot, RestoreOptions{})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestRestore_RefusesControlPlaneArchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if _, err := svc.Restore(ctx, rows[0].ID, destRoot); err == nil {
+	if _, err := svc.Restore(ctx, rows[0].ID, destRoot, RestoreOptions{}); err == nil {
 		t.Fatal("Restore of a control-plane archive must be refused")
 	}
 }
@@ -368,7 +368,7 @@ func TestRestore_CopyTreePreservesTree(t *testing.T) {
 	}
 
 	destRoot := t.TempDir()
-	n, err := svc.Restore(context.Background(), id, destRoot)
+	n, err := svc.Restore(context.Background(), id, destRoot, RestoreOptions{})
 	if err != nil {
 		t.Fatalf("Restore: %v", err)
 	}

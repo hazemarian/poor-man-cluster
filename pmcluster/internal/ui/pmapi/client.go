@@ -235,13 +235,22 @@ func (c *Client) BrowseBackup(ctx context.Context, id int64) (*Backup, []BackupF
 	return body.Run, body.Files, err
 }
 
-// RestoreBackup extracts a backup run's archives back under destRoot.
-func (c *Client) RestoreBackup(ctx context.Context, id int64, destRoot string) (int, error) {
+// RestoreBackup extracts a backup run's archives back under destRoot. An
+// optional volume narrows the restore to one volume; fromS3 forces fetching
+// the archive from the configured offsite S3 store.
+func (c *Client) RestoreBackup(ctx context.Context, id int64, destRoot, volume string, fromS3 bool) (int, error) {
 	var body struct {
 		Restored int `json:"restored"`
 	}
+	req := map[string]any{"dest_root": destRoot}
+	if volume != "" {
+		req["volume"] = volume
+	}
+	if fromS3 {
+		req["from_s3"] = true
+	}
 	err := c.do(ctx, http.MethodPost, "/backups/"+strconv.FormatInt(id, 10)+"/restore",
-		map[string]any{"dest_root": destRoot}, &body)
+		req, &body)
 	return body.Restored, err
 }
 

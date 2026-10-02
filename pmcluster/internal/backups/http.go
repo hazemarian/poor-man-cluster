@@ -91,12 +91,14 @@ func (h *HTTP) restore(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		DestRoot string `json:"dest_root"`
+		Volume   string `json:"volume,omitempty"`
+		FromS3   bool   `json:"from_s3,omitempty"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	if body.DestRoot == "" {
 		body.DestRoot = "/var/stack/data"
 	}
-	n, err := h.Svc.Restore(r.Context(), id, body.DestRoot)
+	n, err := h.Svc.Restore(r.Context(), id, body.DestRoot, RestoreOptions{Volume: body.Volume, FromS3: body.FromS3})
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
