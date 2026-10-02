@@ -34,7 +34,9 @@ services:
       # driven entirely by env and uses an in-memory store, so no volume is
       # needed. Standalone/local runs (EDGE_LOGIN_DISABLED=false) keep their
       # SQLite state on the pmui-data volume.
-      - DATA_DIR=[[if .EdgeLoginDisabled]]:memory:[[else]]/data[[end]]
+      # NOTE: the value is quoted because compose's YAML parser mis-reads the
+      # bare `DATA_DIR=:memory:` plain scalar as a mapping.
+      - "DATA_DIR=[[if .EdgeLoginDisabled]]:memory:[[else]]/data[[end]]"
       # Public cluster domain — the console renders external links to
       # OpenObserve (observ.<domain>) and the Traefik dashboard
       # (traefik.<domain>) from it.
