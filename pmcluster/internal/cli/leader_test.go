@@ -5,14 +5,18 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
@@ -177,7 +181,7 @@ func TestEnsureControlPlaneFresh_KeepsCurrentDB(t *testing.T) {
 
 	cfg := &config.Config{DataDir: dataDir}
 	log := zerolog.Nop()
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, log)
+	restored, err := ensureControlPlaneFresh(context.Background(), cfg, nil, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +208,7 @@ func TestEnsureControlPlaneFresh_RestoresWhenStale(t *testing.T) {
 	os.Chtimes(dbPath, now.Add(-24*time.Hour), now.Add(-24*time.Hour)) // older than archive
 
 	cfg := &config.Config{DataDir: dataDir}
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, zerolog.Nop())
+	restored, err := ensureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +225,7 @@ func TestEnsureControlPlaneFresh_RestoresWhenMissing(t *testing.T) {
 
 	// Empty data dir — no data.db at all. Expect restore.
 	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, zerolog.Nop())
+	restored, err := ensureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,11 +236,160 @@ func TestEnsureControlPlaneFresh_RestoresWhenMissing(t *testing.T) {
 
 func TestEnsureControlPlaneFresh_NoArchiveKeeps(t *testing.T) {
 	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, zerolog.Nop())
+	restored, err := ensureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if restored {
 		t.Fatal("expected no restore when no archive exists")
+	}
+}
+
+// stateFake embeds runtime.Client and stores configs in memory so the
+// Raft-replicated control-plane restore path runs without Docker.
+type stateFake struct {
+	runtime.Client
+	configs map[string]runtime.ConfigInspectResult
+}
+
+func (f *stateFake) ConfigCreate(_ context.Context, spec runtime.ConfigSpec) error {
+	f.configs[spec.Name] = runtime.ConfigInspectResult{Labels: spec.Labels, Data: spec.Data}
+	return nil
+}
+
+func (f *stateFake) ConfigRemove(_ context.Context, name string) error {
+	delete(f.configs, name)
+	return nil
+}
+
+func (f *stateFake) ConfigList(_ context.Context, labelKey, labelValue string) ([]string, error) {
+	var names []string
+	for name, c := range f.configs {
+		if labelKey == "" || c.Labels[labelKey] == labelValue {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+func (f *stateFake) ConfigInspect(_ context.Context, name string) (runtime.ConfigInspectResult, error) {
+	c, ok := f.configs[name]
+	if !ok {
+		return runtime.ConfigInspectResult{}, fmt.Errorf("config %q not found", name)
+	}
+	return c, nil
+}
+
+// snapshotInto publishes a control-plane snapshot of srcDir into the fake.
+func snapshotInto(t *testing.T, f *stateFake, srcDir string) {
+	t.Helper()
+	kit := &controlplane.Kit{Docker: f, DataDir: srcDir, Log: zerolog.Nop()}
+	if err := kit.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureControlPlaneFresh_RestoresFromStateConfig(t *testing.T) {
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "data.db"), []byte("raft-db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, ".encryption_key"), []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &stateFake{configs: map[string]runtime.ConfigInspectResult{}}
+	snapshotInto(t, f, srcDir)
+
+	cfg := &config.Config{DataDir: t.TempDir()}
+	restored, err := ensureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restored {
+		t.Fatal("expected restore from the Raft state config")
+	}
+	if b, _ := os.ReadFile(cfg.DBPath()); string(b) != "raft-db" {
+		t.Fatalf("data.db not restored from Raft config: %q", b)
+	}
+}
+
+func TestEnsureControlPlaneFresh_KeepsCurrentStateConfig(t *testing.T) {
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "data.db"), []byte("raft-db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, ".encryption_key"), []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &stateFake{configs: map[string]runtime.ConfigInspectResult{}}
+	snapshotInto(t, f, srcDir)
+
+	// Local control plane newer than the snapshot (shared storage): the Raft
+	// config exists but nothing is restored, and the local DB survives.
+	curDir := t.TempDir()
+	dbPath := filepath.Join(curDir, "data.db")
+	if err := os.WriteFile(dbPath, []byte("live-db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(dbPath, time.Now().Add(time.Minute), time.Now().Add(time.Minute))
+	if err := os.WriteFile(filepath.Join(curDir, ".encryption_key"), []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &config.Config{DataDir: curDir}
+	restored, err := ensureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored {
+		t.Fatal("expected no restore when the local control plane is current")
+	}
+	if b, _ := os.ReadFile(dbPath); string(b) != "live-db" {
+		t.Fatal("current local DB was clobbered")
+	}
+}
+
+func TestEnsureControlPlaneFresh_MissingKeyConfigErrors(t *testing.T) {
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "data.db"), []byte("raft-db"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, ".encryption_key"), []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &stateFake{configs: map[string]runtime.ConfigInspectResult{}}
+	snapshotInto(t, f, srcDir)
+	// Break the security split: remove the key configs.
+	for name := range f.configs {
+		if strings.HasPrefix(name, "pmcluster_state_key_") {
+			if err := f.ConfigRemove(context.Background(), name); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	cfg := &config.Config{DataDir: t.TempDir()}
+	if _, err := ensureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop()); err == nil {
+		t.Fatal("restore must refuse a state config whose key config is missing")
+	}
+}
+
+func TestEnsureControlPlaneFresh_FallsBackToTarballWhenNoStateConfig(t *testing.T) {
+	// A live Docker client with NO state configs must fall back to the
+	// tarball archive path (pre-L2 clusters).
+	archiveDir := t.TempDir()
+	withArchiveDir(t, archiveDir)
+	now := time.Now()
+	writeCtlplaneArchive(t, archiveDir, "pmcluster-ctlplane-n1-2026-09-25T03-00-00.tar.gz", now.Add(-2*time.Hour))
+
+	f := &stateFake{configs: map[string]runtime.ConfigInspectResult{}}
+	cfg := &config.Config{DataDir: t.TempDir()}
+	restored, err := ensureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !restored {
+		t.Fatal("expected tarball fallback when no Raft state config exists")
 	}
 }

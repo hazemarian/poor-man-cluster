@@ -4,6 +4,84 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.139 (2026-10-03)
+
+- **`storage_nodes` setting + round-robin placement for stateful stacks (P3).**
+  New cluster setting `storage_nodes` (comma-separated hostnames, e.g. via
+  `pmcluster cluster settings set storage_nodes=node-a,node-b`). Stateful services
+  (volume holders) with **no explicit placement** are now pinned deterministically
+  across the listed nodes — FNV-1a of the stack name picks the node, so the same
+  stack always lands on the same node and adding stacks never reshuffles existing
+  ones. Explicit `placement:` (hostname / `manager` / `worker`) always wins; the
+  `platform_node` setting remains the fallback when `storage_nodes` is empty.
+  A change to `storage_nodes` changes the rendered hash, so the reconcile loop
+  re-deploys affected stacks on the next pass.
+- **Storage-outage pause in the control loop (P4).** The reconcile loop now builds
+  a live node-health map (swarm `NodeList`: present, `Status==ready`,
+  `Availability==active`) each pass and **skips syncing/deploying any stack whose
+  storage pin is on a down node**, logging a warning ("storage node down; pausing
+  app sync"). The pause clears automatically when the node returns — or when the
+  stack is moved. This stops the loop from churning against a node that cannot
+  serve its volumes.
+- **`pmcluster stack move <stack> --to <node>` (P5).** Moves a stateful stack's
+  storage to another node: triggers a whole-disk on-demand backup, restores the
+  stack's `<stack>/` subtree on the target (locally when the target is this host,
+  else via a one-shot swarm mover service pinned to the target that wget's the
+  archive from an ephemeral HTTP server on the leader), writes the per-stack
+  `stack_pin_<stack>` setting, and re-deploys so the new pin is rendered. The
+  per-stack pin **outranks** the `storage_nodes` round-robin, so the reconcile
+  loop never moves the stack back. Errors loudly on: unknown stack, no stateful
+  storage, empty `--to`, missing backup trigger, a target that is absent or not
+  ready/active in the swarm.
+- **Path 1 is the HA answer (docs decision).** Replaced the "LINSTOR is the HA
+  prerequisite" design directive with the Path 1 decision: pinned placement +
+  backup/restore is the HA story (storage_nodes round-robin, outage pause,
+  `stack move`), and LINSTOR/DRBD block replication is explicitly off the roadmap
+  with its honest cost table preserved. Removed the L0 LINSTOR backlog item.
+
+## v0.2.138 (2026-10-03)
+
+- **Control-plane survivor kit via Raft-replicated Docker configs (L2).** The swarm
+  leader now snapshots the failover-survivor kit (data.db with credential ciphertexts,
+  settings, webhook secrets, token hashes, stack revisions; config.yaml; the rendered
+  `config/` tree with TLS certs) into `pmcluster_state_<unixnano>` Docker configs. Swarm
+  replicates configs to every manager through its own Raft store, so a promoted standby
+  gets the latest control plane **without the tarball/rsync dependency**. **Security
+  split:** the AES-GCM encryption key is written to a second config family
+  (`pmcluster_state_key_<unixnano>`) so key and ciphertext never share one blob — a
+  restore refuses a state config whose key config is missing, and the key never appears
+  inside the data-kit payload.
+  - **Freshness:** on `serve` startup and on leadership gain,
+    `ensureControlPlaneFresh` restores from the newest state config when the local
+    data.db is missing or older than the snapshot (and repairs a missing encryption key
+    even when the DB is current). A local DB at least as fresh as the snapshot (the
+    shared-storage/LINSTOR case) is never clobbered. Clusters without state configs fall
+    back to the existing tarball archives.
+  - **Snapshot cadence:** the leader publishes a snapshot immediately on promotion and
+    re-checks every 5 minutes, re-snapshoting only when a kit file changed — so a deploy,
+    settings change, secret rotation or webhook edit lands on all managers within one
+    interval. Snapshots are pruned to the newest two per family.
+  - **Guards:** payloads over the Docker config ceiling (500 KiB) fail loudly instead of
+    half-writing; snapshots skip `logs/`; restored data.db is timestamped at the snapshot
+    so repeated promotions never re-restore. `cluster down --purge` wipes the state
+    configs with the rest of the managed footprint (the local SQLite survives by design,
+    and the next leader re-snapshots it).
+  - **Backup stack honors a custom storage root.** The embedded backup stack previously
+    hardcoded `/var/stack/data` and `/var/stack/backup` as bind sources, so any
+    non-default `volume_root` setting broke the volume/control-plane backup agents
+    ("bind source path does not exist"). The compose template now renders `[[.VolumeRoot]]`
+    and `[[.BackupDir]]` from the effective `volume_root` setting and the backup dir
+    (default `/var/stack/backup`, overridable via the `PMCLUSTER_BACKUP_DIR` env var for
+    hermetic/dev hosts that cannot create `/var/stack`).
+  - **Snapshot interval overridable.** `PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL` (seconds,
+    default 300) tunes how often the leader re-checks the kit for changes — used by the
+    e2e suite to exercise the snapshot loop at 1s.
+  - **E2E verification.** New swarm-gated `TestControlPlaneSnapshotE2E` drives the whole
+    loop against a live Swarm (Docker Desktop): both config families appear, the
+    security split holds (data.db present, no `.encryption_key` entry, 32-byte key
+    absent from the state payload), a store mutation is captured within one interval, and
+    prune settles each family to at most two snapshots.
+
 ## v0.2.137 (2026-10-02)
 
 - **Edge console is stateless in cluster mode (Path 1, P1).** With

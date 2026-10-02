@@ -16,6 +16,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -76,6 +77,23 @@ recorded deploy errors.`,
 	RunE: runStackBadge,
 }
 
+var stackMoveCmd = &cobra.Command{
+	Use:   "move <stack-name>",
+	Short: "Move a stateful stack's storage to another node",
+	Long: `Triggers an on-demand backup of the whole volume root, restores the stack's
+<VolumeRoot>/<stack> subtree on the target node (locally when the target is
+this host, else via a one-shot swarm mover service that pulls the archive
+from this host), pins the stack to the target (stack_pin_<stack>), and
+re-deploys so the placement constraint is rendered.
+
+The reconcile loop never moves the stack back: the per-stack pin outranks
+the storage_nodes round-robin and the platform_node fallback.
+
+Must run on a swarm manager with docker.sock + the pmcluster data dir.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runStackMove,
+}
+
 var rollbackCmd = &cobra.Command{
 	Use:   "rollback <stack-name> <revision>",
 	Short: "Re-apply a stored revision as a new revision",
@@ -90,8 +108,10 @@ func init() {
 	deployCmd.Flags().String("file", "", "manifest path inside the source repo (provenance, e.g. deploy/test-lms.yaml)")
 	deployCmd.Flags().String("version", "", "override the manifest's version (image tag)")
 
-	stackCmd.AddCommand(stackListCmd, stackShowCmd, stackBadgeCmd)
+	stackCmd.AddCommand(stackListCmd, stackShowCmd, stackBadgeCmd, stackMoveCmd)
 	stackBadgeCmd.Flags().Bool("services", false, "print the combined badge: stack main health + one segment per service")
+	stackMoveCmd.Flags().String("to", "", "target node hostname to move the stack's storage to")
+	_ = stackMoveCmd.MarkFlagRequired("to")
 
 	rootCmd.AddCommand(deployCmd, stackCmd, rollbackCmd)
 }
@@ -113,7 +133,9 @@ func openDeploySvc(cmd *cobra.Command) (*stacks.Service, *store.Store, func(), e
 		log = zerolog.Nop()
 	}
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
-	svc := &stacks.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st}, VolumeRoot: st.GetSettingDefault(context.Background(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(context.Background(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), Stdout: cmd.OutOrStdout(), Log: log}
+	svc := &stacks.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st}, VolumeRoot: st.GetSettingDefault(context.Background(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(context.Background(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.GetSettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
+		return st.GetSettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
+	}}, Stdout: cmd.OutOrStdout(), Log: log, BackupDir: cluster.BackupRootDir()}
 	return svc, st, func() { _ = st.Close() }, nil
 }
 
@@ -328,6 +350,35 @@ func runRollback(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(cmd.OutOrStdout(),
 		"\n✅ Rolled back %s to revision %d (new revision %d, %s)\n",
 		res.StackName, rev, res.Revision, time.Unix(res.Revision, 0).Format(time.RFC3339),
+	)
+	return nil
+}
+
+func runStackMove(cmd *cobra.Command, args []string) error {
+	defer initCLITelemetry()()
+
+	to, _ := cmd.Flags().GetString("to")
+
+	svc, _, closeFn, err := openDeploySvc(cmd)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	// Node validation + mover transit need a live docker client; when the
+	// daemon is unreachable the move falls back to a local restore (the
+	// target must then be this host).
+	if dc, derr := docker.New(); derr == nil {
+		svc.Docker = dc
+		defer func() { _ = dc.Close() }()
+	}
+
+	if err := svc.Move(cmd.Context(), args[0], to); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(),
+		"\n✅ Moved %s storage to %s (pinned via %s — reconcile will not move it back)\n",
+		args[0], to, stacks.StackPinKey(args[0]),
 	)
 	return nil
 }

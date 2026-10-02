@@ -195,13 +195,23 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 		platformSpan.End()
 	}
 
-	// (b) app-stack drift
+	// (b) app-stack drift. When a stack's storage node is down (offline or
+	// drained), its sync is PAUSED: applying drift would recreate tasks on a
+	// node that cannot serve the data, and the deploy itself could hang
+	// waiting for the volume bind. The pause clears automatically when the
+	// node returns to the swarm, or when a `stack move` re-pins the stack to
+	// a healthy node (the pin changes, so the check passes again).
 	stacks, err := r.Store.ListStacks(ctx)
 	if err != nil {
 		return fmt.Errorf("list stacks for reconcile: %w", err)
 	}
 	log.Debug().Int("stacks", len(stacks)).Msg("reconcile — app-stack drift pass: re-translating latest manifests")
+	health := r.nodeHealth(ctx, log)
 	for _, st := range stacks {
+		if paused, node := r.storagePaused(ctx, st.Name, health); paused {
+			log.Warn().Str("stack", st.Name).Str("node", node).Msg("reconcile — storage node down; pausing app sync (clears when the node returns or the stack is moved)")
+			continue
+		}
 		res, serr := r.DeployService.Sync(ctx, st.Name)
 		switch {
 		case serr != nil:
@@ -215,6 +225,48 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 
 	// (c) health snapshot
 	return r.snapshotHealth(ctx, log)
+}
+
+// nodeHealth maps each swarm node hostname to whether it is ready to host
+// storage: present in the node list, Status "ready" and Availability
+// "active". Returns nil when the swarm cannot be queried (standalone/local
+// mode or a NodeList failure) — callers then skip the pause logic entirely
+// and behave exactly as before.
+func (r *Reconciler) nodeHealth(ctx context.Context, log zerolog.Logger) map[string]bool {
+	if r.Docker == nil {
+		return nil
+	}
+	nodes, err := r.Docker.NodeList(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("reconcile — node list failed; storage-outage pause disabled this pass")
+		return nil
+	}
+	health := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		health[n.Hostname] = n.Status == "ready" && n.Availability == "active"
+	}
+	return health
+}
+
+// storagePaused reports whether the stack's storage node is currently down.
+// A stack is never paused when the swarm is not queryable (nil health), when
+// it has no storage pin (stateless, or role-based placement), or when the
+// deploy service / resolver is not configured.
+func (r *Reconciler) storagePaused(ctx context.Context, stackName string, health map[string]bool) (bool, string) {
+	if r.DeployService == nil || len(health) == 0 {
+		return false, ""
+	}
+	pins, err := r.DeployService.StoragePinsForStack(ctx, stackName)
+	if err != nil {
+		r.Log.Warn().Err(err).Str("stack", stackName).Msg("reconcile — storage-pin resolution failed; not pausing")
+		return false, ""
+	}
+	for _, pin := range pins {
+		if !health[pin] {
+			return true, pin
+		}
+	}
+	return false, ""
 }
 
 // snapshotHealth writes a stack_status row per store stack, with per-service

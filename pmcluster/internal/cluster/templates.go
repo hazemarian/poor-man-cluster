@@ -153,6 +153,18 @@ type RenderInput struct {
 	// nightly archive). Derived by callers via filepath.Dir(ConfigDir).
 	DataDir string
 
+	// VolumeRoot is the single host directory every container volume is forced
+	// under (the volume_root setting, default manifest.DefaultVolumeRoot
+	// /var/stack/data). The volume-backup agent bind-mounts it as its source;
+	// a custom volume_root would leave /var/stack/data unmounted and the agent
+	// rejected, so the rendered stack follows the setting.
+	VolumeRoot string
+
+	// BackupDir is the host-local archive root every backup agent writes to
+	// (backupRootDir(); PMCLUSTER_BACKUP_DIR relocates it on dev/test hosts).
+	// Each node keeps its own copy — see docs/storage-and-databases.md.
+	BackupDir string
+
 	// HostCerts lists the per-host (bring-your-own) certificates recorded in
 	// the DB. RenderTraefikDynamic appends each one's versioned Swarm secret
 	// names to the dynamic config's tls.certificates so Traefik serves them

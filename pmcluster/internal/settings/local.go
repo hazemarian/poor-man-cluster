@@ -50,6 +50,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingBackupS3Region(),
 	cluster.SettingLogLevel(),
 	cluster.SettingReconcileInterval(),
+	cluster.SettingStorageNodes(),
 }
 
 // Get returns the current value of every known setting ("" when unset).

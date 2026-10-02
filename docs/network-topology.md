@@ -81,7 +81,11 @@ All **manager** nodes run Traefik; a load balancer (or DNS failover) fronts
 them; app data is replicated (LINSTOR/DRBD under `/var/stack/data`) so any
 node can serve any stack. **This is the only topology where the domain
 survives a node loss without manual intervention — and it is the last step of
-an HA build, not the first.**
+an HA build, not the first.** Note the platform's current decision (see
+storage-and-databases.md, "Path 1 is the HA answer"): block replication is
+**not** on the roadmap — data HA comes from pinned placement + nightly
+backups + `pmcluster stack move`, so Option C's "any node serves any stack"
+is delivered via restore/move rather than a shared replicated device.
 
 ```mermaid
 flowchart LR

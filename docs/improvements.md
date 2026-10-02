@@ -51,8 +51,7 @@ Legend: ⏱ effort is focused developer time. **Quick win** = simple + high valu
 ## 🔴 Large (bigger projects, schedule deliberately)
 
 ### L2. Control-plane DB snapshot into Raft-replicated Docker config (was #7)
-- Leader snapshots the failover-survivor kit into a `pmcluster_state` Docker config → replicated to all managers; `ensureControlPlaneFresh` restores from it. Security: split the encryption key into a second config.
-- ⏱ **~1-2 days.** Snapshot serialization + config create/read + restore wiring + security split + tests. Removes the tarball/rsync dependency.
+- ✅ **Shipped (v0.2.138).** The swarm leader snapshots the failover-survivor kit into `pmcluster_state_<ts>` Docker configs — replicated to every manager by Swarm's own Raft store, so no tarball/rsync shipping is needed. `ensureControlPlaneFresh` restores from the config on promotion. **Security split:** the AES-GCM encryption key goes in a second config family (`pmcluster_state_key_<ts>`), so key + ciphertext never share one blob; a restore refuses a state config whose key config is missing. Details in the changelog.
 
 ### L3. Interactive exec via websocket (was #9)
 - Interactive shells via a websocket endpoint (or documented SSH fallback).
@@ -62,6 +61,8 @@ Legend: ⏱ effort is focused developer time. **Quick win** = simple + high valu
 
 ## ✅ Shipped already (do not re-propose)
 
+- Storage placement + outage pause + `stack move` — v0.2.139 (P3/P4/P5): `storage_nodes` round-robin for stateful stacks, control-loop pause while a pinned storage node is down, `pmcluster stack move <stack> --to <node>`. Path 1 (pin + backup/restore) is the HA decision; LINSTOR/DRBD explicitly dropped.
+- Control-plane DB snapshot into Raft-replicated Docker config — v0.2.138 (L2)
 - depends_on real wait on Swarm — **replaced in v0.2.118** by control-plane ordered deploys (topo-sorted levels, deploy+wait per level, prune once; no rendered wrapper — works for every image). The v0.2.110–112 shell-wrapper approach is superseded.
 - Stateful-aware defaults (auto stop-first + auto-pin for volume services) — v0.2.110
 - Registry-auth warning + image-freshness pills — v0.2.110

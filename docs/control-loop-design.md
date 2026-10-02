@@ -1,6 +1,6 @@
 # Control loop — architecture & extension design
 
-Status: current implementation live (v0.2.132–v0.2.135); this file describes the
+Status: current implementation live (v0.2.132–v0.2.138); this file describes the
 loop as built AND the refactor target that makes it pluggable and able to push
 events to an external stream for custom control loops.
 
@@ -38,6 +38,19 @@ Key properties:
   retry is Swarm's restart-policy job.
 - **Badges read the DB snapshot**, not live Docker — no flicker, no per-request
   swarm queries.
+
+### Parallel leader loop: control-plane Raft snapshot (v0.2.138)
+
+Alongside the reconciler, the leader runs `controlplane.Kit.Loop` (5-minute tick,
+plus an immediate snapshot on promotion). It re-publishes the failover-survivor
+kit (data.db, config.yaml, config/ tree — and the encryption key in a separate
+config) into `pmcluster_state_*` / `pmcluster_state_key_*` Docker configs, which
+Swarm's Raft store replicates to every manager. The snapshot only fires when a
+kit file changed since the newest config (deploys, settings, secret/webhook
+edits all land within one interval), prunes to the newest two, and fails loudly
+when a payload would exceed Docker's 500 KiB config ceiling. It is independent
+of `reconcile_interval` — a cluster with the reconcile loop disabled still keeps
+its control plane replicated. See `internal/controlplane`.
 
 ## 2. Extension goal
 

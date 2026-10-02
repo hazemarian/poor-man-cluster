@@ -233,6 +233,8 @@ func homeEnv(homeDir string) []string {
 		"PMCLUSTER_OO_INSECURE",
 
 		"PMCLUSTER_EDGE_IMAGE",
+
+		"PMCLUSTER_BACKUP_DIR",
 	} {
 		if v := os.Getenv(k); v != "" {
 			env = append(env, k+"="+v)

@@ -97,6 +97,16 @@ type Service struct {
 	// cluster setting. Empty disables the auto-pin (see
 	// manifest.ComposeWriter.PinNode).
 	PinNode string
+	// Pins resolves the storage placement for stateful services: per-stack
+	// pins (stack move) outrank the storage_nodes round-robin, which outranks
+	// PinNode. Nil keeps today's behaviour (PinNode only). Applied to the IR
+	// before every render.
+	Pins *PinResolver
+	// BackupDir is the host archive root the on-node offen backup agent
+	// writes to (mounted as /archive inside the agent). Used by Move to
+	// locate the newest whole-disk archive after triggering a backup.
+	// Empty falls back to backups.DefaultArchiveDir.
+	BackupDir string
 	// MkdirAll creates host directories for the volume-root bind targets
 	// before deploy (nil = os.MkdirAll). Overridable in tests.
 	MkdirAll func(string, os.FileMode) error
@@ -230,6 +240,9 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 		if err != nil {
 			return fmt.Errorf("translate: %w", err)
 		}
+		if err := s.resolvePlacements(ctx, app.Name, built); err != nil {
+			return fmt.Errorf("translate: %w", err)
+		}
 		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode}
 		y, err := writer.Write(ctx, built)
 		if err != nil {
@@ -356,7 +369,14 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 		if err = manifest.Interpolate(parsed); err == nil {
 			if err = manifest.Validate(parsed); err == nil {
 				var rendered []byte
-				rendered, err = manifest.TranslateIR(ctx, parsed, s.Resolver, &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode})
+				var built *manifest.IR
+				built, err = manifest.BuildIR(ctx, parsed, s.Resolver)
+				if err == nil {
+					err = s.resolvePlacements(ctx, stackName, built)
+				}
+				if err == nil {
+					rendered, err = (&manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode}).Write(ctx, built)
+				}
 				if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
 					// No drift: the stored manifest still renders to the
 					// already-deployed hash — nothing to apply.
@@ -703,6 +723,9 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 		built, err := manifest.BuildIR(ctx, parsed, s.Resolver)
 		if err != nil {
 			return fmt.Errorf("rollback source %d no longer translates: %w", sourceRevision, err)
+		}
+		if err := s.resolvePlacements(ctx, stackName, built); err != nil {
+			return fmt.Errorf("rollback source %d placement: %w", sourceRevision, err)
 		}
 		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode}
 		y, err := writer.Write(ctx, built)

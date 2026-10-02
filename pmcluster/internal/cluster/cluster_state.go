@@ -86,6 +86,14 @@ const (
 	// settingReconcileInterval is how often the leader daemon runs the
 	// control-plane reconcile loop (0 disables the loop entirely).
 	settingReconcileInterval = "reconcile_interval"
+
+	// settingStorageNodes is a comma-separated list of node hostnames that
+	// stateful app stacks (services with volumes and no explicit placement)
+	// are round-robined across. Explicit placement always wins; when a stack
+	// is individually pinned (stack move) that pin outranks the round-robin;
+	// platform_node remains the single-node fallback when storage_nodes is
+	// unset.
+	settingStorageNodes = "storage_nodes"
 )
 
 // Setting* accessors expose the persisted settings keys for CLI surfaces
@@ -120,6 +128,7 @@ func SettingBackupS3SecretKey() string      { return settingBackupS3SecretKey }
 func SettingBackupS3Region() string         { return settingBackupS3Region }
 func SettingLogLevel() string               { return settingLogLevel }
 func SettingReconcileInterval() string      { return settingReconcileInterval }
+func SettingStorageNodes() string           { return settingStorageNodes }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {

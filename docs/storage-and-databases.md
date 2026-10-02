@@ -36,6 +36,58 @@ This is the recommended default for every stateful workload on the platform. Onl
 
 ---
 
+## Path 1 is the HA answer: pin + backup/restore (design decision)
+
+**Path 1 — pinned placement + backup/restore — is the HA story for the platform.**
+Block replication (LINSTOR/DRBD9) is **explicitly not** on the roadmap; see the
+honest cost table below for why it was rejected as the 2026-10-02 directive's
+default and replaced by Path 1.
+
+**The decision (supersedes the earlier "LINSTOR is the HA prerequisite"
+directive).** Stateful services pin to a node (explicit `placement: <hostname>`,
+the `storage_nodes` round-robin, or the `platform_node` fallback), their data
+lives node-locally under `/var/stack/data`, and nightly offen backups plus
+on-demand pre-deploy backups cover it. Multi-manager HA protects the Swarm
+control plane (via the Raft-replicated state configs); data HA comes from
+**backup + restore + `stack move`**, not from block replication.
+
+**How the platform operationalizes Path 1 (v0.2.139):**
+
+- **`storage_nodes` setting** — comma-separated hostnames; stateful stacks
+  (services with volumes and no explicit placement) round-robin deterministically
+  across them (FNV-1a of the stack name). Explicit `placement:` always wins.
+  The `platform_node` setting remains the single-node fallback when
+  `storage_nodes` is empty.
+- **Outage pause (control loop)** — when a pinned storage node is down
+  (absent from the swarm, `Status != ready`, or `Availability != active`), the
+  reconcile loop **skips syncing/deploying** stacks pinned to it and logs a
+  warning; it clears automatically when the node returns or the stack is moved.
+- **`pmcluster stack move <stack> --to <node>`** — backs up the volume root,
+  restores the stack's `<stack>/` subtree on the target (locally, or via a
+  one-shot swarm mover for remote nodes), writes the per-stack
+  `stack_pin_<stack>` pin, and re-deploys. The pin outranks the round-robin, so
+  the loop never moves the stack back. This is the *manual* data-migration
+  story Path 1 gives operators for node maintenance / failure.
+
+**Why not LINSTOR (the honest cost that rejected it):**
+
+| Cost center | What it actually costs |
+| :--- | :--- |
+| LINSTOR controller | JVM, ~0.5–1 GB RAM, and it needs its own HA (embedded etcd) |
+| Per-node satellites | ~50–150 MB each + DRBD9 kernel module (DKMS — rebuilds on kernel updates, needs kernel headers) |
+| Disk provisioning | Builds LVM thin pools — must **NEVER** auto-provision on a live disk without explicit operator confirmation of the target device |
+| Failure mode: footprint | ~1 GB RAM consumed before any app data is stored |
+| Failure mode: complexity | DRBD/LVM complexity with zero benefit on a single node |
+| Failure mode: operational | A replicated device is a second copy to keep consistent — and still needs the backup pipeline on top |
+
+For the target deployments (single VPS, or a small multi-node swarm), Path 1's
+pinned placement + nightly backups + on-demand `stack move` delivers the same
+recovery outcomes (restore onto any node from the archive, or move live) at a
+fraction of the footprint and with no kernel modules. Revisit block replication
+only if a workload genuinely cannot tolerate a minutes-scale restore window.
+
+---
+
 ## Storage Decision Flowchart
 
 Use the flowchart below to choose the right storage paradigm for your workload:

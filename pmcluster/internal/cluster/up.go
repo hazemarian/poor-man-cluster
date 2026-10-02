@@ -15,15 +15,41 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/workflow"
 )
 
-// backupRootDir is the host-local archive every backup agent writes to. In a
-// multi-node cluster each node has its own copy (the manager's is the
-// "node 0" archive) — see docs/storage-and-databases.md.
-const backupRootDir = "/var/stack/backup"
+// backupRootDirDefault is the host-local archive every backup agent writes
+// to. In a multi-node cluster each node has its own copy (the manager's is the
+// "node 0" archive) — see docs/storage-and-databases.md. backupRootDir() lets
+// PMCLUSTER_BACKUP_DIR relocate it: dev/test hosts (e.g. macOS) that cannot
+// create /var/stack use the env var — the e2e swarm tier points it at a temp
+// dir.
+const backupRootDirDefault = "/var/stack/backup"
+
+// backupRootDir returns the archive root, honoring PMCLUSTER_BACKUP_DIR.
+func backupRootDir() string {
+	if p := os.Getenv("PMCLUSTER_BACKUP_DIR"); p != "" {
+		return p
+	}
+	return backupRootDirDefault
+}
+
+// BackupRootDir is the exported form of backupRootDir, for the stacks
+// service (Move locates the newest whole-disk archive here).
+func BackupRootDir() string { return backupRootDir() }
+
+// effectiveVolumeRoot returns v when non-empty, else the bundled default
+// (/var/stack/data). Render sites pass the volume_root setting through it so
+// the platform stacks (and the backup agent's bind mounts) always follow the
+// configured root.
+func effectiveVolumeRoot(v string) string {
+	if v == "" {
+		return manifest.DefaultVolumeRoot
+	}
+	return v
+}
 
 // ensureStorageDirs creates the volume root and the backup archive dir on the
 // host. Overridden in tests to keep them hermetic (t.TempDir).
 var ensureStorageDirs = func(volumeRoot string) error {
-	for _, dir := range []string{volumeRoot, backupRootDir} {
+	for _, dir := range []string{volumeRoot, backupRootDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create storage dir %s: %w", dir, err)
 		}
@@ -144,7 +170,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			return err
 		}
 		fmt.Fprintf(out, "  ✓ %s ready\n", root)
-		fmt.Fprintf(out, "  ✓ %s ready\n", backupRootDir)
+		fmt.Fprintf(out, "  ✓ %s ready\n", backupRootDir())
 		return nil
 	})
 	wf.Add("Syncing platform config templates into the store", func(ctx context.Context) error {
@@ -271,6 +297,8 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			ConfigDir:                in.ConfigDir,
 			ConfigStore:              deps.Store,
 			DataDir:                  filepath.Dir(in.ConfigDir),
+			VolumeRoot:               effectiveVolumeRoot(in.VolumeRoot),
+			BackupDir:                backupRootDir(),
 			HostCerts:                hostCerts,
 			CertSecretName:           certSecret,
 			KeySecretName:            keySecret,

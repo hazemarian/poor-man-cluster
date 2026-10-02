@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
@@ -224,6 +225,144 @@ func TestLoop_EventTriggersPass(t *testing.T) {
 
 func noopLogger() zerolog.Logger {
 	return zerolog.Nop()
+}
+
+// fakeNodesDocker implements runtime.Client.NodeList with canned nodes.
+type fakeNodesDocker struct {
+	runtime.Client
+	nodes []runtime.Node
+	err   error
+}
+
+func (f *fakeNodesDocker) NodeList(context.Context) ([]runtime.Node, error) {
+	return f.nodes, f.err
+}
+
+// TestRunOnce_PausesSyncWhenStorageNodeDown wires a real store + a real
+// stacks.Service with a PinResolver and asserts the app-drift pass SKIPS a
+// stateful stack whose storage node is down (absent from the swarm node
+// list), then resumes syncing once the node returns. A stateless stack is
+// never paused.
+func TestRunOnce_PausesSyncWhenStorageNodeDown(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	// Stateful stack: RenderedHash "" forces a redeploy whenever Sync runs.
+	statefulSource := "app: demo\nenv: production\ndomain: example.com\nservices:\n  web:\n    image: nginx\n    volumes: [data:/var/lib/data]\n"
+	if err := st.RecordDeploy(ctx, &store.StackRevision{
+		StackName:    "demo",
+		Revision:     2001,
+		SourceYAML:   statefulSource,
+		RenderedYAML: "version: \"3.9\"\nservices:\n  web:\n    image: nginx\n",
+	}, ""); err != nil {
+		t.Fatalf("RecordDeploy demo: %v", err)
+	}
+	// Stateless stack: must sync even with every node down.
+	if err := st.RecordDeploy(ctx, &store.StackRevision{
+		StackName:    "webhooks",
+		Revision:     2002,
+		SourceYAML:   "app: webhooks\nenv: production\ndomain: example.com\nservices:\n  api:\n    image: nginx\n",
+		RenderedYAML: "version: \"3.9\"\nservices:\n  api:\n    image: nginx\n",
+	}, ""); err != nil {
+		t.Fatalf("RecordDeploy webhooks: %v", err)
+	}
+
+	// Resolve which storage node "demo" round-robins to.
+	res := &stacks.PinResolver{StorageNodes: []string{"node-a", "node-b"}}
+	ir := &manifest.IR{Name: "demo", Services: []manifest.IRService{{Name: "web", Image: "nginx", Volumes: []string{"/data"}, Placement: ""}}}
+	if err := res.ResolvePlacement(ctx, "demo", ir); err != nil {
+		t.Fatalf("ResolvePlacement: %v", err)
+	}
+	pinned := ir.Services[0].Placement
+	if pinned == "" {
+		t.Fatal("expected a storage pin for the stateful stack")
+	}
+	other := "node-a"
+	if pinned == "node-a" {
+		other = "node-b"
+	}
+
+	dep := &recordingDeployer{}
+	svc := &stacks.Service{Store: st, Deployer: dep, MkdirAll: func(string, os.FileMode) error { return nil }, Pins: res}
+
+	// Case 1: the pinned storage node is down (absent from the node list).
+	// The stateful stack is paused; the stateless one still syncs.
+	down := &fakeNodesDocker{nodes: []runtime.Node{{Hostname: other, Status: "ready", Availability: "active"}}}
+	r := &Reconciler{Store: st, Docker: down, DeployService: svc, Services: &fakeServices{}, Log: zerolog.Nop()}
+	if err := r.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce (down): %v", err)
+	}
+	if dep.calls != 1 {
+		t.Errorf("down: deployer calls = %d, want 1 (stateless only — stateful must be paused)", dep.calls)
+	}
+
+	// Case 2: the storage node returns → the pause clears and sync resumes.
+	dep.calls = 0
+	up := &fakeNodesDocker{nodes: []runtime.Node{
+		{Hostname: pinned, Status: "ready", Availability: "active"},
+		{Hostname: other, Status: "ready", Availability: "active"},
+	}}
+	r.Docker = up
+	if err := r.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce (up): %v", err)
+	}
+	if dep.calls != 1 {
+		t.Errorf("up: deployer calls = %d, want 1 (the previously-paused stateful stack deployed; the stateless stack converged as no-op)", dep.calls)
+	}
+}
+
+// TestStoragePaused_NodeQuirks covers the down-node heuristics: a node
+// listed but not "ready", or not "active", is down; a nil swarm disables the
+// pause entirely.
+func TestStoragePaused_NodeQuirks(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	if err := st.RecordDeploy(ctx, &store.StackRevision{
+		StackName:    "demo",
+		Revision:     2003,
+		SourceYAML:   "app: demo\nenv: production\ndomain: example.com\nservices:\n  web:\n    image: nginx\n    volumes: [data:/var/lib/data]\n",
+		RenderedYAML: "version: \"3.9\"\nservices:\n  web:\n    image: nginx\n",
+	}, ""); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+	svc := &stacks.Service{Store: st, Deployer: &recordingDeployer{}, MkdirAll: func(string, os.FileMode) error { return nil },
+		Pins: &stacks.PinResolver{StorageNodes: []string{"node-a"}}}
+
+	cases := []struct {
+		name  string
+		nodes []runtime.Node
+		want  bool
+	}{
+		{"ready+active not down", []runtime.Node{{Hostname: "node-a", Status: "ready", Availability: "active"}}, false},
+		{"absent is down", []runtime.Node{{Hostname: "node-b", Status: "ready", Availability: "active"}}, true},
+		{"not ready is down", []runtime.Node{{Hostname: "node-a", Status: "down", Availability: "active"}}, true},
+		{"drained is down", []runtime.Node{{Hostname: "node-a", Status: "ready", Availability: "drain"}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &Reconciler{DeployService: svc, Log: zerolog.Nop()}
+			health := (&fakeNodesDocker{nodes: tc.nodes}).toHealth()
+			got, node := r.storagePaused(ctx, "demo", health)
+			if got != tc.want {
+				t.Errorf("storagePaused = %v (node %q), want %v", got, node, tc.want)
+			}
+		})
+	}
+
+	// Nil swarm (standalone/local): never paused.
+	r := &Reconciler{DeployService: svc, Log: zerolog.Nop()}
+	if got, _ := r.storagePaused(ctx, "demo", nil); got {
+		t.Error("nil health must never pause a stack")
+	}
+}
+
+// toHealth builds the health map exactly as nodeHealth does, so the quirk
+// table above exercises the reconciler's own heuristic.
+func (f *fakeNodesDocker) toHealth() map[string]bool {
+	health := make(map[string]bool, len(f.nodes))
+	for _, n := range f.nodes {
+		health[n.Hostname] = n.Status == "ready" && n.Availability == "active"
+	}
+	return health
 }
 
 // TestRunOnce_TracerNoopSafe: creating OTLP spans with the default no-op

@@ -21,6 +21,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
@@ -103,11 +104,21 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 
 		// Control-plane freshness: when this node was a standby and just
-		// became leader, restore the newest control-plane backup if the local
-		// DB is missing or older than it. Shared/replicated storage (LINSTOR)
-		// keeps the DB current on every manager — never clobber a fresh DB.
-		if _, err := ensureControlPlaneFresh(cmd.Context(), cfg, log); err != nil {
+		// became leader, restore the newest control-plane snapshot if the
+		// local DB is missing or older than it. The leader snapshots the
+		// survivor kit into Raft-replicated Docker configs (L2); pre-L2
+		// clusters fall back to the tarball archive. Shared/replicated
+		// storage (LINSTOR) keeps the DB current on every manager — never
+		// clobber a fresh DB.
+		if _, err := ensureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
 			return fmt.Errorf("control-plane restore: %w", err)
+		}
+
+		// First snapshot as leader: publish the current (possibly just
+		// restored) control plane so the other managers have a fresh kit
+		// before any mutation happens.
+		if err := (&controlplane.Kit{Docker: dc, DataDir: cfg.DataDir, Log: log}).Snapshot(cmd.Context()); err != nil {
+			log.Warn().Err(err).Msg("initial control-plane snapshot had issues")
 		}
 
 		checkConfigVersions(cmd.Context(), dc, log)
@@ -138,7 +149,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
-	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st}, VolumeRoot: st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), Log: log}
+	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st}, VolumeRoot: st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.GetSettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
+		return st.GetSettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
+	}}, Log: log, BackupDir: cluster.BackupRootDir()}
 
 	cipher, cipherErr := credentials.Open(cfg.EncryptionKeyPath())
 	if cipherErr != nil {
@@ -192,10 +205,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	defer stop()
 
 	// Leader-only control loop: on becoming Swarm leader the daemon runs the
-	// reconcile loop (platform configs + app-stack drift + health snapshot)
-	// and the control-plane freshness restore; on losing leadership the loop
-	// stops. Non-manager/standalone nodes serve without the loop.
+	// reconcile loop (platform configs + app-stack drift + health snapshot),
+	// the control-plane Raft snapshot loop, and the control-plane freshness
+	// restore; on losing leadership the loops stop. Non-manager/standalone
+	// nodes serve without the loops.
 	leadership := WatchSwarmLeadership(ctx, dc, log)
+	kit := &controlplane.Kit{Docker: dc, DataDir: cfg.DataDir, Log: log}
 	reconciler := &reconcile.Reconciler{
 		Store:         st,
 		Docker:        dc,
@@ -227,12 +242,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 			if isLeader {
 				log.Info().Msg("control loop: starting reconcile loop (leader)")
-				if _, err := ensureControlPlaneFresh(ctx, cfg, log); err != nil {
+				if _, err := ensureControlPlaneFresh(ctx, cfg, dc, log); err != nil {
 					log.Error().Err(err).Msg("control-plane freshness check failed")
 				}
 				var loopCtx context.Context
 				loopCtx, loopCancel = context.WithCancel(ctx)
 				go reconciler.Loop(loopCtx)
+				go kit.Loop(loopCtx, controlPlaneSnapshotInterval())
 			} else {
 				log.Info().Msg("control loop: stopped (not the swarm leader)")
 			}
@@ -311,6 +327,23 @@ func serviceName() string {
 		return n
 	}
 	return "pmcluster"
+}
+
+// controlPlaneSnapshotInterval returns how often the leader re-checks the
+// control-plane survivor kit for changes and snapshots it into Raft-replicated
+// Docker configs. Defaults to controlplane.DefaultSnapshotInterval; the
+// PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL env var (seconds) overrides it
+// (tests use 1 to converge in seconds; 0 or negative falls back to default).
+func controlPlaneSnapshotInterval() time.Duration {
+	raw := os.Getenv("PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL")
+	if raw == "" {
+		return controlplane.DefaultSnapshotInterval
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return controlplane.DefaultSnapshotInterval
+	}
+	return time.Duration(n) * time.Second
 }
 
 // reconcileIntervalSeconds reads the persisted reconcile_interval setting

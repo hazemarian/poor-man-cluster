@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
@@ -146,14 +148,32 @@ func WatchSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Lo
 	return out
 }
 
-// ensureControlPlaneFresh restores the newest control-plane archive when the
-// local data.db is missing or older than that archive. When the local DB is
-// already at least as fresh as the newest archive (e.g. shared/replicated
-// storage such as LINSTOR keeps the data dir current on every manager), no
-// restore happens — restoring would clobber a live, current database.
-// Returns (restored bool, err) — restored reports whether a backup was
-// written.
-func ensureControlPlaneFresh(ctx context.Context, cfg *config.Config, log zerolog.Logger) (bool, error) {
+// ensureControlPlaneFresh restores the control plane on promotion. Two
+// sources, newest-first:
+//
+//  1. The Raft-replicated survivor kit (L2): the leader snapshots the data
+//     kit + encryption key into pmcluster_state_* Docker configs, replicated
+//     to every manager by Swarm itself — no host-to-host archive shipping.
+//     Restored when the local data.db is missing or older than the snapshot.
+//  2. The tarball archive fallback: pre-L2 clusters that only have
+//     pmcluster-ctlplane-*.tar.gz archives on /var/stack/backup.
+//
+// When the local DB is already at least as fresh as the newest snapshot (e.g.
+// shared/replicated storage such as LINSTOR keeps the data dir current on
+// every manager), no restore happens — restoring would clobber a live,
+// current database. Returns (restored bool, err).
+func ensureControlPlaneFresh(ctx context.Context, cfg *config.Config, dc runtime.Client, log zerolog.Logger) (bool, error) {
+	kit := &controlplane.Kit{Docker: dc, DataDir: cfg.DataDir, Log: log}
+	restored, err := kit.Restore(ctx)
+	if err == nil {
+		return restored, nil // Raft config path handled it (restored, or DB current)
+	}
+	if !errors.Is(err, controlplane.ErrNoSnapshots) {
+		return false, fmt.Errorf("control-plane Raft restore: %w", err)
+	}
+
+	// No state configs yet (pre-L2 cluster or standalone): fall back to the
+	// tarball archive path.
 	newest, err := backups.NewestControlPlaneArchive(controlPlaneArchiveDir)
 	if err != nil {
 		return false, fmt.Errorf("scan control-plane archives: %w", err)

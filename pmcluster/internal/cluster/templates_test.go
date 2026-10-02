@@ -67,7 +67,7 @@ func TestLoadComposeFile_KnownStacks(t *testing.T) {
 // it (with no dangling placeholder) when it isn't.
 func TestLoadComposeFile_BackupControlPlane(t *testing.T) {
 
-	in := RenderInput{Domain: "example.com", DataDir: "/root/.pmcluster"}
+	in := RenderInput{Domain: "example.com", DataDir: "/root/.pmcluster", VolumeRoot: "/data/apps", BackupDir: "/data/apps/backup"}
 	data, err := LoadComposeFile(StackBackup, in)
 	if err != nil {
 		t.Fatalf("LoadComposeFile(backup): %v", err)
@@ -79,6 +79,8 @@ func TestLoadComposeFile_BackupControlPlane(t *testing.T) {
 		"BACKUP_SOURCES=/backup/pmcluster",
 		"pmcluster-ctlplane-",
 		"node.role == manager",
+		"/data/apps:/backup/data:ro",
+		"/data/apps/backup:/archive",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered backup stack missing %q", want)
@@ -1263,6 +1265,8 @@ func TestLoadComposeFile_OORetentionRenders(t *testing.T) {
 func TestLoadComposeFile_BackupS3Renders(t *testing.T) {
 	in := RenderInput{
 		Domain:              "example.com",
+		VolumeRoot:          "/var/stack/data",
+		BackupDir:           "/var/stack/backup",
 		BackupRetentionDays: 15,
 		BackupS3: BackupS3{
 			Endpoint:  "https://acct.r2.cloudflarestorage.com",
