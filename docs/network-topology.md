@@ -17,14 +17,21 @@ Every pmcluster deployment has two distinct networks that people mix up:
 Traefik. The *cluster* plane must only be reachable between your own nodes —
 never from the internet (firewall it, or run it over a private/tailnet link).
 
-```
-        PUBLIC (internet)                     CLUSTER (nodes only)
-   ┌──────────────────────┐            ┌──────────────────────────────┐
-   │ browser ── 80/443 ──►│  Traefik  │  2377 Raft / 7946 gossip /    │
-   │ CI ────── 9090 ────► │◄──leader──│  4789 VXLAN / 9090 daemon     │
-   │ domains ── DNS ─────►│   node    │◄────────────────────────────►│
-   └──────────────────────┘            │   worker / standby nodes     │
-                                       └──────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph PUBLIC["Public internet"]
+        B["Browser / CI"]
+        D["DNS (your domains)"]
+    end
+    subgraph CLUSTER["Cluster (nodes only)"]
+        T["Traefik :80/:443"]
+        L["Leader node<br/>pmcluster daemon :9090"]
+        W["Worker / standby nodes"]
+    end
+    B -- "80/443 HTTPS" --> T
+    D -- "resolves domains" --> T
+    T --- L
+    L -- "2377 Raft / 7946 gossip / 4789 VXLAN / 9090 daemon" --- W
 ```
 
 ## 2. Topology options (pick one, in order of effort)
@@ -32,8 +39,11 @@ never from the internet (firewall it, or run it over a private/tailnet link).
 ### Option A — single node (the poor-man default)
 One VPS runs the Swarm leader, all platform stacks, and every app stack.
 
-```
-  your.com ──► A record ──► 203.0.113.10 (the one node)
+```mermaid
+flowchart LR
+    D["your.com (DNS A record)"]
+    N["One VPS<br/>203.0.113.10<br/>Traefik + leader + all stacks"]
+    D -- "A record" --> N
 ```
 
 - **DNS:** one `A` record per domain pointing at the node's public IP.
@@ -48,10 +58,13 @@ backups, standby daemons, and future capacity. App stacks stay **pinned** to
 the leader (`placement: <hostname>` or the auto-pin to `platform_node`) so
 their `/var/stack/data` volumes never migrate.
 
-```
-  your.com ──► A record ──► 203.0.113.10   (leader — the ONLY serving node)
-                                    │
-         203.0.113.11 (worker) ◄────┘  cluster plane only (2377/7946/4789)
+```mermaid
+flowchart LR
+    D["your.com (DNS A record)"]
+    L["Leader (serving)<br/>203.0.113.10<br/>Traefik + all stacks + data"]
+    W["Worker / standby<br/>203.0.113.11<br/>backups + standby daemon"]
+    D -- "A record" --> L
+    L -- "cluster plane only<br/>2377/7946/4789" --- W
 ```
 
 - **DNS:** still one `A` record per domain → the leader. The workers are
@@ -70,12 +83,18 @@ serve any stack. **This is the only topology where the domain survives a node
 loss without manual intervention — and it is the last step of an HA build,
 not the first.**
 
-```
-                    ┌──────────────────────────┐
-  your.com ──► LB IP │  203.0.113.10 (leader)   │
-         (one A rec) │  203.0.113.11            │   all serve 80/443
-                     │  203.0.113.12            │   (traefik on all)
-                     └──────────────────────────┘
+```mermaid
+flowchart LR
+    D["your.com (one A record)"]
+    LB["Load balancer<br/>203.0.113.100"]
+    N1["Node 1 (leader)<br/>203.0.113.10<br/>traefik + stacks"]
+    N2["Node 2<br/>203.0.113.11<br/>traefik + stacks"]
+    N3["Node 3<br/>203.0.113.12<br/>traefik + stacks"]
+    D -- "A record" --> LB
+    LB -- "80/443, health-checked" --> N1
+    LB -- "80/443, health-checked" --> N2
+    LB -- "80/443, health-checked" --> N3
+    N1 --- N2 --- N3
 ```
 
 - **DNS:** one `A` record → the LB IP (or a DNS-failover record).
@@ -91,11 +110,13 @@ Joining nodes with `pmcluster join --tailscale` puts node-to-node traffic on a
 private WireGuard tailnet, so **no firewall rules are needed between nodes** and
 cluster traffic is encrypted end-to-end.
 
-```
-  your.com ──► A record ──► 203.0.113.10        (public entry unchanged)
-
-  leader (100.82.x.x) ── tailnet ──► worker (100.77.x.x)
-                     swarm traffic rides the tunnel
+```mermaid
+flowchart LR
+    D["your.com (DNS A record)"]
+    N["Leader (public entry)<br/>203.0.113.10"]
+    W["Worker<br/>100.77.123.88 (tailnet)"]
+    D -- "A record (unchanged)" --> N
+    N ---|"tailnet 100.82.72.107 ↔ 100.77.123.88<br/>swarm traffic rides the tunnel"| W
 ```
 
 - **DNS:** unchanged — tailnet IPs (100.64.0.0/10) are **not** publicly
@@ -106,6 +127,48 @@ cluster traffic is encrypted end-to-end.
   awkward; future 3rd-node joins with zero firewall choreography.
 - **Limitations:** registry pulls still go out the public egress; tailnets do
   not fix provider-side blocks (e.g. a registry WAF).
+
+#### What pmcluster does (and does not) do with Tailscale
+
+**pmcluster has no Tailscale integration.** The `--tailscale` flag is a thin
+automation of three trivial CLI calls — all the network work is done by the
+`tailscale` binary itself:
+
+```mermaid
+sequenceDiagram
+    participant U as User (node being joined)
+    participant TS as tailscale CLI
+    participant PMC as pmcluster join
+    participant SW as Swarm manager
+    U->>TS: tailscale up --auth-key=tskey-...
+    TS-->>U: (auth via Tailscale coordination server)
+    PMC->>TS: tailscale ip -4
+    TS-->>PMC: 100.x.y.z (tailnet IPv4)
+    PMC->>SW: docker swarm join --token X<br/>--advertise-addr 100.x.y.z
+    SW-->>PMC: joined (advertises the tailnet IP)
+```
+
+1. `tailscale up --auth-key=...` — the authentication (nothing pmcluster-specific);
+2. `tailscale ip -4` — read the node's tailnet IP;
+3. pass that IP as `--advertise-addr` to `docker swarm join` / `docker swarm init`.
+
+**The one non-obvious step is step 3.** `docker swarm join` without an
+advertise-addr advertises the node's *first non-loopback IP* — the **public
+IP**, not the tailnet IP. If you join with just the tailnet IP as the manager
+address, the node still advertises its public IP and swarm node-to-node traffic
+(Raft/gossip/VXLAN) keeps going over the public internet; the tailnet only
+carried your join call. To actually make swarm traffic ride the tailnet the
+joining node must advertise its tailnet IP — exactly what `--tailscale`
+automates. You can do all of it by hand instead:
+
+```bash
+tailscale up --auth-key=tskey-...                    # you, manually
+pmcluster cluster up --swarm-advertise-addr 100.x.y.z  # first node
+docker swarm join --token X --advertise-addr 100.x.y.z <tailnet-manager>:2377
+```
+
+The flag is purely optional convenience — opt-in, dormant unless passed, and
+completely replaceable by the three manual commands above.
 
 ## 3. Firewall reference (per option)
 
@@ -147,6 +210,17 @@ Keep the single `A` record. When the serving node dies:
    fresh node from your backups (see `restore-design.md`).
 2. Edit the `A` record(s) to the survivor's public IP.
 3. Update the record for **every** domain (or use a wildcard).
+
+```mermaid
+flowchart LR
+    D1["A record → leader IP"]
+    N1["Leader (alive)"]
+    D2["A record flipped → survivor IP"]
+    N2["Survivor / restored node"]
+    D1 --> N1
+    D1 -. "leader dies" .-> D2
+    D2 --> N2
+```
 
 ### DNS failover service (automated A-record flip)
 A DNS provider with health-check failover (or a small script on the standby
