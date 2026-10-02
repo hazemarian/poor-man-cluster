@@ -215,12 +215,3 @@ func TestFetchS3Object_WritesFile(t *testing.T) {
 		t.Fatalf("downloaded file = %q, %v", b, err)
 	}
 }
-
-func mustParseTime(t *testing.T, v string) time.Time {
-	t.Helper()
-	out, err := time.Parse(time.RFC3339, v)
-	if err != nil {
-		t.Fatalf("parse time %q: %v", v, err)
-	}
-	return out
-}
