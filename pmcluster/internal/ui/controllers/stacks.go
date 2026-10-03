@@ -503,6 +503,7 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 				Paused:      s.Desired == 0,
 				Complete:    s.RunOnce && s.Desired > 0 && s.Replicas == 0,
 				Routable:    s.Stack != "",
+				Node:        s.Node,
 			}
 			d.Services = append(d.Services, row)
 		}

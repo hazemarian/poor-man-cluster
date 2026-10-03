@@ -308,6 +308,7 @@ type Service struct {
 	UpdateState  string `json:"update_state"`
 	UpdateError  string `json:"update_error"`
 	Updated      int64  `json:"updated"`
+	Node         string `json:"node"`
 }
 
 // ServiceTask is one row of GET /api/services/{stack}/{svc}/tasks.

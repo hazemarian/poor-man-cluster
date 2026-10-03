@@ -105,7 +105,7 @@ func tarEntries(t *testing.T, payload []byte) map[string][]byte {
 			n, rerr := tr.Read(body)
 			// tar.Reader reports io.EOF once the entry's last byte is
 			// consumed; a full read with io.EOF is a success.
-			if rerr != nil && !(rerr == io.EOF && n == len(body)) {
+			if rerr != nil && (rerr != io.EOF || n != len(body)) {
 				t.Fatal(rerr)
 			}
 		}
@@ -437,6 +437,10 @@ type workerClient struct {
 	runtime.Client
 }
 
+// errNotSwarmManager reproduces Docker's real daemon message verbatim; the
+// production code matches on the substring, so the fixture must keep it exact.
+//
+//nolint:staticcheck // ST1005: fidelity to the real docker error string wins
 var errNotSwarmManager = errors.New("Error response from daemon: This node is not a swarm manager. Worker nodes can't be used to view or modify cluster state. Please run this command on a manager node or promote the current node to a manager.")
 
 func (workerClient) ConfigList(context.Context, string, string) ([]string, error) {

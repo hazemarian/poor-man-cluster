@@ -71,17 +71,25 @@ func (c *Client) Configured() bool {
 	return c.base != "" && c.tok != ""
 }
 
-func (c *Client) baseURL() string {
+// BaseURL returns the currently configured daemon base URL (no trailing
+// slash). It powers the console's websocket bridge, which needs to dial the
+// daemon directly (websockets cannot ride the pmapi HTTP client).
+func (c *Client) BaseURL() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.base
 }
 
-func (c *Client) token() string {
+// Token returns the currently configured Bearer token for the daemon.
+func (c *Client) Token() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.tok
 }
+
+func (c *Client) baseURL() string { return c.BaseURL() }
+
+func (c *Client) token() string { return c.Token() }
 
 // do performs a JSON request against /api{path}, decoding a 2xx body into out.
 // Non-2xx responses (and transport errors) return a *Error.

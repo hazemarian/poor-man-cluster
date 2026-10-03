@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strings"
+	"sync"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 )
@@ -24,19 +25,46 @@ import (
 // Stateless services and role-based placements ("manager"/"worker") are
 // never rewritten.
 type PinResolver struct {
+	// mu guards StorageNodes so the daemon's settings hook can refresh the
+	// storage_nodes list live while the reconcile loop resolves placements
+	// concurrently.
+	mu sync.Mutex
+
 	// PlatformNode is the node.hostname stateful services fall back to when
 	// no storage_nodes are configured (the platform_node cluster setting).
 	PlatformNode string
 
 	// StorageNodes is the ordered set of hostnames stateful services are
 	// round-robined across (the storage_nodes cluster setting). Empty keeps
-	// the single-platform-node behaviour.
+	// the single-platform-node behaviour. Mutate via SetStorageNodes.
 	StorageNodes []string
 
 	// StackPin returns the per-stack placement override (a hostname, or ""
 	// when the stack has not been individually moved). Nil disables the
 	// override.
 	StackPin func(ctx context.Context, stackName string) (string, error)
+}
+
+// SetStorageNodes live-replaces the storage-node list. Called by the daemon's
+// settings hook when storage_nodes changes, so round-robin placement adapts
+// without a restart (the rendered hash changes on the next reconcile, which
+// redeploys affected stacks).
+func (r *PinResolver) SetStorageNodes(nodes []string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.StorageNodes = nodes
+}
+
+func (r *PinResolver) storageNodes() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.StorageNodes
 }
 
 // ResolvePlacement rewrites the IR in place: every service that holds a
@@ -69,8 +97,8 @@ func (r *PinResolver) resolve(appName, stackPin string) string {
 	switch {
 	case stackPin != "":
 		return stackPin
-	case len(r.StorageNodes) > 0:
-		return roundRobinNode(appName, r.StorageNodes)
+	case len(r.storageNodes()) > 0:
+		return roundRobinNode(appName, r.storageNodes())
 	default:
 		return r.PlatformNode
 	}

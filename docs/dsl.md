@@ -84,7 +84,7 @@ services:
 | `replicas` | `1` | must be ≥ 0; ignored when `run_once` is true |
 | `run_once` | `false` | `true` → one-shot job (`restart_policy: none`, or `on-failure` max 3 when `depends_on` is set); for migrations/jobs |
 | `skip_filelog` | `false` | excludes the service from the OTel log-tailing receiver (set when the app ships logs via OTLP itself) |
-| `placement` | (any) | `manager` → `node.role == manager`; `worker` → `node.role == worker`; **any other value → `node.hostname == <value>`** (pin a stateful service to one specific node so its volume-backed data never has to migrate); empty + a volume mount → auto-pinned to the platform node (`platform_node`) |
+| `placement` | (any) | `manager` → `node.role == manager`; `worker` → `node.role == worker`; **any other value → `node.hostname == <value>`** (pin a stateful service to one specific node so its volume-backed data never has to migrate); empty + a volume mount → auto-pinned to a storage node (round-robin across `storage_nodes`, `platform_node` fallback) |
 | `command` | — | overrides the image's `CMD` |
 | `entrypoint` | — | overrides the image's `ENTRYPOINT` |
 | `env` | — | map of environment variables (values support substitution) |
@@ -188,7 +188,7 @@ update:
   order: start-first   # default; or stop-first
 ```
 
-Services that mount **volumes** are treated as stateful: pmcluster automatically uses `order: stop-first` (a start-first rollout races the old container's shutdown against the new start — e.g. old Postgres deletes the freshly written `postmaster.pid` and the replacement immediately shuts down) and, when `placement` is empty, pins them to the platform node (`platform_node` setting) so the volume-backed data never has to migrate. No manifest change needed.
+Services that mount **volumes** are treated as stateful: pmcluster automatically uses `order: stop-first` (a start-first rollout races the old container's shutdown against the new start — e.g. old Postgres deletes the freshly written `postmaster.pid` and the replacement immediately shuts down) and, when `placement` is empty, pins them to a **storage node**: a round-robin pick across the `storage_nodes` cluster setting (main node by default — see [storage-and-databases.md](storage-and-databases.md)), with `platform_node` as the single-node fallback. Each deployed service carries an `io.pmcluster.node` label naming its pinned node (visible in the console Services table and `pmcluster service ps`). No manifest change needed.
 
 ---
 

@@ -145,6 +145,7 @@
             <th>{{T "services.col_service"}}</th>
             <th class="num">{{T "services.col_replicas"}}</th>
             <th>{{T "services.col_mode"}}</th>
+            <th>{{T "services.col_node"}}</th>
             <th>{{T "services.col_updated"}}</th>
             <th><span class="sr-only">{{T "common.actions"}}</span></th>
           </tr>
@@ -169,11 +170,13 @@
               {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{end}}
             </td>
             <td>{{if .Mode}}<span class="mono iso" dir="ltr">{{.Mode}}</span>{{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}</td>
+            <td>{{if .Node}}<span class="mono iso" dir="ltr">{{.Node}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
             <td class="muted iso" dir="ltr">{{ts .Updated}}</td>
             <td>
               <div class="row-actions">
                 <a class="btn btn-ghost btn-sm" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true" title="{{T "services.action_tasks"}}">{{icon "server"}}<span class="sr-only">{{T "services.action_tasks"}}</span></a>
                 <a class="btn btn-ghost btn-sm" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true" title="{{T "services.action_logs"}}">{{icon "terminal"}}<span class="sr-only">{{T "services.action_logs"}}</span></a>
+                <a class="btn btn-ghost btn-sm" href="/web/stacks/{{$.Detail.Stack.Name}}/terminal?service={{.ServiceName}}" title="{{T "services.action_terminal"}}">{{icon "console"}}<span class="sr-only">{{T "services.action_terminal"}}</span></a>
                 <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .Name}}" hx-disabled-elt="this" title="{{T "services.action_restart"}}">{{icon "refresh"}}<span class="sr-only">{{T "services.action_restart"}}</span></button>
               </div>
             </td>
@@ -192,11 +195,13 @@
           {{else if .Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>
           {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "services.col_mode"}}</span><span class="v">{{if .Mode}}<span class="mono iso" dir="ltr">{{.Mode}}</span>{{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "services.col_node"}}</span><span class="v">{{if .Node}}<span class="mono iso" dir="ltr">{{.Node}}</span>{{else}}<span class="muted">—</span>{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "services.col_updated"}}</span><span class="v muted iso" dir="ltr">{{ts .Updated}}</span></div>
         <div class="kv-row"><span class="k">{{T "common.actions"}}</span><span class="v">
           <div class="row-actions">
             <a class="btn btn-ghost" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true">{{icon "server"}}<span>{{T "services.action_tasks"}}</span></a>
             <a class="btn btn-ghost" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true">{{icon "terminal"}}<span>{{T "services.action_logs"}}</span></a>
+            <a class="btn btn-ghost" href="/web/stacks/{{$.Detail.Stack.Name}}/terminal?service={{.ServiceName}}">{{icon "console"}}<span>{{T "services.action_terminal"}}</span></a>
             <button type="button" class="btn btn-ghost" hx-post="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .Name}}" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
           </div>
         </span></div>

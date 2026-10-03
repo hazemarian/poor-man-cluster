@@ -83,6 +83,7 @@ type serviceRow struct {
 	PausedUpdate bool   // swarm paused this service's update after a task failure
 	UpdateError  string // the orchestrator's reason for pausing
 	Routable     bool   // belongs to a stack, so the per-service routes resolve
+	Node         string // io.pmcluster.node label: node this service is pinned to ("" when unconstrained)
 }
 
 // List renders the services table.
@@ -121,6 +122,7 @@ func (c Services) List(g *gin.Context) {
 			PausedUpdate: s.UpdateState == "paused" && !completedRunOnce(s.RunOnce, s.Desired, s.Replicas),
 			UpdateError:  s.UpdateError,
 			Routable:     s.Stack != "",
+			Node:         s.Node,
 		}
 		if row.Converged {
 			d.Ready++
@@ -183,6 +185,7 @@ type serviceMeta struct {
 	ImageAge     int64
 	PausedUpdate bool
 	UpdateError  string
+	Node         string // node the service is pinned to ("" when unconstrained)
 }
 
 // completedRunOnce reports whether a service is a one-shot job that already
@@ -281,6 +284,7 @@ func (c Services) meta(ctx *gin.Context, stack, service string) (*serviceMeta, b
 			ImageAge:     imageAgeDays(s.ImageCreated),
 			PausedUpdate: s.UpdateState == "paused" && !completedRunOnce(s.RunOnce, s.Desired, s.Replicas),
 			UpdateError:  s.UpdateError,
+			Node:         s.Node,
 		}, true
 	}
 	return nil, false

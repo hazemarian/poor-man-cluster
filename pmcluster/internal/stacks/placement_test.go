@@ -222,3 +222,44 @@ func TestStoragePins(t *testing.T) {
 		}
 	})
 }
+
+// TestSetStorageNodes_LiveRefresh asserts the daemon's settings hook can swap
+// the storage-node list at runtime (without a restart) and the next resolution
+// pass picks it up — worker nodes added via `join --storage-node` take effect
+// immediately.
+func TestSetStorageNodes_LiveRefresh(t *testing.T) {
+	ctx := context.Background()
+	r := &PinResolver{PlatformNode: "plat"}
+
+	// No storage nodes yet → platform fallback.
+	ir := testIR("app", st("db", []string{"data"}, ""))
+	if err := r.ResolvePlacement(ctx, "app", ir); err != nil {
+		t.Fatal(err)
+	}
+	if got := ir.Services[0].Placement; got != "plat" {
+		t.Fatalf("before SetStorageNodes placement = %q, want plat", got)
+	}
+
+	// Live refresh: a worker joins as a storage node.
+	r.SetStorageNodes([]string{"node-2"})
+	ir2 := testIR("app", st("db", []string{"data"}, ""))
+	if err := r.ResolvePlacement(ctx, "app", ir2); err != nil {
+		t.Fatal(err)
+	}
+	if got := ir2.Services[0].Placement; got != "node-2" {
+		t.Fatalf("after SetStorageNodes placement = %q, want node-2", got)
+	}
+
+	// Empty list reverts to the platform fallback.
+	r.SetStorageNodes(nil)
+	ir3 := testIR("app", st("db", []string{"data"}, ""))
+	if err := r.ResolvePlacement(ctx, "app", ir3); err != nil {
+		t.Fatal(err)
+	}
+	if got := ir3.Services[0].Placement; got != "plat" {
+		t.Fatalf("after SetStorageNodes(nil) placement = %q, want plat", got)
+	}
+
+	// Nil receiver is safe.
+	(*PinResolver)(nil).SetStorageNodes([]string{"x"})
+}

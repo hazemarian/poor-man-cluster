@@ -164,9 +164,9 @@ Notes:
 - `service ps STACK` resolves services by stack namespace so the CLI and
   console agree on naming.
 - `service exec` is strictly non-interactive (stdin not attached; output
-  buffered and printed after exit). Interactive shell remains a
-  documented SSH+`docker exec -it` path — a websocket feature is out of
-  scope for this phase.
+  buffered and printed after exit).
+- **Interactive shell ships via websocket (v0.2.141)** — see §8. The
+  documented SSH+`docker exec -it` path remains for out-of-band access.
 - `--api-url` / `PMCLUSTER_API_URL` remote mode works out of the box since
   the remote adapter is the same `remote.Client.do` used by every other
   data command.
@@ -212,10 +212,60 @@ the gin+HTMX SPA.
    stack manifest, run `cluster update`, verify all remaining stacks still
    healthy. Update `ARCHITECTURE.md` + `docs/openapi.yaml`.
 
+## 8. Interactive exec over websocket (shipped v0.2.141)
+
+The console provides a full terminal into any service container — no SSH
+needed. A browser terminal (`xterm.js`, vendored into
+`internal/ui/views/static/`) talks to a websocket on the console, which
+relays frames to a websocket on the pmcluster daemon; the daemon runs
+`docker exec -it` against the service's running task with a real TTY.
+
+**Topology:**
+
+```
+browser ──ws──▶ gin console /web/stacks/{name}/terminal/ws?service=X
+  (session cookie, operator role)         │ (server-side Bearer token)
+                                          ▼
+                 daemon /api/services/{stack}/{service}/exec/ws
+                                          │
+                                          ▼
+                 docker ContainerExecCreate(Tty)+ExecAttach hijack
+```
+
+The browser never sees the API token — the console dials the daemon with
+its stored `PMAPIToken` in the `Authorization` header.
+
+**Daemon side** (`internal/server/execws.go`):
+- Route `GET /api/services/{stack}/{service}/exec/ws`, auth via the same
+  `auth.Bearer` + `stackScopeGuard` as the rest of `/api`.
+- The handler is dispatched **outside** the `otelhttp` / status-span
+  wrappers (neither implements `http.Hijacker`; gorilla needs it to
+  upgrade).
+- Resolves the service to its running task's container, creates an
+  interactive TTY exec (`runtime.ExecStream`), then pumps frames:
+  - client→server **binary** frames = stdin bytes;
+  - client→server **text** frames = `{"type":"resize","rows":N,"cols":N}`;
+  - server→client **binary** = raw TTY output;
+  - on exec exit the daemon sends `{"type":"exit","code":N}` then closes.
+- `?cmd=` query picks the program (default `sh`); `?rows=`/`?cols=` seed
+  the initial terminal size (default 24×80).
+
+**Console side** (`internal/ui/controllers/terminal.go`):
+- `GET /web/stacks/{name}/terminal?service=X` — standalone page (operator
+  role) rendering `terminal.html` with xterm.
+- `GET /web/stacks/{name}/terminal/ws?service=X` — upgrades the browser
+  connection and relays frames verbatim to the daemon websocket (ws/wss
+  from the API URL scheme).
+- Each service row (stack detail + services page) gains a **Terminal**
+  button linking to the page.
+
+The CLI keeps the non-interactive `service exec` (stdout after exit); an
+interactive `-it` CLI flag can ride the same endpoint later.
+
 ## 7. Explicit non-goals (kept out of this phase)
 
-- Interactive `docker exec -it` over HTTP (needs websocket; SSH remains the
-  path).
+- ~~Interactive `docker exec -it` over HTTP (needs websocket; SSH remains the
+  path).~~ **Shipped v0.2.141** — see §8.
 - Volume / image / raw-network browsing UI (read-only `docker volume ls`
   etc. can come later behind the same whitelisted pattern if requested).
 - Follow-mode log streaming (tail-to-file works; streaming is an SSE/WS

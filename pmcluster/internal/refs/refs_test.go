@@ -126,3 +126,71 @@ func TestSecretMountPath(t *testing.T) {
 		t.Errorf("SecretMountPath = %q, want /run/secrets/db_pass", got)
 	}
 }
+
+// TestReplaceRefs_ResolverErrorLeavesText verifies the offending reference is
+// left untouched in the output when the resolver fails (so a compose file is
+// never silently truncated mid-rewrite).
+func TestReplaceRefs_ResolverErrorLeavesText(t *testing.T) {
+	r := &refResolverStub{
+		configs: map[string]string{"missing": ""}, // resolver returns error
+		secrets: map[string]string{},
+	}
+	// Override: this stub returns err for unknown names. "missing" is absent.
+	r.configs = map[string]string{}
+	out, err := ReplaceRefs(context.Background(), "x: config(missing)", r)
+	if err == nil {
+		t.Fatal("expected resolver error")
+	}
+	if out != "x: config(missing)" {
+		t.Errorf("output = %q, want original text preserved", out)
+	}
+}
+
+// TestReplaceRefs_BothKindsMixedOrder verifies kind dispatch (config vs
+// secrets) honors the actual reference kind, not position.
+func TestReplaceRefs_BothKindsMixedOrder(t *testing.T) {
+	r := &refResolverStub{
+		configs: map[string]string{"c1": "cfg-1"},
+		secrets: map[string]string{"s1": "sec-1"},
+	}
+	out, err := ReplaceRefs(context.Background(),
+		"a: secrets(s1)\nb: config(c1)\nc: config(c1)", r)
+	if err != nil {
+		t.Fatalf("ReplaceRefs: %v", err)
+	}
+	want := "a: sec-1\nb: cfg-1\nc: cfg-1"
+	if out != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+}
+
+// TestFindAll verifies extraction order, dedup, and kind separation.
+func TestFindAll(t *testing.T) {
+	configs, secrets := FindAll("config(b)\nconfig(a) config(b)\nsecrets(x)\nconfig(c) secrets(x)")
+	if len(configs) != 3 || configs[0] != "b" || configs[1] != "a" || configs[2] != "c" {
+		t.Errorf("configs = %v, want [b a c]", configs)
+	}
+	if len(secrets) != 1 || secrets[0] != "x" {
+		t.Errorf("secrets = %v, want [x]", secrets)
+	}
+}
+
+// TestFindAll_NoRefs verifies plain text yields empty result slices.
+func TestFindAll_NoRefs(t *testing.T) {
+	configs, secrets := FindAll("image: nginx\nports: [80]")
+	if configs != nil || secrets != nil {
+		t.Errorf("configs=%v secrets=%v, want nil nil", configs, secrets)
+	}
+}
+
+// TestParseEnvRef_FieldExtraction verifies the parsed kind + name (with
+// surrounding whitespace trimmed).
+func TestParseEnvRef_FieldExtraction(t *testing.T) {
+	ref, ok := ParseEnvRef("config( my_conf )")
+	if !ok {
+		t.Fatal("expected parse success")
+	}
+	if ref.Kind != "config" || ref.Name != "my_conf" {
+		t.Errorf("ref = %+v, want config/my_conf", ref)
+	}
+}

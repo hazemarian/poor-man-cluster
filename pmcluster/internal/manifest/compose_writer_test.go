@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
 
@@ -220,6 +221,11 @@ func TestTranslate_StatefulDefaults(t *testing.T) {
 	if !strings.Contains(s, "node.hostname == node-01") {
 		t.Errorf("stateful service without placement should auto-pin to the platform node:\n%s", s)
 	}
+
+	// The resolved pin is stamped as a label so the UI can show the node.
+	if !strings.Contains(s, runtime.NodeLabel+": node-01") {
+		t.Errorf("stateful service should carry the %s node label:\n%s", runtime.NodeLabel, s)
+	}
 }
 
 // TestTranslate_StatefulDefaultsDisabled asserts that without a PinNode the
@@ -245,6 +251,9 @@ func TestTranslate_StatefulDefaultsDisabled(t *testing.T) {
 
 	if strings.Contains(s, "node.hostname") {
 		t.Errorf("no PinNode configured — stateful services must not be pinned:\n%s", s)
+	}
+	if strings.Contains(s, runtime.NodeLabel) {
+		t.Errorf("no PinNode configured — services must not carry the %s node label:\n%s", runtime.NodeLabel, s)
 	}
 	// Stateless web service keeps the start-first default.
 	if !strings.Contains(s, "order: start-first") {

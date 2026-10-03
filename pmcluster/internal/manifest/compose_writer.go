@@ -250,12 +250,14 @@ func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, 
 		// either strand the data or start a fresh empty volume.
 		if stateful && pinNode != "" {
 			d.Placement = &composePlacement{Constraints: []string{"node.hostname == " + pinNode}}
+			d.Labels[labelNode] = pinNode
 		}
 	default:
 		// Any other value is a node-hostname pin: the operator keeps a
 		// stateful service (with a volume) on one specific node so its
 		// data never has to migrate.
 		d.Placement = &composePlacement{Constraints: []string{"node.hostname == " + s.Placement}}
+		d.Labels[labelNode] = s.Placement
 	}
 
 	if !s.RunOnce {

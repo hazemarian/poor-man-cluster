@@ -178,11 +178,15 @@ func truncateRunes(s string, n int) string {
 
 func printServices(cmd *cobra.Command, list []services.ServiceSummary) {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSTACK\tREPLICAS\tIMAGE\tMODE\tSTATE\tUPDATED")
+	fmt.Fprintln(w, "NAME\tSTACK\tREPLICAS\tIMAGE\tMODE\tNODE\tSTATE\tUPDATED")
 	for _, s := range list {
-		fmt.Fprintf(w, "%s\t%s\t%d/%d\t%s\t%s\t%s\t%s\n",
+		node := s.Node
+		if node == "" {
+			node = "any"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%d/%d\t%s\t%s\t%s\t%s\t%s\n",
 			s.Name, s.Stack, s.Replicas, s.Desired,
-			s.Image, s.Mode,
+			s.Image, s.Mode, node,
 			serviceStateCell(s),
 			time.Unix(s.Updated, 0).Format(time.RFC3339),
 		)

@@ -192,6 +192,12 @@ func (f *fakeClient) ServiceExec(_ context.Context, serviceID string, _ []string
 	f.execResults = f.execResults[1:]
 	return res, nil
 }
+func (f *fakeClient) ServiceExecAttach(_ context.Context, _ string, _ []string, _, _ uint) (runtime.ExecStream, error) {
+	if f.execErr != nil {
+		return nil, f.execErr
+	}
+	return nil, fmt.Errorf("ServiceExecAttach: not implemented in fakeClient")
+}
 func (f *fakeClient) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
 	return runtime.JoinTokens{}, nil
 }

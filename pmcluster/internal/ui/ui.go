@@ -219,6 +219,14 @@ func (a *App) Mount(engine *gin.Engine) {
 	op.POST("/services/:stack/:service/restart", svc.Restart)
 	op.POST("/services/:stack/:service/exec", svc.Exec)
 
+	// Interactive terminal (L3): a standalone xterm page + its websocket
+	// relay. Operator-only — an interactive shell in a container is a
+	// mutation, not a read. The page renders outside the app shell (full
+	// viewport), so it gets its own route here rather than a fragment.
+	tm := controllers.Terminal{Controller: a.ctrl}
+	op.GET("/stacks/:name/terminal", tm.Page)
+	op.GET("/stacks/:name/terminal/ws", tm.WS)
+
 	op.POST("/stacks/:name/configs/add", scc.AddConfig)
 	op.POST("/stacks/:name/configs/edit", scc.EditConfig)
 	op.POST("/stacks/:name/configs/rollback/:config_name/:version_id", scc.RollbackConfig)

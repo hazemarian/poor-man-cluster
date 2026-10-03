@@ -64,6 +64,23 @@ var dockerPullFn = func(ctx context.Context, image string) error {
 	return exec.CommandContext(ctx, "docker", "pull", image).Run()
 }
 
+// sshRunFn runs a remote command over ssh as root on the manager:
+//
+//	ssh -o StrictHostKeyChecking=accept-new root@<host> '<remoteCmd>'
+//
+// Overridable so tests can fake the manager without a network. Used by
+// registerStorageNode (--storage-node) to read + update the storage_nodes
+// cluster setting on the manager.
+var sshRunFn = func(ctx context.Context, host, remoteCmd string) ([]byte, error) {
+	c := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=accept-new",
+		"root@"+host, remoteCmd)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
 // Timeouts for the best-effort registry helpers: a hung ssh or pull must not
 // stall the join forever.
 var (
@@ -95,6 +112,15 @@ Registry credentials (both optional, never fatal to the join):
   --verify-registry-pull <image> runs a best-effort 'docker pull <image>' after
                                  joining to prove private pulls work.
 
+Storage (optional, Path 1):
+  --storage-node                 mark this node as a STORAGE node: the join
+                                 adds its hostname to the manager's
+                                 storage_nodes cluster setting, so round-robin
+                                 placement spreads stateful stacks across this
+                                 node too (workers qualify — storage is not
+                                 leader-only). By default the main (leader)
+                                 node is the only storage node.
+
 Tailnet (optional, M3):
   --tailscale                    bring this node onto a private WireGuard
                                  tailnet (tailscale CLI required) and join the
@@ -110,6 +136,8 @@ Examples:
   pmcluster join --role manager --token SWMTKN-1-... --manager 82.165.128.237:2377
   pmcluster join --role worker --token SWMTKN-1-... --manager 82.165.128.237:2377 \
     --copy-registry-creds 82.165.128.237 --verify-registry-pull ghcr.io/your-org/app:1
+  pmcluster join --role worker --token SWMTKN-1-... --manager 82.165.128.237:2377 \
+    --storage-node                    # this worker also stores stateful stack data
   pmcluster join --role worker --token SWMTKN-1-... --manager 100.64.0.1:2377 \
     --tailscale --tailscale-auth-key tskey-...
 
@@ -130,6 +158,7 @@ func init() {
 	joinCmd.Flags().String("verify-registry-pull", "", "after joining, best-effort 'docker pull <image>' to prove private registry credentials work (e.g. ghcr.io/your-org/app:1)")
 	joinCmd.Flags().Bool("tailscale", false, "join via a private WireGuard tailnet (advertise the tailnet IPv4 instead of the public IP)")
 	joinCmd.Flags().String("tailscale-auth-key", "", "tailnet auth key for 'tailscale up' (default: $PMCLUSTER_TAILSCALE_AUTH_KEY)")
+	joinCmd.Flags().Bool("storage-node", false, "mark this node as a storage node: add its hostname to the manager's storage_nodes setting so stateful stacks can be round-robin placed here (workers qualify)")
 	rootCmd.AddCommand(joinCmd)
 }
 
@@ -229,6 +258,28 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 	}
 	if verifyPullImage != "" {
 		verifyRegistryPull(cmd.Context(), cmd.OutOrStdout(), verifyPullImage)
+	}
+
+	// Path 1 storage: when the operator flags this node as a storage node,
+	// register it on the manager so round-robin placement spreads stateful
+	// stacks across it (workers qualify — storage is not leader-only).
+	if storageNode, _ := cmd.Flags().GetBool("storage-node"); storageNode {
+		// The manager's ssh host: prefer --copy-registry-creds (an explicit
+		// ssh host), else strip the :2377 port off --manager.
+		sshHost := copyCredsFrom
+		if sshHost == "" {
+			sshHost = manager
+			if i := strings.LastIndex(sshHost, ":"); i > 0 && strings.Count(sshHost, ":") == 1 {
+				sshHost = sshHost[:i]
+			}
+		}
+		effectiveHostname := hostname
+		if effectiveHostname == "" {
+			if hn, err := os.Hostname(); err == nil {
+				effectiveHostname = hn
+			}
+		}
+		registerStorageNode(cmd.Context(), cmd.OutOrStdout(), sshHost, effectiveHostname)
 	}
 
 	// Install + start the daemon (systemd on Linux, hint otherwise).
@@ -509,4 +560,80 @@ func prepareJoinState(ctx context.Context, out io.Writer, cfg *config.Config) er
 		fmt.Fprintln(out, "✔ local control-plane database already present (reused).")
 	}
 	return nil
+}
+
+// registerStorageNode marks a freshly joined node as a storage node by adding
+// its hostname to the manager's storage_nodes cluster setting, so round-robin
+// placement can spread stateful stacks onto it. The manager is reached over
+// ssh (root@<sshHost>). Best-effort: any failure warns with the manual
+// command to run instead — a storage-registration problem must never fail
+// the join itself.
+func registerStorageNode(ctx context.Context, out io.Writer, sshHost, nodeHostname string) {
+	sshHost = strings.TrimSpace(sshHost)
+	nodeHostname = strings.TrimSpace(nodeHostname)
+	if sshHost == "" || nodeHostname == "" {
+		fmt.Fprintln(out, "⚠ --storage-node: could not determine the manager ssh host or this node's hostname — not registering as a storage node.")
+		return
+	}
+	fmt.Fprintf(out, "→ registering %q as a storage node on %s (storage_nodes)\n", nodeHostname, sshHost)
+
+	ctx, cancel := context.WithTimeout(ctx, registryCopyTimeout)
+	defer cancel()
+
+	cur, err := sshRunFn(ctx, sshHost, "pmcluster cluster settings get storage_nodes")
+	if err != nil {
+		fmt.Fprintf(out, "⚠ could not read storage_nodes on %s (%v)\n", sshHost, err)
+		manualStorageNodeHint(out, sshHost, nodeHostname, "")
+		return
+	}
+	current := strings.TrimSpace(string(cur))
+	current = strings.TrimPrefix(current, "storage_nodes=")
+	merged, added := appendStorageNode(current, nodeHostname)
+	if !added {
+		fmt.Fprintf(out, "✔ %q is already a storage node.\n", nodeHostname)
+		return
+	}
+	if _, err := sshRunFn(ctx, sshHost, "pmcluster cluster settings set storage_nodes='"+merged+"'"); err != nil {
+		fmt.Fprintf(out, "⚠ could not update storage_nodes on %s (%v)\n", sshHost, err)
+		manualStorageNodeHint(out, sshHost, nodeHostname, merged)
+		return
+	}
+	fmt.Fprintf(out, "✔ %q registered as a storage node (storage_nodes=%s).\n", nodeHostname, merged)
+	fmt.Fprintln(out, "  New stateful stacks will round-robin across the storage nodes; existing")
+	fmt.Fprintln(out, "  stacks can be moved with:  pmcluster stack move <stack> --to <node>")
+}
+
+// appendStorageNode merges a hostname into a comma-separated storage_nodes
+// list (trimmed, deduped, empty entries dropped). The second return reports
+// whether the list actually changed.
+func appendStorageNode(current, host string) (string, bool) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return current, false
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, e := range strings.Split(current, ",") {
+		e = strings.TrimSpace(e)
+		if e == "" || seen[e] {
+			continue
+		}
+		seen[e] = true
+		out = append(out, e)
+	}
+	if seen[host] {
+		return strings.Join(out, ","), false
+	}
+	out = append(out, host)
+	return strings.Join(out, ","), true
+}
+
+// manualStorageNodeHint prints the command the operator can run by hand when
+// the automatic ssh registration failed.
+func manualStorageNodeHint(out io.Writer, sshHost, nodeHostname, merged string) {
+	if merged == "" {
+		merged = nodeHostname
+	}
+	fmt.Fprintln(out, "  Register it manually on the manager (ssh to it and run):")
+	fmt.Fprintf(out, "    pmcluster cluster settings set storage_nodes='%s'\n", merged)
 }

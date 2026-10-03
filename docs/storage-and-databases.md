@@ -51,13 +51,30 @@ on-demand pre-deploy backups cover it. Multi-manager HA protects the Swarm
 control plane (via the Raft-replicated state configs); data HA comes from
 **backup + restore + `stack move`**, not from block replication.
 
-**How the platform operationalizes Path 1 (v0.2.139):**
+**How the platform operationalizes Path 1 (v0.2.139, v0.2.140):**
 
 - **`storage_nodes` setting** — comma-separated hostnames; stateful stacks
   (services with volumes and no explicit placement) round-robin deterministically
   across them (FNV-1a of the stack name). Explicit `placement:` always wins.
   The `platform_node` setting remains the single-node fallback when
   `storage_nodes` is empty.
+- **The main node is a storage node by default (v0.2.140)** — `cluster up`
+  writes the leader's hostname into `storage_nodes` when the setting is empty,
+  so a fresh cluster pins every stateful stack to the main node from day one.
+- **`pmcluster join --storage-node` (v0.2.140)** — opt-in flag on `join`: after
+  joining the Swarm the node's hostname is appended to the manager's
+  `storage_nodes` setting (over ssh). **Workers qualify — storage is not
+  leader-only.** If the ssh registration fails the join still succeeds and
+  prints the manual `pmcluster cluster settings set storage_nodes=...` command.
+  `storage_nodes` is hostname-based and role-agnostic: round-robin placement,
+  the outage pause, and `stack move` all treat a worker storage node exactly
+  like a manager one.
+- **`io.pmcluster.node` label (v0.2.140)** — every deployed service carries a
+  label naming the node its placement pin targets (a resolved storage node or
+  an explicit hostname pin; role-based and unconstrained services carry none).
+  The console Services table, the stack-detail services panel, and
+  `pmcluster service ps` display this node, so you can see at a glance where
+  every stateful service runs.
 - **Outage pause (control loop)** — when a pinned storage node is down
   (absent from the swarm, `Status != ready`, or `Availability != active`), the
   reconcile loop **skips syncing/deploying** stacks pinned to it and logs a

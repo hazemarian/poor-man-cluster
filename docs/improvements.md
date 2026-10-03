@@ -5,40 +5,6 @@ Legend: ⏱ effort is focused developer time. **Quick win** = simple + high valu
 
 ---
 
-## 🟢 Quick wins (simple, do these first)
-
-### Q1. UpdateStatus surfaced in the CLI (was #4)
-- `pmcluster service list/ps` + `cluster status` show paused updates + failing task error (console pills already exist since v0.2.110; the data is already in `ServiceSummary.UpdateState/UpdateError` — only the tabular output is missing).
-- ⏱ **~2 hours.** No new plumbing, pure CLI rendering + tests.
-- **Quick win ✅**
-
-### Q2. Registry credentials on join (was #3)
-- `verifyRegistryAuth` (v0.2.110) already warns. Add: `--copy-registry-creds <manager-host>` flag (scp manager's `~/.docker/config.json` to the joining node) OR verify a real `docker pull` of a pinned image before declaring the node ready.
-- ⏱ **~3-4 hours.** join.go has the hooks; needs an scp step + a pull-verify helper + tests.
-- **Quick win ✅** — kills the "stale cached image" failure class at the source.
-
-### Q3. Webhook delivery retry (was #6)
-- `server_error` deliveries get a bounded retry (2 retries, 30s apart) before being recorded as failed; record retry count + final error.
-- ⏱ **~3-4 hours.** receiver.go already records deliveries at every exit path — add a retry loop + migration column `retries`.
-- **Quick win ✅** — transient docker/network hiccups stop burning CI pipelines.
-
-### Q4. Per-stack API token scoping (was #5)
-- Allow creating a token bound to one stack (only that stack's deploy/rollback/service routes pass). Webhooks/CI per repo use scoped tokens.
-- ⏱ **~4-6 hours.** apikeys store gains a `stack` column + middleware checks route stack vs token stack + CLI/UI flag.
-- **Quick win ✅** — closes the "one global token for every repo" hole.
-
-### Q5. OO-side alerting metrics (was #12)
-- Emit custom OTLP metrics from the daemon: reconcile drift, paused updates, backup failures, image staleness. Alerts built in OpenObserve (per decision m4031).
-- ⏱ **~4-6 hours.** Add a small metrics emitter to the existing telemetry package + a few counter/updates in update/deploy/backup paths.
-- **Quick win ✅** — enables real alerting with zero new infra.
-
-### Q6. `pmcluster deploy --compose` single-node mode (was #8)
-- Deploy a raw `docker-compose.yml` on a single-node swarm without the DSL (no placement/networks/secrets mapping) — bridge for legacy compose users.
-- ⏱ **~5-6 hours.** New deploy path that skips manifest translation; validation pass; tests. Some edge cases (compose v3 vs swarm) need care.
-- **Quick win ✅**
-
----
-
 ## ✅ Shipped (do not re-propose)
 
 - **M1. Health-gated updates + auto-rollback** — superseded: the v0.2.118 depends_on **control-plane ordered deploys** (per-level topo-sort deploy + wait-healthy + prune-once) replaced the shell wait-wrapper; the v0.2.132 **control loop** continuously converges drift. Rollback re-translates source + records `rollback_of` + ordered per-level deploy.
@@ -54,14 +20,21 @@ Legend: ⏱ effort is focused developer time. **Quick win** = simple + high valu
 - ✅ **Shipped (v0.2.138).** The swarm leader snapshots the failover-survivor kit into `pmcluster_state_<ts>` Docker configs — replicated to every manager by Swarm's own Raft store, so no tarball/rsync shipping is needed. `ensureControlPlaneFresh` restores from the config on promotion. **Security split:** the AES-GCM encryption key goes in a second config family (`pmcluster_state_key_<ts>`), so key + ciphertext never share one blob; a restore refuses a state config whose key config is missing. Details in the changelog.
 
 ### L3. Interactive exec via websocket (was #9)
-- Interactive shells via a websocket endpoint (or documented SSH fallback).
-- ⏱ **~2-3 days.** Hijack handling through the edge proxy + console terminal UI + auth. Meaningful UI work.
+- ✅ **Shipped (v0.2.141).** Browser terminal (vendored xterm.js) → console websocket → daemon websocket → `docker exec -it` TTY hijack. Operator-role only, Bearer auth on the daemon, frame protocol (binary stdin/stdout, `resize`/`exit` JSON controls), Terminal button per service row. Details in `pmcluster/docs/service-ops-design.md` §8.
 
 ---
 
 ## ✅ Shipped already (do not re-propose)
 
+- UpdateStatus surfaced in CLI — Q1: `service list/ps` + `cluster status` show paused updates + failing task errors (PAUSED: <error> markers)
+- Registry credentials on join — Q2: `--copy-registry-creds` + `--verify-registry-pull` flags
+- Webhook delivery retry — Q3: bounded deploy retry (default 2 × 30s), retry count recorded on the delivery row
+- Per-stack API token scoping — Q4: `user create --stack <name>` → stack-scoped tokens, 403 guard on every other route
+- OO-side alerting metrics — Q5: `pmcluster.services.paused` / `pmcluster.services.stale` gauges + `pmcluster.reconcile.total` counter via OTLP
+- **Q6 (`deploy --compose` single-node) — DISCARDED** (was #8): raw compose deploys are out of scope; the DSL is the supported path.
+
 - Storage placement + outage pause + `stack move` — v0.2.139 (P3/P4/P5): `storage_nodes` round-robin for stateful stacks, control-loop pause while a pinned storage node is down, `pmcluster stack move <stack> --to <node>`. Path 1 (pin + backup/restore) is the HA decision; LINSTOR/DRBD explicitly dropped.
+- Interactive exec via websocket — v0.2.141 (L3): browser terminal into any service container (console→daemon WS relay, `docker exec -it` TTY), operator-role only.
 - Control-plane DB snapshot into Raft-replicated Docker config — v0.2.138 (L2)
 - depends_on real wait on Swarm — **replaced in v0.2.118** by control-plane ordered deploys (topo-sorted levels, deploy+wait per level, prune once; no rendered wrapper — works for every image). The v0.2.110–112 shell-wrapper approach is superseded.
 - Stateful-aware defaults (auto stop-first + auto-pin for volume services) — v0.2.110

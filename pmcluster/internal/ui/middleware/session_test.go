@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -152,5 +153,187 @@ func TestRequire_LoginDisabledPassThrough(t *testing.T) {
 	}
 	if got := rr.Body.String(); got != "admin:admin" {
 		t.Errorf("synthetic user = %q, want admin:admin", got)
+	}
+}
+
+// TestVerify_RoundTrip checks a freshly signed cookie verifies back to the
+// same session.
+func TestVerify_RoundTrip(t *testing.T) {
+	a := newAuth(t)
+	v := a.sign(Session{Username: "alice", Exp: time.Now().Add(time.Hour).Unix()})
+	s, ok := a.Verify(v)
+	if !ok {
+		t.Fatal("Verify(valid) = false, want true")
+	}
+	if s.Username != "alice" {
+		t.Errorf("username = %q, want alice", s.Username)
+	}
+}
+
+func TestVerify_RejectsInvalid(t *testing.T) {
+	a := newAuth(t)
+
+	// Empty, malformed, tampered payload, tampered signature, garbage.
+	for _, v := range []string{
+		"",
+		"abc",
+		"a.b.c",
+		"abc.def",
+		a.sign(Session{Username: "alice", Exp: time.Now().Add(time.Hour).Unix()}) + "x",
+		"!!.!!",
+	} {
+		if _, ok := a.Verify(v); ok {
+			t.Errorf("Verify(%q) = true, want false", v)
+		}
+	}
+}
+
+func TestVerify_RejectsExpired(t *testing.T) {
+	a := newAuth(t)
+	v := a.sign(Session{Username: "alice", Exp: time.Now().Add(-time.Minute).Unix()})
+	if _, ok := a.Verify(v); ok {
+		t.Error("Verify(expired) = true, want false")
+	}
+}
+
+func TestVerify_RejectsSignatureFromOtherKey(t *testing.T) {
+	a := newAuth(t)
+	other := NewAuth(a.st, []byte("different-secret-0123456789"), "pmui_session")
+	v := other.sign(Session{Username: "alice", Exp: time.Now().Add(time.Hour).Unix()})
+	if _, ok := a.Verify(v); ok {
+		t.Error("Verify(cookie signed by other key) = true, want false")
+	}
+}
+
+// TestSetCookie_SetsSignedCookie checks SetCookie emits a HttpOnly cookie that
+// Verify accepts.
+func TestSetCookie_SetsSignedCookie(t *testing.T) {
+	a := newAuth(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/login", func(c *gin.Context) {
+		a.SetCookie(c, "alice", time.Hour)
+		c.Status(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	cookies := rr.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies = %d, want 1", len(cookies))
+	}
+	ck := cookies[0]
+	if !ck.HttpOnly {
+		t.Error("cookie not HttpOnly")
+	}
+	if _, ok := a.Verify(ck.Value); !ok {
+		t.Error("Verify(set cookie) = false, want true")
+	}
+}
+
+// TestClearCookie_ExpiresImmediately checks ClearCookie issues an expired
+// cookie value.
+func TestClearCookie_ExpiresImmediately(t *testing.T) {
+	a := newAuth(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/logout", func(c *gin.Context) {
+		a.ClearCookie(c)
+		c.Status(http.StatusOK)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/logout", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	cookies := rr.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Value != "" || cookies[0].MaxAge != -1 {
+		t.Errorf("clear cookie = %+v, want empty value + MaxAge -1", cookies)
+	}
+}
+
+// TestRequire_RedirectsToLogin checks Require without a valid cookie lands on
+// /web/login.
+func TestRequire_RedirectsToLogin(t *testing.T) {
+	a := newAuth(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/x", a.Require(), func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusFound {
+		t.Fatalf("no-cookie request = %d, want 302", rr.Code)
+	}
+	if loc := rr.Header().Get("Location"); loc != "/web/login" {
+		t.Errorf("redirect = %q, want /web/login", loc)
+	}
+}
+
+// TestRequire_HTMXRedirectUnauthorized checks HTMX requests get HX-Redirect
+// instead of a Location redirect when unauthenticated.
+func TestRequire_HTMXRedirectUnauthorized(t *testing.T) {
+	a := newAuth(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/x", a.Require(), func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("HX-Request", "true")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("htmx no-cookie = %d, want 401", rr.Code)
+	}
+	if got := rr.Header().Get("HX-Redirect"); got != "/web/login" {
+		t.Errorf("HX-Redirect = %q, want /web/login", got)
+	}
+}
+
+// TestRequire_TamperedCookieRedirects checks a cookie with a valid shape but
+// wrong signature redirects (no crash).
+func TestRequire_TamperedCookieRedirects(t *testing.T) {
+	a := newAuth(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/x", a.Require(), func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	good := a.sign(Session{Username: "alice", Exp: time.Now().Add(time.Hour).Unix()})
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.AddCookie(&http.Cookie{Name: a.cookie, Value: good + "x"})
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusFound {
+		t.Fatalf("tampered cookie = %d, want 302", rr.Code)
+	}
+}
+
+// TestRoleRank_UnknownRanksAsViewer checks roleRank falls back to viewer.
+func TestRoleRank_UnknownRanksAsViewer(t *testing.T) {
+	if got := roleRank("superadmin"); got != 1 {
+		t.Errorf("roleRank(superadmin) = %d, want 1 (viewer)", got)
+	}
+	if got := roleRank(store.RoleAdmin); got != 3 {
+		t.Errorf("roleRank(admin) = %d, want 3", got)
+	}
+	if got := roleRank(store.RoleOperator); got != 2 {
+		t.Errorf("roleRank(operator) = %d, want 2", got)
+	}
+	if got := roleRank(store.RoleViewer); got != 1 {
+		t.Errorf("roleRank(viewer) = %d, want 1", got)
+	}
+}
+
+// TestCurrentUser_NoValue verifies CurrentUser on a bare context returns nil.
+func TestCurrentUser_NoValue(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+	if u := CurrentUser(c); u != nil {
+		t.Errorf("CurrentUser = %+v, want nil", u)
 	}
 }

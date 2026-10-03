@@ -10,7 +10,11 @@
 // slice for exec.
 package services
 
-import "context"
+import (
+	"context"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+)
 
 // ServiceSummary is one row of `pmcluster service ps` — replica health.
 type ServiceSummary struct {
@@ -25,6 +29,7 @@ type ServiceSummary struct {
 	UpdateState  string // swarm UpdateStatus.State ("updating"|"paused"|"completed"|"") — "" when no update in flight
 	UpdateError  string // orchestrator reason for a paused/rolling update
 	Updated      int64  // service spec update time (unix)
+	Node         string // io.pmcluster.node label: hostname pin target ("" when unconstrained/role-based)
 }
 
 // TaskRun is one row of `docker service ps` — a task's lifecycle state.
@@ -62,6 +67,17 @@ type Ops interface {
 	// Exec runs a fixed argv in the first running task's container,
 	// non-interactive.
 	Exec(ctx context.Context, stack, service string, argv []string) (*ExecResult, error)
+}
+
+// ExecAttacher is the OPTIONAL interactive-exec port. The daemon's websocket
+// handler type-asserts it; adapters that cannot host interactive sessions
+// (the remote HTTP adapter) simply don't implement it. Local implements it.
+type ExecAttacher interface {
+	// ExecAttach starts an interactive (TTY, stdin-attached) exec session in
+	// the service's first running task reachable from this node. The stream
+	// is a raw duplex TTY (write stdin, read stdout/stderr). rows/cols seed
+	// the terminal size (0,0 → 80x24).
+	ExecAttach(ctx context.Context, stack, service string, argv []string, rows, cols uint) (runtime.ExecStream, error)
 }
 
 // Logs tails a service's stdout/stderr. Full-text search lives in

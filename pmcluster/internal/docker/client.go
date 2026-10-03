@@ -5,13 +5,16 @@
 package docker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -300,6 +303,7 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 			UpdatedAt:    s.UpdatedAt.Unix(),
 			UpdateState:  updateState,
 			UpdateError:  updateError,
+			Node:         s.Spec.Labels[runtime.NodeLabel],
 		})
 	}
 	return out, nil
@@ -506,6 +510,177 @@ func (r *realClient) ServiceExec(ctx context.Context, serviceID string, argv []s
 		return nil, fmt.Errorf("service %s: no running task reachable on this node: %w", svc.Name, lastErr)
 	}
 	return nil, fmt.Errorf("service %s: no running task on this node (tasks run on other nodes — use ssh + docker exec)", svc.Name)
+}
+
+// ServiceExecAttach starts an interactive (TTY, stdin-attached) exec session
+// in the first running task of the service reachable from this node. The
+// returned stream reads the raw TTY output and writes stdin; callers must
+// Close it. rows/cols seed the terminal size (0,0 → 80x24).
+func (r *realClient) ServiceExecAttach(ctx context.Context, serviceID string, argv []string, rows, cols uint) (runtime.ExecStream, error) {
+	svc, err := r.ServiceInspect(ctx, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	tasks, err := r.c.TaskList(ctx, swarm.TaskListOptions{
+		Filters: filters.NewArgs(filters.Arg("service", svc.ID)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("task list %s: %w", svc.Name, err)
+	}
+
+	if rows == 0 {
+		rows = 24
+	}
+	if cols == 0 {
+		cols = 80
+	}
+
+	var lastErr error
+	for _, t := range tasks {
+		if t.Status.State != swarm.TaskStateRunning || t.Status.ContainerStatus == nil {
+			continue
+		}
+		cid := t.Status.ContainerStatus.ContainerID
+		if cid == "" {
+			continue
+		}
+		st, err := r.execAttachContainer(ctx, cid, argv, rows, cols)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return st, nil
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("service %s: no running task reachable on this node: %w", svc.Name, lastErr)
+	}
+	return nil, fmt.Errorf("service %s: no running task on this node (tasks run on other nodes — use ssh + docker exec)", svc.Name)
+}
+
+// execAttachContainer creates a TTY exec with stdin attached and hijacks the
+// connection. With Tty:true docker streams raw bytes (no stdcopy framing), so
+// the hijacked conn is used directly as the duplex stream.
+func (r *realClient) execAttachContainer(ctx context.Context, containerID string, argv []string, rows, cols uint) (runtime.ExecStream, error) {
+	cfg := container.ExecOptions{
+		Cmd:          argv,
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+		Tty:          true,
+	}
+	created, err := r.c.ContainerExecCreate(ctx, containerID, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("exec create: %w", err)
+	}
+	if rows > 0 && cols > 0 {
+		if err := r.c.ContainerExecResize(ctx, created.ID, container.ResizeOptions{
+			Height: rows,
+			Width:  cols,
+		}); err != nil {
+			// Non-fatal: the session still works at the default size.
+			_ = err
+		}
+	}
+	hij, err := r.c.ContainerExecAttach(ctx, created.ID, container.ExecAttachOptions{
+		Tty: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("exec attach: %w", err)
+	}
+	return &execStream{
+		conn:   hij.Conn,
+		reader: hij.Reader,
+		cli:    r.c,
+		execID: created.ID,
+		done:   make(chan struct{}),
+	}, nil
+}
+
+// execStream adapts a hijacked TTY exec connection to runtime.ExecStream.
+// Read comes from the (buffered) hijack reader, Write goes straight to the
+// raw connection, Resize asks the engine to change the TTY size, and Wait
+// polls the exec inspect until the session ends.
+type execStream struct {
+	conn   net.Conn
+	reader *bufio.Reader
+	cli    client.APIClient
+	execID string
+
+	mu       sync.Mutex
+	closed   bool
+	exitCode int
+	waited   bool
+	done     chan struct{}
+}
+
+func (s *execStream) Read(p []byte) (int, error) {
+	return s.reader.Read(p)
+}
+
+func (s *execStream) Write(p []byte) (int, error) {
+	return s.conn.Write(p)
+}
+
+func (s *execStream) Resize(ctx context.Context, rows, cols uint) error {
+	if rows == 0 {
+		rows = 24
+	}
+	if cols == 0 {
+		cols = 80
+	}
+	return s.cli.ContainerExecResize(ctx, s.execID, container.ResizeOptions{
+		Height: rows,
+		Width:  cols,
+	})
+}
+
+func (s *execStream) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.mu.Unlock()
+	err := s.conn.Close()
+	select {
+	case <-s.done:
+	default:
+		close(s.done)
+	}
+	return err
+}
+
+func (s *execStream) Wait(ctx context.Context) (int, error) {
+	s.mu.Lock()
+	if s.waited {
+		s.mu.Unlock()
+		return s.exitCode, nil
+	}
+	s.waited = true
+	s.mu.Unlock()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-s.done:
+			return s.exitCode, nil
+		case <-ticker.C:
+			insp, err := s.cli.ContainerExecInspect(ctx, s.execID)
+			if err != nil {
+				// Exec gone: treat as ended with an unknown-but-finished code.
+				s.exitCode = 0
+				return s.exitCode, nil
+			}
+			if !insp.Running {
+				s.exitCode = insp.ExitCode
+				return s.exitCode, nil
+			}
+		}
+	}
 }
 
 // execInContainer creates + attaches + inspects a non-interactive exec.

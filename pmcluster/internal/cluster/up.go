@@ -421,6 +421,24 @@ func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
 			return fmt.Errorf("persist %s: %w", k, err)
 		}
 	}
+	// Default storage node: when no storage_nodes list is configured yet, the
+	// main (leader) node is the storage node — a stateful stack with no
+	// explicit placement pins to it, so its data has a home from day one.
+	// The list is hostname-based and role-agnostic: later nodes join as
+	// storage nodes explicitly (pmcluster join --storage-node) and round-robin
+	// placement spreads stateful stacks across them.
+	if cur := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), ""); cur == "" && deps.Docker != nil {
+		if nodes, err := deps.Docker.NodeList(ctx); err == nil {
+			for _, n := range nodes {
+				if n.IsLeader && n.Hostname != "" {
+					if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), n.Hostname); err != nil {
+						return fmt.Errorf("persist %s: %w", SettingStorageNodes(), err)
+					}
+					break
+				}
+			}
+		}
+	}
 	return nil
 }
 

@@ -129,9 +129,13 @@ func NewRenderer() (*Renderer, error) {
 		"tb":   toBytes,
 		"sp":   statusPill,
 		"icon": icon,
-		"T":    func(key string) string { return key },
-		"TN":   func(key string) string { return "" },
-		"TF":   func(key string, args ...any) string { return key },
+		// WebBase is the console mount prefix; templates use it for links
+		// back into the app shell (login/setup/terminal are standalone docs
+		// that do not render inside the shell's base URL context).
+		"WebBase": func() string { return "/web" },
+		"T":       func(key string) string { return key },
+		"TN":      func(key string) string { return "" },
+		"TF":      func(key string, args ...any) string { return key },
 		// Numbers arrive as int, int64, uint64 or float64 depending on the
 		// data source, so every numeric helper takes any and coerces.
 		"P":          func(count any, key string, dualCase ...i18n.Case) string { return key },

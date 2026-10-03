@@ -82,6 +82,9 @@ func (f *inMemoryDockerClient) ServiceRestart(_ context.Context, _ string) error
 func (f *inMemoryDockerClient) ServiceExec(_ context.Context, _ string, _ []string) (*runtime.ExecResult, error) {
 	return nil, nil
 }
+func (f *inMemoryDockerClient) ServiceExecAttach(_ context.Context, _ string, _ []string, _, _ uint) (runtime.ExecStream, error) {
+	return nil, nil
+}
 func (f *inMemoryDockerClient) ConfigList(_ context.Context, _, _ string) ([]string, error) {
 	return nil, nil
 }

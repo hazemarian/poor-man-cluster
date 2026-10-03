@@ -16,6 +16,11 @@ type Local struct {
 	// settings update changes log_level. Wired by the daemon composition root
 	// (logger.SetLevel); nil keeps the settings domain pure (persist-only).
 	ApplyLogLevel func(level string) error
+
+	// ApplyStorageNodes, when set, live-replaces the daemon's storage-node
+	// list when a settings update changes storage_nodes (wired to the stacks
+	// PinResolver). nil keeps the settings domain pure (persist-only).
+	ApplyStorageNodes func(nodes string) error
 }
 
 // NewLocal builds the local settings adapter.
@@ -82,9 +87,18 @@ func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 		if err := l.Store.SetSetting(ctx, k, v); err != nil {
 			return nil, fmt.Errorf("set setting %s: %w", k, err)
 		}
-		if k == cluster.SettingLogLevel() && l.ApplyLogLevel != nil {
-			if err := l.ApplyLogLevel(v); err != nil {
-				return nil, fmt.Errorf("apply log level %q: %w", v, err)
+		switch k {
+		case cluster.SettingLogLevel():
+			if l.ApplyLogLevel != nil {
+				if err := l.ApplyLogLevel(v); err != nil {
+					return nil, fmt.Errorf("apply log level %q: %w", v, err)
+				}
+			}
+		case cluster.SettingStorageNodes():
+			if l.ApplyStorageNodes != nil {
+				if err := l.ApplyStorageNodes(v); err != nil {
+					return nil, fmt.Errorf("apply storage nodes %q: %w", v, err)
+				}
 			}
 		}
 	}

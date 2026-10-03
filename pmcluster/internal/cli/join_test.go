@@ -404,3 +404,135 @@ func TestMergeDockerConfigs(t *testing.T) {
 		t.Errorf("credsStore = %q, want desktop", got.CredsStore)
 	}
 }
+
+// --- Path 1: --storage-node registration -------------------------------------
+
+// TestAppendStorageNode covers the pure list-merge used by registerStorageNode:
+// trimming, dedup, empty-entry dropping, and the "already present" no-op.
+func TestAppendStorageNode(t *testing.T) {
+	cases := []struct {
+		name    string
+		current string
+		host    string
+		want    string
+		added   bool
+	}{
+		{"empty current", "", "node-2", "node-2", true},
+		{"single existing", "node-1", "node-2", "node-1,node-2", true},
+		{"already present", "node-1", "node-1", "node-1", false},
+		{"duplicate in current", "node-1,node-1", "node-2", "node-1,node-2", true},
+		{"whitespace entries", "node-1, ,node-2", "node-3", "node-1,node-2,node-3", true},
+		{"already present with spaces", "node-1, node-2", "node-2", "node-1,node-2", false},
+		{"empty host", "node-1", "  ", "node-1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, added := appendStorageNode(tc.current, tc.host)
+			if got != tc.want || added != tc.added {
+				t.Errorf("appendStorageNode(%q, %q) = (%q, %v), want (%q, %v)",
+					tc.current, tc.host, got, added, tc.want, tc.added)
+			}
+		})
+	}
+}
+
+// TestRegisterStorageNode_AppendsAndSkips exercises the ssh-faked happy path
+// (node appended to storage_nodes) and the already-registered no-op. The
+// failure path (ssh errors) only warns — the join itself must keep going.
+func TestRegisterStorageNode_AppendsAndSkips(t *testing.T) {
+	oldSSH := sshRunFn
+	oldTimeout := registryCopyTimeout
+	defer func() {
+		sshRunFn = oldSSH
+		registryCopyTimeout = oldTimeout
+	}()
+	registryCopyTimeout = 0 // never hang the test
+
+	t.Run("appends new node", func(t *testing.T) {
+		var calls []string
+		sshRunFn = func(_ context.Context, host, remoteCmd string) ([]byte, error) {
+			calls = append(calls, host+": "+remoteCmd)
+			if strings.Contains(remoteCmd, "get") {
+				return []byte("storage_nodes=node-1\n"), nil
+			}
+			return []byte("ok"), nil
+		}
+		var out bytes.Buffer
+		registerStorageNode(t.Context(), &out, "10.0.0.5", "node-2")
+		s := out.String()
+		if !strings.Contains(s, `"node-2" registered as a storage node (storage_nodes=node-1,node-2)`) {
+			t.Errorf("output missing success line:\n%s", s)
+		}
+		if len(calls) != 2 {
+			t.Errorf("expected 2 ssh calls (get + set), got %d: %v", len(calls), calls)
+		}
+	})
+
+	t.Run("already registered", func(t *testing.T) {
+		var calls []string
+		sshRunFn = func(_ context.Context, host, remoteCmd string) ([]byte, error) {
+			calls = append(calls, remoteCmd)
+			return []byte("storage_nodes=node-1,node-2\n"), nil
+		}
+		var out bytes.Buffer
+		registerStorageNode(t.Context(), &out, "10.0.0.5", "node-2")
+		s := out.String()
+		if !strings.Contains(s, `"node-2" is already a storage node`) {
+			t.Errorf("output missing already-registered line:\n%s", s)
+		}
+		if len(calls) != 1 {
+			t.Errorf("expected 1 ssh call (get only), got %d: %v", len(calls), calls)
+		}
+	})
+
+	t.Run("ssh failure warns with manual hint", func(t *testing.T) {
+		var calls []string
+		sshRunFn = func(_ context.Context, host, remoteCmd string) ([]byte, error) {
+			calls = append(calls, remoteCmd)
+			return nil, errors.New("ssh: Connection refused")
+		}
+		var out bytes.Buffer
+		registerStorageNode(t.Context(), &out, "10.0.0.5", "node-2")
+		s := out.String()
+		if !strings.Contains(s, "⚠") {
+			t.Errorf("expected a warning in output:\n%s", s)
+		}
+		if !strings.Contains(s, "pmcluster cluster settings set storage_nodes=") {
+			t.Errorf("output missing manual fallback command:\n%s", s)
+		}
+	})
+
+	t.Run("empty ssh host warns", func(t *testing.T) {
+		sshRunFn = func(context.Context, string, string) ([]byte, error) {
+			t.Error("sshRunFn must not be called with an empty host")
+			return nil, nil
+		}
+		var out bytes.Buffer
+		registerStorageNode(t.Context(), &out, "", "node-2")
+		if !strings.Contains(out.String(), "⚠") {
+			t.Errorf("expected a warning in output:\n%s", out.String())
+		}
+	})
+}
+
+// TestJoinCommandRegistration_StorageNodeFlag asserts --storage-node is
+// registered (opt-in, default false) and settable.
+func TestJoinCommandRegistration_StorageNodeFlag(t *testing.T) {
+	if joinCmd == nil {
+		t.Fatal("joinCmd is nil")
+	}
+	f := joinCmd.Flags().Lookup("storage-node")
+	if f == nil {
+		t.Fatal("joinCmd missing --storage-node")
+	}
+	if f.DefValue != "false" {
+		t.Errorf("--storage-node default = %q, want false", f.DefValue)
+	}
+	if err := joinCmd.Flags().Set("storage-node", "true"); err != nil {
+		t.Errorf("set --storage-node: %v", err)
+	}
+	if got, _ := joinCmd.Flags().GetBool("storage-node"); !got {
+		t.Error("GetBool(storage-node) = false, want true")
+	}
+	joinCmd.Flags().Set("storage-node", "false")
+}

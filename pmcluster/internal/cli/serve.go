@@ -171,6 +171,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		Settings: func() *settings.Local {
 			l := settings.NewLocal(st)
 			l.ApplyLogLevel = logger.SetLevel
+			l.ApplyStorageNodes = func(v string) error {
+				deploySvc.Pins.SetStorageNodes(stacks.ParseStorageNodes(v))
+				return nil
+			}
 			return l
 		}(),
 		Usage:     usage.NewLocal(st),

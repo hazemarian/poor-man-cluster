@@ -28,12 +28,14 @@ func init() {
 		"services.col_replicas":        "Replicas",
 		"services.title":               "Swarm services",
 		"services.col_mode":            "Mode",
+		"services.col_node":            "Node",
 		"services.col_image":           "Image",
 		"services.detail_meta_unknown": "The cluster API did not return this service, so its replicas, image and mode are unknown.",
 		"services.col_updated":         "Updated",
 		"services.action_tasks":        "Tasks",
 		"services.action_logs":         "Logs",
 		"services.action_restart":      "Restart",
+		"services.action_terminal":     "Terminal",
 		"services.restart_confirm":     "Restart {0}? Docker replaces its tasks one at a time, so the other replicas keep serving.",
 		"services.image_stale":         "Image {0} days old — this node is running a stale cached image (registry auth missing?)",
 		"services.update_paused_hint":  "update paused — a task failed; see the tasks tab",
@@ -283,5 +285,13 @@ func init() {
 		"services.logs_pause":           "Pause",
 		"services.logs_resume":          "Resume",
 		"services.logs_poll_hint":       "Turn the automatic log refresh on or off",
+
+		// ---- terminal -------------------------------------------------------
+		"terminal.title":       "Terminal",
+		"terminal.back":        "Back to stack",
+		"terminal.exited":      "Session ended, exit code",
+		"terminal.closed":      "Connection closed.",
+		"terminal.failed":      "Could not start the terminal session.",
+		"terminal.load_failed": "The terminal engine could not load.",
 	})
 }

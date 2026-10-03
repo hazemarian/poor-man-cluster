@@ -34,12 +34,14 @@ func init() {
 		"services.col_replicas":        "النسخ",
 		"services.title":               "خدمات Swarm",
 		"services.col_mode":            "النمط",
+		"services.col_node":            "العقدة",
 		"services.col_image":           "الصورة",
 		"services.detail_meta_unknown": "لم تُرجع واجهة API للعنقود هذه الخدمة، لذا نسخها وصورتها ونمطها غير معروفة.",
 		"services.col_updated":         "تاريخ التحديث",
 		"services.action_tasks":        "المهام",
 		"services.action_logs":         "السجلات",
 		"services.action_restart":      "إعادة التشغيل",
+		"services.action_terminal":     "الطرفية",
 		"services.restart_confirm":     "إعادة تشغيل {0}؟ يستبدل Docker مهامها واحدة تلو الأخرى، فتواصل النسخ الأخرى تقديم الخدمة.",
 		"services.image_stale":         "الصورة عمرها {0} يومًا — تشغّل هذه العقدة صورة قديمة من الذاكرة المؤقتة (هل مفاتيح السجل مفقودة؟)",
 		"services.update_paused_hint":  "التحديث متوقف — فشلت مهمة؛ راجع تبويب المهام",
@@ -289,5 +291,13 @@ func init() {
 		"services.logs_pause":           "إيقاف",
 		"services.logs_resume":          "استئناف",
 		"services.logs_poll_hint":       "تشغيل التحديث التلقائي للسجل أو إيقافه",
+
+		// ---- terminal -------------------------------------------------------
+		"terminal.title":       "الطرفية",
+		"terminal.back":        "العودة إلى الحزمة",
+		"terminal.exited":      "انتهت الجلسة، رمز الخروج",
+		"terminal.closed":      "أُغلقت الجلسة.",
+		"terminal.failed":      "تعذّر بدء جلسة الطرفية.",
+		"terminal.load_failed": "تعذّر تحميل محرك الطرفية.",
 	})
 }

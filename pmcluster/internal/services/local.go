@@ -48,6 +48,7 @@ func (l Local) List(ctx context.Context, stack string) ([]ServiceSummary, error)
 			UpdateState:  s.UpdateState,
 			UpdateError:  s.UpdateError,
 			Updated:      s.UpdatedAt,
+			Node:         s.Node,
 		})
 	}
 	return out, nil
@@ -133,6 +134,28 @@ func (l Local) Exec(ctx context.Context, stack, service string, argv []string) (
 		return nil, err
 	}
 	return &ExecResult{ExitCode: res.ExitCode, Stdout: res.Stdout, Stderr: res.Stderr}, nil
+}
+
+// ExecAttach starts an INTERACTIVE exec session (TTY, stdin attached) in the
+// service's first running task reachable from this node. The returned stream
+// is a raw duplex TTY: write stdin, read stdout/stderr. Callers must Close it.
+func (l Local) ExecAttach(ctx context.Context, stack, service string, argv []string, rows, cols uint) (runtime.ExecStream, error) {
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("argv: required (e.g. `sh`)")
+	}
+	if len(argv) > 16 {
+		return nil, fmt.Errorf("argv: at most 16 arguments")
+	}
+	for _, a := range argv {
+		if len(a) > 200 {
+			return nil, fmt.Errorf("argv: arguments must be <= 200 bytes")
+		}
+	}
+	id, err := l.resolve(ctx, stack, service)
+	if err != nil {
+		return nil, err
+	}
+	return l.Docker.ServiceExecAttach(ctx, id, argv, rows, cols)
 }
 
 // resolve maps a (stack, service) pair to the full swarm service ID, refusing

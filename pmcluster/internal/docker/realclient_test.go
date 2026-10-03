@@ -34,6 +34,9 @@ type mockDaemon struct {
 	updateForce map[string]int
 	// execResults tracks ContainerExecCreate ids → exit codes.
 	execExit map[string]int
+	// execAttachRaw, when non-nil, makes the /exec/<id>/start endpoint write
+	// these raw bytes (TTY mode, no stdcopy framing) then half-close.
+	execAttachRaw []byte
 	// events are streamed (newline-delimited JSON) by the /events endpoint.
 	events []events.Message
 	// holdEvents keeps the /events response open (blocking on the request
@@ -185,7 +188,8 @@ func (m *mockDaemon) handler() http.Handler {
 			}
 			if len(parts) == 2 && parts[1] == "start" {
 				// ContainerExecAttach hijacks the connection. Emulate the
-				// Docker daemon: 101 Switching Protocols, then a single
+				// Docker daemon: 101 Switching Protocols, then either raw
+				// TTY bytes (execAttachRaw set — attach mode) or a single
 				// stdcopy stdout frame ("root\n").
 				hj, ok := w.(http.Hijacker)
 				if !ok {
@@ -202,12 +206,16 @@ func (m *mockDaemon) handler() http.Handler {
 					_ = conn.Close()
 					return
 				}
-				out := "root\n"
-				frame := make([]byte, 8+len(out))
-				frame[0] = 1 // stdout
-				binary.BigEndian.PutUint32(frame[4:8], uint32(len(out)))
-				copy(frame[8:], out)
-				_, _ = conn.Write(frame)
+				if m.execAttachRaw != nil {
+					_, _ = conn.Write(m.execAttachRaw)
+				} else {
+					out := "root\n"
+					frame := make([]byte, 8+len(out))
+					frame[0] = 1 // stdout
+					binary.BigEndian.PutUint32(frame[4:8], uint32(len(out)))
+					copy(frame[8:], out)
+					_, _ = conn.Write(frame)
+				}
 				// CloseWrite sends a clean FIN: the client's StdCopy sees
 				// EOF and returns. Closing the whole socket while the
 				// client still has unread buffered data would surface as
@@ -469,6 +477,61 @@ func TestRealClient_ServiceExec(t *testing.T) {
 	}
 	if res.ExitCode != 0 {
 		t.Errorf("ExitCode = %d, want 0", res.ExitCode)
+	}
+}
+
+func TestRealClient_ServiceExecAttach(t *testing.T) {
+	m := newMockDaemon()
+	m.services = []swarm.Service{{
+		ID:   "svc-1",
+		Spec: swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "demo_web"}},
+	}}
+	now := time.Now()
+	m.tasks["svc-1"] = []swarm.Task{{
+		ID: "task-1",
+		Status: swarm.TaskStatus{
+			State:           swarm.TaskStateRunning,
+			Timestamp:       now,
+			ContainerStatus: &swarm.ContainerStatus{ContainerID: "cont-1"},
+		},
+	}}
+	m.execAttachRaw = []byte("hello-tty\n")
+	m.execExit["exec-1"] = 0
+	rc := realClientFromServer(t, m)
+
+	st, err := rc.ServiceExecAttach(context.Background(), "demo_web", []string{"sh"}, 30, 100)
+	if err != nil {
+		t.Fatalf("ServiceExecAttach: %v", err)
+	}
+	defer st.Close()
+
+	// Raw TTY output arrives on Read without stdcopy framing.
+	buf := make([]byte, 64)
+	n, err := st.Read(buf)
+	if err != nil {
+		t.Fatalf("stream Read: %v", err)
+	}
+	if string(buf[:n]) != "hello-tty\n" {
+		t.Errorf("stream output = %q, want %q", buf[:n], "hello-tty\n")
+	}
+
+	// stdin writes go to the raw connection.
+	if _, err := st.Write([]byte("whoami\n")); err != nil {
+		t.Fatalf("stream Write: %v", err)
+	}
+
+	// Resize hits the daemon endpoint.
+	if err := st.Resize(context.Background(), 40, 120); err != nil {
+		t.Fatalf("stream Resize: %v", err)
+	}
+
+	// Wait reports the exec exit code.
+	code, err := st.Wait(context.Background())
+	if err != nil {
+		t.Fatalf("stream Wait: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("Wait exit code = %d, want 0", code)
 	}
 }
 

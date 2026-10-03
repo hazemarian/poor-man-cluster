@@ -181,6 +181,7 @@ func serviceJSONList(svcs []ServiceSummary) []map[string]any {
 			"update_state":  s.UpdateState,
 			"update_error":  s.UpdateError,
 			"updated":       s.Updated,
+			"node":          s.Node,
 		})
 	}
 	return out

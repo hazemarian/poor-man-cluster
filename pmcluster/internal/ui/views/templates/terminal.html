@@ -1,0 +1,131 @@
+{{define "terminal"}}
+<!doctype html>
+<html lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="/web/static/favicon.svg" type="image/svg+xml">
+  <title>{{T "terminal.title"}} · {{T "app.title"}}</title>
+  <script>
+    // Applied before first paint so the terminal matches the saved theme.
+    (function () {
+      try {
+        var t = localStorage.getItem('pmc_theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/web/static/fonts.css">
+  <link rel="stylesheet" href="/web/static/base.css">
+  <link rel="stylesheet" href="/web/static/components.css">
+  <link rel="stylesheet" href="/web/static/patterns.css">
+  <link rel="stylesheet" href="/web/static/xterm.css">
+  <script src="/web/static/xterm.min.js" defer></script>
+  <script src="/web/static/preferences.js" defer></script>
+</head>
+<body class="terminal-body">
+<main class="terminal-doc">
+  <header class="terminal-bar">
+    <a class="terminal-back" href="{{WebBase}}/stacks/{{.Stack}}">{{icon "arrow-left"}} {{T "terminal.back"}}</a>
+    <span class="terminal-heading mono iso" dir="ltr">{{.Stack}} / {{.Service}}</span>
+    <span class="terminal-version muted num" dir="ltr">{{.Version}}</span>
+  </header>
+  <div id="term" class="terminal-host"></div>
+  <div id="term-status" class="terminal-status muted" hidden></div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var ws = null;
+  var term = null;
+  var termEl = document.getElementById('term');
+  var statusEl = document.getElementById('term-status');
+
+  function setStatus(msg, bad) {
+    statusEl.textContent = msg;
+    statusEl.hidden = !msg;
+    statusEl.classList.toggle('bad', !!bad);
+  }
+
+  function sendResize() {
+    if (ws && ws.readyState === WebSocket.OPEN && term) {
+      ws.send(JSON.stringify({type: 'resize', rows: term.rows, cols: term.cols}));
+    }
+  }
+
+  // Fit the terminal to its container: compute cols/rows from the host box
+  // using the current character cell size, then tell both xterm and the
+  // server (via a resize control frame).
+  function fit() {
+    if (!term) return;
+    var w = termEl.clientWidth, h = termEl.clientHeight;
+    if (!w || !h) return;
+    var dims = term._core ? term._core._renderService.dimensions : null;
+    if (!dims || !dims.actualCellWidth || !dims.actualCellHeight) return;
+    var cols = Math.max(2, Math.floor(w / dims.actualCellWidth));
+    var rows = Math.max(1, Math.floor(h / dims.actualCellHeight));
+    term.resize(cols, rows);
+    sendResize();
+  }
+
+  function connect() {
+    // The server renders the correct ws/wss URL for the current request.
+    var url = {{printf "%q" .WSURL}};
+    if (!/^wss?:\/\//.test(url)) {
+      url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + url;
+    }
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = function () { setStatus(''); setTimeout(fit, 30); };
+    ws.onmessage = function (ev) {
+      if (ev.data instanceof ArrayBuffer) {
+        term.write(new Uint8Array(ev.data));
+        return;
+      }
+      try {
+        var msg = JSON.parse(ev.data);
+        if (msg.type === 'error') {
+          setStatus(msg.error || '{{T "terminal.failed"}}', true);
+        } else if (msg.type === 'exit') {
+          setStatus('{{T "terminal.exited"}} ' + msg.code, false);
+        }
+      } catch (e) {}
+    };
+    ws.onclose = function () {
+      if (!statusEl.hidden) return;
+      setStatus('{{T "terminal.closed"}}', true);
+    };
+    ws.onerror = function () { setStatus('{{T "terminal.failed"}}', true); };
+  }
+
+  if (!window.Terminal) {
+    setStatus('{{T "terminal.load_failed"}}', true);
+    return;
+  }
+
+  term = new Terminal({
+    convertEol: true,
+    cursorBlink: true,
+    fontSize: 13,
+    scrollback: 5000,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    theme: { background: '#0d1117', foreground: '#e6edf3' }
+  });
+  term.open(termEl);
+  term.onData(function (data) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
+  });
+  term.onResize(function () { sendResize(); });
+  window.addEventListener('resize', function () { fit(); });
+
+  connect();
+})();
+</script>
+</body>
+</html>
+{{end}}

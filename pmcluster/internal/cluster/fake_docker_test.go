@@ -26,6 +26,7 @@ type fakeDocker struct {
 	secrets  map[string]runtime.SecretSpec
 	configs  map[string]runtime.ConfigSpec
 	services map[string]runtime.Service
+	nodes    []runtime.Node
 
 	// Removal tracking — appended to on each Remove call.
 	removedSecrets  []string
@@ -146,6 +147,9 @@ func (f *fakeDocker) ServiceRestart(_ context.Context, _ string) error { return 
 func (f *fakeDocker) ServiceExec(_ context.Context, _ string, _ []string) (*runtime.ExecResult, error) {
 	return nil, nil
 }
+func (f *fakeDocker) ServiceExecAttach(_ context.Context, _ string, _ []string, _, _ uint) (runtime.ExecStream, error) {
+	return nil, nil
+}
 
 func (f *fakeDocker) SecretRemove(_ context.Context, name string) error {
 	if f.secretRemoveErr != nil {
@@ -219,7 +223,7 @@ func (f *fakeDocker) ConfigInspect(_ context.Context, name string) (runtime.Conf
 	return runtime.ConfigInspectResult{}, fmt.Errorf("config %q not found", name)
 }
 
-func (f *fakeDocker) NodeList(_ context.Context) ([]runtime.Node, error) { return nil, nil }
+func (f *fakeDocker) NodeList(_ context.Context) ([]runtime.Node, error) { return f.nodes, nil }
 func (f *fakeDocker) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
 	return runtime.JoinTokens{}, nil
 }

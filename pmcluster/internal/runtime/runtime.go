@@ -7,6 +7,7 @@ package runtime
 
 import (
 	"context"
+	"io"
 	"time"
 )
 
@@ -55,6 +56,13 @@ type Client interface {
 	// non-interactive. Returns a clear error when the service has no task
 	// reachable from this node.
 	ServiceExec(ctx context.Context, serviceID string, argv []string) (*ExecResult, error)
+
+	// ServiceExecAttach starts an INTERACTIVE exec session (TTY, stdin
+	// attached) in a running task's container and returns a bidirectional
+	// stream. The caller owns the stream: it must Close it when done. The
+	// returned error is clear when the service has no task reachable from
+	// this node. rows/cols seed the initial terminal size (0 = 80x24).
+	ServiceExecAttach(ctx context.Context, serviceID string, argv []string, rows, cols uint) (ExecStream, error)
 
 	SecretList(ctx context.Context, labelKey, labelValue string) ([]string, error)
 
@@ -157,6 +165,7 @@ type Service struct {
 	UpdatedAt    int64
 	UpdateState  string // swarm UpdateStatus.State: "updating" | "paused" | "completed" | "rollback..." | "" (no update in flight)
 	UpdateError  string // the orchestrator's reason for pausing/rolling back ("" when none)
+	Node         string // NodeLabel: the node hostname the placement pin targets ("" when unconstrained/role-based)
 }
 
 // ServiceInspectResult is a read-only snapshot of one cluster service.
@@ -189,6 +198,21 @@ type ExecResult struct {
 	ExitCode int
 	Stdout   string
 	Stderr   string
+}
+
+// ExecStream is a live, interactive exec session: a raw duplex byte stream
+// to the process's TTY (stdin in, stdout/stderr out, no multiplexing).
+// Resize requests a terminal size change; Wait blocks until the process
+// exits and returns its exit code. Implementations must be safe for
+// concurrent Read/Write/Resize.
+type ExecStream interface {
+	io.ReadWriteCloser
+	// Resize asks the TTY to change dimensions (rows/cols). Best-effort:
+	// implementations should tolerate engines that ignore it.
+	Resize(ctx context.Context, rows, cols uint) error
+	// Wait blocks until the exec session ends and returns its exit code.
+	// A closed stream (Close) unblocks Wait with the session's final code.
+	Wait(ctx context.Context) (int, error)
 }
 
 // Node describes one swarm node; IsLeader identifies the Raft leader the
@@ -230,3 +254,10 @@ type Event struct {
 // network, volume) created by `docker stack deploy` for a stack. VolumeList
 // filters on it to find a stack's named volumes for teardown.
 const StackNamespaceLabel = "com.docker.stack.namespace"
+
+// NodeLabel is stamped on every deployed service and names the node the
+// service's placement constraint targets (a hostname pin, e.g. an
+// auto-resolved storage node). It is empty when the service is unconstrained
+// or role-based (node.role == manager/worker), so the UI can display where
+// a service runs without re-querying the swarm.
+const NodeLabel = "io.pmcluster.node"

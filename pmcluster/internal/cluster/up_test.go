@@ -214,3 +214,63 @@ func TestUp_PreflightFailure_TouchesNothing(t *testing.T) {
 		t.Errorf("stacks deployed despite preflight failure: %v", deployer.deployedStacks)
 	}
 }
+
+// TestUp_DefaultStorageNodeIsLeader asserts cluster up records the leader's
+// hostname as the default storage_nodes value when none is configured — the
+// main node is the storage node by default.
+func TestUp_DefaultStorageNodeIsLeader(t *testing.T) {
+	dir := t.TempDir()
+	certPath := writeTempFile(t, dir, "cert.pem", []byte("CERT"))
+	keyPath := writeTempFile(t, dir, "key.pem", []byte("KEY"))
+
+	deps, f, _ := newUpDeps(t)
+	f.nodes = []runtime.Node{
+		{Hostname: "nextrum-sy-1", Role: "manager", IsLeader: true, Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-2", Role: "worker", Status: "ready", Availability: "active"},
+	}
+
+	if _, err := Up(context.Background(), deps, UpInput{
+		Domain:                "test.example.com",
+		CertPath:              certPath,
+		KeyPath:               keyPath,
+		OpenObserveAdminEmail: "ops@example.com",
+	}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	got := deps.Store.GetSettingDefault(context.Background(), SettingStorageNodes(), "")
+	if got != "nextrum-sy-1" {
+		t.Errorf("default storage_nodes = %q, want the leader hostname nextrum-sy-1", got)
+	}
+}
+
+// TestUp_StorageNodesPreserved asserts an operator-configured storage_nodes
+// list is NOT clobbered by cluster up.
+func TestUp_StorageNodesPreserved(t *testing.T) {
+	dir := t.TempDir()
+	certPath := writeTempFile(t, dir, "cert.pem", []byte("CERT"))
+	keyPath := writeTempFile(t, dir, "key.pem", []byte("KEY"))
+
+	deps, f, _ := newUpDeps(t)
+	f.nodes = []runtime.Node{
+		{Hostname: "nextrum-sy-1", Role: "manager", IsLeader: true, Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-2", Role: "worker", Status: "ready", Availability: "active"},
+	}
+	if err := deps.Store.SetSetting(context.Background(), SettingStorageNodes(), "node-a,node-b"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+
+	if _, err := Up(context.Background(), deps, UpInput{
+		Domain:                "test.example.com",
+		CertPath:              certPath,
+		KeyPath:               keyPath,
+		OpenObserveAdminEmail: "ops@example.com",
+	}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	got := deps.Store.GetSettingDefault(context.Background(), SettingStorageNodes(), "")
+	if got != "node-a,node-b" {
+		t.Errorf("storage_nodes clobbered by cluster up: %q, want node-a,node-b", got)
+	}
+}

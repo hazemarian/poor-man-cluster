@@ -199,7 +199,24 @@ func New(d Deps) http.Handler {
 		}
 	})
 
-	return otelhttp.NewHandler(r, "pmcluster.http")
+	base := otelhttp.NewHandler(r, "pmcluster.http")
+
+	// The interactive-exec websocket endpoint CANNOT live inside the chi
+	// router: httpStatusSpan's statusRecorder and the otelhttp wrapper do not
+	// implement http.Hijacker, which gorilla's Upgrade requires. Dispatch it
+	// at the top level — same auth chain (Bearer + stack scope guard), but a
+	// real http.ResponseWriter.
+	if d.Services != nil && d.Lookup != nil {
+		ws := execWSHandler(d)
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if strings.HasPrefix(req.URL.Path, execWSPathPrefix) && strings.HasSuffix(req.URL.Path, execWSPathSuffix) {
+				ws.ServeHTTP(w, req)
+				return
+			}
+			base.ServeHTTP(w, req)
+		})
+	}
+	return base
 }
 
 // statusRecorder captures the HTTP status code written by the handler so we

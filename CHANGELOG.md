@@ -4,6 +4,69 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.141 (2026-10-03)
+
+- **Interactive `docker exec -it` over websocket (L3) — browser terminals.**
+  The console now ships a real terminal into any service container:
+  - **Daemon endpoint** `GET /api/services/{stack}/{service}/exec/ws`
+    (`internal/server/execws.go`): Bearer-auth + stack-scope guard, runs an
+    interactive TTY exec (`ContainerExecCreate{Tty}` + hijack) against the
+    service's running task, and pumps frames — binary in = stdin, binary out
+    = raw TTY output, `{"type":"resize",rows,cols}` text controls, and a
+    final `{"type":"exit","code":N}` frame. `?cmd=` picks the program
+    (default `sh`); `?rows=`/`?cols=` seed the size. Dispatched **outside**
+    the `otelhttp`/status-span wrappers (neither implements
+    `http.Hijacker`).
+  - **New runtime port** `runtime.ServiceExecAttach` +
+    `runtime.ExecStream` (Read/Write/Resize/Wait with live exit-code
+    polling); Docker adapter does the exec hijack; `services.ExecAttacher`
+    optional interface so the remote adapter is untouched.
+  - **Console**: `GET /web/stacks/{name}/terminal?service=X` standalone
+    xterm.js page (vendored, no CDN) and `.../terminal/ws` relay that
+    bridges the browser connection to the daemon with the server-side API
+    token (the browser never sees it). Operator role only. A **Terminal**
+    button on every service row in the stack detail + services tables
+    (Arabic labels included).
+  - E2E-verified style tests: docker TTY attach (raw hijack), daemon WS
+    handler (auth + frame pump + resize + exit frame), console relay round
+    trip (browser→console→daemon→console→browser), page render. **Bug found
+    by tests:** `execStream.done` channel was never initialized → Close
+    panic; fixed.
+
+## v0.2.140 (2026-10-03)
+
+- **`pmcluster join --storage-node` — mark a joining node as a storage node.**
+  New opt-in flag on `join`: after joining the Swarm, the node's hostname is
+  added to the manager's `storage_nodes` cluster setting (reached over ssh), so
+  round-robin placement can spread stateful stacks onto it too. **Workers
+  qualify — storage is not leader-only.** Best-effort: if the ssh registration
+  fails the join still succeeds and prints the manual
+  `pmcluster cluster settings set storage_nodes=...` command to run instead.
+- **The main node is a storage node by default.** `cluster up` now writes the
+  leader's hostname into `storage_nodes` when the setting is empty, so a
+  fresh cluster pins every stateful stack to the main node from day one.
+  An operator-configured list is never clobbered.
+- **Every service carries an `io.pmcluster.node` label** naming the node its
+  placement pin targets (a resolved storage node / hostname pin; role-based and
+  unconstrained services carry none). The console **Services** table, the
+  **stack detail** services panel, the service card, and `pmcluster service ps`
+  all display this node column — you can see where every stateful service runs
+  at a glance (UI labels in English + Arabic).
+- **Live `storage_nodes` refresh.** The daemon's settings hook hot-swaps the
+  storage-node list when `storage_nodes` changes (no restart); the next
+  reconcile re-renders and redeploys affected stacks.
+
+## v0.2.139.1 (2026-10-03)
+
+- **Fix: worker-node daemon crash at startup (control-plane restore).** The L2
+  config-based restore passed the Docker client into the startup
+  `ensureControlPlaneFresh` check; on a worker node Docker answers
+  "This node is not a swarm manager", which is not the sentinel error the code
+  expected, so the daemon treated it as fatal and exited (systemd FAILURE).
+  `internal/controlplane` now detects the not-a-swarm-manager error and falls
+  back to the tarball path (`Restore` → `ErrNoSnapshots`, `Snapshot` → no-op),
+  so worker daemons start cleanly again. Deployed to the nextrum-sy-2 worker.
+
 ## v0.2.139 (2026-10-03)
 
 - **`storage_nodes` setting + round-robin placement for stateful stacks (P3).**

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/refs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
 
@@ -46,6 +47,12 @@ const (
 	// opts out of filelog scraping (skip_filelog: true). The OTel
 	// collector's filter processor drops these logs.
 	labelSkipFilelog = "io.pmcluster.skip_filelog"
+
+	// labelNode re-uses runtime.NodeLabel: the hostname the service's
+	// placement pin targets (an auto-resolved storage node). Kept here as a
+	// local alias so the compose backend can reference it without reaching
+	// into runtime everywhere.
+	labelNode = runtime.NodeLabel
 )
 
 // defaultWriter is the backend targeted when no writer is supplied: the
