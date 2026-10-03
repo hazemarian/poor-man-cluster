@@ -219,6 +219,10 @@ func homeEnv(homeDir string) []string {
 	env := []string{
 		"HOME=" + homeDir,
 		"PATH=" + os.Getenv("PATH"),
+		// Tests start their own foreground daemon; never let `cluster up` /
+		// `join` start a systemd daemon that could restore + re-snapshot
+		// control-plane state on the shared swarm (clobbering a fresh token).
+		"PMCLUSTER_SKIP_DAEMON=1",
 	}
 	for _, k := range []string{
 		"DOCKER_HOST",

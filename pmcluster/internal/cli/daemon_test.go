@@ -201,3 +201,23 @@ func TestEnsureDaemonRunning_FallsBackToRootDataDir(t *testing.T) {
 		t.Errorf("unit must run as root when only /root/.pmcluster holds state:\n%s", wrote)
 	}
 }
+
+// TestEnsureDaemonRunning_SkipEnv verifies the PMCLUSTER_SKIP_DAEMON escape
+// hatch: e2e harnesses start their own foreground daemon and must be able to
+// suppress the systemd auto-start on Linux CI (a stray systemd daemon on the
+// shared swarm would restore + re-snapshot control-plane state with a fresh
+// timestamp and clobber a just-minted admin token).
+func TestEnsureDaemonRunning_SkipEnv(t *testing.T) {
+	t.Setenv("PMCLUSTER_SKIP_DAEMON", "1")
+	hostOS = "linux"
+	hasSystemctl = func() bool { return true }
+	// If the guard is missing, this would try to write /etc/... via sudo and
+	// fail on non-root dev hosts — a nil return + hint proves the skip fired.
+	var out bytes.Buffer
+	if err := ensureDaemonRunning(&out); err != nil {
+		t.Fatalf("ensureDaemonRunning with PMCLUSTER_SKIP_DAEMON=1: %v", err)
+	}
+	if !strings.Contains(out.String(), "PMCLUSTER_SKIP_DAEMON set") {
+		t.Errorf("output missing skip hint:\n%s", out.String())
+	}
+}

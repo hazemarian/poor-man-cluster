@@ -87,6 +87,11 @@ func TestTerminalExecE2E(t *testing.T) {
 	})
 
 	// Dedicated daemon on a free port — the exec WS endpoint lives here.
+	// The swarm is shared across tests in one run, so leftover control-plane
+	// state configs from an earlier test's cluster up must be purged first:
+	// otherwise the daemon's startup restore can pull a stale snapshot whose
+	// users table lacks this test's freshly-minted admin token (→ 401).
+	removeControlPlaneStateConfigs(t, ctx)
 	addr := freePort(t)
 	daemon := exec.Command(binaryPath, "serve")
 	daemon.Stdout = os.Stdout
@@ -241,6 +246,31 @@ func waitServiceRunning(t *testing.T, ctx context.Context, service string, timeo
 		time.Sleep(2 * time.Second)
 	}
 	t.Fatalf("service %s never reached Running within %s", service, timeout)
+}
+
+// removeControlPlaneStateConfigs best-effort removes leftover pmcluster_state_*
+// / pmcluster_state_key_* Docker configs left on the shared swarm by earlier
+// tests. Without this, a fresh daemon's startup control-plane restore can pick
+// a stale snapshot whose snapshot-at is newer than the just-initialised local
+// data.db, replacing the freshly-minted admin user (→ 401 on exec ws dial).
+func removeControlPlaneStateConfigs(t *testing.T, ctx context.Context) {
+	t.Helper()
+	out := strings.TrimSpace(mustDockerRun(t, ctx, "config", "ls",
+		"--filter", "label=io.pmcluster.managed=true",
+		"--format", "{{.Name}}"))
+	if out == "" {
+		return
+	}
+	for _, name := range strings.Fields(out) {
+		if !strings.HasPrefix(name, "pmcluster_state_") {
+			continue
+		}
+		if _, err := dockerRun(ctx, "config", "rm", name); err != nil {
+			t.Logf("remove leftover state config %s (best-effort): %v", name, err)
+		} else {
+			t.Logf("removed leftover state config %s", name)
+		}
+	}
 }
 
 // rawDialStatus performs a websocket upgrade without auth and returns the HTTP

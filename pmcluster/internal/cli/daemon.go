@@ -73,6 +73,14 @@ func daemonExecStart(exe string) string {
 // Executed from `pmcluster cluster up`, `pmcluster cluster update` and
 // `pmcluster join`, so install.sh no longer needs to manage the service.
 func ensureDaemonRunning(out io.Writer) error {
+	if os.Getenv("PMCLUSTER_SKIP_DAEMON") != "" {
+		// Test/e2e escape hatch: the harness starts its own foreground
+		// daemon, and a stray systemd daemon on the same swarm would
+		// restore + re-snapshot control-plane state with a fresh timestamp
+		// (clobbering a just-minted admin token in shared-swarm tests).
+		fmt.Fprintln(out, "  (PMCLUSTER_SKIP_DAEMON set — start the daemon with: pmcluster serve)")
+		return nil
+	}
 	if hostOS != "linux" {
 		fmt.Fprintln(out, "  (non-Linux host — start the daemon with: pmcluster serve)")
 		return nil
