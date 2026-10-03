@@ -44,21 +44,21 @@ type deployRecord struct {
 }
 
 func (r *recordingDeployer) DeployStack(_ context.Context, name string, composeYAML []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.deployErr != nil {
 		return r.deployErr
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.deployed = append(r.deployed, deployRecord{Name: name, YAML: string(composeYAML)})
 	return nil
 }
 
 func (r *recordingDeployer) DeployStackNoPrune(_ context.Context, name string, composeYAML []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.deployErr != nil {
 		return r.deployErr
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.deployed = append(r.deployed, deployRecord{Name: name, YAML: string(composeYAML)})
 	return nil
 }
@@ -89,6 +89,15 @@ func (r *recordingDeployer) deployedLen() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.deployed)
+}
+
+// setDeployErr installs a deploy error that the next DeployStack /
+// DeployStackNoPrune call returns (mutex-guarded: the apply runs in a
+// background goroutine).
+func (r *recordingDeployer) setDeployErr(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deployErr = err
 }
 
 // deployedNameAt returns the stack name of the i-th deploy call.
@@ -569,7 +578,7 @@ func TestHandlerReceive(t *testing.T) {
 
 	t.Run("valid HMAC + valid JSON, apply fails in the background — 202 accepted", func(t *testing.T) {
 		st, c, dep, secret := testDeps(t, sourceName)
-		dep.deployErr = errors.New("docker stack deploy failed")
+		dep.setDeployErr(errors.New("docker stack deploy failed"))
 		srv, _ := buildHandler(t, st, c, dep)
 
 		ts := time.Now().Unix()
@@ -818,8 +827,8 @@ func TestWebhookConflictFromDifferentRepo(t *testing.T) {
 	if !strings.Contains(deliveries[0].Error, "already exists from repo") {
 		t.Errorf("delivery error = %q, want 'already exists from repo'", deliveries[0].Error)
 	}
-	if len(dep.deployed) != 1 {
-		t.Errorf("deployer calls = %d, want 1 (conflict never reached the swarm)", len(dep.deployed))
+	if dep.deployedLen() != 1 {
+		t.Errorf("deployer calls = %d, want 1 (conflict never reached the swarm)", dep.deployedLen())
 	}
 }
 
@@ -879,7 +888,7 @@ func TestHandlerEmitsDeliveryMetric(t *testing.T) {
 
 	// A second receiver whose deploys always fail → server_error outcomes.
 	st2, c2, dep2, secret2 := testDeps(t, failSource)
-	dep2.deployErr = errors.New("docker stack deploy failed")
+	dep2.setDeployErr(errors.New("docker stack deploy failed"))
 	srv2, _ := buildHandler(t, st2, c2, dep2)
 
 	post := func(server *httptest.Server, source string, secret []byte, body []byte, signOK bool) int {
