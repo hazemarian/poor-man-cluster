@@ -1,6 +1,7 @@
 package backups
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,6 +13,9 @@ import (
 // HTTP exposes the on-demand volume backup pipeline over REST.
 type HTTP struct {
 	Svc Service
+	// VolumeRoot resolves the cluster's configured volume_root setting so the
+	// restore default follows the operator's layout (nil → "/var/stack/data").
+	VolumeRoot func(ctx context.Context) string
 }
 
 func (h *HTTP) Mount(r chi.Router) {
@@ -96,7 +100,14 @@ func (h *HTTP) restore(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	if body.DestRoot == "" {
-		body.DestRoot = "/var/stack/data"
+		if h.VolumeRoot != nil {
+			if vr := h.VolumeRoot(r.Context()); vr != "" {
+				body.DestRoot = vr
+			}
+		}
+		if body.DestRoot == "" {
+			body.DestRoot = "/var/stack/data"
+		}
 	}
 	n, err := h.Svc.Restore(r.Context(), id, body.DestRoot, RestoreOptions{Volume: body.Volume, FromS3: body.FromS3})
 	if err != nil {

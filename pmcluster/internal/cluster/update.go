@@ -191,6 +191,21 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil
 	})
 
+	wf.Add("Ensuring storage root directories exist", func(ctx context.Context) error {
+		// BUG-002 fix: `cluster up` created these dirs for the volume root in
+		// effect at that time; a post-up volume_root change leaves the new
+		// root missing and bind mounts get rejected ("bind source path does
+		// not exist"). Re-create them on every update so operators can move
+		// the storage root without manual mkdir + service --force.
+		if err := ensureStorageDirs(render.VolumeRoot); err != nil {
+			return err
+		}
+		if err := ensureStorageDirs(backupRootDir()); err != nil {
+			return err
+		}
+		return nil
+	})
+
 	wf.Add("TLS certificate (ACME or stored cert/key)", func(ctx context.Context) error {
 		if render.ACMEEmail != "" {
 			return nil

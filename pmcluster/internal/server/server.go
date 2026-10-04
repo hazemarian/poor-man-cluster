@@ -23,6 +23,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/certs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -170,6 +171,11 @@ func New(d Deps) http.Handler {
 		}
 		if d.Backups != nil {
 			bh := &backups.HTTP{Svc: d.Backups}
+			if d.Store != nil {
+				bh.VolumeRoot = func(ctx context.Context) string {
+					return d.Store.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), "")
+				}
+			}
 			bh.Mount(r)
 			bh.MountStackScoped(r)
 		}

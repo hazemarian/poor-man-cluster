@@ -12,6 +12,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -77,12 +78,25 @@ target volume root.`,
 func init() {
 	backupCreateCmd.Flags().Duration("timeout", 5*time.Minute, "max time to wait for the backup to finish")
 	backupListCmd.Flags().Int("limit", 20, "max rows to show (0 = all)")
-	backupRestoreCmd.Flags().String("dest-root", "/var/stack/data", "data root to restore into (<dest-root>/<stack>)")
+	backupRestoreCmd.Flags().String("dest-root", "", "data root to restore into (<dest-root>/<stack>); default: the cluster's volume_root setting (/var/stack/data when unset)")
 	backupRestoreCmd.Flags().String("volume", "", "restore only this volume (e.g. db_data); empty restores the whole run")
 	backupRestoreCmd.Flags().Bool("from-s3", false, "fetch the archive from the configured offsite S3 store even when a local copy exists")
 
 	backupCmd.AddCommand(backupCreateCmd, backupListCmd, backupBrowseCmd, backupRestoreCmd)
 	rootCmd.AddCommand(backupCmd)
+}
+
+// restoreDestRootDefault resolves the default restore root from the cluster's
+// volume_root setting (BUG-003), falling back to the manifest default when the
+// setting is unset or the store is unavailable.
+func restoreDestRootDefault(ctx context.Context) string {
+	if st, _, err := openStore(); err == nil {
+		defer st.Close()
+		if root := st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), ""); root != "" {
+			return root
+		}
+	}
+	return manifest.DefaultVolumeRoot
 }
 
 // backupS3FromSettings converts the persisted backup_s3_* settings into the
@@ -240,6 +254,13 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 	destRoot, _ := cmd.Flags().GetString("dest-root")
 	volume, _ := cmd.Flags().GetString("volume")
 	fromS3, _ := cmd.Flags().GetBool("from-s3")
+
+	// BUG-003 fix: the restore root must default to the cluster's volume_root
+	// setting (not a hardcoded /var/stack/data), or restores land in the wrong
+	// tree on clusters with a custom storage root.
+	if destRoot == "" {
+		destRoot = restoreDestRootDefault(cmd.Context())
+	}
 
 	svc, closeFn, err := backendBackups(cmd)
 	if err != nil {
