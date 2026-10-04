@@ -756,6 +756,23 @@ func (r *realClient) JoinTokens(ctx context.Context) (runtime.JoinTokens, error)
 	}, nil
 }
 
+// SetNodeLabel adds or replaces a label on a swarm node. It inspects the node
+// for its current version (optimistic concurrency) before updating the spec.
+func (r *realClient) SetNodeLabel(ctx context.Context, nodeID, key, value string) error {
+	info, _, err := r.c.NodeInspectWithRaw(ctx, nodeID)
+	if err != nil {
+		return fmt.Errorf("node inspect: %w", err)
+	}
+	if info.Spec.Labels == nil {
+		info.Spec.Labels = map[string]string{}
+	}
+	info.Spec.Labels[key] = value
+	if err := r.c.NodeUpdate(ctx, nodeID, info.Version, info.Spec); err != nil {
+		return fmt.Errorf("node update: %w", err)
+	}
+	return nil
+}
+
 func (r *realClient) SecretList(ctx context.Context, labelKey, labelValue string) ([]string, error) {
 	opts := swarm.SecretListOptions{}
 	if labelKey != "" {

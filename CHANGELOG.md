@@ -4,6 +4,25 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.147 (2026-10-04)
+
+- **feat(cluster): backups run only on storage nodes.** The volume-backup agent is
+  now constrained to nodes carrying the `pmcluster.storage=true` node label
+  (label const `runtime.StorageNodeLabel`). Three-way rendering in the backup
+  stack: `backup_all_nodes=true` → global on every node; otherwise when the
+  `storage_nodes` setting is non-empty → global constrained to
+  `node.labels.pmcluster.storage == true`; otherwise → the legacy replicated /
+  platform-node / manager fallback. The label is set automatically when the
+  default storage node is recorded at `cluster up` (leader), when
+  `pmcluster join --storage-node` registers a node, and repaired on every
+  `cluster update` so `storage_nodes` and node labels can't drift.
+- **test:** three-way backup template rendering, up default-storage labels the
+  leader, update repairs labels for every storage node, join `--storage-node`
+  also runs `docker node update --label-add pmcluster.storage=true`.
+- Requires a `docker stack deploy` of the backup stack (cluster update) to take
+  effect; OTel collector already runs `global` (one per node) and OpenObserve
+  log/metric ingestion is unchanged.
+
 ## v0.2.146 (2026-10-04)
 
 - **fix(cli): secret rotation now works for live stacks (BUG-007).** Docker Swarm

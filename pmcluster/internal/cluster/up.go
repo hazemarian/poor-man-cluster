@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
@@ -44,6 +45,24 @@ func effectiveVolumeRoot(v string) string {
 		return manifest.DefaultVolumeRoot
 	}
 	return v
+}
+
+// splitStorageNodes parses the storage_nodes cluster setting into a deduped
+// hostname list (comma-separated, whitespace-trimmed). Kept in the cluster
+// package — importing stacks would create an import cycle (stacks imports
+// cluster).
+func splitStorageNodes(raw string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		out = append(out, part)
+	}
+	return out
 }
 
 // ensureStorageDirs creates the volume root and the backup archive dir on the
@@ -306,6 +325,8 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
 			BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 			BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
+			StorageNodeConstraint:    deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "") != "",
+			StorageNodeLabel:         runtime.StorageNodeLabel,
 			PlatformNode:             loadPlatformNode(ctx, deps.Store),
 			OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
 			BackupS3:        s3b,
@@ -433,6 +454,12 @@ func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
 				if n.IsLeader && n.Hostname != "" {
 					if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), n.Hostname); err != nil {
 						return fmt.Errorf("persist %s: %w", SettingStorageNodes(), err)
+					}
+					// The default storage node must also carry the
+					// pmcluster.storage label so the backup agent (constrained
+					// to storage nodes) runs exactly where app data lives.
+					if lerr := deps.Docker.SetNodeLabel(ctx, n.ID, runtime.StorageNodeLabel, "true"); lerr != nil {
+						return fmt.Errorf("label storage node %s: %w", n.Hostname, lerr)
 					}
 					break
 				}

@@ -463,8 +463,11 @@ func TestRegisterStorageNode_AppendsAndSkips(t *testing.T) {
 		if !strings.Contains(s, `"node-2" registered as a storage node (storage_nodes=node-1,node-2)`) {
 			t.Errorf("output missing success line:\n%s", s)
 		}
-		if len(calls) != 2 {
-			t.Errorf("expected 2 ssh calls (get + set), got %d: %v", len(calls), calls)
+		if len(calls) != 3 {
+			t.Errorf("expected 3 ssh calls (get + set + label), got %d: %v", len(calls), calls)
+		}
+		if !strings.Contains(calls[2], "docker node update --label-add pmcluster.storage=true node-2") {
+			t.Errorf("expected the storage label command as the 3rd ssh call, got: %v", calls[2])
 		}
 	})
 

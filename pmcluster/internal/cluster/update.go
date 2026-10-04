@@ -172,6 +172,8 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
 			BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 			BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
+			StorageNodeConstraint:    deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "") != "",
+			StorageNodeLabel:         runtime.StorageNodeLabel,
 			PlatformNode:             loadPlatformNode(ctx, deps.Store),
 			OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
 			BackupS3:        s3b,
@@ -316,6 +318,31 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil
 	})
 
+	wf.Add("Ensuring storage-node labels match the storage_nodes setting", func(ctx context.Context) error {
+		if deps.Docker == nil {
+			return nil
+		}
+		raw := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "")
+		if raw == "" {
+			return nil
+		}
+		nodes, err := deps.Docker.NodeList(ctx)
+		if err != nil {
+			return fmt.Errorf("list swarm nodes: %w", err)
+		}
+		for _, want := range splitStorageNodes(raw) {
+			for _, n := range nodes {
+				if n.Hostname == want {
+					if err := deps.Docker.SetNodeLabel(ctx, n.ID, runtime.StorageNodeLabel, "true"); err != nil {
+						fmt.Fprintf(out, "  ⚠ could not label storage node %s (%v)\n", want, err)
+					}
+					break
+				}
+			}
+		}
+		return nil
+	})
+
 	wf.Add("Cluster update complete.", func(ctx context.Context) error { return nil })
 
 	if err := wf.Run(ctx); err != nil {
@@ -413,6 +440,8 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
 		BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 		BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
+		StorageNodeConstraint:    deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "") != "",
+		StorageNodeLabel:         runtime.StorageNodeLabel,
 		PlatformNode:             loadPlatformNode(ctx, deps.Store),
 		OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
 		BackupS3: s3b,

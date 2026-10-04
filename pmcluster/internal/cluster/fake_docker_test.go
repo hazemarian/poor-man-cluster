@@ -34,6 +34,9 @@ type fakeDocker struct {
 	removedNetworks []string
 	removedVolumes  []string
 
+	// Label tracking — appended to on each SetNodeLabel call.
+	nodeLabels []string
+
 	// Injected error overrides for specific operations.
 	networkExistsErr error
 	networkCreateErr error
@@ -224,6 +227,11 @@ func (f *fakeDocker) ConfigInspect(_ context.Context, name string) (runtime.Conf
 }
 
 func (f *fakeDocker) NodeList(_ context.Context) ([]runtime.Node, error) { return f.nodes, nil }
+
+func (f *fakeDocker) SetNodeLabel(_ context.Context, _, key, value string) error {
+	f.nodeLabels = append(f.nodeLabels, key+"="+value)
+	return nil
+}
 func (f *fakeDocker) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
 	return runtime.JoinTokens{}, nil
 }

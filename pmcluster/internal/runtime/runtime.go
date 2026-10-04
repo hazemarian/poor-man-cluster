@@ -37,6 +37,10 @@ type Client interface {
 	NodeList(ctx context.Context) ([]Node, error)
 	JoinTokens(ctx context.Context) (JoinTokens, error)
 
+	// SetNodeLabel adds or replaces a label on a swarm node (used to mark
+	// storage nodes so the backup agent can be constrained to them).
+	SetNodeLabel(ctx context.Context, nodeID, key, value string) error
+
 	// ServiceInspect returns a read-only view of one service by name or ID.
 	ServiceInspect(ctx context.Context, name string) (ServiceInspectResult, error)
 
@@ -254,6 +258,12 @@ type Event struct {
 // network, volume) created by `docker stack deploy` for a stack. VolumeList
 // filters on it to find a stack's named volumes for teardown.
 const StackNamespaceLabel = "com.docker.stack.namespace"
+
+// StorageNodeLabel is the swarm NODE label marking a node as a storage node
+// (pmcluster join --storage-node, or the cluster-up default leader). The
+// backup agent is constrained to nodes carrying this label so backups only
+// run on storage nodes.
+const StorageNodeLabel = "pmcluster.storage"
 
 // NodeLabel is stamped on every deployed service and names the node the
 // service's placement constraint targets (a hostname pin, e.g. an

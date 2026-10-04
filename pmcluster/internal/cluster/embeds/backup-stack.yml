@@ -9,6 +9,15 @@ services:
     deploy:
 [[ if .BackupAllNodes ]]
       mode: global  # <--- The Magic: Ensures 1 copy per node
+[[ else if .StorageNodeConstraint ]]
+      # One backup agent per STORAGE node (nodes carrying the
+      # pmcluster.storage label — set by `pmcluster join --storage-node`
+      # or the cluster-up default leader). Backups only run where app data
+      # actually lives, never on plain worker/manager nodes.
+      mode: global
+      placement:
+        constraints:
+          - node.labels.[[.StorageNodeLabel]] == true
 [[ else ]]
       mode: replicated
       replicas: 1

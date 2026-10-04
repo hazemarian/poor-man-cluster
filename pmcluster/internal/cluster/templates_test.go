@@ -104,6 +104,51 @@ func TestLoadComposeFile_BackupControlPlane(t *testing.T) {
 	}
 }
 
+// TestLoadComposeFile_BackupStorageNodeConstraint verifies the three-way
+// volume-backup deploy branch: BackupAllNodes → global; else
+// StorageNodeConstraint → global constrained to pmcluster.storage-labeled
+// nodes; else → replicated manager/platform-node fallback.
+func TestLoadComposeFile_BackupStorageNodeConstraint(t *testing.T) {
+	// (1) BackupAllNodes wins: global, no storage-node constraint.
+	in := RenderInput{Domain: "example.com", BackupAllNodes: true, StorageNodeConstraint: true, StorageNodeLabel: "pmcluster.storage"}
+	body := string(mustLoadBackup(t, in))
+	if !strings.Contains(body, "mode: global") {
+		t.Errorf("BackupAllNodes render should be global")
+	}
+	if strings.Contains(body, "pmcluster.storage") {
+		t.Errorf("BackupAllNodes render should not reference the storage label")
+	}
+
+	// (2) StorageNodeConstraint only: global + label constraint.
+	in2 := RenderInput{Domain: "example.com", StorageNodeConstraint: true, StorageNodeLabel: "pmcluster.storage"}
+	body2 := string(mustLoadBackup(t, in2))
+	if !strings.Contains(body2, "mode: global") {
+		t.Errorf("StorageNodeConstraint render should be global")
+	}
+	if !strings.Contains(body2, "node.labels.pmcluster.storage == true") {
+		t.Errorf("StorageNodeConstraint render missing label constraint:\n%s", body2)
+	}
+
+	// (3) Neither: replicated manager fallback, no label mention.
+	in3 := RenderInput{Domain: "example.com"}
+	body3 := string(mustLoadBackup(t, in3))
+	if !strings.Contains(body3, "mode: replicated") || !strings.Contains(body3, "node.role == manager") {
+		t.Errorf("fallback render should be replicated manager:\n%s", body3)
+	}
+	if strings.Contains(body3, "pmcluster.storage") {
+		t.Errorf("fallback render should not reference the storage label")
+	}
+}
+
+func mustLoadBackup(t *testing.T, in RenderInput) []byte {
+	t.Helper()
+	data, err := LoadComposeFile(StackBackup, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile(backup): %v", err)
+	}
+	return data
+}
+
 // TestLoadComposeFile_SubstitutesOpenObserveEmail verifies the email
 // substitution specifically in the observability stack, which uses it.
 func TestLoadComposeFile_SubstitutesOpenObserveEmail(t *testing.T) {

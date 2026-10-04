@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -597,6 +598,12 @@ func registerStorageNode(ctx context.Context, out io.Writer, sshHost, nodeHostna
 		fmt.Fprintf(out, "⚠ could not update storage_nodes on %s (%v)\n", sshHost, err)
 		manualStorageNodeHint(out, sshHost, nodeHostname, merged)
 		return
+	}
+	// Storage nodes also carry the pmcluster.storage node label so the backup
+	// agent (constrained to storage nodes) runs exactly where app data lives.
+	if _, err := sshRunFn(ctx, sshHost, "docker node update --label-add "+runtime.StorageNodeLabel+"=true "+nodeHostname); err != nil {
+		fmt.Fprintf(out, "⚠ could not set the %s label on %s (%v) — run manually:\n", runtime.StorageNodeLabel, nodeHostname, err)
+		fmt.Fprintf(out, "    ssh root@%s 'docker node update --label-add %s=true %s'\n", sshHost, runtime.StorageNodeLabel, nodeHostname)
 	}
 	fmt.Fprintf(out, "✔ %q registered as a storage node (storage_nodes=%s).\n", nodeHostname, merged)
 	fmt.Fprintln(out, "  New stateful stacks will round-robin across the storage nodes; existing")

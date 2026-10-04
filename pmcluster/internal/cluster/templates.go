@@ -236,6 +236,17 @@ type RenderInput struct {
 	// pmcluster prunes its own audit rows on the same window).
 	BackupRetentionDays int
 
+	// StorageNodeConstraint makes the volume-backup agent run as a global
+	// service constrained to nodes carrying the StorageNodeLabel (i.e. the
+	// storage_nodes setting is non-empty). Backups only run where app data
+	// actually lives — never on plain worker/manager nodes. When both
+	// BackupAllNodes and StorageNodeConstraint are set, BackupAllNodes wins.
+	StorageNodeConstraint bool
+
+	// StorageNodeLabel is the Swarm node label the backup agent matches
+	// against when StorageNodeConstraint is set (runtime.StorageNodeLabel).
+	StorageNodeLabel string
+
 	// PlatformNode pins every platform service (infra traefik, openobserve,
 	// edge console, backup agents, sso) to ONE specific node via the Swarm
 	// constraint `node.hostname == <value>`. Empty (default) keeps the role

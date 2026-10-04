@@ -88,6 +88,35 @@ func seedUpdateState(t *testing.T) (UpdateDeps, string) {
 	}, cfgDir
 }
 
+// TestUpdate_StorageNodeLabelsRepaired verifies the update step that keeps the
+// pmcluster.storage node label in sync with the storage_nodes setting: every
+// listed hostname gets the label (best-effort per-node).
+func TestUpdate_StorageNodeLabelsRepaired(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "nextrum-sy-1,nextrum-sy-2"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	// seed's fakeDocker has no nodes; give it the two hostnames.
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-2", ID: "n2", Role: "worker", Status: "ready", Availability: "active"},
+	}
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(f.nodeLabels) != 2 {
+		t.Fatalf("expected 2 SetNodeLabel calls, got %v", f.nodeLabels)
+	}
+	for _, l := range f.nodeLabels {
+		if l != runtime.StorageNodeLabel+"=true" {
+			t.Errorf("unexpected label call %q", l)
+		}
+	}
+}
+
 func TestUpdate_NoOpWhenNothingChanged(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 	res, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})

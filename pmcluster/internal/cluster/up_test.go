@@ -242,6 +242,9 @@ func TestUp_DefaultStorageNodeIsLeader(t *testing.T) {
 	if got != "nextrum-sy-1" {
 		t.Errorf("default storage_nodes = %q, want the leader hostname nextrum-sy-1", got)
 	}
+	if len(f.nodeLabels) != 1 || f.nodeLabels[0] != runtime.StorageNodeLabel+"=true" {
+		t.Errorf("expected the default storage node to be labeled %s=true, got %v", runtime.StorageNodeLabel, f.nodeLabels)
+	}
 }
 
 // TestUp_StorageNodesPreserved asserts an operator-configured storage_nodes
