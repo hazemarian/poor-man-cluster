@@ -4,6 +4,27 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.142 (2026-10-04)
+
+- **fix(cli): `WatchSwarmLeadership` re-emitted `leader-true` on every 15s poll.**
+  Found during Test Case 1 on a live single-manager cluster. After emitting
+  `leader=true` the function reset `current=false`, so every poll re-emitted
+  `true` forever. The `serve` leadership goroutine reacted by cancelling and
+  restarting the reconciler loop **and the control-plane snapshot loop every
+  15s** — meaning `pmcluster_state_*` Raft snapshots silently never ran after
+  startup (a data-loss window if the manager disk dies), plus repeated
+  `local control-plane DB is current` restore spam.
+  - Fix: the leader branch now sets `current, first = true, false` so a
+    still-leader poll stays silent; the err/standalone branch was already correct.
+  - Tests: `TestWatchSwarmLeadership_StableLeaderEmitsOnce` (one emit then
+    silence over `2*leaderPollInterval`; fails without the fix) and
+    `TestWatchSwarmLeadership_LeaderToNotLeaderReEmits` (race-safe leadership
+    flip → `false` emit after the flip).
+  - Verified live on `nxt-sw-3-w`: exactly one `became swarm leader` emit after
+    restart and a fresh snapshot at the next 5-min tick.
+- **Docs: first test report** `docs/test-reports/TC1-single-manager-bringup.md`
+  (single-manager setup, multi-service deploy, logs/metrics, UI, control plane).
+
 ## v0.2.141 (2026-10-03)
 
 - **Interactive `docker exec -it` over websocket (L3) — browser terminals.**
