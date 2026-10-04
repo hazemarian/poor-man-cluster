@@ -4,6 +4,30 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.146 (2026-10-04)
+
+- **fix(cli): secret rotation now works for live stacks (BUG-007).** Docker Swarm
+  secrets are immutable and cannot be removed while a running service references
+  them, so `pmcluster secret edit` silently updated only the DB — redeployed
+  containers kept the old value with just a WARN line. Secrets now carry a
+  `swarm_rev` counter (migration 0023); every edit bumps the revision and the CLI
+  mirrors the new value into a **versioned swarm secret** `name_v<rev>`, leaving
+  the in-use original untouched. The compose writer emits the versioned external
+  name via a `SecretNames` resolver while the container mount path stays
+  `/run/secrets/<logical-name>`. Verified empirically that `docker stack deploy`
+  honors the `name:` override on external secrets.
+- **fix(webhooks): retry policy is now live on the receive path (BUG-008).** The
+  `MaxRetries`/`RetryDelay` wiring was dead code — `receiver.go` called
+  `DeployAsync` directly and every delivery row recorded `retries:0`. The receiver
+  now goes through `DeployAsyncWithRetries` under a phase budget; synchronous
+  deploy failures are retried (2 retries, 30s apart) and the actual retry count is
+  recorded on the delivery row and in the 502 body. Background (async) apply
+  failures remain fire-and-forget and are surfaced via stack `last_error` and the
+  reconcile loop, as before.
+- **test:** store swarm_rev bump + `SwarmSecretName` cases, compose
+  `name:` override rendering, receiver retry counts (502 body + delivery row),
+  `DeployAsyncWithRetries` sync-phase retries.
+
 ## v0.2.145 (2026-10-04)
 
 - **fix(cli): control-plane restore is startup-only — the leadership goroutine no

@@ -24,6 +24,7 @@ type secretRowDTO struct {
 	Name      string `json:"name"`
 	Hash      string `json:"hash"`
 	CreatedAt int64  `json:"created_at"`
+	SwarmRev  int64  `json:"swarm_rev"`
 }
 
 type secretListDTO struct {
@@ -87,7 +88,7 @@ func (a *Secrets) List(ctx context.Context, scope, stack string) ([]secrets.Secr
 	for _, d := range out.Secrets {
 		rows = append(rows, secrets.Secret{
 			ID: d.ID, Scope: d.Scope, Stack: d.Stack, Name: d.Name,
-			Hash: d.Hash, CreatedAt: d.CreatedAt,
+			Hash: d.Hash, CreatedAt: d.CreatedAt, SwarmRev: d.SwarmRev,
 		})
 	}
 	return rows, nil

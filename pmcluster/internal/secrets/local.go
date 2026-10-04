@@ -33,7 +33,7 @@ func (s *Local) Get(ctx context.Context, name string) (*Secret, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Secret{ID: row.ID, Scope: row.Scope, Stack: row.Stack, Name: row.Name, Hash: row.Hash, CreatedAt: row.CreatedAt}, nil
+	return &Secret{ID: row.ID, Scope: row.Scope, Stack: row.Stack, Name: row.Name, Hash: row.Hash, CreatedAt: row.CreatedAt, SwarmRev: row.SwarmRev}, nil
 }
 
 func (s *Local) Reveal(ctx context.Context, name string) (string, error) {
@@ -55,7 +55,7 @@ func (s *Local) List(ctx context.Context, scope, stack string) ([]Secret, error)
 	}
 	out := make([]Secret, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, Secret{ID: r.ID, Scope: r.Scope, Stack: r.Stack, Name: r.Name, Hash: r.Hash, CreatedAt: r.CreatedAt})
+		out = append(out, Secret{ID: r.ID, Scope: r.Scope, Stack: r.Stack, Name: r.Name, Hash: r.Hash, CreatedAt: r.CreatedAt, SwarmRev: r.SwarmRev})
 	}
 	return out, nil
 }

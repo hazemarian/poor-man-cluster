@@ -212,6 +212,48 @@ func TestRetryDeployer_WrapperDropsRetryCount(t *testing.T) {
 	}
 }
 
+// TestRetryDeployAsync_RetriesSynchronousPhase covers the DeployAsync retry
+// path added for BUG-008: transient synchronous failures earn retries, the
+// count is reported, and the wrapper still delegates the fire-and-forget
+// async contract to the inner deployer.
+func TestRetryDeployAsync_RetriesSynchronousPhase(t *testing.T) {
+	boom := errors.New("docker stack deploy failed: swarm node busy")
+	dep := &scriptedDeployer{
+		failures: 1,
+		err:      boom,
+		result:   stacks.Result{StackName: "whoami-webhook", Revision: 11},
+	}
+	w := &RetryDeployer{Inner: dep, Attempts: 2, Delay: time.Millisecond}
+
+	res, retries, err := w.DeployAsyncWithRetries(context.Background(), retryTestPayload())
+	if err != nil {
+		t.Fatalf("DeployAsyncWithRetries: %v (want success on the 2nd attempt)", err)
+	}
+	if retries != 1 {
+		t.Errorf("retries = %d, want 1", retries)
+	}
+	if res == nil || res.Revision != 11 {
+		t.Errorf("result = %+v, want revision 11", res)
+	}
+	if got := dep.callCount(); got != 2 {
+		t.Errorf("inner async deploy calls = %d, want 2 (1 + 1 retry)", got)
+	}
+
+	// Exhausting the budget returns the final error and the spent count.
+	dep2 := &scriptedDeployer{failures: -1, err: boom}
+	w2 := &RetryDeployer{Inner: dep2, Attempts: 2, Delay: time.Millisecond}
+	_, retries2, err2 := w2.DeployAsyncWithRetries(context.Background(), retryTestPayload())
+	if !errors.Is(err2, boom) {
+		t.Errorf("err = %v, want the final deploy error", err2)
+	}
+	if retries2 != 2 {
+		t.Errorf("retries = %d, want 2 (budget exhausted)", retries2)
+	}
+	if got := dep2.callCount(); got != 3 {
+		t.Errorf("inner async deploy calls = %d, want 3", got)
+	}
+}
+
 // TestRetryerDefaults pins the zero-value policy: an unwired Receiver gets
 // 2 extra attempts 30s apart (production default), and a negative
 // MaxRetries turns retries off.
@@ -348,9 +390,10 @@ func TestReceiverFireAndForgetAccepted(t *testing.T) {
 	}
 }
 
-// TestReceiverServerError: a DeployAsync validation/apply-start failure
-// surfaces synchronously as 502 with an empty retry count (fire-and-forget
-// does not retry at the receiver).
+// TestReceiverServerError: a DeployAsync synchronous failure surfaces as 502
+// and is retried at the receiver under the bounded policy — the retry budget
+// is spent before the response is written and the delivery row records how
+// many attempts were actually made (BUG-008).
 func TestReceiverServerError(t *testing.T) {
 	const sourceName = "github-retry-fail"
 
@@ -368,11 +411,11 @@ func TestReceiverServerError(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if parsed["retries"] != float64(0) {
-		t.Errorf("response retries = %v, want 0", parsed["retries"])
+	if parsed["retries"] != float64(DefaultDeployRetries) {
+		t.Errorf("response retries = %v, want %d", parsed["retries"], DefaultDeployRetries)
 	}
-	if got := dep.callCount(); got != 1 {
-		t.Errorf("deploy calls = %d, want 1 (no receiver-side retry)", got)
+	if got := dep.callCount(); got != DefaultDeployRetries+1 {
+		t.Errorf("deploy calls = %d, want %d (first + retries)", got, DefaultDeployRetries+1)
 	}
 
 	ds, err := NewLocal(st, c).Deliveries(context.Background(), sourceName, 0)
@@ -386,8 +429,8 @@ func TestReceiverServerError(t *testing.T) {
 	if d.Status != "server_error" {
 		t.Errorf("status = %q, want server_error", d.Status)
 	}
-	if d.Retries != 0 {
-		t.Errorf("retries = %d, want 0", d.Retries)
+	if d.Retries != DefaultDeployRetries {
+		t.Errorf("retries = %d, want %d", d.Retries, DefaultDeployRetries)
 	}
 	if d.Error != "docker stack deploy failed: swarm node busy" {
 		t.Errorf("error = %q, want the final error message", d.Error)

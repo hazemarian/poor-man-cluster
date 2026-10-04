@@ -11,6 +11,53 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
 
+// TestTranslate_VersionedSecretName verifies the BUG-007 fix: a rotated
+// secret (swarm_rev > 1) renders as an external secret with a `name:`
+// override pointing at the versioned swarm secret <name>_v<rev>, while the
+// logical compose key and the container mount path stay unchanged.
+func TestTranslate_VersionedSecretName(t *testing.T) {
+	app := baseApp()
+	app.Secrets = []string{"db_pass"}
+	app.Services["api"].Secrets = []string{"db_pass"}
+	ir, err := BuildIR(context.Background(), app, nil)
+	if err != nil {
+		t.Fatalf("BuildIR: %v", err)
+	}
+
+	// rev 1 → plain name (no override).
+	out, err := (&ComposeWriter{}).Write(context.Background(), ir)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if strings.Contains(string(out), "name: db_pass_v2") {
+		t.Errorf("rev-1 render unexpectedly versioned:\n%s", out)
+	}
+
+	// rev 3 → name: db_pass_v3 override, logical key untouched.
+	w := &ComposeWriter{
+		SecretNames: func(_ context.Context, name string) string {
+			if name == "db_pass" {
+				return "db_pass_v3"
+			}
+			return name
+		},
+	}
+	out, err = w.Write(context.Background(), ir)
+	if err != nil {
+		t.Fatalf("Write versioned: %v", err)
+	}
+	if !strings.Contains(string(out), "name: db_pass_v3") {
+		t.Errorf("versioned render missing name: override:\n%s", out)
+	}
+	// The logical key + service reference must survive for the mount path.
+	if !strings.Contains(string(out), "external: true") {
+		t.Errorf("versioned render lost external flag:\n%s", out)
+	}
+	if !strings.Contains(string(out), "- db_pass") {
+		t.Errorf("versioned render lost service secret reference:\n%s", out)
+	}
+}
+
 // TestTranslate_DependsOnEmitsComposeParity builds a migration service that
 // depends on the db service and asserts the rendered compose carries the
 // depends_on block (plain list form) for compose parity. Startup ordering is

@@ -173,20 +173,27 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fire-and-forget: validation, provenance and revision recording are all
-	// synchronous in DeployAsync, so any validation error still surfaces here
-	// (400/502). Only the swarm apply — and its per-level health waits — runs
-	// in the background, detached from the request deadline. The delivery row
-	// is recorded synchronously as "accepted" with the new revision; the
-	// background apply re-records it (accepted, or server_error with the
-	// deploy error) when the apply settles. Long-running stacks (a cold
-	// postgres that needs minutes to become healthy) no longer hold the
-	// request open or hit the phase timeout.
-	res, err := h.Deploy.DeployAsync(context.WithoutCancel(r.Context()), p)
+	// Fire-and-forget with retry: validation, provenance and revision
+	// recording are all synchronous in DeployAsync, so any validation error
+	// still surfaces here (400/502). Those synchronous failures are retried
+	// under the bounded retry policy (BUG-008 — the policy used to be dead
+	// code on this path). Only the swarm apply — and its per-level health
+	// waits — runs in the background, detached from the request deadline.
+	//
+	// The deploy + retry phase runs on a detached context carrying the phase
+	// budget: the retry window (default 2 × 30s + 3 attempts × 60s ≈ 4min)
+	// deliberately outlives the router's per-request timeout, so the retry
+	// sequence completes and the delivery row records the real outcome even
+	// if the caller stopped waiting.
+	policy := h.retryer()
+	phaseCtx, cancelPhase := context.WithTimeout(context.WithoutCancel(r.Context()), deployPhaseBudget(policy.Attempts, policy.Delay))
+	defer cancelPhase()
+
+	res, retries, err := policy.DeployAsyncWithRetries(phaseCtx, p)
 	if err != nil {
 		record("server_error")
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "retries": 0})
-		recordDelivery("server_error", &p, err, nil, 0)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "retries": retries})
+		recordDelivery("server_error", &p, err, nil, retries)
 		return
 	}
 
@@ -196,7 +203,7 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 		"stack":    res.StackName,
 		"revision": res.Revision,
 	})
-	recordDelivery("accepted", &p, nil, res, 0)
+	recordDelivery("accepted", &p, nil, res, retries)
 }
 
 // parseTimestamp returns the unix-seconds value.  If the header is empty

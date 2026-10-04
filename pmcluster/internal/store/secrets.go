@@ -22,6 +22,23 @@ type SecretRow struct {
 	Payload   []byte
 	Hash      string
 	CreatedAt int64
+	// SwarmRev is how many times the value has been rotated. Docker swarm
+	// secrets are immutable and cannot be removed while in use, so every
+	// rotation mirrors the value into a NEW swarm secret <name>_v<rev>
+	// (rev 1 = the plain name). The compose writer references the versioned
+	// external name; the container mount path stays /run/secrets/<name>.
+	SwarmRev int64
+}
+
+// SwarmSecretName returns the Docker swarm secret name backing a DB secret
+// at a given rotation: the plain name for rev 1, <name>_v<rev> afterwards.
+// Versioning lets a rotation publish a NEW secret instead of trying to
+// mutate an immutable in-use one (BUG-007).
+func SwarmSecretName(name string, rev int64) string {
+	if rev <= 1 {
+		return name
+	}
+	return fmt.Sprintf("%s_v%d", name, rev)
 }
 
 // ErrSecretNotFound is returned by secret getters/deleters when no row matches.
@@ -58,8 +75,8 @@ func (s *Store) CreateSecret(ctx context.Context, scope, stack, name string, pay
 func (s *Store) GetSecret(ctx context.Context, name string) (*SecretRow, error) {
 	var r SecretRow
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, scope, stack, name, payload, hash, created_at FROM secrets WHERE name = ?`, name,
-	).Scan(&r.ID, &r.Scope, &r.Stack, &r.Name, &r.Payload, &r.Hash, &r.CreatedAt)
+		`SELECT id, scope, stack, name, payload, hash, created_at, swarm_rev FROM secrets WHERE name = ?`, name,
+	).Scan(&r.ID, &r.Scope, &r.Stack, &r.Name, &r.Payload, &r.Hash, &r.CreatedAt, &r.SwarmRev)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrSecretNotFound
@@ -78,7 +95,7 @@ func (s *Store) GetSecret(ctx context.Context, name string) (*SecretRow, error) 
 // secret is usable by any stack and must stay visible on every stack's page.
 func (s *Store) ListSecrets(ctx context.Context, scope, stack string) ([]*SecretRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, scope, stack, name, hash, created_at FROM secrets
+		`SELECT id, scope, stack, name, hash, created_at, swarm_rev FROM secrets
 		 WHERE (?1 = '' OR scope = ?1) AND (?2 = '' OR stack = ?2 OR (?2 != '' AND ?1 = 'service' AND stack = ''))
 		 ORDER BY scope, stack, name`, scope, stack)
 	if err != nil {
@@ -88,7 +105,7 @@ func (s *Store) ListSecrets(ctx context.Context, scope, stack string) ([]*Secret
 	var out []*SecretRow
 	for rows.Next() {
 		var r SecretRow
-		if err := rows.Scan(&r.ID, &r.Scope, &r.Stack, &r.Name, &r.Hash, &r.CreatedAt); err != nil {
+		if err := rows.Scan(&r.ID, &r.Scope, &r.Stack, &r.Name, &r.Hash, &r.CreatedAt, &r.SwarmRev); err != nil {
 			return nil, fmt.Errorf("scan secret: %w", err)
 		}
 		out = append(out, &r)
@@ -96,12 +113,14 @@ func (s *Store) ListSecrets(ctx context.Context, scope, stack string) ([]*Secret
 	return out, rows.Err()
 }
 
-// UpdateSecret replaces the ciphertext payload and hash of an existing secret,
-// keeping its scope, stack, name and created_at. Returns ErrSecretNotFound
-// when no row matched.
+// UpdateSecret replaces the ciphertext payload and hash of an existing secret
+// and bumps its swarm rotation counter (SwarmRev +1) so the CLI can mirror
+// the new value into a fresh versioned swarm secret without touching the
+// immutable in-use one (BUG-007). Keeps scope, stack, name and created_at.
+// Returns ErrSecretNotFound when no row matched.
 func (s *Store) UpdateSecret(ctx context.Context, name string, payload []byte, hash string) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE secrets SET payload = ?, hash = ? WHERE name = ?`, payload, hash, name)
+		`UPDATE secrets SET payload = ?, hash = ?, swarm_rev = swarm_rev + 1 WHERE name = ?`, payload, hash, name)
 	if err != nil {
 		return fmt.Errorf("update secret: %w", err)
 	}

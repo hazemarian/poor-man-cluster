@@ -77,6 +77,44 @@ func (r *RetryDeployer) DeployAsync(ctx context.Context, p stacks.Payload) (*sta
 	return r.Inner.DeployAsync(ctx, p)
 }
 
+// DeployAsyncWithRetries runs the underlying DeployAsync under the retry
+// policy and reports the number of retries actually performed (0..Attempts).
+// DeployAsync's synchronous portion validates, records the revision and
+// returns an error for any validation/record failure — those are the
+// retryable failures here (a busy swarm or registry can fail them
+// transiently). The background swarm apply cannot be retried from the
+// receiver: it is fire-and-forget by design, and reconcile retries it via
+// Sync. This makes the receiver's retry policy real for the synchronous
+// phase (BUG-008) instead of dead code.
+func (r *RetryDeployer) DeployAsyncWithRetries(ctx context.Context, p stacks.Payload) (*stacks.Result, int, error) {
+	return retryDeployAsync(ctx, r.Inner, p, r.Attempts, r.Delay)
+}
+
+// retryDeployAsync is the DeployAsync counterpart of retryDeploy: it runs
+// dep.DeployAsync once and, while that attempt fails, repeats it up to
+// `attempts` more times, sleeping `delay` between attempts. Returns the
+// final result, the retry count actually spent, and the final error.
+func retryDeployAsync(ctx context.Context, dep Deployer, p stacks.Payload, attempts int, delay time.Duration) (*stacks.Result, int, error) {
+	if attempts < 0 {
+		attempts = 0
+	}
+	var (
+		res     *stacks.Result
+		err     error
+		retries int
+	)
+	for {
+		res, err = dep.DeployAsync(ctx, p)
+		if err == nil || retries >= attempts {
+			return res, retries, err
+		}
+		if !waitBeforeRetry(ctx, delay) {
+			return res, retries, err
+		}
+		retries++
+	}
+}
+
 // DeployWithRetries runs the underlying Deployer under the retry policy and
 // also reports the number of retries actually performed (0..Attempts).
 func (r *RetryDeployer) DeployWithRetries(ctx context.Context, p stacks.Payload) (*stacks.Result, int, error) {

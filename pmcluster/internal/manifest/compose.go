@@ -68,4 +68,9 @@ type composeNetwork struct {
 
 type composeSecret struct {
 	External bool `json:"external,omitempty"`
+	// Name overrides the swarm secret the compose key references. Set when a
+	// secret has been rotated (swarm_rev > 1): the value lives in a NEW
+	// versioned swarm secret (<name>_v<rev>) while the container mount path
+	// stays /run/secrets/<logical-name> (BUG-007).
+	Name string `json:"name,omitempty"`
 }

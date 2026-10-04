@@ -129,6 +129,25 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (*Result, error) {
 	return s.deploy(ctx, p, false)
 }
 
+// secretExternalName maps a logical secret name to the actual Docker swarm
+// secret to mount: the versioned <name>_v<rev> name once the secret has been
+// rotated (swarm_rev > 1), the plain name otherwise. Rotated secrets can never
+// replace the immutable in-use swarm secret, so the compose writer references
+// the NEW version while the container mount path stays /run/secrets/<name>
+// (BUG-007). Falls back to the plain name when the store has no row (unmanaged
+// external secrets) or on lookup errors — a broken reference must surface at
+// deploy time, not be silently mapped away.
+func (s *Service) secretExternalName(ctx context.Context, name string) string {
+	if s.Store == nil {
+		return name
+	}
+	row, err := s.Store.GetSecret(ctx, name)
+	if err != nil {
+		return name
+	}
+	return store.SwarmSecretName(name, row.SwarmRev)
+}
+
 // DeployAsync validates and records the revision synchronously, then applies
 // the swarm deploy in a background goroutine (detached from the caller's
 // context) so the caller can return 202 immediately. Long-running stacks
@@ -243,7 +262,7 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 		if err := s.resolvePlacements(ctx, app.Name, built); err != nil {
 			return fmt.Errorf("translate: %w", err)
 		}
-		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode}
+		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode, SecretNames: s.secretExternalName}
 		y, err := writer.Write(ctx, built)
 		if err != nil {
 			return fmt.Errorf("translate: %w", err)
@@ -375,7 +394,7 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 					err = s.resolvePlacements(ctx, stackName, built)
 				}
 				if err == nil {
-					rendered, err = (&manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode}).Write(ctx, built)
+					rendered, err = (&manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode, SecretNames: s.secretExternalName}).Write(ctx, built)
 				}
 				if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
 					// No drift: the stored manifest still renders to the
@@ -452,7 +471,7 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 			return fmt.Errorf("docker stack deploy: %w", err)
 		}
 	} else {
-		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode}
+		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode, SecretNames: s.secretExternalName}
 		for i, level := range levels {
 			levelYAML, err := writer.Write(ctx, ir.Subset(level))
 			if err != nil {
@@ -727,7 +746,7 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 		if err := s.resolvePlacements(ctx, stackName, built); err != nil {
 			return fmt.Errorf("rollback source %d placement: %w", sourceRevision, err)
 		}
-		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode}
+		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode, SecretNames: s.secretExternalName}
 		y, err := writer.Write(ctx, built)
 		if err != nil {
 			return fmt.Errorf("rollback source %d no longer renders: %w", sourceRevision, err)

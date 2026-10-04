@@ -35,6 +35,13 @@ type ComposeWriter struct {
 	// value disables the auto-pin (services with volumes then schedule
 	// anywhere, exactly as today).
 	PinNode string
+	// SecretNames maps a logical secret name to the actual Docker swarm
+	// secret to reference. Nil keeps the logical name (unmanaged/external
+	// secrets). Wired from the store's swarm_rev so rotated secrets reference
+	// their versioned swarm secret (<name>_v<rev>) instead of the immutable
+	// in-use one (BUG-007). The container mount path is unaffected — Docker
+	// mounts the override under /run/secrets/<logical-name>.
+	SecretNames func(ctx context.Context, name string) string
 }
 
 // DefaultVolumeRoot is where every container volume lands unless the
@@ -95,7 +102,13 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 	if len(ir.Secrets) > 0 {
 		cf.Secrets = map[string]*composeSecret{}
 		for _, s := range ir.Secrets {
-			cf.Secrets[s] = &composeSecret{External: true}
+			cs := &composeSecret{External: true}
+			if w.SecretNames != nil {
+				if n := w.SecretNames(ctx, s); n != "" && n != s {
+					cs.Name = n
+				}
+			}
+			cf.Secrets[s] = cs
 		}
 	}
 

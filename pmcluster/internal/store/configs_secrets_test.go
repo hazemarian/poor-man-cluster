@@ -311,4 +311,56 @@ func TestSecretsCRUD(t *testing.T) {
 			t.Errorf("DeleteSecret twice = %v, want ErrSecretNotFound", err)
 		}
 	})
+
+	t.Run("update bumps swarm_rev (BUG-007)", func(t *testing.T) {
+		if err := s.UpdateSecret(ctx, "db_password", []byte("newseal"), "newhash"); err != nil {
+			t.Fatalf("UpdateSecret: %v", err)
+		}
+		r, err := s.GetSecret(ctx, "db_password")
+		if err != nil {
+			t.Fatalf("GetSecret after update: %v", err)
+		}
+		if r.SwarmRev != 2 {
+			t.Errorf("swarm_rev = %d, want 2 after one edit", r.SwarmRev)
+		}
+		if r.Hash != "newhash" || string(r.Payload) != "newseal" {
+			t.Errorf("updated row = %+v, want new payload/hash", r)
+		}
+		// List must expose the rev too (drives the compose writer + CLI).
+		rows, err := s.ListSecrets(ctx, "", "")
+		if err != nil {
+			t.Fatalf("ListSecrets: %v", err)
+		}
+		for _, row := range rows {
+			if row.Name == "db_password" && row.SwarmRev != 2 {
+				t.Errorf("ListSecrets row.SwarmRev = %d, want 2", row.SwarmRev)
+			}
+		}
+		// A second edit bumps again.
+		if err := s.UpdateSecret(ctx, "db_password", []byte("seal3"), "hash3"); err != nil {
+			t.Fatalf("UpdateSecret 2: %v", err)
+		}
+		r2, _ := s.GetSecret(ctx, "db_password")
+		if r2.SwarmRev != 3 {
+			t.Errorf("swarm_rev = %d, want 3 after two edits", r2.SwarmRev)
+		}
+	})
+
+	t.Run("SwarmSecretName helper (BUG-007)", func(t *testing.T) {
+		cases := []struct {
+			name string
+			rev  int64
+			want string
+		}{
+			{"app_pass", 1, "app_pass"},
+			{"app_pass", 0, "app_pass"},
+			{"app_pass", 2, "app_pass_v2"},
+			{"app_pass", 3, "app_pass_v3"},
+		}
+		for _, c := range cases {
+			if got := SwarmSecretName(c.name, c.rev); got != c.want {
+				t.Errorf("SwarmSecretName(%q, %d) = %q, want %q", c.name, c.rev, got, c.want)
+			}
+		}
+	})
 }

@@ -35,6 +35,7 @@ type secretRow struct {
 	Name      string `json:"name"`
 	Hash      string `json:"hash"`
 	CreatedAt int64  `json:"created_at"`
+	SwarmRev  int64  `json:"swarm_rev"`
 }
 
 func (s *HTTP) list(res http.ResponseWriter, req *http.Request) {

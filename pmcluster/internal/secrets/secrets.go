@@ -16,6 +16,10 @@ type Secret struct {
 	Name      string
 	Hash      string
 	CreatedAt int64
+	// SwarmRev is the rotation count (1 = first value). The CLI mirrors the
+	// value into the swarm secret named store.SwarmSecretName(name, rev),
+	// keeping rotations out of the immutable in-use swarm secret (BUG-007).
+	SwarmRev int64
 }
 
 // Service is the business entry point for the secrets store. Get and List
