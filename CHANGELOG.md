@@ -4,6 +4,18 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.151 (2026-10-04)
+
+- **fix(cli): `credentials rotate` now applies the rotation immediately (BUG-012).** Rotating a
+  credential (e.g. `openobserve_admin`) updated the DB row + re-materialized the swarm secret,
+  but dependent configs (`pmcluster_otel_config` embeds the OpenObserve basic-auth header) and
+  stacks (`observability` — OO reads `ZO_ROOT_USER_PASSWORD` at start) were only refreshed by a
+  manual `cluster update`, so the rotation had no runtime effect until then. `runCredsRotate` now
+  runs the cluster-update pipeline after a successful rotate (via an injectable `credsUpdateFn`
+  seam + `applyRotatedCredential` helper), mirroring the per-host cert refresh. Regression tests
+  `TestApplyRotatedCredential_TriggersClusterUpdate` / `TestApplyRotatedCredential_ErrorSurfaces`
+  in `internal/cli/credentials_test.go`. Found live during Test Case 11 (credentials rotate).
+
 ## v0.2.150 (2026-10-04)
 
 - **fix(cluster): per-host certs are now mounted into the Traefik service (BUG-011).** The

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,12 +10,17 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
+
+// credsUpdateFn is the cluster update pipeline invoked after a credential
+// rotation (BUG-012). Package var so tests can stub it.
+var credsUpdateFn = cluster.Update
 
 var credsCmd = &cobra.Command{
 	Use:   "credentials",
@@ -124,6 +130,14 @@ func runCredsShow(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// applyRotatedCredential runs the cluster update pipeline so the rotated
+// credential's new value reaches dependent rendered configs (OTel basic-auth
+// header) and stacks (observability) immediately (BUG-012). Returns the
+// update result. Package-var seam credsUpdateFn lets tests stub it.
+func applyRotatedCredential(ctx context.Context, deps cluster.UpdateDeps, in cluster.UpdateInput) (*cluster.UpdateResult, error) {
+	return credsUpdateFn(ctx, deps, in)
+}
+
 func runCredsRotate(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	st, cfg, err := openStore()
@@ -166,6 +180,22 @@ func runCredsRotate(cmd *cobra.Command, args []string) error {
    user:  %s
    secret: %s
 `, rotated.Name, rotated.Password, rotated.Username, rotated.SwarmSecretName)
+
+	// BUG-012: rotation only swaps the DB credential + swarm secret; dependent
+	// rendered configs (e.g. the OTel collector's OpenObserve basic-auth header)
+	// and stacks (observability) would otherwise keep the old value until a
+	// manual `cluster update`. Run the update pipeline now so the new value
+	// takes effect immediately.
+	if _, err := applyRotatedCredential(cmd.Context(), cluster.UpdateDeps{
+		Store:    st,
+		Cipher:   cipher,
+		Docker:   dc,
+		Deployer: mgr.Deployer,
+		Stdout:   cmd.OutOrStdout(),
+	}, cluster.UpdateInput{ConfigDir: cfg.ConfigDir(), Version: buildinfo.Version}); err != nil {
+		return fmt.Errorf("credential rotated, but applying it via cluster update failed: %w (run `pmcluster cluster update` to retry)", err)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "\n✅ Cluster update applied the rotated credential to dependent services.\n")
 	return nil
 }
 
