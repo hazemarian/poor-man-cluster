@@ -109,6 +109,7 @@ func EnsureVersionedSecret(ctx context.Context, d runtime.Client, hs secretHashS
 
 	prefix := baseName + "_v"
 	maxVer := 0
+	maxName := "" // actual existing name carrying the highest version
 	for _, name := range existing {
 		if !strings.HasPrefix(name, prefix) {
 			continue
@@ -116,11 +117,11 @@ func EnsureVersionedSecret(ctx context.Context, d runtime.Client, hs secretHashS
 		var v int
 		if _, scanErr := fmt.Sscanf(name, prefix+"%d", &v); scanErr == nil && v > maxVer {
 			maxVer = v
+			maxName = name
 		}
 	}
 
-	if maxVer > 0 {
-		curName := fmt.Sprintf("%s_v%d", baseName, maxVer)
+	if maxName != "" {
 		stored := ""
 		if hs != nil {
 			stored = hs.GetSettingDefault(ctx, secretHashKey(baseName), "")
@@ -128,8 +129,12 @@ func EnsureVersionedSecret(ctx context.Context, d runtime.Client, hs secretHashS
 		// Content is compared by hashing the actual bytes and checking against
 		// the stored DB hash — never by trusting the pmcluster.data_hash label
 		// and never by reading the secret back from Docker (write-only API).
+		// maxName (NOT a reconstructed %s_v%d) is returned so that legacy
+		// zero-padded names (cert_v042) survive the migration: the name must
+		// actually exist in the swarm or the next stack deploy fails with
+		// "secret not found".
 		if stored != "" && stored == dataHash(data) {
-			return curName, false, nil
+			return maxName, false, nil
 		}
 	}
 
@@ -193,6 +198,7 @@ func EnsureConfig(ctx context.Context, d runtime.Client, baseName string, data [
 
 	prefix := baseName + "_v"
 	maxVer := 0
+	maxName := "" // actual existing name carrying the highest version
 	for _, name := range existing {
 		if !strings.HasPrefix(name, prefix) {
 			continue
@@ -200,17 +206,19 @@ func EnsureConfig(ctx context.Context, d runtime.Client, baseName string, data [
 		var v int
 		if _, scanErr := fmt.Sscanf(name, prefix+"%d", &v); scanErr == nil && v > maxVer {
 			maxVer = v
+			maxName = name
 		}
 	}
 
-	if maxVer > 0 {
-		curName := fmt.Sprintf("%s_v%d", baseName, maxVer)
-		if cur, err := d.ConfigInspect(ctx, curName); err == nil {
+	if maxName != "" {
+		if cur, err := d.ConfigInspect(ctx, maxName); err == nil {
 			// Content is compared by hashing the actual config bytes, never by
 			// trusting the pmcluster.data_hash label — the label could be
 			// stale, missing, or wrong, and the bytes are the source of truth.
+			// maxName (NOT a reconstructed %s_v%d) is reused so that legacy
+			// zero-padded names (v005) survive the migration without churn.
 			if dataHash(cur.Data) == dataHash(data) {
-				return curName, false, nil
+				return maxName, false, nil
 			}
 		}
 	}

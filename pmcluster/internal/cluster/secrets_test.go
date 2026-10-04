@@ -365,3 +365,93 @@ func TestEnsureVersionedSecret_MintsNewVersionOnChange(t *testing.T) {
 		t.Errorf("name = %q, want cert_v2", name)
 	}
 }
+
+// TestEnsureVersionedSecret_ReusesLegacyPaddedName guards the migration path:
+// clusters that minted zero-padded names under the old naming (cert_v042) must
+// be REUSED as-is — never reconstructed as unpadded cert_v42 which does not
+// exist in the swarm ("secret not found" on the next stack deploy). The actual
+// name carrying the highest version wins.
+func TestEnsureVersionedSecret_ReusesLegacyPaddedName(t *testing.T) {
+	f := newFakeDocker()
+	s, err := store.Open(filepath.Join(t.TempDir(), "migrate.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	seed := []byte("-----BEGIN CERTIFICATE-----\npadded-era bytes\n-----END CERTIFICATE-----\n")
+	if err := f.SecretCreate(context.Background(), runtime.SecretSpec{
+		Name: "cert_v041",
+		Data: seed,
+		Labels: map[string]string{
+			pmclusterLabel:        "true",
+			"pmcluster.base":      "cert",
+			"pmcluster.data_hash": dataHash(seed),
+		},
+	}); err != nil {
+		t.Fatalf("seed cert_v041: %v", err)
+	}
+	if err := f.SecretCreate(context.Background(), runtime.SecretSpec{
+		Name: "cert_v042",
+		Data: seed,
+		Labels: map[string]string{
+			pmclusterLabel:        "true",
+			"pmcluster.base":      "cert",
+			"pmcluster.data_hash": dataHash(seed),
+		},
+	}); err != nil {
+		t.Fatalf("seed cert_v042: %v", err)
+	}
+	if err := s.SetSetting(context.Background(), secretHashKey("cert"), dataHash(seed)); err != nil {
+		t.Fatalf("seed hash: %v", err)
+	}
+
+	name, created, err := EnsureVersionedSecret(context.Background(), f, s, "cert", seed)
+	if err != nil {
+		t.Fatalf("EnsureVersionedSecret: %v", err)
+	}
+	if created {
+		t.Error("created = true, want false (unchanged padded cert → reuse)")
+	}
+	if name != "cert_v042" {
+		t.Errorf("name = %q, want cert_v042 (actual swarm name reused, not reconstructed cert_v42)", name)
+	}
+	if _, ok := f.secrets["cert_v42"]; ok {
+		t.Error("cert_v42 (nonexistent reconstruction) must never be returned")
+	}
+	if _, ok := f.secrets["cert_v043"]; ok {
+		t.Error("cert_v043 was created despite unchanged bytes")
+	}
+}
+
+// TestEnsureConfig_ReusesLegacyPaddedName is the config analogue of the
+// migration guard: a padded pmcluster_otel_config_v005 must be reused as-is
+// (not reconstructed as v5) when the bytes are unchanged.
+func TestEnsureConfig_ReusesLegacyPaddedName(t *testing.T) {
+	f := newFakeDocker()
+	seed := []byte("receivers:\n  otlp:\n")
+	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
+		Name: "pmcluster_otel_config_v005",
+		Data: seed,
+		Labels: map[string]string{
+			pmclusterLabel:      "true",
+			"pmcluster.base":    "pmcluster_otel_config",
+			"pmcluster.version": "v0.2.151",
+		},
+	}); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	name, created, err := EnsureConfig(context.Background(), f, "pmcluster_otel_config", seed, "v0.2.152")
+	if err != nil {
+		t.Fatalf("EnsureConfig: %v", err)
+	}
+	if created {
+		t.Error("created = true, want false (unchanged padded config → reuse)")
+	}
+	if name != "pmcluster_otel_config_v005" {
+		t.Errorf("name = %q, want pmcluster_otel_config_v005 (actual swarm name reused)", name)
+	}
+	if _, ok := f.configs["pmcluster_otel_config_v6"]; ok {
+		t.Error("v6 was minted despite unchanged bytes")
+	}
+}

@@ -4,6 +4,20 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.152.1 (2026-10-04)
+
+- **fix(cluster): legacy zero-padded name migration in EnsureConfig /
+  EnsureVersionedSecret.** Clusters that minted `cert_v042` / `key_v042` /
+  `pmcluster_otel_config_v005` under the old `%03d` naming were broken by the
+  v0.2.152 naming unification: the reuse path reconstructed the current name as
+  unpadded (`cert_v42`) without verifying it exists in the swarm, so the next
+  `cluster update` / `cluster up` failed with `secret not found: key_v42` /
+  `config not found: pmcluster_otel_config_v4`. The fix tracks the ACTUAL
+  highest-version name present in the swarm (`maxName`) and reuses it verbatim;
+  only genuinely new content mints `_v<N+1>`. Regression tests:
+  `TestEnsureVersionedSecret_ReusesLegacyPaddedName`,
+  `TestEnsureConfig_ReusesLegacyPaddedName`.
+
 ## v0.2.152 (2026-10-04)
 
 - **feat: ONE pipeline for everything (consolidated L4 directive).** Platform stacks —
