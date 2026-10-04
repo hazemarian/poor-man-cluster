@@ -127,7 +127,10 @@ func WatchSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Lo
 						return
 					}
 				}
-				current, first = false, false
+				// current=true means "we already emitted leader-true for this
+				// state"; a later poll that is still leader must stay silent so
+				// the caller doesn't cancel + restart its loops every poll.
+				current, first = true, false
 			default:
 				if current || first {
 					select {

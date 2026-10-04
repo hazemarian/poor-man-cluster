@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +31,30 @@ type leaderFake struct {
 
 func (f *leaderFake) NodeList(context.Context) ([]runtime.Node, error) {
 	return f.nodes, f.nodeErr
+}
+
+// leaderFakeMutex is leaderFake with a mutex so a test can flip leadership
+// while WatchSwarmLeadership's poll goroutine is reading the node list.
+type leaderFakeMutex struct {
+	runtime.Client
+	mu    sync.Mutex
+	nodes []runtime.Node
+}
+
+func (f *leaderFakeMutex) NodeList(context.Context) ([]runtime.Node, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]runtime.Node(nil), f.nodes...), nil
+}
+
+func (f *leaderFakeMutex) setLeader(hostname string, leader bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.nodes {
+		if f.nodes[i].Hostname == hostname {
+			f.nodes[i].IsLeader = leader
+		}
+	}
 }
 
 func TestIsSwarmLeader_HappyPath(t *testing.T) {
@@ -56,6 +81,75 @@ func TestIsSwarmLeader_HappyPath(t *testing.T) {
 	}
 	if notLeader {
 		t.Fatal("expected mgr1 to not be leader")
+	}
+}
+
+// TestWatchSwarmLeadership_StableLeaderEmitsOnce guards against a regression
+// where a stable leader re-emitted true on every poll (cancelling + restarting
+// the reconcile + control-plane snapshot loops every leaderPollInterval). The
+// channel must emit exactly one true, then stay silent while leadership is
+// unchanged.
+func TestWatchSwarmLeadership_StableLeaderEmitsOnce(t *testing.T) {
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &leaderFake{nodes: []runtime.Node{
+		{ID: "n1", Hostname: host, IsLeader: true},
+		{ID: "n2", Hostname: "mgr2", IsLeader: false},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := WatchSwarmLeadership(ctx, f, zerolog.Nop())
+
+	// First value arrives immediately (initial emit).
+	first := <-ch
+	if !first {
+		t.Fatal("expected initial leader-true emit")
+	}
+
+	// Over several poll intervals (2 * leaderPollInterval), the channel must
+	// NOT emit again while the node stays leader.
+	select {
+	case v := <-ch:
+		t.Fatalf("stable leader re-emitted on poll: got %v (regression: loops restart every poll)", v)
+	case <-time.After(2*leaderPollInterval + 2*time.Second):
+		// correct — no repeat emit
+	}
+}
+
+// TestWatchSwarmLeadership_LeaderToNotLeaderReEmits ensures the channel
+// re-emits when leadership state actually changes (not just poll repeats).
+func TestWatchSwarmLeadership_LeaderToNotLeaderReEmits(t *testing.T) {
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	flip := &leaderFakeMutex{nodes: []runtime.Node{
+		{ID: "n1", Hostname: host, IsLeader: true},
+		{ID: "n2", Hostname: "mgr2", IsLeader: false},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := WatchSwarmLeadership(ctx, flip, zerolog.Nop())
+
+	first := <-ch
+	if !first {
+		t.Fatal("expected initial leader-true emit")
+	}
+
+	// Flip leadership after the first poll has settled.
+	time.Sleep(leaderPollInterval + time.Second)
+	flip.setLeader(host, false)
+	flip.setLeader("mgr2", true)
+
+	select {
+	case v := <-ch:
+		if v {
+			t.Fatalf("expected leader-loss emit (false), got %v", v)
+		}
+	case <-time.After(leaderPollInterval + 2*time.Second):
+		t.Fatal("expected a leadership-loss emit after the flip")
 	}
 }
 
