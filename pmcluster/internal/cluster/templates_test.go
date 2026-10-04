@@ -864,11 +864,11 @@ func TestLoadComposeFile_InfraBYOMode(t *testing.T) {
 		t.Errorf("BYO-mode infra stack must render no volumes mapping (no ACME volume):\n%s", s)
 	}
 	for _, want := range []string{
-		"  cert:\n    external: true\n    name: cert_v001",
-		"  key:\n    external: true\n    name: key_v001",
+		"- cert_v001",
+		"- key_v001",
 	} {
 		if !strings.Contains(s, want) {
-			t.Errorf("BYO-mode infra stack missing %q", want)
+			t.Errorf("BYO-mode infra stack missing %q (versioned cert/key must be in the service secrets array so they mount at /run/secrets/cert_v001 — matching the dynamic config's tls.certificates paths)", want)
 		}
 	}
 	// The dashboard router gate must match the active auth: SSO off → htpasswd.

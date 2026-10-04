@@ -100,8 +100,13 @@ services:
     secrets:
       - admin_credentials
       [[- if not .ACMEEmail]]
-      - cert
-      - key
+      # Mount the VERSIONED cert/key secret names so the files land at
+      # /run/secrets/<versioned> — exactly the paths the traefik dynamic
+      # config's tls.certificates entries reference. Mounting the logical
+      # names (cert/key) would put them at /run/secrets/cert and Traefik
+      # would fail with "failed to find any PEM data".
+      - "[[.CertSecretName]]"
+      - "[[.KeySecretName]]"
       [[- end]]
       [[- range .HostCerts]]
       - "[[.CertSecret]]"
