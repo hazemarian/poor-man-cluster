@@ -117,9 +117,10 @@ operator console) instead of hard-coding values:
 
 ```yaml
 env:
-  ADMIN_PASS: secrets(app_secret)      # inject a stored secret's value
+  ADMIN_PASS: secrets(app_secret)      # mount path /run/secrets/app_secret
   ADMIN_ENABLED: config(app_config)    # inject a stored config's content
   STORAGE_ROOT: settings(volume_root)  # inject a cluster setting's value
+  ZO_ROOT_USER_PASSWORD: secret(oo_admin_password)  # inject a secret's VALUE as-is
   DEBUG: "false"                       # plain values still work
 ```
 
@@ -133,6 +134,14 @@ Behavior:
   env value.
 - `settings(<name>)` — resolves a cluster setting (e.g. `volume_root`) as the
   env value. Resolved at render time against the cluster store.
+- `secret(<name>)` — resolves the secret's **value itself** as the env value
+  (as opposed to `secrets(<name>)`, which names a *file mount*). Use it when the
+  consumer only accepts the value via env and cannot read a mounted secret file
+  (e.g. OpenObserve's `ZO_ROOT_USER_PASSWORD`, which OpenObserve only reads from
+  env, never from a file). Resolved at render time via the resolver's
+  `SecretValueResolver` implementation — app stacks get this through the
+  platform resolver's well-known names; a resolver that doesn't implement
+  `SecretValueResolver` rejects `secret(...)` at translate time.
 - The reference is resolved at deploy time against the DB — rotating the
   secret/config and re-deploying picks up the new value.
 - Validation fails at parse time if the pattern is malformed
