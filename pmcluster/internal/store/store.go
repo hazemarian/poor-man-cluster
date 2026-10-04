@@ -30,7 +30,16 @@ func Open(dbPath string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
 		return nil, fmt.Errorf("ensure data dir: %w", err)
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", dbPath)
+	// journal_mode=DELETE (the rollback journal) is deliberate: WAL mode
+	// corrupts the control-plane DB under multi-process access. When a
+	// second process (the CLI, python3, ...) opens the same database and
+	// closes its connection, SQLite deletes the -wal/-shm sidecars even
+	// though the long-running daemon still holds them open. The daemon then
+	// keeps writing to the orphaned inode, producing a split-brain database
+	// (stale reads, torn indexes, invisible writes). The rollback journal
+	// commits directly to the main file and has no long-lived sidecars, so
+	// concurrent daemon+CLI access stays consistent.
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(DELETE)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
@@ -59,12 +68,15 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// WALCheckpoint flushes all pending WAL transactions to the main
-// database file so volume-level snapshots capture a consistent state.
-// Uses TRUNCATE to also reset the WAL file size (ideal before backups).
+// WALCheckpoint keeps the BackupTrigger contract but is a no-op: the store
+// uses the rollback journal (journal_mode=DELETE), so there is no WAL to
+// flush — transactions commit directly to the main database file, which is
+// exactly the consistent state volume-level snapshots need.
 func (s *Store) WALCheckpoint(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
-	return err
+	// journal_mode=DELETE: nothing to checkpoint. Executing
+	// "PRAGMA wal_checkpoint(TRUNCATE)" in DELETE mode is a harmless no-op
+	// returning (0,0,0), but skipping it avoids confusion.
+	return nil
 }
 
 // DB is for tests and migration inspection — production code uses the

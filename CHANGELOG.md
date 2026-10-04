@@ -4,6 +4,27 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.144 (2026-10-04)
+
+- **fix(store): eliminate the multi-process WAL corruption bug (data-loss risk).**
+  Found during Test Case 2 webhook/CLI feature testing. The control-plane DB was
+  opened in `journal_mode=WAL` by both the long-running daemon and short-lived
+  CLI processes (and any other reader, e.g. `python3`). When a second process
+  wrote and closed its connection, SQLite deleted the `-wal`/`-shm` sidecars
+  even though the daemon still held them open. The daemon then kept writing to
+  the orphaned inode, producing a split-brain database: fresh CLI-created rows
+  (users, tokens, settings) were invisible to the daemon (all auth 401s), index
+  corruption appeared (`wrong # of entries in index idx_backups_started`), and
+  `user list` failed with `database disk image is malformed`. Reproduction:
+  open the store, have a second connection write+close, watch `data.db-wal`
+  disappear while the first handle keeps it open. **Fix:** both stores (daemon
+  `internal/store` and console `internal/ui/store`) now use `journal_mode=DELETE`
+  — transactions commit directly to the main file, there are no long-lived
+  sidecars to orphan, and a writer's close can never detach the DB from an open
+  handle. `Store.WALCheckpoint` is now a no-op (nothing to flush). Regression
+  test `TestMultiProcessNoWALSplitBrain` covers open/write/close/reopen
+  cross-visibility and asserts no `-wal`/`-shm`/`-journal` sidecars ever exist.
+
 ## v0.2.143 (2026-10-04)
 
 - **fix(cluster): `cluster update` now ensures the storage root directories exist.**

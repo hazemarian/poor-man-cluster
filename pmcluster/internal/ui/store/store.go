@@ -76,7 +76,7 @@ func Open(dataDir string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(`
-		PRAGMA journal_mode=WAL;
+		PRAGMA journal_mode=DELETE;
 		CREATE TABLE IF NOT EXISTS users (
 			id            INTEGER PRIMARY KEY AUTOINCREMENT,
 			username      TEXT NOT NULL UNIQUE,
