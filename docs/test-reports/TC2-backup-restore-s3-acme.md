@@ -148,6 +148,6 @@ With Let's Encrypt, Traefik holds the certificate internally; `docker secret ls`
 
 ## Follow-ups
 
-- [ ] Fix BUG-002 in code (`cluster update` → `ensureStorageDirs`)
-- [ ] Fix BUG-003 in code (restore `--dest-root` defaults from `volume_root` setting)
+- [x] Fix BUG-002 in code (`cluster update` → `ensureStorageDirs`) — shipped in `0acde7a` (v0.2.143)
+- [x] Fix BUG-003 in code (restore `--dest-root` defaults from `volume_root` setting) — shipped in `0acde7a` (v0.2.143), both CLI and REST API
 - [ ] Re-run TC2 after fixes to confirm both are resolved

@@ -4,6 +4,24 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.143 (2026-10-04)
+
+- **fix(cluster): `cluster update` now ensures the storage root directories exist.**
+  Found during Test Case 2 (custom `volume_root`). `ensureStorageDirs` was only
+  called from `cluster up` — changing `volume_root` after bring-up left the new
+  root missing, so `backup_volume-backup` tasks were rejected with
+  `bind source path does not exist`. `update.go` gained an explicit
+  *"Ensuring storage root directories exist"* step.
+- **fix(backup): `backup restore` default `--dest-root` now follows the cluster's
+  `volume_root` setting** instead of the hardcoded `/var/stack/data`. Both the
+  CLI (`restoreDestRootDefault`) and the REST API (`backups.HTTP.VolumeRoot`,
+  wired from the store) resolve the setting, falling back to
+  `manifest.DefaultVolumeRoot` when unset. BUG-002/BUG-003 from
+  `docs/test-reports/TC2-backup-restore-s3-acme.md`.
+- **docs: Test Case 2 report** — single-manager, Let's Encrypt ACME certs (all 3
+  domains, Verify code 0), custom volume root `/srv/stack/data`, S3 upload +
+  local/S3 restore round-trips proven (`docs/test-reports/TC2-backup-restore-s3-acme.md`).
+
 ## v0.2.142 (2026-10-04)
 
 - **fix(cli): `WatchSwarmLeadership` re-emitted `leader-true` on every 15s poll.**
