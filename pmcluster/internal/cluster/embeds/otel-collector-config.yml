@@ -104,8 +104,9 @@ exporters:
       # credentials OpenObserve itself runs with (ZO_ROOT_USER_EMAIL /
       # ZO_ROOT_USER_PASSWORD from the openobserve_admin credential + the
       # zo_root_user_password Swarm secret). One password everywhere; no
-      # provisioning API calls.
-      Authorization: "__BASIC_AUTH_PLACEHOLDER__"
+      # provisioning API calls. Resolved via the shared secret reference
+      # language by RenderOTelCollectorConfig.
+      Authorization: "secret(oo_basic_auth)"
       organization: "default"
 
 service:

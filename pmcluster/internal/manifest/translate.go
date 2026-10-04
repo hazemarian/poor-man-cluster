@@ -39,6 +39,17 @@ type ConfigPathResolver interface {
 	ResolveConfigPath(ctx context.Context, stack, name string) (string, error)
 }
 
+// SecretValueResolver is implemented by EnvResolvers that can also resolve
+// `secret(<name>)` references to the secret's VALUE as-is (unlike
+// `secrets(<name>)`, which names a Docker secret to mount at
+// /run/secrets/<name>). `secret(name)` prints the value into the env value at
+// translate time — for consumers that need the value itself (e.g. an env var
+// a process reads, or a config file that cannot read a mounted secret file).
+// Resolvers that don't implement this reject secret() refs at translate time.
+type SecretValueResolver interface {
+	ResolveSecretValue(ctx context.Context, stack, name string) (string, error)
+}
+
 // Shared external networks ensured by `pmcluster cluster up`; the
 // translator references them with `external: true`.
 const (
@@ -333,11 +344,11 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 	return is, nil
 }
 
-// resolveServiceEnv resolves config()/secrets() env references for the given
-// stack. Returns the resolved env map.  It does NOT mount anything:
-// validation guarantees the operator listed every secrets(name) used in env
-// in the service's own `secrets:` array (so the /run/secrets/<name> path
-// actually exists).
+// resolveServiceEnv resolves config()/secrets()/settings()/secret() env
+// references for the given stack. Returns the resolved env map.  It does NOT
+// mount anything: validation guarantees the operator listed every
+// secrets(name) used in env in the service's own `secrets:` array (so the
+// /run/secrets/<name> path actually exists).
 //
 //   - config(name): value = config content from the DB (via EnvResolver).
 //     Multi-line content is rejected — compose environment values must be
@@ -381,6 +392,19 @@ func resolveServiceEnv(ctx context.Context, stack string, env map[string]string,
 			value, err := sr.ResolveSetting(ctx, stack, ref.Name)
 			if err != nil {
 				return nil, fmt.Errorf("env.%s: resolve settings(%s): %w", k, ref.Name, err)
+			}
+			out[k] = value
+		case "secret":
+			sr, ok := res.(SecretValueResolver)
+			if !ok || sr == nil {
+				return nil, fmt.Errorf("env.%s: secret(%s) requires secret-value resolution (not available)", k, ref.Name)
+			}
+			value, err := sr.ResolveSecretValue(ctx, stack, ref.Name)
+			if err != nil {
+				return nil, fmt.Errorf("env.%s: resolve secret(%s): %w", k, ref.Name, err)
+			}
+			if strings.ContainsAny(value, "\r\n") {
+				return nil, fmt.Errorf("env.%s: secret(%s) contains newlines — secret values injected into env must be single-line", k, ref.Name)
 			}
 			out[k] = value
 		default:

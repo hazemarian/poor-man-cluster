@@ -27,7 +27,7 @@ services:
       ZO_TELEMETRY: "false"
       ZO_APP_NAME: openobserve
       ZO_ROOT_USER_EMAIL: "${OPENOBSERVE_ADMIN_EMAIL}"
-      ZO_ROOT_USER_PASSWORD: "__OPENOBSERVE_PASSWORD__"
+      ZO_ROOT_USER_PASSWORD: "secret(oo_admin_password)"
       ZO_LOGS_RETENTION_DAYS: "[[.OOLogsRetentionDays]]"
       ZO_METRICS_RETENTION_DAYS: "[[.OOMetricsRetentionDays]]"
       ZO_TRACES_RETENTION_DAYS: "[[.OOTracesRetentionDays]]"

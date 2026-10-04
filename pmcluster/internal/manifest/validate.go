@@ -170,7 +170,7 @@ func validateService(name string, s *dsl.Service) error {
 	}
 	for k, v := range s.Env {
 		if refs.MalformedEnvRef(v) {
-			return fmt.Errorf("%s.env.%s: malformed reference %q — expected config(name), secrets(name) or settings(name)", prefix, k, v)
+			return fmt.Errorf("%s.env.%s: malformed reference %q — expected config(name), secrets(name), settings(name) or secret(name)", prefix, k, v)
 		}
 		if ref, ok := refs.ParseEnvRef(v); ok && ref.Name == "" {
 			return fmt.Errorf("%s.env.%s: empty name in %s() reference", prefix, k, ref.Kind)

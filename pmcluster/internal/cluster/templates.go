@@ -354,8 +354,43 @@ func (r *renderRefResolver) ResolveConfig(_ context.Context, _ string, name stri
 	return fn(r.render), nil
 }
 
+// ResolveSecret satisfies refs.RefResolver — secrets(<name>) names a mounted
+// Swarm secret, so this maps logical names to their versioned Swarm secret
+// names (cert/key → CertSecretName/KeySecretName) and passes everything else
+// through (the mount key is the external secret's own name).
+func (r *renderRefResolver) ResolveSecret(_ context.Context, _ string, name string) (string, error) {
+	if fn, ok := secretNameAliases[name]; ok {
+		return fn(r.render), nil
+	}
+	return name, nil
+}
+
 func (r *renderRefResolver) ResolveSetting(_ context.Context, _ string, name string) (string, error) {
 	return "", fmt.Errorf("resolve settings(%s): platform manifests cannot reference cluster settings", name)
+}
+
+// ResolveSecretValue implements refs.SecretValueResolver — secret(<name>)
+// prints the VALUE as-is into the surrounding text (unlike secrets(<name>)
+// which names a mounted secret file). The platform knows two logical secret
+// values derived from the OpenObserve admin credential:
+//
+//   - oo_basic_auth: the "Basic base64(email:password)" header the OTel
+//     collector's exporter needs — printed verbatim into the rendered
+//     collector config (the collector cannot read a mounted secret file for
+//     its exporter headers);
+//   - oo_admin_password: the raw OpenObserve admin password — printed into
+//     the observability stack's ZO_ROOT_USER_PASSWORD env var (OpenObserve
+//     only accepts the root password via env, not via a mounted secret file).
+//     Doubled `$` so docker stack deploy's interpolation leaves it intact.
+func (r *renderRefResolver) ResolveSecretValue(_ context.Context, _ string, name string) (string, error) {
+	switch name {
+	case "oo_basic_auth":
+		return r.render.OpenObserveBasicAuth, nil
+	case "oo_admin_password":
+		return escapeComposeDollar(r.render.OpenObserveAdminPassword), nil
+	default:
+		return "", fmt.Errorf("resolve secret(%s): no such platform secret value (known: oo_basic_auth, oo_admin_password)", name)
+	}
 }
 
 // ResolveConfigPath implements manifest.ConfigPathResolver — the in-container
@@ -438,7 +473,6 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	out := strings.ReplaceAll(rendered.String(), "${DOMAIN}", in.Domain)
 	out = strings.ReplaceAll(out, "${OPENOBSERVE_ADMIN_EMAIL}", in.OpenObserveAdminEmail)
 	out = strings.ReplaceAll(out, "${DATA_DIR}", in.DataDir)
-	out = strings.ReplaceAll(out, "__OPENOBSERVE_PASSWORD__", escapeComposeDollar(in.OpenObserveAdminPassword))
 
 	app, err := manifest.Parse([]byte(out))
 	if err != nil {
@@ -486,6 +520,32 @@ func ensureEdgeConfig(ctx context.Context, d runtime.Client, version string, ren
 	return EnsureConfig(ctx, d, "pmcluster_edge", edgeYAML, version)
 }
 
+// otelRefResolver resolves the references the OTel collector config template
+// may carry via the refs.ReplaceRefs language (2-arg interface shape). The
+// only platform reference it supports is secret(oo_basic_auth) — the
+// Authorization header baked into the rendered collector config.
+type otelRefResolver struct {
+	render RenderInput
+}
+
+func (r *otelRefResolver) ResolveConfig(context.Context, string) (string, error) {
+	return "", fmt.Errorf("otel collector config: config(%s) references not supported", "")
+}
+
+func (r *otelRefResolver) ResolveSecret(context.Context, string) (string, error) {
+	return "", fmt.Errorf("otel collector config: secrets(%s) references not supported", "")
+}
+
+func (r *otelRefResolver) ResolveSecretValue(_ context.Context, name string) (string, error) {
+	if name != "oo_basic_auth" {
+		return "", fmt.Errorf("otel collector config: secret(%s): no such value (known: oo_basic_auth)", name)
+	}
+	if r.render.OpenObserveBasicAuth == "" {
+		return "", fmt.Errorf("otel collector config: secret(oo_basic_auth): OpenObserve admin basic auth is not set")
+	}
+	return r.render.OpenObserveBasicAuth, nil
+}
+
 // RenderOTelCollectorConfig fills in the OpenObserve `Authorization: Basic <b64>`
 // RenderOTelCollectorConfig renders the OTel collector pipeline config. The
 // exporter's Authorization header is the ROOT admin basic auth
@@ -494,15 +554,18 @@ func ensureEdgeConfig(ctx context.Context, d runtime.Client, version string, ren
 // openobserve_admin credential + zo_root_user_password Swarm secret), so the
 // collector authenticates ingestion without any provisioning API calls.
 // OpenObserve accepts the root user's email:password on its OTLP endpoint.
+// The header is resolved via the shared secret(<name>) reference language
+// (`secret(oo_basic_auth)` in the embedded template) rather than a bespoke
+// placeholder.
 func RenderOTelCollectorConfig(in RenderInput) ([]byte, error) {
-	if in.OpenObserveBasicAuth == "" {
-		return nil, fmt.Errorf("RenderOTelCollectorConfig: OpenObserve admin basic auth is required")
-	}
 	body, err := readConfigFile("otel-collector-config.yml", in)
 	if err != nil {
 		return nil, err
 	}
-	rendered := strings.ReplaceAll(body, "__BASIC_AUTH_PLACEHOLDER__", in.OpenObserveBasicAuth)
+	rendered, err := refs.ReplaceRefs(context.Background(), body, &otelRefResolver{render: in})
+	if err != nil {
+		return nil, fmt.Errorf("render otel collector config: %w", err)
+	}
 	return []byte(rendered), nil
 }
 

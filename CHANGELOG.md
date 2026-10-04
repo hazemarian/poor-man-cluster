@@ -4,6 +4,31 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.154 (2026-10-04)
+
+- **feat(dsl): `secret(<name>)` prints a secret VALUE as-is — replaces the platform
+  placeholder sentinels.** New reference kind `secret(name)` (whole env value or
+  inline) resolves to the secret's *value* (unlike `secrets(name)`, which mounts a
+  Docker secret file at `/run/secrets/<name>`). Manifest translation resolves it via
+  an optional `SecretValueResolver`; refs.ReplaceRefs resolves it via an optional
+  `SecretValueResolver` interface; malformed-ref validation advertises `secret(name)`.
+- **Platform observability now uses the shared reference language instead of bespoke
+  placeholders.** `observability-stack.yml` env `ZO_ROOT_USER_PASSWORD` is now
+  `secret(oo_admin_password)` (OpenObserve only accepts the root password via env —
+  it cannot read it from a mounted secret file); `otel-collector-config.yml` exporter
+  `Authorization` is now `secret(oo_basic_auth)`. Both resolve through
+  `renderRefResolver.ResolveSecretValue` / a new refs-style `otelRefResolver` in
+  `internal/cluster/templates.go`. The `__OPENOBSERVE_PASSWORD__` /
+  `__BASIC_AUTH_PLACEHOLDER__` sentinels are gone; `RenderOTelCollectorConfig` now
+  renders through `refs.ReplaceRefs`. `renderRefResolver.ResolveSecret` restored
+  (maps cert/key via `secretNameAliases`) so it satisfies the full `refs.RefResolver`
+  surface.
+- **Tests:** `refs_test.go` `TestReplaceRefs_SecretKind` + `TestParseEnvRef_SecretKind`
+  (secret refs resolve via `SecretValueResolver`, error + text-preservation without
+  one); `translate_test.go` `TestTranslate_SecretEnvRef` (secret() value lands in env
+  verbatim, resolver-missing and validate-path error messages mention
+  `secret(name)`).
+
 ## v0.2.153 (2026-10-04)
 
 - **feat(dsl): `expose.external` publishes a real swarm port; `protocol` dropped.**

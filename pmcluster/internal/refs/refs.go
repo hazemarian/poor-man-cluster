@@ -18,13 +18,13 @@ import (
 	"strings"
 )
 
-// inlineRefRe matches config(name)/secrets(name)/settings(name)/config_path(name)
-// references ANYWHERE in a compose file — including inline YAML keys like
-// `config(pmcluster_otel_config):` and list items like
+// inlineRefRe matches config(name)/secrets(name)/settings(name)/config_path(name)/
+// secret(name) references ANYWHERE in a compose file — including inline YAML
+// keys like `config(pmcluster_otel_config):` and list items like
 // `- source: config(pmcluster_traefik_dynamic)`. Unlike envRefRe (which is
 // exact-match on whole env values), this finds references embedded in larger
 // text.
-var inlineRefRe = regexp.MustCompile(`(config|secrets|settings|config_path)\(([^)]+)\)`)
+var inlineRefRe = regexp.MustCompile(`(config|secrets|settings|config_path|secret)\(([^)]+)\)`)
 
 // RefResolver resolves config()/secrets() references found in compose text.
 // The cluster side (internal/cluster) implements it with a RenderInput so the
@@ -48,6 +48,20 @@ type ConfigPathResolver interface {
 	// named <name>. Callers fall back to the default path (/etc/<name>)
 	// when this interface is not implemented.
 	ResolveConfigPath(ctx context.Context, name string) (string, error)
+}
+
+// SecretValueResolver is implemented by RefResolvers that can resolve a
+// secret(<name>) reference to the secret's VALUE as-is (the plaintext the
+// reference stands for). Unlike secrets(<name>) — which names a Docker secret
+// to MOUNT at /run/secrets/<name> — secret(<name>) prints the value itself
+// into the surrounding text, for artifacts that cannot read a mounted secret
+// file (e.g. the OTel collector's exporter Authorization header, which is
+// baked into the rendered config). Resolvers that do not implement it make
+// secret(<name>) references fail loud.
+type SecretValueResolver interface {
+	// ResolveSecretValue returns the value a secret(<name>) reference stands
+	// for.
+	ResolveSecretValue(ctx context.Context, name string) (string, error)
 }
 
 // ReplaceRefs rewrites every config(...)/secrets(...) reference in text via
@@ -82,6 +96,12 @@ func ReplaceRefs(ctx context.Context, text string, r RefResolver) (string, error
 				resolved, err = cpr.ResolveConfigPath(ctx, name)
 			} else {
 				err = fmt.Errorf("config_path(%s) reference not supported by this resolver", name)
+			}
+		case "secret":
+			if svr, ok := r.(SecretValueResolver); ok {
+				resolved, err = svr.ResolveSecretValue(ctx, name)
+			} else {
+				err = fmt.Errorf("secret(%s) reference not supported by this resolver", name)
 			}
 		default:
 			err = fmt.Errorf("unknown reference kind %q", sub[1])

@@ -3,6 +3,7 @@ package refs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -304,5 +305,69 @@ func TestReplaceRefs_SettingsKind(t *testing.T) {
 	}
 	if out != in {
 		t.Errorf("text must be preserved on error, got %q", out)
+	}
+}
+
+// secretRefResolverStub resolves secret(<name>) VALUES as-is, plus the
+// config/secrets kinds via the embedded stub.
+type secretRefResolverStub struct {
+	refResolverStub
+	values map[string]string
+}
+
+func (r *secretRefResolverStub) ResolveSecretValue(_ context.Context, name string) (string, error) {
+	if v, ok := r.values[name]; ok {
+		return v, nil
+	}
+	return "", fmt.Errorf("no such secret value %q", name)
+}
+
+// TestReplaceRefs_SecretKind verifies secret(<name>) references print the
+// VALUE as-is through a resolver that implements SecretValueResolver, while a
+// resolver WITHOUT it errors (text preserved) instead of leaking the raw
+// reference.
+func TestReplaceRefs_SecretKind(t *testing.T) {
+	in := "headers:\n  Authorization: \"secret(oo_basic_auth)\"\n"
+
+	r := &secretRefResolverStub{
+		refResolverStub: refResolverStub{configs: map[string]string{}, secrets: map[string]string{}},
+		values:          map[string]string{"oo_basic_auth": "Basic YWRtaW46cA=="},
+	}
+	got, err := ReplaceRefs(context.Background(), in, r)
+	if err != nil {
+		t.Fatalf("ReplaceRefs: %v", err)
+	}
+	want := "headers:\n  Authorization: \"Basic YWRtaW46cA==\"\n"
+	if got != want {
+		t.Errorf("ReplaceRefs mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+
+	// Resolver that does NOT implement SecretValueResolver → error mentioning
+	// the secret name, original text preserved.
+	plain := &refResolverStub{configs: map[string]string{}, secrets: map[string]string{}}
+	out, err := ReplaceRefs(context.Background(), in, plain)
+	if err == nil {
+		t.Fatal("expected an error from a resolver without SecretValueResolver")
+	}
+	if !strings.Contains(err.Error(), "secret") || !strings.Contains(err.Error(), "oo_basic_auth") {
+		t.Errorf("error should mention secret(oo_basic_auth): %v", err)
+	}
+	if out != in {
+		t.Errorf("text must be preserved on error, got %q", out)
+	}
+}
+
+// TestParseEnvRef_SecretKind verifies the envRef language now accepts
+// secret(<name>) whole-value references alongside config/secrets/settings.
+func TestParseEnvRef_SecretKind(t *testing.T) {
+	ref, ok := ParseEnvRef("secret(oo_admin_password)")
+	if !ok || ref.Kind != "secret" || ref.Name != "oo_admin_password" {
+		t.Fatalf(`ParseEnvRef("secret(oo_admin_password)") = %+v, %v`, ref, ok)
+	}
+	if !MalformedEnvRef("secret(oo_admin_password") {
+		t.Error("malformed secret ref (no close paren) must be flagged")
+	}
+	if MalformedEnvRef("secret(oo_admin_password)") {
+		t.Error("well-formed secret ref must not be flagged malformed")
 	}
 }
