@@ -66,8 +66,8 @@
 
 ## Bugs found
 
-### BUG-007 — Secret rotation silently defeated for live stacks (Medium/High) — FIXED in v0.2.146
-`pmcluster secret edit` updates the DB but cannot update the mirrored Docker secret when it is in use by a running service. Containers keep the old value with only a WARN line. **Fix shipped:** versioned swarm secret names — every edit bumps `swarm_rev`, the CLI mirrors into `name_v<rev>` (never removing the in-use original), and the compose writer emits the versioned external name while the container path stays `/run/secrets/<logical-name>`.
+### BUG-007 — Secret rotation silently defeated for live stacks (Medium/High) — FIXED in v0.2.146 (interim; see L4)
+`pmcluster secret edit` updates the DB but cannot update the mirrored Docker secret when it is in use by a running service. Containers keep the old value with only a WARN line. **Fix shipped:** versioned swarm secret names — every edit bumps `swarm_rev`, the CLI mirrors into `name_v<rev>` (never removing the in-use original), and the compose writer emits the versioned external name while the container path stays `/run/secrets/<logical-name>`. **Follow-up (design directive, L4 in improvements.md):** unify this DB-counter mechanism with the platform `_v%03d` content-aware versioning — one mechanism for cluster and user objects.
 
 ### BUG-008 — Webhook retry policy is dead code (Medium) — FIXED in v0.2.146
 `MaxRetries`/`RetryDelay` are wired but never exercised on the receive path; `DeployAsync` never retries; delivery rows stay `accepted`/`server_error` with `retries:0`. **Fix shipped:** the receiver now calls `DeployAsyncWithRetries` under a phase budget; synchronous failures retry (2×, 30s apart) and the real retry count lands on the delivery row and in the 502 body. Background apply failures still surface via stack `last_error` + reconcile.

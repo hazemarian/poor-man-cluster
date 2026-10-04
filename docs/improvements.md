@@ -22,6 +22,13 @@ Legend: ⏱ effort is focused developer time. **Quick win** = simple + high valu
 ### L3. Interactive exec via websocket (was #9)
 - ✅ **Shipped (v0.2.141).** Browser terminal (vendored xterm.js) → console websocket → daemon websocket → `docker exec -it` TTY hijack. Operator-role only, Bearer auth on the daemon, frame protocol (binary stdin/stdout, `resize`/`exit` JSON controls), Terminal button per service row. Details in `pmcluster/docs/service-ops-design.md` §8.
 
+### L4. Unify secret/config versioning — ONE mechanism for platform and user objects (design directive)
+- **Directive (2026-10-04):** there are currently TWO versioning mechanisms and they must be combined into one — the cluster/platform path must behave the same as the user/app path ("cluster config should be same as other config; no need to keep both ways").
+- **The two mechanisms today:**
+  1. **Platform (cluster-managed):** content-aware versioned Swarm secrets/configs `name_v%03d` via `EnsureVersionedSecretFromFile` (`internal/cluster/secrets.go`, used by `cluster up`/`update` for TLS cert/key — `cert_v042`, `key_v042`, `pmcluster_otel_config_v047`, `pmcluster_traefik_dynamic_v048`). Content-hash aware: reuses the highest version when bytes are unchanged. No DB counter.
+  2. **User/app (added v0.2.146 for BUG-007):** DB-counter-driven `swarm_rev` (migration 0023) → `SwarmSecretName(name, rev)` → `name_v<rev>` (unpadded `_v2`, NOT `_v002`), mirror writes a new versioned secret, compose writer emits a `name:` override via `SecretNames` resolver.
+- **Work:** pick ONE mechanism for all secrets AND all configs (platform configs, platform secrets, user secrets, user configs). Direction: the content-aware `_v%03d` approach is the more mature one (no DB counter, content-hash reuse) — likely the survivor; the DB `swarm_rev` counter and the `SecretNames` resolver would be reworked to feed the same versioning logic, and user configs would gain the same versioned mirror behavior. Also reconcile the padding (`_v%03d` vs `_v%d`) and the CLI hint/messages. Once unified, update CHANGELOG + TC4 report (BUG-007 note) and re-test rotation end-to-end.
+
 ---
 
 ## ✅ Shipped already (do not re-propose)
