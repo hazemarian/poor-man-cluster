@@ -211,6 +211,15 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		res.NewNetworks = created
 		return nil
 	})
+	// Default the storage node BEFORE the platform stacks are rendered, so the
+	// backup agent is rendered in its final form (global, constrained to
+	// storage nodes) from the very first deploy. Defaulting it in
+	// persistInstallState (after deploy) made the first `cluster update`
+	// switch backup_volume-backup from replicated to global — a mode change
+	// Docker rejects in place ("service mode change is not allowed").
+	wf.Add("Defaulting storage node", func(ctx context.Context) error {
+		return defaultStorageNode(ctx, deps)
+	})
 	wf.Add("TLS certificate (Let's Encrypt or operator cert/key)", func(ctx context.Context) error {
 		if in.ACMEEmail != "" {
 			fmt.Fprintf(out, "  ▶ TLS via Let's Encrypt (Traefik HTTP-01) — port 80 must be reachable from the internet\n")
@@ -405,6 +414,36 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	return res, nil
 }
 
+// defaultStorageNode records the leader node as the default storage node when
+// no storage_nodes list is configured yet — a stateful stack with no explicit
+// placement pins to it, so its data has a home from day one. The list is
+// hostname-based and role-agnostic: later nodes join as storage nodes
+// explicitly (pmcluster join --storage-node) and round-robin placement spreads
+// stateful stacks across them. The default storage node also carries the
+// pmcluster.storage label so the backup agent (constrained to storage nodes)
+// runs exactly where app data lives. Idempotent: no-op once a list is set.
+func defaultStorageNode(ctx context.Context, deps UpDeps) error {
+	if deps.Store == nil {
+		return nil
+	}
+	if cur := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), ""); cur == "" && deps.Docker != nil {
+		if nodes, err := deps.Docker.NodeList(ctx); err == nil {
+			for _, n := range nodes {
+				if n.IsLeader && n.Hostname != "" {
+					if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), n.Hostname); err != nil {
+						return fmt.Errorf("persist %s: %w", SettingStorageNodes(), err)
+					}
+					if lerr := deps.Docker.SetNodeLabel(ctx, n.ID, runtime.StorageNodeLabel, "true"); lerr != nil {
+						return fmt.Errorf("label storage node %s: %w", n.Hostname, lerr)
+					}
+					break
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // persistInstallState records the install inputs used on this (possibly
 // idempotent) bring-up: TLS mode + cert/key paths, domain, and OO admin email.
 func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
@@ -428,29 +467,11 @@ func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
 			return fmt.Errorf("persist %s: %w", k, err)
 		}
 	}
-	// Default storage node: when no storage_nodes list is configured yet, the
-	// main (leader) node is the storage node — a stateful stack with no
-	// explicit placement pins to it, so its data has a home from day one.
-	// The list is hostname-based and role-agnostic: later nodes join as
-	// storage nodes explicitly (pmcluster join --storage-node) and round-robin
-	// placement spreads stateful stacks across them.
-	if cur := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), ""); cur == "" && deps.Docker != nil {
-		if nodes, err := deps.Docker.NodeList(ctx); err == nil {
-			for _, n := range nodes {
-				if n.IsLeader && n.Hostname != "" {
-					if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), n.Hostname); err != nil {
-						return fmt.Errorf("persist %s: %w", SettingStorageNodes(), err)
-					}
-					// The default storage node must also carry the
-					// pmcluster.storage label so the backup agent (constrained
-					// to storage nodes) runs exactly where app data lives.
-					if lerr := deps.Docker.SetNodeLabel(ctx, n.ID, runtime.StorageNodeLabel, "true"); lerr != nil {
-						return fmt.Errorf("label storage node %s: %w", n.Hostname, lerr)
-					}
-					break
-				}
-			}
-		}
+	// Storage-node defaulting happens earlier (Defaulting storage node step)
+	// so platform stacks render in final form before deploy; calling the
+	// helper here keeps the persisted state authoritative on re-runs.
+	if err := defaultStorageNode(ctx, deps); err != nil {
+		return err
 	}
 	return nil
 }

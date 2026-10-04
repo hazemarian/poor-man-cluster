@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
@@ -244,6 +245,56 @@ func TestUp_DefaultStorageNodeIsLeader(t *testing.T) {
 	}
 	if len(f.nodeLabels) != 1 || f.nodeLabels[0] != runtime.StorageNodeLabel+"=true" {
 		t.Errorf("expected the default storage node to be labeled %s=true, got %v", runtime.StorageNodeLabel, f.nodeLabels)
+	}
+}
+
+// TestUp_BackupRendersGlobalWhenStorageNodeDefaulted asserts the storage node
+// is defaulted BEFORE platform stacks are rendered, so backup_volume-backup is
+// deployed global from the first bring-up. Regression for the swarm-e2e
+// failure "service mode change is not allowed": defaulting storage_nodes in
+// persistInstallState (after deploy) made the first cluster update switch the
+// backup agent replicated→global — a mode change Docker rejects in place.
+func TestUp_BackupRendersGlobalWhenStorageNodeDefaulted(t *testing.T) {
+	dir := t.TempDir()
+	certPath := writeTempFile(t, dir, "cert.pem", []byte("CERT"))
+	keyPath := writeTempFile(t, dir, "key.pem", []byte("KEY"))
+
+	deps, f, deployer := newUpDeps(t)
+	f.nodes = []runtime.Node{
+		{Hostname: "nextrum-sy-1", Role: "manager", IsLeader: true, Status: "ready", Availability: "active"},
+	}
+
+	if _, err := Up(context.Background(), deps, UpInput{
+		Domain:                "test.example.com",
+		CertPath:              certPath,
+		KeyPath:               keyPath,
+		OpenObserveAdminEmail: "ops@example.com",
+	}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// storage_nodes must be set (leader hostname) so the render saw it.
+	if got := deps.Store.GetSettingDefault(context.Background(), SettingStorageNodes(), ""); got != "nextrum-sy-1" {
+		t.Fatalf("default storage_nodes = %q, want nextrum-sy-1 (must be set before render)", got)
+	}
+
+	// The backup stack deployed at up time must be global (constrained to the
+	// storage node) — never replicated. A subsequent cluster update must then
+	// be a content-aware no-op for the backup stack.
+	var backupYAML string
+	for _, d := range deployer.deployedStacks {
+		if d.Name == string(StackBackup) {
+			backupYAML = d.YAML
+		}
+	}
+	if backupYAML == "" {
+		t.Fatal("backup stack was not deployed during Up")
+	}
+	if !strings.Contains(backupYAML, "mode: global") {
+		t.Errorf("backup stack rendered without mode: global at up time:\n%s", backupYAML)
+	}
+	if !strings.Contains(backupYAML, runtime.StorageNodeLabel) {
+		t.Errorf("backup stack rendered without the storage-node constraint label %s:\n%s", runtime.StorageNodeLabel, backupYAML)
 	}
 }
 

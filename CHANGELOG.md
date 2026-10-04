@@ -4,6 +4,19 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.152.2 (2026-10-04)
+
+- **fix(cluster): storage node is defaulted before platform stacks are rendered.**
+  `cluster up` used to default `storage_nodes` to the leader hostname in
+  `persistInstallState` — i.e. AFTER the platform stacks were deployed. The first
+  `cluster update` therefore switched `backup_volume-backup` from replicated to global,
+  which Docker rejects in place (`service mode change is not allowed`). The defaulting
+  now runs as its own early workflow step (`Defaulting storage node`, extracted into a
+  `defaultStorageNode` helper) before the render is built, so the backup agent is
+  deployed global and storage-node-constrained from the very first bring-up and the
+  first update is a content-aware no-op. Regression test:
+  `TestUp_BackupRendersGlobalWhenStorageNodeDefaulted`.
+
 ## v0.2.152.1 (2026-10-04)
 
 - **fix(cluster): legacy zero-padded name migration in EnsureConfig /
