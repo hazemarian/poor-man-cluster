@@ -1310,6 +1310,40 @@ func TestLoadComposeFile_EdgeStateless(t *testing.T) {
 	}
 }
 
+// TestLoadComposeFile_EdgeBYOModeNoLetsEncrypt reproduces the prod outage on
+// non-ACME (BYO cert) clusters: the edge-stack template referenced the
+// letsencrypt certificate resolver unconditionally, but BYO-cert clusters
+// never define that resolver (infra-stack only declares it under
+// [[ if .ACMEEmail ]]) — Traefik dropped every edge router with "Router uses
+// a nonexistent certificate resolver". The labels must be ACME-conditional.
+func TestLoadComposeFile_EdgeBYOModeNoLetsEncrypt(t *testing.T) {
+	out, err := LoadComposeFile(StackEdge, RenderInput{
+		Domain:            "example.com",
+		EdgeImage:         "ghcr.io/hazemarian/pmcluster-edge:v9",
+		EdgeLoginDisabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(out)
+	if strings.Contains(body, "certresolver: letsencrypt") || strings.Contains(body, "certresolver=letsencrypt") {
+		t.Errorf("edge-stack render must not reference the letsencrypt resolver with BYO certs:\n%s", body)
+	}
+	// ACME mode must still pin the resolver.
+	acme, err := LoadComposeFile(StackEdge, RenderInput{
+		Domain:            "example.com",
+		EdgeImage:         "ghcr.io/hazemarian/pmcluster-edge:v9",
+		EdgeLoginDisabled: true,
+		ACMEEmail:         "ops@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(acme), "certresolver: letsencrypt") {
+		t.Error("ACME-mode edge render must reference the letsencrypt resolver")
+	}
+}
+
 // TestLoadComposeFile_OORetentionRenders verifies the OpenObserve stream
 // retention settings land as ZO_LOGS/METRICS/TRACES_RETENTION_DAYS env vars.
 func TestLoadComposeFile_OORetentionRenders(t *testing.T) {
