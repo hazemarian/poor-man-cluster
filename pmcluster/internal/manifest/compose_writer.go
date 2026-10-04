@@ -42,6 +42,12 @@ type ComposeWriter struct {
 	// in-use one (BUG-007). The container mount path is unaffected — Docker
 	// mounts the override under /run/secrets/<logical-name>.
 	SecretNames func(ctx context.Context, name string) string
+	// ConfigNames maps a logical config name (from service configs mounts)
+	// to the actual versioned Docker config to reference. Nil keeps the
+	// logical name. Wired from the cluster config store so platform stacks
+	// mount the versioned pmcluster_otel_config_vN / pmcluster_traefik_dynamic_vN
+	// configs.
+	ConfigNames func(ctx context.Context, name string) string
 }
 
 // DefaultVolumeRoot is where every container volume lands unless the
@@ -66,18 +72,63 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 
 	app := irApp{name: ir.Name, env: ir.Env, version: ir.Version}
 
+	// Explicit app-level networks (platform stacks joining traefik-net /
+	// monitoring-net) REPLACE the private overlay: platform services are
+	// reachable cross-stack by fully-qualified service DNS on the shared
+	// external networks, and keeping the deployment network-identical to the
+	// pre-DSL templates avoids creating throwaway overlay nets per platform
+	// stack.
+	usePrivateNet := len(ir.Networks) == 0
+
+	// Top-level configs block: every logical config name any service mounts
+	// is declared external (with a versioned name override when wired).
+	configSet := map[string]struct{}{}
+	for i := range ir.Services {
+		for _, c := range ir.Services[i].Configs {
+			configSet[c.Source] = struct{}{}
+		}
+	}
+
 	for i := range ir.Services {
 		s := &ir.Services[i]
-		cs, err := composeServiceFromIR(s, app, privateNet, root, w.CertResolver, w.PinNode, &usesTraefikNet, &usesMonitoringNet)
+		cs, err := composeServiceFromIR(s, app, privateNet, root, w.CertResolver, w.PinNode, usePrivateNet, &usesTraefikNet, &usesMonitoringNet)
 		if err != nil {
 			return nil, err
 		}
 		cf.Services[s.Name] = cs
 	}
 
+	if len(configSet) > 0 && len(ir.Configs) > 0 {
+		cf.Configs = map[string]*composeConfig{}
+		for _, name := range ir.Configs {
+			cc := &composeConfig{External: true}
+			if w.ConfigNames != nil {
+				if n := w.ConfigNames(ctx, name); n != "" && n != name {
+					cc.Name = n
+				}
+			}
+			cf.Configs[name] = cc
+		}
+	}
+
 	if len(ir.Volumes) > 0 {
 		cf.Volumes = map[string]*composeVolume{}
 		for _, v := range ir.Volumes {
+			// App-level plain volumes (platform data volumes) are declared
+			// verbatim — never bind-relocated under the volume root.
+			if decl, ok := ir.PlainVolumes[v]; ok {
+				vv := &composeVolume{}
+				if decl != "" {
+					vv.Driver = "local"
+					vv.DriverOpts = map[string]string{
+						"type":   "none",
+						"o":      "bind",
+						"device": decl,
+					}
+				}
+				cf.Volumes[v] = vv
+				continue
+			}
 			cf.Volumes[v] = &composeVolume{
 				Driver: "local",
 				DriverOpts: map[string]string{
@@ -89,8 +140,9 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 		}
 	}
 
-	cf.Networks = map[string]*composeNetwork{
-		privateNet: {Driver: "overlay"},
+	cf.Networks = map[string]*composeNetwork{}
+	if usePrivateNet {
+		cf.Networks[privateNet] = &composeNetwork{Driver: "overlay"}
 	}
 	if usesTraefikNet {
 		cf.Networks[traefikNet] = &composeNetwork{External: true}
@@ -112,6 +164,25 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 		}
 	}
 
+	// App-level extra external networks (platform stacks join traefik-net /
+	// monitoring-net explicitly).
+	for _, n := range ir.Networks {
+		cf.Networks[n] = &composeNetwork{External: true}
+	}
+
+	// Platform stacks stamp io.pmcluster.platform=true on every service.
+	if ir.Platform {
+		for _, s := range cf.Services {
+			if s.Deploy == nil {
+				s.Deploy = &composeDeploy{}
+			}
+			if s.Deploy.Labels == nil {
+				s.Deploy.Labels = map[string]string{}
+			}
+			s.Deploy.Labels[labelPlatform] = "true"
+		}
+	}
+
 	out, err := yaml.Marshal(cf)
 	if err != nil {
 		return nil, fmt.Errorf("marshal compose: %w", err)
@@ -124,9 +195,13 @@ func composeServiceFromIR(
 	s *IRService,
 	app irApp,
 	privateNet, volumeRoot, certResolver, pinNode string,
+	usePrivateNet bool,
 	usesTraefikNet, usesMonitoringNet *bool,
 ) (*composeService, error) {
 	volumes := relocateVolumes(volumeRoot, app.name, s.Volumes)
+	// Raw binds are emitted verbatim (never relocated) — platform services
+	// mount docker.sock, /etc/localtime, the volume root itself, etc.
+	volumes = append(volumes, s.Binds...)
 	cs := &composeService{
 		Image:       s.Image,
 		Command:     s.Command,
@@ -134,9 +209,43 @@ func composeServiceFromIR(
 		Environment: s.Env,
 		Volumes:     volumes,
 		Secrets:     s.Secrets,
+		ExtraHosts:  s.ExtraHosts,
+		User:        s.User,
 	}
 
-	cs.Networks = []string{privateNet}
+	if len(s.Configs) > 0 {
+		for _, c := range s.Configs {
+			cs.Configs = append(cs.Configs, composeConfigMount{Source: c.Source, Target: c.Target})
+		}
+	}
+
+	if len(s.Ports) > 0 {
+		for _, p := range s.Ports {
+			cp := composePort{Target: p.Target, Published: p.Published, Protocol: p.Protocol, Mode: p.Mode}
+			if cp.Published == 0 {
+				cp.Published = cp.Target
+			}
+			if cp.Protocol == "" {
+				cp.Protocol = "tcp"
+			}
+			cs.Ports = append(cs.Ports, cp)
+		}
+	}
+
+	if usePrivateNet {
+		cs.Networks = []string{privateNet}
+	}
+	// App-level extra networks (traefik-net / monitoring-net for platform
+	// stacks that join them explicitly without exposing anything).
+	for _, n := range s.ExtraNetworks {
+		cs.Networks = append(cs.Networks, n)
+		if n == traefikNet {
+			*usesTraefikNet = true
+		}
+		if n == monitoringNet {
+			*usesMonitoringNet = true
+		}
+	}
 	if s.Expose != nil {
 		cs.Networks = append(cs.Networks, traefikNet, monitoringNet)
 		*usesTraefikNet = true
@@ -144,6 +253,16 @@ func composeServiceFromIR(
 	}
 
 	cs.Healthcheck = composeHealthcheckFromIR(s)
+	if s.Logging != nil {
+		lg := &composeLogging{Driver: s.Logging.Driver}
+		if len(s.Logging.Options) > 0 {
+			lg.Options = make(map[string]string, len(s.Logging.Options))
+			for k, v := range s.Logging.Options {
+				lg.Options[k] = v
+			}
+		}
+		cs.Logging = lg
+	}
 	cs.Deploy = composeDeployFromIR(app, s, certResolver, pinNode, len(volumes) > 0)
 
 	// depends_on is emitted for compose parity ONLY. docker stack deploy
@@ -219,17 +338,28 @@ func composeHealthcheckFromIR(s *IRService) *composeHealthcheck {
 	}
 
 	return &composeHealthcheck{
-		Test:     h.Test,
-		Interval: h.Interval,
-		Timeout:  h.Timeout,
-		Retries:  h.Retries,
+		Test:        h.Test,
+		Interval:    h.Interval,
+		Timeout:     h.Timeout,
+		StartPeriod: h.StartPeriod,
+		Retries:     h.Retries,
 	}
 }
 
 func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, stateful bool) *composeDeploy {
-	d := &composeDeploy{
-		Labels: standardLabels(app, s.Name),
+	// Raw labels merge UNDER the auto-injected standard labels (which always
+	// win on collisions): standard labels first, then raw so a manifest can
+	// never strip the service/application/environment/version identity labels
+	// the UI/CLI/drift loop key on. Platform stacks carry their Traefik router
+	// labels here.
+	labels := map[string]string{}
+	for k, v := range s.Labels {
+		labels[k] = v
 	}
+	for k, v := range standardLabels(app, s.Name) {
+		labels[k] = v
+	}
+	d := &composeDeploy{Labels: labels}
 
 	switch {
 	case s.RunOnce && len(s.DependsOn) > 0:
@@ -241,39 +371,69 @@ func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, 
 		d.RestartPolicy = &composeRestartPolicy{Condition: "on-failure", MaxAttempts: 3}
 	case s.RunOnce:
 		d.RestartPolicy = &composeRestartPolicy{Condition: "none"}
+	case s.Mode == "global":
+		// Global services run one task per node (platform agents). The
+		// default restart policy still applies.
+		d.Mode = "global"
+		if s.Restart != "" {
+			d.RestartPolicy = &composeRestartPolicy{Condition: s.Restart, Delay: s.RestartDelay}
+		} else {
+			d.RestartPolicy = &composeRestartPolicy{Condition: "any", Delay: s.RestartDelay}
+		}
 	default:
 		replicas := s.Replicas
 		if replicas == 0 {
 			replicas = 1
 		}
 		d.Replicas = &replicas
-		d.RestartPolicy = &composeRestartPolicy{Condition: "on-failure"}
+		if s.Restart != "" {
+			d.RestartPolicy = &composeRestartPolicy{Condition: s.Restart, Delay: s.RestartDelay}
+		} else {
+			d.RestartPolicy = &composeRestartPolicy{Condition: "on-failure", Delay: s.RestartDelay}
+		}
 	}
 
+	constraints := []string{}
 	switch s.Placement {
 	case "manager":
-		d.Placement = &composePlacement{Constraints: []string{"node.role == manager"}}
+		constraints = append(constraints, "node.role == manager")
 	case "worker":
-		d.Placement = &composePlacement{Constraints: []string{"node.role == worker"}}
+		constraints = append(constraints, "node.role == worker")
 	case "":
 		// A stateful service (one holding a volume) with no explicit
 		// placement is auto-pinned to the cluster's designated platform node
 		// when one is configured. Its data lives under /var/stack/data and
 		// only exists on that node — letting Swarm schedule it anywhere would
-		// either strand the data or start a fresh empty volume.
-		if stateful && pinNode != "" {
-			d.Placement = &composePlacement{Constraints: []string{"node.hostname == " + pinNode}}
+		// either strand the data or start a fresh empty volume. Global-mode
+		// services (platform agents) are exempt — they run on every node and
+		// never pin.
+		if stateful && pinNode != "" && s.Mode != "global" {
+			constraints = append(constraints, "node.hostname == "+pinNode)
 			d.Labels[labelNode] = pinNode
 		}
 	default:
 		// Any other value is a node-hostname pin: the operator keeps a
 		// stateful service (with a volume) on one specific node so its
 		// data never has to migrate.
-		d.Placement = &composePlacement{Constraints: []string{"node.hostname == " + s.Placement}}
+		constraints = append(constraints, "node.hostname == "+s.Placement)
 		d.Labels[labelNode] = s.Placement
 	}
+	constraints = append(constraints, s.Constraints...)
+	if len(constraints) > 0 {
+		d.Placement = &composePlacement{Constraints: constraints}
+	}
 
-	if !s.RunOnce {
+	if s.Resources != nil {
+		d.Resources = &composeResources{}
+		if s.Resources.Reservations != nil {
+			d.Resources.Reservations = &composeResourceSpec{CPUs: s.Resources.Reservations.CPUs, Memory: s.Resources.Reservations.Memory}
+		}
+		if s.Resources.Limits != nil {
+			d.Resources.Limits = &composeResourceSpec{CPUs: s.Resources.Limits.CPUs, Memory: s.Resources.Limits.Memory}
+		}
+	}
+
+	if !s.RunOnce && s.Mode != "global" {
 		d.UpdateConfig = translateUpdate(s.Update)
 		// A stateful service should never be updated start-first: the old
 		// task's shutdown races the new task's startup on the same data dir

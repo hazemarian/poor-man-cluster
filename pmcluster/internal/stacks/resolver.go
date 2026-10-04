@@ -35,3 +35,21 @@ func (r *StoreConfigResolver) ResolveConfig(ctx context.Context, stack, name str
 	}
 	return c.Content, nil
 }
+
+// ResolveSetting implements manifest.SettingsResolver so `env: X:
+// settings(name)` values are injected from the cluster_settings table (the
+// same source the CLI `cluster settings` and the console read). Unknown
+// settings surface as an error so a typo in a manifest fails loud.
+func (r *StoreConfigResolver) ResolveSetting(ctx context.Context, stack, name string) (string, error) {
+	if r == nil || r.Store == nil {
+		return "", fmt.Errorf("settings resolution unavailable (no store)")
+	}
+	v, err := r.Store.GetSetting(ctx, name)
+	if err != nil {
+		if errors.Is(err, store.ErrSettingNotFound) {
+			return "", fmt.Errorf("setting %q not found — set it with `pmcluster cluster settings set %s=...`", name, name)
+		}
+		return "", fmt.Errorf("get setting %q: %w", name, err)
+	}
+	return v, nil
+}

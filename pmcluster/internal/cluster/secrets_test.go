@@ -172,8 +172,8 @@ func TestEnsureConfig_CreatesWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureConfig: %v", err)
 	}
-	if name != "otel_config_v001" {
-		t.Errorf("name = %q, want otel_config_v001", name)
+	if name != "otel_config_v1" {
+		t.Errorf("name = %q, want otel_config_v1", name)
 	}
 	if !created {
 		t.Error("created = false, want true for a fresh config")
@@ -193,18 +193,18 @@ func TestEnsureConfig_CreatesWhenMissing(t *testing.T) {
 
 func TestEnsureConfig_CreatesNewVersionWhenPreExisting(t *testing.T) {
 	f := newFakeDocker()
-	f.configs["otel_config_v001"] = struct {
+	f.configs["otel_config_v1"] = struct {
 		Name   string
 		Data   []byte
 		Labels map[string]string
-	}{Name: "otel_config_v001", Data: []byte("original")}
+	}{Name: "otel_config_v1", Data: []byte("original")}
 
 	name, created, err := EnsureConfig(context.Background(), f, "otel_config", []byte("new config data"), "v0.2.0")
 	if err != nil {
 		t.Fatalf("EnsureConfig: %v", err)
 	}
-	if name != "otel_config_v002" {
-		t.Errorf("name = %q, want otel_config_v002", name)
+	if name != "otel_config_v2" {
+		t.Errorf("name = %q, want otel_config_v2", name)
 	}
 	if !created {
 		t.Error("created = false, want true for a changed render")
@@ -213,8 +213,8 @@ func TestEnsureConfig_CreatesNewVersionWhenPreExisting(t *testing.T) {
 		t.Errorf("config data = %q, want 'new config data'", f.configs[name].Data)
 	}
 
-	if _, exists := f.configs["otel_config_v001"]; exists {
-		t.Error("old config version otel_config_v001 was not removed")
+	if _, exists := f.configs["otel_config_v1"]; exists {
+		t.Error("old config version otel_config_v1 was not removed")
 	}
 }
 
@@ -238,7 +238,7 @@ func TestEnsureConfig_ReusesVersionWhenUnchanged(t *testing.T) {
 	f := newFakeDocker()
 	data := []byte("same data")
 	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
-		Name: "otel_config_v001",
+		Name: "otel_config_v1",
 		Data: data,
 		Labels: map[string]string{
 			"pmcluster.data_hash": dataHash(data),
@@ -254,18 +254,18 @@ func TestEnsureConfig_ReusesVersionWhenUnchanged(t *testing.T) {
 	if created {
 		t.Error("created = true, want false (bytes unchanged → reuse)")
 	}
-	if name != "otel_config_v001" {
-		t.Errorf("name = %q, want otel_config_v001 (reused)", name)
+	if name != "otel_config_v1" {
+		t.Errorf("name = %q, want otel_config_v1 (reused)", name)
 	}
-	if _, ok := f.configs["otel_config_v002"]; ok {
-		t.Error("otel_config_v002 was created despite unchanged bytes")
+	if _, ok := f.configs["otel_config_v2"]; ok {
+		t.Error("otel_config_v2 was created despite unchanged bytes")
 	}
 }
 
 func TestEnsureConfig_MintsNewVersionOnChange(t *testing.T) {
 	f := newFakeDocker()
 	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
-		Name: "otel_config_v001",
+		Name: "otel_config_v1",
 		Data: []byte("original"),
 	}); err != nil {
 		t.Fatalf("seed config: %v", err)
@@ -278,12 +278,12 @@ func TestEnsureConfig_MintsNewVersionOnChange(t *testing.T) {
 	if !created {
 		t.Error("created = false, want true (bytes changed → new version)")
 	}
-	if name != "otel_config_v002" {
-		t.Errorf("name = %q, want otel_config_v002", name)
+	if name != "otel_config_v2" {
+		t.Errorf("name = %q, want otel_config_v2", name)
 	}
 
-	if _, ok := f.configs["otel_config_v001"]; ok {
-		t.Error("old otel_config_v001 not GC'd after rotate")
+	if _, ok := f.configs["otel_config_v1"]; ok {
+		t.Error("old otel_config_v1 not GC'd after rotate")
 	}
 }
 
@@ -301,7 +301,7 @@ func TestEnsureVersionedSecret_ReusesUnchangedVersion(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	seed := []byte("-----BEGIN CERTIFICATE-----\nsame cert bytes\n-----END CERTIFICATE-----\n")
 	if err := f.SecretCreate(context.Background(), runtime.SecretSpec{
-		Name: "cert_v001",
+		Name: "cert_v1",
 		Data: seed,
 		Labels: map[string]string{
 			pmclusterLabel:        "true",
@@ -323,11 +323,11 @@ func TestEnsureVersionedSecret_ReusesUnchangedVersion(t *testing.T) {
 	if created {
 		t.Error("created = true, want false (unchanged cert → reuse)")
 	}
-	if name != "cert_v001" {
-		t.Errorf("name = %q, want cert_v001 (reused)", name)
+	if name != "cert_v1" {
+		t.Errorf("name = %q, want cert_v1 (reused)", name)
 	}
-	if _, ok := f.secrets["cert_v002"]; ok {
-		t.Error("cert_v002 was created despite unchanged bytes")
+	if _, ok := f.secrets["cert_v2"]; ok {
+		t.Error("cert_v2 was created despite unchanged bytes")
 	}
 }
 
@@ -340,7 +340,7 @@ func TestEnsureVersionedSecret_MintsNewVersionOnChange(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	seed := []byte("old cert bytes")
 	if err := f.SecretCreate(context.Background(), runtime.SecretSpec{
-		Name: "cert_v001",
+		Name: "cert_v1",
 		Data: seed,
 		Labels: map[string]string{
 			pmclusterLabel:        "true",
@@ -361,7 +361,7 @@ func TestEnsureVersionedSecret_MintsNewVersionOnChange(t *testing.T) {
 	if !created {
 		t.Error("created = false, want true (cert changed → new version)")
 	}
-	if name != "cert_v002" {
-		t.Errorf("name = %q, want cert_v002", name)
+	if name != "cert_v2" {
+		t.Errorf("name = %q, want cert_v2", name)
 	}
 }

@@ -1,118 +1,77 @@
-version: "3.9"
-
+# observability-stack.yml — OpenObserve + OTel collector (DSL manifest,
+# platform-managed). Rendered by LoadComposeFile through the same manifest
+# pipeline as customer app stacks.
+app: observability
+env: production
+domain: ${DOMAIN}
+platform: true
+networks:
+  - monitoring-net
+volumes:
+  openobserve_data: ""
+secrets:
+  - zo_root_user_password
 services:
   openobserve:
     image: public.ecr.aws/zinclabs/openobserve:v0.92.2
-    # No entrypoint override — the image is distroless (no /bin/sh).
-    # ZO_ROOT_USER_PASSWORD is rendered directly by pmcluster at deploy
-    # time from the managed credential. It flows through `docker stack deploy`
-    # stdin only, never persisted to disk.
-    deploy:
-      mode: replicated
-      replicas: 1
-      placement:
-[[ if .PlatformNode ]]
-        constraints: [node.hostname == [[.PlatformNode]]]
-[[ else ]]
-        constraints: [node.role == manager]
-[[ end ]]
-      labels:
-        - "traefik.enable=true"
-        - "traefik.http.routers.openobserve.rule=Host(`observ.${DOMAIN}`)"
-        - "traefik.http.services.openobserve.loadbalancer.server.port=5080"
-        - "traefik.http.routers.openobserve.entrypoints=websecure"
-        - "traefik.http.routers.openobserve.tls=true"
-        [[- if .ACMEEmail]]
-        - "traefik.http.routers.openobserve.tls.certresolver=letsencrypt"
-        [[- end]]
-        [[- if .SSOEnabled]]
-        - "traefik.http.routers.openobserve.middlewares=cors-default@file,sso-auth@file,openobserve-auto-auth@file"
-        [[- else]]
-        - "traefik.http.routers.openobserve.middlewares=cors-default@file,admin-auth@file,openobserve-auto-auth@file"
-        [[- end]]
-        - "traefik.swarm.network=traefik-net"
-    environment:
-      - ZO_DATA_DIR=/data
-      - ZO_HTTP_PORT=5080
-      - ZO_GRPC_PORT=5081
-      - ZO_TELEMETRY=false
-      - ZO_APP_NAME=openobserve
-      - ZO_ROOT_USER_EMAIL=${OPENOBSERVE_ADMIN_EMAIL}
-      - ZO_ROOT_USER_PASSWORD=__OPENOBSERVE_PASSWORD__
-      # Stream retention (days). Bounded by pmcluster settings
-      # (oo_logs/metrics/traces_retention_days, default 7) — without a bound
-      # a metrics-heavy cluster silently grows into hundreds of GB.
-      - ZO_LOGS_RETENTION_DAYS=[[.OOLogsRetentionDays]]
-      - ZO_METRICS_RETENTION_DAYS=[[.OOMetricsRetentionDays]]
-      - ZO_TRACES_RETENTION_DAYS=[[.OOTracesRetentionDays]]
-      # Note: the root token env is intentionally absent — OpenObserve caches
-      # root creds in its data volume on first boot and ignores env after. The
-      # OTel collector authenticates ingestion with the ROOT admin email:password
-      # (Basic base64(email:password)) — the same credentials OpenObserve runs
-      # with (ZO_ROOT_USER_EMAIL / ZO_ROOT_USER_PASSWORD). No provisioning API.
-    volumes:
-      - openobserve_data:/data
+    replicas: 1
+    placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
+    # openobserve joins traefik-net (Traefik routers) in addition to the
+    # app-level monitoring-net; the otel-collector joins only monitoring-net.
     networks:
-      - monitoring-net
       - traefik-net
-      
+    env:
+      ZO_DATA_DIR: /data
+      ZO_HTTP_PORT: "5080"
+      ZO_GRPC_PORT: "5081"
+      ZO_TELEMETRY: "false"
+      ZO_APP_NAME: openobserve
+      ZO_ROOT_USER_EMAIL: "${OPENOBSERVE_ADMIN_EMAIL}"
+      ZO_ROOT_USER_PASSWORD: "__OPENOBSERVE_PASSWORD__"
+      ZO_LOGS_RETENTION_DAYS: "[[.OOLogsRetentionDays]]"
+      ZO_METRICS_RETENTION_DAYS: "[[.OOMetricsRetentionDays]]"
+      ZO_TRACES_RETENTION_DAYS: "[[.OOTracesRetentionDays]]"
+    volumes:
+      - "openobserve_data:/data"
+    labels:
+      "traefik.enable": "true"
+      "traefik.http.routers.openobserve.rule": "Host(`observ.${DOMAIN}`)"
+      "traefik.http.services.openobserve.loadbalancer.server.port": "5080"
+      "traefik.http.routers.openobserve.entrypoints": "websecure"
+      "traefik.http.routers.openobserve.tls": "true"
+      [[- if .ACMEEmail]]
+      "traefik.http.routers.openobserve.tls.certresolver": "letsencrypt"
+      [[- end]]
+      [[- if .SSOEnabled]]
+      "traefik.http.routers.openobserve.middlewares": "cors-default@file,sso-auth@file,openobserve-auto-auth@file"
+      [[- else]]
+      "traefik.http.routers.openobserve.middlewares": "cors-default@file,admin-auth@file,openobserve-auto-auth@file"
+      [[- end]]
+      "traefik.swarm.network": "traefik-net"
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.157.0
-    command: ["--config=/etc/otel-collector-config.yaml"]
+    mode: global
     user: "0:0"
-    deploy:
-      mode: global
-      resources:
-        reservations:
-          cpus: '0.3'
-          memory: 256M
-        limits:
-          cpus: '0.4'
-          memory: 512M
-      restart_policy:
-        condition: any
-        delay: 5s
-    # Host-mode port so the pmcluster daemon (running on the manager
-    # host, not in Swarm) can ship its own traces/metrics/logs via
-    # OTLP/HTTP. mode: host binds the port on each node that runs the
-    # collector (global service). NOTE: docker stack deploy does not
-    # support host_ip; the port will be published on all interfaces.
-    # gRPC (4317) stays internal.
+    restart: any
+    restart_delay: 5s
+    command: ["--config=/etc/otel-collector-config.yaml"]
     ports:
       - target: 4318
         published: 4318
         protocol: tcp
         mode: host
-    volumes:
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /etc/localtime:/etc/localtime:ro
+    binds:
+      - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/etc/localtime:/etc/localtime:ro"
     configs:
-      - source: config(pmcluster_otel_config)
+      - source: pmcluster_otel_config
         target: /etc/otel-collector-config.yaml
-    networks:
-      - monitoring-net
-
-volumes:
-  openobserve_data:
-
-networks:
-  monitoring-net:
-    external: true
-  traefik-net:
-    external: true
-
-secrets:
-  # zo_root_user_password is managed by pmcluster as a Swarm secret for
-  # rotating credentials, but the password is rendered directly into the
-  # ZO_ROOT_USER_PASSWORD env var at deploy time (no /bin/sh needed).
-  zo_root_user_password:
-    external: true
-
-# Docker configs are created+managed by pmcluster cluster up. Replicated to
-# every node by Swarm itself, so the otel-collector global service can mount
-# the config without bind-mount-from-disk multi-node fragility.
-configs:
-  config(pmcluster_otel_config):
-    external: true
+    resources:
+      reservations:
+        cpus: "0.3"
+        memory: 256M
+      limits:
+        cpus: "0.4"
+        memory: 512M

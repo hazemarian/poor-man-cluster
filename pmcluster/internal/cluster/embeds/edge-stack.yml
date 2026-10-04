@@ -1,161 +1,97 @@
-version: "3.9"
-
+# edge-stack.yml — pmcluster-edge: smart reverse proxy + gin/HTMX operator
+# console (DSL manifest, platform-managed). Rendered by LoadComposeFile through
+# the same manifest pipeline as customer app stacks.
+#
+# Console credentials (edge_admin_password / edge_ui_secret / edge_api_token)
+# are provisioned by pmcluster and delivered as Swarm secrets mounted read-only
+# at /run/secrets/. The edge reads them on first boot and stores them ONCE into
+# its SQLite DB on the pmui-data volume (cluster mode EDGE_LOGIN_DISABLED=true
+# is stateless and uses an in-memory store — no volume).
+app: edge
+env: production
+domain: ${DOMAIN}
+platform: true
+networks:
+  - traefik-net
+volumes:
+  [[- if not .EdgeLoginDisabled]]
+  pmui-data: ""
+  [[- end]]
 services:
-  # pmcluster-edge — the edge service in front of the pmcluster daemon: the
-  # smart reverse proxy (per-real-IP throttling, connection/DDoS shield, IP
-  # blocklisting with auto-ban) plus the gin+HTMX operator console on the same
-  # origin. The console is served on its web routes; every other request is
-  # reversed to the daemon. Socketless, talks to the daemon over
-  # host.docker.internal:9090 (the same route Traefik used before this stack),
-  # so it removes the host-bound 9090 from the public path entirely.
-  #
-  # Console credentials are provisioned by pmcluster (cluster up / update) and
-  # delivered as Swarm secrets mounted read-only at /run/secrets/. The edge
-  # container reads them on first boot and stores them ONCE into its SQLite DB
-  # on the pmui-data volume:
-  #   edge_admin_password  — console login password (user "admin")
-  #   edge_ui_secret       — HMAC key for session cookies
-  #   edge_api_token       — pmcluster API Bearer token the console uses to reach
-  #                          the daemon (dedicated "edge" daemon user)
-  # Standalone/local runs fall back to PMCLUSTER_UI_USER/PASS/SECRET and
-  # PMCLUSTER_API_TOKEN env vars when no secrets are mounted.
-  #
-  # Routing: this service publishes itself to Traefik via stack labels — the
-  # pmcluster.<domain> origin serves the edge console + reverse proxy, replacing
-  # what was previously the direct daemon path and the edge.<domain> subdomain.
-  # The shared middlewares it references (cors-default) come from the file
-  # provider (traefik-dynamic.yml).
   pmcluster-edge:
     image: [[.EdgeImage]]
-    environment:
-      - LISTEN_ADDR=:8042
-      - UPSTREAM=http://host.docker.internal:9090
-      # Cluster mode (EDGE_LOGIN_DISABLED=true) is stateless: the console is
-      # driven entirely by env and uses an in-memory store, so no volume is
-      # needed. Standalone/local runs (EDGE_LOGIN_DISABLED=false) keep their
-      # SQLite state on the pmui-data volume.
-      # NOTE: the value is quoted because compose's YAML parser mis-reads the
-      # bare `DATA_DIR=:memory:` plain scalar as a mapping.
-      - "DATA_DIR=[[if .EdgeLoginDisabled]]:memory:[[else]]/data[[end]]"
-      # Public cluster domain — the console renders external links to
-      # OpenObserve (observ.<domain>) and the Traefik dashboard
-      # (traefik.<domain>) from it.
-      - PMCLUSTER_DOMAIN=[[.Domain]]
-      - API_RATE=200
-      - API_BURST=400
-      - WEBHOOK_RATE=40
-      - WEBHOOK_BURST=60
-      - MAX_CONCURRENT=128
-      - REQUEST_TIMEOUT=30s
-      - BAN_THRESHOLD=20
-      - BAN_DURATION=10m
-      - LOG_LEVEL=info
-      # Traefik admin-auth (or SSO) gates /web/* (see the router labels below),
-      # so the console's own session login is redundant in the swarm deployment.
-      # EDGE_LOGIN_DISABLED makes Require() pass through as a synthetic admin and
-      # hides the login/setup pages and the Users CRUD from the nav. Local
-      # standalone runs leave it unset (EdgeLoginDisabled=false) to keep the
-      # password login.
-      - EDGE_LOGIN_DISABLED=[[.EdgeLoginDisabled]]
-    [[- if not .EdgeLoginDisabled]]
+    replicas: 1
+    placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
+    env:
+      LISTEN_ADDR: ":8042"
+      UPSTREAM: "http://host.docker.internal:9090"
+      DATA_DIR: "[[if .EdgeLoginDisabled]]:memory:[[else]]/data[[end]]"
+      PMCLUSTER_DOMAIN: "[[.Domain]]"
+      API_RATE: "200"
+      API_BURST: "400"
+      WEBHOOK_RATE: "40"
+      WEBHOOK_BURST: "60"
+      MAX_CONCURRENT: "128"
+      REQUEST_TIMEOUT: "30s"
+      BAN_THRESHOLD: "20"
+      BAN_DURATION: "10m"
+      LOG_LEVEL: info
+      EDGE_LOGIN_DISABLED: "[[.EdgeLoginDisabled]]"
     volumes:
-      - pmui-data:/data
-    [[- end]]
+      [[- if not .EdgeLoginDisabled]]
+      - "pmui-data:/data"
+      [[- end]]
     secrets:
       - edge_admin_password
       - edge_ui_secret
       - edge_api_token
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    networks:
-      - traefik-net
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8042/healthz"]
       interval: 15s
       timeout: 3s
       retries: 3
       start_period: 10s
-    deploy:
-      mode: replicated
-      replicas: 1
-      placement:
-[[ if .PlatformNode ]]
-        constraints: [node.hostname == [[.PlatformNode]]]
-[[ else ]]
-        constraints: [node.role == manager]
-[[ end ]]
-      labels:
-        # Expose the edge console + reverse proxy at pmcluster.<domain>. This
-        # replaces the daemon-direct path AND the old edge.<domain> subdomain:
-        # pmcluster.<domain> is now the single public origin for the console
-        # + API + webhooks, shielded by the edge.
-        - "traefik.enable=true"
-        # The operator console lives under /web. Traefik gates it with the
-        # admin-auth middleware (shared htpasswd via the admin_credentials
-        # secret) — or with the sso-auth forwardAuth middleware when SSO is
-        # enabled (oauth2-proxy). Everything else (/api + /webhook) falls
-        # through to the edge reverse proxy and keeps its own Bearer /
-        # webhook-signature auth — no admin-auth there, so the daemon API
-        # stays machine-accessible.
-        - "traefik.http.routers.pmcluster-web.rule=Host(`pmcluster.${DOMAIN}`) && (PathPrefix(`/web/`) || Path(`/web`))"
-        - "traefik.http.routers.pmcluster-web.entrypoints=websecure"
-        - "traefik.http.routers.pmcluster-web.tls=true"
-        - "traefik.http.routers.pmcluster-web.tls.certresolver=letsencrypt"
-        [[- if .SSOEnabled]]
-        - "traefik.http.routers.pmcluster-web.middlewares=cors-default@file,sso-auth@file"
-        [[- else]]
-        - "traefik.http.routers.pmcluster-web.middlewares=cors-default@file,admin-auth@file"
-        [[- end]]
-        - "traefik.http.routers.pmcluster-api.rule=Host(`pmcluster.${DOMAIN}`) && !PathPrefix(`/web/`) && !Path(`/web`)"
-        - "traefik.http.routers.pmcluster-api.entrypoints=websecure"
-        - "traefik.http.routers.pmcluster-api.tls=true"
-        - "traefik.http.routers.pmcluster-api.tls.certresolver=letsencrypt"
-        - "traefik.http.routers.pmcluster-api.middlewares=cors-default@file"
-        - "traefik.http.services.pmcluster.loadbalancer.server.port=8042"
-        # OpenObserve SSO bridge: observ.<domain>/sso-bridge is served by the
-        # edge console (not OpenObserve) so its JS can write the localStorage
-        # envelope OO's SPA needs after the GitHub SSO gate. Same middlewares
-        # as the openobserve router (cors + the active auth gate); the path is
-        # specific enough to win over the openobserve router's Host-only rule.
-        - "traefik.http.routers.sso-bridge.rule=Host(`observ.${DOMAIN}`) && Path(`/sso-bridge`)"
-        - "traefik.http.routers.sso-bridge.entrypoints=websecure"
-        - "traefik.http.routers.sso-bridge.tls=true"
-        - "traefik.http.routers.sso-bridge.tls.certresolver=letsencrypt"
-        - "traefik.http.routers.sso-bridge.priority=1000"
-        [[- if .SSOEnabled]]
-        - "traefik.http.routers.sso-bridge.middlewares=cors-default@file,sso-auth@file"
-        [[- else]]
-        - "traefik.http.routers.sso-bridge.middlewares=cors-default@file,admin-auth@file"
-        [[- end]]
-        - "traefik.http.routers.sso-bridge.service=pmcluster"
-      resources:
-        reservations:
-          cpus: '0.05'
-          memory: 64M
-        limits:
-          cpus: '0.25'
-          memory: 256M
-      restart_policy:
-        condition: on-failure
-        delay: 5s
+    labels:
+      "traefik.enable": "true"
+      "traefik.http.routers.pmcluster-web.rule": "Host(`pmcluster.${DOMAIN}`) && (PathPrefix(`/web/`) || Path(`/web`))"
+      "traefik.http.routers.pmcluster-web.entrypoints": "websecure"
+      "traefik.http.routers.pmcluster-web.tls": "true"
+      "traefik.http.routers.pmcluster-web.tls.certresolver": "letsencrypt"
+      [[- if .SSOEnabled]]
+      "traefik.http.routers.pmcluster-web.middlewares": "cors-default@file,sso-auth@file"
+      [[- else]]
+      "traefik.http.routers.pmcluster-web.middlewares": "cors-default@file,admin-auth@file"
+      [[- end]]
+      "traefik.http.routers.pmcluster-api.rule": "Host(`pmcluster.${DOMAIN}`) && !PathPrefix(`/web/`) && !Path(`/web`)"
+      "traefik.http.routers.pmcluster-api.entrypoints": "websecure"
+      "traefik.http.routers.pmcluster-api.tls": "true"
+      "traefik.http.routers.pmcluster-api.tls.certresolver": "letsencrypt"
+      "traefik.http.routers.pmcluster-api.middlewares": "cors-default@file"
+      "traefik.http.services.pmcluster.loadbalancer.server.port": "8042"
+      "traefik.http.routers.sso-bridge.rule": "Host(`observ.${DOMAIN}`) && Path(`/sso-bridge`)"
+      "traefik.http.routers.sso-bridge.entrypoints": "websecure"
+      "traefik.http.routers.sso-bridge.tls": "true"
+      "traefik.http.routers.sso-bridge.tls.certresolver": "letsencrypt"
+      "traefik.http.routers.sso-bridge.priority": "1000"
+      [[- if .SSOEnabled]]
+      "traefik.http.routers.sso-bridge.middlewares": "cors-default@file,sso-auth@file"
+      [[- else]]
+      "traefik.http.routers.sso-bridge.middlewares": "cors-default@file,admin-auth@file"
+      [[- end]]
+      "traefik.http.routers.sso-bridge.service": "pmcluster"
+    resources:
+      reservations:
+        cpus: "0.05"
+        memory: 64M
+      limits:
+        cpus: "0.25"
+        memory: 256M
+    restart: on-failure
+    restart_delay: 5s
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
-
-[[- if not .EdgeLoginDisabled]]
-volumes:
-  pmui-data:
-[[- end]]
-secrets:
-  edge_admin_password:
-    external: true
-  edge_ui_secret:
-    external: true
-  edge_api_token:
-    external: true
-
-networks:
-  traefik-net:
-    external: true

@@ -22,6 +22,15 @@ type EnvResolver interface {
 	ResolveConfig(ctx context.Context, stack, name string) (string, error)
 }
 
+// SettingsResolver is implemented by EnvResolvers that can also resolve
+// `settings(<name>)` references against the cluster settings store. When an
+// env value is exactly `settings(name)`, the translator substitutes the live
+// cluster setting value at deploy/update time. Resolvers that don't
+// implement this reject settings() refs at translate time.
+type SettingsResolver interface {
+	ResolveSetting(ctx context.Context, stack, name string) (string, error)
+}
+
 // Shared external networks ensured by `pmcluster cluster up`; the
 // translator references them with `external: true`.
 const (
@@ -53,6 +62,12 @@ const (
 	// local alias so the compose backend can reference it without reaching
 	// into runtime everywhere.
 	labelNode = runtime.NodeLabel
+
+	// labelPlatform is stamped on every service of a platform-managed stack
+	// (app.platform: true) so the UI/CLI/down/--purge can differentiate
+	// platform stacks (infra/edge/observability/backup/sso) from user app
+	// stacks.
+	labelPlatform = "io.pmcluster.platform"
 )
 
 // defaultWriter is the backend targeted when no writer is supplied: the
@@ -97,7 +112,20 @@ func BuildIR(ctx context.Context, app *dsl.App, res EnvResolver) (*IR, error) {
 		Name:     app.Name,
 		Env:      app.Env,
 		Version:  app.Version,
+		Platform: app.Platform,
+		Networks: app.Networks,
 		Services: make([]IRService, 0, len(app.Services)),
+	}
+
+	// App-level volumes are declared verbatim (plain named volumes, never
+	// bind-relocated under the volume root). Platform stacks rely on this to
+	// keep their data volumes (openobserve_data, traefik_acme, pmui-data)
+	// exactly where they are across the L4 pipeline unification.
+	if len(app.Volumes) > 0 {
+		ir.PlainVolumes = make(map[string]string, len(app.Volumes))
+		for name, decl := range app.Volumes {
+			ir.PlainVolumes[name] = decl
+		}
 	}
 
 	for name, svc := range app.Services {
@@ -140,7 +168,41 @@ func BuildIR(ctx context.Context, app *dsl.App, res EnvResolver) (*IR, error) {
 		ir.Secrets = append(ir.Secrets, s)
 	}
 
+	configSet := map[string]struct{}{}
+	for _, svc := range app.Services {
+		for _, c := range svc.Configs {
+			if c.Source != "" {
+				configSet[c.Source] = struct{}{}
+			}
+		}
+	}
+	for c := range configSet {
+		ir.Configs = append(ir.Configs, c)
+	}
+
 	return ir, nil
+}
+
+// appendDistinct returns base followed by extras, dropping empties and
+// duplicates while preserving first-seen order.
+func appendDistinct(base []string, extras ...string) []string {
+	seen := make(map[string]bool, len(base)+len(extras))
+	out := make([]string, 0, len(base)+len(extras))
+	for _, s := range base {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	for _, s := range extras {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 // translateService maps one DSL service to its IR entry, resolving
@@ -152,17 +214,53 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 	}
 
 	is := &IRService{
-		Name:        name,
-		Image:       s.Image,
-		Command:     s.Command,
-		Entrypoint:  s.Entrypoint,
-		Env:         env,
-		Volumes:     s.Volumes,
-		Secrets:     s.Secrets,
-		RunOnce:     s.RunOnce,
-		Placement:   s.Placement,
-		SkipFilelog: s.SkipFilelog,
-		DependsOn:   s.DependsOn,
+		Name:          name,
+		Image:         s.Image,
+		Command:       s.Command,
+		Entrypoint:    s.Entrypoint,
+		Env:           env,
+		Volumes:       s.Volumes,
+		Secrets:       s.Secrets,
+		RunOnce:       s.RunOnce,
+		Placement:     s.Placement,
+		SkipFilelog:   s.SkipFilelog,
+		DependsOn:     s.DependsOn,
+		Mode:          s.Mode,
+		Restart:       s.Restart,
+		RestartDelay:  s.RestartDelay,
+		Constraints:   s.Constraints,
+		Binds:         s.Binds,
+		ExtraHosts:    s.ExtraHosts,
+		User:          s.User,
+		Labels:        s.Labels,
+		ExtraNetworks: appendDistinct(app.Networks, s.Networks...),
+	}
+
+	if len(s.Ports) > 0 {
+		for _, p := range s.Ports {
+			is.Ports = append(is.Ports, IRPort{
+				Target:    p.Target,
+				Published: p.Published,
+				Protocol:  p.Protocol,
+				Mode:      p.Mode,
+			})
+		}
+	}
+
+	if len(s.Configs) > 0 {
+		for _, c := range s.Configs {
+			is.Configs = append(is.Configs, IRConfigMount{Source: c.Source, Target: c.Target})
+		}
+	}
+
+	if s.Resources != nil {
+		is.Resources = &IRResources{}
+		if s.Resources.Reservations != nil {
+			is.Resources.Reservations = &IRResourceSpec{CPUs: s.Resources.Reservations.CPUs, Memory: s.Resources.Reservations.Memory}
+		}
+		if s.Resources.Limits != nil {
+			is.Resources.Limits = &IRResourceSpec{CPUs: s.Resources.Limits.CPUs, Memory: s.Resources.Limits.Memory}
+		}
 	}
 
 	if s.Expose != nil {
@@ -172,6 +270,17 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 			Aliases:      s.Expose.Aliases,
 			CORSDisabled: s.Expose.CORSDisabled,
 		}
+	}
+
+	if s.Logging != nil {
+		lg := &IRLogging{Driver: s.Logging.Driver}
+		if len(s.Logging.Options) > 0 {
+			lg.Options = make(map[string]string, len(s.Logging.Options))
+			for k, v := range s.Logging.Options {
+				lg.Options[k] = v
+			}
+		}
+		is.Logging = lg
 	}
 
 	is.Healthcheck = translateHealthcheck(s)
@@ -245,6 +354,16 @@ func resolveServiceEnv(ctx context.Context, stack string, env map[string]string,
 				return nil, fmt.Errorf("env.%s: config(%s) contains newlines — configs injected into env must be single-line; use a file config for multi-line content", k, ref.Name)
 			}
 			out[k] = content
+		case "settings":
+			sr, ok := res.(SettingsResolver)
+			if !ok || sr == nil {
+				return nil, fmt.Errorf("env.%s: settings(%s) requires settings resolution (not available)", k, ref.Name)
+			}
+			value, err := sr.ResolveSetting(ctx, stack, ref.Name)
+			if err != nil {
+				return nil, fmt.Errorf("env.%s: resolve settings(%s): %w", k, ref.Name, err)
+			}
+			out[k] = value
 		default:
 			return nil, fmt.Errorf("env.%s: unknown reference kind %q", k, ref.Kind)
 		}
@@ -284,10 +403,11 @@ func translateHealthcheck(s *dsl.Service) *IRHealthcheck {
 	}
 
 	return &IRHealthcheck{
-		Type:     "",
-		Test:     h.Test,
-		Interval: h.Interval,
-		Timeout:  h.Timeout,
-		Retries:  h.Retries,
+		Type:        "",
+		Test:        h.Test,
+		Interval:    h.Interval,
+		Timeout:     h.Timeout,
+		StartPeriod: h.StartPeriod,
+		Retries:     h.Retries,
 	}
 }

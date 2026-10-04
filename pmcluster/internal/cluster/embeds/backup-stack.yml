@@ -1,121 +1,61 @@
-version: "3.9"
-
+# backup-stack.yml — offen/docker-volume-backup agents (DSL manifest,
+# platform-managed). Rendered by LoadComposeFile through the same manifest
+# pipeline as customer app stacks.
+app: backup
+env: production
+domain: ${DOMAIN}
+platform: true
 services:
-  # The Backup Agent
-  # Global by default (one copy per node); manager-only when replicated disks
-  # are in use (see docs/storage-and-databases.md).
+  # The Backup Agent — one per node when backup_all_nodes is set; one per
+  # STORAGE node (pmcluster.storage label) when the storage_nodes setting is
+  # non-empty; otherwise a single replica pinned to the platform node / manager.
   volume-backup:
     image: offen/docker-volume-backup:v2
-    deploy:
 [[ if .BackupAllNodes ]]
-      mode: global  # <--- The Magic: Ensures 1 copy per node
+    mode: global
 [[ else if .StorageNodeConstraint ]]
-      # One backup agent per STORAGE node (nodes carrying the
-      # pmcluster.storage label — set by `pmcluster join --storage-node`
-      # or the cluster-up default leader). Backups only run where app data
-      # actually lives, never on plain worker/manager nodes.
-      mode: global
-      placement:
-        constraints:
-          - node.labels.[[.StorageNodeLabel]] == true
+    mode: global
+    constraints:
+      - "node.labels.[[.StorageNodeLabel]] == true"
 [[ else ]]
-      mode: replicated
-      replicas: 1
-      placement:
-        constraints:
-[[ if .PlatformNode ]]
-          - node.hostname == [[.PlatformNode]]
-[[ else ]]
-          - node.role == manager
+    replicas: 1
+    placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
 [[ end ]]
-[[ end ]]
-      restart_policy:
-        condition: on-failure
-    environment:
-      # 1. Schedule: Run every night at 3:00 AM
-      - BACKUP_CRON_EXPRESSION=0 3 * * *
-      
-      # 2. Naming: distinct names per node so they don't overwrite each other
-      # Result: backup-nodeID-2023-10-25.tar.gz
-      - BACKUP_FILENAME=backup-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz
-      
-      # 3. Retention: Delete backups older than the configured window
-      #    (backup_retention_days setting, default 15; pmcluster prunes its
-      #    own audit rows + archive files on the same schedule)
-      - BACKUP_PRUNING_PREFIX=backup-
-      - BACKUP_RETENTION_DAYS=[[ if .BackupRetentionDays ]][[.BackupRetentionDays]][[ else ]]15[[ end ]]
-
-      # 4. Offsite (S3-compatible) upload — Cloudflare R2, MinIO, AWS S3.
-      #    Configured via pmcluster settings (backup_s3_*); when all of
-      #    endpoint/bucket/access-key/secret-key are set, every archive is
-      #    ALSO uploaded off-host (the local /var/stack/backup copy stays).
+    restart: on-failure
+    env:
+      BACKUP_CRON_EXPRESSION: "0 3 * * *"
+      BACKUP_FILENAME: "backup-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz"
+      BACKUP_PRUNING_PREFIX: "backup-"
+      BACKUP_RETENTION_DAYS: "[[ if .BackupRetentionDays ]][[.BackupRetentionDays]][[ else ]]15[[ end ]]"
       [[- if .BackupS3.Configured ]]
-      - AWS_S3_BUCKET_NAME=[[.BackupS3.Bucket]]
-      - AWS_ACCESS_KEY_ID=[[.BackupS3.AccessKey]]
-      - AWS_SECRET_ACCESS_KEY=[[.BackupS3.SecretKey]]
-      - AWS_ENDPOINT=[[.BackupS3.Endpoint]]
-      - AWS_REGION=[[.BackupS3.Region]]
-      - AWS_S3_FORCE_PATH_STYLE=true
+      AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
+      AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
+      AWS_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
+      AWS_ENDPOINT: "[[.BackupS3.Endpoint]]"
+      AWS_REGION: "[[.BackupS3.Region]]"
+      AWS_S3_FORCE_PATH_STYLE: "true"
       [[- end ]]
-      
-    volumes:
-      # SOURCE: the standardized single storage root — every container volume
-      # lives under the volume root (the volume_root setting, rendered as
-      # [[.VolumeRoot]]), so backing up the root captures all app data.
-      - [[.VolumeRoot]]:/backup/data:ro
-
-      # DESTINATION: per-node local archive. The bind path is host-local, so
-      # each node writes to ITS OWN archive dir (the manager's copy is the
-      # "node 0" archive by construction). Node identity is kept in the
-      # filename via {{ .Node.ID }}.
-      - [[.BackupDir]]:/archive
-
-      # CONFIG: Sync timezone so 3 AM is actually 3 AM
-      - /etc/localtime:/etc/localtime:ro
-
+    binds:
+      - "[[.VolumeRoot]]:/backup/data:ro"
+      - "[[.BackupDir]]:/archive"
+      - "/etc/localtime:/etc/localtime:ro"
 [[ if .DataDir ]]
-  # The Control-Plane Backup Agent
-  # Runs ONLY on the manager node (where ~/.pmcluster lives). Archives the
-  # pmcluster control plane itself — SQLite DB (users, API keys, webhook
-  # secrets, credentials, stack revisions), the AES-GCM encryption key,
-  # TLS certs, and rendered configs — so a lost manager disk doesn't mean
-  # a full re-bootstrap. Written to the same /archive as volume backups
-  # with a distinct prefix and a longer retention (small, high-value).
+  # The Control-Plane Backup Agent — runs ONLY on the manager node (where
+  # ~/.pmcluster lives). Archives the pmcluster control plane itself (SQLite
+  # DB, AES-GCM key, TLS certs, rendered configs) so a lost manager disk
+  # doesn't mean a full re-bootstrap. Distinct prefix + longer retention.
   control-plane-backup:
     image: offen/docker-volume-backup:v2
-    deploy:
-      placement:
-        constraints:
-[[ if .PlatformNode ]]
-          - node.hostname == [[.PlatformNode]]
-[[ else ]]
-          - node.role == manager
-[[ end ]]
-      restart_policy:
-        condition: on-failure
-    environment:
-      # Same nightly schedule as the volume backup agent.
-      - BACKUP_CRON_EXPRESSION=0 3 * * *
-      
-      # Distinct name so the two agents never overwrite each other.
-      - BACKUP_FILENAME=pmcluster-ctlplane-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz
-      
-      # Only the control-plane dir — NOT the docker volume directory.
-      - BACKUP_SOURCES=/backup/pmcluster
-      
-      # Retention: keep 30 days (a few MB, critical if disk dies).
-      - BACKUP_PRUNING_PREFIX=pmcluster-ctlplane-
-      - BACKUP_RETENTION_DAYS=30
-
-    volumes:
-      # SOURCE: the pmcluster data dir (rendered from the daemon's config).
-      # Includes data.db, .encryption_key, config/ (incl. main-cert local copy).
-      - ${DATA_DIR}:/backup/pmcluster:ro
-      
-      # DESTINATION: same per-node archive root as the volume backups
-      # (the manager's archive dir is the "node 0" archive).
-      - [[.BackupDir]]:/archive
-      
-      # CONFIG: Sync timezone so 3 AM is actually 3 AM
-      - /etc/localtime:/etc/localtime:ro
+    placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
+    restart: on-failure
+    env:
+      BACKUP_CRON_EXPRESSION: "0 3 * * *"
+      BACKUP_FILENAME: "pmcluster-ctlplane-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz"
+      BACKUP_SOURCES: "/backup/pmcluster"
+      BACKUP_PRUNING_PREFIX: "pmcluster-ctlplane-"
+      BACKUP_RETENTION_DAYS: "30"
+    binds:
+      - "${DATA_DIR}:/backup/pmcluster:ro"
+      - "[[.BackupDir]]:/archive"
+      - "/etc/localtime:/etc/localtime:ro"
 [[ end ]]

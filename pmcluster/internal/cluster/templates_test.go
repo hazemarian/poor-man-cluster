@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"path/filepath"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+	"sigs.k8s.io/yaml"
 )
 
 // stacksWithDomain lists the bundled stacks that actually contain ${DOMAIN}
@@ -76,7 +78,7 @@ func TestLoadComposeFile_BackupControlPlane(t *testing.T) {
 	for _, want := range []string{
 		"control-plane-backup",
 		"/root/.pmcluster:/backup/pmcluster:ro",
-		"BACKUP_SOURCES=/backup/pmcluster",
+		"BACKUP_SOURCES: /backup/pmcluster",
 		"pmcluster-ctlplane-",
 		"node.role == manager",
 		"/data/apps:/backup/data:ro",
@@ -132,7 +134,7 @@ func TestLoadComposeFile_BackupStorageNodeConstraint(t *testing.T) {
 	// (3) Neither: replicated manager fallback, no label mention.
 	in3 := RenderInput{Domain: "example.com"}
 	body3 := string(mustLoadBackup(t, in3))
-	if !strings.Contains(body3, "mode: replicated") || !strings.Contains(body3, "node.role == manager") {
+	if !strings.Contains(body3, "replicas: 1") || !strings.Contains(body3, "node.role == manager") {
 		t.Errorf("fallback render should be replicated manager:\n%s", body3)
 	}
 	if strings.Contains(body3, "pmcluster.storage") {
@@ -211,7 +213,7 @@ func TestLoadComposeFile_ObservabilityOmitsRootToken(t *testing.T) {
 	if strings.Contains(body, "ZO_ROOT_USER_TOKEN") {
 		t.Error("observability stack must NOT set ZO_ROOT_USER_TOKEN (baked into OO volume on first boot)")
 	}
-	if !strings.Contains(body, "ZO_ROOT_USER_EMAIL=ops@example.com") {
+	if !strings.Contains(body, "ZO_ROOT_USER_EMAIL: ops@example.com") {
 		t.Error("observability stack should still set ZO_ROOT_USER_EMAIL")
 	}
 }
@@ -244,37 +246,53 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 	}
 	body := string(data)
 
-	for _, want := range []string{
-		"Host(`sso.example.com`)",
-		"traefik.http.services.sso.loadbalancer.server.port=4180",
-		"OAUTH2_PROXY_REDIRECT_URL: \"https://sso.example.com/oauth2/callback\"",
-		"OAUTH2_PROXY_CLIENT_ID: \"client-id\"",
-		"OAUTH2_PROXY_CLIENT_SECRET: \"client-secret\"",
-		"OAUTH2_PROXY_GITHUB_ORG: \"nextrum-s\"",
-		"OAUTH2_PROXY_GITHUB_REPOS: \"nextrum-s/donation-campaign,nextrum-s/donation-campaign-frontend\"",
-		"OAUTH2_PROXY_COOKIE_SECRET: \"cookie-secret\"",
-		// The forwardAuth start redirect is host-relative to the request it
-		// intercepted, so /oauth2/* must resolve on every gated host too.
-		"Host(`pmcluster.example.com`) && PathPrefix(`/oauth2`)",
-		"Host(`observ.example.com`) && PathPrefix(`/oauth2`)",
-		// Shared cookie so the sso.<domain> callback session works on all hosts.
-		"OAUTH2_PROXY_COOKIE_DOMAINS: \".example.com\"",
-		// Trust X-Forwarded-* (via --reverse-proxy, the v7 flag name) so the
-		// post-login redirect goes back to the ORIGINAL host (pmcluster./observ.)
-		// instead of the sso. callback host; whitelist-domain allows the
-		// cross-subdomain hop.
-		"OAUTH2_PROXY_REVERSE_PROXY: \"true\"",
-		"OAUTH2_PROXY_WHITELIST_DOMAINS: \".example.com\"",
-		"OAUTH2_PROXY_COOKIE_EXPIRE: \"1h\"",
+	// The DSL pipeline renders env and labels as YAML maps (values may be
+	// wrapped or quoted by the marshaler), so assert on the parsed structure.
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse sso-stack render: %v", err)
+	}
+	svcs := doc["services"].(map[string]interface{})
+	proxy := svcs["oauth2-proxy"].(map[string]interface{})
+	env := proxy["environment"].(map[string]interface{})
+	deploy := proxy["deploy"].(map[string]interface{})
+	labels := deploy["labels"].(map[string]interface{})
+
+	for want, kv := range map[string]string{
+		"OAUTH2_PROXY_PROVIDER":          "github",
+		"OAUTH2_PROXY_REDIRECT_URL":      "https://sso.example.com/oauth2/callback",
+		"OAUTH2_PROXY_CLIENT_ID":         "client-id",
+		"OAUTH2_PROXY_CLIENT_SECRET":     "client-secret",
+		"OAUTH2_PROXY_GITHUB_ORG":        "nextrum-s",
+		"OAUTH2_PROXY_GITHUB_REPOS":      "nextrum-s/donation-campaign,nextrum-s/donation-campaign-frontend",
+		"OAUTH2_PROXY_COOKIE_SECRET":     "cookie-secret",
+		"OAUTH2_PROXY_COOKIE_DOMAINS":    ".example.com",
+		"OAUTH2_PROXY_REVERSE_PROXY":     "true",
+		"OAUTH2_PROXY_WHITELIST_DOMAINS": ".example.com",
+		"OAUTH2_PROXY_COOKIE_EXPIRE":     "1h",
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("sso-stack render missing %q", want)
+		if fmt.Sprint(env[want]) != kv {
+			t.Errorf("sso-stack env %s = %q, want %q", want, fmt.Sprint(env[want]), kv)
+		}
+	}
+	if fmt.Sprint(labels["traefik.http.services.sso.loadbalancer.server.port"]) != "4180" {
+		t.Errorf("sso-stack lb port label = %q, want 4180", fmt.Sprint(labels["traefik.http.services.sso.loadbalancer.server.port"]))
+	}
+	if !strings.Contains(fmt.Sprint(labels["traefik.http.routers.sso.rule"]), "Host(`sso.example.com`)") {
+		t.Errorf("sso-stack router rule missing sso host: %q", fmt.Sprint(labels["traefik.http.routers.sso.rule"]))
+	}
+	// The forwardAuth start redirect is host-relative to the request it
+	// intercepted, so /oauth2/* must resolve on every gated host too.
+	for rname, host := range map[string]string{"sso-pmcluster": "pmcluster.example.com", "sso-observ": "observ.example.com"} {
+		rule := fmt.Sprint(labels["traefik.http.routers."+rname+".rule"])
+		if !strings.Contains(rule, "Host(`"+host+"`)") || !strings.Contains(rule, "PathPrefix(`/oauth2`)") {
+			t.Errorf("sso-stack router %s rule missing Host(`%s`) && PathPrefix(`/oauth2`): %q", rname, host, rule)
 		}
 	}
 	// The cluster uses its own operator-supplied certificate (BYO mode): the
 	// ACME resolver is only declared when .ACMEEmail is set, so no router may
 	// reference it here.
-	if strings.Contains(body, "certresolver=letsencrypt") {
+	if strings.Contains(body, "certresolver: letsencrypt") || strings.Contains(body, "certresolver=letsencrypt") {
 		t.Error("sso-stack render must not reference the letsencrypt resolver with BYO certs")
 	}
 	for _, bad := range []string{"pmcluster.example.com/oauth2", "__SSO", "[[."} {
@@ -657,7 +675,7 @@ func TestLoadComposeFile_InfraACMEMode(t *testing.T) {
 		"certificatesresolvers.letsencrypt.acme.email=ops@example.com",
 		"--certificatesresolvers.letsencrypt.acme.httpchallenge=true",
 		"traefik_acme:/letsencrypt",
-		"traefik.http.routers.traefik.tls.certresolver=letsencrypt",
+		"traefik.http.routers.traefik.tls.certresolver: letsencrypt",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("ACME-mode infra stack missing %q", want)
@@ -842,19 +860,19 @@ func TestLoadComposeFile_InfraBYOMode(t *testing.T) {
 	if strings.Contains(s, "traefik_acme") {
 		t.Errorf("BYO-mode infra stack must not declare the ACME volume")
 	}
-	if !strings.Contains(s, "  {}\n") {
-		t.Errorf("BYO-mode infra stack must render an empty volumes mapping (not volumes: null):\n%s", s)
+	if strings.Contains(s, "\nvolumes:\n") {
+		t.Errorf("BYO-mode infra stack must render no volumes mapping (no ACME volume):\n%s", s)
 	}
 	for _, want := range []string{
-		"  cert_v001:\n    external: true",
-		"  key_v001:\n    external: true",
+		"  cert:\n    external: true\n    name: cert_v001",
+		"  key:\n    external: true\n    name: key_v001",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("BYO-mode infra stack missing %q", want)
 		}
 	}
 	// The dashboard router gate must match the active auth: SSO off → htpasswd.
-	if !strings.Contains(s, "traefik.http.routers.traefik.middlewares=admin-auth@file,cors-default@file") {
+	if !strings.Contains(s, "traefik.http.routers.traefik.middlewares: admin-auth@file,cors-default@file") {
 		t.Errorf("BYO-mode infra stack must gate the dashboard with admin-auth (SSO off):\n%s", s)
 	}
 	if strings.Contains(s, "sso-auth@file") {
@@ -876,7 +894,7 @@ func TestLoadComposeFile_InfraSSOMode(t *testing.T) {
 		t.Fatalf("LoadComposeFile: %v", err)
 	}
 	s := string(body)
-	if !strings.Contains(s, "traefik.http.routers.traefik.middlewares=sso-auth@file,cors-default@file") {
+	if !strings.Contains(s, "traefik.http.routers.traefik.middlewares: sso-auth@file,cors-default@file") {
 		t.Errorf("SSO-mode infra stack must gate the dashboard with sso-auth:\n%s", s)
 	}
 	if strings.Contains(s, "admin-auth@file") {
@@ -1110,7 +1128,7 @@ func TestRenderRefResolver(t *testing.T) {
 		"pmcluster_otel_config":     "pmcluster_otel_config_v046",
 		"pmcluster_traefik_dynamic": "pmcluster_traefik_dynamic_v044",
 	} {
-		got, err := r.ResolveConfig(context.Background(), name)
+		got, err := r.ResolveConfig(context.Background(), "infra", name)
 		if err != nil {
 			t.Errorf("ResolveConfig(%q): %v", name, err)
 			continue
@@ -1124,21 +1142,17 @@ func TestRenderRefResolver(t *testing.T) {
 		"cert": "cert_v042",
 		"key":  "key_v042",
 	} {
-		got, err := r.ResolveSecret(context.Background(), name)
-		if err != nil {
-			t.Errorf("ResolveSecret(%q): %v", name, err)
-			continue
-		}
+		got := platformSecretNames(r.render)(context.Background(), name)
 		if got != want {
-			t.Errorf("ResolveSecret(%q) = %q, want %q", name, got, want)
+			t.Errorf("platformSecretNames(%q) = %q, want %q", name, got, want)
 		}
 	}
 
-	if _, err := r.ResolveConfig(context.Background(), "nope"); err == nil {
+	if _, err := r.ResolveConfig(context.Background(), "infra", "nope"); err == nil {
 		t.Error("ResolveConfig(unknown) should error")
 	}
-	if _, err := r.ResolveSecret(context.Background(), "nope"); err == nil {
-		t.Error("ResolveSecret(unknown) should error")
+	if _, err := r.ResolveSetting(context.Background(), "infra", "nope"); err == nil {
+		t.Error("ResolveSetting should error")
 	}
 }
 
@@ -1222,12 +1236,12 @@ func TestLoadComposeFile_EdgeSSOBridge(t *testing.T) {
 	}
 	s := string(out)
 	for _, want := range []string{
-		"traefik.http.routers.sso-bridge.rule=Host(`observ.example.com`) && Path(`/sso-bridge`)",
-		"traefik.http.routers.sso-bridge.entrypoints=websecure",
-		"traefik.http.routers.sso-bridge.tls=true",
-		"traefik.http.routers.sso-bridge.priority=1000",
-		"traefik.http.routers.sso-bridge.middlewares=cors-default@file,sso-auth@file",
-		"traefik.http.routers.sso-bridge.service=pmcluster",
+		"traefik.http.routers.sso-bridge.rule: Host(`observ.example.com`) && Path(`/sso-bridge`)",
+		"traefik.http.routers.sso-bridge.entrypoints: websecure",
+		"traefik.http.routers.sso-bridge.tls: \"true\"",
+		"traefik.http.routers.sso-bridge.priority: \"1000\"",
+		"traefik.http.routers.sso-bridge.middlewares: cors-default@file,sso-auth@file",
+		"traefik.http.routers.sso-bridge.service: pmcluster",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered edge-stack missing %q", want)
@@ -1248,7 +1262,7 @@ func TestLoadComposeFile_EdgeSSOBridgeAdminAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(out)
-	if !strings.Contains(s, "traefik.http.routers.sso-bridge.middlewares=cors-default@file,admin-auth@file") {
+	if !strings.Contains(s, "traefik.http.routers.sso-bridge.middlewares: cors-default@file,admin-auth@file") {
 		t.Errorf("rendered edge-stack missing admin-auth bridge middleware:\n%s", s)
 	}
 }
@@ -1266,7 +1280,7 @@ func TestLoadComposeFile_EdgeStateless(t *testing.T) {
 		t.Fatal(err)
 	}
 	cs := string(cluster)
-	for _, want := range []string{"DATA_DIR=:memory:"} {
+	for _, want := range []string{"DATA_DIR: ':memory:'"} {
 		if !strings.Contains(cs, want) {
 			t.Errorf("cluster-mode edge missing %q:\n%s", want, cs)
 		}
@@ -1289,7 +1303,7 @@ func TestLoadComposeFile_EdgeStateless(t *testing.T) {
 		t.Fatal(err)
 	}
 	ss := string(standalone)
-	for _, want := range []string{"DATA_DIR=/data", "pmui-data:/data", "pmui-data:"} {
+	for _, want := range []string{"DATA_DIR: /data", "pmui-data:/data", "pmui-data:"} {
 		if !strings.Contains(ss, want) {
 			t.Errorf("standalone-mode edge missing %q:\n%s", want, ss)
 		}
@@ -1312,9 +1326,9 @@ func TestLoadComposeFile_OORetentionRenders(t *testing.T) {
 	}
 	body := string(data)
 	for _, want := range []string{
-		"ZO_LOGS_RETENTION_DAYS=30",
-		"ZO_METRICS_RETENTION_DAYS=14",
-		"ZO_TRACES_RETENTION_DAYS=10",
+		"ZO_LOGS_RETENTION_DAYS: \"30\"",
+		"ZO_METRICS_RETENTION_DAYS: \"14\"",
+		"ZO_TRACES_RETENTION_DAYS: \"10\"",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered observability stack missing %q:\n%s", want, body)
@@ -1345,12 +1359,12 @@ func TestLoadComposeFile_BackupS3Renders(t *testing.T) {
 	}
 	body := string(data)
 	for _, want := range []string{
-		"AWS_S3_BUCKET_NAME=pmcluster-backups",
-		"AWS_ACCESS_KEY_ID=ak",
-		"AWS_SECRET_ACCESS_KEY=sk",
-		"AWS_ENDPOINT=https://acct.r2.cloudflarestorage.com",
-		"AWS_REGION=auto",
-		"AWS_S3_FORCE_PATH_STYLE=true",
+		"AWS_S3_BUCKET_NAME: pmcluster-backups",
+		"AWS_ACCESS_KEY_ID: ak",
+		"AWS_SECRET_ACCESS_KEY: sk",
+		"AWS_ENDPOINT: https://acct.r2.cloudflarestorage.com",
+		"AWS_REGION: auto",
+		"AWS_S3_FORCE_PATH_STYLE: \"true\"",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered backup stack missing %q:\n%s", want, body)

@@ -120,7 +120,7 @@ func EnsureVersionedSecret(ctx context.Context, d runtime.Client, hs secretHashS
 	}
 
 	if maxVer > 0 {
-		curName := fmt.Sprintf("%s_v%03d", baseName, maxVer)
+		curName := fmt.Sprintf("%s_v%d", baseName, maxVer)
 		stored := ""
 		if hs != nil {
 			stored = hs.GetSettingDefault(ctx, secretHashKey(baseName), "")
@@ -134,7 +134,7 @@ func EnsureVersionedSecret(ctx context.Context, d runtime.Client, hs secretHashS
 	}
 
 	newVer := maxVer + 1
-	versionedName = fmt.Sprintf("%s_v%03d", baseName, newVer)
+	versionedName = fmt.Sprintf("%s_v%d", baseName, newVer)
 
 	err = d.SecretCreate(ctx, runtime.SecretSpec{
 		Name: versionedName,
@@ -204,7 +204,7 @@ func EnsureConfig(ctx context.Context, d runtime.Client, baseName string, data [
 	}
 
 	if maxVer > 0 {
-		curName := fmt.Sprintf("%s_v%03d", baseName, maxVer)
+		curName := fmt.Sprintf("%s_v%d", baseName, maxVer)
 		if cur, err := d.ConfigInspect(ctx, curName); err == nil {
 			// Content is compared by hashing the actual config bytes, never by
 			// trusting the pmcluster.data_hash label — the label could be
@@ -216,7 +216,7 @@ func EnsureConfig(ctx context.Context, d runtime.Client, baseName string, data [
 	}
 
 	newVer := maxVer + 1
-	versionedName = fmt.Sprintf("%s_v%03d", baseName, newVer)
+	versionedName = fmt.Sprintf("%s_v%d", baseName, newVer)
 
 	err = d.ConfigCreate(ctx, runtime.ConfigSpec{
 		Name: versionedName,

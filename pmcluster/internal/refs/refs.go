@@ -17,12 +17,13 @@ import (
 	"strings"
 )
 
-// inlineRefRe matches config(name)/secrets(name) references ANYWHERE in a
-// compose file — including inline YAML keys like `config(pmcluster_otel_config):`
-// and list items like `- source: config(pmcluster_traefik_dynamic)`. Unlike
-// envRefRe (which is exact-match on whole env values), this finds references
-// embedded in larger text.
-var inlineRefRe = regexp.MustCompile(`(config|secrets)\(([^)]+)\)`)
+// inlineRefRe matches config(name)/secrets(name)/settings(name) references
+// ANYWHERE in a compose file — including inline YAML keys like
+// `config(pmcluster_otel_config):` and list items like
+// `- source: config(pmcluster_traefik_dynamic)`. Unlike envRefRe (which is
+// exact-match on whole env values), this finds references embedded in larger
+// text.
+var inlineRefRe = regexp.MustCompile(`(config|secrets|settings)\(([^)]+)\)`)
 
 // RefResolver resolves config()/secrets() references found in compose text.
 // The cluster side (internal/cluster) implements it with a RenderInput so the
@@ -58,6 +59,12 @@ func ReplaceRefs(ctx context.Context, text string, r RefResolver) (string, error
 			resolved, err = r.ResolveConfig(ctx, name)
 		case "secrets":
 			resolved, err = r.ResolveSecret(ctx, name)
+		case "settings":
+			if sr, ok := r.(SettingsResolver); ok {
+				resolved, err = sr.ResolveSetting(ctx, name)
+			} else {
+				err = fmt.Errorf("settings(%s) reference not supported by this resolver", name)
+			}
 		default:
 			err = fmt.Errorf("unknown reference kind %q", sub[1])
 			return m
@@ -68,6 +75,14 @@ func ReplaceRefs(ctx context.Context, text string, r RefResolver) (string, error
 		return resolved
 	})
 	return out, err
+}
+
+// SettingsResolver is implemented by RefResolvers that can resolve a
+// settings(<name>) reference against the cluster settings store. The DSL and
+// platform templates use it to interpolate live cluster settings into
+// rendered compose at deploy/update time.
+type SettingsResolver interface {
+	ResolveSetting(ctx context.Context, name string) (string, error)
 }
 
 // FindAll extracts every config(...)/secrets(...) reference from text in

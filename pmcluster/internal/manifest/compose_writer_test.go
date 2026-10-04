@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
@@ -305,5 +307,604 @@ func TestTranslate_StatefulDefaultsDisabled(t *testing.T) {
 	// Stateless web service keeps the start-first default.
 	if !strings.Contains(s, "order: start-first") {
 		t.Errorf("stateless service should keep start-first update order:\n%s", s)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// platform-via-DSL surface: mode/restart, raw constraints, binds, ports,
+// config mounts, extra_hosts, user, resources, raw labels, the platform
+// label and app-level networks.
+// ---------------------------------------------------------------------------
+
+// renderCompose translates app through w (nil = default compose writer) and
+// unmarshals the rendered YAML into a composeFile, returning BOTH the raw
+// text (for substring assertions) and the parsed structure (for precise
+// per-field assertions).
+func renderCompose(t *testing.T, app *dsl.App, w Writer) (string, composeFile) {
+	t.Helper()
+	out, err := TranslateIR(context.Background(), app, nil, w)
+	if err != nil {
+		t.Fatalf("TranslateIR: %v", err)
+	}
+	var cf composeFile
+	if err := yaml.Unmarshal(out, &cf); err != nil {
+		t.Fatalf("unmarshal rendered compose: %v\n%s", err, out)
+	}
+	return string(out), cf
+}
+
+// deployOf returns the deploy block of a rendered service or fails the test.
+func deployOf(t *testing.T, cf composeFile, svc string) *composeDeploy {
+	t.Helper()
+	cs, ok := cf.Services[svc]
+	if !ok || cs.Deploy == nil {
+		t.Fatalf("service %q missing from rendered compose (or has no deploy block)", svc)
+	}
+	return cs.Deploy
+}
+
+// TestTranslate_GlobalMode verifies mode: global renders a Swarm global
+// service — deploy mode global, restart_policy condition defaulting to
+// "any", NO replicas key, NO update_config block — plus the validation rules
+// (mode: global is mutually exclusive with replicas and run_once) and the
+// stateful auto-pin exemption (global services run on every node, never pin).
+func TestTranslate_GlobalMode(t *testing.T) {
+	app := baseApp()
+	app.Services["api"].Mode = "global"
+
+	s, cf := renderCompose(t, app, nil)
+	d := deployOf(t, cf, "api")
+
+	if !strings.Contains(s, "mode: global") {
+		t.Errorf("global service should render `mode: global`:\n%s", s)
+	}
+	if !strings.Contains(s, "condition: any") {
+		t.Errorf("global service should default restart_policy condition to any:\n%s", s)
+	}
+	if strings.Contains(s, "replicas:") {
+		t.Errorf("global service must NOT render a replicas key:\n%s", s)
+	}
+	if strings.Contains(s, "update_config") {
+		t.Errorf("global service must NOT render an update_config block:\n%s", s)
+	}
+	if d.Mode != "global" {
+		t.Errorf("deploy.mode = %q, want global", d.Mode)
+	}
+	if d.Replicas != nil {
+		t.Errorf("deploy.replicas = %d, want nil for a global service", *d.Replicas)
+	}
+	if d.UpdateConfig != nil {
+		t.Errorf("deploy.update_config = %+v, want nil for a global service", d.UpdateConfig)
+	}
+	if d.RestartPolicy == nil || d.RestartPolicy.Condition != "any" {
+		t.Errorf("restart_policy = %+v, want condition any", d.RestartPolicy)
+	}
+
+	// An explicit restart override is honored on the global branch.
+	app = baseApp()
+	app.Services["api"].Mode = "global"
+	app.Services["api"].Restart = "on-failure"
+	s, _ = renderCompose(t, app, nil)
+	if !strings.Contains(s, "condition: on-failure") {
+		t.Errorf("global + restart: on-failure should render that condition:\n%s", s)
+	}
+
+	// Stateful auto-pin exemption: a global service holding a volume is NOT
+	// pinned to the platform node — it must run on every node.
+	app = baseApp()
+	app.Services["api"].Mode = "global"
+	app.Services["api"].Volumes = []string{"data:/data"}
+	s, _ = renderCompose(t, app, &ComposeWriter{PinNode: "node-01"})
+	if strings.Contains(s, "node.hostname == node-01") {
+		t.Errorf("global service must be exempt from the stateful auto-pin:\n%s", s)
+	}
+	if strings.Contains(s, runtime.NodeLabel) {
+		t.Errorf("global service must not carry the %s pin label:\n%s", runtime.NodeLabel, s)
+	}
+
+	// Validation: mode: global is meaningless with replicas / run_once.
+	bad := baseApp()
+	bad.Services["api"].Mode = "global"
+	bad.Services["api"].Replicas = ptr(2)
+	mustFail(t, bad, "replicas and mode: global are mutually exclusive")
+
+	bad = baseApp()
+	bad.Services["api"].Mode = "global"
+	bad.Services["api"].RunOnce = true
+	mustFail(t, bad, "run_once and mode: global are mutually exclusive")
+
+	// Anything other than "global" (or empty) is rejected.
+	bad = baseApp()
+	bad.Services["api"].Mode = "daemon"
+	mustFail(t, bad, "services.api.mode:")
+
+	// Empty mode keeps the replicated default (replicas rendered).
+	app = baseApp()
+	s, cf = renderCompose(t, app, nil)
+	if d := deployOf(t, cf, "api"); d.Mode != "" || d.Replicas == nil || *d.Replicas != 1 {
+		t.Errorf("default mode should stay replicated with replicas=1, got mode=%q replicas=%v", d.Mode, d.Replicas)
+	}
+	if strings.Contains(s, "mode: global") {
+		t.Errorf("a service without mode must not render mode: global:\n%s", s)
+	}
+}
+
+// TestTranslate_RawConstraints verifies raw placement constraints render
+// verbatim alongside (AFTER) the auto-derived role/hostname constraint.
+func TestTranslate_RawConstraints(t *testing.T) {
+	const raw = "node.labels.pmcluster.storage == true"
+
+	// No Placement → the raw constraint is the only entry.
+	app := baseApp()
+	app.Services["api"].Constraints = []string{raw}
+	s, cf := renderCompose(t, app, nil)
+	if !strings.Contains(s, raw) {
+		t.Errorf("raw constraint should render verbatim:\n%s", s)
+	}
+	if p := deployOf(t, cf, "api").Placement; p == nil || len(p.Constraints) != 1 || p.Constraints[0] != raw {
+		t.Errorf("placement constraints = %+v, want exactly [%q]", p, raw)
+	}
+
+	// Placement "worker" + raw constraint → BOTH, role constraint first.
+	app = baseApp()
+	app.Services["api"].Placement = "worker"
+	app.Services["api"].Constraints = []string{raw}
+	s, cf = renderCompose(t, app, nil)
+	iRole := strings.Index(s, "node.role == worker")
+	iRaw := strings.Index(s, raw)
+	if iRole < 0 {
+		t.Errorf("auto role constraint missing:\n%s", s)
+	}
+	if iRaw < 0 {
+		t.Errorf("raw constraint missing:\n%s", s)
+	}
+	if iRole >= 0 && iRaw >= 0 && iRole > iRaw {
+		t.Errorf("role constraint must render BEFORE the raw constraint:\n%s", s)
+	}
+	if p := deployOf(t, cf, "api").Placement; p == nil ||
+		len(p.Constraints) != 2 ||
+		p.Constraints[0] != "node.role == worker" || p.Constraints[1] != raw {
+		t.Errorf("placement constraints = %+v, want [role worker, raw]", p)
+	}
+
+	// Hostname placement + raw constraint → BOTH, hostname pin first.
+	app = baseApp()
+	app.Services["api"].Placement = "node-01"
+	app.Services["api"].Constraints = []string{raw}
+	_, cf = renderCompose(t, app, nil)
+	if p := deployOf(t, cf, "api").Placement; p == nil ||
+		len(p.Constraints) != 2 ||
+		p.Constraints[0] != "node.hostname == node-01" || p.Constraints[1] != raw {
+		t.Errorf("placement constraints = %+v, want [hostname pin, raw]", p)
+	}
+
+	// Validation: empty / multi-line constraints are rejected.
+	bad := baseApp()
+	bad.Services["api"].Constraints = []string{"   "}
+	mustFail(t, bad, "constraints[0]: empty constraint")
+
+	bad = baseApp()
+	bad.Services["api"].Constraints = []string{"node.role == manager\nnode.role == worker"}
+	mustFail(t, bad, "constraints[0]: constraint must be single-line")
+}
+
+// TestTranslate_BindsVerbatim asserts raw binds land in the service volumes
+// list byte-for-byte — they are host mounts (docker.sock, the volume root,
+// …) and must NOT be relocated under <volume_root>/<app>/ like ordinary
+// host-path volumes.
+func TestTranslate_BindsVerbatim(t *testing.T) {
+	binds := []string{
+		"/var/run/docker.sock:/var/run/docker.sock:ro",
+		"/srv/stack/data:/backup/data:ro",
+	}
+	app := baseApp()
+	app.Services["api"].Binds = binds
+	app.Services["api"].Volumes = []string{"data_vol:/data"}
+
+	s, cf := renderCompose(t, app, &ComposeWriter{})
+	got := cf.Services["api"].Volumes
+
+	contains := func(hay []string, needle string) bool {
+		for _, h := range hay {
+			if h == needle {
+				return true
+			}
+		}
+		return false
+	}
+	for _, b := range binds {
+		if !contains(got, b) {
+			t.Errorf("bind %q must appear VERBATIM in volumes %v:\n%s", b, got, s)
+		}
+	}
+
+	// NOT relocated: no <root>/<app>/<basename> rewriting of the raw binds.
+	for _, leak := range []string{"my-app/docker.sock", "my-app/data:/backup"} {
+		if strings.Contains(s, leak) {
+			t.Errorf("raw bind must not be relocated (found %q):\n%s", leak, s)
+		}
+	}
+	// A regular named volume still renders untouched next to the binds.
+	if !contains(got, "data_vol:/data") {
+		t.Errorf("named volume should still render as data_vol:/data, got %v:\n%s", got, s)
+	}
+
+	// Validation: a bind without a colon is rejected.
+	bad := baseApp()
+	bad.Services["api"].Binds = []string{"/var/run/docker.sock"}
+	mustFail(t, bad, "binds[0]: must be '/host:/container[:ro]'")
+}
+
+// TestTranslate_Ports verifies published ports render with Published
+// defaulting to Target and Protocol defaulting to tcp, and that an explicit
+// udp/host-mode port survives translation.
+func TestTranslate_Ports(t *testing.T) {
+	app := baseApp()
+	app.Services["api"].Ports = []dsl.PortSpec{
+		{Target: 80, Published: 80},
+		{Target: 4318, Published: 4318, Protocol: "udp", Mode: "host"},
+		{Target: 9000}, // published defaults to target, protocol defaults to tcp
+	}
+	if err := Validate(app); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	s, cf := renderCompose(t, app, nil)
+	ports := cf.Services["api"].Ports
+	if len(ports) != 3 {
+		t.Fatalf("rendered ports = %+v, want 3 entries\n%s", ports, s)
+	}
+
+	want := []composePort{
+		{Target: 80, Published: 80, Protocol: "tcp"},
+		{Target: 4318, Published: 4318, Protocol: "udp", Mode: "host"},
+		{Target: 9000, Published: 9000, Protocol: "tcp"}, // published defaulted
+	}
+	for i, w := range want {
+		if ports[i] != w {
+			t.Errorf("ports[%d] = %+v, want %+v", i, ports[i], w)
+		}
+	}
+
+	// String-level checks on the rendered YAML (published/protocol
+	// defaulting + host mode).
+	for _, substr := range []string{
+		"target: 80", "published: 80",
+		"protocol: tcp", "protocol: udp",
+		"target: 4318", "published: 4318",
+		"mode: host",
+		"target: 9000", "published: 9000",
+	} {
+		if !strings.Contains(s, substr) {
+			t.Errorf("rendered ports missing %q:\n%s", substr, s)
+		}
+	}
+
+	// Validation: range / protocol / mode checks.
+	bad := baseApp()
+	bad.Services["api"].Ports = []dsl.PortSpec{{Target: 0}}
+	mustFail(t, bad, "ports[0].target:")
+
+	bad = baseApp()
+	bad.Services["api"].Ports = []dsl.PortSpec{{Target: 80, Published: 70000}}
+	mustFail(t, bad, "ports[0].published:")
+
+	bad = baseApp()
+	bad.Services["api"].Ports = []dsl.PortSpec{{Target: 80, Protocol: "sctp"}}
+	mustFail(t, bad, "ports[0].protocol:")
+
+	bad = baseApp()
+	bad.Services["api"].Ports = []dsl.PortSpec{{Target: 80, Mode: "bridge"}}
+	mustFail(t, bad, "ports[0].mode:")
+}
+
+// TestTranslate_ConfigMounts verifies a service config mount declares the
+// logical name as an EXTERNAL top-level config (with an optional versioned
+// name: override from ComposeWriter.ConfigNames) while the service keeps
+// mounting the LOGICAL source so the container path stays stable.
+func TestTranslate_ConfigMounts(t *testing.T) {
+	app := baseApp()
+	app.Services["api"].Configs = []dsl.ConfigMount{
+		{Source: "pmcluster_traefik_dynamic", Target: "/etc/traefik/dynamic/conf.yml"},
+	}
+	if err := Validate(app); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	// No ConfigNames resolver → plain external declaration.
+	s, cf := renderCompose(t, app, &ComposeWriter{})
+	decl, ok := cf.Configs["pmcluster_traefik_dynamic"]
+	if !ok {
+		t.Fatalf("top-level configs block missing pmcluster_traefik_dynamic:\n%s", s)
+	}
+	if !decl.External {
+		t.Errorf("config must be declared external, got %+v", decl)
+	}
+	if decl.Name != "" {
+		t.Errorf("without ConfigNames there must be no name override, got %q", decl.Name)
+	}
+	if !strings.Contains(s, "configs:") || !strings.Contains(s, "external: true") {
+		t.Errorf("rendered compose should declare an external config:\n%s", s)
+	}
+	mounts := cf.Services["api"].Configs
+	if len(mounts) != 1 || mounts[0].Source != "pmcluster_traefik_dynamic" || mounts[0].Target != "/etc/traefik/dynamic/conf.yml" {
+		t.Errorf("service config mounts = %+v, want source+target as written", mounts)
+	}
+
+	// With ConfigNames: top-level gets the versioned name: override; the
+	// logical compose key AND the service mount source stay unchanged.
+	w := &ComposeWriter{
+		ConfigNames: func(_ context.Context, name string) string {
+			return name + "_v3"
+		},
+	}
+	s, cf = renderCompose(t, app, w)
+	decl, ok = cf.Configs["pmcluster_traefik_dynamic"]
+	if !ok {
+		t.Fatalf("top-level configs block missing logical key:\n%s", s)
+	}
+	if !decl.External {
+		t.Errorf("versioned config must stay external, got %+v", decl)
+	}
+	if decl.Name != "pmcluster_traefik_dynamic_v3" {
+		t.Errorf("config name override = %q, want pmcluster_traefik_dynamic_v3", decl.Name)
+	}
+	if !strings.Contains(s, "name: pmcluster_traefik_dynamic_v3") {
+		t.Errorf("rendered configs block missing the versioned name override:\n%s", s)
+	}
+	mounts = cf.Services["api"].Configs
+	if len(mounts) != 1 || mounts[0].Source != "pmcluster_traefik_dynamic" {
+		t.Errorf("service mount source must stay the LOGICAL name, got %+v", mounts)
+	}
+
+	// Validation: source and target are both required.
+	bad := baseApp()
+	bad.Services["api"].Configs = []dsl.ConfigMount{{Source: "", Target: "/x"}}
+	mustFail(t, bad, "configs[0].source: required")
+
+	bad = baseApp()
+	bad.Services["api"].Configs = []dsl.ConfigMount{{Source: "cfg", Target: " "}}
+	mustFail(t, bad, "configs[0].target: required")
+}
+
+// TestTranslate_ExtraHostsAndUser verifies /etc/hosts entries and the
+// container user render through to the service block.
+func TestTranslate_ExtraHostsAndUser(t *testing.T) {
+	app := baseApp()
+	app.Services["api"].ExtraHosts = []string{"host.docker.internal:host-gateway"}
+	app.Services["api"].User = "0:0"
+	if err := Validate(app); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	s, cf := renderCompose(t, app, nil)
+	if !strings.Contains(s, "extra_hosts:") {
+		t.Errorf("rendered compose missing extra_hosts:\n%s", s)
+	}
+	if !strings.Contains(s, "- host.docker.internal:host-gateway") {
+		t.Errorf("rendered compose missing the extra host entry:\n%s", s)
+	}
+	if !strings.Contains(s, `user: "0:0"`) {
+		t.Errorf(`rendered compose missing user: "0:0"`+"\n%s", s)
+	}
+	svc := cf.Services["api"]
+	if len(svc.ExtraHosts) != 1 || svc.ExtraHosts[0] != "host.docker.internal:host-gateway" {
+		t.Errorf("extra_hosts = %v", svc.ExtraHosts)
+	}
+	if svc.User != "0:0" {
+		t.Errorf("user = %q, want 0:0", svc.User)
+	}
+
+	// No user → the key stays omitted (image default).
+	app = baseApp()
+	_, cf = renderCompose(t, app, nil)
+	if u := cf.Services["api"].User; u != "" {
+		t.Errorf("user should be empty when unset, got %q", u)
+	}
+
+	// Validation: an extra host without a colon is rejected.
+	bad := baseApp()
+	bad.Services["api"].ExtraHosts = []string{"host.docker.internal"}
+	mustFail(t, bad, "extra_hosts[0]: must be 'host:ip'")
+}
+
+// TestTranslate_Resources verifies cpu/memory reservations + limits render
+// into the deploy resources block, and that the quantity regexes gate
+// Validate.
+func TestTranslate_Resources(t *testing.T) {
+	app := baseApp()
+	app.Services["api"].Resources = &dsl.Resources{
+		Reservations: &dsl.ResourceSpec{CPUs: "0.1", Memory: "128M"},
+		Limits:       &dsl.ResourceSpec{CPUs: "0.25", Memory: "256M"},
+	}
+	if err := Validate(app); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	s, cf := renderCompose(t, app, nil)
+	r := deployOf(t, cf, "api").Resources
+	if r == nil {
+		t.Fatalf("deploy.resources missing:\n%s", s)
+	}
+	if r.Reservations == nil || r.Reservations.CPUs != "0.1" || r.Reservations.Memory != "128M" {
+		t.Errorf("reservations = %+v, want cpus 0.1 / memory 128M", r.Reservations)
+	}
+	if r.Limits == nil || r.Limits.CPUs != "0.25" || r.Limits.Memory != "256M" {
+		t.Errorf("limits = %+v, want cpus 0.25 / memory 256M", r.Limits)
+	}
+	for _, substr := range []string{
+		"reservations:", `cpus: "0.1"`, "memory: 128M",
+		"limits:", `cpus: "0.25"`, "memory: 256M",
+	} {
+		if !strings.Contains(s, substr) {
+			t.Errorf("rendered resources missing %q:\n%s", substr, s)
+		}
+	}
+
+	// No resources → the block stays omitted.
+	app = baseApp()
+	_, cf = renderCompose(t, app, nil)
+	if r := deployOf(t, cf, "api").Resources; r != nil {
+		t.Errorf("deploy.resources should be nil when unset, got %+v", r)
+	}
+
+	// Validation: cpus is a decimal string, memory a byte quantity.
+	bad := baseApp()
+	bad.Services["api"].Resources = &dsl.Resources{Limits: &dsl.ResourceSpec{CPUs: "fast"}}
+	mustFail(t, bad, "resources.limits.cpus:")
+
+	bad = baseApp()
+	bad.Services["api"].Resources = &dsl.Resources{Reservations: &dsl.ResourceSpec{Memory: "plenty"}}
+	mustFail(t, bad, "resources.reservations.memory:")
+
+	bad = baseApp()
+	bad.Services["api"].Resources = &dsl.Resources{Limits: &dsl.ResourceSpec{Memory: "256"}}
+	mustFail(t, bad, "resources.limits.memory:")
+
+	ok := baseApp()
+	ok.Services["api"].Resources = &dsl.Resources{
+		Reservations: &dsl.ResourceSpec{CPUs: "2", Memory: "512m"},
+		Limits:       &dsl.ResourceSpec{CPUs: "1.5", Memory: "1g"},
+	}
+	mustPass(t, ok)
+}
+
+// TestTranslate_RawLabels verifies raw deploy labels merge onto the service,
+// that the standard auto-injected labels are still present, and — per the
+// documented contract in pkg/dsl — that the STANDARD label wins on a key
+// collision.
+func TestTranslate_RawLabels(t *testing.T) {
+	app := baseApp()
+	app.Services["api"].Labels = map[string]string{
+		"traefik.http.routers.x.rule": "Host(`foo.test`)",
+	}
+	s, cf := renderCompose(t, app, nil)
+	labels := deployOf(t, cf, "api").Labels
+
+	if labels["traefik.http.routers.x.rule"] != "Host(`foo.test`)" {
+		t.Errorf("raw label missing from deploy labels: %v", labels)
+	}
+	if !strings.Contains(s, "traefik.http.routers.x.rule: Host(`foo.test`)") {
+		t.Errorf("raw label should render verbatim:\n%s", s)
+	}
+	for k, v := range map[string]string{
+		"service":     "api",
+		"application": "my-app",
+		"environment": "production",
+	} {
+		if labels[k] != v {
+			t.Errorf("standard label %q = %q, want %q (raw labels must not remove it):\n%s", k, labels[k], v, s)
+		}
+	}
+
+	// Collision: the standard label must WIN over a raw label with the same
+	// key — pkg/dsl documents "Standard auto-injected labels
+	// (service/application/environment/version, io.pmcluster.*) always win
+	// on key collisions", and composeDeployFromIR's own comment says the
+	// same.
+	app = baseApp()
+	app.Services["api"].Labels = map[string]string{
+		"service":     "raw-hijack",
+		"application": "raw-hijack",
+	}
+	s, cf = renderCompose(t, app, nil)
+	labels = deployOf(t, cf, "api").Labels
+	if labels["service"] != "api" {
+		t.Errorf("standard label `service` must WIN on collision:\n  rendered: service: %q\n  expected: service: \"api\"\nrendered compose:\n%s", labels["service"], s)
+	}
+	if labels["application"] != "my-app" {
+		t.Errorf("standard label `application` must WIN on collision:\n  rendered: application: %q\n  expected: application: \"my-app\"\nrendered compose:\n%s", labels["application"], s)
+	}
+}
+
+// TestTranslate_PlatformLabel verifies app.platform: true stamps
+// io.pmcluster.platform=true on EVERY service, and that the label is absent
+// for ordinary app stacks.
+func TestTranslate_PlatformLabel(t *testing.T) {
+	app := baseApp()
+	app.Platform = true
+	app.Services["agent"] = &dsl.Service{Image: "otel/opentelemetry-collector:latest", Mode: "global"}
+
+	s, cf := renderCompose(t, app, nil)
+	if len(cf.Services) != 2 {
+		t.Fatalf("expected 2 services, got %d:\n%s", len(cf.Services), s)
+	}
+	for name := range cf.Services {
+		if got := deployOf(t, cf, name).Labels[labelPlatform]; got != "true" {
+			t.Errorf("service %q label %s = %q, want \"true\"\n%s", name, labelPlatform, got, s)
+		}
+	}
+	if !strings.Contains(s, `io.pmcluster.platform: "true"`) {
+		t.Errorf("platform label should render as io.pmcluster.platform: \"true\":\n%s", s)
+	}
+	if got := strings.Count(s, labelPlatform+":"); got != 2 {
+		t.Errorf("platform label stamped %d times, want once per service (2):\n%s", got, s)
+	}
+
+	// Ordinary app stack → no platform label at all.
+	app = baseApp()
+	app.Platform = false
+	s, cf = renderCompose(t, app, nil)
+	if strings.Contains(s, labelPlatform) {
+		t.Errorf("non-platform app must not carry %s:\n%s", labelPlatform, s)
+	}
+	if got := deployOf(t, cf, "api").Labels[labelPlatform]; got != "" {
+		t.Errorf("label %s = %q, want empty", labelPlatform, got)
+	}
+}
+
+// TestTranslate_AppNetworks verifies app-level networks are declared
+// top-level as external and joined by EVERY service.
+func TestTranslate_AppNetworks(t *testing.T) {
+	app := baseApp()
+	app.Networks = []string{"traefik-net", "monitoring-net"}
+	app.Services = map[string]*dsl.Service{
+		"api":   {Image: "nginx:latest"},
+		"agent": {Image: "otel/opentelemetry-collector:latest", Mode: "global"},
+	}
+	if err := Validate(app); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	s, cf := renderCompose(t, app, nil)
+	for _, n := range []string{"traefik-net", "monitoring-net"} {
+		net, ok := cf.Networks[n]
+		if !ok {
+			t.Fatalf("top-level networks missing %q:\n%s", n, s)
+		}
+		if !net.External {
+			t.Errorf("network %q must be external, got %+v", n, net)
+		}
+		if !strings.Contains(s, n+":\n    external: true") {
+			t.Errorf("rendered networks block missing external %q:\n%s", n, s)
+		}
+	}
+	// Explicit app networks REPLACE the private overlay (platform stacks join
+	// shared external networks only — no throwaway per-stack overlay net).
+	if net := cf.Networks["net"]; net != nil {
+		t.Errorf("private overlay net must NOT exist when app networks are set: %+v", net)
+	}
+	for name, cs := range cf.Services {
+		joined := map[string]bool{}
+		for _, n := range cs.Networks {
+			joined[n] = true
+		}
+		if joined["net"] {
+			t.Errorf("service %q must NOT join the private net when app networks are set (networks=%v):\n%s", name, cs.Networks, s)
+		}
+		for _, n := range []string{"traefik-net", "monitoring-net"} {
+			if !joined[n] {
+				t.Errorf("service %q must join %q (networks=%v):\n%s", name, n, cs.Networks, s)
+			}
+		}
+	}
+
+	// No app networks → only the private overlay is declared/joined.
+	app = baseApp()
+	s, cf = renderCompose(t, app, nil)
+	for _, n := range []string{"traefik-net", "monitoring-net"} {
+		if _, ok := cf.Networks[n]; ok {
+			t.Errorf("network %q must not be declared without app networks/expose:\n%s", n, s)
+		}
 	}
 }

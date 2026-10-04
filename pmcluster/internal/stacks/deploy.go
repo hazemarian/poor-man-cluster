@@ -210,6 +210,15 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 		if err != nil {
 			return fmt.Errorf("parse manifest: %w", err)
 		}
+		if parsed.Platform {
+			// The platform flag marks pmcluster's own stacks (infra, edge,
+			// observability, backup, sso), which are rendered by the cluster
+			// update pipeline from their embedded DSL manifests — never by
+			// `pmcluster deploy` or the webhook. Allowing it here would let a
+			// customer manifest stamp io.pmcluster.platform=true on swarm
+			// services and masquerade as a platform stack.
+			return fmt.Errorf("parse manifest: platform: true is reserved for pmcluster-managed platform stacks")
+		}
 		if p.AppName != "" {
 			parsed.Name = p.AppName
 		}

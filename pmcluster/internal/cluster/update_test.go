@@ -381,11 +381,11 @@ func TestUpdate_ConfigsUseSeedVersionedNames(t *testing.T) {
 		t.Fatalf("Update: %v", err)
 	}
 
-	if res.OTelConfig != "pmcluster_otel_config_v001" {
-		t.Errorf("OTelConfig = %q, want pmcluster_otel_config_v001 (reused)", res.OTelConfig)
+	if res.OTelConfig != "pmcluster_otel_config_v1" {
+		t.Errorf("OTelConfig = %q, want pmcluster_otel_config_v1 (reused)", res.OTelConfig)
 	}
-	if res.TraefikConfig != "pmcluster_traefik_dynamic_v001" {
-		t.Errorf("TraefikConfig = %q, want pmcluster_traefik_dynamic_v001 (reused)", res.TraefikConfig)
+	if res.TraefikConfig != "pmcluster_traefik_dynamic_v1" {
+		t.Errorf("TraefikConfig = %q, want pmcluster_traefik_dynamic_v1 (reused)", res.TraefikConfig)
 	}
 }
 
@@ -422,7 +422,7 @@ func TestUpdate_PasswordRotationRedeploysObservabilityAndInfra(t *testing.T) {
 	if !res.OTelCreated {
 		t.Error("OTel config should be re-created after a password rotation (collector embeds the admin basic auth)")
 	}
-	if res.OTelConfig == "pmcluster_otel_config_v001" {
+	if res.OTelConfig == "pmcluster_otel_config_v1" {
 		t.Error("OTelConfig should have been minted to a new version after rotation")
 	}
 	deployer := deps.Deployer.(*recordingDeployer)

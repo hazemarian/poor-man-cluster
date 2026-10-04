@@ -372,6 +372,35 @@ func TestDeploy_EmptyManifest(t *testing.T) {
 	}
 }
 
+// TestDeploy_PlatformFlagReserved verifies that a user manifest declaring
+// `platform: true` is refused: the flag marks pmcluster's own platform stacks
+// (infra/edge/observability/backup/sso), which are rendered by the cluster
+// update pipeline — never by the deploy/webhook path.
+func TestDeploy_PlatformFlagReserved(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+
+	manifest := `app: rogue
+env: production
+domain: example.com
+platform: true
+services:
+  web:
+    image: nginx:1.27-alpine
+`
+	_, err := svc.Deploy(context.Background(), Payload{Manifest: manifest})
+	if err == nil {
+		t.Fatal("expected error for platform: true manifest, got nil")
+	}
+	if !strings.Contains(err.Error(), "platform: true is reserved") {
+		t.Errorf("error = %q, want it to mention the platform reservation", err.Error())
+	}
+	if dep.callCount() != 0 {
+		t.Errorf("deployer was called %d times, want 0", dep.callCount())
+	}
+}
+
 // TestDeploy_InvalidYAML verifies that syntactically invalid YAML returns a
 // parse error.
 func TestDeploy_InvalidYAML(t *testing.T) {

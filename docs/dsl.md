@@ -40,6 +40,9 @@ services:                     # required — one or more service definitions
 | `version` | no | defaults to `latest` |
 | `repo_url` | no | metadata only — pmcluster never reads from git |
 | `strict_backup` | no | only meaningful with `backup_before_deploy: true` |
+| `platform` | no | **reserved for pmcluster's own platform stacks** (`infra`/`edge`/`observability`/`backup`/`sso`) — stamps `io.pmcluster.platform=true` on every service. User deploys are refused this flag. |
+| `networks` | no | additional **external** Swarm networks every service joins (alongside the auto-injected per-stack overlay). When set, the private overlay net is skipped entirely — services reach each other by fully-qualified DNS on the named networks. |
+| `volumes` | no | map of top-level named volumes declared verbatim (`name: ""` for a plain volume, or `name: /host/path` for a bind) — **never** relocated under the volume root. Used by platform stacks whose volumes already exist on hosts (`openobserve_data`, `traefik_acme`, `pmui-data`). |
 
 ---
 
@@ -89,7 +92,19 @@ services:
 | `entrypoint` | — | overrides the image's `ENTRYPOINT` |
 | `env` | — | map of environment variables (values support substitution) |
 | `volumes` | — | each entry must contain `:` (`name:path` or `/host:/container`) |
+| `binds` | — | raw host binds emitted verbatim (`/host:/container[:ro]`), never relocated under the volume root — for sockets, device paths, host dirs |
 | `secrets` | — | each must also be declared (or referenced) at the top level |
+| `mode` | — | `global` → Swarm global mode (one task per node); mutually exclusive with `replicas` and `run_once` |
+| `restart` | — | overrides `restart_policy.condition`: `any`, `on-failure`, `none` |
+| `restart_delay` | — | `restart_policy.delay` (e.g. `5s`) |
+| `constraints` | — | raw Swarm placement constraints appended after the `placement`/auto-pin rule (e.g. `- node.labels.pmcluster.storage == true`) |
+| `ports` | — | published ports: `target` (container, required), `published`, `protocol` (`tcp`/`udp`), `mode` (`ingress`/`host`) |
+| `configs` | — | Swarm config mounts: `source` (DB config name) + `target` (container path) |
+| `extra_hosts` | — | `host:ip` entries added to `/etc/hosts` (e.g. `host.docker.internal:host-gateway`) |
+| `resources` | — | `reservations`/`limits` with `cpus` + `memory` (e.g. `128M`, `1G`) |
+| `user` | — | container user (`0:0`) |
+| `labels` | — | raw Swarm service labels (standard auto-injected labels always win on collision) |
+| `logging` | — | `driver` + `options` map (e.g. `json-file` with `max-size`/`max-file`) |
 | `expose` | — | presence triggers Traefik wiring + extra network membership |
 | `healthcheck` | — | shorthand or full form (see below) |
 | `update` | `1` / `10s` / `start-first` | Swarm rolling-update policy (skipped for `run_once`); volume-holding services automatically use `stop-first` |
@@ -104,6 +119,7 @@ operator console) instead of hard-coding values:
 env:
   ADMIN_PASS: secrets(app_secret)      # inject a stored secret's value
   ADMIN_ENABLED: config(app_config)    # inject a stored config's content
+  STORAGE_ROOT: settings(volume_root)  # inject a cluster setting's value
   DEBUG: "false"                       # plain values still work
 ```
 
@@ -115,6 +131,8 @@ Behavior:
   explicitly puts its content at that path inside the container.
 - `config(<name>)` — resolves the DB config row and injects its content as the
   env value.
+- `settings(<name>)` — resolves a cluster setting (e.g. `volume_root`) as the
+  env value. Resolved at render time against the cluster store.
 - The reference is resolved at deploy time against the DB — rotating the
   secret/config and re-deploying picks up the new value.
 - Validation fails at parse time if the pattern is malformed

@@ -16,7 +16,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/refs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -322,11 +322,11 @@ func readConfigFile(name string, in RenderInput) (string, error) {
 	return string(body), nil
 }
 
-// renderRefResolver resolves config()/secrets() references in platform stack
-// templates to the versioned Docker artifact names computed by up/update. It
-// implements refs.RefResolver so the platform templates use the SAME
-// config(name)/secrets(name) reference syntax as the DSL env values — one
-// mechanism for replacing configs and secrets everywhere.
+// renderRefResolver resolves config()/secrets()/settings() references in
+// platform DSL manifests to the versioned Docker artifact names computed by
+// up/update. It implements manifest.EnvResolver (+ manifest.SettingsResolver)
+// so the platform manifests use the SAME reference syntax as customer DSL env
+// values — one mechanism for replacing configs and secrets everywhere.
 type renderRefResolver struct {
 	render RenderInput
 }
@@ -345,7 +345,7 @@ var secretNameAliases = map[string]func(RenderInput) string{
 	"key":  func(r RenderInput) string { return r.KeySecretName },
 }
 
-func (r *renderRefResolver) ResolveConfig(_ context.Context, name string) (string, error) {
+func (r *renderRefResolver) ResolveConfig(_ context.Context, _ string, name string) (string, error) {
 	fn, ok := configNameAliases[name]
 	if !ok {
 		return "", fmt.Errorf("resolve config(%s): no such platform config (known: pmcluster_otel_config, pmcluster_traefik_dynamic)", name)
@@ -353,23 +353,56 @@ func (r *renderRefResolver) ResolveConfig(_ context.Context, name string) (strin
 	return fn(r.render), nil
 }
 
-func (r *renderRefResolver) ResolveSecret(_ context.Context, name string) (string, error) {
-	fn, ok := secretNameAliases[name]
-	if !ok {
-		return "", fmt.Errorf("resolve secrets(%s): no such platform secret (known: cert, key)", name)
-	}
-	return fn(r.render), nil
+func (r *renderRefResolver) ResolveSetting(_ context.Context, _ string, name string) (string, error) {
+	return "", fmt.Errorf("resolve settings(%s): platform manifests cannot reference cluster settings", name)
 }
 
-// LoadComposeFile renders a stack YAML: text/template first (for
+// platformSecretNames maps a logical secret name to the actual versioned
+// Swarm secret for the render (cert/key → CertSecretName/KeySecretName; every
+// other name — admin_credentials, edge_*, the pre-versioned host-cert names —
+// passes through unchanged so it resolves against the external swarm secret of
+// the same name).
+func platformSecretNames(in RenderInput) func(ctx context.Context, name string) string {
+	return func(_ context.Context, name string) string {
+		if fn, ok := secretNameAliases[name]; ok {
+			return fn(in)
+		}
+		return name
+	}
+}
+
+// platformConfigNames maps a logical config name to the actual versioned
+// Docker config for the render (pmcluster_otel_config / pmcluster_traefik_dynamic
+// → the versioned names computed by up/update).
+func platformConfigNames(in RenderInput) func(ctx context.Context, name string) string {
+	return func(_ context.Context, name string) string {
+		if fn, ok := configNameAliases[name]; ok {
+			return fn(in)
+		}
+		return name
+	}
+}
+
+// LoadComposeFile renders a platform stack: text/template first (for
 // [[if .ACMEEmail]] blocks), then ${DOMAIN}/${OPENOBSERVE_ADMIN_EMAIL}
-// substitution, then config()/secrets() reference resolution. Reads the
-// template from the store when a current-version cluster-scope row exists,
-// else the embedded default.
+// substitution, then the DSL manifest pipeline (Parse → Interpolate →
+// Validate → BuildIR → ComposeWriter) — the SAME pipeline customer app stacks
+// go through. Reads the template from the store when a current-version
+// cluster-scope row exists, else the embedded default. The RenderedHash /
+// deploy / reconcile / purge machinery keys off these rendered bytes exactly
+// as it does for app stacks, so platform and app stacks share one pipeline
+// (L4).
 func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	fname, ok := composeFile[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown stack %q", name)
+	}
+	// The edge stack's image is always resolved through EdgeImageFor() in the
+	// up/update workflows; default it here so standalone renders (tests, or a
+	// hypothetical caller that skipped the workflow) still produce a valid
+	// manifest instead of an empty image ref.
+	if name == StackEdge && in.EdgeImage == "" {
+		in.EdgeImage = EdgeImageFor()
 	}
 	body, err := readConfigFile(fname, in)
 	if err != nil {
@@ -388,11 +421,27 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	out = strings.ReplaceAll(out, "${OPENOBSERVE_ADMIN_EMAIL}", in.OpenObserveAdminEmail)
 	out = strings.ReplaceAll(out, "${DATA_DIR}", in.DataDir)
 	out = strings.ReplaceAll(out, "__OPENOBSERVE_PASSWORD__", escapeComposeDollar(in.OpenObserveAdminPassword))
-	resolved, err := refs.ReplaceRefs(context.Background(), out, &renderRefResolver{render: in})
+
+	app, err := manifest.Parse([]byte(out))
 	if err != nil {
-		return nil, fmt.Errorf("resolve config()/secrets() in %s: %w", fname, err)
+		return nil, fmt.Errorf("parse %s DSL manifest: %w", fname, err)
 	}
-	return []byte(resolved), nil
+	if err := manifest.Interpolate(app); err != nil {
+		return nil, fmt.Errorf("interpolate %s DSL manifest: %w", fname, err)
+	}
+	if err := manifest.Validate(app); err != nil {
+		return nil, fmt.Errorf("validate %s DSL manifest: %w", fname, err)
+	}
+	renderedBytes, err := manifest.TranslateIR(context.Background(), app, &renderRefResolver{render: in}, &manifest.ComposeWriter{
+		VolumeRoot:  effectiveVolumeRoot(in.VolumeRoot),
+		PinNode:     in.PlatformNode,
+		SecretNames: platformSecretNames(in),
+		ConfigNames: platformConfigNames(in),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render %s through the DSL pipeline: %w", fname, err)
+	}
+	return renderedBytes, nil
 }
 
 // escapeComposeDollar doubles every "$" so Docker Compose/Swarm variable

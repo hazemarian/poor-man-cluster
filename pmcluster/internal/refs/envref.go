@@ -5,20 +5,21 @@ import (
 	"strings"
 )
 
-// envRefRe matches a config(name)/secrets(name) reference when it is the
-// WHOLE value of an env entry (`env: KEY: config(x)`). Unlike inlineRefRe it
-// is anchored — it must not match text that has extra content around the
-// reference.
-var envRefRe = regexp.MustCompile(`^(config|secrets)\(([^)]+)\)$`)
+// envRefRe matches a config(name)/secrets(name)/settings(name) reference when
+// it is the WHOLE value of an env entry (`env: KEY: config(x)`). Unlike
+// inlineRefRe it is anchored — it must not match text that has extra content
+// around the reference.
+var envRefRe = regexp.MustCompile(`^(config|secrets|settings)\(([^)]+)\)$`)
 
-// EnvRef is a parsed config(name)/secrets(name) env-value reference.
+// EnvRef is a parsed config(name)/secrets(name)/settings(name) env-value
+// reference.
 type EnvRef struct {
 	Kind string
 	Name string
 }
 
-// ParseEnvRef reports whether v is exactly a config(name)/secrets(name)
-// reference (whole value) and returns its kind + name.
+// ParseEnvRef reports whether v is exactly a config(name)/secrets(name)/
+// settings(name) reference (whole value) and returns its kind + name.
 func ParseEnvRef(v string) (EnvRef, bool) {
 	sub := envRefRe.FindStringSubmatch(v)
 	if len(sub) != 3 {
@@ -27,11 +28,11 @@ func ParseEnvRef(v string) (EnvRef, bool) {
 	return EnvRef{Kind: sub[1], Name: strings.TrimSpace(sub[2])}, true
 }
 
-// MalformedEnvRef reports whether v starts like a reference (config( or
-// secrets() prefix) but does not parse as one — a typo or a forgotten close
-// paren. Used by manifest validation so operators fail loud.
+// MalformedEnvRef reports whether v starts like a reference (config(,
+// secrets( or settings( prefix) but does not parse as one — a typo or a
+// forgotten close paren. Used by manifest validation so operators fail loud.
 func MalformedEnvRef(v string) bool {
-	if !strings.HasPrefix(v, "config(") && !strings.HasPrefix(v, "secrets(") {
+	if !strings.HasPrefix(v, "config(") && !strings.HasPrefix(v, "secrets(") && !strings.HasPrefix(v, "settings(") {
 		return false
 	}
 	_, ok := ParseEnvRef(v)

@@ -97,6 +97,74 @@ func interpolateService(name string, s *dsl.Service, subst func(string) (string,
 		}
 		s.Volumes[i] = v
 	}
+	for i := range s.Binds {
+		v, err := subst(s.Binds[i])
+		if err != nil {
+			return wrap(err, fmt.Sprintf("binds[%d]", i))
+		}
+		s.Binds[i] = v
+	}
+	for i := range s.ExtraHosts {
+		v, err := subst(s.ExtraHosts[i])
+		if err != nil {
+			return wrap(err, fmt.Sprintf("extra_hosts[%d]", i))
+		}
+		s.ExtraHosts[i] = v
+	}
+	for i := range s.Configs {
+		v, err := subst(s.Configs[i].Source)
+		if err != nil {
+			return wrap(err, fmt.Sprintf("configs[%d].source", i))
+		}
+		s.Configs[i].Source = v
+		v, err = subst(s.Configs[i].Target)
+		if err != nil {
+			return wrap(err, fmt.Sprintf("configs[%d].target", i))
+		}
+		s.Configs[i].Target = v
+	}
+	for k, val := range s.Labels {
+		v, err := subst(val)
+		if err != nil {
+			return wrap(err, "labels."+k)
+		}
+		s.Labels[k] = v
+	}
+	if s.Logging != nil {
+		if v, err := subst(s.Logging.Driver); err == nil {
+			s.Logging.Driver = v
+		} else {
+			return wrap(err, "logging.driver")
+		}
+		for k, val := range s.Logging.Options {
+			v, err := subst(val)
+			if err != nil {
+				return wrap(err, "logging.options."+k)
+			}
+			s.Logging.Options[k] = v
+		}
+	}
+	if s.User != "" {
+		v, err := subst(s.User)
+		if err != nil {
+			return wrap(err, "user")
+		}
+		s.User = v
+	}
+	if s.RestartDelay != "" {
+		v, err := subst(s.RestartDelay)
+		if err != nil {
+			return wrap(err, "restart_delay")
+		}
+		s.RestartDelay = v
+	}
+	if s.Healthcheck != nil && s.Healthcheck.StartPeriod != "" {
+		v, err := subst(s.Healthcheck.StartPeriod)
+		if err != nil {
+			return wrap(err, "healthcheck.start_period")
+		}
+		s.Healthcheck.StartPeriod = v
+	}
 	if s.Expose != nil {
 		v, err := subst(s.Expose.Host)
 		if err != nil {

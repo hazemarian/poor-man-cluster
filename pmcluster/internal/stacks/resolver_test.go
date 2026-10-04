@@ -84,6 +84,49 @@ func TestStoreConfigResolver(t *testing.T) {
 	})
 }
 
+// TestStoreConfigResolver_ResolveSetting exercises the settings() env-ref path:
+// a manifest value of settings(name) is injected from the cluster_settings
+// table, missing keys fail loud with the set command hint, and nil store errors.
+func TestStoreConfigResolver_ResolveSetting(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if err := s.SetSetting(ctx, "volume_root", "/srv/stack/data"); err != nil {
+		t.Fatalf("SetSetting: %v", err)
+	}
+	r := &StoreConfigResolver{Store: s}
+
+	t.Run("resolves known setting", func(t *testing.T) {
+		got, err := r.ResolveSetting(ctx, "demo", "volume_root")
+		if err != nil {
+			t.Fatalf("ResolveSetting: %v", err)
+		}
+		if got != "/srv/stack/data" {
+			t.Errorf("ResolveSetting = %q, want /srv/stack/data", got)
+		}
+	})
+
+	t.Run("missing setting errors with hint", func(t *testing.T) {
+		_, err := r.ResolveSetting(ctx, "demo", "ghost_key")
+		if err == nil {
+			t.Fatal("expected error for missing setting")
+		}
+		if !strings.Contains(err.Error(), "not found") {
+			t.Errorf("error should mention not found: %v", err)
+		}
+		if !strings.Contains(err.Error(), "cluster settings set ghost_key") {
+			t.Errorf("error should hint the settings command: %v", err)
+		}
+	})
+
+	t.Run("nil store errors", func(t *testing.T) {
+		r := &StoreConfigResolver{}
+		if _, err := r.ResolveSetting(ctx, "demo", "x"); err == nil {
+			t.Error("expected error with nil store")
+		}
+	})
+}
+
 // TestGetConfigForStack directly exercises the store scoping rule the
 // resolver relies on.
 func TestGetConfigForStack(t *testing.T) {

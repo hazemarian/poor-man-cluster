@@ -1,8 +1,11 @@
 package cluster
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 // The console router used to be declared as PathPrefix("/web"). Traefik matches
@@ -125,25 +128,41 @@ func ruleMatches(rule string, r traefikRequest) bool {
 
 // edgeRouterRules renders the edge stack and returns router name to rule, with
 // the compose DOMAIN placeholder resolved so the rules can be evaluated. The
-// rule text is found by substring scan rather than a regular expression: the
-// syntax is mostly backquotes and dots, which a pattern handles worse than this
-// does.
+// rendered edge stack is now produced by the DSL pipeline, so the labels live
+// in services.pmcluster-edge.deploy.labels (a YAML map, with values that may
+// wrap across lines) rather than a flat `key=value` list.
 func edgeRouterRules(t *testing.T) map[string]string {
 	t.Helper()
 	data, err := LoadComposeFile(StackEdge, RenderInput{Domain: "example.com", SSOEnabled: true})
 	if err != nil {
 		t.Fatalf("LoadComposeFile(StackEdge): %v", err)
 	}
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse rendered edge stack YAML: %v", err)
+	}
 	rules := map[string]string{}
-	for _, raw := range strings.Split(string(data), "\n") {
-		line := strings.TrimSpace(raw)
-		line = strings.TrimSpace(strings.TrimPrefix(line, "- "))
-		line = strings.Trim(line, "\"")
-		for _, name := range []string{"pmcluster-web", "pmcluster-api"} {
-			marker := "traefik.http.routers." + name + ".rule="
-			if idx := strings.Index(line, marker); idx >= 0 {
-				rule := line[idx+len(marker):]
-				rules[name] = strings.ReplaceAll(rule, "${DOMAIN}", "pmcluster.example.com")
+	for name := range doc {
+		if name == "services" {
+			svcs := doc[name].(map[string]interface{})
+			for _, s := range svcs {
+				svc := s.(map[string]interface{})
+				deploy, ok := svc["deploy"].(map[string]interface{})
+				if !ok {
+					continue
+				}
+				labels, ok := deploy["labels"].(map[string]interface{})
+				if !ok {
+					continue
+				}
+				for k, v := range labels {
+					for _, rn := range []string{"pmcluster-web", "pmcluster-api"} {
+						if k == "traefik.http.routers."+rn+".rule" {
+							rule := fmt.Sprint(v)
+							rules[rn] = strings.ReplaceAll(rule, "${DOMAIN}", "pmcluster.example.com")
+						}
+					}
+				}
 			}
 		}
 	}

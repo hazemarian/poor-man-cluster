@@ -20,11 +20,34 @@ type App struct {
 	RepoURL  string `json:"repo_url,omitempty"`
 	EnvFile  string `json:"env_file,omitempty"`
 
+	// Platform marks this stack as platform-managed (infra, edge,
+	// observability, backup, sso). Platform stacks carry the
+	// io.pmcluster.platform=true label on every service, are excluded from
+	// the app-stack drift loop, are NOT user-deletable via the API, and are
+	// only removed by `cluster down --purge`. User-facing app manifests must
+	// leave this false.
+	Platform bool `json:"platform,omitempty"`
+
+	// Networks lists additional EXTERNAL swarm networks every service in
+	// this stack joins, beyond the auto-injected private overlay (and the
+	// traefik-net/monitoring-net that exposure implies). Platform stacks use
+	// it to join traefik-net / monitoring-net explicitly (e.g. the OTel
+	// collector joins monitoring-net without exposing anything).
+	Networks []string `json:"networks,omitempty"`
+
 	// Secrets are listed at App level so the translator can emit the
 	// matching top-level block (secrets: external: true, etc.). Volumes are
 	// declared per-service only — the writer auto-declares named volumes and
 	// relocates every volume under the volume_root (/var/stack/data by default).
 	Secrets []string `json:"secrets,omitempty"`
+
+	// Volumes declares top-level NAMED volumes verbatim (name → optional
+	// driver declaration; empty value = plain local volume). Volumes listed
+	// here are NOT relocated under the volume root — platform stacks keep
+	// their stateful volumes exactly where they are today (openobserve_data,
+	// traefik_acme, pmui-data) so a pipeline unification never strands or
+	// silently migrates existing data.
+	Volumes map[string]string `json:"volumes,omitempty"`
 
 	Services map[string]*Service `json:"services"`
 
@@ -47,6 +70,20 @@ type Service struct {
 	// RunOnce → restart_policy: condition: none. For migrations.
 	RunOnce bool `json:"run_once,omitempty"`
 
+	// Mode is the swarm deploy mode: "global" runs one task on every node
+	// (used by platform agents like the OTel collector and backup); "" means
+	// replicated (the default). Mutually exclusive with Replicas.
+	Mode string `json:"mode,omitempty"`
+
+	// Restart overrides the restart condition explicitly ("any",
+	// "on-failure", "none"). Empty keeps the DSL defaults (run_once → none,
+	// otherwise on-failure).
+	Restart string `json:"restart,omitempty"`
+
+	// RestartDelay sets the swarm restart_policy delay (e.g. "5s").
+	// Platform agents (otel-collector, edge) use it to pace restarts.
+	RestartDelay string `json:"restart_delay,omitempty"`
+
 	// SkipFilelog excludes this service from the filelog receiver.
 	// Set true when the service sends logs directly via OTLP (gRPC/HTTP).
 	SkipFilelog bool `json:"skip_filelog,omitempty"`
@@ -58,12 +95,51 @@ type Service struct {
 	// data never has to migrate. Empty means anywhere.
 	Placement string `json:"placement,omitempty"`
 
+	// Constraints appends RAW placement constraints verbatim (e.g.
+	// "node.labels.pmcluster.storage == true" for storage-node-scoped
+	// platform agents). Merged after the role/hostname constraint derived
+	// from Placement.
+	Constraints []string `json:"constraints,omitempty"`
+
 	Command    []string `json:"command,omitempty"`
 	Entrypoint []string `json:"entrypoint,omitempty"`
 
 	Env     map[string]string `json:"env,omitempty"`
 	Volumes []string          `json:"volumes,omitempty"`
 	Secrets []string          `json:"secrets,omitempty"`
+
+	// Binds are RAW host bind mounts emitted verbatim — NOT relocated under
+	// the volume root (platform services mount docker.sock, /etc/localtime,
+	// the volume root itself, etc.). Format: <host-path>:<container-path>[:ro].
+	Binds []string `json:"binds,omitempty"`
+
+	// Ports publishes container ports on the swarm (platform services only;
+	// app stacks route through Traefik via expose).
+	Ports []PortSpec `json:"ports,omitempty"`
+
+	// Configs mounts Docker config files into the container. Source is the
+	// logical config name (resolved to the versioned swarm config by the
+	// writer), target is the in-container path.
+	Configs []ConfigMount `json:"configs,omitempty"`
+
+	// ExtraHosts adds /etc/hosts entries (e.g. "host.docker.internal:host-gateway").
+	ExtraHosts []string `json:"extra_hosts,omitempty"`
+
+	// Resources sets cpu/memory reservations and limits.
+	Resources *Resources `json:"resources,omitempty"`
+
+	// User overrides the container user (e.g. "0:0").
+	User string `json:"user,omitempty"`
+
+	// Labels are RAW deploy labels merged onto the service (platform stacks
+	// carry Traefik router labels etc. here). Standard auto-injected labels
+	// (service/application/environment/version, io.pmcluster.*) always win on
+	// key collisions.
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// Logging sets the container logging driver + options (e.g. json-file
+	// with max-size/max-file rotation). Empty keeps the swarm default.
+	Logging *Logging `json:"logging,omitempty"`
 
 	// Expose triggers Traefik label injection + traefik-net membership.
 	Expose      *Expose      `json:"expose,omitempty"`
@@ -77,6 +153,52 @@ type Service struct {
 	// healthy — the pattern for run-once migrations that must wait for
 	// the database to accept connections.
 	DependsOn []string `json:"depends_on,omitempty"`
+
+	// Networks adds per-service EXTERNAL swarm network memberships beyond
+	// the app-level Networks (merged). Platform stacks use it when a single
+	// stack splits membership — e.g. observability: openobserve joins
+	// traefik-net + monitoring-net while the otel-collector joins only
+	// monitoring-net.
+	Networks []string `json:"networks,omitempty"`
+}
+
+// PortSpec is a published port mapping. Target is the container port;
+// Published is the swarm-side port (defaults to Target); Protocol is
+// tcp/udp (default tcp); Mode is ingress (default) or host.
+type PortSpec struct {
+	Target    int    `json:"target"`
+	Published int    `json:"published,omitempty"`
+	Protocol  string `json:"protocol,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+}
+
+// ConfigMount mounts a Docker config file into the container.
+type ConfigMount struct {
+	// Source is the LOGICAL config name (the DSL `config(name)` reference).
+	// The writer resolves it to the versioned swarm config via its ConfigNames
+	// resolver; unresolved names emit as-is.
+	Source string `json:"source"`
+	// Target is the in-container file path (e.g. /etc/traefik/dynamic/conf.yml).
+	Target string `json:"target"`
+}
+
+// Resources is a cpu/memory reservation + limit pair (swarm deploy resources).
+type Resources struct {
+	Reservations *ResourceSpec `json:"reservations,omitempty"`
+	Limits       *ResourceSpec `json:"limits,omitempty"`
+}
+
+// Logging sets the container logging driver and its options.
+type Logging struct {
+	Driver  string            `json:"driver,omitempty"`
+	Options map[string]string `json:"options,omitempty"`
+}
+
+// ResourceSpec is one cpus/memory quantity. cpus is a decimal string (e.g.
+// "0.25"); memory is a byte string (e.g. "128M", "512M").
+type ResourceSpec struct {
+	CPUs   string `json:"cpus,omitempty"`
+	Memory string `json:"memory,omitempty"`
 }
 
 type Expose struct {
@@ -106,10 +228,11 @@ type Healthcheck struct {
 	Type string `json:"type,omitempty"`
 	Path string `json:"path,omitempty"`
 
-	Test     []string `json:"test,omitempty"`
-	Interval string   `json:"interval,omitempty"`
-	Timeout  string   `json:"timeout,omitempty"`
-	Retries  int      `json:"retries,omitempty"`
+	Test        []string `json:"test,omitempty"`
+	Interval    string   `json:"interval,omitempty"`
+	Timeout     string   `json:"timeout,omitempty"`
+	Retries     int      `json:"retries,omitempty"`
+	StartPeriod string   `json:"start_period,omitempty"`
 }
 
 // Update is Swarm's rolling-update policy.

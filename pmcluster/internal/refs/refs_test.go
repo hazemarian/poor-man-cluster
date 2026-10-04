@@ -3,6 +3,7 @@ package refs
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -192,5 +193,116 @@ func TestParseEnvRef_FieldExtraction(t *testing.T) {
 	}
 	if ref.Kind != "config" || ref.Name != "my_conf" {
 		t.Errorf("ref = %+v, want config/my_conf", ref)
+	}
+}
+
+// settingsRefResolverStub is a RefResolver that ALSO implements
+// SettingsResolver — the shape the cluster-side resolver has when it can
+// read cluster settings.
+type settingsRefResolverStub struct {
+	refResolverStub
+	settings map[string]string
+}
+
+func (r *settingsRefResolverStub) ResolveSetting(_ context.Context, name string) (string, error) {
+	if v, ok := r.settings[name]; ok {
+		return v, nil
+	}
+	return "", errors.New("setting not found")
+}
+
+// TestParseSettingsRef checks settings(name) parses as a whole-value env
+// ref (kind + trimmed name) and that a missing/empty close parens is flagged
+// as malformed so operators fail loud at validate time.
+func TestParseSettingsRef(t *testing.T) {
+	ref, ok := ParseEnvRef("settings(volume_root)")
+	if !ok {
+		t.Fatal(`ParseEnvRef("settings(volume_root)") should succeed`)
+	}
+	if ref.Kind != "settings" || ref.Name != "volume_root" {
+		t.Errorf("ref = %+v, want settings/volume_root", ref)
+	}
+
+	ref, ok = ParseEnvRef("settings( platform_node )")
+	if !ok {
+		t.Fatal(`ParseEnvRef("settings( platform_node )") should succeed`)
+	}
+	if ref.Kind != "settings" || ref.Name != "platform_node" {
+		t.Errorf("ref = %+v, want settings/platform_node (name trimmed)", ref)
+	}
+
+	for v, wantMalformed := range map[string]bool{
+		"settings(":          true, // missing close paren
+		"settings()":         true, // empty name
+		"settings(a b":       true, // missing close paren
+		"settings(x) y":      true, // extra content around the ref
+		"settings(ok)":       false,
+		"plain":              false,
+		"SETTINGS(x)":        false, // prefix match is case-sensitive
+		"prefix settings(x)": false, // ref is not the whole value
+	} {
+		if got := MalformedEnvRef(v); got != wantMalformed {
+			t.Errorf("MalformedEnvRef(%q) = %v, want %v", v, got, wantMalformed)
+		}
+	}
+
+	// ParseEnvRef agrees: only well-formed whole-value settings() refs parse.
+	for _, v := range []string{"settings(", "settings()", "settings(a b", "settings(x) y", "plain", "prefix settings(x)"} {
+		if _, ok := ParseEnvRef(v); ok {
+			t.Errorf("ParseEnvRef(%q) should fail", v)
+		}
+	}
+	if _, ok := ParseEnvRef("settings(ok)"); !ok {
+		t.Errorf(`ParseEnvRef("settings(ok)") should succeed`)
+	}
+}
+
+// TestReplaceRefs_SettingsKind verifies settings(...) references embedded in
+// compose text are rewritten through a resolver that implements
+// SettingsResolver, and that a resolver WITHOUT it errors (leaving the text
+// untouched) instead of silently emitting the raw reference.
+func TestReplaceRefs_SettingsKind(t *testing.T) {
+	in := "volumes:\n  device: settings(volume_root)/my-app\n"
+
+	r := &settingsRefResolverStub{
+		refResolverStub: refResolverStub{
+			configs: map[string]string{"cfg": "cfg_v1"},
+			secrets: map[string]string{"sec": "sec_v1"},
+		},
+		settings: map[string]string{"volume_root": "bar"},
+	}
+	got, err := ReplaceRefs(context.Background(), in, r)
+	if err != nil {
+		t.Fatalf("ReplaceRefs: %v", err)
+	}
+	want := "volumes:\n  device: bar/my-app\n"
+	if got != want {
+		t.Errorf("ReplaceRefs mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+
+	// Mixed kinds keep dispatching correctly (config/secrets/settings).
+	got, err = ReplaceRefs(context.Background(), "a: config(cfg)\nb: secrets(sec)\nc: settings(volume_root)", r)
+	if err != nil {
+		t.Fatalf("ReplaceRefs mixed: %v", err)
+	}
+	if want := "a: cfg_v1\nb: sec_v1\nc: bar"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+
+	// Resolver that does NOT implement SettingsResolver → error mentioning
+	// settings, with the original text preserved.
+	plain := &refResolverStub{
+		configs: map[string]string{},
+		secrets: map[string]string{},
+	}
+	out, err := ReplaceRefs(context.Background(), in, plain)
+	if err == nil {
+		t.Fatal("expected an error from a resolver without SettingsResolver")
+	}
+	if !strings.Contains(err.Error(), "settings") || !strings.Contains(err.Error(), "volume_root") {
+		t.Errorf("error should mention settings(volume_root): %v", err)
+	}
+	if out != in {
+		t.Errorf("text must be preserved on error, got %q", out)
 	}
 }

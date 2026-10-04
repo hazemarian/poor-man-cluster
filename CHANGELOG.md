@@ -4,6 +4,42 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.152 (2026-10-04)
+
+- **feat: ONE pipeline for everything (consolidated L4 directive).** Platform stacks —
+  `infra`, `edge`, `observability`, `backup`, `sso` — are no longer rendered as raw
+  Compose via a separate path. The five embedded manifests are now DSL manifests
+  (`app.platform: true`) that flow through the SAME pipeline as customer app stacks:
+  `LoadComposeFile` runs the Go-template pre-pass (ACME/SSO/backup-branch conditionals
+  + `${DOMAIN}`-style substitution) and then hands the result to
+  `manifest.Parse → Interpolate → Validate → BuildIR → ComposeWriter`. One renderer,
+  one hash, one deploy/reconcile/purge path.
+- **feat: DSL surface extended for platform needs.** `app.networks` + per-service
+  `networks` (join shared external overlays; the per-stack private net is skipped when
+  app networks are set), `app.volumes` map (platform named volumes like
+  `openobserve_data`/`traefik_acme`/`pmui-data` are declared verbatim — never relocated),
+  `mode: global`, `restart`/`restart_delay`, raw `constraints`, `binds` (host paths
+  emitted verbatim), `ports` (target/published/protocol/mode), `configs` mounts,
+  `extra_hosts`, `resources` (cpus/memory reservations+limits), `user`, raw `labels`,
+  `logging` (driver+options), `healthcheck.start_period`. New `settings(name)` env-ref
+  kind resolves cluster settings at render time (`settings()` env refs, `ResolveSetting`
+  on the resolver). `io.pmcluster.platform=true` is stamped on every service of a
+  platform stack.
+- **feat: unified rendered-config primitive.** The two non-service platform artifacts —
+  the Traefik dynamic config and the OTel collector config — are now handled by one
+  `RenderedConfig` abstraction (`EnsureRenderedConfigs`), so they version/persist/render
+  exactly like every other platform artifact.
+- **feat: versioning unified (user: keep the rev counter).** `EnsureConfig` /
+  `EnsureVersionedSecret` now mint unpadded `_v<N>` names (were `_v%03d`), matching the
+  user-secret swarm_rev counter. `cert_v1`, `pmcluster_otel_config_v1`, etc.
+- **feat: user manifests may not claim `platform: true`.** The deploy/webhook path
+  refuses the flag (reserved for pmcluster's own stacks), so a customer manifest cannot
+  stamp `io.pmcluster.platform=true` on swarm services.
+- Migration note: platform stack rendered output changes shape (env maps, label maps,
+  long-syntax ports, platform label), so the first `cluster update` after this release
+  performs one forced redeploy of the platform stacks — BUG-009 (fixed in v0.2.148)
+  makes a failed redeploy retry on the next update.
+
 ## v0.2.151 (2026-10-04)
 
 - **fix(cli): `credentials rotate` now applies the rotation immediately (BUG-012).** Rotating a

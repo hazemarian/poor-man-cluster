@@ -170,8 +170,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		certSecret, keySecret string
 		creds                 map[string]*ManagedCredential
 		render                RenderInput
-		otelConfigName        string
-		otelConfigCreated     bool
 		sso                   ssoState
 		ssoSecret             string
 	)
@@ -339,27 +337,15 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			SSOCookieExpire: sso.CookieExpire,
 		}
 
-		otelConfigName, otelConfigCreated, err = ensureOTelConfig(ctx, deps, in.Version, render)
+		renderedConfigs, err := EnsureRenderedConfigs(ctx, deps.Docker, &render, in.Version)
 		if err != nil {
 			return err
 		}
-		if otelConfigCreated {
-			res.NewConfigs = append(res.NewConfigs, otelConfigName)
+		for _, oc := range renderedConfigs {
+			if oc.Created {
+				res.NewConfigs = append(res.NewConfigs, oc.Name)
+			}
 		}
-		render.OTelConfigName = otelConfigName
-
-		traefikYAML, err := RenderTraefikDynamic(render)
-		if err != nil {
-			return err
-		}
-		traefikConfigName, traefikConfigCreated, err := EnsureConfig(ctx, deps.Docker, "pmcluster_traefik_dynamic", traefikYAML, in.Version)
-		if err != nil {
-			return err
-		}
-		if traefikConfigCreated {
-			res.NewConfigs = append(res.NewConfigs, traefikConfigName)
-		}
-		render.TraefikConfigName = traefikConfigName
 
 		edgeName, edgeCreated, err := ensureEdgeConfig(ctx, deps.Docker, in.Version, render)
 		if err != nil {
@@ -467,17 +453,6 @@ func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
 		}
 	}
 	return nil
-}
-
-// ensureOTelConfig renders the collector config and ensures its versioned
-// Docker config exists, returning the (versioned) name and whether it was newly
-// created. Used by up/update so the collector's ingestion auth is content-aware.
-func ensureOTelConfig(ctx context.Context, deps UpDeps, version string, render RenderInput) (string, bool, error) {
-	otelYAML, err := RenderOTelCollectorConfig(render)
-	if err != nil {
-		return "", false, err
-	}
-	return EnsureConfig(ctx, deps.Docker, "pmcluster_otel_config", otelYAML, version)
 }
 
 func validateUpInput(in UpInput) error {

@@ -231,27 +231,14 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	})
 
 	wf.Add("Rendering OTel + Traefik + edge configs (content-aware)", func(ctx context.Context) error {
-		otelYAML, err := RenderOTelCollectorConfig(render)
+		rendered, err := EnsureRenderedConfigs(ctx, deps.Docker, &render, in.Version)
 		if err != nil {
 			return err
 		}
-		otelName, otelCreated, err := EnsureConfig(ctx, deps.Docker, "pmcluster_otel_config", otelYAML, in.Version)
-		if err != nil {
-			return err
-		}
-		res.OTelConfig, res.OTelCreated = otelName, otelCreated
-		render.OTelConfigName = otelName
-
-		traefikYAML, err := RenderTraefikDynamic(render)
-		if err != nil {
-			return err
-		}
-		traefikName, traefikCreated, err := EnsureConfig(ctx, deps.Docker, "pmcluster_traefik_dynamic", traefikYAML, in.Version)
-		if err != nil {
-			return err
-		}
-		res.TraefikConfig, res.TraefikCreated = traefikName, traefikCreated
-		render.TraefikConfigName = traefikName
+		res.OTelConfig = rendered["pmcluster_otel_config"].Name
+		res.OTelCreated = rendered["pmcluster_otel_config"].Created
+		res.TraefikConfig = rendered["pmcluster_traefik_dynamic"].Name
+		res.TraefikCreated = rendered["pmcluster_traefik_dynamic"].Created
 
 		edgeName, edgeCreated, err := ensureEdgeConfig(ctx, deps.Docker, in.Version, render)
 		if err != nil {
@@ -388,16 +375,13 @@ func renderPlatformConfigs(render RenderInput) (map[string][]byte, error) {
 		}
 		out[string(s)+"-stack"] = y
 	}
-	otelYAML, err := RenderOTelCollectorConfig(render)
+	nonService, err := renderRenderedConfigs(render)
 	if err != nil {
-		return nil, fmt.Errorf("render otel-collector-config: %w", err)
+		return nil, err
 	}
-	out["otel-collector-config"] = otelYAML
-	traefikYAML, err := RenderTraefikDynamic(render)
-	if err != nil {
-		return nil, fmt.Errorf("render traefik-dynamic: %w", err)
+	for k, v := range nonService {
+		out[k] = v
 	}
-	out["traefik-dynamic"] = traefikYAML
 	return out, nil
 }
 
@@ -518,24 +502,11 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 
 	// Materialise the versioned Docker config names so the rendered stacks
 	// reference real configs (valid YAML) and the snapshots are hashable.
-	otelYAML, err := RenderOTelCollectorConfig(render)
+	renderedConfigs, err := EnsureRenderedConfigs(ctx, deps.Docker, &render, in.Version)
 	if err != nil {
 		return nil, err
 	}
-	otelName, _, err := EnsureConfig(ctx, deps.Docker, "pmcluster_otel_config", otelYAML, in.Version)
-	if err != nil {
-		return nil, err
-	}
-	render.OTelConfigName = otelName
-	traefikYAML, err := RenderTraefikDynamic(render)
-	if err != nil {
-		return nil, err
-	}
-	traefikName, _, err := EnsureConfig(ctx, deps.Docker, "pmcluster_traefik_dynamic", traefikYAML, in.Version)
-	if err != nil {
-		return nil, err
-	}
-	render.TraefikConfigName = traefikName
+	_ = renderedConfigs
 	edgeName, _, err := ensureEdgeConfig(ctx, deps.Docker, in.Version, render)
 	if err != nil {
 		return nil, err

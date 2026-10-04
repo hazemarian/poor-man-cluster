@@ -110,8 +110,8 @@ func TestUp_IncludesCertKeyAndCredentialSecrets(t *testing.T) {
 	}
 
 	wantSecrets := map[string]bool{
-		"cert_v001":             false,
-		"key_v001":              false,
+		"cert_v1":               false,
+		"key_v1":                false,
 		"admin_credentials":     false,
 		"zo_root_user_password": false,
 	}
