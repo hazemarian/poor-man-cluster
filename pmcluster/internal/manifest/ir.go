@@ -136,11 +136,10 @@ type IRService struct {
 	DependsOn []string
 }
 
-// IRPort is a published port mapping.
+// IRPort is a published port mapping (TCP only).
 type IRPort struct {
 	Target    int
 	Published int
-	Protocol  string
 	Mode      string
 }
 
@@ -172,6 +171,8 @@ type IRResourceSpec struct {
 type IRExpose struct {
 	Port         int
 	Host         string
+	External     int
+	Mode         string
 	Aliases      []string
 	CORSDisabled bool
 }

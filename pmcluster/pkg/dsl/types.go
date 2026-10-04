@@ -117,10 +117,12 @@ type Service struct {
 	// app stacks route through Traefik via expose).
 	Ports []PortSpec `json:"ports,omitempty"`
 
-	// Configs mounts Docker config files into the container. Source is the
-	// logical config name (resolved to the versioned swarm config by the
-	// writer), target is the in-container path.
-	Configs []ConfigMount `json:"configs,omitempty"`
+	// Configs mounts Docker config FILES into the container. Each entry is a
+	// config_path(<name>) expression — the shared syntax for both app and
+	// platform stacks. The writer resolves <name> to the versioned swarm
+	// config via its ConfigNames resolver and mounts it at the resolved path
+	// (default /etc/<name>, overridable by the resolver).
+	Configs []string `json:"configs,omitempty"`
 
 	// ExtraHosts adds /etc/hosts entries (e.g. "host.docker.internal:host-gateway").
 	ExtraHosts []string `json:"extra_hosts,omitempty"`
@@ -163,23 +165,12 @@ type Service struct {
 }
 
 // PortSpec is a published port mapping. Target is the container port;
-// Published is the swarm-side port (defaults to Target); Protocol is
-// tcp/udp (default tcp); Mode is ingress (default) or host.
+// Published is the swarm-side port (defaults to Target); Mode is ingress
+// (default) or host. All swarm port publishing is TCP.
 type PortSpec struct {
 	Target    int    `json:"target"`
 	Published int    `json:"published,omitempty"`
-	Protocol  string `json:"protocol,omitempty"`
 	Mode      string `json:"mode,omitempty"`
-}
-
-// ConfigMount mounts a Docker config file into the container.
-type ConfigMount struct {
-	// Source is the LOGICAL config name (the DSL `config(name)` reference).
-	// The writer resolves it to the versioned swarm config via its ConfigNames
-	// resolver; unresolved names emit as-is.
-	Source string `json:"source"`
-	// Target is the in-container file path (e.g. /etc/traefik/dynamic/conf.yml).
-	Target string `json:"target"`
 }
 
 // Resources is a cpu/memory reservation + limit pair (swarm deploy resources).
@@ -204,6 +195,21 @@ type ResourceSpec struct {
 type Expose struct {
 	Port int    `json:"port"`
 	Host string `json:"host"`
+
+	// External publishes the exposed port to the swarm ingress network as a
+	// real host port (target = Port, published = External, TCP). Empty means
+	// the service is only reachable through Traefik (client → Traefik :443 →
+	// service). Platform services that must be reachable directly (Traefik's
+	// own :80/:443 ACME listener, the OTel collector's node-local :4318) set
+	// this. When set and Host is empty, the port is published raw without any
+	// Traefik router.
+	External int `json:"external,omitempty"`
+
+	// Mode is the swarm port publishing mode when External is set: ingress
+	// (default, swarm load-balanced) or host (published on every node with a
+	// task — the OTel collector uses host so the node-local daemon reaches
+	// 127.0.0.1:4318 on the same node).
+	Mode string `json:"mode,omitempty"`
 
 	// Aliases are extra hostnames that route to the same backend. Each
 	// alias emits its own Traefik router pointing at the same service.

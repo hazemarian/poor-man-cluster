@@ -98,14 +98,14 @@ services:
 | `restart` | — | overrides `restart_policy.condition`: `any`, `on-failure`, `none` |
 | `restart_delay` | — | `restart_policy.delay` (e.g. `5s`) |
 | `constraints` | — | raw Swarm placement constraints appended after the `placement`/auto-pin rule (e.g. `- node.labels.pmcluster.storage == true`) |
-| `ports` | — | published ports: `target` (container, required), `published`, `protocol` (`tcp`/`udp`), `mode` (`ingress`/`host`) |
-| `configs` | — | Swarm config mounts: `source` (DB config name) + `target` (container path) |
+| `ports` | — | published ports: `target` (container, required), `published`, `mode` (`ingress`/`host`). All publishing is TCP (`protocol` was removed — no service needs UDP). For single-port services prefer `expose.external` |
+| `configs` | — | Swarm config file mounts: each entry is a `config_path(<name>)` expression — the config's content is mounted at the resolved path (default `/etc/<name>`) and the rendered compose references the versioned Docker config automatically. Same syntax in app and platform DSL |
 | `extra_hosts` | — | `host:ip` entries added to `/etc/hosts` (e.g. `host.docker.internal:host-gateway`) |
 | `resources` | — | `reservations`/`limits` with `cpus` + `memory` (e.g. `128M`, `1G`) |
 | `user` | — | container user (`0:0`) |
 | `labels` | — | raw Swarm service labels (standard auto-injected labels always win on collision) |
 | `logging` | — | `driver` + `options` map (e.g. `json-file` with `max-size`/`max-file`) |
-| `expose` | — | presence triggers Traefik wiring + extra network membership |
+| `expose` | — | Traefik routing (see below). Add `external: <port>` to also publish the port to the swarm ingress as a real host port (TCP) — reachable directly, not only through Traefik |
 | `healthcheck` | — | shorthand or full form (see below) |
 | `update` | `1` / `10s` / `start-first` | Swarm rolling-update policy (skipped for `run_once`); volume-holding services automatically use `stop-first` |
 
@@ -146,18 +146,49 @@ Behavior:
   via `docker service inspect`; for truly sensitive values prefer the
   `secrets:` array (write-only file mount).
 
+### Mounting configs as files (`config_path`)
+
+Services can mount DB-backed configs (managed via `pmcluster config` / the
+operator console) as files inside the container using the `configs:` array —
+the same mechanism the platform stack uses for Traefik's dynamic config and the
+OTel collector's config:
+
+```yaml
+configs:
+  - config_path(nginx_site)      # mounts at /etc/nginx_site (default path)
+  - config_path(prom_rules)      # custom target? configure via the resolver
+```
+
+- Each entry is a `config_path(<name>)` expression — the resolved config's
+  content is mounted at `<resolved path>`, default `/etc/<name>`.
+- The rendered compose references the **versioned** Docker config
+  (`<name>_v<N>`) automatically, so rotating the config and re-deploying picks
+  up the new content (same hash-triggered redeploy semantics as `env:
+  config(...)`).
+- The same syntax is available in app manifests and in pmcluster's own platform
+  manifests — there is exactly one way to mount a config.
+
 ### `expose`
 
 ```yaml
 expose:
   port: 8080                 # required — container-side port (1..65535)
-  host: api.${app}.${domain} # required — primary FQDN
+  host: api.${app}.${domain} # FQDN — required UNLESS external is set (raw publish)
+  external: 80               # optional — also publish the port to the swarm ingress
+                             # (target=port, published=external, TCP). Empty = only
+                             # reachable through Traefik.
+  mode: ingress              # optional — ingress (default) or host
+                             # (host → one port per node, e.g. node-local exporters)
   aliases:                   # optional — extra hostnames → own Traefik routers
     - api.customer.com
   cors_disabled: false       # optional — opt out of the CORS middleware
 ```
 
-- `host` and each `alias` must look like a hostname (at least one dot).
+- `host` and each `alias` must look like a hostname (at least one dot). `host` is
+  only required when `external` is not set: `expose` with `external` but no `host`
+  publishes the raw swarm port with **no** Traefik router and no routing-network
+  membership (this is how the platform stack publishes the OTel collector's
+  node-local OTLP endpoint, and how Traefik itself binds 80/443).
 - Every exposed service automatically joins `traefik-net` (so Traefik can reach it) and `monitoring-net` (so OTel can scrape it).
 - `aliases` let a customer's own domain serve the same backend alongside the canonical `${domain}` host. Each alias gets its own Traefik router sharing the same backend.
 - When aliases are present, pmcluster emits a **per-app CORS middleware** whose origin regex spans the primary host and every alias (foreign domains aren't covered by the cluster-wide regex).

@@ -141,10 +141,22 @@ func TestValidate_ExposePortTooHigh(t *testing.T) {
 	mustFail(t, a, "expose.port:")
 }
 
+// TestValidate_ExposeHostEmpty verifies expose WITHOUT a host is legal ONLY
+// when it publishes externally (expose.external — raw swarm port, no Traefik
+// router); an empty host with no external publish is rejected (nothing would
+// make the service reachable).
 func TestValidate_ExposeHostEmpty(t *testing.T) {
+	// Bare expose (no host, no external) → rejected.
 	a := baseApp()
 	a.Services["api"].Expose = &dsl.Expose{Port: 8080, Host: ""}
 	mustFail(t, a, "expose.host: required")
+
+	// Raw publish: expose.external without a host is legal.
+	b := baseApp()
+	b.Services["api"].Expose = &dsl.Expose{Port: 4318, Host: "", External: 4318}
+	if err := Validate(b); err != nil {
+		t.Fatalf("expose.external without host should validate, got: %v", err)
+	}
 }
 
 func TestValidate_ExposeHostInvalidHostname(t *testing.T) {

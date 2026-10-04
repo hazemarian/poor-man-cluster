@@ -536,14 +536,15 @@ func TestTranslate_BindsVerbatim(t *testing.T) {
 }
 
 // TestTranslate_Ports verifies published ports render with Published
-// defaulting to Target and Protocol defaulting to tcp, and that an explicit
-// udp/host-mode port survives translation.
+// defaulting to Target (all TCP) and that an explicit host-mode port survives
+// translation. (The Protocol field was dropped from the DSL — all swarm port
+// publishing is TCP.)
 func TestTranslate_Ports(t *testing.T) {
 	app := baseApp()
 	app.Services["api"].Ports = []dsl.PortSpec{
 		{Target: 80, Published: 80},
-		{Target: 4318, Published: 4318, Protocol: "udp", Mode: "host"},
-		{Target: 9000}, // published defaults to target, protocol defaults to tcp
+		{Target: 4318, Published: 4318, Mode: "host"},
+		{Target: 9000}, // published defaults to target
 	}
 	if err := Validate(app); err != nil {
 		t.Fatalf("Validate: %v", err)
@@ -557,7 +558,7 @@ func TestTranslate_Ports(t *testing.T) {
 
 	want := []composePort{
 		{Target: 80, Published: 80, Protocol: "tcp"},
-		{Target: 4318, Published: 4318, Protocol: "udp", Mode: "host"},
+		{Target: 4318, Published: 4318, Protocol: "tcp", Mode: "host"},
 		{Target: 9000, Published: 9000, Protocol: "tcp"}, // published defaulted
 	}
 	for i, w := range want {
@@ -566,11 +567,11 @@ func TestTranslate_Ports(t *testing.T) {
 		}
 	}
 
-	// String-level checks on the rendered YAML (published/protocol
-	// defaulting + host mode).
+	// String-level checks on the rendered YAML (published defaulting + host
+	// mode; protocol always tcp).
 	for _, substr := range []string{
 		"target: 80", "published: 80",
-		"protocol: tcp", "protocol: udp",
+		"protocol: tcp",
 		"target: 4318", "published: 4318",
 		"mode: host",
 		"target: 9000", "published: 9000",
@@ -580,7 +581,7 @@ func TestTranslate_Ports(t *testing.T) {
 		}
 	}
 
-	// Validation: range / protocol / mode checks.
+	// Validation: range / mode checks.
 	bad := baseApp()
 	bad.Services["api"].Ports = []dsl.PortSpec{{Target: 0}}
 	mustFail(t, bad, "ports[0].target:")
@@ -590,23 +591,19 @@ func TestTranslate_Ports(t *testing.T) {
 	mustFail(t, bad, "ports[0].published:")
 
 	bad = baseApp()
-	bad.Services["api"].Ports = []dsl.PortSpec{{Target: 80, Protocol: "sctp"}}
-	mustFail(t, bad, "ports[0].protocol:")
-
-	bad = baseApp()
 	bad.Services["api"].Ports = []dsl.PortSpec{{Target: 80, Mode: "bridge"}}
 	mustFail(t, bad, "ports[0].mode:")
 }
 
-// TestTranslate_ConfigMounts verifies a service config mount declares the
-// logical name as an EXTERNAL top-level config (with an optional versioned
-// name: override from ComposeWriter.ConfigNames) while the service keeps
-// mounting the LOGICAL source so the container path stays stable.
+// TestTranslate_ConfigMounts verifies a config_path(<name>) service config
+// mount declares the logical name as an EXTERNAL top-level config (with an
+// optional versioned name: override from ComposeWriter.ConfigNames) while the
+// service keeps mounting the LOGICAL source so the container path stays
+// stable. Without a ConfigPathResolver the file mounts at the default
+// /etc/<name>; a resolver overrides the target.
 func TestTranslate_ConfigMounts(t *testing.T) {
 	app := baseApp()
-	app.Services["api"].Configs = []dsl.ConfigMount{
-		{Source: "pmcluster_traefik_dynamic", Target: "/etc/traefik/dynamic/conf.yml"},
-	}
+	app.Services["api"].Configs = []string{"config_path(pmcluster_traefik_dynamic)"}
 	if err := Validate(app); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -627,8 +624,8 @@ func TestTranslate_ConfigMounts(t *testing.T) {
 		t.Errorf("rendered compose should declare an external config:\n%s", s)
 	}
 	mounts := cf.Services["api"].Configs
-	if len(mounts) != 1 || mounts[0].Source != "pmcluster_traefik_dynamic" || mounts[0].Target != "/etc/traefik/dynamic/conf.yml" {
-		t.Errorf("service config mounts = %+v, want source+target as written", mounts)
+	if len(mounts) != 1 || mounts[0].Source != "pmcluster_traefik_dynamic" || mounts[0].Target != "/etc/pmcluster_traefik_dynamic" {
+		t.Errorf("service config mounts = %+v, want source + default target /etc/<name>", mounts)
 	}
 
 	// With ConfigNames: top-level gets the versioned name: override; the
@@ -657,14 +654,33 @@ func TestTranslate_ConfigMounts(t *testing.T) {
 		t.Errorf("service mount source must stay the LOGICAL name, got %+v", mounts)
 	}
 
-	// Validation: source and target are both required.
+	// With a ConfigPathResolver: the target honors the resolver path.
+	app2 := baseApp()
+	app2.Services["api"].Configs = []string{"config_path(pmcluster_traefik_dynamic)"}
+	res := &configPathResolverStub{paths: map[string]string{
+		"pmcluster_traefik_dynamic": "/etc/traefik/dynamic/conf.yml",
+	}}
+	out, err := TranslateIR(context.Background(), app2, res, &ComposeWriter{})
+	if err != nil {
+		t.Fatalf("TranslateIR (resolver): %v", err)
+	}
+	var cf2 composeFile
+	if err := yaml.Unmarshal(out, &cf2); err != nil {
+		t.Fatalf("unmarshal rendered compose: %v\n%s", err, out)
+	}
+	mounts = cf2.Services["api"].Configs
+	if len(mounts) != 1 || mounts[0].Target != "/etc/traefik/dynamic/conf.yml" {
+		t.Errorf("service mount target = %+v, want resolver path /etc/traefik/dynamic/conf.yml", mounts)
+	}
+
+	// Validation: every configs entry must be a valid config_path(<name>).
 	bad := baseApp()
-	bad.Services["api"].Configs = []dsl.ConfigMount{{Source: "", Target: "/x"}}
-	mustFail(t, bad, "configs[0].source: required")
+	bad.Services["api"].Configs = []string{"raw-name-without-helper"}
+	mustFail(t, bad, "configs[0]: expected config_path(<name>)")
 
 	bad = baseApp()
-	bad.Services["api"].Configs = []dsl.ConfigMount{{Source: "cfg", Target: " "}}
-	mustFail(t, bad, "configs[0].target: required")
+	bad.Services["api"].Configs = []string{"config_path( )"}
+	mustFail(t, bad, "config_path(<name>) requires a non-empty name")
 }
 
 // TestTranslate_ExtraHostsAndUser verifies /etc/hosts entries and the
@@ -907,4 +923,56 @@ func TestTranslate_AppNetworks(t *testing.T) {
 			t.Errorf("network %q must not be declared without app networks/expose:\n%s", n, s)
 		}
 	}
+}
+
+// TestTranslate_ExposeExternal verifies expose.external publishes a raw swarm
+// port (TCP) without any Traefik router when Host is empty, honors the mode
+// (host for the node-local OTel collector), and that a host-ful expose with
+// external keeps BOTH the Traefik routing and the publish.
+func TestTranslate_ExposeExternal(t *testing.T) {
+	// Bare external publish (no host, host mode) — the otel-collector shape.
+	app := baseApp()
+	app.Services["api"].Expose = &dsl.Expose{Port: 4318, External: 4318, Mode: "host"}
+	if err := Validate(app); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	s, cf := renderCompose(t, app, nil)
+	ports := cf.Services["api"].Ports
+	if len(ports) != 1 || ports[0].Target != 4318 || ports[0].Published != 4318 || ports[0].Mode != "host" {
+		t.Fatalf("expose.external ports = %+v, want target/published 4318 host mode\n%s", ports, s)
+	}
+	for k := range cf.Services["api"].Deploy.Labels {
+		if strings.HasPrefix(k, "traefik.") {
+			t.Errorf("bare expose.external must not inject Traefik labels, got %q", k)
+		}
+	}
+	// No traefik-net/monitoring-net membership for a bare publish.
+	for _, n := range []string{"traefik-net", "monitoring-net"} {
+		if _, ok := cf.Networks[n]; ok {
+			t.Errorf("bare expose.external must not declare routing network %q:\n%s", n, s)
+		}
+	}
+	if !strings.Contains(s, "published: 4318") || !strings.Contains(s, "mode: host") {
+		t.Errorf("rendered expose.external missing publish fields:\n%s", s)
+	}
+
+	// Host-ful expose with external — Traefik routing AND raw publish.
+	app = baseApp()
+	app.Services["api"].Expose = &dsl.Expose{Port: 8080, Host: "api.example.com", External: 8080}
+	if err := Validate(app); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	s, cf = renderCompose(t, app, nil)
+	ports = cf.Services["api"].Ports
+	if len(ports) != 1 || ports[0].Target != 8080 || ports[0].Published != 8080 || ports[0].Mode != "" {
+		t.Fatalf("expose.external ports = %+v, want target/published 8080 ingress\n%s", ports, s)
+	}
+	if !strings.Contains(s, "traefik.http.routers.my-app-api.rule") {
+		t.Errorf("host-ful expose must still emit Traefik router labels:\n%s", s)
+	}
+
+	// Validation: bad mode rejected.
+	bad := baseApp()
+	bad.Services["api"].Expose = &dsl.Expose{Port: 8080, Host: "api.example.com", External: 8080, Mode: "weird"}
+	mustFail(t, bad, "expose.mode:")
 }

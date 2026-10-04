@@ -31,6 +31,14 @@ type SettingsResolver interface {
 	ResolveSetting(ctx context.Context, stack, name string) (string, error)
 }
 
+// ConfigPathResolver is implemented by EnvResolvers that can resolve a
+// config_path(<name>) mount to its in-container target path. When a resolver
+// does not implement it (or returns an empty path), the config file mounts at
+// the default refs.DefaultConfigMountPath (currently /etc/<name>).
+type ConfigPathResolver interface {
+	ResolveConfigPath(ctx context.Context, stack, name string) (string, error)
+}
+
 // Shared external networks ensured by `pmcluster cluster up`; the
 // translator references them with `external: true`.
 const (
@@ -171,8 +179,8 @@ func BuildIR(ctx context.Context, app *dsl.App, res EnvResolver) (*IR, error) {
 	configSet := map[string]struct{}{}
 	for _, svc := range app.Services {
 		for _, c := range svc.Configs {
-			if c.Source != "" {
-				configSet[c.Source] = struct{}{}
+			if name, ok := refs.ParseConfigPath(c); ok && name != "" {
+				configSet[name] = struct{}{}
 			}
 		}
 	}
@@ -241,7 +249,6 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 			is.Ports = append(is.Ports, IRPort{
 				Target:    p.Target,
 				Published: p.Published,
-				Protocol:  p.Protocol,
 				Mode:      p.Mode,
 			})
 		}
@@ -249,7 +256,17 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 
 	if len(s.Configs) > 0 {
 		for _, c := range s.Configs {
-			is.Configs = append(is.Configs, IRConfigMount{Source: c.Source, Target: c.Target})
+			name, ok := refs.ParseConfigPath(c)
+			if !ok {
+				return nil, fmt.Errorf("services.%s.configs: expected config_path(<name>), got %q", name, c)
+			}
+			target := refs.DefaultConfigMountPath(name)
+			if cpr, ok := res.(ConfigPathResolver); ok {
+				if p, err := cpr.ResolveConfigPath(ctx, app.Name, name); err == nil && p != "" {
+					target = p
+				}
+			}
+			is.Configs = append(is.Configs, IRConfigMount{Source: name, Target: target})
 		}
 	}
 
@@ -267,6 +284,8 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 		is.Expose = &IRExpose{
 			Port:         s.Expose.Port,
 			Host:         s.Expose.Host,
+			External:     s.Expose.External,
+			Mode:         s.Expose.Mode,
 			Aliases:      s.Expose.Aliases,
 			CORSDisabled: s.Expose.CORSDisabled,
 		}

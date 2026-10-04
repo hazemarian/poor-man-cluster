@@ -4,6 +4,25 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.153 (2026-10-04)
+
+- **feat(dsl): `expose.external` publishes a real swarm port; `protocol` dropped.**
+  `expose` gained `external: <port>` — when set, the exposed container port is also
+  published to the swarm ingress (`target=port`, `published=external`, TCP), so a
+  service can be reached directly (not only through Traefik). `host` is now only
+  required when `external` is unset: `expose` with `external` and no `host` publishes
+  the raw port with no Traefik router or routing-network membership (used for the OTel
+  collector's node-local OTLP endpoint and Traefik's own 80/443). `ports` dropped the
+  `protocol` field (all publishing is TCP) and gained `mode` (`ingress`/`host`).
+  Platform embeds updated: `otel-collector` now uses `expose {port: 4318, external:
+  4318, mode: host}` instead of a `ports` list.
+- **feat(dsl): `config_path(<name>)` helper unifies config file mounting.**
+  `configs:` entries are now `config_path(<name>)` expressions (one syntax for app and
+  platform DSL). The config is mounted at the resolved path (default `/etc/<name>`)
+  and the rendered compose references the versioned Docker config automatically.
+  Traefik dynamic config → `/etc/traefik/dynamic/conf.yml`, OTel collector config →
+  `/etc/otel-collector-config.yaml`. Validation errors for malformed expressions.
+
 ## v0.2.152.2 (2026-10-04)
 
 - **fix(cluster): storage node is defaulted before platform stacks are rendered.**

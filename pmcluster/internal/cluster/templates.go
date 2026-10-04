@@ -17,6 +17,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/refs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -355,6 +356,23 @@ func (r *renderRefResolver) ResolveConfig(_ context.Context, _ string, name stri
 
 func (r *renderRefResolver) ResolveSetting(_ context.Context, _ string, name string) (string, error) {
 	return "", fmt.Errorf("resolve settings(%s): platform manifests cannot reference cluster settings", name)
+}
+
+// ResolveConfigPath implements manifest.ConfigPathResolver — the in-container
+// mount path for a config_path(<name>) reference. Platform configs mount at
+// the well-known paths the consuming binaries expect (Traefik watches
+// /etc/traefik/dynamic/conf.yml, the OTel collector loads
+// /etc/otel-collector-config.yaml); any other config falls back to the
+// default /etc/<name>.
+func (r *renderRefResolver) ResolveConfigPath(_ context.Context, _ string, name string) (string, error) {
+	switch name {
+	case "pmcluster_traefik_dynamic":
+		return "/etc/traefik/dynamic/conf.yml", nil
+	case "pmcluster_otel_config":
+		return "/etc/otel-collector-config.yaml", nil
+	default:
+		return refs.DefaultConfigMountPath(name), nil
+	}
 }
 
 // platformSecretNames maps a logical secret name to the actual versioned

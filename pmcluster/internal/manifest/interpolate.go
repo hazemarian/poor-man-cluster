@@ -112,16 +112,11 @@ func interpolateService(name string, s *dsl.Service, subst func(string) (string,
 		s.ExtraHosts[i] = v
 	}
 	for i := range s.Configs {
-		v, err := subst(s.Configs[i].Source)
+		v, err := subst(s.Configs[i])
 		if err != nil {
-			return wrap(err, fmt.Sprintf("configs[%d].source", i))
+			return wrap(err, fmt.Sprintf("configs[%d]", i))
 		}
-		s.Configs[i].Source = v
-		v, err = subst(s.Configs[i].Target)
-		if err != nil {
-			return wrap(err, fmt.Sprintf("configs[%d].target", i))
-		}
-		s.Configs[i].Target = v
+		s.Configs[i] = v
 	}
 	for k, val := range s.Labels {
 		v, err := subst(val)

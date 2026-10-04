@@ -221,15 +221,33 @@ func composeServiceFromIR(
 
 	if len(s.Ports) > 0 {
 		for _, p := range s.Ports {
-			cp := composePort(p)
-			if cp.Published == 0 {
-				cp.Published = cp.Target
+			cp := composePort{Target: p.Target, Mode: p.Mode}
+			if p.Published != 0 {
+				cp.Published = p.Published
+			} else {
+				cp.Published = p.Target
 			}
 			if cp.Protocol == "" {
 				cp.Protocol = "tcp"
 			}
 			cs.Ports = append(cs.Ports, cp)
 		}
+	}
+	// expose.external publishes the exposed container port to the swarm as a
+	// real host port (TCP). Mode defaults to ingress (swarm load-balanced);
+	// host publishes on every node with a task (the OTel collector's node-local
+	// 4318 for the daemon). Raw publish only — Traefik routing is separate and
+	// gated on expose.host.
+	if s.Expose != nil && s.Expose.External > 0 {
+		cp := composePort{
+			Target:    s.Expose.Port,
+			Published: s.Expose.External,
+			Protocol:  "tcp",
+		}
+		if s.Expose.Mode != "" {
+			cp.Mode = s.Expose.Mode
+		}
+		cs.Ports = append(cs.Ports, cp)
 	}
 
 	if usePrivateNet {
@@ -246,7 +264,10 @@ func composeServiceFromIR(
 			*usesMonitoringNet = true
 		}
 	}
-	if s.Expose != nil {
+	// Traefik routing networks are joined only when the service has a public
+	// hostname. A bare expose.external (no host) is a raw publish with no
+	// Traefik router — it must NOT drag the routing networks in.
+	if s.Expose != nil && s.Expose.Host != "" {
 		cs.Networks = append(cs.Networks, traefikNet, monitoringNet)
 		*usesTraefikNet = true
 		*usesMonitoringNet = true
@@ -445,7 +466,7 @@ func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, 
 		}
 	}
 
-	if s.Expose != nil {
+	if s.Expose != nil && s.Expose.Host != "" {
 		addTraefikLabels(d.Labels, app, s.Name, s.Expose, certResolver)
 	}
 

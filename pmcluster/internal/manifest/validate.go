@@ -108,19 +108,17 @@ func validateService(name string, s *dsl.Service) error {
 		if p.Published != 0 && (p.Published < 1 || p.Published > 65535) {
 			return fmt.Errorf("%s.ports[%d].published: must be 1..65535 or 0 (defaults to target), got %d", prefix, i, p.Published)
 		}
-		if p.Protocol != "" && p.Protocol != "tcp" && p.Protocol != "udp" {
-			return fmt.Errorf("%s.ports[%d].protocol: must be 'tcp' or 'udp', got %q", prefix, i, p.Protocol)
-		}
 		if p.Mode != "" && p.Mode != "ingress" && p.Mode != "host" {
 			return fmt.Errorf("%s.ports[%d].mode: must be 'ingress' or 'host', got %q", prefix, i, p.Mode)
 		}
 	}
 	for i, c := range s.Configs {
-		if strings.TrimSpace(c.Source) == "" {
-			return fmt.Errorf("%s.configs[%d].source: required", prefix, i)
+		name, ok := refs.ParseConfigPath(c)
+		if !ok {
+			return fmt.Errorf("%s.configs[%d]: expected config_path(<name>), got %q", prefix, i, c)
 		}
-		if strings.TrimSpace(c.Target) == "" {
-			return fmt.Errorf("%s.configs[%d].target: required", prefix, i)
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("%s.configs[%d]: config_path(<name>) requires a non-empty name", prefix, i)
 		}
 	}
 	for i, b := range s.Binds {
@@ -187,10 +185,16 @@ func validateService(name string, s *dsl.Service) error {
 		if s.Expose.Port < 1 || s.Expose.Port > 65535 {
 			return fmt.Errorf("%s.expose.port: must be 1..65535, got %d", prefix, s.Expose.Port)
 		}
-		if s.Expose.Host == "" {
-			return fmt.Errorf("%s.expose.host: required when expose is set", prefix)
+		if s.Expose.External != 0 && (s.Expose.External < 1 || s.Expose.External > 65535) {
+			return fmt.Errorf("%s.expose.external: must be 1..65535 or 0 (no published port), got %d", prefix, s.Expose.External)
 		}
-		if !hostnameRe.MatchString(s.Expose.Host) {
+		if s.Expose.Host == "" && s.Expose.External == 0 {
+			return fmt.Errorf("%s.expose.host: required (or set expose.external to publish a raw swarm port)", prefix)
+		}
+		if s.Expose.Mode != "" && s.Expose.Mode != "ingress" && s.Expose.Mode != "host" {
+			return fmt.Errorf("%s.expose.mode: must be 'ingress' or 'host', got %q", prefix, s.Expose.Mode)
+		}
+		if s.Expose.Host != "" && !hostnameRe.MatchString(s.Expose.Host) {
 			return fmt.Errorf("%s.expose.host: invalid hostname %q", prefix, s.Expose.Host)
 		}
 		for i, alias := range s.Expose.Aliases {

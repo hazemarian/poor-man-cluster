@@ -11,6 +11,10 @@ import (
 // around the reference.
 var envRefRe = regexp.MustCompile(`^(config|secrets|settings)\(([^)]+)\)$`)
 
+// configPathRe matches a config_path(<name>) expression — the DSL syntax for
+// declaring a Docker config FILE mount (`configs: [config_path(cfg)]`).
+var configPathRe = regexp.MustCompile(`^config_path\(([^)]+)\)$`)
+
 // EnvRef is a parsed config(name)/secrets(name)/settings(name) env-value
 // reference.
 type EnvRef struct {
@@ -43,4 +47,21 @@ func MalformedEnvRef(v string) bool {
 // appears (compose `secrets:` mounts default to /run/secrets/<name>).
 func SecretMountPath(name string) string {
 	return "/run/secrets/" + name
+}
+
+// DefaultConfigMountPath is the in-container path where a Docker config file
+// appears when the DSL does not override it (`configs: [config_path(cfg)]`
+// mounts at /etc/<name>).
+func DefaultConfigMountPath(name string) string {
+	return "/etc/" + name
+}
+
+// ParseConfigPath reports whether v is exactly a config_path(<name>)
+// expression and returns the config name it references.
+func ParseConfigPath(v string) (string, bool) {
+	sub := configPathRe.FindStringSubmatch(v)
+	if len(sub) != 2 {
+		return "", false
+	}
+	return strings.TrimSpace(sub[1]), true
 }

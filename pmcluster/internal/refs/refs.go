@@ -1,7 +1,8 @@
-// Package refs is the shared config()/secrets() reference language used
-// across the control plane. The DSL env values (internal/manifest) and the
-// platform stack templates (internal/cluster) both resolve references through
-// this package — one mechanism for replacing configs and secrets everywhere.
+// Package refs is the shared config()/secrets()/settings()/config_path()
+// reference language used across the control plane. The DSL env values
+// (internal/manifest) and the platform stack templates (internal/cluster)
+// both resolve references through this package — one mechanism for replacing
+// configs and secrets everywhere.
 //
 // Two reference shapes exist:
 //
@@ -17,13 +18,13 @@ import (
 	"strings"
 )
 
-// inlineRefRe matches config(name)/secrets(name)/settings(name) references
-// ANYWHERE in a compose file — including inline YAML keys like
+// inlineRefRe matches config(name)/secrets(name)/settings(name)/config_path(name)
+// references ANYWHERE in a compose file — including inline YAML keys like
 // `config(pmcluster_otel_config):` and list items like
 // `- source: config(pmcluster_traefik_dynamic)`. Unlike envRefRe (which is
 // exact-match on whole env values), this finds references embedded in larger
 // text.
-var inlineRefRe = regexp.MustCompile(`(config|secrets|settings)\(([^)]+)\)`)
+var inlineRefRe = regexp.MustCompile(`(config|secrets|settings|config_path)\(([^)]+)\)`)
 
 // RefResolver resolves config()/secrets() references found in compose text.
 // The cluster side (internal/cluster) implements it with a RenderInput so the
@@ -36,6 +37,17 @@ type RefResolver interface {
 	// ResolveSecret returns the Docker secret name (or content) for a
 	// secrets(<name>) reference.
 	ResolveSecret(ctx context.Context, name string) (string, error)
+}
+
+// ConfigPathResolver is implemented by RefResolvers that can resolve a
+// config_path(<name>) reference to the container path the config file should
+// be mounted at. Resolvers that do not implement it fall back to a default
+// path (<target> defaults to /etc/<name>).
+type ConfigPathResolver interface {
+	// ResolveConfigPath returns the container path for a config file mount
+	// named <name>. Callers fall back to the default path (/etc/<name>)
+	// when this interface is not implemented.
+	ResolveConfigPath(ctx context.Context, name string) (string, error)
 }
 
 // ReplaceRefs rewrites every config(...)/secrets(...) reference in text via
@@ -64,6 +76,12 @@ func ReplaceRefs(ctx context.Context, text string, r RefResolver) (string, error
 				resolved, err = sr.ResolveSetting(ctx, name)
 			} else {
 				err = fmt.Errorf("settings(%s) reference not supported by this resolver", name)
+			}
+		case "config_path":
+			if cpr, ok := r.(ConfigPathResolver); ok {
+				resolved, err = cpr.ResolveConfigPath(ctx, name)
+			} else {
+				err = fmt.Errorf("config_path(%s) reference not supported by this resolver", name)
 			}
 		default:
 			err = fmt.Errorf("unknown reference kind %q", sub[1])

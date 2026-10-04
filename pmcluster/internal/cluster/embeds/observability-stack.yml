@@ -56,18 +56,16 @@ services:
     restart: any
     restart_delay: 5s
     command: ["--config=/etc/otel-collector-config.yaml"]
-    ports:
-      - target: 4318
-        published: 4318
-        protocol: tcp
-        mode: host
+    expose:
+      port: 4318
+      external: 4318
+      mode: host
     binds:
       - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/etc/localtime:/etc/localtime:ro"
     configs:
-      - source: pmcluster_otel_config
-        target: /etc/otel-collector-config.yaml
+      - config_path(pmcluster_otel_config)
     resources:
       reservations:
         cpus: "0.3"

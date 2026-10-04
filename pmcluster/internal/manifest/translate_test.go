@@ -37,6 +37,24 @@ func (r *settingsResolverStub) ResolveSetting(_ context.Context, stack, name str
 	return "", errors.New("setting not found")
 }
 
+// configPathResolverStub is an EnvResolver that ALSO implements
+// ConfigPathResolver — the shape *cluster.renderRefResolver has in production
+// (it resolves config_path() mounts to their well-known container paths).
+type configPathResolverStub struct {
+	paths map[string]string
+}
+
+func (r *configPathResolverStub) ResolveConfig(_ context.Context, _, name string) (string, error) {
+	return name, nil
+}
+
+func (r *configPathResolverStub) ResolveConfigPath(_ context.Context, _, name string) (string, error) {
+	if p, ok := r.paths[name]; ok {
+		return p, nil
+	}
+	return "", nil
+}
+
 // TestTranslate_SettingsEnvRef verifies an env value of settings(name) is
 // substituted with the live cluster setting through a resolver that
 // implements SettingsResolver, that resolvers which DON'T implement it fail
