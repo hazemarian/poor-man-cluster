@@ -123,23 +123,6 @@ func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domai
 		}
 	}
 
-	if refresh {
-		res, err := Update(ctx, UpdateDeps{
-			Store:    deps.Store,
-			Cipher:   deps.Cipher,
-			Docker:   deps.Docker,
-			Deployer: deps.Deployer,
-			Stdout:   io.Discard,
-		}, UpdateInput{ConfigDir: configDir, Version: version})
-		if err != nil {
-			return nil, err
-		}
-		if mainCert {
-
-			certName, keyName = res.CertSecret, res.KeySecret
-		}
-	}
-
 	now := time.Now().UTC()
 	row := store.SiteCertRow{
 		Domain:     domain,
@@ -153,8 +136,41 @@ func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domai
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-	if err := deps.Store.PutSiteCert(ctx, row); err != nil {
-		return nil, fmt.Errorf("store certificate metadata: %w", err)
+	// BUG-010: a per-host cert's metadata row must be persisted BEFORE the
+	// refresh Update runs, because the refresh re-renders the Traefik dynamic
+	// config via loadHostCertEntries (which reads site_certs). With the old
+	// ordering the row landed after Update, so the FIRST `tls hosts add`
+	// re-rendered without the new cert and Traefik kept serving the default
+	// cert until a later `cluster update`. The cluster's own cert (mainCert)
+	// is excluded from loadHostCertEntries, so it must keep the after-order
+	// (its secret names are resolved by Update's result).
+	if !mainCert {
+		if err := deps.Store.PutSiteCert(ctx, row); err != nil {
+			return nil, fmt.Errorf("store certificate metadata: %w", err)
+		}
+	}
+
+	if refresh {
+		res, err := Update(ctx, UpdateDeps{
+			Store:    deps.Store,
+			Cipher:   deps.Cipher,
+			Docker:   deps.Docker,
+			Deployer: deps.Deployer,
+			Stdout:   io.Discard,
+		}, UpdateInput{ConfigDir: configDir, Version: version})
+		if err != nil {
+			return nil, err
+		}
+		if mainCert {
+			certName, keyName = res.CertSecret, res.KeySecret
+		}
+	}
+
+	if mainCert {
+		row.CertSecret, row.KeySecret = certName, keyName
+		if err := deps.Store.PutSiteCert(ctx, row); err != nil {
+			return nil, fmt.Errorf("store certificate metadata: %w", err)
+		}
 	}
 	return &row, nil
 }

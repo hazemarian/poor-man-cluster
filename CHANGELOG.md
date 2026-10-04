@@ -4,6 +4,10 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.149 (2026-10-04)
+
+- **fix(cluster): `tls hosts add` now applies the per-host certificate immediately (BUG-010).** `ApplyCert` ran the refresh pipeline (which re-renders the Traefik dynamic config from the `site_certs` table) *before* persisting the new row, so the first per-host cert was stored but Traefik kept serving the default certificate until some later `cluster update`. The per-host row is now persisted before the refresh. Regression test `TestApplyHostCert_PersistsBeforeRefresh` (fails on the old ordering, passes with the fix). Found during Test Case 7 (per-host TLS).
+
 ## v0.2.148 (2026-10-04)
 
 - **fix(cluster): a failed platform-stack deploy no longer marks the stack

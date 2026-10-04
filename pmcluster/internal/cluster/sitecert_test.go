@@ -122,6 +122,45 @@ func TestApplySiteCert_RejectsWrongDomain(t *testing.T) {
 	}
 }
 
+// TestApplyHostCert_PersistsBeforeRefresh (BUG-010 regression) verifies that a
+// per-host cert's metadata row is persisted BEFORE the refresh Update pipeline
+// runs. On the FIRST `tls hosts add`, loadHostCertEntries (which reads
+// site_certs) must see the new row while the Traefik dynamic config is being
+// re-rendered — otherwise the rendered config is byte-identical, the infra
+// stack is not redeployed, and Traefik keeps serving the default cert until a
+// later `cluster update`.
+func TestApplyHostCert_PersistsBeforeRefresh(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+
+	ctx := context.Background()
+	// host.example.net is a per-host cert (NOT the seeded cluster domain
+	// test.example.com).
+	certPEM, keyPEM := genCert(t, "host.example.net")
+	scdeps := SiteCertDeps{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer}
+	row, err := ApplyCert(ctx, scdeps, cfgDir, "v0.3.0", "host.example.net", certPEM, keyPEM, true)
+	if err != nil {
+		t.Fatalf("ApplyCert: %v", err)
+	}
+	if row.CertSecret == "" || row.KeySecret == "" {
+		t.Fatal("per-host cert secrets should be materialized before refresh")
+	}
+
+	// The refresh Update re-rendered the Traefik dynamic config; the stored
+	// rendered content must now carry the per-host cert's versioned secrets.
+	cfg, err := deps.Store.GetConfig(ctx, "traefik-dynamic")
+	if err != nil {
+		t.Fatalf("read traefik dynamic config: %v", err)
+	}
+	if cfg.RenderedContent == "" {
+		t.Fatal("rendered traefik dynamic config is empty")
+	}
+	if !strings.Contains(cfg.RenderedContent, row.CertSecret) ||
+		!strings.Contains(cfg.RenderedContent, row.KeySecret) {
+		t.Errorf("BUG-010: rendered traefik dynamic config does not reference the just-added host cert secrets %q/%q — the row was persisted AFTER the refresh re-render; content:\n%s",
+			row.CertSecret, row.KeySecret, cfg.RenderedContent)
+	}
+}
+
 // TestGetSiteCert verifies the getter semantics.
 func TestGetSiteCert(t *testing.T) {
 	dir := t.TempDir()
