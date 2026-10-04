@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -129,6 +130,98 @@ func TestUpdate_NoOpWhenNothingChanged(t *testing.T) {
 	}
 	if res.OTelCreated || res.TraefikCreated || res.CertCreated || res.KeyCreated {
 		t.Errorf("no-op update reported changes: %+v", res)
+	}
+}
+
+// failingDeployer records deploys like recordingDeployer but fails any
+// DeployStack whose stack name is in the failNames set.
+type failingDeployer struct {
+	deployedStacks []string
+	failNames      map[string]bool
+}
+
+func (f *failingDeployer) DeployStack(_ context.Context, name string, composeYAML []byte) error {
+	f.deployedStacks = append(f.deployedStacks, name)
+	if f.failNames[name] {
+		return errors.New("simulated deploy failure")
+	}
+	return nil
+}
+
+func (f *failingDeployer) DeployStackNoPrune(_ context.Context, name string, composeYAML []byte) error {
+	f.deployedStacks = append(f.deployedStacks, name)
+	if f.failNames[name] {
+		return errors.New("simulated deploy failure")
+	}
+	return nil
+}
+
+func (f *failingDeployer) PruneStack(_ context.Context, name string, _ []byte) error { return nil }
+func (f *failingDeployer) RemoveStack(_ context.Context, name string) error          { return nil }
+func (f *failingDeployer) ForceUpdateService(_ context.Context, fullName string) error {
+	return nil
+}
+func (f *failingDeployer) PruneStaleContainers(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+// TestUpdate_FailedDeployLeavesStaleHashRetriedOnNextUpdate verifies BUG-009:
+// a failed platform-stack deploy must NOT stamp the rendered hash, so the next
+// `cluster update` retries the deploy instead of silently skipping it (the
+// swarm never received the stack, but the old code marked it up-to-date).
+func TestUpdate_FailedDeployLeavesStaleHashRetriedOnNextUpdate(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	// First update: everything is a no-op (fresh seed state) — record the
+	// backup-stack rendered hash before we inject a failure.
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("baseline Update: %v", err)
+	}
+	row, err := deps.Store.GetConfig(ctx, string(StackBackup)+"-stack")
+	if err != nil {
+		t.Fatalf("GetConfig backup-stack: %v", err)
+	}
+	beforeHash := row.RenderedHash
+
+	// Change the storage_nodes setting → the backup stack re-renders (new
+	// storage-node constraint) → backup is redeployed. Make that deploy fail.
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "node-1"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	failing := &failingDeployer{failNames: map[string]bool{string(StackBackup): true}}
+	deps.Deployer = failing
+
+	_, err = Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})
+	if err == nil {
+		t.Fatalf("expected Update to fail when backup deploy fails")
+	}
+
+	// The backup-stack hash must be UNCHANGED after the failed deploy.
+	row, err = deps.Store.GetConfig(ctx, string(StackBackup)+"-stack")
+	if err != nil {
+		t.Fatalf("GetConfig backup-stack: %v", err)
+	}
+	if row.RenderedHash != beforeHash {
+		t.Errorf("BUG-009: failed deploy stamped a new rendered hash (before=%q after=%q); next update would skip redeploy",
+			beforeHash, row.RenderedHash)
+	}
+
+	// A second update (with the deploy now succeeding) must RETRY the backup
+	// stack — proving the stale hash isn't blocking redeploy.
+	deps.Deployer = &recordingDeployer{}
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("retry Update: %v", err)
+	}
+	deployer := deps.Deployer.(*recordingDeployer)
+	found := false
+	for _, rec := range deployer.deployedStacks {
+		if rec.Name == string(StackBackup) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("BUG-009: backup stack was NOT redeployed on the update after a failed deploy")
 	}
 }
 

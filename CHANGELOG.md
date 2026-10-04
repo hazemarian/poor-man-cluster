@@ -4,6 +4,21 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.148 (2026-10-04)
+
+- **fix(cluster): a failed platform-stack deploy no longer marks the stack
+  up-to-date (BUG-009).** During the v0.2.147 rollout the backup stack's switch
+  to storage-node mode hit Docker's "service mode change is not allowed", and
+  `cluster update` then refused to redeploy it forever: the rendered hash was
+  stamped into the store *before* the deploy ran, so a failed deploy left the
+  hash matching the fresh render and every subsequent update skipped the stack
+  even though the swarm never received it. Now each stack's rendered snapshot is
+  stamped only *after* its deploy succeeds — a failed deploy leaves the stored
+  hash stale and the next `cluster update` retries. Regression test
+  `TestUpdate_FailedDeployLeavesStaleHashRetriedOnNextUpdate` proves the fix
+  (fails on the old code: hash changes after the failed deploy + backup never
+  redeployed).
+
 ## v0.2.147 (2026-10-04)
 
 - **feat(cluster): backups run only on storage nodes.** The volume-backup agent is

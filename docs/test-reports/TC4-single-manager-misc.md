@@ -72,6 +72,9 @@
 ### BUG-008 — Webhook retry policy is dead code (Medium) — FIXED in v0.2.146
 `MaxRetries`/`RetryDelay` are wired but never exercised on the receive path; `DeployAsync` never retries; delivery rows stay `accepted`/`server_error` with `retries:0`. **Fix shipped:** the receiver now calls `DeployAsyncWithRetries` under a phase budget; synchronous failures retry (2×, 30s apart) and the real retry count lands on the delivery row and in the 502 body. Background apply failures still surface via stack `last_error` + reconcile.
 
+### BUG-009 — Failed platform-stack deploy permanently marks the stack up-to-date (High) — FIXED in v0.2.148
+Discovered during the v0.2.147 rollout: switching the backup stack to storage-node mode hit Docker's "service mode change is not allowed"; the failed deploy had already stamped the new rendered hash into the store (hash is written *before* the deploy runs), so every subsequent `cluster update` saw `hash == ConfigHash(fresh)` and skipped the stack forever — the swarm never received it. **Fix shipped:** each stack's rendered snapshot is stamped only *after* its deploy succeeds; a failed deploy leaves the stored hash stale and the next update retries. Regression test `TestUpdate_FailedDeployLeavesStaleHashRetriedOnNextUpdate` (fails on the old code).
+
 ---
 
 ## DSL gotchas learned (documented, not bugs)

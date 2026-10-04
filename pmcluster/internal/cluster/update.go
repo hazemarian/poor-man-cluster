@@ -293,15 +293,13 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			redeploy = append(redeploy, s)
 		}
 
-		// Snapshot every rendered config into the store (rendered_content +
-		// rendered_hash) so the console reads them back and the next update
-		// has a baseline to compare against.
-		for name, content := range rendered {
-			if err := deps.Store.SetRendered(ctx, name, string(content)); err != nil && !errors.Is(err, store.ErrConfigNotFound) {
-				return fmt.Errorf("store rendered config %s: %w", name, err)
-			}
-		}
-
+		// Deploy changed stacks first. Each stack's rendered snapshot
+		// (rendered_content + rendered_hash) is stamped into the store only
+		// AFTER its deploy succeeds — so a failed deploy leaves the stored
+		// hash stale and the NEXT update retries the deploy. (BUG-009: the
+		// hash used to be stamped up-front, so a failed deploy permanently
+		// skipped redeploy even though the swarm never received the stack.)
+		redeployed := map[string]bool{}
 		for _, s := range redeploy {
 			fmt.Fprintf(out, "  ▶ %s content changed → re-deploying\n", string(s))
 			if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
@@ -311,7 +309,29 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			if s == StackEdge {
 				res.EdgeDeployed = true
 			}
+			cfgName := string(s) + "-stack"
+			if content, ok := rendered[cfgName]; ok {
+				if err := deps.Store.SetRendered(ctx, cfgName, string(content)); err != nil &&
+					!errors.Is(err, store.ErrConfigNotFound) {
+					return fmt.Errorf("store rendered config %s: %w", cfgName, err)
+				}
+			}
+			redeployed[cfgName] = true
 		}
+
+		// Snapshot the unchanged rendered configs (rendered_content +
+		// rendered_hash) so the console reads them back and the next update
+		// has a baseline to compare against. Runs after the deploy loop so a
+		// failed deploy never leaves a stale hash.
+		for name, content := range rendered {
+			if redeployed[name] {
+				continue
+			}
+			if err := deps.Store.SetRendered(ctx, name, string(content)); err != nil && !errors.Is(err, store.ErrConfigNotFound) {
+				return fmt.Errorf("store rendered config %s: %w", name, err)
+			}
+		}
+
 		if len(redeploy) == 0 {
 			fmt.Fprintf(out, "  ▶ No rendered content changed — nothing to redeploy.\n")
 		}
