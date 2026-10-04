@@ -91,7 +91,7 @@ func init() {
 // setting is unset or the store is unavailable.
 func restoreDestRootDefault(ctx context.Context) string {
 	if st, _, err := openStore(); err == nil {
-		defer st.Close()
+		defer st.Close() //nolint:errcheck // read-only best-effort cleanup
 		if root := st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), ""); root != "" {
 			return root
 		}
