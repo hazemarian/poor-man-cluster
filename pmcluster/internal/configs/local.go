@@ -3,12 +3,20 @@ package configs
 import (
 	"context"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Local implements Service and Renderer against the local store.
+//
+// When Docker is set (daemon-side), every config write also materializes a
+// content-addressed swarm config (<name>_<sha8>) so the value lives in the
+// swarm's Raft store — the DB row is the index (and holds the value for
+// rebuilds), the swarm object is what containers actually mount. Docker nil
+// (tests, remote) keeps the old DB-only behavior.
 type Local struct {
-	Store *store.Store
+	Store  *store.Store
+	Docker runtime.Client
 }
 
 // NewLocal wires the configs service onto the store.
@@ -19,8 +27,40 @@ var (
 	_ Renderer = (*Local)(nil)
 )
 
+// mirrorSwarmConfig materializes the config value into a content-addressed
+// swarm config. Best-effort: errors are logged (returned to the caller only
+// via a wrapped write is overkill for a mirror) — a missing swarm object is
+// repaired by the next cluster update's rebuild pass.
+func (s *Local) mirrorSwarmConfig(ctx context.Context, name, content string) {
+	if s.Docker == nil {
+		return
+	}
+	target := store.SwarmConfigName(name, store.ConfigHash(content))
+	exists, err := s.Docker.ConfigExists(ctx, target)
+	if err != nil {
+		return
+	}
+	if exists {
+		return
+	}
+	_ = s.Docker.ConfigCreate(ctx, runtime.ConfigSpec{
+		Name: target,
+		Data: []byte(content),
+		Labels: map[string]string{
+			"io.pmcluster.managed": "true",
+			"pmcluster.base":       name,
+			"pmcluster.data_hash":  store.ConfigHash(content),
+		},
+	})
+}
+
 func (s *Local) Create(ctx context.Context, scope, stack, name, kind, content, version string) (int64, error) {
-	return s.Store.CreateConfig(ctx, scope, stack, name, kind, content, version)
+	id, err := s.Store.CreateConfig(ctx, scope, stack, name, kind, content, version)
+	if err != nil {
+		return 0, err
+	}
+	s.mirrorSwarmConfig(ctx, name, content)
+	return id, nil
 }
 
 func (s *Local) Get(ctx context.Context, name string) (*Config, error) {
@@ -44,7 +84,12 @@ func (s *Local) List(ctx context.Context, scope, stack string) ([]Config, error)
 }
 
 func (s *Local) Update(ctx context.Context, name, content, version string) (string, error) {
-	return s.Store.UpdateConfig(ctx, name, content, version)
+	hash, err := s.Store.UpdateConfig(ctx, name, content, version)
+	if err != nil {
+		return "", err
+	}
+	s.mirrorSwarmConfig(ctx, name, content)
+	return hash, nil
 }
 
 // Retag reassigns the config's scope and stack without touching its content.
@@ -53,7 +98,16 @@ func (s *Local) Retag(ctx context.Context, name, scope, stack string) error {
 }
 
 func (s *Local) Rollback(ctx context.Context, name string, versionID int64) (string, error) {
-	return s.Store.RollbackConfig(ctx, name, versionID)
+	hash, err := s.Store.RollbackConfig(ctx, name, versionID)
+	if err != nil {
+		return "", err
+	}
+	// Re-materialize the restored value into the swarm so the object matches
+	// the rolled-back DB row.
+	if row, err := s.Store.GetConfig(ctx, name); err == nil {
+		s.mirrorSwarmConfig(ctx, name, row.Content)
+	}
+	return hash, nil
 }
 
 func (s *Local) Delete(ctx context.Context, name string) error {

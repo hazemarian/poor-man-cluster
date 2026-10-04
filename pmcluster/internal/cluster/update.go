@@ -350,6 +350,95 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil
 	})
 
+	wf.Add("Repairing swarm configs/secrets from the DB index (rebuild-on-missing)", func(ctx context.Context) error {
+		if deps.Docker == nil {
+			return nil
+		}
+		// Configs: every DB row is materialized into a content-addressed
+		// swarm config (<name>_<sha8>). If the object is missing (swarm lost
+		// it, or it was created before the swarm-first era) it is rebuilt
+		// from the DB value — the DB is the index AND holds the value.
+		cfgs, err := deps.Store.ListConfigs(ctx, "", "")
+		if err != nil {
+			return fmt.Errorf("list configs for swarm repair: %w", err)
+		}
+		repairedConfigs := 0
+		for _, c := range cfgs {
+			target := store.SwarmConfigName(c.Name, c.Hash)
+			exists, err := deps.Docker.ConfigExists(ctx, target)
+			if err != nil {
+				fmt.Fprintf(out, "  ⚠ config %s: check swarm object: %v\n", c.Name, err)
+				continue
+			}
+			if exists {
+				continue
+			}
+			if err := deps.Docker.ConfigCreate(ctx, runtime.ConfigSpec{
+				Name: target,
+				Data: []byte(c.Content),
+				Labels: map[string]string{
+					pmclusterLabel:        "true",
+					"pmcluster.base":      c.Name,
+					"pmcluster.data_hash": c.Hash,
+				},
+			}); err != nil {
+				fmt.Fprintf(out, "  ⚠ config %s: rebuild swarm object %s: %v\n", c.Name, target, err)
+				continue
+			}
+			repairedConfigs++
+		}
+		if repairedConfigs > 0 {
+			fmt.Fprintf(out, "  ▶ rebuilt %d missing swarm config(s) from the DB index\n", repairedConfigs)
+		}
+		// Secrets: same rule — every DB row whose swarm secret is missing is
+		// rebuilt from the stored (encrypted-at-rest, plaintext-recovered by
+		// the caller) value. Secrets are Raft-replicated too, so a lost
+		// leader must not lose a secret.
+		secs, err := deps.Store.ListSecrets(ctx, "", "")
+		if err != nil {
+			return fmt.Errorf("list secrets for swarm repair: %w", err)
+		}
+		repairedSecrets := 0
+		for _, s := range secs {
+			target := store.SwarmSecretName(s.Name, s.Hash)
+			exists, err := deps.Docker.SecretExists(ctx, target)
+			if err != nil {
+				fmt.Fprintf(out, "  ⚠ secret %s: check swarm object: %v\n", s.Name, err)
+				continue
+			}
+			if exists {
+				continue
+			}
+			// The store's payload column is the encrypted-at-rest ciphertext;
+			// rebuilds can only happen when the row carries the plaintext
+			// fingerprint hash (it does) and the value was already mirrored
+			// once. If the ciphertext cannot be recovered, the operator must
+			// recreate the secret — warn, don't fail the update.
+			plain, err := deps.Cipher.Decrypt(s.Payload)
+			if err != nil {
+				fmt.Fprintf(out, "  ⚠ secret %s: cannot rebuild swarm object (ciphertext not recoverable: %v)\n", s.Name, err)
+				continue
+			}
+			if err := deps.Docker.SecretCreate(ctx, runtime.SecretSpec{
+				Name: target,
+				Data: []byte(plain),
+				Labels: map[string]string{
+					pmclusterLabel:        "true",
+					"pmcluster.base":      s.Name,
+					"pmcluster.data_hash": s.Hash,
+				},
+			}); err != nil {
+				fmt.Fprintf(out, "  ⚠ secret %s: rebuild swarm object %s: %v\n", s.Name, target, err)
+				continue
+			}
+			repairedSecrets++
+		}
+		if repairedSecrets > 0 {
+			fmt.Fprintf(out, "  ▶ rebuilt %d missing swarm secret(s) from the DB index\n", repairedSecrets)
+		}
+		return nil
+	})
+
 	wf.Add("Cluster update complete.", func(ctx context.Context) error { return nil })
 
 	if err := wf.Run(ctx); err != nil {

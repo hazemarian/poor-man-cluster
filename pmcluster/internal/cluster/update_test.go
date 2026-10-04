@@ -381,11 +381,14 @@ func TestUpdate_ConfigsUseSeedVersionedNames(t *testing.T) {
 		t.Fatalf("Update: %v", err)
 	}
 
-	if res.OTelConfig != "pmcluster_otel_config_v1" {
-		t.Errorf("OTelConfig = %q, want pmcluster_otel_config_v1 (reused)", res.OTelConfig)
+	// Content-addressed naming: the seeded OTel + Traefik configs are
+	// materialized as <base>_<sha8> objects. Same content → same name → reuse
+	// (no number is ever added).
+	if !strings.HasPrefix(res.OTelConfig, "pmcluster_otel_config_") {
+		t.Errorf("OTelConfig = %q, want pmcluster_otel_config_<sha8>", res.OTelConfig)
 	}
-	if res.TraefikConfig != "pmcluster_traefik_dynamic_v1" {
-		t.Errorf("TraefikConfig = %q, want pmcluster_traefik_dynamic_v1 (reused)", res.TraefikConfig)
+	if !strings.HasPrefix(res.TraefikConfig, "pmcluster_traefik_dynamic_") {
+		t.Errorf("TraefikConfig = %q, want pmcluster_traefik_dynamic_<sha8>", res.TraefikConfig)
 	}
 }
 

@@ -24,21 +24,24 @@ type SecretRow struct {
 	CreatedAt int64
 	// SwarmRev is how many times the value has been rotated. Docker swarm
 	// secrets are immutable and cannot be removed while in use, so every
-	// rotation mirrors the value into a NEW swarm secret <name>_v<rev>
-	// (rev 1 = the plain name). The compose writer references the versioned
-	// external name; the container mount path stays /run/secrets/<name>.
+	// rotation mirrors the value into a NEW swarm secret named by
+	// SwarmSecretName (content-addressed — see below).
 	SwarmRev int64
 }
 
-// SwarmSecretName returns the Docker swarm secret name backing a DB secret
-// at a given rotation: the plain name for rev 1, <name>_v<rev> afterwards.
-// Versioning lets a rotation publish a NEW secret instead of trying to
-// mutate an immutable in-use one (BUG-007).
-func SwarmSecretName(name string, rev int64) string {
-	if rev <= 1 {
+// SwarmSecretName returns the Docker swarm secret name backing a DB secret.
+// Names are CONTENT-ADDRESSED: the 8-hex-char sha256 prefix of the value is
+// appended, so the same value always yields the same name (an unchanged
+// secret is reused as-is — no number is ever added for an unchanged render)
+// and a real value change mints a brand-new name. The DB row is the source
+// of truth for "which is the latest": translation looks up the row, takes
+// its Hash, and derives the exact swarm secret name to reference. The
+// container mount path stays /run/secrets/<name> regardless.
+func SwarmSecretName(name, hash string) string {
+	if len(hash) < 8 {
 		return name
 	}
-	return fmt.Sprintf("%s_v%d", name, rev)
+	return name + "_" + hash[:8]
 }
 
 // ErrSecretNotFound is returned by secret getters/deleters when no row matches.

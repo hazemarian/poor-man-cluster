@@ -13,6 +13,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -93,6 +95,50 @@ func init() {
 // configValueStdin is the stdin source for readConfigValue — overridable in
 // tests; nil means os.Stdin.
 var configValueStdin io.Reader
+
+// mirrorSwarmConfig materializes a config VALUE into a content-addressed
+// Docker swarm config (<name>_<sha8-of-value>). The same value always maps to
+// the same name (an unchanged render reuses it — no number is ever added); a
+// real value change mints a brand-new name and the compose writer
+// (ConfigNames) references it via the DB hash. Configs always live in the
+// swarm (Raft-replicated across managers) so a lost leader never loses a
+// config; the DB row is the index that also holds the value for rebuilds.
+// Best-effort: warnings to stderr, never fails the command.
+func mirrorSwarmConfig(cmd *cobra.Command, name, value string, hash string) bool {
+	if rc := remoteClient(cmd); rc != nil {
+		return false // remote mode has no local daemon access
+	}
+	dc, derr := docker.New()
+	if derr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"   ⚠ docker daemon unreachable — swarm config NOT mirrored (%v).\n", derr)
+		return false
+	}
+	defer func() { _ = dc.Close() }()
+	ctx := cmd.Context()
+	target := store.SwarmConfigName(name, hash)
+	// Content-addressed: if a swarm config with this exact name already
+	// exists, it holds exactly this value — nothing to do.
+	exists, eerr := dc.ConfigExists(ctx, target)
+	switch {
+	case eerr != nil:
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"   ⚠ could not check swarm config %q (%v) — mirror skipped.\n", target, eerr)
+		return false
+	case exists:
+		return true
+	}
+	if cerr := dc.ConfigCreate(ctx, runtime.ConfigSpec{
+		Name:   target,
+		Data:   []byte(value),
+		Labels: map[string]string{"pmcluster.config": "true", "pmcluster.config.hash": hash},
+	}); cerr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"   ⚠ could not create swarm config %q (%v) — mirror skipped.\n", target, cerr)
+		return false
+	}
+	return true
+}
 
 // statReader reports the file-info for a reader. A *os.File is inspected as
 // real stdin (char-device detection); any other reader (injected in tests) is
@@ -176,6 +222,11 @@ func runConfigCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Config %q created (scope: %s, kind: %s).\n", name, scope, kind)
+
+	// Materialize the value into the swarm (content-addressed) so the config
+	// exists in every manager's Raft store, not just this node's DB.
+	hash := store.ConfigHash(value)
+	mirrorSwarmConfig(cmd, name, value, hash)
 	return nil
 }
 
@@ -252,6 +303,7 @@ func runConfigEdit(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Config %q updated (hash: %s).\n", name, shortHash(hash))
 	fmt.Fprintln(cmd.OutOrStdout(), "   Run `pmcluster cluster update` to apply it to the cluster.")
+	mirrorSwarmConfig(cmd, name, value, hash)
 	return nil
 }
 
@@ -326,6 +378,12 @@ func runConfigRollback(cmd *cobra.Command, args []string) error {
 
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Config %q rolled back (hash: %s).\n", name, shortHash(hash))
 	fmt.Fprintln(cmd.OutOrStdout(), "   Run `pmcluster cluster update` to apply it to the cluster.")
+
+	// Materialize the rolled-back value into the swarm so the config object
+	// matches the restored DB row.
+	if c, err := svc.Get(cmd.Context(), name); err == nil {
+		mirrorSwarmConfig(cmd, name, c.Content, c.Hash)
+	}
 	return nil
 }
 

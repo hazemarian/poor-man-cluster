@@ -4,6 +4,37 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.155 (2026-10-04)
+
+- **feat(config): configs always live in the swarm — content-addressed names, no
+  numbered increments.** Per the design directive (configs always come from the swarm;
+  the DB is the index but still holds values so it can rebuild missing swarm objects;
+  no numbered increments anywhere), every config and secret now uses content-addressed
+  naming: `<base>_<sha256-first-8-hex>` (`store.SwarmConfigName` / `store.SwarmSecretName`).
+  Identical content → identical name → reuse; a real change mints a new name. First
+  creation gets the bare name when the hash is short enough — no `_v1` at creation.
+- **Swarm-first translate.** `stacks.StoreConfigResolver` now reads config VALUES from
+  the Docker config (`ConfigInspect` of the name derived from the DB row hash) when a
+  Docker client is available; if the swarm object is missing it REBUILDS it from the DB
+  value (labels `io.pmcluster.managed` / `pmcluster.base`) and falls back to the DB row
+  content when Docker is nil (CLI remote/tests). `config_path()` mounts also resolve via
+  the swarm.
+- **Rebuild-on-missing repair.** `cluster update` gained a "Repairing swarm configs and
+  secrets from the DB index" pass: every indexed config/secret row is ensured to have a
+  matching swarm object, created from the DB value when absent (secrets decrypted via the
+  cipher; non-recoverable ciphertexts warn and skip).
+- **CLI + console materialize swarm objects.** `config create/edit/rollback` and
+  `secret create/edit` mirror their objects into the swarm (`mirrorSwarmConfig` /
+  `mirrorSwarmSecret`, content-addressed, skip-when-exists). The daemon wires
+  `StoreConfigResolver{Docker}` and `configs.Local{Docker}`.
+- **Writer wiring.** `stacks.Service.configExternalName` feeds `ComposeWriter.ConfigNames`
+  at all four render sites so `config_path()` mounts auto-reference the versioned swarm
+  config; `secretExternalName` is content-addressed (hash-based, not `_v<rev>`).
+- Removed the numbered-increment naming everywhere: platform `EnsureConfig` /
+  `EnsureVersionedSecret` mint content-addressed names with GC of stale `<base>_*`
+  objects; secret/config `_v<rev>` counters are gone (migration 0023 `swarm_rev` remains
+  on the table but is no longer used for naming).
+
 ## v0.2.154 (2026-10-04)
 
 - **feat(dsl): `secret(<name>)` prints a secret VALUE as-is — replaces the platform

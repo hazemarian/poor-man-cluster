@@ -64,6 +64,21 @@ func ConfigHash(content string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// SwarmConfigName returns the name of the Docker config a DB config row is
+// materialized into. Names are CONTENT-ADDRESSED: the 8-hex-char sha256
+// prefix of the content is appended, so identical content always yields the
+// same name (an unchanged config is reused as-is — no number is ever added
+// for an unchanged render) and a real content change mints a brand-new name.
+// The DB row is the source of truth for "which is the latest": translation
+// looks up the row, takes its Hash, and derives the exact swarm config name
+// to reference.
+func SwarmConfigName(name, hash string) string {
+	if len(hash) < 8 {
+		return name
+	}
+	return name + "_" + hash[:8]
+}
+
 // CreateConfig inserts a new config. Returns ErrConfigExists on name clash.
 func (s *Store) CreateConfig(ctx context.Context, scope, stack, name, kind, content, version string) (int64, error) {
 	now := time.Now().Unix()

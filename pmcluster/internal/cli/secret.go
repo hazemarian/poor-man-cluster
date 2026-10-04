@@ -141,7 +141,7 @@ func runSecretCreate(cmd *cobra.Command, args []string) error {
 	// the stack deploy fails with 'secret not found: <name>'. Mirror it into
 	// Docker when running on a node with daemon access (local mode). The DB
 	// row remains the encrypted source of truth for rotations/CLI display.
-	swarmMirrored := mirrorSwarmSecret(cmd, name, value, 1)
+	swarmMirrored := mirrorSwarmSecret(cmd, name, value, hash)
 
 	extra := ""
 	if swarmMirrored {
@@ -166,12 +166,14 @@ Use it in a manifest:
 // mirrorSwarmSecret makes the given value available to Docker Swarm so
 // `docker stack deploy` can mount it (DSL secrets(name) renders
 // external:true). Swarm secrets are immutable and cannot be removed while a
-// running service references them, so rotations are VERSIONED: rev 1 uses the
-// plain name; every edit mirrors the new value into a fresh <name>_v<rev>
-// secret and NEVER tries to mutate the in-use original (BUG-007). The compose
-// writer is wired (SecretNames) to reference the versioned name for rev > 1.
-// Best-effort: warnings to stderr, never fails the command.
-func mirrorSwarmSecret(cmd *cobra.Command, name, value string, rev int64) bool {
+// running service references them, so names are CONTENT-ADDRESSED: the swarm
+// secret is <name>_<sha8-of-value> (store.SwarmSecretName). The same value
+// always maps to the same name (an unchanged render reuses it — no number is
+// ever added); a real value change mints a brand-new name and the compose
+// writer (SecretNames) references it via the DB hash. Never tries to mutate
+// the in-use original (BUG-007). Best-effort: warnings to stderr, never
+// fails the command.
+func mirrorSwarmSecret(cmd *cobra.Command, name, value string, hash string) bool {
 	if rc := remoteClient(cmd); rc != nil {
 		return false // remote mode has no local daemon access
 	}
@@ -189,30 +191,24 @@ func mirrorSwarmSecret(cmd *cobra.Command, name, value string, rev int64) bool {
 	}
 	defer func() { _ = dc.Close() }()
 	ctx := cmd.Context()
-	target := store.SwarmSecretName(name, rev)
-	if rev <= 1 {
-		// First value: own the plain name. Only safe to remove+recreate when
-		// no running service references it yet; an in-use plain secret (e.g.
-		// a leftover) is best-effort — the compose writer will keep pointing
-		// at it and the operator can edit again to rotate.
-		exists, eerr := dc.SecretExists(ctx, target)
-		switch {
-		case eerr != nil:
-			fmt.Fprintf(cmd.ErrOrStderr(),
-				"   ⚠ could not check swarm secret %q (%v) — mirror skipped.\n", target, eerr)
-			return false
-		case exists:
-			if rerr := dc.SecretRemove(ctx, target); rerr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(),
-					"   ⚠ could not remove existing swarm secret %q (%v) — mirror skipped.\n", target, rerr)
-				return false
-			}
-		}
+	target := store.SwarmSecretName(name, hash)
+	// Content-addressed: if a swarm secret with this exact name already
+	// exists, it holds exactly this value — nothing to do (the in-use
+	// original is never touched, immutability is fine because a value change
+	// yields a NEW name).
+	exists, eerr := dc.SecretExists(ctx, target)
+	switch {
+	case eerr != nil:
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"   ⚠ could not check swarm secret %q (%v) — mirror skipped.\n", target, eerr)
+		return false
+	case exists:
+		return true
 	}
 	if cerr := dc.SecretCreate(ctx, runtime.SecretSpec{
 		Name:   target,
 		Data:   []byte(value),
-		Labels: map[string]string{"pmcluster.secret": "true", "pmcluster.secret.rev": fmt.Sprintf("%d", rev)},
+		Labels: map[string]string{"pmcluster.secret": "true", "pmcluster.secret.hash": hash},
 	}); cerr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(),
 			"   ⚠ could not create swarm secret %q (%v) — mirror skipped.\n", target, cerr)
@@ -333,21 +329,19 @@ func runSecretEdit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("update secret: %w", err)
 	}
 
-	// Keep the Docker Swarm mirror in sync. Update bumped swarm_rev, so the
-	// value must be mirrored into the NEW versioned swarm secret (<name>_v<rev>)
-	// — the in-use original is immutable and cannot be replaced (BUG-007).
-	rev := int64(1)
-	if sec, gerr := svc.Get(cmd.Context(), name); gerr == nil {
-		rev = sec.SwarmRev
-	}
-	swarmMirrored := mirrorSwarmSecret(cmd, name, value, rev)
+	// Keep the Docker Swarm mirror in sync. The new value is content-addressed
+	// into <name>_<sha8-of-value> (store.SwarmSecretName) — the in-use
+	// original is immutable and cannot be replaced (BUG-007); a new value
+	// simply mints a new name, and the DB hash is how translation finds it.
+	hash := secretHash(value)
+	swarmMirrored := mirrorSwarmSecret(cmd, name, value, hash)
 
 	extra := ""
 	if swarmMirrored {
-		extra = fmt.Sprintf(" (+ mirrored to the Docker Swarm as %q so containers mount the new value on next deploy)", store.SwarmSecretName(name, rev))
+		extra = fmt.Sprintf(" (+ mirrored to the Docker Swarm as %q so containers mount the new value on next deploy)", store.SwarmSecretName(name, hash))
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Secret %q updated (sha256: %s)%s.\n",
-		name, secretHash(value), extra)
+		name, hash, extra)
 	return nil
 }
 

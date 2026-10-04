@@ -346,20 +346,38 @@ func TestSecretsCRUD(t *testing.T) {
 		}
 	})
 
-	t.Run("SwarmSecretName helper (BUG-007)", func(t *testing.T) {
+	t.Run("SwarmSecretName helper (content-addressed)", func(t *testing.T) {
 		cases := []struct {
 			name string
-			rev  int64
+			hash string
 			want string
 		}{
-			{"app_pass", 1, "app_pass"},
-			{"app_pass", 0, "app_pass"},
-			{"app_pass", 2, "app_pass_v2"},
-			{"app_pass", 3, "app_pass_v3"},
+			{"app_pass", "", "app_pass"},
+			{"app_pass", "abc", "app_pass"},
+			{"app_pass", "abcdefgh12345678", "app_pass_abcdefgh"},
+			{"db_password", "1234567890abcdef", "db_password_12345678"},
 		}
 		for _, c := range cases {
-			if got := SwarmSecretName(c.name, c.rev); got != c.want {
-				t.Errorf("SwarmSecretName(%q, %d) = %q, want %q", c.name, c.rev, got, c.want)
+			if got := SwarmSecretName(c.name, c.hash); got != c.want {
+				t.Errorf("SwarmSecretName(%q, %q) = %q, want %q", c.name, c.hash, got, c.want)
+			}
+		}
+	})
+
+	t.Run("SwarmConfigName helper (content-addressed)", func(t *testing.T) {
+		cases := []struct {
+			name string
+			hash string
+			want string
+		}{
+			{"app_config", "", "app_config"},
+			{"app_config", "abc", "app_config"},
+			{"app_config", "abcdefgh12345678", "app_config_abcdefgh"},
+			{"pmcluster_otel_config", "1234567890abcdef", "pmcluster_otel_config_12345678"},
+		}
+		for _, c := range cases {
+			if got := SwarmConfigName(c.name, c.hash); got != c.want {
+				t.Errorf("SwarmConfigName(%q, %q) = %q, want %q", c.name, c.hash, got, c.want)
 			}
 		}
 	})

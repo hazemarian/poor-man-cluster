@@ -110,9 +110,24 @@ func TestUp_IncludesCertKeyAndCredentialSecrets(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
+	// cert/key are content-addressed now (cert_<sha8>, key_<sha8>) — assert
+	// the base names appear with a hash suffix rather than a fixed name.
+	hasCert, hasKey := false, false
+	for _, s := range res.NewSecrets {
+		if strings.HasPrefix(s, "cert_") {
+			hasCert = true
+		}
+		if strings.HasPrefix(s, "key_") {
+			hasKey = true
+		}
+	}
+	if !hasCert {
+		t.Errorf("NewSecrets missing cert_<hash>; got %v", res.NewSecrets)
+	}
+	if !hasKey {
+		t.Errorf("NewSecrets missing key_<hash>; got %v", res.NewSecrets)
+	}
 	wantSecrets := map[string]bool{
-		"cert_v1":               false,
-		"key_v1":                false,
 		"admin_credentials":     false,
 		"zo_root_user_password": false,
 	}

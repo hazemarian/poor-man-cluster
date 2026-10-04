@@ -172,8 +172,11 @@ func TestEnsureConfig_CreatesWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureConfig: %v", err)
 	}
-	if name != "otel_config_v1" {
-		t.Errorf("name = %q, want otel_config_v1", name)
+	// Content-addressed naming: the object name is <base>_<sha8> of the data,
+	// even on first creation — no number is ever added.
+	want := store.SwarmConfigName("otel_config", dataHash(data))
+	if name != want {
+		t.Errorf("name = %q, want %q", name, want)
 	}
 	if !created {
 		t.Error("created = false, want true for a fresh config")
@@ -191,30 +194,66 @@ func TestEnsureConfig_CreatesWhenMissing(t *testing.T) {
 	}
 }
 
-func TestEnsureConfig_CreatesNewVersionWhenPreExisting(t *testing.T) {
+func TestEnsureConfig_ReusesWhenUnchanged(t *testing.T) {
 	f := newFakeDocker()
-	f.configs["otel_config_v1"] = struct {
-		Name   string
-		Data   []byte
-		Labels map[string]string
-	}{Name: "otel_config_v1", Data: []byte("original")}
+	data := []byte("same data")
+	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
+		Name: store.SwarmConfigName("otel_config", dataHash(data)),
+		Data: data,
+		Labels: map[string]string{
+			pmclusterLabel:        "true",
+			"pmcluster.base":      "otel_config",
+			"pmcluster.data_hash": dataHash(data),
+		},
+	}); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
 
-	name, created, err := EnsureConfig(context.Background(), f, "otel_config", []byte("new config data"), "v0.2.0")
+	// Unchanged re-render reuses the exact same content-addressed name —
+	// identical content → identical name → no new object, no number.
+	name, created, err := EnsureConfig(context.Background(), f, "otel_config", data, "v0.2.0")
 	if err != nil {
 		t.Fatalf("EnsureConfig: %v", err)
 	}
-	if name != "otel_config_v2" {
-		t.Errorf("name = %q, want otel_config_v2", name)
+	if created {
+		t.Error("created = true, want false (bytes unchanged → reuse)")
 	}
-	if !created {
-		t.Error("created = false, want true for a changed render")
+	if name != store.SwarmConfigName("otel_config", dataHash(data)) {
+		t.Errorf("name = %q, want %q (reused)", name, store.SwarmConfigName("otel_config", dataHash(data)))
 	}
-	if string(f.configs[name].Data) != "new config data" {
-		t.Errorf("config data = %q, want 'new config data'", f.configs[name].Data)
+}
+
+func TestEnsureConfig_MintsNewNameOnChange(t *testing.T) {
+	f := newFakeDocker()
+	orig := []byte("original")
+	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
+		Name: store.SwarmConfigName("otel_config", dataHash(orig)),
+		Data: orig,
+		Labels: map[string]string{
+			pmclusterLabel:        "true",
+			"pmcluster.base":      "otel_config",
+			"pmcluster.data_hash": dataHash(orig),
+		},
+	}); err != nil {
+		t.Fatalf("seed config: %v", err)
 	}
 
-	if _, exists := f.configs["otel_config_v1"]; exists {
-		t.Error("old config version otel_config_v1 was not removed")
+	changed := []byte("changed")
+	name, created, err := EnsureConfig(context.Background(), f, "otel_config", changed, "v0.2.0")
+	if err != nil {
+		t.Fatalf("EnsureConfig: %v", err)
+	}
+	if !created {
+		t.Error("created = false, want true (bytes changed → new content-addressed object)")
+	}
+	want := store.SwarmConfigName("otel_config", dataHash(changed))
+	if name != want {
+		t.Errorf("name = %q, want %q", name, want)
+	}
+
+	// The old object is GC'd — only the latest content-addressed name survives.
+	if _, ok := f.configs[store.SwarmConfigName("otel_config", dataHash(orig))]; ok {
+		t.Error("old content-addressed config not GC'd after change")
 	}
 }
 
@@ -234,59 +273,6 @@ func TestEnsureConfig_AttachesManagedLabel(t *testing.T) {
 	}
 }
 
-func TestEnsureConfig_ReusesVersionWhenUnchanged(t *testing.T) {
-	f := newFakeDocker()
-	data := []byte("same data")
-	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
-		Name: "otel_config_v1",
-		Data: data,
-		Labels: map[string]string{
-			"pmcluster.data_hash": dataHash(data),
-		},
-	}); err != nil {
-		t.Fatalf("seed config: %v", err)
-	}
-
-	name, created, err := EnsureConfig(context.Background(), f, "otel_config", data, "v0.2.0")
-	if err != nil {
-		t.Fatalf("EnsureConfig: %v", err)
-	}
-	if created {
-		t.Error("created = true, want false (bytes unchanged → reuse)")
-	}
-	if name != "otel_config_v1" {
-		t.Errorf("name = %q, want otel_config_v1 (reused)", name)
-	}
-	if _, ok := f.configs["otel_config_v2"]; ok {
-		t.Error("otel_config_v2 was created despite unchanged bytes")
-	}
-}
-
-func TestEnsureConfig_MintsNewVersionOnChange(t *testing.T) {
-	f := newFakeDocker()
-	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
-		Name: "otel_config_v1",
-		Data: []byte("original"),
-	}); err != nil {
-		t.Fatalf("seed config: %v", err)
-	}
-
-	name, created, err := EnsureConfig(context.Background(), f, "otel_config", []byte("changed"), "v0.2.0")
-	if err != nil {
-		t.Fatalf("EnsureConfig: %v", err)
-	}
-	if !created {
-		t.Error("created = false, want true (bytes changed → new version)")
-	}
-	if name != "otel_config_v2" {
-		t.Errorf("name = %q, want otel_config_v2", name)
-	}
-
-	if _, ok := f.configs["otel_config_v1"]; ok {
-		t.Error("old otel_config_v1 not GC'd after rotate")
-	}
-}
-
 // Regression test for the "new SSL config on every restart" bug: Docker never
 // returns secret payloads on inspect, so comparing the bytes read back from
 // Docker always failed against a real daemon and minted a fresh cert_vNNN on
@@ -301,7 +287,7 @@ func TestEnsureVersionedSecret_ReusesUnchangedVersion(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	seed := []byte("-----BEGIN CERTIFICATE-----\nsame cert bytes\n-----END CERTIFICATE-----\n")
 	if err := f.SecretCreate(context.Background(), runtime.SecretSpec{
-		Name: "cert_v1",
+		Name: store.SwarmSecretName("cert", dataHash(seed)),
 		Data: seed,
 		Labels: map[string]string{
 			pmclusterLabel:        "true",
@@ -323,15 +309,12 @@ func TestEnsureVersionedSecret_ReusesUnchangedVersion(t *testing.T) {
 	if created {
 		t.Error("created = true, want false (unchanged cert → reuse)")
 	}
-	if name != "cert_v1" {
-		t.Errorf("name = %q, want cert_v1 (reused)", name)
-	}
-	if _, ok := f.secrets["cert_v2"]; ok {
-		t.Error("cert_v2 was created despite unchanged bytes")
+	if name != store.SwarmSecretName("cert", dataHash(seed)) {
+		t.Errorf("name = %q, want %q (reused)", name, store.SwarmSecretName("cert", dataHash(seed)))
 	}
 }
 
-func TestEnsureVersionedSecret_MintsNewVersionOnChange(t *testing.T) {
+func TestEnsureVersionedSecret_MintsNewNameOnChange(t *testing.T) {
 	f := newFakeDocker()
 	s, err := store.Open(filepath.Join(t.TempDir(), "mint.db"))
 	if err != nil {
@@ -340,7 +323,7 @@ func TestEnsureVersionedSecret_MintsNewVersionOnChange(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 	seed := []byte("old cert bytes")
 	if err := f.SecretCreate(context.Background(), runtime.SecretSpec{
-		Name: "cert_v1",
+		Name: store.SwarmSecretName("cert", dataHash(seed)),
 		Data: seed,
 		Labels: map[string]string{
 			pmclusterLabel:        "true",
@@ -354,104 +337,16 @@ func TestEnsureVersionedSecret_MintsNewVersionOnChange(t *testing.T) {
 		t.Fatalf("seed hash: %v", err)
 	}
 
-	name, created, err := EnsureVersionedSecret(context.Background(), f, s, "cert", []byte("new cert bytes"))
+	changed := []byte("new cert bytes")
+	name, created, err := EnsureVersionedSecret(context.Background(), f, s, "cert", changed)
 	if err != nil {
 		t.Fatalf("EnsureVersionedSecret: %v", err)
 	}
 	if !created {
-		t.Error("created = false, want true (cert changed → new version)")
+		t.Error("created = false, want true (cert changed → new content-addressed object)")
 	}
-	if name != "cert_v2" {
-		t.Errorf("name = %q, want cert_v2", name)
-	}
-}
-
-// TestEnsureVersionedSecret_ReusesLegacyPaddedName guards the migration path:
-// clusters that minted zero-padded names under the old naming (cert_v042) must
-// be REUSED as-is — never reconstructed as unpadded cert_v42 which does not
-// exist in the swarm ("secret not found" on the next stack deploy). The actual
-// name carrying the highest version wins.
-func TestEnsureVersionedSecret_ReusesLegacyPaddedName(t *testing.T) {
-	f := newFakeDocker()
-	s, err := store.Open(filepath.Join(t.TempDir(), "migrate.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	seed := []byte("-----BEGIN CERTIFICATE-----\npadded-era bytes\n-----END CERTIFICATE-----\n")
-	if err := f.SecretCreate(context.Background(), runtime.SecretSpec{
-		Name: "cert_v041",
-		Data: seed,
-		Labels: map[string]string{
-			pmclusterLabel:        "true",
-			"pmcluster.base":      "cert",
-			"pmcluster.data_hash": dataHash(seed),
-		},
-	}); err != nil {
-		t.Fatalf("seed cert_v041: %v", err)
-	}
-	if err := f.SecretCreate(context.Background(), runtime.SecretSpec{
-		Name: "cert_v042",
-		Data: seed,
-		Labels: map[string]string{
-			pmclusterLabel:        "true",
-			"pmcluster.base":      "cert",
-			"pmcluster.data_hash": dataHash(seed),
-		},
-	}); err != nil {
-		t.Fatalf("seed cert_v042: %v", err)
-	}
-	if err := s.SetSetting(context.Background(), secretHashKey("cert"), dataHash(seed)); err != nil {
-		t.Fatalf("seed hash: %v", err)
-	}
-
-	name, created, err := EnsureVersionedSecret(context.Background(), f, s, "cert", seed)
-	if err != nil {
-		t.Fatalf("EnsureVersionedSecret: %v", err)
-	}
-	if created {
-		t.Error("created = true, want false (unchanged padded cert → reuse)")
-	}
-	if name != "cert_v042" {
-		t.Errorf("name = %q, want cert_v042 (actual swarm name reused, not reconstructed cert_v42)", name)
-	}
-	if _, ok := f.secrets["cert_v42"]; ok {
-		t.Error("cert_v42 (nonexistent reconstruction) must never be returned")
-	}
-	if _, ok := f.secrets["cert_v043"]; ok {
-		t.Error("cert_v043 was created despite unchanged bytes")
-	}
-}
-
-// TestEnsureConfig_ReusesLegacyPaddedName is the config analogue of the
-// migration guard: a padded pmcluster_otel_config_v005 must be reused as-is
-// (not reconstructed as v5) when the bytes are unchanged.
-func TestEnsureConfig_ReusesLegacyPaddedName(t *testing.T) {
-	f := newFakeDocker()
-	seed := []byte("receivers:\n  otlp:\n")
-	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
-		Name: "pmcluster_otel_config_v005",
-		Data: seed,
-		Labels: map[string]string{
-			pmclusterLabel:      "true",
-			"pmcluster.base":    "pmcluster_otel_config",
-			"pmcluster.version": "v0.2.151",
-		},
-	}); err != nil {
-		t.Fatalf("seed config: %v", err)
-	}
-
-	name, created, err := EnsureConfig(context.Background(), f, "pmcluster_otel_config", seed, "v0.2.152")
-	if err != nil {
-		t.Fatalf("EnsureConfig: %v", err)
-	}
-	if created {
-		t.Error("created = true, want false (unchanged padded config → reuse)")
-	}
-	if name != "pmcluster_otel_config_v005" {
-		t.Errorf("name = %q, want pmcluster_otel_config_v005 (actual swarm name reused)", name)
-	}
-	if _, ok := f.configs["pmcluster_otel_config_v6"]; ok {
-		t.Error("v6 was minted despite unchanged bytes")
+	want := store.SwarmSecretName("cert", dataHash(changed))
+	if name != want {
+		t.Errorf("name = %q, want %q", name, want)
 	}
 }

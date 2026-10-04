@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -78,11 +79,11 @@ func EnsureSecretFromFile(ctx context.Context, d runtime.Client, name, path stri
 	return EnsureSecret(ctx, d, name, data)
 }
 
-// EnsureVersionedSecretFromFile reads a file and provisions a versioned
-// Swarm secret (e.g. cert_v001, cert_v002). Returns the versioned name and
-// whether a new version was created (false when the file's bytes are unchanged
-// and the current version is reused). hs records the data-hash of the minted
-// version so the reuse check works despite Docker's write-only secret API.
+// EnsureVersionedSecretFromFile reads a file and provisions a content-addressed
+// Swarm secret (e.g. cert_1a2b3c4d). Returns the versioned name and whether a
+// new version was created (false when the file's bytes are unchanged and the
+// current version is reused). hs records the data-hash of the minted version
+// so the reuse check works despite Docker's write-only secret API.
 func EnsureVersionedSecretFromFile(ctx context.Context, d runtime.Client, hs secretHashStore, baseName, path string) (versionedName string, created bool, err error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -91,10 +92,10 @@ func EnsureVersionedSecretFromFile(ctx context.Context, d runtime.Client, hs sec
 	return EnsureVersionedSecret(ctx, d, hs, baseName, data)
 }
 
-// EnsureVersionedSecret provisions a versioned Swarm secret (e.g. cert_v001)
-// and garbage-collects old versions. It is content-aware: if the current
-// highest version already holds exactly these bytes, that version is reused
-// (created=false, no GC) so unchanged certs don't mint fresh versions. Same
+// EnsureVersionedSecret provisions a content-addressed Swarm secret
+// (e.g. cert_1a2b3c4d) and garbage-collects old versions. It is content-aware:
+// if an object under this base already holds exactly these bytes, it is reused
+// (created=false, no GC) so unchanged certs don't mint fresh objects. Same
 // pattern as EnsureConfig.
 //
 // Because Docker secrets are write-only, "holds exactly these bytes" is
@@ -102,44 +103,23 @@ func EnsureVersionedSecretFromFile(ctx context.Context, d runtime.Client, hs sec
 // (secretHashStore) when the current version was minted — never by inspecting
 // the secret from Docker and never by trusting the pmcluster.data_hash label.
 func EnsureVersionedSecret(ctx context.Context, d runtime.Client, hs secretHashStore, baseName string, data []byte) (versionedName string, created bool, err error) {
-	existing, err := d.SecretList(ctx, pmclusterLabel, "true")
-	if err != nil {
-		return "", false, fmt.Errorf("list secrets: %w", err)
+	// Content-addressed naming (shared rule, "no number added anymore"): the
+	// object name is <baseName>_<sha8-of-data>. Identical content → identical
+	// name → the existing object is reused as-is (created=false). A real
+	// content change mints a brand-new name; the previous object is GC'd.
+	// The stored DB hash is the source of truth for the reuse decision
+	// (Docker's secret API is write-only, so the payload can never be read
+	// back), mirroring the config path where the bytes are inspectable.
+	stored := ""
+	if hs != nil {
+		stored = hs.GetSettingDefault(ctx, secretHashKey(baseName), "")
 	}
+	hash := dataHash(data)
+	versionedName = store.SwarmSecretName(baseName, hash)
 
-	prefix := baseName + "_v"
-	maxVer := 0
-	maxName := "" // actual existing name carrying the highest version
-	for _, name := range existing {
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		var v int
-		if _, scanErr := fmt.Sscanf(name, prefix+"%d", &v); scanErr == nil && v > maxVer {
-			maxVer = v
-			maxName = name
-		}
+	if stored == hash {
+		return versionedName, false, nil
 	}
-
-	if maxName != "" {
-		stored := ""
-		if hs != nil {
-			stored = hs.GetSettingDefault(ctx, secretHashKey(baseName), "")
-		}
-		// Content is compared by hashing the actual bytes and checking against
-		// the stored DB hash — never by trusting the pmcluster.data_hash label
-		// and never by reading the secret back from Docker (write-only API).
-		// maxName (NOT a reconstructed %s_v%d) is returned so that legacy
-		// zero-padded names (cert_v042) survive the migration: the name must
-		// actually exist in the swarm or the next stack deploy fails with
-		// "secret not found".
-		if stored != "" && stored == dataHash(data) {
-			return maxName, false, nil
-		}
-	}
-
-	newVer := maxVer + 1
-	versionedName = fmt.Sprintf("%s_v%d", baseName, newVer)
 
 	err = d.SecretCreate(ctx, runtime.SecretSpec{
 		Name: versionedName,
@@ -147,84 +127,86 @@ func EnsureVersionedSecret(ctx context.Context, d runtime.Client, hs secretHashS
 		Labels: map[string]string{
 			pmclusterLabel:        "true",
 			"pmcluster.base":      baseName,
-			"pmcluster.data_hash": dataHash(data),
+			"pmcluster.data_hash": hash,
 		},
 	})
 	if err != nil {
 		return "", false, fmt.Errorf("create secret %s: %w", versionedName, err)
 	}
 	if hs != nil {
-		if err := hs.SetSetting(ctx, secretHashKey(baseName), dataHash(data)); err != nil {
+		if err := hs.SetSetting(ctx, secretHashKey(baseName), hash); err != nil {
 			return "", false, fmt.Errorf("record secret data hash for %s: %w", baseName, err)
 		}
 	}
 
-	for _, name := range existing {
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		if name == versionedName {
-			continue
-		}
-		if rmErr := d.SecretRemove(ctx, name); rmErr != nil {
-			_ = rmErr
-		}
+	// GC everything managed under this base except the freshly minted object.
+	if err := gcManagedSecrets(ctx, d, baseName, versionedName); err != nil {
+		_ = err
 	}
 
 	return versionedName, true, nil
 }
 
-// EnsureConfig is the Docker-config analogue of EnsureSecret. Because Docker
-// configs are immutable, we create a versioned name (e.g.
-// pmcluster_otel_config_v001) and let the caller embed the versioned name
-// into the compose file via __CONFIG_NAME__ placeholder. Old versions are
-// cleaned up after the new one is created. Returns the full versioned name
-// actually used and whether a NEW version was created (false when the render
-// is unchanged and the current version is reused).
-//
-// The provisioning is content-aware: if the current highest version already
-// holds exactly these bytes, that version is reused (created=false, no GC) so
-// an unchanged render doesn't mint fresh versions or churn consumers. Only a
-// byte change bumps to baseName_vN+1 and GCs the older ones.
-//
-// baseName is the logical name ("pmcluster_otel_config"). The versioned name
-// is baseName + "_v" + zero-padded sequence.
-func EnsureConfig(ctx context.Context, d runtime.Client, baseName string, data []byte, version string) (versionedName string, created bool, err error) {
-
-	existing, err := d.ConfigList(ctx, "", "")
+// gcManagedSecrets removes every pmcluster-managed SECRET whose name is
+// <baseName> or <baseName>_* (old content-addressed versions) except keepName.
+// Best effort: individual removal failures are swallowed so a partial GC never
+// blocks the caller.
+func gcManagedSecrets(ctx context.Context, d runtime.Client, baseName, keepName string) error {
+	prefix := baseName + "_"
+	existing, err := d.SecretList(ctx, pmclusterLabel, "true")
 	if err != nil {
-		return "", false, fmt.Errorf("list configs: %w", err)
+		return fmt.Errorf("list secrets: %w", err)
 	}
-
-	prefix := baseName + "_v"
-	maxVer := 0
-	maxName := "" // actual existing name carrying the highest version
 	for _, name := range existing {
-		if !strings.HasPrefix(name, prefix) {
+		if name == keepName {
 			continue
 		}
-		var v int
-		if _, scanErr := fmt.Sscanf(name, prefix+"%d", &v); scanErr == nil && v > maxVer {
-			maxVer = v
-			maxName = name
+		if name == baseName || strings.HasPrefix(name, prefix) {
+			_ = d.SecretRemove(ctx, name)
 		}
 	}
+	return nil
+}
 
-	if maxName != "" {
-		if cur, err := d.ConfigInspect(ctx, maxName); err == nil {
-			// Content is compared by hashing the actual config bytes, never by
-			// trusting the pmcluster.data_hash label — the label could be
-			// stale, missing, or wrong, and the bytes are the source of truth.
-			// maxName (NOT a reconstructed %s_v%d) is reused so that legacy
-			// zero-padded names (v005) survive the migration without churn.
-			if dataHash(cur.Data) == dataHash(data) {
-				return maxName, false, nil
-			}
+// gcManagedConfigs removes every pmcluster-managed CONFIG whose name is
+// <baseName> or <baseName>_* (old content-addressed versions) except keepName.
+// Best effort: individual removal failures are swallowed so a partial GC never
+// blocks the caller.
+func gcManagedConfigs(ctx context.Context, d runtime.Client, baseName, keepName string) error {
+	prefix := baseName + "_"
+	existing, err := d.ConfigList(ctx, pmclusterLabel, "true")
+	if err != nil {
+		return fmt.Errorf("list configs: %w", err)
+	}
+	for _, name := range existing {
+		if name == keepName {
+			continue
+		}
+		if name == baseName || strings.HasPrefix(name, prefix) {
+			_ = d.ConfigRemove(ctx, name)
 		}
 	}
+	return nil
+}
 
-	newVer := maxVer + 1
-	versionedName = fmt.Sprintf("%s_v%d", baseName, newVer)
+// EnsureConfig is the Docker-config analogue of EnsureSecret. Docker configs
+// are immutable, so we use a content-addressed name (<baseName>_<sha8-of-data>)
+// and let the caller embed the versioned name into the compose file via the
+// config_path()/ConfigNames resolver. Identical content → identical name → the
+// existing object is reused as-is (created=false, no GC). A real content
+// change mints a brand-new name and the previous object is GC'd. Unlike
+// secrets, config bytes ARE inspectable from Docker, so the reuse decision
+// compares the actual payload (never a stored hash and never the
+// pmcluster.data_hash label).
+//
+// baseName is the logical name ("pmcluster_otel_config").
+func EnsureConfig(ctx context.Context, d runtime.Client, baseName string, data []byte, version string) (versionedName string, created bool, err error) {
+	hash := dataHash(data)
+	versionedName = store.SwarmConfigName(baseName, hash)
+
+	if cur, err := d.ConfigInspect(ctx, versionedName); err == nil && dataHash(cur.Data) == hash {
+		return versionedName, false, nil
+	}
 
 	err = d.ConfigCreate(ctx, runtime.ConfigSpec{
 		Name: versionedName,
@@ -233,24 +215,16 @@ func EnsureConfig(ctx context.Context, d runtime.Client, baseName string, data [
 			pmclusterLabel:        "true",
 			"pmcluster.base":      baseName,
 			"pmcluster.version":   version,
-			"pmcluster.data_hash": dataHash(data),
+			"pmcluster.data_hash": hash,
 		},
 	})
 	if err != nil {
 		return "", false, fmt.Errorf("create config %s: %w", versionedName, err)
 	}
 
-	for _, name := range existing {
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		if name == versionedName {
-			continue
-		}
-		if rmErr := d.ConfigRemove(ctx, name); rmErr != nil {
-
-			_ = rmErr
-		}
+	// GC everything managed under this base except the freshly minted object.
+	if err := gcManagedConfigs(ctx, d, baseName, versionedName); err != nil {
+		_ = err
 	}
 
 	return versionedName, true, nil
