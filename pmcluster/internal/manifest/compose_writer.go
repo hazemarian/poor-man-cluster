@@ -215,13 +215,13 @@ func composeServiceFromIR(
 
 	if len(s.Configs) > 0 {
 		for _, c := range s.Configs {
-			cs.Configs = append(cs.Configs, composeConfigMount{Source: c.Source, Target: c.Target})
+			cs.Configs = append(cs.Configs, composeConfigMount(c))
 		}
 	}
 
 	if len(s.Ports) > 0 {
 		for _, p := range s.Ports {
-			cp := composePort{Target: p.Target, Published: p.Published, Protocol: p.Protocol, Mode: p.Mode}
+			cp := composePort(p)
 			if cp.Published == 0 {
 				cp.Published = cp.Target
 			}
