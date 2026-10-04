@@ -314,6 +314,59 @@ func TestEnsureVersionedSecret_ReusesUnchangedVersion(t *testing.T) {
 	}
 }
 
+// TestEnsureVersionedSecret_RebuildsWhenSwarmObjectMissing is the naming-
+// migration regression (BUG: "secret not found: cert_ab64977f" in prod): the
+// stored DB hash matches the current content (unchanged cert), but the
+// content-addressed swarm object was never minted (old _v042 naming era).
+// Reuse must NOT return the non-existent name — it must mint the object.
+func TestEnsureVersionedSecret_RebuildsWhenSwarmObjectMissing(t *testing.T) {
+	f := newFakeDocker()
+	s, err := store.Open(filepath.Join(t.TempDir(), "rebuild.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	seed := []byte("-----BEGIN CERTIFICATE-----\nmigration cert bytes\n-----END CERTIFICATE-----\n")
+	// Legacy-era object under the OLD name only (e.g. cert_v042); the
+	// content-addressed name cert_<sha8> does NOT exist in the swarm yet.
+	if err := f.SecretCreate(context.Background(), runtime.SecretSpec{
+		Name: "cert_v042",
+		Data: seed,
+		Labels: map[string]string{
+			pmclusterLabel:        "true",
+			"pmcluster.base":      "cert",
+			"pmcluster.data_hash": dataHash(seed),
+		},
+	}); err != nil {
+		t.Fatalf("seed legacy secret: %v", err)
+	}
+	// The stored data-hash matches the current content (unchanged cert).
+	if err := s.SetSetting(context.Background(), secretHashKey("cert"), dataHash(seed)); err != nil {
+		t.Fatalf("seed hash: %v", err)
+	}
+
+	name, created, err := EnsureVersionedSecret(context.Background(), f, s, "cert", seed)
+	if err != nil {
+		t.Fatalf("EnsureVersionedSecret: %v", err)
+	}
+	if !created {
+		t.Error("created = false, want true (swarm object missing → must mint)")
+	}
+	want := store.SwarmSecretName("cert", dataHash(seed))
+	if name != want {
+		t.Errorf("name = %q, want %q", name, want)
+	}
+	exists, err := f.SecretExists(context.Background(), name)
+	if err != nil || !exists {
+		t.Errorf("minted object %q not present in swarm (exists=%v err=%v)", name, exists, err)
+	}
+	// The legacy object is GC'd (same base, different content-addressed name).
+	legacyGone, err := f.SecretExists(context.Background(), "cert_v042")
+	if err != nil || legacyGone {
+		t.Errorf("legacy cert_v042 still present (exists=%v err=%v) — GC should remove it", legacyGone, err)
+	}
+}
+
 func TestEnsureVersionedSecret_MintsNewNameOnChange(t *testing.T) {
 	f := newFakeDocker()
 	s, err := store.Open(filepath.Join(t.TempDir(), "mint.db"))

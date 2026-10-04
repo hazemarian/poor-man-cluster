@@ -4,6 +4,10 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.155.1 (2026-10-04)
+
+- **fix(cluster): rebuild-on-missing also applies to cluster-managed secrets' reuse path (migration regression).** The v0.2.155 content-addressed naming (cert_<sha8> instead of cert_v042) made `EnsureVersionedSecret`'s reuse path return the content-addressed name whenever the stored DB hash matched the current content — without verifying that the swarm object actually exists. On clusters upgraded from the old `_v<N>` naming era the DB hash matches unchanged content while the content-addressed object was never minted, so the infra deploy failed with `secret not found: cert_ab64977f`. Reuse now requires BOTH the stored-hash match AND `SecretExists` on the content-addressed name; a missing object is minted (and old `_v<N>` objects GC'd). Regression test: `TestEnsureVersionedSecret_RebuildsWhenSwarmObjectMissing` (seeds legacy `cert_v042` + matching DB hash, asserts the content-addressed object is minted and the legacy one GC'd). Found live during the v0.2.155 prod rollout on nextrum-sy-1.
+
 ## v0.2.155 (2026-10-04)
 
 - **feat(config): configs always live in the swarm — content-addressed names, no

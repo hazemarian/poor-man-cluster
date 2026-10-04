@@ -117,8 +117,21 @@ func EnsureVersionedSecret(ctx context.Context, d runtime.Client, hs secretHashS
 	hash := dataHash(data)
 	versionedName = store.SwarmSecretName(baseName, hash)
 
+	// Reuse only when BOTH conditions hold: (1) the stored DB hash matches the
+	// current content, AND (2) the content-addressed swarm object actually
+	// exists. Condition (2) is the rebuild-on-missing half — after a naming
+	// migration (e.g. old _v042 → content-addressed) the DB hash may match
+	// unchanged content while the content-addressed object has never been
+	// minted; reusing blindly would reference a non-existent secret and fail
+	// the stack deploy (secret not found: cert_ab64977f).
 	if stored == hash {
-		return versionedName, false, nil
+		exists, err := d.SecretExists(ctx, versionedName)
+		if err != nil {
+			return "", false, fmt.Errorf("inspect secret %s: %w", versionedName, err)
+		}
+		if exists {
+			return versionedName, false, nil
+		}
 	}
 
 	err = d.SecretCreate(ctx, runtime.SecretSpec{
