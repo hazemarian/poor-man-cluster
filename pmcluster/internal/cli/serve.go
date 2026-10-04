@@ -246,8 +246,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 			if isLeader {
 				log.Info().Msg("control loop: starting reconcile loop (leader)")
-				if _, err := ensureControlPlaneFresh(ctx, cfg, dc, log); err != nil {
-					log.Error().Err(err).Msg("control-plane freshness check failed")
+				// Publish a fresh control-plane snapshot on promotion. We do
+				// NOT restore here: the local store is already open and being
+				// live-written, and Restore truncates data.db under the live
+				// sqlite connection (BUG-006 — split-brain: daemon serves
+				// stale page-cache rows, fresh readers see the clobbered file).
+				// Control-plane restore happens ONLY at startup, before the
+				// store is opened (see the standby block above).
+				if err := kit.Snapshot(ctx); err != nil {
+					log.Warn().Err(err).Msg("control-plane snapshot on leadership gain had issues")
 				}
 				var loopCtx context.Context
 				loopCtx, loopCancel = context.WithCancel(ctx)

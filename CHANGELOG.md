@@ -4,6 +4,23 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.145 (2026-10-04)
+
+- **fix(cli): control-plane restore is startup-only — the leadership goroutine no
+  longer restores over the live store (split-brain data-loss risk).** Found during
+  Test Case 2 live testing right after the v0.2.144 WAL fix. On every Swarm
+  leadership gain the daemon re-ran `ensureControlPlaneFresh` *after* `store.Open`,
+  so `Restore` truncated `data.db` under the daemon's live SQLite connection:
+  the daemon kept serving stale page-cache rows while fresh readers (CLI,
+  `python3`) saw the clobbered file — the same split-brain symptom class as the
+  WAL bug. Reproduction: leader daemon running → create a user via the CLI →
+  restart the daemon → the user survives auth (stale cache) but is gone for fresh
+  readers. **Fix:** restore now happens only at startup, before the store is
+  opened (the standby/failover path). On leadership gain the daemon only
+  *snapshots* the fresh control plane into the Raft-replicated configs. Verified
+  live on the test node: CLI-created users now survive daemon restarts with full
+  cross-process consistency (`integrity_check` = ok, all readers agree).
+
 ## v0.2.144 (2026-10-04)
 
 - **fix(store): eliminate the multi-process WAL corruption bug (data-loss risk).**
