@@ -4,6 +4,20 @@ Release history for **poor-man-cluster**. The RFC and the reference docs describ
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
+## v0.2.150 (2026-10-04)
+
+- **fix(cluster): per-host certs are now mounted into the Traefik service (BUG-011).** The
+  Traefik dynamic config correctly referenced `hostcert-<host>_vNNN` / `hostkey-<host>_vNNN`
+  in `tls.certificates`, but the `infra` stack never mounted those versioned secrets into
+  the `traefik` service — so Traefik logged `Unable to parse certificate ... failed to find
+  any PEM data` and served the default cert for per-host SNI. The `infra-stack.yml` template
+  now iterates `HostCerts` and mounts every cert/key secret (service `secrets:` list + top-level
+  `external: true` declarations). Regression test asserts both secrets appear in the rendered
+  infra stack.
+- Found live during Test Case 7 (per-host TLS) on the single-manager test node: BUG-010
+  (row persisted after refresh) is fixed in v0.2.149, and BUG-011 (secrets not mounted)
+  completes the per-host TLS path.
+
 ## v0.2.149 (2026-10-04)
 
 - **fix(cluster): `tls hosts add` now applies the per-host certificate immediately (BUG-010).** `ApplyCert` ran the refresh pipeline (which re-renders the Traefik dynamic config from the `site_certs` table) *before* persisting the new row, so the first per-host cert was stored but Traefik kept serving the default certificate until some later `cluster update`. The per-host row is now persisted before the refresh. Regression test `TestApplyHostCert_PersistsBeforeRefresh` (fails on the old ordering, passes with the fix). Found during Test Case 7 (per-host TLS).

@@ -1179,6 +1179,24 @@ func TestLoadComposeFile_ResolvesConfigSecretRefs(t *testing.T) {
 		}
 	}
 
+	// BUG-011: per-host certs must be mounted into the traefik service —
+	// the dynamic config references them, but if the service never mounts
+	// the versioned secrets Traefik serves the default cert instead.
+	inHost := in
+	inHost.HostCerts = []HostCertEntry{
+		{Host: "idlibookfair.com", CertSecret: "hostcert-idlibookfair-com_v001", KeySecret: "hostkey-idlibookfair-com_v001"},
+	}
+	infraHost, err := LoadComposeFile(StackInfra, inHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	infraHostBody := string(infraHost)
+	for _, want := range []string{"hostcert-idlibookfair-com_v001", "hostkey-idlibookfair-com_v001"} {
+		if !strings.Contains(infraHostBody, want) {
+			t.Errorf("infra-stack missing host-cert %q in output (BUG-011: not mounted into traefik)", want)
+		}
+	}
+
 	obs, err := LoadComposeFile(StackObservability, in)
 	if err != nil {
 		t.Fatal(err)

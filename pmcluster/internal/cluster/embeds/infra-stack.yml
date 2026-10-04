@@ -106,6 +106,10 @@ services:
       - secrets(cert)
       - secrets(key)
       [[- end]]
+      [[- range .HostCerts]]
+      - [[.CertSecret]]
+      - [[.KeySecret]]
+      [[- end]]
 
 volumes:
   [[- if .ACMEEmail]]
@@ -127,6 +131,12 @@ secrets:
   secrets(cert):
     external: true
   secrets(key):
+    external: true
+  [[- end]]
+  [[- range .HostCerts]]
+  [[.CertSecret]]:
+    external: true
+  [[.KeySecret]]:
     external: true
   [[- end]]
 
