@@ -66,6 +66,28 @@ Idempotent: re-running reconciles, never destroys existing state.`,
 	RunE: runClusterUp,
 }
 
+var clusterResetCmd = &cobra.Command{
+	Use:   "reset",
+	Short: "Non-destructive rebuild of the Swarm from the local store",
+	Long: `Rebuilds the Swarm side of the cluster FROM the local SQLite store — the DB
+is the desired state / source of truth and the Swarm is derived.
+
+  - Re-ensures overlay networks (traefik-net, monitoring-net)
+  - Re-materializes every managed credential's Swarm secret from the DB
+  - Rebuilds missing swarm configs/secrets from the DB index
+  - Redeploys every platform stack (force) regardless of rendered hash
+  - Re-applies storage-node labels
+
+Use this after the Swarm was wiped (docker swarm leave --force + swarm init)
+while the local store survived, or any time the Swarm must be rebuilt from the
+DB. It never rotates credentials and never resets volumes.
+
+  --restore <archive>   extract a ` + "`cluster down --purge`" + ` backup tarball
+                        into the data dir (restores data.db + .encryption_key)
+                        BEFORE rebuilding.`,
+	RunE: runClusterReset,
+}
+
 func init() {
 	clusterUpCmd.Flags().String("domain", "", "base domain for the cluster (e.g. example.com)")
 	clusterUpCmd.Flags().String("acme-email", "", "Let's Encrypt account email — Traefik issues + renews certs via HTTP-01")
@@ -79,9 +101,11 @@ func init() {
 	clusterUpCmd.Flags().String("tailscale-auth-key", "", "tailnet auth key for 'tailscale up' (default: $PMCLUSTER_TAILSCALE_AUTH_KEY)")
 
 	clusterDownCmd.Flags().Bool("yes", false, "skip confirmation prompt")
-	clusterDownCmd.Flags().Bool("purge", false, "also remove pmcluster-managed secrets, configs, and networks")
+	clusterDownCmd.Flags().Bool("purge", false, "also remove pmcluster-managed secrets, configs, networks, and the local store (backing it up first)")
 
-	clusterCmd.AddCommand(clusterUpCmd, clusterUpdateCmd, clusterStatusCmd, clusterDownCmd)
+	clusterResetCmd.Flags().String("restore", "", "restore a purge-backup tarball into the data dir before rebuilding")
+
+	clusterCmd.AddCommand(clusterUpCmd, clusterUpdateCmd, clusterStatusCmd, clusterDownCmd, clusterResetCmd)
 }
 
 func runClusterUpdate(cmd *cobra.Command, _ []string) error {
@@ -181,6 +205,111 @@ func changedMarker(changed bool) string {
 		return "[rotated]"
 	}
 	return "[unchanged]"
+}
+
+func runClusterReset(cmd *cobra.Command, _ []string) error {
+	defer initCLITelemetry()()
+
+	ctx := cmd.Context()
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	// Optional restore: extract a purge backup into the data dir BEFORE
+	// opening the store (it restores data.db + .encryption_key).
+	if restore, _ := cmd.Flags().GetString("restore"); restore != "" {
+		if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+			return fmt.Errorf("create data dir: %w", err)
+		}
+		if err := cluster.RestoreStoreBackup(cfg.DataDir, restore); err != nil {
+			return fmt.Errorf("restore backup %s: %w", restore, err)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "✔ restored store backup %s into %s\n", restore, cfg.DataDir)
+	}
+
+	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
+		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first (or pass --restore <archive>)", cfg.DataDir)
+	}
+
+	log, logCloser, err := logger.New(logger.Options{
+		LogsDir: cfg.LogsDir(),
+		Level:   cfg.LogLevel,
+		Console: false,
+	})
+	if err != nil {
+		return fmt.Errorf("init logger: %w", err)
+	}
+	defer func() { _ = logCloser.Close() }()
+	log.Info().Msg("cluster reset: starting")
+	defer log.Info().Msg("cluster reset: finished")
+
+	st, err := store.Open(cfg.DBPath())
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	// No persisted cluster state? There is nothing to rebuild — guide the
+	// operator into the setup wizard.
+	if st.GetSettingDefault(ctx, "domain", "") == "" {
+		fmt.Fprintln(cmd.OutOrStdout(), "No cluster configuration found — starting the interactive setup wizard (`pmcluster setup`).")
+		return runSetup(cmd, nil)
+	}
+
+	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
+	if err != nil {
+		return fmt.Errorf("open encryption key: %w", err)
+	}
+
+	dc, err := docker.New()
+	if err != nil {
+		return fmt.Errorf("docker client: %w", err)
+	}
+	defer func() { _ = dc.Close() }()
+
+	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
+
+	res, err := cluster.NewService().Update(ctx, cluster.UpdateDeps{
+		Store:    st,
+		Cipher:   cipher,
+		Docker:   dc,
+		Deployer: deployer,
+		Stdout:   cmd.OutOrStdout(),
+	}, cluster.UpdateInput{
+		ConfigDir: cfg.ConfigDir(),
+		Version:   buildinfo.Version,
+		Force:     true,
+	})
+	if err != nil {
+		return err
+	}
+	printResetResult(cmd.OutOrStdout(), res)
+
+	// Rebuild is done — make sure the daemon is installed + running.
+	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+		return fmt.Errorf("ensure daemon running: %w", err)
+	}
+	return nil
+}
+
+// printResetResult summarises what a `cluster reset` created/redeployed.
+func printResetResult(out io.Writer, res *cluster.UpdateResult) {
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "✔ pmcluster cluster reset complete (Swarm rebuilt from the DB).")
+	fmt.Fprintln(out)
+	if res.OTelConfig != "" {
+		fmt.Fprintf(out, "  OTel collector config  : %s\n", res.OTelConfig)
+	}
+	if res.TraefikConfig != "" {
+		fmt.Fprintf(out, "  Traefik dynamic config : %s\n", res.TraefikConfig)
+	}
+	if res.CertSecret != "" {
+		fmt.Fprintf(out, "  TLS cert secret        : %s\n", res.CertSecret)
+	}
+	fmt.Fprintf(out, "  Stacks re-deployed     : %v\n", res.StacksDeployed)
+	fmt.Fprintln(out)
 }
 
 func runClusterUp(cmd *cobra.Command, _ []string) error {
@@ -465,9 +594,22 @@ func runClusterDown(cmd *cobra.Command, _ []string) error {
 	if !yes {
 		fmt.Fprintf(cmd.OutOrStdout(),
 			"This will remove the infra/observability/backup stacks%s.\nRe-run with --yes to confirm.\n",
-			ternary(purge, " AND purge pmcluster-managed secrets, configs, and overlay networks", ""),
+			ternary(purge, " AND purge pmcluster-managed secrets, configs, overlay networks, and the local store", ""),
 		)
 		return fmt.Errorf("not confirmed")
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	out := cmd.OutOrStdout()
+
+	// Purge must stop the daemon FIRST (best-effort, systemd-only) so it cannot
+	// resurrect swarm resources while we remove them.
+	if purge {
+		stopDaemon(out)
 	}
 
 	dc, err := docker.New()
@@ -476,17 +618,22 @@ func runClusterDown(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = dc.Close() }()
 
-	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
+	deployer := cluster.NewDockerCLIDeployer(out)
+
+	downInput := cluster.DownInput{Purge: purge}
+	if purge {
+		downInput.StoreDir = cfg.DataDir
+	}
+
 	res, err := cluster.NewService().Down(cmd.Context(), cluster.DownDeps{
 		Docker:   dc,
 		Deployer: deployer,
-		Stdout:   cmd.OutOrStdout(),
-	}, cluster.DownInput{Purge: purge})
+		Stdout:   out,
+	}, downInput)
 	if err != nil {
 		return err
 	}
 
-	out := cmd.OutOrStdout()
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Removed:")
 	fmt.Fprintf(out, "  Stacks   : %v\n", res.StacksRemoved)
@@ -494,6 +641,11 @@ func runClusterDown(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintf(out, "  Secrets  : %v\n", res.SecretsRemoved)
 		fmt.Fprintf(out, "  Configs  : %v\n", res.ConfigsRemoved)
 		fmt.Fprintf(out, "  Networks : %v\n", res.NetworksRemoved)
+		if res.StoreBackupPath != "" {
+			fmt.Fprintln(out)
+			fmt.Fprintf(out, "  Store    : deleted (backup kept at %s)\n", res.StoreBackupPath)
+			fmt.Fprintf(out, "  Restore  : pmcluster cluster reset --restore %s\n", res.StoreBackupPath)
+		}
 	}
 	return nil
 }

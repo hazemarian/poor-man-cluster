@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -12,8 +14,17 @@ import (
 // DownInput controls a cluster teardown.
 type DownInput struct {
 	// Purge removes pmcluster-managed secrets, configs, and the two
-	// overlay networks. SQLite state is never touched.
+	// overlay networks. When StoreDir is also set, the local SQLite store
+	// is backed up to a restorable tarball and then deleted.
 	Purge bool
+
+	// StoreDir is the local store directory (the config DataDir). When Purge
+	// is set and StoreDir is non-empty, Down writes a restorable safety backup
+	// (data.db + .encryption_key + config.yaml) to
+	// <StoreDir>/purge-backup-<RFC3339>.tar.gz, records its path in
+	// DownResult.StoreBackupPath, then deletes the store files. The CLI layer
+	// supplies this (the cluster package must not import config/CLI).
+	StoreDir string
 }
 
 // DownResult reports what a teardown actually removed.
@@ -22,6 +33,10 @@ type DownResult struct {
 	SecretsRemoved  []string
 	ConfigsRemoved  []string
 	NetworksRemoved []string
+
+	// StoreBackupPath is the path of the restorable store backup written when
+	// Purge was combined with a StoreDir. Empty when no backup was written.
+	StoreBackupPath string
 }
 
 // DownDeps are the collaborators Down needs: runtime client, deployer and
@@ -125,7 +140,37 @@ func Down(ctx context.Context, deps DownDeps, in DownInput) (*DownResult, error)
 		}
 	}
 
-	step("Purge complete (SQLite at ~/.pmcluster preserved — delete manually if desired)")
+	// NEW: `--purge` now means "delete EVERYTHING". Back up the local store to
+	// a restorable tarball (data.db + .encryption_key + config.yaml) so an
+	// accidental wipe can be undone with `cluster reset --restore`, then delete
+	// the store files themselves. The backup archive is deliberately KEPT.
+	if in.StoreDir != "" {
+		// A purge on a box with no local store (never initialised) has nothing
+		// to back up — skip rather than fail the whole teardown.
+		if _, statErr := os.Stat(filepath.Join(in.StoreDir, "data.db")); os.IsNotExist(statErr) {
+			fmt.Fprintln(out, "  (no local store found to back up — skipping store deletion)")
+		} else {
+			step("Backing up the local store before deleting it")
+			backupPath, err := WriteStoreBackup(in.StoreDir)
+			if err != nil {
+				// A failed backup must never silently proceed to delete the store.
+				return res, fmt.Errorf("write store backup: %w", err)
+			}
+			res.StoreBackupPath = backupPath
+			fmt.Fprintf(out, "  ✓ store backed up to %s\n", backupPath)
+
+			step("Deleting the local store (data.db, .encryption_key, config.yaml)")
+			if err := deleteStoreFiles(in.StoreDir); err != nil {
+				return res, fmt.Errorf("delete local store: %w", err)
+			}
+			fmt.Fprintln(out, "  ✓ local store deleted (backup archive kept)")
+		}
+	}
+
+	step("Purge complete")
+	if res.StoreBackupPath != "" {
+		fmt.Fprintf(out, "  Restore with: pmcluster cluster reset --restore %s\n", res.StoreBackupPath)
+	}
 	return res, nil
 }
 

@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -31,7 +32,14 @@ func openTestCipher(t *testing.T, path string) *credentials.Cipher {
 }
 
 func healthyService(name string) runtime.Service {
-	return runtime.Service{Name: name, Replicas: 1, Desired: 1}
+	// Derive the stack namespace from the service name ("infra_traefik" →
+	// "infra") so the existence-aware reconcile loop can see which stacks are
+	// present in the swarm.
+	stack := name
+	if i := strings.IndexByte(name, '_'); i >= 0 {
+		stack = name[:i]
+	}
+	return runtime.Service{Name: name, Stack: stack, Replicas: 1, Desired: 1}
 }
 
 // seedUpdateState runs a real Up with a fresh fake docker + deployer, then
@@ -572,5 +580,162 @@ func TestUpdate_ACMEModeDoesNotRequireCertPaths(t *testing.T) {
 		Stdout:   io.Discard,
 	}, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("ACME-mode update should succeed without cert/key paths, got: %v", err)
+	}
+}
+
+// TestUpdate_AbsentStackRedeployedDespiteMatchingHash verifies the
+// existence-aware reconcile: a stack whose rendered hash is unchanged but whose
+// services are absent from the swarm (a wiped Swarm) is redeployed.
+func TestUpdate_AbsentStackRedeployedDespiteMatchingHash(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	// Baseline no-op update: every stack present + hash matched.
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("baseline Update: %v", err)
+	}
+
+	// Simulate a wiped swarm: the backup stack's services are gone.
+	f := deps.Docker.(*fakeDocker)
+	for name := range f.services {
+		if strings.HasPrefix(name, "backup_") {
+			delete(f.services, name)
+		}
+	}
+
+	deployer := &recordingDeployer{}
+	deps.Deployer = deployer
+	res, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	var backupDeployed bool
+	for _, d := range deployer.deployedStacks {
+		if d.Name == "backup" {
+			backupDeployed = true
+		}
+	}
+	if !backupDeployed {
+		t.Errorf("absent backup stack was not redeployed despite matching hash: %v", deployer.deployedStacks)
+	}
+	if !slices.Contains(res.StacksDeployed, "backup") {
+		t.Errorf("StacksDeployed should include backup, got %v", res.StacksDeployed)
+	}
+}
+
+// TestUpdate_ReEnsuresNetworks verifies `cluster update` re-creates the
+// external overlay networks that only `cluster up` used to ensure.
+func TestUpdate_ReEnsuresNetworks(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	f := deps.Docker.(*fakeDocker)
+	delete(f.networks, "traefik-net")
+	delete(f.networks, "monitoring-net")
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	for _, name := range []string{"traefik-net", "monitoring-net"} {
+		if _, ok := f.networks[name]; !ok {
+			t.Errorf("network %s was not re-ensured by update", name)
+		}
+	}
+}
+
+// TestUpdate_MissingManagedCredentialSecretRecreated verifies update
+// re-materializes a managed-credential Swarm secret from the DB ciphertext
+// before the stack reconcile, without rotating the credential.
+func TestUpdate_MissingManagedCredentialSecretRecreated(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	before, err := deps.Store.GetCredential(ctx, "traefik_dashboard")
+	if err != nil {
+		t.Fatalf("GetCredential traefik_dashboard: %v", err)
+	}
+
+	if err := deps.Docker.SecretRemove(ctx, "admin_credentials"); err != nil {
+		t.Fatalf("remove admin_credentials: %v", err)
+	}
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	f := deps.Docker.(*fakeDocker)
+	if _, ok := f.secrets["admin_credentials"]; !ok {
+		t.Fatal("admin_credentials swarm secret was not re-materialized by update")
+	}
+
+	after, err := deps.Store.GetCredential(ctx, "traefik_dashboard")
+	if err != nil {
+		t.Fatalf("GetCredential traefik_dashboard (after): %v", err)
+	}
+	if !bytes.Equal(before.PasswordCiphertext, after.PasswordCiphertext) {
+		t.Error("credential ciphertext changed (rotated) — materialization must never rotate")
+	}
+}
+
+// TestUpdate_SwarmIDChangeForcesRedeploy verifies a changed (or newly-seen)
+// Swarm cluster ID force-redeploys every platform stack and persists the ID.
+func TestUpdate_SwarmIDChangeForcesRedeploy(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	f := deps.Docker.(*fakeDocker)
+	f.swarmID = "swarm-v2"
+	deployer := &recordingDeployer{}
+	deps.Deployer = deployer
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update after swarm ID change: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, d := range deployer.deployedStacks {
+		got[d.Name] = true
+	}
+	for _, s := range []string{"observability", "infra", "edge", "backup"} {
+		if !got[s] {
+			t.Errorf("swarm-ID change should force redeploy of %s, got %v", s, deployer.deployedStacks)
+		}
+	}
+	if v := deps.Store.GetSettingDefault(ctx, settingSwarmID, ""); v != "swarm-v2" {
+		t.Errorf("swarm_id setting = %q, want swarm-v2", v)
+	}
+
+	// Second update with the same ID: no change → no redeploy.
+	deployer2 := &recordingDeployer{}
+	deps.Deployer = deployer2
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("second Update: %v", err)
+	}
+	if len(deployer2.deployedStacks) != 0 {
+		t.Errorf("expected no redeploy on unchanged swarm ID, got %v", deployer2.deployedStacks)
+	}
+}
+
+// TestUpdate_ForceRedeploysAllStacks verifies the `cluster reset` force mode:
+// every platform stack is redeployed regardless of hash or existence.
+func TestUpdate_ForceRedeploysAllStacks(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+
+	deployer := &recordingDeployer{}
+	deps.Deployer = deployer
+
+	if _, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0", Force: true}); err != nil {
+		t.Fatalf("Update force: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, d := range deployer.deployedStacks {
+		got[d.Name] = true
+	}
+	for _, s := range []string{"observability", "infra", "edge", "backup"} {
+		if !got[s] {
+			t.Errorf("force update should redeploy %s, got %v", s, deployer.deployedStacks)
+		}
 	}
 }

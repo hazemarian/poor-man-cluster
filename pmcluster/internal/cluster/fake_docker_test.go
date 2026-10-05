@@ -28,6 +28,10 @@ type fakeDocker struct {
 	services map[string]runtime.Service
 	nodes    []runtime.Node
 
+	// swarmID is the Swarm cluster ID SwarmID reports ("" = unset). Tests
+	// mutate it to simulate a wiped + re-initialised Swarm.
+	swarmID string
+
 	// Removal tracking — appended to on each Remove call.
 	removedSecrets  []string
 	removedConfigs  []string
@@ -234,6 +238,12 @@ func (f *fakeDocker) SetNodeLabel(_ context.Context, _, key, value string) error
 }
 func (f *fakeDocker) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
 	return runtime.JoinTokens{}, nil
+}
+
+// SwarmID reports the Swarm cluster ID (the Raft cluster identity). "" when
+// unset — tests mutate f.swarmID to exercise the swarm-identity detection.
+func (f *fakeDocker) SwarmID(_ context.Context) (string, error) {
+	return f.swarmID, nil
 }
 
 // Events is unused by the cluster package; return already-closed channels so

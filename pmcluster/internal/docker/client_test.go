@@ -48,6 +48,11 @@ type fakeClient struct {
 	// returns already-closed channels.
 	EventsCh    chan runtime.Event
 	EventsErrCh chan error
+
+	// swarmID is the Swarm cluster ID reported by SwarmID; swarmIDErr is its
+	// injected error (nil = success).
+	swarmID    string
+	swarmIDErr error
 }
 
 // AddService registers a swarm service for the service-ops tests.
@@ -202,6 +207,12 @@ func (f *fakeClient) ServiceExecAttach(_ context.Context, _ string, _ []string, 
 }
 func (f *fakeClient) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
 	return runtime.JoinTokens{}, nil
+}
+
+// SwarmID reports the Swarm cluster ID (the Raft cluster identity). "" when
+// unset — used by tests that exercise the swarm-identity change detection.
+func (f *fakeClient) SwarmID(_ context.Context) (string, error) {
+	return f.swarmID, f.swarmIDErr
 }
 func (f *fakeClient) SecretList(_ context.Context, _, _ string) ([]string, error) {
 	names := make([]string, 0, len(f.secrets))

@@ -2,6 +2,32 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.161 (2026-10-05)
+
+Cluster lifecycle, self-healing reconcile, and swarm-wipe recovery.
+
+- **`cluster update` is now existence-aware**: on a matching rendered hash it
+  still verifies each platform stack is present in the swarm (via the stack
+  namespace label) and redeploys it when absent, so a wiped/partial swarm no
+  longer stays empty.
+- **Self-healing update**: every `cluster update` now re-ensures the external
+  overlay networks (traefik-net, monitoring-net), re-materializes ALL managed
+  credentials' swarm secrets (incl. the non-rotatable `edge_api_token`) and
+  rebuilds user secrets/configs from the DB index BEFORE deploying stacks, and
+  detects a changed swarm ID (wipe) and forces a redeploy.
+- **`cluster reset [--restore <archive>]`**: rebuilds the cluster from the DB —
+  optionally restoring the store from a purge backup, then a forced,
+  existence-aware reconcile. Idempotent; the recovery verb for a wrecked swarm.
+- **`cluster down --purge` now purges everything**: it stops the daemon, writes
+  a restorable store backup (`purge-backup-<ts>.tar.gz` = data.db +
+  .encryption_key + config.yaml) to the data dir, then removes the platform
+  resources AND the local store (the backup archive is kept). Without `--purge`,
+  behavior is unchanged (DB preserved). `cluster down` on a fresh box with no
+  store is a graceful no-op.
+- Tests: existence-aware redeploy, network re-ensure, managed-credential
+  re-materialization (plain + htpasswd), swarm-ID change, `--force`, purge
+  backup+delete, backup round-trip + traversal guard, `reset` registration.
+
 ## v0.2.160.3 (2026-10-05)
 
 SeaweedFS store fixes found deploying to the 2-node test cluster.

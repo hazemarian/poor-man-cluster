@@ -111,6 +111,12 @@ const (
 	// them it is refused. Enable via the setup prompt or
 	// `cluster settings set storage_failover=true`.
 	settingStorageFailover = "storage_failover"
+
+	// settingSwarmID records the live Swarm cluster ID (Raft cluster identity)
+	// so `cluster update` can detect a wiped + re-initialised Swarm. Deliberately
+	// NOT in the settings allowlist — it is written directly via SetSetting and
+	// never surfaced for operator editing.
+	settingSwarmID = "swarm_id"
 )
 
 // Setting* accessors expose the persisted settings keys for CLI surfaces

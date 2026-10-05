@@ -133,6 +133,37 @@ func (m *CredentialsManager) Ensure(ctx context.Context, name string) (*ManagedC
 	return m.ensure(ctx, spec)
 }
 
+// EnsureMaterialized re-creates a managed credential's Swarm secret from the
+// DB ciphertext when the secret is missing (e.g. the Swarm was wiped while the
+// store survived), WITHOUT ever rotating the credential or minting a new one.
+// A credential row absent from the DB is a no-op — the caller decides whether
+// to self-heal the row itself (e.g. SSO's Ensure). Returns true iff the Swarm
+// secret was (re)created. Used by `cluster update`'s self-heal pass so a wiped
+// Swarm's managed secrets (including the non-rotatable edge_api_token) come
+// back from the DB before any stack deploy.
+func (m *CredentialsManager) EnsureMaterialized(ctx context.Context, name string) (bool, error) {
+	spec, ok := specFor(name, nil)
+	if !ok {
+		return false, fmt.Errorf("ensure materialized %s: no bootstrap spec for credential", name)
+	}
+	existing, err := m.Store.GetCredential(ctx, name)
+	if err != nil {
+		if errors.Is(err, store.ErrCredentialNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("lookup %s: %w", name, err)
+	}
+	plaintext, err := m.Cipher.Decrypt(existing.PasswordCiphertext)
+	if err != nil {
+		return false, fmt.Errorf("decrypt %s: %w", name, err)
+	}
+	payload, err := serialisePassword(spec, existing.Username, string(plaintext))
+	if err != nil {
+		return false, err
+	}
+	return EnsureSecret(ctx, m.Docker, existing.SwarmSecretName, payload)
+}
+
 type secretFormat int
 
 const (

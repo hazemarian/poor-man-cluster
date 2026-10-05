@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // newTestDeps returns a real *store.Store and *credentials.Cipher backed by
@@ -527,5 +529,141 @@ func TestRotate_SyncsDbSecret(t *testing.T) {
 
 	if string(f.secrets["zo_root_user_password"].Data) == string(oldSecretData) {
 		t.Error("swarm secret payload should have changed after Rotate")
+	}
+}
+
+// TestEnsureMaterialized_RecreatesMissingSecretNoRotation verifies the
+// self-heal primitive: a missing Swarm secret is recreated from the DB
+// ciphertext, an existing one is left untouched, and the credential row is
+// never rotated. Uses edge_api_token (plain format, non-rotatable) so the
+// recreated payload is byte-identical — exactly what a wiped-Swarm recovery
+// needs.
+func TestEnsureMaterialized_RecreatesMissingSecretNoRotation(t *testing.T) {
+	s, c := newTestDeps(t)
+	f := newFakeDocker()
+	f.info = goodSwarmInfo()
+	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
+
+	if _, err := mgr.Bootstrap(context.Background(), BootstrapInput{
+		TraefikAdminUser:      "admin",
+		OpenObserveAdminEmail: "ops@example.com",
+	}); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	before, err := s.GetCredential(context.Background(), "edge_api_token")
+	if err != nil {
+		t.Fatalf("GetCredential edge_api_token: %v", err)
+	}
+	originalSecret, ok := f.secrets["edge_api_token"]
+	if !ok {
+		t.Fatal("edge_api_token secret missing after bootstrap")
+	}
+
+	// Simulate a wiped swarm: secret gone, DB row intact.
+	delete(f.secrets, "edge_api_token")
+
+	created, err := mgr.EnsureMaterialized(context.Background(), "edge_api_token")
+	if err != nil {
+		t.Fatalf("EnsureMaterialized: %v", err)
+	}
+	if !created {
+		t.Fatal("EnsureMaterialized should report created=true for a missing secret")
+	}
+	recreated, ok := f.secrets["edge_api_token"]
+	if !ok {
+		t.Fatal("edge_api_token secret not recreated")
+	}
+	if !bytes.Equal(recreated.Data, originalSecret.Data) {
+		t.Error("recreated secret payload differs from the original (rotated?)")
+	}
+
+	// Existing secret must be left untouched: a second call is a no-op.
+	again, err := mgr.EnsureMaterialized(context.Background(), "edge_api_token")
+	if err != nil {
+		t.Fatalf("EnsureMaterialized (existing): %v", err)
+	}
+	if again {
+		t.Error("EnsureMaterialized on an existing secret should report created=false")
+	}
+
+	after, err := s.GetCredential(context.Background(), "edge_api_token")
+	if err != nil {
+		t.Fatalf("GetCredential after: %v", err)
+	}
+	if !bytes.Equal(before.PasswordCiphertext, after.PasswordCiphertext) {
+		t.Error("credential ciphertext changed (rotated) — materialization must never rotate")
+	}
+}
+
+// TestEnsureMaterialized_HtpasswdRecreatedFromSamePassword verifies the
+// htpasswd-format credential (traefik_dashboard → admin_credentials) is
+// recreated with the SAME plaintext password (bcrypt is salted, so the hash
+// line differs, but it must authenticate the unchanged password).
+func TestEnsureMaterialized_HtpasswdRecreatedFromSamePassword(t *testing.T) {
+	s, c := newTestDeps(t)
+	f := newFakeDocker()
+	f.info = goodSwarmInfo()
+	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
+
+	if _, err := mgr.Bootstrap(context.Background(), BootstrapInput{
+		TraefikAdminUser:      "admin",
+		OpenObserveAdminEmail: "ops@example.com",
+	}); err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	before, err := s.GetCredential(context.Background(), "traefik_dashboard")
+	if err != nil {
+		t.Fatalf("GetCredential: %v", err)
+	}
+	beforePlain, err := c.Decrypt(before.PasswordCiphertext)
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+
+	delete(f.secrets, "admin_credentials")
+
+	if _, err := mgr.EnsureMaterialized(context.Background(), "traefik_dashboard"); err != nil {
+		t.Fatalf("EnsureMaterialized: %v", err)
+	}
+	recreated, ok := f.secrets["admin_credentials"]
+	if !ok {
+		t.Fatal("admin_credentials secret not recreated")
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(recreated.Data)), ":", 2)
+	if len(parts) != 2 || parts[0] != "admin" {
+		t.Fatalf("htpasswd line malformed: %q", recreated.Data)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(parts[1]), beforePlain); err != nil {
+		t.Errorf("recreated htpasswd line does not authenticate the unchanged password: %v", err)
+	}
+
+	after, err := s.GetCredential(context.Background(), "traefik_dashboard")
+	if err != nil {
+		t.Fatalf("GetCredential after: %v", err)
+	}
+	if !bytes.Equal(before.PasswordCiphertext, after.PasswordCiphertext) {
+		t.Error("credential ciphertext changed (rotated)")
+	}
+}
+
+// TestEnsureMaterialized_MissingRowIsNoOp verifies a credential absent from the
+// DB is skipped (never minted) — materialization only rebuilds missing Swarm
+// secrets, it never creates credentials.
+func TestEnsureMaterialized_MissingRowIsNoOp(t *testing.T) {
+	s, c := newTestDeps(t)
+	f := newFakeDocker()
+	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
+
+	created, err := mgr.EnsureMaterialized(context.Background(), "sso_cookie_secret")
+	if err != nil {
+		t.Fatalf("EnsureMaterialized: %v", err)
+	}
+	if created {
+		t.Fatal("missing credential row must be a no-op, not a mint")
+	}
+	if _, err := s.GetCredential(context.Background(), "sso_cookie_secret"); err != store.ErrCredentialNotFound {
+		t.Fatalf("credential row should still be absent, got err=%v", err)
 	}
 }

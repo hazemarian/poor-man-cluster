@@ -195,3 +195,19 @@ func systemctlSudo(args ...string) error {
 	}
 	return nil
 }
+
+// stopDaemon stops the pmcluster daemon via systemd, best-effort. Called before
+// `cluster down --purge` so the daemon cannot resurrect swarm resources while
+// the purge removes them. Only acts on Linux hosts with systemctl; a
+// foreground daemon (or a non-systemd host) gets a hint and the purge proceeds.
+// Never fatal.
+func stopDaemon(out io.Writer) {
+	if hostOS != "linux" || !hasSystemctl() {
+		return
+	}
+	if err := systemctlFn("stop", "pmcluster"); err != nil {
+		fmt.Fprintf(out, "  ⚠ could not stop the daemon: %v (continue — re-run purge after stopping it manually if resources reappear)\n", err)
+		return
+	}
+	fmt.Fprintln(out, "→ pmcluster daemon stopped via systemd")
+}

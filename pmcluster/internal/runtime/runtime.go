@@ -37,6 +37,12 @@ type Client interface {
 	NodeList(ctx context.Context) ([]Node, error)
 	JoinTokens(ctx context.Context) (JoinTokens, error)
 
+	// SwarmID returns the live Swarm cluster ID (the Raft cluster identity).
+	// `cluster update` persists this and force-redeploys everything when it
+	// changes — a wiped + re-initialised Swarm has a new ID even though the
+	// local SQLite store (source of truth) survived.
+	SwarmID(ctx context.Context) (string, error)
+
 	// SetNodeLabel adds or replaces a label on a swarm node (used to mark
 	// storage nodes so the backup agent can be constrained to them).
 	SetNodeLabel(ctx context.Context, nodeID, key, value string) error

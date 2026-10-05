@@ -97,6 +97,9 @@ func (f *inMemoryDockerClient) NodeList(_ context.Context) ([]runtime.Node, erro
 func (f *inMemoryDockerClient) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
 	return runtime.JoinTokens{}, nil
 }
+func (f *inMemoryDockerClient) SwarmID(_ context.Context) (string, error) {
+	return "", nil
+}
 func (f *inMemoryDockerClient) SetNodeLabel(_ context.Context, _, _, _ string) error { return nil }
 func (f *inMemoryDockerClient) Events(_ context.Context, _ time.Time) (<-chan runtime.Event, <-chan error) {
 	evCh := make(chan runtime.Event)

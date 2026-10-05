@@ -756,6 +756,18 @@ func (r *realClient) JoinTokens(ctx context.Context) (runtime.JoinTokens, error)
 	}, nil
 }
 
+// SwarmID returns the live Swarm cluster ID (the Raft cluster identity,
+// swarm.ClusterInfo.ID). It changes whenever the Swarm is re-initialised
+// (docker swarm leave --force + swarm init), which is exactly the signal
+// `cluster update` uses to force-redeploy everything from the DB.
+func (r *realClient) SwarmID(ctx context.Context) (string, error) {
+	sw, err := r.c.SwarmInspect(ctx)
+	if err != nil {
+		return "", fmt.Errorf("docker swarm inspect: %w", err)
+	}
+	return sw.ID, nil
+}
+
 // SetNodeLabel adds or replaces a label on a swarm node. It inspects the node
 // for its current version (optimistic concurrency) before updating the spec.
 func (r *realClient) SetNodeLabel(ctx context.Context, nodeID, key, value string) error {

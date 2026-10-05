@@ -3,6 +3,8 @@ package cluster
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -215,5 +217,73 @@ func TestWaitNetworkGone_AlreadyGone(t *testing.T) {
 	f := newFakeDocker() // no networks exist
 	if err := waitNetworkGone(context.Background(), f, "monitoring-net", time.Second); err != nil {
 		t.Fatalf("expected nil for an already-gone network, got %v", err)
+	}
+}
+
+// TestDown_Purge_WritesBackupAndDeletesStore verifies `--purge` now backs up the
+// local store (data.db + .encryption_key + config.yaml) to a restorable tarball
+// and then deletes the store files — while keeping the backup archive.
+func TestDown_Purge_WritesBackupAndDeletesStore(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"data.db":         "sqlite-bytes",
+		".encryption_key": "key-bytes",
+		"config.yaml":     "data_dir: /tmp\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	f := newFakeDocker()
+	f.info = goodSwarmInfo()
+	deployer := &recordingDeployer{}
+
+	res, err := Down(cancelledCtx(), DownDeps{Docker: f, Deployer: deployer, Stdout: io.Discard}, DownInput{Purge: true, StoreDir: dir})
+	if err != nil {
+		t.Fatalf("Down (purge): %v", err)
+	}
+
+	if res.StoreBackupPath == "" {
+		t.Fatal("StoreBackupPath empty after purge with StoreDir")
+	}
+	if _, err := os.Stat(res.StoreBackupPath); err != nil {
+		t.Fatalf("backup archive not found: %v", err)
+	}
+
+	entries := tarEntries(t, res.StoreBackupPath)
+	for _, want := range []string{"data.db", ".encryption_key", "config.yaml"} {
+		if !entries[want] {
+			t.Errorf("backup archive missing %q (entries=%v)", want, entries)
+		}
+	}
+
+	for _, name := range []string{"data.db", ".encryption_key", "config.yaml"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("store file %s should be deleted (stat err=%v)", name, err)
+		}
+	}
+}
+
+// TestDown_NoPurge_NoBackupNoDelete verifies `cluster down` WITHOUT --purge
+// writes no backup and deletes nothing from the store.
+func TestDown_NoPurge_NoBackupNoDelete(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "data.db"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	f := newFakeDocker()
+	deployer := &recordingDeployer{}
+
+	res, err := Down(context.Background(), DownDeps{Docker: f, Deployer: deployer, Stdout: io.Discard}, DownInput{Purge: false, StoreDir: dir})
+	if err != nil {
+		t.Fatalf("Down (no purge): %v", err)
+	}
+	if res.StoreBackupPath != "" {
+		t.Errorf("no backup expected without purge, got %q", res.StoreBackupPath)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "data.db")); err != nil {
+		t.Errorf("data.db should be preserved without purge: %v", err)
 	}
 }
