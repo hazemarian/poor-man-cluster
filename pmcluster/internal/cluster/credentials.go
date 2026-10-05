@@ -559,8 +559,11 @@ func loadObjectStore(ctx context.Context, docker runtime.Client, st *store.Store
 		return ObjectStore{}, fmt.Errorf("decrypt seaweedfs_admin password: %w", err)
 	}
 	return ObjectStore{
-		Enabled:  true,
-		Endpoint: "http://backup_seaweedfs:8333",
+		Enabled: true,
+		// Host:port only (no scheme): offen wants the protocol via
+		// AWS_ENDPOINT_PROTO, and a scheme in AWS_ENDPOINT conflicts with its
+		// secure option (rejected for http). rclone hardcodes the http:// prefix.
+		Endpoint: "backup_seaweedfs:8333",
 		Bucket:   "pmcluster-backups",
 		// Compose env values must have "$" doubled or `docker stack deploy`
 		// rejects the rendered YAML as an interpolation format error.

@@ -2,6 +2,19 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.160.3 (2026-10-05)
+
+SeaweedFS store fixes found deploying to the 2-node test cluster.
+
+- **Swarm advertise IP**: a published port attaches the ingress network, so
+  SeaweedFS auto-detected a task IP it could not self-reach and object uploads
+  timed out (`dial tcp …:8080: i/o timeout`). It now advertises `127.0.0.1` and
+  binds all interfaces (`-ip=127.0.0.1 -ip.bind=0.0.0.0 -s3.ip.bind=0.0.0.0`).
+- **offen endpoint**: `AWS_ENDPOINT` must be host:port with the protocol in
+  `AWS_ENDPOINT_PROTO`; a scheme (`http://`) is rejected ("conflicts with the
+  secure option"). The in-cluster endpoint is now `backup_seaweedfs:8333` with
+  `AWS_ENDPOINT_PROTO=http` (rclone keeps its own `http://` prefix).
+
 ## v0.2.160.1 (2026-10-05)
 
 In-cluster backup store moved from MinIO to SeaweedFS (supersedes v0.2.160).

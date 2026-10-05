@@ -174,7 +174,7 @@ func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
 		StorageNodeConstraint: true,
 		StorageNodeLabel:      "pmcluster.storage",
 		BackupS3:              BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
-		Store:                 ObjectStore{Enabled: true, Endpoint: "http://backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "pmclusterbackup", SecretKey: "s3cr3t", Node: "worker-2"},
+		Store:                 ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "pmclusterbackup", SecretKey: "s3cr3t", Node: "worker-2"},
 	}
 	body := string(mustLoadBackup(t, in))
 
@@ -183,6 +183,10 @@ func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
 	}
 	if !strings.Contains(body, "-s3.port=8333") || !strings.Contains(body, "-s3.port.iceberg=0") {
 		t.Errorf("seaweedfs should run `server -s3 -s3.port=8333 ...`:\n%s", body)
+	}
+	// Advertise loopback + bind all interfaces (Swarm ingress fix).
+	if !strings.Contains(body, "-ip=127.0.0.1") || !strings.Contains(body, "-ip.bind=0.0.0.0") {
+		t.Errorf("seaweedfs should advertise 127.0.0.1 and bind 0.0.0.0:\n%s", body)
 	}
 	if !strings.Contains(body, "seaweeddata") {
 		t.Errorf("missing seaweeddata volume")
@@ -200,6 +204,10 @@ func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
 	// offen destination is the in-cluster SeaweedFS.
 	if !strings.Contains(body, "backup_seaweedfs:8333") {
 		t.Errorf("offen should upload to the in-cluster SeaweedFS endpoint")
+	}
+	// offen needs the protocol separately (a scheme in AWS_ENDPOINT is rejected).
+	if !strings.Contains(body, "AWS_ENDPOINT_PROTO") || !strings.Contains(body, "http") {
+		t.Errorf("offen should set AWS_ENDPOINT_PROTO=http for the in-cluster store")
 	}
 	// Replicator mirrors the bucket to the offsite target via rclone.
 	if !strings.Contains(body, "rclone/rclone") || !strings.Contains(body, "rclone sync sw:pmcluster-backups off:offsite-bucket") {
