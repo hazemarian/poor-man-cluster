@@ -2,6 +2,24 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.158.2 (2026-10-05)
+
+Storage move transit fixes (round two) — found live in Test Case 8 (two-node storage HA).
+
+- **Mover candidate ordering**: the mover now tries local interface IPs (RFC1918
+  private addresses first) before the swarm advertise address. The advertise is
+  often a public IP that hardened nodes silently drop on ephemeral ports, and
+  busybox `wget -T` cannot reliably bound the connect on a dropped SYN — so a
+  public-first order hung the mover until the task deadline even though a
+  working private address existed. `moverCandidateURLs` now sorts private
+  (10/8, 172.16/12, 192.168/16) local addresses first and keeps the advertise
+  address as the final fallback.
+- **Stale target cleanup**: the mover script now runs `rm -rf /data/<stack>`
+  before `mv` so a leftover subtree from a previous failed move attempt (which
+  made `mv` error with "Is a directory") no longer blocks a retry.
+- Tests updated/added for the new candidate ordering (advertise last, dedup,
+  no loopback leak, bare-IP advertise handled) + full suite green.
+
 ## v0.2.158.1 (2026-10-05)
 
 Storage move transit fix — found live in Test Case 8 (two-node storage HA).

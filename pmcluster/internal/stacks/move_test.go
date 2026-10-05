@@ -364,14 +364,16 @@ func TestResolveArchivePath(t *testing.T) {
 	}
 }
 
-func TestMoverCandidateURLs_AdvertiseFirstThenLocalIPs(t *testing.T) {
+func TestMoverCandidateURLs_AdvertiseLastAfterLocalIPs(t *testing.T) {
 	urls := moverCandidateURLs("10.7.224.12:2377", 35001, "/move/abc/tc7db.tgz")
 	if len(urls) == 0 {
 		t.Fatal("expected at least the advertise address URL")
 	}
-	// Advertise address must come first (SplitHostPort strips :2377).
-	if urls[0] != "http://10.7.224.12:35001/move/abc/tc7db.tgz" {
-		t.Fatalf("first candidate = %q, want advertise address", urls[0])
+	// Local interface IPs are tried BEFORE the advertise address (the
+	// advertise is often a public IP hardened nodes can't route to; local
+	// private IPs are the most likely reachable candidates).
+	if urls[len(urls)-1] != "http://10.7.224.12:35001/move/abc/tc7db.tgz" {
+		t.Fatalf("last candidate = %q, want advertise address last", urls[len(urls)-1])
 	}
 	// Every candidate must be a distinct host (dedup) and non-loopback.
 	seen := map[string]bool{}
@@ -391,9 +393,27 @@ func TestMoverCandidateURLs_AdvertiseFirstThenLocalIPs(t *testing.T) {
 
 func TestMoverCandidateURLs_AdvertiseWithoutPort(t *testing.T) {
 	urls := moverCandidateURLs("203.0.113.9", 40000, "/x")
-	if len(urls) == 0 || urls[0] != "http://203.0.113.9:40000/x" {
-		t.Fatalf("bare advertise address not handled: %v", urls)
+	if len(urls) == 0 {
+		t.Fatal("expected candidates")
 	}
+	// Advertise (last) must be present exactly once, bare-IP handled.
+	advert := "http://203.0.113.9:40000/x"
+	if urls[len(urls)-1] != advert {
+		t.Fatalf("advertise not last: %v", urls)
+	}
+	if countOccurrences(urls, advert) != 1 {
+		t.Fatalf("advertise must appear exactly once: %v", urls)
+	}
+}
+
+func countOccurrences(xs []string, want string) int {
+	n := 0
+	for _, x := range xs {
+		if x == want {
+			n++
+		}
+	}
+	return n
 }
 
 func TestMoverCandidateURLs_EmptyAdvertise(t *testing.T) {

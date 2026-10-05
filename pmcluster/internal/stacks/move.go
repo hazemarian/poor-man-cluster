@@ -420,8 +420,8 @@ func (s *Service) moveViaMover(ctx context.Context, archivePath, volumeRoot, sta
 
 	svcName := fmt.Sprintf("pmcluster-move-%s-%s", stackName, tokenHex[:8])
 	script := fmt.Sprintf(
-		"mkdir -p /tmp/x /data && for u in %s; do wget -qO /tmp/m.tgz \"$u\" && break; done && tar -xzf /tmp/m.tgz -C /tmp/x && mv /tmp/x/backup/data/%s /data/ && rm -rf /tmp/x",
-		urlList, stackName,
+		"mkdir -p /tmp/x /data && for u in %s; do wget -q -T 10 -O /tmp/m.tgz \"$u\" && break; done && tar -xzf /tmp/m.tgz -C /tmp/x && rm -rf /data/%s && mv /tmp/x/backup/data/%s /data/ && rm -rf /tmp/x",
+		urlList, stackName, stackName,
 	)
 
 	create := exec.CommandContext(ctx, "docker", "service", "create",
@@ -469,10 +469,17 @@ func (s *Service) moveViaMover(ctx context.Context, archivePath, volumeRoot, sta
 }
 
 // moverCandidateURLs returns the http URLs a mover task on another node can
-// use to reach THIS host's ephemeral archive server: the swarm advertise
-// address first, then every non-loopback local interface IP (so hardened
-// clusters that only route between nodes over a private network still work).
-// The archive server binds 0.0.0.0, so any of these addresses serves it.
+// use to reach THIS host's ephemeral archive server. The archive server binds
+// 0.0.0.0, so any of these addresses serves it.
+//
+// Order matters: local interface IPs are tried BEFORE the swarm advertise
+// address. The advertise address is often a public IP that hardened nodes
+// cannot route to each other on ephemeral ports (it silently drops SYN), and
+// busybox wget cannot reliably bound the connect on a dropped SYN — so a
+// public-first order would hang the mover until the task deadline. Local
+// RFC1918 (private) addresses are the most likely to be reachable between
+// nodes, so they go first; the advertise address is the fallback for clusters
+// that only reach each other through it.
 func moverCandidateURLs(leaderAddr string, port int, urlPath string) []string {
 	var urls []string
 	seen := map[string]bool{}
@@ -484,33 +491,68 @@ func moverCandidateURLs(leaderAddr string, port int, urlPath string) []string {
 		seen[host] = true
 		urls = append(urls, fmt.Sprintf("http://%s:%d%s", host, port, urlPath))
 	}
-	// Advertise address first (it is authoritative and stable).
-	if host, _, err := net.SplitHostPort(leaderAddr); err == nil {
+
+	// Local interface IPs first, with private (RFC1918) addresses ahead of
+	// public ones so the most-reachable candidate is tried first.
+	ifaces, err := net.Interfaces()
+	if err == nil {
+		var privates, others []string
+		for _, iface := range ifaces {
+			addrs, aerr := iface.Addrs()
+			if aerr != nil {
+				continue
+			}
+			for _, a := range addrs {
+				ipnet, ok := a.(*net.IPNet)
+				if !ok {
+					continue
+				}
+				ip := ipnet.IP
+				if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+					continue
+				}
+				host := ip.String()
+				if seen[host] {
+					continue
+				}
+				seen[host] = true
+				if isRFC1918(ip) {
+					privates = append(privates, host)
+				} else {
+					others = append(others, host)
+				}
+			}
+		}
+		for _, h := range privates {
+			urls = append(urls, fmt.Sprintf("http://%s:%d%s", h, port, urlPath))
+		}
+		for _, h := range others {
+			urls = append(urls, fmt.Sprintf("http://%s:%d%s", h, port, urlPath))
+		}
+	}
+
+	// Advertise address last (fallback for clusters that only route via it).
+	if host, _, serr := net.SplitHostPort(leaderAddr); serr == nil {
 		add(host)
 	} else {
 		add(leaderAddr)
 	}
-	// Then every local interface IP (private network reachability).
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return urls
-	}
-	for _, iface := range ifaces {
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			ipnet, ok := a.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			ip := ipnet.IP
-			if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
-				continue
-			}
-			add(ip.String())
-		}
-	}
 	return urls
+}
+
+// isRFC1918 reports whether ip is a private IPv4 address (10/8, 172.16/12,
+// 192.168/16) — the ranges most commonly used for inter-node private
+// networks, and therefore the most likely to be reachable between peers.
+func isRFC1918(ip net.IP) bool {
+	if ip4 := ip.To4(); ip4 != nil {
+		switch {
+		case ip4[0] == 10:
+			return true
+		case ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31:
+			return true
+		case ip4[0] == 192 && ip4[1] == 168:
+			return true
+		}
+	}
+	return false
 }
