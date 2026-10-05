@@ -50,8 +50,11 @@ type Stack struct {
 	RepoURL         string
 	SourceFile      string
 	StackErrors     []store.StackErrorEntry
-	CreatedAt       int64
-	UpdatedAt       int64
+	// Failover is the open storage-failover marker, when the stack was moved
+	// off a failed storage node and has not been acknowledged or moved back.
+	Failover  *store.StackFailover
+	CreatedAt int64
+	UpdatedAt int64
 }
 
 // Revision is one stored deployment of a stack. PayloadJSON carries the
@@ -86,6 +89,11 @@ type Deployer interface {
 	// restore → pin → new revision). Target nodes can be promoted to storage
 	// nodes via `pmcluster node promote` or the console.
 	Move(ctx context.Context, stackName string, targetNode string) error
+	// Ack acknowledges an open storage-failover marker: the operator has
+	// accepted that the stack now runs on the failover target (possibly with
+	// data loss past the last backup) and the badge/console return to normal
+	// health without moving the stack back.
+	Ack(ctx context.Context, stackName string) error
 }
 
 // Reader is the read side: stack metadata and revision history.

@@ -2,6 +2,38 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.159 (2026-10-05)
+
+Storage failover safety, lifecycle & visibility (Test Case 8 follow-up).
+
+- **`storage_failover` setting (opt-in)**: automatic failover is now gated on
+  `storage_failover=true`. When a storage node goes down and the setting is off,
+  the control loop leaves the stack paused and emits an alert signal instead of
+  moving it. New clusters are prompted at setup when offsite S3 is configured
+  ("Enable automatic storage failover?"); without S3 it stays off.
+- **S3-only failover**: the automatic path always restores the newest offsite
+  archive (`MoveOptions{FromS3:true}`); a down node can never be a source, so
+  storage HA depends on S3. The HTTP mover remains for manual moves with both
+  nodes up.
+- **Failover marker + lifecycle**: a successful failover persists a
+  `stack_failover` row (`from`, `to`, `at`, `acked`). Until acknowledged or moved
+  back, the stack shows a `failover` status.
+- **Failover badge (GitHub-shared)**: `/api/public/badge/{stack}` returns an
+  amber `failover` status while an unacknowledged marker exists — the shared
+  signal a human must act on.
+- **Console + CLI**: stack detail shows a warning banner with [Move back] and
+  [Acknowledge & mark healthy]; `pmcluster stack show` surfaces the marker and
+  `pmcluster stack ack <stack>` acknowledges it. A move (including move-back)
+  clears the marker.
+- **OTel failover metrics**: `pmcluster.storage.failover.total`,
+  `pmcluster.storage.node.down`, `pmcluster.storage.failover.disabled` — the
+  operator builds alerts on top in OpenObserve.
+- **Hourly backups**: new `backup_cron` setting (default `0 * * * *`) renders
+  into the volume-backup agent's `BACKUP_CRON_EXPRESSION`, so the offsite archive
+  is never more than an hour old (the failover restore source). Set e.g.
+  `0 3 * * *` for the old daily cadence. Offen already prunes remote S3 objects
+  via `BACKUP_PRUNING_PREFIX`/`BACKUP_RETENTION_DAYS`.
+
 ## v0.2.158.2 (2026-10-05)
 
 Storage move transit fixes (round two) — found live in Test Case 8 (two-node storage HA).

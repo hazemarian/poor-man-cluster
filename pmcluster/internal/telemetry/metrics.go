@@ -35,6 +35,21 @@ const (
 	// MetricReconcileTotal counts k8s-style reconcile runs (stack Sync) by
 	// stack and status (in_sync | applied | error).
 	MetricReconcileTotal = "pmcluster.reconcile.total"
+
+	// MetricStorageFailover counts automatic storage-failover moves by stack,
+	// the failed node, and the target node. Operators alert on this (or on
+	// MetricStorageNodeDown) in their OTel backend to be paged on a failover.
+	MetricStorageFailover = "pmcluster.storage.failover.total"
+
+	// MetricStorageNodeDown reports 1 for each storage node observed unhealthy
+	// on the most recent reconcile pass, 0 when healthy. Labelled by node.
+	MetricStorageNodeDown = "pmcluster.storage.node.down"
+
+	// MetricStorageFailoverDisabled counts passes where a storage node is down
+	// but automatic failover is disabled (storage_failover setting false), so
+	// the stack stays paused instead of being moved. Operators alert on this to
+	// catch "storage is down and we are not recovering automatically".
+	MetricStorageFailoverDisabled = "pmcluster.storage.failover.disabled"
 )
 
 // StaleImageAge is how old a service's cached image must be before the
@@ -102,6 +117,44 @@ var (
 	staleImages     metric.Int64Gauge
 	reconcileTotal  metric.Int64Counter
 )
+
+// Storage-failover instruments are kept in their own lazy group so the hot
+// counters above are untouched.
+var (
+	storageOnce             sync.Once
+	storageFailover         metric.Int64Counter
+	storageNodeDown         metric.Int64Gauge
+	storageFailoverDisabled metric.Int64Counter
+)
+
+func storageInstruments() (metric.Int64Counter, metric.Int64Gauge, metric.Int64Counter) {
+	storageOnce.Do(func() {
+		meter := otel.Meter("github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry")
+		var err error
+		storageFailover, err = meter.Int64Counter(
+			MetricStorageFailover,
+			metric.WithDescription("Automatic storage-failover moves by stack, failed node, and target node."),
+		)
+		if err != nil {
+			storageFailover, _ = otel.Meter("noop").Int64Counter("noop")
+		}
+		storageNodeDown, err = meter.Int64Gauge(
+			MetricStorageNodeDown,
+			metric.WithDescription("1 when a storage node is unhealthy on the most recent reconcile pass, 0 when healthy."),
+		)
+		if err != nil {
+			storageNodeDown, _ = otel.Meter("noop").Int64Gauge("noop")
+		}
+		storageFailoverDisabled, err = meter.Int64Counter(
+			MetricStorageFailoverDisabled,
+			metric.WithDescription("Passes where a storage node is down but automatic failover is disabled (storage_failover=false)."),
+		)
+		if err != nil {
+			storageFailoverDisabled, _ = otel.Meter("noop").Int64Counter("noop")
+		}
+	})
+	return storageFailover, storageNodeDown, storageFailoverDisabled
+}
 
 func instruments() (metric.Int64Counter, metric.Int64Gauge, metric.Int64Gauge, metric.Int64Counter) {
 	instrOnce.Do(func() {
@@ -180,5 +233,45 @@ func RecordReconcile(ctx context.Context, stack, status string) {
 	capture(MetricReconcileTotal, 1, map[string]string{
 		"stack":  stack,
 		"status": status,
+	})
+}
+
+// RecordStorageFailover counts one automatic storage-failover move of a stack
+// from the failed node to the target node. Operators alert on this in their
+// OTel backend to be paged whenever the control plane relocates storage.
+func RecordStorageFailover(ctx context.Context, stack, fromNode, toNode string) {
+	fc, _, _ := storageInstruments()
+	fc.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("stack", stack),
+		attribute.String("from_node", fromNode),
+		attribute.String("to_node", toNode),
+	))
+	capture(MetricStorageFailover, 1, map[string]string{
+		"stack":     stack,
+		"from_node": fromNode,
+		"to_node":   toNode,
+	})
+}
+
+// RecordStorageNodeDown records the health of one storage node on the most
+// recent reconcile pass (1 = unhealthy, 0 = healthy), labelled by node.
+func RecordStorageNodeDown(ctx context.Context, node string, down int) {
+	_, g, _ := storageInstruments()
+	g.Record(ctx, int64(down), metric.WithAttributes(attribute.String("node", node)))
+	capture(MetricStorageNodeDown, int64(down), map[string]string{"node": node})
+}
+
+// RecordStorageFailoverDisabled counts a pass where a storage node was down but
+// automatic failover is disabled, so a stack stayed paused instead of moving.
+// Operators alert on this to catch "storage down and not recovering".
+func RecordStorageFailoverDisabled(ctx context.Context, stack, node string) {
+	_, _, dc := storageInstruments()
+	dc.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("stack", stack),
+		attribute.String("node", node),
+	))
+	capture(MetricStorageFailoverDisabled, 1, map[string]string{
+		"stack": stack,
+		"node":  node,
 	})
 }

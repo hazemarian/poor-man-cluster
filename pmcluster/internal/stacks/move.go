@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -38,6 +39,13 @@ import (
 // prunes it.
 func (s *Service) Move(ctx context.Context, stackName, targetNode string) error {
 	return s.MoveWithOptions(ctx, stackName, targetNode, MoveOptions{})
+}
+
+// Ack resolves an open storage-failover marker without moving the stack: the
+// operator accepts that it now runs on the failover target. After ack the
+// console banner and the GitHub badge return to the stack's normal health.
+func (s *Service) Ack(ctx context.Context, stackName string) error {
+	return s.Store.AckStackFailover(ctx, stackName)
 }
 
 // MoveOptions tunes how a stack move sources its data.
@@ -145,6 +153,14 @@ func (s *Service) MoveWithOptions(ctx context.Context, stackName, targetNode str
 	// resolved hostname changed), so drift detection keeps it applied.
 	if _, err := s.reconcileDeploy(ctx, stackName, latest.SourceYAML); err != nil {
 		return fmt.Errorf("move: redeploy %s: %w", stackName, err)
+	}
+
+	// 5. A successful move is an operator action that resolves any open
+	// failover: the stack now lives where it was deliberately put, so clear the
+	// unacknowledged marker (badge/console return to normal health). Absent
+	// marker is not an error.
+	if err := s.Store.ClearStackFailover(ctx, stackName); err != nil && !errors.Is(err, store.ErrNotFound) {
+		s.Log.Warn().Err(err).Str("stack", stackName).Msg("move: could not clear failover marker")
 	}
 	return nil
 }

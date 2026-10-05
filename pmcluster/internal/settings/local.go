@@ -33,6 +33,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingVolumeRoot(),
 	cluster.SettingBackupAllNodes(),
 	cluster.SettingBackupRetentionDays(),
+	cluster.SettingBackupCron(),
 	cluster.SettingSSOEnabled(),
 	cluster.SettingSSOProvider(),
 	cluster.SettingSSOClientID(),
@@ -56,6 +57,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingLogLevel(),
 	cluster.SettingReconcileInterval(),
 	cluster.SettingStorageNodes(),
+	cluster.SettingStorageFailover(),
 }
 
 // Get returns the current value of every known setting ("" when unset).

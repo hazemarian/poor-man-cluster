@@ -94,6 +94,15 @@ func init() {
 		"stack.action_move":      "Move",
 		"stack.move_confirm":     "Move this stack? Its volumes are backed up, restored on the target node, and a new placement revision is recorded.",
 
+		// ---- storage failover banner ----------------------------------------
+		"stack.failover_title":       "Storage failover — possible data loss",
+		"stack.failover_body":        "This stack was moved off failed storage node {0} and restored on {1} from the latest backup. Changes made after that backup are not recovered. Repair {0} and move it back, or acknowledge to mark the stack officially healthy on {1}.",
+		"stack.failover_move_back":   "Move back to {0}",
+		"stack.failover_ack":         "Acknowledge & mark healthy",
+		"stack.failover_ack_confirm": "Acknowledge the failover? The stack is then considered healthy on its new node and the failover badge clears.",
+		"stack.msg_acknowledged":     "Acknowledged the failover for {0} — it is now considered healthy on its current node.",
+		"err.stack_ack":              "The failover could not be acknowledged.",
+
 		// ---- one revision's manifests ---------------------------------------
 		"revision.title":    "Revision {0} · {1}",
 		"revision.sub":      "Recorded {0}",

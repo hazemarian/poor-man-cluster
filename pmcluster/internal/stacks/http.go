@@ -36,6 +36,7 @@ func (h *HTTP) Mount(r chi.Router) {
 	r.Post("/stacks/{name}/sync", h.sync)
 	r.Post("/stacks/{name}/rollback", h.rollback)
 	r.Post("/stacks/{name}/move", h.move)
+	r.Post("/stacks/{name}/ack", h.ack)
 	r.Delete("/stacks/{name}", h.remove)
 }
 
@@ -276,6 +277,20 @@ func (h *HTTP) move(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"stack": name, "moved_to": body.Target})
 }
 
+// ack acknowledges an open storage-failover marker (see Deployer.Ack).
+func (h *HTTP) ack(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if err := h.Deploy.Ack(r.Context(), name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "no open failover marker for " + name})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stack": name, "acknowledged": true})
+}
+
 // stackJSON keeps the Stack response shape identical across endpoints.
 // last_error carries the full outcome history (JSON array, newest first); the
 // console surfaces the newest entry and keeps the rest for the history panel.
@@ -286,6 +301,7 @@ func stackJSON(s Stack) map[string]any {
 		"repo_url":         s.RepoURL,
 		"source_file":      s.SourceFile,
 		"last_error":       s.StackErrors,
+		"failover":         s.Failover,
 		"created_at":       s.CreatedAt,
 		"updated_at":       s.UpdatedAt,
 	}

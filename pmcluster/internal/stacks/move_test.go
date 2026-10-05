@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // fakeMoveTrigger is a test-local BackupTrigger returning canned paths.
@@ -297,6 +299,90 @@ func TestMove_TargetNodeValidation(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestMove_ClearsFailoverMarker verifies a successful move resolves any open
+// storage-failover marker: the stack now lives where the operator put it, so
+// the unacknowledged marker is deleted (badge/console return to normal).
+func TestMove_ClearsFailoverMarker(t *testing.T) {
+	ctx := context.Background()
+	svc, dep := moveTestSvc(t, nil, nil)
+
+	if _, err := svc.Deploy(ctx, Payload{AppName: "demo", Manifest: moveDemoManifest}); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	archive := filepath.Join(svc.BackupDir, "backup-node0-1234567890.tar.gz")
+	writeMoveArchive(t, archive, map[string]string{
+		"backup/data/demo/db_data/PG_VERSION": "15",
+	})
+	svc.Backup = &fakeMoveTrigger{paths: []string{"/archive/backup-node0-1234567890.tar.gz"}}
+
+	pins, err := svc.StoragePinsForStack(ctx, "demo")
+	if err != nil || len(pins) != 1 {
+		t.Fatalf("pins = %v (err %v), want exactly one", pins, err)
+	}
+	target := "node-a"
+	if pins[0] == "node-a" {
+		target = "node-b"
+	}
+
+	// An open failover marker (as the reconcile loop writes after an
+	// automatic failover) is still unacknowledged before the move.
+	if err := svc.Store.SetStackFailover(ctx, store.StackFailover{
+		StackName: "demo", FromNode: pins[0], ToNode: target, At: time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("SetStackFailover: %v", err)
+	}
+	if _, err := svc.Store.GetStackFailover(ctx, "demo"); err != nil {
+		t.Fatalf("GetStackFailover (before move): %v", err)
+	}
+
+	if err := svc.Move(ctx, "demo", target); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+
+	// The marker is gone: Get answers the package sentinel.
+	if _, err := svc.Store.GetStackFailover(ctx, "demo"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetStackFailover after move = %v, want ErrNotFound (marker cleared)", err)
+	}
+	// The move itself really ran (pin persisted) — the clear is step 5, not a
+	// shortcut around the restore.
+	if got := svc.Store.GetSettingDefault(ctx, StackPinKey("demo"), ""); got != target {
+		t.Errorf("pin = %q, want %q (move must complete before the clear)", got, target)
+	}
+	if dep.callCount() == 0 {
+		t.Error("expected a redeploy")
+	}
+}
+
+// TestMove_NoFailoverMarkerIsFine: ClearStackFailover answers ErrNotFound when
+// there is no marker, and Move must swallow it — an ordinary move of a stack
+// that was never failed over still succeeds.
+func TestMove_NoFailoverMarkerIsFine(t *testing.T) {
+	svc, _ := moveTestSvc(t, nil, nil)
+	if _, err := svc.Deploy(context.Background(), Payload{AppName: "demo", Manifest: moveDemoManifest}); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	archive := filepath.Join(svc.BackupDir, "backup-node0-1234567890.tar.gz")
+	writeMoveArchive(t, archive, map[string]string{
+		"backup/data/demo/db_data/PG_VERSION": "15",
+	})
+	svc.Backup = &fakeMoveTrigger{paths: []string{"/archive/backup-node0-1234567890.tar.gz"}}
+
+	pins, err := svc.StoragePinsForStack(context.Background(), "demo")
+	if err != nil || len(pins) != 1 {
+		t.Fatalf("pins = %v (err %v), want exactly one", pins, err)
+	}
+	target := "node-a"
+	if pins[0] == "node-a" {
+		target = "node-b"
+	}
+	if _, err := svc.Store.GetStackFailover(context.Background(), "demo"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetStackFailover (no marker) = %v, want ErrNotFound", err)
+	}
+	if err := svc.Move(context.Background(), "demo", target); err != nil {
+		t.Fatalf("move without marker must succeed, got: %v", err)
 	}
 }
 

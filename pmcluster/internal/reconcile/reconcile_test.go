@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 )
 
 // fakeServices is a services.Service stub: embeds the interface and returns a
@@ -389,12 +391,16 @@ func TestRunOnce_TracerNoopSafe(t *testing.T) {
 // TestRunOnce_StorageFailoverMovesToHealthyNode verifies the automatic
 // storage failover: when a stack's pinned storage node is down, the
 // reconciler moves it to a healthy alternate storage node (S3 restore path)
-// and the cooldown prevents re-triggering every pass.
+// and the cooldown prevents re-triggering every pass. v0.2.159 gates the move
+// on the storage_failover setting, so the fixture opts in explicitly.
 func TestRunOnce_StorageFailoverMovesToHealthyNode(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 	if err := st.SetSetting(ctx, cluster.SettingStorageNodes(), "node-a,node-b"); err != nil {
 		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	if err := st.SetSetting(ctx, cluster.SettingStorageFailover(), "true"); err != nil {
+		t.Fatalf("SetSetting storage_failover: %v", err)
 	}
 	statefulSource := "app: demo\nenv: production\ndomain: example.com\nservices:\n  web:\n    image: nginx\n    volumes: [data:/var/lib/data]\n"
 	if err := st.RecordDeploy(ctx, &store.StackRevision{
@@ -498,5 +504,264 @@ func TestRunOnce_StorageFailoverNoAlternate(t *testing.T) {
 	defer mu.Unlock()
 	if len(moves) != 0 {
 		t.Fatalf("failover moves = %v, want none (no healthy alternate)", moves)
+	}
+}
+
+// failoverFixture wires the standard storage-failover scenario for the
+// storage_failover gating tests: a stateful stack ("demo") whose node is
+// decided by the PinResolver round-robin over [node-a, node-b], a stateless
+// stack beside it (proves the drift pass keeps running while demo is paused),
+// storage_nodes configured, and a Docker stub in which ONLY the non-pinned
+// node is ready+active — so demo's storage node reads as down. The
+// storage_failover setting is deliberately left UNSET here; each test opts in
+// (or not) explicitly.
+type failoverFixture struct {
+	ctx    context.Context
+	st     *store.Store
+	dep    *recordingDeployer
+	rec    *Reconciler
+	pinned string
+	other  string
+
+	mu    sync.Mutex
+	moves []string
+}
+
+func newFailoverFixture(t *testing.T) *failoverFixture {
+	t.Helper()
+	ctx := context.Background()
+	st := newTestStore(t)
+	if err := st.SetSetting(ctx, cluster.SettingStorageNodes(), "node-a,node-b"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	stateful := "app: demo\nenv: production\ndomain: example.com\nservices:\n  web:\n    image: nginx\n    volumes: [data:/var/lib/data]\n"
+	if err := st.RecordDeploy(ctx, &store.StackRevision{
+		StackName:    "demo",
+		Revision:     2001,
+		SourceYAML:   stateful,
+		RenderedYAML: "version: \"3.9\"\nservices:\n  web:\n    image: nginx\n",
+	}, ""); err != nil {
+		t.Fatalf("RecordDeploy demo: %v", err)
+	}
+	if err := st.RecordDeploy(ctx, &store.StackRevision{
+		StackName:    "webhooks",
+		Revision:     2002,
+		SourceYAML:   "app: webhooks\nenv: production\ndomain: example.com\nservices:\n  api:\n    image: nginx\n",
+		RenderedYAML: "version: \"3.9\"\nservices:\n  api:\n    image: nginx\n",
+	}, ""); err != nil {
+		t.Fatalf("RecordDeploy webhooks: %v", err)
+	}
+
+	// Resolve which storage node "demo" round-robins to.
+	res := &stacks.PinResolver{StorageNodes: []string{"node-a", "node-b"}}
+	ir := &manifest.IR{Name: "demo", Services: []manifest.IRService{{Name: "web", Image: "nginx", Volumes: []string{"/data"}}}}
+	if err := res.ResolvePlacement(ctx, "demo", ir); err != nil {
+		t.Fatalf("ResolvePlacement: %v", err)
+	}
+	pinned := ir.Services[0].Placement
+	if pinned == "" {
+		t.Fatal("expected a storage pin for the stateful stack")
+	}
+	other := "node-a"
+	if pinned == "node-a" {
+		other = "node-b"
+	}
+
+	f := &failoverFixture{
+		ctx:    ctx,
+		st:     st,
+		dep:    &recordingDeployer{},
+		pinned: pinned,
+		other:  other,
+	}
+	f.rec = &Reconciler{
+		Store:         st,
+		Docker:        &fakeNodesDocker{nodes: []runtime.Node{{Hostname: other, Status: "ready", Availability: "active"}}},
+		DeployService: &stacks.Service{Store: st, Deployer: f.dep, MkdirAll: func(string, os.FileMode) error { return nil }, Pins: res},
+		Services:      &fakeServices{},
+		Log:           zerolog.Nop(),
+		FailoverMove: func(_ context.Context, stackName, targetNode string) error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.moves = append(f.moves, stackName+">"+targetNode)
+			return nil
+		},
+	}
+	return f
+}
+
+// moveCalls returns a snapshot of the FailoverMove calls seen so far.
+func (f *failoverFixture) moveCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.moves...)
+}
+
+// captureTelemetry installs a recording sink for the duration of the test and
+// returns an accessor for the samples seen so far.
+func captureTelemetry(t *testing.T) func() []telemetry.Sample {
+	t.Helper()
+	var mu sync.Mutex
+	var samples []telemetry.Sample
+	restore := telemetry.SetSink(func(s telemetry.Sample) {
+		labels := make(map[string]string, len(s.Labels))
+		for k, v := range s.Labels {
+			labels[k] = v
+		}
+		mu.Lock()
+		samples = append(samples, telemetry.Sample{Name: s.Name, Value: s.Value, Labels: labels})
+		mu.Unlock()
+	})
+	t.Cleanup(restore)
+	return func() []telemetry.Sample {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]telemetry.Sample(nil), samples...)
+	}
+}
+
+// TestRunOnce_StorageFailoverDisabledSkipsMove covers the v0.2.159 gate in
+// its OFF state (storage_failover unset or explicitly false): a stateful
+// stack whose storage node is down must NOT be moved — FailoverMove never
+// runs and no marker is written — yet its sync stays paused (the drift pass
+// skips it while the stateless stack keeps syncing) and
+// pmcluster.storage.failover.disabled is emitted for alerting.
+func TestRunOnce_StorageFailoverDisabledSkipsMove(t *testing.T) {
+	cases := []struct {
+		name    string
+		setting string // "" = leave the setting unset
+	}{
+		{"setting unset", ""},
+		{"setting false", "false"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newFailoverFixture(t)
+			if tc.setting != "" {
+				if err := f.st.SetSetting(ctx, cluster.SettingStorageFailover(), tc.setting); err != nil {
+					t.Fatalf("SetSetting storage_failover: %v", err)
+				}
+			}
+			samples := captureTelemetry(t)
+
+			if err := f.rec.RunOnce(ctx); err != nil {
+				t.Fatalf("RunOnce: %v", err)
+			}
+
+			if got := f.moveCalls(); len(got) != 0 {
+				t.Fatalf("failover moves = %v, want none while storage_failover is disabled", got)
+			}
+			// The stateful stack is still paused: only the stateless one syncs.
+			if f.dep.calls != 1 {
+				t.Errorf("deployer calls = %d, want 1 (stateless only — stateful must stay paused)", f.dep.calls)
+			}
+			if _, err := f.st.GetStackFailover(ctx, "demo"); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("GetStackFailover = %v, want ErrNotFound (no move → no marker)", err)
+			}
+
+			var disabled, failovers int
+			for _, s := range samples() {
+				switch s.Name {
+				case telemetry.MetricStorageFailoverDisabled:
+					disabled++
+					if s.Labels["stack"] != "demo" || s.Labels["node"] != f.pinned {
+						t.Errorf("disabled labels = %v, want stack=demo node=%s", s.Labels, f.pinned)
+					}
+					if s.Value != 1 {
+						t.Errorf("disabled value = %d, want 1", s.Value)
+					}
+				case telemetry.MetricStorageFailover:
+					failovers++
+					t.Errorf("MetricStorageFailover emitted while disabled: %+v", s)
+				}
+			}
+			if disabled != 1 {
+				t.Errorf("MetricStorageFailoverDisabled samples = %d, want 1", disabled)
+			}
+			if failovers != 0 {
+				t.Errorf("MetricStorageFailover samples = %d, want 0", failovers)
+			}
+		})
+	}
+}
+
+// TestRunOnce_StorageFailoverEnabledMovesToHealthyAlternate covers the gate
+// in its ON state (storage_failover=true): the paused stack IS moved to the
+// healthy alternate storage node, and the pass leaves behind the
+// unacknowledged failover marker plus the failover counter operators alert
+// on. A second pass stays inside the per-stack cooldown.
+func TestRunOnce_StorageFailoverEnabledMovesToHealthyAlternate(t *testing.T) {
+	ctx := context.Background()
+	f := newFailoverFixture(t)
+	if err := f.st.SetSetting(ctx, cluster.SettingStorageFailover(), "true"); err != nil {
+		t.Fatalf("SetSetting storage_failover: %v", err)
+	}
+	samples := captureTelemetry(t)
+
+	if err := f.rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	want := "demo>" + f.other
+	if got := f.moveCalls(); len(got) != 1 || got[0] != want {
+		t.Fatalf("failover moves = %v, want exactly [%s]", got, want)
+	}
+
+	// The move runs detached; the goroutine records the metric and then the
+	// unacknowledged marker. Poll for the marker.
+	var fo *store.StackFailover
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var err error
+		if fo, err = f.st.GetStackFailover(ctx, "demo"); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if fo == nil {
+		t.Fatal("failover marker was not recorded after the move")
+	}
+	if fo.StackName != "demo" || fo.FromNode != f.pinned || fo.ToNode != f.other || fo.Acked {
+		t.Errorf("marker = %+v, want demo %s→%s unacknowledged", fo, f.pinned, f.other)
+	}
+	if fo.At == 0 {
+		t.Error("marker At must carry the failover timestamp")
+	}
+
+	// The failover counter was emitted (before the marker write, same
+	// goroutine) and the disabled counter never was.
+	var failovers, disabled int
+	for _, s := range samples() {
+		switch s.Name {
+		case telemetry.MetricStorageFailover:
+			failovers++
+			for k, want := range map[string]string{
+				"stack":     "demo",
+				"from_node": f.pinned,
+				"to_node":   f.other,
+			} {
+				if s.Labels[k] != want {
+					t.Errorf("failover label %s = %q, want %q", k, s.Labels[k], want)
+				}
+			}
+		case telemetry.MetricStorageFailoverDisabled:
+			disabled++
+			t.Errorf("MetricStorageFailoverDisabled emitted although the gate is on: %+v", s)
+		}
+	}
+	if failovers != 1 {
+		t.Errorf("MetricStorageFailover samples = %d, want 1", failovers)
+	}
+	if disabled != 0 {
+		t.Errorf("MetricStorageFailoverDisabled samples = %d, want 0", disabled)
+	}
+
+	// Cooldown: a second pass must not re-trigger the move.
+	if err := f.rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce (cooldown): %v", err)
+	}
+	if got := f.moveCalls(); len(got) != 1 {
+		t.Errorf("failover moves after cooldown pass = %v, want still 1", got)
 	}
 }

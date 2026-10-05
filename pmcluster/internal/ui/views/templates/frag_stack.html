@@ -72,6 +72,30 @@
 <div class="msg ok">{{TF .MsgKey .MsgArg0 .MsgArg1 .MsgArg2}}</div>
 {{end}}
 
+{{if and .Detail .Detail.Stack.Failover}}{{if not .Detail.Stack.Failover.Acked}}
+<div class="banner warn">
+  <div class="b-body">
+    <div class="b-title">{{icon "alert"}}<span>{{T "stack.failover_title"}}</span></div>
+    <p>{{TF "stack.failover_body" .Detail.Stack.Failover.FromNode .Detail.Stack.Failover.ToNode}}</p>
+  </div>
+  <div class="b-actions">
+    <form hx-post="/web/stacks/{{.Detail.Stack.Name}}/move" hx-target="#view" hx-swap="innerHTML"
+          hx-confirm="{{T "stack.move_confirm"}}">
+      <input type="hidden" name="target" value="{{.Detail.Stack.Failover.FromNode}}">
+      <button type="submit" class="btn btn-sm" hx-disabled-elt="this">
+        {{icon "move"}}<span>{{TF "stack.failover_move_back" .Detail.Stack.Failover.FromNode}}</span>
+      </button>
+    </form>
+    <form hx-post="/web/stacks/{{.Detail.Stack.Name}}/ack" hx-target="#view" hx-swap="innerHTML"
+          hx-confirm="{{T "stack.failover_ack_confirm"}}">
+      <button type="submit" class="btn btn-ghost btn-sm" hx-disabled-elt="this">
+        {{icon "check"}}<span>{{T "stack.failover_ack"}}</span>
+      </button>
+    </form>
+  </div>
+</div>
+{{end}}{{end}}
+
 {{if and .Detail .Badge}}
 <div class="card">
   <div class="card-inner">

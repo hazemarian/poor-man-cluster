@@ -65,6 +65,14 @@ func BadgeMount(r chi.Router, st *store.Store) {
 // loop writes. No live Docker queries. Unknown when no snapshot exists yet.
 func stackBadge(ctx context.Context, st *store.Store, stack string) (label, status string) {
 	label = stack
+	// An unacknowledged failover dominates the badge: the stack was moved to
+	// another node after a storage-node failure and may have lost data written
+	// since the last backup. It reads "failover" (amber) until an operator
+	// acknowledges it or moves the stack back — the GitHub-shared signal that
+	// a human needs to look.
+	if fo, err := st.GetStackFailover(ctx, stack); err == nil && !fo.Acked {
+		return label, "failover"
+	}
 	snap, err := st.GetStackStatus(ctx, stack)
 	if err != nil {
 		return label, "unknown"
@@ -118,6 +126,7 @@ func writeBadge(w http.ResponseWriter, label, status string) {
 	color := map[string]string{
 		"healthy":     "#44d47b",
 		"in progress": "#ffb454",
+		"failover":    "#e38b00",
 		"degraded":    "#ff5c5c",
 		"error":       "#c62828",
 		"unknown":     "#7d899a",
@@ -183,6 +192,7 @@ func writeMultiBadge(w http.ResponseWriter, segs []badgeSegment) {
 		c, ok := map[string]string{
 			"healthy":     "#44d47b",
 			"in progress": "#ffb454",
+			"failover":    "#e38b00",
 			"degraded":    "#ff5c5c",
 			"error":       "#c62828",
 			"unknown":     "#7d899a",

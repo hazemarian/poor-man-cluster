@@ -227,6 +227,11 @@ func (c *Client) MoveStack(ctx context.Context, name, target string) error {
 	return c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(name)+"/move", body, nil)
 }
 
+// AckStackFailover acknowledges an open storage-failover marker for a stack.
+func (c *Client) AckStackFailover(ctx context.Context, name string) error {
+	return c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(name)+"/ack", nil, nil)
+}
+
 // ListBackups returns the most recent backups across stacks.
 func (c *Client) ListBackups(ctx context.Context, limit int) ([]Backup, error) {
 	var body struct {

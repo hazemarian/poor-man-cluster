@@ -154,3 +154,7 @@ func (a *Deploy) Move(ctx context.Context, stackName, targetNode string) error {
 	return a.c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(stackName)+"/move",
 		map[string]any{"target": targetNode}, nil)
 }
+
+func (a *Deploy) Ack(ctx context.Context, stackName string) error {
+	return a.c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(stackName)+"/ack", nil, nil)
+}

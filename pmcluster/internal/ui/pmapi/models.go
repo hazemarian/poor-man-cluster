@@ -48,15 +48,27 @@ type StackError struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
+// StackFailover is an open storage-failover marker on a stack: it was moved
+// from FromNode to ToNode after a storage-node failure and stays unacknowledged
+// until an operator acknowledges it or moves the stack back.
+type StackFailover struct {
+	StackName string `json:"StackName"`
+	FromNode  string `json:"FromNode"`
+	ToNode    string `json:"ToNode"`
+	At        int64  `json:"At"`
+	Acked     bool   `json:"Acked"`
+}
+
 // Stack is one row of GET /api/stacks.
 type Stack struct {
-	Name            string       `json:"name"`
-	CurrentRevision int64        `json:"current_revision"`
-	RepoURL         string       `json:"repo_url"`
-	SourceFile      string       `json:"source_file"`
-	LastError       []StackError `json:"last_error"`
-	CreatedAt       int64        `json:"created_at"`
-	UpdatedAt       int64        `json:"updated_at"`
+	Name            string         `json:"name"`
+	CurrentRevision int64          `json:"current_revision"`
+	RepoURL         string         `json:"repo_url"`
+	SourceFile      string         `json:"source_file"`
+	LastError       []StackError   `json:"last_error"`
+	Failover        *StackFailover `json:"failover"`
+	CreatedAt       int64          `json:"created_at"`
+	UpdatedAt       int64          `json:"updated_at"`
 }
 
 // RevisionMeta is a lightweight revision entry (no YAML bodies).

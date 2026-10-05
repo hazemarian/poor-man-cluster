@@ -41,6 +41,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 )
 
 // reconcileTracer is lazily created like the deploy/rollback tracers in
@@ -221,6 +222,7 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 	}
 	log.Debug().Int("stacks", len(stacks)).Msg("reconcile — app-stack drift pass: re-translating latest manifests")
 	health := r.nodeHealth(ctx, log)
+	r.recordStorageNodeHealth(ctx, health)
 	for _, st := range stacks {
 		if paused, node := r.storagePaused(ctx, st.Name, health); paused {
 			log.Warn().Str("stack", st.Name).Str("node", node).Msg("reconcile — storage node down; pausing app sync (clears when the node returns or the stack is moved)")
@@ -299,6 +301,12 @@ func (r *Reconciler) tryStorageFailover(ctx context.Context, stackName, downNode
 	if r.Store == nil {
 		return
 	}
+	if !cluster.LoadStorageFailover(ctx, r.Store) {
+		telemetry.RecordStorageFailoverDisabled(ctx, stackName, downNode)
+		log.Warn().Str("stack", stackName).Str("node", downNode).
+			Msg("reconcile — storage node down but automatic failover is disabled (set storage_failover=true to move stacks automatically)")
+		return
+	}
 	raw := r.Store.GetSettingDefault(ctx, cluster.SettingStorageNodes(), "")
 	candidates := stacks.ParseStorageNodes(raw)
 	var target string
@@ -342,7 +350,29 @@ func (r *Reconciler) tryStorageFailover(ctx context.Context, stackName, downNode
 			return
 		}
 		r.Log.Info().Str("stack", stackName).Str("to", target).Msg("reconcile — storage failover move completed")
+		telemetry.RecordStorageFailover(mvCtx, stackName, downNode, target)
+		if err := r.Store.SetStackFailover(mvCtx, store.StackFailover{
+			StackName: stackName, FromNode: downNode, ToNode: target, At: time.Now().Unix(),
+		}); err != nil {
+			r.Log.Warn().Err(err).Str("stack", stackName).Msg("reconcile — record storage failover marker")
+		}
 	}()
+}
+
+// recordStorageNodeHealth emits the pmcluster.storage.node.down gauge for every
+// configured storage node (1 = down, 0 = healthy) so operators can alert on it
+// from OpenObserve. No-op when the storage list or health map is unavailable.
+func (r *Reconciler) recordStorageNodeHealth(ctx context.Context, health map[string]bool) {
+	if r.Store == nil || len(health) == 0 {
+		return
+	}
+	for _, n := range stacks.ParseStorageNodes(r.Store.GetSettingDefault(ctx, cluster.SettingStorageNodes(), "")) {
+		down := 0
+		if !health[n] {
+			down = 1
+		}
+		telemetry.RecordStorageNodeDown(ctx, n, down)
+	}
 }
 
 // snapshotHealth writes a stack_status row per store stack, with per-service

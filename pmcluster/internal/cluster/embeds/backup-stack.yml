@@ -23,7 +23,7 @@ services:
 [[ end ]]
     restart: on-failure
     env:
-      BACKUP_CRON_EXPRESSION: "0 3 * * *"
+      BACKUP_CRON_EXPRESSION: "[[ if .BackupCron ]][[.BackupCron]][[ else ]]0 * * * *[[ end ]]"
       BACKUP_FILENAME: "backup-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz"
       BACKUP_PRUNING_PREFIX: "backup-"
       BACKUP_RETENTION_DAYS: "[[ if .BackupRetentionDays ]][[.BackupRetentionDays]][[ else ]]15[[ end ]]"

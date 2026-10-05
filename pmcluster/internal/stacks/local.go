@@ -20,6 +20,9 @@ func (l Local) Get(ctx context.Context, name string) (*Stack, error) {
 		return nil, err
 	}
 	s := stackFromRow(row)
+	if fo, ferr := l.Store.GetStackFailover(ctx, name); ferr == nil {
+		s.Failover = fo
+	}
 	return &s, nil
 }
 

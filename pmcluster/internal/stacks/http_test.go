@@ -355,6 +355,81 @@ func TestSyncStackHandler_NoOp(t *testing.T) {
 	}
 }
 
+// TestAckStackHandler covers POST /stacks/{name}/ack: acknowledging an open
+// storage-failover marker returns 200 + acknowledged:true (and flips the
+// marker the read side exposes), while a stack with no open marker answers
+// 404 — there is nothing to acknowledge.
+func TestAckStackHandler(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+
+	if err := st.RecordDeploy(ctx, &store.StackRevision{
+		StackName:    "demo",
+		Revision:     1000,
+		SourceYAML:   "app: demo",
+		RenderedYAML: "services: {}",
+	}, ""); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+	if err := st.SetStackFailover(ctx, store.StackFailover{
+		StackName: "demo", FromNode: "node-a", ToNode: "node-b", At: 1700000001,
+	}); err != nil {
+		t.Fatalf("SetStackFailover: %v", err)
+	}
+
+	svc := &Service{Store: st, Deployer: &stubDeployer{}}
+	h := &HTTP{Deploy: svc, Read: Local{Store: st}}
+	r := chi.NewRouter()
+	h.Mount(r)
+
+	// The read side carries the open marker while it is unacknowledged.
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/stacks/demo", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /stacks/demo = %d; body: %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"Acked":false`) || !strings.Contains(body, "node-a") {
+		t.Errorf("GET /stacks/demo must expose the open failover marker, body: %s", body)
+	}
+
+	// Ack → 200, acknowledged:true, marker flipped.
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/stacks/demo/ack", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /stacks/demo/ack = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"acknowledged":true`) || !strings.Contains(body, `"demo"`) {
+		t.Errorf("ack body = %s, want stack demo acknowledged", body)
+	}
+	fo, err := st.GetStackFailover(ctx, "demo")
+	if err != nil {
+		t.Fatalf("GetStackFailover after ack: %v", err)
+	}
+	if !fo.Acked {
+		t.Error("marker not acknowledged after POST /stacks/demo/ack")
+	}
+
+	// No marker anywhere → 404 (nothing to acknowledge).
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/stacks/ghost/ack", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("POST /stacks/ghost/ack = %d, want 404; body: %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "no open failover marker") {
+		t.Errorf("404 body = %s, want the no-open-marker message", body)
+	}
+
+	// Marker cleared (moved back) → the same 404 on a retry.
+	if err := st.ClearStackFailover(ctx, "demo"); err != nil {
+		t.Fatalf("ClearStackFailover: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/stacks/demo/ack", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("POST /stacks/demo/ack after clear = %d, want 404; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestDeployConflictRejectedAtAPI verifies the app-name duplication guard
 // surfaces through the HTTP surface: a second deploy from a different repo
 // yields 400 with the conflict message, and nothing is deployed or recorded.

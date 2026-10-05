@@ -95,6 +95,21 @@ Must run on a swarm manager with docker.sock + the pmcluster data dir.`,
 	RunE: runStackMove,
 }
 
+var stackAckCmd = &cobra.Command{
+	Use:   "ack <stack-name>",
+	Short: "Acknowledge a storage failover (mark the stack healthy on its new node)",
+	Long: `Clears the open storage-failover marker for a stack after a storage-node
+failure moved it to another node. Acknowledging records that the operator has
+seen the possible data loss and considers the stack healthy on its current
+node, so the failover badge and console banner clear.
+
+To move the stack back to its repaired original node instead, run
+` + "`pmcluster stack move <stack-name> --to <original-node>`" + ` (a successful
+move clears the marker too).`,
+	Args: cobra.ExactArgs(1),
+	RunE: runStackAck,
+}
+
 var rollbackCmd = &cobra.Command{
 	Use:   "rollback <stack-name> <revision>",
 	Short: "Re-apply a stored revision as a new revision",
@@ -109,7 +124,7 @@ func init() {
 	deployCmd.Flags().String("file", "", "manifest path inside the source repo (provenance, e.g. deploy/test-lms.yaml)")
 	deployCmd.Flags().String("version", "", "override the manifest's version (image tag)")
 
-	stackCmd.AddCommand(stackListCmd, stackShowCmd, stackBadgeCmd, stackMoveCmd)
+	stackCmd.AddCommand(stackListCmd, stackShowCmd, stackBadgeCmd, stackMoveCmd, stackAckCmd)
 	stackBadgeCmd.Flags().Bool("services", false, "print the combined badge: stack main health + one segment per service")
 	stackMoveCmd.Flags().String("to", "", "target node hostname to move the stack's storage to")
 	_ = stackMoveCmd.MarkFlagRequired("to")
@@ -259,6 +274,15 @@ func runStackShow(cmd *cobra.Command, args []string) error {
 		lastBackup = "(none recorded)"
 	}
 	fmt.Fprintf(out, "Last backup:      %s\n", lastBackup)
+	if s.Failover != nil {
+		state := "acknowledged"
+		if !s.Failover.Acked {
+			state = "OPEN — possible data loss; repair and move back, or run `pmcluster stack ack`"
+		}
+		fmt.Fprintf(out, "Failover:         %s → %s at %s (%s)\n",
+			s.Failover.FromNode, s.Failover.ToNode,
+			time.Unix(s.Failover.At, 0).Format(time.RFC3339), state)
+	}
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "Recent revisions (%d):\n", len(revs))
 
@@ -386,5 +410,22 @@ func runStackMove(cmd *cobra.Command, args []string) error {
 		"\n✅ Moved %s storage to %s (pinned via %s — reconcile will not move it back)\n",
 		args[0], to, stacks.StackPinKey(args[0]),
 	)
+	return nil
+}
+
+func runStackAck(cmd *cobra.Command, args []string) error {
+	defer initCLITelemetry()()
+
+	svc, closeFn, err := backendDeploy(cmd)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	if err := svc.Ack(cmd.Context(), args[0]); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(),
+		"\n✅ Acknowledged the failover for %s — it is now considered healthy on its current node.\n", args[0])
 	return nil
 }

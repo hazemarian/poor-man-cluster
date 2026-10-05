@@ -81,6 +81,7 @@ func init() {
 	setupCmd.Flags().String("backup-s3-access-key", "", "offsite S3 access key (default: $PMCLUSTER_BACKUP_S3_ACCESS_KEY)")
 	setupCmd.Flags().String("backup-s3-secret-key", "", "offsite S3 secret key (default: $PMCLUSTER_BACKUP_S3_SECRET_KEY)")
 	setupCmd.Flags().String("backup-s3-region", "", "offsite S3 region (default auto for R2)")
+	setupCmd.Flags().Bool("storage-failover", true, "enable automatic storage failover (moves stateful stacks off a failed storage node); requires offsite S3 backups")
 	setupCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
 
 	setupCmd.Flags().String("swarm-advertise-addr", "", "advertise address passed to `docker swarm init` on a first node (default: auto-detected node IP)")
@@ -119,6 +120,10 @@ type setupAnswers struct {
 	BackupS3AccessKey      string
 	BackupS3SecretKey      string
 	BackupS3Region         string
+	// StorageFailover enables automatic failover: when a storage node fails,
+	// the control loop moves stateful stacks to a healthy storage node and
+	// restores the latest offsite backup. Requires S3 offsite backups.
+	StorageFailover bool
 
 	// NodeHostname is the name this node joins the Swarm under. It is applied
 	// with hostnamectl before the cluster comes up so the Swarm records the
@@ -226,6 +231,11 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 			a.BackupS3SecretKey = ask(r, out, "S3 secret key", st.GetSettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""))
 			a.BackupS3Region = ask(r, out, "S3 region", st.GetSettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"))
 		}
+		// Automatic storage failover needs offsite backups: when a storage node
+		// dies, the only recoverable copy is in S3, so prompt only when S3 is set.
+		if a.BackupS3Endpoint != "" && a.BackupS3Bucket != "" {
+			a.StorageFailover = askYesNo(r, out, "Enable automatic storage failover? (moves a stack off a failed storage node, restoring the latest offsite backup)", true)
+		}
 		defHost, _ := os.Hostname()
 		a.NodeHostname = ask(r, out, "Hostname for this node (pins use placement: <hostname>)", defHost)
 		if !swarmActive(ctx) {
@@ -262,6 +272,10 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.BackupS3AccessKey, _ = cmd.Flags().GetString("backup-s3-access-key")
 		a.BackupS3SecretKey, _ = cmd.Flags().GetString("backup-s3-secret-key")
 		a.BackupS3Region, _ = cmd.Flags().GetString("backup-s3-region")
+		// Automatic storage failover recovers from offsite backups, so it stays
+		// off unless S3 is configured (even if --storage-failover was passed).
+		a.StorageFailover, _ = cmd.Flags().GetBool("storage-failover")
+		a.StorageFailover = a.StorageFailover && a.BackupS3Endpoint != "" && a.BackupS3Bucket != ""
 		if !cmd.Flags().Changed("backup-s3-access-key") {
 			if v := os.Getenv("PMCLUSTER_BACKUP_S3_ACCESS_KEY"); v != "" {
 				a.BackupS3AccessKey = v
@@ -450,6 +464,7 @@ func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswer
 		cluster.SettingBackupS3AccessKey():      a.BackupS3AccessKey,
 		cluster.SettingBackupS3SecretKey():      a.BackupS3SecretKey,
 		cluster.SettingBackupS3Region():         a.BackupS3Region,
+		cluster.SettingStorageFailover():        boolSetting(a.StorageFailover),
 	}
 	for k, v := range setting {
 		if err := st.SetSetting(ctx, k, v); err != nil {
@@ -484,6 +499,7 @@ func persistSetup(ctx context.Context, st *store.Store, a setupAnswers) error {
 		cluster.SettingBackupS3AccessKey():      a.BackupS3AccessKey,
 		cluster.SettingBackupS3SecretKey():      a.BackupS3SecretKey,
 		cluster.SettingBackupS3Region():         a.BackupS3Region,
+		cluster.SettingStorageFailover():        boolSetting(a.StorageFailover),
 	}
 	for k, v := range setting {
 		if err := st.SetSetting(ctx, k, v); err != nil {

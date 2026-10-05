@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,11 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views"
 )
+
+// ackDaemonCalls counts POSTs the fake daemon received on
+// /api/stacks/demo/ack, so the AckFailover controller test can prove the
+// handler reaches the API even if (hypothetically) rendering fails.
+var ackDaemonCalls atomic.Int32
 
 // ctrlFakeDaemon serves canned /api responses for the controllers under test.
 // Every endpoint requires the Bearer token, mirroring the daemon.
@@ -81,6 +87,14 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/api/stacks/demo/move", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"stack":"demo","moved_to":"node-02"}`)
+	})
+	mux.HandleFunc("/api/stacks/demo/ack", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		ackDaemonCalls.Add(1)
+		write(w, `{"stack":"demo","acknowledged":true}`)
 	})
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","update_state":"completed"}]}`)
@@ -220,6 +234,7 @@ func (h *ctrlHarness) mountStacks() {
 	h.engine.GET("/web/stacks/:name/revisions/:rev", (Stacks{Controller: h.ctrl}).ShowRevision)
 	h.engine.GET("/web/stacks/:name/backups", (Stacks{Controller: h.ctrl}).ShowBackups)
 	h.engine.POST("/web/stacks/:name/move", (Stacks{Controller: h.ctrl}).Move)
+	h.engine.POST("/web/stacks/:name/ack", (Stacks{Controller: h.ctrl}).AckFailover)
 }
 func (h *ctrlHarness) mountServices() {
 	h.engine.GET("/web/services", (Services{Controller: h.ctrl}).List)
@@ -306,6 +321,27 @@ func TestControllers_StackMove(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "Choose a destination node") {
 		t.Errorf("POST move (empty target) body missing err_move_target, got: %s", rr.Body.String())
+	}
+}
+
+// TestControllers_StackAckFailover drives the console's acknowledge action:
+// POST /web/stacks/{name}/ack must forward to the daemon's
+// POST /api/stacks/{name}/ack and re-render the stack fragment with the
+// "Acknowledged the failover for <stack>" confirmation.
+func TestControllers_StackAckFailover(t *testing.T) {
+	h := newCtrlHarness(t)
+	h.mountStacks()
+	ackDaemonCalls.Store(0)
+
+	rr := h.post(t, "/web/stacks/demo/ack", "")
+	if ackDaemonCalls.Load() != 1 {
+		t.Errorf("daemon ack calls = %d, want 1 (POST /api/stacks/demo/ack)", ackDaemonCalls.Load())
+	}
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /web/stacks/demo/ack = %d, want 200; body: %s", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "Acknowledged the failover for demo") {
+		t.Errorf("ack fragment missing confirmation, got: %s", body)
 	}
 }
 

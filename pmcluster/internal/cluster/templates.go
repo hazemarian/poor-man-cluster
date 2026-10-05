@@ -237,6 +237,10 @@ type RenderInput struct {
 	// pmcluster prunes its own audit rows on the same window).
 	BackupRetentionDays int
 
+	// BackupCron is the offen agent's schedule (BACKUP_CRON_EXPRESSION),
+	// mirrors the backup_cron setting. Empty renders the hourly default.
+	BackupCron string
+
 	// StorageNodeConstraint makes the volume-backup agent run as a global
 	// service constrained to nodes carrying the StorageNodeLabel (i.e. the
 	// storage_nodes setting is non-empty). Backups only run where app data

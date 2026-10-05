@@ -142,6 +142,26 @@ func TestLoadComposeFile_BackupStorageNodeConstraint(t *testing.T) {
 	}
 }
 
+// TestLoadComposeFile_BackupCronRendering verifies the offen backup schedule:
+// the default (empty BackupCron) is hourly, and a custom value is rendered
+// verbatim into BACKUP_CRON_EXPRESSION.
+func TestLoadComposeFile_BackupCronRendering(t *testing.T) {
+	// Default: empty BackupCron → hourly.
+	body := string(mustLoadBackup(t, RenderInput{Domain: "example.com"}))
+	if !strings.Contains(body, "BACKUP_CRON_EXPRESSION") || !strings.Contains(body, "0 * * * *") {
+		t.Errorf("default backup render should be hourly (0 * * * *):\n%s", body)
+	}
+
+	// Custom value rendered verbatim.
+	body2 := string(mustLoadBackup(t, RenderInput{Domain: "example.com", BackupCron: "0 3 * * *"}))
+	if !strings.Contains(body2, "0 3 * * *") {
+		t.Errorf("custom BackupCron should render verbatim:\n%s", body2)
+	}
+	if strings.Contains(body2, `"0 * * * *"`) {
+		t.Errorf("custom BackupCron should not fall back to hourly:\n%s", body2)
+	}
+}
+
 func mustLoadBackup(t *testing.T, in RenderInput) []byte {
 	t.Helper()
 	data, err := LoadComposeFile(StackBackup, in)

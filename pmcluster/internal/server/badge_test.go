@@ -161,6 +161,114 @@ func TestBadgeHTTP_ReturnsSVG(t *testing.T) {
 	}
 }
 
+// TestStackBadge_FailoverDominates pins the derivation: an UNACKNOWLEDGED
+// failover marker wins over the health snapshot ("failover"), an
+// acknowledged marker falls through to the snapshot status, and a cleared
+// (moved-back) marker does the same.
+func TestStackBadge_FailoverDominates(t *testing.T) {
+	ctx := context.Background()
+	st := badgeStore(t, "healthy", map[string]string{"web": "healthy"})
+
+	// Unacked marker dominates the healthy snapshot.
+	if err := st.SetStackFailover(ctx, store.StackFailover{
+		StackName: "demo", FromNode: "node-a", ToNode: "node-b", At: 1700000001,
+	}); err != nil {
+		t.Fatalf("SetStackFailover: %v", err)
+	}
+	if _, status := stackBadge(ctx, st, "demo"); status != "failover" {
+		t.Errorf("unacked marker status = %q, want failover", status)
+	}
+
+	// Acknowledged → back to the snapshot's health.
+	if err := st.AckStackFailover(ctx, "demo"); err != nil {
+		t.Fatalf("AckStackFailover: %v", err)
+	}
+	if _, status := stackBadge(ctx, st, "demo"); status != "healthy" {
+		t.Errorf("acked marker status = %q, want healthy", status)
+	}
+
+	// Cleared (moved back) → same: snapshot health only.
+	if err := st.SetStackFailover(ctx, store.StackFailover{
+		StackName: "demo", FromNode: "node-a", ToNode: "node-b", At: 1700000002,
+	}); err != nil {
+		t.Fatalf("SetStackFailover (reopen): %v", err)
+	}
+	if err := st.ClearStackFailover(ctx, "demo"); err != nil {
+		t.Fatalf("ClearStackFailover: %v", err)
+	}
+	if _, status := stackBadge(ctx, st, "demo"); status != "healthy" {
+		t.Errorf("cleared marker status = %q, want healthy", status)
+	}
+
+	// A stack with a marker but no snapshot still reads failover (the
+	// marker is the stronger signal).
+	if err := st.SetStackFailover(ctx, store.StackFailover{
+		StackName: "ghost", FromNode: "node-a", ToNode: "node-b", At: 3,
+	}); err != nil {
+		t.Fatalf("SetStackFailover (ghost): %v", err)
+	}
+	if _, status := stackBadge(ctx, st, "ghost"); status != "failover" {
+		t.Errorf("marker without snapshot status = %q, want failover", status)
+	}
+}
+
+// TestBadgeHTTP_FailoverStatus drives the public badge endpoint through the
+// whole failover lifecycle: unacked marker → amber "failover" SVG (both the
+// single and the combined multi-segment badge), after ACK → the normal
+// healthy green badge again.
+func TestBadgeHTTP_FailoverStatus(t *testing.T) {
+	ctx := context.Background()
+	st := badgeStore(t, "healthy", map[string]string{"web": "healthy"})
+	r := chi.NewRouter()
+	BadgeMount(r, st)
+
+	get := func(path string) string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200; body: %s", path, rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+
+	// Seed an open (unacknowledged) failover marker.
+	if err := st.SetStackFailover(ctx, store.StackFailover{
+		StackName: "demo", FromNode: "node-a", ToNode: "node-b", At: 1700000001,
+	}); err != nil {
+		t.Fatalf("SetStackFailover: %v", err)
+	}
+
+	body := get("/api/public/badge/demo")
+	if !strings.Contains(body, "failover") {
+		t.Errorf("unacked badge missing failover status:\n%s", body)
+	}
+	if !strings.Contains(body, "#e38b00") {
+		t.Errorf("unacked badge missing amber failover color:\n%s", body)
+	}
+	if strings.Contains(body, "#44d47b") {
+		t.Errorf("unacked badge must not read healthy/green:\n%s", body)
+	}
+
+	// The combined badge carries the same amber signal on its main segment.
+	multi := get("/api/public/badge/demo/services")
+	if !strings.Contains(multi, "failover") || !strings.Contains(multi, "#e38b00") {
+		t.Errorf("combined badge missing failover segment/color:\n%s", multi)
+	}
+
+	// Acknowledge → the badge returns to the stack's normal health.
+	if err := st.AckStackFailover(ctx, "demo"); err != nil {
+		t.Fatalf("AckStackFailover: %v", err)
+	}
+	body = get("/api/public/badge/demo")
+	if !strings.Contains(body, "healthy") || !strings.Contains(body, "#44d47b") {
+		t.Errorf("acked badge missing healthy status/color:\n%s", body)
+	}
+	if strings.Contains(body, "failover") || strings.Contains(body, "#e38b00") {
+		t.Errorf("acked badge still shows the failover signal:\n%s", body)
+	}
+}
+
 func TestEscapeXML(t *testing.T) {
 	in := `<demo & "quoted" 'single'>`
 	out := escapeXML(in)

@@ -42,6 +42,10 @@ type stackInfo struct {
 	// LastError is the newest FAILED outcome's message ("" when the latest
 	// apply succeeded) — what the banner and list pill display.
 	LastError string
+	// Failover is the open storage-failover marker (nil when the stack has not
+	// been failed over, or the marker was acknowledged/cleared). Drives the
+	// failover warning banner on the detail page.
+	Failover *pmapi.StackFailover
 }
 
 // stackRow is one line of the stacks table. The replica counts come from the
@@ -271,6 +275,25 @@ func (c Stacks) Move(g *gin.Context) {
 	c.Views.Fragment(g, "stack", d)
 }
 
+// AckFailover acknowledges an open storage-failover marker: the operator
+// accepts the stack now runs on the failover target and the banner/badge
+// return to normal health (no move-back).
+func (c Stacks) AckFailover(g *gin.Context) {
+	ctx := g.Request.Context()
+	name := g.Param("name")
+	d := c.loadStack(ctx, name)
+
+	if _, _, ok := c.loadParams(ctx); !ok {
+		d.ErrKey = "err.api_not_configured"
+	} else if err := c.API.AckStackFailover(ctx, name); err != nil {
+		d.ErrKey, d.ErrRaw = "err.stack_ack", err.Error()
+	} else {
+		d.MsgKey = "stack.msg_acknowledged"
+		d.MsgArg0 = name
+	}
+	c.Views.Fragment(g, "stack", d)
+}
+
 // Rollback redeploys a stack from an older revision's manifest. The API writes
 // the result as a new revision, so the message reports both numbers rather
 // than implying the old revision is live again.
@@ -484,6 +507,7 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 		SourceFile:      det.Stack.SourceFile,
 		LastErrors:      det.Stack.LastError,
 		LastError:       newestStackError(det.Stack.LastError, det.Stack.CurrentRevision),
+		Failover:        det.Stack.Failover,
 		CreatedAt:       det.Stack.CreatedAt,
 		UpdatedAt:       det.Stack.UpdatedAt,
 	}}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -53,6 +54,13 @@ const (
 	// offen agent's own BACKUP_RETENTION_DAYS is rendered from this same value.
 	settingBackupRetentionDays = "backup_retention_days"
 
+	// settingBackupCron is the cron expression the offen backup agent uses for
+	// its scheduled runs (rendered into BACKUP_CRON_EXPRESSION). Standard
+	// 5-field cron. Defaults to hourly ("0 * * * *") so an offsite archive is
+	// never more than an hour old — the storage-failover path restores the
+	// newest of these. Set e.g. "0 3 * * *" for the old daily 03:00 cadence.
+	settingBackupCron = "backup_cron"
+
 	// settingPlatformNode pins every platform service (traefik, openobserve,
 	// edge, backup, sso) to ONE specific node hostname. Empty keeps the role
 	// constraint node.role == manager. Set it to match the stateful-app
@@ -94,6 +102,15 @@ const (
 	// platform_node remains the single-node fallback when storage_nodes is
 	// unset.
 	settingStorageNodes = "storage_nodes"
+
+	// settingStorageFailover controls automatic storage failover. When "true"
+	// the control loop moves a stateful stack off a failed storage node onto a
+	// healthy storage node (restoring the latest offsite backup). When false
+	// (the default) it only alerts — the stack stays paused until an operator
+	// acts. Automatic failover requires offsite backups (backup_s3_*); without
+	// them it is refused. Enable via the setup prompt or
+	// `cluster settings set storage_failover=true`.
+	settingStorageFailover = "storage_failover"
 )
 
 // Setting* accessors expose the persisted settings keys for CLI surfaces
@@ -117,6 +134,7 @@ func SettingEdgeLoginDisabled() string      { return settingEdgeLoginDisabled }
 func SettingVolumeRoot() string             { return settingVolumeRoot }
 func SettingBackupAllNodes() string         { return settingBackupAllNodes }
 func SettingBackupRetentionDays() string    { return settingBackupRetentionDays }
+func SettingBackupCron() string             { return settingBackupCron }
 func SettingPlatformNode() string           { return settingPlatformNode }
 func SettingOOLogsRetentionDays() string    { return settingOOLogsRetentionDays }
 func SettingOOMetricsRetentionDays() string { return settingOOMetricsRetentionDays }
@@ -129,6 +147,7 @@ func SettingBackupS3Region() string         { return settingBackupS3Region }
 func SettingLogLevel() string               { return settingLogLevel }
 func SettingReconcileInterval() string      { return settingReconcileInterval }
 func SettingStorageNodes() string           { return settingStorageNodes }
+func SettingStorageFailover() string        { return settingStorageFailover }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {
@@ -299,6 +318,16 @@ func loadPlatformNode(ctx context.Context, st *store.Store) string {
 	return st.GetSettingDefault(ctx, settingPlatformNode, "")
 }
 
+// LoadStorageFailover reports whether automatic storage failover is enabled
+// (storage_failover=true). Exported so the reconcile loop can gate its
+// automatic move on the same setting the setup wizard writes.
+func LoadStorageFailover(ctx context.Context, st *store.Store) bool {
+	if st == nil {
+		return false
+	}
+	return st.GetSettingDefault(ctx, settingStorageFailover, "") == "true"
+}
+
 // defaultOORetentionDays is the OpenObserve stream retention fallback when
 // the setting is unset. Kept short: metrics are the disk hog (a histogram
 // stream can grow into tens of GB in weeks) — unbounded retention is how the
@@ -379,8 +408,26 @@ func LoadBackupRetentionDays(ctx context.Context, st *store.Store) int {
 	return n
 }
 
+// defaultBackupCron is the backup agent's default schedule: hourly, on the
+// hour. Hourly keeps the offsite archive at most one hour stale, which is what
+// the storage-failover path restores.
+const defaultBackupCron = "0 * * * *"
+
+// LoadBackupCron returns the persisted backup cron expression, falling back to
+// defaultBackupCron (hourly) when unset or blank. The value is a standard
+// 5-field cron expression passed straight to the offen agent.
+func LoadBackupCron(ctx context.Context, st *store.Store) string {
+	if st == nil {
+		return defaultBackupCron
+	}
+	v := strings.TrimSpace(st.GetSettingDefault(ctx, settingBackupCron, ""))
+	if v == "" {
+		return defaultBackupCron
+	}
+	return v
+}
+
 // requestedTLSMode derives the TLS mode the operator asked for on this run,
-// or "" if no TLS flags were supplied (meaning "use the stored mode").
 func requestedTLSMode(in UpInput) string {
 	if in.ACMEEmail != "" {
 		return "acme"
