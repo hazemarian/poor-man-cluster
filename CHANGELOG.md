@@ -2,7 +2,37 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.160.1 (2026-10-05)
+
+In-cluster backup store moved from MinIO to SeaweedFS (supersedes v0.2.160).
+
+- **Why**: MinIO withdrew its public Docker Hub images (`minio/minio`,
+  `minio/mc` → "repository does not exist"; `quay.io/minio/minio` → 401), so the
+  v0.2.160 store could not pull and backups broke wherever it auto-enabled. Only
+  the TC7 test cluster had it; production was never on v0.2.160.
+- **Engine: SeaweedFS** (`chrislusf/seaweedfs:4.48`) — fully declarative, no
+  admin API and no bootstrap: `server -s3 -s3.port=8333` with the S3 identity
+  supplied via env (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`); buckets are
+  created on first upload. Headless; pinned to a NON-storage node via an explicit
+  placement (bypasses the volumed-service → storage-node auto-pin; first
+  non-storage worker, else first non-storage node, else platform/manager).
+- **Offsite replication**: an `rclone/rclone` sidecar `rclone sync` loop mirrors
+  the bucket to the `backup_s3_*` target (deletions propagate, so retention
+  pruning also cleans the offsite copy).
+- **offen uploads to SeaweedFS** (`AWS_ENDPOINT=http://backup_seaweedfs:8333`,
+  bucket `pmcluster-backups`); the `seaweedfs` service publishes 8333 on the
+  routing mesh so the leader daemon reads backups at `127.0.0.1:8333` during a
+  failover restore. Failover/restore code path unchanged (the store *is* the S3
+  endpoint).
+- **`seaweedfs_admin` managed credential** (access key `pmclusterbackup`, secret
+  `seaweedfs_credentials`); `cluster update` self-heals it on existing clusters.
+- Tests: `TestLoadComposeFile_BackupSeaweedFS` (image + command + plain volume +
+  explicit non-storage placement + storage-pin bypass + offen→store + rclone
+  mirror) and `TestLoadComposeFile_BackupSeaweedFSDisabled`.
+
 ## v0.2.160 (2026-10-05)
+
+**Superseded by v0.2.160.1** — MinIO images are no longer pullable; see above.
 
 In-cluster MinIO backup store (one combined backup stack).
 

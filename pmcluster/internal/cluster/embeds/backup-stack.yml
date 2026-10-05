@@ -1,19 +1,19 @@
-# backup-stack.yml — backup agents + the in-cluster MinIO backup store (DSL
+# backup-stack.yml — backup agents + the in-cluster SeaweedFS backup store (DSL
 # manifest, platform-managed). Rendered by LoadComposeFile through the same
 # manifest pipeline as customer app stacks.
 app: backup
 env: production
 domain: ${DOMAIN}
 platform: true
-[[ if .MinIO.Enabled ]]
+[[ if .Store.Enabled ]]
 volumes:
-  miniodata: ""
+  seaweeddata: ""
 [[ end ]]
 services:
   # The Backup Agent — one per node when backup_all_nodes is set; one per
   # STORAGE node (pmcluster.storage label) when the storage_nodes setting is
   # non-empty; otherwise a single replica pinned to the platform node / manager.
-  # Uploads to the in-cluster MinIO store when enabled, else straight to the
+  # Uploads to the in-cluster SeaweedFS store when enabled, else straight to the
   # offsite endpoint (legacy).
   volume-backup:
     image: offen/docker-volume-backup:v2
@@ -33,11 +33,11 @@ services:
       BACKUP_FILENAME: "backup-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz"
       BACKUP_PRUNING_PREFIX: "backup-"
       BACKUP_RETENTION_DAYS: "[[ if .BackupRetentionDays ]][[.BackupRetentionDays]][[ else ]]15[[ end ]]"
-      [[- if .MinIO.Enabled ]]
-      AWS_S3_BUCKET_NAME: "[[.MinIO.Bucket]]"
-      AWS_ACCESS_KEY_ID: "[[.MinIO.User]]"
-      AWS_SECRET_ACCESS_KEY: "[[.MinIO.Password]]"
-      AWS_ENDPOINT: "[[.MinIO.Endpoint]]"
+      [[- if .Store.Enabled ]]
+      AWS_S3_BUCKET_NAME: "[[.Store.Bucket]]"
+      AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
+      AWS_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
+      AWS_ENDPOINT: "[[.Store.Endpoint]]"
       AWS_REGION: "us-east-1"
       AWS_S3_FORCE_PATH_STYLE: "true"
       [[- else if .BackupS3.Configured ]]
@@ -52,45 +52,62 @@ services:
       - "[[.VolumeRoot]]:/backup/data:ro"
       - "[[.BackupDir]]:/archive"
       - "/etc/localtime:/etc/localtime:ro"
-[[ if .MinIO.Enabled ]]
+[[ if .Store.Enabled ]]
   # The in-cluster backup store. Runs on a NON-storage node via an explicit
   # placement (which bypasses the volumed-service→storage-node auto-pin), so
-  # the durable copy lives in a different failure domain than the data. Headless
-  # (no console). Port 9000 is published on the routing mesh so the leader
-  # daemon can read backups at 127.0.0.1:9000 during a failover restore.
-  minio:
-    image: minio/minio:latest
-    placement: "[[ if .MinIO.Node ]][[.MinIO.Node]][[ else if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
-    command: ["server", "/data"]
+  # the durable copy lives in a different failure domain than the data.
+  # SeaweedFS serves the S3 API on 8333; buckets auto-create on first upload
+  # (no admin API, no layout). Credentials come from the AWS_ACCESS_KEY_ID /
+  # AWS_SECRET_ACCESS_KEY env vars, which SeaweedFS auto-promotes to an admin
+  # identity (verified — no config file needed). Port 8333 is published on the
+  # routing mesh so the leader daemon can read backups at 127.0.0.1:8333 during
+  # a failover restore. Data lives in a plain named volume (a real disk, never
+  # tmpfs).
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48
+    placement: "[[ if .Store.Node ]][[.Store.Node]][[ else if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
+    command: ["server", "-s3", "-s3.port=8333", "-s3.port.iceberg=0", "-s3.port.lance=0"]
     restart: on-failure
     env:
-      MINIO_ROOT_USER: "[[.MinIO.User]]"
-      MINIO_ROOT_PASSWORD: "[[.MinIO.Password]]"
-      MINIO_BROWSER: "off"
+      AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
+      AWS_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
     volumes:
-      - miniodata:/data
+      - seaweeddata:/data
     ports:
-      - target: 9000
-        published: 9000
+      - target: 8333
+        published: 8333
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8333/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 [[ if .BackupS3.Configured ]]
-  # Offsite replicator — continuously mirrors the MinIO bucket to the offsite
-  # S3-compatible target. `mc mirror --remove` propagates deletions, so offen's
-  # retention pruning also cleans the offsite copy.
+  # Offsite replicator — continuously mirrors the SeaweedFS bucket to the
+  # offsite S3-compatible target. `rclone sync` propagates deletions, so
+  # offen's retention pruning also cleans the offsite copy. Remotes are
+  # declared entirely via env vars (no config file).
   backup-replicate:
-    image: minio/mc:latest
-    placement: "[[ if .MinIO.Node ]][[.MinIO.Node]][[ else if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
+    image: rclone/rclone
+    placement: "[[ if .Store.Node ]][[.Store.Node]][[ else if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - 'set -e; until mc alias set local http://backup_minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do echo waiting-for-minio; sleep 3; done; until mc alias set offsite "$$OFFSITE_ENDPOINT" "$$OFFSITE_ACCESS_KEY" "$$OFFSITE_SECRET_KEY"; do echo waiting-for-offsite; sleep 5; done; mc mb --ignore-existing local/"$$MINIO_BUCKET"; while true; do mc mirror --overwrite --remove --watch local/"$$MINIO_BUCKET" offsite/"$$OFFSITE_BUCKET" || true; sleep 5; done'
+      - 'while true; do rclone sync sw:pmcluster-backups off:[[.BackupS3.Bucket]] || true; sleep 30; done'
     restart: on-failure
     env:
-      MINIO_ROOT_USER: "[[.MinIO.User]]"
-      MINIO_ROOT_PASSWORD: "[[.MinIO.Password]]"
-      MINIO_BUCKET: "[[.MinIO.Bucket]]"
-      OFFSITE_ENDPOINT: "[[.BackupS3.Endpoint]]"
-      OFFSITE_ACCESS_KEY: "[[.BackupS3.AccessKey]]"
-      OFFSITE_SECRET_KEY: "[[.BackupS3.SecretKey]]"
-      OFFSITE_BUCKET: "[[.BackupS3.Bucket]]"
+      RCLONE_CONFIG_SW_TYPE: "s3"
+      RCLONE_CONFIG_SW_PROVIDER: "Other"
+      RCLONE_CONFIG_SW_ENDPOINT: "http://backup_seaweedfs:8333"
+      RCLONE_CONFIG_SW_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
+      RCLONE_CONFIG_SW_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
+      RCLONE_CONFIG_SW_REGION: "us-east-1"
+      RCLONE_CONFIG_SW_FORCE_PATH_STYLE: "true"
+      RCLONE_CONFIG_OFF_TYPE: "s3"
+      RCLONE_CONFIG_OFF_PROVIDER: "Other"
+      RCLONE_CONFIG_OFF_ENDPOINT: "[[.BackupS3.Endpoint]]"
+      RCLONE_CONFIG_OFF_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
+      RCLONE_CONFIG_OFF_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
+      RCLONE_CONFIG_OFF_REGION: "[[.BackupS3.Region]]"
+      RCLONE_CONFIG_OFF_FORCE_PATH_STYLE: "true"
 [[ end ]]
 [[ end ]]
 [[ if .DataDir ]]
@@ -108,11 +125,11 @@ services:
       BACKUP_SOURCES: "/backup/pmcluster"
       BACKUP_PRUNING_PREFIX: "pmcluster-ctlplane-"
       BACKUP_RETENTION_DAYS: "30"
-      [[- if .MinIO.Enabled ]]
-      AWS_S3_BUCKET_NAME: "[[.MinIO.Bucket]]"
-      AWS_ACCESS_KEY_ID: "[[.MinIO.User]]"
-      AWS_SECRET_ACCESS_KEY: "[[.MinIO.Password]]"
-      AWS_ENDPOINT: "[[.MinIO.Endpoint]]"
+      [[- if .Store.Enabled ]]
+      AWS_S3_BUCKET_NAME: "[[.Store.Bucket]]"
+      AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
+      AWS_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
+      AWS_ENDPOINT: "[[.Store.Endpoint]]"
       AWS_REGION: "us-east-1"
       AWS_S3_FORCE_PATH_STYLE: "true"
       [[- else if .BackupS3.Configured ]]

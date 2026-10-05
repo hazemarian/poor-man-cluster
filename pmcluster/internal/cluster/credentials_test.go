@@ -275,11 +275,11 @@ func TestBootstrap_LostDBRecovery(t *testing.T) {
 		Data   []byte
 		Labels map[string]string
 	}{Name: "sso_cookie_secret", Data: []byte("oldssosecret")}
-	f.secrets["minio_root_password"] = struct {
+	f.secrets["seaweedfs_credentials"] = struct {
 		Name   string
 		Data   []byte
 		Labels map[string]string
-	}{Name: "minio_root_password", Data: []byte("oldminiopass")}
+	}{Name: "seaweedfs_credentials", Data: []byte("oldseaweedpass")}
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	creds, err := mgr.Bootstrap(context.Background(), BootstrapInput{

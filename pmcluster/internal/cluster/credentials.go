@@ -28,8 +28,8 @@ const (
 	// KindSSO marks credentials consumed by the oauth2-proxy sidecar (the sso
 	// stack). Currently only the cookie secret.
 	KindSSO CredentialKind = "sso"
-	// KindBackup marks credentials consumed by the backup stack's MinIO store
-	// (the S3-compatible object store holding cluster backups in-cluster).
+	// KindBackup marks credentials consumed by the backup stack's SeaweedFS
+	// store (the S3-compatible object store holding cluster backups in-cluster).
 	KindBackup CredentialKind = "backup"
 )
 
@@ -69,7 +69,7 @@ var consumingService = map[string]string{
 	"traefik_dashboard": "infra_traefik",
 	"openobserve_admin": "observability_openobserve",
 	"sso_cookie_secret": "sso_oauth2-proxy",
-	"minio_admin":       "backup_minio",
+	"seaweedfs_admin":   "backup_seaweedfs",
 }
 
 // Bootstrap ensures every bundled component has a credential. Idempotent:
@@ -91,7 +91,7 @@ func (m *CredentialsManager) Bootstrap(ctx context.Context, in BootstrapInput) (
 		"edge_ui_secret":    "session",
 		"edge_api_token":    "edge",
 		"sso_cookie_secret": "sso",
-		"minio_admin":       "pmcluster",
+		"seaweedfs_admin":   "pmclusterbackup",
 	}
 	specs := bootstrapSpecs()
 	for i := range specs {
@@ -127,7 +127,7 @@ func (m *CredentialsManager) Ensure(ctx context.Context, name string) (*ManagedC
 		"edge_ui_secret":    "session",
 		"edge_api_token":    "edge",
 		"sso_cookie_secret": "sso",
-		"minio_admin":       "pmcluster",
+		"seaweedfs_admin":   "pmclusterbackup",
 	}
 	spec.username = usernames[spec.name]
 	return m.ensure(ctx, spec)
@@ -392,13 +392,15 @@ func bootstrapSpecs() []bootstrapSpec {
 			generate: randomCookieSecret,
 		},
 		{
-			// MinIO root credentials for the in-cluster backup object store.
-			// offen agents upload here; MinIO replicates the bucket offsite to
-			// the backup_s3_* target. Deployed only when the MinIO store is
-			// enabled in the backup stack.
-			name:            "minio_admin",
+			// SeaweedFS S3 credentials for the in-cluster backup object store.
+			// offen agents upload here; SeaweedFS auto-creates the bucket on
+			// first upload, and the rclone sidecar replicates it offsite to the
+			// backup_s3_* target. Deployed only when the store is enabled in
+			// the backup stack. The access key (username) is a fixed string;
+			// the secret key (password) is generated.
+			name:            "seaweedfs_admin",
 			kind:            KindBackup,
-			swarmSecretName: "minio_root_password",
+			swarmSecretName: "seaweedfs_credentials",
 			format:          formatPlain,
 		},
 	}
@@ -535,42 +537,42 @@ func (c *Credentials) Rotate(ctx context.Context, name string) (*ManagedCredenti
 	return c.Rotator.Rotate(ctx, name)
 }
 
-// loadMinIOBackup builds the in-cluster MinIO store config for the backup
-// stack. The zero value (disabled) is returned when the minio_admin credential
-// is absent — e.g. a cluster that has not enabled the MinIO store. When enabled
-// it points offen at the in-cluster endpoint and pins MinIO to a NON-storage
-// node via an explicit placement (which bypasses the volumed-service → storage
-// node auto-pin).
-func loadMinIOBackup(ctx context.Context, docker runtime.Client, st *store.Store, cipher *credentials.Cipher) (MinIOBackup, error) {
+// loadObjectStore builds the in-cluster SeaweedFS store config for the backup
+// stack. The zero value (disabled) is returned when the seaweedfs_admin
+// credential is absent — e.g. a cluster that has not enabled the in-cluster
+// store. When enabled it points offen at the in-cluster endpoint and pins
+// SeaweedFS to a NON-storage node via an explicit placement (which bypasses
+// the volumed-service → storage node auto-pin).
+func loadObjectStore(ctx context.Context, docker runtime.Client, st *store.Store, cipher *credentials.Cipher) (ObjectStore, error) {
 	if st == nil || cipher == nil {
-		return MinIOBackup{}, nil
+		return ObjectStore{}, nil
 	}
-	cred, err := st.GetCredential(ctx, "minio_admin")
+	cred, err := st.GetCredential(ctx, "seaweedfs_admin")
 	if err != nil {
 		if errors.Is(err, store.ErrCredentialNotFound) {
-			return MinIOBackup{}, nil
+			return ObjectStore{}, nil
 		}
-		return MinIOBackup{}, fmt.Errorf("load minio_admin credential: %w", err)
+		return ObjectStore{}, fmt.Errorf("load seaweedfs_admin credential: %w", err)
 	}
 	pass, err := cipher.Decrypt(cred.PasswordCiphertext)
 	if err != nil {
-		return MinIOBackup{}, fmt.Errorf("decrypt minio_admin password: %w", err)
+		return ObjectStore{}, fmt.Errorf("decrypt seaweedfs_admin password: %w", err)
 	}
-	return MinIOBackup{
-		Enabled:  true,
-		Endpoint: "http://backup_minio:9000",
-		Bucket:   "pmcluster-backups",
-		User:     cred.Username,
-		Password: string(pass),
-		Node:     pickMinIONode(ctx, docker, st),
+	return ObjectStore{
+		Enabled:   true,
+		Endpoint:  "http://backup_seaweedfs:8333",
+		Bucket:    "pmcluster-backups",
+		AccessKey: cred.Username,
+		SecretKey: string(pass),
+		Node:      pickStoreNode(ctx, docker, st),
 	}, nil
 }
 
-// pickMinIONode returns the hostname of a node that is NOT a storage node
+// pickStoreNode returns the hostname of a node that is NOT a storage node
 // (preferring a worker), or "" when every node is a storage node — in which
-// case MinIO shares a node with the data (degraded; the offsite copy still
+// case SeaweedFS shares a node with the data (degraded; the offsite copy still
 // provides the disaster recovery).
-func pickMinIONode(ctx context.Context, docker runtime.Client, st *store.Store) string {
+func pickStoreNode(ctx context.Context, docker runtime.Client, st *store.Store) string {
 	if docker == nil || st == nil {
 		return ""
 	}

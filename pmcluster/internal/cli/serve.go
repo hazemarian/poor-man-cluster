@@ -155,15 +155,16 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		log.Warn().Err(cipherErr).Msg("encryption key not available; /webhook/* disabled")
 	}
 
-	// The in-cluster MinIO store, when enabled (minio_admin credential
+	// The in-cluster SeaweedFS store, when enabled (seaweedfs_admin credential
 	// present), holds the newest backup copies, so reads — failover restore,
 	// `backup restore --from-s3` — prefer it. The external backup_s3_* remains
-	// the replication target and is still used when MinIO is disabled.
+	// the replication target and is still used when the in-cluster store is
+	// disabled.
 	backupS3 := backupS3FromSettings(cmd.Context(), st)
-	if mc, err := st.GetCredential(cmd.Context(), "minio_admin"); err == nil && cipher != nil {
+	if mc, err := st.GetCredential(cmd.Context(), "seaweedfs_admin"); err == nil && cipher != nil {
 		if pass, derr := cipher.Decrypt(mc.PasswordCiphertext); derr == nil {
 			backupS3 = backups.S3Config{
-				Endpoint:  "http://127.0.0.1:9000",
+				Endpoint:  "http://127.0.0.1:8333",
 				Bucket:    "pmcluster-backups",
 				AccessKey: mc.Username,
 				SecretKey: string(pass),
