@@ -403,12 +403,25 @@ func (s *Service) moveViaMover(ctx context.Context, archivePath, volumeRoot, sta
 	defer func() { _ = srv.Close() }()
 
 	port := ln.Addr().(*net.TCPAddr).Port
-	url := fmt.Sprintf("http://%s:%d%s", leaderAddr, port, urlPath)
+	// The mover runs on the target node and must reach THIS host over HTTP.
+	// The swarm advertise address (leaderAddr) may be a public IP that
+	// hardened nodes cannot route to each other on ephemeral ports, so build
+	// candidate URLs from the advertise address PLUS every local interface
+	// IP (private networks included) and let the mover try each in order.
+	urls := moverCandidateURLs(leaderAddr, port, urlPath)
+	if len(urls) == 0 {
+		return fmt.Errorf("no candidate addresses to serve the move archive")
+	}
+	quoted := make([]string, 0, len(urls))
+	for _, u := range urls {
+		quoted = append(quoted, "'"+u+"'")
+	}
+	urlList := strings.Join(quoted, " ")
 
 	svcName := fmt.Sprintf("pmcluster-move-%s-%s", stackName, tokenHex[:8])
 	script := fmt.Sprintf(
-		"mkdir -p /tmp/x /data && wget -qO /tmp/m.tgz '%s' && tar -xzf /tmp/m.tgz -C /tmp/x && mv /tmp/x/backup/data/%s /data/ && rm -rf /tmp/x",
-		url, stackName,
+		"mkdir -p /tmp/x /data && for u in %s; do wget -qO /tmp/m.tgz \"$u\" && break; done && tar -xzf /tmp/m.tgz -C /tmp/x && mv /tmp/x/backup/data/%s /data/ && rm -rf /tmp/x",
+		urlList, stackName,
 	)
 
 	create := exec.CommandContext(ctx, "docker", "service", "create",
@@ -453,4 +466,51 @@ func (s *Service) moveViaMover(ctx context.Context, archivePath, volumeRoot, sta
 		}
 	}
 	return fmt.Errorf("timed out waiting for mover task on %s", targetNode)
+}
+
+// moverCandidateURLs returns the http URLs a mover task on another node can
+// use to reach THIS host's ephemeral archive server: the swarm advertise
+// address first, then every non-loopback local interface IP (so hardened
+// clusters that only route between nodes over a private network still work).
+// The archive server binds 0.0.0.0, so any of these addresses serves it.
+func moverCandidateURLs(leaderAddr string, port int, urlPath string) []string {
+	var urls []string
+	seen := map[string]bool{}
+	add := func(host string) {
+		host = strings.TrimSpace(host)
+		if host == "" || seen[host] {
+			return
+		}
+		seen[host] = true
+		urls = append(urls, fmt.Sprintf("http://%s:%d%s", host, port, urlPath))
+	}
+	// Advertise address first (it is authoritative and stable).
+	if host, _, err := net.SplitHostPort(leaderAddr); err == nil {
+		add(host)
+	} else {
+		add(leaderAddr)
+	}
+	// Then every local interface IP (private network reachability).
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return urls
+	}
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipnet.IP
+			if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+				continue
+			}
+			add(ip.String())
+		}
+	}
+	return urls
 }

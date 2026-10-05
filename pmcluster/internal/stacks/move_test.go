@@ -363,3 +363,44 @@ func TestResolveArchivePath(t *testing.T) {
 		t.Fatalf("fallback got %q, want %q", got, fresh)
 	}
 }
+
+func TestMoverCandidateURLs_AdvertiseFirstThenLocalIPs(t *testing.T) {
+	urls := moverCandidateURLs("10.7.224.12:2377", 35001, "/move/abc/tc7db.tgz")
+	if len(urls) == 0 {
+		t.Fatal("expected at least the advertise address URL")
+	}
+	// Advertise address must come first (SplitHostPort strips :2377).
+	if urls[0] != "http://10.7.224.12:35001/move/abc/tc7db.tgz" {
+		t.Fatalf("first candidate = %q, want advertise address", urls[0])
+	}
+	// Every candidate must be a distinct host (dedup) and non-loopback.
+	seen := map[string]bool{}
+	for _, u := range urls {
+		if seen[u] {
+			t.Fatalf("duplicate candidate %q", u)
+		}
+		seen[u] = true
+		if strings.Contains(u, "127.0.0.1") || strings.Contains(u, "::1") {
+			t.Fatalf("loopback candidate leaked: %q", u)
+		}
+		if !strings.HasPrefix(u, "http://") || !strings.HasSuffix(u, "/move/abc/tc7db.tgz") {
+			t.Fatalf("malformed candidate %q", u)
+		}
+	}
+}
+
+func TestMoverCandidateURLs_AdvertiseWithoutPort(t *testing.T) {
+	urls := moverCandidateURLs("203.0.113.9", 40000, "/x")
+	if len(urls) == 0 || urls[0] != "http://203.0.113.9:40000/x" {
+		t.Fatalf("bare advertise address not handled: %v", urls)
+	}
+}
+
+func TestMoverCandidateURLs_EmptyAdvertise(t *testing.T) {
+	// Empty advertise: no crash; falls through to local interfaces (may be 0
+	// in a sandboxed CI, which is fine — the loop must just not panic).
+	urls := moverCandidateURLs("", 40000, "/x")
+	if len(urls) > 0 && urls[0] == "" {
+		t.Fatalf("empty candidate emitted")
+	}
+}

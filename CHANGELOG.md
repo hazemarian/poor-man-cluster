@@ -2,6 +2,22 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.158.1 (2026-10-05)
+
+Storage move transit fix — found live in Test Case 8 (two-node storage HA).
+
+- **BUG-015:** the cross-node mover built its archive URL only from the swarm
+  leader advertise address (public IP). On hardened clusters the public
+  interface is not routed between nodes, so the mover task hung and failed
+  (`non-zero exit (1)`) while the stack stayed safely on the source node.
+  Fix: the mover now tries the advertise address first, then every non-loopback
+  local interface IP (private-network reachability), deduped — the ephemeral
+  archive server binds 0.0.0.0 so any of them serves it. Mover script loops the
+  candidate URLs until one `wget` succeeds.
+- Tests: `moverCandidateURLs` unit tests (advertise-first ordering, port
+  stripping via SplitHostPort, bare-address + empty-address handling, no
+  loopback leakage, dedup).
+
 ## v0.2.158 (2026-10-05)
 
 Storage-node lifecycle, move + automatic storage failover — Test Case 8 (two-node storage HA).
