@@ -21,7 +21,6 @@ services:
   traefik:
     image: traefik:v3.6.5
     mode: global
-    placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
     command:
       - "--api.dashboard=true"
       - "--providers.swarm=true"

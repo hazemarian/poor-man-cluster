@@ -2,6 +2,14 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.157 (2026-10-05)
+
+Traefik runs on **every** node — found during Test Case 7 (1 manager + 1 worker bring-up).
+
+- **Root cause:** `infra-stack.yml` rendered traefik as `mode: global` but with a placement constraint `node.hostname == <platform_node>` (or `node.role == manager` fallback). On a swarm with a single manager, that pinned the ingress gateway to the leader only — workers never got a traefik replica, so the requirement "traefik on all nodes" was not met.
+- **Fix:** traefik is now placement-free (global, unconstrained) — one replica on every node, managers and workers alike, so any node can serve ingress traffic. The other platform stacks (edge, openobserve, backup, sso) keep their platform-node/manager pinning.
+- **Tests:** `TestTraefikRunsOnAllNodes` (asserts global + no `node.role`/`node.hostname`/`constraints` with and without PlatformNode); `TestPlatformNodePinsAllStacks` and `TestPlatformNodeEmptyKeepsManagerRole` narrowed to the non-ingress stacks.
+
 ## v0.2.156 (2026-10-05)
 
 Fix `secret(<name>)` env refs for **user/app manifests** — found during the post-v0.2.155 test-node purge + re-test.
