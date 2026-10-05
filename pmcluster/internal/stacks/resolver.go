@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -24,9 +25,14 @@ import (
 // rebuilt from the DB value (the DB always holds the value, so a lost swarm
 // object is recoverable). When Docker is nil (CLI remote deploys, tests) the
 // DB Content is used directly.
+//
+// Cipher decrypts secret VALUES for `env: X: secret(name)` refs: Docker
+// secrets are write-only (no payload readback), so secret() must decrypt the
+// DB ciphertext. Nil Cipher makes secret() refs fail loud.
 type StoreConfigResolver struct {
 	Store  *store.Store
 	Docker runtime.Client
+	Cipher *credentials.Cipher
 }
 
 // swarmConfigNameFor returns the content-addressed swarm config name for a
@@ -101,4 +107,33 @@ func (r *StoreConfigResolver) ResolveSetting(ctx context.Context, stack, name st
 // DB-backed default (/etc/<name>) for CLI deploys.
 func (r *StoreConfigResolver) ResolveConfigPath(ctx context.Context, stack, name string) (string, error) {
 	return "/etc/" + name, nil
+}
+
+// ResolveSecretValue implements manifest.SecretValueResolver so
+// `env: X: secret(name)` injects the secret's VALUE as-is. Docker secrets are
+// write-only (no payload readback), so the plaintext is decrypted from the DB
+// ciphertext with the cluster encryption key. Stack-scoped: only rows tagged
+// to this stack (or shared unattached rows) are eligible.
+func (r *StoreConfigResolver) ResolveSecretValue(ctx context.Context, stack, name string) (string, error) {
+	if r == nil || r.Store == nil {
+		return "", fmt.Errorf("secret-value resolution unavailable (no store)")
+	}
+	if r.Cipher == nil {
+		return "", fmt.Errorf("secret-value resolution unavailable (no encryption key — run locally on a node with ~/.pmcluster/.encryption_key)")
+	}
+	sec, err := r.Store.GetSecret(ctx, name)
+	if err != nil {
+		if errors.Is(err, store.ErrSecretNotFound) {
+			return "", fmt.Errorf("secret %q not found — create it with `pmcluster secret create %s <value> --scope service --stack %s`", name, name, stack)
+		}
+		return "", fmt.Errorf("get secret %q: %w", name, err)
+	}
+	if sec.Stack != "" && sec.Stack != stack {
+		return "", fmt.Errorf("secret %q belongs to stack %q — a stack-scoped secret cannot be resolved by another stack", name, sec.Stack)
+	}
+	plain, err := r.Cipher.Decrypt(sec.Payload)
+	if err != nil {
+		return "", fmt.Errorf("decrypt secret %q: %w", name, err)
+	}
+	return string(plain), nil
 }

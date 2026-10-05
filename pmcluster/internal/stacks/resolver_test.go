@@ -2,9 +2,11 @@ package stacks
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -175,4 +177,72 @@ func TestGetConfigForStack(t *testing.T) {
 	if _, err := s.GetConfigForStack(ctx, "demo", "other_cfg"); err != store.ErrConfigNotFound {
 		t.Errorf("foreign config surfaced: err=%v", err)
 	}
+}
+
+// TestStoreConfigResolver_ResolveSecretValue exercises the secret(<name>)
+// env-ref path: the plaintext is decrypted from the DB ciphertext with the
+// cluster encryption key (Docker secrets are write-only — no payload
+// readback), cross-stack rows are refused, and a missing Cipher fails loud.
+func TestStoreConfigResolver_ResolveSecretValue(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	keyDir := t.TempDir()
+	c, err := credentials.Open(filepath.Join(keyDir, ".encryption_key"))
+	if err != nil {
+		t.Fatalf("open cipher: %v", err)
+	}
+	ct, err := c.Encrypt([]byte("s3cret-value-1"))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if _, err := s.CreateSecret(ctx, "service", "demo", "t2_pass", ct, store.SecretHash("s3cret-value-1")); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+
+	r := &StoreConfigResolver{Store: s, Cipher: c}
+
+	t.Run("decrypts own-stack secret value", func(t *testing.T) {
+		got, err := r.ResolveSecretValue(ctx, "demo", "t2_pass")
+		if err != nil {
+			t.Fatalf("ResolveSecretValue: %v", err)
+		}
+		if got != "s3cret-value-1" {
+			t.Errorf("ResolveSecretValue = %q, want %q", got, "s3cret-value-1")
+		}
+	})
+
+	t.Run("cross-stack secret refused", func(t *testing.T) {
+		if _, err := r.ResolveSecretValue(ctx, "other-stack", "t2_pass"); err == nil {
+			t.Error("expected error for cross-stack secret")
+		} else if !strings.Contains(err.Error(), "belongs to stack") {
+			t.Errorf("error should mention stack ownership: %v", err)
+		}
+	})
+
+	t.Run("missing secret errors with hint", func(t *testing.T) {
+		_, err := r.ResolveSecretValue(ctx, "demo", "ghost_pass")
+		if err == nil {
+			t.Fatal("expected error for missing secret")
+		}
+		if !strings.Contains(err.Error(), "not found") {
+			t.Errorf("error should mention not found: %v", err)
+		}
+	})
+
+	t.Run("nil cipher errors", func(t *testing.T) {
+		r := &StoreConfigResolver{Store: s}
+		if _, err := r.ResolveSecretValue(ctx, "demo", "t2_pass"); err == nil {
+			t.Error("expected error with nil cipher")
+		} else if !strings.Contains(err.Error(), "encryption key") {
+			t.Errorf("error should mention encryption key: %v", err)
+		}
+	})
+
+	t.Run("nil store errors", func(t *testing.T) {
+		r := &StoreConfigResolver{Cipher: c}
+		if _, err := r.ResolveSecretValue(ctx, "demo", "t2_pass"); err == nil {
+			t.Error("expected error with nil store")
+		}
+	})
 }

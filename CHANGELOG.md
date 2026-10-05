@@ -1,6 +1,15 @@
 # Changelog
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
+
+## v0.2.156 (2026-10-05)
+
+Fix `secret(<name>)` env refs for **user/app manifests** — found during the post-v0.2.155 test-node purge + re-test.
+
+- **Root cause:** `secret()` worked only on the platform path (`renderRefResolver`); the app-path resolver (`StoreConfigResolver`) did not implement `manifest.SecretValueResolver`, so a manifest like `env: APP_PASS: secret(t2_pass)` failed with `secret(t2_pass) requires secret-value resolution (not available)`.
+- **Fix:** `StoreConfigResolver` gained a `Cipher *credentials.Cipher` field + `ResolveSecretValue(ctx, stack, name)` — fetches the DB secret row, refuses cross-stack rows (`belongs to stack %q`), decrypts the ciphertext with the cluster encryption key (Docker secrets are write-only, so the value can only come from the DB). Nil store / nil cipher / missing secret all fail loud with operator hints.
+- **Wiring:** daemon (`serve.go`) passes the already-opened cipher; CLI local deploys (`openDeploySvc`) open the cipher from `cfg.EncryptionKeyPath()`.
+- **Test:** `TestStoreConfigResolver_ResolveSecretValue` (5 subtests: own-stack decrypt, cross-stack refusal, missing-secret hint, nil cipher, nil store).
 *current* state of the project; this file is the only place that tracks what changed
 and when.
 
