@@ -18,6 +18,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Move relocates a stateful stack's storage to another swarm node:
@@ -36,6 +37,21 @@ import (
 // subtree is intentionally left in place as a safety net until the operator
 // prunes it.
 func (s *Service) Move(ctx context.Context, stackName, targetNode string) error {
+	return s.MoveWithOptions(ctx, stackName, targetNode, MoveOptions{})
+}
+
+// MoveOptions tunes how a stack move sources its data.
+type MoveOptions struct {
+	// FromS3 fetches the newest known archive for the stack from the offsite
+	// object store instead of triggering a local backup. Used by the storage
+	// failover path: when the source storage node is down, its local archive
+	// is unreachable, so the last S3 upload is the only copy of the data.
+	FromS3 bool
+}
+
+// MoveWithOptions is Move with restore-source control (see Move for the
+// default local-backup flow).
+func (s *Service) MoveWithOptions(ctx context.Context, stackName, targetNode string, opts MoveOptions) error {
 	if targetNode == "" {
 		return fmt.Errorf("move: target node is empty (use --to <node>)")
 	}
@@ -85,11 +101,21 @@ func (s *Service) Move(ctx context.Context, stackName, targetNode string) error 
 		}
 	}
 
-	// 1. Whole-disk backup (unanchored row, so the restore's volume filter can
-	// match the <stack>/ prefix via the bare-volume branch of volumeMatch).
-	archivePath, err := s.runMoveBackup(ctx)
-	if err != nil {
-		return err
+	// 1. Source the archive: a fresh local backup (normal move) or the newest
+	// known archive fetched from S3 (failover — the source node is down).
+	var archivePath string
+	if opts.FromS3 {
+		archivePath, err = s.fetchNewestArchiveFromS3(ctx, stackName)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Whole-disk backup (unanchored row, so the restore's volume filter can
+		// match the <stack>/ prefix via the bare-volume branch of volumeMatch).
+		archivePath, err = s.runMoveBackup(ctx)
+		if err != nil {
+			return err
+		}
 	}
 
 	// 2. Restore the stack's subtree on the target.
@@ -121,6 +147,46 @@ func (s *Service) Move(ctx context.Context, stackName, targetNode string) error 
 		return fmt.Errorf("move: redeploy %s: %w", stackName, err)
 	}
 	return nil
+}
+
+// fetchNewestArchiveFromS3 downloads the newest succeeded archive known to the
+// store from the offsite object store into BackupDir, returning the local
+// path. Used by the storage-failover move path when the source node is down.
+func (s *Service) fetchNewestArchiveFromS3(ctx context.Context, stackName string) (string, error) {
+	if !s.S3.Configured() {
+		return "", fmt.Errorf("move: S3 restore requested but backup_s3_* settings are not configured")
+	}
+	// The newest succeeded backup row names the archive: the DB stores the
+	// local container-style path; its basename is the S3 object key (offen
+	// uploads under the same BACKUP_FILENAME it writes locally).
+	var newest *store.Backup
+	rows, err := s.Store.ListBackups(ctx, 100)
+	if err != nil {
+		return "", fmt.Errorf("move: list backups for S3 restore: %w", err)
+	}
+	for _, b := range rows {
+		if b.Status != "succeeded" || b.ArchivePaths == "" {
+			continue
+		}
+		if newest == nil || b.StartedAt > newest.StartedAt {
+			newest = b
+		}
+	}
+	if newest == nil {
+		return "", fmt.Errorf("move: no succeeded backup row found to restore %s from S3 (run `pmcluster backup create` first)", stackName)
+	}
+	key := filepath.Base(strings.Split(newest.ArchivePaths, ",")[0])
+	if !strings.HasSuffix(key, ".tar.gz") {
+		return "", fmt.Errorf("move: newest succeeded archive %q does not look like a backup archive", key)
+	}
+	if err := os.MkdirAll(s.moveBackupDir(), 0o755); err != nil {
+		return "", fmt.Errorf("move: create backup dir: %w", err)
+	}
+	dst := filepath.Join(s.moveBackupDir(), "s3restore-"+key)
+	if err := backups.FetchS3Object(ctx, s.S3, key, dst); err != nil {
+		return "", fmt.Errorf("move: fetch %s from S3: %w", key, err)
+	}
+	return dst, nil
 }
 
 // runMoveBackup triggers a whole-disk backup through the same machinery as a

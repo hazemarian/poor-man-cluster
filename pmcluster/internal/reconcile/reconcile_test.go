@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -382,5 +383,120 @@ func TestRunOnce_TracerNoopSafe(t *testing.T) {
 	snap, err := st.GetStackStatus(context.Background(), "demo")
 	if err != nil || snap.Status != StatusHealthy {
 		t.Fatalf("stack status after RunOnce = %v err %v, want healthy", snap.Status, err)
+	}
+}
+
+// TestRunOnce_StorageFailoverMovesToHealthyNode verifies the automatic
+// storage failover: when a stack's pinned storage node is down, the
+// reconciler moves it to a healthy alternate storage node (S3 restore path)
+// and the cooldown prevents re-triggering every pass.
+func TestRunOnce_StorageFailoverMovesToHealthyNode(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	if err := st.SetSetting(ctx, cluster.SettingStorageNodes(), "node-a,node-b"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	statefulSource := "app: demo\nenv: production\ndomain: example.com\nservices:\n  web:\n    image: nginx\n    volumes: [data:/var/lib/data]\n"
+	if err := st.RecordDeploy(ctx, &store.StackRevision{
+		StackName:    "demo",
+		Revision:     2001,
+		SourceYAML:   statefulSource,
+		RenderedYAML: "version: \"3.9\"\nservices:\n  web:\n    image: nginx\n",
+	}, ""); err != nil {
+		t.Fatalf("RecordDeploy demo: %v", err)
+	}
+
+	// Resolve which storage node "demo" round-robins to.
+	res := &stacks.PinResolver{StorageNodes: []string{"node-a", "node-b"}}
+	ir := &manifest.IR{Name: "demo", Services: []manifest.IRService{{Name: "web", Image: "nginx", Volumes: []string{"/data"}, Placement: ""}}}
+	if err := res.ResolvePlacement(ctx, "demo", ir); err != nil {
+		t.Fatalf("ResolvePlacement: %v", err)
+	}
+	pinned := ir.Services[0].Placement
+	other := "node-a"
+	if pinned == "node-a" {
+		other = "node-b"
+	}
+
+	svc := &stacks.Service{Store: st, Deployer: &recordingDeployer{}, MkdirAll: func(string, os.FileMode) error { return nil }, Pins: res}
+
+	var mu sync.Mutex
+	var moves []string
+	rec := &Reconciler{
+		Store:         st,
+		Docker:        &fakeNodesDocker{nodes: []runtime.Node{{Hostname: other, Status: "ready", Availability: "active"}}},
+		DeployService: svc,
+		Services:      &fakeServices{},
+		Log:           zerolog.Nop(),
+		FailoverMove: func(_ context.Context, stackName, targetNode string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			moves = append(moves, stackName+">"+targetNode)
+			return nil
+		},
+	}
+
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce (failover): %v", err)
+	}
+	mu.Lock()
+	got := append([]string(nil), moves...)
+	mu.Unlock()
+	if len(got) != 1 || got[0] != "demo>"+other {
+		t.Fatalf("failover moves = %v, want exactly [demo>%s]", got, other)
+	}
+
+	// Cooldown: a second pass must not re-trigger the move.
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce (cooldown): %v", err)
+	}
+	mu.Lock()
+	got = append([]string(nil), moves...)
+	mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("failover moves after cooldown pass = %v, want still 1", got)
+	}
+}
+
+// TestRunOnce_StorageFailoverNoAlternate verifies a stack stays paused when
+// every other storage node is down too — no move is attempted.
+func TestRunOnce_StorageFailoverNoAlternate(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	if err := st.SetSetting(ctx, cluster.SettingStorageNodes(), "node-a"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	statefulSource := "app: demo\nenv: production\ndomain: example.com\nservices:\n  web:\n    image: nginx\n    volumes: [data:/var/lib/data]\n"
+	if err := st.RecordDeploy(ctx, &store.StackRevision{
+		StackName:    "demo",
+		Revision:     2001,
+		SourceYAML:   statefulSource,
+		RenderedYAML: "version: \"3.9\"\nservices:\n  web:\n    image: nginx\n",
+	}, ""); err != nil {
+		t.Fatalf("RecordDeploy demo: %v", err)
+	}
+
+	var mu sync.Mutex
+	var moves []string
+	rec := &Reconciler{
+		Store:         st,
+		Docker:        &fakeNodesDocker{nodes: nil}, // storage node down, no alternate
+		DeployService: &stacks.Service{Store: st, Deployer: &recordingDeployer{}, MkdirAll: func(string, os.FileMode) error { return nil }},
+		Services:      &fakeServices{},
+		Log:           zerolog.Nop(),
+		FailoverMove: func(_ context.Context, stackName, targetNode string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			moves = append(moves, stackName+">"+targetNode)
+			return nil
+		},
+	}
+	if err := rec.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(moves) != 0 {
+		t.Fatalf("failover moves = %v, want none (no healthy alternate)", moves)
 	}
 }

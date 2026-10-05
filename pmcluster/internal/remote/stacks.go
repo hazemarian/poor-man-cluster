@@ -149,3 +149,8 @@ func (a *Deploy) Sync(ctx context.Context, stackName string) (*stacks.Result, er
 func (a *Deploy) Undeploy(ctx context.Context, stackName string) error {
 	return a.c.do(ctx, http.MethodDelete, "/stacks/"+url.PathEscape(stackName), nil, nil)
 }
+
+func (a *Deploy) Move(ctx context.Context, stackName, targetNode string) error {
+	return a.c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(stackName)+"/move",
+		map[string]any{"target": targetNode}, nil)
+}

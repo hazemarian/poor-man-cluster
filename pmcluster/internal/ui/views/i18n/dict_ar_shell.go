@@ -147,6 +147,7 @@ func init() {
 		"st.leader":        "القائد",
 		"st.manager":       "مدير",
 		"st.worker":        "عامل",
+		"st.storage":       "تخزين",
 		"st.admin":         "مدير النظام",
 		"st.operator":      "مشغّل",
 		"st.viewer":        "مُشاهد",

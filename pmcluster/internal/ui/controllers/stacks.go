@@ -244,6 +244,33 @@ func (c Stacks) Sync(g *gin.Context) {
 	c.Views.Fragment(g, "stack", d)
 }
 
+// Move relocates a stateful stack's storage to another node (backup →
+// restore → pin → new revision). The target node hostname comes from the
+// form field "target"; the stack detail page offers this action for stateful
+// stacks.
+func (c Stacks) Move(g *gin.Context) {
+	ctx := g.Request.Context()
+	name := g.Param("name")
+	d := c.loadStack(ctx, name)
+
+	target := strings.TrimSpace(g.PostForm("target"))
+	switch {
+	case target == "":
+		d.ErrKey = "stack.err_move_target"
+	case func() bool { _, _, ok := c.loadParams(ctx); return !ok }():
+		d.ErrKey = "err.api_not_configured"
+	default:
+		if err := c.API.MoveStack(ctx, name, target); err != nil {
+			d.ErrKey, d.ErrRaw = "err.stack_move", err.Error()
+		} else {
+			d.MsgKey = "stack.msg_moved"
+			d.MsgArg0 = name
+			d.MsgArg1 = target
+		}
+	}
+	c.Views.Fragment(g, "stack", d)
+}
+
 // Rollback redeploys a stack from an older revision's manifest. The API writes
 // the result as a new revision, so the message reports both numbers rather
 // than implying the old revision is live again.

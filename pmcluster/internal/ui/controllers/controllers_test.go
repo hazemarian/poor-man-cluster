@@ -39,7 +39,27 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"node_name":"mgr","server_version":"28","os":"linux","arch":"amd64","cpus":8,"memory_bytes":8589934592,"swarm":{"state":"active","control_available":true,"managers":1,"nodes":2}}`)
 	})
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"nodes":[{"hostname":"manager-1","role":"manager","status":"ready","is_leader":true,"engine_version":"28.5"}]}`)
+		write(w, `{"nodes":[{"hostname":"manager-1","role":"manager","status":"ready","is_leader":true,"engine_version":"28.5","storage":true},{"hostname":"worker-1","role":"worker","status":"ready","engine_version":"28.5","storage":false}]}`)
+	})
+	mux.HandleFunc("/api/nodes/manager-1/storage", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			write(w, `{"hostname":"manager-1","storage":true,"storage_nodes":"manager-1"}`)
+		case http.MethodDelete:
+			write(w, `{"hostname":"manager-1","storage":false,"storage_nodes":""}`)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/api/nodes/worker-1/storage", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			write(w, `{"hostname":"worker-1","storage":true,"storage_nodes":"manager-1,worker-1"}`)
+		case http.MethodDelete:
+			write(w, `{"hostname":"worker-1","storage":false,"storage_nodes":"manager-1"}`)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	})
 	mux.HandleFunc("/api/stacks", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"stacks":[{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo","created_at":1,"updated_at":2}]}`)
@@ -58,6 +78,9 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/api/stacks/demo/sync", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"stack":"demo","revision":3,"changed":false}`)
+	})
+	mux.HandleFunc("/api/stacks/demo/move", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"stack":"demo","moved_to":"node-02"}`)
 	})
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","update_state":"completed"}]}`)
@@ -187,11 +210,16 @@ func (h *ctrlHarness) post(t *testing.T, path, form string) *httptest.ResponseRe
 func (h *ctrlHarness) mountOverview() {
 	h.engine.GET("/web/overview", (Overview{Controller: h.ctrl}).Fragment)
 }
+func (h *ctrlHarness) mountNodes() {
+	h.engine.POST("/web/nodes/:hostname/storage", (Nodes{Controller: h.ctrl}).Promote)
+	h.engine.DELETE("/web/nodes/:hostname/storage", (Nodes{Controller: h.ctrl}).Demote)
+}
 func (h *ctrlHarness) mountStacks() {
 	h.engine.GET("/web/stacks", (Stacks{Controller: h.ctrl}).List)
 	h.engine.GET("/web/stacks/:name", (Stacks{Controller: h.ctrl}).Show)
 	h.engine.GET("/web/stacks/:name/revisions/:rev", (Stacks{Controller: h.ctrl}).ShowRevision)
 	h.engine.GET("/web/stacks/:name/backups", (Stacks{Controller: h.ctrl}).ShowBackups)
+	h.engine.POST("/web/stacks/:name/move", (Stacks{Controller: h.ctrl}).Move)
 }
 func (h *ctrlHarness) mountServices() {
 	h.engine.GET("/web/services", (Services{Controller: h.ctrl}).List)
@@ -256,6 +284,28 @@ func TestControllers_Stacks(t *testing.T) {
 	rr := h.get(t, "/web/stacks/nope")
 	if rr.Code != http.StatusOK && rr.Code != http.StatusNotFound {
 		t.Errorf("GET /web/stacks/nope = %d, want 200/404", rr.Code)
+	}
+}
+
+func TestControllers_StackMove(t *testing.T) {
+	h := newCtrlHarness(t)
+	h.mountStacks()
+	// Happy path: POST target=node-02 → daemon 200 → fragment shows the moved
+	// confirmation banner.
+	rr := h.post(t, "/web/stacks/demo/move", "target=node-02")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST move = %d, want 200", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "Moved demo to node-02") {
+		t.Errorf("POST move body missing confirmation, got: %s", rr.Body.String())
+	}
+	// Empty target → validation error fragment.
+	rr = h.post(t, "/web/stacks/demo/move", "target=")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST move (empty target) = %d, want 200", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "Choose a destination node") {
+		t.Errorf("POST move (empty target) body missing err_move_target, got: %s", rr.Body.String())
 	}
 }
 
@@ -356,6 +406,34 @@ func TestTokenPrefix(t *testing.T) {
 		if got := tokenPrefix(tc.in); got != tc.want {
 			t.Errorf("tokenPrefix(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestControllers_NodesPromoteDemote(t *testing.T) {
+	h := newCtrlHarness(t)
+	h.mountNodes()
+
+	// Promote worker-1 → 200 overview fragment re-render with storage pill.
+	rr := h.post(t, "/web/nodes/worker-1/storage", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /web/nodes/worker-1/storage = %d, want 200", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "worker-1") {
+		t.Errorf("promote fragment missing node name; body:\n%s", rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "storage") {
+		t.Errorf("promote fragment missing storage pill; body:\n%s", rr.Body.String())
+	}
+
+	// Demote manager-1 → 200 fragment re-render.
+	req := httptest.NewRequest(http.MethodDelete, "http://x/web/nodes/manager-1/storage", nil)
+	rr2 := httptest.NewRecorder()
+	h.engine.ServeHTTP(rr2, req)
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("DELETE /web/nodes/manager-1/storage = %d, want 200", rr2.Code)
+	}
+	if !strings.Contains(rr2.Body.String(), "manager-1") {
+		t.Errorf("demote fragment missing node name; body:\n%s", rr2.Body.String())
 	}
 }
 

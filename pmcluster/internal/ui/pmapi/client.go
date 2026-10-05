@@ -156,6 +156,18 @@ func (c *Client) Nodes(ctx context.Context) ([]Node, error) {
 	return body.Nodes, err
 }
 
+// PromoteNode marks a swarm node as a storage node (storage_nodes setting +
+// pmcluster.storage label) via POST /api/nodes/{hostname}/storage.
+func (c *Client) PromoteNode(ctx context.Context, hostname string) error {
+	return c.do(ctx, http.MethodPost, "/nodes/"+url.PathEscape(hostname)+"/storage", nil, nil)
+}
+
+// DemoteNode clears a swarm node's storage-node role via
+// DELETE /api/nodes/{hostname}/storage.
+func (c *Client) DemoteNode(ctx context.Context, hostname string) error {
+	return c.do(ctx, http.MethodDelete, "/nodes/"+url.PathEscape(hostname)+"/storage", nil, nil)
+}
+
 // ListStacks returns all known stacks.
 func (c *Client) ListStacks(ctx context.Context) ([]Stack, error) {
 	var body struct {
@@ -206,6 +218,13 @@ func (c *Client) SyncStack(ctx context.Context, name string) (*DeployResult, err
 // DeleteStack undeploys the stack from the Swarm and removes its record.
 func (c *Client) DeleteStack(ctx context.Context, name string) error {
 	return c.do(ctx, http.MethodDelete, "/stacks/"+url.PathEscape(name), nil, nil)
+}
+
+// MoveStack relocates a stateful stack's storage to another node (backup →
+// restore → pin → new revision). target is the destination node hostname.
+func (c *Client) MoveStack(ctx context.Context, name, target string) error {
+	body := map[string]any{"target": target}
+	return c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(name)+"/move", body, nil)
 }
 
 // ListBackups returns the most recent backups across stacks.

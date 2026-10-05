@@ -35,6 +35,7 @@ func (h *HTTP) Mount(r chi.Router) {
 	r.Get("/stacks/{name}/revisions/{rev}", h.showRevision)
 	r.Post("/stacks/{name}/sync", h.sync)
 	r.Post("/stacks/{name}/rollback", h.rollback)
+	r.Post("/stacks/{name}/move", h.move)
 	r.Delete("/stacks/{name}", h.remove)
 }
 
@@ -253,6 +254,26 @@ func (h *HTTP) rollback(w http.ResponseWriter, r *http.Request) {
 		"new_revision":   res.Revision,
 		"rolled_back_to": body.Revision,
 	})
+}
+
+func (h *HTTP) move(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	var body struct {
+		Target string `json:"target"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if body.Target == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "target: required"})
+		return
+	}
+	if err := h.Deploy.Move(r.Context(), name, body.Target); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stack": name, "moved_to": body.Target})
 }
 
 // stackJSON keeps the Stack response shape identical across endpoints.

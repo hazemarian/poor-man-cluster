@@ -157,7 +157,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.GetSettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
 		return st.GetSettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
-	}}, Log: log, BackupDir: cluster.BackupRootDir()}
+	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3FromSettings(cmd.Context(), st)}
 
 	tlsSvc := certs.NewLocal(st, cipher, dc, deployer,
 		cfg.ConfigDir(), buildinfo.Version)

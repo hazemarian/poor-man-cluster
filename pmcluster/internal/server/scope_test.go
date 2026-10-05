@@ -303,6 +303,8 @@ func (fakeDeployer) Rollback(_ context.Context, stackName string, rev int64) (*s
 
 func (fakeDeployer) Undeploy(_ context.Context, stackName string) error { return nil }
 
+func (fakeDeployer) Move(_ context.Context, stackName, targetNode string) error { return nil }
+
 // scopeEnv is a fully-wired daemon whose bearer lookup goes through a real
 // store, so tokens minted by the apikeys service authenticate for real.
 type scopeEnv struct {

@@ -2,6 +2,17 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.158 (2026-10-05)
+
+Storage-node lifecycle, move + automatic storage failover — Test Case 8 (two-node storage HA).
+
+- **`node promote <hostname>` / `node demote <hostname>`** — make any swarm node a storage node (updates the `storage_nodes` setting and stamps/clears the `pmcluster.storage` node label). Workers qualify, not just the leader.
+- **Console storage promotion** — the Overview nodes table shows a storage pill per node and a promote/demote button (shield icon), backed by new daemon endpoints `POST /api/nodes/{hostname}/storage` + `DELETE /api/nodes/{hostname}/storage` (the `/api/nodes` list now also reports each node's `storage` flag).
+- **`stack move` via console** — new `POST /api/stacks/{name}/move` daemon endpoint + a Move form on the stack detail page (target node input), matching the existing `pmcluster stack move <name> --to <node>` CLI.
+- **Move with S3 restore** — `stacks.MoveWithOptions` with `MoveOptions{FromS3: true}` fetches the newest succeeded backup for the stack from the offsite store (`backups.FetchS3Object` is now exported) instead of triggering a local backup — for when the source storage node is down and its local archive is unreachable.
+- **Automatic storage failover** — when a storage node goes down, the reconcile loop now picks a healthy alternate storage node (from `storage_nodes` ∩ healthy nodes) and moves each pinned stateful stack there with an S3 restore, instead of pausing indefinitely. Moves run async with a 5-minute per-stack cooldown (`FailoverMove` seam is injectable for tests).
+- **Tests:** CLI promote/demote (6), API storage handler (6: promote/demote/idempotent/404/500/storage-flag), reconcile failover (move-to-healthy + cooldown + no-alternate), UI controller move (happy/empty-target), UI node promote/demote.
+
 ## v0.2.157 (2026-10-05)
 
 Traefik runs on **every** node — found during Test Case 7 (1 manager + 1 worker bring-up).

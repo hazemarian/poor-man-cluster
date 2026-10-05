@@ -107,6 +107,11 @@ type Service struct {
 	// locate the newest whole-disk archive after triggering a backup.
 	// Empty falls back to backups.DefaultArchiveDir.
 	BackupDir string
+	// S3 is the offsite object-store destination. Used by Move-with-S3 (the
+	// storage failover path) to fetch the newest archive when the source
+	// storage node is down and its local archive is unreachable. Empty
+	// disables FromS3 moves.
+	S3 backups.S3Config
 	// MkdirAll creates host directories for the volume-root bind targets
 	// before deploy (nil = os.MkdirAll). Overridable in tests.
 	MkdirAll func(string, os.FileMode) error

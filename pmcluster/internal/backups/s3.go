@@ -145,3 +145,12 @@ func fetchS3Object(ctx context.Context, cfg S3Config, key, dst string) error {
 func s3ObjectKey(archivePath string) string {
 	return filepath.Base(archivePath)
 }
+
+// FetchS3Object downloads object key from the configured endpoint into dst
+// (a temp file), returning the local path. Exported so the storage-failover
+// path (stacks.Service.Move with FromS3) can pull an archive that exists only
+// offsite — when the source storage node is down its local archive is
+// unreachable.
+func FetchS3Object(ctx context.Context, cfg S3Config, key, dst string) error {
+	return fetchS3Object(ctx, cfg, key, dst)
+}

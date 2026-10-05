@@ -82,6 +82,10 @@ type Deployer interface {
 	Sync(ctx context.Context, stackName string) (*Result, error)
 	Rollback(ctx context.Context, stackName string, sourceRevision int64) (*Result, error)
 	Undeploy(ctx context.Context, stackName string) error
+	// Move relocates a stateful stack's storage to another node (backup →
+	// restore → pin → new revision). Target nodes can be promoted to storage
+	// nodes via `pmcluster node promote` or the console.
+	Move(ctx context.Context, stackName string, targetNode string) error
 }
 
 // Reader is the read side: stack metadata and revision history.

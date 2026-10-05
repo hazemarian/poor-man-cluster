@@ -81,6 +81,7 @@ func (c Overview) Fragment(g *gin.Context) {
 			d.Nodes = append(d.Nodes, nodeModel{
 				Hostname: n.Hostname, Role: n.Role, Status: n.Status,
 				IsLeader: n.IsLeader, Availability: n.Availability, EngineVersion: n.EngineVersion,
+				Storage: n.Storage,
 			})
 		}
 	}
@@ -116,4 +117,5 @@ type nodeModel struct {
 	IsLeader      bool
 	Availability  string
 	EngineVersion string
+	Storage       bool
 }

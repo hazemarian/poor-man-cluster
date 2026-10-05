@@ -140,6 +140,7 @@ func init() {
 		"st.leader":        "Leader",
 		"st.manager":       "Manager",
 		"st.worker":        "Worker",
+		"st.storage":       "Storage",
 		"st.admin":         "Admin",
 		"st.operator":      "Operator",
 		"st.viewer":        "Viewer",

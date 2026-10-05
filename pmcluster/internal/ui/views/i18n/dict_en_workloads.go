@@ -88,6 +88,11 @@ func init() {
 		"stack.msg_synced":       "Redeployed {0} — revision {1}.",
 		"stack.msg_synced_same":  "Redeployed {0} — the manifest had not changed, so no new revision was recorded.",
 		"stack.msg_rolled_back":  "Rolled back {0} to revision {1} — recorded as revision {2}.",
+		"stack.msg_moved":        "Moved {0} to {1} — pinned there; reconcile will not move it back.",
+		"stack.err_move_target":  "Choose a destination node for the move.",
+		"err.stack_move":         "The stack could not be moved.",
+		"stack.action_move":      "Move",
+		"stack.move_confirm":     "Move this stack? Its volumes are backed up, restored on the target node, and a new placement revision is recorded.",
 
 		// ---- one revision's manifests ---------------------------------------
 		"revision.title":    "Revision {0} · {1}",

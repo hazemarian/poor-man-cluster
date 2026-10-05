@@ -214,6 +214,7 @@ func (a *App) Mount(engine *gin.Engine) {
 
 	op.POST("/stacks/:name/sync", st.Sync)
 	op.POST("/stacks/:name/rollback", st.Rollback)
+	op.POST("/stacks/:name/move", st.Move)
 	op.POST("/stacks/:name/remove", st.Remove)
 
 	op.POST("/services/:stack/:service/restart", svc.Restart)
@@ -226,6 +227,10 @@ func (a *App) Mount(engine *gin.Engine) {
 	tm := controllers.Terminal{Controller: a.ctrl}
 	op.GET("/stacks/:name/terminal", tm.Page)
 	op.GET("/stacks/:name/terminal/ws", tm.WS)
+
+	nd := controllers.Nodes{Controller: a.ctrl}
+	op.POST("/nodes/:hostname/storage", nd.Promote)
+	op.DELETE("/nodes/:hostname/storage", nd.Demote)
 
 	op.POST("/stacks/:name/configs/add", scc.AddConfig)
 	op.POST("/stacks/:name/configs/edit", scc.EditConfig)

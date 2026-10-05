@@ -29,6 +29,14 @@
           {{icon "play"}}<span>{{T "stacks.act_redeploy"}}</span>
         </button>
       </form>
+      <form class="stack-move" hx-post="/web/stacks/{{.Detail.Stack.Name}}/move" hx-target="#view" hx-swap="innerHTML"
+            hx-confirm="{{T "stack.move_confirm"}}">
+        <input type="text" name="target" placeholder="node hostname" class="input input-sm" required
+               dir="ltr" aria-label="{{T "stack.action_move"}}">
+        <button type="submit" class="btn btn-ghost btn-sm" hx-disabled-elt="this">
+          {{icon "move"}}<span>{{T "stack.action_move"}}</span>
+        </button>
+      </form>
       <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Detail.Stack.Name}}/config"
          hx-get="/web/stacks/{{.Detail.Stack.Name}}/config" hx-target="#view" hx-push-url="true">
         {{icon "file"}}<span>{{T "stacks.act_config"}}</span>

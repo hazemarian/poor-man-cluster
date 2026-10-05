@@ -37,6 +37,7 @@ type Node struct {
 	Address       string `json:"address"`
 	CreatedAt     int64  `json:"created_at"`
 	UpdatedAt     int64  `json:"updated_at"`
+	Storage       bool   `json:"storage"`
 }
 
 // StackError is one deploy/apply outcome for a stack (newest first in a

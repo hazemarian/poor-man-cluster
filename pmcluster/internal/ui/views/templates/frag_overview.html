@@ -136,6 +136,7 @@
                 <span class="node-glyph">{{icon "server"}}</span>
                 <span class="mono iso" dir="ltr">{{.Hostname}}</span>
                 {{if .IsLeader}} <span class="pill accent">{{T "st.leader"}}</span>{{end}}
+                {{if .Storage}} <span class="pill plain">{{T "st.storage"}}</span>{{end}}
               </div>
             </td>
             <td>
@@ -161,6 +162,11 @@
               <div class="row-actions">
                 <button type="button" class="icon-btn" data-copy="{{.Hostname}}" onclick="copyVal(this)"
                         title="{{T "common.copy_hostname"}}" aria-label="{{T "common.copy_hostname"}}">{{icon "copy"}}</button>
+                {{if .Storage}}
+                <button type="button" class="icon-btn" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}" title="{{T "nodes.demote_storage"}}" aria-label="{{T "nodes.demote_storage"}}">{{icon "shield"}}</button>
+                {{else}}
+                <button type="button" class="icon-btn" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}" title="{{T "nodes.promote_storage"}}" aria-label="{{T "nodes.promote_storage"}}">{{icon "shield"}}</button>
+                {{end}}
               </div>
             </td>
           </tr>
@@ -174,14 +180,21 @@
     <div class="only-sm">
       {{range .Nodes}}
       <div class="kv">
-        <div class="kv-row"><span class="k">{{T "common.node"}}</span><span class="v"><span class="mono iso" dir="ltr">{{.Hostname}}</span>{{if .IsLeader}} <span class="pill accent">{{T "st.leader"}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "common.node"}}</span><span class="v"><span class="mono iso" dir="ltr">{{.Hostname}}</span>{{if .IsLeader}} <span class="pill accent">{{T "st.leader"}}</span>{{end}}{{if .Storage}} <span class="pill plain">{{T "st.storage"}}</span>{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "common.role"}}</span><span class="v">{{if eq .Role "manager"}}{{T "st.manager"}}{{else if eq .Role "worker"}}{{T "st.worker"}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "common.status"}}</span><span class="v">{{if eq .Status "ready"}}<span class="pill good"><i class="dot"></i>{{T "st.ready"}}</span>{{else if eq .Status "down"}}<span class="pill bad"><i class="dot"></i>{{T "st.down"}}</span>{{else}}{{T "common.unknown"}}{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "common.availability"}}</span><span class="v">{{if eq .Availability "active"}}{{T "st.avail_active"}}{{else if eq .Availability "pause"}}{{T "st.avail_pause"}}{{else if eq .Availability "drain"}}{{T "st.avail_drain"}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "cluster.engine"}}</span><span class="v mono iso" dir="ltr">{{.EngineVersion}}</span></div>
         <div class="kv-row">
           <span class="k">{{T "common.actions"}}</span>
-          <span class="v"><button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Hostname}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "common.copy"}}</span></button></span>
+          <span class="v">
+            <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Hostname}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
+            {{if .Storage}}
+            <button type="button" class="btn btn-ghost btn-sm" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}">{{icon "shield"}}<span>{{T "nodes.demote_storage"}}</span></button>
+            {{else}}
+            <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}">{{icon "shield"}}<span>{{T "nodes.promote_storage"}}</span></button>
+            {{end}}
+          </span>
         </div>
       </div>
       {{end}}

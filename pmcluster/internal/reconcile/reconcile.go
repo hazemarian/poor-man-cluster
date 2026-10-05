@@ -138,9 +138,23 @@ type Reconciler struct {
 	Log           zerolog.Logger
 	Interval      time.Duration // safety-net tick; 0 disables the tick
 
+	// FailoverMove, when set, replaces the automatic storage-failover move
+	// (normally DeployService.MoveWithOptions). Tests stub it to observe the
+	// failover decision without touching Docker.
+	FailoverMove func(ctx context.Context, stackName, targetNode string) error
+
 	mu    sync.Mutex
 	runID int64
+
+	// Storage failover state: per-stack cooldown so a persistently-down
+	// storage node does not re-trigger a move on every pass.
+	failoverMu   sync.Mutex
+	lastFailover map[string]time.Time
 }
+
+// failoverCooldown is the minimum interval between automatic storage
+// failover moves for the same stack.
+const failoverCooldown = 5 * time.Minute
 
 // RunOnce performs one converge pass. Safe to call concurrently (a second
 // call while one is running returns nil immediately).
@@ -210,6 +224,7 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 	for _, st := range stacks {
 		if paused, node := r.storagePaused(ctx, st.Name, health); paused {
 			log.Warn().Str("stack", st.Name).Str("node", node).Msg("reconcile — storage node down; pausing app sync (clears when the node returns or the stack is moved)")
+			r.tryStorageFailover(ctx, st.Name, node, health, log)
 			continue
 		}
 		res, serr := r.DeployService.Sync(ctx, st.Name)
@@ -267,6 +282,67 @@ func (r *Reconciler) storagePaused(ctx context.Context, stackName string, health
 		}
 	}
 	return false, ""
+}
+
+// tryStorageFailover attempts an automatic storage failover when a stack's
+// storage node is down: pick a healthy alternate storage node (from the
+// storage_nodes setting that is currently ready+active) and move the stack
+// there, restoring its data from S3 (the down node's local archive is
+// unreachable). The move runs in a detached goroutine so it never blocks the
+// converge pass, and a per-stack cooldown prevents re-triggering a move every
+// pass while the node stays down. Silent when no alternate storage node is
+// configured/healthy or when the deploy service is not wired.
+func (r *Reconciler) tryStorageFailover(ctx context.Context, stackName, downNode string, health map[string]bool, log zerolog.Logger) {
+	if r.DeployService == nil && r.FailoverMove == nil {
+		return
+	}
+	if r.Store == nil {
+		return
+	}
+	raw := r.Store.GetSettingDefault(ctx, cluster.SettingStorageNodes(), "")
+	candidates := stacks.ParseStorageNodes(raw)
+	var target string
+	for _, c := range candidates {
+		if c == downNode {
+			continue
+		}
+		if health[c] {
+			target = c
+			break
+		}
+	}
+	if target == "" {
+		log.Debug().Str("stack", stackName).Str("node", downNode).Msg("reconcile — storage failover: no healthy alternate storage node; stack stays paused")
+		return
+	}
+	r.failoverMu.Lock()
+	if r.lastFailover == nil {
+		r.lastFailover = map[string]time.Time{}
+	}
+	if last, ok := r.lastFailover[stackName]; ok && time.Since(last) < failoverCooldown {
+		r.failoverMu.Unlock()
+		return
+	}
+	r.lastFailover[stackName] = time.Now()
+	r.failoverMu.Unlock()
+
+	move := r.FailoverMove
+	if move == nil {
+		move = func(ctx context.Context, name, targetNode string) error {
+			return r.DeployService.MoveWithOptions(ctx, name, targetNode, stacks.MoveOptions{FromS3: true})
+		}
+	}
+
+	log.Warn().Str("stack", stackName).Str("from", downNode).Str("to", target).
+		Msg("reconcile — storage failover: moving stack to a healthy storage node (S3 restore)")
+	go func() {
+		mvCtx := context.WithoutCancel(ctx)
+		if err := move(mvCtx, stackName, target); err != nil {
+			r.Log.Warn().Err(err).Str("stack", stackName).Str("to", target).Msg("reconcile — storage failover move failed")
+			return
+		}
+		r.Log.Info().Str("stack", stackName).Str("to", target).Msg("reconcile — storage failover move completed")
+	}()
 }
 
 // snapshotHealth writes a stack_status row per store stack, with per-service
