@@ -313,6 +313,10 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 
 		ooL, ooM, ooT := loadOORetention(ctx, deps.Store)
 		s3b := loadBackupS3(ctx, deps.Store)
+		minio, minioErr := loadMinIOBackup(ctx, deps.Docker, deps.Store, deps.Cipher)
+		if minioErr != nil {
+			return minioErr
+		}
 		render = RenderInput{
 			Domain:                   in.Domain,
 			OpenObserveAdminEmail:    openobsCred.Username,
@@ -338,6 +342,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			PlatformNode:             loadPlatformNode(ctx, deps.Store),
 			OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
 			BackupS3:        s3b,
+			MinIO:           minio,
 			SSOEnabled:      sso.Enabled,
 			SSOCookieSecret: ssoSecret,
 			SSOClientID:     sso.ClientID,

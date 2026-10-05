@@ -1,14 +1,20 @@
-# backup-stack.yml — offen/docker-volume-backup agents (DSL manifest,
-# platform-managed). Rendered by LoadComposeFile through the same manifest
-# pipeline as customer app stacks.
+# backup-stack.yml — backup agents + the in-cluster MinIO backup store (DSL
+# manifest, platform-managed). Rendered by LoadComposeFile through the same
+# manifest pipeline as customer app stacks.
 app: backup
 env: production
 domain: ${DOMAIN}
 platform: true
+[[ if .MinIO.Enabled ]]
+volumes:
+  miniodata: ""
+[[ end ]]
 services:
   # The Backup Agent — one per node when backup_all_nodes is set; one per
   # STORAGE node (pmcluster.storage label) when the storage_nodes setting is
   # non-empty; otherwise a single replica pinned to the platform node / manager.
+  # Uploads to the in-cluster MinIO store when enabled, else straight to the
+  # offsite endpoint (legacy).
   volume-backup:
     image: offen/docker-volume-backup:v2
 [[ if .BackupAllNodes ]]
@@ -27,7 +33,14 @@ services:
       BACKUP_FILENAME: "backup-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz"
       BACKUP_PRUNING_PREFIX: "backup-"
       BACKUP_RETENTION_DAYS: "[[ if .BackupRetentionDays ]][[.BackupRetentionDays]][[ else ]]15[[ end ]]"
-      [[- if .BackupS3.Configured ]]
+      [[- if .MinIO.Enabled ]]
+      AWS_S3_BUCKET_NAME: "[[.MinIO.Bucket]]"
+      AWS_ACCESS_KEY_ID: "[[.MinIO.User]]"
+      AWS_SECRET_ACCESS_KEY: "[[.MinIO.Password]]"
+      AWS_ENDPOINT: "[[.MinIO.Endpoint]]"
+      AWS_REGION: "us-east-1"
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      [[- else if .BackupS3.Configured ]]
       AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
       AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
       AWS_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
@@ -39,11 +52,52 @@ services:
       - "[[.VolumeRoot]]:/backup/data:ro"
       - "[[.BackupDir]]:/archive"
       - "/etc/localtime:/etc/localtime:ro"
+[[ if .MinIO.Enabled ]]
+  # The in-cluster backup store. Runs on a NON-storage node via an explicit
+  # placement (which bypasses the volumed-service→storage-node auto-pin), so
+  # the durable copy lives in a different failure domain than the data. Headless
+  # (no console). Port 9000 is published on the routing mesh so the leader
+  # daemon can read backups at 127.0.0.1:9000 during a failover restore.
+  minio:
+    image: minio/minio:latest
+    placement: "[[ if .MinIO.Node ]][[.MinIO.Node]][[ else if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
+    command: ["server", "/data"]
+    restart: on-failure
+    env:
+      MINIO_ROOT_USER: "[[.MinIO.User]]"
+      MINIO_ROOT_PASSWORD: "[[.MinIO.Password]]"
+      MINIO_BROWSER: "off"
+    volumes:
+      - miniodata:/data
+    ports:
+      - target: 9000
+        published: 9000
+[[ if .BackupS3.Configured ]]
+  # Offsite replicator — continuously mirrors the MinIO bucket to the offsite
+  # S3-compatible target. `mc mirror --remove` propagates deletions, so offen's
+  # retention pruning also cleans the offsite copy.
+  backup-replicate:
+    image: minio/mc:latest
+    placement: "[[ if .MinIO.Node ]][[.MinIO.Node]][[ else if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - 'set -e; until mc alias set local http://backup_minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do echo waiting-for-minio; sleep 3; done; until mc alias set offsite "$$OFFSITE_ENDPOINT" "$$OFFSITE_ACCESS_KEY" "$$OFFSITE_SECRET_KEY"; do echo waiting-for-offsite; sleep 5; done; mc mb --ignore-existing local/"$$MINIO_BUCKET"; while true; do mc mirror --overwrite --remove --watch local/"$$MINIO_BUCKET" offsite/"$$OFFSITE_BUCKET" || true; sleep 5; done'
+    restart: on-failure
+    env:
+      MINIO_ROOT_USER: "[[.MinIO.User]]"
+      MINIO_ROOT_PASSWORD: "[[.MinIO.Password]]"
+      MINIO_BUCKET: "[[.MinIO.Bucket]]"
+      OFFSITE_ENDPOINT: "[[.BackupS3.Endpoint]]"
+      OFFSITE_ACCESS_KEY: "[[.BackupS3.AccessKey]]"
+      OFFSITE_SECRET_KEY: "[[.BackupS3.SecretKey]]"
+      OFFSITE_BUCKET: "[[.BackupS3.Bucket]]"
+[[ end ]]
+[[ end ]]
 [[ if .DataDir ]]
   # The Control-Plane Backup Agent — runs ONLY on the manager node (where
-  # ~/.pmcluster lives). Archives the pmcluster control plane itself (SQLite
-  # DB, AES-GCM key, TLS certs, rendered configs) so a lost manager disk
-  # doesn't mean a full re-bootstrap. Distinct prefix + longer retention.
+  # ~/.pmcluster lives). Archives the pmcluster control plane itself so a lost
+  # manager disk doesn't mean a full re-bootstrap. Distinct prefix + longer
+  # retention.
   control-plane-backup:
     image: offen/docker-volume-backup:v2
     placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
@@ -54,6 +108,21 @@ services:
       BACKUP_SOURCES: "/backup/pmcluster"
       BACKUP_PRUNING_PREFIX: "pmcluster-ctlplane-"
       BACKUP_RETENTION_DAYS: "30"
+      [[- if .MinIO.Enabled ]]
+      AWS_S3_BUCKET_NAME: "[[.MinIO.Bucket]]"
+      AWS_ACCESS_KEY_ID: "[[.MinIO.User]]"
+      AWS_SECRET_ACCESS_KEY: "[[.MinIO.Password]]"
+      AWS_ENDPOINT: "[[.MinIO.Endpoint]]"
+      AWS_REGION: "us-east-1"
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      [[- else if .BackupS3.Configured ]]
+      AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
+      AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
+      AWS_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
+      AWS_ENDPOINT: "[[.BackupS3.Endpoint]]"
+      AWS_REGION: "[[.BackupS3.Region]]"
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      [[- end ]]
     binds:
       - "${DATA_DIR}:/backup/pmcluster:ro"
       - "[[.BackupDir]]:/archive"

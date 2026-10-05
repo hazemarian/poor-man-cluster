@@ -145,6 +145,21 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil
 	})
 
+	wf.Add("Ensuring the in-cluster MinIO backup credential", func(ctx context.Context) error {
+		if _, err := deps.Store.GetCredential(ctx, "minio_admin"); errors.Is(err, store.ErrCredentialNotFound) {
+			// Mint the MinIO root credential on clusters whose bootstrap
+			// predates the in-cluster backup store, so this render enables it
+			// (idempotent; the swarm secret is created alongside).
+			mgr := &CredentialsManager{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer}
+			if _, cerr := mgr.Ensure(ctx, "minio_admin"); cerr != nil {
+				return fmt.Errorf("bootstrap minio_admin: %w", cerr)
+			}
+		} else if err != nil {
+			return fmt.Errorf("load minio_admin credential: %w", err)
+		}
+		return nil
+	})
+
 	wf.Add("Loading OpenObserve credentials", func(ctx context.Context) error {
 		ooCred, err := deps.Store.GetCredential(ctx, "openobserve_admin")
 		if err != nil {
@@ -156,6 +171,10 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		}
 		ooL, ooM, ooT := loadOORetention(ctx, deps.Store)
 		s3b := loadBackupS3(ctx, deps.Store)
+		minio, minioErr := loadMinIOBackup(ctx, deps.Docker, deps.Store, deps.Cipher)
+		if minioErr != nil {
+			return minioErr
+		}
 		render = RenderInput{
 			Domain:                   domain,
 			OpenObserveAdminEmail:    ooCred.Username,
@@ -178,6 +197,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			PlatformNode:             loadPlatformNode(ctx, deps.Store),
 			OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
 			BackupS3:        s3b,
+			MinIO:           minio,
 			SSOEnabled:      sso.Enabled,
 			SSOCookieSecret: ssoSecret,
 			SSOClientID:     sso.ClientID,
@@ -518,6 +538,10 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 	}
 	ooL, ooM, ooT := loadOORetention(ctx, deps.Store)
 	s3b := loadBackupS3(ctx, deps.Store)
+	minio, minioErr := loadMinIOBackup(ctx, deps.Docker, deps.Store, deps.Cipher)
+	if minioErr != nil {
+		return nil, minioErr
+	}
 	render := RenderInput{
 		Domain:                   domain,
 		OpenObserveAdminEmail:    ooCred.Username,
@@ -540,6 +564,7 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		PlatformNode:             loadPlatformNode(ctx, deps.Store),
 		OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
 		BackupS3: s3b,
+		MinIO:    minio,
 	}
 	sso, err := loadSSOSettings(ctx, deps.Store)
 	if err != nil {

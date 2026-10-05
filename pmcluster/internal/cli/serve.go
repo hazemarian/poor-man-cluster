@@ -155,9 +155,25 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		log.Warn().Err(cipherErr).Msg("encryption key not available; /webhook/* disabled")
 	}
 
+	// The in-cluster MinIO store, when enabled (minio_admin credential
+	// present), holds the newest backup copies, so reads — failover restore,
+	// `backup restore --from-s3` — prefer it. The external backup_s3_* remains
+	// the replication target and is still used when MinIO is disabled.
+	backupS3 := backupS3FromSettings(cmd.Context(), st)
+	if mc, err := st.GetCredential(cmd.Context(), "minio_admin"); err == nil && cipher != nil {
+		if pass, derr := cipher.Decrypt(mc.PasswordCiphertext); derr == nil {
+			backupS3 = backups.S3Config{
+				Endpoint:  "http://127.0.0.1:9000",
+				Bucket:    "pmcluster-backups",
+				AccessKey: mc.Username,
+				SecretKey: string(pass),
+			}
+		}
+	}
+
 	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.GetSettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
 		return st.GetSettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
-	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3FromSettings(cmd.Context(), st)}
+	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3}
 
 	tlsSvc := certs.NewLocal(st, cipher, dc, deployer,
 		cfg.ConfigDir(), buildinfo.Version)
@@ -168,7 +184,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		Store:         st,
 		DeployService: deploySvc,
 		Cipher:        cipher,
-		Backups:       &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: backups.DefaultArchiveDir, RetentionDays: cluster.LoadBackupRetentionDays(cmd.Context(), st), S3: backupS3FromSettings(cmd.Context(), st)},
+		Backups:       &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: backups.DefaultArchiveDir, RetentionDays: cluster.LoadBackupRetentionDays(cmd.Context(), st), S3: backupS3},
 		Settings: func() *settings.Local {
 			l := settings.NewLocal(st)
 			l.ApplyLogLevel = logger.SetLevel

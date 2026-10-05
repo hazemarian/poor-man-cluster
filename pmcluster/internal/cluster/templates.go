@@ -270,10 +270,39 @@ type RenderInput struct {
 	OOMetricsRetentionDays int
 	OOTracesRetentionDays  int
 
-	// BackupS3 is the offsite destination for the volume-backup agent. When
-	// Configured(), offen uploads every archive to the S3-compatible endpoint
-	// in addition to the local /var/stack/backup copy.
+	// BackupS3 is the offsite destination for cluster backups. When MinIO is
+	// enabled it is the bucket-replication TARGET (MinIO copies every archived
+	// object here); when MinIO is disabled it is offen's direct upload target
+	// (the legacy behaviour).
 	BackupS3 BackupS3
+
+	// MinIO configures the in-cluster S3-compatible backup store. When
+	// Enabled, the backup stack runs a headless MinIO on a NON-storage node
+	// and the offen agents upload there instead of straight to the offsite
+	// endpoint; MinIO then replicates the bucket to BackupS3. Keeping the
+	// durable copy on a different node than the data is what makes storage
+	// failover possible.
+	MinIO MinIOBackup
+}
+
+// MinIOBackup configures the in-cluster MinIO backup store.
+type MinIOBackup struct {
+	// Enabled deploys MinIO and points the offen agents at it.
+	Enabled bool
+	// Endpoint is the in-cluster S3 endpoint offen uploads to, e.g.
+	// "http://backup_minio:9000".
+	Endpoint string
+	// Bucket is the MinIO bucket holding cluster backups.
+	Bucket string
+	// User / Password are the MinIO root credentials (mirrored into the
+	// minio_root_password Swarm secret).
+	User     string
+	Password string
+	// Node is the hostname MinIO is pinned to — an explicit placement that
+	// BYPASSES the volumed-service→storage-node auto-pin (which only fires
+	// when placement is empty). Chosen at render time as the first node that
+	// is NOT a storage node; empty falls back to the platform node / manager.
+	Node string
 }
 
 // openObserveBasicAuth computes the HTTP Basic Authorization header value

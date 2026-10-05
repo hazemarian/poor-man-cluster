@@ -2,6 +2,35 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.160 (2026-10-05)
+
+In-cluster MinIO backup store (one combined backup stack).
+
+- **MinIO + backup agents in one stack**: the backup stack now runs a headless
+  MinIO (`MINIO_BROWSER=off`, no console) alongside the offen agents, so there
+  is nothing to click — configure the offsite target once and forget it.
+- **Durable copy in a different failure domain**: MinIO is pinned to a
+  NON-storage node via an **explicit placement**, which bypasses the
+  volumed-service → storage-node auto-pin (that pin only fires when placement is
+  empty). Chosen at render time as the first non-storage worker, then the first
+  non-storage node, falling back to the platform node / manager only when every
+  node is a storage node.
+- **offen uploads to MinIO** instead of straight to the offsite endpoint
+  (`AWS_ENDPOINT=http://backup_minio:9000`, bucket `pmcluster-backups`).
+- **Offsite replication**: a `backup-replicate` sidecar (`minio/mc`) continuously
+  mirrors the MinIO bucket to the existing `backup_s3_*` target
+  (`mc mirror --overwrite --remove --watch`), so retention pruning also cleans
+  the offsite copy.
+- **Failover/restore unchanged**: MinIO *is* the S3 endpoint now — the leader
+  daemon's `fetchNewestArchiveFromS3` and `backup restore --from-s3` read from
+  MinIO (`127.0.0.1:9000` via the routing mesh); the code path is identical.
+- **`minio_admin` managed credential**: root user/password auto-minted at
+  `cluster up` (username `pmcluster`, secret `minio_root_password`); `cluster
+  update` self-heals it on existing clusters so MinIO enables on the next update.
+- Tests: `TestLoadComposeFile_BackupMinIO` (headless MinIO, explicit non-storage
+  placement, storage-pin bypass asserted by constraint count, offen→MinIO,
+  replicator) + `TestLoadComposeFile_BackupMinIODisabled` (legacy offsite path).
+
 ## v0.2.159 (2026-10-05)
 
 Storage failover safety, lifecycle & visibility (Test Case 8 follow-up).

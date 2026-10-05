@@ -162,6 +162,69 @@ func TestLoadComposeFile_BackupCronRendering(t *testing.T) {
 	}
 }
 
+func TestLoadComposeFile_BackupMinIO(t *testing.T) {
+	// MinIO enabled + offsite S3 configured: offen agents upload to the
+	// in-cluster store; a headless MinIO runs pinned to the chosen non-storage
+	// node (explicit placement, which BYPASSES the volumed-service storage
+	// auto-pin); a replicator mirrors the bucket offsite.
+	in := RenderInput{
+		Domain:                "example.com",
+		VolumeRoot:            "/var/stack/data",
+		BackupDir:             "/var/stack/backup",
+		StorageNodeConstraint: true,
+		StorageNodeLabel:      "pmcluster.storage",
+		BackupS3:              BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
+		MinIO:                 MinIOBackup{Enabled: true, Endpoint: "http://backup_minio:9000", Bucket: "pmcluster-backups", User: "pmcluster", Password: "s3cr3t", Node: "worker-2"},
+	}
+	body := string(mustLoadBackup(t, in))
+
+	if !strings.Contains(body, "minio/minio") {
+		t.Errorf("missing minio image:\n%s", body)
+	}
+	if !strings.Contains(body, "MINIO_BROWSER") {
+		t.Errorf("minio should set MINIO_BROWSER (off = headless)")
+	}
+	if !strings.Contains(body, "miniodata") {
+		t.Errorf("missing miniodata volume")
+	}
+	// Explicit placement to the chosen non-storage node.
+	if !strings.Contains(body, "node.hostname == worker-2") {
+		t.Errorf("minio should pin to the explicit non-storage node worker-2:\n%s", body)
+	}
+	// The storage label constraint must appear EXACTLY once (the offen agents),
+	// never on minio — proving the explicit placement bypassed the auto-pin.
+	if n := strings.Count(body, "node.labels.pmcluster.storage == true"); n != 1 {
+		t.Errorf("storage-node constraint count = %d, want 1 (offen only; minio must bypass it):\n%s", n, body)
+	}
+	// offen destination is the in-cluster MinIO.
+	if !strings.Contains(body, "backup_minio:9000") {
+		t.Errorf("offen should upload to the in-cluster MinIO endpoint")
+	}
+	// Replicator mirrors the bucket to the offsite target.
+	if !strings.Contains(body, "minio/mc") || !strings.Contains(body, "mc mirror") {
+		t.Errorf("missing offsite replicator (minio/mc + mc mirror)")
+	}
+	if !strings.Contains(body, "OFFSITE_ENDPOINT") || !strings.Contains(body, "s3.example.com") {
+		t.Errorf("replicator should target the offsite endpoint")
+	}
+}
+
+func TestLoadComposeFile_BackupMinIODisabled(t *testing.T) {
+	// MinIO disabled: legacy path — offen uploads straight to the offsite
+	// endpoint and no minio/replicate services are rendered.
+	in := RenderInput{
+		Domain:   "example.com",
+		BackupS3: BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
+	}
+	body := string(mustLoadBackup(t, in))
+	if strings.Contains(body, "minio/minio") || strings.Contains(body, "minio/mc") {
+		t.Errorf("MinIO services must not render when disabled:\n%s", body)
+	}
+	if !strings.Contains(body, "s3.example.com") {
+		t.Errorf("legacy offen should upload to the offsite endpoint")
+	}
+}
+
 func mustLoadBackup(t *testing.T, in RenderInput) []byte {
 	t.Helper()
 	data, err := LoadComposeFile(StackBackup, in)
