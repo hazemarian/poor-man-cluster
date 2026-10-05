@@ -559,11 +559,13 @@ func loadObjectStore(ctx context.Context, docker runtime.Client, st *store.Store
 		return ObjectStore{}, fmt.Errorf("decrypt seaweedfs_admin password: %w", err)
 	}
 	return ObjectStore{
-		Enabled:   true,
-		Endpoint:  "http://backup_seaweedfs:8333",
-		Bucket:    "pmcluster-backups",
-		AccessKey: cred.Username,
-		SecretKey: string(pass),
+		Enabled:  true,
+		Endpoint: "http://backup_seaweedfs:8333",
+		Bucket:   "pmcluster-backups",
+		// Compose env values must have "$" doubled or `docker stack deploy`
+		// rejects the rendered YAML as an interpolation format error.
+		AccessKey: escapeComposeDollar(cred.Username),
+		SecretKey: escapeComposeDollar(string(pass)),
 		Node:      pickStoreNode(ctx, docker, st),
 	}, nil
 }
