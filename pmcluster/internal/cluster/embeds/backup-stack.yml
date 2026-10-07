@@ -13,8 +13,9 @@ services:
   # The Backup Agent — one per node when backup_all_nodes is set; one per
   # STORAGE node (pmcluster.storage label) when the storage_nodes setting is
   # non-empty; otherwise a single replica pinned to the platform node / manager.
-  # Uploads to the in-cluster SeaweedFS store when enabled, else straight to the
-  # offsite endpoint (legacy).
+  # Writes each archive to BOTH the offsite S3 target (AWS_*) and the
+  # in-cluster SeaweedFS store (WebDAV, WEBDAV_*) when the store AND offsite are
+  # configured; store-only and offsite-only fall back to a single S3 write.
   volume-backup:
     image: offen/docker-volume-backup:v2
 [[ if .BackupAllNodes ]]
@@ -34,6 +35,24 @@ services:
       BACKUP_PRUNING_PREFIX: "backup-"
       BACKUP_RETENTION_DAYS: "[[ if .BackupRetentionDays ]][[.BackupRetentionDays]][[ else ]]15[[ end ]]"
       [[- if .Store.Enabled ]]
+      [[- if .BackupS3.Configured ]]
+      # Double-write: offsite S3 + in-cluster store via WebDAV. offen's native
+      # pruning keeps BOTH copies in lockstep (no separate replicator needed).
+      AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
+      AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
+      AWS_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
+      AWS_ENDPOINT: "[[.BackupS3.EndpointHost]]"
+      AWS_ENDPOINT_PROTO: "[[.BackupS3.EndpointProto]]"
+      AWS_REGION: "[[.BackupS3.Region]]"
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      WEBDAV_URL: "http://backup_seaweedfs:7333"
+      WEBDAV_PATH: "/buckets/[[.Store.Bucket]]"
+      # offen refuses an anonymous WebDAV backend, so credentials must be set;
+      # the SeaweedFS gateway does not check them, so the store's own keys are
+      # reused here.
+      WEBDAV_USERNAME: "[[.Store.AccessKey]]"
+      WEBDAV_PASSWORD: "[[.Store.SecretKey]]"
+      [[- else ]]
       AWS_S3_BUCKET_NAME: "[[.Store.Bucket]]"
       AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
       AWS_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
@@ -41,6 +60,7 @@ services:
       AWS_ENDPOINT_PROTO: "http"
       AWS_REGION: "us-east-1"
       AWS_S3_FORCE_PATH_STYLE: "true"
+      [[- end ]]
       [[- else if .BackupS3.Configured ]]
       AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
       AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
@@ -67,11 +87,15 @@ services:
   seaweedfs:
     image: chrislusf/seaweedfs:4.48
     placement: "[[ if .Store.Node ]][[.Store.Node]][[ else if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
-    # Advertise loopback so the master/volume/filer coordinate over 127.0.0.1
-    # (in a Swarm task the published port attaches the ingress network, so the
-    # auto-detected task IP is not self-reachable and object uploads time out).
-    # Bind on all interfaces so the published 8333 keeps working.
-    command: ["server", "-s3", "-s3.port=8333", "-s3.port.iceberg=0", "-s3.port.lance=0", "-ip=127.0.0.1", "-ip.bind=0.0.0.0", "-s3.ip.bind=0.0.0.0"]
+    # Advertise loopback: publishing 8333 attaches the ingress network, whose
+    # auto-detected task IP is not self-reachable, so the server must not
+    # advertise it. Bind on all interfaces so the published 8333 keeps working.
+    # The WebDAV gateway (offen's second write target) runs in THIS process via
+    # `-webdav`, so it shares the container's network namespace and reaches the
+    # filer on loopback — no separate container, no cross-container loopback
+    # problem. It serves the SAME namespace as S3 (bucket pmcluster-backups ==
+    # filer /buckets/pmcluster-backups). Cluster-internal: no published port.
+    command: ["server", "-s3", "-s3.port=8333", "-s3.port.iceberg=0", "-s3.port.lance=0", "-webdav", "-webdav.port=7333", "-ip=127.0.0.1", "-ip.bind=0.0.0.0", "-s3.ip.bind=0.0.0.0"]
     restart: on-failure
     env:
       AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
@@ -86,34 +110,6 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-[[ if .BackupS3.Configured ]]
-  # Offsite replicator — continuously mirrors the SeaweedFS bucket to the
-  # offsite S3-compatible target. `rclone sync` propagates deletions, so
-  # offen's retention pruning also cleans the offsite copy. Remotes are
-  # declared entirely via env vars (no config file).
-  backup-replicate:
-    image: rclone/rclone
-    placement: "[[ if .Store.Node ]][[.Store.Node]][[ else if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - 'while true; do rclone sync sw:pmcluster-backups off:[[.BackupS3.Bucket]] || true; sleep 30; done'
-    restart: on-failure
-    env:
-      RCLONE_CONFIG_SW_TYPE: "s3"
-      RCLONE_CONFIG_SW_PROVIDER: "Other"
-      RCLONE_CONFIG_SW_ENDPOINT: "http://backup_seaweedfs:8333"
-      RCLONE_CONFIG_SW_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
-      RCLONE_CONFIG_SW_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
-      RCLONE_CONFIG_SW_REGION: "us-east-1"
-      RCLONE_CONFIG_SW_FORCE_PATH_STYLE: "true"
-      RCLONE_CONFIG_OFF_TYPE: "s3"
-      RCLONE_CONFIG_OFF_PROVIDER: "Other"
-      RCLONE_CONFIG_OFF_ENDPOINT: "[[.BackupS3.Endpoint]]"
-      RCLONE_CONFIG_OFF_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
-      RCLONE_CONFIG_OFF_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
-      RCLONE_CONFIG_OFF_REGION: "[[.BackupS3.Region]]"
-      RCLONE_CONFIG_OFF_FORCE_PATH_STYLE: "true"
-[[ end ]]
 [[ end ]]
 [[ if .DataDir ]]
   # The Control-Plane Backup Agent — runs ONLY on the manager node (where
@@ -131,6 +127,22 @@ services:
       BACKUP_PRUNING_PREFIX: "pmcluster-ctlplane-"
       BACKUP_RETENTION_DAYS: "30"
       [[- if .Store.Enabled ]]
+      [[- if .BackupS3.Configured ]]
+      AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
+      AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
+      AWS_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
+      AWS_ENDPOINT: "[[.BackupS3.EndpointHost]]"
+      AWS_ENDPOINT_PROTO: "[[.BackupS3.EndpointProto]]"
+      AWS_REGION: "[[.BackupS3.Region]]"
+      AWS_S3_FORCE_PATH_STYLE: "true"
+      WEBDAV_URL: "http://backup_seaweedfs:7333"
+      WEBDAV_PATH: "/buckets/[[.Store.Bucket]]"
+      # offen refuses an anonymous WebDAV backend, so credentials must be set;
+      # the SeaweedFS gateway does not check them, so the store's own keys are
+      # reused here.
+      WEBDAV_USERNAME: "[[.Store.AccessKey]]"
+      WEBDAV_PASSWORD: "[[.Store.SecretKey]]"
+      [[- else ]]
       AWS_S3_BUCKET_NAME: "[[.Store.Bucket]]"
       AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
       AWS_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
@@ -138,6 +150,7 @@ services:
       AWS_ENDPOINT_PROTO: "http"
       AWS_REGION: "us-east-1"
       AWS_S3_FORCE_PATH_STYLE: "true"
+      [[- end ]]
       [[- else if .BackupS3.Configured ]]
       AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
       AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"

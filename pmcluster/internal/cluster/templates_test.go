@@ -163,10 +163,11 @@ func TestLoadComposeFile_BackupCronRendering(t *testing.T) {
 }
 
 func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
-	// SeaweedFS store enabled + offsite S3 configured: offen agents upload to
-	// the in-cluster store; SeaweedFS runs pinned to the chosen non-storage
-	// node (explicit placement, which BYPASSES the volumed-service storage
-	// auto-pin); an rclone sidecar mirrors the bucket offsite.
+	// SeaweedFS store enabled + offsite S3 configured: offen double-writes each
+	// archive to BOTH the offsite S3 target (AWS_*) and the in-cluster store via
+	// the WebDAV gateway (WEBDAV_*). SeaweedFS runs pinned to the chosen
+	// non-storage node (explicit placement, which BYPASSES the volumed-service
+	// storage auto-pin); there is NO rclone replicator sidecar anymore.
 	in := RenderInput{
 		Domain:                "example.com",
 		VolumeRoot:            "/var/stack/data",
@@ -184,7 +185,10 @@ func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
 	if !strings.Contains(body, "-s3.port=8333") || !strings.Contains(body, "-s3.port.iceberg=0") {
 		t.Errorf("seaweedfs should run `server -s3 -s3.port=8333 ...`:\n%s", body)
 	}
-	// Advertise loopback + bind all interfaces (Swarm ingress fix).
+	// Advertise loopback (publishing 8333 attaches the ingress network whose
+	// task IP is not self-reachable) and bind all interfaces so the published
+	// 8333 keeps working. WebDAV runs in THIS process (`-webdav`), so it needs
+	// no cross-container loopback.
 	if !strings.Contains(body, "-ip=127.0.0.1") || !strings.Contains(body, "-ip.bind=0.0.0.0") {
 		t.Errorf("seaweedfs should advertise 127.0.0.1 and bind 0.0.0.0:\n%s", body)
 	}
@@ -196,41 +200,78 @@ func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
 		t.Errorf("seaweedfs should pin to the explicit non-storage node worker-2:\n%s", body)
 	}
 	// The storage label constraint must appear EXACTLY once (the offen agents),
-	// never on seaweedfs/replicate — proving the explicit placement bypassed
-	// the auto-pin.
+	// never on seaweedfs/webdav — proving the explicit placement bypassed the
+	// auto-pin.
 	if n := strings.Count(body, "node.labels.pmcluster.storage == true"); n != 1 {
-		t.Errorf("storage-node constraint count = %d, want 1 (offen only; seaweedfs must bypass it):\n%s", n, body)
+		t.Errorf("storage-node constraint count = %d, want 1 (offen only; seaweedfs/webdav must bypass it):\n%s", n, body)
 	}
-	// offen destination is the in-cluster SeaweedFS.
-	if !strings.Contains(body, "backup_seaweedfs:8333") {
-		t.Errorf("offen should upload to the in-cluster SeaweedFS endpoint")
+	// WebDAV runs inside the seaweedfs process (`-webdav`), cluster-internal
+	// (no published port) — no separate webdav container.
+	if !strings.Contains(body, "-webdav") || !strings.Contains(body, "-webdav.port=7333") {
+		t.Errorf("seaweedfs should serve WebDAV in-process (`-webdav -webdav.port=7333`):\n%s", body)
 	}
-	// offen needs the protocol separately (a scheme in AWS_ENDPOINT is rejected).
-	if !strings.Contains(body, "AWS_ENDPOINT_PROTO") || !strings.Contains(body, "http") {
-		t.Errorf("offen should set AWS_ENDPOINT_PROTO=http for the in-cluster store")
+	// offen double-writes: AWS_* → offsite (scheme stripped + proto https) AND
+	// WEBDAV_* → the in-cluster store.
+	if !strings.Contains(body, "AWS_ENDPOINT: s3.example.com") {
+		t.Errorf("offen AWS_ENDPOINT should be the offsite host WITHOUT scheme:\n%s", body)
 	}
-	// Replicator mirrors the bucket to the offsite target via rclone.
-	if !strings.Contains(body, "rclone/rclone") || !strings.Contains(body, "rclone sync sw:pmcluster-backups off:offsite-bucket") {
-		t.Errorf("missing offsite replicator (rclone/rclone + rclone sync)")
+	if strings.Contains(body, "https://s3.example.com") {
+		t.Errorf("offen AWS_ENDPOINT must not carry the scheme (AWS_ENDPOINT_PROTO carries it):\n%s", body)
 	}
-	if !strings.Contains(body, "RCLONE_CONFIG_SW_ENDPOINT") || !strings.Contains(body, "RCLONE_CONFIG_OFF_ENDPOINT") || !strings.Contains(body, "s3.example.com") {
-		t.Errorf("replicator should declare in-cluster + offsite rclone remotes pointing at s3.example.com")
+	if !strings.Contains(body, "AWS_ENDPOINT_PROTO: https") {
+		t.Errorf("offen should set AWS_ENDPOINT_PROTO=https for the offsite target:\n%s", body)
+	}
+	if !strings.Contains(body, "WEBDAV_URL: http://backup_seaweedfs:7333") {
+		t.Errorf("offen should set WEBDAV_URL to the in-cluster webdav gateway:\n%s", body)
+	}
+	if !strings.Contains(body, "WEBDAV_PATH: /buckets/pmcluster-backups") {
+		t.Errorf("offen should set WEBDAV_PATH to the bucket's filer path:\n%s", body)
+	}
+	// No rclone replicator sidecar.
+	if strings.Contains(body, "rclone/rclone") || strings.Contains(body, "backup-replicate") || strings.Contains(body, "RCLONE_") {
+		t.Errorf("backup-replicate (rclone) service must be removed:\n%s", body)
 	}
 }
 
 func TestLoadComposeFile_BackupSeaweedFSDisabled(t *testing.T) {
 	// Store disabled: legacy path — offen uploads straight to the offsite
-	// endpoint and no seaweedfs/replicate services are rendered.
+	// endpoint (scheme preserved in AWS_ENDPOINT, as before) and no
+	// SeaweedFS (S3 + in-process WebDAV) services are rendered.
 	in := RenderInput{
 		Domain:   "example.com",
 		BackupS3: BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
 	}
 	body := string(mustLoadBackup(t, in))
-	if strings.Contains(body, "chrislusf/seaweedfs") || strings.Contains(body, "rclone/rclone") {
-		t.Errorf("SeaweedFS services must not render when disabled:\n%s", body)
+	if strings.Contains(body, "chrislusf/seaweedfs") || strings.Contains(body, "rclone/rclone") || strings.Contains(body, "WEBDAV_URL") || strings.Contains(body, "backup-replicate") {
+		t.Errorf("SeaweedFS (S3 + WebDAV) services must not render when disabled:\n%s", body)
 	}
-	if !strings.Contains(body, "s3.example.com") {
-		t.Errorf("legacy offen should upload to the offsite endpoint")
+	if !strings.Contains(body, "https://s3.example.com") {
+		t.Errorf("legacy offen should upload to the offsite endpoint (scheme preserved)")
+	}
+}
+
+func TestLoadComposeFile_BackupSeaweedFSStoreOnly(t *testing.T) {
+	// Store enabled but offsite S3 NOT configured: offen uploads to the store
+	// via S3 (AWS_* → the in-cluster endpoint, as before), with no WEBDAV_*
+	// double-write. The in-process WebDAV gateway (`-webdav`) still renders (it
+	// is part of the seaweedfs service, gated on .Store.Enabled) but is unused.
+	in := RenderInput{
+		Domain:   "example.com",
+		BackupS3: BackupS3{},
+		Store:    ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "pmclusterbackup", SecretKey: "s3cr3t", Node: "worker-2"},
+	}
+	body := string(mustLoadBackup(t, in))
+	if !strings.Contains(body, "AWS_ENDPOINT: backup_seaweedfs:8333") || !strings.Contains(body, "AWS_ENDPOINT_PROTO: http") {
+		t.Errorf("store-only offen should upload to the in-cluster store via S3:\n%s", body)
+	}
+	if strings.Contains(body, "WEBDAV_URL") {
+		t.Errorf("store-only offen must not double-write via WebDAV (no offsite target):\n%s", body)
+	}
+	if !strings.Contains(body, "-webdav.port=7333") {
+		t.Errorf("in-process WebDAV gateway should still render when the store is enabled:\n%s", body)
+	}
+	if strings.Contains(body, "rclone/rclone") || strings.Contains(body, "backup-replicate") {
+		t.Errorf("backup-replicate (rclone) service must be removed:\n%s", body)
 	}
 }
 

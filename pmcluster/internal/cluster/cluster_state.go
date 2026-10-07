@@ -379,6 +379,23 @@ func (b BackupS3) Configured() bool {
 	return b.Endpoint != "" && b.Bucket != "" && b.AccessKey != "" && b.SecretKey != ""
 }
 
+// EndpointHost returns the endpoint with any URL scheme stripped, so offen's
+// AWS_ENDPOINT gets a bare host:port while AWS_ENDPOINT_PROTO carries the
+// scheme (a scheme in AWS_ENDPOINT is rejected — see v0.2.160.3).
+func (b BackupS3) EndpointHost() string {
+	s := strings.TrimPrefix(b.Endpoint, "https://")
+	return strings.TrimPrefix(s, "http://")
+}
+
+// EndpointProto returns the scheme to pass as offen's AWS_ENDPOINT_PROTO:
+// "https" for an https endpoint, "http" otherwise.
+func (b BackupS3) EndpointProto() string {
+	if strings.HasPrefix(b.Endpoint, "https://") {
+		return "https"
+	}
+	return "http"
+}
+
 // loadBackupS3 returns the persisted offsite backup destination.
 func loadBackupS3(ctx context.Context, st *store.Store) BackupS3 {
 	if st == nil {

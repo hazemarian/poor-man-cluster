@@ -2,6 +2,36 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.162 (2026-10-07)
+
+Backup store: offen double-writes each archive — the rclone replicator is gone.
+
+- **offen double-write**: when the in-cluster SeaweedFS store AND the offsite
+  `backup_s3_*` target are both configured, the backup agents (volume +
+  control-plane) upload every archive to BOTH — offsite via S3 (`AWS_*`, scheme
+  stripped into `AWS_ENDPOINT_PROTO=https`) and the in-cluster store via a new
+  WebDAV backend (`WEBDAV_URL` / `WEBDAV_PATH`). offen's native retention
+  pruning keeps both copies in lockstep.
+- **rclone replicator removed**: the `backup-replicate` sidecar (the `rclone
+  sync` loop) is deleted — offen writes the two copies directly, nothing mirrors
+  the bucket anymore.
+- **WebDAV gateway, in-process** (`weed server … -webdav -webdav.port=7333`): the
+  gateway runs inside the SAME SeaweedFS container (no separate service), so it
+  reaches the filer on loopback and shares the container's network namespace. It
+  serves the SAME filer namespace as the S3 gateway, so a WebDAV write at
+  `/buckets/pmcluster-backups/<file>` IS the S3 object `<file>` (verified live on
+  the 2-node cluster, both directions). Cluster-internal: no published port,
+  never on the ingress network, no auth.
+- SeaweedFS keeps advertising loopback (`-ip=127.0.0.1`, bind `0.0.0.0`): the
+  published 8333 attaches the ingress network, whose auto-detected task IP is not
+  self-reachable and so must not be advertised. Because WebDAV is in-process,
+  there is no cross-container loopback problem.
+- The daemon read path is unchanged: failover/restore still reads the store via
+  S3 at `127.0.0.1:8333` (bucket `pmcluster-backups`).
+- Tests: `TestLoadComposeFile_BackupSeaweedFS` (in-process webdav + offen
+  double-write + no rclone), `TestLoadComposeFile_BackupSeaweedFSDisabled`, and
+  a new `TestLoadComposeFile_BackupSeaweedFSStoreOnly`.
+
 ## v0.2.161 (2026-10-05)
 
 Cluster lifecycle, self-healing reconcile, and swarm-wipe recovery.

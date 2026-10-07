@@ -424,10 +424,10 @@ func bootstrapSpecs() []bootstrapSpec {
 		},
 		{
 			// SeaweedFS S3 credentials for the in-cluster backup object store.
-			// offen agents upload here; SeaweedFS auto-creates the bucket on
-			// first upload, and the rclone sidecar replicates it offsite to the
-			// backup_s3_* target. Deployed only when the store is enabled in
-			// the backup stack. The access key (username) is a fixed string;
+			// offen agents upload here via the WebDAV gateway (the same
+			// identity the S3 gateway accepts); SeaweedFS auto-creates the
+			// bucket on first upload. Deployed only when the store is enabled
+			// in the backup stack. The access key (username) is a fixed string;
 			// the secret key (password) is generated.
 			name:            "seaweedfs_admin",
 			kind:            KindBackup,
@@ -593,7 +593,7 @@ func loadObjectStore(ctx context.Context, docker runtime.Client, st *store.Store
 		Enabled: true,
 		// Host:port only (no scheme): offen wants the protocol via
 		// AWS_ENDPOINT_PROTO, and a scheme in AWS_ENDPOINT conflicts with its
-		// secure option (rejected for http). rclone hardcodes the http:// prefix.
+		// secure option (rejected for http).
 		Endpoint: "backup_seaweedfs:8333",
 		Bucket:   "pmcluster-backups",
 		// Compose env values must have "$" doubled or `docker stack deploy`

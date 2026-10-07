@@ -157,9 +157,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	// The in-cluster SeaweedFS store, when enabled (seaweedfs_admin credential
 	// present), holds the newest backup copies, so reads — failover restore,
-	// `backup restore --from-s3` — prefer it. The external backup_s3_* remains
-	// the replication target and is still used when the in-cluster store is
-	// disabled.
+	// `backup restore --from-s3` — prefer it. offen now writes each archive to
+	// BOTH this store (via WebDAV) and the external backup_s3_* offsite target
+	// (via S3); when the in-cluster store is disabled the offsite target is
+	// used directly.
 	backupS3 := backupS3FromSettings(cmd.Context(), st)
 	if mc, err := st.GetCredential(cmd.Context(), "seaweedfs_admin"); err == nil && cipher != nil {
 		if pass, derr := cipher.Decrypt(mc.PasswordCiphertext); derr == nil {

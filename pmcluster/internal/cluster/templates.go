@@ -271,15 +271,17 @@ type RenderInput struct {
 	OOTracesRetentionDays  int
 
 	// BackupS3 is the offsite destination for cluster backups. When the
-	// in-cluster store is enabled it is the bucket-replication TARGET (the
-	// rclone sidecar copies every archived object here); when it is disabled
-	// it is offen's direct upload target (the legacy behaviour).
+	// in-cluster store is enabled, offen double-writes every archive to BOTH
+	// this offsite endpoint (via its AWS_* env) and the in-cluster store (via
+	// a WebDAV backend); when the store is disabled it is offen's direct
+	// upload target (the legacy behaviour).
 	BackupS3 BackupS3
 
 	// Store configures the in-cluster S3-compatible backup store. When
-	// Enabled, the backup stack runs SeaweedFS on a NON-storage node and the
-	// offen agents upload there instead of straight to the offsite endpoint;
-	// a rclone sidecar then replicates the bucket to BackupS3. Keeping the
+	// Enabled, the backup stack runs SeaweedFS (S3 gateway + a WebDAV gateway
+	// over the same filer namespace) on a NON-storage node; offen writes each
+	// archive to the store via WebDAV while ALSO uploading to BackupS3
+	// offsite, so no separate replicator sidecar is needed. Keeping the
 	// durable copy on a different node than the data is what makes storage
 	// failover possible.
 	Store ObjectStore
