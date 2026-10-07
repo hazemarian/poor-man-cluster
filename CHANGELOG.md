@@ -2,6 +2,22 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.163.2 (2026-10-07)
+
+Reconcile: a partially applied platform deploy counts as drift (BUG-017 follow-up).
+
+- The drift check treated a service with **no** `io.pmcluster.rendered_hash` label as
+  "in sync" (so the first update after upgrading would not storm through every stack).
+  That was too lenient: when only **some** services in a stack carry the label the stack
+  was left partially applied — e.g. a `docker stack deploy` cut off mid-flight because
+  the daemon restarted during an install. Hit live on wafaa: `backup_volume-backup` and
+  `backup_control-plane-backup` were left unstamped while `backup_seaweedfs` was stamped,
+  and the drift went unnoticed. A mixed label state is now reported as
+  **"some services are missing the rendered-hash label (partial deploy)"** and re-applied.
+  Stacks where **no** service carries the label (pre-upgrade) are still left alone.
+- New regression test `TestUpdate_RedeploysWhenServiceLabelMissing` (fails on the
+  previous logic, passes now).
+
 ## v0.2.163.1 (2026-10-07)
 
 Reconcile: name the reason a platform stack is redeployed.

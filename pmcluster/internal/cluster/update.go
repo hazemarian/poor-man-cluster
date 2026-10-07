@@ -671,14 +671,32 @@ func platformStackInSync(ctx context.Context, d runtime.Client, s stackName, fre
 	// longer produces is ignored on purpose: `docker stack deploy` cannot
 	// remove a service absent from the compose (no --prune), so flagging it
 	// would re-deploy on every update forever.
+	labeled, unlabeled := 0, 0
 	for name := range want {
 		got, ok := live[name]
 		if !ok {
 			return false, "a required service is missing", nil
 		}
-		if wantHash != "" && got != "" && got != wantHash {
-			return false, "drifted from the rendered compose", nil
+		if wantHash == "" {
+			continue // render predates the label: only the service set is compared
 		}
+		switch {
+		case got == "":
+			unlabeled++
+		case got != wantHash:
+			return false, "drifted from the rendered compose", nil
+		default:
+			labeled++
+		}
+	}
+	// A stack where only SOME services carry the label is a PARTIALLY APPLIED
+	// deploy — the deploy was cut off (interrupted mid `stack deploy`, e.g. the
+	// daemon restarted during an install) or a service was created by hand — so
+	// treat it as drift and re-apply. A stack where NONE carry the label
+	// predates it; leave that alone, because the render change that introduced
+	// the label already forces one re-deploy which stamps them all.
+	if labeled > 0 && unlabeled > 0 {
+		return false, "some services are missing the rendered-hash label (partial deploy)", nil
 	}
 	return true, "", nil
 }

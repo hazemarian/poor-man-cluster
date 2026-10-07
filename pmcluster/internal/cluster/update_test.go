@@ -112,6 +112,77 @@ func TestUpdate_RedeploysWhenLiveServiceLabelDrifted(t *testing.T) {
 	}
 }
 
+// TestUpdate_RedeploysWhenServiceLabelMissing covers the PARTIALLY APPLIED
+// deploy: some services in a stack carry the rendered-hash label while others
+// do not — the shape left behind when a `stack deploy` is cut off mid-flight
+// (e.g. the daemon restarts during an install). That mixed state must be
+// treated as drift and re-applied.
+func TestUpdate_RedeploysWhenServiceLabelMissing(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("baseline Update: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	row, err := deps.Store.GetConfig(ctx, "backup-stack")
+	if err != nil {
+		t.Fatalf("read backup-stack: %v", err)
+	}
+	var doc struct {
+		Services map[string]struct {
+			Deploy struct {
+				Labels map[string]string `json:"labels"`
+			} `json:"deploy"`
+		} `json:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(row.RenderedContent), &doc); err != nil {
+		t.Fatalf("parse stored render: %v", err)
+	}
+	freshHash := ""
+	for _, s := range doc.Services {
+		if h := s.Deploy.Labels[runtime.RenderedHashLabel]; h != "" {
+			freshHash = h
+		}
+	}
+	if freshHash == "" {
+		t.Fatal("stored render carries no rendered-hash label")
+	}
+
+	// Stamp every backup service except one: the interrupted-deploy shape.
+	stamped := 0
+	for name, svc := range f.services {
+		if !strings.HasPrefix(name, "backup_") {
+			continue
+		}
+		if name == "backup_volume-backup" {
+			svc.Labels = map[string]string{}
+		} else {
+			svc.Labels = map[string]string{runtime.RenderedHashLabel: freshHash}
+			stamped++
+		}
+		f.services[name] = svc
+	}
+	if stamped == 0 {
+		t.Fatal("fixture stamped no services; the mixed state was not set up")
+	}
+
+	deployer := &recordingDeployer{}
+	deps.Deployer = deployer
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("partial-deploy Update: %v", err)
+	}
+	var backupDeployed bool
+	for _, d := range deployer.deployedStacks {
+		if d.Name == "backup" {
+			backupDeployed = true
+		}
+	}
+	if !backupDeployed {
+		t.Fatalf("expected the backup stack to be redeployed after a partial deploy, got %v", deployer.deployedStacks)
+	}
+}
+
 func healthyService(name string) runtime.Service {
 	// Derive the stack namespace from the service name ("infra_traefik" →
 	// "infra") so the existence-aware reconcile loop can see which stacks are
