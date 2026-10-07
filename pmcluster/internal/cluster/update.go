@@ -466,6 +466,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// everything.
 		forceAll := in.Force || swarmChanged
 		var redeploy []stackName
+		reasons := map[stackName]string{}
 		order := []stackName{StackObservability, StackInfra, StackEdge, StackBackup}
 		if sso.Enabled {
 			order = append(order, StackSSO)
@@ -477,19 +478,23 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			if err != nil && !errors.Is(err, store.ErrConfigNotFound) {
 				return fmt.Errorf("read rendered hash for %s: %w", cfgName, err)
 			}
-			hashMatches := row != nil && row.RenderedHash == store.ConfigHash(string(fresh))
-			if hashMatches && !forceAll {
-				inSync, syncErr := platformStackInSync(ctx, deps.Docker, s, fresh)
+			switch {
+			case forceAll:
+				reasons[s] = "forced"
+			case row == nil || row.RenderedHash != store.ConfigHash(string(fresh)):
+				reasons[s] = "content changed"
+			default:
+				inSync, why, syncErr := platformStackInSync(ctx, deps.Docker, s, fresh)
 				if syncErr != nil {
 					// A Docker error means we cannot tell — assume in sync so
 					// we never redeploy (and thus never infinite-loop) on a
 					// flaky API.
-					inSync = true
+					continue
 				}
 				if inSync {
 					continue
 				}
-				fmt.Fprintf(out, "  ▶ %s drifted from the rendered compose → re-deploying\n", string(s))
+				reasons[s] = why
 			}
 			redeploy = append(redeploy, s)
 		}
@@ -502,7 +507,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// skipped redeploy even though the swarm never received the stack.)
 		redeployed := map[string]bool{}
 		for _, s := range redeploy {
-			fmt.Fprintf(out, "  ▶ %s content changed → re-deploying\n", string(s))
+			fmt.Fprintf(out, "  ▶ %s %s → re-deploying\n", string(s), reasons[s])
 			if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
 				return err
 			}
@@ -641,17 +646,17 @@ func deployStack(ctx context.Context, out io.Writer, d StackDeployer, s stackNam
 // A nil client is treated as "in sync" so store-only callers never
 // force-redeploy. Any error is returned so the caller can decide to
 // assume-in-sync (avoiding a redeploy loop).
-func platformStackInSync(ctx context.Context, d runtime.Client, s stackName, fresh []byte) (bool, error) {
+func platformStackInSync(ctx context.Context, d runtime.Client, s stackName, fresh []byte) (bool, string, error) {
 	if d == nil {
-		return true, nil
+		return true, "", nil
 	}
 	want, wantHash, err := composeServiceNames(fresh)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	services, err := d.ServiceList(ctx)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	live := map[string]string{}
 	for _, svc := range services {
@@ -660,7 +665,7 @@ func platformStackInSync(ctx context.Context, d runtime.Client, s stackName, fre
 		}
 	}
 	if len(live) == 0 {
-		return false, nil // absent from the swarm entirely
+		return false, "absent from the swarm", nil
 	}
 	// Only services the render WANTS are checked. A live service the render no
 	// longer produces is ignored on purpose: `docker stack deploy` cannot
@@ -669,13 +674,13 @@ func platformStackInSync(ctx context.Context, d runtime.Client, s stackName, fre
 	for name := range want {
 		got, ok := live[name]
 		if !ok {
-			return false, nil // a required service is missing from the swarm
+			return false, "a required service is missing", nil
 		}
 		if wantHash != "" && got != "" && got != wantHash {
-			return false, nil
+			return false, "drifted from the rendered compose", nil
 		}
 	}
-	return true, nil
+	return true, "", nil
 }
 
 // composeServiceNames parses a rendered compose file and returns its service

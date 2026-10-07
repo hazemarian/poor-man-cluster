@@ -2,6 +2,19 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.163.1 (2026-10-07)
+
+Reconcile: name the reason a platform stack is redeployed.
+
+- `cluster update` now prints **why** each stack is redeployed —
+  `backup drifted from the rendered compose → re-deploying`,
+  `backup a required service is missing → re-deploying`,
+  `backup absent from the swarm → re-deploying`, `backup content changed → …`,
+  `backup forced → …`. Previously every redeploy printed the generic
+  "content changed", which was actively misleading for the drift case BUG-017
+  exists to catch. `platformStackInSync` returns the reason alongside the
+  verdict. No behaviour change.
+
 ## v0.2.163 (2026-10-07)
 
 Reconcile: `cluster update` detects Swarm drift instead of trusting the stored hash (BUG-017).
