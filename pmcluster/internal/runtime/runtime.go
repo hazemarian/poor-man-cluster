@@ -176,6 +176,10 @@ type Service struct {
 	UpdateState  string // swarm UpdateStatus.State: "updating" | "paused" | "completed" | "rollback..." | "" (no update in flight)
 	UpdateError  string // the orchestrator's reason for pausing/rolling back ("" when none)
 	Node         string // NodeLabel: the node hostname the placement pin targets ("" when unconstrained/role-based)
+	// Labels is the service's full spec label set (stack namespace, the
+	// io.pmcluster.* markers, and RenderedHashLabel). `cluster update` reads
+	// them to diff the live service against a fresh render (BUG-017).
+	Labels map[string]string
 }
 
 // ServiceInspectResult is a read-only snapshot of one cluster service.
@@ -277,3 +281,13 @@ const StorageNodeLabel = "pmcluster.storage"
 // or role-based (node.role == manager/worker), so the UI can display where
 // a service runs without re-querying the swarm.
 const NodeLabel = "io.pmcluster.node"
+
+// RenderedHashLabel is stamped on every service of a rendered compose with the
+// hash of that render (the platform render path sets it; see LoadComposeFile).
+// `cluster update` compares the label on the LIVE Swarm services against a
+// fresh render to detect drift — a manual `docker service update`, a
+// half-applied deploy, or an upgrade that skipped a service. The stored
+// rendered hash cannot see this: it only records what pmcluster last INTENDED
+// to deploy, so a drifted service would otherwise stay drifted forever
+// (BUG-017).
+const RenderedHashLabel = "io.pmcluster.rendered_hash"

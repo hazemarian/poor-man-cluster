@@ -290,6 +290,12 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 			updateState = string(us.State)
 			updateError = us.Message
 		}
+		// Copy the spec labels: drift detection (BUG-017) and the console read
+		// them after ServiceList returns, so don't alias the SDK's response.
+		labels := make(map[string]string, len(s.Spec.Labels))
+		for k, v := range s.Spec.Labels {
+			labels[k] = v
+		}
 		out = append(out, runtime.Service{
 			ID:           s.ID,
 			Name:         s.Spec.Name,
@@ -304,6 +310,7 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 			UpdateState:  updateState,
 			UpdateError:  updateError,
 			Node:         s.Spec.Labels[runtime.NodeLabel],
+			Labels:       labels,
 		})
 	}
 	return out, nil

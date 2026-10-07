@@ -48,6 +48,13 @@ type ComposeWriter struct {
 	// mount the versioned pmcluster_otel_config_vN / pmcluster_traefik_dynamic_vN
 	// configs.
 	ConfigNames func(ctx context.Context, name string) string
+	// ExtraLabels are stamped on every service's deploy labels, after the
+	// standard and platform labels (standard keys still win on collision). The
+	// platform render path uses this to stamp runtime.RenderedHashLabel, the
+	// hash of the render, so `cluster update` can diff the live Swarm against a
+	// fresh render and detect drift the stored rendered hash cannot see
+	// (BUG-017). Nil (app stacks) leaves the render unchanged.
+	ExtraLabels map[string]string
 }
 
 // DefaultVolumeRoot is where every container volume lands unless the
@@ -180,6 +187,23 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 				s.Deploy.Labels = map[string]string{}
 			}
 			s.Deploy.Labels[labelPlatform] = "true"
+		}
+	}
+
+	// Caller-supplied labels (the platform render path stamps the rendered-hash
+	// label here). Applied last so an explicit caller value is never clobbered
+	// by the standard/platform markers above.
+	if len(w.ExtraLabels) > 0 {
+		for _, s := range cf.Services {
+			if s.Deploy == nil {
+				s.Deploy = &composeDeploy{}
+			}
+			if s.Deploy.Labels == nil {
+				s.Deploy.Labels = map[string]string{}
+			}
+			for k, v := range w.ExtraLabels {
+				s.Deploy.Labels[k] = v
+			}
 		}
 	}
 

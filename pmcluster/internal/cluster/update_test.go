@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -29,6 +31,85 @@ func openTestCipher(t *testing.T, path string) *credentials.Cipher {
 		t.Fatalf("credentials.Open: %v", err)
 	}
 	return c
+}
+
+// TestUpdate_RedeploysWhenLiveServiceLabelDrifted covers BUG-017's drift
+// detection: the stored rendered hash matches the fresh render, but a live
+// service carries the rendered-hash label of a DIFFERENT render — a
+// half-applied deploy, a skipped service, or an upgrade that never reached it.
+// The DB-only comparison reported "nothing to redeploy" forever; the live
+// comparison must redeploy. It also proves the inverse (matching labels → no
+// redeploy) so the detector cannot simply always fire.
+func TestUpdate_RedeploysWhenLiveServiceLabelDrifted(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	// Baseline: platform stacks deployed, stored hashes stamped.
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("baseline Update: %v", err)
+	}
+
+	f := deps.Docker.(*fakeDocker)
+	row, err := deps.Store.GetConfig(ctx, "backup-stack")
+	if err != nil {
+		t.Fatalf("read backup-stack: %v", err)
+	}
+	// Recover the label the fresh render stamps from the stored render itself.
+	var doc struct {
+		Services map[string]struct {
+			Deploy struct {
+				Labels map[string]string `json:"labels"`
+			} `json:"deploy"`
+		} `json:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(row.RenderedContent), &doc); err != nil {
+		t.Fatalf("parse stored render: %v", err)
+	}
+	freshHash := ""
+	for _, s := range doc.Services {
+		if h := s.Deploy.Labels[runtime.RenderedHashLabel]; h != "" {
+			freshHash = h
+		}
+	}
+	if freshHash == "" {
+		t.Fatal("stored render carries no rendered-hash label")
+	}
+
+	// In sync: every live backup service carries the current label.
+	for name, svc := range f.services {
+		if strings.HasPrefix(name, "backup_") {
+			svc.Labels = map[string]string{runtime.RenderedHashLabel: freshHash}
+			f.services[name] = svc
+		}
+	}
+	deployer := &recordingDeployer{}
+	deps.Deployer = deployer
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("in-sync Update: %v", err)
+	}
+	if len(deployer.deployedStacks) != 0 {
+		t.Fatalf("expected no stacks deployed when live labels match, got %v", deployer.deployedStacks)
+	}
+
+	// Drifted: one service still carries an older render's hash.
+	svc := f.services["backup_control-plane-backup"]
+	svc.Labels = map[string]string{runtime.RenderedHashLabel: "stale-from-an-older-render"}
+	f.services["backup_control-plane-backup"] = svc
+
+	deployer2 := &recordingDeployer{}
+	deps.Deployer = deployer2
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("drifted Update: %v", err)
+	}
+	var backupDeployed bool
+	for _, d := range deployer2.deployedStacks {
+		if d.Name == "backup" {
+			backupDeployed = true
+		}
+	}
+	if !backupDeployed {
+		t.Fatalf("expected the backup stack to be redeployed after label drift, got %v", deployer2.deployedStacks)
+	}
 }
 
 func healthyService(name string) runtime.Service {
@@ -67,9 +148,7 @@ func seedUpdateState(t *testing.T) (UpdateDeps, string) {
 
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
-	for _, name := range bundledServices {
-		f.services[name] = healthyService(name)
-	}
+	seedHealthySwarm(f)
 
 	if _, err := Up(context.Background(), UpDeps{
 		Store:    s,
@@ -508,9 +587,7 @@ func TestUpdate_TLSNotACMEWithoutCertPathsErrorsIfNoACMEEmail(t *testing.T) {
 
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
-	for _, name := range bundledServices {
-		f.services[name] = healthyService(name)
-	}
+	seedHealthySwarm(f)
 
 	_, err = Update(ctx, UpdateDeps{
 		Store:    s,
@@ -568,9 +645,7 @@ func TestUpdate_ACMEModeDoesNotRequireCertPaths(t *testing.T) {
 
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
-	for _, name := range bundledServices {
-		f.services[name] = healthyService(name)
-	}
+	seedHealthySwarm(f)
 
 	if _, err := Update(ctx, UpdateDeps{
 		Store:    s,

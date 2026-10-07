@@ -107,7 +107,17 @@ The drift was invisible. Cleaned up by re-applying the stored render (`docker st
 
 **Workaround applied (wafaa):** dump `rendered_content` for `backup-stack` from `data.db` and re-apply it with `docker stack deploy -c <file> backup`. Verified: the control-plane agent then wrote to WebDAV + R2, and the identical archive appeared in both.
 
-**Proposed fix:** stamp the rendered hash as a label on each deployed platform service and have `cluster update` compare the label against the freshly rendered hash — mismatch ⇒ redeploy. That closes the whole class ("derive, don't trust").
+**Fix (shipped in v0.2.163):** the rendered hash is now stamped as a label
+(`io.pmcluster.rendered_hash`) on every service of a rendered platform stack, and
+`cluster update` compares those labels on the **live** services against the fresh
+render, in addition to the stored-hash comparison. A stack is redeployed when the
+hash changed, the stack is absent, a service the render expects is missing, or a
+live service carries the label of a **different** render. Extra live services are
+ignored (`docker stack deploy` cannot remove them → flagging them would redeploy
+forever) and an unlabeled (pre-v0.2.163) service is treated as in sync, since the
+render change that introduced the label already forces one redeploy. Regression test:
+`TestUpdate_RedeploysWhenLiveServiceLabelDrifted` (fails against the old DB-only
+comparison).
 
 ## Operational Notes (not bugs)
 
@@ -120,6 +130,6 @@ The drift was invisible. Cleaned up by re-applying the stored render (`docker st
 
 **PASS.** The v0.2.162.1 backup changes behave correctly on a 1-leader/1-worker swarm: the store is placed by `backup_store_on`, both offen agents write to the in-cluster store **and** the offsite bucket, the control-plane archive is no longer local-only, restore from the store works, and pruning runs automatically on every backend.
 
-**One real product bug recorded (BUG-017, update drift blindness)** — reproduced deliberately on TC9 and previously observed in production on wafaa. Fix proposed; not yet implemented.
+**One real product bug recorded (BUG-017, update drift blindness)** — reproduced deliberately on TC9 and previously observed in production on wafaa. **Fixed in v0.2.163** (rendered-hash label + live-swarm comparison).
 
 **Limitation of this run:** the v0.2.162.1 setup-wizard changes (offsite SSO/S3 prompts, masked key input, `--backup-store-on`) were exercised via the resulting `backup_store_on` setting, not by re-running `pmcluster setup`.

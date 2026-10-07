@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
+
+	"sigs.k8s.io/yaml"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -476,17 +479,17 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			}
 			hashMatches := row != nil && row.RenderedHash == store.ConfigHash(string(fresh))
 			if hashMatches && !forceAll {
-				exists, existsErr := stackExists(ctx, deps.Docker, s)
-				if existsErr != nil {
-					// A Docker/StackDeployer error means we cannot tell —
-					// assume the stack exists so we don't redeploy (and thus
-					// never infinite-loop).
-					exists = true
+				inSync, syncErr := platformStackInSync(ctx, deps.Docker, s, fresh)
+				if syncErr != nil {
+					// A Docker error means we cannot tell — assume in sync so
+					// we never redeploy (and thus never infinite-loop) on a
+					// flaky API.
+					inSync = true
 				}
-				if exists {
+				if inSync {
 					continue
 				}
-				fmt.Fprintf(out, "  ▶ %s absent from the swarm → re-deploying\n", string(s))
+				fmt.Fprintf(out, "  ▶ %s drifted from the rendered compose → re-deploying\n", string(s))
 			}
 			redeploy = append(redeploy, s)
 		}
@@ -609,25 +612,95 @@ func deployStack(ctx context.Context, out io.Writer, d StackDeployer, s stackNam
 	return nil
 }
 
-// stackExists reports whether the named stack has any service present in the
-// Swarm (via the com.docker.stack.namespace label Docker stamps on every
-// `docker stack deploy` resource). A nil client is treated as "exists" so
-// store-only callers never force-redeploy. Any error is returned to the caller
-// so it can decide to assume-exists (avoiding a redeploy loop).
-func stackExists(ctx context.Context, d runtime.Client, s stackName) (bool, error) {
+// platformStackInSync reports whether the live Swarm matches the freshly
+// rendered platform compose. It is the drift detector the stored rendered hash
+// cannot provide: the DB hash records what pmcluster last INTENDED to deploy,
+// so a Swarm-side change (a manual `docker service update`, a half-applied
+// deploy, an upgrade that skipped one service) leaves the store reporting
+// "nothing to redeploy" forever (BUG-017 — the wafaa control-plane backup ran
+// for weeks without its offsite/WebDAV destination for exactly this reason).
+//
+// Two independent signals are checked:
+//   - every service the render expects is present in the stack (detects a
+//     missing or renamed service), and
+//   - a service that carries a RenderedHashLabel whose value differs from the
+//     freshly rendered compose's label was deployed from a DIFFERENT render
+//     (detects a half-applied deploy, a skipped service, an older binary) —
+//     the exact class of drift that let the wafaa control-plane backup run
+//     without its offsite destination. A service with NO label predates the
+//     label and cannot be compared, so it is treated as in sync; the render
+//     change that introduced the label already forced one redeploy that
+//     stamped it.
+//
+// Extra live services the render no longer produces are deliberately ignored —
+// `docker stack deploy` cannot remove them, so flagging them would redeploy
+// forever. This also cannot see a hand-edited env on a live service (a manual
+// service update does not change labels); it detects SWARM-vs-RENDER drift,
+// not render-internal tampering.
+//
+// A nil client is treated as "in sync" so store-only callers never
+// force-redeploy. Any error is returned so the caller can decide to
+// assume-in-sync (avoiding a redeploy loop).
+func platformStackInSync(ctx context.Context, d runtime.Client, s stackName, fresh []byte) (bool, error) {
 	if d == nil {
 		return true, nil
+	}
+	want, wantHash, err := composeServiceNames(fresh)
+	if err != nil {
+		return false, err
 	}
 	services, err := d.ServiceList(ctx)
 	if err != nil {
 		return false, err
 	}
+	live := map[string]string{}
 	for _, svc := range services {
 		if svc.Stack == string(s) {
-			return true, nil
+			live[strings.TrimPrefix(svc.Name, string(s)+"_")] = svc.Labels[runtime.RenderedHashLabel]
 		}
 	}
-	return false, nil
+	if len(live) == 0 {
+		return false, nil // absent from the swarm entirely
+	}
+	// Only services the render WANTS are checked. A live service the render no
+	// longer produces is ignored on purpose: `docker stack deploy` cannot
+	// remove a service absent from the compose (no --prune), so flagging it
+	// would re-deploy on every update forever.
+	for name := range want {
+		got, ok := live[name]
+		if !ok {
+			return false, nil // a required service is missing from the swarm
+		}
+		if wantHash != "" && got != "" && got != wantHash {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// composeServiceNames parses a rendered compose file and returns its service
+// names plus the rendered-hash label stamped on each service ("" when the
+// render predates the label, in which case only the service set is compared).
+func composeServiceNames(composeYAML []byte) (map[string]struct{}, string, error) {
+	var doc struct {
+		Services map[string]struct {
+			Deploy struct {
+				Labels map[string]string `json:"labels"`
+			} `json:"deploy"`
+		} `json:"services"`
+	}
+	if err := yaml.Unmarshal(composeYAML, &doc); err != nil {
+		return nil, "", fmt.Errorf("parse rendered compose: %w", err)
+	}
+	names := make(map[string]struct{}, len(doc.Services))
+	hash := ""
+	for n, svc := range doc.Services {
+		names[n] = struct{}{}
+		if hash == "" {
+			hash = svc.Deploy.Labels[runtime.RenderedHashLabel]
+		}
+	}
+	return names, hash, nil
 }
 
 // ensureLegacyPlainSecret re-materializes a Swarm secret for a credential that

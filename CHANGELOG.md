@@ -2,6 +2,34 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.163 (2026-10-07)
+
+Reconcile: `cluster update` detects Swarm drift instead of trusting the stored hash (BUG-017).
+
+- **BUG-017 fixed — updates no longer report "nothing to redeploy" while the Swarm
+  has drifted.** The redeploy decision compared the STORED rendered hash against a
+  fresh render, never against the LIVE Swarm: the store only records what pmcluster
+  last *intended* to deploy, so a service that missed an update stayed stale forever.
+  This is how a production cluster's control-plane backup kept running with **no
+  remote destination at all** (local-only, on the same node as the DB) while every
+  `cluster update` reported success.
+- **Fix**: every platform service is now stamped with
+  `io.pmcluster.rendered_hash` (the hash of the render that produced it), and
+  `cluster update` compares those live labels against the fresh render — alongside
+  the existing stored-hash comparison. A stack is redeployed when the hash changed,
+  when the stack is absent, when a service the render expects is **missing**, or when
+  a live service carries the label of a **different render**.
+- Deliberately conservative: an extra live service the render no longer produces is
+  ignored (`docker stack deploy` cannot remove it, so flagging it would redeploy
+  forever), and a service with no label (predating this release) is treated as in
+  sync — the render change that introduced the label already forces one redeploy.
+  The check detects swarm-vs-render drift, not a hand-edited env on a live service.
+- **Upgrade note**: the rendered compose changes, so the first `cluster update` after
+  upgrading redeploys every platform stack once (that is what stamps the labels).
+- Tests: `TestUpdate_RedeploysWhenLiveServiceLabelDrifted` (fails against the old
+  DB-only comparison), plus the swarm fixtures now model the full rendered service
+  set (the control-plane + store services).
+
 ## v0.2.162.1 (2026-10-07)
 
 Backup: store-only clusters bootstrap their bucket; setup asks about S3 and the store node.

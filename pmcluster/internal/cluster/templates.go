@@ -520,12 +520,34 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	if err := manifest.Validate(app); err != nil {
 		return nil, fmt.Errorf("validate %s DSL manifest: %w", fname, err)
 	}
-	renderedBytes, err := manifest.TranslateIR(context.Background(), app, &renderRefResolver{render: in}, &manifest.ComposeWriter{
-		VolumeRoot:  effectiveVolumeRoot(in.VolumeRoot),
-		PinNode:     in.PlatformNode,
-		SecretNames: platformSecretNames(in),
-		ConfigNames: platformConfigNames(in),
-	})
+	built, err := manifest.BuildIR(context.Background(), app, &renderRefResolver{render: in})
+	if err != nil {
+		return nil, fmt.Errorf("build %s IR: %w", fname, err)
+	}
+	newWriter := func(extra map[string]string) *manifest.ComposeWriter {
+		return &manifest.ComposeWriter{
+			VolumeRoot:  effectiveVolumeRoot(in.VolumeRoot),
+			PinNode:     in.PlatformNode,
+			SecretNames: platformSecretNames(in),
+			ConfigNames: platformConfigNames(in),
+			ExtraLabels: extra,
+		}
+	}
+	// Two passes over the same IR: the first is the label-free render whose
+	// hash becomes the value of runtime.RenderedHashLabel in the second pass.
+	// Deriving the label from the label-free bytes keeps it deterministic and
+	// non-circular; `cluster update` compares it against the LIVE Swarm's labels
+	// to detect drift (a manual service update, a half-applied deploy, an
+	// upgrade that skipped a service) which the stored rendered hash cannot see
+	// because that only records what pmcluster last intended to deploy
+	// (BUG-017).
+	plain, err := newWriter(nil).Write(context.Background(), built)
+	if err != nil {
+		return nil, fmt.Errorf("render %s through the DSL pipeline: %w", fname, err)
+	}
+	renderedBytes, err := newWriter(map[string]string{
+		runtime.RenderedHashLabel: store.ConfigHash(string(plain)),
+	}).Write(context.Background(), built)
 	if err != nil {
 		return nil, fmt.Errorf("render %s through the DSL pipeline: %w", fname, err)
 	}

@@ -131,6 +131,27 @@ func (f *fakeDocker) ConfigCreate(_ context.Context, spec runtime.ConfigSpec) er
 	return nil
 }
 
+// renderedServices is the service set the bundled stacks render on a cluster
+// with the in-cluster backup store enabled — i.e. the swarm shape the
+// reconcile compares a fresh render against. It is a superset of
+// bundledServices (which drives health checks and lists only the services
+// that are always present, so it cannot include the conditional store).
+func renderedServices() []string {
+	return append(append([]string{}, bundledServices...),
+		"backup_control-plane-backup",
+		"backup_seaweedfs",
+	)
+}
+
+// seedHealthySwarm marks every rendered bundled service as present, so a
+// baseline update against this fixture is a no-op (BUG-017's drift check
+// compares the live service set against the render's).
+func seedHealthySwarm(f *fakeDocker) {
+	for _, name := range renderedServices() {
+		f.services[name] = healthyService(name)
+	}
+}
+
 func (f *fakeDocker) ServiceList(_ context.Context) ([]runtime.Service, error) {
 	out := make([]runtime.Service, 0, len(f.services))
 	for _, s := range f.services {
