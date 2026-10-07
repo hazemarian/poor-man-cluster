@@ -2,6 +2,22 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.168.3 (2026-10-07)
+
+Node-loss recovery, take two: the platform services that actually got stuck now recover too
+(BUG-023 follow-up).
+
+- v0.2.168.2 changed the **default** restart policy for replicated services to `any`, but the
+  four services that hung at 0/1 in the TC10-A failover campaign — `edge_pmcluster-edge`,
+  `backup_volume-backup`, `backup_control-plane-backup`, `backup_seaweedfs` — set
+  `restart: on-failure` **explicitly** in the platform manifests, so the explicit value kept
+  winning and their tasks were still never replaced after a clean (exit 0) termination.
+- Those four platform services now declare `restart: any` (they are long-running daemons:
+  the edge proxy, the two offen backup agents and the in-cluster backup store), keeping their
+  `restart_delay`.
+- Verified live after deploy: every platform service now renders
+  `{"Condition":"any","Delay":5000000000}`.
+
 ## v0.2.168.2 (2026-10-07)
 
 Node-loss recovery: replicated services come back on their own, and the daemon

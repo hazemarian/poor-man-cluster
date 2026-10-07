@@ -94,7 +94,7 @@ services:
       limits:
         cpus: "0.25"
         memory: 256M
-    restart: on-failure
+    restart: any
     restart_delay: 5s
     logging:
       driver: json-file

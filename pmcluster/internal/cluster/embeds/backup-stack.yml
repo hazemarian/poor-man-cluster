@@ -30,7 +30,7 @@ services:
     replicas: 1
     placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
 [[ end ]]
-    restart: on-failure
+    restart: any
     env:
       BACKUP_CRON_EXPRESSION: "[[ if .BackupCron ]][[.BackupCron]][[ else ]]0 * * * *[[ end ]]"
       BACKUP_FILENAME: "backup-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz"
@@ -94,7 +94,7 @@ services:
     # problem. It serves the SAME namespace as S3 (bucket pmcluster-backups ==
     # filer /buckets/pmcluster-backups). Cluster-internal: no published port.
     command: ["server", "-s3", "-s3.port=8333", "-s3.port.iceberg=0", "-s3.port.lance=0", "-webdav", "-webdav.port=7333", "-ip=127.0.0.1", "-ip.bind=0.0.0.0", "-s3.ip.bind=0.0.0.0"]
-    restart: on-failure
+    restart: any
     env:
       AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
       AWS_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
@@ -117,7 +117,7 @@ services:
   control-plane-backup:
     image: offen/docker-volume-backup:v2
     placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
-    restart: on-failure
+    restart: any
     env:
       BACKUP_CRON_EXPRESSION: "0 3 * * *"
       BACKUP_FILENAME: "pmcluster-ctlplane-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz"
