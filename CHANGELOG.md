@@ -2,6 +2,37 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.166 (2026-10-07)
+
+Secrets: `pmcluster secret heal` — find and repair rows the current key cannot open.
+
+- New command `pmcluster secret heal [--dry-run]`: walks every stored secret and
+  1. decrypts the row with the current `~/.pmcluster/.encryption_key`,
+  2. repairs a **stale hash** (translation derives the Docker swarm secret name from the
+     stored hash, so a mismatch referenced a swarm object that never existed),
+  3. creates the content-addressed swarm secret when it is missing.
+- Rows that do **not** decrypt were sealed by an older key (rotated or restored at some
+  point). AES-GCM cannot be reversed without the key that sealed them, so the pass reports
+  them as `unrecoverable` and prints the recovery recipe: read the plaintext from a
+  container that still mounts it (`docker exec <c> cat /run/secrets/<name>`) and re-supply
+  it with `printf '%s' '<value>' | pmcluster secret edit <name>`. A pass never changes a
+  secret's value; `--dry-run` reports without writing anything.
+- Exits non-zero when something still needs attention (unrecoverable rows, or a swarm
+  mirror that could not be created because no daemon was reachable).
+- Driven by a real incident: on nextrum 8 of 9 rows had been sealed under an older key, so
+  `cluster update` warned `cannot rebuild swarm object (ciphertext not recoverable)` and a
+  from-scratch rebuild would have failed. Those rows were healed by hand; this command
+  makes it a one-liner.
+- Core logic lives in `internal/secrets` (`Local.Heal` + `HealReport`, with the swarm
+  mirror injected) so it is testable without Docker; `internal/cli` wires the mirror and
+  prints the table. `mirrorSwarmSecret` now shares `swarmSecretMirrored` with the heal pass.
+- Managed credentials (`traefik_dashboard`, `openobserve_admin`, …) are still healed by
+  `pmcluster cluster update`; this command covers the user secret table.
+- Tests: `internal/secrets/heal_test.go` (healthy row ok, mirror created, stale hash
+  repaired, unrecoverable reported without a mirror attempt, dry-run changes nothing,
+  mirror failure degraded, empty store) and `internal/cli/secret_heal_test.go` (command
+  registered, run path creates the content-addressed swarm secret).
+
 ## v0.2.165 (2026-10-07)
 
 Reconcile: a failed app-stack deploy no longer suppresses retries (BUG-018).

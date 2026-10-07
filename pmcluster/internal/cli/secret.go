@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,8 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -75,11 +77,36 @@ var secretEditCmd = &cobra.Command{
 	RunE:  runSecretEdit,
 }
 
+var secretHealCmd = &cobra.Command{
+	Use:   "heal",
+	Short: "Verify every secret decrypts with the current key and materialize its swarm mirror",
+	Long: `Walks every stored secret and makes it deployable again:
+
+  1. decrypt the row with the current encryption key — a row that does not
+     decrypt was sealed by an older ~/.pmcluster/.encryption_key and must be
+     re-supplied (AES-GCM cannot be reversed without the key that sealed it);
+  2. repair a stale hash (translation derives the Docker swarm secret name
+     from the stored hash, so a mismatch references a missing object);
+  3. create the content-addressed Docker swarm secret when it is missing.
+
+Values are never changed by a heal pass. To recover a row that cannot be
+decrypted, read the plaintext from a container that still mounts it
+(docker exec <container> cat /run/secrets/<name>) and re-supply it:
+
+   printf '%s' '<value>' | pmcluster secret edit <name>
+
+Managed credentials (traefik_dashboard, openobserve_admin, …) are healed by
+'pmcluster cluster update', not by this command.`,
+	Args: cobra.NoArgs,
+	RunE: runSecretHeal,
+}
+
 func init() {
 	secretCreateCmd.Flags().String("scope", "service", "scope: cluster or service")
 	secretCreateCmd.Flags().String("stack", "", "stack this secret belongs to (service scope only)")
 	secretEditCmd.Flags().String("value", "", "new secret value (or pipe via stdin)")
-	secretCmd.AddCommand(secretCreateCmd, secretListCmd, secretShowCmd, secretVerifyCmd, secretEditCmd, secretDeleteCmd)
+	secretHealCmd.Flags().Bool("dry-run", false, "report what would change without writing or creating swarm objects")
+	secretCmd.AddCommand(secretCreateCmd, secretListCmd, secretShowCmd, secretVerifyCmd, secretEditCmd, secretDeleteCmd, secretHealCmd)
 	rootCmd.AddCommand(secretCmd)
 }
 
@@ -163,21 +190,40 @@ Use it in a manifest:
 	return nil
 }
 
+// swarmSecretMirrored ensures the content-addressed swarm secret backing a
+// value exists, creating it when missing. Names are CONTENT-ADDRESSED
+// (<name>_<sha8-of-value> — store.SwarmSecretName), so the same value always
+// maps to the same object and the immutable in-use original is never mutated
+// (BUG-007); a real value change simply mints a new name. Reports whether it
+// created a new object.
+func swarmSecretMirrored(ctx context.Context, dc runtime.Client, name, value, hash string) (bool, error) {
+	target := store.SwarmSecretName(name, hash)
+	exists, err := dc.SecretExists(ctx, target)
+	if err != nil {
+		return false, fmt.Errorf("check swarm secret %s: %w", target, err)
+	}
+	if exists {
+		return false, nil
+	}
+	if err := dc.SecretCreate(ctx, runtime.SecretSpec{
+		Name:   target,
+		Data:   []byte(value),
+		Labels: map[string]string{"pmcluster.secret": "true", "pmcluster.secret.hash": hash},
+	}); err != nil {
+		return false, fmt.Errorf("create swarm secret %s: %w", target, err)
+	}
+	return true, nil
+}
+
 // mirrorSwarmSecret makes the given value available to Docker Swarm so
 // `docker stack deploy` can mount it (DSL secrets(name) renders
-// external:true). Swarm secrets are immutable and cannot be removed while a
-// running service references them, so names are CONTENT-ADDRESSED: the swarm
-// secret is <name>_<sha8-of-value> (store.SwarmSecretName). The same value
-// always maps to the same name (an unchanged render reuses it — no number is
-// ever added); a real value change mints a brand-new name and the compose
-// writer (SecretNames) references it via the DB hash. Never tries to mutate
-// the in-use original (BUG-007). Best-effort: warnings to stderr, never
-// fails the command.
+// external:true), using the content-addressed name translation derives from
+// the DB hash. Best-effort: warnings to stderr, never fails the command.
 func mirrorSwarmSecret(cmd *cobra.Command, name, value string, hash string) bool {
 	if rc := remoteClient(cmd); rc != nil {
 		return false // remote mode has no local daemon access
 	}
-	dc, derr := docker.New()
+	dc, derr := dockerNewFn()
 	if derr != nil {
 		// No daemon reachable — the operator may be on a user machine
 		// creating secrets to use on the cluster later. Warn, don't fail:
@@ -190,28 +236,9 @@ func mirrorSwarmSecret(cmd *cobra.Command, name, value string, hash string) bool
 		return false
 	}
 	defer func() { _ = dc.Close() }()
-	ctx := cmd.Context()
-	target := store.SwarmSecretName(name, hash)
-	// Content-addressed: if a swarm secret with this exact name already
-	// exists, it holds exactly this value — nothing to do (the in-use
-	// original is never touched, immutability is fine because a value change
-	// yields a NEW name).
-	exists, eerr := dc.SecretExists(ctx, target)
-	switch {
-	case eerr != nil:
+	if _, err := swarmSecretMirrored(cmd.Context(), dc, name, value, hash); err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(),
-			"   ⚠ could not check swarm secret %q (%v) — mirror skipped.\n", target, eerr)
-		return false
-	case exists:
-		return true
-	}
-	if cerr := dc.SecretCreate(ctx, runtime.SecretSpec{
-		Name:   target,
-		Data:   []byte(value),
-		Labels: map[string]string{"pmcluster.secret": "true", "pmcluster.secret.hash": hash},
-	}); cerr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"   ⚠ could not create swarm secret %q (%v) — mirror skipped.\n", target, cerr)
+			"   ⚠ could not mirror the swarm secret for %q (%v) — mirror skipped.\n", name, err)
 		return false
 	}
 	return true
@@ -353,4 +380,80 @@ func shortHash(h string) string {
 		return h
 	}
 	return h[:12]
+}
+
+// runSecretHeal verifies every secret row against the current encryption key
+// and materializes the content-addressed swarm mirror for each recoverable
+// value. It exits non-zero when a row still needs operator attention (an
+// unrecoverable ciphertext, or a swarm mirror that could not be created).
+func runSecretHeal(cmd *cobra.Command, _ []string) error {
+	if rc := remoteClient(cmd); rc != nil {
+		return errors.New("secret heal must run on a node that holds the store and ~/.pmcluster/.encryption_key (not in remote mode)")
+	}
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+	st, cfg, err := openStore()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
+	if err != nil {
+		return fmt.Errorf("open encryption key: %w", err)
+	}
+
+	opts := secrets.HealOptions{DryRun: dryRun}
+	if dc, derr := dockerNewFn(); derr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"   ⚠ docker daemon unreachable (%v) — swarm mirrors were not checked.\n"+
+				"     Run this again on a cluster node to materialize missing swarm secrets.\n", derr)
+	} else {
+		defer func() { _ = dc.Close() }()
+		opts.Mirror = func(ctx context.Context, name, value, hash string) (bool, error) {
+			return swarmSecretMirrored(ctx, dc, name, value, hash)
+		}
+	}
+
+	rep, err := secrets.NewLocal(st, cipher).Heal(cmd.Context(), opts)
+	if err != nil {
+		return fmt.Errorf("heal secrets: %w", err)
+	}
+
+	out := cmd.OutOrStdout()
+	if len(rep.Entries) == 0 {
+		fmt.Fprintln(out, "(no secrets yet — nothing to heal)")
+		return nil
+	}
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "STATUS\tNAME\tSCOPE\tSHA256\tDETAIL")
+	for _, e := range rep.Entries {
+		hash := "—"
+		if e.Hash != "" {
+			hash = shortHash(e.Hash)
+		}
+		scope := e.Scope
+		if e.Stack != "" {
+			scope += "/" + e.Stack
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.Status, e.Name, scope, hash, strings.Join(e.Actions, "; "))
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+
+	mode := ""
+	if dryRun {
+		mode = " (dry-run — nothing was changed)"
+	}
+	fmt.Fprintf(out, "\n%d secret(s) checked: %d ok, %d repaired, %d degraded, %d unrecoverable%s\n",
+		len(rep.Entries), rep.OK, rep.Repaired, rep.Degraded, rep.Unrecoverable, mode)
+
+	if rep.Unrecoverable > 0 {
+		return fmt.Errorf("%d secret(s) cannot be decrypted with the current key — re-supply the value with `pmcluster secret edit` (see DETAIL above)", rep.Unrecoverable)
+	}
+	if rep.Degraded > 0 {
+		return fmt.Errorf("%d secret(s) could not be mirrored into the swarm — re-run on a cluster node", rep.Degraded)
+	}
+	return nil
 }
