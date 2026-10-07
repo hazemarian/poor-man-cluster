@@ -10,8 +10,24 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
+
+// localVolumeRoot is the effective storage root for this node: the volume_root
+// setting when it holds a value, otherwise the default. An empty row (the
+// setting can exist but be blank) counts as unset — otherwise the directory
+// work below would be silently skipped.
+func localVolumeRoot(ctx context.Context, st *store.Store) string {
+	if st != nil {
+		if v := st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), ""); v != "" {
+			return v
+		}
+	}
+	return manifest.DefaultVolumeRoot
+}
 
 // volumeRepairInterval is how often each daemon re-checks the volume
 // directories it owns. A pass is cheap: one service list plus one inspect per

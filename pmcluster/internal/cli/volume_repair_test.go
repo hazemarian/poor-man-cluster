@@ -9,7 +9,10 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 type repairDocker struct {
@@ -167,5 +170,32 @@ func TestUnderVolumeRoot(t *testing.T) {
 		if got := underVolumeRoot(c.root, c.path); got != c.want {
 			t.Errorf("underVolumeRoot(%q, %q) = %v, want %v", c.root, c.path, got, c.want)
 		}
+	}
+}
+
+func TestLocalVolumeRoot(t *testing.T) {
+	ctx := context.Background()
+	if got := localVolumeRoot(ctx, nil); got != manifest.DefaultVolumeRoot {
+		t.Fatalf("nil store = %q, want %q", got, manifest.DefaultVolumeRoot)
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	if got := localVolumeRoot(ctx, st); got != manifest.DefaultVolumeRoot {
+		t.Fatalf("unset setting = %q, want the default", got)
+	}
+	if err := st.SetSetting(ctx, cluster.SettingVolumeRoot(), ""); err != nil {
+		t.Fatalf("set empty: %v", err)
+	}
+	if got := localVolumeRoot(ctx, st); got != manifest.DefaultVolumeRoot {
+		t.Fatalf("empty setting = %q, want the default (an empty row counts as unset)", got)
+	}
+	if err := st.SetSetting(ctx, cluster.SettingVolumeRoot(), "/srv/stack/data"); err != nil {
+		t.Fatalf("set value: %v", err)
+	}
+	if got := localVolumeRoot(ctx, st); got != "/srv/stack/data" {
+		t.Fatalf("configured setting = %q, want /srv/stack/data", got)
 	}
 }

@@ -2,6 +2,18 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.169.2 (2026-10-07)
+
+An empty `volume_root` row counts as unset (BUG-026 follow-up 2).
+
+- `cluster up` persists `volume_root` as an **empty string** when the operator did not
+  choose a directory, and `GetSettingDefault` returns the stored value — so both the
+  startup storage-root creation and the volume repair compared against `""` and matched
+  nothing, silently doing no work (verified live: no repair log line at all and `sfapp_db`
+  still `Rejected` after the v0.2.169.1 deploy). Both now use a shared
+  `localVolumeRoot(ctx, st)` helper: a blank setting falls back to
+  `manifest.DefaultVolumeRoot` (`/var/stack/data`).
+
 ## v0.2.169.1 (2026-10-07)
 
 Volume repair resolves the volume's host directory, not just raw binds (BUG-026 follow-up).

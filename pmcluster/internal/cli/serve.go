@@ -191,7 +191,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// Every daemon — leader or not — keeps the volume directories of the
 	// stateful services the Swarm placed on this node (BUG-026).
 	startVolumeRepairLoop(cmd.Context(), dc, deployer, func() string {
-		return st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot)
+		return localVolumeRoot(cmd.Context(), st)
 	}, log)
 
 	tlsSvc := certs.NewLocal(st, cipher, dc, deployer,
@@ -424,7 +424,7 @@ func ensureLocalStorageRoots(ctx context.Context, cfg *config.Config, log zerolo
 	// guard below.
 	if _, statErr := os.Stat(cfg.DBPath()); statErr == nil {
 		if st, err := store.Open(cfg.DBPath()); err == nil {
-			root = st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), root)
+			root = localVolumeRoot(ctx, st)
 			_ = st.Close()
 		}
 	}
