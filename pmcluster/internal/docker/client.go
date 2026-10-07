@@ -207,6 +207,19 @@ func (r *realClient) VolumeList(ctx context.Context, labelKey, labelValue string
 	return out, nil
 }
 
+func (r *realClient) VolumeInspect(ctx context.Context, name string) (runtime.Volume, error) {
+	v, err := r.c.VolumeInspect(ctx, name)
+	if err != nil {
+		return runtime.Volume{}, fmt.Errorf("volume inspect %s: %w", name, err)
+	}
+	return runtime.Volume{
+		Name:       v.Name,
+		Driver:     v.Driver,
+		Device:     v.Options["device"],
+		Mountpoint: v.Mountpoint,
+	}, nil
+}
+
 func (r *realClient) StackSecretNames(ctx context.Context, stackName string) ([]string, error) {
 	svcs, err := r.c.ServiceList(ctx, swarm.ServiceListOptions{
 		Filters: filters.NewArgs(filters.Arg("label", runtime.StackNamespaceLabel+"="+stackName)),

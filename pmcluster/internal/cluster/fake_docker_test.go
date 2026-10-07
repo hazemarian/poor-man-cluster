@@ -274,6 +274,10 @@ func (f *fakeDocker) VolumeList(_ context.Context, _, _ string) ([]string, error
 	return nil, nil
 }
 
+func (f *fakeDocker) VolumeInspect(_ context.Context, name string) (runtime.Volume, error) {
+	return runtime.Volume{Name: name, Driver: "local"}, nil
+}
+
 func (f *fakeDocker) StackSecretNames(_ context.Context, _ string) ([]string, error) {
 	return nil, nil
 }

@@ -93,20 +93,36 @@ func repairLocalVolumeDirs(ctx context.Context, dc runtime.Client, forcer servic
 		}
 		repaired := false
 		for _, m := range ins.Mounts {
-			if m.Type != "bind" || m.Source == "" || !underVolumeRoot(root, m.Source) {
+			var path string
+			switch m.Type {
+			case "bind":
+				path = m.Source
+			case "volume":
+				// A stack volume is declared as a local-driver bind, so the
+				// real host directory lives on the volume definition, not on
+				// the mount (the mount's Source is just the volume name).
+				vol, verr := dc.VolumeInspect(ctx, m.Source)
+				if verr != nil {
+					continue
+				}
+				path = vol.Device
+			default:
 				continue
 			}
-			if _, serr := os.Stat(m.Source); serr == nil {
+			if path == "" || !underVolumeRoot(root, path) {
 				continue
 			}
-			if merr := os.MkdirAll(m.Source, 0o755); merr != nil {
-				log.Warn().Err(merr).Str("service", svc.Name).Str("path", m.Source).
+			if _, serr := os.Stat(path); serr == nil {
+				continue
+			}
+			if merr := os.MkdirAll(path, 0o755); merr != nil {
+				log.Warn().Err(merr).Str("service", svc.Name).Str("path", path).
 					Msg("volume repair: create directory")
 				continue
 			}
 			created++
 			repaired = true
-			log.Info().Str("service", svc.Name).Str("path", m.Source).
+			log.Info().Str("service", svc.Name).Str("path", path).
 				Msg("volume repair: created missing directory")
 		}
 		if !repaired || forcer == nil {

@@ -80,6 +80,11 @@ type Client interface {
 	// labelKey=labelValue.
 	VolumeList(ctx context.Context, labelKey, labelValue string) ([]string, error)
 
+	// VolumeInspect returns one volume's definition. A stack volume is
+	// declared as a local-driver bind, so Device carries the host path the
+	// Swarm mounts (empty for a plain volume).
+	VolumeInspect(ctx context.Context, name string) (Volume, error)
+
 	// StackSecretNames returns the deduplicated names of the secrets
 	// mounted by the stack's services — what a stack delete must remove from
 	// the swarm once the services are gone.
@@ -199,6 +204,14 @@ type Mount struct {
 	Type   string // "bind" | "volume" | "tmpfs"
 	Source string // host path (bind) or volume name (volume)
 	Target string // container path
+}
+
+// Volume is one Docker volume's definition (the subset pmcluster uses).
+type Volume struct {
+	Name       string
+	Driver     string
+	Device     string // local-driver "device" option — the host bind path
+	Mountpoint string // /var/lib/docker/volumes/<name>/_data
 }
 
 // ServiceTask is one row of `docker service ps` — a task's lifecycle state.

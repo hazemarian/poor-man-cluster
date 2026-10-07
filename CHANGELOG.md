@@ -2,6 +2,19 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.169.1 (2026-10-07)
+
+Volume repair resolves the volume's host directory, not just raw binds (BUG-026 follow-up).
+
+- v0.2.169's repair only looked at `bind` mounts, but a stateful stack volume is declared as
+  a **named volume with a local-driver bind** (`driver_opts: {type: none, o: bind, device:
+  <volume_root>/<app>/<name>}` in the rendered compose) — so the service mount is a `volume`
+  mount whose source is just the volume name, and nothing got repaired (verified live:
+  `sfapp_db` stayed `Rejected` on nxt-sw-4-m after the v0.2.169 deploy, while the leader had
+  the directory). The repair now inspects each `volume` mount and uses the volume's `device`
+  when it is under the volume root.
+- `runtime.Client` gained `VolumeInspect` (name → driver, device, mountpoint).
+
 ## v0.2.169 (2026-10-07)
 
 Storage directories are a node-local responsibility (BUG-026) — no remote mkdir, no

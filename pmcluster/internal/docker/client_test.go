@@ -228,6 +228,10 @@ func (f *fakeClient) VolumeList(_ context.Context, _, _ string) ([]string, error
 	return out, nil
 }
 
+func (f *fakeClient) VolumeInspect(_ context.Context, name string) (runtime.Volume, error) {
+	return runtime.Volume{Name: name, Driver: "local"}, nil
+}
+
 func (f *fakeClient) StackSecretNames(_ context.Context, _ string) ([]string, error) {
 	out := make([]string, len(f.stackSecrets))
 	copy(out, f.stackSecrets)

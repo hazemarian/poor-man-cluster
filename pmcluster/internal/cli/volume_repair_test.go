@@ -16,6 +16,7 @@ type repairDocker struct {
 	runtime.Client
 	services []runtime.Service
 	mounts   map[string][]runtime.Mount
+	volumes  map[string]runtime.Volume
 	listErr  error
 }
 
@@ -28,6 +29,13 @@ func (r repairDocker) ServiceList(context.Context) ([]runtime.Service, error) {
 
 func (r repairDocker) ServiceInspect(_ context.Context, name string) (runtime.ServiceInspectResult, error) {
 	return runtime.ServiceInspectResult{ID: name, Mounts: r.mounts[name]}, nil
+}
+
+func (r repairDocker) VolumeInspect(_ context.Context, name string) (runtime.Volume, error) {
+	if v, ok := r.volumes[name]; ok {
+		return v, nil
+	}
+	return runtime.Volume{}, errors.New("no such volume: " + name)
 }
 
 type repairForcer struct{ forced []string }
@@ -44,6 +52,7 @@ func TestRepairLocalVolumeDirs_CreatesAndForces(t *testing.T) {
 	}
 	root := t.TempDir()
 	source := filepath.Join(root, "demo", "db_data")
+	extra := filepath.Join(root, "demo", "extra")
 	dc := repairDocker{
 		services: []runtime.Service{
 			{ID: "s1", Name: "demo_db", Node: host},
@@ -51,13 +60,20 @@ func TestRepairLocalVolumeDirs_CreatesAndForces(t *testing.T) {
 			{ID: "s3", Name: "platform_agent", Node: ""},
 		},
 		mounts: map[string][]runtime.Mount{
+			// The realistic stateful shape: a named volume whose local-driver
+			// device (the host directory) is missing, plus a raw bind and two
+			// mounts the repair must ignore.
 			"s1": {
-				{Type: "bind", Source: source, Target: "/var/lib/postgresql/data"},
+				{Type: "volume", Source: "demo_db_data", Target: "/var/lib/postgresql/data"},
+				{Type: "bind", Source: extra, Target: "/extra"},
 				{Type: "bind", Source: "/var/run/docker.sock", Target: "/var/run/docker.sock"},
-				{Type: "volume", Source: "demo_data", Target: "/named"},
+				{Type: "volume", Source: "gone_volume", Target: "/gone"},
 			},
 			"s2": {{Type: "bind", Source: filepath.Join(root, "other", "v"), Target: "/data"}},
 			"s3": {{Type: "bind", Source: filepath.Join(root, "agent", "v"), Target: "/data"}},
+		},
+		volumes: map[string]runtime.Volume{
+			"demo_db_data": {Name: "demo_db_data", Driver: "local", Device: source},
 		},
 	}
 	forcer := &repairForcer{}
@@ -65,11 +81,13 @@ func TestRepairLocalVolumeDirs_CreatesAndForces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repair: %v", err)
 	}
-	if created != 1 || updated != 1 {
-		t.Fatalf("created=%d updated=%d, want 1/1", created, updated)
+	if created != 2 || updated != 1 {
+		t.Fatalf("created=%d updated=%d, want 2/1", created, updated)
 	}
-	if _, statErr := os.Stat(source); statErr != nil {
-		t.Fatalf("volume directory not created: %v", statErr)
+	for _, dir := range []string{source, extra} {
+		if _, statErr := os.Stat(dir); statErr != nil {
+			t.Fatalf("volume directory not created: %s (%v)", dir, statErr)
+		}
 	}
 	if len(forcer.forced) != 1 || forcer.forced[0] != "s1" {
 		t.Fatalf("forced=%v, want [s1]", forcer.forced)
