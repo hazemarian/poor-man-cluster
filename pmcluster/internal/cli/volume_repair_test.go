@@ -76,7 +76,7 @@ func TestRepairLocalVolumeDirs_CreatesAndForces(t *testing.T) {
 			"s3": {{Type: "bind", Source: filepath.Join(root, "agent", "v"), Target: "/data"}},
 		},
 		volumes: map[string]runtime.Volume{
-			"demo_db_data": {Name: "demo_db_data", Driver: "local", Device: source},
+			"demo_db_data": {Name: "demo_db_data", Driver: "local", Device: source, Bind: true},
 		},
 	}
 	forcer := &repairForcer{}

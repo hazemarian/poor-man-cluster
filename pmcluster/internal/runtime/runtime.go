@@ -212,6 +212,10 @@ type Volume struct {
 	Driver     string
 	Device     string // local-driver "device" option — the host bind path
 	Mountpoint string // /var/lib/docker/volumes/<name>/_data
+	// Bind reports a local-driver volume that mounts a host directory
+	// (`o=bind, type=none`) — how pmcluster declares every stack volume. Its
+	// Device is then inside the managed volume layout by construction.
+	Bind bool
 }
 
 // ServiceTask is one row of `docker service ps` — a task's lifecycle state.

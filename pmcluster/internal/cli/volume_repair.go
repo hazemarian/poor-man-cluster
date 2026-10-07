@@ -112,20 +112,27 @@ func repairLocalVolumeDirs(ctx context.Context, dc runtime.Client, forcer servic
 			var path string
 			switch m.Type {
 			case "bind":
+				// A raw host bind is only touched inside the managed root.
+				if !underVolumeRoot(root, m.Source) {
+					continue
+				}
 				path = m.Source
 			case "volume":
-				// A stack volume is declared as a local-driver bind, so the
-				// real host directory lives on the volume definition, not on
-				// the mount (the mount's Source is just the volume name).
+				// A stack volume is a local-driver bind: the mount's source is
+				// just the volume name, and the host directory lives on the
+				// volume. pmcluster renders these itself, so the device is
+				// inside the managed layout by construction and needs no root
+				// cross-check (this is what makes the repair work on a standby
+				// manager, which has no local store to read the root from).
 				vol, verr := dc.VolumeInspect(ctx, m.Source)
-				if verr != nil {
+				if verr != nil || !vol.Bind {
 					continue
 				}
 				path = vol.Device
 			default:
 				continue
 			}
-			if path == "" || !underVolumeRoot(root, path) {
+			if path == "" {
 				continue
 			}
 			if _, serr := os.Stat(path); serr == nil {

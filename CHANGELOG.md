@@ -2,6 +2,20 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.169.3 (2026-10-07)
+
+The volume repair runs on standby managers too (BUG-026 follow-up 3).
+
+- Root cause of the third miss: `pmcluster serve` on a non-leader manager **blocks in
+  `waitForSwarmLeadership`** before it ever opens the store, so nothing registered after
+  that point runs on a standby — the repair loop never started on nxt-sw-4-m (verified:
+  no repair log line at all, `sfapp_db` still `Rejected`). The loop now starts right after
+  the docker client, **before** the leadership wait, and reads an atomically published
+  storage root (empty until the store is open, i.e. on a standby).
+- Stack volumes no longer depend on that root: a volume mount is a local-driver bind whose
+  `device` is pmcluster-generated, so the repair creates it directly (`runtime.Volume.Bind`
+  marks it). Raw host binds are still restricted to the managed root.
+
 ## v0.2.169.2 (2026-10-07)
 
 An empty `volume_root` row counts as unset (BUG-026 follow-up 2).

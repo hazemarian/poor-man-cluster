@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -90,11 +91,26 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 	}()
 
+	// storageRoot is published once the local store is open (leader path).
+	// Before that the volume repair still handles stack volumes, which carry
+	// their host directory on the volume itself and need no root.
+	var storageRoot atomic.Value
+	storageRoot.Store("")
+
 	dc, dockerErr := docker.New()
 	if dockerErr != nil {
 		log.Warn().Err(dockerErr).Msg("docker client init failed; /api/cluster/info disabled")
 	} else {
 		defer func() { _ = dc.Close() }()
+
+		// Every daemon — leader or not — keeps the volume directories of the
+		// stateful services the Swarm placed on this node (BUG-026). A standby
+		// manager blocks in waitForSwarmLeadership below, so the loop starts
+		// here and touches the runtime client only, never the store.
+		startVolumeRepairLoop(cmd.Context(), dc, cluster.NewDockerCLIDeployer(os.Stderr), func() string {
+			s, _ := storageRoot.Load().(string)
+			return s
+		}, log)
 
 		// Leader-aware daemon: on a multi-manager cluster the daemon serves
 		// ONLY on the current Swarm leader; other managers stand by until
@@ -147,6 +163,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer func() { _ = st.Close() }()
+	storageRoot.Store(localVolumeRoot(cmd.Context(), st))
 
 	// The persisted log_level cluster setting overrides the config-file
 	// default, so a console change survives daemon restarts. Invalid values
@@ -187,12 +204,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.GetSettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
 		return st.GetSettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3}
-
-	// Every daemon — leader or not — keeps the volume directories of the
-	// stateful services the Swarm placed on this node (BUG-026).
-	startVolumeRepairLoop(cmd.Context(), dc, deployer, func() string {
-		return localVolumeRoot(cmd.Context(), st)
-	}, log)
 
 	tlsSvc := certs.NewLocal(st, cipher, dc, deployer,
 		cfg.ConfigDir(), buildinfo.Version)

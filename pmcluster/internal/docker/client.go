@@ -217,6 +217,7 @@ func (r *realClient) VolumeInspect(ctx context.Context, name string) (runtime.Vo
 		Driver:     v.Driver,
 		Device:     v.Options["device"],
 		Mountpoint: v.Mountpoint,
+		Bind:       v.Options["o"] == "bind",
 	}, nil
 }
 
