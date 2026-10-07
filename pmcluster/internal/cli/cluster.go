@@ -192,6 +192,11 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 		defer closeProbe()
 		if classifyLocalCluster(ctx, st, probe) == stateStandby {
 			fmt.Fprintln(cmd.OutOrStdout(), "This node is a Swarm manager with no local control-plane state yet (it has not been promoted — the store is restored from the Raft snapshot on promotion). The cluster exists; nothing to update here.")
+			// A standby manager still needs a current daemon + systemd unit so it
+			// can take over cleanly (and so unit changes roll out to it).
+			if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+				return fmt.Errorf("ensure daemon running: %w", err)
+			}
 			return nil
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "No cluster configuration found — starting the interactive setup wizard (`pmcluster setup`).")
@@ -311,6 +316,9 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 		defer closeProbe()
 		if classifyLocalCluster(ctx, st, probe) == stateStandby {
 			fmt.Fprintln(cmd.OutOrStdout(), "This node is a Swarm manager with no local control-plane state yet (it has not been promoted — the store is restored from the Raft snapshot on promotion). Rebuild from the leader with `pmcluster cluster reset` there, or let this node be promoted.")
+			if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+				return fmt.Errorf("ensure daemon running: %w", err)
+			}
 			return nil
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "No cluster configuration found — starting the interactive setup wizard (`pmcluster setup`).")

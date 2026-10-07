@@ -2,6 +2,16 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.168.1 (2026-10-07)
+
+Standby managers also get the current daemon + systemd unit.
+
+- Follow-up to v0.2.168: the standby early-return in `cluster update` / `cluster reset` skipped
+  `ensureDaemonRunning`, so a manager that has never been promoted kept the old unit
+  (`Requires=docker.service`) until it was promoted. It now refreshes the unit and restarts the
+  daemon on the standby path too, so unit changes (BUG-021's `BindsTo=docker.service`) roll out
+  to every manager during an `install.sh` upgrade.
+
 ## v0.2.168 (2026-10-07)
 
 CLI: `cluster update` / `cluster reset` no longer mistake a standby manager for a fresh box (BUG-022).
