@@ -339,6 +339,32 @@ func TestEnsureControlPlaneFresh_NoArchiveKeeps(t *testing.T) {
 	}
 }
 
+// leaderlessDocker is a runtime.Client whose ConfigList fails with Docker's
+// no-Raft-leader (quorum lost) error — the transient condition that used to
+// make the daemon exit and systemd restart-loop it (BUG-020).
+type leaderlessDocker struct{ runtime.Client }
+
+func (leaderlessDocker) ConfigList(context.Context, string, string) ([]string, error) {
+	return nil, errors.New("Error response from daemon: rpc error: code = Unknown desc = The swarm does not have a leader. It's possible that too few managers are online. Make sure more than half of the managers are online.")
+}
+
+func TestEnsureControlPlaneFresh_SwarmLeaderlessIsNonFatal(t *testing.T) {
+	// Quorum lost while this daemon starts: the Raft kit is unreadable. The
+	// daemon must keep serving (fall through to the tarball path, then the
+	// local DB) instead of returning an error that exits the process —
+	// otherwise every manager crash-loops for the duration of the outage
+	// (BUG-020, reproduced live in TC10-A: 28 restarts on nxt-sw-4-m).
+	withArchiveDir(t, t.TempDir()) // empty: no tarball to fall back to either
+	cfg := &config.Config{DataDir: t.TempDir()}
+	restored, err := ensureControlPlaneFresh(context.Background(), cfg, leaderlessDocker{}, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("a leaderless swarm must not be fatal, got %v", err)
+	}
+	if restored {
+		t.Fatal("no restore expected when the swarm is unavailable and no archive exists")
+	}
+}
+
 // stateFake embeds runtime.Client and stores configs in memory so the
 // Raft-replicated control-plane restore path runs without Docker.
 type stateFake struct {

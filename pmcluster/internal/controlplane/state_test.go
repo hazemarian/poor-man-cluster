@@ -477,6 +477,77 @@ func TestSnapshot_WorkerNodeNoop(t *testing.T) {
 	}
 }
 
+// leaderlessClient is a runtime.Client whose config operations fail with the
+// quorum-loss error Docker returns while the Swarm is briefly without a Raft
+// leader. Unlike the worker case this is *transient* — the managers are up but
+// fewer than half can see each other (BUG-020, seen live in TC10-A: dockerd was
+// stopped on the leader and a second manager dropped off the network, so no
+// manager had quorum and every daemon that restarted crash-looped).
+type leaderlessClient struct {
+	runtime.Client
+}
+
+// errNoLeader reproduces Docker's real daemon message verbatim; production
+// matches on the substring, so the fixture must keep it exact.
+//
+//nolint:staticcheck // ST1005: fidelity to the real docker error string wins
+var errNoLeader = errors.New("Error response from daemon: rpc error: code = Unknown desc = The swarm does not have a leader. It's possible that too few managers are online. Make sure more than half of the managers are online.")
+
+func (leaderlessClient) ConfigList(context.Context, string, string) ([]string, error) {
+	return nil, errNoLeader
+}
+
+func (leaderlessClient) ConfigInspect(context.Context, string) (runtime.ConfigInspectResult, error) {
+	return runtime.ConfigInspectResult{}, errNoLeader
+}
+
+func (leaderlessClient) ConfigCreate(context.Context, runtime.ConfigSpec) error {
+	return errNoLeader
+}
+
+func (leaderlessClient) ConfigRemove(context.Context, string) error { return errNoLeader }
+
+func TestIsSwarmUnavailable(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"worker node", errNotSwarmManager, true},
+		{"no raft leader", errNoLeader, true},
+		{"too few managers", errors.New("rpc error: ... too few managers are online"), true},
+		{"missing config", errors.New("config not found: foo_v1"), false},
+		{"permission", errors.New("permission denied"), false},
+	}
+	for _, tc := range cases {
+		if got := IsSwarmUnavailable(tc.err); got != tc.want {
+			t.Errorf("%s: IsSwarmUnavailable = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestRestore_LeaderlessSwarmFallsBack(t *testing.T) {
+	// No quorum: the replicated kit cannot be read right now. Restore must
+	// degrade to ErrNoSnapshots (tarball fallback) rather than returning a
+	// fatal error that exits the daemon and crash-loops it (BUG-020).
+	k := &Kit{Docker: leaderlessClient{}, DataDir: t.TempDir(), Log: zerolog.Nop()}
+	if _, err := k.Restore(context.Background()); !errors.Is(err, ErrNoSnapshots) {
+		t.Fatalf("leaderless swarm must fall back (ErrNoSnapshots), got %v", err)
+	}
+}
+
+func TestSnapshot_LeaderlessSwarmNoop(t *testing.T) {
+	// Same transient condition for Snapshot: no-op so the leader loop keeps
+	// ticking instead of logging an error on every pass.
+	dataDir := t.TempDir()
+	writeKit(t, dataDir)
+	k := &Kit{Docker: leaderlessClient{}, DataDir: dataDir, Log: zerolog.Nop()}
+	if err := k.Snapshot(context.Background()); err != nil {
+		t.Fatalf("leaderless swarm snapshot must no-op, got %v", err)
+	}
+}
+
 func keys(m map[string][]byte) []string {
 	var out []string
 	for k := range m {

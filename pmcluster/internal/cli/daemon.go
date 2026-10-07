@@ -13,11 +13,17 @@ import (
 
 // renderSystemdUnit builds the pmcluster systemd unit file. The daemon is
 // managed by the CLI (cluster up/update, join) — install.sh never writes it.
+//
+// BindsTo=docker.service (not Requires=): both stop AND start propagate. With
+// Requires, `systemctl restart docker` (a Docker upgrade, or any daemon-only
+// restart) stops pmcluster and never starts it again — the node then has no
+// control loop, so if it comes back as (or later becomes) the Swarm leader the
+// cluster silently stops reconciling (BUG-021, found live in TC10-A).
 func renderSystemdUnit(pmUser, group, home, execStart string) string {
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster API Server
 After=docker.service
-Requires=docker.service
+BindsTo=docker.service
 
 [Service]
 Type=simple

@@ -2,6 +2,37 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.167 (2026-10-07)
+
+Control plane: survive a leaderless swarm, and come back after a docker restart (BUG-020, BUG-021).
+
+Found in the four-manager failover test (TC10-A). `systemctl stop docker` on the leader
+elected a new leader in ~25 s, the new leader restored the whole control plane from the Raft
+snapshot (configs + settings) exactly as designed, and a second consecutive leader loss was
+likewise recovered — but two recovery paths were wrong:
+
+- **BUG-020 — a daemon that starts while the swarm has no Raft leader crash-looped.**
+  Docker answers every config call with `The swarm does not have a leader ...`, and the
+  startup restore treated it as fatal, so systemd restarted the daemon every ~5 s (observed:
+  28 restarts in ~2 min). `IsSwarmUnavailable` (exported; was `isNotSwarmManager`) now also
+  recognises the no-quorum messages — `does not have a leader`, `too few managers are
+  online`; snapshot and restore become a logged no-op, the startup restore falls through to
+  the tarball archive (and keeps local data when there is none), and the daemon stays up and
+  stands by until quorum returns.
+- **BUG-021 — a docker-only restart left `pmcluster` inactive.** The generated unit used
+  `Requires=docker.service`, which propagates stop but not start: stopping dockerd stopped
+  the daemon and starting dockerd did not bring it back (verified live — a manager returned
+  with no control loop, so a leader that is or becomes the Raft leader stops reconciling
+  silently). The unit now uses `BindsTo=docker.service`.
+
+Upgrade note: the unit is rewritten by `cluster up` / `join` / `cluster reset` (not by
+`cluster update`), so re-run one of those — or `install.sh` — to pick up the new unit.
+
+Tests: leaderless-swarm fixtures in `internal/controlplane` + `internal/cli` (verbatim
+Docker no-leader errors), a six-case `IsSwarmUnavailable` table, and the updated unit
+expectation. Falsified: disabling both no-quorum patterns makes the cli test fail with the
+exact crash-loop error.
+
 ## v0.2.166.1 (2026-10-07)
 
 CI: golangci-lint is green again — explicit returns after `t.Fatal` nil-checks.

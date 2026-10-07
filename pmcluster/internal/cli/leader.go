@@ -171,8 +171,19 @@ func ensureControlPlaneFresh(ctx context.Context, cfg *config.Config, dc runtime
 	if err == nil {
 		return restored, nil // Raft config path handled it (restored, or DB current)
 	}
-	if !errors.Is(err, controlplane.ErrNoSnapshots) {
+	if !errors.Is(err, controlplane.ErrNoSnapshots) && !controlplane.IsSwarmUnavailable(err) {
 		return false, fmt.Errorf("control-plane Raft restore: %w", err)
+	}
+	if controlplane.IsSwarmUnavailable(err) {
+		// The swarm has no Raft leader right now (quorum lost), so the
+		// replicated kit is unreadable. That is transient, not a
+		// control-plane failure — never fatal: fall through to the local
+		// tarball archive and, if there is none, keep serving with the local
+		// DB. Safe because the reconcile loop only starts once leadership is
+		// confirmed, so there is nothing to reconcile during the outage.
+		// Without this the daemon exits and systemd restart-loops it
+		// (BUG-020, seen live in TC10-A).
+		log.Warn().Err(err).Msg("swarm unavailable; deferring control-plane restore")
 	}
 
 	// No state configs yet (pre-L2 cluster or standalone): fall back to the

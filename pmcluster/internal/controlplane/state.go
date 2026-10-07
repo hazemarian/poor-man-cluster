@@ -86,14 +86,31 @@ const (
 // archive path for clusters that predate Raft config snapshots.
 var ErrNoSnapshots = errors.New("no control-plane state config exists")
 
-// isNotSwarmManager reports whether err is Docker's "This node is not a
-// swarm manager" error. Worker nodes cannot list, inspect, or create swarm
-// configs, so the Raft-replicated control-plane kit is invisible to them:
-// Restore treats this like ErrNoSnapshots (tarball fallback) and Snapshot
-// no-ops, exactly as if Docker were unavailable. The message is stable
-// across Docker versions (daemon/cluster/errors.go errSwarmNotManager).
-func isNotSwarmManager(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "is not a swarm manager")
+// IsSwarmUnavailable reports whether err is a *transient Swarm availability*
+// error rather than a genuine control-plane failure. Two cases qualify:
+//
+//   - this node is a worker ("This node is not a swarm manager") — swarm
+//     configs are manager-only, so the Raft-replicated kit is invisible here;
+//   - the swarm is momentarily without a Raft leader ("does not have a
+//     leader" / "too few managers are online") — quorum was lost, so even a
+//     manager cannot read the replicated configs *right now*.
+//
+// Both mean the survivor kit cannot be read at this instant, so callers
+// degrade to standalone/local behaviour (Restore -> ErrNoSnapshots, Snapshot
+// -> no-op) and retry later instead of failing fatally. That matters most
+// when a daemon (re)starts during a quorum outage: without this it exits,
+// systemd restarts it, and every manager crash-loops (BUG-020, found in
+// TC10-A — nxt-sw-4-m restarted 28 times while the swarm had no leader).
+// The matched strings are stable Docker messages (daemon/cluster/errors.go
+// errSwarmNotManager; SwarmKit raft errNoLeader).
+func IsSwarmUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "is not a swarm manager") ||
+		strings.Contains(msg, "does not have a leader") ||
+		strings.Contains(msg, "too few managers are online")
 }
 
 // Kit snapshots and restores the control-plane survivor kit via Docker
@@ -129,10 +146,11 @@ func (k *Kit) Snapshot(ctx context.Context) error {
 
 	changed, err := k.needsSnapshot(ctx)
 	if err != nil {
-		if isNotSwarmManager(err) {
-			// Worker node: swarm configs are manager-only. Nothing to
-			// replicate to — behave like standalone mode.
-			log.Debug().Err(err).Msg("not a swarm manager; skipping control-plane snapshot")
+		if IsSwarmUnavailable(err) {
+			// Worker node, or the swarm has no Raft leader right now:
+			// swarm configs are unreadable. Nothing to replicate to —
+			// behave like standalone mode and retry on the next tick.
+			log.Debug().Err(err).Msg("swarm unavailable; skipping control-plane snapshot")
 			return nil
 		}
 		return err
@@ -328,10 +346,13 @@ func (k *Kit) Restore(ctx context.Context) (bool, error) {
 
 	newest, err := k.newest(ctx, KindState)
 	if err != nil {
-		if isNotSwarmManager(err) {
-			// Worker node: cannot read swarm configs. Fall back to the
-			// tarball archive path like a pre-L2 / standalone cluster.
-			log.Debug().Err(err).Msg("not a swarm manager; no Raft state configs to restore")
+		if IsSwarmUnavailable(err) {
+			// Worker node, or the swarm is momentarily leaderless (quorum
+			// lost): the Raft kit is unreadable right now. Fall back to the
+			// tarball archive path like a pre-L2 / standalone cluster — and,
+			// crucially, do NOT fail: a daemon that starts during a quorum
+			// outage must serve and retry, not crash-loop (BUG-020).
+			log.Warn().Err(err).Msg("swarm unavailable; no Raft state configs to restore (deferring)")
 			return false, ErrNoSnapshots
 		}
 		return false, err

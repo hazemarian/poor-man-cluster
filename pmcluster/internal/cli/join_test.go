@@ -20,7 +20,7 @@ func TestRenderSystemdUnit(t *testing.T) {
 		"[Unit]",
 		"Description=pmcluster API Server",
 		"After=docker.service",
-		"Requires=docker.service",
+		"BindsTo=docker.service",
 		"[Service]",
 		"Type=simple",
 		"User=pmuser",
