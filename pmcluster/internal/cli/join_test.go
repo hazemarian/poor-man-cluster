@@ -31,6 +31,7 @@ func TestRenderSystemdUnit(t *testing.T) {
 		"RestartSec=5",
 		"[Install]",
 		"WantedBy=multi-user.target",
+		"WantedBy=docker.service",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("unit template missing %q:\n%s", want, unit)

@@ -434,7 +434,14 @@ func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, 
 		if s.Restart != "" {
 			d.RestartPolicy = &composeRestartPolicy{Condition: s.Restart, Delay: s.RestartDelay}
 		} else {
-			d.RestartPolicy = &composeRestartPolicy{Condition: "on-failure", Delay: s.RestartDelay}
+			// "any", not "on-failure": a long-running service whose container
+			// exits cleanly (SIGTERM while its node's Docker daemon stops, a
+			// Docker upgrade, a graceful shutdown) is marked Complete by the
+			// Swarm, and with `on-failure` the task is NEVER replaced — the
+			// service sits at 0/1 until an operator force-updates it
+			// (BUG-023, found live in TC10-A: the global services recovered
+			// because they already used "any", the replicated ones did not).
+			d.RestartPolicy = &composeRestartPolicy{Condition: "any", Delay: s.RestartDelay}
 		}
 	}
 

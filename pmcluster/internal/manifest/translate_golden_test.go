@@ -33,7 +33,7 @@ func TestTranslate_Golden(t *testing.T) {
 				`version: "3.9"`,
 				"  net:",
 				"busybox:latest",
-				"condition: on-failure",
+				"condition: any",
 				"order: start-first",
 			},
 		},

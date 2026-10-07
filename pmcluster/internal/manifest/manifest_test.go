@@ -123,7 +123,7 @@ func TestTranslate_DonationCampaignSmoke(t *testing.T) {
 	mustContain(`api.donation-campaign.example.com`)
 	mustContain(`traefik.http.routers.donation-campaign-api.rule`)
 	mustContain(`condition: none`)
-	mustContain(`condition: on-failure`)
+	mustContain(`condition: any`)
 	mustContain(`order: start-first`)
 	mustContain(`replicas: 2`)
 	mustContain(`application: donation-campaign`)

@@ -2,6 +2,36 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.168.2 (2026-10-07)
+
+Node-loss recovery: replicated services come back on their own, and the daemon
+returns with Docker (BUG-021b, BUG-023 — both found live during the four-manager
+failover campaign).
+
+- **BUG-023 — a cleanly-exited replicated task was never replaced.** A
+  long-running service whose container exited with code 0 (SIGTERM while its
+  node's Docker daemon stopped, e.g. a Docker upgrade) is marked `Complete` by
+  the Swarm, and `restart_policy: condition: on-failure` ignores a zero exit, so
+  the task was never rescheduled: after the test cluster's daemons restarted,
+  `edge_pmcluster-edge` and `backup_control-plane-backup` sat at 0/1 and
+  `backup_volume-backup` at 1/2 until a manual `docker service update --force`.
+  The writer now renders `condition: any` for the default replicated case — the
+  same policy the global services already used, which is why they recovered on
+  their own. An explicit `restart:` in a manifest still wins, and run-once jobs
+  are unchanged (`none`, or `on-failure` with `max_attempts: 3` when the job has
+  `depends_on`).
+- **BUG-021b — starting Docker did not start the daemon.** `BindsTo=docker.service`
+  (v0.2.167) propagates a *stop* but not a *start*, so
+  `systemctl stop docker && systemctl start docker` left `pmcluster` inactive on
+  the standby managers; a node with no control loop silently stops reconciling if
+  it is (or becomes) the Raft leader. The generated unit now also carries
+  `WantedBy=docker.service`, so starting Docker pulls the daemon back in.
+  `ensureDaemonRunning` (run by `cluster up`/`update`/`reset`/`join`) rewrites and
+  re-enables the unit, so `install.sh` rolls the change out.
+- Tests: `TestRenderSystemdUnit` asserts `WantedBy=docker.service`; the translator
+  goldens and `TestTranslate_Golden`'s expectations assert `condition: any` for
+  replicated services (the run-once fixtures keep `condition: none`).
+
 ## v0.2.168.1 (2026-10-07)
 
 Standby managers also get the current daemon + systemd unit.
