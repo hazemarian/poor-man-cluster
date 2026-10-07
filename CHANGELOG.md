@@ -2,6 +2,18 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.166.1 (2026-10-07)
+
+CI: golangci-lint is green again — explicit returns after `t.Fatal` nil-checks.
+
+- The main gate had been red for six consecutive commits: under **Go 1.25** staticcheck
+  reported 30 `SA5011 possible nil pointer dereference` findings in test files (in that
+  analysis state it does not treat `t.Fatal` as terminating; the same code is clean under
+  Go 1.26, which is why it never reproduced locally).
+- Fixed by adding an explicit `return` to each nil-checked branch — 15 sites across 10
+  test files. No assertion was changed, no linter rule disabled, no production code touched.
+- Test-only change: the v0.2.166.1 binaries are identical to v0.2.166.
+
 ## v0.2.166 (2026-10-07)
 
 Secrets: `pmcluster secret heal` — find and repair rows the current key cannot open.

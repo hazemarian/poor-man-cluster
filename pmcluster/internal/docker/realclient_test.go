@@ -325,6 +325,7 @@ func TestRealClient_ServiceListAndStackSecretNames(t *testing.T) {
 	}
 	if web == nil {
 		t.Fatal("demo_web not found")
+		return
 	}
 	if web.Stack != "demo" || web.Image != "nginx:latest" || web.Mode != "replicated" {
 		t.Errorf("unexpected demo_web: stack=%q image=%q mode=%q", web.Stack, web.Image, web.Mode)

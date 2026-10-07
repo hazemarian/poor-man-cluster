@@ -721,6 +721,7 @@ func TestRunOnce_StorageFailoverEnabledMovesToHealthyAlternate(t *testing.T) {
 	}
 	if fo == nil {
 		t.Fatal("failover marker was not recorded after the move")
+		return
 	}
 	if fo.StackName != "demo" || fo.FromNode != f.pinned || fo.ToNode != f.other || fo.Acked {
 		t.Errorf("marker = %+v, want demo %s→%s unacknowledged", fo, f.pinned, f.other)

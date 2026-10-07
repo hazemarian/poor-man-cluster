@@ -146,6 +146,7 @@ func TestJoinCommandRegistration_RegistryFlags(t *testing.T) {
 	copyF := joinCmd.Flags().Lookup("copy-registry-creds")
 	if copyF == nil {
 		t.Fatal("joinCmd missing --copy-registry-creds")
+		return
 	}
 	if copyF.DefValue != "" {
 		t.Errorf("--copy-registry-creds default = %q, want empty (opt-in)", copyF.DefValue)
@@ -153,6 +154,7 @@ func TestJoinCommandRegistration_RegistryFlags(t *testing.T) {
 	pullF := joinCmd.Flags().Lookup("verify-registry-pull")
 	if pullF == nil {
 		t.Fatal("joinCmd missing --verify-registry-pull")
+		return
 	}
 	if pullF.DefValue != "" {
 		t.Errorf("--verify-registry-pull default = %q, want empty (opt-in)", pullF.DefValue)
@@ -527,6 +529,7 @@ func TestJoinCommandRegistration_StorageNodeFlag(t *testing.T) {
 	f := joinCmd.Flags().Lookup("storage-node")
 	if f == nil {
 		t.Fatal("joinCmd missing --storage-node")
+		return
 	}
 	if f.DefValue != "false" {
 		t.Errorf("--storage-node default = %q, want false", f.DefValue)

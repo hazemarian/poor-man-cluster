@@ -741,6 +741,7 @@ func TestTranslate_Resources(t *testing.T) {
 	r := deployOf(t, cf, "api").Resources
 	if r == nil {
 		t.Fatalf("deploy.resources missing:\n%s", s)
+		return
 	}
 	if r.Reservations == nil || r.Reservations.CPUs != "0.1" || r.Reservations.Memory != "128M" {
 		t.Errorf("reservations = %+v, want cpus 0.1 / memory 128M", r.Reservations)

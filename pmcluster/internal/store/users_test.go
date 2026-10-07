@@ -163,6 +163,7 @@ func TestUserByToken(t *testing.T) {
 		}
 		if u == nil {
 			t.Fatal("expected user, got nil")
+			return
 		}
 		if u.Name != "alice" {
 			t.Errorf("user.Name = %q, want %q", u.Name, "alice")
@@ -213,6 +214,7 @@ func TestUserByTokenLegacy(t *testing.T) {
 	}
 	if u == nil {
 		t.Fatal("legacy token lookup returned nil, want user")
+		return
 	}
 	if u.Name != "legacy-user" {
 		t.Errorf("legacy user.Name = %q, want 'legacy-user'", u.Name)
@@ -301,6 +303,7 @@ func TestUserByID(t *testing.T) {
 		}
 		if u == nil {
 			t.Fatal("expected user, got nil")
+			return
 		}
 		if u.ID != id {
 			t.Errorf("user.ID = %d, want %d", u.ID, id)

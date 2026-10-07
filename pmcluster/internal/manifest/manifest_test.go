@@ -68,6 +68,7 @@ func TestPipeline_DonationCampaign(t *testing.T) {
 	api := app.Services["api"]
 	if api == nil {
 		t.Fatal("missing services.api after parse")
+		return
 	}
 	wantImage := "ghcr.io/nextrum-sy/donation-campaign:latest"
 	if api.Image != wantImage {

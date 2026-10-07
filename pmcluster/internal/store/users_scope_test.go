@@ -100,6 +100,7 @@ func TestCreateUserWithStackScope(t *testing.T) {
 		}
 		if u == nil {
 			t.Fatal("UserByToken (scoped) = nil user")
+			return
 		}
 		if u.Stack != "demo" {
 			t.Errorf("UserByToken stack = %q, want demo", u.Stack)
@@ -111,6 +112,7 @@ func TestCreateUserWithStackScope(t *testing.T) {
 		}
 		if up == nil {
 			t.Fatal("UserByToken (unscoped) = nil user")
+			return
 		}
 		if up.Stack != "" {
 			t.Errorf("UserByToken stack = %q, want %q (unscoped)", up.Stack, "")

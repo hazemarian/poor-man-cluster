@@ -25,6 +25,7 @@ func TestStackAckCommandRegistered(t *testing.T) {
 	}
 	if ack == nil {
 		t.Fatal("stack ack command not registered under stackCmd")
+		return
 	}
 	if ack.Use != "ack <stack-name>" {
 		t.Errorf("ack Use = %q, want %q", ack.Use, "ack <stack-name>")

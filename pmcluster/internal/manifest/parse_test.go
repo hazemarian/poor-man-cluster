@@ -83,6 +83,7 @@ services:
 	}
 	if app == nil {
 		t.Fatal("Parse returned nil app")
+		return
 	}
 	if app.Name != "my-app" {
 		t.Errorf("app.Name = %q, want %q", app.Name, "my-app")

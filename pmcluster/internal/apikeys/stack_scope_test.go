@@ -51,6 +51,7 @@ func TestLocalCreateWithStackScope(t *testing.T) {
 	}
 	if u == nil {
 		t.Fatal("UserByToken returned nil user")
+		return
 	}
 	if u.Stack != "demo" {
 		t.Errorf("UserByToken stack = %q, want demo", u.Stack)
