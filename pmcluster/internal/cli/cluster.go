@@ -108,6 +108,49 @@ func init() {
 	clusterCmd.AddCommand(clusterUpCmd, clusterUpdateCmd, clusterStatusCmd, clusterDownCmd, clusterResetCmd)
 }
 
+// clusterState classifies what the local store says about this node.
+type clusterState int
+
+const (
+	// stateProvisioned: the local store holds the cluster's settings.
+	stateProvisioned clusterState = iota
+	// stateStandby: no local control-plane state, but the node is a member of an
+	// existing Swarm. A manager that joined but was never promoted keeps an
+	// intentionally empty store — the control plane lives in the Raft snapshot
+	// and is restored when it is promoted — so this is not a fresh box.
+	stateStandby
+	// stateFresh: no local state and no Swarm — a fresh box that needs `setup`.
+	stateFresh
+)
+
+// classifyLocalCluster decides whether `cluster update` / `cluster reset` should
+// re-provision this node, stand by, or guide the operator into the setup wizard.
+// A missing local `domain` on its own does not mean "no cluster": a manager that
+// joined but was never promoted has none, and treating it as a fresh box sent
+// install.sh's auto `cluster update` into the interactive wizard, which then
+// failed with "domain is required" (BUG-022).
+func classifyLocalCluster(ctx context.Context, st *store.Store, dc runtime.Client) clusterState {
+	if st.GetSettingDefault(ctx, cluster.SettingDomain(), "") != "" {
+		return stateProvisioned
+	}
+	if dc != nil {
+		if id, err := dc.SwarmID(ctx); err == nil && id != "" {
+			return stateStandby
+		}
+	}
+	return stateFresh
+}
+
+// probeDocker opens a best-effort Docker client used only to classify this node;
+// a failure (a fresh box with no daemon) is not an error.
+func probeDocker() (runtime.Client, func()) {
+	dc, err := docker.New()
+	if err != nil {
+		return nil, func() {}
+	}
+	return dc, func() { _ = dc.Close() }
+}
+
 func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 	defer initCLITelemetry()()
 
@@ -139,9 +182,18 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	// No persisted cluster state? There is nothing to update — guide the
-	// operator into the setup wizard (fresh installs must provision first).
-	if st.GetSettingDefault(ctx, "domain", "") == "" {
+	// No persisted cluster state? Either this is a fresh box (guide the operator
+	// into the setup wizard) or a manager that joined but was never promoted:
+	// its store is intentionally empty and the control plane is restored from
+	// the Raft snapshot on promotion, so there is nothing to update on it
+	// (BUG-022).
+	if st.GetSettingDefault(ctx, cluster.SettingDomain(), "") == "" {
+		probe, closeProbe := probeDocker()
+		defer closeProbe()
+		if classifyLocalCluster(ctx, st, probe) == stateStandby {
+			fmt.Fprintln(cmd.OutOrStdout(), "This node is a Swarm manager with no local control-plane state yet (it has not been promoted — the store is restored from the Raft snapshot on promotion). The cluster exists; nothing to update here.")
+			return nil
+		}
 		fmt.Fprintln(cmd.OutOrStdout(), "No cluster configuration found — starting the interactive setup wizard (`pmcluster setup`).")
 		return runSetup(cmd, nil)
 	}
@@ -251,9 +303,16 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	// No persisted cluster state? There is nothing to rebuild — guide the
-	// operator into the setup wizard.
-	if st.GetSettingDefault(ctx, "domain", "") == "" {
+	// No persisted cluster state? Either a fresh box (guide the operator into the
+	// setup wizard) or a manager that was never promoted, whose store is
+	// intentionally empty (BUG-022).
+	if st.GetSettingDefault(ctx, cluster.SettingDomain(), "") == "" {
+		probe, closeProbe := probeDocker()
+		defer closeProbe()
+		if classifyLocalCluster(ctx, st, probe) == stateStandby {
+			fmt.Fprintln(cmd.OutOrStdout(), "This node is a Swarm manager with no local control-plane state yet (it has not been promoted — the store is restored from the Raft snapshot on promotion). Rebuild from the leader with `pmcluster cluster reset` there, or let this node be promoted.")
+			return nil
+		}
 		fmt.Fprintln(cmd.OutOrStdout(), "No cluster configuration found — starting the interactive setup wizard (`pmcluster setup`).")
 		return runSetup(cmd, nil)
 	}

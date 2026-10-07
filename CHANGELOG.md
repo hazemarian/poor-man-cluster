@@ -2,6 +2,26 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.168 (2026-10-07)
+
+CLI: `cluster update` / `cluster reset` no longer mistake a standby manager for a fresh box (BUG-022).
+
+- Found in the four-manager campaign: `install.sh VERSION=…` on **nxt-sw-3-w** — a manager that
+  joined the Swarm but was never promoted — failed with
+  `No cluster configuration found — starting the interactive setup wizard` →
+  `error: domain is required (interactive prompt or --domain)`.
+- Root cause: a manager that never won a Raft election keeps an intentionally **empty local
+  store** (the control plane lives in the Raft state snapshot and is restored when the node is
+  promoted — 3-w had 0 `cluster_settings` rows while the promoted 2-m had 29), and both
+  commands used "no stored `domain`" as the test for "no cluster".
+- `classifyLocalCluster` now distinguishes three states: **provisioned** (settings present),
+  **standby** (no settings, but the node is a member of an existing Swarm) and **fresh** (no
+  settings, no Swarm). A standby manager gets a one-line explanation and exits 0 — nothing to
+  update there — and only a genuinely fresh box drops into the wizard. The Docker probe used
+  for classification is best-effort, so a host without a daemon still reaches the wizard.
+- Tests: `TestClassifyLocalCluster` (fresh / standby / probe-error / nil client /
+  provisioned-wins).
+
 ## v0.2.167 (2026-10-07)
 
 Control plane: survive a leaderless swarm, and come back after a docker restart (BUG-020, BUG-021).
