@@ -2,6 +2,32 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.165 (2026-10-07)
+
+Reconcile: a failed app-stack deploy no longer suppresses retries (BUG-018).
+
+- Found live during the v0.2.164 rollout: `demoenv` and `uitest` failed to deploy
+  (`service web: secret not found: demoenv_db_pass_3bd8cb98`) yet a revision carrying the
+  **new** rendered hash was recorded anyway, so every later `Sync` compared the stored
+  hash with the fresh render, saw them equal, and logged `no drift` forever — the stack
+  never retried and stayed on a five-day-old task. (The affected swarm secrets were
+  rebuilt by hand and both stacks re-applied.)
+- Root cause: the app lane recorded the revision (with its rendered hash) **before**
+  applying to the swarm. That is the BUG-009 class, fixed for platform stacks in v0.2.148
+  (`SetRendered` only after a successful deploy) but never for apps.
+- Fix: `Deploy`, `Sync` and `Rollback` now record the revision with an **empty**
+  `rendered_hash` and stamp it — via the new `store.SetRevisionRenderedHash` — only after
+  the swarm apply succeeds, on the synchronous path, the async/background (webhook) path
+  and rollback. A failed apply leaves the hash empty, so the next `Sync` sees a mismatch
+  and retries. The revision number, source YAML and audit trail are unchanged.
+- Safety net in `stackdrift.InSync`: when the fresh render carries a label but **no** live
+  service does, that is drift (`the labelled render was not applied`), which also heals a
+  state already poisoned by the old ordering. A stack where none carry the label used to
+  be treated as in-sync.
+- Tests: `TestDeploy_FailedApplyLeavesHashEmptyAndNextSyncRetries` (fails without the
+  fix), a `store` test for the new setter, a `stackdrift` case for the new rule; platform
+  test fixtures now stamp the real rendered-hash label — no production rule was weakened.
+
 ## v0.2.164 (2026-10-07)
 
 Reconcile: every deployed service carries its content hash — app stacks too (k8s-style).

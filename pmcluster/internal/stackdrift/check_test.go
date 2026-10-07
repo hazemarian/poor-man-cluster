@@ -121,13 +121,14 @@ func TestInSync(t *testing.T) {
 			wantReason: "some services are missing the rendered-hash label (partial deploy)",
 		},
 		{
-			name: "all unlabeled treated in sync",
+			name: "all unlabeled drifts when render requires the label",
 			client: &fakeClient{svcs: []runtime.Service{
 				{Name: stack + "_web", Stack: stack, Labels: map[string]string{}},
 				{Name: stack + "_worker", Stack: stack, Labels: map[string]string{}},
 			}},
 			fresh:      freshCompose(h),
-			wantInSync: true,
+			wantInSync: false,
+			wantReason: "no live service carries the rendered-hash label (the labelled render was not applied)",
 		},
 		{
 			name: "extra live service ignored",

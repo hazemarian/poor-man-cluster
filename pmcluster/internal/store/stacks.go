@@ -153,6 +153,25 @@ func (s *Store) RecordDeploy(ctx context.Context, rev *StackRevision, repoURL st
 	return nil
 }
 
+// SetRevisionRenderedHash stamps the rendered_hash column of an existing
+// revision. The deploy pipeline records a revision with an EMPTY hash up
+// front, then sets the hash only after the swarm apply succeeds — so a failed
+// deploy leaves the hash empty and the next Sync sees a mismatch and retries
+// (BUG-018). Returns ErrRevisionNotFound when no such revision exists.
+func (s *Store) SetRevisionRenderedHash(ctx context.Context, stackName string, revision int64, hash string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE stack_revisions SET rendered_hash = ? WHERE stack_name = ? AND revision = ?`,
+		hash, stackName, revision,
+	)
+	if err != nil {
+		return fmt.Errorf("update revision rendered_hash: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrRevisionNotFound
+	}
+	return nil
+}
+
 func (s *Store) GetStack(ctx context.Context, name string) (*Stack, error) {
 	var st Stack
 	err := s.db.QueryRowContext(ctx,

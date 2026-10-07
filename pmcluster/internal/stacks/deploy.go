@@ -344,7 +344,12 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 			Revision:     revision,
 			SourceYAML:   p.Manifest,
 			RenderedYAML: string(rendered),
-			RenderedHash: store.ConfigHash(string(rendered)),
+			// RenderedHash is left EMPTY up front: the revision number,
+			// source YAML and audit trail are recorded now, but the hash is
+			// stamped only AFTER the swarm apply succeeds (see the deploy
+			// step below). A failed deploy therefore leaves the hash empty so
+			// the next Sync sees a mismatch and retries (BUG-018).
+			RenderedHash: "",
 			SourceFile:   p.File,
 			PayloadJSON:  sql.NullString{String: string(payloadJSON), Valid: true},
 		}
@@ -379,11 +384,24 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 					_, _ = s.Store.RecordStackError(applyCtx, app.Name, revision, err.Error())
 					return
 				}
+				// Stamp the rendered hash only now that the apply succeeded.
+				// A failed apply returns above and leaves the hash empty, so
+				// the next Sync sees a mismatch and retries (BUG-018).
+				if err := s.Store.SetRevisionRenderedHash(applyCtx, app.Name, revision, store.ConfigHash(string(rendered))); err != nil {
+					s.Log.Error().Err(err).Str("stack", app.Name).
+						Int64("revision", revision).Msg("deploy — failed to stamp rendered hash after background apply")
+				}
 				_, _ = s.Store.RecordStackError(applyCtx, app.Name, revision, "")
 			}()
 			return nil
 		}
-		return s.applyToSwarm(ctx, app, ir, rendered, revision)
+		if err := s.applyToSwarm(ctx, app, ir, rendered, revision); err != nil {
+			return err
+		}
+		// Stamp the rendered hash only now that the apply succeeded. A failed
+		// apply returned above and left the hash empty, so the next Sync sees
+		// a mismatch and retries (BUG-018).
+		return s.Store.SetRevisionRenderedHash(ctx, app.Name, revision, store.ConfigHash(string(rendered)))
 	})
 
 	// Snapshot the step names in order (all steps are added before Run) so the
@@ -861,7 +879,9 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 			Revision:     revision,
 			SourceYAML:   row.SourceYAML,
 			RenderedYAML: string(rendered),
-			RenderedHash: store.ConfigHash(string(rendered)),
+			// RenderedHash is left EMPTY up front and stamped only after the
+			// re-deploy below succeeds, matching Deploy/Sync (BUG-018).
+			RenderedHash: "",
 			PayloadJSON:  sql.NullString{String: string(rolledBackPayload), Valid: true},
 		}
 		if err := s.Store.RecordDeploy(ctx, rev, ""); err != nil {
@@ -870,7 +890,11 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 		return nil
 	})
 	wf.Add("Re-deploying stack from source", func(ctx context.Context) error {
-		return s.applyToSwarm(ctx, app, ir, rendered, revision)
+		if err := s.applyToSwarm(ctx, app, ir, rendered, revision); err != nil {
+			return err
+		}
+		// Stamp the rendered hash only now that the apply succeeded (BUG-018).
+		return s.Store.SetRevisionRenderedHash(ctx, stackName, revision, store.ConfigHash(string(rendered)))
 	})
 
 	if err := wf.Run(ctx); err != nil {

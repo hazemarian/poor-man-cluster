@@ -169,6 +169,52 @@ func TestRecordDeploy_RenderedHashRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSetRevisionRenderedHash_StampsAndErrors verifies the deploy pipeline's
+// post-apply hash setter: it stamps the rendered_hash column of an existing
+// revision, is read back by GetRevision, and returns ErrRevisionNotFound for an
+// unknown (stack, revision) pair.
+func TestSetRevisionRenderedHash_StampsAndErrors(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	rev := makeRevision("mystack", 1000, "source: yaml", "rendered: yaml")
+	// Record with an EMPTY hash (the deploy pipeline's up-front record).
+	rev.RenderedHash = ""
+	if err := s.RecordDeploy(ctx, rev, ""); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+
+	// Before the apply succeeds, the hash is empty.
+	got, err := s.GetRevision(ctx, "mystack", 1000)
+	if err != nil {
+		t.Fatalf("GetRevision: %v", err)
+	}
+	if got.RenderedHash != "" {
+		t.Fatalf("RenderedHash before stamp = %q, want empty", got.RenderedHash)
+	}
+
+	want := ConfigHash("rendered: yaml")
+	if err := s.SetRevisionRenderedHash(ctx, "mystack", 1000, want); err != nil {
+		t.Fatalf("SetRevisionRenderedHash: %v", err)
+	}
+
+	got, err = s.GetRevision(ctx, "mystack", 1000)
+	if err != nil {
+		t.Fatalf("GetRevision (after stamp): %v", err)
+	}
+	if got.RenderedHash != want {
+		t.Errorf("RenderedHash after stamp = %q, want %q", got.RenderedHash, want)
+	}
+
+	// Unknown revision errors, and a mismatched stack name errors too.
+	if err := s.SetRevisionRenderedHash(ctx, "mystack", 9999, want); !errors.Is(err, ErrRevisionNotFound) {
+		t.Errorf("SetRevisionRenderedHash(unknown revision) = %v, want ErrRevisionNotFound", err)
+	}
+	if err := s.SetRevisionRenderedHash(ctx, "other-stack", 1000, want); !errors.Is(err, ErrRevisionNotFound) {
+		t.Errorf("SetRevisionRenderedHash(wrong stack) = %v, want ErrRevisionNotFound", err)
+	}
+}
+
 // TestRecordDeploy_RepoURLPreservedOnEmptyUpdate verifies that passing an
 // empty repoURL on a subsequent deploy preserves the existing value via the
 // COALESCE(NULLIF(?, ”), repo_url) clause.

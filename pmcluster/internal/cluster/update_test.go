@@ -238,6 +238,13 @@ func seedUpdateState(t *testing.T) (UpdateDeps, string) {
 		t.Fatalf("seed Up: %v", err)
 	}
 
+	// Reconstruct the post-deploy swarm state the fakeDocker's recording
+	// deployer does not build on its own: every live service carries the
+	// rendered-hash label the stored render stamped. Otherwise `cluster
+	// update`'s drift check sees zero labelled services and (correctly)
+	// redeploys every platform stack on a no-op update.
+	stampRenderedHashLabels(t, s, f)
+
 	return UpdateDeps{
 		Store:    s,
 		Cipher:   cipher,

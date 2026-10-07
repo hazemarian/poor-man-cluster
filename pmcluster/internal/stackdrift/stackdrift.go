@@ -41,10 +41,24 @@ func ContentHash(data []byte) string {
 //     freshly rendered compose's label was deployed from a DIFFERENT render
 //     (detects a half-applied deploy, a skipped service, an older binary) —
 //     the exact class of drift that let the wafaa control-plane backup run
-//     without its offsite destination. A service with NO label predates the
-//     label and cannot be compared, so it is treated as in sync; the render
-//     change that introduced the label already forced one redeploy that
-//     stamped it.
+//     without its offsite destination.
+//
+// Label drift is reported under two rules:
+//   - PARTIAL: some (but not all) services carry the label. The deploy was
+//     cut off mid-flight (e.g. the daemon restarted during an install), so it
+//     is drift and must be re-applied.
+//   - ALL-UNLABELLED: when the fresh compose carries a label (wantHash != "")
+//     but NO live service carries one. At these call sites InSync is only
+//     consulted after the stored rendered hash already matches the fresh
+//     render — meaning a labelled render was supposedly applied. Zero labelled
+//     live services proves it was NOT actually applied (a failed deploy that
+//     left the store's hash stale — BUG-018), so it is drift and must be
+//     re-applied. This intentionally supersedes the old rationale ("the stack
+//     predates the label"), which only held when the label was first
+//     introduced, not when a labelled render was the recorded truth.
+//
+// A render with no label (wantHash == "") predates the feature, so only the
+// service set is compared and no label rule applies.
 //
 // Extra live services the render no longer produces are deliberately ignored —
 // `docker stack deploy` cannot remove them, so flagging them would redeploy
@@ -101,11 +115,16 @@ func InSync(ctx context.Context, d runtime.Client, stack string, freshCompose []
 	// A stack where only SOME services carry the label is a PARTIALLY APPLIED
 	// deploy — the deploy was cut off (interrupted mid `stack deploy`, e.g. the
 	// daemon restarted during an install) or a service was created by hand — so
-	// treat it as drift and re-apply. A stack where NONE carry the label
-	// predates it; leave that alone, because the render change that introduced
-	// the label already forces one re-deploy which stamps them all.
+	// treat it as drift and re-apply.
 	if labeled > 0 && unlabeled > 0 {
 		return false, "some services are missing the rendered-hash label (partial deploy)", nil
+	}
+	// A stack where NONE carry the label while the fresh render REQUIRES one
+	// proves the labelled render was never actually applied (a failed deploy
+	// that left the stored hash matching). This only runs when wantHash != ""
+	// — a render with no label predates the feature and is left in sync.
+	if labeled == 0 && wantHash != "" {
+		return false, "no live service carries the rendered-hash label (the labelled render was not applied)", nil
 	}
 	return true, "", nil
 }

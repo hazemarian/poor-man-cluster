@@ -585,6 +585,61 @@ func TestDeploy_DeployerError(t *testing.T) {
 	}
 }
 
+// TestDeploy_FailedApplyLeavesHashEmptyAndNextSyncRetries is the BUG-018
+// regression test: a deploy whose swarm apply FAILS must leave the revision's
+// rendered hash EMPTY (it is stamped only after a successful apply), so the
+// NEXT Sync sees a mismatch and retries the deploy instead of reporting
+// "no drift, rendered hash unchanged" forever.
+func TestDeploy_FailedApplyLeavesHashEmptyAndNextSyncRetries(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{err: errors.New("docker stack deploy: secret not found")}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	// First deploy fails at the swarm apply.
+	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest}); err == nil {
+		t.Fatal("Deploy should fail when the deployer errors")
+	}
+
+	st, err := s.GetStack(ctx, "donation-campaign")
+	if err != nil {
+		t.Fatalf("GetStack: %v", err)
+	}
+	rev, err := s.GetRevision(ctx, "donation-campaign", st.CurrentRevision)
+	if err != nil {
+		t.Fatalf("GetRevision: %v", err)
+	}
+	if rev.RenderedHash != "" {
+		t.Fatalf("BUG-018: failed deploy stamped rendered hash %q — the next Sync would treat the stack as up-to-date", rev.RenderedHash)
+	}
+	if dep.callCount() != 1 {
+		t.Fatalf("deployer calls = %d, want 1 (the failed attempt)", dep.callCount())
+	}
+
+	// Recover the deployer and Sync: the empty stored hash must force a RETRY,
+	// not a "no drift" no-op.
+	dep.err = nil
+	got, err := svc.Sync(ctx, "donation-campaign")
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if !got.Changed {
+		t.Error("Sync reported Changed=false — the failed deploy was not retried")
+	}
+	if dep.callCount() != 2 {
+		t.Errorf("deployer calls = %d, want 2 (Sync must retry the failed deploy)", dep.callCount())
+	}
+
+	// The retried apply succeeded and now stamps the hash.
+	rev, err = s.GetRevision(ctx, "donation-campaign", got.Revision)
+	if err != nil {
+		t.Fatalf("GetRevision (retry): %v", err)
+	}
+	if rev.RenderedHash == "" {
+		t.Error("rendered hash still empty after the successful retry")
+	}
+}
+
 // TestRollback_HappyPath deploys two revisions then rolls back to v1.
 // It verifies: a NEW revision is created, the new revision's RenderedYAML
 // matches v1's (rollback re-translates the stored SOURCE manifest, never the

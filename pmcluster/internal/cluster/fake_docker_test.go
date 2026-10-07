@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"testing"
 	"time"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // fakeDocker is a minimal in-process implementation of runtime.Client for
@@ -149,6 +154,64 @@ func renderedServices() []string {
 func seedHealthySwarm(f *fakeDocker) {
 	for _, name := range renderedServices() {
 		f.services[name] = healthyService(name)
+	}
+}
+
+// renderedHashLabel parses a rendered compose and returns the
+// io.pmcluster.rendered_hash label value stamped on its services ("" when the
+// render carries no label).
+func renderedHashLabel(rendered []byte) string {
+	var doc struct {
+		Services map[string]struct {
+			Deploy struct {
+				Labels map[string]string `json:"labels"`
+			} `json:"deploy"`
+		} `json:"services"`
+	}
+	if err := yaml.Unmarshal(rendered, &doc); err != nil {
+		return ""
+	}
+	for _, svc := range doc.Services {
+		if h := svc.Deploy.Labels[runtime.RenderedHashLabel]; h != "" {
+			return h
+		}
+	}
+	return ""
+}
+
+// stampRenderedHashLabels reads the stored rendered content for every platform
+// stack config and stamps the rendered-hash label on the matching live fake
+// services — the shape a real swarm is in after a successful deploy. Without
+// it, `cluster update`'s drift check sees zero labelled live services and
+// (correctly, per the all-unlabelled rule) treats every platform stack as
+// drift, redeploying on every no-op update.
+//
+// This helper exists for TESTS ONLY: it reconstructs the post-deploy swarm
+// state the fakeDocker does not build on its own (its DeployStack is a
+// recording no-op). It does not weaken the production rule — the production
+// rule is unchanged; the fixture is made to match reality.
+func stampRenderedHashLabels(t *testing.T, s *store.Store, f *fakeDocker) {
+	t.Helper()
+	ctx := context.Background()
+	for _, st := range []stackName{StackObservability, StackInfra, StackEdge, StackBackup, StackSSO} {
+		row, err := s.GetConfig(ctx, string(st)+"-stack")
+		if err != nil {
+			if errors.Is(err, store.ErrConfigNotFound) {
+				continue // e.g. sso when SSO is disabled
+			}
+			t.Fatalf("read %s-stack: %v", st, err)
+		}
+		hash := renderedHashLabel([]byte(row.RenderedContent))
+		if hash == "" {
+			continue
+		}
+		prefix := string(st) + "_"
+		for name, svc := range f.services {
+			if strings.HasPrefix(name, prefix) {
+				svc.Labels = map[string]string{runtime.RenderedHashLabel: hash}
+				f.services[name] = svc
+			}
+		}
 	}
 }
 
