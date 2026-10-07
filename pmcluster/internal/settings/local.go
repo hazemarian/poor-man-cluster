@@ -54,6 +54,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingBackupS3AccessKey(),
 	cluster.SettingBackupS3SecretKey(),
 	cluster.SettingBackupS3Region(),
+	cluster.SettingBackupStoreOn(),
 	cluster.SettingLogLevel(),
 	cluster.SettingReconcileInterval(),
 	cluster.SettingStorageNodes(),

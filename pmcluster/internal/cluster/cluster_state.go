@@ -86,6 +86,13 @@ const (
 	settingBackupS3SecretKey = "backup_s3_secret_key"
 	settingBackupS3Region    = "backup_s3_region"
 
+	// settingBackupStoreOn pins the in-cluster backup store (SeaweedFS) to a
+	// specific node class: "leader" (the manager/leader node) or "worker" (a
+	// non-storage worker, the default). Empty means "worker"/auto for
+	// back-compat. The store is normally kept off storage nodes; an explicit
+	// "leader" choice is allowed as-is.
+	settingBackupStoreOn = "backup_store_on"
+
 	// Daemon log verbosity: "debug" | "info" | "warn" | "error". Rendered into
 	// nothing — the daemon reads it at startup AND applies it live when the
 	// console saves the cluster settings (runtime re-level via logger.SetLevel).
@@ -150,6 +157,7 @@ func SettingBackupS3Bucket() string         { return settingBackupS3Bucket }
 func SettingBackupS3AccessKey() string      { return settingBackupS3AccessKey }
 func SettingBackupS3SecretKey() string      { return settingBackupS3SecretKey }
 func SettingBackupS3Region() string         { return settingBackupS3Region }
+func SettingBackupStoreOn() string          { return settingBackupStoreOn }
 func SettingLogLevel() string               { return settingLogLevel }
 func SettingReconcileInterval() string      { return settingReconcileInterval }
 func SettingStorageNodes() string           { return settingStorageNodes }
@@ -408,6 +416,16 @@ func loadBackupS3(ctx context.Context, st *store.Store) BackupS3 {
 		SecretKey: st.GetSettingDefault(ctx, settingBackupS3SecretKey, ""),
 		Region:    st.GetSettingDefault(ctx, settingBackupS3Region, "auto"),
 	}
+}
+
+// loadBackupStoreOn returns where the in-cluster backup store should run:
+// "leader" or "worker". Empty means "worker"/auto (the pre-setting behavior)
+// so older clusters keep working unchanged.
+func loadBackupStoreOn(ctx context.Context, st *store.Store) string {
+	if st == nil {
+		return ""
+	}
+	return st.GetSettingDefault(ctx, settingBackupStoreOn, "")
 }
 
 // defaultBackupRetentionDays is how many days backup audit rows + archives

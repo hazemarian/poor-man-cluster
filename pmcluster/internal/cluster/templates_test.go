@@ -251,21 +251,42 @@ func TestLoadComposeFile_BackupSeaweedFSDisabled(t *testing.T) {
 }
 
 func TestLoadComposeFile_BackupSeaweedFSStoreOnly(t *testing.T) {
-	// Store enabled but offsite S3 NOT configured: offen uploads to the store
-	// via S3 (AWS_* → the in-cluster endpoint, as before), with no WEBDAV_*
-	// double-write. The in-process WebDAV gateway (`-webdav`) still renders (it
-	// is part of the seaweedfs service, gated on .Store.Enabled) but is unused.
+	// Store enabled but offsite S3 NOT configured (BUG-016 fix): offen uploads
+	// to the store via WebDAV (WEBDAV_*), which auto-creates the bucket path on
+	// first PUT — the S3 API does NOT auto-create it, so there must be NO
+	// store-pointing AWS_* env at all. The in-process WebDAV gateway
+	// (`-webdav`) is part of the seaweedfs service (gated on .Store.Enabled).
 	in := RenderInput{
 		Domain:   "example.com",
 		BackupS3: BackupS3{},
 		Store:    ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "pmclusterbackup", SecretKey: "s3cr3t", Node: "worker-2"},
 	}
 	body := string(mustLoadBackup(t, in))
-	if !strings.Contains(body, "AWS_ENDPOINT: backup_seaweedfs:8333") || !strings.Contains(body, "AWS_ENDPOINT_PROTO: http") {
-		t.Errorf("store-only offen should upload to the in-cluster store via S3:\n%s", body)
+	for _, want := range []string{
+		"WEBDAV_URL: http://backup_seaweedfs:7333",
+		"WEBDAV_PATH: /buckets/pmcluster-backups",
+		"WEBDAV_USERNAME: pmclusterbackup",
+		"WEBDAV_PASSWORD: s3cr3t",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("store-only offen should write the store via WebDAV, missing %q:\n%s", want, body)
+		}
 	}
-	if strings.Contains(body, "WEBDAV_URL") {
-		t.Errorf("store-only offen must not double-write via WebDAV (no offsite target):\n%s", body)
+	// The store-only render must NOT point AWS_* at the store (the S3 API does
+	// not bootstrap the bucket), and must not emit any offsite AWS_* either.
+	// (The seaweedfs service itself still carries AWS_ACCESS_KEY_ID /
+	// AWS_SECRET_ACCESS_KEY — those are its own credentials, not an offen S3
+	// write — so only the offen S3 target env vars are asserted absent.)
+	for _, bad := range []string{
+		"AWS_ENDPOINT: backup_seaweedfs",
+		"AWS_S3_BUCKET_NAME",
+		"AWS_ENDPOINT_PROTO",
+		"AWS_REGION",
+		"AWS_S3_FORCE_PATH_STYLE",
+	} {
+		if strings.Contains(body, bad) {
+			t.Errorf("store-only offen must not emit %q:\n%s", bad, body)
+		}
 	}
 	if !strings.Contains(body, "-webdav.port=7333") {
 		t.Errorf("in-process WebDAV gateway should still render when the store is enabled:\n%s", body)

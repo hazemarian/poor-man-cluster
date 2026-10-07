@@ -2,6 +2,25 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.162.1 (2026-10-07)
+
+Backup: store-only clusters bootstrap their bucket; setup asks about S3 and the store node.
+
+- **BUG-016 fixed — the store bucket is bootstrapped for store-only clusters.** The
+  in-cluster store leg now ALWAYS uses the WebDAV backend (whenever the store is
+  enabled): the SeaweedFS S3 API does NOT auto-create the bucket, so a store-only
+  cluster's first backup failed with `NoSuchBucket`; the WebDAV gateway creates the
+  `/buckets/<bucket>` path on the first PUT. Offsite S3 (`AWS_*`) is now rendered
+  only when `backup_s3_*` is configured, so a store-only cluster has WEBDAV only.
+- **setup asks about offsite backups**: "Upload backups offsite (S3/R2)?" — if yes it
+  collects endpoint / bucket / region / access key / secret key (secrets entered
+  masked, no echo); if no the cluster stays store-only.
+- **setup asks where the store runs**: "Run the in-cluster backup store on 'leader'
+  or 'a worker'?" → new `backup_store_on` setting (`leader` | `worker`; default
+  worker). `pickStoreNode` pins SeaweedFS to the leader (preferring the elected
+  leader, else any manager) or to a non-storage worker. Also `--backup-store-on`
+  for non-interactive setup.
+
 ## v0.2.162 (2026-10-07)
 
 Backup store: offen double-writes each archive — the rclone replicator is gone.

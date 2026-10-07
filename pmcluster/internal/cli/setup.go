@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
@@ -81,6 +82,7 @@ func init() {
 	setupCmd.Flags().String("backup-s3-access-key", "", "offsite S3 access key (default: $PMCLUSTER_BACKUP_S3_ACCESS_KEY)")
 	setupCmd.Flags().String("backup-s3-secret-key", "", "offsite S3 secret key (default: $PMCLUSTER_BACKUP_S3_SECRET_KEY)")
 	setupCmd.Flags().String("backup-s3-region", "", "offsite S3 region (default auto for R2)")
+	setupCmd.Flags().String("backup-store-on", "", "where the in-cluster backup store runs: leader or worker (default worker)")
 	setupCmd.Flags().Bool("storage-failover", true, "enable automatic storage failover (moves stateful stacks off a failed storage node); requires offsite S3 backups")
 	setupCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
 
@@ -120,6 +122,9 @@ type setupAnswers struct {
 	BackupS3AccessKey      string
 	BackupS3SecretKey      string
 	BackupS3Region         string
+	// BackupStoreOn is where the in-cluster backup store (SeaweedFS) runs:
+	// "leader" or "worker". Empty means worker/auto (back-compat).
+	BackupStoreOn string
 	// StorageFailover enables automatic failover: when a storage node fails,
 	// the control loop moves stateful stacks to a healthy storage node and
 	// restores the latest offsite backup. Requires S3 offsite backups.
@@ -165,6 +170,53 @@ func askYesNo(r *bufio.Reader, out io.Writer, prompt string, def bool) bool {
 			return false
 		}
 		fmt.Fprintln(out, "  (answer y or n)")
+	}
+}
+
+// askSecret prompts for a secret value with masked (no-echo) input and never
+// echoes a persisted default back to the terminal (it shows "[set]" instead).
+// Empty input reuses def, so an idempotent re-run keeps the stored secret
+// without retyping it. Falls back to a plain line read when stdin is not a
+// terminal.
+func askSecret(r *bufio.Reader, out io.Writer, prompt, def string) string {
+	label := prompt
+	if def != "" {
+		label = fmt.Sprintf("%s [set]", prompt)
+	}
+	fmt.Fprintf(out, "%s: ", label)
+
+	var line string
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(out)
+		if err == nil {
+			line = strings.TrimSpace(string(b))
+		}
+	} else {
+		raw, _ := r.ReadString('\n')
+		line = strings.TrimSpace(raw)
+	}
+	if line == "" {
+		return def
+	}
+	return line
+}
+
+// askBackupStoreOn prompts where the in-cluster backup store should run:
+// "leader" or "a worker" (default worker). Returns "leader" or "worker".
+func askBackupStoreOn(r *bufio.Reader, out io.Writer, def string) string {
+	if def != "leader" && def != "worker" {
+		def = "worker"
+	}
+	for {
+		line := strings.ToLower(ask(r, out, "Run the in-cluster backup store on 'leader' or 'a worker'?", def))
+		switch line {
+		case "leader":
+			return "leader"
+		case "worker", "a worker":
+			return "worker"
+		}
+		fmt.Fprintln(out, "  (answer leader or worker)")
 	}
 }
 
@@ -227,15 +279,16 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		if askYesNo(r, out, "Upload backups offsite (S3/R2)?", st.GetSettingDefault(ctx, cluster.SettingBackupS3Endpoint(), "") != "") {
 			a.BackupS3Endpoint = ask(r, out, "S3-compatible endpoint (R2: https://<account>.r2.cloudflarestorage.com)", st.GetSettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""))
 			a.BackupS3Bucket = ask(r, out, "S3 bucket name", st.GetSettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""))
-			a.BackupS3AccessKey = ask(r, out, "S3 access key", st.GetSettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""))
-			a.BackupS3SecretKey = ask(r, out, "S3 secret key", st.GetSettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""))
 			a.BackupS3Region = ask(r, out, "S3 region", st.GetSettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"))
+			a.BackupS3AccessKey = askSecret(r, out, "S3 access key", st.GetSettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""))
+			a.BackupS3SecretKey = askSecret(r, out, "S3 secret key", st.GetSettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""))
 		}
 		// Automatic storage failover needs offsite backups: when a storage node
 		// dies, the only recoverable copy is in S3, so prompt only when S3 is set.
 		if a.BackupS3Endpoint != "" && a.BackupS3Bucket != "" {
 			a.StorageFailover = askYesNo(r, out, "Enable automatic storage failover? (moves a stack off a failed storage node, restoring the latest offsite backup)", true)
 		}
+		a.BackupStoreOn = askBackupStoreOn(r, out, st.GetSettingDefault(ctx, cluster.SettingBackupStoreOn(), ""))
 		defHost, _ := os.Hostname()
 		a.NodeHostname = ask(r, out, "Hostname for this node (pins use placement: <hostname>)", defHost)
 		if !swarmActive(ctx) {
@@ -272,10 +325,11 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.BackupS3AccessKey, _ = cmd.Flags().GetString("backup-s3-access-key")
 		a.BackupS3SecretKey, _ = cmd.Flags().GetString("backup-s3-secret-key")
 		a.BackupS3Region, _ = cmd.Flags().GetString("backup-s3-region")
+		a.BackupStoreOn, _ = cmd.Flags().GetString("backup-store-on")
 		// Automatic storage failover recovers from offsite backups, so it stays
 		// off unless S3 is configured (even if --storage-failover was passed).
 		a.StorageFailover, _ = cmd.Flags().GetBool("storage-failover")
-		a.StorageFailover = a.StorageFailover && a.BackupS3Endpoint != "" && a.BackupS3Bucket != ""
+		a.StorageFailover = storageFailoverEnabled(a.StorageFailover, a.BackupS3Endpoint, a.BackupS3Bucket)
 		if !cmd.Flags().Changed("backup-s3-access-key") {
 			if v := os.Getenv("PMCLUSTER_BACKUP_S3_ACCESS_KEY"); v != "" {
 				a.BackupS3AccessKey = v
@@ -464,6 +518,7 @@ func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswer
 		cluster.SettingBackupS3AccessKey():      a.BackupS3AccessKey,
 		cluster.SettingBackupS3SecretKey():      a.BackupS3SecretKey,
 		cluster.SettingBackupS3Region():         a.BackupS3Region,
+		cluster.SettingBackupStoreOn():          a.BackupStoreOn,
 		cluster.SettingStorageFailover():        boolSetting(a.StorageFailover),
 	}
 	for k, v := range setting {
@@ -499,6 +554,7 @@ func persistSetup(ctx context.Context, st *store.Store, a setupAnswers) error {
 		cluster.SettingBackupS3AccessKey():      a.BackupS3AccessKey,
 		cluster.SettingBackupS3SecretKey():      a.BackupS3SecretKey,
 		cluster.SettingBackupS3Region():         a.BackupS3Region,
+		cluster.SettingBackupStoreOn():          a.BackupStoreOn,
 		cluster.SettingStorageFailover():        boolSetting(a.StorageFailover),
 	}
 	for k, v := range setting {
@@ -528,6 +584,13 @@ func boolSetting(b bool) string {
 		return "true"
 	}
 	return ""
+}
+
+// storageFailoverEnabled gates automatic storage failover on a configured
+// offsite S3 destination: when a storage node dies the only recoverable copy
+// lives in S3, so failover must refuse to enable without it.
+func storageFailoverEnabled(requested bool, s3Endpoint, s3Bucket string) bool {
+	return requested && s3Endpoint != "" && s3Bucket != ""
 }
 
 // isTTY reports whether the command's stdout is a terminal (interactive).

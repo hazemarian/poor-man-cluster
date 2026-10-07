@@ -604,10 +604,12 @@ func loadObjectStore(ctx context.Context, docker runtime.Client, st *store.Store
 	}, nil
 }
 
-// pickStoreNode returns the hostname of a node that is NOT a storage node
-// (preferring a worker), or "" when every node is a storage node — in which
-// case SeaweedFS shares a node with the data (degraded; the offsite copy still
-// provides the disaster recovery).
+// pickStoreNode returns the hostname SeaweedFS is pinned to. The
+// backup_store_on setting chooses the node class: "leader" → the manager/
+// leader node (prefer the node with IsLeader, else any manager's hostname);
+// "worker" or empty → the current behavior (first non-storage worker, else
+// first non-storage node, else "" — degraded, where the offsite copy still
+// provides disaster recovery).
 func pickStoreNode(ctx context.Context, docker runtime.Client, st *store.Store) string {
 	if docker == nil || st == nil {
 		return ""
@@ -616,6 +618,21 @@ func pickStoreNode(ctx context.Context, docker runtime.Client, st *store.Store) 
 	if err != nil {
 		return ""
 	}
+
+	if loadBackupStoreOn(ctx, st) == "leader" {
+		for _, n := range nodes {
+			if n.IsLeader {
+				return n.Hostname
+			}
+		}
+		for _, n := range nodes {
+			if n.Role == "manager" {
+				return n.Hostname
+			}
+		}
+		return ""
+	}
+
 	storage := map[string]bool{}
 	for _, h := range splitStorageNodes(st.GetSettingDefault(ctx, SettingStorageNodes(), "")) {
 		storage[h] = true
