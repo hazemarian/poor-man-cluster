@@ -119,6 +119,16 @@ render change that introduced the label already forces one redeploy. Regression 
 `TestUpdate_RedeploysWhenLiveServiceLabelDrifted` (fails against the old DB-only
 comparison).
 
+**Extended to app stacks (shipped in v0.2.164):** the same label is now stamped on every
+service of a **customer/app** stack, and `Sync` applies the same live-swarm check before
+declaring "no drift". Before this, an app stack that lost a service or got a half-applied
+deploy was reported in-sync forever — the identical bug class, in the app lane. The
+detector lives in the shared `internal/stackdrift` package (`InSync` + `ContentHash`),
+used by both `cluster update` and the app `Sync`. The `depends_on` per-level path stamps
+the **full-stack** hash on every subset (a per-subset hash would never match and would
+redeploy every pass). Upgrade cost: the first update after upgrading redeploys every app
+stack once, which is what stamps the labels.
+
 ## Operational Notes (not bugs)
 
 1. **The store's data volume is node-local.** Flipping `backup_store_on` moves the SeaweedFS task, and the named volume `backup_seaweeddata` is per-node — so the store starts **empty** on the new node. The offsite copy is the safety net; don't flip the setting casually on a cluster that relies on the store.
@@ -130,6 +140,6 @@ comparison).
 
 **PASS.** The v0.2.162.1 backup changes behave correctly on a 1-leader/1-worker swarm: the store is placed by `backup_store_on`, both offen agents write to the in-cluster store **and** the offsite bucket, the control-plane archive is no longer local-only, restore from the store works, and pruning runs automatically on every backend.
 
-**One real product bug recorded (BUG-017, update drift blindness)** — reproduced deliberately on TC9 and previously observed in production on wafaa. **Fixed in v0.2.163** (rendered-hash label + live-swarm comparison).
+**One real product bug recorded (BUG-017, update drift blindness)** — reproduced deliberately on TC9 and previously observed in production on wafaa. **Fixed in v0.2.163** (rendered-hash label + live-swarm comparison) and **extended to app/customer stacks in v0.2.164**.
 
 **Limitation of this run:** the v0.2.162.1 setup-wizard changes (offsite SSO/S3 prompts, masked key input, `--backup-store-on`) were exercised via the resulting `backup_store_on` setting, not by re-running `pmcluster setup`.

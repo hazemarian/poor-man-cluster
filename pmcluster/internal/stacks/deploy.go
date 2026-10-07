@@ -24,6 +24,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stackdrift"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/workflow"
@@ -172,6 +173,34 @@ func (s *Service) configExternalName(ctx context.Context, name string) string {
 	return store.SwarmConfigName(name, row.Hash)
 }
 
+// mkWriter builds a ComposeWriter wired to this Service's render inputs.
+// extra labels (the rendered-hash label — see runtime.RenderedHashLabel) are
+// stamped on every service's deploy labels after the standard/platform labels.
+func (s *Service) mkWriter(extra map[string]string) *manifest.ComposeWriter {
+	return &manifest.ComposeWriter{
+		VolumeRoot:   s.VolumeRoot,
+		CertResolver: s.CertResolver,
+		PinNode:      s.PinNode,
+		SecretNames:  s.secretExternalName,
+		ConfigNames:  s.configExternalName,
+		ExtraLabels:  extra,
+	}
+}
+
+// renderStamped renders the IR twice — once label-free to derive the content
+// hash, then again stamped with runtime.RenderedHashLabel = that hash — and
+// returns the LABELED bytes. Deriving the label from the label-free render
+// keeps it deterministic and non-circular; the deployed/stored bytes carry the
+// label so drift detection can compare the live Swarm's labels against a
+// fresh render (BUG-017, k8s-style: every service carries its content hash).
+func (s *Service) renderStamped(ctx context.Context, ir *manifest.IR) ([]byte, error) {
+	plain, err := s.mkWriter(nil).Write(ctx, ir)
+	if err != nil {
+		return nil, err
+	}
+	return s.mkWriter(map[string]string{runtime.RenderedHashLabel: stackdrift.ContentHash(plain)}).Write(ctx, ir)
+}
+
 // DeployAsync validates and records the revision synchronously, then applies
 // the swarm deploy in a background goroutine (detached from the caller's
 // context) so the caller can return 202 immediately. Long-running stacks
@@ -295,8 +324,7 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 		if err := s.resolvePlacements(ctx, app.Name, built); err != nil {
 			return fmt.Errorf("translate: %w", err)
 		}
-		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode, SecretNames: s.secretExternalName, ConfigNames: s.configExternalName}
-		y, err := writer.Write(ctx, built)
+		y, err := s.renderStamped(ctx, built)
 		if err != nil {
 			return fmt.Errorf("translate: %w", err)
 		}
@@ -427,13 +455,34 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 					err = s.resolvePlacements(ctx, stackName, built)
 				}
 				if err == nil {
-					rendered, err = (&manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode, SecretNames: s.secretExternalName, ConfigNames: s.configExternalName}).Write(ctx, built)
+					rendered, err = s.renderStamped(ctx, built)
 				}
 				if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
-					// No drift: the stored manifest still renders to the
-					// already-deployed hash — nothing to apply.
-					s.Log.Info().Str("stack", stackName).Int64("revision", latest.Revision).
-						Msg("sync — no drift, rendered hash unchanged (nothing to apply)")
+					// The rendered hash still matches the deployed revision.
+					// Additionally check the LIVE swarm: a manual `docker
+					// service update`, a half-applied deploy, or a wiped
+					// service leaves the stored hash unchanged while the live
+					// services no longer match the fresh render (BUG-017 —
+					// k8s-style, every service carries its content hash).
+					inSync, reason, syncErr := stackdrift.InSync(ctx, s.Docker, stackName, rendered)
+					switch {
+					case syncErr != nil:
+						// A transient docker error must not cause a redeploy
+						// loop — treat as in sync and continue the no-op.
+						s.Log.Warn().Err(syncErr).Str("stack", stackName).
+							Msg("sync — live drift check failed, assuming in sync")
+					case !inSync:
+						s.Log.Info().Str("stack", stackName).Str("reason", reason).
+							Msg("sync — live swarm drifted, re-applying")
+						// Fall through to reconcileDeploy — do NOT early-return
+						// the no-op.
+						return s.reconcileDeploy(ctx, stackName, latest.SourceYAML)
+					default:
+						// No drift: the stored manifest still renders to the
+						// already-deployed hash AND the live swarm matches.
+						s.Log.Info().Str("stack", stackName).Int64("revision", latest.Revision).
+							Msg("sync — no drift, rendered hash unchanged (nothing to apply)")
+					}
 					telemetry.RecordReconcile(ctx, stackName, telemetry.ReconcileInSync)
 					return &Result{
 						StackName:    stackName,
@@ -504,7 +553,15 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 			return fmt.Errorf("docker stack deploy: %w", err)
 		}
 	} else {
-		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode, SecretNames: s.secretExternalName, ConfigNames: s.configExternalName}
+		// Compute the content hash ONCE from the FULL-stack label-free render,
+		// then stamp that SAME hash on every per-level subset. A per-subset
+		// hash would never match the full-stack render, so the drift check
+		// would redeploy every single pass (an infinite redeploy loop).
+		plain, err := s.mkWriter(nil).Write(ctx, ir)
+		if err != nil {
+			return fmt.Errorf("render full stack for rendered hash: %w", err)
+		}
+		writer := s.mkWriter(map[string]string{runtime.RenderedHashLabel: stackdrift.ContentHash(plain)})
 		for i, level := range levels {
 			levelYAML, err := writer.Write(ctx, ir.Subset(level))
 			if err != nil {
@@ -779,8 +836,7 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 		if err := s.resolvePlacements(ctx, stackName, built); err != nil {
 			return fmt.Errorf("rollback source %d placement: %w", sourceRevision, err)
 		}
-		writer := &manifest.ComposeWriter{VolumeRoot: s.VolumeRoot, CertResolver: s.CertResolver, PinNode: s.PinNode, SecretNames: s.secretExternalName, ConfigNames: s.configExternalName}
-		y, err := writer.Write(ctx, built)
+		y, err := s.renderStamped(ctx, built)
 		if err != nil {
 			return fmt.Errorf("rollback source %d no longer renders: %w", sourceRevision, err)
 		}

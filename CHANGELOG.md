@@ -2,6 +2,36 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.164 (2026-10-07)
+
+Reconcile: every deployed service carries its content hash — app stacks too (k8s-style).
+
+- The v0.2.163 drift detection covered **platform** stacks only. App/customer stacks
+  still decided "no drift" purely on the stored rendered hash (DB vs fresh render), so a
+  customer stack that lost a service — or got a half-applied deploy — was reported
+  in-sync forever. The same bug class, in the other lane.
+- Every service of an app stack is now stamped with `io.pmcluster.rendered_hash` (at the
+  `Deploy`, `Sync`, `Rollback` and per-level `depends_on` writer sites), and `Sync`
+  compares the **live swarm** against the fresh render before declaring no-drift:
+  a missing service, an absent stack, a stale label or a partial label set re-applies the
+  stack (recording a new revision). A transient docker error is treated as in-sync so it
+  can never cause a redeploy loop; `Docker == nil` (CLI deploys) is unchanged.
+- The `depends_on` per-level path computes the hash **once** from the full-stack
+  label-free render and reuses a single writer for every subset, so each level carries
+  the identical hash. A per-subset hash would never match the full render and would
+  redeploy on every pass (infinite loop) — pinned by
+  `TestDeploy_OrderedLevelsStampSameHashOnEveryLevel`.
+- The detector moved to a shared `internal/stackdrift` package (`InSync` +
+  `ContentHash`) used by both lanes (`cluster update` and the app `Sync`).
+- **Upgrade note:** the app render changes, so the first `cluster update` after upgrading
+  redeploys every app/customer stack once (rolling, `start-first`) — that is what stamps
+  the labels. Platform stacks behaved the same way in v0.2.163.
+- Tests: `internal/stackdrift/check_test.go` (every rule: nil client, absent stack,
+  missing service, drifted label, partial labels, all-unlabeled in-sync, extra live
+  service ignored) and `internal/stacks/drift_test.go` (label on every service,
+  identical hash across `depends_on` levels, `Sync` redeploys on a missing service /
+  stale label, transient docker error → in-sync).
+
 ## v0.2.163.2 (2026-10-07)
 
 Reconcile: a partially applied platform deploy counts as drift (BUG-017 follow-up).
