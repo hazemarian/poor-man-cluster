@@ -2,6 +2,30 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.169 (2026-10-07)
+
+Storage directories are a node-local responsibility (BUG-026) — no remote mkdir, no
+manual intervention.
+
+- **The daemon creates the storage roots it owns at startup.** `pmcluster serve` now
+  `mkdir -p`s the configured `volume_root` (the directory the operator selected, default
+  `/var/stack/data`) plus the backup directory before it does anything else. The setting is
+  read only when the store already exists, so a not-yet-initialised node still gets the
+  familiar `run pmcluster init` error instead of a silently created empty database.
+- **Every daemon repairs the volume directories of the stateful services the Swarm placed
+  on it** (new `internal/cli/volume_repair.go`, at startup and every 30 s, leader or not).
+  A pass lists the services, keeps the ones whose `io.pmcluster.node` pin is this hostname,
+  and `mkdir -p`s any missing bind source under the volume root — then force-updates the
+  services it repaired so the Swarm retries the tasks it had rejected. This fixes the case
+  the earlier local-CLI step could not: the deploying host is not necessarily the node a
+  stateful stack is pinned to, and the Swarm refuses to start a task whose bind source is
+  missing (`failed to populate volume: mount /var/stack/data/sfapp/db_data: no such file or
+  directory`, reported live in TC10-B). Services without a node pin (role-based or global —
+  the platform agents) are left to `cluster up`/`update`; a worker (which cannot list
+  services) stays silent and retries on the next tick.
+- `runtime.ServiceInspectResult` now carries the task-template mounts (`runtime.Mount`) so
+  the repair can see a service's bind sources.
+
 ## v0.2.168.3 (2026-10-07)
 
 Node-loss recovery, take two: the platform services that actually got stuck now recover too

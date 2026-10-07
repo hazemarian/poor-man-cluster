@@ -25,6 +25,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
@@ -128,6 +129,16 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// block: a standby node (non-leader) has no local DB yet, and on promotion
 	// the restore must happen BEFORE the DB is opened so the restored control
 	// plane is what gets served.
+	// Every node's daemon ensures its own storage roots exist: a stateful stack
+	// scheduled here binds <volume_root>/<app>/<name>, and the Swarm cannot
+	// start a task whose bind source is missing. The path comes from the
+	// volume_root setting (default /var/stack/data), so the daemon creates the
+	// directory the operator configured — on THIS host, before anything is
+	// deployed onto it (BUG-026).
+	if err := ensureLocalStorageRoots(cmd.Context(), cfg, log); err != nil {
+		log.Warn().Err(err).Msg("ensure local storage roots")
+	}
+
 	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
 		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` (or `pmcluster join` on a joining node)", cfg.DataDir)
 	}
@@ -176,6 +187,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.GetSettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
 		return st.GetSettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3}
+
+	// Every daemon — leader or not — keeps the volume directories of the
+	// stateful services the Swarm placed on this node (BUG-026).
+	startVolumeRepairLoop(cmd.Context(), dc, deployer, func() string {
+		return st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot)
+	}, log)
 
 	tlsSvc := certs.NewLocal(st, cipher, dc, deployer,
 		cfg.ConfigDir(), buildinfo.Version)
@@ -392,4 +409,35 @@ func reconcileIntervalSeconds(ctx context.Context, st *store.Store) int {
 		return def
 	}
 	return n
+}
+
+// ensureLocalStorageRoots creates the storage directories this node owns: the
+// configured volume root and the backup directory. A stateful stack scheduled
+// onto this node binds <volume_root>/<app>/<name>, and the Swarm cannot start a
+// task whose bind source is missing, so each node's daemon prepares its own
+// filesystem (BUG-026). The path is the volume_root setting — the directory the
+// operator selected — falling back to manifest.DefaultVolumeRoot when unset.
+func ensureLocalStorageRoots(ctx context.Context, cfg *config.Config, log zerolog.Logger) error {
+	root := manifest.DefaultVolumeRoot
+	// Read the setting only when the store already exists — opening it would
+	// otherwise create an empty data.db and defeat the "run pmcluster init"
+	// guard below.
+	if _, statErr := os.Stat(cfg.DBPath()); statErr == nil {
+		if st, err := store.Open(cfg.DBPath()); err == nil {
+			root = st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), root)
+			_ = st.Close()
+		}
+	}
+	seen := map[string]bool{}
+	for _, dir := range []string{root, cluster.BackupRootDir()} {
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", dir, err)
+		}
+	}
+	log.Info().Str("volume_root", root).Msg("local storage roots ensured")
+	return nil
 }

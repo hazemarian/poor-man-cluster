@@ -188,6 +188,17 @@ type ServiceInspectResult struct {
 	Name   string
 	Image  string
 	Labels map[string]string
+	// Mounts are the service's task-template mounts. A daemon uses them to
+	// make sure the host directories a service binds exist locally before the
+	// Swarm tries to start its task (a missing bind source is a hard failure).
+	Mounts []Mount
+}
+
+// Mount is one container mount from a service's task template.
+type Mount struct {
+	Type   string // "bind" | "volume" | "tmpfs"
+	Source string // host path (bind) or volume name (volume)
+	Target string // container path
 }
 
 // ServiceTask is one row of `docker service ps` — a task's lifecycle state.
