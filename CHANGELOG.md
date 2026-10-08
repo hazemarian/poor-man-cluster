@@ -2,6 +2,27 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.173 (2026-10-08)
+
+Backup store: sign `x-amz-date` in SigV4 (BUG-029) — automatic storage failover could not restore from the in-cluster store.
+
+- Found live during the four-manager campaign (TC10-B): draining a storage node made the reconcile
+  correctly pick a healthy alternate storage node and start the failover move, but the S3 fetch
+  failed with `403 SignatureDoesNotMatch` against the in-cluster SeaweedFS store.
+- Root cause: our SigV4 signer (`internal/backups/s3.go`) signed only `host;x-amz-content-sha256`
+  while still sending `x-amz-date`. Strict SigV4 verifiers recompute the signature over exactly the
+  headers listed in `SignedHeaders`; SeaweedFS rejects the request, whereas IONOS tolerated the
+  omission — which is why the offsite leg worked and only the store path failed. Proven with a
+  byte-exact reproduction on the node: the old form returned 403, the standard form
+  (`host;x-amz-content-sha256;x-amz-date`) returned HTTP 200 and downloaded the archive.
+- Fix: include `x-amz-date` in the canonical headers and in `SignedHeaders`. Both the object fetch
+  (`fetchS3Object`) and the ListObjectsV2 path (`listS3ObjectsPage`) go through the same signer.
+- This also fixes store-backed `pmcluster backup restore --from-s3`, the store discovery added in
+  v0.2.170 (`pmcluster backup list` seeing the archives other nodes uploaded) and the automatic
+  storage-failover restore.
+- Test: `TestSignV4Headers_SignsAmzDate` — asserts the signed-header set and that the signature
+  changes with the timestamp (it was stable within a day before the fix).
+
 ## v0.2.172 (2026-10-08)
 
 Offsite backups: the S3 path-style knob offen actually supports (BUG-028).

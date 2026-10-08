@@ -65,9 +65,15 @@ func signV4HeadersQuery(cfg S3Config, key string, query url.Values, now time.Tim
 	canonicalURI := "/" + cfg.Bucket + "/" + escapePath(key)
 	canonicalQuery := canonicalQueryString(query)
 
+	// x-amz-date MUST be part of the signed headers: strict SigV4 verifiers
+	// (SeaweedFS) recompute the signature over exactly the headers listed in
+	// SignedHeaders and reject a request that omits the date (403
+	// SignatureDoesNotMatch). IONOS tolerated the omission; the in-cluster
+	// store did not (BUG-029).
 	canonicalHeaders := "host:" + host + "\n" +
-		"x-amz-content-sha256:" + emptyPayloadSHA + "\n"
-	signedHeaders := "host;x-amz-content-sha256"
+		"x-amz-content-sha256:" + emptyPayloadSHA + "\n" +
+		"x-amz-date:" + amzDate + "\n"
+	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
 
 	canonicalRequest := "GET\n" + canonicalURI + "\n" + canonicalQuery + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + emptyPayloadSHA
 	creqHash := sha256.Sum256([]byte(canonicalRequest))
