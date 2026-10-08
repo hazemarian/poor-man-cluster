@@ -2,6 +2,29 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.174 (2026-10-08)
+
+Move + storage failover transit via the object store — no cross-node host ports (BUG-030).
+
+- Found live during the four-manager campaign (TC10-B): the failover reached the transit step and the
+  mover task failed (`wget: download timed out`). The old mover had the LEADER serve the archive over a
+  temporary HTTP server on a random ephemeral port, and hardened hosts only open 2377/7946/4789 per
+  peer — the ephemeral range was allowed only for the original two-node pair, so targets such as
+  nxt-sw-4-m were silently dropped. An unattended recovery therefore depended on an undocumented
+  firewall rule.
+- Fix (no transit at all): the mover service on the TARGET pulls the archive object directly from the
+  object store with `rclone` (an env-var remote pointed at the store's published loopback ingress
+  `http://127.0.0.1:8333`) and unpacks the `<stack>` subtree into the volume root. The leader no longer
+  serves anything, so no cross-node host ports and no firewall rules are involved.
+- A manual `stack move` still takes a fresh backup first (it must relocate CURRENT data); the failover
+  path pulls the newest uploaded archive instead (the data lives on the node that just failed).
+- New `backups.ListS3Objects` (+ `S3ObjectInfo`). The mover refuses to pick a control-plane archive
+  (`pmcluster-ctlplane-*`) or a non-tarball, and errors clearly when no store is configured
+  ("cannot move between nodes without a shared archive …") or nothing has been uploaded yet.
+- The old ephemeral-HTTP mover remains as the no-store fallback; the mover poll loop is now shared.
+- Tests: `TestStorePullMoverScriptAndArgs`, `TestRcloneStoreEnv_EndpointScheme`,
+  `TestNewestArchiveObject`, `TestNewestArchiveObject_Errors`.
+
 ## v0.2.173 (2026-10-08)
 
 Backup store: sign `x-amz-date` in SigV4 (BUG-029) — automatic storage failover could not restore from the in-cluster store.

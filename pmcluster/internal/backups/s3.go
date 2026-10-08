@@ -295,3 +295,25 @@ func listS3ObjectsPage(ctx context.Context, cfg S3Config, prefix, token string) 
 func FetchS3Object(ctx context.Context, cfg S3Config, key, dst string) error {
 	return fetchS3Object(ctx, cfg, key, dst)
 }
+
+// S3ObjectInfo is the object metadata the store-based mover needs: the key to
+// pull and when it was written (so the newest archive can be chosen).
+type S3ObjectInfo struct {
+	Key          string
+	LastModified time.Time
+}
+
+// ListS3Objects returns every object under prefix (Key + LastModified).
+// Exported for the store-based mover: the target node pulls the archive object
+// itself, so the leader needs the key without downloading the data (BUG-030).
+func ListS3Objects(ctx context.Context, cfg S3Config, prefix string) ([]S3ObjectInfo, error) {
+	objs, err := listS3Objects(ctx, cfg, prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]S3ObjectInfo, 0, len(objs))
+	for _, o := range objs {
+		out = append(out, S3ObjectInfo(o))
+	}
+	return out, nil
+}

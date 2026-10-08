@@ -109,35 +109,60 @@ func (s *Service) MoveWithOptions(ctx context.Context, stackName, targetNode str
 		}
 	}
 
-	// 1. Source the archive: a fresh local backup (normal move) or the newest
-	// known archive fetched from S3 (failover — the source node is down).
-	var archivePath string
-	if opts.FromS3 {
-		archivePath, err = s.fetchNewestArchiveFromS3(ctx, stackName)
-		if err != nil {
-			return err
-		}
-	} else {
-		// Whole-disk backup (unanchored row, so the restore's volume filter can
-		// match the <stack>/ prefix via the bare-volume branch of volumeMatch).
-		archivePath, err = s.runMoveBackup(ctx)
-		if err != nil {
-			return err
-		}
-	}
-
-	// 2. Restore the stack's subtree on the target.
 	volRoot := s.VolumeRoot
 	if volRoot == "" {
 		volRoot = manifest.DefaultVolumeRoot
 	}
-	if s.Docker == nil || targetNode == localHost {
-		if _, err := extractStackSubtree(archivePath, volRoot, stackName); err != nil {
-			return fmt.Errorf("move: restore %s subtree: %w", stackName, err)
+	crossNode := s.Docker != nil && targetNode != localHost
+
+	// 1+2. Get the stack's data onto the target.
+	//
+	// Store-based transit (BUG-030): a mover task on the target pulls the
+	// archive OBJECT straight out of the object store over the published
+	// loopback ingress (127.0.0.1:8333 on every node), so a move needs no
+	// cross-node host ports and therefore no firewall rules. The fallback (a
+	// cluster without a store configured, or Docker unavailable) keeps the old
+	// local-archive + ephemeral HTTP mover path.
+	if crossNode && s.S3.Configured() {
+		if !opts.FromS3 {
+			// Manual move: take a fresh backup first so the object we pull is
+			// current. The failover path must NOT do this — the data lives on
+			// the node that just failed, not on this host.
+			if _, err := s.runMoveBackup(ctx); err != nil {
+				return err
+			}
+		}
+		key, err := s.newestArchiveObject(ctx, stackName)
+		if err != nil {
+			return err
+		}
+		if err := s.moveViaStorePull(ctx, key, volRoot, stackName, targetNode); err != nil {
+			return fmt.Errorf("move: store transit: %w", err)
 		}
 	} else {
-		if err := s.moveViaMover(ctx, archivePath, volRoot, stackName, targetNode, leaderAddr); err != nil {
-			return fmt.Errorf("move: mover transit: %w", err)
+		var archivePath string
+		if opts.FromS3 {
+			archivePath, err = s.fetchNewestArchiveFromS3(ctx, stackName)
+			if err != nil {
+				return err
+			}
+		} else {
+			// Whole-disk backup (unanchored row, so the restore's volume filter
+			// can match the <stack>/ prefix via the bare-volume branch of
+			// volumeMatch).
+			archivePath, err = s.runMoveBackup(ctx)
+			if err != nil {
+				return err
+			}
+		}
+		if crossNode {
+			if err := s.moveViaMover(ctx, archivePath, volRoot, stackName, targetNode, leaderAddr); err != nil {
+				return fmt.Errorf("move: mover transit: %w", err)
+			}
+		} else {
+			if _, err := extractStackSubtree(archivePath, volRoot, stackName); err != nil {
+				return fmt.Errorf("move: restore %s subtree: %w", stackName, err)
+			}
 		}
 	}
 
@@ -458,30 +483,7 @@ func (s *Service) moveViaMover(ctx context.Context, archivePath, volumeRoot, sta
 		_, _ = exec.CommandContext(rmCtx, "docker", "service", "rm", svcName).CombinedOutput()
 	}()
 
-	deadline := time.Now().Add(120 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		psCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		out, _ := exec.CommandContext(psCtx, "docker", "service", "ps", svcName, "--format", "{{.CurrentState}}").CombinedOutput()
-		cancel()
-		state := string(out)
-		if strings.Contains(state, "Failed") {
-			return fmt.Errorf("mover task failed on %s: %s", targetNode, strings.TrimSpace(state))
-		}
-		if strings.Contains(state, "Complete") || strings.Contains(state, "Shutdown") {
-			return nil
-		}
-		select {
-		case <-time.After(2 * time.Second):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return fmt.Errorf("timed out waiting for mover task on %s", targetNode)
+	return waitForMoverTask(ctx, svcName, targetNode)
 }
 
 // moverCandidateURLs returns the http URLs a mover task on another node can
