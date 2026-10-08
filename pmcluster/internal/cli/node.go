@@ -220,7 +220,6 @@ func runNodePromote(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-
 	cur, err := readStorageNodes(cmd)
 	if err != nil {
 		return err
@@ -263,6 +262,10 @@ func runNodeDemote(cmd *cobra.Command, args []string) error {
 	node, err := findNodeByHostname(nodes, hostname)
 	if err != nil {
 		return err
+	}
+
+	if node.IsLeader {
+		return fmt.Errorf("refusing to demote %s: the leader must stay a storage node (the backup agent and the edge run there) — promote another node and let it take leadership first", hostname)
 	}
 
 	cur, err := readStorageNodes(cmd)

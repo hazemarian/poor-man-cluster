@@ -152,7 +152,7 @@ func findLocalContainer(ctx context.Context) (string, error) {
 	}
 	id := strings.TrimSpace(stdout.String())
 	if id == "" {
-		return "", errors.New("no offen backup container running on this host (is the backup stack deployed?)")
+		return "", errors.New("no offen backup agent on this node — it is not a storage node (the agent runs only on nodes labeled pmcluster.storage). Run this on a storage node, or make this node one: pmcluster node promote <hostname>")
 	}
 
 	if idx := strings.IndexByte(id, '\n'); idx >= 0 {

@@ -892,3 +892,29 @@ func TestUpdate_ForceRedeploysAllStacks(t *testing.T) {
 		}
 	}
 }
+
+// TestUpdate_AddsLeaderToStorageNodes verifies the BUG-024 policy: the leader
+// must be a storage node (the backup agent and the edge run there), so an
+// update that finds storage_nodes without the leader re-adds it and labels it.
+func TestUpdate_AddsLeaderToStorageNodes(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "nextrum-sy-2"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true},
+		{Hostname: "nextrum-sy-2", ID: "n2", Role: "worker", Status: "ready", Availability: "active"},
+	}
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "")
+	if !strings.Contains(got, "nextrum-sy-1") {
+		t.Fatalf("the leader must be added to storage_nodes, got %q", got)
+	}
+	if len(f.nodeLabels) != 2 {
+		t.Fatalf("expected the label for both storage nodes, got %v", f.nodeLabels)
+	}
+}

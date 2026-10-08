@@ -43,13 +43,24 @@ func NewLocal(st *store.Store, trigger func(ctx context.Context) ([]string, erro
 	return &Local{Store: st, Run: trigger}
 }
 
-// discover records scheduled offen archives found on disk that the audit
-// table does not know about yet. It never fails the caller: a missing or
-// unreadable archive dir simply records nothing.
+// discover reconciles the audit table against BOTH the local archive dir and
+// the in-cluster object store. It never fails the caller: a missing or
+// unreadable archive dir, or an unreachable store, simply records nothing.
 func (l *Local) discover(ctx context.Context) {
-	if l.Store == nil || l.ArchiveDir == "" {
+	if l.Store == nil {
 		return
 	}
+	if l.ArchiveDir != "" {
+		l.discoverLocal(ctx)
+	}
+	if l.S3.Configured() {
+		l.discoverStore(ctx)
+	}
+}
+
+// discoverLocal records scheduled offen archives found on disk that the audit
+// table does not know about yet.
+func (l *Local) discoverLocal(ctx context.Context) {
 	entries, err := os.ReadDir(l.ArchiveDir)
 	if err != nil {
 		return
@@ -72,6 +83,45 @@ func (l *Local) discover(ctx context.Context) {
 		// The unique index on filename makes this a no-op for tarballs
 		// that already produced a row.
 		if err := l.Store.RecordDiscoveredBackup(ctx, e.Name(), archivePath, info.ModTime().Unix()); err != nil {
+			continue
+		}
+	}
+}
+
+// discoverStore indexes the in-cluster object store. The hourly cron archives
+// produced on the storage nodes land in the store but never pass through
+// Trigger, so a daemon/CLI running on a non-storage manager would otherwise
+// never see them (BUG-025). Each discovered volume archive is recorded as a
+// DB row whose archive path is the bare object key; restoreSource then resolves
+// it through fetchS3Object (s3ObjectKey of a bare key is the key itself).
+//
+// Only volume archives (`backup-` prefix) are indexed: control-plane archives
+// are restored through a separate path (RestoreControlPlane), never as volume
+// data, so they are deliberately excluded. Nothing is ever deleted from the
+// store.
+func (l *Local) discoverStore(ctx context.Context) {
+	objects, err := listS3Objects(ctx, l.S3, "backup-")
+	if err != nil {
+		return // an unreachable store must not fail List/ListForStack
+	}
+	for _, o := range objects {
+		base := filepath.Base(o.Key)
+		if !strings.HasSuffix(base, ".tar.gz") {
+			continue
+		}
+		// Dedupe: an on-demand/trigger row stores the container path
+		// (/archive/<base>) and a local discovery row stores the full host
+		// path (<dir>/<base>); both contain <base> as a substring, so the
+		// bare key catches them. The filename unique index is a second layer.
+		exists, err := l.Store.BackupExistsByPath(ctx, base)
+		if err != nil || exists {
+			continue
+		}
+		at := time.Now().Unix()
+		if !o.LastModified.IsZero() {
+			at = o.LastModified.Unix()
+		}
+		if err := l.Store.RecordDiscoveredBackup(ctx, base, base, at); err != nil {
 			continue
 		}
 	}

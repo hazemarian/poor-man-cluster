@@ -2,6 +2,28 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.170 (2026-10-08)
+
+Backups: the leader is always a storage node, the store is indexed, and no one-shot service.
+
+- **The leader is always a storage node (BUG-024 policy).** `cluster update` re-adds the
+  leader to `storage_nodes` when the setting omits it and stamps its `pmcluster.storage`
+  label; `pmcluster node demote <leader>` is refused. The leader also runs the edge
+  (console/API/webhooks), so the offen agent is always local and `pmcluster backup create`
+  reaches it with a plain `docker exec`.
+- `backup create` on a node with no offen agent now fails with an actionable message
+  ("no offen backup agent on this node — it is not a storage node … run this on a storage
+  node, or make this node one: pmcluster node promote <hostname>") instead of the generic
+  "is the backup stack deployed?".
+- **Reverted the one-shot backup service.** A manual trigger no longer creates an
+  ephemeral swarm task: Docker has no remote exec, and with the leader guaranteed to be a
+  storage node the local agent is always present, so no synthetic container is needed.
+- `backup list`, restore and storage failover now see archives written by *other* nodes:
+  the in-cluster store is indexed (S3 ListObjectsV2, prefix `backup-`, deduped, control-plane
+  archives deliberately excluded) alongside the local archive directory.
+- Tests: `TestUpdate_AddsLeaderToStorageNodes`, `TestRunNodeDemote_RefusesLeader`,
+  `internal/backups/s3_list_test.go` (store discovery, pagination, store-only restore).
+
 ## v0.2.169.3 (2026-10-07)
 
 The volume repair runs on standby managers too (BUG-026 follow-up 3).

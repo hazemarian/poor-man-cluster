@@ -554,6 +554,23 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		if err != nil {
 			return fmt.Errorf("list swarm nodes: %w", err)
 		}
+		// The leader runs the edge (console/API/webhooks) and must therefore be
+		// a storage node: otherwise a manual `backup create` finds no local
+		// offen agent (BUG-024). Re-add it when the setting omits it.
+		leaderHost := ""
+		for _, n := range nodes {
+			if n.IsLeader {
+				leaderHost = n.Hostname
+				break
+			}
+		}
+		if leaderHost != "" && !containsStorageNode(splitStorageNodes(raw), leaderHost) {
+			raw = raw + "," + leaderHost
+			if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), raw); err != nil {
+				return fmt.Errorf("persist storage_nodes: %w", err)
+			}
+			fmt.Fprintf(out, "  ⚠ the leader %s must be a storage node (the backup agent runs there) — added to storage_nodes (the next reconcile re-deploys the backup stack)\n", leaderHost)
+		}
 		for _, want := range splitStorageNodes(raw) {
 			for _, n := range nodes {
 				if n.Hostname == want {
@@ -772,4 +789,14 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		out[name] = string(content)
 	}
 	return out, nil
+}
+
+// containsStorageNode reports whether host is already in the storage-node list.
+func containsStorageNode(hosts []string, host string) bool {
+	for _, h := range hosts {
+		if h == host {
+			return true
+		}
+	}
+	return false
 }

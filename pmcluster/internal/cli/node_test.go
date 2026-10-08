@@ -236,3 +236,37 @@ func TestRunNodeDemote_NotInStorageNodes(t *testing.T) {
 		t.Fatalf("labelCalls = %v", fc.labelCalls)
 	}
 }
+
+// TestRunNodeDemote_RefusesLeader verifies the BUG-024 policy: the leader must
+// stay a storage node, so demoting it is refused with an actionable error.
+func TestRunNodeDemote_RefusesLeader(t *testing.T) {
+	_, restore := newTestCLIEnv(t)
+	defer restore()
+	installFakeNodeClient(t, tc7NodeFixtures(), nil)
+
+	st, _, err := openStore()
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.SetSetting(context.Background(), cluster.SettingStorageNodes(), "nxt-sw-1-m,nxt-sw-2-m"); err != nil {
+		t.Fatalf("seed storage_nodes: %v", err)
+	}
+	cmd, out := newNodeTestCmd(runNodeDemote)
+	err = cmd.RunE(cmd, []string{"nxt-sw-1-m"})
+	if err == nil {
+		t.Fatal("demoting the leader must fail")
+	} else if !strings.Contains(err.Error(), "refusing to demote") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	st2, _, err := openStore()
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	got := st2.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), "")
+	_ = st2.Close()
+	if !strings.Contains(got, "nxt-sw-1-m") {
+		t.Fatalf("storage_nodes must be unchanged, got %q", got)
+	}
+	_ = out
+}
