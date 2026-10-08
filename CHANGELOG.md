@@ -2,6 +2,22 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.174.3 (2026-10-08)
+
+Move/failover: do not wait on the `docker service create` CLI's pipes (BUG-030 follow-up).
+
+- Found live on the four-manager cluster: the store-transit mover task completed, but the move never
+  finished because `docker service create` itself never returned (a stuck CLI process holding its
+  inherited stdout/stderr pipes). The task wait therefore never started and the mover service was
+  never cleaned up.
+- `startMoverService` now redirects the CLI's output to a temp file (no inherited pipes), starts it
+  asynchronously, and proceeds as soon as `docker service inspect` confirms the service exists
+  (typically <1s); the CLI is reaped in the background and killed by a bounded context. Genuine
+  create failures still surface the CLI output (e.g. `unknown flag: --host-add`).
+- Tests: `TestStartMoverService_HangingCreateIsTolerated` (a create that hangs while the service
+  already exists must return quickly) and `TestStartMoverService_ReportsCreateFailure` (a real
+  create failure must report the captured CLI output).
+
 ## v0.2.174.2 (2026-10-08)
 
 Storage failover: create the mover service with `--host` (BUG-030 follow-up).

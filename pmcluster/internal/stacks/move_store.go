@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -152,8 +153,8 @@ func (s *Service) moveViaStorePull(ctx context.Context, key, volumeRoot, stackNa
 	args := append([]string{"service", "create"},
 		storePullMoverArgs(svcName, volumeRoot, targetNode, rcloneStoreEnv(moverCfg), script)...)
 
-	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("docker service create: %w (%s)", err, strings.TrimSpace(string(out)))
+	if err := startMoverService(ctx, args, svcName); err != nil {
+		return fmt.Errorf("docker service create: %w", err)
 	}
 	defer removeMoverService(svcName)
 
@@ -171,4 +172,71 @@ func moverEndpoint(endpoint string) string {
 		e = strings.Replace(e, "//"+host+"/", "//host.docker.internal/", 1)
 	}
 	return e
+}
+
+// startMoverService runs `docker service create` without ever waiting on its
+// inherited pipes. On some daemons the CLI does not return even after the
+// service has been created (it stays attached to stdout/stderr), which stalled
+// the whole move: the create call never returned, so the task-wait never began
+// and the mover service was never cleaned up (BUG-030 third follow-up).
+// We redirect the CLI output to a temp file, return as soon as the service
+// exists (`docker service inspect`), and let the (possibly still attached) CLI
+// be killed/reaped in the background.
+func startMoverService(ctx context.Context, args []string, svcName string) error {
+	logf, err := os.CreateTemp("", "pmcluster-mover-create-*.log")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = logf.Close()
+		_ = os.Remove(logf.Name())
+	}()
+
+	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel() // kills the CLI if it is still attached when we return
+
+	cmd := exec.CommandContext(cctx, "docker", args...)
+	cmd.Stdout = logf
+	cmd.Stderr = logf
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	reaped := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(reaped)
+	}()
+
+	exists := func() bool {
+		return exec.CommandContext(cctx, "docker", "service", "inspect", svcName).Run() == nil
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		if exists() {
+			// Created. The create CLI may still be attached — harmless, and the
+			// deferred cancel reaps it.
+			return nil
+		}
+		select {
+		case <-reaped:
+			if exists() {
+				return nil
+			}
+			data, _ := os.ReadFile(logf.Name())
+			return fmt.Errorf("exit status %v: %s", exitStatus(cmd), strings.TrimSpace(string(data)))
+		case <-time.After(500 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	data, _ := os.ReadFile(logf.Name())
+	return fmt.Errorf("timed out creating the mover service: %s", strings.TrimSpace(string(data)))
+}
+
+// exitStatus reports the CLI's exit code when it has exited, "unknown" otherwise.
+func exitStatus(cmd *exec.Cmd) any {
+	if cmd.ProcessState == nil {
+		return "unknown"
+	}
+	return cmd.ProcessState.ExitCode()
 }

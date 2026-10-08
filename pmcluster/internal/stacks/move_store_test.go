@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 )
@@ -131,5 +133,42 @@ func TestMoverEndpoint(t *testing.T) {
 		if got := moverEndpoint(in); got != want {
 			t.Errorf("moverEndpoint(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// fakeDockerOnPath installs a fake `docker` script first on PATH and returns a restore func.
+func fakeDockerOnPath(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/docker", []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake docker: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// TestStartMoverService_HangingCreateIsTolerated pins the BUG-030 follow-up: a
+// `docker service create` that never returns must not stall the move once the
+// service exists.
+func TestStartMoverService_HangingCreateIsTolerated(t *testing.T) {
+	fakeDockerOnPath(t, "#!/bin/sh\nif [ \"$1\" = service ] && [ \"$2\" = inspect ]; then exit 0; fi\nif [ \"$1\" = service ] && [ \"$2\" = create ]; then sleep 5; exit 0; fi\nexit 0\n")
+	start := time.Now()
+	if err := startMoverService(context.Background(), []string{"service", "create", "--name", "pmcluster-move-x-abc", "rclone/rclone:latest"}, "pmcluster-move-x-abc"); err != nil {
+		t.Fatalf("a hanging create must be tolerated once the service exists: %v", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("startMoverService took %v, want a fast return", d)
+	}
+}
+
+// TestStartMoverService_ReportsCreateFailure keeps real CLI errors (e.g. the
+// exit-125 unknown-flag message) surfaced to the caller.
+func TestStartMoverService_ReportsCreateFailure(t *testing.T) {
+	fakeDockerOnPath(t, "#!/bin/sh\nif [ \"$1\" = service ] && [ \"$2\" = inspect ]; then exit 1; fi\necho \"unknown flag: --host-add\" >&2\nexit 125\n")
+	err := startMoverService(context.Background(), []string{"service", "create", "--name", "pmcluster-move-x-abc", "rclone/rclone:latest"}, "pmcluster-move-x-abc")
+	if err == nil {
+		t.Fatal("a failing create must return an error")
+	}
+	if !strings.Contains(err.Error(), "unknown flag") {
+		t.Fatalf("the error must carry the CLI output, got %v", err)
 	}
 }
