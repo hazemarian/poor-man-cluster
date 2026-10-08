@@ -13,7 +13,7 @@ import (
 )
 
 // moverTaskTimeout bounds how long a one-shot mover task may take.
-const moverTaskTimeout = 120 * time.Second
+const moverTaskTimeout = 240 * time.Second
 
 // storePullMoverImage is the mover image for the store transit: rclone (to pull
 // the archive object from the store's S3 API) plus busybox tar/sh (verified to
@@ -96,6 +96,7 @@ func storePullMoverArgs(svcName, volumeRoot, targetNode string, env []string, sc
 		"--constraint", "node.hostname==" + targetNode,
 		"--restart-condition", "none",
 		"--mount", "type=bind,source=" + volumeRoot + ",destination=/data",
+		"--host-add", "host.docker.internal:host-gateway",
 		"--entrypoint", "/bin/sh",
 	}
 	for _, e := range env {
@@ -146,8 +147,10 @@ func (s *Service) moveViaStorePull(ctx context.Context, key, volumeRoot, stackNa
 	}
 	svcName := fmt.Sprintf("pmcluster-move-%s-%s", stackName, hex.EncodeToString(token)[:8])
 	script := storePullMoverScript(s.S3.Bucket, key, stackName)
+	moverCfg := s.S3
+	moverCfg.Endpoint = moverEndpoint(moverCfg.Endpoint) // container cannot use 127.0.0.1
 	args := append([]string{"service", "create"},
-		storePullMoverArgs(svcName, volumeRoot, targetNode, rcloneStoreEnv(s.S3), script)...)
+		storePullMoverArgs(svcName, volumeRoot, targetNode, rcloneStoreEnv(moverCfg), script)...)
 
 	if out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("docker service create: %w (%s)", err, strings.TrimSpace(string(out)))
@@ -155,4 +158,17 @@ func (s *Service) moveViaStorePull(ctx context.Context, key, volumeRoot, stackNa
 	defer removeMoverService(svcName)
 
 	return waitForMoverTask(ctx, svcName, targetNode)
+}
+
+// moverEndpoint rewrites a loopback object-store endpoint to the Docker
+// host-gateway alias: the mover runs in a container, where 127.0.0.1 is the
+// container itself — the store is published on the routing mesh, so
+// host.docker.internal:<port> reaches it from any node (BUG-030 follow-up).
+func moverEndpoint(endpoint string) string {
+	e := endpoint
+	for _, host := range []string{"127.0.0.1", "localhost"} {
+		e = strings.Replace(e, "//"+host+":", "//host.docker.internal:", 1)
+		e = strings.Replace(e, "//"+host+"/", "//host.docker.internal/", 1)
+	}
+	return e
 }

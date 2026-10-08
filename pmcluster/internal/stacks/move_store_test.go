@@ -47,6 +47,9 @@ func TestStorePullMoverScriptAndArgs(t *testing.T) {
 			t.Errorf("mover args missing %q:\n%s", want, joined)
 		}
 	}
+	if !strings.Contains(strings.Join(args, " "), "--host-add host.docker.internal:host-gateway") {
+		t.Fatalf("mover args must map host.docker.internal: %v", args)
+	}
 }
 
 // TestRcloneStoreEnv_EndpointScheme: a scheme-less endpoint (the offsite S3
@@ -111,5 +114,22 @@ func TestNewestArchiveObject_Errors(t *testing.T) {
 	svc := &Service{S3: backups.S3Config{Endpoint: srv.URL, Bucket: "b", AccessKey: "ak", SecretKey: "sk"}}
 	if _, err := svc.newestArchiveObject(context.Background(), "sfapp"); err == nil || !strings.Contains(err.Error(), "no whole-disk archive found") {
 		t.Fatalf("empty store must error, got %v", err)
+	}
+}
+
+// TestMoverEndpoint pins the BUG-030 follow-up: the mover runs in a container,
+// where 127.0.0.1 is the container itself, so a loopback store endpoint must be
+// rewritten to host.docker.internal (the published ingress is reachable there).
+func TestMoverEndpoint(t *testing.T) {
+	cases := map[string]string{
+		"http://127.0.0.1:8333":  "http://host.docker.internal:8333",
+		"https://localhost:9000": "https://host.docker.internal:9000",
+		"http://localhost/":      "http://host.docker.internal/",
+		"s3.example.com:443":     "s3.example.com:443", // non-loopback untouched
+	}
+	for in, want := range cases {
+		if got := moverEndpoint(in); got != want {
+			t.Errorf("moverEndpoint(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

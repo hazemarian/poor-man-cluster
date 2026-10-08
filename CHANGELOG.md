@@ -2,6 +2,26 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.174.1 (2026-10-08)
+
+Storage failover: the mover pulls the archive through the Docker host gateway (BUG-030 follow-up).
+
+- Found while re-running the storage failover on the four-manager test cluster: the new store-transit
+  path was used, but the mover task on the target node timed out.
+- Root cause: the mover runs in a container, where `127.0.0.1` is the container itself. The daemon
+  reads/writes the in-cluster store at `http://127.0.0.1:8333` (published on the routing mesh), but a
+  container cannot reach that loopback address. Probes on the target node: host `127.0.0.1:8333/healthz`
+  → 200; from a container `127.0.0.1:8333` → connection failure; `host.docker.internal:8333` → 200.
+- Fix: the mover service is created with `--host-add host.docker.internal:host-gateway` and the store
+  endpoint handed to rclone is rewritten from a loopback host (`127.0.0.1` / `localhost`) to
+  `host.docker.internal` (non-loopback endpoints untouched). The archive still transits the object
+  store, so there are still no cross-node host ports and no firewall rules.
+- Also raised the mover task timeout from 120 s to 240 s: the first move on a cold node must pull the
+  `rclone/rclone` image on a 1-core host.
+- Tests: `TestMoverEndpoint` (loopback → host.docker.internal for `127.0.0.1`/`localhost`, with and
+  without a port, other hosts unchanged) and `TestStorePullMoverScriptAndArgs` now asserts the
+  `--host-add` mapping.
+
 ## v0.2.174 (2026-10-08)
 
 Move + storage failover transit via the object store — no cross-node host ports (BUG-030).
