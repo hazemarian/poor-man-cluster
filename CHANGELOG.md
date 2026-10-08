@@ -2,6 +2,18 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.174.2 (2026-10-08)
+
+Storage failover: create the mover service with `--host` (BUG-030 follow-up).
+
+- v0.2.174.1 passed `--host-add host.docker.internal:host-gateway`, but `--host-add` is a
+  `docker service update` flag; `docker service create` rejected it with
+  `exit status 125: unknown flag: --host-add`, so the failover aborted instead of moving the stack.
+- Fix: use `--host host.docker.internal:host-gateway` when creating the mover service.
+- Also removed an orphaned mover service left behind by the aborted attempt (it was stuck retrying
+  the container-loopback endpoint, which is exactly what the previous release fixed).
+- Test updated to assert `--host host.docker.internal:host-gateway`.
+
 ## v0.2.174.1 (2026-10-08)
 
 Storage failover: the mover pulls the archive through the Docker host gateway (BUG-030 follow-up).

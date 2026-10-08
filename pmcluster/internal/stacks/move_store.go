@@ -96,7 +96,7 @@ func storePullMoverArgs(svcName, volumeRoot, targetNode string, env []string, sc
 		"--constraint", "node.hostname==" + targetNode,
 		"--restart-condition", "none",
 		"--mount", "type=bind,source=" + volumeRoot + ",destination=/data",
-		"--host-add", "host.docker.internal:host-gateway",
+		"--host", "host.docker.internal:host-gateway", // service create flag is --host (update uses --host-add)
 		"--entrypoint", "/bin/sh",
 	}
 	for _, e := range env {

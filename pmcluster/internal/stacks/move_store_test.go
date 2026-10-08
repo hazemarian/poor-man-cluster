@@ -47,7 +47,7 @@ func TestStorePullMoverScriptAndArgs(t *testing.T) {
 			t.Errorf("mover args missing %q:\n%s", want, joined)
 		}
 	}
-	if !strings.Contains(strings.Join(args, " "), "--host-add host.docker.internal:host-gateway") {
+	if !strings.Contains(strings.Join(args, " "), "--host host.docker.internal:host-gateway") {
 		t.Fatalf("mover args must map host.docker.internal: %v", args)
 	}
 }
