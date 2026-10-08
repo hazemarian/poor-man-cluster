@@ -57,15 +57,16 @@ services:
       AWS_ENDPOINT: "[[.BackupS3.EndpointHost]]"
       AWS_ENDPOINT_PROTO: "[[.BackupS3.EndpointProto]]"
       AWS_REGION: "[[.BackupS3.Region]]"
-      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_S3_BUCKET_LOOKUP: "path"
       [[- end ]]
       [[- else if .BackupS3.Configured ]]
       AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
       AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
       AWS_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
-      AWS_ENDPOINT: "[[.BackupS3.Endpoint]]"
+      AWS_ENDPOINT: "[[.BackupS3.EndpointHost]]"
+      AWS_ENDPOINT_PROTO: "[[.BackupS3.EndpointProto]]"
       AWS_REGION: "[[.BackupS3.Region]]"
-      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_S3_BUCKET_LOOKUP: "path"
       [[- end ]]
     binds:
       - "[[.VolumeRoot]]:/backup/data:ro"
@@ -143,15 +144,16 @@ services:
       AWS_ENDPOINT: "[[.BackupS3.EndpointHost]]"
       AWS_ENDPOINT_PROTO: "[[.BackupS3.EndpointProto]]"
       AWS_REGION: "[[.BackupS3.Region]]"
-      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_S3_BUCKET_LOOKUP: "path"
       [[- end ]]
       [[- else if .BackupS3.Configured ]]
       AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
       AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
       AWS_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
-      AWS_ENDPOINT: "[[.BackupS3.Endpoint]]"
+      AWS_ENDPOINT: "[[.BackupS3.EndpointHost]]"
+      AWS_ENDPOINT_PROTO: "[[.BackupS3.EndpointProto]]"
       AWS_REGION: "[[.BackupS3.Region]]"
-      AWS_S3_FORCE_PATH_STYLE: "true"
+      AWS_S3_BUCKET_LOOKUP: "path"
       [[- end ]]
     binds:
       - "${DATA_DIR}:/backup/pmcluster:ro"

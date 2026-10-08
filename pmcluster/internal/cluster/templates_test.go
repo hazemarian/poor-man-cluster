@@ -245,8 +245,10 @@ func TestLoadComposeFile_BackupSeaweedFSDisabled(t *testing.T) {
 	if strings.Contains(body, "chrislusf/seaweedfs") || strings.Contains(body, "rclone/rclone") || strings.Contains(body, "WEBDAV_URL") || strings.Contains(body, "backup-replicate") {
 		t.Errorf("SeaweedFS (S3 + WebDAV) services must not render when disabled:\n%s", body)
 	}
-	if !strings.Contains(body, "https://s3.example.com") {
-		t.Errorf("legacy offen should upload to the offsite endpoint (scheme preserved)")
+	// offen rejects a scheme inside AWS_ENDPOINT (BUG-028), so the legacy path
+	// renders the host + AWS_ENDPOINT_PROTO=http(s).
+	if !strings.Contains(body, "AWS_ENDPOINT: s3.example.com") || !strings.Contains(body, "AWS_ENDPOINT_PROTO: https") {
+		t.Errorf("legacy offen should upload to the offsite endpoint host + proto:\n%s", body)
 	}
 }
 
@@ -282,7 +284,7 @@ func TestLoadComposeFile_BackupSeaweedFSStoreOnly(t *testing.T) {
 		"AWS_S3_BUCKET_NAME",
 		"AWS_ENDPOINT_PROTO",
 		"AWS_REGION",
-		"AWS_S3_FORCE_PATH_STYLE",
+		"AWS_S3_BUCKET_LOOKUP",
 	} {
 		if strings.Contains(body, bad) {
 			t.Errorf("store-only offen must not emit %q:\n%s", bad, body)
@@ -1550,9 +1552,9 @@ func TestLoadComposeFile_BackupS3Renders(t *testing.T) {
 		"AWS_S3_BUCKET_NAME: pmcluster-backups",
 		"AWS_ACCESS_KEY_ID: ak",
 		"AWS_SECRET_ACCESS_KEY: sk",
-		"AWS_ENDPOINT: https://acct.r2.cloudflarestorage.com",
+		"AWS_ENDPOINT: acct.r2.cloudflarestorage.com",
 		"AWS_REGION: auto",
-		"AWS_S3_FORCE_PATH_STYLE: \"true\"",
+		"AWS_S3_BUCKET_LOOKUP: path",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered backup stack missing %q:\n%s", want, body)

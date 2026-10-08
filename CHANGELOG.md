@@ -2,6 +2,22 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.172 (2026-10-08)
+
+Offsite backups: the S3 path-style knob offen actually supports (BUG-028).
+
+- Found live on the four-manager test cluster: every offen agent uploaded to the
+  in-cluster store (WebDAV) and kept a local copy, but the **offsite S3 leg failed**
+  with `The request signature we calculated does not match the signature you
+  provided` on IONOS. The rendered env set `AWS_S3_FORCE_PATH_STYLE=true`, which the
+  agent's binary does not implement, so offen fell back to virtual-host style
+  (`<bucket>.<endpoint>`) and the provider rejected the signature.
+- The template now renders `AWS_S3_BUCKET_LOOKUP: "path"` (the knob the agent does
+  support) for both offen agents, and the legacy offsite-only branch renders
+  `AWS_ENDPOINT=<host>` + `AWS_ENDPOINT_PROTO=<proto>` instead of a scheme inside
+  `AWS_ENDPOINT` (which offen rejects).
+- Tests: `TestLoadComposeFile_BackupS3Renders`, `TestLoadComposeFile_BackupSeaweedFSDisabled`.
+
 ## v0.2.171 (2026-10-08)
 
 Storage follows leadership — the leader is always a storage node.
