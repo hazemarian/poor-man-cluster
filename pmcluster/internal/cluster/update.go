@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -571,6 +572,37 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			}
 			fmt.Fprintf(out, "  ⚠ the leader %s must be a storage node (the backup agent runs there) — added to storage_nodes (the next reconcile re-deploys the backup stack)\n", leaderHost)
 		}
+		// Storage follows leadership: the new leader was added above, so the
+		// PREVIOUS leader (no longer leading) stops being a storage node.
+		prev := deps.Store.GetSettingDefault(ctx, storageLeaderKey, "")
+		if leaderHost != "" {
+			if prev != "" && prev != leaderHost && containsStorageNode(splitStorageNodes(raw), prev) {
+				kept := make([]string, 0, len(splitStorageNodes(raw)))
+				for _, h := range splitStorageNodes(raw) {
+					if h != prev {
+						kept = append(kept, h)
+					}
+				}
+				raw = strings.Join(kept, ",")
+				if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), raw); err != nil {
+					return fmt.Errorf("persist storage_nodes: %w", err)
+				}
+				for _, n := range nodes {
+					if n.Hostname == prev {
+						if err := deps.Docker.SetNodeLabel(ctx, n.ID, runtime.StorageNodeLabel, ""); err != nil {
+							fmt.Fprintf(out, "  ⚠ could not clear the storage label on the former leader %s (%v)\n", prev, err)
+						}
+						break
+					}
+				}
+				fmt.Fprintf(out, "  ⚠ leadership moved to %s — the former leader %s is no longer a storage node\n", leaderHost, prev)
+			}
+			if prev != leaderHost {
+				if err := deps.Store.SetSetting(ctx, storageLeaderKey, leaderHost); err != nil {
+					return fmt.Errorf("persist storage_leader: %w", err)
+				}
+			}
+		}
 		for _, want := range splitStorageNodes(raw) {
 			for _, n := range nodes {
 				if n.Hostname == want {
@@ -790,6 +822,12 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 	}
 	return out, nil
 }
+
+// storageLeaderKey remembers which hostname was promoted to a storage node
+// because it held leadership, so that a later failover can demote the former
+// leader (the leader is always a storage node; a failed leader returns to a
+// plain node).
+const storageLeaderKey = "storage_leader"
 
 // containsStorageNode reports whether host is already in the storage-node list.
 func containsStorageNode(hosts []string, host string) bool {

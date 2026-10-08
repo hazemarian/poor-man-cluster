@@ -2,6 +2,18 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.171 (2026-10-08)
+
+Storage follows leadership — the leader is always a storage node.
+
+- On every platform pass, `cluster update` now tracks the leader: a manager that gains
+  leadership is added to `storage_nodes` (and labeled), and the **former** leader is
+  removed from `storage_nodes` with its `pmcluster.storage` label cleared — so the backup
+  agent (and the edge) always run on the current leader, and a failed leader returns to a
+  plain node. The promoted leader is remembered in the internal `storage_leader` setting.
+- `pmcluster node demote <leader>` remains refused (v0.2.170).
+- Tests: `TestUpdate_DemotesFormerLeader` (with v0.2.170's `TestUpdate_AddsLeaderToStorageNodes`).
+
 ## v0.2.170 (2026-10-08)
 
 Backups: the leader is always a storage node, the store is indexed, and no one-shot service.

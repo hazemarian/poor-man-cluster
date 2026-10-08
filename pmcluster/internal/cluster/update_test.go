@@ -918,3 +918,42 @@ func TestUpdate_AddsLeaderToStorageNodes(t *testing.T) {
 		t.Fatalf("expected the label for both storage nodes, got %v", f.nodeLabels)
 	}
 }
+
+// TestUpdate_DemotesFormerLeader verifies that storage follows leadership: when
+// leadership moves, the new leader is a storage node and the FORMER leader stops
+// being one (its storage label is cleared).
+func TestUpdate_DemotesFormerLeader(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "node-a,node-b"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	if err := deps.Store.SetSetting(ctx, storageLeaderKey, "node-a"); err != nil {
+		t.Fatalf("SetSetting storage_leader: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "node-a", ID: "na", Role: "manager", Status: "ready", Availability: "active"},
+		{Hostname: "node-b", ID: "nb", Role: "manager", Status: "ready", Availability: "active", IsLeader: true},
+	}
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "")
+	if strings.Contains(got, "node-a") {
+		t.Fatalf("the former leader must be demoted, storage_nodes = %q", got)
+	}
+	if !strings.Contains(got, "node-b") {
+		t.Fatalf("the new leader must stay a storage node, storage_nodes = %q", got)
+	}
+	joined := strings.Join(f.nodeLabels, ",")
+	if !strings.Contains(joined, runtime.StorageNodeLabel+"=true") {
+		t.Fatalf("the new leader must be labeled, calls = %v", f.nodeLabels)
+	}
+	if !strings.Contains(joined, runtime.StorageNodeLabel+"=") {
+		t.Fatalf("the former leader's label must be cleared, calls = %v", f.nodeLabels)
+	}
+	if leader := deps.Store.GetSettingDefault(ctx, storageLeaderKey, ""); leader != "node-b" {
+		t.Fatalf("storage_leader = %q, want node-b", leader)
+	}
+}
