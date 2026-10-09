@@ -8,13 +8,18 @@
   <link rel="icon" href="/web/static/favicon.svg" type="image/svg+xml">
   <title>{{T .Crumb}} · {{T "app.title"}}</title>
   <script>
-    // Theme is applied before first paint so a light-theme operator never sees
-    // a dark flash. The server already set data-theme from the cookie; this
+    // Theme + brand palette are applied before first paint so a light-theme
+    // operator never sees a dark flash and the brand accent never flashes the
+    // default orange. The server already set data-theme from the cookie; this
     // covers the case where localStorage is newer than the cookie.
     (function () {
       try {
         var t = localStorage.getItem('pmc_theme');
         if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+        var p = localStorage.getItem('pmc_palette');
+        if (p === 'orange' || p === 'purple' || p === 'blue' || p === 'red' || p === 'green' || p === 'teal') {
+          document.documentElement.dataset.palette = p;
+        }
       } catch (e) {}
     })();
   </script>
@@ -22,6 +27,7 @@
   <link rel="stylesheet" href="/web/static/base.css">
   <link rel="stylesheet" href="/web/static/components.css">
   <link rel="stylesheet" href="/web/static/patterns.css">
+  <link rel="stylesheet" href="/web/static/brand.css">
   <script src="/web/static/htmx.min.js"></script>
   <script src="/web/static/preferences.js" defer></script>
 </head>
@@ -35,8 +41,7 @@
 <div class="app">
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-head">
-      <span class="mark" aria-hidden="true">{{icon "stacks"}}</span>
-      <span class="brand">{{T "app.title"}}<small>{{T "brand.sub"}}</small></span>
+      {{template "logo"}}
       <button class="icon-btn sidebar-close" type="button" data-drawer-close aria-label="{{T "nav.close"}}" title="{{T "nav.close"}}">{{icon "close"}}</button>
     </div>
 

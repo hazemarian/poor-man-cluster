@@ -2,6 +2,32 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.179 (2026-10-09)
+
+The Poor Man's Cluster visual identity applied across the console and the README: a six-palette
+brand-token system, a palette picker persisted before first paint, an inlined combination-mark logo,
+and a self-contained README lockup.
+
+- **Brand design tokens (`--brand-*`).** A new `static/brand.css` maps the brand spec into CSS custom
+  properties. The palette accents (`--brand-primary`/`--brand-secondary`/`--brand-dark`/
+  `--brand-surface`/`--brand-light`) switch on `[data-palette]`, with Orange as the default plus
+  Purple, Blue, Red, Green and Teal; the surface/text tokens (`--brand-bg-*`, `--brand-text-*`,
+  `--brand-border`) switch on `[data-theme]` (dark/light). These tokens power the logo only — the
+  console's own component tokens are untouched, so the existing look is preserved.
+- **Palette picker.** The console preferences now expose a six-swatch palette control that writes the
+  chosen accent to `localStorage` under `pmc_palette`; a boot script in the document head applies it
+  before first paint (alongside the existing theme boot), so the accent never flashes the default
+  orange.
+- **Combination-mark logo.** A new `frag_logo.html` partial renders an inlined isometric three-node
+  mark (the mark's lines and LEDs reference `var(--brand-primary)` so they follow the active palette)
+  plus a "Poor Man's Cluster" wordmark and `pmcluster` mono subtext, in the sidebar header and on the
+  sign-in and setup pages. A standalone `static/logo-mark.svg` ships for reuse.
+- **README lockup.** The README leads with a centered, self-contained lockup
+  (`docs/assets/logo-lockup.svg`) — GitHub strips CSS variables, so its colours are hard-coded.
+- **Tests.** Five new tests assert the brand stylesheet's palette/theme tokens, the static mark asset,
+  the logo partial wiring across shell/login/setup, the palette boot + picker markup, and the lockup
+  rendering end-to-end.
+
 ## v0.2.178 (2026-10-09)
 
 The console SSO sign-out, Traefik pinned to manager nodes (fixing an intermittent 404 through the

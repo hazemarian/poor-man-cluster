@@ -10,11 +10,16 @@
   <title>{{T "auth.signin_title"}} · {{T "app.title"}}</title>
   <script>
     // Applied before first paint: the sign-in page has no server-side session,
-    // so localStorage is the only thing that knows the operator's last theme.
+    // so localStorage is the only thing that knows the operator's last theme
+    // and brand palette.
     (function () {
       try {
         var t = localStorage.getItem('pmc_theme');
         if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+        var p = localStorage.getItem('pmc_palette');
+        if (p === 'orange' || p === 'purple' || p === 'blue' || p === 'red' || p === 'green' || p === 'teal') {
+          document.documentElement.dataset.palette = p;
+        }
       } catch (e) {}
     })();
   </script>
@@ -22,6 +27,7 @@
   <link rel="stylesheet" href="/web/static/base.css">
   <link rel="stylesheet" href="/web/static/components.css">
   <link rel="stylesheet" href="/web/static/patterns.css">
+  <link rel="stylesheet" href="/web/static/brand.css">
   <script src="/web/static/preferences.js" defer></script>
 </head>
 <body>
@@ -30,8 +36,7 @@
 <main class="doc login-doc">
   <section class="auth-intro" aria-labelledby="intro-title">
     <div class="auth-brand">
-      <span class="mark" aria-hidden="true">{{icon "stacks"}}</span>
-      <span class="auth-word">{{T "app.title"}}</span>
+      {{template "logo"}}
     </div>
     <div class="auth-story">
       <p class="auth-eyebrow">{{T "brand.sub"}}</p>

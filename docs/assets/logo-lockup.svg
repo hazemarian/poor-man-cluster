@@ -1,0 +1,42 @@
+<svg width="680" height="200" viewBox="0 0 680 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Self-contained combination-mark lockup for the README. GitHub strips CSS
+       variables and inline styles, so every colour is hard-coded here (the
+       mark lines/LEDs use the default Orange #FF5722). -->
+  <rect x="1" y="1" width="678" height="198" rx="18" fill="#0F1117" stroke="#2D323E" stroke-width="1"/>
+
+  <!-- app-header traffic-light controls -->
+  <circle cx="32" cy="27" r="5.5" fill="#FF5F56"/>
+  <circle cx="52" cy="27" r="5.5" fill="#FFBD2E"/>
+  <circle cx="72" cy="27" r="5.5" fill="#27C93F"/>
+
+  <!-- isometric 3-node mark (scaled 0.72, accent #FF5722) -->
+  <g transform="translate(38,76) scale(0.72)">
+    <path d="M60 48 L35 70" stroke="#FF5722" stroke-width="6" stroke-linecap="round"/>
+    <path d="M60 48 L85 70" stroke="#FF5722" stroke-width="6" stroke-linecap="round"/>
+    <path d="M35 70 L85 70" stroke="#FF5722" stroke-width="6" stroke-linecap="round"/>
+    <polygon points="60,20 82,31 60,42 38,31" fill="#232730" stroke="#181A20" stroke-width="1.5"/>
+    <polygon points="38,31 60,42 60,58 38,47" fill="#181A20"/>
+    <polygon points="60,42 82,31 82,47 60,58" fill="#13151A"/>
+    <line x1="43" y1="38" x2="55" y2="44" stroke="#8C9BAE" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="73" cy="38" r="2.5" fill="#FF5722"/>
+    <polygon points="35,62 57,73 35,84 13,73" fill="#232730" stroke="#181A20" stroke-width="1.5"/>
+    <polygon points="13,73 35,84 35,100 13,89" fill="#181A20"/>
+    <polygon points="35,84 57,73 57,89 35,100" fill="#13151A"/>
+    <line x1="18" y1="80" x2="30" y2="86" stroke="#8C9BAE" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="48" cy="80" r="2.5" fill="#FF5722"/>
+    <polygon points="85,62 107,73 85,84 63,73" fill="#232730" stroke="#181A20" stroke-width="1.5"/>
+    <polygon points="63,73 85,84 85,100 63,89" fill="#181A20"/>
+    <polygon points="85,84 107,73 107,89 85,100" fill="#13151A"/>
+    <line x1="68" y1="80" x2="80" y2="86" stroke="#8C9BAE" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="98" cy="80" r="2.5" fill="#FF5722"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="150" y="96" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="34" font-weight="700" fill="#FFFFFF">Poor Man's<tspan fill="#FF5722"> Cluster</tspan></text>
+
+  <!-- tagline -->
+  <text x="150" y="130" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="3" fill="#8C9BAE">SIMPLE • FLEXIBLE • POWERFUL</text>
+
+  <!-- mono subtext -->
+  <text x="150" y="160" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" fill="#8C9BAE">pmcluster</text>
+</svg>

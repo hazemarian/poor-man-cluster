@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="docs/assets/logo-lockup.svg" alt="Poor Man's Cluster" width="680">
+</p>
+
+<p align="center"><strong>SIMPLE • FLEXIBLE • POWERFUL</strong></p>
+
 # Poor Man's Cluster
 
 A simple, cost-effective, production-ready deployment stack on open-source tools. No Kubernetes, no managed cloud services, no expensive licensing — just Docker Swarm, a small Go control plane (`pmcluster`), and a handful of well-chosen tools that get the job done.

@@ -10,5 +10,18 @@
     <span class="theme-dark-only" title="{{T "preferences.to_light"}}">{{icon "sun"}}<span>{{T "preferences.light"}}</span><span class="sr-only"> — {{T "preferences.to_light"}}</span></span>
     <span class="theme-light-only" title="{{T "preferences.to_dark"}}">{{icon "moon"}}<span>{{T "preferences.dark"}}</span><span class="sr-only"> — {{T "preferences.to_dark"}}</span></span>
   </button>
+  <div class="palette" data-palette-picker>
+    <button class="preference-control" type="button" data-palette-toggle aria-haspopup="true" aria-expanded="false" aria-label="{{T "preferences.palette"}}" title="{{T "preferences.palette"}}">
+      <span class="swatch swatch-current" aria-hidden="true"></span><span class="palette-label" data-palette-current>{{T "preferences.palette_orange"}}</span>
+    </button>
+    <div class="palette-pop" role="menu" aria-label="{{T "preferences.palette"}}" hidden>
+      <button class="palette-opt" type="button" role="menuitemradio" data-palette-choose="orange" aria-checked="false"><span class="swatch" aria-hidden="true"></span><span class="palette-opt-name">{{T "preferences.palette_orange"}}</span></button>
+      <button class="palette-opt" type="button" role="menuitemradio" data-palette-choose="purple" aria-checked="false"><span class="swatch" aria-hidden="true"></span><span class="palette-opt-name">{{T "preferences.palette_purple"}}</span></button>
+      <button class="palette-opt" type="button" role="menuitemradio" data-palette-choose="blue" aria-checked="false"><span class="swatch" aria-hidden="true"></span><span class="palette-opt-name">{{T "preferences.palette_blue"}}</span></button>
+      <button class="palette-opt" type="button" role="menuitemradio" data-palette-choose="red" aria-checked="false"><span class="swatch" aria-hidden="true"></span><span class="palette-opt-name">{{T "preferences.palette_red"}}</span></button>
+      <button class="palette-opt" type="button" role="menuitemradio" data-palette-choose="green" aria-checked="false"><span class="swatch" aria-hidden="true"></span><span class="palette-opt-name">{{T "preferences.palette_green"}}</span></button>
+      <button class="palette-opt" type="button" role="menuitemradio" data-palette-choose="teal" aria-checked="false"><span class="swatch" aria-hidden="true"></span><span class="palette-opt-name">{{T "preferences.palette_teal"}}</span></button>
+    </div>
+  </div>
 </div>
 {{end}}

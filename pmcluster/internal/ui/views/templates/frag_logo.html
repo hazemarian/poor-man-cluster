@@ -1,0 +1,37 @@
+{{/* Combination-mark lockup: isometric 3-node mark + "Poor Man's Cluster"
+     wordmark + "pmcluster" mono subtext. The mark is INLINED (not an <img>) so
+     var(--brand-primary) resolves against <html data-palette> — the lines and
+     LEDs follow the active palette. A standalone copy also lives in
+     static/logo-mark.svg for reuse outside the templates. */}}
+{{define "logo-mark"}}
+<svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+  <path d="M60 48 L35 70" stroke="var(--brand-primary, #FF5722)" stroke-width="6" stroke-linecap="round"/>
+  <path d="M60 48 L85 70" stroke="var(--brand-primary, #FF5722)" stroke-width="6" stroke-linecap="round"/>
+  <path d="M35 70 L85 70" stroke="var(--brand-primary, #FF5722)" stroke-width="6" stroke-linecap="round"/>
+  <polygon points="60,20 82,31 60,42 38,31" fill="#232730" stroke="#181A20" stroke-width="1.5"/>
+  <polygon points="38,31 60,42 60,58 38,47" fill="#181A20"/>
+  <polygon points="60,42 82,31 82,47 60,58" fill="#13151A"/>
+  <line x1="43" y1="38" x2="55" y2="44" stroke="#8C9BAE" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="73" cy="38" r="2.5" fill="var(--brand-primary, #FF5722)"/>
+  <polygon points="35,62 57,73 35,84 13,73" fill="#232730" stroke="#181A20" stroke-width="1.5"/>
+  <polygon points="13,73 35,84 35,100 13,89" fill="#181A20"/>
+  <polygon points="35,84 57,73 57,89 35,100" fill="#13151A"/>
+  <line x1="18" y1="80" x2="30" y2="86" stroke="#8C9BAE" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="48" cy="80" r="2.5" fill="var(--brand-primary, #FF5722)"/>
+  <polygon points="85,62 107,73 85,84 63,73" fill="#232730" stroke="#181A20" stroke-width="1.5"/>
+  <polygon points="63,73 85,84 85,100 63,89" fill="#181A20"/>
+  <polygon points="85,84 107,73 107,89 85,100" fill="#13151A"/>
+  <line x1="68" y1="80" x2="80" y2="86" stroke="#8C9BAE" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="98" cy="80" r="2.5" fill="var(--brand-primary, #FF5722)"/>
+</svg>
+{{end}}
+
+{{define "logo"}}
+<span class="logo-lockup">
+  <span class="logo-mark" aria-hidden="true">{{template "logo-mark"}}</span>
+  <span class="logo-word" dir="ltr">
+    <span class="logo-name">Poor Man's <em>Cluster</em></span>
+    <span class="logo-sub">pmcluster</span>
+  </span>
+</span>
+{{end}}
