@@ -1,12 +1,14 @@
 package manifest
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"sigs.k8s.io/yaml"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -402,6 +404,77 @@ func TestTranslate_StatefulDefaultsDisabled(t *testing.T) {
 	// Stateless web service keeps the start-first default.
 	if !strings.Contains(s, "order: start-first") {
 		t.Errorf("stateless service should keep start-first update order:\n%s", s)
+	}
+}
+
+// TestTranslate_ReplicasZeroRendersZero verifies an explicit `replicas: 0`
+// (scale to zero) survives translation and renders `replicas: 0`, not the
+// backend default of 1.
+func TestTranslate_ReplicasZeroRendersZero(t *testing.T) {
+	app := baseApp()
+	app.Services["api"].Replicas = ptr(0)
+	if err := Validate(app); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	s, cf := renderCompose(t, app, nil)
+	d := deployOf(t, cf, "api")
+	if d.Replicas == nil || *d.Replicas != 0 {
+		t.Fatalf("deploy.replicas = %v, want explicit 0:\n%s", d.Replicas, s)
+	}
+	if !strings.Contains(s, "replicas: 0") {
+		t.Errorf("rendered compose should contain 'replicas: 0':\n%s", s)
+	}
+}
+
+// TestComposeHealthcheckHTTPPortFallback verifies an http healthcheck probes
+// the exposed port, falls back to the first published port when there is no
+// expose, and is OMITTED (with a warning) when no port is derivable — never a
+// port-0 probe.
+func TestComposeHealthcheckHTTPPortFallback(t *testing.T) {
+	// Published port (no expose) → the healthcheck probes it.
+	ir := &IR{
+		Name: "demo",
+		Services: []IRService{{
+			Name:        "web",
+			Image:       "nginx:latest",
+			Ports:       []IRPort{{Target: 8080, Published: 8080}},
+			Healthcheck: &IRHealthcheck{Type: "http"},
+		}},
+	}
+	out, err := (&ComposeWriter{}).Write(context.Background(), ir)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !strings.Contains(string(out), "wget -q --spider http://127.0.0.1:8080/") {
+		t.Errorf("healthcheck should probe the published port 8080:\n%s", out)
+	}
+
+	// No expose and no published port → the healthcheck is omitted and a
+	// warning is logged (never a port-0 probe).
+	var buf bytes.Buffer
+	w := &ComposeWriter{Log: zerolog.New(&buf)}
+	ir = &IR{
+		Name: "demo",
+		Services: []IRService{{
+			Name:        "web",
+			Image:       "nginx:latest",
+			Healthcheck: &IRHealthcheck{Type: "http"},
+		}},
+	}
+	out, err = w.Write(context.Background(), ir)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	var cf composeFile
+	if err := yaml.Unmarshal(out, &cf); err != nil {
+		t.Fatalf("unmarshal rendered compose: %v\n%s", err, out)
+	}
+	if hc := cf.Services["web"].Healthcheck; hc != nil {
+		t.Errorf("healthcheck should be omitted when no port is derivable, got %+v:\n%s", hc, out)
+	}
+	if !strings.Contains(buf.String(), "no probe port derivable") {
+		t.Errorf("expected a warning about the omitted healthcheck, got: %s", buf.String())
 	}
 }
 

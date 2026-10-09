@@ -1498,6 +1498,49 @@ func TestLoadComposeFile_EdgeStateless(t *testing.T) {
 	}
 }
 
+// TestLoadComposeFile_EdgeSSOEnv verifies the edge stack forwards the SSO gate
+// mode to the console (EDGE_SSO_ENABLED) so the shell can render the SSO
+// sign-out affordance instead of the console-session logout form.
+func TestLoadComposeFile_EdgeSSOEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sso  bool
+		want string
+	}{
+		{name: "sso-on", sso: true, want: "true"},
+		{name: "sso-off", sso: false, want: "false"},
+	} {
+		out, err := LoadComposeFile(StackEdge, RenderInput{
+			Domain:            "example.com",
+			EdgeImage:         "ghcr.io/hazemarian/pmcluster-edge:v9",
+			EdgeLoginDisabled: true,
+			SSOEnabled:        tc.sso,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(out)
+		if !strings.Contains(s, "EDGE_SSO_ENABLED") {
+			t.Errorf("%s: edge-stack missing EDGE_SSO_ENABLED:\n%s", tc.name, s)
+			continue
+		}
+		matched := false
+		for _, form := range []string{
+			"EDGE_SSO_ENABLED: " + tc.want,
+			"EDGE_SSO_ENABLED: '" + tc.want + "'",
+			"EDGE_SSO_ENABLED: \"" + tc.want + "\"",
+		} {
+			if strings.Contains(s, form) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Errorf("%s: EDGE_SSO_ENABLED should render %s:\n%s", tc.name, tc.want, s)
+		}
+	}
+}
+
 // TestLoadComposeFile_EdgeBYOModeNoLetsEncrypt reproduces the prod outage on
 // non-ACME (BYO cert) clusters: the edge-stack template referenced the
 // letsencrypt certificate resolver unconditionally, but BYO-cert clusters

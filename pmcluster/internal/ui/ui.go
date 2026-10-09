@@ -80,6 +80,7 @@ func NewApp(cfg Config) (*App, error) {
 		shell["User"] = middleware.CurrentUser(c)
 		shell["Version"] = cfg.AppVersion
 		shell["LoginDisabled"] = cfg.LoginDisabled
+		shell["SSOEnabled"] = cfg.SSOEnabled
 		shell["Domain"] = cfg.ClusterDomain
 		return shell
 	}
@@ -128,6 +129,11 @@ const WebBase = controllers.WebBase
 
 func (a *App) Mount(engine *gin.Engine) {
 	auth := controllers.Auth{Controller: a.ctrl}
+	// CSRF guard for state-changing console requests: the Origin/Referer host
+	// must match the request host (a cookieless POST — curl/CLI/tests — is
+	// still allowed). Mounted globally so login/setup/logout and the session-
+	// gated groups are all covered.
+	engine.Use(a.ctrl.Auth.CSRF())
 	// The bare origin redirects to the console so pmcluster.<domain> still
 	// lands on the UI (Traefik routes the non-/web root to the edge; the edge
 	// bounces it here).
@@ -355,6 +361,9 @@ func bootstrapUsers(ctx context.Context, st *store.Store, cfg Config) error {
 		return nil
 	}
 	if cfg.EnvUser != "" && cfg.EnvPass != "" {
+		if controllers.PasswordTooLong(cfg.EnvPass) {
+			return fmt.Errorf("PMCLUSTER_UI_PASS exceeds %d bytes (the bcrypt limit)", controllers.MaxPasswordBytes)
+		}
 		hash, err := bcrypt.GenerateFromPassword([]byte(cfg.EnvPass), bcrypt.DefaultCost)
 		if err != nil {
 			return err

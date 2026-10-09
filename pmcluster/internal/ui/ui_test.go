@@ -226,6 +226,11 @@ func doRequest(t *testing.T, app *App, method, path string, body string, jar map
 		rd = strings.NewReader(body)
 	}
 	req := httptest.NewRequest(method, "http://x"+path, rd)
+	// A real browser sends an Origin on state-changing requests; simulate it so
+	// the CSRF guard sees a same-origin POST (matching the request host "x").
+	if method == http.MethodPost || method == http.MethodPut || method == http.MethodDelete {
+		req.Header.Set("Origin", "http://x")
+	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -1151,6 +1156,58 @@ func TestLoginDisabled_PassThrough(t *testing.T) {
 	resp = doRequest(t, app, http.MethodPost, "/web/stacks/demo/rollback", "", jar)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("POST rollback (login disabled) = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestSSOSignOutAffordance verifies that when SSO is the gate (login disabled
+// + EDGE_SSO_ENABLED) the console shell renders a sign-out affordance pointing
+// at oauth2-proxy's /oauth2/sign_out — the console session cookie is not the
+// authenticator in this mode, so the /web/logout form alone would not sign the
+// operator out of the SSO session.
+func TestSSOSignOutAffordance(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+
+	newSSOApp := func(ssoEnabled bool) *App {
+		t.Helper()
+		cfg := FromEnv()
+		cfg.DataDir = t.TempDir()
+		cfg.PMAPIURL = daemon.URL
+		cfg.PMAPIToken = "pmc_test"
+		cfg.SessionSecret = []byte("0123456789abcdefgh")
+		cfg.CookieName = "pmui_session"
+		cfg.LoginDisabled = true
+		cfg.SSOEnabled = ssoEnabled
+		app, err := NewApp(cfg)
+		if err != nil {
+			t.Fatalf("NewApp(login disabled, sso=%v): %v", ssoEnabled, err)
+		}
+		return app
+	}
+
+	// SSO enabled: the shell shows the SSO sign-out link.
+	app := newSSOApp(true)
+	jar := map[string]*http.Cookie{}
+	resp := doRequest(t, app, http.MethodGet, "/web/", "", jar)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /web/ = %d, want 200", resp.StatusCode)
+	}
+	b := readBody(t, resp)
+	if !strings.Contains(b, `href="/oauth2/sign_out"`) {
+		t.Errorf("SSO-enabled shell must render the /oauth2/sign_out sign-out link:\n%s", b)
+	}
+	if strings.Contains(b, `action="/web/logout"`) {
+		t.Errorf("SSO-enabled shell must not render the /web/logout form:\n%s", b)
+	}
+
+	// SSO disabled (admin-auth basic auth): no sign-out affordance — there is
+	// no app-side sign-out for a browser-managed basic-auth gate.
+	app = newSSOApp(false)
+	jar = map[string]*http.Cookie{}
+	resp = doRequest(t, app, http.MethodGet, "/web/", "", jar)
+	b = readBody(t, resp)
+	if strings.Contains(b, `href="/oauth2/sign_out"`) {
+		t.Errorf("non-SSO login-disabled shell must not render the SSO sign-out link:\n%s", b)
 	}
 }
 

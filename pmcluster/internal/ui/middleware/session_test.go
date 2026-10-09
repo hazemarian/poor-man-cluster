@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -232,6 +233,84 @@ func TestSetCookie_SetsSignedCookie(t *testing.T) {
 	}
 }
 
+// TestSetCookie_SecureFlag checks the session cookie's Secure flag follows the
+// request scheme: set over TLS or X-Forwarded-Proto: https, unset over plain
+// HTTP — while HttpOnly + SameSite=Lax stay fixed.
+func TestSetCookie_SecureFlag(t *testing.T) {
+	a := newAuth(t)
+	cases := []struct {
+		name     string
+		tls      bool
+		proto    string
+		secure   bool
+		sameSite http.SameSite
+	}{
+		{"plain http", false, "", false, http.SameSiteLaxMode},
+		{"tls", true, "", true, http.SameSiteLaxMode},
+		{"forwarded https", false, "https", true, http.SameSiteLaxMode},
+		{"forwarded http", false, "http", false, http.SameSiteLaxMode},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			r := gin.New()
+			r.GET("/login", func(c *gin.Context) {
+				a.SetCookie(c, "alice", time.Hour)
+				c.Status(http.StatusOK)
+			})
+			req := httptest.NewRequest(http.MethodGet, "/login", nil)
+			req.TLS = nil
+			if tc.tls {
+				req.TLS = &tls.ConnectionState{}
+			}
+			if tc.proto != "" {
+				req.Header.Set("X-Forwarded-Proto", tc.proto)
+			}
+			rr := httptest.NewRecorder()
+			r.ServeHTTP(rr, req)
+
+			cookies := rr.Result().Cookies()
+			if len(cookies) != 1 {
+				t.Fatalf("cookies = %d, want 1", len(cookies))
+			}
+			ck := cookies[0]
+			if ck.Secure != tc.secure {
+				t.Errorf("Secure = %v, want %v", ck.Secure, tc.secure)
+			}
+			if !ck.HttpOnly {
+				t.Error("HttpOnly must stay true")
+			}
+			if ck.SameSite != tc.sameSite {
+				t.Errorf("SameSite = %v, want %v", ck.SameSite, tc.sameSite)
+			}
+		})
+	}
+}
+
+// TestIsSecureRequest covers the scheme detection helper directly, including
+// a comma-separated X-Forwarded-Proto list where the first hop decides.
+func TestIsSecureRequest(t *testing.T) {
+	plain := httptest.NewRequest(http.MethodGet, "/", nil)
+	if IsSecureRequest(plain) {
+		t.Error("plain HTTP request reported secure")
+	}
+	https := httptest.NewRequest(http.MethodGet, "/", nil)
+	https.Header.Set("X-Forwarded-Proto", "https")
+	if !IsSecureRequest(https) {
+		t.Error("X-Forwarded-Proto: https reported insecure")
+	}
+	list := httptest.NewRequest(http.MethodGet, "/", nil)
+	list.Header.Set("X-Forwarded-Proto", "https, http")
+	if !IsSecureRequest(list) {
+		t.Error("X-Forwarded-Proto: 'https, http' should read as https (first hop)")
+	}
+	tlsReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	tlsReq.TLS = &tls.ConnectionState{}
+	if !IsSecureRequest(tlsReq) {
+		t.Error("TLS request reported insecure")
+	}
+}
+
 // TestClearCookie_ExpiresImmediately checks ClearCookie issues an expired
 // cookie value.
 func TestClearCookie_ExpiresImmediately(t *testing.T) {
@@ -309,6 +388,88 @@ func TestRequire_TamperedCookieRedirects(t *testing.T) {
 
 	if rr.Code != http.StatusFound {
 		t.Fatalf("tampered cookie = %d, want 302", rr.Code)
+	}
+}
+
+// TestCSRF_RejectsForeignOrigin verifies a state-changing console request with
+// a mismatched Origin is refused 403, while a same-origin request passes.
+func TestCSRF_RejectsForeignOrigin(t *testing.T) {
+	a := newAuth(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(a.CSRF())
+	r.POST("/web/stacks/x/sync", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	// Foreign origin → 403.
+	req := httptest.NewRequest(http.MethodPost, "http://pm.example.com/web/stacks/x/sync", nil)
+	req.Header.Set("Origin", "https://evil.example.net")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("foreign origin = %d, want 403", rr.Code)
+	}
+
+	// Same host → passes.
+	req = httptest.NewRequest(http.MethodPost, "http://pm.example.com/web/stacks/x/sync", nil)
+	req.Header.Set("Origin", "http://pm.example.com")
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("same origin = %d, want 200", rr.Code)
+	}
+}
+
+// TestCSRF_MissingOriginAllowedOnlyWithoutSessionCookie verifies a cookieless
+// POST without an Origin (curl/CLI/tests) passes, but the same POST carrying a
+// session cookie is refused.
+func TestCSRF_MissingOriginAllowedOnlyWithoutSessionCookie(t *testing.T) {
+	a := newAuth(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(a.CSRF())
+	r.POST("/web/stacks/x/sync", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	// No Origin, no session cookie → allowed.
+	req := httptest.NewRequest(http.MethodPost, "http://pm.example.com/web/stacks/x/sync", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("cookieless no-origin = %d, want 200", rr.Code)
+	}
+
+	// Session cookie present but no Origin → 403.
+	req = httptest.NewRequest(http.MethodPost, "http://pm.example.com/web/stacks/x/sync", nil)
+	req.AddCookie(&http.Cookie{Name: a.cookie, Value: a.sign(Session{Username: "alice", Exp: time.Now().Add(time.Hour).Unix()})})
+	rr = httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("session cookie no-origin = %d, want 403", rr.Code)
+	}
+}
+
+// TestCSRF_SkipsNonWebAndReadOnly verifies GETs and non-/web/ paths are never
+// gated by the CSRF middleware.
+func TestCSRF_SkipsNonWebAndReadOnly(t *testing.T) {
+	a := newAuth(t)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(a.CSRF())
+	r.GET("/web/stacks", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.POST("/api/whatever", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	for _, tc := range []struct {
+		method, path string
+	}{
+		{http.MethodGet, "/web/stacks"},
+		{http.MethodPost, "/api/whatever"},
+	} {
+		req := httptest.NewRequest(tc.method, "http://pm.example.com"+tc.path, nil)
+		req.Header.Set("Origin", "https://evil.example.net")
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Errorf("%s %s = %d, want 200 (must skip CSRF)", tc.method, tc.path, rr.Code)
+		}
 	}
 }
 

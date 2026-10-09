@@ -117,7 +117,11 @@ type IRService struct {
 	RunOnce bool
 
 	// Replicas is the desired replica count for long-running services.
-	Replicas int
+	// Nil means "backend default" (1 for replicated services); a non-nil
+	// pointer — including an explicit 0 — is rendered verbatim so `replicas: 0`
+	// (a service scaled to zero) survives translation instead of collapsing to
+	// the default.
+	Replicas *int
 
 	// Placement is the node-role constraint ("manager", "worker" or "").
 	Placement string

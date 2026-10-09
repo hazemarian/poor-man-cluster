@@ -4,6 +4,7 @@ import (
 	"context"
 	"html/template"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -36,17 +37,58 @@ import (
 // the right localStorage scope.
 type SSOBridge struct{ *Controller }
 
+// ooSessionCookie is the cookie OpenObserve sets on a successful login (its
+// openobserve-auto-auth middleware mints it after the SSO/forward-auth gate).
+const ooSessionCookie = "auth_tokens"
+
+// ssoBridgeGate reports whether a request to /sso-bridge may proceed. When SSO
+// is disabled the endpoint is ungated at the console (the upstream Traefik
+// admin-auth basic-auth middleware still protects it, and the shipped non-SSO
+// flow must keep working). When SSO is enabled the request must carry the
+// OpenObserve session cookie (auth_tokens) or a Basic Authorization header
+// (the root admin's basic auth — verified upstream by Traefik's gate).
+func ssoBridgeGate(r *http.Request, ssoEnabled bool) bool {
+	if !ssoEnabled {
+		return true
+	}
+	if c, err := r.Cookie(ooSessionCookie); err == nil && c.Value != "" {
+		return true
+	}
+	return hasBasicAuth(r)
+}
+
+// hasBasicAuth reports whether the request carries a Basic Authorization
+// header (any credentials — the console gate only distinguishes "some auth
+// signal" from "anonymous"; Traefik's middleware is the real authenticator).
+func hasBasicAuth(r *http.Request) bool {
+	scheme, _, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+	return strings.EqualFold(scheme, "Basic")
+}
+
 // Page renders the bootstrap HTML document.
 func (b SSOBridge) Page(g *gin.Context) {
+	ctx, cancel := context.WithTimeout(g.Request.Context(), 2*time.Second)
+	defer cancel()
+
 	email := "admin@" + b.Domain
 	// Best effort: the real OpenObserve admin email from cluster settings.
 	// Fall back to the default admin@<domain> derived by the setup wizard.
-	ctx, cancel := context.WithTimeout(g.Request.Context(), 2*time.Second)
-	defer cancel()
+	ssoEnabled := false
 	if s, err := b.API.GetClusterSettings(ctx); err == nil {
 		if v := s["oo_admin_email"]; v != "" {
 			email = v
 		}
+		ssoEnabled = s["sso_enabled"] == "true"
+	}
+
+	// Defense-in-depth: when SSO is enabled, refuse anonymous requests — the
+	// bridge writes a root OpenObserve session, so it must only run for a
+	// caller that already passed the SSO (or root) gate.
+	if !ssoBridgeGate(g.Request, ssoEnabled) {
+		g.Header("Cache-Control", "no-store")
+		g.Status(http.StatusForbidden)
+		_, _ = g.Writer.Write([]byte("forbidden\n"))
+		return
 	}
 
 	g.Header("Content-Type", "text/html; charset=utf-8")

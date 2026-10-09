@@ -21,6 +21,15 @@ services:
   traefik:
     image: traefik:v3.6.5
     mode: global
+    # Traefik's swarm provider (`--providers.swarm=true`) lists Swarm services
+    # through the local Docker socket, which only a MANAGER node can do. A
+    # placement-free global service also lands on workers, where the provider
+    # fails and the replica has no routers at all — so the ingress routing mesh
+    # intermittently hands requests to a routerless Traefik and they 404
+    # (prod SSO outage: /web and /oauth2 404'd on ~half of requests). Pin the
+    # ingress gateway to manager nodes; the routing mesh still fronts it from
+    # every node.
+    placement: manager
     command:
       - "--api.dashboard=true"
       - "--providers.swarm=true"

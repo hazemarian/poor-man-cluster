@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -101,9 +102,25 @@ func (a *Auth) SetCookie(c *gin.Context, username string, ttl time.Duration) {
 		Value:    a.sign(s),
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   IsSecureRequest(c.Request),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(ttl.Seconds()),
 	})
+}
+
+// IsSecureRequest reports whether the request arrived over HTTPS — either
+// directly (a TLS connection) or through a proxy that set
+// `X-Forwarded-Proto: https`. The session cookie's Secure flag is set from
+// this so it is only ever sent over an encrypted channel.
+func IsSecureRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if i := strings.IndexByte(proto, ','); i >= 0 {
+		proto = proto[:i]
+	}
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
 }
 
 // ClearCookie expires the session cookie.
@@ -111,6 +128,59 @@ func (a *Auth) ClearCookie(c *gin.Context) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name: a.cookie, Value: "", Path: "/", HttpOnly: true, MaxAge: -1,
 	})
+}
+
+// CSRF returns gin middleware guarding state-changing console requests
+// (POST/PUT/DELETE under /web/) against cross-site request forgery: the
+// Origin (or Referer) host must match the request host. A missing Origin is
+// allowed only when there is no session cookie — CLI/curl and the automated
+// tests post without one — while a browser request that carries a session
+// cookie but no Origin is refused. Mount it globally on the console engine.
+func (a *Auth) CSRF() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !isStateChangingMethod(c.Request.Method) {
+			c.Next()
+			return
+		}
+		if !strings.HasPrefix(c.Request.URL.Path, WebBase+"/") {
+			c.Next()
+			return
+		}
+
+		origin := c.GetHeader("Origin")
+		if origin == "" {
+			origin = c.GetHeader("Referer")
+		}
+		if origin != "" {
+			u, err := url.Parse(origin)
+			if err != nil || !strings.EqualFold(u.Host, c.Request.Host) {
+				http.Error(c.Writer, "forbidden: cross-origin request", http.StatusForbidden)
+				c.Abort()
+				return
+			}
+			c.Next()
+			return
+		}
+
+		// No Origin and no Referer: only a cookieless request is allowed
+		// (curl/CLI/tests). A session cookie without an Origin is exactly the
+		// forged cross-site POST CSRF guards against.
+		if _, err := c.Cookie(a.cookie); err == nil {
+			http.Error(c.Writer, "forbidden: missing origin", http.StatusForbidden)
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+// isStateChangingMethod reports whether the HTTP method mutates state.
+func isStateChangingMethod(method string) bool {
+	switch method {
+	case http.MethodPost, http.MethodPut, http.MethodDelete:
+		return true
+	}
+	return false
 }
 
 // Require is gin middleware that allows only valid sessions. Unauthenticated

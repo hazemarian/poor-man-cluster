@@ -282,7 +282,12 @@ func RandomPassword() (string, error) {
 
 // HtpasswdLine produces "user:bcrypt-hash\n" for Traefik's basicAuth
 // middleware. Cost 10 ≈ 100 ms/hash — defensive without slowing startup.
+// bcrypt only uses the first 72 bytes of a password, so longer passwords are
+// refused outright rather than silently truncated into a different hash.
 func HtpasswdLine(user, password string) (string, error) {
+	if len(password) > 72 {
+		return "", fmt.Errorf("bcrypt password exceeds 72 bytes")
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), 10)
 	if err != nil {
 		return "", fmt.Errorf("bcrypt: %w", err)

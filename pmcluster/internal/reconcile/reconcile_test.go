@@ -198,6 +198,10 @@ func (f *fakeEventsDocker) Events(_ context.Context, _ time.Time) (<-chan runtim
 	return f.evCh, f.errCh
 }
 
+// NodeList keeps the embedded runtime.Client from panicking when a safety-net
+// tick runs a pass: no swarm nodes means no storage-pause logic.
+func (f *fakeEventsDocker) NodeList(context.Context) ([]runtime.Node, error) { return nil, nil }
+
 // TestLoop_EventTriggersPass asserts the loop subscribes to docker events and
 // stops on cancel.
 func TestLoop_EventTriggersPass(t *testing.T) {
@@ -225,6 +229,104 @@ func TestLoop_EventTriggersPass(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Error("Loop did not stop on cancel")
 	default:
+	}
+}
+
+// TestLoop_ClosedEventChannelDoesNotSpin guards against the busy-spin a closed
+// event channel would otherwise cause: a closed channel yields zero-value
+// events forever, so the loop must disable the event case (evCh = nil) and fall
+// back to the safety-net ticker. The falsifying signal is the per-event debug
+// log: without the `, ok` guard it is emitted in a tight loop.
+func TestLoop_ClosedEventChannelDoesNotSpin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	st := newTestStore(t)
+	evCh := make(chan runtime.Event)
+	docker := &fakeEventsDocker{evCh: evCh, errCh: make(chan error)}
+	close(evCh) // the daemon's event stream ended
+
+	var buf bytes.Buffer
+	r := &Reconciler{
+		Store: st, Docker: docker,
+		DeployService: &stacks.Service{Store: st, Deployer: &recordingDeployer{}, MkdirAll: func(string, os.FileMode) error { return nil }},
+		Services:      &fakeServices{},
+		Interval:      5 * time.Millisecond,
+		Log:           zerolog.New(&buf),
+	}
+
+	done := make(chan struct{})
+	go func() { r.Loop(ctx); close(done) }()
+
+	time.Sleep(60 * time.Millisecond)
+	cancel()
+	<-done
+
+	if got := strings.Count(buf.String(), "swarm event received"); got != 0 {
+		t.Errorf("closed event channel logged 'swarm event received' %d times, want 0 (closed channel must be disabled, not spin)", got)
+	}
+}
+
+// TestRunOnce_PropagatesPlatformError verifies a failing platform pass is
+// returned by RunOnce (not swallowed) while the remaining passes still run.
+func TestRunOnce_PropagatesPlatformError(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	svc := &stacks.Service{Store: st, Deployer: &recordingDeployer{}, MkdirAll: func(string, os.FileMode) error { return nil }}
+	sentinel := errors.New("platform update boom")
+	r := &Reconciler{
+		Store:         st,
+		DeployService: svc,
+		Services:      &fakeServices{},
+		Log:           zerolog.Nop(),
+		Update: func(context.Context, cluster.UpdateDeps, cluster.UpdateInput) (*cluster.UpdateResult, error) {
+			return nil, sentinel
+		},
+	}
+
+	if err := r.RunOnce(ctx); !errors.Is(err, sentinel) {
+		t.Fatalf("RunOnce error = %v, want the platform sentinel", err)
+	}
+}
+
+// TestLogStoragePaused_ThrottlesPerStack verifies the "storage node down"
+// warning is logged on state change plus a once-per-hour heartbeat, not every
+// pass.
+func TestLogStoragePaused_ThrottlesPerStack(t *testing.T) {
+	var buf bytes.Buffer
+	log := zerolog.New(&buf)
+	r := &Reconciler{}
+
+	// State change → warning; consecutive unchanged observations must produce
+	// exactly ONE heartbeat (the first), not one per pass.
+	r.logStoragePaused("demo", "node-a", log)
+	r.logStoragePaused("demo", "node-a", log)
+	r.logStoragePaused("demo", "node-a", log)
+	r.logStoragePaused("demo", "node-a", log)
+
+	if got := strings.Count(buf.String(), "storage node down; pausing app sync"); got != 1 {
+		t.Errorf("state-change warning logged %d times, want 1:\n%s", got, buf.String())
+	}
+	if got := strings.Count(buf.String(), "storage node still down; app sync still paused"); got != 1 {
+		t.Errorf("heartbeat logged %d times, want exactly 1:\n%s", got, buf.String())
+	}
+
+	// A different down node is a new state change → a fresh warning.
+	r.logStoragePaused("demo", "node-b", log)
+	if got := strings.Count(buf.String(), "storage node down; pausing app sync"); got != 2 {
+		t.Errorf("node-change warnings = %d, want 2:\n%s", got, buf.String())
+	}
+
+	// Backdate the heartbeat past the interval → a new heartbeat, but no extra
+	// state-change warning.
+	r.pauseWarnMu.Lock()
+	r.lastPauseWarn["demo"] = time.Now().Add(-2 * time.Hour)
+	r.pauseWarnMu.Unlock()
+	r.logStoragePaused("demo", "node-b", log)
+	if got := strings.Count(buf.String(), "storage node still down; app sync still paused"); got != 2 {
+		t.Errorf("heartbeat after interval = %d, want 2:\n%s", got, buf.String())
+	}
+	if got := strings.Count(buf.String(), "storage node down; pausing app sync"); got != 2 {
+		t.Errorf("heartbeat must not add a state-change warning, count = %d:\n%s", got, buf.String())
 	}
 }
 

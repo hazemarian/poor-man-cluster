@@ -179,10 +179,17 @@ func (c Users) Create(g *gin.Context) {
 		d.ErrKey = "users.err_username"
 	case len(pass) < minPasswordLen:
 		d.ErrKey = "users.err_password_short"
+	case PasswordTooLong(pass):
+		d.ErrKey = "users.err_password_too_long"
 	case !validRole(role):
 		d.ErrKey = "users.err_role"
 	default:
-		if _, err := c.Store.CreateUser(ctx, uname, hashPassword(pass), true, role); err != nil {
+		hash, herr := hashPassword(pass)
+		if herr != nil {
+			d.ErrKey, d.ErrRaw = "users.err_save", herr.Error()
+			break
+		}
+		if _, err := c.Store.CreateUser(ctx, uname, hash, true, role); err != nil {
 			d.ErrKey, d.ErrRaw = "users.err_save", err.Error()
 			break
 		}
@@ -234,10 +241,17 @@ func (c Users) EditSave(g *gin.Context) {
 		d.RoleLocked = true
 	case len(pass) > 0 && len(pass) < minPasswordLen:
 		d.ErrKey = "users.err_password_short"
+	case len(pass) > 0 && PasswordTooLong(pass):
+		d.ErrKey = "users.err_password_too_long"
 	default:
 		var hash string
 		if pass != "" {
-			hash = hashPassword(pass)
+			var herr error
+			hash, herr = hashPassword(pass)
+			if herr != nil {
+				d.ErrKey, d.ErrRaw = "users.err_save", herr.Error()
+				break
+			}
 		}
 		if err := c.Store.UpdateUser(ctx, id, role, hash); err != nil {
 			d.ErrKey, d.ErrRaw = "users.err_save", err.Error()

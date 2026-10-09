@@ -158,6 +158,13 @@ type Reconciler struct {
 	syncErrMu    sync.Mutex
 	lastSyncErrs map[string]string    // stack -> last logged/recorded error string
 	lastSyncWarn map[string]time.Time // stack -> last "still failing" heartbeat WRN
+
+	// Per-stack "storage node down" warning state, throttled the same way as
+	// the sync error: log on state change (first time or node changed) plus a
+	// once-per-hour heartbeat while the stack stays paused.
+	pauseWarnMu   sync.Mutex
+	lastPauseNode map[string]string    // stack -> last logged down node
+	lastPauseWarn map[string]time.Time // stack -> last heartbeat WRN
 }
 
 // failoverCooldown is the minimum interval between automatic storage
@@ -197,6 +204,7 @@ func (r *Reconciler) RunOnce(ctx context.Context) error {
 // the remaining passes — a failing platform pass still gets health snapshots.
 func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) error {
 	log.Info().Msg("reconcile — pass started")
+	var firstErr error
 
 	// (a) platform reconcile
 	if r.Update != nil {
@@ -208,6 +216,9 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 			log.Error().Err(err).Msg("reconcile — platform pass failed")
 			platformSpan.RecordError(err)
 			platformSpan.SetStatus(codes.Error, err.Error())
+			if firstErr == nil {
+				firstErr = err
+			}
 		case len(res.StacksDeployed) > 0:
 			platformSpan.SetAttributes(attribute.StringSlice("stacks_redeployed", res.StacksDeployed))
 			log.Info().Strs("stacks", res.StacksDeployed).Msg("reconcile — platform pass redeployed drifted stacks")
@@ -225,14 +236,17 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 	// a healthy node (the pin changes, so the check passes again).
 	stacks, err := r.Store.ListStacks(ctx)
 	if err != nil {
-		return fmt.Errorf("list stacks for reconcile: %w", err)
+		if firstErr == nil {
+			firstErr = fmt.Errorf("list stacks for reconcile: %w", err)
+		}
+		return firstErr
 	}
 	log.Debug().Int("stacks", len(stacks)).Msg("reconcile — app-stack drift pass: re-translating latest manifests")
 	health := r.nodeHealth(ctx, log)
 	r.recordStorageNodeHealth(ctx, health)
 	for _, st := range stacks {
 		if paused, node := r.storagePaused(ctx, st.Name, health); paused {
-			log.Warn().Str("stack", st.Name).Str("node", node).Msg("reconcile — storage node down; pausing app sync (clears when the node returns or the stack is moved)")
+			r.logStoragePaused(st.Name, node, log)
 			r.tryStorageFailover(ctx, st.Name, node, health, log)
 			continue
 		}
@@ -248,7 +262,10 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 	}
 
 	// (c) health snapshot
-	return r.snapshotHealth(ctx, log)
+	if err := r.snapshotHealth(ctx, log); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
 }
 
 // syncErrorHeartbeat is the minimum interval between the per-stack "still
@@ -256,6 +273,10 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 // between state changes, but a heartbeat every hour keeps it visible without
 // per-pass spam.
 const syncErrorHeartbeat = time.Hour
+
+// storagePauseHeartbeat is the minimum interval between the per-stack "still
+// down" WRN heartbeat for a paused stack (same cadence as the sync error).
+const storagePauseHeartbeat = time.Hour
 
 // handleSyncError logs and persists an app-sync failure exactly once per
 // distinct error string per stack (BUG-034): a permanently broken stack (e.g.
@@ -310,6 +331,44 @@ func (r *Reconciler) handleSyncError(ctx context.Context, stackName string, revi
 		return
 	}
 	r.syncErrMu.Unlock()
+}
+
+// logStoragePaused logs the "storage node down; pausing app sync" warning the
+// same way handleSyncError throttles sync failures: once per distinct down
+// node (state change) and then a WRN heartbeat once per hour while the stack
+// stays paused. A permanently-down storage node is otherwise silent between
+// state changes instead of spamming the daemon log every pass.
+func (r *Reconciler) logStoragePaused(stackName, node string, log zerolog.Logger) {
+	r.pauseWarnMu.Lock()
+	if r.lastPauseNode == nil {
+		r.lastPauseNode = map[string]string{}
+	}
+	prev, seen := r.lastPauseNode[stackName]
+	changed := !seen || prev != node
+	if changed {
+		r.lastPauseNode[stackName] = node
+	}
+	r.pauseWarnMu.Unlock()
+
+	if changed {
+		log.Warn().Str("stack", stackName).Str("node", node).
+			Msg("reconcile — storage node down; pausing app sync (clears when the node returns or the stack is moved)")
+		return
+	}
+
+	r.pauseWarnMu.Lock()
+	if r.lastPauseWarn == nil {
+		r.lastPauseWarn = map[string]time.Time{}
+	}
+	last, ok := r.lastPauseWarn[stackName]
+	if !ok || time.Since(last) >= storagePauseHeartbeat {
+		r.lastPauseWarn[stackName] = time.Now()
+		r.pauseWarnMu.Unlock()
+		log.Warn().Str("stack", stackName).Str("node", node).
+			Msg("reconcile — storage node still down; app sync still paused (unchanged)")
+		return
+	}
+	r.pauseWarnMu.Unlock()
 }
 
 // nodeHealth maps each swarm node hostname to whether it is ready to host
@@ -528,7 +587,15 @@ func (r *Reconciler) Loop(ctx context.Context) {
 		case <-ctx.Done():
 			log.Info().Msg("reconcile loop stopped")
 			return
-		case ev := <-evCh:
+		case ev, ok := <-evCh:
+			if !ok {
+				// The event stream closed (the Docker client shut down, or the
+				// events watch ended): a closed channel would otherwise yield
+				// zero-value events forever and busy-spin this select. Disable
+				// the case and fall back to the safety-net ticker.
+				evCh = nil
+				continue
+			}
 			log.Debug().Str("type", ev.Type).Str("action", ev.Action).Str("stack", ev.Stack).
 				Str("service", ev.Service).Msg("reconcile loop — swarm event received")
 			if timer == nil {

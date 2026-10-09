@@ -1,6 +1,7 @@
 package edgeproxy
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -44,6 +45,9 @@ func New(cfg Config) http.Handler {
 	r.Use(AutoBan(cfg, sb))
 	r.Use(RateLimiter(cfg))
 	r.Use(RequestTimeout(cfg.RequestTimeout))
+	// Enforce the max request-body size before the reverse proxy, so an
+	// oversized upload is rejected at the edge instead of streamed through.
+	r.Use(LimitBody(cfg.MaxBodyBytes))
 
 	upstream, err := url.Parse(cfg.Upstream)
 	if err != nil {
@@ -87,8 +91,16 @@ func reverseProxy(target *url.URL) *httputil.ReverseProxy {
 	// default ReverseProxy writes a bare, internal-leaking 502 body
 	// ("dial tcp 172.17.0.1:9090: connect: connection refused"). Return a
 	// stable, dependency-free JSON body so the console/API client gets a clean
-	// signal instead of a Go transport error.
+	// signal instead of a Go transport error. An oversized request body
+	// (LimitBody) surfaces the same way, so it gets a distinct 413.
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		var maxBytes *http.MaxBytesError
+		if errors.As(err, &maxBytes) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			_, _ = w.Write([]byte(`{"error":"request body too large"}`))
+			return
+		}
 		log.Printf("edgeproxy: upstream %s unreachable: %v", target, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)

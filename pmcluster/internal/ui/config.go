@@ -40,6 +40,12 @@ type Config struct {
 	// as a synthetic admin. Local/standalone deployments leave it unset so
 	// login + setup + user CRUD work normally.
 	LoginDisabled bool
+	// SSOEnabled (EDGE_SSO_ENABLED) reports that the edge is gated by SSO
+	// (oauth2-proxy) rather than Traefik's basic-auth admin-auth. When set with
+	// LoginDisabled, the console's own session cookie is not the authenticator,
+	// so the shell renders a sign-out affordance that clears the oauth2-proxy
+	// session (/oauth2/sign_out) instead of the /web/logout form.
+	SSOEnabled bool
 }
 
 const (
@@ -71,6 +77,7 @@ func FromEnv() Config {
 		AppVersion:      envOr("APP_VERSION", "dev"),
 		ClusterDomain:   envOr("PMCLUSTER_DOMAIN", ""),
 		LoginDisabled:   envBool("EDGE_LOGIN_DISABLED"),
+		SSOEnabled:      envBool("EDGE_SSO_ENABLED"),
 	}
 }
 

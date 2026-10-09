@@ -37,11 +37,17 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 }
 
 // GetSettingDefault reads a setting, returning fallback (not an error) when
-// the key is absent. Convenient for optional values.
+// the key is absent. A genuine read failure (e.g. a closed/backing store) is
+// logged at warn — with the key — and still returns the fallback, so optional
+// settings never break the caller; only sql.ErrNoRows (translated to
+// ErrSettingNotFound by GetSetting) is silently defaulted.
 func (s *Store) GetSettingDefault(ctx context.Context, key, fallback string) string {
 	v, err := s.GetSetting(ctx, key)
-	if err != nil {
-		return fallback
+	if err == nil {
+		return v
 	}
-	return v
+	if !errors.Is(err, ErrSettingNotFound) {
+		s.Log.Warn().Err(err).Str("key", key).Msg("store — get setting failed; using default")
+	}
+	return fallback
 }

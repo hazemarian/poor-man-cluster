@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +15,15 @@ import (
 
 // Auth handles sign-in, the first-run password setup, and sign-out.
 type Auth struct{ *Controller }
+
+// MaxPasswordBytes is the bcrypt input limit: bcrypt only uses the first 72
+// bytes of a password, so a longer password would not hash the way the
+// operator typed it (the tail would be silently dropped). User creation and
+// password change refuse anything over this limit with a clear error.
+const MaxPasswordBytes = 72
+
+// PasswordTooLong reports whether p exceeds the bcrypt 72-byte limit.
+func PasswordTooLong(p string) bool { return len(p) > MaxPasswordBytes }
 
 // needSetup reports whether a first admin still needs to be created (first run:
 // zero users, or the bootstrap admin has no password yet).
@@ -107,7 +117,11 @@ func (c Auth) Setup(g *gin.Context) {
 		c.Views.Page(g, "setup", authPage{Version: c.Version, Failure: key, Username: uname})
 		return
 	}
-	if _, err := c.Store.CreateUser(g.Request.Context(), uname, hashPassword(pass), true, store.RoleAdmin); err != nil {
+	hash, err := hashPassword(pass)
+	if err == nil {
+		_, err = c.Store.CreateUser(g.Request.Context(), uname, hash, true, store.RoleAdmin)
+	}
+	if err != nil {
 		c.Views.Page(g, "setup", authPage{
 			Version:  c.Version,
 			Failure:  "auth.err.create_failed",
@@ -130,6 +144,8 @@ func validateNewAdmin(username, password, confirm string) (key string, bad bool)
 		return "auth.err.username_required", true
 	case len(password) < minPassword:
 		return "auth.err.password_short", true
+	case PasswordTooLong(password):
+		return "auth.err.password_too_long", true
 	case password != confirm:
 		return "auth.err.password_mismatch", true
 	}
@@ -147,12 +163,15 @@ func (c Auth) Logout(g *gin.Context) {
 	redirect(g, WebBase+"/login")
 }
 
-func hashPassword(p string) string {
+func hashPassword(p string) (string, error) {
+	if PasswordTooLong(p) {
+		return "", fmt.Errorf("password exceeds %d bytes (the bcrypt limit)", MaxPasswordBytes)
+	}
 	b, err := bcrypt.GenerateFromPassword([]byte(p), bcrypt.DefaultCost)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("hash password: %w", err)
 	}
-	return string(b)
+	return string(b), nil
 }
 
 func checkPassword(u *store.User, p string) bool {

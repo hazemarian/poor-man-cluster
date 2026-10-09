@@ -22,7 +22,7 @@
   <link rel="stylesheet" href="/web/static/base.css">
   <link rel="stylesheet" href="/web/static/components.css">
   <link rel="stylesheet" href="/web/static/patterns.css">
-  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="/web/static/htmx.min.js"></script>
   <script src="/web/static/preferences.js" defer></script>
 </head>
 <body
@@ -82,6 +82,15 @@
         <form method="post" action="/web/logout">
           <button class="btn btn-ghost btn-sm" type="submit" aria-label="{{T "nav.logout"}}" title="{{T "nav.logout"}}">{{icon "logout"}}<span>{{T "nav.logout"}}</span></button>
         </form>
+      </div>
+      {{else if .SSOEnabled}}
+      {{/* SSO mode: the console session cookie is not the authenticator —
+         oauth2-proxy's forwardAuth gate is. Signing out clears the
+         oauth2-proxy session via its own /oauth2/sign_out endpoint (served on
+         this host through the sso-* routers), which redirects back to the
+         gate's sign-in page. */}}
+      <div class="foot-row">
+        <a class="btn btn-ghost btn-sm" href="/oauth2/sign_out" aria-label="{{T "nav.logout"}}" title="{{T "nav.logout"}}">{{icon "logout"}}<span>{{T "nav.logout"}}</span></a>
       </div>
       {{end}}
     </div>

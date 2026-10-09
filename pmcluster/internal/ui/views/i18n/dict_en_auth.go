@@ -18,6 +18,7 @@ func init() {
 		// sign-in / setup failures
 		"auth.err.username_required": "Enter a username.",
 		"auth.err.password_short":    "The password needs 8 characters or more.",
+		"auth.err.password_too_long": "The password must be 72 characters or fewer.",
 		"auth.err.password_mismatch": "The two passwords do not match.",
 		"auth.err.create_failed":     "Could not create the admin account: {0}",
 

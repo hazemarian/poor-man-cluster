@@ -22,6 +22,7 @@ func init() {
 		// أخطاء الدخول والتهيئة
 		"auth.err.username_required": "أدخل اسم المستخدم.",
 		"auth.err.password_short":    "يجب أن تتكوّن كلمة المرور من 8 أحرف على الأقل.",
+		"auth.err.password_too_long": "يجب ألا تزيد كلمة المرور عن 72 حرفًا.",
 		"auth.err.password_mismatch": "كلمتا المرور غير متطابقتين.",
 		"auth.err.create_failed":     "تعذّر إنشاء حساب مدير النظام: {0}",
 

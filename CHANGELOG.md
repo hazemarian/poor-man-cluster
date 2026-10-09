@@ -2,6 +2,36 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.178 (2026-10-09)
+
+The console SSO sign-out, Traefik pinned to manager nodes (fixing an intermittent 404 through the
+ingress routing mesh), and a batch of thirteen code-hardening fixes from a source review.
+
+- **Console SSO sign-out.** The edge now receives `EDGE_SSO_ENABLED` from the infra stack and the
+  console shell exposes it as `SSOEnabled`; when `edge_login_disabled` is true but SSO is enabled the
+  shell renders an `/oauth2/sign_out` link (which clears the oauth2-proxy session and bounces back to
+  the gate's sign-in page) instead of the `/web/logout` form, since the console session cookie is no
+  longer the authenticator under SSO.
+- **Traefik pinned to managers (prod 404 fix).** A global Traefik replica landing on a worker node
+  cannot use the swarm provider (it lists Swarm services through the local Docker socket, which only
+  a manager can do), so that replica had no routers at all — the ingress routing mesh intermittently
+  handed requests to it and `https://pmcluster.nextrum-sy.com` returned `404 page not found` on
+  ~half of requests. The infra-stack Traefik is now pinned with `placement: manager`; the routing
+  mesh still fronts the gateway from every node and forwards to the manager's Traefik.
+- **Thirteen hardening fixes.** (1) the reconcile event loop no longer busy-spins on a closed event
+  channel (it disables the case and falls back to the safety-net ticker); (2) `runPass`/`RunOnce`
+  now propagate the platform-pass error instead of swallowing it; (3) `GetSettingDefault` logs a
+  genuine read failure (with the key) at warn while still returning the fallback; (4) `replicas: 0`
+  is rendered verbatim via a `*int` (scale to zero) instead of collapsing to the default of 1; (5)
+  http healthchecks fall back to the first published port and are omitted (with a warning) rather
+  than shipping a port-0 probe; (6) bcrypt passwords over 72 bytes are rejected outright instead of
+  being silently truncated; (7) the session cookie is flagged `Secure` when the request arrived over
+  HTTPS; (8) a CSRF Origin/Referer guard protects state-changing console routes; (9) `/sso-bridge`
+  is gated against anonymous callers when SSO is enabled; (10) htmx is vendored locally instead of
+  loaded from a CDN; (11) the "storage node down" warning is throttled (once per state change plus
+  an hourly heartbeat); (12) the backup trigger retries once after a bounded delay to absorb a
+  mid-restart offen agent; (13) `LimitBody` rejects oversized uploads at the edge with a 413.
+
 ## v0.2.177 (2026-10-09)
 
 Platform services are now separated from customer app services across the API, the console and the

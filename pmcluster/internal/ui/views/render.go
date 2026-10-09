@@ -90,9 +90,9 @@ func ShellBase(c *gin.Context) gin.H {
 // StaticBase is the URL prefix the console's own assets are served from.
 const StaticBase = "/web/static"
 
-// StaticHandler serves the console's own CSS and fonts. htmx itself is loaded
-// from its CDN (https://unpkg.com/htmx.org@1.9.12) in app.html; only the CSS
-// and font stack are self-hosted so the design renders on any host.
+// StaticHandler serves the console's own CSS, fonts and JS. htmx is vendored
+// locally (htmx.min.js) alongside the CSS/font stack so the design and the
+// SPA wiring render on any host without a CDN dependency.
 func StaticHandler() gin.HandlerFunc {
 	sub, err := fs.Sub(StaticFS, "static")
 	if err != nil {

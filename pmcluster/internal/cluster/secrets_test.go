@@ -164,6 +164,17 @@ func TestHtpasswdLine_Format(t *testing.T) {
 	}
 }
 
+// TestHtpasswdLine_RejectsOver72Bytes verifies the daemon-side bcrypt path
+// (traefik basic-auth) refuses a >72-byte password rather than truncating it.
+func TestHtpasswdLine_RejectsOver72Bytes(t *testing.T) {
+	if _, err := HtpasswdLine("admin", strings.Repeat("a", 73)); err == nil {
+		t.Fatal("HtpasswdLine(73 bytes) succeeded, want error")
+	}
+	if _, err := HtpasswdLine("admin", strings.Repeat("a", 72)); err != nil {
+		t.Fatalf("HtpasswdLine(72 bytes) = %v, want success", err)
+	}
+}
+
 func TestEnsureConfig_CreatesWhenMissing(t *testing.T) {
 	f := newFakeDocker()
 	data := []byte("otel: config")

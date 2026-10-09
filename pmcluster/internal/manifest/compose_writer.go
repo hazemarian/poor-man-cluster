@@ -7,6 +7,8 @@ import (
 	"path"
 	"strings"
 
+	"github.com/rs/zerolog"
+
 	"sigs.k8s.io/yaml"
 )
 
@@ -55,6 +57,10 @@ type ComposeWriter struct {
 	// fresh render and detect drift the stored rendered hash cannot see
 	// (BUG-017). Nil (app stacks) leaves the render unchanged.
 	ExtraLabels map[string]string
+
+	// Log is the sink for writer warnings (e.g. an http healthcheck omitted
+	// because no probe port is derivable). The zero value is a no-op.
+	Log zerolog.Logger
 }
 
 // DefaultVolumeRoot is where every container volume lands unless the
@@ -98,7 +104,7 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 
 	for i := range ir.Services {
 		s := &ir.Services[i]
-		cs, err := composeServiceFromIR(s, app, privateNet, root, w.CertResolver, w.PinNode, usePrivateNet, &usesTraefikNet, &usesMonitoringNet)
+		cs, err := composeServiceFromIR(s, app, privateNet, root, w.CertResolver, w.PinNode, usePrivateNet, &usesTraefikNet, &usesMonitoringNet, w.Log)
 		if err != nil {
 			return nil, err
 		}
@@ -221,6 +227,7 @@ func composeServiceFromIR(
 	privateNet, volumeRoot, certResolver, pinNode string,
 	usePrivateNet bool,
 	usesTraefikNet, usesMonitoringNet *bool,
+	log zerolog.Logger,
 ) (*composeService, error) {
 	volumes := relocateVolumes(volumeRoot, app.name, s.Volumes)
 	// Raw binds are emitted verbatim (never relocated) — platform services
@@ -300,7 +307,7 @@ func composeServiceFromIR(
 		*usesMonitoringNet = true
 	}
 
-	cs.Healthcheck = composeHealthcheckFromIR(s)
+	cs.Healthcheck = composeHealthcheckFromIR(s, log)
 	if s.Logging != nil {
 		lg := &composeLogging{Driver: s.Logging.Driver}
 		if len(s.Logging.Options) > 0 {
@@ -352,7 +359,7 @@ type irApp struct {
 	version string
 }
 
-func composeHealthcheckFromIR(s *IRService) *composeHealthcheck {
+func composeHealthcheckFromIR(s *IRService, log zerolog.Logger) *composeHealthcheck {
 	if s.Healthcheck == nil {
 		return nil
 	}
@@ -371,9 +378,26 @@ func composeHealthcheckFromIR(s *IRService) *composeHealthcheck {
 			Retries:  5,
 		}
 	case "http":
+		// Prefer the exposed port; fall back to the first published container
+		// port so an http healthcheck on a service that publishes (but does not
+		// "expose") still probes the right port instead of port 0.
 		port := 0
 		if s.Expose != nil {
 			port = s.Expose.Port
+		}
+		if port == 0 {
+			for _, p := range s.Ports {
+				if p.Target > 0 {
+					port = p.Target
+					break
+				}
+			}
+		}
+		if port == 0 {
+			// No derivable port: never emit a port-0 probe. Omit the healthcheck
+			// entirely rather than shipping a broken one.
+			log.Warn().Str("service", s.Name).Msg("compose — http healthcheck omitted: no probe port derivable (no expose port and no published port)")
+			return nil
 		}
 		path := h.Path
 		if path == "" {
@@ -441,9 +465,11 @@ func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, 
 			d.RestartPolicy = &composeRestartPolicy{Condition: "any", Delay: s.RestartDelay}
 		}
 	default:
-		replicas := s.Replicas
-		if replicas == 0 {
-			replicas = 1
+		replicas := 1
+		if s.Replicas != nil {
+			// An explicit 0 is rendered verbatim (scale to zero); only a nil
+			// Replicas collapses to the backend default of 1.
+			replicas = *s.Replicas
 		}
 		d.Replicas = &replicas
 		if s.Restart != "" {

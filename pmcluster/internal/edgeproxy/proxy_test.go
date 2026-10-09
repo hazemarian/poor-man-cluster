@@ -122,6 +122,33 @@ func TestNew_UpstreamUnavailableReturnsCleanJSON502(t *testing.T) {
 	}
 }
 
+// TestNew_RejectsOversizedBody verifies the LimitBody middleware is wired into
+// the proxy chain: an oversized request body is rejected with 413 instead of
+// streamed through to the upstream.
+func TestNew_RejectsOversizedBody(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer up.Close()
+
+	cfg := FromEnv()
+	cfg.Upstream = up.URL
+	cfg.MaxBodyBytes = 16
+	h := New(cfg)
+
+	req := httptest.NewRequest(http.MethodPost, "http://pmcluster.example/api/stacks", strings.NewReader(strings.Repeat("a", 100)))
+	rw := httptest.NewRecorder()
+	h.ServeHTTP(rw, req)
+
+	if rw.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body status = %d, want 413; body=%s", rw.Code, rw.Body.String())
+	}
+	if body := strings.TrimSpace(rw.Body.String()); body != `{"error":"request body too large"}` {
+		t.Errorf("body = %q, want the 413 JSON body", body)
+	}
+}
+
 func TestNew_WebhookRateLimitsPerIP(t *testing.T) {
 	up := fakeDaemon(t, &observed{})
 	defer up.Close()

@@ -316,11 +316,9 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 	is.Healthcheck = translateHealthcheck(s)
 
 	if !s.RunOnce {
-		replicas := 1
-		if s.Replicas != nil {
-			replicas = *s.Replicas
-		}
-		is.Replicas = replicas
+		// Preserve nil-vs-zero: nil = backend default (1), but an explicit
+		// `replicas: 0` must render `replicas: 0` (scale to zero), not 1.
+		is.Replicas = s.Replicas
 
 		if s.Update != nil {
 			u := &IRUpdate{

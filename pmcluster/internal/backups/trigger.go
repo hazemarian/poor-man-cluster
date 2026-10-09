@@ -118,20 +118,59 @@ func Trigger(ctx context.Context) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	return triggerExec(ctx, containerID)
+}
 
-	var stdout, stderr bytes.Buffer
+// runBackupExec executes `docker exec <container> backup`, returning stdout and
+// stderr. A package var so tests can substitute a fake that fails once then
+// succeeds.
+var runBackupExec = func(ctx context.Context, containerID string) (stdout, stderr string, err error) {
+	var outBuf, errBuf bytes.Buffer
 	cmd := exec.CommandContext(ctx, "docker", "exec", containerID, "backup")
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return &Result{Stdout: stdout.String(), Stderr: stderr.String()},
-			fmt.Errorf("docker exec %s backup: %w (%s)", containerID, err, strings.TrimSpace(stderr.String()))
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	return outBuf.String(), errBuf.String(), cmd.Run()
+}
+
+// backupRetryDelay is how long Trigger waits before its single retry. A var so
+// tests can shorten it.
+var backupRetryDelay = 10 * time.Second
+
+// triggerExec runs the offen backup exec, retrying ONCE after a short bounded
+// delay when the first attempt fails. The offen store/agent is often
+// mid-restart when a deploy-triggered backup fires, so a single retry absorbs
+// that transient without masking a genuine failure (the final error stays
+// clear).
+func triggerExec(ctx context.Context, containerID string) (*Result, error) {
+	stdout, stderr, err := runBackupExec(ctx, containerID)
+	if err == nil {
+		return backupResult(stdout, stderr), nil
 	}
+
+	select {
+	case <-ctx.Done():
+		// The context ended while we would have waited — surface the original
+		// failure rather than blocking past the caller's deadline.
+	case <-time.After(backupRetryDelay):
+		rstdout, rstderr, rerr := runBackupExec(ctx, containerID)
+		if rerr == nil {
+			return backupResult(rstdout, rstderr), nil
+		}
+		return &Result{Stdout: rstdout, Stderr: rstderr}, backupExecError(containerID, rerr, rstderr)
+	}
+	return &Result{Stdout: stdout, Stderr: stderr}, backupExecError(containerID, err, stderr)
+}
+
+func backupResult(stdout, stderr string) *Result {
 	return &Result{
-		ArchivePaths: parseArchivePaths(stdout.String()),
-		Stdout:       stdout.String(),
-		Stderr:       stderr.String(),
-	}, nil
+		ArchivePaths: parseArchivePaths(stdout),
+		Stdout:       stdout,
+		Stderr:       stderr,
+	}
+}
+
+func backupExecError(containerID string, err error, stderr string) error {
+	return fmt.Errorf("docker exec %s backup: %w (%s)", containerID, err, strings.TrimSpace(stderr))
 }
 
 // findLocalContainer filters by service-name label so a renamed or

@@ -6,8 +6,8 @@ import (
 )
 
 // TestPlatformNodePinsNonIngressStacks: infra (traefik) is the ingress
-// gateway and runs on EVERY node (mode: global, no placement constraint) so
-// any node can serve traffic. The remaining platform stacks pin to the
+// gateway and is pinned to MANAGER nodes (its swarm provider needs manager
+// access), so it is excluded here. The remaining platform stacks pin to the
 // designated platform node (node.hostname) when set.
 func TestPlatformNodePinsAllStacks(t *testing.T) {
 	for _, name := range []stackName{StackObservability, StackEdge, StackBackup, StackSSO} {
@@ -26,10 +26,13 @@ func TestPlatformNodePinsAllStacks(t *testing.T) {
 	}
 }
 
-// TestTraefikRunsOnAllNodes: traefik is global and must carry NO placement
-// constraint — with or without PlatformNode — so one instance lands on every
-// node (managers and workers alike).
-func TestTraefikRunsOnAllNodes(t *testing.T) {
+// TestTraefikRunsOnManagers: traefik is global but constrained to manager
+// nodes — with or without PlatformNode — because its swarm provider can only
+// list services through a manager's Docker socket. A placement-free global
+// traefik would also run on workers (provider fails there, no routers) and the
+// ingress routing mesh would intermittently route requests to a routerless
+// replica (prod SSO 404s).
+func TestTraefikRunsOnManagers(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		platformNode string
@@ -46,8 +49,11 @@ func TestTraefikRunsOnAllNodes(t *testing.T) {
 		if !strings.Contains(s, "mode: global") {
 			t.Errorf("%s: traefik not global:\n%s", tc.name, s)
 		}
-		if strings.Contains(s, "constraints:") || strings.Contains(s, "node.role == manager") || strings.Contains(s, "node.hostname") {
-			t.Errorf("%s: traefik must be placement-free (all nodes):\n%s", tc.name, s)
+		if !strings.Contains(s, "node.role == manager") {
+			t.Errorf("%s: traefik must be pinned to manager nodes:\n%s", tc.name, s)
+		}
+		if strings.Contains(s, "node.hostname") {
+			t.Errorf("%s: traefik must not carry a node-hostname pin:\n%s", tc.name, s)
 		}
 	}
 }

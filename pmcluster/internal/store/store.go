@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/rs/zerolog"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -22,6 +24,11 @@ var ErrNotFound = errors.New("not found")
 // live in sibling files.
 type Store struct {
 	db *sql.DB
+
+	// Log is the sink for best-effort diagnostics from store methods that
+	// swallow a non-"not found" error (GetSettingDefault). Defaults to
+	// zerolog.Nop(); callers that already hold a logger may wire it.
+	Log zerolog.Logger
 }
 
 // Open opens (or creates) the SQLite DB, applies migrations, and returns
@@ -57,7 +64,7 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
-	return &Store{db: db}, nil
+	return &Store{db: db, Log: zerolog.Nop()}, nil
 }
 
 // Close is safe to call multiple times.

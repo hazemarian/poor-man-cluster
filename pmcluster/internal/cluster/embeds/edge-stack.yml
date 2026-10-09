@@ -37,6 +37,7 @@ services:
       BAN_DURATION: "10m"
       LOG_LEVEL: info
       EDGE_LOGIN_DISABLED: "[[.EdgeLoginDisabled]]"
+      EDGE_SSO_ENABLED: "[[.SSOEnabled]]"
     volumes:
       [[- if not .EdgeLoginDisabled]]
       - "pmui-data:/data"
