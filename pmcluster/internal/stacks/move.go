@@ -19,6 +19,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -86,8 +87,11 @@ func (s *Service) MoveWithOptions(ctx context.Context, stackName, targetNode str
 	// Node validation + leader discovery when the swarm is reachable.
 	localHost, _ := os.Hostname()
 	var leaderAddr string
+	// nodes is declared here (not inside the if) so the store-transit branch
+	// below can map the stack's pinned source hostname to its swarm node id.
+	var nodes []runtime.Node
 	if s.Docker != nil {
-		nodes, err := s.Docker.NodeList(ctx)
+		nodes, err = s.Docker.NodeList(ctx)
 		if err != nil {
 			return fmt.Errorf("move: list swarm nodes: %w", err)
 		}
@@ -132,11 +136,29 @@ func (s *Service) MoveWithOptions(ctx context.Context, stackName, targetNode str
 				return err
 			}
 		}
-		key, err := s.newestArchiveObject(ctx, stackName)
+		// BUG-031: the failover restore must pull the SOURCE node's archive,
+		// not the globally-newest one (that is often the target's own archive,
+		// which holds zero backup/data/<stack> entries and would restore an
+		// empty database). pins[0] is the node the stack's data currently
+		// lives on (the failed/pinned node); map it to its swarm node id. When
+		// Docker is unavailable (a CLI run without a docker client) there is
+		// no node list to map through, so sourceNode stays empty and the
+		// previous newest-overall behaviour is preserved.
+		sourceNode := ""
+		for _, n := range nodes {
+			if n.Hostname == pins[0] {
+				sourceNode = n.ID
+				break
+			}
+		}
+		if s.Docker != nil && sourceNode == "" {
+			return fmt.Errorf("move: cannot resolve the node id of %s (the node holding the stack's data)", pins[0])
+		}
+		key, err := s.newestArchiveObject(ctx, stackName, sourceNode)
 		if err != nil {
 			return err
 		}
-		if err := s.moveViaStorePull(ctx, key, volRoot, stackName, targetNode); err != nil {
+		if err := s.moveViaStorePull(ctx, key, stackName, targetNode); err != nil {
 			return fmt.Errorf("move: store transit: %w", err)
 		}
 	} else {

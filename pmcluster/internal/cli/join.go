@@ -570,6 +570,24 @@ func prepareJoinState(ctx context.Context, out io.Writer, cfg *config.Config) er
 // command to run instead — a storage-registration problem must never fail
 // the join itself.
 func registerStorageNode(ctx context.Context, out io.Writer, sshHost, nodeHostname string) {
+	// BUG-019a: stamp the swarm-visible storage label locally FIRST. The join
+	// already made this node a swarm member, so (as a manager) it can label
+	// itself with no SSH path to the leader; the leader adopts labeled nodes
+	// into storage_nodes on its next update. The SSH path below remains the
+	// direct route when keys exist.
+	if dc, derr := dockerNewFn(); derr == nil {
+		if ns, nerr := dc.NodeList(ctx); nerr == nil {
+			for _, n := range ns {
+				if n.Hostname == nodeHostname {
+					if lerr := dc.SetNodeLabel(ctx, n.ID, runtime.StorageNodeLabel, "true"); lerr == nil {
+						fmt.Fprintf(out, "✓ labeled %s with %s (the leader adopts it on its next update)\n", nodeHostname, runtime.StorageNodeLabel)
+					}
+					break
+				}
+			}
+		}
+		_ = dc.Close()
+	}
 	sshHost = strings.TrimSpace(sshHost)
 	nodeHostname = strings.TrimSpace(nodeHostname)
 	if sshHost == "" || nodeHostname == "" {

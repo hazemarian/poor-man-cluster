@@ -270,6 +270,10 @@ type Node struct {
 	Address       string
 	CreatedAt     int64
 	UpdatedAt     int64
+	// Labels is the node's full spec label set, e.g. pmcluster.storage=true.
+	// `cluster update` reads it to clear stale storage labels from nodes that
+	// were removed from the storage_nodes setting (BUG-019b).
+	Labels map[string]string
 }
 
 // JoinTokens carries the worker and manager join tokens for new nodes.

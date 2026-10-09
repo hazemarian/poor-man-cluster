@@ -189,17 +189,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// BOTH this store (via WebDAV) and the external backup_s3_* offsite target
 	// (via S3); when the in-cluster store is disabled the offsite target is
 	// used directly.
-	backupS3 := backupS3FromSettings(cmd.Context(), st)
-	if mc, err := st.GetCredential(cmd.Context(), "seaweedfs_admin"); err == nil && cipher != nil {
-		if pass, derr := cipher.Decrypt(mc.PasswordCiphertext); derr == nil {
-			backupS3 = backups.S3Config{
-				Endpoint:  "http://127.0.0.1:8333",
-				Bucket:    "pmcluster-backups",
-				AccessKey: mc.Username,
-				SecretKey: string(pass),
-			}
-		}
-	}
+	backupS3 := backupS3Config(cmd.Context(), st, cipher)
 
 	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.GetSettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
 		return st.GetSettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil

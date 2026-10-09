@@ -755,6 +755,11 @@ func (r *realClient) NodeList(ctx context.Context) ([]runtime.Node, error) {
 		if n.ManagerStatus != nil {
 			addr = n.ManagerStatus.Addr
 		}
+		// Copy the spec labels so callers don't alias the SDK's response map.
+		labels := make(map[string]string, len(n.Spec.Labels))
+		for k, v := range n.Spec.Labels {
+			labels[k] = v
+		}
 		out = append(out, runtime.Node{
 			ID:            n.ID,
 			Hostname:      n.Description.Hostname,
@@ -766,6 +771,7 @@ func (r *realClient) NodeList(ctx context.Context) ([]runtime.Node, error) {
 			Address:       addr,
 			CreatedAt:     n.CreatedAt.Unix(),
 			UpdatedAt:     n.UpdatedAt.Unix(),
+			Labels:        labels,
 		})
 	}
 	return out, nil

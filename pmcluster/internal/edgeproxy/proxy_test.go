@@ -91,6 +91,37 @@ func TestNew_StripsHopByHopHeader(t *testing.T) {
 	}
 }
 
+// TestNew_UpstreamUnavailableReturnsCleanJSON502 verifies that a dead upstream
+// (the node's daemon API not listening) yields a stable, dependency-free JSON
+// 502 instead of a bare Go transport "dial tcp ...: connection refused" body.
+func TestNew_UpstreamUnavailableReturnsCleanJSON502(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	upURL := srv.URL
+	srv.Close() // the upstream now refuses connections
+
+	cfg := FromEnv()
+	cfg.Upstream = upURL
+	cfg.TrustedCIDRs = []string{"10.0.0.0/8"}
+	h := New(cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "http://pmcluster.example/api/stacks", nil)
+	req.RemoteAddr = "10.0.3.4:54321"
+	req.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.3.4")
+	rw := httptest.NewRecorder()
+
+	h.ServeHTTP(rw, req)
+
+	if rw.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body=%s", rw.Code, rw.Body.String())
+	}
+	if ct := rw.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("Content-Type = %q, want application/json", ct)
+	}
+	if body := strings.TrimSpace(rw.Body.String()); body != `{"error":"control plane unavailable"}` {
+		t.Errorf("body = %q, want stable JSON 502 body", body)
+	}
+}
+
 func TestNew_WebhookRateLimitsPerIP(t *testing.T) {
 	up := fakeDaemon(t, &observed{})
 	defer up.Close()

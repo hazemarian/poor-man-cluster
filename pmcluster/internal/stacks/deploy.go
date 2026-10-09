@@ -113,6 +113,12 @@ type Service struct {
 	// storage node is down and its local archive is unreachable. Empty
 	// disables FromS3 moves.
 	S3 backups.S3Config
+	// OffsiteS3 is the offsite backup_s3_* destination for the cross-node
+	// `backup restore` path when the operator forces a fetch from the offsite
+	// store (`--from-s3`) instead of the in-cluster SeaweedFS store.
+	// RestoreArchiveToNode selects it when its fromOffsite flag is true. Empty
+	// means no offsite destination is configured.
+	OffsiteS3 backups.S3Config
 	// MkdirAll creates host directories for the volume-root bind targets
 	// before deploy (nil = os.MkdirAll). Overridable in tests.
 	MkdirAll func(string, os.FileMode) error

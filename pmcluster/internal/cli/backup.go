@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -12,7 +14,10 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -109,6 +114,99 @@ func backupS3FromSettings(ctx context.Context, st *store.Store) backups.S3Config
 		SecretKey: st.GetSettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""),
 		Region:    st.GetSettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"),
 	}
+}
+
+// backupS3Config resolves the object-store config used for store-based backup
+// transit. It prefers the in-cluster SeaweedFS store (the seaweedfs_admin
+// credential, published at http://127.0.0.1:8333) over the offsite
+// backup_s3_* settings, matching the daemon's read preference (serve.go). Used
+// by the cross-node `backup restore` path so the mover pulls the same object
+// the daemon indexes. A nil cipher (or an undecryptable credential) falls back
+// to the offsite settings.
+func backupS3Config(ctx context.Context, st *store.Store, cipher *credentials.Cipher) backups.S3Config {
+	cfg := backupS3FromSettings(ctx, st)
+	if cipher == nil {
+		return cfg
+	}
+	if mc, err := st.GetCredential(ctx, "seaweedfs_admin"); err == nil {
+		if pass, derr := cipher.Decrypt(mc.PasswordCiphertext); derr == nil {
+			cfg = backups.S3Config{
+				Endpoint:  "http://127.0.0.1:8333",
+				Bucket:    "pmcluster-backups",
+				AccessKey: mc.Username,
+				SecretKey: string(pass),
+			}
+		}
+	}
+	return cfg
+}
+
+// stackFromVolume returns the stack named by a `--volume <stack>/<vol>` flag,
+// or "" when the volume does not identify a stack (a bare volume name or a
+// whole-disk run with no --volume).
+func stackFromVolume(volume string) string {
+	if i := strings.IndexByte(volume, '/'); i > 0 {
+		return volume[:i]
+	}
+	return ""
+}
+
+// restoreDestination decides where a stack-scoped backup restore must run.
+//
+//   - owner is the node the stack's volume is pinned to ("" = no node-pinned
+//     storage, i.e. stateless or no resolver);
+//   - localHost is this node's hostname;
+//   - dockerOK reports whether a Docker client is available (the store mover
+//     shells out to `docker service create`);
+//   - storeOK reports whether an object store is configured (the mover pulls
+//     the archive object from it).
+//
+// Returns the destination node ("" = restore locally) or a loud error when the
+// volume lives on a remote node but routing is impossible — the caller must
+// never silently restore into the wrong node (BUG-032).
+func restoreDestination(owner, localHost string, dockerOK, storeOK bool) (string, error) {
+	if owner == "" || owner == localHost {
+		return "", nil
+	}
+	if !dockerOK {
+		// No swarm client: a single-node cluster, keep the historical local
+		// path unchanged.
+		return "", nil
+	}
+	if !storeOK {
+		return "", fmt.Errorf("this stack's volume lives on %s — run the restore there", owner)
+	}
+	return owner, nil
+}
+
+// restoreOwnerForStack returns the node the stack's volume is pinned to, or ""
+// when the stack has no node-pinned storage (stateless, role-constrained, or no
+// resolver configured).
+func restoreOwnerForStack(ctx context.Context, svc *stacks.Service, stack string) (string, error) {
+	pins, err := svc.StoragePinsForStack(ctx, stack)
+	if err != nil {
+		return "", fmt.Errorf("resolve storage node for %s: %w", stack, err)
+	}
+	if len(pins) == 0 {
+		return "", nil
+	}
+	return pins[0], nil
+}
+
+// restoreArchiveKey returns the object-store key for a backup run's archive:
+// the basename of the row's (first) archive path. A local row stores an
+// absolute host path and a store-discovered row stores the bare object key;
+// both share the same basename (offen uploads under the same BACKUP_FILENAME).
+func restoreArchiveKey(ctx context.Context, st *store.Store, id int64) (string, error) {
+	row, err := st.GetBackup(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("get backup %d: %w", id, err)
+	}
+	paths := strings.Split(row.ArchivePaths, ",")
+	if len(paths) == 0 || strings.TrimSpace(paths[0]) == "" {
+		return "", fmt.Errorf("backup %d has no archive path to restore from the object store", id)
+	}
+	return filepath.Base(strings.TrimSpace(paths[0])), nil
 }
 
 func runBackupCreate(cmd *cobra.Command, _ []string) error {
@@ -262,6 +360,25 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 		destRoot = restoreDestRootDefault(cmd.Context())
 	}
 
+	// BUG-032: on a multi-node cluster a stack's volume lives on a specific
+	// node (a named volume whose device is <volume_root>/<stack>/<vol>).
+	// Restoring into THIS node's volume root leaves the owning node's directory
+	// empty — the app comes up with an empty DB while the command reports
+	// success. When --volume names a stack, resolve its owning node and route
+	// the restore there (or fail loudly instead of restoring into the wrong
+	// node). Single-node clusters are untouched: owner == this host (or no
+	// Docker client) keeps the local path unchanged.
+	if stack := stackFromVolume(volume); stack != "" && remoteClient(cmd) == nil {
+		target, routeErr := restoreRouteForStack(cmd, id, stack, fromS3)
+		if routeErr != nil {
+			return routeErr
+		}
+		if target != "" {
+			fmt.Fprintf(cmd.OutOrStdout(), "✅ Restored backup %d to %s:%s.\n", id, target, destRoot)
+			return nil
+		}
+	}
+
 	svc, closeFn, err := backendBackups(cmd)
 	if err != nil {
 		return err
@@ -272,7 +389,82 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("restore backup %d: %w", id, err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "✅ Restored %d file(s) from backup %d under %s.\n",
-		restored, id, destRoot)
+	fmt.Fprintf(cmd.OutOrStdout(), "✅ Restored %d file(s) from backup %d to %s:%s.\n",
+		restored, id, localHostname(), destRoot)
 	return nil
+}
+
+// localHostname returns this node's hostname, or "local" when os.Hostname
+// fails.
+func localHostname() string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "local"
+}
+
+// restoreRouteForStack resolves where a stack-scoped backup restore must land
+// and, when the stack's volume lives on another node, routes the restore there
+// via the object-store mover. It returns the destination node for the success
+// message: "" means the restore must be done locally (the caller does it), a
+// non-empty node means it was already routed there.
+//
+// fromS3 mirrors the `backup restore --from-s3` flag: when true the mover pulls
+// the archive from the OFFSITE backup_s3_* destination instead of the in-cluster
+// SeaweedFS store (the routed restore must honour --from-s3).
+func restoreRouteForStack(cmd *cobra.Command, id int64, stack string, fromS3 bool) (string, error) {
+	ctx := cmd.Context()
+
+	svc, st, closeFn, err := openDeploySvc(cmd)
+	if err != nil {
+		// No local deploy service (uninitialised data dir, missing encryption
+		// key): there is nothing to route — fall back to the local restore.
+		return "", nil
+	}
+	defer closeFn()
+
+	dockerOK := false
+	if dc, derr := docker.New(); derr == nil {
+		svc.Docker = dc
+		defer func() { _ = dc.Close() }()
+		dockerOK = true
+	}
+
+	// The offsite destination is always the backup_s3_* settings. The
+	// in-cluster store (preferred by default) comes from the seaweedfs_admin
+	// credential when one exists and decrypts; otherwise the store path falls
+	// back to the offsite settings (matching the daemon's read preference).
+	svc.OffsiteS3 = backupS3FromSettings(ctx, st)
+	svc.S3 = backupS3FromSettings(ctx, st)
+	if cfg := loadConfig(cmd); cfg != nil {
+		if cipher, cerr := credentials.Open(cfg.EncryptionKeyPath()); cerr == nil {
+			svc.S3 = backupS3Config(ctx, st, cipher)
+		}
+	}
+
+	owner, err := restoreOwnerForStack(ctx, svc, stack)
+	if err != nil {
+		return "", err
+	}
+
+	// The mover pulls from the in-cluster store by default, or the offsite
+	// destination when --from-s3 is set. `storeOK` is really "source configured"
+	// here, so pick the destination the mover will actually use.
+	sourceCfg := svc.S3
+	if fromS3 {
+		sourceCfg = svc.OffsiteS3
+	}
+	target, err := restoreDestination(owner, localHostname(), dockerOK, sourceCfg.Configured())
+	if err != nil || target == "" {
+		return target, err
+	}
+
+	key, err := restoreArchiveKey(ctx, st, id)
+	if err != nil {
+		return "", err
+	}
+	if err := svc.RestoreArchiveToNode(ctx, key, stack, target, fromS3); err != nil {
+		return "", fmt.Errorf("restore backup %d onto %s: %w", id, target, err)
+	}
+	return target, nil
 }

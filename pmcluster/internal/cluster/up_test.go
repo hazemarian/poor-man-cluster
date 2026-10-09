@@ -343,3 +343,65 @@ func TestUp_StorageNodesPreserved(t *testing.T) {
 		t.Errorf("storage_nodes clobbered by cluster up: %q, want node-a,node-b", got)
 	}
 }
+
+// TestUp_DefaultPlatformNodeIsLeader verifies FIX 1: a fresh cluster up pins the
+// platform stack to the leader hostname from the start (an empty platform_node
+// defaults to the leader), so platform services never fall back to the
+// node.role == manager constraint (which constrains nothing on an all-manager
+// swarm).
+func TestUp_DefaultPlatformNodeIsLeader(t *testing.T) {
+	dir := t.TempDir()
+	certPath := writeTempFile(t, dir, "cert.pem", []byte("CERT"))
+	keyPath := writeTempFile(t, dir, "key.pem", []byte("KEY"))
+
+	deps, f, _ := newUpDeps(t)
+	f.nodes = []runtime.Node{
+		{Hostname: "nextrum-sy-1", Role: "manager", IsLeader: true, Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-2", Role: "worker", Status: "ready", Availability: "active"},
+	}
+
+	if _, err := Up(context.Background(), deps, UpInput{
+		Domain:                "test.example.com",
+		CertPath:              certPath,
+		KeyPath:               keyPath,
+		OpenObserveAdminEmail: "ops@example.com",
+	}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	got := deps.Store.GetSettingDefault(context.Background(), SettingPlatformNode(), "")
+	if got != "nextrum-sy-1" {
+		t.Errorf("default platform_node = %q, want the leader hostname nextrum-sy-1", got)
+	}
+}
+
+// TestUp_PlatformNodePreserved verifies FIX 1: an operator-configured
+// platform_node is not clobbered by cluster up.
+func TestUp_PlatformNodePreserved(t *testing.T) {
+	dir := t.TempDir()
+	certPath := writeTempFile(t, dir, "cert.pem", []byte("CERT"))
+	keyPath := writeTempFile(t, dir, "key.pem", []byte("KEY"))
+
+	deps, f, _ := newUpDeps(t)
+	f.nodes = []runtime.Node{
+		{Hostname: "nextrum-sy-1", Role: "manager", IsLeader: true, Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-2", Role: "worker", Status: "ready", Availability: "active"},
+	}
+	if err := deps.Store.SetSetting(context.Background(), SettingPlatformNode(), "operator-pinned"); err != nil {
+		t.Fatalf("SetSetting platform_node: %v", err)
+	}
+
+	if _, err := Up(context.Background(), deps, UpInput{
+		Domain:                "test.example.com",
+		CertPath:              certPath,
+		KeyPath:               keyPath,
+		OpenObserveAdminEmail: "ops@example.com",
+	}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	got := deps.Store.GetSettingDefault(context.Background(), SettingPlatformNode(), "")
+	if got != "operator-pinned" {
+		t.Errorf("platform_node clobbered by cluster up: %q, want operator-pinned", got)
+	}
+}

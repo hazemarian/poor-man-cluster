@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stackdrift"
@@ -231,6 +233,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			StorageNodeConstraint:    deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "") != "",
 			StorageNodeLabel:         runtime.StorageNodeLabel,
 			PlatformNode:             loadPlatformNode(ctx, deps.Store),
+			ManagedSecretNames:       managedSecretNames(ctx, deps.Store),
 			OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
 			BackupS3:        s3b,
 			Store:           objStore,
@@ -442,6 +445,45 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil
 	})
 
+	// Self-heal the RENDERED stacks' secret/config mounts (rebuild-on-missing).
+	// The DB-index repair pass above covers DB rows, but a Swarm secret or
+	// config that a RENDERED platform stack references can be deleted by hand
+	// while the rendered hash stays unchanged — so the reconcile step below
+	// would never redeploy the stack, and the missing mount would never come
+	// back. This pass renders the platform stacks with their FINAL
+	// versioned secret/config names (only known after the TLS + config steps
+	// above) and re-creates every referenced mount that is missing in the Swarm:
+	// managed credentials via EnsureMaterialized, user secrets/configs from the
+	// DB. Each repair is logged.
+	wf.Add("Self-healing rendered secret/config mounts (rebuild-on-missing)", func(ctx context.Context) error {
+		if deps.Docker == nil || deps.Store == nil {
+			return nil
+		}
+		rendered, err := renderPlatformConfigs(render)
+		if err != nil {
+			return err
+		}
+		mgr := &CredentialsManager{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer}
+		for stack, content := range rendered {
+			cfgRefs, secRefs := parseComposeMountRefs(content)
+			for _, name := range cfgRefs {
+				if repaired, err := repairMissingConfig(ctx, deps, name); err != nil {
+					fmt.Fprintf(out, "  ⚠ config %s (from %s): %v\n", name, stack, err)
+				} else if repaired {
+					fmt.Fprintf(out, "  ✓ re-created missing swarm config %s (referenced by %s)\n", name, stack)
+				}
+			}
+			for _, name := range secRefs {
+				if repaired, err := repairMissingSecret(ctx, deps, mgr, name); err != nil {
+					fmt.Fprintf(out, "  ⚠ secret %s (from %s): %v\n", name, stack, err)
+				} else if repaired {
+					fmt.Fprintf(out, "  ✓ re-created missing swarm secret %s (referenced by %s)\n", name, stack)
+				}
+			}
+		}
+		return nil
+	})
+
 	wf.Add("Reconciling platform stacks (rendered content vs stored hash)", func(ctx context.Context) error {
 		// Render all six platform configs with the fully-populated render
 		// (config names + cert secrets substituted) so the snapshots are
@@ -547,10 +589,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		if deps.Docker == nil {
 			return nil
 		}
-		raw := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "")
-		if raw == "" {
-			return nil
-		}
 		nodes, err := deps.Docker.NodeList(ctx)
 		if err != nil {
 			return fmt.Errorf("list swarm nodes: %w", err)
@@ -564,6 +602,23 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 				leaderHost = n.Hostname
 				break
 			}
+		}
+		// Default platform_node to the leader. On an all-manager swarm
+		// the `node.role == manager` fallback constraint constrains NOTHING, so
+		// the platform stack (observability_openobserve, edge_pmcluster-edge)
+		// can land on a tiny 1-core node, OOM/crash-loop and starve the Raft
+		// leader. Pinning platform services to the leader (the API host) keeps
+		// them on a node that can serve them. An operator-set value is left
+		// untouched.
+		if leaderHost != "" && deps.Store.GetSettingDefault(ctx, SettingPlatformNode(), "") == "" {
+			if err := deps.Store.SetSetting(ctx, SettingPlatformNode(), leaderHost); err != nil {
+				return fmt.Errorf("persist platform_node: %w", err)
+			}
+			fmt.Fprintf(out, "  ⚠ platform_node was unset — pinned platform services to the leader %s\n", leaderHost)
+		}
+		raw := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "")
+		if raw == "" {
+			return nil
 		}
 		if leaderHost != "" && !containsStorageNode(splitStorageNodes(raw), leaderHost) {
 			raw = raw + "," + leaderHost
@@ -612,6 +667,26 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 					break
 				}
 			}
+		}
+		// BUG-019a: a node carrying the storage label but missing from
+		// storage_nodes is an operator request — `pmcluster join --storage-node`
+		// can only stamp the swarm-visible node label (it has no path to the
+		// leader's store), so the LABEL is the intent channel and the leader
+		// adopts it here. Demotion therefore goes through `pmcluster node
+		// demote`, which clears the label (and the setting); a raw setting edit
+		// is re-adopted on the next update because the label wins.
+		for _, n := range nodes {
+			if n.Labels[runtime.StorageNodeLabel] != "true" {
+				continue
+			}
+			if containsStorageNode(splitStorageNodes(raw), n.Hostname) {
+				continue
+			}
+			raw = raw + "," + n.Hostname
+			if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), raw); err != nil {
+				return fmt.Errorf("persist storage_nodes: %w", err)
+			}
+			fmt.Fprintf(out, "  ⚠ adopted %s into storage_nodes (it carries the %s label)\n", n.Hostname, runtime.StorageNodeLabel)
 		}
 		return nil
 	})
@@ -745,6 +820,7 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		StorageNodeConstraint:    deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "") != "",
 		StorageNodeLabel:         runtime.StorageNodeLabel,
 		PlatformNode:             loadPlatformNode(ctx, deps.Store),
+		ManagedSecretNames:       managedSecretNames(ctx, deps.Store),
 		OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
 		BackupS3: s3b,
 		Store:    objStore,
@@ -837,4 +913,130 @@ func containsStorageNode(hosts []string, host string) bool {
 		}
 	}
 	return false
+}
+
+// parseComposeMountRefs extracts the ACTUAL Swarm object names a rendered
+// compose's top-level configs:/secrets: sections reference. The compose key is
+// the LOGICAL name; a versioned/rotated object carries a `name:` override (the
+// content-addressed <base>_<sha8> Swarm object), so that override wins when
+// present. Invalid YAML yields nothing.
+func parseComposeMountRefs(rendered []byte) (configs, secrets []string) {
+	var doc struct {
+		Configs map[string]struct {
+			Name string `json:"name"`
+		} `json:"configs"`
+		Secrets map[string]struct {
+			Name string `json:"name"`
+		} `json:"secrets"`
+	}
+	if err := yaml.Unmarshal(rendered, &doc); err != nil {
+		return nil, nil
+	}
+	for key, c := range doc.Configs {
+		if c.Name != "" {
+			configs = append(configs, c.Name)
+		} else {
+			configs = append(configs, key)
+		}
+	}
+	for key, s := range doc.Secrets {
+		if s.Name != "" {
+			secrets = append(secrets, s.Name)
+		} else {
+			secrets = append(secrets, key)
+		}
+	}
+	return configs, secrets
+}
+
+// repairMissingConfig re-creates a Swarm config that a rendered stack references
+// but that is missing, by rebuilding it from the DB config index (content-addressed
+// name match). Returns true iff it (re)created the config. A config with no DB
+// row is left alone (false, nil) — the render steps above own the versioned
+// OTel/Traefik/edge configs and already ensure them.
+func repairMissingConfig(ctx context.Context, deps UpdateDeps, name string) (bool, error) {
+	exists, err := deps.Docker.ConfigExists(ctx, name)
+	if err != nil {
+		return false, fmt.Errorf("check config %s: %w", name, err)
+	}
+	if exists {
+		return false, nil
+	}
+	cfgs, err := deps.Store.ListConfigs(ctx, "", "")
+	if err != nil {
+		return false, fmt.Errorf("list configs: %w", err)
+	}
+	for _, c := range cfgs {
+		if store.SwarmConfigName(c.Name, c.Hash) != name {
+			continue
+		}
+		if err := deps.Docker.ConfigCreate(ctx, runtime.ConfigSpec{
+			Name: name,
+			Data: []byte(c.Content),
+			Labels: map[string]string{
+				pmclusterLabel:        "true",
+				"pmcluster.base":      c.Name,
+				"pmcluster.data_hash": c.Hash,
+			},
+		}); err != nil {
+			return false, fmt.Errorf("rebuild config %s: %w", name, err)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// repairMissingSecret re-creates a Swarm secret that a rendered stack references
+// but that is missing. Managed credentials (matched by their current swarm secret
+// name, which may be versioned after a rotation) are re-materialized via
+// EnsureMaterialized; user secrets are rebuilt from the DB secrets index
+// (content-addressed name match). Returns true iff it (re)created the secret.
+func repairMissingSecret(ctx context.Context, deps UpdateDeps, mgr *CredentialsManager, name string) (bool, error) {
+	exists, err := deps.Docker.SecretExists(ctx, name)
+	if err != nil {
+		return false, fmt.Errorf("check secret %s: %w", name, err)
+	}
+	if exists {
+		return false, nil
+	}
+	// Managed credential: match the credential whose swarm secret name equals
+	// the referenced name (fixed pre-rotation, content-addressed post-rotation).
+	if creds, err := deps.Store.ListCredentials(ctx); err == nil {
+		for _, c := range creds {
+			if c.SwarmSecretName == name {
+				return mgr.EnsureMaterialized(ctx, c.Name)
+			}
+		}
+	}
+	// User secret: content-addressed name from the DB secrets index.
+	secs, err := deps.Store.ListSecrets(ctx, "", "")
+	if err != nil {
+		return false, fmt.Errorf("list secrets: %w", err)
+	}
+	for _, s := range secs {
+		if store.SwarmSecretName(s.Name, s.Hash) != name {
+			continue
+		}
+		row, err := deps.Store.GetSecret(ctx, s.Name)
+		if err != nil {
+			return false, fmt.Errorf("get secret %s: %w", s.Name, err)
+		}
+		plain, err := deps.Cipher.Decrypt(row.Payload)
+		if err != nil {
+			return false, fmt.Errorf("decrypt secret %s: %w", s.Name, err)
+		}
+		if err := deps.Docker.SecretCreate(ctx, runtime.SecretSpec{
+			Name: name,
+			Data: plain,
+			Labels: map[string]string{
+				pmclusterLabel:        "true",
+				"pmcluster.base":      s.Name,
+				"pmcluster.data_hash": s.Hash,
+			},
+		}); err != nil {
+			return false, fmt.Errorf("rebuild secret %s: %w", name, err)
+		}
+		return true, nil
+	}
+	return false, nil
 }

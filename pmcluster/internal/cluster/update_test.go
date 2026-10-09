@@ -283,6 +283,35 @@ func TestUpdate_StorageNodeLabelsRepaired(t *testing.T) {
 	}
 }
 
+// TestUpdate_ClearsStaleStorageLabel verifies BUG-019b: a node removed from the
+// storage_nodes setting by any other path keeps pmcluster.storage=true forever,
+// which the backup agent's placement constraint and the stateful-storage logic
+// still honour. The update step must clear the label on every node that carries
+// it but is no longer in the resolved list.
+func TestUpdate_AdoptsLabeledNodeIntoStorageNodes(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "nextrum-sy-2"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", Labels: map[string]string{runtime.StorageNodeLabel: "true"}},
+		{Hostname: "nextrum-sy-2", ID: "n2", Role: "worker", Status: "ready", Availability: "active"},
+	}
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "")
+	if !strings.Contains(got, "nextrum-sy-1") {
+		t.Fatalf("a labeled node must be adopted into storage_nodes, got %q", got)
+	}
+	for _, l := range f.nodeLabels {
+		if l == runtime.StorageNodeLabel+"=" {
+			t.Fatalf("the adopted node must not have its label cleared: %v", f.nodeLabels)
+		}
+	}
+}
 func TestUpdate_NoOpWhenNothingChanged(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 	res, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})
@@ -955,5 +984,111 @@ func TestUpdate_DemotesFormerLeader(t *testing.T) {
 	}
 	if leader := deps.Store.GetSettingDefault(ctx, storageLeaderKey, ""); leader != "node-b" {
 		t.Fatalf("storage_leader = %q, want node-b", leader)
+	}
+}
+
+// TestUpdate_DefaultsPlatformNodeToLeader verifies FIX 1: an empty platform_node
+// is defaulted to the leader hostname during cluster update, so the platform
+// stack pins to the API host instead of leaving the node.role == manager
+// constraint (which constrains nothing on an all-manager swarm).
+func TestUpdate_DefaultsPlatformNodeToLeader(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingPlatformNode(), ""); err != nil {
+		t.Fatalf("SetSetting platform_node: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true},
+		{Hostname: "nextrum-sy-2", ID: "n2", Role: "worker", Status: "ready", Availability: "active"},
+	}
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got := deps.Store.GetSettingDefault(ctx, SettingPlatformNode(), ""); got != "nextrum-sy-1" {
+		t.Fatalf("platform_node = %q, want the leader hostname nextrum-sy-1", got)
+	}
+}
+
+// TestUpdate_PreservesPlatformNode verifies FIX 1: a preset platform_node is
+// never clobbered by the leader default.
+func TestUpdate_PreservesPlatformNode(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingPlatformNode(), "operator-pinned"); err != nil {
+		t.Fatalf("SetSetting platform_node: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true},
+	}
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got := deps.Store.GetSettingDefault(ctx, SettingPlatformNode(), ""); got != "operator-pinned" {
+		t.Fatalf("platform_node = %q, want the preset value operator-pinned", got)
+	}
+}
+
+// TestUpdate_RepairsMissingRenderedSecretMount verifies FIX 3(b): a Swarm secret
+// that a rendered platform stack mounts but that was deleted by hand is
+// re-created during cluster update (the rendered hash is unchanged, so the
+// reconcile loop alone would never redeploy the stack).
+func TestUpdate_RepairsMissingRenderedSecretMount(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	f := deps.Docker.(*fakeDocker)
+	if err := deps.Docker.SecretRemove(ctx, "zo_root_user_password"); err != nil {
+		t.Fatalf("remove zo_root_user_password: %v", err)
+	}
+	if _, ok := f.secrets["zo_root_user_password"]; ok {
+		t.Fatal("fixture: zo_root_user_password still present after remove")
+	}
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if _, ok := f.secrets["zo_root_user_password"]; !ok {
+		t.Fatal("the rendered zo_root_user_password mount was not repaired by update")
+	}
+}
+
+// TestRepairMissingSecret_UserSecretRebuiltFromDB verifies the rebuild-from-DB
+// path of the self-heal pass: a user secret (DB secrets index) whose
+// content-addressed swarm secret is missing is re-created from the decrypted
+// ciphertext.
+func TestRepairMissingSecret_UserSecretRebuiltFromDB(t *testing.T) {
+	deps, _ := seedUpdateState(t)
+	ctx := context.Background()
+	mgr := &CredentialsManager{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer}
+
+	plaintext := []byte("sup3r-s3cret")
+	ct, err := deps.Cipher.Encrypt(plaintext)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	hash := store.SecretHash(string(plaintext))
+	if _, err := deps.Store.CreateSecret(ctx, "service", "", "my_app_secret", ct, hash); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+	swarmName := store.SwarmSecretName("my_app_secret", hash)
+	if _, ok := deps.Docker.(*fakeDocker).secrets[swarmName]; ok {
+		t.Fatal("fixture: swarm secret should not exist yet")
+	}
+
+	repaired, err := repairMissingSecret(ctx, deps, mgr, swarmName)
+	if err != nil {
+		t.Fatalf("repairMissingSecret: %v", err)
+	}
+	if !repaired {
+		t.Fatal("repairMissingSecret should report repaired=true")
+	}
+	spec, ok := deps.Docker.(*fakeDocker).secrets[swarmName]
+	if !ok {
+		t.Fatal("swarm secret was not re-created")
+	}
+	if string(spec.Data) != string(plaintext) {
+		t.Errorf("recreated secret data = %q, want %q", spec.Data, plaintext)
 	}
 }

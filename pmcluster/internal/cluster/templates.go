@@ -191,6 +191,15 @@ type RenderInput struct {
 	// private key (e.g. key_v001). Resolved from `secrets(key)`.
 	KeySecretName string
 
+	// ManagedSecretNames maps a managed credential's FIXED swarm secret base
+	// name (e.g. "admin_credentials") to the credential's current swarm secret
+	// name (the base name, or a content-addressed <base>_<sha8> after a
+	// rotation). The platform stack templates reference the base names, and
+	// platformSecretNames consults this map so a rotated credential renders the
+	// new versioned secret while the old one stays mounted (rotate split-brain
+	// fix). Nil/empty leaves the base name as-is.
+	ManagedSecretNames map[string]string
+
 	// EdgeImage is the pmcluster-edge container image tag used by the
 	// embedded edge-stack.yml (e.g. ghcr.io/hazemarian/pmcluster-edge:v0.2.19).
 	// Rendered via the template body; set in up/update.
@@ -447,14 +456,20 @@ func (r *renderRefResolver) ResolveConfigPath(_ context.Context, _ string, name 
 }
 
 // platformSecretNames maps a logical secret name to the actual versioned
-// Swarm secret for the render (cert/key → CertSecretName/KeySecretName; every
-// other name — admin_credentials, edge_*, the pre-versioned host-cert names —
-// passes through unchanged so it resolves against the external swarm secret of
-// the same name).
+// Swarm secret for the render (cert/key → CertSecretName/KeySecretName; managed
+// credentials → their current swarm secret name via ManagedSecretNames; every
+// other name — admin_credentials before rotation, edge_*, the pre-versioned
+// host-cert names — passes through unchanged so it resolves against the
+// external swarm secret of the same name).
 func platformSecretNames(in RenderInput) func(ctx context.Context, name string) string {
 	return func(_ context.Context, name string) string {
 		if fn, ok := secretNameAliases[name]; ok {
 			return fn(in)
+		}
+		if in.ManagedSecretNames != nil {
+			if v := in.ManagedSecretNames[name]; v != "" {
+				return v
+			}
 		}
 		return name
 	}

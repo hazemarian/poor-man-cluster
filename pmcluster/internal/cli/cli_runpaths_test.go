@@ -22,8 +22,11 @@ func TestWebhookCRUD_RunPaths(t *testing.T) {
 	if !strings.Contains(out.String(), `Webhook source "deploy" created`) {
 		t.Fatalf("add output = %q", out.String())
 	}
-	if !strings.Contains(out.String(), "sha256=<hmac-sha256") {
+	if !strings.Contains(out.String(), "X-Pmcluster-Signature: sha256=<hex>") {
 		t.Fatalf("add output missing secret instructions: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "X-Pmcluster-Timestamp") {
+		t.Fatalf("add output missing the timestamp header: %q", out.String())
 	}
 
 	// duplicate add fails

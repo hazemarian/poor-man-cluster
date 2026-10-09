@@ -347,8 +347,8 @@ func TestRotate_HappyPath(t *testing.T) {
 	if newCred.Username != originalCred.Username {
 		t.Errorf("Username changed: %q → %q", originalCred.Username, newCred.Username)
 	}
-	if newCred.SwarmSecretName != "admin_credentials" {
-		t.Errorf("SwarmSecretName = %q, want 'admin_credentials'", newCred.SwarmSecretName)
+	if !strings.HasPrefix(newCred.SwarmSecretName, "admin_credentials_") {
+		t.Errorf("SwarmSecretName = %q, want a content-addressed admin_credentials_<sha8>", newCred.SwarmSecretName)
 	}
 	if newCred.SwarmSecretCreated != true {
 		t.Error("SwarmSecretCreated should be true after Rotate")
@@ -367,13 +367,26 @@ func TestRotate_HappyPath(t *testing.T) {
 	if string(updatedCred.PasswordCiphertext) == string(originalCiphertext) {
 		t.Error("PasswordCiphertext should have changed after Rotate")
 	}
+	if updatedCred.SwarmSecretName != newCred.SwarmSecretName {
+		t.Errorf("stored SwarmSecretName = %q, want %q", updatedCred.SwarmSecretName, newCred.SwarmSecretName)
+	}
 
-	newSecretData, ok := f.secrets["admin_credentials"]
+	// The OLD secret must remain untouched — never deleted while still mounted.
+	oldAfter, ok := f.secrets["admin_credentials"]
 	if !ok {
-		t.Fatal("admin_credentials secret should still exist after re-creation")
+		t.Fatal("admin_credentials secret must still exist after Rotate (never deleted)")
+	}
+	if string(oldAfter.Data) != string(oldSecretData.Data) {
+		t.Error("old swarm secret payload must be unchanged after Rotate (never replaced in place)")
+	}
+
+	// The NEW content-addressed secret must exist with the new value.
+	newSecretData, ok := f.secrets[newCred.SwarmSecretName]
+	if !ok {
+		t.Fatalf("new swarm secret %s should exist after Rotate", newCred.SwarmSecretName)
 	}
 	if string(newSecretData.Data) == string(oldSecretData.Data) {
-		t.Error("Swarm secret payload should have changed after Rotate")
+		t.Error("new swarm secret payload should differ from the old one")
 	}
 
 	found := false
@@ -419,21 +432,58 @@ func TestRotate_SecretRemoveFails(t *testing.T) {
 	mgr, f, _ := bootstrapForRotate(t)
 	ctx := context.Background()
 
+	// Rotation must NEVER remove a secret that a running service may still
+	// mount — the old secret stays and the new value lands under a fresh
+	// content-addressed name. Inject a SecretRemove failure to prove Remove is
+	// not even called.
 	injectErr := errors.New("secret is in use by a running service")
 	f.secretRemoveErr = map[string]error{
 		"admin_credentials": injectErr,
 	}
 
-	_, err := mgr.Rotate(ctx, "traefik_dashboard")
-	if err == nil {
-		t.Fatal("Rotate should return error when SecretRemove fails")
+	if _, err := mgr.Rotate(ctx, "traefik_dashboard"); err != nil {
+		t.Fatalf("Rotate must not fail on a would-be secret remove: %v", err)
+	}
+	if len(f.removedSecrets) != 0 {
+		t.Fatalf("Rotate must never remove a secret; removed %v", f.removedSecrets)
+	}
+	if _, ok := f.secrets["admin_credentials"]; !ok {
+		t.Fatal("the old admin_credentials secret must remain after Rotate")
+	}
+}
+
+// TestRotate_SecretCreateFailsLeavesStoreUntouched verifies the atomicity of the
+// split-brain fix: the NEW value is materialized into a fresh Swarm secret
+// FIRST, and only then is the store row updated. When that first create fails,
+// the store row must be left completely unchanged (the old code updated the
+// store BEFORE touching Swarm, so a failure left them diverged).
+func TestRotate_SecretCreateFailsLeavesStoreUntouched(t *testing.T) {
+	mgr, f, _ := bootstrapForRotate(t)
+	ctx := context.Background()
+
+	before, err := mgr.Store.GetCredential(ctx, "traefik_dashboard")
+	if err != nil {
+		t.Fatalf("GetCredential: %v", err)
 	}
 
-	if !strings.Contains(err.Error(), "is the consuming service still using it") {
-		t.Errorf("error %q should mention 'is the consuming service still using it'", err.Error())
+	f.secretCreateErr = errSentinel
+
+	if _, err := mgr.Rotate(ctx, "traefik_dashboard"); err == nil {
+		t.Fatal("Rotate should fail when the new secret cannot be created")
 	}
-	if !errors.Is(err, injectErr) {
-		t.Errorf("err = %v, want to wrap the injected error", err)
+
+	after, err := mgr.Store.GetCredential(ctx, "traefik_dashboard")
+	if err != nil {
+		t.Fatalf("GetCredential after failed rotate: %v", err)
+	}
+	if string(before.PasswordCiphertext) != string(after.PasswordCiphertext) {
+		t.Error("store row must be unchanged when the new secret cannot be created first")
+	}
+	if before.SwarmSecretName != after.SwarmSecretName {
+		t.Error("store swarm secret name must be unchanged when the new secret cannot be created first")
+	}
+	if len(f.removedSecrets) != 0 {
+		t.Errorf("no secret should be removed on a failed rotate; removed %v", f.removedSecrets)
 	}
 }
 
@@ -527,8 +577,13 @@ func TestRotate_SyncsDbSecret(t *testing.T) {
 		t.Errorf("db secret hash = %q, want %q", sec.Hash, store.SecretHash(newCred.Password))
 	}
 
-	if string(f.secrets["zo_root_user_password"].Data) == string(oldSecretData) {
-		t.Error("swarm secret payload should have changed after Rotate")
+	// The NEW value lives under a fresh content-addressed swarm secret; the old
+	// fixed-name secret is untouched.
+	if string(f.secrets["zo_root_user_password"].Data) != string(oldSecretData) {
+		t.Error("the old zo_root_user_password swarm secret must be unchanged after Rotate")
+	}
+	if _, ok := f.secrets[newCred.SwarmSecretName]; !ok {
+		t.Fatalf("the new swarm secret %s must exist after Rotate", newCred.SwarmSecretName)
 	}
 }
 

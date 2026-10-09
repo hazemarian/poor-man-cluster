@@ -91,11 +91,17 @@ CI configuration:
 
    Endpoint :  https://pmcluster.<your-domain>/webhook/%s
    Method   :  POST
-   Header   :  X-Pmcluster-Signature: sha256=<hmac-sha256(body, secret)>
+   Header   :  X-Pmcluster-Signature: sha256=<hex>
+   Header   :  X-Pmcluster-Timestamp: <unix-seconds>
    Body     :  {"app_name": "...", "version": "...", "manifest": "<dsl-yaml>"}
 
+The signature is HMAC-SHA256 over "<unix-seconds><body>" (the timestamp header
+value immediately followed by the raw request body), keyed with the shared
+secret.
+
 Example signing in shell:
-   echo -n "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print "sha256=" $2}'
+   TIMESTAMP=$(date +%%s)
+   printf '%%s%%s' "$TIMESTAMP" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print "sha256=" $2}'
 `, source, secretHex, source)
 	return nil
 }

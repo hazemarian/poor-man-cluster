@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 )
 
 // moverTaskTimeout bounds how long a one-shot mover task may take.
@@ -83,10 +84,13 @@ func rcloneStoreEnv(cfg backups.S3Config) []string {
 
 // storePullMoverScript is the mover program: pull the archive object with
 // rclone, unpack it and move the <stack>/ subtree into the mounted volume root.
+// Before it wipes the target's existing subtree it verifies the archive really
+// contains the stack's data — a wrong (or empty) archive must never be able to
+// erase /data/<stack> (BUG-031).
 func storePullMoverScript(bucket, key, stackName string) string {
 	return fmt.Sprintf(
-		"set -e; mkdir -p /tmp/x /data; rclone copyto sw:%s/%s /tmp/m.tgz; tar -xzf /tmp/m.tgz -C /tmp/x; rm -rf /data/%s; mv /tmp/x/backup/data/%s /data/; rm -rf /tmp/x",
-		bucket, key, stackName, stackName,
+		"set -e; mkdir -p /tmp/x /data; rclone copyto sw:%s/%s /tmp/m.tgz; tar -tzf /tmp/m.tgz | grep -q '^backup/data/%s/' || { echo \"the archive does not contain backup/data/%s\"; exit 1; }; tar -xzf /tmp/m.tgz -C /tmp/x; rm -rf /data/%s; mv /tmp/x/backup/data/%s /data/; rm -rf /tmp/x",
+		bucket, key, stackName, stackName, stackName, stackName,
 	)
 }
 
@@ -106,10 +110,23 @@ func storePullMoverArgs(svcName, volumeRoot, targetNode string, env []string, sc
 	return append(args, storePullMoverImage, "-c", script)
 }
 
+// archiveNodeID extracts the swarm node id from a whole-disk archive key of the
+// form backup-<nodeID>-<timestamp>.tar.gz. Swarm node ids contain no '-', so
+// the id is everything between the "backup-" prefix and the next '-'.
+func archiveNodeID(key string) string {
+	rest := strings.TrimPrefix(key, "backup-")
+	if i := strings.IndexByte(rest, '-'); i > 0 {
+		return rest[:i]
+	}
+	return ""
+}
+
 // newestArchiveObject returns the key of the newest whole-disk archive in the
 // configured object store WITHOUT downloading it — the point of the store
-// transit (BUG-030).
-func (s *Service) newestArchiveObject(ctx context.Context, stackName string) (string, error) {
+// transit (BUG-030). When sourceNode is non-empty the search is restricted to
+// that node's own archives, so a storage failover restores the failed node's
+// data instead of whichever node uploaded last (BUG-031).
+func (s *Service) newestArchiveObject(ctx context.Context, stackName, sourceNode string) (string, error) {
 	if !s.S3.Configured() {
 		return "", fmt.Errorf("move: %s cannot move between nodes without a shared archive — configure the object store (backup_s3_* or the in-cluster backup store)", stackName)
 	}
@@ -127,31 +144,64 @@ func (s *Service) newestArchiveObject(ctx context.Context, stackName string) (st
 		if !strings.HasPrefix(o.Key, "backup-") || !strings.HasSuffix(o.Key, ".tar.gz") {
 			continue
 		}
+		// BUG-031: the archive must belong to the node holding the stack's
+		// data. Another node's archive contains zero backup/data/<stack>
+		// entries and would restore an empty database.
+		if sourceNode != "" && archiveNodeID(o.Key) != sourceNode {
+			continue
+		}
 		if key == "" || o.LastModified.After(newest) {
 			key, newest = o.Key, o.LastModified
 		}
 	}
 	if key == "" {
+		if sourceNode != "" {
+			return "", fmt.Errorf("move: no archive from node %s in the object store — the failover needs that node's latest backup (its agent uploads hourly while the node is up); refusing to restore another node's archive", sourceNode)
+		}
 		return "", fmt.Errorf("move: no whole-disk archive found in the object store (run `pmcluster backup create` first)")
 	}
 	return key, nil
 }
 
-// moveViaStorePull runs a one-shot mover service on the target node that pulls
-// the archive object straight from the object store and unpacks the stack's
-// subtree. No data crosses node-to-node host ports, so it needs no firewall
-// rules — unlike the HTTP mover (BUG-030).
-func (s *Service) moveViaStorePull(ctx context.Context, key, volumeRoot, stackName, targetNode string) error {
+// RestoreArchiveToNode runs a one-shot mover service on targetNode that pulls
+// archiveKey straight from the object store and extracts the stack's subtree
+// into <volumeRoot>/<stackName>. No data crosses node-to-node host ports, so
+// it needs no firewall rules — unlike the HTTP mover. It is the store-transit
+// primitive shared by stack move / storage failover and by cross-node backup
+// restore (BUG-032). Returns a clear error when no object store is configured.
+//
+// fromOffsite selects the object store the mover pulls from: false uses the
+// in-cluster SeaweedFS store (s.S3, the default for move/failover); true uses
+// the offsite backup_s3_* destination (s.OffsiteS3, the `backup restore
+// --from-s3` path) so a restore can come from the offsite copy even when the
+// in-cluster store is gone.
+func (s *Service) RestoreArchiveToNode(ctx context.Context, archiveKey, stackName, targetNode string, fromOffsite bool) error {
+	cfg := s.S3
+	if fromOffsite {
+		cfg = s.OffsiteS3
+	}
+	if !cfg.Configured() {
+		where := "backup_s3_* settings or the in-cluster backup store"
+		if fromOffsite {
+			where = "backup_s3_* settings"
+		}
+		return fmt.Errorf("restore: cannot restore %s onto %s without a shared archive — configure the object store (%s)", stackName, targetNode, where)
+	}
+	volRoot := s.VolumeRoot
+	if volRoot == "" {
+		volRoot = manifest.DefaultVolumeRoot
+	}
+
 	token := make([]byte, 16)
 	if _, err := rand.Read(token); err != nil {
 		return err
 	}
 	svcName := fmt.Sprintf("pmcluster-move-%s-%s", stackName, hex.EncodeToString(token)[:8])
-	script := storePullMoverScript(s.S3.Bucket, key, stackName)
-	moverCfg := s.S3
+	script := storePullMoverScript(cfg.Bucket, archiveKey, stackName)
+	moverCfg := cfg
 	moverCfg.Endpoint = moverEndpoint(moverCfg.Endpoint) // container cannot use 127.0.0.1
 	args := append([]string{"service", "create"},
-		storePullMoverArgs(svcName, volumeRoot, targetNode, rcloneStoreEnv(moverCfg), script)...)
+		storePullMoverArgs(svcName, volRoot, targetNode, rcloneStoreEnv(moverCfg), script)...)
 
 	if err := startMoverService(ctx, args, svcName); err != nil {
 		return fmt.Errorf("docker service create: %w", err)
@@ -159,6 +209,17 @@ func (s *Service) moveViaStorePull(ctx context.Context, key, volumeRoot, stackNa
 	defer removeMoverService(svcName)
 
 	return waitForMoverTask(ctx, svcName, targetNode)
+}
+
+// moveViaStorePull delegates the store transit to RestoreArchiveToNode, so a
+// backup restore into a remote node's volume root uses exactly the same
+// one-shot mover as a stack move / storage failover (BUG-032). The caller's
+// volume root is always s.VolumeRoot (or the manifest default), which
+// RestoreArchiveToNode re-derives. The move/failover path always pulls from the
+// in-cluster store (fromOffsite=false); only `backup restore --from-s3` uses
+// the offsite destination.
+func (s *Service) moveViaStorePull(ctx context.Context, key, stackName, targetNode string) error {
+	return s.RestoreArchiveToNode(ctx, key, stackName, targetNode, false)
 }
 
 // moverEndpoint rewrites a loopback object-store endpoint to the Docker

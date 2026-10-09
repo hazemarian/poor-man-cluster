@@ -617,9 +617,9 @@ var clusterDownCmd = &cobra.Command{
 SQLite state are preserved unless --purge is passed.
 
   --purge   also remove pmcluster-managed Swarm secrets, Docker configs,
-            and the two overlay networks. Does NOT delete ~/.pmcluster
-            (encryption key + SQLite); rm that directory manually if you
-            want a fully clean slate.
+            and the two overlay networks; back up the local store to a
+            restorable purge-backup-<ts>.tar.gz archive and then delete
+            it (restore with ` + "`pmcluster cluster reset --restore <path>`" + `).
 
   --yes     skip the confirmation prompt (useful in scripts).`,
 	RunE: runClusterDown,

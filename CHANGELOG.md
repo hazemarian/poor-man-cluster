@@ -2,6 +2,44 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.175 (2026-10-08)
+
+Storage failover & restore correctness + platform placement (pre-production blocker batch).
+
+- **Storage failover restored another node's archive (BUG-031).** The failover picked the globally
+  newest `backup-*.tar.gz` in the object store, which could be a different node's whole-disk
+  archive; restoring it silently started the app with an EMPTY database. The archive is now
+  selected by the SOURCE node (the stack's current pin) and the mover verifies the tarball actually
+  contains `<stack>` before touching the volume, failing loudly otherwise.
+- **`backup restore` was node-local (BUG-032).** It wrote into the volume root of whatever node the
+  CLI ran on, so on a multi-node cluster the stack's own node stayed empty and postgres re-initialised.
+  The restore now resolves the stack's owning node and, when it differs, routes the restore there
+  through the same store-transit mover (rclone pulls the archive from the store via the published
+  ingress and extracts it into the owning node's volume root); when it cannot route it fails loudly
+  (`this stack's volume lives on <node> — run the restore there`) and the output always names the
+  destination node. `--from-s3` now genuinely pulls the archive from the offsite bucket.
+- **Platform placement: `platform_node` now defaults to the leader (BUG-09/BUG-03).** Platform
+  services fell back to `node.role == manager`, which is a no-op on an all-manager swarm, so
+  OpenObserve could land on a 1-core/1.8 GB node and OOM — load spike, SSH/Raft starvation and
+  ~30 minutes with no swarm leader while the hostname-pinned backup store was down with it. The
+  leader is now written to `platform_node` (update/up/persistInstallState), pinning OpenObserve,
+  the edge and the control-plane backup to the leader; the store node selection avoids the platform
+  node; and the edge returns a clean JSON 502 when its upstream is unavailable.
+- **`join --storage-node` no longer needs joiner→manager SSH (BUG-019a).** The joiner stamps the
+  swarm-visible `pmcluster.storage` label and the leader adopts labeled-but-unlisted nodes; demotion
+  goes through `pmcluster node demote` (the earlier stale-label clearing is superseded).
+- **`credentials rotate` is atomic (BUG-05/06).** The new versioned swarm secret is created before
+  the store row is updated and the old secret is never removed; a new self-heal step rebuilds
+  missing rendered secret/config mounts (the cause of silent Traefik 404s after a rotation).
+- Extras: the `pmcluster webhook add` signing recipe now matches the receiver
+  (HMAC-SHA256 over `<unix-seconds><body>`, `X-Pmcluster-Timestamp`), the `cluster down --purge`
+  help documents the `purge-backup-<ts>.tar.gz` archive + `cluster reset --restore`, and the
+  control-plane archive is uploaded offsite too.
+- Verified live on a 4-manager sandbox: failover completes with the data intact (marker, amber
+  badge, `stack ack`, move-back); restore lands on the owning node from both the store and
+  `--from-s3`; `credentials rotate` leaves both secrets present and the dashboard serving 200/401;
+  the console API through the edge returns 200.
+
 ## v0.2.174.3 (2026-10-08)
 
 Move/failover: do not wait on the `docker service create` CLI's pipes (BUG-030 follow-up).

@@ -296,10 +296,15 @@ func (m *CredentialsManager) ensure(ctx context.Context, spec bootstrapSpec) (*M
 // secret, and force-restarts the consuming service. Returns plaintext
 // (caller prints once and discards).
 //
-// If SecretRemove fails (typically: the secret is still mounted by a
-// running service), the store has already been updated but Swarm still
-// has the old value. Operator scales the consuming service to 0 and
-// re-runs.
+// Order matters (split-brain fix): the NEW value is materialized into a
+// fresh content-addressed Swarm secret FIRST, and only then is the store row
+// updated. Swarm secrets are immutable and cannot be replaced in place, so the
+// old code removed the current secret and recreated it under the same name —
+// that left a window with NO secret (the store row was already updated), during
+// which Traefik admin routers silently 404ed. The versioned-name scheme keeps
+// the old secret mounted and in place: a running service can keep mounting the
+// old value until `cluster update` re-renders the stack with the new versioned
+// name. The old secret is therefore NEVER removed here.
 func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedCredential, error) {
 
 	if name == "edge_api_token" {
@@ -311,6 +316,11 @@ func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedC
 		return nil, fmt.Errorf("lookup %s: %w", name, err)
 	}
 
+	spec, ok := specFor(name, existing)
+	if !ok {
+		return nil, fmt.Errorf("rotate %s: no spec for credential kind %q", name, existing.Kind)
+	}
+
 	password, err := RandomPassword()
 	if err != nil {
 		return nil, fmt.Errorf("generate password: %w", err)
@@ -319,25 +329,32 @@ func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedC
 	if err != nil {
 		return nil, fmt.Errorf("encrypt: %w", err)
 	}
-	if err := m.Store.RotateCredential(ctx, name, ciphertext); err != nil {
-		return nil, fmt.Errorf("update credential row: %w", err)
-	}
-
-	spec, ok := specFor(name, existing)
-	if !ok {
-		return nil, fmt.Errorf("rotate %s: no spec for credential kind %q", name, existing.Kind)
-	}
 	payload, err := serialisePassword(spec, existing.Username, password)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := m.Docker.SecretRemove(ctx, existing.SwarmSecretName); err != nil {
-		return nil, fmt.Errorf("remove old swarm secret %s (is the consuming service still using it?): %w", existing.SwarmSecretName, err)
+	// 1. Materialize the NEW value under a fresh content-addressed name FIRST.
+	// The base name is the spec's fixed swarm secret name (e.g.
+	// "admin_credentials"), so successive rotations keep a stable base and the
+	// name grows a new <sha8> suffix each time (admin_credentials_<sha8>).
+	// This is BEFORE any store write: if this fails, the credential is untouched.
+	newSecretName := store.SwarmSecretName(spec.swarmSecretName, store.SecretHash(password))
+	if _, err := EnsureSecret(ctx, m.Docker, newSecretName, payload); err != nil {
+		return nil, fmt.Errorf("create new swarm secret %s: %w", newSecretName, err)
 	}
-	if _, err := EnsureSecret(ctx, m.Docker, existing.SwarmSecretName, payload); err != nil {
-		return nil, fmt.Errorf("re-create swarm secret %s: %w", existing.SwarmSecretName, err)
+
+	// 2. Only now update the store row — the new value is already live in the
+	// Swarm, so there is no window where the store and the Swarm disagree.
+	if err := m.Store.RotateCredential(ctx, name, ciphertext); err != nil {
+		return nil, fmt.Errorf("update credential row: %w", err)
 	}
+	if err := m.Store.UpdateCredentialSecretName(ctx, name, newSecretName); err != nil {
+		return nil, fmt.Errorf("update credential swarm secret name: %w", err)
+	}
+
+	// The old secret is NEVER removed: a running service may still mount it,
+	// and removing it would leave that service with a dangling mount.
 
 	if svc, ok := consumingService[name]; ok && m.Deployer != nil {
 		if err := m.Deployer.ForceUpdateService(ctx, svc); err != nil {
@@ -345,12 +362,15 @@ func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedC
 		}
 	}
 
-	if _, err := m.Store.GetSecret(ctx, existing.SwarmSecretName); err == nil {
-		if err := m.Store.UpdateSecret(ctx, existing.SwarmSecretName, ciphertext, store.SecretHash(password)); err != nil {
-			return nil, fmt.Errorf("update db secret %s: %w", existing.SwarmSecretName, err)
+	// Sync the console-reveal DB secrets row (keyed by the FIXED base name) to
+	// the new plaintext + hash, so GET /api/secrets/{name}/value keeps matching
+	// the rotated credential.
+	if _, err := m.Store.GetSecret(ctx, spec.swarmSecretName); err == nil {
+		if err := m.Store.UpdateSecret(ctx, spec.swarmSecretName, ciphertext, store.SecretHash(password)); err != nil {
+			return nil, fmt.Errorf("update db secret %s: %w", spec.swarmSecretName, err)
 		}
 	} else if !errors.Is(err, store.ErrSecretNotFound) {
-		return nil, fmt.Errorf("lookup db secret %s: %w", existing.SwarmSecretName, err)
+		return nil, fmt.Errorf("lookup db secret %s: %w", spec.swarmSecretName, err)
 	}
 
 	return &ManagedCredential{
@@ -358,7 +378,7 @@ func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedC
 		Kind:               CredentialKind(existing.Kind),
 		Username:           existing.Username,
 		Password:           password,
-		SwarmSecretName:    existing.SwarmSecretName,
+		SwarmSecretName:    newSecretName,
 		NewlyCreated:       false,
 		SwarmSecretCreated: true,
 	}, nil
@@ -568,6 +588,31 @@ func (c *Credentials) Rotate(ctx context.Context, name string) (*ManagedCredenti
 	return c.Rotator.Rotate(ctx, name)
 }
 
+// managedSecretNames maps each managed credential's FIXED swarm secret base
+// name (e.g. "admin_credentials") to the credential's current swarm secret name
+// (the base name, or a content-addressed <base>_<sha8> after a rotation). The
+// platform render consults this map so a rotated credential mounts its new
+// versioned secret while the old one stays in place (rotate split-brain
+// fix). A nil store or a read failure yields nil (base names pass through).
+func managedSecretNames(ctx context.Context, st *store.Store) map[string]string {
+	if st == nil {
+		return nil
+	}
+	creds, err := st.ListCredentials(ctx)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]string, len(creds))
+	for _, c := range creds {
+		spec, ok := specFor(c.Name, c)
+		if !ok || spec.swarmSecretName == "" {
+			continue
+		}
+		out[spec.swarmSecretName] = c.SwarmSecretName
+	}
+	return out
+}
+
 // loadObjectStore builds the in-cluster SeaweedFS store config for the backup
 // stack. The zero value (disabled) is returned when the seaweedfs_admin
 // credential is absent — e.g. a cluster that has not enabled the in-cluster
@@ -610,6 +655,15 @@ func loadObjectStore(ctx context.Context, docker runtime.Client, st *store.Store
 // "worker" or empty → the current behavior (first non-storage worker, else
 // first non-storage node, else "" — degraded, where the offsite copy still
 // provides disaster recovery).
+//
+// BUG-09: the store must never co-locate with the platform stack. The platform
+// node runs the heavy platform workloads (OpenObserve, the edge console,
+// Traefik); if the SeaweedFS backup store also lands there, a small node hosts
+// both the quorum-critical platform services AND the durable store — when it
+// OOMs/crash-loops it takes the Raft quorum and the store down together. So a
+// non-storage candidate that is NOT the platform node is always preferred; the
+// platform node is only used as a last resort when no other valid non-storage
+// node exists.
 func pickStoreNode(ctx context.Context, docker runtime.Client, st *store.Store) string {
 	if docker == nil || st == nil {
 		return ""
@@ -637,11 +691,23 @@ func pickStoreNode(ctx context.Context, docker runtime.Client, st *store.Store) 
 	for _, h := range splitStorageNodes(st.GetSettingDefault(ctx, SettingStorageNodes(), "")) {
 		storage[h] = true
 	}
+	platform := st.GetSettingDefault(ctx, SettingPlatformNode(), "")
+
+	// Preferred: a non-storage, non-platform worker (the durable copy lives in
+	// a different failure domain than both the data and the platform stack).
 	for _, n := range nodes {
-		if n.Role == "worker" && !storage[n.Hostname] {
+		if n.Role == "worker" && !storage[n.Hostname] && n.Hostname != platform {
 			return n.Hostname
 		}
 	}
+	// Then any non-storage, non-platform node.
+	for _, n := range nodes {
+		if !storage[n.Hostname] && n.Hostname != platform {
+			return n.Hostname
+		}
+	}
+	// Last resort: any non-storage node, even the platform node (degraded —
+	// the offsite copy still provides disaster recovery).
 	for _, n := range nodes {
 		if !storage[n.Hostname] {
 			return n.Hostname

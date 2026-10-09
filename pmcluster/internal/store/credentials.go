@@ -102,6 +102,29 @@ func (s *Store) UpdateCredentialUsername(ctx context.Context, name string, newUs
 	return nil
 }
 
+// UpdateCredentialSecretName repoints a credential's Swarm secret to a new
+// (content-addressed) name. Used by rotation, which never mutates the immutable
+// in-use Swarm secret — it mints a fresh versioned secret and records its name
+// here so the next render references the new value. Returns ErrCredentialNotFound
+// if the row doesn't exist.
+func (s *Store) UpdateCredentialSecretName(ctx context.Context, name string, swarmSecretName string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE managed_credentials SET swarm_secret_name = ? WHERE name = ?`,
+		swarmSecretName, name,
+	)
+	if err != nil {
+		return fmt.Errorf("update credential swarm secret name: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrCredentialNotFound
+	}
+	return nil
+}
+
 // ListCredentials returns all credentials, sorted by name. Used by
 // `pmcluster credentials list`.
 func (s *Store) ListCredentials(ctx context.Context) ([]*ManagedCredential, error) {

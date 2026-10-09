@@ -106,6 +106,38 @@ func TestLoadComposeFile_BackupControlPlane(t *testing.T) {
 	}
 }
 
+// TestLoadComposeFile_ControlPlaneBackupOffsite verifies the control-plane
+// backup agent ALSO uploads to the offsite S3 target when backup_s3_* is
+// configured — the campaign observed control-plane archives never reaching the
+// offsite. With DataDir set (so the control-plane agent renders) and BackupS3
+// configured, BOTH offen services (volume-backup + control-plane-backup) carry
+// the AWS_* block.
+func TestLoadComposeFile_ControlPlaneBackupOffsite(t *testing.T) {
+	in := RenderInput{
+		Domain:   "example.com",
+		DataDir:  "/root/.pmcluster",
+		BackupS3: BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
+	}
+	body := string(mustLoadBackup(t, in))
+
+	if !strings.Contains(body, "control-plane-backup") {
+		t.Fatal("control-plane-backup should render when DataDir is set")
+	}
+	for _, want := range []string{
+		"AWS_S3_BUCKET_NAME: offsite-bucket",
+		"AWS_ACCESS_KEY_ID: AK",
+		"AWS_ENDPOINT: s3.example.com",
+		"AWS_ENDPOINT_PROTO: https",
+		"AWS_S3_BUCKET_LOOKUP: path",
+	} {
+		// Each offen service (volume-backup + control-plane-backup) emits its own
+		// AWS_* block, so the env var appears twice.
+		if n := strings.Count(body, want); n != 2 {
+			t.Errorf("expected %q on BOTH offen services (count 2), got %d:\n%s", want, n, body)
+		}
+	}
+}
+
 // TestLoadComposeFile_BackupStorageNodeConstraint verifies the three-way
 // volume-backup deploy branch: BackupAllNodes → global; else
 // StorageNodeConstraint → global constrained to pmcluster.storage-labeled

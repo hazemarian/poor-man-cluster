@@ -66,7 +66,7 @@ func New(cfg Config) http.Handler {
 // IP so the daemon (which runs its own trusted-real-IP logic) sees the genuine
 // client via headers it already trusts from overlay peers.
 func reverseProxy(target *url.URL) *httputil.ReverseProxy {
-	return &httputil.ReverseProxy{
+	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			pr.Out.Host = target.Host
@@ -82,6 +82,19 @@ func reverseProxy(target *url.URL) *httputil.ReverseProxy {
 			}
 		},
 	}
+	// When the upstream daemon is unreachable (this node's API is not
+	// listening — e.g. the edge landed on a node other than the API host), the
+	// default ReverseProxy writes a bare, internal-leaking 502 body
+	// ("dial tcp 172.17.0.1:9090: connect: connection refused"). Return a
+	// stable, dependency-free JSON body so the console/API client gets a clean
+	// signal instead of a Go transport error.
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		log.Printf("edgeproxy: upstream %s unreachable: %v", target, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"error":"control plane unavailable"}`))
+	}
+	return rp
 }
 
 // ServerTimeouts are the slowloris-protection timeouts applied to the http.Server

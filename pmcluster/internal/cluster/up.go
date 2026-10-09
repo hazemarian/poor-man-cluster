@@ -220,6 +220,22 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	wf.Add("Defaulting storage node", func(ctx context.Context) error {
 		return defaultStorageNode(ctx, deps)
 	})
+	// Default the platform node (the leader) BEFORE the platform stacks are
+	// rendered, so the infra/observability/edge/backup services are pinned to a
+	// single node that can actually serve them from day one. On an all-manager
+	// swarm the `node.role == manager` fallback constrains nothing, so without
+	// this the platform stack can land on a tiny node, OOM and starve the Raft
+	// leader. Mirrors the storage-node defaulting step above.
+	wf.Add("Defaulting platform node", func(ctx context.Context) error {
+		host, err := defaultPlatformNode(ctx, deps)
+		if err != nil {
+			return err
+		}
+		if host != "" {
+			fmt.Fprintf(out, "  ⚠ platform_node was unset — pinned platform services to the leader %s\n", host)
+		}
+		return nil
+	})
 	wf.Add("TLS certificate (Let's Encrypt or operator cert/key)", func(ctx context.Context) error {
 		if in.ACMEEmail != "" {
 			fmt.Fprintf(out, "  ▶ TLS via Let's Encrypt (Traefik HTTP-01) — port 80 must be reachable from the internet\n")
@@ -340,6 +356,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			StorageNodeConstraint:    deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "") != "",
 			StorageNodeLabel:         runtime.StorageNodeLabel,
 			PlatformNode:             loadPlatformNode(ctx, deps.Store),
+			ManagedSecretNames:       managedSecretNames(ctx, deps.Store),
 			OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
 			BackupS3:        s3b,
 			Store:           objStore,
@@ -450,6 +467,39 @@ func defaultStorageNode(ctx context.Context, deps UpDeps) error {
 	return nil
 }
 
+// defaultPlatformNode records the leader hostname as the platform_node setting
+// when none is configured yet, so the platform stack (traefik, openobserve,
+// edge, backup agents, sso) is pinned to a single node from the start. On an
+// all-manager swarm the `node.role == manager` fallback constraint constrains
+// NOTHING, so an unset platform_node lets heavy platform workloads land on a
+// tiny 1-core node and OOM/crash-loop it (starving SSH and the Raft leader).
+// Idempotent: no-op once a value is set (an operator's explicit pin is never
+// clobbered). Returns the hostname it set ("" when nothing changed).
+func defaultPlatformNode(ctx context.Context, deps UpDeps) (string, error) {
+	if deps.Store == nil {
+		return "", nil
+	}
+	if cur := deps.Store.GetSettingDefault(ctx, SettingPlatformNode(), ""); cur != "" {
+		return "", nil
+	}
+	if deps.Docker == nil {
+		return "", nil
+	}
+	nodes, err := deps.Docker.NodeList(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, n := range nodes {
+		if n.IsLeader && n.Hostname != "" {
+			if err := deps.Store.SetSetting(ctx, SettingPlatformNode(), n.Hostname); err != nil {
+				return "", fmt.Errorf("persist %s: %w", SettingPlatformNode(), err)
+			}
+			return n.Hostname, nil
+		}
+	}
+	return "", nil
+}
+
 // persistInstallState records the install inputs used on this (possibly
 // idempotent) bring-up: TLS mode + cert/key paths, domain, and OO admin email.
 func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
@@ -477,6 +527,12 @@ func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
 	// so platform stacks render in final form before deploy; calling the
 	// helper here keeps the persisted state authoritative on re-runs.
 	if err := defaultStorageNode(ctx, deps); err != nil {
+		return err
+	}
+	// Platform-node defaulting happens earlier too (Defaulting platform node
+	// step); re-running here keeps the persisted state authoritative on re-runs
+	// without clobbering an operator's explicit pin.
+	if _, err := defaultPlatformNode(ctx, deps); err != nil {
 		return err
 	}
 	return nil

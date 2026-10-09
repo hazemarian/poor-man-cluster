@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -23,10 +24,18 @@ func TestStorePullMoverScriptAndArgs(t *testing.T) {
 		"tar -xzf /tmp/m.tgz -C /tmp/x",
 		"rm -rf /data/sfapp",
 		"mv /tmp/x/backup/data/sfapp /data/",
+		"the archive does not contain backup/data/sfapp",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script missing %q:\n%s", want, script)
 		}
+	}
+	// BUG-031: the empty/wrong-archive guard must run BEFORE the target's
+	// subtree is wiped — otherwise a bad archive would erase /data/sfapp.
+	guardIdx := strings.Index(script, "the archive does not contain")
+	rmIdx := strings.Index(script, "rm -rf /data/sfapp")
+	if guardIdx == -1 || rmIdx == -1 || guardIdx >= rmIdx {
+		t.Errorf("the archive-content guard must precede rm -rf /data/sfapp:\n%s", script)
 	}
 
 	env := rcloneStoreEnv(backups.S3Config{Endpoint: "http://127.0.0.1:8333", Bucket: "pmcluster-backups", AccessKey: "ak", SecretKey: "sk"})
@@ -74,8 +83,8 @@ func TestRcloneStoreEnv_EndpointScheme(t *testing.T) {
 	}
 }
 
-// TestNewestArchiveObject picks the newest whole-disk archive and never a
-// control-plane archive or a non-tarball.
+// TestNewestArchiveObject picks the newest whole-disk archive for a given
+// source node and never a control-plane archive or a non-tarball.
 func TestNewestArchiveObject(t *testing.T) {
 	body := `<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
@@ -85,27 +94,52 @@ func TestNewestArchiveObject(t *testing.T) {
   <Contents><Key>pmcluster-ctlplane-node1-2026-10-08T11-00-00.tar.gz</Key><LastModified>2026-10-08T11:00:01.000Z</LastModified><Size>1</Size></Contents>
   <Contents><Key>notes.txt</Key><LastModified>2026-10-08T12:00:01.000Z</LastModified><Size>1</Size></Contents>
 </ListBucketResult>`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("prefix"); got != "backup-" {
-			t.Errorf("prefix = %q, want backup-", got)
-		}
-		w.Header().Set("Content-Type", "application/xml")
-		fmt.Fprint(w, body)
-	}))
-	defer srv.Close()
 
-	svc := &Service{S3: backups.S3Config{Endpoint: srv.URL, Bucket: "pmcluster-backups", AccessKey: "ak", SecretKey: "sk"}}
-	key, err := svc.newestArchiveObject(context.Background(), "sfapp")
-	if err != nil {
-		t.Fatalf("newestArchiveObject: %v", err)
+	newSvc := func(tt *testing.T) *Service {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got := r.URL.Query().Get("prefix"); got != "backup-" {
+				tt.Errorf("prefix = %q, want backup-", got)
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			fmt.Fprint(w, body)
+		}))
+		tt.Cleanup(srv.Close)
+		return &Service{S3: backups.S3Config{Endpoint: srv.URL, Bucket: "pmcluster-backups", AccessKey: "ak", SecretKey: "sk"}}
 	}
-	if key != "backup-node1-2026-10-08T10-00-00.tar.gz" {
-		t.Fatalf("key = %q, want the newest backup-*.tar.gz (ctlplane + non-tarball excluded)", key)
-	}
+
+	t.Run("source node filter", func(t *testing.T) {
+		svc := newSvc(t)
+		key, err := svc.newestArchiveObject(context.Background(), "sfapp", "node1")
+		if err != nil {
+			t.Fatalf("newestArchiveObject: %v", err)
+		}
+		if key != "backup-node1-2026-10-08T10-00-00.tar.gz" {
+			t.Fatalf("key = %q, want the newest backup-*.tar.gz for node1 (ctlplane + non-tarball excluded)", key)
+		}
+	})
+
+	t.Run("source node mismatch", func(t *testing.T) {
+		svc := newSvc(t)
+		_, err := svc.newestArchiveObject(context.Background(), "sfapp", "node2")
+		if err == nil || !strings.Contains(err.Error(), "no archive from node") {
+			t.Fatalf("err = %v, want a no-archive-from-node error", err)
+		}
+	})
+
+	t.Run("empty source node picks newest overall", func(t *testing.T) {
+		svc := newSvc(t)
+		key, err := svc.newestArchiveObject(context.Background(), "sfapp", "")
+		if err != nil {
+			t.Fatalf("newestArchiveObject: %v", err)
+		}
+		if key != "backup-node1-2026-10-08T10-00-00.tar.gz" {
+			t.Fatalf("key = %q, want the newest backup-*.tar.gz overall", key)
+		}
+	})
 }
 
 func TestNewestArchiveObject_Errors(t *testing.T) {
-	if _, err := (&Service{}).newestArchiveObject(context.Background(), "sfapp"); err == nil || !strings.Contains(err.Error(), "without a shared archive") {
+	if _, err := (&Service{}).newestArchiveObject(context.Background(), "sfapp", ""); err == nil || !strings.Contains(err.Error(), "without a shared archive") {
 		t.Fatalf("unconfigured store must error, got %v", err)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +148,7 @@ func TestNewestArchiveObject_Errors(t *testing.T) {
 	}))
 	defer srv.Close()
 	svc := &Service{S3: backups.S3Config{Endpoint: srv.URL, Bucket: "b", AccessKey: "ak", SecretKey: "sk"}}
-	if _, err := svc.newestArchiveObject(context.Background(), "sfapp"); err == nil || !strings.Contains(err.Error(), "no whole-disk archive found") {
+	if _, err := svc.newestArchiveObject(context.Background(), "sfapp", ""); err == nil || !strings.Contains(err.Error(), "no whole-disk archive found") {
 		t.Fatalf("empty store must error, got %v", err)
 	}
 }
@@ -170,5 +204,162 @@ func TestStartMoverService_ReportsCreateFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown flag") {
 		t.Fatalf("the error must carry the CLI output, got %v", err)
+	}
+}
+
+// TestRestoreArchiveToNode_NoStore: without an object store the exported
+// restore primitive fails loudly instead of creating a mover that cannot pull.
+func TestRestoreArchiveToNode_NoStore(t *testing.T) {
+	err := (&Service{}).RestoreArchiveToNode(context.Background(), "backup-x.tar.gz", "sfapp", "nxt-sw-2-m", false)
+	if err == nil || !strings.Contains(err.Error(), "configure the object store") {
+		t.Fatalf("err = %v, want a no-object-store error", err)
+	}
+}
+
+// TestRestoreArchiveToNode_RoutesMoverToOwner runs the exported restore
+// primitive against a fake docker CLI and asserts the one-shot service is
+// pinned to the owning node, pulls the archive object from the store, and
+// keeps the archive-content guard ahead of the wipe.
+func TestRestoreArchiveToNode_RoutesMoverToOwner(t *testing.T) {
+	capture := filepath.Join(t.TempDir(), "argv.txt")
+	fakeDockerOnPath(t, fmt.Sprintf(`#!/bin/sh
+if [ "$1" = service ] && [ "$2" = create ]; then
+  printf '%%s\n' "$@" > %q
+  exit 0
+fi
+if [ "$1" = service ] && [ "$2" = inspect ]; then
+  i=0
+  while [ ! -f %q ] && [ $i -lt 500 ]; do sleep 0.01; i=$((i+1)); done
+  exit 0
+fi
+if [ "$1" = service ] && [ "$2" = ps ]; then
+  echo "Complete"
+  exit 0
+fi
+exit 0
+`, capture, capture))
+
+	svc := &Service{
+		S3:         backups.S3Config{Endpoint: "http://127.0.0.1:8333", Bucket: "pmcluster-backups", AccessKey: "ak", SecretKey: "sk"},
+		VolumeRoot: "/var/stack/data",
+	}
+	if err := svc.RestoreArchiveToNode(context.Background(), "backup-node1-2026-10-08T10-00-00.tar.gz", "sfapp", "nxt-sw-2-m", false); err != nil {
+		t.Fatalf("RestoreArchiveToNode: %v", err)
+	}
+
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read captured argv: %v", err)
+	}
+	joined := strings.Join(strings.Fields(string(data)), " ")
+	for _, want := range []string{
+		"--constraint node.hostname==nxt-sw-2-m",
+		"--restart-condition none",
+		"--mount type=bind,source=/var/stack/data,destination=/data",
+		"--host host.docker.internal:host-gateway",
+		"RCLONE_CONFIG_SW_ENDPOINT=http://host.docker.internal:8333",
+		"RCLONE_CONFIG_SW_ACCESS_KEY_ID=ak",
+		"RCLONE_CONFIG_SW_SECRET_ACCESS_KEY=sk",
+		"RCLONE_CONFIG_SW_FORCE_PATH_STYLE=true",
+		"rclone copyto sw:pmcluster-backups/backup-node1-2026-10-08T10-00-00.tar.gz /tmp/m.tgz",
+		"the archive does not contain backup/data/sfapp",
+		"mv /tmp/x/backup/data/sfapp /data/",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("mover argv missing %q:\n%s", want, joined)
+		}
+	}
+	// BUG-031: the archive-content guard must run BEFORE the target's subtree
+	// is wiped — a wrong archive must never erase the owner's /data/sfapp.
+	guardIdx := strings.Index(joined, "the archive does not contain")
+	rmIdx := strings.Index(joined, "rm -rf /data/sfapp")
+	if guardIdx == -1 || rmIdx == -1 || guardIdx >= rmIdx {
+		t.Errorf("the archive-content guard must precede rm -rf /data/sfapp:\n%s", joined)
+	}
+}
+
+// TestRestoreArchiveToNode_DefaultVolumeRoot: an unset VolumeRoot falls back to
+// the manifest default so the mover binds the right host directory.
+func TestRestoreArchiveToNode_DefaultVolumeRoot(t *testing.T) {
+	capture := filepath.Join(t.TempDir(), "argv.txt")
+	fakeDockerOnPath(t, fmt.Sprintf(`#!/bin/sh
+if [ "$1" = service ] && [ "$2" = create ]; then
+  printf '%%s\n' "$@" > %q
+  exit 0
+fi
+if [ "$1" = service ] && [ "$2" = inspect ]; then
+  i=0
+  while [ ! -f %q ] && [ $i -lt 500 ]; do sleep 0.01; i=$((i+1)); done
+  exit 0
+fi
+if [ "$1" = service ] && [ "$2" = ps ]; then
+  echo "Complete"
+  exit 0
+fi
+exit 0
+`, capture, capture))
+
+	svc := &Service{S3: backups.S3Config{Endpoint: "http://127.0.0.1:8333", Bucket: "b", AccessKey: "ak", SecretKey: "sk"}}
+	if err := svc.RestoreArchiveToNode(context.Background(), "backup-x.tar.gz", "sfapp", "nxt-sw-2-m", false); err != nil {
+		t.Fatalf("RestoreArchiveToNode: %v", err)
+	}
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read captured argv: %v", err)
+	}
+	joined := strings.Join(strings.Fields(string(data)), " ")
+	if !strings.Contains(joined, "--mount type=bind,source=/var/stack/data,destination=/data") {
+		t.Errorf("unset VolumeRoot must bind the default /var/stack/data:\n%s", joined)
+	}
+}
+
+// TestRestoreArchiveToNode_FromOffsite: with fromOffsite=true the mover's rclone
+// remote must point at the OFFSITE backup_s3_* destination (endpoint + creds +
+// bucket) instead of the in-cluster SeaweedFS store. The store (127.0.0.1:8333)
+// must not appear anywhere in the mover argv.
+func TestRestoreArchiveToNode_FromOffsite(t *testing.T) {
+	capture := filepath.Join(t.TempDir(), "argv.txt")
+	fakeDockerOnPath(t, fmt.Sprintf(`#!/bin/sh
+if [ "$1" = service ] && [ "$2" = create ]; then
+  printf '%%s\n' "$@" > %q
+  exit 0
+fi
+if [ "$1" = service ] && [ "$2" = inspect ]; then
+  i=0
+  while [ ! -f %q ] && [ $i -lt 500 ]; do sleep 0.01; i=$((i+1)); done
+  exit 0
+fi
+if [ "$1" = service ] && [ "$2" = ps ]; then
+  echo "Complete"
+  exit 0
+fi
+exit 0
+`, capture, capture))
+
+	svc := &Service{
+		S3:        backups.S3Config{Endpoint: "http://127.0.0.1:8333", Bucket: "pmcluster-backups", AccessKey: "storeak", SecretKey: "storesk"},
+		OffsiteS3: backups.S3Config{Endpoint: "https://r2.example.com", Bucket: "offsite-bucket", AccessKey: "offak", SecretKey: "offsk", Region: "auto"},
+	}
+	if err := svc.RestoreArchiveToNode(context.Background(), "backup-node1-2026-10-08T10-00-00.tar.gz", "sfapp", "nxt-sw-2-m", true); err != nil {
+		t.Fatalf("RestoreArchiveToNode: %v", err)
+	}
+
+	data, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read captured argv: %v", err)
+	}
+	joined := strings.Join(strings.Fields(string(data)), " ")
+	for _, want := range []string{
+		"RCLONE_CONFIG_SW_ENDPOINT=https://r2.example.com",
+		"RCLONE_CONFIG_SW_ACCESS_KEY_ID=offak",
+		"RCLONE_CONFIG_SW_SECRET_ACCESS_KEY=offsk",
+		"rclone copyto sw:offsite-bucket/backup-node1-2026-10-08T10-00-00.tar.gz /tmp/m.tgz",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("mover argv missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "127.0.0.1") || strings.Contains(joined, "storeak") || strings.Contains(joined, "pmcluster-backups") {
+		t.Errorf("offsite restore must not use the in-cluster store:\n%s", joined)
 	}
 }
