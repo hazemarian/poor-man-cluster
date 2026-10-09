@@ -75,7 +75,7 @@ func TestRenderedConfigsAPI(t *testing.T) {
 	}
 
 	srv := httptest.NewServer(New(Deps{
-		Lookup:  &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
+		Lookup:  &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin", Role: auth.RoleAdmin}}},
 		Configs: configs.NewLocal(st),
 	}))
 	defer srv.Close()
@@ -104,11 +104,42 @@ func TestRenderedConfigsAPI(t *testing.T) {
 // Configs dependency the rendered route is omitted.
 func TestRenderedConfigsAPI_NotWired(t *testing.T) {
 	srv := httptest.NewServer(New(Deps{
-		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin"}}},
+		Lookup: &fakeLookup{users: map[string]*auth.User{"tok": {ID: 1, Name: "admin", Role: auth.RoleAdmin}}},
 	}))
 	defer srv.Close()
 	resp := doJSON(t, http.MethodGet, srv.URL+"/api/cluster/rendered", "tok", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET (not wired) = %d, want 404 (route omitted)", resp.StatusCode)
+	}
+}
+
+// TestRenderedConfigsAPI_RequiresOperatorRole is the FIX 5 guard: a
+// viewer-tier bearer is refused the rendered configs (they embed root
+// credentials), an operator/admin bearer is allowed.
+func TestRenderedConfigsAPI_RequiresOperatorRole(t *testing.T) {
+	st := openServerStore(t)
+	ctx := context.Background()
+	if _, err := st.CreateConfig(ctx, "cluster", "", "traefik-dynamic", "template", "tls: {}", "v0.2.39"); err != nil {
+		t.Fatalf("CreateConfig: %v", err)
+	}
+	if err := st.SetRendered(ctx, "traefik-dynamic", "tls: {}"); err != nil {
+		t.Fatalf("SetRendered: %v", err)
+	}
+
+	srv := httptest.NewServer(New(Deps{
+		Lookup: &fakeLookup{users: map[string]*auth.User{
+			"viewer-tok":   {ID: 1, Name: "viewer", Role: auth.RoleViewer},
+			"operator-tok": {ID: 2, Name: "op", Role: auth.RoleOperator},
+		}},
+		Configs: configs.NewLocal(st),
+	}))
+	defer srv.Close()
+	url := srv.URL + "/api/cluster/rendered"
+
+	if resp := doJSON(t, http.MethodGet, url, "viewer-tok", nil); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("viewer GET = %d, want 403", resp.StatusCode)
+	}
+	if resp := doJSON(t, http.MethodGet, url, "operator-tok", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("operator GET = %d, want 200; body: %s", resp.StatusCode, readBody(t, resp))
 	}
 }

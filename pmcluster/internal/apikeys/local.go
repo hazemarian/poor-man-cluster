@@ -29,7 +29,10 @@ func (a *Local) Create(ctx context.Context, name string, stack ...string) (int64
 	token, _ := auth.GenerateToken()
 	tokenID, secret := auth.SplitToken(token)
 	hash, _ := auth.HashToken(secret)
-	id, err := a.Store.CreateUser(ctx, name, tokenID, hash, stack...)
+	// FIX 5: API keys minted here are operator-tier, not admin — they can
+	// deploy/operate stacks but must NOT read secret-bearing surfaces
+	// (rendered configs embed root credentials, settings embed secrets).
+	id, err := a.Store.CreateUserWithRole(ctx, name, tokenID, hash, auth.RoleOperator, stack...)
 	if err != nil {
 		return 0, "", err
 	}

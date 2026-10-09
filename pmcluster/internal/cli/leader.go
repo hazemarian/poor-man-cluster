@@ -39,8 +39,26 @@ func waitForSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.
 	}
 	t := time.NewTicker(leaderPollInterval)
 	defer t.Stop()
+	workerLogged := false
 	for {
 		leader, found, err := isSwarmLeader(ctx, dc, host)
+		if err != nil && isSwarmWorker(ctx, dc) {
+			// BUG-033: a genuine swarm WORKER (swarm active, ControlAvailable
+			// false). `docker node ls` fails with "this node is not a swarm
+			// manager", but unlike a standalone node it must NOT serve and
+			// start a control loop that errors every pass — stand by silently
+			// instead, re-checking so a later promotion to manager resumes.
+			if !workerLogged {
+				log.Info().Str("node", host).Msg("this node is a swarm worker — standing by (no control loop)")
+				workerLogged = true
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-t.C:
+			}
+			continue
+		}
 		switch {
 		case err != nil:
 			// Docker unreachable: can't confirm swarm membership — treat as
@@ -61,6 +79,26 @@ func waitForSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.
 		case <-t.C:
 		}
 	}
+}
+
+// isSwarmWorker reports whether the local Docker daemon is a Swarm WORKER: a
+// member of an ACTIVE swarm that lacks manager (control) access. Such a node
+// can never run the control loop — every manager-only call (node/service/
+// config list) fails with "this node is not a swarm manager" — so the daemon
+// must stand by silently instead of serving and starting a reconcile loop
+// that errors every pass (BUG-033). A standalone node (swarm inactive) or a
+// manager returns false, preserving the existing behaviour.
+func isSwarmWorker(ctx context.Context, dc runtime.Client) bool {
+	if dc == nil {
+		return false
+	}
+	info, err := dc.Info(ctx)
+	if err != nil {
+		// Docker unreachable: can't confirm worker status — treat as
+		// standalone/local (existing behaviour).
+		return false
+	}
+	return info.SwarmLocalNodeState == "active" && !info.SwarmControlAvailable
 }
 
 // isSwarmLeader reports whether the node with the given hostname is the
@@ -105,9 +143,20 @@ func WatchSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Lo
 		defer t.Stop()
 		current := false
 		first := true
+		workerLogged := false
 		for {
 			leader, found, err := isSwarmLeader(ctx, dc, host)
 			switch {
+			case err != nil && isSwarmWorker(ctx, dc):
+				// BUG-033: a genuine swarm WORKER. Stay idle — never emit
+				// leader-true, so the caller never starts the reconcile loop —
+				// logging the standby message once, and re-checking each poll
+				// so a later promotion to manager starts the loop.
+				if !workerLogged {
+					log.Info().Str("node", host).Msg("this node is a swarm worker — standing by (no control loop)")
+					workerLogged = true
+				}
+				current, first = false, false
 			case err != nil || !found:
 				// Docker unreachable / not a swarm member: standalone mode.
 				if current || first {

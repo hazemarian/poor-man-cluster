@@ -932,7 +932,7 @@ func TestRBAC_ViewerIsReadOnly(t *testing.T) {
 	}
 
 	// Admin-only reads: 403.
-	for _, path := range []string{"/web/apikeys"} {
+	for _, path := range []string{"/web/apikeys", "/web/settings/rendered/traefik-dynamic"} {
 		resp := doRequest(t, app, http.MethodGet, path, "", jar)
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("viewer GET %s = %d, want 403", path, resp.StatusCode)
@@ -979,6 +979,13 @@ func TestRBAC_OperatorCanMutateButNotAdmin(t *testing.T) {
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("operator %s %s = %d, want 403", tc.method, tc.path, resp.StatusCode)
 		}
+	}
+
+	// FIX 5: rendered config content is operator-level (embeds root
+	// credentials) — an operator can read it, a viewer cannot.
+	resp := doRequest(t, app, http.MethodGet, "/web/settings/rendered/traefik-dynamic", "", jar)
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("operator GET /web/settings/rendered/traefik-dynamic = %d, want 200", resp.StatusCode)
 	}
 }
 

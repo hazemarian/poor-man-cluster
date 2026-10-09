@@ -1,9 +1,11 @@
 package reconcile
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -228,6 +230,54 @@ func TestLoop_EventTriggersPass(t *testing.T) {
 
 func noopLogger() zerolog.Logger {
 	return zerolog.Nop()
+}
+
+// TestRunOnce_SyncErrorLoggedOncePerError is the BUG-034 regression: a
+// permanently broken stack (a manifest written before App.volumes became a
+// map) fails every pass, but the reconcile loop must log the error only once
+// (per distinct error string) and mark the stack errored — not spam the daemon
+// log every pass.
+func TestRunOnce_SyncErrorLoggedOncePerError(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	// A legacy manifest: app-level `volumes` as an ARRAY (pre-map format),
+	// which fails to decode into the current map[string]string.
+	legacySource := "app: demo\nenv: production\ndomain: example.com\nvolumes: [legacy_volume]\nservices:\n  web:\n    image: nginx\n"
+	if err := st.RecordDeploy(ctx, &store.StackRevision{
+		StackName:    "demo",
+		Revision:     3001,
+		SourceYAML:   legacySource,
+		RenderedYAML: "version: \"3.9\"\nservices: {}\n",
+	}, ""); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+
+	svc := &stacks.Service{Store: st, Deployer: &recordingDeployer{}, MkdirAll: func(string, os.FileMode) error { return nil }}
+
+	var buf bytes.Buffer
+	log := zerolog.New(&buf)
+	r := &Reconciler{Store: st, DeployService: svc, Services: &fakeServices{}, Log: log}
+
+	if err := r.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce (pass 1): %v", err)
+	}
+	if err := r.RunOnce(ctx); err != nil {
+		t.Fatalf("RunOnce (pass 2): %v", err)
+	}
+
+	out := buf.String()
+	if got := strings.Count(out, "reconcile — app sync failed"); got != 1 {
+		t.Errorf("app sync failure logged %d times, want exactly 1:\n%s", got, out)
+	}
+
+	// The stack is marked errored.
+	snap, err := st.GetStackStatus(ctx, "demo")
+	if err != nil {
+		t.Fatalf("GetStackStatus: %v", err)
+	}
+	if snap.Status != StatusError {
+		t.Errorf("stack status = %q, want %q", snap.Status, StatusError)
+	}
 }
 
 // fakeNodesDocker implements runtime.Client.NodeList with canned nodes.

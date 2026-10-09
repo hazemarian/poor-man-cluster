@@ -1,6 +1,7 @@
 package configs
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,14 +13,28 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // httpTestEnv wires a real store-backed Local service under a chi router
-// mounting the configs HTTP routes (same shape as the daemon's /api mount).
+// mounting the configs HTTP routes (same shape as the daemon's /api mount),
+// behind a Bearer middleware that resolves a single admin token — matching the
+// daemon's auth chain (the rendered route requires operator+).
 type httpTestEnv struct {
 	mux chi.Router
 	st  *store.Store
+}
+
+const httpTestToken = "test-token"
+
+type httpTestLookup struct{}
+
+func (httpTestLookup) UserByToken(_ context.Context, token string) (*auth.User, error) {
+	if token == httpTestToken {
+		return &auth.User{ID: 1, Name: "admin", Role: auth.RoleAdmin}, nil
+	}
+	return nil, nil
 }
 
 func newHTTPTestEnv(t *testing.T) *httpTestEnv {
@@ -30,6 +45,7 @@ func newHTTPTestEnv(t *testing.T) *httpTestEnv {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	mux := chi.NewRouter()
+	mux.Use(auth.Bearer(httpTestLookup{}))
 	(&HTTP{Svc: NewLocal(st)}).Mount(mux)
 	return &httpTestEnv{mux: mux, st: st}
 }
@@ -42,6 +58,7 @@ func (e *httpTestEnv) do(t *testing.T, method, path, body string) (*httptest.Res
 	}
 	req := httptest.NewRequest(method, path, rd)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+httpTestToken)
 	rec := httptest.NewRecorder()
 	e.mux.ServeHTTP(rec, req)
 	var payload map[string]any
@@ -192,4 +209,54 @@ func TestHTTP_RenderedListsSnapshots(t *testing.T) {
 	if len(cfgs) != 0 {
 		t.Errorf("rendered len = %d, want 0 for a fresh store", len(cfgs))
 	}
+}
+
+// TestHTTP_RenderedRequiresOperatorRole is the FIX 5 daemon-side guard: a
+// viewer-tier bearer is refused the rendered configs (which embed root
+// credentials), while an operator/admin bearer is allowed.
+func TestHTTP_RenderedRequiresOperatorRole(t *testing.T) {
+	lookup := &fakeRoleLookup{roles: map[string]string{
+		"viewer-tok":   auth.RoleViewer,
+		"operator-tok": auth.RoleOperator,
+		"admin-tok":    auth.RoleAdmin,
+	}}
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	mux := chi.NewRouter()
+	mux.Use(auth.Bearer(lookup))
+	(&HTTP{Svc: NewLocal(st)}).Mount(mux)
+
+	get := func(token string) int {
+		req := httptest.NewRequest(http.MethodGet, "/cluster/rendered", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := get("viewer-tok"); code != http.StatusForbidden {
+		t.Errorf("viewer rendered code = %d, want 403", code)
+	}
+	if code := get("operator-tok"); code != http.StatusOK {
+		t.Errorf("operator rendered code = %d, want 200", code)
+	}
+	if code := get("admin-tok"); code != http.StatusOK {
+		t.Errorf("admin rendered code = %d, want 200", code)
+	}
+}
+
+// fakeRoleLookup is an auth.Lookup resolving bearer tokens to fixed roles.
+type fakeRoleLookup struct {
+	roles map[string]string
+}
+
+func (f *fakeRoleLookup) UserByToken(_ context.Context, token string) (*auth.User, error) {
+	if role, ok := f.roles[token]; ok {
+		return &auth.User{ID: 1, Name: "u-" + token, Role: role}, nil
+	}
+	return nil, nil
 }

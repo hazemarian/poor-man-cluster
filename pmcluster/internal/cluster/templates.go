@@ -426,13 +426,14 @@ func (r *renderRefResolver) ResolveSetting(_ context.Context, _ string, name str
 //   - oo_admin_password: the raw OpenObserve admin password — printed into
 //     the observability stack's ZO_ROOT_USER_PASSWORD env var (OpenObserve
 //     only accepts the root password via env, not via a mounted secret file).
-//     Doubled `$` so docker stack deploy's interpolation leaves it intact.
+//     NOT `$`-escaped here: the manifest ComposeWriter escapes every env
+//     value (BUG-001 / H8), so pre-escaping would double-escape.
 func (r *renderRefResolver) ResolveSecretValue(_ context.Context, _ string, name string) (string, error) {
 	switch name {
 	case "oo_basic_auth":
 		return r.render.OpenObserveBasicAuth, nil
 	case "oo_admin_password":
-		return escapeComposeDollar(r.render.OpenObserveAdminPassword), nil
+		return r.render.OpenObserveAdminPassword, nil
 	default:
 		return "", fmt.Errorf("resolve secret(%s): no such platform secret value (known: oo_basic_auth, oo_admin_password)", name)
 	}

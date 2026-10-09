@@ -2,6 +2,43 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.176 (2026-10-09)
+
+Security, manifest and reconcile hardening (seven fixes, verified live on the sandbox).
+
+- **Literal `$` is escaped in every rendered value (BUG-001 / CODE_REVIEW H8).** All user/DSL-derived
+  values — env, command, entrypoint, labels, volumes, healthcheck paths, CORS regexes — are now
+  written with `$` doubled to `$$` so `docker stack deploy`'s compose interpolation can no longer
+  silently corrupt a literal `$` (a secret value `p@ss$word` was arriving in the container as `p@ss`).
+  The now-redundant pre-escaping in the platform render path (`ResolveSecretValue`, `loadObjectStore`)
+  was removed. Verified live: an env injected from `secret(esc_test)` stores `p@ss$$word` in the
+  rendered compose while the container env is the literal `p@ss$word`.
+- **The console's insecure default session secret is refused.** With login enabled the edge no longer
+  silently starts on `pmcluster-ui-insecure-default-change-me`; it generates and persists a random
+  32-byte secret (internal/ui/config.go, ui.go, ui/store/store.go). The `cmd/edge` "insecure default"
+  startup warning is gone.
+- **Multi-level deploys keep their top-level blocks.** `IR.Subset` now copies `Platform`, the app-level
+  `Networks`, `Configs` and `PlainVolumes`, so a per-level subset (any `depends_on` stack) still renders
+  the top-level `configs:`/`volumes:`/`networks:` declarations. Previously `config_path()` mounts,
+  plain volumes and platform/app networks silently broke on multi-level stacks. Verified live: a
+  two-service `depends_on` stack deployed "all levels healthy" and the `config_path()` file was present
+  in the container.
+- **Token lookup fast-rejects garbage.** `UserByToken` refuses tokens lacking the `pmc_` prefix or
+  shorter than 40 chars before the legacy argon2id scan, so an obviously-invalid bearer can no longer
+  trigger a full (expensive) user-table scan (CODE_REVIEW H2 follow-up).
+- **RBAC for secret-bearing surfaces.** Migration `0025_users_role.sql` adds a `role` tier
+  (admin/operator/viewer; existing users default to `admin`). Rendered configs now require the
+  `operator` role (the console route moved viewer→operator), cluster settings mask secret values for
+  non-admin tokens (keys containing secret/password/key), and freshly minted API keys are `operator`
+  (CODE_REVIEW H5).
+- **Swarm workers stand by instead of spamming (BUG-033).** A worker daemon (`LocalNodeState==active`,
+  no `ControlAvailable`) now logs `this node is a swarm worker — standing by (no control loop)` once
+  and stays idle, instead of re-running the doomed manager reconcile loop and spamming
+  `platform pass failed: this node is a Swarm worker, not a manager` every pass.
+- **Sync failures are throttled (BUG-034).** The reconcile loop logs each distinct sync error once
+  (plus a 1/hour heartbeat) and records the stack status as `error` via `RecordStackError`, instead of
+  re-logging on every pass.
+
 ## v0.2.175 (2026-10-08)
 
 Storage failover & restore correctness + platform placement (pre-production blocker batch).

@@ -226,15 +226,18 @@ func composeServiceFromIR(
 	// Raw binds are emitted verbatim (never relocated) — platform services
 	// mount docker.sock, /etc/localtime, the volume root itself, etc.
 	volumes = append(volumes, s.Binds...)
+	// Every user/DSL-derived value is `$`-escaped so `docker stack deploy`'s
+	// compose interpolation cannot silently corrupt a literal `$` (e.g. a
+	// secret value `p@ss$word`) — BUG-001 / CODE_REVIEW H8. See escapeCompose.
 	cs := &composeService{
 		Image:       s.Image,
-		Command:     s.Command,
-		Entrypoint:  s.Entrypoint,
-		Environment: s.Env,
-		Volumes:     volumes,
+		Command:     escapeSlice(s.Command),
+		Entrypoint:  escapeSlice(s.Entrypoint),
+		Environment: escapeMapValues(s.Env),
+		Volumes:     escapeSlice(volumes),
 		Secrets:     s.Secrets,
-		ExtraHosts:  s.ExtraHosts,
-		User:        s.User,
+		ExtraHosts:  escapeSlice(s.ExtraHosts),
+		User:        escapeCompose(s.User),
 	}
 
 	if len(s.Configs) > 0 {
@@ -357,6 +360,10 @@ func composeHealthcheckFromIR(s *IRService) *composeHealthcheck {
 
 	switch h.Type {
 	case "pg_isready":
+		// The `$$` here is INTENTIONAL (not user input): compose interpolation
+		// collapses it to a single `$` so the container's CMD-SHELL sees
+		// $POSTGRES_USER/$POSTGRES_DB. It must NOT be re-escaped by
+		// escapeCompose, which would corrupt it.
 		return &composeHealthcheck{
 			Test:     []string{"CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"},
 			Interval: "10s",
@@ -372,6 +379,9 @@ func composeHealthcheckFromIR(s *IRService) *composeHealthcheck {
 		if path == "" {
 			path = "/"
 		}
+		// The path is DSL-derived user input: escape any literal `$` so
+		// compose interpolation cannot corrupt it.
+		path = escapeCompose(path)
 
 		test := fmt.Sprintf("wget -q --spider http://127.0.0.1:%d%s", port, path)
 		return &composeHealthcheck{
@@ -382,8 +392,9 @@ func composeHealthcheckFromIR(s *IRService) *composeHealthcheck {
 		}
 	}
 
+	// Full-form passthrough: every element is DSL-derived user input.
 	return &composeHealthcheck{
-		Test:        h.Test,
+		Test:        escapeSlice(h.Test),
 		Interval:    h.Interval,
 		Timeout:     h.Timeout,
 		StartPeriod: h.StartPeriod,
@@ -397,12 +408,16 @@ func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, 
 	// never strip the service/application/environment/version identity labels
 	// the UI/CLI/drift loop key on. Platform stacks carry their Traefik router
 	// labels here.
+	// Raw + standard label VALUES are user/DSL-derived and must be `$`-escaped
+	// (the app name/env/version and any raw label value can carry a literal
+	// `$`; compose interpolation would otherwise corrupt it). Keys are never
+	// escaped — they are validated labels, not values (BUG-001 / H8).
 	labels := map[string]string{}
 	for k, v := range s.Labels {
-		labels[k] = v
+		labels[k] = escapeCompose(v)
 	}
 	for k, v := range standardLabels(app, s.Name) {
-		labels[k] = v
+		labels[k] = escapeCompose(v)
 	}
 	d := &composeDeploy{Labels: labels}
 
@@ -584,6 +599,31 @@ func addTraefikLabels(labels map[string]string, app irApp, serviceName string, e
 // deploy's interpolation pass unchanged (e.g. a trailing CORS regex `$`).
 func escapeCompose(s string) string {
 	return strings.ReplaceAll(s, "$", "$$")
+}
+
+// escapeSlice returns a copy of in with every element `$`-escaped.
+func escapeSlice(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = escapeCompose(v)
+	}
+	return out
+}
+
+// escapeMapValues returns a copy of in with every VALUE `$`-escaped (keys are
+// left untouched — they are validated identifiers, not user data).
+func escapeMapValues(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = escapeCompose(v)
+	}
+	return out
 }
 
 // buildOriginRegex produces the CORS Access-Control-Allow-Origin regex for

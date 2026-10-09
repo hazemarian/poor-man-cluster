@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -133,5 +134,65 @@ func TestSubset_FiltersAndRecomputes(t *testing.T) {
 	}
 	if !reflect.DeepEqual(sub.Secrets, []string{"db_pass"}) {
 		t.Errorf("subset secrets = %v, want [db_pass]", sub.Secrets)
+	}
+}
+
+// TestSubset_KeepsTopLevelBlocks is the regression test for the per-level
+// deploy bug where IR.Subset dropped Platform, Networks, Configs and
+// PlainVolumes — so Write(ir.Subset(level)) lost the top-level
+// configs:/volumes:/networks: blocks and config_path() mounts / plain volumes /
+// shared networks broke on any multi-level (depends_on) stack.
+func TestSubset_KeepsTopLevelBlocks(t *testing.T) {
+	ir := &IR{
+		Name:     "demo",
+		Env:      "prod",
+		Version:  "v1",
+		Platform: true,
+		Networks: []string{"traefik-net", "monitoring-net"},
+		Configs:  []string{"pmcluster_traefik_dynamic"},
+		PlainVolumes: map[string]string{
+			"app_data": "/srv/app_data",
+		},
+		Services: []IRService{
+			{Name: "db", Image: "postgres:14-alpine"},
+			{Name: "api", Image: "nginx:latest", DependsOn: []string{"db"},
+				Volumes: []string{"app_data:/data"},
+				Configs: []IRConfigMount{{Source: "pmcluster_traefik_dynamic", Target: "/etc/traefik/dynamic.yml"}},
+			},
+		},
+	}
+
+	levels, err := ServiceLevels(ir)
+	if err != nil {
+		t.Fatalf("ServiceLevels: %v", err)
+	}
+	if len(levels) < 2 {
+		t.Fatalf("expected a multi-level split, got %v", levels)
+	}
+
+	// The config mount + plain volume live on the api service (the dependent
+	// level). Rendering that subset must still declare the top-level blocks.
+	sub := ir.Subset([]string{"api"})
+	out, err := (&ComposeWriter{}).Write(context.Background(), sub)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	s := string(out)
+
+	for _, want := range []string{
+		"configs:",
+		"pmcluster_traefik_dynamic:",
+		"external: true",
+		"volumes:",
+		"app_data:",
+		"device: /srv/app_data",
+		"networks:",
+		"traefik-net:",
+		"monitoring-net:",
+		labelPlatform,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("subset render missing top-level %q:\n%s", want, s)
+		}
 	}
 }

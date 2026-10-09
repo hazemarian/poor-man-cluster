@@ -27,6 +27,10 @@ var ErrNotFound = errors.New("not found")
 const (
 	KeyAPIURL = "pmcluster_api_url"
 	KeyToken  = "pmcluster_api_token"
+	// KeySessionSecret persists the auto-generated console session-secret so a
+	// login-enabled console started without PMCLUSTER_UI_SECRET keeps a stable,
+	// non-forgeable secret across reloads (FIX 2).
+	KeySessionSecret = "pmcluster_ui_session_secret"
 )
 
 // Store wraps the SQLite connection. All access is serialized by SQLite's

@@ -84,11 +84,26 @@ func ServiceLevels(ir *IR) ([][]string, error) {
 // secret declarations are derived per-service), which is what the ordered
 // per-level deploy feeds to docker stack deploy.
 func (ir *IR) Subset(names []string) *IR {
+	// BUG (multi-level deploys): Volumes and Secrets are recomputed from the
+	// subset's services below, but Platform, the app-level Networks, Configs
+	// and PlainVolumes are whole-stack declarations that a per-level subset
+	// must STILL carry. Before this copy, Write(ir.Subset(level)) dropped the
+	// top-level configs:/volumes:/networks: blocks — so config_path() mounts,
+	// plain volumes and the platform/app networks silently broke on any
+	// depends_on (multi-level) stack.
+	plainVolumes := make(map[string]string, len(ir.PlainVolumes))
+	for k, v := range ir.PlainVolumes {
+		plainVolumes[k] = v
+	}
 	out := &IR{
-		Name:     ir.Name,
-		Env:      ir.Env,
-		Version:  ir.Version,
-		Services: make([]IRService, 0, len(names)),
+		Name:         ir.Name,
+		Env:          ir.Env,
+		Version:      ir.Version,
+		Platform:     ir.Platform,
+		Networks:     append([]string(nil), ir.Networks...),
+		Configs:      append([]string(nil), ir.Configs...),
+		PlainVolumes: plainVolumes,
+		Services:     make([]IRService, 0, len(names)),
 	}
 	want := make(map[string]bool, len(names))
 	for _, n := range names {

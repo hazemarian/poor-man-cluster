@@ -55,9 +55,6 @@ func run() error {
 	if err := uiCfg.Validate(); err != nil {
 		return fmt.Errorf("ui config: %w", err)
 	}
-	if string(uiCfg.SessionSecret) == "pmcluster-ui-insecure-default-change-me" {
-		log.Warn().Msg("PMCLUSTER_UI_SECRET not set — using the insecure default. Set it in production.")
-	}
 
 	app, err := ui.NewApp(uiCfg)
 	if err != nil {

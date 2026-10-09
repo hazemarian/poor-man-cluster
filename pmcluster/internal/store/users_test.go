@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
@@ -194,12 +195,14 @@ func TestUserByToken(t *testing.T) {
 }
 
 // TestUserByTokenLegacy verifies the legacy O(N) fallback still works for
-// pre-v2 tokens.
+// pre-v2 tokens. Legacy tokens carry the pmc_ prefix (one segment, no id) so
+// they pass the FIX 4 fast-reject; the O(N) argon2id scan is kept only for
+// these well-formed-but-id-less tokens.
 func TestUserByTokenLegacy(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	legacyToken := "old-plain-legacy-token"
+	legacyToken := "pmc_legacy-secret-token-that-is-long-enough-for-v1"
 	h, err := auth.HashToken(legacyToken)
 	if err != nil {
 		t.Fatalf("HashToken: %v", err)
@@ -220,12 +223,45 @@ func TestUserByTokenLegacy(t *testing.T) {
 		t.Errorf("legacy user.Name = %q, want 'legacy-user'", u.Name)
 	}
 
-	u, err = s.UserByToken(ctx, "nonexistent-legacy-token")
+	u, err = s.UserByToken(ctx, "pmc_nonexistent-legacy-token-that-is-long-enough")
 	if err != nil {
 		t.Fatalf("UserByToken (legacy unknown): %v", err)
 	}
 	if u != nil {
 		t.Errorf("expected nil for unknown legacy token, got %+v", u)
+	}
+}
+
+// TestUserByToken_FastRejectsNonPmc is the FIX 4 DoS regression: any token
+// that does not start with "pmc_" (or is implausibly short) must be rejected
+// with (nil, nil) BEFORE any database work. The store is closed on purpose —
+// any DB access would return a "database is closed" error — so a clean
+// (nil, nil) proves the fast-reject ran without touching the legacy argon2id
+// scan.
+func TestUserByToken_FastRejectsNonPmc(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	ctx := context.Background()
+
+	for _, tok := range []string{
+		"",                               // empty
+		"garbage",                        // no prefix
+		"abc123-random-junk",             // no prefix
+		"pmc_short",                      // prefix but implausibly short
+		"pmc_" + strings.Repeat("x", 30), // prefix but under 40 chars
+	} {
+		u, err := s.UserByToken(ctx, tok)
+		if err != nil {
+			t.Fatalf("UserByToken(%q) on a closed store = err %v, want fast (nil,nil)", tok, err)
+		}
+		if u != nil {
+			t.Errorf("UserByToken(%q) = %+v, want nil", tok, u)
+		}
 	}
 }
 
@@ -412,7 +448,7 @@ func TestTouchUserAndLastUsedRoundTrip(t *testing.T) {
 	}
 
 	// A legacy token lookup also touches its user.
-	legacyToken := "old-plain-legacy-token"
+	legacyToken := "pmc_legacy-secret-token-that-is-long-enough-for-v1"
 	lh, err := auth.HashToken(legacyToken)
 	if err != nil {
 		t.Fatalf("HashToken: %v", err)

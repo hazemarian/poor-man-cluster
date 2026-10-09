@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
@@ -28,13 +29,24 @@ var ErrUserNotFound = errors.New("user not found")
 // For legacy users (tokenID empty) the row is inserted with a NULL
 // token_id and will fall back to the O(N) scan path in UserByToken.
 func (s *Store) CreateUser(ctx context.Context, name, tokenID, tokenHash string, stack ...string) (int64, error) {
+	// The bootstrap admin and the edge console token are minted here and keep
+	// the admin role; freshly-minted API keys call CreateUserWithRole with
+	// auth.RoleOperator instead (FIX 5).
+	return s.CreateUserWithRole(ctx, name, tokenID, tokenHash, auth.RoleAdmin, stack...)
+}
+
+// CreateUserWithRole is CreateUser with an explicit daemon role tier (FIX 5).
+func (s *Store) CreateUserWithRole(ctx context.Context, name, tokenID, tokenHash, role string, stack ...string) (int64, error) {
+	if role == "" {
+		role = auth.RoleAdmin
+	}
 	var tid sql.NullString
 	if tokenID != "" {
 		tid = sql.NullString{String: tokenID, Valid: true}
 	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (name, token_id, token_hash, created_at, stack) VALUES (?, ?, ?, ?, ?)`,
-		name, tid, tokenHash, time.Now().Unix(), firstStack(stack),
+		`INSERT INTO users (name, token_id, token_hash, created_at, stack, role) VALUES (?, ?, ?, ?, ?, ?)`,
+		name, tid, tokenHash, time.Now().Unix(), firstStack(stack), role,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -95,16 +107,29 @@ func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// minTokenLength is the shortest plausible pmcluster bearer token: a legacy
+// `pmc_<secret>` token is ~47 chars and a v2 `pmc_<id>_<secret>` ~56 chars, so
+// anything under 40 chars cannot be a real token (FIX 4).
+const minTokenLength = 40
+
 // UserByToken looks up a user by bearer token.
 //
 //   - v2 tokens ("pmc_<id>_<secret>"): the token_id is extracted and used
 //     for a direct indexed lookup.  Argon2id runs exactly once against
 //     the matched row.
-//   - Legacy tokens (no "pmc_" prefix): falls back to the old O(N) scan,
-//     iterating every user row.  This path exists only for backwards
-//     compatibility; once all users have been re-issued v2 tokens, the
-//     fallback can be removed.
+//   - Legacy tokens ("pmc_<secret>", one segment, no id): falls back to the
+//     old O(N) scan, iterating every user row.  This path exists only for
+//     backwards compatibility; once all users have been re-issued v2 tokens,
+//     the fallback can be removed.
+//
+// Any token that does not start with "pmc_" or is implausibly short is
+// fast-rejected with (nil, nil) BEFORE any database work: the legacy scan
+// runs argon2id (t=2, m=64MiB) against every user row, so letting arbitrary
+// garbage through would let an attacker burn CPU per request (FIX 4).
 func (s *Store) UserByToken(ctx context.Context, token string) (*auth.User, error) {
+	if !strings.HasPrefix(token, "pmc_") || len(token) < minTokenLength {
+		return nil, nil
+	}
 	tokenID, secret := auth.SplitToken(token)
 
 	var (
@@ -134,8 +159,8 @@ func (s *Store) userByTokenID(ctx context.Context, tokenID, secret string) (*aut
 		hash string
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, name, stack, token_hash FROM users WHERE token_id = ?`, tokenID,
-	).Scan(&u.ID, &u.Name, &u.Stack, &hash)
+		`SELECT id, name, stack, role, token_hash FROM users WHERE token_id = ?`, tokenID,
+	).Scan(&u.ID, &u.Name, &u.Stack, &u.Role, &hash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -157,7 +182,7 @@ func (s *Store) userByTokenID(ctx context.Context, tokenID, secret string) (*aut
 // with pre-v2 tokens.  It iterates ALL user rows and runs argon2id against
 // each until a match is found.
 func (s *Store) userByTokenLegacy(ctx context.Context, token string) (*auth.User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, stack, token_hash FROM users`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, stack, role, token_hash FROM users`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
@@ -167,7 +192,7 @@ func (s *Store) userByTokenLegacy(ctx context.Context, token string) (*auth.User
 			u    auth.User
 			hash string
 		)
-		if err := rows.Scan(&u.ID, &u.Name, &u.Stack, &hash); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.Stack, &u.Role, &hash); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		ok, err := auth.VerifyToken(token, hash)

@@ -120,7 +120,7 @@ func TestCreateUserWithStackScope(t *testing.T) {
 	})
 
 	t.Run("legacy token lookup carries the scope too", func(t *testing.T) {
-		legacyToken := "old-plain-legacy-token"
+		legacyToken := "pmc_legacy-secret-token-that-is-long-enough-for-v1"
 		h, err := auth.HashToken(legacyToken)
 		if err != nil {
 			t.Fatalf("HashToken: %v", err)

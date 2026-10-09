@@ -177,8 +177,11 @@ func TestTranslate_SecretEnvRef(t *testing.T) {
 		t.Fatalf("TranslateWithResolver: %v", err)
 	}
 	s := string(out)
-	if !strings.Contains(s, "ZO_ROOT_USER_PASSWORD: p@ss$word") {
-		t.Errorf("expected secret(oo_admin_password) printed as its value:\n%s", s)
+	// BUG-001 / H8: the literal `$` in the secret value must be `$`-escaped in
+	// the rendered compose so `docker stack deploy`'s interpolation cannot
+	// silently corrupt it (p@ss$word → p@ss$$word).
+	if !strings.Contains(s, "ZO_ROOT_USER_PASSWORD: p@ss$$word") {
+		t.Errorf("expected secret(oo_admin_password) printed as its $${escaped value}:\n%s", s)
 	}
 	if strings.Contains(s, "secret(oo_admin_password)") {
 		t.Errorf("raw secret() reference must never leak into the compose:\n%s", s)

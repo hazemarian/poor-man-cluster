@@ -2,6 +2,7 @@ package cli
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -27,10 +28,18 @@ type leaderFake struct {
 	runtime.Client
 	nodes   []runtime.Node
 	nodeErr error
+	info    runtime.Info
+	infoErr error
 }
 
 func (f *leaderFake) NodeList(context.Context) ([]runtime.Node, error) {
 	return f.nodes, f.nodeErr
+}
+
+// Info defaults to "not a swarm worker" (inactive) so existing standalone/
+// leader tests keep today's behaviour; the worker test overrides it.
+func (f *leaderFake) Info(context.Context) (runtime.Info, error) {
+	return f.info, f.infoErr
 }
 
 // leaderFakeMutex is leaderFake with a mutex so a test can flip leadership
@@ -45,6 +54,11 @@ func (f *leaderFakeMutex) NodeList(context.Context) ([]runtime.Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]runtime.Node(nil), f.nodes...), nil
+}
+
+// Info is unused by the mutex fake's tests; report a non-worker.
+func (f *leaderFakeMutex) Info(context.Context) (runtime.Info, error) {
+	return runtime.Info{}, nil
 }
 
 func (f *leaderFakeMutex) setLeader(hostname string, leader bool) {
@@ -210,6 +224,72 @@ func TestWaitForSwarmLeadership_NonLeaderStandby(t *testing.T) {
 	cancel()
 	if err := <-done; err != context.Canceled {
 		t.Fatalf("expected context.Canceled after cancel, got %v", err)
+	}
+}
+
+// TestWaitForSwarmLeadership_SwarmWorkerStandsBy is the BUG-033 regression: a
+// genuine swarm worker (swarm active, ControlAvailable false) must stand by
+// (block) rather than serve + start a doomed control loop, logging the standby
+// message exactly once.
+func TestWaitForSwarmLeadership_SwarmWorkerStandsBy(t *testing.T) {
+	f := &leaderFake{
+		nodeErr: errors.New("This node is not a swarm manager."),
+		info:    runtime.Info{SwarmLocalNodeState: "active", SwarmControlAvailable: false},
+	}
+	var buf bytes.Buffer
+	log := zerolog.New(&buf)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- waitForSwarmLeadership(ctx, f, log) }()
+
+	// Stand by: it must block rather than return immediately.
+	time.Sleep(200 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("swarm worker returned early (%v), want standby", err)
+	default:
+	}
+
+	cancel()
+	if err := <-done; err != context.Canceled {
+		t.Fatalf("expected context.Canceled after cancel, got %v", err)
+	}
+	if got := strings.Count(buf.String(), "this node is a swarm worker — standing by (no control loop)"); got != 1 {
+		t.Errorf("standby message logged %d times, want 1", got)
+	}
+}
+
+// TestWatchSwarmLeadership_SwarmWorkerStandsByIdle is the BUG-033 regression
+// on the reconcile-loop driver: a swarm worker must NOT emit leader-true (so
+// the loop never starts), must log the standby message exactly once, and must
+// keep re-checking so a later promotion to manager starts the loop.
+func TestWatchSwarmLeadership_SwarmWorkerStandsByIdle(t *testing.T) {
+	f := &leaderFake{
+		nodeErr: errors.New("This node is not a swarm manager."),
+		info:    runtime.Info{SwarmLocalNodeState: "active", SwarmControlAvailable: false},
+	}
+	var buf bytes.Buffer
+	log := zerolog.New(&buf)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ch := WatchSwarmLeadership(ctx, f, log)
+
+	// The loop must never start: no leader-true may arrive.
+	select {
+	case v := <-ch:
+		t.Fatalf("swarm worker emitted %v, want silent idle (no control loop)", v)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	cancel()
+	// Drain until the channel closes so the goroutine has fully finished.
+	for range ch {
+	}
+
+	if got := strings.Count(buf.String(), "this node is a swarm worker — standing by (no control loop)"); got != 1 {
+		t.Errorf("standby message logged %d times, want exactly 1:\n%s", got, buf.String())
 	}
 }
 

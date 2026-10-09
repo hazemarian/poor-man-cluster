@@ -151,6 +151,13 @@ type Reconciler struct {
 	// storage node does not re-trigger a move on every pass.
 	failoverMu   sync.Mutex
 	lastFailover map[string]time.Time
+
+	// BUG-034: per-stack app-sync error state, so a permanently broken stack
+	// (e.g. a manifest written before App.volumes became a map) is logged and
+	// recorded ONCE per distinct error string, not every pass.
+	syncErrMu    sync.Mutex
+	lastSyncErrs map[string]string    // stack -> last logged/recorded error string
+	lastSyncWarn map[string]time.Time // stack -> last "still failing" heartbeat WRN
 }
 
 // failoverCooldown is the minimum interval between automatic storage
@@ -232,7 +239,7 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 		res, serr := r.DeployService.Sync(ctx, st.Name)
 		switch {
 		case serr != nil:
-			log.Error().Err(serr).Str("stack", st.Name).Msg("reconcile — app sync failed")
+			r.handleSyncError(ctx, st.Name, st.CurrentRevision, serr, log)
 		case res != nil && res.Changed:
 			log.Info().Str("stack", st.Name).Int64("revision", res.Revision).Msg("reconcile — app stack drifted, synced (new revision)")
 		default:
@@ -242,6 +249,67 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 
 	// (c) health snapshot
 	return r.snapshotHealth(ctx, log)
+}
+
+// syncErrorHeartbeat is the minimum interval between the per-stack "still
+// failing" WRN heartbeat (BUG-034). A permanently broken stack is silent
+// between state changes, but a heartbeat every hour keeps it visible without
+// per-pass spam.
+const syncErrorHeartbeat = time.Hour
+
+// handleSyncError logs and persists an app-sync failure exactly once per
+// distinct error string per stack (BUG-034): a permanently broken stack (e.g.
+// a manifest written before App.volumes became a map) fails every pass, so
+// logging every pass spams the daemon log. The error is logged and recorded
+// when it first appears or CHANGES; unchanged repeats are silent except a WRN
+// heartbeat once per hour. The stack's status is marked "error" with the
+// parse error as its message so the console shows it.
+func (r *Reconciler) handleSyncError(ctx context.Context, stackName string, revision int64, err error, log zerolog.Logger) {
+	errStr := err.Error()
+	r.syncErrMu.Lock()
+	if r.lastSyncErrs == nil {
+		r.lastSyncErrs = map[string]string{}
+	}
+	prev, seen := r.lastSyncErrs[stackName]
+	changed := !seen || prev != errStr
+	if changed {
+		r.lastSyncErrs[stackName] = errStr
+	}
+	r.syncErrMu.Unlock()
+
+	if changed {
+		log.Error().Err(err).Str("stack", stackName).Msg("reconcile — app sync failed")
+		if r.Store != nil {
+			// Record the parse error on the stack so the console shows the
+			// message (Deploy cannot: it has no app row when the manifest
+			// fails to parse), and mark the stack errored.
+			if _, e := r.Store.RecordStackError(ctx, stackName, revision, errStr); e != nil {
+				log.Error().Err(e).Str("stack", stackName).Msg("reconcile — record stack error failed")
+			}
+			if e := r.Store.SetStackStatus(ctx, store.StackStatus{
+				StackName: stackName, Status: StatusError,
+				Services: map[string]string{}, UpdatedAt: time.Now().Unix(),
+			}); e != nil {
+				log.Error().Err(e).Str("stack", stackName).Msg("reconcile — store stack status failed")
+			}
+		}
+		return
+	}
+
+	// Heartbeat: WRN once per hour max so the operator still sees the stuck
+	// stack occasionally without per-pass spam.
+	r.syncErrMu.Lock()
+	if r.lastSyncWarn == nil {
+		r.lastSyncWarn = map[string]time.Time{}
+	}
+	last, ok := r.lastSyncWarn[stackName]
+	if !ok || time.Since(last) >= syncErrorHeartbeat {
+		r.lastSyncWarn[stackName] = time.Now()
+		r.syncErrMu.Unlock()
+		log.Warn().Err(err).Str("stack", stackName).Msg("reconcile — app sync still failing (unchanged error)")
+		return
+	}
+	r.syncErrMu.Unlock()
 }
 
 // nodeHealth maps each swarm node hostname to whether it is ready to host

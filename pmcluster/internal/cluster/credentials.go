@@ -641,10 +641,11 @@ func loadObjectStore(ctx context.Context, docker runtime.Client, st *store.Store
 		// secure option (rejected for http).
 		Endpoint: "backup_seaweedfs:8333",
 		Bucket:   "pmcluster-backups",
-		// Compose env values must have "$" doubled or `docker stack deploy`
-		// rejects the rendered YAML as an interpolation format error.
-		AccessKey: escapeComposeDollar(cred.Username),
-		SecretKey: escapeComposeDollar(string(pass)),
+		// NOT `$`-escaped here: these land as compose env values, and the
+		// manifest ComposeWriter escapes every env value (BUG-001 / H8), so
+		// pre-escaping would double-escape.
+		AccessKey: cred.Username,
+		SecretKey: string(pass),
 		Node:      pickStoreNode(ctx, docker, st),
 	}, nil
 }

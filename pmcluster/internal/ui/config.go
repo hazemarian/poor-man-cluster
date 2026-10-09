@@ -46,9 +46,17 @@ const (
 	defaultDataDir    = "./data"
 	defaultCookieName = "pmui_session"
 	defaultTimeout    = 15 * time.Second
+
+	// DefaultSessionSecret is the built-in fallback the UI previously used when
+	// PMCLUSTER_UI_SECRET was unset. It is forgeable and MUST be rejected for a
+	// login-enabled console — see Validate (FIX 2).
+	DefaultSessionSecret = "pmcluster-ui-insecure-default-change-me"
 )
 
 // FromEnv builds a Config from the process environment with sane defaults.
+// When PMCLUSTER_UI_SECRET is unset, SessionSecret is left EMPTY — NewApp
+// then generates and persists a random secret (FIX 2) instead of falling back
+// to the forgeable built-in default.
 func FromEnv() Config {
 	return Config{
 		ListenAddr:      envOr("LISTEN_ADDR", ":8080"),
@@ -57,7 +65,7 @@ func FromEnv() Config {
 		PMAPIToken:      envOr("PMCLUSTER_API_TOKEN", ""),
 		EnvUser:         envOr("PMCLUSTER_UI_USER", ""),
 		EnvPass:         envOr("PMCLUSTER_UI_PASS", ""),
-		SessionSecret:   []byte(envOr("PMCLUSTER_UI_SECRET", "pmcluster-ui-insecure-default-change-me")),
+		SessionSecret:   []byte(os.Getenv("PMCLUSTER_UI_SECRET")),
 		CookieName:      envOr("SESSION_COOKIE", defaultCookieName),
 		UpstreamTimeout: envDur("UPSTREAM_TIMEOUT", defaultTimeout),
 		AppVersion:      envOr("APP_VERSION", "dev"),
@@ -74,8 +82,7 @@ func envBool(key string) bool {
 	return false
 }
 
-// Validate checks required config before serving. The session secret is always
-// present via a default; cmd/edge warns about the weak default.
+// Validate checks required config before serving.
 func (c Config) Validate() error {
 	if c.DataDir == "" {
 		return fmt.Errorf("data_dir is required")
@@ -83,7 +90,21 @@ func (c Config) Validate() error {
 	if len(c.EnvUser) > 0 && len(c.EnvPass) == 0 {
 		return fmt.Errorf("PMCLUSTER_UI_USER set without PMCLUSTER_UI_PASS")
 	}
-	if len(c.SessionSecret) < 16 {
+	// The session secret is only enforced when login is enabled. With login
+	// disabled (EDGE_LOGIN_DISABLED) the secret is never used — Traefik's
+	// admin-auth gate is the only gate — so an empty/default value there is
+	// irrelevant and must not block startup (FIX 2).
+	if c.LoginDisabled {
+		return nil
+	}
+	// Refuse the built-in default explicitly: it is a known, forgeable secret
+	// that would let anyone mint console sessions (FIX 2).
+	if string(c.SessionSecret) == DefaultSessionSecret {
+		return fmt.Errorf("session secret must be changed from the built-in default")
+	}
+	// An empty secret is allowed here — NewApp generates + persists a random
+	// one before serving. Any explicitly-provided secret must be >= 16 bytes.
+	if len(c.SessionSecret) > 0 && len(c.SessionSecret) < 16 {
 		return fmt.Errorf("PMCLUSTER_UI_SECRET must be at least 16 bytes")
 	}
 	return nil

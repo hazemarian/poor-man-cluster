@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -112,4 +114,84 @@ func TestHTTP_PutRejectsUnknownAndBadBody(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown top-level code = %d, want 400", rec.Code)
 	}
+}
+
+// TestHTTP_GetMasksSecretsForNonAdmin is the FIX 5 guard: secret-ish keys
+// (sso_client_secret, backup_s3_access_key/secret_key) are masked for non-admin
+// bearers but kept in full for an admin. The CLI reads full values with the
+// admin token.
+func TestHTTP_GetMasksSecretsForNonAdmin(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	for k, v := range map[string]string{
+		"sso_client_secret":    "client-secret-value",
+		"backup_s3_access_key": "ak-value",
+		"backup_s3_secret_key": "sk-value",
+		"domain":               "example.com",
+		"volume_root":          "/data",
+	} {
+		if err := st.SetSetting(ctx, k, v); err != nil {
+			t.Fatalf("SetSetting %s: %v", k, err)
+		}
+	}
+
+	lookup := &fakeLookup{users: map[string]*auth.User{
+		"admin-tok":  {ID: 1, Name: "admin", Role: auth.RoleAdmin},
+		"viewer-tok": {ID: 2, Name: "viewer", Role: auth.RoleViewer},
+	}}
+	mux := chi.NewRouter()
+	mux.Use(auth.Bearer(lookup))
+	(&HTTP{Svc: NewLocal(st)}).Mount(mux)
+
+	get := func(token string) map[string]string {
+		req := httptest.NewRequest(http.MethodGet, "/cluster/settings", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET settings (token %q) code = %d, body=%s", token, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Settings map[string]string `json:"settings"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return body.Settings
+	}
+
+	admin := get("admin-tok")
+	if admin["sso_client_secret"] != "client-secret-value" {
+		t.Errorf("admin sso_client_secret = %q, want full value", admin["sso_client_secret"])
+	}
+	if admin["backup_s3_access_key"] != "ak-value" {
+		t.Errorf("admin backup_s3_access_key = %q, want full value", admin["backup_s3_access_key"])
+	}
+	if admin["domain"] != "example.com" {
+		t.Errorf("admin domain = %q, want example.com", admin["domain"])
+	}
+
+	viewer := get("viewer-tok")
+	for _, k := range []string{"sso_client_secret", "backup_s3_access_key", "backup_s3_secret_key"} {
+		if viewer[k] != "********" {
+			t.Errorf("viewer %s = %q, want masked", k, viewer[k])
+		}
+	}
+	// Non-secret keys stay unmasked for the viewer.
+	if viewer["domain"] != "example.com" || viewer["volume_root"] != "/data" {
+		t.Errorf("viewer non-secret settings unexpectedly masked: %v", viewer)
+	}
+}
+
+// fakeLookup is an auth.Lookup resolving bearer tokens to fixed roles.
+type fakeLookup struct {
+	users map[string]*auth.User
+}
+
+func (f *fakeLookup) UserByToken(_ context.Context, token string) (*auth.User, error) {
+	return f.users[token], nil
 }

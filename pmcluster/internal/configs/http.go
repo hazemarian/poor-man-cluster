@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -27,7 +28,9 @@ func (c *HTTP) Mount(r chi.Router) {
 	r.Delete("/configs/{name}", c.remove)
 	r.Get("/configs/{name}/versions", c.versions)
 	r.Post("/configs/{name}/rollback", c.rollback)
-	r.Get("/cluster/rendered", c.rendered)
+	// FIX 5: rendered configs embed the OpenObserve root Basic-auth value and
+	// the session cookie — only operator/admin bearers may read them.
+	r.With(auth.RequireRole(auth.RoleOperator)).Get("/cluster/rendered", c.rendered)
 }
 
 type configRow struct {

@@ -152,6 +152,101 @@ func TestTranslate_DependsOnNoWrapperForBakedEntrypoint(t *testing.T) {
 	}
 }
 
+// TestComposeWriter_EscapesDollarInUserValues covers BUG-001 / H8: any literal
+// `$` in a user/DSL-derived value must render as `$$` in the compose so docker
+// stack deploy's interpolation cannot silently corrupt it. Covers env values,
+// command/entrypoint elements, raw label values, and healthcheck test elements.
+func TestComposeWriter_EscapesDollarInUserValues(t *testing.T) {
+	ir := &IR{
+		Name:    "demo",
+		Env:     "prod",
+		Version: "v1",
+		Services: []IRService{
+			{
+				Name:       "api",
+				Image:      "nginx:latest",
+				Command:    []string{"./run", "--flag=$USER"},
+				Entrypoint: []string{"/bin/sh", "-c", "echo $HOME"},
+				Env: map[string]string{
+					"PASSWORD": "p@ss$word",
+					"PLAIN":    "no-dollar",
+				},
+				Labels: map[string]string{
+					"traefik.http.routers.x.rule": "Host(`foo.$suffix`)",
+				},
+				Healthcheck: &IRHealthcheck{
+					Test: []string{"CMD-SHELL", "check --token=$SECRET"},
+				},
+			},
+		},
+	}
+
+	out, err := (&ComposeWriter{}).Write(context.Background(), ir)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "$$") {
+		t.Fatalf("expected escaped `$$` in rendered compose:\n%s", s)
+	}
+
+	var cf composeFile
+	if err := yaml.Unmarshal(out, &cf); err != nil {
+		t.Fatalf("unmarshal rendered compose: %v\n%s", err, out)
+	}
+	svc := cf.Services["api"]
+	if svc == nil {
+		t.Fatalf("service api missing from render:\n%s", s)
+	}
+
+	if got := svc.Environment["PASSWORD"]; got != "p@ss$$word" {
+		t.Errorf("env PASSWORD = %q, want escaped %q", got, "p@ss$$word")
+	}
+	if got := svc.Environment["PLAIN"]; got != "no-dollar" {
+		t.Errorf("env PLAIN = %q, want unchanged %q", got, "no-dollar")
+	}
+	if got := svc.Command; len(got) != 2 || got[1] != "--flag=$$USER" {
+		t.Errorf("command = %v, want [./run --flag=$$USER]", got)
+	}
+	if got := svc.Entrypoint; len(got) != 3 || got[2] != "echo $$HOME" {
+		t.Errorf("entrypoint = %v, want [.. .. \"echo $$HOME\"]", got)
+	}
+	if got := svc.Deploy.Labels["traefik.http.routers.x.rule"]; got != "Host(`foo.$$suffix`)" {
+		t.Errorf("raw label value = %q, want escaped Host(`foo.$$suffix`)", got)
+	}
+	if svc.Healthcheck == nil || len(svc.Healthcheck.Test) != 2 || svc.Healthcheck.Test[1] != "check --token=$$SECRET" {
+		t.Errorf("healthcheck test = %v, want [CMD-SHELL \"check --token=$$SECRET\"]", svc.Healthcheck)
+	}
+}
+
+// TestComposeWriter_PgIsreadyShorthandKeepsIntentionalDoubleDollar guards the
+// hardcoded pg_isready healthcheck against over-escaping: its `$$POSTGRES_USER`
+// is deliberate (compose collapses it to `$` so the container shell expands
+// it), so it must render unchanged, not `$$$$`.
+func TestComposeWriter_PgIsreadyShorthandKeepsIntentionalDoubleDollar(t *testing.T) {
+	ir := &IR{
+		Name:    "demo",
+		Env:     "prod",
+		Version: "v1",
+		Services: []IRService{{
+			Name:        "db",
+			Image:       "postgres:14-alpine",
+			Healthcheck: &IRHealthcheck{Type: "pg_isready"},
+		}},
+	}
+	out, err := (&ComposeWriter{}).Write(context.Background(), ir)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB") {
+		t.Errorf("pg_isready shorthand must keep its intentional $$:\n%s", s)
+	}
+	if strings.Contains(s, "$$$$POSTGRES_USER") {
+		t.Errorf("pg_isready shorthand was over-escaped ($$$$):\n%s", s)
+	}
+}
+
 // TestEnsureVolumeDirs_CreatesBindTargets renders a compose with a named
 // volume and asserts EnsureVolumeDirs mkdirs the driver_opts device paths.
 func TestEnsureVolumeDirs_CreatesBindTargets(t *testing.T) {
