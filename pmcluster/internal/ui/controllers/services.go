@@ -50,7 +50,11 @@ func humanErr(key string, err error) (string, string) {
 type Services struct{ *Controller }
 
 type servicesData struct {
+	// Services are the CUSTOMER app services; Platform are the platform-managed
+	// services (edge/traefik/observability/backup/sso), kept apart so an operator
+	// reading the app surface never mistakes platform plumbing for their own apps.
 	Services []serviceRow
+	Platform []serviceRow
 	// Known separates "the list was read and is empty" from "the read failed":
 	// the second one is never rendered as zero services.
 	Known  bool
@@ -105,24 +109,10 @@ func (c Services) List(g *gin.Context) {
 	d.Known = true
 	stacks := map[string]bool{}
 	for _, s := range svcs {
-		row := serviceRow{
-			Name:         s.Name,
-			ServiceName:  unqualifiedServiceName(s.Name, s.Stack),
-			Stack:        s.Stack,
-			Replicas:     int64(s.Replicas),
-			Desired:      int64(s.Desired),
-			Image:        s.Image,
-			Mode:         s.Mode,
-			Updated:      s.Updated,
-			Converged:    s.Desired > 0 && s.Replicas >= s.Desired,
-			Short:        s.Replicas < s.Desired,
-			Paused:       s.Desired == 0,
-			Complete:     s.RunOnce && s.Desired > 0 && s.Replicas == 0,
-			ImageAge:     imageAgeDays(s.ImageCreated),
-			PausedUpdate: s.UpdateState == "paused" && !completedRunOnce(s.RunOnce, s.Desired, s.Replicas),
-			UpdateError:  s.UpdateError,
-			Routable:     s.Stack != "",
-			Node:         s.Node,
+		row := newServiceRow(s)
+		if s.Platform {
+			d.Platform = append(d.Platform, row)
+			continue
 		}
 		if row.Converged {
 			d.Ready++
@@ -138,6 +128,31 @@ func (c Services) List(g *gin.Context) {
 	d.Count = int64(len(d.Services))
 	d.Stacks = int64(len(stacks))
 	c.Views.Fragment(g, "services", d)
+}
+
+// newServiceRow projects a pmapi.Service into the render-ready serviceRow used
+// by the services, platform and stack pages. Kept in one place so a column
+// change never diverges between surfaces.
+func newServiceRow(s pmapi.Service) serviceRow {
+	return serviceRow{
+		Name:         s.Name,
+		ServiceName:  unqualifiedServiceName(s.Name, s.Stack),
+		Stack:        s.Stack,
+		Replicas:     int64(s.Replicas),
+		Desired:      int64(s.Desired),
+		Image:        s.Image,
+		Mode:         s.Mode,
+		Updated:      s.Updated,
+		Converged:    s.Desired > 0 && s.Replicas >= s.Desired,
+		Short:        s.Replicas < s.Desired,
+		Paused:       s.Desired == 0,
+		Complete:     s.RunOnce && s.Desired > 0 && s.Replicas == 0,
+		ImageAge:     imageAgeDays(s.ImageCreated),
+		PausedUpdate: s.UpdateState == "paused" && !completedRunOnce(s.RunOnce, s.Desired, s.Replicas),
+		UpdateError:  s.UpdateError,
+		Routable:     s.Stack != "",
+		Node:         s.Node,
+	}
 }
 
 type serviceDetailData struct {

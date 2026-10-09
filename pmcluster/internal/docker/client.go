@@ -324,6 +324,7 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 			UpdateState:  updateState,
 			UpdateError:  updateError,
 			Node:         s.Spec.Labels[runtime.NodeLabel],
+			Platform:     s.Spec.Labels[runtime.PlatformLabel] == "true",
 			Labels:       labels,
 		})
 	}

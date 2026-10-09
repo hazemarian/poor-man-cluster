@@ -66,7 +66,7 @@ func CrumbKey(path string) string {
 		seg = seg[:i]
 	}
 	switch seg {
-	case "overview", "stacks", "services", "deploy", "webhooks", "tls",
+	case "overview", "stacks", "services", "platform", "deploy", "webhooks", "tls",
 		"backups", "users", "apikeys", "settings":
 		return "nav." + seg
 	default:

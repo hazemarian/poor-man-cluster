@@ -34,7 +34,10 @@ docker socket). For worker-node tasks use ssh + docker exec.`,
 var serviceListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List every swarm service (all stacks)",
-	RunE:  runServiceList,
+	Long: `Lists swarm services. By default every customer app service is shown;
+platform-managed services (edge/traefik/observability/backup/sso) are marked
+with a PLATFORM column. --platform shows only those platform services.`,
+	RunE: runServiceList,
 }
 
 var servicePsCmd = &cobra.Command{
@@ -79,6 +82,7 @@ the service args from the command:
 }
 
 func init() {
+	serviceListCmd.Flags().Bool("platform", false, "show only platform services")
 	serviceLogsCmd.Flags().Int("tail", 200, "number of lines to tail (1-2000)")
 
 	serviceCmd.AddCommand(
@@ -108,12 +112,27 @@ func runServiceList(cmd *cobra.Command, _ []string) error {
 	}
 	defer closeFn()
 
+	platformOnly, _ := cmd.Flags().GetBool("platform")
+
 	list, err := svc.List(cmd.Context(), "")
 	if err != nil {
 		return fmt.Errorf("list services: %w", err)
 	}
+	if platformOnly {
+		filtered := make([]services.ServiceSummary, 0, len(list))
+		for _, s := range list {
+			if s.Platform {
+				filtered = append(filtered, s)
+			}
+		}
+		list = filtered
+	}
 	if len(list) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "(no swarm services)")
+		if platformOnly {
+			fmt.Fprintln(cmd.OutOrStdout(), "(no platform services)")
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), "(no swarm services)")
+		}
 		return nil
 	}
 	printServices(cmd, list)
@@ -178,20 +197,31 @@ func truncateRunes(s string, n int) string {
 
 func printServices(cmd *cobra.Command, list []services.ServiceSummary) {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSTACK\tREPLICAS\tIMAGE\tMODE\tNODE\tSTATE\tUPDATED")
+	fmt.Fprintln(w, "NAME\tSTACK\tREPLICAS\tIMAGE\tMODE\tNODE\tPLATFORM\tSTATE\tUPDATED")
 	for _, s := range list {
 		node := s.Node
 		if node == "" {
 			node = "any"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d/%d\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%d/%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			s.Name, s.Stack, s.Replicas, s.Desired,
 			s.Image, s.Mode, node,
+			platformCell(s),
 			serviceStateCell(s),
 			time.Unix(s.Updated, 0).Format(time.RFC3339),
 		)
 	}
 	_ = w.Flush()
+}
+
+// platformCell marks a platform-managed service (io.pmcluster.platform=true)
+// in the listing; customer app services stay neutral so the extra column does
+// not add noise for the common case.
+func platformCell(s services.ServiceSummary) string {
+	if s.Platform {
+		return "platform"
+	}
+	return "-"
 }
 
 func runServiceTasks(cmd *cobra.Command, args []string) error {

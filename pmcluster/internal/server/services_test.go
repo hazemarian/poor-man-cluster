@@ -66,7 +66,7 @@ func newServicesServer(fs *fakeServices) *httptest.Server {
 func TestServicesAPI_List(t *testing.T) {
 	fs := &fakeServices{list: []services.ServiceSummary{
 		{Name: "demo_web", Stack: "demo", Replicas: 2, Desired: 2, Mode: "replicated"},
-		{Name: "infra_traefik", Stack: "infra", Replicas: 1, Desired: 1, Mode: "global"},
+		{Name: "infra_traefik", Stack: "infra", Replicas: 1, Desired: 1, Mode: "global", Platform: true},
 	}}
 	srv := newServicesServer(fs)
 	defer srv.Close()
@@ -81,24 +81,32 @@ func TestServicesAPI_List(t *testing.T) {
 	}
 	body := decodeBody[struct {
 		Services []struct {
-			Name  string `json:"name"`
-			Stack string `json:"stack"`
+			Name     string `json:"name"`
+			Stack    string `json:"stack"`
+			Platform bool   `json:"platform"`
 		} `json:"services"`
 	}](t, resp)
 	if len(body.Services) != 2 {
 		t.Fatalf("got %d services, want 2", len(body.Services))
+	}
+	if body.Services[1].Name != "infra_traefik" || !body.Services[1].Platform {
+		t.Fatalf("infra_traefik = %+v, want platform:true", body.Services[1])
 	}
 
 	resp = doJSON(t, http.MethodGet, srv.URL+"/api/services/demo", "tok", nil)
 	defer resp.Body.Close()
 	body = decodeBody[struct {
 		Services []struct {
-			Name  string `json:"name"`
-			Stack string `json:"stack"`
+			Name     string `json:"name"`
+			Stack    string `json:"stack"`
+			Platform bool   `json:"platform"`
 		} `json:"services"`
 	}](t, resp)
 	if len(body.Services) != 1 || body.Services[0].Name != "demo_web" {
 		t.Fatalf("demo services = %+v, want [demo_web]", body.Services)
+	}
+	if body.Services[0].Platform {
+		t.Fatalf("demo_web platform = %v, want false", body.Services[0].Platform)
 	}
 }
 

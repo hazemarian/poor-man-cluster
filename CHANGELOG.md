@@ -2,6 +2,30 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.177 (2026-10-09)
+
+Platform services are now separated from customer app services across the API, the console and the
+CLI. The discriminator is the `io.pmcluster.platform=true` label the compose writer already stamps on
+every platform service (edge, ingress, observability, backup, SSO) — surfaced end-to-end as a
+`platform` boolean rather than inferred by name or stack.
+
+- **`platform: true` on the services API.** `GET /api/services` now returns a `platform` field for each
+  service, populated from the `io.pmcluster.platform` label (pmapi, remote, services, runtime, docker
+  client). Verified live: all seven sandbox platform services report `platform: true`.
+- **A dedicated console Platform page at `GET /web/platform`.** Viewer-readable (like the rest of the
+  read-only pages) and reachable from a new sidebar entry, it lists the platform services (with their
+  stacks, replica health and node placement) that are no longer mixed in with customer apps.
+- **The Services page keeps platform services in a separated "Platform services" panel.** The app
+  services table now only ever shows customer apps; the platform services sit in their own panel that
+  links through to `/web/platform`.
+- **Stack pages are filtered to app services.** Platform-owned stacks (`infra`, `edge`,
+  `observability`, `backup`) no longer appear in the stacks list, so "deploy/remove/manage" surfaces
+  only real customer workloads.
+- **CLI `service list` gains a `PLATFORM` column and a `--platform` flag.** `pmcluster service list
+  --platform` prints only the platform services.
+- **Local gate.** Unit tests for the controllers, services, remote and CLI layers were updated for the
+  new field/flag, and `go test ./...` passes.
+
 ## v0.2.176 (2026-10-09)
 
 Security, manifest and reconcile hardening (seven fixes, verified live on the sandbox).

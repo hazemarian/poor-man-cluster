@@ -27,6 +27,7 @@ type serviceDTO struct {
 	UpdateState  string `json:"update_state"`
 	UpdateError  string `json:"update_error"`
 	Updated      int64  `json:"updated"`
+	Platform     bool   `json:"platform"`
 }
 
 type serviceListDTO struct {
@@ -139,6 +140,7 @@ func (d serviceDTO) summary() services.ServiceSummary {
 		UpdateState:  d.UpdateState,
 		UpdateError:  d.UpdateError,
 		Updated:      d.Updated,
+		Platform:     d.Platform,
 	}
 }
 

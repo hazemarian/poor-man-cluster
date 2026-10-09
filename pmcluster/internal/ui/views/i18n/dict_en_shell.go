@@ -205,10 +205,11 @@ func init() {
 	registerPlural(EN, "plural.days", PluralForms{One: "{n} day", Other: "{n} days"})
 }
 
-// Usage and Inventory are read-only pages inside the cluster group.
+// Usage, Inventory and Platform are read-only pages inside the cluster group.
 func init() {
 	register(EN, map[string]string{
 		"nav.usage":     "Usage",
 		"nav.inventory": "Configs & Secrets",
+		"nav.platform":  "Platform",
 	})
 }

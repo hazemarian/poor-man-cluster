@@ -181,6 +181,11 @@ type Service struct {
 	UpdateState  string // swarm UpdateStatus.State: "updating" | "paused" | "completed" | "rollback..." | "" (no update in flight)
 	UpdateError  string // the orchestrator's reason for pausing/rolling back ("" when none)
 	Node         string // NodeLabel: the node hostname the placement pin targets ("" when unconstrained/role-based)
+	// Platform reports a platform-managed service (edge, ingress, observability,
+	// backup, SSO) — the ones stamped io.pmcluster.platform=true by the compose
+	// writer for platform stacks. The console/CLI split these from customer app
+	// services on this flag, never on a name or stack heuristic.
+	Platform bool
 	// Labels is the service's full spec label set (stack namespace, the
 	// io.pmcluster.* markers, and RenderedHashLabel). `cluster update` reads
 	// them to diff the live service against a fresh render (BUG-017).
@@ -313,6 +318,14 @@ const StorageNodeLabel = "pmcluster.storage"
 // or role-based (node.role == manager/worker), so the UI can display where
 // a service runs without re-querying the swarm.
 const NodeLabel = "io.pmcluster.node"
+
+// PlatformLabel is stamped on every service of a platform-managed stack
+// (app.platform: true — edge, traefik, OpenObserve, otel-collector, backup,
+// sso) by the compose writer. It is the discriminator the console/CLI use to
+// keep platform services apart from customer app services. It is duplicated
+// from internal/manifest.labelPlatform so this package stays self-contained
+// (the docker adapter reads labels to derive the Platform field).
+const PlatformLabel = "io.pmcluster.platform"
 
 // RenderedHashLabel is stamped on every service of a rendered compose with the
 // hash of that render (the platform render path sets it; see LoadComposeFile).

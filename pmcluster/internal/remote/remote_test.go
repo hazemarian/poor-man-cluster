@@ -274,6 +274,7 @@ func TestRemoteServices(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/services":
 			writeJSON(w, http.StatusOK, map[string]any{"services": []map[string]any{
 				{"name": "demo_web", "stack": "demo", "replicas": 2, "desired": 2, "image": "img:1", "mode": "replicated", "updated": 1700000000},
+				{"name": "infra_traefik", "stack": "infra", "replicas": 1, "desired": 1, "image": "traefik", "mode": "global", "updated": 1700000000, "platform": true},
 			}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/services/demo":
 			writeJSON(w, http.StatusOK, map[string]any{"services": []map[string]any{
@@ -311,13 +312,19 @@ func TestRemoteServices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(list) != 1 || list[0].Name != "demo_web" || list[0].Stack != "demo" {
+	if len(list) != 2 || list[0].Name != "demo_web" || list[0].Stack != "demo" {
 		t.Errorf("List = %+v", list)
+	}
+	if list[1].Name != "infra_traefik" || !list[1].Platform {
+		t.Errorf("List platform row = %+v, want infra_traefik marked platform", list[1])
 	}
 
 	demo, err := a.List(context.Background(), "demo")
 	if err != nil || len(demo) != 1 {
 		t.Errorf("List(demo) = %+v, %v", demo, err)
+	}
+	if demo[0].Platform {
+		t.Errorf("demo_web must not be platform: %+v", demo[0])
 	}
 
 	tasks, err := a.Tasks(context.Background(), "demo", "web")

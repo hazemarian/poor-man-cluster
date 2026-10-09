@@ -68,7 +68,7 @@ func doJSON(t *testing.T, mux http.Handler, method, path, body string) (*httptes
 func TestHTTP_ListAndListStack(t *testing.T) {
 	svcs := []ServiceSummary{
 		{Name: "demo_web", Stack: "demo", Replicas: 2, Desired: 2, Image: "nginx", Mode: "replicated"},
-		{Name: "infra_traefik", Stack: "infra", Replicas: 1, Desired: 1, Image: "traefik", Mode: "global"},
+		{Name: "infra_traefik", Stack: "infra", Replicas: 1, Desired: 1, Image: "traefik", Mode: "global", Platform: true},
 	}
 	mux := newServicesMux(&fakeService{listFn: func(_ context.Context, stack string) ([]ServiceSummary, error) {
 		if stack != "" {
@@ -96,6 +96,9 @@ func TestHTTP_ListAndListStack(t *testing.T) {
 	if first["name"] != "demo_web" || first["replicas"] != float64(2) || first["mode"] != "replicated" {
 		t.Errorf("first service = %v, want name/replicas/mode", first)
 	}
+	if first["platform"] != false {
+		t.Errorf("first service platform = %v, want false", first["platform"])
+	}
 
 	// Stack-scoped.
 	rec, body = doJSON(t, mux, "GET", "/services/infra", "")
@@ -105,6 +108,9 @@ func TestHTTP_ListAndListStack(t *testing.T) {
 	rows = body["services"].([]any)
 	if len(rows) != 1 || rows[0].(map[string]any)["name"] != "infra_traefik" {
 		t.Errorf("stack-scoped rows = %v, want only infra_traefik", rows)
+	}
+	if rows[0].(map[string]any)["platform"] != true {
+		t.Errorf("infra_traefik platform = %v, want true", rows[0].(map[string]any)["platform"])
 	}
 	if body["stack"] != "infra" {
 		t.Errorf("stack field = %v, want infra", body["stack"])

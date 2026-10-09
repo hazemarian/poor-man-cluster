@@ -182,7 +182,7 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 
 	// Service ops (the Portainer replacement).
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"services":[{"name":"demo_web","stack":"demo","replicas":2,"desired":2,"image":"ghcr.io/nextrum-sy/demo:1.0","mode":"replicated","updated":70,"image_created":1788000000},{"name":"infra_traefik","stack":"infra","replicas":1,"desired":1,"image":"traefik:v3","mode":"global","updated":71}]}`)
+		write(w, `{"services":[{"name":"demo_web","stack":"demo","replicas":2,"desired":2,"image":"ghcr.io/nextrum-sy/demo:1.0","mode":"replicated","updated":70,"image_created":1788000000},{"name":"infra_traefik","stack":"infra","replicas":1,"desired":1,"image":"traefik:v3","mode":"global","updated":71,"platform":true}]}`)
 	})
 	mux.HandleFunc("/api/services/demo", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"services":[{"name":"demo_web","stack":"demo","replicas":2,"desired":2,"image":"ghcr.io/nextrum-sy/demo:1.0","mode":"replicated","updated":70}]}`)
@@ -400,6 +400,10 @@ func TestAllControllers(t *testing.T) {
 
 	assertFragment(http.MethodGet, "/web/deploy", "", "Deploy")
 	assertFragment(http.MethodGet, "/web/settings", "", "Settings")
+
+	// The platform page lists the platform-managed services (ingress here) and
+	// keeps them off the customer app surface.
+	assertFragment(http.MethodGet, "/web/platform", "", "Platform services", "traefik:v3")
 
 	// The inventory page shows every config and secret across scopes and
 	// stacks, with the Scope column making ownership explicit — the stack
@@ -739,8 +743,14 @@ func TestServicesUI(t *testing.T) {
 	resp = doRequest(t, app, http.MethodGet, "/web/services", "", jar)
 	body, _ := io.ReadAll(resp.Body)
 	s := string(body)
-	if !strings.Contains(s, "demo_web") || !strings.Contains(s, "infra_traefik") {
+	// demo_web is a customer app service (main table); infra_traefik is a
+	// platform service and is kept in the separated "Platform services" section
+	// as its unqualified name/image.
+	if !strings.Contains(s, "demo_web") || !strings.Contains(s, "traefik:v3") {
 		t.Errorf("services list missing rows; got: %s", s)
+	}
+	if !strings.Contains(s, "Platform services") {
+		t.Errorf("services list missing the platform section; got: %s", s)
 	}
 	// v2 writes replica pairs spaced ("2 / 2") so the two numbers stay legible in mono
 	// and never read as one figure.

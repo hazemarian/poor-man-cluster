@@ -440,6 +440,11 @@ func (c Stacks) stacksData(ctx context.Context, q string) stackData {
 	if svcs, err := c.API.ListServices(ctx, ""); err == nil {
 		d.ServicesKnown = true
 		for _, s := range svcs {
+			// Platform services are not customer stacks: they never contribute to
+			// the stacks index counts (a stack's replica health, the totals).
+			if s.Platform {
+				continue
+			}
 			d.TotalServices++
 			if r, ok := byName[s.Stack]; ok {
 				r.Services++
@@ -540,23 +545,12 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 	if svcs, err := c.API.ListServices(ctx, name); err == nil {
 		d.ServicesKnown = true
 		for _, s := range svcs {
-			row := serviceRow{
-				Name:        s.Name,
-				ServiceName: unqualifiedServiceName(s.Name, s.Stack),
-				Stack:       s.Stack,
-				Replicas:    int64(s.Replicas),
-				Desired:     int64(s.Desired),
-				Image:       s.Image,
-				Mode:        s.Mode,
-				Updated:     s.Updated,
-				Converged:   s.Desired > 0 && s.Replicas >= s.Desired,
-				Short:       s.Replicas < s.Desired,
-				Paused:      s.Desired == 0,
-				Complete:    s.RunOnce && s.Desired > 0 && s.Replicas == 0,
-				Routable:    s.Stack != "",
-				Node:        s.Node,
+			// A stack page stays app-focused: platform services (edge/traefik/
+			// observability/backup/sso) belong to the platform surface, not here.
+			if s.Platform {
+				continue
 			}
-			d.Services = append(d.Services, row)
+			d.Services = append(d.Services, newServiceRow(s))
 		}
 	}
 	return d

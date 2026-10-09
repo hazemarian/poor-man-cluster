@@ -30,6 +30,7 @@ type ServiceSummary struct {
 	UpdateError  string // orchestrator reason for a paused/rolling update
 	Updated      int64  // service spec update time (unix)
 	Node         string // io.pmcluster.node label: hostname pin target ("" when unconstrained/role-based)
+	Platform     bool   // io.pmcluster.platform=true: a platform-managed service (edge/traefik/observability/backup/sso)
 }
 
 // TaskRun is one row of `docker service ps` — a task's lifecycle state.

@@ -151,6 +151,44 @@ func TestPrintServices_StateColumn(t *testing.T) {
 	}
 }
 
+// TestPrintServices_PlatformColumn drives printServices directly and checks the
+// PLATFORM column: a platform-managed service (io.pmcluster.platform=true) is
+// marked "platform", a customer app service stays neutral ("-"), and the
+// header carries the column.
+func TestPrintServices_PlatformColumn(t *testing.T) {
+	cmd, out, _ := newTestCmd("list", nil, func(*cobra.Command, []string) error { return nil })
+
+	list := []services.ServiceSummary{
+		{Name: "demo_web", Stack: "demo", Replicas: 1, Desired: 1, Image: "nginx", Mode: "replicated", Updated: 1700000000},
+		{Name: "infra_traefik", Stack: "infra", Replicas: 1, Desired: 1, Image: "traefik", Mode: "global", Updated: 1700000000, Platform: true},
+	}
+
+	printServices(cmd, list)
+	got := out.String()
+
+	if !strings.Contains(got, "PLATFORM") {
+		t.Fatalf("header missing PLATFORM column:\n%s", got)
+	}
+
+	rows := linesByName(got)
+	if strings.Contains(rows["demo_web"], "platform") {
+		t.Errorf("app row must not be marked platform:\n%s", rows["demo_web"])
+	}
+	if !strings.Contains(rows["infra_traefik"], "platform") {
+		t.Errorf("platform row must be marked:\n%s", rows["infra_traefik"])
+	}
+}
+
+// TestPlatformCell checks the marker mapping directly.
+func TestPlatformCell(t *testing.T) {
+	if got := platformCell(services.ServiceSummary{Platform: true}); got != "platform" {
+		t.Fatalf("platformCell(platform) = %q, want platform", got)
+	}
+	if got := platformCell(services.ServiceSummary{}); got != "-" {
+		t.Fatalf("platformCell(app) = %q, want -", got)
+	}
+}
+
 // TestTruncateRunes checks the boundary of the helper directly.
 func TestTruncateRunes(t *testing.T) {
 	if got := truncateRunes("short", 10); got != "short" {

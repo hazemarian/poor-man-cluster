@@ -182,6 +182,11 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/services/:stack/:service/tasks", svc.Tasks)
 	vr.GET("/services/:stack/:service/logs", svc.Logs)
 
+	// Platform-managed services (edge/traefik/observability/backup/sso) live on
+	// their own read-only page, apart from the customer app services.
+	pf := controllers.Platform{Controller: a.ctrl}
+	vr.GET("/platform", pf.List)
+
 	scc := controllers.StackConfigs{Controller: a.ctrl}
 	vr.GET("/stacks/:name/config", scc.Page)
 	vr.GET("/stacks/:name/configs/new", scc.ConfigNew)

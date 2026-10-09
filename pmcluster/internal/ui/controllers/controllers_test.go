@@ -97,7 +97,7 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"stack":"demo","acknowledged":true}`)
 	})
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","update_state":"completed"}]}`)
+		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","update_state":"completed"},{"stack":"infra","name":"infra_traefik","image":"traefik:v3","replicas":1,"desired":1,"mode":"global","updated":31,"platform":true},{"stack":"edge","name":"edge_pmcluster-edge","image":"pmcluster/edge","replicas":1,"desired":1,"mode":"replicated","updated":32,"platform":true},{"stack":"observability","name":"observability_openobserve","image":"openobserve/openobserve","replicas":1,"desired":1,"mode":"replicated","updated":33,"platform":true}]}`)
 	})
 	mux.HandleFunc("/api/services/demo", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","update_state":"completed"}]}`)
@@ -241,6 +241,9 @@ func (h *ctrlHarness) mountServices() {
 	h.engine.GET("/web/services/:stack/:service/tasks", (Services{Controller: h.ctrl}).Tasks)
 	h.engine.GET("/web/services/:stack/:service/logs", (Services{Controller: h.ctrl}).Logs)
 }
+func (h *ctrlHarness) mountPlatform() {
+	h.engine.GET("/web/platform", (Platform{Controller: h.ctrl}).List)
+}
 func (h *ctrlHarness) mountBackups() {
 	h.engine.GET("/web/backups", (Backups{Controller: h.ctrl}).List)
 	h.engine.GET("/web/backups/:id/files", (Backups{Controller: h.ctrl}).Browse)
@@ -361,6 +364,35 @@ func TestControllers_Services(t *testing.T) {
 		if !strings.Contains(rr.Body.String(), tc.want) {
 			t.Errorf("GET %s body missing %q", tc.path, tc.want)
 		}
+	}
+
+	// The app services page owns the customer services in its main table and
+	// keeps platform services in a clearly separated section of their own.
+	rr := h.get(t, "/web/services")
+	body := rr.Body.String()
+	if !strings.Contains(body, "Platform services") {
+		t.Errorf("GET /web/services missing the separated platform section; got:\n%s", body)
+	}
+}
+
+func TestControllers_Platform(t *testing.T) {
+	h := newCtrlHarness(t)
+	h.mountPlatform()
+
+	// A viewer can GET the platform page (read-only, viewer group).
+	rr := h.get(t, "/web/platform")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /web/platform = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	for _, platformSvc := range []string{"traefik:v3", "pmcluster/edge", "openobserve/openobserve"} {
+		if !strings.Contains(body, platformSvc) {
+			t.Errorf("GET /web/platform missing platform service image %q; got:\n%s", platformSvc, body)
+		}
+	}
+	// The customer app service is not a platform service and must not appear.
+	if strings.Contains(body, "nginx:1.27") {
+		t.Errorf("GET /web/platform must not list the customer app service; got:\n%s", body)
 	}
 }
 
