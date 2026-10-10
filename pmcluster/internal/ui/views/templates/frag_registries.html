@@ -1,0 +1,129 @@
+{{define "registries"}}
+{{/* Docker registry credentials for private image pulls.
+
+     The password is write-only end to end: it is accepted on add, used for
+     `docker login` on the manager, and never read back — so this page can only
+     ever show host + username. Adding is the operation that makes a private
+     image pullable, and the stored credential is what `docker stack deploy
+     --with-registry-auth` forwards to every other node. */}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "registries.title"}}</h1>
+    <p class="sub">{{T "registries.sub"}}</p>
+  </div>
+  <div class="ph-actions">
+    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "chevron"}}<span>{{T "registries.back"}}</span></a>
+    <button type="button" class="btn btn-sm" hx-get="/web/settings/registries" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
+  </div>
+</div>
+
+{{if .ErrKey}}
+<div class="banner bad">
+  <div class="b-body">
+    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
+    <p>{{if eq .ErrKey "err.api_not_configured"}}{{T "settings.conn_missing_body"}}{{else}}{{T "err.banner_body"}}{{end}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <button type="button" class="btn btn-sm" hx-get="/web/settings/registries" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+  </div>
+</div>
+{{end}}
+
+{{if .MsgKey}}
+<div class="msg ok">
+  <b>{{icon "check-circle"}}{{TF .MsgKey .MsgArg}}</b>
+</div>
+{{end}}
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "registries.list_title"}}</h2>
+    <div class="ph-actions">
+      {{if .Rows}}<span class="pill plain"><i class="dot"></i>{{P (len .Rows) "plural.registries"}}</span>
+      {{else}}<span class="pill plain"><i class="dot"></i>{{T "common.none"}}</span>{{end}}
+    </div>
+  </div>
+  <div class="panel-body">
+    {{if .Rows}}
+    <div class="table-wrap only-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "registries.col_host"}}</th>
+            <th>{{T "registries.col_user"}}</th>
+            <th>{{T "registries.col_configured"}}</th>
+            <th><span class="sr-only">{{T "common.actions"}}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Rows}}
+          <tr>
+            <td><span class="mono iso">{{.Host}}</span></td>
+            <td>{{.Username}}</td>
+            <td class="muted">{{ts .CreatedAt}}</td>
+            <td class="num">
+              <button type="button" class="btn btn-danger btn-sm"
+                      hx-post="/web/settings/registries/remove" hx-vals='{"host": "{{.Host}}"}'
+                      hx-confirm="{{TF "registries.remove_confirm" .Host}}" hx-target="#view">
+                {{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span>
+              </button>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    <div class="only-sm">
+      {{range .Rows}}
+      <div class="kv">
+        <div class="kv-row"><span class="k">{{T "registries.col_host"}}</span><span class="v mono iso">{{.Host}}</span></div>
+        <div class="kv-row"><span class="k">{{T "registries.col_user"}}</span><span class="v">{{.Username}}</span></div>
+        <div class="kv-row"><span class="k">{{T "registries.col_configured"}}</span><span class="v muted">{{ts .CreatedAt}}</span></div>
+        <div class="kv-row"><span class="k"></span><span class="v">
+          <button type="button" class="btn btn-danger btn-sm" style="min-height:44px"
+                  hx-post="/web/settings/registries/remove" hx-vals='{"host": "{{.Host}}"}'
+                  hx-confirm="{{TF "registries.remove_confirm" .Host}}" hx-target="#view">{{icon "trash"}}<span>{{T "common.delete"}}</span></button>
+        </span></div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">
+      {{icon "inbox"}}
+      <h3>{{T "registries.empty_title"}}</h3>
+      <p>{{T "registries.empty_body"}}</p>
+    </div>
+    {{end}}
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h2>{{T "registries.add_title"}}</h2>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "registries.add_sub"}}</p>
+    <form class="form" hx-post="/web/settings/registries/add" hx-target="#view" hx-disabled-elt="find button">
+      <div class="form-grid">
+        <label class="field"><span>{{T "registries.field_host"}}</span>
+          <input class="finput" type="text" name="host" value="{{.FormHost}}" placeholder="ghcr.io" autocomplete="off" required>
+          <span class="hint">{{T "registries.hint_host"}}</span>
+        </label>
+        <label class="field"><span>{{T "registries.field_user"}}</span>
+          <input class="finput" type="text" name="username" value="{{.FormUser}}" autocomplete="off" required>
+        </label>
+        <label class="field"><span>{{T "registries.field_password"}}</span>
+          <input class="finput" type="password" name="password" autocomplete="new-password" required>
+          <span class="hint">{{T "registries.hint_password"}}</span>
+        </label>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">{{icon "plus"}}<span>{{T "registries.action_add"}}</span></button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<p class="sub">{{T "registries.foot"}}</p>
+{{end}}

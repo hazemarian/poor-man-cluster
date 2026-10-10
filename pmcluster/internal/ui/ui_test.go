@@ -373,7 +373,7 @@ func TestAllControllers(t *testing.T) {
 
 	login()
 
-	assertFragment(http.MethodGet, "/web/", "", "Poor Man's", "Overview", "Log out")
+	assertFragment(http.MethodGet, "/web/", "", `class="brand-name"`, "Overview", "Log out")
 	assertFragment(http.MethodGet, "/web/overview", "", "manager-1", "Cluster overview")
 
 	assertFragment(http.MethodGet, "/web/stacks", "", "Stacks", "demo", "3")
@@ -846,7 +846,7 @@ func TestFragmentRefreshRendersAppShell(t *testing.T) {
 		// v2 links the stylesheets instead of inlining a <style> block: the shell's
 		// own CSS is proved by the link, and the asset being served is checked in
 		// TestLoginDisabled_PassThrough.
-		`href="/web/static/base.css"`, "Poor Man's", "Overview", "Stacks", "Services",
+		`href="/web/static/base.css"`, `class="brand-name"`, "Overview", "Stacks", "Services",
 		`id="view"`, "demo", "Log out",
 	} {
 		if !strings.Contains(b, want) {
@@ -864,7 +864,7 @@ func TestFragmentRefreshRendersAppShell(t *testing.T) {
 			t.Errorf("HX GET /stacks missing %q", want)
 		}
 	}
-	if strings.Contains(b, "<style>") || strings.Contains(b, "Poor Man's") {
+	if strings.Contains(b, "<style>") || strings.Contains(b, `class="brand-name"`) {
 		t.Errorf("HX GET /stacks should return the bare fragment, got the shell")
 	}
 }
@@ -1112,7 +1112,7 @@ func TestLoginDisabled_PassThrough(t *testing.T) {
 		t.Fatalf("GET /web/ = %d, want 200", resp.StatusCode)
 	}
 	b := readBody(t, resp)
-	for _, want := range []string{`href="/web/static/base.css"`, "Poor Man's", "Overview"} {
+	for _, want := range []string{`href="/web/static/base.css"`, `class="brand-name"`, "Overview"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("login-disabled /web/ missing %q", want)
 		}

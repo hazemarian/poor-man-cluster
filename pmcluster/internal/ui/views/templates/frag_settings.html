@@ -41,7 +41,7 @@
     {{if not .Configured}}<div class="stat-f">{{T "settings.conn_missing_body"}}</div>{{end}}
   </div>
   <div class="stat">
-    <div class="stat-l">{{icon "external"}}<span>{{T "settings.api_url"}}</span></div>
+    <div class="stat-l">{{icon "external"}}<span>{{T "settings.api_url"}}</span>{{if .APIURL}}<button type="button" class="icon-btn copy-inline" data-copy="{{.APIURL}}" onclick="copyVal(this)" title="{{T "common.copy"}}" aria-label="{{T "common.copy"}}">{{icon "copy"}}</button>{{end}}</div>
     <div class="stat-v mono iso trunc" dir="ltr" title="{{.APIURL}}">{{if .APIURL}}{{.APIURL}}{{else}}{{T "common.unavailable"}}{{end}}</div>
     <div class="stat-f">{{if .EnvAPIURL}}{{TF "settings.api_url_hint" .EnvAPIURL}}{{else}}{{T "settings.api_url_hint_none"}}{{end}}</div>
   </div>
@@ -52,8 +52,29 @@
   </div>
   <div class="stat">
     <div class="stat-l">{{icon "info"}}<span>{{T "settings.about_version"}}</span></div>
-    <div class="stat-v mono iso" dir="ltr">{{.Version}}</div>
+    <div class="stat-v stat-text mono iso" dir="ltr">{{.Version}}</div>
     <div class="stat-f">{{if .User}}{{TF "settings.about_signed" .User}}{{end}}</div>
+  </div>
+</div>
+
+{{/* Appearance is browser-local: the picker never posts. preferences.js writes the
+   accent to localStorage and the pmc_accent cookie and sets <html data-accent>. */}}
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "appearance.title"}}</h2>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "appearance.sub"}}</p>
+    <fieldset class="accent-picker">
+      <legend>{{T "appearance.accent"}}</legend>
+      <div class="accent-row">
+        <label class="accent-opt" data-swatch="orange"><input type="radio" name="pmc-accent" value="orange"{{if eq ACCENT "orange"}} checked{{end}}><span class="accent-swatch" aria-hidden="true"></span><span>{{T "appearance.accent_orange"}}</span></label>
+        <label class="accent-opt" data-swatch="blue"><input type="radio" name="pmc-accent" value="blue"{{if eq ACCENT "blue"}} checked{{end}}><span class="accent-swatch" aria-hidden="true"></span><span>{{T "appearance.accent_blue"}}</span></label>
+        <label class="accent-opt" data-swatch="violet"><input type="radio" name="pmc-accent" value="violet"{{if eq ACCENT "violet"}} checked{{end}}><span class="accent-swatch" aria-hidden="true"></span><span>{{T "appearance.accent_violet"}}</span></label>
+        <label class="accent-opt" data-swatch="rose"><input type="radio" name="pmc-accent" value="rose"{{if eq ACCENT "rose"}} checked{{end}}><span class="accent-swatch" aria-hidden="true"></span><span>{{T "appearance.accent_rose"}}</span></label>
+        <label class="accent-opt" data-swatch="cyan"><input type="radio" name="pmc-accent" value="cyan"{{if eq ACCENT "cyan"}} checked{{end}}><span class="accent-swatch" aria-hidden="true"></span><span>{{T "appearance.accent_cyan"}}</span></label>
+      </div>
+    </fieldset>
   </div>
 </div>
 
@@ -86,6 +107,20 @@
         <button type="submit" class="btn btn-primary">{{icon "check"}}<span>{{T "settings.save"}}</span></button>
       </div>
     </form>
+  </div>
+</div>
+
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "settings.platform_card_title"}}</h2>
+    <div class="ph-actions">
+      <a class="btn btn-sm" href="/web/settings/registries" hx-get="/web/settings/registries" hx-target="#view" hx-push-url="true">{{icon "server"}}<span>{{T "settings.platform_card_registries"}}</span></a>
+      <a class="btn btn-sm" href="/web/settings/credentials" hx-get="/web/settings/credentials" hx-target="#view" hx-push-url="true">{{icon "keys"}}<span>{{T "settings.platform_card_credentials"}}</span></a>
+      <a class="btn btn-sm" href="/web/logs" hx-get="/web/logs" hx-target="#view" hx-push-url="true">{{icon "terminal"}}<span>{{T "settings.platform_card_logs"}}</span></a>
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "settings.platform_card_body"}}</p>
   </div>
 </div>
 
@@ -157,7 +192,7 @@
               <th>{{T "settings.config_kind"}}</th>
               <th>{{T "settings.col_version"}}</th>
               <th>{{T "settings.col_updated"}}</th>
-              <th class="num"></th>
+              <th class="num"><span class="sr-only">{{T "common.actions"}}</span></th>
             </tr>
           </thead>
           <tbody>
@@ -236,7 +271,7 @@
               <th>{{T "common.name"}}</th>
               <th>{{T "common.value"}}</th>
               <th>{{T "common.created"}}</th>
-              <th class="num"></th>
+              <th class="num"><span class="sr-only">{{T "common.actions"}}</span></th>
             </tr>
           </thead>
           <tbody>

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/registry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -85,29 +85,26 @@ func runRegistryAdd(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("open encryption key: %w", err)
 	}
 
-	if err := dockerLogin(cmd, host, username, password); err != nil {
-		return fmt.Errorf("docker login %s: %w", host, err)
+	svc := &registry.Service{
+		Store:  st,
+		Cipher: cipher,
+		Runner: registry.ExecRunner{Out: cmd.OutOrStdout(), Err: cmd.ErrOrStderr()},
 	}
-
-	ciphertext, err := cipher.Encrypt([]byte(password))
+	// Read the previous username first so the message can name it, the way
+	// this command has always reported an update.
+	previous, _ := st.GetRegistry(cmd.Context(), host)
+	created, err := svc.Add(cmd.Context(), host, username, password)
 	if err != nil {
-		return fmt.Errorf("encrypt password: %w", err)
+		return err
 	}
-	r := &store.Registry{
-		Host:               host,
-		Username:           username,
-		PasswordCiphertext: ciphertext,
-	}
-	if existing, _ := st.GetRegistry(cmd.Context(), host); existing != nil {
-		if err := st.UpdateRegistry(cmd.Context(), r); err != nil {
-			return err
-		}
-		fmt.Fprintf(cmd.OutOrStdout(), "✅ Registry %s updated (was %s, now %s)\n", host, existing.Username, username)
-	} else {
-		if err := st.CreateRegistry(cmd.Context(), r); err != nil {
-			return err
-		}
+	if created {
 		fmt.Fprintf(cmd.OutOrStdout(), "✅ Registry %s added (user: %s)\n", host, username)
+	} else {
+		was := username
+		if previous != nil {
+			was = previous.Username
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "✅ Registry %s updated (was %s, now %s)\n", host, was, username)
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "  Workers will receive these credentials on the next deploy via --with-registry-auth.")
@@ -121,9 +118,9 @@ func runRegistryList(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	regs, err := st.ListRegistries(cmd.Context())
+	regs, err := (&registry.Service{Store: st}).List(cmd.Context())
 	if err != nil {
-		return fmt.Errorf("list registries: %w", err)
+		return err
 	}
 	if len(regs) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "(no registries configured — use `pmcluster registry add <host>`)")
@@ -147,15 +144,15 @@ func runRegistryRemove(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = st.Close() }()
 
-	if err := st.DeleteRegistry(cmd.Context(), host); err != nil {
+	warning, err := (&registry.Service{Store: st, Runner: registry.ExecRunner{Err: cmd.ErrOrStderr()}}).Remove(cmd.Context(), host)
+	if err != nil {
 		if errors.Is(err, store.ErrRegistryNotFound) {
 			return fmt.Errorf("registry %q not configured", host)
 		}
 		return err
 	}
-
-	if out, err := exec.CommandContext(cmd.Context(), "docker", "logout", host).CombinedOutput(); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: docker logout %s: %v\n%s\n", host, err, out)
+	if warning != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", warning)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Registry %q removed.\n", host)
@@ -188,13 +185,4 @@ func readPassword(cmd *cobra.Command) (string, error) {
 		return "", fmt.Errorf("read password: %w", err)
 	}
 	return strings.TrimRight(line, "\r\n"), nil
-}
-
-func dockerLogin(cmd *cobra.Command, host, username, password string) error {
-	dlogin := exec.CommandContext(cmd.Context(), "docker", "login",
-		host, "-u", username, "--password-stdin")
-	dlogin.Stdin = strings.NewReader(password)
-	dlogin.Stdout = cmd.OutOrStdout()
-	dlogin.Stderr = cmd.ErrOrStderr()
-	return dlogin.Run()
 }

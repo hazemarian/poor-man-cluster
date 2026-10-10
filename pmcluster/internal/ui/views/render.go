@@ -30,9 +30,17 @@ var StaticFS embed.FS
 
 // Cookie names owned by the console UI.
 const (
-	CookieLang  = "pmc_lang"
-	CookieTheme = "pmc_theme"
+	CookieLang   = "pmc_lang"
+	CookieTheme  = "pmc_theme"
+	CookieAccent = "pmc_accent"
 )
+
+// DefaultAccent is the brand orange. Accents is the whitelist the cookie, the
+// pre-paint scripts and the Settings picker all validate against; the swatches
+// themselves live in base.css under [data-accent].
+const DefaultAccent = "orange"
+
+var Accents = []string{"orange", "blue", "violet", "rose", "cyan"}
 
 // Lang resolves the request language: explicit ?lang= wins, then the persisted
 // cookie, then the browser's Accept-Language, then English.
@@ -56,6 +64,20 @@ func Theme(c *gin.Context) string {
 		return ck
 	}
 	return "dark"
+}
+
+// Accent resolves the persisted accent color. An unknown cookie value falls
+// back to the brand orange so a stale or tampered cookie can never reach the
+// data-accent attribute.
+func Accent(c *gin.Context) string {
+	if ck, err := c.Cookie(CookieAccent); err == nil {
+		for _, a := range Accents {
+			if ck == a {
+				return ck
+			}
+		}
+	}
+	return DefaultAccent
 }
 
 // CrumbKey maps a console path to its navigation key, so the breadcrumb, the
@@ -146,6 +168,7 @@ func NewRenderer() (*Renderer, error) {
 		"DIR":        func() string { return "ltr" },
 		"LANG":       func() string { return string(i18n.Default) },
 		"THEME":      func() string { return "dark" },
+		"ACCENT":     func() string { return DefaultAccent },
 		"RTL":        func() bool { return false },
 	}).ParseFS(files, "templates/*.html")
 	if err != nil {
@@ -186,6 +209,7 @@ func (r *Renderer) withRequest(c *gin.Context) *template.Template {
 		"LANG":       l.Lang,
 		"RTL":        l.IsRTL,
 		"THEME":      func() string { return Theme(c) },
+		"ACCENT":     func() string { return Accent(c) },
 	})
 }
 

@@ -6,117 +6,97 @@ import (
 	"testing"
 )
 
-// TestBrandTokensExist asserts the brand stylesheet maps the design tokens for
-// both themes and all six palettes: the palette accent tokens (--brand-*) and
-// the theme surface/text tokens (--brand-bg-*/--brand-text-*/--brand-border).
-func TestBrandTokensExist(t *testing.T) {
-	b, err := fs.ReadFile(StaticFS, "static/brand.css")
+var accents = []string{"orange", "blue", "violet", "rose", "cyan"}
+
+// TestAccentTokensExist asserts base.css defines the accent system: the --a-* swatch tokens, the
+// navy-on-accent text token, and one block per accent in BOTH themes. A swatch missing its light
+// block would leave the dark text step on a light page and fail contrast.
+func TestAccentTokensExist(t *testing.T) {
+	b, err := fs.ReadFile(StaticFS, "static/base.css")
 	if err != nil {
-		t.Fatalf("read brand.css: %v", err)
+		t.Fatalf("read base.css: %v", err)
 	}
 	s := string(b)
 
-	for _, tok := range []string{
-		"--brand-primary", "--brand-secondary", "--brand-dark", "--brand-surface", "--brand-light",
-		"--brand-bg-primary", "--brand-bg-secondary", "--brand-bg-elevated",
-		"--brand-text-primary", "--brand-text-secondary", "--brand-border",
-	} {
-		if !strings.Contains(s, tok) {
-			t.Errorf("brand.css missing token %q", tok)
+	for _, tok := range []string{"--a-fill", "--a-light", "--a-deep", "--a-text", "--a-text-hover", "--on-accent", "--m-a", "--m-l", "--m-d"} {
+		if !strings.Contains(s, tok+":") {
+			t.Errorf("base.css missing token %q", tok)
 		}
 	}
-	for _, theme := range []string{`[data-theme="dark"]`, `[data-theme="light"]`} {
-		if !strings.Contains(s, theme) {
-			t.Errorf("brand.css missing theme selector %q", theme)
+	for _, a := range accents {
+		dark := `:root[data-accent="` + a + `"] {`
+		light := `:root[data-accent="` + a + `"][data-theme="light"] {`
+		if !strings.Contains(s, dark) {
+			t.Errorf("base.css missing the dark block for accent %q", a)
+		}
+		if !strings.Contains(s, light) {
+			t.Errorf("base.css missing the light block for accent %q", a)
 		}
 	}
-	// Every palette selector is present and carries a distinct primary accent.
-	palettes := map[string]string{
-		"orange": "#FF5722",
-		"purple": "#7C4DFF",
-		"blue":   "#2979FF",
-		"red":    "#FF1744",
-		"green":  "#00E676",
-		"teal":   "#1DE9B6",
-	}
-	for name, hex := range palettes {
-		if !strings.Contains(s, `[data-palette="`+name+`"]`) {
-			t.Errorf("brand.css missing palette selector [data-palette=%q]", name)
-		}
-		if !strings.Contains(s, hex) {
-			t.Errorf("brand.css missing palette primary %q for %q", hex, name)
-		}
+	if !strings.Contains(s, `[data-theme="light"] {`) {
+		t.Errorf("base.css missing the light theme block")
 	}
 }
 
-// TestLogoMarkStaticAsset asserts the standalone SVG mark ships as a static
-// asset and carries the palette-aware stroke/fill reference.
+// TestLogoMarkStaticAsset asserts the standalone SVG mark ships as a static asset: the three-node
+// mark with its outer links, in the brand orange.
 func TestLogoMarkStaticAsset(t *testing.T) {
 	b, err := fs.ReadFile(StaticFS, "static/logo-mark.svg")
 	if err != nil {
 		t.Fatalf("read logo-mark.svg: %v", err)
 	}
 	s := string(b)
-	if !strings.Contains(s, "var(--brand-primary, #FF5722)") {
-		t.Errorf("logo-mark.svg must reference var(--brand-primary)")
+	if !strings.Contains(s, `viewBox="0 0 100 100"`) {
+		t.Errorf("logo-mark.svg must be the 100x100 three-node mark")
 	}
-	if !strings.Contains(s, `viewBox="0 0 120 120"`) {
-		t.Errorf("logo-mark.svg must be the 120x120 isometric mark")
+	if !strings.Contains(s, "#FF8A00") {
+		t.Errorf("logo-mark.svg must carry the brand orange")
 	}
 }
 
-// TestTemplatesReferenceLogoPartial asserts the shell, sign-in and setup pages
-// render the combination-mark lockup, and that the partial carries the
-// wordmark plus the inlined palette-aware mark.
-func TestTemplatesReferenceLogoPartial(t *testing.T) {
+// TestTemplatesRenderBrandMark asserts the shell, sign-in and setup pages draw the shared mark
+// symbol and the two-part wordmark, and that the symbol itself ships in the icon sprite.
+func TestTemplatesRenderBrandMark(t *testing.T) {
 	for _, name := range []string{"templates/app.html", "templates/login.html", "templates/setup.html"} {
 		b, err := fs.ReadFile(files, name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
 		}
-		if !strings.Contains(string(b), `{{template "logo"}}`) {
-			t.Errorf("%s must render the logo lockup partial", name)
+		s := string(b)
+		for _, want := range []string{`href="#brandmark"`, `brand.name_lead`, `brand.name_accent`, `data-accent="{{ACCENT}}"`} {
+			if !strings.Contains(s, want) {
+				t.Errorf("%s missing %q", name, want)
+			}
 		}
 	}
 
-	b, err := fs.ReadFile(files, "templates/frag_logo.html")
+	b, err := fs.ReadFile(files, "templates/frag_icons.html")
 	if err != nil {
-		t.Fatalf("read frag_logo.html: %v", err)
+		t.Fatal(err)
 	}
-	s := string(b)
-	for _, want := range []string{
-		"Poor Man's", "Cluster", "pmcluster",
-		"var(--brand-primary, #FF5722)", `viewBox="0 0 120 120"`,
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("frag_logo.html missing %q", want)
-		}
+	if !strings.Contains(string(b), `<symbol id="brandmark" viewBox="0 0 100 100">`) {
+		t.Errorf("frag_icons.html must define the brandmark symbol")
 	}
 }
 
-// TestPaletteBootAndPickerPresent asserts the palette boot script (applied
-// before first paint), the picker markup and the persistence key are wired in.
-func TestPaletteBootAndPickerPresent(t *testing.T) {
+// TestAccentBootAndPickerPresent asserts the accent boot script (applied before first paint), the
+// Settings picker and the persistence key are wired in.
+func TestAccentBootAndPickerPresent(t *testing.T) {
 	app, err := fs.ReadFile(files, "templates/app.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(app), "pmc_palette") {
-		t.Errorf("app.html boot script must apply the persisted palette (pmc_palette)")
+	if !strings.Contains(string(app), "pmc_accent") {
+		t.Errorf("app.html boot script must apply the persisted accent (pmc_accent)")
 	}
 
-	pref, err := fs.ReadFile(files, "templates/frag_preferences.html")
+	settings, err := fs.ReadFile(files, "templates/frag_settings.html")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"data-palette-picker", "data-palette-toggle",
-		`data-palette-choose="orange"`, `data-palette-choose="purple"`,
-		`data-palette-choose="blue"`, `data-palette-choose="red"`,
-		`data-palette-choose="green"`, `data-palette-choose="teal"`,
-	} {
-		if !strings.Contains(string(pref), want) {
-			t.Errorf("preferences fragment missing %q", want)
+	for _, a := range accents {
+		if !strings.Contains(string(settings), `name="pmc-accent" value="`+a+`"`) {
+			t.Errorf("settings fragment missing the %q accent option", a)
 		}
 	}
 
@@ -124,7 +104,7 @@ func TestPaletteBootAndPickerPresent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(js), "pmc_palette") {
-		t.Errorf("preferences.js must persist the palette to localStorage (pmc_palette)")
+	if !strings.Contains(string(js), "pmc_accent") {
+		t.Errorf("preferences.js must persist the accent to localStorage and a cookie (pmc_accent)")
 	}
 }

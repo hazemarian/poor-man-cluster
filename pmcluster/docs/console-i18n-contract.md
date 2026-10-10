@@ -275,3 +275,45 @@ and the 298px field clips it mid-URL with no ellipsis (measured at 390px). Examp
 language-neutral and mirror the English dictionary verbatim; the imperative belongs in the field label and
 its hint, which sit outside the box and cannot be clipped. The imperative-hint rule in `arabic-ui` is about
 hints, not example values.
+
+## Platform surfaces: registries, bootstrap credentials, control-plane logs, secret verify
+
+The surfaces the CLI used to own alone. Settled terms (`dict_{en,ar}_platform.go`):
+
+| Concept | Arabic | Notes |
+|---|---|---|
+| image registry | `مستودع الصور` | never `سجل`/`مخزن`, which collide with log/store |
+| registry credentials | `بيانات الاعتماد` | the console-wide term for credentials |
+| bootstrap credentials | `بيانات اعتماد التهيئة` | the passwords the platform mints for its own components |
+| Swarm secret | `سر العنقود` | `العنقود` is the established word for Swarm/cluster here |
+| control-plane logs | `سجلات لوحة التحكم` | a service's own output stays `السجلات` |
+| rotate | `تدوير` | |
+| write-only | `تُكتب ولا تُقرأ` | not `للكتابة فقط`, which is a calque of the English |
+| period (log filter) | `المدة` | `لمدة` is the banned *construction* (`لمدة 3 أيام`), the noun `المدة` is correct |
+| registry host | `المضيف` | **not** `الخادم`, which this console reserves for the daemon (`dict_ar_cluster.go`). A review flagged `المضيف` as inconsistent with the shipped `tls.col_host`/`common.host`, which read Host as `الخادم`; decided in favour of `المضيف` because a registry host is not a daemon. Aligning those two older keys is open, and touches other pages. |
+
+**A key used as both a heading and a label must carry the placeholder in both.** `inventory.verify_title`
+is `{{TF … .Name}}` in `frag_secretverify.html` (the modal names the secret) but a bare `{{T …}}` on the
+row buttons in `frag_inventory.html`; the dictionary value had no `{0}`, so the name was dropped from the
+modal heading. It now reads `تحقّق من قيمة {0}` and the three button call sites use
+`inventory.verify_action` instead. Check every call site before adding a placeholder to a shared key.
+
+**Counts are registered, never interpolated.** `plural.registries` and `plural.credentials` carry the six
+CLDR categories on the AR side and `{{P (len .Rows) "plural.…"}}` renders the badge — a bare
+`"{0} مستودع"` is grammatical only for 11-99. `P` takes the count as `any`, so do **not** wrap it in `N`:
+`N` returns a formatted *string*. Verified forms (real helper output): 0 `لا توجد مستودعات مُهيّأة`,
+1 `مستودع واحد مُهيّأ`, 2 `مستودعان مُهيّآن` / oblique `مستودعين مُهيّأين`, 3 `3 مستودعات مُهيّأة`,
+11 `11 مستودعًا مُهيّأً`, 200 `200 مستودع مُهيّأ`, **1001 `1,001 مستودع مُهيّأ`** (other, not one).
+
+**Truncated identifiers stay reachable by copy.** A `.stat-v` at `--fs-metric` is for numbers; a URL or a
+version in one is ellipsized (`http://127.0.0.1:9090` needs 392px in a 231px cell, 126px on a phone). The
+`title` attribute alone is not a fix — touch has no hover. The copy control sits at the end of the
+**label** row (`.stat-l`, `margin-inline-start: auto`, 24px), never beside the value: the value is already
+ellipsized and a control next to it would take another ~38px from the thing it copies. It costs the strip
+~4px of height. Assert the value's own `clientWidth/scrollWidth` is unchanged when adding it (231/392 at
+1440, 126/392 at 390) — that is the proof the truncation did not get worse.
+
+**Two clipboard paths, both live.** `copyVal` uses `navigator.clipboard` when it exists and falls back to
+`selectAndCopy` (temp textarea + `execCommand`) when it does not. The console is served over plain HTTP on
+the dev box, which is **not a secure context**, so locally the fallback is the only path while production
+takes the primary — a green local test proves half the feature. Test both.

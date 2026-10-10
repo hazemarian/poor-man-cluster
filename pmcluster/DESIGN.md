@@ -487,7 +487,7 @@ its code-side prerequisite:
 ## Mapping to the code
 
 ```
-internal/ui/views/templates/*.html       31 templates; fragments define blocks, app/login/setup are shells
+internal/ui/views/templates/*.html       37 templates; fragments define blocks, app/login/setup are shells
 internal/ui/views/static/fonts.css       19 @font-face, 3 families, script subsets, swap
 internal/ui/views/static/base.css        tokens, reset, typography, shell
 internal/ui/views/static/components.css  buttons, panels, forms, kv, banner, pills
@@ -497,9 +497,24 @@ internal/ui/views/render.go              ShellBase, Localize, func map, static h
 internal/ui/views/i18n/*.go              dictionaries, formatter, plural rules
 internal/ui/controllers/*.go             page data; emits translation keys, never prose
 internal/ui/controllers/usage.go         the config/secret reference graph behind the usage page
+internal/registry/*.go, internal/server/{credentials,logs}.go
+                                         registry, bootstrap-credential and control-plane-log services
+                                         behind the console's platform pages
 internal/cluster/embeds/edge-stack.yml   console/API routing on the edge
 docs/console-i18n-contract.md            the machine-enforced translation + markup contract
 ```
+
+**What ships in the binary, and what does not.** Templates, CSS and the IBM Plex subsets are embedded
+(`go:embed templates/*.html`, `go:embed all:static`), so every page renders correctly on a host with no
+outbound internet — that is the whole of the "self-hosted" claim. htmx is **not** embedded: `app.html`
+loads `https://unpkg.com/htmx.org@1.9.12`, upstream's call in the same commit that removed a committed
+local DB (the vendored copy was byte-identical to the release — a hygiene decision, not a defect fix).
+Measured consequence: every nav anchor keeps a real `href`, so navigation degrades to full page loads,
+but every mutation is `hx-post` with no `action`, so a browser that cannot reach unpkg submits nothing
+(the default form behaviour is a GET of the current URL) and the two `hx-trigger` behaviours stop. A
+cluster whose operators cannot reach unpkg is **observable** in the console and **operable** only from
+the CLI. The fetch happens in the operator's browser, not on the manager, so what matters is the
+operator's egress, not the host's.
 
 ## Screenshots
 
@@ -515,6 +530,11 @@ written from:
 
 ## Open items
 
+- **The CDN script is trusted on TLS alone.** `app.html` loads htmx without `integrity` or `crossorigin`,
+  and no route sets a `Content-Security-Policy`, so a compromised response executes with an authenticated
+  operator's session. The `@1.9.12` pin fixes the version, not the bytes. SRI (`sha384-…` plus
+  `crossorigin`) and a `script-src` policy are both compatible with keeping htmx on the CDN — neither
+  requires vendoring it.
 - **RTL tracking.** Negative tracking is neutralised rule by rule; `.auth-word` (-.02em)
   and `.delivery-link h3` (-.015em) still carry Latin tracking in Arabic. Fix: tokenize the
   two tracking values and zero them in one `[dir="rtl"]` block.

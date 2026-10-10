@@ -349,3 +349,41 @@ type ExecResult struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
 }
+
+// Registry is one configured Docker registry credential (GET /api/registries).
+// The password is write-only at the API level and never appears here.
+type Registry struct {
+	Host      string `json:"host"`
+	Username  string `json:"username"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// ManagedCredential is one bootstrap credential the platform minted for a
+// bundled component (GET /api/credentials). No password material.
+type ManagedCredential struct {
+	Name            string `json:"name"`
+	Kind            string `json:"kind"`
+	Username        string `json:"username"`
+	SwarmSecretName string `json:"swarm_secret_name"`
+	CreatedAt       int64  `json:"created_at"`
+	RotatedAt       int64  `json:"rotated_at"`
+}
+
+// RotatedCredential is the ONE-TIME view returned by a rotation: the new
+// password is never readable again afterwards, so the page has to show it now.
+type RotatedCredential struct {
+	Name            string `json:"name"`
+	Username        string `json:"username"`
+	Password        string `json:"password"`
+	SwarmSecretName string `json:"swarm_secret_name"`
+	UsernameChanged bool   `json:"username_changed"`
+	ShownOnce       bool   `json:"shown_once"`
+}
+
+// LogPage is one page of the control plane's own JSON logs (GET /api/logs).
+type LogPage struct {
+	File      string   `json:"file"`
+	Files     []string `json:"files"`
+	Lines     []string `json:"lines"`
+	Truncated bool     `json:"truncated"`
+}
