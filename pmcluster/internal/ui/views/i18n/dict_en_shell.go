@@ -7,7 +7,7 @@ package i18n
 func init() {
 	register(EN, map[string]string{
 		// product
-		"brand.sub":        "operator console",
+		"brand.sub":        "pmcluster",
 		"app.title":        "pmcluster",
 		"nav.menu":         "Menu",
 		"nav.close":        "Close menu",

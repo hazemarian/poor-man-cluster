@@ -51,7 +51,7 @@ func TestStaticHandlerServesVendoredHtmx(t *testing.T) {
 // pinned the bar to a fixed column count, so a destination added later wrapped
 // into an uneven implicit column. Keep the definition in exactly one sheet.
 func TestTabBarHasSingleDefinition(t *testing.T) {
-	sheets := []string{"base.css", "components.css", "patterns.css", "brand.css"}
+	sheets := []string{"base.css", "components.css", "patterns.css"}
 	var owners []string
 	for _, name := range sheets {
 		b, err := StaticFS.ReadFile("static/" + name)

@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -26,6 +27,7 @@ func (s *HTTP) Mount(r chi.Router) {
 	r.Put("/secrets/{name}/stack", s.retag)
 	r.Delete("/secrets/{name}", s.remove)
 	r.Get("/secrets/{name}/value", s.value)
+	r.Post("/secrets/{name}/verify", s.verify)
 }
 
 type secretRow struct {
@@ -219,6 +221,43 @@ func (s *HTTP) value(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	writeJSON(res, http.StatusOK, map[string]any{"name": name, "value": plain})
+}
+
+// verify compares a supplied value against the secret's stored sha256 hash,
+// answering only match / no-match. The store never holds the plaintext, so
+// this confirms a value WITHOUT revealing one — the counterpart to the CLI's
+// `pmcluster secret verify`. The comparison is constant-time so a caller
+// cannot probe the hash byte by byte through timing.
+func (s *HTTP) verify(res http.ResponseWriter, req *http.Request) {
+	name := chi.URLParam(req, "name")
+	if name == "" {
+		writeErr(res, http.StatusBadRequest, "secret name is required")
+		return
+	}
+	var body struct {
+		Value string `json:"value"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(res, req.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		writeErr(res, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if body.Value == "" {
+		writeErr(res, http.StatusBadRequest, "value is required")
+		return
+	}
+	sec, err := s.Svc.Get(req.Context(), name)
+	if err != nil {
+		if errors.Is(err, store.ErrSecretNotFound) {
+			writeErr(res, http.StatusNotFound, "secret not found: "+name)
+			return
+		}
+		writeErr(res, http.StatusInternalServerError, "get secret: "+err.Error())
+		return
+	}
+	match := subtle.ConstantTimeCompare([]byte(sec.Hash), []byte(store.SecretHash(body.Value))) == 1
+	writeJSON(res, http.StatusOK, map[string]any{"name": name, "match": match})
 }
 
 func writeJSON(res http.ResponseWriter, status int, v any) {

@@ -176,7 +176,7 @@ func init() {
 		"settings.configs_unknown_body":  "لم يستجب الخادم لطلب التهيئات. هذه ليست قائمة فارغة.",
 		"settings.secrets_empty_title":   "لا توجد أسرار للعنقود بعد",
 		"settings.secrets_empty_body": "تحتوي أسرار العنقود على بيانات اعتماد المنصة مثل مفتاح TLS " +
-			"أو رمز API أو كلمة مرور سجل الصور.",
+			"أو رمز API أو كلمة مرور مستودع الصور.",
 		"settings.secrets_unknown_title": "أسرار العنقود غير متاحة",
 		"settings.secrets_unknown_body":  "لم يستجب الخادم لطلب الأسرار. هذه ليست قائمة فارغة.",
 		"settings.secrets_hash_hint":     "لا تُسرد القيم أبدًا — فقط أسماؤها ووقت حفظها.",

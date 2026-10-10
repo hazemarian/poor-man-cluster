@@ -124,7 +124,7 @@
 
 {{if and .Detail .Detail.Stack.LastError}}
 <div class="msg err">
-  <b>{{icon "alert-triangle"}}{{T "stack.deploy_failed"}}</b>
+  <b>{{icon "alert"}}{{T "stack.deploy_failed"}}</b>
   <p class="muted">{{.Detail.Stack.LastError}}</p>
   <p class="sub">{{T "stack.deploy_failed_hint"}}</p>
 </div>
@@ -137,7 +137,7 @@
     {{range .Detail.Stack.LastErrors}}{{if .Error}}
     <li>
       <div class="t-head">
-        <span class="pill bad">{{icon "alert-triangle"}}{{T "stack.deploy_failed"}}</span>
+        <span class="pill bad">{{icon "alert"}}{{T "stack.deploy_failed"}}</span>
         <span class="t-meta">rev {{N0 .Revision}} · {{ts .CreatedAt}}</span>
       </div>
       <p class="muted">{{.Error}}</p>

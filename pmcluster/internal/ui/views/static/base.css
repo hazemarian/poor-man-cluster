@@ -1,53 +1,67 @@
 /* pmcluster console — base: tokens, reset, typography, shell layout.
-   Design direction v2: flat zinc surfaces, hairline separation, single indigo accent.
+   Design direction v3: cool charcoal surfaces (a desaturated take on the brand board navy), hairline separation,
+   one swappable accent (orange by default; see [data-accent] below). Status
+   colors (green/amber/red) are separate from the accent and never change.
    All box-direction properties are LOGICAL (inline-start/end) so the same sheet
    renders correctly for LTR (en) and RTL (ar). */
 
 /* ---------- tokens ---------- */
 :root {
-  --bg-body: #0A0B0E;
-  --bg-sidebar: #0D0F15;
-  --bg-card: #101218;
-  --bg-elevated: #161922;
-  --bg-hover: #1A1E27;
-  --bg-tertiary: #1C2029;
+  --bg-body: #0C0F14;
+  --bg-sidebar: #10141A;
+  --bg-card: #14181F;
+  --bg-elevated: #1B2029;
+  --bg-hover: #1A1F28;
+  --bg-tertiary: #181D26;
   /* The lead stat cell (first cell of the overview row) carries the node's
      headline state, so its fill needs to read as one step above the card in
      BOTH themes. --bg-elevated cannot serve: it is #FFFFFF in light, identical
      to --bg-card, so the cell loses its lift. Dedicated token, measured at
-     ~1.17:1 against --bg-card in each theme. */
-  --bg-lead: #1C2130;
+     ~1.20:1 against --bg-card in each theme. */
+  --bg-lead: #212835;
 
-  --border-subtle: #191C23;
-  --border-default: #23272F;
-  --border-active: #2C313B;
+  --border-subtle: #181C23;
+  --border-default: #212630;
+  --border-active: #2C323E;
   /* Form controls sit on --bg-tertiary inside a --bg-card panel, so a
      --border-default hairline vanishes against its own fill. Controls take
-     this stronger hairline instead; panels keep --border-default. */
-  --border-control: #454C5A;
+     this stronger hairline instead (3.4:1 against the control fill); panels
+     keep --border-default. */
+  --border-control: #667184;
   --shadow-overlay: 0 16px 40px rgba(0, 0, 0, .55);
 
-  --text-primary: #E9EBF0;
-  --text-secondary: #A5ACBA;
-  --text-tertiary: #8A93A3;
+  --text-primary: #F8FAFC;
+  --text-secondary: #AAB3C2;
+  --text-tertiary: #98A2B3;
 
-  --accent: #6D7CFF;
-  --accent-hover: #5A67E8;
-  /* Filled accent surfaces carry white text, and #6D7CFF only reaches 3.5:1
-     against white. --accent-strong is the same hue darkened until white text
-     clears 4.5:1; --accent stays for text, icons, hairlines and focus rings. */
-  --accent-strong: #5460DC;
-  --accent-strong-hover: #4B57D6;
-  --accent-bg: rgba(109, 124, 255, .12);
-  --accent-border: rgba(109, 124, 255, .22);
+  /* Accent. --a-fill / --a-light / --a-deep are the swatch itself; --a-text is
+     the same hue as seen on THIS theme's surfaces (the fill on dark, a darker
+     step on light so text and icons clear 4.5:1). Filled accent surfaces carry
+     --on-accent (navy), not white: every swatch reaches 6.9:1 or better with it.
+     Only the [data-accent] blocks further down change these four. */
+  --a-fill: #FF8A00;
+  --a-light: #FFB347;
+  --a-deep: #FF7A00;
+  --a-text: #FF8A00;
+  --a-text-hover: #FFB347;
+  --on-accent: #0C0F14;
 
-  --green: #3DDC97;  --green-bg: rgba(61, 220, 151, .12);  --green-border: rgba(61, 220, 151, .22);
-  --amber: #F5B945;  --amber-bg: rgba(245, 185, 69, .12);  --amber-border: rgba(245, 185, 69, .22);
-  --red:   #FB6F6F;  --red-bg:   rgba(251, 111, 111, .12); --red-border:   rgba(251, 111, 111, .22);
+  --accent: var(--a-text);
+  --accent-hover: var(--a-text-hover);
+  --accent-strong: var(--a-fill);
+  --accent-strong-hover: var(--a-light);
+  --accent-bg: color-mix(in srgb, var(--a-fill) 12%, transparent);
+  --accent-border: color-mix(in srgb, var(--a-fill) 30%, transparent);
+  /* The brand mark reads these three, so it recolors with the accent. */
+  --m-a: var(--a-fill); --m-l: var(--a-light); --m-d: var(--a-deep);
+
+  --green: #00C896;  --green-bg: rgba(0, 200, 150, .12);  --green-border: rgba(0, 200, 150, .24);
+  --amber: #FFB347;  --amber-bg: rgba(255, 179, 71, .12); --amber-border: rgba(255, 179, 71, .24);
+  --red:   #FB8888;  --red-bg:   rgba(248, 113, 113, .12); --red-border:  rgba(248, 113, 113, .24);
   --cyan:  #49C7F0;  --cyan-bg:  rgba(73, 199, 240, .12);  --cyan-border:  rgba(73, 199, 240, .22);
 
-  --r-sm: 5px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px;
-  --sans: "IBM Plex Sans", "IBM Plex Sans Arabic", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-xl: 18px;
+  --sans: "Plus Jakarta Sans", "IBM Plex Sans Arabic", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --nav-w: 240px; --rail-w: 64px; --top-w: 72px; --content-max: 1440px;
   --t: .15s cubic-bezier(.25, 1, .5, 1);
@@ -55,32 +69,29 @@
 }
 
 [data-theme="light"] {
-  --bg-body: #FBFBFC;
-  --bg-sidebar: #F5F6F8;
+  --bg-body: #F8FAFC;
+  --bg-sidebar: #F1F5F9;
   --bg-card: #FFFFFF;
   --bg-elevated: #FFFFFF;
-  --bg-hover: #F1F2F5;
-  --bg-tertiary: #F4F5F7;
+  --bg-hover: #EEF2F7;
+  --bg-tertiary: #F3F5F9;
   /* See :root — light needs a real step away from #FFFFFF, which --bg-elevated
      cannot provide here. */
-  --bg-lead: #EBEEF4;
+  --bg-lead: #E6ECF4;
 
-  --border-subtle: #EDEEF1;
-  --border-default: #E4E6EA;
-  --border-active: #D3D7DE;
-  --border-control: #B9C0CB;
-  --shadow-overlay: 0 16px 40px rgba(20, 22, 26, .14);
+  --border-subtle: #EDF1F6;
+  --border-default: #E2E8F0;
+  --border-active: #CBD5E1;
+  --border-control: #74849B;
+  --shadow-overlay: 0 16px 40px rgba(15, 23, 42, .14);
 
-  --text-primary: #14161A;
-  --text-secondary: #5B616E;
-  --text-tertiary: #676E7C;
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-tertiary: #5B6B82;
 
-  --accent: #4B57D6;
-  --accent-hover: #4049B8;
-  --accent-strong: #4049B8;
-  --accent-strong-hover: #39419F;
-  --accent-bg: rgba(75, 87, 214, .1);
-  --accent-border: rgba(75, 87, 214, .24);
+  --a-text: #A34706;
+  --a-text-hover: #8A3C04;
+  --accent-border: color-mix(in srgb, var(--a-fill) 38%, transparent);
 
   /* Semantic text clears AA on its own tint, including hovered table rows. */
   --green: #126C48;  --green-bg: rgba(18, 108, 72, .1);   --green-border: rgba(18, 108, 72, .24);
@@ -89,6 +100,24 @@
   --cyan:  #16779B;  --cyan-bg:  rgba(22, 119, 155, .1);  --cyan-border:  rgba(22, 119, 155, .24);
   color-scheme: light;
 }
+
+/* ---------- accent swatches ----------
+   Chosen in Settings, stored in the pmc_accent cookie (server, no flash) and in
+   localStorage (pre-paint fallback), applied as <html data-accent>. Orange is
+   the brand and needs no block on dark: it is the :root default. Every swatch
+   sets all five tokens in BOTH themes, so nothing leaks through from orange.
+   Light-theme text steps were measured on white, the page, hovered rows and the
+   tinted accent surface: all >= 4.6:1. */
+:root[data-accent="orange"] { --a-fill: #FF8A00; --a-light: #FFB347; --a-deep: #FF7A00; --a-text: #FF8A00; --a-text-hover: #FFB347; }
+:root[data-accent="orange"][data-theme="light"] { --a-text: #A34706; --a-text-hover: #8A3C04; }
+:root[data-accent="blue"] { --a-fill: #60A5FA; --a-light: #93C5FD; --a-deep: #3B82F6; --a-text: #60A5FA; --a-text-hover: #93C5FD; }
+:root[data-accent="blue"][data-theme="light"] { --a-text: #1D4ED8; --a-text-hover: #1E40AF; }
+:root[data-accent="violet"] { --a-fill: #A78BFA; --a-light: #C4B5FD; --a-deep: #8B5CF6; --a-text: #A78BFA; --a-text-hover: #C4B5FD; }
+:root[data-accent="violet"][data-theme="light"] { --a-text: #6D28D9; --a-text-hover: #5B21B6; }
+:root[data-accent="rose"] { --a-fill: #FB7185; --a-light: #FDA4AF; --a-deep: #F43F5E; --a-text: #FB7185; --a-text-hover: #FDA4AF; }
+:root[data-accent="rose"][data-theme="light"] { --a-text: #BE123C; --a-text-hover: #9F1239; }
+:root[data-accent="cyan"] { --a-fill: #22D3EE; --a-light: #67E8F9; --a-deep: #06B6D4; --a-text: #22D3EE; --a-text-hover: #67E8F9; }
+:root[data-accent="cyan"][data-theme="light"] { --a-text: #0C6A84; --a-text-hover: #0B5870; }
 
 /* Type, spacing and control metrics are theme-independent, so they live in
    their own block. Six UI steps, one page-title step, one metric step; the mono
@@ -125,8 +154,8 @@ body {
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
 }
-h1, h2, h3, h4 { margin: 0; font-weight: 600; line-height: var(--lh-snug); text-wrap: balance; }
-h1 { font-size: var(--fs-h1); letter-spacing: -.035em; }
+h1, h2, h3, h4 { margin: 0; font-weight: 700; line-height: var(--lh-snug); text-wrap: balance; }
+h1 { font-size: var(--fs-h1); letter-spacing: -.025em; }
 h2 { font-size: var(--fs-h2); }
 h3 { font-size: var(--fs-h3); }
 p { margin: 0; text-wrap: pretty; }
@@ -173,10 +202,25 @@ html.console { overscroll-behavior-y: none; }
   padding: 0 16px; height: var(--top-w); flex: none;
   border-bottom: 1px solid var(--border-subtle);
 }
-.mark { width: 34px; height: 34px; border-radius: 9px; background: var(--accent-bg); border: 1px solid var(--accent-border); flex: none; display: grid; place-items: center; color: var(--accent); }
-.mark .ic { width: 22px; height: 22px; }
-.brand { font-size: 17px; font-weight: 600; letter-spacing: -.025em; display: flex; flex-direction: column; }
-.brand small { font-size: var(--fs-xs); font-weight: 400; color: var(--text-tertiary); letter-spacing: 0; }
+.mark { width: 40px; height: 40px; flex: none; display: block; }
+/* Block, not grid: a percentage height inside an auto grid row resolves to auto, and an SVG
+   with no intrinsic size then falls back to 150px tall and drifts out of its box. */
+.mark-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+/* Brand mark colors: the gradient stops and the port glow follow --m-* (the accent). */
+.bm-sl { stop-color: var(--m-l); } .bm-sd { stop-color: var(--m-d); }
+.bm-fa { fill: var(--m-a); } .bm-sa { stroke: var(--m-a); }
+/* Cube faces. On dark surfaces the default right/left faces sink into the sidebar, so dark
+   lifts them a step; light keeps the deep faces, which already read against white. */
+.bm-l1 { stop-color: var(--m-l1, #283650); } .bm-l2 { stop-color: var(--m-l2, #121A2B); }
+.bm-r1 { stop-color: var(--m-r1, #1A2338); } .bm-r2 { stop-color: var(--m-r2, #080D18); }
+:root:not([data-theme="light"]) { --m-l1: #363F52; --m-l2: #1C2330; --m-r1: #272F3F; --m-r2: #131923; }
+.brand { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+/* Two-tone wordmark: the lead in the text color, "Cluster" in the accent. */
+/* One line when the sidebar has room, wrapping to two ("Poor Man's" / "Cluster") when it does not. */
+.brand-name { font-size: 15px; font-weight: 800; letter-spacing: -.02em; line-height: 1.15; text-align: start; text-wrap: balance; }
+.brand-name b, .auth-word b { color: var(--accent); font-weight: inherit; }
+/* The product id under the wordmark: mono, small, tracked, like the CLI it is named after. */
+.brand small { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--text-tertiary); letter-spacing: .14em; direction: ltr; text-align: start; }
 
 /* The nav owns the scroll, not the sidebar: with the rail this long, a scrolling
    sidebar pushed the footer (account + logout) below the fold, where the logout
@@ -309,8 +353,8 @@ html.console { overscroll-behavior-y: none; }
   .sidebar-head .brand { flex: 1; min-width: 0; }
   .sidebar-head .brand small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sidebar-foot { align-items: stretch; }
-  .content { padding: var(--s-4) var(--s-4) 96px; }
-  .topbar { padding: 0 var(--s-3); gap: var(--s-2); }
+  .content { padding: var(--s-5) var(--s-5) 96px; }
+  .topbar { padding: 0 var(--s-4); gap: var(--s-2); }
   .crumbs { font-size: var(--fs-sm); }
   .scrim {
     position: fixed; inset: 0; background: rgba(0, 0, 0, .5); z-index: 55; display: none;

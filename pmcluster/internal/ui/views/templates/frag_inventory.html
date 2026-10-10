@@ -61,7 +61,7 @@
           <th>{{T "settings.col_version"}}</th>
           <th>{{T "settings.col_updated"}}</th>
           <th>{{T "inventory.col_referenced_by"}}</th>
-          <th class="num"></th>
+          <th class="num"><span class="sr-only">{{T "common.actions"}}</span></th>
         </tr>
       </thead>
       <tbody>
@@ -166,7 +166,7 @@
           <th>{{T "inventory.col_stack"}}</th>
           <th>{{T "settings.col_updated"}}</th>
           <th>{{T "inventory.col_referenced_by"}}</th>
-          <th class="num"></th>
+          <th class="num"><span class="sr-only">{{T "common.actions"}}</span></th>
         </tr>
       </thead>
       <tbody>
@@ -189,6 +189,10 @@
               <button type="button" class="btn btn-ghost btn-sm" title="{{T "settings.reveal"}}"
                       hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
                 {{icon "lock"}}<span class="sr-only">{{T "settings.reveal"}}</span>
+              </button>
+              <button type="button" class="btn btn-ghost btn-sm" title="{{T "inventory.verify_action"}}"
+                      hx-get="/web/inventory/verify/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
+                {{icon "check-circle"}}<span class="sr-only">{{T "inventory.verify_action"}}</span>
               </button>
               <button type="button" class="btn btn-ghost btn-sm" title="{{T "inventory.retag_title"}}"
                       hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()">
@@ -213,6 +217,10 @@
         <button type="button" class="btn btn-sm" style="min-height:44px"
                 hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
           {{icon "lock"}}<span>{{T "settings.reveal"}}</span>
+        </button>
+        <button type="button" class="btn btn-sm" style="min-height:44px"
+                hx-get="/web/inventory/verify/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
+          {{icon "check-circle"}}<span>{{T "inventory.verify_action"}}</span>
         </button>
         <button type="button" class="btn btn-sm" style="min-height:44px"
                 hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()">

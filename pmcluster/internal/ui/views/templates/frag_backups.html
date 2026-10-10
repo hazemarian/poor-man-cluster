@@ -51,7 +51,7 @@
 <div class="stats">
   <div class="stat{{if not .RunsKnown}} is-unknown{{end}}">
     <div class="stat-l">{{T "backups.stats_last_verified"}}</div>
-    <div class="stat-v">
+    <div class="stat-v stat-text">
       {{if not .RunsKnown}}{{T "common.unavailable"}}
       {{else if .HasLastVerified}}{{TF "backups.stats_last_verified_foot" (N .LastVerifiedDays)}}
       {{else}}{{T "backups.coverage_none"}}{{end}}
@@ -60,17 +60,17 @@
   </div>
   <div class="stat is-unknown">
     <div class="stat-l">{{T "backups.stats_schedule"}}</div>
-    <div class="stat-v">{{T "backups.stats_schedule_value"}}</div>
+    <div class="stat-v stat-text">{{T "backups.stats_schedule_value"}}</div>
     <div class="stat-f">{{T "backups.stats_schedule_foot"}}</div>
   </div>
   <div class="stat is-unknown">
     <div class="stat-l">{{T "backups.stats_size"}}</div>
-    <div class="stat-v">{{T "backups.stats_size_value"}}</div>
+    <div class="stat-v stat-text">{{T "backups.stats_size_value"}}</div>
     <div class="stat-f">{{T "backups.stats_size_foot"}}</div>
   </div>
   <div class="stat">
     <div class="stat-l">{{T "backups.stats_retention"}}</div>
-    <div class="stat-v">{{TF "backups.stats_retention_value" (N .Limit)}}</div>
+    <div class="stat-v stat-text">{{TF "backups.stats_retention_value" (N .Limit)}}</div>
     <div class="stat-f">{{T "backups.stats_retention_foot"}}</div>
   </div>
   <div class="stat{{if not .CoverageKnown}} is-unknown{{end}}">
