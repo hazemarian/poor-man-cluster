@@ -68,10 +68,10 @@
   <div class="stat">
     <div class="stat-l">{{icon "deploy"}}{{T "deploy.st_target"}}</div>
     {{if .Form.AppName}}
-    <div class="stat-v"><span class="mono">{{.Form.AppName}}</span></div>
+    <div class="stat-v stat-text"><span class="mono">{{.Form.AppName}}</span></div>
     <div class="stat-f">{{T "deploy.st_target_foot"}}</div>
     {{else}}
-    <div class="stat-v muted">{{T "deploy.no_target"}}</div>
+    <div class="stat-v stat-text muted">{{T "deploy.no_target"}}</div>
     <div class="stat-f">{{T "deploy.st_named_foot"}}</div>
     {{end}}
   </div>
@@ -79,7 +79,7 @@
   <div class="stat{{if or (not .TargetNamed) (not .TargetKnown)}} is-unknown{{end}}">
     <div class="stat-l">{{icon "clock"}}{{T "deploy.st_revision"}}</div>
     {{if and .TargetKnown (not .Target)}}
-    <div class="stat-v muted">{{T "deploy.st_revision_new"}}</div>
+    <div class="stat-v stat-text muted">{{T "deploy.st_revision_new"}}</div>
     <div class="stat-f">{{T "deploy.st_revision_new_foot"}}</div>
     {{else if .Target}}
     <div class="stat-v num">{{N0 .Target.Revision}}</div>

@@ -14,7 +14,7 @@ package i18n
 func init() {
 	register(AR, map[string]string{
 		// product
-		"brand.sub":        "لوحة التحكم للمشغّل",
+		"brand.sub":        "pmcluster",
 		"app.title":        "pmcluster",
 		"nav.menu":         "القائمة",
 		"nav.close":        "إغلاق القائمة",

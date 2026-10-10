@@ -1,6 +1,6 @@
 {{define "setup"}}
 <!doctype html>
-<html lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}">
+<html lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}" data-accent="{{ACCENT}}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -14,10 +14,8 @@
       try {
         var t = localStorage.getItem('pmc_theme');
         if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
-        var p = localStorage.getItem('pmc_palette');
-        if (p === 'orange' || p === 'purple' || p === 'blue' || p === 'red' || p === 'green' || p === 'teal') {
-          document.documentElement.dataset.palette = p;
-        }
+        var a = localStorage.getItem('pmc_accent');
+        if (/^(orange|blue|violet|rose|cyan)$/.test(a)) document.documentElement.dataset.accent = a;
       } catch (e) {}
     })();
   </script>
@@ -25,7 +23,6 @@
   <link rel="stylesheet" href="/web/static/base.css">
   <link rel="stylesheet" href="/web/static/components.css">
   <link rel="stylesheet" href="/web/static/patterns.css">
-  <link rel="stylesheet" href="/web/static/brand.css">
   <script src="/web/static/preferences.js" defer></script>
 </head>
 <body>
@@ -34,7 +31,8 @@
 <div class="doc">
   <div class="auth-card">
     <div class="auth-brand">
-      {{template "logo"}}
+      <span class="mark" aria-hidden="true"><svg class="mark-svg" focusable="false"><use href="#brandmark"></use></svg></span>
+      <span class="auth-word" dir="ltr">{{T "brand.name_lead"}} <b>{{T "brand.name_accent"}}</b></span>
     </div>
     <p class="auth-sub">{{T "auth.setup_brand"}}</p>
 

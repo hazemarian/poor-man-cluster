@@ -1,6 +1,6 @@
 {{define "app"}}
 <!doctype html>
-<html class="console" lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}">
+<html class="console" lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}" data-accent="{{ACCENT}}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -8,18 +8,16 @@
   <link rel="icon" href="/web/static/favicon.svg" type="image/svg+xml">
   <title>{{T .Crumb}} · {{T "app.title"}}</title>
   <script>
-    // Theme + brand palette are applied before first paint so a light-theme
-    // operator never sees a dark flash and the brand accent never flashes the
+    // Theme + accent color are applied before first paint so a light-theme
+    // operator never sees a dark flash and the accent never flashes the
     // default orange. The server already set data-theme from the cookie; this
     // covers the case where localStorage is newer than the cookie.
     (function () {
       try {
         var t = localStorage.getItem('pmc_theme');
         if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
-        var p = localStorage.getItem('pmc_palette');
-        if (p === 'orange' || p === 'purple' || p === 'blue' || p === 'red' || p === 'green' || p === 'teal') {
-          document.documentElement.dataset.palette = p;
-        }
+        var a = localStorage.getItem('pmc_accent');
+        if (/^(orange|blue|violet|rose|cyan)$/.test(a)) document.documentElement.dataset.accent = a;
       } catch (e) {}
     })();
   </script>
@@ -27,7 +25,6 @@
   <link rel="stylesheet" href="/web/static/base.css">
   <link rel="stylesheet" href="/web/static/components.css">
   <link rel="stylesheet" href="/web/static/patterns.css">
-  <link rel="stylesheet" href="/web/static/brand.css">
   <script src="/web/static/htmx.min.js"></script>
   <script src="/web/static/preferences.js" defer></script>
 </head>
@@ -41,7 +38,8 @@
 <div class="app">
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-head">
-      {{template "logo"}}
+      <span class="mark" aria-hidden="true"><svg class="mark-svg" focusable="false"><use href="#brandmark"></use></svg></span>
+      <span class="brand"><span class="brand-name" dir="ltr">{{T "brand.name_lead"}} <b>{{T "brand.name_accent"}}</b></span><small>{{T "brand.sub"}}</small></span>
       <button class="icon-btn sidebar-close" type="button" data-drawer-close aria-label="{{T "nav.close"}}" title="{{T "nav.close"}}">{{icon "close"}}</button>
     </div>
 
@@ -50,8 +48,8 @@
       <a class="nav-item" href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
       <a class="nav-item" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
       <a class="nav-item" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
-      <a class="nav-item" href="/web/platform" hx-get="/web/platform" hx-target="#view" hx-push-url="true" data-nav="platform">{{icon "overview"}}<span>{{T "nav.platform"}}</span></a>
-      <a class="nav-item" href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage">{{icon "overview"}}<span>{{T "nav.usage"}}</span></a>
+      <a class="nav-item" href="/web/platform" hx-get="/web/platform" hx-target="#view" hx-push-url="true" data-nav="platform">{{icon "server"}}<span>{{T "nav.platform"}}</span></a>
+      <a class="nav-item" href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage">{{icon "usage"}}<span>{{T "nav.usage"}}</span></a>
       <a class="nav-item" href="/web/inventory" hx-get="/web/inventory" hx-target="#view" hx-push-url="true" data-nav="inventory">{{icon "file"}}<span>{{T "nav.inventory"}}</span></a>
 
       <p class="nav-label" id="nav-delivery">{{T "nav.group.delivery"}}</p>
@@ -72,6 +70,7 @@
 
       <p class="nav-label" id="nav-system">{{T "nav.group.system"}}</p>
       <a class="nav-item" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-nav="settings">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+      <a class="nav-item" href="/web/logs" hx-get="/web/logs" hx-target="#view" hx-push-url="true" data-nav="logs">{{icon "terminal"}}<span>{{T "nav.logs"}}</span></a>
 
       {{if .Domain}}
       <p class="nav-label">{{T "nav.group.external"}}</p>
@@ -128,7 +127,7 @@
   <a href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
   <a href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
   <a href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
-  <a href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage">{{icon "overview"}}<span>{{T "nav.usage"}}</span></a>
+  <a href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage">{{icon "usage"}}<span>{{T "nav.usage"}}</span></a>
 </nav>
 
 <div class="modal-backdrop" id="modal" hidden onclick="if(event.target===this)closeModal()">

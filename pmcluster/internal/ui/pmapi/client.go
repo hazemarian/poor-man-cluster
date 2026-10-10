@@ -583,3 +583,71 @@ func (c *Client) ExecService(ctx context.Context, stack, service string, argv []
 func svcPath(stack, service string) string {
 	return "/services/" + url.PathEscape(stack) + "/" + url.PathEscape(service)
 }
+
+// ListRegistries returns the configured registry credentials. Passwords are
+// write-only at the API level, so nothing here can leak one.
+func (c *Client) ListRegistries(ctx context.Context) ([]Registry, error) {
+	var body struct {
+		Registries []Registry `json:"registries"`
+	}
+	err := c.do(ctx, http.MethodGet, "/registries", nil, &body)
+	return body.Registries, err
+}
+
+// AddRegistry logs this host in to the registry and stores the credential for
+// `docker stack deploy --with-registry-auth` to forward to the workers.
+func (c *Client) AddRegistry(ctx context.Context, host, username, password string) error {
+	body := map[string]string{"host": host, "username": username, "password": password}
+	return c.do(ctx, http.MethodPost, "/registries", body, nil)
+}
+
+// RemoveRegistry forgets a registry and logs the host out of it.
+func (c *Client) RemoveRegistry(ctx context.Context, host string) error {
+	return c.do(ctx, http.MethodDelete, "/registries/"+url.PathEscape(host), nil, nil)
+}
+
+// ListCredentials returns the bootstrap credentials for the bundled components.
+// The API deliberately has no reveal route: the console can list and rotate,
+// never decrypt.
+func (c *Client) ListCredentials(ctx context.Context) ([]ManagedCredential, error) {
+	var body struct {
+		Credentials []ManagedCredential `json:"credentials"`
+	}
+	err := c.do(ctx, http.MethodGet, "/credentials", nil, &body)
+	return body.Credentials, err
+}
+
+// RotateCredential rotates a managed credential and returns the new password
+// ONCE — the caller must show it immediately, it cannot be read back.
+func (c *Client) RotateCredential(ctx context.Context, name string) (*RotatedCredential, error) {
+	var out RotatedCredential
+	err := c.do(ctx, http.MethodPost, "/credentials/"+url.PathEscape(name)+"/rotate", nil, &out)
+	return &out, err
+}
+
+// VerifySecret compares a supplied value against a stored secret's hash. The
+// plaintext is never sent to the console; only the match verdict comes back.
+func (c *Client) VerifySecret(ctx context.Context, name, value string) (bool, error) {
+	var out struct {
+		Match bool `json:"match"`
+	}
+	err := c.do(ctx, http.MethodPost, "/secrets/"+url.PathEscape(name)+"/verify",
+		map[string]string{"value": value}, &out)
+	return out.Match, err
+}
+
+// ControlPlaneLogs tails the daemon's own JSON logs. since is a Go duration
+// string ("24h"), empty for no time filter; all merges every daily file.
+func (c *Client) ControlPlaneLogs(ctx context.Context, tail int, since string, all bool) (*LogPage, error) {
+	q := url.Values{}
+	q.Set("tail", strconv.Itoa(tail))
+	if since != "" {
+		q.Set("since", since)
+	}
+	if all {
+		q.Set("all", "true")
+	}
+	var out LogPage
+	err := c.do(ctx, http.MethodGet, "/logs?"+q.Encode(), nil, &out)
+	return &out, err
+}

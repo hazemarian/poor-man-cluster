@@ -236,12 +236,27 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/inventory", inv.Page)
 	vr.GET("/inventory/retag/:kind/:name", inv.RetagForm)
 
+	// Platform surfaces that used to be CLI-only: registry credentials, the
+	// bootstrap credentials, the daemon's own logs, and secret verification.
+	vr.GET("/settings/registries", pf.RegistriesPage)
+	vr.GET("/settings/credentials", pf.CredentialsPage)
+	vr.GET("/logs", pf.LogsPage)
+	vr.GET("/logs/tail", pf.LogsTail)
+	vr.GET("/inventory/verify/:name", pf.VerifyForm)
+
 	// ---- operator: mutations (sync/rollback/remove, service ops, backups,
 	// deploy submit, configs/secrets edits, tls, webhooks) ----
 	op := g.Group("")
 	op.Use(a.ctrl.Auth.RequireRole(store.RoleOperator))
 
 	op.POST("/stacks/:name/sync", st.Sync)
+
+	// Platform mutations (operator role): registry credentials, bootstrap
+	// credential rotation, and secret verification.
+	op.POST("/settings/registries/add", pf.RegistryAdd)
+	op.POST("/settings/registries/remove", pf.RegistryRemove)
+	op.POST("/settings/credentials/rotate/:name", pf.CredentialRotate)
+	op.POST("/inventory/verify/:name", pf.VerifySubmit)
 	op.POST("/stacks/:name/rollback", st.Rollback)
 	op.POST("/stacks/:name/move", st.Move)
 	op.POST("/stacks/:name/ack", st.AckFailover)

@@ -141,7 +141,10 @@
   background: var(--bg-sidebar); border-top: 1px solid var(--border-default);
   padding-bottom: env(safe-area-inset-bottom);
 }
-@media (max-width: 767px) { .tabbar { display: grid; grid-template-columns: repeat(5, 1fr); } }
+/* Layout comes from base.css (grid-auto-flow: column + grid-auto-columns: 1fr), which sizes one
+   column per item. Repeating the count here was redundant: it reads as authoritative and hides the
+   real source of truth (measured: 6 items render as one row of 6 columns with or without it). */
+@media (max-width: 767px) { .tabbar { display: grid; } }
 .tabbar a {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s-1);
   min-height: 56px; font-size: var(--fs-xs); color: var(--text-tertiary); padding: 6px 2px;
@@ -153,8 +156,8 @@
 .doc { min-height: 100dvh; display: grid; place-items: center; padding: var(--s-6); background: var(--bg-body); }
 .auth-card { width: 100%; max-width: 380px; }
 .auth-brand { display: flex; align-items: center; gap: var(--s-3); justify-content: center; margin-bottom: var(--s-6); }
-.auth-brand .mark { width: 38px; height: 38px; }
-.auth-word { font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
+.auth-brand .mark { width: 46px; height: 46px; }
+.auth-word { font-size: 26px; font-weight: 800; letter-spacing: -.025em; line-height: 1; }
 .auth-sub { text-align: center; font-size: var(--fs-sm); color: var(--text-secondary); margin-bottom: var(--s-6); }
 .auth-card form { background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--r-xl); padding: var(--s-6); }
 .auth-card .btn-primary { width: 100%; min-height: var(--control-h-lg); margin-top: var(--s-2); }
@@ -172,11 +175,23 @@
   border: 1px solid var(--border-default); border-radius: var(--r-lg);
 }
 .overview-head .sub { overflow-wrap: anywhere; }
-.overview-stats { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.overview-stats { grid-template-columns: repeat(auto-fit, minmax(min(145px, 100%), 1fr)); }
 .overview-stats .stat { padding: var(--s-6) var(--s-8); }
 .overview-stats .stat-v { min-height: 36px; display: flex; align-items: center; }
 .overview-stats .stat-l .ic { color: var(--text-tertiary); }
 .overview-stats .stat:first-child { background: var(--bg-lead); }
+
+/* Keyed to the STRIP's own width, not the viewport. The host card spans the full row and the
+   padding tightens whenever the strip is narrow — which happens on a phone AND inside a narrow
+   panel on a wide screen. The strip is the query container (container-type on .stats), so this
+   fires on the container that actually has the problem; where @container is unsupported the
+   base 180px auto-fit layout above still applies. */
+@container (max-width: 520px) {
+  .overview-stats .stat { padding: var(--s-6); }
+  .overview-stats .stat:first-child { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 var(--s-3); }
+  .overview-stats .stat:first-child .stat-l { margin-bottom: 0; }
+  .overview-stats .stat:first-child .stat-f { grid-column: 1 / -1; margin-top: 0; }
+}
 .node-identity { display: flex; align-items: center; gap: var(--s-3); }
 .node-glyph, .workspace-icon { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border: 1px solid var(--border-default); border-radius: var(--r-md); color: var(--text-secondary); background: var(--bg-elevated); }
 .workspace { padding-block-start: var(--s-3); }
@@ -205,14 +220,12 @@
 .auth-intro .auth-brand { justify-content: flex-start; margin-bottom: var(--s-12); }
 .auth-story { margin-block: auto; padding-block: var(--s-10); }
 .auth-eyebrow { color: var(--accent); font-size: var(--fs-sm); font-weight: 500; margin-bottom: var(--s-5); }
-.auth-story h1 { font-size: clamp(32px, 3.5vw, 52px); line-height: 1.12; letter-spacing: -.045em; white-space: pre-line; }
+.auth-story h1 { font-size: clamp(32px, 3.5vw, 52px); line-height: 1.12; letter-spacing: -.03em; white-space: pre-line; }
 .auth-description { color: var(--text-secondary); font-size: 16px; line-height: 1.7; max-width: 40ch; margin-top: var(--s-6); }
 .auth-intro-foot { font-size: var(--fs-xs); color: var(--text-tertiary); }
-.cluster-art { display: block; width: 100%; max-width: 480px; height: auto; margin-top: var(--s-12); }
-.cluster-wire { stroke: var(--border-control); stroke-width: 1; }
-.cluster-device { fill: var(--bg-elevated); stroke: var(--border-control); }
-.cluster-slot { stroke: var(--text-tertiary); stroke-width: 2; stroke-linecap: round; }
-.cluster-led { fill: var(--accent); }
+.auth-art { display: grid; place-items: center; margin-top: var(--s-10); max-width: 480px; aspect-ratio: 16 / 10;
+  background: radial-gradient(55% 60% at 50% 50%, color-mix(in srgb, var(--a-fill) 22%, transparent), transparent 72%); }
+.auth-art-mark { display: block; width: min(62%, 260px); height: auto; aspect-ratio: 1; overflow: visible; }
 .auth-form-side { display: grid; place-items: center; padding: var(--s-12); }
 .login-doc .auth-card { max-width: 360px; }
 .auth-heading { margin-bottom: var(--s-8); }
@@ -235,17 +248,8 @@
 }
 @media (max-width: 767px) {
   .page-head.overview-head { align-items: stretch; padding: var(--s-6); }
-  .overview-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .overview-stats .stat { padding: var(--s-6); }
-  .overview-stats .stat:first-child { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 var(--s-3); border-inline-end: 0; }
-  .overview-stats .stat:first-child .stat-l { margin-bottom: 0; }
-  .overview-stats .stat:first-child .stat-f { grid-column: 1 / -1; margin-top: 0; }
-  .overview-stats .stat:nth-child(even) { border-inline-end: 1px solid var(--border-default); }
-  .overview-stats .stat:nth-child(odd) { border-inline-end: 0; }
-  .overview-stats .stat:nth-last-child(-n+2) { border-bottom: 0; }
   .workspace-grid { grid-template-columns: 1fr; gap: var(--s-5); }
   .workspace-head { gap: var(--s-1); }
-  .workspace-link { padding-inline: 0; }
   .panel-head, .panel-body { padding: var(--s-4); }
   .panel-body.tight { padding: 0; }
   .panel > .only-sm > .kv { padding: var(--s-4); }
@@ -264,7 +268,7 @@
 .capacity .cap-top { display: flex; justify-content: space-between; gap: var(--s-3); }
 .capacity .cap-top .cap-v { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 1px; background: var(--border-subtle); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(120px, 100%), 1fr)); gap: 1px; background: var(--border-subtle); }
 .kpis > div { background: var(--bg-card); padding: var(--s-3) var(--s-4); }
 .kpis .k { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .06em; color: var(--text-tertiary); }
 .kpis .v { font-size: var(--fs-h2); font-weight: 500; margin-top: var(--s-1); font-variant-numeric: tabular-nums; }

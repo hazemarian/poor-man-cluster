@@ -28,6 +28,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/registry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/server"
@@ -236,9 +237,27 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		WebhookSources: webhooks.NewLocal(st, cipher),
 		APIKeys:        apikeys.NewLocal(st),
 		Services:       &services.Local{Docker: dc},
+		// Registry credentials: the console gets the same service the CLI
+		// uses, so `registry add` cannot drift between the two surfaces.
+		Registries: &registry.HTTP{Svc: &registry.Service{
+			Store:  st,
+			Cipher: cipher,
+			Runner: registry.ExecRunner{},
+		}},
+		// Control-plane logs are read straight off the daily JSON log files.
+		Logs: &server.LogsHTTP{Svc: &server.LogReader{Dir: cfg.LogsDir()}},
 	}
 	if cipher != nil {
 		deps.Secrets = secrets.NewLocal(st, cipher)
+		// Rotation re-encrypts the new password and re-syncs the Swarm
+		// secret, so it needs the cipher plus a docker client + deployer.
+		credsMgr := &cluster.CredentialsManager{
+			Store:    st,
+			Cipher:   cipher,
+			Docker:   dc,
+			Deployer: deployer,
+		}
+		deps.Credentials = &server.CredentialsHTTP{Svc: cluster.NewCredentials(st, cipher, credsMgr)}
 	}
 	handler := server.New(deps)
 

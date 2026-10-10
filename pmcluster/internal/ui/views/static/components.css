@@ -13,7 +13,7 @@
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:disabled, .btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
 .btn-primary {
-  background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; font-weight: 500;
+  background: var(--accent-strong); border-color: var(--accent-strong); color: var(--on-accent); font-weight: 600;
 }
 .btn-primary:hover { background: var(--accent-strong-hover); border-color: var(--accent-strong-hover); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--text-secondary); }
@@ -123,7 +123,7 @@ select { appearance: none; padding-inline-end: 30px;
 [dir="rtl"] select { background-position: 15px 14px, 10px 14px; }
 .check { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--fs-sm); color: var(--text-secondary); cursor: pointer; }
 .check input { margin-top: 2px; }
-.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 var(--s-4); }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 0 var(--s-4); }
 /* Deploy is the one form whose first row holds two short fields (app name,
    version) while later rows span the track list. At a 260px track minimum the
    grid opens three tracks at desktop width, and the spanning children pin the
@@ -147,11 +147,11 @@ select { appearance: none; padding-inline-end: 30px;
 /* ---------- panels: hairlines, not floating cards ---------- */
 .panel { background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--r-lg); }
 .panel-head {
-  display: flex; align-items: center; gap: var(--s-3);
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3);
   padding: var(--s-5) var(--s-6); border-bottom: 1px solid var(--border-default);
 }
-.panel-head h2 { font-size: var(--fs-h2); font-weight: 600; }
-.panel-head .ph-actions { margin-inline-start: auto; display: flex; gap: var(--s-2); align-items: center; }
+.panel-head h2 { font-size: var(--fs-h2); font-weight: 700; }
+.panel-head .ph-actions { margin-inline-start: auto; display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; min-width: 0; }
 .panel-body { padding: var(--s-6); }
 .panel-head > .ic { color: var(--text-tertiary); width: 18px; height: 18px; }
 .panel-body.tight { padding: 0; }
@@ -162,30 +162,45 @@ select { appearance: none; padding-inline-end: 30px;
 }
 .panel-foot .spacer { margin-inline-start: auto; }
 
-/* stat strip — metrics share dividers instead of each becoming a box */
+/* stat strip — metrics share dividers instead of each becoming a box.
+   The divider IS the 1px grid gap with the container's border colour showing through, so it
+   stays correct for any column count; the old fixed counts (5-up, then a hard 2-up on phones)
+   each needed their own nth-child border rules to keep the look, and every count change meant
+   re-deriving them. Cells must stay opaque — that is what paints the dividers.
+   container-type makes the strip a query container so rules keyed to ITS width (see
+   .overview-stats) can fire inside a narrow panel on a wide screen, where no viewport
+   media query can see the problem. */
 .stats {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--r-lg);
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: 1px; background: var(--border-default);
+  border: 1px solid var(--border-default); border-radius: var(--r-lg);
   overflow: hidden; margin-bottom: var(--s-5);
+  container-type: inline-size;
 }
-.stat { padding: var(--s-6); border-inline-end: 1px solid var(--border-default); min-width: 0; }
-.stat:last-child { border-inline-end: 0; }
+.stat { padding: var(--s-6); background: var(--bg-card); min-width: 0; }
 .stat-l {
   font-size: var(--fs-sm); letter-spacing: 0;
   color: var(--text-secondary); font-weight: 500; margin-bottom: var(--s-4);
   display: flex; align-items: center; gap: var(--gap-icon);
 }
-.stat-v { display: block; font-size: var(--fs-metric); font-weight: 600; letter-spacing: -.01em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat-v { display: block; font-size: var(--fs-metric); font-weight: 700; letter-spacing: -.01em; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .stat-v small { font-size: var(--fs-sm); font-weight: 400; color: var(--text-secondary); margin-inline-start: var(--gap-icon); }
+/* A mono value (an API URL) is an identifier, not a metric: body size, not the big number. */
+.stat-v.mono { font-size: var(--fs-h2); font-weight: 600; letter-spacing: 0; line-height: var(--lh-body); }
 .stat-v.stat-text { font-size: var(--fs-body); font-weight: 500; line-height: var(--lh-body); overflow-wrap: anywhere; }
 .stat-f { display: block; font-size: var(--fs-xs); color: var(--text-tertiary); margin-top: var(--s-3); }
 /* a metric whose source failed is not a zero */
 .stat.is-unknown .stat-v { font-size: var(--fs-sm); font-weight: 400; color: var(--text-tertiary); }
-@media (max-width: 767px) {
-  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .stat { border-bottom: 1px solid var(--border-subtle); }
-  .stat:nth-child(2n) { border-inline-end: 0; }
+/* A truncated identifier must stay retrievable. The copy control sits at the end of the LABEL row
+   rather than beside the value: the value is already ellipsized, so a control next to it would take
+   width away from the very thing it copies. It is also the only affordance that works on touch,
+   where the title attribute never fires. */
+.stat-l .copy-inline {
+  margin-inline-start: auto; width: 24px; height: 24px; flex: none;
+  color: var(--text-tertiary); border-radius: var(--r-sm);
 }
+.stat-l .copy-inline:hover { background: var(--bg-hover); color: var(--text-primary); }
+.stat-l .copy-inline .ic { width: 14px; height: 14px; }
 
 /* metric bars (capacity, quota) */
 .bar { height: 4px; border-radius: 2px; background: var(--bg-tertiary); overflow: hidden; margin-top: var(--s-2); }
@@ -206,6 +221,10 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
   padding: var(--s-4) var(--s-6); border-bottom: 1px solid var(--border-subtle);
   vertical-align: middle; text-align: start;
 }
+/* Timestamps and short mono tokens (mode, scope) keep their line: .iso's anywhere-wrapping
+   otherwise shrinks the column and breaks "replicated" into "repl icat ed". The table-wrap
+   scrolls if a row ever needs the room. */
+.table td.iso, .table td > .iso:not(.trunc) { white-space: nowrap; overflow-wrap: normal; }
 .table tbody tr:hover td { background: var(--bg-hover); }
 .table tbody tr:last-child td { border-bottom: 0; }
 .table tbody tr.is-selected td { background: var(--accent-bg); }
@@ -234,15 +253,15 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 /* ---------- status: dot + label, never colour alone ---------- */
 .pill {
   display: inline-flex; align-items: center; gap: var(--gap-icon);
-  padding: 3px var(--s-2); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500;
-  background: var(--bg-tertiary); border: 1px solid var(--border-default); color: var(--text-secondary);
+  padding: 3px 10px; border-radius: 999px; font-size: var(--fs-xs); font-weight: 600;
+  background: var(--bg-tertiary); border: 1px solid transparent; color: var(--text-secondary);
   white-space: nowrap;
 }
-.pill.good { color: var(--green); background: var(--green-bg); border-color: var(--green-border); }
-.pill.warn { color: var(--amber); background: var(--amber-bg); border-color: var(--amber-border); }
-.pill.bad  { color: var(--red);   background: var(--red-bg);   border-color: var(--red-border); }
-.pill.info { color: var(--cyan);  background: var(--cyan-bg);  border-color: var(--cyan-border); }
-.pill.accent { color: var(--accent); background: var(--accent-bg); border-color: var(--accent-border); }
+.pill.good { color: var(--green); background: var(--green-bg); }
+.pill.warn { color: var(--amber); background: var(--amber-bg); }
+.pill.bad  { color: var(--red);   background: var(--red-bg); }
+.pill.info { color: var(--cyan);  background: var(--cyan-bg); }
+.pill.accent { color: var(--accent); background: var(--accent-bg); }
 .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: currentColor; }
 .pill .dot { background: currentColor; }
 .pill.plain { background: transparent; border-color: var(--border-default); }
@@ -396,7 +415,7 @@ kbd {
 .row.tight { gap: var(--s-2); }
 .spacer { margin-inline-start: auto; }
 .mt-0 { margin-top: 0; } .mt-8 { margin-top: 8px; } .mt-16 { margin-top: 16px; } .mt-24 { margin-top: 24px; }
-.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--s-6); }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: var(--s-6); }
 .full { grid-column: 1 / -1; }
 .divider { height: 1px; background: var(--border-subtle); margin: var(--s-5) 0; }
 
@@ -451,6 +470,9 @@ kbd {
   .btn, .btn-sm, .icon-btn, .seg a, .seg button, .tab, .nav-item,
   details.details > summary { min-height: var(--touch); }
   .icon-btn, .modal-close { width: var(--touch); height: var(--touch); }
+  /* Text fields too: a 38px input is a 38px target. Checkboxes and radios keep their own size
+     (their label is the target), and a textarea grows with its rows. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), select { min-height: var(--touch); }
   .table .row-actions .btn, .table .row-actions .icon-btn { min-height: var(--touch); }
 }
 
@@ -477,3 +499,26 @@ kbd {
 }
 .pipeline-step + .pipeline-step::before { content: "\2192"; color: var(--text-tertiary); margin-inline-end: var(--s-2); }
 [dir="rtl"] .pipeline-step + .pipeline-step::before { content: "\2190"; }
+
+/* Accent picker (Settings > Appearance). Each swatch shows its own fill, not the
+   current accent, so the choices stay distinguishable. The whole label is the hit
+   area: the radio is stretched over it and hidden. */
+.accent-picker { border: 0; padding: 0; margin: var(--s-4) 0 0; min-width: 0; }
+.accent-picker legend { padding: 0; margin-block-end: var(--s-3); font-size: var(--fs-sm); font-weight: 500; color: var(--text-secondary); }
+.accent-row { display: flex; flex-wrap: wrap; gap: var(--s-3); }
+.accent-opt {
+  position: relative; display: inline-flex; align-items: center; gap: var(--s-2);
+  min-height: var(--control-h); padding: 0 var(--s-4);
+  border: 1px solid var(--border-control); border-radius: var(--r-md);
+  background: var(--bg-tertiary); font-size: var(--fs-body); cursor: pointer;
+}
+.accent-opt:hover { background: var(--bg-hover); }
+.accent-opt input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.accent-swatch { width: 18px; height: 18px; border-radius: 50%; background: var(--sw); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .25); flex: none; }
+.accent-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-bg); font-weight: 600; box-shadow: 0 0 0 1px var(--accent); }
+.accent-opt:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.accent-opt[data-swatch="orange"] { --sw: #FF8A00; }
+.accent-opt[data-swatch="blue"] { --sw: #60A5FA; }
+.accent-opt[data-swatch="violet"] { --sw: #A78BFA; }
+.accent-opt[data-swatch="rose"] { --sw: #FB7185; }
+.accent-opt[data-swatch="cyan"] { --sw: #22D3EE; }

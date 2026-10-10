@@ -90,7 +90,7 @@
   <div class="stat{{if not .DomainKnown}} is-unknown{{end}}">
     <div class="stat-l">{{icon "external"}}{{T "webhooks.st_endpoint"}}</div>
     {{if .DomainKnown}}
-    <div class="stat-v"><span class="mono iso" dir="ltr">{{.Base}}/webhook/</span></div>
+    <div class="stat-v stat-text"><span class="mono iso" dir="ltr">{{.Base}}/webhook/</span></div>
     <div class="stat-f">{{T "webhooks.st_endpoint_foot"}}</div>
     {{else}}
     <div class="stat-v">—</div>
@@ -100,7 +100,7 @@
 
   <div class="stat">
     <div class="stat-l">{{icon "lock"}}{{T "webhooks.d_sig"}}</div>
-    <div class="stat-v"><span class="mono iso" dir="ltr">X-Pmcluster-Signature</span></div>
+    <div class="stat-v stat-text"><span class="mono iso" dir="ltr">X-Pmcluster-Signature</span></div>
     <div class="stat-f">{{T "webhooks.st_sig_foot"}}</div>
   </div>
 

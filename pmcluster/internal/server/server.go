@@ -26,6 +26,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/registry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
@@ -106,6 +107,20 @@ type Deps struct {
 	// history, logs, restart, exec) under /api/services. Optional; when nil
 	// those routes are omitted.
 	Services services.Service
+
+	// Registries exposes Docker registry credential management under
+	// /api/registries (list/add/remove; passwords are write-only). Optional;
+	// when nil those routes are omitted.
+	Registries *registry.HTTP
+
+	// Credentials exposes the managed bootstrap credentials under
+	// /api/credentials — list + rotate, never reveal. Optional; when nil
+	// those routes are omitted.
+	Credentials *CredentialsHTTP
+
+	// Logs exposes the read-only control-plane log tail under /api/logs.
+	// Optional; when nil that route is omitted.
+	Logs *LogsHTTP
 }
 
 // New assembles the chi router from the optional Deps; every nil dependency
@@ -206,6 +221,15 @@ func New(d Deps) http.Handler {
 		}
 		if d.Services != nil {
 			(&services.HTTP{Svc: d.Services}).Mount(r)
+		}
+		if d.Registries != nil {
+			d.Registries.Mount(r)
+		}
+		if d.Credentials != nil {
+			d.Credentials.Mount(r)
+		}
+		if d.Logs != nil {
+			d.Logs.Mount(r)
 		}
 	})
 
