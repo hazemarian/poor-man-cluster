@@ -25,6 +25,7 @@ import (
 // Lang is a supported console language.
 type Lang string
 
+// The supported languages: English and Arabic.
 const (
 	EN Lang = "en"
 	AR Lang = "ar"

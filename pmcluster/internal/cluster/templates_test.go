@@ -1186,7 +1186,7 @@ func TestSyncClusterConfigs(t *testing.T) {
 			t.Errorf("row %s kind = %s, want template", r.Name, r.Kind)
 		}
 	}
-	infra, err := s.GetConfig(context.Background(), "infra-stack")
+	infra, err := s.Config(context.Background(), "infra-stack")
 	if err != nil {
 		t.Fatalf("get infra-stack: %v", err)
 	}
@@ -1241,7 +1241,7 @@ func TestSyncClusterConfigs_ConsoleEditPreserved(t *testing.T) {
 		t.Errorf("sync churned console-edited row: created=%v updated=%v", res.Created, res.Updated)
 	}
 	// The edit must survive (DB authoritative at the current version).
-	row, err := s.GetConfig(context.Background(), "edge-stack")
+	row, err := s.Config(context.Background(), "edge-stack")
 	if err != nil {
 		t.Fatalf("get edge-stack: %v", err)
 	}

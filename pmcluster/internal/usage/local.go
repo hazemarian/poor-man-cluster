@@ -29,7 +29,7 @@ func (l *Local) Get(ctx context.Context) (*Usage, error) {
 	configs := map[string]map[string]bool{}
 	secrets := map[string]map[string]bool{}
 	for _, s := range stacks {
-		rev, err := l.Store.GetRevision(ctx, s.Name, s.CurrentRevision)
+		rev, err := l.Store.Revision(ctx, s.Name, s.CurrentRevision)
 		if err != nil {
 			continue // stack with no stored latest revision — skip
 		}

@@ -43,10 +43,10 @@ func waitForSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.
 	for {
 		leader, found, err := isSwarmLeader(ctx, dc, host)
 		if err != nil && isSwarmWorker(ctx, dc) {
-			// BUG-033: a genuine swarm WORKER (swarm active, ControlAvailable
-			// false). `docker node ls` fails with "this node is not a swarm
-			// manager", but unlike a standalone node it must NOT serve and
-			// start a control loop that errors every pass — stand by silently
+			// A genuine swarm WORKER (swarm active, ControlAvailable false).
+			// `docker node ls` fails with "this node is not a swarm manager",
+			// but unlike a standalone node it must NOT serve and start a
+			// control loop that errors every pass — stand by silently
 			// instead, re-checking so a later promotion to manager resumes.
 			if !workerLogged {
 				log.Info().Str("node", host).Msg("this node is a swarm worker — standing by (no control loop)")
@@ -86,8 +86,8 @@ func waitForSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.
 // can never run the control loop — every manager-only call (node/service/
 // config list) fails with "this node is not a swarm manager" — so the daemon
 // must stand by silently instead of serving and starting a reconcile loop
-// that errors every pass (BUG-033). A standalone node (swarm inactive) or a
-// manager returns false, preserving the existing behaviour.
+// that errors every pass. A standalone node (swarm inactive) or a manager
+// returns false, preserving the existing behaviour.
 func isSwarmWorker(ctx context.Context, dc runtime.Client) bool {
 	if dc == nil {
 		return false
@@ -148,10 +148,10 @@ func WatchSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Lo
 			leader, found, err := isSwarmLeader(ctx, dc, host)
 			switch {
 			case err != nil && isSwarmWorker(ctx, dc):
-				// BUG-033: a genuine swarm WORKER. Stay idle — never emit
-				// leader-true, so the caller never starts the reconcile loop —
-				// logging the standby message once, and re-checking each poll
-				// so a later promotion to manager starts the loop.
+				// A genuine swarm WORKER. Stay idle — never emit leader-true,
+				// so the caller never starts the reconcile loop — logging the
+				// standby message once, and re-checking each poll so a later
+				// promotion to manager starts the loop.
 				if !workerLogged {
 					log.Info().Str("node", host).Msg("this node is a swarm worker — standing by (no control loop)")
 					workerLogged = true
@@ -231,7 +231,7 @@ func ensureControlPlaneFresh(ctx context.Context, cfg *config.Config, dc runtime
 		// DB. Safe because the reconcile loop only starts once leadership is
 		// confirmed, so there is nothing to reconcile during the outage.
 		// Without this the daemon exits and systemd restart-loops it
-		// (BUG-020, seen live in TC10-A).
+		// (seen live during a whole quorum outage).
 		log.Warn().Err(err).Msg("swarm unavailable; deferring control-plane restore")
 	}
 

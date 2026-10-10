@@ -98,7 +98,7 @@ func runRegistryAdd(cmd *cobra.Command, args []string) error {
 		Username:           username,
 		PasswordCiphertext: ciphertext,
 	}
-	if existing, _ := st.GetRegistry(cmd.Context(), host); existing != nil {
+	if existing, _ := st.Registry(cmd.Context(), host); existing != nil {
 		if err := st.UpdateRegistry(cmd.Context(), r); err != nil {
 			return err
 		}

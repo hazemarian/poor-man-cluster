@@ -143,7 +143,7 @@ func (s *HTTP) retag(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if err := s.Svc.Retag(req.Context(), name, scope, stack); err != nil {
-		if errors.Is(err, store.ErrSecretNotFound) {
+		if errors.Is(err, ErrSecretNotFound) {
 			writeErr(res, http.StatusNotFound, "secret not found: "+name)
 			return
 		}
@@ -173,7 +173,7 @@ func (s *HTTP) update(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if err := s.Svc.Update(req.Context(), name, body.Value); err != nil {
-		if errors.Is(err, store.ErrSecretNotFound) {
+		if errors.Is(err, ErrSecretNotFound) {
 			writeErr(res, http.StatusNotFound, "secret not found: "+name)
 			return
 		}
@@ -191,7 +191,7 @@ func (s *HTTP) remove(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if err := s.Svc.Delete(req.Context(), name); err != nil {
-		if errors.Is(err, store.ErrSecretNotFound) {
+		if errors.Is(err, ErrSecretNotFound) {
 			writeErr(res, http.StatusNotFound, "secret not found: "+name)
 			return
 		}
@@ -211,7 +211,7 @@ func (s *HTTP) value(res http.ResponseWriter, req *http.Request) {
 	}
 	plain, err := s.Svc.Reveal(req.Context(), name)
 	if err != nil {
-		if errors.Is(err, store.ErrSecretNotFound) {
+		if errors.Is(err, ErrSecretNotFound) {
 			writeErr(res, http.StatusNotFound, "secret not found: "+name)
 			return
 		}

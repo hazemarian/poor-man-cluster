@@ -105,9 +105,9 @@ func TestStackAckRunPath(t *testing.T) {
 		t.Fatalf("reopen store: %v", err)
 	}
 	defer func() { _ = st2.Close() }()
-	fo, err := st2.GetStackFailover(context.Background(), "demo")
+	fo, err := st2.StackFailover(context.Background(), "demo")
 	if err != nil {
-		t.Fatalf("GetStackFailover: %v", err)
+		t.Fatalf("StackFailover: %v", err)
 	}
 	if !fo.Acked {
 		t.Error("marker not acknowledged after `stack ack demo`")

@@ -36,6 +36,8 @@ type certListDTO struct {
 	Hosts []certDTO `json:"hosts"`
 }
 
+// SiteCert stores the cluster's main certificate via PUT /tls/site and
+// returns the resulting cert row.
 func (a *TLS) SiteCert(ctx context.Context, domain, certPEM, keyPEM string) (*certs.Cert, error) {
 	var out certDTO
 	if err := a.c.do(ctx, http.MethodPut, "/tls/site", map[string]string{
@@ -47,6 +49,8 @@ func (a *TLS) SiteCert(ctx context.Context, domain, certPEM, keyPEM string) (*ce
 	return out.model(), nil
 }
 
+// ApplyHostCert stores a per-host certificate via PUT /tls/hosts/{host} and
+// returns the resulting cert row.
 func (a *TLS) ApplyHostCert(ctx context.Context, host, certPEM, keyPEM string, refresh bool) (*certs.Cert, error) {
 	var out certDTO
 	if err := a.c.do(ctx, http.MethodPut, "/tls/hosts/"+url.PathEscape(host), map[string]string{
@@ -58,12 +62,14 @@ func (a *TLS) ApplyHostCert(ctx context.Context, host, certPEM, keyPEM string, r
 	return out.model(), nil
 }
 
+// RemoveHostCert deletes a per-host certificate via DELETE /tls/hosts/{host}.
 func (a *TLS) RemoveHostCert(ctx context.Context, host string, refresh bool) error {
 	return a.c.do(ctx, http.MethodDelete, "/tls/hosts/"+url.PathEscape(host), nil, nil)
 }
 
 // GetSiteCert returns the cluster's main certificate. The API serves the
 // persisted cluster domain, so the domain argument is informational.
+// (Get-prefixed: the port already exposes an unrelated SiteCert apply method.)
 func (a *TLS) GetSiteCert(ctx context.Context, domain string) (*certs.Cert, error) {
 	var out certDTO
 	if err := a.c.do(ctx, http.MethodGet, "/tls/site", nil, &out); err != nil {

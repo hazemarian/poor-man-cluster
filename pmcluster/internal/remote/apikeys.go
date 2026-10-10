@@ -48,6 +48,7 @@ func (a *APIKeys) Create(ctx context.Context, name string, stack ...string) (int
 	return out.ID, out.Token, nil
 }
 
+// List returns the minted API keys via GET /api_keys.
 func (a *APIKeys) List(ctx context.Context) ([]apikeys.APIKey, error) {
 	var out apiKeyListDTO
 	if err := a.c.do(ctx, http.MethodGet, "/api_keys", nil, &out); err != nil {
@@ -60,6 +61,7 @@ func (a *APIKeys) List(ctx context.Context) ([]apikeys.APIKey, error) {
 	return keys, nil
 }
 
+// Delete revokes an API key by row ID via DELETE /api_keys/{id}.
 func (a *APIKeys) Delete(ctx context.Context, id int64) error {
 	return a.c.do(ctx, http.MethodDelete, "/api_keys/"+strconv.FormatInt(id, 10), nil, nil)
 }

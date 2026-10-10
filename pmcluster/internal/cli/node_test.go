@@ -94,7 +94,7 @@ func TestRunNodePromote_AppendsToStorageNodes(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer func() { _ = st2.Close() }()
-	if got := st2.GetSettingDefault(cmd.Context(), cluster.SettingStorageNodes(), ""); got != "nxt-sw-1-m,nxt-sw-2-m" {
+	if got := st2.SettingDefault(cmd.Context(), cluster.SettingStorageNodes(), ""); got != "nxt-sw-1-m,nxt-sw-2-m" {
 		t.Fatalf("storage_nodes = %q", got)
 	}
 }
@@ -169,7 +169,7 @@ func TestRunNodePromote_LabelErrorWarns(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer func() { _ = st.Close() }()
-	if got := st.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), ""); got != "nxt-sw-1-m,nxt-sw-2-m" {
+	if got := st.SettingDefault(context.Background(), cluster.SettingStorageNodes(), ""); got != "nxt-sw-1-m,nxt-sw-2-m" {
 		t.Fatalf("storage_nodes = %q", got)
 	}
 }
@@ -204,7 +204,7 @@ func TestRunNodeDemote_RemovesFromStorageNodes(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer func() { _ = st2.Close() }()
-	if got := st2.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), ""); got != "nxt-sw-1-m" {
+	if got := st2.SettingDefault(context.Background(), cluster.SettingStorageNodes(), ""); got != "nxt-sw-1-m" {
 		t.Fatalf("storage_nodes = %q", got)
 	}
 }
@@ -263,7 +263,7 @@ func TestRunNodeDemote_RefusesLeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	got := st2.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), "")
+	got := st2.SettingDefault(context.Background(), cluster.SettingStorageNodes(), "")
 	_ = st2.Close()
 	if !strings.Contains(got, "nxt-sw-1-m") {
 		t.Fatalf("storage_nodes must be unchanged, got %q", got)

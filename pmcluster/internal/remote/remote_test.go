@@ -376,9 +376,9 @@ func TestRemoteClusterSettingsAndUsage(t *testing.T) {
 	ctx := context.Background()
 
 	cs := NewClusterSettings(c)
-	got, err := cs.GetClusterSettings(ctx)
+	got, err := cs.ClusterSettings(ctx)
 	if err != nil || got["volume_root"] != "/var/stack/data" || got["domain"] != "example.com" {
-		t.Fatalf("GetClusterSettings = %+v, err %v", got, err)
+		t.Fatalf("ClusterSettings = %+v, err %v", got, err)
 	}
 	updated, err := cs.UpdateClusterSettings(ctx, map[string]string{"domain": "nextrum-sy.com"})
 	if err != nil || updated["domain"] != "nextrum-sy.com" {
@@ -454,7 +454,7 @@ func TestRemoteBackups(t *testing.T) {
 	}
 }
 
-// TestRemoteTLS exercises SiteCert, ApplyHostCert, RemoveHostCert, GetSiteCert,
+// TestRemoteTLS exercises SiteCert, ApplyHostCert, RemoveHostCert, SiteCert,
 // List and MainDomain against a fake daemon.
 func TestRemoteTLS(t *testing.T) {
 	certJSON := map[string]any{
@@ -494,7 +494,7 @@ func TestRemoteTLS(t *testing.T) {
 	}
 	site, err := tl.GetSiteCert(ctx, "example.com")
 	if err != nil || site.Domain != "example.com" || site.CertSecret != "cert_v001" {
-		t.Fatalf("GetSiteCert = %+v, %v", site, err)
+		t.Fatalf("SiteCert = %+v, %v", site, err)
 	}
 	if site.NotAfter.IsZero() {
 		t.Error("NotAfter parsed to zero time")

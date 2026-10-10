@@ -73,6 +73,19 @@ func TestClusterUp(t *testing.T) {
 	// manual cluster update / deploy assertions below.
 	setReconcileInterval(t, homeDir, "0")
 
+	// Hermetic storage root (see TestControlPlaneSnapshotE2E): `cluster up`
+	// otherwise hardcodes the root-owned /var/stack/{data,backup}, which a
+	// non-root dev host (macOS) cannot create. Relocate both the volume root
+	// (via the volume_root setting) and the backup archive dir (via
+	// PMCLUSTER_BACKUP_DIR, consumed by every runCmd below) under the temp
+	// HOME. This also keeps a shared-swarm run from binding the platform
+	// stacks to a fixed host path across tests.
+	storageRoot := homeDir + "/stack"
+	if out, errOut, code := runCmd(t, homeDir, "cluster", "settings", "set", "volume_root="+storageRoot); code != 0 {
+		t.Fatalf("set volume_root exited %d:\n%s\n%s", code, out, errOut)
+	}
+	t.Setenv("PMCLUSTER_BACKUP_DIR", storageRoot+"/backup")
+
 	certPath, keyPath := generateSelfSignedCert(t, homeDir)
 	t.Logf("Generated self-signed cert: %s  key: %s", certPath, keyPath)
 
@@ -160,7 +173,7 @@ func TestClusterUp(t *testing.T) {
 	t.Run("docker config ls shows pmcluster configs", func(t *testing.T) {
 		out := mustDockerRun(t, ctx, "config", "ls", "--format", "{{.Name}}")
 
-		for _, prefix := range []string{"pmcluster_otel_config_v", "pmcluster_traefik_dynamic_v"} {
+		for _, prefix := range []string{"pmcluster_otel_config_", "pmcluster_traefik_dynamic_"} {
 			if !strings.Contains(out, prefix) {
 				t.Errorf("docker config ls: config with prefix %q not found; output:\n%s", prefix, out)
 			}
@@ -212,7 +225,7 @@ func TestClusterUp(t *testing.T) {
 	t.Run("second cluster up errors (init-only) and cluster update is a content-aware no-op", func(t *testing.T) {
 
 		configsBefore := map[string]string{}
-		for _, prefix := range []string{"pmcluster_otel_config_v", "pmcluster_traefik_dynamic_v"} {
+		for _, prefix := range []string{"pmcluster_otel_config_", "pmcluster_traefik_dynamic_"} {
 			id := dockerConfigIDByPrefix(t, ctx, prefix)
 			if id == "" {
 				t.Fatalf("config with prefix %q not found before re-run", prefix)
@@ -237,7 +250,7 @@ func TestClusterUp(t *testing.T) {
 			t.Fatalf("pmcluster cluster update exited %d:\n%s", updateCode, updateOut)
 		}
 
-		for _, prefix := range []string{"pmcluster_otel_config_v", "pmcluster_traefik_dynamic_v"} {
+		for _, prefix := range []string{"pmcluster_otel_config_", "pmcluster_traefik_dynamic_"} {
 			newID := dockerConfigIDByPrefix(t, ctx, prefix)
 			if newID == "" {
 				t.Fatalf("config with prefix %q not found after cluster update", prefix)
@@ -267,7 +280,7 @@ func TestClusterUp(t *testing.T) {
 	})
 
 	t.Run("edited config in store mints a new Docker config version on cluster update", func(t *testing.T) {
-		before := dockerConfigIDByPrefix(t, ctx, "pmcluster_otel_config_v")
+		before := dockerConfigIDByPrefix(t, ctx, "pmcluster_otel_config_")
 		if before == "" {
 			t.Fatalf("otel config not found before edit")
 		}
@@ -295,7 +308,7 @@ func TestClusterUp(t *testing.T) {
 			t.Fatalf("pmcluster cluster update after edit exited %d:\n%s", updateCode, updateOut)
 		}
 
-		after := dockerConfigIDByPrefix(t, ctx, "pmcluster_otel_config_v")
+		after := dockerConfigIDByPrefix(t, ctx, "pmcluster_otel_config_")
 		if after == "" {
 			t.Fatalf("otel config not found after edit")
 		}

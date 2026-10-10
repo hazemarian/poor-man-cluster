@@ -45,7 +45,7 @@ func PersistedDomain(ctx context.Context, st *store.Store) string {
 	if st == nil {
 		return ""
 	}
-	return st.GetSettingDefault(ctx, settingDomain, "")
+	return st.SettingDefault(ctx, settingDomain, "")
 }
 
 // EnsureSiteCertDir creates the site-cert directory (0755) if missing.
@@ -75,7 +75,7 @@ func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domai
 		return nil, fmt.Errorf("apply certificate requires a store (run `pmcluster init` + `pmcluster cluster up` first)")
 	}
 	if domain == "" {
-		domain = deps.Store.GetSettingDefault(ctx, settingDomain, "")
+		domain = deps.Store.SettingDefault(ctx, settingDomain, "")
 		if domain == "" {
 			return nil, fmt.Errorf("no persisted domain found — run `cluster up` before managing certificates")
 		}
@@ -136,14 +136,14 @@ func ApplyCert(ctx context.Context, deps SiteCertDeps, configDir, version, domai
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-	// BUG-010: a per-host cert's metadata row must be persisted BEFORE the
-	// refresh Update runs, because the refresh re-renders the Traefik dynamic
-	// config via loadHostCertEntries (which reads site_certs). With the old
-	// ordering the row landed after Update, so the FIRST `tls hosts add`
-	// re-rendered without the new cert and Traefik kept serving the default
-	// cert until a later `cluster update`. The cluster's own cert (mainCert)
-	// is excluded from loadHostCertEntries, so it must keep the after-order
-	// (its secret names are resolved by Update's result).
+	// A per-host cert's metadata row must be persisted BEFORE the refresh
+	// Update runs: the refresh re-renders the Traefik dynamic config via
+	// loadHostCertEntries (which reads site_certs), so a row that lands after
+	// the Update leaves the FIRST `tls hosts add` re-rendered without the new
+	// cert — Traefik keeps serving the default cert until a later `cluster
+	// update`. The cluster's own cert (mainCert) is excluded from
+	// loadHostCertEntries, so it must keep the after-order (its secret names
+	// are resolved by Update's result).
 	if !mainCert {
 		if err := deps.Store.PutSiteCert(ctx, row); err != nil {
 			return nil, fmt.Errorf("store certificate metadata: %w", err)
@@ -188,7 +188,7 @@ func RemoveCert(ctx context.Context, deps SiteCertDeps, configDir, version, doma
 	if domain == PersistedDomain(ctx, deps.Store) {
 		return fmt.Errorf("cannot remove the cluster's own certificate (%s) — replace it with `pmcluster tls site set`", domain)
 	}
-	row, err := deps.Store.GetSiteCert(ctx, domain)
+	row, err := deps.Store.SiteCert(ctx, domain)
 	if err != nil {
 		return err
 	}
@@ -213,13 +213,13 @@ func RemoveCert(ctx context.Context, deps SiteCertDeps, configDir, version, doma
 	return nil
 }
 
-// GetSiteCert returns the stored metadata for the cluster's own domain, or
+// SiteCert returns the stored metadata for the cluster's own domain, or
 // store.ErrSiteCertNotFound when nothing has been imported/uploaded yet.
-func GetSiteCert(ctx context.Context, st *store.Store, domain string) (*store.SiteCertRow, error) {
+func SiteCert(ctx context.Context, st *store.Store, domain string) (*store.SiteCertRow, error) {
 	if st == nil {
 		return nil, store.ErrSiteCertNotFound
 	}
-	row, err := st.GetSiteCert(ctx, domain)
+	row, err := st.SiteCert(ctx, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +238,7 @@ func warnSiteCertExpiry(ctx context.Context, st *store.Store, domain string, out
 	if st == nil || domain == "" || out == nil {
 		return
 	}
-	row, err := st.GetSiteCert(ctx, domain)
+	row, err := st.SiteCert(ctx, domain)
 	if err != nil {
 		return
 	}

@@ -19,6 +19,8 @@ type HTTP struct {
 	Svc Service
 }
 
+// Mount registers the config CRUD and version-history routes on the API
+// router.
 func (c *HTTP) Mount(r chi.Router) {
 	r.Get("/configs", c.list)
 	r.Post("/configs", c.create)
@@ -28,8 +30,8 @@ func (c *HTTP) Mount(r chi.Router) {
 	r.Delete("/configs/{name}", c.remove)
 	r.Get("/configs/{name}/versions", c.versions)
 	r.Post("/configs/{name}/rollback", c.rollback)
-	// FIX 5: rendered configs embed the OpenObserve root Basic-auth value and
-	// the session cookie — only operator/admin bearers may read them.
+	// Rendered configs embed the OpenObserve root Basic-auth value and the
+	// session cookie, so only operator/admin bearers may read them.
 	r.With(auth.RequireRole(auth.RoleOperator)).Get("/cluster/rendered", c.rendered)
 }
 
@@ -125,7 +127,7 @@ func (c *HTTP) get(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
 	cfg, err := c.Svc.Get(req.Context(), name)
 	if err != nil {
-		if errors.Is(err, store.ErrConfigNotFound) {
+		if errors.Is(err, ErrConfigNotFound) {
 			writeErr(res, http.StatusNotFound, "config not found: "+name)
 			return
 		}
@@ -169,7 +171,7 @@ func (c *HTTP) retag(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if err := c.Svc.Retag(req.Context(), name, scope, stack); err != nil {
-		if errors.Is(err, store.ErrConfigNotFound) {
+		if errors.Is(err, ErrConfigNotFound) {
 			writeErr(res, http.StatusNotFound, "config not found: "+name)
 			return
 		}
@@ -195,7 +197,7 @@ func (c *HTTP) update(res http.ResponseWriter, req *http.Request) {
 
 	hash, err := c.Svc.Update(req.Context(), name, body.Content, buildVersion())
 	if err != nil {
-		if errors.Is(err, store.ErrConfigNotFound) {
+		if errors.Is(err, ErrConfigNotFound) {
 			writeErr(res, http.StatusNotFound, "config not found: "+name)
 			return
 		}
@@ -208,7 +210,7 @@ func (c *HTTP) update(res http.ResponseWriter, req *http.Request) {
 func (c *HTTP) remove(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
 	if err := c.Svc.Delete(req.Context(), name); err != nil {
-		if errors.Is(err, store.ErrConfigNotFound) {
+		if errors.Is(err, ErrConfigNotFound) {
 			writeErr(res, http.StatusNotFound, "config not found: "+name)
 			return
 		}
@@ -228,7 +230,7 @@ func (c *HTTP) versions(res http.ResponseWriter, req *http.Request) {
 	name := chi.URLParam(req, "name")
 	vers, err := c.Svc.ListVersions(req.Context(), name)
 	if err != nil {
-		if errors.Is(err, store.ErrConfigNotFound) {
+		if errors.Is(err, ErrConfigNotFound) {
 			writeErr(res, http.StatusNotFound, "config not found: "+name)
 			return
 		}
@@ -262,7 +264,7 @@ func (c *HTTP) rollback(res http.ResponseWriter, req *http.Request) {
 	hash, err := c.Svc.Rollback(req.Context(), name, body.VersionID)
 	if err != nil {
 		switch {
-		case errors.Is(err, store.ErrConfigNotFound):
+		case errors.Is(err, ErrConfigNotFound):
 			writeErr(res, http.StatusNotFound, "config not found: "+name)
 		case errors.Is(err, store.ErrConfigVersionNotFound):
 			writeErr(res, http.StatusNotFound, "config version not found")

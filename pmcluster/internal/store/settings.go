@@ -7,12 +7,12 @@ import (
 	"fmt"
 )
 
-// ErrSettingNotFound is returned by GetSetting when no row matches.
+// ErrSettingNotFound is returned by Setting when no row matches.
 var ErrSettingNotFound = errors.New("setting not found")
 
-// GetSetting reads a cluster_settings value. Returns ErrSettingNotFound when
+// Setting reads a cluster_settings value. Returns ErrSettingNotFound when
 // the key has never been written.
-func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
+func (s *Store) Setting(ctx context.Context, key string) (string, error) {
 	var value string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT value FROM cluster_settings WHERE key = ?`, key).Scan(&value)
@@ -36,13 +36,13 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	return nil
 }
 
-// GetSettingDefault reads a setting, returning fallback (not an error) when
+// SettingDefault reads a setting, returning fallback (not an error) when
 // the key is absent. A genuine read failure (e.g. a closed/backing store) is
 // logged at warn — with the key — and still returns the fallback, so optional
 // settings never break the caller; only sql.ErrNoRows (translated to
-// ErrSettingNotFound by GetSetting) is silently defaulted.
-func (s *Store) GetSettingDefault(ctx context.Context, key, fallback string) string {
-	v, err := s.GetSetting(ctx, key)
+// ErrSettingNotFound by Setting) is silently defaulted.
+func (s *Store) SettingDefault(ctx context.Context, key, fallback string) string {
+	v, err := s.Setting(ctx, key)
 	if err == nil {
 		return v
 	}

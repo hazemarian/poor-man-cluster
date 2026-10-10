@@ -206,7 +206,7 @@ func (a *Auth) Require() gin.HandlerFunc {
 			a.redirect(c, a.target(c.Request.Context()))
 			return
 		}
-		u, err := a.st.GetByUsername(c.Request.Context(), s.Username)
+		u, err := a.st.ByUsername(c.Request.Context(), s.Username)
 		if err != nil {
 			a.redirect(c, a.target(c.Request.Context()))
 			return

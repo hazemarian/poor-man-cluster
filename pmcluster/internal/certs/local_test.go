@@ -11,7 +11,7 @@ import (
 
 // Local is exercised against a real store. ApplyHostCert / RemoveHostCert /
 // SiteCert need full cluster wiring (cluster.ApplyCert → Docker + Swarm), so
-// only the read-side (GetSiteCert / List / MainDomain) and the row mapping
+// only the read-side (SiteCert / List / MainDomain) and the row mapping
 // helpers are covered here.
 
 func seedSiteCert(t *testing.T, st *store.Store, domain string) {
@@ -41,10 +41,10 @@ func TestLocalGetSiteCert(t *testing.T) {
 	svc := &Local{Store: st}
 	got, err := svc.GetSiteCert(ctx, "example.com")
 	if err != nil {
-		t.Fatalf("GetSiteCert: %v", err)
+		t.Fatalf("SiteCert: %v", err)
 	}
 	if got.Domain != "example.com" || got.CertSecret != "cert_v1" || got.KeySecret != "key_v1" {
-		t.Errorf("GetSiteCert = %+v, want domain/example.com cert_v1/key_v1", got)
+		t.Errorf("SiteCert = %+v, want domain/example.com cert_v1/key_v1", got)
 	}
 	if got.CertHash != "aa" || got.KeyHash != "bb" {
 		t.Errorf("hashes = %s/%s, want aa/bb", got.CertHash, got.KeyHash)
@@ -54,7 +54,7 @@ func TestLocalGetSiteCert(t *testing.T) {
 	}
 
 	if _, err := svc.GetSiteCert(ctx, "missing.com"); !errors.Is(err, store.ErrSiteCertNotFound) {
-		t.Errorf("GetSiteCert(missing) = %v, want ErrSiteCertNotFound", err)
+		t.Errorf("SiteCert(missing) = %v, want ErrSiteCertNotFound", err)
 	}
 }
 

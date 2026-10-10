@@ -26,7 +26,7 @@ type FileEntry struct {
 // plain directories the listing walks the tree; for tar/tar.gz files it
 // reads the archive headers. Entries are relative to each archive root.
 func (l *Local) Browse(ctx context.Context, id int64) (*Run, []FileEntry, error) {
-	row, err := l.Store.GetBackup(ctx, id)
+	row, err := l.Store.Backup(ctx, id)
 	if err != nil {
 		return nil, nil, fmt.Errorf("get backup: %w", err)
 	}
@@ -116,7 +116,7 @@ func listArchive(p string) ([]FileEntry, error) {
 // instead; a missing local archive with no S3 configured is a loud error that
 // says where the archive lives.
 func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts RestoreOptions) (int, error) {
-	row, err := l.Store.GetBackup(ctx, id)
+	row, err := l.Store.Backup(ctx, id)
 	if err != nil {
 		return 0, fmt.Errorf("get backup: %w", err)
 	}

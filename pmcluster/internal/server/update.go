@@ -18,6 +18,8 @@ type UpdateService struct {
 	Update func(ctx context.Context) (*cluster.UpdateResult, error)
 }
 
+// Mount registers the operator-triggered cluster update route on the API
+// router.
 func (u *UpdateService) Mount(r chi.Router) {
 	r.Post("/update", u.run)
 }

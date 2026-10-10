@@ -57,7 +57,7 @@ func (c Usage) Page(g *gin.Context) {
 		c.Views.Fragment(g, "usage", d)
 		return
 	}
-	u, err := c.API.GetUsage(ctx)
+	u, err := c.API.Usage(ctx)
 	if err != nil {
 		d.ErrKey, d.ErrRaw = "err.usage", err.Error()
 		c.Views.Fragment(g, "usage", d)

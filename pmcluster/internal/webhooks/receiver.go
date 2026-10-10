@@ -176,9 +176,9 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	// Fire-and-forget with retry: validation, provenance and revision
 	// recording are all synchronous in DeployAsync, so any validation error
 	// still surfaces here (400/502). Those synchronous failures are retried
-	// under the bounded retry policy (BUG-008 — the policy used to be dead
-	// code on this path). Only the swarm apply — and its per-level health
-	// waits — runs in the background, detached from the request deadline.
+	// under the bounded retry policy. Only the swarm apply — and its per-level
+	// health waits — runs in the background, detached from the request
+	// deadline.
 	//
 	// The deploy + retry phase runs on a detached context carrying the phase
 	// budget: the retry window (default 2 × 30s + 3 attempts × 60s ≈ 4min)

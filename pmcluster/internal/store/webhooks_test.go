@@ -14,9 +14,9 @@ func TestCreateWebhookSource_HappyPath(t *testing.T) {
 		t.Fatalf("CreateWebhookSource: %v", err)
 	}
 
-	got, err := s.GetWebhookSource(ctx, "github-prod")
+	got, err := s.WebhookSource(ctx, "github-prod")
 	if err != nil {
-		t.Fatalf("GetWebhookSource: %v", err)
+		t.Fatalf("WebhookSource: %v", err)
 	}
 	if got.Source != "github-prod" {
 		t.Errorf("Source = %q, want 'github-prod'", got.Source)
@@ -62,9 +62,9 @@ func TestCreateWebhookSource_EmptyDescription_NullInDB(t *testing.T) {
 		t.Fatalf("CreateWebhookSource: %v", err)
 	}
 
-	got, err := s.GetWebhookSource(ctx, "ci")
+	got, err := s.WebhookSource(ctx, "ci")
 	if err != nil {
-		t.Fatalf("GetWebhookSource: %v", err)
+		t.Fatalf("WebhookSource: %v", err)
 	}
 	if got.Description.Valid {
 		t.Errorf("Description.Valid = true, want false (NULL) when description is empty; got %q", got.Description.String)
@@ -75,7 +75,7 @@ func TestGetWebhookSource_UnknownSource(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.GetWebhookSource(ctx, "does-not-exist")
+	_, err := s.WebhookSource(ctx, "does-not-exist")
 	if err == nil {
 		t.Fatal("expected ErrWebhookSourceNotFound, got nil")
 	}
@@ -136,7 +136,7 @@ func TestDeleteWebhookSource_HappyPath(t *testing.T) {
 		t.Fatalf("DeleteWebhookSource: %v", err)
 	}
 
-	_, err := s.GetWebhookSource(ctx, "to-delete")
+	_, err := s.WebhookSource(ctx, "to-delete")
 	if err != ErrWebhookSourceNotFound {
 		t.Errorf("expected ErrWebhookSourceNotFound after delete, got %v", err)
 	}
@@ -176,9 +176,9 @@ func TestMarkWebhookSourceUsed_PopulatesLastUsedAt(t *testing.T) {
 		t.Fatalf("CreateWebhookSource: %v", err)
 	}
 
-	before, err := s.GetWebhookSource(ctx, "src")
+	before, err := s.WebhookSource(ctx, "src")
 	if err != nil {
-		t.Fatalf("GetWebhookSource (before): %v", err)
+		t.Fatalf("WebhookSource (before): %v", err)
 	}
 	if before.LastUsedAt.Valid {
 		t.Fatal("LastUsedAt should be NULL before MarkWebhookSourceUsed")
@@ -188,9 +188,9 @@ func TestMarkWebhookSourceUsed_PopulatesLastUsedAt(t *testing.T) {
 		t.Fatalf("MarkWebhookSourceUsed: %v", err)
 	}
 
-	after, err := s.GetWebhookSource(ctx, "src")
+	after, err := s.WebhookSource(ctx, "src")
 	if err != nil {
-		t.Fatalf("GetWebhookSource (after): %v", err)
+		t.Fatalf("WebhookSource (after): %v", err)
 	}
 	if !after.LastUsedAt.Valid {
 		t.Error("LastUsedAt should be non-NULL after MarkWebhookSourceUsed")

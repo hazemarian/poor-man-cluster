@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/refs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -41,8 +42,12 @@ var ConfigFileNames = []string{
 	"traefik-dynamic.yml",
 }
 
+// stackName identifies one of the five platform stacks rendered from the
+// embedded templates.
 type stackName string
 
+// The platform stack names. Each names an embedded compose template
+// (composeFile maps them to their bundled source file).
 const (
 	StackInfra         stackName = "infra"
 	StackObservability stackName = "observability"
@@ -356,7 +361,7 @@ func openObserveSessionCookie(email, password string) string {
 func readConfigFile(name string, in RenderInput) (string, error) {
 	if in.ConfigStore != nil {
 		cfgName := strings.TrimSuffix(name, ".yml")
-		if row, err := in.ConfigStore.GetConfig(context.Background(), cfgName); err == nil &&
+		if row, err := in.ConfigStore.Config(context.Background(), cfgName); err == nil &&
 			row.Scope == "cluster" && row.Kind == "template" && row.Version == buildinfo.Version {
 			return row.Content, nil
 		}
@@ -427,7 +432,7 @@ func (r *renderRefResolver) ResolveSetting(_ context.Context, _ string, name str
 //     the observability stack's ZO_ROOT_USER_PASSWORD env var (OpenObserve
 //     only accepts the root password via env, not via a mounted secret file).
 //     NOT `$`-escaped here: the manifest ComposeWriter escapes every env
-//     value (BUG-001 / H8), so pre-escaping would double-escape.
+//     value, so pre-escaping would double-escape.
 func (r *renderRefResolver) ResolveSecretValue(_ context.Context, _ string, name string) (string, error) {
 	switch name {
 	case "oo_basic_auth":
@@ -526,19 +531,9 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	out = strings.ReplaceAll(out, "${OPENOBSERVE_ADMIN_EMAIL}", in.OpenObserveAdminEmail)
 	out = strings.ReplaceAll(out, "${DATA_DIR}", in.DataDir)
 
-	app, err := manifest.Parse([]byte(out))
+	_, built, err := manifest.ParseBuild(context.Background(), []byte(out), "", &renderRefResolver{render: in})
 	if err != nil {
-		return nil, fmt.Errorf("parse %s DSL manifest: %w", fname, err)
-	}
-	if err := manifest.Interpolate(app); err != nil {
-		return nil, fmt.Errorf("interpolate %s DSL manifest: %w", fname, err)
-	}
-	if err := manifest.Validate(app); err != nil {
-		return nil, fmt.Errorf("validate %s DSL manifest: %w", fname, err)
-	}
-	built, err := manifest.BuildIR(context.Background(), app, &renderRefResolver{render: in})
-	if err != nil {
-		return nil, fmt.Errorf("build %s IR: %w", fname, err)
+		return nil, fmt.Errorf("build %s: %w", fname, err)
 	}
 	newWriter := func(extra map[string]string) *manifest.ComposeWriter {
 		return &manifest.ComposeWriter{
@@ -550,20 +545,16 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 		}
 	}
 	// Two passes over the same IR: the first is the label-free render whose
-	// hash becomes the value of runtime.RenderedHashLabel in the second pass.
-	// Deriving the label from the label-free bytes keeps it deterministic and
-	// non-circular; `cluster update` compares it against the LIVE Swarm's labels
-	// to detect drift (a manual service update, a half-applied deploy, an
-	// upgrade that skipped a service) which the stored rendered hash cannot see
-	// because that only records what pmcluster last intended to deploy
-	// (BUG-017).
-	plain, err := newWriter(nil).Write(context.Background(), built)
-	if err != nil {
-		return nil, fmt.Errorf("render %s through the DSL pipeline: %w", fname, err)
-	}
-	renderedBytes, err := newWriter(map[string]string{
-		runtime.RenderedHashLabel: store.ConfigHash(string(plain)),
-	}).Write(context.Background(), built)
+	// hash becomes the value of runtime.RenderedHashLabel in the second pass
+	// (see manifest.RenderStamped). Deriving the label from the label-free
+	// bytes keeps it deterministic and non-circular; `cluster update` compares
+	// it against the LIVE Swarm's labels to detect drift (a manual service
+	// update, a half-applied deploy, an upgrade that skipped a service) which
+	// the stored rendered hash cannot see because that only records what
+	// pmcluster last intended to deploy.
+	renderedBytes, err := manifest.RenderStamped(context.Background(), built, newWriter, func(b []byte) string {
+		return store.ConfigHash(string(b))
+	})
 	if err != nil {
 		return nil, fmt.Errorf("render %s through the DSL pipeline: %w", fname, err)
 	}
@@ -649,7 +640,7 @@ func RenderOTelCollectorConfig(in RenderInput) ([]byte, error) {
 // secret) so Traefik serves it for the matching SNI.
 func RenderTraefikDynamic(in RenderInput) ([]byte, error) {
 	if in.Domain == "" {
-		return nil, fmt.Errorf("RenderTraefikDynamic: Domain is required")
+		return nil, fmt.Errorf("domain is required to render the traefik dynamic config")
 	}
 	if in.CORSOriginRegex == "" {
 		in.CORSOriginRegex = CORSOriginRegex(in.Domain)
@@ -752,7 +743,7 @@ func SyncClusterConfigs(ctx context.Context, st *store.Store, version string) (*
 	for _, name := range ConfigFileNames {
 		cfgName := strings.TrimSuffix(name, ".yml")
 
-		row, err := st.GetConfig(ctx, cfgName)
+		row, err := st.Config(ctx, cfgName)
 		switch {
 		case err == nil && row.Scope == "cluster" && row.Kind == "template":
 			if row.Version == version {
@@ -773,7 +764,7 @@ func SyncClusterConfigs(ctx context.Context, st *store.Store, version string) (*
 			// Name is taken by a non-cluster config (e.g. a service config).
 			// Never clobber a user's config.
 			continue
-		case errors.Is(err, store.ErrConfigNotFound):
+		case errors.Is(err, errs.ErrConfigNotFound):
 			content, err := embeddedConfigContent(name)
 			if err != nil {
 				return nil, err
@@ -805,10 +796,6 @@ func embeddedConfigContent(name string) (string, error) {
 // can't smuggle regex metachars through Domain into the template.
 var validDomain = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$`)
 
-// CORSOriginRegex returns the Traefik origin-list regex that allows
-// https://<domain> and https://<any-subdomain>.<domain>. Falls back to
-// a never-match pattern when domain is empty or malformed so the
-// middleware never inadvertently opens up "*".
 // Compare compares two npm-like semver strings (vM.m.p or M.m.p).
 // Returns -1 if a < b, 0 if equal, 1 if a > b. Pre-release tags and
 // build metadata are not handled — we only ship tagged releases.
@@ -857,9 +844,10 @@ func parseSegment(s string) int {
 	return n
 }
 
-// CORSOriginRegex builds a match-any-hostname regex for the given domain,
-// used for CORS allow-list middleware on routed services. An invalid domain
-// yields a match-nothing regex so routes stay closed.
+// CORSOriginRegex builds the origin-list regex for the given domain — the
+// CORS allow-list pattern for routed services — allowing https://<domain>
+// and https://<any-subdomain>.<domain>. An invalid or empty domain yields a
+// never-match pattern so routes stay closed.
 func CORSOriginRegex(domain string) string {
 	if !validDomain.MatchString(domain) {
 

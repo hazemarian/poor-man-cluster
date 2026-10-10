@@ -24,6 +24,9 @@ type Config struct {
 	OTLPEndpoint string `mapstructure:"otlp_endpoint"`
 }
 
+// The derived path helpers resolve the well-known files and directories under
+// DataDir: the SQLite database, the encryption key, the operator config file,
+// the operator config directory, and the logs directory.
 func (c *Config) DBPath() string            { return filepath.Join(c.DataDir, "data.db") }
 func (c *Config) EncryptionKeyPath() string { return filepath.Join(c.DataDir, ".encryption_key") }
 func (c *Config) ConfigPath() string        { return filepath.Join(c.DataDir, "config.yaml") }

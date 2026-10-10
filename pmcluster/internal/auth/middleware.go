@@ -83,8 +83,8 @@ func RequireRole(min string) func(http.Handler) http.Handler {
 }
 
 // Lookup is the contract Bearer needs from a user store. Implementations
-// iterate users and call VerifyToken; argon2id salts are per-row so we
-// can't look up by token directly.
+// iterate users and call VerifyToken; argon2id salts are per-row so a
+// direct lookup by token is impossible.
 type Lookup interface {
 	UserByToken(ctx context.Context, token string) (*User, error)
 }

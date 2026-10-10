@@ -177,7 +177,7 @@ func New(d Deps) http.Handler {
 			bh := &backups.HTTP{Svc: d.Backups}
 			if d.Store != nil {
 				bh.VolumeRoot = func(ctx context.Context) string {
-					return d.Store.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), "")
+					return d.Store.SettingDefault(ctx, cluster.SettingVolumeRoot(), "")
 				}
 			}
 			bh.Mount(r)

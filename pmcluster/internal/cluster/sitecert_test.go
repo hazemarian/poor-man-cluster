@@ -147,7 +147,7 @@ func TestApplyHostCert_PersistsBeforeRefresh(t *testing.T) {
 
 	// The refresh Update re-rendered the Traefik dynamic config; the stored
 	// rendered content must now carry the per-host cert's versioned secrets.
-	cfg, err := deps.Store.GetConfig(ctx, "traefik-dynamic")
+	cfg, err := deps.Store.Config(ctx, "traefik-dynamic")
 	if err != nil {
 		t.Fatalf("read traefik dynamic config: %v", err)
 	}
@@ -171,10 +171,10 @@ func TestGetSiteCert(t *testing.T) {
 	t.Cleanup(func() { _ = s.Close() })
 
 	ctx := context.Background()
-	if _, err := GetSiteCert(ctx, s, "test.example.com"); !errors.Is(err, store.ErrSiteCertNotFound) {
+	if _, err := SiteCert(ctx, s, "test.example.com"); !errors.Is(err, store.ErrSiteCertNotFound) {
 		t.Fatalf("expected ErrSiteCertNotFound before any apply, got: %v", err)
 	}
-	if _, err := GetSiteCert(ctx, nil, "test.example.com"); !errors.Is(err, store.ErrSiteCertNotFound) {
+	if _, err := SiteCert(ctx, nil, "test.example.com"); !errors.Is(err, store.ErrSiteCertNotFound) {
 		t.Fatalf("nil store should report ErrSiteCertNotFound, got: %v", err)
 	}
 
@@ -188,7 +188,7 @@ func TestGetSiteCert(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	row, err := GetSiteCert(ctx, s, "test.example.com")
+	row, err := SiteCert(ctx, s, "test.example.com")
 	if err != nil {
 		t.Fatalf("get after import: %v", err)
 	}

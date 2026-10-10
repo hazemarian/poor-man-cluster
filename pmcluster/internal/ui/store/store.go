@@ -29,7 +29,7 @@ const (
 	KeyToken  = "pmcluster_api_token"
 	// KeySessionSecret persists the auto-generated console session-secret so a
 	// login-enabled console started without PMCLUSTER_UI_SECRET keeps a stable,
-	// non-forgeable secret across reloads (FIX 2).
+	// non-forgeable secret across reloads.
 	KeySessionSecret = "pmcluster_ui_session_secret"
 )
 
@@ -140,8 +140,8 @@ func ensureRoleColumn(db *sql.DB) error {
 // Close releases the underlying connection.
 func (s *Store) Close() error { return s.db.Close() }
 
-// GetByUsername returns a user or ErrNotFound.
-func (s *Store) GetByUsername(ctx context.Context, username string) (*User, error) {
+// ByUsername returns a user or ErrNotFound.
+func (s *Store) ByUsername(ctx context.Context, username string) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, username, password_hash, password_set, role, created_at
@@ -156,8 +156,8 @@ func (s *Store) GetByUsername(ctx context.Context, username string) (*User, erro
 	return u, nil
 }
 
-// GetByID returns a user by primary key or ErrNotFound.
-func (s *Store) GetByID(ctx context.Context, id int64) (*User, error) {
+// ByID returns a user by primary key or ErrNotFound.
+func (s *Store) ByID(ctx context.Context, id int64) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, username, password_hash, password_set, role, created_at
@@ -232,7 +232,7 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash string, p
 		 VALUES (?, ?, ?, ?, ?)`, username, passwordHash, boolInt(passwordSet), role, time.Now().Unix()); err != nil {
 		return nil, err
 	}
-	return s.GetByUsername(ctx, username)
+	return s.ByUsername(ctx, username)
 }
 
 // UpdateUser updates a user's role and optionally its password. A non-empty
@@ -278,7 +278,7 @@ func (s *Store) SetPassword(ctx context.Context, username, passwordHash string) 
 // The env user is the operator console's bootstrap identity, so it is created
 // with the admin role.
 func (s *Store) CreateEnvUser(ctx context.Context, username, passwordHash string) (bool, error) {
-	if _, err := s.GetByUsername(ctx, username); err == nil {
+	if _, err := s.ByUsername(ctx, username); err == nil {
 		return false, nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return false, err
@@ -289,8 +289,8 @@ func (s *Store) CreateEnvUser(ctx context.Context, username, passwordHash string
 	return true, nil
 }
 
-// GetSetting returns a setting value or ErrNotFound.
-func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
+// Setting returns a setting value or ErrNotFound.
+func (s *Store) Setting(ctx context.Context, key string) (string, error) {
 	var v string
 	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -299,8 +299,8 @@ func (s *Store) GetSetting(ctx context.Context, key string) (string, error) {
 	return v, err
 }
 
-// GetSettings returns all settings as a map.
-func (s *Store) GetSettings(ctx context.Context) (map[string]string, error) {
+// Settings returns all settings as a map.
+func (s *Store) Settings(ctx context.Context) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM settings`)
 	if err != nil {
 		return nil, err
@@ -331,7 +331,7 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 // explicit clear from Settings (SetSetting(key, "")) or subsequent edit is
 // respected and not overwritten on the next start.
 func (s *Store) SeedSettingOnce(ctx context.Context, key, value string) error {
-	if _, err := s.GetSetting(ctx, key); err == nil {
+	if _, err := s.Setting(ctx, key); err == nil {
 		return nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return err

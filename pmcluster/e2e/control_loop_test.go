@@ -39,6 +39,14 @@ func TestControlLoopE2E(t *testing.T) {
 	// so it cannot race this test; the dedicated serve subprocess below is
 	// the only loop runner.
 	setReconcileInterval(t, homeDir, "0")
+	// Hermetic storage root (see TestControlPlaneSnapshotE2E): `cluster up`
+	// otherwise hardcodes the root-owned /var/stack/{data,backup}, which a
+	// non-root dev host (macOS) cannot create.
+	storageRoot := homeDir + "/stack"
+	if out, errOut, code := runCmd(t, homeDir, "cluster", "settings", "set", "volume_root="+storageRoot); code != 0 {
+		t.Fatalf("set volume_root exited %d:\n%s\n%s", code, out, errOut)
+	}
+	t.Setenv("PMCLUSTER_BACKUP_DIR", storageRoot+"/backup")
 	certPath, keyPath := generateSelfSignedCert(t, homeDir)
 
 	// Full cluster up (platform stacks) — the harness baseline.
@@ -132,7 +140,7 @@ services:
 	t.Logf("drift auto-synced: revision %d -> %d (no deploy trigger)", before, currentRevisionViaCmd(t, homeDir))
 
 	// (3) Under-replication flips the badge to degraded (read from the DB).
-	// We make the DESIRED state unhealthy by re-deploying a manifest whose
+	// The DESIRED state is made unhealthy by re-deploying a manifest whose
 	// image cannot be pulled (a nonexistent tag) — the new task is rejected,
 	// so Desired stays 1 while Replicas drops to 0 (scale-to-0 would make
 	// Desired=0, which derives healthy; an unsatisfiable placement would not

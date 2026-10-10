@@ -85,7 +85,7 @@ func (r *RetryDeployer) DeployAsync(ctx context.Context, p stacks.Payload) (*sta
 // transiently). The background swarm apply cannot be retried from the
 // receiver: it is fire-and-forget by design, and reconcile retries it via
 // Sync. This makes the receiver's retry policy real for the synchronous
-// phase (BUG-008) instead of dead code.
+// phase instead of dead code.
 func (r *RetryDeployer) DeployAsyncWithRetries(ctx context.Context, p stacks.Payload) (*stacks.Result, int, error) {
 	return retryDeployAsync(ctx, r.Inner, p, r.Attempts, r.Delay)
 }

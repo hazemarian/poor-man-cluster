@@ -94,27 +94,27 @@ func TestStackStatus(t *testing.T) {
 	if err := st.RecordDeploy(ctx, &store.StackRevision{StackName: "demo", Revision: 1002, SourceYAML: "app: demo", RenderedYAML: "x: 1"}, ""); err != nil {
 		t.Fatalf("RecordDeploy: %v", err)
 	}
-	_, _ = st.GetStack(ctx, "demo") // stack exists check; row re-fetched after the error below
+	_, _ = st.Stack(ctx, "demo") // stack exists check; row re-fetched after the error below
 
 	healthy := []services.ServiceSummary{{Name: "demo_web", Desired: 1, Replicas: 1}}
 	degraded := []services.ServiceSummary{{Name: "demo_web", Desired: 2, Replicas: 1}}
 
 	// Error outcome on the current revision wins.
 	_, _ = st.RecordStackError(ctx, "demo", 1002, "docker stack deploy: boom")
-	row, _ := st.GetStack(ctx, "demo") // re-fetch: LastError changed
+	row, _ := st.Stack(ctx, "demo") // re-fetch: LastError changed
 	if got := StackStatus(*row, healthy); got != StatusError {
 		t.Errorf("current-revision error: got %q want error", got)
 	}
 	// Stale error (older revision) is ignored once cleared.
 	_, _ = st.RecordStackError(ctx, "demo", 1001, "old boom")
-	row, _ = st.GetStack(ctx, "demo")
+	row, _ = st.Stack(ctx, "demo")
 	if got := StackStatus(*row, healthy); got != StatusError { // current rev still errored
 		t.Errorf("older error with current error: got %q want error", got)
 	}
 	// Worst live status wins when no error.
 	st2 := newTestStore(t)
 	_ = st2.RecordDeploy(ctx, &store.StackRevision{StackName: "demo", Revision: 1003, SourceYAML: "app: demo", RenderedYAML: "x: 1"}, "")
-	row2, _ := st2.GetStack(ctx, "demo")
+	row2, _ := st2.Stack(ctx, "demo")
 	if got := StackStatus(*row2, degraded); got != StatusDegraded {
 		t.Errorf("degraded worst: got %q want degraded", got)
 	}
@@ -155,9 +155,9 @@ func TestRunOnce_SnapshotsAndSyncs(t *testing.T) {
 		t.Fatalf("RunOnce: %v", err)
 	}
 
-	snap, err := st.GetStackStatus(ctx, "demo")
+	snap, err := st.StackStatus(ctx, "demo")
 	if err != nil {
-		t.Fatalf("GetStackStatus: %v", err)
+		t.Fatalf("StackStatus: %v", err)
 	}
 	if snap.Status != StatusHealthy {
 		t.Errorf("snapshot status = %q, want healthy", snap.Status)
@@ -180,7 +180,7 @@ func TestRunOnce_PrunesStaleRows(t *testing.T) {
 	if err := r.RunOnce(ctx); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if _, err := st.GetStackStatus(ctx, "ghost"); err == nil {
+	if _, err := st.StackStatus(ctx, "ghost"); err == nil {
 		t.Error("ghost status row was not pruned")
 	}
 }
@@ -373,9 +373,9 @@ func TestRunOnce_SyncErrorLoggedOncePerError(t *testing.T) {
 	}
 
 	// The stack is marked errored.
-	snap, err := st.GetStackStatus(ctx, "demo")
+	snap, err := st.StackStatus(ctx, "demo")
 	if err != nil {
-		t.Fatalf("GetStackStatus: %v", err)
+		t.Fatalf("StackStatus: %v", err)
 	}
 	if snap.Status != StatusError {
 		t.Errorf("stack status = %q, want %q", snap.Status, StatusError)
@@ -534,7 +534,7 @@ func TestRunOnce_TracerNoopSafe(t *testing.T) {
 	if err := rec.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce with no-op tracer: %v", err)
 	}
-	snap, err := st.GetStackStatus(context.Background(), "demo")
+	snap, err := st.StackStatus(context.Background(), "demo")
 	if err != nil || snap.Status != StatusHealthy {
 		t.Fatalf("stack status after RunOnce = %v err %v, want healthy", snap.Status, err)
 	}
@@ -808,8 +808,8 @@ func TestRunOnce_StorageFailoverDisabledSkipsMove(t *testing.T) {
 			if f.dep.calls != 1 {
 				t.Errorf("deployer calls = %d, want 1 (stateless only — stateful must stay paused)", f.dep.calls)
 			}
-			if _, err := f.st.GetStackFailover(ctx, "demo"); !errors.Is(err, store.ErrNotFound) {
-				t.Errorf("GetStackFailover = %v, want ErrNotFound (no move → no marker)", err)
+			if _, err := f.st.StackFailover(ctx, "demo"); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("StackFailover = %v, want ErrNotFound (no move → no marker)", err)
 			}
 
 			var disabled, failovers int
@@ -866,7 +866,7 @@ func TestRunOnce_StorageFailoverEnabledMovesToHealthyAlternate(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		var err error
-		if fo, err = f.st.GetStackFailover(ctx, "demo"); err == nil {
+		if fo, err = f.st.StackFailover(ctx, "demo"); err == nil {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

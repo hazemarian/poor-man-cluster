@@ -193,9 +193,9 @@ Use it in a manifest:
 // swarmSecretMirrored ensures the content-addressed swarm secret backing a
 // value exists, creating it when missing. Names are CONTENT-ADDRESSED
 // (<name>_<sha8-of-value> — store.SwarmSecretName), so the same value always
-// maps to the same object and the immutable in-use original is never mutated
-// (BUG-007); a real value change simply mints a new name. Reports whether it
-// created a new object.
+// maps to the same object and the immutable in-use original is never mutated;
+// a real value change simply mints a new name. Reports whether it created a
+// new object.
 func swarmSecretMirrored(ctx context.Context, dc runtime.Client, name, value, hash string) (bool, error) {
 	target := store.SwarmSecretName(name, hash)
 	exists, err := dc.SecretExists(ctx, target)
@@ -358,8 +358,8 @@ func runSecretEdit(cmd *cobra.Command, args []string) error {
 
 	// Keep the Docker Swarm mirror in sync. The new value is content-addressed
 	// into <name>_<sha8-of-value> (store.SwarmSecretName) — the in-use
-	// original is immutable and cannot be replaced (BUG-007); a new value
-	// simply mints a new name, and the DB hash is how translation finds it.
+	// original is immutable and cannot be replaced; a new value simply mints
+	// a new name, and the DB hash is how translation finds it.
 	hash := secretHash(value)
 	swarmMirrored := mirrorSwarmSecret(cmd, name, value, hash)
 

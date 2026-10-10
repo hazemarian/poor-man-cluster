@@ -14,9 +14,9 @@ type ClusterSettings struct{ c *Client }
 // NewClusterSettings builds the remote cluster-settings adapter.
 func NewClusterSettings(c *Client) *ClusterSettings { return &ClusterSettings{c: c} }
 
-// GetClusterSettings returns the current value of every editable cluster
+// ClusterSettings returns the current value of every editable cluster
 // setting.
-func (s *ClusterSettings) GetClusterSettings(ctx context.Context) (settings.Settings, error) {
+func (s *ClusterSettings) ClusterSettings(ctx context.Context) (settings.Settings, error) {
 	var out clusterSettingsDTO
 	if err := s.c.do(ctx, http.MethodGet, "/cluster/settings", nil, &out); err != nil {
 		return nil, err
@@ -26,7 +26,7 @@ func (s *ClusterSettings) GetClusterSettings(ctx context.Context) (settings.Sett
 
 // Get returns the current value of every editable cluster setting.
 func (s *ClusterSettings) Get(ctx context.Context) (settings.Settings, error) {
-	return s.GetClusterSettings(ctx)
+	return s.ClusterSettings(ctx)
 }
 
 // UpdateClusterSettings persists a set of cluster settings and returns the

@@ -119,11 +119,13 @@ func printSettings(cmd *cobra.Command, s settings.Settings) error {
 	fmt.Fprintln(w, "KEY\tVALUE")
 	for _, k := range keys {
 		v := s[k]
-		if strings.Contains(k, "secret") && v != "" {
-			v = "********"
-		}
 		if v == "" {
 			v = "—"
+		} else {
+			// The CLI runs as the local admin, so the shared mask policy
+			// (admins see cleartext) leaves values intact; it is applied here
+			// so any future policy change flows through one helper.
+			v = settings.MaskValue(k, v, true)
 		}
 		fmt.Fprintf(w, "%s\t%s\n", k, v)
 	}

@@ -32,7 +32,7 @@ func assertBackupSettings(t *testing.T, ctx context.Context, st *store.Store, a 
 		cluster.SettingBackupStoreOn():     a.BackupStoreOn,
 	}
 	for key, wantVal := range want {
-		if got := st.GetSettingDefault(ctx, key, "UNSET"); got != wantVal {
+		if got := st.SettingDefault(ctx, key, "UNSET"); got != wantVal {
 			t.Errorf("%s = %q, want %q", key, got, wantVal)
 		}
 	}
@@ -67,7 +67,7 @@ func TestPersistSetupSecretsOnly_EmptyS3LeavesThemEmpty(t *testing.T) {
 		t.Fatalf("persistSetupSecretsOnly: %v", err)
 	}
 	assertBackupSettings(t, ctx, st, a)
-	if got := st.GetSettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""); got != "" {
+	if got := st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""); got != "" {
 		t.Errorf("backup_s3_endpoint = %q, want empty when offsite S3 is not configured", got)
 	}
 }

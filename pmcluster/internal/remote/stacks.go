@@ -40,6 +40,7 @@ type stackDetailDTO struct {
 	Revisions []revisionMetaDTO `json:"revisions"`
 }
 
+// List returns every stack via GET /stacks.
 func (a *Stacks) List(ctx context.Context) ([]stacks.Stack, error) {
 	var out stackListDTO
 	if err := a.c.do(ctx, http.MethodGet, "/stacks", nil, &out); err != nil {
@@ -52,6 +53,7 @@ func (a *Stacks) List(ctx context.Context) ([]stacks.Stack, error) {
 	return ss, nil
 }
 
+// Get returns one stack with its revision history via GET /stacks/{name}.
 func (a *Stacks) Get(ctx context.Context, name string) (*stacks.Stack, error) {
 	var out stackDetailDTO
 	if err := a.c.do(ctx, http.MethodGet, "/stacks/"+url.PathEscape(name), nil, &out); err != nil {
@@ -61,6 +63,7 @@ func (a *Stacks) Get(ctx context.Context, name string) (*stacks.Stack, error) {
 	return &s, nil
 }
 
+// Revisions returns a stack's revision history via GET /stacks/{name}.
 func (a *Stacks) Revisions(ctx context.Context, name string, limit int) ([]stacks.Revision, error) {
 	var out stackDetailDTO
 	if err := a.c.do(ctx, http.MethodGet, "/stacks/"+url.PathEscape(name), nil, &out); err != nil {
@@ -104,6 +107,7 @@ type deployResultDTO struct {
 	Changed      bool   `json:"changed"`
 }
 
+// Deploy records and applies a deploy by POSTing the payload to /stacks.
 func (a *Deploy) Deploy(ctx context.Context, p stacks.Payload) (*stacks.Result, error) {
 	var out deployResultDTO
 	if err := a.c.do(ctx, http.MethodPost, "/stacks", map[string]string{
@@ -124,6 +128,8 @@ func (a *Deploy) DeployAsync(ctx context.Context, p stacks.Payload) (*stacks.Res
 	return a.Deploy(ctx, p)
 }
 
+// Rollback re-applies a stored revision via POST /stacks/{name}/rollback,
+// reporting the newly recorded revision.
 func (a *Deploy) Rollback(ctx context.Context, stackName string, sourceRevision int64) (*stacks.Result, error) {
 	var out deployResultDTO
 	if err := a.c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(stackName)+"/rollback", map[string]int64{
@@ -138,6 +144,7 @@ func (a *Deploy) Rollback(ctx context.Context, stackName string, sourceRevision 
 	return &stacks.Result{StackName: out.Stack, Revision: rev}, nil
 }
 
+// Sync re-runs the deploy pipeline on the daemon via POST /stacks/{name}/sync.
 func (a *Deploy) Sync(ctx context.Context, stackName string) (*stacks.Result, error) {
 	var out deployResultDTO
 	if err := a.c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(stackName)+"/sync", nil, &out); err != nil {
@@ -146,15 +153,20 @@ func (a *Deploy) Sync(ctx context.Context, stackName string) (*stacks.Result, er
 	return &stacks.Result{StackName: out.Stack, Revision: out.Revision, Changed: out.Changed}, nil
 }
 
+// Undeploy tears a stack down via DELETE /stacks/{name}.
 func (a *Deploy) Undeploy(ctx context.Context, stackName string) error {
 	return a.c.do(ctx, http.MethodDelete, "/stacks/"+url.PathEscape(stackName), nil, nil)
 }
 
+// Move relocates a stack's storage to another node via POST
+// /stacks/{name}/move.
 func (a *Deploy) Move(ctx context.Context, stackName, targetNode string) error {
 	return a.c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(stackName)+"/move",
 		map[string]any{"target": targetNode}, nil)
 }
 
+// Ack acknowledges a stack's open storage-failover marker via POST
+// /stacks/{name}/ack.
 func (a *Deploy) Ack(ctx context.Context, stackName string) error {
 	return a.c.do(ctx, http.MethodPost, "/stacks/"+url.PathEscape(stackName)+"/ack", nil, nil)
 }

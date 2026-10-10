@@ -69,7 +69,7 @@ func signV4HeadersQuery(cfg S3Config, key string, query url.Values, now time.Tim
 	// (SeaweedFS) recompute the signature over exactly the headers listed in
 	// SignedHeaders and reject a request that omits the date (403
 	// SignatureDoesNotMatch). IONOS tolerated the omission; the in-cluster
-	// store did not (BUG-029).
+	// store did not.
 	canonicalHeaders := "host:" + host + "\n" +
 		"x-amz-content-sha256:" + emptyPayloadSHA + "\n" +
 		"x-amz-date:" + amzDate + "\n"
@@ -305,7 +305,7 @@ type S3ObjectInfo struct {
 
 // ListS3Objects returns every object under prefix (Key + LastModified).
 // Exported for the store-based mover: the target node pulls the archive object
-// itself, so the leader needs the key without downloading the data (BUG-030).
+// itself, so the leader needs the key without downloading the data.
 func ListS3Objects(ctx context.Context, cfg S3Config, prefix string) ([]S3ObjectInfo, error) {
 	objs, err := listS3Objects(ctx, cfg, prefix)
 	if err != nil {

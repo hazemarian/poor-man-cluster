@@ -73,9 +73,9 @@ func TestDeploy_StampsRenderedHashOnEveryService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	rev, err := s.GetRevision(ctx, "donation-campaign", res.Revision)
+	rev, err := s.Revision(ctx, "donation-campaign", res.Revision)
 	if err != nil {
-		t.Fatalf("GetRevision: %v", err)
+		t.Fatalf("Revision: %v", err)
 	}
 	hash := renderedHashFromCompose(t, []byte(rev.RenderedYAML))
 
@@ -107,9 +107,9 @@ func TestDeploy_StampsRenderedHashOnEveryService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Deploy: %v", err)
 	}
-	rev2, err := s.GetRevision(ctx, "donation-campaign", res2.Revision)
+	rev2, err := s.Revision(ctx, "donation-campaign", res2.Revision)
 	if err != nil {
-		t.Fatalf("GetRevision (second): %v", err)
+		t.Fatalf("Revision (second): %v", err)
 	}
 	if hash2 := renderedHashFromCompose(t, []byte(rev2.RenderedYAML)); hash2 != hash {
 		t.Errorf("hash not deterministic across deploys: %q vs %q", hash, hash2)
@@ -152,9 +152,9 @@ services:
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	rev, err := s.GetRevision(ctx, "ordered-app", res.Revision)
+	rev, err := s.Revision(ctx, "ordered-app", res.Revision)
 	if err != nil {
-		t.Fatalf("GetRevision: %v", err)
+		t.Fatalf("Revision: %v", err)
 	}
 	fullHash := renderedHashFromCompose(t, []byte(rev.RenderedYAML))
 
@@ -182,9 +182,9 @@ func TestSync_RedeploysWhenLiveSwarmDrifted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	rev, err := s.GetRevision(ctx, "donation-campaign", res.Revision)
+	rev, err := s.Revision(ctx, "donation-campaign", res.Revision)
 	if err != nil {
-		t.Fatalf("GetRevision: %v", err)
+		t.Fatalf("Revision: %v", err)
 	}
 	h := renderedHashFromCompose(t, []byte(rev.RenderedYAML))
 

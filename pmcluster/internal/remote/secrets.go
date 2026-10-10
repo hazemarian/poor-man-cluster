@@ -6,7 +6,6 @@ import (
 	"net/url"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Secrets is the HTTP adapter for secrets.Service. The payload (AES-GCM
@@ -36,6 +35,7 @@ type secretValueDTO struct {
 	Value string `json:"value"`
 }
 
+// Create stores a new secret via POST /secrets and returns its row ID.
 func (a *Secrets) Create(ctx context.Context, scope, stack, name, value string) (int64, error) {
 	var out struct {
 		ID int64 `json:"id"`
@@ -61,9 +61,10 @@ func (a *Secrets) Get(ctx context.Context, name string) (*secrets.Secret, error)
 			return &r, nil
 		}
 	}
-	return nil, store.ErrSecretNotFound
+	return nil, secrets.ErrSecretNotFound
 }
 
+// Reveal fetches the decrypted secret value via GET /secrets/{name}/value.
 func (a *Secrets) Reveal(ctx context.Context, name string) (string, error) {
 	var out secretValueDTO
 	if err := a.c.do(ctx, http.MethodGet, "/secrets/"+url.PathEscape(name)+"/value", nil, &out); err != nil {
@@ -72,6 +73,8 @@ func (a *Secrets) Reveal(ctx context.Context, name string) (string, error) {
 	return out.Value, nil
 }
 
+// List returns the secret rows matching the optional scope and stack filters
+// via GET /secrets.
 func (a *Secrets) List(ctx context.Context, scope, stack string) ([]secrets.Secret, error) {
 	q := url.Values{}
 	if scope != "" {
@@ -94,12 +97,14 @@ func (a *Secrets) List(ctx context.Context, scope, stack string) ([]secrets.Secr
 	return rows, nil
 }
 
+// Update writes a new value for a secret via PUT /secrets/{name}.
 func (a *Secrets) Update(ctx context.Context, name, value string) error {
 	return a.c.do(ctx, http.MethodPut, "/secrets/"+url.PathEscape(name), map[string]string{
 		"value": value,
 	}, nil)
 }
 
+// Delete removes a secret via DELETE /secrets/{name}.
 func (a *Secrets) Delete(ctx context.Context, name string) error {
 	return a.c.do(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, nil)
 }

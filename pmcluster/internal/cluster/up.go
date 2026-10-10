@@ -353,7 +353,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 			BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
 			BackupCron:               LoadBackupCron(ctx, deps.Store),
-			StorageNodeConstraint:    deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "") != "",
+			StorageNodeConstraint:    deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
 			StorageNodeLabel:         runtime.StorageNodeLabel,
 			PlatformNode:             loadPlatformNode(ctx, deps.Store),
 			ManagedSecretNames:       managedSecretNames(ctx, deps.Store),
@@ -449,7 +449,7 @@ func defaultStorageNode(ctx context.Context, deps UpDeps) error {
 	if deps.Store == nil {
 		return nil
 	}
-	if cur := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), ""); cur == "" && deps.Docker != nil {
+	if cur := deps.Store.SettingDefault(ctx, SettingStorageNodes(), ""); cur == "" && deps.Docker != nil {
 		if nodes, err := deps.Docker.NodeList(ctx); err == nil {
 			for _, n := range nodes {
 				if n.IsLeader && n.Hostname != "" {
@@ -479,7 +479,7 @@ func defaultPlatformNode(ctx context.Context, deps UpDeps) (string, error) {
 	if deps.Store == nil {
 		return "", nil
 	}
-	if cur := deps.Store.GetSettingDefault(ctx, SettingPlatformNode(), ""); cur != "" {
+	if cur := deps.Store.SettingDefault(ctx, SettingPlatformNode(), ""); cur != "" {
 		return "", nil
 	}
 	if deps.Docker == nil {
@@ -521,6 +521,18 @@ func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
 	} {
 		if err := deps.Store.SetSetting(ctx, k, v); err != nil {
 			return fmt.Errorf("persist %s: %w", k, err)
+		}
+	}
+	// Persist the live Swarm cluster ID so a subsequent `cluster update` can
+	// distinguish a genuinely wiped + re-initialised Swarm from a fresh
+	// install whose ID was never recorded. Without this, the first update
+	// after `cluster up` reads an empty stored ID, treats the mismatch as a
+	// "swarm change", and force-redeploys every platform stack for no reason.
+	if deps.Docker != nil {
+		if live, err := deps.Docker.SwarmID(ctx); err == nil && live != "" {
+			if err := deps.Store.SetSetting(ctx, settingSwarmID, live); err != nil {
+				return fmt.Errorf("persist swarm_id: %w", err)
+			}
 		}
 	}
 	// Storage-node defaulting happens earlier (Defaulting storage node step)

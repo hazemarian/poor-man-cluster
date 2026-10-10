@@ -70,10 +70,10 @@ func stackBadge(ctx context.Context, st *store.Store, stack string) (label, stat
 	// since the last backup. It reads "failover" (amber) until an operator
 	// acknowledges it or moves the stack back — the GitHub-shared signal that
 	// a human needs to look.
-	if fo, err := st.GetStackFailover(ctx, stack); err == nil && !fo.Acked {
+	if fo, err := st.StackFailover(ctx, stack); err == nil && !fo.Acked {
 		return label, "failover"
 	}
-	snap, err := st.GetStackStatus(ctx, stack)
+	snap, err := st.StackStatus(ctx, stack)
 	if err != nil {
 		return label, "unknown"
 	}
@@ -88,7 +88,7 @@ func stackBadge(ctx context.Context, st *store.Store, stack string) (label, stat
 // prefix). Unknown when the stack or service has no snapshot entry.
 func serviceBadge(ctx context.Context, st *store.Store, stack, service string) (label, status string) {
 	label = stack + "/" + service
-	snap, err := st.GetStackStatus(ctx, stack)
+	snap, err := st.StackStatus(ctx, stack)
 	if err != nil {
 		return label, "unknown"
 	}
@@ -111,7 +111,7 @@ func stackServicesBadge(ctx context.Context, st *store.Store, stack string) []ba
 	_, main := stackBadge(ctx, st, stack)
 	segs := []badgeSegment{{Label: stack, Status: main}}
 
-	snap, err := st.GetStackStatus(ctx, stack)
+	snap, err := st.StackStatus(ctx, stack)
 	if err != nil {
 		return segs
 	}

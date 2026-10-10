@@ -206,20 +206,9 @@ func (s *Service) StoragePinsForStack(ctx context.Context, stackName string) ([]
 	if len(revs) == 0 {
 		return nil, nil
 	}
-	parsed, err := manifest.Parse([]byte(revs[0].SourceYAML))
+	_, built, err := manifest.ParseBuild(ctx, []byte(revs[0].SourceYAML), stackName, s.Resolver)
 	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", stackName, err)
-	}
-	parsed.Name = stackName // mirror Deploy's AppName override
-	if err := manifest.Interpolate(parsed); err != nil {
-		return nil, fmt.Errorf("interpolate %s: %w", stackName, err)
-	}
-	if err := manifest.Validate(parsed); err != nil {
-		return nil, fmt.Errorf("validate %s: %w", stackName, err)
-	}
-	built, err := manifest.BuildIR(ctx, parsed, s.Resolver)
-	if err != nil {
-		return nil, fmt.Errorf("translate %s: %w", stackName, err)
+		return nil, fmt.Errorf("re-translate %s: %w", stackName, err)
 	}
 	return s.Pins.StoragePins(ctx, stackName, built)
 }

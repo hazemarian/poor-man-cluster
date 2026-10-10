@@ -99,6 +99,8 @@ func (s *Store) ListUsers(ctx context.Context) ([]UserRow, error) {
 	return out, rows.Err()
 }
 
+// CountUsers returns the number of user rows; zero means first-run setup has
+// not been completed yet.
 func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
@@ -109,7 +111,7 @@ func (s *Store) CountUsers(ctx context.Context) (int, error) {
 
 // minTokenLength is the shortest plausible pmcluster bearer token: a legacy
 // `pmc_<secret>` token is ~47 chars and a v2 `pmc_<id>_<secret>` ~56 chars, so
-// anything under 40 chars cannot be a real token (FIX 4).
+// anything under 40 chars cannot be a real token.
 const minTokenLength = 40
 
 // UserByToken looks up a user by bearer token.

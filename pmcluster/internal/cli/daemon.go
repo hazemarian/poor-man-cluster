@@ -20,7 +20,7 @@ import (
 // alone, v0.2.167) `systemctl stop docker` + `systemctl start docker` left
 // pmcluster inactive — the node then has no control loop, so if it comes back
 // as (or later becomes) the Swarm leader the cluster silently stops reconciling
-// (BUG-021 / BUG-021b, found live in TC10-A).
+// (observed live on a real cluster).
 func renderSystemdUnit(pmUser, group, home, execStart string) string {
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster API Server

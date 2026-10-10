@@ -63,7 +63,7 @@ func TestUpdate_PersistsRenderedConfigs(t *testing.T) {
 	}
 
 	for _, name := range names {
-		row, err := deps.Store.GetConfig(ctx, name)
+		row, err := deps.Store.Config(ctx, name)
 		if err != nil {
 			t.Errorf("config %q missing after Update: %v", name, err)
 			continue

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
 )
 
 // Backup is one row in the backups audit table.
@@ -20,8 +22,9 @@ type Backup struct {
 	FinishedAt   sql.NullInt64
 }
 
-// ErrBackupNotFound is returned by GetBackup when no row matches.
-var ErrBackupNotFound = errors.New("backup not found")
+// ErrBackupNotFound is returned by Backup when no row matches.
+// Aliases errs.ErrBackupNotFound.
+var ErrBackupNotFound = errs.ErrBackupNotFound
 
 // CreateBackup inserts a new pending backup row and returns its id. The
 // caller updates it later via FinishBackup once the offen exec returns.
@@ -92,8 +95,8 @@ func (s *Store) BackupExistsByPath(ctx context.Context, archivePath string) (boo
 	return n > 0, nil
 }
 
-// GetBackup fetches one backup row by id.
-func (s *Store) GetBackup(ctx context.Context, id int64) (*Backup, error) {
+// Backup fetches one backup row by id.
+func (s *Store) Backup(ctx context.Context, id int64) (*Backup, error) {
 	var b Backup
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, stack_name, revision, status, archive_paths, error_message, started_at, finished_at

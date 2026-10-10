@@ -368,9 +368,9 @@ volumes:
 // `io.pmcluster.skip_filelog: "true"`, and the OTel collector's
 // filter/skip_filelog processor drops logs from those containers.
 //
-// We pre-create log files in a temp directory, then run the OTel collector
-// container with a bind-mount to that directory. This avoids all timing
-// races and compose volume lifecycle issues.
+// The test pre-creates log files in a temp directory, then runs the OTel
+// collector container with a bind-mount to that directory. This avoids all
+// timing races and compose volume lifecycle issues.
 func TestOtelComposeSkipFilelogFilter(t *testing.T) {
 	requireDockerDaemon(t)
 

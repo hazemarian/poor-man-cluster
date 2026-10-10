@@ -93,7 +93,7 @@ func TestHeal_RepairsStaleHash(t *testing.T) {
 	// Simulate a row written by older tooling: the ciphertext decrypts, but
 	// the stored hash no longer matches the plaintext (translation would then
 	// reference a swarm secret that does not exist).
-	row, err := st.GetSecret(ctx, "app_pass")
+	row, err := st.Secret(ctx, "app_pass")
 	if err != nil {
 		t.Fatalf("get secret: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestHeal_RepairsStaleHash(t *testing.T) {
 		t.Errorf("actions = %v, want a stale-hash repair", rep.Entries[0].Actions)
 	}
 	real := store.SecretHash("value-1")
-	after, err := st.GetSecret(ctx, "app_pass")
+	after, err := st.Secret(ctx, "app_pass")
 	if err != nil {
 		t.Fatalf("get secret: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestHeal_DryRunMakesNoChanges(t *testing.T) {
 	if _, err := svc.Create(ctx, "service", "", "app_pass", "value-1"); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	row, err := st.GetSecret(ctx, "app_pass")
+	row, err := st.Secret(ctx, "app_pass")
 	if err != nil {
 		t.Fatalf("get secret: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestHeal_DryRunMakesNoChanges(t *testing.T) {
 	if !strings.Contains(detail, "would be repaired") || !strings.Contains(detail, "would be ensured") {
 		t.Errorf("actions = %v, want dry-run wording", rep.Entries[0].Actions)
 	}
-	after, err := st.GetSecret(ctx, "app_pass")
+	after, err := st.Secret(ctx, "app_pass")
 	if err != nil {
 		t.Fatalf("get secret: %v", err)
 	}

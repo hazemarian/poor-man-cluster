@@ -35,7 +35,9 @@ type Service interface {
 	ApplyHostCert(ctx context.Context, host, certPEM, keyPEM string, refresh bool) (*Cert, error)
 	// RemoveHostCert deletes a per-host certificate.
 	RemoveHostCert(ctx context.Context, host string, refresh bool) error
-	// GetSiteCert returns the stored metadata for one certificate.
+	// GetSiteCert returns the stored metadata for one certificate. The Get
+	// prefix is retained because the port already exposes an unrelated
+	// SiteCert (apply) method.
 	GetSiteCert(ctx context.Context, domain string) (*Cert, error)
 	// List returns all stored certificates (main + per-host rows).
 	List(ctx context.Context) ([]Cert, error)

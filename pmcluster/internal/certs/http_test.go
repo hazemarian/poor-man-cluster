@@ -135,14 +135,14 @@ func (f *fakeService) RemoveHostCert(ctx context.Context, host string, _ bool) e
 		return f.fail
 	}
 	f.refreshes++
-	if _, err := f.store.GetSiteCert(ctx, host); err != nil {
+	if _, err := f.store.SiteCert(ctx, host); err != nil {
 		return err
 	}
 	return f.store.DeleteSiteCert(ctx, host)
 }
 
 func (f *fakeService) GetSiteCert(ctx context.Context, domain string) (*Cert, error) {
-	row, err := f.store.GetSiteCert(ctx, domain)
+	row, err := f.store.SiteCert(ctx, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +423,7 @@ func TestHostCertAPI_ApplyError_ReportsError(t *testing.T) {
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500; body: %s", resp.StatusCode, b)
 	}
-	if _, err := st.GetSiteCert(context.Background(), "fail.example.com"); err == nil {
+	if _, err := st.SiteCert(context.Background(), "fail.example.com"); err == nil {
 		t.Errorf("row must not be persisted on apply error")
 	}
 }

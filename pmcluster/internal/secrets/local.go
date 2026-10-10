@@ -20,6 +20,7 @@ func NewLocal(st *store.Store, c *credentials.Cipher) *Local {
 	return &Local{Store: st, Cipher: c}
 }
 
+// Create encrypts and stores a new secret value, returning its row ID.
 func (s *Local) Create(ctx context.Context, scope, stack, name, value string) (int64, error) {
 	payload, err := s.Cipher.Encrypt([]byte(value))
 	if err != nil {
@@ -28,16 +29,18 @@ func (s *Local) Create(ctx context.Context, scope, stack, name, value string) (i
 	return s.Store.CreateSecret(ctx, scope, stack, name, payload, store.SecretHash(value))
 }
 
+// Get returns a secret's metadata row by name.
 func (s *Local) Get(ctx context.Context, name string) (*Secret, error) {
-	row, err := s.Store.GetSecret(ctx, name)
+	row, err := s.Store.Secret(ctx, name)
 	if err != nil {
 		return nil, err
 	}
 	return &Secret{ID: row.ID, Scope: row.Scope, Stack: row.Stack, Name: row.Name, Hash: row.Hash, CreatedAt: row.CreatedAt, SwarmRev: row.SwarmRev}, nil
 }
 
+// Reveal decrypts and returns a secret's value.
 func (s *Local) Reveal(ctx context.Context, name string) (string, error) {
-	sec, err := s.Store.GetSecret(ctx, name)
+	sec, err := s.Store.Secret(ctx, name)
 	if err != nil {
 		return "", err
 	}
@@ -48,6 +51,8 @@ func (s *Local) Reveal(ctx context.Context, name string) (string, error) {
 	return string(plain), nil
 }
 
+// List returns the secret metadata rows matching the optional scope and
+// stack filters.
 func (s *Local) List(ctx context.Context, scope, stack string) ([]Secret, error) {
 	rows, err := s.Store.ListSecrets(ctx, scope, stack)
 	if err != nil {
@@ -60,6 +65,7 @@ func (s *Local) List(ctx context.Context, scope, stack string) ([]Secret, error)
 	return out, nil
 }
 
+// Update encrypts and replaces a stored value in place.
 func (s *Local) Update(ctx context.Context, name, value string) error {
 	payload, err := s.Cipher.Encrypt([]byte(value))
 	if err != nil {
@@ -73,6 +79,7 @@ func (s *Local) Retag(ctx context.Context, name, scope, stack string) error {
 	return s.Store.UpdateSecretStack(ctx, name, scope, stack)
 }
 
+// Delete removes a secret by name.
 func (s *Local) Delete(ctx context.Context, name string) error {
 	return s.Store.DeleteSecret(ctx, name)
 }

@@ -15,7 +15,7 @@ import (
 // entry). Each row carries the node's storage-ness (from the storage_nodes
 // cluster setting) so the console can render a promote/demote action.
 func NodesHandler(d runtime.Client, store interface {
-	GetSettingDefault(ctx context.Context, key, def string) string
+	SettingDefault(ctx context.Context, key, def string) string
 	SetSetting(ctx context.Context, key, value string) error
 }) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -26,7 +26,7 @@ func NodesHandler(d runtime.Client, store interface {
 		}
 		storage := map[string]bool{}
 		if store != nil {
-			for _, h := range strings.Split(store.GetSettingDefault(r.Context(), cluster.SettingStorageNodes(), ""), ",") {
+			for _, h := range strings.Split(store.SettingDefault(r.Context(), cluster.SettingStorageNodes(), ""), ",") {
 				h = strings.TrimSpace(h)
 				if h != "" {
 					storage[h] = true
@@ -58,7 +58,7 @@ func NodesHandler(d runtime.Client, store interface {
 // Swarm node label. POST promotes, DELETE demotes. This is the daemon-side
 // twin of `pmcluster node promote/demote` so the console can do it.
 func NodeStorageHandler(d runtime.Client, store interface {
-	GetSettingDefault(ctx context.Context, key, def string) string
+	SettingDefault(ctx context.Context, key, def string) string
 	SetSetting(ctx context.Context, key, value string) error
 }) http.HandlerFunc {
 	writeErr := func(w http.ResponseWriter, status int, msg string) {
@@ -89,7 +89,7 @@ func NodeStorageHandler(d runtime.Client, store interface {
 
 		cur := ""
 		if store != nil {
-			cur = store.GetSettingDefault(r.Context(), cluster.SettingStorageNodes(), "")
+			cur = store.SettingDefault(r.Context(), cluster.SettingStorageNodes(), "")
 		}
 
 		var merged string

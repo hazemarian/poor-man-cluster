@@ -90,10 +90,9 @@ func SplitToken(token string) (tokenID, secret string) {
 	return rest[:idx], rest[idx+1:]
 }
 
-// FastHash derives a fast SHA-256 index from a legacy token so we can
-// still do an indexed lookup without storing the plaintext.  This is only
-// for the migration bridgedev — once all tokens are v2, FastHash is
-// unused.
+// FastHash derives a fast SHA-256 index from a legacy token so an indexed
+// lookup is still possible without storing the plaintext. This is only for
+// the migration bridge — once all tokens are v2, FastHash is unused.
 func FastHash(token string) string {
 	d := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(d[:])

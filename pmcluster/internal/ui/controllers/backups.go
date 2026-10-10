@@ -246,7 +246,7 @@ func (c Backups) browseParams(g *gin.Context, d *backupBrowseData) bool {
 	// Best effort: when the daemon reports its volume root, that is where a
 	// restore lands. A failed read is not an error here — the default stands and
 	// the page shows it, so the operator is never told a path that was not read.
-	if cs, err := c.API.GetClusterSettings(ctx); err == nil {
+	if cs, err := c.API.ClusterSettings(ctx); err == nil {
 		if vr := strings.TrimSpace(cs["volume_root"]); vr != "" {
 			d.DestRoot = vr
 		}

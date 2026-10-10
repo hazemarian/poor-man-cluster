@@ -125,9 +125,11 @@ func TestSettingsUsage_RunPaths(t *testing.T) {
 	}
 }
 
-// TestSettingsMaskSecrets checks that printSettings masks any key containing
-// "secret".
-func TestSettingsMaskSecrets(t *testing.T) {
+// TestSettingsPrintAdminCleartext checks that printSettings renders every key
+// through the shared settings.MaskValue policy with isAdmin=true (the CLI runs
+// as the local admin), so secret-ish values are shown in cleartext rather than
+// masked or dropped.
+func TestSettingsPrintAdminCleartext(t *testing.T) {
 	settings := map[string]string{"domain": "example.test", "backup_s3_secret_key": "hunter2"}
 	cmd, out, _ := newTestCmd("settings", nil, func(cmd *cobra.Command, _ []string) error {
 		return printSettings(cmd, settings)
@@ -136,11 +138,8 @@ func TestSettingsMaskSecrets(t *testing.T) {
 		t.Fatalf("printSettings: %v", err)
 	}
 	s := out.String()
-	if strings.Contains(s, "hunter2") {
-		t.Fatalf("printSettings leaked secret: %q", s)
-	}
-	if !strings.Contains(s, "********") {
-		t.Fatalf("printSettings did not mask secret key: %q", s)
+	if !strings.Contains(s, "hunter2") {
+		t.Fatalf("printSettings masked a secret key for the admin CLI: %q", s)
 	}
 	if !strings.Contains(s, "example.test") {
 		t.Fatalf("printSettings dropped non-secret key: %q", s)

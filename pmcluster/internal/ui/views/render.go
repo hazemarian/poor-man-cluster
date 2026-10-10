@@ -25,6 +25,9 @@ import (
 //go:embed templates/*.html
 var files embed.FS
 
+// StaticFS embeds the console's static assets (stylesheet, fonts), served
+// as-is from under StaticBase.
+//
 //go:embed all:static
 var StaticFS embed.FS
 
@@ -227,6 +230,7 @@ func shortImage(v string) string {
 	return v
 }
 
+// Fragment renders a named template as a page fragment. When the request is a
 // full page load (no HX-Request header — a browser refresh or deep link on a
 // fragment URL) and ShellData is set, it renders the app shell with the
 // fragment embedded in #view so navigation styles survive a refresh.

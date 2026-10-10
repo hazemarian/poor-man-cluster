@@ -61,7 +61,7 @@ func (c *Controller) listConfigsFor(ctx context.Context, scope, stack string) ([
 // loadConfigEdit loads one config's content + version history for the edit
 // form.
 func (c *Controller) loadConfigEdit(ctx context.Context, name string) (*configRow, []configVersionRow, error) {
-	cfg, err := c.API.GetConfig(ctx, name)
+	cfg, err := c.API.Config(ctx, name)
 	if err != nil {
 		return nil, nil, err
 	}

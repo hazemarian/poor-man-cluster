@@ -26,7 +26,7 @@ type Store struct {
 	db *sql.DB
 
 	// Log is the sink for best-effort diagnostics from store methods that
-	// swallow a non-"not found" error (GetSettingDefault). Defaults to
+	// swallow a non-"not found" error (SettingDefault). Defaults to
 	// zerolog.Nop(); callers that already hold a logger may wire it.
 	Log zerolog.Logger
 }

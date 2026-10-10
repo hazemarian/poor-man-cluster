@@ -41,10 +41,10 @@ func NewApp(cfg Config) (*App, error) {
 	}
 	seedCtx := context.Background()
 
-	// FIX 2: a login-enabled console started without an explicit session
-	// secret (no PMCLUSTER_UI_SECRET, no edge_ui_secret mount) generates and
-	// persists a random secret in the UI store so sessions are unforgeable and
-	// stable across reloads — never the built-in insecure default.
+	// A login-enabled console started without an explicit session secret (no
+	// PMCLUSTER_UI_SECRET, no edge_ui_secret mount) generates and persists a
+	// random secret in the UI store so sessions are unforgeable and stable
+	// across reloads — never the built-in insecure default.
 	if len(cfg.SessionSecret) == 0 && !cfg.LoginDisabled {
 		secret, err := sessionSecretFor(st, seedCtx)
 		if err != nil {
@@ -117,9 +117,6 @@ func NewApp(cfg Config) (*App, error) {
 	return &App{Cfg: cfg, Store: st, API: api, Auth: auth, ctrl: ctrl}, nil
 }
 
-// Mount registers every UI route on the provided gin engine. This is how the
-// edge service combines the operator console with its reverse proxy on one
-// HTTP listener.
 // WebBase is the URL prefix the operator console is mounted under. Traefik
 // gates /web/* with the admin-auth middleware (basicAuth against the
 // admin_credentials secret) so the console is only reachable through the
@@ -127,6 +124,9 @@ func NewApp(cfg Config) (*App, error) {
 // keep their own Bearer/webhook auth.
 const WebBase = controllers.WebBase
 
+// Mount registers every UI route on the provided gin engine. This is how the
+// edge service combines the operator console with its reverse proxy on one
+// HTTP listener.
 func (a *App) Mount(engine *gin.Engine) {
 	auth := controllers.Auth{Controller: a.ctrl}
 	// CSRF guard for state-changing console requests: the Origin/Referer host
@@ -215,8 +215,8 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/settings/configs/edit/:name", stt.ConfigEdit)
 	vr.GET("/settings/secrets/new", stt.SecretNew)
 	vr.GET("/settings/secrets/edit/:name", stt.SecretEdit)
-	// FIX 5: rendered configs embed the OpenObserve root Basic-auth value and
-	// the session cookie, so the CONTENT is operator-only (not viewer). The
+	// Rendered configs embed the OpenObserve root Basic-auth value and the
+	// session cookie, so the CONTENT is operator-only (not viewer). The
 	// viewer group keeps the rendered LIST on the settings page, but not the
 	// rendered content modal.
 
@@ -284,7 +284,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	op.POST("/settings/secrets/edit", stt.EditSecret)
 	op.POST("/settings/secrets/remove/:name", stt.RemoveSecret)
 	op.GET("/settings/secrets/reveal/:name", stt.RevealSecret)
-	// FIX 5: rendered config content is operator-only (embeds root credentials).
+	// Rendered config content is operator-only (embeds root credentials).
 	op.GET("/settings/rendered/:name", stt.RenderedGet)
 
 	op.POST("/inventory/retag", inv.Retag)
@@ -330,11 +330,11 @@ func (a *App) Handler() http.Handler {
 }
 
 // sessionSecretFor returns the console session secret to use, generating and
-// persisting a random 32-byte secret in the UI store when none exists yet
-// (FIX 2). A persisted secret is stable across reloads and never the forgeable
+// persisting a random 32-byte secret in the UI store when none exists yet.
+// A persisted secret is stable across reloads and never the forgeable
 // built-in default. Login-disabled callers never reach this path.
 func sessionSecretFor(st *store.Store, ctx context.Context) ([]byte, error) {
-	if existing, err := st.GetSetting(ctx, store.KeySessionSecret); err == nil && existing != "" {
+	if existing, err := st.Setting(ctx, store.KeySessionSecret); err == nil && existing != "" {
 		return []byte(existing), nil
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, err

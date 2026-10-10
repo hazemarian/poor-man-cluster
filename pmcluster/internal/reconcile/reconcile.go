@@ -152,9 +152,9 @@ type Reconciler struct {
 	failoverMu   sync.Mutex
 	lastFailover map[string]time.Time
 
-	// BUG-034: per-stack app-sync error state, so a permanently broken stack
-	// (e.g. a manifest written before App.volumes became a map) is logged and
-	// recorded ONCE per distinct error string, not every pass.
+	// Per-stack app-sync error state, so a permanently broken stack (e.g. a
+	// manifest written before App.volumes became a map) is logged and recorded
+	// ONCE per distinct error string, not every pass.
 	syncErrMu    sync.Mutex
 	lastSyncErrs map[string]string    // stack -> last logged/recorded error string
 	lastSyncWarn map[string]time.Time // stack -> last "still failing" heartbeat WRN
@@ -269,9 +269,8 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 }
 
 // syncErrorHeartbeat is the minimum interval between the per-stack "still
-// failing" WRN heartbeat (BUG-034). A permanently broken stack is silent
-// between state changes, but a heartbeat every hour keeps it visible without
-// per-pass spam.
+// failing" WRN heartbeat. A permanently broken stack is silent between state
+// changes, but a heartbeat every hour keeps it visible without per-pass spam.
 const syncErrorHeartbeat = time.Hour
 
 // storagePauseHeartbeat is the minimum interval between the per-stack "still
@@ -279,8 +278,8 @@ const syncErrorHeartbeat = time.Hour
 const storagePauseHeartbeat = time.Hour
 
 // handleSyncError logs and persists an app-sync failure exactly once per
-// distinct error string per stack (BUG-034): a permanently broken stack (e.g.
-// a manifest written before App.volumes became a map) fails every pass, so
+// distinct error string per stack: a permanently broken stack (e.g. a
+// manifest written before App.volumes became a map) fails every pass, so
 // logging every pass spams the daemon log. The error is logged and recorded
 // when it first appears or CHANGES; unchanged repeats are silent except a WRN
 // heartbeat once per hour. The stack's status is marked "error" with the
@@ -434,7 +433,7 @@ func (r *Reconciler) tryStorageFailover(ctx context.Context, stackName, downNode
 			Msg("reconcile — storage node down but automatic failover is disabled (set storage_failover=true to move stacks automatically)")
 		return
 	}
-	raw := r.Store.GetSettingDefault(ctx, cluster.SettingStorageNodes(), "")
+	raw := r.Store.SettingDefault(ctx, cluster.SettingStorageNodes(), "")
 	candidates := stacks.ParseStorageNodes(raw)
 	var target string
 	for _, c := range candidates {
@@ -493,7 +492,7 @@ func (r *Reconciler) recordStorageNodeHealth(ctx context.Context, health map[str
 	if r.Store == nil || len(health) == 0 {
 		return
 	}
-	for _, n := range stacks.ParseStorageNodes(r.Store.GetSettingDefault(ctx, cluster.SettingStorageNodes(), "")) {
+	for _, n := range stacks.ParseStorageNodes(r.Store.SettingDefault(ctx, cluster.SettingStorageNodes(), "")) {
 		down := 0
 		if !health[n] {
 			down = 1

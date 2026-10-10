@@ -20,7 +20,7 @@ type Registry struct {
 	CreatedAt          int64
 }
 
-// ErrRegistryNotFound is returned by GetRegistry when no row matches.
+// ErrRegistryNotFound is returned by Registry when no row matches.
 var ErrRegistryNotFound = errors.New("registry not found")
 
 // ErrRegistryExists is returned by CreateRegistry on UNIQUE collision.
@@ -63,8 +63,8 @@ func (s *Store) UpdateRegistry(ctx context.Context, r *Registry) error {
 	return nil
 }
 
-// GetRegistry fetches one registry by host.
-func (s *Store) GetRegistry(ctx context.Context, host string) (*Registry, error) {
+// Registry fetches one registry by host.
+func (s *Store) Registry(ctx context.Context, host string) (*Registry, error) {
 	var r Registry
 	err := s.db.QueryRowContext(ctx,
 		`SELECT host, username, password_ciphertext, created_at FROM registries WHERE host = ?`, host,

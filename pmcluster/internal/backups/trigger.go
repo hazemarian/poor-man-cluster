@@ -86,6 +86,8 @@ type LocalTrigger struct {
 	Store WALCheckpointer
 }
 
+// Trigger runs the package-level backup pipeline after flushing the SQLite
+// WAL when a checkpointer is configured, returning the created archive paths.
 func (lt LocalTrigger) Trigger(ctx context.Context) ([]string, error) {
 
 	if lt.Store != nil {

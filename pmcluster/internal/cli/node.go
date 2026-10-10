@@ -191,7 +191,7 @@ func readStorageNodes(cmd *cobra.Command) (string, error) {
 		return "", err
 	}
 	defer func() { _ = st.Close() }()
-	return st.GetSettingDefault(cmd.Context(), cluster.SettingStorageNodes(), ""), nil
+	return st.SettingDefault(cmd.Context(), cluster.SettingStorageNodes(), ""), nil
 }
 
 func writeStorageNodes(cmd *cobra.Command, value string) error {

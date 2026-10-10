@@ -1,126 +1,20 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/testutil/fakeclient"
 )
-
-// inMemoryDockerClient is a local fake that implements runtime.Client for use
-// in the api package tests without importing the docker package's test file.
-// (The canonical fake lives in docker/client_test.go; this copy lives here
-// to keep api tests self-contained and avoid a test-only import cycle.)
-type inMemoryDockerClient struct {
-	infoResult     runtime.Info
-	infoErr        error
-	nodeListResult []runtime.Node
-	nodeListErr    error
-}
-
-func (f *inMemoryDockerClient) Ping(_ context.Context) (runtime.Ping, error) {
-	return runtime.Ping{}, nil
-}
-func (f *inMemoryDockerClient) Info(_ context.Context) (runtime.Info, error) {
-	return f.infoResult, f.infoErr
-}
-
-// Network/Secret methods are unused by /api/cluster/info; stub them so this
-// fake satisfies the runtime.Client interface as it grows in later phases.
-func (f *inMemoryDockerClient) NetworkExists(_ context.Context, _ string) (bool, error) {
-	return false, nil
-}
-func (f *inMemoryDockerClient) NetworkCreate(_ context.Context, _ runtime.NetworkSpec) error {
-	return nil
-}
-func (f *inMemoryDockerClient) SecretExists(_ context.Context, _ string) (bool, error) {
-	return false, nil
-}
-func (f *inMemoryDockerClient) SecretCreate(_ context.Context, _ runtime.SecretSpec) error {
-	return nil
-}
-func (f *inMemoryDockerClient) ConfigExists(_ context.Context, _ string) (bool, error) {
-	return false, nil
-}
-func (f *inMemoryDockerClient) ConfigCreate(_ context.Context, _ runtime.ConfigSpec) error {
-	return nil
-}
-func (f *inMemoryDockerClient) SecretRemove(_ context.Context, _ string) error { return nil }
-func (f *inMemoryDockerClient) SecretList(_ context.Context, _, _ string) ([]string, error) {
-	return nil, nil
-}
-func (f *inMemoryDockerClient) SecretInspect(_ context.Context, _ string) (runtime.SecretInspectResult, error) {
-	return runtime.SecretInspectResult{}, nil
-}
-func (f *inMemoryDockerClient) ConfigRemove(_ context.Context, _ string) error  { return nil }
-func (f *inMemoryDockerClient) NetworkRemove(_ context.Context, _ string) error { return nil }
-func (f *inMemoryDockerClient) VolumeRemove(_ context.Context, _ string) error  { return nil }
-func (f *inMemoryDockerClient) VolumeList(_ context.Context, _, _ string) ([]string, error) {
-	return nil, nil
-}
-
-func (f *inMemoryDockerClient) VolumeInspect(_ context.Context, name string) (runtime.Volume, error) {
-	return runtime.Volume{Name: name, Driver: "local"}, nil
-}
-
-func (f *inMemoryDockerClient) StackSecretNames(_ context.Context, _ string) ([]string, error) {
-	return nil, nil
-}
-func (f *inMemoryDockerClient) ServiceList(_ context.Context) ([]runtime.Service, error) {
-	return nil, nil
-}
-func (f *inMemoryDockerClient) ServiceInspect(_ context.Context, _ string) (runtime.ServiceInspectResult, error) {
-	return runtime.ServiceInspectResult{}, nil
-}
-func (f *inMemoryDockerClient) ServiceTasks(_ context.Context, _ string) ([]runtime.ServiceTask, error) {
-	return nil, nil
-}
-func (f *inMemoryDockerClient) ServiceLogs(_ context.Context, _ string, _ int) ([]runtime.LogLine, error) {
-	return nil, nil
-}
-func (f *inMemoryDockerClient) ServiceRestart(_ context.Context, _ string) error { return nil }
-func (f *inMemoryDockerClient) ServiceExec(_ context.Context, _ string, _ []string) (*runtime.ExecResult, error) {
-	return nil, nil
-}
-func (f *inMemoryDockerClient) ServiceExecAttach(_ context.Context, _ string, _ []string, _, _ uint) (runtime.ExecStream, error) {
-	return nil, nil
-}
-func (f *inMemoryDockerClient) ConfigList(_ context.Context, _, _ string) ([]string, error) {
-	return nil, nil
-}
-func (f *inMemoryDockerClient) ConfigInspect(_ context.Context, _ string) (runtime.ConfigInspectResult, error) {
-	return runtime.ConfigInspectResult{}, nil
-}
-func (f *inMemoryDockerClient) NodeList(_ context.Context) ([]runtime.Node, error) {
-	return f.nodeListResult, f.nodeListErr
-}
-func (f *inMemoryDockerClient) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
-	return runtime.JoinTokens{}, nil
-}
-func (f *inMemoryDockerClient) SwarmID(_ context.Context) (string, error) {
-	return "", nil
-}
-func (f *inMemoryDockerClient) SetNodeLabel(_ context.Context, _, _, _ string) error { return nil }
-func (f *inMemoryDockerClient) Events(_ context.Context, _ time.Time) (<-chan runtime.Event, <-chan error) {
-	evCh := make(chan runtime.Event)
-	close(evCh)
-	errCh := make(chan error)
-	close(errCh)
-	return evCh, errCh
-}
-func (f *inMemoryDockerClient) Close() error { return nil }
-
-var _ runtime.Client = (*inMemoryDockerClient)(nil)
 
 // TestClusterInfoHandler_HappyPath verifies 200 and a well-shaped JSON body.
 func TestClusterInfoHandler_HappyPath(t *testing.T) {
-	fake := &inMemoryDockerClient{
-		infoResult: runtime.Info{
+	fake := &fakeclient.Client{
+		InfoResult: runtime.Info{
 			Name:                  "mgr-01",
 			ServerVersion:         "27.0.0",
 			OperatingSystem:       "Ubuntu 22.04",
@@ -187,8 +81,8 @@ func TestClusterInfoHandler_HappyPath(t *testing.T) {
 // TestClusterInfoHandler_BadGateway verifies 502 and an error field when the
 // docker client returns an error.
 func TestClusterInfoHandler_BadGateway(t *testing.T) {
-	fake := &inMemoryDockerClient{
-		infoErr: errors.New("cannot connect to docker daemon"),
+	fake := &fakeclient.Client{
+		InfoErr: errors.New("cannot connect to docker daemon"),
 	}
 	h := ClusterInfoHandler(fake)
 

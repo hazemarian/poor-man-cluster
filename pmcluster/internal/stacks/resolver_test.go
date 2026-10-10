@@ -156,25 +156,25 @@ func TestGetConfigForStack(t *testing.T) {
 		{"demo", "ghost", "", true},
 	}
 	for _, tt := range tests {
-		row, err := s.GetConfigForStack(ctx, tt.stack, tt.name)
+		row, err := s.ConfigForStack(ctx, tt.stack, tt.name)
 		if tt.wantErr {
 			if err == nil {
-				t.Errorf("GetConfigForStack(%s,%s): expected error", tt.stack, tt.name)
+				t.Errorf("ConfigForStack(%s,%s): expected error", tt.stack, tt.name)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("GetConfigForStack(%s,%s): %v", tt.stack, tt.name, err)
+			t.Errorf("ConfigForStack(%s,%s): %v", tt.stack, tt.name, err)
 			continue
 		}
 		if row.Content != tt.wantContent {
-			t.Errorf("GetConfigForStack(%s,%s) = %q, want %q", tt.stack, tt.name, row.Content, tt.wantContent)
+			t.Errorf("ConfigForStack(%s,%s) = %q, want %q", tt.stack, tt.name, row.Content, tt.wantContent)
 		}
 	}
 
 	// Cross-stack check must hold even when the store also holds an
 	// unrelated row — ensure foreign rows never surface.
-	if _, err := s.GetConfigForStack(ctx, "demo", "other_cfg"); err != store.ErrConfigNotFound {
+	if _, err := s.ConfigForStack(ctx, "demo", "other_cfg"); err != store.ErrConfigNotFound {
 		t.Errorf("foreign config surfaced: err=%v", err)
 	}
 }

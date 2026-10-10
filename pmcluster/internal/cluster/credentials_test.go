@@ -324,9 +324,9 @@ func TestRotate_HappyPath(t *testing.T) {
 	mgr, f, rec := bootstrapForRotate(t)
 	ctx := context.Background()
 
-	originalCred, err := mgr.Store.GetCredential(ctx, "traefik_dashboard")
+	originalCred, err := mgr.Store.Credential(ctx, "traefik_dashboard")
 	if err != nil {
-		t.Fatalf("GetCredential (before rotate): %v", err)
+		t.Fatalf("Credential (before rotate): %v", err)
 	}
 	originalCiphertext := make([]byte, len(originalCred.PasswordCiphertext))
 	copy(originalCiphertext, originalCred.PasswordCiphertext)
@@ -360,9 +360,9 @@ func TestRotate_HappyPath(t *testing.T) {
 		t.Error("returned Password should be non-empty")
 	}
 
-	updatedCred, err := mgr.Store.GetCredential(ctx, "traefik_dashboard")
+	updatedCred, err := mgr.Store.Credential(ctx, "traefik_dashboard")
 	if err != nil {
-		t.Fatalf("GetCredential (after rotate): %v", err)
+		t.Fatalf("Credential (after rotate): %v", err)
 	}
 	if string(updatedCred.PasswordCiphertext) == string(originalCiphertext) {
 		t.Error("PasswordCiphertext should have changed after Rotate")
@@ -461,9 +461,9 @@ func TestRotate_SecretCreateFailsLeavesStoreUntouched(t *testing.T) {
 	mgr, f, _ := bootstrapForRotate(t)
 	ctx := context.Background()
 
-	before, err := mgr.Store.GetCredential(ctx, "traefik_dashboard")
+	before, err := mgr.Store.Credential(ctx, "traefik_dashboard")
 	if err != nil {
-		t.Fatalf("GetCredential: %v", err)
+		t.Fatalf("Credential: %v", err)
 	}
 
 	f.secretCreateErr = errSentinel
@@ -472,9 +472,9 @@ func TestRotate_SecretCreateFailsLeavesStoreUntouched(t *testing.T) {
 		t.Fatal("Rotate should fail when the new secret cannot be created")
 	}
 
-	after, err := mgr.Store.GetCredential(ctx, "traefik_dashboard")
+	after, err := mgr.Store.Credential(ctx, "traefik_dashboard")
 	if err != nil {
-		t.Fatalf("GetCredential after failed rotate: %v", err)
+		t.Fatalf("Credential after failed rotate: %v", err)
 	}
 	if string(before.PasswordCiphertext) != string(after.PasswordCiphertext) {
 		t.Error("store row must be unchanged when the new secret cannot be created first")
@@ -533,9 +533,9 @@ func TestRotate_SyncsDbSecret(t *testing.T) {
 	mgr, f, _ := bootstrapForRotate(t)
 	ctx := context.Background()
 
-	orig, err := mgr.Store.GetCredential(ctx, "openobserve_admin")
+	orig, err := mgr.Store.Credential(ctx, "openobserve_admin")
 	if err != nil {
-		t.Fatalf("GetCredential: %v", err)
+		t.Fatalf("Credential: %v", err)
 	}
 
 	if _, err := mgr.Store.CreateSecret(ctx, "cluster", "", "zo_root_user_password",
@@ -550,9 +550,9 @@ func TestRotate_SyncsDbSecret(t *testing.T) {
 		t.Fatalf("Rotate: %v", err)
 	}
 
-	cred, err := mgr.Store.GetCredential(ctx, "openobserve_admin")
+	cred, err := mgr.Store.Credential(ctx, "openobserve_admin")
 	if err != nil {
-		t.Fatalf("GetCredential after Rotate: %v", err)
+		t.Fatalf("Credential after Rotate: %v", err)
 	}
 	plain, err := mgr.Cipher.Decrypt(cred.PasswordCiphertext)
 	if err != nil {
@@ -562,9 +562,9 @@ func TestRotate_SyncsDbSecret(t *testing.T) {
 		t.Errorf("credential password = %q, want %q", plain, newCred.Password)
 	}
 
-	sec, err := mgr.Store.GetSecret(ctx, "zo_root_user_password")
+	sec, err := mgr.Store.Secret(ctx, "zo_root_user_password")
 	if err != nil {
-		t.Fatalf("GetSecret: %v", err)
+		t.Fatalf("Secret: %v", err)
 	}
 	secPlain, err := mgr.Cipher.Decrypt(sec.Payload)
 	if err != nil {
@@ -606,9 +606,9 @@ func TestEnsureMaterialized_RecreatesMissingSecretNoRotation(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 
-	before, err := s.GetCredential(context.Background(), "edge_api_token")
+	before, err := s.Credential(context.Background(), "edge_api_token")
 	if err != nil {
-		t.Fatalf("GetCredential edge_api_token: %v", err)
+		t.Fatalf("Credential edge_api_token: %v", err)
 	}
 	originalSecret, ok := f.secrets["edge_api_token"]
 	if !ok {
@@ -642,9 +642,9 @@ func TestEnsureMaterialized_RecreatesMissingSecretNoRotation(t *testing.T) {
 		t.Error("EnsureMaterialized on an existing secret should report created=false")
 	}
 
-	after, err := s.GetCredential(context.Background(), "edge_api_token")
+	after, err := s.Credential(context.Background(), "edge_api_token")
 	if err != nil {
-		t.Fatalf("GetCredential after: %v", err)
+		t.Fatalf("Credential after: %v", err)
 	}
 	if !bytes.Equal(before.PasswordCiphertext, after.PasswordCiphertext) {
 		t.Error("credential ciphertext changed (rotated) — materialization must never rotate")
@@ -668,9 +668,9 @@ func TestEnsureMaterialized_HtpasswdRecreatedFromSamePassword(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 
-	before, err := s.GetCredential(context.Background(), "traefik_dashboard")
+	before, err := s.Credential(context.Background(), "traefik_dashboard")
 	if err != nil {
-		t.Fatalf("GetCredential: %v", err)
+		t.Fatalf("Credential: %v", err)
 	}
 	beforePlain, err := c.Decrypt(before.PasswordCiphertext)
 	if err != nil {
@@ -694,9 +694,9 @@ func TestEnsureMaterialized_HtpasswdRecreatedFromSamePassword(t *testing.T) {
 		t.Errorf("recreated htpasswd line does not authenticate the unchanged password: %v", err)
 	}
 
-	after, err := s.GetCredential(context.Background(), "traefik_dashboard")
+	after, err := s.Credential(context.Background(), "traefik_dashboard")
 	if err != nil {
-		t.Fatalf("GetCredential after: %v", err)
+		t.Fatalf("Credential after: %v", err)
 	}
 	if !bytes.Equal(before.PasswordCiphertext, after.PasswordCiphertext) {
 		t.Error("credential ciphertext changed (rotated)")
@@ -718,7 +718,7 @@ func TestEnsureMaterialized_MissingRowIsNoOp(t *testing.T) {
 	if created {
 		t.Fatal("missing credential row must be a no-op, not a mint")
 	}
-	if _, err := s.GetCredential(context.Background(), "sso_cookie_secret"); err != store.ErrCredentialNotFound {
+	if _, err := s.Credential(context.Background(), "sso_cookie_secret"); err != store.ErrCredentialNotFound {
 		t.Fatalf("credential row should still be absent, got err=%v", err)
 	}
 }

@@ -50,7 +50,7 @@ func TestUpdate_RedeploysWhenLiveServiceLabelDrifted(t *testing.T) {
 	}
 
 	f := deps.Docker.(*fakeDocker)
-	row, err := deps.Store.GetConfig(ctx, "backup-stack")
+	row, err := deps.Store.Config(ctx, "backup-stack")
 	if err != nil {
 		t.Fatalf("read backup-stack: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestUpdate_RedeploysWhenServiceLabelMissing(t *testing.T) {
 		t.Fatalf("baseline Update: %v", err)
 	}
 	f := deps.Docker.(*fakeDocker)
-	row, err := deps.Store.GetConfig(ctx, "backup-stack")
+	row, err := deps.Store.Config(ctx, "backup-stack")
 	if err != nil {
 		t.Fatalf("read backup-stack: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestUpdate_AdoptsLabeledNodeIntoStorageNodes(t *testing.T) {
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	got := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "")
+	got := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
 	if !strings.Contains(got, "nextrum-sy-1") {
 		t.Fatalf("a labeled node must be adopted into storage_nodes, got %q", got)
 	}
@@ -372,9 +372,9 @@ func TestUpdate_FailedDeployLeavesStaleHashRetriedOnNextUpdate(t *testing.T) {
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("baseline Update: %v", err)
 	}
-	row, err := deps.Store.GetConfig(ctx, string(StackBackup)+"-stack")
+	row, err := deps.Store.Config(ctx, string(StackBackup)+"-stack")
 	if err != nil {
-		t.Fatalf("GetConfig backup-stack: %v", err)
+		t.Fatalf("Config backup-stack: %v", err)
 	}
 	beforeHash := row.RenderedHash
 
@@ -392,9 +392,9 @@ func TestUpdate_FailedDeployLeavesStaleHashRetriedOnNextUpdate(t *testing.T) {
 	}
 
 	// The backup-stack hash must be UNCHANGED after the failed deploy.
-	row, err = deps.Store.GetConfig(ctx, string(StackBackup)+"-stack")
+	row, err = deps.Store.Config(ctx, string(StackBackup)+"-stack")
 	if err != nil {
-		t.Fatalf("GetConfig backup-stack: %v", err)
+		t.Fatalf("Config backup-stack: %v", err)
 	}
 	if row.RenderedHash != beforeHash {
 		t.Errorf("BUG-009: failed deploy stamped a new rendered hash (before=%q after=%q); next update would skip redeploy",
@@ -430,7 +430,7 @@ func TestUpdate_EnablingSSOSelfHealsMissingCookieSecret(t *testing.T) {
 	// Simulate a cluster whose bootstrap predates the SSO credential: the
 	// seed Up created it via Bootstrap, so remove the row + Swarm secret to
 	// reproduce the legacy state cluster update must self-heal.
-	if _, err := deps.Store.GetCredential(ctx, "sso_cookie_secret"); err != nil {
+	if _, err := deps.Store.Credential(ctx, "sso_cookie_secret"); err != nil {
 		t.Fatalf("seed should have bootstrapped sso_cookie_secret: %v", err)
 	}
 	if _, err := deps.Store.DB().ExecContext(ctx, "DELETE FROM managed_credentials WHERE name = ?", "sso_cookie_secret"); err != nil {
@@ -457,7 +457,7 @@ func TestUpdate_EnablingSSOSelfHealsMissingCookieSecret(t *testing.T) {
 		t.Fatalf("Update with SSO enabled: %v", err)
 	}
 
-	mc, err := deps.Store.GetCredential(ctx, "sso_cookie_secret")
+	mc, err := deps.Store.Credential(ctx, "sso_cookie_secret")
 	if err != nil {
 		t.Fatalf("sso_cookie_secret credential should have been minted: %v", err)
 	}
@@ -833,9 +833,9 @@ func TestUpdate_MissingManagedCredentialSecretRecreated(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 	ctx := context.Background()
 
-	before, err := deps.Store.GetCredential(ctx, "traefik_dashboard")
+	before, err := deps.Store.Credential(ctx, "traefik_dashboard")
 	if err != nil {
-		t.Fatalf("GetCredential traefik_dashboard: %v", err)
+		t.Fatalf("Credential traefik_dashboard: %v", err)
 	}
 
 	if err := deps.Docker.SecretRemove(ctx, "admin_credentials"); err != nil {
@@ -851,9 +851,9 @@ func TestUpdate_MissingManagedCredentialSecretRecreated(t *testing.T) {
 		t.Fatal("admin_credentials swarm secret was not re-materialized by update")
 	}
 
-	after, err := deps.Store.GetCredential(ctx, "traefik_dashboard")
+	after, err := deps.Store.Credential(ctx, "traefik_dashboard")
 	if err != nil {
-		t.Fatalf("GetCredential traefik_dashboard (after): %v", err)
+		t.Fatalf("Credential traefik_dashboard (after): %v", err)
 	}
 	if !bytes.Equal(before.PasswordCiphertext, after.PasswordCiphertext) {
 		t.Error("credential ciphertext changed (rotated) — materialization must never rotate")
@@ -884,7 +884,7 @@ func TestUpdate_SwarmIDChangeForcesRedeploy(t *testing.T) {
 			t.Errorf("swarm-ID change should force redeploy of %s, got %v", s, deployer.deployedStacks)
 		}
 	}
-	if v := deps.Store.GetSettingDefault(ctx, settingSwarmID, ""); v != "swarm-v2" {
+	if v := deps.Store.SettingDefault(ctx, settingSwarmID, ""); v != "swarm-v2" {
 		t.Errorf("swarm_id setting = %q, want swarm-v2", v)
 	}
 
@@ -939,7 +939,7 @@ func TestUpdate_AddsLeaderToStorageNodes(t *testing.T) {
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	got := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "")
+	got := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
 	if !strings.Contains(got, "nextrum-sy-1") {
 		t.Fatalf("the leader must be added to storage_nodes, got %q", got)
 	}
@@ -968,7 +968,7 @@ func TestUpdate_DemotesFormerLeader(t *testing.T) {
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	got := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "")
+	got := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
 	if strings.Contains(got, "node-a") {
 		t.Fatalf("the former leader must be demoted, storage_nodes = %q", got)
 	}
@@ -982,7 +982,7 @@ func TestUpdate_DemotesFormerLeader(t *testing.T) {
 	if !strings.Contains(joined, runtime.StorageNodeLabel+"=") {
 		t.Fatalf("the former leader's label must be cleared, calls = %v", f.nodeLabels)
 	}
-	if leader := deps.Store.GetSettingDefault(ctx, storageLeaderKey, ""); leader != "node-b" {
+	if leader := deps.Store.SettingDefault(ctx, storageLeaderKey, ""); leader != "node-b" {
 		t.Fatalf("storage_leader = %q, want node-b", leader)
 	}
 }
@@ -1005,7 +1005,7 @@ func TestUpdate_DefaultsPlatformNodeToLeader(t *testing.T) {
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if got := deps.Store.GetSettingDefault(ctx, SettingPlatformNode(), ""); got != "nextrum-sy-1" {
+	if got := deps.Store.SettingDefault(ctx, SettingPlatformNode(), ""); got != "nextrum-sy-1" {
 		t.Fatalf("platform_node = %q, want the leader hostname nextrum-sy-1", got)
 	}
 }
@@ -1025,7 +1025,7 @@ func TestUpdate_PreservesPlatformNode(t *testing.T) {
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if got := deps.Store.GetSettingDefault(ctx, SettingPlatformNode(), ""); got != "operator-pinned" {
+	if got := deps.Store.SettingDefault(ctx, SettingPlatformNode(), ""); got != "operator-pinned" {
 		t.Fatalf("platform_node = %q, want the preset value operator-pinned", got)
 	}
 }

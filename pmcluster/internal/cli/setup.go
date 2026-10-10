@@ -250,45 +250,45 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintln(out, "│  pmcluster setup — cluster configuration      │")
 		fmt.Fprintln(out, "└──────────────────────────────────────────────┘")
 
-		a.Domain = ask(r, out, "Cluster domain", st.GetSettingDefault(ctx, cluster.SettingDomain(), ""))
+		a.Domain = ask(r, out, "Cluster domain", st.SettingDefault(ctx, cluster.SettingDomain(), ""))
 		le := askYesNo(r, out, "Use Let's Encrypt?", a.ACMEEmail != "")
 		if le {
-			a.ACMEEmail = ask(r, out, "ACME contact email", st.GetSettingDefault(ctx, cluster.SettingTLSACME(), ""))
+			a.ACMEEmail = ask(r, out, "ACME contact email", st.SettingDefault(ctx, cluster.SettingTLSACME(), ""))
 		} else {
 			a.CertPath = ask(r, out, "TLS certificate PEM path", "")
 			a.KeyPath = ask(r, out, "TLS key PEM path", "")
 		}
 		a.OpenObserveEmail = defaultOOEmail(a.Domain)
 		a.TraefikAdminUser = ask(r, out, "Traefik admin user", "admin")
-		a.SSOEnabled = askYesNo(r, out, "Enable SSO (GitHub)?", st.GetSettingDefault(ctx, cluster.SettingSSOEnabled(), "") == "true")
+		a.SSOEnabled = askYesNo(r, out, "Enable SSO (GitHub)?", st.SettingDefault(ctx, cluster.SettingSSOEnabled(), "") == "true")
 		if a.SSOEnabled {
 			a.SSOProvider = ask(r, out, "SSO provider", "github")
 			a.SSOClientID = ask(r, out, "GitHub OAuth client ID", "")
 			a.SSOClientSecret = ask(r, out, "GitHub OAuth client secret", "")
-			a.SSOGitHubOrg = ask(r, out, "Restrict to GitHub org (optional)", st.GetSettingDefault(ctx, cluster.SettingSSOGitHubOrg(), ""))
-			a.SSOGitHubRepos = ask(r, out, "Restrict to GitHub repos, comma-separated (optional)", st.GetSettingDefault(ctx, cluster.SettingSSOGitHubRepos(), ""))
-			a.SSOCookieExpire = ask(r, out, "Session cookie lifetime (e.g. 1h)", st.GetSettingDefault(ctx, cluster.SettingSSOCookieExpire(), "1h"))
+			a.SSOGitHubOrg = ask(r, out, "Restrict to GitHub org (optional)", st.SettingDefault(ctx, cluster.SettingSSOGitHubOrg(), ""))
+			a.SSOGitHubRepos = ask(r, out, "Restrict to GitHub repos, comma-separated (optional)", st.SettingDefault(ctx, cluster.SettingSSOGitHubRepos(), ""))
+			a.SSOCookieExpire = ask(r, out, "Session cookie lifetime (e.g. 1h)", st.SettingDefault(ctx, cluster.SettingSSOCookieExpire(), "1h"))
 		}
 		a.EdgeLoginEnabled = askYesNo(r, out, "Keep edge console password login?", false)
-		a.VolumeRoot = ask(r, out, "Container volume root dir", st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot))
+		a.VolumeRoot = ask(r, out, "Container volume root dir", st.SettingDefault(ctx, cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot))
 		a.BackupAllNodes = askYesNo(r, out, "Run backup agent on every node?", false)
-		a.BackupRetentionDays = ask(r, out, "Backup retention (days)", st.GetSettingDefault(ctx, cluster.SettingBackupRetentionDays(), "15"))
-		a.OOLogsRetentionDays = ask(r, out, "OpenObserve log retention (days)", st.GetSettingDefault(ctx, cluster.SettingOOLogsRetentionDays(), "7"))
-		a.OOMetricsRetentionDays = ask(r, out, "OpenObserve metric retention (days)", st.GetSettingDefault(ctx, cluster.SettingOOMetricsRetentionDays(), "7"))
-		a.OOTracesRetentionDays = ask(r, out, "OpenObserve trace retention (days)", st.GetSettingDefault(ctx, cluster.SettingOOTracesRetentionDays(), "7"))
-		if askYesNo(r, out, "Upload backups offsite (S3/R2)?", st.GetSettingDefault(ctx, cluster.SettingBackupS3Endpoint(), "") != "") {
-			a.BackupS3Endpoint = ask(r, out, "S3-compatible endpoint (R2: https://<account>.r2.cloudflarestorage.com)", st.GetSettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""))
-			a.BackupS3Bucket = ask(r, out, "S3 bucket name", st.GetSettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""))
-			a.BackupS3Region = ask(r, out, "S3 region", st.GetSettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"))
-			a.BackupS3AccessKey = askSecret(r, out, "S3 access key", st.GetSettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""))
-			a.BackupS3SecretKey = askSecret(r, out, "S3 secret key", st.GetSettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""))
+		a.BackupRetentionDays = ask(r, out, "Backup retention (days)", st.SettingDefault(ctx, cluster.SettingBackupRetentionDays(), "15"))
+		a.OOLogsRetentionDays = ask(r, out, "OpenObserve log retention (days)", st.SettingDefault(ctx, cluster.SettingOOLogsRetentionDays(), "7"))
+		a.OOMetricsRetentionDays = ask(r, out, "OpenObserve metric retention (days)", st.SettingDefault(ctx, cluster.SettingOOMetricsRetentionDays(), "7"))
+		a.OOTracesRetentionDays = ask(r, out, "OpenObserve trace retention (days)", st.SettingDefault(ctx, cluster.SettingOOTracesRetentionDays(), "7"))
+		if askYesNo(r, out, "Upload backups offsite (S3/R2)?", st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), "") != "") {
+			a.BackupS3Endpoint = ask(r, out, "S3-compatible endpoint (R2: https://<account>.r2.cloudflarestorage.com)", st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""))
+			a.BackupS3Bucket = ask(r, out, "S3 bucket name", st.SettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""))
+			a.BackupS3Region = ask(r, out, "S3 region", st.SettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"))
+			a.BackupS3AccessKey = askSecret(r, out, "S3 access key", st.SettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""))
+			a.BackupS3SecretKey = askSecret(r, out, "S3 secret key", st.SettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""))
 		}
 		// Automatic storage failover needs offsite backups: when a storage node
 		// dies, the only recoverable copy is in S3, so prompt only when S3 is set.
 		if a.BackupS3Endpoint != "" && a.BackupS3Bucket != "" {
 			a.StorageFailover = askYesNo(r, out, "Enable automatic storage failover? (moves a stack off a failed storage node, restoring the latest offsite backup)", true)
 		}
-		a.BackupStoreOn = askBackupStoreOn(r, out, st.GetSettingDefault(ctx, cluster.SettingBackupStoreOn(), ""))
+		a.BackupStoreOn = askBackupStoreOn(r, out, st.SettingDefault(ctx, cluster.SettingBackupStoreOn(), ""))
 		defHost, _ := os.Hostname()
 		a.NodeHostname = ask(r, out, "Hostname for this node (pins use placement: <hostname>)", defHost)
 		if !swarmActive(ctx) {

@@ -24,9 +24,9 @@ func TestLocalTriggerSuccessRecordsSucceeded(t *testing.T) {
 		t.Errorf("paths = %v, want two archives", paths)
 	}
 
-	row, err := st.GetBackup(ctx, id)
+	row, err := st.Backup(ctx, id)
 	if err != nil {
-		t.Fatalf("GetBackup: %v", err)
+		t.Fatalf("Backup: %v", err)
 	}
 	if row.Status != StatusSucceeded {
 		t.Errorf("Status = %q, want succeeded", row.Status)
@@ -86,9 +86,9 @@ func TestLocalTriggerNilRunNotConfigured(t *testing.T) {
 		t.Fatalf("Trigger id = %d, want > 0 (run still recorded)", id)
 	}
 
-	row, err := st.GetBackup(ctx, id)
+	row, err := st.Backup(ctx, id)
 	if err != nil {
-		t.Fatalf("GetBackup: %v", err)
+		t.Fatalf("Backup: %v", err)
 	}
 	if row.Status != "pending" {
 		t.Errorf("Status = %q, want pending (unfinished)", row.Status)

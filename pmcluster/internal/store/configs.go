@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
 )
 
 // ConfigRow is a DB-backed config value. Scope is "cluster" (cluster-level,
@@ -48,7 +50,9 @@ type ConfigVersionRow struct {
 }
 
 // ErrConfigNotFound is returned by config getters/deleters when no row matches.
-var ErrConfigNotFound = errors.New("config not found")
+// It aliases the canonical sentinel in internal/errs (also aliased by the
+// configs domain), so errors.Is works for either name.
+var ErrConfigNotFound = errs.ErrConfigNotFound
 
 // ErrConfigExists is returned by CreateConfig when the name is taken.
 var ErrConfigExists = errors.New("config already exists")
@@ -96,8 +100,8 @@ func (s *Store) CreateConfig(ctx context.Context, scope, stack, name, kind, cont
 	return res.LastInsertId()
 }
 
-// GetConfig fetches a config by name. Returns ErrConfigNotFound when missing.
-func (s *Store) GetConfig(ctx context.Context, name string) (*ConfigRow, error) {
+// Config fetches a config by name. Returns ErrConfigNotFound when missing.
+func (s *Store) Config(ctx context.Context, name string) (*ConfigRow, error) {
 	var c ConfigRow
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, scope, stack, name, kind, content, version, hash, created_at, updated_at, rendered_content, rendered_at, rendered_hash
@@ -113,7 +117,7 @@ func (s *Store) GetConfig(ctx context.Context, name string) (*ConfigRow, error) 
 	return &c, nil
 }
 
-// GetConfigForStack fetches the config <name> that stack <stack> is allowed to
+// ConfigForStack fetches the config <name> that stack <stack> is allowed to
 // resolve at deploy time. Resolution order:
 //
 //  1. a service-scope row tagged exactly with <stack> (own config), else
@@ -125,7 +129,7 @@ func (s *Store) GetConfig(ctx context.Context, name string) (*ConfigRow, error) 
 // resolves config(name) by name only, so without this guard a config created
 // for stack A would silently leak into stack B's env. Cross-stack rows make
 // the lookup fall through to shared/not-found instead.
-func (s *Store) GetConfigForStack(ctx context.Context, stack, name string) (*ConfigRow, error) {
+func (s *Store) ConfigForStack(ctx context.Context, stack, name string) (*ConfigRow, error) {
 	var c ConfigRow
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, scope, stack, name, kind, content, version, hash, created_at, updated_at, rendered_content, rendered_at, rendered_hash

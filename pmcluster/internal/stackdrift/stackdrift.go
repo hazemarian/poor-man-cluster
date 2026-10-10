@@ -31,8 +31,8 @@ func ContentHash(data []byte) string {
 // cannot provide: the DB hash records what pmcluster last INTENDED to deploy,
 // so a Swarm-side change (a manual `docker service update`, a half-applied
 // deploy, an upgrade that skipped one service) leaves the store reporting
-// "nothing to redeploy" forever (BUG-017 — the wafaa control-plane backup ran
-// for weeks without its offsite/WebDAV destination for exactly this reason).
+// "nothing to redeploy" forever (a control-plane backup once ran for weeks
+// without its offsite/WebDAV destination for exactly this reason).
 //
 // Two independent signals are checked:
 //   - every service the render expects is present in the stack (detects a
@@ -40,8 +40,8 @@ func ContentHash(data []byte) string {
 //   - a service that carries a RenderedHashLabel whose value differs from the
 //     freshly rendered compose's label was deployed from a DIFFERENT render
 //     (detects a half-applied deploy, a skipped service, an older binary) —
-//     the exact class of drift that let the wafaa control-plane backup run
-//     without its offsite destination.
+//     the exact class of drift that let that backup run without its offsite
+//     destination.
 //
 // Label drift is reported under two rules:
 //   - PARTIAL: some (but not all) services carry the label. The deploy was
@@ -52,8 +52,8 @@ func ContentHash(data []byte) string {
 //     consulted after the stored rendered hash already matches the fresh
 //     render — meaning a labelled render was supposedly applied. Zero labelled
 //     live services proves it was NOT actually applied (a failed deploy that
-//     left the store's hash stale — BUG-018), so it is drift and must be
-//     re-applied. This intentionally supersedes the old rationale ("the stack
+//     left the store's hash stale), so it is drift and must be re-applied.
+//     This intentionally supersedes the old rationale ("the stack
 //     predates the label"), which only held when the label was first
 //     introduced, not when a labelled render was the recorded truth.
 //

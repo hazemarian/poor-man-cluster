@@ -268,6 +268,52 @@ func TestEnsureConfig_MintsNewNameOnChange(t *testing.T) {
 	}
 }
 
+// TestEnsureConfig_ReuseGCOrphanedVersions verifies the reuse path still GCs
+// stale content-addressed objects. The update workflow's rebuild-on-missing
+// repair step mints the new object BEFORE EnsureConfig runs, so a reuse here
+// must clean up the orphaned old object (create-path GC alone would miss it).
+func TestEnsureConfig_ReuseGCOrphanedVersions(t *testing.T) {
+	f := newFakeDocker()
+	current := []byte("current")
+
+	orphan := store.SwarmConfigName("otel_config", dataHash([]byte("stale")))
+	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
+		Name: orphan,
+		Data: []byte("stale"),
+		Labels: map[string]string{
+			pmclusterLabel:   "true",
+			"pmcluster.base": "otel_config",
+		},
+	}); err != nil {
+		t.Fatalf("seed orphan: %v", err)
+	}
+
+	if err := f.ConfigCreate(context.Background(), runtime.ConfigSpec{
+		Name: store.SwarmConfigName("otel_config", dataHash(current)),
+		Data: current,
+		Labels: map[string]string{
+			pmclusterLabel:   "true",
+			"pmcluster.base": "otel_config",
+		},
+	}); err != nil {
+		t.Fatalf("seed current: %v", err)
+	}
+
+	name, created, err := EnsureConfig(context.Background(), f, "otel_config", current, "v0.2.0")
+	if err != nil {
+		t.Fatalf("EnsureConfig: %v", err)
+	}
+	if created {
+		t.Error("created = true, want false (reuse)")
+	}
+	if name != store.SwarmConfigName("otel_config", dataHash(current)) {
+		t.Errorf("name = %q, want reuse of current", name)
+	}
+	if _, ok := f.configs[orphan]; ok {
+		t.Error("orphaned old config not GC'd on the reuse path")
+	}
+}
+
 func TestEnsureConfig_AttachesManagedLabel(t *testing.T) {
 	f := newFakeDocker()
 

@@ -85,8 +85,9 @@ const (
 	// labelPlatform is stamped on every service of a platform-managed stack
 	// (app.platform: true) so the UI/CLI/down/--purge can differentiate
 	// platform stacks (infra/edge/observability/backup/sso) from user app
-	// stacks.
-	labelPlatform = "io.pmcluster.platform"
+	// stacks. The value is canonical in runtime.PlatformLabel — this alias
+	// keeps a single source of truth for the string.
+	labelPlatform = runtime.PlatformLabel
 )
 
 // defaultWriter is the backend targeted when no writer is supplied: the

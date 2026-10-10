@@ -74,7 +74,7 @@ func (b SSOBridge) Page(g *gin.Context) {
 	// Best effort: the real OpenObserve admin email from cluster settings.
 	// Fall back to the default admin@<domain> derived by the setup wizard.
 	ssoEnabled := false
-	if s, err := b.API.GetClusterSettings(ctx); err == nil {
+	if s, err := b.API.ClusterSettings(ctx); err == nil {
 		if v := s["oo_admin_email"]; v != "" {
 			email = v
 		}

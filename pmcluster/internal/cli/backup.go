@@ -92,12 +92,12 @@ func init() {
 }
 
 // restoreDestRootDefault resolves the default restore root from the cluster's
-// volume_root setting (BUG-003), falling back to the manifest default when the
-// setting is unset or the store is unavailable.
+// volume_root setting, falling back to the manifest default when the setting
+// is unset or the store is unavailable.
 func restoreDestRootDefault(ctx context.Context) string {
 	if st, _, err := openStore(); err == nil {
 		defer st.Close() //nolint:errcheck // read-only best-effort cleanup
-		if root := st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), ""); root != "" {
+		if root := st.SettingDefault(ctx, cluster.SettingVolumeRoot(), ""); root != "" {
 			return root
 		}
 	}
@@ -108,11 +108,11 @@ func restoreDestRootDefault(ctx context.Context) string {
 // S3Config the backups domain uses for its offsite restore fallback.
 func backupS3FromSettings(ctx context.Context, st *store.Store) backups.S3Config {
 	return backups.S3Config{
-		Endpoint:  st.GetSettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""),
-		Bucket:    st.GetSettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""),
-		AccessKey: st.GetSettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""),
-		SecretKey: st.GetSettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""),
-		Region:    st.GetSettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"),
+		Endpoint:  st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""),
+		Bucket:    st.SettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""),
+		AccessKey: st.SettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""),
+		SecretKey: st.SettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""),
+		Region:    st.SettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"),
 	}
 }
 
@@ -128,7 +128,7 @@ func backupS3Config(ctx context.Context, st *store.Store, cipher *credentials.Ci
 	if cipher == nil {
 		return cfg
 	}
-	if mc, err := st.GetCredential(ctx, "seaweedfs_admin"); err == nil {
+	if mc, err := st.Credential(ctx, "seaweedfs_admin"); err == nil {
 		if pass, derr := cipher.Decrypt(mc.PasswordCiphertext); derr == nil {
 			cfg = backups.S3Config{
 				Endpoint:  "http://127.0.0.1:8333",
@@ -163,7 +163,7 @@ func stackFromVolume(volume string) string {
 //
 // Returns the destination node ("" = restore locally) or a loud error when the
 // volume lives on a remote node but routing is impossible — the caller must
-// never silently restore into the wrong node (BUG-032).
+// never silently restore into the wrong node.
 func restoreDestination(owner, localHost string, dockerOK, storeOK bool) (string, error) {
 	if owner == "" || owner == localHost {
 		return "", nil
@@ -198,7 +198,7 @@ func restoreOwnerForStack(ctx context.Context, svc *stacks.Service, stack string
 // absolute host path and a store-discovered row stores the bare object key;
 // both share the same basename (offen uploads under the same BACKUP_FILENAME).
 func restoreArchiveKey(ctx context.Context, st *store.Store, id int64) (string, error) {
-	row, err := st.GetBackup(ctx, id)
+	row, err := st.Backup(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("get backup %d: %w", id, err)
 	}
@@ -353,19 +353,19 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 	volume, _ := cmd.Flags().GetString("volume")
 	fromS3, _ := cmd.Flags().GetBool("from-s3")
 
-	// BUG-003 fix: the restore root must default to the cluster's volume_root
-	// setting (not a hardcoded /var/stack/data), or restores land in the wrong
-	// tree on clusters with a custom storage root.
+	// The restore root must default to the cluster's volume_root setting (not
+	// a hardcoded /var/stack/data), or restores land in the wrong tree on
+	// clusters with a custom storage root.
 	if destRoot == "" {
 		destRoot = restoreDestRootDefault(cmd.Context())
 	}
 
-	// BUG-032: on a multi-node cluster a stack's volume lives on a specific
-	// node (a named volume whose device is <volume_root>/<stack>/<vol>).
-	// Restoring into THIS node's volume root leaves the owning node's directory
-	// empty — the app comes up with an empty DB while the command reports
-	// success. When --volume names a stack, resolve its owning node and route
-	// the restore there (or fail loudly instead of restoring into the wrong
+	// On a multi-node cluster a stack's volume lives on a specific node (a
+	// named volume whose device is <volume_root>/<stack>/<vol>). Restoring
+	// into THIS node's volume root leaves the owning node's directory empty —
+	// the app comes up with an empty DB while the command reports success.
+	// When --volume names a stack, resolve its owning node and route the
+	// restore there (or fail loudly instead of restoring into the wrong
 	// node). Single-node clusters are untouched: owner == this host (or no
 	// Docker client) keeps the local path unchanged.
 	if stack := stackFromVolume(volume); stack != "" && remoteClient(cmd) == nil {

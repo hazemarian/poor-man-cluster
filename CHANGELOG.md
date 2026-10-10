@@ -2,6 +2,44 @@
 
 Release history for **poor-man-cluster**. The RFC and the reference docs describe the
 
+## v0.2.180 (2026-10-09)
+
+A consolidation release with no new surface area: a repository-wide Go doc-comment conformance
+pass, a docs refresh, a new engineering RFC under `docs/rfc/`, seven structural cleanups, and a
+round of swarm-e2e fixes that close two real product bugs.
+
+- **Go doc-comment conformance.** A 65-file pass aligns exported identifiers with Go convention —
+  package doc comments, sentence-case summaries that begin with the identifier name, and full-stop
+  termination — with no behaviour change. Two dozen exported store getters were renamed to their
+  idiomatic forms (e.g. `GetSettingDefault` → `SettingDefault`, `GetCredential` → `Credential`,
+  `GetConfig` → `Config`, `GetSecret` → `Secret`), with the old names kept as aliases where needed.
+- **Docs refresh.** `README.md`, `agent.md`, `docs/dsl.md`, `docs/security-and-improvements.md`,
+  `docs/webhook.md`, `docs/control-loop-design.md`, `docs/improvements.md`,
+  `docs/network-topology.md`, `docs/storage-and-databases.md` and
+  `pmcluster/docs/service-ops-design.md` were corrected and brought in line with current behaviour.
+- **New RFC (`docs/rfc/`).** Eight new documents (~2,500 lines) capture the problem statement,
+  architecture, decision log, bug catalogue, evolution timeline, testing methodology and open
+  questions — the engineering record behind the release notes.
+- **Structural cleanups.** Seven design-pattern fixes: a shared sentinel-error package
+  (`internal/errs`), a `manifest.ParseBuild`/`RenderStamped` build helper, a `settings.Mask` policy
+  for secret redaction, a `runtime.StackDeployer` interface extracted into a leaf package, an
+  importable fake `runtime.Client` for tests (`internal/testutil/fakeclient`), the getter rename,
+  and one documented behaviour change: the local CLI now prints settings secrets in cleartext, on
+  the grounds that a local CLI operator is already an admin.
+- **Swarm ID now persisted at `cluster up`.** `cluster up` records the live Swarm ID in the store, so
+  the first `cluster update` after a fresh `up` no longer reads an empty stored ID, mistakes it for a
+  wiped-and-reinitialised Swarm, and force-redeploys every platform stack. The first update after a
+  fresh up is now a content-aware no-op. (Product bug.)
+- **Stale platform configs are garbage-collected.** A new post-reconcile GC step in `cluster update`
+  releases the previous content-addressed platform config objects (Traefik dynamic, OTel, edge) once
+  the deploy has re-pointed each stack at the new object, and `EnsureConfig` now GCs on both the
+  create and reuse paths — so an edited config no longer leaves orphans that accumulate forever.
+  (Product bug.)
+- **Swarm e2e made hermetic.** The e2e suite (`cluster_up_test.go`, `setup_test.go`,
+  `standalone_test.go`, `control_loop_test.go`) was corrected for content-addressed names and made
+  hermetic, and `.github/workflows/swarm-e2e.yml` now runs `go test -timeout 20m -tags=e2e ./e2e/...`
+  directly instead of `make e2e` (whose hardcoded 10m timeout was too tight for the full swarm tier).
+
 ## v0.2.179 (2026-10-09)
 
 The Poor Man's Cluster visual identity applied across the console and the README: a six-palette

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
 )
 
 // Stack metadata; compose contents live in StackRevision rows keyed by
@@ -46,11 +48,11 @@ type StackRevision struct {
 	CreatedAt   int64
 }
 
-// ErrStackNotFound indicates a stack row does not exist.
-var ErrStackNotFound = errors.New("stack not found")
+// ErrStackNotFound indicates a stack row does not exist. Aliases errs.ErrStackNotFound.
+var ErrStackNotFound = errs.ErrStackNotFound
 
-// ErrRevisionNotFound indicates a revision row does not exist.
-var ErrRevisionNotFound = errors.New("revision not found")
+// ErrRevisionNotFound indicates a revision row does not exist. Aliases errs.ErrRevisionNotFound.
+var ErrRevisionNotFound = errs.ErrRevisionNotFound
 
 // StackErrorEntry is one deploy/apply outcome in a stack's error history.
 // The stacks.last_error column holds a JSON array of these, newest first;
@@ -156,8 +158,8 @@ func (s *Store) RecordDeploy(ctx context.Context, rev *StackRevision, repoURL st
 // SetRevisionRenderedHash stamps the rendered_hash column of an existing
 // revision. The deploy pipeline records a revision with an EMPTY hash up
 // front, then sets the hash only after the swarm apply succeeds — so a failed
-// deploy leaves the hash empty and the next Sync sees a mismatch and retries
-// (BUG-018). Returns ErrRevisionNotFound when no such revision exists.
+// deploy leaves the hash empty and the next Sync sees a mismatch and retries.
+// Returns ErrRevisionNotFound when no such revision exists.
 func (s *Store) SetRevisionRenderedHash(ctx context.Context, stackName string, revision int64, hash string) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE stack_revisions SET rendered_hash = ? WHERE stack_name = ? AND revision = ?`,
@@ -172,7 +174,9 @@ func (s *Store) SetRevisionRenderedHash(ctx context.Context, stackName string, r
 	return nil
 }
 
-func (s *Store) GetStack(ctx context.Context, name string) (*Stack, error) {
+// Stack returns a stack's row by name. Returns ErrStackNotFound when no
+// such stack exists.
+func (s *Store) Stack(ctx context.Context, name string) (*Stack, error) {
 	var st Stack
 	err := s.db.QueryRowContext(ctx,
 		`SELECT name, current_revision, repo_url, source_file, last_error, created_at, updated_at FROM stacks WHERE name = ?`, name,
@@ -186,6 +190,7 @@ func (s *Store) GetStack(ctx context.Context, name string) (*Stack, error) {
 	return &st, nil
 }
 
+// ListStacks returns every stack row, ordered by name.
 func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT name, current_revision, repo_url, source_file, last_error, created_at, updated_at FROM stacks ORDER BY name`,
@@ -314,7 +319,9 @@ func (s *Store) NextFreeRevision(ctx context.Context, stackName string, candidat
 	return 0, fmt.Errorf("could not find a free revision for %s near %d after %d attempts", stackName, candidate, maxAttempts)
 }
 
-func (s *Store) GetRevision(ctx context.Context, stackName string, revision int64) (*StackRevision, error) {
+// Revision returns one stored revision of a stack by number. Returns
+// ErrRevisionNotFound when no such revision exists.
+func (s *Store) Revision(ctx context.Context, stackName string, revision int64) (*StackRevision, error) {
 	var r StackRevision
 	err := s.db.QueryRowContext(ctx,
 		`SELECT stack_name, revision, source_yaml, rendered_yaml, rendered_hash, source_file, payload_json, created_at

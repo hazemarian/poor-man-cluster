@@ -104,9 +104,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		defer func() { _ = dc.Close() }()
 
 		// Every daemon — leader or not — keeps the volume directories of the
-		// stateful services the Swarm placed on this node (BUG-026). A standby
-		// manager blocks in waitForSwarmLeadership below, so the loop starts
-		// here and touches the runtime client only, never the store.
+		// stateful services the Swarm placed on this node. A standby manager
+		// blocks in waitForSwarmLeadership below, so the loop starts here and
+		// touches the runtime client only, never the store.
 		startVolumeRepairLoop(cmd.Context(), dc, cluster.NewDockerCLIDeployer(os.Stderr), func() string {
 			s, _ := storageRoot.Load().(string)
 			return s
@@ -150,7 +150,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// start a task whose bind source is missing. The path comes from the
 	// volume_root setting (default /var/stack/data), so the daemon creates the
 	// directory the operator configured — on THIS host, before anything is
-	// deployed onto it (BUG-026).
+	// deployed onto it.
 	if err := ensureLocalStorageRoots(cmd.Context(), cfg, log); err != nil {
 		log.Warn().Err(err).Msg("ensure local storage roots")
 	}
@@ -168,7 +168,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// The persisted log_level cluster setting overrides the config-file
 	// default, so a console change survives daemon restarts. Invalid values
 	// are ignored here (a bad setting only surfaces at save time).
-	if lvl := st.GetSettingDefault(cmd.Context(), cluster.SettingLogLevel(), ""); lvl != "" {
+	if lvl := st.SettingDefault(cmd.Context(), cluster.SettingLogLevel(), ""); lvl != "" {
 		_ = logger.SetLevel(lvl)
 	}
 
@@ -191,8 +191,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// used directly.
 	backupS3 := backupS3Config(cmd.Context(), st, cipher)
 
-	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.GetSettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.GetSettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.GetSettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
-		return st.GetSettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
+	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.SettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.SettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.SettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.SettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.SettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
+		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3}
 
 	tlsSvc := certs.NewLocal(st, cipher, dc, deployer,
@@ -283,11 +283,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 			if isLeader {
 				log.Info().Msg("control loop: starting reconcile loop (leader)")
-				// Publish a fresh control-plane snapshot on promotion. We do
-				// NOT restore here: the local store is already open and being
+				// Publish a fresh control-plane snapshot on promotion. Do NOT
+				// restore here: the local store is already open and being
 				// live-written, and Restore truncates data.db under the live
-				// sqlite connection (BUG-006 — split-brain: daemon serves
-				// stale page-cache rows, fresh readers see the clobbered file).
+				// sqlite connection (split-brain: the daemon serves stale
+				// page-cache rows while fresh readers see the clobbered file).
 				// Control-plane restore happens ONLY at startup, before the
 				// store is opened (see the standby block above).
 				if err := kit.Snapshot(ctx); err != nil {
@@ -401,7 +401,7 @@ func reconcileIntervalSeconds(ctx context.Context, st *store.Store) int {
 	if st == nil {
 		return def
 	}
-	raw := st.GetSettingDefault(ctx, cluster.SettingReconcileInterval(), "")
+	raw := st.SettingDefault(ctx, cluster.SettingReconcileInterval(), "")
 	if raw == "" {
 		return def
 	}
@@ -416,8 +416,8 @@ func reconcileIntervalSeconds(ctx context.Context, st *store.Store) int {
 // configured volume root and the backup directory. A stateful stack scheduled
 // onto this node binds <volume_root>/<app>/<name>, and the Swarm cannot start a
 // task whose bind source is missing, so each node's daemon prepares its own
-// filesystem (BUG-026). The path is the volume_root setting — the directory the
-// operator selected — falling back to manifest.DefaultVolumeRoot when unset.
+// filesystem. The path is the volume_root setting — the directory the operator
+// selected — falling back to manifest.DefaultVolumeRoot when unset.
 func ensureLocalStorageRoots(ctx context.Context, cfg *config.Config, log zerolog.Logger) error {
 	root := manifest.DefaultVolumeRoot
 	// Read the setting only when the store already exists — opening it would

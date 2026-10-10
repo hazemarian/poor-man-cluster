@@ -18,6 +18,7 @@ type HTTP struct {
 	VolumeRoot func(ctx context.Context) string
 }
 
+// Mount registers the cluster-scope backup routes on the API router.
 func (h *HTTP) Mount(r chi.Router) {
 	r.Get("/backups", h.list)
 	r.Post("/backups", h.create)

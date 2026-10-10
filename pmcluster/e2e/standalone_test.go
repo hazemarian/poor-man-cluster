@@ -71,6 +71,15 @@ func TestSetupWizardNoSSO(t *testing.T) {
 	// setup/cluster up assertions below.
 	setReconcileInterval(t, homeDir, "0")
 
+	// Hermetic storage root (see TestControlPlaneSnapshotE2E): the setup
+	// wizard hands off to `cluster up`, which otherwise hardcodes the
+	// root-owned /var/stack/{data,backup} — un-creatable on a non-root host.
+	// The volume root is passed as a --volume-root FLAG (not a stored setting):
+	// non-interactive `setup` overwrites the volume_root setting from its
+	// (empty) wizard answers, clobbering anything set via `settings set`.
+	storageRoot := homeDir + "/stack"
+	t.Setenv("PMCLUSTER_BACKUP_DIR", storageRoot+"/backup")
+
 	// Best-effort cluster teardown on ANY failure path so a mid-test abort can
 	// never leak platform stacks/networks into the next swarm test.
 	t.Cleanup(func() {
@@ -91,6 +100,7 @@ func TestSetupWizardNoSSO(t *testing.T) {
 		"--key", keyPath,
 		"--openobserve-email", "admin@example.test",
 		"--traefik-admin-user", "admin",
+		"--volume-root", storageRoot,
 	}
 
 	t.Log("Running `pmcluster setup` WITHOUT --sso-enabled (expects handoff to cluster up)")
@@ -117,9 +127,9 @@ func TestSetupWizardNoSSO(t *testing.T) {
 
 	// Rendered Traefik dynamic config must keep admin-auth (basicAuth).
 	t.Log("Verifying rendered Traefik dynamic config uses admin-auth")
-	traefikCfg := dockerConfigIDByPrefix(t, ctx, "pmcluster_traefik_dynamic_v")
+	traefikCfg := dockerConfigIDByPrefix(t, ctx, "pmcluster_traefik_dynamic_")
 	if traefikCfg == "" {
-		t.Fatal("pmcluster_traefik_dynamic_v* docker config not found")
+		t.Fatal("pmcluster_traefik_dynamic_* docker config not found")
 	}
 	dynOut := dockerConfigData(t, ctx, traefikCfg)
 	if !strings.Contains(dynOut, "admin-auth") {

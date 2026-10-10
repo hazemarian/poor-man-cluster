@@ -20,7 +20,7 @@ type WebhookSource struct {
 	LastUsedAt       sql.NullInt64
 }
 
-// ErrWebhookSourceNotFound is returned by GetWebhookSource when no row matches.
+// ErrWebhookSourceNotFound is returned by WebhookSource when no row matches.
 var ErrWebhookSourceNotFound = errors.New("webhook source not found")
 
 // CreateWebhookSource inserts a new source with its encrypted shared secret.
@@ -43,9 +43,9 @@ func (s *Store) CreateWebhookSource(ctx context.Context, source, description str
 // ErrWebhookSourceExists is returned by CreateWebhookSource on UNIQUE collision.
 var ErrWebhookSourceExists = errors.New("webhook source already exists")
 
-// GetWebhookSource fetches a source by name. Used by the webhook handler to
+// WebhookSource fetches a source by name. Used by the webhook handler to
 // look up the secret for HMAC verification.
-func (s *Store) GetWebhookSource(ctx context.Context, source string) (*WebhookSource, error) {
+func (s *Store) WebhookSource(ctx context.Context, source string) (*WebhookSource, error) {
 	var w WebhookSource
 	err := s.db.QueryRowContext(ctx,
 		`SELECT source, secret_ciphertext, description, created_at, last_used_at

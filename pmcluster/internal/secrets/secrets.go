@@ -4,7 +4,17 @@
 // once at creation.
 package secrets
 
-import "context"
+import (
+	"context"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
+)
+
+// ErrSecretNotFound is returned by Get/Retag/Update/Delete/Reveal when no
+// secret row matches. It aliases errs.ErrSecretNotFound (also aliased by
+// internal/store), so consumers can errors.Is against either name without
+// importing the store.
+var ErrSecretNotFound = errs.ErrSecretNotFound
 
 // Secret is the metadata view of a stored secret. The ciphertext payload is
 // never exposed through this model — the plaintext only ever appears via
@@ -18,7 +28,7 @@ type Secret struct {
 	CreatedAt int64
 	// SwarmRev is the rotation count (1 = first value). The CLI mirrors the
 	// value into the swarm secret named store.SwarmSecretName(name, rev),
-	// keeping rotations out of the immutable in-use swarm secret (BUG-007).
+	// keeping rotations out of the immutable in-use swarm secret.
 	SwarmRev int64
 }
 
@@ -34,7 +44,8 @@ type Service interface {
 	// Update replaces a stored value in place.
 	Update(ctx context.Context, name, value string) error
 	// Retag reassigns a secret's scope and stack (e.g. bind an accidentally
-	// unattached row to a stack). Returns ErrSecretNotFound when missing.
+	// unattached row to a stack). Returns ErrSecretNotFound when
+	// missing.
 	Retag(ctx context.Context, name, scope, stack string) error
 	Delete(ctx context.Context, name string) error
 }

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
 )
 
 // SecretRow is a DB-backed secret. Payload holds the AES-GCM ciphertext
@@ -45,7 +47,9 @@ func SwarmSecretName(name, hash string) string {
 }
 
 // ErrSecretNotFound is returned by secret getters/deleters when no row matches.
-var ErrSecretNotFound = errors.New("secret not found")
+// It aliases the canonical sentinel in internal/errs (also aliased by the
+// secrets domain), so errors.Is works for either name.
+var ErrSecretNotFound = errs.ErrSecretNotFound
 
 // ErrSecretExists is returned by CreateSecret when the name is taken.
 var ErrSecretExists = errors.New("secret already exists")
@@ -73,9 +77,9 @@ func (s *Store) CreateSecret(ctx context.Context, scope, stack, name string, pay
 	return res.LastInsertId()
 }
 
-// GetSecret fetches a secret by name (including ciphertext payload).
+// Secret fetches a secret by name (including ciphertext payload).
 // Returns ErrSecretNotFound when missing.
-func (s *Store) GetSecret(ctx context.Context, name string) (*SecretRow, error) {
+func (s *Store) Secret(ctx context.Context, name string) (*SecretRow, error) {
 	var r SecretRow
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, scope, stack, name, payload, hash, created_at, swarm_rev FROM secrets WHERE name = ?`, name,
@@ -91,7 +95,7 @@ func (s *Store) GetSecret(ctx context.Context, name string) (*SecretRow, error) 
 
 // ListSecrets returns secrets filtered by scope and stack (empty values are
 // wildcards) ordered by scope then stack then name. The ciphertext payload is
-// deliberately excluded — callers wanting a value use GetSecret.
+// deliberately excluded — callers wanting a value use Secret.
 //
 // A stack filter also matches unattached service-scope rows (stack = ”):
 // the DSL resolves secrets(name) by name only, so an unattached service
@@ -119,7 +123,7 @@ func (s *Store) ListSecrets(ctx context.Context, scope, stack string) ([]*Secret
 // UpdateSecret replaces the ciphertext payload and hash of an existing secret
 // and bumps its swarm rotation counter (SwarmRev +1) so the CLI can mirror
 // the new value into a fresh versioned swarm secret without touching the
-// immutable in-use one (BUG-007). Keeps scope, stack, name and created_at.
+// immutable in-use one. Keeps scope, stack, name and created_at.
 // Returns ErrSecretNotFound when no row matched.
 func (s *Store) UpdateSecret(ctx context.Context, name string, payload []byte, hash string) error {
 	res, err := s.db.ExecContext(ctx,

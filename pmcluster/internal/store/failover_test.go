@@ -31,9 +31,9 @@ func TestStackFailover_SetGetRoundTrip(t *testing.T) {
 	if err := s.SetStackFailover(ctx, first); err != nil {
 		t.Fatalf("SetStackFailover: %v", err)
 	}
-	got, err := s.GetStackFailover(ctx, "demo")
+	got, err := s.StackFailover(ctx, "demo")
 	if err != nil {
-		t.Fatalf("GetStackFailover: %v", err)
+		t.Fatalf("StackFailover: %v", err)
 	}
 	if got.StackName != "demo" || got.FromNode != "node-a" || got.ToNode != "node-b" || got.At != 1700000001 {
 		t.Errorf("marker = %+v, want demo node-a→node-b at 1700000001", got)
@@ -48,9 +48,9 @@ func TestStackFailover_SetGetRoundTrip(t *testing.T) {
 	if err := s.SetStackFailover(ctx, second); err != nil {
 		t.Fatalf("SetStackFailover (update): %v", err)
 	}
-	got, err = s.GetStackFailover(ctx, "demo")
+	got, err = s.StackFailover(ctx, "demo")
 	if err != nil {
-		t.Fatalf("GetStackFailover (after update): %v", err)
+		t.Fatalf("StackFailover (after update): %v", err)
 	}
 	if got.FromNode != "node-b" || got.ToNode != "node-c" || got.At != 1700000099 || !got.Acked {
 		t.Errorf("marker after upsert = %+v, want node-b→node-c at 1700000099 acked", got)
@@ -76,9 +76,9 @@ func TestStackFailover_Ack(t *testing.T) {
 	if err := s.AckStackFailover(ctx, "demo"); err != nil {
 		t.Fatalf("AckStackFailover: %v", err)
 	}
-	got, err := s.GetStackFailover(ctx, "demo")
+	got, err := s.StackFailover(ctx, "demo")
 	if err != nil {
-		t.Fatalf("GetStackFailover: %v", err)
+		t.Fatalf("StackFailover: %v", err)
 	}
 	if !got.Acked {
 		t.Error("marker not acknowledged after AckStackFailover")
@@ -88,9 +88,9 @@ func TestStackFailover_Ack(t *testing.T) {
 	if err := s.SetStackFailover(ctx, StackFailover{StackName: "demo", FromNode: "node-c", ToNode: "node-a", At: 2}); err != nil {
 		t.Fatalf("SetStackFailover (re-failover): %v", err)
 	}
-	got, err = s.GetStackFailover(ctx, "demo")
+	got, err = s.StackFailover(ctx, "demo")
 	if err != nil {
-		t.Fatalf("GetStackFailover (re-failover): %v", err)
+		t.Fatalf("StackFailover (re-failover): %v", err)
 	}
 	if got.Acked {
 		t.Error("a fresh failover marker must start unacknowledged")
@@ -109,8 +109,8 @@ func TestStackFailover_Clear(t *testing.T) {
 	if err := s.ClearStackFailover(ctx, "demo"); err != nil {
 		t.Fatalf("ClearStackFailover: %v", err)
 	}
-	if _, err := s.GetStackFailover(ctx, "demo"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("GetStackFailover after clear = %v, want ErrNotFound", err)
+	if _, err := s.StackFailover(ctx, "demo"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("StackFailover after clear = %v, want ErrNotFound", err)
 	}
 	if err := s.ClearStackFailover(ctx, "demo"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second ClearStackFailover = %v, want ErrNotFound", err)
@@ -124,8 +124,8 @@ func TestStackFailover_NotFoundSentinels(t *testing.T) {
 	ctx := context.Background()
 	s := openFailoverStore(t)
 
-	if _, err := s.GetStackFailover(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("GetStackFailover(ghost) = %v, want ErrNotFound", err)
+	if _, err := s.StackFailover(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("StackFailover(ghost) = %v, want ErrNotFound", err)
 	}
 	if err := s.AckStackFailover(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("AckStackFailover(ghost) = %v, want ErrNotFound", err)

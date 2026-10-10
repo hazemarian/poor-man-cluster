@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// --- Tailscale helpers (M3) ---------------------------------------------------
+// --- Tailscale helpers --------------------------------------------------------
 //
 // pmcluster never requires a tailnet. These helpers are opt-in: when the
 // operator passes --tailscale on `join` or `cluster up`/`setup`, the node is
@@ -67,7 +67,7 @@ func tailscaleIP4(ctx context.Context) (string, error) {
 		line = strings.TrimSpace(line[:i])
 	}
 	if line == "" {
-		return "", errors.New("tailscale ip -4 returned no address — is this node on a tailnet?")
+		return "", errors.New("tailscale ip -4 returned no address — this node may not be on a tailnet")
 	}
 	return line, nil
 }

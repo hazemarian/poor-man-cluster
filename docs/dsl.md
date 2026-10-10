@@ -3,8 +3,10 @@
 `pmcluster` deploys applications from a small, strict YAML manifest. The manifest describes *what* you want (app, domain, services, images); pmcluster translates it into the verbose Docker Swarm Compose YAML — injecting Traefik labels, overlay network membership, secret declarations, and restart/update policies.
 
 ```
-Parse (strict YAML) → Interpolate (${…}) → Validate (semantics) → Translate (Compose v3.9)
+Parse (strict YAML) → Interpolate (${…}) → Validate (semantics) → BuildIR (neutral IR) → ComposeWriter (Compose v3.9)
 ```
+
+This is the **single render pipeline** — pmcluster's own platform stacks (`infra` / `edge` / `observability` / `backup` / `sso`) are DSL manifests with `platform: true` that flow through exactly these stages (after a Go-template pre-pass); user manifests share the same translator, writer and deploy path.
 
 Deploy with `pmcluster deploy <file>` (local) or push it through a webhook (CI/CD). To inspect the generated Compose, deploy once and open the revision's Rendered manifest in the console or `pmcluster stack show`.
 
@@ -40,9 +42,9 @@ services:                     # required — one or more service definitions
 | `version` | no | defaults to `latest` |
 | `repo_url` | no | metadata only — pmcluster never reads from git |
 | `strict_backup` | no | only meaningful with `backup_before_deploy: true` |
-| `platform` | no | **reserved for pmcluster's own platform stacks** (`infra`/`edge`/`observability`/`backup`/`sso`) — stamps `io.pmcluster.platform=true` on every service. User deploys are refused this flag. |
+| `platform` | no | **reserved for pmcluster's own platform stacks** (`infra`/`edge`/`observability`/`backup`/`sso`) — stamps `io.pmcluster.platform=true` on every service, excludes the stack from the app drift loop, makes it non-deletable via the API, and is only removed by `cluster down --purge`. User deploys (`pmcluster deploy`, `POST /api/stacks`, webhooks) are **refused** this flag: `platform: true is reserved for pmcluster-managed platform stacks`. |
 | `networks` | no | additional **external** Swarm networks every service joins (alongside the auto-injected per-stack overlay). When set, the private overlay net is skipped entirely — services reach each other by fully-qualified DNS on the named networks. |
-| `volumes` | no | map of top-level named volumes declared verbatim (`name: ""` for a plain volume, or `name: /host/path` for a bind) — **never** relocated under the volume root. Used by platform stacks whose volumes already exist on hosts (`openobserve_data`, `traefik_acme`, `pmui-data`). |
+| `volumes` | no | map of top-level named volumes declared verbatim (`name: ""` for a plain local volume, or `name: /host/path` to bind that host path) — **never** relocated under the volume root. Used by platform stacks whose volumes already exist on hosts (`seaweeddata`, `traefik_acme`, `openobserve_data`). |
 
 ---
 
@@ -84,10 +86,10 @@ services:
 | Field | Default | Notes |
 |-------|---------|-------|
 | `image` | — | required; supports `${…}` substitution |
-| `replicas` | `1` | must be ≥ 0; ignored when `run_once` is true |
+| `replicas` | `1` | must be ≥ 0; mutually exclusive with `run_once` and `mode: global`. An explicit `replicas: 0` (scale to zero) is rendered verbatim, not collapsed to the default |
 | `run_once` | `false` | `true` → one-shot job (`restart_policy: none`, or `on-failure` max 3 when `depends_on` is set); for migrations/jobs |
 | `skip_filelog` | `false` | excludes the service from the OTel log-tailing receiver (set when the app ships logs via OTLP itself) |
-| `placement` | (any) | `manager` → `node.role == manager`; `worker` → `node.role == worker`; **any other value → `node.hostname == <value>`** (pin a stateful service to one specific node so its volume-backed data never has to migrate); empty + a volume mount → auto-pinned to a storage node (round-robin across `storage_nodes`, `platform_node` fallback) |
+| `placement` | (any) | `manager` → `node.role == manager`; `worker` → `node.role == worker`; **any other value → `node.hostname == <value>`** (pin a stateful service to one specific node so its volume-backed data never has to migrate); empty + a volume mount → auto-pinned to a storage node (per-stack `stack move` pin → `storage_nodes` round-robin → `platform_node` fallback) |
 | `command` | — | overrides the image's `CMD` |
 | `entrypoint` | — | overrides the image's `ENTRYPOINT` |
 | `env` | — | map of environment variables (values support substitution) |
@@ -99,12 +101,13 @@ services:
 | `restart_delay` | — | `restart_policy.delay` (e.g. `5s`) |
 | `constraints` | — | raw Swarm placement constraints appended after the `placement`/auto-pin rule (e.g. `- node.labels.pmcluster.storage == true`) |
 | `ports` | — | published ports: `target` (container, required), `published`, `mode` (`ingress`/`host`). All publishing is TCP (`protocol` was removed — no service needs UDP). For single-port services prefer `expose.external` |
-| `configs` | — | Swarm config file mounts: each entry is a `config_path(<name>)` expression — the config's content is mounted at the resolved path (default `/etc/<name>`) and the rendered compose references the versioned Docker config automatically. Same syntax in app and platform DSL |
+| `configs` | — | Swarm config file mounts: each entry is a `config_path(<name>)` expression — the config's content is mounted at the resolved path (default `/etc/<name>`) and the rendered compose references the **content-addressed** Docker config (`<name>_<sha256-first-8>`) automatically. Same syntax in app and platform DSL |
 | `extra_hosts` | — | `host:ip` entries added to `/etc/hosts` (e.g. `host.docker.internal:host-gateway`) |
 | `resources` | — | `reservations`/`limits` with `cpus` + `memory` (e.g. `128M`, `1G`) |
 | `user` | — | container user (`0:0`) |
 | `labels` | — | raw Swarm service labels (standard auto-injected labels always win on collision) |
 | `logging` | — | `driver` + `options` map (e.g. `json-file` with `max-size`/`max-file`) |
+| `networks` | — | per-service **external** Swarm networks joined in addition to the app-level `networks` (merged) — used when one stack splits membership (e.g. OpenObserve joins `traefik-net` + `monitoring-net` while the OTel collector joins only `monitoring-net`) |
 | `expose` | — | Traefik routing (see below). Add `external: <port>` to also publish the port to the swarm ingress as a real host port (TCP) — reachable directly, not only through Traefik |
 | `healthcheck` | — | shorthand or full form (see below) |
 | `update` | `1` / `10s` / `start-first` | Swarm rolling-update policy (skipped for `run_once`); volume-holding services automatically use `stop-first` |
@@ -139,15 +142,16 @@ Behavior:
   consumer only accepts the value via env and cannot read a mounted secret file
   (e.g. OpenObserve's `ZO_ROOT_USER_PASSWORD`, which OpenObserve only reads from
   env, never from a file). Resolved at render time via the resolver's
-  `SecretValueResolver` implementation — app stacks get this through the
-  platform resolver's well-known names; a resolver that doesn't implement
+  `SecretValueResolver` implementation; a service-scope secret belonging to a
+  different stack is refused, and a resolver that doesn't implement
   `SecretValueResolver` rejects `secret(...)` at translate time.
 - The reference is resolved at deploy time against the DB — rotating the
   secret/config and re-deploying picks up the new value.
 - Validation fails at parse time if the pattern is malformed
   (`config(name` / `secrets()`), if a `secrets(name)` env ref is not mounted
   in the service's `secrets:` array, and at deploy time if the named
-  secret/config doesn't exist.
+  secret/config doesn't exist (a `secret(name)`/`secrets(name)` ref to a
+  secret belonging to a *different* stack is refused too).
 - Multi-line content cannot be injected as an env value (it would break the
   compose `environment` block) — use the `secrets:` array to file-mount such
   values instead.
@@ -170,10 +174,10 @@ configs:
 
 - Each entry is a `config_path(<name>)` expression — the resolved config's
   content is mounted at `<resolved path>`, default `/etc/<name>`.
-- The rendered compose references the **versioned** Docker config
-  (`<name>_v<N>`) automatically, so rotating the config and re-deploying picks
-  up the new content (same hash-triggered redeploy semantics as `env:
-  config(...)`).
+- The rendered compose references the **content-addressed** Docker config
+  (`<name>_<sha256-first-8>`) automatically, so rotating the config and
+  re-deploying picks up the new content (same hash-triggered redeploy
+  semantics as `env: config(...)`).
 - The same syntax is available in app manifests and in pmcluster's own platform
   manifests — there is exactly one way to mount a config.
 
@@ -218,7 +222,7 @@ healthcheck:
   path: /health       # default "/"
 ```
 
-> The HTTP shorthand probes `127.0.0.1` (not `localhost`) to avoid IPv6/IPv4 mismatches inside containers. It uses the service's `expose.port`.
+> The HTTP shorthand probes `127.0.0.1` (not `localhost`) to avoid IPv6/IPv4 mismatches inside containers. It uses the service's `expose.port`, falling back to the first published `ports` target.
 
 **Full form** (Compose passthrough):
 
@@ -228,12 +232,15 @@ healthcheck:
   interval: 30s
   timeout: 5s
   retries: 3
+  start_period: 20s    # optional grace period before failures count
 ```
 
 Rules:
 - Shorthand `type` and explicit `test` are mutually exclusive.
 - Full form requires `test` if `interval`/`timeout`/`retries` are set.
 - `type` must be `pg_isready`, `http`, or empty.
+- `start_period` (optional, both forms) is a Docker duration string (e.g. `20s`).
+- An `http` shorthand with no derivable port (no `expose.port`, no published `ports`) is **omitted with a warning** rather than shipping a port-0 probe.
 
 ### `update`
 
@@ -246,7 +253,7 @@ update:
   order: start-first   # default; or stop-first
 ```
 
-Services that mount **volumes** are treated as stateful: pmcluster automatically uses `order: stop-first` (a start-first rollout races the old container's shutdown against the new start — e.g. old Postgres deletes the freshly written `postmaster.pid` and the replacement immediately shuts down) and, when `placement` is empty, pins them to a **storage node**: a round-robin pick across the `storage_nodes` cluster setting (main node by default — see [storage-and-databases.md](storage-and-databases.md)), with `platform_node` as the single-node fallback. Each deployed service carries an `io.pmcluster.node` label naming its pinned node (visible in the console Services table and `pmcluster service ps`). No manifest change needed.
+Services that mount **volumes** are treated as stateful: pmcluster automatically uses `order: stop-first` (a start-first rollout races the old container's shutdown against the new start — e.g. old Postgres deletes the freshly written `postmaster.pid` and the replacement immediately shuts down) and, when `placement` is empty, pins them to a **storage node**. The pin resolution order is: the per-stack pin written by `pmcluster stack move <stack> --to <node>` (the `stack_pin_<stack>` setting — outranks everything) → a deterministic round-robin across the `storage_nodes` cluster setting (FNV-1a of the stack name; the leader is auto-added and workers qualify) → `platform_node` (which defaults to the leader) as the single-node fallback. Each deployed service carries an `io.pmcluster.node` label naming its pinned node (visible in the console Services table and `pmcluster service ps`). No manifest change needed.
 
 ---
 
@@ -287,7 +294,7 @@ Built-in placeholders, resolved anywhere a value is a string:
 | `${domain}` | `domain` |
 | `${env:VAR}` | OS environment variable `VAR` — **error if unset** |
 
-Substitution is applied to: `domain`, `registry`, `version`, `repo_url`, `env_file`, top-level `secrets`/`volumes`, and each service's `image`, `command`, `entrypoint`, `env` values, `volumes`, `expose.host`, and `expose.aliases`.
+Substitution is applied to: `domain`, `registry`, `version`, `repo_url`, `env_file`, the top-level `secrets` list, and each service's `image`, `command`, `entrypoint`, `env` values, `volumes`, `binds`, `extra_hosts`, `configs`, `labels` values, `logging.driver`/`logging.options`, `user`, `restart_delay`, `healthcheck.start_period`, `expose.host`, and `expose.aliases`. (The top-level `volumes:` map is declared verbatim and is **not** interpolated.)
 
 Example: `image: ${registry}/${app}:${version}` → `ghcr.io/acme/donation-campaign:latest`.
 
@@ -303,17 +310,19 @@ Unknown keys are rejected at every level — both top-level and inside a service
 
 You never write these by hand; pmcluster adds them:
 
-- **Networks** — a private per-app overlay declared as `net` (Docker Swarm prefixes it with the stack name, so the deployed network is `<app>_net` — never `<app>_<app>-net`, which would repeat the app name and push long names over Docker's 63-char limit), plus `traefik-net` and `monitoring-net` for exposed services.
-- **Secrets** — every referenced secret is declared `external: true` at the top level (they must exist in Swarm first).
-- **Volumes** — named volumes are auto-collected from service mounts (no top-level declaration) and declared with `driver: local` plus `driver_opts {type: none, o: bind, device: /var/stack/data/<app>/<name>}` so every volume — named or host bind — is forced under the volume root (default `/var/stack/data`, configurable via `volume_root` / `setup --volume-root`). Host binds are relocated to `<root>/<app>/<basename>`. See [`docs/storage-and-databases.md`](storage-and-databases.md).
-- **Labels** — `service`, `application`, `environment`, and `version` on every service.
-- **Traefik** (exposed services) — router/service names scoped `<app>-<service>`; `entrypoints=websecure`, `tls=true`, load-balancer port, `traefik.docker.network=traefik-net`, and the CORS middleware.
-- **Restart policy** — `on-failure` by default; `none` for `run_once` (a `run_once` service with `depends_on` gets `on-failure` with `max_attempts: 3`).
-- **Deploy** — `replicas`, `placement` constraints (stateful services auto-pin to the platform node when `placement` is empty), and `update_config` defaults (`stop-first` for volume-holding services).
+- **Networks** — a private per-app overlay declared as `net` (Docker Swarm prefixes it with the stack name, so the deployed network is `<app>_net` — never `<app>_<app>-net`, which would repeat the app name and push long names over Docker's 63-char limit), plus `traefik-net` and `monitoring-net` for exposed services. Setting the app-level `networks` **replaces** the private overlay — the services join the named external networks and reach each other by fully-qualified DNS instead.
+- **Secrets** — every referenced secret is declared `external: true` at the top level (they must exist in Swarm first). Secrets that live in pmcluster's DB store are referenced by their **content-addressed** Swarm name `<name>_<sha256-first-8-hex>` — the container mount path stays `/run/secrets/<name>`, but a rotation mints a new Swarm object instead of touching the immutable in-use one (see [storage-and-databases.md](storage-and-databases.md)).
+- **Volumes** — named volumes are auto-collected from service mounts (no top-level declaration) and declared with `driver: local` plus `driver_opts {type: none, o: bind, device: /var/stack/data/<app>/<name>}` so every volume — named or host bind — is forced under the volume root (default `/var/stack/data`, configurable via `volume_root` / `setup --volume-root`). Host binds are relocated to `<root>/<app>/<basename>`. See [`docs/storage-and-databases.md`](storage-and-databases.md). Volumes declared in the top-level `volumes:` map are the exception — they pass through verbatim and are never relocated.
+- **Labels** — `service`, `application`, `environment`, and `version` on every service; `io.pmcluster.platform=true` on every service of a `platform: true` stack; `io.pmcluster.node=<hostname>` on services with a resolved node pin; `io.pmcluster.skip_filelog=true` when `skip_filelog: true`; and `io.pmcluster.rendered_hash=<sha256>` — the content hash of the whole-stack label-free render, stamped on every service **after a successful apply** so drift detection can compare the live Swarm against a fresh render (a failed deploy leaves the hash unstamped, forcing the next sync to retry).
+- **Traefik** (exposed services) — router/service names scoped `<app>-<service>`; `entrypoints=websecure`, `tls=true`, load-balancer port, `traefik.docker.network=traefik-net`, the `tls.certresolver=letsencrypt` label on ACME clusters (never on BYO-cert clusters), and the CORS middleware.
+- **Restart policy** — `any` by default (a long-running service whose container exits cleanly — e.g. a SIGTERM during a Docker upgrade or a graceful shutdown — is marked *Complete* by Swarm and, under `on-failure`, is **never** replaced, leaving it at 0/1 until an operator force-updates it; `any` restarts it instead); `none` for `run_once` (a `run_once` service with `depends_on` gets `on-failure` with `max_attempts: 3`).
+- **Deploy** — `replicas` (an explicit `replicas: 0` — scale to zero — is rendered verbatim, not collapsed to the default of 1), `mode: global`, `placement` constraints (the storage-pin order above), and `update_config` defaults (`stop-first` for volume-holding services).
 - **`depends_on` list** — emitted for compose parity; startup ordering is enforced by the control plane (see [`depends_on`](#depends_on)) — no wrapper is injected.
-- **`io.pmcluster.skip_filelog=true`** — when `skip_filelog: true`.
+- **`$`-escaping** — every user-derived string value (env, command, entrypoint, labels, volumes, healthcheck paths, CORS regexes) is written with literal `$` doubled to `$$`, so `docker stack deploy`'s compose interpolation cannot corrupt a literal `$` (a secret value `p@ss$word` reaches the container intact).
 
 The output is a `version: "3.9"` Compose file applied with `docker stack deploy`.
+
+> **Async applies.** Deploys through the HTTP API and webhooks validate, record the revision and return `202 Accepted` immediately; the swarm apply (with its per-level health waits) continues in the background — failures surface on the stack's `last_error`, the webhook delivery row and the deploy telemetry. The CLI `pmcluster deploy` waits synchronously.
 
 ---
 
@@ -358,7 +367,9 @@ services:
       aliases: [api.donations.example.org]
     env:
       PORT: "8080"
-      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      # the collector publishes node-local OTLP (host mode :4318) and serves
+      # gRPC :4317 / HTTP :4318 on monitoring-net as observability_otel-collector:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://observability_otel-collector:4318
       OTEL_SERVICE_NAME: donation-campaign-api
     healthcheck: { type: http, path: /health }
     update: { parallelism: 1, delay: 10s, order: start-first }

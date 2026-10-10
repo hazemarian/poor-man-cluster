@@ -74,4 +74,8 @@ jobs:
         env:
           PMCLUSTER_E2E_SWARM: "1"
           PMCLUSTER_OO_INSECURE: "1"
-        run: make e2e
+        # Run `go test` directly rather than `make e2e`: the Makefile target
+        # hardcodes `-timeout 10m`, which is too tight for the full swarm tier
+        # (several cluster up/down cycles + image pulls on a fresh runner). The
+        # swarm tier needs the 20m budget the docs already specify.
+        run: go test -timeout 20m -tags=e2e ./e2e/...

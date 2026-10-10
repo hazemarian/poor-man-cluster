@@ -74,7 +74,7 @@ func TestSessionSecretFor_GeneratesStableNonDefault(t *testing.T) {
 	}
 
 	// Persisted in the store.
-	persisted, err := st.GetSetting(ctx, store.KeySessionSecret)
+	persisted, err := st.Setting(ctx, store.KeySessionSecret)
 	if err != nil {
 		t.Fatalf("secret not persisted: %v", err)
 	}

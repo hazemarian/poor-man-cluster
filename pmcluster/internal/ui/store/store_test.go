@@ -33,14 +33,14 @@ func TestOpenInMemory(t *testing.T) {
 	if err := s.SeedSettingOnce(ctx, KeyToken, "pmc_x"); err != nil {
 		t.Fatalf("seed setting: %v", err)
 	}
-	u, err := s.GetByUsername(ctx, "edge")
+	u, err := s.ByUsername(ctx, "edge")
 	if err != nil {
 		t.Fatalf("get user: %v", err)
 	}
 	if u.Role != RoleAdmin {
 		t.Errorf("role = %q, want %q", u.Role, RoleAdmin)
 	}
-	if v, err := s.GetSetting(ctx, KeyToken); err != nil || v != "pmc_x" {
+	if v, err := s.Setting(ctx, KeyToken); err != nil || v != "pmc_x" {
 		t.Errorf("setting = %q, err = %v; want pmc_x", v, err)
 	}
 }
@@ -93,20 +93,20 @@ func TestUserRoleCRUD(t *testing.T) {
 		t.Errorf("ListUsers order = [%s %s %s], want [alice bob carol]", users[0].Username, users[1].Username, users[2].Username)
 	}
 
-	// GetByID.
-	got, err := s.GetByID(ctx, op.ID)
+	// ByID.
+	got, err := s.ByID(ctx, op.ID)
 	if err != nil {
-		t.Fatalf("GetByID: %v", err)
+		t.Fatalf("ByID: %v", err)
 	}
 	if got.Username != "bob" || got.Role != RoleOperator {
-		t.Errorf("GetByID = %+v, want bob/operator", got)
+		t.Errorf("ByID = %+v, want bob/operator", got)
 	}
 
 	// UpdateUser: role-only change leaves password untouched.
 	if err := s.UpdateUser(ctx, op.ID, RoleViewer, ""); err != nil {
 		t.Fatalf("update role: %v", err)
 	}
-	got, _ = s.GetByID(ctx, op.ID)
+	got, _ = s.ByID(ctx, op.ID)
 	if got.Role != RoleViewer || got.PasswordHash != "hash-b" {
 		t.Errorf("after role-only update = %+v", got)
 	}
@@ -115,7 +115,7 @@ func TestUserRoleCRUD(t *testing.T) {
 	if err := s.UpdateUser(ctx, op.ID, RoleOperator, "hash-b2"); err != nil {
 		t.Fatalf("update password: %v", err)
 	}
-	got, _ = s.GetByID(ctx, op.ID)
+	got, _ = s.ByID(ctx, op.ID)
 	if got.Role != RoleOperator || got.PasswordHash != "hash-b2" || !got.PasswordSet {
 		t.Errorf("after password update = %+v", got)
 	}
@@ -127,8 +127,8 @@ func TestUserRoleCRUD(t *testing.T) {
 	if err := s.DeleteUser(ctx, viewer.ID); err != ErrNotFound {
 		t.Errorf("double delete err = %v, want ErrNotFound", err)
 	}
-	if _, err := s.GetByID(ctx, viewer.ID); err != ErrNotFound {
-		t.Errorf("GetByID after delete err = %v, want ErrNotFound", err)
+	if _, err := s.ByID(ctx, viewer.ID); err != ErrNotFound {
+		t.Errorf("ByID after delete err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -162,9 +162,9 @@ func TestUserRole_MigrationPromotesFirstUser(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db2.Close() })
 
-	u, err := db2.GetByUsername(ctx, "legacy")
+	u, err := db2.ByUsername(ctx, "legacy")
 	if err != nil {
-		t.Fatalf("GetByUsername: %v", err)
+		t.Fatalf("ByUsername: %v", err)
 	}
 	if u.Role != RoleAdmin {
 		t.Errorf("migrated role = %q, want %q", u.Role, RoleAdmin)
@@ -182,9 +182,9 @@ func TestCreateEnvUser_AdminRoleAndIdempotent(t *testing.T) {
 	if !created {
 		t.Errorf("first CreateEnvUser created = false, want true")
 	}
-	u, err := s.GetByUsername(ctx, "envuser")
+	u, err := s.ByUsername(ctx, "envuser")
 	if err != nil {
-		t.Fatalf("GetByUsername: %v", err)
+		t.Fatalf("ByUsername: %v", err)
 	}
 	if u.Role != RoleAdmin {
 		t.Errorf("env user role = %q, want admin", u.Role)
@@ -206,9 +206,9 @@ func TestSeedSettingOnce_SeedsWhenAbsent(t *testing.T) {
 	if err := s.SeedSettingOnce(ctx, KeyToken, "pmc_abc"); err != nil {
 		t.Fatalf("SeedSettingOnce: %v", err)
 	}
-	got, err := s.GetSetting(ctx, KeyToken)
+	got, err := s.Setting(ctx, KeyToken)
 	if err != nil {
-		t.Fatalf("GetSetting: %v", err)
+		t.Fatalf("Setting: %v", err)
 	}
 	if got != "pmc_abc" {
 		t.Errorf("value = %q, want %q", got, "pmc_abc")
@@ -229,9 +229,9 @@ func TestSeedSettingOnce_DoesNotOverwriteExisting(t *testing.T) {
 		t.Fatalf("seed second: %v", err)
 	}
 
-	got, err := s.GetSetting(ctx, KeyToken)
+	got, err := s.Setting(ctx, KeyToken)
 	if err != nil {
-		t.Fatalf("GetSetting: %v", err)
+		t.Fatalf("Setting: %v", err)
 	}
 	if got != "first" {
 		t.Errorf("value = %q, want %q (must be stored once, not reseeded)", got, "first")
@@ -243,9 +243,9 @@ func TestSeedSettingOnce_DoesNotOverwriteExisting(t *testing.T) {
 	if err := s.SeedSettingOnce(ctx, KeyToken, "third"); err != nil {
 		t.Fatalf("seed after clear: %v", err)
 	}
-	got, err = s.GetSetting(ctx, KeyToken)
+	got, err = s.Setting(ctx, KeyToken)
 	if err != nil {
-		t.Fatalf("GetSetting after clear: %v", err)
+		t.Fatalf("Setting after clear: %v", err)
 	}
 	if got != "" {
 		t.Errorf("value after clear = %q, want empty (explicit clear must be respected)", got)

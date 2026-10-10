@@ -31,6 +31,8 @@ type webhookCreatedDTO struct {
 	Secret string `json:"secret"`
 }
 
+// Create registers a webhook source via POST /webhooks and returns the
+// generated signing secret.
 func (a *Webhooks) Create(ctx context.Context, source, description string) (string, error) {
 	var out webhookCreatedDTO
 	err := a.c.do(ctx, http.MethodPost, "/webhooks", map[string]string{
@@ -40,6 +42,7 @@ func (a *Webhooks) Create(ctx context.Context, source, description string) (stri
 	return out.Secret, err
 }
 
+// List returns the registered webhook sources via GET /webhooks.
 func (a *Webhooks) List(ctx context.Context) ([]webhooks.Source, error) {
 	var out webhookListDTO
 	if err := a.c.do(ctx, http.MethodGet, "/webhooks", nil, &out); err != nil {
@@ -57,6 +60,7 @@ func (a *Webhooks) List(ctx context.Context) ([]webhooks.Source, error) {
 	return sources, nil
 }
 
+// Delete unregisters a webhook source via DELETE /webhooks/{source}.
 func (a *Webhooks) Delete(ctx context.Context, source string) error {
 	return a.c.do(ctx, http.MethodDelete, "/webhooks/"+url.PathEscape(source), nil, nil)
 }

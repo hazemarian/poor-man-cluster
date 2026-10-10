@@ -25,7 +25,7 @@ func makeRevision(stackName string, revision int64, source, rendered string) *St
 }
 
 // TestRecordDeploy_HappyPath inserts a brand-new stack with its first revision
-// and verifies GetStack + GetRevision return the expected rows.
+// and verifies Stack + Revision return the expected rows.
 func TestRecordDeploy_HappyPath(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -35,9 +35,9 @@ func TestRecordDeploy_HappyPath(t *testing.T) {
 		t.Fatalf("RecordDeploy: %v", err)
 	}
 
-	st, err := s.GetStack(ctx, "mystack")
+	st, err := s.Stack(ctx, "mystack")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	if st.Name != "mystack" {
 		t.Errorf("stack.Name = %q, want mystack", st.Name)
@@ -52,9 +52,9 @@ func TestRecordDeploy_HappyPath(t *testing.T) {
 		t.Errorf("stack.SourceFile = %q, want deploy/mystack.yaml", st.SourceFile)
 	}
 
-	r, err := s.GetRevision(ctx, "mystack", 1000)
+	r, err := s.Revision(ctx, "mystack", 1000)
 	if err != nil {
-		t.Fatalf("GetRevision: %v", err)
+		t.Fatalf("Revision: %v", err)
 	}
 	if r.StackName != "mystack" {
 		t.Errorf("revision.StackName = %q, want mystack", r.StackName)
@@ -84,9 +84,9 @@ func TestRecordDeploy_SecondRevision(t *testing.T) {
 	if err := s.RecordDeploy(ctx, rev1, "https://git/repo"); err != nil {
 		t.Fatalf("RecordDeploy v1: %v", err)
 	}
-	st1, err := s.GetStack(ctx, "mystack")
+	st1, err := s.Stack(ctx, "mystack")
 	if err != nil {
-		t.Fatalf("GetStack after v1: %v", err)
+		t.Fatalf("Stack after v1: %v", err)
 	}
 
 	time.Sleep(time.Second + 10*time.Millisecond)
@@ -95,9 +95,9 @@ func TestRecordDeploy_SecondRevision(t *testing.T) {
 	if err := s.RecordDeploy(ctx, rev2, "https://git/repo"); err != nil {
 		t.Fatalf("RecordDeploy v2: %v", err)
 	}
-	st2, err := s.GetStack(ctx, "mystack")
+	st2, err := s.Stack(ctx, "mystack")
 	if err != nil {
-		t.Fatalf("GetStack after v2: %v", err)
+		t.Fatalf("Stack after v2: %v", err)
 	}
 
 	if st2.CurrentRevision != 2000 {
@@ -112,16 +112,16 @@ func TestRecordDeploy_SecondRevision(t *testing.T) {
 		t.Errorf("updated_at did not advance: was %d, still %d", st1.UpdatedAt, st2.UpdatedAt)
 	}
 
-	if _, err := s.GetRevision(ctx, "mystack", 1000); err != nil {
-		t.Errorf("GetRevision(1000): %v", err)
+	if _, err := s.Revision(ctx, "mystack", 1000); err != nil {
+		t.Errorf("Revision(1000): %v", err)
 	}
-	if _, err := s.GetRevision(ctx, "mystack", 2000); err != nil {
-		t.Errorf("GetRevision(2000): %v", err)
+	if _, err := s.Revision(ctx, "mystack", 2000); err != nil {
+		t.Errorf("Revision(2000): %v", err)
 	}
 }
 
 // TestRecordDeploy_RenderedHashRoundTrip verifies the rendered_hash column is
-// persisted on RecordDeploy and read back by GetRevision and ListRevisions.
+// persisted on RecordDeploy and read back by Revision and ListRevisions.
 func TestRecordDeploy_RenderedHashRoundTrip(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -132,12 +132,12 @@ func TestRecordDeploy_RenderedHashRoundTrip(t *testing.T) {
 		t.Fatalf("RecordDeploy: %v", err)
 	}
 
-	r, err := s.GetRevision(ctx, "mystack", 1000)
+	r, err := s.Revision(ctx, "mystack", 1000)
 	if err != nil {
-		t.Fatalf("GetRevision: %v", err)
+		t.Fatalf("Revision: %v", err)
 	}
 	if r.RenderedHash != rev.RenderedHash {
-		t.Errorf("GetRevision.RenderedHash = %q, want %q", r.RenderedHash, rev.RenderedHash)
+		t.Errorf("Revision.RenderedHash = %q, want %q", r.RenderedHash, rev.RenderedHash)
 	}
 
 	rev2 := makeRevision("mystack", 1001, "source: yaml", "rendered: yaml v2")
@@ -171,7 +171,7 @@ func TestRecordDeploy_RenderedHashRoundTrip(t *testing.T) {
 
 // TestSetRevisionRenderedHash_StampsAndErrors verifies the deploy pipeline's
 // post-apply hash setter: it stamps the rendered_hash column of an existing
-// revision, is read back by GetRevision, and returns ErrRevisionNotFound for an
+// revision, is read back by Revision, and returns ErrRevisionNotFound for an
 // unknown (stack, revision) pair.
 func TestSetRevisionRenderedHash_StampsAndErrors(t *testing.T) {
 	s := openTestStore(t)
@@ -185,9 +185,9 @@ func TestSetRevisionRenderedHash_StampsAndErrors(t *testing.T) {
 	}
 
 	// Before the apply succeeds, the hash is empty.
-	got, err := s.GetRevision(ctx, "mystack", 1000)
+	got, err := s.Revision(ctx, "mystack", 1000)
 	if err != nil {
-		t.Fatalf("GetRevision: %v", err)
+		t.Fatalf("Revision: %v", err)
 	}
 	if got.RenderedHash != "" {
 		t.Fatalf("RenderedHash before stamp = %q, want empty", got.RenderedHash)
@@ -198,9 +198,9 @@ func TestSetRevisionRenderedHash_StampsAndErrors(t *testing.T) {
 		t.Fatalf("SetRevisionRenderedHash: %v", err)
 	}
 
-	got, err = s.GetRevision(ctx, "mystack", 1000)
+	got, err = s.Revision(ctx, "mystack", 1000)
 	if err != nil {
-		t.Fatalf("GetRevision (after stamp): %v", err)
+		t.Fatalf("Revision (after stamp): %v", err)
 	}
 	if got.RenderedHash != want {
 		t.Errorf("RenderedHash after stamp = %q, want %q", got.RenderedHash, want)
@@ -232,9 +232,9 @@ func TestRecordDeploy_RepoURLPreservedOnEmptyUpdate(t *testing.T) {
 		t.Fatalf("RecordDeploy v2: %v", err)
 	}
 
-	st, err := s.GetStack(ctx, "mystack")
+	st, err := s.Stack(ctx, "mystack")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	if !st.RepoURL.Valid || st.RepoURL.String != "https://git/original" {
 		t.Errorf("repo_url = %v, want https://git/original (preserved)", st.RepoURL)
@@ -246,9 +246,9 @@ func TestGetStack_NotFound(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.GetStack(ctx, "does-not-exist")
+	_, err := s.Stack(ctx, "does-not-exist")
 	if !errors.Is(err, ErrStackNotFound) {
-		t.Errorf("GetStack(unknown) err = %v, want ErrStackNotFound", err)
+		t.Errorf("Stack(unknown) err = %v, want ErrStackNotFound", err)
 	}
 }
 
@@ -257,18 +257,18 @@ func TestGetRevision_NotFound(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.GetRevision(ctx, "ghost", 9999)
+	_, err := s.Revision(ctx, "ghost", 9999)
 	if !errors.Is(err, ErrRevisionNotFound) {
-		t.Errorf("GetRevision(ghost, 9999) err = %v, want ErrRevisionNotFound", err)
+		t.Errorf("Revision(ghost, 9999) err = %v, want ErrRevisionNotFound", err)
 	}
 
 	rev := makeRevision("mystack", 1000, "src", "rendered")
 	if err := s.RecordDeploy(ctx, rev, ""); err != nil {
 		t.Fatalf("RecordDeploy: %v", err)
 	}
-	_, err = s.GetRevision(ctx, "mystack", 9999)
+	_, err = s.Revision(ctx, "mystack", 9999)
 	if !errors.Is(err, ErrRevisionNotFound) {
-		t.Errorf("GetRevision(mystack, 9999) err = %v, want ErrRevisionNotFound", err)
+		t.Errorf("Revision(mystack, 9999) err = %v, want ErrRevisionNotFound", err)
 	}
 }
 
@@ -364,22 +364,22 @@ func TestCascadeDelete_StackDeletesRevisions(t *testing.T) {
 		t.Fatalf("RecordDeploy: %v", err)
 	}
 
-	if _, err := s.GetRevision(ctx, "doomed", 5000); err != nil {
-		t.Fatalf("GetRevision before delete: %v", err)
+	if _, err := s.Revision(ctx, "doomed", 5000); err != nil {
+		t.Fatalf("Revision before delete: %v", err)
 	}
 
 	if _, err := s.DB().ExecContext(ctx, `DELETE FROM stacks WHERE name = 'doomed'`); err != nil {
 		t.Fatalf("DELETE FROM stacks: %v", err)
 	}
 
-	_, err := s.GetRevision(ctx, "doomed", 5000)
+	_, err := s.Revision(ctx, "doomed", 5000)
 	if !errors.Is(err, ErrRevisionNotFound) {
-		t.Errorf("GetRevision after cascade delete = %v, want ErrRevisionNotFound", err)
+		t.Errorf("Revision after cascade delete = %v, want ErrRevisionNotFound", err)
 	}
 
-	_, err = s.GetStack(ctx, "doomed")
+	_, err = s.Stack(ctx, "doomed")
 	if !errors.Is(err, ErrStackNotFound) {
-		t.Errorf("GetStack after delete = %v, want ErrStackNotFound", err)
+		t.Errorf("Stack after delete = %v, want ErrStackNotFound", err)
 	}
 }
 
@@ -414,24 +414,24 @@ func TestDeleteStack_RemovesStackAndRevisions(t *testing.T) {
 		t.Fatalf("DeleteStack: %v", err)
 	}
 
-	if _, err := s.GetStack(ctx, "mystack"); !errors.Is(err, ErrStackNotFound) {
-		t.Errorf("GetStack after delete = %v, want ErrStackNotFound", err)
+	if _, err := s.Stack(ctx, "mystack"); !errors.Is(err, ErrStackNotFound) {
+		t.Errorf("Stack after delete = %v, want ErrStackNotFound", err)
 	}
-	if _, err := s.GetRevision(ctx, "mystack", 1000); !errors.Is(err, ErrRevisionNotFound) {
-		t.Errorf("GetRevision(1000) after delete = %v, want ErrRevisionNotFound (cascade)", err)
+	if _, err := s.Revision(ctx, "mystack", 1000); !errors.Is(err, ErrRevisionNotFound) {
+		t.Errorf("Revision(1000) after delete = %v, want ErrRevisionNotFound (cascade)", err)
 	}
-	if _, err := s.GetRevision(ctx, "mystack", 1001); !errors.Is(err, ErrRevisionNotFound) {
-		t.Errorf("GetRevision(1001) after delete = %v, want ErrRevisionNotFound (cascade)", err)
+	if _, err := s.Revision(ctx, "mystack", 1001); !errors.Is(err, ErrRevisionNotFound) {
+		t.Errorf("Revision(1001) after delete = %v, want ErrRevisionNotFound (cascade)", err)
 	}
-	if _, err := s.GetConfig(ctx, "mystack_env"); !errors.Is(err, ErrConfigNotFound) {
-		t.Errorf("GetConfig after delete = %v, want ErrConfigNotFound", err)
+	if _, err := s.Config(ctx, "mystack_env"); !errors.Is(err, ErrConfigNotFound) {
+		t.Errorf("Config after delete = %v, want ErrConfigNotFound", err)
 	}
-	if _, err := s.GetSecret(ctx, "mystack_db_pass"); !errors.Is(err, ErrSecretNotFound) {
-		t.Errorf("GetSecret after delete = %v, want ErrSecretNotFound", err)
+	if _, err := s.Secret(ctx, "mystack_db_pass"); !errors.Is(err, ErrSecretNotFound) {
+		t.Errorf("Secret after delete = %v, want ErrSecretNotFound", err)
 	}
 	// Cluster-scope rows are untouched.
-	if _, err := s.GetConfig(ctx, "traefik-dynamic"); err != nil {
-		t.Errorf("GetConfig cluster row after delete: %v, want nil", err)
+	if _, err := s.Config(ctx, "traefik-dynamic"); err != nil {
+		t.Errorf("Config cluster row after delete: %v, want nil", err)
 	}
 }
 
@@ -457,9 +457,9 @@ func TestSetStackLastError_RoundTrip(t *testing.T) {
 	}
 
 	// Default is empty.
-	st, err := s.GetStack(ctx, "mystack")
+	st, err := s.Stack(ctx, "mystack")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	if st.LastError != "" {
 		t.Errorf("LastError initial = %q, want empty", st.LastError)
@@ -468,9 +468,9 @@ func TestSetStackLastError_RoundTrip(t *testing.T) {
 	if err := s.SetStackLastError(ctx, "mystack", "docker stack deploy (depends_on level 1): boom"); err != nil {
 		t.Fatalf("SetStackLastError: %v", err)
 	}
-	st, err = s.GetStack(ctx, "mystack")
+	st, err = s.Stack(ctx, "mystack")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	if st.LastError != "docker stack deploy (depends_on level 1): boom" {
 		t.Errorf("LastError = %q, want the recorded apply error", st.LastError)
@@ -489,7 +489,7 @@ func TestSetStackLastError_RoundTrip(t *testing.T) {
 	if err := s.SetStackLastError(ctx, "mystack", ""); err != nil {
 		t.Fatalf("SetStackLastError clear: %v", err)
 	}
-	st, _ = s.GetStack(ctx, "mystack")
+	st, _ = s.Stack(ctx, "mystack")
 	if st.LastError != "" {
 		t.Errorf("LastError after clear = %q, want empty", st.LastError)
 	}
@@ -534,9 +534,9 @@ func TestRecordStackError_JSONHistory(t *testing.T) {
 	if _, err := s.RecordStackError(ctx, "mystack", 1002, ""); err != nil {
 		t.Fatalf("RecordStackError success: %v", err)
 	}
-	st, err := s.GetStack(ctx, "mystack")
+	st, err := s.Stack(ctx, "mystack")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	all := ParseStackErrors(st.LastError)
 	if len(all) != 2 {

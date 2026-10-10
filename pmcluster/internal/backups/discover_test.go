@@ -84,9 +84,9 @@ func TestLocalTriggerFallsBackToDiskArchive(t *testing.T) {
 	if len(paths) != 1 || paths[0] != dir+"/backup-node1-2026-09-21T20-02-56.tar.gz" {
 		t.Fatalf("paths = %v, want the on-disk archive", paths)
 	}
-	row, err := st.GetBackup(ctx, id)
+	row, err := st.Backup(ctx, id)
 	if err != nil {
-		t.Fatalf("GetBackup: %v", err)
+		t.Fatalf("Backup: %v", err)
 	}
 	if row.ArchivePaths != paths[0] {
 		t.Errorf("row.ArchivePaths = %q, want %q", row.ArchivePaths, paths[0])

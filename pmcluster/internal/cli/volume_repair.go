@@ -22,7 +22,7 @@ import (
 // work below would be silently skipped.
 func localVolumeRoot(ctx context.Context, st *store.Store) string {
 	if st != nil {
-		if v := st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), ""); v != "" {
+		if v := st.SettingDefault(ctx, cluster.SettingVolumeRoot(), ""); v != "" {
 			return v
 		}
 	}
@@ -45,9 +45,9 @@ type serviceForcer interface {
 // necessarily the node a stack is pinned to (stateful placement round-robins
 // over the storage nodes), and the Swarm refuses to start a task whose bind
 // source does not exist — `failed to populate volume: mount
-// <volume_root>/<app>/<name>: no such file or directory` (BUG-026). Creating
-// the directories is inherently node-local, so every daemon does its own,
-// leader or not.
+// <volume_root>/<app>/<name>: no such file or directory`. Creating the
+// directories is inherently node-local, so every daemon does its own, leader
+// or not.
 func startVolumeRepairLoop(ctx context.Context, dc runtime.Client, forcer serviceForcer, volumeRoot func() string, log zerolog.Logger) {
 	go func() {
 		tick := time.NewTicker(volumeRepairInterval)

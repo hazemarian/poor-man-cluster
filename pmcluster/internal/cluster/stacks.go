@@ -10,32 +10,16 @@ import (
 	"time"
 
 	"sigs.k8s.io/yaml"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 // StackDeployer applies a compose file to the swarm under a given stack
 // name. Production impl shells out to the `docker` CLI because the SDK
-// has no high-level stack-deploy primitive.
-type StackDeployer interface {
-	// DeployStack applies the compose file and then reconciles the stack:
-	// drift-prune services dropped from the compose and force-update every
-	// remaining service. Used for full-stack deploys (cluster up/update and
-	// single-level app stacks).
-	DeployStack(ctx context.Context, name string, composeYAML []byte) error
-	// DeployStackNoPrune applies the compose file WITHOUT pruning or
-	// force-updating. Used by the ordered per-level app-stack deploy: each
-	// depends_on level is deployed separately, so pruning mid-way would
-	// remove not-yet-deployed sibling services.
-	DeployStackNoPrune(ctx context.Context, name string, composeYAML []byte) error
-	// PruneStack removes live stack services that are not declared in the
-	// compose file. Run once at the end of an ordered per-level deploy with
-	// the full stack compose.
-	PruneStack(ctx context.Context, name string, composeYAML []byte) error
-	RemoveStack(ctx context.Context, name string) error
-
-	ForceUpdateService(ctx context.Context, fullName string) error
-
-	PruneStaleContainers(ctx context.Context, stackName string, olderThan string) error
-}
+// has no high-level stack-deploy primitive. The interface is owned by the
+// runtime leaf package (runtime.StackDeployer); this alias keeps every
+// existing reference compiling unchanged.
+type StackDeployer = runtime.StackDeployer
 
 type dockerCLIDeployer struct {
 	envExtras []string

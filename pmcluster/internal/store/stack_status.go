@@ -40,9 +40,9 @@ func (s *Store) SetStackStatus(ctx context.Context, st StackStatus) error {
 	return nil
 }
 
-// GetStackStatus returns the loop's latest snapshot for one stack.
+// StackStatus returns the loop's latest snapshot for one stack.
 // Returns ErrNotFound when the loop has not recorded one yet.
-func (s *Store) GetStackStatus(ctx context.Context, stackName string) (*StackStatus, error) {
+func (s *Store) StackStatus(ctx context.Context, stackName string) (*StackStatus, error) {
 	var (
 		status string
 		svcs   string

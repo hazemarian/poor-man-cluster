@@ -154,8 +154,8 @@ func openDeploySvc(cmd *cobra.Command) (*stacks.Service, *store.Store, func(), e
 		_ = st.Close()
 		return nil, nil, nil, fmt.Errorf("open encryption key: %w", cipherErr)
 	}
-	svc := &stacks.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Cipher: cipher}, VolumeRoot: st.GetSettingDefault(context.Background(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.GetSettingDefault(context.Background(), cluster.SettingTLSMode(), "")), PinNode: st.GetSettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.GetSettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
-		return st.GetSettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
+	svc := &stacks.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Cipher: cipher}, VolumeRoot: st.SettingDefault(context.Background(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.SettingDefault(context.Background(), cluster.SettingTLSMode(), "")), PinNode: st.SettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.SettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.SettingDefault(context.Background(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
+		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}}, Stdout: cmd.OutOrStdout(), Log: log, BackupDir: cluster.BackupRootDir()}
 	return svc, st, func() { _ = st.Close() }, nil
 }
@@ -335,7 +335,7 @@ func badgeBaseURL(cmd *cobra.Command) string {
 		return ""
 	}
 	defer func() { _ = st.Close() }()
-	domain := st.GetSettingDefault(cmd.Context(), cluster.SettingDomain(), "")
+	domain := st.SettingDefault(cmd.Context(), cluster.SettingDomain(), "")
 	if domain == "" {
 		return ""
 	}

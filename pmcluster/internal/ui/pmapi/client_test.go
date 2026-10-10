@@ -375,20 +375,20 @@ func TestPmapi_StackOps(t *testing.T) {
 	c, _ := newFakeDaemon(t)
 	ctx := context.Background()
 
-	d, err := c.GetStack(ctx, "demo")
+	d, err := c.Stack(ctx, "demo")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	if d.Stack.Name != "demo" || len(d.Revisions) != 1 {
-		t.Fatalf("GetStack = %+v", d)
+		t.Fatalf("Stack = %+v", d)
 	}
 
-	rev, err := c.GetRevision(ctx, "demo", 3)
+	rev, err := c.Revision(ctx, "demo", 3)
 	if err != nil {
-		t.Fatalf("GetRevision: %v", err)
+		t.Fatalf("Revision: %v", err)
 	}
 	if rev.Revision != 3 || !strings.Contains(rev.RenderedYAML, "nginx") {
-		t.Fatalf("GetRevision = %+v", rev)
+		t.Fatalf("Revision = %+v", rev)
 	}
 
 	res, err := c.Deploy(ctx, DeployPayload{AppName: "demo", Manifest: "app: demo\n"})
@@ -456,12 +456,12 @@ func TestPmapi_BackupsAndTLS(t *testing.T) {
 		t.Fatalf("RestoreBackup restored = %d", n)
 	}
 
-	sc, err := c.GetSiteCert(ctx)
+	sc, err := c.SiteCert(ctx)
 	if err != nil {
-		t.Fatalf("GetSiteCert: %v", err)
+		t.Fatalf("SiteCert: %v", err)
 	}
 	if sc.Domain != "example.com" || sc.CertSecret != "cert_v001" {
-		t.Fatalf("GetSiteCert = %+v", sc)
+		t.Fatalf("SiteCert = %+v", sc)
 	}
 
 	hosts, err := c.ListHostCerts(ctx)
@@ -493,12 +493,12 @@ func TestPmapi_ConfigsAndSecrets(t *testing.T) {
 		t.Fatalf("CreateConfig = %+v", created)
 	}
 
-	got, err := c.GetConfig(ctx, "app_cfg")
+	got, err := c.Config(ctx, "app_cfg")
 	if err != nil {
-		t.Fatalf("GetConfig: %v", err)
+		t.Fatalf("Config: %v", err)
 	}
 	if got.Content != "mode=prod" {
-		t.Fatalf("GetConfig = %+v", got)
+		t.Fatalf("Config = %+v", got)
 	}
 
 	upd, err := c.UpdateConfig(ctx, "app_cfg", "mode=staging")
@@ -570,12 +570,12 @@ func TestPmapi_SettingsUsageServices(t *testing.T) {
 	c, _ := newFakeDaemon(t)
 	ctx := context.Background()
 
-	settings, err := c.GetClusterSettings(ctx)
+	settings, err := c.ClusterSettings(ctx)
 	if err != nil {
-		t.Fatalf("GetClusterSettings: %v", err)
+		t.Fatalf("ClusterSettings: %v", err)
 	}
 	if settings["domain"] != "example.com" {
-		t.Fatalf("GetClusterSettings = %+v", settings)
+		t.Fatalf("ClusterSettings = %+v", settings)
 	}
 
 	upd, err := c.UpdateClusterSettings(ctx, map[string]string{"domain": "other.com"})
@@ -586,12 +586,12 @@ func TestPmapi_SettingsUsageServices(t *testing.T) {
 		t.Fatalf("UpdateClusterSettings = %+v", upd)
 	}
 
-	usage, err := c.GetUsage(ctx)
+	usage, err := c.Usage(ctx)
 	if err != nil {
-		t.Fatalf("GetUsage: %v", err)
+		t.Fatalf("Usage: %v", err)
 	}
 	if usage.Secrets["db_pass"] == nil || usage.Secrets["db_pass"][0] != "demo" {
-		t.Fatalf("GetUsage = %+v", usage)
+		t.Fatalf("Usage = %+v", usage)
 	}
 
 	rendered, err := c.ListRenderedConfigs(ctx)

@@ -348,7 +348,7 @@ func (c Stacks) ShowRevision(g *gin.Context) {
 	}
 	d.Revision = rev
 
-	rv, err := c.API.GetRevision(ctx, name, rev)
+	rv, err := c.API.Revision(ctx, name, rev)
 	if err != nil {
 		d.ErrKey, d.ErrRaw = "err.revision", err.Error()
 		c.Views.Fragment(g, "revision", d)
@@ -499,7 +499,7 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 		return d
 	}
 
-	det, err := c.API.GetStack(ctx, name)
+	det, err := c.API.Stack(ctx, name)
 	if err != nil {
 		d.ErrKey, d.ErrRaw = "err.stack", err.Error()
 		return d

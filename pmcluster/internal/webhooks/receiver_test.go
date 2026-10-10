@@ -642,9 +642,9 @@ func TestHandlerReceive(t *testing.T) {
 		srv, _ := buildHandler(t, st, c, dep)
 
 		ctx := context.Background()
-		before, err := st.GetWebhookSource(ctx, sourceName)
+		before, err := st.WebhookSource(ctx, sourceName)
 		if err != nil {
-			t.Fatalf("GetWebhookSource (before): %v", err)
+			t.Fatalf("WebhookSource (before): %v", err)
 		}
 		if before.LastUsedAt.Valid {
 			t.Fatal("last_used_at should be NULL before first successful POST")
@@ -665,9 +665,9 @@ func TestHandlerReceive(t *testing.T) {
 			t.Fatalf("expected 202, got %d", resp.StatusCode)
 		}
 
-		after, err := st.GetWebhookSource(ctx, sourceName)
+		after, err := st.WebhookSource(ctx, sourceName)
 		if err != nil {
-			t.Fatalf("GetWebhookSource (after): %v", err)
+			t.Fatalf("WebhookSource (after): %v", err)
 		}
 		if !after.LastUsedAt.Valid {
 			t.Error("last_used_at should be non-NULL after successful POST")
@@ -694,9 +694,9 @@ func TestHandlerReceive(t *testing.T) {
 			t.Fatalf("expected 401, got %d", resp.StatusCode)
 		}
 
-		src, err := st.GetWebhookSource(ctx, sourceName)
+		src, err := st.WebhookSource(ctx, sourceName)
 		if err != nil {
-			t.Fatalf("GetWebhookSource: %v", err)
+			t.Fatalf("WebhookSource: %v", err)
 		}
 		if src.LastUsedAt.Valid {
 			t.Errorf("last_used_at should remain NULL after a 401, got %d", src.LastUsedAt.Int64)

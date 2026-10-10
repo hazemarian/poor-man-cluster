@@ -18,9 +18,9 @@ func TestCreateRegistry_HappyPath(t *testing.T) {
 		t.Fatalf("CreateRegistry: %v", err)
 	}
 
-	got, err := s.GetRegistry(ctx, "ghcr.io")
+	got, err := s.Registry(ctx, "ghcr.io")
 	if err != nil {
-		t.Fatalf("GetRegistry: %v", err)
+		t.Fatalf("Registry: %v", err)
 	}
 	if got.Host != "ghcr.io" {
 		t.Errorf("Host = %q, want 'ghcr.io'", got.Host)
@@ -56,7 +56,7 @@ func TestGetRegistry_NotFound(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 
-	_, err := s.GetRegistry(ctx, "nonexistent.registry.io")
+	_, err := s.Registry(ctx, "nonexistent.registry.io")
 	if err != ErrRegistryNotFound {
 		t.Errorf("err = %v, want ErrRegistryNotFound", err)
 	}
@@ -76,9 +76,9 @@ func TestUpdateRegistry_HappyPath(t *testing.T) {
 		t.Fatalf("UpdateRegistry: %v", err)
 	}
 
-	got, err := s.GetRegistry(ctx, "quay.io")
+	got, err := s.Registry(ctx, "quay.io")
 	if err != nil {
-		t.Fatalf("GetRegistry: %v", err)
+		t.Fatalf("Registry: %v", err)
 	}
 	if got.Username != "rotated" {
 		t.Errorf("Username = %q, want 'rotated'", got.Username)
@@ -138,7 +138,7 @@ func TestDeleteRegistry_HappyPath(t *testing.T) {
 		t.Fatalf("DeleteRegistry: %v", err)
 	}
 
-	_, err := s.GetRegistry(ctx, "to-delete.io")
+	_, err := s.Registry(ctx, "to-delete.io")
 	if err != ErrRegistryNotFound {
 		t.Errorf("expected ErrRegistryNotFound after delete, got %v", err)
 	}

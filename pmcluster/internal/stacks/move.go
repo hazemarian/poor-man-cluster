@@ -121,11 +121,11 @@ func (s *Service) MoveWithOptions(ctx context.Context, stackName, targetNode str
 
 	// 1+2. Get the stack's data onto the target.
 	//
-	// Store-based transit (BUG-030): a mover task on the target pulls the
-	// archive OBJECT straight out of the object store over the published
-	// loopback ingress (127.0.0.1:8333 on every node), so a move needs no
-	// cross-node host ports and therefore no firewall rules. The fallback (a
-	// cluster without a store configured, or Docker unavailable) keeps the old
+	// Store-based transit: a mover task on the target pulls the archive
+	// OBJECT straight out of the object store over the published loopback
+	// ingress (127.0.0.1:8333 on every node), so a move needs no cross-node
+	// host ports and therefore no firewall rules. The fallback (a cluster
+	// without a store configured, or Docker unavailable) keeps the old
 	// local-archive + ephemeral HTTP mover path.
 	if crossNode && s.S3.Configured() {
 		if !opts.FromS3 {
@@ -136,14 +136,14 @@ func (s *Service) MoveWithOptions(ctx context.Context, stackName, targetNode str
 				return err
 			}
 		}
-		// BUG-031: the failover restore must pull the SOURCE node's archive,
-		// not the globally-newest one (that is often the target's own archive,
-		// which holds zero backup/data/<stack> entries and would restore an
-		// empty database). pins[0] is the node the stack's data currently
-		// lives on (the failed/pinned node); map it to its swarm node id. When
-		// Docker is unavailable (a CLI run without a docker client) there is
-		// no node list to map through, so sourceNode stays empty and the
-		// previous newest-overall behaviour is preserved.
+		// The failover restore must pull the SOURCE node's archive, not the
+		// globally-newest one (that is often the target's own archive, which
+		// holds zero backup/data/<stack> entries and would restore an empty
+		// database). pins[0] is the node the stack's data currently lives on
+		// (the failed/pinned node); map it to its swarm node id. When Docker
+		// is unavailable (a CLI run without a docker client) there is no node
+		// list to map through, so sourceNode stays empty and the newest-
+		// overall behaviour is preserved.
 		sourceNode := ""
 		for _, n := range nodes {
 			if n.Hostname == pins[0] {

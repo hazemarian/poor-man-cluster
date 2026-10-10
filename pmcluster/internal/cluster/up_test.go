@@ -254,7 +254,7 @@ func TestUp_DefaultStorageNodeIsLeader(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
-	got := deps.Store.GetSettingDefault(context.Background(), SettingStorageNodes(), "")
+	got := deps.Store.SettingDefault(context.Background(), SettingStorageNodes(), "")
 	if got != "nextrum-sy-1" {
 		t.Errorf("default storage_nodes = %q, want the leader hostname nextrum-sy-1", got)
 	}
@@ -289,7 +289,7 @@ func TestUp_BackupRendersGlobalWhenStorageNodeDefaulted(t *testing.T) {
 	}
 
 	// storage_nodes must be set (leader hostname) so the render saw it.
-	if got := deps.Store.GetSettingDefault(context.Background(), SettingStorageNodes(), ""); got != "nextrum-sy-1" {
+	if got := deps.Store.SettingDefault(context.Background(), SettingStorageNodes(), ""); got != "nextrum-sy-1" {
 		t.Fatalf("default storage_nodes = %q, want nextrum-sy-1 (must be set before render)", got)
 	}
 
@@ -338,9 +338,35 @@ func TestUp_StorageNodesPreserved(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
-	got := deps.Store.GetSettingDefault(context.Background(), SettingStorageNodes(), "")
+	got := deps.Store.SettingDefault(context.Background(), SettingStorageNodes(), "")
 	if got != "node-a,node-b" {
 		t.Errorf("storage_nodes clobbered by cluster up: %q, want node-a,node-b", got)
+	}
+}
+
+// TestUp_PersistsSwarmID verifies cluster up records the live Swarm cluster ID.
+// Without this the first `cluster update` reads an empty stored ID, misreads the
+// mismatch as a "wiped + re-initialised Swarm", and force-redeploys every
+// platform stack on what should be a content-aware no-op.
+func TestUp_PersistsSwarmID(t *testing.T) {
+	dir := t.TempDir()
+	certPath := writeTempFile(t, dir, "cert.pem", []byte("CERT"))
+	keyPath := writeTempFile(t, dir, "key.pem", []byte("KEY"))
+
+	deps, f, _ := newUpDeps(t)
+	f.swarmID = "swarm-abcd1234"
+
+	if _, err := Up(context.Background(), deps, UpInput{
+		Domain:                "test.example.com",
+		CertPath:              certPath,
+		KeyPath:               keyPath,
+		OpenObserveAdminEmail: "ops@example.com",
+	}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	if got := deps.Store.SettingDefault(context.Background(), settingSwarmID, ""); got != "swarm-abcd1234" {
+		t.Errorf("swarm_id = %q, want swarm-abcd1234 persisted at cluster up", got)
 	}
 }
 
@@ -369,7 +395,7 @@ func TestUp_DefaultPlatformNodeIsLeader(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
-	got := deps.Store.GetSettingDefault(context.Background(), SettingPlatformNode(), "")
+	got := deps.Store.SettingDefault(context.Background(), SettingPlatformNode(), "")
 	if got != "nextrum-sy-1" {
 		t.Errorf("default platform_node = %q, want the leader hostname nextrum-sy-1", got)
 	}
@@ -400,7 +426,7 @@ func TestUp_PlatformNodePreserved(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 
-	got := deps.Store.GetSettingDefault(context.Background(), SettingPlatformNode(), "")
+	got := deps.Store.SettingDefault(context.Background(), SettingPlatformNode(), "")
 	if got != "operator-pinned" {
 		t.Errorf("platform_node clobbered by cluster up: %q, want operator-pinned", got)
 	}

@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stackdrift"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -102,12 +103,12 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		}
 		live, err := deps.Docker.SwarmID(ctx)
 		if err != nil {
-			// Best-effort: an unreadable swarm ID is not fatal — it only means
-			// we cannot detect a wipe this run.
+			// Best-effort: an unreadable swarm ID is not fatal — it only
+			// means wipe detection is skipped for this run.
 			fmt.Fprintf(out, "  ⚠ could not read swarm ID (%v) — skipping wipe detection\n", err)
 			return nil
 		}
-		stored := deps.Store.GetSettingDefault(ctx, settingSwarmID, "")
+		stored := deps.Store.SettingDefault(ctx, settingSwarmID, "")
 		if live != "" && live != stored {
 			swarmChanged = true
 			fmt.Fprintf(out, "  ▶ swarm identity changed (%s → %s) — forcing full redeploy\n", stored, live)
@@ -141,7 +142,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		if err != nil {
 			return err
 		}
-		domain = deps.Store.GetSettingDefault(ctx, settingDomain, "")
+		domain = deps.Store.SettingDefault(ctx, settingDomain, "")
 		if domain == "" {
 			return fmt.Errorf("no persisted domain found — run `cluster up` before `cluster update`")
 		}
@@ -159,7 +160,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		}
 		ssoSecret = ""
 		if sso.Enabled {
-			cookieCred, err := deps.Store.GetCredential(ctx, "sso_cookie_secret")
+			cookieCred, err := deps.Store.Credential(ctx, "sso_cookie_secret")
 			switch {
 			case errors.Is(err, store.ErrCredentialNotFound):
 				// SSO enabled on a cluster whose bootstrap predates the
@@ -184,7 +185,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	})
 
 	wf.Add("Ensuring the in-cluster SeaweedFS backup credential", func(ctx context.Context) error {
-		if _, err := deps.Store.GetCredential(ctx, "seaweedfs_admin"); errors.Is(err, store.ErrCredentialNotFound) {
+		if _, err := deps.Store.Credential(ctx, "seaweedfs_admin"); errors.Is(err, store.ErrCredentialNotFound) {
 			// Mint the SeaweedFS S3 credential on clusters whose bootstrap
 			// predates the in-cluster backup store, so this render enables it
 			// (idempotent; the swarm secret is created alongside).
@@ -199,7 +200,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	})
 
 	wf.Add("Loading OpenObserve credentials", func(ctx context.Context) error {
-		ooCred, err := deps.Store.GetCredential(ctx, "openobserve_admin")
+		ooCred, err := deps.Store.Credential(ctx, "openobserve_admin")
 		if err != nil {
 			return fmt.Errorf("load openobserve_admin credential (run `cluster up` first): %w", err)
 		}
@@ -223,14 +224,14 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			ConfigDir:                in.ConfigDir,
 			ConfigStore:              deps.Store,
 			DataDir:                  filepath.Dir(in.ConfigDir),
-			VolumeRoot:               effectiveVolumeRoot(deps.Store.GetSettingDefault(ctx, SettingVolumeRoot(), "")),
+			VolumeRoot:               effectiveVolumeRoot(deps.Store.SettingDefault(ctx, SettingVolumeRoot(), "")),
 			BackupDir:                backupRootDir(),
 			EdgeImage:                EdgeImageFor(),
 			EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
 			BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 			BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
 			BackupCron:               LoadBackupCron(ctx, deps.Store),
-			StorageNodeConstraint:    deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "") != "",
+			StorageNodeConstraint:    deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
 			StorageNodeLabel:         runtime.StorageNodeLabel,
 			PlatformNode:             loadPlatformNode(ctx, deps.Store),
 			ManagedSecretNames:       managedSecretNames(ctx, deps.Store),
@@ -254,8 +255,8 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	})
 
 	wf.Add("Ensuring storage root directories exist", func(ctx context.Context) error {
-		// BUG-002 fix: `cluster up` created these dirs for the volume root in
-		// effect at that time; a post-up volume_root change leaves the new
+		// These dirs are created at `cluster up` time for the volume root in
+		// effect at that moment; a post-up volume_root change leaves the new
 		// root missing and bind mounts get rejected ("bind source path does
 		// not exist"). Re-create them on every update so operators can move
 		// the storage root without manual mkdir + service --force.
@@ -515,8 +516,8 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		for _, s := range order {
 			cfgName := string(s) + "-stack"
 			fresh := rendered[cfgName]
-			row, err := deps.Store.GetConfig(ctx, cfgName)
-			if err != nil && !errors.Is(err, store.ErrConfigNotFound) {
+			row, err := deps.Store.Config(ctx, cfgName)
+			if err != nil && !errors.Is(err, errs.ErrConfigNotFound) {
 				return fmt.Errorf("read rendered hash for %s: %w", cfgName, err)
 			}
 			switch {
@@ -527,9 +528,9 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			default:
 				inSync, why, syncErr := stackdrift.InSync(ctx, deps.Docker, string(s), fresh)
 				if syncErr != nil {
-					// A Docker error means we cannot tell — assume in sync so
-					// we never redeploy (and thus never infinite-loop) on a
-					// flaky API.
+					// A Docker error means the live state cannot be compared —
+					// assume in sync so a flaky API never triggers a redeploy
+					// (and thus never an infinite loop).
 					continue
 				}
 				if inSync {
@@ -543,9 +544,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// Deploy changed stacks first. Each stack's rendered snapshot
 		// (rendered_content + rendered_hash) is stamped into the store only
 		// AFTER its deploy succeeds — so a failed deploy leaves the stored
-		// hash stale and the NEXT update retries the deploy. (BUG-009: the
-		// hash used to be stamped up-front, so a failed deploy permanently
-		// skipped redeploy even though the swarm never received the stack.)
+		// hash stale and the NEXT update retries the deploy.
 		redeployed := map[string]bool{}
 		for _, s := range redeploy {
 			fmt.Fprintf(out, "  ▶ %s %s → re-deploying\n", string(s), reasons[s])
@@ -559,7 +558,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			cfgName := string(s) + "-stack"
 			if content, ok := rendered[cfgName]; ok {
 				if err := deps.Store.SetRendered(ctx, cfgName, string(content)); err != nil &&
-					!errors.Is(err, store.ErrConfigNotFound) {
+					!errors.Is(err, errs.ErrConfigNotFound) {
 					return fmt.Errorf("store rendered config %s: %w", cfgName, err)
 				}
 			}
@@ -574,13 +573,38 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			if redeployed[name] {
 				continue
 			}
-			if err := deps.Store.SetRendered(ctx, name, string(content)); err != nil && !errors.Is(err, store.ErrConfigNotFound) {
+			if err := deps.Store.SetRendered(ctx, name, string(content)); err != nil && !errors.Is(err, errs.ErrConfigNotFound) {
 				return fmt.Errorf("store rendered config %s: %w", name, err)
 			}
 		}
 
 		if len(redeploy) == 0 {
 			fmt.Fprintf(out, "  ▶ No rendered content changed — nothing to redeploy.\n")
+		}
+		return nil
+	})
+
+	wf.Add("Garbage-collecting stale platform configs", func(ctx context.Context) error {
+		// The GC inside EnsureConfig runs during the render step, BEFORE the
+		// reconcile above re-points each stack at its new config — so the
+		// previous content-addressed object is still mounted by a live service
+		// and Docker refuses to remove it. Re-run the GC here, after the
+		// stacks have been re-deployed, so the old objects are finally
+		// released and don't accumulate forever.
+		if deps.Docker == nil {
+			return nil
+		}
+		for _, base := range []struct{ base, keep string }{
+			{"pmcluster_otel_config", res.OTelConfig},
+			{"pmcluster_traefik_dynamic", res.TraefikConfig},
+			{"pmcluster_edge", res.EdgeConfig},
+		} {
+			if base.keep == "" {
+				continue
+			}
+			if err := gcManagedConfigs(ctx, deps.Docker, base.base, base.keep); err != nil {
+				fmt.Fprintf(out, "  ⚠ GC %s: %v\n", base.base, err)
+			}
 		}
 		return nil
 	})
@@ -595,7 +619,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		}
 		// The leader runs the edge (console/API/webhooks) and must therefore be
 		// a storage node: otherwise a manual `backup create` finds no local
-		// offen agent (BUG-024). Re-add it when the setting omits it.
+		// offen agent. Re-add it when the setting omits it.
 		leaderHost := ""
 		for _, n := range nodes {
 			if n.IsLeader {
@@ -610,13 +634,13 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// leader. Pinning platform services to the leader (the API host) keeps
 		// them on a node that can serve them. An operator-set value is left
 		// untouched.
-		if leaderHost != "" && deps.Store.GetSettingDefault(ctx, SettingPlatformNode(), "") == "" {
+		if leaderHost != "" && deps.Store.SettingDefault(ctx, SettingPlatformNode(), "") == "" {
 			if err := deps.Store.SetSetting(ctx, SettingPlatformNode(), leaderHost); err != nil {
 				return fmt.Errorf("persist platform_node: %w", err)
 			}
 			fmt.Fprintf(out, "  ⚠ platform_node was unset — pinned platform services to the leader %s\n", leaderHost)
 		}
-		raw := deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "")
+		raw := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
 		if raw == "" {
 			return nil
 		}
@@ -629,7 +653,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		}
 		// Storage follows leadership: the new leader was added above, so the
 		// PREVIOUS leader (no longer leading) stops being a storage node.
-		prev := deps.Store.GetSettingDefault(ctx, storageLeaderKey, "")
+		prev := deps.Store.SettingDefault(ctx, storageLeaderKey, "")
 		if leaderHost != "" {
 			if prev != "" && prev != leaderHost && containsStorageNode(splitStorageNodes(raw), prev) {
 				kept := make([]string, 0, len(splitStorageNodes(raw)))
@@ -668,13 +692,13 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 				}
 			}
 		}
-		// BUG-019a: a node carrying the storage label but missing from
-		// storage_nodes is an operator request — `pmcluster join --storage-node`
-		// can only stamp the swarm-visible node label (it has no path to the
-		// leader's store), so the LABEL is the intent channel and the leader
-		// adopts it here. Demotion therefore goes through `pmcluster node
-		// demote`, which clears the label (and the setting); a raw setting edit
-		// is re-adopted on the next update because the label wins.
+		// A node carrying the storage label but missing from storage_nodes is
+		// an operator request — `pmcluster join --storage-node` can only stamp
+		// the swarm-visible node label (it has no path to the leader's store),
+		// so the LABEL is the intent channel and the leader adopts it here.
+		// Demotion therefore goes through `pmcluster node demote`, which
+		// clears the label (and the setting); a raw setting edit is re-adopted
+		// on the next update because the label wins.
 		for _, n := range nodes {
 			if n.Labels[runtime.StorageNodeLabel] != "true" {
 				continue
@@ -748,7 +772,7 @@ func ensureLegacyPlainSecret(ctx context.Context, deps UpdateDeps, credName, sec
 	if deps.Docker == nil || deps.Store == nil || deps.Cipher == nil {
 		return false, nil
 	}
-	cred, err := deps.Store.GetCredential(ctx, credName)
+	cred, err := deps.Store.Credential(ctx, credName)
 	if err != nil {
 		if errors.Is(err, store.ErrCredentialNotFound) {
 			return false, nil
@@ -782,11 +806,11 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 	if err != nil {
 		return nil, err
 	}
-	domain := deps.Store.GetSettingDefault(ctx, settingDomain, "")
+	domain := deps.Store.SettingDefault(ctx, settingDomain, "")
 	if domain == "" {
 		return nil, fmt.Errorf("no persisted domain found — run `cluster up` before requesting rendered configs")
 	}
-	ooCred, err := deps.Store.GetCredential(ctx, "openobserve_admin")
+	ooCred, err := deps.Store.Credential(ctx, "openobserve_admin")
 	if err != nil {
 		return nil, fmt.Errorf("load openobserve_admin credential (run `cluster up` first): %w", err)
 	}
@@ -810,14 +834,14 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		ConfigDir:                in.ConfigDir,
 		ConfigStore:              deps.Store,
 		DataDir:                  filepath.Dir(in.ConfigDir),
-		VolumeRoot:               effectiveVolumeRoot(deps.Store.GetSettingDefault(ctx, SettingVolumeRoot(), "")),
+		VolumeRoot:               effectiveVolumeRoot(deps.Store.SettingDefault(ctx, SettingVolumeRoot(), "")),
 		BackupDir:                backupRootDir(),
 		EdgeImage:                EdgeImageFor(),
 		EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
 		BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
 		BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
 		BackupCron:               LoadBackupCron(ctx, deps.Store),
-		StorageNodeConstraint:    deps.Store.GetSettingDefault(ctx, SettingStorageNodes(), "") != "",
+		StorageNodeConstraint:    deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
 		StorageNodeLabel:         runtime.StorageNodeLabel,
 		PlatformNode:             loadPlatformNode(ctx, deps.Store),
 		ManagedSecretNames:       managedSecretNames(ctx, deps.Store),
@@ -836,7 +860,7 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 	render.SSOGitHubRepos = sso.GitHubRepos
 	render.SSOCookieExpire = sso.CookieExpire
 	if sso.Enabled {
-		cookieCred, err := deps.Store.GetCredential(ctx, "sso_cookie_secret")
+		cookieCred, err := deps.Store.Credential(ctx, "sso_cookie_secret")
 		switch {
 		case errors.Is(err, store.ErrCredentialNotFound):
 			mgr := &CredentialsManager{Store: deps.Store, Cipher: deps.Cipher, Docker: deps.Docker, Deployer: deps.Deployer}
@@ -1017,7 +1041,7 @@ func repairMissingSecret(ctx context.Context, deps UpdateDeps, mgr *CredentialsM
 		if store.SwarmSecretName(s.Name, s.Hash) != name {
 			continue
 		}
-		row, err := deps.Store.GetSecret(ctx, s.Name)
+		row, err := deps.Store.Secret(ctx, s.Name)
 		if err != nil {
 			return false, fmt.Errorf("get secret %s: %w", s.Name, err)
 		}

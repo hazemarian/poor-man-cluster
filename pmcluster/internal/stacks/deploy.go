@@ -21,7 +21,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stackdrift"
@@ -75,7 +74,7 @@ type BackupTrigger interface {
 // manifests with backup_before_deploy still proceed when nil.
 type Service struct {
 	Store    *store.Store
-	Deployer cluster.StackDeployer
+	Deployer runtime.StackDeployer
 	// Docker is used by Undeploy to find + remove the stack's Swarm secrets
 	// and named volumes. Nil disables the swarm-asset cleanup (tests, CLI
 	// deploy command).
@@ -145,15 +144,15 @@ func (s *Service) Deploy(ctx context.Context, p Payload) (*Result, error) {
 // secret to mount: the content-addressed <name>_<sha8> name derived from the
 // DB row's Hash. Rotated secrets can never replace the immutable in-use swarm
 // secret, so the compose writer references the NEW content-addressed object
-// while the container mount path stays /run/secrets/<name> (BUG-007). Falls
-// back to the plain name when the store has no row (unmanaged external
-// secrets) or on lookup errors — a broken reference must surface at deploy
-// time, not be silently mapped away.
+// while the container mount path stays /run/secrets/<name>. Falls back to the
+// plain name when the store has no row (unmanaged external secrets) or on
+// lookup errors — a broken reference must surface at deploy time, not be
+// silently mapped away.
 func (s *Service) secretExternalName(ctx context.Context, name string) string {
 	if s.Store == nil {
 		return name
 	}
-	row, err := s.Store.GetSecret(ctx, name)
+	row, err := s.Store.Secret(ctx, name)
 	if err != nil {
 		return name
 	}
@@ -172,7 +171,7 @@ func (s *Service) configExternalName(ctx context.Context, name string) string {
 	if s.Store == nil {
 		return name
 	}
-	row, err := s.Store.GetConfig(ctx, name)
+	row, err := s.Store.Config(ctx, name)
 	if err != nil {
 		return name
 	}
@@ -198,13 +197,9 @@ func (s *Service) mkWriter(extra map[string]string) *manifest.ComposeWriter {
 // returns the LABELED bytes. Deriving the label from the label-free render
 // keeps it deterministic and non-circular; the deployed/stored bytes carry the
 // label so drift detection can compare the live Swarm's labels against a
-// fresh render (BUG-017, k8s-style: every service carries its content hash).
+// fresh render (k8s-style: every service carries its content hash).
 func (s *Service) renderStamped(ctx context.Context, ir *manifest.IR) ([]byte, error) {
-	plain, err := s.mkWriter(nil).Write(ctx, ir)
-	if err != nil {
-		return nil, err
-	}
-	return s.mkWriter(map[string]string{runtime.RenderedHashLabel: stackdrift.ContentHash(plain)}).Write(ctx, ir)
+	return manifest.RenderStamped(ctx, ir, s.mkWriter, stackdrift.ContentHash)
 }
 
 // DeployAsync validates and records the revision synchronously, then applies
@@ -290,7 +285,7 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 		return nil
 	})
 	wf.Add("Checking for app name conflicts", func(ctx context.Context) error {
-		existing, err := s.Store.GetStack(ctx, app.Name)
+		existing, err := s.Store.Stack(ctx, app.Name)
 		if err != nil {
 			if errors.Is(err, store.ErrStackNotFound) {
 				return nil
@@ -311,13 +306,7 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 		return nil
 	})
 	wf.Add("Interpolating and validating manifest", func(ctx context.Context) error {
-		if err := manifest.Interpolate(app); err != nil {
-			return fmt.Errorf("interpolate: %w", err)
-		}
-		if err := manifest.Validate(app); err != nil {
-			return fmt.Errorf("validate: %w", err)
-		}
-		return nil
+		return manifest.InterpolateValidate(app)
 	})
 	wf.Add("Translating to Compose (resolving configs/secrets)", func(ctx context.Context) error {
 		// Build the neutral IR first so the ordered per-level deploy can
@@ -354,7 +343,7 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 			// source YAML and audit trail are recorded now, but the hash is
 			// stamped only AFTER the swarm apply succeeds (see the deploy
 			// step below). A failed deploy therefore leaves the hash empty so
-			// the next Sync sees a mismatch and retries (BUG-018).
+			// the next Sync sees a mismatch and retries.
 			RenderedHash: "",
 			SourceFile:   p.File,
 			PayloadJSON:  sql.NullString{String: string(payloadJSON), Valid: true},
@@ -392,7 +381,7 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 				}
 				// Stamp the rendered hash only now that the apply succeeded.
 				// A failed apply returns above and leaves the hash empty, so
-				// the next Sync sees a mismatch and retries (BUG-018).
+				// the next Sync sees a mismatch and retries.
 				if err := s.Store.SetRevisionRenderedHash(applyCtx, app.Name, revision, store.ConfigHash(string(rendered))); err != nil {
 					s.Log.Error().Err(err).Str("stack", app.Name).
 						Int64("revision", revision).Msg("deploy — failed to stamp rendered hash after background apply")
@@ -406,7 +395,7 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 		}
 		// Stamp the rendered hash only now that the apply succeeded. A failed
 		// apply returned above and left the hash empty, so the next Sync sees
-		// a mismatch and retries (BUG-018).
+		// a mismatch and retries.
 		return s.Store.SetRevisionRenderedHash(ctx, app.Name, revision, store.ConfigHash(string(rendered)))
 	})
 
@@ -444,8 +433,6 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 	}, nil
 }
 
-// Rollback re-applies a stored revision as a NEW revision so the audit
-// trail records both deploys. PayloadJSON carries a rollback_of marker.
 // Sync re-runs the deploy pipeline for an existing stack from its latest
 // stored source manifest. Config()/secrets() references are resolved again
 // against the DB, so edits to a stack's configs are applied to the running
@@ -467,55 +454,47 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 	// byte-identical to the latest stored revision (rendered_hash), there is
 	// nothing to apply — config()/secrets() edits in the DB did not change
 	// the output, so no new revision and no Docker call.
-	parsed, err := manifest.Parse([]byte(latest.SourceYAML))
+	var built *manifest.IR
+	var rendered []byte
+	_, built, err = manifest.ParseBuild(ctx, []byte(latest.SourceYAML), stackName, s.Resolver)
 	if err == nil {
-		parsed.Name = stackName // mirror Deploy's AppName override
-		if err = manifest.Interpolate(parsed); err == nil {
-			if err = manifest.Validate(parsed); err == nil {
-				var rendered []byte
-				var built *manifest.IR
-				built, err = manifest.BuildIR(ctx, parsed, s.Resolver)
-				if err == nil {
-					err = s.resolvePlacements(ctx, stackName, built)
-				}
-				if err == nil {
-					rendered, err = s.renderStamped(ctx, built)
-				}
-				if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
-					// The rendered hash still matches the deployed revision.
-					// Additionally check the LIVE swarm: a manual `docker
-					// service update`, a half-applied deploy, or a wiped
-					// service leaves the stored hash unchanged while the live
-					// services no longer match the fresh render (BUG-017 —
-					// k8s-style, every service carries its content hash).
-					inSync, reason, syncErr := stackdrift.InSync(ctx, s.Docker, stackName, rendered)
-					switch {
-					case syncErr != nil:
-						// A transient docker error must not cause a redeploy
-						// loop — treat as in sync and continue the no-op.
-						s.Log.Warn().Err(syncErr).Str("stack", stackName).
-							Msg("sync — live drift check failed, assuming in sync")
-					case !inSync:
-						s.Log.Info().Str("stack", stackName).Str("reason", reason).
-							Msg("sync — live swarm drifted, re-applying")
-						// Fall through to reconcileDeploy — do NOT early-return
-						// the no-op.
-						return s.reconcileDeploy(ctx, stackName, latest.SourceYAML)
-					default:
-						// No drift: the stored manifest still renders to the
-						// already-deployed hash AND the live swarm matches.
-						s.Log.Info().Str("stack", stackName).Int64("revision", latest.Revision).
-							Msg("sync — no drift, rendered hash unchanged (nothing to apply)")
-					}
-					telemetry.RecordReconcile(ctx, stackName, telemetry.ReconcileInSync)
-					return &Result{
-						StackName:    stackName,
-						Revision:     latest.Revision,
-						RenderedYAML: rendered,
-					}, nil
-				}
-			}
+		err = s.resolvePlacements(ctx, stackName, built)
+	}
+	if err == nil {
+		rendered, err = s.renderStamped(ctx, built)
+	}
+	if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
+		// The rendered hash still matches the deployed revision.
+		// Additionally check the LIVE swarm: a manual `docker
+		// service update`, a half-applied deploy, or a wiped
+		// service leaves the stored hash unchanged while the live
+		// services no longer match the fresh render (k8s-style,
+		// every service carries its content hash).
+		inSync, reason, syncErr := stackdrift.InSync(ctx, s.Docker, stackName, rendered)
+		switch {
+		case syncErr != nil:
+			// A transient docker error must not cause a redeploy
+			// loop — treat as in sync and continue the no-op.
+			s.Log.Warn().Err(syncErr).Str("stack", stackName).
+				Msg("sync — live drift check failed, assuming in sync")
+		case !inSync:
+			s.Log.Info().Str("stack", stackName).Str("reason", reason).
+				Msg("sync — live swarm drifted, re-applying")
+			// Fall through to reconcileDeploy — do NOT early-return
+			// the no-op.
+			return s.reconcileDeploy(ctx, stackName, latest.SourceYAML)
+		default:
+			// No drift: the stored manifest still renders to the
+			// already-deployed hash AND the live swarm matches.
+			s.Log.Info().Str("stack", stackName).Int64("revision", latest.Revision).
+				Msg("sync — no drift, rendered hash unchanged (nothing to apply)")
 		}
+		telemetry.RecordReconcile(ctx, stackName, telemetry.ReconcileInSync)
+		return &Result{
+			StackName:    stackName,
+			Revision:     latest.Revision,
+			RenderedYAML: rendered,
+		}, nil
 	}
 
 	// Either the rendered hash drifted from the deployed revision (config()
@@ -784,6 +763,8 @@ func hasJSONKey(raw, key string) bool {
 	return ok
 }
 
+// Rollback re-applies a stored revision as a NEW revision so the audit
+// trail records both deploys. PayloadJSON carries a rollback_of marker.
 func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision int64) (res *Result, retErr error) {
 	counter, hist, tracer := instruments()
 	ctx, span := tracer.Start(ctx, "pmcluster.rollback",
@@ -826,7 +807,7 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 	)
 
 	wf.Add("Loading source revision", func(ctx context.Context) error {
-		src, err := s.Store.GetRevision(ctx, stackName, sourceRevision)
+		src, err := s.Store.Revision(ctx, stackName, sourceRevision)
 		if err != nil {
 			return err
 		}
@@ -842,20 +823,9 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 		// auto-pin, stop-first ...). A source that no longer validates under
 		// the current DSL fails loudly here instead of silently deploying a
 		// stale translation.
-		parsed, err := manifest.Parse([]byte(row.SourceYAML))
+		parsed, built, err := manifest.ParseBuild(ctx, []byte(row.SourceYAML), stackName, s.Resolver)
 		if err != nil {
-			return fmt.Errorf("rollback source %d no longer parses: %w", sourceRevision, err)
-		}
-		parsed.Name = stackName // mirror Deploy's AppName override
-		if err := manifest.Interpolate(parsed); err != nil {
-			return fmt.Errorf("rollback source %d no longer interpolates: %w", sourceRevision, err)
-		}
-		if err := manifest.Validate(parsed); err != nil {
-			return fmt.Errorf("rollback source %d no longer validates: %w", sourceRevision, err)
-		}
-		built, err := manifest.BuildIR(ctx, parsed, s.Resolver)
-		if err != nil {
-			return fmt.Errorf("rollback source %d no longer translates: %w", sourceRevision, err)
+			return fmt.Errorf("rollback source %d: %w", sourceRevision, err)
 		}
 		if err := s.resolvePlacements(ctx, stackName, built); err != nil {
 			return fmt.Errorf("rollback source %d placement: %w", sourceRevision, err)
@@ -886,7 +856,7 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 			SourceYAML:   row.SourceYAML,
 			RenderedYAML: string(rendered),
 			// RenderedHash is left EMPTY up front and stamped only after the
-			// re-deploy below succeeds, matching Deploy/Sync (BUG-018).
+			// re-deploy below succeeds, matching Deploy/Sync.
 			RenderedHash: "",
 			PayloadJSON:  sql.NullString{String: string(rolledBackPayload), Valid: true},
 		}
@@ -899,7 +869,7 @@ func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision
 		if err := s.applyToSwarm(ctx, app, ir, rendered, revision); err != nil {
 			return err
 		}
-		// Stamp the rendered hash only now that the apply succeeded (BUG-018).
+		// Stamp the rendered hash only now that the apply succeeded.
 		return s.Store.SetRevisionRenderedHash(ctx, stackName, revision, store.ConfigHash(string(rendered)))
 	})
 
@@ -949,7 +919,7 @@ func (s *Service) Undeploy(ctx context.Context, stackName string) (retErr error)
 		span.End()
 	}()
 
-	if _, err := s.Store.GetStack(ctx, stackName); err != nil {
+	if _, err := s.Store.Stack(ctx, stackName); err != nil {
 		return err // ErrStackNotFound → 404 for unknown stacks (before any swarm mutation)
 	}
 

@@ -20,12 +20,12 @@ func TestConfigsCRUD(t *testing.T) {
 			t.Errorf("CreateConfig id = %d, want > 0", id)
 		}
 
-		c, err := s.GetConfig(ctx, "traefik_dynamic")
+		c, err := s.Config(ctx, "traefik_dynamic")
 		if err != nil {
-			t.Fatalf("GetConfig: %v", err)
+			t.Fatalf("Config: %v", err)
 		}
 		if c.Name != "traefik_dynamic" || c.Scope != "cluster" || c.Kind != "template" {
-			t.Errorf("GetConfig = %+v", c)
+			t.Errorf("Config = %+v", c)
 		}
 		if c.Hash != ConfigHash(c.Content) {
 			t.Errorf("hash = %q, want %q", c.Hash, ConfigHash(c.Content))
@@ -43,9 +43,9 @@ func TestConfigsCRUD(t *testing.T) {
 	})
 
 	t.Run("get missing returns ErrConfigNotFound", func(t *testing.T) {
-		_, err := s.GetConfig(ctx, "nope")
+		_, err := s.Config(ctx, "nope")
 		if !errors.Is(err, ErrConfigNotFound) {
-			t.Errorf("GetConfig missing err = %v, want ErrConfigNotFound", err)
+			t.Errorf("Config missing err = %v, want ErrConfigNotFound", err)
 		}
 	})
 
@@ -141,7 +141,7 @@ func TestConfigUpdateVersionsRollback(t *testing.T) {
 			t.Errorf("new hash = %q", h)
 		}
 
-		c, _ := s.GetConfig(ctx, "app_conf")
+		c, _ := s.Config(ctx, "app_conf")
 		if c.Content != "LOG_LEVEL=debug" {
 			t.Errorf("content = %q, want LOG_LEVEL=debug", c.Content)
 		}
@@ -181,7 +181,7 @@ func TestConfigUpdateVersionsRollback(t *testing.T) {
 		if h != ConfigHash("LOG_LEVEL=info") {
 			t.Errorf("rollback hash = %q, want original", h)
 		}
-		c, _ := s.GetConfig(ctx, "app_conf")
+		c, _ := s.Config(ctx, "app_conf")
 		if c.Content != "LOG_LEVEL=info" {
 			t.Errorf("content after rollback = %q, want LOG_LEVEL=info", c.Content)
 		}
@@ -220,8 +220,8 @@ func TestConfigDelete(t *testing.T) {
 	if err := s.DeleteConfig(ctx, "gone"); err != nil {
 		t.Fatalf("DeleteConfig: %v", err)
 	}
-	if _, err := s.GetConfig(ctx, "gone"); !errors.Is(err, ErrConfigNotFound) {
-		t.Errorf("GetConfig after delete = %v, want ErrConfigNotFound", err)
+	if _, err := s.Config(ctx, "gone"); !errors.Is(err, ErrConfigNotFound) {
+		t.Errorf("Config after delete = %v, want ErrConfigNotFound", err)
 	}
 
 	vers, err := s.ListConfigVersions(ctx, "gone")
@@ -251,12 +251,12 @@ func TestSecretsCRUD(t *testing.T) {
 			t.Errorf("CreateSecret id = %d, want > 0", id)
 		}
 
-		r, err := s.GetSecret(ctx, "db_password")
+		r, err := s.Secret(ctx, "db_password")
 		if err != nil {
-			t.Fatalf("GetSecret: %v", err)
+			t.Fatalf("Secret: %v", err)
 		}
 		if r.Scope != "service" || r.Hash != "abc123hash" {
-			t.Errorf("GetSecret = %+v", r)
+			t.Errorf("Secret = %+v", r)
 		}
 		if string(r.Payload) != string(payload) {
 			t.Errorf("payload mismatch")
@@ -271,9 +271,9 @@ func TestSecretsCRUD(t *testing.T) {
 	})
 
 	t.Run("get missing returns ErrSecretNotFound", func(t *testing.T) {
-		_, err := s.GetSecret(ctx, "nope")
+		_, err := s.Secret(ctx, "nope")
 		if !errors.Is(err, ErrSecretNotFound) {
-			t.Errorf("GetSecret missing err = %v, want ErrSecretNotFound", err)
+			t.Errorf("Secret missing err = %v, want ErrSecretNotFound", err)
 		}
 	})
 
@@ -304,8 +304,8 @@ func TestSecretsCRUD(t *testing.T) {
 		if err := s.DeleteSecret(ctx, "api_token"); err != nil {
 			t.Fatalf("DeleteSecret: %v", err)
 		}
-		if _, err := s.GetSecret(ctx, "api_token"); !errors.Is(err, ErrSecretNotFound) {
-			t.Errorf("GetSecret after delete = %v, want ErrSecretNotFound", err)
+		if _, err := s.Secret(ctx, "api_token"); !errors.Is(err, ErrSecretNotFound) {
+			t.Errorf("Secret after delete = %v, want ErrSecretNotFound", err)
 		}
 		if err := s.DeleteSecret(ctx, "api_token"); !errors.Is(err, ErrSecretNotFound) {
 			t.Errorf("DeleteSecret twice = %v, want ErrSecretNotFound", err)
@@ -316,9 +316,9 @@ func TestSecretsCRUD(t *testing.T) {
 		if err := s.UpdateSecret(ctx, "db_password", []byte("newseal"), "newhash"); err != nil {
 			t.Fatalf("UpdateSecret: %v", err)
 		}
-		r, err := s.GetSecret(ctx, "db_password")
+		r, err := s.Secret(ctx, "db_password")
 		if err != nil {
-			t.Fatalf("GetSecret after update: %v", err)
+			t.Fatalf("Secret after update: %v", err)
 		}
 		if r.SwarmRev != 2 {
 			t.Errorf("swarm_rev = %d, want 2 after one edit", r.SwarmRev)
@@ -340,7 +340,7 @@ func TestSecretsCRUD(t *testing.T) {
 		if err := s.UpdateSecret(ctx, "db_password", []byte("seal3"), "hash3"); err != nil {
 			t.Fatalf("UpdateSecret 2: %v", err)
 		}
-		r2, _ := s.GetSecret(ctx, "db_password")
+		r2, _ := s.Secret(ctx, "db_password")
 		if r2.SwarmRev != 3 {
 			t.Errorf("swarm_rev = %d, want 3 after two edits", r2.SwarmRev)
 		}

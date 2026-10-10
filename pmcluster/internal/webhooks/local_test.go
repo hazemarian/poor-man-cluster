@@ -94,9 +94,9 @@ func TestLocalMarkUsed(t *testing.T) {
 		t.Fatalf("MarkUsed: %v", err)
 	}
 
-	row, err := st.GetWebhookSource(ctx, "github")
+	row, err := st.WebhookSource(ctx, "github")
 	if err != nil {
-		t.Fatalf("GetWebhookSource: %v", err)
+		t.Fatalf("WebhookSource: %v", err)
 	}
 	if !row.LastUsedAt.Valid || row.LastUsedAt.Int64 <= 0 {
 		t.Errorf("LastUsedAt = %+v, want a positive timestamp after MarkUsed", row.LastUsedAt)

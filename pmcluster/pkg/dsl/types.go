@@ -62,6 +62,9 @@ type App struct {
 	StrictBackup bool `json:"strict_backup,omitempty"`
 }
 
+// Service is one service declaration in an App manifest. The translator
+// expands it into a rendered Compose service; each field below documents its
+// own expansion.
 type Service struct {
 	// Image supports ${app}, ${env}, ${version}, ${registry}, ${env:VAR}.
 	Image string `json:"image"`
@@ -192,6 +195,8 @@ type ResourceSpec struct {
 	Memory string `json:"memory,omitempty"`
 }
 
+// Expose routes a service through the cluster's Traefik ingress: it triggers
+// the Traefik router labels and the traefik-net membership for the service.
 type Expose struct {
 	Port int    `json:"port"`
 	Host string `json:"host"`

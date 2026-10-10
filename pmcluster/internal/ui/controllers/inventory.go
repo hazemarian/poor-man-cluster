@@ -53,7 +53,7 @@ func (c Inventory) Page(g *gin.Context) {
 	}
 	// Annotate every row with the stacks that reference it. Best-effort: a
 	// failed usage call leaves the page readable without the column.
-	if u, err := c.API.GetUsage(ctx); err == nil && d.ConfigsKnown {
+	if u, err := c.API.Usage(ctx); err == nil && d.ConfigsKnown {
 		for i := range d.Configs {
 			d.Configs[i].References = u.Configs[d.Configs[i].Name]
 		}

@@ -91,9 +91,9 @@ func (l *Local) discoverLocal(ctx context.Context) {
 // discoverStore indexes the in-cluster object store. The hourly cron archives
 // produced on the storage nodes land in the store but never pass through
 // Trigger, so a daemon/CLI running on a non-storage manager would otherwise
-// never see them (BUG-025). Each discovered volume archive is recorded as a
-// DB row whose archive path is the bare object key; restoreSource then resolves
-// it through fetchS3Object (s3ObjectKey of a bare key is the key itself).
+// never see them. Each discovered volume archive is recorded as a DB row
+// whose archive path is the bare object key; restoreSource then resolves it
+// through fetchS3Object (s3ObjectKey of a bare key is the key itself).
 //
 // Only volume archives (`backup-` prefix) are indexed: control-plane archives
 // are restored through a separate path (RestoreControlPlane), never as volume

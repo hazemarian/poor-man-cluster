@@ -86,7 +86,7 @@ func rcloneStoreEnv(cfg backups.S3Config) []string {
 // rclone, unpack it and move the <stack>/ subtree into the mounted volume root.
 // Before it wipes the target's existing subtree it verifies the archive really
 // contains the stack's data — a wrong (or empty) archive must never be able to
-// erase /data/<stack> (BUG-031).
+// erase /data/<stack>.
 func storePullMoverScript(bucket, key, stackName string) string {
 	return fmt.Sprintf(
 		"set -e; mkdir -p /tmp/x /data; rclone copyto sw:%s/%s /tmp/m.tgz; tar -tzf /tmp/m.tgz | grep -q '^backup/data/%s/' || { echo \"the archive does not contain backup/data/%s\"; exit 1; }; tar -xzf /tmp/m.tgz -C /tmp/x; rm -rf /data/%s; mv /tmp/x/backup/data/%s /data/; rm -rf /tmp/x",
@@ -123,9 +123,9 @@ func archiveNodeID(key string) string {
 
 // newestArchiveObject returns the key of the newest whole-disk archive in the
 // configured object store WITHOUT downloading it — the point of the store
-// transit (BUG-030). When sourceNode is non-empty the search is restricted to
-// that node's own archives, so a storage failover restores the failed node's
-// data instead of whichever node uploaded last (BUG-031).
+// transit. When sourceNode is non-empty the search is restricted to that
+// node's own archives, so a storage failover restores the failed node's data
+// instead of whichever node uploaded last.
 func (s *Service) newestArchiveObject(ctx context.Context, stackName, sourceNode string) (string, error) {
 	if !s.S3.Configured() {
 		return "", fmt.Errorf("move: %s cannot move between nodes without a shared archive — configure the object store (backup_s3_* or the in-cluster backup store)", stackName)
@@ -144,9 +144,9 @@ func (s *Service) newestArchiveObject(ctx context.Context, stackName, sourceNode
 		if !strings.HasPrefix(o.Key, "backup-") || !strings.HasSuffix(o.Key, ".tar.gz") {
 			continue
 		}
-		// BUG-031: the archive must belong to the node holding the stack's
-		// data. Another node's archive contains zero backup/data/<stack>
-		// entries and would restore an empty database.
+		// The archive must belong to the node holding the stack's data:
+		// another node's archive contains zero backup/data/<stack> entries
+		// and would restore an empty database.
 		if sourceNode != "" && archiveNodeID(o.Key) != sourceNode {
 			continue
 		}
@@ -168,7 +168,7 @@ func (s *Service) newestArchiveObject(ctx context.Context, stackName, sourceNode
 // into <volumeRoot>/<stackName>. No data crosses node-to-node host ports, so
 // it needs no firewall rules — unlike the HTTP mover. It is the store-transit
 // primitive shared by stack move / storage failover and by cross-node backup
-// restore (BUG-032). Returns a clear error when no object store is configured.
+// restore. Returns a clear error when no object store is configured.
 //
 // fromOffsite selects the object store the mover pulls from: false uses the
 // in-cluster SeaweedFS store (s.S3, the default for move/failover); true uses
@@ -213,11 +213,11 @@ func (s *Service) RestoreArchiveToNode(ctx context.Context, archiveKey, stackNam
 
 // moveViaStorePull delegates the store transit to RestoreArchiveToNode, so a
 // backup restore into a remote node's volume root uses exactly the same
-// one-shot mover as a stack move / storage failover (BUG-032). The caller's
-// volume root is always s.VolumeRoot (or the manifest default), which
-// RestoreArchiveToNode re-derives. The move/failover path always pulls from the
-// in-cluster store (fromOffsite=false); only `backup restore --from-s3` uses
-// the offsite destination.
+// one-shot mover as a stack move / storage failover. The caller's volume root
+// is always s.VolumeRoot (or the manifest default), which RestoreArchiveToNode
+// re-derives. The move/failover path always pulls from the in-cluster store
+// (fromOffsite=false); only `backup restore --from-s3` uses the offsite
+// destination.
 func (s *Service) moveViaStorePull(ctx context.Context, key, stackName, targetNode string) error {
 	return s.RestoreArchiveToNode(ctx, key, stackName, targetNode, false)
 }
@@ -225,7 +225,7 @@ func (s *Service) moveViaStorePull(ctx context.Context, key, stackName, targetNo
 // moverEndpoint rewrites a loopback object-store endpoint to the Docker
 // host-gateway alias: the mover runs in a container, where 127.0.0.1 is the
 // container itself — the store is published on the routing mesh, so
-// host.docker.internal:<port> reaches it from any node (BUG-030 follow-up).
+// host.docker.internal:<port> reaches it from any node.
 func moverEndpoint(endpoint string) string {
 	e := endpoint
 	for _, host := range []string{"127.0.0.1", "localhost"} {
@@ -237,12 +237,12 @@ func moverEndpoint(endpoint string) string {
 
 // startMoverService runs `docker service create` without ever waiting on its
 // inherited pipes. On some daemons the CLI does not return even after the
-// service has been created (it stays attached to stdout/stderr), which stalled
-// the whole move: the create call never returned, so the task-wait never began
-// and the mover service was never cleaned up (BUG-030 third follow-up).
-// We redirect the CLI output to a temp file, return as soon as the service
-// exists (`docker service inspect`), and let the (possibly still attached) CLI
-// be killed/reaped in the background.
+// service has been created (it stays attached to stdout/stderr), which stalls
+// the whole move: the create call never returns, so the task-wait never begins
+// and the mover service is never cleaned up. The CLI output is therefore
+// redirected to a temp file, the call returns as soon as the service exists
+// (`docker service inspect`), and the (possibly still attached) CLI is
+// killed/reaped in the background.
 func startMoverService(ctx context.Context, args []string, svcName string) error {
 	logf, err := os.CreateTemp("", "pmcluster-mover-create-*.log")
 	if err != nil {

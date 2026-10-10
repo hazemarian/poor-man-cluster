@@ -15,12 +15,12 @@ type Local struct {
 
 // Get returns a single stack's metadata, or store.ErrStackNotFound.
 func (l Local) Get(ctx context.Context, name string) (*Stack, error) {
-	row, err := l.Store.GetStack(ctx, name)
+	row, err := l.Store.Stack(ctx, name)
 	if err != nil {
 		return nil, err
 	}
 	s := stackFromRow(row)
-	if fo, ferr := l.Store.GetStackFailover(ctx, name); ferr == nil {
+	if fo, ferr := l.Store.StackFailover(ctx, name); ferr == nil {
 		s.Failover = fo
 	}
 	return &s, nil

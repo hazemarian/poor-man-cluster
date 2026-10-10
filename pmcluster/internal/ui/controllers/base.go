@@ -46,7 +46,7 @@ func (c *Controller) loadParams(ctx context.Context) (apiURL, token string, conf
 	apiURL = c.EnvAPI
 	token = c.EnvToken
 
-	cfg, err := c.Store.GetSettings(ctx)
+	cfg, err := c.Store.Settings(ctx)
 	if err == nil {
 		if v, ok := cfg[keyAPIURL]; ok && v != "" {
 			apiURL = v

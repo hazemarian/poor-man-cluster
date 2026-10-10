@@ -92,9 +92,10 @@ func (t *Local) RemoveHostCert(ctx context.Context, host string, refresh bool) e
 	return cluster.RemoveCert(ctx, t.deps(), t.ConfigDir, t.Version, host, refresh)
 }
 
-// GetSiteCert returns the stored metadata for one certificate.
+// GetSiteCert returns the stored metadata for one certificate. (Get-prefixed:
+// the port already exposes an unrelated SiteCert apply method.)
 func (t *Local) GetSiteCert(ctx context.Context, domain string) (*Cert, error) {
-	row, err := t.Store.GetSiteCert(ctx, domain)
+	row, err := t.Store.SiteCert(ctx, domain)
 	if err != nil {
 		return nil, err
 	}

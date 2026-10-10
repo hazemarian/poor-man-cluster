@@ -17,7 +17,7 @@ Legend: ⏱ effort is focused developer time. **Quick win** = simple + high valu
 ## 🔴 Large (bigger projects, schedule deliberately)
 
 ### L2. Control-plane DB snapshot into Raft-replicated Docker config (was #7)
-- ✅ **Shipped (v0.2.138).** The swarm leader snapshots the failover-survivor kit into `pmcluster_state_<ts>` Docker configs — replicated to every manager by Swarm's own Raft store, so no tarball/rsync shipping is needed. `ensureControlPlaneFresh` restores from the config on promotion. **Security split:** the AES-GCM encryption key goes in a second config family (`pmcluster_state_key_<ts>`), so key + ciphertext never share one blob; a restore refuses a state config whose key config is missing. Details in the changelog.
+- ✅ **Shipped (v0.2.138; restore semantics tightened later).** The swarm leader snapshots the failover-survivor kit into `pmcluster_state_<ts>` Docker configs — replicated to every manager by Swarm's own Raft store, so no tarball/rsync shipping is needed. **Security split:** the AES-GCM encryption key goes in a second config family (`pmcluster_state_key_<ts>`), so key + ciphertext never share one blob; a restore refuses a state config whose key config is missing. Restore is **startup-only** (before the store is opened — restoring under a live SQLite connection split-brains the daemon); on promotion the leader only publishes a fresh snapshot. Worker/leaderless swarms degrade gracefully instead of crash-looping. Details in the changelog and `docs/control-loop-design.md`.
 
 ### L3. Interactive exec via websocket (was #9)
 - ✅ **Shipped (v0.2.141).** Browser terminal (vendored xterm.js) → console websocket → daemon websocket → `docker exec -it` TTY hijack. Operator-role only, Bearer auth on the daemon, frame protocol (binary stdin/stdout, `resize`/`exit` JSON controls), Terminal button per service row. Details in `pmcluster/docs/service-ops-design.md` §8.
@@ -52,6 +52,20 @@ Legend: ⏱ effort is focused developer time. **Quick win** = simple + high valu
 - Inventory page, retag scope/stack from console, stack-aware config resolution — v0.2.108
 - Run-once jobs shown as Complete (not Degraded) — v0.2.108/109.1
 - Runtime `NEXT_*` env injection for Next.js apps (app-side pattern) — donation-campaign-frontend
+
+---
+
+## ✅ Shipped v0.2.150 → v0.2.179 (the current architecture)
+
+- **Content-addressed configs/secrets (v0.2.155)** — every swarm config/secret is named `<base>_<sha256-first-8-hex>`; identical content reuses the object, a change mints a new one, and the numbered `_v<N>` increments are gone. The **DB is the index and also holds the value**: translate reads values from the swarm (swarm-first) and **rebuilds a missing object from the DB**; `cluster update` runs a rebuild-on-missing repair pass; `secret heal` verifies/re-mirrors every secret. Rotation is safe because the old, in-use swarm secret is immutable and stays mounted.
+- **DSL additions** — `secret(name)` env ref (prints a value, vs `secrets(name)` which mounts a file) + `settings(name)` (v0.2.154/152); `expose.external` + `expose.mode` and TCP-only `ports` with `mode` (v0.2.153); `config_path(<name>)` file mounts with one syntax for app + platform stacks (v0.2.153); literal `$` escaped as `$$` in every rendered value (v0.2.176); `replicas: 0` rendered verbatim (v0.2.178).
+- **In-cluster backup store** — MinIO (v0.2.160) was replaced by **SeaweedFS** (v0.2.160.1, MinIO images unpullable; production never ran MinIO): S3 :8333 published on the routing mesh, WebDAV :7333, pinned to a non-storage/non-platform node, `seaweedfs_admin` managed credential. The v0.2.160.1 `rclone` replicator sidecar was itself replaced (v0.2.172) by **offen's native double-write** (WebDAV to the store + AWS_* to the offsite target) — no replicator service exists any more.
+- **Storage failover & lifecycle** — `node promote/demote`, console storage pills + Move form (v0.2.158); opt-in `storage_failover` with the failover marker, amber badge, `stack ack`, and hourly `backup_cron` default (v0.2.159); the leader is always a storage node and storage follows leadership (v0.2.170/171); store-transit mover — no cross-node host ports (v0.2.174); failover restores the *source node's* archive (v0.2.175); `backup restore` routes to the owning node and `--from-s3` really pulls offsite (v0.2.175).
+- **Cluster lifecycle** — `cluster reset [--restore]`, self-healing/existence-aware `cluster update`, `cluster down --purge` writes a restorable `purge-backup-<ts>.tar.gz` before deleting the store (v0.2.161); `platform_node` defaults to the leader (v0.2.175).
+- **Drift detection** — every service carries `io.pmcluster.rendered_hash` (stamped after a successful apply); `stackdrift.InSync` compares content-vs-live so a manual `docker service update` or half-applied deploy is re-applied even when the stored hash matches (v0.2.16x).
+- **Platform/app separation (v0.2.177)** — `io.pmcluster.platform=true` surfaced end-to-end: a `platform` field on the services API, a read-only console **Platform page** (`/web/platform`) plus a separated panel on Services, platform stacks hidden from the stacks list, `service list --platform`.
+- **Hardening (v0.2.176/178)** — daemon role tiers (admin/operator/viewer; migration 0025), RBAC on rendered configs, masked secret-ish settings for non-admin tokens, fast-reject garbage bearers, CSRF Origin/Referer guard, secure session cookie flag, vendored htmx, bcrypt 72-byte limit, random persisted console session secret, worker standby (no doomed reconcile spam), throttled sync-error + storage-pause logging, backup trigger retry, Traefik pinned to managers (the swarm provider needs the manager socket — fixes intermittent 404s through the routing mesh).
+- **Brand identity (v0.2.179)** — six-palette `--brand-*` token system, a palette picker persisted before first paint, the inlined combination-mark logo; README lockup.
 
 ---
 

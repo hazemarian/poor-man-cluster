@@ -31,9 +31,9 @@ func TestSiteCertsCRUD(t *testing.T) {
 	if err := s.PutSiteCert(ctx, row); err != nil {
 		t.Fatalf("PutSiteCert: %v", err)
 	}
-	got, err := s.GetSiteCert(ctx, "example.com")
+	got, err := s.SiteCert(ctx, "example.com")
 	if err != nil {
-		t.Fatalf("GetSiteCert: %v", err)
+		t.Fatalf("SiteCert: %v", err)
 	}
 	if got.Domain != row.Domain {
 		t.Errorf("domain = %q, want %q", got.Domain, row.Domain)
@@ -63,9 +63,9 @@ func TestSiteCertsCRUD(t *testing.T) {
 	if err := s.PutSiteCert(ctx, row2); err != nil {
 		t.Fatalf("PutSiteCert (update): %v", err)
 	}
-	got2, err := s.GetSiteCert(ctx, "example.com")
+	got2, err := s.SiteCert(ctx, "example.com")
 	if err != nil {
-		t.Fatalf("GetSiteCert (after update): %v", err)
+		t.Fatalf("SiteCert (after update): %v", err)
 	}
 	if got2.CertSecret != "cert_v013" {
 		t.Errorf("CertSecret after update = %q, want cert_v013", got2.CertSecret)
@@ -80,15 +80,15 @@ func TestSiteCertsCRUD(t *testing.T) {
 	if err := s.DeleteSiteCert(ctx, "example.com"); err != nil {
 		t.Fatalf("DeleteSiteCert: %v", err)
 	}
-	if _, err := s.GetSiteCert(ctx, "example.com"); !errors.Is(err, ErrSiteCertNotFound) {
-		t.Errorf("GetSiteCert after delete: err = %v, want ErrSiteCertNotFound", err)
+	if _, err := s.SiteCert(ctx, "example.com"); !errors.Is(err, ErrSiteCertNotFound) {
+		t.Errorf("SiteCert after delete: err = %v, want ErrSiteCertNotFound", err)
 	}
 
 	if err := s.DeleteSiteCert(ctx, "example.com"); err != nil {
 		t.Errorf("DeleteSiteCert (missing): %v", err)
 	}
 
-	if _, err := s.GetSiteCert(ctx, "other.com"); !errors.Is(err, ErrSiteCertNotFound) {
-		t.Errorf("GetSiteCert (never stored): err = %v, want ErrSiteCertNotFound", err)
+	if _, err := s.SiteCert(ctx, "other.com"); !errors.Is(err, ErrSiteCertNotFound) {
+		t.Errorf("SiteCert (never stored): err = %v, want ErrSiteCertNotFound", err)
 	}
 }

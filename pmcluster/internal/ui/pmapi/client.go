@@ -27,6 +27,7 @@ type Error struct {
 	Body   string
 }
 
+// Error renders the response status and body as one message.
 func (e *Error) Error() string {
 	return fmt.Sprintf("pmcluster API %d: %s", e.Status, e.Body)
 }
@@ -177,15 +178,15 @@ func (c *Client) ListStacks(ctx context.Context) ([]Stack, error) {
 	return body.Stacks, err
 }
 
-// GetStack returns one stack's metadata + recent revisions.
-func (c *Client) GetStack(ctx context.Context, name string) (*StackDetail, error) {
+// Stack returns one stack's metadata + recent revisions.
+func (c *Client) Stack(ctx context.Context, name string) (*StackDetail, error) {
 	var d StackDetail
 	err := c.do(ctx, http.MethodGet, "/stacks/"+url.PathEscape(name), nil, &d)
 	return &d, err
 }
 
-// GetRevision returns one revision's full source + rendered YAML.
-func (c *Client) GetRevision(ctx context.Context, name string, rev int64) (*Revision, error) {
+// Revision returns one revision's full source + rendered YAML.
+func (c *Client) Revision(ctx context.Context, name string, rev int64) (*Revision, error) {
 	var r Revision
 	p := "/stacks/" + url.PathEscape(name) + "/revisions/" + strconv.FormatInt(rev, 10)
 	err := c.do(ctx, http.MethodGet, p, nil, &r)
@@ -307,8 +308,8 @@ func (c *Client) RemoveHostCert(ctx context.Context, host string) error {
 	return c.do(ctx, http.MethodDelete, "/tls/hosts/"+url.PathEscape(host), nil, nil)
 }
 
-// GetSiteCert returns the cluster's own (default) certificate metadata.
-func (c *Client) GetSiteCert(ctx context.Context) (*SiteCert, error) {
+// SiteCert returns the cluster's own (default) certificate metadata.
+func (c *Client) SiteCert(ctx context.Context) (*SiteCert, error) {
 	var out SiteCert
 	err := c.do(ctx, http.MethodGet, "/tls/site", nil, &out)
 	return &out, err
@@ -439,8 +440,8 @@ func (c *Client) ListConfigs(ctx context.Context, scope, stack string) ([]Config
 	return body.Configs, err
 }
 
-// GetConfig returns one config including its content.
-func (c *Client) GetConfig(ctx context.Context, name string) (*Config, error) {
+// Config returns one config including its content.
+func (c *Client) Config(ctx context.Context, name string) (*Config, error) {
 	var out Config
 	err := c.do(ctx, http.MethodGet, "/configs/"+url.PathEscape(name), nil, &out)
 	return &out, err
@@ -510,8 +511,8 @@ func (c *Client) ListRenderedConfigs(ctx context.Context) ([]RenderedConfig, err
 	return out.Configs, nil
 }
 
-// GetClusterSettings returns the editable cluster settings.
-func (c *Client) GetClusterSettings(ctx context.Context) (ClusterSettings, error) {
+// ClusterSettings returns the editable cluster settings.
+func (c *Client) ClusterSettings(ctx context.Context) (ClusterSettings, error) {
 	var body struct {
 		Settings ClusterSettings `json:"settings"`
 	}
@@ -529,8 +530,8 @@ func (c *Client) UpdateClusterSettings(ctx context.Context, settings map[string]
 	return body.Settings, err
 }
 
-// GetUsage returns the config/secret → stacks reference graph.
-func (c *Client) GetUsage(ctx context.Context) (*Usage, error) {
+// Usage returns the config/secret → stacks reference graph.
+func (c *Client) Usage(ctx context.Context) (*Usage, error) {
 	var out Usage
 	err := c.do(ctx, http.MethodGet, "/usage", nil, &out)
 	return &out, err

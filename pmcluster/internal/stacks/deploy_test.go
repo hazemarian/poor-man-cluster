@@ -218,17 +218,17 @@ func TestDeploy_HappyPath(t *testing.T) {
 		t.Error("deployer received empty compose YAML")
 	}
 
-	st, err := s.GetStack(ctx, "donation-campaign")
+	st, err := s.Stack(ctx, "donation-campaign")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	if st.CurrentRevision != result.Revision {
 		t.Errorf("store current_revision = %d, want %d", st.CurrentRevision, result.Revision)
 	}
 
-	rev, err := s.GetRevision(ctx, "donation-campaign", result.Revision)
+	rev, err := s.Revision(ctx, "donation-campaign", result.Revision)
 	if err != nil {
-		t.Fatalf("GetRevision: %v", err)
+		t.Fatalf("Revision: %v", err)
 	}
 	if rev.RenderedYAML != string(result.RenderedYAML) {
 		t.Errorf("stored RenderedYAML differs from returned RenderedYAML")
@@ -248,9 +248,9 @@ func TestDeploy_RecordsPipelineSteps(t *testing.T) {
 		t.Fatalf("Deploy: %v", err)
 	}
 
-	rev, err := s.GetRevision(ctx, "donation-campaign", res.Revision)
+	rev, err := s.Revision(ctx, "donation-campaign", res.Revision)
 	if err != nil {
-		t.Fatalf("GetRevision: %v", err)
+		t.Fatalf("Revision: %v", err)
 	}
 
 	var env struct {
@@ -336,9 +336,9 @@ func TestRollback_PreservesOriginalPayload(t *testing.T) {
 		t.Fatalf("Rollback: %v", err)
 	}
 
-	rev, err := s.GetRevision(ctx, "donation-campaign", rr.Revision)
+	rev, err := s.Revision(ctx, "donation-campaign", rr.Revision)
 	if err != nil {
-		t.Fatalf("GetRevision: %v", err)
+		t.Fatalf("Revision: %v", err)
 	}
 	var rb struct {
 		RollbackOf int64           `json:"rollback_of"`
@@ -437,12 +437,12 @@ func TestDeploy_AppNameOverride(t *testing.T) {
 		t.Errorf("result.StackName = %q, want custom-name", result.StackName)
 	}
 
-	if _, err := s.GetStack(ctx, "custom-name"); err != nil {
-		t.Errorf("GetStack(custom-name): %v", err)
+	if _, err := s.Stack(ctx, "custom-name"); err != nil {
+		t.Errorf("Stack(custom-name): %v", err)
 	}
 
-	if _, err := s.GetStack(ctx, "donation-campaign"); !errors.Is(err, store.ErrStackNotFound) {
-		t.Errorf("GetStack(donation-campaign) = %v, want ErrStackNotFound", err)
+	if _, err := s.Stack(ctx, "donation-campaign"); !errors.Is(err, store.ErrStackNotFound) {
+		t.Errorf("Stack(donation-campaign) = %v, want ErrStackNotFound", err)
 	}
 }
 
@@ -573,14 +573,14 @@ func TestDeploy_DeployerError(t *testing.T) {
 		t.Errorf("error = %q, should mention docker stack deploy", err.Error())
 	}
 
-	st, stErr := s.GetStack(ctx, "donation-campaign")
+	st, stErr := s.Stack(ctx, "donation-campaign")
 	if errors.Is(stErr, store.ErrStackNotFound) {
 		t.Fatal("stack row missing after deployer error — should be recorded")
 	}
 	if stErr != nil {
-		t.Fatalf("GetStack: %v", stErr)
+		t.Fatalf("Stack: %v", stErr)
 	}
-	if _, revErr := s.GetRevision(ctx, "donation-campaign", st.CurrentRevision); revErr != nil {
+	if _, revErr := s.Revision(ctx, "donation-campaign", st.CurrentRevision); revErr != nil {
 		t.Errorf("revision row missing after deployer error: %v", revErr)
 	}
 }
@@ -601,13 +601,13 @@ func TestDeploy_FailedApplyLeavesHashEmptyAndNextSyncRetries(t *testing.T) {
 		t.Fatal("Deploy should fail when the deployer errors")
 	}
 
-	st, err := s.GetStack(ctx, "donation-campaign")
+	st, err := s.Stack(ctx, "donation-campaign")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
-	rev, err := s.GetRevision(ctx, "donation-campaign", st.CurrentRevision)
+	rev, err := s.Revision(ctx, "donation-campaign", st.CurrentRevision)
 	if err != nil {
-		t.Fatalf("GetRevision: %v", err)
+		t.Fatalf("Revision: %v", err)
 	}
 	if rev.RenderedHash != "" {
 		t.Fatalf("BUG-018: failed deploy stamped rendered hash %q — the next Sync would treat the stack as up-to-date", rev.RenderedHash)
@@ -631,9 +631,9 @@ func TestDeploy_FailedApplyLeavesHashEmptyAndNextSyncRetries(t *testing.T) {
 	}
 
 	// The retried apply succeeded and now stamps the hash.
-	rev, err = s.GetRevision(ctx, "donation-campaign", got.Revision)
+	rev, err = s.Revision(ctx, "donation-campaign", got.Revision)
 	if err != nil {
-		t.Fatalf("GetRevision (retry): %v", err)
+		t.Fatalf("Revision (retry): %v", err)
 	}
 	if rev.RenderedHash == "" {
 		t.Error("rendered hash still empty after the successful retry")
@@ -685,9 +685,9 @@ func TestRollback_HappyPath(t *testing.T) {
 		t.Errorf("rollback RenderedYAML differs from v1 RenderedYAML")
 	}
 
-	st, err := s.GetStack(ctx, "donation-campaign")
+	st, err := s.Stack(ctx, "donation-campaign")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	if st.CurrentRevision != rr.Revision {
 		t.Errorf("stack current_revision = %d, want rollback revision %d",
@@ -715,7 +715,7 @@ func TestRollback_UnknownRevision(t *testing.T) {
 
 // TestRollback_UnknownStack verifies that rolling back a non-existent stack
 // returns store.ErrRevisionNotFound (the revision lookup fails first since
-// we look up by stack_name AND revision in the same query).
+// the lookup is by stack_name AND revision in the same query).
 func TestRollback_UnknownStack(t *testing.T) {
 	s := openTestStore(t)
 	dep := &recordingDeployer{}
@@ -759,10 +759,10 @@ func TestUndeploy_HappyPath(t *testing.T) {
 	if got := dk.removedSecrets; len(got) != 1 || got[0] != "donation_campaign_db_password" {
 		t.Errorf("removedSecrets = %v, want [donation_campaign_db_password]", got)
 	}
-	if _, err := s.GetStack(ctx, "donation-campaign"); !errors.Is(err, store.ErrStackNotFound) {
+	if _, err := s.Stack(ctx, "donation-campaign"); !errors.Is(err, store.ErrStackNotFound) {
 		t.Errorf("stack row still present after Undeploy: %v", err)
 	}
-	if _, err := s.GetConfig(ctx, "donation-campaign_env"); !errors.Is(err, store.ErrConfigNotFound) {
+	if _, err := s.Config(ctx, "donation-campaign_env"); !errors.Is(err, store.ErrConfigNotFound) {
 		t.Errorf("stack config still present after Undeploy: %v", err)
 	}
 }
@@ -781,7 +781,7 @@ func TestUndeploy_NoDocker(t *testing.T) {
 	if err := svc.Undeploy(ctx, "donation-campaign"); err != nil {
 		t.Fatalf("Undeploy: %v", err)
 	}
-	if _, err := s.GetStack(ctx, "donation-campaign"); !errors.Is(err, store.ErrStackNotFound) {
+	if _, err := s.Stack(ctx, "donation-campaign"); !errors.Is(err, store.ErrStackNotFound) {
 		t.Errorf("stack row still present after Undeploy: %v", err)
 	}
 }
@@ -835,9 +835,9 @@ func TestSync_NoOpWhenNothingChanged(t *testing.T) {
 	if len(dep.calls) != 1 {
 		t.Errorf("deployer received %d calls, want 1 (sync must not re-deploy)", len(dep.calls))
 	}
-	st, err := s.GetStack(ctx, "donation-campaign")
+	st, err := s.Stack(ctx, "donation-campaign")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	if st.CurrentRevision != revBefore {
 		t.Errorf("current_revision = %d, want %d (no new revision recorded)", st.CurrentRevision, revBefore)
@@ -965,7 +965,7 @@ func TestUndeploy_DeployerError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "docker stack rm") {
 		t.Errorf("Undeploy err = %v, want wrapped docker stack rm error", err)
 	}
-	if _, gErr := s.GetStack(ctx, "donation-campaign"); gErr != nil {
+	if _, gErr := s.Stack(ctx, "donation-campaign"); gErr != nil {
 		t.Errorf("stack row should survive a failed swarm removal: %v", gErr)
 	}
 }
@@ -1141,7 +1141,7 @@ func TestDeployAsync_BackgroundFailureRecordsLastError(t *testing.T) {
 	var st *store.Stack
 	var err error
 	for time.Now().Before(deadline) {
-		st, err = s.GetStack(ctx, "donation-campaign")
+		st, err = s.Stack(ctx, "donation-campaign")
 		entries := store.ParseStackErrors(st.LastError)
 		if err == nil && len(entries) > 0 && entries[0].Error != "" {
 			break
@@ -1149,7 +1149,7 @@ func TestDeployAsync_BackgroundFailureRecordsLastError(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	entries := store.ParseStackErrors(st.LastError)
 	if len(entries) == 0 || entries[0].Error != "docker stack deploy: docker stack deploy: boom" {
@@ -1163,7 +1163,7 @@ func TestDeployAsync_BackgroundFailureRecordsLastError(t *testing.T) {
 	if _, err := svc.Deploy(ctx, Payload{Manifest: donationCampaignManifest}); err != nil {
 		t.Fatalf("Deploy after recovery: %v", err)
 	}
-	st, _ = s.GetStack(ctx, "donation-campaign")
+	st, _ = s.Stack(ctx, "donation-campaign")
 	entries = store.ParseStackErrors(st.LastError)
 	if len(entries) == 0 || entries[0].Error == "" {
 		t.Errorf("stack error history after successful deploy = %q, want failures-only (prior failure still newest)", st.LastError)

@@ -140,7 +140,7 @@ func (c Users) Edit(g *gin.Context) {
 		return
 	}
 	d.ID = id
-	u, err := c.Store.GetByID(ctx, id)
+	u, err := c.Store.ByID(ctx, id)
 	if err != nil {
 		d.ErrKey, d.ErrRaw = "users.err_not_found", err.Error()
 		c.userFormError(g, d)
@@ -221,7 +221,7 @@ func (c Users) EditSave(g *gin.Context) {
 	var u *store.User
 	var err error
 	if idErr == nil {
-		u, err = c.Store.GetByID(ctx, id)
+		u, err = c.Store.ByID(ctx, id)
 		if u != nil {
 			d.Username = u.Username
 		}
@@ -276,7 +276,7 @@ func (c Users) Remove(g *gin.Context) {
 	var u *store.User
 	var err error
 	if idErr == nil {
-		u, err = c.Store.GetByID(ctx, id)
+		u, err = c.Store.ByID(ctx, id)
 	}
 	switch {
 	case idErr != nil:

@@ -31,7 +31,7 @@ func dataHash(data []byte) string {
 // is the same "hash the data, compare with the stored hash" rule applied to
 // configs, with the DB as the source of truth.
 type secretHashStore interface {
-	GetSettingDefault(ctx context.Context, key, fallback string) string
+	SettingDefault(ctx context.Context, key, fallback string) string
 	SetSetting(ctx context.Context, key, value string) error
 }
 
@@ -112,7 +112,7 @@ func EnsureVersionedSecret(ctx context.Context, d runtime.Client, hs secretHashS
 	// back), mirroring the config path where the bytes are inspectable.
 	stored := ""
 	if hs != nil {
-		stored = hs.GetSettingDefault(ctx, secretHashKey(baseName), "")
+		stored = hs.SettingDefault(ctx, secretHashKey(baseName), "")
 	}
 	hash := dataHash(data)
 	versionedName = store.SwarmSecretName(baseName, hash)
@@ -218,29 +218,34 @@ func EnsureConfig(ctx context.Context, d runtime.Client, baseName string, data [
 	versionedName = store.SwarmConfigName(baseName, hash)
 
 	if cur, err := d.ConfigInspect(ctx, versionedName); err == nil && dataHash(cur.Data) == hash {
-		return versionedName, false, nil
+		created = false
+	} else {
+		err = d.ConfigCreate(ctx, runtime.ConfigSpec{
+			Name: versionedName,
+			Data: data,
+			Labels: map[string]string{
+				pmclusterLabel:        "true",
+				"pmcluster.base":      baseName,
+				"pmcluster.version":   version,
+				"pmcluster.data_hash": hash,
+			},
+		})
+		if err != nil {
+			return "", false, fmt.Errorf("create config %s: %w", versionedName, err)
+		}
+		created = true
 	}
 
-	err = d.ConfigCreate(ctx, runtime.ConfigSpec{
-		Name: versionedName,
-		Data: data,
-		Labels: map[string]string{
-			pmclusterLabel:        "true",
-			"pmcluster.base":      baseName,
-			"pmcluster.version":   version,
-			"pmcluster.data_hash": hash,
-		},
-	})
-	if err != nil {
-		return "", false, fmt.Errorf("create config %s: %w", versionedName, err)
-	}
-
-	// GC everything managed under this base except the freshly minted object.
+	// GC everything managed under this base except the freshly ensured object,
+	// on BOTH the create and reuse paths. The update workflow's
+	// rebuild-on-missing repair step can mint the new content-addressed object
+	// BEFORE EnsureConfig runs; if GC only fired on create, the previous
+	// object would be left orphaned and would keep accumulating on every edit.
 	if err := gcManagedConfigs(ctx, d, baseName, versionedName); err != nil {
 		_ = err
 	}
 
-	return versionedName, true, nil
+	return versionedName, created, nil
 }
 
 // RandomPassword returns a cryptographically random password that meets

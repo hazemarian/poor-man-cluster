@@ -183,7 +183,7 @@ func TestRemoveStackHandler(t *testing.T) {
 	if len(dep.removed) != 1 || dep.removed[0] != "demo" {
 		t.Errorf("RemoveStack calls = %v, want [demo]", dep.removed)
 	}
-	if _, err := st.GetStack(ctx, "demo"); !errors.Is(err, store.ErrStackNotFound) {
+	if _, err := st.Stack(ctx, "demo"); !errors.Is(err, store.ErrStackNotFound) {
 		t.Errorf("stack row still present after DELETE: %v", err)
 	}
 
@@ -299,9 +299,9 @@ func TestSyncStackHandler(t *testing.T) {
 	if len(dep.deployed) == 0 {
 		t.Fatal("sync did not re-deploy the stack")
 	}
-	stk, err := st.GetStack(ctx, "demo")
+	stk, err := st.Stack(ctx, "demo")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	if stk.CurrentRevision <= 1000 {
 		t.Errorf("CurrentRevision = %d, want > 1000 (new revision recorded)", stk.CurrentRevision)
@@ -401,9 +401,9 @@ func TestAckStackHandler(t *testing.T) {
 	if body := rec.Body.String(); !strings.Contains(body, `"acknowledged":true`) || !strings.Contains(body, `"demo"`) {
 		t.Errorf("ack body = %s, want stack demo acknowledged", body)
 	}
-	fo, err := st.GetStackFailover(ctx, "demo")
+	fo, err := st.StackFailover(ctx, "demo")
 	if err != nil {
-		t.Fatalf("GetStackFailover after ack: %v", err)
+		t.Fatalf("StackFailover after ack: %v", err)
 	}
 	if !fo.Acked {
 		t.Error("marker not acknowledged after POST /stacks/demo/ack")
@@ -465,9 +465,9 @@ func TestDeployConflictRejectedAtAPI(t *testing.T) {
 		t.Errorf("body = %s, want 'already exists from repo'", rec.Body.String())
 	}
 
-	stk, err := st.GetStack(ctx, "demo")
+	stk, err := st.Stack(ctx, "demo")
 	if err != nil {
-		t.Fatalf("GetStack: %v", err)
+		t.Fatalf("Stack: %v", err)
 	}
 	if stk.CurrentRevision == 0 {
 		t.Error("stack missing after conflicting deploy")

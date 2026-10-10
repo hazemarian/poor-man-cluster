@@ -13,6 +13,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/testutil/fakeclient"
 )
 
 // storeFake implements the setting-store interface NodesHandler needs.
@@ -28,7 +29,7 @@ func newStoreFake(initial map[string]string) *storeFake {
 	return s
 }
 
-func (s *storeFake) GetSettingDefault(_ context.Context, key, def string) string {
+func (s *storeFake) SettingDefault(_ context.Context, key, def string) string {
 	if v, ok := s.settings[key]; ok {
 		return v
 	}
@@ -42,8 +43,8 @@ func (s *storeFake) SetSetting(_ context.Context, key, value string) error {
 
 func TestNodesHandler_HappyPath(t *testing.T) {
 	now := int64(1_700_000_000)
-	fake := &inMemoryDockerClient{
-		nodeListResult: []runtime.Node{
+	fake := &fakeclient.Client{
+		NodeListResult: []runtime.Node{
 			{
 				ID:            "node1abc",
 				Hostname:      "manager-01",
@@ -135,8 +136,8 @@ func TestNodesHandler_HappyPath(t *testing.T) {
 }
 
 func TestNodesHandler_DockerError_502(t *testing.T) {
-	fake := &inMemoryDockerClient{
-		nodeListErr: errors.New("cannot connect to docker daemon"),
+	fake := &fakeclient.Client{
+		NodeListErr: errors.New("cannot connect to docker daemon"),
 	}
 
 	h := NodesHandler(fake, newStoreFake(nil))
@@ -157,8 +158,8 @@ func TestNodesHandler_DockerError_502(t *testing.T) {
 }
 
 func TestNodesHandler_EmptyNodeList(t *testing.T) {
-	fake := &inMemoryDockerClient{
-		nodeListResult: []runtime.Node{},
+	fake := &fakeclient.Client{
+		NodeListResult: []runtime.Node{},
 	}
 
 	h := NodesHandler(fake, newStoreFake(nil))
@@ -183,11 +184,11 @@ func TestNodesHandler_EmptyNodeList(t *testing.T) {
 	}
 }
 
-// storageLabelClient wraps inMemoryDockerClient and records SetNodeLabel
-// calls so NodeStorageHandler tests can assert the label was stamped/cleared
-// and inject failures.
+// storageLabelClient wraps fakeclient.Client and records SetNodeLabel calls so
+// NodeStorageHandler tests can assert the label was stamped/cleared and inject
+// failures.
 type storageLabelClient struct {
-	*inMemoryDockerClient
+	*fakeclient.Client
 	labelCalls []string // "id:key:value"
 	labelErr   error
 }
@@ -219,7 +220,7 @@ func doStorageRequest(t *testing.T, h http.Handler, method, hostname string) *ht
 }
 
 func TestNodeStorageHandler_Promote(t *testing.T) {
-	cli := &storageLabelClient{inMemoryDockerClient: &inMemoryDockerClient{nodeListResult: tc7Nodes()}}
+	cli := &storageLabelClient{Client: &fakeclient.Client{NodeListResult: tc7Nodes()}}
 	store := newStoreFake(map[string]string{cluster.SettingStorageNodes(): "nxt-sw-1-m"})
 
 	h := NodeStorageHandler(cli, store)
@@ -238,8 +239,8 @@ func TestNodeStorageHandler_Promote(t *testing.T) {
 	if body["storage_nodes"] != "nxt-sw-1-m,nxt-sw-2-m" {
 		t.Errorf("storage_nodes = %v, want nxt-sw-1-m,nxt-sw-2-m", body["storage_nodes"])
 	}
-	if store.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), "") != "nxt-sw-1-m,nxt-sw-2-m" {
-		t.Errorf("setting not persisted: %q", store.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), ""))
+	if store.SettingDefault(context.Background(), cluster.SettingStorageNodes(), "") != "nxt-sw-1-m,nxt-sw-2-m" {
+		t.Errorf("setting not persisted: %q", store.SettingDefault(context.Background(), cluster.SettingStorageNodes(), ""))
 	}
 	if len(cli.labelCalls) != 1 || cli.labelCalls[0] != "node2xyz:"+runtime.StorageNodeLabel+":true" {
 		t.Errorf("labelCalls = %v, want one true stamp on node2xyz", cli.labelCalls)
@@ -247,7 +248,7 @@ func TestNodeStorageHandler_Promote(t *testing.T) {
 }
 
 func TestNodeStorageHandler_PromoteIdempotent(t *testing.T) {
-	cli := &storageLabelClient{inMemoryDockerClient: &inMemoryDockerClient{nodeListResult: tc7Nodes()}}
+	cli := &storageLabelClient{Client: &fakeclient.Client{NodeListResult: tc7Nodes()}}
 	store := newStoreFake(map[string]string{cluster.SettingStorageNodes(): "nxt-sw-1-m,nxt-sw-2-m"})
 
 	h := NodeStorageHandler(cli, store)
@@ -270,7 +271,7 @@ func TestNodeStorageHandler_PromoteIdempotent(t *testing.T) {
 }
 
 func TestNodeStorageHandler_Demote(t *testing.T) {
-	cli := &storageLabelClient{inMemoryDockerClient: &inMemoryDockerClient{nodeListResult: tc7Nodes()}}
+	cli := &storageLabelClient{Client: &fakeclient.Client{NodeListResult: tc7Nodes()}}
 	store := newStoreFake(map[string]string{cluster.SettingStorageNodes(): "nxt-sw-1-m,nxt-sw-2-m"})
 
 	h := NodeStorageHandler(cli, store)
@@ -295,7 +296,7 @@ func TestNodeStorageHandler_Demote(t *testing.T) {
 }
 
 func TestNodeStorageHandler_UnknownNode_404(t *testing.T) {
-	cli := &storageLabelClient{inMemoryDockerClient: &inMemoryDockerClient{nodeListResult: tc7Nodes()}}
+	cli := &storageLabelClient{Client: &fakeclient.Client{NodeListResult: tc7Nodes()}}
 	store := newStoreFake(nil)
 
 	h := NodeStorageHandler(cli, store)
@@ -307,13 +308,13 @@ func TestNodeStorageHandler_UnknownNode_404(t *testing.T) {
 	if len(cli.labelCalls) != 0 {
 		t.Errorf("labelCalls = %v, want none for unknown node", cli.labelCalls)
 	}
-	if store.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), "") != "" {
-		t.Errorf("setting changed for unknown node: %q", store.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), ""))
+	if store.SettingDefault(context.Background(), cluster.SettingStorageNodes(), "") != "" {
+		t.Errorf("setting changed for unknown node: %q", store.SettingDefault(context.Background(), cluster.SettingStorageNodes(), ""))
 	}
 }
 
 func TestNodeStorageHandler_LabelError_500(t *testing.T) {
-	cli := &storageLabelClient{inMemoryDockerClient: &inMemoryDockerClient{nodeListResult: tc7Nodes()}, labelErr: errors.New("docker label fail")}
+	cli := &storageLabelClient{Client: &fakeclient.Client{NodeListResult: tc7Nodes()}, labelErr: errors.New("docker label fail")}
 	store := newStoreFake(nil)
 
 	h := NodeStorageHandler(cli, store)
@@ -323,8 +324,8 @@ func TestNodeStorageHandler_LabelError_500(t *testing.T) {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 	// Setting was still updated before the label failure.
-	if store.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), "") != "nxt-sw-2-m" {
-		t.Errorf("storage_nodes = %q, want nxt-sw-2-m (setting survives label error)", store.GetSettingDefault(context.Background(), cluster.SettingStorageNodes(), ""))
+	if store.SettingDefault(context.Background(), cluster.SettingStorageNodes(), "") != "nxt-sw-2-m" {
+		t.Errorf("storage_nodes = %q, want nxt-sw-2-m (setting survives label error)", store.SettingDefault(context.Background(), cluster.SettingStorageNodes(), ""))
 	}
 	var body map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
@@ -336,7 +337,7 @@ func TestNodeStorageHandler_LabelError_500(t *testing.T) {
 }
 
 func TestNodesHandler_StorageFlag(t *testing.T) {
-	fake := &inMemoryDockerClient{nodeListResult: tc7Nodes()}
+	fake := &fakeclient.Client{NodeListResult: tc7Nodes()}
 	h := NodesHandler(fake, newStoreFake(map[string]string{cluster.SettingStorageNodes(): "nxt-sw-1-m"}))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/nodes", nil)

@@ -147,7 +147,7 @@ func TestMove_LocalRestore(t *testing.T) {
 	}
 
 	// Pin setting persisted.
-	if got := svc.Store.GetSettingDefault(context.Background(), StackPinKey("demo"), ""); got != target {
+	if got := svc.Store.SettingDefault(context.Background(), StackPinKey("demo"), ""); got != target {
 		t.Fatalf("pin = %q, want %q", got, target)
 	}
 	// Subtree extracted into the volume root.
@@ -334,8 +334,8 @@ func TestMove_ClearsFailoverMarker(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetStackFailover: %v", err)
 	}
-	if _, err := svc.Store.GetStackFailover(ctx, "demo"); err != nil {
-		t.Fatalf("GetStackFailover (before move): %v", err)
+	if _, err := svc.Store.StackFailover(ctx, "demo"); err != nil {
+		t.Fatalf("StackFailover (before move): %v", err)
 	}
 
 	if err := svc.Move(ctx, "demo", target); err != nil {
@@ -343,12 +343,12 @@ func TestMove_ClearsFailoverMarker(t *testing.T) {
 	}
 
 	// The marker is gone: Get answers the package sentinel.
-	if _, err := svc.Store.GetStackFailover(ctx, "demo"); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("GetStackFailover after move = %v, want ErrNotFound (marker cleared)", err)
+	if _, err := svc.Store.StackFailover(ctx, "demo"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("StackFailover after move = %v, want ErrNotFound (marker cleared)", err)
 	}
 	// The move itself really ran (pin persisted) — the clear is step 5, not a
 	// shortcut around the restore.
-	if got := svc.Store.GetSettingDefault(ctx, StackPinKey("demo"), ""); got != target {
+	if got := svc.Store.SettingDefault(ctx, StackPinKey("demo"), ""); got != target {
 		t.Errorf("pin = %q, want %q (move must complete before the clear)", got, target)
 	}
 	if dep.callCount() == 0 {
@@ -378,8 +378,8 @@ func TestMove_NoFailoverMarkerIsFine(t *testing.T) {
 	if pins[0] == "node-a" {
 		target = "node-b"
 	}
-	if _, err := svc.Store.GetStackFailover(context.Background(), "demo"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("GetStackFailover (no marker) = %v, want ErrNotFound", err)
+	if _, err := svc.Store.StackFailover(context.Background(), "demo"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("StackFailover (no marker) = %v, want ErrNotFound", err)
 	}
 	if err := svc.Move(context.Background(), "demo", target); err != nil {
 		t.Fatalf("move without marker must succeed, got: %v", err)

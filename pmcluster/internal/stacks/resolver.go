@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -49,9 +50,9 @@ func (r *StoreConfigResolver) ResolveConfig(ctx context.Context, stack, name str
 	if r == nil || r.Store == nil {
 		return "", fmt.Errorf("config resolution unavailable (no store)")
 	}
-	c, err := r.Store.GetConfigForStack(ctx, stack, name)
+	c, err := r.Store.ConfigForStack(ctx, stack, name)
 	if err != nil {
-		if errors.Is(err, store.ErrConfigNotFound) {
+		if errors.Is(err, errs.ErrConfigNotFound) {
 			return "", fmt.Errorf("config %q not found for stack %q — create it with `pmcluster config create --scope service --stack %s %s`, or leave the stack empty to share it across stacks", name, stack, stack, name)
 		}
 		return "", fmt.Errorf("get config %q for stack %q: %w", name, stack, err)
@@ -91,7 +92,7 @@ func (r *StoreConfigResolver) ResolveSetting(ctx context.Context, stack, name st
 	if r == nil || r.Store == nil {
 		return "", fmt.Errorf("settings resolution unavailable (no store)")
 	}
-	v, err := r.Store.GetSetting(ctx, name)
+	v, err := r.Store.Setting(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrSettingNotFound) {
 			return "", fmt.Errorf("setting %q not found — set it with `pmcluster cluster settings set %s=...`", name, name)
@@ -121,9 +122,9 @@ func (r *StoreConfigResolver) ResolveSecretValue(ctx context.Context, stack, nam
 	if r.Cipher == nil {
 		return "", fmt.Errorf("secret-value resolution unavailable (no encryption key — run locally on a node with ~/.pmcluster/.encryption_key)")
 	}
-	sec, err := r.Store.GetSecret(ctx, name)
+	sec, err := r.Store.Secret(ctx, name)
 	if err != nil {
-		if errors.Is(err, store.ErrSecretNotFound) {
+		if errors.Is(err, errs.ErrSecretNotFound) {
 			return "", fmt.Errorf("secret %q not found — create it with `pmcluster secret create %s <value> --scope service --stack %s`", name, name, stack)
 		}
 		return "", fmt.Errorf("get secret %q: %w", name, err)

@@ -77,7 +77,7 @@ func TestHTTP_PutRoundTrip(t *testing.T) {
 	}
 
 	// Persisted in the store.
-	if got := st.GetSettingDefault(ctx, "volume_root", ""); got != "/data" {
+	if got := st.SettingDefault(ctx, "volume_root", ""); got != "/data" {
 		t.Errorf("stored volume_root = %q, want /data", got)
 	}
 }

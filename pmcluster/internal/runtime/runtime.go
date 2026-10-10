@@ -188,7 +188,7 @@ type Service struct {
 	Platform bool
 	// Labels is the service's full spec label set (stack namespace, the
 	// io.pmcluster.* markers, and RenderedHashLabel). `cluster update` reads
-	// them to diff the live service against a fresh render (BUG-017).
+	// them to diff the live service against a fresh render.
 	Labels map[string]string
 }
 
@@ -277,7 +277,7 @@ type Node struct {
 	UpdatedAt     int64
 	// Labels is the node's full spec label set, e.g. pmcluster.storage=true.
 	// `cluster update` reads it to clear stale storage labels from nodes that
-	// were removed from the storage_nodes setting (BUG-019b).
+	// were removed from the storage_nodes setting.
 	Labels map[string]string
 }
 
@@ -322,9 +322,9 @@ const NodeLabel = "io.pmcluster.node"
 // PlatformLabel is stamped on every service of a platform-managed stack
 // (app.platform: true — edge, traefik, OpenObserve, otel-collector, backup,
 // sso) by the compose writer. It is the discriminator the console/CLI use to
-// keep platform services apart from customer app services. It is duplicated
-// from internal/manifest.labelPlatform so this package stays self-contained
-// (the docker adapter reads labels to derive the Platform field).
+// keep platform services apart from customer app services. This is the
+// canonical value: internal/manifest aliases it (labelPlatform) rather than
+// repeating the literal, so there is one source of truth.
 const PlatformLabel = "io.pmcluster.platform"
 
 // RenderedHashLabel is stamped on every service of a rendered compose with the
@@ -333,6 +333,5 @@ const PlatformLabel = "io.pmcluster.platform"
 // fresh render to detect drift — a manual `docker service update`, a
 // half-applied deploy, or an upgrade that skipped a service. The stored
 // rendered hash cannot see this: it only records what pmcluster last INTENDED
-// to deploy, so a drifted service would otherwise stay drifted forever
-// (BUG-017).
+// to deploy, so a drifted service would otherwise stay drifted forever.
 const RenderedHashLabel = "io.pmcluster.rendered_hash"

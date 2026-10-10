@@ -18,8 +18,12 @@ import (
 type CredentialKind string
 
 const (
+	// KindTraefikAdmin marks credentials consumed by the Traefik ingress
+	// (the admin-auth basicAuth user).
 	KindTraefikAdmin CredentialKind = "traefik"
-	KindOpenObserve  CredentialKind = "openobserve"
+	// KindOpenObserve marks credentials consumed by OpenObserve (the
+	// observability stack's admin account).
+	KindOpenObserve CredentialKind = "openobserve"
 	// KindEdge marks credentials consumed by the pmcluster-edge console (the
 	// operator UI). Unlike the other kinds these are never force-restarted by
 	// rotate: the console persists them once, so Swarm secrets only matter for
@@ -146,7 +150,7 @@ func (m *CredentialsManager) EnsureMaterialized(ctx context.Context, name string
 	if !ok {
 		return false, fmt.Errorf("ensure materialized %s: no bootstrap spec for credential", name)
 	}
-	existing, err := m.Store.GetCredential(ctx, name)
+	existing, err := m.Store.Credential(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrCredentialNotFound) {
 			return false, nil
@@ -195,7 +199,7 @@ type bootstrapSpec struct {
 // changes, triggering a service update, and the new env vars take effect
 // once the data volume is reset (handled by the caller in up.go).
 func (m *CredentialsManager) ensure(ctx context.Context, spec bootstrapSpec) (*ManagedCredential, error) {
-	existing, err := m.Store.GetCredential(ctx, spec.name)
+	existing, err := m.Store.Credential(ctx, spec.name)
 	if err == nil {
 		username := existing.Username
 		usernameChanged := spec.username != "" && spec.username != existing.Username
@@ -311,7 +315,7 @@ func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedC
 		return nil, fmt.Errorf("cannot rotate %q: it is the daemon Bearer token for the %q user; rotating it would break the edge console's API access (remove the %q user row and the credential, then re-run to re-provision instead)", name, edgeAPITokenUser, edgeAPITokenUser)
 	}
 
-	existing, err := m.Store.GetCredential(ctx, name)
+	existing, err := m.Store.Credential(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("lookup %s: %w", name, err)
 	}
@@ -365,7 +369,7 @@ func (m *CredentialsManager) Rotate(ctx context.Context, name string) (*ManagedC
 	// Sync the console-reveal DB secrets row (keyed by the FIXED base name) to
 	// the new plaintext + hash, so GET /api/secrets/{name}/value keeps matching
 	// the rotated credential.
-	if _, err := m.Store.GetSecret(ctx, spec.swarmSecretName); err == nil {
+	if _, err := m.Store.Secret(ctx, spec.swarmSecretName); err == nil {
 		if err := m.Store.UpdateSecret(ctx, spec.swarmSecretName, ciphertext, store.SecretHash(password)); err != nil {
 			return nil, fmt.Errorf("update db secret %s: %w", spec.swarmSecretName, err)
 		}
@@ -555,7 +559,7 @@ func NewCredentials(st *store.Store, cipher *credentials.Cipher, rotator credent
 
 // Get returns the stored credential row (password ciphertext only).
 func (c *Credentials) Get(ctx context.Context, name string) (*store.ManagedCredential, error) {
-	return c.Store.GetCredential(ctx, name)
+	return c.Store.Credential(ctx, name)
 }
 
 // List returns all managed credentials.
@@ -568,7 +572,7 @@ func (c *Credentials) Reveal(ctx context.Context, name string) (string, error) {
 	if c.Cipher == nil {
 		return "", fmt.Errorf("encryption key unavailable")
 	}
-	cred, err := c.Store.GetCredential(ctx, name)
+	cred, err := c.Store.Credential(ctx, name)
 	if err != nil {
 		return "", err
 	}
@@ -623,7 +627,7 @@ func loadObjectStore(ctx context.Context, docker runtime.Client, st *store.Store
 	if st == nil || cipher == nil {
 		return ObjectStore{}, nil
 	}
-	cred, err := st.GetCredential(ctx, "seaweedfs_admin")
+	cred, err := st.Credential(ctx, "seaweedfs_admin")
 	if err != nil {
 		if errors.Is(err, store.ErrCredentialNotFound) {
 			return ObjectStore{}, nil
@@ -642,8 +646,8 @@ func loadObjectStore(ctx context.Context, docker runtime.Client, st *store.Store
 		Endpoint: "backup_seaweedfs:8333",
 		Bucket:   "pmcluster-backups",
 		// NOT `$`-escaped here: these land as compose env values, and the
-		// manifest ComposeWriter escapes every env value (BUG-001 / H8), so
-		// pre-escaping would double-escape.
+		// manifest ComposeWriter escapes every env value, so pre-escaping
+		// would double-escape.
 		AccessKey: cred.Username,
 		SecretKey: string(pass),
 		Node:      pickStoreNode(ctx, docker, st),
@@ -657,10 +661,10 @@ func loadObjectStore(ctx context.Context, docker runtime.Client, st *store.Store
 // first non-storage node, else "" — degraded, where the offsite copy still
 // provides disaster recovery).
 //
-// BUG-09: the store must never co-locate with the platform stack. The platform
-// node runs the heavy platform workloads (OpenObserve, the edge console,
-// Traefik); if the SeaweedFS backup store also lands there, a small node hosts
-// both the quorum-critical platform services AND the durable store — when it
+// The store must never co-locate with the platform stack. The platform node
+// runs the heavy platform workloads (OpenObserve, the edge console, Traefik);
+// if the SeaweedFS backup store also lands there, a small node hosts both the
+// quorum-critical platform services AND the durable store — when it
 // OOMs/crash-loops it takes the Raft quorum and the store down together. So a
 // non-storage candidate that is NOT the platform node is always preferred; the
 // platform node is only used as a last resort when no other valid non-storage
@@ -689,10 +693,10 @@ func pickStoreNode(ctx context.Context, docker runtime.Client, st *store.Store) 
 	}
 
 	storage := map[string]bool{}
-	for _, h := range splitStorageNodes(st.GetSettingDefault(ctx, SettingStorageNodes(), "")) {
+	for _, h := range splitStorageNodes(st.SettingDefault(ctx, SettingStorageNodes(), "")) {
 		storage[h] = true
 	}
-	platform := st.GetSettingDefault(ctx, SettingPlatformNode(), "")
+	platform := st.SettingDefault(ctx, SettingPlatformNode(), "")
 
 	// Preferred: a non-storage, non-platform worker (the durable copy lives in
 	// a different failure domain than both the data and the platform stack).

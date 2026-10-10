@@ -66,7 +66,7 @@ func (w *Local) Delete(ctx context.Context, source string) error {
 
 // Secret returns the decrypted shared secret for the source.
 func (w *Local) Secret(ctx context.Context, source string) ([]byte, error) {
-	src, err := w.Store.GetWebhookSource(ctx, source)
+	src, err := w.Store.WebhookSource(ctx, source)
 	if err != nil {
 		return nil, err
 	}

@@ -63,6 +63,8 @@ type execResultDTO struct {
 	Stderr   string `json:"stderr"`
 }
 
+// List returns the service summaries for a stack (or all stacks when empty)
+// via GET /services.
 func (a *Services) List(ctx context.Context, stack string) ([]services.ServiceSummary, error) {
 	path := "/services"
 	if stack != "" {
@@ -79,6 +81,7 @@ func (a *Services) List(ctx context.Context, stack string) ([]services.ServiceSu
 	return ss, nil
 }
 
+// Tasks returns a service's task history via GET /services/{stack}/{service}/tasks.
 func (a *Services) Tasks(ctx context.Context, stack, service string) ([]services.TaskRun, error) {
 	var out tasksDTO
 	if err := a.c.do(ctx, http.MethodGet, svcPath(stack, service)+"/tasks", nil, &out); err != nil {
@@ -99,6 +102,8 @@ func (a *Services) Tasks(ctx context.Context, stack, service string) ([]services
 	return ts, nil
 }
 
+// Logs returns up to tail log lines of a service via GET
+// /services/{stack}/{service}/logs.
 func (a *Services) Logs(ctx context.Context, stack, service string, tail int) ([]services.LogLine, error) {
 	var out logsDTO
 	if err := a.c.do(ctx, http.MethodGet, svcPath(stack, service)+"/logs?tail="+itoa(tail), nil, &out); err != nil {
@@ -111,10 +116,13 @@ func (a *Services) Logs(ctx context.Context, stack, service string, tail int) ([
 	return ls, nil
 }
 
+// Restart forces a rolling restart via POST /services/{stack}/{service}/restart.
 func (a *Services) Restart(ctx context.Context, stack, service string) error {
 	return a.c.do(ctx, http.MethodPost, svcPath(stack, service)+"/restart", nil, nil)
 }
 
+// Exec runs a fixed argv non-interactively in a task container via POST
+// /services/{stack}/{service}/exec.
 func (a *Services) Exec(ctx context.Context, stack, service string, argv []string) (*services.ExecResult, error) {
 	var out execResultDTO
 	if err := a.c.do(ctx, http.MethodPost, svcPath(stack, service)+"/exec", map[string]any{"argv": argv}, &out); err != nil {

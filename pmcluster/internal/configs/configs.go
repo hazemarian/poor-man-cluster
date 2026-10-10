@@ -3,7 +3,16 @@
 // post-substitution snapshots written by every cluster update.
 package configs
 
-import "context"
+import (
+	"context"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
+)
+
+// ErrConfigNotFound is returned by Get/Retag/Update/Delete when no config
+// row matches. It aliases errs.ErrConfigNotFound (also aliased by internal/store),
+// so consumers can errors.Is against either name without importing the store.
+var ErrConfigNotFound = errs.ErrConfigNotFound
 
 // Config is a versioned config value (cluster- or service-scoped). Rendered
 // holds the last post-substitution snapshot written by cluster update ("" when

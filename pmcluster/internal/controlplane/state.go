@@ -99,8 +99,8 @@ var ErrNoSnapshots = errors.New("no control-plane state config exists")
 // degrade to standalone/local behaviour (Restore -> ErrNoSnapshots, Snapshot
 // -> no-op) and retry later instead of failing fatally. That matters most
 // when a daemon (re)starts during a quorum outage: without this it exits,
-// systemd restarts it, and every manager crash-loops (BUG-020, found in
-// TC10-A — nxt-sw-4-m restarted 28 times while the swarm had no leader).
+// systemd restarts it, and every manager crash-loops (seen live: a manager
+// restarted 28 times while the swarm had no leader).
 // The matched strings are stable Docker messages (daemon/cluster/errors.go
 // errSwarmNotManager; SwarmKit raft errNoLeader).
 func IsSwarmUnavailable(err error) bool {
@@ -351,7 +351,7 @@ func (k *Kit) Restore(ctx context.Context) (bool, error) {
 			// lost): the Raft kit is unreadable right now. Fall back to the
 			// tarball archive path like a pre-L2 / standalone cluster — and,
 			// crucially, do NOT fail: a daemon that starts during a quorum
-			// outage must serve and retry, not crash-loop (BUG-020).
+			// outage must serve and retry, not crash-loop.
 			log.Warn().Err(err).Msg("swarm unavailable; no Raft state configs to restore (deferring)")
 			return false, ErrNoSnapshots
 		}

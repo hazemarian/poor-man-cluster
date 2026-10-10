@@ -72,7 +72,7 @@ func (c Auth) Login(g *gin.Context) {
 	username := g.PostForm("username")
 	password := g.PostForm("password")
 
-	u, err := c.Store.GetByUsername(g.Request.Context(), username)
+	u, err := c.Store.ByUsername(g.Request.Context(), username)
 	if err != nil || !u.PasswordSet || !checkPassword(u, password) {
 		// One wording for both wrong-username and wrong-password: the form must
 		// not confirm which accounts exist.

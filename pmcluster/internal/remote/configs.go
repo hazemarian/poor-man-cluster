@@ -57,6 +57,7 @@ type renderedConfigsDTO struct {
 	Configs []renderedConfigDTO `json:"configs"`
 }
 
+// Create stores a new config via POST /configs and returns its row ID.
 func (a *Configs) Create(ctx context.Context, scope, stack, name, kind, content, version string) (int64, error) {
 	var out struct {
 		ID int64 `json:"id"`
@@ -71,6 +72,7 @@ func (a *Configs) Create(ctx context.Context, scope, stack, name, kind, content,
 	return out.ID, err
 }
 
+// Get returns one config row via GET /configs/{name}.
 func (a *Configs) Get(ctx context.Context, name string) (*configs.Config, error) {
 	var dto configRowDTO
 	if err := a.c.do(ctx, http.MethodGet, "/configs/"+url.PathEscape(name), nil, &dto); err != nil {
@@ -79,6 +81,8 @@ func (a *Configs) Get(ctx context.Context, name string) (*configs.Config, error)
 	return dto.model(), nil
 }
 
+// List returns the config rows matching the optional scope and stack
+// filters via GET /configs.
 func (a *Configs) List(ctx context.Context, scope, stack string) ([]configs.Config, error) {
 	q := url.Values{}
 	if scope != "" {
@@ -98,6 +102,8 @@ func (a *Configs) List(ctx context.Context, scope, stack string) ([]configs.Conf
 	return rows, nil
 }
 
+// Update writes new content for a config via PUT /configs/{name} and returns
+// the new content hash.
 func (a *Configs) Update(ctx context.Context, name, content, version string) (string, error) {
 	var out configHashDTO
 	if err := a.c.do(ctx, http.MethodPut, "/configs/"+url.PathEscape(name), map[string]string{
@@ -108,6 +114,8 @@ func (a *Configs) Update(ctx context.Context, name, content, version string) (st
 	return out.Hash, nil
 }
 
+// Rollback restores a stored config version via POST /configs/{name}/rollback
+// and returns the restored content hash.
 func (a *Configs) Rollback(ctx context.Context, name string, versionID int64) (string, error) {
 	var out configHashDTO
 	if err := a.c.do(ctx, http.MethodPost, "/configs/"+url.PathEscape(name)+"/rollback", map[string]int64{
@@ -118,6 +126,7 @@ func (a *Configs) Rollback(ctx context.Context, name string, versionID int64) (s
 	return out.Hash, nil
 }
 
+// Delete removes a config row via DELETE /configs/{name}.
 func (a *Configs) Delete(ctx context.Context, name string) error {
 	return a.c.do(ctx, http.MethodDelete, "/configs/"+url.PathEscape(name), nil, nil)
 }
@@ -130,6 +139,8 @@ func (a *Configs) Retag(ctx context.Context, name, scope, stack string) error {
 	}, nil)
 }
 
+// ListVersions returns a config's stored versions via GET
+// /configs/{name}/versions.
 func (a *Configs) ListVersions(ctx context.Context, name string) ([]configs.ConfigVersion, error) {
 	var out configVersionsDTO
 	if err := a.c.do(ctx, http.MethodGet, "/configs/"+url.PathEscape(name)+"/versions", nil, &out); err != nil {
@@ -142,6 +153,7 @@ func (a *Configs) ListVersions(ctx context.Context, name string) ([]configs.Conf
 	return rows, nil
 }
 
+// ListRendered returns the rendered-snapshot rows via GET /cluster/rendered.
 func (a *Configs) ListRendered(ctx context.Context) ([]configs.Config, error) {
 	var out renderedConfigsDTO
 	if err := a.c.do(ctx, http.MethodGet, "/cluster/rendered", nil, &out); err != nil {

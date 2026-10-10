@@ -67,9 +67,9 @@ func TestLocalCreateGetRevealRoundTrip(t *testing.T) {
 	}
 
 	// The ciphertext stored must never equal the plaintext.
-	row, err := st.GetSecret(ctx, "DB_PASSWORD")
+	row, err := st.Secret(ctx, "DB_PASSWORD")
 	if err != nil {
-		t.Fatalf("store.GetSecret: %v", err)
+		t.Fatalf("store.Secret: %v", err)
 	}
 	if string(row.Payload) == "hunter2" {
 		t.Error("stored payload is plaintext; expected ciphertext")

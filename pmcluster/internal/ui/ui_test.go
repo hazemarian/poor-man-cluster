@@ -343,7 +343,7 @@ func TestSettings_RoundTrip(t *testing.T) {
 }
 
 // TestAllControllers exercises every UI route, which drives every pmapi client
-// method (Me, ClusterInfo, Nodes, ListStacks, GetStack, GetRevision, Deploy,
+// method (Me, ClusterInfo, Nodes, ListStacks, Stack, Revision, Deploy,
 // Rollback, ListBackups, CreateBackup, ListStackBackups) and every controller.
 func TestAllControllers(t *testing.T) {
 	daemon := fakeDaemon(t)
@@ -528,7 +528,7 @@ func readBody(t *testing.T, resp *http.Response) string {
 // per-stack config page: list, create, edit, rollback, delete, secret reveal
 // (with confirmation) and the apply-to-swarm update — exercising every new
 // pmapi method (ListSecrets/CreateSecret/UpdateSecret/DeleteSecret/
-// RevealSecret, ListConfigs/GetConfig/CreateConfig/UpdateConfig/
+// RevealSecret, ListConfigs/Config/CreateConfig/UpdateConfig/
 // ConfigVersions/RollbackConfig/DeleteConfig, TriggerUpdate).
 func TestSecretsAndConfigs(t *testing.T) {
 	daemon := fakeDaemon(t)

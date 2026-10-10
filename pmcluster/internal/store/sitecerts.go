@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// ErrSiteCertNotFound is returned by GetSiteCert when no row matches the
+// ErrSiteCertNotFound is returned by SiteCert when no row matches the
 // domain (no site certificate has been uploaded yet).
 var ErrSiteCertNotFound = errors.New("site cert not found")
 
@@ -30,9 +30,9 @@ type SiteCertRow struct {
 	UpdatedAt  time.Time
 }
 
-// GetSiteCert returns the stored site-cert metadata for the cluster domain.
+// SiteCert returns the stored site-cert metadata for the cluster domain.
 // Returns ErrSiteCertNotFound when none has been uploaded yet.
-func (s *Store) GetSiteCert(ctx context.Context, domain string) (SiteCertRow, error) {
+func (s *Store) SiteCert(ctx context.Context, domain string) (SiteCertRow, error) {
 	var r SiteCertRow
 	var sans string
 	var nb, na, created, updated int64

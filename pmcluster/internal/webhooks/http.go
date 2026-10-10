@@ -20,6 +20,7 @@ type HTTP struct {
 	Svc Service
 }
 
+// Mount registers the webhook-source routes on the API router.
 func (w *HTTP) Mount(r chi.Router) {
 	r.Get("/webhooks", w.list)
 	r.Post("/webhooks", w.create)

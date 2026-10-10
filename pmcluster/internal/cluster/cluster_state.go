@@ -176,10 +176,10 @@ func clusterInstalled(ctx context.Context, st *store.Store) (bool, error) {
 	if st == nil {
 		return false, nil
 	}
-	if st.GetSettingDefault(ctx, settingDomain, "") != "" {
+	if st.SettingDefault(ctx, settingDomain, "") != "" {
 		return true, nil
 	}
-	if st.GetSettingDefault(ctx, settingTLSMode, "") != "" {
+	if st.SettingDefault(ctx, settingTLSMode, "") != "" {
 		return true, nil
 	}
 	rows, err := st.ListConfigs(ctx, "cluster", "")
@@ -203,10 +203,10 @@ func loadTLSSettings(ctx context.Context, st *store.Store) (tlsState, error) {
 		return tlsState{}, nil
 	}
 	return tlsState{
-		Mode:      st.GetSettingDefault(ctx, settingTLSMode, ""),
-		CertPath:  st.GetSettingDefault(ctx, settingTLSCertPath, ""),
-		KeyPath:   st.GetSettingDefault(ctx, settingTLSKeyPath, ""),
-		ACMEEmail: st.GetSettingDefault(ctx, settingTLSACME, ""),
+		Mode:      st.SettingDefault(ctx, settingTLSMode, ""),
+		CertPath:  st.SettingDefault(ctx, settingTLSCertPath, ""),
+		KeyPath:   st.SettingDefault(ctx, settingTLSKeyPath, ""),
+		ACMEEmail: st.SettingDefault(ctx, settingTLSACME, ""),
 	}, nil
 }
 
@@ -273,13 +273,13 @@ func loadSSOSettings(ctx context.Context, st *store.Store) (ssoState, error) {
 		return ssoState{}, nil
 	}
 	return ssoState{
-		Enabled:      st.GetSettingDefault(ctx, settingSSOEnabled, "") == "true",
-		Provider:     st.GetSettingDefault(ctx, settingSSOProvider, ""),
-		ClientID:     st.GetSettingDefault(ctx, settingSSOClientID, ""),
-		ClientSecret: st.GetSettingDefault(ctx, settingSSOClientSecret, ""),
-		GitHubOrg:    st.GetSettingDefault(ctx, settingSSOGitHubOrg, ""),
-		GitHubRepos:  st.GetSettingDefault(ctx, settingSSOGitHubRepos, ""),
-		CookieExpire: st.GetSettingDefault(ctx, settingSSOCookieExpire, defaultSSOCookieExpire),
+		Enabled:      st.SettingDefault(ctx, settingSSOEnabled, "") == "true",
+		Provider:     st.SettingDefault(ctx, settingSSOProvider, ""),
+		ClientID:     st.SettingDefault(ctx, settingSSOClientID, ""),
+		ClientSecret: st.SettingDefault(ctx, settingSSOClientSecret, ""),
+		GitHubOrg:    st.SettingDefault(ctx, settingSSOGitHubOrg, ""),
+		GitHubRepos:  st.SettingDefault(ctx, settingSSOGitHubRepos, ""),
+		CookieExpire: st.SettingDefault(ctx, settingSSOCookieExpire, defaultSSOCookieExpire),
 	}, nil
 }
 
@@ -310,7 +310,7 @@ func loadEdgeLoginDisabled(ctx context.Context, st *store.Store) bool {
 	if st == nil {
 		return true
 	}
-	return st.GetSettingDefault(ctx, settingEdgeLoginDisabled, "true") == "true"
+	return st.SettingDefault(ctx, settingEdgeLoginDisabled, "true") == "true"
 }
 
 // loadBackupAllNodes reports whether the volume-backup agent should run on
@@ -320,7 +320,7 @@ func loadBackupAllNodes(ctx context.Context, st *store.Store) bool {
 	if st == nil {
 		return false
 	}
-	return st.GetSettingDefault(ctx, settingBackupAllNodes, "") == "true"
+	return st.SettingDefault(ctx, settingBackupAllNodes, "") == "true"
 }
 
 // loadPlatformNode returns the hostname platform services are pinned to
@@ -329,7 +329,7 @@ func loadPlatformNode(ctx context.Context, st *store.Store) string {
 	if st == nil {
 		return ""
 	}
-	return st.GetSettingDefault(ctx, settingPlatformNode, "")
+	return st.SettingDefault(ctx, settingPlatformNode, "")
 }
 
 // LoadStorageFailover reports whether automatic storage failover is enabled
@@ -339,7 +339,7 @@ func LoadStorageFailover(ctx context.Context, st *store.Store) bool {
 	if st == nil {
 		return false
 	}
-	return st.GetSettingDefault(ctx, settingStorageFailover, "") == "true"
+	return st.SettingDefault(ctx, settingStorageFailover, "") == "true"
 }
 
 // defaultOORetentionDays is the OpenObserve stream retention fallback when
@@ -355,7 +355,7 @@ func loadOORetention(ctx context.Context, st *store.Store) (logs, metrics, trace
 		return defaultOORetentionDays, defaultOORetentionDays, defaultOORetentionDays
 	}
 	parse := func(key string) int {
-		v := st.GetSettingDefault(ctx, key, "")
+		v := st.SettingDefault(ctx, key, "")
 		if v == "" {
 			return defaultOORetentionDays
 		}
@@ -389,7 +389,7 @@ func (b BackupS3) Configured() bool {
 
 // EndpointHost returns the endpoint with any URL scheme stripped, so offen's
 // AWS_ENDPOINT gets a bare host:port while AWS_ENDPOINT_PROTO carries the
-// scheme (a scheme in AWS_ENDPOINT is rejected — see v0.2.160.3).
+// scheme (a scheme in AWS_ENDPOINT is rejected by offen).
 func (b BackupS3) EndpointHost() string {
 	s := strings.TrimPrefix(b.Endpoint, "https://")
 	return strings.TrimPrefix(s, "http://")
@@ -410,11 +410,11 @@ func loadBackupS3(ctx context.Context, st *store.Store) BackupS3 {
 		return BackupS3{}
 	}
 	return BackupS3{
-		Endpoint:  st.GetSettingDefault(ctx, settingBackupS3Endpoint, ""),
-		Bucket:    st.GetSettingDefault(ctx, settingBackupS3Bucket, ""),
-		AccessKey: st.GetSettingDefault(ctx, settingBackupS3AccessKey, ""),
-		SecretKey: st.GetSettingDefault(ctx, settingBackupS3SecretKey, ""),
-		Region:    st.GetSettingDefault(ctx, settingBackupS3Region, "auto"),
+		Endpoint:  st.SettingDefault(ctx, settingBackupS3Endpoint, ""),
+		Bucket:    st.SettingDefault(ctx, settingBackupS3Bucket, ""),
+		AccessKey: st.SettingDefault(ctx, settingBackupS3AccessKey, ""),
+		SecretKey: st.SettingDefault(ctx, settingBackupS3SecretKey, ""),
+		Region:    st.SettingDefault(ctx, settingBackupS3Region, "auto"),
 	}
 }
 
@@ -425,7 +425,7 @@ func loadBackupStoreOn(ctx context.Context, st *store.Store) string {
 	if st == nil {
 		return ""
 	}
-	return st.GetSettingDefault(ctx, settingBackupStoreOn, "")
+	return st.SettingDefault(ctx, settingBackupStoreOn, "")
 }
 
 // defaultBackupRetentionDays is how many days backup audit rows + archives
@@ -438,7 +438,7 @@ func LoadBackupRetentionDays(ctx context.Context, st *store.Store) int {
 	if st == nil {
 		return defaultBackupRetentionDays
 	}
-	v := st.GetSettingDefault(ctx, settingBackupRetentionDays, "")
+	v := st.SettingDefault(ctx, settingBackupRetentionDays, "")
 	if v == "" {
 		return defaultBackupRetentionDays
 	}
@@ -461,7 +461,7 @@ func LoadBackupCron(ctx context.Context, st *store.Store) string {
 	if st == nil {
 		return defaultBackupCron
 	}
-	v := strings.TrimSpace(st.GetSettingDefault(ctx, settingBackupCron, ""))
+	v := strings.TrimSpace(st.SettingDefault(ctx, settingBackupCron, ""))
 	if v == "" {
 		return defaultBackupCron
 	}

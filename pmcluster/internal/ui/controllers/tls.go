@@ -265,7 +265,7 @@ func summarise(d *tlsData) {
 func (c TLS) fetch(g *gin.Context, d *tlsData) {
 	ctx := g.Request.Context()
 
-	switch sc, err := c.API.GetSiteCert(ctx); {
+	switch sc, err := c.API.SiteCert(ctx); {
 	case err == nil:
 		d.SiteKnown = true
 		d.Site = siteCertRow(sc)

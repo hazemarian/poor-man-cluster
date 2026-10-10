@@ -10,8 +10,8 @@ func TestStackStatus_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	// Missing → ErrNotFound.
-	if _, err := st.GetStackStatus(ctx, "demo"); err != ErrNotFound {
-		t.Fatalf("GetStackStatus(missing) err = %v, want ErrNotFound", err)
+	if _, err := st.StackStatus(ctx, "demo"); err != ErrNotFound {
+		t.Fatalf("StackStatus(missing) err = %v, want ErrNotFound", err)
 	}
 
 	// Set one, read back.
@@ -21,9 +21,9 @@ func TestStackStatus_RoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetStackStatus: %v", err)
 	}
-	got, err := st.GetStackStatus(ctx, "demo")
+	got, err := st.StackStatus(ctx, "demo")
 	if err != nil {
-		t.Fatalf("GetStackStatus: %v", err)
+		t.Fatalf("StackStatus: %v", err)
 	}
 	if got.Status != "degraded" || got.UpdatedAt != 100 || len(got.Services) != 2 {
 		t.Fatalf("roundtrip mismatch: %+v", got)
@@ -38,7 +38,7 @@ func TestStackStatus_RoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SetStackStatus upsert: %v", err)
 	}
-	got2, _ := st.GetStackStatus(ctx, "demo")
+	got2, _ := st.StackStatus(ctx, "demo")
 	if got2.Status != "healthy" || got2.UpdatedAt != 200 || len(got2.Services) != 1 {
 		t.Fatalf("upsert mismatch: %+v", got2)
 	}

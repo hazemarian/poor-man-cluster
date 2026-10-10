@@ -40,9 +40,9 @@ func (s *Store) SetStackFailover(ctx context.Context, f StackFailover) error {
 	return nil
 }
 
-// GetStackFailover returns the failover marker for a stack, or ErrNotFound when
+// StackFailover returns the failover marker for a stack, or ErrNotFound when
 // the stack has not been failed over.
-func (s *Store) GetStackFailover(ctx context.Context, stackName string) (*StackFailover, error) {
+func (s *Store) StackFailover(ctx context.Context, stackName string) (*StackFailover, error) {
 	var (
 		f     StackFailover
 		acked int

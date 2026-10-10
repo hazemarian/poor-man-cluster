@@ -83,7 +83,7 @@ func (s *Local) Heal(ctx context.Context, opts HealOptions) (*HealReport, error)
 	}
 	rep := &HealReport{Entries: make([]HealEntry, 0, len(rows))}
 	for _, meta := range rows {
-		row, err := s.Store.GetSecret(ctx, meta.Name)
+		row, err := s.Store.Secret(ctx, meta.Name)
 		if err != nil {
 			return nil, fmt.Errorf("read secret %s: %w", meta.Name, err)
 		}

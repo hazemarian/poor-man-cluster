@@ -190,9 +190,9 @@ func (r *realClient) VolumeRemove(ctx context.Context, name string) error {
 	return idempotentRemove(r.c.VolumeRemove(ctx, name, true), "volume", name)
 }
 
-// runtime.StackNamespaceLabel (com.docker.stack.namespace) is the label
-// Docker attaches to every resource created by `docker stack deploy` for a
-// stack; VolumeList filters on it to find a stack's named volumes for teardown.
+// VolumeList returns the names of the volumes carrying the label
+// labelKey=labelValue (teardown finds a stack's volumes via
+// runtime.StackNamespaceLabel).
 func (r *realClient) VolumeList(ctx context.Context, labelKey, labelValue string) ([]string, error) {
 	vols, err := r.c.VolumeList(ctx, volume.ListOptions{
 		Filters: filters.NewArgs(filters.Arg("label", labelKey+"="+labelValue)),
@@ -304,8 +304,8 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 			updateState = string(us.State)
 			updateError = us.Message
 		}
-		// Copy the spec labels: drift detection (BUG-017) and the console read
-		// them after ServiceList returns, so don't alias the SDK's response.
+		// Copy the spec labels so callers don't alias the SDK's response map;
+		// drift detection and the console read them after ServiceList returns.
 		labels := make(map[string]string, len(s.Spec.Labels))
 		for k, v := range s.Spec.Labels {
 			labels[k] = v

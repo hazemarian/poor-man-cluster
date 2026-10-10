@@ -49,7 +49,7 @@ func TestMultiProcessNoWALSplitBrain(t *testing.T) {
 
 	// The daemon's handle must still see the CLI's write, and vice versa —
 	// no split-brain.
-	if v, _ := daemon.GetSetting(ctx, "cli_probe"); v != "from-cli" {
+	if v, _ := daemon.Setting(ctx, "cli_probe"); v != "from-cli" {
 		t.Fatalf("daemon cannot see cli write: got %q", v)
 	}
 
@@ -59,7 +59,7 @@ func TestMultiProcessNoWALSplitBrain(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer cli2.Close()
-	if v, _ := cli2.GetSetting(ctx, "probe"); v != "daemon" {
+	if v, _ := cli2.Setting(ctx, "probe"); v != "daemon" {
 		t.Fatalf("reopened store cannot see daemon write: got %q", v)
 	}
 	assertNoSidecars(t, dir)

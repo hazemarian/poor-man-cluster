@@ -19,7 +19,7 @@ import (
 )
 
 // credsUpdateFn is the cluster update pipeline invoked after a credential
-// rotation (BUG-012). Package var so tests can stub it.
+// rotation. Package var so tests can stub it.
 var credsUpdateFn = cluster.Update
 
 var credsCmd = &cobra.Command{
@@ -132,8 +132,8 @@ func runCredsShow(cmd *cobra.Command, args []string) error {
 
 // applyRotatedCredential runs the cluster update pipeline so the rotated
 // credential's new value reaches dependent rendered configs (OTel basic-auth
-// header) and stacks (observability) immediately (BUG-012). Returns the
-// update result. Package-var seam credsUpdateFn lets tests stub it.
+// header) and stacks (observability) immediately. Returns the update result.
+// Package-var seam credsUpdateFn lets tests stub it.
 func applyRotatedCredential(ctx context.Context, deps cluster.UpdateDeps, in cluster.UpdateInput) (*cluster.UpdateResult, error) {
 	return credsUpdateFn(ctx, deps, in)
 }
@@ -181,11 +181,11 @@ func runCredsRotate(cmd *cobra.Command, args []string) error {
    secret: %s
 `, rotated.Name, rotated.Password, rotated.Username, rotated.SwarmSecretName)
 
-	// BUG-012: rotation only swaps the DB credential + swarm secret; dependent
-	// rendered configs (e.g. the OTel collector's OpenObserve basic-auth header)
-	// and stacks (observability) would otherwise keep the old value until a
-	// manual `cluster update`. Run the update pipeline now so the new value
-	// takes effect immediately.
+	// Rotation only swaps the DB credential + swarm secret; dependent
+	// rendered configs (e.g. the OTel collector's OpenObserve basic-auth
+	// header) and stacks (observability) would otherwise keep the old value
+	// until a manual `cluster update`. Run the update pipeline now so the new
+	// value takes effect immediately.
 	if _, err := applyRotatedCredential(cmd.Context(), cluster.UpdateDeps{
 		Store:    st,
 		Cipher:   cipher,

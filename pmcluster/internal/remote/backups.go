@@ -21,6 +21,8 @@ type backupCreatedDTO struct {
 	ArchivePaths []string `json:"archive_paths"`
 }
 
+// Trigger requests a backup run via POST /backups and returns the run ID and
+// its archive paths.
 func (a *Backups) Trigger(ctx context.Context, stackName string, revision int64) (int64, []string, error) {
 	var out backupCreatedDTO
 	if err := a.c.do(ctx, http.MethodPost, "/backups", nil, &out); err != nil {
@@ -29,6 +31,8 @@ func (a *Backups) Trigger(ctx context.Context, stackName string, revision int64)
 	return out.ID, out.ArchivePaths, nil
 }
 
+// List returns the latest backup runs (bounded by limit when positive) via
+// GET /backups.
 func (a *Backups) List(ctx context.Context, limit int) ([]backups.Run, error) {
 	path := "/backups"
 	if limit > 0 {
@@ -41,6 +45,7 @@ func (a *Backups) List(ctx context.Context, limit int) ([]backups.Run, error) {
 	return out.Backups, nil
 }
 
+// ListForStack returns one stack's backup runs via GET /stacks/{name}/backups.
 func (a *Backups) ListForStack(ctx context.Context, stackName string) ([]backups.Run, error) {
 	var out backupListDTO
 	if err := a.c.do(ctx, http.MethodGet, "/stacks/"+url.PathEscape(stackName)+"/backups", nil, &out); err != nil {
@@ -49,6 +54,8 @@ func (a *Backups) ListForStack(ctx context.Context, stackName string) ([]backups
 	return out.Backups, nil
 }
 
+// Browse returns a backup run's archive file listing via GET
+// /backups/{id}/files.
 func (a *Backups) Browse(ctx context.Context, id int64) (*backups.Run, []backups.FileEntry, error) {
 	var out backupBrowseDTO
 	if err := a.c.do(ctx, http.MethodGet, "/backups/"+strconv.FormatInt(id, 10)+"/files", nil, &out); err != nil {
@@ -57,6 +64,8 @@ func (a *Backups) Browse(ctx context.Context, id int64) (*backups.Run, []backups
 	return out.Run, out.Files, nil
 }
 
+// Restore restores a backup run's volumes via POST /backups/{id}/restore and
+// returns the number of files restored.
 func (a *Backups) Restore(ctx context.Context, id int64, destRoot string, opts backups.RestoreOptions) (int, error) {
 	var out backupRestoreDTO
 	body := map[string]any{"dest_root": destRoot}

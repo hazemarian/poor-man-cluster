@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	pmsettings "github.com/hazemarian/poor-man-cluster/pmcluster/internal/settings"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 )
@@ -423,19 +424,18 @@ type clusterSettingsData struct {
 	MsgKey          string
 }
 
-// maskClusterSettings hides sso_client_secret from the rendered form: the
-// daemon returns it (so edits round-trip), but the console only ever shows it
-// masked.
+// maskClusterSettings masks secret-ish values (sso_client_secret) in the
+// rendered form via the shared MaskValue policy: the daemon returns the full
+// map (so edits round-trip), but the console only ever shows it masked — never
+// the plaintext, and never dropped (the key stays present so the form still
+// knows the secret is set).
 func maskClusterSettings(settings map[string]string) (map[string]string, bool) {
 	if settings == nil {
 		return nil, false
 	}
 	out := make(map[string]string, len(settings))
 	for k, v := range settings {
-		if k == "sso_client_secret" {
-			continue
-		}
-		out[k] = v
+		out[k] = pmsettings.MaskValue(k, v, false)
 	}
 	return out, settings["sso_client_secret"] != ""
 }
@@ -448,7 +448,7 @@ func (c Settings) ClusterSettingsPage(g *gin.Context) {
 		c.Views.Fragment(g, "clustersettings", d)
 		return
 	}
-	settings, err := c.API.GetClusterSettings(g.Request.Context())
+	settings, err := c.API.ClusterSettings(g.Request.Context())
 	if err != nil {
 		d.ErrKey, d.ErrRaw = "settings.err_cluster_read", err.Error()
 		c.Views.Fragment(g, "clustersettings", d)
@@ -531,7 +531,7 @@ func (c Settings) fill(g *gin.Context, d settingsData) settingsData {
 	if u := middleware.CurrentUser(g); u != nil && u.Role == store.RoleAdmin {
 		d.CanEditCluster = true
 	}
-	if _, err := c.Store.GetSetting(ctx, keyToken); err == nil {
+	if _, err := c.Store.Setting(ctx, keyToken); err == nil {
 		d.HasToken = true
 	}
 	if configured {
@@ -587,7 +587,7 @@ func (c Settings) RenderedGet(g *gin.Context) {
 	}
 	// The config row lives in the same table; the snapshot may simply not be
 	// recorded yet (fresh install before the first Apply to swarm).
-	if _, err := c.API.GetConfig(ctx, name); err == nil {
+	if _, err := c.API.Config(ctx, name); err == nil {
 		d.fail("settings.err_rendered_missing", "")
 	} else {
 		d.fail("settings.err_rendered_not_found", err.Error())

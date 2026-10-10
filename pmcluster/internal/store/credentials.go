@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
 )
 
 // ManagedCredential is the persisted form of a credential pmcluster owns
@@ -22,12 +24,13 @@ type ManagedCredential struct {
 	RotatedAt          sql.NullInt64
 }
 
-// ErrCredentialNotFound is returned by GetCredential when no row matches.
-var ErrCredentialNotFound = errors.New("credential not found")
+// ErrCredentialNotFound is returned by Credential when no row matches.
+// Aliases errs.ErrCredentialNotFound.
+var ErrCredentialNotFound = errs.ErrCredentialNotFound
 
-// GetCredential fetches a credential row by name.
+// Credential fetches a credential row by name.
 // Returns ErrCredentialNotFound if missing.
-func (s *Store) GetCredential(ctx context.Context, name string) (*ManagedCredential, error) {
+func (s *Store) Credential(ctx context.Context, name string) (*ManagedCredential, error) {
 	var c ManagedCredential
 	err := s.db.QueryRowContext(ctx,
 		`SELECT name, kind, username, password_ciphertext, swarm_secret_name, created_at, rotated_at
@@ -44,7 +47,7 @@ func (s *Store) GetCredential(ctx context.Context, name string) (*ManagedCredent
 }
 
 // InsertCredential stores a brand-new credential. Fails if name already
-// exists (UNIQUE collision); callers should `GetCredential` first to
+// exists (UNIQUE collision); callers should `Credential` first to
 // implement the "preserve existing" policy on cluster up.
 func (s *Store) InsertCredential(ctx context.Context, c *ManagedCredential) error {
 	_, err := s.db.ExecContext(ctx,

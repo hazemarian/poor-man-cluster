@@ -126,11 +126,11 @@ const (
 // classifyLocalCluster decides whether `cluster update` / `cluster reset` should
 // re-provision this node, stand by, or guide the operator into the setup wizard.
 // A missing local `domain` on its own does not mean "no cluster": a manager that
-// joined but was never promoted has none, and treating it as a fresh box sent
+// joined but was never promoted has none, and treating it as a fresh box sends
 // install.sh's auto `cluster update` into the interactive wizard, which then
-// failed with "domain is required" (BUG-022).
+// fails with "domain is required".
 func classifyLocalCluster(ctx context.Context, st *store.Store, dc runtime.Client) clusterState {
-	if st.GetSettingDefault(ctx, cluster.SettingDomain(), "") != "" {
+	if st.SettingDefault(ctx, cluster.SettingDomain(), "") != "" {
 		return stateProvisioned
 	}
 	if dc != nil {
@@ -185,9 +185,8 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 	// No persisted cluster state? Either this is a fresh box (guide the operator
 	// into the setup wizard) or a manager that joined but was never promoted:
 	// its store is intentionally empty and the control plane is restored from
-	// the Raft snapshot on promotion, so there is nothing to update on it
-	// (BUG-022).
-	if st.GetSettingDefault(ctx, cluster.SettingDomain(), "") == "" {
+	// the Raft snapshot on promotion, so there is nothing to update on it.
+	if st.SettingDefault(ctx, cluster.SettingDomain(), "") == "" {
 		probe, closeProbe := probeDocker()
 		defer closeProbe()
 		if classifyLocalCluster(ctx, st, probe) == stateStandby {
@@ -310,8 +309,8 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 
 	// No persisted cluster state? Either a fresh box (guide the operator into the
 	// setup wizard) or a manager that was never promoted, whose store is
-	// intentionally empty (BUG-022).
-	if st.GetSettingDefault(ctx, cluster.SettingDomain(), "") == "" {
+	// intentionally empty.
+	if st.SettingDefault(ctx, cluster.SettingDomain(), "") == "" {
 		probe, closeProbe := probeDocker()
 		defer closeProbe()
 		if classifyLocalCluster(ctx, st, probe) == stateStandby {
@@ -433,7 +432,7 @@ func clusterUpHasInput(cmd *cobra.Command, st *store.Store, ctx context.Context)
 		cmd.Flags().Changed("key") {
 		return true
 	}
-	return st.GetSettingDefault(ctx, "domain", "") != ""
+	return st.SettingDefault(ctx, "domain", "") != ""
 }
 
 // runUp executes the `cluster up` workflow with an explicit UpInput: opens the
@@ -476,16 +475,16 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 	// Fill fields from stored settings when not already set (e.g. after the
 	// `pmcluster setup` wizard persisted them).
 	if in.Domain == "" {
-		in.Domain = st.GetSettingDefault(ctx, "domain", "")
+		in.Domain = st.SettingDefault(ctx, "domain", "")
 	}
 	if in.OpenObserveAdminEmail == "" {
-		in.OpenObserveAdminEmail = st.GetSettingDefault(ctx, "oo_admin_email", "")
+		in.OpenObserveAdminEmail = st.SettingDefault(ctx, "oo_admin_email", "")
 	}
 	if in.TraefikAdminUser == "" {
-		in.TraefikAdminUser = st.GetSettingDefault(ctx, cluster.SettingTraefikAdminUser(), "admin")
+		in.TraefikAdminUser = st.SettingDefault(ctx, cluster.SettingTraefikAdminUser(), "admin")
 	}
 	if in.VolumeRoot == "" {
-		in.VolumeRoot = st.GetSettingDefault(ctx, cluster.SettingVolumeRoot(), "")
+		in.VolumeRoot = st.SettingDefault(ctx, cluster.SettingVolumeRoot(), "")
 	}
 
 	cipher, err := credentials.Open(cfg.EncryptionKeyPath())

@@ -19,6 +19,8 @@ type PreflightError struct {
 	Remediation string
 }
 
+// Error renders the cause and the remediation hint as one operator-facing
+// message; with no cause only the remediation is rendered.
 func (e *PreflightError) Error() string {
 	if e.Cause != nil {
 		return fmt.Sprintf("%v\n\n%s", e.Cause, e.Remediation)
@@ -26,6 +28,7 @@ func (e *PreflightError) Error() string {
 	return e.Remediation
 }
 
+// Unwrap returns the low-level cause so errors.Is/As reach through the hint.
 func (e *PreflightError) Unwrap() error { return e.Cause }
 
 // Preflight checks (in order): docker reachable, swarm active, this

@@ -15,8 +15,14 @@ name, a stack name, an integer tail count, and an argv slice for `exec`.
 **Status: implemented.** The `services` domain, HTTP routes, remote
 adapter, CLI group, and console surface are live and unit-tested; the
 `infra` stack no longer ships Portainer. Interactive `docker exec -it`
-and follow-mode log streaming remain out of scope (SSH is the path) — see
-§7.
+shipped in v0.2.141 (§8); follow-mode log streaming remains out of scope
+(tail-to-file works; see §7). Since v0.2.177 the platform services (edge /
+traefik / observability / backup / sso — discriminated by the
+`io.pmcluster.platform=true` label) are surfaced separately from customer app
+services: a `platform` field on the services API, a `PLATFORM` column +
+`--platform` flag on `pmcluster service list`, a dedicated read-only console
+Platform page (`/web/platform`), and a separated "Platform services" panel on
+the Services page.
 
 ---
 
@@ -57,6 +63,12 @@ type ServiceSummary struct {
     Image     string
     Mode      string  // "replicated" | "global"
     UpdatedAt int64
+    // Since the platform separation (v0.2.177) and diagnostics work:
+    // Platform   bool   // io.pmcluster.platform=true (drives the PLATFORM column / --platform filter)
+    // Node       string // io.pmcluster.node — where the service is pinned
+    // RunOnce    bool   // one-shot job (completed jobs read healthy, not degraded)
+    // ImageCreated int64 // local image build time (drives the console's stale-image pill)
+    // UpdateState/UpdateError string // Swarm UpdateStatus — paused rollouts + the failing task's error
 }
 
 // TaskRun is one row of `docker service ps` — crash/restart history.
@@ -139,7 +151,7 @@ Validation rules (fail fast, before touching Docker):
 Rate limiting: these POSTs are gated by the **edge proxy's** per-IP
 limiter (`internal/edgeproxy` — 200 req/s on `/api/*`, 40/s on
 `/webhook/*`, with auto-ban), not by anything in the daemon's
-`server.go`. The daemon on `127.0.0.1:9090` is deliberately unthrottled
+`server.go`. The daemon on `0.0.0.0:9090` is deliberately unthrottled
 (host-local by design). Exec/restart are inherently safe because the call
 graph is fixed; the permissive burst is fine.
 
@@ -151,7 +163,7 @@ remotely** via the existing `backendXxx` switchpoint pattern
 adapter or `remote.NewServices(rc)`).
 
 ```
-pmcluster service list [--stack NAME]            # all swarm services
+pmcluster service list [--stack NAME] [--platform]  # all swarm services; --platform: only platform services
 pmcluster service ps STACK                       # replica health per stack
 pmcluster service tasks STACK SERVICE            # crash/restart trail
 pmcluster service logs STACK SERVICE [--tail 200]
@@ -163,6 +175,8 @@ Notes:
 
 - `service ps STACK` resolves services by stack namespace so the CLI and
   console agree on naming.
+- `service list` prints a `PLATFORM` column (from `io.pmcluster.platform`) and
+  accepts `--platform` to filter to the platform services only.
 - `service exec` is strictly non-interactive (stdin not attached; output
   buffered and printed after exit).
 - **Interactive shell ships via websocket (v0.2.141)** — see §8. The
@@ -188,11 +202,17 @@ the gin+HTMX SPA.
   form). Logs poll every 3s into a dedicated `frag_servicelogs.html`
   fragment (`?tail=200&fragment=logs`) so the panel refreshes without
   re-rendering the page.
+- **Platform page** — `GET /web/platform` (viewer-readable, sidebar entry)
+  lists the platform-managed services with their stacks, replica health and
+  node placement, apart from customer app services; the Services page keeps
+  them in a separated "Platform services" panel that links through. Platform
+  stacks are hidden from the stacks list (v0.2.177).
 - **pmapi client** (`internal/ui/pmapi/client.go`): `ListServices`,
   `ServiceTasks`, `ServiceLogs`, `RestartService`, `ExecService` — thin
   wrappers over `Client.do`, DTOs in `models.go`.
 - All actions are HTMX fragments re-rendered into `#view`; zero JS beyond
-  HTMX attributes. All strings go through the i18n dictionaries
+  HTMX attributes (htmx is vendored locally, not CDN-loaded). All strings go
+  through the i18n dictionaries
   (`internal/ui/views/i18n`, see `docs/console-i18n-contract.md`).
 
 ## 6. Phase order (each lands green + unit tested)

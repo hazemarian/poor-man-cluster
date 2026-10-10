@@ -55,14 +55,14 @@ const (
 
 	// DefaultSessionSecret is the built-in fallback the UI previously used when
 	// PMCLUSTER_UI_SECRET was unset. It is forgeable and MUST be rejected for a
-	// login-enabled console — see Validate (FIX 2).
+	// login-enabled console — see Validate.
 	DefaultSessionSecret = "pmcluster-ui-insecure-default-change-me"
 )
 
 // FromEnv builds a Config from the process environment with sane defaults.
 // When PMCLUSTER_UI_SECRET is unset, SessionSecret is left EMPTY — NewApp
-// then generates and persists a random secret (FIX 2) instead of falling back
-// to the forgeable built-in default.
+// then generates and persists a random secret instead of falling back to the
+// forgeable built-in default.
 func FromEnv() Config {
 	return Config{
 		ListenAddr:      envOr("LISTEN_ADDR", ":8080"),
@@ -100,12 +100,12 @@ func (c Config) Validate() error {
 	// The session secret is only enforced when login is enabled. With login
 	// disabled (EDGE_LOGIN_DISABLED) the secret is never used — Traefik's
 	// admin-auth gate is the only gate — so an empty/default value there is
-	// irrelevant and must not block startup (FIX 2).
+	// irrelevant and must not block startup.
 	if c.LoginDisabled {
 		return nil
 	}
 	// Refuse the built-in default explicitly: it is a known, forgeable secret
-	// that would let anyone mint console sessions (FIX 2).
+	// that would let anyone mint console sessions.
 	if string(c.SessionSecret) == DefaultSessionSecret {
 		return fmt.Errorf("session secret must be changed from the built-in default")
 	}

@@ -194,7 +194,7 @@ func stampRenderedHashLabels(t *testing.T, s *store.Store, f *fakeDocker) {
 	t.Helper()
 	ctx := context.Background()
 	for _, st := range []stackName{StackObservability, StackInfra, StackEdge, StackBackup, StackSSO} {
-		row, err := s.GetConfig(ctx, string(st)+"-stack")
+		row, err := s.Config(ctx, string(st)+"-stack")
 		if err != nil {
 			if errors.Is(err, store.ErrConfigNotFound) {
 				continue // e.g. sso when SSO is disabled

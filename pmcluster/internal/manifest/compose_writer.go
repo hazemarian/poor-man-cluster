@@ -41,8 +41,8 @@ type ComposeWriter struct {
 	// secret to reference. Nil keeps the logical name (unmanaged/external
 	// secrets). Wired from the store's swarm_rev so rotated secrets reference
 	// their versioned swarm secret (<name>_v<rev>) instead of the immutable
-	// in-use one (BUG-007). The container mount path is unaffected — Docker
-	// mounts the override under /run/secrets/<logical-name>.
+	// in-use one. The container mount path is unaffected — Docker mounts the
+	// override under /run/secrets/<logical-name>.
 	SecretNames func(ctx context.Context, name string) string
 	// ConfigNames maps a logical config name (from service configs mounts)
 	// to the actual versioned Docker config to reference. Nil keeps the
@@ -54,8 +54,8 @@ type ComposeWriter struct {
 	// standard and platform labels (standard keys still win on collision). The
 	// platform render path uses this to stamp runtime.RenderedHashLabel, the
 	// hash of the render, so `cluster update` can diff the live Swarm against a
-	// fresh render and detect drift the stored rendered hash cannot see
-	// (BUG-017). Nil (app stacks) leaves the render unchanged.
+	// fresh render and detect drift the stored rendered hash cannot see.
+	// Nil (app stacks) leaves the render unchanged.
 	ExtraLabels map[string]string
 
 	// Log is the sink for writer warnings (e.g. an http healthcheck omitted
@@ -235,7 +235,7 @@ func composeServiceFromIR(
 	volumes = append(volumes, s.Binds...)
 	// Every user/DSL-derived value is `$`-escaped so `docker stack deploy`'s
 	// compose interpolation cannot silently corrupt a literal `$` (e.g. a
-	// secret value `p@ss$word`) — BUG-001 / CODE_REVIEW H8. See escapeCompose.
+	// secret value `p@ss$word`). See escapeCompose.
 	cs := &composeService{
 		Image:       s.Image,
 		Command:     escapeSlice(s.Command),
@@ -435,7 +435,7 @@ func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, 
 	// Raw + standard label VALUES are user/DSL-derived and must be `$`-escaped
 	// (the app name/env/version and any raw label value can carry a literal
 	// `$`; compose interpolation would otherwise corrupt it). Keys are never
-	// escaped — they are validated labels, not values (BUG-001 / H8).
+	// escaped — they are validated labels, not values.
 	labels := map[string]string{}
 	for k, v := range s.Labels {
 		labels[k] = escapeCompose(v)
@@ -479,9 +479,9 @@ func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, 
 			// exits cleanly (SIGTERM while its node's Docker daemon stops, a
 			// Docker upgrade, a graceful shutdown) is marked Complete by the
 			// Swarm, and with `on-failure` the task is NEVER replaced — the
-			// service sits at 0/1 until an operator force-updates it
-			// (BUG-023, found live in TC10-A: the global services recovered
-			// because they already used "any", the replicated ones did not).
+			// service sits at 0/1 until an operator force-updates it (global
+			// services recovered from exactly this because they already used
+			// "any"; replicated ones did not).
 			d.RestartPolicy = &composeRestartPolicy{Condition: "any", Delay: s.RestartDelay}
 		}
 	}

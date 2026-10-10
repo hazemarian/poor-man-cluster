@@ -65,7 +65,7 @@ var clusterSettingKeys = []string{
 func (l *Local) Get(ctx context.Context) (Settings, error) {
 	settings := make(Settings, len(clusterSettingKeys))
 	for _, k := range clusterSettingKeys {
-		settings[k] = l.Store.GetSettingDefault(ctx, k, "")
+		settings[k] = l.Store.SettingDefault(ctx, k, "")
 	}
 	return settings, nil
 }

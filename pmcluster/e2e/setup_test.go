@@ -29,6 +29,20 @@ import (
 
 // TestSetupWizardFallback covers the non-swarm fallback + validation tier.
 func TestSetupWizardFallback(t *testing.T) {
+	// The "fresh box → wizard" fallback only holds when there is NO active
+	// Swarm. In the swarm e2e tier the shared Swarm is already active, so
+	// `cluster update` with no data correctly classifies this node as a
+	// standby manager (exit 0) instead of falling back to the wizard. The
+	// validation subtests (setup without domain/TLS/SSO creds) are swarm
+	// independent and still run in the fast tier; skip the whole test here.
+	if os.Getenv("PMCLUSTER_E2E_SWARM") == "1" {
+		probeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if out, err := dockerRun(probeCtx, "info", "--format", "{{.Swarm.LocalNodeState}}"); err == nil && strings.TrimSpace(out) == "active" {
+			t.Skip("active Swarm — wizard fallback only applies to a swarm-less fresh box")
+		}
+	}
+
 	homeDir := t.TempDir()
 
 	// `pmcluster init` first — the wizard (and up/update fallback) requires
@@ -140,6 +154,15 @@ func TestSetupWizardClusterUp(t *testing.T) {
 	// setup/cluster up assertions below.
 	setReconcileInterval(t, homeDir, "0")
 
+	// Hermetic storage root (see TestControlPlaneSnapshotE2E): the setup
+	// wizard hands off to `cluster up`, which otherwise hardcodes the
+	// root-owned /var/stack/{data,backup} — un-creatable on a non-root host.
+	// The volume root is passed as a --volume-root FLAG (not a stored setting):
+	// non-interactive `setup` overwrites the volume_root setting from its
+	// (empty) wizard answers, clobbering anything set via `settings set`.
+	storageRoot := homeDir + "/stack"
+	t.Setenv("PMCLUSTER_BACKUP_DIR", storageRoot+"/backup")
+
 	// Best-effort cluster teardown on ANY failure path so a mid-test abort can
 	// never leak platform stacks/networks into the next swarm test.
 	t.Cleanup(func() {
@@ -168,6 +191,7 @@ func TestSetupWizardClusterUp(t *testing.T) {
 		"--key", keyPath,
 		"--openobserve-email", adminEmail,
 		"--traefik-admin-user", "admin",
+		"--volume-root", storageRoot,
 		"--sso-enabled",
 		"--sso-client-id", clientID,
 		"--sso-client-secret", clientSec,
@@ -214,9 +238,9 @@ func TestSetupWizardClusterUp(t *testing.T) {
 	// Rendered Traefik dynamic config must use the sso-auth forwardAuth
 	// middleware (SSO enabled) and reference the oauth2-proxy address.
 	t.Log("Verifying rendered Traefik dynamic config uses sso-auth forwardAuth")
-	traefikCfg := dockerConfigIDByPrefix(t, ctx, "pmcluster_traefik_dynamic_v")
+	traefikCfg := dockerConfigIDByPrefix(t, ctx, "pmcluster_traefik_dynamic_")
 	if traefikCfg == "" {
-		t.Fatal("pmcluster_traefik_dynamic_v* docker config not found")
+		t.Fatal("pmcluster_traefik_dynamic_* docker config not found")
 	}
 	dynOut := dockerConfigData(t, ctx, traefikCfg)
 	if !strings.Contains(dynOut, "forwardAuth") {

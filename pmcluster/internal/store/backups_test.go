@@ -29,9 +29,9 @@ func TestCreateBackup_OnDemand(t *testing.T) {
 		t.Errorf("id = %d, want > 0", id)
 	}
 
-	got, err := s.GetBackup(ctx, id)
+	got, err := s.Backup(ctx, id)
 	if err != nil {
-		t.Fatalf("GetBackup: %v", err)
+		t.Fatalf("Backup: %v", err)
 	}
 	if got.Status != "pending" {
 		t.Errorf("status = %q, want pending", got.Status)
@@ -52,9 +52,9 @@ func TestCreateBackup_PreDeploy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateBackup: %v", err)
 	}
-	got, err := s.GetBackup(ctx, id)
+	got, err := s.Backup(ctx, id)
 	if err != nil {
-		t.Fatalf("GetBackup: %v", err)
+		t.Fatalf("Backup: %v", err)
 	}
 	if got.StackName.String != "donation-campaign" {
 		t.Errorf("stack_name = %q", got.StackName.String)
@@ -72,7 +72,7 @@ func TestFinishBackup_Success(t *testing.T) {
 	if err := s.FinishBackup(ctx, id, "succeeded", "/archive/a.tar.gz,/archive/b.tar.gz", ""); err != nil {
 		t.Fatalf("FinishBackup: %v", err)
 	}
-	got, _ := s.GetBackup(ctx, id)
+	got, _ := s.Backup(ctx, id)
 	if got.Status != "succeeded" {
 		t.Errorf("status = %q", got.Status)
 	}
@@ -91,7 +91,7 @@ func TestFinishBackup_Failure(t *testing.T) {
 	if err := s.FinishBackup(ctx, id, "failed", "", "offen exit 1"); err != nil {
 		t.Fatalf("FinishBackup: %v", err)
 	}
-	got, _ := s.GetBackup(ctx, id)
+	got, _ := s.Backup(ctx, id)
 	if got.Status != "failed" {
 		t.Errorf("status = %q", got.Status)
 	}
@@ -102,7 +102,7 @@ func TestFinishBackup_Failure(t *testing.T) {
 
 func TestGetBackup_NotFound(t *testing.T) {
 	s := openBackupTestStore(t)
-	_, err := s.GetBackup(context.Background(), 99999)
+	_, err := s.Backup(context.Background(), 99999)
 	if !errors.Is(err, ErrBackupNotFound) {
 		t.Errorf("err = %v, want ErrBackupNotFound", err)
 	}
