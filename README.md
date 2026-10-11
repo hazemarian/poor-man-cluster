@@ -140,9 +140,9 @@ Open between manager ↔ workers: `2377/tcp`, `7946/tcp+udp`, `4789/udp`.
 | Task | Command |
 |---|---|
 | Deploy / update a stack | `pmcluster deploy ./app.yaml [--version <tag>]` |
-| List / inspect / roll back | `pmcluster stack list` / `show <name>` / `rollback <name> <rev>` |
+| List / inspect / roll back | `pmcluster stack list` / `stack show <name>` / `rollback <name> <rev>` |
 | Move a stateful stack | `pmcluster stack move <name> --to <node>` |
-| Services: health, logs, exec | `pmcluster service list` / `service logs <svc>` / `service exec <svc> -- <cmd>` |
+| Services: health, logs, exec | `pmcluster service list` / `service logs <stack> <svc>` / `service exec <stack> <svc> -- <cmd>` |
 | Secrets / configs | `pmcluster secret …` / `pmcluster config …` — [docs/secrets-and-configs.md](docs/secrets-and-configs.md) |
 | Cluster settings | `pmcluster cluster settings list` / `set key=value` — [docs/settings.md](docs/settings.md) |
 | Certificates | `pmcluster tls site …` / `tls hosts …` — [docs/tls.md](docs/tls.md) |

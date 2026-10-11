@@ -43,7 +43,7 @@ services:                     # required — one or more service definitions
 | `repo_url` | no | metadata only — pmcluster never reads from git |
 | `strict_backup` | no | only meaningful with `backup_before_deploy: true` |
 | `platform` | no | **reserved for pmcluster's own platform stacks** (`infra`/`edge`/`observability`/`backup`/`sso`) — stamps `io.pmcluster.platform=true` on every service, excludes the stack from the app drift loop, makes it non-deletable via the API, and is only removed by `cluster down --purge`. User deploys (`pmcluster deploy`, `POST /api/stacks`, webhooks) are **refused** this flag: `platform: true is reserved for pmcluster-managed platform stacks`. |
-| `networks` | no | additional **external** Swarm networks every service joins (alongside the auto-injected per-stack overlay). When set, the private overlay net is skipped entirely — services reach each other by fully-qualified DNS on the named networks. |
+| `networks` | no | additional **external** Swarm networks every service joins. When set, the auto-injected private overlay net is **skipped** (not created) — services reach each other by fully-qualified DNS on the named networks. |
 | `volumes` | no | map of top-level named volumes declared verbatim (`name: ""` for a plain local volume, or `name: /host/path` to bind that host path) — **never** relocated under the volume root. Used by platform stacks whose volumes already exist on hosts (`seaweeddata`, `traefik_acme`, `openobserve_data`). |
 
 ---

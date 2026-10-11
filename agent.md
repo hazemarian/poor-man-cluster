@@ -207,8 +207,9 @@ Key commands (all in `internal/cli/`):
   `deploy`, `stack`, `rollback`, `tls`) work remotely; bootstrap/repair
   commands (`init`, `cluster *`, `credentials *`, `node`, `registry`, `logs`,
   `serve`) are local-only (they need the node's SQLite + Docker socket).
-- `config.Config` (from `internal/config`) carries `DBPath`, `ConfigDir`,
-  `EncryptionKeyPath`, `ListenAddr`, `Domain`.
+- `config.Config` (from `internal/config`) carries `ListenAddr`, `DataDir`,
+  `LogLevel`, `OTLPEndpoint` (plus derived path helpers `DBPath`/`ConfigDir`/
+  `EncryptionKeyPath`).
 
 ### Domain packages — one bounded context per package
 Each domain owns its model types, port (interface), local adapter and REST
@@ -717,7 +718,7 @@ One-page dependency-rule + domain-inventory doc; read it before touching the
 package layout.
 
 ### migrations/ + internal/store/migrations.go
-0001 init (users, sessions), 0002 credentials, 0003 stacks/revisions,
+0001 init (users), 0002 credentials, 0003 stacks/revisions,
 0004 webhooks/registries, 0005 backups, 0006 token_index, 0007 settings,
 0008 configs/config_versions/secrets, 0009 site_certs, 0010 stack columns on
 configs + secrets (service-scope rows carry their owning stack), 0011

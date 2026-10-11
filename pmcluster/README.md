@@ -116,7 +116,6 @@ internal/
   config/              viper-backed config loading
   docker/              Docker SDK wrapper
   credentials/         AES-GCM cipher (encryption key)
-  registry/            registry credential storage
   manifest/            DSL parser + translator → Docker Swarm Compose
   edgeproxy/           rate limit, shield, blocklist, real-IP, proxy (edge)
   ui/                  operator console (/web base path, RBAC, HTMX); users table

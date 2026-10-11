@@ -25,7 +25,8 @@ Templates never contain user-visible English. They call the per-request funcs:
 
 Keys are `namespace.thing`, one namespace per page (`overview.*`, `stacks.*`,
 `services.*`, `deploy.*`, `webhooks.*`, `tls.*`, `backups.*`, `users.*`, `apikeys.*`,
-`settings.*`, `login.*`, `setup.*`) plus the shared namespaces already defined:
+`settings.*`, `auth.*` — the standalone `login`/`setup` pages both live under
+`auth.*`) plus the shared namespaces already defined:
 `nav.*`, `common.*`, `st.*`, `err.*`, `cluster.*`, `plural.*`.
 
 Entries live in `internal/ui/views/i18n/` as `dict_en_<group>.go` + `dict_ar_<group>.go`

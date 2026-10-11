@@ -35,7 +35,9 @@ cli ──► remote ──► domain packages (ports) ◄── server
 | `certs` | `Cert` | `Service` (SiteCert/ApplyHostCert/RemoveHostCert/GetSiteCert/List/MainDomain) | `GET /api/tls/hosts`, `PUT/DELETE /api/tls/hosts/{host}`, `GET/PUT /api/tls/site` |
 | `stacks` | `Payload`, `Result`, `Stack`, `Revision` | `Deployer` (Deploy/Sync/Rollback/Undeploy) · `Reader` (Get/List/Revisions) | `POST/GET /api/stacks`, `GET/DELETE /api/stacks/{name}`, `GET /api/stacks/{name}/revisions/{rev}`, `POST /api/stacks/{name}/rollback`, `POST /api/stacks/{name}/sync` |
 | `services` | `ServiceSummary`, `TaskRun`, `ExecResult`, `LogLine` | `Reader` (List/Tasks) · `Ops` (Restart/Exec) · `Logs` · `Service` (Reader+Ops+Logs) | `GET /api/services`, `GET /api/services/{stack}`, `GET /api/services/{stack}/{service}/tasks`, `GET /api/services/{stack}/{service}/logs`, `POST /api/services/{stack}/{service}/restart`, `POST /api/services/{stack}/{service}/exec` |
-| `cluster` | — (engine) | `Service` (Up/Update/Down/Status) · `CredentialsService` | `GET /api/cluster/settings`, `PUT /api/cluster/settings`, `GET /api/usage` |
+| `cluster` | — (engine) | `Service` (Up/Update/Down/Status) · `CredentialsService` | — (no REST surface; bring-up/tear-down is local-only) |
+| `settings` | — (key/value map) | `Service` (Get/Update) | `GET/PUT /api/cluster/settings` |
+| `usage` | `Usage` | `Service` (Get) | `GET /api/usage` |
 
 ## Composition roots
 

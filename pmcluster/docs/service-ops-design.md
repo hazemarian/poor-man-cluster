@@ -163,7 +163,7 @@ remotely** via the existing `backendXxx` switchpoint pattern
 adapter or `remote.NewServices(rc)`).
 
 ```
-pmcluster service list [--stack NAME] [--platform]  # all swarm services; --platform: only platform services
+pmcluster service list [--platform]              # all swarm services; --platform: only platform services
 pmcluster service ps STACK                       # replica health per stack
 pmcluster service tasks STACK SERVICE            # crash/restart trail
 pmcluster service logs STACK SERVICE [--tail 200]

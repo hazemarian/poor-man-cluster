@@ -254,15 +254,15 @@ applies the reference hardening in one shot:
    22/80/443 open to the WAN. The FORWARD policy is set to ACCEPT because
    Docker programs its own chains and ufw's default DROP would break overlay
    networking and the swarm ingress.
-2. **iptables DOCKER-USER rules** — close the ports Docker publishes that must
-   NOT be public: 4318 (OTLP, the obvious Traefik bypass) and the host-bound
-   control plane 9090/2377/7946 to the WAN, while the docker/overlay subnets
-   (default `172.16.0.0/12`) keep talking. Peer nodes reach the swarm control
-   plane via the `SWARM_PEERS=<ip,…>` env var (export it per node with the
-   other nodes' IPs). **If the in-cluster backup store is enabled, add 8333 to
-   `RESTRICTED_DOCKER_PORTS`** so the store stays cluster-internal — the
-   failover/restore paths reach it through the routing mesh loopback, never
-   through the public interface.
+2. **iptables DOCKER-USER rules** — close the ports Docker *publishes* that
+   must NOT be public: 4318 (OTLP, the obvious Traefik bypass) via
+   `RESTRICTED_DOCKER_PORTS`, while the docker/overlay subnets (default
+   `172.16.0.0/12`) keep talking. The host-bound control plane 9090/2377/7946
+   is closed by the ufw catch-all in step 1 (re-allowed only from
+   `SWARM_PEERS=<ip,…>`, exported per node with the other nodes' IPs). **If the
+   in-cluster backup store is enabled, add 8333 to `RESTRICTED_DOCKER_PORTS`**
+   so the store stays cluster-internal — the failover/restore paths reach it
+   through the routing mesh loopback, never through the public interface.
 3. **fail2ban** for SSH brute-force defense, plus pending security updates.
 
 Re-running is safe (chains are flushed first). When you re-run it on a

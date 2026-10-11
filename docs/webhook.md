@@ -86,8 +86,8 @@ The body is a JSON `DeployPayload`:
 }
 ```| Field | Required | Notes |
 |-------|----------|-------|
-| `app_name` | yes | stack name; must match the manifest's `app` |
-| `version` | yes | image tag to deploy |
+| `app_name` | no | stack name; when set it **overrides** the manifest's `app` (defaults to it otherwise) |
+| `version` | no | image tag; when set it **overrides** the manifest's `version` (defaults to it otherwise) |
 | `manifest` | yes | the **entire manifest YAML as a string** (not a nested object) |
 | `repo_url` | **yes** | identifies the source repository; recorded with the revision |
 | `file` | **yes** | manifest path inside the source repo, recorded with the revision |
@@ -226,7 +226,7 @@ curl -fsS -X POST "$URL" \
 | Status | Meaning |
 |--------|---------|
 | `202 Accepted` | Deploy accepted — `{"status":"accepted","stack":"<name>","revision":<unix-ts>}`. Validation, provenance and revision recording ran synchronously; the swarm apply (with its per-`depends_on`-level health waits) continues in the background |
-| `400 Bad Request` | Missing `source`, malformed JSON, **missing `repo_url`/`file` provenance**, or manifest validation failure |
+| `400 Bad Request` | Missing `source`, malformed JSON, or **missing `repo_url`/`file` provenance** (a manifest validation failure is a deploy error, so it surfaces as `502`) |
 | `401 Unauthorized` | **Any** HMAC failure — bad secret, unknown source, missing/invalid signature, stale/missing timestamp |
 | `413 Payload Too Large` | Body exceeds 1 MB |
 | `502 Bad Gateway` | The deploy failed after the retry budget was spent; the body carries the error and `retries` count |
