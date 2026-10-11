@@ -30,7 +30,7 @@ bearers). Console: the **Settings** page.
 | `domain` | — | `cluster up` / setup wizard | the cluster's base domain |
 | `oo_admin_email` | — | `cluster up` (`--openobserve-email`) | the OpenObserve root admin login |
 | `traefik_admin_user` | `admin` | setup wizard / `cluster up` | the basic-auth username for the Traefik gate |
-| `openobserve_logs_retention_days` / `_metrics_` / `_traces_` | `7` each | operator | OpenObserve stream retention (unbounded retention is how a cluster silently grows to hundreds of GB) |
+| `oo_logs_retention_days` / `oo_metrics_retention_days` / `oo_traces_retention_days` | `7` each | operator | OpenObserve stream retention (unbounded retention is how a cluster silently grows to hundreds of GB) |
 | `log_level` | `info` | operator | daemon verbosity (`debug`/`info`/`warn`/`error`); applied live on save |
 
 ## Not in the allowlist (managed elsewhere)
