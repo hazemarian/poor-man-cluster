@@ -52,6 +52,10 @@ a node whose volume root is empty.
 
 ## 2. How a stateful service gets its node
 
+**You do not have to pin anything.** A service that holds a volume is placed onto a storage node
+for you, and the placement is stable. `placement:` exists to *override* that, not to make it work.
+The rest of this section is how — and why it is built that way.
+
 You do not choose the node. The platform resolves it, deterministically, before the compose is
 rendered.
 
