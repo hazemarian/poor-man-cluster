@@ -1,23 +1,52 @@
 # 06 — Testing methodology
 
-## 1. The doctrine
+## 1. The operating discipline
+
+The owner stated the same rule four times during the campaign planning, on
+2026-10-02 (session `ses_f015e7886ffebPQLfTXFCjrRJx`):
 
 > you should not do any manual work around if there is something that needs
 > manual intervension that means it is a bug or an issue
-> — user directive, 2026-10-02, issued four times in the same session
 
-Three consequences, all visible in the reports:
+Read as a *testing* directive, not a product spec: when an operator has to
+reach in by hand during a live campaign — a manual `docker service update`, a
+manual restart, a manual repair — that intervention is **evidence**. It points
+at either a defect in the platform or a convergence behaviour the platform is
+missing, so it is logged, root-caused, and turned into a fix or a new
+reconcile step. The discipline has three mechanical consequences, all visible
+in the reports:
 
-1. Every campaign has a mandatory **"Manual interventions (logged)"** section.
-   An intervention you had to perform is, by definition, a defect or an
-   unimplemented behaviour — it is recorded as one or the other, never as a
-   footnote.
+1. Every campaign keeps a **"Manual interventions (logged)"** section. An
+   intervention is recorded as a defect or an unimplemented behaviour, never as
+   a footnote.
 2. A fix must be **deployed back to the same hardware and re-verified there**.
-   "Fixed in a unit test" is not "fixed" until it is fixed on the node that
+   "Fixed in a unit test" is not fixed until it is fixed on the node that
    broke.
 3. A verification failure **stops the campaign** and is reported rather than
-   worked around (the rollout sessions carry this rule explicitly: "if a
+   worked around (the rollout sessions carry this explicitly: "if a
    verification fails, STOP and report instead of continuing").
+
+The discipline is what produced several of the platform's load-bearing
+behaviours. Each started as an intervention someone had to make by hand:
+
+- a drifted service had to be redeployed by hand → the **reconcile loop**
+  (`internal/reconcile/reconcile.go`) and the **drift label**
+  `io.pmcluster.rendered_hash` (`internal/runtime/runtime.go:337`, compared in
+  `internal/stackdrift/stackdrift.go:72`), from BUG-017;
+- a missing secret mount had to be re-created by hand → **`secret heal`**
+  (`internal/cluster/secrets.go:105-161`, the rebuild-on-missing path), from
+  BUG-05/BUG-06;
+- a storage node had to be admitted over SSH by hand → **storage-node
+  adoption**, where a joiner stamps the `pmcluster.storage` label on itself and
+  the leader adopts it (`internal/stacks/placement.go:165-177`), from
+  BUG-019a;
+- a worker that was previously a manager kept running a reconcile loop it could
+  not perform → the **worker-standby** path that logs one line and idles
+  (`internal/cli/leader.go:52`), from BUG-033.
+
+In each case the intervention was logged per campaign, root-caused, and the
+fix shipped with a regression test that names the old behaviour it catches
+(§6 below). That is the whole loop in miniature.
 
 ## 2. The two-tier practice: sandbox vs production
 
@@ -63,7 +92,7 @@ offsite bucket and a failover were all live at once.
 > to make things faster do not cut tags wait for ci then deploy when you are
 > sure all tests are done and we are fine we cut tag and merge to prod it will
 > really speed up the process
-> — user directive, 2026-10-02 (DEC-16)
+> — user directive, 2026-10-02 (DEC-15)
 
 The shape that actually ran (TC10 and the following rollout):
 
@@ -100,7 +129,7 @@ Three independent tiers, deliberately decoupled:
 
 | Tier | Where | What | Gate |
 |---|---|---|---|
-| **Unit + golden + structural** | every push (`pmcluster.yml`) | ~49% test LOC; translator goldens, `TestClassifyLocalCluster`, `TestWatchSwarmLeadership_*`, `TestUpdate_RedeploysWhenLiveServiceLabelDrifted`, `TestSignV4Headers_SignsAmzDate`, `TestMultiProcessNoWALSplitBrain`, … | blocking |
+| **Unit + golden + structural** | every push (`pmcluster.yml`) | ~50% test LOC; translator goldens, `TestClassifyLocalCluster`, `TestWatchSwarmLeadership_*`, `TestUpdate_RedeploysWhenLiveServiceLabelDrifted`, `TestSignV4Headers_SignsAmzDate`, `TestMultiProcessNoWALSplitBrain`, … | blocking |
 | **Smoke e2e** | `make e2e` in the main workflow | the fast path (install/unit/smoke) | blocking |
 | **Real-cluster e2e** | `swarm-e2e.yml` — "runs SEPARATELY from the main build gate" | cluster up + deploy + webhook on a real Swarm (`PMCLUSTER_E2E_SWARM=1`) | non-blocking by design |
 

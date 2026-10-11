@@ -25,7 +25,7 @@ disagree, the disagreement is flagged (see also Chapter 07).
   (including each stack's latest `source_yaml`), revisions, the settings
   table, managed credentials (AES-256-GCM), users, webhook sources and
   deliveries, and the `stack_status` health snapshot
-  (`pmcluster/internal/store/store.go:36-68`).
+  (`pmcluster/internal/store/store.go:1-4`).
 - **Actual state** is the Swarm: services, networks, secrets, configs, node
   labels.
 - **The bridge** is the reconciler (`pmcluster/internal/reconcile/reconcile.go`)
@@ -58,7 +58,7 @@ socket is (`pmcluster/internal/ARCHITECTURE.md:73-84`).
 | Triggers | Docker events (2 s debounce) + a `reconcile_interval` ticker (default 60 s; `0` disables) — `docs/control-loop-design.md:12-16`. |
 | Three passes | `runPass` (`reconcile.go:205`) — (a) platform reconcile via `cluster.Update`, (b) app-stack drift sync via `stacks.Sync`, (c) health snapshot into `stack_status` (`reconcile.go:507`). |
 | Error policy | A failing pass records its error on the span but does **not** stop the remaining passes — a broken platform pass still gets a health snapshot (`reconcile.go:202-204`). |
-| Traces/metrics | One root span `pmcluster.reconcile` with a `pmcluster.reconcile.platform` child; `pmcluster.reconcile.total` counter (`reconcile.go:187-196`, `:37`). |
+| Traces/metrics | One root span `pmcluster.reconcile` (`reconcile.go:187`) with a `pmcluster.reconcile.platform` child (`reconcile.go:211`); the `pmcluster.reconcile.total` counter is defined in `pmcluster/internal/telemetry/metrics.go:37`. |
 
 ### 2.1 Drift detection — two signals, one label
 
@@ -70,7 +70,7 @@ socket is (`pmcluster/internal/ARCHITECTURE.md:73-84`).
    (`pmcluster/internal/stackdrift/stackdrift.go:72`) still inspects the live
    Swarm: every deployed service carries the label
    `io.pmcluster.rendered_hash=<sha256>`
-   (`pmcluster/internal/runtime/...:337`,
+    (`pmcluster/internal/runtime/runtime.go:337`,
    `docs/dsl.md:316`). A manual `docker service update`, a half-applied deploy
    or a wiped service therefore re-applies even though the stored hash is
    unchanged.
@@ -114,7 +114,7 @@ leader …` / `not a manager` errors every ~5 s (BUG-020, BUG-033).
 Alongside the reconciler the leader runs `controlplane.Kit.Loop` — a 5-minute
 tick plus an immediate snapshot on promotion — that publishes the
 failover-survivor kit into two Docker config families
-(`pmcluster/internal/controlplane/state.go:15-16`, `:48`):
+(`pmcluster/internal/controlplane/state.go:48`, `:50`):
 
 - `pmcluster_state_<unixnano>` — a tar.gz of `data.db`, `config.yaml` and the
   `config/` tree;
@@ -122,7 +122,7 @@ failover-survivor kit into two Docker config families
 
 **The key/ciphertext split is deliberate**: a restore refuses a state config
 whose key config is missing, so key + ciphertext never share one blob
-(`docs/improvements.md:20`). Swarm's own Raft store replicates the configs to
+(`pmcluster/internal/controlplane/state.go:12-19`). Swarm's own Raft store replicates the configs to
 every manager; the snapshot only fires when a kit file changed since the
 newest config, prunes to the newest two, and fails loudly above Docker's
 500 KiB config ceiling (`docs/control-loop-design.md:72-81`).
@@ -215,7 +215,7 @@ Three components, all rendered from the platform DSL manifest
 `offen/docker-volume-backup`, `mode: global` constrained to
 `pmcluster.storage`-labeled nodes when `storage_nodes` is set (one agent per
 storage node), or a single replica pinned to the platform node otherwise
-(`backup-stack.yml:31`). Schedule is the `backup_cron` setting, **default
+(`backup-stack.yml:23-31`). Schedule is the `backup_cron` setting, **default
 hourly** (`0 * * * *`) — `pmcluster/internal/cluster/cluster_state.go:455` —
 so the newest archive is never more than an hour old. Retention is
 `backup_retention_days` (default 15). A second agent archives the control
@@ -310,8 +310,8 @@ inside the cluster** — see Chapter 07.
 **The edge.** `pmcluster-edge` (`internal/edgeproxy`) is the only public path
 to the daemon: it applies per-IP rate limits (200 req/s on `/api/*` with a
 burst of 400; 40 req/s on `/webhook/*`), a 1 MB body cap rejected with 413
-(`edgeproxy/shield.go:66`), and an automatic IP ban list
-(`edgeproxy/config.go:123-129`). The daemon itself listens on `0.0.0.0:9090`
+(`edgeproxy/shield.go:67`), and an automatic IP ban list
+(`edgeproxy/blocklist.go:134`). The daemon itself listens on `0.0.0.0:9090`
 so the edge container can reach it over `host.docker.internal`; `harden-host.sh`
 denies 9090 to the WAN.
 
@@ -343,12 +343,12 @@ Parse (strict YAML) → Interpolate (${…}) → Validate → BuildIR → Compos
 
 - `manifest.Parse` (`internal/manifest/parse.go:19`) — unknown keys are
   rejected at every level; errors are path-prefixed.
-- `manifest.BuildIR` (`internal/manifest/translate.go:129`) — the neutral IR.
+- `manifest.BuildIR` (`internal/manifest/translate.go:130`) — the neutral IR.
   This is the writer seam: a future Helm/Terraform backend reads the same IR
   (`docs/improvements.md:72-88`).
-- `manifest.TranslateIR` (`translate.go:115`) → `ComposeWriter`.
+- `manifest.TranslateIR` (`translate.go:116`) → `ComposeWriter`.
 - Platform stacks are the same thing plus a Go-template pre-pass:
-  `cluster.LoadComposeFile` (`internal/cluster/templates.go:504`).
+  `cluster.LoadComposeFile` (`internal/cluster/templates.go:505`).
 
 **Reference language** (`internal/refs`, a leaf package
 `pmcluster/internal/ARCHITECTURE.md:92-97`):
@@ -365,7 +365,8 @@ There is no inline/substring interpolation inside a larger env value
 (`docs/dsl.md:130-161`).
 
 **Content addressing.** `EnsureVersionedSecret` / `EnsureConfig`
-(`internal/cluster/secrets.go:105`, `:216`) name objects
+(`internal/cluster/secrets.go:105-135`, `:216-249`) name objects via
+`dataHash` (`secrets.go:21`)
 `<baseName>_<sha8-of-data>`; identical content reuses the object, a change
 mints a new one and GCs the old. Translate reads values swarm-first and
 **rebuilds a missing object from the DB**; `cluster update` runs a
@@ -388,7 +389,7 @@ injected (the v0.2.110–112 wrapper approach is superseded).
 
 | Layer | Mechanism | Cite |
 |---|---|---|
-| API tokens | Argon2id (`t=2, m=64MiB`), `pmc_<token_id>_<secret>` v2 format with indexed lookup; garbage bearers fast-rejected **before** any DB work | `internal/store/users.go:113-132` |
+| API tokens | Argon2id (`t=2, m=64MiB`), `pmc_<token_id>_<secret>` v2 format with indexed lookup; garbage bearers fast-rejected **  before** any DB work | `internal/store/users.go:119-134` |
 | Credential storage | AES-256-GCM in SQLite, key at `~/.pmcluster/.encryption_key` (0600), mirrored to content-addressed Swarm secrets | `docs/security-and-improvements.md:15` |
 | Webhooks | HMAC-SHA256 over `timestamp‖body` (no separator), ±5 min window, constant-time compare, uniform 401, mandatory `repo_url`+`file` provenance | `docs/webhook.md:102-122` |
 | Daemon RBAC | Bearer tiers admin > operator > viewer (migration 0025); rendered configs require operator; secret-ish settings masked for non-admins | `docs/security-and-improvements.md:179-183` |

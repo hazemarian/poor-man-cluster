@@ -1,13 +1,17 @@
 # 05 — Evolution timeline
 
-Two clocks run through this project's history and they do not agree:
+Two clocks run through this project's history and they mostly agree:
 
-- **git** has 357 commits from `2982549` (2026-04-22, "Initial commit — poor
-  man's Docker Swarm cluster") to `ad6e67f` (2026-10-09, v0.2.179).
-- **tags** begin at `v0.2.158`. Everything before that exists only as a
-  `CHANGELOG.md` entry (the file reaches back to v0.2.42), so a "what shipped
-  in vX" question before v0.2.158 can only be answered from the changelog, not
-  from a tag.
+- **git** has 360 commits from `2982549` (2026-04-22, "Initial commit — poor
+  man's Docker Swarm cluster") to HEAD `4cc1ac5` (2026-10-11, a docs-only
+  restructure). The latest tagged release is **v0.2.180** at `3cfb86c`
+  (2026-10-09); `6e206cf` (an unreleased console fix) and `4cc1ac5` sit on top
+  of it.
+- **tags** run from `v0.0.1` (2026-06-07) through `v0.0.x`, `v0.1.x` and the
+  whole `v0.2.x` series — 236 tags covering the full history, not just the
+  recent releases. `CHANGELOG.md` is still the denser record for the early
+  `v0.2.x` releases, but it only reaches back to v0.2.42 and has a gap of its
+  own (see "Unverified / gaps" below).
 
 Commit density is a good proxy for the project's phases:
 
@@ -18,7 +22,7 @@ Commit density is a good proxy for the project's phases:
 | 2026-08-31 → 2026-09-13 | 25 | the Go service-layer refactor; the first real architecture docs |
 | 2026-09-15 → 2026-09-21 | 111 | **the great conversion**: DSL, single pipeline, content addressing, control loop |
 | 2026-09-22 → 2026-10-02 | 95 | storage/HA work, the LINSTOR reversal, the control plane, the surviving-kit work |
-| 2026-10-03 → 2026-10-09 | 78 | **the campaign era**: TC1 → TC10 and v0.2.161 → v0.2.179 |
+| 2026-10-03 → 2026-10-09 | 78 | **the campaign era**: TC1 → TC10 and v0.2.161 → v0.2.180 |
 
 The last seven days of the project's recorded history contain 78 commits and
 ~40 releases. That is not instability — it is the campaign loop (Chapter 06)
@@ -104,15 +108,15 @@ Most of this phase's design work shipped *after* it ended, interleaved with
 the campaigns — which is why the release table below starts at v0.2.155
 (2026-10-05) even though the decisions are from 2026-09-22 → 10-02.
 
-It ends with the directive that governs everything after it:
-
-> you should not do any manual work around if there is something that needs
-> manual intervension that means it is a bug or an issue
-
-(2026-10-02 — issued four times in the same session, together with the
+It ends with two directives that shaped what came next. The first is the
 four-node test-cluster specification: "we need 2 storage nodes … the 2 storage
 node for testing the failover and the 2 manager nodes to test leader
-failover".)
+failover". The second is an operational rule of thumb the owner kept repeating
+in the same session — that any manual intervention needed to keep the platform
+running is evidence of a bug or a missing behaviour, and should be logged and
+root-caused rather than repeated. That rule became the discipline the
+campaigns ran by; it is described, and quoted, in Chapter 06, not here as a
+product principle.
 
 ## Phase 6 — The campaign era (2026-10-03 → 2026-10-09)
 
@@ -134,15 +138,15 @@ topologies from the reports themselves):
 
 The same six days produced the storage-HA directives (DEC-08), the
 "leader is always a storage node" invariant (BUG-024), and the release
-workflow (DEC-16).
+workflow (DEC-15).
 
-### v0.2.16x → v0.2.179
+### v0.2.16x → v0.2.180
 
 | Tag | Commit | What and why |
 |---|---|---|
-| v0.2.161 | — | `cluster reset`, self-healing/existence-aware `cluster update`, `cluster down --purge` writes a restorable `purge-backup-<ts>.tar.gz` |
-| v0.2.162 | — | backup store placement (`backup_store_on`) |
-| v0.2.162.1 | — | BUG-016 store bucket bootstrap; setup-wizard prompts |
+| v0.2.161 | `03216bf` | `cluster reset`, self-healing/existence-aware `cluster update`, `cluster down --purge` writes a restorable `purge-backup-<ts>.tar.gz` |
+| v0.2.162 | `60aaaff` | backup store placement (`backup_store_on`) |
+| v0.2.162.1 | `92dd93b` | BUG-016 store bucket bootstrap; setup-wizard prompts |
 | v0.2.163 | `aba97eb` | **BUG-017** — the `io.pmcluster.rendered_hash` label + live-Swarm comparison |
 | v0.2.163.1 | `bfb183c` | name the reason each platform stack is redeployed |
 | v0.2.163.2 | `c1786d2` | a partially applied platform deploy counts as drift |
@@ -171,12 +175,13 @@ workflow (DEC-16).
 | v0.2.177 | `6b42cd7` | platform/app separation — the read-only Platform page, `service list --platform` |
 | v0.2.178 | `07b6100` | console SSO sign-out, **Traefik on managers** (DEC-11), `Secure` session cookie, vendored htmx, bcrypt 72-byte limit |
 | v0.2.179 | `ad6e67f` | the brand system — six `--brand-*` palettes, pre-first-paint picker, inlined logo (DEC-14) |
+| v0.2.180 | `3cfb86c` | Go doc-comment conformance, docs refresh, the RFC under `docs/rfc/`, structural cleanups, a hermetic swarm-e2e, and two product fixes (persist the Swarm ID at `cluster up`; GC stale platform configs) |
 
 ---
 
 ## What the last 40 releases are *about*
 
-Read as a sequence, v0.2.161 → v0.2.179 is one continuous argument:
+Read as a sequence, v0.2.161 → v0.2.180 is one continuous argument:
 
 1. **Make the store authoritative and rebuildable** (v0.2.161 reset/purge).
 2. **Make drift visible** (v0.2.163 → .165: live label, app stacks, stamp
@@ -204,10 +209,10 @@ two languages.
   duplicated v0.2.121/122/123 entries. Nothing in the code or the test reports
   contradicts the entries that do exist, but a release in that window cannot be
   verified from the changelog alone.
-- The exact release that carried the BUG-001 fix (`e145d6f`) is recorded in
-  TC1 as "not in any tagged release yet" — it shipped in whatever became
-  v0.2.142. Unverified which tag first contained the commit, since no tag
-  predating v0.2.158 exists in git.
+- The BUG-001 fix (`e145d6f`) is recorded in TC1 as "not in any tagged release
+  yet". `git tag --contains` confirms it first shipped in **v0.2.142**.
 - v0.2.152 is credited with the platform-via-DSL conversion in
-  `docs/improvements.md`; the CHANGELOG entry for it predates the tagged range
-  and was not re-read line-by-line for this RFC.
+  `docs/improvements.md`. The tag exists (`git tag`), and the conversion itself
+  is now carried by the manifest pipeline (`internal/manifest/parse.go`,
+  `translate.go`, `build.go`, `compose_writer.go`), so the claim is verifiable
+  in code.

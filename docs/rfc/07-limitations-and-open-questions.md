@@ -1,12 +1,12 @@
 # 07 — Limitations, stale documents and open questions
 
-Everything below is either (a) a known, still-open defect at v0.2.179,
+Everything below is either (a) a known, still-open defect at v0.2.180,
 (b) a documented behaviour that no longer matches the code, or (c) a design
 decision whose cost is visible but unresolved. Each item cites its evidence.
 
 ---
 
-## 1. Open defects (status: OPEN at v0.2.179)
+## 1. Open defects (status: OPEN at v0.2.180)
 
 ### BUG-033 — a worker's daemon runs a reconcile loop it cannot perform
 
@@ -78,17 +78,23 @@ GC`) is host-agnostic and would support either.
 
 ---
 
-## 3. Stale documents (docs that describe superseded behaviour)
+## 3. Stale documents — found, then fixed
 
-These were found by reading the docs *against* the code. They are listed here
-rather than fixed, because the top-level `docs/*.md` files are read-only for
-this RFC.
+The original draft of this RFC flagged three places where the top-level
+`docs/*.md` described behaviour the code no longer has. Two were corrected in
+v0.2.180 (commit `4cc1ac5`), before this revision:
 
-| Document | Says | Code says | Verdict |
-|---|---|---|---|
-| `docs/security-and-improvements.md:137-146` (§6) | SQLite runs in **WAL** mode and `WALCheckpointer` runs `PRAGMA wal_checkpoint(TRUNCATE)` before snapshots | `store/store.go:40-50` explicitly sets `journal_mode=DELETE` (WAL was reverted after BUG-004, the WAL split-brain corruption, TC3); `store/store.go:78-87` `WALCheckpoint` is now a **no-op** for compatibility | The §6 mechanism still exists as code (`backups/trigger.go` calls it), but its stated *purpose* — flushing WAL — cannot occur. A `DELETE`-mode checkpoint is a plain `sqlite3_backup`-equivalent; the doc describes a mode the store no longer uses. |
-| `docs/storage-and-databases.md:168` | "SQLite + **Litestream** (Recommended) … streams WAL changes continuously to cheap S3-compatible object storage" | Litestream is not a dependency; the offsite path is offen's double-write (DEC-06, v0.2.162) and the mover's S3 transit (v0.2.174) | Recommendation predates the store decision chain (MinIO → Garage → kopia → SeaweedFS). Should be re-scoped as "historical option" or removed. |
-| `docs/improvements.md` (platform-via-DSL) | Credits v0.2.152 with the conversion | v0.2.152 predates the tagged range; the claim cannot be verified from git tags (tags begin at `v0.2.158`) | Unverifiable claim; not contradicted, just unanchored. |
+| Document | Old claim | Current state |
+|---|---|---|
+| `docs/security-and-improvements.md:137-146` (§6) | SQLite runs in **WAL** mode and `WALCheckpointer` flushes the journal before snapshots | §6 now carries a "Superseded detail (updated at v0.2.180)" note recording the reversal to `journal_mode=DELETE` after BUG-004; `WALCheckpoint` is a no-op kept for interface compatibility (`store/store.go:40-48`, `:78-87`) |
+| `docs/storage-and-databases.md:168` | "SQLite + **Litestream** (Recommended) … streams WAL changes continuously" | The line is re-scoped as a "Historical note" stating Litestream never shipped; the offsite path is the backup agents' native double-write (DEC-06) |
+
+The third flag — `docs/improvements.md` crediting v0.2.152 with the
+platform-via-DSL conversion — was listed as unverifiable only because the
+draft believed tags began at `v0.2.158`. The `v0.2.152` tag exists, and the
+conversion is carried by the manifest pipeline (`internal/manifest/parse.go`,
+`translate.go`, `build.go`, `compose_writer.go`), so the attribution is now
+checkable against code and needs no fix.
 
 ---
 
@@ -98,9 +104,9 @@ this RFC.
 
 `escapeCompose` (`manifest/compose_writer.go:626`, "doubles every literal `$`
 so the value survives docker stack") and `escapeComposeDollar`
-(`cluster/templates.go:583`) implement the same rule in two packages, called
+(`cluster/templates.go:571`) implement the same rule in two packages, called
 from two render paths: the **user-manifest** path (`compose_writer.go`) and the
-**platform-stack** path (`cluster/templates.go:504 LoadComposeFile`,
+**platform-stack** path (`cluster/templates.go:505 LoadComposeFile`,
 text/template first). v0.2.176 fixed the `$`-escaping bug in *both* (`$$`
 doubling); nothing prevents the next escaping fix from landing in one and not
 the other.
@@ -188,8 +194,11 @@ auditor) can claim.
    means **one bug slot in the TC1–TC9 sequence has no write-up**.
 2. **CHANGELOG gap v0.2.85 → v0.2.108**, plus duplicated v0.2.121/122/123
    entries. Releases in that window are unverifiable from the changelog alone.
-3. **No git tags before `v0.2.158`.** "What exactly shipped in vX" for
-   v0.2.42–v0.2.157 rests on CHANGELOG prose, not on annotated tags.
+3. **The CHANGELOG is the denser record for early `v0.2.x`.** Tags exist back
+   to `v0.0.1`, but the changelog prose is what ties many early releases to
+   their *content*; a "what shipped in vX" question for v0.2.42–v0.2.157 is
+   best answered from the changelog, with the tag confirming the release
+   exists.
 4. **BUG-A is session-only.** It appears in the opencode session log
    (`ses_ee234a16fffebAYvvTgksndBgE`) but in no TC report and no CHANGELOG
    entry. If the session log is lost, the incident leaves no trace.
@@ -225,9 +234,6 @@ auditor) can claim.
 
 ## 7. What this RFC could not verify
 
-- The exact tag that first contained commit `e145d6f` (BUG-001's fix); TC1
-  records it as "not in any tagged release yet" at test time.
-- The v0.2.152 → platform-via-DSL attribution (pre-dates the tagged range).
 - Whether "stacks→cluster port coupling" (the item this chapter's §4.2
   addresses) refers to the package edge alone or to a specific port mapping; no
   shared port constant was found.

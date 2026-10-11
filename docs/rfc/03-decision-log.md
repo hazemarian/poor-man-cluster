@@ -1,8 +1,10 @@
 # 03 — Decision log
 
-Each entry follows: **Context → Options → Decision → Rationale (with the user
-directive where one exists) → Consequences → Implementation**. Directives are
-quoted verbatim, including their original spelling.
+Each numbered decision follows: **Context → Options → Decision → Rationale
+(with the user directive where one exists) → Consequences → Implementation**.
+The `a`-suffixed entries are refinements of a parent decision and are
+correspondingly leaner. Directives are quoted verbatim, including their
+original spelling.
 
 ---
 
@@ -32,7 +34,7 @@ quoted verbatim, including their original spelling.
 
 The seam that implements it: `Parse → Interpolate → Validate → BuildIR →
 Writer.Write`, where the IR is neutral and the writer is the only
-Swarm-specific component (`docs/dsl.md:5-9`, `docs/improvements.md:72-88`).
+Swarm-specific component (`docs/dsl.md:5-9`, `docs/improvements.md:84-88`).
 `internal/runtime` is a minimal orchestrator contract so a second backend is
 feasible without touching the domains (code-review finding, 2026-10-08:
 "genuinely clean ports/adapters … a k3s/k8s backend is actually feasible").
@@ -43,8 +45,8 @@ provider needs a manager socket (DEC-11), the scheduler needs explicit
 placement guards (DEC-13), and there is no CSI — hence node-local volume
 roots.
 
-**Implementation.** `pmcluster/internal/runtime/`, `internal/manifest/translate.go:129`,
-`docs/improvements.md:72-88`.
+**Implementation.** `pmcluster/internal/runtime/`, `internal/manifest/translate.go:130`,
+`docs/improvements.md:84-88`.
 
 ---
 
@@ -79,16 +81,16 @@ rendering, raw `constraints`/`binds`/`ports`/`configs`/`extra_hosts`/
 `resources`/`user`/`labels`/`logging`, app-level `networks`, and a top-level
 `volumes:` map that passes through **verbatim** (platform volumes like
 `seaweeddata` and `traefik_acme` must never be relocated under the volume
-root) — `docs/improvements.md:28-31`, `docs/dsl.md:47`.
+root) — `docs/dsl.md:15-48`, `:53-113`.
 
 The `platform: true` flag is reserved: it stamps
 `io.pmcluster.platform=true`, excludes the stack from the app drift loop,
 makes it non-deletable via the API, and is **refused** in user manifests
 (`docs/dsl.md:45`).
 
-**Release/implementation.** v0.2.152 (`docs/improvements.md:25-32`);
+**Release/implementation.** v0.2.152 (CHANGELOG);
 `pmcluster/internal/cluster/embeds/*.yml` (each begins with a comment saying
-exactly this), `cluster.LoadComposeFile` (`internal/cluster/templates.go:504`).
+exactly this), `cluster.LoadComposeFile` (`internal/cluster/templates.go:505`).
 
 ---
 
@@ -124,7 +126,7 @@ and later, on the numbered form:
 **Consequences.** Rotation is safe by construction: the in-use Swarm secret is
 immutable and stays mounted until the next deploy; identical content reuses
 one object (no churn); the DB becomes an *index* that also holds the value, so
-a deleted Swarm object can be rebuilt (`docs/improvements.md:60`). This is
+a deleted Swarm object can be rebuilt (`internal/cluster/secrets.go:120-135`). This is
 what made BUG-007 (secret rotation silently defeated) and BUG-018 (failed
 deploy suppresses retries) fixable in the same architecture.
 
@@ -169,7 +171,7 @@ Docker configs; the working set stays in SQLite).
 
 The kit is deliberately minimal: `data.db`, `config.yaml`, the `config/` tree,
 and the encryption key **in a separate config family** so key and ciphertext
-never share one blob (`docs/improvements.md:20`).
+never share one blob (`pmcluster/internal/controlplane/state.go:12-19`).
 
 **Consequences.** `cluster reset` can rebuild the entire Swarm side from the
 DB; a lost manager disk is a restore, not a re-bootstrap; a leaderless swarm
@@ -177,7 +179,7 @@ degrades to no-op snapshots rather than crash-looping (BUG-020). The cost is
 that the DB is single-writer, which is acceptable because exactly one daemon
 is ever active (leader-only serve).
 
-**Implementation.** `internal/controlplane/state.go:15-16`, `:48`;
+**Implementation.** `internal/controlplane/state.go:12-19`, `:48`, `:50`;
 `internal/cli/serve.go:254`, `:286-299`; `docs/control-loop-design.md:70-92`.
 
 ---
@@ -285,10 +287,10 @@ invisible to fresh readers.
 > — `pmcluster/internal/store/store.go:40-48`
 
 **Consequences.** `WALCheckpoint` becomes a no-op that keeps the
-`BackupTrigger` contract (`store.go:78-87`) — the older
-`docs/security-and-improvements.md` §6 still describes the WAL-checkpoint fix
-and is **stale on this point** (see Chapter 07). Throughput is lower, which is
-fine for a control plane with `SetMaxOpenConns(1)`.
+`BackupTrigger` contract (`store.go:78-87`); §6 of
+`docs/security-and-improvements.md` now records the reversal from WAL to
+`journal_mode(DELETE)` rather than prescribing a WAL checkpoint. Throughput
+is lower, which is fine for a control plane with `SetMaxOpenConns(1)`.
 
 **Implementation.** `internal/store/store.go:40-50`; BUG-004 write-up in
 `docs/test-reports/TC3-webhook-cli-features.md:50-94`.
@@ -518,7 +520,7 @@ reversal.
 directive: "The decision (supersedes the earlier 'LINSTOR is the HA
 prerequisite' directive)", `docs/storage-and-databases.md:53-59`).
 
-**Rationale.** The cost table (`docs/storage-and-databases.md:104-119`):
+**Rationale.** The cost table (`docs/storage-and-databases.md:104-113`):
 ~1 GB RAM before any app data; kernel-module complexity with zero benefit on
 a single node; and a replicated device is still a second copy to keep
 consistent *plus* it still needs the backup pipeline. The user's framing of
@@ -572,36 +574,7 @@ any palette change is a stated requirement.
 
 ---
 
-## DEC-15 — The testing doctrine: every manual intervention is a bug
-
-**Context (2026-10-02).** Setting up the four-node test cluster.
-
-**Decision.** The rule, verbatim:
-
-> you should not do any manual work around if there is something that needs
-> manual intervension that means it is a bug or an issue
-> — user directive, 2026-10-02 (issued four times in the same session,
-> `ses_f015e7886ffebPQLfTXFCjrRJx`)
-
-**Rationale.** A platform that needs a human to `docker service update` a
-secret back into place is not a platform; it is a script with a UI. The rule
-converts every campaign intervention into a tracked defect. TC10's bug list is
-literally the interventions that had to be logged (BUG-05/06 — `credentials
-rotate` split-brain requiring manual `docker service update --secret-rm`;
-BUG-022 — `cluster update` on a standby manager falling into the interactive
-wizard; BUG-033 — a worker running a reconcile loop it cannot perform).
-
-**Consequences.** The campaign reports carry a mandatory
-"Manual interventions (logged)" section, and an intervention that cannot be
-fixed becomes an explicitly open bug (BUG-033, BUG-034) rather than an
-untracked workaround.
-
-**Implementation.** Every `docs/test-reports/TC*.md` has the section; see
-Chapter 06.
-
----
-
-## DEC-16 — Release workflow: verify on the sandbox, then cut ONE tag, then roll out
+## DEC-15 — Release workflow: verify on the sandbox, then cut ONE tag, then roll out
 
 **Context (2026-10).** Releases were being tagged repeatedly during a test run,
 producing a stream of near-identical versions and a confused prod rollout.
@@ -624,7 +597,7 @@ daemon never stopped (the old binary keeps running under a deleted inode) —
 use `systemctl restart`, and log it as an intervention when you forget
 (`ses_ee1fc8f83ffepiLlpPfZQnnYII`).
 
-**Implementation.** CHANGELOG v0.2.175 → v0.2.179 sequence; TC10 §"verdict";
+**Implementation.** CHANGELOG v0.2.175 → v0.2.180 sequence; TC10 §"verdict";
 the rollout sessions' "Manual interventions (logged)" sections.
 
 ---
@@ -688,6 +661,6 @@ as the stored hash.
 manual service update is re-applied; a half-applied platform deploy counts as
 drift (BUG-017 follow-up v0.2.163.2).
 
-**Implementation.** `internal/runtime/…:330-337`,
+**Implementation.** `internal/runtime/runtime.go:330-337`,
 `internal/stackdrift/stackdrift.go:24`, `:72`;
 CHANGELOG v0.2.163 / v0.2.164 / v0.2.165.

@@ -1,11 +1,12 @@
 # 04 — Bug catalogue
 
-Forty tracked defects were found by the TC1–TC10 campaigns (and the
-pre-production/production rollouts that followed them): **BUG-001 … BUG-034**,
-the TC10 short series **BUG-03 / BUG-05 / BUG-06 / BUG-09**, and **BUG-A**.
-All but three were fixed and re-verified on the same hardware; **BUG-027** was
-cancelled as not fixable from our side, and **BUG-033 / BUG-034** were still
-open at v0.2.179.
+The TC1–TC10 campaigns (and the pre-production/production rollouts that
+followed them) surfaced defects under thirty-four numbered IDs — **BUG-001 …
+BUG-034** — plus the TC10 short series **BUG-03 / BUG-05 / BUG-06 / BUG-09**
+and one session-only finding, **BUG-A**. One number, **BUG-013**, was never
+used. All but three findings were fixed and re-verified on the same hardware;
+**BUG-027** was cancelled as not fixable from our side, and **BUG-033 /
+BUG-034** were still open at v0.2.180.
 
 ### A note on the numbering
 
@@ -216,7 +217,7 @@ features interacting on real hardware), not of a single function.
 - **Verification:** TC10-E CLI sweep (promote/demote) and the leader-failover
   slice (TC10-A item 2).
 
-### BUG-033 — A worker's daemon runs a full reconcile loop it cannot perform — **OPEN at v0.2.179**
+### BUG-033 — A worker's daemon runs a full reconcile loop it cannot perform — **OPEN at v0.2.180**
 - **Found during:** the production rollout after TC10. **Severity:** Low/Medium.
 - **Symptom:** a worker spams `ERR` on every ~3 s pass:
   `platform pass failed: this node is a Swarm worker, not a manager`, plus
@@ -227,7 +228,7 @@ features interacting on real hardware), not of a single function.
   path (`leader.go:52` — one line, then idle); the reconcile-loop path for a
   worker that was previously a manager is still noisy.
 
-### BUG-034 — Two orphaned stacks in the worker's local DB fail manifest parsing every pass — **OPEN at v0.2.179**
+### BUG-034 — Two orphaned stacks in the worker's local DB fail manifest parsing every pass — **OPEN at v0.2.180**
 - **Found during:** the same rollout. **Severity:** Low.
 - **Symptom:** `abbas-test` and `simple-erp` fail every pass with
   `json: cannot unmarshal array into Go struct field App.volumes of type

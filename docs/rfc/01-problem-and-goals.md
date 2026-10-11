@@ -30,8 +30,7 @@ modules — ~1 GB consumed *before any application data is stored*
 
 A single static Go binary (`pmcluster`) that, on the Swarm leader, owns:
 
-1. a **declarative manifest DSL** (a small, strict YAML — see
-   `docs/dsl.md`);
+1. a **declarative manifest DSL** (a small, strict YAML — see `docs/dsl.md`);
 2. a **desired-state store** (a local SQLite database at
    `~/.pmcluster/data.db`);
 3. a **control loop** that renders the desired state into Docker Swarm
@@ -48,7 +47,7 @@ The same binary also acts as the **cluster lifecycle engine**: `cluster up`,
 `cluster update`, `cluster down --purge`, `cluster reset`, `join`, `node
 promote|demote`, `stack move`, `backup restore`. These are deliberately
 *local-only* operations — they run the engine directly, never through the REST
-API (`pmcluster/internal/ARCHITECTURE.md:63-80`).
+API (`pmcluster/internal/ARCHITECTURE.md:68-84`).
 
 ## 3. The hardware envelope (a design input, not an afterthought)
 
@@ -67,17 +66,21 @@ Two consequences follow directly, and both show up as invariants in the code:
 - **Heavy platform services must be pinned.** On an all-manager swarm a
   role-based constraint (`node.role == manager`) constrains *nothing*, so
   OpenObserve (a JVM-class workload, ~331 MB RSS observed) could be scheduled
-  onto a 1-core node, drive it into swap, starve Raft and cost the swarm its
-  leader for ~30 minutes (BUG-A / BUG-09, `docs/test-reports/TC10-…md:271`).
-  The fix: `platform_node` defaults to the **leader**, and the backup store is
-  pinned to a *non*-storage, *non*-platform node
-  (`docs/storage-and-databases.md:260-268`).
+  onto a 1-core node. Twice this cost real downtime: during TC10 the lack of a
+  placement guard left the swarm without a leader for ~30 minutes (BUG-09,
+  `docs/test-reports/TC10-four-node-storage-ha-and-preprod.md:271`), and a
+  separate session-only incident in which a JVM container starved a 1-core
+  node was recorded as BUG-A
+  (`docs/improvements.md:18-25`). The fix: `platform_node` defaults to the
+  **leader**, and the backup store is pinned to a *non*-storage, *non*-platform
+  node (`docs/storage-and-databases.md:260-268`).
 - **There is no spare capacity for a storage layer.** This is why Path 1 (pin
   + backup + restore) rather than replication is the HA story.
 
 ## 4. Design goals
 
 **G1 — The database is the source of truth; the Swarm is derived.**
+
 > "the sorce of true is the db cluster up and update should update the file and
 > and db"
 > — user directive, session `ses_f4ebe8026ffeeXnVhrX15OFJeD`, 2026-09-17
@@ -91,34 +94,30 @@ rebuild of the whole Swarm side from SQLite
 `edge`, `observability`, `backup`, `sso`) are DSL manifests with
 `platform: true` that flow through exactly the same
 `Parse → Interpolate → Validate → BuildIR → ComposeWriter` stages as user
-apps (`docs/dsl.md:5-9`, `pmcluster/internal/cluster/embeds/infra-stack.yml:3-8`).
-There is one place where a config becomes a Swarm object, one hash function,
-one deploy path, one purge path.
+apps (`docs/dsl.md:5-9`,
+`pmcluster/internal/cluster/embeds/infra-stack.yml:3-8`). There is one place
+where a config becomes a Swarm object, one hash function, one deploy path, one
+purge path.
 
 **G3 — Content addressing over version counters.** Every Swarm config and
-secret is named `<base>_<sha256-first-8-hex>`; identical content reuses the
-object, a change mints a new one, and the in-use object is immutable
-(`pmcluster/internal/cluster/secrets.go:105-109`, `:216-209`). Rotation is
-therefore safe by construction.
+secret is named `<base>_<sha256-first-8-hex>` (`pmcluster/internal/cluster/secrets.go:21`,
+`:105-112`); identical content reuses the object, a change mints a new one, and
+the in-use object is immutable (`:216-249`). Rotation is therefore safe by
+construction, and a drifted or missing swarm-side mirror can be rebuilt from
+the store (`pmcluster secret heal`, shipped v0.2.166).
 
-**G4 — Every manual intervention is a bug.** The testing doctrine quoted in
-the README. If an operator has to `docker service update` something by hand,
-either the platform has a bug or it is missing a convergence behaviour. This
-goal is what produced the reconcile loop, the drift label, `secret heal`, the
-storage-node adoption pass and the worker-standby fix.
-
-**G5 — Fail loudly, never silently.** A failed deploy must look drifted to the
+**G4 — Fail loudly, never silently.** A failed deploy must look drifted to the
 next pass (the rendered hash is stamped **only after a successful apply** —
 BUG-018); a restore that cannot reach the owning node fails with "this stack's
 volume lives on `<node>` — run the restore there" rather than writing into the
 wrong disk; a webhook deploy without `repo_url`+`file` provenance is a 400.
 
-**G6 — Cheap by default, HA by option.** The default topology is one VPS.
+**G5 — Cheap by default, HA by option.** The default topology is one VPS.
 Backups are hourly and local. Offsite, multi-manager HA, storage failover and
 the load-balancer layout are opt-in layers, each with a documented cost
 (`docs/network-topology.md:37-144`).
 
-**G7 — The operator must be able to reason about state from the console.**
+**G6 — The operator must be able to reason about state from the console.**
 Status is *never* colour alone, and never a state the platform did not
 actually observe: "unknown ≠ zero" is a first-class UI state
 (`pmcluster/DESIGN.md:230-243`). Badges read the `stack_status` DB snapshot,
@@ -132,17 +131,20 @@ re-proposed (see also `docs/improvements.md` and Chapter 03):
 
 - **No block-level replication.** LINSTOR/DRBD9 is off the roadmap
   (`docs/storage-and-databases.md:46-59`, `:178-187`).
-- **No Kubernetes.** The IR is backend-neutral (`pmcluster/internal/ARCHITECTURE.md:8-17`
-  and `docs/improvements.md:72-88` describe the writer seam), but no second
-  writer exists and none is planned.
+- **No Kubernetes.** The IR is backend-neutral — intent lives in the IR and
+  mechanism in the writer, so a Helm/Terraform writer is a possible future
+  seam (`docs/improvements.md:84-101`) — but no second writer exists and none
+  is planned.
 - **No shared data plane.** No NFS/GlusterFS/JuiceFS deployment by the
   platform; shared files are a bring-your-own pattern
   (`docs/storage-and-databases.md:160-187`).
+- **No raw-compose deploys.** `deploy` accepts only a pmcluster DSL manifest,
+  not a docker-compose file (`pmcluster/internal/cli/deploy.go:27-29`). The
+  platform's own embedded stacks were converted *out* of hand-written compose
+  into the DSL for exactly this reason (DEC-02).
 - **No git access from the edge.** `repo_url` is provenance metadata only —
   pmcluster never clones or reads a repository
   (`docs/dsl.md:43`, `docs/webhook.md:95-100`).
-- **No raw-compose deploys.** `deploy --compose` was evaluated and discarded
-  (`docs/improvements.md:42`).
 - **No auto-restart on unhealthy.** The control loop reports health; it never
   force-restarts a service. Crash-loop retry is Swarm's restart-policy job
   (`docs/control-loop-design.md:58-60`). The one deliberate exception is the
