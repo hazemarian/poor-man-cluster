@@ -165,7 +165,7 @@ When hosting databases without paying for expensive cloud-managed database servi
 
 If you want zero database complexity and ultra-low RAM usage (~20 MB):
 
-* **SQLite + Litestream (Recommended):** Run SQLite on a local host volume inside the volume root. **Litestream** streams Write-Ahead Log (WAL) changes continuously to cheap S3-compatible object storage (e.g. Cloudflare R2). If a node fails, the database restores automatically in seconds.
+* **SQLite on a pinned volume + pmcluster backups:** Run SQLite on a local host volume inside the volume root, pinned to one node (the zero-effort rule). pmcluster's hourly snapshots cover it like any other volume. *(Historical note: an earlier revision of this guide recommended Litestream for continuous WAL streaming — the platform never shipped it; the offsite path is the backup agents' native double-write, see the [RFC decision log, DEC-06](rfc/03-decision-log.md).)*
 * **Distributed SQLite (rqlite / LiteFS):** Uses Raft consensus or FUSE page replication across nodes for live high availability without traditional database servers. rqlite speaks an HTTP API (`POST /db/execute?q=…`), so an app must talk to it over HTTP rather than opening a SQLite file — the replication happens inside the engine, on node-local volumes, so **no shared storage is needed**.
 
 ### 2. Native Cluster-Replicated Databases (CockroachDB / MariaDB Galera)

@@ -5,6 +5,11 @@
 (`docs/test-reports/TC1…TC10`), or a quoted user directive recovered from the
 opencode session history.*
 
+The **executive RFC** — the summary and entry point, kept current with each
+release — lives at
+[GitHub issue #1](https://github.com/hazemarian/poor-man-cluster/issues/1).
+These chapter files are the full record it points into.
+
 ---
 
 ## Abstract

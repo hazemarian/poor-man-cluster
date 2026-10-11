@@ -178,7 +178,7 @@ stack (Traefik labels, networks, secrets, restart/update policies included).
 
 ## Related docs
 
-- Top-level [README](../README.md) — architecture, getting started, TLS, backups
+- Top-level [README](../README.md) — install + quickstart (architecture and design live in [docs/rfc/](../docs/rfc/) and the RFC issue)
 - [DSL reference](../docs/dsl.md)
 - [Webhook integration guide](../docs/webhook.md)
 - [Storage & database architecture guide](../docs/storage-and-databases.md)
