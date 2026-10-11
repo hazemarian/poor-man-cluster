@@ -1,355 +1,447 @@
-# Poor Man's Cluster: Storage & Database Architecture Guide
+# Storage, backups, and moving data
 
-`Poor Man's Cluster` (pmcluster) is designed to be lightweight, unopinionated, and highly cost-effective. Instead of locking you into a complex, resource-heavy distributed filesystem (like Kubernetes CSIs or Longhorn), the stack standardizes on a **single host root mount**:
+This document answers one question: **where does my data live, and what happens to it when
+something breaks?**
 
-```
-/var/stack/data          (default — override with the volume_root setting)
-```
+The short version, which the rest of this document earns:
 
-How you configure, format, or replicate the underlying host storage at the volume root is entirely up to you. Whether you choose a single $5/month VPS or a multi-node cluster, this guide covers the supported storage options, database architectures, and backup strategies.
+> Every stateful service is placed on one storage node and stays there. An agent on that node
+> tars the volume root every hour and writes the archive to two other places. You can restore
+> that archive, and you can move the whole thing to another node without losing it.
 
-> The volume root is a **setting**, not a hardcoded path: `pmcluster setup
-> --volume-root` or `cluster settings set volume_root=…`. A blank stored value
-> falls back to `/var/stack/data` everywhere (deploy, restore, the per-node
-> volume-repair loop). Per-app paths are always derived from it —
-> `<volume_root>/<app>/<volume>` — never hardcoded per app.
-
----
-
-## The zero-effort rule: name your storage nodes, and stateful services place themselves
-
-If you have a **stateful service** (anything that writes to a volume — a SQLite app, a database, a file store) you **do not have to pin anything**. The platform places stateful services for you, stably and deterministically:
-
-> **Name your storage nodes once — `pmcluster join --storage-node`, or `pmcluster node promote <hostname>` — and every service that holds a volume is placed onto a storage node for you.**
-
-A volume-holding service with no `placement:` is auto-pinned at deploy time: pmcluster hashes the stack name with FNV-32a modulo the storage-node count, so the same stack always lands on the same node, and adding stacks never reshuffles the existing assignments. The service runs on that one node forever, its volume-backed data lives under `<volume_root>/<app>/<name>` on that node and never has to migrate, and nothing else needs to be configured — no NFS, no DRBD, no LINSTOR, no mirroring cron, no distributed database. The hourly backup agents cover it (see Path 1 below). On a single-node cluster there is nothing to name: the leader is seeded as the storage node, so stateful services land there with no further configuration.
-
-If you want a *specific* node, set `placement: <hostname>` — that is the manual override, and it always wins over the auto-pin:
-
-```yaml
-services:
-  db:                       # stateful: SQLite / Postgres / anything with a volume
-    image: ghcr.io/you/db
-    placement: node-01 # ← a SPECIFIC node hostname, not "manager"/"worker"
-    volumes:
-      - db_data:/var/lib/db
-```
-
-Why a specific hostname and not `manager` / `worker`?
-
-* `placement: manager` means *any* manager — if you later add a second manager (or promote the worker), Swarm may reschedule the task onto the other node, where its volume root is empty → the app starts with fresh data or fails on a missing bind source.
-* `placement: <hostname>` pins to exactly one machine. Swarm captures node hostnames at join time (`pmcluster join --hostname`), so the pin always refers to a real, stable name. `pmcluster node list` prints the available hostnames.
-* Leaving `placement` empty is the default, and it is what triggers the auto-pin above.
-
-For every stateful workload, prefer the auto-pin or an explicit hostname. Only reach for the replication strategies in this document when a service genuinely must be able to run on *more than one* node.
+If you would rather not think about any of this, jump to
+[§7 — clustered databases](#7-clustered-databases-when-you-can-stop-caring). That is a real option,
+and for many workloads it is the right one.
 
 ---
 
-## Path 1 is the HA answer: pin + backup/restore (design decision)
+## 1. Where the bytes actually are
 
-**Path 1 — pinned placement + backup/restore — is the HA story for the platform.**
-Block replication (LINSTOR/DRBD9) is **explicitly not** on the roadmap; see the
-honest cost table below for why it was rejected as the 2026-10-02 directive's
-default and replaced by Path 1.
+Everything a stack persists lands under one host directory: the **volume root**. It is a setting,
+not a hardcoded path — `cluster settings set volume_root=…`, or `--volume-root` at setup. Blank
+falls back to `/var/stack/data`.
 
-**The decision (supersedes the earlier "LINSTOR is the HA prerequisite"
-directive).** Stateful services pin to a node (explicit `placement: <hostname>`,
-the `storage_nodes` round-robin, or the `platform_node` fallback), their data
-lives node-locally under the volume root, and the hourly backup agents plus
-on-demand pre-deploy backups cover it. Multi-manager HA protects the Swarm
-control plane (via the Raft-replicated state configs); data HA comes from
-**backup + restore + `stack move`**, not from block replication.
-
-**How the platform operationalizes Path 1:**
-
-- **`storage_nodes` setting** — comma-separated hostnames; stateful stacks
-  (services with volumes and no explicit placement) round-robin deterministically
-  across them (FNV-32a of the stack name). Explicit `placement:` always wins; a
-  per-stack pin written by `pmcluster stack move` outranks the round-robin; the
-  `platform_node` setting (which **defaults to the leader** on update/up) is the
-  single-node fallback when `storage_nodes` is empty.
-- **The leader is always a storage node** — `cluster up` seeds the leader's
-  hostname into `storage_nodes`, and every `cluster update` re-adds the current
-  leader (the backup agent and the edge console run there). Storage follows
-  leadership: a manager that *loses* leadership is removed from
-  `storage_nodes` and its `pmcluster.storage` node label is cleared (the
-  promoted leader is remembered in the internal `storage_leader` setting).
-- **`pmcluster join --storage-node` / `pmcluster node promote|demote <hostname>`**
-  — add or remove a storage node. Workers qualify — storage is not
-  leader-only. `join --storage-node` stamps the swarm-visible
-  `pmcluster.storage` node label (it has no path to the leader's store), and the
-  leader's next `cluster update` **adopts** any labeled-but-unlisted node into
-  `storage_nodes`; demotion goes through `node demote` (which clears the label
-  and the setting, and refuses to demote the current leader).
-- **`io.pmcluster.node` label** — every deployed service carries a label naming
-  the node its placement pin targets (a resolved storage node or an explicit
-  hostname pin; role-based and unconstrained services carry none). The console
-  Services table, the stack-detail services panel, and `pmcluster service ps`
-  display this node, so you can see at a glance where every stateful service
-  runs.
-- **Outage pause (control loop)** — when a pinned storage node is down (absent
-  from the swarm, `Status != ready`, or `Availability != active`), the reconcile
-  loop **skips syncing/deploying** stacks pinned to it and logs a throttled
-  warning; it clears automatically when the node returns or the stack is moved.
-- **Automatic failover (opt-in)** — with `storage_failover=true` and offsite
-  backups configured, the control loop instead moves the stack to a healthy
-  alternate storage node, restoring the failed node's latest archive from the
-  object store (5-minute per-stack cooldown). The move leaves a failover marker:
-  the badge reads `failover` (amber) until `pmcluster stack ack <stack>` — or a
-  move back — clears it. Without the setting the loop only alerts
-  (`pmcluster.storage.node.down` / `pmcluster.storage.failover.disabled` OTel
-  metrics).
-- **`pmcluster stack move <stack> --to <node>`** — the manual data-migration
-  story Path 1 gives operators for node maintenance / failure (see the mover
-  below).
-
-**Why not LINSTOR (the honest cost that rejected it):**
-
-| Cost center | What it actually costs |
-| :--- | :--- |
-| LINSTOR controller | JVM, ~0.5–1 GB RAM, and it needs its own HA (embedded etcd) |
-| Per-node satellites | ~50–150 MB each + DRBD9 kernel module (DKMS — rebuilds on kernel updates, needs kernel headers) |
-| Disk provisioning | Builds LVM thin pools — must **NEVER** auto-provision on a live disk without explicit operator confirmation of the target device |
-| Failure mode: footprint | ~1 GB RAM consumed before any app data is stored |
-| Failure mode: complexity | DRBD/LVM complexity with zero benefit on a single node |
-| Failure mode: operational | A replicated device is a second copy to keep consistent — and still needs the backup pipeline on top |
-
-For the target deployments (single VPS, or a small multi-node swarm), Path 1's
-pinned placement + hourly backups + on-demand `stack move` delivers the same
-recovery outcomes (restore onto any node from the archive, or move live) at a
-fraction of the footprint and with no kernel modules. Revisit block replication
-only if a workload genuinely cannot tolerate a minutes-scale restore window.
-
----
-
-## Storage Decision Flowchart
-
-Use the flowchart below to choose the right storage paradigm for your workload:
+Inside it, every app gets its own subtree, and each container gets a **bind mount** from that
+subtree to the path the manifest asked for:
 
 ```mermaid
 flowchart TD
-    Start([What is your deployment topology?]) --> SingleNode[Single Node / Single VPS]
-    Start --> MultiNode[Multi-Node Swarm Cluster]
-
-    %% Single Node Branch
-    SingleNode --> LocalMount[1. Direct Local SSD Mount]
-    LocalMount --> BackupLitestream[Pair with Litestream or pgBackRest to S3/R2]
-
-    %% Multi Node Branch
-    MultiNode --> Stateful{Stateful service?<br/>writes to a volume}
-    Stateful -->|Yes, and you don't want<br/>storage machinery| Pin[Leave placement empty — auto-pinned<br/>to a storage node (explicit placement is the override)]
-    Stateful -->|Yes, must run on<br/>any node| WorkloadType{What type of workload?}
-
-    WorkloadType --> DBWorkload[Database / Transactional Data]
-    WorkloadType --> SharedFiles[Shared Files / Media Uploads]
-
-    %% DB Workload Branch
-    DBWorkload --> DBEngineChoice{Where should replication happen?}
-    DBEngineChoice --> DBLevel[Database Level <br/>CockroachDB / Galera / Patroni / rqlite]
-    DBEngineChoice --> OSLevel[OS / Block Level <br/>DRBD + LINSTOR — out of scope for pmcluster,<br/>bring it yourself per the Path 1 decision]
-
-    %% Shared Files Branch
-    SharedFiles --> NetworkType{Are nodes on the same LAN or across WAN?}
-    NetworkType --> LAN[Same LAN / Private VPC]
-    NetworkType --> WAN[Global WAN / Multi-Cloud]
-
-    LAN --> HostNFS[2. Host-Level NFS / GlusterFS]
-    WAN --> JuiceFS[3. JuiceFS / SeaweedFS + S3]
+    ROOT["volume root — /var/stack/data"] --> A["myapp/"]
+    ROOT --> B["other-app/"]
+    A --> A1["db_data/"]
+    A --> A2["uploads/"]
+    B --> B1["cache/"]
+    A1 --> C["bind-mounted into the container<br/>at /var/lib/postgresql/data"]
 ```
 
----
+There is no storage driver, no CSI plugin, and no distributed filesystem in the path. The data is
+a directory on a machine you own, at a path you can `ls`, `tar` and `rsync` yourself. That is a
+deliberate constraint: it is why recovery does not depend on pmcluster being functional.
 
-## Database Architectural Strategies
+### Why one node owns a volume
 
-When hosting databases without paying for expensive cloud-managed database services (RDS, Cloud SQL), choose one of the following approaches based on your consistency and availability needs. These are **bring-your-own** patterns for the apps you deploy — pmcluster places and backs them up; the replication is the workload's own.
+A bind mount is local. If Swarm starts the container on a node where
+`<volume_root>/<app>/<volume>` does not exist, the bind source is missing — the task either fails
+to start or starts against an **empty directory** and the app comes up with no data.
 
-### 1. Embedded / Lightweight Databases (SQLite)
-
-If you want zero database complexity and ultra-low RAM usage (~20 MB):
-
-* **SQLite on a pinned volume + pmcluster backups:** Run SQLite on a local host volume inside the volume root, pinned to one node (the zero-effort rule). pmcluster's hourly snapshots cover it like any other volume. *(Historical note: an earlier revision of this guide recommended Litestream for continuous WAL streaming — the platform never shipped it; the offsite path is the backup agents' native double-write, see the [whitepaper](whitepaper.md).)*
-* **Distributed SQLite (rqlite / LiteFS):** Uses Raft consensus or FUSE page replication across nodes for live high availability without traditional database servers. rqlite speaks an HTTP API (`POST /db/execute?q=…`), so an app must talk to it over HTTP rather than opening a SQLite file — the replication happens inside the engine, on node-local volumes, so **no shared storage is needed**.
-
-### 2. Native Cluster-Replicated Databases (CockroachDB / MariaDB Galera)
-
-Instead of replicating storage disks at the OS level, let the database handle multi-node replication natively across standard local host mounts:
-
-* **CockroachDB / YugabyteDB:** Distributed SQL databases using Raft consensus. Each node uses its own local SSD mount inside the volume root. All nodes act as active, fault-tolerant gateways.
-* **MariaDB Galera Cluster:** Multi-master synchronous replication where writes to any node's local disk sync instantly across the cluster over internal overlay networks.
-
-### 3. Primary-Replica with Host-Level Block Replication (DRBD + LINSTOR)
-
-**Out of scope for pmcluster** (the Path 1 decision): the platform does not
-deploy, configure or support DRBD/LINSTOR. If you run it yourself on the hosts,
-know the costs: the LINSTOR controller is a JVM (~0.5–1 GB RAM) plus per-node
-satellites and the DRBD9 kernel module, two extra firewall ranges
-(`3370/tcp`, `7788–7799/tcp`) between the node IPs, and it does not remove the
-need for the backup pipeline. Raw DRBD9 without LINSTOR is lighter (~150 MB)
-but requires manual resource management. Everything else in this document
-(pin, backup, restore, move) works identically on top of it.
+That single fact is the reason placement matters at all, and the reason `placement: manager` is a
+trap: it means *any* manager, so adding a second manager lets Swarm reschedule your database onto
+a node whose volume root is empty.
 
 ---
 
-## How pmcluster enforces the layout
+## 2. How a stateful service gets its node
 
-The DSL and deploy pipeline **force every container volume under the volume root**, so the storage story is enforced, not aspirational:
+You do not choose the node. The platform resolves it, deterministically, before the compose is
+rendered.
 
-* **`volume_root` setting** — a single host directory (default `/var/stack/data`), configurable via `pmcluster setup --volume-root` or `pmcluster cluster settings set volume_root=…`. Changing it re-creates the new root on every update (a missing bind source is rejected by Swarm), and every node's daemon ensures the root + backup dir exist locally at startup.
-* **Named volumes** are auto-collected from service mounts (`db_data:/var/lib/postgresql/data`) and declared with `driver_opts: {type: none, o: bind, device: <root>/<app>/<name>}` — Docker's first-use ownership copy still runs for DB images, so Postgres/MySQL initialize correctly.
-* **Host bind mounts** (`/host/config:/etc/app/config`) are relocated to `<root>/<app>/<basename>`. Raw `binds:` entries (docker.sock, /etc/localtime, sockets, device paths) are the deliberate exception — emitted verbatim, never relocated.
-* **Every volume — named or bind — lands under `<root>/<app>/…`**, and no app can reach another app's data through pmcluster (raw `docker stack deploy` bypasses this, but that user is root on the host already). Volumes declared in the manifest's top-level `volumes:` map (a platform-stack feature) pass through verbatim instead.
-* A per-node **volume-repair loop** in every daemon recreates missing bind-source directories for the stateful services the Swarm placed on that node (a task whose bind source is missing never starts). It is a manager-side repair: the leader and standby managers run it, and a worker silently no-ops (a worker cannot list services to find the ones pinned to it).
+### 2.1 Name your storage nodes once
+
+```bash
+pmcluster join --storage-node …        # at join time
+pmcluster node promote <hostname>      # later
+pmcluster node demote  <hostname>      # and back out
+```
+
+Each does **two** things, and the second is the one that gets missed:
+
+1. writes the hostname into the `storage_nodes` cluster setting — this drives **placement**;
+2. stamps the `pmcluster.storage=true` Swarm node label — this is what the **backup agent**
+   matches on, so backups only run where application data actually lives.
+
+The leader is always a storage node: `cluster up` seeds it, and the list self-maintains — the
+current leader is re-added, a former leader removed, and a node carrying the label but missing
+from the setting is adopted on the next `cluster update`.
+
+### 2.2 At deploy time, the platform resolves placement
+
+Every manifest becomes an intermediate representation, and before the compose is written,
+`PinResolver.ResolvePlacement` walks it. For each service **that holds a volume and left
+`placement` empty**, `resolve()` applies this precedence:
+
+```mermaid
+flowchart TD
+    S{"service holds a volume<br/>and placement is empty?"} -->|no| K["left alone<br/>(explicit placement, or stateless)"]
+    S -->|yes| P{"per-stack pin?<br/>stack_pin_&lt;stack&gt;"}
+    P -->|yes| R1["that node"]
+    P -->|no| N{"storage_nodes<br/>non-empty?"}
+    N -->|yes| R2["roundRobinNode(stackName)<br/>fnv32a(name) mod len(nodes)"]
+    N -->|no| R3["platform_node"]
+```
+
+The winner is rendered into the compose as a Swarm constraint (`node.hostname == <node>`), and
+the service also carries an `io.pmcluster.node` label naming that node — which is what the
+console's Services table and `pmcluster service ps` display, so you can always see where a
+stateful service runs.
+
+**Why a hash, and not an allocation table.** `roundRobinNode` is `fnv32a(stackName) % len(nodes)`.
+A counter would reshuffle every stack whenever you added one. Hashing the name means the same
+stack always resolves to the same node, and a new stack never disturbs an existing one.
+"Round robin" describes the *spread*, not the algorithm.
+
+**Why that is safe to leave alone.** The resolution is a pure function of the stack name and the
+`storage_nodes` setting. Two deploys of the same stack agree without coordinating, and there is no
+allocation state to lose.
+
+### 2.3 The override
+
+Set `placement: <hostname>` and the resolver never touches the service. Use a hostname, not
+`manager`/`worker`: those are role constraints, not pins, and they are how a "pinned" database
+still ends up on an empty volume root.
+
+### 2.4 What makes the layout hold
+
+The DSL enforces the layout rather than documenting it:
+
+- **Named volumes** are collected from service mounts (`db_data:/var/lib/postgresql/data`) and
+  declared with `driver_opts: {type: none, o: bind, device: <root>/<app>/<name>}`. Docker's
+  first-use ownership copy still runs, so Postgres and MySQL initialise correctly.
+- **Host bind mounts** (`/host/config:/etc/app/config`) are relocated to `<root>/<app>/<basename>`.
+  Raw `binds:` entries — `docker.sock`, `/etc/localtime`, sockets, device paths — are the
+  deliberate exception and are emitted verbatim.
+- **A per-node volume-repair loop** recreates missing bind-source directories for the services
+  Swarm placed on that node, since a task whose bind source is missing never starts. It is a
+  manager-side repair: the leader and standby managers run it, and a worker silently no-ops,
+  because a worker cannot list services to find the ones pinned to it.
 
 ---
 
-## Comprehensive Storage Matrix
+## 3. The backup
 
-| Engine / Option | Topology | Best For | DB Safe? | Operational Complexity |
-| :--- | :--- | :--- | :---: | :---: |
-| **Direct Local Host Mount** | Single Node | Single-server setups, SQLite + Litestream | **YES** | **Minimal (Default)** |
-| **CockroachDB / Galera / rqlite** | Multi-Node (Any) | Native DB-level multi-master consensus | **YES** | Low–Medium |
-| **Host NFS / GlusterFS** | Multi-Node (LAN) | Concurrent shared file uploads (RWX) | **NO** | Low–Medium |
-| **JuiceFS / SeaweedFS** | Global WAN | Multi-region shared storage backed by S3 | **YES*** | Medium |
+### 3.1 The agents
 
-\* JuiceFS/SeaweedFS are S3-data-path filesystems, not NFS; single-writer SQL on them still needs care (metadata server + object store), so treat them as safe only for single-writer workloads — same rule as any shared filesystem. (The in-cluster SeaweedFS instance pmcluster ships is a **backup store**, not a shared-data-plane for databases — see below.)
+The backup stack (`platform: true`) runs **offen/docker-volume-backup:v2** as two agents.
+
+**The volume agent** archives the volume root. How many replicas run, and where, follows from how
+you configured storage:
+
+| Condition | Where the volume agent runs |
+|---|---|
+| `storage_nodes` set | `mode: global`, constrained to `node.labels.pmcluster.storage == true` — one per storage node |
+| `backup_all_nodes=true` | `mode: global` on **every** node (needed when data is not confined to storage nodes) |
+| neither | a single replica pinned to the platform node / a manager |
+
+It reads the volume root read-only (`<volume_root>:/backup/data:ro`) and writes archives to
+`<backup_dir>:/archive` — `/var/stack/backup` on the host.
+
+**The control-plane agent** runs only on the manager that holds `~/.pmcluster`, and archives the
+platform's own state: `data.db`, `.encryption_key`, `config.yaml` and the rendered config tree.
+It runs daily at `0 3 * * *` with a **30-day** retention and the `pmcluster-ctlplane-` filename
+prefix, separate from volume archives so a lost manager disk does not mean a full re-bootstrap.
+
+### 3.2 When a backup runs
+
+| Trigger | When | Notes |
+|---|---|---|
+| Scheduled | `backup_cron`, default `0 * * * *` (hourly) | the newest archive is never more than an hour old — the storage-failover path restores exactly this |
+| Pre-deploy | `backup_before_deploy: true` in the manifest | **opt-in per stack**; a failed run is recorded but does not block the deploy |
+| Pre-deploy, strict | `backup_before_deploy` + `strict_backup: true` | a failed pre-deploy backup **aborts the deploy** |
+| Manual | `pmcluster backup create` | |
+
+### 3.3 What an archive is
+
+A `tar.gz` of the volume root, named `backup-<nodeID>-<timestamp>.tar.gz`. It is an ordinary
+tarball — you can extract your data out of it with `tar`, without pmcluster. Not inventing a
+format is the point.
+
+### 3.4 Every archive is written to two other places
+
+This is the part that makes the rest of the story work:
+
+```mermaid
+flowchart TD
+    AG["offen volume agent<br/>on each storage node"] --> AR["archive<br/>/var/stack/backup"]
+    AR --> WD["in-cluster store — SeaweedFS<br/>WebDAV :7333 (write leg)"]
+    AR --> S3["offsite S3 / R2<br/>AWS_* (backup_s3_*)"]
+    WD --> O1["durable copy on a DIFFERENT<br/>node than the data"]
+    S3 --> O2["survives losing the cluster"]
+```
+
+Two things about this are deliberate and load-bearing:
+
+**The store is on a non-storage node.** It is placed there explicitly — an explicit placement
+bypasses the volume-service auto-pin — precisely so the durable copy lives in a different failure
+domain from the data. If the backup sat beside the database, losing one node would lose both, and
+storage failover (which restores *from the offsite copy*) could not exist.
+
+**Writes to the store go over WebDAV, not S3.** The SeaweedFS S3 API does not auto-create a
+bucket, so an S3-first write would fail on a fresh store; the WebDAV gateway creates
+`/buckets/<bucket>` on first PUT. Both gateways serve the *same* namespace and run in the same
+process, so this is a write-path detail, not a second copy.
+
+The offsite leg is optional; when `backup_s3_*` is unset the agent writes only to the store.
+offen's own pruning keeps both copies in lockstep on `backup_retention_days` (default **15**), so
+there is no separate replicator service to operate.
+
+### 3.5 How pmcluster knows what exists
+
+Scheduled runs happen inside offen and never call the daemon. Counting only daemon-triggered runs
+would show a fraction of your backups, so the daemon also **indexes** two sources: the local
+archive dir, and the store (S3 `ListObjectsV2`, `backup-` prefix — control-plane archives
+deliberately excluded). Each unique tarball gets exactly one row (a unique index on `filename`
+makes re-scans idempotent), so `pmcluster backup list` shows scheduled *and* on-demand runs with
+real archive paths. Discovery never deletes anything.
 
 ---
 
-## Automated Backup Architecture
+## 4. Getting it back
 
-pmcluster's backup stack (a platform DSL manifest, `platform: true`) has three
-components: **offen/docker-volume-backup agents**, an **in-cluster SeaweedFS
-object store**, and an optional **offsite S3/R2 destination**.
+```bash
+pmcluster backup list                 # every run, newest first, with status
+pmcluster backup browse <id>          # what is inside those archives
+pmcluster backup restore <id>         # put it back
+```
 
-### The backup agents (offen/docker-volume-backup)
+Restore is **local-first**, and fails loudly rather than silently restoring nothing:
 
-* **Volume agent** — `mode: global` constrained to `pmcluster.storage`-labeled
-  nodes when `storage_nodes` is set (one agent per storage node — the leader
-  always qualifies); `mode: global` on **every** node when `backup_all_nodes`
-  is true; otherwise a single replica pinned to the platform node / manager.
-* **Schedule** — the `backup_cron` setting (standard 5-field cron), **default
-  hourly** (`0 * * * *`) so the newest archive is never more than an hour old —
-  that archive is what the storage-failover path restores. Set `0 3 * * *` for
-  a daily 03:00 cadence.
-* **Source** — the volume root (read-only): every app's data under
-  `<volume_root>` in one whole-disk tarball named
-  `backup-<nodeID>-<timestamp>.tar.gz`.
-* **Retention** — `backup_retention_days` (default **15**): the agent prunes
-  both the local archives and the remote copies (`BACKUP_PRUNING_PREFIX` /
-  `BACKUP_RETENTION_DAYS`), and pmcluster prunes audit rows + archive files
-  older than the window on every list.
-* **Control-plane agent** — a second, manager/platform-node-pinned offen agent
-  (daily 03:00, 30-day retention, `pmcluster-ctlplane-` prefix) that archives
-  `~/.pmcluster` itself: `data.db` + `.encryption_key` + `config.yaml` (+ the
-  rendered config tree). It is also uploaded to the store/offsite target, so a
-  lost manager disk does not mean a full re-bootstrap.
+```mermaid
+flowchart TD
+    R["backup restore &lt;id&gt;"] --> W{"does the stack's volume<br/>live on this node?"}
+    W -->|no| RT["route to the owning node<br/>via the mover"]
+    W -->|yes| L{"archive on this node?"}
+    RT --> L
+    L -->|yes| D["extract from disk"]
+    L -->|no| O{"store or offsite copy?"}
+    O -->|yes| F["fetch, then extract"]
+    O -->|no| E["fail loudly:<br/>say where the archive lives"]
+```
 
-### The in-cluster SeaweedFS store (S3 :8333 + WebDAV :7333)
+Details that prevent the classic accidents:
 
-When enabled (the `seaweedfs_admin` managed credential — self-healed by
-`cluster update` on older clusters), the backup stack runs a headless
-**SeaweedFS** server (`chrislusf/seaweedfs:4.48`) as the in-cluster object
-store:
+- **`--volume` is anchored to the stack.** On a stack-scoped run, `--volume db_data` can only ever
+  match *that stack's* volume, so a bare name cannot pull another app's identically-named volume.
+  On a whole-disk run a bare name matches every app, so scope it as `<app>/<volume>`.
+- **The restore runs where the volume is.** A stack's volume lives on its pinned storage node, so
+  when the CLI runs elsewhere the restore is routed there through the same store-transit mover used
+  by `stack move`. When routing is impossible it says "this stack's volume lives on `<node>` — run
+  the restore there" instead of unpacking data onto the wrong host. Control-plane archives are
+  refused into the volume root.
+- **A purge does not destroy your way back.** `cluster down --purge` first writes a restorable
+  `purge-backup-<ts>.tar.gz` into the data dir and *keeps* it, and
+  `pmcluster cluster reset --restore <archive>` extracts it before rebuilding the Swarm side.
+  Plain `cluster reset` rebuilds networks, secrets, configs, platform stacks and storage labels
+  from the local SQLite store — the DB is the source of truth and the Swarm is derived.
 
-* **S3 API on :8333, published on the swarm routing mesh** — reachable at
-  `127.0.0.1:8333` on *every* node, so the leader daemon (failover restore,
-  `backup restore --from-s3`, store discovery) and the store-transit mover read
-  it with no cross-node host ports. Keep it cluster-internal (restrict the
-  published port — see [network-topology.md](network-topology.md)).
-* **WebDAV gateway on :7333, cluster-internal only** — the *write* leg: offen's
-  WebDAV backend creates the bucket path on first PUT (the S3 API does not
-  auto-create buckets), so agents always write to the store via WebDAV.
-* **Pinned to a non-storage, non-platform node** — chosen at render time as the
-  first non-storage, non-platform **worker**, else the first non-storage,
-  non-platform node, else (last resort, degraded) the platform node; the
-  `backup_store_on` setting pins it to the **leader** instead when set to
-  `leader`. The durable copy deliberately
-  lives in a different failure domain than both the data and the platform
-  stack. Data sits in a plain named volume (`seaweeddata`) — a real disk, never
-  tmpfs. Buckets auto-create on first upload; credentials come from the
-  `seaweedfs_admin` managed credential (S3 identity via env, auto-promoted to
-  admin; no config file, no bootstrap).
-* **Discovery** — the daemon indexes the store (S3 ListObjectsV2, `backup-`
-  prefix, control-plane archives **deliberately excluded**) alongside the local
-  archive dir, so `pmcluster backup list` and the console see archives other
-  nodes uploaded. Nothing is ever deleted from the store by discovery.
+The control plane is restored by a different mechanism: on promotion, the leader restores the data
+directory and encryption key from the Raft-replicated **survivor kit** (`pmcluster_state_*` Docker
+configs, replicated to every manager by Swarm itself). The `pmcluster-ctlplane-*.tar.gz` archives
+are the fallback, and a live database that is already current is never rewound by a restore.
 
-### The offsite double-write (AWS_* + WEBDAV_*)
+---
 
-When the `backup_s3_*` settings (endpoint, bucket, access key, secret key,
-optional region — R2/IONOS/AWS/any S3-compatible) are configured, each offen
-agent writes **every archive twice**: to the in-cluster store via WebDAV
-(`WEBDAV_URL`/`WEBDAV_PATH`/`WEBDAV_USERNAME`/`WEBDAV_PASSWORD`) **and** to the
-offsite target via its native S3 backend (`AWS_S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`,
-`AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT` + `AWS_ENDPOINT_PROTO`,
-`AWS_S3_BUCKET_LOOKUP: path`). offen's own pruning keeps both copies in
-lockstep — there is no separate replicator service. Store-only clusters use
-the WebDAV leg only; offsite-only clusters fall back to a single S3 write.
+## 5. Moving a stack to another node
+
+### 5.1 `stack move` — the deliberate path
+
+```bash
+pmcluster stack move my-web --to node-02
+```
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    participant App as Application / DB
-    participant Disk as volume_root (host)
-    participant Agent as offen agent (storage nodes, hourly)
-    participant Store as in-cluster SeaweedFS (S3 8333 / WebDAV 7333)
-    participant S3 as Offsite S3 / R2 (backup_s3_*)
-
-    App->>Disk: write data
-    Agent->>Disk: read whole-disk snapshot (backup_cron, hourly default)
-    Agent->>Store: WebDAV PUT /buckets/pmcluster-backups (always, when enabled)
-    Agent->>S3: S3 PUT (AWS_*, when offsite configured)
-    Agent->>Agent: prune > backup_retention_days (local + remote)
-    pmcluster->>Store: discover + index (backup- prefix)
+    participant OP as operator
+    participant CLI as pmcluster CLI
+    participant SRC as source node
+    participant MV as one-shot mover
+    participant DST as target node
+    OP->>CLI: stack move my-web --to node-02
+    CLI->>SRC: trigger a fresh whole-disk backup
+    SRC-->>CLI: archive (also written to store + offsite)
+    CLI->>MV: run on the target
+    MV->>MV: verify the tarball really holds this stack's data
+    MV->>DST: unpack my-web/ into the volume root
+    CLI->>CLI: write stack_pin_my-web = node-02
+    CLI->>DST: re-deploy so the constraint renders
+    Note over SRC: old subtree left in place as a safety net
 ```
 
-### Restores
+The mover pulls the archive **object** from the store via the published loopback ingress
+(`host.docker.internal:8333`) — no cross-node host ports, no firewall rules — and verifies the
+tarball actually contains the stack's data before it touches the target. Where no store is
+configured, a fallback ephemeral-HTTP mover serves the archive from the source host.
 
-* **`pmcluster backup restore <id>`** — extracts a SUCCEEDED stack-scoped run
-  under `<volume_root>/<stack>` (the archive's `/backup/data` prefix is
-  stripped; control-plane archives are refused into the volume root). `--volume
-  <name>` narrows to one volume; `--from-s3` forces the fetch from the **offsite**
-  `backup_s3_*` bucket instead of the in-cluster store / local disk.
-* **Routed to the OWNING node** — a stack's volume lives on its pinned storage
-  node; when the CLI runs elsewhere, the restore is routed there through the
-  same store-transit mover used by `stack move` (rclone pulls the archive from
-  the store's published ingress and unpacks it into the owning node's volume
-  root). When routing is impossible it fails loudly ("this stack's volume
-  lives on `<node>` — run the restore there") rather than silently restoring
-  into the wrong node. Single-node clusters keep the local path unchanged.
-* **`cluster down --purge` safety net** — the purge first writes a restorable
-  `purge-backup-<ts>.tar.gz` (data.db + .encryption_key + config.yaml) into the
-  data dir and **keeps** it, then deletes the local store; `pmcluster cluster
-  reset --restore <archive>` extracts it back before rebuilding the Swarm side
-  from the DB.
-* **`pmcluster cluster reset`** — non-destructive rebuild of the whole Swarm
-  side (networks, secrets, configs, platform stacks, storage labels) from the
-  local SQLite store; the DB is the source of truth and the Swarm is derived.
+The `stack_pin_<stack>` setting it writes **outranks** the round-robin, so the reconciler will
+never move the stack back on its own. The source node's subtree is intentionally left behind until
+you prune it: a move is not an `mv`, and nothing is deleted for you.
 
-See `pmcluster/docs/restore-design.md` for the full restore design.
+### 5.2 Automatic failover
 
-### Moving data between nodes (`stack move`, failover, and the store-transit mover)
+With `storage_failover=true` — which refuses to enable without an offsite `backup_s3_*`
+destination, because it needs somewhere to restore *from* — the control loop handles a dead
+storage node without you:
 
-`pmcluster stack move <stack> --to <node>`: trigger a fresh whole-disk backup →
-transit the stack's subtree to the target → write the `stack_pin_<stack>`
-setting (which outranks the round-robin) → re-deploy. The **store-transit
-mover** is the transit path on clusters with the object store configured: a
-one-shot swarm service pinned to the target pulls the archive **object**
-straight from the store via the published loopback ingress
-(`host.docker.internal:8333` — no cross-node host ports, no firewall rules),
-verifies the tarball actually contains the stack's data before touching the
-target, and unpacks `<stack>/` into the target's volume root. The storage
-failover path uses the same mover, but pulls the **failed node's** newest
-archive (never another node's) and never triggers a fresh backup first. A
-fallback ephemeral-HTTP mover serves the archive from this host when no store
-is configured. The source node's old subtree is intentionally left in place as
-a safety net until you prune it.
+```mermaid
+sequenceDiagram
+    participant RC as reconciler
+    participant TGT as alternate storage node
+    participant S3 as offsite copy
+    RC->>RC: storage node down, stack pinned to it
+    RC->>RC: pick a healthy node from storage_nodes
+    alt cooldown clear
+        RC->>S3: fetch that node's newest archive
+        S3-->>TGT: restore into the volume root
+        RC->>TGT: re-deploy with a new pin
+        RC->>RC: leave a failover marker (amber badge)
+    else within the 5-minute cooldown
+        RC->>RC: skip this pass
+    end
+```
+
+It restores the **failed node's** newest archive — never another node's — and the 5-minute
+per-stack cooldown stops a persistently down node from causing a move storm. The marker is cleared
+by `pmcluster stack ack <stack>` (you accept the new node) or by moving the stack back.
+
+With the setting off, none of this happens: the loop **pauses** stacks pinned to a down node,
+warns, and emits `pmcluster.storage.node.down` / `pmcluster.storage.failover.disabled` metrics.
+That is the correct default for someone who has not configured an offsite destination — a paused
+stack and an alert beats an automatic move with nowhere to restore from.
 
 ---
 
-## Quickstart: A pmcluster-managed database stack
+## 6. Other ways to run stateful services
 
-This is the same pattern as the architecture above, expressed as a pmcluster **DSL manifest** (see [dsl.md](dsl.md)) — volumes land under `<volume_root>/<app>/<name>` automatically:
+The default assumes data lives on the node that runs the container. You can break that assumption
+on purpose:
+
+```mermaid
+flowchart TD
+    Q{"must the data be readable<br/>from more than one node?"} -->|no| A["bind mount on one node<br/>+ hourly archive — the default"]
+    Q -->|yes| R{"where should replication happen?"}
+    R -->|"in the OS (block)"| B["DRBD + LINSTOR<br/>replicated volume"]
+    R -->|"in a filesystem"| C["NFS / CephFS / JuiceFS"]
+    R -->|"in the database"| D["clustered database — see §7"]
+```
+
+| Option | What it buys | What it costs |
+|---|---|---|
+| **One node + archive** (default) | no extra software; recovery by restore | a dead node means a restore before the app serves again |
+| **DRBD + LINSTOR** | the volume follows the workload; the container can start on either node | synchronous block replication; a second disk per volume; the DRBD9 kernel module via DKMS, which rebuilds on every kernel update and needs headers |
+| **NFS / CephFS / JuiceFS** | one namespace, no per-node copy | every write crosses the network; SQLite over NFS is a well-known way to corrupt a database; you now operate a filesystem and its metadata service |
+| **External managed DB** | someone else runs replication and backups | not self-hosted — the thing this project exists to avoid |
+
+**Why block replication is not the default.** LINSTOR is not merely absent from the platform; it
+was considered and rejected. The costs are real: the LINSTOR controller is a JVM (~0.5–1 GB RAM)
+that needs its own HA, each satellite adds memory plus the DRBD9 kernel module, and it provisions
+LVM thin pools — which must never be auto-provisioned on a live disk. That is roughly a gigabyte
+of RAM before a single byte of application data is stored, plus kernel-module maintenance, and it
+still needs the backup pipeline on top, because a replicated device is a second copy to keep
+consistent, not a point-in-time copy. For the deployments this project targets — a single VPS, or
+a small swarm — placement plus an hourly archive plus `stack move` reaches the same recovery
+outcomes at a fraction of the footprint. Revisit it only if a workload genuinely cannot tolerate a
+minutes-scale restore window.
+
+If you do run replicated disks yourself, set `backup_all_nodes=true`: data is no longer confined to
+storage nodes, so the agent has to run wherever the volume can appear. Everything else in this
+document — placement, backup, restore, move — works unchanged on top of it.
+
+---
+
+## 7. Clustered databases: when you can stop caring
+
+Everything above answers *"what if the node holding my data dies?"* without running a distributed
+filesystem. You can also answer it **inside the database**, and then most of this document stops
+applying to you.
+
+If the database replicates itself, losing a node is not a data-loss event: the other nodes already
+have the data, and a replica that starts elsewhere catches up on its own.
+
+```mermaid
+flowchart TD
+    subgraph PIN["pinned volume — §1 to §5"]
+        AP["app"] --> DB1["db on node-01<br/>volume on node-01"]
+    end
+    subgraph CLU["clustered database — this section"]
+        R1["node-01 replica"] <--> R2["node-02 replica"]
+        R2 <--> R3["node-03 replica"]
+        AP2["app"] --> R1
+        AP2 --> R3
+    end
+    PIN ~~~ CLU
+```
+
+**rqlite** — SQLite over Raft, and the closest fit for a SQLite shop: same SQL, same file format
+underneath, but writes go through a Raft leader and replicate to followers. The catch is the
+interface: rqlite speaks HTTP (`POST /db/execute?q=…`), so the app must talk to it over HTTP
+rather than opening a SQLite file. The replication lives inside the engine, on node-local volumes,
+so **no shared storage is needed**.
+
+**CockroachDB** — distributed SQL, PostgreSQL wire-compatible, replicating ranges across nodes
+with configurable survival goals. Each node uses its own local disk under the volume root, and
+every node can act as an active gateway. It is the heaviest option here and genuinely wants three
+nodes to be worth running.
+
+**Same family:** MariaDB Galera (synchronous multi-master), PostgreSQL with Patroni or
+CloudNativePG (streaming replication plus automatic failover), YugabyteDB, TiDB.
+
+### What stops applying, what does not
+
+- **Stops applying:** node affinity. When any replica can serve, "which node holds the volume"
+  cannot lose data, so the placement pin stops being load-bearing and the auto-pin in §2 becomes
+  a convenience rather than a safety property.
+- **Stops applying:** restore-before-you-can-serve. A surviving replica serves immediately; you
+  are not waiting on an archive.
+- **Still applies:** the volume backup. The replicas still write to disk under the volume root, so
+  the agent still archives them — and replication does **not** cover a bad migration, a dropped
+  table, or an application that deletes the right rows. A `DELETE` replicates in milliseconds.
+- **Costs more:** three nodes minimum, real CPU and memory per node, and a database you now
+  operate. For one small app on one $5 VPS, a pinned volume and an hourly archive is the better
+  engineering.
+
+**Replication protects availability. A backup protects your data.** Adopt a clustered database and
+you can stop worrying about the first. Keep the hourly archive for the second.
+
+---
+
+## 8. Reference
+
+### Storage options at a glance
+
+| Engine / option | Topology | Best for | Safe for a DB? | Complexity |
+| :--- | :--- | :--- | :---: | :---: |
+| Local mount + pmcluster backups | single node | default; SQLite, Postgres, anything with a volume | **yes** | minimal |
+| rqlite / CockroachDB / Galera / Patroni | multi-node | DB-level replication, any node can serve | **yes** | low–medium |
+| Host NFS / GlusterFS / CephFS | multi-node, LAN | concurrent shared file uploads (RWX) | **no** | low–medium |
+| JuiceFS / SeaweedFS (S3-backed FS) | WAN / multi-region | shared storage without a LAN | single-writer only | medium |
+| DRBD + LINSTOR | multi-node | workloads that cannot tolerate a restore window | yes | high — bring it yourself |
+
+The SeaweedFS instance pmcluster ships is a **backup store**, not a shared data plane for
+databases; do not point a database at it.
+
+### The settings that drive all of this
+
+| Setting | Default | What it does |
+|---|---|---|
+| `volume_root` | `/var/stack/data` | the host root every container volume is bind-mounted under |
+| `storage_nodes` | leader's hostname | which nodes stateful stacks may land on |
+| `storage_failover` | `false` | automatic move off a dead storage node (needs `backup_s3_*`) |
+| `backup_cron` | `0 * * * *` | the volume agent's schedule |
+| `backup_retention_days` | `15` | prune window for archives and audit rows |
+| `backup_all_nodes` | `false` | run the agent everywhere (needed with replicated disks) |
+| `backup_store_on` | `""` = auto | where the in-cluster store runs |
+| `backup_s3_*` | unset | the offsite destination |
+| `platform_node` | the leader | pins platform services — which are stateful too |
+
+### Quickstart: a database stack that is safe by default
 
 ```yaml
 app: myapp
@@ -358,28 +450,42 @@ domain: myapp.example.com
 services:
   db:
     image: postgres:16-alpine
-    env:
-      POSTGRES_DB: "config(db_name)"
-      POSTGRES_PASSWORD: "secret(db_password)"    # injects the stored secret's VALUE
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - db_data:/var/lib/postgresql/data   # no placement: placed for you
     healthcheck: { type: pg_isready }
   web:
     image: ghcr.io/acme/myapp
-    expose:
-      port: 8080
-      host: myapp.example.com
-    env:
-      DATABASE_URL: "secret(myapp_database_url)"   # a stored secret holding the full connection string
+    expose: { port: 8080, host: myapp.example.com }
+    # stateless: no volume, so nothing to place or back up
 ```
 
-* `db_data` is auto-declared and lands at `<volume_root>/myapp/db_data` (via `driver_opts: none/bind`), so Postgres initializes correctly.
-* `db` has no `expose` → it gets no Traefik router and stays on the app's private overlay network, reachable only at `db:5432` (the compose service name resolves on the stack's network; the fully-qualified swarm name `myapp_db` works too).
-* DB-backed references resolve from the pmcluster store at deploy time — the manifest never carries secrets. References are **whole-value** env entries: `config(db_name)` injects a stored config's content, `secret(myapp_database_url)` injects a stored secret's value (as in the example — for a composed connection string, store the whole URL once), and `secrets(name)` resolves to a file mount path (`/run/secrets/<name>`, the secret must also be listed in the service's `secrets:` array). There is no inline/substring interpolation inside a larger env value.
-* The hourly volume agents back up `<volume_root>` — `myapp` rides along automatically; pre-deploy snapshots are opt-in via `backup_before_deploy: true` (+ `strict_backup: true` to abort the deploy if the backup fails).
+```bash
+pmcluster join --storage-node --hostname node-01   # name your storage nodes once
+pmcluster deploy ./app.yaml
+pmcluster backup list                              # the hourly archives appear here
+```
 
-**BYO backup tooling** (e.g. `restic/restic`): perfectly fine as a replacement
-for the platform's offen agent, but it is *your* service — the platform's
-discovery, retention, restore, move and failover paths only know about archives
-the shipped agents write (local archive dir + the store/offsite objects). If
-you bring your own, you also bring your own restore story.
+The hourly agent backs up `<volume_root>`; `myapp` rides along automatically. Pre-deploy snapshots
+are opt-in per stack via `backup_before_deploy: true`, plus `strict_backup: true` to abort the
+deploy if that snapshot fails. By default Postgres initialises correctly because named volumes
+become bind mounts with Docker's first-use ownership copy intact.
+
+**Bringing your own backup tooling** (restic, pgBackRest, Litestream) is fine as a replacement for
+the shipped agent, but it is *your* service: discovery, retention, restore, move and failover only
+know about archives the shipped agents write — the local archive dir and the store/offsite objects.
+Bring your own, and you bring your own restore story.
+
+### Where to check a claim in this document
+
+- placement resolution — `pmcluster/internal/stacks/placement.go`
+- storage nodes, labels and the leader's membership — `pmcluster/internal/cli/node.go`,
+  `pmcluster/internal/cluster/update.go`
+- the agents, the store and the double write — `pmcluster/internal/cluster/embeds/backup-stack.yml`
+- archive records and discovery — `pmcluster/migrations/0005_backups.sql`,
+  `0018_backup_filename.sql`, `pmcluster/internal/backups/local.go`
+- restore, `--volume`, `--from-s3` — `pmcluster/internal/cli/backup.go`,
+  `pmcluster/internal/backups/browse.go`
+- move and failover — `pmcluster/internal/stacks/move.go`,
+  `pmcluster/internal/reconcile/reconcile.go`
+- the mover's transit path — `pmcluster/internal/stacks/move_store.go`
+- control-plane recovery — `pmcluster/internal/cli/leader.go`
