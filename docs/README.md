@@ -17,7 +17,7 @@ the [whitepaper](whitepaper.md).
 | Run stateful services and databases safely | [`storage-and-databases.md`](storage-and-databases.md) |
 | Wire up nodes, DNS, a load balancer, the firewall | [`network-topology.md`](network-topology.md) |
 | Understand the reconcile loop | [`control-loop-design.md`](control-loop-design.md) |
-| Read the security posture | [`security-and-improvements.md`](security-and-improvements.md) |
+| Read the security model | [`whitepaper.md`](whitepaper.md) (§13) |
 | See what was tested on real hardware (TC1–TC10) | [`test-reports/`](test-reports/README.md) |
 | Understand *why* something is the way it is | [`whitepaper.md`](whitepaper.md) |
 
@@ -27,8 +27,7 @@ the [whitepaper](whitepaper.md).
 `storage-and-databases.md` → `network-topology.md` → `webhook.md`.
 
 **New contributor / auditor:** [`whitepaper.md`](whitepaper.md) →
-`control-loop-design.md` → `security-and-improvements.md` →
-`agent.md` (the codebase map, repo root).
+`control-loop-design.md` → `agent.md` (the codebase map, repo root).
 
 **Historian / debugger:** `whitepaper.md` → `test-reports/` →
 `CHANGELOG.md` (repo root).
@@ -43,11 +42,9 @@ the [whitepaper](whitepaper.md).
 | `tls.md` | ACME vs operator-supplied, in-place main-cert rotation, per-host customer-domain certs |
 | `settings.md` | The 29-key cluster-settings catalogue: defaults, who sets what, how a change reaches the swarm |
 | `console.md` | The operator console: every page, auth model, status badges |
-| `storage-and-databases.md` | The zero-effort rule, the Path 1 decision, storage matrix, DB strategies, backup architecture, restore/move/failover |
+| `storage-and-databases.md` | Storage nodes and auto-placement, the Path 1 decision, storage matrix, DB strategies, backup architecture, restore/move/failover |
 | `network-topology.md` | Traffic planes, topology options, firewall reference, DNS routing |
-| `control-loop-design.md` | The reconcile loop as built, plus the extension (sink) architecture |
-| `security-and-improvements.md` | Security findings, each with its implemented fix |
-| `improvements.md` | The open backlog (shipped history lives in `CHANGELOG.md`) |
+| `control-loop-design.md` | The reconcile loop as built — passes, drift signals, outage pause, Raft snapshot |
 | `test-reports/` | TC1–TC10 field reports from live campaigns |
 | `whitepaper.md` | The technical whitepaper — problem, hardware envelope, architecture, design rationale, limitations |
 

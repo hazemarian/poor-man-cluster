@@ -7,8 +7,10 @@ generation, per-host TLS certificates, API tokens, on-demand offen backups,
 structured JSON audit logs, RBAC users, and service operations (replacing
 Portainer). It replaces the old `bin/setup.sh` and owns deployment end to end.
 
-The daemon listens on `127.0.0.1:9090` (host-only). Public access goes through
-[`pmcluster-edge`](../README.md) — a Swarm service that publishes
+The daemon listens on `0.0.0.0:9090` so the edge console container can reach it
+over the Docker bridge gateway (`host.docker.internal:9090`); `harden-host.sh`
+denies 9090 to the WAN, so it is effectively host-local. Public access goes
+through [`pmcluster-edge`](../README.md) — a Swarm service that publishes
 `pmcluster.<domain>` with an operator console and a hardened reverse proxy
 (rate limiting, connection shield, IP blocklisting).
 
@@ -61,7 +63,7 @@ make build         # → ./bin/pmcluster
 | `init` | Bootstrap config (flags: `--admin-name`, `--force` destructive) |
 | `serve` | Run the HTTP daemon (REST API + webhook receiver); leader-aware — serves only on the Swarm leader, standby on non-leader managers (15 s poll), standalone/local mode serves immediately |
 | `cluster up/update/down/status` | Bring the stack up (init-only), content-aware reconcile (DB source of truth, `rendered_hash`), tear down, or show status |
-| `cluster settings/get/set` | List, get, or set cluster settings (25 allowlisted keys incl. `reconcile_interval`, `log_level`; secret keys masked) |
+| `cluster settings/get/set` | List, get, or set cluster settings (29 allowlisted keys incl. `reconcile_interval`, `log_level`; secret keys masked) |
 | `setup` | Interactive wizard: collect cluster config then run cluster up/update (flags incl. `--tailscale`) |
 | `join --role worker\|manager --token … --manager <host>:2377` | Join this host to the Swarm, verify the joined role, initialise local control-plane state, and start the daemon (opt-in `--tailscale [--tailscale-auth-key]` advertises the tailnet IPv4 to the Swarm) |
 | `deploy <manifest.yaml>` | DSL-based deploy (flags: `--app`, `--repo`, `--file`, `--version`) |

@@ -16,13 +16,15 @@ How you configure, format, or replicate the underlying host storage at the volum
 
 ---
 
-## The zero-effort rule: pin stateful services to a specific node
+## The zero-effort rule: name your storage nodes, and stateful services place themselves
 
-If you have a **stateful service** (anything that writes to a volume — a SQLite app, a database, a file store) and you **do not want to deal with storage replication, mirroring, or any of the machinery below**, the supported answer is deliberately simple:
+If you have a **stateful service** (anything that writes to a volume — a SQLite app, a database, a file store) you **do not have to pin anything**. The platform places stateful services for you, stably and deterministically:
 
-> **Pin the service to one specific node with `placement: <hostname>`.**
+> **Name your storage nodes once — `pmcluster join --storage-node`, or `pmcluster node promote <hostname>` — and every service that holds a volume is placed onto a storage node for you.**
 
-That is the whole fix. The service runs on that one node forever, its volume-backed data lives under `<volume_root>/<app>/<name>` on that node and never has to migrate, and nothing else needs to be configured — no NFS, no DRBD, no LINSTOR, no mirroring cron, no distributed database. The hourly backup agents still cover it.
+A volume-holding service with no `placement:` is auto-pinned at deploy time: pmcluster hashes the stack name with FNV-32a modulo the storage-node count, so the same stack always lands on the same node, and adding stacks never reshuffles the existing assignments. The service runs on that one node forever, its volume-backed data lives under `<volume_root>/<app>/<name>` on that node and never has to migrate, and nothing else needs to be configured — no NFS, no DRBD, no LINSTOR, no mirroring cron, no distributed database. The hourly backup agents cover it (see Path 1 below). On a single-node cluster there is nothing to name: the leader is seeded as the storage node, so stateful services land there with no further configuration.
+
+If you want a *specific* node, set `placement: <hostname>` — that is the manual override, and it always wins over the auto-pin:
 
 ```yaml
 services:
@@ -33,13 +35,13 @@ services:
       - db_data:/var/lib/db
 ```
 
-Why a specific node and not `manager` / `worker`?
+Why a specific hostname and not `manager` / `worker`?
 
 * `placement: manager` means *any* manager — if you later add a second manager (or promote the worker), Swarm may reschedule the task onto the other node, where its volume root is empty → the app starts with fresh data or fails on a missing bind source.
 * `placement: <hostname>` pins to exactly one machine. Swarm captures node hostnames at join time (`pmcluster join --hostname`), so the pin always refers to a real, stable name. `pmcluster node list` prints the available hostnames.
-* Leaving `placement` empty is also safe for volume services: pmcluster **auto-pins** them to a storage node (see Path 1 below) instead of letting them float.
+* Leaving `placement` empty is the default, and it is what triggers the auto-pin above.
 
-This is the recommended default for every stateful workload on the platform. Only reach for the replication strategies in this document when a service genuinely must be able to run on *more than one* node.
+For every stateful workload, prefer the auto-pin or an explicit hostname. Only reach for the replication strategies in this document when a service genuinely must be able to run on *more than one* node.
 
 ---
 
@@ -62,7 +64,7 @@ control plane (via the Raft-replicated state configs); data HA comes from
 
 - **`storage_nodes` setting** — comma-separated hostnames; stateful stacks
   (services with volumes and no explicit placement) round-robin deterministically
-  across them (FNV-1a of the stack name). Explicit `placement:` always wins; a
+  across them (FNV-32a of the stack name). Explicit `placement:` always wins; a
   per-stack pin written by `pmcluster stack move` outranks the round-robin; the
   `platform_node` setting (which **defaults to the leader** on update/up) is the
   single-node fallback when `storage_nodes` is empty.
@@ -135,7 +137,7 @@ flowchart TD
 
     %% Multi Node Branch
     MultiNode --> Stateful{Stateful service?<br/>writes to a volume}
-    Stateful -->|Yes, and you don't want<br/>storage machinery| Pin[Pin it: placement: &lt;hostname&gt;<br/>runs on one node, data never migrates]
+    Stateful -->|Yes, and you don't want<br/>storage machinery| Pin[Leave placement empty — auto-pinned<br/>to a storage node (explicit placement is the override)]
     Stateful -->|Yes, must run on<br/>any node| WorkloadType{What type of workload?}
 
     WorkloadType --> DBWorkload[Database / Transactional Data]
@@ -196,7 +198,7 @@ The DSL and deploy pipeline **force every container volume under the volume root
 * **Named volumes** are auto-collected from service mounts (`db_data:/var/lib/postgresql/data`) and declared with `driver_opts: {type: none, o: bind, device: <root>/<app>/<name>}` — Docker's first-use ownership copy still runs for DB images, so Postgres/MySQL initialize correctly.
 * **Host bind mounts** (`/host/config:/etc/app/config`) are relocated to `<root>/<app>/<basename>`. Raw `binds:` entries (docker.sock, /etc/localtime, sockets, device paths) are the deliberate exception — emitted verbatim, never relocated.
 * **Every volume — named or bind — lands under `<root>/<app>/…`**, and no app can reach another app's data through pmcluster (raw `docker stack deploy` bypasses this, but that user is root on the host already). Volumes declared in the manifest's top-level `volumes:` map (a platform-stack feature) pass through verbatim instead.
-* A per-node **volume-repair loop** in every daemon recreates missing bind-source directories for the stateful services the Swarm placed on that node (a task whose bind source is missing never starts) — it runs on standby managers and workers too, not just the leader.
+* A per-node **volume-repair loop** in every daemon recreates missing bind-source directories for the stateful services the Swarm placed on that node (a task whose bind source is missing never starts). It is a manager-side repair: the leader and standby managers run it, and a worker silently no-ops (a worker cannot list services to find the ones pinned to it).
 
 ---
 
@@ -258,9 +260,10 @@ store:
   WebDAV backend creates the bucket path on first PUT (the S3 API does not
   auto-create buckets), so agents always write to the store via WebDAV.
 * **Pinned to a non-storage, non-platform node** — chosen at render time as the
-  first non-storage **worker**, else the first non-storage node, else (last
-  resort, degraded) the platform node; the `backup_store_on` setting pins it to
-  the **leader** instead when set to `leader`. The durable copy deliberately
+  first non-storage, non-platform **worker**, else the first non-storage,
+  non-platform node, else (last resort, degraded) the platform node; the
+  `backup_store_on` setting pins it to the **leader** instead when set to
+  `leader`. The durable copy deliberately
   lives in a different failure domain than both the data and the platform
   stack. Data sits in a plain named volume (`seaweeddata`) — a real disk, never
   tmpfs. Buckets auto-create on first upload; credentials come from the

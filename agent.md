@@ -117,7 +117,6 @@ repo root (this dir)
 │   ├── webhook.md             # CI webhook integration guide
 │   ├── dsl.md                 # DSL reference
 │   ├── storage-and-databases.md / network-topology.md / control-loop-design.md
-│   ├── security-and-improvements.md / improvements.md
 │   └── test-reports/          # per-test-case field reports (historical)
 ├── harden-host.sh             # one-shot host hardening (ufw, DOCKER-USER, fail2ban)
 ├── install.sh                 # curl|bash installer (binary + systemd + auto cluster up/update)

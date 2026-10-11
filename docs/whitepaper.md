@@ -50,7 +50,7 @@ Rejections: no Kubernetes (a second orchestrator backend is a possible future se
 
 Working assumptions: single-writer SQLite, because exactly one daemon serves at a time; reconcile runs only on the leader; Traefik runs only on managers.
 
-Sources: docs/improvements.md; docs/dsl.md; docs/storage-and-databases.md; pmcluster/internal/cli/leader.go.
+Sources: docs/dsl.md; docs/storage-and-databases.md; pmcluster/internal/cli/leader.go.
 
 ## 6. System overview
 
@@ -207,7 +207,7 @@ Sources: pmcluster/internal/manifest/; pmcluster/internal/cluster/secrets.go; pm
 
 ## 9. Storage and placement
 
-Every container volume lands under a single host root (`volume_root`, default `/var/stack/data`). Named volumes become bind `driver_opts` with `device: <root>/<app>/<name>`; host bind mounts move under the root; raw `binds:` entries (docker.sock, sockets, device paths) pass through verbatim. A per-node volume-repair loop in every daemon recreates missing bind-source directories for the stateful services the Swarm placed on that node, on standby managers and workers too.
+Every container volume lands under a single host root (`volume_root`, default `/var/stack/data`). Named volumes become bind `driver_opts` with `device: <root>/<app>/<name>`; host bind mounts move under the root; raw `binds:` entries (docker.sock, sockets, device paths) pass through verbatim. A per-node volume-repair loop in every daemon recreates missing bind-source directories for the stateful services the Swarm placed on that node — a manager-side repair: the leader and standby managers run it, and a worker silently no-ops (a worker cannot list services).
 
 `PinResolver.ResolvePlacement` decides placement once, deterministically:
 
@@ -220,7 +220,7 @@ flowchart TD
     E -- "no" --> P2{stack_pin_&lt;stack&gt; set?}
     P2 -- "yes" --> P2A["use the pin"]
     P2 -- "no" --> P3{storage_nodes set?}
-    P3 -- "yes" --> RR["round-robin: FNV-1a(stack name)"]
+    P3 -- "yes" --> RR["round-robin: FNV-32a(stack name)"]
     P3 -- "no" --> PN["platform_node (defaults to leader)"]
 ```
 
@@ -297,13 +297,14 @@ One table states the trust boundary:
 | API tokens | Argon2id (`t=2, m=64MiB`) hashes; `pmc_<token_id>_<secret>` format with indexed lookup and fast-reject of non-`pmc_` bearers | `internal/store/users.go`, `internal/auth/` |
 | Credential storage | AES-256-GCM ciphertext in SQLite, key at `~/.pmcluster/.encryption_key` (0600), mirrored to content-addressed Swarm secrets | `internal/credentials/`, `internal/cluster/secrets.go` |
 | Webhooks | HMAC-SHA256 over `timestamp‖body`, ±5 min window, constant-time compare, uniform 401, mandatory `repo_url`+`file` provenance | `internal/webhooks/` |
-| Daemon RBAC | Bearer tiers admin > operator > viewer (migration 0025); rendered configs require operator, secret-ish settings masked for non-admins | `internal/auth/`, `migrations/0025_users_role.sql` |
+| Daemon RBAC | Bearer tiers admin > operator > viewer (migration 0025); `pmcluster user create` mints admin-tier tokens, console API keys are operator-tier; rendered configs require operator, secret-ish settings masked for non-admins | `internal/auth/`, `migrations/0025_users_role.sql` |
 | Console RBAC | Session roles admin > operator > viewer; synthetic-admin behind the gate | `internal/ui/` |
 | CSRF | Origin/Referer host must match on state-changing POSTs; cookieless POSTs (curl/CLI) allowed | `internal/ui/` |
 | RealIP | XFF/X-Real-IP honoured only from trusted CIDRs | `internal/server/` |
 | Sessions | Random persisted 32-byte secret (never the built-in default), `Secure` on HTTPS, bcrypt >72 bytes rejected | `internal/ui/` |
 | Edge | Rate limits, bans, 413 body caps | `internal/edgeproxy/` |
 | Platform flag | `platform: true` refused in user manifests, so a customer stack cannot masquerade as platform | `internal/stacks/deploy.go` |
+| OpenObserve surface | `openobserve-auto-auth` Traefik middleware injects the root-admin credential (Basic header + 30-day `auth_tokens` cookie) only after the `admin-auth`/`sso-auth` gate, and is omitted when the credential is unset — never exposed unpaired | `internal/cluster/embeds/traefik-dynamic.yml` |
 
 Sources: pmcluster/internal/store/users.go; pmcluster/internal/auth/; pmcluster/internal/webhooks/; pmcluster/internal/edgeproxy/; pmcluster/internal/server/.
 

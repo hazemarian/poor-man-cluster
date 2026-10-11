@@ -1,16 +1,17 @@
 # Restore
 
-> **Status:** implemented. `pmcluster backup restore <id>` shipped in
-> The whole-disk runs count as
-> verified coverage). Archive discovery (migration 0018) and retention
-> pruning (`backup_retention_days`, default 15) removes rows and archive files.
-> The control-plane restore used by the leader-aware daemon
-> (`RestoreControlPlane`) shipped in v0.2.82. Last updated: v0.2.115.
+`pmcluster backup restore <id>` extracts a successful run under the volume
+root (`--dest-root` overrides the default), with `--volume <name>` narrowing
+to one volume and `--from-s3` forcing a fetch from the offsite `backup_s3_*`
+destination. Archive discovery (migration 0018) and retention pruning
+(`backup_retention_days`, default 15) remove old rows and archive files. The
+control-plane restore used by the leader-aware daemon (`RestoreControlPlane`)
+restores the newest `pmcluster-ctlplane-*.tar.gz` into `~/.pmcluster` at
+daemon startup.
 
-The earlier "Phase 5 — design only" framing is obsolete: `pmcluster backup
-create`, the `backup_before_deploy: true` DSL hook, and the nightly offen
-cron all write archives that pmcluster now discovers, lists, browses, and
-**restores**. This file records what shipped and the gaps still open.
+`pmcluster backup create`, the `backup_before_deploy: true` DSL hook, and the
+hourly offen cron all write archives that pmcluster discovers, lists, browses,
+and restores. This file records what shipped.
 
 ---
 
@@ -19,12 +20,18 @@ cron all write archives that pmcluster now discovers, lists, browses, and
 ### Restore a stack's data
 
 ```
-pmcluster backup restore <id> [--dest-root /var/stack/data]
+pmcluster backup restore <id> [--dest-root /var/stack/data] [--volume <name>] [--from-s3]
 ```
 
 - Works on **SUCCEEDED, stack-scoped** runs (on-demand or
   `backup_before_deploy`). Whole-disk (scheduled) runs restore into the
   **volume root** directly.
+- `--volume <name>` narrows the restore to a single volume (e.g. `db_data`).
+  On a stack-scoped run the volume is anchored to that stack, so it can never
+  pull another app's same-named volume; on a whole-disk run a bare volume name
+  matches every app's volume, so scope it as `<app>/<volume>`.
+- `--from-s3` forces the fetch from the offsite `backup_s3_*` bucket instead
+  of the in-cluster store / local disk.
 - Extraction lands under `<dest_root>/<stack>` for stack-scoped runs, or
   `<dest_root>/<app>/<vol>/...` for whole-disk runs — the offen archives
   bake in a `/backup/data/` prefix, which the restore strips
@@ -34,6 +41,11 @@ pmcluster backup restore <id> [--dest-root /var/stack/data]
   `control-plane archive: cannot restore <p> into the volume root`
   (`browse.go` `refuseControlPlaneArchive`) — they contain
   `~/.pmcluster` state, not app data.
+- **Routed to the owning node.** A stack's volume lives on its pinned storage
+  node; when the CLI runs elsewhere the restore is routed there through the
+  store-transit mover, and fails loudly when routing is impossible
+  (`this stack's volume lives on <node>`). Single-node clusters restore
+  locally.
 - Dest root defaults to `volume_root` (the `volume_root` cluster setting,
   default `/var/stack/data`); pass `--dest-root` to override.
 - REST: `POST /api/backups/{id}/restore` `{dest_root}`; console
@@ -63,30 +75,13 @@ pmcluster backup restore <id> [--dest-root /var/stack/data]
 
 ---
 
-## Constraints (unchanged from the original design)
+## Constraints
 
-- **A volume cannot be restored while it's mounted.** Restore extracts
-  under the volume root to a temp path and renames; services still
-  mounting the old volume see the new files on next task start. For
-  zero-downtime data refreshes, prefer a re-deploy + restore onto a fresh
-  task (the stack detail page's Restore button follows the same path).
-- **Multi-node restore needs to happen on the right node.** Volumes are
-  per-host; pmcluster restores the local node's archives. Worker restores
-  remain a gap (see below).
-
-## Open questions
-
-- **Per-volume restore.** Currently restore is per-archive (whole run).
-  A `pmcluster backup restore <id> <stack> <volume>` form selecting one
-  volume out of a multi-volume archive is still open.
-- **Worker-node restore.** Punted in the shipped design: pmcluster only
-  restores manager-local archives. A future path could add an SSH-out /
-  `docker service` based mechanism to restore a worker's volume in place.
-- **Cross-host archive transport.** Archives from another node must be
-  copied over first (documented, not automated).
-- **`--from-s3`.** The bundled offen stack has S3 envs commented out; if
-  enabled, archives may not exist locally and restore would need to pull
-  from object storage first.
+- Restore extracts files **in place** under the volume root (no temp staging
+  + rename); a service still running against those files sees the new
+  contents on next read/task start. For a zero-downtime data refresh,
+  re-deploy and restore onto a fresh task (the stack detail page's Restore
+  button follows the same path).
 
 ---
 
@@ -97,6 +92,6 @@ pmcluster backup restore <id> [--dest-root /var/stack/data]
   promotion).
 - `pmcluster backup create` — on-demand snapshot; `backup_before_deploy:
   true` in the DSL — automatic pre-deploy snapshot.
-- Scheduled nightly whole-disk backups discovered automatically, with
+- Scheduled hourly whole-disk backups discovered automatically, with
   retention pruning and whole-disk runs counting as verified coverage for
   every stack.

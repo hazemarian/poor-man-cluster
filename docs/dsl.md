@@ -57,9 +57,9 @@ services:
     replicas: 2                            # optional, default 1 (≥ 0)
     run_once: false                        # optional — mutually exclusive with replicas
     placement: node-01                     # optional — manager | worker | <node hostname> | (empty)
-    #   stateful services (with a volume) should pin to ONE specific node
-    #   hostname so their data never has to migrate; "manager"/"worker"
-    #   allow any node of that role (unsafe for volumes)
+    #   a stateful service (with a volume) is auto-pinned to a storage node;
+    #   set a specific hostname here to override; "manager"/"worker" allow
+    #   any node of that role (unsafe for volumes)
     command: ["./server", "--port", "8080"]
     entrypoint: ["/bin/sh", "-c"]
     env:
@@ -253,7 +253,7 @@ update:
   order: start-first   # default; or stop-first
 ```
 
-Services that mount **volumes** are treated as stateful: pmcluster automatically uses `order: stop-first` (a start-first rollout races the old container's shutdown against the new start — e.g. old Postgres deletes the freshly written `postmaster.pid` and the replacement immediately shuts down) and, when `placement` is empty, pins them to a **storage node**. The pin resolution order is: the per-stack pin written by `pmcluster stack move <stack> --to <node>` (the `stack_pin_<stack>` setting — outranks everything) → a deterministic round-robin across the `storage_nodes` cluster setting (FNV-1a of the stack name; the leader is auto-added and workers qualify) → `platform_node` (which defaults to the leader) as the single-node fallback. Each deployed service carries an `io.pmcluster.node` label naming its pinned node (visible in the console Services table and `pmcluster service ps`). No manifest change needed.
+Services that mount **volumes** are treated as stateful: pmcluster automatically uses `order: stop-first` (a start-first rollout races the old container's shutdown against the new start — e.g. old Postgres deletes the freshly written `postmaster.pid` and the replacement immediately shuts down) and, when `placement` is empty, pins them to a **storage node**. The pin resolution order is: the per-stack pin written by `pmcluster stack move <stack> --to <node>` (the `stack_pin_<stack>` setting — outranks everything) → a deterministic round-robin across the `storage_nodes` cluster setting (FNV-32a of the stack name; the leader is auto-added and workers qualify) → `platform_node` (which defaults to the leader) as the single-node fallback. Each deployed service carries an `io.pmcluster.node` label naming its pinned node (visible in the console Services table and `pmcluster service ps`). No manifest change needed.
 
 ---
 
@@ -345,7 +345,7 @@ secrets:
 services:
   db:
     image: postgres:14-alpine
-    placement: node-01        # stateful → pin to ONE specific node (not manager/worker)
+    placement: node-01        # stateful → auto-pinned; a hostname here overrides (not manager/worker)
     volumes: [db_data:/var/lib/postgresql/data]
     env:
       POSTGRES_DB: donation_campaign

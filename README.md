@@ -103,7 +103,7 @@ services:
 
   db:
     image: postgres:14-alpine
-    placement: node-01         # stateful → pin to ONE specific node
+    placement: node-01         # stateful → auto-pinned to a storage node; a hostname here overrides
     volumes: [db_data:/var/lib/postgresql/data]
     env: { POSTGRES_DB: myweb, POSTGRES_USER: db }
     secrets: [my_web_db_password]   # better than plain env — see docs/secrets-and-configs.md
