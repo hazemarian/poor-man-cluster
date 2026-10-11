@@ -1,7 +1,14 @@
 <svg width="680" height="200" viewBox="0 0 680 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Self-contained combination-mark lockup for the README. GitHub strips CSS
-       variables and inline styles, so every colour is hard-coded here (the
-       mark lines/LEDs use the default Orange #FF5722). -->
+  <!-- Self-contained combination-mark lockup for the README.
+       GitHub renders this inside an img element, so there is no CSS cascade and
+       no external font or image loading: every colour here is literal, and the
+       accent is pinned to the console's default Orange (#FF5722).
+
+       The mark sits on an accent-tinted plate, exactly as the console's own
+       sidebar mark does. Without that plate the isometric node faces were
+       near-black on a near-black card, so the mark read as a few floating dots
+       instead of a cluster. The faces are also lifted well above the plate
+       value: the mark has to survive being scaled down to a thumbnail. -->
   <rect x="1" y="1" width="678" height="198" rx="18" fill="#0F1117" stroke="#2D323E" stroke-width="1"/>
 
   <!-- app-header traffic-light controls -->
@@ -9,34 +16,46 @@
   <circle cx="52" cy="27" r="5.5" fill="#FFBD2E"/>
   <circle cx="72" cy="27" r="5.5" fill="#27C93F"/>
 
-  <!-- isometric 3-node mark (scaled 0.72, accent #FF5722) -->
-  <g transform="translate(38,76) scale(0.72)">
+  <!-- accent plate behind the mark -->
+  <rect x="50" y="58" width="108" height="108" rx="18" fill="#FF5722" fill-opacity="0.14" stroke="#FF5722" stroke-opacity="0.45" stroke-width="1"/>
+
+  <!-- isometric 3-node mark: same geometry as internal/ui/views/static/logo-mark.svg,
+       with the faces lifted and edged so all three cubes stay legible on the plate -->
+  <g transform="translate(50,58) scale(0.9)">
+    <!-- connecting links -->
     <path d="M60 48 L35 70" stroke="#FF5722" stroke-width="6" stroke-linecap="round"/>
     <path d="M60 48 L85 70" stroke="#FF5722" stroke-width="6" stroke-linecap="round"/>
     <path d="M35 70 L85 70" stroke="#FF5722" stroke-width="6" stroke-linecap="round"/>
-    <polygon points="60,20 82,31 60,42 38,31" fill="#232730" stroke="#181A20" stroke-width="1.5"/>
-    <polygon points="38,31 60,42 60,58 38,47" fill="#181A20"/>
-    <polygon points="60,42 82,31 82,47 60,58" fill="#13151A"/>
-    <line x1="43" y1="38" x2="55" y2="44" stroke="#8C9BAE" stroke-width="2" stroke-linecap="round"/>
+
+    <!-- top node -->
+    <polygon points="60,20 82,31 60,42 38,31" fill="#525C6E" stroke="#6E7A90" stroke-width="1.5"/>
+    <polygon points="38,31 60,42 60,58 38,47" fill="#39414F" stroke="#4C5665" stroke-width="1"/>
+    <polygon points="60,42 82,31 82,47 60,58" fill="#2E3544" stroke="#434C5C" stroke-width="1"/>
+    <line x1="43" y1="38" x2="55" y2="44" stroke="#B3BDCB" stroke-width="2" stroke-linecap="round"/>
     <circle cx="73" cy="38" r="2.5" fill="#FF5722"/>
-    <polygon points="35,62 57,73 35,84 13,73" fill="#232730" stroke="#181A20" stroke-width="1.5"/>
-    <polygon points="13,73 35,84 35,100 13,89" fill="#181A20"/>
-    <polygon points="35,84 57,73 57,89 35,100" fill="#13151A"/>
-    <line x1="18" y1="80" x2="30" y2="86" stroke="#8C9BAE" stroke-width="2" stroke-linecap="round"/>
+
+    <!-- bottom-left node -->
+    <polygon points="35,62 57,73 35,84 13,73" fill="#525C6E" stroke="#6E7A90" stroke-width="1.5"/>
+    <polygon points="13,73 35,84 35,100 13,89" fill="#39414F" stroke="#4C5665" stroke-width="1"/>
+    <polygon points="35,84 57,73 57,89 35,100" fill="#2E3544" stroke="#434C5C" stroke-width="1"/>
+    <line x1="18" y1="80" x2="30" y2="86" stroke="#B3BDCB" stroke-width="2" stroke-linecap="round"/>
     <circle cx="48" cy="80" r="2.5" fill="#FF5722"/>
-    <polygon points="85,62 107,73 85,84 63,73" fill="#232730" stroke="#181A20" stroke-width="1.5"/>
-    <polygon points="63,73 85,84 85,100 63,89" fill="#181A20"/>
-    <polygon points="85,84 107,73 107,89 85,100" fill="#13151A"/>
-    <line x1="68" y1="80" x2="80" y2="86" stroke="#8C9BAE" stroke-width="2" stroke-linecap="round"/>
+
+    <!-- bottom-right node -->
+    <polygon points="85,62 107,73 85,84 63,73" fill="#525C6E" stroke="#6E7A90" stroke-width="1.5"/>
+    <polygon points="63,73 85,84 85,100 63,89" fill="#39414F" stroke="#4C5665" stroke-width="1"/>
+    <polygon points="85,84 107,73 107,89 85,100" fill="#2E3544" stroke="#434C5C" stroke-width="1"/>
+    <line x1="68" y1="80" x2="80" y2="86" stroke="#B3BDCB" stroke-width="2" stroke-linecap="round"/>
     <circle cx="98" cy="80" r="2.5" fill="#FF5722"/>
   </g>
 
-  <!-- wordmark -->
-  <text x="150" y="96" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="34" font-weight="700" fill="#FFFFFF">Poor Man's<tspan fill="#FF5722"> Cluster</tspan></text>
+  <!-- wordmark: its cap-line and the plate's top edge are optically aligned -->
+  <text x="188" y="97" font-family="'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="36" font-weight="700" fill="#FFFFFF">Poor Man's<tspan fill="#FF5722"> Cluster</tspan></text>
 
-  <!-- tagline -->
-  <text x="150" y="130" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="3" fill="#8C9BAE">SIMPLE • FLEXIBLE • POWERFUL</text>
+  <!-- tagline (step lighter than the identifier below it, so the two grey lines
+       read as descriptor and handle rather than as one block) -->
+  <text x="188" y="127" font-family="'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="12" font-weight="600" letter-spacing="3" fill="#A9B3C2">SIMPLE &#8226; FLEXIBLE &#8226; POWERFUL</text>
 
-  <!-- mono subtext -->
-  <text x="150" y="160" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" fill="#8C9BAE">pmcluster</text>
+  <!-- mono identifier -->
+  <text x="188" y="153" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#6F7889">pmcluster</text>
 </svg>
