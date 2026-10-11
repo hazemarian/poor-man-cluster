@@ -13,7 +13,7 @@ Authentication: the Traefik `admin-auth` (htpasswd) or `sso-auth`
 disabled (`EDGE_LOGIN_DISABLED=true`) and it runs as a synthetic admin
 session. In standalone mode (no gate) the console authenticates its own users
 (admin > operator > viewer RBAC) and the first admin account is created on
-first run. See [RFC ch. 03, DEC-12](rfc/03-decision-log.md) for the auth
+first run. See [the whitepaper](whitepaper.md) for the auth
 model.
 
 ## The pages

@@ -20,5 +20,4 @@ when the campaign ran.
 
 How these campaigns feed the bug catalogue and the testing doctrine
 (verify → tag → rollout) is covered in the
-[RFC](../rfc/README.md) — [ch. 04, bug catalogue](../rfc/04-bug-catalogue.md)
-and [ch. 06, testing methodology](../rfc/06-testing-methodology.md).
+[whitepaper](../whitepaper.md).

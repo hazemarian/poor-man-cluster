@@ -150,7 +150,7 @@ If the backup failed, the failure was logged, but `DeployStack` executed anyway.
 This section was written when the store ran in WAL mode. WAL was later
 **reverted to `journal_mode(DELETE)`** (after BUG-004, the WAL split-brain
 corruption found in TC3 — see the
-[RFC decision log, DEC-07](rfc/03-decision-log.md)), and `WALCheckpoint` is
+[whitepaper](whitepaper.md)), and `WALCheckpoint` is
 now a **no-op kept for interface compatibility**. The checkpoint call in
 the backup trigger still exists — with `DELETE` journal mode a snapshot of
 the `.db` file is already self-contained, so the original goal (consistent

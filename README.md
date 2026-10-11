@@ -10,7 +10,7 @@ A simple, cost-effective, production-ready deployment stack on open-source tools
 
 One static Go binary brings a cluster up on cheap VPSes and gives you HTTPS ingress, observability, programmatic deployments, automated backups, and a single CLI (+ web console) to manage it all.
 
-- **Design & trade-offs:** [RFC — issue #1](https://github.com/hazemarian/poor-man-cluster/issues/1) · [docs/rfc/](docs/rfc/)
+- **Design & trade-offs:** [docs/whitepaper.md](docs/whitepaper.md) — the whitepaper: architecture, design rationale, and what was rejected.
 - **Full documentation:** [docs/README.md](docs/README.md)
 - **Current release:** [v0.2.180](https://github.com/hazemarian/poor-man-cluster/releases) · [CHANGELOG.md](CHANGELOG.md)
 
@@ -35,7 +35,7 @@ Internet → Traefik (HTTPS, every manager)
              └─ your apps           → DSL-deployed stacks
 ```
 
-The DB is the source of truth: `cluster update` re-renders platform configs, re-deploys only what changed, and rebuilds anything missing. Architecture, decisions, and the whole design history: **[the RFC](https://github.com/hazemarian/poor-man-cluster/issues/1)**.
+The DB is the source of truth: `cluster update` re-renders platform configs, re-deploys only what changed, and rebuilds anything missing. Architecture and the design rationale: **[docs/whitepaper.md](docs/whitepaper.md)**.
 
 ## Minimum hardware
 
@@ -165,7 +165,7 @@ pmcluster cluster reset --restore <archive>   # rebuild the swarm side from that
 
 ## Where to go next
 
-The full doc map lives at **[docs/README.md](docs/README.md)** — the DSL reference, webhook guide, secrets/configs, TLS, settings, console tour, storage & databases, network topology, security posture, test reports (TC1–TC10), and the RFC chapters. The design rationale (why, what was rejected, the 19-decision log) is in **[RFC issue #1](https://github.com/hazemarian/poor-man-cluster/issues/1)** and [docs/rfc/](docs/rfc/).
+The full doc map lives at **[docs/README.md](docs/README.md)** — the DSL reference, webhook guide, secrets/configs, TLS, settings, console tour, storage & databases, network topology, security posture, test reports (TC1–TC10), and the whitepaper. The design rationale (why, what was rejected) is in **[docs/whitepaper.md](docs/whitepaper.md)**.
 
 ## License
 

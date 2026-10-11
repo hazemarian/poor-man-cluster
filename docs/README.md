@@ -2,8 +2,7 @@
 
 The README covers install and first use. Everything deeper lives here.
 The design rationale — why the platform looks the way it does — lives in
-the [RFC](rfc/), mirrored at
-[GitHub issue #1](https://github.com/hazemarian/poor-man-cluster/issues/1).
+the [whitepaper](whitepaper.md).
 
 ## Where to go for…
 
@@ -20,18 +19,18 @@ the [RFC](rfc/), mirrored at
 | Understand the reconcile loop | [`control-loop-design.md`](control-loop-design.md) |
 | Read the security posture | [`security-and-improvements.md`](security-and-improvements.md) |
 | See what was tested on real hardware (TC1–TC10) | [`test-reports/`](test-reports/README.md) |
-| Understand *why* something is the way it is | [`rfc/`](rfc/README.md) |
+| Understand *why* something is the way it is | [`whitepaper.md`](whitepaper.md) |
 
 ## Reading orders
 
 **Operator (run a cluster):** `dsl.md` → `secrets-and-configs.md` →
 `storage-and-databases.md` → `network-topology.md` → `webhook.md`.
 
-**New contributor / auditor:** [`rfc/`](rfc/README.md) ch. 01–03 →
+**New contributor / auditor:** [`whitepaper.md`](whitepaper.md) →
 `control-loop-design.md` → `security-and-improvements.md` →
 `agent.md` (the codebase map, repo root).
 
-**Historian / debugger:** `rfc/` ch. 04–07 → `test-reports/` →
+**Historian / debugger:** `whitepaper.md` → `test-reports/` →
 `CHANGELOG.md` (repo root).
 
 ## File map
@@ -50,10 +49,9 @@ the [RFC](rfc/), mirrored at
 | `security-and-improvements.md` | Security findings, each with its implemented fix |
 | `improvements.md` | The open backlog (shipped history lives in `CHANGELOG.md`) |
 | `test-reports/` | TC1–TC10 field reports from live campaigns |
-| `rfc/` | The engineering RFC — problem, architecture, decision log, bug catalogue, timeline, testing, limitations |
+| `whitepaper.md` | The technical whitepaper — problem, hardware envelope, architecture, design rationale, limitations |
 
 Deeper design docs that live with the code:
-[`pmcluster/DESIGN.md`](../pmcluster/DESIGN.md),
 [`pmcluster/internal/ARCHITECTURE.md`](../pmcluster/internal/ARCHITECTURE.md),
 [`pmcluster/docs/`](../pmcluster/docs/) (openapi.yaml, service-ops, restore,
 console-i18n designs).

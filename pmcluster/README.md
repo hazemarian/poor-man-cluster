@@ -178,7 +178,7 @@ stack (Traefik labels, networks, secrets, restart/update policies included).
 
 ## Related docs
 
-- Top-level [README](../README.md) — install + quickstart (architecture and design live in [docs/rfc/](../docs/rfc/) and the RFC issue)
+- Top-level [README](../README.md) — install + quickstart (architecture and design live in [docs/whitepaper.md](../docs/whitepaper.md))
 - [DSL reference](../docs/dsl.md)
 - [Webhook integration guide](../docs/webhook.md)
 - [Storage & database architecture guide](../docs/storage-and-databases.md)
@@ -186,5 +186,4 @@ stack (Traefik labels, networks, secrets, restart/update policies included).
 - [Restore — shipped design & open gaps](docs/restore-design.md)
 - [Service operations design](docs/service-ops-design.md)
 - [Console i18n contract](docs/console-i18n-contract.md)
-- [Console design](DESIGN.md)
-- [RFC v2 (issue #1)](https://github.com/hazemarian/poor-man-cluster/issues/1)
+- [Whitepaper](../docs/whitepaper.md)

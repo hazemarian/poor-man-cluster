@@ -10,7 +10,7 @@ manifest through `env` references.
 
 For the DSL-side rules (which keys accept references, strict YAML), see
 [`dsl.md`](dsl.md). For how platform configs are rendered and snapshotted,
-see the [RFC](rfc/) and
+see the [whitepaper](whitepaper.md) and
 [`control-loop-design.md`](control-loop-design.md).
 
 ## The four `env` reference kinds
