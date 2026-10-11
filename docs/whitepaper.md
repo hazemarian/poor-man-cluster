@@ -220,7 +220,7 @@ flowchart TD
     E -- "no" --> P2{stack_pin_&lt;stack&gt; set?}
     P2 -- "yes" --> P2A["use the pin"]
     P2 -- "no" --> P3{storage_nodes set?}
-    P3 -- "yes" --> RR["round-robin: FNV-32a(stack name)"]
+    P3 -- "yes" --> RR["round-robin: FNV-1a(stack name)"]
     P3 -- "no" --> PN["platform_node (defaults to leader)"]
 ```
 

@@ -85,7 +85,7 @@ flowchart TD
     S -->|yes| P{"per-stack pin?<br/>stack_pin_&lt;stack&gt;"}
     P -->|yes| R1["that node"]
     P -->|no| N{"storage_nodes<br/>non-empty?"}
-    N -->|yes| R2["roundRobinNode(stackName)<br/>fnv32a(name) mod len(nodes)"]
+    N -->|yes| R2["roundRobinNode(stackName)<br/>FNV-1a(name) mod len(nodes)"]
     N -->|no| R3["platform_node"]
 ```
 
@@ -94,7 +94,8 @@ the service also carries an `io.pmcluster.node` label naming that node — which
 console's Services table and `pmcluster service ps` display, so you can always see where a
 stateful service runs.
 
-**Why a hash, and not an allocation table.** `roundRobinNode` is `fnv32a(stackName) % len(nodes)`.
+**Why a hash, and not an allocation table.** `roundRobinNode` is FNV-1a (32-bit) over the stack name, modulo the storage-node count
+(`fnv.New32a()` in Go).
 A counter would reshuffle every stack whenever you added one. Hashing the name means the same
 stack always resolves to the same node, and a new stack never disturbs an existing one.
 "Round robin" describes the *spread*, not the algorithm.
