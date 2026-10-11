@@ -134,16 +134,29 @@ If the backup failed, the failure was logged, but `DeployStack` executed anyway.
 
 ---
 
-## 6. SQLite WAL Checkpoint Before Snapshot Backups — ✅ Implemented
+## 6. SQLite Checkpoint Before Snapshot Backups — ✅ Implemented (superseded detail below)
 
 ### Original Problem
-`offen/docker-volume-backup` creates tarball snapshots of Docker volumes. Since `pmcluster` operates SQLite in WAL mode (`journal_mode(WAL)`), taking a file-level snapshot while transactions are active in the WAL file can lead to incomplete database snapshots.
+`offen/docker-volume-backup` creates tarball snapshots of Docker volumes. A file-level snapshot taken while transactions are still in the journal can lead to an incomplete database snapshot.
 
 ### What was implemented
-- **Checkpoint Exec:** Before executing volume backups, the `WALCheckpointer` interface (satisfied by `*store.Store`) runs `PRAGMA wal_checkpoint(TRUNCATE)` on the SQLite connection so all transactions are flushed to the main `.db` file before the snapshot. The pre-deploy and on-demand triggers both flush first; the trigger also retries once after a bounded delay when the offen agent is mid-restart.
+- **Checkpoint Exec:** Before executing volume backups, the `WALCheckpointer` interface (satisfied by `*store.Store`) runs a checkpoint on the SQLite connection so pending transactions are flushed to the main `.db` file before the snapshot. The pre-deploy and on-demand triggers both flush first; the trigger also retries once after a bounded delay when the offen agent is mid-restart.
 - **Impacted Files:**
   - `pmcluster/internal/backups/trigger.go` — `WALCheckpointer`, `LocalTrigger`
-  - `pmcluster/internal/store/store.go` — WAL-mode connection
+  - `pmcluster/internal/store/store.go` — the store connection
+
+### ⚠️ Superseded detail (updated at v0.2.180)
+
+This section was written when the store ran in WAL mode. WAL was later
+**reverted to `journal_mode(DELETE)`** (after BUG-004, the WAL split-brain
+corruption found in TC3 — see the
+[RFC decision log, DEC-07](rfc/03-decision-log.md)), and `WALCheckpoint` is
+now a **no-op kept for interface compatibility**. The checkpoint call in
+the backup trigger still exists — with `DELETE` journal mode a snapshot of
+the `.db` file is already self-contained, so the original goal (consistent
+snapshots) holds, just not via WAL flushing. See
+[storage-and-databases.md](storage-and-databases.md) for the current backup
+architecture.
 
 ---
 
