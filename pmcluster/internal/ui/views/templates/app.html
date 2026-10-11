@@ -132,7 +132,7 @@
 </nav>
 
 <div class="modal-backdrop" id="modal" hidden onclick="if(event.target===this)closeModal()">
-  <div class="modal" role="dialog" aria-modal="true">
+  <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
     <button class="modal-close" type="button" onclick="closeModal()" aria-label="{{T "common.close"}}">{{icon "close"}}</button>
     <div id="modal-body"></div>
   </div>
@@ -196,18 +196,53 @@
     btn.setAttribute('aria-pressed', paused ? 'false' : 'true');
   }
 
+  /* ---- modal: focus + scroll lock ----
+     A dialog has to take the keyboard with it. On open, focus moves to the
+     first control in the body — but the body may still be empty when the
+     trigger is an onclick=openModal() that fires ahead of its htmx request, so
+     the htmx:afterSwap handler re-focuses once the content lands. Tab is
+     trapped inside the dialog, and closing restores focus to whatever was
+     focused before, so a keyboard operator is not dropped at the top of the
+     page. body.modal-open stops the document scrolling behind. */
+  var lastFocus = null;
+  function focusModal() {
+    var m = document.getElementById('modal');
+    if (!m || m.hidden) return;
+    var body = document.getElementById('modal-body');
+    var scope = (body && body.childElementCount) ? body : m;
+    var first = scope.querySelector('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), a[href]');
+    if (first) { first.focus(); return; }
+    var dlg = m.querySelector('.modal');
+    if (dlg) dlg.focus();
+  }
   function openModal() {
     var m = document.getElementById('modal');
-    if (m) { m.hidden = false; document.body.classList.add('modal-open'); }
+    if (!m) return;
+    if (m.hidden) lastFocus = document.activeElement;
+    m.hidden = false;
+    document.body.classList.add('modal-open');
+    focusModal();
   }
   function closeModal() {
     var m = document.getElementById('modal');
     if (m) { m.hidden = true; document.body.classList.remove('modal-open'); }
     var b = document.getElementById('modal-body');
     if (b) b.innerHTML = '';
+    if (lastFocus && typeof lastFocus.focus === 'function') lastFocus.focus();
+    lastFocus = null;
+  }
+  function trapModalTab(e) {
+    var m = document.getElementById('modal');
+    if (!m || m.hidden) return;
+    var f = m.querySelectorAll('a[href], button:not([disabled]), input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    if (!f.length) return;
+    var first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   }
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { closeModal(); closeDrawer(); }
+    if (e.key === 'Escape') { closeModal(); closeDrawer(); return; }
+    if (e.key === 'Tab') trapModalTab(e);
   });
 
   /* ---- off-canvas drawer (below 768px) ---- */
@@ -247,6 +282,10 @@
     closeDrawer();
   }
   document.addEventListener('htmx:afterSwap', function (e) {
+    // A modal body that swaps in after openModal() already ran (an
+    // onclick=openModal() firing ahead of its htmx request) gets focus once
+    // its content has actually landed.
+    if (e.target && e.target.id === 'modal-body') { focusModal(); return; }
     if (e.target && e.target.id === 'view') {
       syncNav(location.pathname);
       e.target.querySelectorAll('[data-focus]').forEach(function (el) { el.focus(); });

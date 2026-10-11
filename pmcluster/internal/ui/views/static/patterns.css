@@ -135,19 +135,11 @@
 }
 
 /* ---------- mobile bottom tab bar ---------- */
-.tabbar {
-  display: none;
-  position: fixed; inset-block-end: 0; inset-inline: 0; z-index: 50;
-  background: var(--bg-sidebar); border-top: 1px solid var(--border-default);
-  padding-bottom: env(safe-area-inset-bottom);
-}
-@media (max-width: 767px) { .tabbar { display: grid; grid-template-columns: repeat(5, 1fr); } }
-.tabbar a {
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s-1);
-  min-height: 56px; font-size: var(--fs-xs); color: var(--text-tertiary); padding: 6px 2px;
-}
-.tabbar a.is-active { color: var(--accent); }
-.tabbar a .ic { width: 19px; height: 19px; }
+/* Owned by base.css, which sizes the columns from the item count
+   (grid-auto-flow: column). This file used to carry a second copy that pinned
+   the bar to `repeat(5, 1fr)`; once the shell rendered a sixth destination the
+   last item wrapped into an uneven implicit column. Keep the definition in one
+   place so adding or removing a destination cannot re-introduce that drift. */
 
 /* ---------- login document (standalone page) ---------- */
 .doc { min-height: 100dvh; display: grid; place-items: center; padding: var(--s-6); background: var(--bg-body); }

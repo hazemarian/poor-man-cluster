@@ -44,3 +44,28 @@ func TestStaticHandlerServesVendoredHtmx(t *testing.T) {
 		t.Errorf("htmx.min.js body does not look like htmx (missing marker)")
 	}
 }
+
+// TestTabBarHasSingleDefinition guards the shell's mobile tab bar. base.css owns
+// the chrome and sizes the bar's columns from the item count
+// (grid-auto-flow: column). A second definition in another stylesheet once
+// pinned the bar to a fixed column count, so a destination added later wrapped
+// into an uneven implicit column. Keep the definition in exactly one sheet.
+func TestTabBarHasSingleDefinition(t *testing.T) {
+	sheets := []string{"base.css", "components.css", "patterns.css", "brand.css"}
+	var owners []string
+	for _, name := range sheets {
+		b, err := StaticFS.ReadFile("static/" + name)
+		if err != nil {
+			t.Fatalf("read static/%s: %v", name, err)
+		}
+		if strings.Contains(string(b), ".tabbar") {
+			owners = append(owners, name)
+		}
+	}
+	if len(owners) != 1 {
+		t.Fatalf("the shell tab bar must be styled from exactly one stylesheet, found %d: %v", len(owners), owners)
+	}
+	if owners[0] != "base.css" {
+		t.Errorf("the shell tab bar belongs to base.css (the shell chrome), not %s", owners[0])
+	}
+}

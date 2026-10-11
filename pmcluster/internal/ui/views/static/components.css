@@ -353,6 +353,10 @@ kbd {
   display: flex; align-items: center; justify-content: center; padding: var(--s-5);
 }
 .modal-backdrop[hidden] { display: none; }
+/* A dialog owns the viewport: while one is open the document behind it must not
+   scroll, or a wheel or swipe over the backdrop drags the page out from under
+   the operator. Toggled by openModal()/closeModal() in the shell. */
+body.modal-open { overflow: hidden; }
 .modal {
   background: var(--bg-elevated); border: 1px solid var(--border-default); border-radius: var(--r-xl);
   box-shadow: var(--shadow-overlay); width: min(620px, 100%); max-height: 85dvh; overflow: auto;
