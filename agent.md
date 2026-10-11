@@ -446,14 +446,15 @@ HTTP layer).
 ### internal/cluster — cluster orchestration (the core)
 `UpDeps`/`UpdateDeps`/`SiteCertDeps`/`HostCertsDeps` bundle `Store, Cipher,
 Docker, Deployer` (+ `Stdout` where verbose).
-- `up.go` — `cluster up`: idempotent bootstrap, run as a **workflow of 10
-  named steps** (preflight → sync platform configs → networks → TLS →
-  credentials → render configs → deploy stacks → wait health →
-  snapshot rendered configs → persist install state). Renders embedded
+- `up.go` — `cluster up`: idempotent bootstrap, run as a **workflow of 14
+  named steps** (preflight → storage roots → platform configs → networks →
+  default storage/platform node → TLS → credentials → render configs →
+  deploy stacks → wait health → snapshot rendered configs → persist
+  install state). Renders embedded
   stacks, waits for health, saves settings. **Init-only**: errors
   "cluster already initialised" if domain/TLS state already persisted.
 - `update.go` — `cluster update`: content-aware re-apply, run as a **workflow
-  of 7 named steps**. Loads persisted install state + SSO settings (self-heals
+  of 18 named steps**. Loads persisted install state + SSO settings (self-heals
   missing `sso_cookie_secret` via `CredentialsManager.Ensure`). Loads OO
   credentials, re-materializes cert/key secrets, renders OTel + Traefik
   dynamic + edge configs. Content-aware per-stack reconcile: hashes freshly
@@ -603,7 +604,8 @@ paused rollout with the failing task's error in the console).
 `POST /webhook/{source}`. Auth = HMAC-SHA256 over
 `timestamp_decimal + raw_body` (headers `X-Pmcluster-Timestamp` ±5min window,
 `X-Pmcluster-Signature: sha256=<hex>`). Every failure → generic 401.
-Body: `DeployPayload{app_name, version, manifest, repo_url?}`.
+Body: `DeployPayload{app_name, version, manifest, repo_url, file}` (repo_url +
+file provenance is mandatory).
 The receiver reads the HMAC secret via the `SourceReader` port (never touches
 store/cipher directly). `Local{Store,Cipher}` implements both `Service`
 (source management) and `SourceReader`.
@@ -839,10 +841,11 @@ Bootstrap/repair commands stay local.
   print warning lines.
 
 ### Secrets & configs
-`pmcluster secret create|edit|list|show|verify|delete|heal` and
-`pmcluster config create|list|get|edit|history|rollback|delete` (DB-backed,
-AES-GCM encrypted, sha256 hashes displayed, version history + rollback;
-`create` takes `--scope` and `--stack`). Referenced from the DSL env via
+`pmcluster secret create|edit|list|show|verify|delete|heal` (DB-backed,
+AES-GCM encrypted, sha256 hash displayed) and
+`pmcluster config create|list|get|edit|history|rollback|delete` (DB-backed
+plain text, version history + rollback). Both `create` commands take
+`--scope` and `--stack`. Referenced from the DSL env via
 `config(name)` / `secrets(name)` / `settings(name)` / `secret(name)`; mounted
 as files via `configs: [config_path(name)]`. **Swarm-first,
 content-addressed**: every write mirrors a `<name>_<sha8>` swarm object (the

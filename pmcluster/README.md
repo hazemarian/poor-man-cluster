@@ -122,7 +122,7 @@ internal/
   ui/                  operator console (/web base path, RBAC, HTMX); users table
                        with role column; external links observ.<domain> +
                        traefik.<domain>/dashboard/
-  workflow/            named-step runner (up 12 / update 9 / deploy 5 steps)
+  workflow/            named-step runner (up 14 / update 18 / deploy 7 steps)
   telemetry/           OTLP metrics wiring
   logger/              structured JSON audit logs
   buildinfo/           version/commit/date with VCS fallback (Resolve())
