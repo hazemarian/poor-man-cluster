@@ -98,7 +98,7 @@ Sources: docs/network-topology.md; pmcluster/internal/cluster/embeds/infra-stack
 
 Desired state lives in local SQLite at `~/.pmcluster/data.db`, opened with `journal_mode(DELETE)`, `busy_timeout(5000)`, `foreign_keys(1)`, and `SetMaxOpenConns(1)` on the pure-Go `modernc.org/sqlite` driver. Actual state is the Swarm: services, networks, secrets, configs, node labels. The leader-only reconciler bridges them, one pass at a time behind a `TryLock`.
 
-The store schema, as the migrations define it:
+The store schema, as the migrations define it: sixteen tables, of which these eight carry relationships. The other eight — `users`, `managed_credentials`, `secrets`, `registries`, `rendered_configs`, `backups`, `cluster_settings`, `site_certs` — are standalone rows keyed by name, with no edges between them.
 
 What to look for: one status row and one failover marker per stack, one version history per config.
 
@@ -109,13 +109,6 @@ erDiagram
     stacks ||--o| stack_failover : marker
     configs ||--o{ config_versions : history
     webhook_sources ||--o{ webhook_deliveries : records
-    users
-    managed_credentials
-    secrets
-    registries
-    backups
-    cluster_settings
-    site_certs
 ```
 
 The invariant it encodes: G1 holds structurally — all platform state is a row, and the Swarm reconstructs from it.
@@ -172,10 +165,10 @@ Sources: pmcluster/internal/store/store.go; pmcluster/migrations; pmcluster/inte
 
 Every config — platform or application — becomes a Swarm object through one pipeline: Parse (strict YAML, unknown keys rejected at every level) → Interpolate (`${…}`) → Validate → BuildIR (a neutral intermediate representation) → ComposeWriter (Compose v3.9). Platform stacks are the same thing with a Go-template pre-pass (`cluster.LoadComposeFile`) that emits a DSL manifest; `platform: true` reserves the stack from the app drift loop and is refused in user manifests. The IR is the writer seam: intent in the IR, mechanism in the writer.
 
-What to look for: one left-to-right pipeline and one convergence loop feeding back through the store.
+What to look for: one top-to-bottom pipeline and one convergence loop feeding back through the store.
 
 ```mermaid
-flowchart LR
+flowchart TD
     DSL["DSL manifest<br/>user or platform"] --> PARSE["Parse"] --> INTER["Interpolate"] --> VAL["Validate"] --> IR["BuildIR"] --> W["ComposeWriter"]
     W --> SWARM["Swarm (actual)"]
     DB[("SQLite (desired)")] --> RC["reconciler (leader)"]
