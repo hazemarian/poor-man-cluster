@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -134,33 +135,43 @@ var runBackupExec = func(ctx context.Context, containerID string) (stdout, stder
 	return outBuf.String(), errBuf.String(), cmd.Run()
 }
 
-// backupRetryDelay is how long Trigger waits before its single retry. A var so
-// tests can shorten it.
+// backupRetryDelay is how long Trigger waits between attempts. A var so tests
+// can shorten it.
 var backupRetryDelay = 10 * time.Second
 
-// triggerExec runs the offen backup exec, retrying ONCE after a short bounded
-// delay when the first attempt fails. The offen store/agent is often
-// mid-restart when a deploy-triggered backup fires, so a single retry absorbs
-// that transient without masking a genuine failure (the final error stays
-// clear).
-func triggerExec(ctx context.Context, containerID string) (*Result, error) {
-	stdout, stderr, err := runBackupExec(ctx, containerID)
-	if err == nil {
-		return backupResult(stdout, stderr), nil
-	}
+// backupMaxAttempts bounds how many times the agent's `backup` command is tried.
+//
+// The agent accepts it roughly 30-60s after its container starts; before that
+// offen exits 1 having written NOTHING — which is not distinguishable from a
+// genuine failure except by trying again. One retry was not enough for a fresh
+// `cluster up`, where a backup is a common next move: the command failed on a
+// cluster that was seconds away from being able to take one. Six attempts cover
+// a cold start, and still fail a broken agent in bounded time.
+const backupMaxAttempts = 6
 
-	select {
-	case <-ctx.Done():
-		// The context ended while we would have waited — surface the original
-		// failure rather than blocking past the caller's deadline.
-	case <-time.After(backupRetryDelay):
-		rstdout, rstderr, rerr := runBackupExec(ctx, containerID)
-		if rerr == nil {
-			return backupResult(rstdout, rstderr), nil
+// triggerExec runs the offen backup exec, retrying while the agent is not yet
+// accepting work, bounded by both backupMaxAttempts and the caller's context
+// (the CLI's --timeout).
+func triggerExec(ctx context.Context, containerID string) (*Result, error) {
+	var stdout, stderr string
+	var err error
+	for attempt := 1; ; attempt++ {
+		stdout, stderr, err = runBackupExec(ctx, containerID)
+		if err == nil {
+			return backupResult(stdout, stderr), nil
 		}
-		return &Result{Stdout: rstdout, Stderr: rstderr}, backupExecError(containerID, rerr, rstderr)
+		if attempt >= backupMaxAttempts || ctx.Err() != nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			// The deadline arrived while we would have waited — report the
+			// failure rather than blocking past it.
+			return &Result{Stdout: stdout, Stderr: stderr}, backupExecError(ctx, containerID, err, stderr)
+		case <-time.After(backupRetryDelay):
+		}
 	}
-	return &Result{Stdout: stdout, Stderr: stderr}, backupExecError(containerID, err, stderr)
+	return &Result{Stdout: stdout, Stderr: stderr}, backupExecError(ctx, containerID, err, stderr)
 }
 
 func backupResult(stdout, stderr string) *Result {
@@ -171,8 +182,43 @@ func backupResult(stdout, stderr string) *Result {
 	}
 }
 
-func backupExecError(containerID string, err error, stderr string) error {
-	return fmt.Errorf("docker exec %s backup: %w (%s)", containerID, err, strings.TrimSpace(stderr))
+// agentLogTail returns the agent container's most recent log lines, or "" when
+// they cannot be read. A var so tests can substitute one.
+//
+// offen writes to its OWN container streams, which `docker exec` does not
+// capture — so this is the only place its reason for failing is visible.
+var agentLogTail = func(ctx context.Context, containerID string, n int) string {
+	var out, errBuf bytes.Buffer
+	cmd := exec.CommandContext(ctx, "docker", "logs", "--tail", strconv.Itoa(n), containerID)
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	tail := strings.TrimSpace(strings.TrimSpace(out.String()) + "\n" + strings.TrimSpace(errBuf.String()))
+	if len(tail) > 600 {
+		tail = tail[len(tail)-600:]
+	}
+	return tail
+}
+
+// backupExecError describes a failed backup exec usefully.
+//
+// A failing exec used to surface as `docker exec <id> backup: exit status 1 ()`
+// — an exit code, and an empty cause, because the agent logged its reason to a
+// stream the exec never captured. Attach the agent's own log. When even that is
+// empty, say what to check instead of showing an empty pair of brackets.
+func backupExecError(ctx context.Context, containerID string, err error, stderr string) error {
+	detail := strings.TrimSpace(stderr)
+	if detail == "" {
+		detail = agentLogTail(ctx, containerID, 15)
+	}
+	if detail == "" {
+		return fmt.Errorf("docker exec %s backup: %w — the agent logged nothing, so it is most likely still "+
+			"starting. Check `docker service ps backup_volume-backup` for restarts, and `docker logs` on it for why",
+			containerID, err)
+	}
+	return fmt.Errorf("docker exec %s backup: %w (%s)", containerID, err, detail)
 }
 
 // findLocalContainer filters by service-name label so a renamed or

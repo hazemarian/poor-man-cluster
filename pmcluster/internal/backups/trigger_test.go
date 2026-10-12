@@ -49,9 +49,7 @@ func TestParseArchivePaths(t *testing.T) {
 // TestTriggerExec_RetriesOnceOnTransientFailure verifies a first-attempt
 // failure (the offen agent mid-restart) is retried once and succeeds.
 func TestTriggerExec_RetriesOnceOnTransientFailure(t *testing.T) {
-	origExec := runBackupExec
-	origDelay := backupRetryDelay
-	t.Cleanup(func() { runBackupExec = origExec; backupRetryDelay = origDelay })
+	stubExec(t)
 	backupRetryDelay = time.Millisecond
 
 	calls := 0
@@ -75,12 +73,11 @@ func TestTriggerExec_RetriesOnceOnTransientFailure(t *testing.T) {
 	}
 }
 
-// TestTriggerExec_FailsAfterBothAttempts verifies a persistent failure keeps
-// the final (second) error clear instead of silently succeeding.
-func TestTriggerExec_FailsAfterBothAttempts(t *testing.T) {
-	origExec := runBackupExec
-	origDelay := backupRetryDelay
-	t.Cleanup(func() { runBackupExec = origExec; backupRetryDelay = origDelay })
+// TestTriggerExec_FailsAfterExhaustingAttempts verifies a persistent failure is
+// retried to the bound and then reported, keeping the last error clear instead
+// of silently succeeding.
+func TestTriggerExec_FailsAfterExhaustingAttempts(t *testing.T) {
+	stubExec(t)
 	backupRetryDelay = time.Millisecond
 
 	calls := 0
@@ -93,8 +90,8 @@ func TestTriggerExec_FailsAfterBothAttempts(t *testing.T) {
 	if err == nil {
 		t.Fatal("triggerExec succeeded, want error")
 	}
-	if calls != 2 {
-		t.Errorf("runBackupExec calls = %d, want 2", calls)
+	if calls != backupMaxAttempts {
+		t.Errorf("runBackupExec calls = %d, want %d", calls, backupMaxAttempts)
 	}
 	if !strings.Contains(err.Error(), "docker exec abc123 backup") {
 		t.Errorf("error = %q, want docker exec context", err)
@@ -105,4 +102,76 @@ func TestTriggerExec_FailsAfterBothAttempts(t *testing.T) {
 	if res == nil || res.Stderr != "agent down" {
 		t.Errorf("result stderr = %+v, want 'agent down'", res)
 	}
+}
+
+// The failing exec's stderr is USUALLY EMPTY: offen writes to its own container
+// streams, which `docker exec` does not capture. That is why the message used to
+// be "exit status 1 ()" — an exit code and no cause. The agent's log has to be
+// attached instead.
+func TestTriggerExec_ReportsTheAgentsOwnLogWhenTheExecIsSilent(t *testing.T) {
+	stubExec(t)
+	backupRetryDelay = time.Millisecond
+	runBackupExec = func(_ context.Context, _ string) (string, string, error) {
+		return "", "", errors.New("exit status 1") // silent, as offen is mid-startup
+	}
+	agentLogTail = func(context.Context, string, int) string { return "level=ERROR msg=\"store unreachable\"" }
+
+	_, err := triggerExec(context.Background(), "abc123")
+	if err == nil {
+		t.Fatal("triggerExec succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "store unreachable") {
+		t.Errorf("error does not carry the agent's own log, so it still gives no cause: %q", err)
+	}
+}
+
+// When the agent has logged nothing either, say what to check rather than
+// printing an empty pair of brackets.
+func TestTriggerExec_SaysWhatToCheckWhenEvenTheAgentIsSilent(t *testing.T) {
+	stubExec(t)
+	backupRetryDelay = time.Millisecond
+	runBackupExec = func(_ context.Context, _ string) (string, string, error) {
+		return "", "", errors.New("exit status 1")
+	}
+	agentLogTail = func(context.Context, string, int) string { return "" }
+
+	_, err := triggerExec(context.Background(), "abc123")
+	if err == nil {
+		t.Fatal("triggerExec succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "still starting") || !strings.Contains(err.Error(), "backup_volume-backup") {
+		t.Errorf("error should say the agent may still be starting and how to check: %q", err)
+	}
+	if strings.Contains(err.Error(), "()") {
+		t.Errorf("error still renders an empty cause: %q", err)
+	}
+}
+
+// The retry is bounded by the caller's deadline, not only by the attempt count,
+// so `backup create --timeout=20s` does not outlive its own flag.
+func TestTriggerExec_StopsRetryingAtTheDeadline(t *testing.T) {
+	stubExec(t)
+	backupRetryDelay = time.Hour // would hang if the deadline were not honoured
+
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	runBackupExec = func(_ context.Context, _ string) (string, string, error) {
+		calls++
+		cancel() // the caller gives up during the first attempt
+		return "", "", errors.New("exit status 1")
+	}
+
+	if _, err := triggerExec(ctx, "abc123"); err == nil {
+		t.Fatal("triggerExec succeeded, want error")
+	}
+	if calls != 1 {
+		t.Errorf("runBackupExec calls = %d, want 1 — a cancelled context must not be retried", calls)
+	}
+}
+
+// stubExec saves and restores the package seams the trigger tests replace.
+func stubExec(t *testing.T) {
+	t.Helper()
+	origExec, origDelay, origLog := runBackupExec, backupRetryDelay, agentLogTail
+	t.Cleanup(func() { runBackupExec, backupRetryDelay, agentLogTail = origExec, origDelay, origLog })
 }
