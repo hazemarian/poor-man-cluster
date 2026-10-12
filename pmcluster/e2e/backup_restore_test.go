@@ -27,6 +27,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +42,7 @@ import (
 // volume. The service's only job is to hold the volume open, so the volume is
 // created by the deploy pipeline exactly as a customer's would be — placed by
 // the platform, bind-mounted under the volume root.
-const restoreManifest = `app: e2erestore
+const restoreManifest = `app: %s
 env: production
 domain: example.test
 services:
@@ -181,35 +182,56 @@ func TestBackupRestoreE2E(t *testing.T) {
 		t.Logf("cluster down output:\n%s", out)
 	})
 
-	manifestPath := filepath.Join(homeDir, "restore.yaml")
-	if err := os.WriteFile(manifestPath, []byte(restoreManifest), 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
+	const (
+		app      = "e2erestore"
+		laterApp = "e2erestore2" // deployed AFTER the backup, on purpose
+		volName  = "app_data"
+	)
+
+	writeManifest := func(name string) string {
+		t.Helper()
+		p := filepath.Join(homeDir, "restore-"+name+".yaml")
+		if err := os.WriteFile(p, []byte(fmt.Sprintf(restoreManifest, name)), 0o644); err != nil {
+			t.Fatalf("write manifest for %s: %v", name, err)
+		}
+		return p
 	}
+	manifestPath := writeManifest(app)
+	laterManifestPath := writeManifest(laterApp)
 
 	// Clear leftovers from a previous (possibly crashed) run first, then clean
 	// up after this one. Registered after the cluster teardown so it runs
 	// before it.
-	clearAppState(t, "e2erestore", "e2erestore_app_data")
-	t.Cleanup(func() { clearAppState(t, "e2erestore", "e2erestore_app_data") })
+	for _, a := range []string{app, laterApp} {
+		clearAppState(t, a, a+"_"+volName)
+	}
+	t.Cleanup(func() {
+		for _, a := range []string{app, laterApp} {
+			clearAppState(t, a, a+"_"+volName)
+		}
+	})
 
-	// The volume's host path. Every named volume is bind-mounted at
-	// <volume_root>/<app>/<volume> (manifest/compose_writer), and that tree is
-	// exactly what the agent archives — which is why this path is both the
-	// thing to seed and the thing to assert on.
-	volumeDir := filepath.Join(storageRoot, "e2erestore", "app_data")
-	markerPath := filepath.Join(volumeDir, "marker.txt")
 	const (
 		markerOriginal = "original-data-v1\n"
 		markerMutated  = "overwritten-after-backup\n"
 		laterFile      = "post-backup.txt"
 	)
 
+	// The volume's host path. Every named volume is bind-mounted at
+	// <volume_root>/<app>/<volume> (manifest/compose_writer), and that tree is
+	// exactly what the agent archives — which is why this path is both the
+	// thing to seed and the thing to assert on.
+	volumeDir := filepath.Join(storageRoot, app, volName)
+	markerPath := filepath.Join(volumeDir, "marker.txt")
+	laterVolumeDir := filepath.Join(storageRoot, laterApp, volName)
+	laterAppMarker := filepath.Join(laterVolumeDir, "marker.txt")
+
 	t.Run("01-deploy-a-stateful-stack", func(t *testing.T) {
 		out, errOut, code := runCmdCtx(t, ctx, homeDir, "deploy", manifestPath)
 		if code != 0 {
 			t.Fatalf("pmcluster deploy exited %d:\n%s\n%s", code, out, errOut)
 		}
-		waitServiceHealthy(t, ctx, "e2erestore_store", 1, 120*time.Second)
+		waitServiceHealthy(t, ctx, app+"_store", 1, 120*time.Second)
 	})
 
 	t.Run("02-the-volume-lands-under-the-volume-root", func(t *testing.T) {
@@ -280,16 +302,33 @@ func TestBackupRestoreE2E(t *testing.T) {
 		}
 	})
 
-	// Mutate the volume the way a real incident would: the live file changes
-	// after the snapshot, and a new file appears. A correct restore returns the
-	// volume to the archived state, which means BOTH of these are undone.
-	t.Run("05-restore-returns-the-volume-to-the-archived-state", func(t *testing.T) {
+	// A restore REPLACES: the app is rewound to the snapshot, so the mutated
+	// file comes back as it was AND anything written into the volume since is
+	// gone. Both halves are asserted, because the second half is what makes a
+	// database volume come back consistent rather than as a union of two
+	// moments.
+	//
+	// It also asserts the safety half of the same rule: an app deployed AFTER
+	// the backup was never in the snapshot, so a whole-run restore must leave
+	// it alone. Without that bound, replacing would be a loaded gun pointed at
+	// everything deployed since the backup.
+	t.Run("05-restore-replaces-the-volume-and-spares-apps-the-snapshot-never-saw", func(t *testing.T) {
 		if err := os.WriteFile(markerPath, []byte(markerMutated), 0o644); err != nil {
 			t.Fatalf("overwrite %s: %v", markerPath, err)
 		}
 		laterPath := filepath.Join(volumeDir, laterFile)
 		if err := os.WriteFile(laterPath, []byte("created after the backup\n"), 0o644); err != nil {
 			t.Fatalf("write %s: %v", laterPath, err)
+		}
+
+		// A second stateful app, deployed after the backup, holding real data.
+		deployOut, deployErr, code := runCmdCtx(t, ctx, homeDir, "deploy", laterManifestPath)
+		if code != 0 {
+			t.Fatalf("deploy %s exited %d:\n%s\n%s", laterApp, code, deployOut, deployErr)
+		}
+		waitServiceHealthy(t, ctx, laterApp+"_store", 1, 120*time.Second)
+		if err := os.WriteFile(laterAppMarker, []byte("a newer app's data\n"), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", laterAppMarker, err)
 		}
 
 		out, errOut, code := runCmdCtx(t, ctx, homeDir, "backup", "restore", strconv.FormatInt(backupID, 10))
@@ -304,19 +343,16 @@ func TestBackupRestoreE2E(t *testing.T) {
 			t.Fatalf("read %s after restore: %v", markerPath, err)
 		}
 		if string(got) != markerOriginal {
-			t.Errorf("marker.txt after restore = %q, want %q — the restore did not put the archived bytes back",
+			t.Errorf("marker.txt after restore = %q, want the archived bytes %q — the restore did not rewind the volume",
 				string(got), markerOriginal)
 		}
-		// The documented contract is overwrite-in-place ("overwriting existing
-		// files with the same names"), not a tree replace: a file created after
-		// the snapshot survives. Pinned deliberately — a restore that also
-		// deleted post-snapshot files would be a materially different and
-		// riskier command, and changing that is a decision to make on purpose
-		// (CLI help + storage docs) rather than to discover by drift.
-		if _, err := os.Stat(laterPath); err != nil {
-			t.Errorf("%s was removed by the restore, but the documented contract is overwrite-in-place "+
-				"so it should have survived — if a tree replace is now intended, the CLI help and "+
-				"docs/storage-and-databases.md must say so", laterFile)
+		if _, err := os.Stat(laterPath); err == nil {
+			t.Errorf("%s still exists after the restore — the volume was merged rather than replaced, "+
+				"so it is a union of two points in time instead of the state the snapshot captured", laterFile)
+		}
+		if _, err := os.Stat(laterAppMarker); err != nil {
+			t.Errorf("%s' data was removed by a restore of a snapshot that never contained it: %v — "+
+				"the replacement scope must come from the snapshot, not from the destination volume root", laterApp, err)
 		}
 	})
 }
