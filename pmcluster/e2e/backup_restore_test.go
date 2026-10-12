@@ -1,0 +1,322 @@
+//go:build e2e
+
+// Package e2e — backup and restore end-to-end test.
+//
+// The restore decision logic is already unit-tested (internal/backups,
+// internal/cli), with the fetch/expand side stubbed. Nothing exercised the seam
+// between the two halves: that a backup the offen agent actually wrote can be
+// put back into the live volume root, on a real Swarm, where the app's own
+// volume is a bind of that directory.
+//
+// That seam is where a restore fails silently in the worst case — the command
+// reports success while the app comes back with an empty database. This test
+// asserts the observable outcome instead of the exit code: it seeds a file into
+// a deployed stack's volume, backs up, overwrites the file, restores, and
+// requires the original bytes back and the later file gone.
+//
+// It deliberately does not let the service write the marker. A container that
+// writes on start would recreate the expected file during the restore, so the
+// assertion could pass on a restart that has nothing to do with the restore.
+//
+// Gated behind PMCLUSTER_E2E_SWARM=1 so it never runs accidentally on a
+// developer machine — the swarm-e2e workflow sets it explicitly. The hermetic
+// volume root keeps it off /var/stack, which a non-root dev host cannot create.
+//
+// Run via: PMCLUSTER_E2E_SWARM=1 make e2e
+package e2e
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+// restoreManifest is a minimal stateful stack: one service holding one named
+// volume. The service's only job is to hold the volume open, so the volume is
+// created by the deploy pipeline exactly as a customer's would be — placed by
+// the platform, bind-mounted under the volume root.
+const restoreManifest = `app: e2erestore
+env: production
+domain: example.test
+services:
+  store:
+    image: busybox:1.36
+    replicas: 1
+    command: ["sh", "-c", "exec sleep 3600"]
+    volumes: [app_data:/data]
+`
+
+// clearAppState removes this test's stack and its named volume, best-effort.
+//
+// `cluster down --purge` removes the platform stacks only, so an app stack
+// deployed here would outlive the test. `docker stack rm` in turn does not
+// remove volumes — and a volume keeps the driver_opts it was CREATED with, so a
+// volume left by a previous run makes the next run mount that run's (by then
+// deleted) device path. The service then never starts and the failure reads as
+// a code bug in the deploy path. Called before deploying and again in cleanup.
+func clearAppState(t *testing.T, app, volume string) {
+	t.Helper()
+	ctx := context.Background()
+	if out, err := dockerRun(ctx, "stack", "rm", app); err != nil {
+		t.Logf("docker stack rm %s: %v\n%s", app, err, out)
+	}
+	// The volume can only be removed once no service references it, and
+	// `stack rm` converges asynchronously.
+	for i := 0; i < 15; i++ {
+		out, err := dockerRun(ctx, "volume", "rm", volume)
+		if err == nil {
+			return
+		}
+		if !strings.Contains(out, "in use") {
+			return // gone already, or not a condition retrying will fix
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// waitBackupAgentsReady waits for the offen agent — and the in-cluster store it
+// double-writes to, when that service exists — to be up before it is exec'd.
+//
+// `backup create` execs `backup` inside the agent container. Triggered before
+// the agent has finished starting, that exec exits 1 with NO output at all
+// ("docker exec <id> backup: exit status 1 ()"), and Trigger's single 10s retry
+// does not cover a cold start. cluster_up_test.go waits on the same service for
+// the same reason.
+func waitBackupAgentsReady(t *testing.T, ctx context.Context) {
+	t.Helper()
+	waitServiceHealthy(t, ctx, "backup_volume-backup", 1, 120*time.Second)
+	// The store is optional; when the stack ships it, the agent's WebDAV write
+	// leg needs it up or the backup fails as a whole.
+	if out := mustDockerRun(t, ctx, "service", "ls", "--filter", "name=backup_seaweedfs", "--format", "{{.Name}}"); strings.Contains(out, "backup_seaweedfs") {
+		waitServiceHealthy(t, ctx, "backup_seaweedfs", 1, 120*time.Second)
+	}
+}
+
+// TestBackupRestoreE2E proves a real backup round-trips through a real restore
+// into a live volume root.
+func TestBackupRestoreE2E(t *testing.T) {
+
+	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
+		t.Skip("PMCLUSTER_E2E_SWARM is not set to 1; skipping backup/restore e2e (set it in CI or locally to enable)")
+	}
+
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker binary not on PATH; skipping backup/restore e2e")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	weInitedSwarm := ensureSwarmActive(t, ctx)
+	if weInitedSwarm {
+		t.Cleanup(func() {
+			t.Log("TestBackupRestoreE2E: leaving Swarm we initialised (cleanup)")
+			leaveCtx, leaveCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer leaveCancel()
+			out, err := dockerRun(leaveCtx, "swarm", "leave", "--force")
+			if err != nil {
+				t.Logf("docker swarm leave --force: %v\n%s", err, out)
+			}
+		})
+	}
+
+	homeDir := t.TempDir()
+	if stdout, _, code := runCmd(t, homeDir, "init"); code != 0 {
+		t.Fatalf("pmcluster init exited %d:\n%s", code, stdout)
+	}
+
+	// The control loop would reconcile the stacks underneath the assertions.
+	setReconcileInterval(t, homeDir, "0")
+
+	// The volume root must be a path the Docker VM can bind as a volume
+	// DEVICE. t.TempDir() lives under /var/folders on macOS: it exists on the
+	// host, but not at that path inside Docker Desktop's Linux VM, so a service
+	// mounting a volume there never starts and the deploy times out waiting for
+	// a replica. A directory under $HOME is shared at the same absolute path on
+	// every platform. The pmcluster HOME stays in the temp dir — nothing under
+	// it is mounted into a container.
+	homeRoot, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve home dir for the volume root: %v", err)
+	}
+	vmVisibleRoot, err := os.MkdirTemp(homeRoot, ".pmcluster-e2e-stack-")
+	if err != nil {
+		t.Fatalf("create volume-root parent: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(vmVisibleRoot) })
+	storageRoot := filepath.Join(vmVisibleRoot, "stack")
+	if out, errOut, code := runCmd(t, homeDir, "cluster", "settings", "set", "volume_root="+storageRoot); code != 0 {
+		t.Fatalf("set volume_root exited %d:\n%s\n%s", code, out, errOut)
+	}
+
+	// Relocate BOTH the volume root and the archive dir under the temp HOME.
+	// The agent honours PMCLUSTER_BACKUP_DIR (cluster.up), and the CLI resolves
+	// archives against the same directory, so an archive written here is the
+	// one the restore looks for.
+	backupDir := storageRoot + "/backup"
+	t.Setenv("PMCLUSTER_BACKUP_DIR", backupDir)
+
+	certPath, keyPath := generateSelfSignedCert(t, homeDir)
+	upOut, _, code := runCmdCtx(t, ctx, homeDir, "cluster", "up",
+		"--domain=example.test",
+		"--cert="+certPath,
+		"--key="+keyPath,
+		"--openobserve-email=admin@example.test",
+	)
+	if code != 0 {
+		t.Fatalf("pmcluster cluster up exited %d:\n%s", code, upOut)
+	}
+
+	t.Cleanup(func() {
+		t.Log("TestBackupRestoreE2E: running cluster down --yes --purge (cleanup)")
+		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cleanCancel()
+		out, _, _ := runCmdCtx(t, cleanCtx, homeDir, "cluster", "down", "--yes", "--purge")
+		t.Logf("cluster down output:\n%s", out)
+	})
+
+	manifestPath := filepath.Join(homeDir, "restore.yaml")
+	if err := os.WriteFile(manifestPath, []byte(restoreManifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	// Clear leftovers from a previous (possibly crashed) run first, then clean
+	// up after this one. Registered after the cluster teardown so it runs
+	// before it.
+	clearAppState(t, "e2erestore", "e2erestore_app_data")
+	t.Cleanup(func() { clearAppState(t, "e2erestore", "e2erestore_app_data") })
+
+	// The volume's host path. Every named volume is bind-mounted at
+	// <volume_root>/<app>/<volume> (manifest/compose_writer), and that tree is
+	// exactly what the agent archives — which is why this path is both the
+	// thing to seed and the thing to assert on.
+	volumeDir := filepath.Join(storageRoot, "e2erestore", "app_data")
+	markerPath := filepath.Join(volumeDir, "marker.txt")
+	const (
+		markerOriginal = "original-data-v1\n"
+		markerMutated  = "overwritten-after-backup\n"
+		laterFile      = "post-backup.txt"
+	)
+
+	t.Run("01-deploy-a-stateful-stack", func(t *testing.T) {
+		out, errOut, code := runCmdCtx(t, ctx, homeDir, "deploy", manifestPath)
+		if code != 0 {
+			t.Fatalf("pmcluster deploy exited %d:\n%s\n%s", code, out, errOut)
+		}
+		waitServiceHealthy(t, ctx, "e2erestore_store", 1, 120*time.Second)
+	})
+
+	t.Run("02-the-volume-lands-under-the-volume-root", func(t *testing.T) {
+		if _, err := os.Stat(volumeDir); err != nil {
+			t.Fatalf("volume dir %s not created by the deploy: %v", volumeDir, err)
+		}
+	})
+
+	// Seed the app's data, then back it up. Written from the host on purpose:
+	// see the file header on why the service must not write it.
+	if err := os.WriteFile(markerPath, []byte(markerOriginal), 0o644); err != nil {
+		t.Fatalf("seed %s: %v", markerPath, err)
+	}
+
+	var backupID int64
+	t.Run("03-an-on-demand-backup-succeeds", func(t *testing.T) {
+		waitBackupAgentsReady(t, ctx)
+		out, errOut, code := runCmdCtx(t, ctx, homeDir, "backup", "create", "--timeout=5m")
+		combined := out + errOut
+		t.Logf("backup create output:\n%s", combined)
+		if code != 0 {
+			t.Fatalf("pmcluster backup create exited %d:\n%s", code, combined)
+		}
+		m := regexp.MustCompile(`id=(\d+)`).FindStringSubmatch(combined)
+		if m == nil {
+			t.Fatalf("no backup id in output:\n%s", combined)
+		}
+		id, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			t.Fatalf("parse backup id %q: %v", m[1], err)
+		}
+		backupID = id
+
+		// The archive must exist on THIS node's archive dir, or a local-first
+		// restore has nothing to read and the run silently depends on an
+		// offsite fetch.
+		entries, err := os.ReadDir(backupDir)
+		if err != nil {
+			t.Fatalf("read archive dir %s: %v", backupDir, err)
+		}
+		var archives []string
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".tar.gz") {
+				archives = append(archives, e.Name())
+			}
+		}
+		if len(archives) == 0 {
+			t.Fatalf("backup %d reported success but %s holds no .tar.gz archive", backupID, backupDir)
+		}
+		t.Logf("archive(s) on disk: %v", archives)
+	})
+
+	t.Run("04-the-run-is-recorded-as-succeeded-and-browsable", func(t *testing.T) {
+		out, _, code := runCmd(t, homeDir, "backup", "list")
+		if code != 0 {
+			t.Fatalf("pmcluster backup list exited %d:\n%s", code, out)
+		}
+		if !strings.Contains(out, strconv.FormatInt(backupID, 10)) {
+			t.Errorf("backup list does not mention run %d:\n%s", backupID, out)
+		}
+
+		out, errOut, code := runCmd(t, homeDir, "backup", "browse", strconv.FormatInt(backupID, 10))
+		if code != 0 {
+			t.Fatalf("pmcluster backup browse exited %d:\n%s\n%s", code, out, errOut)
+		}
+		if !strings.Contains(out, "marker.txt") {
+			t.Errorf("archive contents do not include the seeded marker.txt — the agent did not archive the volume:\n%s", out)
+		}
+	})
+
+	// Mutate the volume the way a real incident would: the live file changes
+	// after the snapshot, and a new file appears. A correct restore returns the
+	// volume to the archived state, which means BOTH of these are undone.
+	t.Run("05-restore-returns-the-volume-to-the-archived-state", func(t *testing.T) {
+		if err := os.WriteFile(markerPath, []byte(markerMutated), 0o644); err != nil {
+			t.Fatalf("overwrite %s: %v", markerPath, err)
+		}
+		laterPath := filepath.Join(volumeDir, laterFile)
+		if err := os.WriteFile(laterPath, []byte("created after the backup\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", laterPath, err)
+		}
+
+		out, errOut, code := runCmdCtx(t, ctx, homeDir, "backup", "restore", strconv.FormatInt(backupID, 10))
+		combined := out + errOut
+		t.Logf("restore output:\n%s", combined)
+		if code != 0 {
+			t.Fatalf("pmcluster backup restore exited %d:\n%s", code, combined)
+		}
+
+		got, err := os.ReadFile(markerPath)
+		if err != nil {
+			t.Fatalf("read %s after restore: %v", markerPath, err)
+		}
+		if string(got) != markerOriginal {
+			t.Errorf("marker.txt after restore = %q, want %q — the restore did not put the archived bytes back",
+				string(got), markerOriginal)
+		}
+		// The documented contract is overwrite-in-place ("overwriting existing
+		// files with the same names"), not a tree replace: a file created after
+		// the snapshot survives. Pinned deliberately — a restore that also
+		// deleted post-snapshot files would be a materially different and
+		// riskier command, and changing that is a decision to make on purpose
+		// (CLI help + storage docs) rather than to discover by drift.
+		if _, err := os.Stat(laterPath); err != nil {
+			t.Errorf("%s was removed by the restore, but the documented contract is overwrite-in-place "+
+				"so it should have survived — if a tree replace is now intended, the CLI help and "+
+				"docs/storage-and-databases.md must say so", laterFile)
+		}
+	})
+}
