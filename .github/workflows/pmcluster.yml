@@ -5,10 +5,24 @@ on:
     branches: [main]
     paths:
       - "pmcluster/**"
+      # Documentation under pmcluster/ is not code. Without these exclusions a
+      # README or design-doc edit runs the Go unit/smoke suite and the real-swarm
+      # e2e, because `pmcluster/**` matches `pmcluster/README.md`,
+      # `pmcluster/docs/*.md` and `internal/ARCHITECTURE.md` too. The docs
+      # workflow covers those changes; this one is for behaviour.
+      - "!pmcluster/*.md"
+      - "!pmcluster/**/*.md"
       - ".github/workflows/pmcluster.yml"
   pull_request:
     paths:
       - "pmcluster/**"
+      # Documentation under pmcluster/ is not code. Without these exclusions a
+      # README or design-doc edit runs the Go unit/smoke suite and the real-swarm
+      # e2e, because `pmcluster/**` matches `pmcluster/README.md`,
+      # `pmcluster/docs/*.md` and `internal/ARCHITECTURE.md` too. The docs
+      # workflow covers those changes; this one is for behaviour.
+      - "!pmcluster/*.md"
+      - "!pmcluster/**/*.md"
       - ".github/workflows/pmcluster.yml"
 
 jobs:
