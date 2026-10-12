@@ -5,20 +5,23 @@
 ```mermaid
 flowchart TD
   subgraph Sources
-    DE["Docker engine events<br/>runtime.Client.Events"] --> DEB["2s debounce"]
-    TICK["reconcile_interval ticker<br/>(default 60s, 0=off)"] --> DEB
+    DE["Docker engine events"] --> DEB["2s debounce"]
+    TICK["reconcile ticker<br/>60s, 0=off"] --> DEB
   end
   DEB -->|"trigger"| LOOP["Reconciler.Loop<br/>(leader only)"]
-  LOOP -->|"TryLock — one pass at a time"| RUN["Reconciler.RunOnce"]
-  RUN --> P1["Pass (a) platform reconcile"]
-  RUN --> P2["Pass (b) app-stack drift sync"]
-  RUN --> P3["Pass (c) health snapshot"]
-  P1 -->|"re-render platform configs + hash compare<br/>+ live rendered-hash label check"| UPD["cluster.Update (content-aware)"]
-  P2 -->|"re-translate latest source_yaml<br/>+ live drift check"| SYNC["stacks.Sync (no-op on hash match)"]
-  P2 -->|"pinned storage node down"| PAUSE["pause sync (+ optional<br/>storage_failover auto-move)"]
-  P3 -->|"derive healthy/in-progress/degraded/error"| SS[("stack_status DB")]
-  SS --> BADGE["/api/public/badge/*<br/>(reads DB, never live Docker)"]
-  RUN --> OBS["metrics pmcluster.reconcile.total<br/>traces pmcluster.reconcile / .platform<br/>info+debug logs"]
+  LOOP -->|"TryLock<br/>one pass at a time"| RUN["Reconciler.RunOnce"]
+  subgraph PASSES["three passes"]
+    P1["Pass (a) platform reconcile"] -->|"content-aware<br/>re-render"| UPD["cluster.Update"]
+    P2["Pass (b) drift sync"] -->|"re-translate"| SYNC["stacks.Sync"]
+    P2 -->|"node down"| PAUSE["pause<br/>(+ failover)"]
+    P3["Pass (c) health snapshot"] -->|"derive health"| SS[("stack_status")]
+    %% layout only: the three passes stack instead of sitting in one wide row
+    %% (they are independent; these links carry no meaning)
+    P1 ~~~ P2 ~~~ P3
+  end
+  RUN --> PASSES
+  SS --> BADGE["/api/public/badge/*<br/>reads DB, not Docker"]
+  RUN --> OBS["metrics reconcile.total<br/>traces reconcile<br/>info+debug logs"]
 ```
 
 Key properties:

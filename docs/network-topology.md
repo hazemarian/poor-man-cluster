@@ -18,7 +18,7 @@ Traefik. The *cluster* plane must only be reachable between your own nodes —
 never from the internet (firewall it, or run it over a private/tailnet link).
 
 ```mermaid
-flowchart LR
+flowchart TD
     subgraph PUBLIC["Public internet"]
         B["Browser / CI"]
         D["DNS (your domains)"]
@@ -40,7 +40,7 @@ flowchart LR
 One VPS runs the Swarm leader, all platform stacks, and every app stack.
 
 ```mermaid
-flowchart LR
+flowchart TD
     D["your.com (DNS A record)"]
     N["One VPS<br/>203.0.113.10<br/>Traefik + leader + all stacks"]
     D -- "A record" --> N
@@ -154,7 +154,7 @@ flowchart LR
     N["Leader (public entry)<br/>203.0.113.10"]
     W["Worker<br/>100.77.123.88 (tailnet)"]
     D -- "A record (unchanged)" --> N
-    N ---|"tailnet 100.82.72.107 ↔ 100.77.123.88<br/>swarm traffic rides the tunnel"| W
+    N ---|"swarm traffic<br/>rides the tunnel"| W
 ```
 
 - **DNS:** unchanged — tailnet IPs (100.64.0.0/10) are **not** publicly

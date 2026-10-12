@@ -275,19 +275,19 @@ pmcluster stack move my-web --to node-02
 ```mermaid
 sequenceDiagram
     participant OP as operator
-    participant CLI as pmcluster CLI
+    participant CLI as pmcluster
     participant SRC as source node
-    participant MV as one-shot mover
+    participant MV as mover
     participant DST as target node
-    OP->>CLI: stack move my-web --to node-02
-    CLI->>SRC: trigger a fresh whole-disk backup
-    SRC-->>CLI: archive (also written to store + offsite)
+    OP->>CLI: stack move my-web<br/>--to node-02
+    CLI->>SRC: fresh whole-disk backup
+    SRC-->>CLI: archive (store + offsite)
     CLI->>MV: run on the target
-    MV->>MV: verify the tarball really holds this stack's data
-    MV->>DST: unpack my-web/ into the volume root
-    CLI->>CLI: write stack_pin_my-web = node-02
-    CLI->>DST: re-deploy so the constraint renders
-    Note over SRC: old subtree left in place as a safety net
+    MV->>MV: verify the stack
+    MV->>DST: unpack my-web/
+    CLI->>CLI: pin my-web → node-02
+    CLI->>DST: re-deploy
+    Note over SRC: kept as a safety net
 ```
 
 The mover pulls the archive **object** from the store via the published loopback ingress

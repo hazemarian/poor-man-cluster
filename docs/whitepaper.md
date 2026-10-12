@@ -61,29 +61,33 @@ What to look for: two planes — outside the cluster box is public, inside is no
 ```mermaid
 flowchart TD
     subgraph PUB["public plane"]
-        NET["Internet / CI"]
-        LB["load balancer (optional)"]
+        NET["Internet / CI"] --> LB["load balancer<br/>(optional)"]
     end
     subgraph CLUS["cluster plane"]
         subgraph MG["manager nodes"]
-            TR["Traefik :80/:443<br/>global, managers only"]
-            ED["pmcluster-edge<br/>console + API proxy"]
+            direction TB
+            TR["Traefik :80/:443<br/>managers only"]
+            ED["pmcluster-edge<br/>console + API"]
             DM["daemon :9090<br/>leader only"]
         end
         subgraph WK["worker / storage nodes"]
-            AG["offen backup agent"]
-            SW["SeaweedFS :8333/:7333"]
-            W["worker daemons (standby)"]
+            direction TB
+            AG["offen agent"]
+            SW["SeaweedFS<br/>:8333/:7333"]
+            W["standby daemons"]
         end
-        OO["OpenObserve<br/>observ.<domain>"]
-        AP["app stacks<br/>app.<domain>"]
+        subgraph SRV["served over Traefik"]
+            direction TB
+            OO["OpenObserve<br/>observ.<domain>"]
+            AP["app stacks<br/>app.<domain>"]
+        end
     end
     NET -->|"HTTPS"| LB
     LB -->|"80/443"| TR
     TR -->|"pmcluster.<domain>"| ED
     TR -->|"observ.<domain>"| OO
     TR -->|"app.<domain>"| AP
-    ED -->|"host.docker.internal:9090"| DM
+    ED -->|"9090"| DM
     DM <-->|"2377/7946/4789"| W
     AG -->|"WebDAV"| SW
 ```
@@ -107,6 +111,10 @@ erDiagram
     stacks ||--o{ stack_revisions : has
     stacks ||--o| stack_status : snapshot
     stacks ||--o| stack_failover : marker
+```
+
+```mermaid
+erDiagram
     configs ||--o{ config_versions : history
     webhook_sources ||--o{ webhook_deliveries : records
 ```
@@ -238,15 +246,15 @@ What to look for: the double-write at the top and the store-as-transit at the bo
 
 ```mermaid
 sequenceDiagram
-    participant AG as offen agent (per storage node)
-    participant SW as SeaweedFS (store)
+    participant AG as offen agent
+    participant SW as SeaweedFS
     participant S3 as offsite S3/R2
-    participant MV as store-transit mover
+    participant MV as mover
     participant TN as target node
-    AG->>SW: WebDAV PUT (in-cluster copy)
-    AG->>S3: S3 PUT (offsite copy, when configured)
-    MV->>SW: pull archive via host.docker.internal:8333
-    MV->>TN: verify + unpack <stack>/ into volume root
+    AG->>SW: WebDAV PUT
+    AG->>S3: S3 PUT (when configured)
+    MV->>SW: pull archive (8333)
+    MV->>TN: verify + unpack
     Note over MV,TN: no cross-node host ports
 ```
 
