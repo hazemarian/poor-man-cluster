@@ -1,0 +1,76 @@
+name: docs
+
+# Docs are the part of this repository that nothing else checks. The Go job
+# proves the code compiles and behaves; it says nothing about whether the prose
+# describing it is still true. These two jobs do.
+#
+# Both exist because the claim they now enforce was false here: `settings.md`
+# documented a cluster setting the code does not define, a diagram listed 12 of
+# 16 tables, `control-loop-design.md` described an architecture with no
+# implementation, an SVG logo rendered as a browser error, and the OpenAPI spec
+# had drifted six routes behind the handlers.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "agent.md"
+      - "pmcluster/docs/**"
+      - "pmcluster/README.md"
+      - "pmcluster/internal/**"
+      - "scripts/check-mermaid-render.py"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "agent.md"
+      - "pmcluster/docs/**"
+      - "pmcluster/README.md"
+      - "pmcluster/internal/**"
+      - "scripts/check-mermaid-render.py"
+      - ".github/workflows/docs.yml"
+
+jobs:
+  claims:
+    name: documented claims match the code
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pmcluster
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: pmcluster/go.sum
+
+      # -count=1 is load-bearing: these tests read docs and source off disk at
+      # run time, which the build cache cannot see, so a cached result is a
+      # green tick for a check that never executed.
+      - name: setting keys, CLI commands and flags, API paths, links, mermaid syntax
+        run: go test -count=1 -v ./internal/docscheck/
+
+  diagrams:
+    name: diagrams render legibly
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install mermaid-cli
+        run: npm install -g @mermaid-js/mermaid-cli@11
+
+      # Renders every diagram and measures its intrinsic width against GitHub's
+      # content column. A block that fails to parse, or that is wider than the
+      # column can show without shrinking the labels, fails the job.
+      - name: Render and measure every diagram
+        run: python3 scripts/check-mermaid-render.py
