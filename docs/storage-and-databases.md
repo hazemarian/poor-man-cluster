@@ -198,6 +198,15 @@ The offsite leg is optional; when `backup_s3_*` is unset the agent writes only t
 offen's own pruning keeps both copies in lockstep on `backup_retention_days` (default **15**), so
 there is no separate replicator service to operate.
 
+**The local copy is written first, and that order is a trap.** An archive appearing in
+`/var/stack/backup` says nothing about whether the offsite upload succeeded — offen writes the local
+copy, then the store copy, then the offsite copy, and a failure in the last one still leaves the
+first on disk. So `pmcluster cluster update` checks the configured bucket *before* it deploys the
+backup stack: a bucket that does not exist fails the update loudly, while an endpoint that merely
+cannot be reached warns and continues. That split is deliberate — a deleted bucket is a
+configuration mistake an operator can fix in seconds, whereas an outage must never become an
+accidental prerequisite for bringing a cluster up.
+
 ### 3.5 How pmcluster knows what exists
 
 Scheduled runs happen inside offen and never call the daemon. Counting only daemon-triggered runs
@@ -206,6 +215,22 @@ archive dir, and the store (S3 `ListObjectsV2`, `backup-` prefix — control-pla
 deliberately excluded). Each unique tarball gets exactly one row (a unique index on `filename`
 makes re-scans idempotent), so `pmcluster backup list` shows scheduled *and* on-demand runs with
 real archive paths. Discovery never deletes anything.
+
+**A discovered run is not automatically a success.** Because the local copy is written before the
+offsite copy, finding an archive on disk proves the run produced *something*, not that every
+configured destination received it. When `backup_s3_*` is set, discovery checks the offsite bucket
+for each newly discovered archive and records one of:
+
+| status | meaning |
+|---|---|
+| `succeeded` | the archive is on disk **and** the configured offsite bucket holds its copy |
+| `offsite-missing` | the archive is on disk, but its offsite copy is absent — or the bucket could not be read at all. The row's note says which |
+| `succeeded` | nothing is configured offsite, so there is nothing to verify |
+
+`offsite-missing` is deliberately not `failed`: the archive is intact and restorable. It exists so
+that an offsite outage cannot read as a clean backup history. That is not hypothetical — a deleted
+configured bucket produced hours of runs recorded as successes while every offsite upload failed,
+because presence of the local tarball was taken as proof of the whole run.
 
 ---
 
@@ -217,7 +242,10 @@ pmcluster backup browse <id>          # what is inside those archives
 pmcluster backup restore <id>         # put it back
 ```
 
-Restore is **local-first**, and fails loudly rather than silently restoring nothing:
+Restore is **local-first**, and fails loudly rather than silently restoring nothing. A run
+recorded `offsite-missing` is restorable: only its offsite *copy* is missing, while the archive on
+disk is the same snapshot. Refusing those would block a restore during the one incident — an offsite
+outage — where an operator is most likely to need one.
 
 ```mermaid
 flowchart TD

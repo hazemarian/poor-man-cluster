@@ -26,10 +26,16 @@ type Local struct {
 	// RetentionDays prunes backup audit rows (and their archive files on
 	// disk) older than this many days. Zero disables pruning.
 	RetentionDays int
-	// S3 is the offsite object-store destination. When configured, restore
-	// falls back to fetching archives from it when the local copy is gone
-	// (or --from-s3 is explicit). Empty disables the S3 fallback.
+	// S3 is the object store used for reads: restore fallback and cross-node
+	// transit. It is the in-cluster SeaweedFS store when that is enabled, and
+	// the offsite settings otherwise.
 	S3 S3Config
+	// Offsite is ONLY the external backup_s3_* destination. Discovery uses it
+	// to decide whether a scheduled run's offsite copy actually landed: the
+	// agent writes the local copy first, so an archive on disk is not evidence
+	// that the offsite leg succeeded. Empty disables that verification (every
+	// discovered run is recorded as succeeded, as before).
+	Offsite S3Config
 }
 
 // DefaultArchiveDir is the archive root mounted into the bundled
@@ -50,17 +56,60 @@ func (l *Local) discover(ctx context.Context) {
 	if l.Store == nil {
 		return
 	}
+	// Index the offsite bucket once per pass. Discovery is the only place that
+	// can tell an operator the offsite copy of a scheduled run never landed,
+	// because scheduled runs never pass through Trigger.
+	var offsite map[string]bool
+	var offsiteErr error
+	if l.Offsite.Configured() {
+		offsite, offsiteErr = l.offsiteKeys(ctx)
+	}
 	if l.ArchiveDir != "" {
-		l.discoverLocal(ctx)
+		l.discoverLocal(ctx, offsite, offsiteErr)
 	}
 	if l.S3.Configured() {
-		l.discoverStore(ctx)
+		l.discoverStore(ctx, offsite, offsiteErr)
 	}
+}
+
+// offsiteKeys lists the object names present in the configured offsite bucket,
+// keyed by basename (offen names the offsite object after the local archive,
+// so the basename is the join key between the two copies).
+func (l *Local) offsiteKeys(ctx context.Context) (map[string]bool, error) {
+	objects, err := listS3Objects(ctx, l.Offsite, "")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(objects))
+	for _, o := range objects {
+		out[filepath.Base(o.Key)] = true
+	}
+	return out, nil
+}
+
+// offsiteVerdict returns the status and note for a newly discovered run whose
+// archive is named base. With no offsite configured every run is a success, as
+// before. With one configured, a run is only a success when its offsite object
+// is present; an offsite copy that is provably absent — or a bucket that could
+// not be read — is recorded as status offsite-missing with a note saying which
+// of the two it was. Claiming success either way is what let a deleted bucket
+// read as a clean backup history for hours.
+func (l *Local) offsiteVerdict(base string, index map[string]bool, indexErr error) (string, string) {
+	if !l.Offsite.Configured() {
+		return StatusSucceeded, ""
+	}
+	if indexErr != nil {
+		return StatusOffsiteMissing, fmt.Sprintf("offsite copy unverified: %v", indexErr)
+	}
+	if !index[base] {
+		return StatusOffsiteMissing, fmt.Sprintf("offsite copy missing: %s is not in bucket %q on %s (the archive on disk is intact and restorable)", base, l.Offsite.Bucket, l.Offsite.Endpoint)
+	}
+	return StatusSucceeded, ""
 }
 
 // discoverLocal records scheduled offen archives found on disk that the audit
 // table does not know about yet.
-func (l *Local) discoverLocal(ctx context.Context) {
+func (l *Local) discoverLocal(ctx context.Context, offsite map[string]bool, offsiteErr error) {
 	entries, err := os.ReadDir(l.ArchiveDir)
 	if err != nil {
 		return
@@ -81,8 +130,10 @@ func (l *Local) discoverLocal(ctx context.Context) {
 			continue
 		}
 		// The unique index on filename makes this a no-op for tarballs
-		// that already produced a row.
-		if err := l.Store.RecordDiscoveredBackup(ctx, e.Name(), archivePath, info.ModTime().Unix()); err != nil {
+		// that already produced a row. Record the offsite verdict rather than
+		// asserting success: the local copy is written first.
+		status, note := l.offsiteVerdict(e.Name(), offsite, offsiteErr)
+		if err := l.Store.RecordDiscoveredBackupStatus(ctx, e.Name(), archivePath, info.ModTime().Unix(), status, note); err != nil {
 			continue
 		}
 	}
@@ -99,7 +150,7 @@ func (l *Local) discoverLocal(ctx context.Context) {
 // are restored through a separate path (RestoreControlPlane), never as volume
 // data, so they are deliberately excluded. Nothing is ever deleted from the
 // store.
-func (l *Local) discoverStore(ctx context.Context) {
+func (l *Local) discoverStore(ctx context.Context, offsite map[string]bool, offsiteErr error) {
 	objects, err := listS3Objects(ctx, l.S3, "backup-")
 	if err != nil {
 		return // an unreachable store must not fail List/ListForStack
@@ -121,7 +172,8 @@ func (l *Local) discoverStore(ctx context.Context) {
 		if !o.LastModified.IsZero() {
 			at = o.LastModified.Unix()
 		}
-		if err := l.Store.RecordDiscoveredBackup(ctx, base, base, at); err != nil {
+		status, note := l.offsiteVerdict(base, offsite, offsiteErr)
+		if err := l.Store.RecordDiscoveredBackupStatus(ctx, base, base, at, status, note); err != nil {
 			continue
 		}
 	}

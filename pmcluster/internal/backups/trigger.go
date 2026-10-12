@@ -27,6 +27,12 @@ const (
 const (
 	StatusSucceeded = "succeeded"
 	StatusFailed    = "failed"
+	// StatusOffsiteMissing marks a scheduled run whose local/store archive
+	// exists but whose configured offsite copy does NOT: the run is
+	// restorable from the archive on disk, but the offsite leg failed. Kept
+	// distinct from succeeded so an offsite outage cannot read as a clean
+	// backup history.
+	StatusOffsiteMissing = "offsite-missing"
 )
 
 var (

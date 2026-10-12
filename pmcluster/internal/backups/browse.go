@@ -134,7 +134,9 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 	if err != nil {
 		return 0, fmt.Errorf("get backup: %w", err)
 	}
-	if row.Status != "succeeded" {
+	// offsite-missing is restorable: the archive on disk is the same snapshot,
+	// and restore is local-first. Only the offsite COPY of it is absent.
+	if row.Status != "succeeded" && row.Status != StatusOffsiteMissing {
 		return 0, fmt.Errorf("backup %d not restored: status is %q (only succeeded runs are restorable)", id, row.Status)
 	}
 	// A run can be recorded as succeeded with no archive path at all (the

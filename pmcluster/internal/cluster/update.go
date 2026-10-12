@@ -10,6 +10,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -486,6 +487,15 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	})
 
 	wf.Add("Reconciling platform stacks (rendered content vs stored hash)", func(ctx context.Context) error {
+		// A configured offsite destination must actually exist before the
+		// backup stack is deployed against it. Checked here, at the moment the
+		// operator applies settings, because the alternative is what happened
+		// in production: a deleted bucket failed the offsite copy of every
+		// scheduled run while the audit table still reported success.
+		if err := checkBackupOffsite(ctx, deps); err != nil {
+			return err
+		}
+
 		// Render all six platform configs with the fully-populated render
 		// (config names + cert secrets substituted) so the snapshots are
 		// valid YAML and comparable across runs.
@@ -1063,4 +1073,36 @@ func repairMissingSecret(ctx context.Context, deps UpdateDeps, mgr *CredentialsM
 		return true, nil
 	}
 	return false, nil
+}
+
+// checkBackupOffsite refuses to apply a backup configuration whose offsite
+// bucket provably does not exist, and warns without failing when the endpoint
+// cannot be reached at all.
+//
+// The distinction is deliberate. A 404 NoSuchBucket is a configuration error an
+// operator can fix in seconds, and carrying on would deploy a backup stack that
+// fails its offsite copy on every scheduled run — invisibly, because a
+// scheduled run records no outcome and the local copy still lands. An
+// unreachable endpoint is an outage, or a cluster being built before its
+// network exists; failing there would make the offsite an accidental
+// prerequisite for bringing a cluster up.
+func checkBackupOffsite(ctx context.Context, deps UpdateDeps) error {
+	s3 := backups.S3Config{
+		Endpoint:  deps.Store.SettingDefault(ctx, SettingBackupS3Endpoint(), ""),
+		Bucket:    deps.Store.SettingDefault(ctx, SettingBackupS3Bucket(), ""),
+		AccessKey: deps.Store.SettingDefault(ctx, SettingBackupS3AccessKey(), ""),
+		SecretKey: deps.Store.SettingDefault(ctx, SettingBackupS3SecretKey(), ""),
+		Region:    deps.Store.SettingDefault(ctx, SettingBackupS3Region(), "auto"),
+	}
+	if !s3.Configured() {
+		return nil
+	}
+	err := backups.CheckS3Target(ctx, s3)
+	if errors.Is(err, backups.ErrS3BucketMissing) {
+		return fmt.Errorf("offsite backup bucket %q does not exist on %s: create it, or clear the backup_s3_* settings. Deploying against it would fail the offsite copy of every backup while the runs are still recorded as successful: %w", s3.Bucket, s3.Endpoint, err)
+	}
+	if err != nil {
+		fmt.Fprintf(deps.Stdout, "  \u26a0 offsite backup destination unreachable (%v) \u2014 continuing; offsite copies may fail until it is reachable\n", err)
+	}
+	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,6 +43,13 @@ const emptyPayloadSHA = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991
 // s3HTTPClient is injectable so tests can point the fetch at a recording
 // server without any network.
 var s3HTTPClient = http.DefaultClient
+
+// ErrS3BucketMissing reports a definitive "this bucket does not exist" answer
+// from the object store (S3 404 NoSuchBucket). It is deliberately distinct from
+// a transport, auth or timeout failure: a missing bucket is a configuration
+// error the operator must fix, whereas an unreachable endpoint is an outage
+// that must not block a cluster from booting or a run from being recorded.
+var ErrS3BucketMissing = errors.New("offsite bucket does not exist")
 
 // signV4Headers returns the Authorization + date + content-sha256 headers for
 // a SigV4-signed GET of object key inside cfg.Bucket (path-style URL).
@@ -248,6 +256,9 @@ func listS3ObjectsPage(ctx context.Context, cfg S3Config, prefix, token string) 
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if resp.StatusCode == http.StatusNotFound && strings.Contains(string(body), "NoSuchBucket") {
+			return nil, "", fmt.Errorf("%w: bucket %q on %s", ErrS3BucketMissing, cfg.Bucket, cfg.Endpoint)
+		}
 		return nil, "", fmt.Errorf("s3 list %s: %s: %s", prefix, resp.Status, strings.TrimSpace(string(body)))
 	}
 
@@ -285,6 +296,22 @@ func listS3ObjectsPage(ctx context.Context, cfg S3Config, prefix, token string) 
 		next = parsed.NextContinuationToken
 	}
 	return objects, next, nil
+}
+
+// CheckS3Target verifies that the configured offsite destination is usable by
+// reading one page of its listing. It returns an error wrapping
+// ErrS3BucketMissing when the endpoint answers 404 NoSuchBucket, so callers can
+// tell "your configuration points at a bucket that does not exist" (fail the
+// operation) apart from "the endpoint is unreachable right now" (warn, carry
+// on). A configured target that answers 200 with an empty listing is valid.
+func CheckS3Target(ctx context.Context, cfg S3Config) error {
+	if !cfg.Configured() {
+		return nil
+	}
+	if _, _, err := listS3ObjectsPage(ctx, cfg, "", ""); err != nil {
+		return err
+	}
+	return nil
 }
 
 // FetchS3Object downloads object key from the configured endpoint into dst

@@ -68,10 +68,20 @@ func (s *Store) FinishBackup(ctx context.Context, id int64, status, archivePaths
 // idempotent: the partial unique index on filename makes a second record
 // for the same tarball a no-op. The archive path is stored verbatim.
 func (s *Store) RecordDiscoveredBackup(ctx context.Context, filename, archivePath string, at int64) error {
+	return s.RecordDiscoveredBackupStatus(ctx, filename, archivePath, at, "succeeded", "")
+}
+
+// RecordDiscoveredBackupStatus is RecordDiscoveredBackup with an explicit
+// status and note. Discovery uses it to avoid recording a scheduled run as
+// succeeded when its offsite copy is provably absent: the offen agent writes
+// the local copy before it attempts the offsite copy, so an archive on disk
+// says nothing about the offsite leg. INSERT OR IGNORE keeps this idempotent —
+// an existing row is never downgraded or upgraded by a later pass.
+func (s *Store) RecordDiscoveredBackupStatus(ctx context.Context, filename, archivePath string, at int64, status, note string) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO backups (filename, status, archive_paths, started_at, finished_at)
-		 VALUES (?, 'succeeded', ?, ?, ?)`,
-		filename, archivePath, at, at,
+		`INSERT OR IGNORE INTO backups (filename, status, archive_paths, error_message, started_at, finished_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		filename, status, archivePath, note, at, at,
 	)
 	if err != nil {
 		return fmt.Errorf("record discovered backup %s: %w", filename, err)

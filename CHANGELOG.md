@@ -3,6 +3,28 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.182 (2026-10-12)
+
+A backup is only a backup if its copies exist. This release makes the audit table say so.
+
+- **A stored archive is no longer taken as proof that the offsite copy landed.** The offen agent
+  writes the local copy first, then the store copy, then the offsite copy, so an archive appearing
+  on disk says nothing about the configured offsite destination. Scheduled runs never pass through
+  the daemon and therefore record no outcome, and discovery inferred `succeeded` from the presence
+  of the local tarball alone. A deleted offsite bucket produced hours of runs reported as successful
+  while every offsite upload failed — a failure visible only in the agent's own log. Discovery now
+  verifies the offsite copy of each newly discovered run and records `offsite-missing` when that
+  copy is provably absent, or when the bucket cannot be read at all, with a note saying which of the
+  two it was. The status is new but the semantics are conservative: `offsite-missing` runs remain
+  restorable, because the archive on disk is intact and restore is local-first — only the claim of a
+  complete backup is withheld. With no offsite configured nothing changes.
+- **`pmcluster cluster update` refuses a backup configuration whose bucket does not exist.** A 404
+  `NoSuchBucket` is a configuration error, so the update fails with the bucket and endpoint named
+  rather than deploying a stack that will fail its offsite copy on every scheduled run. An endpoint
+  that merely cannot be reached warns and continues, so an outage cannot become an accidental
+  prerequisite for bringing a cluster up. The two cases are distinguished by a typed error
+  (`backups.ErrS3BucketMissing`), not by matching error text, so they cannot silently collapse.
+
 ## v0.2.181 (2026-10-12)
 
 A correctness release for backup and restore, plus the gates that keep this repository's
