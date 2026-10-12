@@ -61,9 +61,20 @@ var backupRestoreCmd = &cobra.Command{
 	Use:   "restore <id>",
 	Short: "Restore a successful backup run into the data root",
 	Args:  cobra.ExactArgs(1),
-	Long: `Extracts the archives of a SUCCESSFUL backup run back under the data
-root (default /var/stack/data/), overwriting existing files with the same
-names. Refuses runs that did not succeed.
+	Long: `Restores a SUCCESSFUL backup run under the data root (default
+/var/stack/data/), and REPLACES what it covers: entries under the restored scope
+that the snapshot did not hold are removed, so the volume ends up as the
+snapshot captured it instead of as a merge of the snapshot and everything that
+happened since. That distinction is the point for a database, where a lock file
+or an append-only log written after the snapshot describes a different moment
+than the data pages beside it. Refuses runs that did not succeed, and runs with
+no archive recorded.
+
+The scope never exceeds what the snapshot covered: an app deployed after the
+backup is not in the archive and is not touched, and --volume confines both the
+restore and the removal to one volume. NOTE: replacing is the behaviour today;
+whether a restore should merge instead (or offer both) is still an open
+decision.
 
 Restores are local-first: an archive still present on this node's archive
 dir is restored from disk. When it is gone (pruned, or this node never
@@ -391,6 +402,10 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Restored %d file(s) from backup %d to %s:%s.\n",
 		restored, id, localHostname(), destRoot)
+	// The restore is destructive by contract. Say so every time, so an operator
+	// who only ever read the flag name is not surprised afterwards.
+	fmt.Fprintln(cmd.OutOrStdout(),
+		"   (the restore replaces: entries in its scope that the snapshot did not hold were removed)")
 	return nil
 }
 

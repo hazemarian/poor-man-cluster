@@ -110,6 +110,20 @@ func listArchive(p string) ([]FileEntry, error) {
 // archives (whose entries live under `backup/pmcluster`) are refused — their
 // target is the control-plane data dir, not the volume root.
 //
+// The restore REPLACES rather than merges: once the archives are extracted,
+// entries under the restored scope that the snapshot did not hold are removed,
+// so the volume ends up as the snapshot captured it instead of as a union of
+// two points in time. That distinction is the whole point for a database,
+// where a lock file or an append-only log written after the snapshot describes
+// a different moment than the data pages beside it. See pruneToSnapshot for
+// what the scope is — it is never wider than what the snapshot covered, so an
+// app deployed after the backup is not touched.
+//
+// Ordering is deliberate: the snapshot's entry set is read BEFORE anything is
+// written, and every archive is extracted BEFORE anything is removed. A
+// restore that dies on a truncated archive therefore leaves the volume as it
+// was, instead of half-empty.
+//
 // The restore is local-first: an archive that still exists on this node's
 // archive dir is restored from disk. When it is gone (pruned, or this node
 // never held it) the archive is fetched from the configured offsite S3 store
@@ -136,6 +150,10 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return 0, fmt.Errorf("create restore dir: %w", err)
 	}
+	// keep is the snapshot's view of the tree: every entry it holds plus every
+	// ancestor directory of one, unioned across the run's archives. Collected
+	// in full before a single byte is written.
+	keep := map[string]bool{}
 	var restored int
 	for _, p := range splitArchivePaths(row.ArchivePaths) {
 		src, cleanup, err := l.restoreSource(ctx, p, opts)
@@ -146,22 +164,10 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 			cleanup()
 			return restored, err
 		}
-		var include func(string) bool
-		if opts.Volume != "" {
-			volume := opts.Volume
-			if row.StackName.Valid && row.StackName.String != "" {
-				// Stack-scoped run: anchor the volume to THIS app, so a
-				// `--volume db_data` can never pull another app's same-named
-				// volume out of a multi-stack archive.
-				anchored := row.StackName.String + "/" + volume
-				include = func(rel string) bool {
-					return rel == anchored || strings.HasPrefix(rel, anchored+"/")
-				}
-			} else {
-				// Whole-disk run: match by segment (a bare volume name matches
-				// every app's volume; "<app>/<volume>" scopes to one app).
-				include = func(rel string) bool { return volumeMatch(rel, volume) }
-			}
+		include := restoreInclude(row, opts)
+		if err := collectArchivedPaths(src, include, keep); err != nil {
+			cleanup()
+			return restored, fmt.Errorf("read archive %s: %w", p, err)
 		}
 		n, err := restoreArchiveRelFiltered(src, target, archiveRelPath, include)
 		cleanup()
@@ -170,7 +176,121 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 		}
 		restored += n
 	}
+
+	// Only now that everything is on disk: drop what the snapshot did not
+	// hold, inside the restored scope only.
+	pruneToSnapshot(target, keep, opts.Volume != "")
 	return restored, nil
+}
+
+// restoreInclude returns the entry filter for opts.Volume, or nil to restore
+// the whole run.
+func restoreInclude(row *store.Backup, opts RestoreOptions) func(string) bool {
+	if opts.Volume == "" {
+		return nil
+	}
+	volume := opts.Volume
+	if row != nil && row.StackName.Valid && row.StackName.String != "" {
+		// Stack-scoped run: anchor the volume to THIS app, so a
+		// `--volume db_data` can never pull another app's same-named volume
+		// out of a multi-stack archive.
+		anchored := row.StackName.String + "/" + volume
+		return func(rel string) bool {
+			return rel == anchored || strings.HasPrefix(rel, anchored+"/")
+		}
+	}
+	// Whole-disk run: match by segment (a bare volume name matches every app's
+	// volume; "<app>/<volume>" scopes to one app).
+	return func(rel string) bool { return volumeMatch(rel, volume) }
+}
+
+// collectArchivedPaths adds an archive's entries — and every ancestor
+// directory of one — to keep, mapped through archiveRelPath and narrowed by
+// include. Reads the archive without extracting it.
+func collectArchivedPaths(src string, include func(string) bool, keep map[string]bool) error {
+	entries, err := listArchive(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		rel := filepath.ToSlash(archiveRelPath(e.Path))
+		if rel == "" || rel == "." {
+			continue
+		}
+		if include != nil && !include(rel) {
+			continue
+		}
+		for {
+			keep[rel] = true
+			i := strings.LastIndexByte(rel, '/')
+			if i < 0 {
+				break
+			}
+			rel = rel[:i]
+		}
+	}
+	return nil
+}
+
+// pruneToSnapshot removes destination entries the snapshot did not hold, under
+// the restored scope only, and returns how many it removed.
+//
+// The scope is derived from the snapshot itself, never from the destination:
+//
+//   - with --volume the restore is confined to that volume, and a sibling
+//     volume of the same app must survive, so the scope root is the volume dir
+//     (<app>/<volume>);
+//   - without it, every app the snapshot covered is rewound to the snapshot, so
+//     the scope root is that app's dir. An app deployed after the backup is not
+//     in the archive, is therefore never a scope root, and a whole-disk restore
+//     cannot touch it.
+//
+// Nothing outside those roots is walked, so a restore can never reach another
+// app's data. An entry that cannot be read is left where it is.
+//
+// NOTE: replacing is the behaviour as of today. Whether a restore should
+// instead merge, or offer both, is still an open product decision — see
+// docs/storage-and-databases.md. This is the one place that implements it.
+func pruneToSnapshot(target string, keep map[string]bool, volumeScoped bool) int {
+	depth := 1
+	if volumeScoped {
+		depth = 2
+	}
+	roots := map[string]bool{}
+	for p := range keep {
+		if strings.Count(p, "/")+1 < depth {
+			continue
+		}
+		roots[strings.Join(strings.Split(p, "/")[:depth], "/")] = true
+	}
+
+	removed := 0
+	for root := range roots {
+		var doomed []string
+		_ = filepath.Walk(filepath.Join(target, root), func(path string, fi os.FileInfo, err error) error {
+			if err != nil {
+				return nil // unreadable: leave it alone
+			}
+			rel, rerr := filepath.Rel(target, path)
+			if rerr != nil {
+				return nil
+			}
+			if keep[filepath.ToSlash(rel)] {
+				return nil
+			}
+			doomed = append(doomed, path)
+			if fi.IsDir() {
+				return filepath.SkipDir // its whole subtree goes with it
+			}
+			return nil
+		})
+		for _, p := range doomed {
+			if err := os.RemoveAll(p); err == nil {
+				removed++
+			}
+		}
+	}
+	return removed
 }
 
 // localArchive resolves an archive path recorded on a backup row to a file on

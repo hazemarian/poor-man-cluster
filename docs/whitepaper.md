@@ -252,7 +252,10 @@ sequenceDiagram
 
 The invariant it encodes: data moves between nodes only through the object store over the routing mesh, never over host ports, so recovery needs no firewall rules.
 
-The store-transit mover pulls the archive from the store via `host.docker.internal:8333`, verifies it contains the stack's data, and unpacks the `<stack>/` subtree into the target's volume root from a one-shot Swarm service pinned to the target. `stack move` triggers a fresh backup then transits; storage failover pulls the failed node's newest archive and never a fresh backup; `backup restore` is routed to the owning node and fails loudly when routing is impossible. `cluster down --purge` writes a restorable `purge-backup-<ts>.tar.gz` first, and `cluster reset --restore <archive>` extracts it before rebuilding the Swarm side from the DB.
+The store-transit mover pulls the archive from the store via `host.docker.internal:8333`, verifies it contains the stack's data, and unpacks the `<stack>/` subtree into the target's volume root from a one-shot Swarm service pinned to the target. `stack move` triggers a fresh backup then transits; storage failover pulls the failed node's newest archive and never a fresh backup; `backup restore` is routed to the owning node and fails loudly when routing is impossible. A restore
+replaces: entries under the restored scope that the snapshot did not hold are removed after extraction, so a
+volume returns as the snapshot captured it rather than as a merge of two points in time — the scope comes
+from the snapshot, so an app deployed after the backup is untouched. `cluster down --purge` writes a restorable `purge-backup-<ts>.tar.gz` first, and `cluster reset --restore <archive>` extracts it before rebuilding the Swarm side from the DB.
 
 Sources: pmcluster/internal/cluster/embeds/backup-stack.yml; pmcluster/internal/stacks/move_store.go; pmcluster/internal/backups/.
 

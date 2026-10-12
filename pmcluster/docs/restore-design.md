@@ -50,6 +50,12 @@ pmcluster backup restore <id> [--dest-root /var/stack/data] [--volume <name>] [-
   default `/var/stack/data`); pass `--dest-root` to override.
 - REST: `POST /api/backups/{id}/restore` `{dest_root}`; console
   `/web/backups/<id>` Browse → Restore card.
+- A restore **replaces**: entries under the restored scope that the snapshot did
+  not hold are removed after extraction (`pruneToSnapshot`), so a volume comes
+  back as the snapshot captured it and not as a merge of two points in time.
+  The scope is derived from the snapshot (`<app>` for a whole-run restore,
+  `<app>/<volume>` under `--volume`), so an app deployed after the backup is
+  never touched. Replacing is today's behaviour; merge-vs-replace is still open.
 - Archive dir is **`/var/stack/backup`** by default, resolved through
   `cluster.BackupRootDir()` so the CLI reads the same directory the agent writes
   to (both honour `PMCLUSTER_BACKUP_DIR`; a relocated archive dir is why the two

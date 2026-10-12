@@ -225,7 +225,7 @@ flowchart TD
     W -->|no| RT["route to the owning node<br/>via the mover"]
     W -->|yes| L{"archive on this node?"}
     RT --> L
-    L -->|yes| D["extract from disk"]
+    L -->|yes| D["extract from disk, then remove<br/>what the snapshot did not hold"]
     L -->|no| O{"store or offsite copy?"}
     O -->|yes| F["fetch, then extract"]
     O -->|no| E["fail loudly:<br/>say where the archive lives"]
@@ -236,6 +236,16 @@ Details that prevent the classic accidents:
 - **`--volume` is anchored to the stack.** On a stack-scoped run, `--volume db_data` can only ever
   match *that stack's* volume, so a bare name cannot pull another app's identically-named volume.
   On a whole-disk run a bare name matches every app, so scope it as `<app>/<volume>`.
+- **A restore replaces, it does not merge.** Once the archives are extracted, entries under the restored
+  scope that the snapshot did not hold are removed, so the volume ends up as the snapshot captured it. For a
+  database that is the difference between a consistent rollback and a directory that is a union of two
+  moments: a lock file or a log segment written *after* the snapshot describes a different point in time than
+  the data pages beside it. The scope comes from the snapshot, never from the destination — an app deployed
+  after the backup is not in the archive and is therefore untouched, and `--volume` confines both the restore
+  and the removal to a single volume. Ordering is deliberate: the snapshot is read before anything is
+  written and everything is extracted before anything is removed, so a restore that dies on a truncated
+  archive leaves the volume as it was instead of half-empty. *(Whether a restore should merge instead, or
+  offer both, is still an open decision.)*
 - **The restore runs where the volume is.** A stack's volume lives on its pinned storage node, so
   when the CLI runs elsewhere the restore is routed there through the same store-transit mover used
   by `stack move`. When routing is impossible it says "this stack's volume lives on `<node>` — run
