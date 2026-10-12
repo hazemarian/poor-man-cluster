@@ -353,7 +353,6 @@ func routeLiterals(t *testing.T, root string) map[string]string {
 			if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING {
 				return strings.Trim(lit.Value, `"`), true
 			}
-			return "", false
 		}
 		return "", false
 	}
