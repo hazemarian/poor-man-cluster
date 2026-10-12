@@ -91,6 +91,20 @@ Everything else (`apikeys`, `webhooks.Service`, `secrets`, `configs.Service`,
 
 ## Leaf packages
 
+`internal/docscheck` is a test-only leaf package — no domain port, no adapter, no
+non-test code. It extracts checkable claims from the prose (cluster setting keys,
+CLI commands and flags, OpenAPI paths against the registered routes, local links,
+in-repo file references) and asserts each against the source, plus a static
+Mermaid syntax lint for the failures a reader cannot see: keyword collisions in
+participant ids, and a `;` smuggled in by an HTML entity, either of which breaks
+a sequence diagram while looking perfectly correct. Every assertion in it exists
+because the claim it checks was false here.
+
+It runs in the `docs` workflow rather than the Go one, because it verifies the
+prose, not the behaviour. `scripts/check-mermaid-render.py` covers the half that
+needs a renderer — whether a diagram is legible once GitHub fits it to its
+content column, which no amount of reading the markup will tell you.
+
 `internal/refs` is a leaf package (no domain port, no adapter). It provides
 the shared `config()/secrets()` reference language consumed by
 `internal/manifest` (DSL env values) and `internal/cluster` (platform
