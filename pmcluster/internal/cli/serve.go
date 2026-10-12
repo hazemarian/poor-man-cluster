@@ -204,7 +204,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		Store:         st,
 		DeployService: deploySvc,
 		Cipher:        cipher,
-		Backups:       &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: backups.DefaultArchiveDir, RetentionDays: cluster.LoadBackupRetentionDays(cmd.Context(), st), S3: backupS3},
+		Backups:       &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: cluster.BackupRootDir(), RetentionDays: cluster.LoadBackupRetentionDays(cmd.Context(), st), S3: backupS3},
 		Settings: func() *settings.Local {
 			l := settings.NewLocal(st)
 			l.ApplyLogLevel = logger.SetLevel

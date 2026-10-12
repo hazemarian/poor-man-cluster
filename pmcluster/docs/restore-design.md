@@ -50,8 +50,13 @@ pmcluster backup restore <id> [--dest-root /var/stack/data] [--volume <name>] [-
   default `/var/stack/data`); pass `--dest-root` to override.
 - REST: `POST /api/backups/{id}/restore` `{dest_root}`; console
   `/web/backups/<id>` Browse → Restore card.
-- Archive dir is **`/var/stack/backup`** (`backups.DefaultArchiveDir`) —
-  not the old `/var/backups/docker-volumes`.
+- Archive dir is **`/var/stack/backup`** by default, resolved through
+  `cluster.BackupRootDir()` so the CLI reads the same directory the agent writes
+  to (both honour `PMCLUSTER_BACKUP_DIR`; a relocated archive dir is why the two
+  must not be resolved independently) — not the old
+  `/var/backups/docker-volumes`. A row records the agent's CONTAINER path
+  (`/archive/<name>`), so restore and browse map it onto the archive dir before
+  declaring an archive missing.
 
 ### Restore the control plane (leader-aware daemon)
 

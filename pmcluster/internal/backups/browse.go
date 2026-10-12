@@ -36,7 +36,7 @@ func (l *Local) Browse(ctx context.Context, id int64) (*Run, []FileEntry, error)
 	}
 	var files []FileEntry
 	for _, p := range run.ArchivePaths {
-		entries, err := listArchive(p)
+		entries, err := listArchive(l.localArchive(p))
 		if err != nil {
 			// A missing archive is not fatal for browsing — surface the
 			// path as an error entry so the UI can explain it.
@@ -123,6 +123,15 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 	if row.Status != "succeeded" {
 		return 0, fmt.Errorf("backup %d not restored: status is %q (only succeeded runs are restorable)", id, row.Status)
 	}
+	// A run can be recorded as succeeded with no archive path at all (the
+	// agent's stdout yielded no path and no archive was found in the archive
+	// dir). Restoring it used to restore nothing and return success, so the
+	// caller — a script, a CI job, an operator mid-incident — saw the same
+	// tick as a real restore. Refuse instead: there is no artifact to restore
+	// FROM, which is a different fact from an archive that held no files.
+	if len(splitArchivePaths(row.ArchivePaths)) == 0 {
+		return 0, fmt.Errorf("backup %d has no archive path recorded, so there is nothing to restore from. The run is marked succeeded but no archive was discovered; re-run the backup, and check the archive dir on the node that took it (%s)", id, l.ArchiveDir)
+	}
 	target := destRoot
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return 0, fmt.Errorf("create restore dir: %w", err)
@@ -164,19 +173,48 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 	return restored, nil
 }
 
+// localArchive resolves an archive path recorded on a backup row to a file on
+// THIS host.
+//
+// An on-demand run records the path as the agent reported it — the CONTAINER
+// path /archive/<name> — which does not exist on the host, while the file
+// itself is in the archive dir. A row discovered from the archive dir or the
+// object store already records a host path or a bare object key, so a path
+// that exists is used unchanged. Without this mapping a local-first restore
+// looks for /archive/<name> on a host that only has <ArchiveDir>/<name>,
+// concludes the archive is missing, and says so — on the very node holding it.
+func (l *Local) localArchive(p string) string {
+	if p == "" {
+		return p
+	}
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	if l.ArchiveDir == "" {
+		return p
+	}
+	if alt := filepath.Join(l.ArchiveDir, filepath.Base(p)); alt != p {
+		if _, err := os.Stat(alt); err == nil {
+			return alt
+		}
+	}
+	return p
+}
+
 // restoreSource resolves where an archive's bytes come from: the local file
 // (default), or a fetch from the configured offsite S3 store when the local
 // copy is gone or --from-s3 is explicit. The returned cleanup removes any
 // temporary file and is always safe to call.
 func (l *Local) restoreSource(ctx context.Context, p string, opts RestoreOptions) (string, func(), error) {
-	_, localErr := os.Stat(p)
+	local := l.localArchive(p)
+	_, localErr := os.Stat(local)
 	localExists := localErr == nil
 
 	if opts.FromS3 && !l.S3.Configured() {
 		return "", func() {}, fmt.Errorf("offsite S3 restore requested but no S3 is configured — set the backup_s3_* settings (endpoint, bucket, access key, secret key)")
 	}
 	if !opts.FromS3 && localExists {
-		return p, func() {}, nil
+		return local, func() {}, nil
 	}
 	if !opts.FromS3 && !l.S3.Configured() {
 		return "", func() {}, fmt.Errorf("archive %s not found locally and no offsite S3 is configured — restore on the node that holds %s, or configure backup_s3_* settings to fetch it", p, l.ArchiveDir)
