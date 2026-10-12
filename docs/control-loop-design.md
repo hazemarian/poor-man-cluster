@@ -3,7 +3,7 @@
 ## How the loop works
 
 ```mermaid
-flowchart LR
+flowchart TD
   subgraph Sources
     DE["Docker engine events<br/>runtime.Client.Events"] --> DEB["2s debounce"]
     TICK["reconcile_interval ticker<br/>(default 60s, 0=off)"] --> DEB

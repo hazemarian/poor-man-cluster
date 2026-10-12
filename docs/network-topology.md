@@ -90,7 +90,7 @@ rather than a shared replicated device, so a node loss still means a
 minutes-scale restore window for the stacks whose data lived on it.
 
 ```mermaid
-flowchart LR
+flowchart TD
     D["your.com (one A record)"]
     LB["Load balancer<br/>203.0.113.100"]
     N1["Manager 1 (leader)<br/>203.0.113.10<br/>traefik"]

@@ -59,7 +59,7 @@ One binary assumes different roles per node, runs a leader-only reconcile loop, 
 What to look for: two planes — outside the cluster box is public, inside is node-to-node.
 
 ```mermaid
-flowchart LR
+flowchart TD
     subgraph PUB["public plane"]
         NET["Internet / CI"]
         LB["load balancer (optional)"]
