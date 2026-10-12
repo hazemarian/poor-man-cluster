@@ -1,6 +1,55 @@
 # Changelog
 
-Release history for **poor-man-cluster**. The RFC and the reference docs describe the
+Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
+docs under `docs/` describe the platform as built.
+
+## v0.2.181 (2026-10-12)
+
+A correctness release for backup and restore, plus the gates that keep this repository's
+documentation honest. It contains one behaviour change, and it is called out first.
+
+- **`backup restore` REPLACES the volume instead of merging into it.** A restore extracted the archive
+  over the data root and left everything else in place, so a restored volume was a union of two points
+  in time rather than the state the snapshot captured. For a database that is not cosmetic: a lock file
+  or an append-only log written after the snapshot describes a different moment than the data pages
+  beside it, and the result can be a directory that never existed as any single state. Entries under the
+  restored scope that the snapshot did not hold are now removed.
+  The scope is derived from the SNAPSHOT, never from the destination: an app deployed after the backup
+  was never in the archive and is untouched, and `--volume` confines both the restore and the removal to
+  a single volume. The ordering is deliberate too — the snapshot is read before anything is written and
+  every archive is extracted before anything is removed, so a restore that dies on a truncated archive
+  leaves the volume as it was rather than half-empty. Whether a restore should merge instead, or offer
+  both, remains an open decision; `internal/backups.pruneToSnapshot` is the one place implementing it.
+- **A restore can no longer report success while restoring nothing.** A run recorded as succeeded with
+  no archive path restored 0 files and exited 0 — `Restored 0 file(s)` — which a script, a CI job
+  or an operator mid-incident reads as a restore. It now refuses, and says there is nothing to restore
+  from.
+- **Restore and browse find the archive the agent actually wrote.** The CLI resolved the archive
+  directory from a constant while the agent's bind honoured `PMCLUSTER_BACKUP_DIR`, and an on-demand run
+  records the agent's CONTAINER path (`/archive/<name>`), which nothing mapped onto the host directory.
+  A local-first restore therefore declared the archive missing on the very node holding it, and a
+  browsable run listed as a single "missing" entry.
+- **`backup create` waits out a cold agent, and reports its own log.** The agent accepts a backup
+  roughly 30-60s after its container starts; before that it exits 1 having written nothing, while the
+  trigger made exactly one retry after 10s — so a backup issued straight after `cluster up` failed on a
+  cluster that was seconds away from being able to take one. It now retries to a bound, and a failure
+  carries the agent's own log tail instead of the old `exit status 1 ()`: `docker exec` captures only
+  the streams of the command it runs, which is why the cause was always empty.
+- **New real-swarm e2e for backup and restore.** It deploys a stateful stack, seeds its volume, backs
+  up, overwrites the data, restores, and asserts both halves of the replacement rule — including that an
+  app deployed after the backup keeps its data. It found the first three defects above.
+- **New gates for the documentation.** `internal/docscheck` verifies the claims the prose makes —
+  cluster setting keys, CLI commands and flags, OpenAPI paths against the registered routes, local
+  links, in-repo file references and Mermaid syntax — while `scripts/check-mermaid-render.py` renders
+  every diagram and measures it against GitHub's content column. Both exist because each claim they now
+  enforce was false here at some point: `settings.md` documented a cluster setting the code does not
+  define, and `control-loop-design.md` described an architecture with no implementation.
+- **Documentation.** The multi-file RFC is replaced by a single technical whitepaper
+  (`docs/whitepaper.md`); the reference docs were reconciled claim-by-claim against the code in two
+  passes; and all 27 diagrams now fit GitHub's column width (three of them rendered labels at roughly
+  6px).
+- **CI.** Documentation-only changes no longer run the code suites — `pmcluster/**` matches markdown
+  too, so a README edit was running the Go unit/smoke tier and the real-swarm e2e.
 
 ## v0.2.180 (2026-10-09)
 
