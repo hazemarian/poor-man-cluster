@@ -4,6 +4,16 @@
 
 <p align="center"><strong>SIMPLE • FLEXIBLE • POWERFUL</strong></p>
 
+<p align="center">
+  <a href="https://github.com/hazemarian/poor-man-cluster/releases/latest"><img src="https://img.shields.io/github/v/release/hazemarian/poor-man-cluster?color=FF5722&label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/hazemarian/poor-man-cluster" alt="License: MIT"></a>
+  <a href="https://github.com/hazemarian/poor-man-cluster/actions/workflows/pmcluster.yml"><img src="https://github.com/hazemarian/poor-man-cluster/actions/workflows/pmcluster.yml/badge.svg" alt="build"></a>
+  <a href="https://github.com/hazemarian/poor-man-cluster/actions/workflows/swarm-e2e.yml"><img src="https://github.com/hazemarian/poor-man-cluster/actions/workflows/swarm-e2e.yml/badge.svg" alt="swarm end-to-end"></a>
+  <a href="https://github.com/hazemarian/poor-man-cluster/actions/workflows/docs.yml"><img src="https://github.com/hazemarian/poor-man-cluster/actions/workflows/docs.yml/badge.svg" alt="docs vs code"></a>
+  <a href="docs/whitepaper.md"><img src="https://img.shields.io/badge/docs-whitepaper-FF5722" alt="Technical whitepaper"></a>
+  <img src="https://img.shields.io/badge/orchestrator-Docker%20Swarm-2496ED?logo=docker&logoColor=white" alt="Docker Swarm">
+</p>
+
 # Poor Man's Cluster
 
 A simple, cost-effective, production-ready deployment stack on open-source tools. No Kubernetes, no managed cloud services, no expensive licensing — just Docker Swarm, a small Go control plane (`pmcluster`), and a handful of well-chosen tools that get the job done.
