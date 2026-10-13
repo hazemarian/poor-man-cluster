@@ -18,7 +18,6 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
@@ -264,11 +263,11 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 	// Only the first running task is recorded; a multi-replica service has
 	// others, and the column is a locator, not an inventory.
 	runningNode := map[string]string{}
-	if tasks, err := r.c.TaskList(ctx, types.TaskListOptions{
+	if tasks, err := r.c.TaskList(ctx, swarm.TaskListOptions{
 		Filters: filters.NewArgs(filters.Arg("desired-state", "running")),
 	}); err == nil {
 		hostByNodeID := map[string]string{}
-		if nodes, err := r.c.NodeList(ctx, types.NodeListOptions{}); err == nil {
+		if nodes, err := r.c.NodeList(ctx, swarm.NodeListOptions{}); err == nil {
 			hostByNodeID = nodeHostnames(nodes)
 		}
 		for _, t := range tasks {
@@ -376,7 +375,7 @@ func nodeHostnames(nodes []swarm.Node) map[string]string {
 	for _, n := range nodes {
 		host := n.Description.Hostname
 		if host == "" {
-			host = n.Spec.Annotations.Name
+			host = n.Spec.Name
 		}
 		out[n.ID] = host
 	}
