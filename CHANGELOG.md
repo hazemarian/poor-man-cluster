@@ -3,6 +3,17 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.184 (2026-10-13)
+
+A fix for the placement column added in v0.2.183.
+
+- **The running node is read from the node's `Description`.** The join keyed node IDs to
+  `Spec.Annotations.Name`, which is empty on every node this cluster has produced. A service's
+  running node therefore resolved to nothing and the column rendered blank for every service —
+  silently, because an empty value is indistinguishable from "no task running". Found by reading
+  the live API after the rollout rather than the tests: the wire field was present and correctly
+  named, the lookup behind it was not.
+
 ## v0.2.183 (2026-10-13)
 
 - **The console shows where each service is running, not only where it was placed.** A service row

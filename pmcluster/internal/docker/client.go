@@ -269,9 +269,7 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 	}); err == nil {
 		hostByNodeID := map[string]string{}
 		if nodes, err := r.c.NodeList(ctx, types.NodeListOptions{}); err == nil {
-			for _, n := range nodes {
-				hostByNodeID[n.ID] = n.Spec.Annotations.Name
-			}
+			hostByNodeID = nodeHostnames(nodes)
 		}
 		for _, t := range tasks {
 			if _, seen := runningNode[t.ServiceID]; seen {
@@ -364,6 +362,25 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 		})
 	}
 	return out, nil
+}
+
+// nodeHostnames maps node IDs to hostnames for the running-node join.
+//
+// Description.Hostname is the field that actually holds the hostname.
+// Spec.Annotations.Name looks like the obvious source and is empty on every
+// node this cluster has produced, so a join keyed on it resolves nothing and
+// leaves the column silently blank — which is precisely what a wrong guess here
+// costs, since an empty result is indistinguishable from "no task running".
+func nodeHostnames(nodes []swarm.Node) map[string]string {
+	out := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		host := n.Description.Hostname
+		if host == "" {
+			host = n.Spec.Annotations.Name
+		}
+		out[n.ID] = host
+	}
+	return out
 }
 
 // ServiceInspect resolves a service by name or ID to a read-only snapshot.
