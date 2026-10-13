@@ -49,6 +49,7 @@ func (l Local) List(ctx context.Context, stack string) ([]ServiceSummary, error)
 			UpdateError:  s.UpdateError,
 			Updated:      s.UpdatedAt,
 			Node:         s.Node,
+			RunningNode:  s.RunningNode,
 			Platform:     s.Platform,
 		})
 	}

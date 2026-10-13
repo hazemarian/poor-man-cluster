@@ -88,6 +88,7 @@ type serviceRow struct {
 	UpdateError  string // the orchestrator's reason for pausing
 	Routable     bool   // belongs to a stack, so the per-service routes resolve
 	Node         string // io.pmcluster.node label: node this service is pinned to ("" when unconstrained)
+	RunningNode  string // node the running task is on ("" when none is running)
 }
 
 // List renders the services table.
@@ -152,6 +153,7 @@ func newServiceRow(s pmapi.Service) serviceRow {
 		UpdateError:  s.UpdateError,
 		Routable:     s.Stack != "",
 		Node:         s.Node,
+		RunningNode:  s.RunningNode,
 	}
 }
 
@@ -201,6 +203,7 @@ type serviceMeta struct {
 	PausedUpdate bool
 	UpdateError  string
 	Node         string // node the service is pinned to ("" when unconstrained)
+	RunningNode  string // node the running task is on ("" when none is running)
 }
 
 // completedRunOnce reports whether a service is a one-shot job that already
@@ -300,6 +303,7 @@ func (c Services) meta(ctx *gin.Context, stack, service string) (*serviceMeta, b
 			PausedUpdate: s.UpdateState == "paused" && !completedRunOnce(s.RunOnce, s.Desired, s.Replicas),
 			UpdateError:  s.UpdateError,
 			Node:         s.Node,
+			RunningNode:  s.RunningNode,
 		}, true
 	}
 	return nil, false

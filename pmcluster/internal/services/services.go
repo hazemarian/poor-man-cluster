@@ -30,6 +30,7 @@ type ServiceSummary struct {
 	UpdateError  string // orchestrator reason for a paused/rolling update
 	Updated      int64  // service spec update time (unix)
 	Node         string // io.pmcluster.node label: hostname pin target ("" when unconstrained/role-based)
+	RunningNode  string // hostname of the node the running task is on ("" when none is running)
 	Platform     bool   // io.pmcluster.platform=true: a platform-managed service (edge/traefik/observability/backup/sso)
 }
 

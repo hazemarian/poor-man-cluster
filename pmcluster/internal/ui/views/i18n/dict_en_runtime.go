@@ -29,6 +29,7 @@ func init() {
 		"services.title":                 "Swarm services",
 		"services.col_mode":              "Mode",
 		"services.col_node":              "Node",
+		"services.running_on":            "running on",
 		"services.col_image":             "Image",
 		"services.detail_meta_unknown":   "The cluster API did not return this service, so its replicas, image and mode are unknown.",
 		"services.col_updated":           "Updated",

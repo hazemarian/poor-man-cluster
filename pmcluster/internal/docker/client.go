@@ -18,6 +18,7 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
@@ -249,6 +250,39 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 	if err != nil {
 		return nil, fmt.Errorf("docker service ls: %w", err)
 	}
+	// Where each service is actually running.
+	//
+	// The io.pmcluster.node label says where a service was PLACED; only its
+	// running task says where it IS. The two diverge exactly when a service has
+	// ended up on a node other than the one it was assigned — the condition an
+	// operator must be able to see without opening a shell, because the service
+	// comes up beside an empty volume root when it happens.
+	//
+	// One task listing covers the whole page. Tasks name their node by ID, so
+	// the node list is mapped once to hostnames. A failure here leaves
+	// RunningNode empty: a missing placement hint must never fail the listing.
+	// Only the first running task is recorded; a multi-replica service has
+	// others, and the column is a locator, not an inventory.
+	runningNode := map[string]string{}
+	if tasks, err := r.c.TaskList(ctx, types.TaskListOptions{
+		Filters: filters.NewArgs(filters.Arg("desired-state", "running")),
+	}); err == nil {
+		hostByNodeID := map[string]string{}
+		if nodes, err := r.c.NodeList(ctx, types.NodeListOptions{}); err == nil {
+			for _, n := range nodes {
+				hostByNodeID[n.ID] = n.Spec.Annotations.Name
+			}
+		}
+		for _, t := range tasks {
+			if _, seen := runningNode[t.ServiceID]; seen {
+				continue
+			}
+			if host := hostByNodeID[t.NodeID]; host != "" {
+				runningNode[t.ServiceID] = host
+			}
+		}
+	}
+
 	out := make([]runtime.Service, 0, len(svcs))
 	for _, s := range svcs {
 		spec := s.Spec
@@ -324,6 +358,7 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 			UpdateState:  updateState,
 			UpdateError:  updateError,
 			Node:         s.Spec.Labels[runtime.NodeLabel],
+			RunningNode:  runningNode[s.ID],
 			Platform:     s.Spec.Labels[runtime.PlatformLabel] == "true",
 			Labels:       labels,
 		})

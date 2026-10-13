@@ -5,6 +5,14 @@ docs under `docs/` describe the platform as built.
 
 ## Unreleased
 
+- **The console shows where each service is running, not only where it was placed.** A service row
+  carried the `io.pmcluster.node` label — the node the service was assigned — and rendered an em
+  dash for every unconstrained one, which is all of them that hold no volume. The listing now also
+  reports the node the running task is on, and the services, stack and platform views show it: the
+  assigned node where there is one, the running node where there is not, and both when they
+  disagree. A service running on a node other than the one it was assigned serves an empty data
+  directory with no outward sign, so the disagreement is worth a column.
+
 A stack's storage node is assigned once. This release makes that true in the code, not just in
 intent.
 

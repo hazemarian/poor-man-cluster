@@ -181,6 +181,12 @@ type Service struct {
 	UpdateState  string // swarm UpdateStatus.State: "updating" | "paused" | "completed" | "rollback..." | "" (no update in flight)
 	UpdateError  string // the orchestrator's reason for pausing/rolling back ("" when none)
 	Node         string // NodeLabel: the node hostname the placement pin targets ("" when unconstrained/role-based)
+	// RunningNode is the hostname of the node the service's running task is
+	// actually on ("" when no task is running). Node is where the service was
+	// PLACED; RunningNode is where it IS. They diverge when a service runs on
+	// a node other than the one it was assigned, which is the one condition an
+	// operator must be able to see without opening a shell.
+	RunningNode string
 	// Platform reports a platform-managed service (edge, ingress, observability,
 	// backup, SSO) — the ones stamped io.pmcluster.platform=true by the compose
 	// writer for platform stacks. The console/CLI split these from customer app

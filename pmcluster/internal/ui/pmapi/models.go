@@ -322,7 +322,10 @@ type Service struct {
 	UpdateError  string `json:"update_error"`
 	Updated      int64  `json:"updated"`
 	Node         string `json:"node"`
-	Platform     bool   `json:"platform"`
+	// RunningNode is the node the service's running task is on ("" when none
+	// is running). Node is where it was placed; RunningNode is where it is.
+	RunningNode string `json:"running_node"`
+	Platform    bool   `json:"platform"`
 }
 
 // ServiceTask is one row of GET /api/services/{stack}/{svc}/tasks.

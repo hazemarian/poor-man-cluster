@@ -97,10 +97,10 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"stack":"demo","acknowledged":true}`)
 	})
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","update_state":"completed"},{"stack":"infra","name":"infra_traefik","image":"traefik:v3","replicas":1,"desired":1,"mode":"global","updated":31,"platform":true},{"stack":"edge","name":"edge_pmcluster-edge","image":"pmcluster/edge","replicas":1,"desired":1,"mode":"replicated","updated":32,"platform":true},{"stack":"observability","name":"observability_openobserve","image":"openobserve/openobserve","replicas":1,"desired":1,"mode":"replicated","updated":33,"platform":true}]}`)
+		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","running_node":"node-09","update_state":"completed"},{"stack":"infra","name":"infra_traefik","image":"traefik:v3","replicas":1,"desired":1,"mode":"global","updated":31,"platform":true},{"stack":"edge","name":"edge_pmcluster-edge","image":"pmcluster/edge","replicas":1,"desired":1,"mode":"replicated","updated":32,"platform":true},{"stack":"observability","name":"observability_openobserve","image":"openobserve/openobserve","replicas":1,"desired":1,"mode":"replicated","updated":33,"platform":true}]}`)
 	})
 	mux.HandleFunc("/api/services/demo", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","update_state":"completed"}]}`)
+		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","running_node":"node-09","update_state":"completed"}]}`)
 	})
 	mux.HandleFunc("/api/services/demo/web/tasks", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"tasks":[{"task_id":"t1","slot":1,"state":"running","error":"","node":"node-01","started_at":30,"finished_at":0}]}`)
@@ -372,6 +372,17 @@ func TestControllers_Services(t *testing.T) {
 	body := rr.Body.String()
 	if !strings.Contains(body, "Platform services") {
 		t.Errorf("GET /web/services missing the separated platform section; got:\n%s", body)
+	}
+
+	// The placement column shows the assigned node AND the node the service is
+	// actually running on. A service running away from its assignment is the
+	// condition that silently serves an empty data directory, so the page must
+	// say so rather than showing only the assignment.
+	if !strings.Contains(body, "node-01") {
+		t.Error("GET /web/services does not show the assigned node")
+	}
+	if !strings.Contains(body, "node-09") {
+		t.Error("GET /web/services does not show the node the service is running on")
 	}
 }
 

@@ -35,6 +35,7 @@ func init() {
 		"services.title":                 "خدمات Swarm",
 		"services.col_mode":              "النمط",
 		"services.col_node":              "العقدة",
+		"services.running_on":            "يعمل على",
 		"services.col_image":             "الصورة",
 		"services.detail_meta_unknown":   "لم تُرجع واجهة API للعنقود هذه الخدمة، لذا نسخها وصورتها ونمطها غير معروفة.",
 		"services.col_updated":           "تاريخ التحديث",
