@@ -156,6 +156,8 @@ func openDeploySvc(cmd *cobra.Command) (*stacks.Service, *store.Store, func(), e
 	}
 	svc := &stacks.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Cipher: cipher}, VolumeRoot: st.SettingDefault(context.Background(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.SettingDefault(context.Background(), cluster.SettingTLSMode(), "")), PinNode: st.SettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.SettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.SettingDefault(context.Background(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
+	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
+		return st.SetSetting(ctx, stacks.StackPinKey(stackName), node)
 	}}, Stdout: cmd.OutOrStdout(), Log: log, BackupDir: cluster.BackupRootDir()}
 	return svc, st, func() { _ = st.Close() }, nil
 }

@@ -3,6 +3,27 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased
+
+A stack's storage node is assigned once. This release makes that true in the code, not just in
+intent.
+
+- **A stack is pinned to its storage node at first placement.** The resolver's order is
+  `stack pin → storage_nodes round-robin → platform_node`, and only `stack move` ever wrote a
+  pin, so nothing recorded where an app had been placed. Every deploy therefore re-ran the
+  round-robin against the storage-node list *as it stood that day*, and growing that list
+  silently relocated every stack whose index changed — onto a node holding none of the stack's
+  data, because the volume is a host path and a service that lands elsewhere comes up beside an
+  empty directory. A stack's node is a property of where its data already is, so the resolved
+  node is now written as a pin the first time an app holding a volume is placed. Later changes to
+  `storage_nodes` affect only stacks that have never been placed, which is the intended contract:
+  a stack moves when an operator moves it, or when a failover moves it.
+- **`stack_pin_<stack>` is now settable through the settings path.** The key was written by the
+  platform but rejected by the settings validator's fixed key list, so a pin could only be
+  observed where it was read, never inspected or cleared. The prefix is accepted now, which also
+  keeps a moved stack's pin honest — the failover path resolves the source node from the pin, and
+  an unpinned stack's pin is only a re-computed guess.
+
 ## v0.2.182 (2026-10-12)
 
 A backup is only a backup if its copies exist. This release makes the audit table say so.

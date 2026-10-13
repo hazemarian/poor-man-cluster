@@ -43,6 +43,12 @@ type PinResolver struct {
 	// when the stack has not been individually moved). Nil disables the
 	// override.
 	StackPin func(ctx context.Context, stackName string) (string, error)
+
+	// SetStackPin records a per-stack placement override. Used to make the
+	// first assignment sticky. Nil disables recording, in which case every
+	// deploy re-runs the round-robin (the behaviour that let a change to
+	// storage_nodes relocate stacks onto nodes holding none of their data).
+	SetStackPin func(ctx context.Context, stackName, node string) error
 }
 
 // SetStorageNodes live-replaces the storage-node list. Called by the daemon's
@@ -183,12 +189,69 @@ func ParseStorageNodes(raw string) []string {
 func StackPinKey(stackName string) string { return "stack_pin_" + stackName }
 
 // resolvePlacements applies the PinResolver to a freshly built IR, when one is
-// configured. Nil-safe: a Service without Pins renders exactly as before.
+// configured, and then records the assignment. Nil-safe: a Service without
+// Pins renders exactly as before.
 func (s *Service) resolvePlacements(ctx context.Context, appName string, ir *manifest.IR) error {
 	if s.Pins == nil {
 		return nil
 	}
-	return s.Pins.ResolvePlacement(ctx, appName, ir)
+	if err := s.Pins.ResolvePlacement(ctx, appName, ir); err != nil {
+		return err
+	}
+	return s.Pins.PersistAssignment(ctx, appName, ir)
+}
+
+// PersistAssignment records the node an app's stateful services resolved to, so
+// the assignment is made once and then holds for the life of the stack.
+//
+// Assignments must be sticky. The placement of a stateful service is a property
+// of where its DATA already is — the volume is a host path, so a service that
+// resolves to a different node comes up beside an empty directory rather than
+// its own data. Re-running the round-robin on every deploy makes the assignment
+// a function of the storage_nodes list *today*, so adding a node silently
+// relocates every stack whose index changes. Writing the resolved node as a pin
+// on first placement makes later changes to the list affect only stacks that
+// have never been placed, which is the intended contract: a stack moves when an
+// operator moves it (`stack move`) or when a failover moves it, never because
+// the cluster grew.
+//
+// Records nothing when no storage nodes are configured (the platform_node
+// fallback is itself the stable choice), when a pin already exists (never
+// overwrite an operator's decision), or when the app holds no volume (a
+// stateless app is free to land anywhere and should stay free).
+func (r *PinResolver) PersistAssignment(ctx context.Context, appName string, ir *manifest.IR) error {
+	if r == nil || r.SetStackPin == nil || len(r.storageNodes()) == 0 {
+		return nil
+	}
+	existing, err := r.stackPin(ctx, appName)
+	if err != nil {
+		return err
+	}
+	if existing != "" {
+		return nil
+	}
+	if !holdsVolume(ir) {
+		return nil
+	}
+	node := r.resolve(appName, "")
+	if node == "" {
+		return nil
+	}
+	return r.SetStackPin(ctx, appName, node)
+}
+
+// holdsVolume reports whether any service in the IR declares a volume, i.e.
+// whether the app has storage that pins it to a node at all.
+func holdsVolume(ir *manifest.IR) bool {
+	if ir == nil {
+		return false
+	}
+	for i := range ir.Services {
+		if len(ir.Services[i].Volumes) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // StoragePinsForStack resolves the storage nodes the stack's latest revision

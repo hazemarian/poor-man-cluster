@@ -3,6 +3,7 @@ package settings
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -70,6 +71,11 @@ func (l *Local) Get(ctx context.Context) (Settings, error) {
 	return settings, nil
 }
 
+// stackPinPrefix is the key prefix for a per-stack placement pin
+// (stacks.StackPinKey). Kept as a literal so this package need not depend on
+// the stacks package.
+const stackPinPrefix = "stack_pin_"
+
 // Update persists the given settings and returns the updated snapshot.
 // Unknown keys are rejected atomically (nothing is written when any key is
 // unknown).
@@ -82,7 +88,11 @@ func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 		allowed[k] = true
 	}
 	for k := range values {
-		if !allowed[k] {
+		// A per-stack placement pin is written by the platform itself (first
+		// placement, and `stack move`), so it is a legitimate setting an
+		// operator must be able to inspect and clear. It cannot be enumerated
+		// in advance because it is per stack.
+		if !allowed[k] && !strings.HasPrefix(k, stackPinPrefix) {
 			return nil, fmt.Errorf("unknown setting: %s", k)
 		}
 	}

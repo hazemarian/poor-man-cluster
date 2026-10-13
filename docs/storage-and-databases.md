@@ -104,9 +104,22 @@ A counter would reshuffle every stack whenever you added one. Hashing the name m
 stack always resolves to the same node, and a new stack never disturbs an existing one.
 "Round robin" describes the *spread*, not the algorithm.
 
-**Why that is safe to leave alone.** The resolution is a pure function of the stack name and the
-`storage_nodes` setting. Two deploys of the same stack agree without coordinating, and there is no
-allocation state to lose.
+**Why the hash alone is not enough.** `roundRobinNode` is pure, but it is a pure function of the
+stack name *and the list as it stands today*: the modulo changes the moment a node is added or
+removed, so every unpinned stack whose index moves resolves somewhere new. On a stateless service
+that is invisible. On a stateful one it is a relocation, because the volume is a host path — a
+service that resolves elsewhere comes up beside an empty directory rather than its own data.
+"There is no allocation state to lose" was the assumption that made this look safe, and it is
+wrong: the assignment *is* state, and it has to be recorded.
+
+**So the assignment is written once.** Two deploys of an unpinned stack still agree without
+coordinating, because both read the same list — but that agreement is with today's list, not with
+the deploy that created the app. When an app holding a volume is therefore placed for the first
+time without a pin of its own, the resolved node is recorded as `stack_pin_<stack>`. The
+resolver's first branch answers from then on, and the round-robin only decides the placement of
+stacks that have never been placed. Adding a storage node gives the new capacity to *new* stacks
+and touches nothing already running, which is the contract: a stack moves when you move it, or
+when a failover moves it.
 
 ### 2.3 The override
 
@@ -324,7 +337,8 @@ tarball actually contains the stack's data before it touches the target. Where n
 configured, a fallback ephemeral-HTTP mover serves the archive from the source host.
 
 The `stack_pin_<stack>` setting it writes **outranks** the round-robin, so the reconciler will
-never move the stack back on its own. The source node's subtree is intentionally left behind until
+never move the stack back on its own. This is not a special case for moved stacks: every stateful
+stack carries a pin from its first placement, and a move rewrites it to the new node. The source node's subtree is intentionally left behind until
 you prune it: a move is not an `mv`, and nothing is deleted for you.
 
 ### 5.2 Automatic failover
