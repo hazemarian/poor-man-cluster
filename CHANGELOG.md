@@ -3,7 +3,7 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
-## Unreleased
+## v0.2.183 (2026-10-13)
 
 - **The console shows where each service is running, not only where it was placed.** A service row
   carried the `io.pmcluster.node` label — the node the service was assigned — and rendered an em
