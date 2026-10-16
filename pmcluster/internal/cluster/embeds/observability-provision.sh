@@ -134,23 +134,31 @@ provision_dashboard() {
     fi
     echo "  dashboard '${_title}' created: ${_d}"
 
-    # Field names come from the live schema, not from assumptions:
-    #   logs    -> service.name, severity_text, time
-    #   metrics -> metric_name, data_point_value, service.name
-    add_tile "$_d" "Log volume by service" code pmcluster-logs timeseries \
-        'SELECT "service.name", count(*) AS lines FROM "pmcluster-logs" GROUP BY "service.name" ORDER BY lines DESC LIMIT 10' 0 0 6 4
-    add_tile "$_d" "Errors by service" code pmcluster-logs bar \
-        'SELECT "service.name", count(*) AS errors FROM "pmcluster-logs" WHERE severity_text = '"'"'ERROR'"'"' GROUP BY "service.name" ORDER BY errors DESC LIMIT 10' 6 0 6 4
-    # NOTE: no "memory bytes" tile. `container.memory.usage.total` has rows but its
-    # data_point_value is null on this build, so the tile renders empty; the
-    # percent metric is the one that actually charts memory. Verified by comparing
-    # count(*) (1881 rows, both) against the selected value column (null vs real).
-    add_tile "$_d" "Container memory %" code pmcluster-metrics bar \
-        'SELECT "service.name", max(data_point_value) AS percent FROM "pmcluster-metrics" WHERE metric_name = '"'"'container.memory.percent'"'"' GROUP BY "service.name" ORDER BY percent DESC LIMIT 10' 6 4 6 4
-    add_tile "$_d" "Network received by service" code pmcluster-metrics timeseries \
-        'SELECT "service.name", sum(data_point_value) AS rx_bytes FROM "pmcluster-metrics" WHERE metric_name = '"'"'container.network.io.usage.rx_bytes'"'"' GROUP BY "service.name" ORDER BY rx_bytes DESC LIMIT 10' 0 8 6 4
-    add_tile "$_d" "CPU by service" code pmcluster-metrics timeseries \
-        'SELECT "service.name", max(data_point_value) AS cpu FROM "pmcluster-metrics" WHERE metric_name = '"'"'container.cpu.utilization'"'"' GROUP BY "service.name" ORDER BY cpu DESC LIMIT 10' 6 8 6 4
+    # NO TILES BY DEFAULT, deliberately.
+    #
+    # Tiles created over the API render as "Something went wrong" in the SPA, and
+    # the API cannot say why: Parseable's model is
+    #
+    #     pub struct Tile { pub tile_id: Ulid,
+    #                       #[serde(flatten)] pub other_fields: Option<Map<..>> }
+    #
+    # — every field but tile_id is an unvalidated passthrough, so a malformed
+    # tile is accepted with HTTP 200 and only fails in the browser. Verified by
+    # bisect against the running instance: a dashboard with NO tiles renders
+    # perfectly, so the dashboard object is fine and the TILES are what break it.
+    # Chart types the UI actually offers are Line/Bar/Area/Pie/Donut/Query
+    # value/Gauge/Table — "timeseries" is not among them, yet switching to "bar"
+    # and carrying a clean string chartQuery still fails, so the missing piece is
+    # not one field.
+    #
+    # Until the render contract is pinned down (a tile created through the UI,
+    # read back, and replicated exactly), the provisioner converges the DASHBOARD
+    # and leaves the tiling to the UI, which demonstrably works. Shipping tiles
+    # that crash the page is worse than shipping an empty canvas.
+    #
+    # To finish this: create one tile in the UI, then read
+    #   GET /api/v1/dashboards/{id}
+    # and copy that tile object verbatim into the calls below.
 }
 
 if wait_ready; then

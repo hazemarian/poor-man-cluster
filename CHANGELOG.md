@@ -59,6 +59,30 @@ Two changes that belong together, because the first caused the outage the second
   settings only mean anything if something pushes them. v0.2.185 shipped without that and flagged it as an
   open gap; v0.2.186 closes it — see below.
 
+## v0.2.194 (2026-10-16)
+
+**The provisioner stops creating dashboard tiles until the render contract is known.**
+
+Tiles created through the API render as *"Something went wrong"* in the SPA, and the API cannot detect it.
+Parseable's model is
+
+```rust
+pub struct Tile { pub tile_id: Ulid,
+                  #[serde(flatten)] pub other_fields: Option<Map<String, Value>> }
+```
+
+— everything but `tile_id` is an unvalidated passthrough, so a malformed tile is accepted with **HTTP 200**
+and fails only in the browser. Every "success" I reported from the API was compatible with a page that
+cannot draw.
+
+Established by bisect against the running instance: a dashboard with **no tiles renders perfectly**, so the
+dashboard object is fine and the tiles are the problem. The UI's chart vocabulary is
+Line/Bar/Area/Pie/Donut/Query value/Gauge/Table — `timeseries` is not in it — yet moving to `bar` with a
+clean string `chartQuery` still fails, so it is not a single missing field.
+
+The provisioner now converges the dashboard and leaves tiling to the UI, which demonstrably works. An empty
+canvas is a better outcome than one that crashes.
+
 ## v0.2.193 (2026-10-16)
 
 **The dashboard's tiles render, and its SQL is correct.**
