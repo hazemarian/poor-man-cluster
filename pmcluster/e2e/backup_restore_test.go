@@ -168,7 +168,7 @@ func TestBackupRestoreE2E(t *testing.T) {
 		"--domain=example.test",
 		"--cert="+certPath,
 		"--key="+keyPath,
-		"--openobserve-email=admin@example.test",
+		"--observability-admin-email=admin@example.test",
 	)
 	if code != 0 {
 		t.Fatalf("pmcluster cluster up exited %d:\n%s", code, upOut)

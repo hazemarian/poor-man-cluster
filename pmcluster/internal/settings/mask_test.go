@@ -11,7 +11,7 @@ func TestIsSecretKey(t *testing.T) {
 		{"backup_s3_secret_key", true},
 		{"sso_client_password", true},
 		{"api_token", true},
-		{"openobserve_credentials", true},
+		{"observability_credentials", true},
 		{"SSO_CLIENT_SECRET", true}, // case-insensitive
 		{"domain", false},
 		{"volume_root", false},

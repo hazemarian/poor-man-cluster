@@ -128,8 +128,8 @@ func TestUp_IncludesCertKeyAndCredentialSecrets(t *testing.T) {
 		t.Errorf("NewSecrets missing key_<hash>; got %v", res.NewSecrets)
 	}
 	wantSecrets := map[string]bool{
-		"admin_credentials":     false,
-		"zo_root_user_password": false,
+		"admin_credentials":            false,
+		"observability_admin_password": false,
 	}
 	for _, s := range res.NewSecrets {
 		if _, ok := wantSecrets[s]; ok {

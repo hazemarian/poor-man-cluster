@@ -50,6 +50,10 @@ type UpdateResult struct {
 	EdgeCreated    bool
 	EdgeDeployed   bool
 	StacksDeployed []string
+
+	// NamingMigration lists what the legacy-OpenObserve cleanup changed on this
+	// run (empty on a migrated or fresh cluster).
+	NamingMigration []string
 }
 
 // UpdateDeps are the collaborators Update needs to reconcile an existing
@@ -94,6 +98,8 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	)
 
 	wf := workflow.NewWorkflow(out)
+	var migrated []string
+
 	wf.Add("Preflight: Docker reachable, Swarm active", func(ctx context.Context) error {
 		return Preflight(ctx, deps.Docker)
 	})
@@ -200,42 +206,64 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil
 	})
 
-	wf.Add("Loading OpenObserve credentials", func(ctx context.Context) error {
-		ooCred, err := deps.Store.Credential(ctx, "openobserve_admin")
+	// Runs BEFORE the credential is loaded, so a cluster still holding the
+	// pre-Parseable names converges on this update instead of the load step
+	// failing. Idempotent: a migrated (or fresh) cluster is a no-op.
+	wf.Add("Migrating legacy observability naming", func(ctx context.Context) error {
+		rep, err := MigrateObservabilityNaming(ctx, deps.Store, deps.Docker)
 		if err != nil {
-			return fmt.Errorf("load openobserve_admin credential (run `cluster up` first): %w", err)
+			return err
 		}
-		ooPass, err := deps.Cipher.Decrypt(ooCred.PasswordCiphertext)
+		// The workflow has no output channel (steps report by name), so the
+		// detail rides out on UpdateResult for the CLI's summary block.
+		if rep.CredentialRenamed {
+			migrated = append(migrated, "credential openobserve_admin -> observability_admin (password preserved)")
+		}
+		for _, s := range rep.SettingsRenamed {
+			migrated = append(migrated, "setting "+s)
+		}
+		for _, s := range rep.SecretsRemoved {
+			migrated = append(migrated, "removed stale swarm secret "+s)
+		}
+		return nil
+	})
+
+	wf.Add("Loading observability credentials", func(ctx context.Context) error {
+		observCred, err := deps.Store.Credential(ctx, "observability_admin")
 		if err != nil {
-			return fmt.Errorf("decrypt openobserve_admin password: %w", err)
+			return fmt.Errorf("load observability_admin credential (run `cluster up` first): %w", err)
 		}
-		ooL, ooM, ooT := loadOORetention(ctx, deps.Store)
+		observPass, err := deps.Cipher.Decrypt(observCred.PasswordCiphertext)
+		if err != nil {
+			return fmt.Errorf("decrypt observability_admin password: %w", err)
+		}
+		logsDays, metricsDays, tracesDays := loadObservabilityRetention(ctx, deps.Store)
 		s3b := loadBackupS3(ctx, deps.Store)
 		objStore, objStoreErr := loadObjectStore(ctx, deps.Docker, deps.Store, deps.Cipher)
 		if objStoreErr != nil {
 			return objStoreErr
 		}
 		render = RenderInput{
-			Domain:                     domain,
-			ObservabilityAdminEmail:    ooCred.Username,
-			ObservabilityAdminPassword: string(ooPass),
-			ObservabilityBasicAuth:     observabilityBasicAuth(ooCred.Username, string(ooPass)),
-			ACMEEmail:                  state.ACMEEmail,
-			ConfigDir:                  in.ConfigDir,
-			ConfigStore:                deps.Store,
-			DataDir:                    filepath.Dir(in.ConfigDir),
-			VolumeRoot:                 effectiveVolumeRoot(deps.Store.SettingDefault(ctx, SettingVolumeRoot(), "")),
-			BackupDir:                  backupRootDir(),
-			EdgeImage:                  EdgeImageFor(),
-			EdgeLoginDisabled:          loadEdgeLoginDisabled(ctx, deps.Store),
-			BackupAllNodes:             loadBackupAllNodes(ctx, deps.Store),
-			BackupRetentionDays:        LoadBackupRetentionDays(ctx, deps.Store),
-			BackupCron:                 LoadBackupCron(ctx, deps.Store),
-			StorageNodeConstraint:      deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
-			StorageNodeLabel:           runtime.StorageNodeLabel,
-			PlatformNode:               loadPlatformNode(ctx, deps.Store),
-			ManagedSecretNames:         managedSecretNames(ctx, deps.Store),
-			OOLogsRetentionDays:        ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
+			Domain:                         domain,
+			ObservabilityAdminEmail:        observCred.Username,
+			ObservabilityAdminPassword:     string(observPass),
+			ObservabilityBasicAuth:         observabilityBasicAuth(observCred.Username, string(observPass)),
+			ACMEEmail:                      state.ACMEEmail,
+			ConfigDir:                      in.ConfigDir,
+			ConfigStore:                    deps.Store,
+			DataDir:                        filepath.Dir(in.ConfigDir),
+			VolumeRoot:                     effectiveVolumeRoot(deps.Store.SettingDefault(ctx, SettingVolumeRoot(), "")),
+			BackupDir:                      backupRootDir(),
+			EdgeImage:                      EdgeImageFor(),
+			EdgeLoginDisabled:              loadEdgeLoginDisabled(ctx, deps.Store),
+			BackupAllNodes:                 loadBackupAllNodes(ctx, deps.Store),
+			BackupRetentionDays:            LoadBackupRetentionDays(ctx, deps.Store),
+			BackupCron:                     LoadBackupCron(ctx, deps.Store),
+			StorageNodeConstraint:          deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
+			StorageNodeLabel:               runtime.StorageNodeLabel,
+			PlatformNode:                   loadPlatformNode(ctx, deps.Store),
+			ManagedSecretNames:             managedSecretNames(ctx, deps.Store),
+			ObservabilityLogsRetentionDays: logsDays, ObservabilityMetricsRetentionDays: metricsDays, ObservabilityTracesRetentionDays: tracesDays,
 			BackupS3:        s3b,
 			Store:           objStore,
 			SSOEnabled:      sso.Enabled,
@@ -729,6 +757,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	if err := wf.Run(ctx); err != nil {
 		return res, err
 	}
+	res.NamingMigration = migrated
 	return res, nil
 }
 
@@ -819,41 +848,41 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 	if domain == "" {
 		return nil, fmt.Errorf("no persisted domain found — run `cluster up` before requesting rendered configs")
 	}
-	ooCred, err := deps.Store.Credential(ctx, "openobserve_admin")
+	observCred, err := deps.Store.Credential(ctx, "observability_admin")
 	if err != nil {
-		return nil, fmt.Errorf("load openobserve_admin credential (run `cluster up` first): %w", err)
+		return nil, fmt.Errorf("load observability_admin credential (run `cluster up` first): %w", err)
 	}
-	ooPass, err := deps.Cipher.Decrypt(ooCred.PasswordCiphertext)
+	observPass, err := deps.Cipher.Decrypt(observCred.PasswordCiphertext)
 	if err != nil {
-		return nil, fmt.Errorf("decrypt openobserve_admin password: %w", err)
+		return nil, fmt.Errorf("decrypt observability_admin password: %w", err)
 	}
-	ooL, ooM, ooT := loadOORetention(ctx, deps.Store)
+	logsDays, metricsDays, tracesDays := loadObservabilityRetention(ctx, deps.Store)
 	s3b := loadBackupS3(ctx, deps.Store)
 	objStore, objStoreErr := loadObjectStore(ctx, deps.Docker, deps.Store, deps.Cipher)
 	if objStoreErr != nil {
 		return nil, objStoreErr
 	}
 	render := RenderInput{
-		Domain:                     domain,
-		ObservabilityAdminEmail:    ooCred.Username,
-		ObservabilityAdminPassword: string(ooPass),
-		ObservabilityBasicAuth:     observabilityBasicAuth(ooCred.Username, string(ooPass)),
-		ACMEEmail:                  state.ACMEEmail,
-		ConfigDir:                  in.ConfigDir,
-		ConfigStore:                deps.Store,
-		DataDir:                    filepath.Dir(in.ConfigDir),
-		VolumeRoot:                 effectiveVolumeRoot(deps.Store.SettingDefault(ctx, SettingVolumeRoot(), "")),
-		BackupDir:                  backupRootDir(),
-		EdgeImage:                  EdgeImageFor(),
-		EdgeLoginDisabled:          loadEdgeLoginDisabled(ctx, deps.Store),
-		BackupAllNodes:             loadBackupAllNodes(ctx, deps.Store),
-		BackupRetentionDays:        LoadBackupRetentionDays(ctx, deps.Store),
-		BackupCron:                 LoadBackupCron(ctx, deps.Store),
-		StorageNodeConstraint:      deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
-		StorageNodeLabel:           runtime.StorageNodeLabel,
-		PlatformNode:               loadPlatformNode(ctx, deps.Store),
-		ManagedSecretNames:         managedSecretNames(ctx, deps.Store),
-		OOLogsRetentionDays:        ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
+		Domain:                         domain,
+		ObservabilityAdminEmail:        observCred.Username,
+		ObservabilityAdminPassword:     string(observPass),
+		ObservabilityBasicAuth:         observabilityBasicAuth(observCred.Username, string(observPass)),
+		ACMEEmail:                      state.ACMEEmail,
+		ConfigDir:                      in.ConfigDir,
+		ConfigStore:                    deps.Store,
+		DataDir:                        filepath.Dir(in.ConfigDir),
+		VolumeRoot:                     effectiveVolumeRoot(deps.Store.SettingDefault(ctx, SettingVolumeRoot(), "")),
+		BackupDir:                      backupRootDir(),
+		EdgeImage:                      EdgeImageFor(),
+		EdgeLoginDisabled:              loadEdgeLoginDisabled(ctx, deps.Store),
+		BackupAllNodes:                 loadBackupAllNodes(ctx, deps.Store),
+		BackupRetentionDays:            LoadBackupRetentionDays(ctx, deps.Store),
+		BackupCron:                     LoadBackupCron(ctx, deps.Store),
+		StorageNodeConstraint:          deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
+		StorageNodeLabel:               runtime.StorageNodeLabel,
+		PlatformNode:                   loadPlatformNode(ctx, deps.Store),
+		ManagedSecretNames:             managedSecretNames(ctx, deps.Store),
+		ObservabilityLogsRetentionDays: logsDays, ObservabilityMetricsRetentionDays: metricsDays, ObservabilityTracesRetentionDays: tracesDays,
 		BackupS3: s3b,
 		Store:    objStore,
 	}

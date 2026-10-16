@@ -93,7 +93,7 @@ func init() {
 	clusterUpCmd.Flags().String("acme-email", "", "Let's Encrypt account email — Traefik issues + renews certs via HTTP-01")
 	clusterUpCmd.Flags().String("cert", "", "path to TLS certificate (PEM) — alternative to --acme-email")
 	clusterUpCmd.Flags().String("key", "", "path to TLS private key (PEM) — alternative to --acme-email")
-	clusterUpCmd.Flags().String("openobserve-email", "", "OpenObserve admin email (becomes admin login)")
+	clusterUpCmd.Flags().String("observability-admin-email", "", "observability admin email (becomes admin login)")
 	clusterUpCmd.Flags().String("traefik-admin-user", "admin", "username for the Traefik dashboard basic-auth")
 	clusterUpCmd.Flags().Bool("force-tls-mode", false, "allow switching TLS mode on an already-installed cluster (cert <-> acme)")
 	clusterUpCmd.Flags().String("swarm-advertise-addr", "", "advertise address passed to `docker swarm init` when this node is not yet in a Swarm (default: auto-detected node IP)")
@@ -248,6 +248,12 @@ func printUpdateResult(out io.Writer, res *cluster.UpdateResult) {
 		fmt.Fprintf(out, "  TLS cert secret        : %s %s\n", res.CertSecret, changedMarker(res.CertCreated))
 		fmt.Fprintf(out, "  TLS key secret         : %s %s\n", res.KeySecret, changedMarker(res.KeyCreated))
 	}
+	if len(res.NamingMigration) > 0 {
+		fmt.Fprintln(out, "  Legacy naming migrated :")
+		for _, m := range res.NamingMigration {
+			fmt.Fprintf(out, "    - %s\n", m)
+		}
+	}
 	fmt.Fprintf(out, "  Stacks re-deployed     : %v\n", res.StacksDeployed)
 	if len(res.StacksDeployed) == 0 {
 		fmt.Fprintln(out)
@@ -374,6 +380,12 @@ func printResetResult(out io.Writer, res *cluster.UpdateResult) {
 	if res.CertSecret != "" {
 		fmt.Fprintf(out, "  TLS cert secret        : %s\n", res.CertSecret)
 	}
+	if len(res.NamingMigration) > 0 {
+		fmt.Fprintln(out, "  Legacy naming migrated :")
+		for _, m := range res.NamingMigration {
+			fmt.Fprintf(out, "    - %s\n", m)
+		}
+	}
 	fmt.Fprintf(out, "  Stacks re-deployed     : %v\n", res.StacksDeployed)
 	fmt.Fprintln(out)
 }
@@ -395,7 +407,7 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 	in.ACMEEmail, _ = cmd.Flags().GetString("acme-email")
 	in.CertPath, _ = cmd.Flags().GetString("cert")
 	in.KeyPath, _ = cmd.Flags().GetString("key")
-	in.ObservabilityAdminEmail, _ = cmd.Flags().GetString("openobserve-email")
+	in.ObservabilityAdminEmail, _ = cmd.Flags().GetString("observability-admin-email")
 	in.TraefikAdminUser, _ = cmd.Flags().GetString("traefik-admin-user")
 	in.ForceTLSMode, _ = cmd.Flags().GetBool("force-tls-mode")
 	in.ConfigDir = cfg.ConfigDir()
@@ -478,7 +490,7 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 		in.Domain = st.SettingDefault(ctx, "domain", "")
 	}
 	if in.ObservabilityAdminEmail == "" {
-		in.ObservabilityAdminEmail = st.SettingDefault(ctx, "oo_admin_email", "")
+		in.ObservabilityAdminEmail = st.SettingDefault(ctx, "observability_admin_email", "")
 	}
 	if in.TraefikAdminUser == "" {
 		in.TraefikAdminUser = st.SettingDefault(ctx, cluster.SettingTraefikAdminUser(), "admin")
@@ -572,7 +584,7 @@ func printUpResult(out io.Writer, in cluster.UpInput, res *cluster.UpResult) {
 		fmt.Fprintln(out, "🔑 BOOTSTRAP CREDENTIALS — save these somewhere safe")
 		fmt.Fprintln(out, "════════════════════════════════════════════════════════════════════")
 		fmt.Fprintln(out)
-		order := []string{"traefik_dashboard", "openobserve_admin"}
+		order := []string{"traefik_dashboard", "observability_admin"}
 		for _, name := range order {
 			c := res.BootstrapCredentials[name]
 			if c == nil {

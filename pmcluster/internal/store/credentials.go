@@ -63,6 +63,20 @@ func (s *Store) InsertCredential(ctx context.Context, c *ManagedCredential) erro
 	return nil
 }
 
+// DeleteCredential removes a credential row. Used by the naming migration, which
+// re-inserts the row under its new name first so a failure can never lose the
+// ciphertext. Returns ErrCredentialNotFound if the row is already gone.
+func (s *Store) DeleteCredential(ctx context.Context, name string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM managed_credentials WHERE name = ?`, name)
+	if err != nil {
+		return fmt.Errorf("delete credential %s: %w", name, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrCredentialNotFound
+	}
+	return nil
+}
+
 // RotateCredential replaces the ciphertext for an existing credential and
 // stamps rotated_at. Returns ErrCredentialNotFound if the row doesn't exist.
 func (s *Store) RotateCredential(ctx context.Context, name string, newCiphertext []byte) error {

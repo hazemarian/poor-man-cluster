@@ -62,7 +62,7 @@ func init() {
 	setupCmd.Flags().String("acme-email", "", "Let's Encrypt contact email (enables ACME)")
 	setupCmd.Flags().String("cert", "", "operator-supplied TLS certificate PEM path")
 	setupCmd.Flags().String("key", "", "operator-supplied TLS key PEM path")
-	setupCmd.Flags().String("openobserve-email", "", "OpenObserve admin email (default admin@<domain>)")
+	setupCmd.Flags().String("observability-admin-email", "", "observability admin email (default admin@<domain>)")
 	setupCmd.Flags().String("traefik-admin-user", "", "Traefik dashboard admin user")
 	setupCmd.Flags().Bool("sso-enabled", false, "enable GitHub SSO via OAuth2 proxy (default: $PMCLUSTER_SSO_ENABLED)")
 	setupCmd.Flags().String("sso-client-id", "", "GitHub OAuth app client ID (SSO; default: $PMCLUSTER_SSO_CLIENT_ID)")
@@ -93,12 +93,12 @@ func init() {
 
 // setupAnswers is the collected wizard state.
 type setupAnswers struct {
-	Domain           string
-	ACMEEmail        string
-	CertPath         string
-	KeyPath          string
-	OpenObserveEmail string
-	TraefikAdminUser string
+	Domain                  string
+	ACMEEmail               string
+	CertPath                string
+	KeyPath                 string
+	ObservabilityAdminEmail string
+	TraefikAdminUser        string
 
 	SSOEnabled      bool
 	SSOProvider     string
@@ -113,15 +113,15 @@ type setupAnswers struct {
 	VolumeRoot     string
 	BackupAllNodes bool
 
-	BackupRetentionDays    string
-	OOLogsRetentionDays    string
-	OOMetricsRetentionDays string
-	OOTracesRetentionDays  string
-	BackupS3Endpoint       string
-	BackupS3Bucket         string
-	BackupS3AccessKey      string
-	BackupS3SecretKey      string
-	BackupS3Region         string
+	BackupRetentionDays               string
+	ObservabilityLogsRetentionDays    string
+	ObservabilityMetricsRetentionDays string
+	ObservabilityTracesRetentionDays  string
+	BackupS3Endpoint                  string
+	BackupS3Bucket                    string
+	BackupS3AccessKey                 string
+	BackupS3SecretKey                 string
+	BackupS3Region                    string
 	// BackupStoreOn is where the in-cluster backup store (SeaweedFS) runs:
 	// "leader" or "worker". Empty means worker/auto (back-compat).
 	BackupStoreOn string
@@ -258,7 +258,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 			a.CertPath = ask(r, out, "TLS certificate PEM path", "")
 			a.KeyPath = ask(r, out, "TLS key PEM path", "")
 		}
-		a.OpenObserveEmail = defaultOOEmail(a.Domain)
+		a.ObservabilityAdminEmail = defaultOOEmail(a.Domain)
 		a.TraefikAdminUser = ask(r, out, "Traefik admin user", "admin")
 		a.SSOEnabled = askYesNo(r, out, "Enable SSO (GitHub)?", st.SettingDefault(ctx, cluster.SettingSSOEnabled(), "") == "true")
 		if a.SSOEnabled {
@@ -273,9 +273,9 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.VolumeRoot = ask(r, out, "Container volume root dir", st.SettingDefault(ctx, cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot))
 		a.BackupAllNodes = askYesNo(r, out, "Run backup agent on every node?", false)
 		a.BackupRetentionDays = ask(r, out, "Backup retention (days)", st.SettingDefault(ctx, cluster.SettingBackupRetentionDays(), "15"))
-		a.OOLogsRetentionDays = ask(r, out, "OpenObserve log retention (days)", st.SettingDefault(ctx, cluster.SettingOOLogsRetentionDays(), "7"))
-		a.OOMetricsRetentionDays = ask(r, out, "OpenObserve metric retention (days)", st.SettingDefault(ctx, cluster.SettingOOMetricsRetentionDays(), "7"))
-		a.OOTracesRetentionDays = ask(r, out, "OpenObserve trace retention (days)", st.SettingDefault(ctx, cluster.SettingOOTracesRetentionDays(), "7"))
+		a.ObservabilityLogsRetentionDays = ask(r, out, "OpenObserve log retention (days)", st.SettingDefault(ctx, cluster.SettingObservabilityLogsRetentionDays(), "7"))
+		a.ObservabilityMetricsRetentionDays = ask(r, out, "OpenObserve metric retention (days)", st.SettingDefault(ctx, cluster.SettingObservabilityMetricsRetentionDays(), "7"))
+		a.ObservabilityTracesRetentionDays = ask(r, out, "OpenObserve trace retention (days)", st.SettingDefault(ctx, cluster.SettingObservabilityTracesRetentionDays(), "7"))
 		if askYesNo(r, out, "Upload backups offsite (S3/R2)?", st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), "") != "") {
 			a.BackupS3Endpoint = ask(r, out, "S3-compatible endpoint (R2: https://<account>.r2.cloudflarestorage.com)", st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""))
 			a.BackupS3Bucket = ask(r, out, "S3 bucket name", st.SettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""))
@@ -301,10 +301,10 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.ACMEEmail, _ = cmd.Flags().GetString("acme-email")
 		a.CertPath, _ = cmd.Flags().GetString("cert")
 		a.KeyPath, _ = cmd.Flags().GetString("key")
-		a.OpenObserveEmail, _ = cmd.Flags().GetString("openobserve-email")
-		if a.OpenObserveEmail == "" {
+		a.ObservabilityAdminEmail, _ = cmd.Flags().GetString("observability-admin-email")
+		if a.ObservabilityAdminEmail == "" {
 			// Hidden behind the admin-auth/SSO gate — no need to prompt.
-			a.OpenObserveEmail = defaultOOEmail(a.Domain)
+			a.ObservabilityAdminEmail = defaultOOEmail(a.Domain)
 		}
 		a.TraefikAdminUser, _ = cmd.Flags().GetString("traefik-admin-user")
 		a.SSOEnabled, _ = cmd.Flags().GetBool("sso-enabled")
@@ -317,9 +317,9 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.VolumeRoot, _ = cmd.Flags().GetString("volume-root")
 		a.BackupAllNodes, _ = cmd.Flags().GetBool("backup-all-nodes")
 		a.BackupRetentionDays, _ = cmd.Flags().GetString("backup-retention-days")
-		a.OOLogsRetentionDays, _ = cmd.Flags().GetString("oo-logs-retention-days")
-		a.OOMetricsRetentionDays, _ = cmd.Flags().GetString("oo-metrics-retention-days")
-		a.OOTracesRetentionDays, _ = cmd.Flags().GetString("oo-traces-retention-days")
+		a.ObservabilityLogsRetentionDays, _ = cmd.Flags().GetString("oo-logs-retention-days")
+		a.ObservabilityMetricsRetentionDays, _ = cmd.Flags().GetString("oo-metrics-retention-days")
+		a.ObservabilityTracesRetentionDays, _ = cmd.Flags().GetString("oo-traces-retention-days")
 		a.BackupS3Endpoint, _ = cmd.Flags().GetString("backup-s3-endpoint")
 		a.BackupS3Bucket, _ = cmd.Flags().GetString("backup-s3-bucket")
 		a.BackupS3AccessKey, _ = cmd.Flags().GetString("backup-s3-access-key")
@@ -463,7 +463,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	in.ACMEEmail = a.ACMEEmail
 	in.CertPath = a.CertPath
 	in.KeyPath = a.KeyPath
-	in.ObservabilityAdminEmail = a.OpenObserveEmail
+	in.ObservabilityAdminEmail = a.ObservabilityAdminEmail
 	in.TraefikAdminUser = a.TraefikAdminUser
 	in.ConfigDir = cfg.ConfigDir()
 	in.SwarmAdvertiseAddr = a.SwarmAdvertiseAddr
@@ -499,27 +499,27 @@ func envBool(v string) bool {
 // UpInput and persists them itself.
 func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswers) error {
 	setting := map[string]string{
-		cluster.SettingSSOEnabled():             boolSetting(a.SSOEnabled),
-		cluster.SettingSSOProvider():            a.SSOProvider,
-		cluster.SettingSSOClientID():            a.SSOClientID,
-		cluster.SettingSSOClientSecret():        a.SSOClientSecret,
-		cluster.SettingSSOGitHubOrg():           a.SSOGitHubOrg,
-		cluster.SettingSSOGitHubRepos():         a.SSOGitHubRepos,
-		cluster.SettingSSOCookieExpire():        a.SSOCookieExpire,
-		cluster.SettingEdgeLoginDisabled():      boolSetting(!a.EdgeLoginEnabled),
-		cluster.SettingVolumeRoot():             a.VolumeRoot,
-		cluster.SettingBackupAllNodes():         boolSetting(a.BackupAllNodes),
-		cluster.SettingBackupRetentionDays():    a.BackupRetentionDays,
-		cluster.SettingOOLogsRetentionDays():    a.OOLogsRetentionDays,
-		cluster.SettingOOMetricsRetentionDays(): a.OOMetricsRetentionDays,
-		cluster.SettingOOTracesRetentionDays():  a.OOTracesRetentionDays,
-		cluster.SettingBackupS3Endpoint():       a.BackupS3Endpoint,
-		cluster.SettingBackupS3Bucket():         a.BackupS3Bucket,
-		cluster.SettingBackupS3AccessKey():      a.BackupS3AccessKey,
-		cluster.SettingBackupS3SecretKey():      a.BackupS3SecretKey,
-		cluster.SettingBackupS3Region():         a.BackupS3Region,
-		cluster.SettingBackupStoreOn():          a.BackupStoreOn,
-		cluster.SettingStorageFailover():        boolSetting(a.StorageFailover),
+		cluster.SettingSSOEnabled():                        boolSetting(a.SSOEnabled),
+		cluster.SettingSSOProvider():                       a.SSOProvider,
+		cluster.SettingSSOClientID():                       a.SSOClientID,
+		cluster.SettingSSOClientSecret():                   a.SSOClientSecret,
+		cluster.SettingSSOGitHubOrg():                      a.SSOGitHubOrg,
+		cluster.SettingSSOGitHubRepos():                    a.SSOGitHubRepos,
+		cluster.SettingSSOCookieExpire():                   a.SSOCookieExpire,
+		cluster.SettingEdgeLoginDisabled():                 boolSetting(!a.EdgeLoginEnabled),
+		cluster.SettingVolumeRoot():                        a.VolumeRoot,
+		cluster.SettingBackupAllNodes():                    boolSetting(a.BackupAllNodes),
+		cluster.SettingBackupRetentionDays():               a.BackupRetentionDays,
+		cluster.SettingObservabilityLogsRetentionDays():    a.ObservabilityLogsRetentionDays,
+		cluster.SettingObservabilityMetricsRetentionDays(): a.ObservabilityMetricsRetentionDays,
+		cluster.SettingObservabilityTracesRetentionDays():  a.ObservabilityTracesRetentionDays,
+		cluster.SettingBackupS3Endpoint():                  a.BackupS3Endpoint,
+		cluster.SettingBackupS3Bucket():                    a.BackupS3Bucket,
+		cluster.SettingBackupS3AccessKey():                 a.BackupS3AccessKey,
+		cluster.SettingBackupS3SecretKey():                 a.BackupS3SecretKey,
+		cluster.SettingBackupS3Region():                    a.BackupS3Region,
+		cluster.SettingBackupStoreOn():                     a.BackupStoreOn,
+		cluster.SettingStorageFailover():                   boolSetting(a.StorageFailover),
 	}
 	for k, v := range setting {
 		if err := st.SetSetting(ctx, k, v); err != nil {
@@ -532,30 +532,30 @@ func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswer
 // persistSetup writes every collected answer into the store settings.
 func persistSetup(ctx context.Context, st *store.Store, a setupAnswers) error {
 	setting := map[string]string{
-		cluster.SettingDomain():                 a.Domain,
-		cluster.SettingOOEmail():                a.OpenObserveEmail,
-		cluster.SettingTraefikAdminUser():       a.TraefikAdminUser,
-		cluster.SettingSSOEnabled():             boolSetting(a.SSOEnabled),
-		cluster.SettingSSOProvider():            a.SSOProvider,
-		cluster.SettingSSOClientID():            a.SSOClientID,
-		cluster.SettingSSOClientSecret():        a.SSOClientSecret,
-		cluster.SettingSSOGitHubOrg():           a.SSOGitHubOrg,
-		cluster.SettingSSOGitHubRepos():         a.SSOGitHubRepos,
-		cluster.SettingSSOCookieExpire():        a.SSOCookieExpire,
-		cluster.SettingEdgeLoginDisabled():      boolSetting(!a.EdgeLoginEnabled),
-		cluster.SettingVolumeRoot():             a.VolumeRoot,
-		cluster.SettingBackupAllNodes():         boolSetting(a.BackupAllNodes),
-		cluster.SettingBackupRetentionDays():    a.BackupRetentionDays,
-		cluster.SettingOOLogsRetentionDays():    a.OOLogsRetentionDays,
-		cluster.SettingOOMetricsRetentionDays(): a.OOMetricsRetentionDays,
-		cluster.SettingOOTracesRetentionDays():  a.OOTracesRetentionDays,
-		cluster.SettingBackupS3Endpoint():       a.BackupS3Endpoint,
-		cluster.SettingBackupS3Bucket():         a.BackupS3Bucket,
-		cluster.SettingBackupS3AccessKey():      a.BackupS3AccessKey,
-		cluster.SettingBackupS3SecretKey():      a.BackupS3SecretKey,
-		cluster.SettingBackupS3Region():         a.BackupS3Region,
-		cluster.SettingBackupStoreOn():          a.BackupStoreOn,
-		cluster.SettingStorageFailover():        boolSetting(a.StorageFailover),
+		cluster.SettingDomain():                            a.Domain,
+		cluster.SettingOOEmail():                           a.ObservabilityAdminEmail,
+		cluster.SettingTraefikAdminUser():                  a.TraefikAdminUser,
+		cluster.SettingSSOEnabled():                        boolSetting(a.SSOEnabled),
+		cluster.SettingSSOProvider():                       a.SSOProvider,
+		cluster.SettingSSOClientID():                       a.SSOClientID,
+		cluster.SettingSSOClientSecret():                   a.SSOClientSecret,
+		cluster.SettingSSOGitHubOrg():                      a.SSOGitHubOrg,
+		cluster.SettingSSOGitHubRepos():                    a.SSOGitHubRepos,
+		cluster.SettingSSOCookieExpire():                   a.SSOCookieExpire,
+		cluster.SettingEdgeLoginDisabled():                 boolSetting(!a.EdgeLoginEnabled),
+		cluster.SettingVolumeRoot():                        a.VolumeRoot,
+		cluster.SettingBackupAllNodes():                    boolSetting(a.BackupAllNodes),
+		cluster.SettingBackupRetentionDays():               a.BackupRetentionDays,
+		cluster.SettingObservabilityLogsRetentionDays():    a.ObservabilityLogsRetentionDays,
+		cluster.SettingObservabilityMetricsRetentionDays(): a.ObservabilityMetricsRetentionDays,
+		cluster.SettingObservabilityTracesRetentionDays():  a.ObservabilityTracesRetentionDays,
+		cluster.SettingBackupS3Endpoint():                  a.BackupS3Endpoint,
+		cluster.SettingBackupS3Bucket():                    a.BackupS3Bucket,
+		cluster.SettingBackupS3AccessKey():                 a.BackupS3AccessKey,
+		cluster.SettingBackupS3SecretKey():                 a.BackupS3SecretKey,
+		cluster.SettingBackupS3Region():                    a.BackupS3Region,
+		cluster.SettingBackupStoreOn():                     a.BackupStoreOn,
+		cluster.SettingStorageFailover():                   boolSetting(a.StorageFailover),
 	}
 	for k, v := range setting {
 		if err := st.SetSetting(ctx, k, v); err != nil {

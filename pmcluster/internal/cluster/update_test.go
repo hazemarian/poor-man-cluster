@@ -608,7 +608,7 @@ func TestUpdate_PasswordRotationRedeploysObservabilityAndInfra(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	if err := deps.Store.RotateCredential(ctx, "openobserve_admin", ct); err != nil {
+	if err := deps.Store.RotateCredential(ctx, "observability_admin", ct); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
 
@@ -694,10 +694,10 @@ func TestUpdate_TLSNotACMEWithoutCertPathsErrorsIfNoACMEEmail(t *testing.T) {
 		t.Fatalf("encrypt: %v", err)
 	}
 	if err := s.InsertCredential(ctx, &store.ManagedCredential{
-		Name: "openobserve_admin", Kind: string(KindOpenObserve),
+		Name: "observability_admin", Kind: string(KindObservability),
 		Username: "ops@example.com", PasswordCiphertext: ct,
 	}); err != nil {
-		t.Fatalf("insert openobserve_admin: %v", err)
+		t.Fatalf("insert observability_admin: %v", err)
 	}
 
 	cfgDir := filepath.Join(dir, "config")
@@ -752,10 +752,10 @@ func TestUpdate_ACMEModeDoesNotRequireCertPaths(t *testing.T) {
 		t.Fatalf("encrypt: %v", err)
 	}
 	if err := s.InsertCredential(ctx, &store.ManagedCredential{
-		Name: "openobserve_admin", Kind: string(KindOpenObserve),
+		Name: "observability_admin", Kind: string(KindObservability),
 		Username: "ops@example.com", PasswordCiphertext: ct,
 	}); err != nil {
-		t.Fatalf("insert openobserve_admin: %v", err)
+		t.Fatalf("insert observability_admin: %v", err)
 	}
 
 	cfgDir := filepath.Join(dir, "config")
@@ -1052,18 +1052,18 @@ func TestUpdate_RepairsMissingRenderedSecretMount(t *testing.T) {
 	ctx := context.Background()
 
 	f := deps.Docker.(*fakeDocker)
-	if err := deps.Docker.SecretRemove(ctx, "zo_root_user_password"); err != nil {
-		t.Fatalf("remove zo_root_user_password: %v", err)
+	if err := deps.Docker.SecretRemove(ctx, "observability_admin_password"); err != nil {
+		t.Fatalf("remove observability_admin_password: %v", err)
 	}
-	if _, ok := f.secrets["zo_root_user_password"]; ok {
-		t.Fatal("fixture: zo_root_user_password still present after remove")
+	if _, ok := f.secrets["observability_admin_password"]; ok {
+		t.Fatal("fixture: observability_admin_password still present after remove")
 	}
 
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if _, ok := f.secrets["zo_root_user_password"]; !ok {
-		t.Fatal("the rendered zo_root_user_password mount was not repaired by update")
+	if _, ok := f.secrets["observability_admin_password"]; !ok {
+		t.Fatal("the rendered observability_admin_password mount was not repaired by update")
 	}
 }
 

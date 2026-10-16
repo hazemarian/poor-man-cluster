@@ -404,7 +404,7 @@ var clusterSettingKeys = []string{
 	"sso_cookie_expire",
 	"edge_login_disabled",
 	"domain",
-	"oo_admin_email",
+	"observability_admin_email",
 	"traefik_admin_user",
 }
 

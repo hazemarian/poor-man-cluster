@@ -83,7 +83,7 @@ func TestBootstrap_ReturnsAllCredentials(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 	wantNames := []string{
-		"traefik_dashboard", "openobserve_admin",
+		"traefik_dashboard", "observability_admin",
 		"edge_admin", "edge_ui_secret", "edge_api_token",
 	}
 	for _, name := range wantNames {
@@ -223,14 +223,14 @@ func TestBootstrap_OpenObserveSecretIsPlaintext(t *testing.T) {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 
-	ooCred := creds["openobserve_admin"]
-	ooSpec, ok := f.secrets["zo_root_user_password"]
+	observCred := creds["observability_admin"]
+	observSpec, ok := f.secrets["observability_admin_password"]
 	if !ok {
-		t.Fatal("zo_root_user_password secret not found in fake docker")
+		t.Fatal("observability_admin_password secret not found in fake docker")
 	}
-	if string(ooSpec.Data) != ooCred.Password {
+	if string(observSpec.Data) != observCred.Password {
 		t.Errorf("openobserve secret payload = %q, want plaintext password %q",
-			ooSpec.Data, ooCred.Password)
+			observSpec.Data, observCred.Password)
 	}
 }
 
@@ -247,11 +247,11 @@ func TestBootstrap_LostDBRecovery(t *testing.T) {
 		Data   []byte
 		Labels map[string]string
 	}{Name: "admin_credentials", Data: []byte("admin:oldhash\n")}
-	f.secrets["zo_root_user_password"] = struct {
+	f.secrets["observability_admin_password"] = struct {
 		Name   string
 		Data   []byte
 		Labels map[string]string
-	}{Name: "zo_root_user_password", Data: []byte("oldoopass")}
+	}{Name: "observability_admin_password", Data: []byte("oldoopass")}
 	f.secrets["zo_root_user_token"] = struct {
 		Name   string
 		Data   []byte
@@ -533,24 +533,24 @@ func TestRotate_SyncsDbSecret(t *testing.T) {
 	mgr, f, _ := bootstrapForRotate(t)
 	ctx := context.Background()
 
-	orig, err := mgr.Store.Credential(ctx, "openobserve_admin")
+	orig, err := mgr.Store.Credential(ctx, "observability_admin")
 	if err != nil {
 		t.Fatalf("Credential: %v", err)
 	}
 
-	if _, err := mgr.Store.CreateSecret(ctx, "cluster", "", "zo_root_user_password",
+	if _, err := mgr.Store.CreateSecret(ctx, "cluster", "", "observability_admin_password",
 		orig.PasswordCiphertext, store.SecretHash("old-password")); err != nil {
 		t.Fatalf("CreateSecret: %v", err)
 	}
 
-	oldSecretData := f.secrets["zo_root_user_password"].Data
+	oldSecretData := f.secrets["observability_admin_password"].Data
 
-	newCred, err := mgr.Rotate(ctx, "openobserve_admin")
+	newCred, err := mgr.Rotate(ctx, "observability_admin")
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
 
-	cred, err := mgr.Store.Credential(ctx, "openobserve_admin")
+	cred, err := mgr.Store.Credential(ctx, "observability_admin")
 	if err != nil {
 		t.Fatalf("Credential after Rotate: %v", err)
 	}
@@ -562,7 +562,7 @@ func TestRotate_SyncsDbSecret(t *testing.T) {
 		t.Errorf("credential password = %q, want %q", plain, newCred.Password)
 	}
 
-	sec, err := mgr.Store.Secret(ctx, "zo_root_user_password")
+	sec, err := mgr.Store.Secret(ctx, "observability_admin_password")
 	if err != nil {
 		t.Fatalf("Secret: %v", err)
 	}
@@ -579,8 +579,8 @@ func TestRotate_SyncsDbSecret(t *testing.T) {
 
 	// The NEW value lives under a fresh content-addressed swarm secret; the old
 	// fixed-name secret is untouched.
-	if string(f.secrets["zo_root_user_password"].Data) != string(oldSecretData) {
-		t.Error("the old zo_root_user_password swarm secret must be unchanged after Rotate")
+	if string(f.secrets["observability_admin_password"].Data) != string(oldSecretData) {
+		t.Error("the old observability_admin_password swarm secret must be unchanged after Rotate")
 	}
 	if _, ok := f.secrets[newCred.SwarmSecretName]; !ok {
 		t.Fatalf("the new swarm secret %s must exist after Rotate", newCred.SwarmSecretName)

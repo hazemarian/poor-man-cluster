@@ -95,7 +95,7 @@ decrypted, read the plaintext from a container that still mounts it
 
    printf '%s' '<value>' | pmcluster secret edit <name>
 
-Managed credentials (traefik_dashboard, openobserve_admin, …) are healed by
+Managed credentials (traefik_dashboard, observability_admin, …) are healed by
 'pmcluster cluster update', not by this command.`,
 	Args: cobra.NoArgs,
 	RunE: runSecretHeal,

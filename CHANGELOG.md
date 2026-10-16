@@ -59,6 +59,30 @@ Two changes that belong together, because the first caused the outage the second
   settings only mean anything if something pushes them. v0.2.185 shipped without that and flagged it as an
   open gap; v0.2.186 closes it — see below.
 
+## v0.2.191 (2026-10-16)
+
+**OpenObserve naming is gone, labels follow the OTel convention, and provisioning now includes a dashboard.**
+
+- **Every OO-era name is renamed, with a migration.** The managed credential becomes
+  `observability_admin` / kind `observability` / Swarm secret `observability_admin_password`; the settings
+  become `observability_admin_email` and `observability_{logs,metrics,traces}_retention_days`; the CLI flag
+  becomes `--observability-admin-email`. The gateway step in `cluster update` **carries the password over
+  untouched** — the running Parseable, the collector's exporter, the injection middleware and the sign-in
+  bridge all authenticate with that exact value — and it removes the three orphaned
+  `zo_root_user_password*` secrets. Idempotent, so it is safe on every update.
+- **Telemetry labels are dot-separated**, matching the OTel semantic convention and the resource processor
+  that already used `service.name`/`stack.name`. docker_stats emitted `service_name`/`stack_name`/
+  `swarm_node_id`, so a metric's attribute and its own resource disagreed on the name of the same thing.
+- **The retention one-shot becomes a provisioner** (`observability_provision`, config
+  `pmcluster_observability_provision`) that converges per-stream retention **and** creates the platform
+  dashboard with five tiles — log volume, errors by service, memory, memory percent and network received.
+  Same mechanism as retention, same reason: Parseable exposes dashboards only through its API, and the call
+  belongs inside the swarm network rather than the host.
+- Dashboard API contract, established against the running build: `POST /api/v1/dashboards` with just
+  `{"title": …}` creates one and returns `dashboardId`; `PUT /api/v1/dashboards/{id}/add_tile` takes the
+  **tile itself** as the body (not wrapped), needs `tile_id`, and is `PUT` — `POST` answers 405. Queries
+  must JSON-escape their double-quoted identifiers or the API answers 400.
+
 ## v0.2.190 (2026-10-16)
 
 **The identity headers the platform claimed to forward are actually forwarded now.**

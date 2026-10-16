@@ -111,7 +111,7 @@ type RenderInput struct {
 	// ObservabilityBasicAuth is the "Basic base64(email:password)" header value
 	// for the OpenObserve ROOT admin user — the same credentials OpenObserve
 	// itself runs with (ZO_ROOT_USER_EMAIL / ZO_ROOT_USER_PASSWORD, from the
-	// openobserve_admin managed credential + the zo_root_user_password Swarm
+	// observability_admin managed credential + the observability_admin_password Swarm
 	// secret). It authenticates the OTel collector's ingestion
 	// (openobserve:5081) AND the Traefik openobserve-auto-auth middleware, so
 	// one password everywhere — no provisioning API calls.
@@ -175,14 +175,14 @@ type RenderInput struct {
 	// `config(pmcluster_traefik_dynamic)` in compose files.
 	TraefikConfigName string
 
-	// ParseableRetentionConfigName is the versioned Docker config name for the
+	// ObservabilityProvisionConfigName is the versioned Docker config name for the
 	// one-shot retention script that runs inside the swarm network. Resolved
-	// from `config(pmcluster_parseable_retention)` in compose files.
+	// from `config(pmcluster_observability_provision)` in compose files.
 	//
 	// Without this field the compose writer cannot map the logical name to the
 	// versioned config the run actually created, so it emits the bare logical
 	// name and `docker stack deploy` fails with "config not found".
-	ParseableRetentionConfigName string
+	ObservabilityProvisionConfigName string
 
 	// CertSecretName is the versioned Swarm secret name for the TLS
 	// certificate (e.g. cert_v001). Resolved from `secrets(cert)`.
@@ -272,13 +272,13 @@ type RenderInput struct {
 	// are stateful too.
 	PlatformNode string
 
-	// OOLogsRetentionDays / OOMetricsRetentionDays / OOTracesRetentionDays
+	// ObservabilityLogsRetentionDays / ObservabilityMetricsRetentionDays / ObservabilityTracesRetentionDays
 	// bound how long OpenObserve keeps each stream type (rendered into
 	// ZO_LOGS/METRICS/TRACES_RETENTION_DAYS). Without a bound, a
 	// metrics-heavy cluster silently grows into hundreds of GB.
-	OOLogsRetentionDays    int
-	OOMetricsRetentionDays int
-	OOTracesRetentionDays  int
+	ObservabilityLogsRetentionDays    int
+	ObservabilityMetricsRetentionDays int
+	ObservabilityTracesRetentionDays  int
 
 	// BackupS3 is the offsite destination for cluster backups. When the
 	// in-cluster store is enabled, offen double-writes every archive to BOTH
@@ -366,9 +366,9 @@ type renderRefResolver struct {
 // configNameAliases maps a logical config() name to the RenderInput field
 // holding that config's versioned Docker config name.
 var configNameAliases = map[string]func(RenderInput) string{
-	"pmcluster_otel_config":         func(r RenderInput) string { return r.OTelConfigName },
-	"pmcluster_traefik_dynamic":     func(r RenderInput) string { return r.TraefikConfigName },
-	"pmcluster_parseable_retention": func(r RenderInput) string { return r.ParseableRetentionConfigName },
+	"pmcluster_otel_config":             func(r RenderInput) string { return r.OTelConfigName },
+	"pmcluster_traefik_dynamic":         func(r RenderInput) string { return r.TraefikConfigName },
+	"pmcluster_observability_provision": func(r RenderInput) string { return r.ObservabilityProvisionConfigName },
 }
 
 // secretNameAliases maps a logical secrets() name to the RenderInput field
@@ -381,7 +381,7 @@ var secretNameAliases = map[string]func(RenderInput) string{
 func (r *renderRefResolver) ResolveConfig(_ context.Context, _ string, name string) (string, error) {
 	fn, ok := configNameAliases[name]
 	if !ok {
-		return "", fmt.Errorf("resolve config(%s): no such platform config (known: pmcluster_otel_config, pmcluster_traefik_dynamic, pmcluster_parseable_retention)", name)
+		return "", fmt.Errorf("resolve config(%s): no such platform config (known: pmcluster_otel_config, pmcluster_traefik_dynamic, pmcluster_observability_provision)", name)
 	}
 	return fn(r.render), nil
 }
@@ -441,8 +441,8 @@ func (r *renderRefResolver) ResolveConfigPath(_ context.Context, _ string, name 
 		return "/etc/traefik/dynamic/conf.yml", nil
 	case "pmcluster_otel_config":
 		return "/etc/otel-collector-config.yaml", nil
-	case "pmcluster_parseable_retention":
-		return "/etc/pmcluster/parseable-retention.sh", nil
+	case "pmcluster_observability_provision":
+		return "/etc/pmcluster/observability-provision.sh", nil
 	default:
 		return refs.DefaultConfigMountPath(name), nil
 	}
@@ -599,14 +599,14 @@ func (r *otelRefResolver) ResolveSecretValue(_ context.Context, name string) (st
 }
 
 // RenderOTelCollectorConfig fills in the OpenObserve `Authorization: Basic <b64>`
-// RenderParseableRetentionScript returns the one-shot retention script.
+// RenderObservabilityProvisionScript returns the one-shot retention script.
 //
 // It is deliberately static: the retention day counts arrive as environment
 // variables from the stack template, so changing a setting changes the compose
 // env and the content-aware reconcile redeploys — there is nothing to
 // substitute into the script itself, and no credential ever lands in it.
-func RenderParseableRetentionScript(in RenderInput) ([]byte, error) {
-	body, err := readConfigFile("parseable-retention.sh", in)
+func RenderObservabilityProvisionScript(in RenderInput) ([]byte, error) {
+	body, err := readConfigFile("observability-provision.sh", in)
 	if err != nil {
 		return nil, err
 	}
@@ -617,7 +617,7 @@ func RenderParseableRetentionScript(in RenderInput) ([]byte, error) {
 // exporter's Authorization header is the ROOT admin basic auth
 // (Basic base64(<admin email>:<admin password>)) — the exact credentials
 // OpenObserve runs with (ZO_ROOT_USER_EMAIL / ZO_ROOT_USER_PASSWORD from the
-// openobserve_admin credential + zo_root_user_password Swarm secret), so the
+// observability_admin credential + observability_admin_password Swarm secret), so the
 // collector authenticates ingestion without any provisioning API calls.
 // OpenObserve accepts the root user's email:password on its OTLP endpoint.
 // The header is resolved via the shared secret(<name>) reference language

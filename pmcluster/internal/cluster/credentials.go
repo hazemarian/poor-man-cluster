@@ -21,9 +21,9 @@ const (
 	// KindTraefikAdmin marks credentials consumed by the Traefik ingress
 	// (the admin-auth basicAuth user).
 	KindTraefikAdmin CredentialKind = "traefik"
-	// KindOpenObserve marks credentials consumed by OpenObserve (the
-	// observability stack's admin account).
-	KindOpenObserve CredentialKind = "openobserve"
+	// KindObservability marks credentials consumed by the observability backend
+	// (the Parseable admin account).
+	KindObservability CredentialKind = "observability"
 	// KindEdge marks credentials consumed by the pmcluster-edge console (the
 	// operator UI). Unlike the other kinds these are never force-restarted by
 	// rotate: the console persists them once, so Swarm secrets only matter for
@@ -35,6 +35,14 @@ const (
 	// KindBackup marks credentials consumed by the backup stack's SeaweedFS
 	// store (the S3-compatible object store holding cluster backups in-cluster).
 	KindBackup CredentialKind = "backup"
+)
+
+// Names for the observability backend's managed credential. Single source of
+// truth: the bootstrap spec below and the naming migration both reference these,
+// so the credential and its Swarm secret cannot drift apart.
+const (
+	observabilityCredentialName = "observability_admin"
+	observabilitySecretBase     = "observability_admin_password"
 )
 
 // ManagedCredential is the in-memory shape of a bootstrap credential. The
@@ -70,10 +78,10 @@ type CredentialsManager struct {
 // mounts its secret. Names are "<stack>_<service>" — what `docker stack
 // deploy` produces. Keep in sync with the bundled stacks.
 var consumingService = map[string]string{
-	"traefik_dashboard": "infra_traefik",
-	"openobserve_admin": "observability_parseable",
-	"sso_cookie_secret": "sso_oauth2-proxy",
-	"seaweedfs_admin":   "backup_seaweedfs",
+	"traefik_dashboard":   "infra_traefik",
+	"observability_admin": "observability_parseable",
+	"sso_cookie_secret":   "sso_oauth2-proxy",
+	"seaweedfs_admin":     "backup_seaweedfs",
 }
 
 // Bootstrap ensures every bundled component has a credential. Idempotent:
@@ -85,17 +93,17 @@ func (m *CredentialsManager) Bootstrap(ctx context.Context, in BootstrapInput) (
 		in.TraefikAdminUser = "admin"
 	}
 	if in.ObservabilityAdminEmail == "" {
-		return nil, fmt.Errorf("OpenObserve admin email is required (use --openobserve-email or set in config)")
+		return nil, fmt.Errorf("observability admin email is required (use --observability-admin-email or set in config)")
 	}
 
 	usernameFor := map[string]string{
-		"traefik_dashboard": in.TraefikAdminUser,
-		"openobserve_admin": in.ObservabilityAdminEmail,
-		"edge_admin":        "admin",
-		"edge_ui_secret":    "session",
-		"edge_api_token":    "edge",
-		"sso_cookie_secret": "sso",
-		"seaweedfs_admin":   "pmclusterbackup",
+		"traefik_dashboard":   in.TraefikAdminUser,
+		"observability_admin": in.ObservabilityAdminEmail,
+		"edge_admin":          "admin",
+		"edge_ui_secret":      "session",
+		"edge_api_token":      "edge",
+		"sso_cookie_secret":   "sso",
+		"seaweedfs_admin":     "pmclusterbackup",
 	}
 	specs := bootstrapSpecs()
 	for i := range specs {
@@ -125,13 +133,13 @@ func (m *CredentialsManager) Ensure(ctx context.Context, name string) (*ManagedC
 		return nil, fmt.Errorf("ensure %s: no bootstrap spec for credential", name)
 	}
 	usernames := map[string]string{
-		"traefik_dashboard": "admin",
-		"openobserve_admin": "",
-		"edge_admin":        "admin",
-		"edge_ui_secret":    "session",
-		"edge_api_token":    "edge",
-		"sso_cookie_secret": "sso",
-		"seaweedfs_admin":   "pmclusterbackup",
+		"traefik_dashboard":   "admin",
+		"observability_admin": "",
+		"edge_admin":          "admin",
+		"edge_ui_secret":      "session",
+		"edge_api_token":      "edge",
+		"sso_cookie_secret":   "sso",
+		"seaweedfs_admin":     "pmclusterbackup",
 	}
 	spec.username = usernames[spec.name]
 	return m.ensure(ctx, spec)
@@ -212,7 +220,7 @@ func (m *CredentialsManager) ensure(ctx context.Context, spec bootstrapSpec) (*M
 			return nil, fmt.Errorf("decrypt %s: %w", spec.name, err)
 		}
 
-		if usernameChanged && spec.kind == KindOpenObserve {
+		if usernameChanged && spec.kind == KindObservability {
 			newPass, err := RandomPassword()
 			if err != nil {
 				return nil, fmt.Errorf("rotate password for %s: %w", spec.name, err)
@@ -239,7 +247,7 @@ func (m *CredentialsManager) ensure(ctx context.Context, spec bootstrapSpec) (*M
 			return nil, fmt.Errorf("ensure swarm secret %s: %w", existing.SwarmSecretName, err)
 		}
 
-		if usernameChanged && spec.kind != KindOpenObserve {
+		if usernameChanged && spec.kind != KindObservability {
 			if updateErr := m.Store.UpdateCredentialUsername(ctx, spec.name, username); updateErr != nil {
 				return nil, fmt.Errorf("update username for %s: %w", spec.name, updateErr)
 			}
@@ -416,9 +424,9 @@ func bootstrapSpecs() []bootstrapSpec {
 			// operator all keep using the SAME login. Consumers resolve it
 			// through secret(observability_admin_password) /
 			// secret(observability_basic_auth) at render time.
-			name:            "openobserve_admin",
-			kind:            KindOpenObserve,
-			swarmSecretName: "zo_root_user_password",
+			name:            observabilityCredentialName,
+			kind:            KindObservability,
+			swarmSecretName: observabilitySecretBase,
 			format:          formatPlain,
 		},
 

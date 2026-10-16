@@ -35,7 +35,7 @@ func RenderedConfigs() []RenderedConfig {
 	return []RenderedConfig{
 		{Logical: "pmcluster_otel_config", SnapshotKey: "otel-collector-config", Render: RenderOTelCollectorConfig},
 		{Logical: "pmcluster_traefik_dynamic", SnapshotKey: "traefik-dynamic", Render: RenderTraefikDynamic},
-		{Logical: "pmcluster_parseable_retention", SnapshotKey: "parseable-retention", Render: RenderParseableRetentionScript},
+		{Logical: "pmcluster_observability_provision", SnapshotKey: "observability-provision", Render: RenderObservabilityProvisionScript},
 	}
 }
 
@@ -67,8 +67,8 @@ func EnsureRenderedConfigs(ctx context.Context, d runtime.Client, render *Render
 			render.OTelConfigName = name
 		case "pmcluster_traefik_dynamic":
 			render.TraefikConfigName = name
-		case "pmcluster_parseable_retention":
-			render.ParseableRetentionConfigName = name
+		case "pmcluster_observability_provision":
+			render.ObservabilityProvisionConfigName = name
 		}
 	}
 	return outcomes, nil
@@ -96,6 +96,6 @@ func renderedConfigs() []RenderedConfig {
 	return []RenderedConfig{
 		{Logical: "pmcluster_otel_config", SnapshotKey: "otel-collector-config", Render: RenderOTelCollectorConfig},
 		{Logical: "pmcluster_traefik_dynamic", SnapshotKey: "traefik-dynamic", Render: RenderTraefikDynamic},
-		{Logical: "pmcluster_parseable_retention", SnapshotKey: "parseable-retention", Render: RenderParseableRetentionScript},
+		{Logical: "pmcluster_observability_provision", SnapshotKey: "observability-provision", Render: RenderObservabilityProvisionScript},
 	}
 }

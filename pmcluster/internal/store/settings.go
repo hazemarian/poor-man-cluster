@@ -36,6 +36,15 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 	return nil
 }
 
+// DeleteSetting removes a cluster_settings row. Absent keys are not an error —
+// the naming migration deletes old keys unconditionally so it stays idempotent.
+func (s *Store) DeleteSetting(ctx context.Context, key string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM cluster_settings WHERE key = ?`, key); err != nil {
+		return fmt.Errorf("delete setting %s: %w", key, err)
+	}
+	return nil
+}
+
 // SettingDefault reads a setting, returning fallback (not an error) when
 // the key is absent. A genuine read failure (e.g. a closed/backing store) is
 // logged at warn — with the key — and still returns the fallback, so optional

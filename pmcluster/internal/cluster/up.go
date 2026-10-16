@@ -127,8 +127,8 @@ type UpDeps struct {
 // install state persistence.
 //
 // OpenObserve runs with the admin email:password (ZO_ROOT_USER_EMAIL /
-// ZO_ROOT_USER_PASSWORD from the openobserve_admin credential + the
-// zo_root_user_password Swarm secret). The OTel collector and the Traefik
+// ZO_ROOT_USER_PASSWORD from the observability_admin credential + the
+// observability_admin_password Swarm secret). The OTel collector and the Traefik
 // openobserve-auto-auth middleware use the SAME admin credentials — no
 // provisioning API calls, no automation user, no ingestion token.
 func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
@@ -295,15 +295,15 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		// data-volume reset is needed — that whole failure mode (a backend
 		// seeding its admin once into a volume, then silently disagreeing with
 		// the configured password) is why Parseable replaced OpenObserve.
-		if obsCred := creds["openobserve_admin"]; obsCred != nil && obsCred.UsernameChanged {
+		if obsCred := creds["observability_admin"]; obsCred != nil && obsCred.UsernameChanged {
 			fmt.Fprintf(out, "  • observability admin changed → Parseable picks it up on restart (no data reset needed)\n")
 		}
 		return nil
 	})
 	wf.Add("Rendering and creating Docker configs (OTel pipeline, Traefik dynamic)", func(ctx context.Context) error {
-		openobsCred := creds["openobserve_admin"]
+		openobsCred := creds["observability_admin"]
 		if openobsCred == nil {
-			return fmt.Errorf("internal: openobserve_admin credential missing after bootstrap")
+			return fmt.Errorf("internal: observability_admin credential missing after bootstrap")
 		}
 
 		sso, err = loadSSOSettings(ctx, deps.Store)
@@ -329,36 +329,36 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			return err
 		}
 
-		ooL, ooM, ooT := loadOORetention(ctx, deps.Store)
+		logsDays, metricsDays, tracesDays := loadObservabilityRetention(ctx, deps.Store)
 		s3b := loadBackupS3(ctx, deps.Store)
 		objStore, objStoreErr := loadObjectStore(ctx, deps.Docker, deps.Store, deps.Cipher)
 		if objStoreErr != nil {
 			return objStoreErr
 		}
 		render = RenderInput{
-			Domain:                     in.Domain,
-			ObservabilityAdminEmail:    openobsCred.Username,
-			ObservabilityAdminPassword: openobsCred.Password,
-			ObservabilityBasicAuth:     observabilityBasicAuth(openobsCred.Username, openobsCred.Password),
-			ACMEEmail:                  in.ACMEEmail,
-			ConfigDir:                  in.ConfigDir,
-			ConfigStore:                deps.Store,
-			DataDir:                    filepath.Dir(in.ConfigDir),
-			VolumeRoot:                 effectiveVolumeRoot(in.VolumeRoot),
-			BackupDir:                  backupRootDir(),
-			HostCerts:                  hostCerts,
-			CertSecretName:             certSecret,
-			KeySecretName:              keySecret,
-			EdgeImage:                  EdgeImageFor(),
-			EdgeLoginDisabled:          loadEdgeLoginDisabled(ctx, deps.Store),
-			BackupAllNodes:             loadBackupAllNodes(ctx, deps.Store),
-			BackupRetentionDays:        LoadBackupRetentionDays(ctx, deps.Store),
-			BackupCron:                 LoadBackupCron(ctx, deps.Store),
-			StorageNodeConstraint:      deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
-			StorageNodeLabel:           runtime.StorageNodeLabel,
-			PlatformNode:               loadPlatformNode(ctx, deps.Store),
-			ManagedSecretNames:         managedSecretNames(ctx, deps.Store),
-			OOLogsRetentionDays:        ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
+			Domain:                         in.Domain,
+			ObservabilityAdminEmail:        openobsCred.Username,
+			ObservabilityAdminPassword:     openobsCred.Password,
+			ObservabilityBasicAuth:         observabilityBasicAuth(openobsCred.Username, openobsCred.Password),
+			ACMEEmail:                      in.ACMEEmail,
+			ConfigDir:                      in.ConfigDir,
+			ConfigStore:                    deps.Store,
+			DataDir:                        filepath.Dir(in.ConfigDir),
+			VolumeRoot:                     effectiveVolumeRoot(in.VolumeRoot),
+			BackupDir:                      backupRootDir(),
+			HostCerts:                      hostCerts,
+			CertSecretName:                 certSecret,
+			KeySecretName:                  keySecret,
+			EdgeImage:                      EdgeImageFor(),
+			EdgeLoginDisabled:              loadEdgeLoginDisabled(ctx, deps.Store),
+			BackupAllNodes:                 loadBackupAllNodes(ctx, deps.Store),
+			BackupRetentionDays:            LoadBackupRetentionDays(ctx, deps.Store),
+			BackupCron:                     LoadBackupCron(ctx, deps.Store),
+			StorageNodeConstraint:          deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
+			StorageNodeLabel:               runtime.StorageNodeLabel,
+			PlatformNode:                   loadPlatformNode(ctx, deps.Store),
+			ManagedSecretNames:             managedSecretNames(ctx, deps.Store),
+			ObservabilityLogsRetentionDays: logsDays, ObservabilityMetricsRetentionDays: metricsDays, ObservabilityTracesRetentionDays: tracesDays,
 			BackupS3:        s3b,
 			Store:           objStore,
 			SSOEnabled:      sso.Enabled,
@@ -517,8 +517,8 @@ func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
 		return fmt.Errorf("persist tls state: %w", err)
 	}
 	for k, v := range map[string]string{
-		settingDomain:  in.Domain,
-		settingOOEmail: in.ObservabilityAdminEmail,
+		settingDomain:             in.Domain,
+		settingObservabilityEmail: in.ObservabilityAdminEmail,
 	} {
 		if err := deps.Store.SetSetting(ctx, k, v); err != nil {
 			return fmt.Errorf("persist %s: %w", k, err)
@@ -556,7 +556,7 @@ func validateUpInput(in UpInput) error {
 		return fmt.Errorf("--domain is required")
 	}
 	if in.ObservabilityAdminEmail == "" {
-		return fmt.Errorf("--openobserve-email is required (used as OpenObserve admin login)")
+		return fmt.Errorf("--observability-admin-email is required (used as OpenObserve admin login)")
 	}
 	hasBYOTLS := in.CertPath != "" || in.KeyPath != ""
 	hasACME := in.ACMEEmail != ""

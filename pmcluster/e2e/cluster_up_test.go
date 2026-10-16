@@ -98,7 +98,7 @@ func TestClusterUp(t *testing.T) {
 		"--domain=" + domain,
 		"--cert=" + certPath,
 		"--key=" + keyPath,
-		"--openobserve-email=" + adminEmail,
+		"--observability-admin-email=" + adminEmail,
 	}
 
 	t.Log("Running: pmcluster cluster up (first run)…")
@@ -162,7 +162,7 @@ func TestClusterUp(t *testing.T) {
 			"admin_credentials",
 			"cert",
 			"key",
-			"zo_root_user_password",
+			"observability_admin_password",
 		} {
 			if !strings.Contains(out, secret) {
 				t.Errorf("docker secret ls: secret %q not found; output:\n%s", secret, out)
@@ -195,7 +195,7 @@ func TestClusterUp(t *testing.T) {
 			t.Fatalf("pmcluster credentials list exited %d:\n%s", code, out)
 		}
 
-		for _, name := range []string{"traefik_dashboard", "openobserve_admin"} {
+		for _, name := range []string{"traefik_dashboard", "observability_admin"} {
 			if !strings.Contains(out, name) {
 				t.Errorf("credentials list: %q not found; output:\n%s", name, out)
 			}
@@ -203,9 +203,9 @@ func TestClusterUp(t *testing.T) {
 	})
 
 	t.Run("credentials show openobserve prints non-empty password", func(t *testing.T) {
-		out, _, code := runCmd(t, homeDir, "credentials", "show", "openobserve_admin")
+		out, _, code := runCmd(t, homeDir, "credentials", "show", "observability_admin")
 		if code != 0 {
-			t.Fatalf("pmcluster credentials show openobserve_admin exited %d:\n%s", code, out)
+			t.Fatalf("pmcluster credentials show observability_admin exited %d:\n%s", code, out)
 		}
 		if !strings.Contains(out, "password:") {
 			t.Errorf("expected 'password:' line in credentials show output; got:\n%s", out)

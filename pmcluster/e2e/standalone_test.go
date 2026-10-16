@@ -98,7 +98,7 @@ func TestSetupWizardNoSSO(t *testing.T) {
 		"--domain", "example.test",
 		"--cert", certPath,
 		"--key", keyPath,
-		"--openobserve-email", "admin@example.test",
+		"--observability-admin-email", "admin@example.test",
 		"--traefik-admin-user", "admin",
 		"--volume-root", storageRoot,
 	}

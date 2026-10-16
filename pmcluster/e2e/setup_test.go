@@ -80,7 +80,7 @@ func TestSetupWizardFallback(t *testing.T) {
 	})
 
 	t.Run("setup without domain fails validation", func(t *testing.T) {
-		stdout, stderr, code := runCmd(t, homeDir, "setup", "--openobserve-email", "admin@example.test")
+		stdout, stderr, code := runCmd(t, homeDir, "setup", "--observability-admin-email", "admin@example.test")
 		if code == 0 {
 			t.Fatalf("setup without domain exited 0; want non-zero")
 		}
@@ -92,7 +92,7 @@ func TestSetupWizardFallback(t *testing.T) {
 	t.Run("setup without TLS mode fails validation", func(t *testing.T) {
 		stdout, stderr, code := runCmd(t, homeDir, "setup",
 			"--domain", "example.test",
-			"--openobserve-email", "admin@example.test")
+			"--observability-admin-email", "admin@example.test")
 		if code == 0 {
 			t.Fatalf("setup without TLS mode exited 0; want non-zero")
 		}
@@ -105,7 +105,7 @@ func TestSetupWizardFallback(t *testing.T) {
 		stdout, stderr, code := runCmd(t, homeDir, "setup",
 			"--domain", "example.test",
 			"--acme-email", "ops@example.test",
-			"--openobserve-email", "admin@example.test",
+			"--observability-admin-email", "admin@example.test",
 			"--sso-enabled")
 		if code == 0 {
 			t.Fatalf("setup --sso-enabled without client id/secret exited 0; want non-zero")
@@ -189,7 +189,7 @@ func TestSetupWizardClusterUp(t *testing.T) {
 		"--domain", domain,
 		"--cert", certPath,
 		"--key", keyPath,
-		"--openobserve-email", adminEmail,
+		"--observability-admin-email", adminEmail,
 		"--traefik-admin-user", "admin",
 		"--volume-root", storageRoot,
 		"--sso-enabled",

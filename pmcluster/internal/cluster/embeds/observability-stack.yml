@@ -85,22 +85,22 @@ services:
   # script retries until the server answers, because swarm ignores depends_on on
   # this path, and it is best-effort: an unreachable backend must never fail the
   # deploy.
-  retention:
+  provision:
     image: curlimages/curl:8.10.1
     run_once: true
     placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
     networks:
       - monitoring-net
     configs:
-      - config_path(pmcluster_parseable_retention)
-    command: ["sh", "/etc/pmcluster/parseable-retention.sh"]
+      - config_path(pmcluster_observability_provision)
+    command: ["sh", "/etc/pmcluster/observability-provision.sh"]
     env:
       P_BASE: "http://observability_parseable:8000"
       P_USER: "[[.ObservabilityAdminEmail]]"
       P_PASS: "secret(observability_admin_password)"
-      LOGS_RETENTION_DAYS: "[[.OOLogsRetentionDays]]"
-      METRICS_RETENTION_DAYS: "[[.OOMetricsRetentionDays]]"
-      TRACES_RETENTION_DAYS: "[[.OOTracesRetentionDays]]"
+      LOGS_RETENTION_DAYS: "[[.ObservabilityLogsRetentionDays]]"
+      METRICS_RETENTION_DAYS: "[[.ObservabilityMetricsRetentionDays]]"
+      TRACES_RETENTION_DAYS: "[[.ObservabilityTracesRetentionDays]]"
     resources:
       reservations:
         cpus: "0.02"

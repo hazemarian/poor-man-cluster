@@ -83,9 +83,9 @@ pmcluster setup   # interactive wizard, then cluster up (or update if one exists
 Scripted instead of the wizard:
 
 ```bash
-pmcluster cluster up --domain=example.com --acme-email=ops@example.com --openobserve-email=ops@example.com
+pmcluster cluster up --domain=example.com --acme-email=ops@example.com --observability-admin-email=ops@example.com
 # or with your own cert:
-pmcluster cluster up --domain=example.com --openobserve-email=ops@example.com \
+pmcluster cluster up --domain=example.com --observability-admin-email=ops@example.com \
   --cert=/path/to/cert.pem --key=/path/to/key.pem
 ```
 

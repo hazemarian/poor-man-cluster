@@ -28,9 +28,9 @@ bearers). Console: the **Settings** page.
 | `edge_login_disabled` | `true` in swarm deployments | setup wizard / edge stack | hides the console's own login (the Traefik admin-auth/SSO gate is the authenticator); `false` keeps password login (standalone) |
 | `sso_enabled` / `sso_provider` / `sso_client_id` / `sso_client_secret` / `sso_github_org` / `sso_github_repos` / `sso_cookie_expire` | off / `github` / unset / unset / unset / unset / `1h` | setup wizard (`--sso-*`) / operator | GitHub SSO via oauth2-proxy: org (and optional repo) restriction, tightened 1h default session |
 | `domain` | — | `cluster up` / setup wizard | the cluster's base domain |
-| `oo_admin_email` | — | `cluster up` (`--openobserve-email`) | the OpenObserve root admin login |
+| `observability_admin_email` | — | `cluster up` (`--observability-admin-email`) | the observability admin login |
 | `traefik_admin_user` | `admin` | setup wizard / `cluster up` | the basic-auth username for the Traefik gate |
-| `oo_logs_retention_days` / `oo_metrics_retention_days` / `oo_traces_retention_days` | `7` each | operator | OpenObserve stream retention (unbounded retention is how a cluster silently grows to hundreds of GB) |
+| `observability_logs_retention_days` / `observability_metrics_retention_days` / `observability_traces_retention_days` | `7` each | operator | per-stream retention in the observability backend (unbounded retention is how a cluster silently grows to hundreds of GB) |
 | `log_level` | `info` | operator | daemon verbosity (`debug`/`info`/`warn`/`error`); applied live on save |
 
 ## Not in the allowlist (managed elsewhere)

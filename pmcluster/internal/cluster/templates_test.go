@@ -732,7 +732,7 @@ func TestObservabilityWebPathRedirect(t *testing.T) {
 // TestEveryRenderedConfigHasANameAlias closes the class of bug that broke the
 // first attempt at the retention one-shot: a config registered in
 // renderedConfigs() but absent from configNameAliases. EnsureRenderedConfigs
-// then mints a versioned config (say pmcluster_parseable_retention_ab12cd34)
+// then mints a versioned config (say pmcluster_observability_provision_ab12cd34)
 // while the compose writer, unable to map the logical name, emits the BARE
 // logical name — and `docker stack deploy` fails with "config not found".
 //
@@ -749,7 +749,7 @@ func TestEveryRenderedConfigHasANameAlias(t *testing.T) {
 			continue
 		}
 		// The alias must actually yield the versioned name when it is known.
-		got := fn(RenderInput{OTelConfigName: "X", TraefikConfigName: "X", ParseableRetentionConfigName: "X"})
+		got := fn(RenderInput{OTelConfigName: "X", TraefikConfigName: "X", ObservabilityProvisionConfigName: "X"})
 		if got == "" {
 			t.Errorf("configNameAliases[%q] returned empty for a RenderInput with every name set "+
 				"(a stack rendered before EnsureRenderedConfigs would silently reference an unversioned config)",
@@ -762,37 +762,38 @@ func TestEveryRenderedConfigHasANameAlias(t *testing.T) {
 // writer maps the logical name to the versioned one the run actually created.
 func TestLoadComposeFile_ObservabilityRetentionUsesVersionedConfig(t *testing.T) {
 	in := RenderInput{
-		Domain:                       "example.com",
-		ObservabilityAdminEmail:      "ops@example.com",
-		ObservabilityAdminPassword:   "PW",
-		ObservabilityBasicAuth:       observabilityBasicAuth("ops@example.com", "PW"),
-		ParseableRetentionConfigName: "pmcluster_parseable_retention_ab12cd34",
+		Domain:                           "example.com",
+		ObservabilityAdminEmail:          "ops@example.com",
+		ObservabilityAdminPassword:       "PW",
+		ObservabilityBasicAuth:           observabilityBasicAuth("ops@example.com", "PW"),
+		ObservabilityProvisionConfigName: "pmcluster_observability_provision_ab12cd34",
 	}
 	data, err := LoadComposeFile(StackObservability, in)
 	if err != nil {
 		t.Fatalf("LoadComposeFile: %v", err)
 	}
 	body := string(data)
-	if !strings.Contains(body, "name: pmcluster_parseable_retention_ab12cd34") {
+	if !strings.Contains(body, "name: pmcluster_observability_provision_ab12cd34") {
 		t.Error("the retention config must be referenced by its versioned name — " +
 			"the bare logical name is not a config the run created")
 	}
 }
 
-// TestLoadComposeFile_ObservabilityRetentionOneShot pins how retention reaches
+// TestLoadComposeFile_ObservabilityProvisionOneShot pins how retention AND the
+// dashboard reach
 // Parseable. It cannot come from env or a flag (v2.8.0 has neither), so an API
 // call has to exist — and it must run INSIDE the swarm network, not from the
 // daemon, because the daemon is a host process that cannot resolve
 // observability_parseable. That is why Parseable publishes no port at all.
-func TestLoadComposeFile_ObservabilityRetentionOneShot(t *testing.T) {
+func TestLoadComposeFile_ObservabilityProvisionOneShot(t *testing.T) {
 	in := RenderInput{
-		Domain:                     "example.com",
-		ObservabilityAdminEmail:    "ops@example.com",
-		ObservabilityAdminPassword: "SOMEPASSWORD_SECRET",
-		ObservabilityBasicAuth:     observabilityBasicAuth("ops@example.com", "SOMEPASSWORD_SECRET"),
-		OOLogsRetentionDays:        30,
-		OOMetricsRetentionDays:     14,
-		OOTracesRetentionDays:      10,
+		Domain:                            "example.com",
+		ObservabilityAdminEmail:           "ops@example.com",
+		ObservabilityAdminPassword:        "SOMEPASSWORD_SECRET",
+		ObservabilityBasicAuth:            observabilityBasicAuth("ops@example.com", "SOMEPASSWORD_SECRET"),
+		ObservabilityLogsRetentionDays:    30,
+		ObservabilityMetricsRetentionDays: 14,
+		ObservabilityTracesRetentionDays:  10,
 	}
 	data, err := LoadComposeFile(StackObservability, in)
 	if err != nil {
@@ -815,11 +816,11 @@ func TestLoadComposeFile_ObservabilityRetentionOneShot(t *testing.T) {
 
 	// The one-shot exists, is run_once (restart_policy none), and mounts the script.
 	for _, want := range []string{
-		"retention:",
+		"provision:",
 		"curlimages/curl:8.10.1",
 		"condition: none",
-		"/etc/pmcluster/parseable-retention.sh",
-		"pmcluster_parseable_retention",
+		"/etc/pmcluster/observability-provision.sh",
+		"pmcluster_observability_provision",
 		"LOGS_RETENTION_DAYS: \"30\"",
 		"METRICS_RETENTION_DAYS: \"14\"",
 		"TRACES_RETENTION_DAYS: \"10\"",
@@ -963,8 +964,8 @@ func TestRenderOTelCollectorConfig_DockerStatsLabels(t *testing.T) {
 
 	for _, want := range []string{
 		"container_labels_to_metric_labels",
-		`com.docker.swarm.service.name: "service_name"`,
-		`com.docker.stack.namespace:    "stack_name"`,
+		`com.docker.swarm.service.name: "service.name"`,
+		`com.docker.stack.namespace:    "stack.name"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered config missing expected docker_stats mapping: %q", want)
@@ -1817,11 +1818,11 @@ func TestLoadComposeFile_EdgeBYOModeNoLetsEncrypt(t *testing.T) {
 // implementation updates it deliberately rather than drifting.
 func TestLoadComposeFile_ObservabilityHasNoOORetentionEnv(t *testing.T) {
 	in := RenderInput{
-		Domain:                  "example.com",
-		ObservabilityAdminEmail: "ops@example.com",
-		OOLogsRetentionDays:     30,
-		OOMetricsRetentionDays:  14,
-		OOTracesRetentionDays:   10,
+		Domain:                            "example.com",
+		ObservabilityAdminEmail:           "ops@example.com",
+		ObservabilityLogsRetentionDays:    30,
+		ObservabilityMetricsRetentionDays: 14,
+		ObservabilityTracesRetentionDays:  10,
 	}
 	data, err := LoadComposeFile(StackObservability, in)
 	if err != nil {

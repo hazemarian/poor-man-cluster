@@ -32,12 +32,12 @@ hand-rolled setups.
 ```bash
 docker swarm init                          # 1. cluster
 pmcluster init                             # 2. bootstrap config (admin name, etc.)
-pmcluster cluster up --openobserve-email=admin@example.com \
+pmcluster cluster up --observability-admin-email=admin@example.com \
     --acme-email=ops@example.com --domain=example.com   # 3. infra + edge + observability + backup stacks
                                             #    (also installs + starts the daemon)
 ```
 
-`cluster up` requires `--openobserve-email` (the observability admin login — the
+`cluster up` requires `--observability-admin-email` (the observability admin login — the
 flag name is retained for compatibility; it is the Parseable account used by
 the OTel collector and by the console's Parseable link); it installs and
 starts the daemon via systemd — no separate `pmcluster serve` step. The

@@ -14,13 +14,13 @@ import (
 // `up` (idempotent re-runs) and `update` (knows what to re-provision without
 // re-bootstrapping).
 const (
-	settingTLSMode          = "tls_mode"
-	settingTLSCertPath      = "tls_cert_path"
-	settingTLSKeyPath       = "tls_key_path"
-	settingTLSACME          = "tls_acme_email"
-	settingDomain           = "domain"
-	settingOOEmail          = "oo_admin_email"
-	settingTraefikAdminUser = "traefik_admin_user"
+	settingTLSMode            = "tls_mode"
+	settingTLSCertPath        = "tls_cert_path"
+	settingTLSKeyPath         = "tls_key_path"
+	settingTLSACME            = "tls_acme_email"
+	settingDomain             = "domain"
+	settingObservabilityEmail = "observability_admin_email"
+	settingTraefikAdminUser   = "traefik_admin_user"
 
 	// SSO settings. SSO is a feature flag (settingSSOEnabled): when enabled the
 	// Traefik admin-auth basicAuth middleware is swapped for a forwardAuth
@@ -71,9 +71,9 @@ const (
 	// OpenObserve stream retention (days). Unbounded retention is how a
 	// metrics-heavy cluster silently grows to hundreds of GB — the values
 	// render into ZO_LOGS/METRICS/TRACES_RETENTION_DAYS.
-	settingOOLogsRetentionDays    = "oo_logs_retention_days"
-	settingOOMetricsRetentionDays = "oo_metrics_retention_days"
-	settingOOTracesRetentionDays  = "oo_traces_retention_days"
+	settingObservabilityLogsRetentionDays    = "observability_logs_retention_days"
+	settingObservabilityMetricsRetentionDays = "observability_metrics_retention_days"
+	settingObservabilityTracesRetentionDays  = "observability_traces_retention_days"
 
 	// Offsite (S3/R2) backup destination for the volume-backup agent. When all
 	// five are set, offen also uploads every archive to the S3-compatible
@@ -129,39 +129,41 @@ const (
 // Setting* accessors expose the persisted settings keys for CLI surfaces
 // (e.g. the interactive `pmcluster setup` wizard) that read/write them
 // directly instead of through the cluster workflow.
-func SettingDomain() string                 { return settingDomain }
-func SettingTLSMode() string                { return settingTLSMode }
-func SettingTLSCertPath() string            { return settingTLSCertPath }
-func SettingTLSKeyPath() string             { return settingTLSKeyPath }
-func SettingTLSACME() string                { return settingTLSACME }
-func SettingOOEmail() string                { return settingOOEmail }
-func SettingTraefikAdminUser() string       { return settingTraefikAdminUser }
-func SettingSSOEnabled() string             { return settingSSOEnabled }
-func SettingSSOProvider() string            { return settingSSOProvider }
-func SettingSSOClientID() string            { return settingSSOClientID }
-func SettingSSOClientSecret() string        { return settingSSOClientSecret }
-func SettingSSOGitHubOrg() string           { return settingSSOGitHubOrg }
-func SettingSSOGitHubRepos() string         { return settingSSOGitHubRepos }
-func SettingSSOCookieExpire() string        { return settingSSOCookieExpire }
-func SettingEdgeLoginDisabled() string      { return settingEdgeLoginDisabled }
-func SettingVolumeRoot() string             { return settingVolumeRoot }
-func SettingBackupAllNodes() string         { return settingBackupAllNodes }
-func SettingBackupRetentionDays() string    { return settingBackupRetentionDays }
-func SettingBackupCron() string             { return settingBackupCron }
-func SettingPlatformNode() string           { return settingPlatformNode }
-func SettingOOLogsRetentionDays() string    { return settingOOLogsRetentionDays }
-func SettingOOMetricsRetentionDays() string { return settingOOMetricsRetentionDays }
-func SettingOOTracesRetentionDays() string  { return settingOOTracesRetentionDays }
-func SettingBackupS3Endpoint() string       { return settingBackupS3Endpoint }
-func SettingBackupS3Bucket() string         { return settingBackupS3Bucket }
-func SettingBackupS3AccessKey() string      { return settingBackupS3AccessKey }
-func SettingBackupS3SecretKey() string      { return settingBackupS3SecretKey }
-func SettingBackupS3Region() string         { return settingBackupS3Region }
-func SettingBackupStoreOn() string          { return settingBackupStoreOn }
-func SettingLogLevel() string               { return settingLogLevel }
-func SettingReconcileInterval() string      { return settingReconcileInterval }
-func SettingStorageNodes() string           { return settingStorageNodes }
-func SettingStorageFailover() string        { return settingStorageFailover }
+func SettingDomain() string                         { return settingDomain }
+func SettingTLSMode() string                        { return settingTLSMode }
+func SettingTLSCertPath() string                    { return settingTLSCertPath }
+func SettingTLSKeyPath() string                     { return settingTLSKeyPath }
+func SettingTLSACME() string                        { return settingTLSACME }
+func SettingOOEmail() string                        { return settingObservabilityEmail }
+func SettingTraefikAdminUser() string               { return settingTraefikAdminUser }
+func SettingSSOEnabled() string                     { return settingSSOEnabled }
+func SettingSSOProvider() string                    { return settingSSOProvider }
+func SettingSSOClientID() string                    { return settingSSOClientID }
+func SettingSSOClientSecret() string                { return settingSSOClientSecret }
+func SettingSSOGitHubOrg() string                   { return settingSSOGitHubOrg }
+func SettingSSOGitHubRepos() string                 { return settingSSOGitHubRepos }
+func SettingSSOCookieExpire() string                { return settingSSOCookieExpire }
+func SettingEdgeLoginDisabled() string              { return settingEdgeLoginDisabled }
+func SettingVolumeRoot() string                     { return settingVolumeRoot }
+func SettingBackupAllNodes() string                 { return settingBackupAllNodes }
+func SettingBackupRetentionDays() string            { return settingBackupRetentionDays }
+func SettingBackupCron() string                     { return settingBackupCron }
+func SettingPlatformNode() string                   { return settingPlatformNode }
+func SettingObservabilityLogsRetentionDays() string { return settingObservabilityLogsRetentionDays }
+func SettingObservabilityMetricsRetentionDays() string {
+	return settingObservabilityMetricsRetentionDays
+}
+func SettingObservabilityTracesRetentionDays() string { return settingObservabilityTracesRetentionDays }
+func SettingBackupS3Endpoint() string                 { return settingBackupS3Endpoint }
+func SettingBackupS3Bucket() string                   { return settingBackupS3Bucket }
+func SettingBackupS3AccessKey() string                { return settingBackupS3AccessKey }
+func SettingBackupS3SecretKey() string                { return settingBackupS3SecretKey }
+func SettingBackupS3Region() string                   { return settingBackupS3Region }
+func SettingBackupStoreOn() string                    { return settingBackupStoreOn }
+func SettingLogLevel() string                         { return settingLogLevel }
+func SettingReconcileInterval() string                { return settingReconcileInterval }
+func SettingStorageNodes() string                     { return settingStorageNodes }
+func SettingStorageFailover() string                  { return settingStorageFailover }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {
@@ -348,9 +350,9 @@ func LoadStorageFailover(ctx context.Context, st *store.Store) bool {
 // legacy cluster accumulated a 123G /data volume.
 const defaultOORetentionDays = 7
 
-// loadOORetention returns the OpenObserve log/metric/trace retention in days.
+// loadObservabilityRetention returns the OpenObserve log/metric/trace retention in days.
 // Each falls back to defaultOORetentionDays when unset or unparseable.
-func loadOORetention(ctx context.Context, st *store.Store) (logs, metrics, traces int) {
+func loadObservabilityRetention(ctx context.Context, st *store.Store) (logs, metrics, traces int) {
 	if st == nil {
 		return defaultOORetentionDays, defaultOORetentionDays, defaultOORetentionDays
 	}
@@ -365,9 +367,9 @@ func loadOORetention(ctx context.Context, st *store.Store) (logs, metrics, trace
 		}
 		return n
 	}
-	return parse(settingOOLogsRetentionDays),
-		parse(settingOOMetricsRetentionDays),
-		parse(settingOOTracesRetentionDays)
+	return parse(settingObservabilityLogsRetentionDays),
+		parse(settingObservabilityMetricsRetentionDays),
+		parse(settingObservabilityTracesRetentionDays)
 }
 
 // BackupS3 is the offsite backup destination for the volume-backup agent.

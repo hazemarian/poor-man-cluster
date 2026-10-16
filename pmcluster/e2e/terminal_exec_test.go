@@ -69,7 +69,7 @@ func TestTerminalExecE2E(t *testing.T) {
 	upOut, upErr, upCode := runCmdCtx(t, ctx, homeDir, "cluster", "up",
 		"--domain=example.test",
 		"--cert="+certPath, "--key="+keyPath,
-		"--openobserve-email=admin@example.test")
+		"--observability-admin-email=admin@example.test")
 	if upCode != 0 {
 		t.Fatalf("cluster up exited %d:\nstdout:\n%s\nstderr:\n%s", upCode, upOut, upErr)
 	}

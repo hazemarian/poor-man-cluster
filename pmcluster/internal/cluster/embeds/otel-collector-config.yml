@@ -28,11 +28,17 @@ receivers:
     # Promote Swarm container labels directly to metric datapoint attributes.
     # (container_labels_to_metric_labels is the documented dockerstats key;
     #  metric_labels_to_resource_attributes is NOT a real receiver option and
-    #  previously produced no attributes, leaving service_name/stack_name empty.)
+    #  previously produced no attributes, leaving these fields empty.)
+    #
+    # Names are DOT-separated to match the OTel semantic convention and the
+    # resource processor below, which already sets service.name / stack.name.
+    # Underscored names (service_name) meant a query had to know which signal a
+    # field came from before it could name it; for metrics the attribute was
+    # service_name while the resource said service.name.
     container_labels_to_metric_labels:
-      com.docker.swarm.service.name: "service_name"
-      com.docker.stack.namespace:    "stack_name"
-      com.docker.swarm.node.id:      "swarm_node_id"
+      com.docker.swarm.service.name: "service.name"
+      com.docker.stack.namespace:    "stack.name"
+      com.docker.swarm.node.id:      "swarm.node.id"
 
   filelog:
     include:
@@ -103,13 +109,14 @@ processors:
     metric_statements:
       - context: datapoint
         # Only copy resource service.name when it actually exists (OTLP/SDK
-        # metrics). Guard so this never clobbers the service_name/stack_name
-        # that docker_stats attaches directly from Swarm container labels.
+        # metrics). Guard so this never clobbers the values docker_stats
+        # attaches directly from Swarm container labels — both sides now use the
+        # same dot-separated names, so a datapoint and its resource agree.
         conditions:
           - 'resource.attributes["service.name"] != nil'
         statements:
-          - set(attributes["service_name"], resource.attributes["service.name"])
-          - set(attributes["stack_name"], resource.attributes["stack.name"])
+          - set(attributes["service.name"], resource.attributes["service.name"])
+          - set(attributes["stack.name"], resource.attributes["stack.name"])
 
   resourcedetection:
     detectors: [system, docker]

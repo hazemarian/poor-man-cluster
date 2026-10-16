@@ -24,7 +24,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	for _, name := range []string{"openobserve_admin"} {
+	for _, name := range []string{"observability_admin"} {
 		cr, err := s.Credential(context.Background(), name)
 		if err != nil {
 			fmt.Printf("%s: ERR %v\n", name, err)
