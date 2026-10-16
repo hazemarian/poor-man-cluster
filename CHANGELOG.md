@@ -59,6 +59,28 @@ Two changes that belong together, because the first caused the outage the second
   settings only mean anything if something pushes them. v0.2.185 shipped without that and flagged it as an
   open gap; v0.2.186 closes it — see below.
 
+## v0.2.193 (2026-10-16)
+
+**The dashboard's tiles render, and its SQL is correct.**
+
+The dashboard was being created with tiles the API accepted and the UI could not draw ("Something went
+wrong"). Two independent faults, neither of which fails loudly:
+
+- **`chartQuery` was missing.** It is what a tile actually charts. The renderer does
+  `typeof chartQuery === "string" ? chartQuery : convert(chartQuery)`, so omitting it passes validation and
+  then throws in the browser. A string is stored verbatim — the SQL goes in directly.
+- **The SQL was being mangled.** `printf '%s' \"$query\"` word-split the query, stripping every space, and
+  the host shell's `sed` doubled backslashes, so the stored SQL read
+  `metric_name = \'container.memory.percent\'` — which matches nothing and renders an empty tile while the
+  API returns 200. Escaping now runs in `awk` inside the container, whose BusyBox semantics are the ones
+  that actually apply.
+
+Also: the memory-bytes tile is gone. `container.memory.usage.total` has rows but a **null** `data_point_value`
+on this build (1881 rows for it and for the percent metric alike; only the percent one selects a real
+value), so it can never chart. A CPU tile takes its place — `container.cpu.utilization` is real.
+
+Every tile query was run against the live streams before being committed.
+
 ## v0.2.192 (2026-10-16)
 
 **The unattributable telemetry is gone at the source — a wipe alone would have refilled it.**

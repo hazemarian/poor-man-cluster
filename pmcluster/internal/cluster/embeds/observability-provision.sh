@@ -72,17 +72,33 @@ tile_id() {
     printf '%s' "$1" | md5sum | cut -c1-26 | tr 'a-f' 'A-F'
 }
 
+# json_escape escapes the two characters JSON string interpolation needs.
+#
+# Done in awk, not sed: sed's backslash handling differs between this BusyBox and
+# the host shell, and getting it wrong does not fail loudly — the API answers 200
+# and stores SQL with stray backslashes (`metric_name = \'x\'`), which then
+# matches nothing and renders an empty tile.
+json_escape() {
+    printf '%s' "$1" | awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); printf "%s", $0 }'
+}
+
 # add_tile DASHBOARD_ID TITLE TILE_TYPE STREAM CHART QUERY X Y W H
 add_tile() {
     _d="$1"; _title="$2"; _type="$3"; _stream="$4"; _chart="$5"; _query="$6"
     _x="$7"; _y="$8"; _w="$9"; _h="${10}"
     _id=$(tile_id "$_title")
-    # The query carries double-quoted identifiers ("service.name"), which must be
-    # escaped inside a JSON string or the body is invalid and the API answers 400.
-    _q=$(printf '%s' "$_query" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    # Two things the API accepts but the UI cannot render:
+    #  - chartQuery is what the tile actually charts. Its renderer does
+    #    `typeof chartQuery === "string" ? chartQuery : convertObject(chartQuery)`,
+    #    so omitting it passes validation and then throws in the browser
+    #    ("Something went wrong"). A string is accepted verbatim, so the SQL goes
+    #    in directly.
+    #  - the query carries double-quoted identifiers ("service.name"), which must
+    #    be escaped inside a JSON string or the body is invalid (API answers 400).
+    _q=$(json_escape "$_query")
     _body=$(cat <<JSON
 {"tile_id":"${_id}","title":"${_title}","tileType":"${_type}","dbName":["${_stream}"],
- "chartType":"${_chart}","config":{"query":"${_q}"},
+ "chartType":"${_chart}","chartQuery":"${_q}","config":{"type":"${_chart}"},
  "layout":{"x":${_x},"y":${_y},"w":${_w},"h":${_h}}}
 JSON
 )
@@ -125,12 +141,16 @@ provision_dashboard() {
         'SELECT "service.name", count(*) AS lines FROM "pmcluster-logs" GROUP BY "service.name" ORDER BY lines DESC LIMIT 10' 0 0 6 4
     add_tile "$_d" "Errors by service" code pmcluster-logs bar \
         'SELECT "service.name", count(*) AS errors FROM "pmcluster-logs" WHERE severity_text = '"'"'ERROR'"'"' GROUP BY "service.name" ORDER BY errors DESC LIMIT 10' 6 0 6 4
-    add_tile "$_d" "Memory by service" code pmcluster-metrics bar \
-        'SELECT "service.name", max(data_point_value) AS bytes FROM "pmcluster-metrics" WHERE metric_name = '"'"'container.memory.usage.total'"'"' GROUP BY "service.name" ORDER BY bytes DESC LIMIT 10' 0 4 6 4
-    add_tile "$_d" "Container memory %" code pmcluster-metrics timeseries \
+    # NOTE: no "memory bytes" tile. `container.memory.usage.total` has rows but its
+    # data_point_value is null on this build, so the tile renders empty; the
+    # percent metric is the one that actually charts memory. Verified by comparing
+    # count(*) (1881 rows, both) against the selected value column (null vs real).
+    add_tile "$_d" "Container memory %" code pmcluster-metrics bar \
         'SELECT "service.name", max(data_point_value) AS percent FROM "pmcluster-metrics" WHERE metric_name = '"'"'container.memory.percent'"'"' GROUP BY "service.name" ORDER BY percent DESC LIMIT 10' 6 4 6 4
     add_tile "$_d" "Network received by service" code pmcluster-metrics timeseries \
         'SELECT "service.name", sum(data_point_value) AS rx_bytes FROM "pmcluster-metrics" WHERE metric_name = '"'"'container.network.io.usage.rx_bytes'"'"' GROUP BY "service.name" ORDER BY rx_bytes DESC LIMIT 10' 0 8 6 4
+    add_tile "$_d" "CPU by service" code pmcluster-metrics timeseries \
+        'SELECT "service.name", max(data_point_value) AS cpu FROM "pmcluster-metrics" WHERE metric_name = '"'"'container.cpu.utilization'"'"' GROUP BY "service.name" ORDER BY cpu DESC LIMIT 10' 6 8 6 4
 }
 
 if wait_ready; then
