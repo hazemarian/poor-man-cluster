@@ -112,17 +112,27 @@ p{opacity:.8;animation:pulse 1.4s ease-in-out infinite}
 // managed admin credential to whoever loads it, so it must only run for a caller
 // that already passed the gate upstream.
 //
-// When SSO is enabled the oauth2-proxy forwardAuth supplies X-Forwarded-User /
-// X-Forwarded-Email (see the sso-auth middleware's authResponseHeaders) — their
-// presence is proof the request came through it. When SSO is disabled Traefik's
-// admin-auth still applies basic auth, and the shipped non-SSO flow must keep
-// working, so any Basic authorization is accepted.
+// When SSO is enabled, oauth2-proxy's forwardAuth supplies the authenticated
+// identity as X-Auth-Request-User / X-Auth-Request-Email (see the sso-auth
+// middleware's authResponseHeaders, and OAUTH2_PROXY_SET_XAUTHREQUEST in the
+// sso stack — without that flag oauth2-proxy returns no such headers and this
+// check would refuse every browser). Their presence is proof the request came
+// through the gate. When SSO is disabled Traefik's admin-auth still applies
+// basic auth, and the shipped non-SSO flow must keep working, so any Basic
+// authorization is accepted.
 func observBridgeGate(r *http.Request) bool {
-	if user := r.Header.Get("X-Forwarded-User"); user != "" {
-		return true
-	}
-	if email := r.Header.Get("X-Forwarded-Email"); email != "" {
-		return true
+	for _, h := range []string{
+		"X-Auth-Request-User",
+		"X-Auth-Request-Email",
+		// Tolerated as well so a deployment whose oauth2-proxy is older, or
+		// configured with --set-xauthrequest off and a header-rewriting proxy in
+		// front, is not locked out of its own console.
+		"X-Forwarded-User",
+		"X-Forwarded-Email",
+	} {
+		if r.Header.Get(h) != "" {
+			return true
+		}
 	}
 	scheme, _, _ := strings.Cut(r.Header.Get("Authorization"), " ")
 	return strings.EqualFold(scheme, "Basic")

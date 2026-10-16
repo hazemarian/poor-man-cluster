@@ -15,8 +15,9 @@ func TestObservBridgeGate(t *testing.T) {
 		want    bool
 	}{
 		{"anonymous is refused", nil, false},
-		{"oauth2 forwardAuth identity is accepted", map[string]string{"X-Forwarded-User": "ops@example.com"}, true},
-		{"forwarded email is accepted", map[string]string{"X-Forwarded-Email": "ops@example.com"}, true},
+		{"oauth2-proxy identity header is accepted", map[string]string{"X-Auth-Request-User": "ops@example.com"}, true},
+		{"oauth2-proxy email header is accepted", map[string]string{"X-Auth-Request-Email": "ops@example.com"}, true},
+		{"forwarded variants still tolerated", map[string]string{"X-Forwarded-User": "ops@example.com"}, true},
 		{"basic auth is accepted (non-SSO installs)", map[string]string{"Authorization": "Basic YTpi"}, true},
 		{"a bearer token is not", map[string]string{"Authorization": "Bearer abc"}, false},
 	}

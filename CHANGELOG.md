@@ -59,6 +59,31 @@ Two changes that belong together, because the first caused the outage the second
   settings only mean anything if something pushes them. v0.2.185 shipped without that and flagged it as an
   open gap; v0.2.186 closes it — see below.
 
+## v0.2.190 (2026-10-16)
+
+**The identity headers the platform claimed to forward are actually forwarded now.**
+
+The sign-in bridge returned `forbidden` for a real operator even though they had passed the SSO gate.
+Root cause: Traefik's `sso-auth` middleware declared
+
+```yaml
+authResponseHeaders: [X-Forwarded-User, X-Forwarded-Email, X-Forwarded-Preferred-Username]
+```
+
+but `forwardAuth` copies the *response* headers of the auth endpoint, and oauth2-proxy returns
+**`X-Auth-Request-*`** — and only when started with `--set-xauthrequest`. So Traefik had nothing to copy,
+the downstream service saw an anonymous request, and the bridge's own gate refused it.
+
+- `OAUTH2_PROXY_SET_XAUTHREQUEST: "true"` so oauth2-proxy emits the identity at all.
+- `authResponseHeaders` renamed to the names it actually emits. Nothing else consumed these headers, so
+  this has been inert since the middleware was written — the platform had never forwarded an identity
+  downstream. The bridge is the first consumer.
+- The bridge gate accepts `X-Auth-Request-*` (and still tolerates `X-Forwarded-*`), so a deployment with
+  an older proxy is not locked out of its own console.
+
+One auth path, for both SSO and Traefik basic-auth installs: the operator never types a credential — the
+router injects it and the bridge seeds the session.
+
 ## v0.2.189 (2026-10-16)
 
 **The sign-in bridge verifies the credential instead of assuming its shape.**

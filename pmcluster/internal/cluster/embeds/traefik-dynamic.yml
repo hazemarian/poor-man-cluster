@@ -6,15 +6,20 @@ http:
     # SSO gate (oauth2-proxy). When SSO is enabled the pmcluster-web +
     # observ. routers use this forwardAuth instead of the htpasswd
     # admin-auth below. oauth2-proxy runs in the sso stack on traefik-net;
-    # X-Forwarded-User / X-Forwarded-Email are passed to the downstream
+    # X-Auth-Request-User / X-Auth-Request-Email are passed to the downstream
     # console + OpenObserve.
     sso-auth:
       forwardAuth:
         address: "http://sso_oauth2-proxy:4180"
+        # These must be the names oauth2-proxy actually RETURNS on /oauth2/auth;
+        # forwardAuth copies the listed headers from that response onto the
+        # upstream request. oauth2-proxy emits X-Auth-Request-* (with
+        # --set-xauthrequest), not X-Forwarded-* — listing the latter silently
+        # forwards nothing and the downstream service sees no identity.
         authResponseHeaders:
-          - X-Forwarded-User
-          - X-Forwarded-Email
-          - X-Forwarded-Preferred-Username
+          - X-Auth-Request-User
+          - X-Auth-Request-Email
+          - X-Auth-Request-Preferred-Username
 [[- else]]
     admin-auth:
       basicAuth:
