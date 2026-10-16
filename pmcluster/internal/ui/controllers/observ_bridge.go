@@ -59,12 +59,33 @@ func (b ObservBridge) Page(g *gin.Context) {
 		encoded = []byte(`""`)
 	}
 
+	// The page PROVES the credential before trusting it, rather than assuming the
+	// shape the SPA expects. Its API client builds `Basic <btoa(user:pass)>`, so
+	// the stored value could reasonably be either that whole header or the bare
+	// base64 — and guessing wrong means a silent 401 on every request. So try the
+	// candidates against a real endpoint and store the one the server accepts.
 	js := template.JS(`
-// Parseable's SPA gates the app on localStorage["authToken"]; its requests carry
-// Basic <authToken> (or the credential Traefik injects). Writing the managed
-// credential here means both paths send the same, correct value.
-localStorage.setItem("authToken", ` + string(encoded) + `);
-location.replace("/");
+const managed = ` + string(encoded) + `;
+const bare = managed.replace(/^Basic\s+/i, "");
+const candidates = [managed, "Basic " + bare, bare];
+
+async function verify(value) {
+  try {
+    const r = await fetch("/api/v1/about", { headers: { Authorization: value } });
+    return r.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+(async () => {
+  let chosen = managed;
+  for (const c of candidates) {
+    if (await verify(c)) { chosen = c; break; }
+  }
+  localStorage.setItem("authToken", chosen);
+  location.replace("/");
+})();
 `)
 
 	_, _ = g.Writer.Write([]byte(`<!doctype html>

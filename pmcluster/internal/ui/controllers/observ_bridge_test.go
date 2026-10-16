@@ -52,8 +52,16 @@ func TestObservBridgePageSeedsTheSession(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `localStorage.setItem("authToken", "`+basicAuth+`")`) {
-		t.Errorf("page must write localStorage.authToken with the managed credential; got:\n%s", body)
+	if !strings.Contains(body, `const managed = "`+basicAuth+`"`) {
+		t.Errorf("page must carry the managed credential; got:\n%s", body)
+	}
+	if !strings.Contains(body, `localStorage.setItem("authToken", chosen)`) {
+		t.Errorf("page must write localStorage.authToken with the VERIFIED value; got:\n%s", body)
+	}
+	// It must check the credential against a real endpoint instead of assuming
+	// which shape the SPA expects.
+	if !strings.Contains(body, `fetch("/api/v1/about"`) {
+		t.Error("page must verify the credential before storing it")
 	}
 	if !strings.Contains(body, `location.replace("/")`) {
 		t.Error("page must land on the observability root, not the removed /web/ path")

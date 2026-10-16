@@ -59,6 +59,15 @@ Two changes that belong together, because the first caused the outage the second
   settings only mean anything if something pushes them. v0.2.185 shipped without that and flagged it as an
   open gap; v0.2.186 closes it — see below.
 
+## v0.2.189 (2026-10-16)
+
+**The sign-in bridge verifies the credential instead of assuming its shape.**
+
+Parseable's SPA builds `Authorization: Basic <btoa(user:pass)>`, which leaves a real ambiguity
+about what `localStorage["authToken"]` should hold — that whole header, or the bare base64. Guessing
+wrong is a silent 401 on every request, so the page now tries the candidates against `/api/v1/about`
+and stores the one the server accepts, then redirects. No assumption, nothing to debug by hand.
+
 ## v0.2.188 (2026-10-16)
 
 **The observability login works again — restored, and ported from OpenObserve to Parseable.**
