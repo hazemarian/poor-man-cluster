@@ -3,6 +3,19 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.211 (2026-10-16)
+
+**Copy the binary over SSH, not scp — and the guard earned its keep.**
+
+The first wafaa upgrade discovered its node, verified the release checksum, then failed at
+`scp: Connection closed`. On OpenSSH 9.x `scp` uses the SFTP subsystem; a host with `Subsystem sftp` disabled
+rejects it in a way that reads like an auth failure or fail2ban and is neither. The binary now goes over with
+`ssh … "cat > /tmp/pmcluster.new" < "$BIN"`, which needs no subsystem.
+
+What did *not* happen matters as much: the script noticed, reported "nothing changed on this node", and exited
+non-zero. wafaa stayed at v0.2.181 with every service at 1/1. A deploy script's value is largely in what it
+refuses to do.
+
 ## v0.2.210 (2026-10-16)
 
 **The upgrade script works on a deployment that does not log in as root.**

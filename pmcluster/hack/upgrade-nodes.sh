@@ -4,7 +4,11 @@
 # WHY THIS EXISTS: `pmcluster cluster update` reconciles platform STACKS and
 # configs. It does not replace the pmcluster binary on the nodes, and there is no
 # `upgrade` command — so updating a server was an undocumented manual dance:
-# download the release, checksum it, scp it to each manager, install it, restart
+# Copy with cat over ssh, not scp: OpenSSH 9.x scp uses the SFTP
+# subsystem, so a host with `Subsystem sftp` disabled answers
+# `scp: Connection closed` — which reads like auth or fail2ban and is
+# neither. Piping through ssh needs no subsystem. (Seen on wafaa.)
+if ! ssh "${SSHOPT[@]}" "$SSHUSER@$ip" "cat > /tmp/pmcluster.new" < "$BIN"; then
 # the unit, and hope the leader went last. Getting that wrong is how a cluster
 # ends up with mixed versions and a leader running old code.
 #
@@ -89,8 +93,16 @@ echo "▶ ${#IPS[@]} node(s): ${IPS[*]}"
 FAILED=0
 for ip in "${IPS[@]}"; do
   echo "══════ $ip ══════"
-  if ! scp -i "$KEY" -o BatchMode=yes -q "$BIN" "root@$ip:/tmp/pmcluster.new"; then
-    echo "  scp FAILED — is SSH blocked (fail2ban)? nothing changed on this node" >&2
+  # Copy with cat over ssh, not scp: OpenSSH 9.x scp uses the SFTP
+  # subsystem, so a host with `Subsystem sftp` disabled answers
+  # `scp: Connection closed` — which reads like auth or fail2ban and is
+  # neither. Piping through ssh needs no subsystem. (Seen on wafaa.)
+  if ! ssh "${SSHOPT[@]}" "$SSHUSER@$ip" "cat > /tmp/pmcluster.new" < "$BIN"; then
+    # Copy with cat over ssh, not scp: OpenSSH 9.x scp uses the SFTP
+    # subsystem, so a host with `Subsystem sftp` disabled answers
+    # `scp: Connection closed` — which reads like auth or fail2ban and is
+    # neither. Piping through ssh needs no subsystem. (Seen on wafaa.)
+    if ! ssh "${SSHOPT[@]}" "$SSHUSER@$ip" "cat > /tmp/pmcluster.new" < "$BIN"; then
     FAILED=1; continue
   fi
   ssh "${SSHOPT[@]}" "$SSHUSER@$ip" "
