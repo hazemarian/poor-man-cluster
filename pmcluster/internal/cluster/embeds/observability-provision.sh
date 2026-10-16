@@ -115,7 +115,7 @@ add_tile() {
     _q=$(json_escape "$_query")
     _body=$(cat <<JSON
 {"tile_id":"${_id}","title":"${_title}","tileType":"builder","dbName":["${_stream}"],
- "chartType":"timeseries","chartQuery":"${_q}",
+ "chartType":"bar","chartQuery":"${_q}",
  "config":{"type":"${_shape}","colourScheme":"forest",
    "layout":{"legendPosition":"bottom"},
    "axes":{"x":{"field":"${_xf}","title":"${_xt}"},"y":{"field":"${_yf}","title":"${_yt}"},"groupBy":{"field":[]}},
@@ -195,7 +195,20 @@ provision_dashboard() {
     # definition even though it is the control plane rather than a workload.
     _KIND="CASE WHEN \`service.name\` LIKE 'infra%' OR \`service.name\` LIKE 'observability%' OR \`service.name\` LIKE 'sso%' OR \`service.name\` LIKE 'backup%' OR \`service.name\` LIKE 'edge%' OR \`service.name\` LIKE 'pmcluster%' THEN 'platform' ELSE 'deployed' END"
 
-    # SHAPE: every tile uses config.type "bar" with chartType "timeseries".
+    # chartType IS "bar" — and that is load-bearing.
+    #
+    # An earlier revision set chartType "timeseries" (the family the UI's own
+    # time-bucketed tile carries) while varying config.type for shape. Every tile
+    # then drew axes, legends and correct axis SCALES but no plotted values at all,
+    # which reads as "no numbers" and is easy to misdiagnose as missing data: the
+    # queries returned rows the whole time (platform=0.786/deployed=0.183; all four
+    # node loads).
+    #
+    # The evidence that settles it is the first revision, which used chartType
+    # "bar": its capture showed Node CPU % plotting real per-node values 0.5-67.9.
+    # So chartType "bar" + config.type "bar" renders, and the "timeseries" family
+    # only renders a time-bucketed x-axis. Categorical x axes (kind, host.name)
+    # need the bar family.
     #
     # Not a style choice — it is the only combination verified to render. Tiles
     # declared as pie/donut/table showed "No data available" while their queries

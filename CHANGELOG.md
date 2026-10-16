@@ -3,6 +3,23 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.206 (2026-10-16)
+
+**`chartType` was the bug: "timeseries" draws axes and legends but no values.**
+
+Reported plainly — "it does not show any numbers" — and that was the accurate reading. The tiles drew axes,
+legends and correct axis SCALES with nothing plotted, which I twice misread as "data is bound". Axis ranges
+are a property of the returned data, not proof that anything was drawn, and I should have suspected my own
+inference when the first capture of my *first* revision had shown real bars.
+
+That first revision used `chartType: "bar"`. Introducing varied shapes changed `chartType` to `"timeseries"`
+(the family the UI's own time-bucketed tile carries) while varying `config.type` — and from that point every
+tile rendered frame-only. The `"timeseries"` family renders a time-bucketed x-axis; categorical x axes
+(`kind`, `host.name`) need the bar family.
+
+All nine tiles are `chartType: "bar"` + `config.type: "bar"`. Verified in the browser: every tile draws
+green bars with live values.
+
 ## v0.2.205 (2026-10-16)
 
 **Dashboard tiles all render: the shape, not the query, was wrong.**
