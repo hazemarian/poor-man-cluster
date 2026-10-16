@@ -162,8 +162,20 @@ processors:
           - set(attributes["service.name"], resource.attributes["service.name"])
           - set(attributes["stack.name"], resource.attributes["stack.name"])
 
+  # ORDER MATTERS, and it is the whole reason a per-node view was broken.
+  #
+  # With [system, docker] and override:false the FIRST detector to set a value
+  # wins, and `system` runs first — so host.name became the CONTAINER's hostname,
+  # i.e. a container id like 1af781ba5184. Grouping by that is grouping by
+  # container, dressed up as "per node", and it is exactly what a node CPU/memory
+  # tile would have charted.
+  #
+  # The docker detector reports the hostname of the daemon it talks to — the
+  # node — and the collector already mounts /var/run/docker.sock, so it needs no
+  # extra access. Running it first makes host.name the node name (nxt-sw-1-m)
+  # for every signal, container metrics included.
   resourcedetection:
-    detectors: [system, docker]
+    detectors: [docker, system]
     override: false
 
   batch:

@@ -3,6 +3,21 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.197 (2026-10-16)
+
+**`host.name` was a container id, so "per node" was a lie waiting to be charted.**
+
+`resourcedetection` was configured `[system, docker]` with `override: false` — the first detector to set a
+value wins, and `system` runs first, so `host.name` became the *container's* hostname: `1af781ba5184`. Any
+node CPU/memory tile built on it would have charted containers while claiming to chart nodes.
+
+Reordered to `[docker, system]`. The docker detector reports the hostname of the daemon it talks to — the
+node — and the collector already mounts `/var/run/docker.sock`, so it needs no extra access. Verified by
+running the detector against the live node: `host.name: "nxt-sw-4-m"`, matching that node's own `hostname`.
+
+Caught before shipping only because I checked what the field actually contained rather than trusting the
+name.
+
 ## v0.2.196 (2026-10-16)
 
 **The collector keeps one task per node and hands back the memory it never used.**
