@@ -71,7 +71,7 @@ type CredentialsManager struct {
 // deploy` produces. Keep in sync with the bundled stacks.
 var consumingService = map[string]string{
 	"traefik_dashboard": "infra_traefik",
-	"openobserve_admin": "observability_openobserve",
+	"openobserve_admin": "observability_parseable",
 	"sso_cookie_secret": "sso_oauth2-proxy",
 	"seaweedfs_admin":   "backup_seaweedfs",
 }

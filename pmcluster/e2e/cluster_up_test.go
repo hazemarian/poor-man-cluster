@@ -138,7 +138,7 @@ func TestClusterUp(t *testing.T) {
 			wantRep int
 		}{
 			{stack: "infra", service: "traefik", wantRep: 1},
-			{stack: "observability", service: "openobserve", wantRep: 1},
+			{stack: "observability", service: "parseable", wantRep: 1},
 			{stack: "observability", service: "otel-collector", wantRep: 1},
 			{stack: "backup", service: "volume-backup", wantRep: 1},
 		} {
@@ -267,7 +267,7 @@ func TestClusterUp(t *testing.T) {
 			wantRep int
 		}{
 			{stack: "infra", service: "traefik", wantRep: 1},
-			{stack: "observability", service: "openobserve", wantRep: 1},
+			{stack: "observability", service: "parseable", wantRep: 1},
 			{stack: "observability", service: "otel-collector", wantRep: 1},
 		} {
 			fullName := svc.stack + "_" + svc.service

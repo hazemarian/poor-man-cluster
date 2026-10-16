@@ -97,7 +97,7 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"stack":"demo","acknowledged":true}`)
 	})
 	mux.HandleFunc("/api/services", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","running_node":"node-09","update_state":"completed"},{"stack":"infra","name":"infra_traefik","image":"traefik:v3","replicas":1,"desired":1,"mode":"global","updated":31,"platform":true},{"stack":"edge","name":"edge_pmcluster-edge","image":"pmcluster/edge","replicas":1,"desired":1,"mode":"replicated","updated":32,"platform":true},{"stack":"observability","name":"observability_openobserve","image":"openobserve/openobserve","replicas":1,"desired":1,"mode":"replicated","updated":33,"platform":true}]}`)
+		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","running_node":"node-09","update_state":"completed"},{"stack":"infra","name":"infra_traefik","image":"traefik:v3","replicas":1,"desired":1,"mode":"global","updated":31,"platform":true},{"stack":"edge","name":"edge_pmcluster-edge","image":"pmcluster/edge","replicas":1,"desired":1,"mode":"replicated","updated":32,"platform":true},{"stack":"observability","name":"observability_parseable","image":"parseable/parseable","replicas":1,"desired":1,"mode":"replicated","updated":33,"platform":true}]}`)
 	})
 	mux.HandleFunc("/api/services/demo", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"services":[{"stack":"demo","name":"web","image":"nginx:1.27","replicas":2,"desired":2,"mode":"replicated","updated":30,"node":"node-01","running_node":"node-09","update_state":"completed"}]}`)
@@ -396,7 +396,7 @@ func TestControllers_Platform(t *testing.T) {
 		t.Fatalf("GET /web/platform = %d, want 200", rr.Code)
 	}
 	body := rr.Body.String()
-	for _, platformSvc := range []string{"traefik:v3", "pmcluster/edge", "openobserve/openobserve"} {
+	for _, platformSvc := range []string{"traefik:v3", "pmcluster/edge", "parseable/parseable"} {
 		if !strings.Contains(body, platformSvc) {
 			t.Errorf("GET /web/platform missing platform service image %q; got:\n%s", platformSvc, body)
 		}
