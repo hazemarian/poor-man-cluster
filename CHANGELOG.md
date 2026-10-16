@@ -3,6 +3,35 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.203 (2026-10-16)
+
+**Node tiles built on metrics that actually carry values — and the reason the first ones didn't.**
+
+The tiles I wrote queried `system.cpu.utilization` and `system.memory.utilization`. Neither exists; this
+collector emits `system.cpu.time` and `system.memory.usage`. Worse, fixing the name alone would still have
+charted nothing, because of a type split found by counting populated values per metric:
+
+| metric | rows | with a value |
+|---|---|---|
+| `system.cpu.time` | 16 | **16** |
+| `system.cpu.load_average.1m` | 2 | **2** |
+| `system.memory.usage` | 12 | **0** |
+| `system.cpu.logical.count` | 2 | **0** |
+
+Every double-valued metric lands in `data_point_value`; every **integer**-valued one arrives empty. Parseable
+does not map integer datapoints, and `data_point_value_double`/`_int` do not exist — there is no column to
+reach for. So no SQL could have fixed a memory tile based on `system.memory.usage`.
+
+Rewritten against metrics that demonstrably carry values: node CPU as the non-idle/total ratio of
+`system.cpu.time` (both doubles), node memory from `container.memory.percent`, node load from
+`system.cpu.load_average.1m`. The memory tile filters `host.name LIKE 'nxt-%'` because rows written before the
+resourcedetection fix carry a **container id** in `host.name`, and grouping without it mixes nodes and
+containers into one chart.
+
+Verified against live data before provisioning:
+`nxt-sw-1-m` 75.1% · `nxt-sw-3-w` 60.5% · `nxt-sw-4-m` 44.0% · `nxt-sw-2-m` 27.9% memory,
+`nxt-sw-3-w` 3.84% CPU, load 0.19.
+
 ## v0.2.202 (2026-10-16)
 
 **Fixed the lint failure CI caught and my local linter could not.**

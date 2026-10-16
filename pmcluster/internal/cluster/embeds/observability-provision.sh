@@ -209,12 +209,36 @@ provision_dashboard() {
         "SELECT ${_KIND} AS \`kind\`, SUM(data_point_value) AS \`value\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.network.io.usage.rx_bytes' GROUP BY \`kind\` ORDER BY \`value\` DESC LIMIT 5" \
         'kind' 'value' 'Tier' 'Bytes received' 0 5 5 5
 
-    # ── per node, from hostmetrics (system.*) ──
-    add_tile "$_d" "Node CPU %" pmcluster-metrics pie \
-        "SELECT \`host.name\`, SUM(data_point_value) * 100 AS \`cpu_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.cpu.utilization' AND state != 'idle' GROUP BY \`host.name\` ORDER BY \`cpu_pct\` DESC LIMIT 10" \
+    # ── per node ──
+    #
+    # METRIC CHOICE IS NOT COSMETIC HERE. Verified by counting populated values
+    # per metric on the live cluster:
+    #
+    #   system.cpu.time                  16 rows, 16 with a value
+    #   system.cpu.load_average.1m        2 rows,  2 with a value
+    #   system.memory.usage              12 rows,  0 with a value
+    #   system.cpu.logical.count          2 rows,  0 with a value
+    #
+    # The split is exact and it is a TYPE split: every metric whose datapoints are
+    # doubles lands in data_point_value, and every INTEGER-valued one arrives with
+    # an empty value. Parseable does not map integer datapoints, so a node memory
+    # tile built on system.memory.usage charts nothing no matter how the query is
+    # written — the value was never stored. `data_point_value_double` /
+    # `_int` do not exist; there is no column to reach for.
+    #
+    # So node CPU comes from the double-valued system.cpu.time (as a ratio of
+    # non-idle to total, both of which are doubles), and node memory comes from
+    # container.memory.percent, which is a double and is attributed to the node
+    # because the docker detector runs first in resourcedetection.
+    #
+    # The `host.name LIKE 'nxt-%'` filter is not decoration: rows written before
+    # that detector fix carry the CONTAINER id in host.name (1af781ba5184), and
+    # grouping without it silently mixes nodes and containers in one chart.
+    add_tile "$_d" "Node CPU %" pmcluster-metrics bar \
+        "SELECT \`host.name\`, SUM(CASE WHEN state <> 'idle' THEN data_point_value ELSE 0 END) / SUM(data_point_value) * 100 AS \`cpu_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.cpu.time' GROUP BY \`host.name\` ORDER BY \`cpu_pct\` DESC LIMIT 10" \
         'host.name' 'cpu_pct' 'Node' 'CPU %' 5 5 5 5
     add_tile "$_d" "Node memory %" pmcluster-metrics donut \
-        "SELECT \`host.name\`, MAX(data_point_value) * 100 AS \`mem_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.memory.utilization' GROUP BY \`host.name\` ORDER BY \`mem_pct\` DESC LIMIT 10" \
+        "SELECT \`host.name\`, MAX(data_point_value) AS \`mem_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.memory.percent' AND \`host.name\` LIKE 'nxt-%' GROUP BY \`host.name\` ORDER BY \`mem_pct\` DESC LIMIT 10" \
         'host.name' 'mem_pct' 'Node' 'Memory %' 10 5 5 5
     add_tile "$_d" "Node load (1m)" pmcluster-metrics table \
         "SELECT \`host.name\`, MAX(data_point_value) AS \`load_1m\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.cpu.load_average.1m' GROUP BY \`host.name\` ORDER BY \`load_1m\` DESC LIMIT 10" \
