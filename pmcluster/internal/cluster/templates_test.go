@@ -410,8 +410,11 @@ func TestLoadComposeFile_ObservabilityUsesManagedCredential(t *testing.T) {
 	if !strings.Contains(body, "P_PASSWORD: SOMEPASSWORD_SECRET") {
 		t.Error("observability stack must set P_PASSWORD from the managed admin credential")
 	}
-	if !strings.Contains(body, "command:\n    - local-store") && !strings.Contains(body, "- local-store") {
-		t.Error("parseable must run the local-store subcommand")
+	// The image declares no ENTRYPOINT, so a bare subcommand is exec'd directly
+	// and the container dies with `exec: "local-store": executable file not
+	// found in $PATH`. The full argv is required.
+	if !strings.Contains(body, "- /usr/bin/parseable") || !strings.Contains(body, "- local-store") {
+		t.Error("parseable must run the FULL argv (/usr/bin/parseable local-store), not a bare subcommand")
 	}
 	// The OpenObserve surface is gone with it.
 	for _, gone := range []string{"ZO_ROOT_USER", "openobserve"} {
@@ -628,6 +631,66 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 
 	if !strings.Contains(body, "[memory_limiter, batch]") {
 		t.Error("traces pipeline must lead with memory_limiter")
+	}
+}
+
+// TestRenderOTelCollectorConfigIsValidYAML parses the rendered collector config
+// with a real YAML parser. The other collector tests only string-match, so a
+// malformed document — a stray escape in the OTTL filter, say — sails through
+// them and is caught only by the swarm e2e, ten minutes and a docker pull
+// later. This makes the fast job catch it.
+func TestRenderOTelCollectorConfigIsValidYAML(t *testing.T) {
+	in := RenderInput{
+		Domain:                  "example.com",
+		ObservabilityAdminEmail: "admin@x.com",
+		ObservabilityBasicAuth:  observabilityBasicAuth("admin@x.com", "pw"),
+	}
+	data, err := RenderOTelCollectorConfig(in)
+	if err != nil {
+		t.Fatalf("RenderOTelCollectorConfig: %v", err)
+	}
+	var doc struct {
+		Receivers  map[string]any `yaml:"receivers"`
+		Processors map[string]any `yaml:"processors"`
+		Exporters  map[string]any `yaml:"exporters"`
+		Service    struct {
+			Pipelines map[string]struct {
+				Receivers  []string `yaml:"receivers"`
+				Processors []string `yaml:"processors"`
+				Exporters  []string `yaml:"exporters"`
+			} `yaml:"pipelines"`
+		} `yaml:"service"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("rendered collector config is not valid YAML: %v", err)
+	}
+	for _, want := range []string{"otlphttp/parseable-logs", "otlphttp/parseable-metrics", "otlphttp/parseable-traces"} {
+		if _, ok := doc.Exporters[want]; !ok {
+			t.Errorf("rendered config is missing exporter %q", want)
+		}
+	}
+	if _, ok := doc.Processors["memory_limiter"]; !ok {
+		t.Error("rendered config is missing the memory_limiter processor")
+	}
+	// Every pipeline must reference components that actually exist — a typo in
+	// a pipeline list is otherwise only discovered when the collector refuses
+	// to boot.
+	for name, pl := range doc.Service.Pipelines {
+		for _, r := range pl.Receivers {
+			if _, ok := doc.Receivers[r]; !ok {
+				t.Errorf("pipeline %s references unknown receiver %q", name, r)
+			}
+		}
+		for _, pr := range pl.Processors {
+			if _, ok := doc.Processors[pr]; !ok {
+				t.Errorf("pipeline %s references unknown processor %q", name, pr)
+			}
+		}
+		for _, e := range pl.Exporters {
+			if _, ok := doc.Exporters[e]; !ok {
+				t.Errorf("pipeline %s references unknown exporter %q", name, e)
+			}
+		}
 	}
 }
 

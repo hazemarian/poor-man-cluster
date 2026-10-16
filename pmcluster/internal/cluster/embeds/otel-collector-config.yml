@@ -73,7 +73,7 @@ processors:
   filter/skip_filelog:
     logs:
       log_record:
-        - 'resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] != nil and resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] == "true"
+        - 'resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] != nil and resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] == "true"'
 
   resource:
     attributes:

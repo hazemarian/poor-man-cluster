@@ -26,9 +26,10 @@ services:
     # app-level monitoring-net; the otel-collector joins only monitoring-net.
     networks:
       - traefik-net
-    # local-store: single node, Parquet on the mounted volumes. The subcommand
-    # is argv to the image's entrypoint (/usr/bin/parseable).
-    command: ["local-store"]
+    # local-store: single node, Parquet on the mounted volumes. The FULL argv is
+    # required: the image declares no ENTRYPOINT, so a bare subcommand is exec'd
+    # directly and fails with `exec: "local-store": executable file not found`.
+    command: ["/usr/bin/parseable", "local-store"]
     env:
       P_ADDR: "0.0.0.0:8000"
       # ONE login everywhere: the same managed observability admin credential
