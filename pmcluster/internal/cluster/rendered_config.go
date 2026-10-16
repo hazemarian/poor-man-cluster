@@ -35,6 +35,7 @@ func RenderedConfigs() []RenderedConfig {
 	return []RenderedConfig{
 		{Logical: "pmcluster_otel_config", SnapshotKey: "otel-collector-config", Render: RenderOTelCollectorConfig},
 		{Logical: "pmcluster_traefik_dynamic", SnapshotKey: "traefik-dynamic", Render: RenderTraefikDynamic},
+		{Logical: "pmcluster_parseable_retention", SnapshotKey: "parseable-retention", Render: RenderParseableRetentionScript},
 	}
 }
 
@@ -93,5 +94,6 @@ func renderedConfigs() []RenderedConfig {
 	return []RenderedConfig{
 		{Logical: "pmcluster_otel_config", SnapshotKey: "otel-collector-config", Render: RenderOTelCollectorConfig},
 		{Logical: "pmcluster_traefik_dynamic", SnapshotKey: "traefik-dynamic", Render: RenderTraefikDynamic},
+		{Logical: "pmcluster_parseable_retention", SnapshotKey: "parseable-retention", Render: RenderParseableRetentionScript},
 	}
 }

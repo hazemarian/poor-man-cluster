@@ -48,14 +48,6 @@ services:
     volumes:
       - "parseable_data:/data"
       - "parseable_staging:/staging"
-    # Published on the routing mesh for the same reason SeaweedFS publishes 8333:
-    # the daemon runs on the HOST, not on a swarm network, so it cannot resolve
-    # observability_parseable. It converges per-stream retention over
-    # 127.0.0.1:8000 at cluster update. Parseable enforces HTTP Basic on every
-    # path, so the port is authenticated even though the mesh exposes it.
-    ports:
-      - target: 8000
-        published: 8000
     labels:
       "traefik.enable": "true"
       "traefik.http.routers.observability.rule": "Host(`observ.${DOMAIN}`)"
@@ -80,6 +72,42 @@ services:
       limits:
         cpus: "0.5"
         memory: 768M
+
+  # Per-stream retention, applied from INSIDE the swarm network by a one-shot.
+  #
+  # Parseable takes no retention from env, from a flag or from a config file —
+  # it is API-only — so an API call has to live somewhere. It lives here rather
+  # than in the daemon because the daemon is a systemd HOST process and cannot
+  # resolve observability_parseable; calling from inside means Parseable needs
+  # no published port at all and is reachable only where it is needed.
+  #
+  # run_once renders restart_policy: none — it applies retention and exits. The
+  # script retries until the server answers, because swarm ignores depends_on on
+  # this path, and it is best-effort: an unreachable backend must never fail the
+  # deploy.
+  retention:
+    image: curlimages/curl:8.10.1
+    run_once: true
+    placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
+    networks:
+      - monitoring-net
+    configs:
+      - config_path(pmcluster_parseable_retention)
+    command: ["sh", "/etc/pmcluster/parseable-retention.sh"]
+    env:
+      P_BASE: "http://observability_parseable:8000"
+      P_USER: "[[.ObservabilityAdminEmail]]"
+      P_PASS: "secret(observability_admin_password)"
+      LOGS_RETENTION_DAYS: "[[.OOLogsRetentionDays]]"
+      METRICS_RETENTION_DAYS: "[[.OOMetricsRetentionDays]]"
+      TRACES_RETENTION_DAYS: "[[.OOTracesRetentionDays]]"
+    resources:
+      reservations:
+        cpus: "0.02"
+        memory: 16M
+      limits:
+        cpus: "0.2"
+        memory: 64M
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.157.0

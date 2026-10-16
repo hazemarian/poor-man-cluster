@@ -634,6 +634,61 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 	}
 }
 
+// TestLoadComposeFile_ObservabilityRetentionOneShot pins how retention reaches
+// Parseable. It cannot come from env or a flag (v2.8.0 has neither), so an API
+// call has to exist — and it must run INSIDE the swarm network, not from the
+// daemon, because the daemon is a host process that cannot resolve
+// observability_parseable. That is why Parseable publishes no port at all.
+func TestLoadComposeFile_ObservabilityRetentionOneShot(t *testing.T) {
+	in := RenderInput{
+		Domain:                     "example.com",
+		ObservabilityAdminEmail:    "ops@example.com",
+		ObservabilityAdminPassword: "SOMEPASSWORD_SECRET",
+		ObservabilityBasicAuth:     observabilityBasicAuth("ops@example.com", "SOMEPASSWORD_SECRET"),
+		OOLogsRetentionDays:        30,
+		OOMetricsRetentionDays:     14,
+		OOTracesRetentionDays:      10,
+	}
+	data, err := LoadComposeFile(StackObservability, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile: %v", err)
+	}
+	body := string(data)
+
+	// Parseable must NOT publish a port: the call comes from inside the swarm.
+	start := strings.Index(body, "parseable:")
+	if start < 0 {
+		t.Fatal("rendered stack has no parseable service")
+	}
+	parseable := body[start:]
+	if i := strings.Index(parseable, "otel-collector:"); i > 0 {
+		parseable = parseable[:i]
+	}
+	if strings.Contains(parseable, "ports:") {
+		t.Error("parseable must not publish a port — retention is applied from inside the swarm network")
+	}
+
+	// The one-shot exists, is run_once (restart_policy none), and mounts the script.
+	for _, want := range []string{
+		"retention:",
+		"curlimages/curl:8.10.1",
+		"condition: none",
+		"/etc/pmcluster/parseable-retention.sh",
+		"pmcluster_parseable_retention",
+		"LOGS_RETENTION_DAYS: \"30\"",
+		"METRICS_RETENTION_DAYS: \"14\"",
+		"TRACES_RETENTION_DAYS: \"10\"",
+		"P_BASE: http://observability_parseable:8000",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("observability stack missing %q", want)
+		}
+	}
+	if !strings.Contains(body, "secret(observability_admin_password)") && !strings.Contains(body, "P_PASS: SOMEPASSWORD_SECRET") {
+		t.Error("the one-shot must receive the managed credential")
+	}
+}
+
 // TestRenderOTelCollectorConfigIsValidYAML parses the rendered collector config
 // with a real YAML parser. The other collector tests only string-match, so a
 // malformed document — a stray escape in the OTTL filter, say — sails through

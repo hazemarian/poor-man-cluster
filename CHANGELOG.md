@@ -59,6 +59,27 @@ Two changes that belong together, because the first caused the outage the second
   settings only mean anything if something pushes them. v0.2.185 shipped without that and flagged it as an
   open gap; v0.2.186 closes it — see below.
 
+## v0.2.187 (2026-10-16)
+
+**Retention is applied from inside the swarm, and Parseable publishes no port.**
+
+A correction to v0.2.186, which reached Parseable by publishing 8000 on the routing mesh so the *daemon*
+could call it.
+
+- **The published port is gone.** It existed only because the caller was in the wrong place: the daemon is
+  a systemd HOST process, not a member of a swarm network, so it cannot resolve `observability_parseable`.
+  Publishing was a workaround for that, and it made the backend reachable from outside the cluster.
+- **Retention is now a `run_once` service in the observability stack** — `observability_retention`, a
+  curl one-shot that applies the per-stream PUTs and exits (`restart_policy: none`). Parseable is
+  therefore reachable only where it is needed, from the swarm network. The API knowledge lives in the
+  stack definition (config), not in Go, and the daemon keeps no backend-specific code.
+- It takes the day counts from the same `oo_*_retention_days` settings, renders them into its env, and
+  receives the admin credential through the same `secret(...)` reference everything else uses. It retries
+  until the server answers — swarm ignores `depends_on` on this path — and is best-effort: an unreachable
+  backend warns, it never fails the deploy.
+- It is deliberately NOT in `WaitHealthyStacks`' service list: being `run_once`, it sits at 0/1 once it has
+  completed, and the health gate would otherwise wait on it forever.
+
 ## v0.2.186 (2026-10-16)
 
 **Retention is real, and the collector stopped re-ingesting history.**

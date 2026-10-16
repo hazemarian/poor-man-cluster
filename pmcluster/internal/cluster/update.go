@@ -724,29 +724,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil
 	})
 
-	wf.Add("Converging observability retention (Parseable)", func(ctx context.Context) error {
-		// Parseable takes NO retention from the environment — OpenObserve used
-		// ZO_*_RETENTION_DAYS, Parseable's is per stream and settable only over
-		// its API. So the retention settings mean nothing unless the daemon
-		// pushes them, and an unset one means the dataset grows without bound.
-		//
-		// Best-effort on purpose: an unreachable backend must never become a
-		// prerequisite for the cluster coming up (the same rule the offsite
-		// preflight follows — warn on unreachable, fail only on a real
-		// rejection that a retry cannot fix).
-		if err := ConvergeObservabilityRetention(ctx, ParseableRetentionBaseURL,
-			render.ObservabilityAdminEmail, render.ObservabilityAdminPassword,
-			render.OOLogsRetentionDays, render.OOMetricsRetentionDays, render.OOTracesRetentionDays); err != nil {
-			fmt.Fprintf(out, "  ⚠ observability retention not converged: %v\n", err)
-			return nil
-		}
-		if render.OOLogsRetentionDays > 0 || render.OOMetricsRetentionDays > 0 || render.OOTracesRetentionDays > 0 {
-			fmt.Fprintf(out, "  ▶ retention applied — logs=%dd metrics=%dd traces=%dd\n",
-				render.OOLogsRetentionDays, render.OOMetricsRetentionDays, render.OOTracesRetentionDays)
-		}
-		return nil
-	})
-
 	wf.Add("Cluster update complete.", func(ctx context.Context) error { return nil })
 
 	if err := wf.Run(ctx); err != nil {

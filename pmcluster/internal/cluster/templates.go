@@ -431,6 +431,8 @@ func (r *renderRefResolver) ResolveConfigPath(_ context.Context, _ string, name 
 		return "/etc/traefik/dynamic/conf.yml", nil
 	case "pmcluster_otel_config":
 		return "/etc/otel-collector-config.yaml", nil
+	case "pmcluster_parseable_retention":
+		return "/etc/pmcluster/parseable-retention.sh", nil
 	default:
 		return refs.DefaultConfigMountPath(name), nil
 	}
@@ -587,6 +589,20 @@ func (r *otelRefResolver) ResolveSecretValue(_ context.Context, name string) (st
 }
 
 // RenderOTelCollectorConfig fills in the OpenObserve `Authorization: Basic <b64>`
+// RenderParseableRetentionScript returns the one-shot retention script.
+//
+// It is deliberately static: the retention day counts arrive as environment
+// variables from the stack template, so changing a setting changes the compose
+// env and the content-aware reconcile redeploys — there is nothing to
+// substitute into the script itself, and no credential ever lands in it.
+func RenderParseableRetentionScript(in RenderInput) ([]byte, error) {
+	body, err := readConfigFile("parseable-retention.sh", in)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(body), nil
+}
+
 // RenderOTelCollectorConfig renders the OTel collector pipeline config. The
 // exporter's Authorization header is the ROOT admin basic auth
 // (Basic base64(<admin email>:<admin password>)) — the exact credentials

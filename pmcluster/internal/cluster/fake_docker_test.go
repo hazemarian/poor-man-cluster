@@ -145,6 +145,11 @@ func renderedServices() []string {
 	return append(append([]string{}, bundledServices...),
 		"backup_control-plane-backup",
 		"backup_seaweedfs",
+		// The observability retention one-shot lives in the observability stack
+		// and so must exist for the drift check to see a settled cluster — but
+		// it is deliberately NOT in bundledServices: it is run_once, so after it
+		// completes it sits at 0/1 and WaitHealthyStacks would wait forever.
+		"observability_retention",
 	)
 }
 
