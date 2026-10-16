@@ -3,6 +3,15 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.201 (2026-10-16)
+
+**The traces-pipeline test now asserts the invariant, not the literal list.**
+
+Adding `filter/drop_docker_api_spans` broke `TestRenderOTelCollectorConfig_LogsPipeline`, which pinned the
+traces pipeline as exactly `[memory_limiter, batch]`. The property worth protecting is that the limiter runs
+**first** and `batch` **last** — a limiter placed after the exporters it exists to protect from is the actual
+bug — so the test now checks the order instead of the contents, and still fails if the limiter is not first.
+
 ## v0.2.200 (2026-10-16)
 
 **Docker API spans dropped in the collector — the missing emitter found.**
