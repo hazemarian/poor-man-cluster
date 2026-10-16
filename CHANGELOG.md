@@ -3,6 +3,17 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.202 (2026-10-16)
+
+**Fixed the lint failure CI caught and my local linter could not.**
+
+`v0.2.201`'s `pmcluster` job failed on `offBy1: Index() can return -1` in the new traces-pipeline assertion —
+I sliced `body[strings.Index(body, "traces:"):]` without guarding, which panics if the marker is absent. CI's
+golangci-lint is newer than the local one, which reported 0 issues on the same code.
+
+Worth keeping: **a clean local lint is not evidence CI will pass.** The `-1` was real, and the fix is a guard
+rather than a suppression.
+
 ## v0.2.201 (2026-10-16)
 
 **The traces-pipeline test now asserts the invariant, not the literal list.**

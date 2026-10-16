@@ -633,14 +633,17 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 	// batch last. Pinning the exact contents meant any added processor broke the
 	// test without breaking the property it exists to protect — a limiter that
 	// runs after the exporters that overload it is the bug being guarded against.
-	tracesPipe := body[strings.Index(body, "traces:"):]
-	if i, j := strings.Index(tracesPipe, "processors:"), strings.Index(tracesPipe, "exporters:"); i >= 0 && j > i {
-		procs := tracesPipe[i:j]
-		if !strings.Contains(procs, "[memory_limiter,") {
-			t.Error("traces pipeline must lead with memory_limiter")
-		}
-		if !strings.Contains(procs, ", batch]") {
-			t.Error("traces pipeline must end with batch")
+	if ti := strings.Index(body, "traces:"); ti >= 0 {
+		tracesPipe := body[ti:]
+		i, j := strings.Index(tracesPipe, "processors:"), strings.Index(tracesPipe, "exporters:")
+		if i >= 0 && j > i {
+			procs := tracesPipe[i:j]
+			if !strings.Contains(procs, "[memory_limiter,") {
+				t.Error("traces pipeline must lead with memory_limiter")
+			}
+			if !strings.Contains(procs, ", batch]") {
+				t.Error("traces pipeline must end with batch")
+			}
 		}
 	}
 }
