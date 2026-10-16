@@ -59,6 +59,25 @@ Two changes that belong together, because the first caused the outage the second
   settings only mean anything if something pushes them. v0.2.185 shipped without that and flagged it as an
   open gap; v0.2.186 closes it — see below.
 
+## v0.2.192 (2026-10-16)
+
+**The unattributable telemetry is gone at the source — a wipe alone would have refilled it.**
+
+The live cluster was ingesting **4.6M INFO + 48k ERROR** log rows with `service.name` null *and* `node`,
+`app` and `stack` null — traefik's own `Labels traefik.docker.* ... deprecated` chatter. Ungroupable,
+unalertable, and the cause of the "null services" noise.
+
+- The `filelog` receiver's `exclude:` entries were **inert**. They name services
+  (`*infra_traefik*`), but container log paths are built from container **IDs**, so the globs matched
+  nothing — which also explains why those "exclusions" never reduced the collector's memory pressure
+  earlier, only `start_at: end` did. The block is removed with a note saying why, rather than left looking
+  correct.
+- Noise is filtered at **record level** in `filter/skip_filelog`, by `service.name` — the only handle that
+  exists there: unattributable records (`service.name` null or empty) and enumerated platform chatter
+  (traefik, the collector, Parseable, the provisioner, oauth2-proxy, the three backup agents). Names are
+  enumerated rather than regex-matched so a typo fails loudly instead of silently filtering nothing.
+- Verified with the production collector image before deploy: `otelcol validate --config=…` exits 0.
+
 ## v0.2.191 (2026-10-16)
 
 **OpenObserve naming is gone, labels follow the OTel convention, and provisioning now includes a dashboard.**

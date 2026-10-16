@@ -43,16 +43,10 @@ receivers:
   filelog:
     include:
       - /var/lib/docker/containers/*/*-json.log
-    exclude:
-      - /var/lib/docker/containers/*otel-collector*/*-json.log
-      - /var/lib/docker/containers/*parseable*/*-json.log
-      # Platform services whose stdout has no query value and is by far the
-      # chattiest: the backup agents log every scheduled run, traefik logs every
-      # provider reload.
-      - /var/lib/docker/containers/*backup_volume-backup*/*-json.log
-      - /var/lib/docker/containers/*backup_control-plane-backup*/*-json.log
-      - /var/lib/docker/containers/*backup_seaweedfs*/*-json.log
-      - /var/lib/docker/containers/*infra_traefik*/*-json.log
+    # NOTE: no `exclude:` here on purpose. These paths are container IDs, so a
+    # pattern naming a service cannot match one. The platform chatter this used
+    # to (fail to) exclude is dropped by filter/skip_filelog below, by service
+    # name — which is the only handle that exists at record level.
     include_file_name: false
     include_file_path: true
     # end, NOT beginning. With `beginning` every collector restart re-reads the
@@ -88,10 +82,34 @@ processors:
 
   # Drop logs from services that opted out via skip_filelog: true.
   # These services send logs via OTLP instead of stdout/stderr.
+  # Filters records the pipelines must never ship, and does it HERE rather than
+  # with filelog `exclude`: that option matches file PATHS, and container log
+  # paths are built from container IDs, so name-based globs like
+  # `*infra_traefik*` silently match nothing. That is why 4.6M unattributable
+  # rows (traefik's own deprecation chatter) were being ingested while the
+  # exclusions looked correct.
   filter/skip_filelog:
+    error_mode: ignore
     logs:
       log_record:
+        # Opt-out a workload sets on itself.
         - 'resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] != nil and resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] == "true"'
+        # Unattributable records. resource attributes come from the Swarm
+        # service label, so anything the receiver cannot resolve lands with
+        # service.name (and node/app/stack) null — ungroupable, unalertable
+        # noise: 4.6M lines and 48k ERRORs on the live cluster.
+        - 'resource.attributes["service.name"] == nil or resource.attributes["service.name"] == ""'
+        # Platform chatter with no query value. Enumerated rather than matched
+        # with a regex so the collector rejects the config loudly on a typo
+        # instead of silently filtering nothing.
+        - 'resource.attributes["service.name"] == "infra_traefik"'
+        - 'resource.attributes["service.name"] == "observability_otel-collector"'
+        - 'resource.attributes["service.name"] == "observability_parseable"'
+        - 'resource.attributes["service.name"] == "observability_provision"'
+        - 'resource.attributes["service.name"] == "sso_oauth2-proxy"'
+        - 'resource.attributes["service.name"] == "backup_volume-backup"'
+        - 'resource.attributes["service.name"] == "backup_control-plane-backup"'
+        - 'resource.attributes["service.name"] == "backup_seaweedfs"'
 
   resource:
     attributes:
