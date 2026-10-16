@@ -184,3 +184,33 @@ MIT. Copyright © 2025 Hazem Arian.
 ## Contact
 
 Built and maintained by **Hazem Arian** — [hazeem.arian@gmail.com](mailto:hazeem.arian@gmail.com) · [LinkedIn](https://www.linkedin.com/in/hazem-a-467b4183/). Contributions, issues, and feedback welcome.
+
+## Upgrading a server
+
+Updating the pmcluster binary on the nodes is a scripted, verifiable step. There is no
+`upgrade` subcommand: `cluster update` reconciles platform *stacks and configs*, and does not replace the
+binary on each node.
+
+```bash
+# followers first, leader last; checksum-verified before anything is installed
+PMCLUSTER_NODES=10.0.0.1,10.0.0.2,10.0.0.3 hack/upgrade-nodes.sh v0.2.203
+```
+
+The script downloads the release, verifies its SHA256, copies it to each node, installs it, restarts the
+unit, and reports the version before/after on every node. It exits non-zero if any node fails, so a partial
+upgrade cannot pass silently. The previous binary is kept as `/usr/local/bin/pmcluster.<version>.prev`.
+
+Then reconcile the platform:
+
+```bash
+pmcluster cluster update
+```
+
+**Two things to know before you run either**, both learned the hard way:
+
+- **`cluster update`'s summary is not trustworthy about redeploys.** It has printed "No rendered content
+  changed — nothing to redeploy" while the collector config and provisioner were in fact replaced. Verify the
+  effect, not the summary: `docker service inspect <svc>` and read the mounted config back.
+- **Repeated SSH attempts trip fail2ban**, after which the leader refuses connections while the followers
+  still answer. Slow down rather than retrying hard, and check followers to confirm the cluster is otherwise
+  healthy.

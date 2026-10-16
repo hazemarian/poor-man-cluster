@@ -3,6 +3,27 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.204 (2026-10-16)
+
+**Upgrading a server is now one command, and it found a seven-version skew on its first run.**
+
+There is no `upgrade` subcommand — `cluster update` reconciles stacks and configs, not the binary on each
+node. Updating was an undocumented manual dance (download, checksum, scp, install, restart, and remember to
+put the leader last), which is not something to repeat on a second server.
+
+`hack/upgrade-nodes.sh <version>` does it: download, **checksum-verified**, copy to each node, install, restart,
+report the version before/after, and fail non-zero if any node doesn't take the upgrade. The previous binary
+is kept as `/usr/local/bin/pmcluster.<version>.prev`. Followers are upgraded before the leader so the swarm
+never loses its only manager mid-run.
+
+Run against production it immediately exposed that **`nxt-sw-3-w` was still on v0.2.196** — seven versions
+behind — because every manual rollout had only touched the three managers, while the worker also runs a
+daemon (it ships its own telemetry). All four nodes are now on v0.2.203 and agree.
+
+The README documents the procedure and the two things that make it non-obvious: `cluster update`'s summary
+has printed "nothing to redeploy" while replacing configs, and repeated SSH attempts trip fail2ban, after
+which the leader refuses connections while followers still answer.
+
 ## v0.2.203 (2026-10-16)
 
 **Node tiles built on metrics that actually carry values — and the reason the first ones didn't.**
