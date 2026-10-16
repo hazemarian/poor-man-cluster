@@ -634,6 +634,56 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 	}
 }
 
+// TestEveryRenderedConfigHasANameAlias closes the class of bug that broke the
+// first attempt at the retention one-shot: a config registered in
+// renderedConfigs() but absent from configNameAliases. EnsureRenderedConfigs
+// then mints a versioned config (say pmcluster_parseable_retention_ab12cd34)
+// while the compose writer, unable to map the logical name, emits the BARE
+// logical name — and `docker stack deploy` fails with "config not found".
+//
+// Unit tests passed for that change because none of them went through a real
+// deploy; only the swarm e2e caught it. This asserts the invariant directly, so
+// registering a config without its alias fails fast instead of at deploy time.
+func TestEveryRenderedConfigHasANameAlias(t *testing.T) {
+	for _, rc := range renderedConfigs() {
+		fn, ok := configNameAliases[rc.Logical]
+		if !ok {
+			t.Errorf("renderedConfigs() has %q but configNameAliases does not — "+
+				"the compose writer would emit the unversioned name and the deploy would fail "+
+				"with \"config not found: %s\"", rc.Logical, rc.Logical)
+			continue
+		}
+		// The alias must actually yield the versioned name when it is known.
+		got := fn(RenderInput{OTelConfigName: "X", TraefikConfigName: "X", ParseableRetentionConfigName: "X"})
+		if got == "" {
+			t.Errorf("configNameAliases[%q] returned empty for a RenderInput with every name set "+
+				"(a stack rendered before EnsureRenderedConfigs would silently reference an unversioned config)",
+				rc.Logical)
+		}
+	}
+}
+
+// TestLoadComposeFile_ObservabilityRetentionUsesVersionedConfig asserts the
+// writer maps the logical name to the versioned one the run actually created.
+func TestLoadComposeFile_ObservabilityRetentionUsesVersionedConfig(t *testing.T) {
+	in := RenderInput{
+		Domain:                       "example.com",
+		ObservabilityAdminEmail:      "ops@example.com",
+		ObservabilityAdminPassword:   "PW",
+		ObservabilityBasicAuth:       observabilityBasicAuth("ops@example.com", "PW"),
+		ParseableRetentionConfigName: "pmcluster_parseable_retention_ab12cd34",
+	}
+	data, err := LoadComposeFile(StackObservability, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile: %v", err)
+	}
+	body := string(data)
+	if !strings.Contains(body, "name: pmcluster_parseable_retention_ab12cd34") {
+		t.Error("the retention config must be referenced by its versioned name — " +
+			"the bare logical name is not a config the run created")
+	}
+}
+
 // TestLoadComposeFile_ObservabilityRetentionOneShot pins how retention reaches
 // Parseable. It cannot come from env or a flag (v2.8.0 has neither), so an API
 // call has to exist — and it must run INSIDE the swarm network, not from the

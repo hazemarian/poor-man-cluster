@@ -175,6 +175,15 @@ type RenderInput struct {
 	// `config(pmcluster_traefik_dynamic)` in compose files.
 	TraefikConfigName string
 
+	// ParseableRetentionConfigName is the versioned Docker config name for the
+	// one-shot retention script that runs inside the swarm network. Resolved
+	// from `config(pmcluster_parseable_retention)` in compose files.
+	//
+	// Without this field the compose writer cannot map the logical name to the
+	// versioned config the run actually created, so it emits the bare logical
+	// name and `docker stack deploy` fails with "config not found".
+	ParseableRetentionConfigName string
+
 	// CertSecretName is the versioned Swarm secret name for the TLS
 	// certificate (e.g. cert_v001). Resolved from `secrets(cert)`.
 	CertSecretName string
@@ -357,8 +366,9 @@ type renderRefResolver struct {
 // configNameAliases maps a logical config() name to the RenderInput field
 // holding that config's versioned Docker config name.
 var configNameAliases = map[string]func(RenderInput) string{
-	"pmcluster_otel_config":     func(r RenderInput) string { return r.OTelConfigName },
-	"pmcluster_traefik_dynamic": func(r RenderInput) string { return r.TraefikConfigName },
+	"pmcluster_otel_config":         func(r RenderInput) string { return r.OTelConfigName },
+	"pmcluster_traefik_dynamic":     func(r RenderInput) string { return r.TraefikConfigName },
+	"pmcluster_parseable_retention": func(r RenderInput) string { return r.ParseableRetentionConfigName },
 }
 
 // secretNameAliases maps a logical secrets() name to the RenderInput field
@@ -371,7 +381,7 @@ var secretNameAliases = map[string]func(RenderInput) string{
 func (r *renderRefResolver) ResolveConfig(_ context.Context, _ string, name string) (string, error) {
 	fn, ok := configNameAliases[name]
 	if !ok {
-		return "", fmt.Errorf("resolve config(%s): no such platform config (known: pmcluster_otel_config, pmcluster_traefik_dynamic)", name)
+		return "", fmt.Errorf("resolve config(%s): no such platform config (known: pmcluster_otel_config, pmcluster_traefik_dynamic, pmcluster_parseable_retention)", name)
 	}
 	return fn(r.render), nil
 }

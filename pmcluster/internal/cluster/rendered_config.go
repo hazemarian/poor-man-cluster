@@ -67,6 +67,8 @@ func EnsureRenderedConfigs(ctx context.Context, d runtime.Client, render *Render
 			render.OTelConfigName = name
 		case "pmcluster_traefik_dynamic":
 			render.TraefikConfigName = name
+		case "pmcluster_parseable_retention":
+			render.ParseableRetentionConfigName = name
 		}
 	}
 	return outcomes, nil
