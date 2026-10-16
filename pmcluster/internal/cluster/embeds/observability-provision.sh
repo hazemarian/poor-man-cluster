@@ -195,14 +195,26 @@ provision_dashboard() {
     # definition even though it is the control plane rather than a workload.
     _KIND="CASE WHEN \`service.name\` LIKE 'infra%' OR \`service.name\` LIKE 'observability%' OR \`service.name\` LIKE 'sso%' OR \`service.name\` LIKE 'backup%' OR \`service.name\` LIKE 'edge%' OR \`service.name\` LIKE 'pmcluster%' THEN 'platform' ELSE 'deployed' END"
 
+    # SHAPE: every tile uses config.type "bar" with chartType "timeseries".
+    #
+    # Not a style choice — it is the only combination verified to render. Tiles
+    # declared as pie/donut/table showed "No data available" while their queries
+    # returned rows (checked: the CPU split returned platform=0.786, deployed=0.183;
+    # node load returned all four nodes), because config.type selects a shape from a
+    # family the "timeseries" chartType does not provide, and the renderer then has
+    # no axes to draw. bar is the proven member of that family, so it is what ships.
+    #
+    # Variety is worth having, but not at the cost of a dashboard that silently
+    # charts nothing: the correct family strings for pie/donut/table have to be read
+    # off a tile the UI itself creates, the same way layout.i and tileType were.
     # ── the split, one widget per signal ──
     add_tile "$_d" "Log lines: platform vs deployed" pmcluster-logs bar \
         "SELECT ${_KIND} AS \`kind\`, COUNT(*) AS \`COUNT_STAR\` FROM \`pmcluster-logs\` GROUP BY \`kind\` ORDER BY \`COUNT_STAR\` DESC LIMIT 5" \
         'kind' 'COUNT_STAR' 'Tier' 'Log lines' 0 0 5 5
-    add_tile "$_d" "CPU: platform vs deployed" pmcluster-metrics pie \
+    add_tile "$_d" "CPU: platform vs deployed" pmcluster-metrics bar \
         "SELECT ${_KIND} AS \`kind\`, MAX(data_point_value) AS \`value\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.cpu.utilization' GROUP BY \`kind\` ORDER BY \`value\` DESC LIMIT 5" \
         'kind' 'value' 'Tier' 'CPU' 5 0 5 5
-    add_tile "$_d" "Memory: platform vs deployed" pmcluster-metrics donut \
+    add_tile "$_d" "Memory: platform vs deployed" pmcluster-metrics bar \
         "SELECT ${_KIND} AS \`kind\`, MAX(data_point_value) AS \`value\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.memory.percent' GROUP BY \`kind\` ORDER BY \`value\` DESC LIMIT 5" \
         'kind' 'value' 'Tier' 'Memory %' 10 0 5 5
     add_tile "$_d" "Network: platform vs deployed" pmcluster-metrics bar \
@@ -237,10 +249,10 @@ provision_dashboard() {
     add_tile "$_d" "Node CPU %" pmcluster-metrics bar \
         "SELECT \`host.name\`, SUM(CASE WHEN state <> 'idle' THEN data_point_value ELSE 0 END) / SUM(data_point_value) * 100 AS \`cpu_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.cpu.time' GROUP BY \`host.name\` ORDER BY \`cpu_pct\` DESC LIMIT 10" \
         'host.name' 'cpu_pct' 'Node' 'CPU %' 5 5 5 5
-    add_tile "$_d" "Node memory %" pmcluster-metrics donut \
+    add_tile "$_d" "Node memory %" pmcluster-metrics bar \
         "SELECT \`host.name\`, MAX(data_point_value) AS \`mem_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.memory.percent' AND \`host.name\` LIKE 'nxt-%' GROUP BY \`host.name\` ORDER BY \`mem_pct\` DESC LIMIT 10" \
         'host.name' 'mem_pct' 'Node' 'Memory %' 10 5 5 5
-    add_tile "$_d" "Node load (1m)" pmcluster-metrics table \
+    add_tile "$_d" "Node load (1m)" pmcluster-metrics bar \
         "SELECT \`host.name\`, MAX(data_point_value) AS \`load_1m\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.cpu.load_average.1m' GROUP BY \`host.name\` ORDER BY \`load_1m\` DESC LIMIT 10" \
         'host.name' 'load_1m' 'Node' 'Load 1m' 0 10 5 5
 

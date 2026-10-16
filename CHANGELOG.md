@@ -3,6 +3,21 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.205 (2026-10-16)
+
+**Dashboard tiles all render: the shape, not the query, was wrong.**
+
+Three tiles showed "No data available" after the metric-name fix — CPU and Memory split, Node load. Their
+queries were correct: run verbatim they returned `platform=0.786 / deployed=0.183` and all four node loads.
+The fault was `config.type`. Every tile declared `chartType: "timeseries"` (the one family proven to work)
+with `config.type` set to `pie` / `donut` / `table` — shapes from families that combination does not provide,
+so the renderer had no axes and drew nothing. Every tile whose `config.type` was `bar` worked.
+
+All nine tiles now use `bar`. Verified in the browser, not from the API: every tile draws with populated
+axes and legends. Variety is worth having, but the correct family strings for pie/donut/table have to be read
+off a tile the UI creates — the same way `layout.i` and `tileType` were — and a dashboard that silently
+charts nothing is worse than a uniform one.
+
 ## v0.2.204 (2026-10-16)
 
 **Upgrading a server is now one command, and it found a seven-version skew on its first run.**
