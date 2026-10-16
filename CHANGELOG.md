@@ -3,6 +3,30 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.208 (2026-10-16)
+
+**Nothing in the platform assumes this deployment's nodes any more.**
+
+Two static assumptions removed, both of which would have broken the first time this ran somewhere else:
+
+- **The upgrade script takes no IP list.** It discovered nodes from the swarm — one seed host is enough — and
+  derives each node's address from `Status.Addr` rather than DNS or a hand-kept list. Ordering comes from the
+  cluster's own roles: workers, then follower managers, leader **last**, so a run never removes the last
+  manager or restarts the leader mid-flight. `PMCLUSTER_NODES` still overrides for unusual setups.
+- **The per-node dashboard filter no longer matches a naming scheme.** It keyed on `host.name LIKE 'nxt-%'` —
+  one deployment's convention. It now matches a **hyphen**, which node hostnames carry and Docker's
+  12-hex-character container ids do not, so it keeps excluding pre-fix container rows on any cluster.
+
+### Dashboard variables: not supported by this Parseable
+
+A dashboard filtered by a `service_name` variable was requested. `GET /api/v1/dashboards/{id}` returns exactly
+`author, created, dashboardId, dashboardType, isFavorite, modified, tags, tenantId, tiles, title, version` —
+**no `variables`, `templating` or `params` field**, and tiles carry no placeholder syntax. So Parseable v2.8.0's
+dashboard API has nowhere to put a variable; a `$service` in `chartQuery` would be passed through as literal
+text. Options, none of them a drop-in: check whether a newer Parseable adds dashboard variables, confirm
+whether the SPA has a client-side feature the API doesn't expose, or generate one dashboard per service from
+the same provisioner.
+
 ## v0.2.207 (2026-10-16)
 
 **Placement fixed, shapes chosen per resource, and one tile removed for being unrenderable.**

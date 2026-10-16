@@ -27,7 +27,7 @@ VERSION="${1:-}"
 [ -n "$VERSION" ] || { echo "usage: $0 <version> [--hosts ip,ip,ip] [--key path]" >&2; exit 2; }
 shift || true
 
-HOSTS="${PMCLUSTER_NODES:-}"
+HOSTS="${PMCLUSTER_NODES:-}"     # optional; discovered from the swarm when empty
 KEY="${PMCLUSTER_SSH_KEY:-$HOME/.ssh/pmcluster_vps4_ed25519}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -36,7 +36,34 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-[ -n "$HOSTS" ] || { echo "no hosts: set PMCLUSTER_NODES or pass --hosts" >&2; exit 2; }
+# NODES ARE DISCOVERED, NOT ASSUMED.
+#
+# The first version took an explicit IP list, which only works on the cluster it
+# was written for: a second deployment means editing the script, and an edited
+# script silently upgrades the wrong machines. So when no list is given, ask the
+# swarm itself — one seed host is enough — and derive the IPs from the nodes'
+# Status.Addr rather than from DNS or a hand-kept list.
+if [ -z "$HOSTS" ]; then
+  SEED="${PMCLUSTER_SEED:-}"
+  if [ -z "$SEED" ]; then
+    echo "no hosts and no seed: pass --hosts, or set PMCLUSTER_SEED to any reachable node" >&2
+    exit 2
+  fi
+  echo "▶ discovering nodes via $SEED"
+  DISCOVERED=$(ssh "${SSHOPT[@]}" "root@$SEED" '
+    docker node ls --format "{{.ID}}" | while read -r id; do
+      ip=$(docker node inspect "$id" --format "{{.Status.Addr}}")
+      role=$(docker node inspect "$id" --format "{{.Spec.Role}}")
+      lead=$(docker node inspect "$id" --format "{{.ManagerStatus.Leader}}")
+      [ -n "$ip" ] && printf "%s|%s|%s\n" "$ip" "$role" "$lead"
+    done
+  ' 2>/dev/null) || { echo "  discovery failed via $SEED" >&2; exit 1; }
+  [ -n "$DISCOVERED" ] || { echo "  discovery returned no nodes" >&2; exit 1; }
+  # workers first, then follower managers, leader LAST — so the swarm keeps a
+  # manager throughout and never loses its leader mid-upgrade.
+  HOSTS=$(printf '%s\n' "$DISCOVERED" | awk -F'|' '{ if ($3=="true") p=3; else if ($2=="manager") p=2; else p=1; print p, $1 }' | sort -k1,1n -k2,2 | awk '{print $2}' | paste -sd, -)
+  echo "  discovered: $HOSTS"
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

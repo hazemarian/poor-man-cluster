@@ -290,14 +290,20 @@ provision_dashboard() {
     # container.memory.percent, which is a double and is attributed to the node
     # because the docker detector runs first in resourcedetection.
     #
-    # The `host.name LIKE 'nxt-%'` filter is not decoration: rows written before
-    # that detector fix carry the CONTAINER id in host.name (1af781ba5184), and
-    # grouping without it silently mixes nodes and containers in one chart.
+    # The host.name filter is not decoration: rows written before the detector fix
+    # carry the CONTAINER id in host.name (1af781ba5184), and grouping without it
+    # mixes nodes with containers in one chart.
+    #
+    # It matches a HYPHEN rather than a deployment's naming scheme. Node hostnames
+    # carry one (nxt-sw-1-m, and any other deployment's will too, or it is not a
+    # hostname); Docker's 12-hex-character container ids do not. A filter keyed to
+    # 'nxt-' would break on the next cluster — the same static assumption this is
+    # meant to remove.
     add_tile "$_d" "Node CPU %" pmcluster-metrics bar \
         "SELECT \`host.name\`, SUM(CASE WHEN state <> 'idle' THEN data_point_value ELSE 0 END) / SUM(data_point_value) * 100 AS \`cpu_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.cpu.time' GROUP BY \`host.name\` ORDER BY \`cpu_pct\` DESC LIMIT 10" \
         'host.name' 'cpu_pct' 'Node' 'CPU %' 0 6 4 6
     add_tile "$_d" "Node memory %" pmcluster-metrics bar \
-        "SELECT \`host.name\`, MAX(data_point_value) AS \`mem_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.memory.percent' AND \`host.name\` LIKE 'nxt-%' GROUP BY \`host.name\` ORDER BY \`mem_pct\` DESC LIMIT 10" \
+        "SELECT \`host.name\`, MAX(data_point_value) AS \`mem_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.memory.percent' AND \`host.name\` LIKE '%-%' GROUP BY \`host.name\` ORDER BY \`mem_pct\` DESC LIMIT 10" \
         'host.name' 'mem_pct' 'Node' 'Memory %' 4 6 4 6
     add_tile "$_d" "Node load (1m)" pmcluster-metrics table \
         "SELECT \`host.name\`, MAX(data_point_value) AS \`load_1m\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.cpu.load_average.1m' GROUP BY \`host.name\` ORDER BY \`load_1m\` DESC LIMIT 10" \
