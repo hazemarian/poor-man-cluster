@@ -182,33 +182,51 @@ provision_dashboard() {
     #
     # Metric names come from SELECT DISTINCT metric_name, not from assumption:
     # docker_stats gives container.*, hostmetrics gives system.* per node.
-    add_tile "$_d" "Log volume by service" pmcluster-logs bar \
-        'SELECT `service.name`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-logs` GROUP BY `service.name` ORDER BY `COUNT_STAR` DESC LIMIT 10' \
-        'service.name' 'COUNT_STAR' 'Service' 'Log lines' 0 0 5 5
-    add_tile "$_d" "Errors by service" pmcluster-logs bar \
-        'SELECT `service.name`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-logs` WHERE severity_text = '"'"'ERROR'"'"' GROUP BY `service.name` ORDER BY `COUNT_STAR` DESC LIMIT 10' \
-        'service.name' 'COUNT_STAR' 'Service' 'Errors' 5 0 5 5
+    # PLATFORM vs DEPLOYED, on every widget.
+    #
+    # The split is computed in SQL rather than assumed, from the one dimension
+    # both signals share. Field names came from the streams themselves
+    # (`SELECT nope FROM ...` returns the schema), not from expectation — that is
+    # how `stack.name` was found to be missing from logs entirely, and how
+    # `severity_text` was confirmed present with 3 ERROR rows.
+    #
+    # Platform prefixes are the stacks pmcluster itself runs; everything else is
+    # a tenant. `pmcluster` is the operator console, which is platform by
+    # definition even though it is the control plane rather than a workload.
+    _KIND="CASE WHEN \`service.name\` LIKE 'infra%' OR \`service.name\` LIKE 'observability%' OR \`service.name\` LIKE 'sso%' OR \`service.name\` LIKE 'backup%' OR \`service.name\` LIKE 'edge%' OR \`service.name\` LIKE 'pmcluster%' THEN 'platform' ELSE 'deployed' END"
+
+    # ── the split, one widget per signal ──
+    add_tile "$_d" "Log lines: platform vs deployed" pmcluster-logs bar \
+        "SELECT ${_KIND} AS \`kind\`, COUNT(*) AS \`COUNT_STAR\` FROM \`pmcluster-logs\` GROUP BY \`kind\` ORDER BY \`COUNT_STAR\` DESC LIMIT 5" \
+        'kind' 'COUNT_STAR' 'Tier' 'Log lines' 0 0 5 5
+    add_tile "$_d" "CPU: platform vs deployed" pmcluster-metrics pie \
+        "SELECT ${_KIND} AS \`kind\`, MAX(data_point_value) AS \`value\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.cpu.utilization' GROUP BY \`kind\` ORDER BY \`value\` DESC LIMIT 5" \
+        'kind' 'value' 'Tier' 'CPU' 5 0 5 5
+    add_tile "$_d" "Memory: platform vs deployed" pmcluster-metrics donut \
+        "SELECT ${_KIND} AS \`kind\`, MAX(data_point_value) AS \`value\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.memory.percent' GROUP BY \`kind\` ORDER BY \`value\` DESC LIMIT 5" \
+        'kind' 'value' 'Tier' 'Memory %' 10 0 5 5
+    add_tile "$_d" "Network: platform vs deployed" pmcluster-metrics bar \
+        "SELECT ${_KIND} AS \`kind\`, SUM(data_point_value) AS \`value\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.network.io.usage.rx_bytes' GROUP BY \`kind\` ORDER BY \`value\` DESC LIMIT 5" \
+        'kind' 'value' 'Tier' 'Bytes received' 0 5 5 5
+
+    # ── per node, from hostmetrics (system.*) ──
     add_tile "$_d" "Node CPU %" pmcluster-metrics pie \
-        'SELECT `host.name`, SUM(data_point_value) * 100 AS `cpu_pct` FROM `pmcluster-metrics` WHERE metric_name = '"'"'system.cpu.utilization'"'"' AND state != '"'"'idle'"'"' GROUP BY `host.name` ORDER BY `cpu_pct` DESC LIMIT 10' \
-        'host.name' 'cpu_pct' 'Node' 'CPU %' 10 0 5 5
+        "SELECT \`host.name\`, SUM(data_point_value) * 100 AS \`cpu_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.cpu.utilization' AND state != 'idle' GROUP BY \`host.name\` ORDER BY \`cpu_pct\` DESC LIMIT 10" \
+        'host.name' 'cpu_pct' 'Node' 'CPU %' 5 5 5 5
     add_tile "$_d" "Node memory %" pmcluster-metrics donut \
-        'SELECT `host.name`, MAX(data_point_value) * 100 AS `mem_pct` FROM `pmcluster-metrics` WHERE metric_name = '"'"'system.memory.utilization'"'"' GROUP BY `host.name` ORDER BY `mem_pct` DESC LIMIT 10' \
-        'host.name' 'mem_pct' 'Node' 'Memory %' 0 5 5 5
+        "SELECT \`host.name\`, MAX(data_point_value) * 100 AS \`mem_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.memory.utilization' GROUP BY \`host.name\` ORDER BY \`mem_pct\` DESC LIMIT 10" \
+        'host.name' 'mem_pct' 'Node' 'Memory %' 10 5 5 5
     add_tile "$_d" "Node load (1m)" pmcluster-metrics table \
-        'SELECT `host.name`, MAX(data_point_value) AS `load_1m` FROM `pmcluster-metrics` WHERE metric_name = '"'"'system.cpu.load_average.1m'"'"' GROUP BY `host.name` ORDER BY `load_1m` DESC LIMIT 10' \
-        'host.name' 'load_1m' 'Node' 'Load 1m' 5 5 5 5
-    add_tile "$_d" "CPU by service" pmcluster-metrics bar \
-        'SELECT `service.name`, MAX(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.cpu.utilization'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
-        'service.name' 'value' 'Service' 'CPU' 10 5 5 5
+        "SELECT \`host.name\`, MAX(data_point_value) AS \`load_1m\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.cpu.load_average.1m' GROUP BY \`host.name\` ORDER BY \`load_1m\` DESC LIMIT 10" \
+        'host.name' 'load_1m' 'Node' 'Load 1m' 0 10 5 5
+
+    # ── per service, for the detail the split necessarily hides ──
+    add_tile "$_d" "Log volume by service" pmcluster-logs bar \
+        'SELECT `service.name`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-logs` GROUP BY `service.name` ORDER BY `COUNT_STAR` DESC LIMIT 12' \
+        'service.name' 'COUNT_STAR' 'Service' 'Log lines' 5 10 5 5
     add_tile "$_d" "Memory % by service" pmcluster-metrics bar \
-        'SELECT `service.name`, MAX(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.memory.percent'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
-        'service.name' 'value' 'Service' 'Memory %' 0 10 5 5
-    add_tile "$_d" "Network received by service" pmcluster-metrics donut \
-        'SELECT `service.name`, SUM(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.network.io.usage.rx_bytes'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
-        'service.name' 'value' 'Service' 'Bytes received' 5 10 5 5
-    add_tile "$_d" "Ingestion per stream" pmcluster-metrics pie \
-        'SELECT `metric_name`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-metrics` GROUP BY `metric_name` ORDER BY `COUNT_STAR` DESC LIMIT 12' \
-        'metric_name' 'COUNT_STAR' 'Metric' 'Samples' 10 10 5 5
+        "SELECT \`service.name\`, MAX(data_point_value) AS \`value\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.memory.percent' GROUP BY \`service.name\` ORDER BY \`value\` DESC LIMIT 12" \
+        'service.name' 'value' 'Service' 'Memory %' 10 10 5 5
 
 }
 

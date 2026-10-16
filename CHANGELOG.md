@@ -3,6 +3,31 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.198 (2026-10-16)
+
+**Every widget now splits platform from deployed, and the shapes vary.**
+
+The split is computed in SQL from the one dimension both signals share, not assumed:
+
+```sql
+CASE WHEN `service.name` LIKE 'infra%' OR `service.name` LIKE 'observability%'
+       OR `service.name` LIKE 'sso%' OR `service.name` LIKE 'backup%'
+       OR `service.name` LIKE 'edge%' OR `service.name` LIKE 'pmcluster%'
+     THEN 'platform' ELSE 'deployed' END
+```
+
+Four split widgets (log lines, CPU, memory, network), three per-node widgets from the new `hostmetrics`
+receiver (CPU %, memory %, load), and two per-service widgets for the detail the split necessarily hides.
+Shapes are chosen for the data: pie/donut for shares of a whole, bars for magnitudes, a table for per-node
+scalars.
+
+Every query was run against the live cluster before shipping, which is how two assumptions died: `stack.name`
+**does not exist in the logs stream at all**, and `severity_text` does exist (3 ERROR rows). Field names now
+come from `SELECT nope FROM <stream>` returning the schema.
+
+Verified live before deployment: the split returns platform=16163 / deployed=5060 log lines, container CPU
+0.489 / 0.378.
+
 ## v0.2.197 (2026-10-16)
 
 **`host.name` was a container id, so "per node" was a lie waiting to be charted.**
