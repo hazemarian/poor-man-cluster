@@ -32,6 +32,28 @@ import (
 
 type realClient struct {
 	c *client.Client
+
+	// ImageCreated is memoised across calls, not just within one.
+	//
+	// Measured on the live cluster: pmcluster asked the daemon to inspect the
+	// SAME image ~194 times in 30 seconds (~6.5/s), because every ServiceList —
+	// and the daemon calls it constantly, for the control loop and for console
+	// polling alike — inspects each service's image. Each call is a Docker API
+	// round trip and an exported span, which is where a reconcile trace's ~400
+	// spans came from.
+	//
+	// A short TTL is safe because this value is explicitly best-effort: it backs
+	// a "your local image looks old" hint, and being 10s stale cannot change any
+	// decision. Failure is cached too — a missing local image does not appear a
+	// moment later, and retrying it is the storm being removed.
+	imgMu    sync.Mutex
+	imgCache map[string]imageCreatedEntry
+	imgTTL   time.Duration
+}
+
+type imageCreatedEntry struct {
+	created int64
+	at      time.Time
 }
 
 // New returns a runtime.Client wired to the local Docker daemon (DOCKER_HOST
@@ -41,7 +63,44 @@ func New() (runtime.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create docker client: %w", err)
 	}
-	return &realClient{c: c}, nil
+	return &realClient{c: c, imgCache: map[string]imageCreatedEntry{}, imgTTL: 10 * time.Second}, nil
+}
+
+// imageCreated returns the local image's creation time, consulting a short-lived
+// cache before the daemon. See realClient.imgCache for why this is cached and why
+// a TTL is safe.
+func (r *realClient) imageCreated(ctx context.Context, ref string) int64 {
+	now := time.Now()
+	r.imgMu.Lock()
+	if e, ok := r.imgCache[ref]; ok && now.Sub(e.at) < r.imgTTL {
+		r.imgMu.Unlock()
+		return e.created
+	}
+	r.imgMu.Unlock()
+
+	var created int64
+	if img, err := r.c.ImageInspect(ctx, ref); err == nil && img.Created != "" {
+		if t, err := time.Parse(time.RFC3339, img.Created); err == nil {
+			created = t.Unix()
+		}
+	}
+
+	r.imgMu.Lock()
+	// Bound the map: images churn as tags move, and this cache lives for the
+	// process. Clearing wholesale is enough — it refills in one pass — and keeps
+	// a long-running daemon from growing without limit.
+	//
+	// nil is tolerated because realClient is also built as a struct literal (in
+	// tests), where New never ran.
+	if r.imgCache == nil || len(r.imgCache) > 512 {
+		r.imgCache = map[string]imageCreatedEntry{}
+	}
+	if r.imgTTL == 0 {
+		r.imgTTL = 10 * time.Second
+	}
+	r.imgCache[ref] = imageCreatedEntry{created: created, at: now}
+	r.imgMu.Unlock()
+	return created
 }
 
 func (r *realClient) Close() error { return r.c.Close() }
@@ -320,13 +379,10 @@ func (r *realClient) ServiceList(ctx context.Context) ([]runtime.Service, error)
 		// registry auth was missing or the image was never refreshed) is a
 		// silent-staleness signal the console should surface. Failure to
 		// inspect means the image is not cached locally — ImageCreated stays 0.
+		// Cached across calls; see imageCreated.
 		var imageCreated int64
 		if image != "" {
-			if img, err := r.c.ImageInspect(ctx, image); err == nil && img.Created != "" {
-				if t, err := time.Parse(time.RFC3339, img.Created); err == nil {
-					imageCreated = t.Unix()
-				}
-			}
+			imageCreated = r.imageCreated(ctx, image)
 		}
 		// Surface a paused/rolling update: the orchestrator froze convergence
 		// because a task failed — the error string is the actionable detail.

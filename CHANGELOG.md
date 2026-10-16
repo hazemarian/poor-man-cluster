@@ -3,6 +3,28 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.199 (2026-10-16)
+
+**The 400-span trace was not a span leak. It was the same image inspected ~194 times per 30 seconds.**
+
+Reported as "each trace contains 402 spans, the control loop must not be closing them". Checked against the
+traces stream instead of the code first, which reframed it:
+
+- The spans are **Docker Engine API calls** — `GET /v1.51/tasks`, `GET /v1.51/images/<ref>/json` — emitted by
+  `service.name=pmcluster` (919k spans, 144 names).
+- **Nothing was leaking.** A span that never ends is never exported, so every span in that trace had been
+  closed properly. Both spans in the control loop do `End()` (reconcile.go:196 and :228).
+- The real defect is work, not lifecycle: `ServiceList` inspects **every service's image on every call**
+  (client.go:325), and the daemon calls `ServiceList` constantly — control loop and console polling alike.
+  Measured: the *same* image inspected **194 times in 30 seconds** (~6.5/s), each an API round trip and an
+  exported span.
+
+Fixed by caching the image's creation time across calls with a 10s TTL. Safe because the value is documented
+as best-effort — it backs a "your local image looks old" hint — so 10s of staleness cannot change a decision.
+Failures are cached too: a missing local image does not appear a moment later.
+
+Not yet deployed; the 400-spans-per-trace figure should fall sharply once it is.
+
 ## v0.2.198 (2026-10-16)
 
 **Every widget now splits platform from deployed, and the shapes vary.**
