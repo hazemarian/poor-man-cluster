@@ -115,7 +115,7 @@ add_tile() {
     _q=$(json_escape "$_query")
     _body=$(cat <<JSON
 {"tile_id":"${_id}","title":"${_title}","tileType":"builder","dbName":["${_stream}"],
- "chartType":"bar","chartQuery":"${_q}",
+ "chartType":"${_shape}","chartQuery":"${_q}",
  "config":{"type":"${_shape}","colourScheme":"forest",
    "layout":{"legendPosition":"bottom"},
    "axes":{"x":{"field":"${_xf}","title":"${_xt}"},"y":{"field":"${_yf}","title":"${_yt}"},"groupBy":{"field":[]}},
@@ -195,7 +195,30 @@ provision_dashboard() {
     # definition even though it is the control plane rather than a workload.
     _KIND="CASE WHEN \`service.name\` LIKE 'infra%' OR \`service.name\` LIKE 'observability%' OR \`service.name\` LIKE 'sso%' OR \`service.name\` LIKE 'backup%' OR \`service.name\` LIKE 'edge%' OR \`service.name\` LIKE 'pmcluster%' THEN 'platform' ELSE 'deployed' END"
 
-    # chartType IS "bar" — and that is load-bearing.
+    # chartType FOLLOWS THE SHAPE, and that is the whole trick.
+    #
+    # chartType names the renderer family, config.type names the shape inside it.
+    # Pinning chartType to one value while varying config.type produced tiles that
+    # drew axes and legends with nothing plotted — and when the pinned value was
+    # "timeseries", pie/donut/table came out as "No data available" outright,
+    # because that family has no such shapes.
+    #
+    # The evidence: the first revision used chartType "bar" + config.type "bar" and
+    # rendered; a later revision pinned chartType "timeseries" and everything went
+    # frame-only. So chartType = the shape name.
+    #
+    # Shapes are picked per resource rather than applied uniformly:
+    #   bar   — comparisons and magnitudes (per-service volume, split by tier)
+    #   table — per-node scalars, where four exact numbers beat four bars
+    #
+    # pie/donut are NOT used, and that is a finding rather than a preference. With
+    # chartType "pie"/"donut" the tiles render their legends with the correct values
+    # (0.302/0.195 for the CPU split; 63.8/18.2/3.8/3.5 per node) but draw no marks
+    # at all — the shape needs an axes configuration this provisioner does not have.
+    # A share-of-whole chart that draws nothing is worse than a bar that draws.
+    # To finish it: create a pie tile in the UI, read it back from
+    # GET /api/v1/dashboards/{id}, and copy its config verbatim — the same route
+    # that produced layout.i and tileType.
     #
     # An earlier revision set chartType "timeseries" (the family the UI's own
     # time-bucketed tile carries) while varying config.type for shape. Every tile
@@ -220,19 +243,30 @@ provision_dashboard() {
     # Variety is worth having, but not at the cost of a dashboard that silently
     # charts nothing: the correct family strings for pie/donut/table have to be read
     # off a tile the UI itself creates, the same way layout.i and tileType were.
+    # LAYOUT: a 12-column grid, so x + w must not exceed 12.
+    #
+    # The first pass used w=5 at x=0/5/10 — 10+5=15, past the edge — so the third
+    # tile in each row overflowed its row and left a gap. w=4 at x=0/4/8 is exactly
+    # 12 and packs cleanly as three columns.
     # ── the split, one widget per signal ──
     add_tile "$_d" "Log lines: platform vs deployed" pmcluster-logs bar \
         "SELECT ${_KIND} AS \`kind\`, COUNT(*) AS \`COUNT_STAR\` FROM \`pmcluster-logs\` GROUP BY \`kind\` ORDER BY \`COUNT_STAR\` DESC LIMIT 5" \
-        'kind' 'COUNT_STAR' 'Tier' 'Log lines' 0 0 5 5
+        'kind' 'COUNT_STAR' 'Tier' 'Log lines' 0 0 4 6
     add_tile "$_d" "CPU: platform vs deployed" pmcluster-metrics bar \
         "SELECT ${_KIND} AS \`kind\`, MAX(data_point_value) AS \`value\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.cpu.utilization' GROUP BY \`kind\` ORDER BY \`value\` DESC LIMIT 5" \
-        'kind' 'value' 'Tier' 'CPU' 5 0 5 5
+        'kind' 'value' 'Tier' 'CPU' 4 0 4 6
     add_tile "$_d" "Memory: platform vs deployed" pmcluster-metrics bar \
         "SELECT ${_KIND} AS \`kind\`, MAX(data_point_value) AS \`value\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.memory.percent' GROUP BY \`kind\` ORDER BY \`value\` DESC LIMIT 5" \
-        'kind' 'value' 'Tier' 'Memory %' 10 0 5 5
-    add_tile "$_d" "Network: platform vs deployed" pmcluster-metrics bar \
-        "SELECT ${_KIND} AS \`kind\`, SUM(data_point_value) AS \`value\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.network.io.usage.rx_bytes' GROUP BY \`kind\` ORDER BY \`value\` DESC LIMIT 5" \
-        'kind' 'value' 'Tier' 'Bytes received' 0 5 5 5
+        'kind' 'value' 'Tier' 'Memory %' 8 0 4 6
+    # NO NETWORK TILE, and not because it is unimportant. Every container network
+    # metric (container.network.io.usage.rx_bytes and friends) is an int64, which
+    # Parseable does not map — the row arrives with an empty value, so a network
+    # tile is blank by construction and no query fixes it. Same type split that
+    # makes system.memory.usage unchartable.
+    #
+    # When a double-valued network or throughput series exists (a rate rather than
+    # a cumulative byte count, or a synthetic one from the collector), this is the
+    # first tile to add back.
 
     # ── per node ──
     #
@@ -261,21 +295,21 @@ provision_dashboard() {
     # grouping without it silently mixes nodes and containers in one chart.
     add_tile "$_d" "Node CPU %" pmcluster-metrics bar \
         "SELECT \`host.name\`, SUM(CASE WHEN state <> 'idle' THEN data_point_value ELSE 0 END) / SUM(data_point_value) * 100 AS \`cpu_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.cpu.time' GROUP BY \`host.name\` ORDER BY \`cpu_pct\` DESC LIMIT 10" \
-        'host.name' 'cpu_pct' 'Node' 'CPU %' 5 5 5 5
+        'host.name' 'cpu_pct' 'Node' 'CPU %' 0 6 4 6
     add_tile "$_d" "Node memory %" pmcluster-metrics bar \
         "SELECT \`host.name\`, MAX(data_point_value) AS \`mem_pct\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.memory.percent' AND \`host.name\` LIKE 'nxt-%' GROUP BY \`host.name\` ORDER BY \`mem_pct\` DESC LIMIT 10" \
-        'host.name' 'mem_pct' 'Node' 'Memory %' 10 5 5 5
-    add_tile "$_d" "Node load (1m)" pmcluster-metrics bar \
+        'host.name' 'mem_pct' 'Node' 'Memory %' 4 6 4 6
+    add_tile "$_d" "Node load (1m)" pmcluster-metrics table \
         "SELECT \`host.name\`, MAX(data_point_value) AS \`load_1m\` FROM \`pmcluster-metrics\` WHERE metric_name = 'system.cpu.load_average.1m' GROUP BY \`host.name\` ORDER BY \`load_1m\` DESC LIMIT 10" \
-        'host.name' 'load_1m' 'Node' 'Load 1m' 0 10 5 5
+        'host.name' 'load_1m' 'Node' 'Load 1m' 8 6 4 6
 
     # ── per service, for the detail the split necessarily hides ──
     add_tile "$_d" "Log volume by service" pmcluster-logs bar \
         'SELECT `service.name`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-logs` GROUP BY `service.name` ORDER BY `COUNT_STAR` DESC LIMIT 12' \
-        'service.name' 'COUNT_STAR' 'Service' 'Log lines' 5 10 5 5
+        'service.name' 'COUNT_STAR' 'Service' 'Log lines' 0 12 4 6
     add_tile "$_d" "Memory % by service" pmcluster-metrics bar \
         "SELECT \`service.name\`, MAX(data_point_value) AS \`value\` FROM \`pmcluster-metrics\` WHERE metric_name = 'container.memory.percent' GROUP BY \`service.name\` ORDER BY \`value\` DESC LIMIT 12" \
-        'service.name' 'value' 'Service' 'Memory %' 10 10 5 5
+        'service.name' 'value' 'Service' 'Memory %' 4 12 4 6
 
 }
 

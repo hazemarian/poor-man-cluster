@@ -3,6 +3,31 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.207 (2026-10-16)
+
+**Placement fixed, shapes chosen per resource, and one tile removed for being unrenderable.**
+
+The layout used w=5 at x=0/5/10 on a 12-column grid — 10+5=15, past the edge — so the third tile in every row
+overflowed and left a hole. Now w=4 at x=0/4/8: exactly 12, a clean three columns. Removing the network tile
+opened a hole at (0,6) — mid-grid, which is what "the placement is wrong" looks like — so the tiles re-flow to
+3+3+2 with any gap trailing.
+
+**`chartType` follows the shape.** It names the renderer family; `config.type` names the shape within it.
+Pinning `chartType` to one value while varying `config.type` drew axes and legends with nothing plotted, and
+pinning it to `"timeseries"` made pie/donut/table come out as "No data available" outright.
+
+- **bar** — comparisons and magnitudes (tier split, log volume by service, memory by service)
+- **table** — per-node scalars, where four exact numbers beat four bars
+
+**pie and donut are deliberately unused**, which is a finding rather than a preference: with `chartType`
+"pie"/"donut" the tiles render legends carrying the correct values (0.302/0.195 for the CPU split;
+63.8/18.2/3.8/3.5 per node) but draw no marks. They need an axes configuration this provisioner does not have,
+and a share-of-whole chart that draws nothing is worse than a bar that draws.
+
+**The network tile is removed.** Every container network metric is an int64, which Parseable does not map, so
+the tile was blank by construction — the same type split that makes `system.memory.usage` unchartable. It goes
+back the moment a double-valued network series exists.
+
 ## v0.2.206 (2026-10-16)
 
 **`chartType` was the bug: "timeseries" draws axes and legends but no values.**
