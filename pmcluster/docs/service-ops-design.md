@@ -28,7 +28,7 @@ the Services page.
 
 ## 1. What stays, what gets removed
 
-- **Keep:** OpenObserve (log/metric search), OTel Collector, pmcluster
+- **Keep:** Parseable (log/metric/trace search), OTel Collector, pmcluster
   deploy/rollback/delete, console UI/RBAC, TLS/backups/webhooks/API keys,
   registry/secret/config management.
 - **Remove from `infra` stack:** `portainer/portainer-ce:2.39.5` service,
@@ -112,7 +112,7 @@ type Ops interface {
 }
 
 // Logs tails a service's stdout/stderr; the full-text search story stays
-// in OpenObserve (deep search is the OO console's job).
+// in Parseable (deep search is its console's job).
 type Logs interface {
     Logs(ctx context.Context, service string, tail int) ([]string, error)
 }

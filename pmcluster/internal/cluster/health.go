@@ -18,7 +18,7 @@ import (
 var bundledServices = []string{
 	"infra_traefik",
 	"edge_pmcluster-edge",
-	"observability_openobserve",
+	"observability_parseable",
 	"observability_otel-collector",
 	"backup_volume-backup",
 }

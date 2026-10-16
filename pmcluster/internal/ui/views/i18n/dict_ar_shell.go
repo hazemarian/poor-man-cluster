@@ -42,8 +42,8 @@ func init() {
 		"nav.users":       "المستخدمون",
 		"nav.apikeys":     "مفاتيح API",
 		"nav.settings":    "الإعدادات",
-		"nav.observ":      "OpenObserve",
-		"nav.observ_hint": "افتح OpenObserve وسجّل الدخول تلقائيًا",
+		"nav.observ":      "Parseable",
+		"nav.observ_hint": "افتح Parseable لعرض السجلات والمقاييس والآثار",
 		"nav.traefik":     "Traefik",
 		"nav.more":        "المزيد",
 

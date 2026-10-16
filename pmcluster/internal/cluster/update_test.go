@@ -228,12 +228,12 @@ func seedUpdateState(t *testing.T) (UpdateDeps, string) {
 		Deployer: &recordingDeployer{},
 		Stdout:   io.Discard,
 	}, UpInput{
-		Domain:                "test.example.com",
-		CertPath:              certPath,
-		KeyPath:               keyPath,
-		OpenObserveAdminEmail: "ops@example.com",
-		ConfigDir:             cfgDir,
-		Version:               "v0.3.0",
+		Domain:                  "test.example.com",
+		CertPath:                certPath,
+		KeyPath:                 keyPath,
+		ObservabilityAdminEmail: "ops@example.com",
+		ConfigDir:               cfgDir,
+		Version:                 "v0.3.0",
 	}); err != nil {
 		t.Fatalf("seed Up: %v", err)
 	}

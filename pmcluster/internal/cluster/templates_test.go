@@ -34,8 +34,8 @@ var stacksWithDomain = map[stackName]bool{
 // YAML and that all placeholder tokens have been removed.
 func TestLoadComposeFile_KnownStacks(t *testing.T) {
 	in := RenderInput{
-		Domain:                "example.com",
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                  "example.com",
+		ObservabilityAdminEmail: "ops@example.com",
 	}
 
 	stacks := []stackName{StackInfra, StackEdge, StackObservability, StackBackup}
@@ -343,8 +343,8 @@ func mustLoadBackup(t *testing.T, in RenderInput) []byte {
 // substitution specifically in the observability stack, which uses it.
 func TestLoadComposeFile_SubstitutesOpenObserveEmail(t *testing.T) {
 	in := RenderInput{
-		Domain:                "prod.example.com",
-		OpenObserveAdminEmail: "admin@company.org",
+		Domain:                  "prod.example.com",
+		ObservabilityAdminEmail: "admin@company.org",
 	}
 	data, err := LoadComposeFile(StackObservability, in)
 	if err != nil {
@@ -366,9 +366,9 @@ func TestLoadComposeFile_SubstitutesOpenObserveEmail(t *testing.T) {
 // the stored credential (HTTP 401 on provisioning).
 func TestLoadComposeFile_EscapesDollarInOpenObservePassword(t *testing.T) {
 	in := RenderInput{
-		Domain:                   "example.com",
-		OpenObserveAdminEmail:    "ops@example.com",
-		OpenObserveAdminPassword: "ab$cd",
+		Domain:                     "example.com",
+		ObservabilityAdminEmail:    "ops@example.com",
+		ObservabilityAdminPassword: "ab$cd",
 	}
 	data, err := LoadComposeFile(StackObservability, in)
 	if err != nil {
@@ -388,21 +388,36 @@ func TestLoadComposeFile_EscapesDollarInOpenObservePassword(t *testing.T) {
 // volume — the OTel collector instead uses a dedicated ingestion token created
 // via the OO API and rendered into the collector config, so credentials stay in
 // pmcluster config rather than the OO volume.
-func TestLoadComposeFile_ObservabilityOmitsRootToken(t *testing.T) {
+func TestLoadComposeFile_ObservabilityUsesManagedCredential(t *testing.T) {
 	in := RenderInput{
-		Domain:                "example.com",
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                     "example.com",
+		ObservabilityAdminEmail:    "ops@example.com",
+		ObservabilityAdminPassword: "SOMEPASSWORD_SECRET",
 	}
 	data, err := LoadComposeFile(StackObservability, in)
 	if err != nil {
 		t.Fatalf("LoadComposeFile: %v", err)
 	}
 	body := string(data)
-	if strings.Contains(body, "ZO_ROOT_USER_TOKEN") {
-		t.Error("observability stack must NOT set ZO_ROOT_USER_TOKEN (baked into OO volume on first boot)")
+
+	// Parseable reads its admin account from env on EVERY boot, so the managed
+	// credential is always applied. OpenObserve instead seeded its root user
+	// once into a metadata volume, which is why its configured password could
+	// silently stop working.
+	if !strings.Contains(body, "P_USERNAME: ops@example.com") {
+		t.Error("observability stack must set P_USERNAME from the managed admin credential")
 	}
-	if !strings.Contains(body, "ZO_ROOT_USER_EMAIL: ops@example.com") {
-		t.Error("observability stack should still set ZO_ROOT_USER_EMAIL")
+	if !strings.Contains(body, "P_PASSWORD: SOMEPASSWORD_SECRET") {
+		t.Error("observability stack must set P_PASSWORD from the managed admin credential")
+	}
+	if !strings.Contains(body, "command:\n    - local-store") && !strings.Contains(body, "- local-store") {
+		t.Error("parseable must run the local-store subcommand")
+	}
+	// The OpenObserve surface is gone with it.
+	for _, gone := range []string{"ZO_ROOT_USER", "openobserve"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("observability stack must not reference OpenObserve anymore (found %q)", gone)
+		}
 	}
 }
 
@@ -513,7 +528,7 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 // that decoding the base64 yields the correct "email:password" string.
 func TestRenderOTelCollectorConfig_ContainsBasicAuth(t *testing.T) {
 	in := RenderInput{
-		OpenObserveBasicAuth: openObserveBasicAuth("admin@example.com", "s3cret-Pass"),
+		ObservabilityBasicAuth: observabilityBasicAuth("admin@example.com", "s3cret-Pass"),
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -555,9 +570,9 @@ func TestRenderOTelCollectorConfig_ContainsBasicAuth(t *testing.T) {
 // one password everywhere and no provisioning API calls.
 func TestRenderOTelCollectorConfig_EmbedsAdminPassword(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail:    "admin@example.com",
-		OpenObserveAdminPassword: "SOMEPASSWORD_SECRET",
-		OpenObserveBasicAuth:     openObserveBasicAuth("admin@example.com", "SOMEPASSWORD_SECRET"),
+		ObservabilityAdminEmail:    "admin@example.com",
+		ObservabilityAdminPassword: "SOMEPASSWORD_SECRET",
+		ObservabilityBasicAuth:     observabilityBasicAuth("admin@example.com", "SOMEPASSWORD_SECRET"),
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -585,8 +600,8 @@ func TestRenderOTelCollectorConfig_MissingBasicAuth(t *testing.T) {
 // has a minimal logs pipeline: filelog → resource → batch → OTLP exporter.
 func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail: "admin@x.com",
-		OpenObserveBasicAuth:  openObserveBasicAuth("admin@x.com", "pw"),
+		ObservabilityAdminEmail: "admin@x.com",
+		ObservabilityBasicAuth:  observabilityBasicAuth("admin@x.com", "pw"),
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -600,12 +615,19 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(body, "[resourcedetection, resource, filter/skip_filelog, batch]") {
-		t.Error("logs pipeline must include resourcedetection + resource + filter/skip_filelog before batch")
+	// memory_limiter MUST lead every pipeline: it is what stops a failing
+	// exporter from growing the collector until the host loses its Swarm
+	// heartbeat.
+	if !strings.Contains(body, "[memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]") {
+		t.Error("logs pipeline must lead with memory_limiter, then resourcedetection + resource + filter/skip_filelog before batch")
 	}
 
-	if !strings.Contains(body, "[resourcedetection, resource, transform/metrics, batch]") {
-		t.Error("metrics pipeline must include resourcedetection + resource + transform/metrics before batch")
+	if !strings.Contains(body, "[memory_limiter, resourcedetection, resource, transform/metrics, batch]") {
+		t.Error("metrics pipeline must lead with memory_limiter, then resourcedetection + resource + transform/metrics before batch")
+	}
+
+	if !strings.Contains(body, "[memory_limiter, batch]") {
+		t.Error("traces pipeline must lead with memory_limiter")
 	}
 }
 
@@ -613,8 +635,8 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 // filelog receiver is configured with the correct glob patterns and operators.
 func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail: "admin@x.com",
-		OpenObserveBasicAuth:  openObserveBasicAuth("admin@x.com", "pw"),
+		ObservabilityAdminEmail: "admin@x.com",
+		ObservabilityBasicAuth:  observabilityBasicAuth("admin@x.com", "pw"),
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -630,7 +652,7 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 		`/var/lib/docker/containers/*/*-json.log`,
 		`exclude:`,
 		`otel-collector`,
-		`openobserve`,
+		`parseable`,
 		`json_parser`,
 		`error_mode: ignore`,
 	} {
@@ -652,8 +674,8 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 		t.Error("rendered config should contain the OTTL filter for io.pmcluster.skip_filelog label")
 	}
 
-	if !strings.Contains(body, "processors: [resourcedetection, resource, filter/skip_filelog, batch]") {
-		t.Error("logs pipeline should list filter/skip_filelog processor before batch")
+	if !strings.Contains(body, "processors: [memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]") {
+		t.Error("logs pipeline should list memory_limiter first and filter/skip_filelog before batch")
 	}
 
 	if strings.Contains(body, "__FILELOG_EXCLUDE_PATTERNS__") {
@@ -667,8 +689,8 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 // the non-existent metric_labels_to_resource_attributes key.
 func TestRenderOTelCollectorConfig_DockerStatsLabels(t *testing.T) {
 	in := RenderInput{
-		OpenObserveAdminEmail: "admin@x.com",
-		OpenObserveBasicAuth:  openObserveBasicAuth("admin@x.com", "pw"),
+		ObservabilityAdminEmail: "admin@x.com",
+		ObservabilityBasicAuth:  observabilityBasicAuth("admin@x.com", "pw"),
 	}
 	data, err := RenderOTelCollectorConfig(in)
 	if err != nil {
@@ -962,11 +984,11 @@ func TestRenderTraefikDynamic_CORSWired(t *testing.T) {
 }
 
 // TestRenderTraefikDynamic_AutoAuthMiddleware verifies the openobserve-auto-auth
-// middleware is rendered when OpenObserveBasicAuth is set (Traefik injects the
+// middleware is rendered when ObservabilityBasicAuth is set (Traefik injects the
 // OO root Basic header AFTER admin-auth lets the operator through) and is
 // OMITTED when empty (no OO credentials yet — avoids a public root credential).
 func TestRenderTraefikDynamic_AutoAuthMiddleware(t *testing.T) {
-	in := RenderInput{Domain: "example.com", OpenObserveBasicAuth: "Basic dXNlckBleGFtcGxlLmNvbTpzZWNyZXQ="}
+	in := RenderInput{Domain: "example.com", ObservabilityBasicAuth: "Basic dXNlckBleGFtcGxlLmNvbTpzZWNyZXQ="}
 	data, err := RenderTraefikDynamic(in)
 	if err != nil {
 		t.Fatalf("RenderTraefikDynamic: %v", err)
@@ -985,23 +1007,23 @@ func TestRenderTraefikDynamic_AutoAuthMiddleware(t *testing.T) {
 		t.Fatalf("RenderTraefikDynamic (empty auth): %v", err)
 	}
 	if strings.Contains(string(dataEmpty), "customRequestHeaders") || strings.Contains(string(dataEmpty), `Authorization:`) {
-		t.Errorf("empty OpenObserveBasicAuth must OMIT the auto-auth middleware:\n%s", string(dataEmpty))
+		t.Errorf("empty ObservabilityBasicAuth must OMIT the auto-auth middleware:\n%s", string(dataEmpty))
 	}
 }
 
-// TestOpenObserveBasicAuth verifies the base64 header computation: empty email
+// TestObservabilityBasicAuth verifies the base64 header computation: empty email
 // or password yields an empty string (middleware omitted), otherwise
 // "Basic base64(email:password)".
-func TestOpenObserveBasicAuth(t *testing.T) {
-	if got := openObserveBasicAuth("", "pw"); got != "" {
+func TestObservabilityBasicAuth(t *testing.T) {
+	if got := observabilityBasicAuth("", "pw"); got != "" {
 		t.Errorf("empty email: got %q, want empty", got)
 	}
-	if got := openObserveBasicAuth("admin@example.com", ""); got != "" {
+	if got := observabilityBasicAuth("admin@example.com", ""); got != "" {
 		t.Errorf("empty password: got %q, want empty", got)
 	}
 	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("admin@example.com:secret"))
-	if got := openObserveBasicAuth("admin@example.com", "secret"); got != want {
-		t.Errorf("openObserveBasicAuth = %q, want %q", got, want)
+	if got := observabilityBasicAuth("admin@example.com", "secret"); got != want {
+		t.Errorf("observabilityBasicAuth = %q, want %q", got, want)
 	}
 }
 
@@ -1349,12 +1371,12 @@ func TestRenderRefResolver(t *testing.T) {
 // artifact names and leave no raw references behind.
 func TestLoadComposeFile_ResolvesConfigSecretRefs(t *testing.T) {
 	in := RenderInput{
-		Domain:                "example.com",
-		OpenObserveAdminEmail: "ops@example.com",
-		OTelConfigName:        "pmcluster_otel_config_v046",
-		TraefikConfigName:     "pmcluster_traefik_dynamic_v044",
-		CertSecretName:        "cert_v042",
-		KeySecretName:         "key_v042",
+		Domain:                  "example.com",
+		ObservabilityAdminEmail: "ops@example.com",
+		OTelConfigName:          "pmcluster_otel_config_v046",
+		TraefikConfigName:       "pmcluster_traefik_dynamic_v044",
+		CertSecretName:          "cert_v042",
+		KeySecretName:           "key_v042",
 	}
 
 	for _, s := range []stackName{StackInfra, StackObservability} {
@@ -1407,57 +1429,6 @@ func TestLoadComposeFile_ResolvesConfigSecretRefs(t *testing.T) {
 		t.Errorf("observability-stack missing otel config name in output")
 	}
 }
-
-// TestLoadComposeFile_EdgeSSOBridge verifies the edge stack carries the
-// sso-bridge router labels that serve the OpenObserve SSO bootstrap page on
-// the observ origin.
-func TestLoadComposeFile_EdgeSSOBridge(t *testing.T) {
-	out, err := LoadComposeFile(StackEdge, RenderInput{
-		Domain:               "example.com",
-		EdgeImage:            "ghcr.io/hazemarian/pmcluster-edge:v9",
-		SSOEnabled:           true,
-		EdgeLoginDisabled:    true,
-		OpenObserveBasicAuth: "Basic abc",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(out)
-	for _, want := range []string{
-		"traefik.http.routers.sso-bridge.rule: Host(`observ.example.com`) && Path(`/sso-bridge`)",
-		"traefik.http.routers.sso-bridge.entrypoints: websecure",
-		"traefik.http.routers.sso-bridge.tls: \"true\"",
-		"traefik.http.routers.sso-bridge.priority: \"1000\"",
-		"traefik.http.routers.sso-bridge.middlewares: cors-default@file,sso-auth@file",
-		"traefik.http.routers.sso-bridge.service: pmcluster",
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("rendered edge-stack missing %q", want)
-		}
-	}
-}
-
-// TestLoadComposeFile_EdgeSSOBridgeAdminAuth checks the non-SSO branch uses
-// the admin-auth middleware for the bridge router.
-func TestLoadComposeFile_EdgeSSOBridgeAdminAuth(t *testing.T) {
-	out, err := LoadComposeFile(StackEdge, RenderInput{
-		Domain:            "example.com",
-		EdgeImage:         "ghcr.io/hazemarian/pmcluster-edge:v9",
-		SSOEnabled:        false,
-		EdgeLoginDisabled: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := string(out)
-	if !strings.Contains(s, "traefik.http.routers.sso-bridge.middlewares: cors-default@file,admin-auth@file") {
-		t.Errorf("rendered edge-stack missing admin-auth bridge middleware:\n%s", s)
-	}
-}
-
-// TestLoadComposeFile_EdgeStateless verifies cluster-mode edge (login disabled)
-// is stateless: DATA_DIR=:memory:, no pmui-data volume mount and no top-level
-// volumes block. Standalone mode (login enabled) keeps /data + the volume.
 func TestLoadComposeFile_EdgeStateless(t *testing.T) {
 	cluster, err := LoadComposeFile(StackEdge, RenderInput{
 		Domain:            "example.com",
@@ -1575,28 +1546,28 @@ func TestLoadComposeFile_EdgeBYOModeNoLetsEncrypt(t *testing.T) {
 	}
 }
 
-// TestLoadComposeFile_OORetentionRenders verifies the OpenObserve stream
-// retention settings land as ZO_LOGS/METRICS/TRACES_RETENTION_DAYS env vars.
-func TestLoadComposeFile_OORetentionRenders(t *testing.T) {
+// TestLoadComposeFile_ObservabilityHasNoOORetentionEnv pins the migration
+// decision: OpenObserve expressed retention as ZO_*_RETENTION_DAYS env vars,
+// Parseable does not take retention from env at all (it is per-stream via its
+// API). Retention is therefore NOT yet enforced by the platform and is tracked
+// as an open follow-up — this test exists so the gap is explicit and a future
+// implementation updates it deliberately rather than drifting.
+func TestLoadComposeFile_ObservabilityHasNoOORetentionEnv(t *testing.T) {
 	in := RenderInput{
-		Domain:                 "example.com",
-		OpenObserveAdminEmail:  "ops@example.com",
-		OOLogsRetentionDays:    30,
-		OOMetricsRetentionDays: 14,
-		OOTracesRetentionDays:  10,
+		Domain:                  "example.com",
+		ObservabilityAdminEmail: "ops@example.com",
+		OOLogsRetentionDays:     30,
+		OOMetricsRetentionDays:  14,
+		OOTracesRetentionDays:   10,
 	}
 	data, err := LoadComposeFile(StackObservability, in)
 	if err != nil {
 		t.Fatalf("LoadComposeFile: %v", err)
 	}
 	body := string(data)
-	for _, want := range []string{
-		"ZO_LOGS_RETENTION_DAYS: \"30\"",
-		"ZO_METRICS_RETENTION_DAYS: \"14\"",
-		"ZO_TRACES_RETENTION_DAYS: \"10\"",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("rendered observability stack missing %q:\n%s", want, body)
+	for _, gone := range []string{"ZO_LOGS_RETENTION_DAYS", "ZO_METRICS_RETENTION_DAYS", "ZO_TRACES_RETENTION_DAYS"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("Parseable takes no retention from env; %q must not be rendered", gone)
 		}
 	}
 }

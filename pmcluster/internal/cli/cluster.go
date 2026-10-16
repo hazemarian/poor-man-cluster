@@ -395,7 +395,7 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 	in.ACMEEmail, _ = cmd.Flags().GetString("acme-email")
 	in.CertPath, _ = cmd.Flags().GetString("cert")
 	in.KeyPath, _ = cmd.Flags().GetString("key")
-	in.OpenObserveAdminEmail, _ = cmd.Flags().GetString("openobserve-email")
+	in.ObservabilityAdminEmail, _ = cmd.Flags().GetString("openobserve-email")
 	in.TraefikAdminUser, _ = cmd.Flags().GetString("traefik-admin-user")
 	in.ForceTLSMode, _ = cmd.Flags().GetBool("force-tls-mode")
 	in.ConfigDir = cfg.ConfigDir()
@@ -477,8 +477,8 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 	if in.Domain == "" {
 		in.Domain = st.SettingDefault(ctx, "domain", "")
 	}
-	if in.OpenObserveAdminEmail == "" {
-		in.OpenObserveAdminEmail = st.SettingDefault(ctx, "oo_admin_email", "")
+	if in.ObservabilityAdminEmail == "" {
+		in.ObservabilityAdminEmail = st.SettingDefault(ctx, "oo_admin_email", "")
 	}
 	if in.TraefikAdminUser == "" {
 		in.TraefikAdminUser = st.SettingDefault(ctx, cluster.SettingTraefikAdminUser(), "admin")

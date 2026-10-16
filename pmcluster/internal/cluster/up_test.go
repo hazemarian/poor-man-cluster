@@ -65,10 +65,10 @@ func TestUp_DeploysInCorrectOrder(t *testing.T) {
 
 	deps, _, deployer := newUpDeps(t)
 	in := UpInput{
-		Domain:                "test.example.com",
-		CertPath:              certPath,
-		KeyPath:               keyPath,
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                  "test.example.com",
+		CertPath:                certPath,
+		KeyPath:                 keyPath,
+		ObservabilityAdminEmail: "ops@example.com",
 	}
 
 	res, err := Up(context.Background(), deps, in)
@@ -99,10 +99,10 @@ func TestUp_IncludesCertKeyAndCredentialSecrets(t *testing.T) {
 
 	deps, _, _ := newUpDeps(t)
 	in := UpInput{
-		Domain:                "test.example.com",
-		CertPath:              certPath,
-		KeyPath:               keyPath,
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                  "test.example.com",
+		CertPath:                certPath,
+		KeyPath:                 keyPath,
+		ObservabilityAdminEmail: "ops@example.com",
 	}
 
 	res, err := Up(context.Background(), deps, in)
@@ -146,10 +146,10 @@ func TestUp_IncludesCertKeyAndCredentialSecrets(t *testing.T) {
 func TestUp_ValidationError_MissingDomain(t *testing.T) {
 	deps, f, deployer := newUpDeps(t)
 	in := UpInput{
-		Domain:                "",
-		CertPath:              "/some/cert",
-		KeyPath:               "/some/key",
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                  "",
+		CertPath:                "/some/cert",
+		KeyPath:                 "/some/key",
+		ObservabilityAdminEmail: "ops@example.com",
 	}
 
 	_, err := Up(context.Background(), deps, in)
@@ -165,10 +165,10 @@ func TestUp_ValidationError_MissingDomain(t *testing.T) {
 func TestUp_ValidationError_MissingCert(t *testing.T) {
 	deps, _, _ := newUpDeps(t)
 	_, err := Up(context.Background(), deps, UpInput{
-		Domain:                "x.com",
-		CertPath:              "",
-		KeyPath:               "/key",
-		OpenObserveAdminEmail: "ops@x.com",
+		Domain:                  "x.com",
+		CertPath:                "",
+		KeyPath:                 "/key",
+		ObservabilityAdminEmail: "ops@x.com",
 	})
 	if err == nil {
 		t.Fatal("expected error for missing CertPath")
@@ -178,10 +178,10 @@ func TestUp_ValidationError_MissingCert(t *testing.T) {
 func TestUp_ValidationError_MissingKey(t *testing.T) {
 	deps, _, _ := newUpDeps(t)
 	_, err := Up(context.Background(), deps, UpInput{
-		Domain:                "x.com",
-		CertPath:              "/cert",
-		KeyPath:               "",
-		OpenObserveAdminEmail: "ops@x.com",
+		Domain:                  "x.com",
+		CertPath:                "/cert",
+		KeyPath:                 "",
+		ObservabilityAdminEmail: "ops@x.com",
 	})
 	if err == nil {
 		t.Fatal("expected error for missing KeyPath")
@@ -191,13 +191,13 @@ func TestUp_ValidationError_MissingKey(t *testing.T) {
 func TestUp_ValidationError_MissingOpenObserveEmail(t *testing.T) {
 	deps, _, _ := newUpDeps(t)
 	_, err := Up(context.Background(), deps, UpInput{
-		Domain:                "x.com",
-		CertPath:              "/cert",
-		KeyPath:               "/key",
-		OpenObserveAdminEmail: "",
+		Domain:                  "x.com",
+		CertPath:                "/cert",
+		KeyPath:                 "/key",
+		ObservabilityAdminEmail: "",
 	})
 	if err == nil {
-		t.Fatal("expected error for missing OpenObserveAdminEmail")
+		t.Fatal("expected error for missing ObservabilityAdminEmail")
 	}
 }
 
@@ -211,10 +211,10 @@ func TestUp_PreflightFailure_TouchesNothing(t *testing.T) {
 	f.pingErr = errSentinel
 
 	_, err := Up(context.Background(), deps, UpInput{
-		Domain:                "test.example.com",
-		CertPath:              certPath,
-		KeyPath:               keyPath,
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                  "test.example.com",
+		CertPath:                certPath,
+		KeyPath:                 keyPath,
+		ObservabilityAdminEmail: "ops@example.com",
 	})
 	if err == nil {
 		t.Fatal("Up: expected preflight error, got nil")
@@ -246,10 +246,10 @@ func TestUp_DefaultStorageNodeIsLeader(t *testing.T) {
 	}
 
 	if _, err := Up(context.Background(), deps, UpInput{
-		Domain:                "test.example.com",
-		CertPath:              certPath,
-		KeyPath:               keyPath,
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                  "test.example.com",
+		CertPath:                certPath,
+		KeyPath:                 keyPath,
+		ObservabilityAdminEmail: "ops@example.com",
 	}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -280,10 +280,10 @@ func TestUp_BackupRendersGlobalWhenStorageNodeDefaulted(t *testing.T) {
 	}
 
 	if _, err := Up(context.Background(), deps, UpInput{
-		Domain:                "test.example.com",
-		CertPath:              certPath,
-		KeyPath:               keyPath,
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                  "test.example.com",
+		CertPath:                certPath,
+		KeyPath:                 keyPath,
+		ObservabilityAdminEmail: "ops@example.com",
 	}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -330,10 +330,10 @@ func TestUp_StorageNodesPreserved(t *testing.T) {
 	}
 
 	if _, err := Up(context.Background(), deps, UpInput{
-		Domain:                "test.example.com",
-		CertPath:              certPath,
-		KeyPath:               keyPath,
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                  "test.example.com",
+		CertPath:                certPath,
+		KeyPath:                 keyPath,
+		ObservabilityAdminEmail: "ops@example.com",
 	}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -357,10 +357,10 @@ func TestUp_PersistsSwarmID(t *testing.T) {
 	f.swarmID = "swarm-abcd1234"
 
 	if _, err := Up(context.Background(), deps, UpInput{
-		Domain:                "test.example.com",
-		CertPath:              certPath,
-		KeyPath:               keyPath,
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                  "test.example.com",
+		CertPath:                certPath,
+		KeyPath:                 keyPath,
+		ObservabilityAdminEmail: "ops@example.com",
 	}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -387,10 +387,10 @@ func TestUp_DefaultPlatformNodeIsLeader(t *testing.T) {
 	}
 
 	if _, err := Up(context.Background(), deps, UpInput{
-		Domain:                "test.example.com",
-		CertPath:              certPath,
-		KeyPath:               keyPath,
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                  "test.example.com",
+		CertPath:                certPath,
+		KeyPath:                 keyPath,
+		ObservabilityAdminEmail: "ops@example.com",
 	}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
@@ -418,10 +418,10 @@ func TestUp_PlatformNodePreserved(t *testing.T) {
 	}
 
 	if _, err := Up(context.Background(), deps, UpInput{
-		Domain:                "test.example.com",
-		CertPath:              certPath,
-		KeyPath:               keyPath,
-		OpenObserveAdminEmail: "ops@example.com",
+		Domain:                  "test.example.com",
+		CertPath:                certPath,
+		KeyPath:                 keyPath,
+		ObservabilityAdminEmail: "ops@example.com",
 	}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}

@@ -130,7 +130,7 @@ func init() {
 		"clustersettings.oo_admin_email":           "بريد المسؤول",
 		"clustersettings.oo_admin_email_hint":      "العنوان الذي يستخدمه الخادم لإشعاراته.",
 		"clustersettings.log_level":                "مستوى السجلات",
-		"clustersettings.log_level_hint":           "كم يكتب الخادم في ملف سجلاته وفي OpenObserve. يضيف debug ملف compose المُقدَّم الكامل لكل مستوى نشر؛ بينما يسجّل info كل خطوة نشر مع أسماء الخدمات.",
+		"clustersettings.log_level_hint":           "كم يكتب الخادم في ملف سجلاته وفي Parseable. يضيف debug ملف compose المُقدَّم الكامل لكل مستوى نشر؛ بينما يسجّل info كل خطوة نشر مع أسماء الخدمات.",
 		"clustersettings.save":                     "حفظ الإعدادات",
 		"clustersettings.foot":                     "لا يمكن تعديل من لوحة التحكم سوى المفاتيح المعروضة في هذه الصفحة. وما عداها يُضبط في بيئة الخادم أو ملف تهيئته.",
 	})

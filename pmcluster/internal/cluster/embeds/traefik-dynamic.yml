@@ -20,27 +20,24 @@ http:
       basicAuth:
         usersFile: /run/secrets/admin_credentials
 [[- end]]
-    # openobserve-auto-auth: injected AFTER admin-auth (or sso-auth) has let
-    # the operator through, so OpenObserve auto-authenticates every request
-    # (its UI's session-check API honours HTTP Basic auth) and its own login
-    # page is never shown. MUST stay paired with the gate middleware — alone
-    # it is a public root credential. The value is base64(<OO root email>:<OO
-    # root password>), rendered from the managed openobserve_admin credential.
+    # observability-auto-auth: injected AFTER admin-auth (or sso-auth) has let
+    # the operator through, so Parseable is reached already authenticated —
+    # its API and ingest endpoints honour HTTP Basic. MUST stay paired with the
+    # gate middleware above; alone it would be a public root credential. The
+    # value is base64(<admin user>:<admin password>), rendered from the same
+    # managed credential the Parseable admin account is created with, so the
+    # collector, the UI and the operator all use ONE login.
     #
-    # The auth_tokens Set-Cookie response header is the SPA half of the fix:
-    # OO's web session is cookie-based (the SPA self-navigates to /web/login
-    # when the cookie is absent even though the header authenticates the API).
-    # The cookie value is the base64url JSON envelope OO itself would mint on
-    # POST /auth/login — {"access_token":"<the same Basic value>","refresh_token":""}
-    # — computed deterministically from the same credential, so it stays valid
-    # across password rotations. 30-day expiry mirrors OO's own session.
-    [[- if .OpenObserveBasicAuth]]
-    openobserve-auto-auth:
+    # NOTE: unlike OpenObserve, Parseable's SPA keeps its own session
+    # client-side and has no server-side cookie that can be minted here, so
+    # there is no Set-Cookie half. The header authenticates the API and the
+    # OTLP ingest paths; the UI's own sign-in uses the same managed
+    # credential (visible under Configs & Secrets).
+    [[- if .ObservabilityBasicAuth]]
+    observability-auto-auth:
       headers:
         customRequestHeaders:
-          Authorization: "[[.OpenObserveBasicAuth]]"
-        customResponseHeaders:
-          Set-Cookie: "auth_tokens=[[.OpenObserveSessionCookie]]; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000"
+          Authorization: "[[.ObservabilityBasicAuth]]"
     [[- end]]
     # cors-default: applied to every exposed/app router emitted by the manifest
     # translator plus those mounted via stack labels (edge console,

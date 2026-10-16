@@ -463,7 +463,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	in.ACMEEmail = a.ACMEEmail
 	in.CertPath = a.CertPath
 	in.KeyPath = a.KeyPath
-	in.OpenObserveAdminEmail = a.OpenObserveEmail
+	in.ObservabilityAdminEmail = a.OpenObserveEmail
 	in.TraefikAdminUser = a.TraefikAdminUser
 	in.ConfigDir = cfg.ConfigDir()
 	in.SwarmAdvertiseAddr = a.SwarmAdvertiseAddr

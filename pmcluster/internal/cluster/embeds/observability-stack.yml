@@ -1,6 +1,13 @@
-# observability-stack.yml — OpenObserve + OTel collector (DSL manifest,
+# observability-stack.yml — Parseable + OTel collector (DSL manifest,
 # platform-managed). Rendered by LoadComposeFile through the same manifest
 # pipeline as customer app stacks.
+#
+# Parseable replaces OpenObserve. One self-contained binary, Parquet on mounted
+# volumes (no database engine, no external dependency), ~70MB resident. Its
+# admin account is read from env on EVERY boot, so the platform's managed
+# credential always applies — unlike OpenObserve, which seeded its root user
+# once into its metadata volume and then silently drifted from the configured
+# password.
 app: observability
 env: production
 domain: ${DOMAIN}
@@ -8,46 +15,62 @@ platform: true
 networks:
   - monitoring-net
 volumes:
-  openobserve_data: ""
-secrets:
-  - zo_root_user_password
+  parseable_data: ""
+  parseable_staging: ""
 services:
-  openobserve:
-    image: public.ecr.aws/zinclabs/openobserve:v0.92.2
+  parseable:
+    image: parseable/parseable:v2.8.0
     replicas: 1
     placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
-    # openobserve joins traefik-net (Traefik routers) in addition to the
+    # parseable joins traefik-net (Traefik routers) in addition to the
     # app-level monitoring-net; the otel-collector joins only monitoring-net.
     networks:
       - traefik-net
+    # local-store: single node, Parquet on the mounted volumes. The subcommand
+    # is argv to the image's entrypoint (/usr/bin/parseable).
+    command: ["local-store"]
     env:
-      ZO_DATA_DIR: /data
-      ZO_HTTP_PORT: "5080"
-      ZO_GRPC_PORT: "5081"
-      ZO_TELEMETRY: "false"
-      ZO_APP_NAME: openobserve
-      ZO_ROOT_USER_EMAIL: "${OPENOBSERVE_ADMIN_EMAIL}"
-      ZO_ROOT_USER_PASSWORD: "secret(oo_admin_password)"
-      ZO_LOGS_RETENTION_DAYS: "[[.OOLogsRetentionDays]]"
-      ZO_METRICS_RETENTION_DAYS: "[[.OOMetricsRetentionDays]]"
-      ZO_TRACES_RETENTION_DAYS: "[[.OOTracesRetentionDays]]"
+      P_ADDR: "0.0.0.0:8000"
+      # ONE login everywhere: the same managed observability admin credential
+      # the OTel collector authenticates with and the operator signs into the
+      # UI with. Retained from the OpenObserve era, so migration rotates
+      # nothing. Resolved from the credential store at render time — never a
+      # literal in this file.
+      P_USERNAME: "[[.ObservabilityAdminEmail]]"
+      P_PASSWORD: "secret(observability_admin_password)"
+      P_FS_DIR: "/data"
+      P_STAGING_DIR: "/staging"
+      P_INDEX_DIR: "/data/index"
+      # The platform owns the lifecycle: no phone-home, no update check.
+      P_SEND_ANONYMOUS_USAGE_DATA: "false"
+      P_CHECK_UPDATE: "false"
     volumes:
-      - "openobserve_data:/data"
+      - "parseable_data:/data"
+      - "parseable_staging:/staging"
     labels:
       "traefik.enable": "true"
-      "traefik.http.routers.openobserve.rule": "Host(`observ.${DOMAIN}`)"
-      "traefik.http.services.openobserve.loadbalancer.server.port": "5080"
-      "traefik.http.routers.openobserve.entrypoints": "websecure"
-      "traefik.http.routers.openobserve.tls": "true"
+      "traefik.http.routers.observability.rule": "Host(`observ.${DOMAIN}`)"
+      "traefik.http.routers.observability.entrypoints": "websecure"
+      "traefik.http.routers.observability.tls": "true"
       [[- if .ACMEEmail]]
-      "traefik.http.routers.openobserve.tls.certresolver": "letsencrypt"
+      "traefik.http.routers.observability.tls.certresolver": "letsencrypt"
       [[- end]]
       [[- if .SSOEnabled]]
-      "traefik.http.routers.openobserve.middlewares": "cors-default@file,sso-auth@file,openobserve-auto-auth@file"
+      "traefik.http.routers.observability.middlewares": "cors-default@file,sso-auth@file,observability-auto-auth@file"
       [[- else]]
-      "traefik.http.routers.openobserve.middlewares": "cors-default@file,admin-auth@file,openobserve-auto-auth@file"
+      "traefik.http.routers.observability.middlewares": "cors-default@file,admin-auth@file,observability-auto-auth@file"
       [[- end]]
+      "traefik.http.services.observability.loadbalancer.server.port": "8000"
       "traefik.swarm.network": "traefik-net"
+    # Capped so a runaway backend is killed inside its own cgroup instead of
+    # starving the host into losing its Swarm heartbeat.
+    resources:
+      reservations:
+        cpus: "0.1"
+        memory: 128M
+      limits:
+        cpus: "0.5"
+        memory: 768M
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.157.0

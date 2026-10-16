@@ -83,14 +83,14 @@ type UpInput struct {
 	// CertPath/KeyPath: operator-provided PEM files loaded into Swarm secrets.
 	// ACMEEmail: Traefik issues + renews via Let's Encrypt HTTP-01.
 	// On a re-run these may be omitted to reuse the stored TLS state.
-	CertPath              string
-	KeyPath               string
-	ACMEEmail             string
-	ForceTLSMode          bool
-	TraefikAdminUser      string
-	OpenObserveAdminEmail string
-	ConfigDir             string
-	Version               string
+	CertPath                string
+	KeyPath                 string
+	ACMEEmail               string
+	ForceTLSMode            bool
+	TraefikAdminUser        string
+	ObservabilityAdminEmail string
+	ConfigDir               string
+	Version                 string
 	// VolumeRoot is the single host dir every container volume is forced
 	// under (default manifest.DefaultVolumeRoot /var/stack/data).
 	VolumeRoot string
@@ -262,8 +262,8 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			Docker: deps.Docker,
 		}
 		creds, err = credMgr.Bootstrap(ctx, BootstrapInput{
-			TraefikAdminUser:      in.TraefikAdminUser,
-			OpenObserveAdminEmail: in.OpenObserveAdminEmail,
+			TraefikAdminUser:        in.TraefikAdminUser,
+			ObservabilityAdminEmail: in.ObservabilityAdminEmail,
 		})
 		if err != nil {
 			return fmt.Errorf("bootstrap credentials: %w", err)
@@ -290,11 +290,13 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		if creds["edge_admin"] != nil {
 			fmt.Fprintf(out, "  ✔ edge console credentials minted — retrieve the admin password with `pmcluster credentials show edge_admin`\n")
 		}
+		// Parseable reads its admin account from P_USERNAME/P_PASSWORD on every
+		// boot, so a changed credential takes effect on the next restart. No
+		// data-volume reset is needed — that whole failure mode (a backend
+		// seeding its admin once into a volume, then silently disagreeing with
+		// the configured password) is why Parseable replaced OpenObserve.
 		if obsCred := creds["openobserve_admin"]; obsCred != nil && obsCred.UsernameChanged {
-			fmt.Fprintf(out, "  ⚠ OpenObserve email changed → resetting data volume so new credentials take effect\n")
-			if err := deps.Docker.VolumeRemove(ctx, "observability_openobserve_data"); err != nil {
-				return fmt.Errorf("reset openobserve data volume: %w (manual: docker volume rm observability_openobserve_data)", err)
-			}
+			fmt.Fprintf(out, "  • observability admin changed → Parseable picks it up on restart (no data reset needed)\n")
 		}
 		return nil
 	})
@@ -334,30 +336,29 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			return objStoreErr
 		}
 		render = RenderInput{
-			Domain:                   in.Domain,
-			OpenObserveAdminEmail:    openobsCred.Username,
-			OpenObserveAdminPassword: openobsCred.Password,
-			OpenObserveBasicAuth:     openObserveBasicAuth(openobsCred.Username, openobsCred.Password),
-			OpenObserveSessionCookie: openObserveSessionCookie(openobsCred.Username, openobsCred.Password),
-			ACMEEmail:                in.ACMEEmail,
-			ConfigDir:                in.ConfigDir,
-			ConfigStore:              deps.Store,
-			DataDir:                  filepath.Dir(in.ConfigDir),
-			VolumeRoot:               effectiveVolumeRoot(in.VolumeRoot),
-			BackupDir:                backupRootDir(),
-			HostCerts:                hostCerts,
-			CertSecretName:           certSecret,
-			KeySecretName:            keySecret,
-			EdgeImage:                EdgeImageFor(),
-			EdgeLoginDisabled:        loadEdgeLoginDisabled(ctx, deps.Store),
-			BackupAllNodes:           loadBackupAllNodes(ctx, deps.Store),
-			BackupRetentionDays:      LoadBackupRetentionDays(ctx, deps.Store),
-			BackupCron:               LoadBackupCron(ctx, deps.Store),
-			StorageNodeConstraint:    deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
-			StorageNodeLabel:         runtime.StorageNodeLabel,
-			PlatformNode:             loadPlatformNode(ctx, deps.Store),
-			ManagedSecretNames:       managedSecretNames(ctx, deps.Store),
-			OOLogsRetentionDays:      ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
+			Domain:                     in.Domain,
+			ObservabilityAdminEmail:    openobsCred.Username,
+			ObservabilityAdminPassword: openobsCred.Password,
+			ObservabilityBasicAuth:     observabilityBasicAuth(openobsCred.Username, openobsCred.Password),
+			ACMEEmail:                  in.ACMEEmail,
+			ConfigDir:                  in.ConfigDir,
+			ConfigStore:                deps.Store,
+			DataDir:                    filepath.Dir(in.ConfigDir),
+			VolumeRoot:                 effectiveVolumeRoot(in.VolumeRoot),
+			BackupDir:                  backupRootDir(),
+			HostCerts:                  hostCerts,
+			CertSecretName:             certSecret,
+			KeySecretName:              keySecret,
+			EdgeImage:                  EdgeImageFor(),
+			EdgeLoginDisabled:          loadEdgeLoginDisabled(ctx, deps.Store),
+			BackupAllNodes:             loadBackupAllNodes(ctx, deps.Store),
+			BackupRetentionDays:        LoadBackupRetentionDays(ctx, deps.Store),
+			BackupCron:                 LoadBackupCron(ctx, deps.Store),
+			StorageNodeConstraint:      deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
+			StorageNodeLabel:           runtime.StorageNodeLabel,
+			PlatformNode:               loadPlatformNode(ctx, deps.Store),
+			ManagedSecretNames:         managedSecretNames(ctx, deps.Store),
+			OOLogsRetentionDays:        ooL, OOMetricsRetentionDays: ooM, OOTracesRetentionDays: ooT,
 			BackupS3:        s3b,
 			Store:           objStore,
 			SSOEnabled:      sso.Enabled,
@@ -517,7 +518,7 @@ func persistInstallState(ctx context.Context, deps UpDeps, in UpInput) error {
 	}
 	for k, v := range map[string]string{
 		settingDomain:  in.Domain,
-		settingOOEmail: in.OpenObserveAdminEmail,
+		settingOOEmail: in.ObservabilityAdminEmail,
 	} {
 		if err := deps.Store.SetSetting(ctx, k, v); err != nil {
 			return fmt.Errorf("persist %s: %w", k, err)
@@ -554,7 +555,7 @@ func validateUpInput(in UpInput) error {
 	if in.Domain == "" {
 		return fmt.Errorf("--domain is required")
 	}
-	if in.OpenObserveAdminEmail == "" {
+	if in.ObservabilityAdminEmail == "" {
 		return fmt.Errorf("--openobserve-email is required (used as OpenObserve admin login)")
 	}
 	hasBYOTLS := in.CertPath != "" || in.KeyPath != ""

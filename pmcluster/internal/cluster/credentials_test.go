@@ -40,11 +40,11 @@ func TestBootstrap_RequiresOpenObserveEmail(t *testing.T) {
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	_, err := mgr.Bootstrap(context.Background(), BootstrapInput{
-		TraefikAdminUser:      "admin",
-		OpenObserveAdminEmail: "",
+		TraefikAdminUser:        "admin",
+		ObservabilityAdminEmail: "",
 	})
 	if err == nil {
-		t.Fatal("Bootstrap: expected error when OpenObserveAdminEmail is empty")
+		t.Fatal("Bootstrap: expected error when ObservabilityAdminEmail is empty")
 	}
 }
 
@@ -55,8 +55,8 @@ func TestBootstrap_DefaultsTraefikAdminUser(t *testing.T) {
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	creds, err := mgr.Bootstrap(context.Background(), BootstrapInput{
-		TraefikAdminUser:      "",
-		OpenObserveAdminEmail: "ops@example.com",
+		TraefikAdminUser:        "",
+		ObservabilityAdminEmail: "ops@example.com",
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -77,7 +77,7 @@ func TestBootstrap_ReturnsAllCredentials(t *testing.T) {
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	creds, err := mgr.Bootstrap(context.Background(), BootstrapInput{
-		OpenObserveAdminEmail: "ops@example.com",
+		ObservabilityAdminEmail: "ops@example.com",
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -104,7 +104,7 @@ func TestBootstrap_EdgeAPIToken(t *testing.T) {
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	ctx := context.Background()
-	creds, err := mgr.Bootstrap(ctx, BootstrapInput{OpenObserveAdminEmail: "ops@example.com"})
+	creds, err := mgr.Bootstrap(ctx, BootstrapInput{ObservabilityAdminEmail: "ops@example.com"})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestBootstrap_FreshInstall_AllNewlyCreated(t *testing.T) {
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	creds, err := mgr.Bootstrap(context.Background(), BootstrapInput{
-		OpenObserveAdminEmail: "ops@example.com",
+		ObservabilityAdminEmail: "ops@example.com",
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -161,7 +161,7 @@ func TestBootstrap_ReRun_NotNewlyCreated(t *testing.T) {
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
 
-	in := BootstrapInput{OpenObserveAdminEmail: "ops@example.com"}
+	in := BootstrapInput{ObservabilityAdminEmail: "ops@example.com"}
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 
 	first, err := mgr.Bootstrap(context.Background(), in)
@@ -195,7 +195,7 @@ func TestBootstrap_TraefikSecretIsHtpasswd(t *testing.T) {
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	_, err := mgr.Bootstrap(context.Background(), BootstrapInput{
-		OpenObserveAdminEmail: "ops@example.com",
+		ObservabilityAdminEmail: "ops@example.com",
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -217,7 +217,7 @@ func TestBootstrap_OpenObserveSecretIsPlaintext(t *testing.T) {
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	creds, err := mgr.Bootstrap(context.Background(), BootstrapInput{
-		OpenObserveAdminEmail: "ops@example.com",
+		ObservabilityAdminEmail: "ops@example.com",
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -285,7 +285,7 @@ func TestBootstrap_LostDBRecovery(t *testing.T) {
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 	creds, err := mgr.Bootstrap(context.Background(), BootstrapInput{
-		OpenObserveAdminEmail: "ops@example.com",
+		ObservabilityAdminEmail: "ops@example.com",
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap (lost-DB): %v", err)
@@ -312,7 +312,7 @@ func bootstrapForRotate(t *testing.T) (*CredentialsManager, *fakeDocker, *record
 
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f, Deployer: rec}
 	_, err := mgr.Bootstrap(context.Background(), BootstrapInput{
-		OpenObserveAdminEmail: "ops@example.com",
+		ObservabilityAdminEmail: "ops@example.com",
 	})
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
@@ -600,8 +600,8 @@ func TestEnsureMaterialized_RecreatesMissingSecretNoRotation(t *testing.T) {
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 
 	if _, err := mgr.Bootstrap(context.Background(), BootstrapInput{
-		TraefikAdminUser:      "admin",
-		OpenObserveAdminEmail: "ops@example.com",
+		TraefikAdminUser:        "admin",
+		ObservabilityAdminEmail: "ops@example.com",
 	}); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
@@ -662,8 +662,8 @@ func TestEnsureMaterialized_HtpasswdRecreatedFromSamePassword(t *testing.T) {
 	mgr := &CredentialsManager{Store: s, Cipher: c, Docker: f}
 
 	if _, err := mgr.Bootstrap(context.Background(), BootstrapInput{
-		TraefikAdminUser:      "admin",
-		OpenObserveAdminEmail: "ops@example.com",
+		TraefikAdminUser:        "admin",
+		ObservabilityAdminEmail: "ops@example.com",
 	}); err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}

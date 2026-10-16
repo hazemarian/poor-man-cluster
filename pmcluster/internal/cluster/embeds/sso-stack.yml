@@ -67,5 +67,15 @@ services:
       [[- end]]
       "traefik.http.routers.sso-observ.priority": "1000"
       "traefik.http.routers.sso-observ.service": "sso"
+    # Memory is capped so a runaway oauth2-proxy is killed inside its own
+    # cgroup rather than starving the host into losing its Swarm heartbeat —
+    # the failure mode that dropped a manager node off the cluster.
+    resources:
+      reservations:
+        cpus: "0.05"
+        memory: 32M
+      limits:
+        cpus: "0.25"
+        memory: 128M
     secrets:
       - sso_cookie_secret

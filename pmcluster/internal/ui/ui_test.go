@@ -1245,7 +1245,7 @@ func TestShellExternalLinks(t *testing.T) {
 	withDomain := shell("example.com")
 	for _, want := range []string{
 		"External",
-		`href="https://observ.example.com/sso-bridge"`,
+		`href="https://observ.example.com/"`,
 		`href="https://traefik.example.com/dashboard/"`,
 	} {
 		if !strings.Contains(withDomain, want) {
@@ -1303,35 +1303,6 @@ func TestCoverageWholeDiskBackupVerified(t *testing.T) {
 
 // TestSSOBridge serves the OpenObserve bootstrap page publicly (no session
 // needed) and bakes the localStorage envelope the OO SPA expects.
-func TestSSOBridge(t *testing.T) {
-	daemon := fakeDaemon(t)
-	defer daemon.Close()
-	app := newTestApp(t, daemon)
-	jar := map[string]*http.Cookie{}
-
-	// No login, no session — the bridge must be public.
-	resp := doRequest(t, app, http.MethodGet, "/sso-bridge", "", jar)
-	b := readBody(t, resp)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /sso-bridge = %d, want 200; body: %s", resp.StatusCode, b)
-	}
-	for _, want := range []string{
-		"localStorage.setItem(\"userInfo\"",
-		"localStorage.setItem(\"currentuser\"",
-		"pgdata: {}",
-		`role: "root"`,
-		"location.replace(\"/web/\")",
-		"btoa(encodeURIComponent(s)",
-	} {
-		if !strings.Contains(b, want) {
-			t.Errorf("sso-bridge missing %q", want)
-		}
-	}
-}
-
-// TestClusterSettingsLogLevelSelect: the cluster settings form renders a
-// log_level select carrying the persisted value, and the save round-trips it
-// back to the daemon's PUT /api/cluster/settings.
 func TestClusterSettingsLogLevelSelect(t *testing.T) {
 	daemon := fakeDaemon(t)
 	defer daemon.Close()

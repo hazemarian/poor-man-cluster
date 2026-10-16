@@ -75,19 +75,6 @@ services:
       [[- end]]
       "traefik.http.routers.pmcluster-api.middlewares": "cors-default@file"
       "traefik.http.services.pmcluster.loadbalancer.server.port": "8042"
-      "traefik.http.routers.sso-bridge.rule": "Host(`observ.${DOMAIN}`) && Path(`/sso-bridge`)"
-      "traefik.http.routers.sso-bridge.entrypoints": "websecure"
-      "traefik.http.routers.sso-bridge.tls": "true"
-      [[- if .ACMEEmail]]
-      "traefik.http.routers.sso-bridge.tls.certresolver": "letsencrypt"
-      [[- end]]
-      "traefik.http.routers.sso-bridge.priority": "1000"
-      [[- if .SSOEnabled]]
-      "traefik.http.routers.sso-bridge.middlewares": "cors-default@file,sso-auth@file"
-      [[- else]]
-      "traefik.http.routers.sso-bridge.middlewares": "cors-default@file,admin-auth@file"
-      [[- end]]
-      "traefik.http.routers.sso-bridge.service": "pmcluster"
     resources:
       reservations:
         cpus: "0.05"

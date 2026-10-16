@@ -1,6 +1,11 @@
 #
 # OTel Collector configuration for pmcluster.
 #
+# Exporters point at Parseable (observability_parseable:8000). Parseable
+# replaces OpenObserve: a single self-contained binary with Parquet storage on
+# a mounted volume, and an admin account that comes from env on every boot
+# rather than a once-only seed into a metadata volume.
+#
 # Two log paths:
 #   1. filelog receiver — scrapes Docker JSON log files from containers
 #      that don't use OTLP/SDK (apps that just write to stdout/stderr).
@@ -34,7 +39,7 @@ receivers:
       - /var/lib/docker/containers/*/*-json.log
     exclude:
       - /var/lib/docker/containers/*otel-collector*/*-json.log
-      - /var/lib/docker/containers/*openobserve*/*-json.log
+      - /var/lib/docker/containers/*parseable*/*-json.log
     include_file_name: false
     include_file_path: true
     start_at: beginning
@@ -55,12 +60,20 @@ receivers:
         if: attributes.log != nil
 
 processors:
+  # memory_limiter is the guard that keeps a failing exporter from growing the
+  # collector until the HOST loses its Swarm heartbeat. It must be the FIRST
+  # processor in every pipeline.
+  memory_limiter:
+    check_interval: 5s
+    limit_mib: 320
+    spike_limit_mib: 80
+
   # Drop logs from services that opted out via skip_filelog: true.
   # These services send logs via OTLP instead of stdout/stderr.
   filter/skip_filelog:
     logs:
       log_record:
-        - 'resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] != nil and resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] == "true"'
+        - 'resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] != nil and resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] == "true"
 
   resource:
     attributes:
@@ -72,8 +85,8 @@ processors:
         from_attribute: "container.labels.com.docker.stack.namespace"
 
   # Copy service.name from resource into metric data points so they are
-  # queryable / groupable in OpenObserve (docker_stats receiver sets
-  # resource attributes but OO stores them separately from metric fields).
+  # queryable / groupable in Parseable (docker_stats sets resource attributes
+  # but they are stored separately from metric fields).
   transform/metrics:
     metric_statements:
       - context: datapoint
@@ -95,19 +108,74 @@ processors:
     timeout: 10s
 
 exporters:
-  otlp/openobserve:
-    endpoint: "openobserve:5081"
-    tls:
-      insecure: true
+  # Parseable takes OTLP/HTTP on /v1/{logs,metrics,traces}. Two headers are
+  # mandatory: X-P-Stream (all signals) names the dataset, and X-P-Log-Source
+  # (all signals) names the source — Parseable's reserved OTLP convention is
+  # otel-<signal>, and it rejects anything else for logs with
+  # "Please use x-p-log-source: otel-logs".
+  #
+  # encoding MUST be json. Parseable rejects protobuf OTLP bodies with
+  # "Protobuf ingestion ..." (verified live: the default proto encoding 400s
+  # while the identical json payload returns 200).
+  #
+  # Authorization is Basic <base64(admin user:admin password)> — the SAME
+  # managed credential Parseable itself boots with, resolved through the
+  # shared secret reference language so no literal ever lands here.
+  # retry_on_failure + sending_queue are bounded so a Parseable outage can
+  # never make the collector grow without limit.
+  otlphttp/parseable-logs:
+    logs_endpoint: "http://observability_parseable:8000/v1/logs"
+    encoding: json
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 60s
+    sending_queue:
+      enabled: true
+      queue_size: 128
+      num_consumers: 4
     headers:
-      # Basic <base64(<admin email>:<admin password>)> — the ROOT admin
-      # credentials OpenObserve itself runs with (ZO_ROOT_USER_EMAIL /
-      # ZO_ROOT_USER_PASSWORD from the openobserve_admin credential + the
-      # zo_root_user_password Swarm secret). One password everywhere; no
-      # provisioning API calls. Resolved via the shared secret reference
-      # language by RenderOTelCollectorConfig.
-      Authorization: "secret(oo_basic_auth)"
-      organization: "default"
+      Authorization: "secret(observability_basic_auth)"
+      X-P-Stream: "pmcluster-logs"
+      X-P-Log-Source: "otel-logs"
+
+  otlphttp/parseable-metrics:
+    metrics_endpoint: "http://observability_parseable:8000/v1/metrics"
+    encoding: json
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 60s
+    sending_queue:
+      enabled: true
+      queue_size: 128
+      num_consumers: 4
+    headers:
+      Authorization: "secret(observability_basic_auth)"
+      X-P-Stream: "pmcluster-metrics"
+      X-P-Log-Source: "otel-metrics"
+
+  otlphttp/parseable-traces:
+    traces_endpoint: "http://observability_parseable:8000/v1/traces"
+    encoding: json
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 60s
+    sending_queue:
+      enabled: true
+      queue_size: 128
+      num_consumers: 4
+    headers:
+      Authorization: "secret(observability_basic_auth)"
+      X-P-Stream: "pmcluster-traces"
+      X-P-Log-Source: "otel-traces"
 
 service:
   extensions: [health_check]
@@ -117,13 +185,13 @@ service:
   pipelines:
     logs:
       receivers:  [filelog, otlp]
-      processors: [resourcedetection, resource, filter/skip_filelog, batch]
-      exporters:  [otlp/openobserve]
+      processors: [memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]
+      exporters:  [otlphttp/parseable-logs]
     metrics:
       receivers:  [docker_stats, otlp]
-      processors: [resourcedetection, resource, transform/metrics, batch]
-      exporters:  [otlp/openobserve]
+      processors: [memory_limiter, resourcedetection, resource, transform/metrics, batch]
+      exporters:  [otlphttp/parseable-metrics]
     traces:
       receivers:  [otlp]
-      processors: [batch]
-      exporters:  [otlp/openobserve]
+      processors: [memory_limiter, batch]
+      exporters:  [otlphttp/parseable-traces]

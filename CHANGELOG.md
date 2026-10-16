@@ -3,6 +3,63 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.185 (2026-10-16)
+
+**Observability runs on Parseable, and every platform service has a memory cap.**
+
+Two changes that belong together, because the first caused the outage the second prevents.
+
+- **OpenObserve is replaced by Parseable.** One self-contained binary, Parquet on mounted volumes,
+  no database engine, no external dependency. The reason is not size — although Parseable idles
+  around 70MB against OpenObserve's ~330MB — but credentials. OpenObserve reads `ZO_ROOT_USER_*`
+  only on its first boot and seeds the root user into its metadata volume; after that the
+  environment says one thing and its user store says another, with nothing to reconcile them. That
+  is why its configured password could stop working with no change on either side, and why the
+  recovery was always "reset the data volume". Parseable takes `P_USERNAME`/`P_PASSWORD` from the
+  environment on **every** boot, so the managed credential always applies and a changed admin takes
+  effect on the next restart. No volume reset exists to get out of sync.
+
+- **The same login is reused, not reissued.** The managed `openobserve_admin` credential — and its
+  Swarm secret name — are kept deliberately, so migrating rotates nothing: the OTel collector, the
+  Parseable admin account and the operator all keep the credential they already had. It reaches
+  Parseable through the existing `secret(...)` render-time reference language
+  (`secret(observability_admin_password)`, with the old `oo_*` names still accepted so a
+  half-migrated snapshot still resolves). The credential key keeps its OpenObserve-era name for the
+  same reason; renaming it would have minted a new password.
+
+- **The collector's exporters needed three separate corrections, each found live.** Parseable
+  requires `X-P-Stream` and `X-P-Log-Source` on **every** signal — the value for logs is the
+  reserved `otel-logs`, not an arbitrary stream name. Encoding must be `json`: Parseable answers a
+  protobuf OTLP body with `Protobuf ingestion ...`. And the endpoints are
+  `http://observability_parseable:8000/v1/{logs,metrics,traces}`.
+
+- **The collector can no longer take a host down with it.** It now carries a `memory_limiter`
+  processor, a bounded `sending_queue` (`queue_size: 128`) and a bounded `retry_on_failure`
+  (`max_elapsed_time: 60s`). Without them, an exporter pointed at a backend that is down queues
+  every batch it cannot deliver: the collector grew to 270–420MB per node, on hosts with 1.8–3.8GB
+  total, until they stopped heartbeating and dropped out of the swarm one after another. The guard
+  was simply never shipped in the embedded config, so every failing backend turned into a cluster
+  incident.
+
+- **Every platform service now has memory limits and reservations.** `oauth2-proxy`, all three
+  backup services, the observability backend and the collector had none; `traefik` and the edge
+  console had limits but no consistent policy. A runaway service is now killed inside its own
+  cgroup rather than starving the host into losing its Raft leadership — which is the only way to
+  make the failure mode local instead of cluster-wide.
+
+- **The console's External link opens Parseable**, on the same `observ.<domain>` origin, through
+  the renamed `observability-auto-auth` middleware which injects the admin Basic credential.
+  OpenObserve's SPA session machinery is gone with it: the `auth_tokens` cookie minting and the
+  `/sso-bridge` page existed only to satisfy OpenObserve's localStorage-based login, and Parseable
+  has no equivalent server-side session to mint. The injected header authenticates the API and the
+  OTLP ingest paths; Parseable's own UI sign-in uses the same managed credential.
+
+- **Retention is an open gap.** OpenObserve expressed retention as `ZO_*_RETENTION_DAYS` env vars.
+  Parseable does not take retention from the environment at all — it is per-stream, set through its
+  API. The `oo_*` retention settings therefore no longer do anything and **streams currently grow
+  unbounded** until retention is re-implemented against Parseable's API. A test pins this so the
+  gap cannot drift silently.
+
 ## v0.2.184 (2026-10-13)
 
 A fix for the placement column added in v0.2.183.

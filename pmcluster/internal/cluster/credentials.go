@@ -53,8 +53,8 @@ type ManagedCredential struct {
 
 // BootstrapInput names the operator-facing accounts minted on first install.
 type BootstrapInput struct {
-	TraefikAdminUser      string
-	OpenObserveAdminEmail string
+	TraefikAdminUser        string
+	ObservabilityAdminEmail string
 }
 
 // CredentialsManager owns the managed-credential lifecycle: mint, rotate,
@@ -84,13 +84,13 @@ func (m *CredentialsManager) Bootstrap(ctx context.Context, in BootstrapInput) (
 	if in.TraefikAdminUser == "" {
 		in.TraefikAdminUser = "admin"
 	}
-	if in.OpenObserveAdminEmail == "" {
+	if in.ObservabilityAdminEmail == "" {
 		return nil, fmt.Errorf("OpenObserve admin email is required (use --openobserve-email or set in config)")
 	}
 
 	usernameFor := map[string]string{
 		"traefik_dashboard": in.TraefikAdminUser,
-		"openobserve_admin": in.OpenObserveAdminEmail,
+		"openobserve_admin": in.ObservabilityAdminEmail,
 		"edge_admin":        "admin",
 		"edge_ui_secret":    "session",
 		"edge_api_token":    "edge",
@@ -408,6 +408,14 @@ func bootstrapSpecs() []bootstrapSpec {
 			format:          formatHtpasswd,
 		},
 		{
+			// The observability admin (Parseable). The credential KEY and its
+			// Swarm secret name are retained deliberately from the OpenObserve
+			// era: renaming either would mint a NEW credential with a new
+			// password, which is exactly the rotation this migration is meant
+			// to avoid — the collector, the Parseable admin account and the
+			// operator all keep using the SAME login. Consumers resolve it
+			// through secret(observability_admin_password) /
+			// secret(observability_basic_auth) at render time.
 			name:            "openobserve_admin",
 			kind:            KindOpenObserve,
 			swarmSecretName: "zo_root_user_password",

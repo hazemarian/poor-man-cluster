@@ -104,31 +104,18 @@ func EdgeImageFor() string {
 // resolved from the store, managed credentials, and the TLS state before the
 // cluster workflow renders the embedded compose files.
 type RenderInput struct {
-	Domain                   string
-	OpenObserveAdminEmail    string
-	OpenObserveAdminPassword string
+	Domain                     string
+	ObservabilityAdminEmail    string
+	ObservabilityAdminPassword string
 
-	// OpenObserveBasicAuth is the "Basic base64(email:password)" header value
+	// ObservabilityBasicAuth is the "Basic base64(email:password)" header value
 	// for the OpenObserve ROOT admin user — the same credentials OpenObserve
 	// itself runs with (ZO_ROOT_USER_EMAIL / ZO_ROOT_USER_PASSWORD, from the
 	// openobserve_admin managed credential + the zo_root_user_password Swarm
 	// secret). It authenticates the OTel collector's ingestion
 	// (openobserve:5081) AND the Traefik openobserve-auto-auth middleware, so
 	// one password everywhere — no provisioning API calls.
-	OpenObserveBasicAuth string
-
-	// OpenObserveSessionCookie is the auth_tokens cookie value the OpenObserve
-	// SPA needs to consider a browser session authenticated. OO's web session
-	// is cookie-based, NOT header-based: the SPA self-navigates to /web/login
-	// when this cookie is absent even though the injected Authorization header
-	// authenticates the API. The value is a plain base64url JSON envelope —
-	// {"access_token":"Basic <base64(email:password)>","refresh_token":""} —
-	// with the SAME access_token as OpenObserveBasicAuth, so it is computed
-	// deterministically and stays correct across password rotations. It is
-	// injected as a Set-Cookie response header by the openobserve-auto-auth
-	// middleware (customResponseHeaders), giving the browser the session cookie
-	// without ever showing OO's login page.
-	OpenObserveSessionCookie string
+	ObservabilityBasicAuth string
 
 	// ACMEEmail enables Let's Encrypt automation when non-empty. Mutually
 	// exclusive with operator-supplied cert/key (see cluster.UpInput).
@@ -322,31 +309,16 @@ type ObjectStore struct {
 	Node string
 }
 
-// openObserveBasicAuth computes the HTTP Basic Authorization header value
-// ("Basic base64(email:password)") for the OpenObserve root user. Empty email
-// or password yields an empty string so the auto-auth middleware is omitted.
-func openObserveBasicAuth(email, password string) string {
+// observabilityBasicAuth computes the HTTP Basic Authorization header value
+// ("Basic base64(user:password)") for the managed observability admin. It is
+// what the OTel collector's Parseable exporters authenticate with and what the
+// observability-auto-auth Traefik middleware injects. Empty user or password
+// yields an empty string so the middleware is omitted.
+func observabilityBasicAuth(email, password string) string {
 	if email == "" || password == "" {
 		return ""
 	}
 	return "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+password))
-}
-
-// openObserveSessionCookie computes the auth_tokens cookie value OpenObserve
-// issues on POST /auth/login. The cookie is a plain base64url JSON envelope
-// {"access_token":"Basic base64(email:password)","refresh_token":""} — the
-// access_token is exactly the OpenObserveBasicAuth header value, so the cookie
-// is deterministic from the same root credentials. Empty email or password
-// yields an empty string. (Verified live: a cookie computed this way is
-// byte-identical to the one OO mints and authenticates GET /api/default/users
-// with HTTP 200.)
-func openObserveSessionCookie(email, password string) string {
-	basic := openObserveBasicAuth(email, password)
-	if basic == "" {
-		return ""
-	}
-	env := `{"access_token":"` + basic + `","refresh_token":""}`
-	return base64.RawURLEncoding.EncodeToString([]byte(env))
 }
 
 // readConfigFile loads a named file. Resolution order:
@@ -422,25 +394,28 @@ func (r *renderRefResolver) ResolveSetting(_ context.Context, _ string, name str
 // ResolveSecretValue implements refs.SecretValueResolver — secret(<name>)
 // prints the VALUE as-is into the surrounding text (unlike secrets(<name>)
 // which names a mounted secret file). The platform knows two logical secret
-// values derived from the OpenObserve admin credential:
+// values derived from the managed observability admin credential:
 //
-//   - oo_basic_auth: the "Basic base64(email:password)" header the OTel
-//     collector's exporter needs — printed verbatim into the rendered
-//     collector config (the collector cannot read a mounted secret file for
-//     its exporter headers);
-//   - oo_admin_password: the raw OpenObserve admin password — printed into
-//     the observability stack's ZO_ROOT_USER_PASSWORD env var (OpenObserve
-//     only accepts the root password via env, not via a mounted secret file).
-//     NOT `$`-escaped here: the manifest ComposeWriter escapes every env
-//     value, so pre-escaping would double-escape.
+//   - observability_basic_auth: the "Basic base64(user:password)" header the
+//     OTel collector's Parseable exporters need — printed verbatim into the
+//     rendered collector config (the collector cannot read a mounted secret
+//     file for its exporter headers);
+//   - observability_admin_password: the raw admin password — printed into the
+//     observability stack's P_PASSWORD env var (Parseable takes its admin
+//     account from env on every boot, so the configured credential always
+//     applies). NOT `$`-escaped here: the manifest ComposeWriter escapes every
+//     env value, so pre-escaping would double-escape.
+//
+// The legacy oo_* names stay accepted so an existing cluster config or a
+// half-migrated rendered snapshot still resolves.
 func (r *renderRefResolver) ResolveSecretValue(_ context.Context, _ string, name string) (string, error) {
 	switch name {
-	case "oo_basic_auth":
-		return r.render.OpenObserveBasicAuth, nil
-	case "oo_admin_password":
-		return r.render.OpenObserveAdminPassword, nil
+	case "observability_basic_auth", "oo_basic_auth":
+		return r.render.ObservabilityBasicAuth, nil
+	case "observability_admin_password", "oo_admin_password":
+		return r.render.ObservabilityAdminPassword, nil
 	default:
-		return "", fmt.Errorf("resolve secret(%s): no such platform secret value (known: oo_basic_auth, oo_admin_password)", name)
+		return "", fmt.Errorf("resolve secret(%s): no such platform secret value (known: observability_basic_auth, observability_admin_password)", name)
 	}
 }
 
@@ -528,7 +503,7 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 		return nil, fmt.Errorf("execute %s template: %w", fname, err)
 	}
 	out := strings.ReplaceAll(rendered.String(), "${DOMAIN}", in.Domain)
-	out = strings.ReplaceAll(out, "${OPENOBSERVE_ADMIN_EMAIL}", in.OpenObserveAdminEmail)
+	out = strings.ReplaceAll(out, "${OPENOBSERVE_ADMIN_EMAIL}", in.ObservabilityAdminEmail)
 	out = strings.ReplaceAll(out, "${DATA_DIR}", in.DataDir)
 
 	_, built, err := manifest.ParseBuild(context.Background(), []byte(out), "", &renderRefResolver{render: in})
@@ -587,8 +562,8 @@ func ensureEdgeConfig(ctx context.Context, d runtime.Client, version string, ren
 
 // otelRefResolver resolves the references the OTel collector config template
 // may carry via the refs.ReplaceRefs language (2-arg interface shape). The
-// only platform reference it supports is secret(oo_basic_auth) — the
-// Authorization header baked into the rendered collector config.
+// only platform reference it supports is secret(observability_basic_auth),
+// the Authorization header baked into the rendered collector config.
 type otelRefResolver struct {
 	render RenderInput
 }
@@ -602,13 +577,13 @@ func (r *otelRefResolver) ResolveSecret(context.Context, string) (string, error)
 }
 
 func (r *otelRefResolver) ResolveSecretValue(_ context.Context, name string) (string, error) {
-	if name != "oo_basic_auth" {
-		return "", fmt.Errorf("otel collector config: secret(%s): no such value (known: oo_basic_auth)", name)
+	if name != "observability_basic_auth" && name != "oo_basic_auth" {
+		return "", fmt.Errorf("otel collector config: secret(%s): no such value (known: observability_basic_auth)", name)
 	}
-	if r.render.OpenObserveBasicAuth == "" {
-		return "", fmt.Errorf("otel collector config: secret(oo_basic_auth): OpenObserve admin basic auth is not set")
+	if r.render.ObservabilityBasicAuth == "" {
+		return "", fmt.Errorf("otel collector config: secret(observability_basic_auth): observability admin basic auth is not set")
 	}
-	return r.render.OpenObserveBasicAuth, nil
+	return r.render.ObservabilityBasicAuth, nil
 }
 
 // RenderOTelCollectorConfig fills in the OpenObserve `Authorization: Basic <b64>`

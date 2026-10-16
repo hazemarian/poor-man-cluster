@@ -37,8 +37,9 @@ pmcluster cluster up --openobserve-email=admin@example.com \
                                             #    (also installs + starts the daemon)
 ```
 
-`cluster up` requires `--openobserve-email` (the OpenObserve admin login, used
-by the OTel collector and the console's OpenObserve link); it installs and
+`cluster up` requires `--openobserve-email` (the observability admin login — the
+flag name is retained for compatibility; it is the Parseable account used by
+the OTel collector and by the console's Parseable link); it installs and
 starts the daemon via systemd — no separate `pmcluster serve` step. The
 interactive `pmcluster setup` wizard collects the same inputs.
 
@@ -119,7 +120,7 @@ internal/
   manifest/            DSL parser + translator → Docker Swarm Compose
   edgeproxy/           rate limit, shield, blocklist, real-IP, proxy (edge)
   ui/                  operator console (/web base path, RBAC, HTMX); users table
-                       with role column; external links observ.<domain> +
+                       with role column; external links observ.<domain> (Parseable) +
                        traefik.<domain>/dashboard/
   workflow/            named-step runner (up 14 / update 18 / deploy 7 steps)
   telemetry/           OTLP metrics wiring

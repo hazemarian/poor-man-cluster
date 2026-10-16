@@ -35,8 +35,8 @@ func init() {
 		"nav.users":       "Users",
 		"nav.apikeys":     "API keys",
 		"nav.settings":    "Settings",
-		"nav.observ":      "OpenObserve",
-		"nav.observ_hint": "Open OpenObserve and sign in automatically",
+		"nav.observ":      "Parseable",
+		"nav.observ_hint": "Open Parseable to query logs, metrics and traces",
 		"nav.traefik":     "Traefik",
 		"nav.more":        "More",
 

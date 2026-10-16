@@ -72,6 +72,13 @@ services:
       - "[[.VolumeRoot]]:/backup/data:ro"
       - "[[.BackupDir]]:/archive"
       - "/etc/localtime:/etc/localtime:ro"
+    resources:
+      reservations:
+        cpus: "0.05"
+        memory: 32M
+      limits:
+        cpus: "0.5"
+        memory: 256M
 [[ if .Store.Enabled ]]
   # The in-cluster backup store. Runs on a NON-storage node via an explicit
   # placement (which bypasses the volumed-service→storage-node auto-pin), so
@@ -109,6 +116,13 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    resources:
+      reservations:
+        cpus: "0.1"
+        memory: 128M
+      limits:
+        cpus: "0.5"
+        memory: 512M
 [[ end ]]
 [[ if .DataDir ]]
   # The Control-Plane Backup Agent — runs ONLY on the manager node (where
@@ -159,4 +173,11 @@ services:
       - "${DATA_DIR}:/backup/pmcluster:ro"
       - "[[.BackupDir]]:/archive"
       - "/etc/localtime:/etc/localtime:ro"
+    resources:
+      reservations:
+        cpus: "0.05"
+        memory: 32M
+      limits:
+        cpus: "0.5"
+        memory: 128M
 [[ end ]]
