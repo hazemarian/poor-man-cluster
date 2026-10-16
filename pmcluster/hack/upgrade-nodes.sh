@@ -43,6 +43,8 @@ done
 # script silently upgrades the wrong machines. So when no list is given, ask the
 # swarm itself — one seed host is enough — and derive the IPs from the nodes'
 # Status.Addr rather than from DNS or a hand-kept list.
+SSHOPT=(-i "$KEY" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=8)
+
 if [ -z "$HOSTS" ]; then
   SEED="${PMCLUSTER_SEED:-}"
   if [ -z "$SEED" ]; then
@@ -67,7 +69,6 @@ fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-SSHOPT=(-i "$KEY" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=8)
 
 echo "▶ release $VERSION"
 gh release download "$VERSION" -R "$REPO" -p '*linux-amd64.tar.gz' -p 'SHA256SUMS.txt' -D "$WORK" >/dev/null

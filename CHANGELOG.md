@@ -3,6 +3,24 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.209 (2026-10-16)
+
+**The node-discovery path was dead on arrival — fixed, and proven.**
+
+`upgrade-nodes.sh` aborted with `SSHOPT[@]: unbound variable` on its first real run: the discovery block I
+added referenced the SSH options before they were defined, and `set -u` turned that into a fatal error. It
+failed loudly rather than proceeding with a missing key, which is the behaviour the script is for — but it
+means the discovery path had never worked.
+
+Options are now defined before anything uses them. Verified two ways: `bash -n` clean, and a dry run against
+an unreachable seed that reaches the discovery step and reports "discovery failed via …" instead of dying on
+an unset variable.
+
+Worth recording as a pattern rather than an incident: this script's whole purpose is to replace a manual
+procedure that was easy to get subtly wrong, and its first two production runs each found something — the
+seven-version worker skew, and now this ordering bug. A deploy path earns trust by being exercised, not by
+being written.
+
 ## v0.2.208 (2026-10-16)
 
 **Nothing in the platform assumes this deployment's nodes any more.**
