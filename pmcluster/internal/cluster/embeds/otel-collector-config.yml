@@ -40,6 +40,22 @@ receivers:
       com.docker.stack.namespace:    "stack.name"
       com.docker.swarm.node.id:      "swarm.node.id"
 
+  # Node-level CPU and memory. docker_stats only ever sees CONTAINERS, so there
+  # was no way to answer "how loaded is this node" — the question that decides
+  # whether a node can take another workload.
+  #
+  # The service mounts the host's /proc and /sys read-only and points gopsutil at
+  # them (HOST_PROC/HOST_SYS in the stack), because a container's own /proc is
+  # not the host's. mode: global means every node scrapes itself, and the
+  # resourcedetection processor tags each series with that node's host.name — so
+  # "per node" grouping is honest rather than an aggregation of containers.
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu:
+      memory:
+      load:
+
   filelog:
     include:
       - /var/lib/docker/containers/*/*-json.log
@@ -235,7 +251,7 @@ service:
       processors: [memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]
       exporters:  [otlphttp/parseable-logs]
     metrics:
-      receivers:  [docker_stats, otlp]
+      receivers:  [docker_stats, hostmetrics, otlp]
       processors: [memory_limiter, resourcedetection, resource, transform/metrics, batch]
       exporters:  [otlphttp/parseable-metrics]
     traces:

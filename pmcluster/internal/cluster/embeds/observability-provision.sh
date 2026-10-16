@@ -94,7 +94,7 @@ json_escape() {
     printf '%s' "$1" | awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); printf "%s", $0 }'
 }
 
-# add_tile DASHBOARD_ID TITLE STREAM CHART QUERY X_FIELD Y_FIELD X_TITLE Y_TITLE X Y W H
+# add_tile DASHBOARD_ID TITLE STREAM SHAPE QUERY X_FIELD Y_FIELD X_TITLE Y_TITLE X Y W H
 #
 # Emits the tile shape the UI itself produces. Established by creating one tile in
 # the UI and reading it back, because the server stores tiles unvalidated:
@@ -109,14 +109,14 @@ json_escape() {
 # escaping of double quotes, so none of the mangling that silently stored
 # `metric_name = \'x\'` while still answering 200.
 add_tile() {
-    _d="$1"; _title="$2"; _stream="$3"; _chart="$4"; _query="$5"
+    _d="$1"; _title="$2"; _stream="$3"; _shape="$4"; _query="$5"
     _xf="$6"; _yf="$7"; _xt="$8"; _yt="$9"; _x="${10}"; _y="${11}"; _w="${12}"; _h="${13}"
     _id=$(tile_id "$_title")
     _q=$(json_escape "$_query")
     _body=$(cat <<JSON
 {"tile_id":"${_id}","title":"${_title}","tileType":"builder","dbName":["${_stream}"],
- "chartType":"${_chart}","chartQuery":"${_q}",
- "config":{"type":"${_chart}","colourScheme":"forest",
+ "chartType":"timeseries","chartQuery":"${_q}",
+ "config":{"type":"${_shape}","colourScheme":"forest",
    "layout":{"legendPosition":"bottom"},
    "axes":{"x":{"field":"${_xf}","title":"${_xt}"},"y":{"field":"${_yf}","title":"${_yt}"},"groupBy":{"field":[]}},
    "advanced":{"dataLabels":{"enabled":false},"tooltip":{"enabled":true,"mode":"index","intersect":false}}},
@@ -176,24 +176,40 @@ provision_dashboard() {
     # Queries use BACKTICK identifiers, as the UI writes them: no JSON escaping,
     # and no chance of the double-quote mangling that silently produced
     # `metric_name = \'x\'` earlier.
+    # Shapes vary deliberately — a dashboard of eight identical bar charts hides
+    # the differences that matter. Shares of a whole (which node, which service
+    # dominates) read better as pie/donut; magnitudes compare better as bars.
+    #
+    # Metric names come from SELECT DISTINCT metric_name, not from assumption:
+    # docker_stats gives container.*, hostmetrics gives system.* per node.
     add_tile "$_d" "Log volume by service" pmcluster-logs bar \
         'SELECT `service.name`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-logs` GROUP BY `service.name` ORDER BY `COUNT_STAR` DESC LIMIT 10' \
-        'service.name' 'COUNT_STAR' 'Service' 'Log lines' 0 0 6 4
+        'service.name' 'COUNT_STAR' 'Service' 'Log lines' 0 0 5 5
     add_tile "$_d" "Errors by service" pmcluster-logs bar \
         'SELECT `service.name`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-logs` WHERE severity_text = '"'"'ERROR'"'"' GROUP BY `service.name` ORDER BY `COUNT_STAR` DESC LIMIT 10' \
-        'service.name' 'COUNT_STAR' 'Service' 'Errors' 6 0 6 4
-    add_tile "$_d" "Container memory %" pmcluster-metrics bar \
-        'SELECT `service.name`, max(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.memory.percent'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
-        'service.name' 'value' 'Service' 'Memory %' 0 4 6 4
+        'service.name' 'COUNT_STAR' 'Service' 'Errors' 5 0 5 5
+    add_tile "$_d" "Node CPU %" pmcluster-metrics pie \
+        'SELECT `host.name`, SUM(data_point_value) * 100 AS `cpu_pct` FROM `pmcluster-metrics` WHERE metric_name = '"'"'system.cpu.utilization'"'"' AND state != '"'"'idle'"'"' GROUP BY `host.name` ORDER BY `cpu_pct` DESC LIMIT 10' \
+        'host.name' 'cpu_pct' 'Node' 'CPU %' 10 0 5 5
+    add_tile "$_d" "Node memory %" pmcluster-metrics donut \
+        'SELECT `host.name`, MAX(data_point_value) * 100 AS `mem_pct` FROM `pmcluster-metrics` WHERE metric_name = '"'"'system.memory.utilization'"'"' GROUP BY `host.name` ORDER BY `mem_pct` DESC LIMIT 10' \
+        'host.name' 'mem_pct' 'Node' 'Memory %' 0 5 5 5
+    add_tile "$_d" "Node load (1m)" pmcluster-metrics table \
+        'SELECT `host.name`, MAX(data_point_value) AS `load_1m` FROM `pmcluster-metrics` WHERE metric_name = '"'"'system.cpu.load_average.1m'"'"' GROUP BY `host.name` ORDER BY `load_1m` DESC LIMIT 10' \
+        'host.name' 'load_1m' 'Node' 'Load 1m' 5 5 5 5
     add_tile "$_d" "CPU by service" pmcluster-metrics bar \
-        'SELECT `service.name`, max(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.cpu.utilization'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
-        'service.name' 'value' 'Service' 'CPU' 6 4 6 4
-    add_tile "$_d" "Network received by service" pmcluster-metrics bar \
-        'SELECT `service.name`, sum(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.network.io.usage.rx_bytes'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
-        'service.name' 'value' 'Service' 'Bytes received' 0 8 6 4
-    add_tile "$_d" "Log volume per minute" pmcluster-logs timeseries \
-        'SELECT DATE_TRUNC('"'"'minute'"'"', `p_timestamp`) AS `time_bucket`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-logs` GROUP BY `time_bucket` ORDER BY `time_bucket` ASC' \
-        'time_bucket' 'COUNT_STAR' 'Timestamp' 'All rows (*)' 6 8 6 4
+        'SELECT `service.name`, MAX(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.cpu.utilization'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
+        'service.name' 'value' 'Service' 'CPU' 10 5 5 5
+    add_tile "$_d" "Memory % by service" pmcluster-metrics bar \
+        'SELECT `service.name`, MAX(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.memory.percent'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
+        'service.name' 'value' 'Service' 'Memory %' 0 10 5 5
+    add_tile "$_d" "Network received by service" pmcluster-metrics donut \
+        'SELECT `service.name`, SUM(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.network.io.usage.rx_bytes'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
+        'service.name' 'value' 'Service' 'Bytes received' 5 10 5 5
+    add_tile "$_d" "Ingestion per stream" pmcluster-metrics pie \
+        'SELECT `metric_name`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-metrics` GROUP BY `metric_name` ORDER BY `COUNT_STAR` DESC LIMIT 12' \
+        'metric_name' 'COUNT_STAR' 'Metric' 'Samples' 10 10 5 5
+
 }
 
 if wait_ready; then

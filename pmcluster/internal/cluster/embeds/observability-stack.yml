@@ -153,6 +153,10 @@ services:
     restart: any
     restart_delay: 5s
     command: ["--config=/etc/otel-collector-config.yaml"]
+    env:
+      # gopsutil reads these to locate the HOST's proc/sys rather than its own.
+      HOST_PROC: "/hostfs/proc"
+      HOST_SYS: "/hostfs/sys"
     expose:
       port: 4318
       external: 4318
@@ -161,6 +165,11 @@ services:
       - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/etc/localtime:/etc/localtime:ro"
+      # Read-only host views for the hostmetrics receiver. A container's /proc is
+      # its own, so node CPU/memory would otherwise report the collector's cgroup
+      # rather than the node's. Read-only, and nothing is written back.
+      - "/proc:/hostfs/proc:ro"
+      - "/sys:/hostfs/sys:ro"
     configs:
       - config_path(pmcluster_otel_config)
     resources:

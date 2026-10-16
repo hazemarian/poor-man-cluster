@@ -100,6 +100,23 @@ Two changes that belong together, because the first caused the outage the second
   settings only mean anything if something pushes them. v0.2.185 shipped without that and flagged it as an
   open gap; v0.2.186 closes it — see below.
 
+## v0.2.196 (2026-10-16)
+
+**Node-level CPU and memory, and a dashboard that is not eight bar charts.**
+
+`docker_stats` only ever sees containers, so there was no way to answer "how loaded is this node" — the
+question that decides whether a node can take another workload. Added the `hostmetrics` receiver
+(`cpu`, `memory`, `load`) to the metrics pipeline; the service mounts the host's `/proc` and `/sys`
+**read-only** and points gopsutil at them via `HOST_PROC`/`HOST_SYS`, because a container's own `/proc` is
+not the host's. `mode: global` means every node scrapes itself and `resourcedetection` tags each series with
+that node's `host.name`, so "per node" is honest rather than a sum of containers. Config validated with
+`otelcol validate` before shipping.
+
+Nine tiles, with shapes chosen to suit the data rather than for variety's sake: shares of a whole read
+better as pie/donut (which node is loaded, which service dominates traffic), magnitudes compare better as
+bars, and a table suits per-node scalars. `chartType` is the UI's own `timeseries` family with `config.type`
+selecting the shape — the combination its SQL path produces.
+
 ## v0.2.195 (2026-10-16)
 
 **The dashboard renders. Three details were wrong, and each was fatal on its own.**
