@@ -3,6 +3,31 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.200 (2026-10-16)
+
+**Docker API spans dropped in the collector — the missing emitter found.**
+
+The instrumentation site I could not locate from the code is Traefik: it runs `--tracing.otlp=true` and its
+**swarm provider** polls the Docker API, which is the 64,790 `GET /v1.51/tasks` spans under
+`service.name=traefik-proxy`. pmcluster supplies the other half — ~89,000 inspections of a single image.
+Together they are most of a ~400-span trace.
+
+Filtered with `filter/drop_docker_api_spans` on the **traces pipeline**, matching the span name:
+
+```yaml
+- 'IsMatch(name, "^[A-Z]+ /v1\.[0-9]+/")'
+```
+
+Chosen over filtering in either producer: it is one place, it is config, it needs no rebuild, and no
+operational signal is lost — a Docker API call is never what an operator is looking for, while every *caller*
+span (the reconcile pass, the deploy, the HTTP request) remains.
+
+Escaping needed care and is worth recording: YAML single quotes are literal, so the file must carry the CEL
+source verbatim — **two** backslashes, which CEL evaluates to `\.`'s single `\.`, i.e. a literal dot. Four
+backslashes validate cleanly and then match nothing, which is the inert-config failure this repo has already
+been bitten by more than once. Verified by rendering and `otelcol validate` (exit 0); actual match behaviour
+is to be confirmed against the live span counts after deployment.
+
 ## v0.2.199 (2026-10-16)
 
 **The 400-span trace was not a span leak. It was the same image inspected ~194 times per 30 seconds.**

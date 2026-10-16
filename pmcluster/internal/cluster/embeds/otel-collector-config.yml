@@ -114,6 +114,26 @@ processors:
   # `*infra_traefik*` silently match nothing. That is why 4.6M unattributable
   # rows (traefik's own deprecation chatter) were being ingested while the
   # exclusions looked correct.
+  # Docker Engine API calls are PLUMBING, and two components emit them by the
+  # thousand: Traefik's swarm provider (--tracing.otlp=true, polling
+  # /v1.51/tasks) and pmcluster's own image inspection. Measured on the live
+  # cluster: 64,790 `GET /v1.51/tasks` spans from traefik-proxy and ~89,000
+  # inspections of a SINGLE image from pmcluster, which together are most of a
+  # ~400-span trace. The trace stops reading as the work that happened.
+  #
+  # Dropped here rather than in either producer: it is one place, it is config,
+  # and it needs no rebuild. Nothing operational is lost — a Docker API call is
+  # never what an operator is looking for, and the CALLERS' spans (the reconcile
+  # pass, the deploy, the HTTP request) all remain.
+  #
+  # Matched on the span name, which is the only reliable signal: it is
+  # "<method> /v1.<api-version>/..." for these calls and names the path.
+  filter/drop_docker_api_spans:
+    error_mode: ignore
+    traces:
+      span:
+        - 'IsMatch(name, "^[A-Z]+ /v1\\.[0-9]+/")'
+
   filter/skip_filelog:
     error_mode: ignore
     logs:
@@ -268,5 +288,5 @@ service:
       exporters:  [otlphttp/parseable-metrics]
     traces:
       receivers:  [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, filter/drop_docker_api_spans, batch]
       exporters:  [otlphttp/parseable-traces]
