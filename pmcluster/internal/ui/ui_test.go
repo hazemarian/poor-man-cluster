@@ -1245,7 +1245,10 @@ func TestShellExternalLinks(t *testing.T) {
 	withDomain := shell("example.com")
 	for _, want := range []string{
 		"External",
-		`href="https://observ.example.com/"`,
+		// The nav goes THROUGH the sign-in bridge, not straight to the backend:
+		// the bridge seeds the SPA's browser-side session and then lands on the
+		// root, so an SSO-authenticated operator is actually logged in.
+		`href="https://observ.example.com/sso-bridge"`,
 		`href="https://traefik.example.com/dashboard/"`,
 	} {
 		if !strings.Contains(withDomain, want) {

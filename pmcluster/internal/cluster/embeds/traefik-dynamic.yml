@@ -39,6 +39,22 @@ http:
         customRequestHeaders:
           Authorization: "[[.ObservabilityBasicAuth]]"
     [[- end]]
+    # observability-root-redirect: OpenObserve's UI lived at /web/; Parseable
+    # serves its SPA at /. Parseable answers /web/ with HTTP 200, but the SPA's
+    # client-side router then renders its OWN not-found view — so an old
+    # bookmark or link shows a 404 in the browser even though the request
+    # succeeded at the edge. Redirect those paths to the root instead.
+    #
+    # Unconditional (not inside the SSOEnabled branch): it is a path rewrite, and
+    # the auth gate still applies to wherever it lands.
+    observability-root-redirect:
+      redirectRegex:
+        # A capture group rather than a domain placeholder: RenderTraefikDynamic
+        # runs the Go template pass but NOT the shell-style substitution (only the
+        # compose path does that), so a placeholder here would ship as a literal.
+        regex: "^https?://([^/]+)/web/?$"
+        replacement: "https://$1/"
+        permanent: false
     # cors-default: applied to every exposed/app router emitted by the manifest
     # translator plus those mounted via stack labels (edge console,
     # openobserve). Origins are restricted to

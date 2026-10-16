@@ -634,6 +634,101 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 	}
 }
 
+// TestEdgeStackServesTheObservabilitySignInBridge pins the routing that makes
+// the observability login work.
+//
+// The SSO gate authenticates the operator but the backend SPA decides it is
+// logged in from browser storage, which only code on the observ origin can
+// write. So the console serves that page and Traefik routes /sso-bridge on the
+// observ host to the console — ahead of the observability backend's catch-all
+// router, which is what the explicit priority buys. The credential it writes is
+// the same managed value the injection middleware sends, rendered from the same
+// field, so the collector, the UI and the operator share one login.
+func TestEdgeStackServesTheObservabilitySignInBridge(t *testing.T) {
+	in := RenderInput{
+		Domain:                 "nextrum-sy.com",
+		SSOEnabled:             true,
+		EdgeImage:              "example/edge:v1",
+		ObservabilityBasicAuth: observabilityBasicAuth("ops@example.com", "PW"),
+	}
+	data, err := LoadComposeFile(StackEdge, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile: %v", err)
+	}
+	body := string(data)
+
+	for _, want := range []string{
+		"Host(`observ.nextrum-sy.com`) && Path(`/sso-bridge`)",
+		`traefik.http.routers.sso-bridge.priority: "1000"`,
+		`traefik.http.routers.sso-bridge.service: pmcluster`,
+		`traefik.http.routers.sso-bridge.middlewares: cors-default@file,sso-auth@file`,
+		"OBSERVABILITY_BASIC_AUTH:",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("edge stack missing %q", want)
+		}
+	}
+
+	// The bridge must be gated: it hands out the managed admin credential, so it
+	// may never be routed with CORS alone.
+	if !strings.Contains(body, "traefik.http.routers.sso-bridge.middlewares: cors-default@file,sso-auth@file") &&
+		!strings.Contains(body, "traefik.http.routers.sso-bridge.middlewares: cors-default@file,admin-auth@file") {
+		t.Error("the bridge must be routed behind an auth gate, not CORS alone")
+	}
+	// And it must carry the credential, or the page writes an empty session.
+	if strings.Contains(body, "OBSERVABILITY_BASIC_AUTH: \"\"") {
+		t.Error("the bridge needs the managed credential to seed the session")
+	}
+}
+
+// TestObservabilityWebPathRedirect covers the reported symptom: an
+// OpenObserve-era link to /web/ still "returns 404". Parseable answers /web/
+// with HTTP 200 and the SPA's own client-side router renders the not-found
+// view, so the fix belongs at the edge — redirect the old path to the root.
+//
+// The redirect must also come BEFORE the auth gate: a redirect needs no session,
+// and the destination is gated anyway.
+func TestObservabilityWebPathRedirect(t *testing.T) {
+	in := RenderInput{Domain: "nextrum-sy.com", CORSOriginRegex: CORSOriginRegex("nextrum-sy.com"),
+		SSOEnabled: true, ObservabilityBasicAuth: observabilityBasicAuth("ops@example.com", "PW")}
+
+	dyn, err := RenderTraefikDynamic(in)
+	if err != nil {
+		t.Fatalf("RenderTraefikDynamic: %v", err)
+	}
+	body := string(dyn)
+	if !strings.Contains(body, "observability-root-redirect:") {
+		t.Fatal("traefik dynamic config has no observability-root-redirect middleware")
+	}
+	if !strings.Contains(body, `regex: "^https?://([^/]+)/web/?$"`) {
+		t.Error("the redirect must match the old /web/ path")
+	}
+	if !strings.Contains(body, `replacement: "https://$1/"`) {
+		t.Error("the redirect target must be the same host's root")
+	}
+	// It must not lean on ${DOMAIN}: this render path does not substitute it.
+	if strings.Contains(body, "replacement: \"https://observ.${DOMAIN}/\"") {
+		t.Error("the redirect must not use ${DOMAIN} — RenderTraefikDynamic does not substitute it")
+	}
+
+	stack, err := LoadComposeFile(StackObservability, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile: %v", err)
+	}
+	s := string(stack)
+	for _, chain := range []string{
+		"cors-default@file,observability-root-redirect@file,sso-auth@file,observability-auto-auth@file",
+	} {
+		if !strings.Contains(s, chain) {
+			t.Errorf("router chain missing the redirect ahead of the gate: want %q", chain)
+		}
+	}
+	// The rewrite must not be placed after the gate in any chain.
+	if strings.Contains(s, "sso-auth@file,observability-root-redirect@file") {
+		t.Error("redirect must run BEFORE the auth gate")
+	}
+}
+
 // TestEveryRenderedConfigHasANameAlias closes the class of bug that broke the
 // first attempt at the retention one-shot: a config registered in
 // renderedConfigs() but absent from configNameAliases. EnsureRenderedConfigs

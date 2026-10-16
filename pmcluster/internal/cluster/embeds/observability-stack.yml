@@ -57,9 +57,9 @@ services:
       "traefik.http.routers.observability.tls.certresolver": "letsencrypt"
       [[- end]]
       [[- if .SSOEnabled]]
-      "traefik.http.routers.observability.middlewares": "cors-default@file,sso-auth@file,observability-auto-auth@file"
+      "traefik.http.routers.observability.middlewares": "cors-default@file,observability-root-redirect@file,sso-auth@file,observability-auto-auth@file"
       [[- else]]
-      "traefik.http.routers.observability.middlewares": "cors-default@file,admin-auth@file,observability-auto-auth@file"
+      "traefik.http.routers.observability.middlewares": "cors-default@file,observability-root-redirect@file,admin-auth@file,observability-auto-auth@file"
       [[- end]]
       "traefik.http.services.observability.loadbalancer.server.port": "8000"
       "traefik.swarm.network": "traefik-net"

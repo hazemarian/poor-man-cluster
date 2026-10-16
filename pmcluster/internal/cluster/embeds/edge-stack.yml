@@ -38,6 +38,12 @@ services:
       LOG_LEVEL: info
       EDGE_LOGIN_DISABLED: "[[.EdgeLoginDisabled]]"
       EDGE_SSO_ENABLED: "[[.SSOEnabled]]"
+      # The managed observability credential — base64(<admin user>:<password>),
+      # the same value the observability router's injection middleware sends.
+      # The console's /sso-bridge page writes it into the backend SPA's browser
+      # storage so the operator is signed in, and it is rendered from one source
+      # (RenderInput.ObservabilityBasicAuth), not typed anywhere.
+      OBSERVABILITY_BASIC_AUTH: "[[.ObservabilityBasicAuth]]"
     volumes:
       [[- if not .EdgeLoginDisabled]]
       - "pmui-data:/data"
@@ -74,6 +80,30 @@ services:
       "traefik.http.routers.pmcluster-api.tls.certresolver": "letsencrypt"
       [[- end]]
       "traefik.http.routers.pmcluster-api.middlewares": "cors-default@file"
+      # sso-bridge: serves the observability sign-in bootstrap page (the console's
+      # /sso-bridge handler) on the observ.<domain> origin.
+      #
+      # Why a router and not a redirect: the backend's web app decides whether it
+      # is logged in from state kept in the BROWSER (localStorage), and only code
+      # executing on that origin can write it. The SSO gate alone leaves the
+      # operator at a sign-in form.
+      #
+      # priority 1000 keeps it ahead of the observability stack's catch-all
+      # router for the same host; `service: pmcluster` points it at this console,
+      # which shares the Traefik overlay with the observability backend.
+      "traefik.http.routers.sso-bridge.rule": "Host(`observ.${DOMAIN}`) && Path(`/sso-bridge`)"
+      "traefik.http.routers.sso-bridge.entrypoints": "websecure"
+      "traefik.http.routers.sso-bridge.tls": "true"
+      [[- if .ACMEEmail]]
+      "traefik.http.routers.sso-bridge.tls.certresolver": "letsencrypt"
+      [[- end]]
+      "traefik.http.routers.sso-bridge.priority": "1000"
+      [[- if .SSOEnabled]]
+      "traefik.http.routers.sso-bridge.middlewares": "cors-default@file,sso-auth@file"
+      [[- else]]
+      "traefik.http.routers.sso-bridge.middlewares": "cors-default@file,admin-auth@file"
+      [[- end]]
+      "traefik.http.routers.sso-bridge.service": "pmcluster"
       "traefik.http.services.pmcluster.loadbalancer.server.port": "8042"
     resources:
       reservations:

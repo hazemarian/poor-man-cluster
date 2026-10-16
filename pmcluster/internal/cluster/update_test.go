@@ -623,19 +623,26 @@ func TestUpdate_PasswordRotationRedeploysObservabilityAndInfra(t *testing.T) {
 		t.Error("OTelConfig should have been minted to a new version after rotation")
 	}
 	deployer := deps.Deployer.(*recordingDeployer)
-	if len(deployer.deployedStacks) != 2 {
-		t.Fatalf("expected observability + infra re-deployed (password env + auto-auth middleware changed), got %v", deployer.deployedStacks)
+	// Three stacks, not two: the credential reaches the observability stack (its
+	// env), infra (the traefik-dynamic auto-auth middleware) AND the edge console
+	// (OBSERVABILITY_BASIC_AUTH, which its /sso-bridge page writes into the
+	// backend SPA's browser storage). Any one of them left stale would leave a
+	// login or an ingest path on the old password.
+	if len(deployer.deployedStacks) != 3 {
+		t.Fatalf("expected observability + infra + edge re-deployed (password env, auto-auth middleware and the sign-in bridge), got %v", deployer.deployedStacks)
 	}
 	if !res.TraefikCreated {
 		t.Error("traefik-dynamic config should be re-created (openobserve-auto-auth middleware embeds the NEW password)")
 	}
-	var observability, infra string
+	var observability, infra, edge string
 	for _, d := range deployer.deployedStacks {
 		switch d.Name {
 		case "observability":
 			observability = d.YAML
 		case "infra":
 			infra = d.YAML
+		case "edge":
+			edge = d.YAML
 		}
 	}
 	if observability == "" {
@@ -649,6 +656,12 @@ func TestUpdate_PasswordRotationRedeploysObservabilityAndInfra(t *testing.T) {
 	// a raw "$" in a random password would otherwise flake the match.
 	if !strings.Contains(string(observability), escapeComposeDollar(newPass)) {
 		t.Errorf("observability re-deploy must carry the NEW password in ZO_ROOT_USER_PASSWORD")
+	}
+	// The edge carries the credential as the base64 the injection middleware
+	// sends, so it must change with the rotation too.
+	newBasicAuth := observabilityBasicAuth("ops@example.com", newPass)
+	if !strings.Contains(edge, escapeComposeDollar(newBasicAuth)) {
+		t.Errorf("edge re-deploy must carry the NEW credential for the sign-in bridge")
 	}
 }
 

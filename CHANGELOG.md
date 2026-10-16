@@ -59,6 +59,31 @@ Two changes that belong together, because the first caused the outage the second
   settings only mean anything if something pushes them. v0.2.185 shipped without that and flagged it as an
   open gap; v0.2.186 closes it — see below.
 
+## v0.2.188 (2026-10-16)
+
+**The observability login works again — restored, and ported from OpenObserve to Parseable.**
+
+Two reported symptoms, one cause. `https://observ.<domain>/web/` showed a not-found view, and an
+SSO-authenticated operator still met Parseable's sign-in form.
+
+- **`/web/` is redirected to `/`.** Parseable answers `/web/` with HTTP 200 and then its SPA renders
+  its *own* not-found page, so it looks like a 404 even though the request succeeded. OpenObserve-era
+  bookmarks and links now land on the root, via a Traefik `redirectRegex` that runs before the auth gate.
+- **The sign-in bridge is back architected the same way, for Parseable.** The SSO gate authenticates the
+  *operator*, but the backend's web app decides whether it is logged in from state it keeps in the
+  **browser** — `localStorage["authToken"]` for Parseable, exactly as OpenObserve needed
+  `localStorage["userInfo"]`/`["currentuser"]`. Nothing off-origin can write it, so the console serves a
+  page on that origin that seeds it and redirects.
+- Routing restored: the `sso-bridge` router (`Host(observ.<domain>) && Path(/sso-bridge)`, **priority
+  1000** so it beats the backend's catch-all router, `service: pmcluster`, behind sso-auth/admin-auth),
+  the console's `GET /sso-bridge` handler, and the console nav link that goes through it.
+- The credential is declarative, not hardcoded: `OBSERVABILITY_BASIC_AUTH` is rendered into the edge
+  stack from the same `RenderInput.ObservabilityBasicAuth` the injection middleware uses, so the
+  collector, the UI and the operator share **one** login. The bridge re-checks the identity headers the
+  gate supplies, so it cannot hand the credential to an anonymous caller.
+- A password rotation now redeploys **three** stacks (observability, infra, edge) — the credential
+  reaches all three, and a stale copy in any of them means a broken login or ingest.
+
 ## v0.2.187 (2026-10-16)
 
 **Retention is applied from inside the swarm, and Parseable publishes no port.**

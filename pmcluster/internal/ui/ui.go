@@ -160,6 +160,13 @@ func (a *App) Mount(engine *gin.Engine) {
 	engine.POST(WebBase+"/setup", auth.Setup)
 	engine.POST(WebBase+"/logout", auth.Logout)
 
+	// Observability sign-in bridge: served on the observ.<domain> origin, routed
+	// there by the Traefik sso-bridge router. It writes the browser-storage state
+	// the observability SPA reads to decide it is logged in — which cannot be set
+	// from anywhere but that origin — using the same managed credential the
+	// router's injection middleware sends.
+	engine.GET("/sso-bridge", (controllers.ObservBridge{Controller: a.ctrl}).Page)
+
 	g := engine.Group(WebBase)
 	g.Use(a.ctrl.Auth.Require())
 
