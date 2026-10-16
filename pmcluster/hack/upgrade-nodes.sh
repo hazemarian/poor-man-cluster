@@ -29,6 +29,7 @@ shift || true
 
 HOSTS="${PMCLUSTER_NODES:-}"     # optional; discovered from the swarm when empty
 KEY="${PMCLUSTER_SSH_KEY:-$HOME/.ssh/pmcluster_vps4_ed25519}"
+SSHUSER="${PMCLUSTER_SSH_USER:-root}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --hosts) HOSTS="$2"; shift 2 ;;
@@ -52,7 +53,7 @@ if [ -z "$HOSTS" ]; then
     exit 2
   fi
   echo "▶ discovering nodes via $SEED"
-  DISCOVERED=$(ssh "${SSHOPT[@]}" "root@$SEED" '
+  DISCOVERED=$(ssh "${SSHOPT[@]}" "$SSHUSER@$SEED" '
     docker node ls --format "{{.ID}}" | while read -r id; do
       ip=$(docker node inspect "$id" --format "{{.Status.Addr}}")
       role=$(docker node inspect "$id" --format "{{.Spec.Role}}")
@@ -88,17 +89,22 @@ echo "▶ ${#IPS[@]} node(s): ${IPS[*]}"
 FAILED=0
 for ip in "${IPS[@]}"; do
   echo "══════ $ip ══════"
-  if ! scp -i "$KEY" -o BatchMode=yes -q "$BIN" "root@$ip:/root/pmcluster.new"; then
+  if ! scp -i "$KEY" -o BatchMode=yes -q "$BIN" "root@$ip:/tmp/pmcluster.new"; then
     echo "  scp FAILED — is SSH blocked (fail2ban)? nothing changed on this node" >&2
     FAILED=1; continue
   fi
-  ssh "${SSHOPT[@]}" "root@$ip" "
+  ssh "${SSHOPT[@]}" "$SSHUSER@$ip" "
     set -e
+    # Not every deployment logs in as root — wafaa runs as 'wafaa' with
+    # passwordless sudo. Privileged steps go through sudo when we are not root, so
+    # the same script works on both without a second code path.
+    SUDO=\"\"; [ \"\$(id -u)\" -ne 0 ] && SUDO=\"sudo -n\"
+    echo \"  user:   \$(whoami) (\${SUDO:-no sudo needed})\"
     echo \"  before: \$(pmcluster version 2>/dev/null | head -1)\"
     cp -a /usr/local/bin/pmcluster /usr/local/bin/pmcluster.\$VERSION.prev 2>/dev/null || true
-    install -m 0755 /root/pmcluster.new /usr/local/bin/pmcluster
-    rm -f /root/pmcluster.new
-    systemctl restart pmcluster
+    $SUDO install -m 0755 /tmp/pmcluster.new /usr/local/bin/pmcluster
+    rm -f /tmp/pmcluster.new
+    $SUDO systemctl restart pmcluster
     sleep 6
     echo \"  after:  \$(pmcluster version 2>/dev/null | head -1)\"
     echo \"  unit:   \$(systemctl is-active pmcluster)\"
@@ -113,5 +119,5 @@ fi
 # Reconcile stacks and configs AFTER the binaries agree, so a re-render is done by
 # the new version everywhere.
 echo "▶ reconciling platform stacks + configs"
-ssh "${SSHOPT[@]}" "root@${IPS[${#IPS[@]}-1]}" 'pmcluster cluster update' 2>&1 | grep -viE 'telemetry|4318|export:' | tail -12
+ssh "${SSHOPT[@]}" "$SSHUSER@${IPS[${#IPS[@]}-1]}" 'SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo -n"; $SUDO pmcluster cluster update' 2>&1 | grep -viE 'telemetry|4318|export:' | tail -12
 echo "✔ upgraded to $VERSION"

@@ -3,6 +3,20 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.210 (2026-10-16)
+
+**The upgrade script works on a deployment that does not log in as root.**
+
+wafaa runs as `wafaa` with passwordless sudo, and a single-node swarm — no second manager to absorb a
+mistake. The script assumed `root` for three privileged steps: staging the binary (into `/root`, unwritable by
+a normal user), `install` into `/usr/local/bin`, and `systemctl restart`. It now takes `PMCLUSTER_SSH_USER`,
+stages in `/tmp`, and routes privileged steps through `sudo -n` **only when it is not already root**, so the
+same script serves both without a second code path.
+
+Learned the hard way in this session's wafaa attempts: the username is `wafaa` — `idlib-wafaa` is the
+*hostname*, and `root` is simply not accepted, so the right key sent to the wrong user reads exactly like a
+missing key. That is what the earlier "key refused" findings actually were.
+
 ## v0.2.209 (2026-10-16)
 
 **The node-discovery path was dead on arrival — fixed, and proven.**
