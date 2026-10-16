@@ -48,6 +48,14 @@ services:
     volumes:
       - "parseable_data:/data"
       - "parseable_staging:/staging"
+    # Published on the routing mesh for the same reason SeaweedFS publishes 8333:
+    # the daemon runs on the HOST, not on a swarm network, so it cannot resolve
+    # observability_parseable. It converges per-stream retention over
+    # 127.0.0.1:8000 at cluster update. Parseable enforces HTTP Basic on every
+    # path, so the port is authenticated even though the mesh exposes it.
+    ports:
+      - target: 8000
+        published: 8000
     labels:
       "traefik.enable": "true"
       "traefik.http.routers.observability.rule": "Host(`observ.${DOMAIN}`)"

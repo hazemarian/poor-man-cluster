@@ -54,11 +54,37 @@ Two changes that belong together, because the first caused the outage the second
   has no equivalent server-side session to mint. The injected header authenticates the API and the
   OTLP ingest paths; Parseable's own UI sign-in uses the same managed credential.
 
-- **Retention is an open gap.** OpenObserve expressed retention as `ZO_*_RETENTION_DAYS` env vars.
-  Parseable does not take retention from the environment at all — it is per-stream, set through its
-  API. The `oo_*` retention settings therefore no longer do anything and **streams currently grow
-  unbounded** until retention is re-implemented against Parseable's API. A test pins this so the
-  gap cannot drift silently.
+- **Retention is applied by the daemon, not by env.** OpenObserve expressed retention as
+  `ZO_*_RETENTION_DAYS` env vars; Parseable takes none from the environment, so the `oo_*_retention_days`
+  settings only mean anything if something pushes them. v0.2.185 shipped without that and flagged it as an
+  open gap; v0.2.186 closes it — see below.
+
+## v0.2.186 (2026-10-16)
+
+**Retention is real, and the collector stopped re-ingesting history.**
+
+The release that follows the Parseable swap, because the first one measured fine on an idle box and badly
+under load.
+
+- **`filelog` no longer starts at `beginning`.** With it, every collector restart re-read the ENTIRE
+  historical container-log set and re-sent it — and the collector is global, so that is per node, four
+  times. Measured on the live cluster it drove Parseable to **764 MB against its 768 MB cap**, OOM-killed
+  (`exit 137`) four times in eight minutes at 64% CPU. Changing this one line took it to **~350 MB and
+  ~0.1% CPU**. The receiver also stops scraping four platform services whose stdout has no query value:
+  the two backup agents, SeaweedFS and traefik.
+- **Per-stream retention is converged over Parseable's API** at `cluster update`, from the existing
+  `oo_logs_retention_days` / `oo_metrics_retention_days` / `oo_traces_retention_days` settings. The
+  contract was established by probing the running instance rather than from documentation, because the
+  documentation does not match v2.8.0: `PUT /api/v1/logstream/{stream}/retention` takes a JSON
+  **sequence** of task objects — a bare object is rejected with *"invalid type: map, expected a
+  sequence"*, and an object missing `action` with *"missing field `action`"*. An unset (zero) day count
+  skips that stream, leaving whatever is already configured in place rather than silently clearing it.
+  Best-effort by design: an unreachable backend warns, it never blocks the update.
+- **Parseable publishes 8000 on the routing mesh** so the daemon can reach it at all. The daemon is a
+  systemd host process, not a swarm-network member, so it cannot resolve `observability_parseable` — the
+  same reason SeaweedFS publishes 8333. Parseable enforces HTTP Basic on every path, so the port stays
+  authenticated, but it is now reachable from outside the cluster and the VPS firewall is what limits
+  that.
 
 ## v0.2.184 (2026-10-13)
 

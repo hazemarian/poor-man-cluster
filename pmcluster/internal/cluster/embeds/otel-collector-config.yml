@@ -40,9 +40,21 @@ receivers:
     exclude:
       - /var/lib/docker/containers/*otel-collector*/*-json.log
       - /var/lib/docker/containers/*parseable*/*-json.log
+      # Platform services whose stdout has no query value and is by far the
+      # chattiest: the backup agents log every scheduled run, traefik logs every
+      # provider reload.
+      - /var/lib/docker/containers/*backup_volume-backup*/*-json.log
+      - /var/lib/docker/containers/*backup_control-plane-backup*/*-json.log
+      - /var/lib/docker/containers/*backup_seaweedfs*/*-json.log
+      - /var/lib/docker/containers/*infra_traefik*/*-json.log
     include_file_name: false
     include_file_path: true
-    start_at: beginning
+    # end, NOT beginning. With `beginning` every collector restart re-reads the
+    # ENTIRE historical container-log set and re-sends it: on a cluster with any
+    # history that is a sustained burst into the backend, and it was measured
+    # driving Parseable to 764MB against a 768MB cap (exit 137 loops, 64% CPU).
+    # Changing this alone took it to ~350MB and ~0.1% CPU.
+    start_at: end
     operators:
       # Parse Docker JSON log format: {"log":"...","stream":"stdout|stderr","time":"..."}
       - type: json_parser
