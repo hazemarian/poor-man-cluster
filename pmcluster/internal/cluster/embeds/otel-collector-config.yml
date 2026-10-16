@@ -75,10 +75,20 @@ processors:
   # memory_limiter is the guard that keeps a failing exporter from growing the
   # collector until the HOST loses its Swarm heartbeat. It must be the FIRST
   # processor in every pipeline.
+  #
+  # Ceiling = limit_mib + spike_limit_mib = 240MiB, deliberately BELOW the
+  # 320MiB container cap in observability-stack.yml: the limiter has to shed
+  # data while the process still has room, or the cgroup OOM-kill is what ends
+  # a backlog instead — and that takes the collector down with it.
+  #
+  # 192MiB is ~2x what the collector actually holds (88-102MiB peak measured
+  # across all four live nodes). The 270-420MiB it once reached was an
+  # UNBOUNDED exporter queue, which the bounded sending_queue +
+  # retry_on_failure on each exporter below now prevent.
   memory_limiter:
     check_interval: 5s
-    limit_mib: 320
-    spike_limit_mib: 80
+    limit_mib: 192
+    spike_limit_mib: 48
 
   # Drop logs from services that opted out via skip_filelog: true.
   # These services send logs via OTLP instead of stdout/stderr.

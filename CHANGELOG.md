@@ -3,6 +3,47 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.196 (2026-10-16)
+
+**The collector keeps one task per node and hands back the memory it never used.**
+
+After the 2026-10-15/16 memory-pressure incident, the OTel collector looked like the obvious thing to
+shrink: four tasks, one on each of four nodes, each carrying a 512MiB cap and a 256MiB reservation on
+hosts with 1.8GB. Measured, it is not that: across all four nodes its 24-hour peak is **88–102MiB and
+0.02–0.10 cores**. Cutting the count to three buys ~89MiB on the node that has the most free memory —
+and costs real telemetry, which is why the count stays.
+
+- **The shape is `global` because two of the three jobs are node-local by construction.**
+  `docker_stats` reads this node's `/var/run/docker.sock`, and `filelog` tails this node's
+  `/var/lib/docker/containers/*-json.log`; no other task can read either. Only the OTLP receivers are
+  node-agnostic — every app on the cluster dials the service name over `monitoring-net`
+  (`observability_otel-collector:4317`, verified across all eleven OTLP-configured services), so app
+  traces/logs/metrics survive the loss of any single task. What does not survive is that node's
+  container metrics and its **daemon's own telemetry**: `pmcluster serve` is a host process exporting
+  to `http://127.0.0.1:4318` (the host-published port this service provides), so a node with no
+  collector task ships nothing. Observed live during the 2026-10-16 stop-gap, when the worker ran no
+  collector: `dial tcp 127.0.0.1:4318: connect: connection refused` on every export, invisible outside
+  journald. The decision is recorded in `observability-stack.yml` beside the service, so the next
+  reader does not have to re-derive it.
+
+- **What actually shrank is the headroom nobody was using**: reservation `256M → 96M`, cap
+  `512M → 320M`, CPU reservation `0.3 → 0.05` cores, CPU cap `0.4 → 0.25`. On a 1.8GB node that is
+  160MiB of schedulable memory returned per node (640MiB cluster-wide) and a third less worst-case
+  cgroup exposure, with nothing dropped from the pipeline. The reservation now matches the measured
+  steady state instead of reserving 3x it; the cap sits at ~3x the measured peak.
+
+- **The `memory_limiter` moved below the cap, where it can still work.** It was `320MiB + 80MiB
+  spike` against a 512MiB cap; it is now `192MiB + 48MiB` against a 320MiB cap. A limiter that sits
+  above the container limit never fires — the cgroup OOM-kill ends the backlog instead, and takes the
+  collector down with it. The 270–420MiB growth this guard exists for was an unbounded exporter
+  queue, which the bounded `sending_queue` and `retry_on_failure` already prevent; 192MiB is still
+  ~2x anything the collector holds in steady state.
+
+- **Parseable is left alone on purpose.** Its cap is 768MiB reservation 128MiB and its measured
+  24-hour peak is 266MiB (average 197MiB) — that cap has already been reached once, when the
+  collector re-read every historical container log after a restart, and it is the limit that made
+  that failure local instead of fatal.
+
 ## v0.2.185 (2026-10-16)
 
 **Observability runs on Parseable, and every platform service has a memory cap.**

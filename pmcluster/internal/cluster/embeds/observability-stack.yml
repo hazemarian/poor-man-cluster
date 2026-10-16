@@ -109,6 +109,43 @@ services:
         cpus: "0.2"
         memory: 64M
 
+  # One collector per node — this shape is deliberate, and it stays.
+  #
+  # `global` is not a default nobody trimmed; two of this process's three jobs
+  # are node-local by construction:
+  #
+  #   docker_stats — reads THIS node's /var/run/docker.sock, so it can only
+  #     report the containers running beside it. Removing the local task does
+  #     not move that collection anywhere; it deletes that node's container
+  #     CPU/memory/network metrics outright.
+  #   filelog — tails THIS node's /var/lib/docker/containers/*-json.log. Same:
+  #     no other task can read those files.
+  #   otlp — the only node-agnostic job. Clients dial the service name
+  #     (`observability_otel-collector:4317`) over monitoring-net and Swarm DNS
+  #     hands them whichever task survives; every app on this cluster is
+  #     configured that way, never localhost.
+  #
+  # The daemon depends on the LOCAL task specifically. `pmcluster serve` is a
+  # host process and ships its own telemetry to http://127.0.0.1:4318
+  # (config.OTLPEndpoint); that only resolves because this service publishes
+  # 4318 in host mode on every node it lands on. Take the task off a node and
+  # that node's daemon silently loses its logs/traces/metrics — seen on
+  # 2026-10-16 as `dial tcp 127.0.0.1:4318: connect: connection refused` in
+  # journalctl while the worker ran no collector.
+  #
+  # So the luxury was never the fourth container, it was the RESERVATION
+  # (256M) and the CAP (512M) carried on every node for a process measured at
+  # 88-102MiB and 0.02-0.10 cores across all four nodes (24h peaks read from
+  # container.memory.percent / container.cpu.utilization). Dropping to three
+  # manager copies buys 89MiB on the node with the MOST free memory and costs
+  # that node's container metrics plus its daemon telemetry; trimming the
+  # reservation returns 160MiB of schedulable memory on every node and costs
+  # nothing observable.
+  #
+  # Sizing rule: reserve ~the measured steady state, cap at ~3x the measured
+  # peak, and keep the collector's own memory_limiter
+  # (otel-collector-config.yml) strictly BELOW this cap so the limiter sheds
+  # load while the process still has room instead of the cgroup OOM-killing it.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.157.0
     mode: global
@@ -128,8 +165,8 @@ services:
       - config_path(pmcluster_otel_config)
     resources:
       reservations:
-        cpus: "0.3"
-        memory: 256M
+        cpus: "0.05"
+        memory: 96M
       limits:
-        cpus: "0.4"
-        memory: 512M
+        cpus: "0.25"
+        memory: 320M
