@@ -59,6 +59,31 @@ Two changes that belong together, because the first caused the outage the second
   settings only mean anything if something pushes them. v0.2.185 shipped without that and flagged it as an
   open gap; v0.2.186 closes it — see below.
 
+## v0.2.195 (2026-10-16)
+
+**The dashboard renders. Three details were wrong, and each was fatal on its own.**
+
+Established by having the UI create one tile and reading it back, then replicating it — the server stores
+tiles as an untyped passthrough, so no amount of API-level checking could have found these:
+
+- **`layout.i` was missing, and it must equal `tile_id`.** It is the grid-item id react-grid-layout keys
+  on; without it the dashboard throws "Something went wrong" before drawing anything. This was the primary
+  crash.
+- **`tileType` is `builder`, not `code`**, and `config` carries the `axes` the renderer reads
+  (`x.field`/`y.field`), plus `type`/`colourScheme`/`advanced`.
+- **`tile_id` must be a real ULID.** It is the one field Parseable types, so the server parses and
+  re-serialises it — and a hash-derived id that merely *looks* like a ULID gets its first character
+  rewritten (`2`→`A`, `3`→`B`) while `layout.i`, sitting in the untyped passthrough, keeps the original.
+  The two then disagree and the grid throws again. Ids are now generated ULID-shaped, reusing the timestamp
+  prefix from a tile the UI itself created, with a stable 16-char suffix from the title hash.
+
+Queries also switched to **backtick** identifiers, as the UI writes them — no JSON escaping of double
+quotes, so none of the mangling that silently stored `metric_name = \'x\'` while still answering 200.
+
+Verified on the running instance: six tiles, `layout.i == tile_id` for all, and the dashboard draws —
+four tiles with live data, "Errors by service" correctly empty, and "Log volume per minute" empty pending a
+fix to its time-bucket query.
+
 ## v0.2.194 (2026-10-16)
 
 **The provisioner stops creating dashboard tiles until the render contract is known.**

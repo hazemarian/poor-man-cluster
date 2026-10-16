@@ -66,10 +66,22 @@ apply_retention() {
 }
 
 # ── dashboard ───────────────────────────────────────────────────────────────
-# A tile_id is any id string; it only has to be unique within the dashboard, so
-# it is derived from the tile title to stay stable across runs.
+# tile_id derives a stable id per tile (from its title), in the shape of a real
+# ULID.
+#
+# The shape matters, and not subtly: tile_id is the one field Parseable types
+# (`tile_id: Ulid`), so the server parses and re-serialises it. A hash-derived id
+# looks like a ULID but is not one, and the server rewrites its FIRST character
+# (2 -> A, 3 -> B) while `layout.i` — inside the untyped passthrough — keeps the
+# original. The two then disagree, and react-grid-layout keys on `i`, so the
+# dashboard throws "Something went wrong".
+#
+# The 10-char timestamp prefix is taken verbatim from a tile the UI created, so it
+# is a value the server demonstrably accepts; the remaining 16 chars come from the
+# title hash, keeping ids stable across runs. Hex is a subset of Crockford base32
+# (no I/L/O/U), so the result is valid.
 tile_id() {
-    printf '%s' "$1" | md5sum | cut -c1-26 | tr 'a-f' 'A-F'
+    printf '01M52G7RCJ%s' "$(printf '%s' "$1" | md5sum | cut -c1-16 | tr 'a-f' 'A-F')"
 }
 
 # json_escape escapes the two characters JSON string interpolation needs.
@@ -82,24 +94,33 @@ json_escape() {
     printf '%s' "$1" | awk '{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); printf "%s", $0 }'
 }
 
-# add_tile DASHBOARD_ID TITLE TILE_TYPE STREAM CHART QUERY X Y W H
+# add_tile DASHBOARD_ID TITLE STREAM CHART QUERY X_FIELD Y_FIELD X_TITLE Y_TITLE X Y W H
+#
+# Emits the tile shape the UI itself produces. Established by creating one tile in
+# the UI and reading it back, because the server stores tiles unvalidated:
+#
+#   - `tileType` is `builder` for these charts (an earlier attempt sent `code`).
+#   - `layout` MUST carry `i`, and it equals tile_id. It is the grid item id
+#     react-grid-layout keys on: absent, the dashboard throws
+#     "Something went wrong" before drawing anything.
+#   - `config.axes` is what the renderer reads for the x/y fields.
+#
+# Queries use BACKTICK identifiers exactly as the UI writes them — no JSON
+# escaping of double quotes, so none of the mangling that silently stored
+# `metric_name = \'x\'` while still answering 200.
 add_tile() {
-    _d="$1"; _title="$2"; _type="$3"; _stream="$4"; _chart="$5"; _query="$6"
-    _x="$7"; _y="$8"; _w="$9"; _h="${10}"
+    _d="$1"; _title="$2"; _stream="$3"; _chart="$4"; _query="$5"
+    _xf="$6"; _yf="$7"; _xt="$8"; _yt="$9"; _x="${10}"; _y="${11}"; _w="${12}"; _h="${13}"
     _id=$(tile_id "$_title")
-    # Two things the API accepts but the UI cannot render:
-    #  - chartQuery is what the tile actually charts. Its renderer does
-    #    `typeof chartQuery === "string" ? chartQuery : convertObject(chartQuery)`,
-    #    so omitting it passes validation and then throws in the browser
-    #    ("Something went wrong"). A string is accepted verbatim, so the SQL goes
-    #    in directly.
-    #  - the query carries double-quoted identifiers ("service.name"), which must
-    #    be escaped inside a JSON string or the body is invalid (API answers 400).
     _q=$(json_escape "$_query")
     _body=$(cat <<JSON
-{"tile_id":"${_id}","title":"${_title}","tileType":"${_type}","dbName":["${_stream}"],
- "chartType":"${_chart}","chartQuery":"${_q}","config":{"type":"${_chart}"},
- "layout":{"x":${_x},"y":${_y},"w":${_w},"h":${_h}}}
+{"tile_id":"${_id}","title":"${_title}","tileType":"builder","dbName":["${_stream}"],
+ "chartType":"${_chart}","chartQuery":"${_q}",
+ "config":{"type":"${_chart}","colourScheme":"forest",
+   "layout":{"legendPosition":"bottom"},
+   "axes":{"x":{"field":"${_xf}","title":"${_xt}"},"y":{"field":"${_yf}","title":"${_yt}"},"groupBy":{"field":[]}},
+   "advanced":{"dataLabels":{"enabled":false},"tooltip":{"enabled":true,"mode":"index","intersect":false}}},
+ "layout":{"i":"${_id}","x":${_x},"y":${_y},"w":${_w},"h":${_h},"moved":false,"static":false}}
 JSON
 )
     _code=$(curl -sS -o /dev/null -w '%{http_code}' -m 20 -X PUT \
@@ -134,31 +155,45 @@ provision_dashboard() {
     fi
     echo "  dashboard '${_title}' created: ${_d}"
 
-    # NO TILES BY DEFAULT, deliberately.
+    # Tiles, in the shape the UI itself produces.
     #
-    # Tiles created over the API render as "Something went wrong" in the SPA, and
-    # the API cannot say why: Parseable's model is
+    # Established by having the UI create one tile and reading it back, because
+    # Parseable's model is a passthrough:
     #
     #     pub struct Tile { pub tile_id: Ulid,
     #                       #[serde(flatten)] pub other_fields: Option<Map<..>> }
     #
-    # — every field but tile_id is an unvalidated passthrough, so a malformed
-    # tile is accepted with HTTP 200 and only fails in the browser. Verified by
-    # bisect against the running instance: a dashboard with NO tiles renders
-    # perfectly, so the dashboard object is fine and the TILES are what break it.
-    # Chart types the UI actually offers are Line/Bar/Area/Pie/Donut/Query
-    # value/Gauge/Table — "timeseries" is not among them, yet switching to "bar"
-    # and carrying a clean string chartQuery still fails, so the missing piece is
-    # not one field.
+    # Only tile_id is typed; everything else is stored unvalidated, so a
+    # malformed tile is accepted with HTTP 200 and fails in the browser instead.
+    # Two details were wrong in an earlier attempt and each is fatal:
     #
-    # Until the render contract is pinned down (a tile created through the UI,
-    # read back, and replicated exactly), the provisioner converges the DASHBOARD
-    # and leaves the tiling to the UI, which demonstrably works. Shipping tiles
-    # that crash the page is worse than shipping an empty canvas.
+    #  - layout MUST carry `i`, and it equals tile_id. It is the grid item id
+    #    react-grid-layout keys on; absent, the dashboard throws
+    #    "Something went wrong" before drawing anything.
+    #  - tileType is `builder` for these charts (not `code`), and config carries
+    #    the axes the renderer reads.
     #
-    # To finish this: create one tile in the UI, then read
-    #   GET /api/v1/dashboards/{id}
-    # and copy that tile object verbatim into the calls below.
+    # Queries use BACKTICK identifiers, as the UI writes them: no JSON escaping,
+    # and no chance of the double-quote mangling that silently produced
+    # `metric_name = \'x\'` earlier.
+    add_tile "$_d" "Log volume by service" pmcluster-logs bar \
+        'SELECT `service.name`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-logs` GROUP BY `service.name` ORDER BY `COUNT_STAR` DESC LIMIT 10' \
+        'service.name' 'COUNT_STAR' 'Service' 'Log lines' 0 0 6 4
+    add_tile "$_d" "Errors by service" pmcluster-logs bar \
+        'SELECT `service.name`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-logs` WHERE severity_text = '"'"'ERROR'"'"' GROUP BY `service.name` ORDER BY `COUNT_STAR` DESC LIMIT 10' \
+        'service.name' 'COUNT_STAR' 'Service' 'Errors' 6 0 6 4
+    add_tile "$_d" "Container memory %" pmcluster-metrics bar \
+        'SELECT `service.name`, max(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.memory.percent'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
+        'service.name' 'value' 'Service' 'Memory %' 0 4 6 4
+    add_tile "$_d" "CPU by service" pmcluster-metrics bar \
+        'SELECT `service.name`, max(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.cpu.utilization'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
+        'service.name' 'value' 'Service' 'CPU' 6 4 6 4
+    add_tile "$_d" "Network received by service" pmcluster-metrics bar \
+        'SELECT `service.name`, sum(data_point_value) AS `value` FROM `pmcluster-metrics` WHERE metric_name = '"'"'container.network.io.usage.rx_bytes'"'"' GROUP BY `service.name` ORDER BY `value` DESC LIMIT 10' \
+        'service.name' 'value' 'Service' 'Bytes received' 0 8 6 4
+    add_tile "$_d" "Log volume per minute" pmcluster-logs timeseries \
+        'SELECT DATE_TRUNC('"'"'minute'"'"', `p_timestamp`) AS `time_bucket`, COUNT(*) AS `COUNT_STAR` FROM `pmcluster-logs` GROUP BY `time_bucket` ORDER BY `time_bucket` ASC' \
+        'time_bucket' 'COUNT_STAR' 'Timestamp' 'All rows (*)' 6 8 6 4
 }
 
 if wait_ready; then
