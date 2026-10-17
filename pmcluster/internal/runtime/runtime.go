@@ -142,10 +142,18 @@ type Info struct {
 }
 
 // NetworkSpec.Driver defaults to "overlay" if empty.
+//
+// Labels matter for stack-private overlays: `docker stack deploy` decides
+// whether a network it declares in the compose already exists by listing
+// networks carrying StackNamespaceLabel=<stack>, so a network pmcluster
+// pre-creates for a stack MUST carry that label or the deploy tries to create
+// a second network with the same name and fails ("network with name X already
+// exists").
 type NetworkSpec struct {
 	Name       string
 	Driver     string
 	Attachable bool
+	Labels     map[string]string
 }
 
 // SecretSpec.Labels are applied so pmcluster-managed secrets can be

@@ -3,6 +3,46 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.212 (2026-10-17)
+
+**Three defects closed, one of them in my own previous fix, plus the e2e race root-caused.**
+
+### The non-root install path never worked
+
+`v0.2.210` added `sudo -n` for deployments that do not log in as root — and the `$SUDO` in the install and
+restart lines sat inside a **double-quoted** ssh argument, so it expanded *locally*, where it is unset, and
+`set -u` aborted with `SUDO: unbound variable`. The privilege escalation was decorative. wafaa only upgraded
+because those steps were run by hand. Escaped (`\$SUDO`) in the double-quoted block; left bare in the
+single-quoted reconcile command, where it *is* evaluated on the node. Both verified with `bash -n`.
+
+### The copy no longer depends on SFTP
+
+`scp` on OpenSSH 9.x rides the SFTP subsystem; a host with it disabled answers `scp: Connection closed`, which
+reads like auth or fail2ban and is neither. The binary now goes over as `ssh … "cat > /tmp/pmcluster.new"`,
+with `scp -O` as a second chance. The copy stays strictly before the install, so a copy failure leaves the node
+untouched and the upgrade aborts rather than half-applying.
+
+### `cluster update` reports config replacements
+
+A replaced rendered config could be reported as "No rendered content changed — nothing to redeploy", because
+the summary tracked stack redeploys only. `UpdateResult` gains `ConfigsChanged`, the workflow line now
+distinguishes stacks-and/or-configs from configs-only from genuinely-nothing, and the CLI prints
+`Configs replaced`. Previously only the OTel and Traefik configs were recorded, so a replaced
+`pmcluster_observability_provision` was invisible.
+
+### The intermittent `swarm-e2e` failure is an ordering race, fixed
+
+`EnsureBundledNetworks` creates only the shared overlays; each stack's **private** overlay was left to
+`docker stack deploy`, which attaches by name and skips creation when a network of that name is merely
+*listed* — so a leftover `backup_net` still being removed asynchronously gets listed, creation is skipped, and
+the name is gone by the time the service is created. That is exactly `network backup_net not found`. It is
+intermittent because `TestBackupRestoreE2E` runs before `TestClusterUp` and its purge does not wait for the
+network to disappear.
+
+The up path now ensures per-stack overlays before deploy, stamped with `com.docker.stack.namespace=<stack>` so
+`docker stack deploy` reuses them instead of colliding, and waits out a same-name leftover. Covered by four
+tests asserting `network-create:backup_net` precedes `deploy:backup`.
+
 ## v0.2.211 (2026-10-16)
 
 **Copy the binary over SSH, not scp — and the guard earned its keep.**

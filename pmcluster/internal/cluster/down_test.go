@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 // cancelledCtx returns a context that is already cancelled so that
@@ -53,11 +55,7 @@ func TestDown_NoPurge_PreservesSecretsConfigsNetworks(t *testing.T) {
 		Data   []byte
 		Labels map[string]string
 	}{Name: "admin_credentials"}
-	f.networks["traefik-net"] = struct {
-		Name       string
-		Driver     string
-		Attachable bool
-	}{Name: "traefik-net"}
+	f.networks["traefik-net"] = runtime.NetworkSpec{Name: "traefik-net"}
 
 	deployer := &recordingDeployer{}
 	res, err := Down(context.Background(), makeDownDeps(f, deployer), DownInput{Purge: false})
@@ -106,11 +104,7 @@ func TestDown_Purge_RemovesAllManagedResources(t *testing.T) {
 		Labels map[string]string
 	}{Name: "pmcluster_traefik_dynamic_v001", Labels: map[string]string{pmclusterLabel: "true"}}
 	for _, name := range pmclusterManagedNetworks {
-		f.networks[name] = struct {
-			Name       string
-			Driver     string
-			Attachable bool
-		}{Name: name}
+		f.networks[name] = runtime.NetworkSpec{Name: name}
 	}
 
 	deployer := &recordingDeployer{}

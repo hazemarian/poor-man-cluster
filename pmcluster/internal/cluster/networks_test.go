@@ -3,6 +3,8 @@ package cluster
 import (
 	"context"
 	"testing"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 func TestEnsureNetwork_CreatesWhenMissing(t *testing.T) {
@@ -23,11 +25,7 @@ func TestEnsureNetwork_CreatesWhenMissing(t *testing.T) {
 func TestEnsureNetwork_NoOpWhenPreExisting(t *testing.T) {
 	f := newFakeDocker()
 
-	f.networks["traefik-net"] = struct {
-		Name       string
-		Driver     string
-		Attachable bool
-	}{Name: "traefik-net", Driver: "overlay", Attachable: true}
+	f.networks["traefik-net"] = runtime.NetworkSpec{Name: "traefik-net", Driver: "overlay", Attachable: true}
 
 	created, err := EnsureNetwork(context.Background(), f, "traefik-net")
 	if err != nil {
@@ -87,11 +85,7 @@ func TestEnsureBundledNetworks_CreatesBoth(t *testing.T) {
 func TestEnsureBundledNetworks_OnePreExisting(t *testing.T) {
 	f := newFakeDocker()
 
-	f.networks["traefik-net"] = struct {
-		Name       string
-		Driver     string
-		Attachable bool
-	}{Name: "traefik-net", Driver: "overlay", Attachable: true}
+	f.networks["traefik-net"] = runtime.NetworkSpec{Name: "traefik-net", Driver: "overlay", Attachable: true}
 
 	names, err := EnsureBundledNetworks(context.Background(), f)
 	if err != nil {

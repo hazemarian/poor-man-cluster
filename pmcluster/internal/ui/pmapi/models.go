@@ -276,6 +276,11 @@ type UpdateSummary struct {
 	KeySecret      string   `json:"key_secret"`
 	EdgeConfig     string   `json:"edge_config"`
 	StacksDeployed []string `json:"stacks_deployed"`
+	// ConfigsChanged lists the rendered platform configs (OTel collector,
+	// Traefik dynamic, observability-provision, edge fingerprint) replaced on
+	// this update. Additive key: a console that ignores it keeps working, and
+	// one that reads it can tell a config swap from a true no-op.
+	ConfigsChanged []string `json:"configs_changed"`
 }
 
 // RenderedConfig is one of the cluster's platform configs after template

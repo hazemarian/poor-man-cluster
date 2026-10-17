@@ -155,6 +155,7 @@ func (r *realClient) NetworkCreate(ctx context.Context, spec runtime.NetworkSpec
 	_, err := r.c.NetworkCreate(ctx, spec.Name, network.CreateOptions{
 		Driver:     driver,
 		Attachable: spec.Attachable,
+		Labels:     spec.Labels,
 	})
 	if err != nil {
 		return fmt.Errorf("network create %s: %w", spec.Name, err)

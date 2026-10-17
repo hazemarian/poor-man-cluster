@@ -314,6 +314,8 @@ func TestUpdate_AdoptsLabeledNodeIntoStorageNodes(t *testing.T) {
 }
 func TestUpdate_NoOpWhenNothingChanged(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
+	var out bytes.Buffer
+	deps.Stdout = &out
 	res, err := Update(context.Background(), deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -324,6 +326,70 @@ func TestUpdate_NoOpWhenNothingChanged(t *testing.T) {
 	}
 	if res.OTelCreated || res.TraefikCreated || res.CertCreated || res.KeyCreated {
 		t.Errorf("no-op update reported changes: %+v", res)
+	}
+	if len(res.ConfigsChanged) != 0 {
+		t.Errorf("no-op update must replace no rendered configs, got %v", res.ConfigsChanged)
+	}
+	// The summary may say "nothing to redeploy" ONLY when neither axis moved.
+	if !strings.Contains(out.String(), "no stacks re-deployed and no configs replaced") {
+		t.Errorf("no-op summary must state specifically that neither stacks nor configs changed, got:\n%s", out.String())
+	}
+}
+
+// TestUpdate_ReportsReplacedConfigWithoutStackDeploy covers the untrustworthy
+// summary: a run that replaced a rendered CONFIG while re-deploying no stack
+// used to print "No rendered content changed — nothing to redeploy", because
+// only the stack axis was consulted. Here the platform stacks are legitimately
+// settled (rendered hash matches, live labels match) and the only thing that
+// moves is a rendered config object that has to be (re)created — the result
+// must list it in ConfigsChanged and the summary must name it.
+func TestUpdate_ReportsReplacedConfigWithoutStackDeploy(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	// Baseline: a full no-op — every config object already exists.
+	base, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})
+	if err != nil {
+		t.Fatalf("baseline Update: %v", err)
+	}
+	if base.OTelConfig == "" {
+		t.Fatal("baseline did not report an OTel config name")
+	}
+	if slices.Contains(base.ConfigsChanged, "pmcluster_otel_config") {
+		t.Fatalf("baseline should not replace the OTel config, got %v", base.ConfigsChanged)
+	}
+
+	// Drop ONLY the rendered OTel config object from the Swarm. Nothing else
+	// moves: the stacks' rendered content (and its stored hash) is unchanged,
+	// so their fresh render still embeds the very same config name. This is
+	// the config-replaced/no-stack-redeployed shape the summary misreported.
+	f := deps.Docker.(*fakeDocker)
+	delete(f.configs, base.OTelConfig)
+
+	var out bytes.Buffer
+	deps.Stdout = &out
+	deployer := &recordingDeployer{}
+	deps.Deployer = deployer
+
+	res, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(deployer.deployedStacks) != 0 {
+		t.Fatalf("fixture should re-deploy no stack, got %v", deployer.deployedStacks)
+	}
+	if len(res.StacksDeployed) != 0 {
+		t.Fatalf("StacksDeployed should be empty, got %v", res.StacksDeployed)
+	}
+	if !slices.Contains(res.ConfigsChanged, "pmcluster_otel_config") {
+		t.Errorf("ConfigsChanged must report the replaced rendered config, got %v", res.ConfigsChanged)
+	}
+	summary := out.String()
+	if !strings.Contains(summary, "pmcluster_otel_config") {
+		t.Errorf("summary must name the replaced config, got:\n%s", summary)
+	}
+	if strings.Contains(summary, "nothing to redeploy") {
+		t.Errorf("summary must not claim nothing happened while a config was replaced, got:\n%s", summary)
 	}
 }
 

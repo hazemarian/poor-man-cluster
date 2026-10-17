@@ -89,9 +89,29 @@ echo "▶ ${#IPS[@]} node(s): ${IPS[*]}"
 FAILED=0
 for ip in "${IPS[@]}"; do
   echo "══════ $ip ══════"
-  if ! scp -i "$KEY" -o BatchMode=yes -q "$BIN" "root@$ip:/tmp/pmcluster.new"; then
-    echo "  scp FAILED — is SSH blocked (fail2ban)? nothing changed on this node" >&2
-    FAILED=1; continue
+  # COPY VIA SSH+CAT, NOT SCP. (primary path)
+  #
+  # WHY: scp normally rides the SFTP subsystem, which the remote sshd is free to
+  # leave disabled. On a host without it the failure is `scp: Connection closed`
+  # — a message that reads exactly like an auth refusal or a fail2ban ban and is
+  # neither, so it sends you chasing sshd_config and firewall rules that were
+  # never the problem. Piping the binary into `cat` over a plain ssh session uses
+  # the exec channel only, so it works wherever ssh itself works.
+  #
+  # The copy is deliberately separate from (and strictly before) the install
+  # below: staging into /tmp needs no privileges, so a copy failure leaves this
+  # node byte-for-byte untouched and we can `continue` instead of half-applying
+  # an upgrade. That is the whole point of the check.
+  if ! ssh "${SSHOPT[@]}" "$SSHUSER@$ip" "cat > /tmp/pmcluster.new" < "$BIN"; then
+    # FALLBACK ONLY: scp -O forces the legacy SCP protocol, which also skips the
+    # SFTP subsystem. It still requires the remote `scp` binary and its own
+    # quirks, so ssh+cat stays the primary path and this is a second chance, not
+    # the plan.
+    echo "  ssh copy failed — retrying with scp -O (legacy protocol)" >&2
+    if ! scp -O -i "$KEY" -o BatchMode=yes -q "$BIN" "$SSHUSER@$ip:/tmp/pmcluster.new"; then
+      echo "  copy FAILED (ssh and scp -O both failed) — nothing changed on this node" >&2
+      FAILED=1; continue
+    fi
   fi
   ssh "${SSHOPT[@]}" "$SSHUSER@$ip" "
     set -e
@@ -102,9 +122,9 @@ for ip in "${IPS[@]}"; do
     echo \"  user:   \$(whoami) (\${SUDO:-no sudo needed})\"
     echo \"  before: \$(pmcluster version 2>/dev/null | head -1)\"
     cp -a /usr/local/bin/pmcluster /usr/local/bin/pmcluster.\$VERSION.prev 2>/dev/null || true
-    $SUDO install -m 0755 /tmp/pmcluster.new /usr/local/bin/pmcluster
+    \$SUDO install -m 0755 /tmp/pmcluster.new /usr/local/bin/pmcluster
     rm -f /tmp/pmcluster.new
-    $SUDO systemctl restart pmcluster
+    \$SUDO systemctl restart pmcluster
     sleep 6
     echo \"  after:  \$(pmcluster version 2>/dev/null | head -1)\"
     echo \"  unit:   \$(systemctl is-active pmcluster)\"

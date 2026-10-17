@@ -41,5 +41,6 @@ func (u *UpdateService) run(res http.ResponseWriter, req *http.Request) {
 		"key_secret":      resu.KeySecret,
 		"edge_config":     resu.EdgeConfig,
 		"stacks_deployed": resu.StacksDeployed,
+		"configs_changed": resu.ConfigsChanged,
 	})
 }

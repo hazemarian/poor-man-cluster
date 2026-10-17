@@ -51,6 +51,21 @@ type UpdateResult struct {
 	EdgeDeployed   bool
 	StacksDeployed []string
 
+	// ConfigsChanged lists the rendered platform configs that were actually
+	// created or replaced on this run — the OTel collector config, the
+	// Traefik dynamic config, the observability-provision script and the edge
+	// content fingerprint. Docker configs are content-addressed, so a new
+	// object is minted only when the rendered bytes move (or when the object
+	// was missing from the Swarm); a non-empty list therefore means a config
+	// WAS swapped and any "nothing changed" summary would be a lie.
+	//
+	// Tracked SEPARATELY from StacksDeployed because the two axes genuinely
+	// differ: the bug this field fixes was a run that replaced a rendered
+	// config while re-deploying no stack, and the summary claimed the run was
+	// a no-op. The json key is additive — existing consumers
+	// (internal/ui/pmapi) keep reading stacks_deployed unchanged.
+	ConfigsChanged []string `json:"configs_changed"`
+
 	// NamingMigration lists what the legacy-OpenObserve cleanup changed on this
 	// run (empty on a migrated or fresh cluster).
 	NamingMigration []string
@@ -466,11 +481,26 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		res.TraefikConfig = rendered["pmcluster_traefik_dynamic"].Name
 		res.TraefikCreated = rendered["pmcluster_traefik_dynamic"].Created
 
+		// Record EVERY replaced rendered config, in the canonical
+		// RenderedConfigs() order so the summary text is stable run to run.
+		// The CLI used to print only the OTel + Traefik outcomes, so a
+		// replaced observability-provision script (or any other config) was
+		// invisible — which is how a run that swapped a config still managed
+		// to end with "nothing to redeploy".
+		for _, rc := range RenderedConfigs() {
+			if o, ok := rendered[rc.Logical]; ok && o.Created {
+				res.ConfigsChanged = append(res.ConfigsChanged, rc.Logical)
+			}
+		}
+
 		edgeName, edgeCreated, err := ensureEdgeConfig(ctx, deps.Docker, in.Version, render)
 		if err != nil {
 			return err
 		}
 		res.EdgeConfig, res.EdgeCreated = edgeName, edgeCreated
+		if edgeCreated {
+			res.ConfigsChanged = append(res.ConfigsChanged, "pmcluster_edge")
+		}
 		return nil
 	})
 
@@ -615,8 +645,23 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			}
 		}
 
-		if len(redeploy) == 0 {
-			fmt.Fprintf(out, "  ▶ No rendered content changed — nothing to redeploy.\n")
+		// Honest summary. Before this, anything that did not move a STACK
+		// printed a blanket "No rendered content changed — nothing to
+		// redeploy", even when a rendered config had in fact been replaced.
+		// An operator then read a swapped config as a no-op. The two axes are
+		// reported separately so "nothing happened" can only mean nothing.
+		cfgCount := len(res.ConfigsChanged)
+		switch {
+		case len(redeploy) > 0 && cfgCount > 0:
+			fmt.Fprintf(out, "  ▶ re-deployed %d stack(s) and replaced %d rendered config(s): %s\n",
+				len(redeploy), cfgCount, strings.Join(res.ConfigsChanged, ", "))
+		case len(redeploy) > 0:
+			fmt.Fprintf(out, "  ▶ re-deployed %d stack(s); no rendered configs replaced\n", len(redeploy))
+		case cfgCount > 0:
+			fmt.Fprintf(out, "  ▶ no stacks re-deployed, but %d rendered config(s) replaced: %s\n",
+				cfgCount, strings.Join(res.ConfigsChanged, ", "))
+		default:
+			fmt.Fprintf(out, "  ▶ no stacks re-deployed and no configs replaced — nothing to redeploy.\n")
 		}
 		return nil
 	})

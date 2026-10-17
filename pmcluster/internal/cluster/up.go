@@ -65,6 +65,18 @@ func splitStorageNodes(raw string) []string {
 	return out
 }
 
+// platformStacks is the ordered set of platform stacks `cluster up` deploys
+// (and whose private overlay networks must exist first). sso is appended last
+// when SSO is enabled so oauth2-proxy is up alongside the stack whose Traefik
+// forwardAuth middleware points at it.
+func platformStacks(ssoEnabled bool) []stackName {
+	stacks := []stackName{StackInfra, StackEdge, StackObservability, StackBackup}
+	if ssoEnabled {
+		stacks = append(stacks, StackSSO)
+	}
+	return stacks
+}
+
 // ensureStorageDirs creates the volume root and the backup archive dir on the
 // host. Overridden in tests to keep them hermetic (t.TempDir).
 var ensureStorageDirs = func(volumeRoot string) error {
@@ -389,13 +401,37 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		}
 		return nil
 	})
-	wf.Add("Deploying stacks (infra → edge → observability → backup)", func(ctx context.Context) error {
-		stacks := []stackName{StackInfra, StackEdge, StackObservability, StackBackup}
-		if sso.Enabled {
-			// sso (oauth2-proxy) is deployed alongside the platform stacks so
-			// Traefik's forwardAuth middleware has a live backend.
-			stacks = append(stacks, StackSSO)
+	wf.Add("Ensuring per-stack overlay networks", func(ctx context.Context) error {
+		// Each platform stack that joins a PRIVATE overlay (rather than the
+		// shared traefik-net/monitoring-net) needs that network to exist
+		// BEFORE the stack is deployed. `docker stack deploy` attaches every
+		// service to its compose networks BY NAME and only creates a missing
+		// one, so a stale leftover it lists skips creation and the service
+		// fails with "network <stack>_net not found" — the intermittent
+		// swarm-e2e failure for backup_control-plane-backup (backup is the one
+		// platform stack with a private overlay, backup_net). See
+		// ensureStackOverlays.
+		if deps.Docker == nil {
+			return nil
 		}
+		for _, s := range platformStacks(sso.Enabled) {
+			composeYAML, err := LoadComposeFile(s, render)
+			if err != nil {
+				return fmt.Errorf("load compose for %s: %w", s, err)
+			}
+			created, err := ensureStackOverlays(ctx, deps.Docker, string(s), composeYAML)
+			if err != nil {
+				return fmt.Errorf("ensure %s overlay networks: %w", s, err)
+			}
+			for _, n := range created {
+				fmt.Fprintf(out, "  ✓ network %s created\n", n)
+				res.NewNetworks = append(res.NewNetworks, n)
+			}
+		}
+		return nil
+	})
+	wf.Add("Deploying stacks (infra → edge → observability → backup)", func(ctx context.Context) error {
+		stacks := platformStacks(sso.Enabled)
 		for _, s := range stacks {
 			if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
 				return err

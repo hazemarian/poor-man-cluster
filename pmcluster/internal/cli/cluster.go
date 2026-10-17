@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -255,9 +256,22 @@ func printUpdateResult(out io.Writer, res *cluster.UpdateResult) {
 		}
 	}
 	fmt.Fprintf(out, "  Stacks re-deployed     : %v\n", res.StacksDeployed)
-	if len(res.StacksDeployed) == 0 {
+	if len(res.ConfigsChanged) > 0 {
+		fmt.Fprintf(out, "  Configs replaced       : %s\n", strings.Join(res.ConfigsChanged, ", "))
+	}
+	// The summary must never claim "nothing to redeploy" when a rendered
+	// CONFIG was in fact replaced: a stack can stay untouched while the OTel
+	// collector config or the observability-provision script is swapped for a
+	// new content-addressed object. So "nothing happened" is only printed when
+	// neither axis moved — and even then a TLS cert/key rotation is called out
+	// rather than being folded into the same sentence.
+	if len(res.StacksDeployed) == 0 && len(res.ConfigsChanged) == 0 {
 		fmt.Fprintln(out)
-		fmt.Fprintln(out, "  (no config or certificate changes — nothing to redeploy)")
+		if res.CertCreated || res.KeyCreated {
+			fmt.Fprintln(out, "  (no stacks redeployed and no configs replaced — only the TLS cert/key secret rotated)")
+		} else {
+			fmt.Fprintln(out, "  (no stacks redeployed and no configs replaced — nothing to redeploy)")
+		}
 	}
 }
 
