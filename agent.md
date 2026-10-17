@@ -120,6 +120,7 @@ repo root (this dir)
 │   └── test-reports/          # per-test-case field reports (historical)
 ├── harden-host.sh             # one-shot host hardening (ufw, DOCKER-USER, fail2ban)
 ├── install.sh                 # curl|bash installer (binary + systemd + auto cluster up/update)
+├── pmcluster/hack/upgrade-nodes.sh   # multi-node binary upgrade (verify → ssh+cat copy → install → restart → cluster update)
 ├── skills/poor-man-cluster-deploy/SKILL.md   # deployment skill for agents
 ├── .github/workflows/
 │   ├── pmcluster.yml          # build gate: lint + build + unit + fast e2e
@@ -759,10 +760,22 @@ snapshot (`controlplane.Kit`). Alongside the reconcile loop the leader runs
 
 ### Upgrading the platform
 Push a `v*` tag → `release.yml` cross-compiles 4 tarballs + SHA256SUMS +
-builds/pushes `ghcr.io/hazemarian/pmcluster-edge:<v>` + `:latest`. On the node:
-`curl -fsSL .../install.sh | VERSION=vX bash` → installs the new binary,
-restarts the daemon, and auto-runs `pmcluster cluster update` (because a
-config exists). `cluster update` is self-healing: it re-renders the embedded
+builds/pushes `ghcr.io/hazemarian/pmcluster-edge:<v>` + `:latest`.
+
+To replace the binary on a **multi-node** swarm, use
+`pmcluster/hack/upgrade-nodes.sh <version>`: it verifies the release checksum,
+copies the binary to each node over `ssh … "cat > /tmp/pmcluster.new"` (not
+`scp` — see the script header), installs/restarts units followers-first with the
+leader last, exits non-zero without half-applying if any node fails, and runs
+`cluster update` on the leader only once every node agrees. Pass
+`PMCLUSTER_NODES` (public IPs); discovery returns swarm-internal addresses,
+which are unreachable from outside. `PMCLUSTER_SSH_USER` defaults to `root`;
+wafaa needs `wafaa` (+ passwordless sudo), a disabled-SFTP sshd, and a zsh login
+shell.
+
+On a **single node**, `curl -fsSL .../install.sh | VERSION=vX bash` installs the
+new binary, restarts the daemon, and auto-runs `pmcluster cluster update`
+(because a config exists). `cluster update` is self-healing: it re-renders the embedded
 stacks (edge image pinned to the new version), re-ensures networks and
 credential secrets, rebuilds missing configs/secrets from the DB index,
 redeploys stacks missing from the swarm, detects a wiped Swarm (swarm_id

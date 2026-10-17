@@ -79,7 +79,7 @@ pmcluster cluster reset --restore /var/stack/purge-backup-<ts>.tar.gz
 ### TC10-D — deploy lifecycle + drift
 
 ```bash
-pmcluster cluster update                            # run 1 redeploys what changed; run 2 → "No rendered content changed — nothing to redeploy"
+pmcluster cluster update                            # run 1 redeploys what changed; run 2 → no-op (no stacks redeployed and no configs replaced)
 docker service rm <stack>_<service> && pmcluster cluster update   # recreated, reason "<stack> absent from the swarm → re-deploying"
 docker service update --env-add PMCLUSTER_DRIFT_PROBE=1 backup_volume-backup
 pmcluster cluster update                            # "<stack> drifted from the rendered compose → re-deploying"
@@ -138,7 +138,7 @@ PMCLUSTER_API_URL=… PMCLUSTER_API_TOKEN=… pmcluster stack list  # remote mod
 
 | # | Check | Result | Evidence |
 |---|-------|--------|----------|
-| D1 | Second `cluster update` is a clean no-op | PASS | "No rendered content changed — nothing to redeploy" |
+| D1 | Second `cluster update` is a clean no-op | PASS | `no stacks re-deployed and no configs replaced — nothing to redeploy` |
 | D2 | A deleted platform service is recreated | PASS | reason printed: "<stack> absent from the swarm → re-deploying" |
 | D3 | Live drift detected and re-deployed | PASS | `io.pmcluster.rendered_hash` label compared against the live services (v0.2.163–.165) |
 | D4 | A partially-applied deploy counts as drift; a failed app deploy does not suppress retries | PASS | mixed label state → "partial deploy" re-apply (v0.2.163.2); rendered hash stamped only after a successful apply (v0.2.165) |

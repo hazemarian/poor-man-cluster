@@ -67,7 +67,7 @@ Verify the in-cluster backup-store changes (v0.2.162 → v0.2.162.1) on a real 1
 7. **Drift probe** (see BUG-017)
    ```
    docker service update --env-add PMCLUSTER_DRIFT_PROBE=1 backup_volume-backup
-   pmcluster cluster update      # → "No rendered content changed — nothing to redeploy"
+   pmcluster cluster update      # → no-op, nothing changed (drift invisible — see BUG-017)
    # cleanup: re-apply the stored render via `docker stack deploy -c <render> backup`
    ```
 
@@ -96,14 +96,14 @@ Verify the in-cluster backup-store changes (v0.2.162 → v0.2.162.1) on a real 1
 
 **Reproduced on TC9 (deliberate):** injected an env var into the live `backup_volume-backup` service, then ran `pmcluster cluster update`:
 ```
-▶ No rendered content changed — nothing to redeploy.
+▶ no-op — the update saw no change, so the drift stayed invisible
   Stacks re-deployed     : []
 ```
 The drift was invisible. Cleaned up by re-applying the stored render (`docker stack deploy -c <render> backup`).
 
 **Original sighting (wafaa, prod):** `backup_control-plane-backup` was running **local-only** — 6 env vars, no `WEBDAV_URL`, no `AWS_*` — while `volume-backup` had all 16. The control-plane archive was therefore landing on the *same single node* as the database it protects, i.e. no disaster-recovery value at all. The stored render *did* contain the correct env for both services (verified by dumping `rendered_content`), so the swarm was stale, not the template.
 
-**Root cause:** `cluster update` decides whether to redeploy by comparing the **stored rendered hash** with a **fresh render**. It never inspects the live swarm. Once a service drifts out of band (orphan/partial redeploy, an interrupted apply, a manual `docker service update`), the hashes still agree and every later update reports "nothing to redeploy" indefinitely.
+**Root cause:** `cluster update` decides whether to redeploy by comparing the **stored rendered hash** with a **fresh render**. It never inspects the live swarm. Once a service drifts out of band (orphan/partial redeploy, an interrupted apply, a manual `docker service update`), the hashes still agree and every later update reports a no-op indefinitely.
 
 **Workaround applied (wafaa):** dump `rendered_content` for `backup-stack` from `data.db` and re-apply it with `docker stack deploy -c <file> backup`. Verified: the control-plane agent then wrote to WebDAV + R2, and the identical archive appeared in both.
 

@@ -3,6 +3,32 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.213 (2026-10-17)
+
+**`hack/upgrade-nodes.sh`: the sudo path was decorative under zsh, and discovery was trusted as if it were reachable.**
+
+### The non-root install path split a variable that zsh does not split
+
+`v0.2.212` escaped `\$SUDO` so it would expand *on the node* rather than locally — but expansion was only
+half the problem. The remote login shell is the user's own, and on wafaa that is **zsh**, which does not
+word-split an unquoted parameter. `SUDO="sudo -n"; $SUDO install …` therefore tried to exec a command
+named literally `sudo -n` and failed with `zsh: command not found: sudo -n`, so the non-root install and
+`systemctl restart` had **never** worked; wafaa upgraded only by hand. The privileged steps are now written
+out once per branch (`if [ "$(id -u)" -eq 0 ]; then install …; else sudo -n install …; fi`), which cannot
+depend on any shell's splitting behaviour. The same bug sat in the single-quoted `pmcluster cluster update`
+one-liner at the end: identical `$SUDO` word, identical zsh failure, and because its output is piped
+through `grep | tail` it exited 0 and the reconcile was silently skipped — that one is now a branch too.
+
+### Discovery is not a reachability check
+
+`docker node inspect … {{.Status.Addr}}` is the swarm's **internal** address. On the wafaa deployment the
+nodes answer `10.7.224.x`, routable between the nodes and nowhere else, so the discovered list could only
+ever time out from the machine running the script. The addresses remain correct for **role ordering**
+(workers, then follower managers, leader last), so discovery stays — but it now warns, on stderr, that the
+addresses are swarm-internal and tells the operator to pass `PMCLUSTER_NODES`. An explicit list wins for
+*which* nodes to touch; its **order** is still derived from the swarm when a seed answers, falling back to
+the stated order (never aborting) if the swarm cannot be read.
+
 ## v0.2.212 (2026-10-17)
 
 **Three defects closed, one of them in my own previous fix, plus the e2e race root-caused.**

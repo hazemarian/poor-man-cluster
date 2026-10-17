@@ -189,16 +189,70 @@ Built and maintained by **Hazem Arian** — [hazeem.arian@gmail.com](mailto:haze
 
 Updating the pmcluster binary on the nodes is a scripted, verifiable step. There is no
 `upgrade` subcommand: `cluster update` reconciles platform *stacks and configs*, and does not replace the
-binary on each node.
+binary on each node. `pmcluster/hack/upgrade-nodes.sh <version>` does that.
 
 ```bash
-# followers first, leader last; checksum-verified before anything is installed
-PMCLUSTER_NODES=10.0.0.1,10.0.0.2,10.0.0.3 hack/upgrade-nodes.sh v0.2.203
+# from a checkout; needs gh + ssh. Followers first, leader last; checksum verified before anything installs.
+PMCLUSTER_NODES=217.160.143.24,217.160.143.26,217.160.143.22 \
+  pmcluster/hack/upgrade-nodes.sh v0.2.213
 ```
 
-The script downloads the release, verifies its SHA256, copies it to each node, installs it, restarts the
-unit, and reports the version before/after on every node. It exits non-zero if any node fails, so a partial
-upgrade cannot pass silently. The previous binary is kept as `/usr/local/bin/pmcluster.<version>.prev`.
+The script downloads `pmcluster-<version>-linux-amd64.tar.gz` + `SHA256SUMS.txt`, verifies the SHA256, copies
+the binary to each node over `ssh … "cat > /tmp/pmcluster.new"`, stages it in `/tmp`, installs it to
+`/usr/local/bin/pmcluster`, restarts the unit, and reports the version before/after on every node. Only once
+every node agrees does it run `cluster update` on the leader. The previous binary is kept as
+`/usr/local/bin/pmcluster.<version>.prev`.
+
+**Environment variables:**
+
+| Var | Default | Meaning |
+|---|---|---|
+| `PMCLUSTER_NODES` | *(empty)* | Comma-separated node IPs. **Pass this in practice** — see below. Selects *which* nodes to touch; the restart order is still derived from the swarm when a seed answers. |
+| `PMCLUSTER_SEED` | *(empty)* | One reachable node to discover the swarm from; used only when `PMCLUSTER_NODES` is empty (and as the ordering seed when it is set). |
+| `PMCLUSTER_SSH_KEY` | `~/.ssh/pmcluster_vps4_ed25519` | SSH private key. |
+| `PMCLUSTER_SSH_USER` | `root` | SSH user for every node (set `wafaa` for the wafaa node). |
+
+**Ordering:** workers and follower managers are upgraded **before the leader**, which goes last, so the swarm
+never loses its only manager mid-upgrade. "Leader last" is a safety property, not a preference: even when you
+name the nodes with `PMCLUSTER_NODES`, the script reads each node's role from the swarm and reorders them.
+Only if the swarm cannot be read does it fall back to the order you gave (never aborting).
+
+**Failure semantics:** every step that can fail is fatal. If a node's copy or install fails, the script
+finishes the loop and exits non-zero — a partial upgrade cannot pass silently. The copy is strictly before
+the install, so a copy failure leaves that node byte-for-byte untouched.
+
+**Always pass `PMCLUSTER_NODES`.** Discovery reads each node's `Status.Addr`, which on these clusters is the
+swarm-**internal** address (`10.7.224.x`) — unreachable from outside. The script discovers the nodes happily
+and then cannot SSH to any of them.
+
+**The two production targets, and what trips you up on each:**
+
+- **Production swarm** — nodes `217.160.143.22` (leader), `.24`, `.26`, and worker `217.160.128.29`; key
+  `~/.ssh/pmcluster_vps4_ed25519`; user `root`.
+- **wafaa** — single-node manager at `195.62.50.111`, hostname `idlib-wafaa`; key `~/.ssh/wafaa_m_ed25519`;
+  user **`wafaa`** (not root); passwordless `sudo -n` required; sshd has the **SFTP subsystem disabled**; login
+  shell is **zsh**.
+
+```bash
+# wafaa (single node, non-root user)
+PMCLUSTER_NODES=195.62.50.111 PMCLUSTER_SSH_USER=wafaa \
+  PMCLUSTER_SSH_KEY=~/.ssh/wafaa_m_ed25519 \
+  pmcluster/hack/upgrade-nodes.sh v0.2.213
+```
+
+Three traps on wafaa, each of which looks like something it isn't:
+
+- **The user is `wafaa`, not `root`, and `idlib-wafaa` is the hostname, not a username.** Sending the correct
+  key to the wrong user fails as `Permission denied (publickey)` — identical to a missing or wrong key, so you
+  re-check the key path when the real problem is the username.
+- **`scp` needs the SFTP subsystem, which is disabled.** A copy over `scp` fails with `scp: Connection
+  closed` — the same message an auth refusal or fail2ban ban produces, though it is neither. That is why the
+  script copies with `ssh … "cat > /tmp/pmcluster.new"` as the primary path; `scp -O` is only a fallback.
+- **zsh does not word-split unquoted variables.** The remote login shell is the user's own — zsh on wafaa —
+  and zsh does not split an unquoted parameter. The old `SUDO="sudo -n"; $SUDO install …` indirection tried to
+  exec a command named literally `sudo -n` and died with `zsh: command not found: sudo -n`, so the non-root
+  install never worked. The script now writes the privileged step once per branch (`if [ "$(id -u)" -eq 0 ];
+  then install …; else sudo -n install …; fi`), which cannot depend on any shell's splitting behaviour.
 
 Then reconcile the platform:
 
@@ -208,9 +262,13 @@ pmcluster cluster update
 
 **Two things to know before you run either**, both learned the hard way:
 
-- **`cluster update`'s summary is not trustworthy about redeploys.** It has printed "No rendered content
-  changed — nothing to redeploy" while the collector config and provisioner were in fact replaced. Verify the
-  effect, not the summary: `docker service inspect <svc>` and read the mounted config back.
+- **Read `cluster update`'s summary literally — it has two axes.** `Stacks re-deployed : [...]` lists stacks
+  whose rendered compose moved; `Configs replaced : [...]` lists rendered configs replaced *without* a stack
+  redeploy (e.g. the OTel collector config or the observability provisioner). The no-op line
+  `(no stacks redeployed and no configs replaced — nothing to redeploy)` prints only when neither axis moved.
+  Before v0.2.212 the summary tracked stack redeploys only, so a replaced config was reported as "nothing
+  changed"; if you are on an older binary and a config replacement matters, verify the effect rather than the
+  summary — `docker service inspect <svc>` and read the mounted config back.
 - **Repeated SSH attempts trip fail2ban**, after which the leader refuses connections while the followers
   still answer. Slow down rather than retrying hard, and check followers to confirm the cluster is otherwise
   healthy.
