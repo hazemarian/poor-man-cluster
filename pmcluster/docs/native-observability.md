@@ -139,7 +139,13 @@ never in a URL. The Anthropic and Gemini paths take `max_tokens` /
 `maxOutputTokens` from the policy's output allowance; the "output-limit field"
 selector applies to the OpenAI-compatible protocol only. Anthropic has no JSON
 mode, so the reply is validated strictly (one surrounding code fence is
-tolerated). Azure OpenAI and Bedrock use different authentication and are not
+tolerated). OpenCode Go works through the protocol that matches the model:
+OpenAI-compatible models (GLM, Kimi, DeepSeek, MiMo and others) use base
+`https://opencode.ai/inference/go/openai/v1`; Claude Haiku, MiniMax and Qwen use
+`anthropic` with base `https://opencode.ai/inference/go/anthropic`. Its Responses
+and Gemini endpoints are not supported. OpenCode Go rejects requests without an
+`x-opencode-session` header, so one random id is sent per investigation to
+`opencode.ai` hosts only. Azure OpenAI and Bedrock use different authentication and are not
 supported yet.
 
 Every protocol uses one nonstreaming request with JSON output, validates every returned citation against supplied evidence,

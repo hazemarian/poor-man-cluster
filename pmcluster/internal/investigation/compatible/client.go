@@ -16,7 +16,11 @@ import (
 const systemPrompt = investigation.SystemPrompt
 
 // Client makes nonstreaming, no-redirect requests with bounded responses.
-type Client struct{ HTTP *http.Client }
+type Client struct {
+	HTTP *http.Client
+	// Headers are extra non-credential headers, for providers that need routing hints.
+	Headers map[string]string
+}
 
 // Run returns parsed cited output and provider usage when it is authoritative.
 func (c Client) Run(ctx context.Context, p investigation.Policy, key string, in investigation.Input) (investigation.Verdict, *int64, error) {
@@ -37,6 +41,9 @@ func (c Client) Run(ctx context.Context, p investigation.Policy, key string, in 
 	req.Header.Set("Content-Type", "application/json")
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	for k, v := range c.Headers {
+		req.Header.Set(k, v)
 	}
 	hc := http.Client{}
 	if c.HTTP != nil {

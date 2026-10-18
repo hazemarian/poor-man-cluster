@@ -28,6 +28,6 @@ func init() {
 		"investigation.protocol_openai":    "OpenAI-compatible (OpenAI, OpenRouter, Groq, Mistral, DeepSeek, Ollama, vLLM)",
 		"investigation.protocol_anthropic": "Anthropic (Claude)",
 		"investigation.protocol_gemini":    "Google Gemini",
-		"investigation.protocol_hint":      "Base URLs: OpenAI https://api.openai.com/v1 · Anthropic https://api.anthropic.com · Gemini https://generativelanguage.googleapis.com/v1beta. The output token field below applies to OpenAI-compatible providers only.",
+		"investigation.protocol_hint":      "Base URLs: OpenAI https://api.openai.com/v1 · Anthropic https://api.anthropic.com · Gemini https://generativelanguage.googleapis.com/v1beta · OpenCode Go https://opencode.ai/inference/go/openai/v1 (OpenAI-compatible models). The output token field below applies to OpenAI-compatible providers only.",
 	})
 }

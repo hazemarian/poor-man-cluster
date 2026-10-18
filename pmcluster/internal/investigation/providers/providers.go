@@ -5,9 +5,12 @@ package providers
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -29,7 +32,7 @@ func (r Router) Run(ctx context.Context, p investigation.Policy, key string, in 
 	case investigation.ProtocolGemini:
 		return r.gemini(ctx, p, key, in)
 	default:
-		return compatible.Client{HTTP: r.HTTP}.Run(ctx, p, key, in)
+		return compatible.Client{HTTP: r.HTTP, Headers: routingHeaders(p.BaseURL)}.Run(ctx, p, key, in)
 	}
 }
 
@@ -50,3 +53,32 @@ func encodeInput(p investigation.Policy, in investigation.Input) (string, error)
 var modelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 func trimBase(base string) string { return strings.TrimRight(base, "/") }
+
+// routingHeaders returns provider-specific headers that carry no credential.
+// OpenCode Go rejects a request without x-opencode-session, which it uses for
+// routing and prompt caching. Each investigation is one conversation, so a
+// fresh random id per call is correct; it identifies nothing about the
+// cluster. The header is sent only to opencode.ai so no other provider
+// receives it.
+func routingHeaders(base string) map[string]string {
+	u, err := url.Parse(base)
+	if err != nil {
+		return nil
+	}
+	host := u.Hostname()
+	if host != "opencode.ai" && !strings.HasSuffix(host, ".opencode.ai") {
+		return nil
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return nil
+	}
+	return map[string]string{"x-opencode-session": hex.EncodeToString(b)}
+}
+
+func withRouting(h map[string]string, base string) map[string]string {
+	for k, v := range routingHeaders(base) {
+		h[k] = v
+	}
+	return h
+}

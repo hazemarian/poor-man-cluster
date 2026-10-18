@@ -26,7 +26,7 @@ func (r Router) anthropic(ctx context.Context, p investigation.Policy, key strin
 		"model": p.Model, "max_tokens": p.MaxOutputTokens, "system": investigation.SystemPrompt,
 		"messages": []map[string]string{{"role": "user", "content": input}},
 	}
-	data, err := investigation.PostJSON(ctx, r.HTTP, url+"/messages", map[string]string{"x-api-key": key, "anthropic-version": anthropicVersion}, body)
+	data, err := investigation.PostJSON(ctx, r.HTTP, url+"/messages", withRouting(map[string]string{"x-api-key": key, "anthropic-version": anthropicVersion}, p.BaseURL), body)
 	if err != nil {
 		return investigation.Verdict{}, nil, err
 	}

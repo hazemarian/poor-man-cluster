@@ -27,7 +27,7 @@ func (r Router) gemini(ctx context.Context, p investigation.Policy, key string, 
 		"generationConfig":  map[string]any{"responseMimeType": "application/json", "maxOutputTokens": p.MaxOutputTokens},
 	}
 	endpoint := trimBase(p.BaseURL) + "/models/" + url.PathEscape(p.Model) + ":generateContent"
-	data, err := investigation.PostJSON(ctx, r.HTTP, endpoint, map[string]string{"x-goog-api-key": key}, body)
+	data, err := investigation.PostJSON(ctx, r.HTTP, endpoint, withRouting(map[string]string{"x-goog-api-key": key}, p.BaseURL), body)
 	if err != nil {
 		return investigation.Verdict{}, nil, err
 	}

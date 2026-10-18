@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation/compatible"
 )
 
 func fixtureInput() investigation.Input {
@@ -179,5 +180,32 @@ func TestPolicyProtocolValidation(t *testing.T) {
 	p.Protocol = "bedrock"
 	if p.Validate() == nil {
 		t.Error("accepted unknown protocol")
+	}
+}
+
+func TestOpenCodeGoGetsSessionHeaderOthersDoNot(t *testing.T) {
+	if h := routingHeaders("https://opencode.ai/inference/go/openai/v1"); len(h["x-opencode-session"]) != 32 {
+		t.Errorf("opencode.ai: %v", h)
+	}
+	if a, b := routingHeaders("https://opencode.ai/zen/go/v1"), routingHeaders("https://opencode.ai/zen/go/v1"); a["x-opencode-session"] == b["x-opencode-session"] {
+		t.Error("session id reused across investigations")
+	}
+	for _, base := range []string{"https://api.openai.com/v1", "https://api.anthropic.com", "https://evilopencode.ai/v1", "https://opencode.ai.evil.example/v1", "://bad"} {
+		if h := routingHeaders(base); h != nil {
+			t.Errorf("%s got %v", base, h)
+		}
+	}
+}
+
+func TestOpenAIClientForwardsRoutingHeaders(t *testing.T) {
+	var got string
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("x-opencode-session")
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": verdictJSON("log:actual")}, "finish_reason": "stop"}}})
+	}))
+	defer h.Close()
+	c := compatible.Client{Headers: map[string]string{"x-opencode-session": "abc"}}
+	if _, _, err := c.Run(context.Background(), policy("", h.URL+"/v1"), "k", fixtureInput()); err != nil || got != "abc" {
+		t.Fatalf("%v %q", err, got)
 	}
 }
