@@ -38,8 +38,11 @@ type Config struct {
 	MaxBytes      int64
 	Timeout       time.Duration
 	MaxConcurrent int
-	Now           func() time.Time
-	Redactor      observability.Redactor
+	// QueueWait is how long a query waits for a free slot before it is shed.
+	// Zero means two seconds; negative means do not wait.
+	QueueWait time.Duration
+	Now       func() time.Time
+	Redactor  observability.Redactor
 }
 
 // Client is a fixed-contract Parseable query source.  It has no method that
@@ -56,6 +59,7 @@ type Client struct {
 	timeout    time.Duration
 	now        func() time.Time
 	sem        chan struct{}
+	wait       time.Duration
 	redactor   observability.Redactor
 }
 
@@ -121,6 +125,13 @@ func New(cfg Config) (*Client, error) {
 	if concurrency > 8 {
 		concurrency = 8
 	}
+	wait := cfg.QueueWait
+	switch {
+	case wait == 0:
+		wait = 2 * time.Second
+	case wait < 0:
+		wait = 0
+	}
 	hc := cfg.HTTPClient
 	if hc == nil {
 		hc = &http.Client{Timeout: timeout}
@@ -132,7 +143,7 @@ func New(cfg Config) (*Client, error) {
 	return &Client{
 		baseURL: base, stream: stream, metrics: metrics, traces: traces, authHeader: auth, http: hc,
 		maxRows: maxRows, maxBytes: maxBytes, timeout: timeout,
-		now: now, sem: make(chan struct{}, concurrency), redactor: cfg.Redactor,
+		now: now, sem: make(chan struct{}, concurrency), wait: wait, redactor: cfg.Redactor,
 	}, nil
 }
 
@@ -262,10 +273,23 @@ func (c *Client) acquire(ctx context.Context) error {
 	select {
 	case c.sem <- struct{}{}:
 		return nil
+	default:
+	}
+	if c.wait <= 0 {
+		return errors.New("query capacity exhausted")
+	}
+	// The overview issues several independent reads at once. Queue briefly for
+	// a slot instead of dropping a panel, but never wait past the query's own
+	// deadline.
+	timer := time.NewTimer(c.wait)
+	defer timer.Stop()
+	select {
+	case c.sem <- struct{}{}:
+		return nil
+	case <-timer.C:
+		return errors.New("query capacity exhausted")
 	case <-ctx.Done():
 		return ctx.Err()
-	default:
-		return errors.New("query capacity exhausted")
 	}
 }
 

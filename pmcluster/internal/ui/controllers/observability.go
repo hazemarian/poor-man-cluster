@@ -47,6 +47,7 @@ type observabilityData struct {
 	StackPage obsPager
 	NodeCards []obsNodeCard
 	Metrics   obsMetrics
+	Dash      obsDashboard
 
 	Live         bool
 	Traces       obsTraces
@@ -403,7 +404,16 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 		}
 	default:
 		d.Stacks, d.StackPage = groupStacks(d.Health.Services, d.Q, atoiDefault(g.Query("page"), 1))
-		c.loadMetrics(ctx, &d, window, false)
+		var dash sync.WaitGroup
+		dash.Add(2)
+		go func() { defer dash.Done(); c.loadMetrics(ctx, &d, window, false) }()
+		go func() {
+			defer dash.Done()
+			if c.Telemetry != nil {
+				c.loadDashboard(ctx, &d, window, redactor)
+			}
+		}()
+		dash.Wait()
 	}
 	if c.Investigation != nil && c.Investigation.Configured() {
 		policyCtx, policyCancel := context.WithTimeout(ctx, 5*time.Second)

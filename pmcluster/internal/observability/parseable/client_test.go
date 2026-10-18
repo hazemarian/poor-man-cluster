@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -78,7 +79,7 @@ func TestQueryRejectsBusyCapacity(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(entered); <-release; fmt.Fprint(w, "[]") }))
 	defer s.Close()
-	c, _ := New(Config{BaseURL: s.URL, MaxConcurrent: 1})
+	c, _ := New(Config{BaseURL: s.URL, MaxConcurrent: 1, QueueWait: -1})
 	done := make(chan error, 1)
 	go func() { _, err := c.Query(context.Background(), queryFixture()); done <- err }()
 	<-entered
@@ -89,5 +90,29 @@ func TestQueryRejectsBusyCapacity(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestQueryQueuesBrieflyForCapacity(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(entered); <-release })
+		fmt.Fprint(w, "[]")
+	}))
+	defer s.Close()
+	c, _ := New(Config{BaseURL: s.URL, MaxConcurrent: 1, QueueWait: 3 * time.Second})
+	first := make(chan error, 1)
+	go func() { _, err := c.Query(context.Background(), queryFixture()); first <- err }()
+	<-entered
+	second := make(chan error, 1)
+	go func() { _, err := c.Query(context.Background(), queryFixture()); second <- err }()
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("queued query was shed: %v", err)
 	}
 }

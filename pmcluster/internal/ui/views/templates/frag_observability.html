@@ -31,7 +31,7 @@
   <form class="obs-filters" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, change from:select">
     <input type="hidden" name="tab" value="{{.Tab}}">
     <div class="field">
-      <label for="observability-range">{{T "observability.filter_range"}}</label>
+      <label class="sr-only" for="observability-range">{{T "observability.filter_range"}}</label>
       <select id="observability-range" name="range" class="finput">
         <option value="15m"{{if eq .Range "15m"}} selected{{end}}>{{T "observability.range_15m"}}</option><option value="1h"{{if eq .Range "1h"}} selected{{end}}>{{T "observability.range_1h"}}</option><option value="6h"{{if eq .Range "6h"}} selected{{end}}>{{T "observability.range_6h"}}</option><option value="24h"{{if eq .Range "24h"}} selected{{end}}>{{T "observability.range_24h"}}</option>
       </select>
@@ -53,37 +53,91 @@
 
 {{define "observabilityoverview"}}
 <div id="observability-summary">
-  <div class="stats">
-    <div class="stat{{if not .Health.NodesKnown}} is-unknown{{end}}">
+  <div class="stats obs-kpis">
+    {{if .Health.NodesKnown}}<div class="stat">
       <div class="stat-l">{{T "observability.nodes_ready"}}</div>
-      <div class="stat-v iso" dir="ltr">{{if .Health.NodesKnown}}{{N .Health.NodesReady}} / {{N .Health.NodesTotal}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+      <div class="stat-v iso" dir="ltr">{{N .Health.NodesReady}} / {{N .Health.NodesTotal}}</div>
       <div class="stat-f">{{T "observability.nodes_foot"}}</div>
-    </div>
-    <div class="stat{{if not .Health.ServicesKnown}} is-unknown{{end}}">
+    </div>{{end}}
+    {{if and .Health.ServicesKnown .Health.ServicesDesiredKnown}}<div class="stat">
       <div class="stat-l">{{T "observability.services_ready"}}</div>
-      <div class="stat-v iso" dir="ltr">{{if .Health.ServicesKnown}}{{if .Health.ServicesDesiredKnown}}{{N .Health.ServicesReady}} / {{N .Health.ServicesTotal}}{{else}}{{T "common.unknown"}}{{end}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+      <div class="stat-v iso" dir="ltr">{{N .Health.ServicesReady}} / {{N .Health.ServicesTotal}}</div>
       <div class="stat-f">{{T "observability.services_foot"}}</div>
+    </div>{{end}}
+    {{if .Dash.Volume.Known}}<div class="stat">
+      <div class="stat-l">{{T "obs.kpi_logs"}}</div>
+      <div class="stat-v iso" dir="ltr">{{compact .Dash.Volume.Total}}</div>
+      <div class="stat-f">{{T "obs.kpi_logs_foot"}}</div>
     </div>
-    <div class="stat{{if not .Health.DeficitKnown}} is-unknown{{end}}">
+    <div class="stat{{if gt .Dash.Volume.Errors 0}} is-bad{{end}}">
+      <div class="stat-l">{{T "obs.kpi_errors"}}</div>
+      <div class="stat-v iso" dir="ltr">{{if .Dash.Volume.Total}}{{.Dash.Volume.ErrPctText}}{{else}}—{{end}}</div>
+      <div class="stat-f"><bdi class="iso" dir="ltr">{{compact .Dash.Volume.Errors}}</bdi> {{T "obs.kpi_errors_foot"}}</div>
+    </div>{{end}}
+    {{if .Dash.TraceKPI.Known}}<div class="stat{{if gt .Dash.TraceKPI.ErrTraces 0}} is-bad{{end}}">
+      <div class="stat-l">{{T "obs.tab_traces"}}</div>
+      <div class="stat-v iso" dir="ltr">{{N .Dash.TraceKPI.Traces}}</div>
+      <div class="stat-f">{{if .Dash.TraceKPI.ErrTraces}}<bdi class="iso" dir="ltr">{{N .Dash.TraceKPI.ErrTraces}}</bdi> {{T "obs.kpi_traces_err"}}{{else}}{{T "obs.kpi_traces_ok"}}{{end}}</div>
+    </div>{{end}}
+    {{if .Health.DeficitKnown}}<div class="stat">
       <div class="stat-l">{{T "observability.replica_deficit"}}</div>
-      <div class="stat-v">{{if .Health.DeficitKnown}}{{N .Health.ReplicaDeficit}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+      <div class="stat-v">{{N .Health.ReplicaDeficit}}</div>
       <div class="stat-f">{{T "observability.replica_deficit_foot"}}</div>
-    </div>
-    <div class="stat is-unknown">
-      <div class="stat-l">{{T "observability.pending_tasks"}}</div>
-      <div class="stat-v">{{if .Health.PendingKnown}}{{N .Health.Pending}}{{else}}{{T "common.unavailable"}}{{end}}</div>
-      <div class="stat-f">{{T "observability.pending_tasks_foot"}}</div>
-    </div>
-    <div class="stat{{if not .Health.BackupsKnown}} is-unknown{{end}}">
+    </div>{{end}}
+    {{if .Health.BackupsKnown}}<div class="stat">
       <div class="stat-l">{{T "observability.backup_age"}}</div>
-      <div class="stat-v">{{if not .Health.BackupsKnown}}{{T "common.unavailable"}}{{else if .Health.BackupHasVerified}}{{N .Health.BackupAgeDays}} {{T "observability.days"}}{{else}}{{T "observability.no_verified_backup"}}{{end}}</div>
+      <div class="stat-v">{{if .Health.BackupHasVerified}}{{N .Health.BackupAgeDays}} {{T "observability.days"}}{{else}}{{T "observability.no_verified_backup"}}{{end}}</div>
       <div class="stat-f">{{T "observability.backup_age_foot"}}</div>
-    </div>
-    <div class="stat{{if not .Health.TLSKnown}} is-unknown{{end}}">
+    </div>{{end}}
+    {{if .Health.TLSKnown}}<div class="stat">
       <div class="stat-l">{{T "observability.tls_expiry"}}</div>
-      <div class="stat-v">{{if not .Health.TLSKnown}}{{T "common.unavailable"}}{{else if not .Health.TLSHasCertificate}}{{T "observability.no_certificate"}}{{else if .Health.TLSExpired}}<span class="pill bad">{{T "observability.expired"}}</span>{{else}}{{N .Health.TLSDays}} {{T "observability.days"}}{{end}}</div>
+      <div class="stat-v">{{if not .Health.TLSHasCertificate}}{{T "observability.no_certificate"}}{{else if .Health.TLSExpired}}<span class="pill bad">{{T "observability.expired"}}</span>{{else}}{{N .Health.TLSDays}} {{T "observability.days"}}{{end}}</div>
       <div class="stat-f">{{T "observability.tls_expiry_foot"}}{{if .Health.TLSPartial}} · {{T "observability.partial"}}{{end}}</div>
-    </div>
+    </div>{{end}}
+  </div>
+
+  <div class="obs-dash">
+    <section class="panel">
+      <div class="panel-head"><div><h2>{{T "obs.volume_title"}}</h2><p class="sub">{{T "obs.volume_sub"}} {{T "obs.volume_scale"}}</p></div>
+        <div class="ph-actions obs-legend" aria-hidden="true"><span class="lg info">{{T "obs.level_info"}}</span><span class="lg warn">{{T "obs.level_warn"}}</span><span class="lg err">{{T "obs.level_error"}}</span></div>
+      </div>
+      <div class="panel-body">
+        {{if not .Dash.Volume.Known}}<div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "obs.metrics_unavailable"}}</p></div>
+        {{else if not .Dash.Volume.Bars}}<div class="empty"><h3>{{T "observability.evidence_empty_title"}}</h3><p>{{T "observability.evidence_empty_body"}}</p></div>
+        {{else}}
+        <div class="obs-volume" dir="ltr">
+          <span class="obs-vmax mono">{{.Dash.Volume.MaxText}}</span>
+          <svg viewBox="0 0 600 120" preserveAspectRatio="none" role="img" aria-label="{{T "obs.volume_title"}}">
+            <line class="grid" x1="0" y1="1" x2="600" y2="1"/><line class="grid" x1="0" y1="60" x2="600" y2="60"/><line class="grid" x1="0" y1="119" x2="600" y2="119"/>
+            {{range .Dash.Volume.Bars}}<g><title>{{.Title}}</title>
+              {{if .HasInfo}}<rect class="b-info" x="{{printf "%.1f" .X}}" y="{{printf "%.1f" .InfoY}}" width="{{printf "%.1f" .W}}" height="{{printf "%.1f" .InfoH}}"/>{{end}}
+              {{if .HasWarn}}<rect class="b-warn" x="{{printf "%.1f" .X}}" y="{{printf "%.1f" .WarnY}}" width="{{printf "%.1f" .W}}" height="{{printf "%.1f" .WarnH}}"/>{{end}}
+              {{if .HasEr}}<rect class="b-err" x="{{printf "%.1f" .X}}" y="{{printf "%.1f" .ErrY}}" width="{{printf "%.1f" .W}}" height="{{printf "%.1f" .ErrH}}"/>{{end}}
+            </g>{{end}}
+          </svg>
+          <div class="obs-vaxis mono"><span>{{.Dash.Volume.StartLabel}} UTC</span><span>{{.Dash.Volume.EndLabel}} UTC</span></div>
+        </div>
+        {{end}}
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><div><h2>{{T "obs.top_errors"}}</h2><p class="sub">{{T "obs.top_errors_sub"}}</p></div>
+        <div class="ph-actions"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=logs&amp;severity=error&amp;range={{.Range}}" hx-get="/web/observability?tab=logs&amp;severity=error&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.view_logs"}}</a></div>
+      </div>
+      <div class="panel-body tight">
+        {{if not .Dash.TopOK}}<div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3></div>
+        {{else if not .Dash.TopErrors}}<div class="empty obs-allgood"><h3>{{T "obs.no_errors"}}</h3><p>{{T "obs.no_errors_body"}}</p></div>
+        {{else}}
+        <ol class="obs-toperr">
+          {{range .Dash.TopErrors}}
+          <li><span class="obs-toperr-n num iso" dir="ltr">{{N .Count}}×</span>
+            <span class="obs-toperr-b"><span class="mono obs-toperr-m" title="{{if .Example}}{{.Example}}{{else}}{{.Message}}{{end}}">{{.Message}}</span><span class="muted mono iso" dir="ltr">{{.Service}}{{if .Last}} · {{.Last}}{{end}}</span></span></li>
+          {{end}}
+        </ol>
+        {{end}}
+      </div>
+    </section>
   </div>
 
   <section class="panel">
@@ -173,9 +227,9 @@
   </header>
   {{if .HasMetrics}}
   <dl class="obs-series">
-    <div><dt>{{T "obs.cpu"}}</dt><dd>{{if .CPU.Known}}<span class="obs-val iso" dir="ltr">{{.CPU.LastText}}</span><span class="obs-peak muted">{{T "obs.peak"}} <bdi class="iso" dir="ltr">{{.CPU.PeakText}}</bdi></span>{{else}}<span class="muted">{{T "obs.no_data"}}</span>{{end}}</dd>{{if .CPU.Known}}<div class="obs-chart-box" dir="ltr">{{template "obschart" .CPU}}</div>{{end}}</div>
-    <div><dt>{{T "obs.memory"}}</dt><dd>{{if .Mem.Known}}<span class="obs-val iso" dir="ltr">{{.Mem.LastText}}</span><span class="obs-peak muted">{{T "obs.peak"}} <bdi class="iso" dir="ltr">{{.Mem.PeakText}}</bdi></span>{{else}}<span class="muted">{{T "obs.no_data"}}</span>{{end}}</dd>{{if .Mem.Known}}<div class="obs-chart-box" dir="ltr">{{template "obschart" .Mem}}</div>{{end}}</div>
-    <div><dt>{{T "obs.load"}}</dt><dd>{{if .Load.Known}}<span class="obs-val iso" dir="ltr">{{.Load.LastText}}</span><span class="obs-peak muted">{{T "obs.peak"}} <bdi class="iso" dir="ltr">{{.Load.PeakText}}</bdi></span>{{else}}<span class="muted">{{T "obs.no_data"}}</span>{{end}}</dd>{{if .Load.Known}}<div class="obs-chart-box" dir="ltr">{{template "obschart" .Load}}</div>{{end}}</div>
+    <div><dt>{{T "obs.cpu"}}</dt><dd>{{if .CPU.Known}}<span class="obs-val iso" dir="ltr">{{.CPU.LastText}}</span><span class="obs-peak muted">{{T "obs.peak"}} <bdi class="iso" dir="ltr">{{.CPU.PeakText}}</bdi></span>{{else}}<span class="muted">{{T "obs.no_data"}}</span>{{end}}</dd>{{if .CPU.Known}}{{if lt .CPU.Points 3}}{{if .CPU.Pct}}<div class="obs-gauge"><span class="obs-bar-track"><i class="{{.CPU.Level}}" style="width:{{.CPU.Pct}}%"></i></span></div>{{end}}{{else}}<div class="obs-chart-box" dir="ltr">{{template "obschart" .CPU}}</div>{{end}}{{end}}</div>
+    <div><dt>{{T "obs.memory"}}</dt><dd>{{if .Mem.Known}}<span class="obs-val iso" dir="ltr">{{.Mem.LastText}}</span><span class="obs-peak muted">{{T "obs.peak"}} <bdi class="iso" dir="ltr">{{.Mem.PeakText}}</bdi></span>{{else}}<span class="muted">{{T "obs.no_data"}}</span>{{end}}</dd>{{if .Mem.Known}}{{if lt .Mem.Points 3}}{{if .Mem.Pct}}<div class="obs-gauge"><span class="obs-bar-track"><i class="{{.Mem.Level}}" style="width:{{.Mem.Pct}}%"></i></span></div>{{end}}{{else}}<div class="obs-chart-box" dir="ltr">{{template "obschart" .Mem}}</div>{{end}}{{end}}</div>
+    <div><dt>{{T "obs.load"}}</dt><dd>{{if .Load.Known}}<span class="obs-val iso" dir="ltr">{{.Load.LastText}}</span><span class="obs-peak muted">{{T "obs.peak"}} <bdi class="iso" dir="ltr">{{.Load.PeakText}}</bdi></span>{{else}}<span class="muted">{{T "obs.no_data"}}</span>{{end}}</dd>{{if .Load.Known}}{{if lt .Load.Points 3}}{{if .Load.Pct}}<div class="obs-gauge"><span class="obs-bar-track"><i class="{{.Load.Level}}" style="width:{{.Load.Pct}}%"></i></span></div>{{end}}{{else}}<div class="obs-chart-box" dir="ltr">{{template "obschart" .Load}}</div>{{end}}{{end}}</div>
   </dl>
   {{else}}
   <p class="sub">{{T "obs.no_node_metrics"}}</p>

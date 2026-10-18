@@ -93,3 +93,26 @@ func TestTracesKeepNumbersAndReportNextPage(t *testing.T) {
 		t.Errorf("free text not redacted: %v", row["root"])
 	}
 }
+
+func TestLogVolumeAndTraceStatsSQLAreFixedStatements(t *testing.T) {
+	c, _ := New(Config{BaseURL: "http://parseable.invalid"})
+	end := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	q := observability.MetricQuery{Window: observability.Window{Start: end.Add(-time.Hour), End: end}, Bucket: time.Minute}
+	vol, err := c.LogVolumeSQL(q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"date_bin(INTERVAL '60 seconds', p_timestamp) AS bucket", "FROM `pmcluster-logs`", "GROUP BY bucket, level", "regexp_like(SUBSTR(body, 1, 200)", "THEN 'error'", "THEN 'warn'"} {
+		if !strings.Contains(vol, want) {
+			t.Errorf("volume: missing %q in %s", want, vol)
+		}
+	}
+	ts, err := c.TraceStatsSQL(q)
+	if err != nil || !strings.Contains(ts, "FROM `pmcluster-traces`") || !strings.Contains(ts, "COUNT(DISTINCT span_trace_id) AS traces") {
+		t.Errorf("trace stats: %v %s", err, ts)
+	}
+	q.Bucket = time.Second
+	if _, err := c.LogVolumeSQL(q); err == nil {
+		t.Error("accepted a bucket below the minimum")
+	}
+}

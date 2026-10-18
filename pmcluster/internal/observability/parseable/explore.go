@@ -47,7 +47,7 @@ func (c *Client) LogsPageSQL(q observability.LogQuery) (string, error) {
 		sql += " AND `service.name` = '" + escapeLiteral(q.Service) + "'"
 	}
 	if q.Severity != "" {
-		sql += " AND LOWER(severity_text) IN (" + severitySQL[q.Severity] + ")"
+		sql += " AND " + severityPredicate(q.Severity)
 	}
 	if q.Search != "" {
 		sql += " AND body ILIKE '%" + escapeLike(q.Search) + "%' ESCAPE '\\'"
@@ -165,4 +165,79 @@ func (c *Client) redactKeepingTime(rows []observability.Row) []observability.Row
 		}
 	}
 	return out
+}
+
+var _ observability.StatsSource = (*Client)(nil)
+
+// levelSQL buckets a record into error, warn or info. Container output has no
+// level of its own and the collector labels stderr ERROR, so a record labelled
+// error that plainly carries an info or debug level in its first 200
+// characters is counted as info; counting it as an error would make a quiet
+// system look broken. The patterns mirror investigation.inferSeverity.
+const (
+	stderrLabelSQL = "LOWER(severity_text) IN ('error','err','fatal','critical','crit','panic','emerg','alert')"
+	// The first 200 characters carry the level in the formats the cluster's own
+	// software uses: tab-separated (OTel collector), level= (logfmt), a bracket
+	// prefix, glog (I1018), and PostgreSQL's "] LOG:" / "] WARNING:".
+	infoHintSQL = "regexp_like(SUBSTR(body, 1, 200), '(?i)(\\tinfo\\t|\\tdebug\\t|level=(info|debug)|^[\\[(]?(info|debug)[\\]) :]|^I[0-9]{4} [0-9]|\\][ ]+(log|notice|info|statement|debug[0-9]?):)')"
+	warnHintSQL = "regexp_like(SUBSTR(body, 1, 200), '(?i)(\\twarn(ing)?\\t|level=warn(ing)?|^[\\[(]?warn(ing)?[\\]) :]|^W[0-9]{4} [0-9]|\\][ ]+warning:)')"
+	levelSQL    = "CASE WHEN " + stderrLabelSQL + " AND " + infoHintSQL + " THEN 'info'" +
+		" WHEN " + stderrLabelSQL + " AND " + warnHintSQL + " THEN 'warn'" +
+		" WHEN " + stderrLabelSQL + " THEN 'error'" +
+		" WHEN LOWER(severity_text) IN ('warn','warning') THEN 'warn' ELSE 'info' END"
+)
+
+// LogVolumeSQL returns the fixed per-bucket record count by level.
+func (c *Client) LogVolumeSQL(q observability.MetricQuery) (string, error) {
+	if err := q.Validate(); err != nil {
+		return "", err
+	}
+	return "SELECT " + bucketSQL(q.Bucket) + " AS bucket, " + levelSQL + " AS level, COUNT(*) AS n FROM `" +
+		escapeIdentifier(c.stream) + "` WHERE " + timeBounds(q.Window) +
+		" GROUP BY bucket, level ORDER BY bucket ASC LIMIT " + strconv.Itoa(observability.MaxMetricRows), nil
+}
+
+// LogVolume returns bucketed record counts by level.
+func (c *Client) LogVolume(ctx context.Context, q observability.MetricQuery) (observability.Result, error) {
+	sql, err := c.LogVolumeSQL(q)
+	if err != nil {
+		return observability.Result{}, err
+	}
+	return c.metricResult(ctx, sql, q)
+}
+
+// TraceStatsSQL returns the fixed trace totals for the window.
+func (c *Client) TraceStatsSQL(q observability.MetricQuery) (string, error) {
+	if err := q.Validate(); err != nil {
+		return "", err
+	}
+	return "SELECT COUNT(DISTINCT span_trace_id) AS traces," +
+		" COUNT(DISTINCT CASE WHEN span_status_code = 2 THEN span_trace_id END) AS error_traces, COUNT(*) AS spans FROM `" +
+		escapeIdentifier(c.traces) + "` WHERE " + timeBounds(q.Window), nil
+}
+
+// TraceStats returns the number of traces, error traces and spans.
+func (c *Client) TraceStats(ctx context.Context, q observability.MetricQuery) (observability.Result, error) {
+	sql, err := c.TraceStatsSQL(q)
+	if err != nil {
+		return observability.Result{}, err
+	}
+	return c.metricResult(ctx, sql, q)
+}
+
+// severityPredicate filters by the same classification the dashboard counts, so
+// the Error rate tile, Top errors and the Logs level filter agree. Error, warn
+// and info use levelSQL, which corrects the stderr label; debug uses the stored
+// level because nothing infers it.
+func severityPredicate(severity string) string {
+	switch severity {
+	case "error":
+		return "(" + levelSQL + ") = 'error'"
+	case "warn":
+		return "(" + levelSQL + ") = 'warn'"
+	case "info":
+		return "(" + levelSQL + ") = 'info' AND LOWER(severity_text) NOT IN (" + severitySQL["debug"] + ")"
+	default:
+		return "LOWER(severity_text) IN (" + severitySQL[severity] + ")"
+	}
 }

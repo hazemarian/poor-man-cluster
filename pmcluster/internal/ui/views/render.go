@@ -8,13 +8,16 @@ package views
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -112,6 +115,21 @@ func ShellBase(c *gin.Context) gin.H {
 	}
 }
 
+// AssetVersion identifies the embedded stylesheets and scripts by content, so
+// the URL a page links to changes whenever they do. The static handler lets
+// browsers cache for an hour; a release-number query would leave dev builds
+// and unversioned rebuilds serving stale CSS against new markup.
+func AssetVersion() string { return assetVersion() }
+
+var assetVersion = sync.OnceValue(func() string {
+	h := sha256.New()
+	for _, name := range []string{"static/base.css", "static/components.css", "static/patterns.css", "static/preferences.js"} {
+		b, _ := fs.ReadFile(StaticFS, name)
+		h.Write(b)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:10]
+})
+
 // StaticBase is the URL prefix the console's own assets are served from.
 const StaticBase = "/web/static"
 
@@ -163,10 +181,13 @@ func NewRenderer() (*Renderer, error) {
 		"TF":      func(key string, args ...any) string { return key },
 		// Numbers arrive as int, int64, uint64 or float64 depending on the
 		// data source, so every numeric helper takes any and coerces.
-		"P":          func(count any, key string, dualCase ...i18n.Case) string { return key },
-		"N":          func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
-		"N0":         func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
-		"NF":         func(v any, decimals int) string { return strconv.FormatFloat(i18n.Float(v), 'f', decimals, 64) },
+		"P":  func(count any, key string, dualCase ...i18n.Case) string { return key },
+		"N":  func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"N0": func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"NF": func(v any, decimals int) string { return strconv.FormatFloat(i18n.Float(v), 'f', decimals, 64) },
+		"compact": func(v any) string {
+			return compactNum(i18n.Num(v), func(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) }, func(n int64) string { return strconv.FormatInt(n, 10) })
+		},
 		"shortImage": func(v string) string { return v },
 		"DIR":        func() string { return "ltr" },
 		"LANG":       func() string { return string(i18n.Default) },
@@ -205,8 +226,11 @@ func (r *Renderer) withRequest(c *gin.Context) *template.Template {
 		// N0 is the ungrouped integer form of N: revision IDs and other opaque
 		// identifiers are never comma-grouped ("1,789,849,639" is a sum, not an
 		// ID). Counts and sizes use N (grouped) and NF.
-		"N0":         func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
-		"NF":         func(v any, decimals int) string { return l.NF(i18n.Float(v), decimals) },
+		"N0": func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"NF": func(v any, decimals int) string { return l.NF(i18n.Float(v), decimals) },
+		"compact": func(v any) string {
+			return compactNum(i18n.Num(v), func(f float64) string { return l.NF(f, 1) }, func(n int64) string { return l.N(n) })
+		},
 		"shortImage": shortImage,
 		"DIR":        l.Dir,
 		"LANG":       l.Lang,
@@ -344,4 +368,16 @@ func statusPill(s string) string {
 	default:
 		return "warn"
 	}
+}
+
+// compactNum renders large counts as 12.3k or 4.5M, using the caller's number
+// formatting so digits follow the page language.
+func compactNum(n int64, one func(float64) string, plain func(int64) string) string {
+	switch {
+	case n >= 1_000_000:
+		return one(float64(n)/1e6) + "M"
+	case n >= 1000:
+		return one(float64(n)/1e3) + "k"
+	}
+	return plain(n)
 }

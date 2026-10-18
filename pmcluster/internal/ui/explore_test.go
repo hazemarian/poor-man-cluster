@@ -63,6 +63,9 @@ func (f *exploreFixture) ServiceMetrics(_ context.Context, q observability.Metri
 // obsLogPageSizeForTest mirrors the controller page size.
 const obsLogPageSizeForTest = 50
 
+// obsTopErrorFetchForTest mirrors the controller's top-errors fetch size.
+const obsTopErrorFetchForTest = 200
+
 func exploreApp(t *testing.T, me int, f *exploreFixture) *App {
 	t.Helper()
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,13 +101,36 @@ func get(app *App, target string) (int, string) {
 	return w.Code, w.Body.String()
 }
 
-func TestOverviewShowsNodeChartsGroupedServicesAndNoLogQuery(t *testing.T) {
+func (f *exploreFixture) LogVolume(_ context.Context, q observability.MetricQuery) (observability.Result, error) {
+	t0 := q.Window.End.Add(-10 * time.Minute).UTC().Format("2006-01-02T15:04:05")
+	return observability.Result{Status: observability.StatusAvailable, Window: q.Window, Rows: []observability.Row{
+		{"bucket": t0, "level": "info", "n": 40.0}, {"bucket": t0, "level": "error", "n": 10.0},
+	}}, nil
+}
+
+func (f *exploreFixture) TraceStats(_ context.Context, q observability.MetricQuery) (observability.Result, error) {
+	return observability.Result{Status: observability.StatusAvailable, Window: q.Window, Rows: []observability.Row{
+		{"traces": 7.0, "error_traces": 2.0, "spans": 30.0},
+	}}, nil
+}
+
+func TestOverviewIsADashboardAndReadsNoLegacyEvidence(t *testing.T) {
 	f := &exploreFixture{}
 	_, body := get(exploreApp(t, 200, f), "/web/observability")
-	if f.logs.Load() != 0 || f.calls.Load() != 0 || f.svc.Load() != 0 {
-		t.Fatalf("overview must not read logs or service metrics: %d %d %d", f.logs.Load(), f.calls.Load(), f.svc.Load())
+	// The only log read is the bounded top-errors query; the legacy 500-row
+	// evidence path and per-container metrics belong to other tabs.
+	if f.logs.Load() != 1 || f.lastLog.Severity != "error" || f.lastLog.Limit != obsTopErrorFetchForTest || f.calls.Load() != 0 || f.svc.Load() != 0 {
+		t.Fatalf("overview reads: logs=%d last=%+v legacy=%d svc=%d", f.logs.Load(), f.lastLog, f.calls.Load(), f.svc.Load())
 	}
-	for _, want := range []string{`class="obs-node"`, `class="obs-line"`, "25.0%", "50.0%", `class="obs-stack"`, "demo"} {
+	for _, want := range []string{`class="obs-volume"`, `class="b-err"`, "Error rate", "20.0%", "Top errors", `class="obs-toperr"`, "&lt;b&gt;x&lt;/b&gt;", "7", "2</bdi> with errors"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard missing %q", want)
+		}
+	}
+	if strings.Contains(body, "<b>x</b>") {
+		t.Error("log text reached the page unescaped")
+	}
+	for _, want := range []string{`class="obs-node"`, `class="obs-gauge"`, "25.0%", "50.0%", `class="obs-stack"`, "demo"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q", want)
 		}

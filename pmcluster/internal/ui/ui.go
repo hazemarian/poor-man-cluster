@@ -84,6 +84,7 @@ func NewApp(cfg Config) (*App, error) {
 		shell := views.ShellBase(c)
 		shell["User"] = middleware.CurrentUser(c)
 		shell["Version"] = cfg.AppVersion
+		shell["AssetVer"] = views.AssetVersion()
 		shell["LoginDisabled"] = cfg.LoginDisabled
 		shell["SSOEnabled"] = cfg.SSOEnabled
 		shell["StandaloneObserver"] = cfg.StandaloneObserver
@@ -130,6 +131,8 @@ func NewApp(cfg Config) (*App, error) {
 			BaseURL: cfg.ParseableURL, Stream: cfg.ParseableStream,
 			Username: cfg.ParseableUser, Password: cfg.ParseablePassword,
 			AuthHeader: cfg.ParseableAuth,
+			// An overview load issues up to five independent reads.
+			MaxConcurrent: 6,
 		}); parseErr == nil {
 			ctrl.Telemetry = source
 		}

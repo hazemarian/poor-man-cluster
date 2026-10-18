@@ -846,7 +846,7 @@ func TestFragmentRefreshRendersAppShell(t *testing.T) {
 		// v2 links the stylesheets instead of inlining a <style> block: the shell's
 		// own CSS is proved by the link, and the asset being served is checked in
 		// TestLoginDisabled_PassThrough.
-		`href="/web/static/base.css"`, `class="brand-name"`, "Overview", "Stacks", "Services",
+		`href="/web/static/base.css?v=`, `class="brand-name"`, "Overview", "Stacks", "Services",
 		`id="view"`, "demo", "Log out",
 	} {
 		if !strings.Contains(b, want) {
@@ -1112,7 +1112,7 @@ func TestLoginDisabled_PassThrough(t *testing.T) {
 		t.Fatalf("GET /web/ = %d, want 200", resp.StatusCode)
 	}
 	b := readBody(t, resp)
-	for _, want := range []string{`href="/web/static/base.css"`, `class="brand-name"`, "Overview"} {
+	for _, want := range []string{`href="/web/static/base.css?v=`, `class="brand-name"`, "Overview"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("login-disabled /web/ missing %q", want)
 		}

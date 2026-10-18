@@ -212,3 +212,12 @@ type TraceSource interface {
 	Traces(ctx context.Context, q TraceQuery) (Result, error)
 	Trace(ctx context.Context, window Window, traceID string) (Result, error)
 }
+
+// StatsSource reads the fixed aggregations behind the overview dashboard.
+//
+// LogVolume rows carry bucket, level (error, warn or info) and n. TraceStats
+// returns one row with traces, error_traces and spans.
+type StatsSource interface {
+	LogVolume(ctx context.Context, q MetricQuery) (Result, error)
+	TraceStats(ctx context.Context, q MetricQuery) (Result, error)
+}

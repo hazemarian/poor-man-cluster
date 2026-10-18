@@ -29,5 +29,18 @@ func init() {
 		"investigation.protocol_anthropic": "Anthropic (Claude)",
 		"investigation.protocol_gemini":    "Google Gemini",
 		"investigation.protocol_hint":      "Base URLs: OpenAI https://api.openai.com/v1 · Anthropic https://api.anthropic.com · Gemini https://generativelanguage.googleapis.com/v1beta · OpenCode Go https://opencode.ai/inference/go/openai/v1 (OpenAI-compatible models). The output token field below applies to OpenAI-compatible providers only.",
+		"obs.kpi_logs":                     "Log records",
+		"obs.kpi_logs_foot":                "in the selected window",
+		"obs.kpi_errors":                   "Error rate",
+		"obs.kpi_errors_foot":              "error records",
+		"obs.kpi_traces_err":               "with errors",
+		"obs.kpi_traces_ok":                "no failed traces",
+		"obs.volume_title":                 "Log volume",
+		"obs.volume_sub":                   "Records per interval, split by level.",
+		"obs.top_errors":                   "Top errors",
+		"obs.top_errors_sub":               "Most repeated error messages. Numbers and ids are folded together.",
+		"obs.no_errors":                    "No errors in this window",
+		"obs.no_errors_body":               "Container lines that only look like errors because they were written to stderr are not counted.",
+		"obs.volume_scale":                 "Bar height uses a square-root scale so quiet intervals stay visible beside bursts.",
 	})
 }

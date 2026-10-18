@@ -54,7 +54,7 @@ func assertBrandMark(t *testing.T, where, body string) {
 		"Poor Man&#39;s",       // lead wordmark text (html/template escapes the apostrophe)
 		"<b>Cluster</b>",       // the accent-colored second word
 		`data-accent="orange"`, // the accent attribute, defaulting to the brand orange
-		`href="/web/static/base.css"`,
+		`href="/web/static/base.css`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("%s page missing %q", where, want)

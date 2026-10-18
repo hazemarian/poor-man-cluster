@@ -96,6 +96,7 @@ var levelHints = []struct {
 	{regexp.MustCompile(`(?i)\t(debug|info|warn|warning|error|fatal)\t`)},
 	{regexp.MustCompile(`(?i)^[\[(]?(debug|info|warn|warning|error|fatal|critical)[\])]?[ :]`)},
 	{regexp.MustCompile(`^([IWEF])\d{4} \d`)},
+	{regexp.MustCompile(`(?i)\][ ]+(log|notice|info|statement|debug\d?|warning|error|fatal|panic):`)},
 }
 
 // inferSeverity corrects the stream-derived level. Container output carries no
@@ -113,7 +114,13 @@ func inferSeverity(sev, firstLine string) string {
 		if m == nil {
 			continue
 		}
-		switch strings.ToUpper(m[1]) {
+		level := strings.ToUpper(m[1])
+		if strings.HasPrefix(level, "DEBUG") {
+			level = "DEBUG"
+		}
+		switch level {
+		case "LOG", "STATEMENT":
+			return "INFO"
 		case "I":
 			return "INFO"
 		case "W":

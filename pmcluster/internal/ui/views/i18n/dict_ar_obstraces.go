@@ -29,5 +29,18 @@ func init() {
 		"investigation.protocol_anthropic": "Anthropic (Claude)",
 		"investigation.protocol_gemini":    "Google Gemini",
 		"investigation.protocol_hint":      "عناوين القاعدة: OpenAI https://api.openai.com/v1 · Anthropic https://api.anthropic.com · Gemini https://generativelanguage.googleapis.com/v1beta. حقل رموز الإخراج أدناه ينطبق على المزوّدين المتوافقين مع OpenAI فقط.",
+		"obs.kpi_logs":                     "سجلات",
+		"obs.kpi_logs_foot":                "في الفترة المحددة",
+		"obs.kpi_errors":                   "نسبة الأخطاء",
+		"obs.kpi_errors_foot":              "سجل خطأ",
+		"obs.kpi_traces_err":               "بها أخطاء",
+		"obs.kpi_traces_ok":                "لا تتبعات فاشلة",
+		"obs.volume_title":                 "حجم السجلات",
+		"obs.volume_sub":                   "عدد السجلات في كل فترة، حسب المستوى.",
+		"obs.top_errors":                   "أكثر الأخطاء",
+		"obs.top_errors_sub":               "رسائل الخطأ الأكثر تكراراً. تُدمج الأرقام والمعرّفات معاً.",
+		"obs.no_errors":                    "لا أخطاء في هذه الفترة",
+		"obs.no_errors_body":               "الأسطر التي تبدو أخطاء لمجرد كتابتها إلى stderr لا تُحتسب.",
+		"obs.volume_scale":                 "يعتمد ارتفاع العمود على الجذر التربيعي لتبقى الفترات الهادئة مرئية بجانب الذروات.",
 	})
 }

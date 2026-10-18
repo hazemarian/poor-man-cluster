@@ -43,11 +43,16 @@ func obsTab(raw string) string {
 // points for this series; callers show that as "no data", never as zero.
 type obsChart struct {
 	Known bool
-	Path  string
-	Area  string
-	Last  float64
-	Peak  float64
-	Min   float64
+	// Points is how many buckets had data. With fewer than three a line is a
+	// scatter of ticks, so the card shows a gauge of the latest value instead.
+	Points int
+	Pct    int
+	Level  string
+	Path   string
+	Area   string
+	Last   float64
+	Peak   float64
+	Min    float64
 	// Text values are formatted server-side so a gap-only series renders no
 	// number at all rather than a misleading zero.
 	LastText string
@@ -214,7 +219,7 @@ func buildChart(points map[int64]float64, w observability.Window, bucket time.Du
 	if yMax <= 0 {
 		yMax = 1
 	}
-	c := obsChart{Known: true, Min: points[times[0]], Peak: points[times[0]]}
+	c := obsChart{Known: true, Points: len(times), Min: points[times[0]], Peak: points[times[0]]}
 	var path, area strings.Builder
 	var seg [][2]float64
 	flush := func() {
@@ -254,6 +259,15 @@ func buildChart(points map[int64]float64, w observability.Window, bucket time.Du
 	}
 	flush()
 	c.Path, c.Area = path.String(), area.String()
+	if unit == "%" {
+		c.Pct = int(fmin(fmax(c.Last, 0), 100) + 0.5)
+		switch {
+		case c.Pct >= 90:
+			c.Level = "bad"
+		case c.Pct >= 75:
+			c.Level = "warn"
+		}
+	}
 	c.LastText, c.PeakText = fmt.Sprintf("%.1f%s", c.Last, unit), fmt.Sprintf("%.1f%s", c.Peak, unit)
 	return c
 }

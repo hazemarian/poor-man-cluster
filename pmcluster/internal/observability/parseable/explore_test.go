@@ -28,7 +28,8 @@ func TestLogsPageSQLNewestFirstWithFilters(t *testing.T) {
 	}
 	for _, want := range []string{
 		"`service.name` = 'demo_web'",
-		"LOWER(severity_text) IN ('error','err','fatal','critical','crit','panic','emerg','alert')",
+		"regexp_like(SUBSTR(body, 1, 200)",
+		") = 'error'",
 		`body ILIKE '%50\%\_off \\ it''s%' ESCAPE '\'`,
 		"ORDER BY p_timestamp DESC LIMIT 3 OFFSET 40",
 	} {
@@ -150,5 +151,19 @@ func TestLogsKeepTimestampsUnderRedaction(t *testing.T) {
 	}
 	if strings.Contains(fmt.Sprint(got.Rows[0]["body"]), "hunter2") {
 		t.Fatal("secret not redacted")
+	}
+}
+
+func TestSeverityFiltersUseTheDashboardClassification(t *testing.T) {
+	c, _ := New(Config{BaseURL: "http://parseable.invalid"})
+	for sev, want := range map[string]string{
+		"error": ") = 'error'", "warn": ") = 'warn'", "info": "NOT IN ('debug','trace')", "debug": "LOWER(severity_text) IN ('debug','trace')",
+	} {
+		q := logFixture()
+		q.Severity = sev
+		sql, err := c.LogsPageSQL(q)
+		if err != nil || !strings.Contains(sql, want) {
+			t.Errorf("%s: %v %s", sev, err, sql)
+		}
 	}
 }
