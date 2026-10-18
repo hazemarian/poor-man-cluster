@@ -150,3 +150,65 @@ type MetricSource interface {
 	NodeMetrics(ctx context.Context, q MetricQuery) (Result, error)
 	ServiceMetrics(ctx context.Context, q MetricQuery) (Result, error)
 }
+
+// Bounds for trace reads. A list page is for reading; a single trace is capped
+// so one runaway trace cannot flood the page.
+const (
+	MaxTracePageSize = 50
+	MaxTraceOffset   = 1000
+	MaxTraceSpans    = 500
+)
+
+// ValidTraceID reports whether value is a 32 character lowercase hex trace id.
+// Trace ids are the only caller-supplied value placed in a trace detail query,
+// so this is a strict shape check rather than an escaping step.
+func ValidTraceID(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// TraceQuery is a newest-first, paged read of trace summaries. Service matches
+// the OTel service.name of any span in the trace; ErrorsOnly keeps traces with
+// at least one error span.
+type TraceQuery struct {
+	Service    string
+	Window     Window
+	ErrorsOnly bool
+	Limit      int
+	Offset     int
+}
+
+// Validate checks every bound that does not depend on the daemon inventory.
+func (q TraceQuery) Validate() error {
+	base := Query{Window: q.Window, Limit: 1}
+	if err := base.Validate(); err != nil {
+		return err
+	}
+	if q.Limit <= 0 || q.Limit > MaxTracePageSize {
+		return fmt.Errorf("trace page size must be between 1 and %d", MaxTracePageSize)
+	}
+	if q.Offset < 0 || q.Offset > MaxTraceOffset {
+		return fmt.Errorf("trace offset must be between 0 and %d", MaxTraceOffset)
+	}
+	if len([]rune(q.Service)) > MaxSearchRunes {
+		return errors.New("service filter is too long")
+	}
+	return nil
+}
+
+// TraceSource reads trace summaries and the spans of one trace.
+//
+// Traces rows carry trace_id, started, duration_ns, spans, errors, root and
+// service. Trace rows carry span_id, parent_id, name, service, kind, status,
+// message, start_ns and duration_ns.
+type TraceSource interface {
+	Traces(ctx context.Context, q TraceQuery) (Result, error)
+	Trace(ctx context.Context, window Window, traceID string) (Result, error)
+}

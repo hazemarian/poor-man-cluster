@@ -42,7 +42,7 @@ proxy deployments must configure it to their actual public HTTPS origin.
 
 ## Console layout
 
-The page has three tabs; each loads only its own telemetry, and every tab runs
+The page has four tabs; each loads only its own telemetry, and every tab runs
 the same daemon authorization probe and inventory resolution before any
 Parseable call.
 
@@ -59,6 +59,17 @@ Parseable call.
   the page already has read access to the telemetry backend.
 - **Metrics.** Per-node CPU, memory and load charts and per-container average
   and peak CPU and memory (the 15 highest peaks).
+- **Traces.** Trace summaries newest first (25 per page, at most 1000 deep) with
+  an optional exact service-name filter and an errors-only toggle. Opening a
+  trace shows a span waterfall: spans nested by parent, bars positioned against
+  the whole trace, error spans in red. A trace is capped at 500 spans, and a
+  trace whose root lies outside the selected window still renders (its spans
+  show as roots). Span attributes are not shown. Only the trace id, which must be
+  32 lowercase hex characters, is taken from the request.
+- **Live tail.** The Logs tab has a "Live tail" toggle that re-reads the newest
+  50 records every 5 seconds. It reads the same Parseable stream as the paged
+  view (container output is already collected there), so it adds no Docker
+  socket access to the edge. Paging is hidden while it is on.
 
 Charts are server-rendered SVG. A gap in a series means nothing was collected
 for that interval; it is never drawn as zero. Node CPU and memory percentages
@@ -78,7 +89,13 @@ Parseable streams. Applications on the cluster's monitoring network send to
 container output is collected automatically from the json-file logs without any
 instrumentation. Set `severityNumber` on OTLP log records to get a level;
 Parseable shows `UNSPECIFIED` when only `severityText` is sent. The console does
-not yet render traces; query the `pmcluster-traces` stream in Parseable.
+renders traces in the Traces tab.
+
+OTLP port 4318 on the Swarm collector is published on all interfaces and has no
+authentication: anything that can reach the host can push telemetry. Firewall it
+to your application networks. The standalone stack publishes nothing by default;
+add `compose.otlp.yaml` (`docker compose -f compose.yaml -f compose.otlp.yaml up -d`)
+to expose 127.0.0.1:4317/4318 on a host that does not run the Swarm collector.
 
 ## Enabling a compatible provider
 

@@ -25,8 +25,9 @@
     <a href="/web/observability?tab=overview&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "overview"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_overview"}}</a>
     <a href="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "logs"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_logs"}}</a>
     <a href="/web/observability?tab=metrics&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=metrics&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "metrics"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_metrics"}}</a>
+    <a href="/web/observability?tab=traces&amp;range={{.Range}}" hx-get="/web/observability?tab=traces&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "traces"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_traces"}}</a>
   </nav>
-  {{if ne .Tab "logs"}}
+  {{if and (ne .Tab "logs") (ne .Tab "traces")}}
   <form class="obs-filters" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, change from:select">
     <input type="hidden" name="tab" value="{{.Tab}}">
     <div class="field">
@@ -42,6 +43,7 @@
 
 {{if eq .Tab "logs"}}{{template "observabilitylogs" .}}
 {{else if eq .Tab "metrics"}}{{template "observabilitymetrics" .}}
+{{else if eq .Tab "traces"}}{{template "observabilitytraces" .}}
 {{else}}{{template "observabilityoverview" .}}{{end}}
 
 {{template "investigationask" .}}
@@ -182,13 +184,13 @@
 {{end}}
 
 {{define "observabilitylogs"}}
-<section class="panel" id="obs-logs">
+<section class="panel" id="obs-logs"{{if .Live}} hx-get="/web/observability/evidence?live=1&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}" hx-trigger="every 5s [document.activeElement.id !== 'obs-search']" hx-swap="outerHTML"{{end}}>
   <div class="panel-head">
     <div><h2>{{T "obs.logs_title"}}</h2><p class="sub">{{T "obs.logs_sub"}}</p></div>
     <div class="ph-actions"><div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}{{.Evidence.WindowStart}} → {{.Evidence.WindowEnd}}{{end}}</div></div>
   </div>
   <div class="panel-body">
-    <form class="obs-logform" method="get" action="/web/observability" hx-get="/web/observability/evidence" hx-target="#obs-logs" hx-swap="outerHTML" hx-trigger="submit, change from:select, keyup changed delay:500ms from:#obs-search">
+    <form class="obs-logform" method="get" action="/web/observability" hx-get="/web/observability/evidence" hx-target="#obs-logs" hx-swap="outerHTML" hx-trigger="submit, change from:select, change from:#obs-live, keyup changed delay:500ms from:#obs-search">
       <input type="hidden" name="tab" value="logs">
       <div class="field obs-svc-field">
         <label for="obs-log-service">{{T "observability.filter_service"}}</label>
@@ -217,8 +219,12 @@
         <label for="obs-search">{{T "obs.filter_search"}}</label>
         <input id="obs-search" class="finput" type="search" name="search" value="{{.Search}}" maxlength="100" placeholder="{{T "obs.search_ph"}}" autocomplete="off">
       </div>
+      <div class="field obs-live-field">
+        <label class="obs-check" for="obs-live"><input id="obs-live" type="checkbox" name="live" value="1"{{if .Live}} checked{{end}}><span>{{T "obs.live"}}</span></label>
+      </div>
       <noscript><button type="submit" class="btn btn-primary">{{T "observability.load_evidence"}}</button></noscript>
     </form>
+    {{if .Live}}<p class="sub obs-note"><span class="pill good"><i class="dot"></i>{{T "obs.live_on"}}</span> {{T "obs.live_note"}}</p>{{end}}
 
     {{if .Evidence.Unavailable}}
     <div class="empty"><h3>{{if eq .Evidence.UnavailableWhy "scope"}}{{T "observability.scope_unavailable"}}{{else if eq .Evidence.UnavailableWhy "service"}}{{T "observability.invalid_service"}}{{else if eq .Evidence.UnavailableWhy "range"}}{{T "observability.invalid_range"}}{{else if eq .Evidence.UnavailableWhy "api"}}{{T "err.api_not_configured"}}{{else}}{{T "observability.telemetry_unavailable"}}{{end}}</h3><p>{{T "observability.evidence_unavailable_body"}}</p></div>
@@ -237,7 +243,7 @@
       </div>
       {{end}}
     </div>
-    {{if or .Evidence.HasPrev .Evidence.HasNext}}
+    {{if and (not .Live) (or .Evidence.HasPrev .Evidence.HasNext)}}
     <div class="obs-pager">
       {{if .Evidence.HasPrev}}<a class="btn btn-sm" href="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.PrevOffset}}" hx-get="/web/observability/evidence?service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.PrevOffset}}" hx-target="#obs-logs" hx-swap="outerHTML">{{T "obs.newer"}}</a>{{end}}
       {{if .Evidence.HasNext}}<a class="btn btn-sm" href="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.NextOffset}}" hx-get="/web/observability/evidence?service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.NextOffset}}" hx-target="#obs-logs" hx-swap="outerHTML">{{T "obs.older"}}</a>{{end}}
@@ -285,5 +291,79 @@
     </div>
     {{end}}
   </div>
+</section>
+{{end}}
+
+{{define "observabilitytraces"}}
+<section class="panel" id="obs-traces">
+  {{if .Traces.Detail}}
+  <div class="panel-head">
+    <div><h2>{{T "obs.traces_title"}} <span class="mono iso" dir="ltr">{{.Traces.TraceID}}</span></h2></div>
+    <div class="ph-actions"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=traces&amp;range={{.Range}}" hx-get="/web/observability/traces?range={{.Range}}" hx-target="#obs-traces" hx-swap="outerHTML">{{T "obs.trace_back"}}</a></div>
+  </div>
+  <div class="panel-body">
+    {{if .Traces.Unavailable}}<div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "observability.evidence_unavailable_body"}}</p></div>
+    {{else if .Traces.NotFound}}<div class="empty"><h3>{{T "obs.trace_notfound"}}</h3></div>
+    {{else}}
+    <p class="sub obs-note">{{T "obs.trace_total"}} <bdi class="iso" dir="ltr">{{.Traces.TotalText}}</bdi> · <bdi class="iso" dir="ltr">{{N .Traces.SpanCount}}</bdi> {{T "obs.trace_spans_label"}}{{if .Traces.ErrorCount}} · <span class="pill bad">{{N .Traces.ErrorCount}} {{T "obs.trace_errors_label"}}</span>{{end}}{{if .Traces.Truncated}} · {{T "obs.trace_truncated"}}{{end}}</p>
+    <div class="obs-wf" role="table" aria-label="{{T "obs.traces_title"}}">
+      {{range .Traces.Spans}}
+      <div class="obs-wf-row{{if .Error}} is-error{{end}}" role="row">
+        <span class="obs-wf-name" role="cell" style="padding-inline-start:{{.Indent}}px" title="{{.Message}}"><span class="mono">{{.Name}}</span> <span class="muted mono iso" dir="ltr">{{.Service}}</span></span>
+        <span class="obs-wf-track" role="cell" dir="ltr"><i style="left:{{printf "%.2f" .Left}}%;width:{{printf "%.2f" .Width}}%"></i></span>
+        <span class="obs-wf-dur mono iso" dir="ltr" role="cell">{{.DurText}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+  {{else}}
+  <div class="panel-head">
+    <div><h2>{{T "obs.traces_title"}}</h2><p class="sub">{{T "obs.traces_sub"}}</p></div>
+    <div class="ph-actions"><div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}{{.Evidence.WindowStart}} → {{.Evidence.WindowEnd}}{{end}}</div></div>
+  </div>
+  <div class="panel-body">
+    <form class="obs-logform" method="get" action="/web/observability" hx-get="/web/observability/traces" hx-target="#obs-traces" hx-swap="outerHTML" hx-trigger="submit, change from:select, change from:#obs-errors, keyup changed delay:500ms from:#obs-tsvc">
+      <input type="hidden" name="tab" value="traces">
+      <div class="field">
+        <label for="obs-trace-range">{{T "observability.filter_range"}}</label>
+        <select id="obs-trace-range" name="range" class="finput">
+          <option value="15m"{{if eq .Range "15m"}} selected{{end}}>{{T "observability.range_15m"}}</option><option value="1h"{{if eq .Range "1h"}} selected{{end}}>{{T "observability.range_1h"}}</option><option value="6h"{{if eq .Range "6h"}} selected{{end}}>{{T "observability.range_6h"}}</option><option value="24h"{{if eq .Range "24h"}} selected{{end}}>{{T "observability.range_24h"}}</option>
+        </select>
+      </div>
+      <div class="field obs-grow">
+        <label for="obs-tsvc">{{T "obs.filter_trace_service"}}</label>
+        <input id="obs-tsvc" class="finput" type="search" name="svc" value="{{.TraceService}}" maxlength="100" autocomplete="off">
+      </div>
+      <div class="field obs-live-field">
+        <label class="obs-check" for="obs-errors"><input id="obs-errors" type="checkbox" name="errors" value="1"{{if .ErrorsOnly}} checked{{end}}><span>{{T "obs.filter_errors"}}</span></label>
+      </div>
+      <noscript><button type="submit" class="btn btn-primary">{{T "observability.apply_filters"}}</button></noscript>
+    </form>
+    {{if .Traces.Unavailable}}<div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "observability.evidence_unavailable_body"}}</p></div>
+    {{else if .Traces.Empty}}<div class="empty"><h3>{{T "obs.traces_none_title"}}</h3><p>{{T "obs.traces_none_body"}}</p></div>
+    {{else}}
+    <p class="sub obs-note">{{T "obs.rows"}} <span class="iso" dir="ltr">{{N .Traces.FirstRow}}–{{N .Traces.LastRow}}</span></p>
+    <div class="obs-traces" role="table" aria-label="{{T "obs.traces_title"}}">
+      <div class="obs-trace-head" role="row"><span role="columnheader">{{T "obs.col_started"}}</span><span role="columnheader">{{T "obs.col_root"}}</span><span role="columnheader">{{T "observability.col_service"}}</span><span role="columnheader">{{T "obs.col_spans"}}</span><span role="columnheader">{{T "obs.col_duration"}}</span></div>
+      {{range .Traces.Rows}}
+      <a class="obs-trace{{if .HasError}} is-error{{end}}" role="row" href="/web/observability?tab=traces&amp;trace={{.ID}}&amp;range={{$.Range}}" hx-get="/web/observability/traces?trace={{.ID}}&amp;range={{$.Range}}" hx-target="#obs-traces" hx-swap="outerHTML">
+        <span class="mono iso" dir="ltr" role="cell">{{.Started}}</span>
+        <span class="obs-trace-root" role="cell"><span class="mono">{{if .Root}}{{.Root}}{{else}}{{T "obs.trace_orphan"}}{{end}}</span> <span class="muted mono iso" dir="ltr">{{.Short}}</span></span>
+        <span class="mono iso" dir="ltr" role="cell">{{.Service}}</span>
+        <span class="num iso" dir="ltr" role="cell">{{N .Spans}}{{if .HasError}} <span class="pill bad">{{N .Errors}}</span>{{end}}</span>
+        <span class="obs-res-cell" role="cell"><span class="obs-bar-track"><i style="width:{{.DurPct}}%"></i></span><bdi class="iso mono" dir="ltr">{{.DurText}}</bdi></span>
+      </a>
+      {{end}}
+    </div>
+    {{if or .Traces.HasPrev .Traces.HasNext}}
+    <div class="obs-pager">
+      {{if .Traces.HasPrev}}<a class="btn btn-sm" href="/web/observability?tab=traces&amp;svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.PrevOffset}}" hx-get="/web/observability/traces?svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.PrevOffset}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-target="#obs-traces" hx-swap="outerHTML">{{T "obs.newer"}}</a>{{end}}
+      {{if .Traces.HasNext}}<a class="btn btn-sm" href="/web/observability?tab=traces&amp;svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.NextOffset}}" hx-get="/web/observability/traces?svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.NextOffset}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-target="#obs-traces" hx-swap="outerHTML">{{T "obs.older"}}</a>{{end}}
+    </div>
+    {{end}}
+    {{end}}
+  </div>
+  {{end}}
 </section>
 {{end}}

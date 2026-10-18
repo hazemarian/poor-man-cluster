@@ -225,6 +225,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/observability", obs.Page)
 	vr.GET("/observability/summary", obs.Summary)
 	vr.GET("/observability/evidence", obs.Evidence)
+	vr.GET("/observability/traces", obs.Traces)
 	investigator := controllers.Investigations{Controller: a.ctrl}
 	vr.GET("/observability/investigations/:id", investigator.Show)
 

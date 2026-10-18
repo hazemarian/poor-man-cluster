@@ -16,6 +16,7 @@ const (
 	obsTabOverview = "overview"
 	obsTabLogs     = "logs"
 	obsTabMetrics  = "metrics"
+	obsTabTraces   = "traces"
 
 	// obsTabInvestigate loads the legacy bounded evidence set used to build an
 	// investigation prompt. It is never reachable from a request parameter.
@@ -23,6 +24,7 @@ const (
 
 	obsStacksPerPage = 8
 	obsLogPageSize   = 50
+	obsTracePageSize = 25
 	obsTopServices   = 15
 
 	chartW = 240.0
@@ -31,7 +33,7 @@ const (
 
 func obsTab(raw string) string {
 	switch raw {
-	case obsTabLogs, obsTabMetrics:
+	case obsTabLogs, obsTabMetrics, obsTabTraces:
 		return raw
 	}
 	return obsTabOverview

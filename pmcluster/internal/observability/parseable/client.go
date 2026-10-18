@@ -29,6 +29,7 @@ type Config struct {
 	BaseURL       string
 	Stream        string
 	MetricsStream string
+	TracesStream  string
 	Username      string
 	Password      string
 	AuthHeader    string
@@ -47,6 +48,7 @@ type Client struct {
 	baseURL    string
 	stream     string
 	metrics    string
+	traces     string
 	authHeader string
 	http       *http.Client
 	maxRows    int
@@ -82,6 +84,13 @@ func New(cfg Config) (*Client, error) {
 	}
 	if !streamName.MatchString(metrics) {
 		return nil, errors.New("parseable metrics stream name is invalid")
+	}
+	traces := strings.TrimSpace(cfg.TracesStream)
+	if traces == "" {
+		traces = "pmcluster-traces"
+	}
+	if !streamName.MatchString(traces) {
+		return nil, errors.New("parseable traces stream name is invalid")
 	}
 	auth := strings.TrimSpace(cfg.AuthHeader)
 	if auth == "" && cfg.Username != "" && cfg.Password != "" {
@@ -121,7 +130,7 @@ func New(cfg Config) (*Client, error) {
 		now = time.Now
 	}
 	return &Client{
-		baseURL: base, stream: stream, metrics: metrics, authHeader: auth, http: hc,
+		baseURL: base, stream: stream, metrics: metrics, traces: traces, authHeader: auth, http: hc,
 		maxRows: maxRows, maxBytes: maxBytes, timeout: timeout,
 		now: now, sem: make(chan struct{}, concurrency), redactor: cfg.Redactor,
 	}, nil

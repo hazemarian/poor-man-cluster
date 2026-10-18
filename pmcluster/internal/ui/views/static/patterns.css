@@ -378,3 +378,29 @@
   .obs-res-head { display: none; }
   .obs-res-row { grid-template-columns: 1fr; gap: var(--s-2); padding-inline: var(--s-4); }
 }
+
+/* Traces, waterfall and live tail */
+.obs-check { display: inline-flex; align-items: center; gap: var(--s-2); min-height: 36px; cursor: pointer; }
+.obs-live-field { flex: 0 0 auto; }
+.obs-traces { border: 1px solid var(--border-subtle); border-radius: var(--r-md); overflow: hidden; }
+.obs-trace-head, .obs-trace { display: grid; grid-template-columns: 90px minmax(0, 2fr) minmax(0, 1fr) 80px minmax(140px, 1fr); gap: var(--s-3); padding: var(--s-2) var(--s-3); align-items: center; }
+.obs-trace-head { background: var(--bg-tertiary); font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary); }
+.obs-trace { border-top: 1px solid var(--border-subtle); color: inherit; text-decoration: none; font-size: var(--fs-code); }
+.obs-trace:hover { background: var(--bg-tertiary); }
+.obs-trace.is-error { border-inline-start: 3px solid var(--red); }
+.obs-trace-root { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.obs-wf { border: 1px solid var(--border-subtle); border-radius: var(--r-md); overflow: hidden; }
+.obs-wf-row { display: grid; grid-template-columns: minmax(180px, 2fr) minmax(0, 3fr) 80px; gap: var(--s-3); padding: var(--s-2) var(--s-3); align-items: center; border-top: 1px solid var(--border-subtle); font-size: var(--fs-code); }
+.obs-wf-row:first-child { border-top: 0; }
+.obs-wf-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.obs-wf-track { position: relative; height: 14px; background: var(--bg-tertiary); border-radius: 3px; }
+.obs-wf-track i { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; min-width: 2px; }
+.obs-wf-row.is-error .obs-wf-track i { background: var(--red); }
+.obs-wf-dur { text-align: end; }
+@media (max-width: 767px) {
+  .obs-trace-head { display: none; }
+  .obs-trace { grid-template-columns: 1fr 1fr; }
+  .obs-wf-row { grid-template-columns: 1fr 70px; }
+  .obs-wf-track { grid-column: 1 / -1; order: 3; }
+}
+.obs-wf-name .muted, .obs-trace-root .muted { margin-inline-start: var(--s-2); }

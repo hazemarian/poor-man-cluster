@@ -48,6 +48,12 @@ type observabilityData struct {
 	NodeCards []obsNodeCard
 	Metrics   obsMetrics
 
+	Live         bool
+	Traces       obsTraces
+	TraceService string
+	TraceOffset  int
+	ErrorsOnly   bool
+
 	ScopeKnown bool
 	ScopeError string
 	Health     observabilityHealth
@@ -179,6 +185,13 @@ func (c Observability) Summary(g *gin.Context) {
 	c.Views.Fragment(g, "observabilityoverview", d)
 }
 
+// Traces renders only the traces panel for in-page filtering and paging, after
+// the same authorization probe as every other tab.
+func (c Observability) Traces(g *gin.Context) {
+	d := c.load(g, obsTabTraces)
+	c.Views.Fragment(g, "observabilitytraces", d)
+}
+
 // Evidence renders only the logs panel for in-page filtering and paging. It
 // resolves the selected service against the full daemon inventory after the
 // /api/me probe, so a scoped token or unknown service fails closed before
@@ -197,6 +210,13 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 		d.Severity = sev
 	}
 	d.Offset = min(max(atoiDefault(g.Query("offset"), 0), 0), observability.MaxLogOffset)
+	d.Live = g.Query("live") == "1"
+	if d.Live {
+		d.Offset = 0
+	}
+	d.TraceService = observability.CleanSearch(g.Query("svc"))
+	d.ErrorsOnly = g.Query("errors") == "1"
+	d.TraceOffset = min(max(atoiDefault(g.Query("toffset"), 0), 0), observability.MaxTraceOffset)
 	if raw := strings.TrimSpace(g.Query("range")); raw != "" {
 		d.Range = raw
 	}
@@ -375,6 +395,12 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 		c.loadEvidence(g, &d, window, services, servicesErr, redactor)
 	case obsTabMetrics:
 		c.loadMetrics(ctx, &d, window, true)
+	case obsTabTraces:
+		if c.Telemetry == nil {
+			d.Traces.Unavailable = true
+		} else {
+			c.loadTraces(g, &d, window, redactor)
+		}
 	default:
 		d.Stacks, d.StackPage = groupStacks(d.Health.Services, d.Q, atoiDefault(g.Query("page"), 1))
 		c.loadMetrics(ctx, &d, window, false)

@@ -15,8 +15,10 @@ import (
 
 type exploreFixture struct {
 	evidenceFixture
-	logs, node, svc atomic.Int32
-	lastLog         observability.LogQuery
+	logs, node, svc, traces, trace atomic.Int32
+	lastTrace                      observability.TraceQuery
+	lastTraceID                    string
+	lastLog                        observability.LogQuery
 }
 
 func (f *exploreFixture) Logs(_ context.Context, q observability.LogQuery) (observability.Result, error) {
@@ -24,6 +26,22 @@ func (f *exploreFixture) Logs(_ context.Context, q observability.LogQuery) (obse
 	f.lastLog = q
 	return observability.Result{Status: observability.StatusAvailable, Window: q.Window, ObservedAt: time.Now(), Truncated: true,
 		Rows: []observability.Row{{"service.name": "demo_web", "body": "line one\nline two <b>x</b>", "severity_text": "ERROR", "p_timestamp": "2026-10-18T19:07:30.310"}}}, nil
+}
+
+func (f *exploreFixture) Traces(_ context.Context, q observability.TraceQuery) (observability.Result, error) {
+	f.traces.Add(1)
+	f.lastTrace = q
+	return observability.Result{Status: observability.StatusAvailable, Window: q.Window, Truncated: true, Rows: []observability.Row{
+		{"trace_id": "5b8efff798038103d269b633813fc60d", "started": "2026-10-18T19:35:31.114", "duration_ns": 50000000.0, "spans": 3.0, "errors": 1.0, "root": "GET /smoke", "service": "otlp-smoke"},
+	}}, nil
+}
+
+func (f *exploreFixture) Trace(_ context.Context, w observability.Window, id string) (observability.Result, error) {
+	f.trace.Add(1)
+	f.lastTraceID = id
+	return observability.Result{Status: observability.StatusAvailable, Window: w, Rows: []observability.Row{
+		{"span_id": "a", "parent_id": "", "name": "GET /smoke", "service": "otlp-smoke", "kind": "SERVER", "status": 2.0, "message": "bad", "start_ns": 1.7e18, "duration_ns": 5e7},
+	}}, nil
 }
 
 func (f *exploreFixture) NodeMetrics(_ context.Context, q observability.MetricQuery) (observability.Result, error) {
@@ -125,10 +143,10 @@ func TestInjectedFiltersAreDroppedNotForwarded(t *testing.T) {
 }
 
 func TestExploreTabsFailClosedWithoutDaemonScope(t *testing.T) {
-	for _, target := range []string{"/web/observability?tab=logs", "/web/observability?tab=metrics", "/web/observability", "/web/observability/evidence"} {
+	for _, target := range []string{"/web/observability?tab=logs", "/web/observability?tab=metrics", "/web/observability", "/web/observability/evidence", "/web/observability?tab=traces", "/web/observability/traces", "/web/observability/traces?trace=5b8efff798038103d269b633813fc60d"} {
 		f := &exploreFixture{}
 		get(exploreApp(t, 403, f), target)
-		if f.logs.Load()+f.calls.Load()+f.node.Load()+f.svc.Load() != 0 {
+		if f.logs.Load()+f.calls.Load()+f.node.Load()+f.svc.Load()+f.traces.Load()+f.trace.Load() != 0 {
 			t.Errorf("%s reached the telemetry source without scope", target)
 		}
 	}
@@ -144,5 +162,45 @@ func TestMetricsTabReadsNodeAndContainerAggregates(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q", want)
 		}
+	}
+}
+
+func TestTracesTabListsTracesAndSanitisesFilters(t *testing.T) {
+	f := &exploreFixture{}
+	code, body := get(exploreApp(t, 200, f), "/web/observability?tab=traces&svc=web&errors=1&toffset=999999")
+	if code != 200 || f.traces.Load() != 1 || f.logs.Load() != 0 {
+		t.Fatalf("code=%d traces=%d logs=%d", code, f.traces.Load(), f.logs.Load())
+	}
+	if f.lastTrace.Service != "web" || !f.lastTrace.ErrorsOnly || f.lastTrace.Offset != observability.MaxTraceOffset || f.lastTrace.Limit != 25 {
+		t.Errorf("query: %+v", f.lastTrace)
+	}
+	for _, want := range []string{"GET /smoke", "otlp-smoke", "5b8efff7", "trace=5b8efff798038103d269b633813fc60d", "50.0 ms"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
+func TestTraceDetailRendersWaterfallAndRejectsBadIDs(t *testing.T) {
+	f := &exploreFixture{}
+	app := exploreApp(t, 200, f)
+	_, body := get(app, "/web/observability/traces?trace=5b8efff798038103d269b633813fc60d")
+	if f.trace.Load() != 1 || !strings.Contains(body, `class="obs-wf-row is-error"`) || !strings.Contains(body, "GET /smoke") {
+		t.Fatalf("detail not rendered (calls=%d)", f.trace.Load())
+	}
+	get(app, "/web/observability/traces?trace=%27%20OR%201%3D1")
+	if f.trace.Load() != 1 {
+		t.Fatal("malformed trace id reached the source")
+	}
+}
+
+func TestLiveTailPollsAndHidesPaging(t *testing.T) {
+	f := &exploreFixture{}
+	_, body := get(exploreApp(t, 200, f), "/web/observability/evidence?live=1&offset=100")
+	if f.lastLog.Offset != 0 {
+		t.Errorf("live view paged back: %+v", f.lastLog)
+	}
+	if !strings.Contains(body, `hx-trigger="every 5s`) || strings.Contains(body, `class="obs-pager"`) {
+		t.Error("live tail should poll and hide paging")
 	}
 }
