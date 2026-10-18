@@ -71,6 +71,7 @@ func (m *Manager) Start(ctx context.Context, ledger Ledger, owner string, p Poli
 	in.Question = r.Text(in.Question)
 	for i := range in.Evidence {
 		in.Evidence[i].Message = r.Text(in.Evidence[i].Message)
+		in.Evidence[i].Example = r.Text(in.Evidence[i].Example)
 		in.Evidence[i].Service = r.Text(in.Evidence[i].Service)
 		in.Evidence[i].Severity = r.Text(in.Evidence[i].Severity)
 	}
@@ -79,6 +80,9 @@ func (m *Manager) Start(ctx context.Context, ledger Ledger, owner string, p Poli
 	}
 	encoded, _ := json.Marshal(in)
 	for len(in.Evidence) > 0 && int64(len(encoded)+4096) > p.MaxInputTokens {
+		last := in.Evidence[len(in.Evidence)-1]
+		in.Stats.OmittedItems++
+		in.Stats.OmittedRecords += last.Count
 		in.Evidence = in.Evidence[:len(in.Evidence)-1]
 		in.Truncated = true
 		encoded, _ = json.Marshal(in)

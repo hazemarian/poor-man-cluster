@@ -23,6 +23,25 @@ type Policy struct {
 	MaxInputTokens  int64  `json:"max_input_tokens"`
 	MaxOutputTokens int64  `json:"max_output_tokens"`
 	TokenField      string `json:"token_field"`
+	// Protocol selects the wire format: "openai" (also the empty default, for
+	// OpenAI and every compatible endpoint), "anthropic" or "gemini".
+	Protocol string `json:"protocol,omitempty"`
+}
+
+// Wire protocols a policy may select.
+const (
+	ProtocolOpenAI    = "openai"
+	ProtocolAnthropic = "anthropic"
+	ProtocolGemini    = "gemini"
+)
+
+// Proto returns the effective protocol; policies saved before the field
+// existed use the OpenAI-compatible format.
+func (p Policy) Proto() string {
+	if p.Protocol == "" {
+		return ProtocolOpenAI
+	}
+	return p.Protocol
 }
 
 // DefaultPolicy disables paid work until an administrator configures it.
@@ -37,6 +56,11 @@ func (p Policy) Validate() error {
 	}
 	if p.TokenField != "max_completion_tokens" && p.TokenField != "max_tokens" {
 		return fmt.Errorf("unsupported output token field")
+	}
+	switch p.Proto() {
+	case ProtocolOpenAI, ProtocolAnthropic, ProtocolGemini:
+	default:
+		return fmt.Errorf("unsupported provider protocol")
 	}
 	if len(p.Model) > 200 || len(p.BaseURL) > 2048 {
 		return fmt.Errorf("provider configuration too long")

@@ -460,12 +460,19 @@ func (c Observability) loadEvidence(g *gin.Context, d *observabilityData, window
 		result observability.Result
 		err    error
 	)
-	if logs, ok := c.Telemetry.(observability.LogSource); ok && d.Tab == obsTabLogs {
+	logs, hasLogs := c.Telemetry.(observability.LogSource)
+	switch {
+	case hasLogs && d.Tab == obsTabLogs:
 		result, err = logs.Logs(g.Request.Context(), observability.LogQuery{
 			Service: backendService, Window: window, Severity: d.Severity, Search: d.Search,
 			Limit: obsLogPageSize, Offset: d.Offset,
 		})
-	} else {
+	case hasLogs:
+		// An investigation reads the newest errors and the newest records of any
+		// level. A single oldest-first page would miss the incident itself, and
+		// a single mixed page can bury the errors under routine lines.
+		result, err = recentForInvestigation(g.Request.Context(), logs, backendService, window)
+	default:
 		result, err = c.Telemetry.Query(g.Request.Context(), observability.Query{Service: backendService, Window: window, Limit: observabilityRowLimit})
 	}
 	if err != nil || result.Status == observability.StatusUnavailable {
@@ -607,4 +614,29 @@ func shortTime(ts string) string {
 		return after[:8]
 	}
 	return ts
+}
+
+// recentForInvestigation merges the newest error records with the newest
+// records of any level, dropping rows both queries returned.
+func recentForInvestigation(ctx context.Context, logs observability.LogSource, service string, window observability.Window) (observability.Result, error) {
+	var merged observability.Result
+	seen := map[string]bool{}
+	for _, severity := range []string{"error", ""} {
+		res, err := logs.Logs(ctx, observability.LogQuery{Service: service, Window: window, Severity: severity, Limit: observability.MaxLogPageSize})
+		if err != nil || res.Status == observability.StatusUnavailable {
+			return observability.Result{}, errors.New("telemetry unavailable")
+		}
+		merged.Status, merged.Window, merged.ObservedAt, merged.Coverage = res.Status, res.Window, res.ObservedAt, res.Coverage
+		merged.Truncated = merged.Truncated || res.Truncated
+		for _, row := range res.Rows {
+			log := observability.ProjectLog(row)
+			key := log.Timestamp + "\x00" + log.Service + "\x00" + log.Body
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			merged.Rows = append(merged.Rows, row)
+		}
+	}
+	return merged, nil
 }

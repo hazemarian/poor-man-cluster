@@ -180,7 +180,7 @@ func (c Investigations) SaveSettings(g *gin.Context) {
 	input, e1 := strconv.ParseInt(g.PostForm("input_tokens"), 10, 64)
 	output, e2 := strconv.ParseInt(g.PostForm("output_tokens"), 10, 64)
 	daily, e3 := strconv.ParseInt(g.PostForm("daily_tokens"), 10, 64)
-	p := investigation.Policy{Enabled: g.PostForm("enabled") == "on", Sharing: g.PostForm("sharing") == "on", BaseURL: g.PostForm("base_url"), Model: g.PostForm("model"), DailyTokens: daily, MaxInputTokens: input, MaxOutputTokens: output, TokenField: g.PostForm("token_field")}
+	p := investigation.Policy{Enabled: g.PostForm("enabled") == "on", Sharing: g.PostForm("sharing") == "on", BaseURL: g.PostForm("base_url"), Model: g.PostForm("model"), DailyTokens: daily, MaxInputTokens: input, MaxOutputTokens: output, TokenField: g.PostForm("token_field"), Protocol: g.PostForm("protocol")}
 	if e1 != nil || e2 != nil || e3 != nil || p.Validate() != nil {
 		g.Status(http.StatusBadRequest)
 		return

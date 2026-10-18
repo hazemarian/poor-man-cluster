@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation/compatible"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation/providers"
 	"net/http"
 	"strings"
 	"time"
@@ -136,7 +136,7 @@ func NewApp(cfg Config) (*App, error) {
 	}
 
 	ctrl.PublicOrigin = cfg.PublicOrigin
-	ctrl.Investigation = investigation.NewManager(compatible.Client{}, cfg.InvestigationKey, ctrl.Redactor)
+	ctrl.Investigation = investigation.NewManager(providers.Router{}, cfg.InvestigationKey, ctrl.Redactor)
 	return &App{Cfg: cfg, Store: st, API: api, Auth: auth, ctrl: ctrl}, nil
 }
 

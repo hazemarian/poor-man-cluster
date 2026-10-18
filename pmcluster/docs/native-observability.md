@@ -129,8 +129,20 @@ alongside existing apps on the three project hosts; AI remains disabled.
 4. Select a service and time range, inspect its evidence, then submit a question.
    Empty or unavailable evidence cannot trigger an investigation.
 
-The provider adapter uses one nonstreaming Chat Completions request with JSON
-object output, validates every returned citation against supplied evidence,
+Pick the wire protocol in the settings form (`protocol` in the policy): 
+`openai` (the default, also for OpenRouter, Groq, Mistral, DeepSeek, Together,
+Ollama and vLLM), `anthropic` (Messages API, base `https://api.anthropic.com`)
+or `gemini` (native `generateContent`, base
+`https://generativelanguage.googleapis.com/v1beta`). Keys travel in the
+provider's own header (`Authorization: Bearer`, `x-api-key`, `x-goog-api-key`),
+never in a URL. The Anthropic and Gemini paths take `max_tokens` /
+`maxOutputTokens` from the policy's output allowance; the "output-limit field"
+selector applies to the OpenAI-compatible protocol only. Anthropic has no JSON
+mode, so the reply is validated strictly (one surrounding code fence is
+tolerated). Azure OpenAI and Bedrock use different authentication and are not
+supported yet.
+
+Every protocol uses one nonstreaming request with JSON output, validates every returned citation against supplied evidence,
 rejects incomplete/invalid output, and neither follows redirects nor retries a
 potentially billable call. Compatible providers must support this contract;
 unsupported providers fail explicitly. The API format follows the
@@ -139,6 +151,33 @@ and [JSON output guidance](https://developers.openai.com/api/docs/guides/structu
 For standalone development, a server-side `INVESTIGATION_API_KEY` environment
 value is supported; production uses the mounted secret. Never put keys in the
 policy form or a committed configuration file.
+
+## What the model is sent
+
+Raw log lines are never sent. Records are folded into message templates:
+numbers, durations, ids, UUIDs, IP addresses and timestamps become placeholders
+(`<NUM>`, `<DUR>`, `<ID>`, `<IP>`, `<TS>`), and records that then match share one
+evidence item with a count, a first/last timestamp and, when values were
+replaced or the record spans several lines, one real example (at most 500
+characters). A line repeated five hundred times costs one item. Measured on 400
+real container records this reduced about 189 KB to about 13 KB.
+
+The list holds at most 40 items, filled by severity: up to 24 error, 10 warning
+and 6 other items, with any unused share passing down. Repeated errors and
+warnings rank by count; for info and debug the unusual lines come first, because
+a heartbeat repeated thousands of times says little. The input also carries
+`stats` (records seen, templates found, and how many were left out), so the
+model knows when the list is a sample. If the per-call input allowance is
+smaller than the list, items are dropped from the end and counted in `stats`.
+
+Container output has no level of its own and stderr is labelled `ERROR`. The
+sender therefore reads an explicit level in the first line (`level=info`,
+a tab-separated `info`, a glog `I1018` prefix, `[INFO]`) and uses it in place of
+the stream label. A level the application itself set is never overridden.
+
+An investigation reads the newest 200 error records and the newest 200 records
+of any level in the window, merged without duplicates, rather than the oldest
+page.
 
 ## Jobs, budgets and failure behavior
 
