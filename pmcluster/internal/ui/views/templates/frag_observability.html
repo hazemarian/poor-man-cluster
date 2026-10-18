@@ -5,7 +5,7 @@
     <p class="sub">{{T "observability.sub"}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability?service={{.Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true" hx-disabled-elt="this">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability?tab={{.Tab}}&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true" hx-disabled-elt="this">
       {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
     </button>
   </div>
@@ -20,37 +20,36 @@
 </div>
 {{end}}
 
-<div class="panel">
-  <div class="panel-body">
-    <form class="filter-bar" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true">
-      <div class="form-grid">
-      <div class="field">
-        <label for="observability-service">{{T "observability.filter_service"}}</label>
-        <select id="observability-service" name="service" class="finput">
-          <option value="">{{T "observability.all_services"}}</option>
-          {{range .Options}}<option value="{{.Value}}"{{if eq $.Service .Value}} selected{{end}}>{{.Label}}</option>{{end}}
-        </select>
-      </div>
-      <div class="field">
-        <label for="observability-range">{{T "observability.filter_range"}}</label>
-        <select id="observability-range" name="range" class="finput">
-          <option value="15m"{{if eq .Range "15m"}} selected{{end}}>{{T "observability.range_15m"}}</option><option value="1h"{{if eq .Range "1h"}} selected{{end}}>{{T "observability.range_1h"}}</option><option value="6h"{{if eq .Range "6h"}} selected{{end}}>{{T "observability.range_6h"}}</option><option value="24h"{{if eq .Range "24h"}} selected{{end}}>{{T "observability.range_24h"}}</option>
-        </select>
-      </div>
-      </div>
-      <div class="form-actions">
-        <button type="submit" class="btn btn-primary">{{icon "refresh"}}<span>{{T "observability.apply_filters"}}</span></button>
-      </div>
-    </form>
-  </div>
+<div class="obs-bar">
+  <nav class="seg obs-tabs" aria-label="{{T "obs.tabs_label"}}">
+    <a href="/web/observability?tab=overview&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "overview"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_overview"}}</a>
+    <a href="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "logs"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_logs"}}</a>
+    <a href="/web/observability?tab=metrics&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=metrics&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "metrics"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_metrics"}}</a>
+  </nav>
+  {{if ne .Tab "logs"}}
+  <form class="obs-filters" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, change from:select">
+    <input type="hidden" name="tab" value="{{.Tab}}">
+    <div class="field">
+      <label for="observability-range">{{T "observability.filter_range"}}</label>
+      <select id="observability-range" name="range" class="finput">
+        <option value="15m"{{if eq .Range "15m"}} selected{{end}}>{{T "observability.range_15m"}}</option><option value="1h"{{if eq .Range "1h"}} selected{{end}}>{{T "observability.range_1h"}}</option><option value="6h"{{if eq .Range "6h"}} selected{{end}}>{{T "observability.range_6h"}}</option><option value="24h"{{if eq .Range "24h"}} selected{{end}}>{{T "observability.range_24h"}}</option>
+      </select>
+    </div>
+    <noscript><button type="submit" class="btn btn-primary">{{T "observability.apply_filters"}}</button></noscript>
+  </form>
+  {{end}}
 </div>
 
-{{template "observabilitysummary" .}}
-{{template "observabilityevidence" .}}
+{{if eq .Tab "logs"}}{{template "observabilitylogs" .}}
+{{else if eq .Tab "metrics"}}{{template "observabilitymetrics" .}}
+{{else}}{{template "observabilityoverview" .}}{{end}}
+
 {{template "investigationask" .}}
 {{end}}
 
-{{define "observabilitysummary"}}
+{{define "obschart"}}<svg class="obs-chart" viewBox="0 0 240 56" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path class="obs-area" d="{{.Area}}"/><path class="obs-line" d="{{.Path}}"/></svg>{{end}}
+
+{{define "observabilityoverview"}}
 <div id="observability-summary">
   <div class="stats">
     <div class="stat{{if not .Health.NodesKnown}} is-unknown{{end}}">
@@ -85,61 +84,206 @@
     </div>
   </div>
 
-  <div class="panel">
+  <section class="panel">
     <div class="panel-head">
       <h2>{{T "observability.nodes_title"}}</h2>
       <div class="ph-actions">
-        <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability/summary" hx-target="#observability-summary" hx-swap="outerHTML" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+        <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability/summary?range={{.Range}}" hx-target="#observability-summary" hx-swap="outerHTML" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
       </div>
     </div>
     <div class="panel-body">
-      {{if not .Health.NodesKnown}}
+      {{if and (not .Health.NodesKnown) (not .NodeCards)}}
       <div class="empty"><h3>{{T "observability.nodes_unknown_title"}}</h3><p>{{T "observability.nodes_unknown_body"}}</p></div>
-      {{else if not .Health.Nodes}}
+      {{else if not .NodeCards}}
       <div class="empty"><h3>{{T "observability.nodes_empty_title"}}</h3><p>{{T "observability.nodes_empty_body"}}</p></div>
       {{else}}
-      <div class="table-wrap only-md">
-        <table class="table">
-          <thead><tr><th>{{T "common.node"}}</th><th>{{T "common.role"}}</th><th>{{T "common.status"}}</th><th>{{T "common.availability"}}</th></tr></thead>
-          <tbody>{{range .Health.Nodes}}<tr><td><span class="mono iso" dir="ltr">{{.Hostname}}</span>{{if .Leader}} <span class="pill accent">{{T "st.leader"}}</span>{{end}}</td><td>{{.Role}}</td><td>{{if eq .Status "ready"}}<span class="pill good"><i class="dot"></i>{{T "st.ready"}}</span>{{else if eq .Status "down"}}<span class="pill bad"><i class="dot"></i>{{T "st.down"}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{if .Status}}{{.Status}}{{else}}{{T "common.unknown"}}{{end}}</span>{{end}}</td><td>{{if .Availability}}{{.Availability}}{{else}}{{T "common.unknown"}}{{end}}</td></tr>{{end}}</tbody>
-        </table>
+      {{if .Metrics.Unavailable}}<p class="sub">{{T "obs.metrics_unavailable"}}</p>{{end}}
+      <div class="obs-nodes">
+        {{range .NodeCards}}{{template "obsnodecard" .}}{{end}}
       </div>
-      <div class="only-sm">{{range .Health.Nodes}}<div class="kv"><div class="kv-row"><span class="k">{{T "common.node"}}</span><span class="v mono iso" dir="ltr">{{.Hostname}}</span></div><div class="kv-row"><span class="k">{{T "common.status"}}</span><span class="v">{{.Status}}</span></div><div class="kv-row"><span class="k">{{T "common.availability"}}</span><span class="v">{{.Availability}}</span></div></div>{{end}}</div>
+      <p class="sub obs-note">{{T "obs.gap_note"}}</p>
       {{end}}
     </div>
-  </div>
+  </section>
 
-  <div class="panel">
-    <div class="panel-head"><h2>{{T "observability.services_title"}}</h2><p class="sub">{{T "observability.services_sub"}}</p></div>
-    <div class="panel-body">
+  <section class="panel">
+    <div class="panel-head">
+      <div><h2>{{T "observability.services_title"}}</h2><p class="sub">{{T "observability.services_sub"}}</p></div>
+      <div class="ph-actions">
+        <form class="obs-search" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, keyup changed delay:400ms from:#obs-q">
+          <input type="hidden" name="tab" value="overview"><input type="hidden" name="range" value="{{.Range}}">
+          <label class="sr-only" for="obs-q">{{T "obs.search_services"}}</label>
+          <input id="obs-q" class="finput" type="search" name="q" value="{{.Q}}" maxlength="100" placeholder="{{T "obs.search_services"}}" autocomplete="off">
+        </form>
+      </div>
+    </div>
+    <div class="panel-body tight">
       {{if not .Health.ServicesKnown}}<div class="empty"><h3>{{T "observability.services_unknown_title"}}</h3><p>{{T "observability.services_unknown_body"}}</p></div>
       {{else if not .Health.Services}}<div class="empty"><h3>{{T "observability.services_empty_title"}}</h3><p>{{T "observability.services_empty_body"}}</p></div>
+      {{else if not .Stacks}}<div class="empty"><h3>{{T "obs.no_match"}}</h3></div>
       {{else}}
-      <div class="table-wrap only-md"><table class="table"><thead><tr><th>{{T "services.col_service"}}</th><th class="num">{{T "services.col_replicas"}}</th><th>{{T "observability.service_state"}}</th><th>{{T "observability.service_deficit"}}</th><th><span class="sr-only">{{T "common.actions"}}</span></th></tr></thead><tbody>{{range .Health.Services}}<tr><td><span class="mono iso" dir="ltr">{{.Path}}</span>{{if .Platform}} <span class="pill plain">{{T "nav.platform"}}</span>{{end}}</td><td class="num iso" dir="ltr">{{N .Replicas}} / {{if .DesiredKnown}}{{N .Desired}}{{else}}?{{end}}</td><td>{{if .Standalone}}<span class="pill plain">{{T "common.unknown"}}</span>{{else if .Job}}<span class="pill plain">{{T "observability.job_unknown"}}</span>{{else if eq .Status "inactive"}}<span class="pill plain">{{T "st.inactive"}}</span>{{else if .Completed}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>{{else if .Ready}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{else}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>{{end}}</td><td>{{if .DeficitKnown}}<span class="pill {{if gt .Deficit 0}}bad{{else}}plain{{end}}">{{N .Deficit}}</span>{{else}}{{T "common.unknown"}}{{end}}</td><td><a class="btn btn-ghost btn-sm" href="/web/observability?service={{.Path}}&amp;range={{$.Range}}" hx-get="/web/observability?service={{.Path}}&amp;range={{$.Range}}" hx-target="#view" hx-push-url="true">{{icon "overview"}}<span>{{T "services.action_investigate"}}</span></a></td></tr>{{end}}</tbody></table></div>
-      <div class="only-sm">{{range .Health.Services}}<div class="kv"><div class="kv-row"><span class="k">{{T "services.col_service"}}</span><span class="v mono iso" dir="ltr">{{.Path}}</span></div><div class="kv-row"><span class="k">{{T "services.col_replicas"}}</span><span class="v num iso" dir="ltr">{{N .Replicas}} / {{if .DesiredKnown}}{{N .Desired}}{{else}}?{{end}}</span></div><div class="kv-row"><span class="k">{{T "observability.service_deficit"}}</span><span class="v">{{if .DeficitKnown}}{{N .Deficit}}{{else}}{{T "common.unknown"}}{{end}}</span></div><div class="action-bar"><a class="btn btn-ghost" href="/web/observability?service={{.Path}}&amp;range={{$.Range}}" hx-get="/web/observability?service={{.Path}}&amp;range={{$.Range}}" hx-target="#view" hx-push-url="true">{{icon "overview"}}<span>{{T "services.action_investigate"}}</span></a></div></div>{{end}}</div>
+      <div class="obs-stacks">
+        {{range .Stacks}}
+        <details class="obs-stack"{{if .Unhealthy}} open{{end}}>
+          <summary>
+            <span class="obs-stack-name mono iso" dir="ltr">{{if .Name}}{{.Name}}{{else}}—{{end}}</span>
+            <span class="obs-stack-meta">
+              <span class="muted">{{N .Total}} {{if eq .Total 1}}{{T "obs.service_one"}}{{else}}{{T "obs.services_count"}}{{end}}</span>
+              {{if .Active}}{{if .Unhealthy}}<span class="pill bad"><i class="dot"></i>{{N .Ready}} / {{N .Active}} {{T "st.running"}}</span>{{else}}<span class="pill good"><i class="dot"></i>{{N .Ready}} / {{N .Active}} {{T "st.running"}}</span>{{end}}{{end}}
+            </span>
+          </summary>
+          <ul class="obs-svc-list">
+            {{range .Services}}
+            <li class="obs-svc">
+              <span class="obs-svc-name mono iso" dir="ltr">{{.Service}}{{if .Platform}} <span class="pill plain">{{T "nav.platform"}}</span>{{end}}</span>
+              <span class="obs-svc-rep num iso" dir="ltr">{{N .Replicas}} / {{if .DesiredKnown}}{{N .Desired}}{{else}}?{{end}}</span>
+              <span class="obs-svc-state">{{if .Standalone}}<span class="pill plain">{{T "common.unknown"}}</span>{{else if .Job}}<span class="pill plain">{{T "observability.job_unknown"}}</span>{{else if eq .Status "inactive"}}<span class="pill plain">{{T "st.inactive"}}</span>{{else if .Completed}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>{{else if .Ready}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{else}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>{{end}}</span>
+              <span class="obs-svc-act"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=logs&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-get="/web/observability?tab=logs&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-target="#view" hx-push-url="true">{{icon "overview"}}<span>{{T "obs.view_logs"}}</span></a></span>
+            </li>
+            {{end}}
+          </ul>
+        </details>
+        {{end}}
+      </div>
+      {{if gt .StackPage.Pages 1}}
+      <div class="panel-foot">
+        <span class="muted">{{T "obs.page"}} {{N .StackPage.Page}} / {{N .StackPage.Pages}}</span>
+        <span class="spacer"></span>
+        {{if .StackPage.HasPrev}}<a class="btn btn-sm" href="/web/observability?tab=overview&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Prev}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Prev}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.prev"}}</a>{{end}}
+        {{if .StackPage.HasNext}}<a class="btn btn-sm" href="/web/observability?tab=overview&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Next}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Next}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.next"}}</a>{{end}}
+      </div>
+      {{end}}
       {{end}}
     </div>
-  </div>
+  </section>
 </div>
 {{end}}
 
-{{define "observabilityevidence"}}
-<div class="panel" id="observability-evidence">
-  <div class="panel-head"><div><h2>{{T "observability.evidence_title"}}</h2><p class="sub">{{T "observability.evidence_sub"}}</p></div><div class="ph-actions"><div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}<div>{{.Evidence.WindowStart}}</div><div>{{.Evidence.WindowEnd}}</div>{{else}}{{T "common.unknown"}}{{end}}</div></div></div>
+{{define "obsnodecard"}}
+<article class="obs-node">
+  <header>
+    <h3 class="mono iso" dir="ltr">{{.Hostname}}</h3>
+    <span class="obs-node-tags">
+      {{if .Leader}}<span class="pill accent">{{T "st.leader"}}</span>{{end}}
+      {{if .Role}}<span class="pill plain">{{.Role}}</span>{{end}}
+      {{if .Inventory}}{{if eq .Status "ready"}}<span class="pill good"><i class="dot"></i>{{T "st.ready"}}</span>{{else if eq .Status "down"}}<span class="pill bad"><i class="dot"></i>{{T "st.down"}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{if .Status}}{{.Status}}{{else}}{{T "common.unknown"}}{{end}}</span>{{end}}{{end}}
+    </span>
+  </header>
+  {{if .HasMetrics}}
+  <dl class="obs-series">
+    <div><dt>{{T "obs.cpu"}}</dt><dd>{{if .CPU.Known}}<span class="obs-val iso" dir="ltr">{{.CPU.LastText}}</span><span class="obs-peak muted">{{T "obs.peak"}} <bdi class="iso" dir="ltr">{{.CPU.PeakText}}</bdi></span>{{else}}<span class="muted">{{T "obs.no_data"}}</span>{{end}}</dd>{{if .CPU.Known}}<div class="obs-chart-box" dir="ltr">{{template "obschart" .CPU}}</div>{{end}}</div>
+    <div><dt>{{T "obs.memory"}}</dt><dd>{{if .Mem.Known}}<span class="obs-val iso" dir="ltr">{{.Mem.LastText}}</span><span class="obs-peak muted">{{T "obs.peak"}} <bdi class="iso" dir="ltr">{{.Mem.PeakText}}</bdi></span>{{else}}<span class="muted">{{T "obs.no_data"}}</span>{{end}}</dd>{{if .Mem.Known}}<div class="obs-chart-box" dir="ltr">{{template "obschart" .Mem}}</div>{{end}}</div>
+    <div><dt>{{T "obs.load"}}</dt><dd>{{if .Load.Known}}<span class="obs-val iso" dir="ltr">{{.Load.LastText}}</span><span class="obs-peak muted">{{T "obs.peak"}} <bdi class="iso" dir="ltr">{{.Load.PeakText}}</bdi></span>{{else}}<span class="muted">{{T "obs.no_data"}}</span>{{end}}</dd>{{if .Load.Known}}<div class="obs-chart-box" dir="ltr">{{template "obschart" .Load}}</div>{{end}}</div>
+  </dl>
+  {{else}}
+  <p class="sub">{{T "obs.no_node_metrics"}}</p>
+  {{end}}
+</article>
+{{end}}
+
+{{define "observabilitylogs"}}
+<section class="panel" id="obs-logs">
+  <div class="panel-head">
+    <div><h2>{{T "obs.logs_title"}}</h2><p class="sub">{{T "obs.logs_sub"}}</p></div>
+    <div class="ph-actions"><div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}{{.Evidence.WindowStart}} → {{.Evidence.WindowEnd}}{{end}}</div></div>
+  </div>
   <div class="panel-body">
-    <form class="filter-bar" method="get" action="/web/observability/evidence" hx-get="/web/observability/evidence" hx-target="#observability-evidence" hx-swap="outerHTML">
-      <input type="hidden" name="service" value="{{.Service}}">
-      <div class="field"><label for="observability-evidence-range">{{T "observability.filter_range"}}</label><select id="observability-evidence-range" name="range" class="finput"><option value="15m"{{if eq .Range "15m"}} selected{{end}}>{{T "observability.range_15m"}}</option><option value="1h"{{if eq .Range "1h"}} selected{{end}}>{{T "observability.range_1h"}}</option><option value="6h"{{if eq .Range "6h"}} selected{{end}}>{{T "observability.range_6h"}}</option><option value="24h"{{if eq .Range "24h"}} selected{{end}}>{{T "observability.range_24h"}}</option></select></div>
-      <div class="form-actions"><button type="submit" class="btn btn-primary">{{icon "refresh"}}<span>{{T "observability.load_evidence"}}</span></button></div>
+    <form class="obs-logform" method="get" action="/web/observability" hx-get="/web/observability/evidence" hx-target="#obs-logs" hx-swap="outerHTML" hx-trigger="submit, change from:select, keyup changed delay:500ms from:#obs-search">
+      <input type="hidden" name="tab" value="logs">
+      <div class="field obs-svc-field">
+        <label for="obs-log-service">{{T "observability.filter_service"}}</label>
+        <select id="obs-log-service" name="service" class="finput">
+          <option value="">{{T "observability.all_services"}}</option>
+          {{range .Options}}<option value="{{.Value}}"{{if eq $.Service .Value}} selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
+      </div>
+      <div class="field">
+        <label for="obs-log-range">{{T "observability.filter_range"}}</label>
+        <select id="obs-log-range" name="range" class="finput">
+          <option value="15m"{{if eq .Range "15m"}} selected{{end}}>{{T "observability.range_15m"}}</option><option value="1h"{{if eq .Range "1h"}} selected{{end}}>{{T "observability.range_1h"}}</option><option value="6h"{{if eq .Range "6h"}} selected{{end}}>{{T "observability.range_6h"}}</option><option value="24h"{{if eq .Range "24h"}} selected{{end}}>{{T "observability.range_24h"}}</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="obs-log-severity">{{T "obs.filter_level"}}</label>
+        <select id="obs-log-severity" name="severity" class="finput">
+          <option value="">{{T "obs.level_all"}}</option>
+          <option value="error"{{if eq .Severity "error"}} selected{{end}}>{{T "obs.level_error"}}</option>
+          <option value="warn"{{if eq .Severity "warn"}} selected{{end}}>{{T "obs.level_warn"}}</option>
+          <option value="info"{{if eq .Severity "info"}} selected{{end}}>{{T "obs.level_info"}}</option>
+          <option value="debug"{{if eq .Severity "debug"}} selected{{end}}>{{T "obs.level_debug"}}</option>
+        </select>
+      </div>
+      <div class="field obs-grow">
+        <label for="obs-search">{{T "obs.filter_search"}}</label>
+        <input id="obs-search" class="finput" type="search" name="search" value="{{.Search}}" maxlength="100" placeholder="{{T "obs.search_ph"}}" autocomplete="off">
+      </div>
+      <noscript><button type="submit" class="btn btn-primary">{{T "observability.load_evidence"}}</button></noscript>
     </form>
+
     {{if .Evidence.Unavailable}}
     <div class="empty"><h3>{{if eq .Evidence.UnavailableWhy "scope"}}{{T "observability.scope_unavailable"}}{{else if eq .Evidence.UnavailableWhy "service"}}{{T "observability.invalid_service"}}{{else if eq .Evidence.UnavailableWhy "range"}}{{T "observability.invalid_range"}}{{else if eq .Evidence.UnavailableWhy "api"}}{{T "err.api_not_configured"}}{{else}}{{T "observability.telemetry_unavailable"}}{{end}}</h3><p>{{T "observability.evidence_unavailable_body"}}</p></div>
     {{else if .Evidence.Empty}}
     <div class="empty"><h3>{{T "observability.evidence_empty_title"}}</h3><p>{{T "observability.evidence_empty_body"}}</p></div>
     {{else if .Evidence.Known}}
-    <p class="sub">{{N .Evidence.RowsSeen}} {{T "observability.rows_seen"}}{{if .Evidence.Truncated}} · <span class="pill warn">{{T "observability.truncated"}}</span>{{end}}</p>
-    <div class="table-wrap"><table class="table"><thead><tr><th>{{T "observability.col_time"}}</th><th>{{T "observability.col_severity"}}</th><th>{{T "observability.col_service"}}</th><th>{{T "observability.col_message"}}</th></tr></thead><tbody>{{range .Evidence.Rows}}<tr><td class="mono iso" dir="ltr">{{.Timestamp}}</td><td>{{.Severity}}</td><td class="mono iso" dir="ltr">{{.Service}}</td><td><pre class="inline-pre">{{.Body}}</pre></td></tr>{{end}}</tbody></table></div>
+    <p class="sub obs-note">{{T "obs.rows"}} <span class="iso" dir="ltr">{{N .Evidence.FirstRow}}–{{N .Evidence.LastRow}}</span> · {{T "obs.level_note"}}</p>
+    <div class="obs-logs" role="table" aria-label="{{T "obs.logs_title"}}" tabindex="0">
+      <div class="obs-log-head" role="row"><span role="columnheader">{{T "observability.col_time"}}</span><span role="columnheader">{{T "observability.col_severity"}}</span><span role="columnheader">{{T "observability.col_service"}}</span><span role="columnheader">{{T "observability.col_message"}}</span></div>
+      {{range .Evidence.Rows}}
+      <div class="obs-log" role="row">
+        <span class="obs-log-time mono iso" dir="ltr" title="{{.Timestamp}}" role="cell">{{.TimeShort}}</span>
+        <span class="obs-log-sev" role="cell"><span class="pill {{.SevClass}}">{{if .Severity}}{{.Severity}}{{else}}—{{end}}</span></span>
+        <span class="obs-log-svc mono iso" dir="ltr" role="cell" title="{{.Service}}">{{.Service}}</span>
+        <span class="obs-log-msg" role="cell">{{if .Multiline}}<details><summary><span class="mono">{{.Preview}}</span></summary><pre class="inline-pre">{{.Body}}</pre></details>{{else}}<span class="mono">{{.Body}}</span>{{end}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{if or .Evidence.HasPrev .Evidence.HasNext}}
+    <div class="obs-pager">
+      {{if .Evidence.HasPrev}}<a class="btn btn-sm" href="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.PrevOffset}}" hx-get="/web/observability/evidence?service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.PrevOffset}}" hx-target="#obs-logs" hx-swap="outerHTML">{{T "obs.newer"}}</a>{{end}}
+      {{if .Evidence.HasNext}}<a class="btn btn-sm" href="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.NextOffset}}" hx-get="/web/observability/evidence?service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.NextOffset}}" hx-target="#obs-logs" hx-swap="outerHTML">{{T "obs.older"}}</a>{{end}}
+    </div>
+    {{end}}
     {{end}}
   </div>
-</div>
+</section>
+{{end}}
+
+{{define "observabilitymetrics"}}
+<section class="panel">
+  <div class="panel-head"><div><h2>{{T "obs.nodes_resources"}}</h2><p class="sub">{{T "obs.nodes_resources_sub"}}</p></div></div>
+  <div class="panel-body">
+    {{if .Metrics.Unavailable}}
+    <div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "obs.metrics_unavailable"}}</p></div>
+    {{else if not .NodeCards}}
+    <div class="empty"><h3>{{T "observability.nodes_empty_title"}}</h3><p>{{T "observability.nodes_empty_body"}}</p></div>
+    {{else}}
+    <div class="obs-nodes obs-nodes-wide">
+      {{range .NodeCards}}{{template "obsnodecard" .}}{{end}}
+    </div>
+    <p class="sub obs-note">{{T "obs.gap_note"}}</p>
+    {{end}}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><div><h2>{{T "obs.containers_title"}}</h2><p class="sub">{{T "obs.containers_sub"}}</p></div></div>
+  <div class="panel-body tight">
+    {{if not .Metrics.ServicesOK}}
+    <div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "obs.metrics_unavailable"}}</p></div>
+    {{else if not .Metrics.Services}}
+    <div class="empty"><h3>{{T "obs.no_container_metrics"}}</h3></div>
+    {{else}}
+    <div class="obs-res" role="table" aria-label="{{T "obs.containers_title"}}">
+      <div class="obs-res-head" role="row"><span role="columnheader">{{T "observability.col_service"}}</span><span role="columnheader">{{T "obs.col_cpu"}}</span><span role="columnheader">{{T "obs.col_mem"}}</span></div>
+      {{range .Metrics.Services}}
+      <div class="obs-res-row" role="row">
+        <span class="mono iso obs-res-name" dir="ltr" role="cell">{{.Label}}</span>
+        <span class="obs-res-cell" role="cell">{{if .HasCPU}}<span class="obs-bar-track"><i style="width:{{.CPUPct}}%"></i></span><span class="muted"><bdi class="iso" dir="ltr">{{.CPUAvgText}}</bdi> · {{T "obs.peak"}} <bdi class="iso" dir="ltr">{{.CPUMaxText}}</bdi></span>{{else}}<span class="muted">{{T "obs.no_data"}}</span>{{end}}</span>
+        <span class="obs-res-cell" role="cell">{{if .HasMem}}<span class="obs-bar-track"><i style="width:{{.MemPct}}%"></i></span><span class="muted"><bdi class="iso" dir="ltr">{{.MemAvgText}}</bdi> · {{T "obs.peak"}} <bdi class="iso" dir="ltr">{{.MemMaxText}}</bdi></span>{{else}}<span class="muted">{{T "obs.no_data"}}</span>{{end}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+</section>
 {{end}}

@@ -23,9 +23,9 @@ concurrency and deadline. Logs are redacted and HTML-escaped before rendering.
 
 Ready/desired replica counts describe active regular services. One-shot outcomes
 stay unknown until actual task outcome evidence is available. A missing replica
-is not labelled as a pending task. Host resource charts, historical OOM counts,
-trace analysis and persistent novelty baselines are not implemented in this
-version. The page does not invent those values.
+is not labelled as a pending task. Historical OOM counts, trace analysis and
+persistent novelty baselines are not implemented in this version. The page does
+not invent those values.
 
 Viewer sessions may read the page; operators may submit/cancel their own model
 jobs; administrators configure the provider. Jobs bind to both the console user
@@ -39,6 +39,46 @@ per-user SSO authorization. No tenant isolation or per-person billing is implied
 Investigation mutations require same-origin metadata even without a console
 cookie. `PMCLUSTER_PUBLIC_ORIGIN` is set by the edge stack; standalone reverse
 proxy deployments must configure it to their actual public HTTPS origin.
+
+## Console layout
+
+The page has three tabs; each loads only its own telemetry, and every tab runs
+the same daemon authorization probe and inventory resolution before any
+Parseable call.
+
+- **Overview.** Daemon health tiles, one card per node with CPU, memory and
+  one-minute load sparklines, and services grouped by stack. Unhealthy stacks
+  sort first and open by default; stacks are paginated and searchable.
+- **Logs.** Newest first, 50 rows per page, with service, window, level and text
+  filters. Paging uses a bounded offset (at most 2000 rows deep); narrow the
+  window or add a filter to reach older records. Container output has no level
+  of its own: the collector maps stderr to `ERROR` and stdout to `INFO`, so the
+  level filter reflects the stream unless the application sets a level through
+  OTLP. Search matches the stored text, but rows are redacted before they are
+  shown, so a search can reveal that a redacted value exists. Anyone who can use
+  the page already has read access to the telemetry backend.
+- **Metrics.** Per-node CPU, memory and load charts and per-container average
+  and peak CPU and memory (the 15 highest peaks).
+
+Charts are server-rendered SVG. A gap in a series means nothing was collected
+for that interval; it is never drawn as zero. Node CPU and memory percentages
+come from the collector's `system.cpu.utilization` and
+`system.memory.utilization` series, which the collector config enables because
+Parseable does not map the integer usage series. Nodes without collector data
+show "No metrics reported" rather than empty charts. Every query is a fixed
+statement built by the adapter; the browser supplies only allowlisted filters
+(severity, tab), a length-capped search string and a bounded offset.
+
+## OpenTelemetry ingestion
+
+The collector accepts OTLP on gRPC 4317 and HTTP 4318 and writes logs, metrics
+and traces to the `pmcluster-logs`, `pmcluster-metrics` and `pmcluster-traces`
+Parseable streams. Applications on the cluster's monitoring network send to
+`http://otel-collector:4318` (set `OTEL_EXPORTER_OTLP_ENDPOINT`). Docker
+container output is collected automatically from the json-file logs without any
+instrumentation. Set `severityNumber` on OTLP log records to get a level;
+Parseable shows `UNSPECIFIED` when only `severityText` is sent. The console does
+not yet render traces; query the `pmcluster-traces` stream in Parseable.
 
 ## Enabling a compatible provider
 

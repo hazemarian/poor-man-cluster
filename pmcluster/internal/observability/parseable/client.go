@@ -28,6 +28,7 @@ var streamName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 type Config struct {
 	BaseURL       string
 	Stream        string
+	MetricsStream string
 	Username      string
 	Password      string
 	AuthHeader    string
@@ -45,6 +46,7 @@ type Config struct {
 type Client struct {
 	baseURL    string
 	stream     string
+	metrics    string
 	authHeader string
 	http       *http.Client
 	maxRows    int
@@ -73,6 +75,13 @@ func New(cfg Config) (*Client, error) {
 	}
 	if !streamName.MatchString(stream) {
 		return nil, errors.New("parseable stream name is invalid")
+	}
+	metrics := strings.TrimSpace(cfg.MetricsStream)
+	if metrics == "" {
+		metrics = "pmcluster-metrics"
+	}
+	if !streamName.MatchString(metrics) {
+		return nil, errors.New("parseable metrics stream name is invalid")
 	}
 	auth := strings.TrimSpace(cfg.AuthHeader)
 	if auth == "" && cfg.Username != "" && cfg.Password != "" {
@@ -112,7 +121,7 @@ func New(cfg Config) (*Client, error) {
 		now = time.Now
 	}
 	return &Client{
-		baseURL: base, stream: stream, authHeader: auth, http: hc,
+		baseURL: base, stream: stream, metrics: metrics, authHeader: auth, http: hc,
 		maxRows: maxRows, maxBytes: maxBytes, timeout: timeout,
 		now: now, sem: make(chan struct{}, concurrency), redactor: cfg.Redactor,
 	}, nil
@@ -159,48 +168,9 @@ func (c *Client) Query(ctx context.Context, q observability.Query) (observabilit
 	if err != nil {
 		return observability.Result{}, err
 	}
-	qctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-	if err := c.acquire(qctx); err != nil {
-		return observability.Result{}, fmt.Errorf("%w: query capacity unavailable", observability.ErrUnavailable)
-	}
-	defer c.release()
-	payload := map[string]string{
-		"query":     sql,
-		"startTime": q.Window.Start.UTC().Format(time.RFC3339Nano),
-		"endTime":   q.Window.End.UTC().Format(time.RFC3339Nano),
-	}
-	body, err := json.Marshal(payload)
+	rows, hasMore, err := c.execute(ctx, sql, q.Window)
 	if err != nil {
-		return observability.Result{}, fmt.Errorf("%w: encode request", observability.ErrUnavailable)
-	}
-	req, err := http.NewRequestWithContext(qctx, http.MethodPost, c.baseURL+"/api/v1/query", bytes.NewReader(body))
-	if err != nil {
-		return observability.Result{}, fmt.Errorf("%w: build request", observability.ErrUnavailable)
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	if c.authHeader != "" {
-		req.Header.Set("Authorization", c.authHeader)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return observability.Result{}, fmt.Errorf("%w: query request failed", observability.ErrUnavailable)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return observability.Result{}, fmt.Errorf("%w: query returned HTTP %d", observability.ErrUnavailable, resp.StatusCode)
-	}
-	data, tooLarge, err := readBounded(resp.Body, c.maxBytes)
-	if err != nil {
-		return observability.Result{}, fmt.Errorf("%w: read response", observability.ErrUnavailable)
-	}
-	if tooLarge {
-		return observability.Result{}, fmt.Errorf("%w: response exceeded limit", observability.ErrUnavailable)
-	}
-	rows, hasMore, err := decodeRows(data)
-	if err != nil {
-		return observability.Result{}, fmt.Errorf("%w: malformed response", observability.ErrUnavailable)
+		return observability.Result{}, err
 	}
 	rows = c.redactor.Rows(rows)
 	truncated := hasMore || len(rows) >= q.Limit
@@ -227,6 +197,56 @@ func (c *Client) Query(ctx context.Context, q observability.Query) (observabilit
 		TruncationReasons: reasons,
 		Coverage:          "bounded query window",
 	}, nil
+}
+
+// execute sends one adapter-built SELECT and decodes the bounded response.
+// Every public query path goes through here so the timeout, capacity gate,
+// response cap and error redaction are applied uniformly.
+func (c *Client) execute(ctx context.Context, sql string, window observability.Window) ([]observability.Row, bool, error) {
+	qctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	if err := c.acquire(qctx); err != nil {
+		return nil, false, fmt.Errorf("%w: query capacity unavailable", observability.ErrUnavailable)
+	}
+	defer c.release()
+	payload := map[string]string{
+		"query":     sql,
+		"startTime": window.Start.UTC().Format(time.RFC3339Nano),
+		"endTime":   window.End.UTC().Format(time.RFC3339Nano),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: encode request", observability.ErrUnavailable)
+	}
+	req, err := http.NewRequestWithContext(qctx, http.MethodPost, c.baseURL+"/api/v1/query", bytes.NewReader(body))
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: build request", observability.ErrUnavailable)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	if c.authHeader != "" {
+		req.Header.Set("Authorization", c.authHeader)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: query request failed", observability.ErrUnavailable)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, false, fmt.Errorf("%w: query returned HTTP %d", observability.ErrUnavailable, resp.StatusCode)
+	}
+	data, tooLarge, err := readBounded(resp.Body, c.maxBytes)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: read response", observability.ErrUnavailable)
+	}
+	if tooLarge {
+		return nil, false, fmt.Errorf("%w: response exceeded limit", observability.ErrUnavailable)
+	}
+	rows, hasMore, err := decodeRows(data)
+	if err != nil {
+		return nil, false, fmt.Errorf("%w: malformed response", observability.ErrUnavailable)
+	}
+	return rows, hasMore, nil
 }
 
 func (c *Client) acquire(ctx context.Context) error {

@@ -68,7 +68,7 @@ func TestNativeObservabilityScopeAndRendering(t *testing.T) {
 			defer app.Store.Close()
 			source := &evidenceFixture{}
 			app.ctrl.Telemetry = source
-			req := httptest.NewRequest("GET", "http://x/web/observability?service="+tc.service, nil)
+			req := httptest.NewRequest("GET", "http://x/web/observability?tab=logs&service="+tc.service, nil)
 			w := httptest.NewRecorder()
 			app.Handler().ServeHTTP(w, req)
 			body := w.Body.String()

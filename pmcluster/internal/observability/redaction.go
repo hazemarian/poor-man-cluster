@@ -9,13 +9,16 @@ import (
 )
 
 var (
-	redactJWT      = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`)
-	redactAWS      = regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)
-	redactBearer   = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}`)
-	redactBasic    = regexp.MustCompile(`(?i)\bBasic\s+[A-Za-z0-9+/=]{8,}`)
-	redactAuth     = regexp.MustCompile(`(?i)(\bAuthorization\s*[:=]\s*)(Bearer|Basic)\s+[^\s,;]+`)
-	redactEmail    = regexp.MustCompile(`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`)
-	redactPhone    = regexp.MustCompile(`\+?[0-9][0-9 .()_-]{7,}[0-9]`)
+	redactJWT    = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`)
+	redactAWS    = regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)
+	redactBearer = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}`)
+	redactBasic  = regexp.MustCompile(`(?i)\bBasic\s+[A-Za-z0-9+/=]{8,}`)
+	redactAuth   = regexp.MustCompile(`(?i)(\bAuthorization\s*[:=]\s*)(Bearer|Basic)\s+[^\s,;]+`)
+	redactEmail  = regexp.MustCompile(`\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b`)
+	redactPhone  = regexp.MustCompile(`\+?[0-9][0-9 .()_-]{7,}[0-9]`)
+	// A bare calendar date matches the phone shape but is not sensitive, and
+	// redacting it makes every timestamp in a log line unreadable.
+	isoDate        = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 	redactIP       = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?::[0-9]{1,5})?\b`)
 	redactURLCreds = regexp.MustCompile(`(?i)(://[^/:\s]+):([^@\s]+)@`)
 	redactAssign   = regexp.MustCompile(`(?i)(["']?\b(?:password|passwd|secret|token|api[_-]?key)\b["']?\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)`)
@@ -86,7 +89,12 @@ func (r Redactor) Text(value string) string {
 	})
 	result = redactEmail.ReplaceAllString(result, "<EMAIL>")
 	result = redactIP.ReplaceAllString(result, `<ADDR>`)
-	result = redactPhone.ReplaceAllString(result, `<PHONE>`)
+	result = redactPhone.ReplaceAllStringFunc(result, func(match string) string {
+		if isoDate.MatchString(match) {
+			return match
+		}
+		return "<PHONE>"
+	})
 	return result
 }
 

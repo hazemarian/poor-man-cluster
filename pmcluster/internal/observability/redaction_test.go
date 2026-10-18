@@ -38,3 +38,14 @@ func TestParseableUTCWithoutZoneIsNotPhone(t *testing.T) {
 		t.Fatal("invalid date accepted")
 	}
 }
+
+func TestISODatesInBodiesSurvivePhoneRedaction(t *testing.T) {
+	r := Redactor{}
+	got := r.Text("2026-10-18T22:29:09.745+0300 info call +1 (555) 123-4567 or 555-123-4567")
+	if !strings.Contains(got, "2026-10-18T22:29:09.745") {
+		t.Fatalf("date redacted: %s", got)
+	}
+	if strings.Contains(got, "555") || strings.Count(got, "<PHONE>") != 2 {
+		t.Fatalf("phone numbers must stay redacted: %s", got)
+	}
+}

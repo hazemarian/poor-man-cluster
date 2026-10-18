@@ -61,8 +61,17 @@ receivers:
   hostmetrics:
     collection_interval: 30s
     scrapers:
+      # The double-valued utilization series are enabled because Parseable does
+      # not map the int64 usage/count series (their rows arrive with an empty
+      # value), so per-node percentages could not otherwise be charted.
       cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
       memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
       load:
 
   # receiver_creator instantiates this filelog receiver once for each

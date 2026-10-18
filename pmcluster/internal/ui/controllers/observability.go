@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,16 @@ type observabilityData struct {
 	Range   string
 	Service string
 	Options []observabilityServiceOption
+
+	Tab       string
+	Q         string
+	Severity  string
+	Search    string
+	Offset    int
+	Stacks    []obsStack
+	StackPage obsPager
+	NodeCards []obsNodeCard
+	Metrics   obsMetrics
 
 	ScopeKnown bool
 	ScopeError string
@@ -134,41 +145,58 @@ type observabilityEvidence struct {
 	WindowStart    string
 	WindowEnd      string
 	UnavailableWhy string
+	HasPrev        bool
+	HasNext        bool
+	PrevOffset     int
+	NextOffset     int
+	FirstRow       int
+	LastRow        int
 }
 
 type observabilityEvidenceRow struct {
 	Timestamp string
 	Severity  string
+	SevClass  string
 	Service   string
 	Body      string
+	Preview   string
+	TimeShort string
+	Multiline bool
 }
 
-// Page renders health, filters, and a bounded evidence panel in the app
-// shell. A full page load and an HTMX navigation use the same fragment.
+// Page renders the tabbed observability console. Each tab loads only its own
+// telemetry; the daemon authorization probe and inventory resolution run for
+// every tab before any Parseable call. A full page load and an HTMX navigation
+// use the same fragment.
 func (c Observability) Page(g *gin.Context) {
-	d := c.load(g, true)
+	d := c.load(g, obsTab(g.Query("tab")))
 	c.Views.Fragment(g, "observability", d)
 }
 
-// Summary renders only the daemon-derived health panel for independent HTMX
-// refreshes. It never queries Parseable.
+// Summary re-renders the Overview tab content for independent refreshes.
 func (c Observability) Summary(g *gin.Context) {
-	d := c.load(g, false)
-	c.Views.Fragment(g, "observabilitysummary", d)
+	d := c.load(g, obsTabOverview)
+	c.Views.Fragment(g, "observabilityoverview", d)
 }
 
-// Evidence renders the bounded telemetry fragment. The page first calls
-// /api/me and resolves the selected service against the full daemon inventory;
-// a scoped token or unknown service therefore fails closed before Parseable is
-// contacted.
+// Evidence renders only the logs panel for in-page filtering and paging. It
+// resolves the selected service against the full daemon inventory after the
+// /api/me probe, so a scoped token or unknown service fails closed before
+// Parseable is contacted.
 func (c Observability) Evidence(g *gin.Context) {
-	d := c.load(g, true)
-	c.Views.Fragment(g, "observabilityevidence", d)
+	d := c.load(g, obsTabLogs)
+	c.Views.Fragment(g, "observabilitylogs", d)
 }
 
-func (c Observability) load(g *gin.Context, includeEvidence bool) observabilityData {
+func (c Observability) load(g *gin.Context, tab string) observabilityData {
 	ctx := g.Request.Context()
-	d := observabilityData{Range: observabilityDefaultRange, Service: strings.TrimSpace(g.Query("service"))}
+	d := observabilityData{Range: observabilityDefaultRange, Service: strings.TrimSpace(g.Query("service")), Tab: tab}
+	d.Q = observability.CleanSearch(g.Query("q"))
+	d.Search = observability.CleanSearch(g.Query("search"))
+	if sev := strings.TrimSpace(g.Query("severity")); observability.ValidSeverity(sev) {
+		d.Severity = sev
+	}
+	d.Offset = min(max(atoiDefault(g.Query("offset"), 0), 0), observability.MaxLogOffset)
 	if raw := strings.TrimSpace(g.Query("range")); raw != "" {
 		d.Range = raw
 	}
@@ -342,8 +370,14 @@ func (c Observability) load(g *gin.Context, includeEvidence bool) observabilityD
 		d.Health.TLSExpired = soonest.Before(time.Now())
 	}
 
-	if includeEvidence {
+	switch tab {
+	case obsTabLogs, obsTabInvestigate:
 		c.loadEvidence(g, &d, window, services, servicesErr, redactor)
+	case obsTabMetrics:
+		c.loadMetrics(ctx, &d, window, true)
+	default:
+		d.Stacks, d.StackPage = groupStacks(d.Health.Services, d.Q, atoiDefault(g.Query("page"), 1))
+		c.loadMetrics(ctx, &d, window, false)
 	}
 	if c.Investigation != nil && c.Investigation.Configured() {
 		policyCtx, policyCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -396,8 +430,18 @@ func (c Observability) loadEvidence(g *gin.Context, d *observabilityData, window
 		d.Evidence.UnavailableWhy = "telemetry"
 		return
 	}
-	query := observability.Query{Service: backendService, Window: window, Limit: observabilityRowLimit}
-	result, err := c.Telemetry.Query(g.Request.Context(), query)
+	var (
+		result observability.Result
+		err    error
+	)
+	if logs, ok := c.Telemetry.(observability.LogSource); ok && d.Tab == obsTabLogs {
+		result, err = logs.Logs(g.Request.Context(), observability.LogQuery{
+			Service: backendService, Window: window, Severity: d.Severity, Search: d.Search,
+			Limit: obsLogPageSize, Offset: d.Offset,
+		})
+	} else {
+		result, err = c.Telemetry.Query(g.Request.Context(), observability.Query{Service: backendService, Window: window, Limit: observabilityRowLimit})
+	}
 	if err != nil || result.Status == observability.StatusUnavailable {
 		d.Evidence.Unavailable = true
 		d.Evidence.UnavailableWhy = "telemetry"
@@ -411,6 +455,15 @@ func (c Observability) loadEvidence(g *gin.Context, d *observabilityData, window
 	d.Evidence.ObservedAt = result.ObservedAt.Unix()
 	for _, row := range redactor.Rows(result.Rows) {
 		d.Evidence.Rows = append(d.Evidence.Rows, evidenceRow(row))
+	}
+	d.Evidence.HasNext = result.Truncated
+	d.Evidence.HasPrev = d.Offset > 0
+	d.Evidence.PrevOffset = max(d.Offset-obsLogPageSize, 0)
+	d.Evidence.NextOffset = min(d.Offset+obsLogPageSize, observability.MaxLogOffset)
+	d.Evidence.FirstRow = d.Offset + 1
+	d.Evidence.LastRow = d.Offset + len(d.Evidence.Rows)
+	if d.Offset+obsLogPageSize > observability.MaxLogOffset {
+		d.Evidence.HasNext = false
 	}
 }
 
@@ -497,5 +550,35 @@ func resolveService(value string, services []pmapi.Service) (string, error) {
 
 func evidenceRow(row observability.Row) observabilityEvidenceRow {
 	log := observability.ProjectLog(row)
-	return observabilityEvidenceRow{Timestamp: log.Timestamp, Severity: log.Severity, Service: log.Service, Body: log.Body}
+	return observabilityEvidenceRow{
+		Preview: logPreview(log.Body), TimeShort: shortTime(log.Timestamp),
+		Timestamp: log.Timestamp, Severity: log.Severity, SevClass: severityClass(log.Severity),
+		Service: log.Service, Body: log.Body, Multiline: strings.ContainsAny(strings.TrimRight(log.Body, "\n"), "\n") || len([]rune(log.Body)) > 160,
+	}
+}
+
+func atoiDefault(raw string, def int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+// logPreview is the first line of a message, capped for the collapsed row.
+func logPreview(body string) string {
+	line := strings.TrimSpace(strings.SplitN(strings.TrimLeft(body, "\r\n"), "\n", 2)[0])
+	if r := []rune(line); len(r) > 160 {
+		line = string(r[:160]) + "…"
+	}
+	return line
+}
+
+// shortTime returns HH:MM:SS from a Parseable timestamp, or the input when it
+// has no time part.
+func shortTime(ts string) string {
+	if _, after, ok := strings.Cut(ts, "T"); ok && len(after) >= 8 {
+		return after[:8]
+	}
+	return ts
 }
