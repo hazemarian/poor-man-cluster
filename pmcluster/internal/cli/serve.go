@@ -25,6 +25,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile"
@@ -201,6 +202,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		cfg.ConfigDir(), buildinfo.Version)
 
 	deps := server.Deps{
+		Investigation: &investigation.Local{Store: st},
 		Lookup:        st,
 		Docker:        dc,
 		Store:         st,

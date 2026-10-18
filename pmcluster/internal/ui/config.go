@@ -17,16 +17,18 @@ import (
 
 // Config holds every tunable for the UI service, sourced from the environment.
 type Config struct {
-	ListenAddr      string
-	DataDir         string
-	PMAPIURL        string
-	PMAPIToken      string
-	EnvUser         string
-	EnvPass         string
-	SessionSecret   []byte
-	CookieName      string
-	UpstreamTimeout time.Duration
-	AppVersion      string
+	InvestigationKey string
+	PublicOrigin     string
+	ListenAddr       string
+	DataDir          string
+	PMAPIURL         string
+	PMAPIToken       string
+	EnvUser          string
+	EnvPass          string
+	SessionSecret    []byte
+	CookieName       string
+	UpstreamTimeout  time.Duration
+	AppVersion       string
 	// ClusterDomain (PMCLUSTER_DOMAIN) is the public cluster domain (e.g.
 	// example.com). The console renders external links to OpenObserve
 	// (observ.<domain>) and the Traefik dashboard (traefik.<domain>) from it.
@@ -46,6 +48,18 @@ type Config struct {
 	// so the shell renders a sign-out affordance that clears the oauth2-proxy
 	// session (/oauth2/sign_out) instead of the /web/logout form.
 	SSOEnabled bool
+	// StandaloneObserver selects the ordinary-Docker observer shell. It keeps
+	// the native Observability page as the default route and hides controls
+	// that only make sense for a Swarm control plane.
+	StandaloneObserver bool
+	// ParseableURL/User/Password configure the edge-local, read-only evidence
+	// adapter. Password is populated from the managed Swarm secret by
+	// applyEdgeSecrets; it is intentionally not read from a browser setting.
+	ParseableURL      string
+	ParseableStream   string
+	ParseableUser     string
+	ParseablePassword string
+	ParseableAuth     string
 }
 
 const (
@@ -65,19 +79,26 @@ const (
 // forgeable built-in default.
 func FromEnv() Config {
 	return Config{
-		ListenAddr:      envOr("LISTEN_ADDR", ":8080"),
-		DataDir:         envOr("DATA_DIR", defaultDataDir),
-		PMAPIURL:        envOr("PMCLUSTER_API_URL", ""),
-		PMAPIToken:      envOr("PMCLUSTER_API_TOKEN", ""),
-		EnvUser:         envOr("PMCLUSTER_UI_USER", ""),
-		EnvPass:         envOr("PMCLUSTER_UI_PASS", ""),
-		SessionSecret:   []byte(os.Getenv("PMCLUSTER_UI_SECRET")),
-		CookieName:      envOr("SESSION_COOKIE", defaultCookieName),
-		UpstreamTimeout: envDur("UPSTREAM_TIMEOUT", defaultTimeout),
-		AppVersion:      envOr("APP_VERSION", "dev"),
-		ClusterDomain:   envOr("PMCLUSTER_DOMAIN", ""),
-		LoginDisabled:   envBool("EDGE_LOGIN_DISABLED"),
-		SSOEnabled:      envBool("EDGE_SSO_ENABLED"),
+		InvestigationKey:   os.Getenv("INVESTIGATION_API_KEY"),
+		PublicOrigin:       envOr("PMCLUSTER_PUBLIC_ORIGIN", ""),
+		ListenAddr:         envOr("LISTEN_ADDR", ":8080"),
+		DataDir:            envOr("DATA_DIR", defaultDataDir),
+		PMAPIURL:           envOr("PMCLUSTER_API_URL", ""),
+		PMAPIToken:         envOr("PMCLUSTER_API_TOKEN", ""),
+		EnvUser:            envOr("PMCLUSTER_UI_USER", ""),
+		EnvPass:            envOr("PMCLUSTER_UI_PASS", ""),
+		SessionSecret:      []byte(os.Getenv("PMCLUSTER_UI_SECRET")),
+		CookieName:         envOr("SESSION_COOKIE", defaultCookieName),
+		UpstreamTimeout:    envDur("UPSTREAM_TIMEOUT", defaultTimeout),
+		AppVersion:         envOr("APP_VERSION", "dev"),
+		ClusterDomain:      envOr("PMCLUSTER_DOMAIN", ""),
+		LoginDisabled:      envBool("EDGE_LOGIN_DISABLED"),
+		SSOEnabled:         envBool("EDGE_SSO_ENABLED"),
+		StandaloneObserver: envBool("PMCLUSTER_OBSERVER_MODE"),
+		ParseableURL:       envOr("OBSERVABILITY_PARSEABLE_URL", ""),
+		ParseableStream:    envOr("OBSERVABILITY_PARSEABLE_STREAM", "pmcluster-logs"),
+		ParseableUser:      envOr("OBSERVABILITY_PARSEABLE_USER", ""),
+		ParseableAuth:      envOr("OBSERVABILITY_PARSEABLE_AUTH", ""),
 	}
 }
 

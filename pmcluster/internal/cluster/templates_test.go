@@ -620,9 +620,13 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 
 	// memory_limiter MUST lead every pipeline: it is what stops a failing
 	// exporter from growing the collector until the host loses its Swarm
-	// heartbeat.
-	if !strings.Contains(body, "[memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]") {
-		t.Error("logs pipeline must lead with memory_limiter, then resourcedetection + resource + filter/skip_filelog before batch")
+	// heartbeat. Keep the stdout and SDK pipelines separate so the stdout-only
+	// filter cannot drop OTLP records.
+	if !strings.Contains(body, "[memory_limiter, resourcedetection, filter/skip_filelog, batch]") {
+		t.Error("logs/filelog pipeline must lead with memory_limiter and filter skip_filelog before batch")
+	}
+	if !strings.Contains(body, "[memory_limiter, resourcedetection, batch]") {
+		t.Error("logs/otlp pipeline must preserve SDK records with memory_limiter and batch")
 	}
 
 	if !strings.Contains(body, "[memory_limiter, resourcedetection, resource, transform/metrics, batch]") {
@@ -909,8 +913,11 @@ func TestRenderOTelCollectorConfigIsValidYAML(t *testing.T) {
 	}
 }
 
-// TestRenderOTelCollectorConfig_FilelogReceiver verifies that the static
-// filelog receiver is configured with the correct glob patterns and operators.
+// TestRenderOTelCollectorConfig_FilelogReceiver verifies that Docker stdout
+// logs are discovered with the Docker observer and attributed before they hit
+// the filelog-only filter. A static /var/lib/docker glob cannot recover Swarm
+// labels from a container ID, so it silently turns every record into
+// unattributable noise and drops it.
 func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 	in := RenderInput{
 		ObservabilityAdminEmail: "admin@x.com",
@@ -921,43 +928,81 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 		t.Fatalf("RenderOTelCollectorConfig: %v", err)
 	}
 	body := string(data)
-
-	if strings.Contains(body, "receiver_creator") {
-		t.Error("rendered config should not contain receiver_creator")
+	var doc struct {
+		Extensions map[string]any `yaml:"extensions"`
+		Receivers  map[string]struct {
+			WatchObservers []string `yaml:"watch_observers"`
+			Receivers      map[string]struct {
+				Rule   string         `yaml:"rule"`
+				Config map[string]any `yaml:"config"`
+			} `yaml:"receivers"`
+		} `yaml:"receivers"`
+		Service struct {
+			Pipelines map[string]struct {
+				Receivers  []string `yaml:"receivers"`
+				Processors []string `yaml:"processors"`
+			} `yaml:"pipelines"`
+		} `yaml:"service"`
 	}
-
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("rendered collector config is not valid YAML: %v", err)
+	}
+	if _, ok := doc.Extensions["docker_observer"]; !ok {
+		t.Fatal("rendered config must enable the Docker observer extension")
+	}
+	if !strings.Contains(body, "extensions: [health_check, docker_observer]") {
+		t.Fatal("service must start the Docker observer extension")
+	}
+	rc, ok := doc.Receivers["receiver_creator"]
+	if !ok {
+		t.Fatal("rendered config must include receiver_creator for Docker log attribution")
+	}
+	if !strings.Contains(body, "watch_observers: [docker_observer]") {
+		t.Fatal("receiver_creator must watch the docker_observer extension")
+	}
+	filelog, ok := rc.Receivers["filelog/docker"]
+	if !ok {
+		t.Fatal("receiver_creator must create one filelog receiver per Docker container")
+	}
+	if filelog.Rule != `type == "container" and port == 0` {
+		t.Errorf("filelog/docker rule = %q, want a port-less container rule", filelog.Rule)
+	}
+	include, ok := filelog.Config["include"].([]any)
+	if !ok || len(include) != 1 || include[0] != "/var/lib/docker/containers/`container_id`/*-json.log" {
+		t.Errorf("filelog/docker include = %#v, want a container-id expansion", filelog.Config["include"])
+	}
 	for _, want := range []string{
-		`/var/lib/docker/containers/*/*-json.log`,
-		`exclude:`,
-		`otel-collector`,
-		`parseable`,
-		`json_parser`,
-		`error_mode: ignore`,
+		`service.name: '` + "`labels[\"com.docker.swarm.service.name\"] ?? \"\"`" + `'`,
+		`stack.name: '` + "`labels[\"com.docker.stack.namespace\"] ?? \"\"`" + `'`,
+		`container.labels.io.pmcluster.skip_filelog: '` + "`labels[\"io.pmcluster.skip_filelog\"] ?? \"\"`" + `'`,
+		`resource.attributes["container.labels.io.pmcluster.skip_filelog"] == "true"`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("rendered config missing expected content: %q", want)
+			t.Errorf("rendered config missing dynamic resource attribute %q", want)
 		}
 	}
-
-	if strings.Contains(body, "docker_observer") {
-		t.Error("rendered config should not contain docker_observer")
+	filelogPipeline, ok := doc.Service.Pipelines["logs/filelog"]
+	if !ok {
+		t.Fatal("rendered config must keep Docker stdout logs in a dedicated pipeline")
 	}
-
-	if !strings.Contains(body, "filter/skip_filelog") {
-		t.Error("rendered config should contain filter/skip_filelog processor")
+	if len(filelogPipeline.Receivers) != 1 || filelogPipeline.Receivers[0] != "receiver_creator" {
+		t.Errorf("logs/filelog receivers = %v, want [receiver_creator]", filelogPipeline.Receivers)
 	}
-
-	skipFilelogExpr := "container.labels.io" + "\\" + "\\" + ".pmcluster" + "\\" + "\\" + ".skip_filelog"
-	if !strings.Contains(body, skipFilelogExpr) {
-		t.Error("rendered config should contain the OTTL filter for io.pmcluster.skip_filelog label")
+	if !strings.Contains(strings.Join(filelogPipeline.Processors, ","), "filter/skip_filelog") {
+		t.Errorf("logs/filelog processors = %v, want filter/skip_filelog", filelogPipeline.Processors)
 	}
-
-	if !strings.Contains(body, "processors: [memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]") {
-		t.Error("logs pipeline should list memory_limiter first and filter/skip_filelog before batch")
+	otlpPipeline, ok := doc.Service.Pipelines["logs/otlp"]
+	if !ok {
+		t.Fatal("rendered config must keep OTLP SDK logs in a dedicated pipeline")
 	}
-
-	if strings.Contains(body, "__FILELOG_EXCLUDE_PATTERNS__") {
-		t.Error("rendered config should NOT contain __FILELOG_EXCLUDE_PATTERNS__ (label-based approach replaces it)")
+	if len(otlpPipeline.Receivers) != 1 || otlpPipeline.Receivers[0] != "otlp" {
+		t.Errorf("logs/otlp receivers = %v, want [otlp]", otlpPipeline.Receivers)
+	}
+	if strings.Contains(strings.Join(otlpPipeline.Processors, ","), "filter/skip_filelog") {
+		t.Error("logs/otlp must not use the stdout skip_filelog filter")
+	}
+	if strings.Contains(body, "/var/lib/docker/containers/*/*-json.log") {
+		t.Error("rendered config must not use an unattributed static Docker glob")
 	}
 }
 

@@ -51,6 +51,8 @@ func (l Local) List(ctx context.Context, stack string) ([]ServiceSummary, error)
 			Node:         s.Node,
 			RunningNode:  s.RunningNode,
 			Platform:     s.Platform,
+			DesiredKnown: true,
+			Standalone:   false,
 		})
 	}
 	return out, nil

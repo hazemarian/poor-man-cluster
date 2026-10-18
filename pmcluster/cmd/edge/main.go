@@ -85,13 +85,13 @@ func run() error {
 
 	select {
 	case err := <-errCh:
-		_ = app.Store.Close()
+		_ = app.Close()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 		return nil
 	case <-ctx.Done():
-		_ = app.Store.Close()
+		_ = app.Close()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -120,6 +120,12 @@ func applyEdgeSecrets(cfg *ui.Config) {
 	}
 	if token, ok := readSecretFile("edge_api_token"); ok {
 		cfg.PMAPIToken = string(token)
+	}
+	if key, ok := readSecretFile("investigation_provider_key"); ok {
+		cfg.InvestigationKey = string(key)
+	}
+	if password, ok := readSecretFile("observability_admin_password"); ok {
+		cfg.ParseablePassword = string(password)
 	}
 }
 

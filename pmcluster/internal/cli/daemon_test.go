@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -141,12 +142,32 @@ func TestEnsureDaemonRunningIdempotentUnit(t *testing.T) {
 }
 
 func TestSystemctlSudoErrorWrapping(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("systemd is not supported on Windows")
+	}
+	// Keep this test hermetic. systemctlSudo prefixes sudo for an ordinary
+	// user, and a real sudo invocation can wait indefinitely for an askpass
+	// helper in CI. Put short-lived failing stand-ins for both commands first
+	// on PATH so the test exercises the error wrapping without touching the
+	// host init system or prompting for credentials.
+	binDir := t.TempDir()
+	for _, name := range []string{"sudo", "systemctl"} {
+		body := "#!/bin/sh\nprintf '%s\\n' 'synthetic systemctl failure' >&2\nexit 42\n"
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o755); err != nil {
+			t.Fatalf("write fake %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
 	err := systemctlSudo("bogus-command-xyz")
 	if err == nil {
-		t.Skip("systemctl accepted bogus command (unusual) — nothing to assert")
+		t.Fatal("systemctlSudo unexpectedly succeeded")
 	}
 	if !strings.Contains(err.Error(), "bogus-command-xyz") {
 		t.Errorf("error should mention the command, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "synthetic systemctl failure") {
+		t.Errorf("error should include command output, got: %v", err)
 	}
 }
 
@@ -208,6 +229,12 @@ func TestEnsureDaemonRunning_FallsBackToRootDataDir(t *testing.T) {
 // shared swarm would restore + re-snapshot control-plane state with a fresh
 // timestamp and clobber a just-minted admin token).
 func TestEnsureDaemonRunning_SkipEnv(t *testing.T) {
+	oldHostOS := hostOS
+	oldHasSys := hasSystemctl
+	t.Cleanup(func() {
+		hostOS = oldHostOS
+		hasSystemctl = oldHasSys
+	})
 	t.Setenv("PMCLUSTER_SKIP_DAEMON", "1")
 	hostOS = "linux"
 	hasSystemctl = func() bool { return true }

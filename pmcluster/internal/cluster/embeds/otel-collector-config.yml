@@ -14,6 +14,15 @@
 #      for services that send logs via OTLP.
 extensions:
   health_check:
+  # Discover every running container through the local Docker API. The
+  # receiver_creator below uses the observer's container id and labels to
+  # create one filelog receiver per container, so stdout records retain their
+  # Swarm service identity instead of being filtered as unknown noise.
+  docker_observer:
+    endpoint: "unix:///var/run/docker.sock"
+    api_version: "1.44"
+    timeout: 5s
+    include_all_containers: true
 
 receivers:
   otlp:
@@ -56,36 +65,48 @@ receivers:
       memory:
       load:
 
-  filelog:
-    include:
-      - /var/lib/docker/containers/*/*-json.log
-    # NOTE: no `exclude:` here on purpose. These paths are container IDs, so a
-    # pattern naming a service cannot match one. The platform chatter this used
-    # to (fail to) exclude is dropped by filter/skip_filelog below, by service
-    # name — which is the only handle that exists at record level.
-    include_file_name: false
-    include_file_path: true
-    # end, NOT beginning. With `beginning` every collector restart re-reads the
-    # ENTIRE historical container-log set and re-sends it: on a cluster with any
-    # history that is a sustained burst into the backend, and it was measured
-    # driving Parseable to 764MB against a 768MB cap (exit 137 loops, 64% CPU).
-    # Changing this alone took it to ~350MB and ~0.1% CPU.
-    start_at: end
-    operators:
-      # Parse Docker JSON log format: {"log":"...","stream":"stdout|stderr","time":"..."}
-      - type: json_parser
-        error_mode: ignore
-        timestamp:
-          parse_from: attributes.time
-          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
-        severity:
-          parse_from: attributes.stream
-          mapping: { info: stdout, error: stderr }
-      # Move the parsed log message from attributes.log to body
-      - type: move
-        from: attributes.log
-        to: body
-        if: attributes.log != nil
+  # receiver_creator instantiates this filelog receiver once for each
+  # port-less Docker container endpoint. The Docker observer supplies the
+  # container id and labels; receiver_creator evaluates the backtick
+  # expressions for that endpoint before starting the receiver.
+  receiver_creator:
+    watch_observers: [docker_observer]
+    receivers:
+      filelog/docker:
+        rule: 'type == "container" and port == 0'
+        config:
+          include:
+            - /var/lib/docker/containers/`container_id`/*-json.log
+          include_file_name: false
+          include_file_path: true
+          # Start at end so collector restarts do not replay every historical
+          # container log into the backend.
+          start_at: end
+          operators:
+            # Parse Docker JSON log format: {"log":"...","stream":"stdout|stderr","time":"..."}
+            - type: json_parser
+              error_mode: ignore
+              timestamp:
+                parse_from: attributes.time
+                layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+              severity:
+                parse_from: attributes.stream
+                mapping: { info: stdout, error: stderr }
+            # Move the parsed log message from attributes.log to body.
+            - type: move
+              from: attributes.log
+              to: body
+              if: attributes.log != nil
+        resource_attributes:
+          # The coalesce fallback leaves an attribute unset when a non-Swarm
+          # container has no matching label, so filter/skip_filelog can report
+          # it as unknown instead of inventing a service name.
+          service.name: '`labels["com.docker.swarm.service.name"] ?? ""`'
+          stack.name: '`labels["com.docker.stack.namespace"] ?? ""`'
+          container.name: '`name`'
+          container.id: '`container_id`'
+          container.image.name: '`image`'
+          container.labels.io.pmcluster.skip_filelog: '`labels["io.pmcluster.skip_filelog"] ?? ""`'
 
 processors:
   # memory_limiter is the guard that keeps a failing exporter from growing the
@@ -139,7 +160,7 @@ processors:
     logs:
       log_record:
         # Opt-out a workload sets on itself.
-        - 'resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] != nil and resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] == "true"'
+        - 'resource.attributes["container.labels.io.pmcluster.skip_filelog"] != nil and resource.attributes["container.labels.io.pmcluster.skip_filelog"] == "true"'
         # Unattributable records. resource attributes come from the Swarm
         # service label, so anything the receiver cannot resolve lands with
         # service.name (and node/app/stack) null — ungroupable, unalertable
@@ -273,14 +294,22 @@ exporters:
       X-P-Log-Source: "otel-traces"
 
 service:
-  extensions: [health_check]
+  extensions: [health_check, docker_observer]
   telemetry:
     logs:
       level: info
   pipelines:
-    logs:
-      receivers:  [filelog, otlp]
-      processors: [memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]
+    # Keep stdout scraping separate from SDK logs. The skip_filelog filter is
+    # intentionally scoped to the Docker receiver: applying it to a combined
+    # pipeline can drop OTLP records whose service resource is absent or whose
+    # service happens to share a platform name.
+    logs/filelog:
+      receivers:  [receiver_creator]
+      processors: [memory_limiter, resourcedetection, filter/skip_filelog, batch]
+      exporters:  [otlphttp/parseable-logs]
+    logs/otlp:
+      receivers:  [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
       exporters:  [otlphttp/parseable-logs]
     metrics:
       receivers:  [docker_stats, hostmetrics, otlp]

@@ -7,7 +7,10 @@ package controllers
 
 import (
 	"context"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
+	"golang.org/x/time/rate"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
@@ -30,14 +33,22 @@ const WebBase = "/web"
 // Controller carries the shared dependencies every handler needs. References,
 // not ownership: it is constructed once in the ui package and passed around.
 type Controller struct {
-	Store    *store.Store
-	API      *pmapi.Client
-	Views    *views.Renderer
-	Auth     *middleware.Auth
-	Version  string
-	Domain   string
-	EnvAPI   string
-	EnvToken string
+	Store              *store.Store
+	API                *pmapi.Client
+	Views              *views.Renderer
+	Auth               *middleware.Auth
+	Version            string
+	Domain             string
+	EnvAPI             string
+	EnvToken           string
+	StandaloneObserver bool
+	// Telemetry is nil when Parseable is not configured or unavailable. The
+	// console still renders daemon-derived health in that state.
+	ObservabilityRate *rate.Limiter
+	Investigation     *investigation.Manager
+	PublicOrigin      string
+	Telemetry         observability.Source
+	Redactor          observability.Redactor
 }
 
 // loadParams reads the stored overrides and the env fallbacks into the running

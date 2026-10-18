@@ -32,6 +32,11 @@ type ServiceSummary struct {
 	Node         string // io.pmcluster.node label: hostname pin target ("" when unconstrained/role-based)
 	RunningNode  string // hostname of the node the running task is on ("" when none is running)
 	Platform     bool   // io.pmcluster.platform=true: a platform-managed service (edge/traefik/observability/backup/sso)
+	// DesiredKnown distinguishes Swarm scheduler state from standalone Docker
+	// observation. Compose and hand-created containers expose what is running,
+	// not a configured desired replica count.
+	DesiredKnown bool
+	Standalone   bool
 }
 
 // TaskRun is one row of `docker service ps` — a task's lifecycle state.

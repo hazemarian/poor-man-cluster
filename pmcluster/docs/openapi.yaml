@@ -1443,6 +1443,91 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           description: Service not found, does not belong to the stack, or no task on this node
+  /api/investigation/policy:
+    get:
+      summary: Read nonsecret native investigation policy
+      operationId: getInvestigationPolicy
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Disabled by default; requires an unscoped bearer
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InvestigationPolicy"}
+    put:
+      summary: Replace investigation policy (admin only)
+      operationId: putInvestigationPolicy
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/InvestigationPolicy"}
+      responses:
+        "200": {description: Policy saved}
+        "400": {description: Invalid or incomplete enabled policy}
+        "403": {description: Admin and unscoped bearer required}
+  /api/investigation/budget:
+    get:
+      summary: Read global UTC reservation-day token accounting
+      operationId: getInvestigationBudget
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Held reservations and accounted tokens, including conservative unknown usage
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bucket: {type: string, format: date}
+                  held: {type: integer, format: int64}
+                  charged: {type: integer, format: int64}
+  /api/investigation/reservations/{id}/{action}:
+    post:
+      summary: Privileged edge accounting transition (admin only)
+      operationId: transitionInvestigationReservation
+      description: |
+        Reserve admits the full policy input/output allowance atomically.
+        Dispatch is a single-use claim before any provider request.
+        Settle with unknown usage charges the full dispatched allowance;
+        undispatched work releases capacity. Settlements never overwrite an
+        existing final charge. This is an integration API for the privileged
+        edge, not a direct operator submission endpoint.
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, pattern: "^[a-f0-9]{32}$"}
+        - name: action
+          in: path
+          required: true
+          schema: {type: string, enum: [reserve, dispatch, settle]}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                usage: {type: integer, format: int64, minimum: 0, nullable: true}
+      responses:
+        "200":
+          description: Transition accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: string}
+                  bucket: {type: string, format: date}
+                  reserved: {type: integer, format: int64}
+                  charged: {type: integer, format: int64}
+                  status: {type: string, enum: [reserved, dispatched, settled]}
+        "403": {description: Privileged admin integration token required}
+        "409": {description: Policy disabled, exhausted budget, or invalid/replayed transition}
 components:
   securitySchemes:
     bearerAuth:
@@ -1463,6 +1548,19 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    InvestigationPolicy:
+      type: object
+      additionalProperties: false
+      required: [enabled, sharing, base_url, model, daily_tokens, max_input_tokens, max_output_tokens, token_field]
+      properties:
+        enabled: {type: boolean, default: false}
+        sharing: {type: boolean, default: false}
+        base_url: {type: string, maxLength: 2048, description: HTTPS base URL; HTTP allowed only on loopback}
+        model: {type: string, maxLength: 200}
+        daily_tokens: {type: integer, format: int64, minimum: 0, maximum: 1000000000}
+        max_input_tokens: {type: integer, format: int64, minimum: 1024, maximum: 200000, default: 16000}
+        max_output_tokens: {type: integer, format: int64, minimum: 128, maximum: 16000, default: 2000}
+        token_field: {type: string, enum: [max_completion_tokens, max_tokens]}
     Error:
       type: object
       properties:

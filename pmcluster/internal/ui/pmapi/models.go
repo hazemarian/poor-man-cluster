@@ -331,6 +331,10 @@ type Service struct {
 	// is running). Node is where it was placed; RunningNode is where it is.
 	RunningNode string `json:"running_node"`
 	Platform    bool   `json:"platform"`
+	// DesiredKnown is false for standalone Docker observations: a container
+	// list reports what exists now but has no scheduler desired count.
+	DesiredKnown bool `json:"desired_known"`
+	Standalone   bool `json:"standalone"`
 }
 
 // ServiceTask is one row of GET /api/services/{stack}/{svc}/tasks.

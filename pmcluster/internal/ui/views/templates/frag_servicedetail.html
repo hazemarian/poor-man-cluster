@@ -6,6 +6,7 @@
   </div>
   <div class="ph-actions">
     <a class="btn btn-ghost btn-sm" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true">{{icon "services"}}<span>{{T "services.detail_back"}}</span></a>
+    <a class="btn btn-ghost btn-sm" href="/web/observability?service={{.Stack}}/{{.Service}}&amp;range=1h" hx-get="/web/observability?service={{.Stack}}/{{.Service}}&amp;range=1h" hx-target="#view" hx-push-url="true">{{icon "overview"}}<span>{{T "services.action_investigate"}}</span></a>
     <form hx-post="/web/services/{{.Stack}}/{{.Service}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .FullName}}">
       <button type="submit" class="btn btn-sm" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
     </form>

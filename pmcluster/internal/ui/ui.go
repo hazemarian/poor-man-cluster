@@ -6,13 +6,18 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation/compatible"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/time/rate"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability/parseable"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/controllers"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
@@ -81,6 +86,7 @@ func NewApp(cfg Config) (*App, error) {
 		shell["Version"] = cfg.AppVersion
 		shell["LoginDisabled"] = cfg.LoginDisabled
 		shell["SSOEnabled"] = cfg.SSOEnabled
+		shell["StandaloneObserver"] = cfg.StandaloneObserver
 		shell["Domain"] = cfg.ClusterDomain
 		return shell
 	}
@@ -112,8 +118,25 @@ func NewApp(cfg Config) (*App, error) {
 		Store: st, API: api, Views: renderer, Auth: auth,
 		Version: cfg.AppVersion, Domain: cfg.ClusterDomain,
 		EnvAPI: cfg.PMAPIURL, EnvToken: cfg.PMAPIToken,
+		StandaloneObserver: cfg.StandaloneObserver,
+		ObservabilityRate:  rate.NewLimiter(2, 8),
+		Redactor:           observability.NewRedactor(cfg.ParseablePassword, cfg.ParseableAuth, cfg.PMAPIToken, cfg.InvestigationKey),
+	}
+	// Telemetry is optional. A malformed or absent Parseable configuration must
+	// not take down the daemon-derived console; the Observability page reports
+	// the source as unavailable while nodes/services/backups/TLS remain useful.
+	if cfg.ParseableURL != "" {
+		if source, parseErr := parseable.New(parseable.Config{
+			BaseURL: cfg.ParseableURL, Stream: cfg.ParseableStream,
+			Username: cfg.ParseableUser, Password: cfg.ParseablePassword,
+			AuthHeader: cfg.ParseableAuth,
+		}); parseErr == nil {
+			ctrl.Telemetry = source
+		}
 	}
 
+	ctrl.PublicOrigin = cfg.PublicOrigin
+	ctrl.Investigation = investigation.NewManager(compatible.Client{}, cfg.InvestigationKey, ctrl.Redactor)
 	return &App{Cfg: cfg, Store: st, API: api, Auth: auth, ctrl: ctrl}, nil
 }
 
@@ -174,9 +197,19 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr := g.Group("")
 	vr.Use(a.ctrl.Auth.RequireRole(store.RoleViewer))
 
+	obs := controllers.Observability{Controller: a.ctrl}
 	ov := controllers.Overview{Controller: a.ctrl}
-	vr.GET("/", ov.App)
-	vr.GET("/overview", ov.Fragment)
+	if a.ctrl.StandaloneObserver {
+		// Keep the old console entry points useful for operators who have a
+		// bookmark or a browser home page pointing at the Swarm overview.
+		// Observability.Page renders a full shell on browser loads and the
+		// native fragment on HTMX requests.
+		vr.GET("/", obs.Page)
+		vr.GET("/overview", obs.Page)
+	} else {
+		vr.GET("/", ov.App)
+		vr.GET("/overview", ov.Fragment)
+	}
 
 	st := controllers.Stacks{Controller: a.ctrl}
 	vr.GET("/stacks", st.List)
@@ -188,6 +221,12 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/services", svc.List)
 	vr.GET("/services/:stack/:service/tasks", svc.Tasks)
 	vr.GET("/services/:stack/:service/logs", svc.Logs)
+
+	vr.GET("/observability", obs.Page)
+	vr.GET("/observability/summary", obs.Summary)
+	vr.GET("/observability/evidence", obs.Evidence)
+	investigator := controllers.Investigations{Controller: a.ctrl}
+	vr.GET("/observability/investigations/:id", investigator.Show)
 
 	// Platform-managed services (edge/traefik/observability/backup/sso) live on
 	// their own read-only page, apart from the customer app services.
@@ -241,6 +280,8 @@ func (a *App) Mount(engine *gin.Engine) {
 	// deploy submit, configs/secrets edits, tls, webhooks) ----
 	op := g.Group("")
 	op.Use(a.ctrl.Auth.RequireRole(store.RoleOperator))
+	op.POST("/observability/investigations", investigator.Start)
+	op.POST("/observability/investigations/:id/cancel", investigator.Cancel)
 
 	op.POST("/stacks/:name/sync", st.Sync)
 	op.POST("/stacks/:name/rollback", st.Rollback)
@@ -300,6 +341,8 @@ func (a *App) Mount(engine *gin.Engine) {
 	// ---- admin: API keys, settings save/apply, and the users CRUD ----
 	ad := g.Group("")
 	ad.Use(a.ctrl.Auth.RequireRole(store.RoleAdmin))
+	ad.GET("/observability/settings", investigator.Settings)
+	ad.POST("/observability/settings", investigator.SaveSettings)
 
 	ak := controllers.APIKeys{Controller: a.ctrl}
 	ad.GET("/apikeys", ak.Page)
@@ -402,10 +445,18 @@ func (a *App) Run(ctx context.Context, addr string) error {
 	case <-ctx.Done():
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = a.Store.Close()
+		_ = a.Close()
 		return srv.Shutdown(sctx)
 	case err := <-errCh:
-		_ = a.Store.Close()
+		_ = a.Close()
 		return err
 	}
+}
+
+// Close stops investigations and closes console storage.
+func (a *App) Close() error {
+	if a.ctrl.Investigation != nil {
+		a.ctrl.Investigation.Close()
+	}
+	return a.Store.Close()
 }

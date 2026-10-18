@@ -78,6 +78,7 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(serveCmd)
+	rootCmd.AddCommand(observeCmd)
 	rootCmd.AddCommand(clusterCmd)
 }
 

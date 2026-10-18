@@ -124,3 +124,19 @@ templates via `renderRefResolver`). Key exports: `RefResolver` interface
 - `stacks.Result.Changed` is `false` when a sync re-translates the latest
   stored source manifest and `sha256(rendered)` matches the stored
   `rendered_hash` — no new revision recorded, no stack deployed.
+
+## Native observability composition
+
+The existing edge process composes `internal/observability` with the HTTP adapter
+in `internal/observability/parseable`, then injects the source into the gin/HTMX
+console. Parseable stays internal to the Swarm overlay; the host daemon is not
+assumed to resolve its service DNS. The edge also composes the on-demand
+`internal/investigation` worker and `compatible` provider adapter. These use no
+Docker socket or shell commands.
+
+The daemon composes `investigation.Local` over its durable store and exposes
+policy and accounting through `investigation.HTTP`. Policy and reservation
+mutations require an unscoped admin bearer; operator console submissions go
+through the privileged edge client. Model calls remain in edge. Role/scoping,
+strict browser origins, independent source failures and unknown spend handling
+are described in [native-observability.md](../docs/native-observability.md).

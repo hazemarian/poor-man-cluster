@@ -630,6 +630,9 @@ func managedSecretNames(ctx context.Context, st *store.Store) map[string]string 
 		}
 		out[spec.swarmSecretName] = c.SwarmSecretName
 	}
+	if row, err := st.Secret(ctx, "investigation_provider_key"); err == nil && row.Scope == "cluster" {
+		out["investigation_provider_key"] = store.SwarmSecretName(row.Name, row.Hash)
+	}
 	return out
 }
 

@@ -26,6 +26,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
@@ -52,6 +53,7 @@ var trustedProxyCIDRs = []string{
 // fields cause their associated routes to be omitted when nil, so tests
 // can wire a partial server.
 type Deps struct {
+	Investigation investigation.Service
 	Lookup        auth.Lookup
 	Docker        runtime.Client
 	Store         *store.Store
@@ -106,12 +108,27 @@ type Deps struct {
 	// history, logs, restart, exec) under /api/services. Optional; when nil
 	// those routes are omitted.
 	Services services.Service
+	// ReadOnly omits mutating service operations and the exec websocket. It is
+	// used by the explicit standalone observer mode, which may inspect the
+	// host Docker daemon but must never reconcile or mutate workloads.
+	ReadOnly bool
 }
 
 // New assembles the chi router from the optional Deps; every nil dependency
 // simply omits its routes.
 func New(d Deps) http.Handler {
 	r := chi.NewRouter()
+	if d.ReadOnly {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if req.Method != http.MethodGet && req.Method != http.MethodHead && !strings.HasPrefix(req.URL.Path, "/api/investigation/") {
+					http.Error(w, "standalone observer does not manage workloads", http.StatusMethodNotAllowed)
+					return
+				}
+				next.ServeHTTP(w, req)
+			})
+		})
+	}
 
 	r.Use(trustedRealIP)
 	r.Use(middleware.RequestID)
@@ -154,16 +171,21 @@ func New(d Deps) http.Handler {
 		// stack-scoped (no-op for unscoped tokens).
 		r.Use(stackScopeGuard)
 		r.Get("/me", api.Me)
+		if d.Investigation != nil {
+			(&investigation.HTTP{Svc: d.Investigation}).Mount(r)
+		}
 		if d.Docker != nil {
 			r.Get("/cluster/info", api.ClusterInfoHandler(d.Docker))
 			r.Get("/nodes", api.NodesHandler(d.Docker, d.Store))
-			if d.Store != nil {
+			if d.Store != nil && !d.ReadOnly {
 				r.Post("/nodes/{hostname}/storage", api.NodeStorageHandler(d.Docker, d.Store))
 				r.Delete("/nodes/{hostname}/storage", api.NodeStorageHandler(d.Docker, d.Store))
 			}
 		}
-		if d.Store != nil {
+		if d.Settings != nil {
 			(&settings.HTTP{Svc: d.Settings}).Mount(r)
+		}
+		if d.Usage != nil {
 			(&usage.HTTP{Svc: d.Usage}).Mount(r)
 		}
 		if d.Store != nil && d.DeployService != nil {
@@ -205,7 +227,7 @@ func New(d Deps) http.Handler {
 			(&configs.HTTP{Svc: d.Configs}).Mount(r)
 		}
 		if d.Services != nil {
-			(&services.HTTP{Svc: d.Services}).Mount(r)
+			(&services.HTTP{Svc: d.Services, ReadOnly: d.ReadOnly}).Mount(r)
 		}
 	})
 
@@ -216,7 +238,7 @@ func New(d Deps) http.Handler {
 	// implement http.Hijacker, which gorilla's Upgrade requires. Dispatch it
 	// at the top level — same auth chain (Bearer + stack scope guard), but a
 	// real http.ResponseWriter.
-	if d.Services != nil && d.Lookup != nil {
+	if d.Services != nil && d.Lookup != nil && !d.ReadOnly {
 		ws := execWSHandler(d)
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			if strings.HasPrefix(req.URL.Path, execWSPathPrefix) && strings.HasSuffix(req.URL.Path, execWSPathSuffix) {

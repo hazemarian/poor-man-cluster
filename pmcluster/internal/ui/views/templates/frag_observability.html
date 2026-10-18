@@ -1,0 +1,145 @@
+{{define "observability"}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "nav.observability"}}</h1>
+    <p class="sub">{{T "observability.sub"}}</p>
+  </div>
+  <div class="ph-actions">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability?service={{.Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true" hx-disabled-elt="this">
+      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
+    </button>
+  </div>
+</div>
+
+{{if .ErrKey}}
+<div class="banner {{if eq .ErrKey "observability.invalid_service"}}warn{{else}}bad{{end}}">
+  <div class="b-body">
+    <p class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></p>
+    <p>{{T "observability.banner_body"}}</p>
+  </div>
+</div>
+{{end}}
+
+<div class="panel">
+  <div class="panel-body">
+    <form class="filter-bar" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true">
+      <div class="form-grid">
+      <div class="field">
+        <label for="observability-service">{{T "observability.filter_service"}}</label>
+        <select id="observability-service" name="service" class="finput">
+          <option value="">{{T "observability.all_services"}}</option>
+          {{range .Options}}<option value="{{.Value}}"{{if eq $.Service .Value}} selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
+      </div>
+      <div class="field">
+        <label for="observability-range">{{T "observability.filter_range"}}</label>
+        <select id="observability-range" name="range" class="finput">
+          <option value="15m"{{if eq .Range "15m"}} selected{{end}}>{{T "observability.range_15m"}}</option><option value="1h"{{if eq .Range "1h"}} selected{{end}}>{{T "observability.range_1h"}}</option><option value="6h"{{if eq .Range "6h"}} selected{{end}}>{{T "observability.range_6h"}}</option><option value="24h"{{if eq .Range "24h"}} selected{{end}}>{{T "observability.range_24h"}}</option>
+        </select>
+      </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary">{{icon "refresh"}}<span>{{T "observability.apply_filters"}}</span></button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{{template "observabilitysummary" .}}
+{{template "observabilityevidence" .}}
+{{template "investigationask" .}}
+{{end}}
+
+{{define "observabilitysummary"}}
+<div id="observability-summary">
+  <div class="stats">
+    <div class="stat{{if not .Health.NodesKnown}} is-unknown{{end}}">
+      <div class="stat-l">{{T "observability.nodes_ready"}}</div>
+      <div class="stat-v iso" dir="ltr">{{if .Health.NodesKnown}}{{N .Health.NodesReady}} / {{N .Health.NodesTotal}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+      <div class="stat-f">{{T "observability.nodes_foot"}}</div>
+    </div>
+    <div class="stat{{if not .Health.ServicesKnown}} is-unknown{{end}}">
+      <div class="stat-l">{{T "observability.services_ready"}}</div>
+      <div class="stat-v iso" dir="ltr">{{if .Health.ServicesKnown}}{{if .Health.ServicesDesiredKnown}}{{N .Health.ServicesReady}} / {{N .Health.ServicesTotal}}{{else}}{{T "common.unknown"}}{{end}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+      <div class="stat-f">{{T "observability.services_foot"}}</div>
+    </div>
+    <div class="stat{{if not .Health.DeficitKnown}} is-unknown{{end}}">
+      <div class="stat-l">{{T "observability.replica_deficit"}}</div>
+      <div class="stat-v">{{if .Health.DeficitKnown}}{{N .Health.ReplicaDeficit}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+      <div class="stat-f">{{T "observability.replica_deficit_foot"}}</div>
+    </div>
+    <div class="stat is-unknown">
+      <div class="stat-l">{{T "observability.pending_tasks"}}</div>
+      <div class="stat-v">{{if .Health.PendingKnown}}{{N .Health.Pending}}{{else}}{{T "common.unavailable"}}{{end}}</div>
+      <div class="stat-f">{{T "observability.pending_tasks_foot"}}</div>
+    </div>
+    <div class="stat{{if not .Health.BackupsKnown}} is-unknown{{end}}">
+      <div class="stat-l">{{T "observability.backup_age"}}</div>
+      <div class="stat-v">{{if not .Health.BackupsKnown}}{{T "common.unavailable"}}{{else if .Health.BackupHasVerified}}{{N .Health.BackupAgeDays}} {{T "observability.days"}}{{else}}{{T "observability.no_verified_backup"}}{{end}}</div>
+      <div class="stat-f">{{T "observability.backup_age_foot"}}</div>
+    </div>
+    <div class="stat{{if not .Health.TLSKnown}} is-unknown{{end}}">
+      <div class="stat-l">{{T "observability.tls_expiry"}}</div>
+      <div class="stat-v">{{if not .Health.TLSKnown}}{{T "common.unavailable"}}{{else if not .Health.TLSHasCertificate}}{{T "observability.no_certificate"}}{{else if .Health.TLSExpired}}<span class="pill bad">{{T "observability.expired"}}</span>{{else}}{{N .Health.TLSDays}} {{T "observability.days"}}{{end}}</div>
+      <div class="stat-f">{{T "observability.tls_expiry_foot"}}{{if .Health.TLSPartial}} · {{T "observability.partial"}}{{end}}</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <h2>{{T "observability.nodes_title"}}</h2>
+      <div class="ph-actions">
+        <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability/summary" hx-target="#observability-summary" hx-swap="outerHTML" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+      </div>
+    </div>
+    <div class="panel-body">
+      {{if not .Health.NodesKnown}}
+      <div class="empty"><h3>{{T "observability.nodes_unknown_title"}}</h3><p>{{T "observability.nodes_unknown_body"}}</p></div>
+      {{else if not .Health.Nodes}}
+      <div class="empty"><h3>{{T "observability.nodes_empty_title"}}</h3><p>{{T "observability.nodes_empty_body"}}</p></div>
+      {{else}}
+      <div class="table-wrap only-md">
+        <table class="table">
+          <thead><tr><th>{{T "common.node"}}</th><th>{{T "common.role"}}</th><th>{{T "common.status"}}</th><th>{{T "common.availability"}}</th></tr></thead>
+          <tbody>{{range .Health.Nodes}}<tr><td><span class="mono iso" dir="ltr">{{.Hostname}}</span>{{if .Leader}} <span class="pill accent">{{T "st.leader"}}</span>{{end}}</td><td>{{.Role}}</td><td>{{if eq .Status "ready"}}<span class="pill good"><i class="dot"></i>{{T "st.ready"}}</span>{{else if eq .Status "down"}}<span class="pill bad"><i class="dot"></i>{{T "st.down"}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{if .Status}}{{.Status}}{{else}}{{T "common.unknown"}}{{end}}</span>{{end}}</td><td>{{if .Availability}}{{.Availability}}{{else}}{{T "common.unknown"}}{{end}}</td></tr>{{end}}</tbody>
+        </table>
+      </div>
+      <div class="only-sm">{{range .Health.Nodes}}<div class="kv"><div class="kv-row"><span class="k">{{T "common.node"}}</span><span class="v mono iso" dir="ltr">{{.Hostname}}</span></div><div class="kv-row"><span class="k">{{T "common.status"}}</span><span class="v">{{.Status}}</span></div><div class="kv-row"><span class="k">{{T "common.availability"}}</span><span class="v">{{.Availability}}</span></div></div>{{end}}</div>
+      {{end}}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>{{T "observability.services_title"}}</h2><p class="sub">{{T "observability.services_sub"}}</p></div>
+    <div class="panel-body">
+      {{if not .Health.ServicesKnown}}<div class="empty"><h3>{{T "observability.services_unknown_title"}}</h3><p>{{T "observability.services_unknown_body"}}</p></div>
+      {{else if not .Health.Services}}<div class="empty"><h3>{{T "observability.services_empty_title"}}</h3><p>{{T "observability.services_empty_body"}}</p></div>
+      {{else}}
+      <div class="table-wrap only-md"><table class="table"><thead><tr><th>{{T "services.col_service"}}</th><th class="num">{{T "services.col_replicas"}}</th><th>{{T "observability.service_state"}}</th><th>{{T "observability.service_deficit"}}</th><th><span class="sr-only">{{T "common.actions"}}</span></th></tr></thead><tbody>{{range .Health.Services}}<tr><td><span class="mono iso" dir="ltr">{{.Path}}</span>{{if .Platform}} <span class="pill plain">{{T "nav.platform"}}</span>{{end}}</td><td class="num iso" dir="ltr">{{N .Replicas}} / {{if .DesiredKnown}}{{N .Desired}}{{else}}?{{end}}</td><td>{{if .Standalone}}<span class="pill plain">{{T "common.unknown"}}</span>{{else if .Job}}<span class="pill plain">{{T "observability.job_unknown"}}</span>{{else if eq .Status "inactive"}}<span class="pill plain">{{T "st.inactive"}}</span>{{else if .Completed}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>{{else if .Ready}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{else}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>{{end}}</td><td>{{if .DeficitKnown}}<span class="pill {{if gt .Deficit 0}}bad{{else}}plain{{end}}">{{N .Deficit}}</span>{{else}}{{T "common.unknown"}}{{end}}</td><td><a class="btn btn-ghost btn-sm" href="/web/observability?service={{.Path}}&amp;range={{$.Range}}" hx-get="/web/observability?service={{.Path}}&amp;range={{$.Range}}" hx-target="#view" hx-push-url="true">{{icon "overview"}}<span>{{T "services.action_investigate"}}</span></a></td></tr>{{end}}</tbody></table></div>
+      <div class="only-sm">{{range .Health.Services}}<div class="kv"><div class="kv-row"><span class="k">{{T "services.col_service"}}</span><span class="v mono iso" dir="ltr">{{.Path}}</span></div><div class="kv-row"><span class="k">{{T "services.col_replicas"}}</span><span class="v num iso" dir="ltr">{{N .Replicas}} / {{if .DesiredKnown}}{{N .Desired}}{{else}}?{{end}}</span></div><div class="kv-row"><span class="k">{{T "observability.service_deficit"}}</span><span class="v">{{if .DeficitKnown}}{{N .Deficit}}{{else}}{{T "common.unknown"}}{{end}}</span></div><div class="action-bar"><a class="btn btn-ghost" href="/web/observability?service={{.Path}}&amp;range={{$.Range}}" hx-get="/web/observability?service={{.Path}}&amp;range={{$.Range}}" hx-target="#view" hx-push-url="true">{{icon "overview"}}<span>{{T "services.action_investigate"}}</span></a></div></div>{{end}}</div>
+      {{end}}
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "observabilityevidence"}}
+<div class="panel" id="observability-evidence">
+  <div class="panel-head"><div><h2>{{T "observability.evidence_title"}}</h2><p class="sub">{{T "observability.evidence_sub"}}</p></div><div class="ph-actions"><div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}<div>{{.Evidence.WindowStart}}</div><div>{{.Evidence.WindowEnd}}</div>{{else}}{{T "common.unknown"}}{{end}}</div></div></div>
+  <div class="panel-body">
+    <form class="filter-bar" method="get" action="/web/observability/evidence" hx-get="/web/observability/evidence" hx-target="#observability-evidence" hx-swap="outerHTML">
+      <input type="hidden" name="service" value="{{.Service}}">
+      <div class="field"><label for="observability-evidence-range">{{T "observability.filter_range"}}</label><select id="observability-evidence-range" name="range" class="finput"><option value="15m"{{if eq .Range "15m"}} selected{{end}}>{{T "observability.range_15m"}}</option><option value="1h"{{if eq .Range "1h"}} selected{{end}}>{{T "observability.range_1h"}}</option><option value="6h"{{if eq .Range "6h"}} selected{{end}}>{{T "observability.range_6h"}}</option><option value="24h"{{if eq .Range "24h"}} selected{{end}}>{{T "observability.range_24h"}}</option></select></div>
+      <div class="form-actions"><button type="submit" class="btn btn-primary">{{icon "refresh"}}<span>{{T "observability.load_evidence"}}</span></button></div>
+    </form>
+    {{if .Evidence.Unavailable}}
+    <div class="empty"><h3>{{if eq .Evidence.UnavailableWhy "scope"}}{{T "observability.scope_unavailable"}}{{else if eq .Evidence.UnavailableWhy "service"}}{{T "observability.invalid_service"}}{{else if eq .Evidence.UnavailableWhy "range"}}{{T "observability.invalid_range"}}{{else if eq .Evidence.UnavailableWhy "api"}}{{T "err.api_not_configured"}}{{else}}{{T "observability.telemetry_unavailable"}}{{end}}</h3><p>{{T "observability.evidence_unavailable_body"}}</p></div>
+    {{else if .Evidence.Empty}}
+    <div class="empty"><h3>{{T "observability.evidence_empty_title"}}</h3><p>{{T "observability.evidence_empty_body"}}</p></div>
+    {{else if .Evidence.Known}}
+    <p class="sub">{{N .Evidence.RowsSeen}} {{T "observability.rows_seen"}}{{if .Evidence.Truncated}} · <span class="pill warn">{{T "observability.truncated"}}</span>{{end}}</p>
+    <div class="table-wrap"><table class="table"><thead><tr><th>{{T "observability.col_time"}}</th><th>{{T "observability.col_severity"}}</th><th>{{T "observability.col_service"}}</th><th>{{T "observability.col_message"}}</th></tr></thead><tbody>{{range .Evidence.Rows}}<tr><td class="mono iso" dir="ltr">{{.Timestamp}}</td><td>{{.Severity}}</td><td class="mono iso" dir="ltr">{{.Service}}</td><td><pre class="inline-pre">{{.Body}}</pre></td></tr>{{end}}</tbody></table></div>
+    {{end}}
+  </div>
+</div>
+{{end}}
