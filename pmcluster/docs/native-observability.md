@@ -109,10 +109,12 @@ telemetry without initializing Swarm or managing workloads. That mode is deploye
 alongside existing apps on the three project hosts; AI remains disabled.
 
 1. Import an actual provider-issued key using the existing cluster secret
-   tooling. Omit the value argument to use its protected interactive prompt:
+   tooling. The value is read from stdin when no argument is given (the CLI
+   never prompts), so pipe it in rather than putting it on the command line,
+   where shell history would keep it:
 
    ```sh
-   pmcluster secret create investigation_provider_key --scope cluster
+   read -rs "K?Provider key: " && printf %s "$K" | pmcluster secret create investigation_provider_key --scope cluster; unset K
    ```
 
 2. Apply the updated platform configuration through the normal deployment
