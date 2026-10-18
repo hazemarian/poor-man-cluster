@@ -92,7 +92,7 @@ func runRegistryAdd(cmd *cobra.Command, args []string) error {
 	}
 	// Read the previous username first so the message can name it, the way
 	// this command has always reported an update.
-	previous, _ := st.GetRegistry(cmd.Context(), host)
+	previous, _ := st.Registry(cmd.Context(), host)
 	created, err := svc.Add(cmd.Context(), host, username, password)
 	if err != nil {
 		return err

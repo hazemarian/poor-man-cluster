@@ -37,7 +37,7 @@ type Entry struct {
 type Store interface {
 	CreateRegistry(ctx context.Context, r *store.Registry) error
 	UpdateRegistry(ctx context.Context, r *store.Registry) error
-	GetRegistry(ctx context.Context, host string) (*store.Registry, error)
+	Registry(ctx context.Context, host string) (*store.Registry, error)
 	ListRegistries(ctx context.Context) ([]*store.Registry, error)
 	DeleteRegistry(ctx context.Context, host string) error
 }
@@ -97,7 +97,7 @@ func (s *Service) Add(ctx context.Context, host, username, password string) (boo
 		return false, fmt.Errorf("encrypt password: %w", err)
 	}
 	row := &store.Registry{Host: host, Username: username, PasswordCiphertext: ciphertext}
-	existing, err := s.Store.GetRegistry(ctx, host)
+	existing, err := s.Store.Registry(ctx, host)
 	if err != nil && !errors.Is(err, store.ErrRegistryNotFound) {
 		return false, err
 	}

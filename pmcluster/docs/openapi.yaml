@@ -977,6 +977,170 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           description: Secret not found
+  /api/secrets/{name}/verify:
+    post:
+      summary: Check a candidate value against a secret's stored hash
+      description: |
+        Compares the supplied value with the secret's sha256 hash in constant
+        time and returns only whether they match. The plaintext is never
+        returned.
+      operationId: verifySecret
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value:
+                  type: string
+      responses:
+        "200":
+          description: Match result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  match:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Secret not found
+  /api/credentials:
+    get:
+      summary: List managed bootstrap credentials (never the password)
+      operationId: listCredentials
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Credential metadata rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  credentials:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: {type: string}
+                        kind: {type: string}
+                        username: {type: string}
+                        swarm_secret_name: {type: string}
+                        created_at: {type: integer, format: int64}
+                        rotated_at: {type: integer, format: int64}
+  /api/credentials/{name}/rotate:
+    post:
+      summary: Rotate a managed credential
+      description: |
+        Generates a new password, re-encrypts it, updates the Swarm secret and
+        restarts the consuming service. The new password is returned once and
+        cannot be read back afterwards.
+      operationId: rotateCredential
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Rotated; the password is shown once
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: {type: string}
+                  username: {type: string}
+                  password: {type: string}
+                  swarm_secret_name: {type: string}
+                  username_changed: {type: boolean}
+                  shown_once: {type: boolean}
+        "404":
+          description: Credential not found
+  /api/registries:
+    get:
+      summary: List configured Docker registries (passwords are write-only)
+      operationId: listRegistries
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Registry rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  registries:
+                    type: array
+                    items:
+                      type: object
+    post:
+      summary: Add or update a Docker registry login
+      description: |
+        Logs in to the registry on the host, then stores the encrypted
+        credential. Returns 201 for a new registry and 200 when an existing
+        one was updated.
+      operationId: addRegistry
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [host, username, password]
+              properties:
+                host: {type: string}
+                username: {type: string}
+                password: {type: string}
+      responses:
+        "200":
+          description: Existing registry updated
+        "201":
+          description: Registry added
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "502":
+          description: The registry rejected the login or was unreachable
+  /api/registries/{host}:
+    delete:
+      summary: Remove a Docker registry login
+      operationId: removeRegistry
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: host
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Removed; a warning is included when the host logout failed
+        "404":
+          description: Registry not configured
   /api/configs:
     get:
       summary: List configs (metadata + hash, no content)
@@ -1561,6 +1725,7 @@ components:
         max_input_tokens: {type: integer, format: int64, minimum: 1024, maximum: 200000, default: 16000}
         max_output_tokens: {type: integer, format: int64, minimum: 128, maximum: 16000, default: 2000}
         token_field: {type: string, enum: [max_completion_tokens, max_tokens]}
+        protocol: {type: string, enum: [openai, anthropic, gemini], default: openai, description: Wire protocol; empty means openai}
     Error:
       type: object
       properties:
