@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -56,7 +57,7 @@ func (c Client) Run(ctx context.Context, p investigation.Policy, key string, in 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return verdict, nil, errors.New("provider rejected request")
+		return verdict, nil, fmt.Errorf("provider rejected request (HTTP %d)", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, (512<<10)+1))
 	if err != nil || len(data) > 512<<10 {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"sync"
 	"time"
 
@@ -206,6 +207,9 @@ func (m *Manager) execute(w *work) {
 		w.job.Status = "failed"
 		w.job.Error = "accounting_unavailable"
 	} else if failure != nil {
+		// Only the adapter's own fixed messages reach this line (provider text
+		// is never copied into an error), so it is safe to log.
+		log.Printf("investigation %s failed: %v", w.job.ID, failure)
 		w.job.Status = "failed"
 		w.job.Error = "investigation_failed"
 	} else {

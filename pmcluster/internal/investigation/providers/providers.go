@@ -32,6 +32,11 @@ func (r Router) Run(ctx context.Context, p investigation.Policy, key string, in 
 	case investigation.ProtocolGemini:
 		return r.gemini(ctx, p, key, in)
 	default:
+		if isOpenCode(p.BaseURL) {
+			// OpenCode Go's upstreams reject max_completion_tokens with a bare
+			// 400; max_tokens is accepted.
+			p.TokenField = "max_tokens"
+		}
 		return compatible.Client{HTTP: r.HTTP, Headers: routingHeaders(p.BaseURL)}.Run(ctx, p, key, in)
 	}
 }
@@ -61,12 +66,7 @@ func trimBase(base string) string { return strings.TrimRight(base, "/") }
 // cluster. The header is sent only to opencode.ai so no other provider
 // receives it.
 func routingHeaders(base string) map[string]string {
-	u, err := url.Parse(base)
-	if err != nil {
-		return nil
-	}
-	host := u.Hostname()
-	if host != "opencode.ai" && !strings.HasSuffix(host, ".opencode.ai") {
+	if !isOpenCode(base) {
 		return nil
 	}
 	b := make([]byte, 16)
@@ -81,4 +81,13 @@ func withRouting(h map[string]string, base string) map[string]string {
 		h[k] = v
 	}
 	return h
+}
+
+func isOpenCode(base string) bool {
+	u, err := url.Parse(base)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "opencode.ai" || strings.HasSuffix(host, ".opencode.ai")
 }

@@ -209,3 +209,9 @@ func TestOpenAIClientForwardsRoutingHeaders(t *testing.T) {
 		t.Fatalf("%v %q", err, got)
 	}
 }
+
+func TestOpenCodeUsesMaxTokensWhateverThePolicySays(t *testing.T) {
+	if !isOpenCode("https://opencode.ai/inference/go/openai/v1") || isOpenCode("https://api.openai.com/v1") {
+		t.Fatal("host detection")
+	}
+}

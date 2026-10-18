@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -44,7 +45,7 @@ func PostJSON(ctx context.Context, hc *http.Client, url string, headers map[stri
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, errors.New("provider rejected request")
+		return nil, fmt.Errorf("provider rejected request (HTTP %d)", resp.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxProviderResponse+1))
 	if err != nil || len(data) > MaxProviderResponse {
