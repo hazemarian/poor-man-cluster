@@ -60,6 +60,9 @@ type Config struct {
 	ParseableUser     string
 	ParseablePassword string
 	ParseableAuth     string
+	// FleetConfigPath points at the owner-readable fleet endpoint file. An
+	// empty path disables the combined fleet page and its navigation item.
+	FleetConfigPath string
 }
 
 const (
@@ -99,6 +102,7 @@ func FromEnv() Config {
 		ParseableStream:    envOr("OBSERVABILITY_PARSEABLE_STREAM", "pmcluster-logs"),
 		ParseableUser:      envOr("OBSERVABILITY_PARSEABLE_USER", ""),
 		ParseableAuth:      envOr("OBSERVABILITY_PARSEABLE_AUTH", ""),
+		FleetConfigPath:    envOr("OBSERVABILITY_FLEET_CONFIG", ""),
 	}
 }
 

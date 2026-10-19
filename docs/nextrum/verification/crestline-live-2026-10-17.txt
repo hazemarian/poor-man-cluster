@@ -1,0 +1,11 @@
+inventory_services 13
+authorization_and_readonly_pass
+native_page_http 200
+retention_1day pmcluster-logs
+retention_1day pmcluster-metrics
+retention_1day pmcluster-traces
+pmcluster-logs [{'n': 320}]
+pmcluster-metrics [{'n': 14472}]
+metric_types [{'metric_name': 'container.blockio.io_service_bytes_recursive', 'n': 1650}, {'metric_name': 'container.cpu.usage.kernelmode', 'n': 938}, {'metric_name': 'container.cpu.usage.total', 'n': 938}, {'metric_name': 'container.cpu.usage.usermode', 'n': 938}, {'metric_name': 'container.cpu.utilization', 'n': 938}, {'metric_name': 'container.memory.file', 'n': 938}, {'metric_name': 'container.memory.percent', 'n': 938}, {'metric_name': 'container.memory.usage.limit', 'n': 938}]
+swarm inactive
+live_acceptance_pass {'stdout_records': 12, 'host_metric_records': 522, 'container_metric_records': 13950, 'native_probe_visible': True}

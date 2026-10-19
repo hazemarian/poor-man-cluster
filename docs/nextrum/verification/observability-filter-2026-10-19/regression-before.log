@@ -1,0 +1,112 @@
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+--- FAIL: TestFederatedIrrelevantServiceFilterKeepsInventoryCards (0.21s)
+    --- FAIL: TestFederatedIrrelevantServiceFilterKeepsInventoryCards/overview (0.01s)
+        observability_federated_test.go:88: inventory card was lost for overview: err="observability.invalid_service" nodes=0 known=true
+    --- FAIL: TestFederatedIrrelevantServiceFilterKeepsInventoryCards/metrics (0.01s)
+        observability_federated_test.go:88: inventory card was lost for metrics: err="observability.invalid_service" nodes=0 known=true
+    observability_federated_test.go:97: metrics render used the empty-inventory state for an irrelevant service filter:
+        <div class="page-head">
+          <div class="ph-text">
+            <h1>Observability</h1>
+            <p class="sub">Fleet-wide daemon health and bounded telemetry, with each host kept distinct.</p>
+          </div>
+          <div class="ph-actions">
+            <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability?tab=metrics&amp;node=&amp;service=svc-e19e9d01a1fb0f3c&amp;q=&amp;range=15m&amp;severity=&amp;search=&amp;offset=0&amp;svc=&amp;toffset=0" hx-target="#view" hx-push-url="true" hx-disabled-elt="this">
+              <svg class="ic" aria-hidden="true" focusable="false"><use href="#i-refresh"></use></svg><span>Refresh</span>
+            </button>
+          </div>
+        </div>
+
+
+
+        <div class="obs-bar">
+          <nav class="seg obs-tabs" aria-label="Observability sections">
+            <a href="/web/observability?tab=overview&amp;node=&amp;service=svc-e19e9d01a1fb0f3c&amp;q=&amp;range=15m&amp;severity=&amp;search=&amp;offset=0&amp;svc=&amp;toffset=0" hx-get="/web/observability?tab=overview&amp;node=&amp;service=svc-e19e9d01a1fb0f3c&amp;q=&amp;range=15m&amp;severity=&amp;search=&amp;offset=0&amp;svc=&amp;toffset=0" hx-target="#view" hx-push-url="true">Overview</a>
+            <a href="/web/observability?tab=logs&amp;node=&amp;service=svc-e19e9d01a1fb0f3c&amp;q=&amp;range=15m&amp;severity=&amp;search=&amp;offset=0&amp;svc=&amp;toffset=0" hx-get="/web/observability?tab=logs&amp;node=&amp;service=svc-e19e9d01a1fb0f3c&amp;q=&amp;range=15m&amp;severity=&amp;search=&amp;offset=0&amp;svc=&amp;toffset=0" hx-target="#view" hx-push-url="true">Logs</a>
+            <a href="/web/observability?tab=metrics&amp;node=&amp;service=svc-e19e9d01a1fb0f3c&amp;q=&amp;range=15m&amp;severity=&amp;search=&amp;offset=0&amp;svc=&amp;toffset=0" hx-get="/web/observability?tab=metrics&amp;node=&amp;service=svc-e19e9d01a1fb0f3c&amp;q=&amp;range=15m&amp;severity=&amp;search=&amp;offset=0&amp;svc=&amp;toffset=0" hx-target="#view" hx-push-url="true" class="is-active" aria-current="page">Metrics</a>
+            <a href="/web/observability?tab=traces&amp;node=&amp;service=svc-e19e9d01a1fb0f3c&amp;q=&amp;range=15m&amp;severity=&amp;search=&amp;offset=0&amp;svc=&amp;toffset=0" hx-get="/web/observability?tab=traces&amp;node=&amp;service=svc-e19e9d01a1fb0f3c&amp;q=&amp;range=15m&amp;severity=&amp;search=&amp;offset=0&amp;svc=&amp;toffset=0" hx-target="#view" hx-push-url="true">Traces</a>
+          </nav>
+
+          <form class="obs-filters obs-node-filter" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="change">
+            <input type="hidden" name="tab" value="metrics"><input type="hidden" name="service" value="svc-e19e9d01a1fb0f3c"><input type="hidden" name="range" value="15m"><input type="hidden" name="q" value=""><input type="hidden" name="page" value="1"><input type="hidden" name="severity" value=""><input type="hidden" name="search" value=""><input type="hidden" name="offset" value="0"><input type="hidden" name="svc" value=""><input type="hidden" name="toffset" value="0">
+            <div class="field"><label for="observability-node">Node scope</label>
+              <select id="observability-node" name="node" class="finput"><option value="">All hosts</option><option value="crestline">crestline · crestline</option></select>
+            </div>
+          </form>
+
+
+          <form class="obs-filters" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, change">
+            <input type="hidden" name="tab" value="metrics">
+            <input type="hidden" name="node" value=""><input type="hidden" name="service" value="svc-e19e9d01a1fb0f3c"><input type="hidden" name="q" value=""><input type="hidden" name="page" value="1"><input type="hidden" name="severity" value=""><input type="hidden" name="search" value=""><input type="hidden" name="offset" value="0"><input type="hidden" name="svc" value=""><input type="hidden" name="toffset" value="0">
+            <div class="field">
+              <label class="sr-only" for="observability-range">Time range</label>
+              <select id="observability-range" name="range" class="finput">
+                <option value="15m" selected>15 minutes</option><option value="1h">1 hour</option><option value="6h">6 hours</option><option value="24h">24 hours</option>
+              </select>
+            </div>
+            <noscript><button type="submit" class="btn btn-primary">Apply filters</button></noscript>
+          </form>
+
+        </div>
+
+
+
+        <div class="banner warn"><div class="b-body"><p class="b-title"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-alert"></use></svg><span>partial coverage</span></p><p>Some configured hosts or telemetry sources did not answer. Values remain separated by host.</p></div></div>
+        <div class="fleet-hosts federated-hosts">
+
+          <section class="panel fleet-host">
+
+        <div class="panel-head">
+          <div><h2 class="mono iso" dir="ltr">crestline</h2><p class="sub mono iso" dir="ltr">crestline</p></div>
+          <div class="ph-actions">
+            <span class="pill good"><i class="dot"></i>Online</span>
+            <a class="btn btn-ghost btn-sm" href="/web/observability?node=crestline&amp;tab=metrics&amp;service=&amp;q=&amp;page=0&amp;range=15m&amp;severity=&amp;search=&amp;offset=0&amp;svc=&amp;toffset=0" hx-get="/web/observability?node=crestline&amp;tab=metrics&amp;service=&amp;q=&amp;page=0&amp;range=15m&amp;severity=&amp;search=&amp;offset=0&amp;svc=&amp;toffset=0" hx-target="#view" hx-push-url="true">Host detail</a>
+          </div>
+        </div>
+
+            <div class="panel-body">
+        <section class="panel">
+          <div class="panel-head"><div><h2>Node resources</h2><p class="sub">CPU, memory and load per node over the selected window.</p></div></div>
+          <div class="panel-body">
+
+            <div class="empty"><h3>No nodes reported</h3><p>The daemon answered successfully but returned no nodes.</p></div>
+
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><div><h2>Containers by peak memory</h2><p class="sub">Average and peak CPU and memory per container in the window.</p></div></div>
+          <div class="panel-body tight">
+
+            <div class="empty"><h3>Telemetry source unavailable</h3><p>Metrics could not be read. Daemon health is still shown.</p></div>
+
+          </div>
+        </section>
+        </div>
+          </section>
+
+        </div>
+
+
+
+
+
+
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+FAIL
+FAIL	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/controllers	0.403s
+FAIL

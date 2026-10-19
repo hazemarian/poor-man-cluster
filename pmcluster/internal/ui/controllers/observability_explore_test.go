@@ -60,3 +60,24 @@ func TestProjectServiceMetricsLabelsAndCaps(t *testing.T) {
 		t.Fatalf("%+v", got[0])
 	}
 }
+
+func TestProjectServiceMetricsKeepsReplicaRowsDistinct(t *testing.T) {
+	rows := []observability.Row{
+		{"stack": "demo", "service": "demo_web", "container": "demo_web.1.high", "metric": observability.MetricContainerMemoryPercent, "avg": 80.0, "max": 95.0},
+		{"stack": "demo", "service": "demo_web", "container": "demo_web.2.low", "metric": observability.MetricContainerMemoryPercent, "avg": 10.0, "max": 15.0},
+	}
+
+	got := projectServiceMetrics(rows)
+	if len(got) != 2 {
+		t.Fatalf("replica rows were collapsed: %+v", got)
+	}
+	if got[0].Label != "demo/web/demo_web.1.high" || got[0].MemMax != 95 {
+		t.Fatalf("high replica was projected incorrectly: %+v", got[0])
+	}
+	if got[1].Label != "demo/web/demo_web.2.low" || got[1].MemMax != 15 {
+		t.Fatalf("low replica was projected incorrectly: %+v", got[1])
+	}
+	if got := serviceMetricLabel(observability.Row{"container": "orphan.1.abc"}); got != "orphan.1.abc" {
+		t.Fatalf("container-only label was duplicated: %q", got)
+	}
+}

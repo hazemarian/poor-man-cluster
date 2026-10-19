@@ -1,0 +1,11 @@
+inventory_services 21
+authorization_and_readonly_pass
+native_page_http 200
+retention_1day pmcluster-logs
+retention_1day pmcluster-metrics
+retention_1day pmcluster-traces
+pmcluster-logs [{'n': 1481}]
+pmcluster-metrics [{'n': 12086}]
+metric_types [{'metric_name': 'container.network.io.usage.tx_dropped', 'n': 993}, {'metric_name': 'container.network.io.usage.tx_bytes', 'n': 993}, {'metric_name': 'container.network.io.usage.rx_dropped', 'n': 993}, {'metric_name': 'container.network.io.usage.rx_bytes', 'n': 993}, {'metric_name': 'container.memory.usage.total', 'n': 788}, {'metric_name': 'container.memory.usage.limit', 'n': 788}, {'metric_name': 'container.memory.percent', 'n': 788}, {'metric_name': 'container.memory.file', 'n': 788}]
+swarm inactive
+live_acceptance_pass {'stdout_records': 12, 'host_metric_records': 234, 'container_metric_records': 11852, 'native_probe_visible': True}

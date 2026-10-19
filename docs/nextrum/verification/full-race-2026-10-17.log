@@ -1,0 +1,50 @@
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/cmd/edge	[no test files]
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/cmd/pmcluster	[no test files]
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/api	1.017s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/apikeys	7.680s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth	2.059s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups	11.208s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo	1.007s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/certs	2.732s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/cli	73.469s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster	140.010s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster/tlscerts	1.015s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/config	1.012s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs	3.558s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane	1.090s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials	1.011s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker	1.661s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/docscheck	1.611s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/edgeproxy	1.558s
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs	[no test files]
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation	1.538s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation/compatible	1.028s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger	1.010s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest	1.119s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability	1.011s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability/parseable	1.021s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile	5.364s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/refs	1.011s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/remote	1.055s
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime	[no test files]
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets	4.836s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/server	15.718s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/services	1.015s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/settings	3.097s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/stackdrift	1.016s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks	26.932s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/store	30.774s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry	1.018s
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/internal/testutil/fakeclient	[no test files]
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui	56.132s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/controllers	3.142s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware	1.189s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi	1.043s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store	1.092s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views	1.136s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views/i18n	1.010s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/usage	1.471s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/webhooks	7.575s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/workflow	1.008s
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/migrations	[no test files]
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl	[no test files]

@@ -1,0 +1,38 @@
+[
+  {
+    "host": "crestline",
+    "application_containers_unchanged": 6,
+    "collector": {
+      "host": "crestline",
+      "collector_running": true,
+      "collector_started": "2026-10-19T19:32:33.036133252Z",
+      "other_monitoring_services_unchanged": true,
+      "otel_sha256": "73dfeb6a9e5ba8bc932f3c1e052d2091bfd21f1de8fec6ae023506818b56f84f",
+      "configuration_validated": true
+    }
+  },
+  {
+    "host": "damarkets",
+    "application_containers_unchanged": 15,
+    "collector": {
+      "host": "damarkets",
+      "collector_running": true,
+      "collector_started": "2026-10-19T19:34:59.733775482Z",
+      "other_monitoring_services_unchanged": true,
+      "otel_sha256": "73dfeb6a9e5ba8bc932f3c1e052d2091bfd21f1de8fec6ae023506818b56f84f",
+      "configuration_validated": true
+    }
+  },
+  {
+    "host": "deshli",
+    "application_containers_unchanged": 41,
+    "collector": {
+      "host": "deshli",
+      "collector_running": true,
+      "collector_started": "2026-10-19T19:34:57.817069482Z",
+      "other_monitoring_services_unchanged": true,
+      "otel_sha256": "73dfeb6a9e5ba8bc932f3c1e052d2091bfd21f1de8fec6ae023506818b56f84f",
+      "configuration_validated": true
+    }
+  }
+]

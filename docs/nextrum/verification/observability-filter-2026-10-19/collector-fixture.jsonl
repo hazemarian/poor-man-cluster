@@ -1,0 +1,2 @@
+{"phase": "before", "checks": {"resource-compose": false, "explicit-point": true, "explicit-resource": false, "legacy-point": true, "unlabelled": true}, "all_pass": false}
+{"phase": "after", "checks": {"resource-compose": true, "explicit-point": true, "explicit-resource": true, "legacy-point": true, "unlabelled": true}, "all_pass": true}

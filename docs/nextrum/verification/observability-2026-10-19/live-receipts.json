@@ -1,0 +1,25 @@
+[
+  {
+    "host": "deshli",
+    "original_apps": 41,
+    "original_apps_unchanged_running": true,
+    "daemon_release": "nextrum-fleet-20261019-2",
+    "backend_hostname": "46fe8a5ace7f",
+    "tunnels_active": true,
+    "edge_sha256": "51c6bb375dc0cdc0312f5f12a6426ce5c75e8128f455f8af606fcd6af5ca268e"
+  },
+  {
+    "host": "crestline",
+    "original_apps": 6,
+    "original_apps_unchanged_running": true,
+    "daemon_release": "nextrum-fleet-20261019-2",
+    "backend_hostname": "ff9de8f45b39"
+  },
+  {
+    "host": "damarkets",
+    "original_apps": 15,
+    "original_apps_unchanged_running": true,
+    "daemon_release": "nextrum-fleet-20261019-2",
+    "backend_hostname": "28227f3ad801"
+  }
+]

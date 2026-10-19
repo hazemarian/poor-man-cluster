@@ -44,8 +44,21 @@ type Client struct {
 // New builds a Client. base and token are initial values; both are mutable via
 // SetBase/SetToken so the UI can reconfigure after boot.
 func New(base, token string, timeout time.Duration) *Client {
+	return NewWithHTTPClient(base, token, timeout, &http.Client{Timeout: timeout})
+}
+
+// NewWithHTTPClient builds a client with the supplied transport. The regular
+// UI client keeps its historical redirect behaviour; callers that fan out to
+// configured fleet endpoints can pass a client with redirects disabled and a
+// bounded timeout without changing the shared client.
+func NewWithHTTPClient(base, token string, timeout time.Duration, hc *http.Client) *Client {
+	if hc == nil {
+		hc = &http.Client{Timeout: timeout}
+	} else if hc.Timeout <= 0 && timeout > 0 {
+		hc.Timeout = timeout
+	}
 	return &Client{
-		http: &http.Client{Timeout: timeout},
+		http: hc,
 		base: strings.TrimRight(base, "/"),
 		tok:  token,
 	}

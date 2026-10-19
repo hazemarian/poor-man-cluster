@@ -1,0 +1,10 @@
+# Install as compose.override.yaml on Deshli after integrating its existing
+# authenticated, host-run pmcluster console. Keeps only monitoring in Compose.
+services:
+  parseable:
+    ports:
+      - 127.0.0.1:18080:8000
+  daemon:
+    profiles: [private-console]
+  edge:
+    profiles: [private-console]

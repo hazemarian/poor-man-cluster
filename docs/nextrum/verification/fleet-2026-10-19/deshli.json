@@ -1,0 +1,13 @@
+{
+  "host": "deshli",
+  "release": "nextrum-fleet-20261019-2",
+  "binaries_match": true,
+  "original_app_containers_unchanged": 41,
+  "swarm": "inactive",
+  "disk_guard_entries": 1,
+  "hashes": {
+    "pmcluster": "b52346a8d0654d426fe12404314a686bbf8b7ddf5d1e91646363264e193e95d1",
+    "edge": "ea6d365cb1e03aad8e4ab142af48900ce3d2f9a37de5fce209c6a3683c57bff5"
+  },
+  "stdout_service_identity_pass": true
+}

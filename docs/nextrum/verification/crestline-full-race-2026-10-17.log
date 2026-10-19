@@ -1,0 +1,50 @@
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/cmd/edge	[no test files]
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/cmd/pmcluster	[no test files]
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/api	1.044s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/apikeys	20.840s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth	3.831s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups	37.083s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo	1.026s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/certs	6.840s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/cli	99.658s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster	278.152s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster/tlscerts	1.039s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/config	1.037s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs	9.285s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane	1.792s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials	1.061s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker	1.804s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/docscheck	2.042s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/edgeproxy	1.594s
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs	[no test files]
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation	2.515s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation/compatible	1.080s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger	1.037s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest	1.250s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability	1.033s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability/parseable	1.063s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile	13.588s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/refs	1.036s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/remote	1.160s
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime	[no test files]
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets	15.653s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/server	45.823s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/services	1.120s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/settings	9.276s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/stackdrift	1.052s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks	74.834s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/store	97.076s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry	1.066s
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/internal/testutil/fakeclient	[no test files]
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui	74.918s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/controllers	5.366s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware	1.793s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi	1.134s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store	1.535s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views	1.327s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views/i18n	1.033s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/usage	2.791s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/webhooks	21.308s
+ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/workflow	1.033s
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/migrations	[no test files]
+?   	github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl	[no test files]

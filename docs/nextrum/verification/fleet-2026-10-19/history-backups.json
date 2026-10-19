@@ -1,0 +1,47 @@
+{
+  "crestline": {
+    "created_at": "2026-10-19T13:18:51.418445+00:00",
+    "archives": [
+      {
+        "name": "data.tar.gz",
+        "bytes": 31158673,
+        "sha256": "a9a06a2e3f54e9202edddd48f1898fa76a4f4ce614d7e5adcfc1a6a5ca76582c"
+      },
+      {
+        "name": "staging.tar.gz",
+        "bytes": 613,
+        "sha256": "81d1a954a87e6dafd455bdc001f2e1fd49eb94b212b342411bcaa7ebad5a555d"
+      }
+    ]
+  },
+  "deshli": {
+    "created_at": "2026-10-19T13:33:01.775671+00:00",
+    "archives": [
+      {
+        "name": "data.tar.gz",
+        "bytes": 118592107,
+        "sha256": "2fa5293c03ef5c98aa4e848f8ea4a273c28f90905d84b716d725c29dd5a55c2e"
+      },
+      {
+        "name": "staging.tar.gz",
+        "bytes": 618,
+        "sha256": "b1af281820c45099ea67f372337017c4d50407f271f94d5a11c056ceeedcb39a"
+      }
+    ]
+  },
+  "damarkets": {
+    "created_at": "2026-10-19T13:38:11.666917+00:00",
+    "archives": [
+      {
+        "name": "data.tar.gz",
+        "bytes": 141230536,
+        "sha256": "a585cf22a6b7365ce986e42c05fc4eccd5c0e8c86632b6c7c3cba14762bdd7a4"
+      },
+      {
+        "name": "staging.tar.gz",
+        "bytes": 635,
+        "sha256": "f50120be0033dd7a5a7e074f92df7c67cc78868367c231349aa76fb8e7baed4b"
+      }
+    ]
+  }
+}

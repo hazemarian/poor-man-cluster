@@ -2,10 +2,10 @@
 <div class="page-head">
   <div class="ph-text">
     <h1>{{T "nav.observability"}}</h1>
-    <p class="sub">{{T "observability.sub"}}</p>
+    <p class="sub">{{if .FederatedAll}}{{T "observability.federated_sub"}}{{else}}{{T "observability.sub"}}{{end}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability?tab={{.Tab}}&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true" hx-disabled-elt="this">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability?tab={{.Tab}}&amp;node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;q={{urlquery .Q}}&amp;range={{.Range}}&amp;severity={{urlquery .Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Offset}}&amp;svc={{urlquery .TraceService}}&amp;toffset={{.TraceOffset}}{{if .Live}}&amp;live=1{{end}}{{if .ErrorsOnly}}&amp;errors=1{{end}}{{if .Traces.Detail}}&amp;trace={{urlquery .Traces.TraceID}}{{end}}" hx-target="#view" hx-push-url="true" hx-disabled-elt="this">
       {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
     </button>
   </div>
@@ -22,14 +22,23 @@
 
 <div class="obs-bar">
   <nav class="seg obs-tabs" aria-label="{{T "obs.tabs_label"}}">
-    <a href="/web/observability?tab=overview&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "overview"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_overview"}}</a>
-    <a href="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "logs"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_logs"}}</a>
-    <a href="/web/observability?tab=metrics&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=metrics&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "metrics"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_metrics"}}</a>
-    <a href="/web/observability?tab=traces&amp;range={{.Range}}" hx-get="/web/observability?tab=traces&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "traces"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_traces"}}</a>
+    <a href="/web/observability?tab=overview&amp;node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;q={{urlquery .Q}}&amp;range={{.Range}}&amp;severity={{urlquery .Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Offset}}&amp;svc={{urlquery .TraceService}}&amp;toffset={{.TraceOffset}}{{if .Live}}&amp;live=1{{end}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-get="/web/observability?tab=overview&amp;node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;q={{urlquery .Q}}&amp;range={{.Range}}&amp;severity={{urlquery .Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Offset}}&amp;svc={{urlquery .TraceService}}&amp;toffset={{.TraceOffset}}{{if .Live}}&amp;live=1{{end}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "overview"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_overview"}}</a>
+    <a href="/web/observability?tab=logs&amp;node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;q={{urlquery .Q}}&amp;range={{.Range}}&amp;severity={{urlquery .Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Offset}}&amp;svc={{urlquery .TraceService}}&amp;toffset={{.TraceOffset}}{{if .Live}}&amp;live=1{{end}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-get="/web/observability?tab=logs&amp;node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;q={{urlquery .Q}}&amp;range={{.Range}}&amp;severity={{urlquery .Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Offset}}&amp;svc={{urlquery .TraceService}}&amp;toffset={{.TraceOffset}}{{if .Live}}&amp;live=1{{end}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "logs"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_logs"}}</a>
+    <a href="/web/observability?tab=metrics&amp;node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;q={{urlquery .Q}}&amp;range={{.Range}}&amp;severity={{urlquery .Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Offset}}&amp;svc={{urlquery .TraceService}}&amp;toffset={{.TraceOffset}}{{if .Live}}&amp;live=1{{end}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-get="/web/observability?tab=metrics&amp;node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;q={{urlquery .Q}}&amp;range={{.Range}}&amp;severity={{urlquery .Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Offset}}&amp;svc={{urlquery .TraceService}}&amp;toffset={{.TraceOffset}}{{if .Live}}&amp;live=1{{end}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "metrics"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_metrics"}}</a>
+    <a href="/web/observability?tab=traces&amp;node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;q={{urlquery .Q}}&amp;range={{.Range}}&amp;severity={{urlquery .Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Offset}}&amp;svc={{urlquery .TraceService}}&amp;toffset={{.TraceOffset}}{{if .Live}}&amp;live=1{{end}}{{if .ErrorsOnly}}&amp;errors=1{{end}}{{if .Traces.Detail}}&amp;trace={{urlquery .Traces.TraceID}}{{end}}" hx-get="/web/observability?tab=traces&amp;node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;q={{urlquery .Q}}&amp;range={{.Range}}&amp;severity={{urlquery .Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Offset}}&amp;svc={{urlquery .TraceService}}&amp;toffset={{.TraceOffset}}{{if .Live}}&amp;live=1{{end}}{{if .ErrorsOnly}}&amp;errors=1{{end}}{{if .Traces.Detail}}&amp;trace={{urlquery .Traces.TraceID}}{{end}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "traces"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_traces"}}</a>
   </nav>
-  {{if and (ne .Tab "logs") (ne .Tab "traces")}}
-  <form class="obs-filters" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, change from:select">
+  {{if .HostOptions}}
+  <form class="obs-filters obs-node-filter" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="change">
+    <input type="hidden" name="tab" value="{{.Tab}}"><input type="hidden" name="service" value="{{.Service}}"><input type="hidden" name="range" value="{{.Range}}"><input type="hidden" name="q" value="{{.Q}}"><input type="hidden" name="page" value="{{.StackPage.Page}}"><input type="hidden" name="severity" value="{{.Severity}}"><input type="hidden" name="search" value="{{.Search}}"><input type="hidden" name="offset" value="{{.Offset}}"><input type="hidden" name="svc" value="{{.TraceService}}"><input type="hidden" name="toffset" value="{{.TraceOffset}}">{{if .Live}}<input type="hidden" name="live" value="1">{{end}}{{if .ErrorsOnly}}<input type="hidden" name="errors" value="1">{{end}}{{if .Traces.Detail}}<input type="hidden" name="trace" value="{{.Traces.TraceID}}">{{end}}
+    <div class="field"><label for="observability-node">{{T "observability.node_scope"}}</label>
+      <select id="observability-node" name="node" class="finput"><option value="">{{T "observability.all_nodes"}}</option>{{range .HostOptions}}<option value="{{.Name}}"{{if eq $.Node .Name}} selected{{end}}>{{.Name}} · {{.Hostname}}</option>{{end}}</select>
+    </div>
+  </form>
+  {{end}}
+  {{if or .FederatedAll (and (ne .Tab "logs") (ne .Tab "traces"))}}
+  <form class="obs-filters" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, change">
     <input type="hidden" name="tab" value="{{.Tab}}">
+    <input type="hidden" name="node" value="{{.Node}}"><input type="hidden" name="service" value="{{.Service}}"><input type="hidden" name="q" value="{{.Q}}"><input type="hidden" name="page" value="{{.StackPage.Page}}"><input type="hidden" name="severity" value="{{.Severity}}"><input type="hidden" name="search" value="{{.Search}}"><input type="hidden" name="offset" value="{{.Offset}}"><input type="hidden" name="svc" value="{{.TraceService}}"><input type="hidden" name="toffset" value="{{.TraceOffset}}">{{if .Live}}<input type="hidden" name="live" value="1">{{end}}{{if .ErrorsOnly}}<input type="hidden" name="errors" value="1">{{end}}{{if .Traces.Detail}}<input type="hidden" name="trace" value="{{.Traces.TraceID}}">{{end}}
     <div class="field">
       <label class="sr-only" for="observability-range">{{T "observability.filter_range"}}</label>
       <select id="observability-range" name="range" class="finput">
@@ -41,18 +50,19 @@
   {{end}}
 </div>
 
-{{if eq .Tab "logs"}}{{template "observabilitylogs" .}}
+{{if .FederatedAll}}{{template "federatedobservability" .}}
+{{else if eq .Tab "logs"}}{{template "observabilitylogs" .}}
 {{else if eq .Tab "metrics"}}{{template "observabilitymetrics" .}}
 {{else if eq .Tab "traces"}}{{template "observabilitytraces" .}}
 {{else}}{{template "observabilityoverview" .}}{{end}}
 
-{{template "investigationask" .}}
+{{if not .Federated}}{{template "investigationask" .}}{{end}}
 {{end}}
 
 {{define "obschart"}}<svg class="obs-chart" viewBox="0 0 240 56" preserveAspectRatio="none" aria-hidden="true" focusable="false"><path class="obs-area" d="{{.Area}}"/><path class="obs-line" d="{{.Path}}"/></svg>{{end}}
 
 {{define "observabilityoverview"}}
-<div id="observability-summary">
+<div id="{{if .PanelID}}{{.PanelID}}{{else}}observability-summary{{end}}">
   <div class="stats obs-kpis">
     {{if .Health.NodesKnown}}<div class="stat">
       <div class="stat-l">{{T "observability.nodes_ready"}}</div>
@@ -123,7 +133,7 @@
 
     <section class="panel">
       <div class="panel-head"><div><h2>{{T "obs.top_errors"}}</h2><p class="sub">{{T "obs.top_errors_sub"}}</p></div>
-        <div class="ph-actions"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=logs&amp;severity=error&amp;range={{.Range}}" hx-get="/web/observability?tab=logs&amp;severity=error&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.view_logs"}}</a></div>
+        <div class="ph-actions"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=logs&amp;node={{urlquery .Node}}&amp;severity=error&amp;range={{.Range}}" hx-get="/web/observability?tab=logs&amp;node={{urlquery .Node}}&amp;severity=error&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.view_logs"}}</a></div>
       </div>
       <div class="panel-body tight">
         {{if not .Dash.TopOK}}<div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3></div>
@@ -144,7 +154,7 @@
     <div class="panel-head">
       <h2>{{T "observability.nodes_title"}}</h2>
       <div class="ph-actions">
-        <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability/summary?range={{.Range}}" hx-target="#observability-summary" hx-swap="outerHTML" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+        <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability/summary?node={{urlquery .Node}}&amp;range={{.Range}}" hx-target="#{{if .PanelID}}{{.PanelID}}{{else}}observability-summary{{end}}" hx-swap="outerHTML" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
       </div>
     </div>
     <div class="panel-body">
@@ -166,10 +176,10 @@
     <div class="panel-head">
       <div><h2>{{T "observability.services_title"}}</h2><p class="sub">{{T "observability.services_sub"}}</p></div>
       <div class="ph-actions">
-        <form class="obs-search" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, keyup changed delay:400ms from:#obs-q">
-          <input type="hidden" name="tab" value="overview"><input type="hidden" name="range" value="{{.Range}}">
-          <label class="sr-only" for="obs-q">{{T "obs.search_services"}}</label>
-          <input id="obs-q" class="finput" type="search" name="q" value="{{.Q}}" maxlength="100" placeholder="{{T "obs.search_services"}}" autocomplete="off">
+        <form class="obs-search" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, keyup changed delay:400ms from:#{{.IDPrefix}}-q">
+          <input type="hidden" name="tab" value="overview"><input type="hidden" name="node" value="{{.Node}}"><input type="hidden" name="range" value="{{.Range}}">
+          <label class="sr-only" for="{{.IDPrefix}}-q">{{T "obs.search_services"}}</label>
+          <input id="{{.IDPrefix}}-q" class="finput" type="search" name="q" value="{{.Q}}" maxlength="100" placeholder="{{T "obs.search_services"}}" autocomplete="off">
         </form>
       </div>
     </div>
@@ -194,7 +204,7 @@
               <span class="obs-svc-name mono iso" dir="ltr">{{.Service}}{{if .Platform}} <span class="pill plain">{{T "nav.platform"}}</span>{{end}}</span>
               <span class="obs-svc-rep num iso" dir="ltr">{{N .Replicas}} / {{if .DesiredKnown}}{{N .Desired}}{{else}}?{{end}}</span>
               <span class="obs-svc-state">{{if .Standalone}}<span class="pill plain">{{T "common.unknown"}}</span>{{else if .Job}}<span class="pill plain">{{T "observability.job_unknown"}}</span>{{else if eq .Status "inactive"}}<span class="pill plain">{{T "st.inactive"}}</span>{{else if .Completed}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>{{else if .Ready}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{else}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>{{end}}</span>
-              <span class="obs-svc-act"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=logs&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-get="/web/observability?tab=logs&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-target="#view" hx-push-url="true">{{icon "overview"}}<span>{{T "obs.view_logs"}}</span></a></span>
+              <span class="obs-svc-act"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=logs&amp;node={{urlquery $.Node}}&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-get="/web/observability?tab=logs&amp;node={{urlquery $.Node}}&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-target="#view" hx-push-url="true">{{icon "overview"}}<span>{{T "obs.view_logs"}}</span></a></span>
             </li>
             {{end}}
           </ul>
@@ -205,11 +215,11 @@
       <div class="panel-foot">
         <span class="muted">{{T "obs.page"}} {{N .StackPage.Page}} / {{N .StackPage.Pages}}</span>
         <span class="spacer"></span>
-        {{if .StackPage.HasPrev}}<a class="btn btn-sm" href="/web/observability?tab=overview&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Prev}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Prev}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.prev"}}</a>{{end}}
-        {{if .StackPage.HasNext}}<a class="btn btn-sm" href="/web/observability?tab=overview&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Next}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Next}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.next"}}</a>{{end}}
+        {{if .StackPage.HasPrev}}<a class="btn btn-sm" href="/web/observability?tab=overview&amp;node={{urlquery .Node}}&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Prev}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;node={{urlquery .Node}}&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Prev}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.prev"}}</a>{{end}}
+        {{if .StackPage.HasNext}}<a class="btn btn-sm" href="/web/observability?tab=overview&amp;node={{urlquery .Node}}&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Next}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;node={{urlquery .Node}}&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Next}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.next"}}</a>{{end}}
       </div>
-      {{end}}
-      {{end}}
+{{end}}
+{{end}}
     </div>
   </section>
 </div>
@@ -238,30 +248,31 @@
 {{end}}
 
 {{define "observabilitylogs"}}
-<section class="panel" id="obs-logs"{{if .Live}} hx-get="/web/observability/evidence?live=1&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}" hx-trigger="every 5s [document.activeElement.id !== 'obs-search']" hx-swap="outerHTML"{{end}}>
+<section class="panel" id="{{if .EvidenceTarget}}{{.EvidenceTarget}}{{else}}obs-logs{{end}}"{{if .Live}} hx-get="/web/observability/evidence?node={{urlquery .Node}}&amp;live=1&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}" hx-trigger="every 5s [document.activeElement.id !== '{{.IDPrefix}}-search']" hx-swap="outerHTML"{{end}}>
   <div class="panel-head">
     <div><h2>{{T "obs.logs_title"}}</h2><p class="sub">{{T "obs.logs_sub"}}</p></div>
     <div class="ph-actions"><div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}{{.Evidence.WindowStart}} → {{.Evidence.WindowEnd}}{{end}}</div></div>
   </div>
   <div class="panel-body">
-    <form class="obs-logform" method="get" action="/web/observability" hx-get="/web/observability/evidence" hx-target="#obs-logs" hx-swap="outerHTML" hx-trigger="submit, change from:select, change from:#obs-live, keyup changed delay:500ms from:#obs-search">
+    <form class="obs-logform" method="get" action="/web/observability" hx-get="/web/observability/evidence" hx-target="#{{if .EvidenceTarget}}{{.EvidenceTarget}}{{else}}obs-logs{{end}}" hx-swap="outerHTML" hx-trigger="submit, change, keyup changed delay:500ms from:#{{.IDPrefix}}-search">
       <input type="hidden" name="tab" value="logs">
+      <input type="hidden" name="node" value="{{.Node}}">
       <div class="field obs-svc-field">
-        <label for="obs-log-service">{{T "observability.filter_service"}}</label>
-        <select id="obs-log-service" name="service" class="finput">
+        <label for="{{.IDPrefix}}-log-service">{{T "observability.filter_service"}}</label>
+        <select id="{{.IDPrefix}}-log-service" name="service" class="finput">
           <option value="">{{T "observability.all_services"}}</option>
           {{range .Options}}<option value="{{.Value}}"{{if eq $.Service .Value}} selected{{end}}>{{.Label}}</option>{{end}}
         </select>
       </div>
       <div class="field">
-        <label for="obs-log-range">{{T "observability.filter_range"}}</label>
-        <select id="obs-log-range" name="range" class="finput">
+        <label for="{{.IDPrefix}}-log-range">{{T "observability.filter_range"}}</label>
+        <select id="{{.IDPrefix}}-log-range" name="range" class="finput">
           <option value="15m"{{if eq .Range "15m"}} selected{{end}}>{{T "observability.range_15m"}}</option><option value="1h"{{if eq .Range "1h"}} selected{{end}}>{{T "observability.range_1h"}}</option><option value="6h"{{if eq .Range "6h"}} selected{{end}}>{{T "observability.range_6h"}}</option><option value="24h"{{if eq .Range "24h"}} selected{{end}}>{{T "observability.range_24h"}}</option>
         </select>
       </div>
       <div class="field">
-        <label for="obs-log-severity">{{T "obs.filter_level"}}</label>
-        <select id="obs-log-severity" name="severity" class="finput">
+        <label for="{{.IDPrefix}}-log-severity">{{T "obs.filter_level"}}</label>
+        <select id="{{.IDPrefix}}-log-severity" name="severity" class="finput">
           <option value="">{{T "obs.level_all"}}</option>
           <option value="error"{{if eq .Severity "error"}} selected{{end}}>{{T "obs.level_error"}}</option>
           <option value="warn"{{if eq .Severity "warn"}} selected{{end}}>{{T "obs.level_warn"}}</option>
@@ -270,11 +281,11 @@
         </select>
       </div>
       <div class="field obs-grow">
-        <label for="obs-search">{{T "obs.filter_search"}}</label>
-        <input id="obs-search" class="finput" type="search" name="search" value="{{.Search}}" maxlength="100" placeholder="{{T "obs.search_ph"}}" autocomplete="off">
+        <label for="{{.IDPrefix}}-search">{{T "obs.filter_search"}}</label>
+        <input id="{{.IDPrefix}}-search" class="finput" type="search" name="search" value="{{.Search}}" maxlength="100" placeholder="{{T "obs.search_ph"}}" autocomplete="off">
       </div>
       <div class="field obs-live-field">
-        <label class="obs-check" for="obs-live"><input id="obs-live" type="checkbox" name="live" value="1"{{if .Live}} checked{{end}}><span>{{T "obs.live"}}</span></label>
+        <label class="obs-check" for="{{.IDPrefix}}-live"><input id="{{.IDPrefix}}-live" type="checkbox" name="live" value="1"{{if .Live}} checked{{end}}><span>{{T "obs.live"}}</span></label>
       </div>
       <noscript><button type="submit" class="btn btn-primary">{{T "observability.load_evidence"}}</button></noscript>
     </form>
@@ -299,8 +310,8 @@
     </div>
     {{if and (not .Live) (or .Evidence.HasPrev .Evidence.HasNext)}}
     <div class="obs-pager">
-      {{if .Evidence.HasPrev}}<a class="btn btn-sm" href="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.PrevOffset}}" hx-get="/web/observability/evidence?service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.PrevOffset}}" hx-target="#obs-logs" hx-swap="outerHTML">{{T "obs.newer"}}</a>{{end}}
-      {{if .Evidence.HasNext}}<a class="btn btn-sm" href="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.NextOffset}}" hx-get="/web/observability/evidence?service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.NextOffset}}" hx-target="#obs-logs" hx-swap="outerHTML">{{T "obs.older"}}</a>{{end}}
+      {{if .Evidence.HasPrev}}<a class="btn btn-sm" href="/web/observability?tab=logs&amp;node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.PrevOffset}}" hx-get="/web/observability/evidence?node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.PrevOffset}}" hx-target="#{{if .EvidenceTarget}}{{.EvidenceTarget}}{{else}}obs-logs{{end}}" hx-swap="outerHTML">{{T "obs.newer"}}</a>{{end}}
+      {{if .Evidence.HasNext}}<a class="btn btn-sm" href="/web/observability?tab=logs&amp;node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.NextOffset}}" hx-get="/web/observability/evidence?node={{urlquery .Node}}&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}&amp;offset={{.Evidence.NextOffset}}" hx-target="#{{if .EvidenceTarget}}{{.EvidenceTarget}}{{else}}obs-logs{{end}}" hx-swap="outerHTML">{{T "obs.older"}}</a>{{end}}
     </div>
     {{end}}
     {{end}}
@@ -349,11 +360,11 @@
 {{end}}
 
 {{define "observabilitytraces"}}
-<section class="panel" id="obs-traces">
+<section class="panel" id="{{if .TracesTarget}}{{.TracesTarget}}{{else}}obs-traces{{end}}">
   {{if .Traces.Detail}}
   <div class="panel-head">
     <div><h2>{{T "obs.traces_title"}} <span class="mono iso" dir="ltr">{{.Traces.TraceID}}</span></h2></div>
-    <div class="ph-actions"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=traces&amp;range={{.Range}}" hx-get="/web/observability/traces?range={{.Range}}" hx-target="#obs-traces" hx-swap="outerHTML">{{T "obs.trace_back"}}</a></div>
+    <div class="ph-actions"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=traces&amp;node={{urlquery .Node}}&amp;svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.TraceOffset}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-get="/web/observability/traces?node={{urlquery .Node}}&amp;svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.TraceOffset}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-target="#{{if .TracesTarget}}{{.TracesTarget}}{{else}}obs-traces{{end}}" hx-swap="outerHTML">{{T "obs.trace_back"}}</a></div>
   </div>
   <div class="panel-body">
     {{if .Traces.Unavailable}}<div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "observability.evidence_unavailable_body"}}</p></div>
@@ -377,20 +388,21 @@
     <div class="ph-actions"><div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}{{.Evidence.WindowStart}} → {{.Evidence.WindowEnd}}{{end}}</div></div>
   </div>
   <div class="panel-body">
-    <form class="obs-logform" method="get" action="/web/observability" hx-get="/web/observability/traces" hx-target="#obs-traces" hx-swap="outerHTML" hx-trigger="submit, change from:select, change from:#obs-errors, keyup changed delay:500ms from:#obs-tsvc">
+    <form class="obs-logform" method="get" action="/web/observability" hx-get="/web/observability/traces" hx-target="#{{if .TracesTarget}}{{.TracesTarget}}{{else}}obs-traces{{end}}" hx-swap="outerHTML" hx-trigger="submit, change, keyup changed delay:500ms from:#{{.IDPrefix}}-tsvc">
       <input type="hidden" name="tab" value="traces">
+      <input type="hidden" name="node" value="{{.Node}}">
       <div class="field">
-        <label for="obs-trace-range">{{T "observability.filter_range"}}</label>
-        <select id="obs-trace-range" name="range" class="finput">
+        <label for="{{.IDPrefix}}-trace-range">{{T "observability.filter_range"}}</label>
+        <select id="{{.IDPrefix}}-trace-range" name="range" class="finput">
           <option value="15m"{{if eq .Range "15m"}} selected{{end}}>{{T "observability.range_15m"}}</option><option value="1h"{{if eq .Range "1h"}} selected{{end}}>{{T "observability.range_1h"}}</option><option value="6h"{{if eq .Range "6h"}} selected{{end}}>{{T "observability.range_6h"}}</option><option value="24h"{{if eq .Range "24h"}} selected{{end}}>{{T "observability.range_24h"}}</option>
         </select>
       </div>
       <div class="field obs-grow">
-        <label for="obs-tsvc">{{T "obs.filter_trace_service"}}</label>
-        <input id="obs-tsvc" class="finput" type="search" name="svc" value="{{.TraceService}}" maxlength="100" autocomplete="off">
+        <label for="{{.IDPrefix}}-tsvc">{{T "obs.filter_trace_service"}}</label>
+        <input id="{{.IDPrefix}}-tsvc" class="finput" type="search" name="svc" value="{{.TraceService}}" maxlength="100" autocomplete="off">
       </div>
       <div class="field obs-live-field">
-        <label class="obs-check" for="obs-errors"><input id="obs-errors" type="checkbox" name="errors" value="1"{{if .ErrorsOnly}} checked{{end}}><span>{{T "obs.filter_errors"}}</span></label>
+        <label class="obs-check" for="{{.IDPrefix}}-errors"><input id="{{.IDPrefix}}-errors" type="checkbox" name="errors" value="1"{{if .ErrorsOnly}} checked{{end}}><span>{{T "obs.filter_errors"}}</span></label>
       </div>
       <noscript><button type="submit" class="btn btn-primary">{{T "observability.apply_filters"}}</button></noscript>
     </form>
@@ -401,7 +413,7 @@
     <div class="obs-traces" role="table" aria-label="{{T "obs.traces_title"}}">
       <div class="obs-trace-head" role="row"><span role="columnheader">{{T "obs.col_started"}}</span><span role="columnheader">{{T "obs.col_root"}}</span><span role="columnheader">{{T "observability.col_service"}}</span><span role="columnheader">{{T "obs.col_spans"}}</span><span role="columnheader">{{T "obs.col_duration"}}</span></div>
       {{range .Traces.Rows}}
-      <a class="obs-trace{{if .HasError}} is-error{{end}}" role="row" href="/web/observability?tab=traces&amp;trace={{.ID}}&amp;range={{$.Range}}" hx-get="/web/observability/traces?trace={{.ID}}&amp;range={{$.Range}}" hx-target="#obs-traces" hx-swap="outerHTML">
+      <a class="obs-trace{{if .HasError}} is-error{{end}}" role="row" href="/web/observability?tab=traces&amp;node={{urlquery $.Node}}&amp;trace={{urlquery .ID}}&amp;svc={{urlquery $.TraceService}}&amp;range={{$.Range}}&amp;toffset={{$.TraceOffset}}{{if $.ErrorsOnly}}&amp;errors=1{{end}}" hx-get="/web/observability/traces?node={{urlquery $.Node}}&amp;trace={{urlquery .ID}}&amp;svc={{urlquery $.TraceService}}&amp;range={{$.Range}}&amp;toffset={{$.TraceOffset}}{{if $.ErrorsOnly}}&amp;errors=1{{end}}" hx-target="#{{if $.TracesTarget}}{{$.TracesTarget}}{{else}}obs-traces{{end}}" hx-swap="outerHTML">
         <span class="mono iso" dir="ltr" role="cell">{{.Started}}</span>
         <span class="obs-trace-root" role="cell"><span class="mono">{{if .Root}}{{.Root}}{{else}}{{T "obs.trace_orphan"}}{{end}}</span> <span class="muted mono iso" dir="ltr">{{.Short}}</span></span>
         <span class="mono iso" dir="ltr" role="cell">{{.Service}}</span>
@@ -412,12 +424,88 @@
     </div>
     {{if or .Traces.HasPrev .Traces.HasNext}}
     <div class="obs-pager">
-      {{if .Traces.HasPrev}}<a class="btn btn-sm" href="/web/observability?tab=traces&amp;svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.PrevOffset}}" hx-get="/web/observability/traces?svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.PrevOffset}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-target="#obs-traces" hx-swap="outerHTML">{{T "obs.newer"}}</a>{{end}}
-      {{if .Traces.HasNext}}<a class="btn btn-sm" href="/web/observability?tab=traces&amp;svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.NextOffset}}" hx-get="/web/observability/traces?svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.NextOffset}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-target="#obs-traces" hx-swap="outerHTML">{{T "obs.older"}}</a>{{end}}
+      {{if .Traces.HasPrev}}<a class="btn btn-sm" href="/web/observability?tab=traces&amp;node={{urlquery .Node}}&amp;svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.PrevOffset}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-get="/web/observability/traces?node={{urlquery .Node}}&amp;svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.PrevOffset}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-target="#{{if .TracesTarget}}{{.TracesTarget}}{{else}}obs-traces{{end}}" hx-swap="outerHTML">{{T "obs.newer"}}</a>{{end}}
+      {{if .Traces.HasNext}}<a class="btn btn-sm" href="/web/observability?tab=traces&amp;node={{urlquery .Node}}&amp;svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.NextOffset}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-get="/web/observability/traces?node={{urlquery .Node}}&amp;svc={{urlquery .TraceService}}&amp;range={{.Range}}&amp;toffset={{.Traces.NextOffset}}{{if .ErrorsOnly}}&amp;errors=1{{end}}" hx-target="#{{if .TracesTarget}}{{.TracesTarget}}{{else}}obs-traces{{end}}" hx-swap="outerHTML">{{T "obs.older"}}</a>{{end}}
     </div>
     {{end}}
     {{end}}
   </div>
   {{end}}
 </section>
+{{end}}
+
+{{define "federatedobservability"}}
+{{if eq .Tab "logs"}}{{template "federatedlogs" .}}
+{{else if eq .Tab "metrics"}}{{template "federatedmetrics" .}}
+{{else if eq .Tab "traces"}}{{template "federatedtraces" .}}
+{{else}}{{template "federatedoverview" .}}{{end}}
+{{end}}
+
+{{define "federatedscopehead"}}
+<div class="panel-head">
+  <div><h2 class="mono iso" dir="ltr">{{.Name}}</h2><p class="sub mono iso" dir="ltr">{{.Hostname}}</p></div>
+  <div class="ph-actions">
+    {{if .Online}}<span class="pill good"><i class="dot"></i>{{T "fleet.status_online"}}</span>{{else}}<span class="pill bad"><i class="dot"></i>{{T "fleet.status_offline"}}</span>{{end}}
+    <a class="btn btn-ghost btn-sm" href="/web/observability?node={{urlquery .Name}}&amp;tab={{.Data.Tab}}&amp;service={{urlquery .Data.Service}}&amp;q={{urlquery .Data.Q}}&amp;page={{.Data.StackPage.Page}}&amp;range={{.Data.Range}}&amp;severity={{urlquery .Data.Severity}}&amp;search={{urlquery .Data.Search}}&amp;offset={{.Data.Offset}}&amp;svc={{urlquery .Data.TraceService}}&amp;toffset={{.Data.TraceOffset}}{{if .Data.Live}}&amp;live=1{{end}}{{if .Data.ErrorsOnly}}&amp;errors=1{{end}}{{if .Data.Traces.Detail}}&amp;trace={{urlquery .Data.Traces.TraceID}}{{end}}" hx-get="/web/observability?node={{urlquery .Name}}&amp;tab={{.Data.Tab}}&amp;service={{urlquery .Data.Service}}&amp;q={{urlquery .Data.Q}}&amp;page={{.Data.StackPage.Page}}&amp;range={{.Data.Range}}&amp;severity={{urlquery .Data.Severity}}&amp;search={{urlquery .Data.Search}}&amp;offset={{.Data.Offset}}&amp;svc={{urlquery .Data.TraceService}}&amp;toffset={{.Data.TraceOffset}}{{if .Data.Live}}&amp;live=1{{end}}{{if .Data.ErrorsOnly}}&amp;errors=1{{end}}{{if .Data.Traces.Detail}}&amp;trace={{urlquery .Data.Traces.TraceID}}{{end}}" hx-target="#view" hx-push-url="true">{{T "fleet.detail"}}</a>
+  </div>
+</div>
+{{end}}
+
+{{define "federatedoffline"}}
+<div class="empty"><h3>{{if eq .StatusReason "hostname"}}{{T "fleet.hostname"}}{{else if eq .StatusReason "authorization"}}{{T "fleet.authorization"}}{{else}}{{T "fleet.inventory"}}{{end}}</h3><p>{{T "fleet.host_unavailable_body"}}</p></div>
+{{end}}
+
+{{define "federatedoverview"}}
+<div class="stats obs-kpis">
+  <div class="stat"><div class="stat-l">{{T "fleet.online"}}</div><div class="stat-v iso" dir="ltr">{{N .FederatedOnline}} / {{N .FederatedTotal}}</div><div class="stat-f">{{T "fleet.online_foot"}}</div></div>
+  <div class="stat"><div class="stat-l">{{T "fleet.services"}}</div><div class="stat-v iso" dir="ltr">{{if .FederatedServicesKnown}}{{N .FederatedServices}}{{else}}{{T "common.unavailable"}}{{end}}</div><div class="stat-f">{{T "fleet.services_foot"}}{{if .FederatedServicesPartial}} · {{T "fleet.partial"}}{{end}}</div></div>
+  <div class="stat"><div class="stat-l">{{T "fleet.records"}}</div><div class="stat-v iso" dir="ltr">{{if .FederatedLogsKnown}}{{compact .FederatedLogs}}{{else}}{{T "common.unavailable"}}{{end}}</div><div class="stat-f">{{T "fleet.records_foot"}}{{if .FederatedLogsPartial}} · {{T "fleet.partial"}}{{end}}</div></div>
+  <div class="stat{{if gt .FederatedErrors 0}} is-bad{{end}}"><div class="stat-l">{{T "fleet.errors"}}</div><div class="stat-v iso" dir="ltr">{{if .FederatedErrorRateKnown}}{{.FederatedErrorPctText}}{{else}}{{T "common.unavailable"}}{{end}}</div><div class="stat-f">{{if .FederatedLogsKnown}}{{compact .FederatedErrors}}{{else}}{{T "common.unavailable"}}{{end}} {{T "fleet.errors_foot"}}</div></div>
+  {{if .FederatedTracesKnown}}<div class="stat"><div class="stat-l">{{T "fleet.traces"}}</div><div class="stat-v iso" dir="ltr">{{N .FederatedTraces}}</div><div class="stat-f">{{T "fleet.traces_foot"}}{{if .FederatedTracesPartial}} · {{T "fleet.partial"}}{{end}}</div></div>{{end}}
+</div>
+{{if .FederatedPartial}}<div class="banner warn"><div class="b-body"><p class="b-title">{{icon "alert"}}<span>{{T "fleet.partial"}}</span></p><p>{{T "fleet.partial_body"}}</p></div></div>{{end}}
+<div class="fleet-hosts federated-hosts">
+{{range .FederatedHosts}}
+  <section class="panel fleet-host">
+    {{template "federatedscopehead" .}}
+    <div class="panel-body">{{if .Online}}{{template "observabilityoverview" .Data}}{{else}}{{template "federatedoffline" .}}{{end}}</div>
+  </section>
+{{end}}
+</div>
+{{end}}
+
+{{define "federatedlogs"}}
+{{if .FederatedPartial}}<div class="banner warn"><div class="b-body"><p class="b-title">{{icon "alert"}}<span>{{T "fleet.partial"}}</span></p><p>{{T "fleet.partial_body"}}</p></div></div>{{end}}
+<div class="fleet-hosts federated-hosts">
+{{range .FederatedHosts}}
+  <section class="panel fleet-host">
+    {{template "federatedscopehead" .}}
+    <div class="panel-body">{{if .Online}}{{template "observabilitylogs" .Data}}{{else}}{{template "federatedoffline" .}}{{end}}</div>
+  </section>
+{{end}}
+</div>
+{{end}}
+
+{{define "federatedmetrics"}}
+{{if .FederatedPartial}}<div class="banner warn"><div class="b-body"><p class="b-title">{{icon "alert"}}<span>{{T "fleet.partial"}}</span></p><p>{{T "fleet.partial_body"}}</p></div></div>{{end}}
+<div class="fleet-hosts federated-hosts">
+{{range .FederatedHosts}}
+  <section class="panel fleet-host">
+    {{template "federatedscopehead" .}}
+    <div class="panel-body">{{if .Online}}{{template "observabilitymetrics" .Data}}{{else}}{{template "federatedoffline" .}}{{end}}</div>
+  </section>
+{{end}}
+</div>
+{{end}}
+
+{{define "federatedtraces"}}
+{{if .FederatedPartial}}<div class="banner warn"><div class="b-body"><p class="b-title">{{icon "alert"}}<span>{{T "fleet.partial"}}</span></p><p>{{T "fleet.partial_body"}}</p></div></div>{{end}}
+<div class="fleet-hosts federated-hosts">
+{{range .FederatedHosts}}
+  <section class="panel fleet-host">
+    {{template "federatedscopehead" .}}
+    <div class="panel-body">{{if .Online}}{{template "observabilitytraces" .Data}}{{else}}{{template "federatedoffline" .}}{{end}}</div>
+  </section>
+{{end}}
+</div>
 {{end}}
