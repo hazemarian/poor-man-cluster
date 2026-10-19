@@ -51,9 +51,6 @@ obsai/*.sqlite*
 obsai/**/__pycache__/
 obsai/**/*.py[cod]
 
-# Verification output is intentionally retained under the dated Nextrum report.
-!docs/nextrum/verification/**/*.log
-
 # Design capture set — process artifacts, not shipped assets
 pmcluster/docs/redesign/
 

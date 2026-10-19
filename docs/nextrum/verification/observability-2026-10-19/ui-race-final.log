@@ -1,7 +1,0 @@
-ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui	86.215s
-ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/controllers	8.130s
-ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware	1.967s
-ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi	1.163s
-ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store	1.571s
-ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views	1.511s
-ok  	github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views/i18n	1.047s
