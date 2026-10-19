@@ -1035,7 +1035,12 @@ func TestRenderOTelCollectorConfig_DockerStatsLabels(t *testing.T) {
 		t.Error("rendered config should NOT contain the non-existent metric_labels_to_resource_attributes option")
 	}
 
-	for _, want := range []string{`conditions:`, `resource.attributes["service.name"] != nil`} {
+	for _, want := range []string{
+		`resource.attributes["service.name"] != nil`,
+		`attributes["service.name"] == nil`,
+		`resource.attributes["stack.name"] != nil`,
+		`attributes["stack.name"] == nil`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("transform/metrics missing guard condition: %q", want)
 		}

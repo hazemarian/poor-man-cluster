@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -88,10 +87,6 @@ func intOf(v any) int {
 }
 
 func (c Observability) loadTraces(g *gin.Context, d *observabilityData, window observability.Window, redactor observability.Redactor) {
-	c.loadTracesContext(g.Request.Context(), d, window, redactor, strings.TrimSpace(g.Query("trace")))
-}
-
-func (c Observability) loadTracesContext(ctx context.Context, d *observabilityData, window observability.Window, redactor observability.Redactor, traceID string) {
 	d.Traces.Queried = true
 	d.Evidence.WindowStart = window.Start.UTC().Format(time.RFC3339)
 	d.Evidence.WindowEnd = window.End.UTC().Format(time.RFC3339)
@@ -104,14 +99,14 @@ func (c Observability) loadTracesContext(ctx context.Context, d *observabilityDa
 		d.Traces.Unavailable = true
 		return
 	}
-	if id := strings.TrimSpace(traceID); id != "" {
+	if id := strings.TrimSpace(g.Query("trace")); id != "" {
 		d.Traces.Detail = true
 		d.Traces.TraceID = id
 		if !observability.ValidTraceID(id) {
 			d.Traces.NotFound = true
 			return
 		}
-		res, err := src.Trace(ctx, window, id)
+		res, err := src.Trace(g.Request.Context(), window, id)
 		if err != nil || res.Status == observability.StatusUnavailable {
 			d.Traces.Unavailable = true
 			return
@@ -126,7 +121,7 @@ func (c Observability) loadTracesContext(ctx context.Context, d *observabilityDa
 		Service: d.TraceService, Window: window, ErrorsOnly: d.ErrorsOnly,
 		Limit: obsTracePageSize, Offset: d.TraceOffset,
 	}
-	res, err := src.Traces(ctx, q)
+	res, err := src.Traces(g.Request.Context(), q)
 	if err != nil || res.Status == observability.StatusUnavailable {
 		d.Traces.Unavailable = true
 		return

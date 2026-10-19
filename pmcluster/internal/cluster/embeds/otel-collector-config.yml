@@ -36,8 +36,7 @@ receivers:
     api_version: "1.44"
     # Promote Swarm container labels directly to metric datapoint attributes.
     # (container_labels_to_metric_labels is the documented dockerstats key;
-    #  metric_labels_to_resource_attributes is NOT a real receiver option and
-    #  previously produced no attributes, leaving these fields empty.)
+    #  metric_labels_to_resource_attributes is not a receiver option.)
     #
     # Names are DOT-separated to match the OTel semantic convention and the
     # resource processor below, which already sets service.name / stack.name.
@@ -196,20 +195,22 @@ processors:
         action: upsert
         from_attribute: "container.labels.com.docker.stack.namespace"
 
-  # Copy service.name from resource into metric data points so they are
-  # queryable / groupable in Parseable (docker_stats sets resource attributes
-  # but they are stored separately from metric fields).
+  # Copy resource identities into metric data points so they are queryable and
+  # groupable in Parseable. The guards preserve an explicit datapoint identity
+  # supplied by an OTLP client or the docker_stats receiver.
   transform/metrics:
     metric_statements:
       - context: datapoint
-        # Only copy resource service.name when it actually exists (OTLP/SDK
-        # metrics). Guard so this never clobbers the values docker_stats
-        # attaches directly from Swarm container labels — both sides now use the
-        # same dot-separated names, so a datapoint and its resource agree.
         conditions:
           - 'resource.attributes["service.name"] != nil'
+          - 'attributes["service.name"] == nil'
         statements:
           - set(attributes["service.name"], resource.attributes["service.name"])
+      - context: datapoint
+        conditions:
+          - 'resource.attributes["stack.name"] != nil'
+          - 'attributes["stack.name"] == nil'
+        statements:
           - set(attributes["stack.name"], resource.attributes["stack.name"])
 
   # ORDER MATTERS, and it is the whole reason a per-node view was broken.

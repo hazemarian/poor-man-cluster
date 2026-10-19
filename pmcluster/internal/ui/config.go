@@ -48,10 +48,6 @@ type Config struct {
 	// so the shell renders a sign-out affordance that clears the oauth2-proxy
 	// session (/oauth2/sign_out) instead of the /web/logout form.
 	SSOEnabled bool
-	// StandaloneObserver selects the ordinary-Docker observer shell. It keeps
-	// the native Observability page as the default route and hides controls
-	// that only make sense for a Swarm control plane.
-	StandaloneObserver bool
 	// ParseableURL/User/Password configure the edge-local, read-only evidence
 	// adapter. Password is populated from the managed Swarm secret by
 	// applyEdgeSecrets; it is intentionally not read from a browser setting.
@@ -60,9 +56,6 @@ type Config struct {
 	ParseableUser     string
 	ParseablePassword string
 	ParseableAuth     string
-	// FleetConfigPath points at the owner-readable fleet endpoint file. An
-	// empty path disables the combined fleet page and its navigation item.
-	FleetConfigPath string
 }
 
 const (
@@ -82,27 +75,25 @@ const (
 // forgeable built-in default.
 func FromEnv() Config {
 	return Config{
-		InvestigationKey:   os.Getenv("INVESTIGATION_API_KEY"),
-		PublicOrigin:       envOr("PMCLUSTER_PUBLIC_ORIGIN", ""),
-		ListenAddr:         envOr("LISTEN_ADDR", ":8080"),
-		DataDir:            envOr("DATA_DIR", defaultDataDir),
-		PMAPIURL:           envOr("PMCLUSTER_API_URL", ""),
-		PMAPIToken:         envOr("PMCLUSTER_API_TOKEN", ""),
-		EnvUser:            envOr("PMCLUSTER_UI_USER", ""),
-		EnvPass:            envOr("PMCLUSTER_UI_PASS", ""),
-		SessionSecret:      []byte(os.Getenv("PMCLUSTER_UI_SECRET")),
-		CookieName:         envOr("SESSION_COOKIE", defaultCookieName),
-		UpstreamTimeout:    envDur("UPSTREAM_TIMEOUT", defaultTimeout),
-		AppVersion:         envOr("APP_VERSION", "dev"),
-		ClusterDomain:      envOr("PMCLUSTER_DOMAIN", ""),
-		LoginDisabled:      envBool("EDGE_LOGIN_DISABLED"),
-		SSOEnabled:         envBool("EDGE_SSO_ENABLED"),
-		StandaloneObserver: envBool("PMCLUSTER_OBSERVER_MODE"),
-		ParseableURL:       envOr("OBSERVABILITY_PARSEABLE_URL", ""),
-		ParseableStream:    envOr("OBSERVABILITY_PARSEABLE_STREAM", "pmcluster-logs"),
-		ParseableUser:      envOr("OBSERVABILITY_PARSEABLE_USER", ""),
-		ParseableAuth:      envOr("OBSERVABILITY_PARSEABLE_AUTH", ""),
-		FleetConfigPath:    envOr("OBSERVABILITY_FLEET_CONFIG", ""),
+		InvestigationKey: os.Getenv("INVESTIGATION_API_KEY"),
+		PublicOrigin:     envOr("PMCLUSTER_PUBLIC_ORIGIN", ""),
+		ListenAddr:       envOr("LISTEN_ADDR", ":8080"),
+		DataDir:          envOr("DATA_DIR", defaultDataDir),
+		PMAPIURL:         envOr("PMCLUSTER_API_URL", ""),
+		PMAPIToken:       envOr("PMCLUSTER_API_TOKEN", ""),
+		EnvUser:          envOr("PMCLUSTER_UI_USER", ""),
+		EnvPass:          envOr("PMCLUSTER_UI_PASS", ""),
+		SessionSecret:    []byte(os.Getenv("PMCLUSTER_UI_SECRET")),
+		CookieName:       envOr("SESSION_COOKIE", defaultCookieName),
+		UpstreamTimeout:  envDur("UPSTREAM_TIMEOUT", defaultTimeout),
+		AppVersion:       envOr("APP_VERSION", "dev"),
+		ClusterDomain:    envOr("PMCLUSTER_DOMAIN", ""),
+		LoginDisabled:    envBool("EDGE_LOGIN_DISABLED"),
+		SSOEnabled:       envBool("EDGE_SSO_ENABLED"),
+		ParseableURL:     envOr("OBSERVABILITY_PARSEABLE_URL", ""),
+		ParseableStream:  envOr("OBSERVABILITY_PARSEABLE_STREAM", "pmcluster-logs"),
+		ParseableUser:    envOr("OBSERVABILITY_PARSEABLE_USER", ""),
+		ParseableAuth:    envOr("OBSERVABILITY_PARSEABLE_AUTH", ""),
 	}
 }
 

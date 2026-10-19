@@ -93,7 +93,7 @@ func TestMetricQueriesAreFixedAndBounded(t *testing.T) {
 		t.Fatalf("service metrics must use the shared OTel service field: %s", svc)
 	}
 	if strings.Contains(svc, "`compose.service`") {
-		t.Fatalf("service metrics must not require the standalone-only Compose field: %s", svc)
+		t.Fatalf("service metrics must use the shared identity fields: %s", svc)
 	}
 	if _, err := c.NodeMetricsSQL(observability.MetricQuery{Window: w, Bucket: time.Second}); err == nil {
 		t.Error("tiny bucket accepted")

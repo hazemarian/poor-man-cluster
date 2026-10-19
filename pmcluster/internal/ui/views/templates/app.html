@@ -44,12 +44,6 @@
     </div>
 
     <nav class="nav" aria-label="{{T "nav.menu"}}">
-      {{if .StandaloneObserver}}
-      <p class="nav-label" id="nav-observability">{{T "nav.group.cluster"}}</p>
-      <a class="nav-item" href="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" data-nav="observability">{{icon "overview"}}<span>{{T "nav.observability"}}</span></a>
-      {{if and (eq .User.Role "admin") (not .LoginDisabled)}}<a class="nav-item" href="/web/users" hx-get="/web/users" hx-target="#view" hx-push-url="true" data-nav="users">{{icon "users"}}<span>{{T "nav.users"}}</span></a>{{end}}
-      <a class="nav-item" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-nav="settings">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
-      {{else}}
       <p class="nav-label" id="nav-cluster">{{T "nav.group.cluster"}}</p>
       <a class="nav-item" href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
       <a class="nav-item" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
@@ -83,7 +77,6 @@
       <p class="nav-label">{{T "nav.group.external"}}</p>
       <a class="nav-item" href="https://observ.{{.Domain}}/sso-bridge" target="_blank" rel="noopener" title="{{T "nav.observ_hint"}}">{{icon "external"}}<span>{{T "nav.observ"}}</span></a>
       <a class="nav-item" href="https://traefik.{{.Domain}}/dashboard/" target="_blank" rel="noopener">{{icon "external"}}<span>{{T "nav.traefik"}}</span></a>
-      {{end}}
       {{end}}
     </nav>
 
@@ -130,17 +123,12 @@
 </div>
 
 <nav class="tabbar" aria-label="{{T "nav.menu"}}">
-  {{if .StandaloneObserver}}
-  <a href="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" data-nav="observability">{{icon "overview"}}<span>{{T "nav.observability"}}</span></a>
-  <a href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-nav="settings">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
-  {{else}}
   <a href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
   <a href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
   <a href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
   <a href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
   <a href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
   <a href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage">{{icon "usage"}}<span>{{T "nav.usage"}}</span></a>
-  {{end}}
 </nav>
 
 <div class="modal-backdrop" id="modal" hidden onclick="if(event.target===this)closeModal()">

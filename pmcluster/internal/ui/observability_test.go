@@ -85,8 +85,135 @@ func TestNativeObservabilityScopeAndRendering(t *testing.T) {
 	}
 }
 
+// nativeClusterFixture models the normal full-cluster composition: one
+// daemon inventory contains every Swarm node and one Parseable source carries
+// the same node identities across all signals. There is no observer mode or
+// host federation in this path.
+type nativeClusterFixture struct {
+	logs, nodes, services, traces atomic.Int32
+}
+
+func (f *nativeClusterFixture) Query(_ context.Context, q observability.Query) (observability.Result, error) {
+	return observability.Result{Status: observability.StatusAvailable, Window: q.Window, ObservedAt: time.Now()}, nil
+}
+
+func (f *nativeClusterFixture) Logs(_ context.Context, q observability.LogQuery) (observability.Result, error) {
+	f.logs.Add(1)
+	return observability.Result{Status: observability.StatusAvailable, Window: q.Window, ObservedAt: time.Now(), Rows: []observability.Row{
+		{"service.name": "demo_web", "body": "native cluster log", "severity_text": "ERROR", "p_timestamp": q.Window.End.UTC().Format(time.RFC3339)},
+	}}, nil
+}
+
+func (f *nativeClusterFixture) NodeMetrics(_ context.Context, q observability.MetricQuery) (observability.Result, error) {
+	f.nodes.Add(1)
+	bucket := q.Window.End.Add(-30 * time.Minute).UTC().Format(time.RFC3339)
+	rows := make([]observability.Row, 0, 9)
+	for i, host := range []string{"node-1", "node-2", "node-3"} {
+		rows = append(rows,
+			observability.Row{"bucket": bucket, "host": host, "metric": observability.MetricNodeCPUUtilization, "state": "idle", "value": 0.25 + float64(i)/10},
+			observability.Row{"bucket": bucket, "host": host, "metric": observability.MetricNodeMemUtilization, "state": "used", "value": 0.45 + float64(i)/10},
+			observability.Row{"bucket": bucket, "host": host, "metric": observability.MetricNodeLoad1m, "state": "", "value": 0.5 + float64(i)/10},
+		)
+	}
+	return observability.Result{Status: observability.StatusAvailable, Window: q.Window, ObservedAt: time.Now(), Rows: rows}, nil
+}
+
+func (f *nativeClusterFixture) ServiceMetrics(_ context.Context, q observability.MetricQuery) (observability.Result, error) {
+	f.services.Add(1)
+	return observability.Result{Status: observability.StatusAvailable, Window: q.Window, ObservedAt: time.Now(), Rows: []observability.Row{
+		{"stack": "demo", "service": "demo_web", "container": "demo_web.1", "metric": observability.MetricContainerCPU, "avg": 12.0, "max": 18.0},
+		{"stack": "demo", "service": "demo_web", "container": "demo_web.1", "metric": observability.MetricContainerMemoryPercent, "avg": 40.0, "max": 55.0},
+	}}, nil
+}
+
+func (f *nativeClusterFixture) Traces(_ context.Context, q observability.TraceQuery) (observability.Result, error) {
+	f.traces.Add(1)
+	return observability.Result{Status: observability.StatusAvailable, Window: q.Window, ObservedAt: time.Now(), Rows: []observability.Row{
+		{"trace_id": "0123456789abcdef0123456789abcdef", "started": q.Window.End.UTC().Format(time.RFC3339), "duration_ns": 50000000.0, "spans": 2.0, "errors": 0.0, "root": "GET /health", "service": "demo_web"},
+	}}, nil
+}
+
+func (f *nativeClusterFixture) Trace(context.Context, observability.Window, string) (observability.Result, error) {
+	return observability.Result{Status: observability.StatusAvailable}, nil
+}
+
+func (f *nativeClusterFixture) LogVolume(_ context.Context, q observability.MetricQuery) (observability.Result, error) {
+	bucket := q.Window.End.Add(-30 * time.Minute).UTC().Format(time.RFC3339)
+	return observability.Result{Status: observability.StatusAvailable, Window: q.Window, Rows: []observability.Row{
+		{"bucket": bucket, "level": "info", "n": 10.0}, {"bucket": bucket, "level": "error", "n": 1.0},
+	}}, nil
+}
+
+func (f *nativeClusterFixture) TraceStats(_ context.Context, q observability.MetricQuery) (observability.Result, error) {
+	return observability.Result{Status: observability.StatusAvailable, Window: q.Window, Rows: []observability.Row{{"traces": 1.0, "error_traces": 0.0, "spans": 2.0}}}, nil
+}
+
+func TestNativeObservabilityUsesFullClusterComposition(t *testing.T) {
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/me":
+			fmt.Fprint(w, `{"id":1,"name":"edge"}`)
+		case "/api/services":
+			fmt.Fprint(w, `{"services":[{"name":"demo_web","stack":"demo","replicas":3,"desired":3},{"name":"demo_worker","stack":"demo","replicas":3,"desired":3}]}`)
+		case "/api/nodes":
+			fmt.Fprint(w, `{"nodes":[{"hostname":"node-1","role":"manager","status":"ready","availability":"active","is_leader":true},{"hostname":"node-2","role":"manager","status":"ready","availability":"active"},{"hostname":"node-3","role":"worker","status":"ready","availability":"active"}]}`)
+		case "/api/backups":
+			fmt.Fprint(w, `{"backups":[]}`)
+		case "/api/tls/hosts":
+			fmt.Fprint(w, `{"hosts":[]}`)
+		default:
+			fmt.Fprint(w, `{}`)
+		}
+	}))
+	defer daemon.Close()
+
+	app, err := NewApp(Config{DataDir: ":memory:", PMAPIURL: daemon.URL, PMAPIToken: "fixture-token", LoginDisabled: true, UpstreamTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	fixture := &nativeClusterFixture{}
+	app.ctrl.Telemetry = fixture
+
+	overviewCode, overview := get(app, "/web/observability")
+	if overviewCode != http.StatusOK {
+		t.Fatalf("overview status=%d", overviewCode)
+	}
+	if got := strings.Count(overview, `<article class="obs-node">`); got != 3 {
+		t.Fatalf("overview node cards=%d, want 3", got)
+	}
+	for _, want := range []string{`href="/web/overview"`, `href="/web/stacks"`, "node-1", "node-2", "node-3"} {
+		if !strings.Contains(overview, want) {
+			t.Errorf("full console missing %q", want)
+		}
+	}
+
+	metricsCode, metrics := get(app, "/web/observability?tab=metrics&range=1h")
+	if metricsCode != http.StatusOK {
+		t.Fatalf("metrics status=%d", metricsCode)
+	}
+	if got := strings.Count(metrics, `<article class="obs-node">`); got != 3 {
+		t.Fatalf("metrics node cards=%d, want 3", got)
+	}
+	if !strings.Contains(metrics, "demo/web") {
+		t.Fatal("metrics page missing native service aggregate")
+	}
+
+	logsCode, logs := get(app, "/web/observability?tab=logs&range=1h")
+	if logsCode != http.StatusOK || !strings.Contains(logs, "native cluster log") {
+		t.Fatalf("logs status=%d body=%s", logsCode, logs)
+	}
+	tracesCode, traces := get(app, "/web/observability?tab=traces&range=1h")
+	if tracesCode != http.StatusOK || !strings.Contains(traces, "0123456789abcdef") {
+		t.Fatalf("traces status=%d body=%s", tracesCode, traces)
+	}
+	if fixture.logs.Load() == 0 || fixture.nodes.Load() < 2 || fixture.services.Load() == 0 || fixture.traces.Load() == 0 {
+		t.Fatalf("native source calls logs=%d nodes=%d services=%d traces=%d", fixture.logs.Load(), fixture.nodes.Load(), fixture.services.Load(), fixture.traces.Load())
+	}
+}
+
 func TestNativeObservabilityRequiresLogin(t *testing.T) {
-	app, err := NewApp(Config{DataDir: ":memory:", CookieName:"pmui_session", EnvUser:"admin", EnvPass:"fixture-password", SessionSecret: []byte("0123456789abcdef")})
+	app, err := NewApp(Config{DataDir: ":memory:", CookieName: "pmui_session", EnvUser: "admin", EnvPass: "fixture-password", SessionSecret: []byte("0123456789abcdef")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +351,7 @@ func TestInvestigationOriginAndRoleGates(t *testing.T) {
 			t.Fatalf("origin %q status%d", origin, w.Code)
 		}
 	}
-	local, err := NewApp(Config{DataDir: ":memory:", CookieName:"pmui_session", EnvUser:"admin", EnvPass:"fixture-password", SessionSecret: []byte("0123456789abcdef")})
+	local, err := NewApp(Config{DataDir: ":memory:", CookieName: "pmui_session", EnvUser: "admin", EnvPass: "fixture-password", SessionSecret: []byte("0123456789abcdef")})
 	if err != nil {
 		t.Fatal(err)
 	}

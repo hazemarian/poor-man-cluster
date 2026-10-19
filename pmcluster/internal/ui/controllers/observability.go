@@ -24,15 +24,7 @@ const (
 // Observability renders the native, read-only health and telemetry page. It
 // intentionally uses the shared daemon client and viewer route group; no
 // browser credential or arbitrary Parseable query crosses this controller.
-type Observability struct {
-	*Controller
-	// Fleet is an immutable collection of paired daemon/telemetry clients.
-	// When present, the main observability surface federates through those
-	// clients instead of reading the local controller settings. Keeping this
-	// pointer on the request controller also means the legacy local behaviour
-	// remains unchanged when no fleet is configured.
-	Fleet *Fleet
-}
+type Observability struct{ *Controller }
 
 type observabilityData struct {
 	api            *pmapi.Client
@@ -45,34 +37,6 @@ type observabilityData struct {
 	Range   string
 	Service string
 	Options []observabilityServiceOption
-	Node    string
-	// HostOptions is populated only when the immutable fleet is enabled. The
-	// values are configured names/hostnames, never endpoint URLs or secrets.
-	HostOptions              []FleetOption
-	Federated                bool
-	FederatedAll             bool
-	FederatedHosts           []federatedHostView
-	FederatedOnline          int64
-	FederatedTotal           int64
-	FederatedServices        int64
-	FederatedServicesKnown   bool
-	FederatedServicesPartial bool
-	FederatedLogs            int64
-	FederatedLogsKnown       bool
-	FederatedLogsPartial     bool
-	FederatedErrors          int64
-	FederatedErrorRateKnown  bool
-	FederatedErrorPctText    string
-	FederatedTraces          int64
-	FederatedTracesKnown     bool
-	FederatedTracesPartial   bool
-	FederatedPartial         bool
-	// Panel IDs keep independent per-host HTMX fragments from targeting the
-	// first host's panel when the all-host view renders several copies.
-	PanelID        string
-	EvidenceTarget string
-	TracesTarget   string
-	IDPrefix       string
 
 	Tab       string
 	Q         string
@@ -166,7 +130,6 @@ type observabilityServiceRow struct {
 	Deficit      int64
 	DeficitKnown bool
 	DesiredKnown bool
-	Standalone   bool
 	Ready        bool
 	Job          bool
 	Completed    bool
@@ -212,26 +175,12 @@ type observabilityEvidenceRow struct {
 // every tab before any Parseable call. A full page load and an HTMX navigation
 // use the same fragment.
 func (c Observability) Page(g *gin.Context) {
-	if c.Fleet != nil {
-		d := c.loadFederated(g, obsTab(g.Query("tab")))
-		c.Views.Fragment(g, "observability", d)
-		return
-	}
 	d := c.load(g, obsTab(g.Query("tab")))
 	c.Views.Fragment(g, "observability", d)
 }
 
 // Summary re-renders the Overview tab content for independent refreshes.
 func (c Observability) Summary(g *gin.Context) {
-	if c.Fleet != nil {
-		d := c.loadFederated(g, obsTabOverview)
-		if d.FederatedAll {
-			c.Views.Fragment(g, "federatedoverview", d)
-		} else {
-			c.Views.Fragment(g, "observabilityoverview", d)
-		}
-		return
-	}
 	d := c.load(g, obsTabOverview)
 	c.Views.Fragment(g, "observabilityoverview", d)
 }
@@ -239,15 +188,6 @@ func (c Observability) Summary(g *gin.Context) {
 // Traces renders only the traces panel for in-page filtering and paging, after
 // the same authorization probe as every other tab.
 func (c Observability) Traces(g *gin.Context) {
-	if c.Fleet != nil {
-		d := c.loadFederated(g, obsTabTraces)
-		if d.FederatedAll {
-			c.Views.Fragment(g, "federatedtraces", d)
-		} else {
-			c.Views.Fragment(g, "observabilitytraces", d)
-		}
-		return
-	}
 	d := c.load(g, obsTabTraces)
 	c.Views.Fragment(g, "observabilitytraces", d)
 }
@@ -257,25 +197,13 @@ func (c Observability) Traces(g *gin.Context) {
 // /api/me probe, so a scoped token or unknown service fails closed before
 // Parseable is contacted.
 func (c Observability) Evidence(g *gin.Context) {
-	if c.Fleet != nil {
-		d := c.loadFederated(g, obsTabLogs)
-		if d.FederatedAll {
-			c.Views.Fragment(g, "federatedlogs", d)
-		} else {
-			c.Views.Fragment(g, "observabilitylogs", d)
-		}
-		return
-	}
 	d := c.load(g, obsTabLogs)
 	c.Views.Fragment(g, "observabilitylogs", d)
 }
 
 func (c Observability) load(g *gin.Context, tab string) observabilityData {
 	ctx := g.Request.Context()
-	d := observabilityData{
-		Range: observabilityDefaultRange, Service: strings.TrimSpace(g.Query("service")), Tab: tab,
-		PanelID: "observability-summary", EvidenceTarget: "obs-logs", TracesTarget: "obs-traces", IDPrefix: "obs",
-	}
+	d := observabilityData{Range: observabilityDefaultRange, Service: strings.TrimSpace(g.Query("service")), Tab: tab}
 	d.Q = observability.CleanSearch(g.Query("q"))
 	d.Search = observability.CleanSearch(g.Query("search"))
 	if sev := strings.TrimSpace(g.Query("severity")); observability.ValidSeverity(sev) {
@@ -499,10 +427,6 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 }
 
 func (c Observability) loadEvidence(g *gin.Context, d *observabilityData, window observability.Window, services []pmapi.Service, servicesErr error, redactor observability.Redactor) {
-	c.loadEvidenceContext(g.Request.Context(), d, window, services, servicesErr, redactor)
-}
-
-func (c Observability) loadEvidenceContext(ctx context.Context, d *observabilityData, window observability.Window, services []pmapi.Service, servicesErr error, redactor observability.Redactor) {
 	d.Evidence.Queried = true
 	d.Evidence.WindowStart = window.Start.UTC().Format(time.RFC3339)
 	d.Evidence.WindowEnd = window.End.UTC().Format(time.RFC3339)
@@ -548,7 +472,7 @@ func (c Observability) loadEvidenceContext(ctx context.Context, d *observability
 	logs, hasLogs := c.Telemetry.(observability.LogSource)
 	switch {
 	case hasLogs && d.Tab == obsTabLogs:
-		result, err = logs.Logs(ctx, observability.LogQuery{
+		result, err = logs.Logs(g.Request.Context(), observability.LogQuery{
 			Service: backendService, Window: window, Severity: d.Severity, Search: d.Search,
 			Limit: obsLogPageSize, Offset: d.Offset,
 		})
@@ -556,9 +480,9 @@ func (c Observability) loadEvidenceContext(ctx context.Context, d *observability
 		// An investigation reads the newest errors and the newest records of any
 		// level. A single oldest-first page would miss the incident itself, and
 		// a single mixed page can bury the errors under routine lines.
-		result, err = recentForInvestigation(ctx, logs, backendService, window)
+		result, err = recentForInvestigation(g.Request.Context(), logs, backendService, window)
 	default:
-		result, err = c.Telemetry.Query(ctx, observability.Query{Service: backendService, Window: window, Limit: observabilityRowLimit})
+		result, err = c.Telemetry.Query(g.Request.Context(), observability.Query{Service: backendService, Window: window, Limit: observabilityRowLimit})
 	}
 	if err != nil || result.Status == observability.StatusUnavailable {
 		d.Evidence.Unavailable = true
@@ -608,20 +532,17 @@ func projectServices(services []pmapi.Service, health *observabilityHealth) {
 	health.ServicesDesiredKnown = true
 	for _, service := range services {
 		desired, running := int64(service.Desired), int64(service.Replicas)
-		desiredKnown := !service.Standalone
+		desiredKnown := true
 		ready := !service.RunOnce && desiredKnown && desired > 0 && running >= desired
 		row := observabilityServiceRow{
 			Stack: service.Stack, Service: unqualifiedServiceName(service.Name, service.Stack),
 			Path:     service.Stack + "/" + unqualifiedServiceName(service.Name, service.Stack),
 			Replicas: running, Desired: desired, Ready: ready, Job: service.RunOnce,
 			Platform: service.Platform, Updated: service.Updated, DesiredKnown: desiredKnown,
-			Standalone: service.Standalone, DeficitKnown: desiredKnown && !service.RunOnce,
+			DeficitKnown: desiredKnown && !service.RunOnce,
 		}
 		if service.RunOnce || !desiredKnown {
 			health.DeficitKnown = false
-		}
-		if !desiredKnown {
-			health.ServicesDesiredKnown = false
 		}
 		if !service.RunOnce && desiredKnown && desired > 0 {
 			health.ServicesTotal++

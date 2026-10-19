@@ -86,7 +86,7 @@ func (c Investigations) Start(g *gin.Context) {
 		return
 	}
 	g.Request.URL.RawQuery = url.Values{"service": {g.PostForm("service")}, "range": {g.PostForm("range")}}.Encode()
-	d := (Observability{Controller: c.Controller}).load(g, obsTabInvestigate)
+	d := (Observability{c.Controller}).load(g, obsTabInvestigate)
 	if !d.ScopeKnown || !d.Evidence.Known || d.ErrKey != "" {
 		c.unavailable(g)
 		return

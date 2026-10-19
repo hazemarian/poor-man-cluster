@@ -293,18 +293,6 @@
 .obs-note { margin-top: var(--s-3); }
 
 .obs-nodes { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--s-4); }
-.fleet-hosts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: var(--s-4); }
-.federated-hosts { grid-template-columns: minmax(0, 1fr); }
-.fleet-hosts > .panel { margin: 0; }
-.fleet-host .obs-nodes { grid-template-columns: minmax(0, 1fr); }
-.fleet-host .panel-body { display: grid; gap: var(--s-5); }
-.fleet-host-sections { display: grid; gap: var(--s-3); }
-.fleet-host-sections h3 { margin: 0 0 var(--s-3); font-size: var(--fs-h3); }
-.fleet-service-details > summary { cursor: pointer; list-style: none; }
-.fleet-service-details > summary::-webkit-details-marker { display: none; }
-.fleet-service-details > summary h3 { display: inline-block; }
-.fleet-search { flex: 1 1 220px; min-width: 180px; }
-.fleet-logs-panel { margin-top: var(--s-4); }
 .obs-node { border: 1px solid var(--border-default); border-radius: var(--r-md); background: var(--bg-elevated); padding: var(--s-4); min-width: 0; }
 .obs-node header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-2); margin-bottom: var(--s-3); }
 .obs-node h3 { font-size: var(--fs-h2); font-weight: 600; overflow-wrap: anywhere; }
@@ -356,9 +344,6 @@
 .obs-log-msg summary span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .obs-log-msg details[open] summary span { display: block; -webkit-line-clamp: unset; }
 .obs-log-msg pre { margin: var(--s-2) 0 0; max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-.fleet-logs-panel .obs-log-head, .fleet-logs-panel .obs-log { grid-template-columns: 76px 100px minmax(100px, 180px) 76px minmax(0, 1fr); }
-.fleet-log-host { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.fleet-logs-panel .obs-log-msg details[open] summary span { display: -webkit-box; -webkit-line-clamp: 2; }
 .obs-pager { display: flex; justify-content: flex-end; gap: var(--s-2); margin-top: var(--s-4); }
 
 .obs-res { display: block; }
@@ -382,7 +367,6 @@
   .obs-search { width: 100%; }
   .obs-search input { width: 100%; min-width: 0; }
   .obs-nodes { grid-template-columns: 1fr; }
-  .fleet-hosts { grid-template-columns: 1fr; }
   .obs-stack > summary, .obs-svc-list { padding-inline: var(--s-4); }
   .obs-svc { grid-template-columns: minmax(0, 1fr) auto; row-gap: var(--s-1); }
   .obs-svc-rep { text-align: start; }
@@ -392,8 +376,6 @@
   .obs-log-sev { grid-area: sev; justify-self: end; }
   .obs-log-svc { grid-area: svc; color: var(--text-secondary); }
   .obs-log-msg { grid-area: msg; }
-  .fleet-logs-panel .obs-log { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "host time" "svc sev" "msg msg"; }
-  .fleet-log-host { grid-area: host; }
   .obs-res-head { display: none; }
   .obs-res-row { grid-template-columns: 1fr; gap: var(--s-2); padding-inline: var(--s-4); }
 }

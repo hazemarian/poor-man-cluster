@@ -139,4 +139,4 @@ policy and accounting through `investigation.HTTP`. Policy and reservation
 mutations require an unscoped admin bearer; operator console submissions go
 through the privileged edge client. Model calls remain in edge. Role/scoping,
 strict browser origins, independent source failures and unknown spend handling
-are described in the [standalone observability operations guide](../../docs/observability.md).
+are described in the [observability guide](../../docs/observability.md).

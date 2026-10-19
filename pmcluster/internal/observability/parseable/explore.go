@@ -116,11 +116,9 @@ func (c *Client) NodeMetrics(ctx context.Context, q observability.MetricQuery) (
 // ServiceMetricsSQL returns average and peak container CPU and memory per
 // container over the window.
 //
-// service.name is the shared metric attribute emitted by both collector
-// deployments: standalone normalizes the Compose project/service labels into
-// it, while Swarm promotes the Swarm service label into it. The older
-// compose.service field only exists in standalone metrics, so selecting it
-// makes the same query fail against a Swarm stream.
+// service.name is the shared metric attribute emitted by the embedded
+// collector from the Swarm service label. The same identity is used by logs
+// and traces, so every signal can be queried with one schema.
 func (c *Client) ServiceMetricsSQL(q observability.MetricQuery) (string, error) {
 	if err := q.Validate(); err != nil {
 		return "", err

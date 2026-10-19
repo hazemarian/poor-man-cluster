@@ -33,15 +33,14 @@ const WebBase = "/web"
 // Controller carries the shared dependencies every handler needs. References,
 // not ownership: it is constructed once in the ui package and passed around.
 type Controller struct {
-	Store              *store.Store
-	API                *pmapi.Client
-	Views              *views.Renderer
-	Auth               *middleware.Auth
-	Version            string
-	Domain             string
-	EnvAPI             string
-	EnvToken           string
-	StandaloneObserver bool
+	Store    *store.Store
+	API      *pmapi.Client
+	Views    *views.Renderer
+	Auth     *middleware.Auth
+	Version  string
+	Domain   string
+	EnvAPI   string
+	EnvToken string
 	// Telemetry is nil when Parseable is not configured or unavailable. The
 	// console still renders daemon-derived health in that state.
 	ObservabilityRate *rate.Limiter

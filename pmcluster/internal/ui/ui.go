@@ -36,7 +36,6 @@ type App struct {
 	API   *pmapi.Client
 	Auth  *middleware.Auth
 	ctrl  *controllers.Controller
-	fleet *controllers.Fleet
 }
 
 // NewApp opens the local store, boots the initial user, and wires the UI.
@@ -81,7 +80,6 @@ func NewApp(cfg Config) (*App, error) {
 	// the fragment into the app shell so the console keeps its styles.
 	// ShellBase adds language, direction, theme and breadcrumb; the fields
 	// below are the ones only the app knows about.
-	fleetEnabled := false
 	renderer.ShellData = func(c *gin.Context) gin.H {
 		shell := views.ShellBase(c)
 		shell["User"] = middleware.CurrentUser(c)
@@ -89,8 +87,6 @@ func NewApp(cfg Config) (*App, error) {
 		shell["AssetVer"] = views.AssetVersion()
 		shell["LoginDisabled"] = cfg.LoginDisabled
 		shell["SSOEnabled"] = cfg.SSOEnabled
-		shell["StandaloneObserver"] = cfg.StandaloneObserver
-		shell["FleetEnabled"] = fleetEnabled
 		shell["Domain"] = cfg.ClusterDomain
 		return shell
 	}
@@ -122,9 +118,8 @@ func NewApp(cfg Config) (*App, error) {
 		Store: st, API: api, Views: renderer, Auth: auth,
 		Version: cfg.AppVersion, Domain: cfg.ClusterDomain,
 		EnvAPI: cfg.PMAPIURL, EnvToken: cfg.PMAPIToken,
-		StandaloneObserver: cfg.StandaloneObserver,
-		ObservabilityRate:  rate.NewLimiter(2, 8),
-		Redactor:           observability.NewRedactor(cfg.ParseablePassword, cfg.ParseableAuth, cfg.PMAPIToken, cfg.InvestigationKey),
+		ObservabilityRate: rate.NewLimiter(2, 8),
+		Redactor:          observability.NewRedactor(cfg.ParseablePassword, cfg.ParseableAuth, cfg.PMAPIToken, cfg.InvestigationKey),
 	}
 	// Telemetry is optional. A malformed or absent Parseable configuration must
 	// not take down the daemon-derived console; the Observability page reports
@@ -143,22 +138,7 @@ func NewApp(cfg Config) (*App, error) {
 
 	ctrl.PublicOrigin = cfg.PublicOrigin
 	ctrl.Investigation = investigation.NewManager(providers.Router{}, cfg.InvestigationKey, ctrl.Redactor)
-
-	entries, err := controllers.LoadFleetConfig(cfg.FleetConfigPath)
-	if err != nil {
-		_ = st.Close()
-		return nil, fmt.Errorf("fleet config: %w", err)
-	}
-	var fleet *controllers.Fleet
-	if len(entries) > 0 {
-		fleet, err = controllers.NewFleet(ctrl, entries, cfg.UpstreamTimeout)
-		if err != nil {
-			_ = st.Close()
-			return nil, fmt.Errorf("fleet clients: %w", err)
-		}
-		fleetEnabled = true
-	}
-	return &App{Cfg: cfg, Store: st, API: api, Auth: auth, ctrl: ctrl, fleet: fleet}, nil
+	return &App{Cfg: cfg, Store: st, API: api, Auth: auth, ctrl: ctrl}, nil
 }
 
 // WebBase is the URL prefix the operator console is mounted under. Traefik
@@ -218,25 +198,10 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr := g.Group("")
 	vr.Use(a.ctrl.Auth.RequireRole(store.RoleViewer))
 
-	obs := controllers.Observability{Controller: a.ctrl, Fleet: a.fleet}
+	obs := controllers.Observability{Controller: a.ctrl}
 	ov := controllers.Overview{Controller: a.ctrl}
-	if a.fleet != nil && a.ctrl.StandaloneObserver {
-		// A configured observer fleet is the operator's landing dashboard. The
-		// main Observability controller owns every tab so a host filter never
-		// drops the detailed logs, metrics or traces context.
-		vr.GET("/", obs.Page)
-		vr.GET("/overview", obs.Page)
-	} else if a.ctrl.StandaloneObserver {
-		// Keep the old console entry points useful for operators who have a
-		// bookmark or a browser home page pointing at the Swarm overview.
-		// Observability.Page renders a full shell on browser loads and the
-		// native fragment on HTMX requests.
-		vr.GET("/", obs.Page)
-		vr.GET("/overview", obs.Page)
-	} else {
-		vr.GET("/", ov.App)
-		vr.GET("/overview", ov.Fragment)
-	}
+	vr.GET("/", ov.App)
+	vr.GET("/overview", ov.Fragment)
 
 	st := controllers.Stacks{Controller: a.ctrl}
 	vr.GET("/stacks", st.List)
@@ -253,14 +218,8 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/observability/summary", obs.Summary)
 	vr.GET("/observability/evidence", obs.Evidence)
 	vr.GET("/observability/traces", obs.Traces)
-	if a.fleet != nil {
-		// Compatibility alias for bookmarks from the former fleet-only page.
-		vr.GET("/fleet", obs.Page)
-	}
 	investigator := controllers.Investigations{Controller: a.ctrl}
-	if a.fleet == nil {
-		vr.GET("/observability/investigations/:id", investigator.Show)
-	}
+	vr.GET("/observability/investigations/:id", investigator.Show)
 
 	// Platform-managed services (edge/traefik/observability/backup/sso) live on
 	// their own read-only page, apart from the customer app services.
@@ -322,10 +281,8 @@ func (a *App) Mount(engine *gin.Engine) {
 	// deploy submit, configs/secrets edits, tls, webhooks) ----
 	op := g.Group("")
 	op.Use(a.ctrl.Auth.RequireRole(store.RoleOperator))
-	if a.fleet == nil {
-		op.POST("/observability/investigations", investigator.Start)
-		op.POST("/observability/investigations/:id/cancel", investigator.Cancel)
-	}
+	op.POST("/observability/investigations", investigator.Start)
+	op.POST("/observability/investigations/:id/cancel", investigator.Cancel)
 
 	op.POST("/stacks/:name/sync", st.Sync)
 
@@ -392,10 +349,8 @@ func (a *App) Mount(engine *gin.Engine) {
 	// ---- admin: API keys, settings save/apply, and the users CRUD ----
 	ad := g.Group("")
 	ad.Use(a.ctrl.Auth.RequireRole(store.RoleAdmin))
-	if a.fleet == nil {
-		ad.GET("/observability/settings", investigator.Settings)
-		ad.POST("/observability/settings", investigator.SaveSettings)
-	}
+	ad.GET("/observability/settings", investigator.Settings)
+	ad.POST("/observability/settings", investigator.SaveSettings)
 
 	ak := controllers.APIKeys{Controller: a.ctrl}
 	ad.GET("/apikeys", ak.Page)

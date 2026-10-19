@@ -26,8 +26,7 @@ import (
 // Both list endpoints also record the Q5 alerting gauges (paused swarm
 // updates, stale images) — see observe.
 type HTTP struct {
-	Svc      Service
-	ReadOnly bool
+	Svc Service
 }
 
 // Mount expects to be wrapped with Bearer auth in the parent router.
@@ -36,9 +35,6 @@ func (h *HTTP) Mount(r chi.Router) {
 	r.Get("/services/{stack}", h.listStack)
 	r.Get("/services/{stack}/{service}/tasks", h.tasks)
 	r.Get("/services/{stack}/{service}/logs", h.logs)
-	if h.ReadOnly {
-		return
-	}
 	r.Post("/services/{stack}/{service}/restart", h.restart)
 	r.Post("/services/{stack}/{service}/exec", h.exec)
 }
@@ -188,8 +184,6 @@ func serviceJSONList(svcs []ServiceSummary) []map[string]any {
 			"node":          s.Node,
 			"running_node":  s.RunningNode,
 			"platform":      s.Platform,
-			"desired_known": !s.Standalone,
-			"standalone":    s.Standalone,
 		})
 	}
 	return out

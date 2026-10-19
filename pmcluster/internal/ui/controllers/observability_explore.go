@@ -53,9 +53,6 @@ type obsChart struct {
 	Last   float64
 	Peak   float64
 	Min    float64
-	// LastAt is the newest source bucket. It lets aggregate views distinguish
-	// an old, otherwise valid sample from current telemetry.
-	LastAt time.Time
 	// Text values are formatted server-side so a gap-only series renders no
 	// number at all rather than a misleading zero.
 	LastText string
@@ -250,7 +247,6 @@ func buildChart(points map[int64]float64, w observability.Window, bucket time.Du
 	for i, t := range times {
 		v := points[t]
 		c.Last = v
-		c.LastAt = time.Unix(t, 0).UTC()
 		c.Peak, c.Min = fmax(c.Peak, v), fmin(c.Min, v)
 		if i > 0 && t-prev > maxGap {
 			flush()
@@ -423,15 +419,9 @@ func serviceMetricLabel(row observability.Row) string {
 	stack := rowString(row, "stack")
 	service := rowString(row, "service")
 	container := rowString(row, "container")
-
-	// Swarm and standalone collectors both emit service.name as the fully
-	// qualified stack_service identity. Standalone's former compose.service
-	// projection emitted only service, so strip the qualified prefix here to
-	// preserve the existing stack/service display shape.
 	if stack != "" {
 		service = strings.TrimPrefix(service, stack+"_")
 	}
-
 	var label string
 	switch {
 	case stack != "" && service != "":
@@ -441,7 +431,7 @@ func serviceMetricLabel(row observability.Row) string {
 	default:
 		label = container
 	}
-	if container != "" && label != "" && (stack != "" || service != "") {
+	if container != "" && label != "" {
 		label += "/" + container
 	}
 	return label
