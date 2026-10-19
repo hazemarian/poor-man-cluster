@@ -407,7 +407,7 @@ docker compose down
 The command intentionally preserves named volumes. Replacing a backend binary
 or configuration is not a substitute for a data recovery procedure.
 
-## AI and the parked evidence prototype
+## Optional AI capabilities
 
 AI is currently disabled. Fleet investigation routes are disabled, no provider
 key is installed, no provider calls have been made, and the monitoring
@@ -421,23 +421,6 @@ redacted evidence, and a normal daemon/edge release. It sends redacted and
 bounded evidence, validates citations, accounts usage conservatively, and
 cannot restart or deploy workloads. Provider setup is separate from this
 standalone deployment and must not be inferred from the dashboard.
-
-The `obsai/` directory is a parked evidence-only Python prototype, not a live
-dependency. It has no model client, GitHub access, credentials, Docker socket,
-or mutating endpoint. Its local checks and development server are:
-
-```sh
-cd obsai
-python -m unittest discover -s tests -v
-python -m obsai
-curl http://127.0.0.1:8080/api/health
-curl 'http://127.0.0.1:8080/api/brief?window=2h'
-```
-
-It reads a bounded Parseable log query, redacts common secrets and identifiers,
-and reports truncation and unknown fields instead of presenting capped data as
-complete. Persistence, a deployment manifest, provider calls, automated
-triage, MCP, checkout, and notifications remain future work.
 
 ## Verification and limits
 

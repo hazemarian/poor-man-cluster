@@ -34,23 +34,6 @@ pmcluster/coverage.html
 # Local console state (per-machine UI database)
 pmcluster/data/
 
-# Nextrum parked evidence prototype: local credentials, state and tool caches.
-obsai/.env
-obsai/.env.*
-!obsai/.env.example
-obsai/.secrets/
-obsai/repos/
-obsai/.venv/
-obsai/.pytest_cache/
-obsai/.mypy_cache/
-obsai/.ruff_cache/
-obsai/state/
-obsai/data/
-obsai/*.db
-obsai/*.sqlite*
-obsai/**/__pycache__/
-obsai/**/*.py[cod]
-
 # Design capture set — process artifacts, not shipped assets
 pmcluster/docs/redesign/
 
