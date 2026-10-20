@@ -182,6 +182,34 @@ func TestNativeObservabilityUsesFullClusterComposition(t *testing.T) {
 	if got := strings.Count(overview, `<article class="obs-node">`); got != 3 {
 		t.Fatalf("overview node cards=%d, want 3", got)
 	}
+	assertNodeCard := func(page, host string, cpu, memory, load float64) {
+		t.Helper()
+		var card string
+		for _, section := range strings.Split(page, `<article class="obs-node">`)[1:] {
+			if strings.Contains(section, ">"+host+"</h3>") {
+				card = section
+				if end := strings.Index(card, "</article>"); end >= 0 {
+					card = card[:end]
+				}
+				break
+			}
+		}
+		if card == "" {
+			t.Fatalf("missing host-scoped card for %q", host)
+		}
+		for _, want := range []string{
+			"<dt>CPU</dt>", fmt.Sprintf("%.1f%%", cpu),
+			"<dt>Memory</dt>", fmt.Sprintf("%.1f%%", memory),
+			"<dt>Load (1 min)</dt>", fmt.Sprintf("%.1f", load),
+		} {
+			if !strings.Contains(card, want) {
+				t.Errorf("host %q card missing %q: %s", host, want, card)
+			}
+		}
+	}
+	for i, host := range []string{"node-1", "node-2", "node-3"} {
+		assertNodeCard(overview, host, 75-float64(i)*10, 45+float64(i)*10, 0.5+float64(i)/10)
+	}
 	for _, want := range []string{`href="/web/overview"`, `href="/web/stacks"`, "node-1", "node-2", "node-3"} {
 		if !strings.Contains(overview, want) {
 			t.Errorf("full console missing %q", want)
@@ -194,6 +222,9 @@ func TestNativeObservabilityUsesFullClusterComposition(t *testing.T) {
 	}
 	if got := strings.Count(metrics, `<article class="obs-node">`); got != 3 {
 		t.Fatalf("metrics node cards=%d, want 3", got)
+	}
+	for i, host := range []string{"node-1", "node-2", "node-3"} {
+		assertNodeCard(metrics, host, 75-float64(i)*10, 45+float64(i)*10, 0.5+float64(i)/10)
 	}
 	if !strings.Contains(metrics, "demo/web") {
 		t.Fatal("metrics page missing native service aggregate")

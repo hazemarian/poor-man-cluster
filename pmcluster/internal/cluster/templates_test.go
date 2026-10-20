@@ -933,8 +933,9 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 		Receivers  map[string]struct {
 			WatchObservers []string `yaml:"watch_observers"`
 			Receivers      map[string]struct {
-				Rule   string         `yaml:"rule"`
-				Config map[string]any `yaml:"config"`
+				Rule               string            `yaml:"rule"`
+				Config             map[string]any    `yaml:"config"`
+				ResourceAttributes map[string]string `yaml:"resource_attributes" json:"resource_attributes"`
 			} `yaml:"receivers"`
 		} `yaml:"receivers"`
 		Service struct {
@@ -971,9 +972,46 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 	if !ok || len(include) != 1 || include[0] != "/var/lib/docker/containers/`container_id`/*-json.log" {
 		t.Errorf("filelog/docker include = %#v, want a container-id expansion", filelog.Config["include"])
 	}
+	resourceAttrs := filelog.ResourceAttributes
+	serviceExpr, ok := resourceAttrs["service.name"]
+	if !ok {
+		t.Fatal("filelog/docker must define a service.name resource expression")
+	}
+	stackExpr, ok := resourceAttrs["stack.name"]
+	if !ok {
+		t.Fatal("filelog/docker must define a stack.name resource expression")
+	}
+	for name, tc := range map[string]struct {
+		expr       string
+		swarmLabel string
+	}{
+		"service.name": {expr: serviceExpr, swarmLabel: "com.docker.swarm.service.name"},
+		"stack.name":   {expr: stackExpr, swarmLabel: "com.docker.stack.namespace"},
+	} {
+		t.Run(name+" identity precedence", func(t *testing.T) {
+			swarm := strings.Index(tc.expr, `"`+tc.swarmLabel+`"`)
+			compose := strings.Index(tc.expr, `"com.docker.compose.project"`)
+			if swarm < 0 || compose < 0 || swarm > compose {
+				t.Fatalf("%s expression must check Swarm identity before Compose fallback: %s", name, tc.expr)
+			}
+			if !strings.Contains(tc.expr, `"com.docker.compose.project" in labels`) ||
+				!strings.Contains(tc.expr, `"com.docker.compose.service" in labels`) ||
+				!strings.Contains(tc.expr, `labels["com.docker.compose.project"] != ""`) ||
+				!strings.Contains(tc.expr, `labels["com.docker.compose.service"] != ""`) {
+				t.Fatalf("%s expression must require a complete non-empty Compose label pair: %s", name, tc.expr)
+			}
+			if !strings.Contains(tc.expr, `: "")`) {
+				t.Fatalf("%s expression must return an empty fallback for unknown containers: %s", name, tc.expr)
+			}
+		})
+	}
+	if !strings.Contains(serviceExpr, `labels["com.docker.compose.project"] + "_" + labels["com.docker.compose.service"]`) {
+		t.Errorf("service.name expression must derive the Compose identity from project and service: %s", serviceExpr)
+	}
+	if !strings.Contains(stackExpr, `labels["com.docker.compose.project"]`) {
+		t.Errorf("stack.name expression must derive the Compose stack from project: %s", stackExpr)
+	}
 	for _, want := range []string{
-		`service.name: '` + "`labels[\"com.docker.swarm.service.name\"] ?? \"\"`" + `'`,
-		`stack.name: '` + "`labels[\"com.docker.stack.namespace\"] ?? \"\"`" + `'`,
 		`container.labels.io.pmcluster.skip_filelog: '` + "`labels[\"io.pmcluster.skip_filelog\"] ?? \"\"`" + `'`,
 		`resource.attributes["container.labels.io.pmcluster.skip_filelog"] == "true"`,
 	} {
@@ -1035,14 +1073,36 @@ func TestRenderOTelCollectorConfig_DockerStatsLabels(t *testing.T) {
 		t.Error("rendered config should NOT contain the non-existent metric_labels_to_resource_attributes option")
 	}
 
-	for _, want := range []string{
-		`resource.attributes["service.name"] != nil`,
-		`attributes["service.name"] == nil`,
-		`resource.attributes["stack.name"] != nil`,
-		`attributes["stack.name"] == nil`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("transform/metrics missing guard condition: %q", want)
+	var doc struct {
+		Processors map[string]struct {
+			MetricStatements []struct {
+				Context    string   `yaml:"context"`
+				Conditions []string `yaml:"conditions"`
+			} `yaml:"metric_statements" json:"metric_statements"`
+		} `yaml:"processors"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("rendered collector config is not valid YAML: %v", err)
+	}
+	transform, ok := doc.Processors["transform/metrics"]
+	if !ok {
+		t.Fatal("rendered config must include transform/metrics")
+	}
+	wantConditions := []string{
+		`resource.attributes["service.name"] != nil and attributes["service.name"] == nil`,
+		`resource.attributes["stack.name"] != nil and attributes["stack.name"] == nil`,
+		`attributes["service.name"] == nil and resource.attributes["compose.project"] != nil and resource.attributes["compose.project"] != "" and resource.attributes["compose.service"] != nil and resource.attributes["compose.service"] != ""`,
+	}
+	if len(transform.MetricStatements) != len(wantConditions) {
+		t.Fatalf("transform/metrics statements = %d, want %d", len(transform.MetricStatements), len(wantConditions))
+	}
+	for i, want := range wantConditions {
+		statement := transform.MetricStatements[i]
+		if statement.Context != "datapoint" {
+			t.Errorf("transform/metrics statement %d context = %q, want datapoint", i, statement.Context)
+		}
+		if len(statement.Conditions) != 1 || statement.Conditions[0] != want {
+			t.Errorf("transform/metrics statement %d conditions = %#v, want one AND guard %q", i, statement.Conditions, want)
 		}
 	}
 }

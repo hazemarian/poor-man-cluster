@@ -14,23 +14,23 @@ The stack answers four questions from one place:
 ## Architecture
 
 ```text
-Each Swarm node                         One per cluster
-  Docker containers ─┐
-  host /proc, /sys ──┼─► OTel collector ─┐
-  OTLP from SDKs ────┘                   │
-                                         ▼
-                                  Parseable (1 task)
-                                         ▲
-                       pmcluster daemon ─┘
-                       edge console ── fixed, bounded queries
+On each Swarm node:
+  Docker logs, Docker stats, host metrics ─┐
+  Application and daemon OTLP ────────────┴─► OTel collector
+                                                  │
+                                                  ▼
+One per cluster:                               Parseable
+                                                  │ bounded queries
+                                                  ▼
+  pmcluster daemon ── inventory and auth ─────► edge console
 ```
 - **One collector per node.** It is a `mode: global` service, because container
-  logs live under that node's `/var/lib/docker/containers` and container metrics
-  come from that node's Docker socket. A central collector could not read them.
+  logs and container metrics are node-local and come from that node's Docker
+  engine. A central collector could not read them.
 - **One Parseable backend per cluster.** It stores logs, metrics and traces on a
   mounted volume and serves the SQL queries used by the console. It is pinned to
   the platform node.
-- **The daemon and edge are unchanged service components.** The daemon supplies
+- **The daemon and edge supply the console.** The daemon supplies
   cluster inventory and authorization; the edge renders the console and queries
   Parseable. The edge never needs the Docker socket.
 - **The provisioning job runs once.** It applies per-stream retention and the
@@ -40,9 +40,9 @@ Each Swarm node                         One per cluster
 
 | Signal | Source | Notes |
 | --- | --- | --- |
-| Container logs | Docker `json-file` logs | Automatic for every container; stdout is `INFO`, stderr is `ERROR` unless the application supplies a level |
+| Container logs | Docker `json-file` logs | Collected when the global collector can resolve the container identity; opt-out services, unknown identities and selected platform chatter are filtered. stdout/stderr provide the default severity |
 | Container metrics | Docker stats API | CPU, memory, network and block I/O, labelled with stack and service |
-| Node metrics | Host `/proc` and `/sys` | CPU utilization, memory utilization and load average |
+| Node metrics | Host `/proc` and `/sys` mounted read-only | CPU utilization, memory utilization and load average |
 | Traces | OTLP from instrumented applications | Empty until an application sends spans |
 | Platform telemetry | pmcluster daemon and Traefik | Deploys, reconciles, backups and proxy spans |
 
@@ -50,6 +50,12 @@ Application traces and custom metrics are **opt-in**. Set
 `OTEL_EXPORTER_OTLP_ENDPOINT` to the collector service and instrument the
 application with an OpenTelemetry SDK. Docker log collection alone does not
 produce spans.
+
+Containers started by an optional Compose workload can be collected by the same
+global collector when Docker exposes both Compose project and service labels.
+They use the `<project>_<service>` identity; containers without a complete
+identity are filtered. This uses the built-in collector and does not add a
+second observability installation.
 
 The `observability` stack is deployed by the normal lifecycle:
 
@@ -117,8 +123,11 @@ twice from stdout.
 ## OpenTelemetry ingestion
 
 The collector accepts OTLP on gRPC `4317` and HTTP `4318` on every node. The
-Swarm stack publishes `4318` in host mode so the host daemon and local clients
-can reach it.
+monitoring network endpoint for HTTP is
+`http://observability_otel-collector:4318`; gRPC uses the internal
+`observability_otel-collector:4317` endpoint. The Swarm stack publishes HTTP
+`4318` in host mode so the host daemon and local clients can reach it; the
+published host port and the internal gRPC port are different endpoints.
 
 ```sh
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://<node>:4318
@@ -155,7 +164,7 @@ config has a memory limiter below that cap. Export queues are bounded and
 retried; a long backend outage can drop records.
 
 The Parseable volume stores telemetry. Back it up like any other platform
-volume, and never remove it with `docker compose down -v`.
+volume; the normal cluster lifecycle manages the stack and its volume.
 
 ## Security
 
@@ -180,15 +189,15 @@ returned citation. The model only recommends actions; it cannot deploy,
 restart or execute anything.
 
 Enable it only after configuring a provider secret, an exact base URL and model,
-per-call token limits, a daily budget and explicit consent. See
-`pmcluster/docs/openapi.yaml` for the policy fields.
+per-call token limits, a daily budget and explicit consent. See the [OpenAPI
+reference](../pmcluster/docs/openapi.yaml) for the policy fields.
 
 ## Troubleshooting
 
 | Symptom | Check |
 | --- | --- |
-| Page shows no telemetry | `docker service ps observability_parseable observability_otel-collector` |
-| No node metrics | collector task on that node; `/proc` and `/sys` are mounted read-only |
+| Page shows no telemetry | `docker service ps observability_parseable` and `docker service ps observability_otel-collector` |
+| No node metrics | collector task is running on that node and has host metrics access |
 | No container logs | container uses the `json-file` driver; check `docker info` |
 | Logs duplicated | application sends OTLP logs **and** stdout; set `skip_filelog: true` |
 | No traces | the application is instrumented and points at the collector's OTLP endpoint |

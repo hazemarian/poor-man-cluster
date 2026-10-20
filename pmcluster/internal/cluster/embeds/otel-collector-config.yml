@@ -47,6 +47,10 @@ receivers:
       com.docker.swarm.service.name: "service.name"
       com.docker.stack.namespace:    "stack.name"
       com.docker.swarm.node.id:      "swarm.node.id"
+      # Compose containers have no Swarm labels. Keep their identity as
+      # separate attributes; transform/metrics derives service.name below.
+      com.docker.compose.project: "compose.project"
+      com.docker.compose.service: "compose.service"
 
   # Node-level CPU and memory. docker_stats only ever sees CONTAINERS, so there
   # was no way to answer "how loaded is this node" — the question that decides
@@ -106,11 +110,12 @@ receivers:
               to: body
               if: attributes.log != nil
         resource_attributes:
-          # The coalesce fallback leaves an attribute unset when a non-Swarm
-          # container has no matching label, so filter/skip_filelog can report
-          # it as unknown instead of inventing a service name.
-          service.name: '`labels["com.docker.swarm.service.name"] ?? ""`'
-          stack.name: '`labels["com.docker.stack.namespace"] ?? ""`'
+          # Swarm services keep their Swarm identity. Plain Compose containers
+          # fall back to <project>_<service> only when both labels are present
+          # and non-empty; unlabelled or partial-label containers stay empty so
+          # filter/skip_filelog can drop them without an expression error.
+          service.name: '`("com.docker.swarm.service.name" in labels && labels["com.docker.swarm.service.name"] != "") ? labels["com.docker.swarm.service.name"] : (("com.docker.compose.project" in labels && labels["com.docker.compose.project"] != "" && "com.docker.compose.service" in labels && labels["com.docker.compose.service"] != "") ? labels["com.docker.compose.project"] + "_" + labels["com.docker.compose.service"] : "")`'
+          stack.name: '`("com.docker.stack.namespace" in labels && labels["com.docker.stack.namespace"] != "") ? labels["com.docker.stack.namespace"] : (("com.docker.compose.project" in labels && labels["com.docker.compose.project"] != "" && "com.docker.compose.service" in labels && labels["com.docker.compose.service"] != "") ? labels["com.docker.compose.project"] : "")`'
           container.name: '`name`'
           container.id: '`container_id`'
           container.image.name: '`image`'
@@ -201,17 +206,18 @@ processors:
   transform/metrics:
     metric_statements:
       - context: datapoint
-        conditions:
-          - 'resource.attributes["service.name"] != nil'
-          - 'attributes["service.name"] == nil'
+        conditions: ['resource.attributes["service.name"] != nil and attributes["service.name"] == nil']
         statements:
           - set(attributes["service.name"], resource.attributes["service.name"])
       - context: datapoint
-        conditions:
-          - 'resource.attributes["stack.name"] != nil'
-          - 'attributes["stack.name"] == nil'
+        conditions: ['resource.attributes["stack.name"] != nil and attributes["stack.name"] == nil']
         statements:
           - set(attributes["stack.name"], resource.attributes["stack.name"])
+      - context: datapoint
+        conditions: ['attributes["service.name"] == nil and resource.attributes["compose.project"] != nil and resource.attributes["compose.project"] != "" and resource.attributes["compose.service"] != nil and resource.attributes["compose.service"] != ""']
+        statements:
+          - set(attributes["service.name"], Concat([resource.attributes["compose.project"], resource.attributes["compose.service"]], "_"))
+          - set(attributes["stack.name"], resource.attributes["compose.project"]) where attributes["stack.name"] == nil
 
   # ORDER MATTERS, and it is the whole reason a per-node view was broken.
   #
