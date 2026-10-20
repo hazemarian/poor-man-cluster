@@ -232,9 +232,8 @@ type RenderInput struct {
 	SSOCookieExpire string
 
 	// EdgeLoginDisabled is rendered into the edge stack's
-	// EDGE_LOGIN_DISABLED env var. Default true in swarm deployments (Traefik
-	// admin-auth or SSO already gates /web, so the console's own login +
-	// Users CRUD are hidden); false keeps the password login (local runs).
+	// EDGE_LOGIN_DISABLED env var. The native edge session is the default; true
+	// explicitly opts into the legacy Traefik Basic Auth gate and stateless edge.
 	EdgeLoginDisabled bool
 
 	// BackupAllNodes runs the volume-backup agent as a global service on
@@ -272,6 +271,12 @@ type RenderInput struct {
 	// are stateful too.
 	PlatformNode string
 
+	// ObservabilityParseableHostname is the stable task hostname for the
+	// native Parseable backend. It is captured from an existing service or
+	// defaulted for fresh installs so Swarm task replacement cannot change the
+	// backend identity used by Parseable's local catalog.
+	ObservabilityParseableHostname string
+
 	// ObservabilityLogsRetentionDays / ObservabilityMetricsRetentionDays / ObservabilityTracesRetentionDays
 	// bound how long OpenObserve keeps each stream type (rendered into
 	// ZO_LOGS/METRICS/TRACES_RETENTION_DAYS). Without a bound, a
@@ -279,6 +284,11 @@ type RenderInput struct {
 	ObservabilityLogsRetentionDays    int
 	ObservabilityMetricsRetentionDays int
 	ObservabilityTracesRetentionDays  int
+
+	// IngressHTTPPort/IngressHTTPSPort are the host ports published by the
+	// platform Traefik. Zero means the standard 80/443.
+	IngressHTTPPort  int
+	IngressHTTPSPort int
 
 	// BackupS3 is the offsite destination for cluster backups. When the
 	// in-cluster store is enabled, offen double-writes every archive to BOTH
@@ -490,6 +500,12 @@ func platformConfigNames(in RenderInput) func(ctx context.Context, name string) 
 // as it does for app stacks, so platform and app stacks share one pipeline
 // (L4).
 func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
+	if in.IngressHTTPPort == 0 {
+		in.IngressHTTPPort = 80
+	}
+	if in.IngressHTTPSPort == 0 {
+		in.IngressHTTPSPort = 443
+	}
 	fname, ok := composeFile[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown stack %q", name)

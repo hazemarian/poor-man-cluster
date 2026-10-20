@@ -16,6 +16,9 @@ const (
 	MaxLogOffset   = 2000
 	MaxSearchRunes = 100
 	MaxMetricRows  = 20_000
+	// MaxServiceMetricRows keeps the grouped per-container view bounded even
+	// when a cluster has many services and containers.
+	MaxServiceMetricRows = 400
 )
 
 // Metric names the console understands. They are shared so the adapter that

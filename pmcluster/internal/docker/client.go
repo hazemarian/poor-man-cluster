@@ -443,6 +443,9 @@ func nodeHostnames(nodes []swarm.Node) map[string]string {
 func (r *realClient) ServiceInspect(ctx context.Context, name string) (runtime.ServiceInspectResult, error) {
 	svc, _, err := r.c.ServiceInspectWithRaw(ctx, name, swarm.ServiceInspectOptions{})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) || isNotFoundString(err) {
+			return runtime.ServiceInspectResult{}, fmt.Errorf("%w: service inspect %s: %v", runtime.ErrServiceNotFound, name, err)
+		}
 		return runtime.ServiceInspectResult{}, fmt.Errorf("service inspect %s: %w", name, err)
 	}
 	labels := svc.Spec.Labels
@@ -450,20 +453,69 @@ func (r *realClient) ServiceInspect(ctx context.Context, name string) (runtime.S
 		labels = map[string]string{}
 	}
 	image := ""
+	hostname := ""
 	var mounts []runtime.Mount
 	if c := svc.Spec.TaskTemplate.ContainerSpec; c != nil {
 		image = c.Image
+		hostname = c.Hostname
 		for _, m := range c.Mounts {
 			mounts = append(mounts, runtime.Mount{Type: string(m.Type), Source: m.Source, Target: m.Target})
 		}
 	}
 	return runtime.ServiceInspectResult{
-		ID:     svc.ID,
-		Name:   svc.Spec.Name,
-		Image:  image,
-		Labels: labels,
-		Mounts: mounts,
+		ID:       svc.ID,
+		Name:     svc.Spec.Name,
+		Image:    image,
+		Hostname: hostname,
+		Labels:   labels,
+		Mounts:   mounts,
 	}, nil
+}
+
+// ServiceRunningHostname returns the hostname Docker assigns to a running
+// task when the service template does not set one. Docker's default container
+// hostname is the first 12 characters of the container ID. Deriving it from
+// one trusted Swarm task avoids ContainerInspect, which only works on the
+// manager's local node and therefore breaks when a legacy Parseable task is on
+// another node.
+func (r *realClient) ServiceRunningHostname(ctx context.Context, name string) (string, error) {
+	svc, _, err := r.c.ServiceInspectWithRaw(ctx, name, swarm.ServiceInspectOptions{})
+	if err != nil {
+		if cerrdefs.IsNotFound(err) || isNotFoundString(err) {
+			return "", fmt.Errorf("%w: service inspect %s: %v", runtime.ErrServiceNotFound, name, err)
+		}
+		return "", fmt.Errorf("service inspect %s: %w", name, err)
+	}
+	tasks, err := r.c.TaskList(ctx, swarm.TaskListOptions{
+		Filters: filters.NewArgs(filters.Arg("service", svc.ID), filters.Arg("desired-state", "running")),
+	})
+	if err != nil {
+		return "", fmt.Errorf("running task list %s: %w", svc.Spec.Name, err)
+	}
+	var containerIDs []string
+	for _, task := range tasks {
+		if task.Status.State != swarm.TaskStateRunning || task.Status.ContainerStatus == nil {
+			continue
+		}
+		containerID := strings.TrimSpace(task.Status.ContainerStatus.ContainerID)
+		if containerID == "" {
+			continue
+		}
+		containerIDs = append(containerIDs, containerID)
+	}
+	if len(containerIDs) != 1 {
+		return "", fmt.Errorf("service %s has %d running tasks; cannot determine one default container hostname", svc.Spec.Name, len(containerIDs))
+	}
+	containerID := containerIDs[0]
+	if len(containerID) != 64 {
+		return "", fmt.Errorf("service %s reported an invalid container ID length", svc.Spec.Name)
+	}
+	for _, c := range containerID {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return "", fmt.Errorf("service %s reported an invalid container ID", svc.Spec.Name)
+		}
+	}
+	return containerID[:12], nil
 }
 
 // ServiceTasks returns the task history for a service, newest last. The node

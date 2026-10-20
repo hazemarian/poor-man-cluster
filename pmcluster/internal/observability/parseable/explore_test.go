@@ -80,16 +80,16 @@ func TestMetricQueriesAreFixedAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"date_bin(INTERVAL '300 seconds', p_timestamp)", "FROM `pmcluster-metrics`", "system.cpu.utilization", "state = 'idle'", "system.memory.utilization", "state = 'used'", "LIMIT 20000"} {
+	for _, want := range []string{"date_bin(INTERVAL '300 seconds', p_timestamp)", "FROM `pmcluster-metrics`", "system.cpu.utilization", "state = 'idle'", "system.memory.utilization", "state = 'used'", "MAX(p_timestamp) AS last_seen", "LIMIT 20001"} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("missing %q in %s", want, sql)
 		}
 	}
 	svc, err := c.ServiceMetricsSQL(q)
-	if err != nil || !strings.Contains(svc, "container.memory.percent") || !strings.Contains(svc, "LIMIT 400") {
+	if err != nil || !strings.Contains(svc, "container.memory.percent") || !strings.Contains(svc, "LIMIT 401") {
 		t.Fatalf("%v %s", err, svc)
 	}
-	if !strings.Contains(svc, "`service.name` AS service") {
+	if !strings.Contains(svc, "`service.name` AS service") || !strings.Contains(svc, "GROUP BY `stack.name`, `service.name`, `container.name`, metric_name") {
 		t.Fatalf("service metrics must use the shared OTel service field: %s", svc)
 	}
 	if strings.Contains(svc, "`compose.service`") {
@@ -100,6 +100,34 @@ func TestMetricQueriesAreFixedAndBounded(t *testing.T) {
 	}
 	if _, err := c.NodeMetricsSQL(observability.MetricQuery{Window: w, Bucket: 30 * time.Second}); err == nil {
 		t.Error("too many buckets accepted")
+	}
+}
+
+func TestMetricResultsReportAdapterRowCap(t *testing.T) {
+	rows := make([]map[string]any, observability.MaxServiceMetricRows+1)
+	for i := range rows {
+		rows[i] = map[string]any{"service": "svc", "metric": "container.cpu.utilization", "max": i}
+	}
+	payload, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(s.Close)
+	c, _ := New(Config{BaseURL: s.URL})
+	end := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	q := observability.MetricQuery{Window: observability.Window{Start: end.Add(-time.Hour), End: end}, Bucket: time.Minute}
+	got, err := c.ServiceMetrics(context.Background(), q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rows) != observability.MaxServiceMetricRows || !got.Truncated {
+		t.Fatalf("metric result rows=%d truncated=%v, want %d/true", len(got.Rows), got.Truncated, observability.MaxServiceMetricRows)
+	}
+	if len(got.TruncationReasons) != 1 || got.TruncationReasons[0] != "row_limit" {
+		t.Fatalf("truncation reasons = %#v, want row_limit", got.TruncationReasons)
 	}
 }
 
@@ -171,5 +199,23 @@ func TestSeverityFiltersUseTheDashboardClassification(t *testing.T) {
 		if err != nil || !strings.Contains(sql, want) {
 			t.Errorf("%s: %v %s", sev, err, sql)
 		}
+	}
+}
+
+func TestServiceNamesQueryIsDistinctAndBounded(t *testing.T) {
+	c, _ := New(Config{BaseURL: "http://parseable.invalid"})
+	end := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	w := observability.Window{Start: end.Add(-time.Hour), End: end}
+	sql, err := c.ServiceNamesSQL(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"SELECT DISTINCT `service.name` AS service", "FROM `pmcluster-logs`", "LIMIT 500"} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("service names query missing %q: %s", want, sql)
+		}
+	}
+	if _, err := c.ServiceNamesSQL(observability.Window{}); err == nil {
+		t.Error("empty window accepted")
 	}
 }

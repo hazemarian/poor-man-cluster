@@ -33,6 +33,11 @@ type fakeDocker struct {
 	services map[string]runtime.Service
 	nodes    []runtime.Node
 
+	serviceInspect    runtime.ServiceInspectResult
+	serviceInspectErr error
+	runningHostname   string
+	runningHostErr    error
+
 	// swarmID is the Swarm cluster ID SwarmID reports ("" = unset). Tests
 	// mutate it to simulate a wiped + re-initialised Swarm.
 	swarmID string
@@ -231,7 +236,16 @@ func (f *fakeDocker) ServiceList(_ context.Context) ([]runtime.Service, error) {
 // ServiceInspect/Tasks/Logs/Restart/Exec are unused by the cluster package;
 // stub them so this fake keeps satisfying the growing interface.
 func (f *fakeDocker) ServiceInspect(_ context.Context, _ string) (runtime.ServiceInspectResult, error) {
-	return runtime.ServiceInspectResult{}, nil
+	if f.serviceInspectErr != nil {
+		return runtime.ServiceInspectResult{}, f.serviceInspectErr
+	}
+	if f.serviceInspect.ID == "" && f.serviceInspect.Name == "" && f.serviceInspect.Image == "" && f.serviceInspect.Hostname == "" {
+		return runtime.ServiceInspectResult{}, runtime.ErrServiceNotFound
+	}
+	return f.serviceInspect, nil
+}
+func (f *fakeDocker) ServiceRunningHostname(_ context.Context, _ string) (string, error) {
+	return f.runningHostname, f.runningHostErr
 }
 func (f *fakeDocker) ServiceTasks(_ context.Context, _ string) ([]runtime.ServiceTask, error) {
 	return nil, nil

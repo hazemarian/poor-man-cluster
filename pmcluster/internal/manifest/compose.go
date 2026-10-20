@@ -16,6 +16,7 @@ type composeService struct {
 	Image       string               `json:"image,omitempty"`
 	Command     []string             `json:"command,omitempty"`
 	Entrypoint  []string             `json:"entrypoint,omitempty"`
+	Hostname    string               `json:"hostname,omitempty"`
 	Environment map[string]string    `json:"environment,omitempty"`
 	Volumes     []string             `json:"volumes,omitempty"`
 	Networks    []string             `json:"networks,omitempty"`

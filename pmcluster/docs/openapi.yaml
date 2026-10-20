@@ -92,6 +92,137 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Me"
+  /api/observability/status:
+    get:
+      summary: Compare expected Swarm nodes with fresh telemetry
+      operationId: observabilityStatus
+      description: |
+        Read-only cluster telemetry status. `empty`, `missing`, `stale` and
+        `inventory_failed` are distinct status values; a stack-scoped token is
+        denied because node coverage is cluster-wide.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+      responses:
+        "200":
+          description: Node inventory and telemetry coverage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObservabilityStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Viewer role or unscoped token required
+  /api/observability/logs:
+    get:
+      summary: Read bounded newest-first telemetry logs
+      operationId: observabilityLogs
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: service
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: severity
+          in: query
+          schema: {type: string, enum: [error, warn, info, debug]}
+        - name: search
+          in: query
+          schema: {type: string, maxLength: 100}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 200}
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 2000, default: 0}
+      responses:
+        "200":
+          description: Available, empty, or unavailable bounded result
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/metrics/nodes:
+    get:
+      summary: Read bounded per-node metric series
+      operationId: observabilityNodeMetrics
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: bucket
+          in: query
+          schema: {type: string, description: Go duration, example: 1m}
+      responses:
+        "200":
+          description: Bounded metric rows
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/metrics/services:
+    get:
+      summary: Read bounded per-service metric series
+      operationId: observabilityServiceMetrics
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: bucket
+          in: query
+          schema: {type: string, description: Go duration, example: 5m}
+      responses:
+        "200":
+          description: Bounded metric rows
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/traces:
+    get:
+      summary: Read bounded trace summaries
+      operationId: observabilityTraces
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: service
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: errors_only
+          in: query
+          schema: {type: boolean, default: false}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 50, default: 50}
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 1000, default: 0}
+      responses:
+        "200":
+          description: Bounded trace summaries
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/traces/{trace_id}:
+    get:
+      summary: Read spans for one trace
+      operationId: observabilityTrace
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: trace_id
+          in: path
+          required: true
+          schema: {type: string, pattern: "^[0-9a-f]{32}$"}
+        - $ref: "#/components/parameters/EvidenceRange"
+      responses:
+        "200":
+          description: Bounded spans
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
   /api/cluster/info:
     get:
       summary: Node + swarm summary
@@ -1049,7 +1180,8 @@ paths:
       summary: Rotate a managed credential
       description: |
         Generates a new password, re-encrypts it, updates the Swarm secret and
-        restarts the consuming service. The new password is returned once and
+        restarts the consuming service. This is admin-only; viewer and
+        operator tokens receive 403. The new password is returned once and
         cannot be read back afterwards.
       operationId: rotateCredential
       security:
@@ -1076,6 +1208,8 @@ paths:
                   shown_once: {type: boolean}
         "404":
           description: Credential not found
+        "403":
+          description: Admin role required
   /api/registries:
     get:
       summary: List configured Docker registries (passwords are write-only)
@@ -1099,7 +1233,8 @@ paths:
       description: |
         Logs in to the registry on the host, then stores the encrypted
         credential. Returns 201 for a new registry and 200 when an existing
-        one was updated.
+        one was updated. This is admin-only; viewer and operator tokens
+        receive 403.
       operationId: addRegistry
       security:
         - bearerAuth: []
@@ -1124,6 +1259,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "502":
           description: The registry rejected the login or was unreachable
+        "403":
+          description: Admin role required
   /api/registries/{host}:
     delete:
       summary: Remove a Docker registry login
@@ -1141,6 +1278,8 @@ paths:
           description: Removed; a warning is included when the host logout failed
         "404":
           description: Registry not configured
+        "403":
+          description: Admin role required
   /api/configs:
     get:
       summary: List configs (metadata + hash, no content)
@@ -1698,6 +1837,15 @@ components:
       type: http
       scheme: bearer
       bearerFormat: pmc_<token_id>_<secret>
+  parameters:
+    EvidenceRange:
+      name: range
+      in: query
+      required: false
+      description: Bounded duration such as 15m, 1h, 6h or 24h (maximum 24h).
+      schema:
+        type: string
+        default: 1h
   responses:
     BadRequest:
       description: Invalid request
@@ -1731,6 +1879,63 @@ components:
       properties:
         error:
           type: string
+    ObservabilityEvidence:
+      type: object
+      required: [status, window, rows, truncated]
+      properties:
+        status:
+          type: string
+          enum: [available, empty, unavailable]
+        observed_at: {type: string, format: date-time}
+        window:
+          type: object
+          required: [start, end]
+          properties:
+            start: {type: string, format: date-time}
+            end: {type: string, format: date-time}
+        rows:
+          type: array
+          items: {type: object, additionalProperties: true}
+        truncated: {type: boolean}
+        truncation_reasons:
+          type: array
+          items: {type: string}
+        coverage: {type: string}
+        error: {type: string}
+    ObservabilityStatus:
+      type: object
+      required: [status, inventory_status, telemetry_status, window, nodes, truncated]
+      properties:
+        status:
+          type: string
+          enum: [fresh, stale, missing, empty, unavailable, inventory_failed]
+        inventory_status: {type: string}
+        telemetry_status: {type: string}
+        observed_at: {type: string, format: date-time}
+        window:
+          type: object
+          required: [start, end]
+          properties:
+            start: {type: string, format: date-time}
+            end: {type: string, format: date-time}
+        expected_nodes: {type: integer}
+        reporting_nodes: {type: integer}
+        unknown_node_samples: {type: integer}
+        truncated: {type: boolean, description: True when node telemetry hit a read bound; absent or old nodes are then reported unavailable rather than missing/stale.}
+        truncation_reasons: {type: array, items: {type: string}, description: Each independent read bound that cut the node telemetry read; omitted when empty.}
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              id: {type: string}
+              hostname: {type: string}
+              role: {type: string}
+              availability: {type: string}
+              swarm_status: {type: string}
+              is_leader: {type: boolean}
+              telemetry_status: {type: string}
+              last_seen: {type: string, format: date-time}
     Health:
       type: object
       properties:

@@ -2,11 +2,13 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -35,9 +37,8 @@ const (
 	settingSSOCookieExpire = "sso_cookie_expire"
 
 	// settingEdgeLoginDisabled controls the edge console's own session login.
-	// Default "true" in swarm deployments: Traefik admin-auth (or SSO) already
-	// gates /web, so the console login + Users CRUD are hidden. Local standalone
-	// runs leave it unset (or "false") to keep password login.
+	// An unset value keeps the native cookie session enabled. Operators who
+	// explicitly choose the legacy Traefik Basic Auth gate set this to "true".
 	settingEdgeLoginDisabled = "edge_login_disabled"
 
 	// settingVolumeRoot is the single host directory every container volume is
@@ -74,6 +75,12 @@ const (
 	settingObservabilityLogsRetentionDays    = "observability_logs_retention_days"
 	settingObservabilityMetricsRetentionDays = "observability_metrics_retention_days"
 	settingObservabilityTracesRetentionDays  = "observability_traces_retention_days"
+
+	// Host ports for the platform ingress. Defaults are the standard 80/443;
+	// alternate ports let pmcluster run beside an existing ingress controller
+	// on hosts that already own the standard ports.
+	settingIngressHTTPPort  = "ingress_http_port"
+	settingIngressHTTPSPort = "ingress_https_port"
 
 	// Offsite (S3/R2) backup destination for the volume-backup agent. When all
 	// five are set, offen also uploads every archive to the S3-compatible
@@ -124,6 +131,13 @@ const (
 	// NOT in the settings allowlist — it is written directly via SetSetting and
 	// never surfaced for operator editing.
 	settingSwarmID = "swarm_id"
+
+	// settingObservabilityParseableHostname pins the Parseable task hostname.
+	// Parseable's local-store catalog includes the task hostname, so leaving it
+	// to Docker's per-task ID can make a Swarm replacement look like a new
+	// backend. The value is internal state, captured from an existing service
+	// once and rendered into every later observability reconcile.
+	settingObservabilityParseableHostname = "observability_parseable_hostname"
 )
 
 // Setting* accessors expose the persisted settings keys for CLI surfaces
@@ -154,6 +168,8 @@ func SettingObservabilityMetricsRetentionDays() string {
 	return settingObservabilityMetricsRetentionDays
 }
 func SettingObservabilityTracesRetentionDays() string { return settingObservabilityTracesRetentionDays }
+func SettingIngressHTTPPort() string                  { return settingIngressHTTPPort }
+func SettingIngressHTTPSPort() string                 { return settingIngressHTTPSPort }
 func SettingBackupS3Endpoint() string                 { return settingBackupS3Endpoint }
 func SettingBackupS3Bucket() string                   { return settingBackupS3Bucket }
 func SettingBackupS3AccessKey() string                { return settingBackupS3AccessKey }
@@ -164,6 +180,10 @@ func SettingLogLevel() string                         { return settingLogLevel }
 func SettingReconcileInterval() string                { return settingReconcileInterval }
 func SettingStorageNodes() string                     { return settingStorageNodes }
 func SettingStorageFailover() string                  { return settingStorageFailover }
+
+// SettingObservabilityParseableHostname returns the internal setting key used
+// to keep the native Parseable task hostname stable across Swarm replacements.
+func SettingObservabilityParseableHostname() string { return settingObservabilityParseableHostname }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {
@@ -305,14 +325,21 @@ func (s ssoState) validate() error {
 }
 
 // loadEdgeLoginDisabled reports whether the edge console's own session login
-// is disabled (default true — the swarm deployment always gates /web behind
-// Traefik admin-auth or SSO, so the console login is redundant; local standalone
-// runs set edge_login_disabled=false to keep password login).
+// is disabled. A missing setting deliberately defaults to false so a fresh
+// cluster has a real browser session and logout path. Basic Auth remains an
+// explicit opt-in through edge_login_disabled=true.
 func loadEdgeLoginDisabled(ctx context.Context, st *store.Store) bool {
 	if st == nil {
+		return false
+	}
+	// SSO owns the browser gate. Keep the edge's own session disabled in that
+	// mode even when the new native-session default is unset or an old setting
+	// explicitly enabled the password form; otherwise operators would face two
+	// independent login systems and the SSO sign-out path would be misleading.
+	if st.SettingDefault(ctx, settingSSOEnabled, "") == "true" {
 		return true
 	}
-	return st.SettingDefault(ctx, settingEdgeLoginDisabled, "true") == "true"
+	return st.SettingDefault(ctx, settingEdgeLoginDisabled, "false") == "true"
 }
 
 // loadBackupAllNodes reports whether the volume-backup agent should run on
@@ -334,6 +361,73 @@ func loadPlatformNode(ctx context.Context, st *store.Store) string {
 	return st.SettingDefault(ctx, settingPlatformNode, "")
 }
 
+const defaultObservabilityParseableHostname = "pmcluster-parseable"
+
+// loadObservabilityParseableHostname returns the persisted Parseable hostname,
+// capturing an explicitly configured hostname from an existing service when a
+// legacy cluster has not recorded it yet. Fresh installs receive a stable
+// name instead of Docker's per-task container ID. The setting is deliberately
+// internal and is not part of the editable settings surface. A missing service
+// may default only during an explicitly fresh `cluster up`; installed update
+// paths fail closed so a surviving data volume cannot be rebound with a new
+// hostname.
+func loadObservabilityParseableHostname(ctx context.Context, st *store.Store, d runtime.Client, allowFreshDefault bool) (string, error) {
+	if st == nil {
+		if !allowFreshDefault {
+			return "", fmt.Errorf("read %s: state store is required for an installed cluster", settingObservabilityParseableHostname)
+		}
+		return defaultObservabilityParseableHostname, nil
+	}
+	current, settingErr := st.Setting(ctx, settingObservabilityParseableHostname)
+	if settingErr == nil {
+		if current = strings.TrimSpace(current); current != "" {
+			return current, nil
+		}
+	} else if !errors.Is(settingErr, store.ErrSettingNotFound) {
+		return "", fmt.Errorf("read %s: %w", settingObservabilityParseableHostname, settingErr)
+	}
+
+	if d == nil {
+		if !allowFreshDefault {
+			return "", fmt.Errorf("inspect observability_parseable: runtime client is required for an installed cluster")
+		}
+		return persistObservabilityParseableHostname(ctx, st, defaultObservabilityParseableHostname)
+	}
+
+	svc, inspectErr := d.ServiceInspect(ctx, "observability_parseable")
+	if inspectErr != nil {
+		if errors.Is(inspectErr, runtime.ErrServiceNotFound) {
+			if !allowFreshDefault {
+				return "", fmt.Errorf("observability_parseable service is missing on an installed cluster; refusing to default its hostname")
+			}
+			return persistObservabilityParseableHostname(ctx, st, defaultObservabilityParseableHostname)
+		}
+		return "", fmt.Errorf("inspect observability_parseable: %w", inspectErr)
+	}
+	if hostname := strings.TrimSpace(svc.Hostname); hostname != "" {
+		return persistObservabilityParseableHostname(ctx, st, hostname)
+	}
+	reader, ok := d.(runtime.RunningServiceHostnameReader)
+	if !ok {
+		return "", fmt.Errorf("observability_parseable has no task-template hostname and runtime cannot inspect its running container hostname")
+	}
+	hostname, err := reader.ServiceRunningHostname(ctx, "observability_parseable")
+	if err != nil {
+		return "", fmt.Errorf("inspect running observability_parseable hostname: %w", err)
+	}
+	if strings.TrimSpace(hostname) == "" {
+		return "", fmt.Errorf("running observability_parseable container reported an empty hostname")
+	}
+	return persistObservabilityParseableHostname(ctx, st, strings.TrimSpace(hostname))
+}
+
+func persistObservabilityParseableHostname(ctx context.Context, st *store.Store, hostname string) (string, error) {
+	if err := st.SetSetting(ctx, settingObservabilityParseableHostname, hostname); err != nil {
+		return "", fmt.Errorf("persist %s: %w", settingObservabilityParseableHostname, err)
+	}
+	return hostname, nil
+}
+
 // LoadStorageFailover reports whether automatic storage failover is enabled
 // (storage_failover=true). Exported so the reconcile loop can gate its
 // automatic move on the same setting the setup wizard writes.
@@ -349,6 +443,32 @@ func LoadStorageFailover(ctx context.Context, st *store.Store) bool {
 // stream can grow into tens of GB in weeks) — unbounded retention is how the
 // legacy cluster accumulated a 123G /data volume.
 const defaultOORetentionDays = 7
+
+// LoadIngressPorts returns the host ports published by the platform ingress.
+// Values outside 1-65535 fall back to 80/443; the two ports must differ.
+func LoadIngressPorts(ctx context.Context, st *store.Store) (httpPort, httpsPort int) {
+	httpPort, httpsPort = 80, 443
+	if st == nil {
+		return httpPort, httpsPort
+	}
+	parse := func(key string, fallback int) int {
+		v := st.SettingDefault(ctx, key, "")
+		if v == "" {
+			return fallback
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 65535 {
+			return fallback
+		}
+		return n
+	}
+	httpPort = parse(settingIngressHTTPPort, 80)
+	httpsPort = parse(settingIngressHTTPSPort, 443)
+	if httpPort == httpsPort {
+		return 80, 443
+	}
+	return httpPort, httpsPort
+}
 
 // loadObservabilityRetention returns the OpenObserve log/metric/trace retention in days.
 // Each falls back to defaultOORetentionDays when unset or unparseable.

@@ -41,6 +41,9 @@ const observBasicAuthEnv = "OBSERVABILITY_BASIC_AUTH"
 func (b ObservBridge) Page(g *gin.Context) {
 	basicAuth := os.Getenv(observBasicAuthEnv)
 
+	// The observability origin has its own browser origin, so the host-only edge
+	// session cookie is not sent here. Traefik's Basic/SSO gate authenticates the
+	// bridge request and this handler re-checks the identity headers below.
 	if !observBridgeGate(g.Request) {
 		g.Header("Cache-Control", "no-store")
 		g.Status(http.StatusForbidden)

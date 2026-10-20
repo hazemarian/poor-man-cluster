@@ -22,6 +22,12 @@ const (
 	// logReadMax caps how much of a file is read to satisfy a tail, so a
 	// multi-gigabyte log cannot be pulled into memory by one request.
 	logReadMax = 4 << 20
+	// logAggregateReadMax caps bytes read when a request spans daily files.
+	// The newest files are visited first, so an all-files request still stops
+	// at a useful recent window when old files are numerous or very large.
+	logAggregateReadMax = 16 << 20
+	// logAllFileMax caps how many daily files an all-files request examines.
+	logAllFileMax = 32
 	// logSinceMax caps how far back `since` may reach.
 	logSinceMax = 7 * 24 * time.Hour
 )
@@ -34,6 +40,10 @@ type LogPage struct {
 	Files     []string `json:"files"`
 	Lines     []string `json:"lines"`
 	Truncated bool     `json:"truncated"`
+	// TruncationReasons identifies each independent bound that cut the read.
+	// Keeping the reasons explicit prevents a caller from mistaking a
+	// complete-looking page for complete history.
+	TruncationReasons []string `json:"truncation_reasons,omitempty"`
 }
 
 // LogReader tails pmcluster's daily JSON log files. The path comes from the
@@ -59,16 +69,21 @@ func (l *LogReader) Files() []string {
 
 // Tail returns the last `tail` entries, optionally only entries newer than
 // `since`, optionally merged across every daily file. tail is clamped to
-// logTailMax and since to logSinceMax; `truncated` reports that older entries
-// existed but were not returned.
+// logTailMax and since to logSinceMax. Files are visited newest first and only
+// a bounded ring of matching lines is retained; `truncated` and
+// TruncationReasons report every bound that cut the read.
 func (l *LogReader) Tail(ctx context.Context, tail int, since time.Duration, all bool) (LogPage, error) {
 	files := l.Files()
 	page := LogPage{Files: files, Lines: []string{}}
 	if len(files) == 0 {
 		return page, nil
 	}
-	if tail <= 0 || tail > logTailMax {
+	reasons := make([]string, 0, 4)
+	if tail <= 0 {
 		tail = logTailMax
+	} else if tail > logTailMax {
+		tail = logTailMax
+		appendReason(&reasons, "row_limit")
 	}
 	selected := files
 	if !all {
@@ -80,61 +95,131 @@ func (l *LogReader) Tail(ctx context.Context, tail int, since time.Duration, all
 	if since > 0 {
 		if since > logSinceMax {
 			since = logSinceMax
+			appendReason(&reasons, "since_limit")
 		}
 		cutoff = time.Now().Add(-since)
 	}
 
-	collected := make([]string, 0, tail*2)
-	total := 0
-	for _, name := range selected {
+	// Scan newest files and newest lines first. This is a bounded ring: once it
+	// has tail entries, no older entry can affect the response.
+	collected := make([]string, 0, tail)
+	var aggregateBytes int64
+	processedFiles := 0
+	rowLimit := false
+	for fileIndex := len(selected) - 1; fileIndex >= 0; fileIndex-- {
+		name := selected[fileIndex]
 		if err := ctx.Err(); err != nil {
 			return page, err
 		}
-		lines, err := tailFile(filepath.Join(l.Dir, name), int64(logReadMax))
+		if all && processedFiles >= logAllFileMax {
+			appendReason(&reasons, "file_limit")
+			break
+		}
+		remaining := int64(logAggregateReadMax) - aggregateBytes
+		if remaining <= 0 {
+			appendReason(&reasons, "aggregate_byte_limit")
+			break
+		}
+		readMax := int64(logReadMax)
+		if remaining < readMax {
+			readMax = remaining
+		}
+		read, err := tailFileBounded(filepath.Join(l.Dir, name), readMax)
 		if err != nil {
 			return page, err
 		}
-		for _, line := range lines {
+		processedFiles++
+		aggregateBytes += read.BytesRead
+		if read.Truncated {
+			appendReason(&reasons, "file_byte_limit")
+		}
+		for lineIndex := len(read.Lines) - 1; lineIndex >= 0; lineIndex-- {
+			if lineIndex%256 == 0 {
+				if err := ctx.Err(); err != nil {
+					return page, err
+				}
+			}
+			line := read.Lines[lineIndex]
 			if line == "" {
 				continue
 			}
 			if !cutoff.IsZero() && !logLineAfter(line, cutoff) {
 				continue
 			}
-			total++
 			collected = append(collected, line)
+			if len(collected) == tail {
+				// There are still older lines in this file, or older files in an
+				// all-files request. Either way the page is a bounded slice.
+				rowLimit = lineIndex > 0 || fileIndex > 0
+				break
+			}
+		}
+		if rowLimit {
+			break
 		}
 	}
-	if len(collected) > tail {
-		page.Truncated = true
-		collected = collected[len(collected)-tail:]
+	if all && processedFiles < len(selected) && !rowLimit && len(reasons) == 0 {
+		// A file can disappear during the scan. Keep the response honest if a
+		// future bound is added without a corresponding reason above.
+		appendReason(&reasons, "file_limit")
+	}
+	if rowLimit {
+		appendReason(&reasons, "row_limit")
+	}
+	page.Truncated = len(reasons) > 0
+	page.TruncationReasons = reasons
+	// The scan is newest-first for bounded work; callers have historically
+	// received chronological lines, so restore that order at the boundary.
+	for left, right := 0, len(collected)-1; left < right; left, right = left+1, right-1 {
+		collected[left], collected[right] = collected[right], collected[left]
 	}
 	page.Lines = collected
 	return page, nil
 }
 
-// tailFile reads at most maxBytes from the end of the file and returns its
-// lines, dropping the leading partial line when the window did not start at a
-// line boundary.
-func tailFile(path string, maxBytes int64) ([]string, error) {
+// appendReason records a truncation reason once. Several daily files can hit
+// the same bound, so duplicates are dropped to keep the list readable.
+func appendReason(reasons *[]string, reason string) {
+	for _, r := range *reasons {
+		if r == reason {
+			return
+		}
+	}
+	*reasons = append(*reasons, reason)
+}
+
+type boundedTail struct {
+	Lines     []string
+	BytesRead int64
+	Truncated bool
+}
+
+func tailFileBounded(path string, maxBytes int64) (boundedTail, error) {
+	result := boundedTail{Lines: []string{}}
+	if maxBytes <= 0 {
+		return result, nil
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return result, nil
 		}
-		return nil, err
+		return result, err
 	}
 	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
+	result.BytesRead = info.Size()
 	truncatedHead := false
 	if info.Size() > maxBytes {
 		if _, err := f.Seek(info.Size()-maxBytes, 0); err != nil {
-			return nil, err
+			return result, err
 		}
+		result.BytesRead = maxBytes
+		result.Truncated = true
 		truncatedHead = true
 	}
 	var lines []string
@@ -144,12 +229,13 @@ func tailFile(path string, maxBytes int64) ([]string, error) {
 		lines = append(lines, sc.Text())
 	}
 	if err := sc.Err(); err != nil {
-		return nil, err
+		return result, err
 	}
 	if truncatedHead && len(lines) > 0 {
 		lines = lines[1:]
 	}
-	return lines, nil
+	result.Lines = lines
+	return result, nil
 }
 
 // logLineAfter reports whether a zerolog JSON line carries a timestamp at or

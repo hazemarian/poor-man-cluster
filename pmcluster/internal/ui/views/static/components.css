@@ -155,6 +155,10 @@ select { appearance: none; padding-inline-end: 30px;
 .panel-body { padding: var(--s-6); }
 .panel-head > .ic { color: var(--text-tertiary); width: 18px; height: 18px; }
 .panel-body.tight { padding: 0; }
+/* A hint line leading a panel body (above a table or form): secondary, and spaced off what follows
+   instead of sitting flush against the table header. */
+.panel-body > .sub { color: var(--text-secondary); font-size: var(--fs-sm); max-width: 75ch; }
+.panel-body > .sub:not(:last-child) { margin-bottom: var(--s-4); }
 .panel + .panel { margin-top: var(--s-5); }
 .panel-foot {
   padding: var(--s-3) var(--s-4); border-top: 1px solid var(--border-subtle);
@@ -262,6 +266,9 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 .pill.bad  { color: var(--red);   background: var(--red-bg); }
 .pill.info { color: var(--cyan);  background: var(--cyan-bg); }
 .pill.accent { color: var(--accent); background: var(--accent-bg); }
+/* A sentence, not a status word: it wraps inside its cell rather than widening the column until the
+   table scrolls sideways. */
+.pill.note { white-space: normal; border-radius: var(--r-sm); line-height: 1.35; max-width: 46ch; margin-top: var(--s-1); }
 .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: currentColor; }
 .pill .dot { background: currentColor; }
 .pill.plain { background: transparent; border-color: var(--border-default); }

@@ -1,0 +1,10 @@
+[Unit]
+Description=Constrain Swarm ingress TCP segments for the private underlay
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/pmcluster-ingress-mss
+ExecStart=/usr/local/libexec/pmcluster-ingress-mss

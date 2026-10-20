@@ -67,6 +67,50 @@ type observabilityData struct {
 type observabilityServiceOption struct {
 	Value string
 	Label string
+	// Backend is the exact service.name value used in the telemetry query.
+	// For Swarm services it is the full Swarm service name; for telemetry-only
+	// services (for example Compose containers) it is the stored identity.
+	Backend string
+}
+
+// telemetryServiceLister is implemented by telemetry sources that can report
+// distinct service identities. It lets the console offer services that are not
+// part of the Swarm inventory, such as existing Compose containers.
+type telemetryServiceLister interface {
+	ServiceNames(context.Context, observability.Window) ([]string, error)
+}
+
+func mergeTelemetryServiceOptions(ctx context.Context, telemetry observability.Source, window observability.Window, options []observabilityServiceOption) []observabilityServiceOption {
+	lister, ok := telemetry.(telemetryServiceLister)
+	if !ok {
+		return options
+	}
+	names, err := lister.ServiceNames(ctx, window)
+	if err != nil {
+		return options
+	}
+	seen := make(map[string]bool, len(options))
+	for _, option := range options {
+		seen[option.Value] = true
+	}
+	for _, name := range names {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		options = append(options, observabilityServiceOption{Value: name, Label: name, Backend: name})
+	}
+	sort.Slice(options, func(i, j int) bool { return options[i].Value < options[j].Value })
+	return options
+}
+
+func findServiceOption(options []observabilityServiceOption, value string) (observabilityServiceOption, bool) {
+	for _, option := range options {
+		if option.Value == value {
+			return option, true
+		}
+	}
+	return observabilityServiceOption{}, false
 }
 
 type observabilityHealth struct {
@@ -297,7 +341,7 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 		d.Evidence.UnavailableWhy = "inventory"
 	} else {
 		d.Health.ServicesKnown = true
-		d.Options = serviceOptions(services)
+		d.Options = mergeTelemetryServiceOptions(ctx, c.Telemetry, window, serviceOptions(services))
 		projectServices(services, &d.Health)
 	}
 
@@ -443,20 +487,23 @@ func (c Observability) loadEvidence(g *gin.Context, d *observabilityData, window
 	selected := strings.TrimSpace(d.Service)
 	backendService := ""
 	if selected != "" {
-		var err error
-		backendService, err = resolveService(selected, services)
-		if servicesErr != nil || err != nil {
-			d.ErrKey = "observability.invalid_service"
-			d.Evidence.Unavailable = true
-			d.Evidence.UnavailableWhy = "service"
-			return
-		}
-	}
-	if backendService != "" {
-		for _, service := range services {
-			if service.Name == backendService {
-				d.Service = service.Stack + "/" + unqualifiedServiceName(service.Name, service.Stack)
-				break
+		if option, ok := findServiceOption(d.Options, selected); ok {
+			backendService = option.Backend
+			d.Service = option.Value
+		} else {
+			var err error
+			backendService, err = resolveService(selected, services)
+			if servicesErr != nil || err != nil {
+				d.ErrKey = "observability.invalid_service"
+				d.Evidence.Unavailable = true
+				d.Evidence.UnavailableWhy = "service"
+				return
+			}
+			for _, service := range services {
+				if service.Name == backendService {
+					d.Service = service.Stack + "/" + unqualifiedServiceName(service.Name, service.Stack)
+					break
+				}
 			}
 		}
 	}
@@ -521,7 +568,7 @@ func serviceOptions(services []pmapi.Service) []observabilityServiceOption {
 			continue
 		}
 		seen[value] = true
-		options = append(options, observabilityServiceOption{Value: value, Label: value})
+		options = append(options, observabilityServiceOption{Value: value, Label: value, Backend: service.Name})
 	}
 	sort.Slice(options, func(i, j int) bool { return options[i].Value < options[j].Value })
 	return options

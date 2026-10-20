@@ -8,13 +8,15 @@ The console is a web UI (gin + HTMX) served by **`pmcluster-edge`** on the
 https://pmcluster.<your-domain>          # the console (/web/* routes)
 ```
 
-Authentication: the Traefik `admin-auth` (htpasswd) or `sso-auth`
-(forwardAuth) gate owns access — when gated, the console's own login page is
-disabled (`EDGE_LOGIN_DISABLED=true`) and it runs as a synthetic admin
-session. In standalone mode (no gate) the console authenticates its own users
-(admin > operator > viewer RBAC) and the first admin account is created on
-first run. See [the whitepaper](whitepaper.md) for the auth
-model.
+Authentication uses the console's signed cookie session by default. The
+`/web/login` and `/web/logout` routes therefore work on a normal non-SSO
+cluster. Setting `EDGE_LOGIN_DISABLED=true` explicitly selects the legacy
+Traefik Basic Auth gate and stateless synthetic-admin mode; a browser-managed
+Basic Auth credential cannot be cleared by a server-side logout button. SSO
+keeps the edge session disabled and uses the `/oauth2/sign_out` link. In
+standalone mode the first admin account is created on first run, with RBAC
+roles admin > operator > viewer. See [the whitepaper](whitepaper.md) for the
+auth model.
 
 ## The pages
 
@@ -46,7 +48,7 @@ model.
   credentials).
 - **Preferences** — theme plus the brand palette picker (six accent palettes,
   persisted before first paint).
-- **External** — nav links to `https://observ.<domain>` (OpenObserve) and
+- **External** — nav links to `https://observ.<domain>` (Parseable) and
   `https://traefik.<domain>/dashboard/` (Traefik dashboard).
 
 ## Status badges
@@ -65,6 +67,7 @@ the copyable markdown (single + combined), and `pmcluster stack badge
 ## What the console does NOT cover
 
 Service-level operations beyond the whitelisted set are CLI territory —
-`pmcluster service list|ps|tasks|logs|restart|exec` (locally or off-node
-via `--api-url`). There is no Portainer; the console + `pmcluster service`
-cover its role. Raw `docker` passthrough is deliberately absent.
+`pmcluster service list|ps|tasks|logs|restart|exec` and the native
+`pmcluster observability status|logs|metrics|traces|trace` reads (locally or
+off-node via `--api-url`). There is no Portainer; the console and CLI cover its
+role. Raw `docker` passthrough is deliberately absent.

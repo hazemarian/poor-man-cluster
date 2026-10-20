@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -30,8 +31,11 @@ type CredentialsHTTP struct {
 
 // Mount registers the credentials routes.
 func (h *CredentialsHTTP) Mount(r chi.Router) {
-	r.Get("/credentials", h.list)
-	r.Post("/credentials/{name}/rotate", h.rotate)
+	// Listing metadata is safe for every authenticated console role. Rotation
+	// returns fresh password material and restarts the consuming service, so it
+	// is an explicit admin-only mutation rather than inheriting Bearer access.
+	r.With(auth.RequireRole(auth.RoleViewer)).Get("/credentials", h.list)
+	r.With(auth.RequireRole(auth.RoleAdmin)).Post("/credentials/{name}/rotate", h.rotate)
 }
 
 type credentialRow struct {

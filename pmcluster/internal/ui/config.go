@@ -30,17 +30,16 @@ type Config struct {
 	UpstreamTimeout  time.Duration
 	AppVersion       string
 	// ClusterDomain (PMCLUSTER_DOMAIN) is the public cluster domain (e.g.
-	// example.com). The console renders external links to OpenObserve
+	// example.com). The console renders external links to Parseable
 	// (observ.<domain>) and the Traefik dashboard (traefik.<domain>) from it.
 	// Set by the edge stack template ([[.Domain]]); local standalone runs leave
 	// it empty and the links are hidden.
 	ClusterDomain string
-	// LoginDisabled (EDGE_LOGIN_DISABLED) turns off the console's own session
-	// login. This is the deployed-edge mode: Traefik's admin-auth gate protects
-	// /web/*, so the console skips its own login, the user CRUD page and the
-	// first-run setup page are hidden, and Require() lets every request through
-	// as a synthetic admin. Local/standalone deployments leave it unset so
-	// login + setup + user CRUD work normally.
+	// LoginDisabled (EDGE_LOGIN_DISABLED) selects the legacy stateless edge mode:
+	// Traefik's admin-auth gate protects /web/*, so the console skips its own
+	// login, the user CRUD page and first-run setup, and Require() lets every
+	// request through as a synthetic admin. The default is a native signed
+	// cookie session, including on the deployed edge.
 	LoginDisabled bool
 	// SSOEnabled (EDGE_SSO_ENABLED) reports that the edge is gated by SSO
 	// (oauth2-proxy) rather than Traefik's basic-auth admin-auth. When set with
@@ -113,10 +112,9 @@ func (c Config) Validate() error {
 	if len(c.EnvUser) > 0 && len(c.EnvPass) == 0 {
 		return fmt.Errorf("PMCLUSTER_UI_USER set without PMCLUSTER_UI_PASS")
 	}
-	// The session secret is only enforced when login is enabled. With login
-	// disabled (EDGE_LOGIN_DISABLED) the secret is never used — Traefik's
-	// admin-auth gate is the only gate — so an empty/default value there is
-	// irrelevant and must not block startup.
+	// The session secret is only enforced when native login is enabled. With
+	// explicit stateless Basic mode (EDGE_LOGIN_DISABLED), the secret is never
+	// used because Traefik's admin-auth gate is the only gate.
 	if c.LoginDisabled {
 		return nil
 	}

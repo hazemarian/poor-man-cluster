@@ -209,11 +209,8 @@ html.console { overscroll-behavior-y: none; }
 /* Brand mark colors: the gradient stops and the port glow follow --m-* (the accent). */
 .bm-sl { stop-color: var(--m-l); } .bm-sd { stop-color: var(--m-d); }
 .bm-fa { fill: var(--m-a); } .bm-sa { stroke: var(--m-a); }
-/* Cube faces. On dark surfaces the default right/left faces sink into the sidebar, so dark
-   lifts them a step; light keeps the deep faces, which already read against white. */
-.bm-l1 { stop-color: var(--m-l1, #283650); } .bm-l2 { stop-color: var(--m-l2, #121A2B); }
-.bm-r1 { stop-color: var(--m-r1, #1A2338); } .bm-r2 { stop-color: var(--m-r2, #080D18); }
-:root:not([data-theme="light"]) { --m-l1: #363F52; --m-l2: #1C2330; --m-r1: #272F3F; --m-r2: #131923; }
+/* The server-box faces are literal charcoal in both themes (as on the brand board): rim highlights
+   and the accent glow separate them from a dark sidebar, and they read as-is on light. */
 .brand { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 /* Two-tone wordmark: the lead in the text color, "Cluster" in the accent. */
 /* One line when the sidebar has room, wrapping to two ("Poor Man's" / "Cluster") when it does not. */

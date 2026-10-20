@@ -107,6 +107,11 @@ type Service struct {
 	Command    []string `json:"command,omitempty"`
 	Entrypoint []string `json:"entrypoint,omitempty"`
 
+	// Hostname sets the container hostname. Platform services that persist
+	// backend catalog state may use this to keep the identity stable across
+	// Swarm task replacement; empty leaves Docker's default task hostname.
+	Hostname string `json:"hostname,omitempty"`
+
 	Env     map[string]string `json:"env,omitempty"`
 	Volumes []string          `json:"volumes,omitempty"`
 	Secrets []string          `json:"secrets,omitempty"`

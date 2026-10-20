@@ -157,6 +157,15 @@ func combineProxyAndUI(proxyCfg edgeproxy.Config, app *ui.App) http.Handler {
 	})
 
 	app.Mount(engine)
+	// Traefik's native-session forwardAuth probe is a separate reserved route.
+	// The handler verifies the service Host and the session itself; an external
+	// request cannot use this path as a public auth oracle.
+	engine.Any("/internal/session/check", gin.WrapH(app.InternalSessionCheckHandler()))
+	// The daemon reaches Parseable through this exact, private edge hop. It is
+	// registered before NoRoute so it cannot recurse through the public proxy;
+	// InternalObservabilityHandler accepts only the managed edge_api_token and
+	// uses the edge-local Parseable source on monitoring-net.
+	engine.Any("/internal/observability/*path", gin.WrapH(app.InternalObservabilityHandler(app.Cfg.PMAPIToken)))
 
 	engine.NoRoute(gin.WrapH(edgeproxy.New(proxyCfg)))
 	return engine

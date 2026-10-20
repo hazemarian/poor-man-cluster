@@ -87,6 +87,35 @@ func bucketSQL(b time.Duration) string {
 	return "date_bin(INTERVAL '" + strconv.Itoa(int(b/time.Second)) + " seconds', p_timestamp)"
 }
 
+// ServiceNamesSQL returns the distinct log service identities in the window.
+// The console uses it to offer Compose services that are not Swarm services.
+func (c *Client) ServiceNamesSQL(w observability.Window) (string, error) {
+	if err := (observability.Query{Window: w, Limit: 1}).Validate(); err != nil {
+		return "", err
+	}
+	return "SELECT DISTINCT `service.name` AS service FROM `" + escapeIdentifier(c.stream) + "` WHERE " +
+		timeBounds(w) + " AND `service.name` != '' ORDER BY service LIMIT 500", nil
+}
+
+// ServiceNames returns the distinct log service identities in the window.
+func (c *Client) ServiceNames(ctx context.Context, w observability.Window) ([]string, error) {
+	sql, err := c.ServiceNamesSQL(w)
+	if err != nil {
+		return nil, err
+	}
+	rows, _, err := c.execute(ctx, sql, w)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if name, ok := row["service"].(string); ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
 // NodeMetricsSQL returns the fixed per-node aggregation: CPU idle share,
 // memory used share and one-minute load, averaged per bucket and host. The
 // utilization series are doubles; the integer usage series are not mapped by
@@ -95,12 +124,12 @@ func (c *Client) NodeMetricsSQL(q observability.MetricQuery) (string, error) {
 	if err := q.Validate(); err != nil {
 		return "", err
 	}
-	return "SELECT " + bucketSQL(q.Bucket) + " AS bucket, `host.name` AS host, metric_name AS metric, state, AVG(data_point_value) AS value FROM `" +
+	return "SELECT " + bucketSQL(q.Bucket) + " AS bucket, `host.name` AS host, metric_name AS metric, state, AVG(data_point_value) AS value, MAX(p_timestamp) AS last_seen FROM `" +
 		escapeIdentifier(c.metrics) + "` WHERE " + timeBounds(q.Window) +
 		" AND ((metric_name = 'system.cpu.utilization' AND state = 'idle')" +
 		" OR (metric_name = 'system.memory.utilization' AND state = 'used')" +
 		" OR metric_name = 'system.cpu.load_average.1m')" +
-		" GROUP BY bucket, host, metric, state ORDER BY bucket ASC LIMIT " + strconv.Itoa(observability.MaxMetricRows), nil
+		" GROUP BY bucket, host, metric, state ORDER BY bucket ASC LIMIT " + strconv.Itoa(observability.MaxMetricRows+1), nil
 }
 
 // NodeMetrics returns bucketed per-node series. Missing buckets are simply
@@ -110,7 +139,7 @@ func (c *Client) NodeMetrics(ctx context.Context, q observability.MetricQuery) (
 	if err != nil {
 		return observability.Result{}, err
 	}
-	return c.metricResult(ctx, sql, q)
+	return c.metricResult(ctx, sql, q, observability.MaxMetricRows)
 }
 
 // ServiceMetricsSQL returns average and peak container CPU and memory per
@@ -126,7 +155,7 @@ func (c *Client) ServiceMetricsSQL(q observability.MetricQuery) (string, error) 
 	return "SELECT `stack.name` AS stack, `service.name` AS service, `container.name` AS container, metric_name AS metric," +
 		" AVG(data_point_value) AS avg, MAX(data_point_value) AS max FROM `" + escapeIdentifier(c.metrics) + "` WHERE " + timeBounds(q.Window) +
 		" AND metric_name IN ('container.cpu.utilization','container.memory.percent')" +
-		" GROUP BY stack, service, container, metric ORDER BY max DESC LIMIT 400", nil
+		" GROUP BY `stack.name`, `service.name`, `container.name`, metric_name ORDER BY max DESC LIMIT " + strconv.Itoa(observability.MaxServiceMetricRows+1), nil
 }
 
 // ServiceMetrics returns per-container aggregates, highest peak first.
@@ -135,27 +164,41 @@ func (c *Client) ServiceMetrics(ctx context.Context, q observability.MetricQuery
 	if err != nil {
 		return observability.Result{}, err
 	}
-	return c.metricResult(ctx, sql, q)
+	return c.metricResult(ctx, sql, q, observability.MaxServiceMetricRows)
 }
 
-func (c *Client) metricResult(ctx context.Context, sql string, q observability.MetricQuery) (observability.Result, error) {
+func (c *Client) metricResult(ctx context.Context, sql string, q observability.MetricQuery, limits ...int) (observability.Result, error) {
 	rows, hasMore, err := c.execute(ctx, sql, q.Window)
 	if err != nil {
 		return observability.Result{}, err
 	}
-	if len(rows) > observability.MaxMetricRows {
+	limit := observability.MaxMetricRows
+	if len(limits) > 0 && limits[0] > 0 {
+		limit = limits[0]
+	}
+	if len(rows) > limit+1 {
 		return observability.Result{}, fmt.Errorf("%w: metric response exceeded limit", observability.ErrUnavailable)
+	}
+	truncated := hasMore || len(rows) > limit
+	reasons := make([]string, 0, 2)
+	if hasMore {
+		reasons = append(reasons, "backend_has_more")
+	}
+	if len(rows) > limit {
+		rows = rows[:limit]
+		reasons = append(reasons, "row_limit")
 	}
 	// Metric rows are bucket timestamps, numbers and infrastructure names, never
 	// free text, so they bypass text redaction. The redactor would otherwise
 	// rewrite date digits in the bucket as a phone number and stringify values.
 	return observability.Result{
-		Status:     observability.StatusAvailable,
-		Rows:       rows,
-		ObservedAt: c.now().UTC(),
-		Window:     q.Window,
-		Truncated:  hasMore,
-		Coverage:   "bounded query window",
+		Status:            observability.StatusAvailable,
+		Rows:              rows,
+		ObservedAt:        c.now().UTC(),
+		Window:            q.Window,
+		Truncated:         truncated,
+		TruncationReasons: reasons,
+		Coverage:          "bounded query window",
 	}, nil
 }
 

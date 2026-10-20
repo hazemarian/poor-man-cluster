@@ -253,10 +253,15 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			return fmt.Errorf("decrypt observability_admin password: %w", err)
 		}
 		logsDays, metricsDays, tracesDays := loadObservabilityRetention(ctx, deps.Store)
+		ingressHTTP, ingressHTTPS := LoadIngressPorts(ctx, deps.Store)
 		s3b := loadBackupS3(ctx, deps.Store)
 		objStore, objStoreErr := loadObjectStore(ctx, deps.Docker, deps.Store, deps.Cipher)
 		if objStoreErr != nil {
 			return objStoreErr
+		}
+		parseableHostname, err := loadObservabilityParseableHostname(ctx, deps.Store, deps.Docker, false)
+		if err != nil {
+			return err
 		}
 		render = RenderInput{
 			Domain:                         domain,
@@ -277,8 +282,10 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			StorageNodeConstraint:          deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
 			StorageNodeLabel:               runtime.StorageNodeLabel,
 			PlatformNode:                   loadPlatformNode(ctx, deps.Store),
+			ObservabilityParseableHostname: parseableHostname,
 			ManagedSecretNames:             managedSecretNames(ctx, deps.Store),
 			ObservabilityLogsRetentionDays: logsDays, ObservabilityMetricsRetentionDays: metricsDays, ObservabilityTracesRetentionDays: tracesDays,
+			IngressHTTPPort: ingressHTTP, IngressHTTPSPort: ingressHTTPS,
 			BackupS3:        s3b,
 			Store:           objStore,
 			SSOEnabled:      sso.Enabled,
@@ -902,10 +909,15 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		return nil, fmt.Errorf("decrypt observability_admin password: %w", err)
 	}
 	logsDays, metricsDays, tracesDays := loadObservabilityRetention(ctx, deps.Store)
+	ingressHTTP, ingressHTTPS := LoadIngressPorts(ctx, deps.Store)
 	s3b := loadBackupS3(ctx, deps.Store)
 	objStore, objStoreErr := loadObjectStore(ctx, deps.Docker, deps.Store, deps.Cipher)
 	if objStoreErr != nil {
 		return nil, objStoreErr
+	}
+	parseableHostname, err := loadObservabilityParseableHostname(ctx, deps.Store, deps.Docker, false)
+	if err != nil {
+		return nil, err
 	}
 	render := RenderInput{
 		Domain:                         domain,
@@ -926,8 +938,10 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		StorageNodeConstraint:          deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
 		StorageNodeLabel:               runtime.StorageNodeLabel,
 		PlatformNode:                   loadPlatformNode(ctx, deps.Store),
+		ObservabilityParseableHostname: parseableHostname,
 		ManagedSecretNames:             managedSecretNames(ctx, deps.Store),
 		ObservabilityLogsRetentionDays: logsDays, ObservabilityMetricsRetentionDays: metricsDays, ObservabilityTracesRetentionDays: tracesDays,
+		IngressHTTPPort: ingressHTTP, IngressHTTPSPort: ingressHTTPS,
 		BackupS3: s3b,
 		Store:    objStore,
 	}

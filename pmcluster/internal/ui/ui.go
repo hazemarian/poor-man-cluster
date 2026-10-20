@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-chi/chi/v5"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/time/rate"
 
@@ -36,6 +37,109 @@ type App struct {
 	API   *pmapi.Client
 	Auth  *middleware.Auth
 	ctrl  *controllers.Controller
+}
+
+// InternalObservabilityHandler exposes the edge's private telemetry hop to
+// the host daemon. It is mounted by cmd/edge before the public NoRoute proxy;
+// only the exact managed edge_api_token is accepted, and that token is never
+// forwarded to Parseable. Caller Bearer tokens are therefore unable to turn
+// this route into a backend proxy or bypass daemon role/scope checks.
+func (a *App) InternalObservabilityHandler(managedToken string) http.Handler {
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if !observability.EdgeBearerValid(req.Header.Get("Authorization"), managedToken) {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="pmcluster-edge-internal"`)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, req)
+		})
+	})
+
+	var logs observability.LogSource
+	var metrics observability.MetricSource
+	var traces observability.TraceSource
+	if a != nil && a.ctrl != nil && a.ctrl.Telemetry != nil {
+		logs, _ = a.ctrl.Telemetry.(observability.LogSource)
+		metrics, _ = a.ctrl.Telemetry.(observability.MetricSource)
+		traces, _ = a.ctrl.Telemetry.(observability.TraceSource)
+	}
+	reader := &observability.ReadService{LogsSrc: logs, Metrics: metrics, TracesSrc: traces}
+	(&observability.HTTP{Svc: reader}).MountAt(r, "/internal/observability")
+	return r
+}
+
+// InternalSessionCheckHandler is the private forward-auth target used by
+// Traefik while native edge sessions are enabled. It is deliberately a
+// separate reserved path: an old edge task does not know it and therefore
+// returns 404, which makes a rolling upgrade fail closed rather than expose a
+// task that still treats every request as an admin.
+//
+// Login, setup, static assets and language selection remain public so an
+// unauthenticated browser can reach the sign-in flow. Every other path must
+// carry a valid, unexpired session whose user still exists.
+func (a *App) InternalSessionCheckHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// Traefik's forwardAuth client addresses the edge service directly,
+		// whereas an external request arrives with the public pmcluster host.
+		// Keep this reserved probe private even though the edge listener also
+		// serves the public API router.
+		if !internalSessionForwardAuthHost(req.Host) {
+			http.NotFound(w, req)
+			return
+		}
+		path := req.Header.Get("X-Forwarded-Uri")
+		if path == "" {
+			path = req.URL.Path
+		}
+		if i := strings.IndexByte(path, '?'); i >= 0 {
+			path = path[:i]
+		}
+		if nativeSessionPublicPath(path) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if a == nil || a.Cfg.LoginDisabled || a.Auth == nil || a.Store == nil {
+			writeSessionCheckRedirect(w)
+			return
+		}
+		cookie, err := req.Cookie(a.Auth.CookieName())
+		if err != nil {
+			writeSessionCheckRedirect(w)
+			return
+		}
+		session, ok := a.Auth.Verify(cookie.Value)
+		if !ok {
+			writeSessionCheckRedirect(w)
+			return
+		}
+		user, err := a.Store.ByUsername(req.Context(), session.Username)
+		if err != nil || user == nil || !user.PasswordSet {
+			writeSessionCheckRedirect(w)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func internalSessionForwardAuthHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "edge_pmcluster-edge" || host == "edge_pmcluster-edge:8042"
+}
+
+func nativeSessionPublicPath(path string) bool {
+	switch path {
+	case "/web/login", "/web/setup":
+		return true
+	}
+	return strings.HasPrefix(path, "/web/static/") || strings.HasPrefix(path, "/web/lang/")
+}
+
+func writeSessionCheckRedirect(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Location", "/web/login")
+	w.WriteHeader(http.StatusFound)
 }
 
 // NewApp opens the local store, boots the initial user, and wires the UI.
@@ -141,11 +245,10 @@ func NewApp(cfg Config) (*App, error) {
 	return &App{Cfg: cfg, Store: st, API: api, Auth: auth, ctrl: ctrl}, nil
 }
 
-// WebBase is the URL prefix the operator console is mounted under. Traefik
-// gates /web/* with the admin-auth middleware (basicAuth against the
-// admin_credentials secret) so the console is only reachable through the
-// cluster admin gate; /api/* and /webhook/* fall through to the edge proxy and
-// keep their own Bearer/webhook auth.
+// WebBase is the URL prefix the operator console is mounted under. The edge
+// deployment selects native signed sessions, explicit Traefik Basic Auth, or
+// SSO for /web/*; /api/* and /webhook/* fall through to the edge proxy and keep
+// their own Bearer/webhook auth.
 const WebBase = controllers.WebBase
 
 // Mount registers every UI route on the provided gin engine. This is how the
@@ -248,7 +351,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/settings/configs/edit/:name", stt.ConfigEdit)
 	vr.GET("/settings/secrets/new", stt.SecretNew)
 	vr.GET("/settings/secrets/edit/:name", stt.SecretEdit)
-	// Rendered configs embed the OpenObserve root Basic-auth value and the
+	// Rendered configs embed the Parseable admin Basic-auth value and the
 	// session cookie, so the CONTENT is operator-only (not viewer). The
 	// viewer group keeps the rendered LIST on the settings page, but not the
 	// rendered content modal.
@@ -405,9 +508,9 @@ func sessionSecretFor(st *store.Store, ctx context.Context) ([]byte, error) {
 // bootstrapUsers seeds the initial login. If env user/pass are set, that user
 // is created once (password pre-set, admin role). Otherwise the first-run
 // /web/setup page creates the first admin account (username + password) when
-// there are no users — no placeholder is pre-created. When login is disabled
-// (EDGE_LOGIN_DISABLED) no user rows are created at all — Traefik's admin-auth
-// is the only gate, and the user CRUD + setup pages are hidden.
+// there are no users — no placeholder is pre-created. When the explicit
+// stateless Basic mode is enabled (EDGE_LOGIN_DISABLED), no user rows are
+// created because Traefik's admin-auth is the only gate.
 func bootstrapUsers(ctx context.Context, st *store.Store, cfg Config) error {
 	if cfg.LoginDisabled {
 		return nil

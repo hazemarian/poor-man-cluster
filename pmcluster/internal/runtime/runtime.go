@@ -7,9 +7,15 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 )
+
+// ErrServiceNotFound marks a runtime service lookup that found no matching
+// service. Callers use this to distinguish a fresh cluster from an existing
+// service whose state could not be inspected safely.
+var ErrServiceNotFound = errors.New("service not found")
 
 // Client is the contract pmcluster needs from an orchestrator daemon — a
 // subset of what Docker Swarm offers. *Exists/*Create methods collapse
@@ -208,14 +214,25 @@ type Service struct {
 
 // ServiceInspectResult is a read-only snapshot of one cluster service.
 type ServiceInspectResult struct {
-	ID     string
-	Name   string
-	Image  string
-	Labels map[string]string
+	ID    string
+	Name  string
+	Image string
+	// Hostname is the task-template hostname, when explicitly configured.
+	// An empty value means Docker will choose the task/container identity.
+	Hostname string
+	Labels   map[string]string
 	// Mounts are the service's task-template mounts. A daemon uses them to
 	// make sure the host directories a service binds exist locally before the
 	// Swarm tries to start its task (a missing bind source is a hard failure).
 	Mounts []Mount
+}
+
+// RunningServiceHostnameReader is an optional runtime capability. Docker can
+// expose a task-template hostname without exposing the hostname of a running
+// legacy container; stateful platform recovery uses this capability only when
+// the service template is empty.
+type RunningServiceHostnameReader interface {
+	ServiceRunningHostname(ctx context.Context, name string) (string, error)
 }
 
 // Mount is one container mount from a service's task template.

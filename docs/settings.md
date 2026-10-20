@@ -16,7 +16,7 @@ bearers). Console: the **Settings** page.
 | Key | Default | Who sets it | What it controls |
 |---|---|---|---|
 | `volume_root` | `/var/stack/data` | setup wizard (`--volume-root`) / operator | the host root every container volume is forced under |
-| `platform_node` | the **leader** (auto-written by `cluster up`/`update` when unset) | operator-optional | pins the platform services (OpenObserve, edge, backup agents, SSO) to one node; empty = `node.role == manager` |
+| `platform_node` | the **leader** (auto-written by `cluster up`/`update` when unset) | operator-optional | pins the platform services (Parseable, edge, backup agents, SSO) to one node; empty = `node.role == manager` |
 | `storage_nodes` | leader's hostname (auto-seeded) | operator, `join --storage-node`, `node promote/demote` | comma-separated storage node hostnames; stateful stacks round-robin across them; the current leader is always re-added, a former leader is removed, and labeled-but-unlisted nodes are adopted |
 | `storage_failover` | `false` | setup prompt (only when offsite S3 is configured) / operator | automatic storage failover in the control loop (requires `backup_s3_*`; refuses to enable without it) |
 | `backup_cron` | `0 * * * *` (hourly) | operator | the offen agents' schedule (5-field cron) |
@@ -25,7 +25,7 @@ bearers). Console: the **Settings** page.
 | `backup_store_on` | `""` (= worker/auto) | setup wizard / operator | where the in-cluster SeaweedFS store runs: `leader`, or a non-storage non-platform worker (auto) |
 | `backup_s3_endpoint` / `_bucket` / `_access_key` / `_secret_key` / `_region` | unset (`_region` defaults `auto`) | setup wizard / operator | the offsite S3/R2 destination — when set, agents double-write every archive offsite |
 | `reconcile_interval` | `60` (seconds) | operator | the control loop's safety tick; `0` disables the loop |
-| `edge_login_disabled` | `true` in swarm deployments | setup wizard / edge stack | hides the console's own login (the Traefik admin-auth/SSO gate is the authenticator); `false` keeps password login (standalone) |
+| `edge_login_disabled` | `false` (native signed cookie session) | setup wizard / edge stack | `false` keeps the console login and real `/web/logout` path; set `true` explicitly for the legacy stateless Traefik Basic Auth gate; SSO still forces its oauth2-proxy gate |
 | `sso_enabled` / `sso_provider` / `sso_client_id` / `sso_client_secret` / `sso_github_org` / `sso_github_repos` / `sso_cookie_expire` | off / `github` / unset / unset / unset / unset / `1h` | setup wizard (`--sso-*`) / operator | GitHub SSO via oauth2-proxy: org (and optional repo) restriction, tightened 1h default session |
 | `domain` | — | `cluster up` / setup wizard | the cluster's base domain |
 | `observability_admin_email` | — | `cluster up` (`--observability-admin-email`) | the observability admin login |

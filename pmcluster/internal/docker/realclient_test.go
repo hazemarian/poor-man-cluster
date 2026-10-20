@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -383,6 +384,8 @@ func TestRealClient_ServiceInspectNotFound(t *testing.T) {
 	rc := realClientFromServer(t, m)
 	if _, err := rc.ServiceInspect(context.Background(), "ghost"); err == nil {
 		t.Fatal("expected error for unknown service")
+	} else if !errors.Is(err, runtime.ErrServiceNotFound) {
+		t.Fatalf("unknown service error = %v, want runtime.ErrServiceNotFound", err)
 	}
 }
 
@@ -478,6 +481,29 @@ func TestRealClient_ServiceExec(t *testing.T) {
 	}
 	if res.ExitCode != 0 {
 		t.Errorf("ExitCode = %d, want 0", res.ExitCode)
+	}
+}
+
+func TestRealClient_ServiceRunningHostnameUsesDockerDefault(t *testing.T) {
+	m := newMockDaemon()
+	m.services = []swarm.Service{{
+		ID:   "svc-1",
+		Spec: swarm.ServiceSpec{Annotations: swarm.Annotations{Name: "observability_parseable"}},
+	}}
+	m.tasks["svc-1"] = []swarm.Task{{
+		Status: swarm.TaskStatus{
+			State:           swarm.TaskStateRunning,
+			ContainerStatus: &swarm.ContainerStatus{ContainerID: strings.Repeat("a", 64)},
+		},
+	}}
+	rc := realClientFromServer(t, m)
+
+	hostname, err := rc.ServiceRunningHostname(context.Background(), "observability_parseable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hostname != strings.Repeat("a", 12) {
+		t.Fatalf("hostname = %q, want Docker's 12-character default", hostname)
 	}
 }
 

@@ -72,6 +72,9 @@ func validateService(name string, s *dsl.Service) error {
 	if s.Image == "" {
 		return fmt.Errorf("%s.image: required", prefix)
 	}
+	if s.Hostname != "" && !nodeNameRe.MatchString(s.Hostname) {
+		return fmt.Errorf("%s.hostname: invalid Docker hostname %q", prefix, s.Hostname)
+	}
 	if s.Replicas != nil && *s.Replicas < 0 {
 		return fmt.Errorf("%s.replicas: must be ≥ 0, got %d", prefix, *s.Replicas)
 	}

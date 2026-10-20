@@ -141,6 +141,33 @@ name instead of a host port.
 `severityNumber` is the reliable level field for OTLP logs. If only
 `severityText` is sent, Parseable stores the level as unspecified.
 
+## Native CLI and API
+
+The daemon and CLI expose the same bounded read surface used by the console:
+
+```sh
+pmcluster observability status
+pmcluster observability logs --service checkout/web --severity error --range 1h
+pmcluster observability metrics nodes --range 6h
+pmcluster observability metrics services --range 1h
+pmcluster observability traces --service checkout/web --errors-only
+pmcluster observability trace 0123456789abcdef0123456789abcdef
+```
+
+Add `--json` to emit one lower_snake_case envelope suitable for scripts. Every
+read validates the time range, service identity, severity, trace ID, page size
+and metric bucket before it reaches Parseable. Empty successful results report
+`status: empty`; a backend or inventory failure reports `status: unavailable`
+or an inventory-specific status. Responses carry the queried window and any
+truncation reasons.
+
+Remote commands use the normal `--api-url` and `--api-token` (or their
+environment variables), with daemon Bearer role and stack-scope checks. A
+local command reads the stored cluster domain, ingress port and managed edge
+token, then calls the authenticated native edge route through local HTTPS. The
+CLI never accepts a Parseable URL, SQL statement or backend password. Parseable
+credentials stay inside the edge service on the monitoring network.
+
 ## Configuration
 
 Retention is configured as cluster settings and applied by the provisioning job:
@@ -165,6 +192,81 @@ retried; a long backend outage can drop records.
 
 The Parseable volume stores telemetry. Back it up like any other platform
 volume; the normal cluster lifecycle manages the stack and its volume.
+
+Parseable's local-store catalog also depends on its hostname. pmcluster persists
+that identity and captures the existing hostname during upgrades; fresh installs
+use `pmcluster-parseable`. Preserve the control-plane database and encryption key
+alongside telemetry volumes. An upgrade stops if an installed backend's identity
+cannot be recovered, rather than silently assigning a new one.
+
+When Swarm runs over a VPN, allow room for both VPN and VXLAN headers in the
+network MTU. Test large requests through published ports as well as direct
+overlay traffic. For an existing ingress network that cannot be recreated during
+an upgrade, the optional [ingress MSS helper](../pmcluster/contrib/systemd/pmcluster-ingress-mss.sh)
+limits TCP segments inside Docker's ingress sandbox. Install it as
+`/usr/local/libexec/pmcluster-ingress-mss`, install the adjacent service and timer
+under `/etc/systemd/system`, and enable `pmcluster-ingress-mss.timer` on each node.
+It requires `nsenter` and `nft` (plus Docker CLI and `iproute2`'s `ip`/`bridge`
+for recovery mappings), covers IPv4 and IPv6, and retries after sandbox
+recreation. `PMCLUSTER_INGRESS_MSS` in `/etc/default/pmcluster-ingress-mss` overrides
+the conservative default of 1200 bytes. It does not change host routes or UDP.
+For recovery after a control-plane migration, an operator can also supply
+verified missing ingress proxy-ARP mappings in
+`/etc/pmcluster/ingress-recovery-peers`: one `network-id overlay-ip mac private-vtep-ip`
+row per endpoint. The helper applies a row only to that exact network ID. This
+is an explicit recovery override, not a substitute for normal Swarm discovery;
+remove it after rebuilding the affected ingress network. Preserve it with the
+host configuration while that network remains in use. Mappings do not expire:
+revalidate them after node membership or endpoint changes, even when the network
+ID stays the same. Remove stale mappings from both the file and the namespace.
+
+Docker-published ports can bypass a host's usual input firewall. Restrict private
+Swarm, OTLP, backup and daemon ports in both the input and forwarding paths,
+including IPv6. Forwarding rules must match the connection's original published
+port because Docker may already have translated its destination. The optional
+`pmcluster-private-ports.service` loads an operator-supplied
+`/etc/pmcluster/private-ports.nft`; the adjacent Docker drop-in orders this guard
+before Docker starts. Keep public HTTPS separate from private native ingress.
+Use `systemctl reload pmcluster-private-ports.service` to apply rule changes.
+Restarting this required dependency can restart Docker and interrupt workloads.
+
+Create and validate the rule file before installing the Docker dependency. For
+example, adapt the interface, exact peer addresses and ports in this minimal
+IPv4/IPv6 guard (add private native ingress ports if used):
+
+```nft
+define cluster_interface = "wg0"
+define peers = { 10.20.0.1, 10.20.0.2, 10.20.0.3 }
+define private_ports = { 2377, 7946, 4789, 4317, 4318, 8333, 9090 }
+add table inet pmcluster_private_ports
+flush table inet pmcluster_private_ports
+add chain inet pmcluster_private_ports input { type filter hook input priority -20; policy accept; }
+add chain inet pmcluster_private_ports forward { type filter hook forward priority -20; policy accept; }
+add rule inet pmcluster_private_ports input iifname "lo" return
+add rule inet pmcluster_private_ports input iifname $cluster_interface ip saddr $peers return
+add rule inet pmcluster_private_ports input iifname "docker_gwbridge" return
+add rule inet pmcluster_private_ports input iifname "br-*" return
+add rule inet pmcluster_private_ports input tcp dport $private_ports drop
+add rule inet pmcluster_private_ports input udp dport { 7946, 4789 } drop
+add rule inet pmcluster_private_ports forward iifname $cluster_interface ip saddr $peers return
+add rule inet pmcluster_private_ports forward iifname "docker_gwbridge" return
+add rule inet pmcluster_private_ports forward iifname "br-*" return
+add rule inet pmcluster_private_ports forward meta l4proto tcp ct original proto-dst $private_ports drop
+add rule inet pmcluster_private_ports forward meta l4proto udp ct original proto-dst { 7946, 4789 } drop
+```
+
+Run `nft -c -f /etc/pmcluster/private-ports.nft`, install the service under
+`/etc/systemd/system`, then run `systemctl daemon-reload` and
+`systemctl enable --now pmcluster-private-ports.service`. Verify private peer
+traffic and public HTTPS before installing `docker-private-ports.conf` as
+`/etc/systemd/system/docker.service.d/20-pmcluster-private-ports.conf` and running
+`systemctl daemon-reload` again. Existing workloads need no Docker restart.
+
+The local Parseable store keeps a stable backend identity with its persisted
+state. During an upgrade, the lifecycle captures an existing identity before
+rendering the replacement configuration; when existing volumes are reused,
+keep that identity and its stored setting so the backend is not renamed and
+its history remains addressable.
 
 ## Security
 

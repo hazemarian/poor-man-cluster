@@ -1,61 +1,27 @@
-<svg width="680" height="200" viewBox="0 0 680 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Self-contained combination-mark lockup for the README.
-       GitHub renders this inside an img element, so there is no CSS cascade and
-       no external font or image loading: every colour here is literal, and the
-       accent is pinned to the console's default Orange (#FF5722).
+<svg width="680" height="220" viewBox="0 0 680 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Self-contained combination-mark lockup for the README, laid out as the brand board's
+       "Primary (Dark)" variant: mark, one-line two-tone wordmark, mono product id.
+       GitHub renders this inside an img element, so there is no CSS cascade and no external font
+       loading: every colour is literal and the accent is pinned to the console default (#FF8A00).
+       The mark is the same drawing as #brandmark in internal/ui/views/templates/frag_icons.html. -->
+  <rect x="1" y="1" width="678" height="218" rx="18" fill="#0F172A" stroke="#1E293B" stroke-width="1"/>
+  <rect x="1" y="1" width="678" height="218" rx="18" fill="url(#lk-wash)"/>
+  <defs><radialGradient id="lk-wash" cx="0.197" cy=".5" r=".45"><stop offset="0" stop-color="#FF8A00" stop-opacity=".16"/><stop offset="1" stop-color="#FF8A00" stop-opacity="0"/></radialGradient></defs>
 
-       The mark sits on an accent-tinted plate, exactly as the console's own
-       sidebar mark does. Without that plate the isometric node faces were
-       near-black on a near-black card, so the mark read as a few floating dots
-       instead of a cluster. The faces are also lifted well above the plate
-       value: the mark has to survive being scaled down to a thumbnail. -->
-  <rect x="1" y="1" width="678" height="198" rx="18" fill="#0F1117" stroke="#2D323E" stroke-width="1"/>
+  <g transform="translate(46 22) scale(1.76)"><defs>
+<linearGradient id="pipe-lk" gradientUnits="userSpaceOnUse" x1="0" y1="40" x2="0" y2="88"><stop offset="0" stop-color="#FFB347"/><stop offset="1" stop-color="#FF7A00"/></linearGradient>
+<radialGradient id="port-lk" cx=".4" cy=".35" r=".7"><stop offset="0" stop-color="#FFB347"/><stop offset="1" stop-color="#FF7A00"/></radialGradient>
+<linearGradient id="top-lk" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#434A57"/><stop offset="1" stop-color="#2A3039"/></linearGradient>
+<linearGradient id="lf-lk" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#323843"/><stop offset="1" stop-color="#1C2027"/></linearGradient>
+<linearGradient id="rf-lk" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#262B33"/><stop offset="1" stop-color="#14171C"/></linearGradient>
+<filter id="glow-lk" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2"/></filter>
+<filter id="pglow-lk" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation=".9"/></filter>
+</defs><path d="M50 44 V66 M50 66 L35 74.7 M50 66 L65 74.7 M40 40 L28.5 46.6 Q25.5 48.4 25.5 51.9 V62 M60 40 L71.5 46.6 Q74.5 48.4 74.5 51.9 V62" fill="none" stroke="#FF8A00" stroke-opacity=".7" stroke-width="11" stroke-linecap="butt" stroke-linejoin="round" filter="url(#glow-lk)"/><path d="M50 44 V66 M50 66 L35 74.7 M50 66 L65 74.7 M40 40 L28.5 46.6 Q25.5 48.4 25.5 51.9 V62 M60 40 L71.5 46.6 Q74.5 48.4 74.5 51.9 V62" fill="none" stroke="url(#pipe-lk)" stroke-width="7.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M50 44 V66 M50 66 L35 74.7 M50 66 L65 74.7 M40 40 L28.5 46.6 Q25.5 48.4 25.5 51.9 V62 M60 40 L71.5 46.6 Q74.5 48.4 74.5 51.9 V62" fill="none" stroke="#FFF3E0" stroke-opacity=".16" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><polygon points="50,61.6 57.6,66 50,70.4 42.4,66" fill="#FF8A00" opacity=".6" filter="url(#pglow-lk)"/><polygon points="50,62.6 55.9,66 50,69.4 44.1,66" fill="url(#port-lk)" stroke="#FFF3E0" stroke-opacity=".35" stroke-width=".5" stroke-linejoin="round"/><g transform="translate(50 31) scale(2.2)"><polygon points="0.00,-10.00 8.66,-5.00 0.00,0.00 -8.66,-5.00" transform="translate(0 7.6)" fill="#000" opacity=".35" filter="url(#pglow-lk)"/><polygon points="0.00,-9.50 7.79,-5.00 0.00,-0.50 -7.79,-5.00" fill="url(#top-lk)" stroke="url(#top-lk)" stroke-width="1.1" stroke-linejoin="round"/><polygon points="0.00,-9.50 7.79,-5.00 0.00,-0.50 -7.79,-5.00" fill="none" stroke="#fff" stroke-opacity=".30" stroke-width=".32" stroke-linejoin="round"/><polygon points="-8.23,-4.40 -0.43,0.10 -0.43,6.40 -8.23,1.90" fill="url(#lf-lk)" stroke="url(#lf-lk)" stroke-width="1.1" stroke-linejoin="round"/><polygon points="-8.23,-4.40 -0.43,0.10 -0.43,6.40 -8.23,1.90" fill="none" stroke="#fff" stroke-opacity=".14" stroke-width=".32" stroke-linejoin="round"/><polygon points="8.23,-4.40 0.43,0.10 0.43,6.40 8.23,1.90" fill="url(#rf-lk)" stroke="url(#rf-lk)" stroke-width="1.1" stroke-linejoin="round"/><polygon points="8.23,-4.40 0.43,0.10 0.43,6.40 8.23,1.90" fill="none" stroke="#fff" stroke-opacity=".10" stroke-width=".32" stroke-linejoin="round"/><line x1="-6.6" y1="-2.3" x2="-2.2" y2="0.25" stroke="#06080B" stroke-width="1.15" stroke-linecap="round"/><line x1="-6.6" y1="-1.6799999999999997" x2="-2.2" y2="0.87" stroke="#fff" stroke-opacity=".09" stroke-width=".35" stroke-linecap="round"/><line x1="-6.6" y1="0.20000000000000018" x2="-2.2" y2="2.75" stroke="#06080B" stroke-width="1.15" stroke-linecap="round"/><line x1="-6.6" y1="0.8200000000000002" x2="-2.2" y2="3.37" stroke="#fff" stroke-opacity=".09" stroke-width=".35" stroke-linecap="round"/><ellipse cx="4.33" cy="1.2" rx="2.7" ry="3.0" fill="#FF8A00" opacity=".75" filter="url(#pglow-lk)"/><ellipse cx="4.33" cy="1.2" rx="1.75" ry="2.05" fill="url(#port-lk)"/></g><g transform="translate(19 76) scale(2.2)"><polygon points="0.00,-10.00 8.66,-5.00 0.00,0.00 -8.66,-5.00" transform="translate(0 7.6)" fill="#000" opacity=".35" filter="url(#pglow-lk)"/><polygon points="0.00,-9.50 7.79,-5.00 0.00,-0.50 -7.79,-5.00" fill="url(#top-lk)" stroke="url(#top-lk)" stroke-width="1.1" stroke-linejoin="round"/><polygon points="0.00,-9.50 7.79,-5.00 0.00,-0.50 -7.79,-5.00" fill="none" stroke="#fff" stroke-opacity=".30" stroke-width=".32" stroke-linejoin="round"/><polygon points="-8.23,-4.40 -0.43,0.10 -0.43,6.40 -8.23,1.90" fill="url(#lf-lk)" stroke="url(#lf-lk)" stroke-width="1.1" stroke-linejoin="round"/><polygon points="-8.23,-4.40 -0.43,0.10 -0.43,6.40 -8.23,1.90" fill="none" stroke="#fff" stroke-opacity=".14" stroke-width=".32" stroke-linejoin="round"/><polygon points="8.23,-4.40 0.43,0.10 0.43,6.40 8.23,1.90" fill="url(#rf-lk)" stroke="url(#rf-lk)" stroke-width="1.1" stroke-linejoin="round"/><polygon points="8.23,-4.40 0.43,0.10 0.43,6.40 8.23,1.90" fill="none" stroke="#fff" stroke-opacity=".10" stroke-width=".32" stroke-linejoin="round"/><line x1="-6.6" y1="-2.3" x2="-2.2" y2="0.25" stroke="#06080B" stroke-width="1.15" stroke-linecap="round"/><line x1="-6.6" y1="-1.6799999999999997" x2="-2.2" y2="0.87" stroke="#fff" stroke-opacity=".09" stroke-width=".35" stroke-linecap="round"/><line x1="-6.6" y1="0.20000000000000018" x2="-2.2" y2="2.75" stroke="#06080B" stroke-width="1.15" stroke-linecap="round"/><line x1="-6.6" y1="0.8200000000000002" x2="-2.2" y2="3.37" stroke="#fff" stroke-opacity=".09" stroke-width=".35" stroke-linecap="round"/><ellipse cx="4.33" cy="1.2" rx="2.7" ry="3.0" fill="#FF8A00" opacity=".75" filter="url(#pglow-lk)"/><ellipse cx="4.33" cy="1.2" rx="1.75" ry="2.05" fill="url(#port-lk)"/></g><g transform="translate(81 76) scale(2.2)"><polygon points="0.00,-10.00 8.66,-5.00 0.00,0.00 -8.66,-5.00" transform="translate(0 7.6)" fill="#000" opacity=".35" filter="url(#pglow-lk)"/><polygon points="0.00,-9.50 7.79,-5.00 0.00,-0.50 -7.79,-5.00" fill="url(#top-lk)" stroke="url(#top-lk)" stroke-width="1.1" stroke-linejoin="round"/><polygon points="0.00,-9.50 7.79,-5.00 0.00,-0.50 -7.79,-5.00" fill="none" stroke="#fff" stroke-opacity=".30" stroke-width=".32" stroke-linejoin="round"/><polygon points="-8.23,-4.40 -0.43,0.10 -0.43,6.40 -8.23,1.90" fill="url(#lf-lk)" stroke="url(#lf-lk)" stroke-width="1.1" stroke-linejoin="round"/><polygon points="-8.23,-4.40 -0.43,0.10 -0.43,6.40 -8.23,1.90" fill="none" stroke="#fff" stroke-opacity=".14" stroke-width=".32" stroke-linejoin="round"/><polygon points="8.23,-4.40 0.43,0.10 0.43,6.40 8.23,1.90" fill="url(#rf-lk)" stroke="url(#rf-lk)" stroke-width="1.1" stroke-linejoin="round"/><polygon points="8.23,-4.40 0.43,0.10 0.43,6.40 8.23,1.90" fill="none" stroke="#fff" stroke-opacity=".10" stroke-width=".32" stroke-linejoin="round"/><line x1="6.6" y1="-2.3" x2="2.2" y2="0.25" stroke="#06080B" stroke-width="1.15" stroke-linecap="round"/><line x1="6.6" y1="-1.6799999999999997" x2="2.2" y2="0.87" stroke="#fff" stroke-opacity=".09" stroke-width=".35" stroke-linecap="round"/><line x1="6.6" y1="0.20000000000000018" x2="2.2" y2="2.75" stroke="#06080B" stroke-width="1.15" stroke-linecap="round"/><line x1="6.6" y1="0.8200000000000002" x2="2.2" y2="3.37" stroke="#fff" stroke-opacity=".09" stroke-width=".35" stroke-linecap="round"/><ellipse cx="-4.33" cy="1.2" rx="2.7" ry="3.0" fill="#FF8A00" opacity=".75" filter="url(#pglow-lk)"/><ellipse cx="-4.33" cy="1.2" rx="1.75" ry="2.05" fill="url(#port-lk)"/></g></g>
 
-  <!-- app-header traffic-light controls -->
-  <circle cx="32" cy="27" r="5.5" fill="#FF5F56"/>
-  <circle cx="52" cy="27" r="5.5" fill="#FFBD2E"/>
-  <circle cx="72" cy="27" r="5.5" fill="#27C93F"/>
-
-  <!-- accent plate behind the mark -->
-  <rect x="50" y="58" width="108" height="108" rx="18" fill="#FF5722" fill-opacity="0.14" stroke="#FF5722" stroke-opacity="0.45" stroke-width="1"/>
-
-  <!-- isometric 3-node mark: same geometry as internal/ui/views/static/logo-mark.svg,
-       with the faces lifted and edged so all three cubes stay legible on the plate -->
-  <g transform="translate(50,58) scale(0.9)">
-    <!-- connecting links -->
-    <path d="M60 48 L35 70" stroke="#FF5722" stroke-width="6" stroke-linecap="round"/>
-    <path d="M60 48 L85 70" stroke="#FF5722" stroke-width="6" stroke-linecap="round"/>
-    <path d="M35 70 L85 70" stroke="#FF5722" stroke-width="6" stroke-linecap="round"/>
-
-    <!-- top node -->
-    <polygon points="60,20 82,31 60,42 38,31" fill="#525C6E" stroke="#6E7A90" stroke-width="1.5"/>
-    <polygon points="38,31 60,42 60,58 38,47" fill="#39414F" stroke="#4C5665" stroke-width="1"/>
-    <polygon points="60,42 82,31 82,47 60,58" fill="#2E3544" stroke="#434C5C" stroke-width="1"/>
-    <line x1="43" y1="38" x2="55" y2="44" stroke="#B3BDCB" stroke-width="2" stroke-linecap="round"/>
-    <circle cx="73" cy="38" r="2.5" fill="#FF5722"/>
-
-    <!-- bottom-left node -->
-    <polygon points="35,62 57,73 35,84 13,73" fill="#525C6E" stroke="#6E7A90" stroke-width="1.5"/>
-    <polygon points="13,73 35,84 35,100 13,89" fill="#39414F" stroke="#4C5665" stroke-width="1"/>
-    <polygon points="35,84 57,73 57,89 35,100" fill="#2E3544" stroke="#434C5C" stroke-width="1"/>
-    <line x1="18" y1="80" x2="30" y2="86" stroke="#B3BDCB" stroke-width="2" stroke-linecap="round"/>
-    <circle cx="48" cy="80" r="2.5" fill="#FF5722"/>
-
-    <!-- bottom-right node -->
-    <polygon points="85,62 107,73 85,84 63,73" fill="#525C6E" stroke="#6E7A90" stroke-width="1.5"/>
-    <polygon points="63,73 85,84 85,100 63,89" fill="#39414F" stroke="#4C5665" stroke-width="1"/>
-    <polygon points="85,84 107,73 107,89 85,100" fill="#2E3544" stroke="#434C5C" stroke-width="1"/>
-    <line x1="68" y1="80" x2="80" y2="86" stroke="#B3BDCB" stroke-width="2" stroke-linecap="round"/>
-    <circle cx="98" cy="80" r="2.5" fill="#FF5722"/>
-  </g>
-
-  <!-- wordmark: its cap-line and the plate's top edge are optically aligned -->
-  <text x="188" y="97" font-family="'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="36" font-weight="700" fill="#FFFFFF">Poor Man's<tspan fill="#FF5722"> Cluster</tspan></text>
-
-  <!-- tagline (step lighter than the identifier below it, so the two grey lines
-       read as descriptor and handle rather than as one block) -->
-  <text x="188" y="127" font-family="'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="12" font-weight="600" letter-spacing="3" fill="#A9B3C2">SIMPLE &#8226; FLEXIBLE &#8226; POWERFUL</text>
-
-  <!-- mono identifier -->
-  <text x="188" y="153" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#6F7889">pmcluster</text>
+  <!-- Text block: wordmark, tagline, product id. One shared left edge (the bold wordmark sits
+       1px left to cancel the P's side bearing); baselines 95 / 122 / 148 centre the block on the
+       mark's visual centre (y 110). -->
+  <text id="lk-word" x="255" y="95" font-family="'Plus Jakarta Sans', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="36" font-weight="800" letter-spacing="-1.1" fill="#F8FAFC">Poor Man&#8217;s<tspan fill="#FF8A00"> Cluster</tspan></text>
+  <text id="lk-tag" x="256" y="122" font-family="'Plus Jakarta Sans', 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif" font-size="11.5" font-weight="600" letter-spacing="2.8" fill="#A9B4C4">SIMPLE &#183; FLEXIBLE &#183; POWERFUL</text>
+  <text id="lk-id" x="256" y="148" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" letter-spacing="4" fill="#64748B">pmcluster</text>
 </svg>

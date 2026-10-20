@@ -50,6 +50,8 @@ var clusterSettingKeys = []string{
 	cluster.SettingObservabilityLogsRetentionDays(),
 	cluster.SettingObservabilityMetricsRetentionDays(),
 	cluster.SettingObservabilityTracesRetentionDays(),
+	cluster.SettingIngressHTTPPort(),
+	cluster.SettingIngressHTTPSPort(),
 	cluster.SettingBackupS3Endpoint(),
 	cluster.SettingBackupS3Bucket(),
 	cluster.SettingBackupS3AccessKey(),

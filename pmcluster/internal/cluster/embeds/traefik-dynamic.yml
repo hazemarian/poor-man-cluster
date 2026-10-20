@@ -2,6 +2,13 @@
 # replicated to every Swarm node automatically.
 http:
   middlewares:
+    # Native edge sessions remain protected during a rolling edge update.
+    # The reserved endpoint returns success only from a session-aware edge
+    # task; an older task (or a missing dynamic middleware) fails closed.
+    edge-session-auth:
+      forwardAuth:
+        address: "http://edge_pmcluster-edge:8042/internal/session/check"
+        trustForwardHeader: false
 [[- if .SSOEnabled]]
     # SSO gate (oauth2-proxy). When SSO is enabled the pmcluster-web +
     # observ. routers use this forwardAuth instead of the htpasswd

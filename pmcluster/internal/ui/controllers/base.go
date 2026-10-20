@@ -25,9 +25,10 @@ const (
 )
 
 // WebBase is the URL prefix the operator console is mounted under
-// (pmcluster.<domain>/web/*). Traefik gates the /web prefix with the
-// admin-auth middleware; the edge's /api and /webhook routes are outside it.
-// Every template path and redirect the controllers emit must start here.
+// (pmcluster.<domain>/web/*). Native signed edge sessions gate the prefix by
+// default; explicit Basic Auth and SSO are selected by the edge deployment.
+// The edge's /api and /webhook routes are outside it. Every template path and
+// redirect the controllers emit must start here.
 const WebBase = "/web"
 
 // Controller carries the shared dependencies every handler needs. References,

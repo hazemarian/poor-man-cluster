@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -19,9 +20,11 @@ type HTTP struct {
 
 // Mount registers the /api/registries routes.
 func (h *HTTP) Mount(r chi.Router) {
-	r.Get("/registries", h.list)
-	r.Post("/registries", h.add)
-	r.Delete("/registries/{host}", h.remove)
+	r.With(auth.RequireRole(auth.RoleViewer)).Get("/registries", h.list)
+	// Registry passwords are written to the host Docker credential store and
+	// forwarded to Swarm on deploy. Keep both mutations admin-only.
+	r.With(auth.RequireRole(auth.RoleAdmin)).Post("/registries", h.add)
+	r.With(auth.RequireRole(auth.RoleAdmin)).Delete("/registries/{host}", h.remove)
 }
 
 func (h *HTTP) list(res http.ResponseWriter, req *http.Request) {

@@ -27,6 +27,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/registry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
@@ -123,6 +124,12 @@ type Deps struct {
 	// Logs exposes the read-only control-plane log tail under /api/logs.
 	// Optional; when nil that route is omitted.
 	Logs *LogsHTTP
+
+	// Observability exposes bounded native telemetry reads under
+	// /api/observability. It is read-only and requires an authenticated viewer;
+	// stack-scoped tokens are denied by stackScopeGuard because telemetry is
+	// cluster-wide.
+	Observability observability.Reader
 }
 
 // New assembles the chi router from the optional Deps; every nil dependency
@@ -236,6 +243,11 @@ func New(d Deps) http.Handler {
 		}
 		if d.Logs != nil {
 			d.Logs.Mount(r)
+		}
+		if d.Observability != nil {
+			r.With(auth.RequireRole(auth.RoleViewer)).Group(func(or chi.Router) {
+				(&observability.HTTP{Svc: d.Observability}).Mount(or)
+			})
 		}
 	})
 

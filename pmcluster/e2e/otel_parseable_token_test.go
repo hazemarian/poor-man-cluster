@@ -64,7 +64,7 @@ func TestE2EParseableAdminAuthIngestion(t *testing.T) {
 services:
   observability_parseable:
     image: parseable/parseable:v2.8.0
-    command: ["local-store"]
+    command: ["/usr/bin/parseable", "local-store"]
     environment:
       - P_ADDR=0.0.0.0:8000
       - P_USERNAME=%s

@@ -424,6 +424,45 @@ func TestLoadComposeFile_ObservabilityUsesManagedCredential(t *testing.T) {
 	}
 }
 
+func TestLoadComposeFile_ObservabilityHostnamePin(t *testing.T) {
+	in := RenderInput{
+		Domain:                         "example.com",
+		ObservabilityAdminEmail:        "ops@example.com",
+		ObservabilityAdminPassword:     "PW",
+		ObservabilityParseableHostname: "b15ab0ff62e5",
+	}
+	data, err := LoadComposeFile(StackObservability, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse rendered observability stack: %v", err)
+	}
+	services, ok := doc["services"].(map[string]any)
+	if !ok {
+		t.Fatalf("rendered observability stack has no services map: %v", doc["services"])
+	}
+	parseable, ok := services["parseable"].(map[string]any)
+	if !ok {
+		t.Fatalf("rendered observability stack has no parseable service")
+	}
+	if got := parseable["hostname"]; got != "b15ab0ff62e5" {
+		t.Fatalf("parseable hostname = %v, want b15ab0ff62e5", got)
+	}
+
+	data, err = LoadComposeFile(StackObservability, RenderInput{
+		Domain:                  "example.com",
+		ObservabilityAdminEmail: "ops@example.com",
+	})
+	if err != nil {
+		t.Fatalf("LoadComposeFile without pin: %v", err)
+	}
+	if strings.Contains(string(data), "hostname:") {
+		t.Fatal("unset Parseable hostname must omit the compose hostname field")
+	}
+}
+
 // TestLoadComposeFile_UnknownStack verifies that an unknown stack name returns
 // an error.
 func TestLoadComposeFile_UnknownStack(t *testing.T) {
@@ -1369,6 +1408,70 @@ func TestRenderTraefikDynamic_CORSWired(t *testing.T) {
 	if strings.Contains(body, "routers:") {
 		t.Errorf("file-provider should declare no routers (edge owns pmcluster.<domain>):\n%s", body)
 	}
+	if !strings.Contains(body, "edge-session-auth:") || !strings.Contains(body, "http://edge_pmcluster-edge:8042/internal/session/check") {
+		t.Errorf("rendered config missing fail-closed native session forwardAuth:\n%s", body)
+	}
+}
+
+func TestLoadComposeFile_EdgeSessionGateModes(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     RenderInput
+		want   string
+		bad    string
+		bridge string
+	}{
+		{name: "native session", in: RenderInput{Domain: "example.com", EdgeLoginDisabled: false}, want: "cors-default@file,edge-session-auth@file", bad: "admin-auth@file", bridge: "cors-default@file,admin-auth@file"},
+		{name: "explicit basic", in: RenderInput{Domain: "example.com", EdgeLoginDisabled: true}, want: "cors-default@file,admin-auth@file", bad: "edge-session-auth@file"},
+		{name: "sso", in: RenderInput{Domain: "example.com", EdgeLoginDisabled: true, SSOEnabled: true}, want: "cors-default@file,sso-auth@file", bad: "edge-session-auth@file"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := LoadComposeFile(StackEdge, tc.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := string(data)
+			// The pmcluster-web router is the console gate under test. The
+			// sso-bridge router keeps its own gate on purpose, so the whole
+			// body must not be searched for admin-auth@file.
+			web := routerMiddlewares(t, body, "pmcluster-web")
+			if web != tc.want {
+				t.Fatalf("pmcluster-web middlewares = %q, want %q", web, tc.want)
+			}
+			if strings.Contains(web, tc.bad) {
+				t.Fatalf("pmcluster-web middlewares unexpectedly contain %q: %q", tc.bad, web)
+			}
+			if tc.bridge != "" {
+				// The bridge hands out the managed credential and is hosted on
+				// observ.<domain>, where the host-only session cookie is not sent,
+				// so it stays behind Basic auth even in native-session mode.
+				if got := routerMiddlewares(t, body, "sso-bridge"); got != tc.bridge {
+					t.Fatalf("sso-bridge middlewares = %q, want %q", got, tc.bridge)
+				}
+			}
+		})
+	}
+}
+
+// routerMiddlewares returns the middleware chain the rendered compose body
+// assigns to one Traefik router. It fails unless the label appears exactly
+// once, so a broken if/else in the template cannot pass as a match.
+func routerMiddlewares(t *testing.T, body, router string) string {
+	t.Helper()
+	key := "traefik.http.routers." + router + ".middlewares"
+	var found []string
+	for _, line := range strings.Split(body, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok || strings.Trim(k, `"`) != key {
+			continue
+		}
+		found = append(found, strings.Trim(strings.TrimSpace(v), `"'`))
+	}
+	if len(found) != 1 {
+		t.Fatalf("rendered compose has %d %s labels, want 1:\n%s", len(found), key, body)
+	}
+	return found[0]
 }
 
 // TestRenderTraefikDynamic_AutoAuthMiddleware verifies the openobserve-auto-auth
@@ -2004,5 +2107,29 @@ func TestLoadComposeFile_BackupS3Renders(t *testing.T) {
 	body = string(data)
 	if strings.Contains(body, "AWS_") {
 		t.Errorf("unconfigured backup stack must not emit AWS_* env:\n%s", body)
+	}
+}
+
+func TestRenderInfraAlternateIngressPorts(t *testing.T) {
+	body, err := LoadComposeFile(StackInfra, RenderInput{
+		Domain: "example.com", IngressHTTPPort: 8080, IngressHTTPSPort: 8443,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{"published: 8080", "published: 8443"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("alternate ingress missing %q:\n%s", want, text)
+		}
+	}
+	def, err := LoadComposeFile(StackInfra, RenderInput{Domain: "example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"published: 80", "published: 443"} {
+		if !strings.Contains(string(def), want) {
+			t.Errorf("default ingress missing %q", want)
+		}
 	}
 }

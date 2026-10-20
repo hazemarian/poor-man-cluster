@@ -37,7 +37,7 @@ answers into the store settings:
     --sso-github-repos, --sso-cookie-expire)
   - Edge console login (EDGE_LOGIN_DISABLED)
 
-The OpenObserve admin email is derived automatically (admin@<domain>) — it is
+The Parseable admin email is derived automatically (admin@<domain>) — it is
 hidden behind the admin-auth / SSO gate, so there is no prompt for it.
 
 Every SSO question also has an env-var override for scripting/CI:
@@ -70,7 +70,7 @@ func init() {
 	setupCmd.Flags().String("sso-github-org", "", "restrict SSO to a GitHub org (optional; default: $PMCLUSTER_SSO_GITHUB_ORG)")
 	setupCmd.Flags().String("sso-github-repos", "", "restrict SSO to users with access to these comma-separated repos, org/repo (optional; default: $PMCLUSTER_SSO_GITHUB_REPOS)")
 	setupCmd.Flags().String("sso-cookie-expire", "", "SSO session cookie lifetime (default 1h; default: $PMCLUSTER_SSO_COOKIE_EXPIRE)")
-	setupCmd.Flags().Bool("edge-login-enabled", false, "keep the edge console password login (default: disabled behind SSO/admin-auth; default: $PMCLUSTER_EDGE_LOGIN_ENABLED)")
+	setupCmd.Flags().Bool("edge-login-enabled", false, "keep the edge console password login (default: enabled; set false to opt into Traefik Basic Auth; default: $PMCLUSTER_EDGE_LOGIN_ENABLED)")
 	setupCmd.Flags().String("volume-root", "", "host dir every container volume is forced under (default /var/stack/data)")
 	setupCmd.Flags().Bool("backup-all-nodes", false, "run the backup agent on every node (default: manager-only)")
 	setupCmd.Flags().String("backup-retention-days", "", "how many days backups are kept before pruning (default 15)")
@@ -269,7 +269,8 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 			a.SSOGitHubRepos = ask(r, out, "Restrict to GitHub repos, comma-separated (optional)", st.SettingDefault(ctx, cluster.SettingSSOGitHubRepos(), ""))
 			a.SSOCookieExpire = ask(r, out, "Session cookie lifetime (e.g. 1h)", st.SettingDefault(ctx, cluster.SettingSSOCookieExpire(), "1h"))
 		}
-		a.EdgeLoginEnabled = askYesNo(r, out, "Keep edge console password login?", false)
+		storedEdgeLogin := st.SettingDefault(ctx, cluster.SettingEdgeLoginDisabled(), "false") != "true"
+		a.EdgeLoginEnabled = askYesNo(r, out, "Keep edge console password login?", storedEdgeLogin)
 		a.VolumeRoot = ask(r, out, "Container volume root dir", st.SettingDefault(ctx, cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot))
 		a.BackupAllNodes = askYesNo(r, out, "Run backup agent on every node?", false)
 		a.BackupRetentionDays = ask(r, out, "Backup retention (days)", st.SettingDefault(ctx, cluster.SettingBackupRetentionDays(), "15"))
@@ -313,7 +314,14 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.SSOGitHubOrg, _ = cmd.Flags().GetString("sso-github-org")
 		a.SSOGitHubRepos, _ = cmd.Flags().GetString("sso-github-repos")
 		a.SSOCookieExpire, _ = cmd.Flags().GetString("sso-cookie-expire")
-		a.EdgeLoginEnabled, _ = cmd.Flags().GetBool("edge-login-enabled")
+		// The boolean flag's zero value is false, so an absent flag must be
+		// handled separately. Fresh installs keep the native cookie session;
+		// an existing explicit setting is preserved until the operator changes
+		// it with --edge-login-enabled or the environment override.
+		a.EdgeLoginEnabled = st.SettingDefault(ctx, cluster.SettingEdgeLoginDisabled(), "false") != "true"
+		if cmd.Flags().Changed("edge-login-enabled") {
+			a.EdgeLoginEnabled, _ = cmd.Flags().GetBool("edge-login-enabled")
+		}
 		a.VolumeRoot, _ = cmd.Flags().GetString("volume-root")
 		a.BackupAllNodes, _ = cmd.Flags().GetBool("backup-all-nodes")
 		a.BackupRetentionDays, _ = cmd.Flags().GetString("backup-retention-days")
