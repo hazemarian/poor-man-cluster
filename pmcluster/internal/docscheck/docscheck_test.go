@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -282,8 +283,13 @@ func isDiagram(block string) bool {
 	return false
 }
 
+// rePMMention finds a line that talks about the pmcluster CLI. A hyphen or
+// underscore right after the word marks a unit, file or container name such as
+// `pmcluster-private-ports.service`; flags on such a line belong to another tool
+// (systemctl here), so they are not read as pmcluster flags.
 var (
 	rePMInvocation = regexp.MustCompile(`\bpmcluster\s+([a-z][a-z0-9-]*)`)
+	rePMMention    = regexp.MustCompile(`\bpmcluster([^-_]|$)`)
 	reLongFlag     = regexp.MustCompile(`(--[a-z][a-z0-9-]{1,})`)
 )
 
@@ -305,7 +311,7 @@ func TestDocumentedCLICommandsAndFlagsExist(t *testing.T) {
 				continue // a Mermaid label is not a shell command
 			}
 			for _, line := range strings.Split(block, "\n") {
-				if !strings.Contains(line, "pmcluster") {
+				if !rePMMention.MatchString(line) {
 					continue
 				}
 				if m := rePMInvocation.FindStringSubmatch(line); m != nil {
@@ -348,10 +354,24 @@ func routeLiterals(t *testing.T, root string) map[string]string {
 	found := map[string]string{}
 	fset := token.NewFileSet()
 
+	// firstString returns the path a registration call is keyed on. A bare
+	// literal is taken as written; a concatenation such as `prefix+"/status"`
+	// yields its rightmost literal, since the left operand is a runtime prefix
+	// this pass cannot resolve. The suffix match in the caller still lines the
+	// route up with the spec.
 	firstString := func(call *ast.CallExpr) (string, bool) {
 		for _, arg := range call.Args {
-			if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				return strings.Trim(lit.Value, `"`), true
+			switch x := arg.(type) {
+			case *ast.BasicLit:
+				if x.Kind == token.STRING {
+					return strings.Trim(x.Value, `"`), true
+				}
+			case *ast.BinaryExpr:
+				if lit, ok := x.Y.(*ast.BasicLit); ok && x.Op == token.ADD && lit.Kind == token.STRING {
+					if s, err := strconv.Unquote(lit.Value); err == nil {
+						return s, true
+					}
+				}
 			}
 		}
 		return "", false

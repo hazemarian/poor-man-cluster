@@ -193,6 +193,10 @@ func TestEdgeRoutingSendsWebhooksToTheAPIRouter(t *testing.T) {
 		{"/web/overview", "pmcluster-web", "console pages are auth-gated"},
 		{"/web/static/base.css", "pmcluster-web", "console assets are auth-gated too"},
 		{"/web/login", "pmcluster-web", "the sign-in screen is part of the console"},
+		// The observability sign-in bridge is only routed on observ.<domain>.
+		// On the console host no router may claim it, or the managed credential
+		// it hands out would be served to anyone who can reach pmcluster.<domain>.
+		{"/sso-bridge", "", "the bridge must not be served on the console host"},
 	}
 
 	for _, tc := range cases {
@@ -223,5 +227,14 @@ func TestEdgeRoutingIgnoresOtherHosts(t *testing.T) {
 				t.Errorf("%s matched %s for an unrelated host", name, path)
 			}
 		}
+	}
+}
+
+// The API router is the catch-all for pmcluster.<domain>, so it must carry the
+// /sso-bridge exclusion explicitly rather than relying on another router winning.
+func TestEdgeRoutingAPIRuleExcludesSSOBridge(t *testing.T) {
+	rules := edgeRouterRules(t)
+	if !strings.Contains(rules["pmcluster-api"], "!Path(`/sso-bridge`)") {
+		t.Fatalf("pmcluster-api rule must exclude /sso-bridge, got %q", rules["pmcluster-api"])
 	}
 }

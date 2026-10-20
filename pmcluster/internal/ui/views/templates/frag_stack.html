@@ -124,7 +124,7 @@
 
 {{if and .Detail .Detail.Stack.LastError}}
 <div class="msg err">
-  <b>{{icon "alert-triangle"}}{{T "stack.deploy_failed"}}</b>
+  <b>{{icon "alert"}}{{T "stack.deploy_failed"}}</b>
   <p class="muted">{{.Detail.Stack.LastError}}</p>
   <p class="sub">{{T "stack.deploy_failed_hint"}}</p>
 </div>
@@ -137,7 +137,7 @@
     {{range .Detail.Stack.LastErrors}}{{if .Error}}
     <li>
       <div class="t-head">
-        <span class="pill bad">{{icon "alert-triangle"}}{{T "stack.deploy_failed"}}</span>
+        <span class="pill bad">{{icon "alert"}}{{T "stack.deploy_failed"}}</span>
         <span class="t-meta">rev {{N0 .Revision}} · {{ts .CreatedAt}}</span>
       </div>
       <p class="muted">{{.Error}}</p>
@@ -192,7 +192,7 @@
               <span class="mono iso" dir="ltr">{{.ServiceName}}</span>
               {{end}}
               {{if .Image}}<div class="muted trunc" title="{{.Image}}">{{shortImage .Image}}</div>{{end}}
-              {{if gt .ImageAge 30}}<span class="pill warn">{{TF "services.image_stale" (N .ImageAge)}}</span>{{end}}
+              {{if gt .ImageAge 30}}<span class="pill warn note">{{TF "services.image_stale" (N .ImageAge)}}</span>{{end}}
             </td>
             <td class="num">
               <span class="num">{{N .Replicas}} / {{N .Desired}}</span>

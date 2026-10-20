@@ -164,7 +164,88 @@ func buildHandler(t *testing.T, st *store.Store, c *credentials.Cipher, dep *rec
 	h.Mount(r)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
+	t.Cleanup(func() { waitForBackgroundDeploys(t, st) })
 	return srv, h
+}
+
+// waitForBackgroundDeploys joins every background apply started through
+// this store by DeployAsync. That goroutine's LAST store write is one of
+// exactly two terminal markers:
+//
+//   - success: the rendered_hash stamp (SetRevisionRenderedHash); the
+//     follow-up RecordStackError("") is a documented no-op that writes
+//     nothing;
+//   - failure: the last_error history entry (RecordStackError(err)).
+//
+// The store uses journal_mode=DELETE, so an in-flight write transiently
+// creates data.db-journal. If the goroutine is still writing when a test
+// returns, t.TempDir's RemoveAll can race that file and fail with
+// "directory not empty". Waiting for the terminal marker makes the fixture
+// deterministic; a fixed sleep would only narrow the window.
+//
+// buildHandler registers this via t.Cleanup. Cleanups run LIFO, so it runs
+// BEFORE testDeps' store.Close and the TempDir removal.
+func waitForBackgroundDeploys(t *testing.T, st *store.Store) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	all, err := st.ListStacks(ctx)
+	if err != nil {
+		t.Fatalf("list stacks for background deploy join: %v", err)
+	}
+	for _, stack := range all {
+		waitForStackSettled(ctx, t, st, stack.Name)
+	}
+}
+
+// waitForStackSettled blocks until the stack's newest revision reached its
+// terminal state: a rendered hash (apply succeeded) or a matching last_error
+// entry (apply failed). Observing either marker guarantees the background
+// goroutine will not touch the database again.
+func waitForStackSettled(ctx context.Context, t *testing.T, st *store.Store, stackName string) {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	var lastErr error
+	for {
+		settled, err := backgroundDeploySettled(ctx, st, stackName)
+		if err != nil {
+			lastErr = err
+		}
+		if settled {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				t.Fatalf("background deploy for %q did not settle: %v", stackName, lastErr)
+			}
+			t.Fatalf("background deploy for %q did not settle before cleanup", stackName)
+		case <-ticker.C:
+		}
+	}
+}
+
+// backgroundDeploySettled reports whether stackName's newest revision already
+// carries its terminal marker.
+func backgroundDeploySettled(ctx context.Context, st *store.Store, stackName string) (bool, error) {
+	revs, err := st.ListRevisions(ctx, stackName, 1)
+	if err != nil {
+		return false, err
+	}
+	if len(revs) == 0 {
+		// No revision recorded: nothing was deployed asynchronously.
+		return true, nil
+	}
+	latest := revs[0]
+	if latest.RenderedHash != "" {
+		return true, nil
+	}
+	entries, err := st.ListStackErrors(ctx, stackName, 1)
+	if err != nil {
+		return false, err
+	}
+	return len(entries) > 0 && entries[0].Revision == latest.Revision && entries[0].Error != "", nil
 }
 
 // computeHMAC returns "sha256=<hex>" for the given timestamp, body, and secret.

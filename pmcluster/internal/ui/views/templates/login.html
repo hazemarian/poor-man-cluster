@@ -1,6 +1,6 @@
 {{define "login"}}
 <!doctype html>
-<html lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}">
+<html lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}" data-accent="{{ACCENT}}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -11,15 +11,13 @@
   <script>
     // Applied before first paint: the sign-in page has no server-side session,
     // so localStorage is the only thing that knows the operator's last theme
-    // and brand palette.
+    // and accent color.
     (function () {
       try {
         var t = localStorage.getItem('pmc_theme');
         if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
-        var p = localStorage.getItem('pmc_palette');
-        if (p === 'orange' || p === 'purple' || p === 'blue' || p === 'red' || p === 'green' || p === 'teal') {
-          document.documentElement.dataset.palette = p;
-        }
+        var a = localStorage.getItem('pmc_accent');
+        if (/^(orange|blue|violet|rose|cyan)$/.test(a)) document.documentElement.dataset.accent = a;
       } catch (e) {}
     })();
   </script>
@@ -27,7 +25,6 @@
   <link rel="stylesheet" href="/web/static/base.css">
   <link rel="stylesheet" href="/web/static/components.css">
   <link rel="stylesheet" href="/web/static/patterns.css">
-  <link rel="stylesheet" href="/web/static/brand.css">
   <script src="/web/static/preferences.js" defer></script>
 </head>
 <body>
@@ -36,18 +33,14 @@
 <main class="doc login-doc">
   <section class="auth-intro" aria-labelledby="intro-title">
     <div class="auth-brand">
-      {{template "logo"}}
+      <span class="mark" aria-hidden="true"><svg class="mark-svg" focusable="false"><use href="#brandmark"></use></svg></span>
+      <span class="auth-word" dir="ltr">{{T "brand.name_lead"}} <b>{{T "brand.name_accent"}}</b></span>
     </div>
     <div class="auth-story">
       <p class="auth-eyebrow">{{T "brand.sub"}}</p>
       <h1 id="intro-title">{{T "auth.intro_title"}}</h1>
       <p class="auth-description">{{T "auth.intro_body"}}</p>
-      <svg class="cluster-art" viewBox="0 0 480 200" fill="none" aria-hidden="true" focusable="false">
-        <path class="cluster-wire" d="M240 62v36m-156 0h312M84 98v34m156-34v34m156-34v34"/>
-        <g class="cluster-device"><rect x="185" y="12" width="110" height="50" rx="8"/><rect x="29" y="132" width="110" height="50" rx="8"/><rect x="185" y="132" width="110" height="50" rx="8"/><rect x="341" y="132" width="110" height="50" rx="8"/></g>
-        <g class="cluster-slot"><path d="M204 32h40m-40 10h24M48 152h40m-40 10h24M204 152h40m-40 10h24M360 152h40m-40 10h24"/></g>
-        <g class="cluster-led"><circle cx="275" cy="37" r="3"/><circle cx="119" cy="157" r="3"/><circle cx="275" cy="157" r="3"/><circle cx="431" cy="157" r="3"/><circle cx="240" cy="98" r="4"/></g>
-      </svg>
+      <div class="auth-art" aria-hidden="true"><svg class="auth-art-mark" focusable="false"><use href="#brandmark"></use></svg></div>
     </div>
     <p class="auth-intro-foot">{{T "auth.intro_foot"}}</p>
   </section>

@@ -240,6 +240,7 @@ func composeServiceFromIR(
 		Image:       s.Image,
 		Command:     escapeSlice(s.Command),
 		Entrypoint:  escapeSlice(s.Entrypoint),
+		Hostname:    escapeCompose(s.Hostname),
 		Environment: escapeMapValues(s.Env),
 		Volumes:     escapeSlice(volumes),
 		Secrets:     s.Secrets,

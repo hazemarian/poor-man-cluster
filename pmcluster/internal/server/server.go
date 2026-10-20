@@ -26,6 +26,9 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/registry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
@@ -52,6 +55,7 @@ var trustedProxyCIDRs = []string{
 // fields cause their associated routes to be omitted when nil, so tests
 // can wire a partial server.
 type Deps struct {
+	Investigation investigation.Service
 	Lookup        auth.Lookup
 	Docker        runtime.Client
 	Store         *store.Store
@@ -106,13 +110,32 @@ type Deps struct {
 	// history, logs, restart, exec) under /api/services. Optional; when nil
 	// those routes are omitted.
 	Services services.Service
+
+	// Registries exposes Docker registry credential management under
+	// /api/registries (list/add/remove; passwords are write-only). Optional;
+	// when nil those routes are omitted.
+	Registries *registry.HTTP
+
+	// Credentials exposes the managed bootstrap credentials under
+	// /api/credentials — list + rotate, never reveal. Optional; when nil
+	// those routes are omitted.
+	Credentials *CredentialsHTTP
+
+	// Logs exposes the read-only control-plane log tail under /api/logs.
+	// Optional; when nil that route is omitted.
+	Logs *LogsHTTP
+
+	// Observability exposes bounded native telemetry reads under
+	// /api/observability. It is read-only and requires an authenticated viewer;
+	// stack-scoped tokens are denied by stackScopeGuard because telemetry is
+	// cluster-wide.
+	Observability observability.Reader
 }
 
 // New assembles the chi router from the optional Deps; every nil dependency
 // simply omits its routes.
 func New(d Deps) http.Handler {
 	r := chi.NewRouter()
-
 	r.Use(trustedRealIP)
 	r.Use(middleware.RequestID)
 
@@ -154,6 +177,9 @@ func New(d Deps) http.Handler {
 		// stack-scoped (no-op for unscoped tokens).
 		r.Use(stackScopeGuard)
 		r.Get("/me", api.Me)
+		if d.Investigation != nil {
+			(&investigation.HTTP{Svc: d.Investigation}).Mount(r)
+		}
 		if d.Docker != nil {
 			r.Get("/cluster/info", api.ClusterInfoHandler(d.Docker))
 			r.Get("/nodes", api.NodesHandler(d.Docker, d.Store))
@@ -162,8 +188,10 @@ func New(d Deps) http.Handler {
 				r.Delete("/nodes/{hostname}/storage", api.NodeStorageHandler(d.Docker, d.Store))
 			}
 		}
-		if d.Store != nil {
+		if d.Settings != nil {
 			(&settings.HTTP{Svc: d.Settings}).Mount(r)
+		}
+		if d.Usage != nil {
 			(&usage.HTTP{Svc: d.Usage}).Mount(r)
 		}
 		if d.Store != nil && d.DeployService != nil {
@@ -206,6 +234,20 @@ func New(d Deps) http.Handler {
 		}
 		if d.Services != nil {
 			(&services.HTTP{Svc: d.Services}).Mount(r)
+		}
+		if d.Registries != nil {
+			d.Registries.Mount(r)
+		}
+		if d.Credentials != nil {
+			d.Credentials.Mount(r)
+		}
+		if d.Logs != nil {
+			d.Logs.Mount(r)
+		}
+		if d.Observability != nil {
+			r.With(auth.RequireRole(auth.RoleViewer)).Group(func(or chi.Router) {
+				(&observability.HTTP{Svc: d.Observability}).Mount(or)
+			})
 		}
 	})
 

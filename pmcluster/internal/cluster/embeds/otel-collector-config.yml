@@ -14,6 +14,15 @@
 #      for services that send logs via OTLP.
 extensions:
   health_check:
+  # Discover every running container through the local Docker API. The
+  # receiver_creator below uses the observer's container id and labels to
+  # create one filelog receiver per container, so stdout records retain their
+  # Swarm service identity instead of being filtered as unknown noise.
+  docker_observer:
+    endpoint: "unix:///var/run/docker.sock"
+    api_version: "1.44"
+    timeout: 5s
+    include_all_containers: true
 
 receivers:
   otlp:
@@ -27,8 +36,7 @@ receivers:
     api_version: "1.44"
     # Promote Swarm container labels directly to metric datapoint attributes.
     # (container_labels_to_metric_labels is the documented dockerstats key;
-    #  metric_labels_to_resource_attributes is NOT a real receiver option and
-    #  previously produced no attributes, leaving these fields empty.)
+    #  metric_labels_to_resource_attributes is not a receiver option.)
     #
     # Names are DOT-separated to match the OTel semantic convention and the
     # resource processor below, which already sets service.name / stack.name.
@@ -39,6 +47,10 @@ receivers:
       com.docker.swarm.service.name: "service.name"
       com.docker.stack.namespace:    "stack.name"
       com.docker.swarm.node.id:      "swarm.node.id"
+      # Compose containers have no Swarm labels. Keep their identity as
+      # separate attributes; transform/metrics derives service.name below.
+      com.docker.compose.project: "compose.project"
+      com.docker.compose.service: "compose.service"
 
   # Node-level CPU and memory. docker_stats only ever sees CONTAINERS, so there
   # was no way to answer "how loaded is this node" — the question that decides
@@ -52,40 +64,62 @@ receivers:
   hostmetrics:
     collection_interval: 30s
     scrapers:
+      # The double-valued utilization series are enabled because Parseable does
+      # not map the int64 usage/count series (their rows arrive with an empty
+      # value), so per-node percentages could not otherwise be charted.
       cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
       memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
       load:
 
-  filelog:
-    include:
-      - /var/lib/docker/containers/*/*-json.log
-    # NOTE: no `exclude:` here on purpose. These paths are container IDs, so a
-    # pattern naming a service cannot match one. The platform chatter this used
-    # to (fail to) exclude is dropped by filter/skip_filelog below, by service
-    # name — which is the only handle that exists at record level.
-    include_file_name: false
-    include_file_path: true
-    # end, NOT beginning. With `beginning` every collector restart re-reads the
-    # ENTIRE historical container-log set and re-sends it: on a cluster with any
-    # history that is a sustained burst into the backend, and it was measured
-    # driving Parseable to 764MB against a 768MB cap (exit 137 loops, 64% CPU).
-    # Changing this alone took it to ~350MB and ~0.1% CPU.
-    start_at: end
-    operators:
-      # Parse Docker JSON log format: {"log":"...","stream":"stdout|stderr","time":"..."}
-      - type: json_parser
-        error_mode: ignore
-        timestamp:
-          parse_from: attributes.time
-          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
-        severity:
-          parse_from: attributes.stream
-          mapping: { info: stdout, error: stderr }
-      # Move the parsed log message from attributes.log to body
-      - type: move
-        from: attributes.log
-        to: body
-        if: attributes.log != nil
+  # receiver_creator instantiates this filelog receiver once for each
+  # port-less Docker container endpoint. The Docker observer supplies the
+  # container id and labels; receiver_creator evaluates the backtick
+  # expressions for that endpoint before starting the receiver.
+  receiver_creator:
+    watch_observers: [docker_observer]
+    receivers:
+      filelog/docker:
+        rule: 'type == "container" and port == 0'
+        config:
+          include:
+            - /var/lib/docker/containers/`container_id`/*-json.log
+          include_file_name: false
+          include_file_path: true
+          # Start at end so collector restarts do not replay every historical
+          # container log into the backend.
+          start_at: end
+          operators:
+            # Parse Docker JSON log format: {"log":"...","stream":"stdout|stderr","time":"..."}
+            - type: json_parser
+              error_mode: ignore
+              timestamp:
+                parse_from: attributes.time
+                layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+              severity:
+                parse_from: attributes.stream
+                mapping: { info: stdout, error: stderr }
+            # Move the parsed log message from attributes.log to body.
+            - type: move
+              from: attributes.log
+              to: body
+              if: attributes.log != nil
+        resource_attributes:
+          # Swarm services keep their Swarm identity. Plain Compose containers
+          # fall back to <project>_<service> only when both labels are present
+          # and non-empty; unlabelled or partial-label containers stay empty so
+          # filter/skip_filelog can drop them without an expression error.
+          service.name: '`("com.docker.swarm.service.name" in labels && labels["com.docker.swarm.service.name"] != "") ? labels["com.docker.swarm.service.name"] : (("com.docker.compose.project" in labels && labels["com.docker.compose.project"] != "" && "com.docker.compose.service" in labels && labels["com.docker.compose.service"] != "") ? labels["com.docker.compose.project"] + "_" + labels["com.docker.compose.service"] : "")`'
+          stack.name: '`("com.docker.stack.namespace" in labels && labels["com.docker.stack.namespace"] != "") ? labels["com.docker.stack.namespace"] : (("com.docker.compose.project" in labels && labels["com.docker.compose.project"] != "" && "com.docker.compose.service" in labels && labels["com.docker.compose.service"] != "") ? labels["com.docker.compose.project"] : "")`'
+          container.name: '`name`'
+          container.id: '`container_id`'
+          container.image.name: '`image`'
+          container.labels.io.pmcluster.skip_filelog: '`labels["io.pmcluster.skip_filelog"] ?? ""`'
 
 processors:
   # memory_limiter is the guard that keeps a failing exporter from growing the
@@ -139,7 +173,7 @@ processors:
     logs:
       log_record:
         # Opt-out a workload sets on itself.
-        - 'resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] != nil and resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] == "true"'
+        - 'resource.attributes["container.labels.io.pmcluster.skip_filelog"] != nil and resource.attributes["container.labels.io.pmcluster.skip_filelog"] == "true"'
         # Unattributable records. resource attributes come from the Swarm
         # service label, so anything the receiver cannot resolve lands with
         # service.name (and node/app/stack) null — ungroupable, unalertable
@@ -166,21 +200,24 @@ processors:
         action: upsert
         from_attribute: "container.labels.com.docker.stack.namespace"
 
-  # Copy service.name from resource into metric data points so they are
-  # queryable / groupable in Parseable (docker_stats sets resource attributes
-  # but they are stored separately from metric fields).
+  # Copy resource identities into metric data points so they are queryable and
+  # groupable in Parseable. The guards preserve an explicit datapoint identity
+  # supplied by an OTLP client or the docker_stats receiver.
   transform/metrics:
     metric_statements:
       - context: datapoint
-        # Only copy resource service.name when it actually exists (OTLP/SDK
-        # metrics). Guard so this never clobbers the values docker_stats
-        # attaches directly from Swarm container labels — both sides now use the
-        # same dot-separated names, so a datapoint and its resource agree.
-        conditions:
-          - 'resource.attributes["service.name"] != nil'
+        conditions: ['resource.attributes["service.name"] != nil and attributes["service.name"] == nil']
         statements:
           - set(attributes["service.name"], resource.attributes["service.name"])
+      - context: datapoint
+        conditions: ['resource.attributes["stack.name"] != nil and attributes["stack.name"] == nil']
+        statements:
           - set(attributes["stack.name"], resource.attributes["stack.name"])
+      - context: datapoint
+        conditions: ['attributes["service.name"] == nil and resource.attributes["compose.project"] != nil and resource.attributes["compose.project"] != "" and resource.attributes["compose.service"] != nil and resource.attributes["compose.service"] != ""']
+        statements:
+          - set(attributes["service.name"], Concat([resource.attributes["compose.project"], resource.attributes["compose.service"]], "_"))
+          - set(attributes["stack.name"], resource.attributes["compose.project"]) where attributes["stack.name"] == nil
 
   # ORDER MATTERS, and it is the whole reason a per-node view was broken.
   #
@@ -273,14 +310,22 @@ exporters:
       X-P-Log-Source: "otel-traces"
 
 service:
-  extensions: [health_check]
+  extensions: [health_check, docker_observer]
   telemetry:
     logs:
       level: info
   pipelines:
-    logs:
-      receivers:  [filelog, otlp]
-      processors: [memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]
+    # Keep stdout scraping separate from SDK logs. The skip_filelog filter is
+    # intentionally scoped to the Docker receiver: applying it to a combined
+    # pipeline can drop OTLP records whose service resource is absent or whose
+    # service happens to share a platform name.
+    logs/filelog:
+      receivers:  [receiver_creator]
+      processors: [memory_limiter, resourcedetection, filter/skip_filelog, batch]
+      exporters:  [otlphttp/parseable-logs]
+    logs/otlp:
+      receivers:  [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
       exporters:  [otlphttp/parseable-logs]
     metrics:
       receivers:  [docker_stats, hostmetrics, otlp]

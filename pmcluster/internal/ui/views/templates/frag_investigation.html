@@ -1,0 +1,59 @@
+{{define "investigationask"}}
+<section class="panel" aria-labelledby="investigation-title">
+ <div class="panel-head"><h2 id="investigation-title">{{T "investigation.title"}}</h2>{{if .CanConfigure}}<a class="btn btn-sm" href="/web/observability/settings" hx-get="/web/observability/settings" hx-target="#view" hx-push-url="true">{{T "investigation.settings"}}</a>{{end}}</div>
+ <div class="panel-body">
+ <p class="sub">{{T "investigation.notice"}}</p>
+ {{if .AIEnabled}}<p class="mono iso" dir="ltr">{{.Model}}</p>{{else}}<p>{{T "investigation.disabled"}}</p>{{end}}
+ {{if .CanInvestigate}}
+ <form method="post" action="/web/observability/investigations" hx-post="/web/observability/investigations" hx-target="#investigation-result" hx-disabled-elt="find button">
+ <input type="hidden" name="service" value="{{.Service}}"><input type="hidden" name="range" value="{{.Range}}">
+ <div class="field"><label for="investigation-question">{{T "investigation.question"}}</label><textarea class="finput" id="investigation-question" name="question" rows="3" maxlength="2000" required{{if not .AIEnabled}} disabled{{end}}></textarea></div>
+ <div class="form-actions"><button type="submit" class="btn btn-primary"{{if not .AIEnabled}} disabled{{end}}>{{T "investigation.submit"}}</button></div>
+ </form>{{end}}
+ <div id="investigation-result" aria-live="polite"></div>
+ </div>
+</section>
+{{end}}
+
+{{define "investigationjob"}}
+<section id="investigation-job"{{if or (eq .Job.Status "queued") (eq .Job.Status "running")}} hx-get="/web/observability/investigations/{{.Job.ID}}" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+ <h3>{{T "investigation.result"}}</h3>
+ <p>{{if eq .Job.Status "queued"}}{{T "investigation.queued"}}{{else if eq .Job.Status "running"}}{{T "investigation.running"}}{{else if eq .Job.Status "completed"}}{{T "investigation.completed"}}{{else}}{{T "investigation.failed"}}{{end}}</p>
+ {{if or (eq .Job.Status "queued") (eq .Job.Status "running")}}<form method="post" action="/web/observability/investigations/{{.Job.ID}}/cancel" hx-post="/web/observability/investigations/{{.Job.ID}}/cancel" hx-target="#investigation-job" hx-swap="outerHTML"><button class="btn btn-sm" type="submit">{{T "common.cancel"}}</button></form>{{end}}
+ <p class="sub">{{T "investigation.allowance"}}: {{N .Job.Reserved}}{{if .Job.Usage}} · {{T "investigation.usage"}}: {{N .Job.Used}}{{end}}</p>
+ {{if .Job.Verdict}}
+ <p>{{.Job.Verdict.Summary}}</p>
+ <p>{{range .Job.Verdict.Evidence}}<a class="mono iso" dir="ltr" href="#evidence-{{.}}">{{.}}</a> {{end}}</p>
+ <h4>{{T "investigation.hypotheses"}}</h4>
+ {{range .Job.Verdict.Hypotheses}}<div class="panel-body"><p>{{.Cause}}</p><p class="sub">{{if eq .Confidence "high"}}{{T "investigation.high"}}{{else if eq .Confidence "medium"}}{{T "investigation.medium"}}{{else}}{{T "investigation.low"}}{{end}} · {{range .Evidence}}<a class="mono iso" dir="ltr" href="#evidence-{{.}}">{{.}}</a> {{end}}</p></div>{{end}}
+ <h4>{{T "investigation.actions"}}</h4><ul>{{range .Job.Verdict.Actions}}<li>{{.}}</li>{{end}}</ul>
+ {{end}}
+ <details class="details"><summary>{{T "investigation.evidence"}}</summary>
+ {{if .Job.Input.Truncated}}<p>{{T "observability.truncated"}}</p>{{end}}
+ {{range .Job.Input.Evidence}}<div class="panel-body" id="evidence-{{.ID}}"><p class="mono iso" dir="ltr">{{.ID}} · {{.Service}} · {{.Severity}} · {{N .Count}}</p><pre>{{.Message}}</pre></div>{{end}}
+ </details>
+</section>
+{{end}}
+
+{{define "investigationsettings"}}
+<div class="page-head"><h1>{{T "investigation.settings"}}</h1><a class="btn btn-sm" href="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true">{{T "common.back"}}</a></div>
+<section class="panel"><div class="panel-body">
+<p>{{T "investigation.key_notice"}}</p><p>{{if .KeyConfigured}}{{T "investigation.key_available"}}{{else}}{{T "investigation.key_missing"}}{{end}}</p>
+{{if .Error}}<div class="banner bad">{{T "investigation.state_unavailable"}}</div>{{else}}
+<p>{{T "investigation.budget"}} ({{.Budget.Bucket}}): {{T "investigation.held"}} {{N .Budget.Held}} · {{T "investigation.accounted"}} {{N .Budget.Charged}}</p>
+<form method="post" action="/web/observability/settings" hx-post="/web/observability/settings" hx-target="#view">
+<div class="field"><label for="investigation-protocol">{{T "investigation.protocol"}}</label><select class="finput" id="investigation-protocol" name="protocol"><option value="openai"{{if eq .Policy.Proto "openai"}} selected{{end}}>{{T "investigation.protocol_openai"}}</option><option value="anthropic"{{if eq .Policy.Proto "anthropic"}} selected{{end}}>{{T "investigation.protocol_anthropic"}}</option><option value="gemini"{{if eq .Policy.Proto "gemini"}} selected{{end}}>{{T "investigation.protocol_gemini"}}</option></select><p class="sub">{{T "investigation.protocol_hint"}}</p></div>
+<div class="field"><label for="investigation-base">{{T "investigation.base_url"}}</label><input class="finput" id="investigation-base" name="base_url" type="url" value="{{.Policy.BaseURL}}" maxlength="2048" placeholder="https://provider.example/v1"></div>
+<div class="field"><label for="investigation-model">{{T "investigation.model"}}</label><input class="finput" id="investigation-model" name="model" value="{{.Policy.Model}}" maxlength="200"></div>
+<div class="field"><label for="investigation-daily">{{T "investigation.daily_tokens"}}</label><input class="finput" id="investigation-daily" name="daily_tokens" type="number" min="0" max="1000000000" value="{{.Policy.DailyTokens}}" required></div>
+<div class="field"><label for="investigation-input">{{T "investigation.input_tokens"}}</label><input class="finput" id="investigation-input" name="input_tokens" type="number" min="1024" max="200000" value="{{.Policy.MaxInputTokens}}" required></div>
+<div class="field"><label for="investigation-output">{{T "investigation.output_tokens"}}</label><input class="finput" id="investigation-output" name="output_tokens" type="number" min="128" max="16000" value="{{.Policy.MaxOutputTokens}}" required></div>
+<div class="field"><label for="investigation-field">{{T "investigation.token_field"}}</label><select class="finput" id="investigation-field" name="token_field"><option value="max_completion_tokens"{{if eq .Policy.TokenField "max_completion_tokens"}} selected{{end}}>max_completion_tokens</option><option value="max_tokens"{{if eq .Policy.TokenField "max_tokens"}} selected{{end}}>max_tokens</option></select></div>
+<div class="field"><label><input type="checkbox" name="sharing"{{if .Policy.Sharing}} checked{{end}}> {{T "investigation.consent"}}</label></div>
+<div class="field"><label><input type="checkbox" name="enabled"{{if .Policy.Enabled}} checked{{end}}> {{T "investigation.enable"}}</label></div>
+<div class="form-actions"><button class="btn btn-primary" type="submit">{{T "common.save"}}</button></div>
+</form>{{end}}
+</div></section>
+{{end}}
+
+{{define "investigationerror"}}<p role="alert" class="banner warn">{{T "investigation.request_unavailable"}}</p>{{end}}

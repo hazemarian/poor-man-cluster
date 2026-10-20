@@ -20,6 +20,12 @@ A simple, cost-effective, production-ready deployment stack on open-source tools
 
 One static Go binary brings a cluster up on cheap VPSes and gives you HTTPS ingress, observability, programmatic deployments, automated backups, and a single CLI (+ web console) to manage it all.
 
+## Observability
+
+Every cluster ships with logs, metrics and traces: one OpenTelemetry collector
+per node feeds a Parseable backend, and the operator console renders them at
+`/web/observability`. Start with the [observability guide](docs/observability.md).
+
 - **Design & trade-offs:** [docs/whitepaper.md](docs/whitepaper.md) — the whitepaper: architecture, design rationale, and what was rejected.
 - **Full documentation:** [docs/README.md](docs/README.md)
 - **Current release:** [v0.2.180](https://github.com/hazemarian/poor-man-cluster/releases) · [CHANGELOG.md](CHANGELOG.md)

@@ -11,14 +11,19 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
-
+	"github.com/go-chi/chi/v5"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation/providers"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability/parseable"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/controllers"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views/i18n"
+	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/time/rate"
 )
 
 // App ties the store, pmapi client, renderer, session auth and controllers
@@ -31,6 +36,109 @@ type App struct {
 	API   *pmapi.Client
 	Auth  *middleware.Auth
 	ctrl  *controllers.Controller
+}
+
+// InternalObservabilityHandler exposes the edge's private telemetry hop to
+// the host daemon. It is mounted by cmd/edge before the public NoRoute proxy;
+// only the exact managed edge_api_token is accepted, and that token is never
+// forwarded to Parseable. Caller Bearer tokens are therefore unable to turn
+// this route into a backend proxy or bypass daemon role/scope checks.
+func (a *App) InternalObservabilityHandler(managedToken string) http.Handler {
+	r := chi.NewRouter()
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if !observability.EdgeBearerValid(req.Header.Get("Authorization"), managedToken) {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="pmcluster-edge-internal"`)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, req)
+		})
+	})
+
+	var logs observability.LogSource
+	var metrics observability.MetricSource
+	var traces observability.TraceSource
+	if a != nil && a.ctrl != nil && a.ctrl.Telemetry != nil {
+		logs, _ = a.ctrl.Telemetry.(observability.LogSource)
+		metrics, _ = a.ctrl.Telemetry.(observability.MetricSource)
+		traces, _ = a.ctrl.Telemetry.(observability.TraceSource)
+	}
+	reader := &observability.ReadService{LogsSrc: logs, Metrics: metrics, TracesSrc: traces}
+	(&observability.HTTP{Svc: reader}).MountAt(r, "/internal/observability")
+	return r
+}
+
+// InternalSessionCheckHandler is the private forward-auth target used by
+// Traefik while native edge sessions are enabled. It is deliberately a
+// separate reserved path: an old edge task does not know it and therefore
+// returns 404, which makes a rolling upgrade fail closed rather than expose a
+// task that still treats every request as an admin.
+//
+// Login, setup, static assets and language selection remain public so an
+// unauthenticated browser can reach the sign-in flow. Every other path must
+// carry a valid, unexpired session whose user still exists.
+func (a *App) InternalSessionCheckHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// Traefik's forwardAuth client addresses the edge service directly,
+		// whereas an external request arrives with the public pmcluster host.
+		// Keep this reserved probe private even though the edge listener also
+		// serves the public API router.
+		if !internalSessionForwardAuthHost(req.Host) {
+			http.NotFound(w, req)
+			return
+		}
+		path := req.Header.Get("X-Forwarded-Uri")
+		if path == "" {
+			path = req.URL.Path
+		}
+		if i := strings.IndexByte(path, '?'); i >= 0 {
+			path = path[:i]
+		}
+		if nativeSessionPublicPath(path) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if a == nil || a.Cfg.LoginDisabled || a.Auth == nil || a.Store == nil {
+			writeSessionCheckRedirect(w)
+			return
+		}
+		cookie, err := req.Cookie(a.Auth.CookieName())
+		if err != nil {
+			writeSessionCheckRedirect(w)
+			return
+		}
+		session, ok := a.Auth.Verify(cookie.Value)
+		if !ok {
+			writeSessionCheckRedirect(w)
+			return
+		}
+		user, err := a.Store.ByUsername(req.Context(), session.Username)
+		if err != nil || user == nil || !user.PasswordSet {
+			writeSessionCheckRedirect(w)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func internalSessionForwardAuthHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return host == "edge_pmcluster-edge" || host == "edge_pmcluster-edge:8042"
+}
+
+func nativeSessionPublicPath(path string) bool {
+	switch path {
+	case "/web/login", "/web/setup":
+		return true
+	}
+	return strings.HasPrefix(path, "/web/static/") || strings.HasPrefix(path, "/web/lang/")
+}
+
+func writeSessionCheckRedirect(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Location", "/web/login")
+	w.WriteHeader(http.StatusFound)
 }
 
 // NewApp opens the local store, boots the initial user, and wires the UI.
@@ -79,6 +187,7 @@ func NewApp(cfg Config) (*App, error) {
 		shell := views.ShellBase(c)
 		shell["User"] = middleware.CurrentUser(c)
 		shell["Version"] = cfg.AppVersion
+		shell["AssetVer"] = views.AssetVersion()
 		shell["LoginDisabled"] = cfg.LoginDisabled
 		shell["SSOEnabled"] = cfg.SSOEnabled
 		shell["Domain"] = cfg.ClusterDomain
@@ -112,16 +221,37 @@ func NewApp(cfg Config) (*App, error) {
 		Store: st, API: api, Views: renderer, Auth: auth,
 		Version: cfg.AppVersion, Domain: cfg.ClusterDomain,
 		EnvAPI: cfg.PMAPIURL, EnvToken: cfg.PMAPIToken,
+		ObservabilityRate: rate.NewLimiter(2, 8),
+		Redactor:          observability.NewRedactor(cfg.ParseablePassword, cfg.ParseableAuth, cfg.PMAPIToken, cfg.InvestigationKey),
+	}
+	// Telemetry is optional. A malformed or absent Parseable configuration must
+	// not take down the daemon-derived console; the Observability page reports
+	// the source as unavailable while nodes/services/backups/TLS remain useful.
+	if cfg.ParseableURL != "" {
+		if source, parseErr := parseable.New(parseable.Config{
+			BaseURL: cfg.ParseableURL, Stream: cfg.ParseableStream,
+			Username: cfg.ParseableUser, Password: cfg.ParseablePassword,
+			AuthHeader: cfg.ParseableAuth,
+			// An overview load issues up to five independent reads.
+			MaxConcurrent: 6,
+			// The same exact-value redactor the console uses. The source also
+			// serves /internal/observability, which has no console request to
+			// add the edge token, so the token must be in this redactor already.
+			Redactor: ctrl.Redactor,
+		}); parseErr == nil {
+			ctrl.Telemetry = source
+		}
 	}
 
+	ctrl.PublicOrigin = cfg.PublicOrigin
+	ctrl.Investigation = investigation.NewManager(providers.Router{}, cfg.InvestigationKey, ctrl.Redactor)
 	return &App{Cfg: cfg, Store: st, API: api, Auth: auth, ctrl: ctrl}, nil
 }
 
-// WebBase is the URL prefix the operator console is mounted under. Traefik
-// gates /web/* with the admin-auth middleware (basicAuth against the
-// admin_credentials secret) so the console is only reachable through the
-// cluster admin gate; /api/* and /webhook/* fall through to the edge proxy and
-// keep their own Bearer/webhook auth.
+// WebBase is the URL prefix the operator console is mounted under. The edge
+// deployment selects native signed sessions, explicit Traefik Basic Auth, or
+// SSO for /web/*; /api/* and /webhook/* fall through to the edge proxy and keep
+// their own Bearer/webhook auth.
 const WebBase = controllers.WebBase
 
 // Mount registers every UI route on the provided gin engine. This is how the
@@ -160,11 +290,12 @@ func (a *App) Mount(engine *gin.Engine) {
 	engine.POST(WebBase+"/setup", auth.Setup)
 	engine.POST(WebBase+"/logout", auth.Logout)
 
-	// Observability sign-in bridge: served on the observ.<domain> origin, routed
-	// there by the Traefik sso-bridge router. It writes the browser-storage state
-	// the observability SPA reads to decide it is logged in — which cannot be set
-	// from anywhere but that origin — using the same managed credential the
-	// router's injection middleware sends.
+	// Observability sign-in bridge. Traefik routes it only on the observ.<domain>
+	// origin (sso-bridge router), and the handler itself answers 404 for any other
+	// Host, including pmcluster.<domain>. It writes the browser-storage state the
+	// observability SPA reads to decide it is logged in — which cannot be set from
+	// anywhere but that origin — using the managed credential the router's
+	// injection middleware sends.
 	engine.GET("/sso-bridge", (controllers.ObservBridge{Controller: a.ctrl}).Page)
 
 	g := engine.Group(WebBase)
@@ -174,6 +305,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr := g.Group("")
 	vr.Use(a.ctrl.Auth.RequireRole(store.RoleViewer))
 
+	obs := controllers.Observability{Controller: a.ctrl}
 	ov := controllers.Overview{Controller: a.ctrl}
 	vr.GET("/", ov.App)
 	vr.GET("/overview", ov.Fragment)
@@ -188,6 +320,13 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/services", svc.List)
 	vr.GET("/services/:stack/:service/tasks", svc.Tasks)
 	vr.GET("/services/:stack/:service/logs", svc.Logs)
+
+	vr.GET("/observability", obs.Page)
+	vr.GET("/observability/summary", obs.Summary)
+	vr.GET("/observability/evidence", obs.Evidence)
+	vr.GET("/observability/traces", obs.Traces)
+	investigator := controllers.Investigations{Controller: a.ctrl}
+	vr.GET("/observability/investigations/:id", investigator.Show)
 
 	// Platform-managed services (edge/traefik/observability/backup/sso) live on
 	// their own read-only page, apart from the customer app services.
@@ -216,7 +355,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/settings/configs/edit/:name", stt.ConfigEdit)
 	vr.GET("/settings/secrets/new", stt.SecretNew)
 	vr.GET("/settings/secrets/edit/:name", stt.SecretEdit)
-	// Rendered configs embed the OpenObserve root Basic-auth value and the
+	// Rendered configs embed the Parseable admin Basic-auth value and the
 	// session cookie, so the CONTENT is operator-only (not viewer). The
 	// viewer group keeps the rendered LIST on the settings page, but not the
 	// rendered content modal.
@@ -237,12 +376,23 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/inventory", inv.Page)
 	vr.GET("/inventory/retag/:kind/:name", inv.RetagForm)
 
+	// Platform surfaces that used to be CLI-only: registry credentials, the
+	// bootstrap credentials, the daemon's own logs, and secret verification.
+	vr.GET("/settings/registries", pf.RegistriesPage)
+	vr.GET("/settings/credentials", pf.CredentialsPage)
+	vr.GET("/logs", pf.LogsPage)
+	vr.GET("/logs/tail", pf.LogsTail)
+	vr.GET("/inventory/verify/:name", pf.VerifyForm)
+
 	// ---- operator: mutations (sync/rollback/remove, service ops, backups,
 	// deploy submit, configs/secrets edits, tls, webhooks) ----
 	op := g.Group("")
 	op.Use(a.ctrl.Auth.RequireRole(store.RoleOperator))
+	op.POST("/observability/investigations", investigator.Start)
+	op.POST("/observability/investigations/:id/cancel", investigator.Cancel)
 
 	op.POST("/stacks/:name/sync", st.Sync)
+
 	op.POST("/stacks/:name/rollback", st.Rollback)
 	op.POST("/stacks/:name/move", st.Move)
 	op.POST("/stacks/:name/ack", st.AckFailover)
@@ -300,6 +450,8 @@ func (a *App) Mount(engine *gin.Engine) {
 	// ---- admin: API keys, settings save/apply, and the users CRUD ----
 	ad := g.Group("")
 	ad.Use(a.ctrl.Auth.RequireRole(store.RoleAdmin))
+	ad.GET("/observability/settings", investigator.Settings)
+	ad.POST("/observability/settings", investigator.SaveSettings)
 
 	ak := controllers.APIKeys{Controller: a.ctrl}
 	ad.GET("/apikeys", ak.Page)
@@ -318,6 +470,15 @@ func (a *App) Mount(engine *gin.Engine) {
 	ad.POST("/users/add", us.Create)
 	ad.POST("/users/edit", us.EditSave)
 	ad.POST("/users/remove/:id", us.Remove)
+
+	// Platform credential mutations. The console calls the daemon with its admin
+	// token, so the daemon's own role checks never see the operator: the console
+	// role is the only gate, and rotating a credential or changing a registry
+	// login is admin-only.
+	ad.POST("/settings/registries/add", pf.RegistryAdd)
+	ad.POST("/settings/registries/remove", pf.RegistryRemove)
+	ad.POST("/settings/credentials/rotate/:name", pf.CredentialRotate)
+	ad.POST("/inventory/verify/:name", pf.VerifySubmit)
 }
 
 // Handler returns a gin engine with every UI route. The edge service mounts
@@ -354,9 +515,9 @@ func sessionSecretFor(st *store.Store, ctx context.Context) ([]byte, error) {
 // bootstrapUsers seeds the initial login. If env user/pass are set, that user
 // is created once (password pre-set, admin role). Otherwise the first-run
 // /web/setup page creates the first admin account (username + password) when
-// there are no users — no placeholder is pre-created. When login is disabled
-// (EDGE_LOGIN_DISABLED) no user rows are created at all — Traefik's admin-auth
-// is the only gate, and the user CRUD + setup pages are hidden.
+// there are no users — no placeholder is pre-created. When the explicit
+// stateless Basic mode is enabled (EDGE_LOGIN_DISABLED), no user rows are
+// created because Traefik's admin-auth is the only gate.
 func bootstrapUsers(ctx context.Context, st *store.Store, cfg Config) error {
 	if cfg.LoginDisabled {
 		return nil
@@ -402,10 +563,18 @@ func (a *App) Run(ctx context.Context, addr string) error {
 	case <-ctx.Done():
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = a.Store.Close()
+		_ = a.Close()
 		return srv.Shutdown(sctx)
 	case err := <-errCh:
-		_ = a.Store.Close()
+		_ = a.Close()
 		return err
 	}
+}
+
+// Close stops investigations and closes console storage.
+func (a *App) Close() error {
+	if a.ctrl.Investigation != nil {
+		a.ctrl.Investigation.Close()
+	}
+	return a.Store.Close()
 }

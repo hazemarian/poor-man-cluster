@@ -5,14 +5,16 @@
 # Console credentials (edge_admin_password / edge_ui_secret / edge_api_token)
 # are provisioned by pmcluster and delivered as Swarm secrets mounted read-only
 # at /run/secrets/. The edge reads them on first boot and stores them ONCE into
-# its SQLite DB on the pmui-data volume (cluster mode EDGE_LOGIN_DISABLED=true
-# is stateless and uses an in-memory store — no volume).
+# its SQLite DB on the pmui-data volume. Native cookie sessions are the
+# default; explicit EDGE_LOGIN_DISABLED=true is stateless and uses an in-memory
+# store.
 app: edge
 env: production
 domain: ${DOMAIN}
 platform: true
 networks:
   - traefik-net
+  - monitoring-net
 volumes:
   [[- if not .EdgeLoginDisabled]]
   pmui-data: ""
@@ -26,6 +28,7 @@ services:
       LISTEN_ADDR: ":8042"
       UPSTREAM: "http://host.docker.internal:9090"
       DATA_DIR: "[[if .EdgeLoginDisabled]]:memory:[[else]]/data[[end]]"
+      PMCLUSTER_PUBLIC_ORIGIN: "https://pmcluster.[[.Domain]]"
       PMCLUSTER_DOMAIN: "[[.Domain]]"
       API_RATE: "200"
       API_BURST: "400"
@@ -43,6 +46,8 @@ services:
       # The console's /sso-bridge page writes it into the backend SPA's browser
       # storage so the operator is signed in, and it is rendered from one source
       # (RenderInput.ObservabilityBasicAuth), not typed anywhere.
+      OBSERVABILITY_PARSEABLE_URL: "http://observability_parseable:8000"
+      OBSERVABILITY_PARSEABLE_USER: "[[.ObservabilityAdminEmail]]"
       OBSERVABILITY_BASIC_AUTH: "[[.ObservabilityBasicAuth]]"
     volumes:
       [[- if not .EdgeLoginDisabled]]
@@ -52,6 +57,10 @@ services:
       - edge_admin_password
       - edge_ui_secret
       - edge_api_token
+      - observability_admin_password
+      [[- if index .ManagedSecretNames "investigation_provider_key"]]
+      - investigation_provider_key
+      [[- end]]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -70,10 +79,12 @@ services:
       [[- end]]
       [[- if .SSOEnabled]]
       "traefik.http.routers.pmcluster-web.middlewares": "cors-default@file,sso-auth@file"
-      [[- else]]
+      [[- else if .EdgeLoginDisabled]]
       "traefik.http.routers.pmcluster-web.middlewares": "cors-default@file,admin-auth@file"
+      [[- else]]
+      "traefik.http.routers.pmcluster-web.middlewares": "cors-default@file,edge-session-auth@file"
       [[- end]]
-      "traefik.http.routers.pmcluster-api.rule": "Host(`pmcluster.${DOMAIN}`) && !PathPrefix(`/web/`) && !Path(`/web`)"
+      "traefik.http.routers.pmcluster-api.rule": "Host(`pmcluster.${DOMAIN}`) && !PathPrefix(`/web/`) && !Path(`/web`) && !Path(`/sso-bridge`)"
       "traefik.http.routers.pmcluster-api.entrypoints": "websecure"
       "traefik.http.routers.pmcluster-api.tls": "true"
       [[- if .ACMEEmail]]
@@ -100,7 +111,12 @@ services:
       "traefik.http.routers.sso-bridge.priority": "1000"
       [[- if .SSOEnabled]]
       "traefik.http.routers.sso-bridge.middlewares": "cors-default@file,sso-auth@file"
+      [[- else if .EdgeLoginDisabled]]
+      "traefik.http.routers.sso-bridge.middlewares": "cors-default@file,admin-auth@file"
       [[- else]]
+      # The bridge is hosted on observ.<domain>, so the host-only console
+      # session cookie is not sent by browsers. Keep the separate Basic gate
+      # here; the native session protects the pmcluster console itself.
       "traefik.http.routers.sso-bridge.middlewares": "cors-default@file,admin-auth@file"
       [[- end]]
       "traefik.http.routers.sso-bridge.service": "pmcluster"

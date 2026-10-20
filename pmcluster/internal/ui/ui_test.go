@@ -373,7 +373,7 @@ func TestAllControllers(t *testing.T) {
 
 	login()
 
-	assertFragment(http.MethodGet, "/web/", "", "Poor Man's", "Overview", "Log out")
+	assertFragment(http.MethodGet, "/web/", "", `class="brand-name"`, "Overview", "Log out")
 	assertFragment(http.MethodGet, "/web/overview", "", "manager-1", "Cluster overview")
 
 	assertFragment(http.MethodGet, "/web/stacks", "", "Stacks", "demo", "3")
@@ -846,7 +846,7 @@ func TestFragmentRefreshRendersAppShell(t *testing.T) {
 		// v2 links the stylesheets instead of inlining a <style> block: the shell's
 		// own CSS is proved by the link, and the asset being served is checked in
 		// TestLoginDisabled_PassThrough.
-		`href="/web/static/base.css"`, "Poor Man's", "Overview", "Stacks", "Services",
+		`href="/web/static/base.css?v=`, `class="brand-name"`, "Overview", "Stacks", "Services",
 		`id="view"`, "demo", "Log out",
 	} {
 		if !strings.Contains(b, want) {
@@ -864,7 +864,7 @@ func TestFragmentRefreshRendersAppShell(t *testing.T) {
 			t.Errorf("HX GET /stacks missing %q", want)
 		}
 	}
-	if strings.Contains(b, "<style>") || strings.Contains(b, "Poor Man's") {
+	if strings.Contains(b, "<style>") || strings.Contains(b, `class="brand-name"`) {
 		t.Errorf("HX GET /stacks should return the bare fragment, got the shell")
 	}
 }
@@ -989,6 +989,12 @@ func TestRBAC_OperatorCanMutateButNotAdmin(t *testing.T) {
 		{http.MethodGet, "/web/users"},
 		{http.MethodGet, "/web/users/new"},
 		{http.MethodGet, "/web/users/edit/2"},
+		// Platform credential mutations are admin-only: the console calls the
+		// daemon with its admin token, so an operator must be refused here.
+		{http.MethodPost, "/web/settings/credentials/rotate/x"},
+		{http.MethodPost, "/web/settings/registries/add"},
+		{http.MethodPost, "/web/settings/registries/remove"},
+		{http.MethodPost, "/web/inventory/verify/x"},
 	} {
 		resp := doRequest(t, app, tc.method, tc.path, "", jar)
 		if resp.StatusCode != http.StatusForbidden {
@@ -1112,7 +1118,7 @@ func TestLoginDisabled_PassThrough(t *testing.T) {
 		t.Fatalf("GET /web/ = %d, want 200", resp.StatusCode)
 	}
 	b := readBody(t, resp)
-	for _, want := range []string{`href="/web/static/base.css"`, "Poor Man's", "Overview"} {
+	for _, want := range []string{`href="/web/static/base.css?v=`, `class="brand-name"`, "Overview"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("login-disabled /web/ missing %q", want)
 		}

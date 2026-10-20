@@ -85,13 +85,13 @@ func run() error {
 
 	select {
 	case err := <-errCh:
-		_ = app.Store.Close()
+		_ = app.Close()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 		return nil
 	case <-ctx.Done():
-		_ = app.Store.Close()
+		_ = app.Close()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -120,6 +120,12 @@ func applyEdgeSecrets(cfg *ui.Config) {
 	}
 	if token, ok := readSecretFile("edge_api_token"); ok {
 		cfg.PMAPIToken = string(token)
+	}
+	if key, ok := readSecretFile("investigation_provider_key"); ok {
+		cfg.InvestigationKey = string(key)
+	}
+	if password, ok := readSecretFile("observability_admin_password"); ok {
+		cfg.ParseablePassword = string(password)
 	}
 }
 
@@ -151,6 +157,15 @@ func combineProxyAndUI(proxyCfg edgeproxy.Config, app *ui.App) http.Handler {
 	})
 
 	app.Mount(engine)
+	// Traefik's native-session forwardAuth probe is a separate reserved route.
+	// The handler verifies the service Host and the session itself; an external
+	// request cannot use this path as a public auth oracle.
+	engine.Any("/internal/session/check", gin.WrapH(app.InternalSessionCheckHandler()))
+	// The daemon reaches Parseable through this exact, private edge hop. It is
+	// registered before NoRoute so it cannot recurse through the public proxy;
+	// InternalObservabilityHandler accepts only the managed edge_api_token and
+	// uses the edge-local Parseable source on monitoring-net.
+	engine.Any("/internal/observability/*path", gin.WrapH(app.InternalObservabilityHandler(app.Cfg.PMAPIToken)))
 
 	engine.NoRoute(gin.WrapH(edgeproxy.New(proxyCfg)))
 	return engine

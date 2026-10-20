@@ -8,13 +8,16 @@ package views
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -33,9 +36,17 @@ var StaticFS embed.FS
 
 // Cookie names owned by the console UI.
 const (
-	CookieLang  = "pmc_lang"
-	CookieTheme = "pmc_theme"
+	CookieLang   = "pmc_lang"
+	CookieTheme  = "pmc_theme"
+	CookieAccent = "pmc_accent"
 )
+
+// DefaultAccent is the brand orange. Accents is the whitelist the cookie, the
+// pre-paint scripts and the Settings picker all validate against; the swatches
+// themselves live in base.css under [data-accent].
+const DefaultAccent = "orange"
+
+var Accents = []string{"orange", "blue", "violet", "rose", "cyan"}
 
 // Lang resolves the request language: explicit ?lang= wins, then the persisted
 // cookie, then the browser's Accept-Language, then English.
@@ -61,6 +72,20 @@ func Theme(c *gin.Context) string {
 	return "dark"
 }
 
+// Accent resolves the persisted accent color. An unknown cookie value falls
+// back to the brand orange so a stale or tampered cookie can never reach the
+// data-accent attribute.
+func Accent(c *gin.Context) string {
+	if ck, err := c.Cookie(CookieAccent); err == nil {
+		for _, a := range Accents {
+			if ck == a {
+				return ck
+			}
+		}
+	}
+	return DefaultAccent
+}
+
 // CrumbKey maps a console path to its navigation key, so the breadcrumb, the
 // document title and the sidebar agree without every controller repeating it.
 func CrumbKey(path string) string {
@@ -69,7 +94,7 @@ func CrumbKey(path string) string {
 		seg = seg[:i]
 	}
 	switch seg {
-	case "overview", "stacks", "services", "platform", "deploy", "webhooks", "tls",
+	case "overview", "stacks", "services", "observability", "platform", "deploy", "webhooks", "tls",
 		"backups", "users", "apikeys", "settings":
 		return "nav." + seg
 	default:
@@ -89,6 +114,21 @@ func ShellBase(c *gin.Context) gin.H {
 		"Title": l.T(key),
 	}
 }
+
+// AssetVersion identifies the embedded stylesheets and scripts by content, so
+// the URL a page links to changes whenever they do. The static handler lets
+// browsers cache for an hour; a release-number query would leave dev builds
+// and unversioned rebuilds serving stale CSS against new markup.
+func AssetVersion() string { return assetVersion() }
+
+var assetVersion = sync.OnceValue(func() string {
+	h := sha256.New()
+	for _, name := range []string{"static/base.css", "static/components.css", "static/patterns.css", "static/preferences.js"} {
+		b, _ := fs.ReadFile(StaticFS, name)
+		h.Write(b)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:10]
+})
 
 // StaticBase is the URL prefix the console's own assets are served from.
 const StaticBase = "/web/static"
@@ -141,14 +181,18 @@ func NewRenderer() (*Renderer, error) {
 		"TF":      func(key string, args ...any) string { return key },
 		// Numbers arrive as int, int64, uint64 or float64 depending on the
 		// data source, so every numeric helper takes any and coerces.
-		"P":          func(count any, key string, dualCase ...i18n.Case) string { return key },
-		"N":          func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
-		"N0":         func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
-		"NF":         func(v any, decimals int) string { return strconv.FormatFloat(i18n.Float(v), 'f', decimals, 64) },
+		"P":  func(count any, key string, dualCase ...i18n.Case) string { return key },
+		"N":  func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"N0": func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"NF": func(v any, decimals int) string { return strconv.FormatFloat(i18n.Float(v), 'f', decimals, 64) },
+		"compact": func(v any) string {
+			return compactNum(i18n.Num(v), func(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) }, func(n int64) string { return strconv.FormatInt(n, 10) })
+		},
 		"shortImage": func(v string) string { return v },
 		"DIR":        func() string { return "ltr" },
 		"LANG":       func() string { return string(i18n.Default) },
 		"THEME":      func() string { return "dark" },
+		"ACCENT":     func() string { return DefaultAccent },
 		"RTL":        func() bool { return false },
 	}).ParseFS(files, "templates/*.html")
 	if err != nil {
@@ -182,13 +226,17 @@ func (r *Renderer) withRequest(c *gin.Context) *template.Template {
 		// N0 is the ungrouped integer form of N: revision IDs and other opaque
 		// identifiers are never comma-grouped ("1,789,849,639" is a sum, not an
 		// ID). Counts and sizes use N (grouped) and NF.
-		"N0":         func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
-		"NF":         func(v any, decimals int) string { return l.NF(i18n.Float(v), decimals) },
+		"N0": func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"NF": func(v any, decimals int) string { return l.NF(i18n.Float(v), decimals) },
+		"compact": func(v any) string {
+			return compactNum(i18n.Num(v), func(f float64) string { return l.NF(f, 1) }, func(n int64) string { return l.N(n) })
+		},
 		"shortImage": shortImage,
 		"DIR":        l.Dir,
 		"LANG":       l.Lang,
 		"RTL":        l.IsRTL,
 		"THEME":      func() string { return Theme(c) },
+		"ACCENT":     func() string { return Accent(c) },
 	})
 }
 
@@ -320,4 +368,16 @@ func statusPill(s string) string {
 	default:
 		return "warn"
 	}
+}
+
+// compactNum renders large counts as 12.3k or 4.5M, using the caller's number
+// formatting so digits follow the page language.
+func compactNum(n int64, one func(float64) string, plain func(int64) string) string {
+	switch {
+	case n >= 1_000_000:
+		return one(float64(n)/1e6) + "M"
+	case n >= 1000:
+		return one(float64(n)/1e3) + "k"
+	}
+	return plain(n)
 }

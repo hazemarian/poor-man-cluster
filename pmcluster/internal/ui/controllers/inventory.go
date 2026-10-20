@@ -27,6 +27,9 @@ type inventoryData struct {
 
 	ErrKey string
 	ErrRaw string
+
+	// CanConfigure shows the secret verify control (admins only).
+	CanConfigure bool
 }
 
 func (d *inventoryData) fail(key, raw string) { d.ErrKey, d.ErrRaw = key, raw }
@@ -35,7 +38,7 @@ func (d *inventoryData) fail(key, raw string) { d.ErrKey, d.ErrRaw = key, raw }
 // annotated with the stacks that reference it (from the usage graph) so a
 // delete or retag visibly shows what would break.
 func (c Inventory) Page(g *gin.Context) {
-	d := inventoryData{}
+	d := inventoryData{CanConfigure: canConfigure(g)}
 	if c.apiRefused(g, &d) {
 		c.Views.Fragment(g, "inventory", d)
 		return

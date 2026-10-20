@@ -25,9 +25,11 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/registry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/server"
@@ -191,6 +193,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// used directly.
 	backupS3 := backupS3Config(cmd.Context(), st, cipher)
 
+	// Parseable stays on the monitoring overlay. The daemon's read service
+	// reaches it through the edge's reserved internal route using the managed
+	// edge bearer token, while status still reports Swarm inventory when the
+	// telemetry hop is unavailable.
+	obsReader, obsErr := newLocalObservabilityReader(cmd.Context(), st, cipher, dc)
+	if obsErr != nil {
+		log.Warn().Err(obsErr).Msg("observability source unavailable")
+	}
+
 	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.SettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.SettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.SettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.SettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.SettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
@@ -201,6 +212,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		cfg.ConfigDir(), buildinfo.Version)
 
 	deps := server.Deps{
+		Investigation: &investigation.Local{Store: st},
 		Lookup:        st,
 		Docker:        dc,
 		Store:         st,
@@ -238,9 +250,28 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		WebhookSources: webhooks.NewLocal(st, cipher),
 		APIKeys:        apikeys.NewLocal(st),
 		Services:       &services.Local{Docker: dc},
+		// Registry credentials: the console gets the same service the CLI
+		// uses, so `registry add` cannot drift between the two surfaces.
+		Registries: &registry.HTTP{Svc: &registry.Service{
+			Store:  st,
+			Cipher: cipher,
+			Runner: registry.ExecRunner{},
+		}},
+		// Control-plane logs are read straight off the daily JSON log files.
+		Logs:          &server.LogsHTTP{Svc: &server.LogReader{Dir: cfg.LogsDir()}},
+		Observability: obsReader,
 	}
 	if cipher != nil {
 		deps.Secrets = secrets.NewLocal(st, cipher)
+		// Rotation re-encrypts the new password and re-syncs the Swarm
+		// secret, so it needs the cipher plus a docker client + deployer.
+		credsMgr := &cluster.CredentialsManager{
+			Store:    st,
+			Cipher:   cipher,
+			Docker:   dc,
+			Deployer: deployer,
+		}
+		deps.Credentials = &server.CredentialsHTTP{Svc: cluster.NewCredentials(st, cipher, credsMgr)}
 	}
 	handler := server.New(deps)
 

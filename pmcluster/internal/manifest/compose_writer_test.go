@@ -857,6 +857,7 @@ func TestTranslate_ExtraHostsAndUser(t *testing.T) {
 	app := baseApp()
 	app.Services["api"].ExtraHosts = []string{"host.docker.internal:host-gateway"}
 	app.Services["api"].User = "0:0"
+	app.Services["api"].Hostname = "stable-api"
 	if err := Validate(app); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -878,6 +879,9 @@ func TestTranslate_ExtraHostsAndUser(t *testing.T) {
 	if svc.User != "0:0" {
 		t.Errorf("user = %q, want 0:0", svc.User)
 	}
+	if svc.Hostname != "stable-api" {
+		t.Errorf("hostname = %q, want stable-api", svc.Hostname)
+	}
 
 	// No user → the key stays omitted (image default).
 	app = baseApp()
@@ -885,11 +889,18 @@ func TestTranslate_ExtraHostsAndUser(t *testing.T) {
 	if u := cf.Services["api"].User; u != "" {
 		t.Errorf("user should be empty when unset, got %q", u)
 	}
+	if h := cf.Services["api"].Hostname; h != "" {
+		t.Errorf("hostname should be empty when unset, got %q", h)
+	}
 
 	// Validation: an extra host without a colon is rejected.
 	bad := baseApp()
 	bad.Services["api"].ExtraHosts = []string{"host.docker.internal"}
 	mustFail(t, bad, "extra_hosts[0]: must be 'host:ip'")
+
+	bad = baseApp()
+	bad.Services["api"].Hostname = "invalid hostname"
+	mustFail(t, bad, "hostname: invalid Docker hostname")
 }
 
 // TestTranslate_Resources verifies cpu/memory reservations + limits render

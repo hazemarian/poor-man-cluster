@@ -58,6 +58,7 @@ type IRService struct {
 	Image      string
 	Command    []string
 	Entrypoint []string
+	Hostname   string
 
 	// Env holds the FULLY resolved environment (config() contents and
 	// secrets() mount paths substituted).

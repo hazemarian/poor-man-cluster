@@ -17,14 +17,17 @@ the [whitepaper](whitepaper.md).
 | Run stateful services and databases safely | [`storage-and-databases.md`](storage-and-databases.md) |
 | Wire up nodes, DNS, a load balancer, the firewall | [`network-topology.md`](network-topology.md) |
 | Understand the reconcile loop | [`control-loop-design.md`](control-loop-design.md) |
+| Use the built-in logs, metrics and traces | [`observability.md`](observability.md) |
 | Read the security model | [`whitepaper.md`](whitepaper.md) (§13) |
 | See what was tested on real hardware (TC1–TC10) | [`test-reports/`](test-reports/README.md) |
 | Understand *why* something is the way it is | [`whitepaper.md`](whitepaper.md) |
 
 ## Reading orders
 
-**Operator (run a cluster):** `dsl.md` → `secrets-and-configs.md` →
+**Operator (run a Swarm cluster):** `dsl.md` → `secrets-and-configs.md` →
 `storage-and-databases.md` → `network-topology.md` → `webhook.md`.
+
+**Operator (observability):** [`observability.md`](observability.md).
 
 **New contributor / auditor:** [`whitepaper.md`](whitepaper.md) →
 `control-loop-design.md` → `agent.md` (the codebase map, repo root).
@@ -45,6 +48,7 @@ the [whitepaper](whitepaper.md).
 | `storage-and-databases.md` | Storage nodes and auto-placement, the Path 1 decision, storage matrix, DB strategies, backup architecture, restore/move/failover |
 | `network-topology.md` | Traffic planes, topology options, firewall reference, DNS routing |
 | `control-loop-design.md` | The reconcile loop as built — passes, drift signals, outage pause, Raft snapshot |
+| `observability.md` | Built-in telemetry pipeline, console, retention, security and limits |
 | `test-reports/` | TC1–TC10 field reports from live campaigns |
 | `whitepaper.md` | The technical whitepaper — problem, hardware envelope, architecture, design rationale, limitations |
 

@@ -3,6 +3,7 @@ package controllers
 import (
 	"encoding/json"
 	"html/template"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -13,6 +14,11 @@ import (
 // ObservBridge serves the observability single-sign-on bootstrap page on the
 // observ.<domain> origin, reached through the Traefik `sso-bridge` router
 // (priority 1000, so it wins over the catch-all observability router).
+//
+// The page is served only when the request's Host is exactly observ.<domain>
+// (see observBridgeHost). Every other host, including the console's own
+// pmcluster.<domain>, gets a 404 before the credential is read, so the page is
+// not reachable through the console's host even if a router is misconfigured.
 //
 // Why this exists at all: the SSO gate authenticates the OPERATOR, but the
 // backend's own web app decides whether it is logged in from state it keeps in
@@ -28,9 +34,10 @@ import (
 // collector, the UI and the operator.
 //
 // Like the console's own routes, this page cannot be gated by a console session
-// — the browser has no edge session when it lands here. The Traefik sso-auth (or
-// admin-auth) middleware upstream is the real gate; this handler re-checks the
-// identity headers that middleware supplies.
+// — the browser has no edge session when it lands here. On the observ.<domain>
+// origin the Traefik sso-auth (or admin-auth) middleware upstream is the gate;
+// this handler adds the host check above and re-checks the identity headers
+// that middleware supplies.
 type ObservBridge struct{ *Controller }
 
 // observBasicAuthEnv carries base64(<admin user>:<admin password>) — the exact
@@ -39,8 +46,17 @@ const observBasicAuthEnv = "OBSERVABILITY_BASIC_AUTH"
 
 // Page renders the bootstrap document.
 func (b ObservBridge) Page(g *gin.Context) {
+	if !observBridgeHost(b, g.Request) {
+		g.Header("Cache-Control", "no-store")
+		g.Status(http.StatusNotFound)
+		_, _ = g.Writer.Write([]byte("not found\n"))
+		return
+	}
 	basicAuth := os.Getenv(observBasicAuthEnv)
 
+	// The observability origin has its own browser origin, so the host-only edge
+	// session cookie is not sent here. Traefik's Basic/SSO gate authenticates the
+	// bridge request and this handler re-checks the identity headers below.
 	if !observBridgeGate(g.Request) {
 		g.Header("Cache-Control", "no-store")
 		g.Status(http.StatusForbidden)
@@ -106,6 +122,31 @@ p{opacity:.8;animation:pulse 1.4s ease-in-out infinite}
 </body>
 </html>
 `))
+}
+
+// observBridgeHost reports whether the request is addressed to observ.<domain>,
+// the only origin the bridge may serve. The domain is the console's configured
+// PMCLUSTER_DOMAIN; an unset domain (or a nil controller) fails closed. Only the
+// Host header is trusted: Traefik forwards the original Host unchanged, while
+// X-Forwarded-Host is client-supplied on this path. The comparison ignores case,
+// a trailing dot and any port.
+func observBridgeHost(b ObservBridge, r *http.Request) bool {
+	if b.Controller == nil {
+		return false
+	}
+	domain := normalizeBridgeHost(b.Domain)
+	if domain == "" {
+		return false
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return normalizeBridgeHost(host) == "observ."+domain
+}
+
+func normalizeBridgeHost(host string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 }
 
 // observBridgeGate reports whether the request may be served. The page hands the

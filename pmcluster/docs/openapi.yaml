@@ -92,6 +92,137 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Me"
+  /api/observability/status:
+    get:
+      summary: Compare expected Swarm nodes with fresh telemetry
+      operationId: observabilityStatus
+      description: |
+        Read-only cluster telemetry status. `empty`, `missing`, `stale` and
+        `inventory_failed` are distinct status values; a stack-scoped token is
+        denied because node coverage is cluster-wide.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+      responses:
+        "200":
+          description: Node inventory and telemetry coverage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObservabilityStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Viewer role or unscoped token required
+  /api/observability/logs:
+    get:
+      summary: Read bounded newest-first telemetry logs
+      operationId: observabilityLogs
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: service
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: severity
+          in: query
+          schema: {type: string, enum: [error, warn, info, debug]}
+        - name: search
+          in: query
+          schema: {type: string, maxLength: 100}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 200}
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 2000, default: 0}
+      responses:
+        "200":
+          description: Available, empty, or unavailable bounded result
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/metrics/nodes:
+    get:
+      summary: Read bounded per-node metric series
+      operationId: observabilityNodeMetrics
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: bucket
+          in: query
+          schema: {type: string, description: Go duration, example: 1m}
+      responses:
+        "200":
+          description: Bounded metric rows
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/metrics/services:
+    get:
+      summary: Read bounded per-service metric series
+      operationId: observabilityServiceMetrics
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: bucket
+          in: query
+          schema: {type: string, description: Go duration, example: 5m}
+      responses:
+        "200":
+          description: Bounded metric rows
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/traces:
+    get:
+      summary: Read bounded trace summaries
+      operationId: observabilityTraces
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: service
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: errors_only
+          in: query
+          schema: {type: boolean, default: false}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 50, default: 50}
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 1000, default: 0}
+      responses:
+        "200":
+          description: Bounded trace summaries
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/traces/{trace_id}:
+    get:
+      summary: Read spans for one trace
+      operationId: observabilityTrace
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: trace_id
+          in: path
+          required: true
+          schema: {type: string, pattern: "^[0-9a-f]{32}$"}
+        - $ref: "#/components/parameters/EvidenceRange"
+      responses:
+        "200":
+          description: Bounded spans
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
   /api/cluster/info:
     get:
       summary: Node + swarm summary
@@ -977,6 +1108,178 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           description: Secret not found
+  /api/secrets/{name}/verify:
+    post:
+      summary: Check a candidate value against a secret's stored hash
+      description: |
+        Compares the supplied value with the secret's sha256 hash in constant
+        time and returns only whether they match. The plaintext is never
+        returned.
+      operationId: verifySecret
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value:
+                  type: string
+      responses:
+        "200":
+          description: Match result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  match:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Secret not found
+  /api/credentials:
+    get:
+      summary: List managed bootstrap credentials (never the password)
+      operationId: listCredentials
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Credential metadata rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  credentials:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: {type: string}
+                        kind: {type: string}
+                        username: {type: string}
+                        swarm_secret_name: {type: string}
+                        created_at: {type: integer, format: int64}
+                        rotated_at: {type: integer, format: int64}
+  /api/credentials/{name}/rotate:
+    post:
+      summary: Rotate a managed credential
+      description: |
+        Generates a new password, re-encrypts it, updates the Swarm secret and
+        restarts the consuming service. This is admin-only; viewer and
+        operator tokens receive 403. The new password is returned once and
+        cannot be read back afterwards.
+      operationId: rotateCredential
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Rotated; the password is shown once
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: {type: string}
+                  username: {type: string}
+                  password: {type: string}
+                  swarm_secret_name: {type: string}
+                  username_changed: {type: boolean}
+                  shown_once: {type: boolean}
+        "404":
+          description: Credential not found
+        "403":
+          description: Admin role required
+  /api/registries:
+    get:
+      summary: List configured Docker registries (passwords are write-only)
+      operationId: listRegistries
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Registry rows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  registries:
+                    type: array
+                    items:
+                      type: object
+    post:
+      summary: Add or update a Docker registry login
+      description: |
+        Logs in to the registry on the host, then stores the encrypted
+        credential. Returns 201 for a new registry and 200 when an existing
+        one was updated. This is admin-only; viewer and operator tokens
+        receive 403.
+      operationId: addRegistry
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [host, username, password]
+              properties:
+                host: {type: string}
+                username: {type: string}
+                password: {type: string}
+      responses:
+        "200":
+          description: Existing registry updated
+        "201":
+          description: Registry added
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "502":
+          description: The registry rejected the login or was unreachable
+        "403":
+          description: Admin role required
+  /api/registries/{host}:
+    delete:
+      summary: Remove a Docker registry login
+      operationId: removeRegistry
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: host
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Removed; a warning is included when the host logout failed
+        "404":
+          description: Registry not configured
+        "403":
+          description: Admin role required
   /api/configs:
     get:
       summary: List configs (metadata + hash, no content)
@@ -1443,12 +1746,106 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           description: Service not found, does not belong to the stack, or no task on this node
+  /api/investigation/policy:
+    get:
+      summary: Read nonsecret native investigation policy
+      operationId: getInvestigationPolicy
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Disabled by default; requires an unscoped bearer
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InvestigationPolicy"}
+    put:
+      summary: Replace investigation policy (admin only)
+      operationId: putInvestigationPolicy
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/InvestigationPolicy"}
+      responses:
+        "200": {description: Policy saved}
+        "400": {description: Invalid or incomplete enabled policy}
+        "403": {description: Admin and unscoped bearer required}
+  /api/investigation/budget:
+    get:
+      summary: Read global UTC reservation-day token accounting
+      operationId: getInvestigationBudget
+      security: [{bearerAuth: []}]
+      responses:
+        "200":
+          description: Held reservations and accounted tokens, including conservative unknown usage
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bucket: {type: string, format: date}
+                  held: {type: integer, format: int64}
+                  charged: {type: integer, format: int64}
+  /api/investigation/reservations/{id}/{action}:
+    post:
+      summary: Privileged edge accounting transition (admin only)
+      operationId: transitionInvestigationReservation
+      description: |
+        Reserve admits the full policy input/output allowance atomically.
+        Dispatch is a single-use claim before any provider request.
+        Settle with unknown usage charges the full dispatched allowance;
+        undispatched work releases capacity. Settlements never overwrite an
+        existing final charge. This is an integration API for the privileged
+        edge, not a direct operator submission endpoint.
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string, pattern: "^[a-f0-9]{32}$"}
+        - name: action
+          in: path
+          required: true
+          schema: {type: string, enum: [reserve, dispatch, settle]}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                usage: {type: integer, format: int64, minimum: 0, nullable: true}
+      responses:
+        "200":
+          description: Transition accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: string}
+                  bucket: {type: string, format: date}
+                  reserved: {type: integer, format: int64}
+                  charged: {type: integer, format: int64}
+                  status: {type: string, enum: [reserved, dispatched, settled]}
+        "403": {description: Privileged admin integration token required}
+        "409": {description: Policy disabled, exhausted budget, or invalid/replayed transition}
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: pmc_<token_id>_<secret>
+  parameters:
+    EvidenceRange:
+      name: range
+      in: query
+      required: false
+      description: Bounded duration such as 15m, 1h, 6h or 24h (maximum 24h).
+      schema:
+        type: string
+        default: 1h
   responses:
     BadRequest:
       description: Invalid request
@@ -1463,11 +1860,82 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    InvestigationPolicy:
+      type: object
+      additionalProperties: false
+      required: [enabled, sharing, base_url, model, daily_tokens, max_input_tokens, max_output_tokens, token_field]
+      properties:
+        enabled: {type: boolean, default: false}
+        sharing: {type: boolean, default: false}
+        base_url: {type: string, maxLength: 2048, description: HTTPS base URL; HTTP allowed only on loopback}
+        model: {type: string, maxLength: 200}
+        daily_tokens: {type: integer, format: int64, minimum: 0, maximum: 1000000000}
+        max_input_tokens: {type: integer, format: int64, minimum: 1024, maximum: 200000, default: 16000}
+        max_output_tokens: {type: integer, format: int64, minimum: 128, maximum: 16000, default: 2000}
+        token_field: {type: string, enum: [max_completion_tokens, max_tokens]}
+        protocol: {type: string, enum: [openai, anthropic, gemini], default: openai, description: Wire protocol; empty means openai}
     Error:
       type: object
       properties:
         error:
           type: string
+    ObservabilityEvidence:
+      type: object
+      required: [status, window, rows, truncated]
+      properties:
+        status:
+          type: string
+          enum: [available, empty, unavailable]
+        observed_at: {type: string, format: date-time}
+        window:
+          type: object
+          required: [start, end]
+          properties:
+            start: {type: string, format: date-time}
+            end: {type: string, format: date-time}
+        rows:
+          type: array
+          items: {type: object, additionalProperties: true}
+        truncated: {type: boolean}
+        truncation_reasons:
+          type: array
+          items: {type: string}
+        coverage: {type: string}
+        error: {type: string}
+    ObservabilityStatus:
+      type: object
+      required: [status, inventory_status, telemetry_status, window, nodes, truncated]
+      properties:
+        status:
+          type: string
+          enum: [fresh, stale, missing, empty, unavailable, inventory_failed]
+        inventory_status: {type: string}
+        telemetry_status: {type: string}
+        observed_at: {type: string, format: date-time}
+        window:
+          type: object
+          required: [start, end]
+          properties:
+            start: {type: string, format: date-time}
+            end: {type: string, format: date-time}
+        expected_nodes: {type: integer}
+        reporting_nodes: {type: integer}
+        unknown_node_samples: {type: integer}
+        truncated: {type: boolean, description: True when node telemetry hit a read bound; absent or old nodes are then reported unavailable rather than missing/stale.}
+        truncation_reasons: {type: array, items: {type: string}, description: Each independent read bound that cut the node telemetry read; omitted when empty.}
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              id: {type: string}
+              hostname: {type: string}
+              role: {type: string}
+              availability: {type: string}
+              swarm_status: {type: string}
+              is_leader: {type: boolean}
+              telemetry_status: {type: string}
+              last_seen: {type: string, format: date-time}
     Health:
       type: object
       properties:

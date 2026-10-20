@@ -238,6 +238,7 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 		Image:         s.Image,
 		Command:       s.Command,
 		Entrypoint:    s.Entrypoint,
+		Hostname:      s.Hostname,
 		Env:           env,
 		Volumes:       s.Volumes,
 		Secrets:       s.Secrets,

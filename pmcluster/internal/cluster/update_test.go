@@ -219,6 +219,7 @@ func seedUpdateState(t *testing.T) (UpdateDeps, string) {
 
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
+	f.serviceInspect = runtime.ServiceInspectResult{Name: "observability_parseable", Hostname: defaultObservabilityParseableHostname}
 	seedHealthySwarm(f)
 
 	if _, err := Up(context.Background(), UpDeps{
@@ -773,6 +774,7 @@ func TestUpdate_TLSNotACMEWithoutCertPathsErrorsIfNoACMEEmail(t *testing.T) {
 
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
+	f.serviceInspect = runtime.ServiceInspectResult{Name: "observability_parseable", Hostname: defaultObservabilityParseableHostname}
 	seedHealthySwarm(f)
 
 	_, err = Update(ctx, UpdateDeps{
@@ -831,6 +833,7 @@ func TestUpdate_ACMEModeDoesNotRequireCertPaths(t *testing.T) {
 
 	f := newFakeDocker()
 	f.info = goodSwarmInfo()
+	f.serviceInspect = runtime.ServiceInspectResult{Name: "observability_parseable", Hostname: defaultObservabilityParseableHostname}
 	seedHealthySwarm(f)
 
 	if _, err := Update(ctx, UpdateDeps{

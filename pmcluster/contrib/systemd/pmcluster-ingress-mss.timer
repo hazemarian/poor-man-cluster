@@ -1,0 +1,11 @@
+[Unit]
+Description=Maintain Swarm ingress MSS after sandbox recreation
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=pmcluster-ingress-mss.service
+
+[Install]
+WantedBy=timers.target

@@ -14,7 +14,7 @@ loop.
 Poor Man's Stack is a self-hosted, single-node-friendly deployment platform
 built on **Docker Swarm**. A single Go binary called `pmcluster` is the control
 plane: it bootstraps a Swarm cluster, provisions the infrastructure services
-(Traefik, OpenObserve, OTel collector, backups), accepts application
+(Traefik, Parseable, OTel collector, backups), accepts application
 deployments through a YAML DSL, and manages TLS, secrets, configs, API keys,
 webhooks and backups — via a CLI, a REST API, and an operator console.
 
@@ -62,7 +62,7 @@ and optionally SSO via GitHub (oauth2-proxy on `https://sso.<domain>`).
                     │
         ┌───────────┼───────────────────────┐
         ▼           ▼                       ▼
-  App stacks   pmcluster-edge (:8042)   OpenObserve
+  App stacks   pmcluster-edge (:8042)   Parseable
   (deployed    ┌────────────────────┐     (observability)
    apps)       │ operator console   │
                │  (gin + HTMX)      │
@@ -78,7 +78,7 @@ and optionally SSO via GitHub (oauth2-proxy on `https://sso.<domain>`).
                └── AES-GCM key ~/.pmcluster/.encryption_key
 
     SSO:        oauth2-proxy (sso stack, sso.<domain>) → GitHub OAuth
-    Observability: apps → OTLP :4317 → otel-collector (global) → OpenObserve
+    Observability: apps → OTLP :4317 → otel-collector (global) → Parseable
     Backups:       offen agents (hourly, storage nodes) + in-cluster SeaweedFS
                    store (S3 :8333 routing-mesh / WebDAV :7333) + offsite S3
 ```
@@ -493,7 +493,7 @@ Docker, Deployer` (+ `Stdout` where verbose).
   non-storage, non-platform node (or the leader with `backup_store_on=leader`).
 - `embeds/` — the embedded platform DSL manifests: `infra-stack.yml`
   (Traefik, global on managers), `edge-stack.yml`, `observability-stack.yml`
-  (OpenObserve + OTel), `backup-stack.yml` (offen agents + SeaweedFS store),
+  (Parseable + OTel), `backup-stack.yml` (offen agents + SeaweedFS store),
   `sso-stack.yml` (oauth2-proxy), `traefik-dynamic.yml`,
   `otel-collector-config.yml`.
 - `sitecert.go` — `ApplyCert`/`RemoveCert`/`GetSiteCert`/`PersistedDomain`/
@@ -502,7 +502,7 @@ Docker, Deployer` (+ `Stdout` where verbose).
   `RefreshHostCerts`.
 - `health.go` — `WaitHealthyStacks` polls the bundled services.
 - `credentials.go` — platform credential specs (`edge_admin`,
-  `openobserve_admin`, `traefik_dashboard`, `sso_cookie_secret`).
+  `observability_admin`, `traefik_dashboard`, `sso_cookie_secret`).
   `CredentialsManager` with `Bootstrap`, `Ensure`, `Rotate`. `Ensure` is
   idempotent: creates only when missing (used by `cluster update` to self-heal
   `sso_cookie_secret`).
@@ -665,10 +665,14 @@ RBAC roles (`admin > operator > viewer`):
   webhooks, node promote/demote) and the rendered-config CONTENT modal.
 - **admin**: API keys, settings save/apply, the users CRUD.
 
-Auth middleware: `Require()` + `RequireRole(minRole)`. `LoginDisabled` mode
-(EDGE_LOGIN_DISABLED=true): every request passes through as a synthetic admin
-(the Traefik admin-auth gate protects `/web/*` in this mode) and no user rows
-exist.
+Auth middleware: `Require()` + `RequireRole(minRole)`. With SSO disabled,
+native signed cookie sessions protect `/web/*` when `edge_login_disabled=false`
+(`pmcluster setup` writes that for new clusters); `/web/login` and `/web/logout`
+issue and revoke those sessions. A cluster without the setting keeps the legacy
+Traefik Basic Auth gate. `EDGE_LOGIN_DISABLED=true` selects that gate and
+synthetic-admin mode; Basic Auth credentials cannot be revoked by a server-side
+logout. SSO forces the console session off and keeps the oauth2-proxy sign-out
+flow, so enabling SSO never introduces a second login gate.
 
 Console organization: **cluster-scope** configs + secrets (the platform's own
 templates/secrets) live on the **Settings** page, which also has the
@@ -821,15 +825,18 @@ When SSO is enabled via `pmcluster setup --sso-enabled`:
   resolves on every gated host).
 - The OAuth provider is GitHub, restricted to an optional org (and optional
   repos).
-- The edge console's own login is disabled (EDGE_LOGIN_DISABLED=true); the
+- The edge console's own login is disabled (effectively
+  `EDGE_LOGIN_DISABLED=true`); the
   console shell renders an `/oauth2/sign_out` link (clears the oauth2-proxy
   session) instead of its own logout form.
 - Cookie secret is a managed credential (`sso_cookie_secret`); `cluster update`
   self-heals it when missing via `CredentialsManager.Ensure`.
 
-Without SSO: Traefik admin-auth basicAuth (`htpasswd` from
-`admin_credentials` secret) gates `/web/*` + `observ.<domain>` + traefik
-dashboard.
+Without SSO, native cookie sessions (`edge_login_disabled=false`, the setup
+default) gate the console `/web/*`; the separate
+Parseable origin and Traefik dashboard retain the Traefik admin-auth basicAuth
+gate (`htpasswd` from `admin_credentials`). Setting `EDGE_LOGIN_DISABLED=true`
+also puts the console behind that Basic gate.
 
 ### Remote CLI (off-node)
 Set `--api-url https://pmcluster.<domain>` (or `PMCLUSTER_API_URL`) plus
@@ -955,7 +962,7 @@ own values (manager node, domain, GitHub org, root admin email).
 - Console at `https://pmcluster.<domain>/web/`.
 - SSO live: GitHub OAuth (org `<github-org>`), oauth2-proxy on
   `https://sso.<domain>`, `EDGE_LOGIN_DISABLED=true`.
-- OpenObserve root admin email: `admin@<domain>` (derived from domain).
+- Parseable admin email: `admin@<domain>` (derived from domain).
   Auth = root admin email:password (NOT provisioning API / ingestion token).
 - `site_certs` rows: `<domain>` + per-host certs for extra subdomains.
 - Traefik auth gates `/web/*` + `observ.<domain>` + traefik dashboard

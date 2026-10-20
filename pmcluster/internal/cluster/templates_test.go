@@ -424,6 +424,45 @@ func TestLoadComposeFile_ObservabilityUsesManagedCredential(t *testing.T) {
 	}
 }
 
+func TestLoadComposeFile_ObservabilityHostnamePin(t *testing.T) {
+	in := RenderInput{
+		Domain:                         "example.com",
+		ObservabilityAdminEmail:        "ops@example.com",
+		ObservabilityAdminPassword:     "PW",
+		ObservabilityParseableHostname: "b15ab0ff62e5",
+	}
+	data, err := LoadComposeFile(StackObservability, in)
+	if err != nil {
+		t.Fatalf("LoadComposeFile: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse rendered observability stack: %v", err)
+	}
+	services, ok := doc["services"].(map[string]any)
+	if !ok {
+		t.Fatalf("rendered observability stack has no services map: %v", doc["services"])
+	}
+	parseable, ok := services["parseable"].(map[string]any)
+	if !ok {
+		t.Fatalf("rendered observability stack has no parseable service")
+	}
+	if got := parseable["hostname"]; got != "b15ab0ff62e5" {
+		t.Fatalf("parseable hostname = %v, want b15ab0ff62e5", got)
+	}
+
+	data, err = LoadComposeFile(StackObservability, RenderInput{
+		Domain:                  "example.com",
+		ObservabilityAdminEmail: "ops@example.com",
+	})
+	if err != nil {
+		t.Fatalf("LoadComposeFile without pin: %v", err)
+	}
+	if strings.Contains(string(data), "hostname:") {
+		t.Fatal("unset Parseable hostname must omit the compose hostname field")
+	}
+}
+
 // TestLoadComposeFile_UnknownStack verifies that an unknown stack name returns
 // an error.
 func TestLoadComposeFile_UnknownStack(t *testing.T) {
@@ -620,9 +659,13 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 
 	// memory_limiter MUST lead every pipeline: it is what stops a failing
 	// exporter from growing the collector until the host loses its Swarm
-	// heartbeat.
-	if !strings.Contains(body, "[memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]") {
-		t.Error("logs pipeline must lead with memory_limiter, then resourcedetection + resource + filter/skip_filelog before batch")
+	// heartbeat. Keep the stdout and SDK pipelines separate so the stdout-only
+	// filter cannot drop OTLP records.
+	if !strings.Contains(body, "[memory_limiter, resourcedetection, filter/skip_filelog, batch]") {
+		t.Error("logs/filelog pipeline must lead with memory_limiter and filter skip_filelog before batch")
+	}
+	if !strings.Contains(body, "[memory_limiter, resourcedetection, batch]") {
+		t.Error("logs/otlp pipeline must preserve SDK records with memory_limiter and batch")
 	}
 
 	if !strings.Contains(body, "[memory_limiter, resourcedetection, resource, transform/metrics, batch]") {
@@ -909,8 +952,11 @@ func TestRenderOTelCollectorConfigIsValidYAML(t *testing.T) {
 	}
 }
 
-// TestRenderOTelCollectorConfig_FilelogReceiver verifies that the static
-// filelog receiver is configured with the correct glob patterns and operators.
+// TestRenderOTelCollectorConfig_FilelogReceiver verifies that Docker stdout
+// logs are discovered with the Docker observer and attributed before they hit
+// the filelog-only filter. A static /var/lib/docker glob cannot recover Swarm
+// labels from a container ID, so it silently turns every record into
+// unattributable noise and drops it.
 func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 	in := RenderInput{
 		ObservabilityAdminEmail: "admin@x.com",
@@ -921,43 +967,119 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 		t.Fatalf("RenderOTelCollectorConfig: %v", err)
 	}
 	body := string(data)
-
-	if strings.Contains(body, "receiver_creator") {
-		t.Error("rendered config should not contain receiver_creator")
+	var doc struct {
+		Extensions map[string]any `yaml:"extensions"`
+		Receivers  map[string]struct {
+			WatchObservers []string `yaml:"watch_observers"`
+			Receivers      map[string]struct {
+				Rule               string            `yaml:"rule"`
+				Config             map[string]any    `yaml:"config"`
+				ResourceAttributes map[string]string `yaml:"resource_attributes" json:"resource_attributes"`
+			} `yaml:"receivers"`
+		} `yaml:"receivers"`
+		Service struct {
+			Pipelines map[string]struct {
+				Receivers  []string `yaml:"receivers"`
+				Processors []string `yaml:"processors"`
+			} `yaml:"pipelines"`
+		} `yaml:"service"`
 	}
-
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("rendered collector config is not valid YAML: %v", err)
+	}
+	if _, ok := doc.Extensions["docker_observer"]; !ok {
+		t.Fatal("rendered config must enable the Docker observer extension")
+	}
+	if !strings.Contains(body, "extensions: [health_check, docker_observer]") {
+		t.Fatal("service must start the Docker observer extension")
+	}
+	rc, ok := doc.Receivers["receiver_creator"]
+	if !ok {
+		t.Fatal("rendered config must include receiver_creator for Docker log attribution")
+	}
+	if !strings.Contains(body, "watch_observers: [docker_observer]") {
+		t.Fatal("receiver_creator must watch the docker_observer extension")
+	}
+	filelog, ok := rc.Receivers["filelog/docker"]
+	if !ok {
+		t.Fatal("receiver_creator must create one filelog receiver per Docker container")
+	}
+	if filelog.Rule != `type == "container" and port == 0` {
+		t.Errorf("filelog/docker rule = %q, want a port-less container rule", filelog.Rule)
+	}
+	include, ok := filelog.Config["include"].([]any)
+	if !ok || len(include) != 1 || include[0] != "/var/lib/docker/containers/`container_id`/*-json.log" {
+		t.Errorf("filelog/docker include = %#v, want a container-id expansion", filelog.Config["include"])
+	}
+	resourceAttrs := filelog.ResourceAttributes
+	serviceExpr, ok := resourceAttrs["service.name"]
+	if !ok {
+		t.Fatal("filelog/docker must define a service.name resource expression")
+	}
+	stackExpr, ok := resourceAttrs["stack.name"]
+	if !ok {
+		t.Fatal("filelog/docker must define a stack.name resource expression")
+	}
+	for name, tc := range map[string]struct {
+		expr       string
+		swarmLabel string
+	}{
+		"service.name": {expr: serviceExpr, swarmLabel: "com.docker.swarm.service.name"},
+		"stack.name":   {expr: stackExpr, swarmLabel: "com.docker.stack.namespace"},
+	} {
+		t.Run(name+" identity precedence", func(t *testing.T) {
+			swarm := strings.Index(tc.expr, `"`+tc.swarmLabel+`"`)
+			compose := strings.Index(tc.expr, `"com.docker.compose.project"`)
+			if swarm < 0 || compose < 0 || swarm > compose {
+				t.Fatalf("%s expression must check Swarm identity before Compose fallback: %s", name, tc.expr)
+			}
+			if !strings.Contains(tc.expr, `"com.docker.compose.project" in labels`) ||
+				!strings.Contains(tc.expr, `"com.docker.compose.service" in labels`) ||
+				!strings.Contains(tc.expr, `labels["com.docker.compose.project"] != ""`) ||
+				!strings.Contains(tc.expr, `labels["com.docker.compose.service"] != ""`) {
+				t.Fatalf("%s expression must require a complete non-empty Compose label pair: %s", name, tc.expr)
+			}
+			if !strings.Contains(tc.expr, `: "")`) {
+				t.Fatalf("%s expression must return an empty fallback for unknown containers: %s", name, tc.expr)
+			}
+		})
+	}
+	if !strings.Contains(serviceExpr, `labels["com.docker.compose.project"] + "_" + labels["com.docker.compose.service"]`) {
+		t.Errorf("service.name expression must derive the Compose identity from project and service: %s", serviceExpr)
+	}
+	if !strings.Contains(stackExpr, `labels["com.docker.compose.project"]`) {
+		t.Errorf("stack.name expression must derive the Compose stack from project: %s", stackExpr)
+	}
 	for _, want := range []string{
-		`/var/lib/docker/containers/*/*-json.log`,
-		`exclude:`,
-		`otel-collector`,
-		`parseable`,
-		`json_parser`,
-		`error_mode: ignore`,
+		`container.labels.io.pmcluster.skip_filelog: '` + "`labels[\"io.pmcluster.skip_filelog\"] ?? \"\"`" + `'`,
+		`resource.attributes["container.labels.io.pmcluster.skip_filelog"] == "true"`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("rendered config missing expected content: %q", want)
+			t.Errorf("rendered config missing dynamic resource attribute %q", want)
 		}
 	}
-
-	if strings.Contains(body, "docker_observer") {
-		t.Error("rendered config should not contain docker_observer")
+	filelogPipeline, ok := doc.Service.Pipelines["logs/filelog"]
+	if !ok {
+		t.Fatal("rendered config must keep Docker stdout logs in a dedicated pipeline")
 	}
-
-	if !strings.Contains(body, "filter/skip_filelog") {
-		t.Error("rendered config should contain filter/skip_filelog processor")
+	if len(filelogPipeline.Receivers) != 1 || filelogPipeline.Receivers[0] != "receiver_creator" {
+		t.Errorf("logs/filelog receivers = %v, want [receiver_creator]", filelogPipeline.Receivers)
 	}
-
-	skipFilelogExpr := "container.labels.io" + "\\" + "\\" + ".pmcluster" + "\\" + "\\" + ".skip_filelog"
-	if !strings.Contains(body, skipFilelogExpr) {
-		t.Error("rendered config should contain the OTTL filter for io.pmcluster.skip_filelog label")
+	if !strings.Contains(strings.Join(filelogPipeline.Processors, ","), "filter/skip_filelog") {
+		t.Errorf("logs/filelog processors = %v, want filter/skip_filelog", filelogPipeline.Processors)
 	}
-
-	if !strings.Contains(body, "processors: [memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]") {
-		t.Error("logs pipeline should list memory_limiter first and filter/skip_filelog before batch")
+	otlpPipeline, ok := doc.Service.Pipelines["logs/otlp"]
+	if !ok {
+		t.Fatal("rendered config must keep OTLP SDK logs in a dedicated pipeline")
 	}
-
-	if strings.Contains(body, "__FILELOG_EXCLUDE_PATTERNS__") {
-		t.Error("rendered config should NOT contain __FILELOG_EXCLUDE_PATTERNS__ (label-based approach replaces it)")
+	if len(otlpPipeline.Receivers) != 1 || otlpPipeline.Receivers[0] != "otlp" {
+		t.Errorf("logs/otlp receivers = %v, want [otlp]", otlpPipeline.Receivers)
+	}
+	if strings.Contains(strings.Join(otlpPipeline.Processors, ","), "filter/skip_filelog") {
+		t.Error("logs/otlp must not use the stdout skip_filelog filter")
+	}
+	if strings.Contains(body, "/var/lib/docker/containers/*/*-json.log") {
+		t.Error("rendered config must not use an unattributed static Docker glob")
 	}
 }
 
@@ -990,9 +1112,36 @@ func TestRenderOTelCollectorConfig_DockerStatsLabels(t *testing.T) {
 		t.Error("rendered config should NOT contain the non-existent metric_labels_to_resource_attributes option")
 	}
 
-	for _, want := range []string{`conditions:`, `resource.attributes["service.name"] != nil`} {
-		if !strings.Contains(body, want) {
-			t.Errorf("transform/metrics missing guard condition: %q", want)
+	var doc struct {
+		Processors map[string]struct {
+			MetricStatements []struct {
+				Context    string   `yaml:"context"`
+				Conditions []string `yaml:"conditions"`
+			} `yaml:"metric_statements" json:"metric_statements"`
+		} `yaml:"processors"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("rendered collector config is not valid YAML: %v", err)
+	}
+	transform, ok := doc.Processors["transform/metrics"]
+	if !ok {
+		t.Fatal("rendered config must include transform/metrics")
+	}
+	wantConditions := []string{
+		`resource.attributes["service.name"] != nil and attributes["service.name"] == nil`,
+		`resource.attributes["stack.name"] != nil and attributes["stack.name"] == nil`,
+		`attributes["service.name"] == nil and resource.attributes["compose.project"] != nil and resource.attributes["compose.project"] != "" and resource.attributes["compose.service"] != nil and resource.attributes["compose.service"] != ""`,
+	}
+	if len(transform.MetricStatements) != len(wantConditions) {
+		t.Fatalf("transform/metrics statements = %d, want %d", len(transform.MetricStatements), len(wantConditions))
+	}
+	for i, want := range wantConditions {
+		statement := transform.MetricStatements[i]
+		if statement.Context != "datapoint" {
+			t.Errorf("transform/metrics statement %d context = %q, want datapoint", i, statement.Context)
+		}
+		if len(statement.Conditions) != 1 || statement.Conditions[0] != want {
+			t.Errorf("transform/metrics statement %d conditions = %#v, want one AND guard %q", i, statement.Conditions, want)
 		}
 	}
 }
@@ -1259,6 +1408,70 @@ func TestRenderTraefikDynamic_CORSWired(t *testing.T) {
 	if strings.Contains(body, "routers:") {
 		t.Errorf("file-provider should declare no routers (edge owns pmcluster.<domain>):\n%s", body)
 	}
+	if !strings.Contains(body, "edge-session-auth:") || !strings.Contains(body, "http://edge_pmcluster-edge:8042/internal/session/check") {
+		t.Errorf("rendered config missing fail-closed native session forwardAuth:\n%s", body)
+	}
+}
+
+func TestLoadComposeFile_EdgeSessionGateModes(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     RenderInput
+		want   string
+		bad    string
+		bridge string
+	}{
+		{name: "native session", in: RenderInput{Domain: "example.com", EdgeLoginDisabled: false}, want: "cors-default@file,edge-session-auth@file", bad: "admin-auth@file", bridge: "cors-default@file,admin-auth@file"},
+		{name: "explicit basic", in: RenderInput{Domain: "example.com", EdgeLoginDisabled: true}, want: "cors-default@file,admin-auth@file", bad: "edge-session-auth@file"},
+		{name: "sso", in: RenderInput{Domain: "example.com", EdgeLoginDisabled: true, SSOEnabled: true}, want: "cors-default@file,sso-auth@file", bad: "edge-session-auth@file"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := LoadComposeFile(StackEdge, tc.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := string(data)
+			// The pmcluster-web router is the console gate under test. The
+			// sso-bridge router keeps its own gate on purpose, so the whole
+			// body must not be searched for admin-auth@file.
+			web := routerMiddlewares(t, body, "pmcluster-web")
+			if web != tc.want {
+				t.Fatalf("pmcluster-web middlewares = %q, want %q", web, tc.want)
+			}
+			if strings.Contains(web, tc.bad) {
+				t.Fatalf("pmcluster-web middlewares unexpectedly contain %q: %q", tc.bad, web)
+			}
+			if tc.bridge != "" {
+				// The bridge hands out the managed credential and is hosted on
+				// observ.<domain>, where the host-only session cookie is not sent,
+				// so it stays behind Basic auth even in native-session mode.
+				if got := routerMiddlewares(t, body, "sso-bridge"); got != tc.bridge {
+					t.Fatalf("sso-bridge middlewares = %q, want %q", got, tc.bridge)
+				}
+			}
+		})
+	}
+}
+
+// routerMiddlewares returns the middleware chain the rendered compose body
+// assigns to one Traefik router. It fails unless the label appears exactly
+// once, so a broken if/else in the template cannot pass as a match.
+func routerMiddlewares(t *testing.T, body, router string) string {
+	t.Helper()
+	key := "traefik.http.routers." + router + ".middlewares"
+	var found []string
+	for _, line := range strings.Split(body, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok || strings.Trim(k, `"`) != key {
+			continue
+		}
+		found = append(found, strings.Trim(strings.TrimSpace(v), `"'`))
+	}
+	if len(found) != 1 {
+		t.Fatalf("rendered compose has %d %s labels, want 1:\n%s", len(found), key, body)
+	}
+	return found[0]
 }
 
 // TestRenderTraefikDynamic_AutoAuthMiddleware verifies the openobserve-auto-auth
@@ -1894,5 +2107,29 @@ func TestLoadComposeFile_BackupS3Renders(t *testing.T) {
 	body = string(data)
 	if strings.Contains(body, "AWS_") {
 		t.Errorf("unconfigured backup stack must not emit AWS_* env:\n%s", body)
+	}
+}
+
+func TestRenderInfraAlternateIngressPorts(t *testing.T) {
+	body, err := LoadComposeFile(StackInfra, RenderInput{
+		Domain: "example.com", IngressHTTPPort: 8080, IngressHTTPSPort: 8443,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{"published: 8080", "published: 8443"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("alternate ingress missing %q:\n%s", want, text)
+		}
+	}
+	def, err := LoadComposeFile(StackInfra, RenderInput{Domain: "example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"published: 80", "published: 443"} {
+		if !strings.Contains(string(def), want) {
+			t.Errorf("default ingress missing %q", want)
+		}
 	}
 }
