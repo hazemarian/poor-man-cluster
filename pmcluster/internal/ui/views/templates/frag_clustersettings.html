@@ -126,7 +126,7 @@
     </div>
     <div class="panel-body">
       <label class="check">
-        <input type="checkbox" name="edge_login_disabled" value="true"{{if eq (index .Settings "edge_login_disabled") "true"}} checked{{end}}>
+        <input type="checkbox" name="edge_login_disabled" value="true"{{if ne (index .Settings "edge_login_disabled") "false"}} checked{{end}}>
         <span>{{T "clustersettings.edge_login_disabled"}}</span>
       </label>
       <span class="hint">{{T "clustersettings.edge_login_disabled_hint"}}</span>

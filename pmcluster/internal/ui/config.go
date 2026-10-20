@@ -38,8 +38,9 @@ type Config struct {
 	// LoginDisabled (EDGE_LOGIN_DISABLED) selects the legacy stateless edge mode:
 	// Traefik's admin-auth gate protects /web/*, so the console skips its own
 	// login, the user CRUD page and first-run setup, and Require() lets every
-	// request through as a synthetic admin. The default is a native signed
-	// cookie session, including on the deployed edge.
+	// request through as a synthetic admin. The edge derives this from its
+	// edge_login_disabled setting: setup writes native signed cookie sessions
+	// (false), and a cluster without the setting keeps Basic Auth (true).
 	LoginDisabled bool
 	// SSOEnabled (EDGE_SSO_ENABLED) reports that the edge is gated by SSO
 	// (oauth2-proxy) rather than Traefik's basic-auth admin-auth. When set with

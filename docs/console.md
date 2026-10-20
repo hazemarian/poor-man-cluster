@@ -8,10 +8,12 @@ The console is a web UI (gin + HTMX) served by **`pmcluster-edge`** on the
 https://pmcluster.<your-domain>          # the console (/web/* routes)
 ```
 
-Authentication uses the console's signed cookie session by default. The
-`/web/login` and `/web/logout` routes therefore work on a normal non-SSO
-cluster. Setting `EDGE_LOGIN_DISABLED=true` explicitly selects the legacy
-Traefik Basic Auth gate and stateless synthetic-admin mode; a browser-managed
+For a new cluster, `pmcluster setup` chooses the console's signed cookie
+session, so the `/web/login` and `/web/logout` routes work on a normal non-SSO
+cluster. A cluster without the `edge_login_disabled` setting keeps the legacy
+Traefik Basic Auth gate; set `edge_login_disabled=false` to switch to native
+sessions. `EDGE_LOGIN_DISABLED=true` selects the Basic Auth gate and stateless
+synthetic-admin mode; a browser-managed
 Basic Auth credential cannot be cleared by a server-side logout button. SSO
 keeps the edge session disabled and uses the `/oauth2/sign_out` link. In
 standalone mode the first admin account is created on first run, with RBAC

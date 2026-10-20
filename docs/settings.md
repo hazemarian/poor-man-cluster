@@ -25,7 +25,7 @@ bearers). Console: the **Settings** page.
 | `backup_store_on` | `""` (= worker/auto) | setup wizard / operator | where the in-cluster SeaweedFS store runs: `leader`, or a non-storage non-platform worker (auto) |
 | `backup_s3_endpoint` / `_bucket` / `_access_key` / `_secret_key` / `_region` | unset (`_region` defaults `auto`) | setup wizard / operator | the offsite S3/R2 destination — when set, agents double-write every archive offsite |
 | `reconcile_interval` | `60` (seconds) | operator | the control loop's safety tick; `0` disables the loop |
-| `edge_login_disabled` | `false` (native signed cookie session) | setup wizard / edge stack | `false` keeps the console login and real `/web/logout` path; set `true` explicitly for the legacy stateless Traefik Basic Auth gate; SSO still forces its oauth2-proxy gate |
+| `edge_login_disabled` | `true` (Traefik Basic Auth) when unset; `pmcluster setup` writes `false` (native signed cookie session) | setup wizard / edge stack | A cluster without the setting keeps Basic Auth. Set `edge_login_disabled=false` to switch to native sessions, which keep the console login and real `/web/logout` path. `true` is the legacy stateless Basic Auth gate; SSO still forces its oauth2-proxy gate |
 | `sso_enabled` / `sso_provider` / `sso_client_id` / `sso_client_secret` / `sso_github_org` / `sso_github_repos` / `sso_cookie_expire` | off / `github` / unset / unset / unset / unset / `1h` | setup wizard (`--sso-*`) / operator | GitHub SSO via oauth2-proxy: org (and optional repo) restriction, tightened 1h default session |
 | `domain` | — | `cluster up` / setup wizard | the cluster's base domain |
 | `observability_admin_email` | — | `cluster up` (`--observability-admin-email`) | the observability admin login |

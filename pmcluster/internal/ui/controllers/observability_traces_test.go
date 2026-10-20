@@ -69,3 +69,32 @@ func TestFmtDuration(t *testing.T) {
 		}
 	}
 }
+
+// The trace service filter reaches a SQL literal, so only the daemon's service
+// grammar may pass. Quotes, spaces and extra path segments are refused, and
+// "stack/service" maps to the backend name the daemon filter uses.
+func TestTraceServiceFilter(t *testing.T) {
+	cases := []struct {
+		in     string
+		want   string
+		wantOK bool
+	}{
+		{"", "", true},
+		{"  ", "", true},
+		{"web", "web", true},
+		{"demo/web", "demo_web", true},
+		{"demo_web", "demo_web", true},
+		{"web' OR '1'='1", "", false},
+		{"web'--", "", false},
+		{"a/b/c", "", false},
+		{"demo/", "", false},
+		{"/web", "", false},
+		{"web worker", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := traceServiceFilter(tc.in)
+		if ok != tc.wantOK || got != tc.want {
+			t.Errorf("traceServiceFilter(%q) = (%q, %v), want (%q, %v)", tc.in, got, ok, tc.want, tc.wantOK)
+		}
+	}
+}

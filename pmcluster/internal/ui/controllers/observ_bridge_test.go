@@ -34,6 +34,21 @@ func TestObservBridgeGate(t *testing.T) {
 	}
 }
 
+// serveBridge runs the bridge handler for one request and returns the recorded
+// response. The Host is set explicitly because httptest defaults it.
+func serveBridge(t *testing.T, bridge ObservBridge, host string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	g, _ := gin.CreateTestContext(rec)
+	g.Request = httptest.NewRequest("GET", "/sso-bridge", nil)
+	g.Request.Host = host
+	for k, v := range headers {
+		g.Request.Header.Set(k, v)
+	}
+	bridge.Page(g)
+	return rec
+}
+
 // TestObservBridgePageSeedsTheSession pins the contract the page exists for:
 // the observability SPA decides it is logged in from localStorage["authToken"],
 // so the page must write exactly that key with the managed credential — the same
@@ -42,12 +57,8 @@ func TestObservBridgePageSeedsTheSession(t *testing.T) {
 	basicAuth := "b3BzQGV4YW1wbGUuY29tOnB3" // base64("ops@example.com:pw")
 	t.Setenv(observBasicAuthEnv, basicAuth)
 
-	rec := httptest.NewRecorder()
-	g, _ := gin.CreateTestContext(rec)
-	g.Request = httptest.NewRequest("GET", "/sso-bridge", nil)
-	g.Request.Header.Set("X-Forwarded-User", "ops@example.com")
-
-	ObservBridge{}.Page(g)
+	bridge := ObservBridge{Controller: &Controller{Domain: "example.com"}}
+	rec := serveBridge(t, bridge, "observ.example.com", map[string]string{"X-Forwarded-User": "ops@example.com"})
 
 	if rec.Code != 200 {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -76,11 +87,8 @@ func TestObservBridgePageSeedsTheSession(t *testing.T) {
 func TestObservBridgePageRefusesAnonymous(t *testing.T) {
 	t.Setenv(observBasicAuthEnv, "b3BzQGV4YW1wbGUuY29tOnB3")
 
-	rec := httptest.NewRecorder()
-	g, _ := gin.CreateTestContext(rec)
-	g.Request = httptest.NewRequest("GET", "/sso-bridge", nil)
-
-	ObservBridge{}.Page(g)
+	bridge := ObservBridge{Controller: &Controller{Domain: "example.com"}}
+	rec := serveBridge(t, bridge, "observ.example.com", nil)
 
 	if rec.Code != 403 {
 		t.Fatalf("anonymous status = %d, want 403", rec.Code)
@@ -88,4 +96,58 @@ func TestObservBridgePageRefusesAnonymous(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "authToken") {
 		t.Error("an anonymous response must not contain the session seeding")
 	}
+}
+
+// The bridge hands out the managed admin credential, so it must answer only on
+// observ.<domain>. Every other host is a bare 404 that never carries the
+// credential, even when the caller presents valid Basic auth.
+func TestObservBridgeServesOnlyTheObservHost(t *testing.T) {
+	basicAuth := "b3BzQGV4YW1wbGUuY29tOnB3"
+	t.Setenv(observBasicAuthEnv, basicAuth)
+	basic := map[string]string{"Authorization": "Basic " + basicAuth}
+	configured := ObservBridge{Controller: &Controller{Domain: "example.com"}}
+
+	cases := []struct {
+		name    string
+		bridge  ObservBridge
+		host    string
+		headers map[string]string
+		status  int
+	}{
+		{"console host with basic auth is 404", configured, "pmcluster.example.com", basic, 404},
+		{"bare domain with basic auth is 404", configured, "example.com", basic, 404},
+		{"host that merely ends in the domain is 404", configured, "evilobserv.example.com", basic, 404},
+		{"forwarded host cannot be spoofed", configured, "pmcluster.example.com", merge(basic, map[string]string{"X-Forwarded-Host": "observ.example.com"}), 404},
+		{"observ host with basic auth is served", configured, "observ.example.com", basic, 200},
+		{"host is case-insensitive", configured, "OBSERV.Example.COM", basic, 200},
+		{"port is ignored", configured, "observ.example.com:443", basic, 200},
+		{"trailing dot is ignored", configured, "observ.example.com.", basic, 200},
+		{"observ host with no auth is still refused", configured, "observ.example.com", nil, 403},
+		{"unset domain fails closed", ObservBridge{Controller: &Controller{}}, "observ.example.com", basic, 404},
+		{"nil controller fails closed", ObservBridge{}, "observ.example.com", basic, 404},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := serveBridge(t, tc.bridge, tc.host, tc.headers)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
+			}
+			if tc.status == 404 {
+				if strings.Contains(rec.Body.String(), basicAuth) || strings.Contains(rec.Body.String(), "authToken") {
+					t.Errorf("a refused host must not receive the credential or the session seeding")
+				}
+			}
+		})
+	}
+}
+
+func merge(a, b map[string]string) map[string]string {
+	out := make(map[string]string, len(a)+len(b))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		out[k] = v
+	}
+	return out
 }

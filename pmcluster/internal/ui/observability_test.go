@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
@@ -443,5 +443,74 @@ func TestObservabilityExpiredCertificateIsExplicit(t *testing.T) {
 				t.Fatalf("expired=%v status%d", expired, w.Code)
 			}
 		})
+	}
+}
+
+// A console trace filter that the daemon grammar refuses must never reach the
+// Parseable query, while a valid stack/service filter must.
+func TestConsoleTraceServiceFilterIsValidatedBeforeTheQuery(t *testing.T) {
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/me":
+			fmt.Fprint(w, `{"id":1,"name":"edge"}`)
+		default:
+			fmt.Fprint(w, `{}`)
+		}
+	}))
+	defer daemon.Close()
+
+	app, err := NewApp(Config{DataDir: ":memory:", PMAPIURL: daemon.URL, PMAPIToken: "fixture-token", LoginDisabled: true, UpstreamTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	fixture := &nativeClusterFixture{}
+	app.ctrl.Telemetry = fixture
+
+	code, body := get(app, "/web/observability/traces?svc="+url.QueryEscape("web' OR '1'='1"))
+	if code != http.StatusOK {
+		t.Fatalf("invalid filter status=%d", code)
+	}
+	if n := fixture.traces.Load(); n != 0 {
+		t.Fatalf("invalid service filter reached the trace query %d time(s)", n)
+	}
+	if strings.Contains(body, "GET /health") {
+		t.Error("an invalid service filter must not render trace rows")
+	}
+
+	if code, _ := get(app, "/web/observability/traces?svc="+url.QueryEscape("demo/web")); code != http.StatusOK {
+		t.Fatalf("valid filter status=%d", code)
+	}
+	if n := fixture.traces.Load(); n != 1 {
+		t.Fatalf("valid service filter should query traces once, got %d", n)
+	}
+}
+
+// The /internal/observability hop returns Parseable rows to the edge's daemon
+// caller, so the edge token must be redacted there as well as on console pages.
+func TestInternalObservabilityRedactsTheEdgeToken(t *testing.T) {
+	const edgeToken = "edge-token-value-7731"
+	parseableFake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[{"p_timestamp":"2026-10-18T19:07:30.310","service.name":"demo_web","severity_text":"ERROR","body":"leaked `+edgeToken+` in a log line"}]`)
+	}))
+	defer parseableFake.Close()
+
+	app, err := NewApp(Config{DataDir: ":memory:", PMAPIURL: "http://127.0.0.1:1", PMAPIToken: edgeToken, ParseableURL: parseableFake.URL, LoginDisabled: true, UpstreamTimeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+
+	req := httptest.NewRequest("GET", "/internal/observability/logs", nil)
+	req.Header.Set("Authorization", "Bearer "+edgeToken)
+	w := httptest.NewRecorder()
+	app.InternalObservabilityHandler(edgeToken).ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if w.Code != http.StatusOK || !strings.Contains(body, "leaked") {
+		t.Fatalf("status=%d, want the fixture row back; body=%s", w.Code, body)
+	}
+	if strings.Contains(body, edgeToken) {
+		t.Fatalf("edge token reached the internal response: %s", body)
 	}
 }

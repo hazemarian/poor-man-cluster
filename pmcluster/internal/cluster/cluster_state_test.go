@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -27,15 +28,17 @@ func TestRequestedTLSMode(t *testing.T) {
 	}
 }
 
-func TestLoadEdgeLoginDisabledDefaultsToSessionAndPreservesSSOGate(t *testing.T) {
+// An upgraded cluster that predates edge_login_disabled must keep the Basic
+// Auth gate it already has. Only an explicit "false" switches to native sessions.
+func TestLoadEdgeLoginDisabledDefaultsToBasicAndPreservesSSOGate(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer st.Close()
 	ctx := context.Background()
-	if got := loadEdgeLoginDisabled(ctx, st); got {
-		t.Fatal("unset edge_login_disabled should keep native sessions enabled")
+	if got := loadEdgeLoginDisabled(ctx, st); !got {
+		t.Fatal("unset edge_login_disabled must keep Basic Auth (legacy default)")
 	}
 	if err := st.SetSetting(ctx, SettingEdgeLoginDisabled(), "true"); err != nil {
 		t.Fatal(err)
@@ -46,11 +49,17 @@ func TestLoadEdgeLoginDisabledDefaultsToSessionAndPreservesSSOGate(t *testing.T)
 	if err := st.SetSetting(ctx, SettingEdgeLoginDisabled(), "false"); err != nil {
 		t.Fatal(err)
 	}
+	if got := loadEdgeLoginDisabled(ctx, st); got {
+		t.Fatal("explicit edge_login_disabled=false should select native sessions")
+	}
 	if err := st.SetSetting(ctx, SettingSSOEnabled(), "true"); err != nil {
 		t.Fatal(err)
 	}
 	if got := loadEdgeLoginDisabled(ctx, st); !got {
 		t.Fatal("SSO must keep the edge's own session login disabled")
+	}
+	if got := loadEdgeLoginDisabled(ctx, nil); !got {
+		t.Fatal("a missing store must keep the legacy Basic Auth gate")
 	}
 }
 
@@ -124,8 +133,15 @@ func TestLoadObservabilityParseableHostname_ExistingEmptyTemplateRequiresRunning
 	d.serviceInspect = runtime.ServiceInspectResult{Name: "observability_parseable"}
 	d.runningHostErr = errors.New("container inspect failed")
 
-	if _, err := loadObservabilityParseableHostname(context.Background(), st, d, false); err == nil {
+	_, err = loadObservabilityParseableHostname(context.Background(), st, d, false)
+	if err == nil {
 		t.Fatal("expected legacy empty-template inspection failure")
+	}
+	if !errors.Is(err, d.runningHostErr) {
+		t.Fatalf("error must wrap the inspection failure, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "docker service ps observability_parseable") {
+		t.Fatalf("error must say how to fix the legacy service, got %v", err)
 	}
 	if got := st.SettingDefault(context.Background(), SettingObservabilityParseableHostname(), ""); got != "" {
 		t.Fatalf("failed inspection must not persist a default hostname: %q", got)

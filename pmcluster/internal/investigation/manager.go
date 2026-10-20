@@ -203,16 +203,17 @@ func (m *Manager) execute(w *work) {
 	if usage != nil {
 		w.job.Used = *usage
 	}
-	if settleErr != nil {
+	switch {
+	case settleErr != nil:
 		w.job.Status = "failed"
 		w.job.Error = "accounting_unavailable"
-	} else if failure != nil {
+	case failure != nil:
 		// Only the adapter's own fixed messages reach this line (provider text
 		// is never copied into an error), so it is safe to log.
 		log.Printf("investigation %s failed: %v", w.job.ID, failure)
 		w.job.Status = "failed"
 		w.job.Error = "investigation_failed"
-	} else {
+	default:
 		v := verdict.Redact(m.redactor)
 		w.job.Status = "completed"
 		w.job.Verdict = &v

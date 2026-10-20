@@ -84,7 +84,7 @@ services:
       [[- else]]
       "traefik.http.routers.pmcluster-web.middlewares": "cors-default@file,edge-session-auth@file"
       [[- end]]
-      "traefik.http.routers.pmcluster-api.rule": "Host(`pmcluster.${DOMAIN}`) && !PathPrefix(`/web/`) && !Path(`/web`)"
+      "traefik.http.routers.pmcluster-api.rule": "Host(`pmcluster.${DOMAIN}`) && !PathPrefix(`/web/`) && !Path(`/web`) && !Path(`/sso-bridge`)"
       "traefik.http.routers.pmcluster-api.entrypoints": "websecure"
       "traefik.http.routers.pmcluster-api.tls": "true"
       [[- if .ACMEEmail]]

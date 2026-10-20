@@ -666,9 +666,10 @@ RBAC roles (`admin > operator > viewer`):
 - **admin**: API keys, settings save/apply, the users CRUD.
 
 Auth middleware: `Require()` + `RequireRole(minRole)`. With SSO disabled,
-native signed cookie sessions are the default and protect `/web/*`; `/web/login`
-and `/web/logout` issue and revoke those sessions. Explicit
-`EDGE_LOGIN_DISABLED=true` selects the legacy Traefik Basic Auth gate and
+native signed cookie sessions protect `/web/*` when `edge_login_disabled=false`
+(`pmcluster setup` writes that for new clusters); `/web/login` and `/web/logout`
+issue and revoke those sessions. A cluster without the setting keeps the legacy
+Traefik Basic Auth gate. `EDGE_LOGIN_DISABLED=true` selects that gate and
 synthetic-admin mode; Basic Auth credentials cannot be revoked by a server-side
 logout. SSO forces the console session off and keeps the oauth2-proxy sign-out
 flow, so enabling SSO never introduces a second login gate.
@@ -831,7 +832,8 @@ When SSO is enabled via `pmcluster setup --sso-enabled`:
 - Cookie secret is a managed credential (`sso_cookie_secret`); `cluster update`
   self-heals it when missing via `CredentialsManager.Ensure`.
 
-Without SSO, native cookie sessions gate the console `/web/*`; the separate
+Without SSO, native cookie sessions (`edge_login_disabled=false`, the setup
+default) gate the console `/web/*`; the separate
 Parseable origin and Traefik dashboard retain the Traefik admin-auth basicAuth
 gate (`htpasswd` from `admin_credentials`). Setting `EDGE_LOGIN_DISABLED=true`
 also puts the console behind that Basic gate.

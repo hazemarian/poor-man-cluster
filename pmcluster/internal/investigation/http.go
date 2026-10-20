@@ -82,7 +82,7 @@ func decode(w http.ResponseWriter, r *http.Request, out any) bool {
 
 func reply(w http.ResponseWriter, value any, err error) {
 	if err != nil {
-		http.Error(w, "investigation state unavailable", 503)
+		http.Error(w, "investigation state unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

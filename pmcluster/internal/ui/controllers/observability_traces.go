@@ -117,8 +117,17 @@ func (c Observability) loadTraces(g *gin.Context, d *observabilityData, window o
 		d.Traces.SpanCount = len(res.Rows)
 		return
 	}
+	// The service filter reaches a SQL literal in the Parseable adapter, so it
+	// is checked against the daemon's service grammar first, exactly as the
+	// logs tab and the daemon's own trace endpoint check theirs.
+	service, validService := traceServiceFilter(d.TraceService)
+	if !validService {
+		d.ErrKey = "observability.invalid_service"
+		d.Traces.Unavailable = true
+		return
+	}
 	q := observability.TraceQuery{
-		Service: d.TraceService, Window: window, ErrorsOnly: d.ErrorsOnly,
+		Service: service, Window: window, ErrorsOnly: d.ErrorsOnly,
 		Limit: obsTracePageSize, Offset: d.TraceOffset,
 	}
 	res, err := src.Traces(g.Request.Context(), q)
@@ -134,6 +143,25 @@ func (c Observability) loadTraces(g *gin.Context, d *observabilityData, window o
 	d.Traces.NextOffset = min(d.TraceOffset+obsTracePageSize, observability.MaxTraceOffset)
 	d.Traces.FirstRow = d.TraceOffset + 1
 	d.Traces.LastRow = d.TraceOffset + len(d.Traces.Rows)
+}
+
+// traceServiceFilter applies the daemon's service-filter grammar to the console
+// trace filter. An empty filter means no filter. "stack/service" maps to the
+// backend's stack_service name, as the daemon's own filter does. The second
+// result is false for input outside that grammar.
+func traceServiceFilter(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", true
+	}
+	path, err := observability.ParseServicePath(value)
+	if err != nil {
+		return "", false
+	}
+	if path.Stack != "" {
+		return path.Stack + "_" + path.Service, true
+	}
+	return path.Service, true
 }
 
 func projectTraces(rows []observability.Row) []obsTraceRow {

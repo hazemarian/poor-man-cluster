@@ -60,7 +60,7 @@ func TestCompatibleRejectsRedirectAndOversizedBody(t *testing.T) {
 			defer destination.Close()
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if redirect {
-					http.Redirect(w, r, destination.URL, 307)
+					http.Redirect(w, r, destination.URL, http.StatusTemporaryRedirect)
 				} else {
 					fmt.Fprint(w, strings.Repeat("a", (512<<10)+1))
 				}

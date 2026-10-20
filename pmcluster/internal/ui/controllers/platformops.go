@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 )
 
@@ -33,9 +34,20 @@ type registryRow struct {
 	CreatedAt int64
 }
 
+// canConfigure reports whether the signed-in console user is an admin. The
+// credential and registry mutations are admin-only routes, so the controls that
+// submit them are rendered only when this is true.
+func canConfigure(g *gin.Context) bool {
+	user := middleware.CurrentUser(g)
+	return user != nil && user.Role == "admin"
+}
+
 type registriesData struct {
 	Rows  []registryRow
 	Known bool
+
+	// CanConfigure shows the add and remove controls (admins only).
+	CanConfigure bool
 
 	// Form echo, so a rejected add does not lose what the operator typed.
 	FormHost string
@@ -53,7 +65,7 @@ func (d *registriesData) fail(key, raw string) { d.ErrKey, d.ErrRaw = key, raw }
 // RegistriesPage renders the registry list.
 func (c Platform) RegistriesPage(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := registriesData{}
+	d := registriesData{CanConfigure: canConfigure(g)}
 	if !c.apiRefused(g, &d) {
 		c.fillRegistries(ctx, &d)
 	}
@@ -67,6 +79,7 @@ func (c Platform) RegistryAdd(g *gin.Context) {
 		FormHost: strings.TrimSpace(g.PostForm("host")),
 		FormUser: strings.TrimSpace(g.PostForm("username")),
 	}
+	d.CanConfigure = canConfigure(g)
 	password := g.PostForm("password")
 	if !c.apiRefused(g, &d) {
 		if err := c.API.AddRegistry(ctx, d.FormHost, d.FormUser, password); err != nil {
@@ -86,7 +99,7 @@ func (c Platform) RegistryAdd(g *gin.Context) {
 func (c Platform) RegistryRemove(g *gin.Context) {
 	ctx := g.Request.Context()
 	host := strings.TrimSpace(g.PostForm("host"))
-	d := registriesData{}
+	d := registriesData{CanConfigure: canConfigure(g)}
 	if !c.apiRefused(g, &d) {
 		if err := c.API.RemoveRegistry(ctx, host); err != nil {
 			d.fail("registries.err_remove", err.Error())
@@ -131,6 +144,9 @@ type credentialsData struct {
 	Rows  []credentialRow
 	Known bool
 
+	// CanConfigure shows the rotate control (admins only).
+	CanConfigure bool
+
 	// Rotated carries the one-time password from a rotation. It is shown in a
 	// modal because it cannot be read back once this render is gone.
 	Rotated *pmapi.RotatedCredential
@@ -147,7 +163,7 @@ func (d *credentialsData) fail(key, raw string) { d.ErrKey, d.ErrRaw = key, raw 
 // CredentialsPage renders the bootstrap-credential list.
 func (c Platform) CredentialsPage(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := credentialsData{}
+	d := credentialsData{CanConfigure: canConfigure(g)}
 	if !c.apiRefused(g, &d) {
 		c.fillCredentials(ctx, &d)
 	}
@@ -158,7 +174,7 @@ func (c Platform) CredentialsPage(g *gin.Context) {
 func (c Platform) CredentialRotate(g *gin.Context) {
 	ctx := g.Request.Context()
 	name := g.Param("name")
-	d := credentialsData{}
+	d := credentialsData{CanConfigure: canConfigure(g)}
 	if !c.apiRefused(g, &d) {
 		rotated, err := c.API.RotateCredential(ctx, name)
 		if err != nil {

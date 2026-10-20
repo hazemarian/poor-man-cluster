@@ -37,8 +37,10 @@ const (
 	settingSSOCookieExpire = "sso_cookie_expire"
 
 	// settingEdgeLoginDisabled controls the edge console's own session login.
-	// An unset value keeps the native cookie session enabled. Operators who
-	// explicitly choose the legacy Traefik Basic Auth gate set this to "true".
+	// An unset value keeps the legacy Traefik Basic Auth gate ("true"), so an
+	// existing cluster is not switched under its operators on upgrade. Setup
+	// writes this setting explicitly and defaults new clusters to native
+	// sessions; "false" selects the native cookie session.
 	settingEdgeLoginDisabled = "edge_login_disabled"
 
 	// settingVolumeRoot is the single host directory every container volume is
@@ -325,21 +327,23 @@ func (s ssoState) validate() error {
 }
 
 // loadEdgeLoginDisabled reports whether the edge console's own session login
-// is disabled. A missing setting deliberately defaults to false so a fresh
-// cluster has a real browser session and logout path. Basic Auth remains an
-// explicit opt-in through edge_login_disabled=true.
+// is disabled, i.e. whether the edge gates /web/* with Traefik Basic Auth.
+// A missing setting, or a missing store, keeps Basic Auth: that is the legacy
+// behaviour, so a cluster that predates the setting does not change its login
+// on upgrade. Setup always writes edge_login_disabled explicitly, so fresh
+// clusters get the native session chosen at setup time. edge_login_disabled=false
+// selects the native cookie session.
 func loadEdgeLoginDisabled(ctx context.Context, st *store.Store) bool {
 	if st == nil {
-		return false
+		return true
 	}
 	// SSO owns the browser gate. Keep the edge's own session disabled in that
-	// mode even when the new native-session default is unset or an old setting
-	// explicitly enabled the password form; otherwise operators would face two
+	// mode regardless of edge_login_disabled; otherwise operators would face two
 	// independent login systems and the SSO sign-out path would be misleading.
 	if st.SettingDefault(ctx, settingSSOEnabled, "") == "true" {
 		return true
 	}
-	return st.SettingDefault(ctx, settingEdgeLoginDisabled, "false") == "true"
+	return st.SettingDefault(ctx, settingEdgeLoginDisabled, "true") == "true"
 }
 
 // loadBackupAllNodes reports whether the volume-backup agent should run on
@@ -413,7 +417,7 @@ func loadObservabilityParseableHostname(ctx context.Context, st *store.Store, d 
 	}
 	hostname, err := reader.ServiceRunningHostname(ctx, "observability_parseable")
 	if err != nil {
-		return "", fmt.Errorf("inspect running observability_parseable hostname: %w", err)
+		return "", fmt.Errorf("cannot determine observability_parseable's hostname to preserve its catalog identity (%w); make sure exactly one observability_parseable task is running (docker service ps observability_parseable) and retry", err)
 	}
 	if strings.TrimSpace(hostname) == "" {
 		return "", fmt.Errorf("running observability_parseable container reported an empty hostname")

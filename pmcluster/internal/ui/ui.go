@@ -6,17 +6,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation/providers"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-chi/chi/v5"
-	"golang.org/x/crypto/bcrypt"
-	"golang.org/x/time/rate"
-
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/investigation/providers"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability/parseable"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/controllers"
@@ -25,6 +22,8 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views/i18n"
+	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/time/rate"
 )
 
 // App ties the store, pmapi client, renderer, session auth and controllers
@@ -235,6 +234,10 @@ func NewApp(cfg Config) (*App, error) {
 			AuthHeader: cfg.ParseableAuth,
 			// An overview load issues up to five independent reads.
 			MaxConcurrent: 6,
+			// The same exact-value redactor the console uses. The source also
+			// serves /internal/observability, which has no console request to
+			// add the edge token, so the token must be in this redactor already.
+			Redactor: ctrl.Redactor,
 		}); parseErr == nil {
 			ctrl.Telemetry = source
 		}
@@ -287,11 +290,12 @@ func (a *App) Mount(engine *gin.Engine) {
 	engine.POST(WebBase+"/setup", auth.Setup)
 	engine.POST(WebBase+"/logout", auth.Logout)
 
-	// Observability sign-in bridge: served on the observ.<domain> origin, routed
-	// there by the Traefik sso-bridge router. It writes the browser-storage state
-	// the observability SPA reads to decide it is logged in — which cannot be set
-	// from anywhere but that origin — using the same managed credential the
-	// router's injection middleware sends.
+	// Observability sign-in bridge. Traefik routes it only on the observ.<domain>
+	// origin (sso-bridge router), and the handler itself answers 404 for any other
+	// Host, including pmcluster.<domain>. It writes the browser-storage state the
+	// observability SPA reads to decide it is logged in — which cannot be set from
+	// anywhere but that origin — using the managed credential the router's
+	// injection middleware sends.
 	engine.GET("/sso-bridge", (controllers.ObservBridge{Controller: a.ctrl}).Page)
 
 	g := engine.Group(WebBase)
@@ -389,12 +393,6 @@ func (a *App) Mount(engine *gin.Engine) {
 
 	op.POST("/stacks/:name/sync", st.Sync)
 
-	// Platform mutations (operator role): registry credentials, bootstrap
-	// credential rotation, and secret verification.
-	op.POST("/settings/registries/add", pf.RegistryAdd)
-	op.POST("/settings/registries/remove", pf.RegistryRemove)
-	op.POST("/settings/credentials/rotate/:name", pf.CredentialRotate)
-	op.POST("/inventory/verify/:name", pf.VerifySubmit)
 	op.POST("/stacks/:name/rollback", st.Rollback)
 	op.POST("/stacks/:name/move", st.Move)
 	op.POST("/stacks/:name/ack", st.AckFailover)
@@ -472,6 +470,15 @@ func (a *App) Mount(engine *gin.Engine) {
 	ad.POST("/users/add", us.Create)
 	ad.POST("/users/edit", us.EditSave)
 	ad.POST("/users/remove/:id", us.Remove)
+
+	// Platform credential mutations. The console calls the daemon with its admin
+	// token, so the daemon's own role checks never see the operator: the console
+	// role is the only gate, and rotating a credential or changing a registry
+	// login is admin-only.
+	ad.POST("/settings/registries/add", pf.RegistryAdd)
+	ad.POST("/settings/registries/remove", pf.RegistryRemove)
+	ad.POST("/settings/credentials/rotate/:name", pf.CredentialRotate)
+	ad.POST("/inventory/verify/:name", pf.VerifySubmit)
 }
 
 // Handler returns a gin engine with every UI route. The edge service mounts

@@ -989,6 +989,12 @@ func TestRBAC_OperatorCanMutateButNotAdmin(t *testing.T) {
 		{http.MethodGet, "/web/users"},
 		{http.MethodGet, "/web/users/new"},
 		{http.MethodGet, "/web/users/edit/2"},
+		// Platform credential mutations are admin-only: the console calls the
+		// daemon with its admin token, so an operator must be refused here.
+		{http.MethodPost, "/web/settings/credentials/rotate/x"},
+		{http.MethodPost, "/web/settings/registries/add"},
+		{http.MethodPost, "/web/settings/registries/remove"},
+		{http.MethodPost, "/web/inventory/verify/x"},
 	} {
 		resp := doRequest(t, app, tc.method, tc.path, "", jar)
 		if resp.StatusCode != http.StatusForbidden {

@@ -190,10 +190,10 @@
                       hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
                 {{icon "lock"}}<span class="sr-only">{{T "settings.reveal"}}</span>
               </button>
-              <button type="button" class="btn btn-ghost btn-sm" title="{{T "inventory.verify_action"}}"
+              {{if $.CanConfigure}}<button type="button" class="btn btn-ghost btn-sm" title="{{T "inventory.verify_action"}}"
                       hx-get="/web/inventory/verify/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
                 {{icon "check-circle"}}<span class="sr-only">{{T "inventory.verify_action"}}</span>
-              </button>
+              </button>{{end}}
               <button type="button" class="btn btn-ghost btn-sm" title="{{T "inventory.retag_title"}}"
                       hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()">
                 {{icon "move"}}<span class="sr-only">{{T "inventory.retag_title"}}</span>
@@ -218,10 +218,10 @@
                 hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
           {{icon "lock"}}<span>{{T "settings.reveal"}}</span>
         </button>
-        <button type="button" class="btn btn-sm" style="min-height:44px"
+        {{if $.CanConfigure}}<button type="button" class="btn btn-sm" style="min-height:44px"
                 hx-get="/web/inventory/verify/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
           {{icon "check-circle"}}<span>{{T "inventory.verify_action"}}</span>
-        </button>
+        </button>{{end}}
         <button type="button" class="btn btn-sm" style="min-height:44px"
                 hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()">
           {{icon "move"}}<span>{{T "inventory.retag_title"}}</span>

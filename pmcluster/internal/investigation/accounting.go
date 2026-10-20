@@ -72,7 +72,7 @@ func (p Policy) Validate() error {
 		}
 		ip := net.ParseIP(u.Hostname())
 		local := u.Hostname() == "localhost" || (ip != nil && ip.IsLoopback())
-		if u.Scheme != "https" && !(u.Scheme == "http" && local) {
+		if u.Scheme != "https" && (u.Scheme != "http" || !local) {
 			return fmt.Errorf("provider requires HTTPS or loopback HTTP")
 		}
 	}

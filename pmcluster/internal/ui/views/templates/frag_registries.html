@@ -63,11 +63,11 @@
             <td>{{.Username}}</td>
             <td class="muted">{{ts .CreatedAt}}</td>
             <td class="num">
-              <button type="button" class="btn btn-danger btn-sm"
+              {{if $.CanConfigure}}<button type="button" class="btn btn-danger btn-sm"
                       hx-post="/web/settings/registries/remove" hx-vals='{"host": "{{.Host}}"}'
                       hx-confirm="{{TF "registries.remove_confirm" .Host}}" hx-target="#view">
                 {{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span>
-              </button>
+              </button>{{end}}
             </td>
           </tr>
           {{end}}
@@ -81,9 +81,9 @@
         <div class="kv-row"><span class="k">{{T "registries.col_user"}}</span><span class="v">{{.Username}}</span></div>
         <div class="kv-row"><span class="k">{{T "registries.col_configured"}}</span><span class="v muted">{{ts .CreatedAt}}</span></div>
         <div class="kv-row"><span class="k"></span><span class="v">
-          <button type="button" class="btn btn-danger btn-sm" style="min-height:44px"
+          {{if $.CanConfigure}}<button type="button" class="btn btn-danger btn-sm" style="min-height:44px"
                   hx-post="/web/settings/registries/remove" hx-vals='{"host": "{{.Host}}"}'
-                  hx-confirm="{{TF "registries.remove_confirm" .Host}}" hx-target="#view">{{icon "trash"}}<span>{{T "common.delete"}}</span></button>
+                  hx-confirm="{{TF "registries.remove_confirm" .Host}}" hx-target="#view">{{icon "trash"}}<span>{{T "common.delete"}}</span></button>{{end}}
         </span></div>
       </div>
       {{end}}
@@ -98,7 +98,7 @@
   </div>
 </div>
 
-<div class="panel">
+{{if .CanConfigure}}<div class="panel">
   <div class="panel-head">
     <h2>{{T "registries.add_title"}}</h2>
   </div>
@@ -123,7 +123,7 @@
       </div>
     </form>
   </div>
-</div>
+</div>{{end}}
 
 <p class="sub">{{T "registries.foot"}}</p>
 {{end}}

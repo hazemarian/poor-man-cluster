@@ -1,8 +1,9 @@
 package controllers
 
 import (
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 	"testing"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 )
 
 func TestObservabilityHealthyZeroAndUnknownJob(t *testing.T) {
