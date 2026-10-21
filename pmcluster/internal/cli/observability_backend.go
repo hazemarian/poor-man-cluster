@@ -29,6 +29,20 @@ import (
 // process and cannot resolve one.
 const ObservabilitySourcePort = cluster.ObservabilityPort
 
+// observabilityServiceName is the Swarm service that owns the published port.
+// The daemon resolves its running task's node rather than trusting a placement
+// setting, so this name is the only link to WHERE the backend actually is.
+const observabilityServiceName = "observability_parseable"
+
+// parseableLocator is the slice of the Docker client the read path needs: the
+// node list to turn a hostname into an address, and the service/task calls to
+// find which node is actually running the backend.
+type parseableLocator interface {
+	NodeList(context.Context) ([]runtime.Node, error)
+	ServiceList(context.Context) ([]runtime.Service, error)
+	ServiceTasks(ctx context.Context, serviceID string) ([]runtime.ServiceTask, error)
+}
+
 // observabilityAdminCredential is the managed credential Parseable is created
 // with. The daemon already holds the encryption key, so no other component
 // needs the password — the console reaches telemetry through this daemon API.
@@ -69,7 +83,7 @@ func backendObservability(cmd *cobra.Command) (observability.Reader, func(), err
 // A missing credential or an unreachable backend is NOT an error here: the
 // caller keeps a reader with inventory only, and every telemetry read answers
 // "unavailable" rather than making the daemon fail to start.
-func newLocalObservabilityReader(ctx context.Context, st *store.Store, cipher *credentials.Cipher, dc observability.NodeReader) (*observability.ReadService, error) {
+func newLocalObservabilityReader(ctx context.Context, st *store.Store, cipher *credentials.Cipher, dc parseableLocator) (*observability.ReadService, error) {
 	reader := &observability.ReadService{Inventory: dc}
 	if st == nil || cipher == nil {
 		return reader, errors.New("observability source requires the cluster store and encryption key")
@@ -82,17 +96,11 @@ func newLocalObservabilityReader(ctx context.Context, st *store.Store, cipher *c
 	if err != nil {
 		return reader, errors.New("decrypt the observability credential")
 	}
-	// Where to read from: the platform node's private address, resolved from the
-	// swarm so it survives the platform node changing. A node list failure is not
-	// fatal — it degrades to loopback, which is correct on the platform node.
+	// Where to read from: the node running the Parseable task, resolved from the
+	// swarm so a placement change cannot point the reader at nothing. A lookup
+	// failure is not fatal — it degrades to the platform node, then to loopback.
 	platformNode := st.SettingDefault(ctx, cluster.SettingPlatformNode(), "")
-	var nodes []runtime.Node
-	if dc != nil {
-		if list, err := dc.NodeList(ctx); err == nil {
-			nodes = list
-		}
-	}
-	source, err := localObservabilitySource(observabilityEndpoint(platformNode, nodes), cred.Username, string(plain))
+	source, err := localObservabilitySource(observabilityEndpoint(ctx, dc, platformNode), cred.Username, string(plain))
 	if err != nil {
 		return reader, err
 	}
@@ -107,21 +115,64 @@ func newLocalObservabilityReader(ctx context.Context, st *store.Store, cipher *c
 // observabilityEndpoint is where the host daemon reads Parseable.
 //
 // The port is published in HOST mode, so exactly one node binds it: the node
-// running the Parseable task, which is the platform node. Every daemon reads
-// that address over the cluster's private network. Loopback is right when this
-// host IS the platform node and is the fallback when the platform node cannot
-// be resolved — a read that fails beats a daemon that will not start.
-func observabilityEndpoint(platformNode string, nodes []runtime.Node) string {
-	host := "127.0.0.1"
-	if platformNode != "" {
-		for _, n := range nodes {
-			if n.Hostname == platformNode && n.Address != "" {
-				host = nodeHost(n.Address)
-				break
+// running the Parseable TASK. That is a fact about the swarm, so it is read from
+// the task, not from a placement setting — `platform_node` is a hint that can be
+// unset, renamed, or ignored by placement, and a reader built on it silently
+// dials an address where nothing listens. The setting is only a fallback for a
+// cluster where no task is running yet, and loopback is the last resort.
+func observabilityEndpoint(ctx context.Context, dc parseableLocator, platformNode string) string {
+	host := ""
+	if dc != nil {
+		if name, ok := parseableTaskNode(ctx, dc); ok && dc != nil {
+			host = name
+		}
+		if nodes, err := dc.NodeList(ctx); err == nil {
+			if addr := addressOf(host, nodes); addr != "" {
+				return "http://" + net.JoinHostPort(nodeHost(addr), strconv.Itoa(ObservabilitySourcePort))
+			}
+			// No running task: fall back to the configured platform node.
+			if addr := addressOf(platformNode, nodes); addr != "" {
+				return "http://" + net.JoinHostPort(nodeHost(addr), strconv.Itoa(ObservabilitySourcePort))
 			}
 		}
 	}
-	return "http://" + net.JoinHostPort(host, strconv.Itoa(ObservabilitySourcePort))
+	return "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(ObservabilitySourcePort))
+}
+
+// parseableTaskNode returns the hostname of the node running the Parseable task.
+func parseableTaskNode(ctx context.Context, dc parseableLocator) (string, bool) {
+	services, err := dc.ServiceList(ctx)
+	if err != nil {
+		return "", false
+	}
+	for _, s := range services {
+		if s.Name != observabilityServiceName {
+			continue
+		}
+		tasks, err := dc.ServiceTasks(ctx, s.ID)
+		if err != nil {
+			return "", false
+		}
+		for _, t := range tasks {
+			if t.State == "running" && t.Node != "" {
+				return t.Node, true
+			}
+		}
+	}
+	return "", false
+}
+
+// addressOf resolves a node hostname to the swarm's address for it.
+func addressOf(hostname string, nodes []runtime.Node) string {
+	if hostname == "" {
+		return ""
+	}
+	for _, n := range nodes {
+		if n.Hostname == hostname && n.Address != "" {
+			return n.Address
+		}
+	}
+	return ""
 }
 
 // nodeHost strips the port from a swarm node address.

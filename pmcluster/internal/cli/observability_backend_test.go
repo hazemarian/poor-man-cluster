@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -79,43 +78,87 @@ func TestLocalObservabilityReaderDegradesToInventory(t *testing.T) {
 	}
 }
 
-// TestObservabilityEndpointFollowsThePlatformNode pins where the daemon reads.
-//
-// The port is published in HOST mode, so exactly one node binds it — the one
-// running the Parseable task. A daemon that dials loopback on every node reads
-// its own machine, where nothing listens, and reports "telemetry unavailable"
-// while the backend is healthy. So the address must come from the swarm.
-func TestObservabilityEndpointFollowsThePlatformNode(t *testing.T) {
-	// Address carries the MANAGER address, port and all ("10.7.224.12:2377").
-	// That is what the swarm reports, and using it verbatim builds a URL the
-	// Parseable client rejects — the whole read path then reports "unavailable"
-	// with a healthy backend.
-	nodes := []runtime.Node{
-		{Hostname: "nxt-sw-1-m", Address: "10.7.224.12:2377"},
-		{Hostname: "nxt-sw-2-m", Address: "10.7.224.13:2377"},
-	}
-	got := observabilityEndpoint("nxt-sw-2-m", nodes)
-	if want := "http://10.7.224.13:" + strconv.Itoa(ObservabilitySourcePort); got != want {
-		t.Fatalf("endpoint = %q, want %q", got, want)
+// fakeLocator serves the swarm facts the read path resolves against.
+type fakeLocator struct {
+	nodes    []runtime.Node
+	services []runtime.Service
+	tasks    map[string][]runtime.ServiceTask
+}
+
+func (f fakeLocator) NodeList(context.Context) ([]runtime.Node, error) { return f.nodes, nil }
+func (f fakeLocator) ServiceList(context.Context) ([]runtime.Service, error) {
+	return f.services, nil
+}
+func (f fakeLocator) ServiceTasks(_ context.Context, id string) ([]runtime.ServiceTask, error) {
+	return f.tasks[id], nil
+}
+
+// TestObservabilityEndpointFollowsTheRunningTask is the whole point of resolving
+// from the swarm: the port is published in HOST mode, so it answers on exactly
+// one node — the one running the Parseable task. A reader that trusts a
+// placement SETTING instead dials an address where nothing listens the moment
+// that setting is unset, renamed, or simply not what placed the task.
+func TestObservabilityEndpointFollowsTheRunningTask(t *testing.T) {
+	port := strconv.Itoa(ObservabilitySourcePort)
+	loc := fakeLocator{
+		nodes: []runtime.Node{
+			{Hostname: "nxt-sw-1-m", Address: "10.7.224.12:2377"},
+			{Hostname: "nxt-sw-2-m", Address: "10.7.224.13:2377"},
+		},
+		services: []runtime.Service{
+			{ID: "svc-parseable", Name: observabilityServiceName},
+			{ID: "svc-other", Name: "infra_traefik"},
+		},
+		tasks: map[string][]runtime.ServiceTask{
+			"svc-parseable": {
+				{State: "failed", Node: "nxt-sw-1-m"},
+				{State: "running", Node: "nxt-sw-2-m"},
+			},
+			"svc-other": {{State: "running", Node: "nxt-sw-1-m"}},
+		},
 	}
 
-	// A bare address (a worker reports none, but a future source might) must work
-	// the same way.
-	if got := observabilityEndpoint("nxt-sw-1-m", []runtime.Node{{Hostname: "nxt-sw-1-m", Address: "10.7.224.12"}}); got != "http://10.7.224.12:"+strconv.Itoa(ObservabilitySourcePort) {
-		t.Fatalf("bare address endpoint = %q", got)
+	// The task's node wins, and it is NOT the platform_node setting's node.
+	if got, want := observabilityEndpoint(context.Background(), loc, "nxt-sw-1-m"), "http://10.7.224.13:"+port; got != want {
+		t.Fatalf("endpoint = %q, want %q (the task's node, not the setting)", got, want)
 	}
 
-	// Unknown platform node (a rename, or a node list that came back empty)
-	// degrades to loopback instead of building an unroutable address.
-	if got := observabilityEndpoint("gone-node", nodes); !strings.HasPrefix(got, "http://127.0.0.1:") {
-		t.Fatalf("unknown platform node should fall back to loopback, got %q", got)
-	}
-	if got := observabilityEndpoint("", nil); !strings.HasPrefix(got, "http://127.0.0.1:") {
-		t.Fatalf("no platform node should fall back to loopback, got %q", got)
+	// No running task (still scheduling, or the stack is gone): fall back to the
+	// configured platform node so a fresh install can still be read.
+	idle := loc
+	idle.tasks = map[string][]runtime.ServiceTask{"svc-parseable": {{State: "pending"}}}
+	if got, want := observabilityEndpoint(context.Background(), idle, "nxt-sw-1-m"), "http://10.7.224.12:"+port; got != want {
+		t.Fatalf("fallback endpoint = %q, want %q", got, want)
 	}
 
-	// A node with no address must not produce "http://:8000".
-	if got := observabilityEndpoint("nxt-sw-1-m", []runtime.Node{{Hostname: "nxt-sw-1-m"}}); !strings.HasPrefix(got, "http://127.0.0.1:") {
-		t.Fatalf("addressless node should fall back to loopback, got %q", got)
+	// Neither a task nor a setting: loopback, never an unroutable URL.
+	if got, want := observabilityEndpoint(context.Background(), idle, ""), "http://127.0.0.1:"+port; got != want {
+		t.Fatalf("bare endpoint = %q, want %q", got, want)
+	}
+
+	// No swarm client at all must not panic.
+	if got, want := observabilityEndpoint(context.Background(), nil, ""), "http://127.0.0.1:"+port; got != want {
+		t.Fatalf("nil locator endpoint = %q, want %q", got, want)
+	}
+}
+
+// TestNodeHostStripsTheManagerPort pins the shape the swarm reports: Address is
+// "10.7.224.12:2377" (host + raft port) on a manager and empty on a worker.
+// Using it verbatim built "[10.7.224.12:2377]:8000", which url.Parse rejects —
+// the daemon then answered "telemetry unavailable" with a healthy backend.
+func TestNodeHostStripsTheManagerPort(t *testing.T) {
+	// The whitespace case is deliberate: a value read back from a config file can
+	// arrive padded, and it must not become a URL host with a space in it.
+	for in, want := range map[string]string{
+		"10.7.224.12:2377": "10.7.224.12",
+		"10.7.224.12":      "10.7.224.12",
+		"[fd00::1]:2377":   "fd00::1",
+	} {
+		if got := nodeHost(in); got != want {
+			t.Fatalf("nodeHost(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := nodeHost(" 10.7.224.13 "); got != "10.7.224.13" {
+		t.Fatalf("nodeHost did not trim whitespace: %q", got)
 	}
 }
