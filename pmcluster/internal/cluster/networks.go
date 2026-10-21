@@ -125,6 +125,38 @@ func ensureStackOverlays(ctx context.Context, d runtime.Client, stack string, co
 	return created, nil
 }
 
+// networkSettleWindow is how long a refused NetworkRemove is given to resolve.
+// Long enough for an in-flight overlay removal to either finish or prove it is
+// staying, short enough that a genuinely in-use network costs one page a few
+// hundred milliseconds.
+var networkSettleWindow = 3 * time.Second
+
+// waitNetworkStable gives an asynchronous overlay removal time to settle, so the
+// caller can tell "in use, will stay" from "mid-removal, about to vanish" — both
+// of which refuse NetworkRemove. It never fails the caller: if the network is
+// still present after the window it is treated as stable and reused.
+func waitNetworkStable(ctx context.Context, d runtime.Client, name string) error {
+	deadline := time.Now().Add(networkSettleWindow)
+	for {
+		exists, err := d.NetworkExists(ctx, name)
+		if err != nil {
+			return fmt.Errorf("check network %s: %w", name, err)
+		}
+		if !exists {
+			// Gone on its own — the caller waits for removal and recreates it.
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-time.After(250 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
 // ensureStackNetwork guarantees the stack-scoped overlay network `name` exists
 // and is stable before the stack that joins it is deployed. It reports whether
 // it created the network.
@@ -143,11 +175,34 @@ func ensureStackNetwork(ctx context.Context, d runtime.Client, stack, name strin
 	}
 	if exists {
 		if rmErr := d.NetworkRemove(ctx, name); rmErr != nil {
-			// In use by running services — a stable network the deploy will
-			// simply reuse. Do not treat the refused removal as an error.
-			return false, nil
-		}
-		if err := waitNetworkGone(ctx, d, name, stackNetGoneTimeout); err != nil {
+			// Two different states look identical here, and they need opposite
+			// handling:
+			//
+			//   1. in use by running services — a stable network the deploy will
+			//      simply reuse;
+			//   2. mid-removal from a previous teardown — Swarm removes overlays
+			//      asynchronously, so it refuses removal while no longer being
+			//      attachable. Treating this as (1) leaves a network that is about
+			//      to vanish: the deploy lists it, skips creating it, and the
+			//      service create fails with "network <name> not found".
+			//
+			// A present-and-in-use network still answers after a short settle;
+			// one that is mid-removal disappears. Re-check, and if it has gone,
+			// wait it out and create a fresh one.
+			if err := waitNetworkStable(ctx, d, name); err != nil {
+				return false, err
+			}
+			still, cErr := d.NetworkExists(ctx, name)
+			if cErr != nil {
+				return false, fmt.Errorf("re-check network %s: %w", name, cErr)
+			}
+			if still {
+				return false, nil
+			}
+			if err := waitNetworkGone(ctx, d, name, stackNetGoneTimeout); err != nil {
+				return false, fmt.Errorf("network %s did not finish removing: %w", name, err)
+			}
+		} else if err := waitNetworkGone(ctx, d, name, stackNetGoneTimeout); err != nil {
 			return false, fmt.Errorf("network %s did not finish removing: %w", name, err)
 		}
 	}
