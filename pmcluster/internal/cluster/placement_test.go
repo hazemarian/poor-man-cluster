@@ -128,3 +128,70 @@ func TestObservabilityPlacementIsFrozenAfterFirstResolution(t *testing.T) {
 		t.Fatalf("placement moved from %q to %q after a storage_nodes change", first, again)
 	}
 }
+
+// TestBackupPlacementIsFrozen: the backup stack round-robins on FIRST
+// resolution and is recorded, so growing the worker pool later must not move the
+// durable copy off the node that holds it.
+func TestBackupPlacementIsFrozen(t *testing.T) {
+	dir := t.TempDir()
+	st, err := openTestStore(t, filepath.Join(dir, "backup-pin.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	f := placementFleet()
+	first := BackupPlacement(ctx, st, f)
+	if first != "nxt-sw-3-w" && first != "nxt-sw-4-w" {
+		t.Fatalf("first placement = %q, want a worker", first)
+	}
+	if pin := st.SettingDefault(ctx, "stack_pin_backup", ""); pin != first {
+		t.Fatalf("placement was not recorded (pin=%q, resolved=%q)", pin, first)
+	}
+
+	// A new worker joins: the modulus changes, so an unpinned stack would move.
+	f.nodes = append(f.nodes, runtime.Node{Hostname: "nxt-sw-5-w", Role: "worker"})
+	if again := BackupPlacement(ctx, st, f); again != first {
+		t.Fatalf("backup moved from %q to %q when a worker joined", first, again)
+	}
+}
+
+// TestBackupPlacementReResolvesWhenItsNodeLeaves: the pin is honoured while the
+// node exists. If it is REMOVED from the swarm, the stack must follow a survivor
+// instead of sitting at "no suitable node" until someone intervenes.
+func TestBackupPlacementReResolvesWhenItsNodeLeaves(t *testing.T) {
+	dir := t.TempDir()
+	st, err := openTestStore(t, filepath.Join(dir, "backup-gone.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	f := placementFleet()
+	first := BackupPlacement(ctx, st, f)
+	if first == "" {
+		t.Fatal("no placement resolved")
+	}
+
+	// Drop the pinned node from the swarm, leaving one worker.
+	remaining := make([]runtime.Node, 0, len(f.nodes))
+	for _, n := range f.nodes {
+		if n.Hostname != first {
+			remaining = append(remaining, n)
+		}
+	}
+	f.nodes = remaining
+
+	again := BackupPlacement(ctx, st, f)
+	if again == first {
+		t.Fatalf("backup stayed on %q after that node left the swarm", first)
+	}
+	if again == "" {
+		t.Fatal("backup placement went empty instead of moving to a surviving worker")
+	}
+	if pin := st.SettingDefault(ctx, "stack_pin_backup", ""); pin != again {
+		t.Fatalf("the new placement was not recorded (pin=%q, resolved=%q)", pin, again)
+	}
+}

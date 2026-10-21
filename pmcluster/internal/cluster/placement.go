@@ -73,7 +73,7 @@ func LeaderNode(ctx context.Context, dc runtime.Client) string {
 // Parseable's Parquet store is a host path — re-resolving it after a
 // storage_nodes change would bring it up beside an empty directory.
 func ObservabilityNode(ctx context.Context, st *store.Store) string {
-	return pinnedOrResolved(ctx, st, "stack_pin_"+string(StackObservability), func() string {
+	return pinnedOrResolved(ctx, st, "stack_pin_"+string(StackObservability), nil, func() string {
 		return roundRobinHost(string(StackObservability), StorageNodesFor(ctx, st))
 	})
 }
@@ -84,7 +84,15 @@ func ObservabilityNode(ctx context.Context, st *store.Store) string {
 // a different order; a cluster with no workers falls back to "" (any node),
 // which is what a single-manager install has.
 func BackupPlacement(ctx context.Context, st *store.Store, dc runtime.Client) string {
-	return pinnedOrResolved(ctx, st, "stack_pin_"+string(StackBackup), func() string {
+	exists := map[string]bool{}
+	if dc != nil {
+		if nodes, err := dc.NodeList(ctx); err == nil {
+			for _, n := range nodes {
+				exists[n.Hostname] = true
+			}
+		}
+	}
+	return pinnedOrResolved(ctx, st, "stack_pin_"+string(StackBackup), exists, func() string {
 		if dc == nil {
 			return ""
 		}
@@ -109,15 +117,25 @@ func BackupPlacement(ctx context.Context, st *store.Store, dc runtime.Client) st
 // pinnedOrResolved returns the recorded placement for a platform stack, and
 // records the resolved one the first time. The pin is what makes the choice
 // durable: without it every render re-runs the round-robin, so adding or
-// removing a storage node relocates a stack onto a node holding none of its
-// data. Deliberately NOT in the settings allowlist — it is written here, not by
-// an operator.
-func pinnedOrResolved(ctx context.Context, st *store.Store, key string, resolve func() string) string {
+// removing a storage or worker node relocates a stack onto a node holding none
+// of its data.
+//
+// The pin is honoured while the node is still in the swarm. If the node has LEFT
+// (not merely gone quiet — a drained or unreachable node still exists and still
+// holds the data), the pin is re-resolved onto a survivor and rewritten, because
+// otherwise the service sits at `no suitable node` forever and needs an operator
+// to unstick it.
+//
+// Deliberately NOT in the settings allowlist — it is written here, not by an
+// operator.
+func pinnedOrResolved(ctx context.Context, st *store.Store, key string, exists map[string]bool, resolve func() string) string {
 	if st == nil {
 		return resolve()
 	}
 	if pin := st.SettingDefault(ctx, key, ""); pin != "" {
-		return pin
+		if exists == nil || exists[pin] {
+			return pin
+		}
 	}
 	node := resolve()
 	if node != "" {
