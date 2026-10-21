@@ -86,13 +86,23 @@ func TestLocalObservabilityReaderDegradesToInventory(t *testing.T) {
 // its own machine, where nothing listens, and reports "telemetry unavailable"
 // while the backend is healthy. So the address must come from the swarm.
 func TestObservabilityEndpointFollowsThePlatformNode(t *testing.T) {
+	// Address carries the MANAGER address, port and all ("10.7.224.12:2377").
+	// That is what the swarm reports, and using it verbatim builds a URL the
+	// Parseable client rejects — the whole read path then reports "unavailable"
+	// with a healthy backend.
 	nodes := []runtime.Node{
-		{Hostname: "nxt-sw-1-m", Address: "10.7.224.12"},
-		{Hostname: "nxt-sw-2-m", Address: "10.7.224.13"},
+		{Hostname: "nxt-sw-1-m", Address: "10.7.224.12:2377"},
+		{Hostname: "nxt-sw-2-m", Address: "10.7.224.13:2377"},
 	}
 	got := observabilityEndpoint("nxt-sw-2-m", nodes)
 	if want := "http://10.7.224.13:" + strconv.Itoa(ObservabilitySourcePort); got != want {
 		t.Fatalf("endpoint = %q, want %q", got, want)
+	}
+
+	// A bare address (a worker reports none, but a future source might) must work
+	// the same way.
+	if got := observabilityEndpoint("nxt-sw-1-m", []runtime.Node{{Hostname: "nxt-sw-1-m", Address: "10.7.224.12"}}); got != "http://10.7.224.12:"+strconv.Itoa(ObservabilitySourcePort) {
+		t.Fatalf("bare address endpoint = %q", got)
 	}
 
 	// Unknown platform node (a rename, or a node list that came back empty)

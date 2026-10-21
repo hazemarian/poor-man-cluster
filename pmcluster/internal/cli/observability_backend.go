@@ -116,12 +116,27 @@ func observabilityEndpoint(platformNode string, nodes []runtime.Node) string {
 	if platformNode != "" {
 		for _, n := range nodes {
 			if n.Hostname == platformNode && n.Address != "" {
-				host = n.Address
+				host = nodeHost(n.Address)
 				break
 			}
 		}
 	}
 	return "http://" + net.JoinHostPort(host, strconv.Itoa(ObservabilitySourcePort))
+}
+
+// nodeHost strips the port from a swarm node address.
+//
+// runtime.Node.Address carries ManagerStatus.Addr, which is "10.7.224.12:2377" —
+// host AND the manager's raft port — and is EMPTY on a worker. Using it verbatim
+// produces "[10.7.224.12:2377]:8000", which url.Parse rejects, so the client
+// fails with "endpoint must be an http(s) URL without credentials" and every
+// telemetry read answers "unavailable" while the backend is perfectly healthy.
+func nodeHost(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if h, _, err := net.SplitHostPort(addr); err == nil && h != "" {
+		return h
+	}
+	return addr
 }
 
 // localObservabilitySource builds the Parseable adapter for the given endpoint.
