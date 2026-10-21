@@ -92,4 +92,7 @@ jobs:
         # hardcodes `-timeout 10m`, which is too tight for the full swarm tier
         # (several cluster up/down cycles + image pulls on a fresh runner). The
         # swarm tier needs the 20m budget the docs already specify.
-        run: go test -timeout 20m -tags=e2e ./e2e/...
+        # -v so the log names every e2e test and whether it PASSed or SKIPped:
+        # without it a skipped test is indistinguishable from a passing one, and
+        # a skip that hides a real regression looks exactly like a green run.
+        run: go test -v -timeout 20m -tags=e2e ./e2e/...
