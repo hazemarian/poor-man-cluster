@@ -116,6 +116,20 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// ONLY on the current Swarm leader; other managers stand by until
 		// Swarm elects them leader (failover). Standalone/local mode returns
 		// immediately.
+		// Control-plane freshness for EVERY manager at startup, BEFORE the
+		// leadership wait, not only on promotion. A follower manager that never
+		// leads still needs the current credential and settings rows to answer
+		// reads (the observability reader, the console) — restoring only on
+		// promotion is why two managers sat on a two-week-old credential table
+		// while reporting themselves current.
+		//
+		// This is the safe window: nothing has the store open yet, so replacing
+		// data.db cannot truncate it under a live sqlite connection. Best-effort:
+		// a worker, or a swarm without a readable Raft config, must still serve.
+		if _, err := ensureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
+			log.Warn().Err(err).Msg("control-plane restore at startup had issues (continuing)")
+		}
+
 		if err := waitForSwarmLeadership(cmd.Context(), dc, log); err != nil {
 			return fmt.Errorf("standby: %w", err)
 		}
