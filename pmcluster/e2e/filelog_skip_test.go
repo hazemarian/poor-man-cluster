@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -264,4 +265,21 @@ func tail(s string, n int) string {
 		return s
 	}
 	return "…" + s[len(s)-n:]
+}
+
+// hostPort returns a currently-free host TCP port number, parsing the address
+// freePort already reserves. It lived in a compose-based test that can only
+// skip in CI; this is the one helper worth keeping from it.
+func hostPort(t *testing.T) int {
+	t.Helper()
+	addr := freePort(t)
+	parts := strings.Split(addr, ":")
+	if len(parts) != 2 {
+		t.Fatalf("unexpected freePort address %q", addr)
+	}
+	p, err := strconv.Atoi(parts[1])
+	if err != nil {
+		t.Fatalf("parse freePort address %q: %v", addr, err)
+	}
+	return p
 }
