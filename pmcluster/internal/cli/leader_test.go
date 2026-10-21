@@ -525,8 +525,11 @@ func TestEnsureControlPlaneFresh_KeepsCurrentStateConfig(t *testing.T) {
 	f := &stateFake{configs: map[string]runtime.ConfigInspectResult{}}
 	snapshotInto(t, f, srcDir)
 
-	// Local control plane newer than the snapshot (shared storage): the Raft
-	// config exists but nothing is restored, and the local DB survives.
+	// Local control plane at the snapshot's revision (a node that already
+	// synced): the Raft config exists but nothing is restored, and the local DB
+	// survives. "Current" is the revision marker — a follower writes its own
+	// data.db constantly, so its mtime is always newer and can never mean
+	// "synced".
 	curDir := t.TempDir()
 	dbPath := filepath.Join(curDir, "data.db")
 	if err := os.WriteFile(dbPath, []byte("live-db"), 0o644); err != nil {
@@ -534,6 +537,18 @@ func TestEnsureControlPlaneFresh_KeepsCurrentStateConfig(t *testing.T) {
 	}
 	os.Chtimes(dbPath, time.Now().Add(time.Minute), time.Now().Add(time.Minute))
 	if err := os.WriteFile(filepath.Join(curDir, ".encryption_key"), []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var snapAt string
+	for name, cfg := range f.configs {
+		if strings.HasPrefix(name, controlplane.StateNamePrefix+"_") && !strings.HasPrefix(name, controlplane.KeyNamePrefix+"_") {
+			snapAt = cfg.Labels[controlplane.LabelSnapshotAt]
+		}
+	}
+	if snapAt == "" {
+		t.Fatal("snapshot has no timestamp label")
+	}
+	if err := os.WriteFile(filepath.Join(curDir, ".state_revision"), []byte(snapAt), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
