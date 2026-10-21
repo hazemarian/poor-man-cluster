@@ -207,6 +207,12 @@ Description=pmcluster — keep published-but-private ports off the WAN
 Documentation=file:///etc/pmcluster/README.hardening
 After=docker.service
 Wants=docker.service
+# PartOf is what makes this survive a DOCKER RESTART, not just a reboot. A
+# docker engine upgrade recreates the iptables chains and flushes DOCKER-USER, so
+# `After=docker.service` alone leaves the rules gone until the next boot — the
+# exact "firewall you think you have" failure. PartOf ties this unit's lifecycle
+# to docker's, so restarting or upgrading docker re-applies the rules.
+PartOf=docker.service
 
 [Service]
 Type=oneshot
