@@ -40,7 +40,7 @@ func TestPlatformStackPlacements(t *testing.T) {
 	in := RenderInput{
 		Domain:            "example.com",
 		EdgeImage:         "ghcr.io/hazemarian/pmcluster-edge:v0.2.87",
-		EdgeNode:          "leader-1",
+		LeaderNode:        "leader-1",
 		ObservabilityNode: "storage-1",
 		BackupNode:        "worker-1",
 	}
@@ -63,16 +63,15 @@ func TestPlatformStackPlacements(t *testing.T) {
 		}
 	}
 
-	// SSO holds no data, so it stays role-based and carries no hostname.
+	// SSO holds no data, so it takes the leader as its default rather than a
+	// storage pin — the default has to be a real node, because on a
+	// single-server cluster a role constraint constrains nothing.
 	out, err := LoadComposeFile(StackSSO, in)
 	if err != nil {
 		t.Fatalf("sso: %v", err)
 	}
-	if strings.Contains(string(out), "node.hostname") {
-		t.Fatalf("sso must not be pinned to a hostname — it has no data to keep there:\n%s", out)
-	}
-	if !strings.Contains(string(out), "node.role == manager") {
-		t.Fatalf("sso should stay on managers:\n%s", out)
+	if !strings.Contains(string(out), "node.hostname == leader-1") {
+		t.Fatalf("sso should default to the leader:\n%s", out)
 	}
 }
 
@@ -90,6 +89,7 @@ func TestPlatformStacksFallBackToManagerRole(t *testing.T) {
 		if !strings.Contains(s, "node.role ==") {
 			t.Fatalf("%s rendered with no placement at all:\n%s", stack, s)
 		}
+		// No leader either: the role constraint is the only thing left.
 		if strings.Contains(s, "node.hostname ==") {
 			t.Fatalf("%s pinned to a hostname it was not given:\n%s", stack, s)
 		}

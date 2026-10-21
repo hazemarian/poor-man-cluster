@@ -359,7 +359,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			BackupCron:                     LoadBackupCron(ctx, deps.Store),
 			StorageNodeConstraint:          deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
 			StorageNodeLabel:               runtime.StorageNodeLabel,
-			EdgeNode:                       LeaderNode(ctx, deps.Docker),
+			LeaderNode:                     LeaderNode(ctx, deps.Docker),
 			ObservabilityNode:              ObservabilityNode(ctx, deps.Store),
 			BackupNode:                     BackupPlacement(ctx, deps.Store, deps.Docker),
 			ManagedSecretNames:             managedSecretNames(ctx, deps.Store),

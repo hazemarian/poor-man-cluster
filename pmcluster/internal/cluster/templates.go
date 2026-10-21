@@ -262,11 +262,11 @@ type RenderInput struct {
 	// against when StorageNodeConstraint is set (runtime.StorageNodeLabel).
 	StorageNodeLabel string
 
-	// EdgeNode is the hostname of the current leader: the console is the API
-	// host, so it follows leadership rather than sitting on a frozen hostname.
-	// Re-resolved every render, which is why an election moves it on the next
-	// reconcile pass.
-	EdgeNode string
+	// LeaderNode is the hostname of the current leader. The console follows it
+	// (it is the API host), and every stacked pool falls back to it: a
+	// single-server cluster has no storage pool and no worker, so "any manager"
+	// is the only thing left and a role constraint there constrains nothing.
+	LeaderNode string
 
 	// ObservabilityNode is the hostname the observability stack is pinned to:
 	// the cluster's standard storage placement (round-robin over storage_nodes,

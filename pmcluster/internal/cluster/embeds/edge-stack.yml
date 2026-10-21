@@ -21,7 +21,7 @@ services:
   pmcluster-edge:
     image: [[.EdgeImage]]
     replicas: 1
-    placement: "[[ if .EdgeNode ]][[.EdgeNode]][[ else ]]manager[[ end ]]"
+    placement: "[[ if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
     env:
       LISTEN_ADDR: ":8042"
       UPSTREAM: "http://host.docker.internal:9090"

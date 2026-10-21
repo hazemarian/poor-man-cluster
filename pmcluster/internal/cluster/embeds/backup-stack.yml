@@ -28,7 +28,7 @@ services:
       - "node.labels.[[.StorageNodeLabel]] == true"
 [[ else ]]
     replicas: 1
-    placement: "[[ if .BackupNode ]][[.BackupNode]][[ else ]]manager[[ end ]]"
+    placement: "[[ if .BackupNode ]][[.BackupNode]][[ else if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
 [[ end ]]
     restart: any
     env:
@@ -92,7 +92,7 @@ services:
   # tmpfs).
   seaweedfs:
     image: chrislusf/seaweedfs:4.48
-    placement: "[[ if .Store.Node ]][[.Store.Node]][[ else if .BackupNode ]][[.BackupNode]][[ else ]]worker[[ end ]]"
+    placement: "[[ if .Store.Node ]][[.Store.Node]][[ else if .BackupNode ]][[.BackupNode]][[ else if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
     # Advertise loopback: publishing 8333 attaches the ingress network, whose
     # auto-detected task IP is not self-reachable, so the server must not
     # advertise it. Bind on all interfaces so the published 8333 keeps working.
@@ -131,7 +131,7 @@ services:
   # retention.
   control-plane-backup:
     image: offen/docker-volume-backup:v2
-    placement: "[[ if .BackupNode ]][[.BackupNode]][[ else ]]manager[[ end ]]"
+    placement: "[[ if .BackupNode ]][[.BackupNode]][[ else if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
     restart: any
     env:
       BACKUP_CRON_EXPRESSION: "0 3 * * *"
