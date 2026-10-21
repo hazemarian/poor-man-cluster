@@ -829,14 +829,6 @@ func TestLoadComposeFile_ObservabilityProvisionOneShot(t *testing.T) {
 	// from the overlay. Retention and dashboards still come from inside the
 	// swarm (the provision one-shot), so this port is read-only for the
 	// platform itself and must stay denied to the WAN by the private-ports unit.
-	start := strings.Index(body, "parseable:")
-	if start < 0 {
-		t.Fatal("rendered stack has no parseable service")
-	}
-	parseable := body[start:]
-	if i := strings.Index(parseable, "otel-collector:"); i > 0 {
-		parseable = parseable[:i]
-	}
 	var stackDoc struct {
 		Services map[string]struct {
 			Ports []struct {

@@ -201,3 +201,98 @@ func TestObservabilityHTTPStatusTruncationFields(t *testing.T) {
 		t.Fatalf("status JSON truncation_reasons = %#v, want [row_limit]", body["truncation_reasons"])
 	}
 }
+
+// TestObservabilityHTTPOverviewRoutes covers the three reads the console
+// overview needs, which used to live inside the console process: log volume by
+// level, trace totals, and the service-name list. They are part of the daemon
+// API now, so the console never holds a backend client — and that means their
+// envelopes are a contract the console depends on.
+func TestObservabilityHTTPOverviewRoutes(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	w := Window{Start: now.Add(-time.Hour), End: now}
+
+	t.Run("volume and trace stats are evidence envelopes", func(t *testing.T) {
+		f := &readerFixture{statsResult: Result{
+			Status: StatusAvailable, Window: w,
+			Rows: []Row{{"bucket": "2026-10-20T11:00:00Z", "level": "error", "n": 3}},
+		}}
+		h := observabilityRouter(f, now)
+
+		for _, path := range []string{"/observability/volume?range=1h", "/observability/traces/stats?range=1h"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+			if resp.Code != http.StatusOK {
+				t.Fatalf("%s status = %d, want 200 (%s)", path, resp.Code, resp.Body.String())
+			}
+			body := decodeBody(t, resp)
+			if body["status"] != string(StatusAvailable) {
+				t.Errorf("%s status field = %v, want available", path, body["status"])
+			}
+			rows, _ := body["rows"].([]any)
+			if len(rows) != 1 {
+				t.Errorf("%s returned %d rows, want 1", path, len(rows))
+			}
+		}
+		if f.statsCalls != 2 {
+			t.Errorf("stats source calls = %d, want 2", f.statsCalls)
+		}
+	})
+
+	t.Run("service names are a list, and unavailability is distinguishable", func(t *testing.T) {
+		f := &readerFixture{names: []string{"demo_web", "shop_api"}}
+		h := observabilityRouter(f, now)
+
+		req := httptest.NewRequest(http.MethodGet, "/observability/services?range=1h", nil)
+		resp := httptest.NewRecorder()
+		h.ServeHTTP(resp, req)
+		body := decodeBody(t, resp)
+		if body["status"] != string(StatusAvailable) {
+			t.Fatalf("status = %v, want available", body["status"])
+		}
+		names, _ := body["services"].([]any)
+		if len(names) != 2 || names[0] != "demo_web" {
+			t.Fatalf("services = %v, want [demo_web shop_api]", names)
+		}
+
+		unavailable := &readerFixture{namesErr: ErrUnavailable}
+		req = httptest.NewRequest(http.MethodGet, "/observability/services?range=1h", nil)
+		resp = httptest.NewRecorder()
+		observabilityRouter(unavailable, now).ServeHTTP(resp, req)
+		body = decodeBody(t, resp)
+		if body["status"] != string(StatusUnavailable) {
+			t.Errorf("unavailable status = %v, want unavailable", body["status"])
+		}
+		if got, _ := body["services"].([]any); len(got) != 0 {
+			t.Errorf("unavailable services = %v, want empty", got)
+		}
+	})
+
+	t.Run("an unavailable source never becomes a 500", func(t *testing.T) {
+		f := &readerFixture{statsResult: Result{Status: StatusUnavailable, Window: w}, statsErr: ErrUnavailable}
+		h := observabilityRouter(f, now)
+		req := httptest.NewRequest(http.MethodGet, "/observability/volume?range=1h", nil)
+		resp := httptest.NewRecorder()
+		h.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 with an unavailable envelope", resp.Code)
+		}
+		if decodeBody(t, resp)["status"] != string(StatusUnavailable) {
+			t.Error("expected status=unavailable")
+		}
+	})
+
+	t.Run("the literal paths are not read as a trace id", func(t *testing.T) {
+		f := &readerFixture{}
+		h := observabilityRouter(f, now)
+		req := httptest.NewRequest(http.MethodGet, "/observability/traces/stats?range=1h", nil)
+		resp := httptest.NewRecorder()
+		h.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("/traces/stats = %d, want 200 (%s)", resp.Code, resp.Body.String())
+		}
+		if f.traceCalls != 0 {
+			t.Error("/traces/stats reached the single-trace handler")
+		}
+	})
+}
