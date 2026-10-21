@@ -241,6 +241,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 	if cipher != nil {
 		deps.Secrets = secrets.NewLocal(st, cipher)
+		// Observability reads the backend through the published loopback
+		// endpoint with the managed credential. A missing credential leaves the
+		// reader with Swarm inventory only, so the console still reports node
+		// health and every telemetry read answers "unavailable".
+		obsReader, obsErr := newLocalObservabilityReader(cmd.Context(), st, cipher, dc)
+		if obsErr != nil {
+			log.Warn().Err(obsErr).Msg("observability telemetry source unavailable — inventory only")
+		}
+		deps.Observability = obsReader
 	}
 	handler := server.New(deps)
 

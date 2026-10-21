@@ -1,0 +1,118 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"strconv"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability/parseable"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/remote"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
+)
+
+// ObservabilitySourcePort is the host port the observability stack publishes
+// Parseable's HTTP API on. It is published on the routing mesh, so it answers
+// on 127.0.0.1 on EVERY node. Parseable itself stays on the monitoring overlay
+// and is never addressed here by its Swarm DNS name: the daemon is a host
+// process and cannot resolve one.
+const ObservabilitySourcePort = cluster.ObservabilityPort
+
+// observabilityAdminCredential is the managed credential Parseable is created
+// with. The daemon already holds the encryption key, so no other component
+// needs the password — the console reaches telemetry through this daemon API.
+const observabilityAdminCredential = cluster.ObservabilityAdminCredential
+
+// backendObservability returns the remote reader when the CLI targets a daemon,
+// and a local reader that queries the backend directly otherwise.
+func backendObservability(cmd *cobra.Command) (observability.Reader, func(), error) {
+	if rc := remoteClient(cmd); rc != nil {
+		return remote.NewObservability(rc), func() {}, nil
+	}
+	st, cfg, err := openStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
+	if err != nil {
+		_ = st.Close()
+		return nil, nil, err
+	}
+	var dc runtime.Client
+	if client, dockerErr := docker.New(); dockerErr == nil {
+		dc = client
+	}
+	reader, _ := newLocalObservabilityReader(cmd.Context(), st, cipher, dc)
+	return reader, func() {
+		if dc != nil {
+			_ = dc.Close()
+		}
+		_ = st.Close()
+	}, nil
+}
+
+// newLocalObservabilityReader builds the daemon's read service. The returned
+// service always carries Swarm inventory, so `status` reports node health even
+// when the telemetry backend is unreachable.
+//
+// A missing credential or an unreachable backend is NOT an error here: the
+// caller keeps a reader with inventory only, and every telemetry read answers
+// "unavailable" rather than making the daemon fail to start.
+func newLocalObservabilityReader(ctx context.Context, st *store.Store, cipher *credentials.Cipher, dc observability.NodeReader) (*observability.ReadService, error) {
+	reader := &observability.ReadService{Inventory: dc}
+	if st == nil || cipher == nil {
+		return reader, errors.New("observability source requires the cluster store and encryption key")
+	}
+	cred, err := st.Credential(ctx, observabilityAdminCredential)
+	if err != nil {
+		return reader, fmt.Errorf("load %s credential: %w", observabilityAdminCredential, err)
+	}
+	plain, err := cipher.Decrypt(cred.PasswordCiphertext)
+	if err != nil {
+		return reader, errors.New("decrypt the observability credential")
+	}
+	source, err := localObservabilitySource(cred.Username, string(plain))
+	if err != nil {
+		return reader, err
+	}
+	reader.LogsSrc = source
+	reader.Metrics = source
+	reader.TracesSrc = source
+	reader.Stats = source
+	reader.Names = source
+	return reader, nil
+}
+
+// localObservabilitySource builds the Parseable adapter over the published
+// loopback endpoint. The password is used only to construct the adapter's
+// Authorization header and the value redactor; it is never returned or logged.
+func localObservabilitySource(username, password string) (*parseable.Client, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return nil, errors.New("observability credential has no username")
+	}
+	if strings.TrimSpace(password) == "" {
+		return nil, errors.New("observability credential is empty")
+	}
+	endpoint := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(ObservabilitySourcePort))
+	source, err := parseable.New(parseable.Config{
+		BaseURL:  endpoint,
+		Username: username,
+		Password: password,
+		Timeout:  observability.MaxQueryDuration,
+		Redactor: observability.NewRedactor(password),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build observability source: %w", err)
+	}
+	return source, nil
+}
