@@ -1975,3 +1975,113 @@ func TestLoadComposeFile_BackupS3Renders(t *testing.T) {
 		t.Errorf("unconfigured backup stack must not emit AWS_* env:\n%s", body)
 	}
 }
+
+// TestRenderOTelCollectorConfig_PerContainerFilelogStructure parses the rendered
+// config as YAML instead of matching substrings.
+//
+// This exists because the e2e caught what string tests could not: the receiver
+// template's own `resource_attributes` map was accepted by the collector but not
+// applied to the records it created, so every stdout record arrived with an empty
+// service.name and filter/skip_filelog dropped it — no error, no rows, and a
+// collector whose log says "Everything is ready". The attributes now live in the
+// filelog receiver's `resource` map, inside `config`, where substitution is
+// documented to happen.
+func TestRenderOTelCollectorConfig_PerContainerFilelogStructure(t *testing.T) {
+	data, err := RenderOTelCollectorConfig(RenderInput{
+		ObservabilityAdminEmail: "admin@x.com",
+		ObservabilityBasicAuth:  observabilityBasicAuth("admin@x.com", "pw"),
+	})
+	if err != nil {
+		t.Fatalf("RenderOTelCollectorConfig: %v", err)
+	}
+
+	var cfg struct {
+		Extensions map[string]any `json:"extensions"`
+		Receivers  map[string]struct {
+			WatchObservers []string `json:"watch_observers"`
+			Receivers      map[string]struct {
+				Rule   string `json:"rule"`
+				Config struct {
+					Resource map[string]string `json:"resource"`
+					Include  []string          `json:"include"`
+				} `json:"config"`
+				// A template-level resource_attributes map is what did not work.
+				ResourceAttributes map[string]string `json:"resource_attributes"`
+			} `json:"receivers"`
+		} `json:"receivers"`
+		Service struct {
+			Extensions []string `json:"extensions"`
+			Pipelines  map[string]struct {
+				Receivers []string `json:"receivers"`
+			} `json:"pipelines"`
+		} `json:"service"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("rendered collector config is not valid YAML: %v", err)
+	}
+
+	if _, ok := cfg.Extensions["docker_observer"]; !ok {
+		t.Error("docker_observer extension is not declared")
+	}
+	enabled := false
+	for _, e := range cfg.Service.Extensions {
+		if e == "docker_observer" {
+			enabled = true
+		}
+	}
+	if !enabled {
+		t.Error("docker_observer must be listed in service.extensions or it never runs")
+	}
+
+	rc, ok := cfg.Receivers["receiver_creator"]
+	if !ok {
+		t.Fatal("receiver_creator receiver is missing")
+	}
+	var tmpl struct {
+		Rule   string `json:"rule"`
+		Config struct {
+			Resource map[string]string `json:"resource"`
+			Include  []string          `json:"include"`
+		} `json:"config"`
+		ResourceAttributes map[string]string `json:"resource_attributes"`
+	}
+	for name, r := range rc.Receivers {
+		if strings.HasPrefix(name, "filelog") {
+			tmpl.Rule = r.Rule
+			tmpl.Config.Resource = r.Config.Resource
+			tmpl.Config.Include = r.Config.Include
+			tmpl.ResourceAttributes = r.ResourceAttributes
+		}
+	}
+	if tmpl.Rule == "" {
+		t.Fatal("receiver_creator declares no filelog template")
+	}
+	if !strings.Contains(tmpl.Rule, `io.pmcluster.skip_filelog`) {
+		t.Error("the rule must exclude opted-out containers so no receiver starts for them")
+	}
+	if strings.Contains(tmpl.Rule, "port") {
+		t.Error("the rule must not bound on port: it would exclude containers that expose one")
+	}
+	if len(tmpl.ResourceAttributes) != 0 {
+		t.Error("a template-level resource_attributes map is not applied per endpoint — keep the attributes in config.resource")
+	}
+	for _, key := range []string{"service.name", "stack.name", "container.id", "container.image.name", "container.labels.io.pmcluster.skip_filelog"} {
+		if val, ok := tmpl.Config.Resource[key]; !ok || !strings.Contains(val, "`") {
+			t.Errorf("config.resource[%q] must be a backtick expression, got %q", key, val)
+		}
+	}
+	if len(tmpl.Config.Include) != 1 || !strings.Contains(tmpl.Config.Include[0], "`container_id`") {
+		t.Errorf("filelog include must interpolate the discovered container id, got %v", tmpl.Config.Include[0:])
+	}
+
+	logs := cfg.Service.Pipelines["logs"]
+	found := false
+	for _, r := range logs.Receivers {
+		if r == "receiver_creator" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the logs pipeline must read from receiver_creator")
+	}
+}

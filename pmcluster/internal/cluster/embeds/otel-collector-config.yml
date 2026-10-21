@@ -99,23 +99,28 @@ receivers:
               from: attributes.log
               to: body
               if: attributes.log != nil
-        # Resource attributes are what make a stdout line attributable. The
-        # backtick expressions are evaluated per discovered endpoint, so every
-        # receiver carries ITS container's identity.
-        resource_attributes:
-          # Swarm services keep their Swarm identity; plain Compose containers
-          # fall back to <project>_<service> only when both labels are present.
-          # An unlabelled container resolves to "" and is dropped by
-          # filter/skip_filelog rather than ingested as anonymous noise.
-          service.name: '`("com.docker.swarm.service.name" in labels && labels["com.docker.swarm.service.name"] != "") ? labels["com.docker.swarm.service.name"] : (("com.docker.compose.project" in labels && labels["com.docker.compose.project"] != "" && "com.docker.compose.service" in labels && labels["com.docker.compose.service"] != "") ? labels["com.docker.compose.project"] + "_" + labels["com.docker.compose.service"] : "")`'
-          stack.name: '`("com.docker.stack.namespace" in labels && labels["com.docker.stack.namespace"] != "") ? labels["com.docker.stack.namespace"] : (("com.docker.compose.project" in labels && labels["com.docker.compose.project"] != "" && "com.docker.compose.service" in labels && labels["com.docker.compose.service"] != "") ? labels["com.docker.compose.project"] : "")`'
-          container.name: '`name`'
-          container.id: '`container_id`'
-          container.image.name: '`image`'
-          # The opt-out, copied onto the record so the logs filter can enforce it
-          # independently of the rule above. Intentionally redundant: a silent
-          # failure here would ship a service's logs against its explicit wish.
-          container.labels.io.pmcluster.skip_filelog: '`labels["io.pmcluster.skip_filelog"] ?? ""`'
+          # Resource attributes are what make a stdout line attributable, and
+          # they are declared inside `config` rather than as the receiver
+          # template's own resource_attributes map: the e2e showed the
+          # latter is not applied per endpoint, so every record arrived with
+          # an empty service.name and filter/skip_filelog dropped it — no
+          # error, no rows, a collector that looks healthy. The filelog
+          # receiver's `resource:` map IS honoured, and receiver_creator
+          # substitutes backtick expressions inside `config`.
+          resource:
+            # Swarm services keep their Swarm identity; plain Compose containers
+            # fall back to <project>_<service> only when both labels are present.
+            # An unlabelled container resolves to "" and is dropped by
+            # filter/skip_filelog rather than ingested as anonymous noise.
+            service.name: '`("com.docker.swarm.service.name" in labels && labels["com.docker.swarm.service.name"] != "") ? labels["com.docker.swarm.service.name"] : (("com.docker.compose.project" in labels && labels["com.docker.compose.project"] != "" && "com.docker.compose.service" in labels && labels["com.docker.compose.service"] != "") ? labels["com.docker.compose.project"] + "_" + labels["com.docker.compose.service"] : "")`'
+            stack.name: '`("com.docker.stack.namespace" in labels && labels["com.docker.stack.namespace"] != "") ? labels["com.docker.stack.namespace"] : (("com.docker.compose.project" in labels && labels["com.docker.compose.project"] != "" && "com.docker.compose.service" in labels && labels["com.docker.compose.service"] != "") ? labels["com.docker.compose.project"] : "")`'
+            container.name: '`name`'
+            container.id: '`container_id`'
+            container.image.name: '`image`'
+            # The opt-out, copied onto the record so the logs filter can enforce it
+            # independently of the rule above. Intentionally redundant: a silent
+            # failure here would ship a service's logs against its explicit wish.
+            container.labels.io.pmcluster.skip_filelog: '`labels["io.pmcluster.skip_filelog"] ?? ""`'
 
   # Node-level CPU and memory. docker_stats only ever sees CONTAINERS, so there
   # was no way to answer "how loaded is this node" — the question that decides

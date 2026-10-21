@@ -187,8 +187,10 @@ func TestE2EFilelogAttributionAndSkip(t *testing.T) {
 		time.Sleep(5 * time.Second)
 	}
 	if !keptSeen {
-		logs, _ := run("logs", "--tail", "200", collectorName)
-		t.Fatalf("kept container's stdout never reached Parseable: no filelog attribution.\nCollector log tail:\n%s", tail(logs, 4000))
+		logs, _ := run("logs", "--tail", "400", collectorName)
+		labels, _ := run("inspect", "--format", "{{.Name}} {{json .Config.Labels}}", keptName, skippedName)
+		t.Fatalf("kept container's stdout never reached Parseable: no filelog attribution.\n"+
+			"Emitter labels (what the receiver rule reads):\n%s\nCollector log tail:\n%s", labels, tail(logs, 6000))
 	}
 	t.Logf("✅ %s attributed and ingested (service identity + filelog path work)", keptMarker)
 

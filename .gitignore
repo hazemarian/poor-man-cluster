@@ -46,3 +46,6 @@ pmcluster/docs/redesign/
 ehthumbs.db
 Thumbs.db
 pmcluster/pmcluster
+
+# Agent tooling state (contains local tokens); never commit
+.claude/
