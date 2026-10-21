@@ -242,12 +242,29 @@ apply_updates() {
 
 # ───────────────────────────── main ────────────────────────────────
 main() {
+  # --no-updates skips the apt upgrade. On a live cluster that step can upgrade
+  # the Docker engine itself, which restarts the daemon on a node that is
+  # currently running workloads — a decision for the operator, not a side effect
+  # of closing a port. Everything else is safe to re-run at any time.
+  local with_updates=1
+  for arg in "$@"; do
+    case "$arg" in
+      --no-updates) with_updates=0 ;;
+      -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+      *) die "unknown argument: $arg (use --no-updates)" ;;
+    esac
+  done
+
   require_root
   apply_firewall
   apply_docker_user_rules
   install_docker_user_unit
   apply_fail2ban
-  apply_updates
+  if [ "$with_updates" -eq 1 ]; then
+    apply_updates
+  else
+    info "skipping apt upgrade (--no-updates): Docker/Swarm runtime left as-is"
+  fi
   cat <<'SUMMARY'
 
 ============================== SUMMARY =============================
@@ -258,7 +275,7 @@ main() {
 ✔ pmcluster-docker-user.service re-applies those rules after every boot
 ✔ pmcluster API 9090 + swarm control plane 2377/7946 blocked from WAN
 ✔ fail2ban active (sshd jail: 5 fails / 10 min → 1h ban)
-✔ security updates applied
+✔ security updates applied (unless --no-updates was given)
 ✔ SSH password auth LEFT AS-IS (no keys installed) — add a key first,
   then follow the manual step-1 instructions above to close it.
 ============================== END =================================
