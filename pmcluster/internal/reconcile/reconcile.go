@@ -219,9 +219,18 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 			if firstErr == nil {
 				firstErr = err
 			}
-		case len(res.StacksDeployed) > 0:
-			platformSpan.SetAttributes(attribute.StringSlice("stacks_redeployed", res.StacksDeployed))
-			log.Info().Strs("stacks", res.StacksDeployed).Msg("reconcile — platform pass redeployed drifted stacks")
+		case len(res.StacksDeployed) > 0 || len(res.ConfigsChanged) > 0:
+			// A replaced rendered config with no stack redeploy is still an
+			// apply — it is how the collector config ships. Both axes are
+			// logged so this is the record an operator can find afterwards.
+			platformSpan.SetAttributes(
+				attribute.StringSlice("stacks_redeployed", res.StacksDeployed),
+				attribute.StringSlice("configs_replaced", res.ConfigsChanged),
+			)
+			log.Info().
+				Strs("stacks", res.StacksDeployed).
+				Strs("configs", res.ConfigsChanged).
+				Msg("reconcile — platform pass applied changes")
 		default:
 			log.Debug().Msg("reconcile — platform pass converged (no stack content changed)")
 		}

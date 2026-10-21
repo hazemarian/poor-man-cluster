@@ -127,6 +127,10 @@ apply_firewall() {
     ufw allow from "$pn" to any port 7946 proto tcp >/dev/null
     ufw allow from "$pn" to any port 7946 proto udp >/dev/null
     ufw allow from "$pn" to any port 4789 proto udp >/dev/null
+    # Parseable is published in HOST mode, so only the platform node binds it and
+    # every other node's daemon reads it across this private network. That range
+    # is the only client; the deny below still closes it to the WAN.
+    ufw allow from "$pn" to any port 8000 proto tcp >/dev/null
   done
 
   ufw deny 9090/tcp  >/dev/null   # pmcluster API       — no WAN

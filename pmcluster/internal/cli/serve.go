@@ -281,7 +281,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			Deployer: deployer,
 			Stdout:   io.Discard,
 		},
-		UpdateInput: cluster.UpdateInput{ConfigDir: cfg.ConfigDir(), Version: buildinfo.Version},
+		// Source marks applies made by this loop. Its output is discarded, so
+		// without the marker an operator's later `cluster update` reports
+		// "nothing to redeploy" with no way to learn the loop already applied it.
+		UpdateInput: cluster.UpdateInput{ConfigDir: cfg.ConfigDir(), Version: buildinfo.Version, Source: "reconcile"},
 		Log:         log,
 		Interval:    time.Duration(reconcileIntervalSeconds(cmd.Context(), st)) * time.Second,
 	}

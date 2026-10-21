@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"sigs.k8s.io/yaml"
 
@@ -1169,5 +1170,111 @@ func TestRepairMissingSecret_UserSecretRebuiltFromDB(t *testing.T) {
 	}
 	if string(spec.Data) != string(plaintext) {
 		t.Errorf("recreated secret data = %q, want %q", spec.Data, plaintext)
+	}
+}
+
+// TestUpdate_ReportsTheApplyAReconcileMade is the fix for "the no changes to
+// deploy" report an operator got straight after an upgrade.
+//
+// The daemon's leader-only reconcile loop runs this same pipeline with its
+// output discarded, so it can refresh the version-stamped templates and
+// re-deploy the platform BEFORE the operator runs `cluster update`. That run
+// then has nothing of its own to do and used to print a bare "nothing to
+// redeploy" — which reads as "the upgrade did nothing" while the live Swarm had
+// already moved. The summary must name the apply that happened, and who made it.
+func TestUpdate_ReportsTheApplyAReconcileMade(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	// Baseline: the cluster as it stands on the old version.
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.2.213"}); err != nil {
+		t.Fatalf("baseline Update: %v", err)
+	}
+
+	// Create real drift for the loop to apply: a stored rendered hash that no
+	// longer matches the fresh render, which is what a version-stamped template
+	// refresh produces in production.
+	if err := deps.Store.SetRendered(ctx, "backup-stack", "services: {}\n"); err != nil {
+		t.Fatalf("seed drift: %v", err)
+	}
+
+	// The loop applies the upgrade while the operator is not looking. Its
+	// output is discarded, exactly like the daemon's.
+	quiet := deps
+	quiet.Stdout = io.Discard
+	loopRes, err := Update(ctx, quiet, UpdateInput{ConfigDir: cfgDir, Version: "v0.2.214-rc.1", Source: "reconcile"})
+	if err != nil {
+		t.Fatalf("reconcile Update: %v", err)
+	}
+	if len(loopRes.StacksDeployed) == 0 && len(loopRes.ConfigsChanged) == 0 {
+		t.Fatalf("the seeded drift must produce an apply; got neither stacks nor configs, so this test proves nothing")
+	}
+	if loopRes.PriorApply != nil {
+		t.Fatalf("a run that applied changes must not also report a prior apply")
+	}
+
+	// The operator now runs the update and sees nothing of its own to do.
+	var out bytes.Buffer
+	opDeps := deps
+	opDeps.Stdout = &out
+	res, err := Update(ctx, opDeps, UpdateInput{ConfigDir: cfgDir, Version: "v0.2.214-rc.1", Source: "update"})
+	if err != nil {
+		t.Fatalf("operator Update: %v", err)
+	}
+	if len(res.StacksDeployed) != 0 || len(res.ConfigsChanged) != 0 {
+		t.Fatalf("expected the operator run to have nothing to do, got stacks=%v configs=%v",
+			res.StacksDeployed, res.ConfigsChanged)
+	}
+	if res.PriorApply == nil {
+		t.Fatalf("an empty run must surface the apply that already happened; the summary cannot contradict the Swarm")
+	}
+	if res.PriorApply.Source != "reconcile" {
+		t.Fatalf("prior apply source = %q, want reconcile", res.PriorApply.Source)
+	}
+	if res.PriorApply.Version != "v0.2.214-rc.1" {
+		t.Fatalf("prior apply version = %q, want v0.2.214-rc.1", res.PriorApply.Version)
+	}
+	if strings.Contains(out.String(), "no stacks re-deployed and no configs replaced") {
+		t.Fatalf("the summary still claims nothing happened while an apply is on record:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "last platform apply:") {
+		t.Fatalf("the summary did not name the prior apply:\n%s", out.String())
+	}
+}
+
+// TestApplyRecord_SurvivesAndStaysEmptyWhenNothingMoved pins the two edges: the
+// record round-trips through the store, and a run on a cluster that has never
+// applied anything reports no prior apply rather than inventing one.
+func TestApplyRecord_SurvivesAndStaysEmptyWhenNothingMoved(t *testing.T) {
+	deps, _ := seedUpdateState(t)
+	ctx := context.Background()
+
+	if got := LoadApplyRecord(ctx, deps.Store); got != nil {
+		t.Fatalf("fresh cluster should have no apply record, got %+v", got)
+	}
+
+	want := ApplyRecord{At: time.Now().UTC().Add(-time.Hour), Version: "v0.2.214-rc.1", Source: "reconcile",
+		Stacks: []string{"observability"}, Configs: []string{"pmcluster_otel_config"}}
+	if err := SaveApplyRecord(ctx, deps.Store, want); err != nil {
+		t.Fatalf("SaveApplyRecord: %v", err)
+	}
+	got := LoadApplyRecord(ctx, deps.Store)
+	if got == nil {
+		t.Fatal("record did not round-trip")
+	}
+	if got.Source != want.Source || got.Version != want.Version || !slices.Equal(got.Stacks, want.Stacks) || !slices.Equal(got.Configs, want.Configs) {
+		t.Fatalf("round-trip mismatch:\n got %+v\nwant %+v", *got, want)
+	}
+	if line := got.Line(); !strings.Contains(line, "observability") || !strings.Contains(line, "pmcluster_otel_config") {
+		t.Fatalf("the operator-facing line dropped the detail: %q", line)
+	}
+
+	// An empty record must not be persisted — "nothing happened" is the absence
+	// of a record, not a record saying nothing happened.
+	if err := SaveApplyRecord(ctx, deps.Store, ApplyRecord{Source: "update", Version: "x"}); err != nil {
+		t.Fatalf("SaveApplyRecord(empty): %v", err)
+	}
+	if got := LoadApplyRecord(ctx, deps.Store); got == nil || got.Source != "reconcile" {
+		t.Fatalf("an empty apply overwrote a real one: %+v", got)
 	}
 }

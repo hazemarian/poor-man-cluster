@@ -24,7 +24,8 @@ One per cluster:                                            Parseable
                                                        (local Parquet store)
                                                                 ▲
                                                                 │ bounded SQL
-                                                                │ over 127.0.0.1:8000
+                                                                │ over the platform
+                                                                │ node's :8000
   CLI ──► pmcluster daemon ─────────────────────────────────────┘
             ▲           │
   console ──┘           └──► /api/observability/*   (bearer + viewer role)
@@ -45,39 +46,42 @@ One per cluster:                                            Parseable
 - **The provisioning job runs once.** It applies per-stream retention and the
   platform dashboard through Parseable's API, then exits.
 
-### Why Parseable publishes a host port
+### Why Parseable publishes a host port, and on which node
 
 Parseable keeps its API on the cluster networks, but its HTTP port is published
-on the Swarm routing mesh (`8000`). The daemon is a **host process**: it cannot
-resolve `observability_parseable` from the overlay, so the mesh publish — which
-answers on `127.0.0.1:8000` on every node — is how it reads telemetry. This is
-the same mechanism the backup SeaweedFS service uses for `8333`.
+**in host mode** (`8000`). The daemon is a **host process**: it cannot resolve
+`observability_parseable` from the overlay, so a published host port is how it
+reads telemetry.
 
-Publishing on the routing mesh also binds that port on each host's public
-interface. **Deny it to the WAN on every node.** `ufw` does not cover it — a
-published port is DNAT'd past ufw's INPUT chain — so the block belongs in the
-`DOCKER-USER` chain, which is evaluated before Docker's own accept rules.
+Host mode, not the routing mesh, because that is the difference between one
+listener and four. A host publish binds the port **only on the node running the
+task** — the platform node — and every daemon reads that one address over the
+cluster's private network (the platform node's own loopback included). An ingress
+publish would bind all four nodes for a reader that only ever needs one, and each
+of those four is another interface that must be kept closed.
 
-`./harden-host.sh` (repo root) already does this: `8000` sits in
-`RESTRICTED_DOCKER_PORTS` alongside `4318`, and the script RETURNs every PRIVATE
+Because one node listens and the rest dial it, that node's host firewall must
+allow `8000` from the cluster's private range — `./harden-host.sh` does that, and
+still denies it to the WAN. Two things then need verifying, and they are not
+interchangeable: the readers (a `curl` from a **peer node** to the platform node's
+private address) and the WAN (unreachable from **outside**).
+
+`./harden-host.sh` (repo root) closes that port: `8000` sits in
+`RESTRICTED_DOCKER_PORTS` alongside `4318`, the script RETURNs every PRIVATE
 source (`127.0.0.0/8`, the overlay pools, and the cluster's private peer network)
-before dropping. That distinction matters: an ingress-published port is served by
-whichever node hosts the task, so a peer node's request arrives over VXLAN
-carrying the *peer's* private address — not a bridge subnet and not loopback.
-Allow-listing only `172.16.0.0/12` drops every cross-node request while Swarm
-keeps its ESTABLISHED tunnels alive, so the cluster still reports `Ready` and the
-only symptom is a port that answers on one node and hangs on the others.
-Re-run it on each node after upgrading — it is idempotent. To do it by hand:
+before dropping, and it allows `8000` through ufw from that same private range.
+Both halves matter, because a host-published port is reached from a peer's
+private address — not from a bridge subnet and not from loopback. Allow-listing
+only `172.16.0.0/12` drops every peer read while Swarm keeps its ESTABLISHED
+tunnels alive, so the cluster still reports `Ready` and the only symptom is a
+port that answers on the platform node and hangs from everywhere else.
+Re-run it on every node after upgrading — it is idempotent, and it resets ufw
+before rebuilding, which is what keeps the allows ahead of the denies.
 
-```sh
-iptables -I DOCKER-USER -s 127.0.0.0/8 -j RETURN
-iptables -I DOCKER-USER -p tcp --dport 8000 -j DROP
-```
-
-Verify from another host that `8000` is unreachable, and from the node itself
-that `curl -sf -u <user>:<pass> http://127.0.0.1:8000/api/v1/logstream` still
-answers. The first proves the WAN side is closed; the second proves you did not
-cut the daemon off from its own backend.
+Verify both directions, and treat them as different questions: from a **peer
+node**, `curl -sf -u <user>:<pass> http://<platform-node-address>:8000/api/v1/logstream`
+must answer, and from **outside** `8000` must be unreachable. The first proves the
+daemon can still read its own backend; the second proves the WAN is closed.
 
 ## What is collected
 
@@ -248,30 +252,14 @@ in `.parseable.json` inside its data volume, which is independent of the task
 hostname — replacing a task does not create a new backend.
 
 Docker-published ports bypass a host's usual input firewall: they are DNAT'd
-past `ufw`'s INPUT chain, so a "deny 8000" in ufw does not close them. The
-forwarding path is the one that counts. `./harden-host.sh` (repo root) closes
-the published-but-private ports — OTLP `4318` and Parseable `8000` — in
-`DOCKER-USER`, RETURNs docker subnets and loopback first (the daemon reads its
-own published ports), and installs `pmcluster-docker-user.service` so the rules
-come back after every boot. It is idempotent: re-run it on each node after an
-upgrade. To do it by hand:
-
-```sh
-iptables -I DOCKER-USER -s 127.0.0.0/8 -j RETURN
-iptables -I DOCKER-USER -p tcp --dport 8000 -j DROP
-```
-
-Two verification steps, and you need both: from **another host**, `8000` must be
-unreachable; from the **node itself**,
-`curl -sf -u <user>:<pass> http://127.0.0.1:8000/api/v1/logstream` must still
-answer. The first proves the WAN side is closed, the second proves you did not
-cut the daemon off from its own backend.
-
-Keep public HTTPS separate from private native ingress, and add any further
-published-but-private port to `RESTRICTED_DOCKER_PORTS` in the script. Note that
-`--dport` in `DOCKER-USER` matches the *container* port; a remapped publish
-(host 9000 → container 8000) needs a conntrack match instead, which the script
-does not generate today.
+past `ufw`'s INPUT chain, so a "deny 8000" in ufw alone does not close them. Both
+paths are covered by `./harden-host.sh` — see "Why Parseable publishes a host
+port, and on which node" above for the rule shape, the ufw allow for the private
+range, and the two verification steps. Keep public HTTPS separate from private
+native ingress, and add any further published-but-private port to
+`RESTRICTED_DOCKER_PORTS` in the script. Note that `--dport` in `DOCKER-USER`
+matches the *container* port; a remapped publish (host 9000 → container 8000)
+needs a conntrack match instead, which the script does not generate today.
 
 The local Parseable store keeps a stable backend identity with its persisted
 state. During an upgrade, the lifecycle captures an existing identity before

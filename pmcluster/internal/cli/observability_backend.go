@@ -21,8 +21,10 @@ import (
 )
 
 // ObservabilitySourcePort is the host port the observability stack publishes
-// Parseable's HTTP API on. It is published on the routing mesh, so it answers
-// on 127.0.0.1 on EVERY node. Parseable itself stays on the monitoring overlay
+// Parseable's HTTP API on. It is published in HOST mode, so it is bound only on
+// the node running the Parseable task (the platform node) — one listener, not
+// one per node. Every daemon reads that single address over the cluster's
+// private network; loopback is what the platform node itself uses. Parseable itself stays on the monitoring overlay
 // and is never addressed here by its Swarm DNS name: the daemon is a host
 // process and cannot resolve one.
 const ObservabilitySourcePort = cluster.ObservabilityPort
@@ -80,7 +82,17 @@ func newLocalObservabilityReader(ctx context.Context, st *store.Store, cipher *c
 	if err != nil {
 		return reader, errors.New("decrypt the observability credential")
 	}
-	source, err := localObservabilitySource(cred.Username, string(plain))
+	// Where to read from: the platform node's private address, resolved from the
+	// swarm so it survives the platform node changing. A node list failure is not
+	// fatal — it degrades to loopback, which is correct on the platform node.
+	platformNode := st.SettingDefault(ctx, cluster.SettingPlatformNode(), "")
+	var nodes []runtime.Node
+	if dc != nil {
+		if list, err := dc.NodeList(ctx); err == nil {
+			nodes = list
+		}
+	}
+	source, err := localObservabilitySource(observabilityEndpoint(platformNode, nodes), cred.Username, string(plain))
 	if err != nil {
 		return reader, err
 	}
@@ -92,10 +104,30 @@ func newLocalObservabilityReader(ctx context.Context, st *store.Store, cipher *c
 	return reader, nil
 }
 
-// localObservabilitySource builds the Parseable adapter over the published
-// loopback endpoint. The password is used only to construct the adapter's
-// Authorization header and the value redactor; it is never returned or logged.
-func localObservabilitySource(username, password string) (*parseable.Client, error) {
+// observabilityEndpoint is where the host daemon reads Parseable.
+//
+// The port is published in HOST mode, so exactly one node binds it: the node
+// running the Parseable task, which is the platform node. Every daemon reads
+// that address over the cluster's private network. Loopback is right when this
+// host IS the platform node and is the fallback when the platform node cannot
+// be resolved — a read that fails beats a daemon that will not start.
+func observabilityEndpoint(platformNode string, nodes []runtime.Node) string {
+	host := "127.0.0.1"
+	if platformNode != "" {
+		for _, n := range nodes {
+			if n.Hostname == platformNode && n.Address != "" {
+				host = n.Address
+				break
+			}
+		}
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(ObservabilitySourcePort))
+}
+
+// localObservabilitySource builds the Parseable adapter for the given endpoint.
+// The password is used only to construct the adapter's Authorization header and
+// the value redactor; it is never returned or logged.
+func localObservabilitySource(endpoint, username, password string) (*parseable.Client, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, errors.New("observability credential has no username")
@@ -103,7 +135,6 @@ func localObservabilitySource(username, password string) (*parseable.Client, err
 	if strings.TrimSpace(password) == "" {
 		return nil, errors.New("observability credential is empty")
 	}
-	endpoint := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(ObservabilitySourcePort))
 	source, err := parseable.New(parseable.Config{
 		BaseURL:  endpoint,
 		Username: username,

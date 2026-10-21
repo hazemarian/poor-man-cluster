@@ -2,11 +2,14 @@ package cli
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
 // TestObservabilitySourcePortMatchesCluster keeps the CLI's dial target tied to
@@ -32,7 +35,7 @@ func TestLocalObservabilitySourceValidatesCredential(t *testing.T) {
 		"both empty":     {"", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
-			src, err := localObservabilitySource(tc.user, tc.pass)
+			src, err := localObservabilitySource("http://127.0.0.1:8000", tc.user, tc.pass)
 			if err == nil {
 				t.Fatalf("want an error for %s, got a client (%v)", name, src)
 			}
@@ -42,7 +45,7 @@ func TestLocalObservabilitySourceValidatesCredential(t *testing.T) {
 		})
 	}
 
-	src, err := localObservabilitySource("admin@example.test", "secret")
+	src, err := localObservabilitySource("http://127.0.0.1:8000", "admin@example.test", "secret")
 	if err != nil {
 		t.Fatalf("valid credential rejected: %v", err)
 	}
@@ -73,5 +76,36 @@ func TestLocalObservabilityReaderDegradesToInventory(t *testing.T) {
 	}
 	if _, logsErr := reader.Logs(context.Background(), observability.LogQuery{Window: w, Limit: 10}); logsErr == nil {
 		t.Fatal("want ErrUnavailable from a reader with no telemetry source")
+	}
+}
+
+// TestObservabilityEndpointFollowsThePlatformNode pins where the daemon reads.
+//
+// The port is published in HOST mode, so exactly one node binds it — the one
+// running the Parseable task. A daemon that dials loopback on every node reads
+// its own machine, where nothing listens, and reports "telemetry unavailable"
+// while the backend is healthy. So the address must come from the swarm.
+func TestObservabilityEndpointFollowsThePlatformNode(t *testing.T) {
+	nodes := []runtime.Node{
+		{Hostname: "nxt-sw-1-m", Address: "10.7.224.12"},
+		{Hostname: "nxt-sw-2-m", Address: "10.7.224.13"},
+	}
+	got := observabilityEndpoint("nxt-sw-2-m", nodes)
+	if want := "http://10.7.224.13:" + strconv.Itoa(ObservabilitySourcePort); got != want {
+		t.Fatalf("endpoint = %q, want %q", got, want)
+	}
+
+	// Unknown platform node (a rename, or a node list that came back empty)
+	// degrades to loopback instead of building an unroutable address.
+	if got := observabilityEndpoint("gone-node", nodes); !strings.HasPrefix(got, "http://127.0.0.1:") {
+		t.Fatalf("unknown platform node should fall back to loopback, got %q", got)
+	}
+	if got := observabilityEndpoint("", nil); !strings.HasPrefix(got, "http://127.0.0.1:") {
+		t.Fatalf("no platform node should fall back to loopback, got %q", got)
+	}
+
+	// A node with no address must not produce "http://:8000".
+	if got := observabilityEndpoint("nxt-sw-1-m", []runtime.Node{{Hostname: "nxt-sw-1-m"}}); !strings.HasPrefix(got, "http://127.0.0.1:") {
+		t.Fatalf("addressless node should fall back to loopback, got %q", got)
 	}
 }
