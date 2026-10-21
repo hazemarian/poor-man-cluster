@@ -35,7 +35,8 @@ One per cluster:                                            Parseable
   logs and container metrics are node-local and only that node's Docker engine
   can see them. A central collector could not read them.
 - **One Parseable backend per cluster.** It stores logs, metrics and traces on a
-  mounted volume and answers SQL. It is pinned to the platform node.
+  mounted volume and answers SQL. It is placed on the same storage
+round-robin every stateful stack uses, and stays there.
 - **The daemon owns the telemetry connection.** It alone holds the Parseable
   credential, applies redaction and bounds every query. The console and the CLI
   both read telemetry through it, so there is one auth check and one place a
@@ -55,15 +56,16 @@ reads telemetry.
 
 Host mode, not the routing mesh, because that is the difference between one
 listener and four. A host publish binds the port **only on the node running the
-task** — the platform node — and every daemon reads that one address over the
-cluster's private network (the platform node's own loopback included). An ingress
+task**, resolved from the swarm rather than from a placement setting — and
+every daemon reads that one address over the cluster's private network (that
+node's own loopback included). An ingress
 publish would bind all four nodes for a reader that only ever needs one, and each
 of those four is another interface that must be kept closed.
 
 Because one node listens and the rest dial it, that node's host firewall must
 allow `8000` from the cluster's private range — `./harden-host.sh` does that, and
 still denies it to the WAN. Two things then need verifying, and they are not
-interchangeable: the readers (a `curl` from a **peer node** to the platform node's
+interchangeable: the readers (a `curl` from a **peer node** to that node's
 private address) and the WAN (unreachable from **outside**).
 
 `./harden-host.sh` (repo root) closes that port: `8000` sits in
@@ -74,7 +76,7 @@ Both halves matter, because a host-published port is reached from a peer's
 private address — not from a bridge subnet and not from loopback. Allow-listing
 only `172.16.0.0/12` drops every peer read while Swarm keeps its ESTABLISHED
 tunnels alive, so the cluster still reports `Ready` and the only symptom is a
-port that answers on the platform node and hangs from everywhere else.
+port that answers where the task runs and hangs from everywhere else.
 Re-run it on every node after upgrading — it is idempotent, and it resets ufw
 before rebuilding, which is what keeps the allows ahead of the denies.
 

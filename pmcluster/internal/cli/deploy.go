@@ -154,7 +154,7 @@ func openDeploySvc(cmd *cobra.Command) (*stacks.Service, *store.Store, func(), e
 		_ = st.Close()
 		return nil, nil, nil, fmt.Errorf("open encryption key: %w", cipherErr)
 	}
-	svc := &stacks.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Cipher: cipher}, VolumeRoot: st.SettingDefault(context.Background(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.SettingDefault(context.Background(), cluster.SettingTLSMode(), "")), PinNode: st.SettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.SettingDefault(context.Background(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.SettingDefault(context.Background(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
+	svc := &stacks.Service{Store: st, Deployer: deployer, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Cipher: cipher}, VolumeRoot: st.SettingDefault(context.Background(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.SettingDefault(context.Background(), cluster.SettingTLSMode(), "")), Pins: &stacks.PinResolver{StorageNodes: stacks.ParseStorageNodes(st.SettingDefault(context.Background(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
 		return st.SetSetting(ctx, stacks.StackPinKey(stackName), node)

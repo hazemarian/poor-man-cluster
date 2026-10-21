@@ -1067,49 +1067,6 @@ func TestUpdate_DemotesFormerLeader(t *testing.T) {
 	}
 }
 
-// TestUpdate_DefaultsPlatformNodeToLeader verifies FIX 1: an empty platform_node
-// is defaulted to the leader hostname during cluster update, so the platform
-// stack pins to the API host instead of leaving the node.role == manager
-// constraint (which constrains nothing on an all-manager swarm).
-func TestUpdate_DefaultsPlatformNodeToLeader(t *testing.T) {
-	deps, cfgDir := seedUpdateState(t)
-	ctx := context.Background()
-	if err := deps.Store.SetSetting(ctx, SettingPlatformNode(), ""); err != nil {
-		t.Fatalf("SetSetting platform_node: %v", err)
-	}
-	f := deps.Docker.(*fakeDocker)
-	f.nodes = []runtime.Node{
-		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true},
-		{Hostname: "nextrum-sy-2", ID: "n2", Role: "worker", Status: "ready", Availability: "active"},
-	}
-	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-	if got := deps.Store.SettingDefault(ctx, SettingPlatformNode(), ""); got != "nextrum-sy-1" {
-		t.Fatalf("platform_node = %q, want the leader hostname nextrum-sy-1", got)
-	}
-}
-
-// TestUpdate_PreservesPlatformNode verifies FIX 1: a preset platform_node is
-// never clobbered by the leader default.
-func TestUpdate_PreservesPlatformNode(t *testing.T) {
-	deps, cfgDir := seedUpdateState(t)
-	ctx := context.Background()
-	if err := deps.Store.SetSetting(ctx, SettingPlatformNode(), "operator-pinned"); err != nil {
-		t.Fatalf("SetSetting platform_node: %v", err)
-	}
-	f := deps.Docker.(*fakeDocker)
-	f.nodes = []runtime.Node{
-		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true},
-	}
-	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-	if got := deps.Store.SettingDefault(ctx, SettingPlatformNode(), ""); got != "operator-pinned" {
-		t.Fatalf("platform_node = %q, want the preset value operator-pinned", got)
-	}
-}
-
 // TestUpdate_RepairsMissingRenderedSecretMount verifies FIX 3(b): a Swarm secret
 // that a rendered platform stack mounts but that was deleted by hand is
 // re-created during cluster update (the rendered hash is unchanged, so the

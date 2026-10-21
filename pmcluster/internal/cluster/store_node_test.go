@@ -116,29 +116,21 @@ func TestPickStoreNode_LeaderIgnoresStorageNodes(t *testing.T) {
 	}
 }
 
-// TestPickStoreNode_AvoidsPlatformNode verifies BUG-09: the store must not
-// co-locate with the platform stack. With two non-storage candidates — one the
-// platform node, one not — the non-platform node wins; when the platform node is
-// the ONLY non-storage node, it is used as a last resort.
-func TestPickStoreNode_AvoidsPlatformNode(t *testing.T) {
+// TestPickStoreNode_PrefersNonStorageNode: the durable copy must not share a
+// node with the data it protects. With two non-storage candidates the first
+// non-storage node wins; when the only non-storage node is the leader, it is
+// used as a last resort.
+func TestPickStoreNode_PrefersNonStorageNode(t *testing.T) {
 	st, ctx := newStoreNodeTest(t)
-	if err := st.SetSetting(ctx, SettingPlatformNode(), "platform-node"); err != nil {
+	if err := st.SetSetting(ctx, SettingStorageNodes(), "storage-1"); err != nil {
 		t.Fatal(err)
 	}
 	f := newFakeDocker()
 	f.nodes = []runtime.Node{
-		{Hostname: "platform-node", Role: "manager"},
+		{Hostname: "storage-1", Role: "manager", IsLeader: true},
 		{Hostname: "other", Role: "manager"},
 	}
 	if got := pickStoreNode(ctx, f, st); got != "other" {
-		t.Errorf("pickStoreNode = %q, want other (non-platform node preferred)", got)
-	}
-
-	// Only the platform node is available (and non-storage) → it is picked.
-	f.nodes = []runtime.Node{
-		{Hostname: "platform-node", Role: "manager"},
-	}
-	if got := pickStoreNode(ctx, f, st); got != "platform-node" {
-		t.Errorf("pickStoreNode (only platform node) = %q, want platform-node (last resort)", got)
+		t.Errorf("pickStoreNode = %q, want other (non-storage node preferred)", got)
 	}
 }

@@ -289,7 +289,9 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			BackupCron:                     LoadBackupCron(ctx, deps.Store),
 			StorageNodeConstraint:          deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
 			StorageNodeLabel:               runtime.StorageNodeLabel,
-			PlatformNode:                   loadPlatformNode(ctx, deps.Store),
+			EdgeNode:                       LeaderNode(ctx, deps.Docker),
+			ObservabilityNode:              ObservabilityNode(ctx, deps.Store),
+			BackupNode:                     BackupPlacement(ctx, deps.Store, deps.Docker),
 			ManagedSecretNames:             managedSecretNames(ctx, deps.Store),
 			ObservabilityLogsRetentionDays: logsDays, ObservabilityMetricsRetentionDays: metricsDays, ObservabilityTracesRetentionDays: tracesDays,
 			BackupS3:        s3b,
@@ -739,12 +741,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// leader. Pinning platform services to the leader (the API host) keeps
 		// them on a node that can serve them. An operator-set value is left
 		// untouched.
-		if leaderHost != "" && deps.Store.SettingDefault(ctx, SettingPlatformNode(), "") == "" {
-			if err := deps.Store.SetSetting(ctx, SettingPlatformNode(), leaderHost); err != nil {
-				return fmt.Errorf("persist platform_node: %w", err)
-			}
-			fmt.Fprintf(out, "  ⚠ platform_node was unset — pinned platform services to the leader %s\n", leaderHost)
-		}
 		raw := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
 		if raw == "" {
 			return nil
@@ -972,7 +968,9 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		BackupCron:                     LoadBackupCron(ctx, deps.Store),
 		StorageNodeConstraint:          deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
 		StorageNodeLabel:               runtime.StorageNodeLabel,
-		PlatformNode:                   loadPlatformNode(ctx, deps.Store),
+		EdgeNode:                       LeaderNode(ctx, deps.Docker),
+		ObservabilityNode:              ObservabilityNode(ctx, deps.Store),
+		BackupNode:                     BackupPlacement(ctx, deps.Store, deps.Docker),
 		ManagedSecretNames:             managedSecretNames(ctx, deps.Store),
 		ObservabilityLogsRetentionDays: logsDays, ObservabilityMetricsRetentionDays: metricsDays, ObservabilityTracesRetentionDays: tracesDays,
 		BackupS3: s3b,

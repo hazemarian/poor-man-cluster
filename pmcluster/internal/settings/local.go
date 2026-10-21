@@ -46,7 +46,6 @@ var clusterSettingKeys = []string{
 	cluster.SettingDomain(),
 	cluster.SettingOOEmail(),
 	cluster.SettingTraefikAdminUser(),
-	cluster.SettingPlatformNode(),
 	cluster.SettingObservabilityLogsRetentionDays(),
 	cluster.SettingObservabilityMetricsRetentionDays(),
 	cluster.SettingObservabilityTracesRetentionDays(),

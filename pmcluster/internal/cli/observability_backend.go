@@ -98,9 +98,8 @@ func newLocalObservabilityReader(ctx context.Context, st *store.Store, cipher *c
 	}
 	// Where to read from: the node running the Parseable task, resolved from the
 	// swarm so a placement change cannot point the reader at nothing. A lookup
-	// failure is not fatal — it degrades to the platform node, then to loopback.
-	platformNode := st.SettingDefault(ctx, cluster.SettingPlatformNode(), "")
-	source, err := localObservabilitySource(observabilityEndpoint(ctx, dc, platformNode), cred.Username, string(plain))
+	// failure is not fatal — it degrades to loopback.
+	source, err := localObservabilitySource(observabilityEndpoint(ctx, dc), cred.Username, string(plain))
 	if err != nil {
 		return reader, err
 	}
@@ -120,19 +119,13 @@ func newLocalObservabilityReader(ctx context.Context, st *store.Store, cipher *c
 // unset, renamed, or ignored by placement, and a reader built on it silently
 // dials an address where nothing listens. The setting is only a fallback for a
 // cluster where no task is running yet, and loopback is the last resort.
-func observabilityEndpoint(ctx context.Context, dc parseableLocator, platformNode string) string {
-	host := ""
+func observabilityEndpoint(ctx context.Context, dc parseableLocator) string {
 	if dc != nil {
-		if name, ok := parseableTaskNode(ctx, dc); ok && dc != nil {
-			host = name
-		}
 		if nodes, err := dc.NodeList(ctx); err == nil {
-			if addr := addressOf(host, nodes); addr != "" {
-				return "http://" + net.JoinHostPort(nodeHost(addr), strconv.Itoa(ObservabilitySourcePort))
-			}
-			// No running task: fall back to the configured platform node.
-			if addr := addressOf(platformNode, nodes); addr != "" {
-				return "http://" + net.JoinHostPort(nodeHost(addr), strconv.Itoa(ObservabilitySourcePort))
+			if name, ok := parseableTaskNode(ctx, dc); ok {
+				if addr := addressOf(name, nodes); addr != "" {
+					return "http://" + net.JoinHostPort(nodeHost(addr), strconv.Itoa(ObservabilitySourcePort))
+				}
 			}
 		}
 	}

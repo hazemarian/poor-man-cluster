@@ -61,13 +61,6 @@ const (
 	// newest of these. Set e.g. "0 3 * * *" for the old daily 03:00 cadence.
 	settingBackupCron = "backup_cron"
 
-	// settingPlatformNode pins every platform service (traefik, openobserve,
-	// edge, backup, sso) to ONE specific node hostname. Empty keeps the role
-	// constraint node.role == manager. Set it to match the stateful-app
-	// placement rule so platform state under /var/stack/data can never be
-	// rescheduled to a node with empty storage.
-	settingPlatformNode = "platform_node"
-
 	// OpenObserve stream retention (days). Unbounded retention is how a
 	// metrics-heavy cluster silently grows to hundreds of GB — the values
 	// render into ZO_LOGS/METRICS/TRACES_RETENTION_DAYS.
@@ -148,7 +141,6 @@ func SettingVolumeRoot() string                     { return settingVolumeRoot }
 func SettingBackupAllNodes() string                 { return settingBackupAllNodes }
 func SettingBackupRetentionDays() string            { return settingBackupRetentionDays }
 func SettingBackupCron() string                     { return settingBackupCron }
-func SettingPlatformNode() string                   { return settingPlatformNode }
 func SettingObservabilityLogsRetentionDays() string { return settingObservabilityLogsRetentionDays }
 func SettingObservabilityMetricsRetentionDays() string {
 	return settingObservabilityMetricsRetentionDays
@@ -323,15 +315,6 @@ func loadBackupAllNodes(ctx context.Context, st *store.Store) bool {
 		return false
 	}
 	return st.SettingDefault(ctx, settingBackupAllNodes, "") == "true"
-}
-
-// loadPlatformNode returns the hostname platform services are pinned to
-// (empty = keep the node.role == manager constraint).
-func loadPlatformNode(ctx context.Context, st *store.Store) string {
-	if st == nil {
-		return ""
-	}
-	return st.SettingDefault(ctx, settingPlatformNode, "")
 }
 
 // LoadStorageFailover reports whether automatic storage failover is enabled

@@ -118,26 +118,17 @@ func TestObservabilityEndpointFollowsTheRunningTask(t *testing.T) {
 		},
 	}
 
-	// The task's node wins, and it is NOT the platform_node setting's node.
-	if got, want := observabilityEndpoint(context.Background(), loc, "nxt-sw-1-m"), "http://10.7.224.13:"+port; got != want {
-		t.Fatalf("endpoint = %q, want %q (the task's node, not the setting)", got, want)
+	// The task's node is the answer.
+	if got, want := observabilityEndpoint(context.Background(), loc), "http://10.7.224.13:"+port; got != want {
+		t.Fatalf("endpoint = %q, want %q (the running task's node)", got, want)
 	}
 
-	// No running task (still scheduling, or the stack is gone): fall back to the
-	// configured platform node so a fresh install can still be read.
-	idle := loc
-	idle.tasks = map[string][]runtime.ServiceTask{"svc-parseable": {{State: "pending"}}}
-	if got, want := observabilityEndpoint(context.Background(), idle, "nxt-sw-1-m"), "http://10.7.224.12:"+port; got != want {
-		t.Fatalf("fallback endpoint = %q, want %q", got, want)
+	// No running task, or no swarm client at all: loopback, never an
+	// unroutable URL — and never a panic.
+	if got, want := observabilityEndpoint(context.Background(), fakeLocator{}), "http://127.0.0.1:"+port; got != want {
+		t.Fatalf("no task endpoint = %q, want %q", got, want)
 	}
-
-	// Neither a task nor a setting: loopback, never an unroutable URL.
-	if got, want := observabilityEndpoint(context.Background(), idle, ""), "http://127.0.0.1:"+port; got != want {
-		t.Fatalf("bare endpoint = %q, want %q", got, want)
-	}
-
-	// No swarm client at all must not panic.
-	if got, want := observabilityEndpoint(context.Background(), nil, ""), "http://127.0.0.1:"+port; got != want {
+	if got, want := observabilityEndpoint(context.Background(), nil), "http://127.0.0.1:"+port; got != want {
 		t.Fatalf("nil locator endpoint = %q, want %q", got, want)
 	}
 }

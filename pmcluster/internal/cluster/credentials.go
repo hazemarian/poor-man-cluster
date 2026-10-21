@@ -712,18 +712,17 @@ func pickStoreNode(ctx context.Context, docker runtime.Client, st *store.Store) 
 	for _, h := range splitStorageNodes(st.SettingDefault(ctx, SettingStorageNodes(), "")) {
 		storage[h] = true
 	}
-	platform := st.SettingDefault(ctx, SettingPlatformNode(), "")
 
-	// Preferred: a non-storage, non-platform worker (the durable copy lives in
-	// a different failure domain than both the data and the platform stack).
+	// Preferred: a non-storage worker (the durable copy lives in a different
+	// failure domain than the data and the platform stack).
 	for _, n := range nodes {
-		if n.Role == "worker" && !storage[n.Hostname] && n.Hostname != platform {
+		if n.Role == "worker" && !storage[n.Hostname] {
 			return n.Hostname
 		}
 	}
-	// Then any non-storage, non-platform node.
+	// Then any node that is not a storage node.
 	for _, n := range nodes {
-		if !storage[n.Hostname] && n.Hostname != platform {
+		if !storage[n.Hostname] {
 			return n.Hostname
 		}
 	}
