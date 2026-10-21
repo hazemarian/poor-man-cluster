@@ -99,7 +99,17 @@ func newLocalObservabilityReader(ctx context.Context, st *store.Store, cipher *c
 	// Where to read from: the node running the Parseable task, resolved from the
 	// swarm so a placement change cannot point the reader at nothing. A lookup
 	// failure is not fatal — it degrades to loopback.
-	source, err := localObservabilitySource(observabilityEndpoint(ctx, dc), cred.Username, string(plain))
+	//
+	// Redaction covers both secrets this process can actually see: the backend
+	// password it authenticates with, and the edge API token (a log line echoing
+	// the token is the one realistic way a reader returns it in clear).
+	redact := []string{string(plain)}
+	if tok, err := st.Credential(ctx, "edge_api_token"); err == nil && tok != nil {
+		if tp, derr := cipher.Decrypt(tok.PasswordCiphertext); derr == nil && len(tp) > 0 {
+			redact = append(redact, string(tp))
+		}
+	}
+	source, err := localObservabilitySource(observabilityEndpoint(ctx, dc), cred.Username, string(plain), redact...)
 	if err != nil {
 		return reader, err
 	}
@@ -184,9 +194,11 @@ func nodeHost(addr string) string {
 }
 
 // localObservabilitySource builds the Parseable adapter for the given endpoint.
-// The password is used only to construct the adapter's Authorization header and
-// the value redactor; it is never returned or logged.
-func localObservabilitySource(endpoint, username, password string) (*parseable.Client, error) {
+// The redact list is applied to every row before it leaves the daemon: the
+// backend password, and the edge API token because the daemon is the component
+// that can see both and a log line echoing the token would otherwise render in
+// clear in the console.
+func localObservabilitySource(endpoint, username, password string, redact ...string) (*parseable.Client, error) {
 	username = strings.TrimSpace(username)
 	if username == "" {
 		return nil, errors.New("observability credential has no username")
@@ -199,7 +211,7 @@ func localObservabilitySource(endpoint, username, password string) (*parseable.C
 		Username: username,
 		Password: password,
 		Timeout:  observability.MaxQueryDuration,
-		Redactor: observability.NewRedactor(password),
+		Redactor: observability.NewRedactor(redact...),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build observability source: %w", err)

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,5 +152,31 @@ func TestNodeHostStripsTheManagerPort(t *testing.T) {
 	}
 	if got := nodeHost(" 10.7.224.13 "); got != "10.7.224.13" {
 		t.Fatalf("nodeHost did not trim whitespace: %q", got)
+	}
+}
+
+// TestObservabilityRedactListMasksBothSecrets pins the daemon redact list: it
+// must carry the Parseable password AND the edge API token. The daemon is the
+// one component that holds both, so a log line echoing the token would otherwise
+// render in clear in the console — a redactor built from the backend password
+// alone reads as protection while leaving the token exposed.
+func TestObservabilityRedactListMasksBothSecrets(t *testing.T) {
+	const backendPass = "parseable-admin-pass-9f3a"
+	const edgeToken = "pmc_edge_token_7c1de0b4"
+
+	r := observability.NewRedactor(backendPass, edgeToken)
+	rows := r.Rows([]observability.Row{{
+		"p_timestamp": "2026-10-21T10:00:00Z",
+		"body":        "auth Basic " + backendPass + " token=" + edgeToken,
+	}})
+	if len(rows) != 1 {
+		t.Fatalf("expected one row, got %d", len(rows))
+	}
+	body, _ := rows[0]["body"].(string)
+	if strings.Contains(body, backendPass) {
+		t.Fatalf("backend password survived redaction: %q", body)
+	}
+	if strings.Contains(body, edgeToken) {
+		t.Fatalf("edge API token survived redaction: %q", body)
 	}
 }
