@@ -293,15 +293,28 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 	// /api/me is an authorization probe, not presentation data. The daemon
 	// intentionally denies it to stack-scoped tokens, so do not use any
 	// cluster-wide inventory or Parseable evidence until it succeeds.
-	scopeCtx, scopeCancel := context.WithTimeout(ctx, 4*time.Second)
-	_, scopeErr := api.Me(scopeCtx)
-	scopeCancel()
-	if scopeErr != nil {
-		d.ScopeError = "daemon authorization could not be established"
-		d.ErrKey = "observability.scope_unavailable"
-		d.Evidence.Unavailable = true
-		d.Evidence.UnavailableWhy = "scope"
-		return d
+	// A burst of fragments shares ONE authorization probe: it is a scope check,
+	// not data, and paying 0.2s for it on every panel buys nothing.
+	if ok, fresh := c.ObsCache.MeAuthorized(); fresh {
+		if !ok {
+			d.ScopeError = "daemon authorization could not be established"
+			d.ErrKey = "observability.scope_unavailable"
+			d.Evidence.Unavailable = true
+			d.Evidence.UnavailableWhy = "scope"
+			return d
+		}
+	} else {
+		scopeCtx, scopeCancel := context.WithTimeout(ctx, 4*time.Second)
+		_, scopeErr := api.Me(scopeCtx)
+		scopeCancel()
+		c.ObsCache.RecordMe(scopeErr == nil)
+		if scopeErr != nil {
+			d.ScopeError = "daemon authorization could not be established"
+			d.ErrKey = "observability.scope_unavailable"
+			d.Evidence.Unavailable = true
+			d.Evidence.UnavailableWhy = "scope"
+			return d
+		}
 	}
 	d.ScopeKnown = true
 
@@ -329,7 +342,20 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 	go func() { defer wg.Done(); services, servicesErr = api.ListServices(healthCtx, "") }()
 	go func() { defer wg.Done(); info, infoErr = api.ClusterInfo(healthCtx) }()
 	go func() { defer wg.Done(); nodes, nodesErr = api.Nodes(healthCtx) }()
-	go func() { defer wg.Done(); backups, backupsErr = api.ListBackups(healthCtx, 50) }()
+	go func() {
+		defer wg.Done()
+		// Cached: this one runs a discovery pass over the archive dir and the
+		// store (~1.8s) and it gated the whole page behind wg.Wait(). Backup age
+		// can be 30s stale; a page cannot.
+		if cached, ok := c.ObsCache.Backups(); ok {
+			backups = cached
+			return
+		}
+		backups, backupsErr = api.ListBackups(healthCtx, 50)
+		if backupsErr == nil {
+			c.ObsCache.RecordBackups(backups)
+		}
+	}()
 	go func() { defer wg.Done(); site, siteErr = api.SiteCert(healthCtx) }()
 	go func() { defer wg.Done(); hosts, hostsErr = api.ListHostCerts(healthCtx) }()
 	wg.Wait()

@@ -48,7 +48,17 @@ type Controller struct {
 	// ObservabilityRate bounds how often the console asks the daemon for
 	// telemetry, so one open tab cannot pin the backend. Shared by all users by
 	// design: it protects the backend, not a per-operator quota.
+	//
+	// Sized for the page's own fan-out: the observability view loads a shell plus
+	// several fragments, and a burst smaller than that rejects its own requests
+	// with "observability.busy" — turning a slow page into a broken-looking one.
 	ObservabilityRate *rate.Limiter
+
+	// ObsCache memoises the two daemon reads that dominate a page load and change
+	// slowly: the /api/me authorization probe and the backup listing (a discovery
+	// pass over the archive dir + store, measured at ~1.8s). Without it every
+	// fragment re-pays both, and the page multiplies that by the number of panels.
+	ObsCache *ObservabilityCache
 }
 
 // loadParams reads the stored overrides and the env fallbacks into the running

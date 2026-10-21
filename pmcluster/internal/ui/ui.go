@@ -121,7 +121,8 @@ func NewApp(cfg Config) (*App, error) {
 		// the daemon's auth, redaction and bounds for free.
 		Telemetry:         remote.NewTelemetry(cfg.PMAPIURL, cfg.PMAPIToken, cfg.UpstreamTimeout),
 		Redactor:          observability.NewRedactor(cfg.PMAPIToken),
-		ObservabilityRate: rate.NewLimiter(2, 8),
+		ObservabilityRate: rate.NewLimiter(10, 40),
+		ObsCache:          controllers.NewObservabilityCache(),
 	}
 
 	return &App{Cfg: cfg, Store: st, API: api, Auth: auth, ctrl: ctrl}, nil
