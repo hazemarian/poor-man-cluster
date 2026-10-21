@@ -127,6 +127,11 @@ consent boundary that fails open is worse than a duplicated line.
 memory through Docker stats — you are opting out of log duplication, not out of
 monitoring.
 
+**Known limit:** the Docker observer behind this path only reports a container
+that exposes at least one port. A container with no `ports:` in its manifest
+produces no filelog receiver, so it contributes container metrics but no stdout
+logs. Give a workload one exposed port if its stdout matters.
+
 Do not also exclude the container in `filelog`'s `exclude:`: that option matches
 file paths, and container log paths are built from container ids, so a
 name-based glob silently matches nothing.

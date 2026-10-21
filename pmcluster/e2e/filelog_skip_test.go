@@ -153,7 +153,12 @@ func TestE2EFilelogAttributionAndSkip(t *testing.T) {
 	// Compose-style identity labels are what the receiver maps to
 	// <project>_<service>; a Swarm service carries the swarm labels instead.
 	emitter := func(name, service, marker string, skip bool) {
+		// --expose matters: this Docker observer version only reports a
+		// container endpoint for a container that exposes at least one port (the
+		// endpoint's `port` field carries it). A port-less container produces no
+		// endpoint, so no receiver — see the docs note about that limit.
 		args := []string{"run", "-d", "--name", name, "--network", netName,
+			"--expose", "8080",
 			"--label", "com.docker.compose.project=demoe2e",
 			"--label", "com.docker.compose.service=" + service}
 		if skip {
