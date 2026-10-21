@@ -467,7 +467,18 @@ func waitServiceHealthy(t *testing.T, ctx context.Context, fullName string, want
 	for {
 		select {
 		case <-queryCtx.Done():
-			t.Fatalf("service %s: did not reach %d running replicas within %v", fullName, wantRep, deadline)
+			// Say WHY, not just "0/1": a task that never starts (no disk space,
+			// image pull denied, bad config) and a task that starts and exits
+			// look identical from `service ls`. Without this the next reader
+			// gets a timeout and no cause.
+			ps, _ := dockerRunNoFail(ctx, "service", "ps", "--no-trunc", fullName,
+				"--format", "{{.Name}}\t{{.CurrentState}}\t{{.Error}}")
+			taskLogs, _ := dockerRunNoFail(ctx, "service", "logs", "--tail", "20", "--no-task-ids", fullName)
+			nodes, _ := dockerRunNoFail(ctx, "node", "ls", "--format", "{{.Hostname}}\t{{.Status}}")
+			disk, _ := dockerRunNoFail(ctx, "system", "df", "--format", "{{.Type}}\t{{.Size}}\t{{.Used}}\t{{.Available}}")
+			t.Fatalf("service %s: did not reach %d running replicas within %v\n"+
+				"--- service ps ---\n%s\n--- task logs ---\n%s\n--- nodes ---\n%s\n--- docker df ---\n%s",
+				fullName, wantRep, deadline, ps, taskLogs, nodes, disk)
 		default:
 		}
 
