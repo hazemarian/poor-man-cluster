@@ -328,13 +328,41 @@ func TestRestore_KeepsCurrentDB(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Local DB + key are NEWER than the snapshot (shared-storage case): keep
-	// them, restore nothing.
+	// Local DB + key are at the snapshot's revision (a node that already
+	// synced): keep them, restore nothing. "Current" is the revision marker, not
+	// the mtime — every follower writes its own data.db, so an mtime can never
+	// distinguish "synced" from "stale content behind a fresh file".
 	curDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(curDir, "data.db"), []byte("live-db"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(curDir, ".encryption_key"), []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Same key bytes as the snapshot's key config, and the snapshot's revision.
+	var stateName, keyData string
+	for name, cfg := range f.configs {
+		// Key prefix first: "pmcluster_state_key_<ts>" also begins with the
+		// state prefix.
+		switch {
+		case strings.HasPrefix(name, KeyNamePrefix+"_"):
+			keyData = string(cfg.Data)
+		case strings.HasPrefix(name, StateNamePrefix+"_"):
+			stateName = name
+		}
+	}
+	if stateName == "" || keyData == "" {
+		t.Fatalf("snapshot missing (state=%q key=%v)", stateName, keyData != "")
+	}
+	if err := os.WriteFile(filepath.Join(curDir, ".encryption_key"), []byte(keyData), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	at, err := parseSnapshotAt(f.configs[stateName].Labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kPre := &Kit{Docker: f, DataDir: curDir, Log: zerolog.Nop()}
+	if err := kPre.writeRevision(at); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(2 * time.Millisecond)
@@ -355,6 +383,64 @@ func TestRestore_KeepsCurrentDB(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(curDir, "data.db")); string(b) != "live-db" {
 		t.Fatal("current local DB was clobbered")
+	}
+}
+
+// TestRestore_RefreshesBehindContentDespiteNewerMtime is the live defect: a
+// follower manager writes its own data.db on every reconcile pass, so its mtime
+// is always newer than the snapshot while its CONTENT is arbitrarily old. Under
+// an mtime check that node never restores again — it kept an Oct-12 credential
+// table (openobserve_admin, no observability_admin) while reporting itself
+// current. The revision marker is what makes it sync.
+func TestRestore_RefreshesBehindContentDespiteNewerMtime(t *testing.T) {
+	dataDir := t.TempDir()
+	f := newFake()
+	writeKit(t, dataDir)
+	k := &Kit{Docker: f, DataDir: dataDir, Log: zerolog.Nop()}
+	if err := k.Snapshot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// A follower: its own stale DB, written AFTER the snapshot, and a revision
+	// marker that predates it.
+	behind := t.TempDir()
+	if err := os.WriteFile(filepath.Join(behind, "data.db"), []byte("stale-db"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	staleKey := bytes.Repeat([]byte("k"), 32)
+	if err := os.WriteFile(filepath.Join(behind, ".encryption_key"), staleKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kBehind := &Kit{Docker: f, DataDir: behind, Log: zerolog.Nop()}
+	if err := kBehind.writeRevision(time.Now().Add(-72 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(filepath.Join(behind, "data.db"), later, later); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := kBehind.Restore(context.Background())
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if !restored {
+		t.Fatal("a behind-revision node with a NEWER mtime must still restore")
+	}
+	// The DB and the key must come from the snapshot together — adopting one
+	// without the other leaves ciphertext the node cannot read.
+	if b, _ := os.ReadFile(filepath.Join(behind, "data.db")); string(b) == "stale-db" {
+		t.Fatal("stale DB survived a restore")
+	}
+	got, err := os.ReadFile(filepath.Join(behind, ".encryption_key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(got, staleKey) {
+		t.Fatal("the node kept its own encryption key alongside the cluster's DB — its credentials would be unreadable")
+	}
+	if kBehind.readRevision().IsZero() {
+		t.Fatal("the restored revision was not recorded, so the next pass would restore again")
 	}
 }
 

@@ -21,7 +21,17 @@ services:
   parseable:
     image: parseable/parseable:v2.8.0
     replicas: 1
-    placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
+    placement: "[[ if .ObservabilityNode ]][[.ObservabilityNode]][[ else if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
+    # Published on the HOST, not the routing mesh: the port is bound only on the
+    # node running this task, so exactly ONE node listens. The daemon on every
+    # node reads it at the platform node address on the cluster private network,
+    # which ./harden-host.sh allows while denying the WAN. Ingress publishing
+    # would bind all four nodes for a reader that needs one.
+    # The port must stay in step with cluster.ObservabilityPort.
+    ports:
+      - target: 8000
+        published: 8000
+        mode: host
     # parseable joins traefik-net (Traefik routers) in addition to the
     # app-level monitoring-net; the otel-collector joins only monitoring-net.
     networks:
@@ -88,7 +98,7 @@ services:
   provision:
     image: curlimages/curl:8.10.1
     run_once: true
-    placement: "[[ if .PlatformNode ]][[.PlatformNode]][[ else ]]manager[[ end ]]"
+    placement: "[[ if .ObservabilityNode ]][[.ObservabilityNode]][[ else if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
     networks:
       - monitoring-net
     configs:

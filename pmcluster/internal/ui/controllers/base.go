@@ -8,10 +8,12 @@ package controllers
 import (
 	"context"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views"
+	"golang.org/x/time/rate"
 )
 
 // Setting keys persisted in the local store. Defined in the store package so
@@ -38,6 +40,25 @@ type Controller struct {
 	Domain   string
 	EnvAPI   string
 	EnvToken string
+	// Telemetry is nil when the daemon reports no telemetry source, or when the
+	// console cannot reach it. The page still renders daemon-derived health.
+	Telemetry observability.Source
+	// Redactor masks secrets in anything the page shows or compacts.
+	Redactor observability.Redactor
+	// ObservabilityRate bounds how often the console asks the daemon for
+	// telemetry, so one open tab cannot pin the backend. Shared by all users by
+	// design: it protects the backend, not a per-operator quota.
+	//
+	// Sized for the page's own fan-out: the observability view loads a shell plus
+	// several fragments, and a burst smaller than that rejects its own requests
+	// with "observability.busy" — turning a slow page into a broken-looking one.
+	ObservabilityRate *rate.Limiter
+
+	// ObsCache memoises the two daemon reads that dominate a page load and change
+	// slowly: the /api/me authorization probe and the backup listing (a discovery
+	// pass over the archive dir + store, measured at ~1.8s). Without it every
+	// fragment re-pays both, and the page multiplies that by the number of panels.
+	ObsCache *ObservabilityCache
 }
 
 // loadParams reads the stored overrides and the env fallbacks into the running

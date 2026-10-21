@@ -262,15 +262,23 @@ type RenderInput struct {
 	// against when StorageNodeConstraint is set (runtime.StorageNodeLabel).
 	StorageNodeLabel string
 
-	// PlatformNode pins every platform service (infra traefik, openobserve,
-	// edge console, backup agents, sso) to ONE specific node via the Swarm
-	// constraint `node.hostname == <value>`. Empty (default) keeps the role
-	// constraint `node.role == manager`. Set it when a platform service
-	// holds state on a node (e.g. /var/stack/data under the volume root) so
-	// adding another manager can never reschedule it to a node with empty
-	// storage. Mirrors the stateful-app placement rule — platform services
-	// are stateful too.
-	PlatformNode string
+	// LeaderNode is the hostname of the current leader. The console follows it
+	// (it is the API host), and every stacked pool falls back to it: a
+	// single-server cluster has no storage pool and no worker, so "any manager"
+	// is the only thing left and a role constraint there constrains nothing.
+	LeaderNode string
+
+	// ObservabilityNode is the hostname the observability stack is pinned to:
+	// the cluster's standard storage placement (round-robin over storage_nodes,
+	// then frozen). Parseable keeps a Parquet store on a host path, so it must
+	// never be rescheduled onto a node holding none of its data.
+	ObservabilityNode string
+
+	// BackupNode is the hostname the backup stack is pinned to. SeaweedFS holds
+	// the durable copy on a host path and is deliberately placed OUTSIDE the
+	// storage pool — round-robin over the WORKER nodes — so a backup never
+	// shares a failure domain with the data it protects.
+	BackupNode string
 
 	// ObservabilityLogsRetentionDays / ObservabilityMetricsRetentionDays / ObservabilityTracesRetentionDays
 	// bound how long OpenObserve keeps each stream type (rendered into
@@ -525,7 +533,7 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	newWriter := func(extra map[string]string) *manifest.ComposeWriter {
 		return &manifest.ComposeWriter{
 			VolumeRoot:  effectiveVolumeRoot(in.VolumeRoot),
-			PinNode:     in.PlatformNode,
+			PinNode:     "",
 			SecretNames: platformSecretNames(in),
 			ConfigNames: platformConfigNames(in),
 			ExtraLabels: extra,

@@ -12,7 +12,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/time/rate"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/remote"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/controllers"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
@@ -112,6 +115,14 @@ func NewApp(cfg Config) (*App, error) {
 		Store: st, API: api, Views: renderer, Auth: auth,
 		Version: cfg.AppVersion, Domain: cfg.ClusterDomain,
 		EnvAPI: cfg.PMAPIURL, EnvToken: cfg.PMAPIToken,
+		// The console asks the daemon for telemetry; it never holds the
+		// backend credential and never reaches the telemetry store itself. One
+		// credential lives in one process (the daemon), and this page inherits
+		// the daemon's auth, redaction and bounds for free.
+		Telemetry:         remote.NewTelemetry(cfg.PMAPIURL, cfg.PMAPIToken, cfg.UpstreamTimeout),
+		Redactor:          observability.NewRedactor(cfg.PMAPIToken),
+		ObservabilityRate: rate.NewLimiter(10, 40),
+		ObsCache:          controllers.NewObservabilityCache(),
 	}
 
 	return &App{Cfg: cfg, Store: st, API: api, Auth: auth, ctrl: ctrl}, nil
@@ -188,6 +199,16 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/services", svc.List)
 	vr.GET("/services/:stack/:service/tasks", svc.Tasks)
 	vr.GET("/services/:stack/:service/logs", svc.Logs)
+
+	// ---- observability: bounded read-only cluster telemetry ----
+	// The page and its fragments are viewer-level reads. Every number they show
+	// comes from the daemon API, so the console holds no backend credential and
+	// the daemon's bearer + role + stack-scope rules stay the single gate.
+	obs := controllers.Observability{Controller: a.ctrl}
+	vr.GET("/observability", obs.Page)
+	vr.GET("/observability/summary", obs.Summary)
+	vr.GET("/observability/evidence", obs.Evidence)
+	vr.GET("/observability/traces", obs.Traces)
 
 	// Platform-managed services (edge/traefik/observability/backup/sso) live on
 	// their own read-only page, apart from the customer app services.

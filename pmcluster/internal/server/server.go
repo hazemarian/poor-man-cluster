@@ -26,6 +26,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
@@ -106,6 +107,11 @@ type Deps struct {
 	// history, logs, restart, exec) under /api/services. Optional; when nil
 	// those routes are omitted.
 	Services services.Service
+
+	// Observability exposes bounded read-only cluster telemetry under
+	// /api/observability. It requires an authenticated viewer, and a
+	// stack-scoped token is refused: cluster telemetry is not a tenant surface.
+	Observability observability.Reader
 }
 
 // New assembles the chi router from the optional Deps; every nil dependency
@@ -206,6 +212,11 @@ func New(d Deps) http.Handler {
 		}
 		if d.Services != nil {
 			(&services.HTTP{Svc: d.Services}).Mount(r)
+		}
+		if d.Observability != nil {
+			r.With(auth.RequireRole(auth.RoleViewer)).Group(func(or chi.Router) {
+				(&observability.HTTP{Svc: d.Observability}).Mount(or)
+			})
 		}
 	})
 

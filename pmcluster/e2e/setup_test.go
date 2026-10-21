@@ -223,7 +223,11 @@ func TestSetupWizardClusterUp(t *testing.T) {
 	if !strings.Contains(ssoStackOut, "sso") {
 		t.Fatalf("expected sso stack in docker stack ls, got:\n%s", ssoStackOut)
 	}
-	waitServiceHealthy(t, ctx, "sso_oauth2-proxy", 1, 90*time.Second)
+	// 180s, not 90s: this budget pays for a public-ECR image pull on a cold
+	// runner (bitnami/oauth2-proxy, ~50MB over a shared egress). At 90s the test
+	// failed two runs in three while the service was still "starting" — the task
+	// was pulling, not broken. Raise the budget, don't retry the job.
+	waitServiceHealthy(t, ctx, "sso_oauth2-proxy", 1, 180*time.Second)
 
 	// sso_cookie_secret credential must exist in the store.
 	t.Log("Verifying sso_cookie_secret credential")

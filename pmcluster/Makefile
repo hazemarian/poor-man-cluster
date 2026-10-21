@@ -39,7 +39,10 @@ test:
 
 ## e2e : run end-to-end tests in ./e2e (requires Docker, may be slow)
 e2e:
-	$(GO) test $(GOFLAGS) -timeout 10m -tags=e2e ./e2e/...
+	# -v so the log names every e2e test and whether it PASSed or SKIPped:
+	# without it a skipped test is indistinguishable from a passing one, and a
+	# silent skip once hid a broken collector path while the job stayed green.
+	$(GO) test -v $(GOFLAGS) -timeout 10m -tags=e2e ./e2e/...
 
 ## lint : run golangci-lint (install via: brew install golangci-lint)
 lint:

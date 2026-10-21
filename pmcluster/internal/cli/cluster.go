@@ -267,9 +267,17 @@ func printUpdateResult(out io.Writer, res *cluster.UpdateResult) {
 	// rather than being folded into the same sentence.
 	if len(res.StacksDeployed) == 0 && len(res.ConfigsChanged) == 0 {
 		fmt.Fprintln(out)
-		if res.CertCreated || res.KeyCreated {
+		switch {
+		case res.CertCreated || res.KeyCreated:
 			fmt.Fprintln(out, "  (no stacks redeployed and no configs replaced — only the TLS cert/key secret rotated)")
-		} else {
+		case res.PriorApply != nil:
+			// The daemon's reconcile loop runs this same pipeline with its
+			// output discarded, so an upgrade can be applied BY THE LOOP before
+			// the operator runs this command. Reporting a bare "nothing to
+			// redeploy" there is how a real deploy looked like a no-op.
+			fmt.Fprintln(out, "  (nothing to redeploy in this run)")
+			fmt.Fprintf(out, "  %s\n", res.PriorApply.Line())
+		default:
 			fmt.Fprintln(out, "  (no stacks redeployed and no configs replaced — nothing to redeploy)")
 		}
 	}

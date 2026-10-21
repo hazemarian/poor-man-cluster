@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"sigs.k8s.io/yaml"
 
@@ -25,6 +26,12 @@ import (
 type UpdateInput struct {
 	ConfigDir string
 	Version   string
+
+	// Source names the caller in the apply record: "update" for an operator run
+	// (`cluster update` or the API), "reconcile" for the daemon's leader-only
+	// loop. Without it, a change the LOOP applied is indistinguishable from one
+	// no one applied at all.
+	Source string
 
 	// Force makes Update existence-unaware AND hash-unaware: every platform
 	// stack is redeployed regardless of its stored rendered hash or whether it
@@ -50,6 +57,12 @@ type UpdateResult struct {
 	EdgeCreated    bool
 	EdgeDeployed   bool
 	StacksDeployed []string
+
+	// PriorApply is set when this run changed nothing: it is the last run that
+	// did, whoever ran it. This is what stops an operator's `cluster update`
+	// from reporting "nothing happened" immediately after the reconcile loop
+	// applied their upgrade.
+	PriorApply *ApplyRecord
 
 	// ConfigsChanged lists the rendered platform configs that were actually
 	// created or replaced on this run — the OTel collector config, the
@@ -276,7 +289,9 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			BackupCron:                     LoadBackupCron(ctx, deps.Store),
 			StorageNodeConstraint:          deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
 			StorageNodeLabel:               runtime.StorageNodeLabel,
-			PlatformNode:                   loadPlatformNode(ctx, deps.Store),
+			LeaderNode:                     LeaderNode(ctx, deps.Docker),
+			ObservabilityNode:              ObservabilityNode(ctx, deps.Store),
+			BackupNode:                     BackupPlacement(ctx, deps.Store, deps.Docker),
 			ManagedSecretNames:             managedSecretNames(ctx, deps.Store),
 			ObservabilityLogsRetentionDays: logsDays, ObservabilityMetricsRetentionDays: metricsDays, ObservabilityTracesRetentionDays: tracesDays,
 			BackupS3:        s3b,
@@ -661,7 +676,17 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			fmt.Fprintf(out, "  ▶ no stacks re-deployed, but %d rendered config(s) replaced: %s\n",
 				cfgCount, strings.Join(res.ConfigsChanged, ", "))
 		default:
-			fmt.Fprintf(out, "  ▶ no stacks re-deployed and no configs replaced — nothing to redeploy.\n")
+			// Nothing moved in THIS run. The reconcile loop runs this same
+			// pipeline with its output discarded, so an upgrade can already be
+			// applied by the time an operator runs this — and a bare "nothing
+			// to redeploy" then contradicts the live Swarm. Name the apply that
+			// did happen, and who did it.
+			if prior := LoadApplyRecord(ctx, deps.Store); prior != nil {
+				res.PriorApply = prior
+				fmt.Fprintf(out, "  ▶ nothing to redeploy in this run; %s\n", prior.Line())
+			} else {
+				fmt.Fprintf(out, "  ▶ no stacks re-deployed and no configs replaced — nothing to redeploy.\n")
+			}
 		}
 		return nil
 	})
@@ -716,12 +741,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// leader. Pinning platform services to the leader (the API host) keeps
 		// them on a node that can serve them. An operator-set value is left
 		// untouched.
-		if leaderHost != "" && deps.Store.SettingDefault(ctx, SettingPlatformNode(), "") == "" {
-			if err := deps.Store.SetSetting(ctx, SettingPlatformNode(), leaderHost); err != nil {
-				return fmt.Errorf("persist platform_node: %w", err)
-			}
-			fmt.Fprintf(out, "  ⚠ platform_node was unset — pinned platform services to the leader %s\n", leaderHost)
-		}
 		raw := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
 		if raw == "" {
 			return nil
@@ -793,6 +812,30 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 				return fmt.Errorf("persist storage_nodes: %w", err)
 			}
 			fmt.Fprintf(out, "  ⚠ adopted %s into storage_nodes (it carries the %s label)\n", n.Hostname, runtime.StorageNodeLabel)
+		}
+		return nil
+	})
+
+	wf.Add("Recording the platform apply", func(ctx context.Context) error {
+		source := in.Source
+		if source == "" {
+			source = "update"
+		}
+		rec := ApplyRecord{
+			At:      time.Now().UTC(),
+			Version: in.Version,
+			Source:  source,
+			Stacks:  res.StacksDeployed,
+			Configs: res.ConfigsChanged,
+		}
+		if rec.Empty() {
+			// Nothing moved in this run; the reconcile summary above already
+			// reported the last apply that did.
+			return nil
+		}
+		if err := SaveApplyRecord(ctx, deps.Store, rec); err != nil {
+			// Evidence, not state the pipeline needs — warn, never fail.
+			fmt.Fprintf(out, "  ⚠ could not record the platform apply: %v\n", err)
 		}
 		return nil
 	})
@@ -925,7 +968,9 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 		BackupCron:                     LoadBackupCron(ctx, deps.Store),
 		StorageNodeConstraint:          deps.Store.SettingDefault(ctx, SettingStorageNodes(), "") != "",
 		StorageNodeLabel:               runtime.StorageNodeLabel,
-		PlatformNode:                   loadPlatformNode(ctx, deps.Store),
+		LeaderNode:                     LeaderNode(ctx, deps.Docker),
+		ObservabilityNode:              ObservabilityNode(ctx, deps.Store),
+		BackupNode:                     BackupPlacement(ctx, deps.Store, deps.Docker),
 		ManagedSecretNames:             managedSecretNames(ctx, deps.Store),
 		ObservabilityLogsRetentionDays: logsDays, ObservabilityMetricsRetentionDays: metricsDays, ObservabilityTracesRetentionDays: tracesDays,
 		BackupS3: s3b,

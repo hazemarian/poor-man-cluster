@@ -16,7 +16,6 @@ bearers). Console: the **Settings** page.
 | Key | Default | Who sets it | What it controls |
 |---|---|---|---|
 | `volume_root` | `/var/stack/data` | setup wizard (`--volume-root`) / operator | the host root every container volume is forced under |
-| `platform_node` | the **leader** (auto-written by `cluster up`/`update` when unset) | operator-optional | pins the platform services (OpenObserve, edge, backup agents, SSO) to one node; empty = `node.role == manager` |
 | `storage_nodes` | leader's hostname (auto-seeded) | operator, `join --storage-node`, `node promote/demote` | comma-separated storage node hostnames; stateful stacks round-robin across them; the current leader is always re-added, a former leader is removed, and labeled-but-unlisted nodes are adopted |
 | `storage_failover` | `false` | setup prompt (only when offsite S3 is configured) / operator | automatic storage failover in the control loop (requires `backup_s3_*`; refuses to enable without it) |
 | `backup_cron` | `0 * * * *` (hourly) | operator | the offen agents' schedule (5-field cron) |

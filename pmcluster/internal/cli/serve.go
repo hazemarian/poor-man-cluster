@@ -116,6 +116,20 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// ONLY on the current Swarm leader; other managers stand by until
 		// Swarm elects them leader (failover). Standalone/local mode returns
 		// immediately.
+		// Control-plane freshness for EVERY manager at startup, BEFORE the
+		// leadership wait, not only on promotion. A follower manager that never
+		// leads still needs the current credential and settings rows to answer
+		// reads (the observability reader, the console) — restoring only on
+		// promotion is why two managers sat on a two-week-old credential table
+		// while reporting themselves current.
+		//
+		// This is the safe window: nothing has the store open yet, so replacing
+		// data.db cannot truncate it under a live sqlite connection. Best-effort:
+		// a worker, or a swarm without a readable Raft config, must still serve.
+		if _, err := ensureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
+			log.Warn().Err(err).Msg("control-plane restore at startup had issues (continuing)")
+		}
+
 		if err := waitForSwarmLeadership(cmd.Context(), dc, log); err != nil {
 			return fmt.Errorf("standby: %w", err)
 		}
@@ -191,7 +205,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// used directly.
 	backupS3 := backupS3Config(cmd.Context(), st, cipher)
 
-	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.SettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.SettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), PinNode: st.SettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), Pins: &stacks.PinResolver{PlatformNode: st.SettingDefault(cmd.Context(), cluster.SettingPlatformNode(), ""), StorageNodes: stacks.ParseStorageNodes(st.SettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
+	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.SettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.SettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), Pins: &stacks.PinResolver{StorageNodes: stacks.ParseStorageNodes(st.SettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
 		return st.SetSetting(ctx, stacks.StackPinKey(stackName), node)
@@ -241,6 +255,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 	if cipher != nil {
 		deps.Secrets = secrets.NewLocal(st, cipher)
+		// Observability reads the backend through the published loopback
+		// endpoint with the managed credential. A missing credential leaves the
+		// reader with Swarm inventory only, so the console still reports node
+		// health and every telemetry read answers "unavailable".
+		obsReader, obsErr := newLocalObservabilityReader(cmd.Context(), st, cipher, dc)
+		if obsErr != nil {
+			log.Warn().Err(obsErr).Msg("observability telemetry source unavailable — inventory only")
+		}
+		deps.Observability = obsReader
 	}
 	handler := server.New(deps)
 
@@ -272,7 +295,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			Deployer: deployer,
 			Stdout:   io.Discard,
 		},
-		UpdateInput: cluster.UpdateInput{ConfigDir: cfg.ConfigDir(), Version: buildinfo.Version},
+		// Source marks applies made by this loop. Its output is discarded, so
+		// without the marker an operator's later `cluster update` reports
+		// "nothing to redeploy" with no way to learn the loop already applied it.
+		UpdateInput: cluster.UpdateInput{ConfigDir: cfg.ConfigDir(), Version: buildinfo.Version, Source: "reconcile"},
 		Log:         log,
 		Interval:    time.Duration(reconcileIntervalSeconds(cmd.Context(), st)) * time.Second,
 	}

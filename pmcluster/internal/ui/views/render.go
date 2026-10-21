@@ -141,10 +141,14 @@ func NewRenderer() (*Renderer, error) {
 		"TF":      func(key string, args ...any) string { return key },
 		// Numbers arrive as int, int64, uint64 or float64 depending on the
 		// data source, so every numeric helper takes any and coerces.
-		"P":          func(count any, key string, dualCase ...i18n.Case) string { return key },
-		"N":          func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
-		"N0":         func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
-		"NF":         func(v any, decimals int) string { return strconv.FormatFloat(i18n.Float(v), 'f', decimals, 64) },
+		"P":  func(count any, key string, dualCase ...i18n.Case) string { return key },
+		"N":  func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"N0": func(v any) string { return strconv.FormatInt(i18n.Num(v), 10) },
+		"NF": func(v any, decimals int) string { return strconv.FormatFloat(i18n.Float(v), 'f', decimals, 64) },
+		// compact abbreviates a large count for a KPI tile: 1.2k, 3.4M.
+		"compact": func(v any) string {
+			return compactNum(i18n.Num(v), func(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) }, func(n int64) string { return strconv.FormatInt(n, 10) })
+		},
 		"shortImage": func(v string) string { return v },
 		"DIR":        func() string { return "ltr" },
 		"LANG":       func() string { return string(i18n.Default) },
@@ -320,4 +324,15 @@ func statusPill(s string) string {
 	default:
 		return "warn"
 	}
+}
+
+// compactNum abbreviates a count for a KPI tile: 1.2k, 3.4M, else the number.
+func compactNum(n int64, one func(float64) string, plain func(int64) string) string {
+	switch {
+	case n >= 1_000_000:
+		return one(float64(n)/1e6) + "M"
+	case n >= 1000:
+		return one(float64(n)/1e3) + "k"
+	}
+	return plain(n)
 }

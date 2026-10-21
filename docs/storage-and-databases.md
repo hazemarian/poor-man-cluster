@@ -90,7 +90,7 @@ flowchart TD
     P -->|yes| R1["that node"]
     P -->|no| N{"storage_nodes<br/>non-empty?"}
     N -->|yes| R2["roundRobinNode(stackName)<br/>FNV-1a(name) mod len(nodes)"]
-    N -->|no| R3["platform_node"]
+    N -->|no| R3["any node (no storage pool)"]
 ```
 
 The winner is rendered into the compose as a Swarm constraint (`node.hostname == <node>`), and
@@ -496,7 +496,6 @@ databases; do not point a database at it.
 | `backup_all_nodes` | `false` | run the agent everywhere (needed with replicated disks) |
 | `backup_store_on` | `""` = auto | where the in-cluster store runs |
 | `backup_s3_*` | unset | the offsite destination |
-| `platform_node` | the leader | pins platform services — which are stateful too |
 
 ### Quickstart: a database stack that is safe by default
 

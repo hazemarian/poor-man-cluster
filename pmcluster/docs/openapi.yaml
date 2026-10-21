@@ -1443,6 +1443,190 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           description: Service not found, does not belong to the stack, or no task on this node
+  /api/observability/status:
+    get:
+      summary: Compare expected Swarm nodes with fresh telemetry
+      operationId: observabilityStatus
+      description: |
+        Read-only cluster telemetry status. `empty`, `missing`, `stale` and
+        `inventory_failed` are distinct status values; a stack-scoped token is
+        denied because node coverage is cluster-wide.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+      responses:
+        "200":
+          description: Node inventory and telemetry coverage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObservabilityStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          description: Viewer role or unscoped token required
+  /api/observability/logs:
+    get:
+      summary: Read bounded newest-first telemetry logs
+      operationId: observabilityLogs
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: service
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: severity
+          in: query
+          schema: {type: string, enum: [error, warn, info, debug]}
+        - name: search
+          in: query
+          schema: {type: string, maxLength: 100}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 200}
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 2000, default: 0}
+      responses:
+        "200":
+          description: Available, empty, or unavailable bounded result
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/metrics/nodes:
+    get:
+      summary: Read bounded per-node metric series
+      operationId: observabilityNodeMetrics
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: bucket
+          in: query
+          schema: {type: string, description: Go duration, example: 1m}
+      responses:
+        "200":
+          description: Bounded metric rows
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/metrics/services:
+    get:
+      summary: Read bounded per-service metric series
+      operationId: observabilityServiceMetrics
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: bucket
+          in: query
+          schema: {type: string, description: Go duration, example: 5m}
+      responses:
+        "200":
+          description: Bounded metric rows
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/volume:
+    get:
+      summary: Read bounded log volume by level (the console overview KPI)
+      operationId: observabilityLogVolume
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: bucket
+          in: query
+          schema: {type: string, description: Go duration, example: 5m}
+      responses:
+        "200":
+          description: One row per bucket and level (error, warn, info)
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/traces/stats:
+    get:
+      summary: Read bounded trace totals for the window
+      operationId: observabilityTraceStats
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+      responses:
+        "200":
+          description: One row with traces, error_traces and spans
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/services:
+    get:
+      summary: List the log service identities seen in the window
+      operationId: observabilityServiceNames
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+      responses:
+        "200":
+          description: Service names, or an empty list with status=unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, services]
+                properties:
+                  status: {type: string, enum: [available, unavailable]}
+                  services:
+                    type: array
+                    items: {type: string}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/traces:
+    get:
+      summary: Read bounded trace summaries
+      operationId: observabilityTraces
+      security: [{bearerAuth: []}]
+      parameters:
+        - $ref: "#/components/parameters/EvidenceRange"
+        - name: service
+          in: query
+          schema: {type: string, maxLength: 255}
+        - name: errors_only
+          in: query
+          schema: {type: boolean, default: false}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 50, default: 50}
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, maximum: 1000, default: 0}
+      responses:
+        "200":
+          description: Bounded trace summaries
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/traces/{trace_id}:
+    get:
+      summary: Read spans for one trace
+      operationId: observabilityTrace
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: trace_id
+          in: path
+          required: true
+          schema: {type: string, pattern: "^[0-9a-f]{32}$"}
+        - $ref: "#/components/parameters/EvidenceRange"
+      responses:
+        "200":
+          description: Bounded spans
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+
 components:
   securitySchemes:
     bearerAuth:

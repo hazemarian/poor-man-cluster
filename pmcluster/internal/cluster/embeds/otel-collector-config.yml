@@ -6,14 +6,30 @@
 # a mounted volume, and an admin account that comes from env on every boot
 # rather than a once-only seed into a metadata volume.
 #
-# Two log paths:
-#   1. filelog receiver — scrapes Docker JSON log files from containers
-#      that don't use OTLP/SDK (apps that just write to stdout/stderr).
-#   2. OTLP receiver (gRPC + HTTP) — accepts structured logs from apps
-#      with OTel SDKs. Set `skip_filelog: true` in the pmcluster manifest
-#      for services that send logs via OTLP.
+# Two log paths, and both are expected to be live:
+#   1. receiver_creator + docker_observer — one filelog receiver PER CONTAINER,
+#      so a container's stdout/stderr keeps its Swarm service identity. A single
+#      filelog receiver could NOT do this: container log paths are built from
+#      container ids, there is no operator that reaches the Docker API for
+#      labels, and a record without a resolved service.name is unattributable
+#      noise. Measured on the live cluster: with one global filelog receiver,
+#      528k rows arrived over 24h from OTLP senders only and NOT ONE line of
+#      container stdout was ingested (abbas-cms_web wrote 12 lines/minute and
+#      contributed zero rows).
+#   2. OTLP receiver (gRPC + HTTP) — structured logs from apps with OTel SDKs.
+#      Set `skip_filelog: true` on a manifest service that ships its own logs so
+#      the same line is not ingested twice; that opt-out suppresses the LOG leg
+#      only, never container metrics.
 extensions:
   health_check:
+
+  # Discovers every running container and its Swarm labels. The receiver_creator
+  # below turns each one into a filelog receiver, which is the only way a log
+  # record can learn which service produced it.
+  docker_observer:
+    endpoint: "unix:///var/run/docker.sock"
+    api_version: "1.44"
+    timeout: 5s
 
 receivers:
   otlp:
@@ -31,14 +47,80 @@ receivers:
     #  previously produced no attributes, leaving these fields empty.)
     #
     # Names are DOT-separated to match the OTel semantic convention and the
-    # resource processor below, which already sets service.name / stack.name.
-    # Underscored names (service_name) meant a query had to know which signal a
-    # field came from before it could name it; for metrics the attribute was
-    # service_name while the resource said service.name.
+    # resource attributes the receiver_creator sets for logs, so a query groups
+    # logs, metrics and traces by the same field name.
     container_labels_to_metric_labels:
       com.docker.swarm.service.name: "service.name"
       com.docker.stack.namespace:    "stack.name"
       com.docker.swarm.node.id:      "swarm.node.id"
+
+  # One filelog receiver per container. The rule decides which containers get
+  # one at all, so an opted-out or platform container costs nothing.
+  receiver_creator:
+    watch_observers: [docker_observer]
+    receivers:
+      filelog/docker:
+        # type == "container" and NOTHING ELSE. Deliberately no `port`
+        # condition: the receiver only needs container_id and labels (it reads
+        # a file, it never connects to the endpoint), and a port predicate
+        # would silently exclude every container that exposes one.
+        rule: >-
+          type == "container"
+          and (labels["io.pmcluster.skip_filelog"] ?? "") != "true"
+          and (labels["com.docker.stack.namespace"] ?? "") != "infra"
+          and (labels["com.docker.stack.namespace"] ?? "") != "observability"
+          and (labels["com.docker.stack.namespace"] ?? "") != "backup"
+          and (labels["com.docker.stack.namespace"] ?? "") != "sso"
+          and (labels["com.docker.stack.namespace"] ?? "") != "edge"
+        config:
+          include:
+            - /var/lib/docker/containers/`container_id`/*-json.log
+          include_file_name: false
+          include_file_path: true
+          # end, NOT beginning. Each receiver owns exactly one container's file,
+          # but offsets are in memory: with `beginning` every collector restart
+          # would re-read up to max-size x max-file per container and re-send it.
+          # The cost is that lines written between a container's start and the
+          # receiver's start are missed. That is the accepted trade until
+          # per-instance checkpointing exists for dynamic receivers.
+          start_at: end
+          operators:
+            # Parse Docker JSON log format: {"log":"...","stream":"stdout|stderr","time":"..."}
+            - type: json_parser
+              error_mode: ignore
+              timestamp:
+                parse_from: attributes.time
+                layout: '%Y-%m-%dT%H:%M:%S.%LZ'
+              severity:
+                parse_from: attributes.stream
+                mapping: { info: stdout, error: stderr }
+            # Move the parsed log message from attributes.log to body.
+            - type: move
+              from: attributes.log
+              to: body
+              if: attributes.log != nil
+          # Resource attributes are what make a stdout line attributable, and
+          # they are declared inside `config` rather than as the receiver
+          # template's own resource_attributes map: the e2e showed the
+          # latter is not applied per endpoint, so every record arrived with
+          # an empty service.name and filter/skip_filelog dropped it — no
+          # error, no rows, a collector that looks healthy. The filelog
+          # receiver's `resource:` map IS honoured, and receiver_creator
+          # substitutes backtick expressions inside `config`.
+          resource:
+            # Swarm services keep their Swarm identity; plain Compose containers
+            # fall back to <project>_<service> only when both labels are present.
+            # An unlabelled container resolves to "" and is dropped by
+            # filter/skip_filelog rather than ingested as anonymous noise.
+            service.name: '`("com.docker.swarm.service.name" in labels && labels["com.docker.swarm.service.name"] != "") ? labels["com.docker.swarm.service.name"] : (("com.docker.compose.project" in labels && labels["com.docker.compose.project"] != "" && "com.docker.compose.service" in labels && labels["com.docker.compose.service"] != "") ? labels["com.docker.compose.project"] + "_" + labels["com.docker.compose.service"] : "")`'
+            stack.name: '`("com.docker.stack.namespace" in labels && labels["com.docker.stack.namespace"] != "") ? labels["com.docker.stack.namespace"] : (("com.docker.compose.project" in labels && labels["com.docker.compose.project"] != "" && "com.docker.compose.service" in labels && labels["com.docker.compose.service"] != "") ? labels["com.docker.compose.project"] : "")`'
+            container.name: '`name`'
+            container.id: '`container_id`'
+            container.image.name: '`image`'
+            # The opt-out, copied onto the record so the logs filter can enforce it
+            # independently of the rule above. Intentionally redundant: a silent
+            # failure here would ship a service's logs against its explicit wish.
+            container.labels.io.pmcluster.skip_filelog: '`labels["io.pmcluster.skip_filelog"] ?? ""`'
 
   # Node-level CPU and memory. docker_stats only ever sees CONTAINERS, so there
   # was no way to answer "how loaded is this node" — the question that decides
@@ -52,40 +134,19 @@ receivers:
   hostmetrics:
     collection_interval: 30s
     scrapers:
+      # The double-valued utilization series are what the console charts.
+      # Parseable does not map int64 datapoints (their rows arrive with an empty
+      # value), so system.cpu.utilization / system.memory.utilization are the
+      # only node percentages that can be plotted at all.
       cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
       memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
       load:
-
-  filelog:
-    include:
-      - /var/lib/docker/containers/*/*-json.log
-    # NOTE: no `exclude:` here on purpose. These paths are container IDs, so a
-    # pattern naming a service cannot match one. The platform chatter this used
-    # to (fail to) exclude is dropped by filter/skip_filelog below, by service
-    # name — which is the only handle that exists at record level.
-    include_file_name: false
-    include_file_path: true
-    # end, NOT beginning. With `beginning` every collector restart re-reads the
-    # ENTIRE historical container-log set and re-sends it: on a cluster with any
-    # history that is a sustained burst into the backend, and it was measured
-    # driving Parseable to 764MB against a 768MB cap (exit 137 loops, 64% CPU).
-    # Changing this alone took it to ~350MB and ~0.1% CPU.
-    start_at: end
-    operators:
-      # Parse Docker JSON log format: {"log":"...","stream":"stdout|stderr","time":"..."}
-      - type: json_parser
-        error_mode: ignore
-        timestamp:
-          parse_from: attributes.time
-          layout: '%Y-%m-%dT%H:%M:%S.%LZ'
-        severity:
-          parse_from: attributes.stream
-          mapping: { info: stdout, error: stderr }
-      # Move the parsed log message from attributes.log to body
-      - type: move
-        from: attributes.log
-        to: body
-        if: attributes.log != nil
 
 processors:
   # memory_limiter is the guard that keeps a failing exporter from growing the
@@ -97,23 +158,50 @@ processors:
   # data while the process still has room, or the cgroup OOM-kill is what ends
   # a backlog instead — and that takes the collector down with it.
   #
-  # 192MiB is ~2x what the collector actually holds (88-102MiB peak measured
-  # across all four live nodes). The 270-420MiB it once reached was an
-  # UNBOUNDED exporter queue, which the bounded sending_queue +
-  # retry_on_failure on each exporter below now prevent.
+  # 192MiB is ~2x what the collector held with ONE filelog receiver (88-102MiB
+  # peak measured across all four live nodes). Per-container receivers raise
+  # that: measure RSS per node before widening the rule, and raise limit_mib and
+  # the container cap together if the new floor demands it.
   memory_limiter:
     check_interval: 5s
     limit_mib: 192
     spike_limit_mib: 48
 
-  # Drop logs from services that opted out via skip_filelog: true.
-  # These services send logs via OTLP instead of stdout/stderr.
-  # Filters records the pipelines must never ship, and does it HERE rather than
-  # with filelog `exclude`: that option matches file PATHS, and container log
-  # paths are built from container IDs, so name-based globs like
-  # `*infra_traefik*` silently match nothing. That is why 4.6M unattributable
-  # rows (traefik's own deprecation chatter) were being ingested while the
-  # exclusions looked correct.
+  # Drop logs the pipelines must never ship, and drop them HERE rather than with
+  # filelog `exclude`: that option matches file PATHS, and container log paths
+  # are built from container ids, so name-based globs like `*infra_traefik*`
+  # silently match nothing. That is why 4.6M unattributable rows (traefik's own
+  # deprecation chatter) were being ingested while the exclusions looked correct.
+  filter/skip_filelog:
+    error_mode: ignore
+    logs:
+      log_record:
+        # Opt-out a workload sets on itself (DSL: skip_filelog: true). The
+        # receiver rule already refuses to start for such a container; this rule
+        # is the enforcement that survives a rule change, so an opt-out can never
+        # be lost by accident.
+        # Dots are NOT escaped: OTTL indexes a map key literally, so
+        # attributes["a.b"] reads the key "a.b". The escaped spelling this
+        # rule originally shipped with parses to a key containing backslashes,
+        # which never equals the attribute the receiver sets — so the opt-out
+        # could never fire, even once labels were available.
+        - 'resource.attributes["container.labels.io.pmcluster.skip_filelog"] == "true"'
+        # Unattributable records. A container whose labels resolved to nothing
+        # has no service.name — ungroupable, unalertable noise: 4.6M lines and
+        # 48k ERRORs on the live cluster before this rule existed.
+        - 'resource.attributes["service.name"] == nil or resource.attributes["service.name"] == ""'
+        # Platform chatter with no query value. Enumerated rather than matched
+        # with a regex so the collector rejects the config loudly on a typo
+        # instead of silently filtering nothing.
+        - 'resource.attributes["service.name"] == "infra_traefik"'
+        - 'resource.attributes["service.name"] == "observability_otel-collector"'
+        - 'resource.attributes["service.name"] == "observability_parseable"'
+        - 'resource.attributes["service.name"] == "observability_provision"'
+        - 'resource.attributes["service.name"] == "sso_oauth2-proxy"'
+        - 'resource.attributes["service.name"] == "backup_volume-backup"'
+        - 'resource.attributes["service.name"] == "backup_control-plane-backup"'
+        - 'resource.attributes["service.name"] == "backup_seaweedfs"'
+
   # Docker Engine API calls are PLUMBING, and two components emit them by the
   # thousand: Traefik's swarm provider (--tracing.otlp=true, polling
   # /v1.51/tasks) and pmcluster's own image inspection. Measured on the live
@@ -132,50 +220,16 @@ processors:
     error_mode: ignore
     traces:
       span:
-        - 'IsMatch(name, "^[A-Z]+ /v1\\.[0-9]+/")'
+        - 'IsMatch(name, "^[A-Z]+ /v1\\\\.[0-9]+/")'
 
-  filter/skip_filelog:
-    error_mode: ignore
-    logs:
-      log_record:
-        # Opt-out a workload sets on itself.
-        - 'resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] != nil and resource.attributes["container.labels.io\\.pmcluster\\.skip_filelog"] == "true"'
-        # Unattributable records. resource attributes come from the Swarm
-        # service label, so anything the receiver cannot resolve lands with
-        # service.name (and node/app/stack) null — ungroupable, unalertable
-        # noise: 4.6M lines and 48k ERRORs on the live cluster.
-        - 'resource.attributes["service.name"] == nil or resource.attributes["service.name"] == ""'
-        # Platform chatter with no query value. Enumerated rather than matched
-        # with a regex so the collector rejects the config loudly on a typo
-        # instead of silently filtering nothing.
-        - 'resource.attributes["service.name"] == "infra_traefik"'
-        - 'resource.attributes["service.name"] == "observability_otel-collector"'
-        - 'resource.attributes["service.name"] == "observability_parseable"'
-        - 'resource.attributes["service.name"] == "observability_provision"'
-        - 'resource.attributes["service.name"] == "sso_oauth2-proxy"'
-        - 'resource.attributes["service.name"] == "backup_volume-backup"'
-        - 'resource.attributes["service.name"] == "backup_control-plane-backup"'
-        - 'resource.attributes["service.name"] == "backup_seaweedfs"'
-
-  resource:
-    attributes:
-      - key: service.name
-        action: upsert
-        from_attribute: "container.labels.com.docker.swarm.service.name"
-      - key: stack.name
-        action: upsert
-        from_attribute: "container.labels.com.docker.stack.namespace"
-
-  # Copy service.name from resource into metric data points so they are
-  # queryable / groupable in Parseable (docker_stats sets resource attributes
-  # but they are stored separately from metric fields).
+  # Copy service.name from the resource onto metric datapoints so they are
+  # queryable / groupable in Parseable (docker_stats sets resource attributes but
+  # Parseable stores metric fields separately). Logs need no equivalent: the
+  # filelog receiver sets these names on the resource itself, and an OTLP sender
+  # already carries the service.name IT chose — this guard leaves those alone.
   transform/metrics:
     metric_statements:
       - context: datapoint
-        # Only copy resource service.name when it actually exists (OTLP/SDK
-        # metrics). Guard so this never clobbers the values docker_stats
-        # attaches directly from Swarm container labels — both sides now use the
-        # same dot-separated names, so a datapoint and its resource agree.
         conditions:
           - 'resource.attributes["service.name"] != nil'
         statements:
@@ -213,9 +267,9 @@ exporters:
   # "Protobuf ingestion ..." (verified live: the default proto encoding 400s
   # while the identical json payload returns 200).
   #
-  # Authorization is Basic <base64(admin user:admin password)> — the SAME
-  # managed credential Parseable itself boots with, resolved through the
-  # shared secret reference language so no literal ever lands here.
+  # Authorization is the Basic header built from the managed observability
+  # credential, resolved through the shared reference language so no literal
+  # ever lands here.
   # retry_on_failure + sending_queue are bounded so a Parseable outage can
   # never make the collector grow without limit.
   otlphttp/parseable-logs:
@@ -273,18 +327,18 @@ exporters:
       X-P-Log-Source: "otel-traces"
 
 service:
-  extensions: [health_check]
+  extensions: [health_check, docker_observer]
   telemetry:
     logs:
       level: info
   pipelines:
     logs:
-      receivers:  [filelog, otlp]
-      processors: [memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]
+      receivers:  [receiver_creator, otlp]
+      processors: [memory_limiter, resourcedetection, filter/skip_filelog, batch]
       exporters:  [otlphttp/parseable-logs]
     metrics:
       receivers:  [docker_stats, hostmetrics, otlp]
-      processors: [memory_limiter, resourcedetection, resource, transform/metrics, batch]
+      processors: [memory_limiter, resourcedetection, transform/metrics, batch]
       exporters:  [otlphttp/parseable-metrics]
     traces:
       receivers:  [otlp]

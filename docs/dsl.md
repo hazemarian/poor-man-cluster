@@ -89,7 +89,7 @@ services:
 | `replicas` | `1` | must be ≥ 0; mutually exclusive with `run_once` and `mode: global`. An explicit `replicas: 0` (scale to zero) is rendered verbatim, not collapsed to the default |
 | `run_once` | `false` | `true` → one-shot job (`restart_policy: none`, or `on-failure` max 3 when `depends_on` is set); for migrations/jobs |
 | `skip_filelog` | `false` | excludes the service from the OTel log-tailing receiver (set when the app ships logs via OTLP itself) |
-| `placement` | (any) | `manager` → `node.role == manager`; `worker` → `node.role == worker`; **any other value → `node.hostname == <value>`** (pin a stateful service to one specific node so its volume-backed data never has to migrate); empty + a volume mount → auto-pinned to a storage node (per-stack `stack move` pin → `storage_nodes` round-robin → `platform_node` fallback) |
+| `placement` | (any) | `manager` → `node.role == manager`; `worker` → `node.role == worker`; **any other value → `node.hostname == <value>`** (pin a stateful service to one specific node so its volume-backed data never has to migrate); empty + a volume mount → auto-pinned to a storage node (per-stack `stack move` pin, then a deterministic `storage_nodes` round-robin) |
 | `command` | — | overrides the image's `CMD` |
 | `entrypoint` | — | overrides the image's `ENTRYPOINT` |
 | `env` | — | map of environment variables (values support substitution) |
@@ -253,7 +253,7 @@ update:
   order: start-first   # default; or stop-first
 ```
 
-Services that mount **volumes** are treated as stateful: pmcluster automatically uses `order: stop-first` (a start-first rollout races the old container's shutdown against the new start — e.g. old Postgres deletes the freshly written `postmaster.pid` and the replacement immediately shuts down) and, when `placement` is empty, pins them to a **storage node**. The pin resolution order is: the per-stack pin written by `pmcluster stack move <stack> --to <node>` (the `stack_pin_<stack>` setting — outranks everything) → a deterministic round-robin across the `storage_nodes` cluster setting (FNV-1a, 32-bit, over the stack name; the leader is auto-added and workers qualify) → `platform_node` (which defaults to the leader) as the single-node fallback. Each deployed service carries an `io.pmcluster.node` label naming its pinned node (visible in the console Services table and `pmcluster service ps`). No manifest change needed.
+Services that mount **volumes** are treated as stateful: pmcluster automatically uses `order: stop-first` (a start-first rollout races the old container's shutdown against the new start — e.g. old Postgres deletes the freshly written `postmaster.pid` and the replacement immediately shuts down) and, when `placement` is empty, pins them to a **storage node**. The pin resolution order is: the per-stack pin written by `pmcluster stack move <stack> --to <node>` (the `stack_pin_<stack>` setting — outranks everything) → a deterministic round-robin across the `storage_nodes` cluster setting (FNV-1a, 32-bit, over the stack name; the leader is auto-added and workers qualify) — and with no storage nodes nothing is pinned, so any node will do. Each deployed service carries an `io.pmcluster.node` label naming its pinned node (visible in the console Services table and `pmcluster service ps`). No manifest change needed.
 
 ---
 

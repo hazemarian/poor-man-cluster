@@ -129,6 +129,39 @@ func (k *Kit) DBPath() string { return filepath.Join(k.DataDir, "data.db") }
 // KeyPath returns the encryption key path inside DataDir.
 func (k *Kit) KeyPath() string { return filepath.Join(k.DataDir, ".encryption_key") }
 
+// RevisionPath is the marker recording which snapshot this node's control plane
+// has been brought up to.
+//
+// The marker exists because an mtime CANNOT serve as the version. A follower
+// writes its own data.db on every reconcile pass, so its mtime is always newer
+// than the newest snapshot while its CONTENT stays wherever it was when the node
+// joined — which is exactly how a manager ends up holding an Oct-12 credential
+// table behind a fresh-looking DB, forever reported as "current".
+func (k *Kit) RevisionPath() string { return filepath.Join(k.DataDir, ".state_revision") }
+
+// readRevision returns the snapshot this node's control plane is at, or the zero
+// time when it has never synced (or the marker is unreadable — treated as
+// "never", because restoring an authoritative kit is the safe direction).
+func (k *Kit) readRevision() time.Time {
+	b, err := os.ReadFile(k.RevisionPath())
+	if err != nil {
+		return time.Time{}
+	}
+	at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(b)))
+	if err != nil {
+		return time.Time{}
+	}
+	return at
+}
+
+// writeRevision records that this node's control plane now matches snapshot `at`.
+func (k *Kit) writeRevision(at time.Time) error {
+	if err := os.MkdirAll(k.DataDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(k.RevisionPath(), []byte(at.UTC().Format(time.RFC3339Nano)), 0o600)
+}
+
 // Snapshot writes the current survivor kit into fresh state + key configs
 // (Raft-replicated to every manager) when the kit changed since the last
 // snapshot, then prunes old snapshots. It is a no-op when Docker is
@@ -200,6 +233,13 @@ func (k *Kit) Snapshot(ctx context.Context) error {
 	}
 	log.Info().Str("config", keyName).Int("bytes", len(key)).Msg("control-plane encryption key snapshotted to Raft-replicated config")
 
+	// This node IS the source of this snapshot, so its control plane is by
+	// definition at this revision. Without recording it, a demoted-then-promoted
+	// leader would restore its own snapshot over newer local writes.
+	if err := k.writeRevision(now); err != nil {
+		log.Warn().Err(err).Msg("could not record the control-plane revision marker")
+	}
+
 	if err := k.prune(ctx, KindState); err != nil {
 		log.Warn().Err(err).Msg("prune control-plane state configs had issues")
 	}
@@ -255,6 +295,12 @@ func (k *Kit) maxKitMtime() (time.Time, error) {
 		if !fi.Mode().IsRegular() {
 			return nil
 		}
+		// The revision marker is written by this package after every snapshot, so
+		// counting it would make the kit look perpetually newer and re-snapshot on
+		// every tick — an endless config churn loop.
+		if filepath.Base(path) == ".state_revision" {
+			return nil
+		}
 		if fi.ModTime().After(max) {
 			max = fi.ModTime()
 		}
@@ -297,6 +343,9 @@ func (k *Kit) readKit() ([]byte, error) {
 		}
 		if rel == ".encryption_key" {
 			return nil // security split: key goes to its own config
+		}
+		if rel == ".state_revision" {
+			return nil // node-local bookkeeping, not survivor state
 		}
 		name := filepath.ToSlash(rel)
 		switch {
@@ -371,29 +420,45 @@ func (k *Kit) Restore(ctx context.Context) (bool, error) {
 	}
 
 	dbPath := k.DBPath()
-	dbInfo, dbErr := os.Stat(dbPath)
-	needDB := os.IsNotExist(dbErr) || (dbErr == nil && dbInfo.ModTime().Before(at))
-	if dbErr != nil && !os.IsNotExist(dbErr) {
-		return false, fmt.Errorf("stat local data.db: %w", dbErr)
-	}
 
 	keyName := KeyNamePrefix + "_" + strings.TrimPrefix(newest, StateNamePrefix+"_")
 	keyInspect, keyErr := k.Docker.ConfigInspect(ctx, keyName)
 
-	_, keyMissing := os.Stat(k.KeyPath())
-	needKey := os.IsNotExist(keyMissing)
+	// Freshness by REVISION, not by mtime. A node that writes its own data.db
+	// (every follower does, on each reconcile pass) would otherwise look "newer"
+	// than the snapshot while its content is arbitrarily old, and never restore
+	// again. A node that has never synced, is behind, or holds a DIFFERENT
+	// encryption key (so its ciphertexts are not the cluster's) takes the
+	// snapshot's kit and key together.
+	localRev := k.readRevision()
+	localKey, localKeyErr := os.ReadFile(k.KeyPath())
+	keyExists := localKeyErr == nil
+	keyDiffers := keyErr == nil && keyExists && !bytes.Equal(localKey, keyInspect.Data)
+
+	needRestore := !keyExists || localRev.IsZero() || localRev.Before(at) || keyDiffers
 
 	switch {
-	case needDB:
+	case needRestore:
 		// Full restore. The key is mandatory: a data kit without its key is a
 		// control plane that cannot decrypt its own credentials.
 		if keyErr != nil {
 			return false, fmt.Errorf("state config %s exists but key config %s is missing — refusing to restore a ciphertext without its key (security split); investigate before promoting this node", newest, keyName)
 		}
+		reason := "local control plane is behind"
+		switch {
+		case keyDiffers:
+			reason = "local encryption key differs from the cluster's"
+		case !keyExists:
+			reason = "no local encryption key"
+		case localRev.IsZero():
+			reason = "node has never synced"
+		}
 		n, err := k.extractKit(inspect.Data, at)
 		if err != nil {
 			return false, fmt.Errorf("restore control plane from %s: %w", newest, err)
 		}
+		// Adopt the cluster key unconditionally: the DB we just wrote is the
+		// cluster's, so any other key would make its ciphertexts unreadable.
 		if err := os.WriteFile(k.KeyPath(), keyInspect.Data, 0o600); err != nil {
 			return false, fmt.Errorf("restore control-plane encryption key: %w", err)
 		}
@@ -403,25 +468,15 @@ func (k *Kit) Restore(ctx context.Context) (bool, error) {
 		if err := os.Chtimes(dbPath, at, at); err != nil {
 			return false, fmt.Errorf("timestamp restored data.db: %w", err)
 		}
-		log.Info().Str("config", newest).Str("snapshot-at", at.Format(time.RFC3339Nano)).Int("files", n).Msg("control-plane data restored from Raft config")
-		return true, nil
-	case needKey:
-		// DB is current but this node never got the encryption key (fresh
-		// join, or the key file was lost). Repair just the key.
-		if keyErr != nil {
-			log.Warn().Str("config", newest).Msg("local data.db is current but no key config found; leaving encryption key missing (webhook/credential features will stay disabled)")
-			return false, nil
+		if err := k.writeRevision(at); err != nil {
+			return false, fmt.Errorf("record restored control-plane revision: %w", err)
 		}
-		if err := os.WriteFile(k.KeyPath(), keyInspect.Data, 0o600); err != nil {
-			return false, fmt.Errorf("restore missing control-plane encryption key: %w", err)
-		}
-		if err := os.Chtimes(k.KeyPath(), at, at); err != nil {
-			return false, fmt.Errorf("timestamp restored encryption key: %w", err)
-		}
-		log.Info().Str("config", keyName).Msg("restored missing control-plane encryption key from Raft config")
+		log.Info().Str("config", newest).Str("snapshot-at", at.Format(time.RFC3339Nano)).
+			Int("files", n).Str("reason", reason).Msg("control-plane data restored from Raft config")
 		return true, nil
 	default:
-		log.Info().Str("config", newest).Msg("local control-plane DB is current (shared storage?); no restore from Raft config")
+		log.Info().Str("config", newest).Str("revision", localRev.Format(time.RFC3339Nano)).
+			Msg("local control plane is at the newest snapshot; no restore from Raft config")
 		return false, nil
 	}
 }

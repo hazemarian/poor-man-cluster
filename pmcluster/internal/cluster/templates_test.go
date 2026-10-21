@@ -621,12 +621,21 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 	// memory_limiter MUST lead every pipeline: it is what stops a failing
 	// exporter from growing the collector until the host loses its Swarm
 	// heartbeat.
-	if !strings.Contains(body, "[memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]") {
-		t.Error("logs pipeline must lead with memory_limiter, then resourcedetection + resource + filter/skip_filelog before batch")
+	if !strings.Contains(body, "[memory_limiter, resourcedetection, filter/skip_filelog, batch]") {
+		t.Error("logs pipeline must lead with memory_limiter, then resourcedetection + filter/skip_filelog before batch")
 	}
 
-	if !strings.Contains(body, "[memory_limiter, resourcedetection, resource, transform/metrics, batch]") {
-		t.Error("metrics pipeline must lead with memory_limiter, then resourcedetection + resource + transform/metrics before batch")
+	if !strings.Contains(body, "[memory_limiter, resourcedetection, transform/metrics, batch]") {
+		t.Error("metrics pipeline must lead with memory_limiter, then resourcedetection + transform/metrics before batch")
+	}
+
+	// The generic `resource` processor was deleted with the per-container
+	// receivers: it upserted service.name from container labels, which no
+	// record path can supply any more (the filelog receiver sets it directly,
+	// and an OTLP sender already carries its own). Relaunching it would be a
+	// mapping that reads as authoritative and does nothing.
+	if strings.Contains(body, "\n  resource:\n") {
+		t.Error("rendered config should not define the vestigial `resource` processor")
 	}
 
 	// The invariant, not the literal list: memory_limiter must come first and
@@ -815,17 +824,25 @@ func TestLoadComposeFile_ObservabilityProvisionOneShot(t *testing.T) {
 	}
 	body := string(data)
 
-	// Parseable must NOT publish a port: the call comes from inside the swarm.
-	start := strings.Index(body, "parseable:")
-	if start < 0 {
-		t.Fatal("rendered stack has no parseable service")
+	// Parseable publishes its API on the routing mesh so the HOST daemon can
+	// read telemetry: a host process cannot resolve `observability_parseable`
+	// from the overlay. Retention and dashboards still come from inside the
+	// swarm (the provision one-shot), so this port is read-only for the
+	// platform itself and must stay denied to the WAN by harden-host.sh.
+	var stackDoc struct {
+		Services map[string]struct {
+			Ports []struct {
+				Target    int `json:"target"`
+				Published int `json:"published"`
+			} `json:"ports"`
+		} `json:"services"`
 	}
-	parseable := body[start:]
-	if i := strings.Index(parseable, "otel-collector:"); i > 0 {
-		parseable = parseable[:i]
+	if err := yaml.Unmarshal([]byte(body), &stackDoc); err != nil {
+		t.Fatalf("parse rendered observability stack: %v", err)
 	}
-	if strings.Contains(parseable, "ports:") {
-		t.Error("parseable must not publish a port — retention is applied from inside the swarm network")
+	ports := stackDoc.Services["parseable"].Ports
+	if len(ports) != 1 || ports[0].Published != ObservabilityPort {
+		t.Errorf("parseable must publish exactly %d on the routing mesh for the host daemon, got %+v", ObservabilityPort, ports)
 	}
 
 	// The one-shot exists, is run_once (restart_policy none), and mounts the script.
@@ -909,9 +926,16 @@ func TestRenderOTelCollectorConfigIsValidYAML(t *testing.T) {
 	}
 }
 
-// TestRenderOTelCollectorConfig_FilelogReceiver verifies that the static
-// filelog receiver is configured with the correct glob patterns and operators.
-func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
+// TestRenderOTelCollectorConfig_PerContainerFilelog verifies the log path that
+// makes stdout attributable, and that skip_filelog can actually withhold a
+// service's logs.
+//
+// The previous shape (one global `filelog` receiver) could not work: container
+// log paths are built from container ids, no filelog operator can reach the
+// Docker API for labels, so every record arrived without service.name and the
+// skip filter dropped all of them — silently, while 528k rows from OTLP senders
+// made the stream look healthy.
+func TestRenderOTelCollectorConfig_PerContainerFilelog(t *testing.T) {
 	in := RenderInput{
 		ObservabilityAdminEmail: "admin@x.com",
 		ObservabilityBasicAuth:  observabilityBasicAuth("admin@x.com", "pw"),
@@ -922,43 +946,98 @@ func TestRenderOTelCollectorConfig_FilelogReceiver(t *testing.T) {
 	}
 	body := string(data)
 
-	if strings.Contains(body, "receiver_creator") {
-		t.Error("rendered config should not contain receiver_creator")
+	// The single global receiver is gone; one receiver is created per container.
+	if strings.Contains(body, "\n  filelog:\n") {
+		t.Error("rendered config should not define a single global filelog receiver")
 	}
-
 	for _, want := range []string{
-		`/var/lib/docker/containers/*/*-json.log`,
-		`exclude:`,
-		`otel-collector`,
-		`parseable`,
-		`json_parser`,
-		`error_mode: ignore`,
+		"receiver_creator:",
+		"filelog/docker:",
+		"docker_observer:",
+		"watch_observers: [docker_observer]",
+		"receivers:  [receiver_creator, otlp]",
+		"extensions: [health_check, docker_observer]",
+		"/var/lib/docker/containers/`container_id`/*-json.log",
+		"start_at: end",
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("rendered config missing expected content: %q", want)
+			t.Errorf("rendered config missing %q", want)
 		}
 	}
 
-	if strings.Contains(body, "docker_observer") {
-		t.Error("rendered config should not contain docker_observer")
+	// The skip predicate lives in the RULE, so an opted-out container never gets
+	// a receiver at all (and therefore costs nothing). The filter keeps its own
+	// copy as the enforcement that survives a rule edit.
+	skipRule := `(labels["io.pmcluster.skip_filelog"] ?? "") != "true"`
+	if !strings.Contains(body, skipRule) {
+		t.Error("receiver rule must exclude skip_filelog services so no receiver starts for them")
 	}
 
-	if !strings.Contains(body, "filter/skip_filelog") {
-		t.Error("rendered config should contain filter/skip_filelog processor")
+	// No `port` predicate: the receiver reads a file and never connects to the
+	// endpoint, while a port condition would silently exclude every container
+	// that exposes one.
+	if strings.Contains(body, `type == "container" and port`) {
+		t.Error("receiver rule must not bound on port: it would exclude containers that expose a port")
 	}
 
-	skipFilelogExpr := "container.labels.io" + "\\" + "\\" + ".pmcluster" + "\\" + "\\" + ".skip_filelog"
-	if !strings.Contains(body, skipFilelogExpr) {
-		t.Error("rendered config should contain the OTTL filter for io.pmcluster.skip_filelog label")
+	// Platform stacks are excluded in the rule rather than created and filtered.
+	for _, stack := range []string{"infra", "observability", "backup", "sso", "edge"} {
+		want := `(labels["com.docker.stack.namespace"] ?? "") != "` + stack + `"`
+		if !strings.Contains(body, want) {
+			t.Errorf("receiver rule must exclude the %s stack", stack)
+		}
 	}
 
-	if !strings.Contains(body, "processors: [memory_limiter, resourcedetection, resource, filter/skip_filelog, batch]") {
-		t.Error("logs pipeline should list memory_limiter first and filter/skip_filelog before batch")
+	// The pairing invariant, asserted by NAME rather than by re-typing an
+	// escaped expression: the attribute the filter matches must be the attribute
+	// the receiver sets. Renaming one side alone is the break that cannot be
+	// caught by eye, and it fails closed only by luck.
+	const attrKey = "container.labels.io.pmcluster.skip_filelog"
+	if !strings.Contains(body, attrKey+": '`labels[\"io.pmcluster.skip_filelog\"] ?? \"\"`'") {
+		t.Errorf("receiver must copy %q onto the record", attrKey)
+	}
+	var filterAttr string
+	filterStart := strings.Index(body, "filter/skip_filelog:")
+	if filterStart < 0 {
+		t.Fatal("rendered config has no filter/skip_filelog processor")
+	}
+	for _, line := range strings.Split(body[filterStart:], "\n") {
+		if strings.Contains(line, "resource.attributes[") && strings.Contains(line, "skip_filelog") {
+			filterAttr = ottlAttributeName(line)
+			break
+		}
+	}
+	if filterAttr != attrKey {
+		t.Errorf("filter matches attribute %q but the receiver sets %q — the opt-out cannot fire", filterAttr, attrKey)
 	}
 
-	if strings.Contains(body, "__FILELOG_EXCLUDE_PATTERNS__") {
-		t.Error("rendered config should NOT contain __FILELOG_EXCLUDE_PATTERNS__ (label-based approach replaces it)")
+	for _, want := range []string{
+		`service.name: '` + "`",
+		`stack.name: '` + "`",
+		"container.id: '`container_id`'",
+		"container.image.name: '`image`'",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("receiver must carry %q so a stdout line is attributable", want)
+		}
 	}
+}
+
+// ottlAttributeName extracts the resource attribute name from a filter rule and
+// unescapes the dotted form OTTL requires, so it can be compared with a
+// receiver's plain attribute key.
+func ottlAttributeName(rule string) string {
+	const marker = `resource.attributes["`
+	i := strings.Index(rule, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := rule[i+len(marker):]
+	j := strings.Index(rest, `"]`)
+	if j < 0 {
+		return ""
+	}
+	return rest[:j]
 }
 
 // TestRenderOTelCollectorConfig_DockerStatsLabels verifies the docker_stats
@@ -1894,5 +1973,115 @@ func TestLoadComposeFile_BackupS3Renders(t *testing.T) {
 	body = string(data)
 	if strings.Contains(body, "AWS_") {
 		t.Errorf("unconfigured backup stack must not emit AWS_* env:\n%s", body)
+	}
+}
+
+// TestRenderOTelCollectorConfig_PerContainerFilelogStructure parses the rendered
+// config as YAML instead of matching substrings.
+//
+// This exists because the e2e caught what string tests could not: the receiver
+// template's own `resource_attributes` map was accepted by the collector but not
+// applied to the records it created, so every stdout record arrived with an empty
+// service.name and filter/skip_filelog dropped it — no error, no rows, and a
+// collector whose log says "Everything is ready". The attributes now live in the
+// filelog receiver's `resource` map, inside `config`, where substitution is
+// documented to happen.
+func TestRenderOTelCollectorConfig_PerContainerFilelogStructure(t *testing.T) {
+	data, err := RenderOTelCollectorConfig(RenderInput{
+		ObservabilityAdminEmail: "admin@x.com",
+		ObservabilityBasicAuth:  observabilityBasicAuth("admin@x.com", "pw"),
+	})
+	if err != nil {
+		t.Fatalf("RenderOTelCollectorConfig: %v", err)
+	}
+
+	var cfg struct {
+		Extensions map[string]any `json:"extensions"`
+		Receivers  map[string]struct {
+			WatchObservers []string `json:"watch_observers"`
+			Receivers      map[string]struct {
+				Rule   string `json:"rule"`
+				Config struct {
+					Resource map[string]string `json:"resource"`
+					Include  []string          `json:"include"`
+				} `json:"config"`
+				// A template-level resource_attributes map is what did not work.
+				ResourceAttributes map[string]string `json:"resource_attributes"`
+			} `json:"receivers"`
+		} `json:"receivers"`
+		Service struct {
+			Extensions []string `json:"extensions"`
+			Pipelines  map[string]struct {
+				Receivers []string `json:"receivers"`
+			} `json:"pipelines"`
+		} `json:"service"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("rendered collector config is not valid YAML: %v", err)
+	}
+
+	if _, ok := cfg.Extensions["docker_observer"]; !ok {
+		t.Error("docker_observer extension is not declared")
+	}
+	enabled := false
+	for _, e := range cfg.Service.Extensions {
+		if e == "docker_observer" {
+			enabled = true
+		}
+	}
+	if !enabled {
+		t.Error("docker_observer must be listed in service.extensions or it never runs")
+	}
+
+	rc, ok := cfg.Receivers["receiver_creator"]
+	if !ok {
+		t.Fatal("receiver_creator receiver is missing")
+	}
+	var tmpl struct {
+		Rule   string `json:"rule"`
+		Config struct {
+			Resource map[string]string `json:"resource"`
+			Include  []string          `json:"include"`
+		} `json:"config"`
+		ResourceAttributes map[string]string `json:"resource_attributes"`
+	}
+	for name, r := range rc.Receivers {
+		if strings.HasPrefix(name, "filelog") {
+			tmpl.Rule = r.Rule
+			tmpl.Config.Resource = r.Config.Resource
+			tmpl.Config.Include = r.Config.Include
+			tmpl.ResourceAttributes = r.ResourceAttributes
+		}
+	}
+	if tmpl.Rule == "" {
+		t.Fatal("receiver_creator declares no filelog template")
+	}
+	if !strings.Contains(tmpl.Rule, `io.pmcluster.skip_filelog`) {
+		t.Error("the rule must exclude opted-out containers so no receiver starts for them")
+	}
+	if strings.Contains(tmpl.Rule, "port") {
+		t.Error("the rule must not bound on port: it would exclude containers that expose one")
+	}
+	if len(tmpl.ResourceAttributes) != 0 {
+		t.Error("a template-level resource_attributes map is not applied per endpoint — keep the attributes in config.resource")
+	}
+	for _, key := range []string{"service.name", "stack.name", "container.id", "container.image.name", "container.labels.io.pmcluster.skip_filelog"} {
+		if val, ok := tmpl.Config.Resource[key]; !ok || !strings.Contains(val, "`") {
+			t.Errorf("config.resource[%q] must be a backtick expression, got %q", key, val)
+		}
+	}
+	if len(tmpl.Config.Include) != 1 || !strings.Contains(tmpl.Config.Include[0], "`container_id`") {
+		t.Errorf("filelog include must interpolate the discovered container id, got %v", tmpl.Config.Include[0:])
+	}
+
+	logs := cfg.Service.Pipelines["logs"]
+	found := false
+	for _, r := range logs.Receivers {
+		if r == "receiver_creator" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the logs pipeline must read from receiver_creator")
 	}
 }

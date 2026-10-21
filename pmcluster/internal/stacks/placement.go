@@ -30,13 +30,9 @@ type PinResolver struct {
 	// concurrently.
 	mu sync.Mutex
 
-	// PlatformNode is the node.hostname stateful services fall back to when
-	// no storage_nodes are configured (the platform_node cluster setting).
-	PlatformNode string
-
 	// StorageNodes is the ordered set of hostnames stateful services are
-	// round-robined across (the storage_nodes cluster setting). Empty keeps
-	// the single-platform-node behaviour. Mutate via SetStorageNodes.
+	// round-robined across (the storage_nodes cluster setting). Empty means
+	// "any node". Mutate via SetStorageNodes.
 	StorageNodes []string
 
 	// StackPin returns the per-stack placement override (a hostname, or ""
@@ -97,8 +93,8 @@ func (r *PinResolver) ResolvePlacement(ctx context.Context, appName string, ir *
 }
 
 // resolve returns the winning node for a stateful service with no explicit
-// placement: the per-stack pin first, then round-robin across storage nodes,
-// then the platform node. "" means "any node".
+// placement: the per-stack pin first, then round-robin across storage nodes.
+// "" means "any node" (a cluster with no storage nodes yet).
 func (r *PinResolver) resolve(appName, stackPin string) string {
 	switch {
 	case stackPin != "":
@@ -106,7 +102,7 @@ func (r *PinResolver) resolve(appName, stackPin string) string {
 	case len(r.storageNodes()) > 0:
 		return roundRobinNode(appName, r.storageNodes())
 	default:
-		return r.PlatformNode
+		return ""
 	}
 }
 

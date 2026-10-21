@@ -81,9 +81,8 @@ func TestRoundRobinNode_Deterministic(t *testing.T) {
 func TestResolvePlacement_Precedence(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("StackPin outranks round-robin and platform", func(t *testing.T) {
+	t.Run("StackPin outranks round-robin", func(t *testing.T) {
 		r := &PinResolver{
-			PlatformNode: "plat",
 			StorageNodes: []string{"s1", "s2"},
 			StackPin:     func(context.Context, string) (string, error) { return "moved-node", nil },
 		}
@@ -96,8 +95,8 @@ func TestResolvePlacement_Precedence(t *testing.T) {
 		}
 	})
 
-	t.Run("Round-robin wins over platform when storage_nodes set", func(t *testing.T) {
-		r := &PinResolver{PlatformNode: "plat", StorageNodes: []string{"s1", "s2"}}
+	t.Run("Round-robin wins when storage_nodes set", func(t *testing.T) {
+		r := &PinResolver{StorageNodes: []string{"s1", "s2"}}
 		ir := testIR("app", st("db", []string{"data"}, ""))
 		if err := r.ResolvePlacement(ctx, "app", ir); err != nil {
 			t.Fatal(err)
@@ -108,19 +107,19 @@ func TestResolvePlacement_Precedence(t *testing.T) {
 		}
 	})
 
-	t.Run("Platform node is the fallback", func(t *testing.T) {
-		r := &PinResolver{PlatformNode: "plat"}
+	t.Run("No storage nodes leaves the service unconstrained", func(t *testing.T) {
+		r := &PinResolver{}
 		ir := testIR("app", st("db", []string{"data"}, ""))
 		if err := r.ResolvePlacement(ctx, "app", ir); err != nil {
 			t.Fatal(err)
 		}
-		if ir.Services[0].Placement != "plat" {
-			t.Fatalf("placement = %q, want plat", ir.Services[0].Placement)
+		if ir.Services[0].Placement != "" {
+			t.Fatalf("placement = %q, want empty (any node) when there is no storage pool", ir.Services[0].Placement)
 		}
 	})
 
 	t.Run("Explicit placement never rewritten", func(t *testing.T) {
-		r := &PinResolver{PlatformNode: "plat", StorageNodes: []string{"s1"}}
+		r := &PinResolver{StorageNodes: []string{"s1"}}
 		ir := testIR("app",
 			st("db", []string{"data"}, "explicit-host"),
 			st("worker", []string{"jobs"}, "worker"),
@@ -137,7 +136,7 @@ func TestResolvePlacement_Precedence(t *testing.T) {
 	})
 
 	t.Run("Stateless services untouched", func(t *testing.T) {
-		r := &PinResolver{PlatformNode: "plat", StorageNodes: []string{"s1"}}
+		r := &PinResolver{StorageNodes: []string{"s1"}}
 		ir := testIR("app", st("web", nil, ""))
 		if err := r.ResolvePlacement(ctx, "app", ir); err != nil {
 			t.Fatal(err)
@@ -177,7 +176,7 @@ func TestStoragePins(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("Collects distinct pinned nodes", func(t *testing.T) {
-		r := &PinResolver{PlatformNode: "plat", StorageNodes: []string{"s1"}}
+		r := &PinResolver{StorageNodes: []string{"s1"}}
 		ir := testIR("app",
 			st("db", []string{"data"}, ""),             // resolves via round-robin → s1
 			st("cache", []string{"cache"}, "explicit"), // explicit hostname
@@ -200,7 +199,7 @@ func TestStoragePins(t *testing.T) {
 	})
 
 	t.Run("Nothing pinned yields empty", func(t *testing.T) {
-		r := &PinResolver{PlatformNode: "plat"}
+		r := &PinResolver{}
 		ir := testIR("app", st("web", nil, ""), st("job", []string{"jobs"}, "worker"))
 		pins, err := r.StoragePins(ctx, "app", ir)
 		if err != nil {
@@ -229,15 +228,15 @@ func TestStoragePins(t *testing.T) {
 // immediately.
 func TestSetStorageNodes_LiveRefresh(t *testing.T) {
 	ctx := context.Background()
-	r := &PinResolver{PlatformNode: "plat"}
+	r := &PinResolver{}
 
-	// No storage nodes yet → platform fallback.
+	// No storage nodes yet → nothing to pin to.
 	ir := testIR("app", st("db", []string{"data"}, ""))
 	if err := r.ResolvePlacement(ctx, "app", ir); err != nil {
 		t.Fatal(err)
 	}
-	if got := ir.Services[0].Placement; got != "plat" {
-		t.Fatalf("before SetStorageNodes placement = %q, want plat", got)
+	if got := ir.Services[0].Placement; got != "" {
+		t.Fatalf("before SetStorageNodes placement = %q, want empty", got)
 	}
 
 	// Live refresh: a worker joins as a storage node.
@@ -250,14 +249,14 @@ func TestSetStorageNodes_LiveRefresh(t *testing.T) {
 		t.Fatalf("after SetStorageNodes placement = %q, want node-2", got)
 	}
 
-	// Empty list reverts to the platform fallback.
+	// Empty list reverts to "any node".
 	r.SetStorageNodes(nil)
 	ir3 := testIR("app", st("db", []string{"data"}, ""))
 	if err := r.ResolvePlacement(ctx, "app", ir3); err != nil {
 		t.Fatal(err)
 	}
-	if got := ir3.Services[0].Placement; got != "plat" {
-		t.Fatalf("after SetStorageNodes(nil) placement = %q, want plat", got)
+	if got := ir3.Services[0].Placement; got != "" {
+		t.Fatalf("after SetStorageNodes(nil) placement = %q, want empty", got)
 	}
 
 	// Nil receiver is safe.
