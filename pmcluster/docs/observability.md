@@ -59,8 +59,14 @@ published port is DNAT'd past ufw's INPUT chain — so the block belongs in the
 `DOCKER-USER` chain, which is evaluated before Docker's own accept rules.
 
 `./harden-host.sh` (repo root) already does this: `8000` sits in
-`RESTRICTED_DOCKER_PORTS` alongside `4318`, and the script RETURNs loopback
-before dropping, so the daemon keeps reaching `127.0.0.1:8000` on every node.
+`RESTRICTED_DOCKER_PORTS` alongside `4318`, and the script RETURNs every PRIVATE
+source (`127.0.0.0/8`, the overlay pools, and the cluster's private peer network)
+before dropping. That distinction matters: an ingress-published port is served by
+whichever node hosts the task, so a peer node's request arrives over VXLAN
+carrying the *peer's* private address — not a bridge subnet and not loopback.
+Allow-listing only `172.16.0.0/12` drops every cross-node request while Swarm
+keeps its ESTABLISHED tunnels alive, so the cluster still reports `Ready` and the
+only symptom is a port that answers on one node and hangs on the others.
 Re-run it on each node after upgrading — it is idempotent. To do it by hand:
 
 ```sh

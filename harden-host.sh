@@ -31,6 +31,18 @@ set -euo pipefail
 # allowed through to 9090/4318 while the WAN is not.
 DOCKER_SUBNETS="${DOCKER_SUBNETS:-172.16.0.0/12}"
 
+# Everything PRIVATE is trusted, everything else is the WAN. This is the whole
+# rule, and assuming 172.16.0.0/12 alone is a production outage: on a node whose
+# overlay pool is 10.0.0.0/8 and whose peers live on the provider's private
+# network (10.7.224.0/24 here), an ingress-published port IS reached from another
+# node over VXLAN carrying that peer's private address. Swarm keeps ESTABLISHED
+# tunnels alive, so the cluster keeps reporting Ready while every NEW cross-node
+# connection is dropped — the failure looks like nothing at all.
+PRIVATE_SUBNETS="${PRIVATE_SUBNETS:-127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}"
+# Swarm control + overlay ports must be open to that same private space, or the
+# control plane is blocked by the rule written to protect it.
+SWARM_PEER_SOURCES="${SWARM_PEER_SOURCES:-$PRIVATE_SUBNETS}"
+
 # WAN-facing ports to keep publicly open.
 WAN_PORTS="${WAN_PORTS:-22 80 443}"
 
@@ -107,6 +119,16 @@ apply_firewall() {
   fi
   # Then deny everything else for these ports (still reachable from the docker
   # subnets + peers above, blocked from the WAN). Numbers 9090/4318/2377/7946.
+  # Swarm control plane + VXLAN. MUST be added BEFORE the deny block below:
+  # ufw is first-match-wins, so a blanket deny appended first shadows every
+  # later allow — the rules look right in `ufw status` and block anyway.
+  for pn in $(ip_to_list "$SWARM_PEER_SOURCES"); do
+    ufw allow from "$pn" to any port 2377 proto tcp >/dev/null
+    ufw allow from "$pn" to any port 7946 proto tcp >/dev/null
+    ufw allow from "$pn" to any port 7946 proto udp >/dev/null
+    ufw allow from "$pn" to any port 4789 proto udp >/dev/null
+  done
+
   ufw deny 9090/tcp  >/dev/null   # pmcluster API       — no WAN
   ufw deny 4318/tcp  >/dev/null   # OTLP (host path)    — no WAN
   ufw deny 8000/tcp  >/dev/null   # Parseable API       — no WAN (belt; the DOCKER-USER rule is the real gate)
@@ -140,12 +162,13 @@ write_docker_user_script() {
     for sn in $(ip_to_list "$DOCKER_SUBNETS"); do
       echo "iptables -A DOCKER-USER -s '$sn' -j RETURN"
     done
-    # Loopback/local traffic must keep reaching these published ports, because
-    # the platform consumes its own published ports: the daemon reads Parseable
-    # at 127.0.0.1:8000 and exports its own OTLP to 127.0.0.1:4318. A locally
-    # generated packet keeps its source address through DNAT, so this RETURN is
-    # what stops the DROP below from cutting the cluster off from its backend.
-    echo 'iptables -A DOCKER-USER -s 127.0.0.0/8 -j RETURN'
+    # Every PRIVATE source returns before the drops: loopback (the daemon reads
+    # its own published port), the overlay/bridge pools, and the cluster's private
+    # peer network (an ingress-published port is served by whichever node hosts
+    # the task, so a peer's request arrives over VXLAN carrying the peer address).
+    for pn in $(ip_to_list "$PRIVATE_SUBNETS"); do
+      echo "iptables -A DOCKER-USER -s '$pn' -j RETURN"
+    done
     for p in $RESTRICTED_DOCKER_PORTS; do
       # NOTE: --dport matches the CONTAINER port here, not the published one.
       # That is fine while a port is published to the same number (4318, 8000);
