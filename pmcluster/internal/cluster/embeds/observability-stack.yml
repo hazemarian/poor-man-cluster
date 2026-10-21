@@ -30,8 +30,8 @@ services:
     #
     # Ingress publishing also binds the port on each host's public interface, so
     # it MUST be denied to the WAN: ufw alone is not enough (published ports are
-    # DNAT'd past ufw's INPUT chain), which is what docker-private-ports.nft and
-    # the pmcluster-private-ports unit are for.
+    # DNAT'd past ufw's INPUT chain) — ./harden-host.sh closes 8000 in the
+    # DOCKER-USER chain and keeps it closed across reboots.
     ports:
       - target: 8000
         published: 8000

@@ -828,7 +828,7 @@ func TestLoadComposeFile_ObservabilityProvisionOneShot(t *testing.T) {
 	// read telemetry: a host process cannot resolve `observability_parseable`
 	// from the overlay. Retention and dashboards still come from inside the
 	// swarm (the provision one-shot), so this port is read-only for the
-	// platform itself and must stay denied to the WAN by the private-ports unit.
+	// platform itself and must stay denied to the WAN by harden-host.sh.
 	var stackDoc struct {
 		Services map[string]struct {
 			Ports []struct {
