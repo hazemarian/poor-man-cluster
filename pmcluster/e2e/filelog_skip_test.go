@@ -26,8 +26,8 @@ import (
 // It proves the whole chain against a REAL Docker daemon, a REAL collector
 // running the config pmcluster renders, and a REAL Parseable:
 //
-//	DSL label → Swarm/Compose container label → docker_observer → per-container
-//	filelog receiver → resource attribute service.name → Parseable row
+//	container label → docker_observer → per-container filelog receiver →
+//	resource attribute service.name → Parseable row
 //
 // Two containers emit a unique marker to stdout every second. One carries
 // io.pmcluster.skip_filelog=true. The assertion is BOTH directions: the kept
@@ -35,10 +35,12 @@ import (
 // there at all. A one-sided assertion would pass on an empty stream, which is
 // exactly how the old single-receiver design looked healthy while ingesting
 // zero lines of container output.
+//
+// Deliberately plain `docker run`, not `docker compose`: the runner that owns
+// this suite has no working compose plugin, so compose-based e2e tests skip
+// here while looking green.
 func TestE2EFilelogAttributionAndSkip(t *testing.T) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker binary not on PATH")
-	}
+	requireDockerDaemon(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
@@ -47,87 +49,69 @@ func TestE2EFilelogAttributionAndSkip(t *testing.T) {
 	user := "ops@example.com"
 	pass := "AdminPass123!"
 	stream := "pmcluster-logs"
-	project := "pmcluster-filelog-e2e"
+	netName := "pmc-filelog-e2e"
+	parseableName := "observability_parseable"
+	keptName := "pmc-filelog-kept"
+	skippedName := "pmc-filelog-skipped"
+	collectorName := "pmc-filelog-collector"
 	keptMarker := "KEPT_STDOUT_MARKER_7f3a"
 	skippedMarker := "SKIPPED_STDOUT_MARKER_9c21"
-
 	pport := hostPort(t)
 
-	compose := fmt.Sprintf(`
-services:
-  observability_parseable:
-    image: parseable/parseable:v2.8.0
-    command: ["local-store"]
-    environment:
-      - P_ADDR=0.0.0.0:8000
-      - P_USERNAME=%s
-      - P_PASSWORD=%s
-      - P_FS_DIR=/data
-      - P_STAGING_DIR=/staging
-      - P_INDEX_DIR=/data/index
-      - P_SEND_ANONYMOUS_USAGE_DATA=false
-      - P_CHECK_UPDATE=false
-    volumes:
-      - parseable_data:/data
-      - parseable_staging:/staging
-    ports:
-      - "%d:8000"
-
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.157.0
-    # The collector reads the host's Docker API and the host's container log
-    # directory, exactly as the production Swarm service does.
-    user: "0:0"
-    command: ["--config=/etc/otel-config.yaml"]
-    volumes:
-      - ${OTEL_CONFIG}:/etc/otel-config.yaml:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro
-
-  # Emits to stdout only. No OTel SDK, so its logs can ONLY arrive through the
-  # filelog path — which is the path under test.
-  kept:
-    image: alpine:3.20
-    command: ["sh", "-c", "while true; do echo %s; sleep 1; done"]
-    logging:
-      driver: json-file
-
-  skipped:
-    image: alpine:3.20
-    command: ["sh", "-c", "while true; do echo %s; sleep 1; done"]
-    logging:
-      driver: json-file
-    labels:
-      io.pmcluster.skip_filelog: "true"
-
-volumes:
-  parseable_data:
-  parseable_staging:
-`, user, pass, pport, keptMarker, skippedMarker)
-
-	composePath := filepath.Join(dir, "docker-compose.yml")
-	if err := os.WriteFile(composePath, []byte(compose), 0o644); err != nil {
-		t.Fatal(err)
+	run := func(args ...string) (string, error) {
+		var buf bytes.Buffer
+		cmd := exec.CommandContext(ctx, "docker", args...)
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+		err := cmd.Run()
+		return buf.String(), err
 	}
-	otelConfigPath := filepath.Join(dir, "otel-config.yaml")
-
-	composeArgs := func(args ...string) *exec.Cmd {
-		cmd := exec.CommandContext(ctx, "docker", append([]string{"compose", "-f", composePath, "-p", project}, args...)...)
-		cmd.Env = append(os.Environ(), "OTEL_CONFIG="+otelConfigPath)
-		return cmd
+	mustRun := func(what string, args ...string) {
+		t.Helper()
+		out, err := run(args...)
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", what, err, out)
+		}
 	}
+	remove := func(name string) {
+		clean, cancelClean := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancelClean()
+		_ = exec.CommandContext(clean, "docker", "rm", "-f", name).Run()
+	}
+
+	remove(parseableName)
+	remove(collectorName)
+	remove(keptName)
+	remove(skippedName)
+	_ = exec.CommandContext(ctx, "docker", "network", "rm", netName).Run()
 	t.Cleanup(func() {
-		downCtx, downCancel := context.WithTimeout(context.Background(), 90*time.Second)
-		defer downCancel()
-		cmd := exec.CommandContext(downCtx, "docker", "compose", "-f", composePath, "-p", project, "down", "-v")
-		cmd.Env = append(os.Environ(), "OTEL_CONFIG="+otelConfigPath)
-		out, _ := cmd.CombinedOutput()
-		t.Logf("compose down: %s", strings.TrimSpace(string(out)))
+		remove(parseableName)
+		remove(collectorName)
+		remove(keptName)
+		remove(skippedName)
+		clean, cancelClean := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancelClean()
+		_ = exec.CommandContext(clean, "docker", "network", "rm", netName).Run()
 	})
 
+	mustRun("docker network create", "network", "create", netName)
+
 	t.Log("Starting Parseable...")
-	if out, err := composeArgs("up", "-d", "observability_parseable").CombinedOutput(); err != nil {
-		t.Skipf("docker compose up failed (image pull / daemon issue — skipping): %v\n%s", err, out)
+	// The argv is the WHOLE command: this image declares no ENTRYPOINT, so a
+	// bare `local-store` argument would replace the binary and fail to exec.
+	parseableOut, err := run("run", "-d", "--name", parseableName,
+		"--network", netName, "-p", fmt.Sprintf("%d:8000", pport),
+		"-e", "P_ADDR=0.0.0.0:8000",
+		"-e", "P_USERNAME="+user,
+		"-e", "P_PASSWORD="+pass,
+		"-e", "P_FS_DIR=/data",
+		"-e", "P_STAGING_DIR=/staging",
+		"-e", "P_INDEX_DIR=/data/index",
+		"-e", "P_SEND_ANONYMOUS_USAGE_DATA=false",
+		"-e", "P_CHECK_UPDATE=false",
+		"parseable/parseable:v2.8.0", "/usr/bin/parseable", "local-store")
+	if err != nil {
+		t.Fatalf("docker run parseable: %v\n%s", err, parseableOut)
 	}
 	waitParseableHealthy(t, ctx, pport, 240*time.Second)
 
@@ -146,18 +130,48 @@ volumes:
 			t.Fatalf("rendered collector config no longer contains %q — the filelog path under test is gone", want)
 		}
 	}
-	if err := os.WriteFile(otelConfigPath, rendered, 0o644); err != nil {
+	configPath := filepath.Join(dir, "otel-config.yaml")
+	if err := os.WriteFile(configPath, rendered, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	t.Log("Starting OTel collector and the two emitters...")
-	if out, err := composeArgs("up", "-d", "otel-collector", "kept", "skipped").CombinedOutput(); err != nil {
-		t.Fatalf("docker compose up collector/emitters: %v\n%s", err, out)
+	t.Log("Starting the collector with the rendered config...")
+	collectorOut, err := run("run", "-d", "--name", collectorName, "--network", netName,
+		// The collector reads the host's Docker API and the host's container log
+		// directory, exactly as the production Swarm service does.
+		"-u", "0:0",
+		"-v", configPath+":/etc/otel-config.yaml:ro",
+		"-v", "/var/run/docker.sock:/var/run/docker.sock",
+		"-v", "/var/lib/docker/containers:/var/lib/docker/containers:ro",
+		"otel/opentelemetry-collector-contrib:0.157.0",
+		"--config=/etc/otel-config.yaml")
+	if err != nil {
+		t.Fatalf("docker run collector: %v\n%s", err, collectorOut)
 	}
 
+	t.Log("Starting the two emitters (one opted out)...")
+	// Compose-style identity labels are what the receiver maps to
+	// <project>_<service>; a Swarm service carries the swarm labels instead.
+	emitter := func(name, service, marker string, skip bool) {
+		args := []string{"run", "-d", "--name", name, "--network", netName,
+			"--label", "com.docker.compose.project=demoe2e",
+			"--label", "com.docker.compose.service=" + service}
+		if skip {
+			args = append(args, "--label", "io.pmcluster.skip_filelog=true")
+		}
+		args = append(args, "alpine:3.20", "sh", "-c",
+			fmt.Sprintf("while true; do echo %s; sleep 1; done", marker))
+		out, err := run(args...)
+		if err != nil {
+			t.Fatalf("docker run %s: %v\n%s", name, err, out)
+		}
+	}
+	emitter(keptName, "kept", keptMarker, false)
+	emitter(skippedName, "skipped", skippedMarker, true)
+
 	// The kept marker must appear; the skipped one must never appear. Poll
-	// rather than sleep a fixed time so a fast cluster does not wait and a slow
-	// one is not judged early.
+	// rather than sleep a fixed time so a fast host does not wait and a slow one
+	// is not judged early.
 	var keptSeen bool
 	deadline := time.Now().Add(180 * time.Second)
 	for time.Now().Before(deadline) {
@@ -173,7 +187,7 @@ volumes:
 		time.Sleep(5 * time.Second)
 	}
 	if !keptSeen {
-		logs := containerLogs(t, ctx, project+"-otel-collector-1")
+		logs, _ := run("logs", "--tail", "200", collectorName)
 		t.Fatalf("kept container's stdout never reached Parseable: no filelog attribution.\nCollector log tail:\n%s", tail(logs, 4000))
 	}
 	t.Logf("✅ %s attributed and ingested (service identity + filelog path work)", keptMarker)
@@ -183,14 +197,12 @@ volumes:
 	}
 	t.Logf("✅ %s absent: skip_filelog withholds a service's logs", skippedMarker)
 
-	// Prove the skip is a rule-level refusal, not a filter that ran late, and
-	// that the receiver still exists for the kept service: the collector names
-	// the receivers it starts when logging at debug is off only on errors, so
-	// assert on the absence of a startup error instead of on a receiver name.
-	logs := containerLogs(t, ctx, project+"-otel-collector-1")
+	// A config that fails to start must never ship; it would crash-loop the
+	// collector on every node at once.
+	logs, _ := run("logs", "--tail", "200", collectorName)
 	for _, bad := range []string{"Error:", "failed to start", "invalid configuration"} {
 		if strings.Contains(logs, bad) {
-			t.Errorf("collector reported %q — a config that fails to start must never ship:\n%s", bad, tail(logs, 4000))
+			t.Errorf("collector reported %q:\n%s", bad, tail(logs, 4000))
 		}
 	}
 }
