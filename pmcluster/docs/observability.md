@@ -54,16 +54,24 @@ answers on `127.0.0.1:8000` on every node — is how it reads telemetry. This is
 the same mechanism the backup SeaweedFS service uses for `8333`.
 
 Publishing on the routing mesh also binds that port on each host's public
-interface. **Deny it to the WAN on every node.** `ufw` alone does not cover it,
-because a published port is DNAT'd past ufw's INPUT chain; block it in the
-`DOCKER-USER` chain, which is evaluated before Docker's own accept rules:
+interface. **Deny it to the WAN on every node.** `ufw` does not cover it — a
+published port is DNAT'd past ufw's INPUT chain — so the block belongs in the
+`DOCKER-USER` chain, which is evaluated before Docker's own accept rules.
+
+`./harden-host.sh` (repo root) already does this: `8000` sits in
+`RESTRICTED_DOCKER_PORTS` alongside `4318`, and the script RETURNs loopback
+before dropping, so the daemon keeps reaching `127.0.0.1:8000` on every node.
+Re-run it on each node after upgrading — it is idempotent. To do it by hand:
 
 ```sh
-iptables -I DOCKER-USER -p tcp --dport 8000 -m addrtype ! --src-type LOCAL -j DROP
+iptables -I DOCKER-USER -s 127.0.0.0/8 -j RETURN
+iptables -I DOCKER-USER -p tcp --dport 8000 -j DROP
 ```
 
-Verify from another host that the port is unreachable before considering the
-cluster finished.
+Verify from another host that `8000` is unreachable, and from the node itself
+that `curl -sf -u <user>:<pass> http://127.0.0.1:8000/api/v1/logstream` still
+answers. The first proves the WAN side is closed; the second proves you did not
+cut the daemon off from its own backend.
 
 ## What is collected
 
@@ -233,47 +241,31 @@ cannot authenticate its reads. Parseable's own identity is the `deployment_id`
 in `.parseable.json` inside its data volume, which is independent of the task
 hostname — replacing a task does not create a new backend.
 
-Docker-published ports can bypass a host's usual input firewall. Restrict private
-Swarm, OTLP, backup and daemon ports in both the input and forwarding paths,
-including IPv6. Forwarding rules must match the connection's original published
-port because Docker may already have translated its destination. The optional
-`pmcluster-private-ports.service` loads an operator-supplied
-`/etc/pmcluster/private-ports.nft`; the adjacent Docker drop-in orders this guard
-before Docker starts. Keep public HTTPS separate from private native ingress.
-Use `systemctl reload pmcluster-private-ports.service` to apply rule changes.
-Restarting this required dependency can restart Docker and interrupt workloads.
+Docker-published ports bypass a host's usual input firewall: they are DNAT'd
+past `ufw`'s INPUT chain, so a "deny 8000" in ufw does not close them. The
+forwarding path is the one that counts. `./harden-host.sh` (repo root) closes
+the published-but-private ports — OTLP `4318` and Parseable `8000` — in
+`DOCKER-USER`, RETURNs docker subnets and loopback first (the daemon reads its
+own published ports), and installs `pmcluster-docker-user.service` so the rules
+come back after every boot. It is idempotent: re-run it on each node after an
+upgrade. To do it by hand:
 
-Create and validate the rule file before installing the Docker dependency. For
-example, adapt the interface, exact peer addresses and ports in this minimal
-IPv4/IPv6 guard (add private native ingress ports if used):
-
-```nft
-define cluster_interface = "wg0"
-define peers = { 10.20.0.1, 10.20.0.2, 10.20.0.3 }
-define private_ports = { 2377, 7946, 4789, 4317, 4318, 8333, 9090 }
-add table inet pmcluster_private_ports
-flush table inet pmcluster_private_ports
-add chain inet pmcluster_private_ports input { type filter hook input priority -20; policy accept; }
-add chain inet pmcluster_private_ports forward { type filter hook forward priority -20; policy accept; }
-add rule inet pmcluster_private_ports input iifname "lo" return
-add rule inet pmcluster_private_ports input iifname $cluster_interface ip saddr $peers return
-add rule inet pmcluster_private_ports input iifname "docker_gwbridge" return
-add rule inet pmcluster_private_ports input iifname "br-*" return
-add rule inet pmcluster_private_ports input tcp dport $private_ports drop
-add rule inet pmcluster_private_ports input udp dport { 7946, 4789 } drop
-add rule inet pmcluster_private_ports forward iifname $cluster_interface ip saddr $peers return
-add rule inet pmcluster_private_ports forward iifname "docker_gwbridge" return
-add rule inet pmcluster_private_ports forward iifname "br-*" return
-add rule inet pmcluster_private_ports forward meta l4proto tcp ct original proto-dst $private_ports drop
-add rule inet pmcluster_private_ports forward meta l4proto udp ct original proto-dst { 7946, 4789 } drop
+```sh
+iptables -I DOCKER-USER -s 127.0.0.0/8 -j RETURN
+iptables -I DOCKER-USER -p tcp --dport 8000 -j DROP
 ```
 
-Run `nft -c -f /etc/pmcluster/private-ports.nft`, install the service under
-`/etc/systemd/system`, then run `systemctl daemon-reload` and
-`enable and start the pmcluster-private-ports unit`. Verify private peer
-traffic and public HTTPS before installing `docker-private-ports.conf` as
-`/etc/systemd/system/docker.service.d/20-pmcluster-private-ports.conf` and running
-`systemctl daemon-reload` again. Existing workloads need no Docker restart.
+Two verification steps, and you need both: from **another host**, `8000` must be
+unreachable; from the **node itself**,
+`curl -sf -u <user>:<pass> http://127.0.0.1:8000/api/v1/logstream` must still
+answer. The first proves the WAN side is closed, the second proves you did not
+cut the daemon off from its own backend.
+
+Keep public HTTPS separate from private native ingress, and add any further
+published-but-private port to `RESTRICTED_DOCKER_PORTS` in the script. Note that
+`--dport` in `DOCKER-USER` matches the *container* port; a remapped publish
+(host 9000 → container 8000) needs a conntrack match instead, which the script
+does not generate today.
 
 The local Parseable store keeps a stable backend identity with its persisted
 state. During an upgrade, the lifecycle captures an existing identity before
