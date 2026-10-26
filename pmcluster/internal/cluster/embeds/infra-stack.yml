@@ -36,6 +36,16 @@ services:
       - "--providers.swarm.exposedByDefault=false"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
+      # Forward the ORIGINAL client address to services. Traffic is two hops
+      # (client -> load balancer -> traefik -> service), and Traefik v3 defaults
+      # to forwardedHeaders.insecure=false, which DISCARDS the X-Forwarded-For
+      # the load balancer sets — so services only ever saw the ingress node's
+      # address. insecure=true trusts that header unconditionally: it is the
+      # simple setting, and it is spoofable, so an app that logs the client IP
+      # for audit must not treat it as authoritative. Replace with
+      # forwardedHeaders.trustedIPs=<lb>,<private ranges> if that matters.
+      - "--entrypoints.web.forwardedHeaders.insecure=true"
+      - "--entrypoints.websecure.forwardedHeaders.insecure=true"
       - "--entrypoints.websecure.http.tls=true"
       - "--providers.file.filename=/etc/traefik/dynamic/conf.yml"
       - "--providers.file.watch=true"
