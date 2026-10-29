@@ -16,7 +16,7 @@ networks:
   - traefik-net
 services:
   oauth2-proxy:
-    image: public.ecr.aws/extremecloud/bitnami/oauth2-proxy:v7.11.0
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.11.0
     replicas: 1
     placement: "[[ if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
     restart: any
