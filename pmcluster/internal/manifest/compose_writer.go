@@ -7,6 +7,9 @@ import (
 	"path"
 	"strings"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/engine"
+	engineswarm "github.com/hazemarian/poor-man-cluster/pmcluster/internal/engine/swarm"
+
 	"github.com/rs/zerolog"
 
 	"sigs.k8s.io/yaml"
@@ -486,30 +489,18 @@ func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, 
 		}
 	}
 
-	constraints := []string{}
-	switch s.Placement {
-	case "manager":
-		constraints = append(constraints, "node.role == manager")
-	case "worker":
-		constraints = append(constraints, "node.role == worker")
-	case "":
-		// A stateful service (one holding a volume) with no explicit
-		// placement is auto-pinned to the cluster's designated platform node
-		// when one is configured. Its data lives under /var/stack/data and
-		// only exists on that node — letting Swarm schedule it anywhere would
-		// either strand the data or start a fresh empty volume. Global-mode
-		// services (platform agents) are exempt — they run on every node and
-		// never pin.
-		if stateful && pinNode != "" && s.Mode != "global" {
-			constraints = append(constraints, "node.hostname == "+pinNode)
-			d.Labels[labelNode] = pinNode
-		}
-	default:
-		// Any other value is a node-hostname pin: the operator keeps a
-		// stateful service (with a volume) on one specific node so its
-		// data never has to migrate.
-		constraints = append(constraints, "node.hostname == "+s.Placement)
-		d.Labels[labelNode] = s.Placement
+	// Placement is expressed in platform terms and translated by the engine
+	// adapter: internal/engine.PlacementFor owns the rules (role restriction,
+	// auto-pin of stateful services, explicit hostname pin) and
+	// internal/engine/swarm renders them into Swarm constraint syntax. Nothing
+	// engine-specific stays in this file.
+	placement := engine.PlacementFor(s.Placement, pinNode, stateful, s.Mode == "global")
+	constraints := engineswarm.Constraints(placement)
+	if placement.Pinned() {
+		// The pin is recorded as a label as well, so the console and the
+		// reconciler can report what the node choice was without parsing
+		// constraints.
+		d.Labels[labelNode] = placement.Node
 	}
 	constraints = append(constraints, s.Constraints...)
 	if len(constraints) > 0 {
