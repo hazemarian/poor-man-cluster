@@ -31,7 +31,13 @@ import (
 // recordingDeployer records every DeployStack call and can optionally inject
 // an error. It implements cluster.StackDeployer.
 type recordingDeployer struct {
-	mu        sync.Mutex
+	mu sync.Mutex
+	// attempts counts EVERY apply, including ones that fail before a record is
+	// appended. The 202 path is fire-and-forget, so a test that only inspects
+	// `deployed` cannot see a failed attempt at all — and without seeing it the
+	// test returns while the handler's goroutine is still running, which then
+	// races t.TempDir cleanup.
+	attempts  int
 	deployed  []deployRecord
 	deployErr error
 	removed   []string
@@ -46,6 +52,7 @@ type deployRecord struct {
 func (r *recordingDeployer) DeployStack(_ context.Context, name string, composeYAML []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.attempts++
 	if r.deployErr != nil {
 		return r.deployErr
 	}
@@ -56,11 +63,36 @@ func (r *recordingDeployer) DeployStack(_ context.Context, name string, composeY
 func (r *recordingDeployer) DeployStackNoPrune(_ context.Context, name string, composeYAML []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.attempts++
 	if r.deployErr != nil {
 		return r.deployErr
 	}
 	r.deployed = append(r.deployed, deployRecord{Name: name, YAML: string(composeYAML)})
 	return nil
+}
+
+// waitAttempts blocks until the handler's background apply has actually been
+// attempted (or failed), up to deadline.
+//
+// This is the honest way to settle a fire-and-forget handler in a test: the 202
+// means "accepted", not "done", so waiting on the OBSERVABLE outcome — the apply
+// reaching the deployer — keeps the test deterministic without reaching into the
+// handler's goroutine, and without any change to production concurrency.
+func (r *recordingDeployer) waitAttempts(t *testing.T, want int, deadline time.Duration) {
+	t.Helper()
+	end := time.Now().Add(deadline)
+	for {
+		r.mu.Lock()
+		got := r.attempts
+		r.mu.Unlock()
+		if got >= want {
+			return
+		}
+		if time.Now().After(end) {
+			t.Fatalf("background apply did not reach the deployer within %s (attempts=%d, want %d)", deadline, got, want)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func (r *recordingDeployer) PruneStack(_ context.Context, _ string, _ []byte) error { return nil }
@@ -599,6 +631,11 @@ func TestHandlerReceive(t *testing.T) {
 			b, _ := io.ReadAll(resp.Body)
 			t.Errorf("status = %d, want 202; body: %s", resp.StatusCode, b)
 		}
+		// Settle the background apply before the test returns: the store close
+		// and TempDir removal run in cleanup, and a still-running apply writing
+		// into that directory is what produced "TempDir RemoveAll cleanup:
+		// directory not empty".
+		dep.waitAttempts(t, 1, 5*time.Second)
 	})
 
 	t.Run("body larger than MaxBodyBytes — 413", func(t *testing.T) {
