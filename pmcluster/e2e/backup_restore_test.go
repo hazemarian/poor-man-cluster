@@ -68,14 +68,34 @@ func clearAppState(t *testing.T, app, volume string) {
 		t.Logf("docker stack rm %s: %v\n%s", app, err, out)
 	}
 	// The volume can only be removed once no service references it, and
-	// `stack rm` converges asynchronously.
-	for i := 0; i < 15; i++ {
+	// `stack rm` converges ASYNCHRONOUSLY: the CLI returns while the tasks are
+	// still being stopped, and a volume held by a dying task refuses removal.
+	//
+	// The previous loop simply gave up after 30s and returned, leaving a stale
+	// volume whose driver_opts point at a device path from THAT run. The next
+	// run then mounts a deleted path, its service never starts, and the failure
+	// reads as a bug in the deploy path — which is exactly how this presented.
+	//
+	// So: wait long enough (scaled for slow hosts), and when it still fails,
+	// name what is holding the volume instead of leaving a landmine behind.
+	waitFor := e2eTimeout(90 * time.Second)
+	deadline := time.Now().Add(waitFor)
+	var lastOut string
+	for {
 		out, err := dockerRun(ctx, "volume", "rm", volume)
 		if err == nil {
 			return
 		}
 		if !strings.Contains(out, "in use") {
 			return // gone already, or not a condition retrying will fix
+		}
+		lastOut = out
+		if time.Now().After(deadline) {
+			holders, _ := dockerRun(ctx, "ps", "-a", "--filter", "volume="+volume,
+				"--format", "{{.ID}} {{.Names}} {{.Status}} {{.Label \"com.docker.swarm.service.name\"}}")
+			t.Logf("volume %s still in use after %s — containers holding it:\n%s\nlast error: %s",
+				volume, waitFor, holders, strings.TrimSpace(lastOut))
+			return
 		}
 		time.Sleep(2 * time.Second)
 	}
