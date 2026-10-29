@@ -99,8 +99,11 @@ func swarmTierEnabled() bool {
 	if ok, _ := engineReachable(); !ok {
 		return false
 	}
+	// Active only: an inactive engine will SKIP the swarm tier (see requireSwarm),
+	// so building the local edge image for it would be wasted work in the smoke
+	// job. Forced mode is handled by the switch above.
 	state, _ := swarmState()
-	return state == "active" || state == "inactive" // inactive is init-able
+	return state == "active"
 }
 
 // ensureSwarm makes a single-node swarm exist, which is what every swarm test
@@ -156,8 +159,25 @@ func requireSwarm(t *testing.T) {
 		fail("docker CLI found but the engine is unreachable: %s\n"+
 			"hint: DOCKER_HOST=%s", out, os.Getenv("DOCKER_HOST"))
 	}
-	if err := ensureSwarm(t); err != nil {
-		fail("cannot prepare a swarm: %v", err)
+	// DETECT, do not provision. Initialising a swarm is a side effect, and a
+	// smoke-tier test that asserts "no cluster data yet" changes behaviour the
+	// moment one exists — it starts exiting 0 instead of demanding a wizard, and
+	// the failure looks like a product bug rather than test scaffolding.
+	//
+	// So an inactive engine only gets initialised when the caller has explicitly
+	// asked for the swarm tier (PMCLUSTER_E2E_SWARM=1, CI's mode). Everyone else
+	// is told how to prepare the engine themselves.
+	state, reason := swarmState()
+	if state != "active" {
+		if forced {
+			if err := ensureSwarm(t); err != nil {
+				fail("cannot prepare a swarm: %v", err)
+			}
+		} else {
+			fail("swarm is %q (%s): this suite must not mutate the engine's swarm "+
+				"state. Run `docker swarm init` yourself, or set "+
+				"PMCLUSTER_E2E_SWARM=1 to let the suite initialise one.", state, reason)
+		}
 	}
 	t.Logf("harness: docker %s, swarm active, timeout scale %.1fx",
 		out, float64(e2eTimeout(time.Second))/float64(time.Second))
