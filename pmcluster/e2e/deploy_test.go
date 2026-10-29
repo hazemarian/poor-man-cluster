@@ -66,9 +66,7 @@ services:
 // against a real single-node Docker Swarm plus the HTTP API.
 func TestDeployPipeline(t *testing.T) {
 
-	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
-		t.Skip("PMCLUSTER_E2E_SWARM is not set to 1; skipping deploy pipeline e2e (set it in CI or locally to enable)")
-	}
+	requireSwarm(t)
 
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH; skipping deploy pipeline e2e")

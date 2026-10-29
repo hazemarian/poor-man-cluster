@@ -104,9 +104,7 @@ func postWebhook(t *testing.T, baseURL, source, sig, ts string, body []byte) *ht
 // TestWebhookE2E exercises the full webhook flow against a real Docker Swarm.
 func TestWebhookE2E(t *testing.T) {
 
-	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
-		t.Skip("PMCLUSTER_E2E_SWARM is not set to 1; skipping webhook e2e")
-	}
+	requireSwarm(t)
 
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH; skipping webhook e2e")

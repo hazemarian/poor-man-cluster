@@ -105,7 +105,7 @@ func TestMain(m *testing.M) {
 	// build a local image from the module's Dockerfile.edge and pin the edge
 	// stack to it via PMCLUSTER_EDGE_IMAGE (see EdgeImageFor). Skipped unless
 	// the swarm tier is actually running, to keep the fast tier hermetic.
-	if os.Getenv("PMCLUSTER_E2E_SWARM") == "1" && os.Getenv("PMCLUSTER_EDGE_IMAGE") == "" {
+	if swarmTierEnabled() && os.Getenv("PMCLUSTER_EDGE_IMAGE") == "" {
 		moduleRoot, err := findModuleRoot()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "e2e: locate module root (edge image): %v\n", err)

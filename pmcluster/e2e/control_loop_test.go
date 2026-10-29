@@ -22,9 +22,7 @@ import (
 //
 // Swarm-gated (PMCLUSTER_E2E_SWARM=1), mirroring TestClusterUp's harness.
 func TestControlLoopE2E(t *testing.T) {
-	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
-		t.Skip("PMCLUSTER_E2E_SWARM=1 required")
-	}
+	requireSwarm(t)
 	requireDockerDaemon(t)
 
 	ctx, cancel := context.WithCancel(context.Background())

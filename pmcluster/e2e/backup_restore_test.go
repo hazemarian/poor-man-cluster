@@ -18,11 +18,11 @@
 // writes on start would recreate the expected file during the restore, so the
 // assertion could pass on a restart that has nothing to do with the restore.
 //
-// Gated behind PMCLUSTER_E2E_SWARM=1 so it never runs accidentally on a
+// Gated on CAPABILITY (see requireSwarm): it runs wherever a Swarm-capable
 // developer machine — the swarm-e2e workflow sets it explicitly. The hermetic
 // volume root keeps it off /var/stack, which a non-root dev host cannot create.
 //
-// Run via: PMCLUSTER_E2E_SWARM=1 make e2e
+// Run via: make e2e
 package e2e
 
 import (
@@ -103,9 +103,7 @@ func waitBackupAgentsReady(t *testing.T, ctx context.Context) {
 // into a live volume root.
 func TestBackupRestoreE2E(t *testing.T) {
 
-	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
-		t.Skip("PMCLUSTER_E2E_SWARM is not set to 1; skipping backup/restore e2e (set it in CI or locally to enable)")
-	}
+	requireSwarm(t)
 
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH; skipping backup/restore e2e")

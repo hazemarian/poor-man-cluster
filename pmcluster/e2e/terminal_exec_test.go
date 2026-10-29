@@ -35,9 +35,7 @@ import (
 // real swarm: deploy a stack, exec `sh` into its running task, echo a marker
 // line, resize, exit, and assert auth rejection.
 func TestTerminalExecE2E(t *testing.T) {
-	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
-		t.Skip("PMCLUSTER_E2E_SWARM=1 required")
-	}
+	requireSwarm(t)
 	requireDockerDaemon(t)
 
 	ctx, cancel := context.WithCancel(context.Background())

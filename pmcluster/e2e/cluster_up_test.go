@@ -2,10 +2,10 @@
 
 // Package e2e contains end-to-end tests for the pmcluster binary.
 // This file tests `pmcluster cluster up` against a real single-node Docker
-// Swarm. It is gated behind the PMCLUSTER_E2E_SWARM=1 env var so it never
+// Swarm. It is gated on capability (requireSwarm): a reachable Swarm-capable
 // runs by accident on developer machines — CI sets the variable explicitly.
 //
-// Run via: PMCLUSTER_E2E_SWARM=1 make e2e
+// Run via: make e2e
 package e2e
 
 import (
@@ -37,9 +37,7 @@ import (
 // drives the full cluster up → idempotent re-run → cluster down --purge flow.
 func TestClusterUp(t *testing.T) {
 
-	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
-		t.Skip("PMCLUSTER_E2E_SWARM is not set to 1; skipping cluster up e2e (set it in CI or locally to enable)")
-	}
+	requireSwarm(t)
 
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH; skipping cluster up e2e")
@@ -461,6 +459,10 @@ func dockerRunNoFail(ctx context.Context, args ...string) (string, error) {
 // Global services report 0/0 until scheduled, then N/N.
 func waitServiceHealthy(t *testing.T, ctx context.Context, fullName string, wantRep int, deadline time.Duration) {
 	t.Helper()
+	// Scale here rather than at ~20 call sites: this helper is the single place
+	// service readiness is waited on, so a slow machine (dockerd in a VM, cold
+	// image pulls) gets longer waits without every test carrying its own number.
+	deadline = e2eTimeout(deadline)
 	queryCtx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 

@@ -120,9 +120,7 @@ func TestSetupWizardFallback(t *testing.T) {
 // TestSetupWizardClusterUp drives the full wizard → cluster up flow with SSO
 // enabled against a real single-node Swarm (same gating as TestClusterUp).
 func TestSetupWizardClusterUp(t *testing.T) {
-	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
-		t.Skip("PMCLUSTER_E2E_SWARM is not set to 1; skipping setup wizard swarm e2e")
-	}
+	requireSwarm(t)
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH; skipping setup wizard swarm e2e")
 	}

@@ -40,9 +40,7 @@ import (
 // TestSetupWizardClusterUp: the sso stack must NOT deploy, the Traefik gate
 // must stay admin-auth (basicAuth), and no sso_cookie_secret may exist.
 func TestSetupWizardNoSSO(t *testing.T) {
-	if os.Getenv("PMCLUSTER_E2E_SWARM") != "1" {
-		t.Skip("PMCLUSTER_E2E_SWARM is not set to 1; skipping setup wizard no-SSO swarm e2e")
-	}
+	requireSwarm(t)
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH; skipping setup wizard no-SSO swarm e2e")
 	}
