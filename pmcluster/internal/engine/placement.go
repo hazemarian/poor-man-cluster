@@ -93,6 +93,8 @@ type Capabilities struct {
 	// RoutingMesh: publishing a port binds it on every node, so any node can
 	// front a service.
 	RoutingMesh bool
+	// NativeScale: replica counts can be changed through the engine's own API.
+	NativeScale bool
 	// NativeJobs: one-shot / cron workloads are first-class and cleaned up by
 	// the engine.
 	NativeJobs bool
