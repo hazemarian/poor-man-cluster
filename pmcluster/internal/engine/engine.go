@@ -21,6 +21,9 @@ type Node struct {
 	Labels map[string]string
 	// EngineVersion is the engine's own version on this machine.
 	EngineVersion string
+	// Address is the address the engine routes to this node on — what a caller
+	// needs to reach a workload placed there (an endpoint, a probe).
+	Address string
 }
 
 // Workload is the platform's view of one deployed unit (a Swarm service, a

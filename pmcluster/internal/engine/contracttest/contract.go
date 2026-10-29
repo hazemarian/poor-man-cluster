@@ -50,6 +50,12 @@ func Run(t *testing.T, newEngine func(t *testing.T) engine.Engine) {
 			default:
 				t.Errorf("node %q has un-normalised role %q", n.Hostname, n.Role)
 			}
+			// Address is what lets a caller reach a workload on this node
+			// (endpoint discovery, probes). Without it every caller has to go
+			// back to the engine's own node type to find one.
+			if n.Address == "" {
+				t.Errorf("node %q has no address; the read model must carry one", n.Hostname)
+			}
 		}
 	})
 

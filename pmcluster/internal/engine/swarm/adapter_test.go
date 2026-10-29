@@ -21,9 +21,9 @@ type stubClient struct {
 
 func (s *stubClient) NodeList(context.Context) ([]runtime.Node, error) {
 	return []runtime.Node{
-		{Hostname: "nxt-sw-1-m", Role: "manager", Availability: "active", Status: "ready", IsLeader: true},
-		{Hostname: "nxt-sw-4-m", Role: "manager", Availability: "active", Status: "ready"},
-		{Hostname: "nxt-sw-3-w", Role: "worker", Availability: "active", Status: "ready"},
+		{Hostname: "nxt-sw-1-m", Role: "manager", Availability: "active", Status: "ready", IsLeader: true, Address: "10.7.224.12"},
+		{Hostname: "nxt-sw-4-m", Role: "manager", Availability: "active", Status: "ready", Address: "10.7.224.13"},
+		{Hostname: "nxt-sw-3-w", Role: "worker", Availability: "active", Status: "ready", Address: "10.7.224.11"},
 	}, nil
 }
 

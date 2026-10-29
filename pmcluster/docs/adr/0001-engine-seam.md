@@ -82,11 +82,22 @@ its data or returns with an empty one.
 
 1. **Landed:** neutral `Placement` + Swarm translator; `compose_writer` no longer
    contains engine syntax; rules and translation covered by table tests.
-2. Next: remove the ~20 `runtime.*` type references behind the seam (mechanical,
-   ~1–2 days).
-3. Next: split `internal/manifest` into *parse* (Compose → neutral workload IR)
-   and *render* (IR → engine format).
-4. Next: `engine.Engine` interface (`Apply`, `Remove`, `Scale`, `Nodes`,
-   `Leader`, `Capabilities`) plus a shared contract test suite that every adapter
-   must pass — that suite becomes the definition of engine parity.
-5. Only if justified: an adapter for a second engine.
+2. **Landed:** `engine.Engine` (Capabilities, Nodes, Leader, Workloads, Restart),
+   `engine.Node` / `engine.Workload` read model, `engine/swarm` adapter, and
+   `engine/contracttest.Run` — the parity suite every adapter must pass.
+3. **Already satisfied — no work needed.** The parse/render split exists:
+   `manifest.Parse() → *IR`, then `composeXFromIR` renders. It predates this ADR.
+4. **Deliberately NOT moved**, after reading each site:
+
+   | Remaining refs | What they are | Why they stay |
+   |---|---|---|
+   | ~15 × `runtime.SecretSpec/NetworkSpec/ConfigSpec` | transport payloads | they describe engine API calls, not platform intent; they belong to the transport |
+   | `cli/observability_backend.go` (`parseableLocator`) | a local narrow interface (NodeList/ServiceList/ServiceTasks) | already a test seam; routing it through `Engine` adds indirection without removing any engine knowledge |
+   | `controlplane/state.go`, `stacks/resolver.go` | domain structs with engine-agnostic fields | no constraint syntax, no engine objects |
+
+   The original audit over-counted: `runtime.Service`/`runtime.Node` are already
+   *domain* types (`EngineVersion`, `Role`, `Mode`, `Platform`), not raw engine
+   structs. The only genuine semantic leak was constraint serialisation, and it
+   is now behind the adapter.
+5. Only if justified: a second adapter (4–6 weeks: Compose translation, its own
+   ingress provider, its own secret store, re-proved e2e).

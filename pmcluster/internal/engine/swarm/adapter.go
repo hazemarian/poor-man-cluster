@@ -40,6 +40,7 @@ func (a *Adapter) Nodes(ctx context.Context) ([]engine.Node, error) {
 			Status:        n.Status,
 			IsLeader:      n.IsLeader,
 			EngineVersion: n.EngineVersion,
+			Address:       n.Address,
 		})
 	}
 	return out, nil
