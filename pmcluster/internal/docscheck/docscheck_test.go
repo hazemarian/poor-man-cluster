@@ -104,6 +104,32 @@ func markdownDocs(t *testing.T, root string) []string {
 	return present
 }
 
+// adrDocs returns the decision records under pmcluster/docs/adr/.
+//
+// ADRs are held to the link and file-reference checks but deliberately not to
+// the command/flag/route checks: an ADR may name a command it proposes, and
+// asserting that command exists today would fail every proposal by design.
+// A proposal's claims are checked when it becomes an implementation.
+func adrDocs(t *testing.T, root string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(root, "pmcluster", "docs", "adr", "*.md"))
+	if err != nil {
+		t.Fatalf("glob adr: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("parsed zero ADRs out of pmcluster/docs/adr — the glob is stale, or the decision records are gone")
+	}
+	return matches
+}
+
+// narrativeDocs is every piece of prose whose links and file references must
+// resolve: the docs trees plus the ADRs. The trees above are globbed one level
+// deep, so anything filed under a subdirectory is invisible to them unless it is
+// added here — which is exactly how the ADRs went unchecked.
+func narrativeDocs(t *testing.T, root string) []string {
+	return append(markdownDocs(t, root), adrDocs(t, root)...)
+}
+
 func read(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -504,7 +530,7 @@ var (
 func TestLocalMarkdownLinksResolve(t *testing.T) {
 	root := repoRoot(t)
 	links := 0
-	for _, doc := range markdownDocs(t, root) {
+	for _, doc := range narrativeDocs(t, root) {
 		src := read(t, doc)
 		for _, m := range reMDLink.FindAllStringSubmatch(src, -1) {
 			target := m[1]
@@ -529,7 +555,7 @@ func TestLocalMarkdownLinksResolve(t *testing.T) {
 func TestNoReferencesToMissingFiles(t *testing.T) {
 	root := repoRoot(t)
 	refs := 0
-	for _, doc := range markdownDocs(t, root) {
+	for _, doc := range narrativeDocs(t, root) {
 		for _, m := range reDocRef.FindAllStringSubmatch(read(t, doc), -1) {
 			refs++
 			// Docs trees are written both from the repository root and from
@@ -603,7 +629,7 @@ func mermaidBlocks(src string) []string {
 func TestMermaidBlocksAreWellFormed(t *testing.T) {
 	root := repoRoot(t)
 	blocks := 0
-	for _, doc := range markdownDocs(t, root) {
+	for _, doc := range narrativeDocs(t, root) {
 		for _, b := range mermaidBlocks(read(t, doc)) {
 			blocks++
 			body := strings.TrimSpace(b)

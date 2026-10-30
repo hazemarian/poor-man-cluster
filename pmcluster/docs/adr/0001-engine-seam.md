@@ -5,8 +5,10 @@ Status: accepted (layer 1 landed) · Date: 2026-10-27
 ## Context
 
 pmcluster is a platform that sits above a container engine. Today the engine is
-Docker Swarm; Nomad and k3s were both considered as alternatives (see
-`docs/` discussion on engines). Whichever engine runs underneath, the platform
+Docker Swarm; Nomad and k3s were both considered as alternatives — the whitepaper
+records the k3s rejection ([`docs/whitepaper.md`](../../../docs/whitepaper.md),
+§ *Orchestrator*), and Nomad's licensing cost is recorded below, in
+Consequences. Whichever engine runs underneath, the platform
 layer — placement policy, backend provisioning, backups, SSO wiring, TLS
 rotation, host hardening — is the product. The engine is a dependency.
 
@@ -15,8 +17,8 @@ bounded:
 
 | Kind | Scale | Where |
 |---|---|---|
-| `runtime.*` domain types used outside the engine package | ~20 refs / 8 files | `cluster/update.go`, `cli/observability_backend.go`, `cluster/secrets.go`, `cluster/networks.go`, `controlplane/state.go`, `cli/node.go`, `stacks/resolver.go` |
-| Engine-specific constraint syntax | **one function** | `manifest/compose_writer.go:489–516` (before this change) |
+| `runtime.*` domain types used outside the engine package | ~20 refs / 8 files | `internal/cluster/update.go`, `internal/cli/observability_backend.go`, `internal/cluster/secrets.go`, `internal/cluster/networks.go`, `internal/controlplane/state.go`, `internal/cli/node.go`, `internal/stacks/resolver.go` |
+| Engine-specific constraint syntax | **one function** | `internal/manifest/compose_writer.go` (the constraint-rendering block, before this change) |
 | Deploy primitives (`ServiceCreate/Update`, `StackDeploy`) | 13 call sites | `internal/cluster/` |
 
 Two findings drove the design:
@@ -92,8 +94,8 @@ its data or returns with an empty one.
    | Remaining refs | What they are | Why they stay |
    |---|---|---|
    | ~15 × `runtime.SecretSpec/NetworkSpec/ConfigSpec` | transport payloads | they describe engine API calls, not platform intent; they belong to the transport |
-   | `cli/observability_backend.go` (`parseableLocator`) | a local narrow interface (NodeList/ServiceList/ServiceTasks) | already a test seam; routing it through `Engine` adds indirection without removing any engine knowledge |
-   | `controlplane/state.go`, `stacks/resolver.go` | domain structs with engine-agnostic fields | no constraint syntax, no engine objects |
+   | `internal/cli/observability_backend.go` (`parseableLocator`) | a local narrow interface (NodeList/ServiceList/ServiceTasks) | already a test seam; routing it through `Engine` adds indirection without removing any engine knowledge |
+   | `internal/controlplane/state.go`, `internal/stacks/resolver.go` | domain structs with engine-agnostic fields | no constraint syntax, no engine objects |
 
    The original audit over-counted: `runtime.Service`/`runtime.Node` are already
    *domain* types (`EngineVersion`, `Role`, `Mode`, `Platform`), not raw engine

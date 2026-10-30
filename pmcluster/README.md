@@ -188,4 +188,5 @@ stack (Traefik labels, networks, secrets, restart/update policies included).
 - [Restore — shipped design & open gaps](docs/restore-design.md)
 - [Service operations design](docs/service-ops-design.md)
 - [Console i18n contract](docs/console-i18n-contract.md)
+- [Decision records](docs/adr/README.md) — why the engine seam, the CLI's store-vs-API split, and what each choice cost
 - [Whitepaper](../docs/whitepaper.md)

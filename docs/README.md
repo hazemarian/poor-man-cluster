@@ -20,6 +20,7 @@ the [whitepaper](whitepaper.md).
 | Read the security model | [`whitepaper.md`](whitepaper.md) (§13) |
 | See what was tested on real hardware (TC1–TC10) | [`test-reports/`](test-reports/README.md) |
 | Understand *why* something is the way it is | [`whitepaper.md`](whitepaper.md) |
+| See the decisions and what was rejected | [`pmcluster/docs/adr/`](../pmcluster/docs/adr/README.md) |
 
 ## Reading orders
 
@@ -51,4 +52,6 @@ the [whitepaper](whitepaper.md).
 Deeper design docs that live with the code:
 [`pmcluster/internal/ARCHITECTURE.md`](../pmcluster/internal/ARCHITECTURE.md),
 [`pmcluster/docs/`](../pmcluster/docs/) (openapi.yaml, service-ops, restore,
-console-i18n designs).
+console-i18n designs), and the
+[decision records](../pmcluster/docs/adr/README.md) — the choices that constrain
+the code, with what was rejected and what each one costs.
