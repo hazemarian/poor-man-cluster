@@ -44,6 +44,22 @@ knowledge lives in whoever has been burned by it.
    (dockerd restarts, a manager being demoted and removed). Any rule of the form
    "run it on the leader" was stale within the hour.
 
+6. **Remote mode is advertised but partial.** Run from a laptop with no local
+   Docker and no local store, against the leader's API over a tunnel
+   (`--api-url http://127.0.0.1:19090 --api-token …`), three commands gave three
+   different answers:
+
+   | Command | Result |
+   |---|---|
+   | `observability status` | **works** — answered from the daemon |
+   | `cluster settings` | **works** — printed the settings table |
+   | `cluster status` | **fails** — `docker info: Cannot connect to the Docker daemon at unix:///var/run/docker.sock`, ignoring `--api-url` entirely |
+   | `credentials list` | **fails** — `data directory not initialised at ~/.pmcluster — run 'pmcluster init' first`, ignoring `--api-url` |
+
+   So `--api-url`/`--api-token` are honoured by some command paths and bypassed
+   by others. An operator cannot know which, and the failures accuse the machine
+   ("run init", "is the daemon running?") rather than naming the real cause.
+
 ## Impact
 
 - **Silent drift is the worst outcome**: a plausible but wrong answer (item 2)
