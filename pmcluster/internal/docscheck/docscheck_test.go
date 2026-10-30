@@ -16,9 +16,6 @@
 package docscheck
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -361,161 +358,15 @@ func TestDocumentedCLICommandsAndFlagsExist(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. every path the OpenAPI spec documents must exist as a route handler
+// 3. the OpenAPI spec matches the router — see openapi_test.go
 // ---------------------------------------------------------------------------
-
-// routeLiterals returns the string literals passed to router-registration
-// calls, parsed from the AST rather than by regex. Regex on source text misses
-// collection endpoints registered as `Get("/")` inside a `Route("/x", …)`
-// block and reports them as non-existent.
-func routeLiterals(t *testing.T, root string) map[string]string {
-	t.Helper()
-	routeMethods := map[string]bool{"Get": true, "Post": true, "Put": true, "Delete": true, "Patch": true}
-	found := map[string]string{}
-	fset := token.NewFileSet()
-
-	firstString := func(call *ast.CallExpr) (string, bool) {
-		for _, arg := range call.Args {
-			if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				return strings.Trim(lit.Value, `"`), true
-			}
-		}
-		return "", false
-	}
-
-	for _, f := range goFiles(t, filepath.Join(root, "pmcluster")) {
-		astFile, err := parser.ParseFile(fset, f, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", f, err)
-		}
-		var scan func(n ast.Node, prefix string)
-		scan = func(n ast.Node, prefix string) {
-			ast.Inspect(n, func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				switch {
-				case sel.Sel.Name == "Route":
-					// A sub-router: its prefix composes into every route inside,
-					// which is how collection endpoints register (`Route("/x")`
-					// + `Get("/")` is the route `/x`).
-					sub, ok := firstString(call)
-					if ok && strings.HasPrefix(sub, "/") {
-						for _, arg := range call.Args {
-							if fn, ok := arg.(*ast.FuncLit); ok {
-								scan(fn.Body, prefix+sub)
-							}
-						}
-					}
-					return false // handled above; do not double-visit children
-				case routeMethods[sel.Sel.Name]:
-					sub, ok := firstString(call)
-					if ok && strings.HasPrefix(sub, "/") {
-						found[prefix+sub] = f
-					}
-				}
-				return true
-			})
-		}
-		scan(astFile, "")
-	}
-	return found
-}
-
-func normalizePath(p string) string {
-	p = regexp.MustCompile(`\{[^}]+\}`).ReplaceAllString(strings.TrimRight(p, "/"), "{}")
-	return strings.ReplaceAll(p, "*", "{}")
-}
-
-func specPaths(t *testing.T, root string) []string {
-	t.Helper()
-	src := read(t, filepath.Join(root, "pmcluster", "docs", "openapi.yaml"))
-	var out []string
-	for _, m := range regexp.MustCompile(`(?m)^\s{2}(/[A-Za-z0-9/_{}\-]+):\s*$`).FindAllStringSubmatch(src, -1) {
-		out = append(out, normalizePath(m[1]))
-	}
-	if len(out) == 0 {
-		t.Fatal("parsed zero paths out of pmcluster/docs/openapi.yaml — the spec format changed, not the routes")
-	}
-	sort.Strings(out)
-	return out
-}
-
-// undocumentedRoutes lists routes this spec has never covered. It may only
-// shrink: documenting or deleting an entry is a deliberate act, and adding a
-// new route to this list instead of to the spec is the drift this test exists
-// to stop.
-var undocumentedRoutes = map[string]bool{
-	"/configs/{}/stack": true,
-	"/health":           true,
-	"/nodes/{}/storage": true,
-	"/secrets/{}/stack": true,
-	"/stacks/{}/ack":    true,
-	"/stacks/{}/move":   true,
-}
-
-// knownUndocumented reports whether a route is on the checked-in list of
-// endpoints the spec has never covered, matching on the path tail because a
-// composed route may or may not carry the /api mount prefix.
-func knownUndocumented(route string) bool {
-	for k := range undocumentedRoutes {
-		if route == k || strings.HasSuffix(route, k) || strings.HasSuffix(k, route) {
-			return true
-		}
-	}
-	return false
-}
-
-func TestOpenAPIPathsExistAndAreCovered(t *testing.T) {
-	root := repoRoot(t)
-	literals := routeLiterals(t, root)
-	if len(literals) == 0 {
-		t.Fatal("parsed zero route literals — the AST extraction is broken, not the spec")
-	}
-	var normalized []string
-	for lit := range literals {
-		normalized = append(normalized, normalizePath(lit))
-	}
-	sort.Strings(normalized)
-
-	paths := specPaths(t, root)
-	for _, p := range paths {
-		// The router mounts most sub-packages under /api, so a registered
-		// literal is normally the tail of the documented path.
-		matched := false
-		for _, lit := range normalized {
-			if p == lit || strings.HasSuffix(p, lit) || strings.HasSuffix(lit, p) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			t.Errorf("openapi.yaml documents %s, but no route literal in the code matches it", p)
-		}
-	}
-
-	// Reverse direction: routes the spec never mentions. Reported, plus a
-	// checked-in list so new gaps have to be added deliberately.
-	for _, lit := range normalized {
-		covered := false
-		for _, p := range paths {
-			if lit == p || strings.HasSuffix(p, lit) || strings.HasSuffix(lit, p) {
-				covered = true
-				break
-			}
-		}
-		if !covered && !knownUndocumented(lit) {
-			t.Errorf("route %s is served but absent from openapi.yaml — document it, or add it to undocumentedRoutes with a reason", lit)
-		}
-	}
-	t.Logf("checked %d documented paths against %d route literals (%d known-undocumented routes allowed)",
-		len(paths), len(normalized), len(undocumentedRoutes))
-}
+//
+// The path-only check that used to live here (documented paths vs route
+// string literals, suffix-matched) was replaced: it could not see r.Method
+// registrations, could not see a route mounted by a sub-package's Mount(r),
+// and asserted nothing about status codes or response bodies. Its
+// `undocumentedRoutes` allowlist had already grown to six routes. openapi_test.go
+// now checks routes in both directions plus $refs, status codes and JSON shapes.
 
 // ---------------------------------------------------------------------------
 // 4. links and file references must resolve

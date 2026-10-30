@@ -16,7 +16,15 @@ info:
     only reach that stack's `/api/stacks/...` and `/api/services/...` routes;
     every other `/api` route answers `403 {"error":"token scoped to stack <x>"}`.
     Tokens without a scope keep full access.
-  version: "0.2.0"
+
+    This document is checked against the router it describes: every served
+    route must appear here and every operation here must be served, and the
+    2xx status codes and JSON response keys are compared with what the
+    handlers actually write (`internal/docscheck`, `openapi_test.go`). Change
+    a response in the code and this file must change with it, or the build
+    fails. Routes marked `security: []` (the public badges, `/health`) and the
+    websocket upgrade are the only unauthenticated endpoints.
+  version: "0.2.213"
 servers:
   - url: https://pmcluster.example.com
     description: Deployed daemon behind the edge gateway
@@ -27,6 +35,7 @@ paths:
     get:
       summary: Liveness probe (unauthenticated, no dependencies)
       operationId: health
+      security: []
       responses:
         "200":
           description: Healthy
@@ -69,8 +78,8 @@ paths:
             schema:
               $ref: "#/components/schemas/DeployPayload"
       responses:
-        "200":
-          description: Deploy accepted and applied
+        "202":
+          description: Deploy accepted; the apply runs in the background
           content:
             application/json:
               schema:
@@ -153,8 +162,11 @@ paths:
             schema:
               $ref: "#/components/schemas/DeployPayload"
       responses:
-        "200":
-          description: Deploy accepted
+        "202":
+          description: |
+            Deploy accepted; validation and revision recording are synchronous,
+            the swarm apply runs in the background. Watch the stack for the
+            result rather than treating this as "deployed".
           content:
             application/json:
               schema:
@@ -330,11 +342,11 @@ paths:
         - bearerAuth: []
       responses:
         "200":
-          description: Backup started
+          description: Backup ran and finished on the answering node
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Backup"
+                $ref: "#/components/schemas/BackupStarted"
   /api/stacks/{name}/backups:
     get:
       summary: Backups for one stack
@@ -885,7 +897,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Secret"
+                $ref: "#/components/schemas/SecretCreated"
         "400":
           $ref: "#/components/responses/BadRequest"
         "409":
@@ -1007,7 +1019,7 @@ paths:
                   configs:
                     type: array
                     items:
-                      $ref: "#/components/schemas/Config"
+                      $ref: "#/components/schemas/ConfigSummary"
     post:
       summary: Create a config
       operationId: createConfig
@@ -1038,11 +1050,11 @@ paths:
                   type: string
       responses:
         "201":
-          description: Created — returns metadata incl. hash
+          description: Created — returns the metadata and hash, never the content
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Config"
+                $ref: "#/components/schemas/ConfigCreated"
         "400":
           $ref: "#/components/responses/BadRequest"
         "409":
@@ -1059,22 +1071,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  otel_config:
-                    type: string
-                  traefik_config:
-                    type: string
-                  cert_secret:
-                    type: string
-                  key_secret:
-                    type: string
-                  edge_config:
-                    type: string
-                  stacks_deployed:
-                    type: array
-                    items:
-                      type: string
+                $ref: "#/components/schemas/UpdateResult"
         "500":
           description: Cluster update failed
   /api/cluster/rendered:
@@ -1282,6 +1279,8 @@ paths:
               schema:
                 type: object
                 properties:
+                  stack:
+                    type: string
                   services:
                     type: array
                     items:
@@ -1395,7 +1394,7 @@ paths:
                     type: string
                   restarted:
                     type: boolean
-                    const: true
+                    enum: [true]
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
@@ -1454,6 +1453,8 @@ paths:
       security:
         - bearerAuth: []
       parameters:
+        - $ref: "#/components/parameters/EvidenceStart"
+        - $ref: "#/components/parameters/EvidenceEnd"
         - $ref: "#/components/parameters/EvidenceRange"
       responses:
         "200":
@@ -1468,44 +1469,49 @@ paths:
           description: Viewer role or unscoped token required
   /api/observability/logs:
     get:
-      summary: Read bounded newest-first telemetry logs
+      summary: Read bounded logs for a window
       operationId: observabilityLogs
       security:
         - bearerAuth: []
       parameters:
+        - $ref: "#/components/parameters/EvidenceStart"
+        - $ref: "#/components/parameters/EvidenceEnd"
         - $ref: "#/components/parameters/EvidenceRange"
         - name: service
           in: query
           schema: {type: string, maxLength: 255}
         - name: severity
           in: query
-          schema: {type: string, enum: [error, warn, info, debug]}
+          schema: {type: string}
         - name: search
           in: query
-          schema: {type: string, maxLength: 100}
+          schema: {type: string, maxLength: 512}
         - name: limit
           in: query
           schema: {type: integer, minimum: 1, maximum: 200, default: 200}
         - name: offset
           in: query
-          schema: {type: integer, minimum: 0, maximum: 2000, default: 0}
+          schema: {type: integer, minimum: 0, maximum: 10000, default: 0}
       responses:
         "200":
-          description: Available, empty, or unavailable bounded result
+          description: Bounded log rows
           content:
             application/json:
               schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
         "400": {$ref: "#/components/responses/BadRequest"}
   /api/observability/metrics/nodes:
     get:
-      summary: Read bounded per-node metric series
+      summary: Read node metric samples for a window
       operationId: observabilityNodeMetrics
       security: [{bearerAuth: []}]
       parameters:
+        - $ref: "#/components/parameters/EvidenceStart"
+        - $ref: "#/components/parameters/EvidenceEnd"
         - $ref: "#/components/parameters/EvidenceRange"
         - name: bucket
           in: query
-          schema: {type: string, description: Go duration, example: 1m}
+          description: Bucket width ("1m", "5m"). Defaults to a width derived from the window.
+          schema: {type: string}
       responses:
         "200":
           description: Bounded metric rows
@@ -1515,14 +1521,16 @@ paths:
         "400": {$ref: "#/components/responses/BadRequest"}
   /api/observability/metrics/services:
     get:
-      summary: Read bounded per-service metric series
+      summary: Read service metric samples for a window
       operationId: observabilityServiceMetrics
       security: [{bearerAuth: []}]
       parameters:
+        - $ref: "#/components/parameters/EvidenceStart"
+        - $ref: "#/components/parameters/EvidenceEnd"
         - $ref: "#/components/parameters/EvidenceRange"
         - name: bucket
           in: query
-          schema: {type: string, description: Go duration, example: 5m}
+          schema: {type: string}
       responses:
         "200":
           description: Bounded metric rows
@@ -1532,31 +1540,35 @@ paths:
         "400": {$ref: "#/components/responses/BadRequest"}
   /api/observability/volume:
     get:
-      summary: Read bounded log volume by level (the console overview KPI)
+      summary: Log volume over the window, bucketed
       operationId: observabilityLogVolume
       security: [{bearerAuth: []}]
       parameters:
+        - $ref: "#/components/parameters/EvidenceStart"
+        - $ref: "#/components/parameters/EvidenceEnd"
         - $ref: "#/components/parameters/EvidenceRange"
         - name: bucket
           in: query
-          schema: {type: string, description: Go duration, example: 5m}
+          schema: {type: string}
       responses:
         "200":
-          description: One row per bucket and level (error, warn, info)
+          description: Bucketed log counts
           content:
             application/json:
               schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
         "400": {$ref: "#/components/responses/BadRequest"}
   /api/observability/traces/stats:
     get:
-      summary: Read bounded trace totals for the window
+      summary: Aggregate trace statistics for the window
       operationId: observabilityTraceStats
       security: [{bearerAuth: []}]
       parameters:
+        - $ref: "#/components/parameters/EvidenceStart"
+        - $ref: "#/components/parameters/EvidenceEnd"
         - $ref: "#/components/parameters/EvidenceRange"
       responses:
         "200":
-          description: One row with traces, error_traces and spans
+          description: Aggregated trace statistics
           content:
             application/json:
               schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
@@ -1567,6 +1579,8 @@ paths:
       operationId: observabilityServiceNames
       security: [{bearerAuth: []}]
       parameters:
+        - $ref: "#/components/parameters/EvidenceStart"
+        - $ref: "#/components/parameters/EvidenceEnd"
         - $ref: "#/components/parameters/EvidenceRange"
       responses:
         "200":
@@ -1574,13 +1588,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [status, services]
-                properties:
-                  status: {type: string, enum: [available, unavailable]}
-                  services:
-                    type: array
-                    items: {type: string}
+                $ref: "#/components/schemas/ObservabilityServiceNames"
         "400": {$ref: "#/components/responses/BadRequest"}
   /api/observability/traces:
     get:
@@ -1588,6 +1596,8 @@ paths:
       operationId: observabilityTraces
       security: [{bearerAuth: []}]
       parameters:
+        - $ref: "#/components/parameters/EvidenceStart"
+        - $ref: "#/components/parameters/EvidenceEnd"
         - $ref: "#/components/parameters/EvidenceRange"
         - name: service
           in: query
@@ -1618,6 +1628,8 @@ paths:
           in: path
           required: true
           schema: {type: string, pattern: "^[0-9a-f]{32}$"}
+        - $ref: "#/components/parameters/EvidenceStart"
+        - $ref: "#/components/parameters/EvidenceEnd"
         - $ref: "#/components/parameters/EvidenceRange"
       responses:
         "200":
@@ -1627,12 +1639,379 @@ paths:
               schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
         "400": {$ref: "#/components/responses/BadRequest"}
 
+  # ---------------------------------------------------------------------------
+  # Public, unauthenticated badge endpoints. GitHub's camo proxy and image
+  # widgets fetch these; GET and HEAD are both registered with the same handler.
+  # ---------------------------------------------------------------------------
+  /api/public/badge/{stack}:
+    get:
+      summary: Aggregate health badge for a stack (SVG)
+      operationId: stackBadge
+      security: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SVG badge
+          content:
+            image/svg+xml:
+              schema:
+                type: string
+    head:
+      summary: Same as GET, headers only
+      operationId: stackBadgeHead
+      security: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SVG badge headers, no body
+  /api/public/badge/{stack}/services:
+    get:
+      summary: Per-service health badges for a stack (SVG)
+      operationId: stackServicesBadge
+      security: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SVG badge strip, one segment per service
+          content:
+            image/svg+xml:
+              schema:
+                type: string
+    head:
+      summary: Same as GET, headers only
+      operationId: stackServicesBadgeHead
+      security: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SVG badge headers, no body
+  /api/public/badge/{stack}/{service}:
+    get:
+      summary: Health badge for one service (SVG)
+      operationId: serviceBadge
+      security: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SVG badge
+          content:
+            image/svg+xml:
+              schema:
+                type: string
+    head:
+      summary: Same as GET, headers only
+      operationId: serviceBadgeHead
+      security: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SVG badge headers, no body
+  /api/services/{stack}/{service}/exec/ws:
+    get:
+      summary: Interactive exec over a websocket
+      description: |
+        The console's terminal. Dispatched outside the chi middleware chain
+        because a websocket upgrade needs a real http.ResponseWriter
+        (http.Hijacker); authentication is the same Bearer token and stack-scope
+        guard as the REST routes. Frames carry terminal I/O; this is NOT the
+        non-interactive `POST .../exec` (which answers JSON).
+      operationId: execServiceWS
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: stack
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: cmd
+          in: query
+          description: Command to run, space-separated; defaults to /bin/sh.
+          schema:
+            type: string
+        - name: rows
+          in: query
+          schema:
+            type: integer
+        - name: cols
+          in: query
+          schema:
+            type: integer
+      responses:
+        "101":
+          description: Switching protocols — raw terminal byte frames follow
+        "401":
+          description: Missing or invalid bearer token
+        "403":
+          description: Token scoped to another stack
+        "501":
+          description: Interactive exec unavailable on the answering node
+  /api/nodes/{hostname}/storage:
+    post:
+      summary: Register a node as a storage node
+      description: |
+        Adds the node to the `storage_nodes` cluster setting and stamps the
+        `pmcluster.storage` Swarm node label. Stateful stacks without an
+        explicit placement may then land on it, and the backup agent runs a
+        global task there.
+      operationId: markStorageNode
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: hostname
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Node registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageNodeResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      summary: Remove a node's storage designation
+      description: |
+        Removes the node from `storage_nodes` and clears the label. Stacks
+        already pinned to it are NOT moved; use `POST /api/stacks/{name}/move`.
+      operationId: unmarkStorageNode
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: hostname
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Node no longer a storage node
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageNodeResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/stacks/{name}/ack:
+    post:
+      summary: Acknowledge an open failover marker
+      operationId: ackStackFailover
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Failover acknowledged; the stack's badge returns to normal
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stack:
+                    type: string
+                  acknowledged:
+                    type: boolean
+        "404":
+          description: No open failover marker for that stack
+  /api/stacks/{name}/move:
+    post:
+      summary: Move a stack's pinned services to another node
+      description: |
+        Re-renders and redeploys the stack with its stateful services pinned to
+        `target`. The operator is responsible for the volume having moved.
+      operationId: moveStack
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target]
+              properties:
+                target:
+                  type: string
+                  description: Destination node hostname
+      responses:
+        "200":
+          description: Stack moved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  stack:
+                    type: string
+                  moved_to:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+  /api/configs/{name}/stack:
+    put:
+      summary: Reassign a config's scope and owning stack
+      description: Binds a config created at the wrong scope to a stack (or back to cluster scope).
+      operationId: retagConfig
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: string
+                  enum: [cluster, service]
+                  default: service
+                stack:
+                  type: string
+                  description: Only valid with service scope; empty detaches the stack
+      responses:
+        "200":
+          description: Config reassigned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Retagged"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /api/secrets/{name}/stack:
+    put:
+      summary: Reassign a secret's scope and owning stack
+      description: Binds a secret created at the wrong scope to a stack (or back to cluster scope).
+      operationId: retagSecret
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: string
+                  enum: [cluster, service]
+                  default: service
+                stack:
+                  type: string
+      responses:
+        "200":
+          description: Secret reassigned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Retagged"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: pmc_<token_id>_<secret>
+  parameters:
+    EvidenceStart:
+      name: start
+      in: query
+      required: false
+      description: Window start (RFC3339). Must be sent with `end`.
+      schema:
+        type: string
+        format: date-time
+    EvidenceEnd:
+      name: end
+      in: query
+      required: false
+      description: Window end (RFC3339). Must be sent with `start`.
+      schema:
+        type: string
+        format: date-time
+    EvidenceRange:
+      name: range
+      in: query
+      required: false
+      description: Shorthand window ("15m", "1h"). `window` is accepted as an alias. Ignored when start/end are sent.
+      schema:
+        type: string
   responses:
     BadRequest:
       description: Invalid request
@@ -1642,6 +2021,12 @@ components:
             $ref: "#/components/schemas/Error"
     NotFound:
       description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InternalError:
+      description: Internal error
       content:
         application/json:
           schema:
@@ -1685,6 +2070,10 @@ components:
     DeployResult:
       type: object
       properties:
+        status:
+          type: string
+          enum: [accepted]
+          description: present on the 202 deploy response
         stack:
           type: string
         revision:
@@ -1722,7 +2111,6 @@ components:
           type: string
         status:
           type: string
-          enum: [accepted, unauthorized, bad_request, server_error]
         stack_name:
           type: string
         revision:
@@ -1734,6 +2122,9 @@ components:
           type: string
         error:
           type: string
+        retries:
+          type: integer
+          description: extra deploy attempts made after a transient failure
         created_at:
           type: integer
           format: int64
@@ -1803,16 +2194,22 @@ components:
           type: string
         role:
           type: string
+          enum: [manager, worker]
         availability:
           type: string
+          description: active, or drain/draining when the node refuses new work
         status:
           type: string
+          description: ready, or the engine's own not-ready label
         is_leader:
           type: boolean
         engine_version:
           type: string
         address:
           type: string
+        storage:
+          type: boolean
+          description: node is registered as a storage node (pmcluster.storage label)
         created_at:
           type: integer
           format: int64
@@ -1829,6 +2226,15 @@ components:
           format: int64
         repo_url:
           type: string
+        source_file:
+          type: string
+        last_error:
+          type: string
+          description: error from the most recent failed background deploy
+        failover:
+          type: object
+          description: open failover marker, when the stack was moved after a storage-node failure
+          additionalProperties: true
         created_at:
           type: integer
           format: int64
@@ -1851,6 +2257,9 @@ components:
               created_at:
                 type: integer
                 format: int64
+              error:
+                type: string
+                description: why this revision failed to apply; empty when it applied
         last_backup:
           $ref: "#/components/schemas/BackupSummary"
     BackupSummary:
@@ -1886,6 +2295,9 @@ components:
           type: string
         payload:
           type: string
+        error:
+          type: string
+          description: why this revision failed to apply; empty when it applied
     Backup:
       type: object
       properties:
@@ -1997,12 +2409,14 @@ components:
           format: int64
         name:
           type: string
+        stack:
+          type: string
         created_at:
           type: integer
           format: int64
-        stack:
-          type: string
-          description: Optional stack scope; "" means unscoped (full access).
+        last_used_at:
+          type: integer
+          format: int64
     APIKeyCreated:
       type: object
       properties:
@@ -2027,17 +2441,20 @@ components:
           enum: [cluster, service]
         stack:
           type: string
-          description: owning stack (service scope only); empty for cluster scope
         name:
           type: string
         hash:
           type: string
-          description: sha256 hex fingerprint of the plaintext value
         created_at:
           type: integer
           format: int64
+        swarm_rev:
+          type: integer
+          format: int64
+          description: swarm object revision versioning this secret
     Config:
       type: object
+      description: One config including its content (GET /api/configs/{name}).
       properties:
         id:
           type: integer
@@ -2045,9 +2462,6 @@ components:
         scope:
           type: string
           enum: [cluster, service]
-        stack:
-          type: string
-          description: owning stack (service scope only); empty for cluster scope
         name:
           type: string
         kind:
@@ -2055,18 +2469,10 @@ components:
           enum: [template, file, env]
         version:
           type: string
-          description: last writing build version
         hash:
           type: string
         content:
           type: string
-          description: only present on get (single config); omitted on list
-        created_at:
-          type: integer
-          format: int64
-        updated_at:
-          type: integer
-          format: int64
     ConfigVersion:
       type: object
       properties:
@@ -2100,10 +2506,30 @@ components:
         mode:
           type: string
           enum: [replicated, global]
+        run_once:
+          type: boolean
+          description: run-once workload; zero running replicas means completed, not crashed
+        image_created:
+          type: integer
+          format: int64
+        update_state:
+          type: string
+          description: swarm update state (updating, paused, completed, rollback_started, ...)
+        update_error:
+          type: string
         updated:
           type: integer
           format: int64
           description: last service spec update (unix seconds)
+        node:
+          type: string
+          description: where the platform asked the service to run (a pin)
+        running_node:
+          type: string
+          description: where it actually runs; differs from node when it drifted
+        platform:
+          type: boolean
+          description: platform-managed service (ingress, console, backup, ...)
     ServiceTask:
       type: object
       properties:
@@ -2145,4 +2571,231 @@ components:
         stdout:
           type: string
         stderr:
+          type: string
+    ConfigSummary:
+      type: object
+      description: One row of the config listing — metadata and hash, never content.
+      properties:
+        id:
+          type: integer
+          format: int64
+        scope:
+          type: string
+          enum: [cluster, service]
+        stack:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+          enum: [template, file, env]
+        version:
+          type: string
+        hash:
+          type: string
+        rendered:
+          type: boolean
+          description: a rendered variant exists for this config
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
+    ConfigCreated:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        scope:
+          type: string
+        stack:
+          type: string
+        name:
+          type: string
+        kind:
+          type: string
+        hash:
+          type: string
+    SecretCreated:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        scope:
+          type: string
+        stack:
+          type: string
+        name:
+          type: string
+        hash:
+          type: string
+    BackupStarted:
+      type: object
+      description: |
+        A backup that has already run to completion on the node answering the
+        call (the daemon does not return a run id that is still in flight).
+      properties:
+        id:
+          type: integer
+          format: int64
+        status:
+          type: string
+        archive_paths:
+          type: array
+          items:
+            type: string
+    StorageNodeResult:
+      type: object
+      properties:
+        hostname:
+          type: string
+        storage:
+          type: boolean
+        storage_nodes:
+          type: array
+          items:
+            type: string
+    Retagged:
+      type: object
+      properties:
+        name:
+          type: string
+        scope:
+          type: string
+          enum: [cluster, service]
+        stack:
+          type: string
+    UpdateResult:
+      type: object
+      description: What `cluster update` re-applied. Absent fields mean the step was skipped.
+      properties:
+        otel_config:
+          type: string
+        traefik_config:
+          type: string
+        cert_secret:
+          type: string
+        key_secret:
+          type: string
+        edge_config:
+          type: string
+        stacks_deployed:
+          type: array
+          items:
+            type: string
+        configs_changed:
+          type: array
+          items:
+            type: string
+    ObservabilityWindow:
+      type: object
+      description: The window every observability read was answered over.
+      properties:
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+    ObservabilityNode:
+      type: object
+      properties:
+        id:
+          type: string
+        hostname:
+          type: string
+        role:
+          type: string
+        availability:
+          type: string
+        swarm_status:
+          type: string
+        is_leader:
+          type: boolean
+        telemetry_status:
+          type: string
+          enum: [available, unavailable, stale]
+        last_seen:
+          type: string
+          format: date-time
+    ObservabilityStatus:
+      type: object
+      description: |
+        Inventory coverage compared with telemetry. `empty`, `missing`, `stale`
+        and `inventory_failed` are distinct values, not shades of "unavailable".
+      properties:
+        status:
+          type: string
+          enum: [available, unavailable, stale, empty, missing, inventory_failed]
+        inventory_status:
+          type: string
+        telemetry_status:
+          type: string
+        observed_at:
+          type: string
+          format: date-time
+        window:
+          $ref: "#/components/schemas/ObservabilityWindow"
+        expected_nodes:
+          type: integer
+        reporting_nodes:
+          type: integer
+        unknown_node_samples:
+          type: integer
+        truncated:
+          type: boolean
+        truncation_reasons:
+          type: array
+          items:
+            type: string
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ObservabilityNode"
+    ObservabilityEvidence:
+      type: object
+      description: |
+        Bounded read envelope shared by logs, traces, metrics and volume. A row
+        shape differs per endpoint (log line, span, bucket sample), so rows are
+        documented as opaque objects rather than per-endpoint unions.
+      properties:
+        status:
+          type: string
+          enum: [available, unavailable, stale]
+        observed_at:
+          type: string
+          format: date-time
+        window:
+          $ref: "#/components/schemas/ObservabilityWindow"
+        rows:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        truncated:
+          type: boolean
+        truncation_reasons:
+          type: array
+          items:
+            type: string
+        coverage:
+          type: string
+        error:
+          type: string
+    ObservabilityServiceNames:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [available, unavailable]
+        window:
+          $ref: "#/components/schemas/ObservabilityWindow"
+        services:
+          type: array
+          items:
+            type: string
+        error:
           type: string
