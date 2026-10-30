@@ -60,6 +60,32 @@ knowledge lives in whoever has been burned by it.
    by others. An operator cannot know which, and the failures accuse the machine
    ("run init", "is the daemon running?") rather than naming the real cause.
 
+## Intended contract (what the CLI is supposed to be)
+
+One binary, two modes, **one switch**:
+
+```
+PMCLUSTER_API_URL unset   → local mode
+    read ~/.pmcluster store, talk to the local docker socket.
+    Requires a cluster MEMBER node: a local store AND a local socket.
+
+PMCLUSTER_API_URL set     → remote mode
+    every read and write goes through the daemon API, authenticated with
+    PMCLUSTER_API_TOKEN. Requires neither a store nor a socket.
+```
+
+The environment variable must be the **only** difference between the two
+invocations. Nothing else changes — not the flags, not the command names, not
+the output.
+
+**Asymmetry, stated so it isn't discovered the hard way:** the modes are not
+mirror images. Local mode only works on a cluster member; remote mode works
+anywhere. "Runs locally" therefore means "runs on a member node", and a machine
+that is neither should be told that, not handed `run pmcluster init`.
+
+This contract is correct and should be kept. It is the implementation that
+violates it (evidence 6).
+
 ## Impact
 
 - **Silent drift is the worst outcome**: a plausible but wrong answer (item 2)
@@ -76,9 +102,15 @@ knowledge lives in whoever has been burned by it.
 
 ## Root cause
 
-The CLI is a **store client**, not an **API client**. The daemon owns the store
-and the reconcile loop; the CLI reaches around it. Every command therefore
-inherits an unstated assumption that it is running on the authoritative node.
+Resolution of *"where do I get my state"* is duplicated in every command instead
+of happening once. Some commands build a store from `~/.pmcluster`, others build
+a docker client, others use the API — and each decides for itself, so the modes
+drift apart command by command. The CLI is a **store client that also has an API
+mode**, rather than an **API client with one local fallback**.
+
+Evidence 6 is what that looks like from the outside: with `--api-url` set, two
+commands answered from the daemon and two ignored it entirely, and their errors
+blamed the machine ("run `pmcluster init`", "is the daemon running?").
 
 ## Options
 
@@ -119,6 +151,46 @@ write authority or command semantics (items 1, 3, 4).
 | Any node, local answer | `version`, `status` (clearly labelled as *this node's view*) |
 | Needs authoritative state | `cluster update`, `cluster settings`, `credentials`, `deploy`, `backup`, `tls site set`, `node promote/demote`, `observability status` |
 | Bootstrap only | `init`, `cluster up`, `cluster reset`, `join` |
+
+## Implementation plan
+
+1. **One resolver.** `resolveCluster()` returns an API-backed or store-backed
+   implementation, decided solely by whether `PMCLUSTER_API_URL` is set. No
+   command inspects `~/.pmcluster` or calls `docker info` on its own.
+2. **Bootstrap is the only exception.** `init`, `cluster up`, `cluster reset`,
+   `join` may use the store directly, because the cluster does not exist yet.
+   The exception is declared in one place, not inferred per command.
+3. **Messages follow the mode.** In remote mode a failure names the API and the
+   token; in local mode it names the store and the socket. No message tells an
+   operator to bootstrap a machine that will never host a cluster.
+4. **A table test pins it.** For every command in the classification table,
+   assert that it goes through the resolver — or is a declared bootstrap
+   exception. That is what stops the next drift, which is how this one happened.
+
+## Reproducing the evidence (no local Docker needed)
+
+```bash
+ssh -f -N -L 19090:127.0.0.1:9090 root@<leader>          # tunnel to the daemon
+TOK=$(ssh root@<leader> cat /root/.pmcluster/bootstrap-token.txt)
+
+for c in "observability status" "cluster settings" "cluster status" "credentials list"; do
+  printf "%-24s " "$c"
+  ./pmcluster $c --api-url http://127.0.0.1:19090 --api-token "$TOK" 2>&1 | head -2
+done
+```
+
+Currently: first two answer from the daemon, last two fail on the local machine.
+After the fix, all four must answer from the daemon.
+
+## Handoff checklist for the next session
+
+- [ ] Read this ADR first; it carries all findings from the 2026-10-29 session.
+- [ ] Inventory the direct-access sites: `grep -rn "docker info\|\.pmcluster\|store.Open" internal/cli/`.
+- [ ] Build `resolveCluster()` + the resolver table test (step 4 above).
+- [ ] Convert the commands in the classification table, one commit per group.
+- [ ] Rewrite the mode-specific error messages.
+- [ ] Re-run the four-command matrix above; all four must honour `PMCLUSTER_API_URL`.
+- [ ] Only then consider `status` merging views across managers (open question 2).
 
 ## Open questions
 
