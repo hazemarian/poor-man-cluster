@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -184,4 +187,155 @@ func TestCapabilitiesDescribeTheNarrowPolicy(t *testing.T) {
 	if !sawDeploy || !sawExec {
 		t.Errorf("writes_refused does not name deploy and exec: %v", refused)
 	}
+}
+
+// A refusal that names a command the CLI does not have is worse than a refusal
+// with no command: the agent relays it verbatim and the operator runs something
+// that fails. Every mapped command must start with a real pmcluster command, and
+// every refusal must carry the exact REST recipe as the always-correct fallback.
+func TestRefusalsNameRealCommandsAndTheExactAPI(t *testing.T) {
+	real := cliCommandTree(t)
+	catalog, err := BuildCatalog(pmcdocs.OpenAPI)
+	if err != nil {
+		t.Fatalf("BuildCatalog: %v", err)
+	}
+	// Two shapes of the gate: the default policy (one permitted write) and the
+	// permissive one (dangerous operations still refused). Every refusal either
+	// shape produces must carry a correct payload.
+	configs := []Options{{}, {AllowOps: AllWritesForTest(t)}}
+	seen := map[string]bool{}
+	for _, opts := range configs {
+		for _, tool := range catalog {
+			if tool.Tier == ReadOnly || allowed(opts, tool) || seen[tool.Name] {
+				continue
+			}
+			seen[tool.Name] = true
+			payload := refusal(tool, opts)
+			if payload.API == "" {
+				t.Errorf("%s: refusal has no API recipe", tool.Name)
+			}
+			if !strings.Contains(payload.API, tool.Method) || !strings.Contains(payload.API, tool.Path) {
+				t.Errorf("%s: API recipe does not name %s %s: %s", tool.Name, tool.Method, tool.Path, payload.API)
+			}
+			if payload.Command != "" {
+				tokens := strings.Fields(payload.Command)
+				if len(tokens) < 2 || tokens[0] != "pmcluster" {
+					t.Errorf("%s: command %q does not start with `pmcluster`", tool.Name, payload.Command)
+					continue
+				}
+				if !commandPathValid(real, tokens[1:]) {
+					t.Errorf("%s: refusal names `%s`, which does not resolve in the CLI command tree", tool.Name, payload.Command)
+				}
+			}
+		}
+	}
+	if len(seen) < 25 {
+		t.Fatalf("only %d refusals checked — the catalog or the gate changed shape", len(seen))
+	}
+	t.Logf("checked %d refusal payloads against %d CLI command paths", len(seen), len(real))
+}
+
+// AllWritesForTest is the permissive allowlist, so the loop above visits every
+// refusal path including the dangerous ones.
+func AllWritesForTest(t *testing.T) map[string]bool {
+	t.Helper()
+	all, err := AllWrites(pmcdocs.OpenAPI)
+	if err != nil {
+		t.Fatalf("AllWrites: %v", err)
+	}
+	return all
+}
+
+// cliCommandTree parses internal/cli into the command paths `pmcluster` accepts:
+// every top-level command and its subcommands, from the cobra declarations
+// (`var xCmd = &cobra.Command{Use: "..."}`) and the AddCommand edges. Validating
+// against the real tree is the point — a flat set of `Use:` tokens accepts
+// `pmcluster create webhook` because `create` exists somewhere, which is exactly
+// the invented command this check is meant to reject.
+func cliCommandTree(t *testing.T) map[string]bool {
+	t.Helper()
+	files, err := filepath.Glob("../cli/*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no internal/cli sources: %v", err)
+	}
+	useRe := regexp.MustCompile(`(?m)^var (\w+) = &cobra\.Command\{\s*\n\s*Use:\s+"([^"]+)"`)
+	addRe := regexp.MustCompile(`(?m)(\w+)\.AddCommand\(([^)]*)\)`)
+
+	useByVar := map[string]string{} // varName → first token of Use
+	var sources []string
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		sources = append(sources, string(src))
+		for _, m := range useRe.FindAllStringSubmatch(string(src), -1) {
+			tok := strings.Fields(m[2])
+			if len(tok) > 0 && tok[0] != "" {
+				useByVar[m[1]] = tok[0]
+			}
+		}
+	}
+	children := map[string][]string{} // parent var → child vars
+	for _, src := range sources {
+		for _, m := range addRe.FindAllStringSubmatch(src, -1) {
+			parent := m[1]
+			for _, raw := range strings.Split(m[2], ",") {
+				child := strings.TrimSpace(raw)
+				if child != "" {
+					children[parent] = append(children[parent], child)
+				}
+			}
+		}
+	}
+
+	paths := map[string]bool{}
+	var walk func(parentVar, prefix string, depth int)
+	walk = func(parentVar, prefix string, depth int) {
+		if depth > 4 {
+			return
+		}
+		for _, child := range children[parentVar] {
+			tok, ok := useByVar[child]
+			if !ok {
+				continue
+			}
+			full := strings.TrimSpace(prefix + " " + tok)
+			if paths[full] {
+				continue
+			}
+			paths[full] = true
+			walk(child, full, depth+1)
+		}
+	}
+	for _, root := range children["rootCmd"] {
+		if tok, ok := useByVar[root]; ok {
+			paths[tok] = true
+			walk(root, tok, 0)
+		}
+	}
+	if len(paths) < 20 {
+		t.Fatalf("parsed only %d command paths — the cobra extraction is stale", len(paths))
+	}
+	return paths
+}
+
+// commandPathValid reports whether `pmcluster <tokens…>` resolves in the tree.
+// Placeholders (<...>) and flags end the walk; everything before them must be a
+// real command or subcommand.
+func commandPathValid(paths map[string]bool, tokens []string) bool {
+	var walked []string
+	for _, tok := range tokens {
+		if strings.HasPrefix(tok, "-") || strings.HasPrefix(tok, "<") || strings.HasPrefix(tok, "[") {
+			break
+		}
+		walked = append(walked, tok)
+		if !paths[strings.Join(walked, " ")] {
+			return false
+		}
+	}
+	return len(walked) > 0
 }

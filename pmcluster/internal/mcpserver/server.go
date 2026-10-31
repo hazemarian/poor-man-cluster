@@ -248,13 +248,48 @@ func errorResult(msg string) *mcp.CallToolResult {
 // manualAction renders the result an agent must relay to a human verbatim: what
 // it could not do, why, the command, and where to run it.
 type manualActionPayload struct {
-	Status      string `json:"status"`
-	Tool        string `json:"tool"`
-	Reason      string `json:"reason"`
-	Command     string `json:"command,omitempty"`
+	Status string `json:"status"`
+	Tool   string `json:"tool"`
+	Reason string `json:"reason"`
+	// Command is the CLI invocation, present only when one exists and was
+	// verified against the command tree. An agent relays this verbatim, so an
+	// invented command is worse than no command.
+	Command string `json:"command,omitempty"`
+	// API is the exact REST call for this operation, derived from the spec. It
+	// is always correct, so it is always present.
+	API         string `json:"api"`
 	Where       string `json:"where,omitempty"`
 	TellTheUser string `json:"tell_the_user"`
 	DoNotRetry  bool   `json:"do_not_retry"`
+}
+
+// operatorCommands maps an operation to the CLI that performs it. Only entries
+// whose invocation is certain are listed — a test walks internal/cli and fails
+// if a first token here is not a real pmcluster command. Everything else is
+// answered with the REST recipe alone.
+var operatorCommands = map[string]string{
+	"POST /api/stacks":                             "pmcluster deploy <manifest>",
+	"POST /api/stacks/{name}/rollback":             "pmcluster rollback <stack>",
+	"POST /api/webhooks":                           "pmcluster webhook add <source>",
+	"POST /api/api_keys":                           "pmcluster user create <name>",
+	"PUT /api/configs/{name}":                      "pmcluster config set <name> <value>",
+	"GET /api/secrets/{name}/value":                "pmcluster secret show <name>",
+	"PUT /api/tls/site":                            "pmcluster tls site set --cert <pem> --key <pem>",
+	"POST /api/update":                             "pmcluster cluster update",
+	"POST /api/services/{stack}/{service}/restart": "pmcluster service restart <stack> <service>",
+	"POST /api/backups":                            "pmcluster backup",
+}
+
+// operatorCommand returns the CLI (possibly empty) and the REST recipe for a
+// tool. The recipe names the daemon path so a human or a script can run it
+// without guessing which endpoint the refusal was about.
+func operatorCommand(t Tool) (command, api string) {
+	command = operatorCommands[t.Method+" "+t.Path]
+	api = fmt.Sprintf("curl -sS -X %s https://<daemon>/api%s -H \"Authorization: Bearer $PMC_TOKEN\"", t.Method, t.Path)
+	if t.Method != http.MethodGet && t.Method != http.MethodDelete {
+		api += " -H 'Content-Type: application/json' -d @body.json"
+	}
+	return command, api
 }
 
 func manualAction(p manualActionPayload) *mcp.CallToolResult {
@@ -287,19 +322,19 @@ func refusal(t Tool, opts Options) manualActionPayload {
 	default:
 		reason = fmt.Sprintf("%s is a write operation that is not on this MCP endpoint's allowlist; only config content updates are enabled", t.Name)
 	}
+	command, api := operatorCommand(t)
+	how := "the REST call below"
+	if command != "" {
+		how = "the command below (or its REST equivalent)"
+	}
 	return manualActionPayload{
 		Tool:        t.Name,
 		Reason:      reason,
-		Command:     "pmcluster " + cliHint(t),
-		Where:       "on a cluster node with the data directory, or over the API with a token that allows the change",
-		TellTheUser: "I cannot make this change myself: it is not permitted on this MCP endpoint. Ask the user to run the command below.",
+		Command:     command,
+		API:         api,
+		Where:       "on a cluster node with the data directory or a leader's shell, using a token that allows the change",
+		TellTheUser: "I cannot make this change myself: it is not permitted on this MCP endpoint. Ask the user to run " + how + ".",
 	}
-}
-
-// cliHint maps a REST operation back to the CLI command an operator would type.
-func cliHint(t Tool) string {
-	human := strings.TrimPrefix(t.Name, "pmc_")
-	return strings.ReplaceAll(human, "_", " ")
 }
 
 func contains(list []string, s string) bool {
