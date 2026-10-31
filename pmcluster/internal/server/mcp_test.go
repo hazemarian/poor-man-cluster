@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/mcpserver"
 )
 
 // The MCP surface is a sub-route of the API, so it inherits the daemon's auth
@@ -19,7 +18,7 @@ func TestMCPSubRouteIsBehindTheAPIToken(t *testing.T) {
 		Lookup: &fakeLookup{users: map[string]*auth.User{
 			"tok": {ID: 1, Name: "admin", Role: auth.RoleAdmin},
 		}},
-		MCP: &MCPOptions{Allow: mcpserver.ReadOnly},
+		MCP: &MCPOptions{AllowOps: map[string]bool{}},
 	}))
 	defer srv.Close()
 

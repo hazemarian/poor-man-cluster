@@ -125,8 +125,10 @@ type Deps struct {
 
 // MCPOptions tunes the MCP sub-route.
 type MCPOptions struct {
-	// Allow is the highest tool tier served: read (default), write, dangerous.
-	Allow mcpserver.Tier
+	// AllowOps is the set of write operations ("METHOD /path") an agent may
+	// call. Nil means mcpserver.DefaultAllowedOps: update a service-scoped
+	// config, nothing else.
+	AllowOps map[string]bool
 }
 
 // New assembles the chi router from the optional Deps; every nil dependency
@@ -241,9 +243,9 @@ func New(d Deps) http.Handler {
 		// therefore fails the build, not the daemon; if construction still
 		// fails, the route answers 500 with the reason instead of vanishing.
 		h, err := mcpserver.Handler(r, mcpserver.Options{
-			Spec:    docs.OpenAPI,
-			Allow:   d.MCP.Allow,
-			Version: buildinfo.Version,
+			Spec:     docs.OpenAPI,
+			AllowOps: d.MCP.AllowOps,
+			Version:  buildinfo.Version,
 		})
 		if err != nil {
 			h = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

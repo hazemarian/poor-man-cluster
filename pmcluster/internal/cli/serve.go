@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/docs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
@@ -231,7 +232,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 			return l
 		}(),
-		MCP:       &server.MCPOptions{Allow: mcpAllowTier()},
+		MCP:       &server.MCPOptions{AllowOps: mcpAllowOps()},
 		Usage:     usage.NewLocal(st),
 		HostCerts: &certs.HTTP{Svc: tlsSvc},
 		SiteCert:  &certs.HTTP{Svc: tlsSvc},
@@ -473,17 +474,27 @@ func ensureLocalStorageRoots(ctx context.Context, cfg *config.Config, log zerolo
 	return nil
 }
 
-// mcpAllowTier reads PMCLUSTER_MCP_ALLOW: "read" (default), "write", or
-// "dangerous". The MCP endpoint serves reads always; a write token handed to a
-// model is a decision the operator makes explicitly, and "dangerous" (exec,
-// secret reveal, stack delete, TLS rotation) is a separate, deliberate step.
-func mcpAllowTier() mcpserver.Tier {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("PMCLUSTER_MCP_ALLOW"))) {
-	case "write":
-		return mcpserver.Write
-	case "dangerous":
-		return mcpserver.Dangerous
+// mcpAllowOps decides which writes the MCP endpoint permits, from
+// PMCLUSTER_MCP_WRITES:
+//
+//	unset / "service-config" (default) — update a service-scoped config's content
+//	"none"                             — reads only
+//	"all"                              — every non-dangerous write
+//
+// Dangerous operations (exec, secret reveal, deletions, TLS, backup restore) are
+// never enabled from here: they stay manual by construction.
+func mcpAllowOps() map[string]bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PMCLUSTER_MCP_WRITES"))) {
+	case "none", "read", "readonly":
+		return map[string]bool{}
+	case "all", "write":
+		all, err := mcpserver.AllWrites(docs.OpenAPI)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mcp: cannot derive the write allowlist (%v); serving reads only\n", err)
+			return map[string]bool{}
+		}
+		return all
 	default:
-		return mcpserver.ReadOnly
+		return mcpserver.DefaultAllowedOps
 	}
 }

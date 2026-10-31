@@ -1802,11 +1802,17 @@ paths:
         input schema from the operation's parameters and request body), which is
         why it cannot describe an endpoint that does not exist.
 
-        The tier served is chosen by the operator (`PMCLUSTER_MCP_ALLOW`):
-        `read` by default, `write`, or `dangerous`. A call above the enabled
-        tier is answered with a `manual_action_required` payload naming the
-        command a human must run instead — bootstrap operations (cluster up,
-        join, reset) have no API route and are only ever answered that way.
+        Reads are always served. Exactly one write is permitted by default:
+        updating the content of a **service-scoped** config
+        (`PUT /api/configs/{name}`); the tool reads the config first and refuses
+        cluster-scope targets, which are the platform's own templates. Every
+        other write answers `manual_action_required` with the command a human
+        must run instead, and the dangerous set (exec, secret reveal, deletions,
+        TLS, backup restore) is never served whatever the operator sets.
+        `PMCLUSTER_MCP_WRITES` widens it: unset/`service-config` (default),
+        `none`, or `all` for every non-dangerous write. Bootstrap operations
+        (cluster up, join, reset) have no API route and are only ever answered
+        as manual actions.
       operationId: mcpEndpoint
       security:
         - bearerAuth: []

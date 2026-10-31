@@ -35,10 +35,38 @@ import (
 type Options struct {
 	// Spec is pmcluster/docs/openapi.yaml, embedded.
 	Spec []byte
-	// Allow is the highest tool tier served. Zero value is ReadOnly.
-	Allow Tier
+	// AllowOps is the set of write operations ("METHOD /path") an agent may
+	// call. Reads are always served; a write that is not in this set is refused
+	// with instructions instead. Nil means DefaultAllowedOps — never "all".
+	AllowOps map[string]bool
 	// Version is stamped into the MCP implementation name.
 	Version string
+}
+
+// DefaultAllowedOps is the out-of-the-box write surface: update the content of a
+// service-scoped config, and nothing else. Every other write (deploy, restart,
+// delete, settings, exec, secret reveal) is answered with a manual-action
+// refusal, because an agent editing production infrastructure unattended is not
+// a default.
+var DefaultAllowedOps = map[string]bool{
+	"PUT /api/configs/{name}": true,
+}
+
+// AllWrites is every non-dangerous write. Still never includes the dangerous
+// tier: exec, secret reveal, stack delete, TLS rotation and backup restore stay
+// manual whatever the operator sets.
+func AllWrites(spec []byte) (map[string]bool, error) {
+	catalog, err := BuildCatalog(spec)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, t := range catalog {
+		if t.Tier == Write {
+			out[t.Method+" "+t.Path] = true
+		}
+	}
+	return out, nil
 }
 
 // Handler builds the streamable-HTTP MCP handler. base must be the daemon's
@@ -89,11 +117,30 @@ func buildServer(base http.Handler, opts Options, tools []Tool, r *http.Request)
 
 // runTool executes one tool call, applying the tier gate first.
 func runTool(ctx context.Context, base http.Handler, authz string, opts Options, t Tool, args map[string]any, catalog []Tool) (*mcp.CallToolResult, error) {
-	if t.Tier > opts.Allow {
-		return manualAction(tierRefusal(t, opts)), nil
+	if t.Tier != ReadOnly && !allowed(opts, t) {
+		return manualAction(refusal(t, opts)), nil
 	}
 	if t.Method == "" {
-		return runCurated(ctx, base, authz, t, args, catalog)
+		return runCurated(ctx, base, authz, t, args, catalog, opts)
+	}
+	// The one permitted write is "update a service-scoped config". Cluster-scope
+	// configs are the platform's own templates and secrets-adjacent material, so
+	// the tool checks the target's scope before changing it.
+	if t.Method+" "+t.Path == "PUT /api/configs/{name}" {
+		name, _ := args["name"].(string)
+		cfg, err := get(ctx, base, authz, "/api/configs/"+name)
+		if err != nil {
+			return errorResult(fmt.Sprintf("cannot read config %q before updating it: %v", name, err)), nil
+		}
+		if scope, _ := cfg["scope"].(string); scope != "service" {
+			return manualAction(manualActionPayload{
+				Tool:        t.Name,
+				Reason:      fmt.Sprintf("config %q has scope %q; only service-scoped configs may be changed through MCP", name, scope),
+				Command:     fmt.Sprintf("pmcluster config set %s --content-file <file>", name),
+				Where:       "on a cluster node",
+				TellTheUser: fmt.Sprintf("I did not change %q: it is a %s-scope config. Ask the user to update it themselves.", name, scope),
+			}), nil
+		}
 	}
 	status, body, err := call(ctx, base, authz, t, args)
 	if err != nil {
@@ -217,15 +264,35 @@ func manualAction(p manualActionPayload) *mcp.CallToolResult {
 	return textResult(string(raw))
 }
 
-// tierRefusal is the answer for a tool above the enabled tier.
-func tierRefusal(t Tool, opts Options) manualActionPayload {
-	reason := fmt.Sprintf("%s is a %s operation and this MCP endpoint serves up to %s", t.Name, t.Tier, opts.Allow)
+// allowed reports whether a write tool is on the operator's allowlist.
+func allowed(opts Options, t Tool) bool {
+	if t.Tier == Dangerous {
+		return false // never, whatever the allowlist says
+	}
+	set := opts.AllowOps
+	if set == nil {
+		set = DefaultAllowedOps
+	}
+	return set[t.Method+" "+t.Path]
+}
+
+// refusal is the answer for a write the operator has not allowed.
+func refusal(t Tool, opts Options) manualActionPayload {
+	var reason string
+	switch {
+	case t.Tier == Dangerous:
+		reason = fmt.Sprintf("%s is a dangerous operation (exec, secret reveal, deletion or TLS change) and is never served through MCP", t.Name)
+	case len(opts.AllowOps) == 0:
+		reason = fmt.Sprintf("%s is a write operation and no writes are enabled on this MCP endpoint", t.Name)
+	default:
+		reason = fmt.Sprintf("%s is a write operation that is not on this MCP endpoint's allowlist; only config content updates are enabled", t.Name)
+	}
 	return manualActionPayload{
 		Tool:        t.Name,
 		Reason:      reason,
 		Command:     "pmcluster " + cliHint(t),
 		Where:       "on a cluster node with the data directory, or over the API with a token that allows the change",
-		TellTheUser: "I cannot make this change: this MCP endpoint is read-only for it. Ask the user to run the command below themselves, or to raise the MCP tier.",
+		TellTheUser: "I cannot make this change myself: it is not permitted on this MCP endpoint. Ask the user to run the command below.",
 	}
 }
 

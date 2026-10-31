@@ -116,14 +116,14 @@ func curatedTools() []Tool {
 }
 
 // runCurated dispatches a curated tool.
-func runCurated(ctx context.Context, base http.Handler, authz string, t Tool, args map[string]any, catalog []Tool) (*mcp.CallToolResult, error) {
+func runCurated(ctx context.Context, base http.Handler, authz string, t Tool, args map[string]any, catalog []Tool, opts Options) (*mcp.CallToolResult, error) {
 	switch t.Name {
 	case "pmc_cluster_status":
 		return textResult(mustJSON(clusterStatus(ctx, base, authz))), nil
 	case "pmc_cluster_capacity":
 		return textResult(mustJSON(clusterCapacity(ctx, base, authz))), nil
 	case "pmc_capabilities":
-		return textResult(mustJSON(capabilities(catalog))), nil
+		return textResult(mustJSON(capabilities(catalog, opts))), nil
 	case "pmc_manual_action":
 		action, _ := args["action"].(string)
 		detail, _ := args["detail"].(string)
@@ -298,12 +298,28 @@ func clusterCapacity(ctx context.Context, base http.Handler, authz string) map[s
 }
 
 // capabilities answers "what may I do" without calling anything.
-func capabilities(all []Tool) map[string]any {
+func capabilities(all []Tool, opts Options) map[string]any {
+	var writable, blocked []string
+	for _, t := range all {
+		if t.Tier == ReadOnly {
+			continue
+		}
+		if allowed(opts, t) {
+			writable = append(writable, t.Name)
+			continue
+		}
+		blocked = append(blocked, t.Name)
+	}
+	sort.Strings(writable)
+	sort.Strings(blocked)
 	return map[string]any{
-		"tiers": map[string]any{
-			"read":      "served",
-			"write":     "requires the MCP write tier",
-			"dangerous": "requires the MCP dangerous tier and an operator/admin token",
+		"writes_allowed": writable,
+		"writes_refused": blocked,
+		"rules": map[string]any{
+			"reads":     "all read tools are served",
+			"writes":    "only the operations on this endpoint's allowlist; everything else answers manual_action_required",
+			"dangerous": "never served (exec, secret reveal, deletions, TLS, backup restore)",
+			"scope":     "a config update is only permitted when the config's own scope is 'service'",
 		},
 		"tools": ToolsByTier(all),
 		"manual_only": func() []string {

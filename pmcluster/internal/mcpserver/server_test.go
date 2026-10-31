@@ -22,6 +22,7 @@ type stubRouter struct {
 	calls  []recordedCall
 	status int
 	body   string
+	byPath map[string]string // "METHOD /path" → response body
 }
 
 type recordedCall struct {
@@ -48,6 +49,9 @@ func (s *stubRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Body:   string(read),
 	})
 	status, body := s.status, s.body
+	if byPath, ok := s.byPath[r.Method+" "+r.URL.Path]; ok {
+		body = byPath
+	}
 	s.mu.Unlock()
 	if status == 0 {
 		status = http.StatusOK
@@ -167,7 +171,7 @@ func TestCatalogMatchesSpecOperations(t *testing.T) {
 
 func TestToolsListIncludesCurated(t *testing.T) {
 	stub := &stubRouter{}
-	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI, Allow: ReadOnly}, "")
+	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI, AllowOps: map[string]bool{}}, "")
 	names := toolNames(t, cs)
 	for _, want := range []string{"pmc_cluster_status", "pmc_cluster_capacity", "pmc_capabilities", "pmc_manual_action", "pmc_list_stacks", "pmc_get_stack"} {
 		if !names[want] {
@@ -179,7 +183,7 @@ func TestToolsListIncludesCurated(t *testing.T) {
 // A read tool must reach the daemon router with the caller's own token.
 func TestReadToolDispatchesWithCallerToken(t *testing.T) {
 	stub := &stubRouter{body: `{"stacks":[{"name":"edge"}]}`}
-	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI, Allow: ReadOnly}, "Bearer pmc_test_secret")
+	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI, AllowOps: map[string]bool{}}, "Bearer pmc_test_secret")
 
 	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "pmc_list_stacks",
@@ -206,7 +210,7 @@ func TestReadToolDispatchesWithCallerToken(t *testing.T) {
 // Path and query parameters belong in the URL, not in the request body.
 func TestPathAndQueryArgumentsAreNotBodyFields(t *testing.T) {
 	stub := &stubRouter{body: `{"stack":"edge"}`}
-	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI, Allow: ReadOnly}, "Bearer t")
+	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI, AllowOps: map[string]bool{}}, "Bearer t")
 	if _, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "pmc_get_stack",
 		Arguments: map[string]any{"name": "edge", "limit": 5},
@@ -225,11 +229,11 @@ func TestPathAndQueryArgumentsAreNotBodyFields(t *testing.T) {
 	}
 }
 
-// Writes are refused at the read tier — and the refusal must tell the agent to
-// hand the job back to the user, not just fail.
-func TestWriteRefusedAtReadTier(t *testing.T) {
+// The default policy serves exactly one write: updating a service-scoped
+// config. Every other write is refused with instructions for the operator.
+func TestDefaultPolicyRefusesOtherWrites(t *testing.T) {
 	stub := &stubRouter{}
-	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI, Allow: ReadOnly}, "Bearer t")
+	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI}, "Bearer t")
 
 	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "pmc_deploy",
@@ -263,7 +267,7 @@ func TestWriteRefusedAtReadTier(t *testing.T) {
 // Dangerous operations need their own tier, above plain write.
 func TestDangerousNeedsDangerousTier(t *testing.T) {
 	stub := &stubRouter{}
-	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI, Allow: Write}, "Bearer t")
+	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI}, "Bearer t")
 	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "pmc_exec_service",
 		Arguments: map[string]any{"stack": "edge", "service": "edge_pmcluster-edge", "argv": []any{"id"}},
@@ -284,7 +288,7 @@ func TestDangerousNeedsDangerousTier(t *testing.T) {
 
 // Bootstrap work has no API route at all: the tool must name the command.
 func TestManualActionNamesTheCommand(t *testing.T) {
-	cs := connect(t, &stubRouter{}, Options{Spec: pmcdocs.OpenAPI, Allow: ReadOnly}, "Bearer t")
+	cs := connect(t, &stubRouter{}, Options{Spec: pmcdocs.OpenAPI, AllowOps: map[string]bool{}}, "Bearer t")
 	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "pmc_manual_action",
 		Arguments: map[string]any{"action": "cluster_up"},
@@ -303,7 +307,7 @@ func TestManualActionNamesTheCommand(t *testing.T) {
 // A daemon error is relayed verbatim, not dressed up as success.
 func TestDaemonErrorIsRelayed(t *testing.T) {
 	stub := &stubRouter{status: http.StatusForbidden, body: `{"error":"token scoped to stack edge"}`}
-	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI, Allow: ReadOnly}, "Bearer t")
+	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI, AllowOps: map[string]bool{}}, "Bearer t")
 	res, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: "pmc_list_stacks"})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
