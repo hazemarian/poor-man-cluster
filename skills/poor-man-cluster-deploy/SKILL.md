@@ -736,3 +736,57 @@ Ensure `OAUTH2_PROXY_COOKIE_DOMAINS` and `OAUTH2_PROXY_WHITELIST_DOMAINS` are **
 
 ### Edge image not updating after upgrade
 The edge image tag is pinned to the release version (`ghcr.io/hazemarian/pmcluster-edge:<version>`). If the tag doesn't match, override with `PMCLUSTER_EDGE_IMAGE=<tag>`. Always use the release → binary upgrade (`hack/upgrade-nodes.sh`, or `install.sh` on a single node) → `cluster update` flow rather than `docker service update --image` directly.
+
+## Upgrading a multi-node deployment (`hack/upgrade-nodes.sh`)
+
+```bash
+cd pmcluster
+PMCLUSTER_NODES=<ip>,<ip>,<ip> \
+PMCLUSTER_SSH_KEY=$HOME/.ssh/<key> \
+bash hack/upgrade-nodes.sh v0.2.218
+```
+
+The script downloads the release, verifies its checksum, copies the binary over `ssh … "cat > /tmp/x"`
+(SFTP is not required), installs it, restarts the unit, and only then runs `pmcluster cluster update`
+on the last node in the list.
+
+### Two traps, both silent
+
+**1. A public IP list defeats the role ordering.** The script sorts your list by the swarm's roles, but
+it matches entries against `docker node inspect … {{.Status.Addr}}` — the *internal* address
+(`10.7.224.x` here). Public IPs match nothing, so every node is treated as a plain worker and your
+stated order is used as-is. "Leader last" is then **your** job: put the leader at the end of
+`PMCLUSTER_NODES`. (Same caveat as discovery: internal addresses are right for ordering and wrong as
+SSH targets.)
+
+**2. A timeout on port 22 is usually a stale address, not a down host.** Before concluding a node is
+unreachable, ask the node itself, through one that is reachable:
+
+```bash
+# from a reachable node, jump to the suspect node's INTERNAL address
+ssh -i $KEY -o "ProxyCommand=ssh -i $KEY -W %h:%p root@<reachable-node>" root@10.7.224.x '
+  hostname; ip -4 -o addr show scope global | awk "{print \$2, \$4}"; ss -ltnp | grep ":22"'
+```
+
+Full `ping` loss plus a port-22 timeout, while the swarm reports the node `Ready`, means the swarm is
+fine and the address you typed is not the node's current public IP (rebuilt hosts get new IPs from the
+provider). Re-run with the address the node reports; do not touch its firewall.
+
+### Recovering a node reachable only on the internal network
+
+Mirror the script's own steps over a jump host — never `docker service update` your way around it:
+
+```bash
+gh release download <version> -R hazemarian/poor-man-cluster -p '*linux-amd64.tar.gz' -p 'SHA256SUMS.txt'
+shasum -a 256 -c want.txt && tar -xzf pmcluster-<version>-linux-amd64.tar.gz
+ssh -o "ProxyCommand=ssh -i $KEY -W %h:%p root@<reachable-node>" root@10.7.224.x \
+  'cat > /tmp/pmcluster.new' < pmcluster-<version>-linux-amd64
+ssh -o "ProxyCommand=…" root@10.7.224.x '
+  cp -a /usr/local/bin/pmcluster /usr/local/bin/pmcluster.<old>.prev
+  install -m 0755 /tmp/pmcluster.new /usr/local/bin/pmcluster && rm -f /tmp/pmcluster.new
+  systemctl restart pmcluster && sleep 6
+  pmcluster version | head -1; systemctl is-active pmcluster'
+```
+
+Then run `pmcluster cluster update` on the leader once every node reports the new version — a mixed
+cluster is worse than an un-upgraded one.
