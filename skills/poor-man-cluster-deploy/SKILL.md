@@ -790,3 +790,48 @@ ssh -o "ProxyCommand=…" root@10.7.224.x '
 
 Then run `pmcluster cluster update` on the leader once every node reports the new version — a mixed
 cluster is worse than an un-upgraded one.
+
+## Verifying the MCP surface after a deploy
+
+`initialize` and `tools/list` answer without touching the router, so they prove nothing about whether
+reads work. Verify with a real `tools/call` for something that dispatches:
+
+```bash
+ssh root@<leader> 'bash -s' <<'REMOTE'
+OUT=$(pmcluster user create mcp-check 2>&1); TOK=$(echo "$OUT" | grep -oE 'pmc_[A-Za-z0-9_.=-]+' | head -1)
+H=$(mktemp); U=http://127.0.0.1:9090/api/mcp
+curl -s -D "$H" -o /dev/null -X POST $U -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"c","version":"0"}}}'
+SID=$(grep -i '^mcp-session-id:' "$H" | tr -d '\r' | awk '{print $2}' | head -1)
+curl -s -o /dev/null -X POST $U -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  -H "Mcp-Session-Id: $SID" -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+curl -s -X POST $U -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' -H "Mcp-Session-Id: $SID" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"pmc_list_services","arguments":{}}}'
+pmcluster user remove mcp-check >/dev/null 2>&1
+REMOTE
+```
+
+Expect real service names in the payload and `isError` absent. `"HTTP 405: "` or `"HTTP 500"` means
+the in-process dispatch is broken — see the chi trap below.
+
+## Trap: in-process dispatch reuses the caller's chi route context
+
+A tool call runs inside the request that matched `/api/mcp`, so its context already carries chi's
+`RouteCtxKey` with `RoutePath = "/api/mcp"`. chi's `Mux.ServeHTTP` checks for exactly that key and, when
+present, **delegates to its handler without routing at all**:
+
+```go
+rctx, _ := r.Context().Value(RouteCtxKey).(*Context)
+if rctx != nil { mx.handler.ServeHTTP(w, r); return }
+```
+
+Re-entering the router with the inherited context therefore re-dispatches the sub-request as `/api/mcp`:
+curated reads get 400/405 from the MCP handler re-entering itself, derived reads crash it (recovered
+panic, logged as a bare 500 with no stack). Fix: dispatch with the same context but the key overridden to
+a typed nil — `context.WithValue(ctx, chi.RouteCtxKey, (*chi.Context)(nil))` — which makes chi take its
+fresh-route path while keeping cancellation and deadlines.
+
+Whatever the transport, test the dispatch: a `tools/call` through the router built by `server.New`. A stub
+router with no chi in it cannot reproduce this, and neither can `initialize`/`tools/list`.
