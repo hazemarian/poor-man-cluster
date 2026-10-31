@@ -339,3 +339,39 @@ func commandPathValid(paths map[string]bool, tokens []string) bool {
 	}
 	return len(walked) > 0
 }
+
+// The tool list itself must state the permission. A model that discovers "I may
+// not write here" only by failing has spent a turn and told the user nothing; the
+// description is the one place it reads before deciding.
+func TestToolDescriptionsStateThePolicy(t *testing.T) {
+	stub := &stubRouter{}
+	cs := connect(t, stub, Options{Spec: pmcdocs.OpenAPI}, "Bearer t")
+	descs := map[string]string{}
+	for tool, err := range cs.Tools(context.Background(), nil) {
+		if err != nil {
+			t.Fatalf("tools: %v", err)
+		}
+		descs[tool.Name] = tool.Description
+	}
+
+	checks := []struct {
+		tool string
+		want string
+		why  string
+	}{
+		{"pmc_update_config", "WRITE: permitted", "the one allowed write must say so"},
+		{"pmc_deploy", "WRITE: NOT permitted", "an unpermitted write must say so up front"},
+		{"pmc_create_webhook", "WRITE: NOT permitted", "credential minting is refused, and the tool must not pretend otherwise"},
+		{"pmc_exec_service", "DANGEROUS: never served", "the dangerous tier is unreachable, stated in the description"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(descs[c.tool], c.want) {
+			t.Errorf("%s: description lacks %q — %s\ngot: %s", c.tool, c.want, c.why, descs[c.tool])
+		}
+	}
+	for _, read := range []string{"pmc_list_stacks", "pmc_cluster_status", "pmc_observability_node_metrics"} {
+		if strings.Contains(descs[read], "WRITE:") || strings.Contains(descs[read], "DANGEROUS:") {
+			t.Errorf("%s is a read tool but carries a write marker: %s", read, descs[read])
+		}
+	}
+}

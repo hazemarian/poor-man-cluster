@@ -102,7 +102,7 @@ func buildServer(base http.Handler, opts Options, tools []Tool, r *http.Request)
 		tool := t
 		srv.AddTool(&mcp.Tool{
 			Name:        tool.Name,
-			Description: tool.Description,
+			Description: describeWithPolicy(opts, tool),
 			InputSchema: tool.InputSchema,
 		}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			args := map[string]any{}
@@ -113,6 +113,26 @@ func buildServer(base http.Handler, opts Options, tools []Tool, r *http.Request)
 		})
 	}
 	return srv
+}
+
+// describeWithPolicy appends this endpoint's permission for a write tool to its
+// description. Without it the model learns the limit only by calling the tool and
+// reading the refusal — and a tool list that advertises `Create a webhook` on an
+// endpoint that refuses writes is misleading in exactly the direction that wastes
+// a turn. Reads carry no marker: they are all served.
+func describeWithPolicy(opts Options, t Tool) string {
+	switch {
+	case t.Tier == ReadOnly:
+		return t.Description
+	case t.Tier == Dangerous:
+		return t.Description + "\n\nDANGEROUS: never served through MCP. A call answers manual_action_required " +
+			"naming the command a human must run. Do not attempt it, and do not look for a workaround."
+	case allowed(opts, t):
+		return t.Description + "\n\nWRITE: permitted on this MCP endpoint."
+	default:
+		return t.Description + "\n\nWRITE: NOT permitted on this MCP endpoint. A call answers " +
+			"manual_action_required with the command a human must run — relay it, do not retry."
+	}
 }
 
 // runTool executes one tool call, applying the tier gate first.
