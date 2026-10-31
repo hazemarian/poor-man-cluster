@@ -96,7 +96,9 @@ func buildServer(base http.Handler, opts Options, tools []Tool, r *http.Request)
 	if opts.Version != "" {
 		name = "pmcluster " + opts.Version
 	}
-	srv := mcp.NewServer(&mcp.Implementation{Name: name, Version: opts.Version}, nil)
+	srv := mcp.NewServer(&mcp.Implementation{Name: name, Version: opts.Version},
+		&mcp.ServerOptions{Instructions: instructions(opts, tools)})
+	addResources(srv, opts, tools, opts.Spec)
 	authz := r.Header.Get("Authorization")
 	for _, t := range tools {
 		tool := t
