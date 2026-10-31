@@ -18,14 +18,17 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/time/rate"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/docs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/api"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/apikeys"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/certs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/mcpserver"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
@@ -112,6 +115,18 @@ type Deps struct {
 	// /api/observability. It requires an authenticated viewer, and a
 	// stack-scoped token is refused: cluster telemetry is not a tenant surface.
 	Observability observability.Reader
+
+	// MCP, when non-nil, mounts the Model Context Protocol endpoint at
+	// /api/mcp behind the same Bearer token and stack-scope guard as the REST
+	// routes. Tool calls re-enter this router in-process, so the handlers and
+	// their middleware are shared rather than duplicated.
+	MCP *MCPOptions
+}
+
+// MCPOptions tunes the MCP sub-route.
+type MCPOptions struct {
+	// Allow is the highest tool tier served: read (default), write, dangerous.
+	Allow mcpserver.Tier
 }
 
 // New assembles the chi router from the optional Deps; every nil dependency
@@ -219,6 +234,24 @@ func New(d Deps) http.Handler {
 			})
 		}
 	})
+
+	if d.MCP != nil {
+		// The catalog is derived from the embedded OpenAPI document, which
+		// internal/docscheck keeps in step with these handlers. A broken spec
+		// therefore fails the build, not the daemon; if construction still
+		// fails, the route answers 500 with the reason instead of vanishing.
+		h, err := mcpserver.Handler(r, mcpserver.Options{
+			Spec:    docs.OpenAPI,
+			Allow:   d.MCP.Allow,
+			Version: buildinfo.Version,
+		})
+		if err != nil {
+			h = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "mcp unavailable: "+err.Error(), http.StatusInternalServerError)
+			})
+		}
+		r.Handle("/api/mcp", auth.Bearer(d.Lookup)(stackScopeGuard(h)))
+	}
 
 	base := otelhttp.NewHandler(r, "pmcluster.http")
 

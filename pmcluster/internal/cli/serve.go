@@ -27,6 +27,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/mcpserver"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
@@ -230,6 +231,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 			return l
 		}(),
+		MCP:       &server.MCPOptions{Allow: mcpAllowTier()},
 		Usage:     usage.NewLocal(st),
 		HostCerts: &certs.HTTP{Svc: tlsSvc},
 		SiteCert:  &certs.HTTP{Svc: tlsSvc},
@@ -469,4 +471,19 @@ func ensureLocalStorageRoots(ctx context.Context, cfg *config.Config, log zerolo
 	}
 	log.Info().Str("volume_root", root).Msg("local storage roots ensured")
 	return nil
+}
+
+// mcpAllowTier reads PMCLUSTER_MCP_ALLOW: "read" (default), "write", or
+// "dangerous". The MCP endpoint serves reads always; a write token handed to a
+// model is a decision the operator makes explicitly, and "dangerous" (exec,
+// secret reveal, stack delete, TLS rotation) is a separate, deliberate step.
+func mcpAllowTier() mcpserver.Tier {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PMCLUSTER_MCP_ALLOW"))) {
+	case "write":
+		return mcpserver.Write
+	case "dangerous":
+		return mcpserver.Dangerous
+	default:
+		return mcpserver.ReadOnly
+	}
 }

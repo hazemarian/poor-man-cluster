@@ -433,6 +433,20 @@ func (idx *goIndex) walkRoutes(t *testing.T, pkg *goPkg, file *ast.File, filePat
 			}
 			descend(sub, sub.firstFile(), mount.Body, prefix)
 			return false
+		case sel.Sel.Name == "Handle" || sel.Sel.Name == "HandleFunc":
+			lit, ok := firstStringLit(call)
+			if !ok || len(call.Args) < 2 {
+				return true
+			}
+			h, hpkg := idx.resolveHandler(pkg, file, call.Args[1])
+			*out = append(*out, servedRoute{
+				Method:   "*", // every verb
+				Pattern:  joinPattern(prefix, lit),
+				Handler:  h,
+				Pkg:      hpkg,
+				Declared: filePath,
+			})
+			return true
 		case isVerb(sel.Sel.Name):
 			lit, ok := firstStringLit(call)
 			if !ok || len(call.Args) < 2 {
@@ -1357,15 +1371,25 @@ func TestOpenAPIDocumentsEveryServedRoute(t *testing.T) {
 			undocumented = append(undocumented, fmt.Sprintf("%s (registered at %s)", key, r.Declared))
 			continue
 		}
+		if r.Method == "*" {
+			if len(ops[path]) == 0 {
+				undocumented = append(undocumented, fmt.Sprintf("%s (path documented with no operations; registered at %s)", key, r.Declared))
+			}
+			continue
+		}
 		if _, ok := ops[path][r.Method]; !ok {
 			undocumented = append(undocumented, fmt.Sprintf("%s (route exists, method absent from the spec; registered at %s)", key, r.Declared))
 		}
 	}
 	for path, methods := range ops {
 		for method := range methods {
-			if _, ok := served[method+" "+path]; !ok {
-				unserved = append(unserved, method+" "+path)
+			if _, ok := served[method+" "+path]; ok {
+				continue
 			}
+			if _, wildcard := served["* "+path]; wildcard {
+				continue
+			}
+			unserved = append(unserved, method+" "+path)
 		}
 	}
 	sort.Strings(undocumented)
