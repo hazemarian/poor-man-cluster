@@ -3,6 +3,44 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.220 (2026-10-31)
+
+**Every MCP read was broken in v0.2.219, and the tests could not see it.**
+
+### The in-process dispatch re-entered the router under the wrong route
+
+`v0.2.219` shipped an MCP surface whose reads all failed: `pmc_list_stacks` returned HTTP 500
+(a recovered panic), `pmc_cluster_status` reported every source as `HTTP 405: ` with an empty body,
+and only the tools that never touch the router (`pmc_capabilities`, and the local half of the curated
+ones) worked.
+
+Cause, in chi v5's `Mux.ServeHTTP`:
+
+```go
+rctx, _ := r.Context().Value(RouteCtxKey).(*Context)
+if rctx != nil { mx.handler.ServeHTTP(w, r); return }   // no routing at all
+```
+
+A tool call executes inside the request that matched `/api/mcp`, so its context already holds chi's
+route context — with `RoutePath = "/api/mcp"`. Piping that context into `base.ServeHTTP` for
+`GET /api/stacks` did not route the sub-request; chi delegated to its handler with the *old* route
+state, so the request was still `/api/mcp`. The MCP handler then answered its own re-entry (400/405),
+and the derived-read path crashed it (500, recovered, logged without a stack).
+
+Fixed by dispatching with `dispatchContext(ctx)`: the same context with `chi.RouteCtxKey` set to a
+typed nil, which makes chi take its fresh-route path while the parent context keeps carrying
+cancellation and deadlines.
+
+### Why no test caught it
+
+`initialize` and `tools/list` never dispatch, and the mcpserver tests call through a stub router that
+contains no chi at all. Grepping `tools/call` across the repo returned nothing.
+
+Now `internal/server/mcp_dispatch_test.go` drives a real `tools/call` through `server.New` with a real
+chi router: two derived reads (settings, usage) and one curated tool whose degraded answer must name
+its unavailable sources as 404 rather than the old 405. Reverting the one-line fix reproduces the
+original `HTTP 405: ` exactly.
+
 ## v0.2.219 (2026-10-31)
 
 **The MCP surface now states its own contract — and stops inventing commands.**

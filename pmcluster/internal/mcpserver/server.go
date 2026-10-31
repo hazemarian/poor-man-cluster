@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -219,7 +220,7 @@ func call(ctx context.Context, base http.Handler, authz string, t Tool, args map
 		body = bytes.NewReader(raw)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, t.Method, target, body)
+	req, err := http.NewRequestWithContext(dispatchContext(ctx), t.Method, target, body)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -238,9 +239,26 @@ func call(ctx context.Context, base http.Handler, authz string, t Tool, args map
 	return rec.Code, rec.Body.Bytes(), nil
 }
 
+// dispatchContext detaches a sub-request from the chi routing state of the request
+// that carried the MCP call.
+//
+// WHY THIS IS REQUIRED: chi's Mux.ServeHTTP checks the incoming context for its
+// RouteCtxKey and, when one is present, delegates straight to its handler WITHOUT
+// re-routing (chi v5 mux.go). The MCP tool call runs inside the request that
+// matched /api/mcp, so that context already holds a route context whose RoutePath
+// is /api/mcp. Re-entering the router with it therefore re-dispatches the
+// sub-request as /api/mcp: curated reads got a 400/405 from the MCP handler
+// re-entering itself, and derived reads crashed it (a recovered panic, logged as
+// a bare 500). Setting the key to a typed nil makes chi take the fresh-route path
+// and route on the sub-request's own URL, while the parent context keeps carrying
+// cancellation and deadlines.
+func dispatchContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, chi.RouteCtxKey, (*chi.Context)(nil))
+}
+
 // get is the read helper used by the curated tools.
 func get(ctx context.Context, base http.Handler, authz, path string) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+	req, err := http.NewRequestWithContext(dispatchContext(ctx), http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}

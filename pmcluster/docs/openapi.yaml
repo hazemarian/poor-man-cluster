@@ -24,7 +24,7 @@ info:
     a response in the code and this file must change with it, or the build
     fails. Routes marked `security: []` (the public badges, `/health`) and the
     websocket upgrade are the only unauthenticated endpoints.
-  version: "0.2.219"
+  version: "0.2.220"
 servers:
   - url: https://pmcluster.example.com
     description: Deployed daemon behind the edge gateway
