@@ -298,12 +298,55 @@ type servedRoute struct {
 	Declared string // "file:line" for messages
 }
 
-// routesServedOutsideChi are mounted by path-prefix dispatch on a raw
+// outsideChiRoutes are mounted by path-prefix dispatch on a raw
 // http.ResponseWriter, because the chi middleware chain cannot hijack a
-// connection. There is no chi route literal to read, so they are declared here
-// and asserted against the spec like any other route.
-var routesServedOutsideChi = []struct{ method, pattern string }{
-	{"GET", "/api/services/{stack}/{service}/exec/ws"},
+// connection. There is no chi route literal to read, so the pattern is composed
+// from the dispatch constants in internal/server/execws.go: rename the path there
+// and the route this test asserts changes with it, instead of drifting silently.
+func (idx *goIndex) outsideChiRoutes(t *testing.T) []servedRoute {
+	t.Helper()
+	dir := filepath.Join(idx.root, "pmcluster", "internal", "server")
+	pkg := idx.pkgs[dir]
+	if pkg == nil {
+		t.Fatalf("no package at %s — the daemon router moved", dir)
+	}
+	consts := map[string]string{}
+	for _, file := range pkg.files {
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for i, name := range vs.Names {
+					if i >= len(vs.Values) {
+						continue
+					}
+					if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						if v, err := strconv.Unquote(lit.Value); err == nil {
+							consts[name.Name] = v
+						}
+					}
+				}
+			}
+		}
+	}
+	prefix, okP := consts["execWSPathPrefix"]
+	suffix, okS := consts["execWSPathSuffix"]
+	if !okP || !okS {
+		t.Fatal("execWSPathPrefix / execWSPathSuffix not found in internal/server — the websocket route moved, and this check needs updating")
+	}
+	// The dispatch parses <stack>/<service> positionally between the two
+	// constants, so the equivalent documented pattern inserts the two params.
+	return []servedRoute{{
+		Method:   "GET",
+		Pattern:  prefix + "{stack}/{service}" + suffix,
+		Declared: "composed from execWSPathPrefix+Suffix (internal/server/execws.go)",
+	}}
 }
 
 // servedRoutes reconstructs the daemon's route table by walking the chi router
@@ -324,9 +367,7 @@ func (idx *goIndex) servedRoutes(t *testing.T) []servedRoute {
 		t.Fatal("internal/server.New not found — the router entry point moved, and this check needs updating")
 	}
 	idx.walkRoutes(t, pkg, pkg.firstFile(), "", entry.Body, "", &out)
-	for _, extra := range routesServedOutsideChi {
-		out = append(out, servedRoute{Method: extra.method, Pattern: extra.pattern, Declared: "declared in this test"})
-	}
+	out = append(out, idx.outsideChiRoutes(t)...)
 	if len(out) == 0 {
 		t.Fatal("found zero routes — the route walk is broken")
 	}
