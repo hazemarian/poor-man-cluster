@@ -3,6 +3,73 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.218 (2026-10-31)
+
+**The API description became a checked artifact, and the daemon now serves MCP tools derived from it.**
+
+### The spec did not describe the daemon
+
+`pmcluster/docs/openapi.yaml` failed validation with 20 errors: 19 `$ref`s pointed at components that
+were never added (`components.parameters` did not exist at all, so all eleven `/api/observability/*`
+operations were unresolvable), and one response used the 3.1 `const` keyword in a document declaring
+3.0.3. No generated client could consume it.
+
+Where it disagreed with the handlers:
+
+- `POST /api/stacks` answers **202** and its body carries `status:"accepted"` — fire-and-forget since
+  v0.2.122 — while the spec promised `200`. Read literally, the document said a deploy had landed when
+  the apply had not started.
+- `POST /webhook/{source}` is the same 202.
+- `POST /api/backups` returns `{id, status, archive_paths}`, not a `Backup`.
+- `GET /api/services` emits 14 fields per service, 11 per node, 8 per stack; the schemas documented
+  7, 10 and 5. Configs have three distinct shapes (list / detail / created) behind one schema.
+- Four served routes were undocumented and on an allowlist the old check could not see past: the three
+  public SVG badges (GET **and** HEAD, registered with `r.Method`) and the interactive `exec/ws`
+  websocket.
+
+### The check that was supposed to catch it could not
+
+It compared path *strings* with suffix matching. It asserted nothing about methods, status codes,
+response bodies or `$ref` resolution, and its route extraction only understood `Get/Post/Put/Delete/
+Patch` with literal paths — so `r.Method(...)` and constant-composed routes were invisible. It passed
+through every finding above.
+
+Replaced by three checks in `internal/docscheck/openapi_test.go`:
+
+1. every `$ref` resolves, and no 3.1 keyword appears in a 3.0 document;
+2. served routes and documented operations agree **in both directions**, walking the router from
+   `server.New` through `r.Route`, `Group`, every `Mount*` and `r.Method`;
+3. the 2xx status codes and the JSON keys a handler can write equal what the operation documents —
+   the union across every branch of the handler, following same-package response helpers, so a spec
+   cannot pass by describing only the happy path or only the degraded one.
+
+The websocket route is composed from `execWSPathPrefix`/`Suffix` read out of `execws.go`, so renaming
+it in the code fails the suite instead of drifting. Verified by mutation: flipping 202→200, adding a
+response key, dropping a documented field, and deleting a documented route each fail the build.
+
+### `/api/mcp`: the Model Context Protocol surface, as a sub-route
+
+MCP (streamable HTTP) is served by the daemon itself at `POST/GET/DELETE /api/mcp`, behind the same
+`auth.Bearer` and `stackScopeGuard`. Each tool call re-enters the router **in-process** with the
+caller's own `Authorization` header, so the handlers, the middleware and the token's authority are
+shared — no second client, no parallel auth path, no second implementation to keep in sync.
+
+The catalog is derived from the now-checked spec: one tool per `operationId` (65 of them), input
+schemas built from path parameters, query parameters and request body with `$ref`s inlined. Four
+curated tools carry hand-written schemas because the questions are not one endpoint: `pmc_cluster_status`,
+`pmc_cluster_capacity`, `pmc_capabilities`, `pmc_manual_action`.
+
+Reads are all served. Exactly **one** write is permitted by default — updating the content of a
+service-scoped config — and the tool reads the config first, refusing cluster-scope targets without
+issuing the write. Everything else, including every bootstrap operation that has no API route at all
+(cluster up, join, reset, host hardening, TLS materialisation, secret healing), answers a structured
+`manual_action_required` payload naming the command and where to run it. The dangerous set (exec,
+secret reveal, deletions, TLS, backup restore) is never served, and `AllWrites()` derives its permit
+list from the catalog filtered by tier, so those cannot be enabled by configuration.
+`PMCLUSTER_MCP_WRITES` = unset/`service-config` (default) | `none` | `all`.
+
+New dependency: `github.com/modelcontextprotocol/go-sdk` v1.8.0 (Apache-2.0).
+
 ## v0.2.213 (2026-10-17)
 
 **`hack/upgrade-nodes.sh`: the sudo path was decorative under zsh, and discovery was trusted as if it were reachable.**
