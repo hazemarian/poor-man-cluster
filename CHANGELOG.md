@@ -3,6 +3,56 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.219 (2026-10-31)
+
+**The MCP surface now states its own contract — and stops inventing commands.**
+
+### A refusal told operators to run a command that does not exist
+
+`v0.2.218` shipped refusals whose `command` was the tool name turned into words: `pmc_create_webhook`
+became `pmcluster create webhook`, which no CLI implements. An agent relays a refusal verbatim, so the
+failure mode was "the human runs it, it fails, and the agent that was supposed to hand the job back
+handed back a dead end."
+
+Refusals now carry:
+
+- `command` — only for operations with an unambiguous CLI invocation (deploy, rollback, webhook add,
+  user create, config set, secret show, tls site set, cluster update, service restart, backup);
+- `api` — always: the exact REST call from the operation's own method and path, with body shape and
+  bearer header, so the answer is correct even where no CLI mapping exists.
+
+The mapping is validated against the real cobra tree (85 command paths parsed out of `internal/cli`),
+not a bag of `Use:` tokens — a flat set would happily accept `pmcluster create webhook` because `create`
+exists elsewhere. Verified by mutation.
+
+### A tool list that advertised writes the endpoint would refuse
+
+Every write tool now carries this endpoint's permission in its own description, computed per endpoint
+from the allowlist: `WRITE: permitted`, `WRITE: NOT permitted … relay the refusal, do not retry`, or
+`DANGEROUS: never served through MCP`. Read tools carry no marker. A model reading the list learns its
+limits without spending a call to discover them.
+
+### `initialize` carries instructions, and four resources carry the schemas
+
+Connected clients now receive an `instructions` block stating the contract: reads served, the one
+permitted write named from the live allowlist, the `manual_action_required` shape and `do_not_retry`,
+the fact that deploys are **202-async** and must be polled, and the observability bounds — including
+that `system.cpu.utilization` is the **idle** fraction, so busy = 1 − value.
+
+Resources, so an agent reads a document instead of probing with tool calls:
+
+| URI | carries |
+|---|---|
+| `pmcluster://schema/api` | the OpenAPI document the catalog derives from |
+| `pmcluster://schema/logs` | the four projected log columns, filters, page caps, redaction |
+| `pmcluster://schema/metrics` | every metric name per view, units, idle/used semantics |
+| `pmcluster://policy` | permitted / refused / never-served writes, and the refusal shape |
+
+They are generated, not transcribed: metric names come from the `observability` package constants, the
+write lists from the live allowlist, and a test extracts the projection from
+`parseable.Client.LogsSQL` and fails if the published log schema drifts from it. Instructions are
+asserted on the wire through `InitializeResult`; resources are read through a connected client.
+
 ## v0.2.218 (2026-10-31)
 
 **The API description became a checked artifact, and the daemon now serves MCP tools derived from it.**
