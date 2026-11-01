@@ -24,7 +24,7 @@ info:
     a response in the code and this file must change with it, or the build
     fails. Routes marked `security: []` (the public badges, `/health`) and the
     websocket upgrade are the only unauthenticated endpoints.
-  version: "0.2.220"
+  version: "0.2.221"
 servers:
   - url: https://pmcluster.example.com
     description: Deployed daemon behind the edge gateway
@@ -79,15 +79,30 @@ paths:
               $ref: "#/components/schemas/DeployPayload"
       responses:
         "202":
-          description: Deploy accepted; the apply runs in the background
+          description: |
+            Accepted. The revision is recorded synchronously; the swarm apply runs in
+            the background, and a retryable failure keeps retrying for the retry
+            window even after this response has been sent.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/DeployResult"
+                $ref: "#/components/schemas/WebhookAccepted"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           description: Bad or missing signature (indistinguishable from unknown source)
+        "422":
+          description: |
+            Deterministic failure — the same payload fails identically on every
+            attempt, so it is not retried.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookRejected"
+        "502":
+          description: |
+            A retryable deploy failure that outlived its retries. The body carries
+            the last error and how many retries were spent.
   /api/me:
     get:
       summary: Authenticated user profile
@@ -2137,6 +2152,59 @@ components:
         revision:
           type: integer
           format: int64
+
+    WebhookAccepted:
+      type: object
+      description: |
+        A webhook deploy answers 202 in two shapes. When the deploy phase finishes
+        inside the response budget (20s) the body names the recorded revision. When
+        it does not — a retry is still running — the response says so and points at
+        the delivery history, because the HTTP answer is about this request while
+        the delivery row is the record of the deploy.
+        The budget is deliberately under the edge proxy's 30s REQUEST_TIMEOUT: a
+        response slower than that is replaced by the proxy's own error, which is how
+        a missing secret was once reported to CI as "control plane unavailable".
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+        stack:
+          type: string
+          description: set when the revision was recorded before the budget elapsed
+        revision:
+          type: integer
+          format: int64
+          description: set when the revision was recorded before the budget elapsed
+        pending:
+          type: boolean
+          description: true when the deploy and its retries outlived the response budget
+        note:
+          type: string
+          description: where to read the outcome when pending is true
+        retry_window:
+          type: string
+          description: the whole deploy+retry budget, e.g. 4m0s
+
+    WebhookRejected:
+      type: object
+      description: |
+        A deploy that cannot succeed on a retry — a manifest that will not parse, a
+        name owned by another repo, a config/secret the stack references but the
+        cluster does not have. It is answered on the first attempt with the failing
+        step named, instead of being retried until the ingress proxy times out and
+        reports something unrelated.
+      properties:
+        status:
+          type: string
+          enum: [rejected]
+        error:
+          type: string
+          description: the underlying failure, verbatim
+        step:
+          type: string
+          description: the deploy-pipeline step that failed
+        help:
+          type: string
     RollbackResult:
       type: object
       properties:

@@ -1,0 +1,41 @@
+{{define "stackpicker"}}
+{{/*
+  "Which stack?" — the step in front of the service-scope config/secret form.
+
+  It replaces a dead end: the cluster-scope forms on Settings create items with no
+  stack, and the stack-scope forms live on a stack page that only exists after a
+  successful deploy. A manifest needs config(<name>)/secret(<name>) to deploy at
+  all, so a first deploy of a new stack had no way to pre-create them from the
+  console at all.
+
+  The field is free text with suggestions, not a select of existing stacks: the
+  whole point is naming a stack that does not exist yet.
+*/}}
+<h2>{{if eq .Kind "config"}}{{T "stackpicker.title_config"}}{{else}}{{T "stackpicker.title_secret"}}{{end}}</h2>
+<p class="sub">{{T "stackpicker.sub"}}</p>
+
+{{if .ErrKey}}
+<div class="msg err">{{T .ErrKey}}</div>
+{{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+{{end}}
+
+<form hx-get="{{.Action}}" hx-target="#modal-body" hx-swap="innerHTML">
+  <div class="field">
+    <label for="stack-name">{{T "stackpicker.stack"}}</label>
+    <input id="stack-name" class="finput mono" type="text" name="stack" required dir="ltr"
+           autocomplete="off" spellcheck="false" list="stackpicker-stacks" placeholder="adam-world">
+    <datalist id="stackpicker-stacks">
+      {{- range .Stacks}}
+      <option value="{{.}}"></option>
+      {{- end}}
+    </datalist>
+    <span class="hint">
+      {{if .Stacks}}{{T "stackpicker.hint_known"}}{{else}}{{T "stackpicker.hint_none"}}{{end}}
+    </span>
+  </div>
+  <div class="form-actions">
+    <button class="btn btn-primary" type="submit">{{T "common.continue"}}</button>
+    <button class="btn btn-ghost" type="button" onclick="closeModal()">{{T "common.cancel"}}</button>
+  </div>
+</form>
+{{end}}

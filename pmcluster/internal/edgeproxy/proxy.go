@@ -1,6 +1,7 @@
 package edgeproxy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -8,6 +9,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -54,7 +56,7 @@ func New(cfg Config) http.Handler {
 
 		panic("edgeproxy: invalid upstream: " + err.Error())
 	}
-	proxy := reverseProxy(upstream)
+	proxy := reverseProxy(upstream, cfg.RequestTimeout)
 	proxy.ErrorLog = log.New(os.Stderr, "edgeproxy: ", log.LstdFlags)
 
 	r.Get("/health", http.HandlerFunc(proxy.ServeHTTP))
@@ -69,7 +71,7 @@ func New(cfg Config) http.Handler {
 // rewrites scheme/host, strips hop-by-hop headers, and injects the real client
 // IP so the daemon (which runs its own trusted-real-IP logic) sees the genuine
 // client via headers it already trusts from overlay peers.
-func reverseProxy(target *url.URL) *httputil.ReverseProxy {
+func reverseProxy(target *url.URL, requestTimeout time.Duration) *httputil.ReverseProxy {
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
@@ -101,10 +103,27 @@ func reverseProxy(target *url.URL) *httputil.ReverseProxy {
 			_, _ = w.Write([]byte(`{"error":"request body too large"}`))
 			return
 		}
-		log.Printf("edgeproxy: upstream %s unreachable: %v", target, err)
+		// Two failure modes must not share one message. A dial that never
+		// connects means the API really is not there; a request the upstream
+		// never answered inside REQUEST_TIMEOUT means it *is* there and busy —
+		// reporting that as "control plane unavailable" sent an operator looking
+		// for a dead daemon while the real answer (a missing secret, in the
+		// observed case) sat in the delivery history.
+		status, body := http.StatusServiceUnavailable, `{"error":"control plane unavailable","retryable":true}`
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) ||
+			strings.Contains(err.Error(), "context deadline exceeded") ||
+			strings.Contains(err.Error(), "timeout awaiting response headers") {
+			status = http.StatusGatewayTimeout
+			body = fmt.Sprintf(
+				`{"error":"control plane did not answer within %s","retryable":true,`+
+					`"hint":"the request reached the daemon and outlived the proxy timeout — `+
+					`check the delivery history and the daemon log before retrying"}`,
+				requestTimeout)
+		}
+		log.Printf("edgeproxy: upstream %s failed (%d): %v", target, status, err)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte(`{"error":"control plane unavailable"}`))
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
 	}
 	return rp
 }

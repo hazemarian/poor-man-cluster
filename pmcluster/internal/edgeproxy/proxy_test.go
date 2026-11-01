@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // upstream captures what the fake daemon observed, for assertions.
@@ -93,8 +94,9 @@ func TestNew_StripsHopByHopHeader(t *testing.T) {
 
 // TestNew_UpstreamUnavailableReturnsCleanJSON502 verifies that a dead upstream
 // (the node's daemon API not listening) yields a stable, dependency-free JSON
-// 502 instead of a bare Go transport "dial tcp ...: connection refused" body.
-func TestNew_UpstreamUnavailableReturnsCleanJSON502(t *testing.T) {
+// 503 instead of a bare Go transport "dial tcp ...: connection refused" body.
+// 503, not 502: the API is genuinely unavailable, so the caller should retry.
+func TestNew_UpstreamUnavailableReturnsCleanJSON503(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	upURL := srv.URL
 	srv.Close() // the upstream now refuses connections
@@ -111,14 +113,58 @@ func TestNew_UpstreamUnavailableReturnsCleanJSON502(t *testing.T) {
 
 	h.ServeHTTP(rw, req)
 
-	if rw.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502; body=%s", rw.Code, rw.Body.String())
+	if rw.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", rw.Code, rw.Body.String())
 	}
 	if ct := rw.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		t.Errorf("Content-Type = %q, want application/json", ct)
 	}
-	if body := strings.TrimSpace(rw.Body.String()); body != `{"error":"control plane unavailable"}` {
-		t.Errorf("body = %q, want stable JSON 502 body", body)
+	if body := strings.TrimSpace(rw.Body.String()); !strings.Contains(body, `"error":"control plane unavailable"`) {
+		t.Errorf("body = %q, want the unavailable-control-plane JSON body", body)
+	}
+}
+
+// An upstream that accepts the request and never answers inside REQUEST_TIMEOUT
+// is NOT an unavailable control plane: the daemon is there and busy. The proxy
+// must say so, because the caller's log is where an operator looks first.
+//
+// Observed in production: a webhook whose deploy failed on a missing secret was
+// reported to CI as {"error":"control plane unavailable"} because the receiver
+// answered after the proxy's 30s ceiling.
+func TestNew_UpstreamTimeoutReturnsGatewayTimeout(t *testing.T) {
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-block:
+		case <-time.After(2 * time.Second):
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(up.Close)
+
+	cfg := FromEnv()
+	cfg.Upstream = up.URL
+	cfg.TrustedCIDRs = []string{"10.0.0.0/8"}
+	cfg.RequestTimeout = 150 * time.Millisecond
+	h := New(cfg)
+
+	req := httptest.NewRequest(http.MethodPost, "http://pmcluster.example/webhook/github-adam", nil)
+	req.RemoteAddr = "10.0.3.4:54321"
+	req.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.3.4")
+	rw := httptest.NewRecorder()
+
+	h.ServeHTTP(rw, req)
+
+	if rw.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want 504; body=%s", rw.Code, rw.Body.String())
+	}
+	body := rw.Body.String()
+	if strings.Contains(body, "control plane unavailable") {
+		t.Errorf("body = %q — a timeout must not claim the control plane is unavailable", body)
+	}
+	if !strings.Contains(body, "did not answer within") {
+		t.Errorf("body = %q, want the timeout named", body)
 	}
 }
 

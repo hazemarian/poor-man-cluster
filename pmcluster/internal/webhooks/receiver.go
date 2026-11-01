@@ -189,22 +189,87 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	phaseCtx, cancelPhase := context.WithTimeout(context.WithoutCancel(r.Context()), deployPhaseBudget(policy.Attempts, policy.Delay))
 	defer cancelPhase()
 
-	res, retries, err := policy.DeployAsyncWithRetries(phaseCtx, p)
-	if err != nil {
+	// The retry phase runs on its own goroutine from here: a retryable failure
+	// can spend minutes of sleeps, and the caller is waiting on an HTTP request
+	// with a 30s ceiling in front of it (the edge proxy). Answering only after
+	// the phase finishes is what turned a missing secret into
+	// {"error":"control plane unavailable"} — the proxy timed out on a deploy
+	// the receiver already knew had failed.
+	type outcome struct {
+		res     *stacks.Result
+		retries int
+		err     error
+	}
+	phase := make(chan outcome, 1)
+	go func() {
+		res, retries, err := policy.DeployAsyncWithRetries(phaseCtx, p)
+		phase <- outcome{res: res, retries: retries, err: err}
+	}()
+
+	var out outcome
+	select {
+	case out = <-phase:
+	case <-time.After(webhookResponseBudget):
+		// Still retrying. Answer now with what the caller can act on, and let
+		// the delivery row — which the goroutine records — carry the outcome.
+		// This is the honest split: the HTTP response is about this request,
+		// the delivery history is about the deploy.
+		go func() {
+			o := <-phase
+			status, deployErr := "accepted", error(nil)
+			if o.err != nil {
+				status, deployErr = "server_error", o.err
+			}
+			recordDelivery(status, &p, deployErr, o.res, o.retries)
+		}()
+		record("accepted_pending")
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status":  "accepted",
+			"pending": true,
+			"note": "the deploy and its retries are still running; the delivery history records the outcome " +
+				"(`pmcluster webhook deliveries " + source + "`)",
+			"retry_window": deployPhaseBudget(policy.Attempts, policy.Delay).String(),
+		})
+		return
+	}
+
+	if out.err != nil {
+		if step, deterministic := Deterministic(out.err); deterministic {
+			// Nothing about this payload can succeed on a retry: name the cause
+			// and the step instead of spending the retry window.
+			record("rejected")
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+				"error":  out.err.Error(),
+				"step":   step,
+				"status": "rejected",
+				"help":   "this deploy will fail identically until the payload or the cluster state changes",
+			})
+			recordDelivery("rejected", &p, out.err, nil, 0)
+			return
+		}
 		record("server_error")
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "retries": retries})
-		recordDelivery("server_error", &p, err, nil, retries)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": out.err.Error(), "retries": out.retries})
+		recordDelivery("server_error", &p, out.err, nil, out.retries)
 		return
 	}
 
 	record("accepted")
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":   "accepted",
-		"stack":    res.StackName,
-		"revision": res.Revision,
+		"stack":    out.res.StackName,
+		"revision": out.res.Revision,
 	})
-	recordDelivery("accepted", &p, nil, res, retries)
+	recordDelivery("accepted", &p, nil, out.res, out.retries)
 }
+
+// webhookResponseBudget bounds how long the HTTP response waits for the deploy
+// phase before answering 202 and leaving the rest to the delivery history.
+//
+// It must stay under the ingress ceiling: the edge proxy in front of the daemon
+// answers its own 30s REQUEST_TIMEOUT first, which is how a deterministic deploy
+// failure was reported to CI as `{"error":"control plane unavailable"}`.
+// It is a variable so tests can shrink it; production never writes to it.
+var webhookResponseBudget = 20 * time.Second
 
 // parseTimestamp returns the unix-seconds value.  If the header is empty
 // or unparseable, tsErr is non-nil and verifyHMAC handles it uniformly.

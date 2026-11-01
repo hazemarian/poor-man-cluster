@@ -3,6 +3,66 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.221 (2026-11-01)
+
+**A refused deploy now says why, and a new stack can get its secrets before it exists.**
+
+### The webhook told CI the control plane was down when a secret was missing
+
+`adam-world`'s first deploy failed with
+
+```
+secret "adam_world_session_secret" not found — create it with
+`pmcluster secret create … --scope service --stack adam-world`
+```
+
+and GitHub Actions recorded, after forty seconds:
+
+```
+HTTP 502: {"error":"control plane unavailable"}
+```
+
+Three failures stacked into that one lie:
+
+- **A deterministic error was retried.** `deploy/retry.go` retried every failure,
+  including the ones no retry can change (parse, name conflict, interpolate,
+  translate, record) — spending `2 × 30s` of sleeping per attempt cycle. The step
+  that failed is now carried as a typed `workflow.StepError`, so the receiver can
+  tell the two classes apart instead of matching on message text, and a
+  deterministic failure is answered on the **first** attempt.
+- **The answer waited for the whole retry window.** The phase runs on a detached
+  context precisely so a CI client hanging up cannot abort a deploy — but the
+  response was still held until it finished, up to `≈4 min`, against a **30s**
+  ingress ceiling. The response now waits at most `webhookResponseBudget` (20s,
+  deliberately under the proxy's `REQUEST_TIMEOUT`), then answers `202` with
+  `pending: true` and a pointer to the delivery history, which is where the
+  outcome was always recorded.
+- **The proxy described a timeout as an outage.** `edgeproxy` answered every
+  upstream failure with `502 {"error":"control plane unavailable"}`. A dial that
+  never connects is `503`; a request the daemon accepted and did not answer inside
+  `REQUEST_TIMEOUT` is `504 {"error":"control plane did not answer within 30s"}`
+  with a hint naming the delivery history. An operator reading a 502 went looking
+  for a dead daemon that was healthy the whole time.
+
+Deterministic failures are now `422` with `{status, error, step, help}` and
+**zero** retries; both the OpenAPI document and its drift test were updated with
+them, which is how the shared `DeployResult` schema being reused for two different
+bodies got caught.
+
+### A first deploy could never create the secrets it needed
+
+The console offered service-scope configs and secrets **only** from a stack page,
+and a stack page exists only after that stack has deployed. A manifest references
+`config(<name>)` / `secret(<name>)` before its first deploy — which is the deploy
+that fails without them. The API and the CLI never had this problem; the UI had a
+dead end with no exit.
+
+Settings → configs/secrets now carries **“For a Stack…”**, which asks for a stack
+name in a free-text field with suggestions (existing stacks, plus any stack that
+already owns a service-scope item) and then opens the real service-scope form for
+it. The name is allowed to be one the cluster has never seen, because that is the
+case it exists for.
+
 ## v0.2.220 (2026-10-31)
 
 **Every MCP read was broken in v0.2.219, and the tests could not see it.**

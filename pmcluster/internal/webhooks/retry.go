@@ -2,9 +2,11 @@ package webhooks
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/workflow"
 )
 
 // Deploy-retry policy for webhook-triggered deploys.
@@ -94,6 +96,33 @@ func (r *RetryDeployer) DeployAsyncWithRetries(ctx context.Context, p stacks.Pay
 // dep.DeployAsync once and, while that attempt fails, repeats it up to
 // `attempts` more times, sleeping `delay` between attempts. Returns the
 // final result, the retry count actually spent, and the final error.
+// deterministicSteps are the deploy-pipeline steps whose failure does not depend
+// on anything a retry can change: the same payload parses, interpolates, resolves
+// and records identically every time. A failure here is a message for the caller —
+// a missing secret, a config that does not exist, a name owned by another repo —
+// so retrying it only spends the ingress budget while the caller waits on a
+// request that was already doomed. Observed in production: four attempts against
+// a missing `adam_world_session_secret` sat through two 30s waits and answered the
+// CI job with an edge-proxy timeout instead of the one sentence naming the secret.
+var deterministicSteps = map[string]bool{
+	"Parsing manifest (DSL)":                             true,
+	"Checking for app name conflicts":                    true,
+	"Interpolating and validating manifest":              true,
+	"Translating to Compose (resolving configs/secrets)": true,
+	"Recording revision":                                 true,
+}
+
+// Deterministic reports whether err comes from a pipeline step that cannot
+// succeed on a retry, and names that step. Callers use it to answer the caller
+// with the real cause instead of a retry window.
+func Deterministic(err error) (step string, ok bool) {
+	var se *workflow.StepError
+	if errors.As(err, &se) && deterministicSteps[se.Step] {
+		return se.Step, true
+	}
+	return "", false
+}
+
 func retryDeployAsync(ctx context.Context, dep Deployer, p stacks.Payload, attempts int, delay time.Duration) (*stacks.Result, int, error) {
 	if attempts < 0 {
 		attempts = 0
@@ -106,6 +135,11 @@ func retryDeployAsync(ctx context.Context, dep Deployer, p stacks.Payload, attem
 	for {
 		res, err = dep.DeployAsync(ctx, p)
 		if err == nil || retries >= attempts {
+			return res, retries, err
+		}
+		// A deterministic failure is final: hand it back on the first attempt so
+		// the caller reads the cause rather than a timeout.
+		if _, deterministic := Deterministic(err); deterministic {
 			return res, retries, err
 		}
 		if !waitBeforeRetry(ctx, delay) {

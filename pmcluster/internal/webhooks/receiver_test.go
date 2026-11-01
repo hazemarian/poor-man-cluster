@@ -845,10 +845,17 @@ func TestWebhookConflictFromDifferentRepo(t *testing.T) {
 		File:     "deploy/app.yaml",
 	}
 	b, _ := json.Marshal(conflict)
-	if code, body := post(b); code != http.StatusBadGateway {
-		t.Fatalf("conflicting webhook deploy = %d, want 502; body: %s", code, body)
-	} else if !strings.Contains(body, "already exists from repo") {
-		t.Errorf("502 body = %s, want 'already exists from repo'", body)
+	// 422, not 502: a name owned by another repo is deterministic, so the caller
+	// is told the cause on the first attempt instead of after a retry window.
+	code, body := post(b)
+	if code != http.StatusUnprocessableEntity {
+		t.Fatalf("conflicting webhook deploy = %d, want 422; body: %s", code, body)
+	}
+	if !strings.Contains(body, "already exists from repo") {
+		t.Errorf("422 body = %s, want 'already exists from repo'", body)
+	}
+	if !strings.Contains(body, `"status":"rejected"`) {
+		t.Errorf("422 body = %s, want status=rejected", body)
 	}
 
 	deliveries, err := NewLocal(st, c).Deliveries(ctx, sourceName, 0)
@@ -856,10 +863,13 @@ func TestWebhookConflictFromDifferentRepo(t *testing.T) {
 		t.Fatalf("Deliveries: %v", err)
 	}
 	if len(deliveries) != 2 {
-		t.Fatalf("delivery count = %d, want 2 (accepted + server_error)", len(deliveries))
+		t.Fatalf("delivery count = %d, want 2 (accepted + rejected)", len(deliveries))
 	}
-	if deliveries[0].Status != "server_error" {
-		t.Errorf("newest delivery status = %q, want server_error", deliveries[0].Status)
+	if deliveries[0].Status != "rejected" {
+		t.Errorf("newest delivery status = %q, want rejected", deliveries[0].Status)
+	}
+	if deliveries[0].Retries != 0 {
+		t.Errorf("newest delivery retries = %d, want 0 — a deterministic failure must not retry", deliveries[0].Retries)
 	}
 	if !strings.Contains(deliveries[0].Error, "already exists from repo") {
 		t.Errorf("delivery error = %q, want 'already exists from repo'", deliveries[0].Error)

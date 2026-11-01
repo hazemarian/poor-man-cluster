@@ -236,6 +236,11 @@ func (a *App) Mount(engine *gin.Engine) {
 	vr.GET("/settings/configs/new", stt.ConfigNew)
 	vr.GET("/settings/configs/edit/:name", stt.ConfigEdit)
 	vr.GET("/settings/secrets/new", stt.SecretNew)
+	// Service-scope items for a stack the operator types: the cluster-scope forms
+	// above create items with no stack, and the per-stack forms live on a stack
+	// page that only exists after a successful deploy.
+	vr.GET("/settings/secrets/for-stack", stt.SecretForStack)
+	vr.GET("/settings/configs/for-stack", stt.ConfigForStack)
 	vr.GET("/settings/secrets/edit/:name", stt.SecretEdit)
 	// Rendered configs embed the OpenObserve root Basic-auth value and the
 	// session cookie, so the CONTENT is operator-only (not viewer). The

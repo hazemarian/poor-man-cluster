@@ -16,6 +16,21 @@ type Step struct {
 	Run  func(ctx context.Context) error
 }
 
+// StepError names the step that failed. It exists so a caller can tell a
+// deterministic failure — a manifest that will never translate, a name that is
+// already taken by another repo — from a transient one that may succeed on a
+// retry, without parsing the message. Run used to wrap failures with
+// fmt.Errorf("%s: %w"), which made that distinction a string match.
+type StepError struct {
+	Step string
+	Err  error
+}
+
+func (e *StepError) Error() string { return e.Step + ": " + e.Err.Error() }
+
+// Unwrap keeps errors.Is/As working through the step boundary.
+func (e *StepError) Unwrap() error { return e.Err }
+
 // Workflow runs named steps in order, streaming a "▶ <name>" progress line
 // per step to its output. It is the shared engine behind `cluster up`,
 // `cluster update` and the deploy pipeline: each phase of those operations
@@ -57,7 +72,7 @@ func (w *Workflow) Run(ctx context.Context) error {
 	for _, s := range w.steps {
 		fmt.Fprintf(w.out, "▶ %s\n", s.Name)
 		if err := s.Run(ctx); err != nil {
-			return fmt.Errorf("%s: %w", s.Name, err)
+			return &StepError{Step: s.Name, Err: err}
 		}
 	}
 	return nil

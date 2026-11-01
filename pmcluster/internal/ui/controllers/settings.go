@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -615,4 +617,110 @@ func username(g *gin.Context) string {
 		return u.Username
 	}
 	return ""
+}
+
+// stackPickerData backs the small "which stack?" modal that sits in front of the
+// service-scope config/secret forms.
+//
+// It exists because of a gap in the shape of the console, not in the API: the
+// only place that offered "new secret for a stack" was the stack's own page
+// (/web/stacks/{name}/config), and that page is reachable only once the stack
+// exists in the store. But a manifest references config(<name>) and
+// secret(<name>) from its very FIRST deploy — a first deploy that fails because
+// those are missing, so the stack never comes into being, so the page is never
+// reachable, so they can never be created. The API and the CLI never had this
+// problem: POST /api/secrets takes any stack name.
+type stackPickerData struct {
+	// Kind is "secret" or "config" — it selects the follow-up form and the copy.
+	Kind string
+	// Action is the HTMX endpoint the picker submits to; it re-renders the modal
+	// with the real form filled in with this stack name.
+	Action string
+	// Stacks are suggestions from the cluster: deployed stacks plus any stack
+	// that already owns a service-scope config or secret (a stack can be
+	// pre-provisioned before its first deploy, so those matter too).
+	Stacks []string
+	// ErrKey/ErrRaw render "the API did not answer" instead of an empty list.
+	ErrKey string
+	ErrRaw string
+}
+
+func (d *stackPickerData) fail(key, raw string) { d.ErrKey, d.ErrRaw = key, raw }
+
+// SecretForStack renders the service-scope secret form for a typed stack name.
+// With no ?stack= it renders the picker first, so the operator sees what exists.
+func (c Settings) SecretForStack(g *gin.Context) {
+	stack := strings.TrimSpace(g.Query("stack"))
+	if stack == "" {
+		c.stackPicker(g, "secret", "/web/settings/secrets/for-stack")
+		return
+	}
+	d := secretFormData{
+		Scope:  "service",
+		Stack:  stack,
+		Action: WebBase + "/stacks/" + url.PathEscape(stack) + "/secrets/add",
+	}
+	if c.apiRefused(g, &d) {
+		c.secretFormError(g, d)
+		return
+	}
+	c.secretForm(g, d)
+}
+
+// ConfigForStack is the same entry point for service-scope configs.
+func (c Settings) ConfigForStack(g *gin.Context) {
+	stack := strings.TrimSpace(g.Query("stack"))
+	if stack == "" {
+		c.stackPicker(g, "config", "/web/settings/configs/for-stack")
+		return
+	}
+	d := configFormData{
+		Scope:  "service",
+		Stack:  stack,
+		Kind:   "file",
+		Action: WebBase + "/stacks/" + url.PathEscape(stack) + "/configs/add",
+	}
+	if c.apiRefused(g, &d) {
+		c.configFormError(g, d)
+		return
+	}
+	c.configForm(g, d)
+}
+
+// stackPicker renders the picker with the stack names the cluster already knows.
+// A failure to list them is not fatal — the field is free text, so the operator
+// can always type the name of a stack that does not exist yet, which is the case
+// this whole flow is for.
+func (c Settings) stackPicker(g *gin.Context, kind, action string) {
+	d := stackPickerData{Kind: kind, Action: action}
+	ctx := g.Request.Context()
+	seen := map[string]bool{}
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name != "" && !seen[name] {
+			seen[name] = true
+			d.Stacks = append(d.Stacks, name)
+		}
+	}
+	if stacks, err := c.API.ListStacks(ctx); err == nil {
+		for _, s := range stacks {
+			add(s.Name)
+		}
+	}
+	// Stacks that only exist as the owner of a service-scope item: a stack can be
+	// pre-provisioned before its first deploy, and suggesting it is the point.
+	for _, scope := range []string{"service"} {
+		if cfgs, err := c.API.ListConfigs(ctx, scope, ""); err == nil {
+			for _, cf := range cfgs {
+				add(cf.Stack)
+			}
+		}
+		if secs, err := c.API.ListSecrets(ctx, scope, ""); err == nil {
+			for _, s := range secs {
+				add(s.Stack)
+			}
+		}
+	}
+	sort.Strings(d.Stacks)
+	c.Views.Fragment(g, "stackpicker", d)
 }

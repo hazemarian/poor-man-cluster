@@ -133,6 +133,7 @@
     <h2>{{T "settings.configs_title"}}</h2>
     <div class="ph-actions">
       <button type="button" class="btn btn-sm" hx-get="/web/settings/configs/new" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.add_config"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/settings/configs/for-stack" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.for_stack"}}</span></button>
     </div>
   </div>
   <div class="panel-body">
@@ -214,6 +215,7 @@
     <h2>{{T "settings.secrets_title"}}</h2>
     <div class="ph-actions">
       <button type="button" class="btn btn-sm" hx-get="/web/settings/secrets/new" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.add_secret"}}</span></button>
+      <button type="button" class="btn btn-sm" hx-get="/web/settings/secrets/for-stack" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.for_stack"}}</span></button>
     </div>
   </div>
   <div class="panel-body">
