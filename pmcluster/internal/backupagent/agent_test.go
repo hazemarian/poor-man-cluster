@@ -156,6 +156,17 @@ func TestRunWritesOneVerifiedArtifactPerStack(t *testing.T) {
 		if !strings.HasPrefix(m, "backup/data/horizon-erp/") {
 			t.Errorf("member %q does not carry the backup/data/<stack>/ prefix", m)
 		}
+		// The stack name must appear exactly ONCE. Repeating it pushes every
+		// restored file one directory too deep, and that is invisible to a mere
+		// prefix check — which is how the first version shipped this.
+		if strings.HasPrefix(m, "backup/data/horizon-erp/horizon-erp/") {
+			t.Errorf("stack name duplicated in member %q", m)
+		}
+		// The path a restore will write is volume_root/<stack>/<volume>/<file>:
+		// assert the volume level exists exactly once.
+		if strings.HasSuffix(m, "app.db") && !strings.HasSuffix(m, "horizon-erp-data/app.db") {
+			t.Errorf("member %q does not sit under the stack's volume directory", m)
+		}
 		if strings.HasSuffix(m, "app.db") {
 			foundDB = true
 		}

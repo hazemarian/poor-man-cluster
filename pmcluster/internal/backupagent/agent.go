@@ -354,7 +354,9 @@ func (a *Agent) archiveStack(ctx context.Context, snapDir string, s StackPlan, a
 	}
 	name := backups.ArtifactName(s.Name, a.Node, at)
 	dst := filepath.Join(a.ArchiveDir, name)
-	files, bytes, sha, err := writeTarGz(ctx, src, path.Join(Prefix, s.Name), dst, s.Volumes)
+	// member is the archive-relative base; addTree appends the path relative to
+	// the stack's PARENT, so the stack name appears exactly once.
+	files, bytes, sha, err := writeTarGz(ctx, src, Prefix, dst, s.Volumes)
 	if err != nil {
 		_ = os.Remove(dst)
 		out.Reason = err.Error()
@@ -440,11 +442,17 @@ func writeTarGz(ctx context.Context, src, member, dst string, only []string) (fi
 			roots = append(roots, filepath.Join(src, v))
 		}
 	}
+	// base is the stack's PARENT directory: relative paths are computed from
+	// there, which is what puts "<stack>/<volume>/…" after the member prefix
+	// exactly once. Computing it from each root instead duplicated the stack
+	// name ("backup/data/<stack>/<stack>/…") and would have restored every app
+	// one directory too deep.
+	base := filepath.Dir(src)
 	for _, root := range roots {
 		if err := ctx.Err(); err != nil {
 			return files, n, "", err
 		}
-		c, b, werr := addTree(ctx, tw, root, member)
+		c, b, werr := addTree(ctx, tw, root, base, member)
 		files += c
 		n += b
 		if werr != nil {
@@ -463,10 +471,12 @@ func writeTarGz(ctx context.Context, src, member, dst string, only []string) (fi
 	return files, n, hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// addTree walks root and writes it under member. Sockets are skipped (they
-// cannot be archived and carry no data); symlinks are preserved.
-func addTree(ctx context.Context, tw *tar.Writer, root, member string) (files int, n int64, err error) {
-	base := filepath.Dir(root)
+// addTree walks root and writes it under member, with each member name computed
+// relative to base. base is the stack's parent, so a member reads
+// "backup/data/<stack>/<volume>/file" — the same shape the offen archives use,
+// which is what browse, restore, --volume anchoring and prune-to-snapshot all
+// expect.
+func addTree(ctx context.Context, tw *tar.Writer, root, base, member string) (files int, n int64, err error) {
 	return files, n, filepath.Walk(root, func(p string, info os.FileInfo, werr error) error {
 		if werr != nil {
 			return werr
