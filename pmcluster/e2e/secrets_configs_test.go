@@ -9,9 +9,9 @@
 //  2. config create/get/edit/history/rollback (version history)
 //  3. manifest deploy referencing both via env:
 //     env:
-//     DB_PASS: secrets(e2e_db_pass)      → /run/secrets/<name> + service mount
+//     DB_PASS: secret_path(e2e_db_pass)  → /run/secrets/<name> + service mount
 //     ADMIN_ENABLED: config(app_env)     → literal content injection
-//  4. validation: secrets() env ref without a matching service secrets: entry
+//  4. validation: secret_path() env ref without a matching service secrets: entry
 //     must fail the deploy.
 //
 // Gated behind PMCLUSTER_E2E_SWARM=1 (see deploy_test.go for the convention).
@@ -124,7 +124,7 @@ func TestSecretsConfigsE2E(t *testing.T) {
 		if !strings.Contains(combined, "sha256:") {
 			t.Errorf("expected sha256 hash in output; got:\n%s", combined)
 		}
-		if !strings.Contains(combined, "secrets("+secretName+")") {
+		if !strings.Contains(combined, "secret_path("+secretName+")") {
 			t.Errorf("expected DSL usage hint; got:\n%s", combined)
 		}
 		t.Logf("secret create OK:\n%s", combined)
@@ -249,7 +249,7 @@ services:
     image: traefik/whoami:v1.10
     replicas: 1
     env:
-      DB_PASS: secrets(` + secretName + `)
+      DB_PASS: secret_path(` + secretName + `)
 `
 		if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
 			t.Fatalf("write bad-ref manifest: %v", err)
@@ -257,12 +257,12 @@ services:
 		out, errOut, code := runCmd(t, homeDir, "deploy", manifestPath)
 		combined := out + errOut
 		if code == 0 {
-			t.Fatalf("expected deploy to fail for unmounted secrets() ref; got exit 0:\n%s", combined)
+			t.Fatalf("expected deploy to fail for an unmounted secret_path() ref; got exit 0:\n%s", combined)
 		}
 		if !strings.Contains(combined, "not mounted") || !strings.Contains(combined, secretName) {
 			t.Errorf("expected 'not mounted' validation error naming %q; got:\n%s", secretName, combined)
 		}
-		t.Logf("validation correctly rejected unmounted secrets() ref (exit %d)", code)
+		t.Logf("validation correctly rejected unmounted secret_path() ref (exit %d)", code)
 	})
 
 	t.Run("g-deploy-with-env-refs", func(t *testing.T) {
@@ -295,7 +295,7 @@ services:
     secrets:
       - ` + secretName + `
     env:
-      DB_PASS: secrets(` + secretName + `)
+      DB_PASS: secret_path(` + secretName + `)
       ADMIN_ENABLED: config(` + configName + `)
     expose:
       port: 80

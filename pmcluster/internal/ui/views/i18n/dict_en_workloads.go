@@ -111,7 +111,7 @@ func init() {
 
 		// ---- a stack's configs + secrets ------------------------------------
 		"stackconfigs.title": "Config & secrets · {0}",
-		"stackconfigs.sub":   "Service-scope configs and secrets for this stack, referenced from its manifest as config(name) and secrets(name). Values are stored encrypted, and secrets are never rendered back into this page.",
+		"stackconfigs.sub":   "Service-scope configs and secrets for this stack, referenced from its manifest as config_path(name) and secret_path(name). Values are stored encrypted, and secrets are never rendered back into this page.",
 
 		"stackconfigs.configs_title":   "Configs",
 		"stackconfigs.secrets_title":   "Secrets",

@@ -14,7 +14,7 @@ package i18n
 // plural.sources below.
 //
 // Technical tokens stay Latin because the operator pastes them: DSL, YAML,
-// JSON, HMAC-SHA256, sha256=, app, configs(), secrets(), CI, Swarm, Compose,
+// JSON, HMAC-SHA256, sha256=, app, config(), secret_path(), CI, Swarm, Compose,
 // API. "Manifest" has no glossary entry; it is rendered ملف التعريف throughout,
 // matching dict_ar_workloads.go, rather than بيان (which reads as "statement").
 func init() {
@@ -86,7 +86,7 @@ func init() {
 		"deploy.step_interp":         "الاستبدال والتحقّق",
 		"deploy.step_interp_note":    "تُستبدل المتغيّرات بقيمها ويُتحقّق من الحقول المطلوبة.",
 		"deploy.step_translate":      "الترجمة إلى Compose",
-		"deploy.step_translate_note": "تُحلّ الدالتان configs() وsecrets() بالرجوع إلى المخزن.",
+		"deploy.step_translate_note": "تُحلّ الدالتان config() وsecret_path() بالرجوع إلى المخزن.",
 		"deploy.step_record":         "حفظ المراجعة",
 		"deploy.step_record_note":    "يُحفظ المصدر وYAML الناتج تحت رقم المراجعة الجديد.",
 		"deploy.step_apply":          "إطلاق الحزمة",

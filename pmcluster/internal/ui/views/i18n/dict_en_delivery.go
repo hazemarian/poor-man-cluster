@@ -77,7 +77,7 @@ func init() {
 		"deploy.step_interp":         "Interpolate and validate",
 		"deploy.step_interp_note":    "Variables are resolved and required fields are verified.",
 		"deploy.step_translate":      "Translate to Compose",
-		"deploy.step_translate_note": "configs() and secrets() are resolved against the store.",
+		"deploy.step_translate_note": "config() and secret_path() are resolved against the store.",
 		"deploy.step_record":         "Store the revision",
 		"deploy.step_record_note":    "Source and rendered YAML are kept under the new revision number.",
 		"deploy.step_apply":          "Roll out the stack",

@@ -20,7 +20,7 @@ package i18n
 //   · daemon is الخادم (cluster.* ships the same gloss), never الخدمة.
 //   · unknown and empty stay distinct in every state: "غير معروفة وليست
 //     فارغة" for an unanswered API, "لا توجد…" for an empty answer.
-//   · config(name) / secrets(name) stay in Latin script: the operator copies
+//   · config_path(name) / secret_path(name) stay in Latin script: the operator copies
 //     them into the manifest verbatim.
 
 func init() {
@@ -118,7 +118,7 @@ func init() {
 
 		// ---- a stack's configs + secrets ------------------------------------
 		"stackconfigs.title":                 "التهيئة والأسرار · {0}",
-		"stackconfigs.sub":                   "تهيئات وأسرار على نطاق الخدمة لهذه الحزمة، تُشار إليها من ملف تعريفها بصيغة config(name) وsecrets(name). تُخزَّن القيم مشفّرة، ولا تُعرض الأسرار مرة أخرى في هذه الصفحة.",
+		"stackconfigs.sub":                   "تهيئات وأسرار على نطاق الخدمة لهذه الحزمة، تُشار إليها من ملف تعريفها بصيغة config_path(name) وsecret_path(name). تُخزَّن القيم مشفّرة، ولا تُعرض الأسرار مرة أخرى في هذه الصفحة.",
 		"stackconfigs.configs_title":         "التهيئات",
 		"stackconfigs.secrets_title":         "الأسرار",
 		"stackconfigs.form_new_secret":       "سر جديد",

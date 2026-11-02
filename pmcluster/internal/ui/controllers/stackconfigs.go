@@ -11,7 +11,7 @@ import (
 // StackConfigs is the per-stack config + secrets page, reachable from the
 // stacks list and the stack inspector at /stacks/{name}/config. It manages
 // only the service-scope configs and secrets that belong to that stack —
-// referenced from the DSL via env: VAR: config(<name>) / secrets(<name>).
+// referenced from the DSL via env: VAR: config(<name>) / secret_path(<name>).
 //
 // The page keeps three answers apart: values, "unknown" (the API did not
 // answer for that source) and "empty" (it answered with nothing). v1 printed
