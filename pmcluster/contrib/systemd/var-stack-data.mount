@@ -1,0 +1,32 @@
+[Unit]
+# The app-data filesystem: one LVM thin volume holding every stack's directory.
+#
+# Named var-stack-data.mount because systemd derives a mount unit's name from
+# its path (/var/stack/data). It is a native unit rather than an /etc/fstab
+# line on purpose: fstab's `nofail` would let the node boot with the mount
+# missing, and every application would then start against an empty directory on
+# the root filesystem. Here a failed mount fails the unit, and docker (which
+# requires it) does not start — a node that refuses to run is recoverable; a
+# node that runs on empty data is not.
+#
+# `x-systemd.device-timeout` is irrelevant (the device is a mapper node created
+# by pmcluster-data-loop.service, which this unit Requires).
+Description=pmcluster app data (/var/stack/data)
+Documentation=https://github.com/hazemarian/poor-man-cluster
+Requires=pmcluster-data-loop.service
+After=pmcluster-data-loop.service
+# Do not let a stop of the pool cascade into stopping everything mid-boot.
+DefaultDependencies=no
+Conflicts=umount.target
+Before=local-fs.target umount.target
+
+[Mount]
+What=/dev/vg-pmcluster/data
+Where=/var/stack/data
+Type=ext4
+# noatime: the archive walk reads every file once an hour and should not write
+# atime updates back into the same volume it is snapshotting.
+Options=defaults,noatime
+
+[Install]
+WantedBy=local-fs.target

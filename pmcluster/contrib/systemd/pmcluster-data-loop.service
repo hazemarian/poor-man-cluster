@@ -1,0 +1,52 @@
+[Unit]
+# pmcluster app-data thin pool, backed by a loop device on the root filesystem.
+#
+# Why a loop device at all: the alternative is a second disk or an attached
+# cloud volume, which makes the platform depend on an operator action it cannot
+# verify. A file inside the root filesystem is something pmcluster can create,
+# size, verify and remove on its own — the whole point of the data layer being
+# platform-owned.
+#
+# The boot risk this unit exists to close: the loop device must be attached and
+# the volume group activated BEFORE the filesystem is mounted, and the mount
+# must exist BEFORE docker starts — otherwise /var/stack/data comes up as an
+# empty directory on the root filesystem and every application starts writing
+# into nothing. Ordering is therefore explicit, and nothing here is nofail.
+Description=pmcluster app-data thin pool (loop-backed)
+Documentation=https://github.com/hazemarian/poor-man-cluster
+DefaultDependencies=no
+# The file lives on the root filesystem, so / must be writable first —
+# systemd-remount-fs.service is exactly that, and it runs BEFORE local-fs.target.
+#
+# Do NOT order this After=local-fs.target: the mount unit below is
+# Before=local-fs.target and Requires this service, so "service after
+# local-fs.target" closes a cycle and systemd resolves it the quiet way — by
+# deleting the mount job at boot. That failure is silent: no failed unit, no
+# journal error, just an unmounted data volume and (with the docker guard) a
+# node that never starts. Learned by rebooting and finding /var/stack/data
+# empty.
+After=systemd-remount-fs.service
+Requires=systemd-remount-fs.service
+# Everything that consumes the data waits for this.
+Before=var-stack-data.mount docker.service pmcluster.service
+# On shutdown, stop in reverse: mount first (the .mount unit depends on this
+# one), then deactivate the VG and detach the loop device.
+Before=shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Validate before touching anything: a missing or truncated backing file must
+# fail here, loudly, rather than produce a half-provisioned volume.
+ExecStartPre=/usr/bin/test -s /var/lib/pmcluster/app-data.img
+# Attach only if the file is not already attached (idempotent: this unit is
+# also what a repaired boot runs).
+ExecStart=/bin/sh -c 'losetup -j /var/lib/pmcluster/app-data.img | grep -q . || losetup --find --show /var/lib/pmcluster/app-data.img'
+ExecStart=/sbin/vgchange -ay vg-pmcluster
+# Shutdown order is enforced by systemd stopping the .mount unit first.
+ExecStop=/bin/sh -c 'vgchange -an vg-pmcluster || true'
+ExecStop=/bin/sh -c 'd=$(losetup -j /var/lib/pmcluster/app-data.img | cut -d: -f1); [ -n "$d" ] && losetup -d "$d" || true'
+
+[Install]
+WantedBy=multi-user.target
