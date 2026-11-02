@@ -22,15 +22,6 @@ type EnvResolver interface {
 	ResolveConfig(ctx context.Context, stack, name string) (string, error)
 }
 
-// SettingsResolver is implemented by EnvResolvers that can also resolve
-// `settings(<name>)` references against the cluster settings store. When an
-// env value is exactly `settings(name)`, the translator substitutes the live
-// cluster setting value at deploy/update time. Resolvers that don't
-// implement this reject settings() refs at translate time.
-type SettingsResolver interface {
-	ResolveSetting(ctx context.Context, stack, name string) (string, error)
-}
-
 // ConfigPathResolver is implemented by EnvResolvers that can resolve a
 // config_path(<name>) mount to its in-container target path. When a resolver
 // does not implement it (or returns an empty path), the config file mounts at
@@ -403,9 +394,9 @@ func resolveServiceEnv(ctx context.Context, stack string, env map[string]string,
 			continue
 		}
 		switch ref.Kind {
-		case "secrets":
+		case "secret_path":
 			if ref.Name == "" {
-				return nil, fmt.Errorf("env.%s: secrets() name is empty", k)
+				return nil, fmt.Errorf("env.%s: secret_path() name is empty", k)
 			}
 			out[k] = refs.SecretMountPath(ref.Name)
 		case "config_path":
@@ -440,16 +431,6 @@ func resolveServiceEnv(ctx context.Context, stack string, env map[string]string,
 				return nil, fmt.Errorf("env.%s: config(%s) contains newlines — configs injected into env must be single-line; use a file config for multi-line content", k, ref.Name)
 			}
 			out[k] = content
-		case "settings":
-			sr, ok := res.(SettingsResolver)
-			if !ok || sr == nil {
-				return nil, fmt.Errorf("env.%s: settings(%s) requires settings resolution (not available)", k, ref.Name)
-			}
-			value, err := sr.ResolveSetting(ctx, stack, ref.Name)
-			if err != nil {
-				return nil, fmt.Errorf("env.%s: resolve settings(%s): %w", k, ref.Name, err)
-			}
-			out[k] = value
 		case "secret":
 			sr, ok := res.(SecretValueResolver)
 			if !ok || sr == nil {

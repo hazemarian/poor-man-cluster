@@ -215,46 +215,32 @@ func (r *settingsRefResolverStub) ResolveSetting(_ context.Context, name string)
 // TestParseSettingsRef checks settings(name) parses as a whole-value env
 // ref (kind + trimmed name) and that a missing/empty close parens is flagged
 // as malformed so operators fail loud at validate time.
-func TestParseSettingsRef(t *testing.T) {
-	ref, ok := ParseEnvRef("settings(volume_root)")
+// settings() was removed from the reference language. It must not parse as a
+// reference, and it must be reported as malformed so a manifest that still uses
+// it fails validation instead of shipping the literal "settings(x)" as an env
+// value.
+func TestParseSettingsRefIsGone(t *testing.T) {
+	if ref, ok := ParseEnvRef("settings(volume_root)"); ok {
+		t.Fatalf("settings() still parses as %+v", ref)
+	}
+	if !MalformedEnvRef("settings(volume_root)") {
+		t.Error("settings() should be reported as malformed, not passed through as a literal")
+	}
+}
+
+// The plural spelling is still accepted but normalised, so a manifest written
+// before the rename keeps working and any code branching on Kind sees one value.
+func TestParseSecretPathRefNormalisesLegacySpelling(t *testing.T) {
+	modern, ok := ParseEnvRef("secret_path(db_pass)")
+	if !ok || modern.Kind != "secret_path" || modern.Name != "db_pass" {
+		t.Fatalf("secret_path ref = %+v ok=%v", modern, ok)
+	}
+	legacy, ok := ParseEnvRef("secrets(db_pass)")
 	if !ok {
-		t.Fatal(`ParseEnvRef("settings(volume_root)") should succeed`)
+		t.Fatal("legacy secrets() should still parse")
 	}
-	if ref.Kind != "settings" || ref.Name != "volume_root" {
-		t.Errorf("ref = %+v, want settings/volume_root", ref)
-	}
-
-	ref, ok = ParseEnvRef("settings( platform_node )")
-	if !ok {
-		t.Fatal(`ParseEnvRef("settings( platform_node )") should succeed`)
-	}
-	if ref.Kind != "settings" || ref.Name != "platform_node" {
-		t.Errorf("ref = %+v, want settings/platform_node (name trimmed)", ref)
-	}
-
-	for v, wantMalformed := range map[string]bool{
-		"settings(":          true, // missing close paren
-		"settings()":         true, // empty name
-		"settings(a b":       true, // missing close paren
-		"settings(x) y":      true, // extra content around the ref
-		"settings(ok)":       false,
-		"plain":              false,
-		"SETTINGS(x)":        false, // prefix match is case-sensitive
-		"prefix settings(x)": false, // ref is not the whole value
-	} {
-		if got := MalformedEnvRef(v); got != wantMalformed {
-			t.Errorf("MalformedEnvRef(%q) = %v, want %v", v, got, wantMalformed)
-		}
-	}
-
-	// ParseEnvRef agrees: only well-formed whole-value settings() refs parse.
-	for _, v := range []string{"settings(", "settings()", "settings(a b", "settings(x) y", "plain", "prefix settings(x)"} {
-		if _, ok := ParseEnvRef(v); ok {
-			t.Errorf("ParseEnvRef(%q) should fail", v)
-		}
-	}
-	if _, ok := ParseEnvRef("settings(ok)"); !ok {
-		t.Errorf(`ParseEnvRef("settings(ok)") should succeed`)
+	if legacy.Kind != modern.Kind || legacy.Name != modern.Name {
+		t.Errorf("legacy = %+v, want the same kind/name as %+v", legacy, modern)
 	}
 }
 

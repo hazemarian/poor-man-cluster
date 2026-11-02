@@ -170,14 +170,16 @@ func validateService(name string, s *dsl.Service) error {
 	}
 	for k, v := range s.Env {
 		if refs.MalformedEnvRef(v) {
-			return fmt.Errorf("%s.env.%s: malformed reference %q — expected config(name), secrets(name), settings(name) or secret(name)", prefix, k, v)
+			return fmt.Errorf("%s.env.%s: malformed reference %q — expected config(name), config_path(name), secret(name) or secret_path(name)", prefix, k, v)
 		}
 		if ref, ok := refs.ParseEnvRef(v); ok && ref.Name == "" {
 			return fmt.Errorf("%s.env.%s: empty name in %s() reference", prefix, k, ref.Kind)
 		}
-		if ref, ok := refs.ParseEnvRef(v); ok && ref.Kind == "secrets" {
+		// ParseEnvRef normalises the legacy plural spelling, so this covers
+		// secret_path(x) and secrets(x) alike.
+		if ref, ok := refs.ParseEnvRef(v); ok && ref.Kind == "secret_path" {
 			if !slices.Contains(s.Secrets, ref.Name) {
-				return fmt.Errorf("%s.env.%s: secrets(%s) is not mounted — add %q to the service secrets: array (env refs point at /run/secrets/<name>)", prefix, k, ref.Name, ref.Name)
+				return fmt.Errorf("%s.env.%s: secret_path(%s) points at /run/secrets/%s, but the service does not declare it — add %q to the service secrets: array", prefix, k, ref.Name, ref.Name, ref.Name)
 			}
 		}
 	}

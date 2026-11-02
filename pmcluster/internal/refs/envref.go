@@ -6,11 +6,20 @@ import (
 	"strings"
 )
 
-// envRefRe matches a config_path(name)/config(name)/secrets(name)/settings(name)/
+// envRefRe matches a config_path(name)/config(name)/secret_path(name)/
 // secret(name) reference when it is the WHOLE value of an env entry
 // (`env: KEY: config(x)`). Unlike inlineRefRe it is anchored — it must not
 // match text that has extra content around the reference.
-var envRefRe = regexp.MustCompile(`^(config_path|config|secrets|settings|secret)\(([^)]+)\)$`)
+var envRefRe = regexp.MustCompile(`^(config_path|config|secret_path|secrets|secret)\(([^)]+)\)$`)
+
+// secretPathKind and secretPathLegacyKind are the same reference. The plural
+// form is what the first cut shipped; it read like "the secrets" and returned a
+// path, which is how a manifest ended up handing an app a value where a path was
+// expected. `secret_path(name)` says what it does and matches config_path(name).
+const (
+	secretPathKind       = "secret_path"
+	secretPathLegacyKind = "secrets"
+)
 
 // configPathRe matches a config_path(<name>) expression — the DSL syntax for
 // declaring a Docker config FILE mount (`configs: [config_path(cfg)]`).
@@ -30,16 +39,24 @@ func ParseEnvRef(v string) (EnvRef, bool) {
 	if len(sub) != 3 {
 		return EnvRef{}, false
 	}
-	return EnvRef{Kind: sub[1], Name: strings.TrimSpace(sub[2])}, true
+	kind := sub[1]
+	if kind == secretPathLegacyKind {
+		kind = secretPathKind
+	}
+	return EnvRef{Kind: kind, Name: strings.TrimSpace(sub[2])}, true
 }
 
 // MalformedEnvRef reports whether v starts like a reference but does not parse
 // as one — a typo or a forgotten close paren. Used by manifest validation so
 // operators fail loud.
 func MalformedEnvRef(v string) bool {
+	// settings( is deliberately still listed even though the token is no longer a
+	// reference kind: a manifest that kept it would otherwise pass through as the
+	// literal string "settings(x)" in the container environment — a silent
+	// misconfiguration instead of a validation error.
 	if !strings.HasPrefix(v, "config_path(") && !strings.HasPrefix(v, "config(") &&
-		!strings.HasPrefix(v, "secrets(") && !strings.HasPrefix(v, "settings(") &&
-		!strings.HasPrefix(v, "secret(") {
+		!strings.HasPrefix(v, "secret_path(") && !strings.HasPrefix(v, "secrets(") &&
+		!strings.HasPrefix(v, "secret(") && !strings.HasPrefix(v, "settings(") {
 		return false
 	}
 	_, ok := ParseEnvRef(v)

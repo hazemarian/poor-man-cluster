@@ -18,7 +18,7 @@ import (
 // config(x)/secret(x)/secrets(x)/settings(x)/config_path(x). Config files are
 // not env values — they are whole documents — so these are substituted inline,
 // anywhere in the text, unlike the anchored whole-value form used for env.
-var configRefRe = regexp.MustCompile(`\b(config_path|config|secrets|settings|secret)\(([^)]+)\)`)
+var configRefRe = regexp.MustCompile(`\b(config_path|config|secret_path|secrets|secret)\(([^)]+)\)`)
 
 // configExpandDepth bounds config → config reference chains so a cycle
 // (a.yaml → b.yaml → a.yaml) fails loudly instead of hanging the deploy.
@@ -103,12 +103,10 @@ func (r *StoreConfigResolver) expandConfigRefs(ctx context.Context, stack, conte
 			if err == nil {
 				resolved = nested
 			}
-		case "secrets":
+		case "secret_path", "secrets":
 			resolved = refs.SecretMountPath(name)
 		case "secret":
 			resolved, err = r.ResolveSecretValue(ctx, stack, name)
-		case "settings":
-			resolved, err = r.ResolveSetting(ctx, stack, name)
 		}
 		if err != nil {
 			firstErr = fmt.Errorf("%s(%s) in config content: %w", kind, name, err)
@@ -164,24 +162,6 @@ func (r *StoreConfigResolver) resolveConfig(ctx context.Context, stack, name str
 	}
 
 	return r.expandConfigRefs(ctx, stack, c.Content, depth)
-}
-
-// ResolveSetting implements manifest.SettingsResolver so `env: X:
-// settings(name)` values are injected from the cluster_settings table (the
-// same source the CLI `cluster settings` and the console read). Unknown
-// settings surface as an error so a typo in a manifest fails loud.
-func (r *StoreConfigResolver) ResolveSetting(ctx context.Context, stack, name string) (string, error) {
-	if r == nil || r.Store == nil {
-		return "", fmt.Errorf("settings resolution unavailable (no store)")
-	}
-	v, err := r.Store.Setting(ctx, name)
-	if err != nil {
-		if errors.Is(err, store.ErrSettingNotFound) {
-			return "", fmt.Errorf("setting %q not found — set it with `pmcluster cluster settings set %s=...`", name, name)
-		}
-		return "", fmt.Errorf("get setting %q: %w", name, err)
-	}
-	return v, nil
 }
 
 // ResolveConfigPath implements manifest.ConfigPathResolver so `config_path(name)`

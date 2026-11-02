@@ -55,84 +55,31 @@ func (r *configPathResolverStub) ResolveConfigPath(_ context.Context, _, name st
 	return "", nil
 }
 
-// TestTranslate_SettingsEnvRef verifies an env value of settings(name) is
-// substituted with the live cluster setting through a resolver that
-// implements SettingsResolver, that resolvers which DON'T implement it fail
-// loud with a settings-specific message (never leaking the raw reference
-// into compose), and that the validate-time malformed-ref message advertises
-// settings(name).
-func TestTranslate_SettingsEnvRef(t *testing.T) {
-	newApp := func() *dsl.App {
-		app := envRefApp()
-		app.Services["web"] = svcWithEnv(map[string]string{
-			"VOLUME_ROOT": "settings(volume_root)",
-			"KEEP":        "value",
-		})
-		return app
-	}
+// settings() is no longer part of the reference language: the token was removed
+// because no manifest used it and the platform resolver refused it anyway. It must
+// now fail validation as a malformed reference rather than quietly reaching
+// compose, and the error must advertise only the tokens that still exist.
+func TestTranslate_SettingsRefIsRejected(t *testing.T) {
+	app := envRefApp()
+	app.Services["web"] = svcWithEnv(map[string]string{
+		"VOLUME_ROOT": "settings(volume_root)",
+	})
 
-	// Resolver implementing SettingsResolver → the setting value lands in
-	// the rendered env (and the lookup is stack-scoped).
-	res := &settingsResolverStub{
-		settings: map[string]string{"volume_root": "/srv/stack/data"},
-	}
-	out, err := TranslateWithResolver(context.Background(), newApp(), res)
-	if err != nil {
-		t.Fatalf("TranslateWithResolver: %v", err)
-	}
-	s := string(out)
-	if !strings.Contains(s, "VOLUME_ROOT: /srv/stack/data") {
-		t.Errorf("expected settings(volume_root) resolved to /srv/stack/data:\n%s", s)
-	}
-	if strings.Contains(s, "settings(volume_root)") {
-		t.Errorf("raw settings() reference must never leak into the compose:\n%s", s)
-	}
-	if !strings.Contains(s, "KEEP: value") {
-		t.Errorf("expected plain env preserved:\n%s", s)
-	}
-	if res.lastLook.stack != "myapp" || res.lastLook.name != "volume_root" {
-		t.Errorf("ResolveSetting called with stack=%q name=%q, want myapp/volume_root",
-			res.lastLook.stack, res.lastLook.name)
-	}
-
-	// A resolver that only implements EnvResolver (no SettingsResolver) →
-	// clear error mentioning settings.
-	_, err = TranslateWithResolver(context.Background(), newApp(), &fakeResolver{values: map[string]string{}})
+	err := Validate(app)
 	if err == nil {
-		t.Fatal("expected an error when the resolver cannot resolve settings()")
+		t.Fatal("settings() must be rejected now that the token is removed")
 	}
-	if !strings.Contains(err.Error(), "settings(volume_root)") || !strings.Contains(err.Error(), "settings resolution") {
-		t.Errorf("error should name settings() and say settings resolution is unavailable: %v", err)
+	msg := err.Error()
+	if !strings.Contains(msg, "malformed reference") {
+		t.Errorf("unexpected error: %v", err)
 	}
-
-	// No resolver at all → same loud failure, still mentioning settings.
-	_, err = Translate(newApp())
-	if err == nil {
-		t.Fatal("expected an error when settings() is used without a resolver")
+	if strings.Contains(msg, "settings(name)") {
+		t.Errorf("error still advertises the removed settings(name): %s", msg)
 	}
-	if !strings.Contains(err.Error(), "settings(volume_root)") {
-		t.Errorf("error should mention the settings() reference: %v", err)
-	}
-
-	// Resolver failure (unknown setting) surfaces with the env key + ref.
-	_, err = TranslateWithResolver(context.Background(), newApp(), &settingsResolverStub{})
-	if err == nil {
-		t.Fatal("expected an error for an unknown setting")
-	}
-	if !strings.Contains(err.Error(), "env.VOLUME_ROOT") || !strings.Contains(err.Error(), "resolve settings(volume_root)") {
-		t.Errorf("error should name the env key and the reference: %v", err)
-	}
-
-	// Validation: a malformed settings ref fails loud and the message
-	// advertises settings(name) alongside config/secrets.
-	bad := envRefApp()
-	bad.Services["web"] = svcWithEnv(map[string]string{"X": "settings(volume_root"})
-	verr := Validate(bad)
-	if verr == nil {
-		t.Fatal("expected validation error for malformed settings() ref")
-	}
-	if !strings.Contains(verr.Error(), "settings(name)") {
-		t.Errorf("malformed-ref error should mention settings(name): %v", verr)
+	for _, want := range []string{"config(name)", "config_path(name)", "secret(name)", "secret_path(name)"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error does not mention %s: %s", want, msg)
+		}
 	}
 }
 

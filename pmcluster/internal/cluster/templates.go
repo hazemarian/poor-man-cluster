@@ -397,13 +397,6 @@ func (r *renderRefResolver) ResolveConfig(_ context.Context, _ string, name stri
 // ResolveSecret satisfies refs.RefResolver — secrets(<name>) names a mounted
 // Swarm secret, so this maps logical names to their versioned Swarm secret
 // names (cert/key → CertSecretName/KeySecretName) and passes everything else
-// through (the mount key is the external secret's own name).
-func (r *renderRefResolver) ResolveSecret(_ context.Context, _ string, name string) (string, error) {
-	if fn, ok := secretNameAliases[name]; ok {
-		return fn(r.render), nil
-	}
-	return name, nil
-}
 
 func (r *renderRefResolver) ResolveSetting(_ context.Context, _ string, name string) (string, error) {
 	return "", fmt.Errorf("resolve settings(%s): platform manifests cannot reference cluster settings", name)

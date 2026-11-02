@@ -67,20 +67,32 @@ func TestTranslate_SecretsEnvRef(t *testing.T) {
 
 // TestValidate_SecretsEnvRefNotMounted: secrets(name) in env without the
 // secret listed in the service secrets: array is a validation error.
-func TestValidate_SecretsEnvRefNotMounted(t *testing.T) {
-	app := envRefApp()
-	app.Services["web"] = svcWithEnv(map[string]string{
-		"DB_PASSWORD": "secrets(db_pass)",
-	})
-	app.Secrets = []string{"db_pass"}
+// A secret_path()/secrets() reference must name a secret the service actually
+// mounts — otherwise the app is handed /run/secrets/<x> for a file that is not
+// there. Both spellings are covered: ParseEnvRef normalises the legacy plural.
+func TestValidate_SecretPathEnvRefNotMounted(t *testing.T) {
+	for _, ref := range []string{"secret_path(db_pass)", "secrets(db_pass)"} {
+		app := envRefApp()
+		app.Services["web"] = svcWithEnv(map[string]string{"DB_PASSWORD": ref})
+		app.Secrets = nil
 
-	err := Validate(app)
-	if err == nil {
-		t.Fatal("expected validation error for unmounted env secret")
+		err := Validate(app)
+		if err == nil {
+			t.Fatalf("%s: expected validation error for an unmounted secret path", ref)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "does not declare it") || !strings.Contains(msg, "db_pass") {
+			t.Errorf("%s: unexpected error: %v", ref, err)
+		}
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, "not mounted") || !strings.Contains(msg, "db_pass") {
-		t.Errorf("unexpected error: %v", err)
+
+	// Declared on the service → accepted.
+	app := envRefApp()
+	svc := svcWithEnv(map[string]string{"DB_PASSWORD_FILE": "secret_path(db_pass)"})
+	svc.Secrets = []string{"db_pass"}
+	app.Services["web"] = svc
+	if err := Validate(app); err != nil {
+		t.Errorf("declared secret_path should validate: %v", err)
 	}
 }
 

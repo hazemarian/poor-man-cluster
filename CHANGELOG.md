@@ -3,6 +3,34 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.224 (2026-11-02)
+
+**The reference language loses a token and gains a clearer one.**
+
+`settings(name)` is gone. Nothing in the fleet used it, the platform resolver
+already refused it (`platform manifests cannot reference cluster settings`), and a
+manifest that kept it would now read as the literal string `settings(x)` in the
+container environment — so it is rejected at validation as a malformed reference
+instead, with the surviving tokens named in the error. The `cluster_settings`
+table is untouched: it still holds `domain`, `reconcile_interval`,
+`storage_nodes`, `backup_*`, `observability_*`, and feeds the platform render.
+
+`secrets(name)` becomes `secret_path(name)`, symmetric with `config_path(name)`:
+
+| token | yields |
+|---|---|
+| `config(name)` / `config_path(name)` | content / location |
+| `secret(name)` / `secret_path(name)` | value / location |
+
+The old plural spelling still parses and normalises to `secret_path`, so no
+manifest breaks, but the trap is gone: singular is a value, `_path` is a location.
+The secret path itself stays **computed** (`/run/secrets/<name>`) rather than read
+back from Docker — it is the compose mount convention, and querying swarm for it
+would add a live API call to rendering without making it truer. The guard that
+matters already exists and now covers both spellings: `secret_path(x)` requires
+`secrets: [x]` on the service, so a reference cannot hand an app a path to a file
+nobody mounted.
+
 ## v0.2.223 (2026-11-02)
 
 **Config files get one platform-owned location, a directory the app discovers, and
