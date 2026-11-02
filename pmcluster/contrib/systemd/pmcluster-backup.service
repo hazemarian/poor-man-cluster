@@ -1,0 +1,47 @@
+# Reference template for the pmcluster volume snapshot backup agent.
+#
+# This unit is INSTALLED BY THE CLI, not by hand:
+#   PMCLUSTER_BACKUP_AGENT=1 pmcluster cluster update    # on a storage node
+# which renders it with the real paths and enables the matching timer.
+#
+# If you prefer to write it yourself, copy this file to
+# /etc/systemd/system/pmcluster-backup.service and replace:
+#   /usr/local/bin/pmcluster  — path to the binary
+#   /var/stack/data           — the volume root (PMCLUSTER_VOLUME_ROOT)
+#   /var/stack/backup         — where artifacts land (PMCLUSTER_BACKUP_DIR)
+#   /var/lib/pmcluster-backup — cached plan + run records (PMCLUSTER_BACKUP_STATE)
+# then set PMCLUSTER_BACKUP_VG / PMCLUSTER_BACKUP_LV to the volume group and
+# logical volume holding the volume root, and enable pmcluster-backup.timer.
+#
+# After placing the file:
+#   systemctl daemon-reload
+#   systemctl enable --now pmcluster-backup.timer
+
+[Unit]
+Description=pmcluster volume snapshot backup (one run)
+After=docker.service
+Requires=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=2
+
+[Service]
+Type=oneshot
+# Root is required: fsfreeze, lvcreate, mount, umount. The daemon runs as the
+# operator user; it triggers this unit through systemd instead.
+User=root
+Environment=PMCLUSTER_VOLUME_ROOT=/var/stack/data
+Environment=PMCLUSTER_BACKUP_DIR=/var/stack/backup
+Environment=PMCLUSTER_BACKUP_STATE=/var/lib/pmcluster-backup
+Environment=PMCLUSTER_BACKUP_VG=vg0
+Environment=PMCLUSTER_BACKUP_LV=data
+# One run per node, always: a second trigger exits immediately.
+ExecStartPre=/usr/bin/flock -n /run/pmcluster-backup.lock
+ExecStart=/usr/local/bin/pmcluster backup-agent run
+# The snapshot copy loses every contention fight with an application.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target

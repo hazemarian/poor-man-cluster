@@ -1,0 +1,18 @@
+# Hourly schedule for the pmcluster volume snapshot backup agent.
+# Installed by `PMCLUSTER_BACKUP_AGENT=1 pmcluster cluster update`.
+#
+# Persistent=true fires a run that was missed while the node was down instead
+# of silently skipping the hour; AccuracySec keeps the fleet from hitting the
+# same second, which matters when every node uploads to the same store.
+
+[Unit]
+Description=pmcluster volume snapshot backup (hourly)
+
+[Timer]
+OnCalendar=*-*-* *:00:00
+AccuracySec=30s
+Persistent=true
+Unit=pmcluster-backup.service
+
+[Install]
+WantedBy=timers.target

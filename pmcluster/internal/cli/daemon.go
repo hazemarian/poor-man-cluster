@@ -174,6 +174,19 @@ func ensureDaemonRunning(out io.Writer) error {
 		return fmt.Errorf("systemctl restart pmcluster: %w", err)
 	}
 	fmt.Fprintln(out, "→ pmcluster daemon started via systemd (pmcluster serve)")
+
+	// The snapshot agent is installed only when the operator opts this node in.
+	//
+	// Opt-in, not automatic, because the two producers write different
+	// archives and a node must not run both against the same data by
+	// accident: the agent snapshots, the offen agent tars a live tree. Set
+	// PMCLUSTER_BACKUP_AGENT=1 on a storage node that has the thin pool, watch
+	// an hour of per-stack artifacts, then retire that node's offen agent.
+	// Removing the offen agent before the agent is live would leave the node
+	// with no working backup at all.
+	if os.Getenv("PMCLUSTER_BACKUP_AGENT") != "" {
+		return ensureBackupAgentInstalled(out)
+	}
 	return nil
 }
 

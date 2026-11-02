@@ -1,0 +1,82 @@
+%% pmcluster backup — one run, end to end.
+%% Colours: green = in code and tested | red = NOT in code yet |
+%% amber = host/ops change (no code) | purple = data.
+%%
+%% System packages: NONE are missing on nxt-sw-1-m / nxt-sw-3-w.
+%% Verified: fsfreeze+flock (util-linux), lvcreate/lvs/lvremove (lvm2 2.03.31),
+%% mount/umount, tar, gzip — all installed. sqlite3, psql and pg_controldata are
+%% NOT installed and are NOT needed: SQLite verification links into the binary
+%% (modernc.org/sqlite) and Postgres is only presence-checked.
+
+sequenceDiagram
+ autonumber
+
+ box rgb(6,78,59) IN CODE — shipped and tested
+ participant T as systemd timer
+ participant A as backup-agent (root oneshot)
+ participant D as pmcluster daemon (this node)
+ participant L as pmcluster daemon (leader)
+ participant S as SeaweedFS store (WebDAV)
+ end
+
+ box rgb(120,53,15) HOST / OPS — no code
+ participant K as kernel + LVM (fsfreeze, lvcreate)
+ participant O as operator
+ end
+
+ box rgb(76,29,149) DATA
+ participant V as volume root (thin LV)
+ participant X as archive dir
+ participant E as database engines
+ end
+
+ box rgb(136,19,55) NOT IN CODE YET
+ participant API as plan + run-report API
+ end
+
+ T->>A: OnCalendar hourly, Persistent=true
+ A->>A: flock -n /run/pmcluster-backup.lock
+ Note right of A: one run per node, extra triggers exit
+
+ A->>X: read cached plan.json
+ A-->>API: refresh plan from leader (missing endpoint)
+ Note over A,API: NOT BUILT — plan publisher. plan.json is hand-placed, and a stale one is harmless.
+
+ A->>K: fsfreeze -f /var/stack/data
+ Note over K,V: all writes block, ~ms
+ A->>K: lvcreate -s vg0/data
+ A->>K: fsfreeze -u
+ Note right of A: freeze fails ⇒ NO tar. No live-tree fallback.
+ A->>K: mount -o ro the snapshot
+
+ loop one artifact per stack, serial
+ A->>V: walk stack/ in the frozen image
+ A->>X: tar → backup-node-ts-stack-stack.tar.gz
+ A->>X: manifest.json (sha256, snapshot facts)
+ A->>E: verify: sqlite integrity_check
+ Note right of E: postgres presence only, not validated
+ A->>S: PUT artifact (net/http)
+ end
+
+ A->>K: umount + lvremove
+ Note right of K: pool ≥80% aborts loudly
+
+ A->>X: write run-ts.json
+ Note right of A: written before any report
+ A--)API: POST /internal/backup/runs (missing endpoint)
+
+ D->>X: discover *.tar.gz → backups rows
+ Note over D,X: no report needed — the archive is the record
+ O->>D: backup list / browse / restore
+ O->>A: backup-agent drill archive
+ A->>A: extract + integrity_check (proves restorability)
+
+ alt leader is down during the run
+ Note over A,L: a systemd job, not a leader client: it finishes
+ D->>X: rows still discovered on the next pass
+ L->>D: plan refresh waits for promotion
+ end
+
+ rect rgb(120,53,15)
+ Note over K,V: NOT CODE — thin pool, then PMCLUSTER_BACKUP_AGENT=1, an hour + a drill, then retire offen (leader last)
+ end

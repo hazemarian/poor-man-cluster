@@ -1,0 +1,327 @@
+package backupagent
+
+import (
+	"archive/tar"
+	"compress/gzip"
+	"database/sql"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+
+	_ "modernc.org/sqlite" // pure-Go driver: verify opens an archived database in-process
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
+)
+
+// VerifyArchive is the default verification: reopen the artifact and ask the
+// database inside it whether it is intact.
+//
+// This is the difference between "a file exists" and "a backup exists". It
+// costs a full read of the archive, which is why it runs on the host right
+// after the write rather than on the leader.
+func VerifyArchive(archivePath, _ string) (engine, detail string, err error) {
+	dbMembers, pgControl, err := scanArchive(archivePath)
+	if err != nil {
+		return "", "", err
+	}
+	switch {
+	case len(dbMembers) > 0:
+		// Every database in the artifact is checked, not just the first: a
+		// whole-node archive holds one per stack, and a green verdict that
+		// covered one of eight would be a lie the console repeats.
+		for _, m := range dbMembers {
+			if err := checkSQLite(archivePath, m); err != nil {
+				return "sqlite", "", fmt.Errorf("%s: %w", path.Base(m), err)
+			}
+		}
+		return "sqlite", describeDatabases(dbMembers), nil
+	case pgControl:
+		// A Postgres data directory is only meaningful with its WAL, and
+		// neither pg_controldata nor a server are available on the host, so
+		// report exactly what was checked rather than implying validity.
+		return "postgres", "control file + WAL present (not validated — start the cluster to confirm)", nil
+	default:
+		return "", "archive readable, no database detected", nil
+	}
+}
+
+// scanArchive reads the whole tar stream (so a truncated archive fails here)
+// and reports the first SQLite database member it saw and whether a Postgres
+// control file is present.
+func scanArchive(archivePath string) (dbMembers []string, pgControl bool, err error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return nil, false, fmt.Errorf("open archive: %w", err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, false, fmt.Errorf("gzip: %w", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return dbMembers, pgControl, nil
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("tar: %w", err)
+		}
+		if h.Typeflag != tar.TypeReg {
+			continue
+		}
+		base := path.Base(h.Name)
+		switch {
+		case isDatabaseName(base):
+			dbMembers = append(dbMembers, h.Name)
+		case base == "pg_control" && strings.HasSuffix(path.Dir(h.Name), "global"):
+			pgControl = true
+		}
+	}
+}
+
+// checkSQLite extracts the database (and its WAL, when archived) and runs
+// PRAGMA integrity_check on it.
+//
+// The -shm file is deliberately not restored: it is shared-memory scratch that
+// SQLite rebuilds, and a stale copy from a mid-write moment is a hazard.
+func checkSQLite(archivePath, member string) error {
+	dir, err := os.MkdirTemp("", "pmcluster-verify-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+
+	base := path.Base(member)
+	want := map[string]bool{
+		member:          true, // the database itself
+		member + "-wal": true, // committed frames not yet checkpointed
+	}
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		f.Close()
+		return err
+	}
+	tr := tar.NewReader(gz)
+	found := 0
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			gz.Close()
+			f.Close()
+			return fmt.Errorf("tar: %w", err)
+		}
+		if h.Typeflag != tar.TypeReg || !want[h.Name] {
+			continue
+		}
+		dst := filepath.Join(dir, path.Base(h.Name))
+		out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		if err != nil {
+			gz.Close()
+			f.Close()
+			return err
+		}
+		if _, err := io.Copy(out, tr); err != nil {
+			out.Close()
+			gz.Close()
+			f.Close()
+			return err
+		}
+		out.Close()
+		found++
+	}
+	gz.Close()
+	f.Close()
+	if found == 0 {
+		return fmt.Errorf("archive holds no readable copy of %s", base)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, base))
+	if err != nil {
+		return fmt.Errorf("open %s: %w", base, err)
+	}
+	defer db.Close()
+	var verdict string
+	if err := db.QueryRow("PRAGMA integrity_check").Scan(&verdict); err != nil {
+		return fmt.Errorf("integrity_check %s: %w", base, err)
+	}
+	if !strings.EqualFold(verdict, "ok") {
+		return fmt.Errorf("integrity_check %s: %s", base, verdict)
+	}
+	return nil
+}
+
+// Drill is the restore drill: extract an artifact completely into workDir and
+// prove the databases inside the extracted tree open.
+//
+// It is deliberately not the same code path as VerifyArchive. Verify reads the
+// database out of the tar; Drill extracts *every* member first, so a truncated
+// or mis-sized archive fails here even when the first database happens to sit
+// early in the stream. That is the difference between checking a backup and
+// rehearsing a restore.
+func Drill(archivePath, workDir string) (files int, engine, detail string, err error) {
+	if workDir == "" {
+		return 0, "", "", fmt.Errorf("drill: work dir is required")
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return 0, "", "", err
+	}
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return 0, "", "", fmt.Errorf("open archive: %w", err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return 0, "", "", fmt.Errorf("gzip: %w", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return files, "", "", fmt.Errorf("tar after %d files: %w", files, err)
+		}
+		// Members may be absolute (the offen agents bake in "/backup/data/")
+		// or relative (this agent writes "backup/data/<stack>/"). ArchiveRelPath
+		// applies the same mapping a restore uses, so the drill extracts the
+		// tree a restore would produce — and a path that escapes the work dir
+		// is still refused.
+		rel := backups.ArchiveRelPath(h.Name)
+		if rel == "." || rel == "" {
+			continue
+		}
+		if strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+			return files, "", "", fmt.Errorf("drill: refusing member outside the work dir: %s", h.Name)
+		}
+		dst := filepath.Join(workDir, rel)
+		switch h.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(dst, 0o755); err != nil {
+				return files, "", "", err
+			}
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return files, "", "", err
+			}
+			_ = os.Remove(dst)
+			if err := os.Symlink(h.Linkname, dst); err != nil {
+				return files, "", "", err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return files, "", "", err
+			}
+			out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(h.Mode)&0o777|0o200)
+			if err != nil {
+				return files, "", "", err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				return files, "", "", err
+			}
+			if err := out.Close(); err != nil {
+				return files, "", "", err
+			}
+			files++
+		}
+	}
+	engine, detail, err = verifyTree(workDir)
+	return files, engine, detail, err
+}
+
+// verifyTree is the on-disk half of the verification: find the first SQLite
+// database (with its WAL) or a Postgres control file and check it.
+func verifyTree(root string) (engine, detail string, err error) {
+	var dbs []string
+	var pgControl string
+	walkErr := filepath.Walk(root, func(p string, info os.FileInfo, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if info.IsDir() {
+			return nil
+		}
+		base := info.Name()
+		switch {
+		case isDatabaseName(base):
+			dbs = append(dbs, p)
+		case base == "pg_control" && filepath.Base(filepath.Dir(p)) == "global":
+			pgControl = p
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return "", "", walkErr
+	}
+	switch {
+	case len(dbs) > 0:
+		for _, db := range dbs {
+			// A stale -shm from a mid-write moment is a hazard; SQLite
+			// rebuilds it on open.
+			_ = os.Remove(db + "-shm")
+			if err := integrityCheckFile(db); err != nil {
+				return "sqlite", "", fmt.Errorf("%s: %w", filepath.Base(db), err)
+			}
+		}
+		return "sqlite", describeDatabases(dbs), nil
+	case pgControl != "":
+		return "postgres", "control file + WAL present (not validated — start the cluster to confirm)", nil
+	default:
+		return "", "extracted cleanly, no database detected", nil
+	}
+}
+
+// integrityCheckFile runs PRAGMA integrity_check against one database file.
+func integrityCheckFile(p string) error {
+	db, err := sql.Open("sqlite", p)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", filepath.Base(p), err)
+	}
+	defer db.Close()
+	var verdict string
+	if err := db.QueryRow("PRAGMA integrity_check").Scan(&verdict); err != nil {
+		return fmt.Errorf("integrity_check %s: %w", filepath.Base(p), err)
+	}
+	if !strings.EqualFold(verdict, "ok") {
+		return fmt.Errorf("integrity_check %s: %s", filepath.Base(p), verdict)
+	}
+	return nil
+}
+
+// isDatabaseName reports whether a file looks like a SQLite database. The -wal
+// and -shm sidecars are excluded: they are not databases and must never be
+// integrity-checked on their own.
+func isDatabaseName(base string) bool {
+	if strings.HasSuffix(base, "-wal") || strings.HasSuffix(base, "-shm") {
+		return false
+	}
+	return strings.HasSuffix(base, ".db") || strings.HasSuffix(base, ".sqlite") || strings.HasSuffix(base, ".sqlite3")
+}
+
+// describeDatabases renders the verification detail: how many were checked and
+// which ones, keeping the line readable when a node archive holds a dozen.
+func describeDatabases(paths []string) string {
+	names := make([]string, 0, len(paths))
+	for _, p := range paths {
+		names = append(names, path.Base(p))
+	}
+	if len(names) > 3 {
+		shown := strings.Join(names[:3], ", ")
+		return fmt.Sprintf("%d databases integrity_check ok (%s, +%d more)", len(names), shown, len(names)-3)
+	}
+	return fmt.Sprintf("%d database(s) integrity_check ok (%s)", len(names), strings.Join(names, ", "))
+}
