@@ -133,7 +133,16 @@ func (l *Local) discoverLocal(ctx context.Context, offsite map[string]bool, offs
 		// that already produced a row. Record the offsite verdict rather than
 		// asserting success: the local copy is written first.
 		status, note := l.offsiteVerdict(e.Name(), offsite, offsiteErr)
-		if err := l.Store.RecordDiscoveredBackupStatus(ctx, e.Name(), archivePath, info.ModTime().Unix(), status, note); err != nil {
+		// A per-stack artifact names its app, so the console can list it under
+		// that stack; a whole-node archive leaves the stack empty, as before.
+		stack := ""
+		if a, ok := ParseArtifact(e.Name()); ok {
+			stack = a.Stack
+		}
+		if note == "" {
+			note = artifactVerdictNote(archivePath)
+		}
+		if err := l.Store.RecordDiscoveredBackupArtifact(ctx, e.Name(), archivePath, info.ModTime().Unix(), status, note, stack); err != nil {
 			continue
 		}
 	}

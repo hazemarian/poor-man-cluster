@@ -78,10 +78,26 @@ func (s *Store) RecordDiscoveredBackup(ctx context.Context, filename, archivePat
 // says nothing about the offsite leg. INSERT OR IGNORE keeps this idempotent —
 // an existing row is never downgraded or upgraded by a later pass.
 func (s *Store) RecordDiscoveredBackupStatus(ctx context.Context, filename, archivePath string, at int64, status, note string) error {
+	return s.RecordDiscoveredBackupArtifact(ctx, filename, archivePath, at, status, note, "")
+}
+
+// RecordDiscoveredBackupArtifact is RecordDiscoveredBackupStatus that also
+// attributes the row to a stack.
+//
+// A per-stack artifact (backup-<node>-<ts>-stack-<stack>.tar.gz) belongs to
+// exactly one app, so the console's per-stack backup list can show it. The
+// stack is derived from the filename, never guessed from the contents: an
+// archive whose name does not carry a stack stays a whole-node run, which is
+// what the offen agents produce.
+func (s *Store) RecordDiscoveredBackupArtifact(ctx context.Context, filename, archivePath string, at int64, status, note, stackName string) error {
+	var stack sql.NullString
+	if stackName != "" {
+		stack = sql.NullString{String: stackName, Valid: true}
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO backups (filename, status, archive_paths, error_message, started_at, finished_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		filename, status, archivePath, note, at, at,
+		`INSERT OR IGNORE INTO backups (filename, stack_name, status, archive_paths, error_message, started_at, finished_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		filename, stack, status, archivePath, note, at, at,
 	)
 	if err != nil {
 		return fmt.Errorf("record discovered backup %s: %w", filename, err)
