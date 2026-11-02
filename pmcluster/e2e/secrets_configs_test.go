@@ -259,7 +259,7 @@ services:
 		if code == 0 {
 			t.Fatalf("expected deploy to fail for an unmounted secret_path() ref; got exit 0:\n%s", combined)
 		}
-		if !strings.Contains(combined, "not mounted") || !strings.Contains(combined, secretName) {
+		if !strings.Contains(combined, "does not declare it") || !strings.Contains(combined, secretName) {
 			t.Errorf("expected 'not mounted' validation error naming %q; got:\n%s", secretName, combined)
 		}
 		t.Logf("validation correctly rejected unmounted secret_path() ref (exit %d)", code)

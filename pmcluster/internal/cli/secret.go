@@ -28,7 +28,7 @@ value can be verified without ever being revealed.
 
 DSL usage — env value injection:
   env:
-    ADMIN_PASS: secrets(app_secret)   # value = /run/secrets/app_secret
+    ADMIN_PASS: secret_path(app_secret)   # value = /run/secrets/app_secret
                                        # (also mounts the file when using
                                        #  the secrets: array in the service)
 
@@ -162,7 +162,7 @@ func runSecretCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create secret: %w", err)
 	}
 
-	// The DSL renders secrets(name) as external:true — the container mounts
+	// The DSL renders secret_path(name) as external:true — the container mounts
 	// a Docker SWARM secret, not the encrypted DB row. So the DB row alone is
 	// not enough: the same value must also exist as a swarm secret, otherwise
 	// the stack deploy fails with 'secret not found: <name>'. Mirror it into
@@ -183,10 +183,18 @@ func runSecretCreate(cmd *cobra.Command, args []string) error {
 
    sha256: %s
 
-Use it in a manifest:
+Use it in a manifest — mount it, then reference the path (or the value):
+
+   secrets: [%s]
+
    env:
-     %s_VALUE: secrets(%s)
-`, name, scope, extra, value, hash, strings.ToUpper(strings.ReplaceAll(name, "-", "_")), name)
+     %s_FILE: secret_path(%s)   # /run/secrets/%s — the safer form
+     %s: secret(%s)             # the decrypted value, visible in 'docker inspect'
+
+`, name, scope, extra, value, hash,
+		name,
+		strings.ToUpper(strings.ReplaceAll(name, "-", "_")), name, name,
+		strings.ToUpper(strings.ReplaceAll(name, "-", "_")), name)
 	return nil
 }
 
@@ -216,7 +224,7 @@ func swarmSecretMirrored(ctx context.Context, dc runtime.Client, name, value, ha
 }
 
 // mirrorSwarmSecret makes the given value available to Docker Swarm so
-// `docker stack deploy` can mount it (DSL secrets(name) renders
+// `docker stack deploy` can mount it (DSL secret_path(name) renders
 // external:true), using the content-addressed name translation derives from
 // the DB hash. Best-effort: warnings to stderr, never fails the command.
 func mirrorSwarmSecret(cmd *cobra.Command, name, value string, hash string) bool {
