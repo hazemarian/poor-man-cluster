@@ -3,6 +3,29 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.225 (2026-11-02)
+
+**The legacy `secrets()` spelling is gone too.**
+
+`v0.2.224` renamed it to `secret_path()` but kept the old plural parsing as a
+compatibility alias. No manifest in the fleet used it — the platform was the only
+place that still understood it — so the alias is removed and the language has
+exactly four tokens:
+
+| token | yields |
+|---|---|
+| `config(name)` / `config_path(name)` | content / location |
+| `secret(name)` / `secret_path(name)` | value / location |
+
+`secrets(x)` and `settings(x)` now fail validation as malformed references, with
+the four surviving tokens named in the error. That is deliberate: an unrecognised
+`x(y)` value would otherwise be written into the container environment verbatim —
+`DB_PASSWORD: secrets(db_pass)` would reach the app as that literal string and
+"work" until someone wondered why authentication failed.
+
+Verified across every deploy manifest on the workstation (18 files) and the app
+repos: no live manifest used the legacy spelling, so nothing needed migrating.
+
 ## v0.2.224 (2026-11-02)
 
 **The reference language loses a token and gains a clearer one.**

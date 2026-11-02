@@ -10,16 +10,7 @@ import (
 // secret(name) reference when it is the WHOLE value of an env entry
 // (`env: KEY: config(x)`). Unlike inlineRefRe it is anchored — it must not
 // match text that has extra content around the reference.
-var envRefRe = regexp.MustCompile(`^(config_path|config|secret_path|secrets|secret)\(([^)]+)\)$`)
-
-// secretPathKind and secretPathLegacyKind are the same reference. The plural
-// form is what the first cut shipped; it read like "the secrets" and returned a
-// path, which is how a manifest ended up handing an app a value where a path was
-// expected. `secret_path(name)` says what it does and matches config_path(name).
-const (
-	secretPathKind       = "secret_path"
-	secretPathLegacyKind = "secrets"
-)
+var envRefRe = regexp.MustCompile(`^(config_path|config|secret_path|secret)\(([^)]+)\)$`)
 
 // configPathRe matches a config_path(<name>) expression — the DSL syntax for
 // declaring a Docker config FILE mount (`configs: [config_path(cfg)]`).
@@ -39,11 +30,7 @@ func ParseEnvRef(v string) (EnvRef, bool) {
 	if len(sub) != 3 {
 		return EnvRef{}, false
 	}
-	kind := sub[1]
-	if kind == secretPathLegacyKind {
-		kind = secretPathKind
-	}
-	return EnvRef{Kind: kind, Name: strings.TrimSpace(sub[2])}, true
+	return EnvRef{Kind: sub[1], Name: strings.TrimSpace(sub[2])}, true
 }
 
 // MalformedEnvRef reports whether v starts like a reference but does not parse
@@ -54,6 +41,10 @@ func MalformedEnvRef(v string) bool {
 	// reference kind: a manifest that kept it would otherwise pass through as the
 	// literal string "settings(x)" in the container environment — a silent
 	// misconfiguration instead of a validation error.
+	// secrets( and settings( are deliberately listed even though neither is a
+	// reference kind any more: a manifest that still carries one would otherwise
+	// pass through as the literal string "secrets(x)" in the container
+	// environment — a silent misconfiguration instead of a validation error.
 	if !strings.HasPrefix(v, "config_path(") && !strings.HasPrefix(v, "config(") &&
 		!strings.HasPrefix(v, "secret_path(") && !strings.HasPrefix(v, "secrets(") &&
 		!strings.HasPrefix(v, "secret(") && !strings.HasPrefix(v, "settings(") {

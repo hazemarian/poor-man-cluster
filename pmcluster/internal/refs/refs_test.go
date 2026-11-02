@@ -92,16 +92,16 @@ func TestReplaceRefs_ResolverError(t *testing.T) {
 // right shapes.
 func TestParseEnvRef(t *testing.T) {
 	for v, want := range map[string]bool{
-		"config(my_conf)":  true,
-		"secrets(db_pass)": true,
-		"config( a )":      true,
-		"plain-value":      false,
-		"${ENV_VAR}":       false,
-		"config(":          false,
-		"config()":         false,
-		"prefix config(x)": false,
-		"config(x) suffix": false,
-		"secrets()":        false,
+		"config(my_conf)":      true,
+		"secret_path(db_pass)": true,
+		"config( a )":          true,
+		"plain-value":          false,
+		"${ENV_VAR}":           false,
+		"config(":              false,
+		"config()":             false,
+		"prefix config(x)":     false,
+		"config(x) suffix":     false,
+		"secrets()":            false,
 	} {
 		_, ok := ParseEnvRef(v)
 		if ok != want {
@@ -111,12 +111,12 @@ func TestParseEnvRef(t *testing.T) {
 }
 
 func TestMalformedEnvRef(t *testing.T) {
-	for _, v := range []string{"config(", "secrets(abc", "config(,", "config())", "secrets()} x"} {
+	for _, v := range []string{"config(", "secrets(abc", "config(,", "config())", "secrets()} x", "secrets(db_pass)", "settings(volume_root)"} {
 		if !MalformedEnvRef(v) {
 			t.Errorf("MalformedEnvRef(%q) = false, want true", v)
 		}
 	}
-	for _, v := range []string{"plain", "config(ok)", "secrets(ok)", "CONFIG(x)"} {
+	for _, v := range []string{"plain", "config(ok)", "secret_path(ok)", "CONFIG(x)"} {
 		if MalformedEnvRef(v) {
 			t.Errorf("MalformedEnvRef(%q) = true, want false", v)
 		}
@@ -228,19 +228,19 @@ func TestParseSettingsRefIsGone(t *testing.T) {
 	}
 }
 
-// The plural spelling is still accepted but normalised, so a manifest written
-// before the rename keeps working and any code branching on Kind sees one value.
-func TestParseSecretPathRefNormalisesLegacySpelling(t *testing.T) {
-	modern, ok := ParseEnvRef("secret_path(db_pass)")
-	if !ok || modern.Kind != "secret_path" || modern.Name != "db_pass" {
-		t.Fatalf("secret_path ref = %+v ok=%v", modern, ok)
+// The legacy plural spelling was removed in v0.2.225. It must not parse, and it
+// must be reported malformed so a manifest still carrying `secrets(x)` fails
+// validation instead of shipping that string into a container's environment.
+func TestParseLegacySecretsSpellingIsRejected(t *testing.T) {
+	if ref, ok := ParseEnvRef("secrets(db_pass)"); ok {
+		t.Fatalf("legacy secrets() still parses as %+v", ref)
 	}
-	legacy, ok := ParseEnvRef("secrets(db_pass)")
-	if !ok {
-		t.Fatal("legacy secrets() should still parse")
+	if !MalformedEnvRef("secrets(db_pass)") {
+		t.Error("secrets() should be reported as malformed, not passed through as a literal")
 	}
-	if legacy.Kind != modern.Kind || legacy.Name != modern.Name {
-		t.Errorf("legacy = %+v, want the same kind/name as %+v", legacy, modern)
+	ref, ok := ParseEnvRef("secret_path(db_pass)")
+	if !ok || ref.Kind != "secret_path" || ref.Name != "db_pass" {
+		t.Fatalf("secret_path ref = %+v ok=%v", ref, ok)
 	}
 }
 

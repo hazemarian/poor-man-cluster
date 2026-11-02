@@ -33,13 +33,13 @@ func svcWithEnv(env map[string]string) *dsl.Service {
 	return &dsl.Service{Image: "nginx", Env: env}
 }
 
-// TestTranslate_SecretsEnvRef verifies secrets(name) resolves to the mount
-// path. The secret is NOT auto-mounted — validation requires the operator
+// TestTranslate_SecretPathEnvRef verifies secret_path(name) resolves to the
+// mount path. The secret is NOT auto-mounted — validation requires the operator
 // to list it in the service secrets: array first.
-func TestTranslate_SecretsEnvRef(t *testing.T) {
+func TestTranslate_SecretPathEnvRef(t *testing.T) {
 	app := envRefApp()
 	app.Services["web"] = svcWithEnv(map[string]string{
-		"DB_PASSWORD": "secrets(db_pass)",
+		"DB_PASSWORD": "secret_path(db_pass)",
 		"PLAIN":       "hello",
 	})
 	app.Services["web"].Secrets = []string{"db_pass"}
@@ -71,7 +71,7 @@ func TestTranslate_SecretsEnvRef(t *testing.T) {
 // mounts — otherwise the app is handed /run/secrets/<x> for a file that is not
 // there. Both spellings are covered: ParseEnvRef normalises the legacy plural.
 func TestValidate_SecretPathEnvRefNotMounted(t *testing.T) {
-	for _, ref := range []string{"secret_path(db_pass)", "secrets(db_pass)"} {
+	for _, ref := range []string{"secret_path(db_pass)"} {
 		app := envRefApp()
 		app.Services["web"] = svcWithEnv(map[string]string{"DB_PASSWORD": ref})
 		app.Secrets = nil

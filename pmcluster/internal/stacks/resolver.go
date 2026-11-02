@@ -18,7 +18,7 @@ import (
 // config(x)/secret(x)/secrets(x)/settings(x)/config_path(x). Config files are
 // not env values — they are whole documents — so these are substituted inline,
 // anywhere in the text, unlike the anchored whole-value form used for env.
-var configRefRe = regexp.MustCompile(`\b(config_path|config|secret_path|secrets|secret)\(([^)]+)\)`)
+var configRefRe = regexp.MustCompile(`\b(config_path|config|secret_path|secret)\(([^)]+)\)`)
 
 // configExpandDepth bounds config → config reference chains so a cycle
 // (a.yaml → b.yaml → a.yaml) fails loudly instead of hanging the deploy.
@@ -103,7 +103,7 @@ func (r *StoreConfigResolver) expandConfigRefs(ctx context.Context, stack, conte
 			if err == nil {
 				resolved = nested
 			}
-		case "secret_path", "secrets":
+		case "secret_path":
 			resolved = refs.SecretMountPath(name)
 		case "secret":
 			resolved, err = r.ResolveSecretValue(ctx, stack, name)
