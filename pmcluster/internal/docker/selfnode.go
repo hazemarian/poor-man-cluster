@@ -21,6 +21,11 @@ type SelfNode struct {
 	// Role is "manager" or "worker", straight from the swarm node spec.
 	Role      string
 	IsManager bool
+	// SwarmActive is false on a node that is not part of a swarm at all. Such a
+	// node has no leader because it has no cluster yet — the CLI must work there
+	// (that is how a cluster is created), and the daemon already serves in this
+	// state as "standalone/local mode".
+	SwarmActive bool
 	// IsLeader is true only on the node that currently holds swarm leadership.
 	// A worker has no ManagerStatus at all, so this stays false there.
 	IsLeader bool
@@ -48,11 +53,20 @@ func InspectSelf(ctx context.Context) (SelfNode, error) {
 	if err != nil {
 		return SelfNode{}, fmt.Errorf("read local docker info: %w", err)
 	}
-	if sys.Swarm.LocalNodeState == "" || sys.Swarm.LocalNodeState == "inactive" {
-		return SelfNode{Name: sys.Name}, nil
+	if sys.Swarm.LocalNodeState != "active" {
+		// No swarm (or one still forming): there is no leader to defer to, so this
+		// is standalone/local mode. docker info still answers, which is how a fresh
+		// node can run init/cluster up at all.
+		return SelfNode{Name: sys.Name, Hostname: sys.Name}, nil
 	}
 
-	self := SelfNode{ID: sys.Swarm.NodeID, Name: sys.Name, Hostname: sys.Name, IsManager: sys.Swarm.ControlAvailable}
+	self := SelfNode{
+		ID:          sys.Swarm.NodeID,
+		Name:        sys.Name,
+		Hostname:    sys.Name,
+		SwarmActive: true,
+		IsManager:   sys.Swarm.ControlAvailable,
+	}
 	self.Role = "worker"
 	if self.IsManager {
 		self.Role = "manager"

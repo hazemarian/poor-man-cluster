@@ -121,7 +121,10 @@ func enforceScope(cmd *cobra.Command) error {
 			"Nothing has been read or changed. Run it on the leader, or use the remote CLI:\n  %s",
 			err, remoteHint(cmd, ""))
 	}
-	if self.IsLeader {
+	// Standalone/local mode: this node is not in a swarm, so there is no leader to
+	// defer to and nothing to be stale against. The daemon serves in this state
+	// too ("serving (standalone/local mode)"), and bootstrap depends on it.
+	if !self.SwarmActive || self.IsLeader {
 		return nil
 	}
 	return notLeader(cmd, self)

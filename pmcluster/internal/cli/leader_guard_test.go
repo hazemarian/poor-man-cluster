@@ -88,7 +88,7 @@ func TestScopeOf(t *testing.T) {
 func TestEnforceScope_RefusesOnNonLeader(t *testing.T) {
 	t.Setenv("PMCLUSTER_API_URL", "")
 	apiURL = ""
-	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-3-w", Role: "worker"}, nil)
+	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-3-w", Role: "worker", SwarmActive: true}, nil)
 
 	err := enforceScope(stackListCmd)
 	if err == nil {
@@ -105,7 +105,7 @@ func TestEnforceScope_RefusesOnNonLeader(t *testing.T) {
 // A manager follower names the leader so the operator knows where to run it.
 func TestEnforceScope_NamesTheLeader(t *testing.T) {
 	apiURL = ""
-	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-4-m", Role: "manager", IsManager: true, LeaderHostname: "nxt-sw-1-m"}, nil)
+	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-4-m", Role: "manager", SwarmActive: true, IsManager: true, LeaderHostname: "nxt-sw-1-m"}, nil)
 
 	err := enforceScope(stackListCmd)
 	if err == nil {
@@ -118,7 +118,7 @@ func TestEnforceScope_NamesTheLeader(t *testing.T) {
 
 func TestEnforceScope_LeaderIsAllowed(t *testing.T) {
 	apiURL = ""
-	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-1-m", Role: "manager", IsManager: true, IsLeader: true}, nil)
+	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-1-m", Role: "manager", SwarmActive: true, IsManager: true, IsLeader: true}, nil)
 
 	if err := enforceScope(stackListCmd); err != nil {
 		t.Errorf("the leader must be allowed: %v", err)
@@ -146,7 +146,7 @@ func TestEnforceScope_NodeAndBootstrapScopesSkipTheProbe(t *testing.T) {
 func TestEnforceScope_RemoteModeSkipsTheGuard(t *testing.T) {
 	apiURL = "https://pmcluster.example.com"
 	t.Cleanup(func() { apiURL = "" })
-	stubSelf(t, docker.SelfNode{Hostname: "laptop", Role: "worker"}, nil)
+	stubSelf(t, docker.SelfNode{Hostname: "laptop", Role: "worker", SwarmActive: true}, nil)
 
 	if err := enforceScope(stackListCmd); err != nil {
 		t.Errorf("remote mode must not be leader-gated: %v", err)
@@ -167,5 +167,33 @@ func TestEnforceScope_ProbeFailureIsActionable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--api-url") {
 		t.Errorf("the refusal should offer the remote path: %v", err)
+	}
+}
+
+// A node that is not in a swarm has no leader to defer to. This is how a cluster
+// is created in the first place: `cluster up` on a bare node, and the setup
+// wizard that `cluster update` falls back to when there is no data.
+func TestEnforceScope_StandaloneNodeIsNotGated(t *testing.T) {
+	apiURL = ""
+	stubSelf(t, docker.SelfNode{Name: "fresh-host", Hostname: "fresh-host"}, nil)
+
+	for _, cmd := range []*cobra.Command{stackListCmd, clusterUpdateCmd} {
+		if err := enforceScope(cmd); err != nil {
+			t.Errorf("%s must run on a node with no swarm: %v", cmd.Name(), err)
+		}
+	}
+}
+
+// Participation in a swarm without leadership is the only state that refuses.
+func TestEnforceScope_SwarmMemberWithoutLeadershipRefuses(t *testing.T) {
+	apiURL = ""
+	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-5-m", Role: "manager", SwarmActive: true, IsManager: true}, nil)
+
+	err := enforceScope(stackListCmd)
+	if err == nil {
+		t.Fatal("a swarm member that is not the leader must refuse cluster state")
+	}
+	if strings.Contains(err.Error(), "is a node,") {
+		t.Errorf("the refusal should name a real role: %v", err)
 	}
 }
