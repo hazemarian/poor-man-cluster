@@ -552,6 +552,11 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 			}
 			d.Services = append(d.Services, newServiceRow(s))
 		}
+		// A stack can deploy "successfully" and still have no containers: the
+		// swarm apply runs after the revision is recorded, so an unpullable image
+		// or a bad command shows up as a rejected task, not as a deploy error.
+		// Without this the page reads 0/1 and nothing else.
+		d.Services = c.attachTaskErrors(ctx, d.Services)
 	}
 	return d
 }

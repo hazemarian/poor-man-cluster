@@ -3,6 +3,34 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.222 (2026-11-02)
+
+**A service with no running replica now says why.**
+
+`adam-world-dev` deployed cleanly — revision recorded, workflow green, webhook
+`202` — and then every swarm task was rejected:
+
+```
+failed to resolve reference "ghcr.io/nextrum-sy/adam-world-dev:dev-v20261101-56ac0ae": not found
+```
+
+The stack page showed `0 / 1` and nothing else. The reason existed the whole time
+(`GET /api/services/{stack}/{service}/tasks` returns it) but only behind the
+per-service **Tasks** tab, which is not where anyone looks when the page gives
+them nothing to look for.
+
+The console now fetches task state for services that are running fewer replicas
+than desired — at most five lookups per page, and none when everything is
+converged — and renders the newest rejected/failed task error under the replicas
+cell on the services list and the stack page, in both the table and the stacked
+card. The full message is the tooltip; a running task always wins, so a service
+that has recovered stops showing a stale error.
+
+This is deliberately *not* `update_error`: that field is the swarm's reason for
+pausing an update, and it is empty when the deploy itself succeeded and the
+runtime then refused the task. The two were conflated, which is why a completely
+broken stack looked like a quiet one.
+
 ## v0.2.221 (2026-11-01)
 
 **A refused deploy now says why, and a new stack can get its secrets before it exists.**

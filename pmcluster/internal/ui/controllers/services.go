@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -89,6 +90,18 @@ type serviceRow struct {
 	Routable     bool   // belongs to a stack, so the per-service routes resolve
 	Node         string // io.pmcluster.node label: node this service is pinned to ("" when unconstrained)
 	RunningNode  string // node the running task is on ("" when none is running)
+	// TaskError is why the service has no running replica: the error from its
+	// newest rejected/failed swarm task, e.g. "failed to resolve reference
+	// ghcr.io/nextrum-sy/adam-world-dev:dev-v… not found".
+	//
+	// It is not the same thing as UpdateError, and that difference cost real time:
+	// a deploy can be accepted and recorded while every task is then rejected by
+	// the runtime. The stack page showed 0/1 with no reason, and the answer existed
+	// only behind the per-service Tasks tab.
+	TaskError string
+	// TaskErrorShort is TaskError clipped for the table cell; the full text stays
+	// in TaskError for the title tooltip.
+	TaskErrorShort string
 }
 
 // List renders the services table.
@@ -128,7 +141,61 @@ func (c Services) List(g *gin.Context) {
 	}
 	d.Count = int64(len(d.Services))
 	d.Stacks = int64(len(stacks))
+	d.Services = c.attachTaskErrors(ctx, d.Services)
+	d.Platform = c.attachTaskErrors(ctx, d.Platform)
 	c.Views.Fragment(g, "services", d)
+}
+
+// attachTaskErrors fills TaskError for the services that are not converged.
+//
+// It asks the daemon per failing service rather than for the whole stack, and it
+// stops after taskErrorLookups: a page that is healthy makes zero extra calls, and
+// a page where everything is down cannot turn into a burst of them.
+func (c *Controller) attachTaskErrors(ctx context.Context, rows []serviceRow) []serviceRow {
+	const taskErrorLookups = 5
+	lookups := 0
+	for i := range rows {
+		if lookups >= taskErrorLookups {
+			break
+		}
+		r := &rows[i]
+		if !r.Short || r.Complete || r.Stack == "" || r.ServiceName == "" {
+			continue
+		}
+		lookups++
+		tasks, err := c.API.ServiceTasks(ctx, r.Stack, r.ServiceName)
+		if err != nil {
+			continue
+		}
+		// Newest first: the task list is returned in swarm order, so take the most
+		// recent non-empty error and let a running task win outright.
+		for _, t := range tasks {
+			if t.State == "running" {
+				r.TaskError = ""
+				break
+			}
+			if msg := strings.TrimSpace(t.Error); msg != "" {
+				r.TaskError = msg
+				r.TaskErrorShort = clip(msg, 110)
+				break
+			}
+		}
+	}
+	return rows
+}
+
+// clip shortens a one-line message for a table cell, on a word boundary when one
+// is near the cut.
+func clip(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= max {
+		return s
+	}
+	cut := s[:max]
+	if i := strings.LastIndexByte(cut, ' '); i > max/2 {
+		cut = cut[:i]
+	}
+	return cut + "…"
 }
 
 // newServiceRow projects a pmapi.Service into the render-ready serviceRow used
@@ -204,6 +271,18 @@ type serviceMeta struct {
 	UpdateError  string
 	Node         string // node the service is pinned to ("" when unconstrained)
 	RunningNode  string // node the running task is on ("" when none is running)
+	// TaskError is why the service has no running replica: the error from its
+	// newest rejected/failed swarm task, e.g. "failed to resolve reference
+	// ghcr.io/nextrum-sy/adam-world-dev:dev-v… not found".
+	//
+	// It is not the same thing as UpdateError, and that difference cost real time:
+	// a deploy can be accepted and recorded while every task is then rejected by
+	// the runtime. The stack page showed 0/1 with no reason, and the answer existed
+	// only behind the per-service Tasks tab.
+	TaskError string
+	// TaskErrorShort is TaskError clipped for the table cell; the full text stays
+	// in TaskError for the title tooltip.
+	TaskErrorShort string
 }
 
 // completedRunOnce reports whether a service is a one-shot job that already
