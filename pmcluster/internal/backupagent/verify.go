@@ -56,12 +56,12 @@ func scanArchive(archivePath string) (dbMembers []string, pgControl bool, err er
 	if err != nil {
 		return nil, false, fmt.Errorf("open archive: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return nil, false, fmt.Errorf("gzip: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 	for {
 		h, err := tr.Next()
@@ -94,7 +94,7 @@ func checkSQLite(archivePath, member string) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	base := path.Base(member)
 	want := map[string]bool{
@@ -107,7 +107,7 @@ func checkSQLite(archivePath, member string) error {
 	}
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	tr := tar.NewReader(gz)
@@ -118,8 +118,8 @@ func checkSQLite(archivePath, member string) error {
 			break
 		}
 		if err != nil {
-			gz.Close()
-			f.Close()
+			_ = gz.Close()
+			_ = f.Close()
 			return fmt.Errorf("tar: %w", err)
 		}
 		if h.Typeflag != tar.TypeReg || !want[h.Name] {
@@ -128,21 +128,21 @@ func checkSQLite(archivePath, member string) error {
 		dst := filepath.Join(dir, path.Base(h.Name))
 		out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 		if err != nil {
-			gz.Close()
-			f.Close()
+			_ = gz.Close()
+			_ = f.Close()
 			return err
 		}
 		if _, err := io.Copy(out, tr); err != nil {
-			out.Close()
-			gz.Close()
-			f.Close()
+			_ = out.Close()
+			_ = gz.Close()
+			_ = f.Close()
 			return err
 		}
-		out.Close()
+		_ = out.Close()
 		found++
 	}
-	gz.Close()
-	f.Close()
+	_ = gz.Close()
+	_ = f.Close()
 	if found == 0 {
 		return fmt.Errorf("archive holds no readable copy of %s", base)
 	}
@@ -150,7 +150,7 @@ func checkSQLite(archivePath, member string) error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", base, err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var verdict string
 	if err := db.QueryRow("PRAGMA integrity_check").Scan(&verdict); err != nil {
 		return fmt.Errorf("integrity_check %s: %w", base, err)
@@ -180,12 +180,12 @@ func Drill(archivePath, workDir string) (files int, engine, detail string, err e
 	if err != nil {
 		return 0, "", "", fmt.Errorf("open archive: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return 0, "", "", fmt.Errorf("gzip: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 	for {
 		h, err := tr.Next()
@@ -230,7 +230,7 @@ func Drill(archivePath, workDir string) (files int, engine, detail string, err e
 				return files, "", "", err
 			}
 			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
+				_ = out.Close()
 				return files, "", "", err
 			}
 			if err := out.Close(); err != nil {
@@ -291,7 +291,7 @@ func integrityCheckFile(p string) error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", filepath.Base(p), err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var verdict string
 	if err := db.QueryRow("PRAGMA integrity_check").Scan(&verdict); err != nil {
 		return fmt.Errorf("integrity_check %s: %w", filepath.Base(p), err)

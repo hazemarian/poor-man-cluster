@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -263,7 +262,7 @@ func runBackupAgentDrill(cmd *cobra.Command, args []string) error {
 		if work, err = os.MkdirTemp("", "pmcluster-drill-"); err != nil {
 			return err
 		}
-		defer os.RemoveAll(work)
+		defer func() { _ = os.RemoveAll(work) }()
 	}
 	files, engine, detail, err := backupagent.Drill(archive, work)
 	out := cmd.OutOrStdout()
@@ -285,7 +284,3 @@ func webdavShipper(base string) func(context.Context, string) error {
 		return backups.PutWebDAV(ctx, base, archivePath)
 	}
 }
-
-// marshalPlan is used by tests and by anything that wants to write a plan by
-// hand.
-func marshalPlan(p backupagent.Plan) ([]byte, error) { return json.MarshalIndent(p, "", "  ") }
