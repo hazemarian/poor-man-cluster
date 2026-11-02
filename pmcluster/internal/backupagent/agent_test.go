@@ -547,3 +547,51 @@ func TestDrillNeutralisesPrefixedTraversal(t *testing.T) {
 		t.Fatal("member escaped into the parent directory")
 	}
 }
+
+// A snapshotter that can prove the volume root gets asked before anything is
+// frozen: a refusal must not leave a frozen filesystem behind.
+type verifyingSnap struct {
+	*fakeSnap
+	err   error
+	asked bool
+}
+
+func (v *verifyingSnap) Verify(context.Context, string) error { v.asked = true; return v.err }
+
+func TestRunVerifiesBeforeFreezing(t *testing.T) {
+	root, archive := t.TempDir(), t.TempDir()
+	seedStack(t, root, "app", true)
+	inner := &fakeSnap{kind: "lvm", usage: 1}
+	snap := &verifyingSnap{fakeSnap: inner, err: errFake}
+	a := newAgent(t, root, archive, snap)
+
+	res, err := a.Run(context.Background(), Plan{Node: a.Node, Stacks: []StackPlan{{Name: "app"}}})
+	if err == nil {
+		t.Fatal("Run succeeded on a node that failed verification")
+	}
+	if !snap.asked {
+		t.Fatal("Verify was never called")
+	}
+	for _, c := range inner.calls {
+		if c == "freeze" || c == "snapshot" {
+			t.Fatalf("froze or snapshotted despite a failed verification: %v", inner.calls)
+		}
+	}
+	if res.Error == "" {
+		t.Error("the refusal was not recorded in the result")
+	}
+	if entries, _ := os.ReadDir(archive); len(entries) != 0 {
+		t.Fatalf("wrote %d artifacts after a failed verification", len(entries))
+	}
+}
+
+func TestUnplannedDirsIgnoresLostAndFound(t *testing.T) {
+	root := t.TempDir()
+	seedStack(t, root, "app", false)
+	if err := os.MkdirAll(filepath.Join(root, "lost+found"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := UnplannedDirs(root, Plan{Stacks: []StackPlan{{Name: "app"}}}); len(got) != 0 {
+		t.Fatalf("UnplannedDirs = %v, want none (lost+found is a filesystem artefact)", got)
+	}
+}

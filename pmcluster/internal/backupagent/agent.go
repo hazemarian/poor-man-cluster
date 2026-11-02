@@ -123,6 +123,14 @@ func (r Result) Succeeded() bool {
 	return true
 }
 
+// Verifier is the optional pre-flight a snapshotter may implement. Run calls it
+// before freezing anything: a node that cannot prove its volume root is the
+// volume it is configured to snapshot must fail loudly, not archive the wrong
+// tree.
+type Verifier interface {
+	Verify(ctx context.Context, root string) error
+}
+
 // Snapshotter turns the live volume root into a tree nothing writes to.
 // Production is LVMSnapshotter; NoSnapshot exists for tests and --dry-run.
 type Snapshotter interface {
@@ -199,7 +207,10 @@ func UnplannedDirs(volumeRoot string, plan Plan) []string {
 	}
 	var out []string
 	for _, e := range entries {
-		if !e.IsDir() || planned[e.Name()] {
+		// lost+found exists on every freshly mkfs'd volume and belongs to no
+		// stack: warning about it on a brand-new node would train the operator
+		// to ignore the warning that matters.
+		if !e.IsDir() || planned[e.Name()] || e.Name() == "lost+found" {
 			continue
 		}
 		out = append(out, e.Name())
@@ -235,6 +246,14 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 		}
 		res.Ended = a.now().Unix()
 		return res, nil
+	}
+
+	if v, ok := a.Snapshot.(Verifier); ok {
+		if err := v.Verify(ctx, a.VolumeRoot); err != nil {
+			res.Error = err.Error()
+			res.Ended = a.now().Unix()
+			return res, fmt.Errorf("backup-agent: %w", err)
+		}
 	}
 
 	if err := os.MkdirAll(a.ArchiveDir, 0o755); err != nil {

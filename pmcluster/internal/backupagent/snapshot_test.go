@@ -180,3 +180,52 @@ func TestUsageWithoutAThinPoolIsUnknown(t *testing.T) {
 		t.Fatalf("pct = %v, want -1 (no thin pool, no guard)", pct)
 	}
 }
+
+// Verify is the guard that makes a misconfigured node fail closed. On a fresh
+// install the volume root is a plain directory on the root filesystem, so
+// there is nothing atomic to snapshot; the agent must refuse rather than tar a
+// live tree.
+func TestVerifyRejectsAVolumeRootThatIsNotTheConfiguredLV(t *testing.T) {
+	l := &LVMSnapshotter{VG: "vg0", LV: "data"}
+	l.Exec = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "findmnt":
+			return []byte("/dev/vda1\n"), nil // plain directory on the root fs
+		case "readlink":
+			return []byte(args[len(args)-1] + "\n"), nil
+		}
+		return nil, nil
+	}
+	err := l.Verify(context.Background(), "/var/stack/data")
+	if err == nil {
+		t.Fatal("Verify accepted a volume root mounted from the root filesystem")
+	}
+	if !strings.Contains(err.Error(), "not from /dev/vg0/data") {
+		t.Fatalf("error does not explain the mismatch: %v", err)
+	}
+}
+
+func TestVerifyAcceptsTheConfiguredLV(t *testing.T) {
+	for _, source := range []string{"/dev/mapper/vg0-data", "/dev/vg0/data"} {
+		l := &LVMSnapshotter{VG: "vg0", LV: "data"}
+		l.Exec = func(_ context.Context, name string, args ...string) ([]byte, error) {
+			switch name {
+			case "findmnt":
+				return []byte(source + "\n"), nil
+			case "readlink":
+				return []byte("/dev/dm-7\n"), nil
+			}
+			return nil, nil
+		}
+		if err := l.Verify(context.Background(), "/var/stack/data"); err != nil {
+			t.Fatalf("%s: Verify: %v", source, err)
+		}
+	}
+}
+
+func TestVerifyRequiresAVGAndLV(t *testing.T) {
+	l := &LVMSnapshotter{Exec: func(context.Context, string, ...string) ([]byte, error) { return nil, nil }}
+	if err := l.Verify(context.Background(), "/var/stack/data"); err == nil {
+		t.Fatal("Verify accepted an unconfigured snapshotter")
+	}
+}

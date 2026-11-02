@@ -55,6 +55,44 @@ func (l *LVMSnapshotter) exec(ctx context.Context, name string, args ...string) 
 // Kind implements Snapshotter.
 func (l *LVMSnapshotter) Kind() string { return "lvm" }
 
+// Verify proves the volume root is a mount of the LV this snapshotter is
+// configured to snapshot, BEFORE anything is frozen.
+//
+// It exists because the failure it prevents is silent. On a node where the
+// volume root is still a plain directory on the root filesystem — which is
+// exactly what a fresh install produces, since nothing in the platform
+// provisions storage — `lvcreate -s` would snapshot the wrong volume (or fail),
+// and any fallback that "just tars the directory" archives a tree the
+// applications are still writing to. A configured-but-unprovisioned node must
+// refuse to run, not run wrongly.
+func (l *LVMSnapshotter) Verify(ctx context.Context, root string) error {
+	if root == "" {
+		root = l.Root
+	}
+	if l.VG == "" || l.LV == "" {
+		return fmt.Errorf("verify: backup_vg/backup_lv are unset — this node has no snapshot-ready volume; provision one or leave the offen agent in place")
+	}
+	out, err := l.exec(ctx, "findmnt", "-no", "SOURCE", "--target", root)
+	if err != nil {
+		return fmt.Errorf("verify: findmnt %s: %w (%s)", root, err, strings.TrimSpace(string(out)))
+	}
+	source := strings.TrimSpace(string(out))
+	if source == "" {
+		return fmt.Errorf("verify: %s is not a mount point — it is a directory on the root filesystem, so there is nothing atomic to snapshot", root)
+	}
+	want := "/dev/" + l.VG + "/" + l.LV
+	got, gerr := l.exec(ctx, "readlink", "-f", source)
+	wantResolved, werr := l.exec(ctx, "readlink", "-f", want)
+	if gerr == nil && werr == nil && strings.TrimSpace(string(got)) == strings.TrimSpace(string(wantResolved)) {
+		return nil
+	}
+	// Fall back to the mapper name, which is what findmnt usually prints.
+	if strings.Contains(source, "mapper/"+l.VG+"-"+l.LV) || strings.Contains(source, want) {
+		return nil
+	}
+	return fmt.Errorf("verify: %s is mounted from %s, not from %s — refusing to snapshot a volume this node does not own", root, source, want)
+}
+
 // Freeze implements Snapshotter with `fsfreeze -f`.
 func (l *LVMSnapshotter) Freeze(ctx context.Context, root string) error {
 	if root == "" {
