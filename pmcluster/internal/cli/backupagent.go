@@ -176,9 +176,13 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	}
 	printAgentResult(out, res)
 	if unplanned := backupagent.UnplannedDirs(root, plan); len(unplanned) > 0 {
+		verb, aux := "are", "were"
+		if len(unplanned) == 1 {
+			verb, aux = "is", "was"
+		}
 		fmt.Fprintf(cmd.ErrOrStderr(),
-			"warning: %d director%s under %s are not in the plan and were NOT archived: %v\n",
-			len(unplanned), plural(len(unplanned), "y", "ies"), root, unplanned)
+			"warning: %d director%s under %s %s not in the plan and %s NOT archived: %v\n",
+			len(unplanned), plural(len(unplanned), "y", "ies"), root, verb, aux, unplanned)
 	}
 	if runErr != nil {
 		return runErr

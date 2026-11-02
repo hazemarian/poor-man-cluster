@@ -13,10 +13,10 @@ func TestRenderBackupServiceUnit(t *testing.T) {
 	for _, want := range []string{
 		"Type=oneshot",
 		"User=root",
-		"ExecStart=/usr/local/bin/pmcluster backup-agent run",
-		// The lock is the concurrency control: two triggers must never
-		// interleave two freezes on one filesystem.
-		"ExecStartPre=/usr/bin/flock -n /run/pmcluster-backup.lock",
+		// The lock wraps the run (held for its whole duration) and a skipped
+		// run is not an error — see the deployment test that caught the
+		// ExecStartPre version failing outright.
+		"ExecStart=/usr/bin/flock -n -E 0 /run/pmcluster-backup.lock /usr/local/bin/pmcluster backup-agent run",
 		"Environment=PMCLUSTER_VOLUME_ROOT=/var/stack/data",
 		"Environment=PMCLUSTER_BACKUP_DIR=/var/stack/backup",
 		"TimeoutStartSec=3600",
@@ -30,6 +30,12 @@ func TestRenderBackupServiceUnit(t *testing.T) {
 	// A restart policy on a oneshot would loop; assert we did not add one.
 	if strings.Contains(u, "Restart=") {
 		t.Errorf("oneshot unit must not carry Restart=\n%s", u)
+	}
+	// The lock must never move back into ExecStartPre: with no command flock
+	// fails, and with one it releases before the run starts — either way the
+	// unit stops serialising, which is the whole property.
+	if strings.Contains(u, "ExecStartPre=/usr/bin/flock") {
+		t.Errorf("flock must wrap ExecStart, not ExecStartPre\n%s", u)
 	}
 }
 

@@ -34,9 +34,10 @@ Environment=PMCLUSTER_BACKUP_DIR=/var/stack/backup
 Environment=PMCLUSTER_BACKUP_STATE=/var/lib/pmcluster-backup
 Environment=PMCLUSTER_BACKUP_VG=vg0
 Environment=PMCLUSTER_BACKUP_LV=data
-# One run per node, always: a second trigger exits immediately.
-ExecStartPre=/usr/bin/flock -n /run/pmcluster-backup.lock
-ExecStart=/usr/local/bin/pmcluster backup-agent run
+# One run per node, always: the lock is held for the whole run, so a second
+# trigger exits instead of interleaving two freezes. NOT ExecStartPre — that
+# releases the lock before ExecStart runs and serialises nothing.
+ExecStart=/usr/bin/flock -n -E 0 /run/pmcluster-backup.lock /usr/local/bin/pmcluster backup-agent run
 # The snapshot copy loses every contention fight with an application.
 Nice=10
 IOSchedulingClass=best-effort

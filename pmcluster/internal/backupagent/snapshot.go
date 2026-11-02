@@ -110,31 +110,43 @@ func (l *LVMSnapshotter) Snapshot(ctx context.Context, root string, at time.Time
 		_ = l.dropLV(ctx, name)
 		return "", "", fmt.Errorf("mkdir %s: %w (%s)", dir, err, strings.TrimSpace(string(out)))
 	}
-	if out, err := l.exec(ctx, "mount", "-o", "ro", "/dev/"+origin, dir); err != nil {
+	// Mount the SNAPSHOT, never the origin: "/dev/<vg>/<origin-lv>" is the live
+	// volume, and archiving that would tar a tree the applications are still
+	// writing to — the exact failure this design exists to prevent. The kernel
+	// only caught it here because the origin was mounted elsewhere.
+	if out, err := l.exec(ctx, "mount", "-o", "ro", "/dev/"+l.VG+"/"+name, dir); err != nil {
 		_ = l.dropLV(ctx, name)
-		return "", "", fmt.Errorf("mount snapshot: %w (%s)", err, strings.TrimSpace(string(out)))
+		return "", "", fmt.Errorf("mount snapshot %s: %w (%s)", name, err, strings.TrimSpace(string(out)))
 	}
 	return dir, name, nil
 }
 
-// Usage reports thin-pool data percent via lvs, or -1 when unavailable.
+// Usage reports the THIN POOL's data percentage, or -1 when the VG holds none.
+//
+// Only the pool's figure is a snapshot risk: when it fills, the kernel
+// invalidates every snapshot in it. A thin *volume*'s data_percent measures how
+// much of that volume's own size is used, so reading every line and taking the
+// worst (the first version did) aborts runs on a perfectly healthy pool just
+// because one data LV is 85% full.
 func (l *LVMSnapshotter) Usage(ctx context.Context) (float64, error) {
 	if l.VG == "" {
 		return -1, nil
 	}
-	out, err := l.exec(ctx, "lvs", "--noheadings", "--units", "b", "-o", "data_percent", l.VG)
+	out, err := l.exec(ctx, "lvs", "--noheadings", "-o", "lv_attr,data_percent", l.VG)
 	if err != nil {
 		return -1, err
 	}
-	s := strings.TrimSpace(string(out))
-	if s == "" {
-		return -1, nil
-	}
-	// lvs prints one line; a pool keeps a single data_percent, so the max is
-	// the pool's own figure.
 	worst := -1.0
-	for _, line := range strings.Split(s, "\n") {
-		f, err := strconv.ParseFloat(strings.TrimSpace(line), 64)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		// lv_attr starts with the LV type: 't' is a thin pool.
+		if !strings.HasPrefix(fields[0], "t") {
+			continue
+		}
+		f, err := strconv.ParseFloat(fields[1], 64)
 		if err != nil {
 			continue
 		}

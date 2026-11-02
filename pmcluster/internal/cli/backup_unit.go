@@ -25,9 +25,15 @@ import (
 
 // renderBackupServiceUnit builds the oneshot unit that performs one run.
 //
-// ExecStartPre's flock is the whole concurrency control: a second trigger
-// (the timer and an on-demand `backup create` landing together) exits
-// immediately instead of interleaving two freezes on the same filesystem.
+// The flock wraps ExecStart, so the lock is held for the whole run: a second
+// trigger (the timer and an on-demand `backup create` landing together) finds
+// the lock taken and exits instead of interleaving two freezes on the same
+// filesystem. -n makes it fail immediately rather than queue, and -E 0 makes a
+// skipped run exit 0 — nothing failed, a run was already in progress.
+//
+// It must NOT be an ExecStartPre: `flock -n <file>` with no command errors out
+// ("bad file descriptor"), and even with a command the lock would be released
+// before ExecStart ran, so the unit would not serialise anything at all.
 func renderBackupServiceUnit(exe, volumeRoot, archiveDir, stateDir string) string {
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster volume snapshot backup (one run)
@@ -47,8 +53,7 @@ User=root
 Environment=PMCLUSTER_VOLUME_ROOT=%s
 Environment=PMCLUSTER_BACKUP_DIR=%s
 Environment=PMCLUSTER_BACKUP_STATE=%s
-ExecStartPre=/usr/bin/flock -n /run/pmcluster-backup.lock
-ExecStart=%s backup-agent run
+ExecStart=/usr/bin/flock -n -E 0 /run/pmcluster-backup.lock %s backup-agent run
 # The snapshot copy is I/O heavy and must never win a fight with an app.
 Nice=10
 IOSchedulingClass=best-effort
