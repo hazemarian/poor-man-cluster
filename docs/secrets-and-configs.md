@@ -15,26 +15,40 @@ see the [whitepaper](whitepaper.md) and
 
 ## The four `env` reference kinds
 
-Any whole-value `env` entry can reference the stores:
-
-```yaml
-env:
-  ADMIN_PASS: secrets(app_secret)     # stored secret → mount path /run/secrets/app_secret
-                                      # (must also be listed in the service secrets: array)
-  ADMIN_ENABLED: config(app_config)   # stored config content
-  STORAGE_ROOT: settings(volume_root) # a live cluster setting's value
-  DB_URL: secret(db_url)              # a stored secret's VALUE, printed as-is
-```
+Any whole-value `env` entry can reference the stores. Two families, each with a
+value form and a location form — **singular is a value, `_path` is a location**:
 
 | Reference | Resolves to | Use when |
 |---|---|---|
-| `secrets(<name>)` | the **mount path** `/run/secrets/<name>` | the app reads a mounted secret file (the secret must also be in the `secrets:` array) |
-| `config(<name>)` | the stored config's **content** | embedding a config value in env |
-| `settings(<name>)` | a live **cluster setting**'s value | e.g. `volume_root` |
-| `secret(<name>)` | the secret's **value itself** | consumers that cannot read a mounted file (e.g. OpenObserve's root password env) |
+| `secret_path(<name>)` | the **mount path** `/run/secrets/<name>` | the app reads a mounted file (requires `secrets: [<name>]`) |
+| `secret(<name>)` | the secret's **value**, decrypted | the consumer only accepts the value via env and cannot read a file |
+| `config_path(<name>)` | the **path** the config is mounted at, `<config_mount_root>/<name>.yaml` | the app reads a mounted config file (requires `configs: [<name>]`) |
+| `config(<name>)` | the stored config's **content**, inline | a single-line value the app wants in the environment |
 
-Services can also mount configs as **files**:
-`configs: [- config_path(<name>)]` (default path `/etc/<name>`).
+```yaml
+services:
+  web:
+    secrets:
+      - app_secret                      # the mount — without it the path points at nothing
+    configs:
+      - config_path(app_config)
+    env:
+      APP_SECRET_FILE: secret_path(app_secret)   # /run/secrets/app_secret
+      APP_CONFIG_FILE: config_path(app_config)   # /etc/config/app_config.yaml
+      APP_CONFIG_JSON: config(app_config)        # content inline (single line only)
+      DB_URL: secret(db_url)                     # value, printed as-is
+```
+
+`settings(<name>)` and the older plural `secrets(<name>)` **no longer exist**:
+`settings()` was removed in v0.2.224 and `secrets()` in v0.2.225. A manifest that
+still carries either fails validation as a malformed reference — deliberately,
+because an unknown `x(y)` would otherwise be written into the container
+environment as a literal string and "work" until someone wondered why the value
+was wrong.
+
+Cluster settings (`domain`, `reconcile_interval`, `storage_nodes`, `backup_*`,
+`config_mount_root`) are the platform's own knobs and are not addressable from a
+manifest.
 
 ## Secrets
 

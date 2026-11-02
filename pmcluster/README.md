@@ -86,6 +86,51 @@ make build         # → ./bin/pmcluster
 | `completion` | Generate autocompletion scripts for the specified shell |
 | `version` | Binary version |
 
+### Where a command may run
+
+The leader is the only node whose view of cluster state is current, and the daemon
+already works that way: a non-leader manager runs as a **standby that does not
+serve**, polling until Swarm elects it leader. The CLI follows the same rule
+(`internal/cli/leader_guard.go`), and it decides *before* opening the store —
+opening it is what used to seed an empty database on every node and make an empty
+answer look plausible.
+
+| node | what the CLI does |
+|---|---|
+| leader | everything: reads and writes |
+| non-leader manager | refuses cluster-state commands, names the leader |
+| worker | refuses cluster-state commands, names the leader when it can (a worker cannot list nodes) |
+| any machine, `--api-url` set | the API answers; scope is the API's business |
+
+Cluster-state commands are refused, not answered from a stale store:
+
+```
+$ pmcluster stack list          # on nxt-sw-4-m
+error: nxt-sw-4-m is a manager, not the leader — cluster state is only current on the leader.
+
+  leader : nxt-sw-1-m
+
+This node holds no authoritative copy of stacks, secrets, configs, credentials,
+nodes or settings. The command is refused rather than answered from an empty or
+stale local store:
+
+  pmcluster stack list
+
+Run it on the leader, or use the remote CLI from your own machine:
+  pmcluster stack list --api-url https://pmcluster.<domain> --api-token <token>
+```
+
+**Node-local and bootstrap commands run anywhere**, because they describe the
+machine rather than the cluster, or exist to create/lifecycle it: `version`,
+`serve`, `init`, `setup`, `join`, `cluster up`, `cluster reset`.
+
+**Remote mode is for machines that are not cluster nodes** — a laptop or CI. It is
+the only path that makes HTTP calls, and it is always explicit (`--api-url` /
+`PMCLUSTER_API_URL`). The CLI never discovers the leader and never falls back to
+the API on its own. The edge console already proxies to whichever node holds
+leadership, which is why the edge is also the stable address to give a script: the
+leader's hostname changes with elections, the edge hostname does not.
+
 ## Layout
 
 ```
@@ -108,7 +153,7 @@ internal/
   stacks/              domain: deploy engine + read side (Deploy + Sync + Rollback + Undeploy)
   cluster/             domain: platform lifecycle (up/update/down/status) + credentials
     embeds/            bundled compose YAMLs (infra, edge, observability, backup, Traefik)
-  refs/                shared config()/secrets() reference language (RefResolver,
+  refs/                shared config()/config_path()/secret()/secret_path() reference language (RefResolver,
                        ReplaceRefs, ParseEnvRef, SecretMountPath)
   services/            domain: per-service operations (list, tasks, logs, restart,
                        exec) — replaces Portainer; local + remote adapters

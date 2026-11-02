@@ -101,7 +101,7 @@ services:
 | `restart_delay` | — | `restart_policy.delay` (e.g. `5s`) |
 | `constraints` | — | raw Swarm placement constraints appended after the `placement`/auto-pin rule (e.g. `- node.labels.pmcluster.storage == true`) |
 | `ports` | — | published ports: `target` (container, required), `published`, `mode` (`ingress`/`host`). All publishing is TCP (`protocol` was removed — no service needs UDP). For single-port services prefer `expose.external` |
-| `configs` | — | Swarm config file mounts: each entry is a `config_path(<name>)` expression — the config's content is mounted at the resolved path (default `/etc/<name>`) and the rendered compose references the **content-addressed** Docker config (`<name>_<sha256-first-8>`) automatically. Same syntax in app and platform DSL |
+| `configs` | — | Swarm config file mounts: each entry is `config_path(<name>)`. The platform resolves the path — `<config_mount_root>/<name>.yaml`, default `/etc/config/app.yaml`, `.yaml` appended only when the name has no extension — and the rendered compose references the **content-addressed** Docker config (`<name>_<sha8>`) automatically. Same syntax in app and platform DSL |
 | `extra_hosts` | — | `host:ip` entries added to `/etc/hosts` (e.g. `host.docker.internal:host-gateway`) |
 | `resources` | — | `reservations`/`limits` with `cpus` + `memory` (e.g. `128M`, `1G`) |
 | `user` | — | container user (`0:0`) |
@@ -114,72 +114,86 @@ services:
 
 ### Referencing DB-backed secrets & configs in `env`
 
-`env` values can reference entries from pmcluster's DB-backed **secrets** and
-**configs** stores (managed via `pmcluster secret` / `pmcluster config` or the
-operator console) instead of hard-coding values:
+`env` values may reference entries from pmcluster's DB-backed **secrets** and
+**configs** stores (managed with `pmcluster secret` / `pmcluster config` or the
+operator console) instead of hard-coding values. There are exactly four tokens —
+two families, each with a value form and a location form:
+
+| token | resolves to | stored in |
+|---|---|---|
+| `config(name)` | the config's **content** | `configs` |
+| `config_path(name)` | the file **path** the config is mounted at | `configs` |
+| `secret(name)` | the secret's **value**, decrypted | `secrets` |
+| `secret_path(name)` | the file **path** the secret is mounted at, `/run/secrets/<name>` | `secrets` |
+
+Singular is a **value**, `_path` is a **location**. When in doubt reach for the
+location form: a path in an env var is safe to print, safe to log, and safe to
+leak into `docker service inspect`, while a value is none of those.
 
 ```yaml
-env:
-  ADMIN_PASS: secrets(app_secret)      # mount path /run/secrets/app_secret
-  ADMIN_ENABLED: config(app_config)    # inject a stored config's content
-  STORAGE_ROOT: settings(volume_root)  # inject a cluster setting's value
-  ZO_ROOT_USER_PASSWORD: secret(oo_admin_password)  # inject a secret's VALUE as-is
-  DEBUG: "false"                       # plain values still work
+services:
+  web:
+    secrets:
+      - db_password                     # the mount, without which the path is fiction
+    configs:
+      - config_path(app_settings)
+    env:
+      DATABASE_URL_FILE: secret_path(db_password)   # /run/secrets/db_password
+      SETTINGS_FILE: config_path(app_settings)      # /etc/config/app_settings.yaml
+      ADMIN_ENABLED: config(app_settings)           # content inline (single line only)
+      ZO_ROOT_USER_PASSWORD: secret(oo_admin_password)  # value inline
+      DEBUG: "false"                                # plain values still work
 ```
 
-Behavior:
+Enforced rules, not advice:
 
-- `secrets(<name>)` — resolves to the secret's **mount path** `/run/secrets/<name>`
-  as the env value. The secret is **not** auto-mounted: you must list it in the
-  service's `secrets:` array too, or validation fails. Mounting the secret
-  explicitly puts its content at that path inside the container.
-- `config(<name>)` — resolves the DB config row and injects its content as the
-  env value.
-- `settings(<name>)` — resolves a cluster setting (e.g. `volume_root`) as the
-  env value. Resolved at render time against the cluster store.
-- `secret(<name>)` — resolves the secret's **value itself** as the env value
-  (as opposed to `secrets(<name>)`, which names a *file mount*). Use it when the
-  consumer only accepts the value via env and cannot read a mounted secret file
-  (e.g. OpenObserve's `ZO_ROOT_USER_PASSWORD`, which OpenObserve only reads from
-  env, never from a file). Resolved at render time via the resolver's
-  `SecretValueResolver` implementation; a service-scope secret belonging to a
-  different stack is refused, and a resolver that doesn't implement
-  `SecretValueResolver` rejects `secret(...)` at translate time.
-- The reference is resolved at deploy time against the DB — rotating the
-  secret/config and re-deploying picks up the new value.
-- Validation fails at parse time if the pattern is malformed
-  (`config(name` / `secrets()`), if a `secrets(name)` env ref is not mounted
-  in the service's `secrets:` array, and at deploy time if the named
-  secret/config doesn't exist (a `secret(name)`/`secrets(name)` ref to a
-  secret belonging to a *different* stack is refused too).
-- Multi-line content cannot be injected as an env value (it would break the
-  compose `environment` block) — use the `secrets:` array to file-mount such
-  values instead.
-- `secrets(name)` in `env` is convenient, but note that env vars are visible
-  via `docker service inspect`; for truly sensitive values prefer the
-  `secrets:` array (write-only file mount).
+- `secret_path(name)` requires `secrets: [name]`; `config_path(name)` requires
+  `configs: [name]`. Validation rejects the reference and names the array entry to
+  add — a path is never handed to an app for a file nobody mounted.
+- `secret(name)` resolves within the owning stack only. A service-scope secret
+  belonging to another stack is refused, with the owning stack named and the value
+  never echoed. Cluster-scope (stack-less) secrets are shared and always
+  resolvable.
+- Multi-line content cannot be injected as an env value — it would break the
+  compose `environment` block. Use the mount form.
+- An unrecognised `x(y)` value is **rejected as a malformed reference**, never
+  written through verbatim. Both `settings(x)` (removed in v0.2.224) and
+  `secrets(x)` (removed in v0.2.225) fail this way: without that check the string
+  `secrets(db_pass)` would land in the container environment and "work" as a
+  literal — a plausible, wrong value instead of an error.
+- Cluster settings are **not** addressable from a manifest. The `cluster_settings`
+  table (`domain`, `reconcile_interval`, `storage_nodes`, `backup_*`,
+  `config_mount_root`) belongs to the platform; manifests name resources.
 
-### Mounting configs as files (`config_path`)
+### Mounting configs and secrets as files
 
-Services can mount DB-backed configs (managed via `pmcluster config` / the
-operator console) as files inside the container using the `configs:` array —
-the same mechanism the platform stack uses for Traefik's dynamic config and the
-OTel collector's config:
+The platform owns the mount path; the manifest only names the resource.
 
 ```yaml
-configs:
-  - config_path(nginx_site)      # mounts at /etc/nginx_site (default path)
-  - config_path(prom_rules)      # custom target? configure via the resolver
+services:
+  web:
+    configs:
+      - config_path(app_settings)     # → /etc/config/app_settings.yaml
+    secrets:
+      - db_password                   # → /run/secrets/db_password
 ```
 
-- Each entry is a `config_path(<name>)` expression — the resolved config's
-  content is mounted at `<resolved path>`, default `/etc/<name>`.
-- The rendered compose references the **content-addressed** Docker config
-  (`<name>_<sha256-first-8>`) automatically, so rotating the config and
-  re-deploying picks up the new content (same hash-triggered redeploy
-  semantics as `env: config(...)`).
-- The same syntax is available in app manifests and in pmcluster's own platform
-  manifests — there is exactly one way to mount a config.
+- **Configs** land under the cluster setting `config_mount_root` (default
+  `/etc/config`), named `<name>` with `.yaml` appended when the name carries no
+  extension — `config_path(nginx.conf)` keeps its own name. Every service that
+  mounts at least one config gets `CONFIG_PATH=<mount root>` injected
+  automatically (the Kubernetes ConfigMap directory convention), overridable in
+  the manifest.
+- **Secrets** land at `/run/secrets/<name>`, root-owned, read-only, on a tmpfs.
+- The rendered compose references the **content-addressed** Docker object
+  (`<name>_<sha8>` for both configs and secrets), so editing a config never
+  mutates a running container: the next deploy swaps the object, and rotating a
+  secret changes the rendered hash so reconcile redeploys on its own.
+- Config content may itself reference `config()`, `config_path()`, `secret()` and
+  `secret_path()`; a cross-stack reference is refused naming the owner, and
+  config→config cycles are depth-limited.
+- Config file permissions are `0444` root-owned on a read-only mount; secret files
+  are `0400` root-owned. Neither is world-readable.
 
 ### `expose`
 

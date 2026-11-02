@@ -106,7 +106,7 @@ needs a renderer — whether a diagram is legible once GitHub fits it to its
 content column, which no amount of reading the markup will tell you.
 
 `internal/refs` is a leaf package (no domain port, no adapter). It provides
-the shared `config()/secrets()` reference language consumed by
+the shared `config()/config_path()/secret()/secret_path()` reference language consumed by
 `internal/manifest` (DSL env values) and `internal/cluster` (platform
 templates via `renderRefResolver`). Key exports: `RefResolver` interface
 (`ResolveConfig`, `ResolveSecret`), `ReplaceRefs` inline scanner,

@@ -3,12 +3,13 @@
 One file per decision that constrains the code, written when the decision is made
 rather than reconstructed later. An ADR is not a design doc: it records the choice,
 what was rejected and why, and what the choice costs — the design docs describe
-what the system is.
+what the system is. A record that has served its purpose (the code is the
+decision, the alternatives are no longer live) is deleted rather than kept as
+decoration; the design docs carry the behaviour.
 
 | # | Decision | Status | Date | Settles |
 |---|---|---|---|---|
 | [0001](0001-engine-seam.md) | Keep Swarm behind a translation layer | accepted (layers 1–2 landed) | 2026-10-27 | Placement is expressed in platform terms in `internal/engine`; engine syntax lives only in `internal/engine/<engine>` |
-| [0002](0002-cli-must-be-api-first.md) | The CLI is an API client with one local fallback | **proposed — not implemented** | 2026-10-29 | Every non-bootstrap command answers from the daemon API, so the answer does not depend on which node you are on |
 
 ## Status values
 
@@ -31,8 +32,7 @@ what the system is.
   and prefer naming a function or symbol over a line range — line numbers drift
   and nothing checks them.
 - Leave a **handoff checklist** when the decision is proposed and the work is not
-  yours to finish. 0002 exists because a session ended mid-investigation; the
-  checklist is what makes the next session cheap.
+  yours to finish; the checklist is what makes the next session cheap.
 
 Link and file-reference integrity in this directory is checked by
 `internal/docscheck` (`TestLocalMarkdownLinksResolve`,

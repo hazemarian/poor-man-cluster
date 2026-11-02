@@ -271,20 +271,21 @@ list-then-find; `Reveal` via `/secrets/{name}/value`), `NewWebhooks`,
 error ("internal cluster-update operation not available over the remote API").
 `cluster.Service`/`CredentialsService` have **no** remote adapters yet.
 
-### internal/refs — shared config()/secrets()/settings()/secret()/config_path() reference language
+### internal/refs — shared config()/config_path()/secret()/secret_path() reference language
 Leaf package used by BOTH `internal/manifest` (DSL env values) and
 `internal/cluster` (platform template refs). Provides:
 - `RefResolver` interface: `ResolveConfig`/`ResolveSecret`.
-- Optional capability interfaces: `SettingsResolver` (`settings(name)`),
-  `ConfigPathResolver` (`config_path(name)` — default mount path `/etc/<name>`),
-  `SecretValueResolver` (`secret(name)` — the secret's VALUE as-is, vs
-  `secrets(name)` which names a file mount).
+- Optional capability interface: `SecretValueResolver` (`secret(name)` — the
+  secret's VALUE as-is, vs `secret_path(name)` which names a file mount).
+  `settings()` and the plural `secrets()` no longer exist (v0.2.224/v0.2.225);
+  `MalformedEnvRef` still lists both prefixes so a manifest carrying one fails
+  validation instead of shipping the literal string.
 - `ReplaceRefs(ctx, text, r)` — inline scanner rewrites every reference kind
   in compose text (unknown kinds fail loud).
 - `ParseEnvRef(v)` — whole-value env parser (`env: KEY: config(x)`).
 - `MalformedEnvRef(v)` — detects typos (e.g. `config(foo` without closing paren).
 - `SecretMountPath(name)` — returns `/run/secrets/<name>`.
-- `FindAll(text)` — every `config(...)`/`secrets(...)` reference in a text,
+- `FindAll(text)` — every `config(...)`/`secret_path(...)` reference in a text,
   deduped per kind, in source order. Used by the usage graph: the DSL
   resolves `config()` into env CONTENT at translation time, so the true
   reference graph is read from the SOURCE DSL manifest via
@@ -487,7 +488,7 @@ Docker, Deployer` (+ `Stdout` where verbose).
   **content-addressed** names with GC of stale `<base>_*` objects.
   `renderRefResolver` implements the `refs.RefResolver` surface
   (+ `SecretValueResolver` etc.) so platform templates use the same
-  `config(name)`/`secrets(name)`/`settings(name)`/`secret(name)` syntax as
+  `config(name)`/`config_path(name)`/`secret(name)`/`secret_path(name)` syntax as
   the DSL. `loadObjectStore` builds the in-cluster SeaweedFS store config
   from the `seaweedfs_admin` credential; `pickStoreNode` pins it to a
   non-storage, non-platform node (or the leader with `backup_store_on=leader`).
@@ -521,11 +522,12 @@ user deploys by `stacks.Deploy`) → `Interpolate`
 labels, cors middleware, healthchecks, restart/update policies, storage-pin
 constraints, standard + `io.pmcluster.*` labels; escapes literal `$` as `$$`
 in every user-derived value). `env` values may reference DB-backed values:
-`config(<name>)` (injects content), `secrets(<name>)` (resolves to
-`/run/secrets/<name>` — requires the secret to be in the service's `secrets:`
-array), `settings(<name>)` (a live cluster setting) and `secret(<name>)`
-(the value itself). `configs:` entries are `config_path(<name>)` file mounts
-(default path `/etc/<name>`). Reference resolution goes through
+`config(<name>)` (injects content), `config_path(<name>)` (the path the config
+is mounted at — `<config_mount_root>/<name>.yaml`, default `/etc/config`),
+`secret(<name>)` (the value itself) and `secret_path(<name>)` (resolves to
+`/run/secrets/<name>`, and requires the secret to be in the service's `secrets:`
+array). `configs:`/`secrets:` entries are mounts; a service with at least one
+config also gets `CONFIG_PATH` injected unless it sets one. Reference resolution goes through
 `internal/refs` (shared package). `BuildIR` takes an `EnvResolver` (the
 stacks engine wires a `StoreConfigResolver` from
 `internal/stacks/resolver.go`, which implements all the resolver
@@ -787,8 +789,8 @@ with the binary.
 DSL manifest → `pmcluster deploy m.yaml` OR `POST /api/stacks` OR webhook
 (HMAC-signed CI). All three hit `stacks.Service.Deploy` (API/webhook via
 `DeployAsync` → 202, swarm apply in the background). Pipeline:
-Parse → Interpolate → Validate → BuildIR (resolves config()/secrets()/
-settings()/secret() refs from the swarm-first resolver) → resolve placements
+Parse → Interpolate → Validate → BuildIR (resolves config()/config_path()/
+secret()/secret_path() refs from the swarm-first resolver) → resolve placements
 → renderStamped (hash → `io.pmcluster.rendered_hash` label) → RecordDeploy
 (revision, hash EMPTY) → ensure volume dirs → applyToSwarm (ordered
 depends_on levels; drift-prune once) → stamp the rendered hash on success.
@@ -860,7 +862,7 @@ AES-GCM encrypted, sha256 hash displayed) and
 `pmcluster config create|list|get|edit|history|rollback|delete` (DB-backed
 plain text, version history + rollback). Both `create` commands take
 `--scope` and `--stack`. Referenced from the DSL env via
-`config(name)` / `secrets(name)` / `settings(name)` / `secret(name)`; mounted
+`config(name)` / `config_path(name)` / `secret(name)` / `secret_path(name)`; mounted
 as files via `configs: [config_path(name)]`. **Swarm-first,
 content-addressed**: every write mirrors a `<name>_<sha8>` swarm object (the
 DB is the index and holds the value; `cluster update` rebuilds missing
@@ -893,7 +895,7 @@ auto-ban → forward to daemon. The console UI is served by the same process.
 | Change cert flow | `internal/certs/` (port + `local.go` wrapping `internal/cluster/sitecert.go`) |
 | Change auth model | `internal/auth/`, `internal/store/users.go`, token minting in `internal/apikeys/local.go` |
 | Change console auth | `internal/ui/middleware/session.go` (Require/RequireRole) + `traefik-dynamic.yml` + embeds conditionals |
-| Add a config()/secrets() reference target | `internal/refs/refs.go` (RefResolver), `internal/cluster/templates.go` (configNameAliases / secretNameAliases maps) |
+| Add a config()/secret_path() reference target | `internal/refs/refs.go` (RefResolver), `internal/cluster/templates.go` (configNameAliases / secretNameAliases maps) |
 
 ---
 

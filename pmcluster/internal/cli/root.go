@@ -75,6 +75,10 @@ func init() {
 		apiToken = v
 	}
 
+	// The scope guard refuses cluster-state commands on a node that is not the
+	// leader, before any command body can open the store (see leader_guard.go).
+	withScopeGuard()
+
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(serveCmd)

@@ -3,6 +3,54 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.226 (2026-11-02)
+
+**The CLI stops answering cluster questions on nodes that do not have the answer.**
+
+The leader is the only node whose view of cluster state is current, and the daemon
+already worked that way: a non-leader manager runs as a standby that does not
+serve. The CLI was the exception — it opened the local store on any node and
+answered from it. On `nxt-sw-3-w` that produced:
+
+```
+$ pmcluster stack list
+(no stacks yet — use `pmcluster deploy <manifest.yaml>`)
+```
+
+while ten stacks were running, because opening the store seeds an empty database
+and an empty database answers confidently. The same node claimed there were no
+secrets, and `credentials list` told the operator to run `cluster up` on a cluster
+that was up.
+
+Every top-level command now declares a scope (`internal/cli/leader_guard.go`) and
+a guard runs before any command body, so a refusal happens **before** the store is
+opened:
+
+| scope | commands | where it runs |
+|---|---|---|
+| leader | stacks, secrets, configs, credentials, nodes, settings, telemetry, TLS, registry, webhooks, users, backups, usage, logs, services | leader only |
+| node | `version`, `serve` | any node — they describe the machine |
+| bootstrap | `init`, `setup`, `join`, `cluster up`, `cluster reset` | any node — they create or repair the cluster |
+
+A refusal names the node, its role, and the leader, and offers both ways out:
+run it on the leader, or use the remote CLI from your own machine. Remote mode
+(`--api-url` / `PMCLUSTER_API_URL`) is unchanged and remains the only path that
+makes HTTP calls — the CLI never discovers the leader and never falls back to the
+API by itself. A test asserts every registered top-level command has a scope, so a
+new command cannot silently inherit cluster-state answers.
+
+Leadership detection uses `docker info` plus a node inspect by ID: `docker node
+inspect self` is manager-only, so the SDK call cannot use `"self"`, and a failed
+lookup fails loud rather than reporting the leader as a follower.
+
+**Documentation.** `docs/dsl.md`, `docs/secrets-and-configs.md`,
+`pmcluster/README.md`, `pmcluster/internal/ARCHITECTURE.md` and `agent.md` now
+describe the four-token reference language, the platform-owned mount paths, and
+the CLI node-role contract. ADR 0002 (CLI must be API-first) is deleted: its
+problem statement was right, its recommended remedy — route every command through
+the local daemon API — contradicted the daemon's own standby semantics, and the
+behaviour it described now lives in the README and the code.
+
 ## v0.2.225 (2026-11-02)
 
 **The legacy `secrets()` spelling is gone too.**
