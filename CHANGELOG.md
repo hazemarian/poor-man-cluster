@@ -3,6 +3,31 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.227 (2026-11-02)
+
+**Fixes for v0.2.226, all found by CI rather than by reading the diff.**
+
+- **A node that is not in a swarm is not leader-gated.** The guard conflated "not
+  the leader" with "not in a cluster", so on a bare node it refused cluster-state
+  commands with *"this node is a node, not the leader"* — on the one node you
+  bootstrap from. `docker info` reports no leadership because there is no cluster
+  yet, and the daemon already serves in that state as *standalone/local mode*. The
+  scope probe now reports `SwarmActive` separately, and only membership in a swarm
+  without leadership refuses. (Caught by `TestSetupWizardFallback` — `cluster
+  update` with no data must fall back to the wizard — and `TestSmoke`.)
+- **`secret create` teaches the current syntax.** It told the operator to write
+  `secrets(<name>)`, which no longer exists, and showed nothing about the mount. It
+  now prints the `secrets: [<name>]` line, `secret_path(<name>)` as the recommended
+  form, and `secret(<name>)` with the warning that the value is visible in
+  `docker inspect`.
+- **Real-swarm e2e fixtures migrated to `secret_path()`**, and its assertion follows
+  the validator's actual wording. Two subtests had been failing for the wrong
+  reason since v0.2.225: the deploy that should succeed was rejected as a malformed
+  reference, and the one that should fail failed on the old spelling.
+
+Console strings (English and Arabic) that named the removed tokens are corrected
+too — the operator-facing copy said `config(name)` / `secrets(name)`.
+
 ## v0.2.226 (2026-11-02)
 
 **The CLI stops answering cluster questions on nodes that do not have the answer.**
