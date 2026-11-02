@@ -178,16 +178,80 @@ func (s *Service) configExternalName(ctx context.Context, name string) string {
 	return store.SwarmConfigName(name, row.Hash)
 }
 
+// prepareConfigObjects materialises every config a stack mounts, with its
+// config()/secret()/secrets()/settings()/config_path() references EXPANDED, and
+// returns logical-name → swarm-name.
+//
+// Two reasons this is not done at config-write time:
+//   - a config file may embed a secret ("password: secret(db_password)"); writing
+//     the expanded text into the row would persist plaintext next to the
+//     ciphertext it came from, readable by anyone who can list configs;
+//   - the swarm object's name is derived from the content hash, so deriving it
+//     from the EXPANDED content means rotating a referenced secret changes the
+//     name, which changes the rendered compose, which the reconcile drift check
+//     turns into a redeploy. A name derived from the un-expanded row would keep
+//     serving the old secret until somebody deployed by hand.
+func (s *Service) prepareConfigObjects(ctx context.Context, stack string, ir *manifest.IR) (map[string]string, error) {
+	names := map[string]string{}
+	if ir == nil || s.Store == nil {
+		return names, nil
+	}
+	resolver, _ := s.Resolver.(interface {
+		ResolveConfig(ctx context.Context, stack, name string) (string, error)
+	})
+	for _, svc := range ir.Services {
+		for _, c := range svc.Configs {
+			if _, done := names[c.Source]; done {
+				continue
+			}
+			if resolver == nil {
+				names[c.Source] = s.configExternalName(ctx, c.Source)
+				continue
+			}
+			content, err := resolver.ResolveConfig(ctx, stack, c.Source)
+			if err != nil {
+				return nil, fmt.Errorf("config %s: %w", c.Source, err)
+			}
+			swarm := store.SwarmConfigName(c.Source, store.ConfigHash(content))
+			if s.Docker != nil {
+				if _, ierr := s.Docker.ConfigInspect(ctx, swarm); ierr != nil {
+					if cerr := s.Docker.ConfigCreate(ctx, runtime.ConfigSpec{
+						Name: swarm,
+						Data: []byte(content),
+						Labels: map[string]string{
+							"io.pmcluster.managed": "true",
+							"pmcluster.base":       c.Source,
+						},
+					}); cerr != nil {
+						return nil, fmt.Errorf("materialise config %s: %w", c.Source, cerr)
+					}
+				}
+			}
+			names[c.Source] = swarm
+		}
+	}
+	return names, nil
+}
+
 // mkWriter builds a ComposeWriter wired to this Service's render inputs.
 // extra labels (the rendered-hash label — see runtime.RenderedHashLabel) are
 // stamped on every service's deploy labels after the standard/platform labels.
-func (s *Service) mkWriter(extra map[string]string) *manifest.ComposeWriter {
+func (s *Service) mkWriter(ctx context.Context, prepared map[string]string, extra map[string]string) *manifest.ComposeWriter {
+	configName := func(ctx context.Context, name string) string {
+		// A prepared entry is a config materialised with its references expanded.
+		// The fallback keeps a config that was never walked (should not happen)
+		// mountable rather than silently dropping the mount.
+		if swarm, ok := prepared[name]; ok {
+			return swarm
+		}
+		return s.configExternalName(ctx, name)
+	}
 	return &manifest.ComposeWriter{
 		VolumeRoot:   s.VolumeRoot,
 		CertResolver: s.CertResolver,
 		PinNode:      s.PinNode,
 		SecretNames:  s.secretExternalName,
-		ConfigNames:  s.configExternalName,
+		ConfigNames:  configName,
 		ExtraLabels:  extra,
 	}
 }
@@ -199,7 +263,13 @@ func (s *Service) mkWriter(extra map[string]string) *manifest.ComposeWriter {
 // label so drift detection can compare the live Swarm's labels against a
 // fresh render (k8s-style: every service carries its content hash).
 func (s *Service) renderStamped(ctx context.Context, ir *manifest.IR) ([]byte, error) {
-	return manifest.RenderStamped(ctx, ir, s.mkWriter, stackdrift.ContentHash)
+	prepared, err := s.prepareConfigObjects(ctx, ir.Name, ir)
+	if err != nil {
+		return nil, err
+	}
+	return manifest.RenderStamped(ctx, ir, func(extra map[string]string) *manifest.ComposeWriter {
+		return s.mkWriter(ctx, prepared, extra)
+	}, stackdrift.ContentHash)
 }
 
 // DeployAsync validates and records the revision synchronously, then applies
@@ -560,11 +630,15 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 		// then stamp that SAME hash on every per-level subset. A per-subset
 		// hash would never match the full-stack render, so the drift check
 		// would redeploy every single pass (an infinite redeploy loop).
-		plain, err := s.mkWriter(nil).Write(ctx, ir)
+		prepared, perr := s.prepareConfigObjects(ctx, app.Name, ir)
+		if perr != nil {
+			return perr
+		}
+		plain, err := s.mkWriter(ctx, prepared, nil).Write(ctx, ir)
 		if err != nil {
 			return fmt.Errorf("render full stack for rendered hash: %w", err)
 		}
-		writer := s.mkWriter(map[string]string{runtime.RenderedHashLabel: stackdrift.ContentHash(plain)})
+		writer := s.mkWriter(ctx, prepared, map[string]string{runtime.RenderedHashLabel: stackdrift.ContentHash(plain)})
 		for i, level := range levels {
 			levelYAML, err := writer.Write(ctx, ir.Subset(level))
 			if err != nil {

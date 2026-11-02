@@ -246,3 +246,103 @@ func TestStoreConfigResolver_ResolveSecretValue(t *testing.T) {
 		}
 	})
 }
+
+// A config file may reference a secret in its content ("password: secret(x)").
+// The substitution happens at RENDER time: the row keeps the reference, only the
+// materialised content carries the plaintext.
+func TestConfigContentExpandsSecretReferences(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	c, err := credentials.Open(filepath.Join(t.TempDir(), ".encryption_key"))
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+	ct, err := c.Encrypt([]byte("hunter2"))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if _, err := s.CreateSecret(ctx, "service", "demo", "db_pass", ct, store.SecretHash("hunter2")); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+	if _, err := s.CreateConfig(ctx, "service", "demo", "db_host", "env", "postgres", "v0"); err != nil {
+		t.Fatalf("CreateConfig: %v", err)
+	}
+	body := "db:\n  user: demo\n  password: secret(db_pass)\n  host: config(db_host)\n"
+	if _, err := s.CreateConfig(ctx, "service", "demo", "app_config", "file", body, "v0"); err != nil {
+		t.Fatalf("CreateConfig: %v", err)
+	}
+
+	r := &StoreConfigResolver{Store: s, Cipher: c}
+	got, err := r.ResolveConfig(ctx, "demo", "app_config")
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	if !strings.Contains(got, "password: hunter2") {
+		t.Errorf("secret() not expanded:\n%s", got)
+	}
+	if !strings.Contains(got, "host: postgres") {
+		t.Errorf("config() not expanded:\n%s", got)
+	}
+
+	// The stored row must still hold the reference — no plaintext at rest.
+	stored, err := s.Config(ctx, "app_config")
+	if err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	if strings.Contains(stored.Content, "hunter2") {
+		t.Errorf("secret plaintext was persisted into the config row:\n%s", stored.Content)
+	}
+	if !strings.Contains(stored.Content, "secret(db_pass)") {
+		t.Errorf("stored row lost the reference: %s", stored.Content)
+	}
+}
+
+// The expansion must not become a side channel: a config belonging to stack A
+// that references a secret or a config of stack B is refused, exactly like an
+// env reference would be.
+func TestConfigContentCannotReachAnotherStacksSecret(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	c, err := credentials.Open(filepath.Join(t.TempDir(), ".encryption_key"))
+	if err != nil {
+		t.Fatalf("cipher: %v", err)
+	}
+	ct, _ := c.Encrypt([]byte("other-app-password"))
+	if _, err := s.CreateSecret(ctx, "service", "otherapp", "their_pass", ct, store.SecretHash("other-app-password")); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+	if _, err := s.CreateConfig(ctx, "service", "demo", "leaky", "file", "password: secret(their_pass)\n", "v0"); err != nil {
+		t.Fatalf("CreateConfig: %v", err)
+	}
+
+	r := &StoreConfigResolver{Store: s, Cipher: c}
+	_, err = r.ResolveConfig(ctx, "demo", "leaky")
+	if err == nil {
+		t.Fatal("a config resolved another stack's secret")
+	}
+	if !strings.Contains(err.Error(), `belongs to stack "otherapp"`) {
+		t.Errorf("error should name the owning stack: %v", err)
+	}
+	if strings.Contains(err.Error(), "other-app-password") {
+		t.Errorf("the refusal leaked the secret value: %v", err)
+	}
+}
+
+func TestConfigReferenceCycleFails(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	if _, err := s.CreateConfig(ctx, "service", "demo", "a", "file", "x: config(b)\n", "v0"); err != nil {
+		t.Fatalf("CreateConfig a: %v", err)
+	}
+	if _, err := s.CreateConfig(ctx, "service", "demo", "b", "file", "y: config(a)\n", "v0"); err != nil {
+		t.Fatalf("CreateConfig b: %v", err)
+	}
+	r := &StoreConfigResolver{Store: s}
+	_, err := r.ResolveConfig(ctx, "demo", "a")
+	if err == nil {
+		t.Fatal("expected a cycle error")
+	}
+	if !strings.Contains(err.Error(), "too deep") {
+		t.Errorf("error should mention the chain depth: %v", err)
+	}
+}

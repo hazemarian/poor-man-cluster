@@ -94,7 +94,7 @@ func TestDeploy_StampsRenderedHashOnEveryService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildIR: %v", err)
 	}
-	plain, err := svc.mkWriter(nil).Write(ctx, built)
+	plain, err := svc.mkWriter(context.Background(), nil, nil).Write(ctx, built)
 	if err != nil {
 		t.Fatalf("label-free render: %v", err)
 	}

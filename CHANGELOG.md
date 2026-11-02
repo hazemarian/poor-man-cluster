@@ -3,6 +3,57 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.223 (2026-11-02)
+
+**Config files get one platform-owned location, a directory the app discovers, and
+secrets resolved inside them.**
+
+Until now a config mounted at `/etc/<name>` — a path the resolver chose and no
+manifest could predict — so every stack restated it in `env`
+(`PLUGINS_CONFIG_PATH: "/etc/test_lms_plugins"`). Two sources for one fact, and
+the second one silently points at nothing the day the mount moves.
+
+### The platform owns the path
+
+Every app config now mounts under one directory, `/etc/config/<name>.yaml`
+(`.yaml` only when the name carries no extension of its own). The mount location
+is a platform decision — overridable per cluster with the `config_mount_root`
+setting — and never appears in a manifest.
+
+### A service is told the directory, automatically
+
+A service that declares at least one `configs:` entry is handed
+`CONFIG_PATH=/etc/config` by the translator. The app reads one variable and lists
+the directory — the Kubernetes ConfigMap shape — instead of being told each
+file's path. A service with no configs gets no variable, and a manifest that sets
+`CONFIG_PATH` itself always wins.
+
+`env: VAR: config_path(<name>)` is also available when a single explicit path is
+needed: it resolves through the same call that produces the mount target, so the
+two cannot disagree.
+
+### Config content may reference secrets
+
+A config file is a whole document, so `config(x)`, `secret(x)`, `secrets(x)`,
+`settings(x)` and `config_path(x)` are substituted inline anywhere in it:
+
+```yaml
+db:
+  user: demo
+  password: secret(db_password)     # resolved at render time
+```
+
+Substitution happens when the config is materialised for a deploy — the row keeps
+the reference, so no secret plaintext is ever stored in a config row next to the
+ciphertext it came from. The swarm object's name is derived from the **expanded**
+content, which means rotating a referenced secret changes the name, changes the
+rendered compose, and the reconcile drift check redeploys on its own.
+
+Resolution stays stack-scoped: a config belonging to stack A that references a
+secret or config of stack B is refused, with the owning stack named and the value
+never echoed. Config → config cycles stop at a depth limit instead of hanging the
+deploy.
+
 ## v0.2.222 (2026-11-02)
 
 **A service with no running replica now says why.**

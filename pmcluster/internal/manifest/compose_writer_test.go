@@ -792,8 +792,10 @@ func TestTranslate_ConfigMounts(t *testing.T) {
 		t.Errorf("rendered compose should declare an external config:\n%s", s)
 	}
 	mounts := cf.Services["api"].Configs
-	if len(mounts) != 1 || mounts[0].Source != "pmcluster_traefik_dynamic" || mounts[0].Target != "/etc/pmcluster_traefik_dynamic" {
-		t.Errorf("service config mounts = %+v, want source + default target /etc/<name>", mounts)
+	// The mount location is the platform's decision: one directory, with the
+	// default extension applied to a name that has none.
+	if len(mounts) != 1 || mounts[0].Source != "pmcluster_traefik_dynamic" || mounts[0].Target != "/etc/config/pmcluster_traefik_dynamic.yaml" {
+		t.Errorf("service config mounts = %+v, want source + platform default target /etc/config/<name>.yaml", mounts)
 	}
 
 	// With ConfigNames: top-level gets the versioned name: override; the

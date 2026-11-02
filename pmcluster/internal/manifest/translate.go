@@ -225,12 +225,49 @@ func appendDistinct(base []string, extras ...string) []string {
 	return out
 }
 
+// ConfigRootResolver optionally reports the directory config files are mounted
+// under. When a daemon resolver implements it, the platform-injected CONFIG_PATH
+// follows the cluster's configured root instead of assuming the default.
+type ConfigRootResolver interface {
+	ConfigMountRoot(ctx context.Context, stack string) (string, error)
+}
+
+// configPathEnv is the environment variable the platform injects into every
+// service that mounts config files. Its value is the directory those files were
+// mounted in (refs.DefaultConfigMountRoot unless the cluster relocated it), so
+// an app discovers its configuration instead of being told each path.
+const configPathEnv = "CONFIG_PATH"
+
 // translateService maps one DSL service to its IR entry, resolving
 // config()/secrets() env references.
 func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Service, res EnvResolver) (*IRService, error) {
 	env, err := resolveServiceEnv(ctx, app.Name, s.Env, res)
 	if err != nil {
 		return nil, fmt.Errorf("services.%s: %w", name, err)
+	}
+
+	// CONFIG_PATH is injected by the platform, not written in a manifest: a
+	// service that mounts config files is handed the directory they live in, so
+	// an app reads `CONFIG_PATH` and lists it instead of hardcoding "/etc/..."
+	// or being told each file's path. Only services that actually declare
+	// configs get it — pointing a service at a directory that is not mounted
+	// would make every config-less service look misconfigured.
+	//
+	// A manifest that sets CONFIG_PATH itself always wins: the platform provides
+	// a default, it does not override an explicit decision.
+	if len(s.Configs) > 0 {
+		if env == nil {
+			env = map[string]string{}
+		}
+		if _, set := env[configPathEnv]; !set {
+			root := refs.DefaultConfigMountRoot
+			if rr, ok := res.(ConfigRootResolver); ok && rr != nil {
+				if resolved, perr := rr.ConfigMountRoot(ctx, app.Name); perr == nil && resolved != "" {
+					root = resolved
+				}
+			}
+			env[configPathEnv] = root
+		}
 	}
 
 	is := &IRService{
@@ -371,6 +408,26 @@ func resolveServiceEnv(ctx context.Context, stack string, env map[string]string,
 				return nil, fmt.Errorf("env.%s: secrets() name is empty", k)
 			}
 			out[k] = refs.SecretMountPath(ref.Name)
+		case "config_path":
+			// The LOCATION of a config file mount. Resolved through the same
+			// ConfigPathResolver call that produces the mount target, so the env
+			// value an app reads and the path the file is actually mounted at are
+			// one decision — they cannot disagree, and no manifest needs a literal
+			// "/etc/...".
+			if ref.Name == "" {
+				return nil, fmt.Errorf("env.%s: config_path() name is empty", k)
+			}
+			p := refs.DefaultConfigMountPath(ref.Name)
+			if pr, ok := res.(ConfigPathResolver); ok && pr != nil {
+				resolved, perr := pr.ResolveConfigPath(ctx, stack, ref.Name)
+				if perr != nil {
+					return nil, fmt.Errorf("env.%s: resolve config_path(%s): %w", k, ref.Name, perr)
+				}
+				if resolved != "" {
+					p = resolved
+				}
+			}
+			out[k] = p
 		case "config":
 			if res == nil {
 				return nil, fmt.Errorf("env.%s: config(%s) requires config resolution (not available)", k, ref.Name)
