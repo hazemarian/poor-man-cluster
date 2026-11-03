@@ -23,7 +23,7 @@ import (
 // costs a full read of the archive, which is why it runs on the host right
 // after the write rather than on the leader.
 func VerifyArchive(archivePath, _ string) (engine, detail string, err error) {
-	dbMembers, pgControl, err := scanArchive(archivePath)
+	dbMembers, pgControl, mysql, err := scanArchive(archivePath)
 	if err != nil {
 		return "", "", err
 	}
@@ -38,6 +38,13 @@ func VerifyArchive(archivePath, _ string) (engine, detail string, err error) {
 			}
 		}
 		return "sqlite", describeDatabases(dbMembers), nil
+	case mysql.found():
+		// MySQL and MariaDB cannot be opened from the host the way SQLite can —
+		// no client, no server. What IS checkable is that the pieces a clean
+		// shutdown or a crash leaves behind are all there: the InnoDB system
+		// tablespace, the data dictionary, and a redo log. Saying so is honest;
+		// claiming "verified" would not be.
+		return mysql.engine(), mysql.describe(), nil
 	case pgControl:
 		// A Postgres data directory is only meaningful with its WAL, and
 		// neither pg_controldata nor a server are available on the host, so
@@ -48,28 +55,68 @@ func VerifyArchive(archivePath, _ string) (engine, detail string, err error) {
 	}
 }
 
+// mysqlEvidence records what a MySQL/MariaDB data directory is made of, so the
+// verdict can distinguish "recognised, and here is what is inside" from
+// "not a database at all".
+type mysqlEvidence struct {
+	systemTablespace bool // ibdata1 — present in every MySQL/MariaDB datadir
+	dataDictionary   bool // mysql.ibd (MySQL 8) or mysql/ (5.7/MariaDB)
+	redoLog          bool // #innodb_redo (8.0+) or ib_logfile*
+	aria             bool // aria_log_control — MariaDB's Aria engine
+}
+
+func (m mysqlEvidence) found() bool { return m.systemTablespace || m.dataDictionary }
+
+func (m mysqlEvidence) engine() string {
+	// Aria is MariaDB's own engine: a datadir that has its control file is a
+	// MariaDB datadir, even though MariaDB also ships InnoDB (and therefore
+	// ib_logfile*/#innodb_redo). Keying off the redo log instead guessed
+	// "mysql" for every real MariaDB directory.
+	if m.aria {
+		return "mariadb"
+	}
+	return "mysql"
+}
+
+func (m mysqlEvidence) describe() string {
+	var parts []string
+	if m.systemTablespace {
+		parts = append(parts, "InnoDB system tablespace")
+	}
+	if m.dataDictionary {
+		parts = append(parts, "data dictionary")
+	}
+	if m.redoLog {
+		parts = append(parts, "redo log (replayed on start)")
+	}
+	if m.aria {
+		parts = append(parts, "Aria control file")
+	}
+	return strings.Join(parts, " + ") + " present (not validated — start the server to confirm)"
+}
+
 // scanArchive reads the whole tar stream (so a truncated archive fails here)
 // and reports the first SQLite database member it saw and whether a Postgres
 // control file is present.
-func scanArchive(archivePath string) (dbMembers []string, pgControl bool, err error) {
+func scanArchive(archivePath string) (dbMembers []string, pgControl bool, mysql mysqlEvidence, err error) {
 	f, err := os.Open(archivePath)
 	if err != nil {
-		return nil, false, fmt.Errorf("open archive: %w", err)
+		return nil, false, mysql, fmt.Errorf("open archive: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return nil, false, fmt.Errorf("gzip: %w", err)
+		return nil, false, mysql, fmt.Errorf("gzip: %w", err)
 	}
 	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return dbMembers, pgControl, nil
+			return dbMembers, pgControl, mysql, nil
 		}
 		if err != nil {
-			return nil, false, fmt.Errorf("tar: %w", err)
+			return nil, false, mysql, fmt.Errorf("tar: %w", err)
 		}
 		if h.Typeflag != tar.TypeReg {
 			continue
@@ -80,6 +127,19 @@ func scanArchive(archivePath string) (dbMembers []string, pgControl bool, err er
 			dbMembers = append(dbMembers, h.Name)
 		case base == "pg_control" && strings.HasSuffix(path.Dir(h.Name), "global"):
 			pgControl = true
+		case base == "ibdata1":
+			mysql.systemTablespace = true
+		case base == "mysql.ibd":
+			mysql.dataDictionary = true
+		case base == "aria_log_control":
+			mysql.aria = true
+		case strings.HasPrefix(base, "ib_logfile") || strings.Contains(h.Name, "#innodb_redo/"):
+			mysql.redoLog = true
+		case h.Typeflag == tar.TypeDir && path.Base(h.Name) == "mysql", strings.Contains(h.Name, "/mysql/"):
+			// MySQL 5.7 and MariaDB keep the data dictionary as a mysql/
+			// directory; match files inside it too, since an archive may carry
+			// no explicit directory entries.
+			mysql.dataDictionary = true
 		}
 	}
 }

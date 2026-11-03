@@ -1,0 +1,264 @@
+name: storage e2e
+
+# The data volume is the prerequisite for every backup guarantee the platform
+# makes, and it is the one part of the system that cannot be unit-tested: loop
+# devices, LVM, mounts and systemd ordering only exist on a real machine. Both
+# jobs below run on real Linux, and the matrix runs the same test on three
+# independent machines so a host-specific assumption cannot hide behind a single
+# green run (the /var layout, in particular, differs).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pmcluster/internal/storage/**"
+      - "pmcluster/internal/backupagent/**"
+      - "pmcluster/internal/cli/storage*.go"
+      - "pmcluster/internal/cluster/up.go"
+      - "pmcluster/contrib/systemd/**"
+      - ".github/workflows/storage-e2e.yml"
+  pull_request:
+    paths:
+      - "pmcluster/internal/storage/**"
+      - "pmcluster/internal/backupagent/**"
+      - "pmcluster/internal/cli/storage*.go"
+      - "pmcluster/internal/cluster/up.go"
+      - "pmcluster/contrib/systemd/**"
+      - ".github/workflows/storage-e2e.yml"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: pmcluster
+
+jobs:
+  provision:
+    name: provision + reboot (${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [node-a, node-b, node-c]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: pmcluster/go.mod
+      - name: build
+        run: go build -o /tmp/pmcluster ./cmd/pmcluster
+      - name: tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lvm2 e2fsprogs util-linux
+          command -v vgcreate losetup mke2fs findmnt systemctl
+          echo "free: $(df -h / | awk 'NR==2{print $4}')"
+
+      - name: "before: a plain directory cannot be snapshotted"
+        run: |
+          sudo /tmp/pmcluster storage status | tee /tmp/before.txt
+          grep -q "NOT possible" /tmp/before.txt
+
+      - name: provision
+        run: sudo /tmp/pmcluster storage provision --size 4G
+
+      - name: "after: snapshots possible, units installed"
+        run: |
+          sudo /tmp/pmcluster storage status | tee /tmp/after.txt
+          grep -q "snapshots possible" /tmp/after.txt
+          findmnt -no SOURCE,TARGET /var/stack/data
+          test "$(findmnt -no SOURCE /var/stack/data)" != "$(findmnt -no SOURCE /)"
+          sudo systemctl is-enabled var-stack-data.mount pmcluster-data-loop.service
+
+      - name: "idempotent: a second run does not rebuild"
+        run: |
+          sudo /tmp/pmcluster storage provision --size 4G | tee /tmp/again.txt
+          grep -q "already provisioned" /tmp/again.txt
+          sudo lvs --noheadings -o lv_name vg-pmcluster
+
+      - name: data on the volume
+        run: |
+          sudo mkdir -p /var/stack/data/ci-app
+          sudo python3 - <<'PY'
+          import sqlite3
+          con = sqlite3.connect("/var/stack/data/ci-app/app.db")
+          con.execute("pragma journal_mode=wal")
+          con.execute("create table notes(id integer primary key, body text)")
+          con.executemany("insert into notes(body) values (?)", [("row-%d" % i,) for i in range(100)])
+          con.commit(); con.close()
+          PY
+
+      - name: "reboot: stop everything, then let systemd bring it back"
+        run: |
+          # A real reboot cannot happen on a runner, so tear the stack down the
+          # way power loss does: mount first, then the pool unit (which
+          # deactivates the VG and detaches the loop device in ExecStop).
+          sudo systemctl stop var-stack-data.mount
+          sudo systemctl stop pmcluster-data-loop.service
+          echo "after teardown: mounted=$(findmnt -no SOURCE /var/stack/data 2>/dev/null || echo no) vgs=$(sudo vgs --noheadings -o vg_name | wc -l) loops=$(sudo losetup -a | wc -l)"
+          test -z "$(findmnt -no SOURCE /var/stack/data 2>/dev/null)"
+          sudo systemctl start var-stack-data.mount
+          findmnt -no SOURCE,TARGET /var/stack/data
+
+      - name: "data survived, snapshots still possible"
+        run: |
+          sudo /tmp/pmcluster storage status | grep -q "snapshots possible"
+          sudo python3 - <<'PY'
+          import sqlite3
+          con = sqlite3.connect("/var/stack/data/ci-app/app.db")
+          n = con.execute("select count(*) from notes").fetchone()[0]
+          ok = con.execute("pragma integrity_check").fetchone()[0]
+          assert n == 100, f"rows = {n}"
+          assert ok == "ok", ok
+          print(f"rows={n} integrity={ok}")
+          PY
+
+      - name: "backup agent runs against the volume"
+        run: |
+          sudo tee /tmp/plan.json >/dev/null <<'JSON'
+          {"node":"ci","volume_root":"/var/stack/data","stacks":[{"name":"ci-app"}]}
+          JSON
+          sudo /tmp/pmcluster backup-agent run --snapshot=lvm --vg vg-pmcluster --lv data \
+            --plan /tmp/plan.json --state-dir /tmp/state --archive-dir /tmp/archive | tee /tmp/run.txt
+          grep -q "verified sqlite" /tmp/run.txt
+          sudo /tmp/pmcluster backup-agent drill "$(sudo ls /tmp/archive/*.tar.gz | head -1)" | tee /tmp/drill.txt
+          grep -q "integrity_check ok" /tmp/drill.txt
+
+      - name: cleanup
+        if: always()
+        run: |
+          sudo systemctl stop var-stack-data.mount pmcluster-data-loop.service || true
+          sudo vgchange -an vg-pmcluster || true
+          sudo rm -f /etc/systemd/system/pmcluster-data-loop.service /etc/systemd/system/var-stack-data.mount
+          sudo rm -rf /etc/systemd/system/*.service.d
+          sudo losetup -d "$(sudo losetup -j /var/lib/pmcluster/app-data.img | cut -d: -f1)" || true
+          sudo rm -f /var/lib/pmcluster/app-data.img
+          sudo systemctl daemon-reload || true
+
+  multidb:
+    name: backup while three engines are writing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: pmcluster/go.mod
+      - name: build
+        run: go build -o /tmp/pmcluster ./cmd/pmcluster
+      - name: tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lvm2 e2fsprogs
+      - name: provision
+        run: sudo /tmp/pmcluster storage provision --size 6G
+
+      - name: engines with data on the platform volume
+        run: |
+          sudo mkdir -p /var/stack/data/{pg-app,mysql-app,sqlite-app}
+          sudo docker run -d --name pg-app \
+            -e POSTGRES_USER=app -e POSTGRES_PASSWORD=pgtest -e POSTGRES_DB=appdb \
+            -v /var/stack/data/pg-app/db:/var/lib/postgresql/data postgres:16-alpine
+          sudo docker run -d --name my-app \
+            -e MARIADB_ROOT_PASSWORD=mytest -e MARIADB_DATABASE=appdb \
+            -e MARIADB_USER=app -e MARIADB_PASSWORD=app \
+            -v /var/stack/data/mysql-app/db:/var/lib/mysql mariadb:11
+          for i in $(seq 1 90); do
+            sudo docker exec pg-app pg_isready -U app -d appdb >/dev/null 2>&1 && \
+            sudo docker exec my-app mariadb -uapp -papp -e 'select 1' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          sudo docker exec pg-app psql -U app -d appdb -qc "create table events(id bigserial primary key, note text not null)"
+          sudo docker exec my-app mariadb -uapp -papp appdb -e "create table events(id bigint auto_increment primary key, note varchar(64) not null)"
+          sudo python3 - <<'PY'
+          import sqlite3
+          con = sqlite3.connect("/var/stack/data/sqlite-app/app.db")
+          con.execute("pragma journal_mode=wal")
+          con.execute("create table events(id integer primary key autoincrement, note text not null)")
+          con.commit(); con.close()
+          PY
+
+      - name: write load, then snapshot mid-write
+        run: |
+          cat > /tmp/pgwrite.sh <<'SH'
+          while :; do psql -U app -d appdb -qc "insert into events(note) select 'pg-'||g from generate_series(1,20) g" >/dev/null 2>&1; sleep 0.05; done
+          SH
+          sudo docker cp /tmp/pgwrite.sh pg-app:/tmp/pgwrite.sh
+          sudo docker exec -d pg-app sh /tmp/pgwrite.sh
+          sudo docker exec -d my-app sh -c 'i=0; while :; do i=$((i+1)); mariadb -uapp -papp appdb -e "insert into events(note) values (\"my-$i\")" >/dev/null 2>&1; done'
+          sudo python3 - >/dev/null 2>&1 <<'PY' &
+          import sqlite3, time
+          con = sqlite3.connect("/var/stack/data/sqlite-app/app.db", timeout=30)
+          con.execute("pragma journal_mode=wal")
+          end = time.time() + 600
+          i = 0
+          while time.time() < end:
+              i += 1
+              con.execute("insert into events(note) values (?)", ("sq-%d" % i,)); con.commit(); time.sleep(0.01)
+          PY
+          sleep 10
+          pg_before=$(sudo docker exec pg-app psql -U app -d appdb -tAc "select count(*) from events")
+          my_before=$(sudo docker exec my-app mariadb -uapp -papp appdb -N -e "select count(*) from events")
+          sq_before=$(sudo python3 -c "import sqlite3;print(sqlite3.connect('/var/stack/data/sqlite-app/app.db').execute('select count(*) from events').fetchone()[0])")
+          echo "floor: pg=$pg_before my=$my_before sq=$sq_before" | tee /tmp/floor.txt
+
+          sudo tee /tmp/plan.json >/dev/null <<'JSON'
+          {"node":"ci","volume_root":"/var/stack/data","stacks":[{"name":"pg-app"},{"name":"mysql-app"},{"name":"sqlite-app"}]}
+          JSON
+          sudo /tmp/pmcluster backup-agent run --snapshot=lvm --vg vg-pmcluster --lv data \
+            --plan /tmp/plan.json --state-dir /tmp/state --archive-dir /tmp/archive | tee /tmp/run.txt
+          grep -q "verified postgres" /tmp/run.txt
+          grep -q "verified sqlite" /tmp/run.txt
+          grep -qE "verified (mariadb|mysql)" /tmp/run.txt
+          sudo docker exec pg-app pkill -f pgwrite.sh || true
+          sudo docker exec my-app pkill -f 'mariadb -uapp' || true
+
+      - name: restore into a clean tree and start the engines on it
+        run: |
+          sudo rm -rf /var/stack/data-restored && sudo mkdir -p /var/stack/data-restored
+          for a in /tmp/archive/*.tar.gz; do
+            sudo tar -xzf "$a" -C /var/stack/data-restored --strip-components=2
+          done
+          sudo docker rm -f pg-restored my-restored >/dev/null 2>&1 || true
+          sudo docker run -d --name pg-restored -v /var/stack/data-restored/pg-app/db:/var/lib/postgresql/data postgres:16-alpine
+          sudo docker run -d --name my-restored -v /var/stack/data-restored/mysql-app/db:/var/lib/mysql mariadb:11
+          for i in $(seq 1 90); do
+            sudo docker exec pg-restored pg_isready -U app -d appdb >/dev/null 2>&1 && \
+            sudo docker exec my-restored mariadb -uapp -papp -e 'select 1' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          sudo docker logs pg-restored 2>&1 | grep -iE "redo done|database system is ready" | tail -2
+          sudo docker exec pg-restored psql -U app -d appdb -tAc "select count(*) from events" > /tmp/pg_restored
+          sudo docker exec my-restored mariadb -uapp -papp appdb -N -e "select count(*) from events" > /tmp/my_restored
+          sudo python3 -c "
+          import sqlite3
+          con = sqlite3.connect('/var/stack/data-restored/sqlite-app/app.db')
+          print(con.execute('select count(*) from events').fetchone()[0])
+          print(con.execute('pragma integrity_check').fetchone()[0])" > /tmp/sq_restored
+          cat /tmp/floor.txt; echo "restored: pg=$(cat /tmp/pg_restored) my=$(cat /tmp/my_restored) sq=$(head -1 /tmp/sq_restored) integrity=$(tail -1 /tmp/sq_restored)"
+
+      - name: verify the restored data is consistent and inside the window
+        run: |
+          python3 - <<'PY'
+          import re, sqlite3
+          floor = dict(re.findall(r"(\w+)=(\d+)", open("/tmp/floor.txt").read()))
+          pg = int(open("/tmp/pg_restored").read().strip())
+          my = int(open("/tmp/my_restored").read().strip())
+          sq_lines = open("/tmp/sq_restored").read().split()
+          sq, integ = int(sq_lines[0]), sq_lines[1]
+          assert integ == "ok", f"restored sqlite integrity: {integ}"
+          # Every row committed before the snapshot must be there. The snapshot
+          # may include a few more (writes between the count and the freeze), so
+          # the check is a floor, not equality — asserting equality would make
+          # this test fail whenever the engine was busy, which is the point.
+          for name, got in (("pg", pg), ("my", my), ("sq", sq)):
+              want = int(floor[name])
+              assert got >= want, f"{name}: restored {got} rows, but {want} were committed before the snapshot"
+          print(f"OK: pg={pg}>={floor['pg']} my={my}>={floor['my']} sq={sq}>={floor['sq']} integrity={integ}")
+          PY
+
+      - name: cleanup
+        if: always()
+        run: |
+          sudo docker rm -f pg-app my-app pg-restored my-restored || true
+          sudo systemctl stop var-stack-data.mount pmcluster-data-loop.service || true
+          sudo vgchange -an vg-pmcluster || true
+          sudo losetup -d "$(sudo losetup -j /var/lib/pmcluster/app-data.img | cut -d: -f1)" || true
+          sudo rm -f /var/lib/pmcluster/app-data.img

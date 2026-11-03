@@ -12,6 +12,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/workflow"
 )
@@ -83,6 +84,19 @@ var ensureStorageDirs = func(volumeRoot string) error {
 	for _, dir := range []string{volumeRoot, backupRootDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create storage dir %s: %w", dir, err)
+		}
+	}
+	// A node that was provisioned but whose volume failed to mount looks
+	// identical to a fresh one — an empty directory. Deploying onto it is how
+	// every stack ends up writing into the root filesystem, so the presence of a
+	// backing file with no mount is a hard stop rather than a warning.
+	if _, err := os.Stat(storage.DefaultImagePath); err == nil {
+		st, derr := storage.Detect(context.Background(), storage.Spec{VolumeRoot: volumeRoot})
+		if derr != nil {
+			return fmt.Errorf("inspect app-data volume: %w", derr)
+		}
+		if !st.Provisioned() {
+			return fmt.Errorf("%s is not mounted even though %s exists — deploying now would run every stack on an empty directory; run `pmcluster storage status` and fix the mount first", volumeRoot, storage.DefaultImagePath)
 		}
 	}
 	return nil

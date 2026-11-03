@@ -18,6 +18,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -281,6 +282,15 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 			}
 		}
 		registerStorageNode(cmd.Context(), cmd.OutOrStdout(), sshHost, effectiveHostname)
+		// A storage node must be able to take atomic snapshots before it accepts
+		// work, because converting it afterwards means moving every stack off it
+		// first. Best-effort on purpose: a join that fails because a loop device
+		// could not be built leaves an operator with a node that is not in the
+		// cluster AND has no explanation — so this warns, and the backup agent's
+		// own pre-flight refuses to run until it is fixed.
+		if mode := os.Getenv("PMCLUSTER_STORAGE_MODE"); mode != storage.ModeNone.String() {
+			provisionStorageForNode(cmd.Context(), cmd.OutOrStdout(), storage.Spec{Mode: storage.ModeLoop})
+		}
 	}
 
 	// Install + start the daemon (systemd on Linux, hint otherwise).

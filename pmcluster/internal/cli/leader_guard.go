@@ -44,6 +44,10 @@ var topLevelScopes = map[string]commandScope{
 	// worker that holds the data and has no current view of the cluster.
 	// Gating it on leadership would be a failure mode, not a safety property.
 	"backup-agent": scopeNode,
+	// storage describes and provisions THIS machine's volume; there is no
+	// cluster-wide answer and gating it on leadership would make a worker
+	// unable to provision its own disk.
+	"storage": scopeNode,
 
 	// Bootstrap and lifecycle.
 	"init":    scopeBootstrap,

@@ -15,6 +15,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -84,6 +85,8 @@ func init() {
 	setupCmd.Flags().String("backup-s3-region", "", "offsite S3 region (default auto for R2)")
 	setupCmd.Flags().String("backup-store-on", "", "where the in-cluster backup store runs: leader or worker (default worker)")
 	setupCmd.Flags().Bool("storage-failover", true, "enable automatic storage failover (moves stateful stacks off a failed storage node); requires offsite S3 backups")
+	setupCmd.Flags().String("storage-mode", "loop", "how the snapshot-capable app-data volume is backed: loop (a file, no operator action needed), lvm (a block device) or none")
+	setupCmd.Flags().String("storage-size", "auto", "backing-file size for the app-data volume (auto = half of free space, clamped to 8 GiB..128 GiB)")
 	setupCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
 
 	setupCmd.Flags().String("swarm-advertise-addr", "", "advertise address passed to `docker swarm init` on a first node (default: auto-detected node IP)")
@@ -125,6 +128,12 @@ type setupAnswers struct {
 	// BackupStoreOn is where the in-cluster backup store (SeaweedFS) runs:
 	// "leader" or "worker". Empty means worker/auto (back-compat).
 	BackupStoreOn string
+	// StorageMode / StorageSize describe the app-data volume. Default loop:
+	// a file on the root filesystem is the only option the platform can create
+	// without an operator doing something it cannot verify.
+	StorageMode string
+	StorageSize string
+
 	// StorageFailover enables automatic failover: when a storage node fails,
 	// the control loop moves stateful stacks to a healthy storage node and
 	// restores the latest offsite backup. Requires S3 offsite backups.
@@ -287,6 +296,15 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		// dies, the only recoverable copy is in S3, so prompt only when S3 is set.
 		if a.BackupS3Endpoint != "" && a.BackupS3Bucket != "" {
 			a.StorageFailover = askYesNo(r, out, "Enable automatic storage failover? (moves a stack off a failed storage node, restoring the latest offsite backup)", true)
+			// The volume that holds every stack's data has to be snapshot-capable
+			// before the first deployment, because converting a node later means
+			// moving the stacks off it first.
+			if askYesNo(r, out, "Provision the app-data volume for atomic snapshots? (no operator action needed; without it backups copy live files)", true) {
+				a.StorageMode = storage.ModeLoop.String()
+				a.StorageSize = ask(r, out, "Backing-file size (auto = half of free space)", "auto")
+			} else {
+				a.StorageMode = storage.ModeNone.String()
+			}
 		}
 		a.BackupStoreOn = askBackupStoreOn(r, out, st.SettingDefault(ctx, cluster.SettingBackupStoreOn(), ""))
 		defHost, _ := os.Hostname()
@@ -330,6 +348,11 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		// off unless S3 is configured (even if --storage-failover was passed).
 		a.StorageFailover, _ = cmd.Flags().GetBool("storage-failover")
 		a.StorageFailover = storageFailoverEnabled(a.StorageFailover, a.BackupS3Endpoint, a.BackupS3Bucket)
+		a.StorageMode, _ = cmd.Flags().GetString("storage-mode")
+		a.StorageSize, _ = cmd.Flags().GetString("storage-size")
+		if v := os.Getenv("PMCLUSTER_STORAGE_MODE"); v != "" && !cmd.Flags().Changed("storage-mode") {
+			a.StorageMode = v
+		}
 		if !cmd.Flags().Changed("backup-s3-access-key") {
 			if v := os.Getenv("PMCLUSTER_BACKUP_S3_ACCESS_KEY"); v != "" {
 				a.BackupS3AccessKey = v
@@ -444,6 +467,9 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		if err := persistSetup(ctx, st, a); err != nil {
 			return err
 		}
+		if spec, err := storageSpecFromSetup(a); err == nil && spec.Mode != storage.ModeNone {
+			provisionStorageForNode(ctx, out, spec)
+		}
 		fmt.Fprintln(out, "Cluster already initialised — running `pmcluster cluster update` with the new settings.")
 		return runClusterUpdate(cmd, nil)
 	}
@@ -455,6 +481,16 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	// itself via persistInstallState.
 	if err := persistSetupSecretsOnly(ctx, st, a); err != nil {
 		return err
+	}
+
+	// The volume must exist BEFORE the cluster deploys: cluster up can only
+	// create directories, and a directory on the root filesystem cannot be
+	// snapshotted — which is precisely the "backup while writing" failure this
+	// platform is meant to remove.
+	if spec, err := storageSpecFromSetup(a); err == nil {
+		provisionStorageForNode(ctx, out, spec)
+	} else {
+		fmt.Fprintf(out, "⚠ app-data volume not provisioned: %v\n", err)
 	}
 
 	in := cluster.UpInput{}
@@ -470,6 +506,22 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 
 	fmt.Fprintln(out, "Fresh install — running `pmcluster cluster up` with the new settings.")
 	return runUp(cmd, cfg, in)
+}
+
+// storageSpecFromSetup turns the wizard's answers into a provisioning spec.
+func storageSpecFromSetup(a setupAnswers) (storage.Spec, error) {
+	spec := storage.Spec{Mode: storage.Mode(a.StorageMode)}
+	if spec.Mode == "" {
+		spec.Mode = storage.ModeLoop
+	}
+	if a.StorageSize != "" && a.StorageSize != "auto" {
+		n, err := parseSize(a.StorageSize)
+		if err != nil {
+			return spec, err
+		}
+		spec.Size = n
+	}
+	return spec, nil
 }
 
 // defaultOOEmail derives the OpenObserve root admin email from the cluster
