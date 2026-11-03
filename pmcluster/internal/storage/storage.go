@@ -396,13 +396,10 @@ func Provision(ctx context.Context, spec Spec) (Result, error) {
 // fail (the loop device already carries a physical volume) or, worse, succeed
 // over live data.
 func attachExisting(ctx context.Context, spec Spec, st State, res *Result) error {
-	loop := st.LoopDevice
-	if loop == "" {
-		out, err := spec.exec(ctx, "losetup", "--find", "--show", spec.ImagePath)
-		if err != nil {
+	if st.LoopDevice == "" {
+		if out, err := spec.exec(ctx, "losetup", "--find", "--show", spec.ImagePath); err != nil {
 			return fmt.Errorf("attach loop device: %w (%s)", err, strings.TrimSpace(string(out)))
 		}
-		loop = strings.TrimSpace(string(out))
 	}
 	if out, err := spec.exec(ctx, "vgchange", "-ay", spec.VG); err != nil {
 		return fmt.Errorf("activate %s: %w (%s)", spec.VG, err, strings.TrimSpace(string(out)))

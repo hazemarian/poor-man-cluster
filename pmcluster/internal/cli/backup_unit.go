@@ -5,9 +5,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
-	"strings"
 )
 
 // The backup agent is a host unit, not a Swarm service.

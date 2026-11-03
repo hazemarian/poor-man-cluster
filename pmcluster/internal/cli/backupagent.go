@@ -146,7 +146,7 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		if derr != nil {
 			return fmt.Errorf("load plan %s: %w (and deriving one from %s failed: %v)", planPath, err, agentVolumeRoot, derr)
 		}
-		plan, planPath = derived, "derived from "+agentVolumeRoot
+		plan = derived
 		fmt.Fprintf(cmd.ErrOrStderr(), "note: no plan at %s — derived %d stack(s) from %s\n", err, len(plan.Stacks), agentVolumeRoot)
 	}
 	node := agentNode
