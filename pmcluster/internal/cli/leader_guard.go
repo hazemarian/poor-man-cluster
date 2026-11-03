@@ -75,6 +75,14 @@ var topLevelScopes = map[string]commandScope{
 	"webhook":       scopeLeader,
 }
 
+// nodeLocalSubcommands overrides the top-level scope for subcommands that
+// describe or act on THIS machine. `backup prune` deletes files in this node's
+// archive directory: it has no cluster-wide answer, and gating it on leadership
+// would leave a worker's disk unable to clean itself up.
+var nodeLocalSubcommands = map[string]map[string]bool{
+	"backup": {"prune": true},
+}
+
 // bootstrapClusterSubcommands are the `cluster` subcommands that must work
 // anywhere: they bring a cluster into existence, tear it down without a store,
 // or repair a node that cannot reach the control plane.
@@ -101,6 +109,10 @@ func scopeOf(cmd *cobra.Command) commandScope {
 			return scopeBootstrap
 		}
 		return scopeLeader
+	}
+
+	if subs, ok := nodeLocalSubcommands[name]; ok && cmd != top && subs[cmd.Name()] {
+		return scopeNode
 	}
 
 	if s, ok := topLevelScopes[name]; ok {

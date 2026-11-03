@@ -109,6 +109,13 @@ services:
     # agents already use.
     command: ["server", "-s3", "-s3.port=8333", "-s3.port.iceberg=0", "-s3.port.lance=0", "-webdav", "-webdav.port=7333", "-ip=127.0.0.1", "-ip.bind=0.0.0.0", "-s3.ip.bind=0.0.0.0"]
     restart: any
+    # NOTE: this service runs with update order "stop-first" on the live cluster,
+    # set out of band. SeaweedFS keeps its filer metadata in a LevelDB directory
+    # that allows ONE writer; the default start-first rollout starts the
+    # replacement while the old task still holds the lock, the new task exits 255
+    # ("resource temporarily unavailable"), and the update pauses. The manifest
+    # DSL cannot express update_config yet, so a `cluster update` will drop this
+    # back to the default — worth modelling as `update: {order: stop-first}`.
     env:
       AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
       AWS_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
