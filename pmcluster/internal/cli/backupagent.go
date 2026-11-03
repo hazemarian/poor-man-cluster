@@ -76,7 +76,7 @@ func init() {
 	backupAgentRunCmd.Flags().StringVar(&agentNode, "node", "", "swarm node id (default: $PMCLUSTER_NODE_ID, else the plan's node)")
 	backupAgentRunCmd.Flags().StringVar(&agentVolumeRoot, "volume-root", envOr("PMCLUSTER_VOLUME_ROOT", defaultVolumeRoot), "host directory holding every stack's data")
 	backupAgentRunCmd.Flags().StringVar(&agentArchiveDir, "archive-dir", envOr("PMCLUSTER_BACKUP_DIR", backups.DefaultArchiveDir), "where artifacts and their sidecars are written")
-	backupAgentRunCmd.Flags().StringVar(&agentPlanPath, "plan", "", "plan file (default: <state-dir>/plan.json, the cached plan)")
+	backupAgentRunCmd.Flags().StringVar(&agentPlanPath, "plan", "", "plan file (default: <state-dir>/plan.json; when that is absent the plan is derived from the volume root)")
 	backupAgentRunCmd.Flags().StringVar(&agentStateDir, "state-dir", envOr("PMCLUSTER_BACKUP_STATE", defaultStateDir), "agent state: cached plan, run records, lock")
 	backupAgentRunCmd.Flags().StringVar(&agentSnapshot, "snapshot", "lvm", "consistency mechanism: lvm (production) or none (tests, hosts without LVM)")
 	backupAgentRunCmd.Flags().StringVar(&agentVG, "vg", envOr("PMCLUSTER_BACKUP_VG", ""), "volume group holding the volume root (lvm only)")
@@ -86,7 +86,24 @@ func init() {
 	backupAgentRunCmd.Flags().StringVar(&agentShipWebDAV, "ship-webdav", envOr("PMCLUSTER_BACKUP_WEBDAV", ""),
 		"WebDAV URL to copy each artifact to after verification (the in-cluster store)")
 	backupAgentDrillCmd.Flags().StringVar(&agentDrillWorkD, "work-dir", "", "scratch directory (default: a temp dir)")
-	backupAgentCmd.AddCommand(backupAgentRunCmd, backupAgentDrillCmd)
+	backupAgentInstallCmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install and enable the hourly root oneshot on this node",
+		Long: `Install the systemd service + timer that run the agent every hour.
+
+Needs root (the unit runs fsfreeze, lvcreate, mount). Opt-in rather than
+automatic: the two producers write different archives, and a node must not run
+both against the same data by accident — watch an hour of per-stack artifacts
+before retiring that node's volume-backup agent.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if os.Geteuid() != 0 {
+				return fmt.Errorf("installing the hourly unit needs root — re-run with sudo")
+			}
+			return ensureBackupAgentInstalled(cmd.OutOrStdout())
+		},
+	}
+	backupAgentCmd.AddCommand(backupAgentRunCmd, backupAgentDrillCmd, backupAgentInstallCmd)
 	rootCmd.AddCommand(backupAgentCmd)
 }
 
@@ -122,7 +139,15 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 
 	plan, planPath, err := loadAgentPlan(agentPlanPath, agentStateDir)
 	if err != nil {
-		return fmt.Errorf("load plan %s: %w (the leader publishes it; pass --plan for a first run)", planPath, err)
+		// No published plan and no cache: derive one from the volume root. A
+		// node whose control plane is unreachable must still be backed up, and
+		// the directory layout already says what the stacks are.
+		derived, derr := backupagent.PlanFromDisk(agentVolumeRoot)
+		if derr != nil {
+			return fmt.Errorf("load plan %s: %w (and deriving one from %s failed: %v)", planPath, err, agentVolumeRoot, derr)
+		}
+		plan, planPath = derived, "derived from "+agentVolumeRoot
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: no plan at %s — derived %d stack(s) from %s\n", err, len(plan.Stacks), agentVolumeRoot)
 	}
 	node := agentNode
 	if node == "" {

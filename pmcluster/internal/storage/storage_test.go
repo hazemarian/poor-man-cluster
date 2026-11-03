@@ -355,6 +355,28 @@ func TestProvisionFailsLoudlyOnALVMError(t *testing.T) {
 	}
 }
 
+// Every size handed to LVM must be a multiple of 512 bytes, and in practice of a
+// 64 KiB chunk. Asserted across sizes that do not divide evenly — the case that
+// only appeared on a runner with a differently-sized disk.
+func TestSizesAreSectorAligned(t *testing.T) {
+	for _, fileSize := range []int64{4 << 30, 5 << 30, 6 << 30, 7 << 30, 12<<30 + 12345, 100 << 30} {
+		pool, data := PoolSize(fileSize), DataSize(PoolSize(fileSize))
+		if pool%512 != 0 || data%512 != 0 {
+			t.Fatalf("file %d: pool %d / data %d are not multiples of 512", fileSize, pool, data)
+		}
+		if pool%sectorAlign != 0 || data%sectorAlign != 0 {
+			t.Fatalf("file %d: pool %d / data %d are not chunk-aligned", fileSize, pool, data)
+		}
+		if data > pool {
+			t.Fatalf("file %d: data volume (%d) exceeds its pool (%d)", fileSize, data, pool)
+		}
+		// The headroom is the whole point of 80%: assert it survives rounding.
+		if float64(data) > float64(pool)*dataVolumeShare {
+			t.Fatalf("file %d: data %d exceeds %.0f%% of pool %d", fileSize, data, dataVolumeShare*100, pool)
+		}
+	}
+}
+
 func TestAutoSizeClamps(t *testing.T) {
 	if got := AutoSize(4 << 30); got != minAutoSize {
 		t.Fatalf("small disk = %d, want the minimum", got)

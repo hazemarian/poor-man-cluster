@@ -259,17 +259,36 @@ func AutoSize(freeBytes int64) int64 {
 	return size
 }
 
+// roundDown rounds n down to a multiple of unit.
+//
+// LVM refuses sector-misaligned sizes ("Size is not a multiple of 512"), and the
+// arithmetic that produces them is invisible until it is not: 4G - 1G = 3 GiB,
+// and 80% of that is 2,576,980,377 bytes. The VM test used 6G, whose 80% happens
+// to be exact, so only a differently-sized disk in CI surfaced it.
+func roundDown(n, unit int64) int64 {
+	if unit <= 0 {
+		return n
+	}
+	return n / unit * unit
+}
+
+// sectorAlign is the granularity every size must respect: 64 KiB is one thin-pool
+// chunk, which is both a multiple of 512-byte sectors and of the ext4 block size.
+const sectorAlign = 64 << 10
+
 // PoolSize is the thin pool inside a backing file of the given size.
 func PoolSize(fileBytes int64) int64 {
 	if fileBytes <= poolOverhead {
-		return fileBytes
+		return roundDown(fileBytes, sectorAlign)
 	}
-	return fileBytes - poolOverhead
+	return roundDown(fileBytes-poolOverhead, sectorAlign)
 }
 
 // DataSize is the data volume inside a pool of the given size. Leaving a fifth
 // of the pool unallocated is what lets a backup run's snapshot exist at all.
-func DataSize(poolBytes int64) int64 { return int64(float64(poolBytes) * dataVolumeShare) }
+func DataSize(poolBytes int64) int64 {
+	return roundDown(int64(float64(poolBytes)*dataVolumeShare), sectorAlign)
+}
 
 // Result reports what happened, in the terms a wizard or a log line needs.
 type Result struct {

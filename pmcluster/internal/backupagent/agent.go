@@ -123,6 +123,30 @@ func (r Result) Succeeded() bool {
 	return true
 }
 
+// PlanFromDisk derives a plan from the volume root itself: one stack per
+// directory, which is exactly the layout the platform's bind mounts create
+// (/var/stack/data/<stack>/<volume>/…).
+//
+// It exists so an hourly run does not depend on the control plane publishing a
+// plan. The leader's plan stays authoritative when it is available — it carries
+// attribution the filesystem cannot know, such as which volumes belong to a
+// stack that was moved — but a backup that stops because a leader is down is not
+// a backup. lost+found is skipped: it belongs to no stack.
+func PlanFromDisk(root string) (Plan, error) {
+	plan := Plan{VolumeRoot: root}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return plan, fmt.Errorf("read %s: %w", root, err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == "lost+found" {
+			continue
+		}
+		plan.Stacks = append(plan.Stacks, StackPlan{Name: e.Name()})
+	}
+	return plan, nil
+}
+
 // Verifier is the optional pre-flight a snapshotter may implement. Run calls it
 // before freezing anything: a node that cannot prove its volume root is the
 // volume it is configured to snapshot must fail loudly, not archive the wrong

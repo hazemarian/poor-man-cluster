@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
 	"strings"
 )
 
@@ -53,6 +55,11 @@ User=root
 Environment=PMCLUSTER_VOLUME_ROOT=%s
 Environment=PMCLUSTER_BACKUP_DIR=%s
 Environment=PMCLUSTER_BACKUP_STATE=%s
+# The LVM coordinates: without them the agent cannot prove the volume root is
+# its own and refuses to run (deliberately — a snapshot of the wrong volume is
+# worse than no snapshot).
+Environment=PMCLUSTER_BACKUP_VG=%s
+Environment=PMCLUSTER_BACKUP_LV=%s
 ExecStart=/usr/bin/flock -n -E 0 /run/pmcluster-backup.lock %s backup-agent run
 # The snapshot copy is I/O heavy and must never win a fight with an app.
 Nice=10
@@ -62,7 +69,7 @@ TimeoutStartSec=3600
 
 [Install]
 WantedBy=multi-user.target
-`, volumeRoot, archiveDir, stateDir, exe)
+`, volumeRoot, archiveDir, stateDir, storage.DefaultVG, storage.DefaultLV, exe)
 }
 
 // renderBackupTimerUnit builds the hourly schedule.
