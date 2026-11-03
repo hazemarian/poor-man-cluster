@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -107,6 +109,34 @@ before retiring that node's volume-backup agent.`,
 	rootCmd.AddCommand(backupAgentCmd)
 }
 
+// resolveAgentNode answers "which node am I?" for an artifact name.
+//
+// Order matters: an explicit flag, then the environment the systemd unit sets,
+// then the swarm's own answer, then the hostname. The swarm branch is what makes
+// a first run work on a node nobody configured — without it a derived plan and
+// no PMCLUSTER_NODE_ID is a hard failure, which is exactly the state a freshly
+// provisioned node is in on the day the agent is installed.
+func resolveAgentNode(ctx context.Context, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if v := os.Getenv("PMCLUSTER_NODE_ID"); v != "" {
+		return v
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if out, err := exec.CommandContext(ctx, "docker", "info", "--format", "{{.Swarm.NodeID}}").Output(); err == nil {
+		if id := strings.TrimSpace(string(out)); id != "" {
+			return id
+		}
+	}
+	if hn, err := os.Hostname(); err == nil {
+		return hn
+	}
+	return ""
+}
+
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -149,10 +179,7 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		plan = derived
 		fmt.Fprintf(cmd.ErrOrStderr(), "note: no plan at %s — derived %d stack(s) from %s\n", err, len(plan.Stacks), agentVolumeRoot)
 	}
-	node := agentNode
-	if node == "" {
-		node = os.Getenv("PMCLUSTER_NODE_ID")
-	}
+	node := resolveAgentNode(ctx, agentNode)
 	if node == "" {
 		node = plan.Node
 	}
