@@ -25,6 +25,30 @@ import (
 // volumes has nothing to freeze, and installing it everywhere would make every
 // worker carry a timer that can only no-op.
 
+// backupEnvFile holds the ship target (and nothing else) for the hourly run.
+// 0600 and root-owned: the unit is world-readable and the store credential must
+// not be in it.
+const backupEnvFile = "/etc/pmcluster/backup.env"
+
+// writeBackupEnv persists the WebDAV target handed to the installer through the
+// environment. Refusing to put it on a command line is deliberate: argv is
+// world-readable in /proc for the life of the process, and this is a password.
+func writeBackupEnv() error {
+	url := os.Getenv("PMCLUSTER_BACKUP_WEBDAV")
+	if url == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(backupEnvFile), 0o700); err != nil {
+		return err
+	}
+	body := "PMCLUSTER_BACKUP_WEBDAV=" + url + "\n"
+	temp := backupEnvFile + ".tmp"
+	if err := os.WriteFile(temp, []byte(body), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(temp, backupEnvFile)
+}
+
 // renderBackupServiceUnit builds the oneshot unit that performs one run.
 //
 // The flock wraps ExecStart, so the lock is held for the whole run: a second
@@ -60,6 +84,11 @@ Environment=PMCLUSTER_BACKUP_STATE=%s
 # worse than no snapshot).
 Environment=PMCLUSTER_BACKUP_VG=%s
 Environment=PMCLUSTER_BACKUP_LV=%s
+# Where to ship artifacts (the in-cluster store's WebDAV gateway, reached on
+# this node's own loopback because the published port is on the routing mesh).
+# Credentials live in this 0600 file, never in the unit text: the unit is world
+# readable and a backup store password does not belong in it.
+EnvironmentFile=-%s
 ExecStart=/usr/bin/flock -n -E 0 /run/pmcluster-backup.lock %s backup-agent run
 # The snapshot copy is I/O heavy and must never win a fight with an app.
 Nice=10
@@ -69,7 +98,7 @@ TimeoutStartSec=3600
 
 [Install]
 WantedBy=multi-user.target
-`, volumeRoot, archiveDir, stateDir, storage.DefaultVG, storage.DefaultLV, exe)
+`, volumeRoot, archiveDir, stateDir, storage.DefaultVG, storage.DefaultLV, backupEnvFile, exe)
 }
 
 // renderBackupTimerUnit builds the hourly schedule.
@@ -128,6 +157,9 @@ func ensureBackupAgentInstalled(out io.Writer) error {
 		// write, so a permission problem here is worth reporting but not fatal
 		// to the install.
 		fmt.Fprintf(out, "  (could not create %s: %v)\n", backupAgentStateDir, err)
+	}
+	if err := writeBackupEnv(); err != nil {
+		fmt.Fprintf(out, "  (could not write %s: %v — artifacts will stay local)\n", backupEnvFile, err)
 	}
 	if err := writeUnitFn(backupUnitPath, []byte(renderBackupServiceUnit(exe, backupAgentVolumeRd, backupAgentArchive, backupAgentStateDir)), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", backupUnitPath, err)

@@ -37,7 +37,7 @@ after a reboot.
   sudo pmcluster storage provision
   sudo pmcluster storage provision --mode lvm --device /dev/vdb --size 40G`,
 	}
-	cmd.AddCommand(storageStatusCmd(), storageProvisionCmd(), storageGrowCmd())
+	cmd.AddCommand(storageStatusCmd(), storageProvisionCmd(), storageGrowCmd(), storageMigrateCmd())
 	rootCmd.AddCommand(cmd)
 }
 
@@ -199,6 +199,61 @@ backup run's snapshot exist while the copy is in flight.`,
 	}
 	addStorageFlags(cmd)
 	cmd.Flags().Bool("dry-run", false, "print the plan without touching the disk")
+	return cmd
+}
+
+func storageMigrateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "migrate",
+		Short: "Adopt a node that already holds stack data (build, copy, verify, switch)",
+		Long: `Move existing stack data onto a snapshot-capable volume, in place.
+
+This is how an existing node gets snapshots without a rebuild: the new volume is
+built and mounted somewhere else, the data is copied into it while nothing is
+writing, the copy is verified by file count and byte total, and only then is the
+mount switched. A failure at any step before the switch leaves the live tree
+untouched; after it, the old tree is preserved at <volume-root>.pre-migration-<ts>.
+
+Drain the node first so no container is writing:
+
+  docker node update --availability drain <node>
+  sudo pmcluster storage migrate
+  docker node update --availability active <node>`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			spec, err := storageSpecFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			spec.Force, _ = cmd.Flags().GetBool("force")
+			if os.Geteuid() != 0 {
+				return fmt.Errorf("migration needs root (loop devices, LVM, mounts) — re-run with sudo")
+			}
+			ctx := cmd.Context()
+			out := cmd.OutOrStdout()
+			res, err := storage.Migrate(ctx, spec)
+			if err != nil {
+				return err
+			}
+			if res.AlreadyProvisioned {
+				fmt.Fprintf(out, "✔ already provisioned: %s (nothing to migrate)\n", res.Device)
+				return nil
+			}
+			fmt.Fprintf(out, "✔ migrated onto %s\n", res.Device)
+			fmt.Fprintf(out, "  copied        %d files, %s\n", res.Copied, humanSize(res.CopyBytes))
+			fmt.Fprintf(out, "  pool / data   %s / %s\n", humanSize(res.PoolBytes), humanSize(res.DataBytes))
+			if res.PreviousTree != "" {
+				fmt.Fprintf(out, "  previous tree %s (delete once you are satisfied)\n", res.PreviousTree)
+			}
+			for _, w := range res.Warnings {
+				fmt.Fprintf(out, "⚠ %s\n", w)
+			}
+			fmt.Fprintf(out, "\nNext: docker node update --availability active <node>\n")
+			return nil
+		},
+	}
+	addStorageFlags(cmd)
+	cmd.Flags().Bool("force", false, "skip the 'a container is still writing' check (only if you froze the writers yourself)")
 	return cmd
 }
 

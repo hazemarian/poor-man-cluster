@@ -29,6 +29,10 @@ var (
 	agentVolumeRoot string
 	agentArchiveDir string
 	agentPlanPath   string
+	agentKeepHours  int
+	agentKeepDays   int
+	agentKeepLast   int
+	agentKeepLegacy bool
 	agentStateDir   string
 	agentSnapshot   string
 	agentVG         string
@@ -84,6 +88,10 @@ func init() {
 	backupAgentRunCmd.Flags().StringVar(&agentVG, "vg", envOr("PMCLUSTER_BACKUP_VG", ""), "volume group holding the volume root (lvm only)")
 	backupAgentRunCmd.Flags().StringVar(&agentLV, "lv", envOr("PMCLUSTER_BACKUP_LV", ""), "logical volume holding the volume root (lvm only)")
 	backupAgentRunCmd.Flags().StringVar(&agentSnapDir, "snap-dir", "/run/pmcluster-backup/snap", "mount point for the read-only snapshot")
+	backupAgentRunCmd.Flags().IntVar(&agentKeepHours, "keep-hours", 48, "keep every artifact newer than this many hours (0 disables pruning)")
+	backupAgentRunCmd.Flags().IntVar(&agentKeepDays, "keep-days", 15, "keep one artifact per day until this age in days")
+	backupAgentRunCmd.Flags().IntVar(&agentKeepLast, "keep-last", 2, "never delete the newest N artifacts of a stack")
+	backupAgentRunCmd.Flags().BoolVar(&agentKeepLegacy, "prune-legacy", false, "also prune whole-node archives (the previous producer's output)")
 	backupAgentRunCmd.Flags().BoolVar(&agentDryRun, "dry-run", false, "report what would be archived without freezing, snapshotting or writing")
 	backupAgentRunCmd.Flags().StringVar(&agentShipWebDAV, "ship-webdav", envOr("PMCLUSTER_BACKUP_WEBDAV", ""),
 		"WebDAV URL to copy each artifact to after verification (the in-cluster store)")
@@ -204,7 +212,17 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("unknown --snapshot %q (want lvm or none)", agentSnapshot)
 	}
 
+	var retention *backups.Retention
+	if agentKeepHours > 0 {
+		policy := backups.DefaultRetention()
+		policy.KeepHours = agentKeepHours
+		policy.KeepDays = agentKeepDays
+		policy.KeepLast = agentKeepLast
+		policy.IncludeLegacy = agentKeepLegacy
+		retention = &policy
+	}
 	a := &backupagent.Agent{
+		Retention:  retention,
 		Node:       node,
 		VolumeRoot: root,
 		ArchiveDir: agentArchiveDir,

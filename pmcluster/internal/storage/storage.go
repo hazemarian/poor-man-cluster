@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -99,6 +98,11 @@ type Spec struct {
 	Size int64
 	// UnitDir is where systemd units are written.
 	UnitDir string
+	// Force skips the "a container is still writing" check during a migration.
+	// It exists for an operator who has frozen the writers themselves, not as a
+	// convenience: copying a live database produces the torn image this design
+	// exists to prevent.
+	Force bool
 	// Exec runs commands; nil means ExecCommand.
 	Exec Execer
 }
@@ -302,6 +306,11 @@ type Result struct {
 	PoolBytes          int64    `json:"pool_bytes,omitempty"`
 	DataBytes          int64    `json:"data_bytes,omitempty"`
 	UnitsWritten       []string `json:"units_written,omitempty"`
+	// Copied / CopyBytes describe a migration's copy, and PreviousTree is where
+	// the pre-migration directory was preserved.
+	Copied       int    `json:"copied_files,omitempty"`
+	CopyBytes    int64  `json:"copied_bytes,omitempty"`
+	PreviousTree string `json:"previous_tree,omitempty"`
 	// Warnings are things the operator should know but that did not stop the
 	// provisioning (an auto-size clamped to the minimum, for instance).
 	Warnings []string `json:"warnings,omitempty"`
@@ -412,59 +421,10 @@ func attachExisting(ctx context.Context, spec Spec, st State, res *Result) error
 	return nil
 }
 
-// provisionLoop builds the volume from a sparse file.
+// provisionLoop builds the volume from a sparse file. The LVM sequence lives in
+// buildLoop so provisioning and migration cannot drift apart.
 func provisionLoop(ctx context.Context, spec Spec, st State, res *Result) error {
-	if err := os.MkdirAll(filepath.Dir(spec.ImagePath), 0o755); err != nil {
-		return fmt.Errorf("create image dir: %w", err)
-	}
-
-	size := spec.Size
-	if size == 0 {
-		free, err := freeBytes(ctx, spec, filepath.Dir(spec.ImagePath))
-		if err != nil {
-			return err
-		}
-		size = AutoSize(free)
-		if size == minAutoSize && int64(float64(free)*autoFreeShare) < minAutoSize {
-			res.Warnings = append(res.Warnings, fmt.Sprintf("only %s free: using the %s minimum, which leaves little room for snapshots", humanBytes(free), humanBytes(minAutoSize)))
-		}
-	}
-	res.ImagePath, res.ImageBytes = spec.ImagePath, size
-	res.PoolBytes = PoolSize(size)
-	res.DataBytes = DataSize(res.PoolBytes)
-
-	if !st.ImageExists {
-		// truncate creates a sparse file: it costs nothing until written.
-		if out, err := spec.exec(ctx, "truncate", "-s", strconv.FormatInt(size, 10), spec.ImagePath); err != nil {
-			return fmt.Errorf("create backing file: %w (%s)", err, strings.TrimSpace(string(out)))
-		}
-	}
-
-	loop := st.LoopDevice
-	if loop == "" {
-		out, err := spec.exec(ctx, "losetup", "--find", "--show", spec.ImagePath)
-		if err != nil {
-			return fmt.Errorf("attach loop device: %w (%s)", err, strings.TrimSpace(string(out)))
-		}
-		loop = strings.TrimSpace(string(out))
-	}
-
-	steps := [][]string{
-		{"pvcreate", "-q", loop},
-		{"vgcreate", "-q", spec.VG, loop},
-		{"lvcreate", "-q", "-T", spec.VG + "/pool", "-L", strconv.FormatInt(res.PoolBytes, 10) + "B"},
-		{"lvcreate", "-q", "-V", strconv.FormatInt(res.DataBytes, 10) + "B", "-T", spec.VG + "/pool", "-n", spec.LV},
-		// mke2fs directly rather than a distribution wrapper: the wrapper's
-		// name and its defaults vary, the tool does not.
-		{"mke2fs", "-q", "-t", "ext4", "-L", "pmcluster-data", spec.device()},
-	}
-	for _, argv := range steps {
-		if out, err := spec.exec(ctx, argv[0], argv[1:]...); err != nil {
-			return fmt.Errorf("%s: %w (%s)", argv[0], err, strings.TrimSpace(string(out)))
-		}
-	}
-	res.Device = spec.device()
-	return nil
+	return buildLoop(ctx, spec, st, res)
 }
 
 // provisionBlockDevice builds the volume on a device the operator supplied.

@@ -22,6 +22,9 @@ type fakeHost struct {
 	vg           bool
 	free         string
 	failOn       string
+	// docker answers for the migration writer check.
+	dockerPs     string
+	dockerMounts string
 }
 
 func (f *fakeHost) exec(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -54,6 +57,17 @@ func (f *fakeHost) exec(_ context.Context, name string, args ...string) ([]byte,
 		return nil, nil
 	case "df":
 		return []byte("Avail\n" + f.free + "\n"), nil
+	case "docker":
+		if len(args) > 0 && args[0] == "ps" {
+			if f.dockerPs == "" {
+				return nil, nil
+			}
+			return []byte(f.dockerPs + "\n"), nil
+		}
+		if f.dockerMounts != "" {
+			return []byte(f.dockerMounts), nil
+		}
+		return []byte("[]"), nil
 	case "systemctl":
 		if len(args) > 0 && args[0] == "start" {
 			f.mountSource = "/dev/mapper/vg--pmcluster-data"
@@ -79,6 +93,8 @@ func testSpec(t *testing.T, h *fakeHost) Spec {
 	base := t.TempDir()
 	return Spec{
 		Mode:       ModeLoop,
+		VG:         DefaultVG,
+		LV:         DefaultLV,
 		VolumeRoot: filepath.Join(base, "data"),
 		ImagePath:  filepath.Join(base, "lib", "app-data.img"),
 		UnitDir:    filepath.Join(base, "units"),

@@ -91,14 +91,73 @@ target volume root.`,
 	RunE: runBackupRestore,
 }
 
+// backupPruneCmd applies the retention policy to a node's archive directory.
+//
+// It exists as its own command because retention is also an operator question:
+// "what is on this disk, and what did the last run delete?" A policy that only
+// lives inside the hourly run answers neither.
+var backupPruneCmd = &cobra.Command{
+	Use:   "prune",
+	Short: "Apply retention to this node's archive directory",
+	Long: `Delete artifacts outside the retention policy.
+
+The policy is 48 hours dense and 15 days sparse by default: every hourly artifact
+is kept for two days, then one per day for the rest. The newest copies of a stack
+are never deleted, and whole-node archives produced by the previous agent
+(offen/docker-volume-backup) are left alone unless --legacy is passed — on a
+fleet mid-cutover those are the only backups that exist.
+
+  pmcluster backup prune --dry-run
+  pmcluster backup prune --keep-hours 72 --keep-days 30`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		out := cmd.OutOrStdout()
+		dir, _ := cmd.Flags().GetString("dir")
+		dryRun, _ := cmd.Flags().GetBool("dry-run")
+		policy := backups.DefaultRetention()
+		policy.KeepHours, _ = cmd.Flags().GetInt("keep-hours")
+		policy.KeepDays, _ = cmd.Flags().GetInt("keep-days")
+		policy.KeepLast, _ = cmd.Flags().GetInt("keep-last")
+		policy.IncludeLegacy, _ = cmd.Flags().GetBool("legacy")
+
+		res, err := backups.PruneArtifacts(dir, policy, time.Now().UTC(), dryRun)
+		if err != nil {
+			return err
+		}
+		verb := "deleted"
+		if dryRun {
+			verb = "would delete"
+		}
+		fmt.Fprintf(out, "%s in %s\n", verb, dir)
+		for _, name := range res.Deleted {
+			fmt.Fprintf(out, "  - %s\n", name)
+		}
+		fmt.Fprintf(out, "\nkept %d · %s %d · freed %s", res.Kept, verb, len(res.Deleted), humanSize(res.FreedBytes))
+		if res.SkippedOld > 0 {
+			fmt.Fprintf(out, " · %d whole-node archive(s) left alone (--legacy prunes them)", res.SkippedOld)
+		}
+		fmt.Fprintln(out)
+		for _, f := range res.Failed {
+			fmt.Fprintf(out, "⚠ %s\n", f)
+		}
+		return nil
+	},
+}
+
 func init() {
+	backupPruneCmd.Flags().String("dir", backups.DefaultArchiveDir, "archive directory to prune")
+	backupPruneCmd.Flags().Bool("dry-run", false, "report what would be deleted without deleting")
+	backupPruneCmd.Flags().Int("keep-hours", 48, "keep every artifact newer than this many hours")
+	backupPruneCmd.Flags().Int("keep-days", 15, "keep one artifact per day until this age in days")
+	backupPruneCmd.Flags().Int("keep-last", 2, "never delete the newest N artifacts of a stack")
+	backupPruneCmd.Flags().Bool("legacy", false, "also prune whole-node archives from the previous agent")
 	backupCreateCmd.Flags().Duration("timeout", 5*time.Minute, "max time to wait for the backup to finish")
 	backupListCmd.Flags().Int("limit", 20, "max rows to show (0 = all)")
 	backupRestoreCmd.Flags().String("dest-root", "", "data root to restore into (<dest-root>/<stack>); default: the cluster's volume_root setting (/var/stack/data when unset)")
 	backupRestoreCmd.Flags().String("volume", "", "restore only this volume (e.g. db_data); empty restores the whole run")
 	backupRestoreCmd.Flags().Bool("from-s3", false, "fetch the archive from the configured offsite S3 store even when a local copy exists")
 
-	backupCmd.AddCommand(backupCreateCmd, backupListCmd, backupBrowseCmd, backupRestoreCmd)
+	backupCmd.AddCommand(backupCreateCmd, backupListCmd, backupBrowseCmd, backupRestoreCmd, backupPruneCmd)
 	rootCmd.AddCommand(backupCmd)
 }
 

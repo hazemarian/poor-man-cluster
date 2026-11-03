@@ -2085,3 +2085,25 @@ func TestRenderOTelCollectorConfig_PerContainerFilelogStructure(t *testing.T) {
 		t.Error("the logs pipeline must read from receiver_creator")
 	}
 }
+
+// The backup store's WebDAV gateway must be reachable from a node's own
+// loopback: the agent is a HOST process and cannot resolve the overlay name
+// backup_seaweedfs, so an unpublished 7333 means artifacts never leave the node.
+func TestBackupStorePublishesWebDAVForHostAgents(t *testing.T) {
+	in := RenderInput{
+		Domain:                "example.com",
+		VolumeRoot:            "/var/stack/data",
+		BackupDir:             "/var/stack/backup",
+		StorageNodeConstraint: true,
+		StorageNodeLabel:      "pmcluster.storage",
+		Store:                 ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "k", SecretKey: "s", Node: "worker-2"},
+	}
+	body := string(mustLoadBackup(t, in))
+	// The renderer sorts keys, so assert on the directive rather than on the
+	// order YAML happened to print it in.
+	for _, want := range []string{"published: 7333", "-webdav.port=7333"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("backup stack does not publish WebDAV for host agents (%q missing):\n%s", want, body)
+		}
+	}
+}

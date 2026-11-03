@@ -100,10 +100,12 @@ type Stack struct {
 // to the leader best-effort: the artifact is the record, the report is
 // enrichment.
 type Result struct {
-	Node    string  `json:"node"`
-	Started int64   `json:"started_at"`
-	Ended   int64   `json:"ended_at"`
-	Stacks  []Stack `json:"stacks"`
+	// Pruned is what retention removed after the run.
+	Pruned  backups.PruneResult `json:"pruned,omitempty"`
+	Node    string              `json:"node"`
+	Started int64               `json:"started_at"`
+	Ended   int64               `json:"ended_at"`
+	Stacks  []Stack             `json:"stacks"`
 	// Error is set when the run as a whole failed (no snapshot, pool abort).
 	Error string `json:"error,omitempty"`
 	// Snapshot records how consistency was obtained for this run.
@@ -195,6 +197,10 @@ type Agent struct {
 	// Verify inspects one artifact. Nil means VerifyArchive with the default
 	// rules.
 	Verify func(archivePath, stack string) (engine, detail string, err error)
+	// Retention, when set, prunes the archive directory after a run. Zero value
+	// means "leave the archives alone" — a test or a one-off run must not delete
+	// history just because it happened to execute.
+	Retention *backups.Retention
 	// DryRun walks the plan and reports what it would do without freezing,
 	// snapshotting or writing anything.
 	DryRun bool
@@ -350,6 +356,21 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 		}
 	}
 	res.Ended = a.now().Unix()
+
+	// Retention runs on the way out, after the artifacts are written and after
+	// the pool guard has judged the run: pruning first would delete a good
+	// artifact to make room for a bad one.
+	if a.Retention != nil {
+		pruned, perr := backups.PruneArtifacts(a.ArchiveDir, *a.Retention, a.now(), false)
+		res.Pruned = pruned
+		if perr != nil {
+			// Retention failing must not fail a run that produced good artifacts.
+			a.logf("backup-agent: retention: %v", perr)
+		} else if len(pruned.Deleted) > 0 {
+			a.logf("backup-agent: retention removed %d artifact(s), freed %s", len(pruned.Deleted), humanBytes(pruned.FreedBytes))
+		}
+	}
+
 	if res.Error != "" {
 		return res, errors.New(res.Error)
 	}
@@ -609,4 +630,18 @@ func sanitise(s string) string {
 		}
 		return '-'
 	}, s)
+}
+
+// humanBytes formats a byte count for a log line.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
