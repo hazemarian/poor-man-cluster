@@ -132,6 +132,46 @@ node image to go back to, which is why a partial restore is not a special case.
 Restore does **not** stop the stack. That is a known gap: the correct procedure
 today is stop-the-stack, restore, start. See "Not done yet".
 
+## Converting a node that already holds data
+
+`provision` refuses a non-empty volume root, which is correct but useless on a
+fleet that already runs. `migrate` is the in-place conversion:
+
+```
+docker node update --availability drain <node>
+sudo pmcluster storage migrate      # build → copy → verify → switch
+docker node update --availability active <node>
+```
+
+It builds the volume and mounts it somewhere else, copies the tree while nothing
+is writing, verifies the copy by file count and byte total, and only then moves
+the old tree aside and mounts the new one at the real path. A failure at any step
+before the switch leaves the live tree untouched; after it, the old tree is at
+`<root>.pre-migration-<ts>` until someone deletes it on purpose.
+
+Measured on the production fleet: 4 stacks / 3.1 MiB on one node, 2 / 4.3 MiB on
+another, and the 19-stack leader in 5.5 s for 435 MiB — 3398 files, 39 SQLite
+databases still passing `integrity_check` on the new volume.
+
+It refuses while a container has a bind mount inside the volume root, and it
+repairs the states a failed teardown leaves behind (orphaned device-mapper
+mappings, a stale `/dev/<vg>`, a volume built but never formatted).
+
+## Retention
+
+Each run prunes its own archive directory: everything for 48 hours, then one
+artifact per calendar day for 15 days, judged per stack. The newest copies of a
+stack are never deleted, and whole-node archives from the previous producer are
+left alone unless `--legacy` is passed.
+
+```
+pmcluster backup prune --dry-run
+pmcluster backup prune --keep-hours 72 --keep-days 30
+```
+
+The first production run freed 30.4 GiB on the leader (299 archives, disk 68% →
+41%) and 31.8 MiB across the two smaller nodes.
+
 ## Runbook
 
 **Is this node backed up?**
