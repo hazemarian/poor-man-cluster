@@ -1086,7 +1086,9 @@ func TestDeployAsync_ReturnsEarlyAndAppliesInBackground(t *testing.T) {
 	}
 	// The apply is backgrounded — give it a bounded moment to reach the
 	// deployer, then confirm it did apply.
-	deadline := time.Now().Add(2 * time.Second)
+	// Generous on purpose: this asserts the background apply happened, not how
+	// fast it happened. 2s flaked on loaded CI runners.
+	deadline := time.Now().Add(20 * time.Second)
 	for dep.callCount() == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -1137,7 +1139,9 @@ func TestDeployAsync_BackgroundFailureRecordsLastError(t *testing.T) {
 	}
 
 	// The apply is backgrounded; wait for it to fail and persist.
-	deadline := time.Now().Add(2 * time.Second)
+	// Generous on purpose: this asserts the background apply happened, not how
+	// fast it happened. 2s flaked on loaded CI runners.
+	deadline := time.Now().Add(20 * time.Second)
 	var st *store.Stack
 	var err error
 	for time.Now().Before(deadline) {

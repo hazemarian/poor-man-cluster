@@ -560,7 +560,10 @@ func TestHandlerReceive(t *testing.T) {
 
 		// The swarm apply runs in a background goroutine now; give it a
 		// bounded moment to reach the deployer.
-		deadline := time.Now().Add(2 * time.Second)
+		// Bounded, but generous: the assertion is 'the background apply
+		// happened', not 'it happened within 2s'. A tight deadline here fails on
+		// a loaded runner while telling us nothing about production.
+		deadline := time.Now().Add(20 * time.Second)
 		for dep.deployedLen() == 0 && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -635,7 +638,7 @@ func TestHandlerReceive(t *testing.T) {
 		// and TempDir removal run in cleanup, and a still-running apply writing
 		// into that directory is what produced "TempDir RemoveAll cleanup:
 		// directory not empty".
-		dep.waitAttempts(t, 1, 5*time.Second)
+		dep.waitAttempts(t, 1, 20*time.Second)
 	})
 
 	t.Run("body larger than MaxBodyBytes — 413", func(t *testing.T) {
