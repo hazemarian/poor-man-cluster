@@ -80,7 +80,7 @@ func TestMigrateCopiesVerifiesAndSwaps(t *testing.T) {
 	if mountIdx < 0 || umountIdx < 0 || startIdx < 0 {
 		t.Fatalf("missing mount/umount/systemctl-start: %v", h.calls)
 	}
-	if !(mountIdx < umountIdx && umountIdx < startIdx) {
+	if mountIdx >= umountIdx || umountIdx >= startIdx {
 		t.Fatalf("order must be mount(%d) → copy → umount(%d) → switch(%d): %v", mountIdx, umountIdx, startIdx, h.calls)
 	}
 }
