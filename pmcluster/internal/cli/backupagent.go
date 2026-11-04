@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -274,6 +275,8 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	if !agentForce && !agentDryRun {
 		dec, derr := fetchBackupDecision(agentDaemonURLs(), node)
 		switch {
+		case errors.Is(derr, errNoDecisionEndpoint):
+			fmt.Fprintf(out, "backup running: %v (deploy the matching daemon to enable the schedule gate)\n", derr)
 		case derr != nil:
 			fmt.Fprintf(out, "backup skipped: control plane unreachable (%v)\n", derr)
 			return nil
@@ -442,6 +445,9 @@ func agentDaemonURLs() []string {
 // now. A failure is not treated as "yes": the operator chose control-plane
 // authority, so an unreachable control plane pauses backups rather than letting
 // every node invent its own schedule.
+// errNoDecisionEndpoint means the manager predates the schedule gate.
+var errNoDecisionEndpoint = fmt.Errorf("control plane does not implement the backup decision endpoint")
+
 func fetchBackupDecision(bases []string, node string) (cluster.BackupDecision, error) {
 	var dec cluster.BackupDecision
 	var lastErr error
@@ -460,6 +466,14 @@ func fetchBackupDecision(bases []string, node string) (cluster.BackupDecision, e
 			cancel()
 			lastErr = err
 			continue
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			// A manager that predates this endpoint. Skipping would turn a
+			// rolling upgrade into a cluster with no backups and no error, so
+			// this is reported distinctly and the run proceeds.
+			resp.Body.Close()
+			cancel()
+			return dec, errNoDecisionEndpoint
 		}
 		if resp.StatusCode != http.StatusOK {
 			lastErr = fmt.Errorf("%s: %s", base, resp.Status)

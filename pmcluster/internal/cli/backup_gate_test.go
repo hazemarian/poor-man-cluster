@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -44,5 +45,23 @@ func TestFetchBackupDecisionReportsWhenNothingAnswers(t *testing.T) {
 	}
 	if _, err := fetchBackupDecision(nil, "n"); err == nil {
 		t.Fatal("expected an error with no addresses at all")
+	}
+}
+
+// A manager that predates the gate answers 404. Treating that like "unreachable"
+// would stop every backup during a rolling upgrade, so it is a distinct answer
+// that lets the run proceed.
+func TestFetchBackupDecisionDistinguishesAManagerWithoutTheEndpoint(t *testing.T) {
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer old.Close()
+
+	_, err := fetchBackupDecision([]string{old.URL}, "n")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !errors.Is(err, errNoDecisionEndpoint) {
+		t.Fatalf("got %v, want errNoDecisionEndpoint", err)
 	}
 }
