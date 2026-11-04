@@ -61,6 +61,13 @@ const (
 	// newest of these. Set e.g. "0 3 * * *" for the old daily 03:00 cadence.
 	settingBackupCron = "backup_cron"
 
+	// settingBackupEnabled is the master switch for the whole backup pipeline.
+	// The node's timer fires regardless; the agent asks the control plane
+	// whether this hour is due and does nothing when the answer is no. Absent
+	// means "true" so a cluster that has been backing up since before this
+	// setting existed keeps backing up.
+	settingBackupEnabled = "backup_enabled"
+
 	// OpenObserve stream retention (days). Unbounded retention is how a
 	// metrics-heavy cluster silently grows to hundreds of GB — the values
 	// render into ZO_LOGS/METRICS/TRACES_RETENTION_DAYS.
@@ -141,6 +148,7 @@ func SettingVolumeRoot() string                     { return settingVolumeRoot }
 func SettingBackupAllNodes() string                 { return settingBackupAllNodes }
 func SettingBackupRetentionDays() string            { return settingBackupRetentionDays }
 func SettingBackupCron() string                     { return settingBackupCron }
+func SettingBackupEnabled() string                  { return settingBackupEnabled }
 func SettingObservabilityLogsRetentionDays() string { return settingObservabilityLogsRetentionDays }
 func SettingObservabilityMetricsRetentionDays() string {
 	return settingObservabilityMetricsRetentionDays

@@ -2,7 +2,11 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +17,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backupagent"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 )
 
 // Defaults for a host-side run. They match the paths the platform already
@@ -26,6 +31,7 @@ const (
 )
 
 var (
+	agentForce      bool
 	agentNode       string
 	agentVolumeRoot string
 	agentArchiveDir string
@@ -93,6 +99,7 @@ func init() {
 	backupAgentRunCmd.Flags().IntVar(&agentKeepDays, "keep-days", 15, "keep one artifact per day until this age in days")
 	backupAgentRunCmd.Flags().IntVar(&agentKeepLast, "keep-last", 2, "never delete the newest N artifacts of a stack")
 	backupAgentRunCmd.Flags().BoolVar(&agentKeepLegacy, "prune-legacy", false, "also prune whole-node archives (the previous producer's output)")
+	backupAgentRunCmd.Flags().BoolVar(&agentForce, "force", false, "run now, ignoring the control plane's schedule decision")
 	backupAgentRunCmd.Flags().BoolVar(&agentDryRun, "dry-run", false, "report what would be archived without freezing, snapshotting or writing")
 	backupAgentRunCmd.Flags().StringVar(&agentShipWebDAV, "ship-webdav", envOr("PMCLUSTER_BACKUP_WEBDAV", ""),
 		"WebDAV URL to copy each artifact to after verification (the in-cluster store)")
@@ -241,6 +248,27 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 		},
 	}
+	// The control plane decides whether this hour is due. The systemd timer is a
+	// dumb heartbeat: it fires every hour and this is where a run is actually
+	// authorised. --force exists for an operator or the console asking for a run
+	// now, and is the only way past the gate.
+	if !agentForce && !agentDryRun {
+		dec, derr := fetchBackupDecision(agentDaemonURL(), node)
+		switch {
+		case derr != nil:
+			fmt.Fprintf(out, "backup skipped: control plane unreachable (%v)\n", derr)
+			return nil
+		case !dec.Enabled:
+			fmt.Fprintf(out, "backup skipped: %s\n", dec.Reason)
+			return nil
+		case !dec.Due:
+			fmt.Fprintf(out, "backup not due: %s\n", dec.Reason)
+			return nil
+		default:
+			fmt.Fprintf(out, "backup authorised by the control plane (schedule %s, store=%t, offsite=%t)\n", dec.Schedule, dec.Store, dec.Offsite)
+		}
+	}
+
 	if ship := shipTargetsFromEnv(); ship != nil {
 		a.Ship = ship
 	}
@@ -358,6 +386,42 @@ func runBackupAgentDrill(cmd *cobra.Command, args []string) error {
 
 // webdavShipper copies an artifact to the in-cluster store. It is a thin
 // wrapper so the agent stays unaware of the transport.
+// agentDaemonURL is the node's own daemon. Loopback, because the decision is
+// served only to local callers.
+var agentDaemonURL = func() string {
+	if v := os.Getenv("PMCLUSTER_DAEMON_URL"); v != "" {
+		return v
+	}
+	return "http://127.0.0.1:9090"
+}
+
+// fetchBackupDecision asks the control plane whether this node should back up
+// now. A failure is not treated as "yes": the operator chose control-plane
+// authority, so an unreachable control plane pauses backups rather than letting
+// every node invent its own schedule.
+func fetchBackupDecision(base, node string) (cluster.BackupDecision, error) {
+	var dec cluster.BackupDecision
+	u := strings.TrimSuffix(base, "/") + "/internal/backup/decision?node=" + url.QueryEscape(node)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return dec, err
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return dec, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return dec, fmt.Errorf("%s", resp.Status)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&dec); err != nil {
+		return dec, err
+	}
+	return dec, nil
+}
+
 // shipTargetsFromEnv builds the artifact's destinations from the environment.
 //
 // Both legs are optional and independent: the in-cluster store (WebDAV) is one

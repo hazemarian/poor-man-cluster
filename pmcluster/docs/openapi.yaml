@@ -43,6 +43,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Health"
+  /internal/backup/decision:
+    get:
+      summary: Should this node back up right now (loopback only, used by the node agent)
+      description: |
+        The systemd timer on each node is a heartbeat, not a schedule: it fires
+        and asks this endpoint whether the current minute matches `backup_cron`
+        and whether `backup_enabled` is on. Answers are refused unless the caller
+        is on loopback, because the caller is the root backup agent on the same
+        host. The response carries switches and the schedule string, never
+        credentials.
+      operationId: backupDecision
+      security: []
+      parameters:
+        - name: node
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: The decision
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled: { type: boolean }
+                  due: { type: boolean }
+                  schedule: { type: string }
+                  store: { type: boolean }
+                  offsite: { type: boolean }
+                  reason: { type: string }
+        "403":
+          description: Caller is not on loopback
   /webhook/{source}:
     post:
       summary: Accept an HMAC-verified deploy from CI
