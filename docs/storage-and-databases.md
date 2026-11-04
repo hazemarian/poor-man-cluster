@@ -183,34 +183,38 @@ stack on an empty directory.
 
 ### 3.2 The schedule belongs to the control plane, not to the timer
 
-`pmcluster-backup.timer` fires every hour and means nothing on its own. On each
-fire the agent asks the control plane one question — `GET
-/internal/backup/decision` — and a manager answers from the cluster's settings.
-
-It asks a **manager**, not its own node's daemon: on a worker the daemon runs in
-standby and serves no HTTP at all, so "ask the local daemon" would silently stop
-backups on exactly the nodes that host most of the stacks. The agent tries
-loopback first (correct on a manager) and then every manager address the swarm
-advertises, which a worker can read even though it cannot run `docker node ls`.
-The endpoint accepts private addresses for that reason, and the public edge never
-proxies `/internal/`.
+`pmcluster-backup.timer` fires every hour and means nothing on its own. Before
+each run the agent reads its policy — `/etc/pmcluster/backup.conf`, mode 0600 —
+and obeys it:
 
 | setting | effect |
 |---|---|
 | `backup_enabled` | `false` ⇒ the agent exits without freezing anything |
-| `backup_cron` | a run is due only when the current minute matches |
+| `backup_cron` | a run happens only when the current minute matches |
 | `backup_store_on` | `off` ⇒ no in-cluster store is deployed or written |
 | `backup_s3_*` | a complete set ⇒ artifacts are also uploaded offsite |
 
-All four are editable from the console and the CLI (`pmcluster backup enable`,
-`pmcluster backup disable`, `pmcluster backup schedule "0 2 * * *"`), which is the
-point: a schedule in a unit file is a schedule a user can silently break, and a
-timer someone disables stops backups with no record anywhere.
+The file is written by `pmcluster backup-agent install` from the cluster's
+settings, and the same values are editable from the console and the CLI
+(`pmcluster backup enable`, `backup disable`, `backup schedule "0 2 * * *"`).
+
+**There is no endpoint and no cross-node call.** An earlier design had the agent
+ask a manager over HTTP; that turned into an unauthenticated port on the private
+plane, and — worse — the response carried the offsite bucket key, which any
+container on the overlay could have read. The policy file removes the question
+entirely: a node never asks another node for permission.
+
+**Why a file and not a read of the node's own store?** Managers carry the full
+settings in their control-plane database, and a promoted leader keeps them (the
+survivor kit restores the newest `pmcluster_state_*` config on promotion, and a
+standby's `data.db` holds the same rows). **Workers do not**: their copy is as old
+as their last restore from the daily archive, so a worker reading its own store
+silently falls back to hourly defaults. That is why the policy is a file the
+platform writes rather than a setting the node looks up.
 
 **The timer is a heartbeat. Do not edit it.** Changing its calendar changes
-nothing, because it is not what decides anything — the decision comes from the
-settings above. An unreachable control plane skips the run and says so; nodes do
-not invent their own schedules.
+nothing — the decision comes from the policy above. The run lock belongs to the
+agent, not the unit, so a forced run and the hourly run can never overlap.
 
 ### 3.3 The producer is a node-local agent, not a Swarm service
 
