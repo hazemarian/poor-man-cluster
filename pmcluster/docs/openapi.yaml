@@ -74,6 +74,18 @@ paths:
                   store: { type: boolean }
                   offsite: { type: boolean }
                   reason: { type: string }
+                  target:
+                    type: object
+                    description: |
+                      The offsite destination the agent should upload to. Served
+                      so an operator sets the bucket once and every node ships to
+                      it, instead of writing a secret into a file per node.
+                    properties:
+                      endpoint: { type: string }
+                      bucket: { type: string }
+                      region: { type: string }
+                      access_key: { type: string }
+                      secret_key: { type: string }
         "403":
           description: Caller is not on loopback
   /webhook/{source}:
