@@ -117,7 +117,7 @@ func TestBackupAgentPerStackEndToEnd(t *testing.T) {
 	seedAgentStack(t, root, "khaal-pvc-cms", false) // files only
 	writeAgentPlan(t, state, node, "horizon-erp", "khaal-pvc-cms")
 
-	out, code := runAgent(t, "backup-agent", "run",
+	out, code := runAgent(t, "backup-agent", "run", "--force",
 		"--snapshot=none",
 		"--node="+node,
 		"--volume-root="+root,
@@ -210,7 +210,7 @@ func TestBackupAgentDrillRejectsCorruptArchive(t *testing.T) {
 	seedAgentStack(t, root, "app", true)
 	writeAgentPlan(t, state, "node1", "app")
 
-	if out, code := runAgent(t, "backup-agent", "run", "--snapshot=none", "--node=node1",
+	if out, code := runAgent(t, "backup-agent", "run", "--force", "--snapshot=none", "--node=node1",
 		"--volume-root="+root, "--archive-dir="+archive, "--state-dir="+state); code != 0 {
 		t.Fatalf("run exited %d\n%s", code, out)
 	}
@@ -241,7 +241,7 @@ func TestBackupAgentDrillRejectsCorruptArchive(t *testing.T) {
 	badArchive := t.TempDir()
 	badState := t.TempDir()
 	writeAgentPlan(t, badState, "node1", "app")
-	out, code := runAgent(t, "backup-agent", "run", "--snapshot=none", "--node=node1",
+	out, code := runAgent(t, "backup-agent", "run", "--force", "--snapshot=none", "--node=node1",
 		"--volume-root="+bad, "--archive-dir="+badArchive, "--state-dir="+badState)
 	if code == 0 {
 		t.Fatalf("the agent reported success for an unopenable database:\n%s", out)
@@ -263,7 +263,7 @@ func TestBackupAgentIsolatesAMissingStack(t *testing.T) {
 	seedAgentStack(t, root, "healthy", true)
 	writeAgentPlan(t, state, "node1", "healthy", "moved-away")
 
-	out, code := runAgent(t, "backup-agent", "run", "--snapshot=none", "--node=node1",
+	out, code := runAgent(t, "backup-agent", "run", "--force", "--snapshot=none", "--node=node1",
 		"--volume-root="+root, "--archive-dir="+archive, "--state-dir="+state)
 	// A partially failed run is a failed run for the unit (non-zero exit)...
 	if code == 0 {
@@ -288,6 +288,28 @@ func TestBackupAgentIsolatesAMissingStack(t *testing.T) {
 	}
 }
 
+// TestBackupAgentSkipsWhenTheControlPlaneIsUnreachable pins the scheduling gate:
+// the timer is only a heartbeat, so a run with no control plane to ask must not
+// freeze anything. Exit 0 and an explicit line, not a silent success.
+func TestBackupAgentSkipsWhenTheControlPlaneIsUnreachable(t *testing.T) {
+	root, archive, state := t.TempDir(), t.TempDir(), t.TempDir()
+	seedAgentStack(t, root, "app", true)
+	writeAgentPlan(t, state, "node1", "app")
+
+	t.Setenv("PMCLUSTER_DAEMON_URL", "") // no override: nothing to ask
+	out, code := runAgent(t, "backup-agent", "run", "--snapshot=none", "--node=node1",
+		"--volume-root="+root, "--archive-dir="+archive, "--state-dir="+state)
+	if code != 0 {
+		t.Fatalf("a skipped run must exit 0, got %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "backup skipped") {
+		t.Fatalf("expected an explicit skip line, got:\n%s", out)
+	}
+	if entries, _ := os.ReadDir(archive); len(entries) != 0 {
+		t.Fatalf("a skipped run wrote %d entries into the archive dir", len(entries))
+	}
+}
+
 // TestBackupAgentDryRunWritesNothing guards the flag an operator will run
 // first on a production node.
 func TestBackupAgentDryRunWritesNothing(t *testing.T) {
@@ -295,7 +317,7 @@ func TestBackupAgentDryRunWritesNothing(t *testing.T) {
 	seedAgentStack(t, root, "app", true)
 	writeAgentPlan(t, state, "node1", "app")
 
-	out, code := runAgent(t, "backup-agent", "run", "--snapshot=none", "--dry-run", "--node=node1",
+	out, code := runAgent(t, "backup-agent", "run", "--force", "--snapshot=none", "--dry-run", "--node=node1",
 		"--volume-root="+root, "--archive-dir="+archive, "--state-dir="+state)
 	if code != 0 {
 		t.Fatalf("dry run exited %d\n%s", code, out)
@@ -328,7 +350,7 @@ func TestBackupAgentUnplannedDirsAreReported(t *testing.T) {
 	seedAgentStack(t, root, "dep-s2-stale", true) // left behind by an old deployment
 	writeAgentPlan(t, state, "node1", "app")
 
-	out, code := runAgent(t, "backup-agent", "run", "--snapshot=none", "--node=node1",
+	out, code := runAgent(t, "backup-agent", "run", "--force", "--snapshot=none", "--node=node1",
 		"--volume-root="+root, "--archive-dir="+archive, "--state-dir="+state)
 	if code != 0 {
 		t.Fatalf("run exited %d\n%s", code, out)
