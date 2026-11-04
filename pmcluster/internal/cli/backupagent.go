@@ -277,9 +277,9 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		dec, derr := localBackupDecision(ctx)
 		switch {
 		case derr != nil:
-			// No settings on this node (fresh install, or the store is missing).
-			// Running with the defaults is the safe failure: a cluster that has
-			// not configured backups still gets backups.
+			// No settings on this node. The decision already says "due", so this
+			// is a notice, not a gate: a node the platform has not configured
+			// still backs up.
 			fmt.Fprintf(out, "backup running with defaults: no local settings (%v)\n", derr)
 		case !dec.Enabled:
 			fmt.Fprintf(out, "backup skipped: %s\n", dec.Reason)
@@ -434,7 +434,16 @@ func localBackupDecision(ctx context.Context) (cluster.BackupDecision, error) {
 	}
 	st, _, err := openStore()
 	if err != nil {
-		return cluster.BackupDecision{}, err
+		// No policy file and no store: a node the platform has not configured.
+		// It must still back up — an unconfigured node is not an exempt one —
+		// so the defaults are enabled and due, not a zero decision that would
+		// read as "not due".
+		return cluster.BackupDecision{
+			Enabled:  true,
+			Due:      true,
+			Schedule: cluster.DefaultBackupCron,
+			Reason:   "no local settings; running with the defaults",
+		}, err
 	}
 	defer func() { _ = st.Close() }()
 	return cluster.BackupDecisionFor(ctx, st, time.Now()), nil
