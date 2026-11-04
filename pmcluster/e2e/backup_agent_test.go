@@ -288,25 +288,23 @@ func TestBackupAgentIsolatesAMissingStack(t *testing.T) {
 	}
 }
 
-// TestBackupAgentSkipsWhenTheControlPlaneIsUnreachable pins the scheduling gate:
-// the timer is only a heartbeat, so a run with no control plane to ask must not
-// freeze anything. Exit 0 and an explicit line, not a silent success.
-func TestBackupAgentSkipsWhenTheControlPlaneIsUnreachable(t *testing.T) {
+// The schedule is a policy file on the node. Disabled means disabled; absent
+// means the defaults, which are enabled — an unconfigured node is not an exempt
+// one. There is no endpoint to be unreachable.
+func TestBackupAgentHonoursTheNodePolicyFile(t *testing.T) {
 	root, archive, state := t.TempDir(), t.TempDir(), t.TempDir()
 	seedAgentStack(t, root, "app", true)
 	writeAgentPlan(t, state, "node1", "app")
 
-	t.Setenv("PMCLUSTER_DAEMON_URL", "") // no override: nothing to ask
+	// No policy file anywhere: the agent must still run.
 	out, code := runAgent(t, "backup-agent", "run", "--snapshot=none", "--node=node1",
 		"--volume-root="+root, "--archive-dir="+archive, "--state-dir="+state)
 	if code != 0 {
-		t.Fatalf("a skipped run must exit 0, got %d\n%s", code, out)
+		t.Fatalf("an unconfigured node must still back up, got %d\n%s", code, out)
 	}
-	if !strings.Contains(out, "backup skipped") {
-		t.Fatalf("expected an explicit skip line, got:\n%s", out)
-	}
-	if entries, _ := os.ReadDir(archive); len(entries) != 0 {
-		t.Fatalf("a skipped run wrote %d entries into the archive dir", len(entries))
+	entries, _ := os.ReadDir(archive)
+	if len(entries) == 0 {
+		t.Fatalf("no artifact written with the defaults in force:\n%s", out)
 	}
 }
 
