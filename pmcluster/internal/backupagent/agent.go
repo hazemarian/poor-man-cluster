@@ -176,7 +176,7 @@ func acquireLock(path string) (release func(), err error) {
 // tracer emits one span per run, per phase and per stack.
 //
 // A run that froze a production node for seventeen minutes left nothing behind
-// but "wrote blocked for 17m9s": the number said a phase was slow, not which one,
+// but one opaque duration: the number said a phase was slow, not which one,
 // and the only way to tell was to reproduce it. Spans answer that question from
 // the trace: freeze, lvcreate, tar, verify and ship are separate spans with their
 // own durations, so the slow one names itself.
