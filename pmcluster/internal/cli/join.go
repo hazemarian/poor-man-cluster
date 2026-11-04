@@ -282,6 +282,12 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 			}
 		}
 		registerStorageNode(cmd.Context(), cmd.OutOrStdout(), sshHost, effectiveHostname)
+		// Mark the role on the node itself. The backup agent reads it before it
+		// installs: a worker that was explicitly joined as a storage node is the
+		// one worker that should be snapshotting its volume.
+		if err := markStorageNodeEnv(); err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "  (could not record the storage-node role: %v)\n", err)
+		}
 		// A storage node must be able to take atomic snapshots before it accepts
 		// work, because converting it afterwards means moving every stack off it
 		// first. Best-effort on purpose: a join that fails because a loop device
@@ -671,4 +677,28 @@ func manualStorageNodeHint(out io.Writer, sshHost, nodeHostname, merged string) 
 	}
 	fmt.Fprintln(out, "  Register it manually on the manager (ssh to it and run):")
 	fmt.Fprintf(out, "    pmcluster cluster settings set storage_nodes='%s'\n", merged)
+}
+
+// markStorageNodeEnv records that this node is a storage node in the agent's
+// environment file, which is where `backup-agent install` looks before it decides
+// whether this host should be snapshotting anything.
+func markStorageNodeEnv() error {
+	const line = "PMCLUSTER_STORAGE_NODE=1\n"
+	b, err := os.ReadFile(backupEnvFile)
+	if err == nil && strings.Contains(string(b), "PMCLUSTER_STORAGE_NODE=1") {
+		return nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(backupEnvFile), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(backupEnvFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(line)
+	return err
 }

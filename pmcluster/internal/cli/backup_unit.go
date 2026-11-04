@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
@@ -206,28 +206,29 @@ var (
 // It is deliberately quiet on non-Linux hosts and when systemctl is missing:
 // the same binary is used on a laptop for `backup-agent drill`, and that must
 // not require an init system.
-// isStorageNode reports whether this host owns a data volume worth snapshotting.
+// isStorageNode reports whether this host is meant to hold stack data.
 //
-// A plain worker runs other people's stateless services and holds no stack data:
-// there is nothing on it to snapshot, so installing an hourly root job that takes
-// snapshots of a volume that does not exist buys nothing and costs disk. Observed
-// on a production worker: a 5 GiB pool sat unused while a 41 GB backup store filled
-// the disk it was never supposed to need.
+// It is a question about the node's ROLE, not about its disk. Checking for a local
+// LV is not enough: a worker joined with storage provisioned has one, and would
+// then be handed an hourly root job that snapshots a volume holding nothing but a
+// test stack — observed on production, where the worker also carried a 41 GB backup
+// store on a 58 GB disk.
+//
+// A storage node is a manager (the fleet keeps stack data on managers) or a worker
+// that was explicitly marked as one at join time, which sets PMCLUSTER_STORAGE_NODE
+// in this unit's environment.
 func isStorageNode() (bool, string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	st, err := storage.Detect(ctx, storage.Spec{VolumeRoot: backupAgentVolumeRd})
+	if os.Getenv("PMCLUSTER_STORAGE_NODE") == "1" {
+		return true, ""
+	}
+	out, err := exec.Command("docker", "info", "--format", "{{.Swarm.ControlAvailable}}").Output()
 	if err != nil {
-		return false, err.Error()
+		return false, "docker did not answer, so this node's swarm role is unknown"
 	}
-	if !st.Ours {
-		src := st.Source
-		if src == "" {
-			src = "nothing"
-		}
-		return false, fmt.Sprintf("%s is mounted from %s", st.Root, src)
+	if strings.TrimSpace(string(out)) == "true" {
+		return true, ""
 	}
-	return true, ""
+	return false, "this node is a worker, and workers hold no stack data"
 }
 
 // storageNodeFn is isStorageNode, overridable for tests.
