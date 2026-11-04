@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -241,14 +240,12 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		retention = &policy
 	}
 	a := &backupagent.Agent{
-		Retention:        retention,
-		Node:             node,
-		VolumeRoot:       root,
-		ArchiveDir:       agentArchiveDir,
-		RunDir:           filepath.Join(agentStateDir, "runs"),
-		MaxFreezeSeconds: maxFreezeSeconds(),
-		Snapshot:         snap,
-		DryRun:           agentDryRun,
+		Retention:  retention,
+		Node:       node,
+		VolumeRoot: root,
+		ArchiveDir: agentArchiveDir,
+		Snapshot:   snap,
+		DryRun:     agentDryRun,
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 		},
@@ -297,10 +294,6 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	}
 
 	res, runErr := a.Run(ctx, plan)
-	if errors.Is(runErr, backupagent.ErrBackingOff) {
-		fmt.Fprintf(out, "%s\n", res.Error)
-		return nil
-	}
 	if errors.Is(runErr, backupagent.ErrAlreadyRunning) {
 		// Somebody else is already backing this node up. Not an error: the work
 		// is being done by the run that holds the lock.
@@ -422,20 +415,6 @@ func runBackupAgentDrill(cmd *cobra.Command, args []string) error {
 
 // webdavShipper copies an artifact to the in-cluster store. It is a thin
 // wrapper so the agent stays unaware of the transport.
-// maxFreezeSeconds is the circuit-breaker limit: how long the previous run's
-// freeze may have lasted before this run stands down for one interval.
-//
-// Thirty seconds is generous — a healthy node freezes for 100–600 ms — and
-// anything above it means the node is not in a state where a snapshot is safe.
-func maxFreezeSeconds() float64 {
-	if v := envOr("PMCLUSTER_BACKUP_MAX_FREEZE_SECONDS", ""); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			return f
-		}
-	}
-	return 30
-}
-
 // localBackupDecision answers "should this hour run?" from the node's own copy
 // of the control-plane store.
 //

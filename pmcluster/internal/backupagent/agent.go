@@ -84,45 +84,8 @@ const Prefix = "backup/data"
 // to the work, not to the launcher.
 const lockPath = "/run/pmcluster-backup.lock"
 
-// ErrBackingOff means the previous run's freeze was long enough that this run
-// deliberately stands down for one interval.
-var ErrBackingOff = errors.New("backing off after a long freeze")
-
 // ErrAlreadyRunning is returned when another run holds the lock.
 var ErrAlreadyRunning = errors.New("another backup run is in progress")
-
-// lastFreezeSeconds reads the newest run record and returns how long its freeze
-// was held. ok is false when there is no usable record.
-func (a *Agent) lastFreezeSeconds() (float64, bool) {
-	if a.RunDir == "" {
-		return 0, false
-	}
-	entries, err := os.ReadDir(a.RunDir)
-	if err != nil {
-		return 0, false
-	}
-	newest := ""
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "run-") && strings.HasSuffix(e.Name(), ".json") && e.Name() > newest {
-			newest = e.Name()
-		}
-	}
-	if newest == "" {
-		return 0, false
-	}
-	b, err := os.ReadFile(filepath.Join(a.RunDir, newest))
-	if err != nil {
-		return 0, false
-	}
-	var prev Result
-	if json.Unmarshal(b, &prev) != nil {
-		return 0, false
-	}
-	if prev.Snapshot.FrozenAt == 0 || prev.Snapshot.ThawedAt <= prev.Snapshot.FrozenAt {
-		return 0, false
-	}
-	return float64(prev.Snapshot.ThawedAt-prev.Snapshot.FrozenAt) / 1e9, true
-}
 
 // lockRuns takes the run lock, trying the lock file's home first and the archive
 // directory second.
@@ -342,9 +305,6 @@ type Agent struct {
 	RunDir string
 	// MountsFile overrides /proc/self/mounts; tests only.
 	MountsFile string
-	// MaxFreezeSeconds is the circuit breaker: if the previous run held the
-	// freeze longer than this, skip one interval. Zero disables it.
-	MaxFreezeSeconds float64
 	// Now is overridable in tests.
 	Now func() time.Time
 	// Logf receives progress lines.
@@ -499,19 +459,6 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 		res.Warnings = append(res.Warnings, fmt.Sprintf(
 			"stack(s) %s mount a filesystem outside %s: the snapshot holds only part of that stack",
 			strings.Join(split, ", "), a.VolumeRoot))
-	}
-
-	// Circuit breaker. A freeze cannot be cancelled, so the only way to avoid a
-	// repeat of a nineteen-minute stall is to not start one: if the previous run
-	// held the freeze longer than the limit, stand down for this interval and let
-	// the node drain. The skipped run writes a record with no freeze, so the next
-	// interval tries again — a one-interval cooldown, not a permanent stop.
-	if a.MaxFreezeSeconds > 0 {
-		if secs, ok := a.lastFreezeSeconds(); ok && secs >= a.MaxFreezeSeconds {
-			res.Error = fmt.Sprintf("backing off: the previous run held the freeze for %.0fs (limit %.0fs) — skipping this interval so the node can drain", secs, a.MaxFreezeSeconds)
-			res.Ended = a.now().Unix()
-			return res, ErrBackingOff
-		}
 	}
 
 	// Freeze, snapshot, thaw. The thaw is deferred so a snapshot failure can
