@@ -272,8 +272,10 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	// dumb heartbeat: it fires every hour and this is where a run is actually
 	// authorised. --force exists for an operator or the console asking for a run
 	// now, and is the only way past the gate.
+	var decisionTarget *cluster.OffsiteTarget
 	if !agentForce && !agentDryRun {
 		dec, derr := fetchBackupDecision(agentDaemonURLs(), node)
+		decisionTarget = dec.Target
 		switch {
 		case errors.Is(derr, errNoDecisionEndpoint):
 			fmt.Fprintf(out, "backup running: %v (deploy the matching daemon to enable the schedule gate)\n", derr)
@@ -289,9 +291,13 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		default:
 			fmt.Fprintf(out, "backup authorised by the control plane (schedule %s, store=%t, offsite=%t)\n", dec.Schedule, dec.Store, dec.Offsite)
 		}
+	} else if dec, derr := fetchBackupDecision(agentDaemonURLs(), node); derr == nil {
+		// Forced runs still take the operator's ship target when one is served;
+		// the verdict is ignored, the destination is not.
+		decisionTarget = dec.Target
 	}
 
-	if ship := shipTargetsFromEnv(); ship != nil {
+	if ship := shipTargetsFromEnv(decisionTarget); ship != nil {
 		a.Ship = ship
 	}
 
@@ -503,7 +509,7 @@ func fetchBackupDecision(bases []string, node string) (cluster.BackupDecision, e
 // a node with neither is a legitimate configuration — the artifact still lands
 // on disk and the run records where. Returning nil means "local only", which the
 // agent reports as such rather than as a failure.
-func shipTargetsFromEnv() func(context.Context, string) ([]string, error) {
+func shipTargetsFromEnv(target *cluster.OffsiteTarget) func(context.Context, string) ([]string, error) {
 	webdav := agentShipWebDAV
 	s3 := backups.S3Config{
 		Endpoint:  os.Getenv("PMCLUSTER_BACKUP_S3_ENDPOINT"),
@@ -511,6 +517,17 @@ func shipTargetsFromEnv() func(context.Context, string) ([]string, error) {
 		AccessKey: os.Getenv("PMCLUSTER_BACKUP_S3_ACCESS_KEY"),
 		SecretKey: os.Getenv("PMCLUSTER_BACKUP_S3_SECRET_KEY"),
 		Region:    os.Getenv("PMCLUSTER_BACKUP_S3_REGION"),
+	}
+	// The control plane's target wins: it is what the operator set once, in the
+	// console or the CLI, and it is the only copy a worker has.
+	if target != nil {
+		s3 = backups.S3Config{
+			Endpoint:  target.Endpoint,
+			Bucket:    target.Bucket,
+			Region:    target.Region,
+			AccessKey: target.AccessKey,
+			SecretKey: target.SecretKey,
+		}
 	}
 	if webdav == "" && !s3.Configured() {
 		return nil

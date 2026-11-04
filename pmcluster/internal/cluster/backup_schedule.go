@@ -28,6 +28,14 @@ type BackupDecision struct {
 	Store bool `json:"store"`
 	// Offsite is true when an S3-compatible destination is fully configured.
 	Offsite bool `json:"offsite"`
+	// Target is the offsite destination the agent should upload to.
+	//
+	// It travels in the answer rather than being configured on every node, so an
+	// operator sets the bucket once (console or CLI) and every node ships to it.
+	// The transport is the swarm's private plane and the endpoint refuses public
+	// callers; the alternative — writing a secret into a file on each node by
+	// hand — is the operator toil this platform exists to remove.
+	Target *OffsiteTarget `json:"target,omitempty"`
 	// Reason explains a "no", in the words the operator will read.
 	Reason string `json:"reason,omitempty"`
 }
@@ -60,7 +68,16 @@ func BackupDecisionFor(ctx context.Context, st *store.Store, now time.Time) Back
 		d.Store = true
 	}
 
-	d.Offsite = BackupS3For(ctx, st).Configured()
+	if s3 := BackupS3For(ctx, st); s3.Configured() {
+		d.Offsite = true
+		d.Target = &OffsiteTarget{
+			Endpoint:  s3.Endpoint,
+			Bucket:    s3.Bucket,
+			Region:    s3.Region,
+			AccessKey: s3.AccessKey,
+			SecretKey: s3.SecretKey,
+		}
+	}
 
 	switch {
 	case !d.Enabled:
@@ -91,6 +108,15 @@ func BackupS3For(ctx context.Context, st *store.Store) (cfg S3Settings) {
 		Region:    st.SettingDefault(ctx, settingBackupS3Region, ""),
 	}
 	return cfg
+}
+
+// OffsiteTarget is what the agent needs to upload an artifact.
+type OffsiteTarget struct {
+	Endpoint  string `json:"endpoint"`
+	Bucket    string `json:"bucket"`
+	Region    string `json:"region,omitempty"`
+	AccessKey string `json:"access_key"`
+	SecretKey string `json:"secret_key"`
 }
 
 // S3Settings is the offsite destination as stored in the cluster settings.
