@@ -197,6 +197,58 @@ func (l *LVMSnapshotter) Usage(ctx context.Context) (float64, error) {
 
 // Drop unmounts and removes the snapshot. Errors are returned so the caller can
 // log them; a leftover snapshot is a disk-space problem, not a data problem.
+// snapDir is where the snapshot gets mounted.
+func (l *LVMSnapshotter) snapDir() string {
+	if l.SnapDir != "" {
+		return l.SnapDir
+	}
+	return "/run/pmcluster-backup/snap"
+}
+
+// RemoveStale drops snapshot LVs left behind by a run that never finished.
+//
+// A run killed with SIGKILL — an operator, an OOM kill, a reboot mid-ship, or
+// the run deadline expiring — never reaches its deferred lvremove. The snapshot
+// then sits on the origin holding pool blocks until the 80% guard starts
+// aborting runs for a reason that looks nothing like its cause. Cleanup belongs
+// at the start of the next run, not the end of the last one.
+func (l *LVMSnapshotter) RemoveStale(ctx context.Context) ([]string, error) {
+	prefix := l.Prefix
+	if prefix == "" {
+		prefix = "pmcluster-snap"
+	}
+	out, err := l.exec(ctx, "lvs", "--noheadings", "-o", "lv_name", "-S", "lv_name=~^"+prefix+"-", l.VG)
+	if err != nil {
+		return nil, fmt.Errorf("list stale snapshots in %s: %w (%s)", l.VG, err, strings.TrimSpace(string(out)))
+	}
+	var removed []string
+	for _, name := range parseLVSNames(string(out)) {
+		// A left-over mount would block the next run's mount point; an unmounted
+		// LV reports "not mounted" here, which is the benign case.
+		if out, uerr := l.exec(ctx, "umount", l.snapDir()); uerr != nil && !strings.Contains(string(out), "not mounted") {
+			// Keep going: lvremove can still succeed, and failing the run over a
+			// leftover directory is worse than trying.
+			_ = out
+		}
+		if out, rerr := l.exec(ctx, "lvremove", "-y", l.VG+"/"+name); rerr != nil {
+			return removed, fmt.Errorf("drop stale snapshot %s: %w (%s)", name, rerr, strings.TrimSpace(string(out)))
+		}
+		removed = append(removed, name)
+	}
+	return removed, nil
+}
+
+// parseLVSNames reads `lvs --noheadings -o lv_name` output.
+func parseLVSNames(out string) []string {
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		if n := strings.TrimSpace(line); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
 func (l *LVMSnapshotter) Drop(ctx context.Context, token string) error {
 	dir := l.SnapDir
 	if dir == "" {

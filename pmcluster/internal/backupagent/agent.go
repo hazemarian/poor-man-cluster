@@ -315,6 +315,19 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 		return res, fmt.Errorf("backup-agent: archive dir: %w", err)
 	}
 
+	// Drop snapshots a previous run could not remove. Deliberately before the
+	// freeze: a stale snapshot holds pool blocks and its mount point would
+	// collide with this run's.
+	if cleaner, ok := a.Snapshot.(interface {
+		RemoveStale(context.Context) ([]string, error)
+	}); ok {
+		if gone, serr := cleaner.RemoveStale(ctx); serr != nil {
+			a.logf("backup-agent: stale snapshot cleanup: %v", serr)
+		} else if len(gone) > 0 {
+			a.logf("backup-agent: removed %d snapshot(s) left by an interrupted run: %s", len(gone), strings.Join(gone, ", "))
+		}
+	}
+
 	// Freeze, snapshot, thaw. The thaw is deferred so a snapshot failure can
 	// never leave the node's filesystem frozen — that would stall every stack
 	// on the node, which is far worse than a missed backup.
