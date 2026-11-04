@@ -8,10 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
+	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
 )
 
 // The backup agent is a host unit, not a Swarm service.
@@ -206,7 +206,62 @@ var (
 // It is deliberately quiet on non-Linux hosts and when systemctl is missing:
 // the same binary is used on a laptop for `backup-agent drill`, and that must
 // not require an init system.
+// isStorageNode reports whether this host owns a data volume worth snapshotting.
+//
+// A plain worker runs other people's stateless services and holds no stack data:
+// there is nothing on it to snapshot, so installing an hourly root job that takes
+// snapshots of a volume that does not exist buys nothing and costs disk. Observed
+// on a production worker: a 5 GiB pool sat unused while a 41 GB backup store filled
+// the disk it was never supposed to need.
+func isStorageNode() (bool, string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	st, err := storage.Detect(ctx, storage.Spec{VolumeRoot: backupAgentVolumeRd})
+	if err != nil {
+		return false, err.Error()
+	}
+	if !st.Ours {
+		src := st.Source
+		if src == "" {
+			src = "nothing"
+		}
+		return false, fmt.Sprintf("%s is mounted from %s", st.Root, src)
+	}
+	return true, ""
+}
+
+// storageNodeFn is isStorageNode, overridable for tests.
+var storageNodeFn = isStorageNode
+
+// removeBackupAgent takes the agent back off a node that should not have one. It
+// is idempotent: a node that never had the units just gets two failed removes.
+func removeBackupAgent(out io.Writer) {
+	if hostOS == "linux" && hasSystemctl() {
+		_ = systemctlFn("disable", "--now", "pmcluster-backup.timer")
+	}
+	removed := false
+	for _, p := range []string{backupTimerPath, backupUnitPath} {
+		if err := os.Remove(p); err == nil {
+			removed = true
+		}
+	}
+	if removed {
+		fmt.Fprintf(out, "  → removed %s and %s: this node is not a storage node\n",
+			filepath.Base(backupUnitPath), filepath.Base(backupTimerPath))
+		if hostOS == "linux" && hasSystemctl() {
+			_ = systemctlFn("daemon-reload")
+		}
+	}
+}
+
 func ensureBackupAgentInstalled(out io.Writer) error {
+	// No volume, no backup. A worker does not hold stack data, so an agent here
+	// would snapshot an empty directory forever.
+	if ok, why := storageNodeFn(); !ok {
+		fmt.Fprintf(out, "  (not a storage node — %s; the backup agent was not installed)\n", why)
+		removeBackupAgent(out)
+		return nil
+	}
 	if os.Getenv("PMCLUSTER_SKIP_BACKUP_AGENT") != "" {
 		fmt.Fprintln(out, "  (PMCLUSTER_SKIP_BACKUP_AGENT set — the backup timer was not installed)")
 		return nil

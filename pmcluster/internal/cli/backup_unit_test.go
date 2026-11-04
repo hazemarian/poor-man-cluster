@@ -62,7 +62,20 @@ func TestRenderBackupTimerUnit(t *testing.T) {
 // TestEnsureBackupAgentInstalled covers the install sequence: both files
 // written, daemon-reload then enable --now, using the same seams the daemon
 // installer uses so no test touches a real init system.
+func storageNodeForTest(t *testing.T, is bool) {
+	t.Helper()
+	prev := storageNodeFn
+	storageNodeFn = func() (bool, string) {
+		if is {
+			return true, ""
+		}
+		return false, "/var/stack/data is mounted from nothing"
+	}
+	t.Cleanup(func() { storageNodeFn = prev })
+}
+
 func TestEnsureBackupAgentInstalled(t *testing.T) {
+	storageNodeForTest(t, true)
 	dir := t.TempDir()
 	oldUnit, oldTimer := backupUnitPath, backupTimerPath
 	oldSys, oldHostOS, oldHasSys, oldWrite := systemctlFn, hostOS, hasSystemctl, writeUnitFn
@@ -111,6 +124,7 @@ func TestEnsureBackupAgentInstalled(t *testing.T) {
 // A laptop runs the binary for `backup-agent drill`; installing a timer there
 // must be impossible rather than merely unlikely.
 func TestEnsureBackupAgentInstalledSkipsNonLinux(t *testing.T) {
+	storageNodeForTest(t, true)
 	oldHostOS, oldHasSys, oldWrite := hostOS, hasSystemctl, writeUnitFn
 	defer func() { hostOS, hasSystemctl, writeUnitFn = oldHostOS, oldHasSys, oldWrite }()
 	hostOS = "darwin"
@@ -129,6 +143,7 @@ func TestEnsureBackupAgentInstalledSkipsNonLinux(t *testing.T) {
 }
 
 func TestEnsureBackupAgentInstalledHonoursSkipEnv(t *testing.T) {
+	storageNodeForTest(t, true)
 	t.Setenv("PMCLUSTER_SKIP_BACKUP_AGENT", "1")
 	oldWrite := writeUnitFn
 	defer func() { writeUnitFn = oldWrite }()
@@ -139,5 +154,48 @@ func TestEnsureBackupAgentInstalledHonoursSkipEnv(t *testing.T) {
 	var out bytes.Buffer
 	if err := ensureBackupAgentInstalled(&out); err != nil {
 		t.Fatalf("want nil with the skip env, got %v", err)
+	}
+}
+
+// A worker holds no stack data. Installing an hourly root job that snapshots a
+// volume that is not there buys nothing — and on production it meant a node with no
+// storage ran a backup agent while its pool sat unused.
+func TestEnsureBackupAgentIsNotInstalledOnANonStorageNode(t *testing.T) {
+	dir := t.TempDir()
+	backupUnitPath = filepath.Join(dir, "pmcluster-backup.service")
+	backupTimerPath = filepath.Join(dir, "pmcluster-backup.timer")
+	storageNodeForTest(t, false)
+
+	var out bytes.Buffer
+	if err := ensureBackupAgentInstalled(&out); err != nil {
+		t.Fatalf("a non-storage node must be a clean no-op, got: %v", err)
+	}
+	if _, err := os.Stat(backupTimerPath); !os.IsNotExist(err) {
+		t.Fatal("the timer was installed on a node with no volume to snapshot")
+	}
+	if !strings.Contains(out.String(), "not a storage node") {
+		t.Fatalf("the operator was not told why: %q", out.String())
+	}
+}
+
+// And if one was installed before the node stopped being a storage node, it comes
+// back off rather than lingering.
+func TestEnsureBackupAgentRemovesLeftoverUnits(t *testing.T) {
+	dir := t.TempDir()
+	backupUnitPath = filepath.Join(dir, "pmcluster-backup.service")
+	backupTimerPath = filepath.Join(dir, "pmcluster-backup.timer")
+	for _, p := range []string{backupUnitPath, backupTimerPath} {
+		if err := os.WriteFile(p, []byte("[Unit]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	storageNodeForTest(t, false)
+
+	var out bytes.Buffer
+	if err := ensureBackupAgentInstalled(&out); err != nil {
+		t.Fatalf("ensureBackupAgentInstalled: %v", err)
+	}
+	if _, err := os.Stat(backupTimerPath); !os.IsNotExist(err) {
+		t.Fatal("a leftover timer survived on a node that is no longer a storage node")
 	}
 }
