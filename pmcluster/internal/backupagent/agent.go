@@ -255,6 +255,9 @@ type Result struct {
 	Error string `json:"error,omitempty"`
 	// Snapshot records how consistency was obtained for this run.
 	Snapshot backups.SnapshotFacts `json:"snapshot"`
+	// Warnings name conditions that make an artifact less useful than it looks —
+	// a stack split across filesystems, so its snapshot holds half of it.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Succeeded reports whether every planned stack produced a verified artifact.
@@ -337,6 +340,8 @@ type Agent struct {
 	// RunDir holds previous run records; the last freeze duration is read from
 	// the newest one before this run decides to freeze.
 	RunDir string
+	// MountsFile overrides /proc/self/mounts; tests only.
+	MountsFile string
 	// MaxFreezeSeconds is the circuit breaker: if the previous run held the
 	// freeze longer than this, skip one interval. Zero disables it.
 	MaxFreezeSeconds float64
@@ -485,6 +490,15 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 		} else if len(gone) > 0 {
 			a.logf("backup-agent: removed %d snapshot(s) left by an interrupted run: %s", len(gone), strings.Join(gone, ", "))
 		}
+	}
+
+	// A snapshot only holds one filesystem. A stack that mounts a second volume
+	// gets half a backup, and the missing half is the redo a database needs — so
+	// say it in the record rather than shipping it silently.
+	if split := SplitStacks(mountsFor(a.MountsFile), a.VolumeRoot); len(split) > 0 {
+		res.Warnings = append(res.Warnings, fmt.Sprintf(
+			"stack(s) %s mount a filesystem outside %s: the snapshot holds only part of that stack",
+			strings.Join(split, ", "), a.VolumeRoot))
 	}
 
 	// Circuit breaker. A freeze cannot be cancelled, so the only way to avoid a

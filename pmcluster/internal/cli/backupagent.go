@@ -364,6 +364,9 @@ func printAgentResult(out interface{ Write([]byte) (int, error) }, res backupage
 	if res.Snapshot.ThawedAt > res.Snapshot.FrozenAt && res.Snapshot.FrozenAt > 0 {
 		freeze = time.Duration(res.Snapshot.ThawedAt - res.Snapshot.FrozenAt)
 	}
+	for _, w := range res.Warnings {
+		fmt.Fprintf(out, "warning: %s\n", w)
+	}
 	fmt.Fprintf(out, "\nnode %s · %d stack(s) · snapshot took %s · snapshot %s",
 		res.Node, len(res.Stacks), freeze, res.Snapshot.Kind)
 	if res.Snapshot.PoolPercent >= 0 && res.Snapshot.PoolPercent != 0 {
