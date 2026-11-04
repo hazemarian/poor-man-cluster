@@ -293,12 +293,18 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 	// Freeze, snapshot, thaw. The thaw is deferred so a snapshot failure can
 	// never leave the node's filesystem frozen — that would stall every stack
 	// on the node, which is far worse than a missed backup.
+	// Phase timings are logged separately because "wrote blocked for 17m" was
+	// once reported with no way to tell WHICH step held the freeze: the fsfreeze
+	// call itself (flush), or lvcreate. One production run took seventeen minutes
+	// and the number alone could not say why.
+	freezeStarted := a.now()
 	if err := a.Snapshot.Freeze(ctx, a.VolumeRoot); err != nil {
 		res.Error = fmt.Sprintf("freeze failed: %v", err)
 		res.Ended = a.now().Unix()
 		return res, fmt.Errorf("backup-agent: freeze %s: %w", a.VolumeRoot, err)
 	}
 	res.Snapshot.FrozenAt = a.now().UnixNano()
+	freezeCost := a.now().Sub(freezeStarted)
 	at := a.now()
 
 	snapDir := ""
@@ -314,6 +320,10 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 		}()
 		snapDir, token, snapErr = a.Snapshot.Snapshot(ctx, a.VolumeRoot, at)
 	}()
+	snapCost := a.now().Sub(at)
+	if freezeCost > 2*time.Second || snapCost > 2*time.Second {
+		a.logf("backup-agent: SLOW WINDOW — fsfreeze %s, lvcreate+thaw %s", freezeCost.Round(time.Millisecond), snapCost.Round(time.Millisecond))
+	}
 	if snapErr != nil {
 		// Deliberately no fallback to tarring the live tree: that is exactly
 		// the bug this agent exists to remove.
