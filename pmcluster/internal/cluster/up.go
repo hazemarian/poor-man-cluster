@@ -86,18 +86,28 @@ var ensureStorageDirs = func(volumeRoot string) error {
 			return fmt.Errorf("create storage dir %s: %w", dir, err)
 		}
 	}
-	// A node that was provisioned but whose volume failed to mount looks
-	// identical to a fresh one — an empty directory. Deploying onto it is how
-	// every stack ends up writing into the root filesystem, so the presence of a
-	// backing file with no mount is a hard stop rather than a warning.
-	if _, err := os.Stat(storage.DefaultImagePath); err == nil {
-		st, derr := storage.Detect(context.Background(), storage.Spec{VolumeRoot: volumeRoot})
-		if derr != nil {
-			return fmt.Errorf("inspect app-data volume: %w", derr)
-		}
-		if !st.Provisioned() {
-			return fmt.Errorf("%s is not mounted even though %s exists — deploying now would run every stack on an empty directory; run `pmcluster storage status` and fix the mount first", volumeRoot, storage.DefaultImagePath)
-		}
+	return nil
+}
+
+// verifyVolumeRootMounted is the deploy-time guard: a node that was provisioned
+// but whose volume failed to mount looks identical to a fresh one — an empty
+// directory. Deploying onto it is how every stack ends up writing into the root
+// filesystem, so a backing file with no mount is a hard stop.
+//
+// It takes the volume root explicitly and is NOT part of ensureStorageDirs: the
+// archive directory is a plain directory by design, and checking it for a
+// logical volume made `cluster update` refuse on a node whose data volume was
+// perfectly healthy.
+func verifyVolumeRootMounted(volumeRoot string) error {
+	if _, err := os.Stat(storage.DefaultImagePath); err != nil {
+		return nil // never provisioned: nothing to be inconsistent with
+	}
+	st, derr := storage.Detect(context.Background(), storage.Spec{VolumeRoot: volumeRoot})
+	if derr != nil {
+		return fmt.Errorf("inspect app-data volume: %w", derr)
+	}
+	if !st.Provisioned() {
+		return fmt.Errorf("%s is not mounted even though %s exists — deploying now would run every stack on an empty directory; run `pmcluster storage status` and fix the mount first", volumeRoot, storage.DefaultImagePath)
 	}
 	return nil
 }
@@ -210,6 +220,9 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			root = manifest.DefaultVolumeRoot
 		}
 		if err := ensureStorageDirs(root); err != nil {
+			return err
+		}
+		if err := verifyVolumeRootMounted(root); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "  ✓ %s ready\n", root)

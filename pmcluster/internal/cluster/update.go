@@ -324,7 +324,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		if err := ensureStorageDirs(backupRootDir()); err != nil {
 			return err
 		}
-		return nil
+		return verifyVolumeRootMounted(render.VolumeRoot)
 	})
 
 	wf.Add("Ensuring overlay networks", func(ctx context.Context) error {
