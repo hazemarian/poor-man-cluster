@@ -181,6 +181,9 @@ func loadAgentPlan(explicit, stateDir string) (backupagent.Plan, string, error) 
 
 func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	cmd.SilenceUsage = true
+	// Spans are only useful if a provider is installed: without this the tracer
+	// is the global no-op and a slow phase leaves no trace behind.
+	defer initCLITelemetry()()
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()

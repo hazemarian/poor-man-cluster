@@ -55,6 +55,11 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 )
 
@@ -67,6 +72,15 @@ import (
 // changes at all — the artifact is narrower (one stack), the wire format is
 // identical.
 const Prefix = "backup/data"
+
+// tracer emits one span per run, per phase and per stack.
+//
+// A run that froze a production node for seventeen minutes left nothing behind
+// but "wrote blocked for 17m9s": the number said a phase was slow, not which one,
+// and the only way to tell was to reproduce it. Spans answer that question from
+// the trace: freeze, lvcreate, tar, verify and ship are separate spans with their
+// own durations, so the slow one names itself.
+func tracer() trace.Tracer { return otel.Tracer("pmcluster/backupagent") }
 
 // PoolAbortPercent is the thin-pool data percentage at which a run aborts.
 // A thin snapshot that fills its pool is invalidated by the kernel and cannot
@@ -292,6 +306,20 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 	if a.Snapshot == nil {
 		return res, errors.New("backup-agent: no snapshotter configured")
 	}
+	ctx, runSpan := tracer().Start(ctx, "backup.run",
+		trace.WithAttributes(
+			attribute.String("backup.node", a.Node),
+			attribute.String("backup.volume_root", a.VolumeRoot),
+			attribute.Int("backup.stacks_planned", len(plan.Stacks)),
+			attribute.String("backup.snapshot_kind", a.Snapshot.Kind()),
+		))
+	defer func() {
+		runSpan.SetAttributes(attribute.Int("backup.stacks_ok", len(res.Stacks)))
+		if res.Error != "" {
+			runSpan.SetStatus(codes.Error, res.Error)
+		}
+		runSpan.End()
+	}()
 	if len(plan.Stacks) == 0 {
 		a.logf("backup-agent: plan holds no stacks for node %s — nothing to do", a.Node)
 		return res, nil
@@ -328,7 +356,7 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 		RemoveStale(context.Context) ([]string, error)
 	}); ok {
 		if gone, serr := cleaner.RemoveStale(ctx); serr != nil {
-			a.logf("backup-agent: stale snapshot cleanup: %v", serr)
+			a.logf("backup-agent: warning: stale snapshot cleanup: %v", serr)
 		} else if len(gone) > 0 {
 			a.logf("backup-agent: removed %d snapshot(s) left by an interrupted run: %s", len(gone), strings.Join(gone, ", "))
 		}
@@ -342,11 +370,16 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 	// call itself (flush), or lvcreate. One production run took seventeen minutes
 	// and the number alone could not say why.
 	freezeStarted := a.now()
-	if err := a.Snapshot.Freeze(ctx, a.VolumeRoot); err != nil {
+	freezeCtx, freezeSpan := tracer().Start(ctx, "backup.freeze")
+	if err := a.Snapshot.Freeze(freezeCtx, a.VolumeRoot); err != nil {
+		freezeSpan.RecordError(err)
+		freezeSpan.SetStatus(codes.Error, err.Error())
+		freezeSpan.End()
 		res.Error = fmt.Sprintf("freeze failed: %v", err)
 		res.Ended = a.now().Unix()
 		return res, fmt.Errorf("backup-agent: freeze %s: %w", a.VolumeRoot, err)
 	}
+	freezeSpan.End()
 	res.Snapshot.FrozenAt = a.now().UnixNano()
 	freezeCost := a.now().Sub(freezeStarted)
 	at := a.now()
@@ -358,15 +391,18 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 		defer func() {
 			if terr := a.Snapshot.Thaw(ctx, a.VolumeRoot); terr != nil {
 				// Not fatal to the artifacts, but it must be visible.
-				a.logf("backup-agent: THAW FAILED (%v) — the node may still be frozen", terr)
+				a.logf("backup-agent: error: THAW FAILED (%v) — the node may still be frozen", terr)
 			}
 			res.Snapshot.ThawedAt = a.now().UnixNano()
 		}()
 		snapDir, token, snapErr = a.Snapshot.Snapshot(ctx, a.VolumeRoot, at)
 	}()
 	snapCost := a.now().Sub(at)
+	if snapErr != nil {
+		freezeSpan.RecordError(snapErr)
+	}
 	if freezeCost > 2*time.Second || snapCost > 2*time.Second {
-		a.logf("backup-agent: SLOW WINDOW — fsfreeze %s, lvcreate+thaw %s", freezeCost.Round(time.Millisecond), snapCost.Round(time.Millisecond))
+		a.logf("backup-agent: warning: SLOW WINDOW — fsfreeze %s, lvcreate+thaw %s", freezeCost.Round(time.Millisecond), snapCost.Round(time.Millisecond))
 	}
 	if snapErr != nil {
 		// Deliberately no fallback to tarring the live tree: that is exactly
@@ -379,18 +415,28 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 	a.snapLV = token
 	defer func() {
 		if err := a.Snapshot.Drop(context.WithoutCancel(ctx), token); err != nil {
-			a.logf("backup-agent: drop snapshot %s: %v", token, err)
+			a.logf("backup-agent: warning: drop snapshot %s: %v", token, err)
 		}
 	}()
 
 	for _, s := range plan.Stacks {
-		st := a.archiveStack(ctx, snapDir, s, at)
+		stackCtx, stackSpan := tracer().Start(ctx, "backup.stack",
+			trace.WithAttributes(attribute.String("backup.stack", s.Name)))
+		st := a.archiveStack(stackCtx, snapDir, s, at)
 		res.Stacks = append(res.Stacks, st)
 		if st.Archive != "" {
 			st.Where = []string{"node:" + st.Archive}
 			if a.Ship != nil {
 				p := filepath.Join(a.ArchiveDir, st.Archive)
-				where, err := a.Ship(ctx, p)
+				shipCtx, shipSpan := tracer().Start(ctx, "backup.ship",
+					trace.WithAttributes(attribute.String("backup.stack", st.Stack)))
+				where, err := a.Ship(shipCtx, p)
+				shipSpan.SetAttributes(attribute.StringSlice("backup.where", where))
+				if err != nil {
+					shipSpan.RecordError(err)
+					shipSpan.SetStatus(codes.Error, err.Error())
+				}
+				shipSpan.End()
 				if err != nil {
 					st.OK = false
 					st.Reason = fmt.Sprintf("ship: %v", err)
@@ -400,6 +446,19 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 			}
 			res.Stacks[len(res.Stacks)-1] = st
 		}
+		stackSpan.SetAttributes(
+			attribute.Bool("backup.ok", st.OK),
+			attribute.String("backup.archive", st.Archive),
+			attribute.Int64("backup.bytes", st.Bytes),
+			attribute.Int("backup.files", st.Files),
+			attribute.String("backup.engine", st.Engine),
+			attribute.Bool("backup.verified", st.Verified),
+			attribute.StringSlice("backup.where", st.Where),
+		)
+		if !st.OK {
+			stackSpan.SetStatus(codes.Error, st.Reason)
+		}
+		stackSpan.End()
 	}
 
 	// Pool guard: a thin snapshot approaching its pool limit is invalidated by
@@ -410,7 +469,7 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 		res.Snapshot.PoolPercent = pct
 		if pct >= PoolAbortPercent {
 			res.Error = fmt.Sprintf("thin pool at %.1f%% (limit %.0f%%) — snapshot may have been invalidated", pct, PoolAbortPercent)
-			a.logf("backup-agent: %s", res.Error)
+			a.logf("backup-agent: error: %s", res.Error)
 		}
 	}
 	res.Ended = a.now().Unix()
@@ -419,14 +478,17 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 	// the pool guard has judged the run: pruning first would delete a good
 	// artifact to make room for a bad one.
 	if a.Retention != nil {
+		_, retentionSpan := tracer().Start(ctx, "backup.retention")
 		pruned, perr := backups.PruneArtifacts(a.ArchiveDir, *a.Retention, a.now(), false)
 		res.Pruned = pruned
 		if perr != nil {
 			// Retention failing must not fail a run that produced good artifacts.
-			a.logf("backup-agent: retention: %v", perr)
+			a.logf("backup-agent: warning: retention: %v", perr)
 		} else if len(pruned.Deleted) > 0 {
 			a.logf("backup-agent: retention removed %d artifact(s), freed %s", len(pruned.Deleted), humanBytes(pruned.FreedBytes))
 		}
+		retentionSpan.SetAttributes(attribute.Int("backup.pruned", len(pruned.Deleted)))
+		retentionSpan.End()
 	}
 
 	if res.Error != "" {
