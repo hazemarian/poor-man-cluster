@@ -49,9 +49,19 @@ const (
 	// snapshot, and above 128 GiB a single-node file is the wrong shape.
 	minAutoSize = 8 << 30
 	maxAutoSize = 128 << 30
-	// Fraction of free space claimed on a fresh install. Half leaves the root
-	// filesystem room for images, logs and the packages Docker pulls.
-	autoFreeShare = 0.50
+	// Fraction of the DISK the data volume claims on a fresh install.
+	//
+	// It was half of the space that happened to be free at that moment, which is
+	// why two nodes of the same size ended up with a 30 GiB volume and a 5 GiB
+	// one: "free" depends on what the node was doing that day. Sizing against the
+	// disk itself gives every node the same answer — three quarters for data,
+	// one quarter for the system — and the reserve below stops a heavily used
+	// disk from being over-committed by the same rule.
+	autoDiskShare = 0.75
+	// systemReserve is how much must stay free for images, logs and Docker's own
+	// writes. A sparse file that fills the root filesystem does not fail the
+	// volume, it fails the node.
+	systemReserve = 8 << 30
 )
 
 // String lets a Mode be stored in a setting or a flag without a cast at every
@@ -250,10 +260,18 @@ func sameMount(ctx context.Context, spec Spec, src string) bool {
 	return a != "" && a == b
 }
 
-// AutoSize derives the backing file size from free space on the filesystem that
-// will hold it.
-func AutoSize(freeBytes int64) int64 {
-	size := int64(float64(freeBytes) * autoFreeShare)
+// AutoSize derives the backing file size from the disk that will hold it.
+//
+// The rule is 75% of the filesystem's total size, capped so that at least
+// systemReserve stays free — on a disk that is already half full, the reserve
+// wins and the volume is smaller. Both numbers are needed: total alone would
+// over-commit a busy disk, free alone is what produced wildly different volumes
+// on identically sized nodes.
+func AutoSize(totalBytes, freeBytes int64) int64 {
+	size := int64(float64(totalBytes) * autoDiskShare)
+	if room := freeBytes - systemReserve; size > room {
+		size = room
+	}
 	if size < minAutoSize {
 		return minAutoSize
 	}
@@ -461,6 +479,20 @@ func freeBytes(ctx context.Context, spec Spec, dir string) (int64, error) {
 	fields := strings.Fields(string(out))
 	if len(fields) < 2 {
 		return 0, fmt.Errorf("measure free space on %s: unexpected df output %q", dir, string(out))
+	}
+	return strconv.ParseInt(fields[len(fields)-1], 10, 64)
+}
+
+// totalBytes reports the size of the filesystem holding dir, so auto-sizing can
+// be a share of the disk rather than of whatever happens to be free.
+func totalBytes(ctx context.Context, spec Spec, dir string) (int64, error) {
+	out, err := spec.exec(ctx, "df", "-B1", "--output=size", dir)
+	if err != nil {
+		return 0, fmt.Errorf("measure disk size on %s: %w", dir, err)
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) < 2 {
+		return 0, fmt.Errorf("measure disk size on %s: unexpected df output %q", dir, string(out))
 	}
 	return strconv.ParseInt(fields[len(fields)-1], 10, 64)
 }

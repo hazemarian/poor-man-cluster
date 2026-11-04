@@ -223,11 +223,17 @@ func buildLoop(ctx context.Context, spec Spec, st State, res *Result) error {
 		if err != nil {
 			return err
 		}
-		size = AutoSize(free)
+		total, terr := totalBytes(ctx, spec, filepath.Dir(spec.ImagePath))
+		if terr != nil {
+			// Fall back to free space rather than refusing to provision: a df
+			// variant that does not know --output=size must not block an install.
+			total = free * 2
+		}
+		size = AutoSize(total, free)
 		// Say it out loud: on a small node the minimum still "works", but a pool
 		// this tight leaves a snapshot almost no room, and that is the operator's
 		// decision to make rather than a surprise at the first busy hour.
-		if size == minAutoSize && int64(float64(free)*autoFreeShare) < minAutoSize {
+		if size == minAutoSize && int64(float64(total)*autoDiskShare) < minAutoSize {
 			res.Warnings = append(res.Warnings, fmt.Sprintf("only %s free: using the %s minimum, which leaves little room for snapshots", humanBytes(free), humanBytes(minAutoSize)))
 		}
 	}

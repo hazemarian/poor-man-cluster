@@ -394,13 +394,13 @@ func TestSizesAreSectorAligned(t *testing.T) {
 }
 
 func TestAutoSizeClamps(t *testing.T) {
-	if got := AutoSize(4 << 30); got != minAutoSize {
+	if got := AutoSize(10<<30, 4<<30); got != minAutoSize {
 		t.Fatalf("small disk = %d, want the minimum", got)
 	}
-	if got := AutoSize(4 << 40); got != maxAutoSize {
+	if got := AutoSize(400<<30, 380<<30); got != maxAutoSize {
 		t.Fatalf("huge disk = %d, want the maximum", got)
 	}
-	if got := AutoSize(200 << 30); got != 100<<30 {
+	if got := AutoSize(400<<30, 380<<30); got != 128<<30 {
 		t.Fatalf("200 GiB free = %d, want half", got)
 	}
 }
@@ -418,5 +418,36 @@ func TestModeNoneLeavesTheVolumeRootAlone(t *testing.T) {
 	}
 	if h.ran("truncate") || h.ran("systemctl") {
 		t.Fatalf("mode none did work: %v", h.calls)
+	}
+}
+
+// The default is a share of the DISK, not of whatever is free that day — half of
+// free space is how two identically sized nodes ended up with a 30 GiB volume and
+// a 5 GiB one.
+func TestAutoSizeTakesThreeQuartersOfTheDisk(t *testing.T) {
+	const gib = int64(1) << 30
+	cases := []struct {
+		name        string
+		total, free int64
+		want        int64
+	}{
+		{"116 GiB disk, mostly empty", 116 * gib, 106 * gib, int64(116 * gib * 75 / 100)},
+		{"58 GiB disk, mostly empty — reserve caps it", 58 * gib, 46 * gib, 38 * gib},
+		{"58 GiB disk, half full — reserve wins", 58 * gib, 30 * gib, 22 * gib},
+		{"tiny disk floors at the minimum", 10 * gib, 9 * gib, 8 * gib},
+	}
+	for _, c := range cases {
+		if got := AutoSize(c.total, c.free); got != c.want {
+			t.Fatalf("%s: AutoSize(%d, %d) = %d, want %d", c.name, c.total, c.free, got, c.want)
+		}
+	}
+}
+
+// Whatever the arithmetic says, the volume must never eat the disk it lives on.
+func TestAutoSizeAlwaysLeavesTheSystemReserve(t *testing.T) {
+	const gib = int64(1) << 30
+	got := AutoSize(500*gib, 20*gib)
+	if got > 20*gib-systemReserve {
+		t.Fatalf("AutoSize left only %d GiB free", (20*gib-got)/gib)
 	}
 }
