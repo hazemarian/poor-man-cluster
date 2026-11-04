@@ -1,27 +1,33 @@
-%% pmcluster backup — one run, end to end.
+%% pmcluster backup — one run, end to end (current state).
 %% Colours: green = in code and tested | red = NOT in code yet |
 %% amber = host/ops change (no code) | purple = data.
 %%
-%% System packages: NONE are missing on nxt-sw-1-m / nxt-sw-3-w.
-%% Verified: fsfreeze+flock (util-linux), lvcreate/lvs/lvremove (lvm2 2.03.31),
-%% mount/umount, tar, gzip — all installed. sqlite3, psql and pg_controldata are
-%% NOT installed and are NOT needed: SQLite verification links into the binary
-%% (modernc.org/sqlite) and Postgres is only presence-checked.
+%% Every green line below ran on the four production nodes. The per-volume offen
+%% archiver is gone from the binary — its whole-node tar of a live directory is
+%% exactly what this replaced.
+%%
+%% Packages a node needs: fsfreeze + flock (util-linux), lvcreate / lvs /
+%% lvremove (lvm2), mount / umount, tar, gzip, losetup, pvcreate, blkid.
+%% sqlite3, psql and pg_controldata are NOT installed and NOT needed: SQLite
+%% verification links into the binary (modernc.org/sqlite), and Postgres / MySQL
+%% are recognised from their on-disk files.
 
 sequenceDiagram
  autonumber
 
- box rgb(6,78,59) IN CODE — shipped and tested
+ box rgb(6,78,59) IN CODE — shipped, tested, running in production
+ participant OP as operator / setup wizard
+ participant ST as pmcluster storage
  participant T as systemd timer
  participant A as backup-agent (root oneshot)
  participant D as pmcluster daemon (this node)
- participant L as pmcluster daemon (leader)
- participant S as SeaweedFS store (WebDAV)
+ participant S as SeaweedFS store (WebDAV 7333)
+ participant UI as console + CLI
  end
 
  box rgb(120,53,15) HOST / OPS — no code
  participant K as kernel + LVM (fsfreeze, lvcreate)
- participant O as operator
+ participant S3 as offsite S3 (the store's own mirror)
  end
 
  box rgb(76,29,149) DATA
@@ -31,52 +37,65 @@ sequenceDiagram
  end
 
  box rgb(136,19,55) NOT IN CODE YET
- participant API as plan + run-report API
+ participant PITR as Postgres WAL stream
+ participant API as plan / run-report endpoint
  end
 
+ Note over OP,ST: ONE TIME, per node
+ OP->>ST: sudo pmcluster storage migrate (provision on an empty node)
+ ST->>K: loop file → PV → VG → thin pool → thin LV → ext4
+ ST->>V: mount at /var/stack/data — copy, verify, switch, keep the old tree
+ ST->>T: install units — pool, mount, and RequiresMountsFor on docker/daemon/agent
+ Note right of ST: refuses over live data unless drained,<br/>and repairs a half-built volume instead of rebuilding
+
+ Note over T,A: EVERY HOUR
  T->>A: OnCalendar hourly, Persistent=true
  A->>A: flock -n /run/pmcluster-backup.lock
- Note right of A: one run per node, extra triggers exit
+ Note right of A: one run per node, a second trigger exits 0
+ A->>X: read cached plan.json when present
+ A->>V: otherwise derive the plan from the directory layout
+ Note right of A: a backup must not depend on the leader being reachable
 
- A->>X: read cached plan.json
- A-->>API: refresh plan from leader (missing endpoint)
- Note over A,API: NOT BUILT — plan publisher. plan.json is hand-placed, and a stale one is harmless.
-
+ A->>K: findmnt --mountpoint — is this really our LV?
+ Note right of K: not mounted ⇒ REFUSE, never tar a live tree
  A->>K: fsfreeze -f /var/stack/data
- Note over K,V: all writes block, ~ms
- A->>K: lvcreate -s vg0/data
+ Note over K,V: writes block, measured 0.1–0.6 s warm
+ A->>K: lvcreate -s vg-pmcluster/data
  A->>K: fsfreeze -u
- Note right of A: freeze fails ⇒ NO tar. No live-tree fallback.
  A->>K: mount -o ro the snapshot
 
  loop one artifact per stack, serial
- A->>V: walk stack/ in the frozen image
- A->>X: tar → backup-node-ts-stack-stack.tar.gz
- A->>X: manifest.json (sha256, snapshot facts)
- A->>E: verify: sqlite integrity_check
- Note right of E: postgres presence only, not validated
- A->>S: PUT artifact (net/http)
+   A->>V: walk stack/ inside the frozen image
+   A->>X: tar → backup-node-ts-stack-stack.tar.gz
+   A->>X: manifest.json with sha256 and snapshot facts
+   A->>E: verify — sqlite integrity_check
+   Note right of E: postgres / mysql / mariadb are recognised from<br/>their files, not validated from the host
+   A->>S: PUT artifact over WebDAV (127.0.0.1:7333, basic auth)
  end
 
  A->>K: umount + lvremove
- Note right of K: pool ≥80% aborts loudly
+ Note right of K: pool ≥80% aborts loudly rather than shipping<br/>a snapshot the kernel invalidated
+ S->>S3: the store mirrors its bucket — SeaweedFS, not offen
 
+ A->>X: retention — 48 h dense, one per day to 15 d, per stack
+ Note right of A: never deletes a stack's last copies
  A->>X: write run-ts.json
- Note right of A: written before any report
- A--)API: POST /internal/backup/runs (missing endpoint)
 
- D->>X: discover *.tar.gz → backups rows
- Note over D,X: no report needed — the archive is the record
- O->>D: backup list / browse / restore
- O->>A: backup-agent drill archive
- A->>A: extract + integrity_check (proves restorability)
+ D->>X: discover artifacts → backups rows
+ UI->>D: backup list / browse / restore
+ UI->>A: backup create (root) — run now instead of waiting for the hour
+
+ OP->>A: pmcluster backup-agent drill archive
+ A->>A: extract + integrity_check, which is what proves restorability
+ Note over OP,V: restore opens ONE artifact, extracts it into the volume root<br/>and prunes what it did not contain. The snapshot is long gone.
 
  alt leader is down during the run
- Note over A,L: a systemd job, not a leader client: it finishes
- D->>X: rows still discovered on the next pass
- L->>D: plan refresh waits for promotion
+   Note over A,D: a systemd job, not a leader client — it finishes, and the<br/>archive on disk is the record
+   D->>X: rows discovered on the next pass
  end
 
- rect rgb(120,53,15)
- Note over K,V: NOT CODE — thin pool, then PMCLUSTER_BACKUP_AGENT=1, an hour + a drill, then retire offen (leader last)
+ rect rgb(136,19,55)
+   Note over A,PITR: NOT BUILT — RPO is one hour. The WAL stream that would<br/>make it continuous (pg_receivewal over the container's trust socket) is designed, not written.
+   Note over A,API: NOT BUILT — plan publisher and run-report endpoint.<br/>The agent works without both.
+   Note over D,V: NOT BUILT — restore writes into a live volume root,<br/>so stop the stack around it.
  end
