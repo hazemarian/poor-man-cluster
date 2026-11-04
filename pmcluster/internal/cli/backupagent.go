@@ -22,6 +22,7 @@ const (
 	defaultVolumeRoot = "/var/stack/data"
 	defaultStateDir   = "/var/lib/pmcluster-backup"
 	planCacheName     = "plan.json"
+	agentRunDeadline  = 45 * time.Minute
 )
 
 var (
@@ -174,6 +175,14 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		ctx = context.Background()
 	}
 	out := cmd.OutOrStdout()
+
+	// A run may not outlive the timer interval: an unbounded phase would hold the
+	// flock past the next trigger, which exits silently as "already running" and
+	// turns a hung node into a node with no backups and no error.
+	// Derived from the command's context, not a fresh one: a SIGTERM that
+	// cancels the command must also cancel the run.
+	ctx, cancel := context.WithTimeout(ctx, agentRunDeadline)
+	defer cancel()
 
 	plan, planPath, err := loadAgentPlan(agentPlanPath, agentStateDir)
 	if err != nil {

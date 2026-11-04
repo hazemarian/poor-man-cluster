@@ -30,6 +30,23 @@ import (
 // not be in it.
 const backupEnvFile = "/etc/pmcluster/backup.env"
 
+// canonicalAgentPath is where the platform installs its own binary; the timer
+// must exec that, not whatever name the installer happened to be invoked as.
+const canonicalAgentPath = "/usr/local/bin/pmcluster"
+
+// canonicalAgentBinary picks the path the timer should exec.
+//
+// os.Executable returns whatever was invoked: installing the unit from
+// /usr/local/bin/pmcluster.new wrote that name into ExecStart, so the timer kept
+// running a renamed copy while every `pmcluster` command reported the new build.
+// A stable install path wins whenever it exists.
+func canonicalAgentBinary(exe string, stat func(string) (os.FileInfo, error)) string {
+	if _, err := stat(canonicalAgentPath); err == nil {
+		return canonicalAgentPath
+	}
+	return exe
+}
+
 // writeBackupEnv persists the WebDAV target handed to the installer through the
 // environment. Refusing to put it on a command line is deliberate: argv is
 // world-readable in /proc for the life of the process, and this is a password.
@@ -152,6 +169,7 @@ func ensureBackupAgentInstalled(out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
+	exe = canonicalAgentBinary(exe, os.Stat)
 	if err := os.MkdirAll(backupAgentStateDir, 0o755); err != nil {
 		// /var/lib needs root; the run itself will fail loudly if it cannot
 		// write, so a permission problem here is worth reporting but not fatal

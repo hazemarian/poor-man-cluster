@@ -4,12 +4,36 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+)
+
+// putTimeout bounds one artifact upload and webdavClient bounds the rest.
+//
+// These are not decoration. With http.DefaultClient and a ten-minute request
+// deadline, a store that accepted the TCP connection and then stopped answering
+// held a production run for 22 minutes of wall clock and 1.6 s of CPU — the
+// agent sat in epoll, the lock stayed held, and the node's next hourly run
+// exited immediately as "already running". A blackhole has to fail fast.
+var (
+	putTimeout = 5 * time.Minute
+
+	webdavClient = &http.Client{
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			MaxIdleConns:          4,
+			IdleConnTimeout:       30 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
 )
 
 // PutWebDAV uploads one file to a WebDAV collection with a plain PUT.
@@ -45,7 +69,7 @@ func PutWebDAV(ctx context.Context, base, localPath string) error {
 		return fmt.Errorf("webdav: stat %s: %w", filepath.Base(localPath), err)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, putTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u.String(), io.NopCloser(f))
 	if err != nil {
@@ -56,7 +80,7 @@ func PutWebDAV(ctx context.Context, base, localPath string) error {
 	if user != "" {
 		req.SetBasicAuth(user, pass)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := webdavClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("webdav: put %s: %w", filepath.Base(localPath), err)
 	}
