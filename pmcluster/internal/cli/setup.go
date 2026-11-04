@@ -73,6 +73,7 @@ func init() {
 	setupCmd.Flags().String("sso-cookie-expire", "", "SSO session cookie lifetime (default 1h; default: $PMCLUSTER_SSO_COOKIE_EXPIRE)")
 	setupCmd.Flags().Bool("edge-login-enabled", false, "keep the edge console password login (default: disabled behind SSO/admin-auth; default: $PMCLUSTER_EDGE_LOGIN_ENABLED)")
 	setupCmd.Flags().String("volume-root", "", "host dir every container volume is forced under (default /var/stack/data)")
+	setupCmd.Flags().Bool("backup-enabled", true, "enable the backup pipeline (the agent asks the control plane before every run)")
 	setupCmd.Flags().Bool("backup-all-nodes", false, "run the backup agent on every node (default: manager-only)")
 	setupCmd.Flags().String("backup-retention-days", "", "how many days backups are kept before pruning (default 15)")
 	setupCmd.Flags().String("oo-logs-retention-days", "", "OpenObserve log retention in days (default 7)")
@@ -115,6 +116,9 @@ type setupAnswers struct {
 
 	VolumeRoot     string
 	BackupAllNodes bool
+	// BackupEnabled is the master switch. Asked first, because saying no skips
+	// the store, the offsite bucket and the agent entirely.
+	BackupEnabled bool
 
 	BackupRetentionDays               string
 	ObservabilityLogsRetentionDays    string
@@ -280,33 +284,38 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		}
 		a.EdgeLoginEnabled = askYesNo(r, out, "Keep edge console password login?", false)
 		a.VolumeRoot = ask(r, out, "Container volume root dir", st.SettingDefault(ctx, cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot))
-		a.BackupAllNodes = askYesNo(r, out, "Run backup agent on every node?", false)
-		a.BackupRetentionDays = ask(r, out, "Backup retention (days)", st.SettingDefault(ctx, cluster.SettingBackupRetentionDays(), "15"))
-		a.ObservabilityLogsRetentionDays = ask(r, out, "OpenObserve log retention (days)", st.SettingDefault(ctx, cluster.SettingObservabilityLogsRetentionDays(), "7"))
-		a.ObservabilityMetricsRetentionDays = ask(r, out, "OpenObserve metric retention (days)", st.SettingDefault(ctx, cluster.SettingObservabilityMetricsRetentionDays(), "7"))
-		a.ObservabilityTracesRetentionDays = ask(r, out, "OpenObserve trace retention (days)", st.SettingDefault(ctx, cluster.SettingObservabilityTracesRetentionDays(), "7"))
-		if askYesNo(r, out, "Upload backups offsite (S3/R2)?", st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), "") != "") {
-			a.BackupS3Endpoint = ask(r, out, "S3-compatible endpoint (R2: https://<account>.r2.cloudflarestorage.com)", st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""))
-			a.BackupS3Bucket = ask(r, out, "S3 bucket name", st.SettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""))
-			a.BackupS3Region = ask(r, out, "S3 region", st.SettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"))
-			a.BackupS3AccessKey = askSecret(r, out, "S3 access key", st.SettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""))
-			a.BackupS3SecretKey = askSecret(r, out, "S3 secret key", st.SettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""))
-		}
-		// Automatic storage failover needs offsite backups: when a storage node
-		// dies, the only recoverable copy is in S3, so prompt only when S3 is set.
-		if a.BackupS3Endpoint != "" && a.BackupS3Bucket != "" {
-			a.StorageFailover = askYesNo(r, out, "Enable automatic storage failover? (moves a stack off a failed storage node, restoring the latest offsite backup)", true)
-			// The volume that holds every stack's data has to be snapshot-capable
-			// before the first deployment, because converting a node later means
-			// moving the stacks off it first.
-			if askYesNo(r, out, "Provision the app-data volume for atomic snapshots? (no operator action needed; without it backups copy live files)", true) {
-				a.StorageMode = storage.ModeLoop.String()
-				a.StorageSize = ask(r, out, "Backing-file size (auto = half of free space)", "auto")
+		a.BackupEnabled = askYesNo(r, out, "Enable backups? (snapshot every stack, hourly by default)", true)
+		if !a.BackupEnabled {
+			// No means no: nothing is installed and no store is deployed.
+			a.BackupStoreOn = "off"
+			fmt.Fprintln(out, "  Backups are OFF. Nothing is snapshotted, no backup store is deployed.")
+			fmt.Fprintln(out, "  Handled elsewhere instead? Attach a block device to the host and back it up")
+			fmt.Fprintln(out, "  with your own tooling, or point stacks at an external database service.")
+			fmt.Fprintln(out, "  Turn platform backups on later: `pmcluster backup enable`, or the console.")
+		} else {
+			// The schedule lives in the platform's settings, not in the unit file.
+			fmt.Fprintln(out, "  The platform decides WHEN to back up, from its own settings (console or CLI).")
+			fmt.Fprintln(out, "  Do NOT edit, disable or re-time the pmcluster-backup timer: it is a heartbeat")
+			fmt.Fprintln(out, "  that asks the control plane, so changing it does not change the schedule.")
+			a.BackupAllNodes = askYesNo(r, out, "Run the backup agent on every node?", false)
+			a.BackupRetentionDays = ask(r, out, "Backup retention (days)", st.SettingDefault(ctx, cluster.SettingBackupRetentionDays(), "15"))
+			if askYesNo(r, out, "Keep every backup in one place in the cluster? (an in-cluster store)", true) {
+				a.BackupStoreOn = askBackupStoreOn(r, out, st.SettingDefault(ctx, cluster.SettingBackupStoreOn(), ""))
 			} else {
-				a.StorageMode = storage.ModeNone.String()
+				a.BackupStoreOn = "off"
+				fmt.Fprintln(out, "  Backups stay on the node that took them, and restores read them from there.")
+				fmt.Fprintln(out, "  If that node is lost, its own backups are lost with it. Every run records")
+				fmt.Fprintln(out, "  where each stack's artifact lives (node, store, offsite), so the console can")
+				fmt.Fprintln(out, "  always answer \"where is the copy of this stack\".")
+				if askYesNo(r, out, "Export backups offsite anyway (S3/R2)?", st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), "") != "") {
+					a.BackupS3Endpoint = ask(r, out, "S3-compatible endpoint (R2: https://<account>.r2.cloudflarestorage.com)", st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""))
+					a.BackupS3Bucket = ask(r, out, "S3 bucket name", st.SettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""))
+					a.BackupS3Region = ask(r, out, "S3 region", st.SettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"))
+					a.BackupS3AccessKey = askSecret(r, out, "S3 access key", st.SettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""))
+					a.BackupS3SecretKey = askSecret(r, out, "S3 secret key", st.SettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""))
+				}
 			}
 		}
-		a.BackupStoreOn = askBackupStoreOn(r, out, st.SettingDefault(ctx, cluster.SettingBackupStoreOn(), ""))
 		defHost, _ := os.Hostname()
 		a.NodeHostname = ask(r, out, "Hostname for this node (pins use placement: <hostname>)", defHost)
 		if !swarmActive(ctx) {
@@ -340,6 +349,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.ObservabilityTracesRetentionDays, _ = cmd.Flags().GetString("oo-traces-retention-days")
 		a.BackupS3Endpoint, _ = cmd.Flags().GetString("backup-s3-endpoint")
 		a.BackupS3Bucket, _ = cmd.Flags().GetString("backup-s3-bucket")
+		a.BackupEnabled, _ = cmd.Flags().GetBool("backup-enabled")
 		a.BackupS3AccessKey, _ = cmd.Flags().GetString("backup-s3-access-key")
 		a.BackupS3SecretKey, _ = cmd.Flags().GetString("backup-s3-secret-key")
 		a.BackupS3Region, _ = cmd.Flags().GetString("backup-s3-region")
@@ -560,6 +570,7 @@ func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswer
 		cluster.SettingSSOCookieExpire():                   a.SSOCookieExpire,
 		cluster.SettingEdgeLoginDisabled():                 boolSetting(!a.EdgeLoginEnabled),
 		cluster.SettingVolumeRoot():                        a.VolumeRoot,
+		cluster.SettingBackupEnabled():                     boolSetting(a.BackupEnabled),
 		cluster.SettingBackupAllNodes():                    boolSetting(a.BackupAllNodes),
 		cluster.SettingBackupRetentionDays():               a.BackupRetentionDays,
 		cluster.SettingObservabilityLogsRetentionDays():    a.ObservabilityLogsRetentionDays,
@@ -596,6 +607,7 @@ func persistSetup(ctx context.Context, st *store.Store, a setupAnswers) error {
 		cluster.SettingSSOCookieExpire():                   a.SSOCookieExpire,
 		cluster.SettingEdgeLoginDisabled():                 boolSetting(!a.EdgeLoginEnabled),
 		cluster.SettingVolumeRoot():                        a.VolumeRoot,
+		cluster.SettingBackupEnabled():                     boolSetting(a.BackupEnabled),
 		cluster.SettingBackupAllNodes():                    boolSetting(a.BackupAllNodes),
 		cluster.SettingBackupRetentionDays():               a.BackupRetentionDays,
 		cluster.SettingObservabilityLogsRetentionDays():    a.ObservabilityLogsRetentionDays,

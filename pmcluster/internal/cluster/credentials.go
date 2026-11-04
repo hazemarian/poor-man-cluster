@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
@@ -641,6 +642,12 @@ func managedSecretNames(ctx context.Context, st *store.Store) map[string]string 
 // the volumed-service → storage node auto-pin).
 func loadObjectStore(ctx context.Context, docker runtime.Client, st *store.Store, cipher *credentials.Cipher) (ObjectStore, error) {
 	if st == nil || cipher == nil {
+		return ObjectStore{}, nil
+	}
+	// "off" is an answer, not a missing value: the operator said every backup
+	// stays on the node that took it, so no store is deployed even though its
+	// credential may still exist from an earlier configuration.
+	if strings.ToLower(strings.TrimSpace(loadBackupStoreOn(ctx, st))) == "off" {
 		return ObjectStore{}, nil
 	}
 	cred, err := st.Credential(ctx, "seaweedfs_admin")

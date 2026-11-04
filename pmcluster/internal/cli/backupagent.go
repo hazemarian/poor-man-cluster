@@ -32,6 +32,7 @@ const (
 
 var (
 	agentForce      bool
+	agentOnlyStack  string
 	agentNode       string
 	agentVolumeRoot string
 	agentArchiveDir string
@@ -99,6 +100,7 @@ func init() {
 	backupAgentRunCmd.Flags().IntVar(&agentKeepDays, "keep-days", 15, "keep one artifact per day until this age in days")
 	backupAgentRunCmd.Flags().IntVar(&agentKeepLast, "keep-last", 2, "never delete the newest N artifacts of a stack")
 	backupAgentRunCmd.Flags().BoolVar(&agentKeepLegacy, "prune-legacy", false, "also prune whole-node archives (the previous producer's output)")
+	backupAgentRunCmd.Flags().StringVar(&agentOnlyStack, "only-stack", "", "archive just this stack (operator or console asking for one stack)")
 	backupAgentRunCmd.Flags().BoolVar(&agentForce, "force", false, "run now, ignoring the control plane's schedule decision")
 	backupAgentRunCmd.Flags().BoolVar(&agentDryRun, "dry-run", false, "report what would be archived without freezing, snapshotting or writing")
 	backupAgentRunCmd.Flags().StringVar(&agentShipWebDAV, "ship-webdav", envOr("PMCLUSTER_BACKUP_WEBDAV", ""),
@@ -248,6 +250,22 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 		},
 	}
+	// One stack on request: the operator asked for THIS stack, so the run is
+	// narrowed before anything is frozen. An unknown name is an error, not an
+	// empty run — silence would look like success.
+	if agentOnlyStack != "" {
+		var kept []backupagent.StackPlan
+		for _, sp := range plan.Stacks {
+			if sp.Name == agentOnlyStack {
+				kept = append(kept, sp)
+			}
+		}
+		if len(kept) == 0 {
+			return fmt.Errorf("stack %q is not planned on this node (planned: %s)", agentOnlyStack, strings.Join(plan.StackNames(), ", "))
+		}
+		plan.Stacks = kept
+	}
+
 	// The control plane decides whether this hour is due. The systemd timer is a
 	// dumb heartbeat: it fires every hour and this is where a run is actually
 	// authorised. --force exists for an operator or the console asking for a run

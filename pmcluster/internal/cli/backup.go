@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -43,6 +44,16 @@ Needs root: freezing a filesystem and creating an LVM snapshot require it. The
 hourly timer already does this; the command exists for "back me up before I do
 something" and records the outcome in the audit table either way.`,
 	RunE: runBackupCreate,
+}
+
+// selfBinary is the binary the timer and the console both exec. Resolving it
+// rather than hard-coding "pmcluster" keeps the command working when the
+// platform is installed somewhere else.
+func selfBinary() string {
+	if p, err := os.Executable(); err == nil {
+		return p
+	}
+	return "pmcluster"
 }
 
 var backupListCmd = &cobra.Command{
@@ -150,6 +161,7 @@ fleet mid-cutover those are the only backups that exist.
 }
 
 func init() {
+	backupCreateCmd.Flags().String("stack", "", "back up only this stack, now (bypasses the schedule)")
 	backupPruneCmd.Flags().String("dir", backups.DefaultArchiveDir, "archive directory to prune")
 	backupPruneCmd.Flags().Bool("dry-run", false, "report what would be deleted without deleting")
 	backupPruneCmd.Flags().Int("keep-hours", 48, "keep every artifact newer than this many hours")
@@ -162,7 +174,8 @@ func init() {
 	backupRestoreCmd.Flags().String("volume", "", "restore only this volume (e.g. db_data); empty restores the whole run")
 	backupRestoreCmd.Flags().Bool("from-s3", false, "fetch the archive from the configured offsite S3 store even when a local copy exists")
 
-	backupCmd.AddCommand(backupCreateCmd, backupListCmd, backupBrowseCmd, backupRestoreCmd, backupPruneCmd)
+	backupCmd.AddCommand(backupCreateCmd, backupListCmd, backupBrowseCmd, backupRestoreCmd, backupPruneCmd,
+		backupEnableCmd, backupDisableCmd, backupScheduleCmd)
 	rootCmd.AddCommand(backupCmd)
 }
 
@@ -288,6 +301,22 @@ func runBackupCreate(cmd *cobra.Command, _ []string) error {
 	defer initCLITelemetry()()
 
 	timeout, _ := cmd.Flags().GetDuration("timeout")
+	onlyStack, _ := cmd.Flags().GetString("stack")
+
+	// One stack: run the agent here, in the foreground, with the schedule gate
+	// bypassed. The operator asked for it now, and going through the systemd
+	// unit would lose the stack argument.
+	if onlyStack != "" {
+		ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+		defer cancel()
+		args := []string{"backup-agent", "run", "--force", "--only-stack", onlyStack}
+		echo := exec.CommandContext(ctx, selfBinary(), args...)
+		echo.Stdout, echo.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+		if err := echo.Run(); err != nil {
+			return fmt.Errorf("backup of stack %q failed: %w", onlyStack, err)
+		}
+		return nil
+	}
 
 	svc, closeFn, err := backendBackups(cmd)
 	if err != nil {

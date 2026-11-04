@@ -181,7 +181,30 @@ when a backing file exists but nothing is mounted — that state is
 indistinguishable from a fresh node by `ls`, and deploying onto it runs every
 stack on an empty directory.
 
-### 3.2 The producer is a node-local agent, not a Swarm service
+### 3.2 The schedule belongs to the control plane, not to the timer
+
+`pmcluster-backup.timer` fires every hour and means nothing on its own. On each
+fire the agent asks the daemon one question — `GET /internal/backup/decision`,
+loopback only — and the daemon answers from the cluster's settings:
+
+| setting | effect |
+|---|---|
+| `backup_enabled` | `false` ⇒ the agent exits without freezing anything |
+| `backup_cron` | a run is due only when the current minute matches |
+| `backup_store_on` | `off` ⇒ no in-cluster store is deployed or written |
+| `backup_s3_*` | a complete set ⇒ artifacts are also uploaded offsite |
+
+All four are editable from the console and the CLI (`pmcluster backup enable`,
+`pmcluster backup disable`, `pmcluster backup schedule "0 2 * * *"`), which is the
+point: a schedule in a unit file is a schedule a user can silently break, and a
+timer someone disables stops backups with no record anywhere.
+
+**The timer is a heartbeat. Do not edit it.** Changing its calendar changes
+nothing, because it is not what decides anything — the decision comes from the
+settings above. An unreachable control plane skips the run and says so; nodes do
+not invent their own schedules.
+
+### 3.3 The producer is a node-local agent, not a Swarm service
 
 The per-volume archiver this platform used to ship (offen/docker-volume-backup)
 is gone. It tarred a live directory, so one growing SQLite file could abort a
@@ -228,7 +251,7 @@ expected logical volume — a fresh node, or one whose boot ordering failed — 
 agent exits non-zero and writes no artifact. It never falls back to tarring the
 live tree; that fallback is the failure this design exists to remove.
 
-### 3.3 What an artifact is
+### 3.4 What an artifact is
 
 One `tar.gz` per stack, per run: `backup-<nodeID>-<timestamp>-stack-<stack>.tar.gz`,
 members under `backup/data/<stack>/…`. An ordinary tarball — `tar -xzf` it
@@ -247,7 +270,7 @@ archive and checks what can be checked from the host:
 That distinction is deliberate: a green tick that claimed to validate a Postgres
 cluster from the host would be a lie the console then repeats.
 
-### 3.4 Two write legs, and who owns each
+### 3.5 Two write legs, and who owns each
 
 ```mermaid
 flowchart TD
@@ -273,10 +296,18 @@ derived, not configured: adding a storage label to the last non-storage worker
 moves the store onto the platform node, and because the store's volume is
 node-local its history does not follow. Worth an explicit setting.
 
-**Offsite is the store's mirror, not the agent's job.** The agent's responsibility
-ends at the store.
+**Offsite is the agent's second leg, optional and independent.** The agent
+uploads the artifact it just verified straight to an S3-compatible bucket
+(IONOS/R2/AWS), signed with SigV4, with the same bounds as any other network
+call. The in-cluster store and the offsite bucket are separately configurable:
+either, both, or neither.
 
-### 3.5 Retention
+**Every stack records where its artifact went.** The run's per-stack record
+carries `where`: `node:<artifact>` always, plus `store:` and `s3:` when those legs
+ran. Once a backup can live in three places, "succeeded" is not an answer to
+"where is the copy of this stack".
+
+### 3.6 Retention
 
 Each run prunes its own archive directory: everything for 48 hours, then one
 artifact per calendar day until 15 days, judged per stack. The newest copies of a
@@ -289,7 +320,7 @@ pmcluster backup prune --dry-run
 pmcluster backup prune --keep-hours 72 --keep-days 30
 ```
 
-### 3.6 The control-plane agent
+### 3.7 The control-plane agent
 
 Unchanged, and separate: `backup_control-plane-backup` still runs only on the
 manager holding `~/.pmcluster`, archiving `data.db`, `.encryption_key`,
@@ -297,7 +328,7 @@ manager holding `~/.pmcluster`, archiving `data.db`, `.encryption_key`,
 retention, `pmcluster-ctlplane-` prefix — so a lost manager disk is not a full
 re-bootstrap.
 
-### 3.7 How pmcluster knows what exists
+### 3.8 How pmcluster knows what exists
 
 The agent writes artifacts; the daemon **indexes** them. Discovery reads the
 local archive dir and the store (S3 `ListObjectsV2`, `backup-` prefix,
