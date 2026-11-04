@@ -184,7 +184,7 @@ func writeUnits(ctx context.Context, spec Spec, res *Result) error {
 	}
 
 	// Prove it, rather than trusting systemctl's exit code.
-	after, err := Detect(ctx, spec)
+	after, err := detect(ctx, spec)
 	if err != nil {
 		return err
 	}

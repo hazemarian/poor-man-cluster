@@ -22,7 +22,7 @@ func grow(ctx context.Context, spec Spec) error {
 	if spec.Mode == ModeNone {
 		return fmt.Errorf("grow needs a provisioned volume")
 	}
-	st, err := Detect(ctx, spec)
+	st, err := detect(ctx, spec)
 	if err != nil {
 		return err
 	}

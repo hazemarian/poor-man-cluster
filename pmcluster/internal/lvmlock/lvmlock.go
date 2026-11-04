@@ -38,6 +38,11 @@ var ErrBusy = errors.New("another LVM command holds the lock")
 
 // With runs fn while holding the LVM lock. The lock is released even if fn panics.
 //
+// A locked body must call the package's unlocked internals (`detect`, `grow`,
+// `provision`), never its exported wrappers: flock conflicts with itself, so a
+// second acquire from the same process parks forever. Grow did exactly that and
+// hung a production node's LVM for seven minutes.
+//
 // A short poll interval is used rather than a blocking flock so the caller's
 // context is honoured: a daemon probe waiting on a twenty-minute `lvextend` must
 // give up and report "storage busy", not hang the whole daemon.

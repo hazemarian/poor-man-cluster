@@ -35,7 +35,7 @@ func Migrate(ctx context.Context, spec Spec) (Result, error) {
 	var res Result
 	res.Mode = spec.Mode
 
-	st, err := Detect(ctx, spec)
+	st, err := detect(ctx, spec)
 	if err != nil {
 		return res, err
 	}

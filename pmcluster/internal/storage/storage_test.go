@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/lvmlock"
 )
 
 // fakeHost stands in for the machine: it records every command, and its answers
@@ -449,5 +452,34 @@ func TestAutoSizeAlwaysLeavesTheSystemReserve(t *testing.T) {
 	got := AutoSize(500*gib, 20*gib)
 	if got > 20*gib-systemReserve {
 		t.Fatalf("AutoSize left only %d GiB free", (20*gib-got)/gib)
+	}
+}
+
+// Growing a volume used to hang forever: grow() called the exported Detect, which
+// takes the LVM lock grow already holds, and flock conflicts with itself. It hung a
+// production node's LVM for seven minutes, with every other LVM command queued
+// behind it. A locked body must only reach for the unlocked internals.
+func TestGrowDoesNotAcquireTheLockTwice(t *testing.T) {
+	dir := t.TempDir()
+	lvmlock.Path = filepath.Join(dir, "pmcluster.lock")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Grow(context.Background(), Spec{
+			Mode:      ModeLoop,
+			ImagePath: filepath.Join(dir, "app-data.img"),
+			Size:      8 << 30,
+			// every probe reports the volume missing, so grow() returns early with
+			// an error — the point is that it returns at all, holding the lock once.
+			Exec: func(context.Context, string, ...string) ([]byte, error) {
+				return nil, errors.New("no volume")
+			},
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Grow deadlocked on its own lock")
 	}
 }
