@@ -225,7 +225,10 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	var snap backupagent.Snapshotter
 	switch agentSnapshot {
 	case "lvm":
-		snap = &backupagent.LVMSnapshotter{Root: root, VG: agentVG, LV: agentLV, SnapDir: agentSnapDir}
+		snap = &backupagent.LVMSnapshotter{
+			Root: root, VG: agentVG, LV: agentLV, SnapDir: agentSnapDir,
+			Gate: backupagent.NewGate(envOr("PMCLUSTER_BACKUP_MAX_IO_PRESSURE", ""), envOr("PMCLUSTER_BACKUP_MAX_DIRTY_MB", "")),
+		}
 	case "none":
 		// Explicitly requested: no freeze, no snapshot. Correct for tests and
 		// hosts without LVM; never the default, because a tar of a live tree

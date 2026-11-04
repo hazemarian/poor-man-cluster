@@ -42,6 +42,9 @@ type LVMSnapshotter struct {
 	// Frozen records whether Freeze succeeded, so Thaw is only ever called on
 	// a filesystem this process actually froze.
 	Frozen bool
+	// Gate refuses a freeze the node cannot afford right now. nil means "check
+	// with the defaults", false disables it (tests, --snapshot=none).
+	Gate *ioGate
 }
 
 func (l *LVMSnapshotter) exec(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -95,6 +98,19 @@ func (l *LVMSnapshotter) Verify(ctx context.Context, root string) error {
 
 // Freeze implements Snapshotter with `fsfreeze -f`.
 func (l *LVMSnapshotter) Freeze(ctx context.Context, root string) error {
+	gate := l.Gate
+	if gate == nil {
+		gate = defaultGate()
+	}
+	if err := gate.check(); err != nil {
+		return err
+	}
+	// Pre-flush so the freeze itself waits on the tail of writeback rather than
+	// the whole backlog. Deliberately best-effort: a sync that fails is not a
+	// reason to skip the backup.
+	if out, err := l.exec(ctx, "sync", "-f", root); err != nil {
+		_ = out
+	}
 	if root == "" {
 		root = l.Root
 	}
