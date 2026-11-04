@@ -9,17 +9,23 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
-// isLoopback is the whole access control for the decision endpoint: the caller
-// must be the root agent on this machine, and that is the only thing on this
-// machine that asks. A nil IP (a bare "127.0.0.1" with no port) is refused
-// rather than assumed local.
-func isLoopback(remoteAddr string) bool {
+// isClusterReachable is the whole access control for the decision endpoint.
+//
+// Not loopback-only, deliberately: a worker's daemon stands by and serves no
+// HTTP at all, so the agent on a worker has to ask a MANAGER — over the cluster
+// plane, from a private address. Loopback covers the manager's own node. The
+// public edge never proxies /internal/, and the answer carries switches and a
+// schedule string, never a credential.
+func isClusterReachable(remoteAddr string) bool {
 	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
 		host = remoteAddr
 	}
 	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 // BackupDecisionHandler answers "should this node back up right now?" for the
@@ -32,7 +38,7 @@ func isLoopback(remoteAddr string) bool {
 func BackupDecisionHandler(st *store.Store, now func() int64) http.HandlerFunc {
 	// nil means wall clock; tests inject a fixed instant.
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r.RemoteAddr) {
+		if !isClusterReachable(r.RemoteAddr) {
 			http.Error(w, "local only", http.StatusForbidden)
 			return
 		}

@@ -66,6 +66,16 @@
     </div>
     <div class="panel-body">
       <label class="check">
+        <input type="checkbox" name="backup_enabled" value="true"{{if ne (index .Settings "backup_enabled") "false"}} checked{{end}}>
+        <span>{{T "clustersettings.backup_enabled"}}</span>
+      </label>
+      <span class="hint">{{T "clustersettings.backup_enabled_hint"}}</span>
+      <label class="field">
+        <span>{{T "clustersettings.backup_cron"}}</span>
+        <input type="text" name="backup_cron" value="{{index .Settings "backup_cron"}}" placeholder="0 * * * *">
+      </label>
+      <span class="hint">{{T "clustersettings.backup_cron_hint"}}</span>
+      <label class="check">
         <input type="checkbox" name="backup_all_nodes" value="true"{{if eq (index .Settings "backup_all_nodes") "true"}} checked{{end}}>
         <span>{{T "clustersettings.backup_all_nodes"}}</span>
       </label>

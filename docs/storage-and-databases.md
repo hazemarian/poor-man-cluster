@@ -184,8 +184,16 @@ stack on an empty directory.
 ### 3.2 The schedule belongs to the control plane, not to the timer
 
 `pmcluster-backup.timer` fires every hour and means nothing on its own. On each
-fire the agent asks the daemon one question — `GET /internal/backup/decision`,
-loopback only — and the daemon answers from the cluster's settings:
+fire the agent asks the control plane one question — `GET
+/internal/backup/decision` — and a manager answers from the cluster's settings.
+
+It asks a **manager**, not its own node's daemon: on a worker the daemon runs in
+standby and serves no HTTP at all, so "ask the local daemon" would silently stop
+backups on exactly the nodes that host most of the stacks. The agent tries
+loopback first (correct on a manager) and then every manager address the swarm
+advertises, which a worker can read even though it cannot run `docker node ls`.
+The endpoint accepts private addresses for that reason, and the public edge never
+proxies `/internal/`.
 
 | setting | effect |
 |---|---|

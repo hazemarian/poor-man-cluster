@@ -396,6 +396,8 @@ func (c Settings) Apply(g *gin.Context) {
 // must mirror the daemon's /api/cluster/settings allowlist exactly.
 var clusterSettingKeys = []string{
 	"volume_root",
+	"backup_enabled",
+	"backup_cron",
 	"backup_all_nodes",
 	"sso_enabled",
 	"sso_provider",
@@ -413,6 +415,7 @@ var clusterSettingKeys = []string{
 // clusterBoolSettings are the allowlisted settings that are flags rather than
 // strings, so the form and the save agree on what a cleared checkbox means.
 var clusterBoolSettings = map[string]bool{
+	"backup_enabled":      true,
 	"backup_all_nodes":    true,
 	"sso_enabled":         true,
 	"edge_login_disabled": true,

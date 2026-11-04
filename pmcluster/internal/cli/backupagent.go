@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -271,7 +272,7 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	// authorised. --force exists for an operator or the console asking for a run
 	// now, and is the only way past the gate.
 	if !agentForce && !agentDryRun {
-		dec, derr := fetchBackupDecision(agentDaemonURL(), node)
+		dec, derr := fetchBackupDecision(agentDaemonURLs(), node)
 		switch {
 		case derr != nil:
 			fmt.Fprintf(out, "backup skipped: control plane unreachable (%v)\n", derr)
@@ -404,40 +405,81 @@ func runBackupAgentDrill(cmd *cobra.Command, args []string) error {
 
 // webdavShipper copies an artifact to the in-cluster store. It is a thin
 // wrapper so the agent stays unaware of the transport.
-// agentDaemonURL is the node's own daemon. Loopback, because the decision is
-// served only to local callers.
-var agentDaemonURL = func() string {
+// agentDaemonURLs lists the control-plane addresses this node can ask, in order.
+//
+// A worker's daemon stands by and serves no HTTP, so "ask the local daemon" is
+// wrong on exactly the nodes that run most of the stacks. The candidates are:
+// the explicit override, loopback (correct on a manager), then every manager the
+// swarm advertises — a worker can read Swarm.RemoteManagers even though it
+// cannot run `docker node ls`.
+func agentDaemonURLs() []string {
+	var urls []string
 	if v := os.Getenv("PMCLUSTER_DAEMON_URL"); v != "" {
-		return v
+		urls = append(urls, v)
 	}
-	return "http://127.0.0.1:9090"
+	urls = append(urls, "http://127.0.0.1:9090")
+	out, err := exec.Command("docker", "info", "--format", "{{json .Swarm.RemoteManagers}}").Output()
+	if err != nil {
+		return urls
+	}
+	var remotes []struct {
+		Addr string `json:"Addr"`
+	}
+	if json.Unmarshal(out, &remotes) != nil {
+		return urls
+	}
+	for _, r := range remotes {
+		host, _, err := net.SplitHostPort(r.Addr)
+		if err != nil {
+			continue
+		}
+		urls = append(urls, "http://"+host+":9090")
+	}
+	return urls
 }
 
 // fetchBackupDecision asks the control plane whether this node should back up
 // now. A failure is not treated as "yes": the operator chose control-plane
 // authority, so an unreachable control plane pauses backups rather than letting
 // every node invent its own schedule.
-func fetchBackupDecision(base, node string) (cluster.BackupDecision, error) {
+func fetchBackupDecision(bases []string, node string) (cluster.BackupDecision, error) {
 	var dec cluster.BackupDecision
-	u := strings.TrimSuffix(base, "/") + "/internal/backup/decision?node=" + url.QueryEscape(node)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return dec, err
+	var lastErr error
+	client := &http.Client{Timeout: 8 * time.Second}
+	for _, base := range bases {
+		u := strings.TrimSuffix(base, "/") + "/internal/backup/decision?node=" + url.QueryEscape(node)
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			cancel()
+			lastErr = err
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			cancel()
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("%s: %s", base, resp.Status)
+			resp.Body.Close()
+			cancel()
+			continue
+		}
+		err = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&dec)
+		resp.Body.Close()
+		cancel()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return dec, nil
 	}
-	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
-	if err != nil {
-		return dec, err
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no control-plane address available")
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return dec, fmt.Errorf("%s", resp.Status)
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&dec); err != nil {
-		return dec, err
-	}
-	return dec, nil
+	return dec, lastErr
 }
 
 // shipTargetsFromEnv builds the artifact's destinations from the environment.
