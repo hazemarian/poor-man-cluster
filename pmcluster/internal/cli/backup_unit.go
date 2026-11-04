@@ -68,7 +68,12 @@ func writeBackupEnv() error {
 
 // renderBackupServiceUnit builds the oneshot unit that performs one run.
 //
-// The flock wraps ExecStart, so the lock is held for the whole run: a second
+// The run lock lives in the agent, not here: a forced or single-stack run does
+// not come through this unit, and the lock has to cover those too. The comment
+// that used to justify flock in ExecStart follows, because the reasoning about
+// WHERE the lock must sit is the part that was wrong.
+//
+// The lock is held for the whole run: a second
 // trigger (the timer and an on-demand `backup create` landing together) finds
 // the lock taken and exits instead of interleaving two freezes on the same
 // filesystem. -n makes it fail immediately rather than queue, and -E 0 makes a
@@ -106,7 +111,7 @@ Environment=PMCLUSTER_BACKUP_LV=%s
 # Credentials live in this 0600 file, never in the unit text: the unit is world
 # readable and a backup store password does not belong in it.
 EnvironmentFile=-%s
-ExecStart=/usr/bin/flock -n -E 0 /run/pmcluster-backup.lock %s backup-agent run
+ExecStart=%s backup-agent run
 # The snapshot copy is I/O heavy and must never win a fight with an app.
 Nice=10
 IOSchedulingClass=best-effort

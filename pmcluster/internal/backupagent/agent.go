@@ -53,6 +53,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -72,6 +73,68 @@ import (
 // changes at all — the artifact is narrower (one stack), the wire format is
 // identical.
 const Prefix = "backup/data"
+
+// lockPath is the one run lock, taken by the agent itself.
+//
+// It used to live in the systemd unit's ExecStart, which meant anything that did
+// not go through the unit — a forced run, a single-stack run, an operator in a
+// shell — ran concurrently with the hourly job. Two concurrent runs freeze the
+// same filesystem and tar the same stacks; on production that produced a frozen
+// node, a 33-minute orphan run and a dashboard full of failures. The lock belongs
+// to the work, not to the launcher.
+const lockPath = "/run/pmcluster-backup.lock"
+
+// ErrAlreadyRunning is returned when another run holds the lock.
+var ErrAlreadyRunning = errors.New("another backup run is in progress")
+
+// lockRuns takes the run lock, trying the lock file's home first and the archive
+// directory second.
+func (a *Agent) lockRuns() (func(), error) {
+	candidates := []string{a.LockPath}
+	if a.LockPath == "" {
+		candidates = []string{lockPath}
+	}
+	// TempDir, not the archive directory: the lock must never appear as an
+	// artifact, and prune/discovery count what is in there.
+	candidates = append(candidates, filepath.Join(os.TempDir(), "pmcluster-backup.lock"))
+	var lastErr error
+	for _, c := range candidates {
+		release, err := acquireLock(c)
+		if err == nil {
+			return release, nil
+		}
+		// "Held by someone else" is an answer, not a reason to try the next
+		// path: falling through would defeat the lock entirely, which is exactly
+		// how two runs ended up freezing the same filesystem.
+		if errors.Is(err, ErrAlreadyRunning) {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+// acquireLock takes the run lock or reports that someone else has it.
+func acquireLock(path string) (release func(), err error) {
+	if path == "" {
+		path = lockPath
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open run lock %s: %w", path, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, ErrAlreadyRunning
+		}
+		return nil, fmt.Errorf("lock %s: %w", path, err)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
+}
 
 // tracer emits one span per run, per phase and per stack.
 //
@@ -232,6 +295,8 @@ type Agent struct {
 	// /var/stack/backup today, so discovery needs no change).
 	ArchiveDir string
 	Snapshot   Snapshotter
+	// LockPath overrides the run lock; empty means /run/pmcluster-backup.lock.
+	LockPath string
 	// Now is overridable in tests.
 	Now func() time.Time
 	// Logf receives progress lines.
@@ -305,6 +370,23 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 	}
 	if a.Snapshot == nil {
 		return res, errors.New("backup-agent: no snapshotter configured")
+	}
+	// One run per node, whichever way it was started. A dry run takes no lock:
+	// it touches nothing and an operator diagnosing a stuck node should not be
+	// turned away by the run they are diagnosing.
+	if !a.DryRun {
+		// /run is the right place, but a container-ish or unusual host may not
+		// have it writable. Falling back beats failing: a run without a lock is
+		// worse than one with, and both are better than no backup at all.
+		release, err := a.lockRuns()
+		if errors.Is(err, ErrAlreadyRunning) {
+			return res, err
+		}
+		if err != nil {
+			a.logf("backup-agent: warning: running without a lock: %v", err)
+		} else {
+			defer release()
+		}
 	}
 	ctx, runSpan := tracer().Start(ctx, "backup.run",
 		trace.WithAttributes(

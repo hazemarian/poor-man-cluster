@@ -16,7 +16,7 @@ func TestRenderBackupServiceUnit(t *testing.T) {
 		// The lock wraps the run (held for its whole duration) and a skipped
 		// run is not an error — see the deployment test that caught the
 		// ExecStartPre version failing outright.
-		"ExecStart=/usr/bin/flock -n -E 0 /run/pmcluster-backup.lock /usr/local/bin/pmcluster backup-agent run",
+		"ExecStart=/usr/local/bin/pmcluster backup-agent run",
 		"Environment=PMCLUSTER_VOLUME_ROOT=/var/stack/data",
 		"Environment=PMCLUSTER_BACKUP_DIR=/var/stack/backup",
 		"TimeoutStartSec=3600",
@@ -30,6 +30,11 @@ func TestRenderBackupServiceUnit(t *testing.T) {
 	// A restart policy on a oneshot would loop; assert we did not add one.
 	if strings.Contains(u, "Restart=") {
 		t.Errorf("oneshot unit must not carry Restart=\n%s", u)
+	}
+	// The lock must never live in the unit at all: a forced or single-stack run
+	// never comes through it, which is how two runs once froze one filesystem.
+	if strings.Contains(u, "flock") {
+		t.Fatalf("the unit must not take the run lock; the agent owns it:\n%s", u)
 	}
 	// The lock must never move back into ExecStartPre: with no command flock
 	// fails, and with one it releases before the run starts — either way the

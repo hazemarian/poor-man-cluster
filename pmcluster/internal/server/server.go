@@ -151,9 +151,6 @@ func New(d Deps) http.Handler {
 	r.Use(middleware.Timeout(30 * time.Second))
 
 	r.Get("/health", api.Health)
-	// The node-local backup agent asks the control plane whether this hour is
-	// due. Loopback-only and unauthenticated: see api.BackupDecisionHandler.
-	r.Get("/internal/backup/decision", api.BackupDecisionHandler(d.Store, nil))
 
 	// Public stack-status badges for READMEs — no auth (GitHub camo fetches
 	// them). Aggregate health only, read from the DB snapshot the control

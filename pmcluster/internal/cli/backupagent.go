@@ -2,13 +2,8 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -278,16 +273,14 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	// dumb heartbeat: it fires every hour and this is where a run is actually
 	// authorised. --force exists for an operator or the console asking for a run
 	// now, and is the only way past the gate.
-	var decisionTarget *cluster.OffsiteTarget
 	if !agentForce && !agentDryRun {
-		dec, derr := fetchBackupDecision(agentDaemonURLs(), node)
-		decisionTarget = dec.Target
+		dec, derr := localBackupDecision(ctx)
 		switch {
-		case errors.Is(derr, errNoDecisionEndpoint):
-			fmt.Fprintf(out, "backup running: %v (deploy the matching daemon to enable the schedule gate)\n", derr)
 		case derr != nil:
-			fmt.Fprintf(out, "backup skipped: control plane unreachable (%v)\n", derr)
-			return nil
+			// No settings on this node (fresh install, or the store is missing).
+			// Running with the defaults is the safe failure: a cluster that has
+			// not configured backups still gets backups.
+			fmt.Fprintf(out, "backup running with defaults: no local settings (%v)\n", derr)
 		case !dec.Enabled:
 			fmt.Fprintf(out, "backup skipped: %s\n", dec.Reason)
 			return nil
@@ -297,17 +290,19 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		default:
 			fmt.Fprintf(out, "backup authorised by the control plane (schedule %s, store=%t, offsite=%t)\n", dec.Schedule, dec.Store, dec.Offsite)
 		}
-	} else if dec, derr := fetchBackupDecision(agentDaemonURLs(), node); derr == nil {
-		// Forced runs still take the operator's ship target when one is served;
-		// the verdict is ignored, the destination is not.
-		decisionTarget = dec.Target
 	}
 
-	if ship := shipTargetsFromEnv(decisionTarget); ship != nil {
+	if ship := shipTargetsFromEnv(); ship != nil {
 		a.Ship = ship
 	}
 
 	res, runErr := a.Run(ctx, plan)
+	if errors.Is(runErr, backupagent.ErrAlreadyRunning) {
+		// Somebody else is already backing this node up. Not an error: the work
+		// is being done by the run that holds the lock.
+		fmt.Fprintln(out, "another backup run is in progress on this node — nothing to do")
+		return nil
+	}
 
 	// Report the run before anything else can fail: a node that cannot reach
 	// the leader still has to leave an audit trail behind.
@@ -420,102 +415,36 @@ func runBackupAgentDrill(cmd *cobra.Command, args []string) error {
 
 // webdavShipper copies an artifact to the in-cluster store. It is a thin
 // wrapper so the agent stays unaware of the transport.
-// agentDaemonURLs lists the control-plane addresses this node can ask, in order.
+// localBackupDecision answers "should this hour run?" from the node's own copy
+// of the control-plane store.
 //
-// A worker's daemon stands by and serves no HTTP, so "ask the local daemon" is
-// wrong on exactly the nodes that run most of the stacks. The candidates are:
-// the explicit override, loopback (correct on a manager), then every manager the
-// swarm advertises — a worker can read Swarm.RemoteManagers even though it
-// cannot run `docker node ls`.
-func agentDaemonURLs() []string {
-	var urls []string
-	if v := os.Getenv("PMCLUSTER_DAEMON_URL"); v != "" {
-		urls = append(urls, v)
-	}
-	urls = append(urls, "http://127.0.0.1:9090")
-	out, err := exec.Command("docker", "info", "--format", "{{json .Swarm.RemoteManagers}}").Output()
+// There is no endpoint and no cross-node call: every node already holds the
+// settings in a volume (~/.pmcluster/data.db), restored from the control-plane
+// archive, so the agent reads them the same way the CLI does. That keeps the
+// schedule in the control plane's hands without opening a port, minting a token,
+// or putting a bucket key on the wire.
+//
+// The copy is as fresh as the node's last restore (the control-plane archive runs
+// daily, and a manager refreshes it on promotion), which is the right latency for
+// a schedule setting and the wrong latency for an emergency stop — for that,
+// stop the unit on the node.
+func localBackupDecision(ctx context.Context) (cluster.BackupDecision, error) {
+	st, _, err := openStore()
 	if err != nil {
-		return urls
+		return cluster.BackupDecision{}, err
 	}
-	var remotes []struct {
-		Addr string `json:"Addr"`
-	}
-	if json.Unmarshal(out, &remotes) != nil {
-		return urls
-	}
-	for _, r := range remotes {
-		host, _, err := net.SplitHostPort(r.Addr)
-		if err != nil {
-			continue
-		}
-		urls = append(urls, "http://"+host+":9090")
-	}
-	return urls
+	defer func() { _ = st.Close() }()
+	return cluster.BackupDecisionFor(ctx, st, time.Now()), nil
 }
 
-// fetchBackupDecision asks the control plane whether this node should back up
-// now. A failure is not treated as "yes": the operator chose control-plane
-// authority, so an unreachable control plane pauses backups rather than letting
-// every node invent its own schedule.
-// errNoDecisionEndpoint means the manager predates the schedule gate.
-var errNoDecisionEndpoint = fmt.Errorf("control plane does not implement the backup decision endpoint")
-
-func fetchBackupDecision(bases []string, node string) (cluster.BackupDecision, error) {
-	var dec cluster.BackupDecision
-	var lastErr error
-	client := &http.Client{Timeout: 8 * time.Second}
-	for _, base := range bases {
-		u := strings.TrimSuffix(base, "/") + "/internal/backup/decision?node=" + url.QueryEscape(node)
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			cancel()
-			lastErr = err
-			continue
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			cancel()
-			lastErr = err
-			continue
-		}
-		if resp.StatusCode == http.StatusNotFound {
-			// A manager that predates this endpoint. Skipping would turn a
-			// rolling upgrade into a cluster with no backups and no error, so
-			// this is reported distinctly and the run proceeds.
-			resp.Body.Close()
-			cancel()
-			return dec, errNoDecisionEndpoint
-		}
-		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("%s: %s", base, resp.Status)
-			resp.Body.Close()
-			cancel()
-			continue
-		}
-		err = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&dec)
-		resp.Body.Close()
-		cancel()
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		return dec, nil
-	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("no control-plane address available")
-	}
-	return dec, lastErr
-}
-
-// shipTargetsFromEnv builds the artifact's destinations from the environment.
+// shipTargetsFromEnv builds// shipTargetsFromEnv builds the artifact's destinations from the environment.
 //
 // Both legs are optional and independent: the in-cluster store (WebDAV) is one
 // way to keep every backup in a single place, the offsite bucket is another, and
 // a node with neither is a legitimate configuration — the artifact still lands
 // on disk and the run records where. Returning nil means "local only", which the
 // agent reports as such rather than as a failure.
-func shipTargetsFromEnv(target *cluster.OffsiteTarget) func(context.Context, string) ([]string, error) {
+func shipTargetsFromEnv() func(context.Context, string) ([]string, error) {
 	webdav := agentShipWebDAV
 	s3 := backups.S3Config{
 		Endpoint:  os.Getenv("PMCLUSTER_BACKUP_S3_ENDPOINT"),
@@ -523,17 +452,6 @@ func shipTargetsFromEnv(target *cluster.OffsiteTarget) func(context.Context, str
 		AccessKey: os.Getenv("PMCLUSTER_BACKUP_S3_ACCESS_KEY"),
 		SecretKey: os.Getenv("PMCLUSTER_BACKUP_S3_SECRET_KEY"),
 		Region:    os.Getenv("PMCLUSTER_BACKUP_S3_REGION"),
-	}
-	// The control plane's target wins: it is what the operator set once, in the
-	// console or the CLI, and it is the only copy a worker has.
-	if target != nil {
-		s3 = backups.S3Config{
-			Endpoint:  target.Endpoint,
-			Bucket:    target.Bucket,
-			Region:    target.Region,
-			AccessKey: target.AccessKey,
-			SecretKey: target.SecretKey,
-		}
 	}
 	if webdav == "" && !s3.Configured() {
 		return nil
