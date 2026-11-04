@@ -256,13 +256,13 @@ What to look for: the double-write at the top and the store-as-transit at the bo
 
 ```mermaid
 sequenceDiagram
-    participant AG as backup-agent (node, systemd)
+    participant AG as backup-agent
     participant SW as SeaweedFS
     participant S3 as offsite S3/R2
     participant MV as mover
     participant TN as target node
-    AG->>SW: WebDAV PUT, one artifact per stack
-    SW->>S3: the store mirrors its bucket (when configured)
+    AG->>SW: PUT per stack
+    SW->>S3: mirrors its bucket
     MV->>SW: pull archive (8333)
     MV->>TN: verify + unpack
     Note over MV,TN: no cross-node host ports

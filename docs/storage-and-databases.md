@@ -227,23 +227,23 @@ against the filesystem it is archiving.
 ```mermaid
 sequenceDiagram
  autonumber
- participant T as systemd timer
- participant A as backup-agent (root oneshot)
- participant K as kernel + LVM
- participant V as volume root (thin LV)
- participant S as in-cluster store (WebDAV)
+ participant T as timer
+ participant A as backup-agent
+ participant K as kernel/LVM
+ participant V as volume (thin LV)
+ participant S as store (WebDAV)
  T->>A: hourly, Persistent=true
- A->>K: fsfreeze -f /var/stack/data
- A->>K: lvcreate -s vg-pmcluster/data
+ A->>K: fsfreeze -f
+ A->>K: lvcreate -s
  A->>K: fsfreeze -u
- Note over K,V: writes block for the freeze only<br/>measured 0.1-0.6 s warm
- A->>K: mount -o ro the snapshot
+ Note over K,V: writes block only<br/>0.1-0.6 s warm
+ A->>K: mount -o ro
  loop one artifact per stack
-   A->>V: walk stack/ in the frozen image
-   A->>S: PUT the verified artifact
+   A->>V: walk stack/
+   A->>S: PUT artifact
  end
  A->>K: umount + lvremove
- A->>V: retention (48 h dense, one per day to 15 d)
+ A->>V: retention
 ```
 
 The whole run, from provisioning through restore, is drawn in
