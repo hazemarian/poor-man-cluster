@@ -20,7 +20,6 @@ var bundledServices = []string{
 	"edge_pmcluster-edge",
 	"observability_parseable",
 	"observability_otel-collector",
-	"backup_volume-backup",
 }
 
 const (

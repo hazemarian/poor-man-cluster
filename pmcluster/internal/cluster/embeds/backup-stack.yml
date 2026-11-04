@@ -18,67 +18,14 @@ services:
   # that is also configured. Store-only clusters use WebDAV only (the S3 API
   # does NOT auto-create the bucket — BUG-016); offsite-only clusters fall back
   # to a single S3 write.
-  volume-backup:
-    image: offen/docker-volume-backup:v2
-[[ if .BackupAllNodes ]]
-    mode: global
-[[ else if .StorageNodeConstraint ]]
-    mode: global
-    constraints:
-      - "node.labels.[[.StorageNodeLabel]] == true"
-[[ else ]]
-    replicas: 1
-    placement: "[[ if .BackupNode ]][[.BackupNode]][[ else if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
-[[ end ]]
-    restart: any
-    env:
-      BACKUP_CRON_EXPRESSION: "[[ if .BackupCron ]][[.BackupCron]][[ else ]]0 * * * *[[ end ]]"
-      BACKUP_FILENAME: "backup-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz"
-      BACKUP_PRUNING_PREFIX: "backup-"
-      BACKUP_RETENTION_DAYS: "[[ if .BackupRetentionDays ]][[.BackupRetentionDays]][[ else ]]15[[ end ]]"
-      [[- if .Store.Enabled ]]
-      # In-cluster store leg ALWAYS uses WebDAV: the SeaweedFS S3 API does NOT
-      # auto-create the bucket (BUG-016), while the WebDAV gateway creates the
-      # /buckets/<bucket> path on first PUT. So the store leg is WebDAV whether
-      # or not an offsite target is configured.
-      WEBDAV_URL: "http://backup_seaweedfs:7333"
-      WEBDAV_PATH: "/buckets/[[.Store.Bucket]]"
-      # offen refuses an anonymous WebDAV backend, so credentials must be set;
-      # the SeaweedFS gateway does not check them, so the store's own keys are
-      # reused here.
-      WEBDAV_USERNAME: "[[.Store.AccessKey]]"
-      WEBDAV_PASSWORD: "[[.Store.SecretKey]]"
-      [[- if .BackupS3.Configured ]]
-      # Double-write: offsite S3 + in-cluster store via WebDAV. offen's native
-      # pruning keeps BOTH copies in lockstep (no separate replicator needed).
-      AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
-      AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
-      AWS_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
-      AWS_ENDPOINT: "[[.BackupS3.EndpointHost]]"
-      AWS_ENDPOINT_PROTO: "[[.BackupS3.EndpointProto]]"
-      AWS_REGION: "[[.BackupS3.Region]]"
-      AWS_S3_BUCKET_LOOKUP: "path"
-      [[- end ]]
-      [[- else if .BackupS3.Configured ]]
-      AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
-      AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
-      AWS_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
-      AWS_ENDPOINT: "[[.BackupS3.EndpointHost]]"
-      AWS_ENDPOINT_PROTO: "[[.BackupS3.EndpointProto]]"
-      AWS_REGION: "[[.BackupS3.Region]]"
-      AWS_S3_BUCKET_LOOKUP: "path"
-      [[- end ]]
-    binds:
-      - "[[.VolumeRoot]]:/backup/data:ro"
-      - "[[.BackupDir]]:/archive"
-      - "/etc/localtime:/etc/localtime:ro"
-    resources:
-      reservations:
-        cpus: "0.05"
-        memory: 32M
-      limits:
-        cpus: "0.5"
-        memory: 256M
+  # The per-volume archiver that used to live here (offen/docker-volume-backup)
+  # is gone from the binary. It tarred a live directory — one growing SQLite
+  # file could abort a node's whole hour — and had no concept of a snapshot.
+  # Stack data is archived by the node-local systemd unit instead
+  # (pmcluster-backup.timer): freeze, snapshot, one verified artifact per stack,
+  # ship to the store below, 15-day retention. This stack keeps only the store
+  # and the control-plane archiver.
+
 [[ if .Store.Enabled ]]
   # The in-cluster backup store. Runs on a NON-storage node via an explicit
   # placement (which bypasses the volumed-service→storage-node auto-pin), so

@@ -269,52 +269,36 @@ func TestUp_DefaultStorageNodeIsLeader(t *testing.T) {
 // failure "service mode change is not allowed": defaulting storage_nodes in
 // persistInstallState (after deploy) made the first cluster update switch the
 // backup agent replicated→global — a mode change Docker rejects in place.
-func TestUp_BackupRendersGlobalWhenStorageNodeDefaulted(t *testing.T) {
-	dir := t.TempDir()
-	certPath := writeTempFile(t, dir, "cert.pem", []byte("CERT"))
-	keyPath := writeTempFile(t, dir, "key.pem", []byte("KEY"))
-
-	deps, f, deployer := newUpDeps(t)
-	f.nodes = []runtime.Node{
-		{Hostname: "nextrum-sy-1", Role: "manager", IsLeader: true, Status: "ready", Availability: "active"},
-	}
-
-	if _, err := Up(context.Background(), deps, UpInput{
-		Domain:                  "test.example.com",
-		CertPath:                certPath,
-		KeyPath:                 keyPath,
-		ObservabilityAdminEmail: "ops@example.com",
-	}); err != nil {
+// The backup stack no longer ships the per-volume archiver, so it has no global
+// mode and no storage-node constraint to assert at up time. What still matters is
+// that the store renders and that nothing in the stack pretends to read stack
+// data on every node.
+// The backup stack no longer ships the per-volume archiver, so it has no global
+// mode and no storage-node constraint to assert at up time. What still matters:
+// the store renders, and nothing in this stack claims to read stack data.
+func TestUp_BackupStackRendersWithoutFleetWideAgent(t *testing.T) {
+	deps, _, deployer := newUpDeps(t)
+	if _, err := Up(context.Background(), deps, UpInput{Domain: "example.com", ACMEEmail: "a@example.com", ObservabilityAdminEmail: "admin@example.com", VolumeRoot: "/var/stack/data"}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
-
-	// storage_nodes must be set (leader hostname) so the render saw it.
-	if got := deps.Store.SettingDefault(context.Background(), SettingStorageNodes(), ""); got != "nextrum-sy-1" {
-		t.Fatalf("default storage_nodes = %q, want nextrum-sy-1 (must be set before render)", got)
-	}
-
-	// The backup stack deployed at up time must be global (constrained to the
-	// storage node) — never replicated. A subsequent cluster update must then
-	// be a content-aware no-op for the backup stack.
-	var backupYAML string
-	for _, d := range deployer.deployedStacks {
-		if d.Name == string(StackBackup) {
-			backupYAML = d.YAML
+	// The deployed bytes are what matter, not the persisted hash.
+	var body string
+	for _, rec := range deployer.deployedStacks {
+		if rec.Name == "backup-stack" || strings.HasSuffix(rec.Name, "backup") {
+			body = rec.YAML
 		}
 	}
-	if backupYAML == "" {
-		t.Fatal("backup stack was not deployed during Up")
+	if body == "" {
+		t.Fatal("backup stack was not deployed")
 	}
-	if !strings.Contains(backupYAML, "mode: global") {
-		t.Errorf("backup stack rendered without mode: global at up time:\n%s", backupYAML)
+	if strings.Contains(body, "  volume-backup:") {
+		t.Fatalf("the per-volume archiver came back:\n%s", body)
 	}
-	if !strings.Contains(backupYAML, runtime.StorageNodeLabel) {
-		t.Errorf("backup stack rendered without the storage-node constraint label %s:\n%s", runtime.StorageNodeLabel, backupYAML)
+	if strings.Contains(body, "node.labels.pmcluster.storage == true") {
+		t.Fatalf("a service in the backup stack still pins to storage nodes:\n%s", body)
 	}
 }
 
-// TestUp_StorageNodesPreserved asserts an operator-configured storage_nodes
-// list is NOT clobbered by cluster up.
 func TestUp_StorageNodesPreserved(t *testing.T) {
 	dir := t.TempDir()
 	certPath := writeTempFile(t, dir, "cert.pem", []byte("CERT"))

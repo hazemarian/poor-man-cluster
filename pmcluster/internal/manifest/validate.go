@@ -49,7 +49,14 @@ func Validate(app *dsl.App) error {
 		return fmt.Errorf("domain: required")
 	}
 	if len(app.Services) == 0 {
-		return fmt.Errorf("services: at least one service is required")
+		// A platform stack may render empty: the backup stack has no services on a
+		// cluster with neither an object store nor a control-plane data dir — stack
+		// data is archived by a systemd unit, not a swarm service. Customer stacks
+		// must still deploy something.
+		if !app.Platform {
+			return fmt.Errorf("services: at least one service is required")
+		}
+		return nil
 	}
 	for name, svc := range app.Services {
 		if !nameRe.MatchString(name) {

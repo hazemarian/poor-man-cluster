@@ -882,6 +882,14 @@ func deployStack(ctx context.Context, out io.Writer, d StackDeployer, s stackNam
 	if err != nil {
 		return fmt.Errorf("load compose for %s: %w", s, err)
 	}
+	// A platform stack can legitimately render no services — the backup stack on a
+	// cluster with neither an object store nor a control-plane data directory,
+	// where stack data is archived by a systemd unit. `docker stack deploy` would
+	// reject an empty file, so skip it (and say so) rather than fail the install.
+	if len(composeServices(composeYAML)) == 0 {
+		fmt.Fprintf(out, "  · %s renders no services for this configuration (skipped)\n", s)
+		return nil
+	}
 	fmt.Fprintf(out, "  ▶ docker stack deploy %s\n", s)
 	if err := d.DeployStack(ctx, string(s), composeYAML); err != nil {
 		return fmt.Errorf("deploy %s: %w", s, err)
@@ -1222,4 +1230,21 @@ func checkBackupOffsite(ctx context.Context, deps UpdateDeps) error {
 		fmt.Fprintf(deps.Stdout, "  \u26a0 offsite backup destination unreachable (%v) \u2014 continuing; offsite copies may fail until it is reachable\n", err)
 	}
 	return nil
+}
+
+// composeServices returns the service keys of a rendered compose document. It is
+// deliberately forgiving: the only question it answers is "is there anything to
+// deploy", and a parse problem is LoadComposeFile's job to report.
+func composeServices(composeYAML []byte) []string {
+	var doc struct {
+		Services map[string]any `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(composeYAML, &doc); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(doc.Services))
+	for name := range doc.Services {
+		out = append(out, name)
+	}
+	return out
 }

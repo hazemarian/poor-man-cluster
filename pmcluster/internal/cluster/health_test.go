@@ -26,8 +26,13 @@ func TestWaitHealthyStacks_AllHealthy(t *testing.T) {
 func TestWaitHealthyStacks_TimesOutWithMissingService(t *testing.T) {
 	f := newFakeDocker()
 
-	for _, name := range bundledServices[:4] {
+	// Register every bundled service EXCEPT the last one: indexing off the list
+	// made this test silently stop testing anything the moment the list shrank.
+	for _, name := range bundledServices[:len(bundledServices)-1] {
 		f.services[name] = runtime.Service{Name: name, Replicas: 1, Desired: 1}
+	}
+	if len(bundledServices) < 2 {
+		t.Fatal("bundledServices is too short to have a missing one")
 	}
 	var buf bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)

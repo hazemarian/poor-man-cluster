@@ -81,8 +81,6 @@ func TestLoadComposeFile_BackupControlPlane(t *testing.T) {
 		"BACKUP_SOURCES: /backup/pmcluster",
 		"pmcluster-ctlplane-",
 		"node.role == manager",
-		"/data/apps:/backup/data:ro",
-		"/data/apps/backup:/archive",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered backup stack missing %q", want)
@@ -107,11 +105,13 @@ func TestLoadComposeFile_BackupControlPlane(t *testing.T) {
 }
 
 // TestLoadComposeFile_ControlPlaneBackupOffsite verifies the control-plane
-// backup agent ALSO uploads to the offsite S3 target when backup_s3_* is
-// configured — the campaign observed control-plane archives never reaching the
-// offsite. With DataDir set (so the control-plane agent renders) and BackupS3
-// configured, BOTH offen services (volume-backup + control-plane-backup) carry
-// the AWS_* block.
+// archiver uploads to the offsite S3 target when backup_s3_* is configured.
+//
+// It used to assert the AWS_* block appeared TWICE (volume-backup and
+// control-plane-backup). The per-volume archiver is gone from the binary: stack
+// data is archived by the node-local agent, so this service is the only offen
+// container left, and the offsite copy of stack data is the store's own S3
+// mirror, not offen's.
 func TestLoadComposeFile_ControlPlaneBackupOffsite(t *testing.T) {
 	in := RenderInput{
 		Domain:   "example.com",
@@ -130,67 +130,9 @@ func TestLoadComposeFile_ControlPlaneBackupOffsite(t *testing.T) {
 		"AWS_ENDPOINT_PROTO: https",
 		"AWS_S3_BUCKET_LOOKUP: path",
 	} {
-		// Each offen service (volume-backup + control-plane-backup) emits its own
-		// AWS_* block, so the env var appears twice.
-		if n := strings.Count(body, want); n != 2 {
-			t.Errorf("expected %q on BOTH offen services (count 2), got %d:\n%s", want, n, body)
+		if n := strings.Count(body, want); n != 1 {
+			t.Errorf("expected %q exactly once (the control-plane archiver is the only offen service left), got %d:\n%s", want, n, body)
 		}
-	}
-}
-
-// TestLoadComposeFile_BackupStorageNodeConstraint verifies the three-way
-// volume-backup deploy branch: BackupAllNodes → global; else
-// StorageNodeConstraint → global constrained to pmcluster.storage-labeled
-// nodes; else → replicated manager/platform-node fallback.
-func TestLoadComposeFile_BackupStorageNodeConstraint(t *testing.T) {
-	// (1) BackupAllNodes wins: global, no storage-node constraint.
-	in := RenderInput{Domain: "example.com", BackupAllNodes: true, StorageNodeConstraint: true, StorageNodeLabel: "pmcluster.storage"}
-	body := string(mustLoadBackup(t, in))
-	if !strings.Contains(body, "mode: global") {
-		t.Errorf("BackupAllNodes render should be global")
-	}
-	if strings.Contains(body, "pmcluster.storage") {
-		t.Errorf("BackupAllNodes render should not reference the storage label")
-	}
-
-	// (2) StorageNodeConstraint only: global + label constraint.
-	in2 := RenderInput{Domain: "example.com", StorageNodeConstraint: true, StorageNodeLabel: "pmcluster.storage"}
-	body2 := string(mustLoadBackup(t, in2))
-	if !strings.Contains(body2, "mode: global") {
-		t.Errorf("StorageNodeConstraint render should be global")
-	}
-	if !strings.Contains(body2, "node.labels.pmcluster.storage == true") {
-		t.Errorf("StorageNodeConstraint render missing label constraint:\n%s", body2)
-	}
-
-	// (3) Neither: replicated manager fallback, no label mention.
-	in3 := RenderInput{Domain: "example.com"}
-	body3 := string(mustLoadBackup(t, in3))
-	if !strings.Contains(body3, "replicas: 1") || !strings.Contains(body3, "node.role == manager") {
-		t.Errorf("fallback render should be replicated manager:\n%s", body3)
-	}
-	if strings.Contains(body3, "pmcluster.storage") {
-		t.Errorf("fallback render should not reference the storage label")
-	}
-}
-
-// TestLoadComposeFile_BackupCronRendering verifies the offen backup schedule:
-// the default (empty BackupCron) is hourly, and a custom value is rendered
-// verbatim into BACKUP_CRON_EXPRESSION.
-func TestLoadComposeFile_BackupCronRendering(t *testing.T) {
-	// Default: empty BackupCron → hourly.
-	body := string(mustLoadBackup(t, RenderInput{Domain: "example.com"}))
-	if !strings.Contains(body, "BACKUP_CRON_EXPRESSION") || !strings.Contains(body, "0 * * * *") {
-		t.Errorf("default backup render should be hourly (0 * * * *):\n%s", body)
-	}
-
-	// Custom value rendered verbatim.
-	body2 := string(mustLoadBackup(t, RenderInput{Domain: "example.com", BackupCron: "0 3 * * *"}))
-	if !strings.Contains(body2, "0 3 * * *") {
-		t.Errorf("custom BackupCron should render verbatim:\n%s", body2)
-	}
-	if strings.Contains(body2, `"0 * * * *"`) {
-		t.Errorf("custom BackupCron should not fall back to hourly:\n%s", body2)
 	}
 }
 
@@ -231,33 +173,23 @@ func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
 	if !strings.Contains(body, "node.hostname == worker-2") {
 		t.Errorf("seaweedfs should pin to the explicit non-storage node worker-2:\n%s", body)
 	}
-	// The storage label constraint must appear EXACTLY once (the offen agents),
-	// never on seaweedfs/webdav — proving the explicit placement bypassed the
-	// auto-pin.
-	if n := strings.Count(body, "node.labels.pmcluster.storage == true"); n != 1 {
-		t.Errorf("storage-node constraint count = %d, want 1 (offen only; seaweedfs/webdav must bypass it):\n%s", n, body)
+	// Nothing in this stack carries the storage-node constraint any more: it was
+	// the per-volume archiver's, and that service is gone. The store must stay on
+	// its explicit non-storage node (asserted above) so the durable copy lives in
+	// a different failure domain than the data.
+	if n := strings.Count(body, "node.labels.pmcluster.storage == true"); n != 0 {
+		t.Errorf("storage-node constraint count = %d, want 0 (no service in this stack reads stack data any more):\n%s", n, body)
 	}
 	// WebDAV runs inside the seaweedfs process (`-webdav`), cluster-internal
 	// (no published port) — no separate webdav container.
 	if !strings.Contains(body, "-webdav") || !strings.Contains(body, "-webdav.port=7333") {
 		t.Errorf("seaweedfs should serve WebDAV in-process (`-webdav -webdav.port=7333`):\n%s", body)
 	}
-	// offen double-writes: AWS_* → offsite (scheme stripped + proto https) AND
-	// WEBDAV_* → the in-cluster store.
-	if !strings.Contains(body, "AWS_ENDPOINT: s3.example.com") {
-		t.Errorf("offen AWS_ENDPOINT should be the offsite host WITHOUT scheme:\n%s", body)
-	}
-	if strings.Contains(body, "https://s3.example.com") {
-		t.Errorf("offen AWS_ENDPOINT must not carry the scheme (AWS_ENDPOINT_PROTO carries it):\n%s", body)
-	}
-	if !strings.Contains(body, "AWS_ENDPOINT_PROTO: https") {
-		t.Errorf("offen should set AWS_ENDPOINT_PROTO=https for the offsite target:\n%s", body)
-	}
-	if !strings.Contains(body, "WEBDAV_URL: http://backup_seaweedfs:7333") {
-		t.Errorf("offen should set WEBDAV_URL to the in-cluster webdav gateway:\n%s", body)
-	}
-	if !strings.Contains(body, "WEBDAV_PATH: /buckets/pmcluster-backups") {
-		t.Errorf("offen should set WEBDAV_PATH to the bucket's filer path:\n%s", body)
+	// The agents that used to carry the offsite AWS_* block and the WEBDAV_*
+	// block are gone. The store is reached two ways now: agents PUT over WebDAV
+	// on 7333 (published), and the bucket itself is mirrored offsite by the store.
+	if strings.Contains(body, "WEBDAV_URL:") {
+		t.Errorf("no in-cluster service should carry offen's WEBDAV_* block any more:\n%s", body)
 	}
 	// No rclone replicator sidecar.
 	if strings.Contains(body, "rclone/rclone") || strings.Contains(body, "backup-replicate") || strings.Contains(body, "RCLONE_") {
@@ -266,11 +198,12 @@ func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
 }
 
 func TestLoadComposeFile_BackupSeaweedFSDisabled(t *testing.T) {
-	// Store disabled: legacy path — offen uploads straight to the offsite
-	// endpoint (scheme preserved in AWS_ENDPOINT, as before) and no
-	// SeaweedFS (S3 + in-process WebDAV) services are rendered.
+	// Store disabled: no SeaweedFS (S3 + in-process WebDAV) renders. The
+	// control-plane archiver is the only offen container left, and it uploads
+	// straight to the offsite endpoint (host + proto, BUG-028).
 	in := RenderInput{
 		Domain:   "example.com",
+		DataDir:  "/root/.pmcluster",
 		BackupS3: BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
 	}
 	body := string(mustLoadBackup(t, in))
@@ -280,7 +213,7 @@ func TestLoadComposeFile_BackupSeaweedFSDisabled(t *testing.T) {
 	// offen rejects a scheme inside AWS_ENDPOINT (BUG-028), so the legacy path
 	// renders the host + AWS_ENDPOINT_PROTO=http(s).
 	if !strings.Contains(body, "AWS_ENDPOINT: s3.example.com") || !strings.Contains(body, "AWS_ENDPOINT_PROTO: https") {
-		t.Errorf("legacy offen should upload to the offsite endpoint host + proto:\n%s", body)
+		t.Errorf("the control-plane archiver should upload to the offsite endpoint host + proto:\n%s", body)
 	}
 }
 
@@ -296,15 +229,14 @@ func TestLoadComposeFile_BackupSeaweedFSStoreOnly(t *testing.T) {
 		Store:    ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "pmclusterbackup", SecretKey: "s3cr3t", Node: "worker-2"},
 	}
 	body := string(mustLoadBackup(t, in))
-	for _, want := range []string{
-		"WEBDAV_URL: http://backup_seaweedfs:7333",
-		"WEBDAV_PATH: /buckets/pmcluster-backups",
-		"WEBDAV_USERNAME: pmclusterbackup",
-		"WEBDAV_PASSWORD: s3cr3t",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("store-only offen should write the store via WebDAV, missing %q:\n%s", want, body)
-		}
+	// The store is rendered; the clients that write to it are node-local agents
+	// (they PUT to http://127.0.0.1:7333), so no in-cluster service carries a
+	// WEBDAV_* block any more — but WebDAV must still be switched on in-process.
+	if !strings.Contains(body, "-webdav.port=7333") {
+		t.Errorf("the store must still serve WebDAV for the node agents:\n%s", body)
+	}
+	if strings.Contains(body, "WEBDAV_URL:") {
+		t.Errorf("no in-cluster service should carry offen's WEBDAV_* block:\n%s", body)
 	}
 	// The store-only render must NOT point AWS_* at the store (the S3 API does
 	// not bootstrap the bucket), and must not emit any offsite AWS_* either.
@@ -1929,63 +1861,6 @@ func TestLoadComposeFile_ObservabilityHasNoOORetentionEnv(t *testing.T) {
 	}
 }
 
-// TestLoadComposeFile_BackupS3Renders verifies a configured offsite S3
-// destination lands as offen AWS_* env vars, and that an unset one leaves the
-// agent local-only.
-func TestLoadComposeFile_BackupS3Renders(t *testing.T) {
-	in := RenderInput{
-		Domain:              "example.com",
-		VolumeRoot:          "/var/stack/data",
-		BackupDir:           "/var/stack/backup",
-		BackupRetentionDays: 15,
-		BackupS3: BackupS3{
-			Endpoint:  "https://acct.r2.cloudflarestorage.com",
-			Bucket:    "pmcluster-backups",
-			AccessKey: "ak",
-			SecretKey: "sk",
-			Region:    "auto",
-		},
-	}
-	data, err := LoadComposeFile(StackBackup, in)
-	if err != nil {
-		t.Fatalf("LoadComposeFile: %v", err)
-	}
-	body := string(data)
-	for _, want := range []string{
-		"AWS_S3_BUCKET_NAME: pmcluster-backups",
-		"AWS_ACCESS_KEY_ID: ak",
-		"AWS_SECRET_ACCESS_KEY: sk",
-		"AWS_ENDPOINT: acct.r2.cloudflarestorage.com",
-		"AWS_REGION: auto",
-		"AWS_S3_BUCKET_LOOKUP: path",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("rendered backup stack missing %q:\n%s", want, body)
-		}
-	}
-
-	// Unset destination: the agent stays local-only (no AWS_* lines).
-	in.BackupS3 = BackupS3{}
-	data, err = LoadComposeFile(StackBackup, in)
-	if err != nil {
-		t.Fatalf("LoadComposeFile: %v", err)
-	}
-	body = string(data)
-	if strings.Contains(body, "AWS_") {
-		t.Errorf("unconfigured backup stack must not emit AWS_* env:\n%s", body)
-	}
-}
-
-// TestRenderOTelCollectorConfig_PerContainerFilelogStructure parses the rendered
-// config as YAML instead of matching substrings.
-//
-// This exists because the e2e caught what string tests could not: the receiver
-// template's own `resource_attributes` map was accepted by the collector but not
-// applied to the records it created, so every stdout record arrived with an empty
-// service.name and filter/skip_filelog dropped it — no error, no rows, and a
-// collector whose log says "Everything is ready". The attributes now live in the
-// filelog receiver's `resource` map, inside `config`, where substitution is
-// documented to happen.
 func TestRenderOTelCollectorConfig_PerContainerFilelogStructure(t *testing.T) {
 	data, err := RenderOTelCollectorConfig(RenderInput{
 		ObservabilityAdminEmail: "admin@x.com",
@@ -2104,6 +1979,34 @@ func TestBackupStorePublishesWebDAVForHostAgents(t *testing.T) {
 	for _, want := range []string{"published: 7333", "-webdav.port=7333"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("backup stack does not publish WebDAV for host agents (%q missing):\n%s", want, body)
+		}
+	}
+}
+
+// The per-volume archiver is gone from the binary: stack data is archived by the
+// node-local systemd agent, one artifact per stack. A regression that quietly
+// brings the offen agent back would restore the exact failure mode this replaced
+// (tarring a live tree), so its absence is asserted, not assumed.
+func TestBackupStackNoLongerShipsThePerVolumeArchiver(t *testing.T) {
+	in := RenderInput{
+		Domain:                "example.com",
+		VolumeRoot:            "/var/stack/data",
+		BackupDir:             "/var/stack/backup",
+		DataDir:               "/root/.pmcluster",
+		StorageNodeConstraint: true,
+		StorageNodeLabel:      "pmcluster.storage",
+		BackupAllNodes:        true,
+		BackupCron:            "0 * * * *",
+	}
+	body := string(mustLoadBackup(t, in))
+	// Match the SERVICE KEY, not the word: the template keeps a comment
+	// explaining why the archiver was removed, and it names it.
+	if strings.Contains(body, "  volume-backup:") {
+		t.Fatalf("backup stack still ships the offen per-volume archiver:\n%s", body)
+	}
+	for _, want := range []string{"control-plane-backup", "BACKUP_CRON_EXPRESSION"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("backup stack lost %q:\n%s", want, body)
 		}
 	}
 }

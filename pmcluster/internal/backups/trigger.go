@@ -3,10 +3,9 @@ package backups
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
+	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -76,27 +75,39 @@ func RecordOutcome(ctx context.Context, kind, status string) {
 	gauge.Record(ctx, time.Now().Unix(), attrs)
 }
 
-// ServiceName matches the bundled backup-stack.yml (<stack>_<service>).
-const ServiceName = "backup_volume-backup"
+// Triggering a backup used to mean `docker exec` into the offen agent
+// container. That agent is gone: stack data is archived by the node-local
+// systemd unit (pmcluster-backup.timer), which freezes and snapshots the volume,
+// writes one artifact per stack, verifies them, ships them to the store, and
+// prunes by retention.
+//
+// So a trigger is now "run that unit". The part worth stating: freezing a
+// filesystem and creating a snapshot need root, so this refuses with the exact
+// command to run instead of pretending a request was queued.
 
-// WALCheckpointer is implemented by *store.Store so Trigger can flush
-// SQLite WAL before taking a volume snapshot.
+// Result carries the agent's output plus the artifact paths parsed out of it.
+type Result struct {
+	ArchivePaths []string
+	Stdout       string
+	Stderr       string
+}
+
+// WALCheckpointer is implemented by *store.Store so Trigger can flush SQLite WAL
+// before a snapshot.
 type WALCheckpointer interface {
 	WALCheckpoint(ctx context.Context) error
 }
 
-// LocalTrigger satisfies the stacks package's BackupTrigger consumer
-// interface via the package-level Trigger. If a WALCheckpointer is set, it
-// is called before the backup exec to flush pending transactions from the
-// WAL to the main DB file.
+// LocalTrigger satisfies the stacks package's BackupTrigger consumer interface
+// via the package-level Trigger. If a WALCheckpointer is set, it is called
+// before the run so SQLite's WAL is folded into the main database file.
 type LocalTrigger struct {
 	Store WALCheckpointer
 }
 
-// Trigger runs the package-level backup pipeline after flushing the SQLite
-// WAL when a checkpointer is configured, returning the created archive paths.
+// Trigger runs the package-level backup pipeline after flushing the SQLite WAL
+// when a checkpointer is configured, returning the created archive paths.
 func (lt LocalTrigger) Trigger(ctx context.Context) ([]string, error) {
-
 	if lt.Store != nil {
 		if err := lt.Store.WALCheckpoint(ctx); err != nil {
 			return nil, fmt.Errorf("wal checkpoint before backup: %w", err)
@@ -112,155 +123,66 @@ func (lt LocalTrigger) Trigger(ctx context.Context) ([]string, error) {
 	return res.ArchivePaths, nil
 }
 
-// Result carries the stdout/stderr of a backup exec plus the archive paths
-// parsed out of it.
-type Result struct {
-	ArchivePaths []string
-	Stdout       string
-	Stderr       string
-}
-
-// Trigger runs `docker exec <offen> backup`. Caller should pass a ctx
-// with a deadline (~5 min is plenty for typical volumes).
-func Trigger(ctx context.Context) (*Result, error) {
-	containerID, err := findLocalContainer(ctx)
-	if err != nil {
-		return nil, err
+// agentBinary is the executable to run. Overridable for tests and for a daemon
+// installed somewhere unusual.
+var agentBinary = func() string {
+	if v := os.Getenv("PMCLUSTER_BINARY"); v != "" {
+		return v
 	}
-	return triggerExec(ctx, containerID)
+	if exe, err := os.Executable(); err == nil {
+		return exe
+	}
+	return "pmcluster"
 }
 
-// runBackupExec executes `docker exec <container> backup`, returning stdout and
-// stderr. A package var so tests can substitute a fake that fails once then
-// succeeds.
-var runBackupExec = func(ctx context.Context, containerID string) (stdout, stderr string, err error) {
+// runAgent executes `pmcluster backup-agent run`. A var so tests substitute a
+// fake that records the invocation.
+var runAgent = func(ctx context.Context, bin string) (stdout, stderr string, err error) {
 	var outBuf, errBuf bytes.Buffer
-	cmd := exec.CommandContext(ctx, "docker", "exec", containerID, "backup")
+	cmd := exec.CommandContext(ctx, bin, "backup-agent", "run")
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
 	return outBuf.String(), errBuf.String(), cmd.Run()
 }
 
-// backupRetryDelay is how long Trigger waits between attempts. A var so tests
-// can shorten it.
-var backupRetryDelay = 10 * time.Second
+// geteuid is a seam for tests: the real check is os.Geteuid.
+var geteuid = os.Geteuid
 
-// backupMaxAttempts bounds how many times the agent's `backup` command is tried.
+// Trigger runs one backup on THIS node and returns the artifacts it wrote.
 //
-// The agent accepts it roughly 30-60s after its container starts; before that
-// offen exits 1 having written NOTHING — which is not distinguishable from a
-// genuine failure except by trying again. One retry was not enough for a fresh
-// `cluster up`, where a backup is a common next move: the command failed on a
-// cluster that was seconds away from being able to take one. Six attempts cover
-// a cold start, and still fail a broken agent in bounded time.
-const backupMaxAttempts = 6
-
-// triggerExec runs the offen backup exec, retrying while the agent is not yet
-// accepting work, bounded by both backupMaxAttempts and the caller's context
-// (the CLI's --timeout).
-func triggerExec(ctx context.Context, containerID string) (*Result, error) {
-	var stdout, stderr string
-	var err error
-	for attempt := 1; ; attempt++ {
-		stdout, stderr, err = runBackupExec(ctx, containerID)
-		if err == nil {
-			return backupResult(stdout, stderr), nil
+// Caller should pass a context with a deadline: a run on a busy node is seconds,
+// not milliseconds, and the freeze length follows the dirty-page backlog.
+func Trigger(ctx context.Context) (*Result, error) {
+	if geteuid() != 0 {
+		return nil, fmt.Errorf("triggering a backup needs root (fsfreeze, lvcreate, mount): run `sudo pmcluster backup-agent run` on this node, or wait for the hourly timer (`systemctl list-timers pmcluster-backup.timer`)")
+	}
+	stdout, stderr, err := runAgent(ctx, agentBinary())
+	res := &Result{ArchivePaths: parseArchivePaths(stdout), Stdout: stdout, Stderr: stderr}
+	if err != nil {
+		detail := strings.TrimSpace(stderr)
+		if detail == "" {
+			detail = strings.TrimSpace(stdout)
 		}
-		if attempt >= backupMaxAttempts || ctx.Err() != nil {
-			break
+		if detail == "" {
+			return res, fmt.Errorf("backup-agent run: %w — it printed nothing; check `journalctl -u pmcluster-backup.service -n 50`", err)
 		}
-		select {
-		case <-ctx.Done():
-			// The deadline arrived while we would have waited — report the
-			// failure rather than blocking past it.
-			return &Result{Stdout: stdout, Stderr: stderr}, backupExecError(ctx, containerID, err, stderr)
-		case <-time.After(backupRetryDelay):
+		// Short on purpose: this string ends up in an HTTP response, and the
+		// agent's own journal has the long version.
+		if len(detail) > 600 {
+			detail = detail[len(detail)-600:]
 		}
+		return res, fmt.Errorf("backup-agent run: %w (%s)", err, detail)
 	}
-	return &Result{Stdout: stdout, Stderr: stderr}, backupExecError(ctx, containerID, err, stderr)
+	return res, nil
 }
 
-func backupResult(stdout, stderr string) *Result {
-	return &Result{
-		ArchivePaths: parseArchivePaths(stdout),
-		Stdout:       stdout,
-		Stderr:       stderr,
-	}
-}
-
-// agentLogTail returns the agent container's most recent log lines, or "" when
-// they cannot be read. A var so tests can substitute one.
-//
-// offen writes to its OWN container streams, which `docker exec` does not
-// capture — so this is the only place its reason for failing is visible.
-var agentLogTail = func(ctx context.Context, containerID string, n int) string {
-	var out, errBuf bytes.Buffer
-	cmd := exec.CommandContext(ctx, "docker", "logs", "--tail", strconv.Itoa(n), containerID)
-	cmd.Stdout = &out
-	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
-		return ""
-	}
-	tail := strings.TrimSpace(strings.TrimSpace(out.String()) + "\n" + strings.TrimSpace(errBuf.String()))
-	if len(tail) > 600 {
-		tail = tail[len(tail)-600:]
-	}
-	return tail
-}
-
-// backupExecError describes a failed backup exec usefully.
-//
-// A failing exec used to surface as `docker exec <id> backup: exit status 1 ()`
-// — an exit code, and an empty cause, because the agent logged its reason to a
-// stream the exec never captured. Attach the agent's own log. When even that is
-// empty, say what to check instead of showing an empty pair of brackets.
-func backupExecError(ctx context.Context, containerID string, err error, stderr string) error {
-	detail := strings.TrimSpace(stderr)
-	if detail == "" {
-		detail = agentLogTail(ctx, containerID, 15)
-	}
-	if detail == "" {
-		return fmt.Errorf("docker exec %s backup: %w — the agent logged nothing, so it is most likely still "+
-			"starting. Check `docker service ps backup_volume-backup` for restarts, and `docker logs` on it for why",
-			containerID, err)
-	}
-	return fmt.Errorf("docker exec %s backup: %w (%s)", containerID, err, detail)
-}
-
-// findLocalContainer filters by service-name label so a renamed or
-// replaced container is still found by its provenance.
-func findLocalContainer(ctx context.Context) (string, error) {
-	timeout, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(timeout, "docker", "ps",
-		"--filter", "label=com.docker.swarm.service.name="+ServiceName,
-		"--filter", "status=running",
-		"--format", "{{.ID}}",
-	)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("docker ps: %w (%s)", err, strings.TrimSpace(stderr.String()))
-	}
-	id := strings.TrimSpace(stdout.String())
-	if id == "" {
-		return "", errors.New("no offen backup agent on this node — it is not a storage node (the agent runs only on nodes labeled pmcluster.storage). Run this on a storage node, or make this node one: pmcluster node promote <hostname>")
-	}
-
-	if idx := strings.IndexByte(id, '\n'); idx >= 0 {
-		id = id[:idx]
-	}
-	return id, nil
-}
-
-// parseArchivePaths is permissive — offen's wording has shifted across
-// versions, so we match any /archive/*.tar.gz token in stdout.
+// parseArchivePaths pulls artifact file names out of the agent's output: one
+// line per stack, ending in the archive name, with sizes and verdicts around it.
 func parseArchivePaths(stdout string) []string {
 	var out []string
 	for _, tok := range strings.Fields(stdout) {
 		tok = strings.TrimRight(tok, ".,;:")
-		if strings.HasPrefix(tok, "/archive/") && strings.HasSuffix(tok, ".tar.gz") {
+		if strings.HasPrefix(tok, "backup-") && strings.HasSuffix(tok, ".tar.gz") {
 			out = append(out, tok)
 		}
 	}

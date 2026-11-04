@@ -43,6 +43,12 @@ func TestPlatformStackPlacements(t *testing.T) {
 		LeaderNode:        "leader-1",
 		ObservabilityNode: "storage-1",
 		BackupNode:        "worker-1",
+		// The backup stack renders the store (and the control-plane archiver);
+		// without a store there is nothing in it to place.
+		Store:      ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "k", SecretKey: "s"},
+		DataDir:    "/root/.pmcluster",
+		VolumeRoot: "/var/stack/data",
+		BackupDir:  "/var/stack/backup",
 	}
 
 	for _, tc := range []struct {
@@ -79,7 +85,15 @@ func TestPlatformStackPlacements(t *testing.T) {
 // install with no storage_nodes and no worker), the stacks must still render a
 // constraint rather than an empty placement.
 func TestPlatformStacksFallBackToManagerRole(t *testing.T) {
-	in := RenderInput{Domain: "example.com", EdgeImage: "ghcr.io/hazemarian/pmcluster-edge:v0.2.87"}
+	in := RenderInput{
+		Domain:    "example.com",
+		EdgeImage: "ghcr.io/hazemarian/pmcluster-edge:v0.2.87",
+		// Same reason as above: the backup stack needs a store to have services.
+		Store:      ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "k", SecretKey: "s"},
+		DataDir:    "/root/.pmcluster",
+		VolumeRoot: "/var/stack/data",
+		BackupDir:  "/var/stack/backup",
+	}
 	for _, stack := range []stackName{StackObservability, StackEdge, StackBackup, StackSSO} {
 		out, err := LoadComposeFile(stack, in)
 		if err != nil {

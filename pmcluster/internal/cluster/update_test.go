@@ -151,18 +151,25 @@ func TestUpdate_RedeploysWhenServiceLabelMissing(t *testing.T) {
 	}
 
 	// Stamp every backup service except one: the interrupted-deploy shape.
-	stamped := 0
+	// Named explicitly before, which broke silently when the per-volume archiver
+	// was removed from the stack — so pick the first backup service that exists
+	// and stamp the rest.
+	stamped, unstamped := 0, ""
 	for name, svc := range f.services {
 		if !strings.HasPrefix(name, "backup_") {
 			continue
 		}
-		if name == "backup_volume-backup" {
+		if unstamped == "" {
+			unstamped = name
 			svc.Labels = map[string]string{}
 		} else {
 			svc.Labels = map[string]string{runtime.RenderedHashLabel: freshHash}
 			stamped++
 		}
 		f.services[name] = svc
+	}
+	if unstamped == "" {
+		t.Fatal("fixture has no backup services")
 	}
 	if stamped == 0 {
 		t.Fatal("fixture stamped no services; the mixed state was not set up")
@@ -430,46 +437,49 @@ func (f *failingDeployer) PruneStaleContainers(_ context.Context, _ string, _ st
 // a failed platform-stack deploy must NOT stamp the rendered hash, so the next
 // `cluster update` retries the deploy instead of silently skipping it (the
 // swarm never received the stack, but the old code marked it up-to-date).
+//
+// The vehicle used to be the backup stack, whose per-volume archiver was the one
+// service that re-rendered when the storage-node setting changed. That service is
+// gone from the binary, so this uses the edge stack and a version bump — which
+// still changes the rendered image tag, and therefore the hash.
 func TestUpdate_FailedDeployLeavesStaleHashRetriedOnNextUpdate(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 	ctx := context.Background()
 
-	// First update: everything is a no-op (fresh seed state) — record the
-	// backup-stack rendered hash before we inject a failure.
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("baseline Update: %v", err)
 	}
-	row, err := deps.Store.Config(ctx, string(StackBackup)+"-stack")
+	row, err := deps.Store.Config(ctx, string(StackEdge)+"-stack")
 	if err != nil {
-		t.Fatalf("Config backup-stack: %v", err)
+		t.Fatalf("Config edge-stack: %v", err)
 	}
 	beforeHash := row.RenderedHash
 
-	// Change the storage_nodes setting → the backup stack re-renders (new
-	// storage-node constraint) → backup is redeployed. Make that deploy fail.
-	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "node-1"); err != nil {
-		t.Fatalf("SetSetting storage_nodes: %v", err)
+	// Changing the domain re-renders the edge stack (its Traefik router host) →
+	// it must be redeployed. Make that deploy fail.
+	if err := deps.Store.SetSetting(ctx, SettingDomain(), "changed.example.com"); err != nil {
+		t.Fatalf("SetSetting domain: %v", err)
 	}
-	failing := &failingDeployer{failNames: map[string]bool{string(StackBackup): true}}
+	failing := &failingDeployer{failNames: map[string]bool{string(StackEdge): true}}
 	deps.Deployer = failing
 
 	_, err = Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"})
 	if err == nil {
-		t.Fatalf("expected Update to fail when backup deploy fails")
+		t.Fatalf("expected Update to fail when the edge deploy fails")
 	}
 
-	// The backup-stack hash must be UNCHANGED after the failed deploy.
-	row, err = deps.Store.Config(ctx, string(StackBackup)+"-stack")
+	// The edge-stack hash must be UNCHANGED after the failed deploy.
+	row, err = deps.Store.Config(ctx, string(StackEdge)+"-stack")
 	if err != nil {
-		t.Fatalf("Config backup-stack: %v", err)
+		t.Fatalf("Config edge-stack: %v", err)
 	}
 	if row.RenderedHash != beforeHash {
 		t.Errorf("BUG-009: failed deploy stamped a new rendered hash (before=%q after=%q); next update would skip redeploy",
 			beforeHash, row.RenderedHash)
 	}
 
-	// A second update (with the deploy now succeeding) must RETRY the backup
-	// stack — proving the stale hash isn't blocking redeploy.
+	// A second update (deploy now succeeding) must RETRY the edge stack —
+	// proving the stale hash isn't blocking redeploy.
 	deps.Deployer = &recordingDeployer{}
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("retry Update: %v", err)
@@ -477,12 +487,12 @@ func TestUpdate_FailedDeployLeavesStaleHashRetriedOnNextUpdate(t *testing.T) {
 	deployer := deps.Deployer.(*recordingDeployer)
 	found := false
 	for _, rec := range deployer.deployedStacks {
-		if rec.Name == string(StackBackup) {
+		if rec.Name == string(StackEdge) {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("BUG-009: backup stack was NOT redeployed on the update after a failed deploy")
+		t.Errorf("BUG-009: the edge stack was NOT redeployed on the update after a failed deploy")
 	}
 }
 

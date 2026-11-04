@@ -23,20 +23,25 @@ import (
 
 var backupCmd = &cobra.Command{
 	Use:   "backup",
-	Short: "Trigger and inspect on-demand volume backups (offen)",
-	Long: `pmcluster wraps offen/docker-volume-backup so you can trigger an
-ad-hoc snapshot from the CLI or before a deploy. The actual archives
-land at /var/backups/docker-volumes/ on the host that ran the backup;
-this audit log records when each run started, finished, and which
-files it produced.`,
+	Short: "Trigger, inspect and prune the node's snapshot backups",
+	Long: `Stack data is archived by the node-local agent (pmcluster-backup.timer):
+it freezes and snapshots the volume, writes one verified artifact per stack,
+ships them to the in-cluster store, and keeps 15 days of history.
+
+  pmcluster backup list       what exists, per stack
+  pmcluster backup restore    put a stack's artifact back
+  pmcluster backup prune      apply retention now
+  pmcluster backup create     run the agent on THIS node (needs root)`,
 }
 
 var backupCreateCmd = &cobra.Command{
 	Use:   "create",
-	Short: "Trigger an on-demand backup on the local node",
-	Long: `Runs 'docker exec backup' against the local offen container and waits
-for it to finish. Records the run in pmcluster's backups audit table
-regardless of outcome (success or failure).`,
+	Short: "Run the snapshot agent on this node now",
+	Long: `Runs 'pmcluster backup-agent run' on THIS node and waits for it.
+
+Needs root: freezing a filesystem and creating an LVM snapshot require it. The
+hourly timer already does this; the command exists for "back me up before I do
+something" and records the outcome in the audit table either way.`,
 	RunE: runBackupCreate,
 }
 
