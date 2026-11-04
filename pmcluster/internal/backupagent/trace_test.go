@@ -52,3 +52,16 @@ func TestRunEmitsAPhaseByPhaseTrace(t *testing.T) {
 		}
 	}
 }
+
+// The run path must not be at the mercy of the host's dirty-page count either:
+// a unit test that writes a few files should never be refused a freeze because
+// some other process on the machine is flushing a database.
+func TestRunFreezesWithTheGuardDisabled(t *testing.T) {
+	a := &Agent{
+		Node: "n", VolumeRoot: t.TempDir(), ArchiveDir: t.TempDir(),
+		Snapshot: &NoSnapshot{Root: "/x"},
+	}
+	if _, err := a.Run(context.Background(), Plan{Node: "n", Stacks: []StackPlan{{Name: "web"}}}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}

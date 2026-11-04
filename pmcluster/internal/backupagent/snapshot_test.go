@@ -48,7 +48,7 @@ func (r *recordingExec) joined() string {
 // it, so the mount target is asserted here by name.
 func TestSnapshotMountsTheSnapshotNotTheOrigin(t *testing.T) {
 	ex := &recordingExec{}
-	l := &LVMSnapshotter{
+	l := &LVMSnapshotter{Gate: unguarded(),
 		Root: "/var/stack/data", VG: "vg0", LV: "data",
 		SnapDir: "/run/pmcluster-backup/snap", Prefix: "pmcluster-snap", Exec: ex.run,
 	}
@@ -105,7 +105,7 @@ func TestSnapshotMountsTheSnapshotNotTheOrigin(t *testing.T) {
 
 func TestSnapshotFailsCleanlyWhenLvcreateFails(t *testing.T) {
 	ex := &recordingExec{fail: map[string]error{"lvcreate": errFake}}
-	l := &LVMSnapshotter{Root: "/d", VG: "vg0", LV: "data", Exec: ex.run}
+	l := &LVMSnapshotter{Gate: unguarded(), Root: "/d", VG: "vg0", LV: "data", Exec: ex.run}
 	if _, _, err := l.Snapshot(context.Background(), "/d", time.Now().UTC()); err == nil {
 		t.Fatal("want an error when lvcreate fails")
 	}
@@ -118,7 +118,7 @@ func TestSnapshotFailsCleanlyWhenLvcreateFails(t *testing.T) {
 // leaks a thin LV until the pool fills — which then aborts later runs.
 func TestSnapshotCleansUpWhenMountFails(t *testing.T) {
 	ex := &recordingExec{fail: map[string]error{"mount": errFake}}
-	l := &LVMSnapshotter{Root: "/d", VG: "vg0", LV: "data", Exec: ex.run}
+	l := &LVMSnapshotter{Gate: unguarded(), Root: "/d", VG: "vg0", LV: "data", Exec: ex.run}
 	if _, _, err := l.Snapshot(context.Background(), "/d", time.Now().UTC()); err == nil {
 		t.Fatal("want an error when mount fails")
 	}
@@ -132,7 +132,7 @@ func TestSnapshotCleansUpWhenMountFails(t *testing.T) {
 // lock.
 func TestThawIsANoOpWhenNothingWasFrozen(t *testing.T) {
 	ex := &recordingExec{}
-	l := &LVMSnapshotter{Root: "/d", Exec: ex.run}
+	l := &LVMSnapshotter{Gate: unguarded(), Root: "/d", Exec: ex.run}
 	if err := l.Thaw(context.Background(), "/d"); err != nil {
 		t.Fatalf("Thaw: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestThawIsANoOpWhenNothingWasFrozen(t *testing.T) {
 // pool at 1.72% next to its data LV at 4.31% — and a data LV can legitimately
 // sit at 85%, which the first "worst line" version would have aborted on.
 func TestUsageReadsOnlyTheThinPool(t *testing.T) {
-	l := &LVMSnapshotter{VG: "vg0", Exec: func(context.Context, string, ...string) ([]byte, error) {
+	l := &LVMSnapshotter{Gate: unguarded(), VG: "vg0", Exec: func(context.Context, string, ...string) ([]byte, error) {
 		// lv_attr, data_percent: V = thin volume, t = thin pool.
 		return []byte("  Vwi-a-tz-- 85.00\n  twi-aotz--  1.72\n"), nil
 	}}
@@ -169,7 +169,7 @@ func TestUsageReadsOnlyTheThinPool(t *testing.T) {
 }
 
 func TestUsageWithoutAThinPoolIsUnknown(t *testing.T) {
-	l := &LVMSnapshotter{VG: "vg0", Exec: func(context.Context, string, ...string) ([]byte, error) {
+	l := &LVMSnapshotter{Gate: unguarded(), VG: "vg0", Exec: func(context.Context, string, ...string) ([]byte, error) {
 		return []byte("  -wi-ao---- 12.00\n"), nil
 	}}
 	pct, err := l.Usage(context.Background())
@@ -186,7 +186,7 @@ func TestUsageWithoutAThinPoolIsUnknown(t *testing.T) {
 // there is nothing atomic to snapshot; the agent must refuse rather than tar a
 // live tree.
 func TestVerifyRejectsAVolumeRootThatIsNotTheConfiguredLV(t *testing.T) {
-	l := &LVMSnapshotter{VG: "vg0", LV: "data"}
+	l := &LVMSnapshotter{Gate: unguarded(), VG: "vg0", LV: "data"}
 	l.Exec = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "findmnt":
@@ -207,7 +207,7 @@ func TestVerifyRejectsAVolumeRootThatIsNotTheConfiguredLV(t *testing.T) {
 
 func TestVerifyAcceptsTheConfiguredLV(t *testing.T) {
 	for _, source := range []string{"/dev/mapper/vg0-data", "/dev/vg0/data"} {
-		l := &LVMSnapshotter{VG: "vg0", LV: "data"}
+		l := &LVMSnapshotter{Gate: unguarded(), VG: "vg0", LV: "data"}
 		l.Exec = func(_ context.Context, name string, args ...string) ([]byte, error) {
 			switch name {
 			case "findmnt":
@@ -224,8 +224,14 @@ func TestVerifyAcceptsTheConfiguredLV(t *testing.T) {
 }
 
 func TestVerifyRequiresAVGAndLV(t *testing.T) {
-	l := &LVMSnapshotter{Exec: func(context.Context, string, ...string) ([]byte, error) { return nil, nil }}
+	l := &LVMSnapshotter{Gate: unguarded(), Exec: func(context.Context, string, ...string) ([]byte, error) { return nil, nil }}
 	if err := l.Verify(context.Background(), "/var/stack/data"); err == nil {
 		t.Fatal("Verify accepted an unconfigured snapshotter")
 	}
 }
+
+// unguarded disables the io-pressure guard for tests that are about the freeze
+// mechanism, not about when a freeze is affordable. The CI host's own dirty-page
+// count made a guard-enabled test refuse to freeze, which is the guard working
+// correctly and the test asking the wrong question.
+func unguarded() *ioGate { return &ioGate{} }
