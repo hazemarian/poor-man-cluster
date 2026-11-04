@@ -241,8 +241,8 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 		},
 	}
-	if agentShipWebDAV != "" {
-		a.Ship = webdavShipper(agentShipWebDAV)
+	if ship := shipTargetsFromEnv(); ship != nil {
+		a.Ship = ship
 	}
 
 	res, runErr := a.Run(ctx, plan)
@@ -358,8 +358,40 @@ func runBackupAgentDrill(cmd *cobra.Command, args []string) error {
 
 // webdavShipper copies an artifact to the in-cluster store. It is a thin
 // wrapper so the agent stays unaware of the transport.
-func webdavShipper(base string) func(context.Context, string) error {
-	return func(ctx context.Context, archivePath string) error {
-		return backups.PutWebDAV(ctx, base, archivePath)
+// shipTargetsFromEnv builds the artifact's destinations from the environment.
+//
+// Both legs are optional and independent: the in-cluster store (WebDAV) is one
+// way to keep every backup in a single place, the offsite bucket is another, and
+// a node with neither is a legitimate configuration — the artifact still lands
+// on disk and the run records where. Returning nil means "local only", which the
+// agent reports as such rather than as a failure.
+func shipTargetsFromEnv() func(context.Context, string) ([]string, error) {
+	webdav := agentShipWebDAV
+	s3 := backups.S3Config{
+		Endpoint:  os.Getenv("PMCLUSTER_BACKUP_S3_ENDPOINT"),
+		Bucket:    os.Getenv("PMCLUSTER_BACKUP_S3_BUCKET"),
+		AccessKey: os.Getenv("PMCLUSTER_BACKUP_S3_ACCESS_KEY"),
+		SecretKey: os.Getenv("PMCLUSTER_BACKUP_S3_SECRET_KEY"),
+		Region:    os.Getenv("PMCLUSTER_BACKUP_S3_REGION"),
+	}
+	if webdav == "" && !s3.Configured() {
+		return nil
+	}
+	return func(ctx context.Context, archivePath string) ([]string, error) {
+		name := filepath.Base(archivePath)
+		var where []string
+		if webdav != "" {
+			if err := backups.PutWebDAV(ctx, webdav, archivePath); err != nil {
+				return where, err
+			}
+			where = append(where, "store:"+name)
+		}
+		if s3.Configured() {
+			if err := backups.PutS3Object(ctx, s3, name, archivePath); err != nil {
+				return where, err
+			}
+			where = append(where, "s3:"+s3.Bucket+"/"+name)
+		}
+		return where, nil
 	}
 }

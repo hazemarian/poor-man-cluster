@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -54,13 +55,21 @@ var ErrS3BucketMissing = errors.New("offsite bucket does not exist")
 // signV4Headers returns the Authorization + date + content-sha256 headers for
 // a SigV4-signed GET of object key inside cfg.Bucket (path-style URL).
 func signV4Headers(cfg S3Config, key string, now time.Time) http.Header {
-	return signV4HeadersQuery(cfg, key, nil, now)
+	return signV4Request(cfg, http.MethodGet, key, nil, emptyPayloadSHA, now)
 }
 
 // signV4HeadersQuery is signV4Headers with an optional canonical query string
-// — ListObjectsV2 signs its `?list-type=2&prefix=...` parameters, so they
-// must be part of the canonical request.
+// — ListObjectsV2 signs its `?list-type=2&prefix=...` parameters, so they must
+// be part of the canonical request.
 func signV4HeadersQuery(cfg S3Config, key string, query url.Values, now time.Time) http.Header {
+	return signV4Request(cfg, http.MethodGet, key, query, emptyPayloadSHA, now)
+}
+
+// signV4Request signs any method over any payload hash. The read paths signed an
+// empty payload because nothing they sent carried a body; an upload must sign
+// the SHA-256 of the bytes it is about to send, or the store answers 403
+// XAmzContentSHA256Mismatch.
+func signV4Request(cfg S3Config, method, key string, query url.Values, payloadSHA string, now time.Time) http.Header {
 	region := cfg.Region
 	if region == "" {
 		region = "auto"
@@ -79,11 +88,11 @@ func signV4HeadersQuery(cfg S3Config, key string, query url.Values, now time.Tim
 	// SignatureDoesNotMatch). IONOS tolerated the omission; the in-cluster
 	// store did not.
 	canonicalHeaders := "host:" + host + "\n" +
-		"x-amz-content-sha256:" + emptyPayloadSHA + "\n" +
+		"x-amz-content-sha256:" + payloadSHA + "\n" +
 		"x-amz-date:" + amzDate + "\n"
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
 
-	canonicalRequest := "GET\n" + canonicalURI + "\n" + canonicalQuery + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + emptyPayloadSHA
+	canonicalRequest := method + "\n" + canonicalURI + "\n" + canonicalQuery + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + payloadSHA
 	creqHash := sha256.Sum256([]byte(canonicalRequest))
 
 	scope := dateStamp + "/" + region + "/s3/aws4_request"
@@ -97,7 +106,7 @@ func signV4HeadersQuery(cfg S3Config, key string, query url.Values, now time.Tim
 
 	h := http.Header{}
 	h.Set("x-amz-date", amzDate)
-	h.Set("x-amz-content-sha256", emptyPayloadSHA)
+	h.Set("x-amz-content-sha256", payloadSHA)
 	h.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+cfg.AccessKey+"/"+scope+
 		", SignedHeaders="+signedHeaders+", Signature="+signature)
 	return h
@@ -185,6 +194,82 @@ func fetchS3Object(ctx context.Context, cfg S3Config, key, dst string) error {
 	if err := out.Close(); err != nil {
 		_ = os.Remove(dst)
 		return err
+	}
+	return nil
+}
+
+// s3UploadClient bounds an upload the way webdavClient bounds a PUT. A store
+// that accepts the connection and then stops reading must fail the artifact
+// quickly, not hold the node's backup lock for the rest of the hour.
+var s3UploadClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 60 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		MaxIdleConns:          4,
+		IdleConnTimeout:       30 * time.Second,
+	},
+}
+
+// s3PutTimeout bounds one object upload end to end.
+var s3PutTimeout = 10 * time.Minute
+
+// PutS3Object uploads a local artifact to cfg.Bucket under key.
+//
+// This is the offsite leg the agent owns. It exists so a node can ship straight
+// to S3/R2/IONOS without any in-cluster store in the path — the store is an
+// option, not a requirement, and a bucket is a simpler thing to keep alive than
+// a pinned SeaweedFS service with a node-local volume.
+func PutS3Object(ctx context.Context, cfg S3Config, key, src string) error {
+	if !cfg.Configured() {
+		return fmt.Errorf("s3: endpoint, bucket and keys are all required")
+	}
+	u, err := url.Parse(cfg.Endpoint)
+	if err != nil {
+		return fmt.Errorf("s3: parse endpoint: %w", err)
+	}
+	u.Path = "/" + cfg.Bucket + "/" + escapePath(key)
+
+	f, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("s3 put %s: %w", key, err)
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("s3 put %s: %w", key, err)
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("s3 put %s: hash: %w", key, err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("s3 put %s: rewind: %w", key, err)
+	}
+	payloadSHA := hex.EncodeToString(h.Sum(nil))
+
+	ctx, cancel := context.WithTimeout(ctx, s3PutTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u.String(), f)
+	if err != nil {
+		return err
+	}
+	req.ContentLength = st.Size()
+	req.Header.Set("Content-Type", "application/octet-stream")
+	for k, v := range signV4Request(cfg, http.MethodPut, key, nil, payloadSHA, time.Now()) {
+		req.Header[k] = v
+	}
+
+	resp, err := s3UploadClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("s3 put %s: %w", key, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("s3 put %s: %s: %s", key, resp.Status, strings.TrimSpace(string(body)))
 	}
 	return nil
 }

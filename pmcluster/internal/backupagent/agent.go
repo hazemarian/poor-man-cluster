@@ -119,6 +119,12 @@ type Stack struct {
 	Verified bool   `json:"verified"`
 	Engine   string `json:"engine,omitempty"`
 	Detail   string `json:"detail,omitempty"`
+	// Where lists every place this artifact can be restored from: the node's
+	// own archive directory always, plus the store and/or the offsite bucket
+	// when those are configured. A run record that says only "succeeded" is not
+	// enough once backups may live in one of three places — the operator has to
+	// be able to answer "where is the copy of THIS stack" without guessing.
+	Where []string `json:"where,omitempty"`
 }
 
 // Result is what the run reports back. It is written to disk first and posted
@@ -218,7 +224,7 @@ type Agent struct {
 	Logf func(format string, args ...any)
 	// Ship, when set, is called per artifact after it is written and
 	// verified: the node uploads its own archives.
-	Ship func(ctx context.Context, archivePath string) error
+	Ship func(ctx context.Context, archivePath string) ([]string, error)
 	// Verify inspects one artifact. Nil means VerifyArchive with the default
 	// rules.
 	Verify func(archivePath, stack string) (engine, detail string, err error)
@@ -381,14 +387,18 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 		st := a.archiveStack(ctx, snapDir, s, at)
 		res.Stacks = append(res.Stacks, st)
 		if st.Archive != "" {
+			st.Where = []string{"node:" + st.Archive}
 			if a.Ship != nil {
 				p := filepath.Join(a.ArchiveDir, st.Archive)
-				if err := a.Ship(ctx, p); err != nil {
+				where, err := a.Ship(ctx, p)
+				if err != nil {
 					st.OK = false
 					st.Reason = fmt.Sprintf("ship: %v", err)
-					res.Stacks[len(res.Stacks)-1] = st
+				} else {
+					st.Where = append(st.Where, where...)
 				}
 			}
+			res.Stacks[len(res.Stacks)-1] = st
 		}
 	}
 
