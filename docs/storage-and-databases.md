@@ -237,11 +237,10 @@ sequenceDiagram
  participant V as volume (thin LV)
  participant S as store (WebDAV)
  T->>A: hourly, Persistent=true
- A->>K: fsfreeze -f
  A->>K: lvcreate -s
- A->>K: fsfreeze -u
- Note over K,V: writes block only<br/>0.1-0.6 s warm
- A->>K: mount -o ro
+ Note over K,V: metadata operation<br/>192 ms, no write stall
+ A->>K: mount (r/w)
+ Note over K: journal replays<br/>"recovery complete"
  loop one artifact per stack
    A->>V: walk stack/
    A->>S: PUT artifact
@@ -253,10 +252,37 @@ sequenceDiagram
 The whole run, from provisioning through restore, is drawn in
 [`backup-agent-flow.md`](backup-agent-flow.md) — including what is not built.
 
-The freeze is the only write stall in the design and it is node-wide. Its length
-tracks how much dirty data the filesystem has to flush, so it is a property of
-the node's write rate rather than a constant — plan for seconds on a busy
-database node.
+There is no freeze, and that is deliberate.
+
+An earlier version ran `fsfreeze -f` around the snapshot. It was removed after it
+took a production node down: the freeze flushes every dirty page and blocks
+writers until the disk acknowledges them, which is unbounded and cannot be
+cancelled. On a node whose pool is a loop file on the root disk that flush
+competes with Docker, containerd, journald and sshd for one device. Measured:
+**19m29s** of write stall, kernel hung-task reports, dockerd missing its swarm
+heartbeat, and every service rescheduled. The same code on an idle node froze for
+**216 ms** — the cost is a property of write rate, not a constant.
+
+What the freeze bought was filesystem-metadata consistency, and the filesystem
+already guarantees that itself: a journaling filesystem keeps "the on-disk state is
+always recoverable" true at every instant, so a thin snapshot — a metadata
+operation, **192 ms measured** — captures a recoverable state. The copy is mounted
+**read-write** so its journal replays, exactly as it would after a power cut. That
+is crash consistency, and it is the same guarantee cloud volume snapshots give.
+
+Databases do not need anything more: PostgreSQL, InnoDB and SQLite are crash-safe
+by design and replay their own redo on open. The one invariant is that the redo
+material must sit in the **same snapshot** as the data — `pg_wal`, InnoDB redo and
+the SQLite `-wal` file must live in the stack's own volume, never on a separate
+volume or outside the pool. A database split across two snapshotted volumes is the
+single silent-unrestorable case, and it is a volume-layout rule rather than an
+engine plugin.
+
+The honest trade: this is crash consistency, not application consistency. A volume
+mounted `data=writeback`, or a store that writes multi-file state without fsync
+(Redis with `appendfsync no`), can come back needing a documented repair step.
+Stacks that need sub-hour RPO get WAL shipping as a per-stack option; the
+mechanism above stays engine-agnostic.
 
 **A run refuses rather than degrades.** If the volume root is not a mount of the
 expected logical volume — a fresh node, or one whose boot ordering failed — the
@@ -286,7 +312,7 @@ cluster from the host would be a lie the console then repeats.
 
 ```mermaid
 flowchart TD
-    A["backup-agent on the node<br/>freeze, snapshot, tar, verify"] --> L["local archive<br/>/var/stack/backup"]
+    A["backup-agent on the node<br/>snapshot, tar, verify"] --> L["local archive<br/>/var/stack/backup"]
     L --> W["in-cluster store — SeaweedFS<br/>WebDAV on 127.0.0.1:7333"]
     W --> M["store mirror to offsite S3/R2<br/>(the store's own job)"]
     L --> R["retention: 48 h dense, 15 d sparse"]

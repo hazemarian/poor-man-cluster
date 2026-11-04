@@ -42,9 +42,6 @@ type LVMSnapshotter struct {
 	// Frozen records whether Freeze succeeded, so Thaw is only ever called on
 	// a filesystem this process actually froze.
 	Frozen bool
-	// Gate refuses a freeze the node cannot afford right now. nil means "check
-	// with the defaults", false disables it (tests, --snapshot=none).
-	Gate *ioGate
 }
 
 func (l *LVMSnapshotter) exec(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -96,30 +93,27 @@ func (l *LVMSnapshotter) Verify(ctx context.Context, root string) error {
 	return fmt.Errorf("verify: %s is mounted from %s, not from %s — refusing to snapshot a volume this node does not own", root, source, want)
 }
 
-// Freeze implements Snapshotter with `fsfreeze -f`.
-func (l *LVMSnapshotter) Freeze(ctx context.Context, root string) error {
-	gate := l.Gate
-	if gate == nil {
-		gate = defaultGate()
-	}
-	if err := gate.check(); err != nil {
-		return err
-	}
-	// Pre-flush so the freeze itself waits on the tail of writeback rather than
-	// the whole backlog. Deliberately best-effort: a sync that fails is not a
-	// reason to skip the backup.
-	if out, err := l.exec(ctx, "sync", "-f", root); err != nil {
-		_ = out
-	}
-	if root == "" {
-		root = l.Root
-	}
-	if out, err := l.exec(ctx, "fsfreeze", "-f", root); err != nil {
-		return fmt.Errorf("fsfreeze -f %s: %w (%s)", root, err, strings.TrimSpace(string(out)))
-	}
-	l.Frozen = true
-	return nil
-}
+// Freeze is deliberately a no-op.
+//
+// It used to call `fsfreeze -f`, which flushes every dirty page and blocks
+// writers until the disk acknowledges them. That flush is unbounded and cannot be
+// cancelled, and on a node whose pool is a loop file on the root disk it competes
+// with Docker, containerd, journald and sshd for the same device. Measured on
+// production: 19m29s of node-wide write stall, kernel hung-task reports, dockerd
+// missing its swarm heartbeat, and every service on the node rescheduled.
+//
+// What it bought was filesystem-metadata consistency — and the filesystem already
+// guarantees that itself. A journaling filesystem keeps "the on-disk state is
+// always recoverable" true at every instant, so a thin snapshot (a metadata
+// operation, 192 ms measured) captures a recoverable state. Mount the copy
+// read-write and the journal replays, exactly as it does after a power cut. The
+// same guarantee every cloud volume snapshot gives.
+//
+// Databases are unaffected: Postgres, InnoDB and SQLite are crash-safe by design
+// and replay their own redo on open. The one invariant that matters is that the
+// redo material lives in the SAME snapshot as the data — see the volume layout
+// check in `pmcluster storage status`.
+func (l *LVMSnapshotter) Freeze(ctx context.Context, root string) error { return nil }
 
 // Thaw implements Snapshotter with `fsfreeze -u`. It is a no-op when this
 // process never froze anything, so a failed Freeze cannot unfreeze somebody
@@ -150,10 +144,11 @@ func (l *LVMSnapshotter) Snapshot(ctx context.Context, root string, at time.Time
 	}
 	name := prefix + "-" + at.UTC().Format("20060102T150405")
 	origin := l.VG + "/" + l.LV
-	// -kn keeps the snapshot's minor number from being reused, -p r makes it
-	// read-only: a writable snapshot would let nothing write to it anyway, but
-	// the kernel's refusal is a better guard than ours.
-	if out, err := l.exec(ctx, "lvcreate", "-s", "-n", name, "-kn", "-p", "r", origin); err != nil {
+	// Not -p r: the snapshot is mounted read-write so the filesystem can replay
+	// its journal on the copy. A read-only snapshot of a filesystem captured
+	// mid-transaction is exactly the case that needs recovery, and refusing the
+	// copy the right to repair itself would hand back a torn tree.
+	if out, err := l.exec(ctx, "lvcreate", "-s", "-n", name, "-kn", origin); err != nil {
 		return "", "", fmt.Errorf("lvcreate -s %s: %w (%s)", origin, err, strings.TrimSpace(string(out)))
 	}
 	dir := l.SnapDir
@@ -168,7 +163,7 @@ func (l *LVMSnapshotter) Snapshot(ctx context.Context, root string, at time.Time
 	// volume, and archiving that would tar a tree the applications are still
 	// writing to — the exact failure this design exists to prevent. The kernel
 	// only caught it here because the origin was mounted elsewhere.
-	if out, err := l.exec(ctx, "mount", "-o", "ro", "/dev/"+l.VG+"/"+name, dir); err != nil {
+	if out, err := l.exec(ctx, "mount", "/dev/"+l.VG+"/"+name, dir); err != nil {
 		_ = l.dropLV(ctx, name)
 		return "", "", fmt.Errorf("mount snapshot %s: %w (%s)", name, err, strings.TrimSpace(string(out)))
 	}
