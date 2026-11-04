@@ -68,16 +68,35 @@ func writeBackupPolicyFile() error {
 	pol.S3.Region = envOr("PMCLUSTER_BACKUP_S3_REGION", "")
 	pol.S3.AccessKey = envOr("PMCLUSTER_BACKUP_S3_ACCESS_KEY", "")
 	pol.S3.SecretKey = envOr("PMCLUSTER_BACKUP_S3_SECRET_KEY", "")
-	// Without an explicit cron, take the cluster's own schedule when this node
-	// can see it.
-	if pol.Cron == "" {
-		if st, _, err := openStore(); err == nil {
-			pol.Cron = st.SettingDefault(context.Background(), cluster.SettingBackupCron(), "")
-			if pol.Store == "" {
-				pol.Store = st.SettingDefault(context.Background(), cluster.SettingBackupStoreOn(), "")
-			}
-			_ = st.Close()
+	// Whatever the environment does not say, the control plane says. The offsite
+	// target especially: it is a cluster setting the operator edits from the
+	// console, and reading it only from env meant a node whose environment lacked
+	// PMCLUSTER_BACKUP_S3_* wrote an EMPTY target into its policy and silently
+	// shipped nothing offsite — a node fully configured for R2 in `cluster
+	// settings`, whose every artifact stayed local.
+	if st, _, err := openStore(); err == nil {
+		ctx := context.Background()
+		if pol.Cron == "" {
+			pol.Cron = st.SettingDefault(ctx, cluster.SettingBackupCron(), "")
 		}
+		if pol.Store == "" {
+			pol.Store = st.SettingDefault(ctx, cluster.SettingBackupStoreOn(), "")
+		}
+		for _, f := range []struct {
+			dst *string
+			key string
+		}{
+			{&pol.S3.Endpoint, cluster.SettingBackupS3Endpoint()},
+			{&pol.S3.Bucket, cluster.SettingBackupS3Bucket()},
+			{&pol.S3.Region, cluster.SettingBackupS3Region()},
+			{&pol.S3.AccessKey, cluster.SettingBackupS3AccessKey()},
+			{&pol.S3.SecretKey, cluster.SettingBackupS3SecretKey()},
+		} {
+			if *f.dst == "" {
+				*f.dst = st.SettingDefault(ctx, f.key, "")
+			}
+		}
+		_ = st.Close()
 	}
 	if pol.Cron == "" {
 		pol.Cron = cluster.DefaultBackupCron
