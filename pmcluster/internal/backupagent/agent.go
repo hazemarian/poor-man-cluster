@@ -9,8 +9,33 @@
 //
 // The agent is deliberately engine-agnostic: it never reads a database. It
 // captures whatever files the stack owns, one artifact per stack, and records
-// how the image was obtained. Engines that need more (WAL shipping, PITR) keep
-// that responsibility themselves — see the whitepaper, "backup granularity".
+// how the image was obtained.
+//
+// # Deliberately not implemented: Postgres PITR
+//
+// The snapshot restores to the instant it was taken, so RPO is the hourly
+// interval and the finest undo is an hour. Point-in-time recovery would make
+// both arbitrary — a base image plus a continuous WAL stream replayed to a
+// timestamp. It is a FUTURE PLAN, not a gap somebody forgot:
+//
+//   - base: the snapshot taken here is already a valid base (crash-consistent,
+//     and Postgres replays its own tail on start);
+//   - stream: pg_receivewal inside the stack's Postgres container, writing into
+//     <stack>/_wal over the container's local trust socket with its own
+//     POSTGRES_USER — no password, no new role, no pg_hba change, which is the
+//     only reason it is viable on a platform that does not hold database
+//     credentials;
+//   - prerequisite, not follow-up: max_slot_wal_keep_size is -1 (unlimited) on
+//     our instances today. A receiver that dies while a slot exists makes
+//     Postgres retain WAL forever and fill the disk, so the cap and the
+//     pg_replication_slots.wal_status alert must land BEFORE the slot exists;
+//   - restore: extract the base, point restore_command at the shipped WAL, write
+//     recovery.signal, set recovery_target_time, start once.
+//
+// Limits to state before anyone builds it: WAL replays only into the same major
+// version, PITR rewinds a whole instance rather than a table, and MySQL/MariaDB
+// need their own binlog equivalent. See docs/storage-and-databases.md,
+// "Future plan: Postgres point-in-time recovery".
 package backupagent
 
 import (

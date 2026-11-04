@@ -207,11 +207,47 @@ any machine.
 | gap | consequence |
 |---|---|
 | Host → store shipping | the agent writes locally; artifacts reach the in-cluster store only through offen today. WebDAV :7333 is not published for a host process, and publishing it exposes the store — the S3 leg on the published :8333 is the better route |
-| Postgres PITR | a snapshot restores to the snapshot instant only; no `pg_receivewal` stream yet, so RPO = one hour |
+| Postgres PITR | a snapshot restores to the snapshot instant only; RPO = one hour. **Future plan, deliberately not built — see below.** |
 | Retention | per-stack artifacts accumulate; offen's `BACKUP_RETENTION_DAYS=15` has no equivalent on the new path |
 | Plan endpoint | `GET /internal/backup/plan` does not exist; the agent derives the plan from the directory layout, which works but carries no attribution |
 | Restore stop/start | restore writes into a live volume root |
 | Nodes with data | provisioning needs an empty volume root, so a node with stacks must be drained first (`stack move`) |
+
+## Future plan: Postgres point-in-time recovery
+
+**Status: not implemented, deliberately.** A snapshot restores to one instant, so
+RPO is the hourly interval and the finest "undo" is an hour. PITR would make both
+of those arbitrary. Nothing below is written; it is recorded so the design is not
+re-derived, and so nobody assumes it exists.
+
+The shape it would take:
+
+1. **Base.** The thin snapshot we already take. It is crash-consistent, and
+   Postgres replays its own WAL tail on start — that is the `redo done` line the
+   restore drills show. No second base-backup mechanism is needed.
+2. **Stream.** `pg_receivewal` inside the stack's Postgres container, writing
+   into `<stack>/_wal`, over the container's local trust socket with its own
+   `POSTGRES_USER`. No password, no new role, no `pg_hba` change — the reason
+   this approach works at all on a platform that does not want to hold database
+   credentials. It needs a dedicated replication slot (`--create-slot`) and
+   `--no-loop`, so the receiver writes segments once instead of waiting for a
+   connection reset.
+3. **A guard before the slot exists.** `max_slot_wal_keep_size` is `-1`
+   (unlimited) on our instances today. A receiver that dies while a slot exists
+   makes Postgres retain WAL forever and fill the disk, so the cap
+   (`512MB`, say) and an alert on `pg_replication_slots.wal_status` are
+   prerequisites, not follow-ups.
+4. **Restore.** Extract the base, point `restore_command` at the shipped WAL,
+   write `recovery.signal`, set `recovery_target_time`, start once. The
+   artifacts already carry `<stack>/_wal`, so the same archive that restores the
+   base would carry the log that rewinds it.
+5. **Retention.** WAL must age out on its own schedule, or a 24 h rewind window
+   costs more disk than the data.
+
+Limits worth stating before anyone builds it: WAL replays only into the same
+major version (14 for `donation-campaign`), PITR rewinds a whole instance rather
+than one table, and MySQL/MariaDB need their own binlog equivalent — neither is
+covered by this plan.
 
 ## Verified
 
