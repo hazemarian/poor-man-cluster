@@ -87,6 +87,22 @@ func BackupDecisionFor(ctx context.Context, st *store.Store, now time.Time) Back
 	return d
 }
 
+// backupEnabled reads the master switch for the rendered policy. Absent means
+// true: a cluster that has been backing up since before the switch existed must
+// not stop because the settings row is missing.
+func backupEnabled(ctx context.Context, st *store.Store) bool {
+	v := strings.ToLower(strings.TrimSpace(st.SettingDefault(ctx, settingBackupEnabled, "true")))
+	return v != "false" && v != "0" && v != "no"
+}
+
+// backupCron reads the schedule for the rendered policy.
+func backupCron(ctx context.Context, st *store.Store) string {
+	if v := strings.TrimSpace(st.SettingDefault(ctx, settingBackupCron, "")); v != "" {
+		return v
+	}
+	return DefaultBackupCron
+}
+
 // BackupS3For reads the offsite destination from the cluster settings.
 func BackupS3For(ctx context.Context, st *store.Store) (cfg S3Settings) {
 	cfg = S3Settings{

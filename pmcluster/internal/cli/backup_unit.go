@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -8,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 )
 
 // The backup agent is a host unit, not a Swarm service.
@@ -45,6 +49,51 @@ func canonicalAgentBinary(exe string, stat func(string) (os.FileInfo, error)) st
 		return canonicalAgentPath
 	}
 	return exe
+}
+
+// writeBackupPolicyFile writes the node's copy of the backup settings.
+//
+// This is how the control plane reaches a node without an endpoint: the installer
+// reads the cluster settings (from this node's store when it has one) and writes
+// a 0600 file the agent reads before every run. Re-running the installer is the
+// refresh — one command, and it is the same command that installs the unit.
+func writeBackupPolicyFile() error {
+	pol := backupPolicy{
+		Enabled: envOr("PMCLUSTER_BACKUP_ENABLED", "true"),
+		Cron:    envOr("PMCLUSTER_BACKUP_CRON", ""),
+		Store:   envOr("PMCLUSTER_BACKUP_STORE", ""),
+	}
+	pol.S3.Endpoint = envOr("PMCLUSTER_BACKUP_S3_ENDPOINT", "")
+	pol.S3.Bucket = envOr("PMCLUSTER_BACKUP_S3_BUCKET", "")
+	pol.S3.Region = envOr("PMCLUSTER_BACKUP_S3_REGION", "")
+	pol.S3.AccessKey = envOr("PMCLUSTER_BACKUP_S3_ACCESS_KEY", "")
+	pol.S3.SecretKey = envOr("PMCLUSTER_BACKUP_S3_SECRET_KEY", "")
+	// Without an explicit cron, take the cluster's own schedule when this node
+	// can see it.
+	if pol.Cron == "" {
+		if st, _, err := openStore(); err == nil {
+			pol.Cron = st.SettingDefault(context.Background(), cluster.SettingBackupCron(), "")
+			if pol.Store == "" {
+				pol.Store = st.SettingDefault(context.Background(), cluster.SettingBackupStoreOn(), "")
+			}
+			_ = st.Close()
+		}
+	}
+	if pol.Cron == "" {
+		pol.Cron = cluster.DefaultBackupCron
+	}
+	b, err := json.MarshalIndent(pol, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(backupPolicyFile), 0o700); err != nil {
+		return err
+	}
+	tmp := backupPolicyFile + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, backupPolicyFile)
 }
 
 // writeBackupEnv persists the WebDAV target handed to the installer through the
@@ -180,6 +229,9 @@ func ensureBackupAgentInstalled(out io.Writer) error {
 		// write, so a permission problem here is worth reporting but not fatal
 		// to the install.
 		fmt.Fprintf(out, "  (could not create %s: %v)\n", backupAgentStateDir, err)
+	}
+	if err := writeBackupPolicyFile(); err != nil {
+		fmt.Fprintf(out, "  (could not write %s: %v — the agent will use this node's stored settings)\n", backupPolicyFile, err)
 	}
 	if err := writeBackupEnv(); err != nil {
 		fmt.Fprintf(out, "  (could not write %s: %v — artifacts will stay local)\n", backupEnvFile, err)

@@ -429,6 +429,9 @@ func runBackupAgentDrill(cmd *cobra.Command, args []string) error {
 // a schedule setting and the wrong latency for an emergency stop — for that,
 // stop the unit on the node.
 func localBackupDecision(ctx context.Context) (cluster.BackupDecision, error) {
+	if pol, ok := readBackupPolicy(backupPolicyFile); ok {
+		return decisionFromPolicy(pol, time.Now()), nil
+	}
 	st, _, err := openStore()
 	if err != nil {
 		return cluster.BackupDecision{}, err
@@ -447,11 +450,27 @@ func localBackupDecision(ctx context.Context) (cluster.BackupDecision, error) {
 func shipTargetsFromEnv() func(context.Context, string) ([]string, error) {
 	webdav := agentShipWebDAV
 	s3 := backups.S3Config{
-		Endpoint:  os.Getenv("PMCLUSTER_BACKUP_S3_ENDPOINT"),
-		Bucket:    os.Getenv("PMCLUSTER_BACKUP_S3_BUCKET"),
-		AccessKey: os.Getenv("PMCLUSTER_BACKUP_S3_ACCESS_KEY"),
-		SecretKey: os.Getenv("PMCLUSTER_BACKUP_S3_SECRET_KEY"),
-		Region:    os.Getenv("PMCLUSTER_BACKUP_S3_REGION"),
+		Endpoint:  envOr("PMCLUSTER_BACKUP_S3_ENDPOINT", ""),
+		Bucket:    envOr("PMCLUSTER_BACKUP_S3_BUCKET", ""),
+		AccessKey: envOr("PMCLUSTER_BACKUP_S3_ACCESS_KEY", ""),
+		SecretKey: envOr("PMCLUSTER_BACKUP_S3_SECRET_KEY", ""),
+		Region:    envOr("PMCLUSTER_BACKUP_S3_REGION", ""),
+	}
+	// The node's policy file is authoritative when it exists: it is what the
+	// installer wrote from the cluster settings.
+	if pol, ok := readBackupPolicy(backupPolicyFile); ok {
+		if pol.Store != "" && isOff(pol.Store) {
+			webdav = ""
+		}
+		if pol.S3.Endpoint != "" {
+			s3 = backups.S3Config{
+				Endpoint:  pol.S3.Endpoint,
+				Bucket:    pol.S3.Bucket,
+				Region:    pol.S3.Region,
+				AccessKey: pol.S3.AccessKey,
+				SecretKey: pol.S3.SecretKey,
+			}
+		}
 	}
 	if webdav == "" && !s3.Configured() {
 		return nil
