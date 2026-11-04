@@ -101,17 +101,14 @@ func clearAppState(t *testing.T, app, volume string) {
 	}
 }
 
-// waitBackupAgentsReady waits for the offen agent — and the in-cluster store it
-// double-writes to, when that service exists — to be up before it is exec'd.
+// waitBackupAgentsReady waits for the in-cluster store, which is what the
+// node-local agent ships artifacts to.
 //
-// `backup create` execs `backup` inside the agent container. Triggered before
-// the agent has finished starting, that exec exits 1 with NO output at all
-// ("docker exec <id> backup: exit status 1 ()"), and Trigger's single 10s retry
-// does not cover a cold start. cluster_up_test.go waits on the same service for
-// the same reason.
+// It used to wait for the offen per-volume agent, because `backup create`
+// exec'd `backup` inside that container. There is no such container any more:
+// the trigger runs the systemd agent on the host.
 func waitBackupAgentsReady(t *testing.T, ctx context.Context) {
 	t.Helper()
-	waitServiceHealthy(t, ctx, "backup_volume-backup", 1, 120*time.Second)
 	// The store is optional; when the stack ships it, the agent's WebDAV write
 	// leg needs it up or the backup fails as a whole.
 	if out := mustDockerRun(t, ctx, "service", "ls", "--filter", "name=backup_seaweedfs", "--format", "{{.Name}}"); strings.Contains(out, "backup_seaweedfs") {
@@ -127,6 +124,17 @@ func TestBackupRestoreE2E(t *testing.T) {
 
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH; skipping backup/restore e2e")
+	}
+	// `backup create` now runs the node agent, which freezes and snapshots the
+	// volume: root, and a volume that is a mount of its own LV. A runner without
+	// either exercises nothing, so say so instead of failing on a permission
+	// error three layers down. The provisioning, mid-write and multi-engine
+	// coverage lives in .github/workflows/storage-e2e.yml.
+	if os.Geteuid() != 0 {
+		t.Skip("backup create needs root (fsfreeze, lvcreate); skipping")
+	}
+	if st, err := exec.CommandContext(context.Background(), "pmcluster", "storage", "status").CombinedOutput(); err != nil || !strings.Contains(string(st), "snapshots possible") {
+		t.Skipf("this runner has no snapshot-capable volume (%s); see .github/workflows/storage-e2e.yml for the coverage that does run", strings.TrimSpace(string(st)))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)

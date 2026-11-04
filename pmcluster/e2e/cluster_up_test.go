@@ -138,7 +138,9 @@ func TestClusterUp(t *testing.T) {
 			{stack: "infra", service: "traefik", wantRep: 1},
 			{stack: "observability", service: "parseable", wantRep: 1},
 			{stack: "observability", service: "otel-collector", wantRep: 1},
-			{stack: "backup", service: "volume-backup", wantRep: 1},
+			// The backup stack ships the store (and the control-plane archiver),
+			// never a per-volume agent: stack data is archived by a systemd unit
+			// on each node, which this swarm-only harness cannot exercise.
 		} {
 			fullName := svc.stack + "_" + svc.service
 			waitServiceHealthy(t, ctx, fullName, svc.wantRep, 120*time.Second)
