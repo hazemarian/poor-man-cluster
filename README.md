@@ -34,7 +34,7 @@ One static Go binary brings a cluster up on cheap VPSes and gives you HTTPS ingr
 
 ## How it works
 
-One machine is the **manager** (runs `pmcluster` + the platform services); any number of **workers** join with one command. Traefik fronts HTTPS ingress; OpenObserve + an OTel collector give you logs/metrics/traces; offen agents back everything up hourly.
+One machine is the **manager** (runs `pmcluster` + the platform services); any number of **workers** join with one command. Traefik fronts HTTPS ingress; OpenObserve + an OTel collector give you logs/metrics/traces; a node-local agent snapshots each volume hourly and writes one verified artifact per stack.
 
 ```
 Internet → Traefik (HTTPS, every manager)

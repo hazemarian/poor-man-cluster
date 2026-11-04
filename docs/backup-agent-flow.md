@@ -1,17 +1,20 @@
-%% pmcluster backup — one run, end to end (current state).
-%% Colours: green = in code and tested | red = NOT in code yet |
-%% amber = host/ops change (no code) | purple = data.
-%%
-%% Every green line below ran on the four production nodes. The per-volume offen
-%% archiver is gone from the binary — its whole-node tar of a live directory is
-%% exactly what this replaced.
-%%
-%% Packages a node needs: fsfreeze + flock (util-linux), lvcreate / lvs /
-%% lvremove (lvm2), mount / umount, tar, gzip, losetup, pvcreate, blkid.
-%% sqlite3, psql and pg_controldata are NOT installed and NOT needed: SQLite
-%% verification links into the binary (modernc.org/sqlite), and Postgres / MySQL
-%% are recognised from their on-disk files.
+# One backup run, end to end
 
+The whole pipeline in one picture: what is in code and running, what is a host
+requirement, and what is deliberately not built. Read it top to bottom — the
+first block happens once per node, the middle every hour, the last only when you
+need the data back.
+
+Colour key: **green** = in code, tested, running in production · **amber** = host
+or ops requirement with no code · **purple** = data · **red** = not built.
+
+Packages a node needs: `fsfreeze` and `flock` (util-linux), `lvcreate` / `lvs` /
+`lvremove` (lvm2), `mount`, `umount`, `tar`, `gzip`, `losetup`, `pvcreate`,
+`blkid`. `sqlite3`, `psql` and `pg_controldata` are **not** installed and not
+needed: SQLite verification links into the binary, and Postgres and MySQL are
+recognised from their on-disk files rather than interrogated.
+
+```mermaid
 sequenceDiagram
  autonumber
 
@@ -99,3 +102,17 @@ sequenceDiagram
    Note over A,API: NOT BUILT — plan publisher and run-report endpoint.<br/>The agent works without both.
    Note over D,V: NOT BUILT — restore writes into a live volume root,<br/>so stop the stack around it.
  end
+```
+
+## What the picture implies
+
+- **The freeze is the only write stall, and it is node-wide.** Everything after
+  `fsfreeze -u` reads a snapshot, so a slow tar cannot slow your database.
+- **Shipping is not on the critical path of consistency.** The store leg runs
+  after the thaw; a store outage fails the run's shipping verdict, not its
+  snapshot.
+- **Nothing in the hourly path needs the leader.** Plan, run, artifact and record
+  are all node-local, which is why a leader outage costs you nothing but the
+  console view until it returns.
+- **The red block is a plan, not an oversight.** See
+  [`storage-and-databases.md`](storage-and-databases.md#future-plan-postgres-point-in-time-recovery).

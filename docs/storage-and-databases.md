@@ -146,104 +146,178 @@ The DSL enforces the layout rather than documenting it:
 
 ## 3. The backup
 
-### 3.1 The agents
+### 3.1 Where the volume comes from
 
-The backup stack (`platform: true`) runs **offen/docker-volume-backup:v2** as two agents.
+None of the rest of this chapter is possible on a plain directory: a copy of a
+directory is a file-by-file walk of a tree the applications are still writing to.
+So the first thing that has to be true is that `<volume_root>` is a mount of its
+own snapshot-capable filesystem.
 
-**The volume agent** archives the volume root. How many replicas run, and where, follows from how
-you configured storage:
+```
+app-data.img                  sparse file, 50% of free space (8 GiB..128 GiB)
+ └─ /dev/loopN                loop device, found by file not by number
+    └─ vg-pmcluster           # volume group (LVM)
+       ├─ pool                 thin pool: file size minus 1 GiB
+       └─ data                 thin volume: 80% of the pool
+          └─ /var/stack/data   ext4, noatime
+```
 
-| Condition | Where the volume agent runs |
+```bash
+pmcluster storage status       # what this node can do, and why not
+sudo pmcluster storage provision    # empty node: build it
+sudo pmcluster storage migrate      # existing node: build, copy, verify, switch
+sudo pmcluster storage grow --size 64G
+```
+
+The data volume is deliberately smaller than its pool: each run allocates pool
+blocks for the snapshot's divergent writes, and a volume that already fills its
+pool leaves the snapshot nowhere to go. The missing fifth is that room, and the
+agent aborts a run at 80% pool usage rather than ship a snapshot the kernel may
+invalidate mid-copy.
+
+`setup` asks once and provisions before the cluster deploys; `join
+--storage-node` provisions the node being added; `cluster up` refuses to deploy
+when a backing file exists but nothing is mounted — that state is
+indistinguishable from a fresh node by `ls`, and deploying onto it runs every
+stack on an empty directory.
+
+### 3.2 The producer is a node-local agent, not a Swarm service
+
+The per-volume archiver this platform used to ship (offen/docker-volume-backup)
+is gone. It tarred a live directory, so one growing SQLite file could abort a
+node's whole hour, and that is not a bug to fix but a design to replace.
+
+What runs instead is a privileged one-shot on each node,
+`pmcluster-backup.timer` → `pmcluster-backup.service` → `pmcluster backup-agent
+run`. It runs on the host rather than in a Swarm task because a task can be
+rescheduled mid-run, cannot hold a lock across the run, and has no ordering
+against the filesystem it is archiving.
+
+```mermaid
+sequenceDiagram
+ autonumber
+ participant T as systemd timer
+ participant A as backup-agent (root oneshot)
+ participant K as kernel + LVM
+ participant V as volume root (thin LV)
+ participant S as in-cluster store (WebDAV)
+ T->>A: hourly, Persistent=true
+ A->>K: fsfreeze -f /var/stack/data
+ A->>K: lvcreate -s vg-pmcluster/data
+ A->>K: fsfreeze -u
+ Note over K,V: writes block for the freeze only<br/>measured 0.1-0.6 s warm
+ A->>K: mount -o ro the snapshot
+ loop one artifact per stack
+   A->>V: walk stack/ in the frozen image
+   A->>S: PUT the verified artifact
+ end
+ A->>K: umount + lvremove
+ A->>V: retention (48 h dense, one per day to 15 d)
+```
+
+The whole run, from provisioning through restore, is drawn in
+[`backup-agent-flow.md`](backup-agent-flow.md) — including what is not built.
+
+The freeze is the only write stall in the design and it is node-wide. Its length
+tracks how much dirty data the filesystem has to flush, so it is a property of
+the node's write rate rather than a constant — plan for seconds on a busy
+database node.
+
+**A run refuses rather than degrades.** If the volume root is not a mount of the
+expected logical volume — a fresh node, or one whose boot ordering failed — the
+agent exits non-zero and writes no artifact. It never falls back to tarring the
+live tree; that fallback is the failure this design exists to remove.
+
+### 3.3 What an artifact is
+
+One `tar.gz` per stack, per run: `backup-<nodeID>-<timestamp>-stack-<stack>.tar.gz`,
+members under `backup/data/<stack>/…`. An ordinary tarball — `tar -xzf` it
+without pmcluster. Not inventing a format is the point.
+
+Beside it, a `manifest.json` carries the sha256, size, which node took it, which
+snapshot it came from, and the verification verdict. Verification opens the
+archive and checks what can be checked from the host:
+
+| engine | what is verified |
 |---|---|
-| `storage_nodes` set | `mode: global`, constrained to `node.labels.pmcluster.storage == true` — one per storage node |
-| `backup_all_nodes=true` | `mode: global` on **every** node (needed when data is not confined to storage nodes) |
-| neither | a single replica pinned to the platform node / a manager |
+| SQLite | `PRAGMA integrity_check` on every database in the artifact |
+| PostgreSQL | control file and WAL present — recognised, not validated |
+| MySQL / MariaDB | InnoDB system tablespace, data dictionary, redo log, Aria control file — recognised, not validated |
 
-It reads the volume root read-only (`<volume_root>:/backup/data:ro`) and writes archives to
-`<backup_dir>:/archive` — `/var/stack/backup` on the host.
+That distinction is deliberate: a green tick that claimed to validate a Postgres
+cluster from the host would be a lie the console then repeats.
 
-**The control-plane agent** runs only on the manager that holds `~/.pmcluster`, and archives the
-platform's own state: `data.db`, `.encryption_key`, `config.yaml` and the rendered config tree.
-It runs daily at `0 3 * * *` with a **30-day** retention and the `pmcluster-ctlplane-` filename
-prefix, separate from volume archives so a lost manager disk does not mean a full re-bootstrap.
-
-### 3.2 When a backup runs
-
-| Trigger | When | Notes |
-|---|---|---|
-| Scheduled | `backup_cron`, default `0 * * * *` (hourly) | the newest archive is never more than an hour old — the storage-failover path restores exactly this |
-| Pre-deploy | `backup_before_deploy: true` in the manifest | **opt-in per stack**; a failed run is recorded but does not block the deploy |
-| Pre-deploy, strict | `backup_before_deploy` + `strict_backup: true` | a failed pre-deploy backup **aborts the deploy** |
-| Manual | `pmcluster backup create` | |
-
-### 3.3 What an archive is
-
-A `tar.gz` of the volume root, named `backup-<nodeID>-<timestamp>.tar.gz`. It is an ordinary
-tarball — you can extract your data out of it with `tar`, without pmcluster. Not inventing a
-format is the point.
-
-### 3.4 Every archive is written to two other places
-
-This is the part that makes the rest of the story work:
+### 3.4 Two write legs, and who owns each
 
 ```mermaid
 flowchart TD
-    AG["offen volume agent<br/>on each storage node"] --> AR["archive<br/>/var/stack/backup"]
-    AR --> WD["in-cluster store — SeaweedFS<br/>WebDAV :7333 (write leg)"]
-    AR --> S3["offsite S3 / R2<br/>AWS_* (backup_s3_*)"]
-    WD --> O1["durable copy on a DIFFERENT<br/>node than the data"]
-    S3 --> O2["survives losing the cluster"]
+    A["backup-agent on the node<br/>freeze, snapshot, tar, verify"] --> L["local archive<br/>/var/stack/backup"]
+    L --> W["in-cluster store — SeaweedFS<br/>WebDAV on 127.0.0.1:7333"]
+    W --> M["store mirror to offsite S3/R2<br/>(the store's own job)"]
+    L --> R["retention: 48 h dense, 15 d sparse"]
 ```
 
-Two things about this are deliberate and load-bearing:
+**The local copy is written first.** An artifact on disk says nothing about the
+store leg, which is why the run reports per stack and a shipping failure marks
+that stack failed while leaving the artifact intact and restorable.
 
-**The store is on a non-storage node.** It is placed there explicitly — an explicit placement
-bypasses the volume-service auto-pin — precisely so the durable copy lives in a different failure
-domain from the data. If the backup sat beside the database, losing one node would lose both, and
-storage failover (which restores *from the offsite copy*) could not exist.
+**The store is reached over the node's own loopback.** The agent is a host
+process, so it cannot resolve the overlay name `backup_seaweedfs`; the store's
+WebDAV gateway is published on the routing mesh and the agent PUTs to
+`127.0.0.1:7333` with the store's credentials, which live in
+`/etc/pmcluster/backup.env` (mode 0600) rather than in the world-readable unit.
 
-**Writes to the store go over WebDAV, not S3.** The SeaweedFS S3 API does not auto-create a
-bucket, so an S3-first write would fail on a fresh store; the WebDAV gateway creates
-`/buckets/<bucket>` on first PUT. Both gateways serve the *same* namespace and run in the same
-process, so this is a write-path detail, not a second copy.
+**The store sits on a non-storage node**, by explicit placement, so the durable
+copy lives in a different failure domain from the data. That placement is
+derived, not configured: adding a storage label to the last non-storage worker
+moves the store onto the platform node, and because the store's volume is
+node-local its history does not follow. Worth an explicit setting.
 
-The offsite leg is optional; when `backup_s3_*` is unset the agent writes only to the store.
-offen's own pruning keeps both copies in lockstep on `backup_retention_days` (default **15**), so
-there is no separate replicator service to operate.
+**Offsite is the store's mirror, not the agent's job.** The agent's responsibility
+ends at the store.
 
-**The local copy is written first, and that order is a trap.** An archive appearing in
-`/var/stack/backup` says nothing about whether the offsite upload succeeded — offen writes the local
-copy, then the store copy, then the offsite copy, and a failure in the last one still leaves the
-first on disk. So `pmcluster cluster update` checks the configured bucket *before* it deploys the
-backup stack: a bucket that does not exist fails the update loudly, while an endpoint that merely
-cannot be reached warns and continues. That split is deliberate — a deleted bucket is a
-configuration mistake an operator can fix in seconds, whereas an outage must never become an
-accidental prerequisite for bringing a cluster up.
+### 3.5 Retention
 
-### 3.5 How pmcluster knows what exists
+Each run prunes its own archive directory: everything for 48 hours, then one
+artifact per calendar day until 15 days, judged per stack. The newest copies of a
+stack are never deleted, and whole-node archives from the previous agent are left
+alone unless asked (`--legacy`) — on a fleet mid-cutover those are the only
+backups that exist.
 
-Scheduled runs happen inside offen and never call the daemon. Counting only daemon-triggered runs
-would show a fraction of your backups, so the daemon also **indexes** two sources: the local
-archive dir, and the store (S3 `ListObjectsV2`, `backup-` prefix — control-plane archives
-deliberately excluded). Each unique tarball gets exactly one row (a unique index on `filename`
-makes re-scans idempotent), so `pmcluster backup list` shows scheduled *and* on-demand runs with
-real archive paths. Discovery never deletes anything.
+```bash
+pmcluster backup prune --dry-run
+pmcluster backup prune --keep-hours 72 --keep-days 30
+```
 
-**A discovered run is not automatically a success.** Because the local copy is written before the
-offsite copy, finding an archive on disk proves the run produced *something*, not that every
-configured destination received it. When `backup_s3_*` is set, discovery checks the offsite bucket
-for each newly discovered archive and records one of:
+### 3.6 The control-plane agent
+
+Unchanged, and separate: `backup_control-plane-backup` still runs only on the
+manager holding `~/.pmcluster`, archiving `data.db`, `.encryption_key`,
+`config.yaml` and the rendered config tree. Daily at `0 3 * * *`, 30-day
+retention, `pmcluster-ctlplane-` prefix — so a lost manager disk is not a full
+re-bootstrap.
+
+### 3.7 How pmcluster knows what exists
+
+The agent writes artifacts; the daemon **indexes** them. Discovery reads the
+local archive dir and the store (S3 `ListObjectsV2`, `backup-` prefix,
+control-plane archives deliberately excluded), and gives each unique tarball
+exactly one row, so `pmcluster backup list` shows scheduled and on-demand runs
+with real paths. Discovery never deletes anything.
+
+**A discovered run is not automatically a success.** Finding an archive proves
+the run produced *something*, not that every destination received it. When an
+offsite target is configured, discovery checks it for each newly discovered
+artifact and records:
 
 | status | meaning |
 |---|---|
-| `succeeded` | the archive is on disk **and** the configured offsite bucket holds its copy |
-| `offsite-missing` | the archive is on disk, but its offsite copy is absent — or the bucket could not be read at all. The row's note says which |
-| `succeeded` | nothing is configured offsite, so there is nothing to verify |
+| `succeeded` | on disk, and the configured offsite bucket holds its copy |
+| `offsite-missing` | on disk, offsite copy absent — or the bucket could not be read at all. The row's note says which |
+| `succeeded` | nothing configured offsite, so there is nothing to verify |
 
-`offsite-missing` is deliberately not `failed`: the archive is intact and restorable. It exists so
-that an offsite outage cannot read as a clean backup history. That is not hypothetical — a deleted
-configured bucket produced hours of runs recorded as successes while every offsite upload failed,
-because presence of the local tarball was taken as proof of the whole run.
+`offsite-missing` is deliberately not `failed`: the artifact is intact and
+restorable. It exists so an offsite outage cannot read as a clean backup history.
 
 ---
 

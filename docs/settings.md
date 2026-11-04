@@ -18,7 +18,7 @@ bearers). Console: the **Settings** page.
 | `volume_root` | `/var/stack/data` | setup wizard (`--volume-root`) / operator | the host root every container volume is forced under |
 | `storage_nodes` | leader's hostname (auto-seeded) | operator, `join --storage-node`, `node promote/demote` | comma-separated storage node hostnames; stateful stacks round-robin across them; the current leader is always re-added, a former leader is removed, and labeled-but-unlisted nodes are adopted |
 | `storage_failover` | `false` | setup prompt (only when offsite S3 is configured) / operator | automatic storage failover in the control loop (requires `backup_s3_*`; refuses to enable without it) |
-| `backup_cron` | `0 * * * *` (hourly) | operator | the offen agents' schedule (5-field cron) |
+| `backup_cron` | `0 * * * *` (hourly) | operator | the node agent's schedule (5-field cron; applied to the systemd timer) |
 | `backup_retention_days` | `15` | operator | prune window for backup rows + archives (local and remote) |
 | `backup_all_nodes` | `false` | operator | run the volume agent on **every** node instead of storage nodes only |
 | `backup_store_on` | `""` (= worker/auto) | setup wizard / operator | where the in-cluster SeaweedFS store runs: `leader`, or a non-storage non-platform worker (auto) |
