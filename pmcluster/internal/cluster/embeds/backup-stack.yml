@@ -95,7 +95,12 @@ services:
   # retention.
   control-plane-backup:
     image: offen/docker-volume-backup:v2
-    placement: "[[ if .BackupNode ]][[.BackupNode]][[ else if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
+    # The control plane lives on the LEADER (~/.pmcluster). This task must run
+    # there: pinned anywhere else it archives an empty directory and produces a
+    # backup that restores nothing. It was pinned to the store node, which is a
+    # non-storage worker — so every "control-plane backup" since that placement
+    # was a 9 KB archive of a worker's empty database.
+    placement: "[[ if .LeaderNode ]][[.LeaderNode]][[ else if .BackupNode ]][[.BackupNode]][[ else ]]manager[[ end ]]"
     restart: any
     env:
       BACKUP_CRON_EXPRESSION: "0 3 * * *"
