@@ -21,6 +21,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/lvmlock"
 )
 
 // Defaults. The VG name is fixed rather than derived from the hostname: it
@@ -189,7 +191,7 @@ func (s State) SnapshotReady() bool { return s.Provisioned() }
 // Detect inspects the host. It never writes anything, which is what makes it
 // safe to call from `status`, from the install wizard, and from the daemon's
 // pre-flight.
-func Detect(ctx context.Context, spec Spec) (State, error) {
+func detect(ctx context.Context, spec Spec) (State, error) {
 	spec = spec.withDefaults()
 	st := State{Root: spec.VolumeRoot}
 
@@ -342,7 +344,7 @@ type Result struct {
 // data would look lost until somebody unmounted the new volume), and a volume
 // root mounted from something that is not our LV (provisioning would snapshot
 // the wrong filesystem).
-func Provision(ctx context.Context, spec Spec) (Result, error) {
+func provision(ctx context.Context, spec Spec) (Result, error) {
 	spec = spec.withDefaults()
 	var res Result
 	res.Mode = spec.Mode
@@ -512,4 +514,28 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// Detect reports the volume's state. It takes the LVM lock: a read-only probe
+// that lands mid-`lvextend` deadlocks with it (see package lvmlock), and the
+// daemon runs this on a timer.
+func Detect(ctx context.Context, spec Spec) (State, error) {
+	var st State
+	err := lvmlock.With(ctx, func() error {
+		var e error
+		st, e = detect(ctx, spec)
+		return e
+	})
+	return st, err
+}
+
+// Provision creates the volume, holding the LVM lock for the whole sequence.
+func Provision(ctx context.Context, spec Spec) (Result, error) {
+	var res Result
+	err := lvmlock.With(ctx, func() error {
+		var e error
+		res, e = provision(ctx, spec)
+		return e
+	})
+	return res, err
 }

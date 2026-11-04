@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/lvmlock"
 )
 
 // Grow enlarges the backing file and extends the thin pool into it.
@@ -15,7 +17,7 @@ import (
 // volume larger than its pool is a trap for the next person, and the agent's
 // 80%-pool guard is measured against allocated blocks, not the volume's nominal
 // size, so there is nothing to gain by inflating it.
-func Grow(ctx context.Context, spec Spec) error {
+func grow(ctx context.Context, spec Spec) error {
 	spec = spec.withDefaults()
 	if spec.Mode == ModeNone {
 		return fmt.Errorf("grow needs a provisioned volume")
@@ -55,4 +57,10 @@ func Grow(ctx context.Context, spec Spec) error {
 		return fmt.Errorf("verify pool: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// Grow enlarges the volume, holding the LVM lock for the whole sequence so a
+// concurrent `vgs` from the daemon cannot deadlock against the `lvextend`.
+func Grow(ctx context.Context, spec Spec) error {
+	return lvmlock.With(ctx, func() error { return grow(ctx, spec) })
 }

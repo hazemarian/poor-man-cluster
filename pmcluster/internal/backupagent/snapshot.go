@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/lvmlock"
 )
 
 // Execer runs one command. Production is ExecCommand; tests substitute a fake
@@ -148,7 +150,16 @@ func (l *LVMSnapshotter) Snapshot(ctx context.Context, root string, at time.Time
 	// its journal on the copy. A read-only snapshot of a filesystem captured
 	// mid-transaction is exactly the case that needs recovery, and refusing the
 	// copy the right to repair itself would hand back a torn tree.
-	if out, err := l.exec(ctx, "lvcreate", "-s", "-n", name, "-kn", origin); err != nil {
+	var out []byte
+	var err error
+	lockErr := lvmlock.With(ctx, func() error {
+		out, err = l.exec(ctx, "lvcreate", "-s", "-n", name, "-kn", origin)
+		return nil
+	})
+	if lockErr != nil {
+		return "", "", lockErr
+	}
+	if err != nil {
 		return "", "", fmt.Errorf("lvcreate -s %s: %w (%s)", origin, err, strings.TrimSpace(string(out)))
 	}
 	dir := l.SnapDir
