@@ -42,7 +42,7 @@ the [whitepaper](whitepaper.md).
 | `webhook.md` | Webhook sources, request format, signature, GitHub Actions + generic CI examples, troubleshooting |
 | `secrets-and-configs.md` | DB-backed secrets/configs: encryption, versioning, scopes, content-addressed swarm mirrors, `env` reference kinds, API |
 | `tls.md` | ACME vs operator-supplied, in-place main-cert rotation, per-host customer-domain certs |
-| `settings.md` | The 29-key cluster-settings catalogue: defaults, who sets what, how a change reaches the swarm |
+| `settings.md` | The cluster-settings catalogue: every key the daemon accepts, its default, who sets it, and how a change reaches the swarm |
 | `console.md` | The operator console: every page, auth model, status badges |
 | `storage-and-databases.md` | Storage nodes and auto-placement, the Path 1 decision, storage matrix, DB strategies, moving/failing over a stack — backups live in `backup.md` |
 | `backup.md` | **The** backup chapter: the snapshot-capable volume and its repair, the hourly run (no freeze, and why), what an artifact is, what "verified" means per engine, the three destinations, retention, discovery, restore, the failure modes seen in production, what is not built, and the open questions |

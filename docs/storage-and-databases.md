@@ -269,9 +269,11 @@ a small swarm — placement plus an hourly archive plus `stack move` reaches the
 outcomes at a fraction of the footprint. Revisit it only if a workload genuinely cannot tolerate a
 minutes-scale restore window.
 
-If you do run replicated disks yourself, set `backup_all_nodes=true`: data is no longer confined to
-storage nodes, so the agent has to run wherever the volume can appear. Everything else in this
-document — placement, backup, restore, move — works unchanged on top of it.
+If you do run replicated disks yourself, be aware that `backup_all_nodes` no longer does anything:
+the node agent is installed by role (a manager, or a worker joined with `--storage-node`), not by that
+setting, so on a node where the volume can appear the agent has to be installed there — run
+`pmcluster backup-agent install` on it. Everything else in this document — placement, backup, restore,
+move — works unchanged on top of it.
 
 ---
 
@@ -355,7 +357,7 @@ databases; do not point a database at it.
 | `storage_failover` | `false` | automatic move off a dead storage node (needs `backup_s3_*`) |
 | `backup_cron` | `0 * * * *` | the volume agent's schedule |
 | `backup_retention_days` | `3` | prune window for archives and audit rows (48 h dense, then one a day) |
-| `backup_all_nodes` | `false` | run the agent everywhere (needed with replicated disks) |
+| `backup_all_nodes` | `false` | accepted, no effect today — the node agent installs by role (`docs/backup.md` §1) |
 | `backup_store_on` | `""` = auto | where the in-cluster store runs |
 | `backup_s3_*` | unset | the offsite destination |
 

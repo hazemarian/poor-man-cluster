@@ -378,6 +378,57 @@ var (
 	reFenceStart = regexp.MustCompile("^\\s*```")
 )
 
+// Every reader-facing document has to be reachable from the index.
+//
+// An orphan document is not merely hard to find: it is the copy nobody updates
+// when the behaviour it describes changes. That is exactly how four files ended
+// up describing a WebDAV gateway that had been deleted, and how the same
+// retention default was stated as both 15 days and 3 in one week.
+//
+// The reverse direction is checked too: the index may not name a file that is not
+// there, because a dangling entry reads as "this exists, go read it".
+func TestDocumentsAreIndexedAndIndexEntriesExist(t *testing.T) {
+	root := repoRoot(t)
+	index := read(t, filepath.Join(root, "docs", "README.md"))
+
+	var orphans []string
+	for _, doc := range markdownDocs(t, root) {
+		name := filepath.Base(doc)
+		if name == "README.md" && filepath.Dir(doc) == filepath.Join(root, "docs") {
+			continue // the index itself
+		}
+		if filepath.Dir(doc) != filepath.Join(root, "docs") {
+			continue // test reports and ADRs have their own indexes
+		}
+		if !strings.Contains(index, name) {
+			orphans = append(orphans, name)
+		}
+	}
+	sort.Strings(orphans)
+	if len(orphans) > 0 {
+		t.Errorf("documents not listed in docs/README.md: %v — add them to the file map so the next reader finds the one copy that is current", orphans)
+	}
+
+	// `name.md` spelled in the index must exist next to it.
+	named := regexp.MustCompile("`([a-z0-9-]+\\.md)`")
+	var dangling []string
+	for _, m := range named.FindAllStringSubmatch(index, -1) {
+		// docs/ first, then the repo root: agent.md (the codebase map) lives at
+		// the top level and the index is allowed to point at it.
+		if _, err := os.Stat(filepath.Join(root, "docs", m[1])); err == nil {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, m[1])); err == nil {
+			continue
+		}
+		dangling = append(dangling, m[1])
+	}
+	sort.Strings(dangling)
+	if len(dangling) > 0 {
+		t.Errorf("docs/README.md lists documents that do not exist: %v", dangling)
+	}
+}
+
 func TestLocalMarkdownLinksResolve(t *testing.T) {
 	root := repoRoot(t)
 	links := 0

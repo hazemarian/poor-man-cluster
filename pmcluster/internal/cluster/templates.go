@@ -237,9 +237,11 @@ type RenderInput struct {
 	// Users CRUD are hidden); false keeps the password login (local runs).
 	EdgeLoginDisabled bool
 
-	// BackupAllNodes runs the volume-backup agent as a global service on
-	// every swarm node. When false (default) it is manager-only — required
-	// when replicated disks are in use (see docs/storage-and-databases.md).
+	// BackupAllNodes is LEGACY: no embed reads it. It used to place the
+	// per-volume archiver container as a global service; that container is gone
+	// and the node agent is installed by role (manager, or a worker joined with
+	// --storage-node), so the setting behind this field has no effect today.
+	// docs/settings.md says so; wire it or remove it rather than trusting it.
 	BackupAllNodes bool
 
 	// BackupRetentionDays is how many days the offen agent keeps archives
@@ -252,11 +254,10 @@ type RenderInput struct {
 	// each node's policy file rather than served over HTTP.
 	BackupCron string
 
-	// StorageNodeConstraint makes the volume-backup agent run as a global
-	// service constrained to nodes carrying the StorageNodeLabel (i.e. the
-	// storage_nodes setting is non-empty). Backups only run where app data
-	// actually lives — never on plain worker/manager nodes. When both
-	// BackupAllNodes and StorageNodeConstraint are set, BackupAllNodes wins.
+	// StorageNodeConstraint and StorageNodeLabel are LEGACY alongside
+	// BackupAllNodes: they constrained the per-volume archiver's placement, and
+	// no embed reads them any more. Kept so the wiring in cluster/update.go
+	// keeps compiling; neither is a behaviour switch today.
 	StorageNodeConstraint bool
 
 	// StorageNodeLabel is the Swarm node label the backup agent matches

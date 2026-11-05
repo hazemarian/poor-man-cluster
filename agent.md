@@ -179,7 +179,7 @@ Key commands (all in `internal/cli/`):
   mounted, self-heal rebuilds missing mounts), `registry add|list|remove`,
   `user create (--stack)|list|remove`, `webhook add|list|remove|deliveries`,
   `tls hosts … / tls site show|set`, `cluster settings list|get|set`
-  (`settings_usage.go`; 29-key allowlist, secret-ish keys masked), `usage`,
+  (`settings_usage.go`; the fixed allowlist, secret-ish keys masked), `usage`,
   `logs`, `serve`, `version`.
 - `join` (`join.go`) — swarm join + local state init + daemon unit + hostname
   management; flags `--copy-registry-creds <host>` (ssh-fetch + merge the
@@ -230,7 +230,7 @@ consumer. Ports by package:
   content-addressed swarm config (`mirrorSwarmConfig`).
 - `secrets` — `Service` (CRUD + `Reveal`, `Update`) + `Heal` (verify/repair
   every secret: decrypt, stale hash, missing swarm mirror).
-- `settings` — `Service` (Get/Update over the fixed 29-key allowlist;
+- `settings` — `Service` (Get/Update over the fixed allowlist;
   `ApplyLogLevel`/`ApplyStorageNodes` hooks let the daemon apply live).
 - `certs` — `Service` (site + per-host TLS: `SiteCert`, `ApplyHostCert`
   (+refresh), `RemoveHostCert`(+refresh), `GetSiteCert`, `List`, `MainDomain`).
