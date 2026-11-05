@@ -32,7 +32,6 @@ func NewLocal(st *store.Store) *Local { return &Local{Store: st} }
 // excluded — those are managed by the setup wizard, not edited here.
 var clusterSettingKeys = []string{
 	cluster.SettingVolumeRoot(),
-	cluster.SettingBackupAllNodes(),
 	cluster.SettingBackupRetentionDays(),
 	cluster.SettingBackupCron(),
 	cluster.SettingSSOEnabled(),

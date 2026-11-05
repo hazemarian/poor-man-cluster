@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -51,7 +52,19 @@ type Receiver struct {
 	// RetryDelay is the pause between attempts. Zero means
 	// DefaultDeployRetryDelay (30s).
 	RetryDelay time.Duration
+
+	// inflight counts the goroutines a request is allowed to leave behind: the
+	// retry phase, and the 202 follow-up that records its outcome. Nothing in
+	// production waits on it — the process is long-lived — but a *test* does:
+	// the delivery row is written after the response, so a test that returns
+	// first closes the store (and deletes its temp dir) under a live writer.
+	// That is a flake with no failing assertion, which is the worst kind.
+	inflight sync.WaitGroup
 }
+
+// Wait blocks until the goroutines started by in-flight requests have finished.
+// Only tests and shutdown call it; a request handler never does.
+func (h *Receiver) Wait() { h.inflight.Wait() }
 
 // Mount registers POST /webhook/{source}. Caller MUST place this outside
 // the Bearer-protected /api subtree — HMAC IS the auth.
@@ -209,7 +222,9 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 		err     error
 	}
 	phase := make(chan outcome, 1)
+	h.inflight.Add(1)
 	go func() {
+		defer h.inflight.Done()
 		res, retries, err := policy.DeployAsyncWithRetries(phaseCtx, p)
 		phase <- outcome{res: res, retries: retries, err: err}
 	}()
@@ -224,9 +239,11 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 		// the delivery row — which the goroutine records — carry the outcome.
 		// This is the honest split: the HTTP response is about this request,
 		// the delivery history is about the deploy.
+		h.inflight.Add(1)
 		go func() {
 			// This goroutine owns the phase from here (see the note where the
 			// context is created), so it is also the one that releases it.
+			defer h.inflight.Done()
 			defer cancelPhase()
 			o := <-phase
 			status, deployErr := "accepted", error(nil)

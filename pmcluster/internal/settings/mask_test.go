@@ -15,7 +15,6 @@ func TestIsSecretKey(t *testing.T) {
 		{"SSO_CLIENT_SECRET", true}, // case-insensitive
 		{"domain", false},
 		{"volume_root", false},
-		{"backup_all_nodes", false},
 		{"sso_enabled", false},
 		{"", false},
 	}

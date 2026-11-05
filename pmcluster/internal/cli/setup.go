@@ -74,7 +74,6 @@ func init() {
 	setupCmd.Flags().Bool("edge-login-enabled", false, "keep the edge console password login (default: disabled behind SSO/admin-auth; default: $PMCLUSTER_EDGE_LOGIN_ENABLED)")
 	setupCmd.Flags().String("volume-root", "", "host dir every container volume is forced under (default /var/stack/data)")
 	setupCmd.Flags().Bool("backup-enabled", true, "enable the backup pipeline (the agent asks the control plane before every run)")
-	setupCmd.Flags().Bool("backup-all-nodes", false, "run the backup agent on every node (default: manager-only)")
 	setupCmd.Flags().String("backup-retention-days", "", "how many days backups are kept before pruning (default 15)")
 	setupCmd.Flags().String("oo-logs-retention-days", "", "OpenObserve log retention in days (default 7)")
 	setupCmd.Flags().String("oo-metrics-retention-days", "", "OpenObserve metric retention in days (default 7)")
@@ -114,8 +113,7 @@ type setupAnswers struct {
 
 	EdgeLoginEnabled bool
 
-	VolumeRoot     string
-	BackupAllNodes bool
+	VolumeRoot string
 	// BackupEnabled is the master switch. Asked first, because saying no skips
 	// the store, the offsite bucket and the agent entirely.
 	BackupEnabled bool
@@ -297,7 +295,6 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintln(out, "  The platform decides WHEN to back up, from its own settings (console or CLI).")
 			fmt.Fprintln(out, "  Do NOT edit, disable or re-time the pmcluster-backup timer: it is a heartbeat")
 			fmt.Fprintln(out, "  that asks the control plane, so changing it does not change the schedule.")
-			a.BackupAllNodes = askYesNo(r, out, "Run the backup agent on every node?", false)
 			a.BackupRetentionDays = ask(r, out, "Backup retention (days)", st.SettingDefault(ctx, cluster.SettingBackupRetentionDays(), "3"))
 			if askYesNo(r, out, "Keep every backup in one place in the cluster? (an in-cluster store)", true) {
 				a.BackupStoreOn = askBackupStoreOn(r, out, st.SettingDefault(ctx, cluster.SettingBackupStoreOn(), ""))
@@ -342,7 +339,6 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.SSOCookieExpire, _ = cmd.Flags().GetString("sso-cookie-expire")
 		a.EdgeLoginEnabled, _ = cmd.Flags().GetBool("edge-login-enabled")
 		a.VolumeRoot, _ = cmd.Flags().GetString("volume-root")
-		a.BackupAllNodes, _ = cmd.Flags().GetBool("backup-all-nodes")
 		a.BackupRetentionDays, _ = cmd.Flags().GetString("backup-retention-days")
 		a.ObservabilityLogsRetentionDays, _ = cmd.Flags().GetString("oo-logs-retention-days")
 		a.ObservabilityMetricsRetentionDays, _ = cmd.Flags().GetString("oo-metrics-retention-days")
@@ -573,7 +569,6 @@ func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswer
 		cluster.SettingEdgeLoginDisabled():                 boolSetting(!a.EdgeLoginEnabled),
 		cluster.SettingVolumeRoot():                        a.VolumeRoot,
 		cluster.SettingBackupEnabled():                     boolSetting(a.BackupEnabled),
-		cluster.SettingBackupAllNodes():                    boolSetting(a.BackupAllNodes),
 		cluster.SettingBackupRetentionDays():               a.BackupRetentionDays,
 		cluster.SettingObservabilityLogsRetentionDays():    a.ObservabilityLogsRetentionDays,
 		cluster.SettingObservabilityMetricsRetentionDays(): a.ObservabilityMetricsRetentionDays,
@@ -610,7 +605,6 @@ func persistSetup(ctx context.Context, st *store.Store, a setupAnswers) error {
 		cluster.SettingEdgeLoginDisabled():                 boolSetting(!a.EdgeLoginEnabled),
 		cluster.SettingVolumeRoot():                        a.VolumeRoot,
 		cluster.SettingBackupEnabled():                     boolSetting(a.BackupEnabled),
-		cluster.SettingBackupAllNodes():                    boolSetting(a.BackupAllNodes),
 		cluster.SettingBackupRetentionDays():               a.BackupRetentionDays,
 		cluster.SettingObservabilityLogsRetentionDays():    a.ObservabilityLogsRetentionDays,
 		cluster.SettingObservabilityMetricsRetentionDays(): a.ObservabilityMetricsRetentionDays,

@@ -83,8 +83,6 @@ func init() {
 		"clustersettings.domain":                         "Domain",
 		"clustersettings.domain_hint":                    "Domain the edge serves, for example example.com. Leave it empty to keep the daemon's own default.",
 		"clustersettings.sect_backup":                    "Backups",
-		"clustersettings.backup_all_nodes":               "Back up every node",
-		"clustersettings.backup_all_nodes_hint":          "When on, a requested backup runs on all nodes instead of only the node that took the request.",
 		"clustersettings.backup_enabled":                 "Back up this cluster",
 		"clustersettings.backup_enabled_hint":            "The hourly timer only asks whether a run is due. The schedule below decides. Turning this off leaves the timer firing and doing nothing.",
 		"clustersettings.backup_cron":                    "When to run (5-field cron)",

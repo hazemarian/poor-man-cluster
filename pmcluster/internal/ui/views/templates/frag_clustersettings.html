@@ -80,11 +80,6 @@
         <input type="number" min="1" step="1" name="backup_retention_days" value="{{index .Settings "backup_retention_days"}}" placeholder="3">
       </label>
       <span class="hint">{{T "clustersettings.backup_retention_days_hint"}}</span>
-      <label class="check">
-        <input type="checkbox" name="backup_all_nodes" value="true"{{if eq (index .Settings "backup_all_nodes") "true"}} checked{{end}}>
-        <span>{{T "clustersettings.backup_all_nodes"}}</span>
-      </label>
-      <span class="hint">{{T "clustersettings.backup_all_nodes_hint"}}</span>
     </div>
   </div>
 

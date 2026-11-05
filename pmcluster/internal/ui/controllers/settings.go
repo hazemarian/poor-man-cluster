@@ -399,7 +399,6 @@ var clusterSettingKeys = []string{
 	"backup_enabled",
 	"backup_cron",
 	"backup_retention_days",
-	"backup_all_nodes",
 	"sso_enabled",
 	"sso_provider",
 	"sso_client_id",
@@ -417,7 +416,6 @@ var clusterSettingKeys = []string{
 // strings, so the form and the save agree on what a cleared checkbox means.
 var clusterBoolSettings = map[string]bool{
 	"backup_enabled":      true,
-	"backup_all_nodes":    true,
 	"sso_enabled":         true,
 	"edge_login_disabled": true,
 }

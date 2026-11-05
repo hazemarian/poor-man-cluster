@@ -198,7 +198,13 @@ func buildHandler(t *testing.T, st *store.Store, c *credentials.Cipher, dep *rec
 	r := chi.NewRouter()
 	h.Mount(r)
 	srv := httptest.NewServer(r)
-	t.Cleanup(srv.Close)
+	// Close the server, then drain the goroutines it left behind: cleanups run
+	// LIFO, so this must be registered after testDeps' store close for the wait
+	// to happen *before* the store (and its temp dir) goes away.
+	t.Cleanup(func() {
+		srv.Close()
+		h.Wait()
+	})
 	return srv, h
 }
 

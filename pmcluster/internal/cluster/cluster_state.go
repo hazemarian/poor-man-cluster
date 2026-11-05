@@ -44,11 +44,6 @@ const (
 	// forced under (subpaths /<app>/<name>). Defaults to /var/stack/data.
 	settingVolumeRoot = "volume_root"
 
-	// settingBackupAllNodes makes the backup agent run on every swarm node
-	// (manager-only by default). When replicated disks are in use it must stay
-	// false — see docs/storage-and-databases.md.
-	settingBackupAllNodes = "backup_all_nodes"
-
 	// settingBackupRetentionDays is how long pmcluster keeps backup audit rows
 	// and their archives on disk before pruning them (default 15 days). The
 	// offen agent's own BACKUP_RETENTION_DAYS is rendered from this same value.
@@ -145,7 +140,6 @@ func SettingSSOGitHubRepos() string                 { return settingSSOGitHubRep
 func SettingSSOCookieExpire() string                { return settingSSOCookieExpire }
 func SettingEdgeLoginDisabled() string              { return settingEdgeLoginDisabled }
 func SettingVolumeRoot() string                     { return settingVolumeRoot }
-func SettingBackupAllNodes() string                 { return settingBackupAllNodes }
 func SettingBackupRetentionDays() string            { return settingBackupRetentionDays }
 func SettingBackupCron() string                     { return settingBackupCron }
 func SettingBackupEnabled() string                  { return settingBackupEnabled }
@@ -313,16 +307,6 @@ func loadEdgeLoginDisabled(ctx context.Context, st *store.Store) bool {
 		return true
 	}
 	return st.SettingDefault(ctx, settingEdgeLoginDisabled, "true") == "true"
-}
-
-// loadBackupAllNodes reports whether the volume-backup agent should run on
-// every swarm node (false = manager-only, the default and the required mode
-// when disks are synchronously replicated — see storage guide).
-func loadBackupAllNodes(ctx context.Context, st *store.Store) bool {
-	if st == nil {
-		return false
-	}
-	return st.SettingDefault(ctx, settingBackupAllNodes, "") == "true"
 }
 
 // LoadStorageFailover reports whether automatic storage failover is enabled

@@ -15,7 +15,7 @@ import (
 
 var clusterSettingsCmd = &cobra.Command{
 	Use:   "settings",
-	Short: "Read or update cluster settings (volume_root, backup_all_nodes, sso_*)",
+	Short: "Read or update cluster settings (volume_root, backup_*, sso_*)",
 	Long: `Reads or writes the cluster_settings table in the daemon store.
 
 ` + "`pmcluster cluster settings`" + `          list all settings

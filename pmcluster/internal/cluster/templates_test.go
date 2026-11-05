@@ -196,13 +196,11 @@ func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
 	// non-storage node (explicit placement, which BYPASSES the volumed-service
 	// storage auto-pin); there is NO rclone replicator sidecar anymore.
 	in := RenderInput{
-		Domain:                "example.com",
-		VolumeRoot:            "/var/stack/data",
-		BackupDir:             "/var/stack/backup",
-		StorageNodeConstraint: true,
-		StorageNodeLabel:      "pmcluster.storage",
-		BackupS3:              BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
-		Store:                 ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "pmclusterbackup", SecretKey: "s3cr3t", Node: "worker-2"},
+		Domain:     "example.com",
+		VolumeRoot: "/var/stack/data",
+		BackupDir:  "/var/stack/backup",
+		BackupS3:   BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
+		Store:      ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "pmclusterbackup", SecretKey: "s3cr3t", Node: "worker-2"},
 	}
 	body := string(mustLoadBackup(t, in))
 
@@ -2026,12 +2024,10 @@ func TestRenderOTelCollectorConfig_PerContainerFilelogStructure(t *testing.T) {
 // backup_seaweedfs, so an unpublished 7333 means artifacts never leave the node.
 func TestBackupStorePublishesWebDAVForHostAgents(t *testing.T) {
 	in := RenderInput{
-		Domain:                "example.com",
-		VolumeRoot:            "/var/stack/data",
-		BackupDir:             "/var/stack/backup",
-		StorageNodeConstraint: true,
-		StorageNodeLabel:      "pmcluster.storage",
-		Store:                 ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "k", SecretKey: "s", Node: "worker-2"},
+		Domain:     "example.com",
+		VolumeRoot: "/var/stack/data",
+		BackupDir:  "/var/stack/backup",
+		Store:      ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "k", SecretKey: "s", Node: "worker-2"},
 	}
 	body := string(mustLoadBackup(t, in))
 	// The renderer sorts keys, so assert on the directive rather than on the
@@ -2049,14 +2045,11 @@ func TestBackupStorePublishesWebDAVForHostAgents(t *testing.T) {
 // (tarring a live tree), so its absence is asserted, not assumed.
 func TestBackupStackNoLongerShipsThePerVolumeArchiver(t *testing.T) {
 	in := RenderInput{
-		Domain:                "example.com",
-		VolumeRoot:            "/var/stack/data",
-		BackupDir:             "/var/stack/backup",
-		DataDir:               "/root/.pmcluster",
-		StorageNodeConstraint: true,
-		StorageNodeLabel:      "pmcluster.storage",
-		BackupAllNodes:        true,
-		BackupCron:            "0 * * * *",
+		Domain:     "example.com",
+		VolumeRoot: "/var/stack/data",
+		BackupDir:  "/var/stack/backup",
+		DataDir:    "/root/.pmcluster",
+		BackupCron: "0 * * * *",
 	}
 	body := string(mustLoadBackup(t, in))
 	// Match the SERVICE KEY, not the word: the template keeps a comment

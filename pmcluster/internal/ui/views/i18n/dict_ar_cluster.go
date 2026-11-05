@@ -102,8 +102,6 @@ func init() {
 		"clustersettings.domain":                         "النطاق",
 		"clustersettings.domain_hint":                    "النطاق الذي تخدمه الحافة، مثل example.com. اتركه فارغًا للإبقاء على افتراضي الخادم.",
 		"clustersettings.sect_backup":                    "النسخ الاحتياطي",
-		"clustersettings.backup_all_nodes":               "النسخ من كل العقد",
-		"clustersettings.backup_all_nodes_hint":          "عند التشغيل، يجري النسخ المطلوب على كل العقد بدل العقدة التي تلقّت الطلب وحدها.",
 		"clustersettings.backup_enabled":                 "تفعيل النسخ الاحتياطي لهذا العنقود",
 		"clustersettings.backup_enabled_hint":            "مؤقّت الساعة لا يقرّر شيئًا: يسأل فقط هل حان موعد النسخ. الجدول أدناه هو ما يقرّر. إيقاف هذا يُبقي المؤقّت يعمل دون أن يفعل شيئًا.",
 		"clustersettings.backup_cron":                    "موعد التشغيل (صيغة cron بخمسة حقول)",

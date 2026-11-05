@@ -237,13 +237,6 @@ type RenderInput struct {
 	// Users CRUD are hidden); false keeps the password login (local runs).
 	EdgeLoginDisabled bool
 
-	// BackupAllNodes is LEGACY: no embed reads it. It used to place the
-	// per-volume archiver container as a global service; that container is gone
-	// and the node agent is installed by role (manager, or a worker joined with
-	// --storage-node), so the setting behind this field has no effect today.
-	// docs/settings.md says so; wire it or remove it rather than trusting it.
-	BackupAllNodes bool
-
 	// BackupRetentionDays is how many days the offen agent keeps archives
 	// before pruning them (mirrors the backup_retention_days setting;
 	// pmcluster prunes its own audit rows on the same window).
@@ -253,16 +246,6 @@ type RenderInput struct {
 	// backup_cron setting. Empty renders the hourly default. It is rendered into
 	// each node's policy file rather than served over HTTP.
 	BackupCron string
-
-	// StorageNodeConstraint and StorageNodeLabel are LEGACY alongside
-	// BackupAllNodes: they constrained the per-volume archiver's placement, and
-	// no embed reads them any more. Kept so the wiring in cluster/update.go
-	// keeps compiling; neither is a behaviour switch today.
-	StorageNodeConstraint bool
-
-	// StorageNodeLabel is the Swarm node label the backup agent matches
-	// against when StorageNodeConstraint is set (runtime.StorageNodeLabel).
-	StorageNodeLabel string
 
 	// LeaderNode is the hostname of the current leader. The console follows it
 	// (it is the API host), and every stacked pool falls back to it: a
