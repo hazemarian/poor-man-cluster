@@ -708,10 +708,12 @@ Methods: `ListUsers`, `GetByID`, `CountAdmins`, `UpdateUser`, `DeleteUser`,
   `pmcluster.backup.last_unix{kind,status}` +
   `pmcluster.deploys.total{stack,status}` + `pmcluster.deploy.duration`
   cover backup/deploy observability.
-- `backups`: `trigger.go` holds `LocalTrigger` (WAL checkpoint →
-  `docker exec backup_volume-backup backup`, one bounded retry) +
-  `RecordOutcome` metrics; `s3.go` is the stdlib SigV4 S3 client (GET +
-  ListObjectsV2, signs `x-amz-date`); the domain package is described above.
+- `backups`: `trigger.go` holds `LocalTrigger` (WAL checkpoint, then the node
+  agent's own `backup-agent run --force` — the per-volume archiver container is
+  gone, so a trigger is "run that unit" and needs root) + `RecordOutcome`
+  metrics; `s3.go` is the stdlib SigV4 S3 client (GET + PUT + ListObjectsV2,
+  signs `x-amz-date`) used for both the store and the offsite bucket; the
+  domain package is described above and the operator contract is `docs/backup.md`.
 - `logger`: zerolog setup (log_level cluster setting applied live).
   `buildinfo`: `Version`/`Commit`/`Date` vars (ldflags);
   `buildinfo.Resolve()` used by `--version`.

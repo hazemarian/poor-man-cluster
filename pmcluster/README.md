@@ -3,7 +3,7 @@
 Single-binary control plane for the [poor-man-cluster](../README.md) Docker Swarm cluster.
 It owns cluster bootstrap, application deploys (via a small DSL that translates to
 Compose), HMAC-verified webhooks for CI, registry credentials, bootstrap-password
-generation, per-host TLS certificates, API tokens, on-demand offen backups,
+generation, per-host TLS certificates, API tokens, on-demand backups,
 structured JSON audit logs, RBAC users, and service operations (replacing
 Portainer). It replaces the old `bin/setup.sh` and owns deployment end to end.
 
@@ -148,7 +148,7 @@ internal/
   webhooks/            domain: webhook sources + HMAC receiver (SourceReader port)
   secrets/             domain: encrypted secrets — model, port, local + http
   configs/             domain: versioned configs + rendered snapshots (Renderer port)
-  backups/             domain: volume backup audit + offen trigger
+  backups/             domain: volume backup audit + node-agent trigger
   certs/               domain: TLS certificates (site + per-host)
   stacks/              domain: deploy engine + read side (Deploy + Sync + Rollback + Undeploy)
   cluster/             domain: platform lifecycle (up/update/down/status) + credentials
