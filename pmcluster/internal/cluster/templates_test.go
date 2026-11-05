@@ -136,6 +136,59 @@ func TestLoadComposeFile_ControlPlaneBackupOffsite(t *testing.T) {
 	}
 }
 
+// The common production shape — in-cluster store AND an offsite bucket — is the
+// one that was broken. The template emitted both AWS_* blocks, so the render
+// produced a YAML mapping with duplicate keys and `cluster update` died in the
+// parser, leaving the backup stack at whatever had been deployed last. Nothing
+// noticed because the only test with an offsite bucket left the store disabled.
+//
+// The assertion is on the PARSED document, and specifically on the archiver's
+// env: duplicate keys make that parse fail, which is exactly how this escaped —
+// it renders plausibly and only breaks when something tries to load it.
+func TestBackupStackTakesOneS3BackendWhenStoreAndOffsiteAreBothSet(t *testing.T) {
+	in := RenderInput{
+		Domain:   "example.com",
+		DataDir:  "/root/.pmcluster",
+		BackupS3: BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
+		Store:    ObjectStore{Enabled: true, Bucket: "store-bucket", AccessKey: "SAK", SecretKey: "SSK"},
+	}
+	body := string(mustLoadBackup(t, in))
+
+	var doc struct {
+		Services map[string]struct {
+			Env         map[string]string `yaml:"env"`
+			Environment map[string]string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("rendered backup stack is not valid YAML (duplicate keys land here): %v\n%s", err, body)
+	}
+	cp, ok := doc.Services["control-plane-backup"]
+	if !ok {
+		t.Fatalf("control-plane-backup is missing from the render")
+	}
+	// Offsite wins, and the store's credentials must not leak into it: a bucket
+	// with the wrong key is an upload that fails at 3am, not at deploy time.
+	env := cp.Env
+	if len(cp.Environment) > 0 {
+		env = cp.Environment
+	}
+	for key, want := range map[string]string{
+		"AWS_S3_BUCKET_NAME":    "offsite-bucket",
+		"AWS_ACCESS_KEY_ID":     "AK",
+		"AWS_SECRET_ACCESS_KEY": "SK",
+		"AWS_ENDPOINT":          "s3.example.com",
+		"AWS_ENDPOINT_PROTO":    "https",
+	} {
+		if got := env[key]; got != want {
+			t.Errorf("%s = %q, want %q (the offsite target wins when both are configured)", key, got, want)
+		}
+	}
+	if strings.Contains(body, "store-bucket") {
+		t.Error("the store bucket was rendered into the archiver alongside the offsite bucket")
+	}
+}
+
 func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
 	// SeaweedFS store enabled + offsite S3 configured: offen double-writes each
 	// archive to BOTH the offsite S3 target (AWS_*) and the in-cluster store via

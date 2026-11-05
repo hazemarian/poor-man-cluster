@@ -98,18 +98,13 @@ services:
       BACKUP_SOURCES: "/backup/pmcluster"
       BACKUP_PRUNING_PREFIX: "pmcluster-ctlplane-"
       BACKUP_RETENTION_DAYS: "30"
-      [[- if .Store.Enabled ]]
-      # The store is an S3 target, like any other destination. WebDAV was here
-      # because the S3 API "does not auto-create a bucket" — SeaweedFS does, on
-      # first upload, so that reason is gone and with it a whole second protocol.
-      # Only used when there is no offsite bucket: one process, one backend.
-      AWS_S3_BUCKET_NAME: "[[.Store.Bucket]]"
-      AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
-      AWS_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
-      AWS_ENDPOINT: "backup_seaweedfs:8333"
-      AWS_ENDPOINT_PROTO: "http"
-      AWS_REGION: "us-east-1"
-      AWS_S3_BUCKET_LOOKUP: "path"
+      # ONE backend per process, offsite first. The two branches below describe
+      # the same seven variables, so emitting both — which this template used to
+      # do whenever the store AND an offsite bucket were configured — produced a
+      # YAML mapping with duplicate keys, and every `cluster update` on such a
+      # cluster died in the parser with the backup stack left at whatever was
+      # deployed last. Offsite wins: the offsite copy is the one that survives
+      # the node, and the store is ON the node.
       [[- if .BackupS3.Configured ]]
       AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
       AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
@@ -118,14 +113,16 @@ services:
       AWS_ENDPOINT_PROTO: "[[.BackupS3.EndpointProto]]"
       AWS_REGION: "[[.BackupS3.Region]]"
       AWS_S3_BUCKET_LOOKUP: "path"
-      [[- end ]]
-      [[- else if .BackupS3.Configured ]]
-      AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
-      AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
-      AWS_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
-      AWS_ENDPOINT: "[[.BackupS3.EndpointHost]]"
-      AWS_ENDPOINT_PROTO: "[[.BackupS3.EndpointProto]]"
-      AWS_REGION: "[[.BackupS3.Region]]"
+      [[- else if .Store.Enabled ]]
+      # The store is an S3 target, like any other destination. WebDAV was here
+      # because the S3 API "does not auto-create a bucket" — SeaweedFS does, on
+      # first upload, so that reason is gone and with it a whole second protocol.
+      AWS_S3_BUCKET_NAME: "[[.Store.Bucket]]"
+      AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
+      AWS_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
+      AWS_ENDPOINT: "backup_seaweedfs:8333"
+      AWS_ENDPOINT_PROTO: "http"
+      AWS_REGION: "us-east-1"
       AWS_S3_BUCKET_LOOKUP: "path"
       [[- end ]]
     binds:
