@@ -79,8 +79,8 @@ and optionally SSO via GitHub (oauth2-proxy on `https://sso.<domain>`).
 
     SSO:        oauth2-proxy (sso stack, sso.<domain>) → GitHub OAuth
     Observability: apps → OTLP :4317 → otel-collector (global) → OpenObserve
-    Backups:       offen agents (hourly, storage nodes) + in-cluster SeaweedFS
-                   store (S3 :8333 routing-mesh / WebDAV :7333) + offsite S3
+    Backups:       node agent (hourly, storage nodes) snapshot → per-stack
+                   artifact → in-cluster SeaweedFS (S3 :8333) + offsite S3
 ```
 
 - **Two overlay networks**: `traefik-net` (app traffic via Traefik) and
@@ -494,7 +494,7 @@ Docker, Deployer` (+ `Stdout` where verbose).
   non-storage, non-platform node (or the leader with `backup_store_on=leader`).
 - `embeds/` — the embedded platform DSL manifests: `infra-stack.yml`
   (Traefik, global on managers), `edge-stack.yml`, `observability-stack.yml`
-  (OpenObserve + OTel), `backup-stack.yml` (offen agents + SeaweedFS store),
+  (OpenObserve + OTel), `backup-stack.yml` (control-plane archiver + SeaweedFS store),
   `sso-stack.yml` (oauth2-proxy), `traefik-dynamic.yml`,
   `otel-collector-config.yml`.
 - `sitecert.go` — `ApplyCert`/`RemoveCert`/`GetSiteCert`/`PersistedDomain`/
@@ -803,11 +803,12 @@ rendered compose hashes identically to the latest revision's `rendered_hash`
 AND the live swarm still matches (`stackdrift.InSync`).
 
 ### Backups & storage failover
-Hourly offen agents on the storage nodes snapshot the whole volume root and
-double-write each archive (WebDAV → in-cluster SeaweedFS store; AWS_* →
-offsite `backup_s3_*` when configured); the control-plane agent archives
-`~/.pmcluster` daily. Discovery indexes the local archive dir + the store
-into `backup list`. A stack-scoped `backup restore` routes to the owning
+An hourly node agent on each storage node takes one LVM thin snapshot (no
+freeze) and writes one verified artifact per stack, shipping each to the
+in-cluster SeaweedFS store and to the offsite `backup_s3_*` bucket — both are
+plain S3 targets. offen survives only as the control-plane archiver, which
+copies `~/.pmcluster` daily and writes to ONE backend (offsite wins). Discovery
+indexes the local archive dir + the store into `backup list`. A stack-scoped `backup restore` routes to the owning
 node via the store-transit mover (`RestoreArchiveToNode`; `--from-s3` pulls
 the offsite bucket instead). When a pinned storage node goes down, the
 reconcile loop pauses the stack's sync — or, with `storage_failover=true`,

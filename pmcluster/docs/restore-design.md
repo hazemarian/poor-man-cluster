@@ -4,13 +4,15 @@
 root (`--dest-root` overrides the default), with `--volume <name>` narrowing
 to one volume and `--from-s3` forcing a fetch from the offsite `backup_s3_*`
 destination. Archive discovery (migration 0018) and retention pruning
-(`backup_retention_days`, default 15) remove old rows and archive files. The
+(`backup_retention_days`, default 3: 48 h dense, then one artifact a day to that
+age) remove old rows and archive files, and the same plan is applied to the
+store and the offsite bucket. The
 control-plane restore used by the leader-aware daemon (`RestoreControlPlane`)
 restores the newest `pmcluster-ctlplane-*.tar.gz` into `~/.pmcluster` at
 daemon startup.
 
 `pmcluster backup create`, the `backup_before_deploy: true` DSL hook, and the
-hourly offen cron all write archives that pmcluster discovers, lists, browses,
+hourly node agent (and the daily control-plane archiver) all write archives that pmcluster discovers, lists, browses,
 and restores. This file records what shipped.
 
 ---
@@ -33,7 +35,7 @@ pmcluster backup restore <id> [--dest-root /var/stack/data] [--volume <name>] [-
 - `--from-s3` forces the fetch from the offsite `backup_s3_*` bucket instead
   of the in-cluster store / local disk.
 - Extraction lands under `<dest_root>/<stack>` for stack-scoped runs, or
-  `<dest_root>/<app>/<vol>/...` for whole-disk runs — the offen archives
+  `<dest_root>/<app>/<vol>/...` for whole-disk runs — the legacy archives
   bake in a `/backup/data/` prefix, which the restore strips
   (`internal/backups/browse.go` `archiveRelPath`). A restore writes
   **under the volume root**, never outside it (path-escape guard).
@@ -78,7 +80,7 @@ pmcluster backup restore <id> [--dest-root /var/stack/data] [--volume <name>] [-
 ### Discovery & retention
 
 - Migration `0018_backup_filename.sql` adds `filename` to `backups` with a
-  unique partial index — scheduled offen archives on disk are discovered
+  unique partial index — scheduled archives on disk are discovered
   once into `pmcluster backup list` / the console (no double-recording).
 - `backup_retention_days` (default **3**: every hour for 48 h, then one a day
   to day 3) prunes old rows **and** their archive files on

@@ -89,12 +89,12 @@ flowchart TD
     TR -->|"app.<domain>"| AP
     ED -->|"9090"| DM
     DM <-->|"2377/7946/4789"| W
-    AG -->|"WebDAV"| SW
+    AG -->|"S3 8333"| SW
 ```
 
 The invariant it encodes: the only public path to the daemon runs through Traefik and the edge; nothing else on the cluster plane is reachable.
 
-By name: Swarm is the orchestrator; the daemon is the leader-only control plane; the edge (`pmcluster-edge`) is its only public proxy; Traefik fronts ingress; OpenObserve is observability; SeaweedFS is the backup store; a node-local agent takes one frozen snapshot and writes one artifact per stack; SQLite holds desired state.
+By name: Swarm is the orchestrator; the daemon is the leader-only control plane; the edge (`pmcluster-edge`) is its only public proxy; Traefik fronts ingress; OpenObserve is observability; SeaweedFS is the backup store; a node-local agent takes one thin snapshot and writes one artifact per stack; SQLite holds desired state.
 
 Sources: docs/network-topology.md; pmcluster/internal/cluster/embeds/infra-stack.yml; pmcluster/internal/cli/serve.go.
 
@@ -242,15 +242,17 @@ Sources: pmcluster/internal/stacks/placement.go; pmcluster/internal/cluster/clus
 
 Backups have two halves. The **producer** is a privileged one-shot on every node —
 `pmcluster-backup.timer` → `pmcluster-backup.service` → `pmcluster backup-agent run` — because the only way to
-image a live volume without stopping anything is to freeze and snapshot it on the host (`fsfreeze` + LVM thin
-snapshot), and a Swarm task cannot do that: it is rescheduled, cannot hold a lock across a run, and has no
-ordering against the filesystem it archives. One freeze per node, then a serial walk of the **snapshot** writing
-one `tar.gz` per stack, verified (SQLite `integrity_check`; Postgres and MySQL recognised from their files), and
-retained 48 h dense then one per day to 15 days, per stack. The **store** is one SeaweedFS process serving S3 on
-:8333 and WebDAV on :7333 (published on the routing mesh, so the host process reaches it at `127.0.0.1:7333`),
-pinned to a non-storage node so the durable copy lives in a different failure domain than the data. The agent's
-responsibility ends at the store; the offsite copy is the store's own mirror. A second agent, unchanged, archives
-the control plane daily at 03:00 with 30-day retention.
+image a live volume without stopping anything is to snapshot it on the host (one LVM thin snapshot: a metadata
+operation of ~200-320 ms, nothing frozen), and a Swarm task cannot do that: it is rescheduled, cannot hold a lock
+across a run, and has no ordering against the filesystem it archives. One snapshot per node, then a serial walk of
+the **snapshot** — mounted read-write so each filesystem replays its journal on the copy, exactly as after a power
+cut — writing one `tar.gz` per stack, verified (SQLite `integrity_check`; Postgres and MySQL recognised from their
+files), and retained 48 h dense then one per day to `backup_retention_days` (3 by default), per stack. The
+**store** is one SeaweedFS process serving S3 on :8333 (no WebDAV: it existed because "the S3 API does not
+auto-create a bucket", and SeaweedFS does), pinned to a non-storage node so the durable copy lives in a different
+failure domain than the data. The agent writes both legs — the store on the node's own loopback, and the offsite
+bucket directly — because both are the same thing to it: an endpoint, a bucket and a credential. A second agent,
+unchanged, archives the control plane daily at 03:00 with 30-day retention.
 
 What to look for: the double-write at the top and the store-as-transit at the bottom.
 
@@ -345,12 +347,15 @@ Grouped by concern: the problem that forced the choice, the option taken, the al
 
 **In-cluster backup store.** A second copy inside the swarm keeps node loss off the external S3 endpoint, so we adopted SeaweedFS after trying MinIO (image pull problems, unwanted UI), Garage (bootstrap ceremony), and kopia (an awkward credential path). The cost is one more pinned service, configured once.
 
-**Backup replication.** The producer's job ends at the store: the agent PUTs over WebDAV to the node's own
-loopback and nothing else. Offsite is the store's mirror, so there is still no replicator service and no second
-credential set for the agent. We rejected having the agent write S3 directly — it would put an external endpoint
-on the critical path of every hourly run and duplicate the store's own copy. The cost is that the offsite leg is
-only as observable as the store makes it, which is why discovery records `offsite-missing` rather than assuming a
-local artifact implies a complete run.
+**Backup replication.** Two destinations, one mechanism: the agent PUTs to the in-cluster store over the node's
+own loopback and to the offsite bucket directly, and both are plain S3 targets (endpoint, bucket, region, key,
+secret). There is no replicator service and no second protocol — the earlier design had WebDAV for the store and
+S3 for the bucket, which meant two upload paths, two retention implementations and two sets of timeouts to get
+wrong. We rejected making the offsite leg the store's own mirror (i.e. leave replication to SeaweedFS): the node
+then ships only to loopback, and the copy that survives losing the node depends on another process's mirror
+schedule being right. The cost of doing it in the agent is that an external endpoint is on the path of every
+hourly run, which is why each leg reports its own verdict in the run record and discovery records
+`offsite-missing` rather than assuming a local artifact implies a complete run.
 
 **Storage-node model.** Stateful stacks need a home that follows leadership, so the leader is always a storage node, workers optionally so, and storage follows leadership. We rejected a fixed anchor, which could strand the backup agent and console on an ex-leader. The cost is that expanding `storage_nodes` re-pins only future deploys.
 

@@ -285,7 +285,7 @@ sequenceDiagram
  participant A as backup-agent
  participant K as kernel/LVM
  participant V as volume (thin LV)
- participant S as store (WebDAV)
+ participant S as store / bucket (S3)
  T->>A: hourly, Persistent=true
  A->>K: lvcreate -s
  Note over K,V: metadata operation<br/>192 ms, no write stall
@@ -358,25 +358,31 @@ archive and checks what can be checked from the host:
 That distinction is deliberate: a green tick that claimed to validate a Postgres
 cluster from the host would be a lie the console then repeats.
 
-### 3.5 Two write legs, and who owns each
+### 3.5 Three legs, one mechanism
 
 ```mermaid
 flowchart TD
     A["backup-agent on the node<br/>snapshot, tar, verify"] --> L["local archive<br/>/var/stack/backup"]
-    L --> W["in-cluster store — SeaweedFS<br/>WebDAV on 127.0.0.1:7333"]
-    W --> M["store mirror to offsite S3/R2<br/>(the store's own job)"]
-    L --> R["retention: 48 h dense, 15 d sparse"]
+    L --> W["in-cluster store — SeaweedFS<br/>S3 on 127.0.0.1:8333"]
+    L --> B["offsite bucket — S3/R2<br/>endpoint from backup_s3_*"]
+    L --> R["retention: 48 h dense,<br/>then daily to backup_retention_days"]
 ```
 
 **The local copy is written first.** An artifact on disk says nothing about the
-store leg, which is why the run reports per stack and a shipping failure marks
+shipped legs, which is why the run reports per stack and a shipping failure marks
 that stack failed while leaving the artifact intact and restorable.
 
-**The store is reached over the node's own loopback.** The agent is a host
-process, so it cannot resolve the overlay name `backup_seaweedfs`; the store's
-WebDAV gateway is published on the routing mesh and the agent PUTs to
-`127.0.0.1:7333` with the store's credentials, which live in
-`/etc/pmcluster/backup.env` (mode 0600) rather than in the world-readable unit.
+**Both destinations are the same kind of thing**: an endpoint, a bucket, a region
+and a credential. The agent uploads to the store over the node's own loopback
+(a host process cannot resolve the overlay name `backup_seaweedfs`) and to the
+offsite bucket directly. WebDAV used to be the store's protocol — it existed
+because "the S3 API does not auto-create a bucket", and SeaweedFS does — so one
+of the two legs was a second protocol with its own timeout, retention half and
+failure mode.
+
+Credentials live in `/etc/pmcluster/backup.conf` (mode 0600), never in the
+world-readable unit and never on a command line: argv is world-readable in
+`/proc` for the life of the process.
 
 **The store sits on a non-storage node**, by explicit placement, so the durable
 copy lives in a different failure domain from the data. That placement is
@@ -398,10 +404,16 @@ ran. Once a backup can live in three places, "succeeded" is not an answer to
 ### 3.6 Retention
 
 Each run prunes its own archive directory: everything for 48 hours, then one
-artifact per calendar day until 15 days, judged per stack. The newest copies of a
-stack are never deleted, and whole-node archives from the previous agent are left
-alone unless asked (`--legacy`) — on a fleet mid-cutover those are the only
-backups that exist.
+artifact per calendar day until `backup_retention_days` (3 by default), judged per
+stack. The newest copies of a stack are never deleted, and whole-node archives
+from the previous agent are left alone unless asked (`--legacy`) — on a fleet
+mid-cutover those are the only backups that exist.
+
+The same plan is applied to the store and the offsite bucket (one implementation,
+`planPrune`), and the number comes from one place: the node's policy file first,
+then its copy of the store, then the default. It used to be decoration — every
+node pruned at the `--keep-days` flag default while the setting said otherwise —
+so `pmcluster backup prune` and the hourly agent now share the resolver too.
 
 ```bash
 pmcluster backup prune --dry-run
@@ -685,7 +697,7 @@ databases; do not point a database at it.
 | `storage_nodes` | leader's hostname | which nodes stateful stacks may land on |
 | `storage_failover` | `false` | automatic move off a dead storage node (needs `backup_s3_*`) |
 | `backup_cron` | `0 * * * *` | the volume agent's schedule |
-| `backup_retention_days` | `15` | prune window for archives and audit rows |
+| `backup_retention_days` | `3` | prune window for archives and audit rows (48 h dense, then one a day) |
 | `backup_all_nodes` | `false` | run the agent everywhere (needed with replicated disks) |
 | `backup_store_on` | `""` = auto | where the in-cluster store runs |
 | `backup_s3_*` | unset | the offsite destination |

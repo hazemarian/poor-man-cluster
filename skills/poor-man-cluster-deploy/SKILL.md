@@ -231,7 +231,7 @@ version: latest                # optional — default image tag (overridable at 
 repo_url: https://github.com/my-org/my-app   # optional — metadata only
 env_file: .env                 # optional — env file path
 
-backup_before_deploy: true     # optional — trigger offen volume snapshot before deploy
+backup_before_deploy: true     # optional — take a snapshot backup before deploy
 strict_backup: true            # optional — abort deploy if the pre-deploy backup fails
                                #   (requires backup_before_deploy: true)
 
@@ -541,7 +541,7 @@ pmcluster registry list                   # verify
 
 ## Pre-Deploy Backups
 
-Add `backup_before_deploy: true` to a manifest to trigger an offen volume snapshot before deployment. By default the deploy proceeds even if the backup fails (best-effort semantics).
+Add `backup_before_deploy: true` to a manifest to take a snapshot backup before deployment. By default the deploy proceeds even if the backup fails (best-effort semantics).
 
 To abort the deploy on backup failure, also set `strict_backup: true`:
 
