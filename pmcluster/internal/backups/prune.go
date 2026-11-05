@@ -37,10 +37,14 @@ type Retention struct {
 	IncludeLegacy bool
 }
 
-// DefaultRetention is 48 hours dense, 15 days sparse — the same 15 days offen was
-// configured with, so the cutover does not shorten anyone's history.
+// DefaultRetention is 48 hours dense and three days in total.
+//
+// Three days is the default because the copies that cost money are the ones off the
+// node: a stack that takes an hourly artifact and never deletes one fills the bucket
+// and, eventually, starts failing every upload. An operator who wants a longer
+// history sets backup_retention_days; nothing here is hard-coded beyond the default.
 func DefaultRetention() Retention {
-	return Retention{KeepHours: 48, KeepDays: 15, KeepLast: 2}
+	return Retention{KeepHours: 48, KeepDays: 3, KeepLast: 2}
 }
 
 // PruneResult reports what a prune did, so a log line can be specific.

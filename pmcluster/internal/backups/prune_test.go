@@ -162,3 +162,31 @@ func TestPruneJudgesEachStackSeparately(t *testing.T) {
 		t.Fatalf("a recent artifact of a new stack was pruned because another stack was busy: %v", err)
 	}
 }
+
+// The default is three days because the copies that cost money live off the node:
+// an hourly artifact per stack with no delete fills the bucket and eventually fails
+// every upload.
+func TestDefaultRetentionIsThreeDays(t *testing.T) {
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	policy := DefaultRetention()
+	if policy.KeepDays != 3 {
+		t.Fatalf("KeepDays = %d, want 3", policy.KeepDays)
+	}
+	dir := t.TempDir()
+	old := ArtifactName("shop", "node1", now.Add(-4*24*time.Hour))
+	fresh := ArtifactName("shop", "node1", now.Add(-2*24*time.Hour))
+	day := ArtifactName("shop", "node1", now.Add(-3*24*time.Hour+time.Hour))
+	if err := os.WriteFile(filepath.Join(dir, old), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(dir, fresh), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, day), []byte("x"), 0o644)
+
+	res, err := PruneArtifacts(dir, policy, now, false)
+	if err != nil {
+		t.Fatalf("PruneArtifacts: %v", err)
+	}
+	if len(res.Deleted) != 1 || res.Deleted[0] != old {
+		t.Fatalf("deleted %v, want only the four-day-old artifact", res.Deleted)
+	}
+}

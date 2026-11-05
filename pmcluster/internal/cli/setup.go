@@ -298,7 +298,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintln(out, "  Do NOT edit, disable or re-time the pmcluster-backup timer: it is a heartbeat")
 			fmt.Fprintln(out, "  that asks the control plane, so changing it does not change the schedule.")
 			a.BackupAllNodes = askYesNo(r, out, "Run the backup agent on every node?", false)
-			a.BackupRetentionDays = ask(r, out, "Backup retention (days)", st.SettingDefault(ctx, cluster.SettingBackupRetentionDays(), "15"))
+			a.BackupRetentionDays = ask(r, out, "Backup retention (days)", st.SettingDefault(ctx, cluster.SettingBackupRetentionDays(), "3"))
 			if askYesNo(r, out, "Keep every backup in one place in the cluster? (an in-cluster store)", true) {
 				a.BackupStoreOn = askBackupStoreOn(r, out, st.SettingDefault(ctx, cluster.SettingBackupStoreOn(), ""))
 			} else {
