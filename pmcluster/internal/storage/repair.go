@@ -113,10 +113,14 @@ func repairInPlace(ctx context.Context, spec Spec, opts RepairOptions, res Repai
 		return res, err
 	}
 	if free < meta {
+		// The pool cannot be shrunk to make room: LVM refuses to reduce a thin
+		// pool's data volume ("cannot be reduced in size yet"), so the only way to
+		// free extents is to add some. Growing the backing file by a gigabyte is
+		// cheap and `storage grow` leaves exactly the reserve free afterwards.
 		return res, fmt.Errorf("cannot repair in place: %s has %d bytes free and the repair needs %d for the replacement metadata. "+
-			"Free that space first (shrink the pool by %d bytes with `lvreduce -L -%dB %s/pool`, which is safe while the data volume is smaller), "+
-			"or pass --rebuild to destroy and re-create the volume",
-			spec.VG, free, meta, meta, meta, spec.VG)
+			"Free extents first — the pool cannot be shrunk, so grow the backing file and let `pmcluster storage grow` keep the reserve "+
+			"(e.g. `pmcluster storage grow --size <current+1G>`) — or pass --rebuild to destroy and re-create the volume",
+			spec.VG, free, meta)
 	}
 
 	err = lvmlock.With(ctx, func() error {

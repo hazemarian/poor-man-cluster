@@ -149,8 +149,13 @@ func TestRepairRefusesInPlaceWithoutHeadroom(t *testing.T) {
 	if err == nil {
 		t.Fatal("repair ran on a volume group with no free extents")
 	}
-	if !strings.Contains(err.Error(), "cannot repair in place") || !strings.Contains(err.Error(), "lvreduce") {
+	if !strings.Contains(err.Error(), "cannot repair in place") || !strings.Contains(err.Error(), "storage grow") {
 		t.Fatalf("error does not explain the shortfall or how to fix it: %v", err)
+	}
+	// Shrinking a thin pool is not a thing LVM can do, and telling an operator to
+	// try it wastes the worst possible minute of their day.
+	if strings.Contains(err.Error(), "lvreduce") {
+		t.Fatalf("error suggests shrinking a thin pool, which LVM refuses: %v", err)
 	}
 	if h.index("lvconvert") >= 0 {
 		t.Fatalf("lvconvert ran anyway: %v", h.calls)

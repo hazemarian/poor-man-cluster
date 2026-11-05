@@ -205,13 +205,20 @@ pool inactive (so the volume root is unmounted, which means stopping its writers
 and it refuses up front, with the shortfall named, when the group has no free
 extents — rather than letting LVM create a metadata backup and then fail.
 
-A pool that is already at zero free extents can be given headroom without
-recreating anything, because the data volume is far from full:
+A pool that is already at zero free extents cannot be given headroom by
+shrinking it — LVM refuses to reduce a thin pool's data volume (`Thin pool
+volumes vg-pmcluster/pool_tdata cannot be reduced in size yet`), whatever the
+data volume is using. The room has to be added instead, which is one gigabyte of
+disk and leaves the reserve free afterwards:
 
 ```bash
-sudo lvreduce -L -128M vg-pmcluster/pool   # safe while data% is low; check with `lvs`
+sudo pmcluster storage grow --size <current image + 1G>   # extends by free minus the reserve
 sudo pmcluster storage repair --unmount
 ```
+
+`storage repair` refuses up front and says so, rather than letting LVM create a
+metadata backup and then die on `insufficient free space (0 extents): 11
+required`.
 
 `--rebuild --allow-data-loss` destroys and re-creates the volume when the
 metadata is beyond repair. It reproduces the shape it found — same pool, same
