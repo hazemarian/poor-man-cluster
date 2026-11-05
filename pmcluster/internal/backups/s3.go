@@ -186,10 +186,26 @@ func fetchS3Object(ctx context.Context, cfg S3Config, key, dst string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, resp.Body); err != nil {
+	written, err := io.Copy(out, resp.Body)
+	if err != nil {
 		out.Close()
 		_ = os.Remove(dst)
 		return err
+	}
+	// A 200 is not a body. A store or a proxy in front of one can answer 200
+	// with nothing (or with fewer bytes than it announced), and a caller that
+	// only checks the status then hands an empty file to the extractor.
+	if written == 0 {
+		out.Close()
+		_ = os.Remove(dst)
+		return fmt.Errorf("s3 get %s from bucket %q: 200 with an empty body (content-type %q) — the object is missing at this key or the endpoint answered a placeholder",
+			key, cfg.Bucket, resp.Header.Get("Content-Type"))
+	}
+	if resp.ContentLength >= 0 && written != resp.ContentLength {
+		out.Close()
+		_ = os.Remove(dst)
+		return fmt.Errorf("s3 get %s from bucket %q: truncated download — %d of %d bytes (the connection closed early; nothing was kept)",
+			key, cfg.Bucket, written, resp.ContentLength)
 	}
 	if err := out.Close(); err != nil {
 		_ = os.Remove(dst)

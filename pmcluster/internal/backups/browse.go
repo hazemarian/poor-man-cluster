@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,68 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
+
+// ErrNotAnArchive reports bytes that are not a tar or tar.gz stream at all: an
+// empty body, an HTML error page, a JSON sidecar. It is deliberately distinct
+// from a corrupt archive — nothing was ever an artifact here, which almost
+// always means the wrong object was fetched (a key that resolves to an error
+// page, a redirect that answered 200, a bucket with a prefix the key lacks).
+var ErrNotAnArchive = errors.New("not an archive")
+
+// classifyArchive reads the first block of a file and names what it is.
+//
+// Extraction used to trust the file name alone. A fetched object is written to
+// a temp file with a hard-coded ".tar.gz" suffix, so every fetched object
+// looked like an archive: an endpoint answering 200 with an HTML page failed
+// deep inside the gzip reader, and an empty body parsed as a tar with no
+// entries — which, before it was made an error, read as a successful restore
+// of nothing. Naming the bytes up front turns both into one clear sentence.
+func classifyArchive(p string) (string, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	head := make([]byte, 512)
+	n, rerr := io.ReadFull(f, head)
+	if n == 0 {
+		if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
+			return "", fmt.Errorf("%w: %s is empty (0 bytes)", ErrNotAnArchive, filepath.Base(p))
+		}
+		return "", rerr
+	}
+	head = head[:n]
+	if len(head) >= 2 && head[0] == 0x1f && head[1] == 0x8b {
+		return "gzip", nil
+	}
+	if len(head) >= 262 && string(head[257:262]) == "ustar" {
+		return "tar", nil
+	}
+	if len(head) < 512 {
+		// Short read and no magic: a fragment, not a stream we could parse.
+		return "", fmt.Errorf("%w: %s is %d bytes and starts with %q, not a tar or gzip header",
+			ErrNotAnArchive, filepath.Base(p), n, printable(head, 32))
+	}
+	return "", fmt.Errorf("%w: %s starts with %q, not a tar or gzip header",
+		ErrNotAnArchive, filepath.Base(p), printable(head, 32))
+}
+
+// printable renders the first n bytes of a probe as a quoted, single-line
+// string so an error can show what the fetch actually landed on.
+func printable(b []byte, n int) string {
+	if len(b) > n {
+		b = b[:n]
+	}
+	var sb strings.Builder
+	for _, c := range b {
+		if c >= 0x20 && c < 0x7f {
+			sb.WriteByte(c)
+		} else {
+			sb.WriteByte('.')
+		}
+	}
+	return strings.TrimSpace(sb.String())
+}
 
 // FileEntry is one item inside a backup archive: either a file on the host
 // (when the backup run produced a raw directory) or an entry inside a
@@ -48,6 +111,12 @@ func (l *Local) Browse(ctx context.Context, id int64) (*Run, []FileEntry, error)
 	return &run, files, nil
 }
 
+// listArchive lists an archive's entries. A file that is not an archive, or an
+// archive with no entries at all, is an ERROR rather than an empty list: an
+// empty list is indistinguishable from "the artifact holds nothing", and treating
+// those as the same is how a restore that extracted nothing still reported
+// success. Callers that can legitimately meet a missing file (browsing a pruned
+// archive) get a plain os error and explain it themselves.
 func listArchive(p string) ([]FileEntry, error) {
 	info, err := os.Stat(p)
 	if err != nil {
@@ -67,6 +136,9 @@ func listArchive(p string) ([]FileEntry, error) {
 			return nil
 		})
 		return out, err
+	}
+	if _, err := classifyArchive(p); err != nil {
+		return nil, err
 	}
 	// tar / tar.gz archive: read headers without extracting.
 	f, err := os.Open(p)
@@ -98,6 +170,9 @@ func listArchive(p string) ([]FileEntry, error) {
 			return nil, fmt.Errorf("tar read %s: %w", filepath.Base(p), err)
 		}
 		out = append(out, FileEntry{Path: hdr.Name, Size: hdr.Size, IsDir: hdr.Typeflag == tar.TypeDir})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: %s holds no entries (an empty or truncated archive)", ErrNotAnArchive, filepath.Base(p))
 	}
 	return out, nil
 }
@@ -156,7 +231,8 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 	// ancestor directory of one, unioned across the run's archives. Collected
 	// in full before a single byte is written.
 	keep := map[string]bool{}
-	var restored int
+	var restored, archived int
+	var names []string
 	for _, p := range splitArchivePaths(row.ArchivePaths) {
 		src, cleanup, err := l.restoreSource(ctx, p, opts)
 		if err != nil {
@@ -167,10 +243,13 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 			return restored, err
 		}
 		include := restoreInclude(row, opts)
-		if err := collectArchivedPaths(src, include, keep); err != nil {
+		files, err := collectArchivedPaths(src, include, keep)
+		if err != nil {
 			cleanup()
 			return restored, fmt.Errorf("read archive %s: %w", p, err)
 		}
+		archived += files
+		names = append(names, filepath.Base(p))
 		n, err := restoreArchiveRelFiltered(src, target, archiveRelPath, include)
 		cleanup()
 		if err != nil {
@@ -182,6 +261,22 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 	// Only now that everything is on disk: drop what the snapshot did not
 	// hold, inside the restored scope only.
 	pruneToSnapshot(target, keep, opts.Volume != "")
+
+	// Zero files has two very different causes, and the operator must be told
+	// which one they are looking at: an artifact that holds no files at all is
+	// an empty snapshot (the volume was empty when it was taken — the backup is
+	// honest and the data was never there), whereas an artifact full of files
+	// whose none matched means the scope was wrong. Saying "nothing matched the
+	// restore scope" for the first case sends the operator hunting for a filter
+	// bug when the real answer is that this node never held the data.
+	if restored == 0 {
+		if archived == 0 {
+			return 0, fmt.Errorf("nothing was restored: %s contains only directories, so the snapshot captured an EMPTY volume — this is an empty backup, not a fetch or filter problem. Check that the stack's data was on the node that wrote it (%s) at the time of the run",
+				strings.Join(names, ", "), l.ArchiveDir)
+		}
+		return 0, fmt.Errorf("nothing was restored: %s holds %d file(s), none of which matched the restore scope (volume %q) — the artifact was fetched intact, so the filter is what excluded everything",
+			strings.Join(names, ", "), archived, opts.Volume)
+	}
 	return restored, nil
 }
 
@@ -208,13 +303,20 @@ func restoreInclude(row *store.Backup, opts RestoreOptions) func(string) bool {
 
 // collectArchivedPaths adds an archive's entries — and every ancestor
 // directory of one — to keep, mapped through archiveRelPath and narrowed by
-// include. Reads the archive without extracting it.
-func collectArchivedPaths(src string, include func(string) bool, keep map[string]bool) error {
+// include. Reads the archive without extracting it. It also returns how many
+// regular-file entries the archive holds in total, which is what lets a
+// zero-file restore say whether the snapshot was empty or the filter excluded
+// everything.
+func collectArchivedPaths(src string, include func(string) bool, keep map[string]bool) (int, error) {
 	entries, err := listArchive(src)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	files := 0
 	for _, e := range entries {
+		if !e.IsDir {
+			files++
+		}
 		rel := filepath.ToSlash(archiveRelPath(e.Path))
 		if rel == "" || rel == "." {
 			continue
@@ -231,7 +333,7 @@ func collectArchivedPaths(src string, include func(string) bool, keep map[string
 			rel = rel[:i]
 		}
 	}
-	return nil
+	return files, nil
 }
 
 // pruneToSnapshot removes destination entries the snapshot did not hold, under
@@ -348,9 +450,19 @@ func (l *Local) restoreSource(ctx context.Context, p string, opts RestoreOptions
 	}
 	tmpPath := tmp.Name()
 	_ = tmp.Close()
-	if err := fetchS3Object(ctx, l.S3, s3ObjectKey(p), tmpPath); err != nil {
+	key := s3ObjectKey(p)
+	if err := fetchS3Object(ctx, l.S3, key, tmpPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", func() {}, err
+	}
+	// The object downloaded, but that is not the same as "this is the artifact".
+	// A key that resolves to an HTML error page, a JSON sidecar or an empty body
+	// answers 200 and used to surface as a parse failure deep in gzip — or, for
+	// an empty body, as a restore of zero files that looked like a restore.
+	if _, err := classifyArchive(tmpPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", func() {}, fmt.Errorf("offsite artifact %s from bucket %q on %s: %w (the object exists but is not a backup archive — check the bucket's key layout and that the endpoint is not serving an error page)",
+			key, l.S3.Bucket, l.S3.Endpoint, err)
 	}
 	return tmpPath, func() { _ = os.Remove(tmpPath) }, nil
 }
