@@ -499,6 +499,15 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("restore backup %d: %w", id, err)
 	}
+	// Zero files is a FAILURE, not a quiet success. It means the artifact was
+	// fetched and then every member was skipped — usually because the restore
+	// scope named a stack or volume that does not exist on this node. Reporting
+	// that as "✅ Restored 0 file(s)" is the worst outcome a restore path can
+	// produce: the operator walks away believing their data is back.
+	if restored == 0 {
+		return fmt.Errorf("restore backup %d: extracted 0 files into %s — the artifact was fetched but nothing in it matched the restore scope (volume %q); nothing was restored",
+			id, destRoot, volume)
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), "✅ Restored %d file(s) from backup %d to %s:%s.\n",
 		restored, id, localHostname(), destRoot)
 	// The restore is destructive by contract. Say so every time, so an operator
