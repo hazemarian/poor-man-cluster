@@ -27,11 +27,11 @@ sequenceDiagram
  participant V as volume (thin LV)
 
  Note over OP,ST: once per node
- OP->>ST: storage provision (fresh) or storage migrate (data already there)
+ OP->>ST: storage provision / storage migrate
  ST->>K: file → PV → VG → pool → thin LV
  ST->>V: mount, copy, verify, switch
  ST->>ST: install units (pool, mount, backup timer)
- Note right of ST: refuses over live data unless drained;<br/>leaves two metadata copies free for a repair
+ Note right of ST: refuses over live data unless drained<br/>keeps two metadata copies free
 ```
 
 The pool does not take the whole volume group: `2 × metadata` stays free, because
@@ -46,24 +46,23 @@ sequenceDiagram
  autonumber
  participant T as timer
  participant A as agent
- participant P as /etc/pmcluster/backup.conf
+ participant P as backup.conf
  participant K as kernel/LVM
  participant D as destinations
 
  T->>A: hourly fire
- A->>P: enabled? due? where does it go?
- P-->>A: settings, written at install time
- Note right of P: no manager, no endpoint, no token
- A->>A: derive the plan from the volume root
- A->>K: lvcreate -s (metadata op, ~200-320 ms)
- A->>K: mount the SNAPSHOT read-write
+ A->>P: read the policy file
+ P-->>A: settings, written at install
+ A->>A: derive the stack plan from disk
+ A->>K: lvcreate -s (~200-320 ms)
+ A->>K: mount the snapshot rw
  loop per stack
    A->>A: tar from the snapshot, sha256
-   A->>A: verify (sqlite integrity, MySQL/Postgres evidence)
-   A->>D: store (S3) and/or offsite bucket
+   A->>A: verify (sqlite check)
+   A->>D: store + offsite bucket
  end
- A->>K: umount, lvremove the snapshot
- A->>A: prune by retention, write a run record
+ A->>K: umount + lvremove
+ A->>A: prune, then record the run
 ```
 
 **There is no freeze.** It used to be `fsfreeze -f`, which flushes every dirty
@@ -99,13 +98,13 @@ sequenceDiagram
  participant V as volume (thin LV)
 
  OP->>A: backup browse <id>
- A-->>OP: the archive's contents, read without extracting
+ A-->>OP: contents, without extracting
  OP->>A: backup-agent drill <artifact>
  A->>A: extract into scratch, open each database
  Note right of A: this is what proves restorability
- OP->>D: backup restore <id> [--from-s3] [--volume v]
+ OP->>D: backup restore <id> --from-s3
  D->>V: extract one artifact, then prune the scope
- Note over OP,V: the snapshot is long gone;<br/>the ARTIFACT is the restore object
+ Note over OP,V: the ARTIFACT is the restore object
 ```
 
 Restore is local-first: an artifact still on the node's archive directory is read
