@@ -22,13 +22,26 @@ var clusterSettingsCmd = &cobra.Command{
 ` + "`pmcluster cluster settings get <key>`" + `  show one setting
 ` + "`pmcluster cluster settings set <key>=<value>`" + `  update one or more settings
 
+Secret-typed keys (anything whose name contains secret, password, key, token or
+credential) are printed as ` + "`" + `settings.Mask` + "`" + `, the same policy the API and the
+console apply. Pass --show-secrets when you actually need the value — and expect
+it in your shell history, your paste buffer and anything you pipe this into.
+
 Settings are applied to the swarm by ` + "`pmcluster cluster update`" + ` (the settings
 command itself only persists them).`,
 	RunE: runClusterSettings,
 }
 
 func init() {
+	clusterSettingsCmd.Flags().Bool("show-secrets", false,
+		"print secret-typed settings in cleartext (they land in your shell history)")
 	clusterCmd.AddCommand(clusterSettingsCmd)
+}
+
+// showSecrets reports whether the caller asked for cleartext secret values.
+func showSecrets(cmd *cobra.Command) bool {
+	v, err := cmd.Flags().GetBool("show-secrets")
+	return err == nil && v
 }
 
 func backendSettings(cmd *cobra.Command) (settings.Service, func(), error) {
@@ -79,7 +92,7 @@ func runClusterSettings(cmd *cobra.Command, args []string) error {
 		if !ok {
 			return fmt.Errorf("unknown setting %q", args[1])
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s=%s\n", args[1], v)
+		fmt.Fprintf(cmd.OutOrStdout(), "%s=%s\n", args[1], settings.MaskValue(args[1], v, showSecrets(cmd)))
 		return nil
 	}
 
@@ -97,7 +110,7 @@ func runClusterSettings(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("update settings: %w", err)
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "✅ Settings updated. Run `pmcluster cluster update` to apply them to the swarm.")
-		return printSettings(cmd, updated)
+		return printSettings(cmd, updated, showSecrets(cmd))
 	}
 
 	// No args — list everything.
@@ -105,10 +118,10 @@ func runClusterSettings(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("get settings: %w", err)
 	}
-	return printSettings(cmd, all)
+	return printSettings(cmd, all, showSecrets(cmd))
 }
 
-func printSettings(cmd *cobra.Command, s settings.Settings) error {
+func printSettings(cmd *cobra.Command, s settings.Settings, showSecrets bool) error {
 	keys := make([]string, 0, len(s))
 	for k := range s {
 		keys = append(keys, k)
@@ -117,19 +130,31 @@ func printSettings(cmd *cobra.Command, s settings.Settings) error {
 
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "KEY\tVALUE")
+	masked := 0
 	for _, k := range keys {
 		v := s[k]
 		if v == "" {
 			v = "—"
 		} else {
-			// The CLI runs as the local admin, so the shared mask policy
-			// (admins see cleartext) leaves values intact; it is applied here
-			// so any future policy change flows through one helper.
-			v = settings.MaskValue(k, v, true)
+			// Root on the box can read the DB anyway, but stdout does not stay on
+			// the box: it lands in shell history, in scrollback, in a pasted
+			// transcript. So the CLI applies the SAME policy the API and console
+			// apply, and cleartext is an explicit request.
+			if settings.IsSecretKey(k) && !showSecrets {
+				masked++
+			}
+			v = settings.MaskValue(k, v, showSecrets)
 		}
 		fmt.Fprintf(w, "%s\t%s\n", k, v)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if masked > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(),
+			"\n%d secret-typed value(s) masked. `--show-secrets` prints them (they land in your shell history).\n", masked)
+	}
+	return nil
 }
 
 var usageCmd = &cobra.Command{

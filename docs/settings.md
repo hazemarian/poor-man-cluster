@@ -7,9 +7,18 @@ console's **Apply to swarm**). Unknown keys are rejected atomically.
 
 ```bash
 pmcluster cluster settings             # list all (KEY/VALUE; secret-typed keys masked)
+pmcluster cluster settings --show-secrets   # ...and print them in cleartext
 pmcluster cluster settings get <key>
 pmcluster cluster settings set key=value ...
 ```
+
+Secret-typed means any key whose name contains `secret`, `password`, `key`, `token`
+or `credential` (`internal/settings/mask.go`, one policy for the CLI, the API and
+the console). The CLI masks them by default **even though it runs as root on the
+box**: root can read the store anyway, but stdout does not stay on the box — it
+goes into shell history, scrollback and any transcript it is pasted into, which is
+how the offsite keys were exposed once already. `--show-secrets` is the explicit
+way to see a value, and it says so when it masks.
 
 REST: `GET/PUT /api/cluster/settings` (secret-ish values masked for non-admin
 bearers). Console: the **Settings** page.

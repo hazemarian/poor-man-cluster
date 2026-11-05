@@ -125,24 +125,36 @@ func TestSettingsUsage_RunPaths(t *testing.T) {
 	}
 }
 
-// TestSettingsPrintAdminCleartext checks that printSettings renders every key
-// through the shared settings.MaskValue policy with isAdmin=true (the CLI runs
-// as the local admin), so secret-ish values are shown in cleartext rather than
-// masked or dropped.
-func TestSettingsPrintAdminCleartext(t *testing.T) {
+// TestSettingsPrintThinWrapperContract replaces the old
+// TestSettingsPrintAdminCleartext. That test encoded "the CLI runs as the local
+// admin, so secret-ish values are shown in cleartext" — which is true about the
+// process and false about the output: it lands in shell history and in pasted
+// transcripts. docs/settings.md already promised masked output, so the CLI was
+// the half that was wrong. The values are still reachable, explicitly.
+func TestSettingsPrintThinWrapperContract(t *testing.T) {
 	settings := map[string]string{"domain": "example.test", "backup_s3_secret_key": "hunter2"}
 	cmd, out, _ := newTestCmd("settings", nil, func(cmd *cobra.Command, _ []string) error {
-		return printSettings(cmd, settings)
+		return printSettings(cmd, settings, false)
 	})
-	if err := printSettings(cmd, settings); err != nil {
+	if err := printSettings(cmd, settings, false); err != nil {
 		t.Fatalf("printSettings: %v", err)
 	}
 	s := out.String()
-	if !strings.Contains(s, "hunter2") {
-		t.Fatalf("printSettings masked a secret key for the admin CLI: %q", s)
+	if strings.Contains(s, "hunter2") {
+		t.Fatalf("printSettings leaked a secret to stdout: %q", s)
 	}
 	if !strings.Contains(s, "example.test") {
 		t.Fatalf("printSettings dropped non-secret key: %q", s)
+	}
+
+	cmd2, out2, _ := newTestCmd("settings", nil, func(cmd *cobra.Command, _ []string) error {
+		return printSettings(cmd, settings, true)
+	})
+	if err := printSettings(cmd2, settings, true); err != nil {
+		t.Fatalf("printSettings --show-secrets: %v", err)
+	}
+	if !strings.Contains(out2.String(), "hunter2") {
+		t.Fatalf("--show-secrets did not print the value: %q", out2.String())
 	}
 }
 
