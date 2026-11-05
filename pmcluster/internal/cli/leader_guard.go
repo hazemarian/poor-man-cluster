@@ -37,8 +37,9 @@ const (
 // "answers cluster state from a node that does not have it".
 var topLevelScopes = map[string]commandScope{
 	// Node-local: describes this machine, nothing else.
-	"version": scopeNode,
-	"serve":   scopeNode, // standby on a non-leader by design
+	"version":   scopeNode,
+	"hardening": scopeNode, // host settings for this machine, not cluster state
+	"serve":     scopeNode, // standby on a non-leader by design
 	// backup-agent is node-local WORK, not cluster state: it takes this
 	// node's snapshot and writes this node's artifacts, so it must run on a
 	// worker that holds the data and has no current view of the cluster.

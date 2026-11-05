@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 // Swap on a small node is insurance, not tuning.
@@ -133,4 +135,43 @@ func appendOnce(path, line string) error {
 	defer f.Close()
 	_, err = f.WriteString("\n" + line + "\n")
 	return err
+}
+
+// hardeningCmd groups the host-level settings an operator applies to a node image.
+// They are deliberately not part of `setup`: the cluster does not own the kernel.
+var hardeningCmd = &cobra.Command{
+	Use:   "hardening",
+	Short: "Host-level settings for a node image (not cluster state)",
+}
+
+func init() { hardeningCmd.AddCommand(hardeningSwapCmd) }
+
+// hardeningSwapCmd exposes the swap step for the node hardening script.
+//
+// Swap is the host's business, not the cluster's: it belongs beside the other
+// kernel and OS settings an operator applies when building a node image. The
+// cluster's own installers no longer touch it.
+var hardeningSwapCmd = &cobra.Command{
+	Use:   "swap",
+	Short: "Add a swap file to this node (run from the hardening script)",
+	Long: `Adds a swap file when the node has none and has less than 8 GiB of RAM: half the
+RAM, capped at 2 GiB, recorded in /etc/fstab.
+
+A small node with no swap does not admit it is out of memory — kswapd spins,
+dockerd cannot answer its swarm heartbeat, and the node is marked Down while every
+container on it is still running.`,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		if err := ensureSwap(cmd.OutOrStdout()); err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), swapSummary())
+		return nil
+	},
+}
+
+// swapSummary reports the node's swap state in one line.
+func swapSummary() string {
+	mem := memInfoKB("/proc/meminfo", "MemTotal")
+	swap := memInfoKB("/proc/meminfo", "SwapTotal")
+	return fmt.Sprintf("mem=%d MiB swap=%d MiB", mem>>10, swap>>10)
 }

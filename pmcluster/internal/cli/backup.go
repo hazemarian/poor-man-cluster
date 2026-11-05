@@ -375,6 +375,12 @@ func printBackups(cmd *cobra.Command, rows []backups.Run) error {
 		stack := "—"
 		if b.StackName != "" {
 			stack = b.StackName
+		} else if s := stackFromArchives(b.ArchivePaths); s != "" {
+			// A run covers many stacks, so the row has no stack of its own. The
+			// artifact name does, and "which stack is this backup of" is the
+			// question an operator asks before restoring — leaving the column as a
+			// dash made `backup list | grep <stack>` impossible.
+			stack = s
 		}
 		rev := "—"
 		if b.Revision != 0 {
@@ -388,8 +394,8 @@ func printBackups(cmd *cobra.Command, rows []backups.Run) error {
 		if notes == "" {
 			notes = strings.Join(b.ArchivePaths, ",")
 		}
-		if len(notes) > 60 {
-			notes = notes[:57] + "..."
+		if len(notes) > 100 {
+			notes = notes[:97] + "..."
 		}
 		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			b.ID, b.Status, stack, rev,
@@ -575,4 +581,25 @@ func restoreRouteForStack(cmd *cobra.Command, id int64, stack string, fromS3 boo
 		return "", fmt.Errorf("restore backup %d onto %s: %w", id, target, err)
 	}
 	return target, nil
+}
+
+// stackFromArchives reports the stack an artifact name belongs to, if it names one.
+func stackFromArchives(paths []string) string {
+	seen := map[string]bool{}
+	var names []string
+	for _, p := range paths {
+		art, ok := backups.ParseArtifact(p)
+		if !ok || art.Stack == "" || seen[art.Stack] {
+			continue
+		}
+		seen[art.Stack] = true
+		names = append(names, art.Stack)
+	}
+	if len(names) == 1 {
+		return names[0]
+	}
+	if len(names) > 1 {
+		return fmt.Sprintf("%s+%d", names[0], len(names)-1)
+	}
+	return ""
 }

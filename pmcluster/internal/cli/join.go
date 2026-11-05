@@ -299,12 +299,6 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Same insurance on a joining node: no swap on a small box means it drops out
-	// of the cluster under memory pressure instead of reporting it.
-	if err := ensureSwap(cmd.OutOrStdout()); err != nil {
-		fmt.Fprintf(cmd.OutOrStdout(), "  (swap: %v)\n", err)
-	}
-
 	// Install + start the daemon (systemd on Linux, hint otherwise).
 	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
 		return err

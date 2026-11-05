@@ -502,12 +502,9 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	} else {
 		fmt.Fprintf(out, "⚠ app-data volume not provisioned: %v\n", err)
 	}
-	// A small node with no swap loses its swarm membership rather than admitting
-	// it is out of memory: kswapd spins, dockerd cannot answer, the node is marked
-	// Down while every container on it is still running.
-	if err := ensureSwap(out); err != nil {
-		fmt.Fprintf(out, "  (swap: %v)\n", err)
-	}
+	// Swap is the host's business, not the cluster's: it belongs in the node
+	// hardening script beside the other kernel and OS settings. `pmcluster
+	// hardening swap` prints the three commands for whoever builds the image.
 
 	in := cluster.UpInput{}
 	in.Version = buildinfo.Version

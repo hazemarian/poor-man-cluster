@@ -80,6 +80,7 @@ func init() {
 	withScopeGuard()
 
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(hardeningCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(clusterCmd)
