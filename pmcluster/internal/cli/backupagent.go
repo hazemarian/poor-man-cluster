@@ -351,6 +351,8 @@ func failedCount(r backupagent.Result) int {
 func printAgentResult(out interface{ Write([]byte) (int, error) }, res backupagent.Result) {
 	for _, s := range res.Stacks {
 		switch {
+		case s.Empty:
+			fmt.Fprintf(out, "○ %-24s nothing to archive — %s\n", s.Stack, s.Detail)
 		case s.OK && s.Verified:
 			fmt.Fprintf(out, "✓ %-24s %8s  %s  [verified %s]\n", s.Stack, humanBytes(s.Bytes), s.Archive, s.Engine)
 		case s.OK:

@@ -196,6 +196,11 @@ type Stack struct {
 	Verified bool   `json:"verified"`
 	Engine   string `json:"engine,omitempty"`
 	Detail   string `json:"detail,omitempty"`
+	// Empty marks a stack that had nothing to archive: the snapshot subtree held
+	// no regular files. The stack is not a failure — an app that never wrote data
+	// is not broken — but it did not produce an artifact, and saying so is the
+	// difference between "backed up" and "backed up nothing".
+	Empty bool `json:"empty,omitempty"`
 	// Where lists every place this artifact can be restored from: the node's
 	// own archive directory always, plus the store and/or the offsite bucket
 	// when those are configured. A run record that says only "succeeded" is not
@@ -523,6 +528,11 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 			trace.WithAttributes(attribute.String("backup.stack", s.Name)))
 		st := a.archiveStack(stackCtx, snapDir, s, at)
 		res.Stacks = append(res.Stacks, st)
+		if st.Empty {
+			// Visible at run level too: a stack that produced no artifact is the
+			// one thing an operator scanning an hourly log must not miss.
+			res.Warnings = append(res.Warnings, fmt.Sprintf("stack %s produced no artifact: %s", st.Stack, st.Detail))
+		}
 		if st.Archive != "" {
 			st.Where = []string{"node:" + st.Archive}
 			if a.Ship != nil {
@@ -601,11 +611,51 @@ func (a *Agent) dryRunStack(s StackPlan) Stack {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return Stack{Stack: s.Name, OK: false, Reason: "not present on this node"}
 	}
+	// A dry run that promises an artifact the real run will refuse to write is
+	// worse than no dry run: it reads as "this stack is covered". Check for one
+	// regular file, which is exactly the condition the real run uses.
+	if !hasRegularFile(dir, s.Volumes) {
+		return Stack{
+			Stack:  s.Name,
+			OK:     true,
+			Empty:  true,
+			Detail: fmt.Sprintf("would archive nothing — no files under %s", dir),
+		}
+	}
 	return Stack{
 		Stack:  s.Name,
 		OK:     true,
 		Detail: fmt.Sprintf("would archive %s → %s", dir, backups.ArtifactName(s.Name, a.Node, a.now())),
 	}
+}
+
+// hasRegularFile reports whether dir (or, when volumes are named, any of those
+// subtree) holds at least one regular file. It stops at the first one: a stack
+// tree can be millions of entries, and the only question is empty or not.
+func hasRegularFile(dir string, volumes []string) bool {
+	roots := []string{dir}
+	if len(volumes) > 0 {
+		roots = nil
+		for _, v := range volumes {
+			roots = append(roots, filepath.Join(dir, v))
+		}
+	}
+	found := errors.New("found")
+	for _, root := range roots {
+		err := filepath.WalkDir(root, func(_ string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil // unreadable: not our answer to give
+			}
+			if d.Type().IsRegular() {
+				return found
+			}
+			return nil
+		})
+		if errors.Is(err, found) {
+			return true
+		}
+	}
+	return false
 }
 
 // archiveStack writes one stack's artifact plus its sidecar manifest.
@@ -624,6 +674,26 @@ func (a *Agent) archiveStack(ctx context.Context, snapDir string, s StackPlan, a
 	if err != nil {
 		_ = os.Remove(dst)
 		out.Reason = err.Error()
+		return out
+	}
+	// A subtree with no regular files is not a backup of anything.
+	//
+	// This is the shape a moved volume leaves behind: the stack's directory
+	// stays on the old node, emptied, and the hourly run kept writing a
+	// "succeeded" artifact that held only directory entries. It restores zero
+	// files, so an operator restoring it concludes the backup is broken — and
+	// the real answer, that this node has not held that stack's data since it
+	// moved, is nowhere in the record. Write no artifact, upload nothing, and
+	// say so per stack instead of inventing a green run for it.
+	if files == 0 {
+		_ = os.Remove(dst)
+		where := src
+		if len(s.Volumes) > 0 {
+			where = src + " (" + strings.Join(s.Volumes, ", ") + ")"
+		}
+		out.OK = true
+		out.Empty = true
+		out.Detail = fmt.Sprintf("no files under %s — the stack's volume is empty on this node", where)
 		return out
 	}
 	out.Archive, out.Files, out.Bytes, out.SHA256 = name, files, bytes, sha

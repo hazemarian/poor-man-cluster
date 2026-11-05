@@ -221,6 +221,12 @@ func artifactVerdictNote(archivePath string) string {
 	if err != nil {
 		return ""
 	}
+	// An artifact whose manifest holds no files is a snapshot of an empty
+	// volume. Saying so in the list is what stops "succeeded" from reading as
+	// "your data is safe here" for a stack this node never held.
+	if m.Files == 0 {
+		return "empty: 0 files — the volume was empty on this node when the snapshot was taken"
+	}
 	switch {
 	case m.Verify.Verified && m.Verify.Engine != "":
 		return fmt.Sprintf("verified (%s): %s", m.Verify.Engine, m.Verify.Detail)

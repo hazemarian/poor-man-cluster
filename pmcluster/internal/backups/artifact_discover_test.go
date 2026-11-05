@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,6 +26,7 @@ func TestDiscoverAttributesPerStackArtifacts(t *testing.T) {
 	// The agent leaves a sidecar; discovery turns its verdict into the note.
 	if err := WriteManifest(filepath.Join(dir, name), Manifest{
 		Stack: "horizon-erp", Node: "bh3e42i41uae6fd3mlkv7qfjg", Archive: name,
+		Files:  3,
 		Verify: VerifyFacts{Verified: true, Engine: "sqlite", Detail: "app.db: integrity_check ok"},
 	}); err != nil {
 		t.Fatalf("WriteManifest: %v", err)
@@ -145,5 +147,29 @@ func TestManifestSidecarIsIgnoredByDiscovery(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("found %d archive-looking files, want only the .tar.gz", count)
+	}
+}
+
+// An artifact whose manifest counts zero files is a snapshot of an empty
+// volume. Its note must say that instead of a verification verdict that reads
+// as "this backup holds your data".
+func TestArtifactNoteSaysWhenTheSnapshotHeldNoFiles(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "backup-n1-2026-11-05T10-00-00-stack-moved.tar.gz")
+	if err := os.WriteFile(archive, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteManifest(archive, Manifest{
+		Stack: "moved", Archive: filepath.Base(archive), Files: 0,
+		Verify: VerifyFacts{Verified: true, Engine: "sqlite", Detail: "integrity_check ok"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	note := artifactVerdictNote(archive)
+	if !strings.Contains(note, "empty") || !strings.Contains(note, "0 files") {
+		t.Fatalf("note = %q, want it to say the snapshot held no files", note)
+	}
+	if strings.Contains(note, "integrity_check") {
+		t.Fatalf("note reports a verification verdict for an empty artifact: %q", note)
 	}
 }

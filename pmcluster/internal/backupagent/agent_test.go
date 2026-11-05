@@ -193,6 +193,100 @@ func TestRunWritesOneVerifiedArtifactPerStack(t *testing.T) {
 	}
 }
 
+// A stack whose volume is empty on this node must not become an artifact.
+//
+// This is the shape a moved volume leaves behind — the directory stays, emptied
+// — and the run used to write a "succeeded" archive of directories only. It
+// restores zero files, which reads as a broken backup rather than as "this node
+// does not hold that stack's data".
+func TestRunSkipsAStackWithNothingToArchive(t *testing.T) {
+	root, archive := t.TempDir(), t.TempDir()
+	// The leftover: a stack directory with its volume dirs and no files.
+	if err := os.MkdirAll(filepath.Join(root, "moved-away", "moved-away-data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	seedStack(t, root, "horizon-erp", false)
+
+	var shipped []string
+	a := newAgent(t, root, archive, &fakeSnap{kind: "lvm", usage: 1})
+	a.Ship = func(_ context.Context, p string) ([]string, error) {
+		shipped = append(shipped, filepath.Base(p))
+		return []string{"s3:bucket/" + filepath.Base(p)}, nil
+	}
+
+	res, err := a.Run(context.Background(), Plan{
+		Node:       a.Node,
+		VolumeRoot: root,
+		Stacks:     []StackPlan{{Name: "moved-away"}, {Name: "horizon-erp"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Stacks) != 2 {
+		t.Fatalf("stacks = %d, want 2", len(res.Stacks))
+	}
+	empty := res.Stacks[0]
+	if empty.Stack != "moved-away" {
+		t.Fatalf("first stack = %q", empty.Stack)
+	}
+	if !empty.Empty || empty.Archive != "" {
+		t.Fatalf("empty stack: empty=%v archive=%q, want empty with no artifact", empty.Empty, empty.Archive)
+	}
+	if !strings.Contains(empty.Detail, "no files under") {
+		t.Errorf("detail does not explain the empty subtree: %q", empty.Detail)
+	}
+	// No artifact on disk and nothing shipped for it.
+	leftover := backups.ArtifactName("moved-away", a.Node, fixedNow())
+	if _, err := os.Stat(filepath.Join(archive, leftover)); !os.IsNotExist(err) {
+		t.Errorf("an artifact was written for an empty stack: %v", err)
+	}
+	for _, name := range shipped {
+		if name == leftover {
+			t.Errorf("the empty stack's artifact was shipped: %s", name)
+		}
+	}
+	// The other stack is unaffected, and the run is still green: an app with no
+	// data is not a failed backup.
+	if res.Stacks[1].Archive == "" || res.Stacks[1].Empty {
+		t.Fatalf("populated stack produced no artifact: %+v", res.Stacks[1])
+	}
+	if !res.Succeeded() {
+		t.Fatalf("run not successful with one empty and one populated stack")
+	}
+	warned := false
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "moved-away") && strings.Contains(w, "no artifact") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("no run-level warning names the stack that produced nothing: %v", res.Warnings)
+	}
+}
+
+func TestDryRunSaysNothingToArchive(t *testing.T) {
+	root, archive := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "moved-away", "moved-away-data"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := newAgent(t, root, archive, &fakeSnap{kind: "lvm"})
+	a.DryRun = true
+	res, err := a.Run(context.Background(), Plan{Node: a.Node, Stacks: []StackPlan{{Name: "moved-away"}}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Stacks) != 1 {
+		t.Fatalf("stacks = %d, want 1", len(res.Stacks))
+	}
+	st := res.Stacks[0]
+	if !st.Empty || st.Archive != "" {
+		t.Fatalf("dry run stack = %+v, want empty with no archive", st)
+	}
+	if !strings.Contains(st.Detail, "would archive nothing") {
+		t.Errorf("dry run detail = %q", st.Detail)
+	}
+}
+
 func TestRunFreezeOrderAndDrop(t *testing.T) {
 	root, archive := t.TempDir(), t.TempDir()
 	seedStack(t, root, "app", true)
