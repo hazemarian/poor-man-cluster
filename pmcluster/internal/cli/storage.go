@@ -116,7 +116,7 @@ removes it, which is the operation the backup agent performs.`,
 			}
 			// Say what was actually checked. "snapshots possible" from the layout
 			// alone was printed on a node whose every hourly lvcreate was failing.
-			fmt.Fprintf(out, "\n✔ volume present: %s is a snapshot-capable volume (layout only — pass --verify to take one now).\n", st.Source)
+			fmt.Fprintf(out, "\n✔ snapshots possible: %s is a snapshot-capable volume (layout only — pass --verify to take one now).\n", st.Source)
 			verify, _ := cmd.Flags().GetBool("verify")
 			if !verify {
 				return nil

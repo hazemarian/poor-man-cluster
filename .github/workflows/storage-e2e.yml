@@ -64,6 +64,11 @@ jobs:
         run: |
           sudo /tmp/pmcluster storage status | tee /tmp/after.txt
           grep -q "snapshots possible" /tmp/after.txt
+          # The line above is a claim about the layout. This one takes a snapshot
+          # and removes it — the operation the backup agent performs, and the only
+          # check that can tell a working pool from a drifted one.
+          sudo /tmp/pmcluster storage status --verify | tee /tmp/verify.txt
+          grep -q "snapshot probe: took and removed" /tmp/verify.txt
           findmnt -no SOURCE,TARGET /var/stack/data
           test "$(findmnt -no SOURCE /var/stack/data)" != "$(findmnt -no SOURCE /)"
           sudo systemctl is-enabled var-stack-data.mount pmcluster-data-loop.service
@@ -101,6 +106,7 @@ jobs:
       - name: "data survived, snapshots still possible"
         run: |
           sudo /tmp/pmcluster storage status | grep -q "snapshots possible"
+          sudo /tmp/pmcluster storage status --verify | grep -q "snapshot probe: took and removed"
           sudo python3 - <<'PY'
           import sqlite3
           con = sqlite3.connect("/var/stack/data/ci-app/app.db")
