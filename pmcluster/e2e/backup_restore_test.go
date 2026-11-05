@@ -125,13 +125,14 @@ func TestBackupRestoreE2E(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker binary not on PATH; skipping backup/restore e2e")
 	}
-	// `backup create` now runs the node agent, which freezes and snapshots the
-	// volume: root, and a volume that is a mount of its own LV. A runner without
-	// either exercises nothing, so say so instead of failing on a permission
-	// error three layers down. The provisioning, mid-write and multi-engine
-	// coverage lives in .github/workflows/storage-e2e.yml.
+	// `backup create` now runs the node agent, which snapshots the volume (one
+	// LVM thin snapshot, nothing frozen): root, and a volume that is a mount of
+	// its own LV. A runner without either exercises nothing, so say so instead of
+	// failing on a permission error three layers down. The provisioning,
+	// mid-write and multi-engine coverage lives in
+	// .github/workflows/storage-e2e.yml.
 	if os.Geteuid() != 0 {
-		t.Skip("backup create needs root (fsfreeze, lvcreate); skipping")
+		t.Skip("backup create needs root (lvcreate, mount); skipping")
 	}
 	if st, err := exec.CommandContext(context.Background(), "pmcluster", "storage", "status").CombinedOutput(); err != nil || !strings.Contains(string(st), "snapshots possible") {
 		t.Skipf("this runner has no snapshot-capable volume (%s); see .github/workflows/storage-e2e.yml for the coverage that does run", strings.TrimSpace(string(st)))

@@ -398,6 +398,7 @@ var clusterSettingKeys = []string{
 	"volume_root",
 	"backup_enabled",
 	"backup_cron",
+	"backup_retention_days",
 	"backup_all_nodes",
 	"sso_enabled",
 	"sso_provider",
@@ -488,6 +489,19 @@ func (c Settings) ClusterSettingsSave(g *gin.Context) {
 			}
 		}
 		settings[k] = v
+	}
+	// Retention is the one numeric field on this form, and it decides how much
+	// history survives a prune: a typo here that reached the store would either
+	// stop pruning (a filled bucket, then failed uploads) or delete history.
+	// Empty means "use the default", which is a legitimate choice; anything
+	// else has to be a positive whole number.
+	if v := strings.TrimSpace(settings["backup_retention_days"]); v != "" {
+		if n, err := strconv.Atoi(v); err != nil || n < 1 {
+			d.ErrKey, d.ErrRaw = "settings.err_backup_retention", v
+			d.Settings, d.HasClientSecret = maskClusterSettings(settings)
+			c.Views.Fragment(g, "clustersettings", d)
+			return
+		}
 	}
 	// The password field is left empty when the operator didn't change the
 	// secret — omit it so the stored secret is preserved.

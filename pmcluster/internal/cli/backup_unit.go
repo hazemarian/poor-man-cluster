@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
@@ -18,8 +19,8 @@ import (
 //
 // Two reasons, both learned from the offen agent it replaces. A Swarm task can
 // be rescheduled mid-run, which strands a half-written snapshot and drops the
-// only record of what happened; and the work itself needs root — fsfreeze,
-// lvcreate, mount — while the daemon deliberately runs as the operator user.
+// only record of what happened; and the work itself needs root — lvcreate,
+// mount — while the daemon deliberately runs as the operator user.
 // So the privileged body is a one-shot unit and the daemon, which already
 // writes its own unit, writes this one too. No new install path, no second
 // daemon, and systemd — not the daemon — owns the schedule, so a restarting
@@ -68,6 +69,9 @@ func writeBackupPolicyFile() error {
 	pol.S3.Region = envOr("PMCLUSTER_BACKUP_S3_REGION", "")
 	pol.S3.AccessKey = envOr("PMCLUSTER_BACKUP_S3_ACCESS_KEY", "")
 	pol.S3.SecretKey = envOr("PMCLUSTER_BACKUP_S3_SECRET_KEY", "")
+	if days, err := strconv.Atoi(strings.TrimSpace(envOr("PMCLUSTER_BACKUP_RETENTION_DAYS", ""))); err == nil && days > 0 {
+		pol.RetentionDays = days
+	}
 	// Whatever the environment does not say, the control plane says. The offsite
 	// target especially: it is a cluster setting the operator edits from the
 	// console, and reading it only from env meant a node whose environment lacked
@@ -81,6 +85,13 @@ func writeBackupPolicyFile() error {
 		}
 		if pol.Store == "" {
 			pol.Store = st.SettingDefault(ctx, cluster.SettingBackupStoreOn(), "")
+		}
+		// Retention belongs with the ship target: both are the answer to "how
+		// much history does this cluster pay for". It used to stop at the
+		// setting, so backup_retention_days was editable, accepted by the API,
+		// and read by nothing — every node pruned at the flag default instead.
+		if pol.RetentionDays == 0 {
+			pol.RetentionDays = cluster.LoadBackupRetentionDays(ctx, st)
 		}
 		for _, f := range []struct {
 			dst *string
@@ -231,8 +242,8 @@ StartLimitBurst=2
 
 [Service]
 Type=oneshot
-# Root is required: fsfreeze, lvcreate, mount and umount. The daemon runs as
-# the operator user and triggers this unit through systemd instead.
+# Root is required: lvcreate, mount and umount. The daemon runs as the operator
+# user and triggers this unit through systemd instead.
 User=root
 Environment=PMCLUSTER_VOLUME_ROOT=%s
 Environment=PMCLUSTER_BACKUP_DIR=%s
@@ -242,10 +253,11 @@ Environment=PMCLUSTER_BACKUP_STATE=%s
 # worse than no snapshot).
 Environment=PMCLUSTER_BACKUP_VG=%s
 Environment=PMCLUSTER_BACKUP_LV=%s
-# Where to ship artifacts (the in-cluster store's WebDAV gateway, reached on
-# this node's own loopback because the published port is on the routing mesh).
-# Credentials live in this 0600 file, never in the unit text: the unit is world
-# readable and a backup store password does not belong in it.
+# Where to ship artifacts, and how long to keep them: the in-cluster store and
+# the offsite bucket are both plain S3 targets now (endpoint, bucket, region,
+# key, secret), written into this 0600 file by the installer. Credentials live
+# here, never in the unit text: the unit is world-readable, and a backup store
+# password does not belong in it.
 EnvironmentFile=-%s
 ExecStart=%s backup-agent run
 # The snapshot copy is I/O heavy and must never win a fight with an app.

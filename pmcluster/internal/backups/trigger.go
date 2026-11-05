@@ -77,13 +77,13 @@ func RecordOutcome(ctx context.Context, kind, status string) {
 
 // Triggering a backup used to mean `docker exec` into the offen agent
 // container. That agent is gone: stack data is archived by the node-local
-// systemd unit (pmcluster-backup.timer), which freezes and snapshots the volume,
-// writes one artifact per stack, verifies them, ships them to the store, and
-// prunes by retention.
+// systemd unit (pmcluster-backup.timer), which snapshots the volume (one thin
+// metadata operation — nothing is frozen), writes one artifact per stack,
+// verifies them, ships them to the store, and prunes by retention.
 //
-// So a trigger is now "run that unit". The part worth stating: freezing a
-// filesystem and creating a snapshot need root, so this refuses with the exact
-// command to run instead of pretending a request was queued.
+// So a trigger is now "run that unit". The part worth stating: creating and
+// mounting a snapshot needs root, so this refuses with the exact command to run
+// instead of pretending a request was queued.
 
 // Result carries the agent's output plus the artifact paths parsed out of it.
 type Result struct {

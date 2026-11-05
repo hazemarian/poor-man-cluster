@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
@@ -29,6 +30,14 @@ type backupPolicy struct {
 	Cron    string   `json:"cron"`
 	Store   string   `json:"store"`
 	S3      policyS3 `json:"s3"`
+	// RetentionDays is the sparse window: beyond the dense 48 hours, one
+	// artifact per calendar day is kept until this age. It mirrors the
+	// backup_retention_days setting, because the agent has no endpoint to ask
+	// and the promise "configurable from the console" is only true if the
+	// number the operator typed reaches the node. Zero means "unset", and the
+	// agent then falls back to the setting (on a node with a store) and to
+	// backups.DefaultRetention.
+	RetentionDays int `json:"retention_days,omitempty"`
 	// StoreS3 is the in-cluster store as an S3 target. It used to be a WebDAV URL
 	// with the credentials embedded in it; now it is the same five fields as any
 	// other destination, so one code path ships to both.
@@ -91,6 +100,53 @@ func decisionFromPolicy(pol backupPolicy, now time.Time) cluster.BackupDecision 
 		d.Reason = "schedule " + d.Schedule + " does not match " + now.Format("15:04")
 	}
 	return d
+}
+
+// localRetentionPolicy answers "how long does this node keep artifacts?".
+//
+// The chain is the one the schedule and the ship targets already follow, and for
+// the same reason: the agent runs as root with no endpoint, so a cluster setting
+// reaches it through the policy file the installer wrote, and a node that never
+// ran the installer still has its own copy of the store. Order is policy file,
+// setting, default — the file is the installer's snapshot of the setting and so
+// wins; the store is the live truth when the file is absent or predates it.
+//
+// KeepHours is deliberately not configurable: 48 dense hours is what "restore
+// the state from before this morning's deploy" needs, and every artifact inside
+// it is the cheap kind of history to keep. Only the sparse tail is a policy
+// decision, which is exactly what backup_retention_days names.
+func localRetentionPolicy(ctx context.Context) backups.Retention {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if pol, ok := readBackupPolicy(backupPolicyFile); ok {
+		if policy, said := retentionFromPolicy(pol); said {
+			return policy
+		}
+	}
+	policy := backups.DefaultRetention()
+	if st, _, err := openStore(); err == nil {
+		if days := cluster.LoadBackupRetentionDays(ctx, st); days > 0 {
+			policy.KeepDays = days
+		}
+		_ = st.Close()
+	}
+	return policy
+}
+
+// retentionFromPolicy maps a node policy onto the retention policy, and reports
+// whether the policy said anything about retention at all.
+//
+// A policy file written before backup_retention_days reached the installer has
+// no retention_days field, and that is not the same statement as "keep nothing":
+// it means "unknown", so the caller keeps looking.
+func retentionFromPolicy(pol backupPolicy) (backups.Retention, bool) {
+	policy := backups.DefaultRetention()
+	if pol.RetentionDays <= 0 {
+		return policy, false
+	}
+	policy.KeepDays = pol.RetentionDays
+	return policy, true
 }
 
 func isOff(v string) bool {

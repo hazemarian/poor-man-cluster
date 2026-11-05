@@ -89,6 +89,8 @@ func init() {
 		"clustersettings.backup_enabled_hint":            "The hourly timer only asks whether a run is due. The schedule below decides. Turning this off leaves the timer firing and doing nothing.",
 		"clustersettings.backup_cron":                    "When to run (5-field cron)",
 		"clustersettings.backup_cron_hint":               "For example 0 * * * * hourly, or 0 2 * * * at 02:00. Steps and ranges are refused. Do not edit the systemd timer: it is a heartbeat, not the schedule.",
+		"clustersettings.backup_retention_days":          "Keep backups for (days)",
+		"clustersettings.backup_retention_days_hint":     "Everything from the last 48 hours is kept hour by hour, then one backup per day until this age. Default 3. Each node reads this on its next run; longer windows cost bucket space on every stack.",
 		"clustersettings.sect_sso":                       "Single sign-on",
 		"clustersettings.sect_sso_sub":                   "Leave it off to keep the daemon's own login. Turning it on hands sign-in to the provider below.",
 		"clustersettings.sso_enabled":                    "Enable single sign-on",

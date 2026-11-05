@@ -26,8 +26,12 @@ var backupCmd = &cobra.Command{
 	Use:   "backup",
 	Short: "Trigger, inspect and prune the node's snapshot backups",
 	Long: `Stack data is archived by the node-local agent (pmcluster-backup.timer):
-it freezes and snapshots the volume, writes one verified artifact per stack,
-ships them to the in-cluster store, and keeps 15 days of history.
+it takes one LVM thin snapshot of the volume (a metadata operation, not a
+freeze — the copy is mounted read-write so each filesystem's journal replays and
+the databases recover on their own), writes one verified artifact per stack,
+ships them to the in-cluster store and the offsite bucket, and keeps 48 hours
+hour-by-hour plus one artifact per day to the end of backup_retention_days
+(three days by default).
 
   pmcluster backup list       what exists, per stack
   pmcluster backup restore    put a stack's artifact back
@@ -117,9 +121,11 @@ var backupPruneCmd = &cobra.Command{
 	Short: "Apply retention to this node's archive directory",
 	Long: `Delete artifacts outside the retention policy.
 
-The policy is 48 hours dense and 15 days sparse by default: every hourly artifact
-is kept for two days, then one per day for the rest. The newest copies of a stack
-are never deleted, and whole-node archives produced by the previous agent
+The policy is 48 hours dense and backup_retention_days sparse (three days by
+default): every hourly artifact is kept for two days, then one per day for the
+rest. This is the same policy the hourly agent applies — the flags exist to
+override it for one run, not to define it. The newest copies of a stack are
+never deleted, and whole-node archives produced by the previous agent
 (offen/docker-volume-backup) are left alone unless --legacy is passed — on a
 fleet mid-cutover those are the only backups that exist.
 
@@ -130,11 +136,23 @@ fleet mid-cutover those are the only backups that exist.
 		out := cmd.OutOrStdout()
 		dir, _ := cmd.Flags().GetString("dir")
 		dryRun, _ := cmd.Flags().GetBool("dry-run")
-		policy := backups.DefaultRetention()
-		policy.KeepHours, _ = cmd.Flags().GetInt("keep-hours")
-		policy.KeepDays, _ = cmd.Flags().GetInt("keep-days")
-		policy.KeepLast, _ = cmd.Flags().GetInt("keep-last")
-		policy.IncludeLegacy, _ = cmd.Flags().GetBool("legacy")
+		// The same resolution the hourly agent uses, so an operator pruning by
+		// hand cannot delete history the agent was told to keep (or keep what it
+		// would have deleted). The flags override it for this run only.
+		policy := localRetentionPolicy(cmd.Context())
+		flags := cmd.Flags()
+		if flags.Changed("keep-hours") {
+			policy.KeepHours, _ = flags.GetInt("keep-hours")
+		}
+		if flags.Changed("keep-days") {
+			policy.KeepDays, _ = flags.GetInt("keep-days")
+		}
+		if flags.Changed("keep-last") {
+			policy.KeepLast, _ = flags.GetInt("keep-last")
+		}
+		if flags.Changed("legacy") {
+			policy.IncludeLegacy, _ = flags.GetBool("legacy")
+		}
 
 		res, err := backups.PruneArtifacts(dir, policy, time.Now().UTC(), dryRun)
 		if err != nil {
@@ -164,8 +182,8 @@ func init() {
 	backupCreateCmd.Flags().String("stack", "", "back up only this stack, now (bypasses the schedule)")
 	backupPruneCmd.Flags().String("dir", backups.DefaultArchiveDir, "archive directory to prune")
 	backupPruneCmd.Flags().Bool("dry-run", false, "report what would be deleted without deleting")
-	backupPruneCmd.Flags().Int("keep-hours", 48, "keep every artifact newer than this many hours")
-	backupPruneCmd.Flags().Int("keep-days", 15, "keep one artifact per day until this age in days")
+	backupPruneCmd.Flags().Int("keep-hours", 0, "override the dense window (default 48 hours)")
+	backupPruneCmd.Flags().Int("keep-days", 0, "override the sparse window (default: backup_retention_days, else 3 days)")
 	backupPruneCmd.Flags().Int("keep-last", 2, "never delete the newest N artifacts of a stack")
 	backupPruneCmd.Flags().Bool("legacy", false, "also prune whole-node archives from the previous agent")
 	backupCreateCmd.Flags().Duration("timeout", 5*time.Minute, "max time to wait for the backup to finish")

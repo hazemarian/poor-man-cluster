@@ -45,7 +45,6 @@ var (
 	agentLV         string
 	agentSnapDir    string
 	agentDryRun     bool
-	agentShipWebDAV string
 	agentDrillWorkD string
 )
 
@@ -55,9 +54,11 @@ var backupAgentCmd = &cobra.Command{
 	Long: `Take one consistent, per-stack backup of this node's volume root.
 
 This is the host-side half of the backup pipeline. It runs on the node that
-holds the data, freezes the filesystem for milliseconds, takes a single LVM
-thin snapshot, and writes one archive per stack from the frozen image — so no
-database is ever read while it is being written.
+holds the data, takes a single LVM thin snapshot (a metadata operation, ~200 ms;
+nothing is frozen), mounts the copy read-write so each filesystem's journal
+replays, and writes one archive per stack from that copy — so no database is
+ever read while it is being written, and every artifact is crash-consistent
+rather than torn.
 
 It is not a Swarm service on purpose: a task cannot hold the freeze/thaw
 sequence safely, and it can be rescheduled mid-run. The unit that drives it is
@@ -94,22 +95,20 @@ func init() {
 	backupAgentRunCmd.Flags().StringVar(&agentVG, "vg", envOr("PMCLUSTER_BACKUP_VG", ""), "volume group holding the volume root (lvm only)")
 	backupAgentRunCmd.Flags().StringVar(&agentLV, "lv", envOr("PMCLUSTER_BACKUP_LV", ""), "logical volume holding the volume root (lvm only)")
 	backupAgentRunCmd.Flags().StringVar(&agentSnapDir, "snap-dir", "/run/pmcluster-backup/snap", "mount point for the read-only snapshot")
-	backupAgentRunCmd.Flags().IntVar(&agentKeepHours, "keep-hours", 48, "keep every artifact newer than this many hours (0 disables pruning)")
-	backupAgentRunCmd.Flags().IntVar(&agentKeepDays, "keep-days", 15, "keep one artifact per day until this age in days")
+	backupAgentRunCmd.Flags().IntVar(&agentKeepHours, "keep-hours", 0, "override the dense window (default 48 hours; 0 keeps one per day from the start)")
+	backupAgentRunCmd.Flags().IntVar(&agentKeepDays, "keep-days", 0, "override the sparse window (default: backup_retention_days, else 3 days)")
 	backupAgentRunCmd.Flags().IntVar(&agentKeepLast, "keep-last", 2, "never delete the newest N artifacts of a stack")
 	backupAgentRunCmd.Flags().BoolVar(&agentKeepLegacy, "prune-legacy", false, "also prune whole-node archives (the previous producer's output)")
 	backupAgentRunCmd.Flags().StringVar(&agentOnlyStack, "only-stack", "", "archive just this stack (operator or console asking for one stack)")
 	backupAgentRunCmd.Flags().BoolVar(&agentForce, "force", false, "run now, ignoring the control plane's schedule decision")
 	backupAgentRunCmd.Flags().BoolVar(&agentDryRun, "dry-run", false, "report what would be archived without freezing, snapshotting or writing")
-	backupAgentRunCmd.Flags().StringVar(&agentShipWebDAV, "ship-webdav", envOr("PMCLUSTER_BACKUP_WEBDAV", ""),
-		"WebDAV URL to copy each artifact to after verification (the in-cluster store)")
 	backupAgentDrillCmd.Flags().StringVar(&agentDrillWorkD, "work-dir", "", "scratch directory (default: a temp dir)")
 	backupAgentInstallCmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install and enable the hourly root oneshot on this node",
 		Long: `Install the systemd service + timer that run the agent every hour.
 
-Needs root (the unit runs fsfreeze, lvcreate, mount). Opt-in rather than
+Needs root (the unit runs lvcreate, mount, umount). Opt-in rather than
 automatic: the two producers write different archives, and a node must not run
 both against the same data by accident — watch an hour of per-stack artifacts
 before retiring that node's volume-backup agent.`,
@@ -231,11 +230,24 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("unknown --snapshot %q (want lvm or none)", agentSnapshot)
 	}
 
-	policy := backups.DefaultRetention()
-	if agentKeepHours > 0 {
+	// Retention comes from the node's policy file (which carries
+	// backup_retention_days), falling back to the setting and then to the 48h/3d
+	// default. A flag overrides it only when the operator actually passed one:
+	// deciding on the flag VALUES let their defaults overwrite the cluster
+	// setting, so a cluster configured for three days pruned at fifteen and the
+	// setting read as decoration.
+	policy := localRetentionPolicy(ctx)
+	flags := cmd.Flags()
+	if flags.Changed("keep-hours") {
 		policy.KeepHours = agentKeepHours
+	}
+	if flags.Changed("keep-days") {
 		policy.KeepDays = agentKeepDays
+	}
+	if flags.Changed("keep-last") {
 		policy.KeepLast = agentKeepLast
+	}
+	if flags.Changed("prune-legacy") {
 		policy.IncludeLegacy = agentKeepLegacy
 	}
 	retention := &policy
@@ -421,8 +433,6 @@ func runBackupAgentDrill(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// webdavShipper copies an artifact to the in-cluster store. It is a thin
-// wrapper so the agent stays unaware of the transport.
 // localBackupDecision answers "should this hour run?" from the node's own copy
 // of the control-plane store.
 //

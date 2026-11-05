@@ -423,7 +423,14 @@ func loadBackupStoreOn(ctx context.Context, st *store.Store) string {
 
 // defaultBackupRetentionDays is how many days backup audit rows + archives
 // are kept before pmcluster prunes them.
-const defaultBackupRetentionDays = 15
+//
+// Three, matching backups.DefaultRetention and the value the setup wizard
+// offers, because a fallback that disagrees with the documented default is a
+// silent policy: a cluster whose operator never opened the setting kept a
+// fortnight of artifacts while every surface said three days. The dense 48
+// hours inside those three days is not affected — this number only governs the
+// sparse tail.
+const defaultBackupRetentionDays = 3
 
 // LoadBackupRetentionDays returns the persisted backup retention window in
 // days, falling back to defaultBackupRetentionDays when unset or unparseable.
