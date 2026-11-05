@@ -425,6 +425,34 @@ func (l *Local) localArchive(p string) string {
 	return p
 }
 
+// restoreTempDir is where a fetched archive is staged while it is extracted.
+//
+// Not os.TempDir() by default: /tmp is a tmpfs on the reference hosts, which
+// means RAM. Fetching a backup there caps restore at roughly "as big as the
+// node's free memory" — a 900 MB artifact cannot be restored on a 1839 MB node
+// even though its disk has 40 GB free — and the copy competes with the very
+// pages the extractor is about to dirty. The archive dir is on disk, is where
+// artifacts live anyway, and is the same filesystem the volumes usually sit on.
+//
+// The staging file lives in a dot SUBDIRECTORY of it, never beside the
+// artifacts: archive discovery walks the archive dir for *.tar.gz and would
+// otherwise index a half-written temp file as a backup. PMCLUSTER_RESTORE_TMPDIR
+// overrides the base; "" falls back to os.CreateTemp's own default.
+func (l *Local) restoreTempDir() string {
+	if d := os.Getenv("PMCLUSTER_RESTORE_TMPDIR"); d != "" {
+		return d
+	}
+	if l.ArchiveDir != "" {
+		if fi, err := os.Stat(l.ArchiveDir); err == nil && fi.IsDir() {
+			stage := filepath.Join(l.ArchiveDir, ".restore-tmp")
+			if err := os.MkdirAll(stage, 0o700); err == nil {
+				return stage
+			}
+		}
+	}
+	return ""
+}
+
 // restoreSource resolves where an archive's bytes come from: the local file
 // (default), or a fetch from the configured offsite S3 store when the local
 // copy is gone or --from-s3 is explicit. The returned cleanup removes any
@@ -444,7 +472,7 @@ func (l *Local) restoreSource(ctx context.Context, p string, opts RestoreOptions
 		return "", func() {}, fmt.Errorf("archive %s not found locally and no offsite S3 is configured — restore on the node that holds %s, or configure backup_s3_* settings to fetch it", p, l.ArchiveDir)
 	}
 
-	tmp, err := os.CreateTemp("", "pmcluster-restore-*.tar.gz")
+	tmp, err := os.CreateTemp(l.restoreTempDir(), "pmcluster-restore-*.tar.gz")
 	if err != nil {
 		return "", func() {}, fmt.Errorf("temp file for s3 fetch: %w", err)
 	}

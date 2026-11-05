@@ -167,6 +167,31 @@ func TestFetchS3ObjectRefusesATruncatedBody(t *testing.T) {
 	}
 }
 
+// A fetched archive must not be staged in a RAM-backed /tmp: the staging dir is
+// the archive dir (disk) unless explicitly overridden.
+func TestRestoreTempDirPrefersTheArchiveDir(t *testing.T) {
+	dir := t.TempDir()
+	svc := &Local{ArchiveDir: dir}
+	if got, want := svc.restoreTempDir(), filepath.Join(dir, ".restore-tmp"); got != want {
+		t.Fatalf("restoreTempDir = %q, want the staging subdir %q", got, want)
+	}
+	if fi, err := os.Stat(svc.restoreTempDir()); err != nil || !fi.IsDir() {
+		t.Fatalf("staging dir was not created: %v", err)
+	}
+
+	override := t.TempDir()
+	t.Setenv("PMCLUSTER_RESTORE_TMPDIR", override)
+	if got := svc.restoreTempDir(); got != override {
+		t.Fatalf("restoreTempDir = %q, want the override %q", got, override)
+	}
+
+	empty := &Local{ArchiveDir: filepath.Join(dir, "does-not-exist")}
+	t.Setenv("PMCLUSTER_RESTORE_TMPDIR", "")
+	if got := empty.restoreTempDir(); got != "" {
+		t.Fatalf("restoreTempDir = %q, want the os default when the archive dir is absent", got)
+	}
+}
+
 // A snapshot that captured an empty volume must say exactly that — not blame
 // the restore scope, which sends the operator looking for a filter bug.
 func TestRestoreEmptySnapshotSaysTheVolumeWasEmpty(t *testing.T) {
