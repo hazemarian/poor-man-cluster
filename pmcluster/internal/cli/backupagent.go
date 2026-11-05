@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -230,15 +231,14 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("unknown --snapshot %q (want lvm or none)", agentSnapshot)
 	}
 
-	var retention *backups.Retention
+	policy := backups.DefaultRetention()
 	if agentKeepHours > 0 {
-		policy := backups.DefaultRetention()
 		policy.KeepHours = agentKeepHours
 		policy.KeepDays = agentKeepDays
 		policy.KeepLast = agentKeepLast
 		policy.IncludeLegacy = agentKeepLegacy
-		retention = &policy
 	}
+	retention := &policy
 	a := &backupagent.Agent{
 		Retention:  retention,
 		Node:       node,
@@ -315,6 +315,12 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintf(cmd.ErrOrStderr(),
 			"warning: %d director%s under %s %s not in the plan and %s NOT archived: %v\n",
 			len(unplanned), plural(len(unplanned), "y", "ies"), root, verb, aux, unplanned)
+	}
+	// The store and the bucket are pruned on the same policy as the node. Nothing
+	// used to delete from either: an upload loop with no delete grows without
+	// limit until the bucket is full and every upload starts failing.
+	if !agentDryRun {
+		pruneRemoteLegs(ctx, out, policy)
 	}
 	if runErr != nil {
 		return runErr
@@ -457,6 +463,32 @@ func localBackupDecision(ctx context.Context) (cluster.BackupDecision, error) {
 // on disk and the run records where. Returning nil means "local only", which the
 // agent reports as such rather than as a failure.
 func shipTargetsFromEnv() func(context.Context, string) ([]string, error) {
+	webdav, s3 := backupShipTargets()
+	if webdav == "" && !s3.Configured() {
+		return nil
+	}
+	return func(ctx context.Context, archivePath string) ([]string, error) {
+		name := filepath.Base(archivePath)
+		var where []string
+		if webdav != "" {
+			if err := backups.PutWebDAV(ctx, webdav, archivePath); err != nil {
+				return where, err
+			}
+			where = append(where, "store:"+name)
+		}
+		if s3.Configured() {
+			if err := backups.PutS3Object(ctx, s3, name, archivePath); err != nil {
+				return where, err
+			}
+			where = append(where, "s3:"+s3.Bucket+"/"+name)
+		}
+		return where, nil
+	}
+}
+
+// backupShipTargets resolves where artifacts go: the policy file when it exists
+// (written by the installer from cluster settings), else the environment.
+func backupShipTargets() (string, backups.S3Config) {
 	webdav := agentShipWebDAV
 	s3 := backups.S3Config{
 		Endpoint:  envOr("PMCLUSTER_BACKUP_S3_ENDPOINT", ""),
@@ -481,24 +513,33 @@ func shipTargetsFromEnv() func(context.Context, string) ([]string, error) {
 			}
 		}
 	}
-	if webdav == "" && !s3.Configured() {
-		return nil
+	return webdav, s3
+}
+
+// pruneRemoteLegs applies retention to the store and the offsite bucket.
+//
+// Failures are reported, never fatal: a store that is down must not turn a
+// successful backup into a failed one. What it must not do is pass silently for
+// months while the bucket fills.
+func pruneRemoteLegs(ctx context.Context, out io.Writer, policy backups.Retention) {
+	webdav, s3 := backupShipTargets()
+	now := time.Now()
+	if webdav != "" {
+		res, err := backups.PruneStore(ctx, webdav, policy, now, false)
+		switch {
+		case err != nil:
+			fmt.Fprintf(out, "store retention skipped: %v\n", err)
+		case len(res.Deleted) > 0 || len(res.Failed) > 0:
+			fmt.Fprintf(out, "store retention: deleted %d, kept %d, failed %d\n", len(res.Deleted), res.Kept, len(res.Failed))
+		}
 	}
-	return func(ctx context.Context, archivePath string) ([]string, error) {
-		name := filepath.Base(archivePath)
-		var where []string
-		if webdav != "" {
-			if err := backups.PutWebDAV(ctx, webdav, archivePath); err != nil {
-				return where, err
-			}
-			where = append(where, "store:"+name)
+	if s3.Configured() {
+		res, err := backups.PruneS3(ctx, s3, policy, now, false)
+		switch {
+		case err != nil:
+			fmt.Fprintf(out, "offsite retention skipped: %v\n", err)
+		case len(res.Deleted) > 0 || len(res.Failed) > 0:
+			fmt.Fprintf(out, "offsite retention: deleted %d, kept %d, failed %d\n", len(res.Deleted), res.Kept, len(res.Failed))
 		}
-		if s3.Configured() {
-			if err := backups.PutS3Object(ctx, s3, name, archivePath); err != nil {
-				return where, err
-			}
-			where = append(where, "s3:"+s3.Bucket+"/"+name)
-		}
-		return where, nil
 	}
 }

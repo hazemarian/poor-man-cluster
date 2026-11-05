@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -73,61 +72,36 @@ func PruneArtifacts(dir string, policy Retention, now time.Time, dryRun bool) (P
 		return res, fmt.Errorf("read %s: %w", dir, err)
 	}
 
-	byStack := map[string][]Artifact{}
+	var names []string
 	for _, e := range entries {
 		if e.IsDir() || strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		art, ok := ParseArtifact(e.Name())
-		if !ok {
-			continue
-		}
-		if art.Stack == "" && !policy.IncludeLegacy {
-			res.SkippedOld++
-			continue
-		}
-		// Grouped by node AND stack: legacy whole-node archives have no stack, and
-		// grouping them under "" would let one node's presence keep another node's
-		// only archive alive (or vice versa).
-		byStack[art.Node+"/"+art.Stack] = append(byStack[art.Node+"/"+art.Stack], art)
+		names = append(names, e.Name())
 	}
+	byStack, skipped := groupArtifacts(names, policy)
+	res.SkippedOld = skipped
 
-	for _, arts := range byStack {
-		sort.Slice(arts, func(i, j int) bool { return arts[i].At.After(arts[j].At) })
-		newestPerDay := map[string]Artifact{}
-		for _, a := range arts {
-			day := a.At.Format("2006-01-02")
-			if _, seen := newestPerDay[day]; !seen {
-				newestPerDay[day] = a
+	del, kept := planPrune(byStack, policy, now)
+	res.Kept = kept
+	for _, a := range del {
+		// A dry run must not call the delete path at all: doing the work and
+		// reporting it as hypothetical is how "dry run" deletes data.
+		if dryRun {
+			if fi, statErr := os.Stat(filepath.Join(dir, a.Name)); statErr == nil {
+				res.FreedBytes += fi.Size()
 			}
+			res.Deleted = append(res.Deleted, a.Name+" (would delete)")
+			continue
 		}
-		for i, a := range arts {
-			if i < policy.KeepLast {
-				res.Kept++
-				continue
-			}
-			if !shouldDelete(a.At, policy, now, newestPerDay[a.At.Format("2006-01-02")].Name == a.Name) {
-				res.Kept++
-				continue
-			}
-			// A dry run must not call the delete path at all: doing the work and
-			// reporting it as hypothetical is how "dry run" deletes data.
-			if dryRun {
-				if fi, statErr := os.Stat(filepath.Join(dir, a.Name)); statErr == nil {
-					res.FreedBytes += fi.Size()
-				}
-				res.Deleted = append(res.Deleted, a.Name+" (would delete)")
-				continue
-			}
-			size, _, err := removeArtifact(dir, a.Name)
-			if err != nil {
-				res.Failed = append(res.Failed, a.Name+": "+err.Error())
-				res.Kept++
-				continue
-			}
-			res.Deleted = append(res.Deleted, a.Name)
-			res.FreedBytes += size
+		size, _, err := removeArtifact(dir, a.Name)
+		if err != nil {
+			res.Failed = append(res.Failed, a.Name+": "+err.Error())
+			res.Kept++
+			continue
 		}
+		res.Deleted = append(res.Deleted, a.Name)
+		res.FreedBytes += size
 	}
 	return res, nil
 }

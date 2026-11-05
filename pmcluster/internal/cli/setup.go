@@ -502,6 +502,12 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	} else {
 		fmt.Fprintf(out, "⚠ app-data volume not provisioned: %v\n", err)
 	}
+	// A small node with no swap loses its swarm membership rather than admitting
+	// it is out of memory: kswapd spins, dockerd cannot answer, the node is marked
+	// Down while every container on it is still running.
+	if err := ensureSwap(out); err != nil {
+		fmt.Fprintf(out, "  (swap: %v)\n", err)
+	}
 
 	in := cluster.UpInput{}
 	in.Version = buildinfo.Version
