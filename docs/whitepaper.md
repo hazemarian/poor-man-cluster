@@ -277,7 +277,7 @@ replaces: entries under the restored scope that the snapshot did not hold are re
 volume returns as the snapshot captured it rather than as a merge of two points in time — the scope comes
 from the snapshot, so an app deployed after the backup is untouched. `cluster down --purge` writes a restorable `purge-backup-<ts>.tar.gz` first, and `cluster reset --restore <archive>` extracts it before rebuilding the Swarm side from the DB.
 
-Sources: pmcluster/internal/cluster/embeds/backup-stack.yml; pmcluster/internal/stacks/move_store.go; pmcluster/internal/backups/.
+Sources: [docs/backup.md](backup.md); pmcluster/internal/cluster/embeds/backup-stack.yml; pmcluster/internal/stacks/move_store.go; pmcluster/internal/backups/.
 
 ## 11. Control-plane survivability
 

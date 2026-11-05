@@ -50,7 +50,7 @@ flowchart TD
 - **Firewall:** only 22 (SSH), 80, 443 open to the internet; nothing else.
 - **Good for:** the majority of deployments (a handful of apps on one box).
 - **Downtime if the node dies:** full — recovery = restore backups on a fresh
-  node (see `pmcluster/docs/restore-design.md`). This is the accepted poor-man
+  node (see [`backup.md`](backup.md)). This is the accepted poor-man
   trade-off.
 
 ### Option B — multi-node, one serving node (leader + workers)
@@ -135,13 +135,13 @@ surviving managers' Traefik instances are already running and keep serving.
 - **DNS:** one `A` record → the LB IP (or a DNS-failover record).
 - **Requires, in order:** (1) 3+ managers (quorum 2/3 so the swarm survives a
   loss), (2) the data story — pinned stateful stacks plus tested
-  backup/restore (see `storage-and-databases.md`), (3) Traefik on every
+  backup/restore (see [`backup.md`](backup.md)), (3) Traefik on every
   **manager** (the default global manager placement does this), (4) the
   LB/DNS in front — terminating TLS itself or fronting a BYO-cert cluster
   (see the limitation above).
 - **An LB alone does NOT give you HA** — it only redirects to whatever is
   actually running. Without steps 1–2 it will happily route users to a healthy
-  node that has no copy of their data (see `storage-and-databases.md`).
+  node that has no copy of their data (see [`storage-and-databases.md`](storage-and-databases.md)).
 
 ### Option D — tailnet (Tailscale) instead of opening cluster ports
 Joining nodes with `pmcluster join --tailscale` puts node-to-node traffic on a
@@ -291,7 +291,7 @@ same IP works if your DNS provider supports it.
 Keep the single `A` record. When the serving node dies:
 
 1. (If a standby manager exists) promote/restore — or restore app data on a
-   fresh node from your backups (see `pmcluster/docs/restore-design.md`).
+   fresh node from your backups (see [`backup.md`](backup.md)).
 2. Edit the `A` record(s) to the survivor's public IP.
 3. Update the record for **every** domain (or use a wildcard).
 

@@ -131,7 +131,7 @@ repo root (this dir)
     ├── cmd/edge/main.go       # edge console+proxy binary entrypoint
     ├── migrations/            # SQL migrations 0001..0025 (schema_version-tracked)
     ├── e2e/                   # swarm e2e tests (//go:build e2e)
-    ├── docs/                  # openapi.yaml, service-ops-design.md, restore-design.md,
+    ├── docs/                  # openapi.yaml, service-ops-design.md,
     │                          # console-i18n-contract.md, redesign/ (concept mockups)
     └── internal/              # all packages (§5)
 ```

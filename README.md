@@ -175,7 +175,7 @@ pmcluster cluster reset --restore <archive>   # rebuild the swarm side from that
 
 ## Where to go next
 
-The full doc map lives at **[docs/README.md](docs/README.md)** — the DSL reference, webhook guide, secrets/configs, TLS, settings, console tour, storage & databases, network topology, security posture, test reports (TC1–TC10), and the whitepaper. The design rationale (why, what was rejected) is in **[docs/whitepaper.md](docs/whitepaper.md)**.
+The full doc map lives at **[docs/README.md](docs/README.md)** — the DSL reference, webhook guide, secrets/configs, TLS, settings, console tour, storage & databases, [backups and restore](docs/backup.md), network topology, security posture, test reports (TC1–TC10), and the whitepaper. The design rationale (why, what was rejected) is in **[docs/whitepaper.md](docs/whitepaper.md)**.
 
 ## License
 

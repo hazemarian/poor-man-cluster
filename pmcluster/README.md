@@ -176,7 +176,7 @@ pkg/dsl/               public DSL types
 migrations/            *.sql, embedded via //go:embed
 e2e/                   end-to-end tests (cluster up, deploy, webhook, edge, otel)
 hack/                  dev utilities
-docs/                  openapi.yaml (REST API spec), restore-design.md,
+docs/                  openapi.yaml (REST API spec),
                        service-ops-design.md, console-i18n-contract.md
 ```
 
@@ -230,7 +230,7 @@ stack (Traefik labels, networks, secrets, restart/update policies included).
 - [Webhook integration guide](../docs/webhook.md)
 - [Storage & database architecture guide](../docs/storage-and-databases.md)
 - [REST API spec](docs/openapi.yaml)
-- [Restore — shipped design & open gaps](docs/restore-design.md)
+- [Backups and restore](../docs/backup.md) — the one chapter: run, artifact, retention, restore, open questions
 - [Service operations design](docs/service-ops-design.md)
 - [Console i18n contract](docs/console-i18n-contract.md)
 - [Decision records](docs/adr/README.md) — why the engine seam, the CLI's store-vs-API split, and what each choice cost

@@ -15,7 +15,7 @@ the [whitepaper](whitepaper.md).
 | Change a cluster setting | [`settings.md`](settings.md) |
 | Click through the UI (console pages, badges) | [`console.md`](console.md) |
 | Run stateful services and databases safely | [`storage-and-databases.md`](storage-and-databases.md) |
-| See one backup run end to end, and what it guarantees | [`backup-agent-flow.md`](backup-agent-flow.md) |
+| Back up and restore: the volume, the run, retention, restore, what it guarantees | [`backup.md`](backup.md) |
 | Wire up nodes, DNS, a load balancer, the firewall | [`network-topology.md`](network-topology.md) |
 | Understand the reconcile loop | [`control-loop-design.md`](control-loop-design.md) |
 | Read the security model | [`whitepaper.md`](whitepaper.md) (§13) |
@@ -26,7 +26,7 @@ the [whitepaper](whitepaper.md).
 ## Reading orders
 
 **Operator (run a cluster):** `dsl.md` → `secrets-and-configs.md` →
-`storage-and-databases.md` → `network-topology.md` → `webhook.md`.
+`storage-and-databases.md` → `backup.md` → `network-topology.md` → `webhook.md`.
 
 **New contributor / auditor:** [`whitepaper.md`](whitepaper.md) →
 `control-loop-design.md` → `agent.md` (the codebase map, repo root).
@@ -44,8 +44,8 @@ the [whitepaper](whitepaper.md).
 | `tls.md` | ACME vs operator-supplied, in-place main-cert rotation, per-host customer-domain certs |
 | `settings.md` | The 29-key cluster-settings catalogue: defaults, who sets what, how a change reaches the swarm |
 | `console.md` | The operator console: every page, auth model, status badges |
-| `storage-and-databases.md` | Storage nodes and auto-placement, the Path 1 decision, storage matrix, DB strategies, backup architecture, restore/move/failover |
-| `backup-agent-flow.md` | The backup as a review document: one run end to end, what "verified" means per database engine, the failure modes seen in production, what is not built, and the open questions |
+| `storage-and-databases.md` | Storage nodes and auto-placement, the Path 1 decision, storage matrix, DB strategies, moving/failing over a stack — backups live in `backup.md` |
+| `backup.md` | **The** backup chapter: the snapshot-capable volume and its repair, the hourly run (no freeze, and why), what an artifact is, what "verified" means per engine, the three destinations, retention, discovery, restore, the failure modes seen in production, what is not built, and the open questions |
 | `network-topology.md` | Traffic planes, topology options, firewall reference, DNS routing |
 | `control-loop-design.md` | The reconcile loop as built — passes, drift signals, outage pause, Raft snapshot |
 | `test-reports/` | TC1–TC10 field reports from live campaigns |
