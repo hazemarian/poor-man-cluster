@@ -10,14 +10,15 @@ volumes:
   seaweeddata: ""
 [[ end ]]
 services:
-  # The Backup Agent — one per node when backup_all_nodes is set; one per
-  # STORAGE node (pmcluster.storage label) when the storage_nodes setting is
-  # non-empty; otherwise a single replica pinned to the platform node / manager.
-  # Writes each archive to the in-cluster SeaweedFS store via WebDAV (WEBDAV_*)
-  # whenever the store is enabled, AND to the offsite S3 target (AWS_*) when
-  # that is also configured. Store-only clusters use WebDAV only (the S3 API
-  # does NOT auto-create the bucket — BUG-016); offsite-only clusters fall back
-  # to a single S3 write.
+  # The control-plane archiver — one replica pinned to the LEADER, daily. It
+  # archives pmcluster's own state, never stack volumes: stack data is archived
+  # by the node-local systemd agent (pmcluster-backup.timer), installed by role,
+  # which writes to the store and the offsite bucket itself.
+  # Writes each archive to the in-cluster SeaweedFS store (S3 on 8333, path-style)
+  # whenever the store is enabled, AND to the offsite S3 target (AWS_*) when that
+  # is also configured. Store-only clusters use the S3 API only — SeaweedFS
+  # creates the bucket on first upload, which is why the WebDAV gateway was
+  # deleted; offsite-only clusters fall back to a single S3 write.
   # The per-volume archiver that used to live here (offen/docker-volume-backup)
   # is gone from the binary. It tarred a live directory — one growing SQLite
   # file could abort a node's whole hour — and had no concept of a snapshot.

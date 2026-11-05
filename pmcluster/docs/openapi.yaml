@@ -705,9 +705,11 @@ paths:
     get:
       summary: Read cluster settings
       description: >-
-        Returns all allowlisted cluster settings (volume_root,
-        backup_all_nodes, sso_*, edge_login_disabled, domain, oo_admin_email,
-        traefik_admin_user). Empty string means unset.
+        Returns all allowlisted cluster settings (volume_root, backup_*,
+        sso_*, edge_login_disabled, domain, oo_admin_email, traefik_admin_user).
+        Empty string means unset. The daemon's list in
+        `internal/settings/local.go` is authoritative; a key that is not on it is
+        rejected as unknown.
       operationId: getClusterSettings
       security:
         - bearerAuth: []
