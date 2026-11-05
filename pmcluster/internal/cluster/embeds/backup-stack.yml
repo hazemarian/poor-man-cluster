@@ -43,18 +43,10 @@ services:
     # Advertise loopback: publishing 8333 attaches the ingress network, whose
     # auto-detected task IP is not self-reachable, so the server must not
     # advertise it. Bind on all interfaces so the published 8333 keeps working.
-    # The WebDAV gateway runs in THIS process via `-webdav`, so it shares the
-    # container's network namespace and reaches the filer on loopback. It serves
-    # the SAME namespace as S3 (bucket pmcluster-backups == filer
-    # /buckets/pmcluster-backups).
-    #
-    # 7333 IS published (on the routing mesh, with the store's credentials in
-    # front of it) because the backup agent is a HOST process: it cannot resolve
-    # backup_seaweedfs on the overlay, so each node ships its own artifacts to
-    # 127.0.0.1:7333. Publishing it puts the backup store on the mesh, which is
-    # why the credential is mandatory — it is the same basic-auth the offen
-    # agents already use.
-    command: ["server", "-s3", "-s3.port=8333", "-s3.port.iceberg=0", "-s3.port.lance=0", "-webdav", "-webdav.port=7333", "-ip=127.0.0.1", "-ip.bind=0.0.0.0", "-s3.ip.bind=0.0.0.0"]
+    # 8333 IS published (on the routing mesh) because the backup agent is a HOST
+    # process: it cannot resolve backup_seaweedfs on the overlay, so each node
+    # ships its own artifacts to 127.0.0.1:8333 with the store's own S3 keys.
+    command: ["server", "-s3", "-s3.port=8333", "-s3.port.iceberg=0", "-s3.port.lance=0", "-ip=127.0.0.1", "-ip.bind=0.0.0.0", "-s3.ip.bind=0.0.0.0"]
     restart: any
     # NOTE: this service runs with update order "stop-first" on the live cluster,
     # set out of band. SeaweedFS keeps its filer metadata in a LevelDB directory
@@ -73,8 +65,6 @@ services:
         published: 8333
       # WebDAV: reachable from every node's own loopback so the host agent can
       # ship artifacts without overlay DNS.
-      - target: 7333
-        published: 7333
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8333/healthz"]
       interval: 30s
@@ -109,17 +99,17 @@ services:
       BACKUP_PRUNING_PREFIX: "pmcluster-ctlplane-"
       BACKUP_RETENTION_DAYS: "30"
       [[- if .Store.Enabled ]]
-      # In-cluster store leg ALWAYS uses WebDAV: the SeaweedFS S3 API does NOT
-      # auto-create the bucket (BUG-016), while the WebDAV gateway creates the
-      # /buckets/<bucket> path on first PUT. So the store leg is WebDAV whether
-      # or not an offsite target is configured.
-      WEBDAV_URL: "http://backup_seaweedfs:7333"
-      WEBDAV_PATH: "/buckets/[[.Store.Bucket]]"
-      # offen refuses an anonymous WebDAV backend, so credentials must be set;
-      # the SeaweedFS gateway does not check them, so the store's own keys are
-      # reused here.
-      WEBDAV_USERNAME: "[[.Store.AccessKey]]"
-      WEBDAV_PASSWORD: "[[.Store.SecretKey]]"
+      # The store is an S3 target, like any other destination. WebDAV was here
+      # because the S3 API "does not auto-create a bucket" — SeaweedFS does, on
+      # first upload, so that reason is gone and with it a whole second protocol.
+      # Only used when there is no offsite bucket: one process, one backend.
+      AWS_S3_BUCKET_NAME: "[[.Store.Bucket]]"
+      AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
+      AWS_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
+      AWS_ENDPOINT: "backup_seaweedfs:8333"
+      AWS_ENDPOINT_PROTO: "http"
+      AWS_REGION: "us-east-1"
+      AWS_S3_BUCKET_LOOKUP: "path"
       [[- if .BackupS3.Configured ]]
       AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
       AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"

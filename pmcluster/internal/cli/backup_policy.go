@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 )
 
@@ -24,16 +25,31 @@ const backupPolicyFile = "/etc/pmcluster/backup.conf"
 
 // backupPolicy mirrors the JSON written at install time.
 type backupPolicy struct {
-	Enabled string `json:"enabled"`
-	Cron    string `json:"cron"`
-	Store   string `json:"store"`
-	S3      struct {
-		Endpoint  string `json:"endpoint"`
-		Bucket    string `json:"bucket"`
-		Region    string `json:"region"`
-		AccessKey string `json:"access_key"`
-		SecretKey string `json:"secret_key"`
-	} `json:"s3"`
+	Enabled string   `json:"enabled"`
+	Cron    string   `json:"cron"`
+	Store   string   `json:"store"`
+	S3      policyS3 `json:"s3"`
+	// StoreS3 is the in-cluster store as an S3 target. It used to be a WebDAV URL
+	// with the credentials embedded in it; now it is the same five fields as any
+	// other destination, so one code path ships to both.
+	StoreS3 policyS3 `json:"store_s3,omitempty"`
+}
+
+// policyS3 is one destination.
+type policyS3 struct {
+	Endpoint  string `json:"endpoint"`
+	Bucket    string `json:"bucket"`
+	Region    string `json:"region"`
+	AccessKey string `json:"access_key"`
+	SecretKey string `json:"secret_key"`
+}
+
+// config converts the policy entry into the S3 client's shape.
+func (p policyS3) config() backups.S3Config {
+	return backups.S3Config{
+		Endpoint: p.Endpoint, Bucket: p.Bucket, Region: p.Region,
+		AccessKey: p.AccessKey, SecretKey: p.SecretKey,
+	}
 }
 
 // readBackupPolicy loads the node's policy file, if there is one.

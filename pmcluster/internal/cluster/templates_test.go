@@ -180,10 +180,14 @@ func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
 	if n := strings.Count(body, "node.labels.pmcluster.storage == true"); n != 0 {
 		t.Errorf("storage-node constraint count = %d, want 0 (no service in this stack reads stack data any more):\n%s", n, body)
 	}
-	// WebDAV runs inside the seaweedfs process (`-webdav`), cluster-internal
-	// (no published port) — no separate webdav container.
-	if !strings.Contains(body, "-webdav") || !strings.Contains(body, "-webdav.port=7333") {
-		t.Errorf("seaweedfs should serve WebDAV in-process (`-webdav -webdav.port=7333`):\n%s", body)
+	// S3 runs inside the seaweedfs process; there is no WebDAV gateway any more.
+	// The protocol was there because "the S3 API does not auto-create a bucket" —
+	// SeaweedFS does, on first upload, so the store is just another S3 target.
+	if !strings.Contains(body, "-s3.port=8333") {
+		t.Errorf("seaweedfs should serve the S3 API (`-s3.port=8333`):\n%s", body)
+	}
+	if strings.Contains(body, "-webdav") {
+		t.Errorf("the WebDAV gateway must be gone:\n%s", body)
 	}
 	// The agents that used to carry the offsite AWS_* block and the WEBDAV_*
 	// block are gone. The store is reached two ways now: agents PUT over WebDAV
@@ -232,8 +236,8 @@ func TestLoadComposeFile_BackupSeaweedFSStoreOnly(t *testing.T) {
 	// The store is rendered; the clients that write to it are node-local agents
 	// (they PUT to http://127.0.0.1:7333), so no in-cluster service carries a
 	// WEBDAV_* block any more — but WebDAV must still be switched on in-process.
-	if !strings.Contains(body, "-webdav.port=7333") {
-		t.Errorf("the store must still serve WebDAV for the node agents:\n%s", body)
+	if !strings.Contains(body, "published: 8333") {
+		t.Errorf("the store must publish S3 for the node agents:\n%s", body)
 	}
 	if strings.Contains(body, "WEBDAV_URL:") {
 		t.Errorf("no in-cluster service should carry offen's WEBDAV_* block:\n%s", body)
@@ -254,8 +258,11 @@ func TestLoadComposeFile_BackupSeaweedFSStoreOnly(t *testing.T) {
 			t.Errorf("store-only offen must not emit %q:\n%s", bad, body)
 		}
 	}
-	if !strings.Contains(body, "-webdav.port=7333") {
-		t.Errorf("in-process WebDAV gateway should still render when the store is enabled:\n%s", body)
+	if !strings.Contains(body, "-s3.port=8333") {
+		t.Errorf("in-process S3 gateway should still render when the store is enabled:\n%s", body)
+	}
+	if strings.Contains(body, "WEBDAV_URL:") {
+		t.Errorf("the store is an S3 target now; no WEBDAV_* block should render:\n%s", body)
 	}
 	if strings.Contains(body, "rclone/rclone") || strings.Contains(body, "backup-replicate") {
 		t.Errorf("backup-replicate (rclone) service must be removed:\n%s", body)
@@ -1976,9 +1983,9 @@ func TestBackupStorePublishesWebDAVForHostAgents(t *testing.T) {
 	body := string(mustLoadBackup(t, in))
 	// The renderer sorts keys, so assert on the directive rather than on the
 	// order YAML happened to print it in.
-	for _, want := range []string{"published: 7333", "-webdav.port=7333"} {
+	for _, want := range []string{"published: 8333", "-s3.port=8333"} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("backup stack does not publish WebDAV for host agents (%q missing):\n%s", want, body)
+			t.Fatalf("backup stack does not publish S3 for host agents (%q missing):\n%s", want, body)
 		}
 	}
 }

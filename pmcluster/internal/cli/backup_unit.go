@@ -101,6 +101,16 @@ func writeBackupPolicyFile() error {
 	if pol.Cron == "" {
 		pol.Cron = cluster.DefaultBackupCron
 	}
+	// The in-cluster store is just another S3 target, recorded here so the agent
+	// needs no environment at all.
+	if pol.Store == "" || !isOff(pol.Store) {
+		if ak, sk := storeS3Keys(); ak != "" && sk != "" {
+			pol.StoreS3 = policyS3{
+				Endpoint: storeS3Endpoint(), Bucket: storeS3Bucket(),
+				Region: "us-east-1", AccessKey: ak, SecretKey: sk,
+			}
+		}
+	}
 	b, err := json.MarshalIndent(pol, "", "  ")
 	if err != nil {
 		return err
@@ -118,21 +128,79 @@ func writeBackupPolicyFile() error {
 // writeBackupEnv persists the WebDAV target handed to the installer through the
 // environment. Refusing to put it on a command line is deliberate: argv is
 // world-readable in /proc for the life of the process, and this is a password.
+// writeBackupEnv records the in-cluster store as an S3 target in the agent's
+// environment.
+//
+// It used to write a WebDAV URL with the credentials embedded as userinfo. The
+// store serves the S3 API on 8333 with the same Store.AccessKey/SecretKey, and
+// SeaweedFS creates a bucket on first upload — so the WebDAV gateway, its port and
+// its five-minute PUT timeout bought nothing but a second code path.
 func writeBackupEnv() error {
-	url := os.Getenv("PMCLUSTER_BACKUP_WEBDAV")
-	if url == "" {
-		return nil
-	}
 	if err := os.MkdirAll(filepath.Dir(backupEnvFile), 0o700); err != nil {
 		return err
 	}
-	body := "PMCLUSTER_BACKUP_WEBDAV=" + url + "\n"
+	pol, _ := readBackupPolicy(backupPolicyFile)
+	if pol.Store != "" && isOff(pol.Store) {
+		return nil
+	}
+	ak, sk := storeS3Keys()
+	if ak == "" || sk == "" {
+		// No store deployed (or docker is not reachable): leave the file alone
+		// rather than writing an endpoint that cannot authenticate.
+		return nil
+	}
+	body := strings.Join([]string{
+		"PMCLUSTER_BACKUP_STORE_S3_ENDPOINT=" + storeS3Endpoint(),
+		"PMCLUSTER_BACKUP_STORE_S3_BUCKET=" + storeS3Bucket(),
+		"PMCLUSTER_BACKUP_STORE_S3_REGION=us-east-1",
+		"PMCLUSTER_BACKUP_STORE_S3_ACCESS_KEY=" + ak,
+		"PMCLUSTER_BACKUP_STORE_S3_SECRET_KEY=" + sk,
+	}, "\n") + "\n"
 	temp := backupEnvFile + ".tmp"
 	if err := os.WriteFile(temp, []byte(body), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(temp, backupEnvFile)
 }
+
+// storeS3Endpoint is the store's S3 API, reachable on the routing mesh.
+func storeS3Endpoint() string {
+	if v := envOr("PMCLUSTER_BACKUP_STORE_S3_ENDPOINT", ""); v != "" {
+		return v
+	}
+	return "http://127.0.0.1:8333"
+}
+
+// storeS3Bucket is where the store keeps artifacts.
+func storeS3Bucket() string {
+	if v := envOr("PMCLUSTER_BACKUP_STORE_S3_BUCKET", ""); v != "" {
+		return v
+	}
+	return "pmcluster-backups"
+}
+
+// storeS3Keys reads the store's own S3 identity from the running service — the
+// same two variables SeaweedFS promotes to an admin identity.
+func storeS3Keys() (string, string) {
+	out, err := exec.Command("docker", "service", "inspect", storeServiceName,
+		"--format", "{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}").Output()
+	if err != nil {
+		return "", ""
+	}
+	var ak, sk string
+	for _, line := range strings.Split(string(out), "\n") {
+		if v, ok := strings.CutPrefix(line, "AWS_ACCESS_KEY_ID="); ok {
+			ak = strings.TrimSpace(v)
+		}
+		if v, ok := strings.CutPrefix(line, "AWS_SECRET_ACCESS_KEY="); ok {
+			sk = strings.TrimSpace(v)
+		}
+	}
+	return ak, sk
+}
+
+// storeServiceName is the Swarm service that carries the in-cluster store.
+const storeServiceName = "backup_seaweedfs"
 
 // renderBackupServiceUnit builds the oneshot unit that performs one run.
 //

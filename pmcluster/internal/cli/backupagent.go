@@ -462,34 +462,46 @@ func localBackupDecision(ctx context.Context) (cluster.BackupDecision, error) {
 // a node with neither is a legitimate configuration — the artifact still lands
 // on disk and the run records where. Returning nil means "local only", which the
 // agent reports as such rather than as a failure.
-func shipTargetsFromEnv() func(context.Context, string) ([]string, error) {
-	webdav, s3 := backupShipTargets()
-	if webdav == "" && !s3.Configured() {
-		return nil
-	}
-	return func(ctx context.Context, archivePath string) ([]string, error) {
-		name := filepath.Base(archivePath)
-		var where []string
-		if webdav != "" {
-			if err := backups.PutWebDAV(ctx, webdav, archivePath); err != nil {
-				return where, err
-			}
-			where = append(where, "store:"+name)
-		}
-		if s3.Configured() {
-			if err := backups.PutS3Object(ctx, s3, name, archivePath); err != nil {
-				return where, err
-			}
-			where = append(where, "s3:"+s3.Bucket+"/"+name)
-		}
-		return where, nil
-	}
+// shipTarget is one destination for an artifact. Store and bucket are the same
+// thing: an S3 endpoint, a bucket and a credential. Keeping them as separate
+// mechanisms (WebDAV for one, S3 for the other) meant two upload paths, two
+// retention implementations and two sets of timeouts to get wrong.
+type shipTarget struct {
+	// Label is what the run record calls this destination ("store" or "s3").
+	Label string
+	S3    backups.S3Config
 }
 
-// backupShipTargets resolves where artifacts go: the policy file when it exists
-// (written by the installer from cluster settings), else the environment.
-func backupShipTargets() (string, backups.S3Config) {
-	webdav := agentShipWebDAV
+// backupShipTargets resolves where artifacts go.
+//
+// The in-cluster store is one target, the offsite bucket is another, and a node
+// with neither is a legitimate configuration — the artifact still lands on disk
+// and the run records where. The node's policy file wins over the environment: it
+// is what the installer wrote from the cluster's own settings.
+func backupShipTargets() []shipTarget {
+	var targets []shipTarget
+
+	pol, havePol := readBackupPolicy(backupPolicyFile)
+	storeOff := havePol && pol.Store != "" && isOff(pol.Store)
+
+	// The in-cluster store, as an S3 target in its own right.
+	if !storeOff {
+		store := backups.S3Config{
+			Endpoint:  envOr("PMCLUSTER_BACKUP_STORE_S3_ENDPOINT", ""),
+			Bucket:    envOr("PMCLUSTER_BACKUP_STORE_S3_BUCKET", ""),
+			AccessKey: envOr("PMCLUSTER_BACKUP_STORE_S3_ACCESS_KEY", ""),
+			SecretKey: envOr("PMCLUSTER_BACKUP_STORE_S3_SECRET_KEY", ""),
+			Region:    envOr("PMCLUSTER_BACKUP_STORE_S3_REGION", ""),
+		}
+		if havePol && pol.StoreS3.Endpoint != "" {
+			store = pol.StoreS3.config()
+		}
+		if store.Configured() {
+			targets = append(targets, shipTarget{Label: "store", S3: store})
+		}
+	}
+
+	// The offsite bucket.
 	s3 := backups.S3Config{
 		Endpoint:  envOr("PMCLUSTER_BACKUP_S3_ENDPOINT", ""),
 		Bucket:    envOr("PMCLUSTER_BACKUP_S3_BUCKET", ""),
@@ -497,49 +509,51 @@ func backupShipTargets() (string, backups.S3Config) {
 		SecretKey: envOr("PMCLUSTER_BACKUP_S3_SECRET_KEY", ""),
 		Region:    envOr("PMCLUSTER_BACKUP_S3_REGION", ""),
 	}
-	// The node's policy file is authoritative when it exists: it is what the
-	// installer wrote from the cluster settings.
-	if pol, ok := readBackupPolicy(backupPolicyFile); ok {
-		if pol.Store != "" && isOff(pol.Store) {
-			webdav = ""
-		}
-		if pol.S3.Endpoint != "" {
-			s3 = backups.S3Config{
-				Endpoint:  pol.S3.Endpoint,
-				Bucket:    pol.S3.Bucket,
-				Region:    pol.S3.Region,
-				AccessKey: pol.S3.AccessKey,
-				SecretKey: pol.S3.SecretKey,
-			}
-		}
-	}
-	return webdav, s3
-}
-
-// pruneRemoteLegs applies retention to the store and the offsite bucket.
-//
-// Failures are reported, never fatal: a store that is down must not turn a
-// successful backup into a failed one. What it must not do is pass silently for
-// months while the bucket fills.
-func pruneRemoteLegs(ctx context.Context, out io.Writer, policy backups.Retention) {
-	webdav, s3 := backupShipTargets()
-	now := time.Now()
-	if webdav != "" {
-		res, err := backups.PruneStore(ctx, webdav, policy, now, false)
-		switch {
-		case err != nil:
-			fmt.Fprintf(out, "store retention skipped: %v\n", err)
-		case len(res.Deleted) > 0 || len(res.Failed) > 0:
-			fmt.Fprintf(out, "store retention: deleted %d, kept %d, failed %d\n", len(res.Deleted), res.Kept, len(res.Failed))
-		}
+	if havePol && pol.S3.Endpoint != "" {
+		s3 = pol.S3.config()
 	}
 	if s3.Configured() {
-		res, err := backups.PruneS3(ctx, s3, policy, now, false)
+		targets = append(targets, shipTarget{Label: "s3", S3: s3})
+	}
+	return targets
+}
+
+// shipTargetsFromEnv returns the sink the agent calls after an artifact is
+// verified, or nil when the artifact stays on the node.
+func shipTargetsFromEnv() func(context.Context, string) ([]string, error) {
+	targets := backupShipTargets()
+	if len(targets) == 0 {
+		return nil
+	}
+	return func(ctx context.Context, archivePath string) ([]string, error) {
+		name := filepath.Base(archivePath)
+		var where []string
+		for _, t := range targets {
+			if err := backups.PutS3Object(ctx, t.S3, name, archivePath); err != nil {
+				return where, fmt.Errorf("%s: %w", t.Label, err)
+			}
+			where = append(where, t.Label+":"+t.S3.Bucket+"/"+name)
+		}
+		return where, nil
+	}
+}
+
+// pruneRemoteLegs applies retention to every configured destination.
+//
+// Retention used to run only on the node, so the store and the bucket were written
+// to forever. Failures are reported, never fatal: a store that is down must not turn
+// a successful backup into a failed one, but it must not pass silently for months
+// either.
+func pruneRemoteLegs(ctx context.Context, out io.Writer, policy backups.Retention) {
+	now := time.Now()
+	for _, t := range backupShipTargets() {
+		res, err := backups.PruneS3(ctx, t.S3, policy, now, false)
 		switch {
 		case err != nil:
-			fmt.Fprintf(out, "offsite retention skipped: %v\n", err)
+			fmt.Fprintf(out, "%s retention skipped: %v\n", t.Label, err)
 		case len(res.Deleted) > 0 || len(res.Failed) > 0:
-			fmt.Fprintf(out, "offsite retention: deleted %d, kept %d, failed %d\n", len(res.Deleted), res.Kept, len(res.Failed))
+			fmt.Fprintf(out, "%s retention: deleted %d, kept %d, failed %d\n",
+				t.Label, len(res.Deleted), res.Kept, len(res.Failed))
 		}
 	}
 }
