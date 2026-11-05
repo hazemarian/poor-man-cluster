@@ -154,19 +154,23 @@ So the first thing that has to be true is that `<volume_root>` is a mount of its
 own snapshot-capable filesystem.
 
 ```
-app-data.img                  sparse file, 50% of free space (8 GiB..128 GiB)
+app-data.img                  sparse file, 75% of the disk (8 GiB..128 GiB)
  └─ /dev/loopN                loop device, found by file not by number
     └─ vg-pmcluster           # volume group (LVM)
-       ├─ pool                 thin pool: file size minus 1 GiB
+       ├─ pool                 thin pool: file minus 1 GiB, minus the repair reserve
+       │   ├─ [pool_tmeta]     thin metadata, pinned to ≈ pool/1000 at creation
+       │   └─ [pool_tdata]
        └─ data                 thin volume: 80% of the pool
           └─ /var/stack/data   ext4, noatime
 ```
 
 ```bash
-pmcluster storage status       # what this node can do, and why not
-sudo pmcluster storage provision    # empty node: build it
-sudo pmcluster storage migrate      # existing node: build, copy, verify, switch
+pmcluster storage status             # what this node has, and why not
+sudo pmcluster storage status --verify   # prove it by taking a snapshot
+sudo pmcluster storage provision     # empty node: build it
+sudo pmcluster storage migrate       # existing node: build, copy, verify, switch
 sudo pmcluster storage grow --size 64G
+sudo pmcluster storage repair --unmount  # thin metadata drifted: rebuild it
 ```
 
 The data volume is deliberately smaller than its pool: each run allocates pool
@@ -174,6 +178,45 @@ blocks for the snapshot's divergent writes, and a volume that already fills its
 pool leaves the snapshot nowhere to go. The missing fifth is that room, and the
 agent aborts a run at 80% pool usage rather than ship a snapshot the kernel may
 invalidate mid-copy.
+
+**The pool also leaves the volume group two metadata copies of free extents** —
+`2 × pool/1000`, 88 MiB on a 42 GiB volume. That space is not for snapshots. It
+is what makes the pool *repairable*: `lvconvert --repair` writes the repaired
+metadata as a new logical volume and keeps the damaged one beside it, so a pool
+that occupies its group to the last extent cannot be repaired at all — LVM
+answers `insufficient free space (0 extents): 11 required` and the only exit is
+destroying the volume. `storage grow` therefore extends by free-space *minus*
+this reserve instead of `+100%FREE`, and the metadata size is passed to
+`lvcreate --poolmetadatasize` rather than inferred, so the reserve is arithmetic
+and not a guess about the local LVM build.
+
+### 3.1.1 When the metadata does drift
+
+Thin metadata can disagree with itself without the volume looking any different.
+The production case: a snapshot creation interrupted mid-flight leaves a thin
+device id allocated with no logical volume behind it, and from then on every
+`lvcreate -s` on that node fails with `already contain thin device with device_id
+N` — the volume mounts, the group is present, and every hourly backup fails.
+
+`storage status` reads the layout, so it cannot see this; `--verify` takes a
+snapshot and removes it, which is the operation the agent performs. `storage
+repair` rebuilds the metadata and then proves the fix the same way. It needs the
+pool inactive (so the volume root is unmounted, which means stopping its writers)
+and it refuses up front, with the shortfall named, when the group has no free
+extents — rather than letting LVM create a metadata backup and then fail.
+
+A pool that is already at zero free extents can be given headroom without
+recreating anything, because the data volume is far from full:
+
+```bash
+sudo lvreduce -L -128M vg-pmcluster/pool   # safe while data% is low; check with `lvs`
+sudo pmcluster storage repair --unmount
+```
+
+`--rebuild --allow-data-loss` destroys and re-creates the volume when the
+metadata is beyond repair. It reproduces the shape it found — same pool, same
+data size, same pinned metadata size — so the next run sees the volume it left.
+The data on it does not survive; that is the whole point of the flag.
 
 `setup` asks once and provisions before the cluster deploys; `join
 --storage-node` provisions the node being added; `cluster up` refuses to deploy

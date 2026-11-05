@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -37,7 +38,7 @@ after a reboot.
   sudo pmcluster storage provision
   sudo pmcluster storage provision --mode lvm --device /dev/vdb --size 40G`,
 	}
-	cmd.AddCommand(storageStatusCmd(), storageProvisionCmd(), storageGrowCmd(), storageMigrateCmd())
+	cmd.AddCommand(storageStatusCmd(), storageProvisionCmd(), storageGrowCmd(), storageMigrateCmd(), storageRepairCmd())
 	rootCmd.AddCommand(cmd)
 }
 
@@ -72,7 +73,14 @@ func storageStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Report whether this node can take atomic snapshots",
-		Args:  cobra.NoArgs,
+		Long: `Report the volume's state, and with --verify prove it can snapshot.
+
+Without --verify this reads the layout: is the volume root a mount of LVM on its
+own device, is the group present, does the backing file exist. That is a
+necessary condition, not the answer — a pool whose thin metadata has drifted
+reports a perfect layout and fails every lvcreate. --verify takes a snapshot and
+removes it, which is the operation the backup agent performs.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			spec, err := storageSpecFromFlags(cmd)
 			if err != nil {
@@ -102,15 +110,33 @@ func storageStatusCmd() *cobra.Command {
 				}
 			}
 			fmt.Fprintf(out, "volume group     %s%s\n", spec.VG, map[bool]string{true: " (present)", false: " (absent)"}[st.VGExists])
-			if st.SnapshotReady() {
-				fmt.Fprintf(out, "\n✔ snapshots possible: the backup agent can freeze and copy this volume atomically.\n")
-			} else {
+			if !st.SnapshotReady() {
 				fmt.Fprintf(out, "\n✗ snapshots NOT possible: the backup agent will refuse to run here.\n  fix: sudo pmcluster storage provision\n")
+				return nil
 			}
+			// Say what was actually checked. "snapshots possible" from the layout
+			// alone was printed on a node whose every hourly lvcreate was failing.
+			fmt.Fprintf(out, "\n✔ volume present: %s is a snapshot-capable volume (layout only — pass --verify to take one now).\n", st.Source)
+			verify, _ := cmd.Flags().GetBool("verify")
+			if !verify {
+				return nil
+			}
+			if os.Geteuid() != 0 {
+				return fmt.Errorf("--verify takes a snapshot, which needs root — re-run with sudo")
+			}
+			start := time.Now()
+			if perr := storage.Probe(ctx, spec); perr != nil {
+				fmt.Fprintf(out, "\n✗ snapshot probe FAILED after %s: %v\n  the layout is fine and the pool is not: see `sudo pmcluster storage repair`\n",
+					time.Since(start).Round(time.Millisecond), perr)
+				return nil
+			}
+			fmt.Fprintf(out, "\n✔ snapshot probe: took and removed one in %s — the backup agent can do the same.\n",
+				time.Since(start).Round(time.Millisecond))
 			return nil
 		},
 	}
 	addStorageFlags(cmd)
+	cmd.Flags().Bool("verify", false, "take a snapshot and remove it, instead of only reading the layout (needs root)")
 	return cmd
 }
 
@@ -199,6 +225,81 @@ backup run's snapshot exist while the copy is in flight.`,
 	}
 	addStorageFlags(cmd)
 	cmd.Flags().Bool("dry-run", false, "print the plan without touching the disk")
+	return cmd
+}
+
+func storageRepairCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "repair",
+		Short: "Repair thin-pool metadata so this node can snapshot again",
+		Long: `Repair the thin pool whose metadata no longer agrees with itself.
+
+The failure this exists for: a backup run interrupted mid-snapshot leaves a thin
+device id allocated with no volume behind it, and from then on every lvcreate on
+the node fails with "already contain thin device with device_id N". The volume
+still mounts, the group is still present, and the backup agent keeps running and
+keeps failing — which is why --verify exists and why this command ends by taking
+a snapshot rather than by trusting LVM's exit status.
+
+lvconvert --repair needs two things people are surprised by: the pool INACTIVE
+(so the volume has to be unmounted, which means stopping its writers) and free
+extents in the volume group for the replacement metadata. The second is checked
+before anything is touched, because a pool that fills its group cannot be
+repaired at all — only rebuilt.
+
+  sudo pmcluster storage repair --unmount
+  sudo pmcluster storage repair --rebuild --unmount --allow-data-loss   # last resort, data is lost`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			spec, err := storageSpecFromFlags(cmd)
+			if err != nil {
+				return err
+			}
+			if os.Geteuid() != 0 {
+				return fmt.Errorf("repairing storage needs root (LVM, unmount, mount) — re-run with sudo")
+			}
+			var opts storage.RepairOptions
+			opts.Unmount, _ = cmd.Flags().GetBool("unmount")
+			opts.Rebuild, _ = cmd.Flags().GetBool("rebuild")
+			opts.AllowDataLoss, _ = cmd.Flags().GetBool("allow-data-loss")
+			opts.KeepBackup, _ = cmd.Flags().GetBool("keep-backup")
+
+			ctx := cmd.Context()
+			out := cmd.OutOrStdout()
+			res, err := storage.Repair(ctx, spec, opts)
+			for _, m := range res.Unmounted {
+				fmt.Fprintf(out, "· unmounted %s\n", m)
+			}
+			if err != nil {
+				return err
+			}
+			switch res.Mode {
+			case "rebuild":
+				fmt.Fprintf(out, "✔ rebuilt %s/pool (%s) and %s/%s (%s, metadata %s)\n",
+					spec.VG, humanSize(res.PoolBytes), spec.VG, spec.LV, humanSize(res.DataBytes), humanSize(res.MetadataBytes))
+				fmt.Fprintf(out, "  the volume is empty: every stack on it starts from nothing\n")
+			default:
+				fmt.Fprintf(out, "✔ repaired %s/pool metadata (%s)\n", spec.VG, humanSize(res.MetadataBytes))
+				if res.BackupLV != "" {
+					fmt.Fprintf(out, "  old metadata kept as %s/%s, then removed\n", spec.VG, res.BackupLV)
+				}
+			}
+			for _, line := range strings.Split(res.RepairOutput, "\n") {
+				if line = strings.TrimSpace(line); line != "" {
+					fmt.Fprintf(out, "  | %s\n", line)
+				}
+			}
+			if res.Verified {
+				fmt.Fprintf(out, "\n✔ verified: a snapshot was taken and removed, so the backup agent can run here again.\n")
+			}
+			return nil
+		},
+	}
+	addStorageFlags(cmd)
+	cmd.Flags().Bool("unmount", false, "let the repair unmount the volume (stop its writers first)")
+	cmd.Flags().Bool("rebuild", false, "destroy and re-create the volume when the metadata cannot be repaired")
+	cmd.Flags().Bool("allow-data-loss", false, "acknowledge that --rebuild destroys every stack's data")
+	cmd.Flags().Bool("keep-backup", false, "keep LVM's copy of the unrepaired metadata for inspection")
 	return cmd
 }
 
