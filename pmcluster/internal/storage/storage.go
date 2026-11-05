@@ -47,6 +47,17 @@ const (
 	dataVolumeShare = 0.80
 	// LVM metadata and chunk overhead live inside the pool's size.
 	poolOverhead = 1 << 30
+	// Thin-pool metadata sizing. LVM infers ~1/1000 of the pool; pmcluster asks
+	// for it explicitly so the reserve arithmetic below is checkable instead of
+	// depending on which LVM the node happens to run. The bounds keep a tiny pool
+	// from getting 2 MiB of metadata and a huge one from wasting a gigabyte.
+	poolMetaMin = 8 << 20
+	poolMetaMax = 512 << 20
+	// repairReserveFactor is metadata copies a repair needs, not chunks: the
+	// repaired metadata itself plus the copy of the old one LVM keeps beside it.
+	// One is not enough (that is what lvol0_pmspare already provides) and three
+	// is waste.
+	repairReserveFactor = 2
 	// Auto-sizing bounds: below 8 GiB a pool cannot hold a realistic app plus a
 	// snapshot, and above 128 GiB a single-node file is the wrong shape.
 	minAutoSize = 8 << 30
@@ -262,6 +273,74 @@ func sameMount(ctx context.Context, spec Spec, src string) bool {
 	return a != "" && a == b
 }
 
+// parseLVMBytes reads one of LVM's byte answers ("  46137344B").
+//
+// --units b is what makes the arithmetic exact: the default is human units
+// ("41.91g") and rounding those into extents is how a resize ends up off by one.
+func parseLVMBytes(out []byte) (int64, error) {
+	s := strings.TrimSpace(string(out))
+	s = strings.TrimSuffix(strings.TrimSuffix(s, "B"), "b")
+	s = strings.TrimSpace(s)
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse LVM size %q: %w", strings.TrimSpace(string(out)), err)
+	}
+	return n, nil
+}
+
+// vgFreeBytes is the free space left in the volume group.
+func vgFreeBytes(ctx context.Context, spec Spec) (int64, error) {
+	out, err := spec.exec(ctx, "vgs", "--noheadings", "--units", "b", "-o", "vg_free", spec.VG)
+	if err != nil {
+		return 0, fmt.Errorf("read %s free space: %w (%s)", spec.VG, err, strings.TrimSpace(string(out)))
+	}
+	return parseLVMBytes(out)
+}
+
+// metadataBytes is the size of this pool's thin metadata, as it actually is.
+//
+// Measured rather than recomputed: a pool created before pmcluster pinned the
+// metadata size carries whatever LVM chose, and a repair has to allocate exactly
+// that much.
+func metadataBytes(ctx context.Context, spec Spec) (int64, error) {
+	out, err := spec.exec(ctx, "lvs", "--noheadings", "--units", "b", "-o", "lv_size", spec.VG+"/pool_tmeta")
+	if err != nil {
+		return 0, fmt.Errorf("read pool metadata size: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return parseLVMBytes(out)
+}
+
+// Probe proves a snapshot can be taken, instead of inferring it from the layout.
+//
+// `storage status` used to answer "snapshots possible" from the presence of an
+// LVM volume, and it said so on a node whose every hourly lvcreate was failing
+// with a phantom thin device id in the pool metadata. The only honest check is
+// to take one and remove it: it costs a few hundred milliseconds and it is the
+// exact operation the backup agent performs.
+func Probe(ctx context.Context, spec Spec) error {
+	spec = spec.withDefaults()
+	return lvmlock.With(ctx, func() error {
+		name := spec.LV + "-probe"
+		// A probe killed mid-flight leaves the name behind, and the next probe
+		// would then fail with "already exists" — which reads as "snapshots are
+		// broken" when the truth is "a probe was interrupted". Clearing the name
+		// first makes the check repeatable; the failure to remove is ignored
+		// because its absence is the normal case.
+		_, _ = spec.exec(ctx, "lvremove", "-f", spec.VG+"/"+name)
+		if out, err := spec.exec(ctx, "lvcreate", "-q", "-s", "-n", name, spec.VG+"/"+spec.LV); err != nil {
+			return fmt.Errorf("snapshot probe failed: %w (%s)", err, strings.TrimSpace(string(out)))
+		}
+		// Always remove it, even when the caller's context dies: a probe LV left
+		// behind is a snapshot that quietly costs pool space until the next prune
+		// (which does not know about it).
+		if out, err := spec.exec(context.WithoutCancel(ctx), "lvremove", "-f", spec.VG+"/"+name); err != nil {
+			return fmt.Errorf("snapshot probe succeeded but the probe volume could not be removed — remove %s/%s by hand: %w (%s)",
+				spec.VG, name, err, strings.TrimSpace(string(out)))
+		}
+		return nil
+	})
+}
+
 // AutoSize derives the backing file size from the disk that will hold it.
 //
 // The rule is 75% of the filesystem's total size, capped so that at least
@@ -296,16 +375,77 @@ func roundDown(n, unit int64) int64 {
 	return n / unit * unit
 }
 
+func roundUp(n, unit int64) int64 {
+	if unit <= 0 {
+		return n
+	}
+	if n%unit == 0 {
+		return n
+	}
+	return (n/unit + 1) * unit
+}
+
+// poolMetaSize is the thin-pool metadata size pmcluster asks LVM for.
+//
+// Roughly a thousandth of the pool, which is what LVM would have chosen on its
+// own, rounded up to 4 MiB and clamped. Explicit because a repair has to know
+// the number in advance: it allocates a replacement metadata LV of exactly this
+// size before it can touch the damaged one.
+func poolMetaSize(poolBytes int64) int64 {
+	meta := roundUp(poolBytes/1000, 4<<20)
+	if meta < poolMetaMin {
+		return poolMetaMin
+	}
+	if meta > poolMetaMax {
+		return poolMetaMax
+	}
+	return meta
+}
+
+// repairReserve is the VG space that must stay outside the pool for a metadata
+// repair to be possible at all.
+//
+// A thin pool that fills its volume group cannot be repaired in place: lvconvert
+// --repair allocates the repaired metadata beside the damaged one, finds no free
+// extents, and gives up with "insufficient free space (0 extents)". That is not
+// a corrupted-data scenario, it is a provisioning decision — and the only
+// recovery from it is destroying the volume. Two metadata copies of headroom
+// cost well under 1% of the pool.
+func repairReserve(poolBytes int64) int64 {
+	return repairReserveFactor * poolMetaSize(poolBytes)
+}
+
 // sectorAlign is the granularity every size must respect: 64 KiB is one thin-pool
 // chunk, which is both a multiple of 512-byte sectors and of the ext4 block size.
 const sectorAlign = 64 << 10
 
 // PoolSize is the thin pool inside a backing file of the given size.
+//
+// What the pool does NOT get is poolOverhead, and then repairReserve: the space a
+// future metadata repair will need. Sizing the pool to the last extent is what
+// made every node of the reference fleet unrepairable — the pool was fine right
+// up until the moment it needed to be fixed, and then the only option was to
+// destroy it.
+//
+// The reserve depends on the metadata size, which depends on the pool size, so
+// this converges in one step: the pool is smaller than the first estimate, so
+// its metadata is no bigger than that estimate's.
 func PoolSize(fileBytes int64) int64 {
 	if fileBytes <= poolOverhead {
 		return roundDown(fileBytes, sectorAlign)
 	}
-	return roundDown(fileBytes-poolOverhead, sectorAlign)
+	pool := roundDown(fileBytes-poolOverhead, sectorAlign)
+	for i := 0; i < 4; i++ {
+		// Always subtract from the FILE, never from the previous estimate: doing
+		// the latter costs another reserve per iteration and quietly shrank the
+		// pool by the reserve several times over.
+		next := roundDown(fileBytes-poolOverhead-repairReserve(pool), sectorAlign)
+		if next <= 0 || next == pool {
+			break
+		}
+		pool = next
+	}
+	return pool
 }
 
 // DataSize is the data volume inside a pool of the given size. Leaving a fifth
@@ -459,7 +599,8 @@ func provisionBlockDevice(ctx context.Context, spec Spec, st State, res *Result)
 	steps := [][]string{
 		{"pvcreate", "-q", spec.Device},
 		{"vgcreate", "-q", spec.VG, spec.Device},
-		{"lvcreate", "-q", "-T", spec.VG + "/pool", "-L", strconv.FormatInt(res.PoolBytes, 10) + "B"},
+		{"lvcreate", "-q", "-T", spec.VG + "/pool", "-L", strconv.FormatInt(res.PoolBytes, 10) + "B",
+			"--poolmetadatasize", strconv.FormatInt(poolMetaSize(res.PoolBytes), 10) + "B"},
 		{"lvcreate", "-q", "-V", strconv.FormatInt(res.DataBytes, 10) + "B", "-T", spec.VG + "/pool", "-n", spec.LV},
 		{"mke2fs", "-q", "-t", "ext4", "-L", "pmcluster-data", spec.device()},
 	}

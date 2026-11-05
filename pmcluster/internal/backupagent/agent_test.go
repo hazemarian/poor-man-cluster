@@ -282,7 +282,7 @@ func TestDryRunSaysNothingToArchive(t *testing.T) {
 	if !st.Empty || st.Archive != "" {
 		t.Fatalf("dry run stack = %+v, want empty with no archive", st)
 	}
-	if !strings.Contains(st.Detail, "would archive nothing") {
+	if !strings.Contains(st.Detail, "no files under") {
 		t.Errorf("dry run detail = %q", st.Detail)
 	}
 }

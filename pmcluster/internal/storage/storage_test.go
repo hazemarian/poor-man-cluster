@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -249,16 +250,26 @@ func TestProvisionLoopBuildsTheVolumeAndSizesItForSnapshots(t *testing.T) {
 		last = idx
 	}
 
-	// The data volume must be smaller than its pool, or the first backup run has
-	// nowhere to put the snapshot's divergent writes.
-	if res.PoolBytes != 15<<30 {
-		t.Fatalf("pool = %d, want 15 GiB (file minus overhead)", res.PoolBytes)
+	// The pool takes the file minus its overhead minus the repair reserve, and
+	// the data volume takes 80% of the pool. Both halves are load-bearing: the
+	// 20% is where a snapshot's divergent writes go, the reserve is what makes a
+	// metadata repair possible later (see repairReserve).
+	const file = 16 << 30
+	if want := roundDown(file-poolOverhead-repairReserve(res.PoolBytes), sectorAlign); res.PoolBytes != want {
+		t.Fatalf("pool = %d, want %d (file minus overhead minus the repair reserve)", res.PoolBytes, want)
 	}
-	if res.DataBytes != 12<<30 {
-		t.Fatalf("data = %d, want 12 GiB (80%% of the pool)", res.DataBytes)
+	if free := file - poolOverhead - res.PoolBytes; free < repairReserve(res.PoolBytes) {
+		t.Fatalf("pool left %d bytes of VG free, want at least %d for a metadata repair", free, repairReserve(res.PoolBytes))
 	}
-	if !strings.Contains(strings.Join(h.calls, "\n"), "lvcreate -q -V 12884901888B") {
+	if want := DataSize(res.PoolBytes); res.DataBytes != want {
+		t.Fatalf("data = %d, want %d (80%% of the pool)", res.DataBytes, want)
+	}
+	if !strings.Contains(strings.Join(h.calls, "\n"), fmt.Sprintf("lvcreate -q -V %dB", res.DataBytes)) {
 		t.Fatalf("data volume not sized with its headroom: %v", h.calls)
+	}
+	// The metadata size is asked for, not inferred: a repair needs to know it.
+	if !strings.Contains(strings.Join(h.calls, "\n"), fmt.Sprintf("--poolmetadatasize %dB", poolMetaSize(res.PoolBytes))) {
+		t.Fatalf("pool metadata size not pinned: %v", h.calls)
 	}
 
 	// The units land on disk with the ordering that survives a reboot.

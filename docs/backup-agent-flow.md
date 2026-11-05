@@ -86,6 +86,12 @@ sequenceDiagram
   leader that dies mid-run costs the cluster its console view, not the backup.
 - **Restore reads one artifact, not the snapshot.** The snapshot is deleted at
   the end of every run.
+- **A stack with no files is not an artifact.** The agent counts regular files
+  before it writes anything: an empty stack directory (what a moved volume
+  leaves behind) produces no artifact, no upload and no row, and the run says
+  so per stack. An archive of directory entries restores zero files, which is
+  indistinguishable from a broken backup — the honest record is that this node
+  had nothing to back up.
 
 ## Not built, and known
 

@@ -80,9 +80,44 @@ pmcluster backup restore <id> [--dest-root /var/stack/data] [--volume <name>] [-
 - Migration `0018_backup_filename.sql` adds `filename` to `backups` with a
   unique partial index — scheduled offen archives on disk are discovered
   once into `pmcluster backup list` / the console (no double-recording).
-- `backup_retention_days` (default **15**) prunes old rows **and** their
-  archive files on `List`/`ListForStack`; control-plane archives keep a
-  30-day window.
+- `backup_retention_days` (default **3**: every hour for 48 h, then one a day
+  to day 3) prunes old rows **and** their archive files on
+  `List`/`ListForStack`; the store and the bucket are pruned on the same
+  policy through `planPrune`, and control-plane archives keep a 30-day window.
+
+### When a restore extracts nothing
+
+Three different conditions produced the same sentence, and only one of them is
+a bug in the restore. They are now distinct, and `Restore` refuses all three
+with the cause named:
+
+| Message | Meaning | What to do |
+| --- | --- | --- |
+| `… contains only directories, so the snapshot captured an EMPTY volume` | the artifact is intact; the volume was empty when it was taken | the stack's data lives on another node — restore that node's artifact |
+| `… holds N file(s), none of which matched the restore scope (volume "x")` | the artifact is intact and full; the filter excluded every entry | fix `--volume` (stack-scoped runs anchor it to the app) |
+| `offsite artifact <key> …: not an archive` | the object exists but is not a tar.gz — an HTML error page, a JSON sidecar, an empty body | the key or the endpoint is wrong; nothing was written to disk |
+
+Guards behind those messages: `fetchS3Object` rejects a 200 with an empty body
+and a body shorter than the announced `Content-Length` (nothing is kept);
+`restoreSource` classifies the fetched bytes (gzip magic, `ustar` at offset
+257, zero length) before the extractor ever sees them; `listArchive` errors on
+a non-archive and on a zero-entry archive instead of returning an empty list.
+A fetched archive is staged in `<archive dir>/.restore-tmp` — `/tmp` is a
+tmpfs on the reference hosts, so staging there would cap a restore at the
+node's free RAM.
+
+### An empty volume is not an artifact
+
+The backup agent counts regular files before it commits to an artifact. A stack
+whose directory exists on a node but holds no files (the leftover of a stack
+whose volumes moved) produces **no artifact, no upload and no row**; the run
+stays green and names the stack: `○ <stack> nothing to archive — no files under
+/var/stack/data/<stack> — the volume is empty on this node`, plus a run-level
+warning. Without this, the node kept writing a "succeeded" archive of directory
+entries that restores zero files — seven of the twenty most recent artifacts in
+the reference cluster were exactly that. Artifacts recorded before this rule
+carry the note `empty: 0 files — the volume was empty on this node when the
+snapshot was taken`, read from their sidecar manifest.
 
 ---
 

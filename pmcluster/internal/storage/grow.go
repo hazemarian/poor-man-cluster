@@ -48,9 +48,35 @@ func grow(ctx context.Context, spec Spec) error {
 			}
 		}
 	}
-	// Extend the pool into whatever free space the VG now has.
-	if out, err := spec.exec(ctx, "lvextend", "-q", "-l", "+100%FREE", spec.VG+"/pool"); err != nil {
+	// Extend the pool into the VG's free space MINUS the repair reserve.
+	//
+	// This used to be `-l +100%FREE`, which takes the last extent: the pool ends
+	// up healthy and unrepairable at the same time, because lvconvert --repair
+	// allocates a replacement metadata LV before it can touch the damaged one and
+	// there is nowhere to put it. The reserve is two metadata copies — the
+	// repaired metadata and the backup of the old one — and it costs under 1%.
+	meta, err := metadataBytes(ctx, spec)
+	if err != nil {
+		return err
+	}
+	free, err := vgFreeBytes(ctx, spec)
+	if err != nil {
+		return err
+	}
+	reserve := repairReserveFactor * meta
+	extend := roundDown(free-reserve, sectorAlign)
+	if extend <= 0 {
+		return fmt.Errorf("nothing to extend: %s has %d bytes free and a metadata repair needs %d of them kept back (grow the backing file first: --size)",
+			spec.VG, free, reserve)
+	}
+	if out, err := spec.exec(ctx, "lvextend", "-q", "-L", fmt.Sprintf("+%dB", extend), spec.VG+"/pool"); err != nil {
 		return fmt.Errorf("extend pool: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	// Verify the reserve survived: an extend that leaves the VG at zero free
+	// extents is the state this guard exists to prevent, and LVM rounds.
+	after, verr := vgFreeBytes(ctx, spec)
+	if verr == nil && after < reserve {
+		return fmt.Errorf("extended the pool but only %d bytes stay free, less than the %d a metadata repair needs", after, reserve)
 	}
 	// A thin pool that grew needs its metadata checked before the next snapshot.
 	if out, err := spec.exec(ctx, "lvs", "--noheadings", "-o", "lv_name,data_percent", spec.VG); err != nil {

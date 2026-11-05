@@ -283,7 +283,8 @@ func buildLoop(ctx context.Context, spec Spec, st State, res *Result) error {
 		return fmt.Errorf("activate %s: %w (%s)", spec.VG, err, strings.TrimSpace(string(out)))
 	}
 	if !lvExists(ctx, spec, "pool") {
-		if out, err := spec.exec(ctx, "lvcreate", "-q", "-T", spec.VG+"/pool", "-L", fmt.Sprintf("%dB", res.PoolBytes)); err != nil {
+		if out, err := spec.exec(ctx, "lvcreate", "-q", "-T", spec.VG+"/pool", "-L", fmt.Sprintf("%dB", res.PoolBytes),
+			"--poolmetadatasize", fmt.Sprintf("%dB", poolMetaSize(res.PoolBytes))); err != nil {
 			return fmt.Errorf("lvcreate pool: %w (%s)", err, strings.TrimSpace(string(out)))
 		}
 	}

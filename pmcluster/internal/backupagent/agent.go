@@ -619,7 +619,7 @@ func (a *Agent) dryRunStack(s StackPlan) Stack {
 			Stack:  s.Name,
 			OK:     true,
 			Empty:  true,
-			Detail: fmt.Sprintf("would archive nothing — no files under %s", dir),
+			Detail: fmt.Sprintf("no files under %s — the volume is empty on this node", dir),
 		}
 	}
 	return Stack{
