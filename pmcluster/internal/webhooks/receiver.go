@@ -187,7 +187,15 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	// if the caller stopped waiting.
 	policy := h.retryer()
 	phaseCtx, cancelPhase := context.WithTimeout(context.WithoutCancel(r.Context()), deployPhaseBudget(policy.Attempts, policy.Delay))
-	defer cancelPhase()
+	// Deliberately NOT deferred.
+	//
+	// The 202 below answers "accepted, still running" and leaves the retry phase
+	// going; cancelling it when this function returns would abort the very work
+	// that answer promised, and — worse — a cancelled deploy surfaces as "no
+	// error", so the delivery row the follow-up goroutine writes would say
+	// "accepted" for a deploy that was killed mid-flight. Ownership of this
+	// cancel is transferred to that goroutine on the 202 path; the phase deadline
+	// set above still bounds the work either way.
 
 	// The retry phase runs on its own goroutine from here: a retryable failure
 	// can spend minutes of sleeps, and the caller is waiting on an HTTP request
@@ -209,12 +217,17 @@ func (h *Receiver) receive(w http.ResponseWriter, r *http.Request) {
 	var out outcome
 	select {
 	case out = <-phase:
+		// The phase is over: releasing its context now frees the deadline timer.
+		cancelPhase()
 	case <-time.After(webhookResponseBudget):
 		// Still retrying. Answer now with what the caller can act on, and let
 		// the delivery row — which the goroutine records — carry the outcome.
 		// This is the honest split: the HTTP response is about this request,
 		// the delivery history is about the deploy.
 		go func() {
+			// This goroutine owns the phase from here (see the note where the
+			// context is created), so it is also the one that releases it.
+			defer cancelPhase()
 			o := <-phase
 			status, deployErr := "accepted", error(nil)
 			if o.err != nil {

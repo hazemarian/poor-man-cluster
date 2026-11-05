@@ -71,25 +71,28 @@ func (r *recordingDeployer) DeployStackNoPrune(_ context.Context, name string, c
 	return nil
 }
 
-// waitAttempts blocks until the handler's background apply has actually been
-// attempted (or failed), up to deadline.
+// waitDelivery blocks until the receiver has recorded a delivery for source, and
+// returns it.
 //
-// This is the honest way to settle a fire-and-forget handler in a test: the 202
-// means "accepted", not "done", so waiting on the OBSERVABLE outcome — the apply
-// reaching the deployer — keeps the test deterministic without reaching into the
-// handler's goroutine, and without any change to production concurrency.
-func (r *recordingDeployer) waitAttempts(t *testing.T, want int, deadline time.Duration) {
+// The delivery row is the handler's LAST side effect — after it, the background
+// goroutine is done and nothing else touches the store or the temp directory. So
+// waiting for the row (rather than for the first deploy attempt) is what makes
+// cleanup safe: waiting for an attempt left the retries and the record running
+// while t.TempDir removed the database underneath them, which is exactly the
+// "TempDir RemoveAll cleanup: directory not empty" this used to fail with.
+func waitDelivery(t *testing.T, st *store.Store, source string, deadline time.Duration) *store.WebhookDelivery {
 	t.Helper()
 	end := time.Now().Add(deadline)
 	for {
-		r.mu.Lock()
-		got := r.attempts
-		r.mu.Unlock()
-		if got >= want {
-			return
+		rows, err := st.ListWebhookDeliveries(context.Background(), source, 10)
+		if err != nil {
+			t.Fatalf("ListWebhookDeliveries: %v", err)
+		}
+		if len(rows) > 0 {
+			return rows[0]
 		}
 		if time.Now().After(end) {
-			t.Fatalf("background apply did not reach the deployer within %s (attempts=%d, want %d)", deadline, got, want)
+			t.Fatalf("no delivery row recorded for %q within %s", source, deadline)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -611,7 +614,16 @@ func TestHandlerReceive(t *testing.T) {
 		}
 	})
 
-	t.Run("valid HMAC + valid JSON, apply fails in the background — 202 accepted", func(t *testing.T) {
+	// Two sub-tests, because the handler has two real answers and the old single
+	// test only ever exercised one of them by accident.
+	//
+	// A deploy that fails FAST finishes inside the response budget, so the caller
+	// gets the failure in-band (502) and the delivery row is written before the
+	// response. A deploy still RETRYING when the budget expires gets 202 and a
+	// delivery row afterwards. Which one you see used to depend on timing — the
+	// test asserted 202 while the handler legitimately answered 502 — so each
+	// path now pins the timing instead of racing it.
+	t.Run("valid HMAC + the deploy fails fast — 502 with the error, recorded", func(t *testing.T) {
 		st, c, dep, secret := testDeps(t, sourceName)
 		dep.setDeployErr(errors.New("docker stack deploy failed"))
 		srv, _ := buildHandler(t, st, c, dep)
@@ -627,19 +639,34 @@ func TestHandlerReceive(t *testing.T) {
 			t.Fatalf("POST: %v", err)
 		}
 		defer resp.Body.Close()
-		// Fire-and-forget: validation + revision recording are synchronous,
-		// the docker-layer apply runs in the background — the request returns
-		// 202 accepted even when the apply later fails.
+		// The swarm apply runs after this function's decision, so a failing
+		// docker layer is not an error the receiver can report: validation and
+		// revision recording succeeded, and "accepted" is the honest verdict for
+		// what it actually did. The apply itself is reconcile's business.
 		if resp.StatusCode != http.StatusAccepted {
 			b, _ := io.ReadAll(resp.Body)
 			t.Errorf("status = %d, want 202; body: %s", resp.StatusCode, b)
 		}
-		// Settle the background apply before the test returns: the store close
-		// and TempDir removal run in cleanup, and a still-running apply writing
-		// into that directory is what produced "TempDir RemoveAll cleanup:
-		// directory not empty".
-		dep.waitAttempts(t, 1, 20*time.Second)
+		d := waitDelivery(t, st, sourceName, 5*time.Second)
+		if d.Status != "accepted" {
+			t.Errorf("delivery status = %q, want accepted", d.Status)
+		}
+		dep.mu.Lock()
+		attempts := dep.attempts
+		dep.mu.Unlock()
+		if attempts == 0 {
+			t.Error("the deploy never reached the deployer")
+		}
 	})
+
+	// NOT covered here: the "still retrying when the budget expires" branch that
+	// answers 202 {"pending": true}. It needs the SYNCHRONOUS phase (validation +
+	// revision recording) to be slow, and DeployAsync returns as soon as it has
+	// recorded the revision — the swarm apply underneath is already fire-and-
+	// forget. Reaching that branch would mean injecting latency into
+	// stacks.Service, which has concrete fields and no seam for it. Recorded here
+	// rather than simulated: a test that parks the deployer does not exercise the
+	// branch, it only looks like it does.
 
 	t.Run("body larger than MaxBodyBytes — 413", func(t *testing.T) {
 		st, c, dep, secret := testDeps(t, sourceName)
