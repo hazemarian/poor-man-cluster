@@ -502,9 +502,8 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	} else {
 		fmt.Fprintf(out, "⚠ app-data volume not provisioned: %v\n", err)
 	}
-	// Swap is the host's business, not the cluster's: it belongs in the node
-	// hardening script beside the other kernel and OS settings. `pmcluster
-	// hardening swap` prints the three commands for whoever builds the image.
+	// Swap is the host's business, not the cluster's: harden-host.sh sizes it
+	// from RAM and free disk when the node image is built.
 
 	in := cluster.UpInput{}
 	in.Version = buildinfo.Version

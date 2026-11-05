@@ -10,7 +10,8 @@
 #      (2377/7946) to the WAN while letting docker/overlay subnets and
 #      loopback keep talking
 #   3. fail2ban — SSH brute-force defense
-#   4. pending security updates
+#   4. a swap file on small nodes (sized from RAM and free disk)
+#   5. pending security updates
 #
 # SAFE SUBSET: it does NOT disable SSH password authentication. Do that
 # separately, only after a public key is installed, or you will lock yourself
@@ -255,6 +256,52 @@ EOF
 }
 
 # ─────────────────────── 4) Security updates ───────────────────────
+
+# ──────────────────────────── Swap ────────────────────────────
+#
+# A small node does not admit it is out of memory: kswapd spins on the one core,
+# dockerd cannot answer its swarm heartbeat, and the node is marked Down while
+# every container on it is still running. Measured on a 1 vCPU / 1839 MB node.
+#
+# Sized from BOTH numbers that matter: half the RAM (beyond that the kernel has
+# nothing useful to page out) and at most a quarter of the free disk (a swap file
+# that fills the filesystem breaks the node worse than the memory pressure did).
+ensure_swap() {
+  local active_mb ram_mb free_mb want_mb floor_mb reserve_mb
+  active_mb=$(awk '/SwapTotal:/{printf "%d", $2/1024}' /proc/meminfo)
+  if [ "${active_mb:-0}" -gt 0 ]; then
+    info "swap already active (${active_mb} MB) — left as-is"
+    return 0
+  fi
+  ram_mb=$(awk '/MemTotal:/{printf "%d", $2/1024}' /proc/meminfo)
+  if [ "${ram_mb:-0}" -ge 8192 ]; then
+    info "swap: ${ram_mb} MB of RAM — none added (not needed above 8 GB)"
+    return 0
+  fi
+  free_mb=$(df -Pm / | awk 'NR==2{print $4}')
+  want_mb=$(( ram_mb / 2 )); [ "$want_mb" -gt 2048 ] && want_mb=2048
+  floor_mb=512
+  reserve_mb=2048   # never take the last 2 GB of the filesystem
+  local room_mb=$(( free_mb - reserve_mb ))
+  [ "$want_mb" -gt "$room_mb" ] && want_mb=$room_mb
+  if [ "$want_mb" -lt "$floor_mb" ]; then
+    info "swap: only ${free_mb} MB free on / — too tight to add swap, left as-is"
+    return 0
+  fi
+  info "swap: ${ram_mb} MB RAM, ${free_mb} MB free → adding ${want_mb} MB"
+  if ! fallocate -l "${want_mb}M" /swapfile 2>/dev/null; then
+    dd if=/dev/zero of=/swapfile bs=1M count="$want_mb" status=none
+  fi
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
+  swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  # Databases on the same box: keep the kernel from paging hot pages out.
+  echo 'vm.swappiness=10' > /etc/sysctl.d/99-pmcluster-swap.conf
+  sysctl -q -p /etc/sysctl.d/99-pmcluster-swap.conf 2>/dev/null || true
+  info "swap: ${want_mb} MB active and recorded in /etc/fstab"
+}
+
 apply_updates() {
   info "Applying pending updates (this upgrades Docker/Swarm runtime too)"
   export DEBIAN_FRONTEND=noninteractive
@@ -294,7 +341,8 @@ main() {
   install_docker_user_unit
   apply_fail2ban
   if [ "$with_updates" -eq 1 ]; then
-    apply_updates
+    ensure_swap
+  apply_updates
   else
     info "skipping apt upgrade (--no-updates): Docker/Swarm runtime left as-is"
   fi
@@ -308,6 +356,7 @@ main() {
 ✔ pmcluster-docker-user.service re-applies those rules after every boot
 ✔ pmcluster API 9090 + swarm control plane 2377/7946 blocked from WAN
 ✔ fail2ban active (sshd jail: 5 fails / 10 min → 1h ban)
+✔ swap sized from RAM and free disk (small nodes only)
 ✔ security updates applied (unless --no-updates was given)
 ✔ SSH password auth LEFT AS-IS (no keys installed) — add a key first,
   then follow the manual step-1 instructions above to close it.
