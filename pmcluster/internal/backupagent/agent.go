@@ -397,6 +397,17 @@ type Agent struct {
 	// means "leave the archives alone" — a test or a one-off run must not delete
 	// history just because it happened to execute.
 	Retention *backups.Retention
+	// KeepLocalOne means this node keeps exactly ONE artifact per stack: the
+	// one just written, after every configured destination has confirmed it.
+	// Older local copies of that stack go immediately, instead of waiting for
+	// the retention window.
+	//
+	// This is what "the copies live in the store and the bucket, not on the
+	// node" means in practice. It is not the default: a node that keeps nothing
+	// but the newest copy has no local history to restore from and nothing for
+	// the weekly drill unless that newest copy survived. One is the smallest
+	// number that keeps both working.
+	KeepLocalOne bool
 	// DryRun walks the plan and reports what it would do without freezing,
 	// snapshotting or writing anything.
 	DryRun bool
@@ -634,6 +645,19 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 					st.Reason = fmt.Sprintf("ship: %v", err)
 				} else {
 					st.Where = append(st.Where, where...)
+					// Only after every destination CONFIRMED the object (the
+					// ship function verifies each leg) may the older local copies
+					// of this stack go. Deliberately per-stack and after the
+					// fact: deleting before the ship is how a node ends up
+					// holding neither a local copy nor a remote one.
+					if a.KeepLocalOne && len(where) > 0 {
+						if removed, derr := a.pruneLocalToNewestOfStack(st.Stack, st.Archive); derr != nil {
+							res.Warnings = append(res.Warnings,
+								fmt.Sprintf("stack %s: could not remove older local artifacts: %v", st.Stack, derr))
+						} else if removed > 0 {
+							st.Where = append(st.Where, fmt.Sprintf("node:kept-newest (%d older removed)", removed))
+						}
+					}
 				}
 			}
 			res.Stacks[len(res.Stacks)-1] = st
@@ -1016,4 +1040,46 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// pruneLocalToNewestOfStack removes this node's older artifacts of one stack,
+// keeping the newest (the one just written) and its sidecar.
+//
+// The archive dir is shared with other nodes' artifacts and with the
+// control-plane tarballs, so it filters by parseable (node, stack) rather than
+// by prefix — a name that does not parse is somebody else's and is left alone.
+func (a *Agent) pruneLocalToNewestOfStack(stack, keepArchive string) (int, error) {
+	entries, err := os.ReadDir(a.ArchiveDir)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == keepArchive || name == keepArchive+".json" {
+			continue
+		}
+		// Sidecars are removed with their archive; counting them separately
+		// would report two removals per artifact.
+		if strings.HasSuffix(name, ".json") {
+			continue
+		}
+		art, ok := backups.ParseArtifact(name)
+		if !ok || art.Node != a.Node || art.Stack != stack {
+			continue
+		}
+		// The sidecar goes with its archive, always.
+		full := filepath.Join(a.ArchiveDir, name)
+		if err := os.Remove(full); err != nil && !os.IsNotExist(err) {
+			return removed, fmt.Errorf("remove %s: %w", name, err)
+		}
+		if !strings.HasSuffix(name, ".json") {
+			_ = os.Remove(full + ".json")
+		}
+		removed++
+	}
+	return removed, nil
 }

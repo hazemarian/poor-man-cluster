@@ -87,6 +87,10 @@ const (
 	// back-compat. The store is normally kept off storage nodes; an explicit
 	// "leader" choice is allowed as-is.
 	settingBackupStoreOn = "backup_store_on"
+	// settingBackupKeepLocal decides whether a node keeps the whole dense
+	// window on its own disk ("dense", the default) or one artifact per stack
+	// ("minimal"). The copies that matter are remote.
+	settingBackupKeepLocal = "backup_keep_local"
 
 	// Daemon log verbosity: "debug" | "info" | "warn" | "error". Rendered into
 	// nothing — the daemon reads it at startup AND applies it live when the
@@ -154,10 +158,13 @@ func SettingBackupS3AccessKey() string                { return settingBackupS3Ac
 func SettingBackupS3SecretKey() string                { return settingBackupS3SecretKey }
 func SettingBackupS3Region() string                   { return settingBackupS3Region }
 func SettingBackupStoreOn() string                    { return settingBackupStoreOn }
-func SettingLogLevel() string                         { return settingLogLevel }
-func SettingReconcileInterval() string                { return settingReconcileInterval }
-func SettingStorageNodes() string                     { return settingStorageNodes }
-func SettingStorageFailover() string                  { return settingStorageFailover }
+
+// SettingBackupKeepLocal is the node-disk retention mode.
+func SettingBackupKeepLocal() string   { return settingBackupKeepLocal }
+func SettingLogLevel() string          { return settingLogLevel }
+func SettingReconcileInterval() string { return settingReconcileInterval }
+func SettingStorageNodes() string      { return settingStorageNodes }
+func SettingStorageFailover() string   { return settingStorageFailover }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {

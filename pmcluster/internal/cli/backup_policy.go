@@ -38,6 +38,12 @@ type backupPolicy struct {
 	// agent then falls back to the setting (on a node with a store) and to
 	// backups.DefaultRetention.
 	RetentionDays int `json:"retention_days,omitempty"`
+	// KeepLocal says how much history this node keeps on its own disk:
+	// "dense" (default, the full retention window) or "minimal" (one artifact
+	// per stack — the newest, after every destination confirmed it). The
+	// copies that matter are in the store and the bucket; the node's copy is
+	// the one that costs disk on the machine running the apps.
+	KeepLocal string `json:"keep_local,omitempty"`
 	// StoreS3 is the in-cluster store as an S3 target. It used to be a WebDAV URL
 	// with the credentials embedded in it; now it is the same five fields as any
 	// other destination, so one code path ships to both.
@@ -155,4 +161,13 @@ func isOff(v string) bool {
 		return true
 	}
 	return false
+}
+
+// keepLocalMinimal answers whether this node keeps only the newest artifact of
+// each stack (backup_keep_local = "minimal").
+func keepLocalMinimal() bool {
+	if pol, ok := readBackupPolicy(backupPolicyFile); ok && pol.KeepLocal != "" {
+		return strings.EqualFold(pol.KeepLocal, "minimal")
+	}
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("PMCLUSTER_BACKUP_KEEP_LOCAL")), "minimal")
 }

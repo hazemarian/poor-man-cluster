@@ -64,6 +64,7 @@ func writeBackupPolicyFile() error {
 		Cron:    envOr("PMCLUSTER_BACKUP_CRON", ""),
 		Store:   envOr("PMCLUSTER_BACKUP_STORE", ""),
 	}
+	pol.KeepLocal = envOr("PMCLUSTER_BACKUP_KEEP_LOCAL", "")
 	pol.S3.Endpoint = envOr("PMCLUSTER_BACKUP_S3_ENDPOINT", "")
 	pol.S3.Bucket = envOr("PMCLUSTER_BACKUP_S3_BUCKET", "")
 	pol.S3.Region = envOr("PMCLUSTER_BACKUP_S3_REGION", "")
@@ -92,6 +93,9 @@ func writeBackupPolicyFile() error {
 		// and read by nothing — every node pruned at the flag default instead.
 		if pol.RetentionDays == 0 {
 			pol.RetentionDays = cluster.LoadBackupRetentionDays(ctx, st)
+		}
+		if pol.KeepLocal == "" {
+			pol.KeepLocal = st.SettingDefault(ctx, cluster.SettingBackupKeepLocal(), "")
 		}
 		for _, f := range []struct {
 			dst *string

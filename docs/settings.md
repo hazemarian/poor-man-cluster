@@ -31,6 +31,7 @@ bearers). Console: the **Settings** page.
 | `backup_enabled` | `true` | operator | master switch. The timer keeps firing; the agent asks the control plane and exits without freezing when this is off |
 | `backup_cron` | `0 * * * *` (hourly) | operator | when a run is due (5-field cron; `*`, numbers and comma lists only). Evaluated by the daemon, not by the unit file |
 | `backup_retention_days` | `3` | operator | prune window for backup rows + archives (local, store and offsite): 48 h dense, then one a day to this age |
+| `backup_keep_local` | `dense` | operator | how much history a node keeps on its **own** disk: `dense` keeps the whole retention window (48 h dense + the sparse tail), `minimal` keeps one artifact per stack — the newest, deleted-down only *after* every configured destination confirmed the object. The copies that matter are in the store and the bucket; this is the one that costs disk on the machine running the apps |
 | `backup_store_on` | `""` (= worker/auto) | setup wizard / operator | where the in-cluster SeaweedFS store runs: `leader`, or a non-storage non-platform worker (auto) |
 | `backup_s3_endpoint` / `_bucket` / `_access_key` / `_secret_key` / `_region` | unset (`_region` defaults `auto`) | setup wizard / operator | the offsite S3/R2 destination — when set, agents double-write every archive offsite |
 | `reconcile_interval` | `60` (seconds) | operator | the control loop's safety tick; `0` disables the loop |
