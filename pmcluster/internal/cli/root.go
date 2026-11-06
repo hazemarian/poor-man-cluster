@@ -79,7 +79,7 @@ func init() {
 	// leader, before any command body can open the store (see leader_guard.go).
 	withScopeGuard()
 
-	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(doctorCmd, versionCmd)
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(clusterCmd)

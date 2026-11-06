@@ -190,9 +190,11 @@ func runVerifyOffsite(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// Record each target's verdict; the last record is the one the console and
-	// `offsite-status` read, so a failing target must not be overwritten by a
-	// passing one in the same run.
+	// Record each target's verdict. `offsite-status` and the doctor read the
+	// LAST record, so a failing target is recorded last: writing them in
+	// configuration order let a healthy bucket overwrite a broken one and made
+	// the summary read as fine.
+	sort.SliceStable(recs, func(i, j int) bool { return recs[i].OK && !recs[j].OK })
 	for _, r := range recs {
 		_ = recordOffsiteCheck(stateDir, r)
 	}

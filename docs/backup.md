@@ -585,6 +585,15 @@ pmcluster backup-agent drill backup-<node>-<ts>-stack-<stack>.tar.gz
 
 ---
 
+## Re-reading the bucket
+
+The `where:` column records intent at ship time. `backup-agent verify-offsite
+--days 2` re-reads every configured target and checks that each recent archive —
+and its `.json` sidecar — is still there, which is the only thing that catches a
+lifecycle rule, a quota, a rotated key or a deleted bucket. It runs daily at
+04:20; `backup-agent offsite-status` prints the last verdict and `pmcluster
+doctor` folds it into the platform health table. See [`health.md`](health.md).
+
 ## 13. Not built, and known
 
 | item | state |

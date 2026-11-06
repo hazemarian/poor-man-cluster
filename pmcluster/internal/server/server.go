@@ -181,6 +181,7 @@ func New(d Deps) http.Handler {
 			r.Get("/cluster/info", api.ClusterInfoHandler(d.Docker))
 			r.Get("/cluster/apply", api.ApplyRecordHandler(d.Store))
 			r.Get("/cluster/versions", api.VersionsHandler(d.Docker))
+			r.Get("/doctor", api.DoctorHandler(d.Docker, d.Store, d.Cipher))
 			r.Get("/nodes", api.NodesHandler(d.Docker, d.Store))
 			if d.Store != nil {
 				r.Post("/nodes/{hostname}/storage", api.NodeStorageHandler(d.Docker, d.Store))

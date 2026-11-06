@@ -56,6 +56,13 @@ var topLevelScopes = map[string]commandScope{
 	"cluster": scopeLeader, // overridden per-subcommand below
 
 	// Cluster state: leader only.
+	//
+	// doctor belongs here even though half of it is about this machine: the
+	// secrets, the last apply and the config index all come from the local
+	// store, and a follower's store is a stale copy. Answering "the platform is
+	// healthy" from a node that cannot see the platform is the one wrong answer
+	// this command must never give.
+	"doctor":        scopeLeader,
 	"backup":        scopeLeader,
 	"config":        scopeLeader,
 	"creds":         scopeLeader,

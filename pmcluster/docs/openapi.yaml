@@ -129,6 +129,98 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ClusterInfo"
+  /api/cluster/apply:
+    get:
+      summary: Last platform apply, including the steps that degraded
+      description: |
+        What the last cluster update (or the daemon reconcile pass) changed, and
+        what it could not do. Every degraded step in the update pipeline is
+        recorded as a warning - the reconcile loop runs unattended, so warnings
+        that only reached stdout were invisible to operators.
+      operationId: clusterApplyRecord
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: 'The last apply, or present=false when none is recorded'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  present: {type: boolean}
+                  at: {type: string, format: date-time}
+                  version: {type: string}
+                  source: {type: string}
+                  stacks: {type: array, items: {type: string}}
+                  configs: {type: array, items: {type: string}}
+                  warnings: {type: array, items: {type: string}}
+                  warning_count: {type: integer}
+                  line: {type: string}
+  /api/cluster/versions:
+    get:
+      summary: Binary version every manager reports, and the skew
+      description: |
+        Managers publish a pmcluster_nodever_ host config on start and every ten
+        minutes. The stale list names the ones that are not on the version of the
+        daemon answering this request. Workers cannot create swarm configs, so
+        they cannot report and never appear here.
+      operationId: clusterVersions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Reported versions and the skew against this daemon
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reference: {type: string}
+                  ok: {type: boolean}
+                  nodes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        hostname: {type: string}
+                        version: {type: string}
+                  stale:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        hostname: {type: string}
+                        version: {type: string}
+  /api/doctor:
+    get:
+      summary: Platform health checks (the same measurements as pmcluster doctor)
+      description: |
+        Read-only checks - quorum, version skew, a full control-plane restore
+        drill, secret decryption, the last apply warnings, drill age, the offsite
+        re-read and disk headroom. Each check reports ok, warn, fail or skip,
+        and skip means it could not be measured here and carries the reason.
+      operationId: doctor
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The health report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  at: {type: string, format: date-time}
+                  ok: {type: boolean}
+                  checks:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: {type: string}
+                        status: {type: string, enum: [ok, warn, fail, skip]}
+                        detail: {type: string}
   /api/nodes:
     get:
       summary: List swarm nodes
