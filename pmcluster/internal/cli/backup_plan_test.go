@@ -50,11 +50,18 @@ func TestApplyOrphanPolicySkipsStaleOrphansOnly(t *testing.T) {
 	if strings.Contains(names, "ghost") {
 		t.Error("a stale orphan was archived")
 	}
-	if !strings.Contains(out.String(), "ghost") {
-		t.Errorf("a skipped orphan must be named in the output:\n%s", out.String())
+	// The note is about what was ADOPTED. What was skipped is named by the run's
+	// own unplanned-directory warning, which reads UnplannedDirs — the same list,
+	// reported once.
+	if strings.Contains(out.String(), "ghost") {
+		t.Errorf("the adopt note should not mention a skipped directory:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "fresh") {
 		t.Errorf("an adopted directory must be named in the output:\n%s", out.String())
+	}
+	unplanned := backupagent.UnplannedDirs(root, got)
+	if len(unplanned) != 1 || unplanned[0] != "ghost" {
+		t.Errorf("the run would not name the skipped orphan: %v", unplanned)
 	}
 
 	// --include-orphans keeps everything, which is the operator's escape hatch.

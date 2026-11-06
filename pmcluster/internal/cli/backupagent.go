@@ -106,45 +106,36 @@ var agentIncludeOrphans bool
 
 // applyOrphanPolicy reconciles the published plan with what is on disk.
 //
-// A plan lists the stacks that exist; a directory the plan does not cover is an
-// orphan — the leftover of a removed stack, or the source subtree a `stack move`
-// deliberately left behind. Archiving those forever is pure cost (they are ~18%
-// of one production node's hourly payload) and restoring one is meaningless.
+// A plan lists the stacks that exist, and the run archives exactly those —
+// directories it does not cover are already skipped, and the run's own
+// unplanned-directory warning names them. Archiving them forever is pure cost (87
+// MB of one production node's hourly payload was volumes of stacks that no longer
+// exist) and restoring one is meaningless.
 //
-// Two guards keep "skip" from becoming "silently stopped backing up a live
-// stack": a directory whose contents changed AFTER the plan was generated is
-// archived anyway (a stack deployed since then is writing there), and anything
-// skipped is named in the output so it can never be a surprise.
+// The one thing that must not happen is "we quietly stopped backing up a live
+// stack", so a directory whose contents changed AFTER the plan was generated is
+// adopted back into the plan: a stack deployed since then is writing there, and
+// its data would otherwise be invisible until the next plan publish. A plan with
+// no GeneratedAt (written by an older daemon) adopts nothing — the long-standing
+// behaviour.
 func applyOrphanPolicy(plan backupagent.Plan, root string, out io.Writer, includeOrphans bool) backupagent.Plan {
 	orphans, err := backupagent.OrphanDirs(root, plan)
 	if err != nil || len(orphans) == 0 {
 		return plan
 	}
-	listed := map[string]bool{}
-	for _, o := range plan.Orphans {
-		listed[o] = true
-	}
-	var skipped, adopted []string
+	var adopted []string
 	for _, dir := range orphans {
-		active := backupagent.NewestMtime(filepath.Join(root, dir)) > plan.GeneratedAt
-		switch {
-		case includeOrphans || !listed[dir] || active:
-			// Not a known orphan, or it has been written to since the plan was
-			// published: keep archiving it rather than trusting a stale plan.
-			plan.Stacks = append(plan.Stacks, backupagent.StackPlan{Name: dir})
-			adopted = append(adopted, dir)
-		default:
-			skipped = append(skipped, dir)
+		active := plan.GeneratedAt > 0 && backupagent.NewestMtime(filepath.Join(root, dir)) > plan.GeneratedAt
+		if !includeOrphans && !active {
+			continue
 		}
+		plan.Stacks = append(plan.Stacks, backupagent.StackPlan{Name: dir})
+		adopted = append(adopted, dir)
 	}
-	sort.Slice(plan.Stacks, func(i, j int) bool { return plan.Stacks[i].Name < plan.Stacks[j].Name })
 	if len(adopted) > 0 {
-		fmt.Fprintf(out, "note: %d director(y/ies) are not in the plan but changed since it was published — archiving them anyway: %s\n",
+		sort.Slice(plan.Stacks, func(i, j int) bool { return plan.Stacks[i].Name < plan.Stacks[j].Name })
+		fmt.Fprintf(out, "note: %d unplanned director(y/ies) changed since the plan was published — archiving them anyway: %s\n",
 			len(adopted), strings.Join(adopted, ", "))
-	}
-	if len(skipped) > 0 {
-		fmt.Fprintf(out, "note: not archiving %d orphan director(y/ies) with no deployed stack (--include-orphans keeps them): %s\n",
-			len(skipped), strings.Join(skipped, ", "))
 	}
 	return plan
 }
