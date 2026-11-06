@@ -28,8 +28,13 @@ type offsiteCheckRecord struct {
 	Present    int       `json:"present"`
 	Missing    []string  `json:"missing,omitempty"`
 	NoManifest []string  `json:"no_manifest,omitempty"`
-	OK         bool      `json:"ok"`
-	Error      string    `json:"error,omitempty"`
+	// Sample is a few keys the bucket actually holds (newest first). A miss is
+	// only actionable next to the bucket's own contents: a prefix, the wrong
+	// bucket, an empty store and a lost object all look identical from the
+	// missing-name list alone.
+	Sample []string `json:"sample,omitempty"`
+	OK     bool     `json:"ok"`
+	Error  string   `json:"error,omitempty"`
 }
 
 // offsiteStatusFile is what `backup-agent offsite-status` reads.
@@ -138,6 +143,15 @@ func runVerifyOffsite(cmd *cobra.Command, _ []string) error {
 		for _, o := range objects {
 			present[o.Key] = true
 		}
+		keys := make([]string, 0, len(objects))
+		for _, o := range objects {
+			keys = append(keys, o.Key)
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+		if len(keys) > 5 {
+			keys = keys[:5]
+		}
+		rec.Sample = keys
 		for _, local := range locals {
 			rec.Checked++
 			name := filepath.Base(local)
@@ -182,6 +196,9 @@ func runVerifyOffsite(cmd *cobra.Command, _ []string) error {
 					r.Target, r.Present, r.Checked, len(r.Missing), len(r.NoManifest))
 				for _, m := range r.Missing {
 					fmt.Fprintf(out, "    missing: %s\n", m)
+				}
+				if len(r.Sample) > 0 {
+					fmt.Fprintf(out, "    bucket holds (newest): %s\n", strings.Join(r.Sample, ", "))
 				}
 				for _, m := range r.NoManifest {
 					fmt.Fprintf(out, "    no manifest: %s\n", m)
