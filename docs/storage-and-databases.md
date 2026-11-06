@@ -198,6 +198,13 @@ The mover pulls the archive **object** from the store via the published loopback
 tarball actually contains the stack's data before it touches the target. Where no store is
 configured, a fallback ephemeral-HTTP mover serves the archive from the source host.
 
+It stages the download **inside the volume** (`/data/.restore-tmp-<stack>`), not in the
+container's `/tmp`. That `/tmp` is the container's writable layer, i.e. the host's root
+filesystem: staging a 20 GB database there needed ~40 GB free on the system disk before a byte
+reached `/data`, and failed as `no space left on device` halfway through. `/data` is the bind
+mount of the volume root — the same filesystem as the destination — so the space it uses is the
+space that exists to hold the data, and the final step is a rename rather than a copy.
+
 The `stack_pin_<stack>` setting it writes **outranks** the round-robin, so the reconciler will
 never move the stack back on its own. This is not a special case for moved stacks: every stateful
 stack carries a pin from its first placement, and a move rewrites it to the new node. The source node's subtree is intentionally left behind until

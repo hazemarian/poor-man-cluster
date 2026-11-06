@@ -2,11 +2,9 @@ package backups
 
 import (
 	"context"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -132,121 +130,4 @@ func deleteS3Object(ctx context.Context, cfg S3Config, key string) error {
 		return fmt.Errorf("s3 delete %s: %s", key, resp.Status)
 	}
 	return nil
-}
-
-// webdavMultistatus is the PROPFIND response shape, trimmed to what is needed.
-type webdavMultistatus struct {
-	XMLName  xml.Name `xml:"multistatus"`
-	Response []struct {
-		Href string `xml:"href"`
-	} `xml:"response"`
-}
-
-// ListWebDAV returns the artifact names in a WebDAV collection.
-func ListWebDAV(ctx context.Context, base string) ([]string, error) {
-	u, err := url.Parse(base)
-	if err != nil {
-		return nil, fmt.Errorf("webdav: parse endpoint: %w", err)
-	}
-	var user, pass string
-	if u.User != nil {
-		user = u.User.Username()
-		pass, _ = u.User.Password()
-		u.User = nil
-	}
-	u.Path = strings.TrimSuffix(u.Path, "/") + "/"
-
-	body := `<?xml version="1.0"?><propfind xmlns="DAV:"><prop><getcontentlength/></prop></propfind>`
-	req, err := http.NewRequestWithContext(ctx, "PROPFIND", u.String(), strings.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Depth", "1")
-	req.Header.Set("Content-Type", "application/xml")
-	if user != "" {
-		req.SetBasicAuth(user, pass)
-	}
-	resp, err := webdavClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusMultiStatus && resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("webdav PROPFIND: %s", resp.Status)
-	}
-	var ms webdavMultistatus
-	if err := xml.NewDecoder(resp.Body).Decode(&ms); err != nil {
-		return nil, fmt.Errorf("webdav PROPFIND parse: %w", err)
-	}
-	names := make([]string, 0, len(ms.Response))
-	for _, r := range ms.Response {
-		p := strings.TrimSuffix(r.Href, "/")
-		name := p[strings.LastIndex(p, "/")+1:]
-		if name == "" || strings.HasSuffix(name, ".json") {
-			continue
-		}
-		names = append(names, name)
-	}
-	return names, nil
-}
-
-// DeleteWebDAV removes one artifact from the store.
-func DeleteWebDAV(ctx context.Context, base, name string) error {
-	u, err := url.Parse(base)
-	if err != nil {
-		return fmt.Errorf("webdav: parse endpoint: %w", err)
-	}
-	var user, pass string
-	if u.User != nil {
-		user = u.User.Username()
-		pass, _ = u.User.Password()
-		u.User = nil
-	}
-	u.Path = strings.TrimSuffix(u.Path, "/") + "/" + url.PathEscape(name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
-	if err != nil {
-		return err
-	}
-	if user != "" {
-		req.SetBasicAuth(user, pass)
-	}
-	resp, err := webdavClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode/100 != 2 && resp.StatusCode != http.StatusNotFound {
-		return fmt.Errorf("webdav delete %s: %s", name, resp.Status)
-	}
-	return nil
-}
-
-// PruneStore applies the retention policy to the in-cluster store.
-func PruneStore(ctx context.Context, base string, policy Retention, now time.Time, dryRun bool) (PruneResult, error) {
-	res := PruneResult{DryRun: dryRun}
-	if base == "" {
-		return res, nil
-	}
-	names, err := ListWebDAV(ctx, base)
-	if err != nil {
-		return res, err
-	}
-	byStack, skipped := groupArtifacts(names, policy)
-	res.SkippedOld = skipped
-	del, kept := planPrune(byStack, policy, now)
-	res.Kept = kept
-	for _, a := range del {
-		if dryRun {
-			res.Deleted = append(res.Deleted, a.Name+" (would delete)")
-			continue
-		}
-		if err := DeleteWebDAV(ctx, base, a.Name); err != nil {
-			res.Failed = append(res.Failed, a.Name+": "+err.Error())
-			res.Kept++
-			continue
-		}
-		res.Deleted = append(res.Deleted, a.Name)
-	}
-	return res, nil
 }

@@ -88,10 +88,29 @@ func rcloneStoreEnv(cfg backups.S3Config) []string {
 // contains the stack's data — a wrong (or empty) archive must never be able to
 // erase /data/<stack>.
 func storePullMoverScript(bucket, key, stackName string) string {
-	return fmt.Sprintf(
-		"set -e; mkdir -p /tmp/x /data; rclone copyto sw:%s/%s /tmp/m.tgz; tar -tzf /tmp/m.tgz | grep -q '^backup/data/%s/' || { echo \"the archive does not contain backup/data/%s\"; exit 1; }; tar -xzf /tmp/m.tgz -C /tmp/x; rm -rf /data/%s; mv /tmp/x/backup/data/%s /data/; rm -rf /tmp/x",
-		bucket, key, stackName, stackName, stackName, stackName,
-	)
+	// Staging lives INSIDE the volume (/data), not in the container's /tmp.
+	//
+	// The archive and its expanded tree used to be written to the container's
+	// writable layer, which is the host's root filesystem: a 20 GB database
+	// needed ~40 GB free there before a single byte reached /data, and on a
+	// node whose root fs is the system disk that fails as "no space left on
+	// device" in the middle of a restore.
+	//
+	// /data is the bind mount of the volume root, i.e. the same filesystem as
+	// the destination, so the final move is a rename instead of a copy, and the
+	// space it uses is the space that exists to hold the data. Peak usage is one
+	// archive plus its expanded tree, and the tarball is removed before the
+	// subtree replaces the live one.
+	return fmt.Sprintf(`set -e
+work=/data/.restore-tmp-%[3]s
+rm -rf "$work"; mkdir -p "$work"
+rclone copyto sw:%[1]s/%[2]s "$work/m.tgz"
+tar -tzf "$work/m.tgz" | grep -q '^backup/data/%[3]s/' || { echo "the archive does not contain backup/data/%[3]s"; exit 1; }
+tar -xzf "$work/m.tgz" -C "$work"
+rm -f "$work/m.tgz"
+rm -rf /data/%[3]s
+mv "$work/backup/data/%[3]s" /data/%[3]s
+rm -rf "$work"`, bucket, key, stackName)
 }
 
 // storePullMoverArgs builds the argv after `docker service create`.

@@ -130,20 +130,25 @@ func TestRestore_RefusesControlPlaneArchive(t *testing.T) {
 	}
 }
 
+// Retention is applied by Prune, and only by Prune.
+//
+// This test used to assert the opposite — that List() pruned — which is how the
+// console came to delete archives by being opened. The files and their rows go
+// together; the *read* is what must stay free of side effects.
 func TestLocalPruneRemovesOldRowsAndFiles(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 	dir := t.TempDir()
 
-	// Two archives with different mtimes.
-	oldName := "backup-old-2026-08-01T03-00-00.tar.gz"
+	oldName := "backup-nodex-2026-08-01T03-00-00.tar.gz"
 	writeTarGz(t, dir, oldName, "backup/data", map[string]string{"app/data/x": "old"})
-	_ = os.Chtimes(filepath.Join(dir, oldName), time.Now().Add(-20*24*time.Hour), time.Now().Add(-20*24*time.Hour))
+	oldAt := time.Now().Add(-20 * 24 * time.Hour)
+	_ = os.Chtimes(filepath.Join(dir, oldName), oldAt, oldAt)
 
-	newName := "backup-new-2026-09-21T03-00-00.tar.gz"
+	newName := "backup-nodex-2026-09-21T03-00-00.tar.gz"
 	writeTarGz(t, dir, newName, "backup/data", map[string]string{"app/data/y": "new"})
 
-	if err := st.RecordDiscoveredBackup(ctx, oldName, filepath.Join(dir, oldName), time.Now().Add(-20*24*time.Hour).Unix()); err != nil {
+	if err := st.RecordDiscoveredBackup(ctx, oldName, filepath.Join(dir, oldName), oldAt.Unix()); err != nil {
 		t.Fatalf("record old: %v", err)
 	}
 	if err := st.RecordDiscoveredBackup(ctx, newName, filepath.Join(dir, newName), time.Now().Unix()); err != nil {
@@ -151,10 +156,29 @@ func TestLocalPruneRemovesOldRowsAndFiles(t *testing.T) {
 	}
 
 	svc := &Local{Store: st, ArchiveDir: dir, RetentionDays: 15}
+
+	// Reading first: it must change nothing.
 	if _, err := svc.List(ctx, 50); err != nil {
 		t.Fatalf("List: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, oldName)); err != nil {
+		t.Fatalf("List deleted the old archive (the read path must not prune): %v", err)
+	}
+	if rows, err := st.ListBackups(ctx, 50); err != nil || len(rows) != 2 {
+		t.Fatalf("List deleted audit rows: %d rows, err=%v", len(rows), err)
+	}
 
+	// Then the explicit prune, which is allowed to delete.
+	// These two names are whole-node (legacy) archives, so the plan spares them
+	// unless asked — the same protection that used to be bypassed by the read
+	// path. Ask explicitly for this test.
+	res, err := svc.Prune(ctx, Retention{KeepDays: 15, KeepLast: 1, IncludeLegacy: true}, false)
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if len(res.Deleted) != 1 {
+		t.Fatalf("Prune deleted %v, want only the 20-day-old artifact", res.Deleted)
+	}
 	rows, err := st.ListBackups(ctx, 50)
 	if err != nil {
 		t.Fatalf("ListBackups: %v", err)
@@ -165,7 +189,6 @@ func TestLocalPruneRemovesOldRowsAndFiles(t *testing.T) {
 	if rows[0].StartedAt <= time.Now().Add(-24*time.Hour).Unix() {
 		t.Errorf("surviving row should be the new archive (started_at=%d)", rows[0].StartedAt)
 	}
-	// The old archive file must be gone from disk too.
 	if _, err := os.Stat(filepath.Join(dir, oldName)); !os.IsNotExist(err) {
 		t.Errorf("old archive file should be removed, stat err = %v", err)
 	}

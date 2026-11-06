@@ -539,8 +539,23 @@ func shipTargetsFromEnv() func(context.Context, string) ([]string, error) {
 	}
 	return func(ctx context.Context, archivePath string) ([]string, error) {
 		name := filepath.Base(archivePath)
+		manifest := backups.ManifestName(archivePath)
+		hasManifest := false
+		if _, err := os.Stat(manifest); err == nil {
+			hasManifest = true
+		}
 		var where []string
 		for _, t := range targets {
+			// The sidecar goes FIRST. It carries the sha256, the snapshot facts and
+			// the verification result: without it an offsite copy is a tarball
+			// nobody can prove is the one that was taken. Uploading it first means
+			// a failed second call leaves an orphan manifest (which pruning
+			// removes) rather than an archive whose provenance is lost.
+			if hasManifest {
+				if err := backups.PutS3Object(ctx, t.S3, backups.ManifestName(name), manifest); err != nil {
+					return where, fmt.Errorf("%s manifest: %w", t.Label, err)
+				}
+			}
 			if err := backups.PutS3Object(ctx, t.S3, name, archivePath); err != nil {
 				return where, fmt.Errorf("%s: %w", t.Label, err)
 			}

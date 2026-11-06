@@ -85,6 +85,11 @@ func TestRestore_S3FallbackFetches(t *testing.T) {
 		if r.Header.Get("x-amz-content-sha256") != emptyPayloadSHA {
 			t.Errorf("x-amz-content-sha256 = %q, want empty payload hash", r.Header.Get("x-amz-content-sha256"))
 		}
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			// The sidecar is requested next to the artifact; this fake has none.
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/pmcluster-backup-test-bucket/run.tar.gz") {
 			t.Errorf("path = %q, want bucket + object key", r.URL.Path)
 		}

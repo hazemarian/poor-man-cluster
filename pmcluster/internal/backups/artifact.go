@@ -1,8 +1,12 @@
 package backups
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -244,3 +248,50 @@ func artifactVerdictNote(archivePath string) string {
 // consumers outside this package (the backup agent's drill) cannot drift from
 // what a restore would actually write.
 func ArchiveRelPath(name string) string { return archiveRelPath(name) }
+
+// SHA256File hashes an artifact the way the manifest records it.
+func SHA256File(p string) (string, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// ErrChecksumMismatch means the artifact is not the file the manifest describes.
+var ErrChecksumMismatch = errors.New("archive checksum does not match its manifest")
+
+// VerifyArchive checks an artifact against its sidecar, when it has one.
+//
+// This is the answer to "is this the file that was taken?" — the one question a
+// restore of an offsite copy cannot answer from the object alone. It returns
+// (false, nil) when there is no sidecar (nothing to check against) and an error
+// only when the archive provably does not match: a truncated download, an object
+// overwritten in place, or a bucket key pointing at the wrong artifact.
+func VerifyArchive(p string) (checked bool, err error) {
+	m, err := ReadManifest(p)
+	if err != nil {
+		// Missing, or written by a generation whose shape we cannot read: either
+		// way it proves nothing. Only a manifest we CAN read, whose hash differs,
+		// is evidence that this is the wrong artifact — and refusing to restore
+		// because a sidecar is unreadable would strand old archives.
+		return false, nil
+	}
+	if m.SHA256 == "" {
+		return false, nil
+	}
+	got, err := SHA256File(p)
+	if err != nil {
+		return false, err
+	}
+	if !strings.EqualFold(got, m.SHA256) {
+		return true, fmt.Errorf("%w: %s is sha256 %s, the manifest recorded %s",
+			ErrChecksumMismatch, filepath.Base(p), got, m.SHA256)
+	}
+	return true, nil
+}

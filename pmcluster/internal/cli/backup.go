@@ -166,6 +166,15 @@ fleet mid-cutover those are the only backups that exist.
 		for _, name := range res.Deleted {
 			fmt.Fprintf(out, "  - %s\n", name)
 		}
+		// Files and audit rows are pruned together, by name: a row whose archive
+		// this policy just deleted must not linger in the console as restorable.
+		if !dryRun && len(res.Deleted) > 0 {
+			if st, _, serr := openStore(); serr == nil {
+				if n, rerr := backups.DeleteRowsForArtifacts(cmd.Context(), st, res.Deleted, policy.KeepDays); rerr == nil && n > 0 {
+					fmt.Fprintf(out, "removed %d audit row(s) for the deleted artifacts\n", n)
+				}
+			}
+		}
 		fmt.Fprintf(out, "\nkept %d · %s %d · freed %s", res.Kept, verb, len(res.Deleted), humanSize(res.FreedBytes))
 		if res.SkippedOld > 0 {
 			fmt.Fprintf(out, " · %d whole-node archive(s) left alone (--legacy prunes them)", res.SkippedOld)

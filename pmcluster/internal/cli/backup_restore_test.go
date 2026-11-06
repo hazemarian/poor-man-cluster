@@ -265,7 +265,7 @@ func TestRestoreRouteForStack(t *testing.T) {
 			"--constraint node.hostname==nxt-sw-2-m",
 			"--host host.docker.internal:host-gateway",
 			"RCLONE_CONFIG_SW_ENDPOINT=http://host.docker.internal:8333",
-			"rclone copyto sw:pmcluster-backups/backup-node1-2026-10-08T10-00-00.tar.gz /tmp/m.tgz",
+			"rclone copyto sw:pmcluster-backups/backup-node1-2026-10-08T10-00-00.tar.gz \"$work/m.tgz\"",
 			"the archive does not contain backup/data/sfapp",
 		} {
 			if !strings.Contains(joined, want) {
@@ -325,7 +325,7 @@ func TestRestoreRouteForStack(t *testing.T) {
 			"RCLONE_CONFIG_SW_ENDPOINT=https://r2.example.com",
 			"RCLONE_CONFIG_SW_ACCESS_KEY_ID=offak",
 			"RCLONE_CONFIG_SW_SECRET_ACCESS_KEY=offsk",
-			"rclone copyto sw:offsite-bucket/backup-node1-2026-10-08T10-00-00.tar.gz /tmp/m.tgz",
+			"rclone copyto sw:offsite-bucket/backup-node1-2026-10-08T10-00-00.tar.gz \"$work/m.tgz\"",
 		} {
 			if !strings.Contains(joined, want) {
 				t.Errorf("mover argv missing %q:\n%s", want, joined)

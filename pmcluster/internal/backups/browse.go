@@ -242,6 +242,18 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 			cleanup()
 			return restored, err
 		}
+		// Verify before extracting, not after: a mismatched artifact is a wrong
+		// artifact, and half of it is already on the user's disk by the time a
+		// post-hoc check could complain.
+		if checked, verr := VerifyArchive(src); verr != nil {
+			cleanup()
+			return restored, fmt.Errorf("refusing to restore %s: %w", filepath.Base(p), verr)
+		} else if !checked {
+			if checked, verr = VerifyArchive(p); verr != nil {
+				cleanup()
+				return restored, fmt.Errorf("refusing to restore %s: %w", filepath.Base(p), verr)
+			}
+		}
 		include := restoreInclude(row, opts)
 		files, err := collectArchivedPaths(src, include, keep)
 		if err != nil {
@@ -483,6 +495,18 @@ func (l *Local) restoreSource(ctx context.Context, p string, opts RestoreOptions
 		_ = os.Remove(tmpPath)
 		return "", func() {}, err
 	}
+	// The sidecar travels with the artifact. Its absence is not fatal (older
+	// artifacts have none), its presence is what lets the restore below prove
+	// that the bytes it downloaded are the bytes that were taken.
+	sidecar := ManifestName(tmpPath)
+	if merr := fetchS3Object(ctx, l.S3, ManifestName(key), sidecar); merr != nil {
+		_ = os.Remove(sidecar)
+	} else if m, rerr := ReadManifest(tmpPath); rerr != nil || m.Archive != filepath.Base(key) {
+		// A store that answers every GET with the object itself, or an old
+		// sidecar for a different name, must not become a "manifest" this
+		// restore then trusts. Keep it only when it describes THIS archive.
+		_ = os.Remove(sidecar)
+	}
 	// The object downloaded, but that is not the same as "this is the artifact".
 	// A key that resolves to an HTML error page, a JSON sidecar or an empty body
 	// answers 200 and used to surface as a parse failure deep in gzip — or, for
@@ -690,11 +714,44 @@ func restoreArchiveRelFiltered(p, target string, rel func(string) string, includ
 			if err := os.MkdirAll(name, 0o755); err != nil {
 				return count, err
 			}
+			// The archive records the real mode; the MkdirAll default is only a
+			// placeholder for directories that did not exist yet.
+			_ = os.Chmod(name, hdr.FileInfo().Mode().Perm())
+		case tar.TypeSymlink:
+			if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+				return count, err
+			}
+			// A dropped symlink is a silently missing file: the tree looks
+			// complete and is not. The drill has always linked them (verify.go);
+			// restore now matches it.
+			_ = os.Remove(name)
+			if err := os.Symlink(hdr.Linkname, name); err != nil {
+				return count, fmt.Errorf("symlink %s -> %s: %w", r, hdr.Linkname, err)
+			}
+			count++
+		case tar.TypeLink:
+			if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+				return count, err
+			}
+			// Hard links carry their target as an archive-relative path, so the
+			// same containment check applies before anything is linked.
+			linkTarget := filepath.Join(target, rel(hdr.Linkname))
+			if linkTarget != target && !strings.HasPrefix(linkTarget, target+string(filepath.Separator)) {
+				return count, fmt.Errorf("archive hard link escapes restore dir: %s", hdr.Linkname)
+			}
+			_ = os.Remove(name)
+			if err := os.Link(linkTarget, name); err != nil {
+				return count, fmt.Errorf("hard link %s -> %s: %w", r, hdr.Linkname, err)
+			}
+			count++
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
 				return count, err
 			}
-			out, err := os.OpenFile(name, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+			mode := hdr.FileInfo().Mode().Perm()
+			// Create private and widen afterwards: opening at the archive's mode
+			// would publish a 0600 key as 0644 for as long as the copy takes.
+			out, err := os.OpenFile(name, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 			if err != nil {
 				return count, err
 			}
@@ -703,6 +760,9 @@ func restoreArchiveRelFiltered(p, target string, rel func(string) string, includ
 				return count, err
 			}
 			out.Close()
+			if err := os.Chmod(name, mode); err != nil {
+				return count, fmt.Errorf("chmod %s to %04o: %w", r, mode, err)
+			}
 			count++
 		}
 	}
@@ -730,6 +790,20 @@ func copyTreeFiltered(src, dst string, include func(string) bool) (int, error) {
 		out := filepath.Join(dst, rel)
 		if fi.IsDir() {
 			return os.MkdirAll(out, 0o755)
+		}
+		// A raw-directory backup is a copy of a live tree, so it can hold links.
+		// Dropping them loses files exactly as it does for tar archives.
+		if fi.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			_ = os.Remove(out)
+			if err := os.Symlink(linkTarget, out); err != nil {
+				return fmt.Errorf("symlink %s -> %s: %w", rel, linkTarget, err)
+			}
+			count++
+			return nil
 		}
 		if !fi.Mode().IsRegular() {
 			return nil

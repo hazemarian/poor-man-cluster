@@ -150,6 +150,10 @@ func TestRestoreStoreOnlyRowFetchesFromS3(t *testing.T) {
 
 	key := "backup-node1-2026-10-07T03-00-00.tar.gz"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			w.WriteHeader(http.StatusNotFound) // no sidecar in this fake bucket
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/b/"+key) {
 			t.Errorf("path = %q, want /b/%s", r.URL.Path, key)
 		}

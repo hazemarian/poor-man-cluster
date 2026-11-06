@@ -23,8 +23,9 @@ type Local struct {
 	// through Trigger, so the console and CLI see the full backup picture.
 	// Empty disables discovery (used by tests and legacy callers).
 	ArchiveDir string
-	// RetentionDays prunes backup audit rows (and their archive files on
-	// disk) older than this many days. Zero disables pruning.
+	// RetentionDays is the sparse retention window used by Prune when the
+	// caller passes no policy of its own. Zero means DefaultRetention's.
+	// It does NOT cause anything to be deleted on a read: see Prune.
 	RetentionDays int
 	// S3 is the object store used for reads: restore fallback and cross-node
 	// transit. It is the in-cluster SeaweedFS store when that is enabled, and
@@ -247,33 +248,93 @@ func (l *Local) archiveCreatedAfter(ctx context.Context, at int64) string {
 	return filepath.Join(l.ArchiveDir, newest)
 }
 
-// prune removes backup audit rows older than RetentionDays together with
-// their archive files on disk. It never fails the caller: rows that cannot
-// be deleted are left in place and retried next time.
-func (l *Local) prune(ctx context.Context) {
-	if l.Store == nil || l.RetentionDays <= 0 {
-		return
+// Prune applies the retention plan to this node's archive directory and then
+// removes the audit rows of the artifacts it actually deleted.
+//
+// It is deliberately NOT called from List/ListForStack. Those used to prune, so
+// *opening the console's backups page deleted archives*: a flat age cut that
+// ignored KeepLast (the newest copies of a stack) and IncludeLegacy (whole-node
+// archives, which are the only backups of a node that has not been migrated —
+// planPrune spares them on purpose), and that also deleted audit rows for
+// artifacts living on other nodes, whose files this process cannot see at all.
+//
+// Deletion now happens where the plan is applied — the hourly agent, which
+// prunes node, store and bucket through one implementation, or `backup prune`
+// when an operator asks for it.
+func (l *Local) Prune(ctx context.Context, policy Retention, dryRun bool) (PruneResult, error) {
+	if policy.KeepDays == 0 && l.RetentionDays > 0 {
+		policy.KeepDays = l.RetentionDays
 	}
-	before := time.Now().Add(-time.Duration(l.RetentionDays) * 24 * time.Hour).Unix()
-	rows, err := l.Store.ListBackupsOlderThan(ctx, before)
+	if policy.KeepHours == 0 && policy.KeepDays == 0 {
+		policy = DefaultRetention()
+	}
+	dir := l.ArchiveDir
+	if dir == "" {
+		dir = DefaultArchiveDir
+	}
+	res, err := PruneArtifacts(dir, policy, time.Now().UTC(), dryRun)
+	if err != nil || dryRun || l.Store == nil || len(res.Deleted) == 0 {
+		return res, err
+	}
+	if _, derr := DeleteRowsForArtifacts(ctx, l.Store, res.Deleted, policy.KeepDays); derr != nil {
+		return res, derr
+	}
+	return res, nil
+}
+
+// DeleteRowsForArtifacts removes the audit rows of artifacts that were just
+// deleted, matched by FILE NAME — never by age.
+//
+// Matching by age is what made the old implementation delete history belonging
+// to other nodes: on the leader those rows describe files it cannot reach, so
+// "older than the window" was the only test applied and every remote row older
+// than three days disappeared from the console while its artifact survived.
+//
+// A row is removed only when every artifact it lists is in the deleted set, so
+// a multi-volume run keeps its history as long as one of its archives remains.
+func DeleteRowsForArtifacts(ctx context.Context, st *store.Store, deleted []string, keepDays int) (int, error) {
+	if st == nil || len(deleted) == 0 {
+		return 0, nil
+	}
+	gone := make(map[string]bool, len(deleted))
+	for _, n := range deleted {
+		gone[filepath.Base(strings.TrimSuffix(n, " (would delete)"))] = true
+	}
+	if keepDays < 0 {
+		keepDays = 0
+	}
+	before := time.Now().Add(-time.Duration(keepDays) * 24 * time.Hour).Unix()
+	rows, err := st.ListBackupsOlderThan(ctx, before)
 	if err != nil {
-		return
+		return 0, err
 	}
+	removed := 0
 	for _, b := range rows {
-		for _, p := range splitArchivePaths(b.ArchivePaths) {
-			if p == "" {
-				continue
-			}
-			_ = os.Remove(p)
+		paths := splitArchivePaths(b.ArchivePaths)
+		if len(paths) == 0 {
+			continue
 		}
-		_ = l.Store.DeleteBackup(ctx, b.ID)
+		allGone := true
+		for _, p := range paths {
+			if p == "" || !gone[filepath.Base(p)] {
+				allGone = false
+				break
+			}
+		}
+		if !allGone {
+			continue
+		}
+		if err := st.DeleteBackup(ctx, b.ID); err != nil {
+			return removed, err
+		}
+		removed++
 	}
+	return removed, nil
 }
 
 // List returns the most recent backup runs.
 func (l *Local) List(ctx context.Context, limit int) ([]Run, error) {
 	l.discover(ctx)
-	l.prune(ctx)
 	rows, err := l.Store.ListBackups(ctx, limit)
 	if err != nil {
 		return nil, err
@@ -285,7 +346,6 @@ func (l *Local) List(ctx context.Context, limit int) ([]Run, error) {
 // (including cluster-wide runs that cover every stack).
 func (l *Local) ListForStack(ctx context.Context, stackName string) ([]Run, error) {
 	l.discover(ctx)
-	l.prune(ctx)
 	rows, err := l.Store.ListBackupsForStack(ctx, stackName)
 	if err != nil {
 		return nil, err

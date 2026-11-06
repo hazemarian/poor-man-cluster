@@ -20,14 +20,15 @@ func ExecCommand(ctx context.Context, name string, args ...string) ([]byte, erro
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
-// LVMSnapshotter freezes the filesystem and takes a thin snapshot of an LV.
+// LVMSnapshotter takes a thin snapshot of an LV and mounts it read-write.
 //
-// Why the freeze: an LVM snapshot of a mounted ext4 filesystem is
-// crash-consistent (equivalent to pulling the plug), and every engine in the
-// wild recovers from that. Freezing first upgrades it to a clean image — the
-// difference between "the database has to replay its log to start" and "the
-// database starts". The freeze is the only write stall anywhere in the design,
-// and it lasts as long as `lvcreate` takes: milliseconds.
+// There is no fsfreeze. It was removed after it hung a node for 19 minutes at a
+// 4.4% chance per run: freezing a filesystem that is actively written to is
+// unbounded, and the snapshot is worth nothing if the backup never finishes. A
+// thin snapshot is crash-consistent by construction — the equivalent of pulling
+// the power — and every engine here recovers from that on its own next start.
+// Mounting the copy read-write lets the kernel replay the journal on the
+// snapshot, so the archive holds an already-recovered tree.
 //
 // Why not stop the container: stopping is the thing this whole design removes.
 type LVMSnapshotter struct {
@@ -52,6 +53,28 @@ func (l *LVMSnapshotter) exec(ctx context.Context, name string, args ...string) 
 		e = ExecCommand
 	}
 	return e(ctx, name, args...)
+}
+
+// locked runs one LVM command under the shared LVM lock.
+//
+// EVERY LVM invocation in this file goes through here. The deadlock lvmlock
+// exists to prevent ("vgs takes the global lock then waits for the group lock;
+// lvextend takes them in the other order") is a property of the command, not of
+// `lvcreate`: an unguarded `lvs` deadlocks against a running `lvextend` exactly
+// like `vgs` does, and an unguarded `lvremove` holds the group lock exclusively.
+// This file used to guard only the snapshot call, which left four commands able
+// to reproduce the twelve-minute production hang.
+func (l *LVMSnapshotter) locked(ctx context.Context, name string, args ...string) ([]byte, error) {
+	var out []byte
+	var err error
+	lockErr := lvmlock.With(ctx, func() error {
+		out, err = l.exec(ctx, name, args...)
+		return nil
+	})
+	if lockErr != nil {
+		return nil, lockErr
+	}
+	return out, err
 }
 
 // Kind implements Snapshotter.
@@ -150,15 +173,7 @@ func (l *LVMSnapshotter) Snapshot(ctx context.Context, root string, at time.Time
 	// its journal on the copy. A read-only snapshot of a filesystem captured
 	// mid-transaction is exactly the case that needs recovery, and refusing the
 	// copy the right to repair itself would hand back a torn tree.
-	var out []byte
-	var err error
-	lockErr := lvmlock.With(ctx, func() error {
-		out, err = l.exec(ctx, "lvcreate", "-s", "-n", name, "-kn", origin)
-		return nil
-	})
-	if lockErr != nil {
-		return "", "", lockErr
-	}
+	out, err := l.locked(ctx, "lvcreate", "-s", "-n", name, "-kn", origin)
 	if err != nil {
 		return "", "", fmt.Errorf("lvcreate -s %s: %w (%s)", origin, err, strings.TrimSpace(string(out)))
 	}
@@ -192,7 +207,7 @@ func (l *LVMSnapshotter) Usage(ctx context.Context) (float64, error) {
 	if l.VG == "" {
 		return -1, nil
 	}
-	out, err := l.exec(ctx, "lvs", "--noheadings", "-o", "lv_attr,data_percent", l.VG)
+	out, err := l.locked(ctx, "lvs", "--noheadings", "-o", "lv_attr,data_percent", l.VG)
 	if err != nil {
 		return -1, err
 	}
@@ -239,7 +254,7 @@ func (l *LVMSnapshotter) RemoveStale(ctx context.Context) ([]string, error) {
 	if prefix == "" {
 		prefix = "pmcluster-snap"
 	}
-	out, err := l.exec(ctx, "lvs", "--noheadings", "-o", "lv_name", "-S", "lv_name=~^"+prefix+"-", l.VG)
+	out, err := l.locked(ctx, "lvs", "--noheadings", "-o", "lv_name", "-S", "lv_name=~^"+prefix+"-", l.VG)
 	if err != nil {
 		return nil, fmt.Errorf("list stale snapshots in %s: %w (%s)", l.VG, err, strings.TrimSpace(string(out)))
 	}
@@ -252,7 +267,7 @@ func (l *LVMSnapshotter) RemoveStale(ctx context.Context) ([]string, error) {
 			// leftover directory is worse than trying.
 			_ = out
 		}
-		if out, rerr := l.exec(ctx, "lvremove", "-y", l.VG+"/"+name); rerr != nil {
+		if out, rerr := l.locked(ctx, "lvremove", "-y", l.VG+"/"+name); rerr != nil {
 			return removed, fmt.Errorf("drop stale snapshot %s: %w (%s)", name, rerr, strings.TrimSpace(string(out)))
 		}
 		removed = append(removed, name)
@@ -283,17 +298,32 @@ func (l *LVMSnapshotter) Drop(ctx context.Context, token string) error {
 			firstErr = fmt.Errorf("umount %s: %w (%s)", dir, err, strings.TrimSpace(string(out)))
 		}
 	}
-	if err := l.dropLV(ctx, token); err != nil && firstErr == nil {
+	// Bounded: the lock may be held by a `storage grow` that will run for minutes.
+	// Waiting without a ceiling would park this run's cleanup for exactly as long,
+	// which is the failure mode lvmlock exists to remove. Give up, leave the LV,
+	// and let the next run's RemoveStale reap it.
+	lockCtx, cancel := context.WithTimeout(ctx, dropLockWait)
+	defer cancel()
+	if err := l.dropLV(lockCtx, token); err != nil && firstErr == nil {
 		firstErr = err
 	}
 	return firstErr
 }
 
+// dropLockWait bounds how long a cleanup will queue behind another LVM command.
+const dropLockWait = 2 * time.Minute
+
+// dropLV removes one snapshot LV under the LVM lock.
+//
+// Never call it from inside an lvmlock.With body: flock conflicts with itself in
+// one process and the second acquire parks forever (the package records `grow`
+// hanging a node's LVM for seven minutes that way). Every caller here is outside
+// a locked region.
 func (l *LVMSnapshotter) dropLV(ctx context.Context, token string) error {
 	if token == "" {
 		return nil
 	}
-	out, err := l.exec(ctx, "lvremove", "-y", l.VG+"/"+token)
+	out, err := l.locked(ctx, "lvremove", "-y", l.VG+"/"+token)
 	if err != nil {
 		return fmt.Errorf("lvremove %s: %w (%s)", token, err, strings.TrimSpace(string(out)))
 	}

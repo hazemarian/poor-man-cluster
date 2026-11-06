@@ -220,8 +220,15 @@ members under `backup/data/<stack>/…`. An ordinary tarball — `tar -xzf` it w
 pmcluster. Not inventing a format is the point.
 
 Beside it, a `manifest.json` carries the sha256, size, which node took it, which
-snapshot it came from, and the verification verdict. Verification opens the
-archive and checks what can be checked from the host:
+snapshot it came from, and the verification verdict. **The sidecar is uploaded
+next to the archive** — to the store and to the offsite bucket, before the
+archive itself, so a failed second upload leaves an orphan manifest (which
+pruning removes) rather than an artifact whose provenance is gone. Without the
+sidecar an offsite tar.gz is a file nobody can prove is the one that was taken;
+with it, `backup restore` refuses an artifact whose sha256 does not match, and
+says which hash it expected.
+
+Verification opens the archive and checks what can be checked from the host:
 
 | engine | what is verified |
 |---|---|
@@ -302,6 +309,16 @@ pmcluster backup prune --keep-hours 72 --keep-days 30
 Retention is by age, not by count: an hourly stack and a twice-daily stack keep
 very different numbers of copies for the same "3 days". The floor is the newest two
 artifacts of every stack, whatever the clocks say.
+
+**Nothing is deleted on a read path.** Listing backups — the console's page, the
+API, `backup list` — used to run a flat "older than N days" deletion as a side
+effect, which ignored both of the protections above: a stack that had been quiet
+for four days lost its only copies by someone *opening a page*, and whole-node
+archives the plan spares were removed outright. The audit rows of artifacts on
+other nodes went with them, because on the leader those paths do not resolve and
+the age test was the only one applied. Deletion now happens only where the plan is
+applied: the hourly agent, or `backup prune` (which removes the audit rows of the
+artifacts it actually deleted, matched by name).
 
 ---
 
@@ -407,6 +424,13 @@ Details that prevent the classic accidents:
   extracted before anything is removed, so a restore that dies on a truncated
   archive leaves the volume as it was instead of half-empty. *(Merge-vs-replace is
   still an open decision — §14.)*
+- **A restored volume is the volume, not a pile of files with the right names.**
+  File modes come from the archive (a `0600` key stays `0600`, a script keeps
+  `+x`), and symlinks and hard links are recreated rather than skipped. They used
+  to be: everything was written `0644` and any entry that was not a plain file or
+  directory was dropped, so a tree containing `current -> releases/v3` restored
+  looking complete and silently missing files. Links are checked against the
+  restore root before they are created, exactly like ordinary entries.
 - **The restore runs where the volume is.** A stack's volume lives on its pinned
   storage node, so when the CLI runs elsewhere the restore is routed there through
   the same store-transit mover used by `stack move`. When routing is impossible it
@@ -479,7 +503,7 @@ answer an integrity check. Nothing runs it automatically today (§13).
 | failure | symptom | handling |
 |---|---|---|
 | `fsfreeze` flush outliving the run | node-wide write stall, dockerd heartbeat lost | removed; snapshot only (§3) |
-| LVM commands deadlocking under concurrent `vgs`/`lvextend` | two storage ops stuck 12 min | every LVM call serialised through `internal/lvmlock` |
+| LVM commands deadlocking under concurrent `vgs`/`lvextend` | two storage ops stuck 12 min | every LVM call serialised through `internal/lvmlock` — the snapshot's `lvcreate` **and** every `lvs`/`lvremove` the agent runs: the inversion belongs to the command, so guarding one call left four able to reproduce it (`TestEveryLVMCommandRunsUnderTheLock`) |
 | snapshot creation interrupted mid-flight | orphaned thin device id; **every** later `lvcreate -s` fails while the volume looks healthy | `storage status --verify` detects it, `storage repair` rebuilds the metadata (§1.1) |
 | pool sized to fill its volume group | `insufficient free space (0 extents)` on repair | provisioning reserves `2 × metadata`; `storage grow` keeps it (§1) |
 | RAM-backed `/tmp` | a 900 MB artifact could not be staged on a 1839 MB node | fetched archives are staged in the archive dir (§10) |

@@ -96,38 +96,3 @@ func TestPruneS3DryRunSendsNoDelete(t *testing.T) {
 }
 
 // The in-cluster store speaks WebDAV; listing is PROPFIND and removing is DELETE.
-func TestPruneStoreUsesPropfindAndDelete(t *testing.T) {
-	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
-	fresh := ArtifactName("shop", "node1", now.Add(-time.Hour))
-	old := ArtifactName("shop", "node1", now.Add(-40*24*time.Hour))
-
-	var deleted []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case "PROPFIND":
-			w.WriteHeader(http.StatusMultiStatus)
-			fmt.Fprintf(w, `<?xml version="1.0"?><D:multistatus xmlns:D="DAV:">
-				<D:response><D:href>/bucket/</D:href></D:response>
-				<D:response><D:href>/bucket/%s</D:href></D:response>
-				<D:response><D:href>/bucket/%s</D:href></D:response>
-			</D:multistatus>`, fresh, old)
-		case http.MethodDelete:
-			deleted = append(deleted, strings.TrimPrefix(r.URL.Path, "/bucket/"))
-			w.WriteHeader(http.StatusNoContent)
-		}
-	}))
-	defer srv.Close()
-
-	policy := DefaultRetention()
-	policy.KeepLast = 1
-	res, err := PruneStore(context.Background(), srv.URL+"/bucket", policy, now, false)
-	if err != nil {
-		t.Fatalf("PruneStore: %v", err)
-	}
-	if len(deleted) != 1 || deleted[0] != old {
-		t.Fatalf("deleted %v, want only %s", deleted, old)
-	}
-	if len(res.Deleted) != 1 {
-		t.Fatalf("result reported %v", res.Deleted)
-	}
-}

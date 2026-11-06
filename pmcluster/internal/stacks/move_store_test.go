@@ -20,10 +20,10 @@ import (
 func TestStorePullMoverScriptAndArgs(t *testing.T) {
 	script := storePullMoverScript("pmcluster-backups", "backup-node-2026-10-08T10-00-00.tar.gz", "sfapp")
 	for _, want := range []string{
-		"rclone copyto sw:pmcluster-backups/backup-node-2026-10-08T10-00-00.tar.gz /tmp/m.tgz",
-		"tar -xzf /tmp/m.tgz -C /tmp/x",
+		"rclone copyto sw:pmcluster-backups/backup-node-2026-10-08T10-00-00.tar.gz \"$work/m.tgz\"",
+		"tar -xzf \"$work/m.tgz\" -C \"$work\"",
 		"rm -rf /data/sfapp",
-		"mv /tmp/x/backup/data/sfapp /data/",
+		"mv \"$work/backup/data/sfapp\" /data/sfapp",
 		"the archive does not contain backup/data/sfapp",
 	} {
 		if !strings.Contains(script, want) {
@@ -52,7 +52,7 @@ func TestStorePullMoverScriptAndArgs(t *testing.T) {
 		"RCLONE_CONFIG_SW_SECRET_ACCESS_KEY=sk",
 		"RCLONE_CONFIG_SW_FORCE_PATH_STYLE=true",
 		storePullMoverImage,
-		"-c set -e;",
+		"-c set -e",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("mover args missing %q:\n%s", want, joined)
@@ -261,9 +261,9 @@ exit 0
 		"RCLONE_CONFIG_SW_ACCESS_KEY_ID=ak",
 		"RCLONE_CONFIG_SW_SECRET_ACCESS_KEY=sk",
 		"RCLONE_CONFIG_SW_FORCE_PATH_STYLE=true",
-		"rclone copyto sw:pmcluster-backups/backup-node1-2026-10-08T10-00-00.tar.gz /tmp/m.tgz",
+		"rclone copyto sw:pmcluster-backups/backup-node1-2026-10-08T10-00-00.tar.gz \"$work/m.tgz\"",
 		"the archive does not contain backup/data/sfapp",
-		"mv /tmp/x/backup/data/sfapp /data/",
+		"mv \"$work/backup/data/sfapp\" /data/sfapp",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("mover argv missing %q:\n%s", want, joined)
@@ -353,7 +353,7 @@ exit 0
 		"RCLONE_CONFIG_SW_ENDPOINT=https://r2.example.com",
 		"RCLONE_CONFIG_SW_ACCESS_KEY_ID=offak",
 		"RCLONE_CONFIG_SW_SECRET_ACCESS_KEY=offsk",
-		"rclone copyto sw:offsite-bucket/backup-node1-2026-10-08T10-00-00.tar.gz /tmp/m.tgz",
+		"rclone copyto sw:offsite-bucket/backup-node1-2026-10-08T10-00-00.tar.gz \"$work/m.tgz\"",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("mover argv missing %q:\n%s", want, joined)
