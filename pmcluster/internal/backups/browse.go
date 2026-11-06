@@ -245,14 +245,9 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 		// Verify before extracting, not after: a mismatched artifact is a wrong
 		// artifact, and half of it is already on the user's disk by the time a
 		// post-hoc check could complain.
-		if checked, verr := VerifyArchive(src); verr != nil {
+		if _, verr := verifyArtifact(src, p); verr != nil {
 			cleanup()
 			return restored, fmt.Errorf("refusing to restore %s: %w", filepath.Base(p), verr)
-		} else if !checked {
-			if checked, verr = VerifyArchive(p); verr != nil {
-				cleanup()
-				return restored, fmt.Errorf("refusing to restore %s: %w", filepath.Base(p), verr)
-			}
 		}
 		include := restoreInclude(row, opts)
 		files, err := collectArchivedPaths(src, include, keep)
@@ -517,6 +512,19 @@ func (l *Local) restoreSource(ctx context.Context, p string, opts RestoreOptions
 			key, l.S3.Bucket, l.S3.Endpoint, err)
 	}
 	return tmpPath, func() { _ = os.Remove(tmpPath) }, nil
+}
+
+// verifyArtifact checks an artifact against its sidecar, trying the local copy
+// when the first path is a temp fetch that arrived without one.
+//
+// A missing or unreadable sidecar is "unchecked", not a failure: artifacts
+// written before sidecars existed must still restore.
+func verifyArtifact(src, p string) (bool, error) {
+	checked, err := VerifyArchive(src)
+	if err != nil || checked || src == p {
+		return checked, err
+	}
+	return VerifyArchive(p)
 }
 
 // volumeMatch reports whether a restore-relative path belongs to the named
