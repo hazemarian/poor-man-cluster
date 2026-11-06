@@ -180,6 +180,13 @@ func (f *fakeClient) ServiceLogs(_ context.Context, serviceID string, _ int) ([]
 	return out, nil
 }
 
+func (f *fakeClient) ScaleService(_ context.Context, serviceID string, _ uint64) error {
+	// Same shape as ServiceRestart: unknown service is an error, everything
+	// else is a no-op here (the drain logic is tested in internal/backups).
+	_, err := f.ServiceInspect(context.Background(), serviceID)
+	return err
+}
+
 func (f *fakeClient) ServiceRestart(_ context.Context, serviceID string) error {
 	if _, err := f.ServiceInspect(context.Background(), serviceID); err != nil {
 		return err

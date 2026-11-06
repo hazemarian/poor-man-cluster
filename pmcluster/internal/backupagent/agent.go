@@ -169,6 +169,12 @@ type Plan struct {
 	GeneratedAt int64       `json:"generated_at,omitempty"`
 	// VolumeRoot is the host directory the plan's stacks live under.
 	VolumeRoot string `json:"volume_root,omitempty"`
+	// Orphans names directories under VolumeRoot that belong to no deployed
+	// stack — the leftovers of a removed stack, or a `stack move` that
+	// deliberately leaves the source subtree behind. They are listed rather than
+	// merely absent so the agent can report them instead of discovering them by
+	// accident, and so an operator can see what is being kept and why.
+	Orphans []string `json:"orphans,omitempty"`
 }
 
 // StackNames returns the planned stack names, for diffing against disk.
@@ -263,6 +269,73 @@ func PlanFromDisk(root string) (Plan, error) {
 		plan.Stacks = append(plan.Stacks, StackPlan{Name: e.Name()})
 	}
 	return plan, nil
+}
+
+// PlanFromStacks builds a plan from what is actually deployed, cross-checked
+// against what is on disk. `deployed` is the set of stack names the swarm knows.
+//
+// This is what stops a deleted stack's volumes from being archived forever: the
+// directory cannot know it is an orphan, but the control plane can. Directories
+// with no deployed stack land in Orphans — reported, not silently dropped, because
+// "your backup stopped covering this" is a fact an operator must see.
+func PlanFromStacks(root string, deployed map[string]bool) (Plan, error) {
+	plan, err := PlanFromDisk(root)
+	if err != nil {
+		return plan, err
+	}
+	plan.GeneratedAt = time.Now().UTC().Unix()
+	kept := plan.Stacks[:0]
+	for _, s := range plan.Stacks {
+		if deployed[s.Name] {
+			kept = append(kept, s)
+			continue
+		}
+		plan.Orphans = append(plan.Orphans, s.Name)
+	}
+	plan.Stacks = kept
+	sort.Strings(plan.Orphans)
+	return plan, nil
+}
+
+// OrphanDirs lists the directories under root that the plan does not cover.
+func OrphanDirs(root string, plan Plan) ([]string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]bool{}
+	for _, s := range plan.Stacks {
+		known[s.Name] = true
+	}
+	var out []string
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == "lost+found" || known[e.Name()] {
+			continue
+		}
+		out = append(out, e.Name())
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// NewestMtime reports the most recent modification anywhere under dir.
+//
+// It is how the agent decides whether a directory the plan calls an orphan is
+// still being written to: a stack deployed after the plan was generated starts
+// writing into its volume immediately, and that mtime is newer than the plan.
+// Without that check a stale plan would quietly stop backing up a live stack.
+func NewestMtime(dir string) int64 {
+	var newest int64
+	_ = filepath.Walk(dir, func(_ string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if t := fi.ModTime().Unix(); t > newest {
+			newest = t
+		}
+		return nil
+	})
+	return newest
 }
 
 // Verifier is the optional pre-flight a snapshotter may implement. Run calls it

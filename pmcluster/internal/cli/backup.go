@@ -18,6 +18,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -200,6 +201,8 @@ func init() {
 	backupRestoreCmd.Flags().String("dest-root", "", "data root to restore into (<dest-root>/<stack>); default: the cluster's volume_root setting (/var/stack/data when unset)")
 	backupRestoreCmd.Flags().String("volume", "", "restore only this volume (e.g. db_data); empty restores the whole run")
 	backupRestoreCmd.Flags().Bool("from-s3", false, "fetch the archive from the configured offsite S3 store even when a local copy exists")
+	backupRestoreCmd.Flags().Bool("drain", true, "pause the stack's services while restoring (a live database writes into files the restore unlinks)")
+	backupRestoreCmd.Flags().Bool("no-drain", false, "do not pause the stack — only when it is already down, or you accept a restore under a live database")
 
 	backupCmd.AddCommand(backupCreateCmd, backupListCmd, backupBrowseCmd, backupRestoreCmd, backupPruneCmd,
 		backupEnableCmd, backupDisableCmd, backupScheduleCmd)
@@ -489,6 +492,18 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 	destRoot, _ := cmd.Flags().GetString("dest-root")
 	volume, _ := cmd.Flags().GetString("volume")
 	fromS3, _ := cmd.Flags().GetBool("from-s3")
+	drain, _ := cmd.Flags().GetBool("drain")
+	if noDrain, _ := cmd.Flags().GetBool("no-drain"); noDrain {
+		drain = false
+	}
+	// Pausing the stack only helps when the restore writes into the LIVE volume.
+	// `backup restore <id> --dest-root /tmp/inspect` must not stop production.
+	if drain {
+		live := restoreDestRootDefault(cmd.Context())
+		if !backups.RestoreIntoLiveVolume(destRoot, live) {
+			drain = false
+		}
+	}
 
 	// The restore root must default to the cluster's volume_root setting (not
 	// a hardcoded /var/stack/data), or restores land in the wrong tree on
@@ -506,7 +521,7 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 	// node). Single-node clusters are untouched: owner == this host (or no
 	// Docker client) keeps the local path unchanged.
 	if stack := stackFromVolume(volume); stack != "" && remoteClient(cmd) == nil {
-		target, routeErr := restoreRouteForStack(cmd, id, stack, fromS3)
+		target, routeErr := restoreRouteForStack(cmd, id, stack, fromS3, drain)
 		if routeErr != nil {
 			return routeErr
 		}
@@ -521,8 +536,9 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer closeFn()
+	attachScaler(cmd, svc, drain)
 
-	restored, err := svc.Restore(cmd.Context(), id, destRoot, backups.RestoreOptions{Volume: volume, FromS3: fromS3})
+	restored, err := svc.Restore(cmd.Context(), id, destRoot, backups.RestoreOptions{Volume: volume, FromS3: fromS3, Drain: drain})
 	if err != nil {
 		return fmt.Errorf("restore backup %d: %w", id, err)
 	}
@@ -544,6 +560,34 @@ func runBackupRestore(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// attachScaler gives a local backups service the docker client a drain needs.
+//
+// Only the local service can drain: a remote (API) client's restores happen in
+// the daemon, which attaches its own scaler. A cluster with no docker socket
+// (or a test fake) simply leaves it nil and the restore reports that it did not
+// pause anything.
+func attachScaler(cmd *cobra.Command, svc backups.Service, drain bool) {
+	local, ok := svc.(*backups.Local)
+	if !ok || !drain || local.Scaler != nil {
+		return
+	}
+	dc, err := docker.New()
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: no docker socket — the restore will not pause the stack (%v)\n", err)
+		return
+	}
+	sc, ok := dc.(backups.Scaler)
+	if !ok {
+		_ = dc.Close()
+		return
+	}
+	local.Scaler = sc
+	out := cmd.OutOrStdout()
+	local.Logf = func(format string, args ...any) {
+		fmt.Fprintf(out, format+"\n", args...)
+	}
+}
+
 // localHostname returns this node's hostname, or "local" when os.Hostname
 // fails.
 func localHostname() string {
@@ -562,7 +606,7 @@ func localHostname() string {
 // fromS3 mirrors the `backup restore --from-s3` flag: when true the mover pulls
 // the archive from the OFFSITE backup_s3_* destination instead of the in-cluster
 // SeaweedFS store (the routed restore must honour --from-s3).
-func restoreRouteForStack(cmd *cobra.Command, id int64, stack string, fromS3 bool) (string, error) {
+func restoreRouteForStack(cmd *cobra.Command, id int64, stack string, fromS3 bool, drain bool) (string, error) {
 	ctx := cmd.Context()
 
 	svc, st, closeFn, err := openDeploySvc(cmd)
@@ -573,10 +617,12 @@ func restoreRouteForStack(cmd *cobra.Command, id int64, stack string, fromS3 boo
 	}
 	defer closeFn()
 
+	var dc runtime.Client
 	dockerOK := false
-	if dc, derr := docker.New(); derr == nil {
-		svc.Docker = dc
-		defer func() { _ = dc.Close() }()
+	if c, derr := docker.New(); derr == nil {
+		dc = c
+		svc.Docker = c
+		defer func() { _ = c.Close() }()
 		dockerOK = true
 	}
 
@@ -612,6 +658,24 @@ func restoreRouteForStack(cmd *cobra.Command, id int64, stack string, fromS3 boo
 	key, err := restoreArchiveKey(ctx, st, id)
 	if err != nil {
 		return "", err
+	}
+	// The mover extracts on the target node, so the pause has to happen here —
+	// around the mover — rather than inside Local.Restore, which never runs for
+	// this path.
+	if drain && dockerOK {
+		if sc, ok := dc.(backups.Scaler); ok {
+			rep, undo, derr := (&backups.Drainer{Scaler: sc, Logf: func(f string, a ...any) {
+				fmt.Fprintf(cmd.OutOrStdout(), f+"\n", a...)
+			}}).Drain(ctx, stack)
+			if derr != nil {
+				return "", derr
+			}
+			if len(rep.Skipped) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "warning: %s also runs global service(s) that cannot be paused: %s\n",
+					stack, strings.Join(rep.Skipped, ", "))
+			}
+			defer undo()
+		}
 	}
 	if err := svc.RestoreArchiveToNode(ctx, key, stack, target, fromS3); err != nil {
 		return "", fmt.Errorf("restore backup %d onto %s: %w", id, target, err)

@@ -667,6 +667,13 @@ paths:
         Extracts every archive of a SUCCEEDED, stack-scoped backup run back
         under the destination root (default /var/stack/data/<stack>). Refuses
         non-succeeded runs and runs not tied to a stack.
+
+        By default the stack's services are scaled to zero for the write and
+        scaled back afterwards, because the restore removes files the snapshot
+        did not hold while a live database is still writing to them. The pause is
+        skipped when dest_root is outside the volume root (restoring into a
+        scratch directory is for inspection), and can be disabled with
+        drain: false.
       operationId: restoreBackup
       security:
         - bearerAuth: []
@@ -686,6 +693,12 @@ paths:
                 dest_root:
                   type: string
                   default: /var/stack/data
+                drain:
+                  type: boolean
+                  description: >-
+                    Pause the stack's replicated services for the write and resume
+                    them afterwards. Absent means true; ignored when dest_root is
+                    outside the volume root.
       responses:
         "200":
           description: Restore result

@@ -201,7 +201,7 @@ func TestRestoreRouteForStack(t *testing.T) {
 		seedRestoreStack(t, st, "sfapp", local)
 		_ = st.Close()
 
-		target, err := restoreRouteForStack(cmd, 0, "sfapp", false)
+		target, err := restoreRouteForStack(cmd, 0, "sfapp", false, false)
 		if err != nil {
 			t.Fatalf("restoreRouteForStack: %v", err)
 		}
@@ -220,7 +220,7 @@ func TestRestoreRouteForStack(t *testing.T) {
 		seedRestoreStack(t, st, "sfapp", "nxt-sw-2-m")
 		_ = st.Close()
 
-		_, err = restoreRouteForStack(cmd, 0, "sfapp", false)
+		_, err = restoreRouteForStack(cmd, 0, "sfapp", false, false)
 		if err == nil || !strings.Contains(err.Error(), "this stack's volume lives on nxt-sw-2-m") {
 			t.Fatalf("err = %v, want the loud lives-on error", err)
 		}
@@ -248,7 +248,7 @@ func TestRestoreRouteForStack(t *testing.T) {
 		id := seedRestoreBackup(t, st, "backup-node1-2026-10-08T10-00-00.tar.gz")
 		_ = st.Close()
 
-		target, err := restoreRouteForStack(cmd, id, "sfapp", false)
+		target, err := restoreRouteForStack(cmd, id, "sfapp", false, false)
 		if err != nil {
 			t.Fatalf("restoreRouteForStack: %v", err)
 		}
@@ -308,7 +308,7 @@ func TestRestoreRouteForStack(t *testing.T) {
 		id := seedRestoreBackup(t, st, "backup-node1-2026-10-08T10-00-00.tar.gz")
 		_ = st.Close()
 
-		target, err := restoreRouteForStack(cmd, id, "sfapp", true)
+		target, err := restoreRouteForStack(cmd, id, "sfapp", true, false)
 		if err != nil {
 			t.Fatalf("restoreRouteForStack: %v", err)
 		}

@@ -216,13 +216,31 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	tlsSvc := certs.NewLocal(st, cipher, dc, deployer,
 		cfg.ConfigDir(), buildinfo.Version)
 
+	// The console's restore button goes through this service, so it gets the
+	// same drain the CLI has: a restore that writes into a live volume is a
+	// corrupt restore, whichever front door it came through.
+	backupSvc := &backups.Local{
+		Store:         st,
+		Run:           backups.LocalTrigger{Store: st}.Trigger,
+		ArchiveDir:    cluster.BackupRootDir(),
+		RetentionDays: cluster.LoadBackupRetentionDays(cmd.Context(), st),
+		S3:            backupS3,
+		Offsite:       backupS3FromSettings(cmd.Context(), st),
+		Logf: func(format string, args ...any) {
+			log.Printf(format, args...)
+		},
+	}
+	if sc, ok := dc.(backups.Scaler); ok {
+		backupSvc.Scaler = sc
+	}
+
 	deps := server.Deps{
 		Lookup:        st,
 		Docker:        dc,
 		Store:         st,
 		DeployService: deploySvc,
 		Cipher:        cipher,
-		Backups:       &backups.Local{Store: st, Run: backups.LocalTrigger{Store: st}.Trigger, ArchiveDir: cluster.BackupRootDir(), RetentionDays: cluster.LoadBackupRetentionDays(cmd.Context(), st), S3: backupS3, Offsite: backupS3FromSettings(cmd.Context(), st)},
+		Backups:       backupSvc,
 		Settings: func() *settings.Local {
 			l := settings.NewLocal(st)
 			l.ApplyLogLevel = logger.SetLevel
@@ -268,6 +286,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 		deps.Observability = obsReader
 	}
+	// Publish the node's backup plan (see publishBackupPlan): the hourly agent
+	// archives directories, and only the daemon knows which of them still have a
+	// stack behind them.
+	go publishBackupPlan(cmd.Context(), dc, st, func(format string, args ...any) {
+		log.Warn().Msgf(format, args...)
+	})
+
 	handler := server.New(deps)
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)

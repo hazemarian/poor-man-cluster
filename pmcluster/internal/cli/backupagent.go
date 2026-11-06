@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -81,8 +83,70 @@ var backupAgentDrillCmd = &cobra.Command{
 	Long: `Restore drill: extract the artifact into a scratch directory and prove the
 databases inside it open and answer an integrity check. This is the check that
 makes "backed up" mean something; a listing alone proves nothing.`,
-	Args: cobra.ExactArgs(1),
+	Args: cobra.MaximumNArgs(1),
 	RunE: runBackupAgentDrill,
+}
+
+var backupAgentDrillStatusCmd = &cobra.Command{
+	Use:   "drill-status",
+	Short: "Show the last restore drill this node ran",
+	Long: `Reads the record the drill leaves behind. The weekly timer writes it, so this
+answers "has anything been extracted and verified lately?" without a journal grep.
+
+A drill that has never run says so; that is a fact worth having, not an error.`,
+	Args: cobra.NoArgs,
+	RunE: runBackupAgentDrillStatus,
+}
+
+var agentDrillNewest int
+
+// agentIncludeOrphans archives directories the plan calls orphans instead of
+// skipping them.
+var agentIncludeOrphans bool
+
+// applyOrphanPolicy reconciles the published plan with what is on disk.
+//
+// A plan lists the stacks that exist; a directory the plan does not cover is an
+// orphan — the leftover of a removed stack, or the source subtree a `stack move`
+// deliberately left behind. Archiving those forever is pure cost (they are ~18%
+// of one production node's hourly payload) and restoring one is meaningless.
+//
+// Two guards keep "skip" from becoming "silently stopped backing up a live
+// stack": a directory whose contents changed AFTER the plan was generated is
+// archived anyway (a stack deployed since then is writing there), and anything
+// skipped is named in the output so it can never be a surprise.
+func applyOrphanPolicy(plan backupagent.Plan, root string, out io.Writer, includeOrphans bool) backupagent.Plan {
+	orphans, err := backupagent.OrphanDirs(root, plan)
+	if err != nil || len(orphans) == 0 {
+		return plan
+	}
+	listed := map[string]bool{}
+	for _, o := range plan.Orphans {
+		listed[o] = true
+	}
+	var skipped, adopted []string
+	for _, dir := range orphans {
+		active := backupagent.NewestMtime(filepath.Join(root, dir)) > plan.GeneratedAt
+		switch {
+		case includeOrphans || !listed[dir] || active:
+			// Not a known orphan, or it has been written to since the plan was
+			// published: keep archiving it rather than trusting a stale plan.
+			plan.Stacks = append(plan.Stacks, backupagent.StackPlan{Name: dir})
+			adopted = append(adopted, dir)
+		default:
+			skipped = append(skipped, dir)
+		}
+	}
+	sort.Slice(plan.Stacks, func(i, j int) bool { return plan.Stacks[i].Name < plan.Stacks[j].Name })
+	if len(adopted) > 0 {
+		fmt.Fprintf(out, "note: %d director(y/ies) are not in the plan but changed since it was published — archiving them anyway: %s\n",
+			len(adopted), strings.Join(adopted, ", "))
+	}
+	if len(skipped) > 0 {
+		fmt.Fprintf(out, "note: not archiving %d orphan director(y/ies) with no deployed stack (--include-orphans keeps them): %s\n",
+			len(skipped), strings.Join(skipped, ", "))
+	}
+	return plan
 }
 
 func init() {
@@ -101,8 +165,10 @@ func init() {
 	backupAgentRunCmd.Flags().BoolVar(&agentKeepLegacy, "prune-legacy", false, "also prune whole-node archives (the previous producer's output)")
 	backupAgentRunCmd.Flags().StringVar(&agentOnlyStack, "only-stack", "", "archive just this stack (operator or console asking for one stack)")
 	backupAgentRunCmd.Flags().BoolVar(&agentForce, "force", false, "run now, ignoring the control plane's schedule decision")
+	backupAgentRunCmd.Flags().BoolVar(&agentIncludeOrphans, "include-orphans", false, "archive volume directories the plan does not cover (leftovers of removed stacks)")
 	backupAgentRunCmd.Flags().BoolVar(&agentDryRun, "dry-run", false, "report what would be archived without freezing, snapshotting or writing")
 	backupAgentDrillCmd.Flags().StringVar(&agentDrillWorkD, "work-dir", "", "scratch directory (default: a temp dir)")
+	backupAgentDrillCmd.Flags().IntVar(&agentDrillNewest, "newest", 0, "drill the N newest artifacts in --archive-dir instead of naming one on the command line (the weekly timer uses 1)")
 	backupAgentInstallCmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install and enable the hourly root oneshot on this node",
@@ -120,7 +186,7 @@ before retiring that node's volume-backup agent.`,
 			return ensureBackupAgentInstalled(cmd.OutOrStdout())
 		},
 	}
-	backupAgentCmd.AddCommand(backupAgentRunCmd, backupAgentDrillCmd, backupAgentInstallCmd)
+	backupAgentCmd.AddCommand(backupAgentRunCmd, backupAgentDrillCmd, backupAgentDrillStatusCmd, backupAgentInstallCmd)
 	rootCmd.AddCommand(backupAgentCmd)
 }
 
@@ -204,6 +270,8 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		}
 		plan = derived
 		fmt.Fprintf(cmd.ErrOrStderr(), "note: no plan at %s — derived %d stack(s) from %s\n", err, len(plan.Stacks), agentVolumeRoot)
+	} else {
+		plan = applyOrphanPolicy(plan, agentVolumeRoot, out, agentIncludeOrphans)
 	}
 	node := resolveAgentNode(ctx, agentNode)
 	if node == "" {
@@ -406,29 +474,140 @@ func humanBytes(n int64) string {
 
 func runBackupAgentDrill(cmd *cobra.Command, args []string) error {
 	cmd.SilenceUsage = true
-	archive := args[0]
-	if st, err := os.Stat(archive); err != nil {
-		return fmt.Errorf("archive: %w", err)
-	} else if st.IsDir() {
-		return fmt.Errorf("%s is a directory, want a .tar.gz artifact", archive)
+	out := cmd.OutOrStdout()
+
+	var archives []string
+	switch {
+	case agentDrillNewest > 0:
+		if len(args) > 0 {
+			return fmt.Errorf("--newest picks the artifacts itself; do not also name one on the command line")
+		}
+		found, err := newestArtifacts(agentArchiveDir, agentDrillNewest)
+		if err != nil {
+			return fmt.Errorf("find artifacts in %s: %w", agentArchiveDir, err)
+		}
+		if len(found) == 0 {
+			// An empty archive dir is a real answer, not a failure: a node with no
+			// artifacts has nothing to drill, and the weekly timer must not report
+			// that as a broken drill.
+			fmt.Fprintf(out, "no artifacts in %s — nothing to drill\n", agentArchiveDir)
+			return nil
+		}
+		archives = found
+	case len(args) == 1:
+		archives = args
+	default:
+		return fmt.Errorf("name an archive, or pass --newest N to drill the newest ones in %s", agentArchiveDir)
 	}
-	work := agentDrillWorkD
-	if work == "" {
-		var err error
-		if work, err = os.MkdirTemp("", "pmcluster-drill-"); err != nil {
+
+	var failures int
+	for _, archive := range archives {
+		rec := drillRecord{At: time.Now().UTC(), Archive: filepath.Base(archive)}
+		fi, statErr := os.Stat(archive)
+		if statErr != nil {
+			rec.Error = statErr.Error()
+			_ = recordDrill(agentStatedirForDrill(), rec)
+			fmt.Fprintf(out, "✗ %s\n  %v\n", rec.Archive, statErr)
+			failures++
+			continue
+		}
+		if fi.IsDir() {
+			return fmt.Errorf("%s is a directory, want a .tar.gz artifact", archive)
+		}
+		work := agentDrillWorkD
+		if work == "" {
+			work = os.TempDir()
+		}
+		if err := ensureDrillSpace(work, fi.Size()); err != nil {
+			rec.Error = err.Error()
+			_ = recordDrill(agentStatedirForDrill(), rec)
+			fmt.Fprintf(out, "✗ %s\n  %v\n", rec.Archive, err)
+			failures++
+			continue
+		}
+		scratch, err := os.MkdirTemp(work, "pmcluster-drill-")
+		if err != nil {
 			return err
 		}
-		defer func() { _ = os.RemoveAll(work) }()
+		files, engine, detail, derr := backupagent.Drill(archive, scratch)
+		_ = os.RemoveAll(scratch)
+		rec.Files, rec.Engine, rec.Detail = files, engine, detail
+		if derr != nil {
+			rec.Error = derr.Error()
+			_ = recordDrill(agentStatedirForDrill(), rec)
+			fmt.Fprintf(out, "✗ %s\n  %v\n", rec.Archive, derr)
+			failures++
+			continue
+		}
+		rec.OK = true
+		_ = recordDrill(agentStatedirForDrill(), rec)
+		fmt.Fprintf(out, "✓ %s\n  %d files extracted\n  %s\n", rec.Archive, files, detail)
+		if engine == "" {
+			fmt.Fprintf(out, "  note: no database found in this artifact — extraction is the whole drill\n")
+		}
 	}
-	files, engine, detail, err := backupagent.Drill(archive, work)
+	if failures > 0 {
+		return fmt.Errorf("%d of %d drill(s) failed", failures, len(archives))
+	}
+	return nil
+}
+
+// agentStatedirForDrill is the state dir the drill records into. It honours the
+// same override the agent uses, so a test (or an operator with a custom state
+// dir) does not write into /var/lib.
+func agentStatedirForDrill() string {
+	if agentStateDir != "" {
+		return agentStateDir
+	}
+	return defaultStateDir
+}
+
+func runBackupAgentDrillStatus(cmd *cobra.Command, _ []string) error {
 	out := cmd.OutOrStdout()
+	p := drillStatusPath(agentStatedirForDrill())
+	b, err := os.ReadFile(p)
 	if err != nil {
-		fmt.Fprintf(out, "✗ %s\n  %v\n", filepath.Base(archive), err)
+		if os.IsNotExist(err) {
+			fmt.Fprintf(out, "no drill has run on this node yet (%s does not exist)\n", p)
+			fmt.Fprintln(out, "  the weekly timer installs with `pmcluster backup-agent install`; run one now with")
+			fmt.Fprintln(out, "  `pmcluster backup-agent drill --newest 1`")
+			return nil
+		}
 		return err
 	}
-	fmt.Fprintf(out, "✓ %s\n  %d files extracted to %s\n  %s\n", filepath.Base(archive), files, work, detail)
-	if engine == "" {
-		fmt.Fprintf(out, "  note: no database found in this artifact — extraction is the whole drill\n")
+	var doc drillStatusFile
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("parse %s: %w", p, err)
+	}
+	if doc.Last == nil {
+		fmt.Fprintf(out, "no drill recorded in %s\n", p)
+		return nil
+	}
+	last := doc.Last
+	mark := "✗"
+	if last.OK {
+		mark = "✓"
+	}
+	fmt.Fprintf(out, "%s last drill: %s\n", mark, last.At.Format(time.RFC3339))
+	fmt.Fprintf(out, "  archive: %s\n  files:   %d\n", last.Archive, last.Files)
+	if last.Detail != "" {
+		fmt.Fprintf(out, "  detail:  %s\n", last.Detail)
+	}
+	if last.Error != "" {
+		fmt.Fprintf(out, "  error:   %s\n", last.Error)
+	}
+	if len(doc.History) > 1 {
+		fmt.Fprint(out, "\nrecent drills:\n")
+		for i, h := range doc.History {
+			if i >= 5 {
+				break
+			}
+			m := "✗"
+			if h.OK {
+				m = "✓"
+			}
+			fmt.Fprintf(out, "  %s %s  %s\n", m, h.At.Format("2006-01-02 15:04"), h.Archive)
+		}
 	}
 	return nil
 }

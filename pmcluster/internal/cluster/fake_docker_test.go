@@ -239,6 +239,21 @@ func (f *fakeDocker) ServiceTasks(_ context.Context, _ string) ([]runtime.Servic
 func (f *fakeDocker) ServiceLogs(_ context.Context, _ string, _ int) ([]runtime.LogLine, error) {
 	return nil, nil
 }
+func (f *fakeDocker) ScaleService(_ context.Context, serviceID string, replicas uint64) error {
+	for name, svc := range f.services {
+		if svc.ID != serviceID && svc.Name != serviceID {
+			continue
+		}
+		svc.Desired = replicas
+		if replicas == 0 {
+			svc.Replicas = 0
+		}
+		f.services[name] = svc
+		return nil
+	}
+	return nil
+}
+
 func (f *fakeDocker) ServiceRestart(_ context.Context, _ string) error { return nil }
 func (f *fakeDocker) ServiceExec(_ context.Context, _ string, _ []string) (*runtime.ExecResult, error) {
 	return nil, nil

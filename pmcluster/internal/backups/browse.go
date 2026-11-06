@@ -223,6 +223,22 @@ func (l *Local) Restore(ctx context.Context, id int64, destRoot string, opts Res
 	if len(splitArchivePaths(row.ArchivePaths)) == 0 {
 		return 0, fmt.Errorf("backup %d has no archive path recorded, so there is nothing to restore from. The run is marked succeeded but no archive was discovered; re-run the backup, and check the archive dir on the node that took it (%s)", id, l.ArchiveDir)
 	}
+	// Pause the stack before the first byte is written. Deferred, so it also
+	// resumes after a failed restore — leaving an app down because a restore
+	// failed converts one incident into two.
+	if opts.Drain && l.Scaler != nil && row.StackName.Valid && row.StackName.String != "" {
+		stack := row.StackName.String
+		rep, undo, derr := (&Drainer{Scaler: l.Scaler, Logf: l.Logf}).Drain(ctx, stack)
+		if derr != nil {
+			return 0, derr
+		}
+		defer undo()
+		if len(rep.Skipped) > 0 && l.Logf != nil {
+			l.Logf("warning: %s also runs global service(s) that cannot be paused (%s) — the restore runs with them live",
+				stack, strings.Join(rep.Skipped, ", "))
+		}
+	}
+
 	target := destRoot
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return 0, fmt.Errorf("create restore dir: %w", err)

@@ -27,6 +27,14 @@ type Local struct {
 	// caller passes no policy of its own. Zero means DefaultRetention's.
 	// It does NOT cause anything to be deleted on a read: see Prune.
 	RetentionDays int
+	// Scaler pauses and resumes a stack's services around a restore. Optional:
+	// nil means "no container runtime here", and a drain-enabled restore then
+	// proceeds without pausing (the CLI reports it; the console's daemon always
+	// has one).
+	Scaler Scaler
+	// Logf reports restore progress (what was paused, what was skipped).
+	// Optional.
+	Logf func(format string, args ...any)
 	// S3 is the object store used for reads: restore fallback and cross-node
 	// transit. It is the in-cluster SeaweedFS store when that is enabled, and
 	// the offsite settings otherwise.

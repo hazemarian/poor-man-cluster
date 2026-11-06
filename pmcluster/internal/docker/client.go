@@ -609,6 +609,30 @@ func (r *realClient) ServiceRestart(ctx context.Context, serviceID string) error
 	return nil
 }
 
+// ScaleService sets a replicated service's desired replica count.
+//
+// A global service is refused rather than silently left alone: there is no
+// replica count to set, and a caller that believes it paused the workload while
+// the workload keeps writing is the worst possible outcome of a restore.
+func (r *realClient) ScaleService(ctx context.Context, serviceID string, replicas uint64) error {
+	svc, _, err := r.c.ServiceInspectWithRaw(ctx, serviceID, swarm.ServiceInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("service inspect %s: %w", serviceID, err)
+	}
+	if svc.Spec.Mode.Global != nil {
+		return fmt.Errorf("service %s is global — a global service has no replica count to scale", svc.Spec.Name)
+	}
+	if svc.Spec.Mode.Replicated == nil {
+		svc.Spec.Mode.Replicated = &swarm.ReplicatedService{}
+	}
+	n := replicas
+	svc.Spec.Mode.Replicated.Replicas = &n
+	if _, err := r.c.ServiceUpdate(ctx, svc.ID, svc.Version, svc.Spec, swarm.ServiceUpdateOptions{}); err != nil {
+		return fmt.Errorf("scale %s to %d: %w", svc.Spec.Name, replicas, err)
+	}
+	return nil
+}
+
 // ServiceExec runs a fixed argv non-interactively in the first running task
 // whose container is reachable from this node. The daemon only has its own
 // docker socket, so tasks running on other swarm nodes cannot be exec'd here;

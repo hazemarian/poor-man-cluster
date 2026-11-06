@@ -98,6 +98,9 @@ func (h *HTTP) restore(w http.ResponseWriter, r *http.Request) {
 		DestRoot string `json:"dest_root"`
 		Volume   string `json:"volume,omitempty"`
 		FromS3   bool   `json:"from_s3,omitempty"`
+		// Drain is a pointer so "absent" (drain, the default) and an explicit
+		// false (--no-drain equivalent) are different requests.
+		Drain *bool `json:"drain,omitempty"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	if body.DestRoot == "" {
@@ -110,7 +113,18 @@ func (h *HTTP) restore(w http.ResponseWriter, r *http.Request) {
 			body.DestRoot = "/var/stack/data"
 		}
 	}
-	n, err := h.Svc.Restore(r.Context(), id, body.DestRoot, RestoreOptions{Volume: body.Volume, FromS3: body.FromS3})
+	// Drain by default: the API is how the console restores, and the console has
+	// no flag to tick. `"drain": false` is the escape hatch, mirroring --no-drain.
+	drain := true
+	if body.Drain != nil {
+		drain = *body.Drain
+	}
+	if drain && h.VolumeRoot != nil {
+		if live := h.VolumeRoot(r.Context()); live != "" && !RestoreIntoLiveVolume(body.DestRoot, live) {
+			drain = false
+		}
+	}
+	n, err := h.Svc.Restore(r.Context(), id, body.DestRoot, RestoreOptions{Volume: body.Volume, FromS3: body.FromS3, Drain: drain})
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return

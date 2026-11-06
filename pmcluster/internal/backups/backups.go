@@ -54,4 +54,10 @@ type RestoreOptions struct {
 	// FromS3 forces fetching the archives from the configured offsite S3
 	// store even when a local copy still exists.
 	FromS3 bool
+	// Drain pauses the stack's services before writing into its volumes and
+	// resumes them afterwards. On by default for stack-scoped restores: a
+	// restore writes into a live volume and then removes what the snapshot did
+	// not hold, which is how a database ends up as a directory built from two
+	// different moments.
+	Drain bool
 }

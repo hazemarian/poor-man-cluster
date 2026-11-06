@@ -374,6 +374,28 @@ when the snapshot was taken`, read from their sidecar manifest.
 
 ---
 
+## 8.1 What the plan knows, and what it refuses to archive
+
+The hourly plan lists the stacks that **exist**. `pmcluster serve` republishes it
+every 15 minutes (each node from its own view of the swarm), so a directory whose
+stack was removed becomes an *orphan*: named in the plan's `orphans` list, reported
+by the run, and **not archived**. On one production node those leftovers were 87 MB
+of an 491 MB hourly payload — volumes of stacks that no longer exist, copied hourly
+forever.
+
+Two guards keep "skip" from meaning "silently stopped backing up a live stack":
+
+- a directory whose contents changed **after** the plan was generated is archived
+  anyway (a stack deployed since then is writing there);
+- every skipped directory is named in the run output, and `backup-agent run
+  --include-orphans` keeps them for an operator who wants the belt and braces.
+
+A node that cannot list services (a worker, which by role holds no stack data)
+writes no plan at all and keeps the older behaviour: derive from the volume root
+and archive everything.
+
+---
+
 ## 9. Restore
 
 ```bash
@@ -431,6 +453,18 @@ Details that prevent the classic accidents:
   directory was dropped, so a tree containing `current -> releases/v3` restored
   looking complete and silently missing files. Links are checked against the
   restore root before they are created, exactly like ordinary entries.
+- **The stack is paused first.** A restore writes into the volume and then
+  removes what the snapshot did not hold (`pruneToSnapshot`), so a running
+  database keeps writing into files that are being unlinked under it — and what
+  is left when it is finally started is a directory built out of two moments.
+  `backup restore` therefore scales the stack's replicated services to zero,
+  waits for the tasks to stop, writes, and scales them back (per service, in a
+  `defer`, so a failed restore does not leave the app down). Two exceptions:
+  a restore into a scratch directory (`--dest-root /tmp/…`) is for looking
+  inside an artifact and never pauses anything, and `--no-drain` exists for the
+  case where the stack is already dead. `global` services have no replica count
+  to set, so they are named in a warning and left running — a lie about a
+  drained stack is worse than a warning.
 - **The restore runs where the volume is.** A stack's volume lives on its pinned
   storage node, so when the CLI runs elsewhere the restore is routed there through
   the same store-transit mover used by `stack move`. When routing is impossible it
@@ -494,7 +528,33 @@ pmcluster backup-agent drill <artifact>      # extract and open every database i
 `backup_before_deploy: true` in a manifest takes the same snapshot before a deploy.
 The drill is the check that makes "backed up" mean something: it extracts the
 artifact into a scratch directory and proves the databases inside it open and
-answer an integrity check. Nothing runs it automatically today (§13).
+answer an integrity check.
+
+**It runs on its own.** `backup-agent install` now also writes
+`pmcluster-backup-drill.timer` — weekly, Sunday 03:00, randomized over 30 minutes
+so a fleet does not all extract at once — which runs `backup-agent drill
+--newest 1`: the newest artifact in the archive dir, extracted into a scratch
+directory and verified. The schedule is deliberately not hourly: a drill costs
+the I/O of a restore and must not run beside the backup it is testing.
+
+Three guards make an unattended drill safe:
+
+- **space**: the drill needs the archive's size a second time plus 256 MiB of
+  headroom, and refuses with the numbers (`not enough space under /tmp …`)
+  instead of filling the volume a backup just freed;
+- **time**: `TimeoutStartSec=1800` — a drill that hangs holds a database copy open;
+- **an empty archive dir is not a failure**: a node with nothing to drill says so
+  and exits 0.
+
+The result is recorded in `<state-dir>/drill/status.json` (last drill plus a
+12-entry history, mode 0600), so "have we actually restored anything this month?"
+does not depend on someone's memory:
+
+```bash
+pmcluster backup-agent drill-status
+pmcluster backup-agent drill --newest 1        # now
+pmcluster backup-agent drill backup-<node>-<ts>-stack-<stack>.tar.gz
+```
 
 ---
 
@@ -519,9 +579,9 @@ answer an integrity check. Nothing runs it automatically today (§13).
 | item | state |
 |---|---|
 | Postgres PITR (WAL streaming) | designed, deliberately not written — per-stack option, see §3 |
-| restore draining the stack first | restore writes into a live volume root (§9) |
-| MySQL/MariaDB verification | evidence only, no open-and-check (§4) |
-| scheduled restore drills | `backup-agent drill` exists; nothing runs it on a schedule |
+| MySQL/MariaDB verification | evidence only, no open-and-check (§4); a boot check is the follow-on after drills |
+| Postgres boot verification in a drill | evidence only today — replaying a datadir needs the engine version recorded next to the artifact |
+| per-volume backup opt-out | not built on purpose: every large volume in the reference fleet is a live database, so the only use it would get is a mistake |
 | merge-vs-replace on restore | replace is today's behaviour; the alternative is undecided |
 
 ---

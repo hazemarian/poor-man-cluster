@@ -62,6 +62,10 @@ type Client interface {
 	// ForceUpdate counter (the daemon re-deploys running tasks in place).
 	ServiceRestart(ctx context.Context, serviceID string) error
 
+	// ScaleService sets a replicated service's desired replica count. It is how
+	// a restore drains a stack: scale to 0, write the volume, scale back.
+	ScaleService(ctx context.Context, serviceID string, replicas uint64) error
+
 	// ServiceExec runs a fixed argv in a running task's container,
 	// non-interactive. Returns a clear error when the service has no task
 	// reachable from this node.

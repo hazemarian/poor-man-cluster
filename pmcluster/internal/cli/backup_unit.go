@@ -291,10 +291,64 @@ WantedBy=timers.target
 `
 }
 
+// renderBackupDrillServiceUnit builds the weekly restore drill.
+//
+// A backup nobody has restored is a hypothesis. The hourly run proves the
+// artifact could be WRITTEN; this proves one can be READ — extracted, and its
+// databases opened and asked a question. It runs on the node that holds the
+// archive, uses the same scratch discipline as `backup-agent drill`, and is
+// deliberately weekly: it competes with the apps for I/O and pool space.
+func renderBackupDrillServiceUnit(exe, volumeRoot, archiveDir, stateDir string) string {
+	return fmt.Sprintf(`[Unit]
+Description=pmcluster restore drill (extract the newest artifact and verify its databases)
+Documentation=https://github.com/hazemarian/poor-man-cluster
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Environment=PMCLUSTER_VOLUME_ROOT=%s
+Environment=PMCLUSTER_BACKUP_DIR=%s
+Environment=PMCLUSTER_BACKUP_STATE=%s
+EnvironmentFile=-%s
+# --newest picks this node's newest artifact per stack; the space guard inside
+# the command refuses rather than filling the disk a backup just freed.
+ExecStart=%s backup-agent drill --newest 1
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# A drill that hangs holds a scratch copy of a database open; bound it.
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
+`, volumeRoot, archiveDir, stateDir, backupEnvFile, exe)
+}
+
+// renderBackupDrillTimerUnit builds the weekly schedule: Sunday, 03:00, spread
+// over 30 minutes so a fleet does not all extract at once.
+func renderBackupDrillTimerUnit() string {
+	return `[Unit]
+Description=pmcluster restore drill (weekly)
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+RandomizedDelaySec=30m
+AccuracySec=1m
+Persistent=true
+Unit=pmcluster-backup-drill.service
+
+[Install]
+WantedBy=timers.target
+`
+}
+
 // Overridable in tests, like the daemon's equivalents.
 var (
 	backupUnitPath      = "/etc/systemd/system/pmcluster-backup.service"
 	backupTimerPath     = "/etc/systemd/system/pmcluster-backup.timer"
+	backupDrillUnitPath = "/etc/systemd/system/pmcluster-backup-drill.service"
+	backupDrillTimer    = "/etc/systemd/system/pmcluster-backup-drill.timer"
 	backupAgentVolumeRd = defaultVolumeRoot
 	backupAgentArchive  = "/var/stack/backup"
 	backupAgentStateDir = "/var/lib/pmcluster-backup"
@@ -340,7 +394,10 @@ func removeBackupAgent(out io.Writer) {
 		_ = systemctlFn("disable", "--now", "pmcluster-backup.timer")
 	}
 	removed := false
-	for _, p := range []string{backupTimerPath, backupUnitPath} {
+	if hostOS == "linux" && hasSystemctl() {
+		_ = systemctlFn("disable", "--now", "pmcluster-backup-drill.timer")
+	}
+	for _, p := range []string{backupTimerPath, backupUnitPath, backupDrillUnitPath, backupDrillTimer} {
 		if err := os.Remove(p); err == nil {
 			removed = true
 		}
@@ -397,11 +454,22 @@ func ensureBackupAgentInstalled(out io.Writer) error {
 	if err := writeUnitFn(backupTimerPath, []byte(renderBackupTimerUnit()), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", backupTimerPath, err)
 	}
-	for _, args := range [][]string{{"daemon-reload"}, {"enable", "--now", "pmcluster-backup.timer"}} {
+	if err := writeUnitFn(backupDrillUnitPath, []byte(renderBackupDrillServiceUnit(exe, backupAgentVolumeRd, backupAgentArchive, backupAgentStateDir)), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", backupDrillUnitPath, err)
+	}
+	if err := writeUnitFn(backupDrillTimer, []byte(renderBackupDrillTimerUnit()), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", backupDrillTimer, err)
+	}
+	for _, args := range [][]string{
+		{"daemon-reload"},
+		{"enable", "--now", "pmcluster-backup.timer"},
+		{"enable", "--now", "pmcluster-backup-drill.timer"},
+	} {
 		if err := systemctlFn(args...); err != nil {
 			return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
 		}
 	}
 	fmt.Fprintf(out, "  → installed %s + %s (hourly, root oneshot)\n", filepath.Base(backupUnitPath), filepath.Base(backupTimerPath))
+	fmt.Fprintf(out, "  → installed %s + %s (weekly restore drill, Sunday 03:00)\n", filepath.Base(backupDrillUnitPath), filepath.Base(backupDrillTimer))
 	return nil
 }
