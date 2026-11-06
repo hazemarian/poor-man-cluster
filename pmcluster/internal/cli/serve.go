@@ -114,6 +114,17 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			return s
 		}, log)
 
+		// Publish this node's backup plan: the hourly agent archives directories,
+		// and only the daemon knows which of them still have a stack behind them.
+		//
+		// Started BEFORE the leadership wait on purpose. A standby manager can
+		// read the service list, and every storage node needs its own plan for the
+		// volumes it actually holds — publishing only on the leader left the other
+		// managers archiving directories of stacks that no longer exist.
+		go publishBackupPlan(cmd.Context(), dc, func(format string, args ...any) {
+			log.Warn().Msgf(format, args...)
+		})
+
 		// Leader-aware daemon: on a multi-manager cluster the daemon serves
 		// ONLY on the current Swarm leader; other managers stand by until
 		// Swarm elects them leader (failover). Standalone/local mode returns
@@ -286,13 +297,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 		deps.Observability = obsReader
 	}
-	// Publish the node's backup plan (see publishBackupPlan): the hourly agent
-	// archives directories, and only the daemon knows which of them still have a
-	// stack behind them.
-	go publishBackupPlan(cmd.Context(), dc, st, func(format string, args ...any) {
-		log.Warn().Msgf(format, args...)
-	})
-
 	handler := server.New(deps)
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
