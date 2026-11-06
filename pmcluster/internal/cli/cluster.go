@@ -106,7 +106,7 @@ func init() {
 
 	clusterResetCmd.Flags().String("restore", "", "restore a purge-backup tarball into the data dir before rebuilding")
 
-	clusterCmd.AddCommand(clusterUpCmd, clusterUpdateCmd, clusterStatusCmd, clusterDownCmd, clusterResetCmd)
+	clusterCmd.AddCommand(clusterUpCmd, clusterUpdateCmd, clusterStatusCmd, clusterDownCmd, clusterResetCmd, clusterKitCmd)
 }
 
 // clusterState classifies what the local store says about this node.

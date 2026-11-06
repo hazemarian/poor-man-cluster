@@ -314,6 +314,13 @@ EnvironmentFile=-%s
 # --newest picks this node's newest artifact per stack; the space guard inside
 # the command refuses rather than filling the disk a backup just freed.
 ExecStart=%s backup-agent drill --newest 1
+# The other half of the drill, and the one that used to have none: the control
+# plane itself. The leader publishes data.db + .encryption_key into
+# Raft-replicated configs every five minutes and nothing ever proved that pair
+# restores — it was exercised only when a leader actually died. "|" keeps this
+# step from masking a failed artifact drill; a non-manager fails it with a clear
+# reason, which is honest on a worker and harmless on a manager.
+ExecStart=-/bin/sh -c '%s cluster kit verify' 
 Nice=15
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
@@ -322,7 +329,7 @@ TimeoutStartSec=1800
 
 [Install]
 WantedBy=multi-user.target
-`, volumeRoot, archiveDir, stateDir, backupEnvFile, exe)
+`, volumeRoot, archiveDir, stateDir, backupEnvFile, exe, exe)
 }
 
 // renderBackupDrillTimerUnit builds the weekly schedule: Sunday, 03:00, spread
