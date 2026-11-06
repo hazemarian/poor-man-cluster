@@ -34,6 +34,12 @@ type overviewData struct {
 	// looked exactly like an empty cluster. These flags keep "we don't know"
 	// separate from "the answer is none", and ErrRaw keeps the payload for the
 	// operator who wants it without putting it in the reading path.
+	// Apply is the last platform apply: what it changed and, more usefully, what
+	// it could not do. Reconcile runs unattended, so its warnings used to live
+	// in journald and nowhere else.
+	Apply      *applyModel
+	ApplyKnown bool
+
 	InfoKnown  bool
 	NodesKnown bool
 	ErrKey     string
@@ -74,6 +80,13 @@ func (c Overview) Fragment(g *gin.Context) {
 			SwarmNodes: info.Swarm.Nodes, ControlAvailable: info.Swarm.ControlAvailable,
 		}
 	}
+	if rec, errA := c.API.ApplyRecord(ctx); errA == nil && rec.Present {
+		d.ApplyKnown = true
+		d.Apply = &applyModel{
+			At: rec.At, Source: rec.Source, Version: rec.Version,
+			Line: rec.Line, Warnings: rec.Warnings,
+		}
+	}
 	nodes, errN := c.API.Nodes(ctx)
 	if errN == nil {
 		d.NodesKnown = true
@@ -96,6 +109,19 @@ func (c Overview) Fragment(g *gin.Context) {
 	}
 	c.Views.Fragment(g, "overview", d)
 }
+
+// applyModel is the last platform apply as the overview renders it.
+type applyModel struct {
+	At       string
+	Source   string
+	Version  string
+	Line     string
+	Warnings []string
+}
+
+// HasWarnings reports whether the last apply degraded, which the template uses
+// to choose between a quiet line and a banner.
+func (a *applyModel) HasWarnings() bool { return a != nil && len(a.Warnings) > 0 }
 
 type infoModel struct {
 	NodeName         string

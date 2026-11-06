@@ -110,6 +110,12 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 	if deps.Stdout != nil {
 		out = deps.Stdout
 	}
+	// Every degradation in this file is reported as a "⚠" line and then the
+	// run carries on — 29 sites, all of them writing here. Tee them so the
+	// apply record can keep them: the reconcile loop runs unattended, so a
+	// warning nobody watched used to be a warning nobody would ever know.
+	warnings := &warningSink{dst: out}
+	out = warnings
 	res := &UpdateResult{}
 
 	var (
@@ -857,15 +863,16 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			source = "update"
 		}
 		rec := ApplyRecord{
-			At:      time.Now().UTC(),
-			Version: in.Version,
-			Source:  source,
-			Stacks:  res.StacksDeployed,
-			Configs: res.ConfigsChanged,
+			At:       time.Now().UTC(),
+			Version:  in.Version,
+			Source:   source,
+			Stacks:   res.StacksDeployed,
+			Configs:  res.ConfigsChanged,
+			Warnings: warnings.List(),
 		}
-		if rec.Empty() {
-			// Nothing moved in this run; the reconcile summary above already
-			// reported the last apply that did.
+		if rec.Empty() && len(rec.Warnings) == 0 {
+			// Nothing moved and nothing degraded in this run; the reconcile
+			// summary above already reported the last apply that did.
 			return nil
 		}
 		if err := SaveApplyRecord(ctx, deps.Store, rec); err != nil {

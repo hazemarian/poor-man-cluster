@@ -29,14 +29,30 @@ type ApplyRecord struct {
 	Source  string    `json:"source"`
 	Stacks  []string  `json:"stacks,omitempty"`
 	Configs []string  `json:"configs,omitempty"`
+
+	// Warnings is what the run could not do, kept because the run that emits
+	// them is often unattended (the daemon's reconcile loop) and its stdout
+	// only reaches journald. Without this, a capability the platform quietly
+	// lost — a swarm mirror it could not rebuild, a node it could not label —
+	// was invisible to everyone who was not watching a terminal at the time.
+	// Recording them also means a warning-only run is a run worth recording.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // lastApplySettingKey lives in cluster_settings: no migration, and it is
 // operator-visible state, not a secret.
 const lastApplySettingKey = "last_platform_apply"
 
-// Empty reports whether the record describes a run that changed nothing.
-func (r ApplyRecord) Empty() bool { return len(r.Stacks) == 0 && len(r.Configs) == 0 }
+// Empty reports whether the record describes a run that changed nothing AND
+// degraded nothing.
+//
+// Warnings count. A run that deployed no stacks but could not rebuild four
+// secret mirrors is the single record an operator most needs to see — it changed
+// nothing, so nothing else about it leaves a trace, and gating the record on
+// "did it change something" is how those warnings stayed invisible.
+func (r ApplyRecord) Empty() bool {
+	return len(r.Stacks) == 0 && len(r.Configs) == 0 && len(r.Warnings) == 0
+}
 
 // Line renders the record the way both the daemon log and the CLI summary show
 // it, so the same sentence appears whichever one the operator reads.
@@ -48,8 +64,12 @@ func (r ApplyRecord) Line() string {
 	if len(r.Configs) > 0 {
 		configs = fmt.Sprintf("%d rendered config(s) %v", len(r.Configs), r.Configs)
 	}
-	return fmt.Sprintf("last platform apply: %s by %s (%s) — re-deployed %s, replaced %s",
+	line := fmt.Sprintf("last platform apply: %s by %s (%s) — re-deployed %s, replaced %s",
 		r.At.UTC().Format(time.RFC3339), r.Source, r.Version, stacks, configs)
+	if n := len(r.Warnings); n > 0 {
+		line += fmt.Sprintf(", %d warning(s): %s", n, r.Warnings[0])
+	}
+	return line
 }
 
 // LoadApplyRecord reads the most recent apply, or nil when none was ever

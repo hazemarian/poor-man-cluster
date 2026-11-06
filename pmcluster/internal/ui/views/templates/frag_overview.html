@@ -34,6 +34,20 @@
 </div>
 {{end}}
 
+{{if and .ApplyKnown .Apply.HasWarnings}}
+<div class="banner warn">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{TF "overview.apply_warnings_title" (len .Apply.Warnings)}}</p>
+    <p>{{T "overview.apply_warnings_body"}}</p>
+    <ul class="b-list">
+      {{range .Apply.Warnings}}<li>{{.}}</li>{{end}}
+    </ul>
+    <p class="muted">{{TF "overview.apply_warnings_when" .Apply.At .Apply.Source}}</p>
+  </div>
+</div>
+{{end}}
+
 {{/* Quorum is arithmetic, not policy: at one or two managers a single failure
      leaves a cluster that can read nothing and commit nothing, and the console
      will be gone with it. Say so while the console still works. */}}

@@ -357,3 +357,16 @@ type ExecResult struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
 }
+
+// ApplyRecord is the last platform apply as the daemon reports it.
+type ApplyRecord struct {
+	Present      bool     `json:"present"`
+	At           string   `json:"at"`
+	Version      string   `json:"version"`
+	Source       string   `json:"source"`
+	Stacks       []string `json:"stacks"`
+	Configs      []string `json:"configs"`
+	Warnings     []string `json:"warnings"`
+	WarningCount int      `json:"warning_count"`
+	Line         string   `json:"line"`
+}

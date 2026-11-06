@@ -148,6 +148,14 @@ func (c *Client) ClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	return &ci, err
 }
 
+// ApplyRecord returns the last platform apply, including the warnings it
+// recorded — the console's only view of a degraded unattended reconcile.
+func (c *Client) ApplyRecord(ctx context.Context) (*ApplyRecord, error) {
+	var rec ApplyRecord
+	err := c.do(ctx, http.MethodGet, "/cluster/apply", nil, &rec)
+	return &rec, err
+}
+
 // Nodes returns the swarm node list.
 func (c *Client) Nodes(ctx context.Context) ([]Node, error) {
 	var body struct {

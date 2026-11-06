@@ -11,15 +11,18 @@ package i18n
 
 func init() {
 	register(AR, map[string]string{
-		"overview.title":               "نظرة عامة على العنقود",
-		"overview.sub":                 "{0}\u00a0· Docker {1}\u00a0· {2}\u00a0· {3}",
-		"overview.sub_unknown":         "تفاصيل العنقود غير متاحة",
-		"overview.nodes_title":         "العقد",
-		"overview.nodes_unknown_title": "قائمة العقد غير متاحة",
-		"overview.nodes_unknown_body":  "تعذّر تحميل العقد. حدّث الصفحة أو تحقّق من الاتصال في الإعدادات.",
-		"overview.nodes_empty_title":   "لا توجد عقد",
-		"overview.nodes_empty_body":    "تحقّق من عنوان API والرمز في الإعدادات.",
-		"overview.not_manager_body":    "هذا الخادم ليس مديرًا، لذا مقاييس العنقود غير متاحة. يمكنك إدارة التطبيقات والشهادات والنسخ الاحتياطية.",
+		"overview.apply_warnings_title": "آخر تطبيق للمنصة لم يكمل %d خطوة",
+		"overview.apply_warnings_body":  "لا شيء متوقف، لكن المنصة تعمل بأقل مما طُلب منها — هذه هي الخطوات التي تراجعت واستمرت:",
+		"overview.apply_warnings_when":  "مسجّل عند %s بواسطة %s",
+		"overview.title":                "نظرة عامة على العنقود",
+		"overview.sub":                  "{0}\u00a0· Docker {1}\u00a0· {2}\u00a0· {3}",
+		"overview.sub_unknown":          "تفاصيل العنقود غير متاحة",
+		"overview.nodes_title":          "العقد",
+		"overview.nodes_unknown_title":  "قائمة العقد غير متاحة",
+		"overview.nodes_unknown_body":   "تعذّر تحميل العقد. حدّث الصفحة أو تحقّق من الاتصال في الإعدادات.",
+		"overview.nodes_empty_title":    "لا توجد عقد",
+		"overview.nodes_empty_body":     "تحقّق من عنوان API والرمز في الإعدادات.",
+		"overview.not_manager_body":     "هذا الخادم ليس مديرًا، لذا مقاييس العنقود غير متاحة. يمكنك إدارة التطبيقات والشهادات والنسخ الاحتياطية.",
 
 		"cluster.state_foot":    "حالة العنقود الحالية",
 		"cluster.nodes_foot":    "ضمن هذا العنقود",

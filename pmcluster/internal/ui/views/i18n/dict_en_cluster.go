@@ -4,15 +4,18 @@ package i18n
 
 func init() {
 	register(EN, map[string]string{
-		"overview.title":               "Cluster overview",
-		"overview.sub":                 "{0}\u00a0· Docker {1}\u00a0· {2}\u00a0· {3}",
-		"overview.sub_unknown":         "Cluster details unavailable",
-		"overview.nodes_title":         "Nodes",
-		"overview.nodes_unknown_title": "Node list unavailable",
-		"overview.nodes_unknown_body":  "Unable to load nodes. Refresh the page or check the connection in Settings.",
-		"overview.nodes_empty_title":   "No nodes reported",
-		"overview.nodes_empty_body":    "Check the API address and token in Settings.",
-		"overview.not_manager_body":    "This host is not a manager, so cluster metrics are unavailable. You can still manage applications, certificates, and backups.",
+		"overview.apply_warnings_title": "The last platform apply could not finish %d step(s)",
+		"overview.apply_warnings_body":  "Nothing is down, but the platform is running with less than it asked for — these are the steps that degraded and carried on:",
+		"overview.apply_warnings_when":  "recorded at %s by %s",
+		"overview.title":                "Cluster overview",
+		"overview.sub":                  "{0}\u00a0· Docker {1}\u00a0· {2}\u00a0· {3}",
+		"overview.sub_unknown":          "Cluster details unavailable",
+		"overview.nodes_title":          "Nodes",
+		"overview.nodes_unknown_title":  "Node list unavailable",
+		"overview.nodes_unknown_body":   "Unable to load nodes. Refresh the page or check the connection in Settings.",
+		"overview.nodes_empty_title":    "No nodes reported",
+		"overview.nodes_empty_body":     "Check the API address and token in Settings.",
+		"overview.not_manager_body":     "This host is not a manager, so cluster metrics are unavailable. You can still manage applications, certificates, and backups.",
 
 		"cluster.state_foot":    "Current cluster status",
 		"cluster.nodes_foot":    "In this cluster",

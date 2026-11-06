@@ -1330,3 +1330,35 @@ func TestUpdate_RebuildsAMissingSecretMirror(t *testing.T) {
 		t.Errorf("a healthy row must not be reported unrecoverable:\n%s", out.String())
 	}
 }
+
+// A run that changes nothing but degrades something still has to be recorded:
+// the reconcile loop is unattended, and "nothing changed" used to mean "nothing
+// worth writing down" — which is how four broken secret mirrors stayed invisible
+// for five days.
+func TestUpdate_RecordsWarningsEvenWhenNothingChanged(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+
+	// A row whose ciphertext cannot be decrypted: the sweep will warn about it.
+	if _, err := deps.Store.CreateSecret(ctx, "service", "adam-world", "broken_secret", []byte("not-ciphertext"), store.SecretHash("x")); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+
+	var out bytes.Buffer
+	deps.Stdout = &out
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	rec := LoadApplyRecord(ctx, deps.Store)
+	if rec == nil {
+		t.Fatal("no apply record written for a run that only warned")
+	}
+	if len(rec.Warnings) == 0 {
+		t.Fatalf("warnings were emitted but not recorded; stdout was:\n%s", out.String())
+	}
+	joined := strings.Join(rec.Warnings, "\n")
+	if !strings.Contains(joined, "broken_secret") {
+		t.Errorf("the recorded warning should name the row: %#v", rec.Warnings)
+	}
+}
