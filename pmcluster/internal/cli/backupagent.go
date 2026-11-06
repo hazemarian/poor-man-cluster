@@ -225,7 +225,7 @@ before retiring that node's volume-backup agent.`,
 			return ensureBackupAgentInstalled(cmd.OutOrStdout())
 		},
 	}
-	backupAgentCmd.AddCommand(backupAgentRunCmd, backupAgentDrillCmd, backupAgentDrillStatusCmd,
+	backupAgentCmd.AddCommand(backupAgentRunCmd, backupAgentDrillCmd, backupAgentDrillStatusCmd, backupStorePruneCmd,
 		backupAgentVerifyOffsiteCmd, offsiteStatusCmd, backupAgentInstallCmd)
 	rootCmd.AddCommand(backupAgentCmd)
 }
@@ -362,13 +362,13 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	}
 	retention := &policy
 	a := &backupagent.Agent{
-		Retention:    retention,
-		KeepLocalOne: keepLocalMinimal(),
-		Node:         node,
-		VolumeRoot:   root,
-		ArchiveDir:   agentArchiveDir,
-		Snapshot:     snap,
-		DryRun:       agentDryRun,
+		Retention:     retention,
+		KeepLocalMode: keepLocalMode(),
+		Node:          node,
+		VolumeRoot:    root,
+		ArchiveDir:    agentArchiveDir,
+		Snapshot:      snap,
+		DryRun:        agentDryRun,
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 		},

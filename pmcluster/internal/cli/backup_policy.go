@@ -163,11 +163,23 @@ func isOff(v string) bool {
 	return false
 }
 
-// keepLocalMinimal answers whether this node keeps only the newest artifact of
-// each stack (backup_keep_local = "minimal").
-func keepLocalMinimal() bool {
+// keepLocalMode answers how much history this node keeps on its own disk:
+// "dense" (the whole window, the default), "minimal" (one artifact per stack), or
+// "none" (nothing — the store and the bucket are the copies). The last value is
+// spelled "none"/"off"/"false"/"0".
+func keepLocalMode() string {
+	raw := ""
 	if pol, ok := readBackupPolicy(backupPolicyFile); ok && pol.KeepLocal != "" {
-		return strings.EqualFold(pol.KeepLocal, "minimal")
+		raw = pol.KeepLocal
+	} else {
+		raw = os.Getenv("PMCLUSTER_BACKUP_KEEP_LOCAL")
 	}
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("PMCLUSTER_BACKUP_KEEP_LOCAL")), "minimal")
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "none", "off", "false", "0", "no":
+		return "none"
+	case "minimal", "one", "1":
+		return "minimal"
+	default:
+		return "dense"
+	}
 }
