@@ -168,7 +168,23 @@ for ip in "${IPS[@]}"; do
     # the plan.
     echo "  ssh copy failed — retrying with scp -O (legacy protocol)" >&2
     if ! scp -O -i "$KEY" -o BatchMode=yes -q "$BIN" "$SSHUSER@$ip:/tmp/pmcluster.new"; then
-      echo "  copy FAILED (ssh and scp -O both failed) — nothing changed on this node" >&2
+      # A REFUSED PORT 22 IS NOT A DEAD SSHD. fail2ban/sshguard REJECT with a TCP
+      # reset, so `Connection refused` is exactly what a temporary ban looks like —
+      # and it looks identical to a host whose sshd is down. Seen live: a burst of
+      # connections during an upgrade got this workstation banned from one node,
+      # the node was reported "failed", and it had in fact installed the new binary
+      # a minute earlier. Ban windows expire, so the honest advice is "retry later
+      # and verify the version", not "this node is broken".
+      if ! (exec 3<>"/dev/tcp/$ip/22") 2>/dev/null; then
+        echo "  copy FAILED — port 22 is REFUSED (before any change was made to this node)." >&2
+        echo "  A refused port is either a dead sshd or a temporary fail2ban/sshguard ban on this" >&2
+        echo "  IP — they are indistinguishable from here. Bans lift by themselves: wait a few" >&2
+        echo "  minutes, re-run, and check the node's actual version before assuming it was missed:" >&2
+        echo "    ssh -i $KEY $SSHUSER@$ip 'pmcluster version'" >&2
+      else
+        echo "  copy FAILED (ssh and scp -O both failed) — port 22 answers, so this is auth or" >&2
+        echo "  remote-binary trouble, not a network ban. Nothing has changed on this node." >&2
+      fi
       FAILED=1; continue
     fi
   fi
