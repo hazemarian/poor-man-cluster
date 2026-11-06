@@ -14,7 +14,8 @@ import (
 // planPublishInterval is how often the daemon republishes this node's plan. It
 // only has to keep up with stack create/remove, and a stale plan is caught on
 // the agent side by the mtime guard, so minutes are plenty.
-const planPublishInterval = 15 * time.Minute
+// Overridable in tests, like the daemon's other intervals.
+var planPublishInterval = 15 * time.Minute
 
 // publishBackupPlan keeps this node's backup plan in step with the swarm.
 //
@@ -36,9 +37,22 @@ func publishBackupPlan(ctx context.Context, dc runtime.Client, log func(format s
 	}
 	tick := time.NewTicker(planPublishInterval)
 	defer tick.Stop()
+	// A worker can never publish — it may not read the swarm — and saying so every
+	// 15 minutes for the life of the node is how an operator learns to ignore
+	// warnings. Report a failure once, again only if the message changes (a node
+	// promoted mid-life starts working, or breaks differently), and stay quiet
+	// while it is the same known condition.
+	lastErr := ""
 	for {
-		if err := writeBackupPlanOnce(ctx, dc); err != nil && log != nil {
+		err := writeBackupPlanOnce(ctx, dc)
+		switch {
+		case err == nil:
+			lastErr = ""
+		case err.Error() != lastErr && log != nil:
+			lastErr = err.Error()
 			log("backup plan not published: %v (the agent falls back to the volume-root listing)", err)
+		case err != nil:
+			lastErr = err.Error()
 		}
 		select {
 		case <-ctx.Done():

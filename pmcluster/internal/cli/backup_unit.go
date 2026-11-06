@@ -402,6 +402,14 @@ func removeBackupAgent(out io.Writer) {
 			removed = true
 		}
 	}
+	// Unit files are not the only thing an install leaves behind: the admin
+	// drop-in directory (and its drill twin) survives its unit and would sit there
+	// looking like configuration for an agent this node no longer runs.
+	for _, d := range []string{backupUnitPath + ".d", backupDrillUnitPath + ".d"} {
+		if err := os.RemoveAll(d); err == nil {
+			removed = true
+		}
+	}
 	if removed {
 		fmt.Fprintf(out, "  → removed %s and %s: this node is not a storage node\n",
 			filepath.Base(backupUnitPath), filepath.Base(backupTimerPath))
