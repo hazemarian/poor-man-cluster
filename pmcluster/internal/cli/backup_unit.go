@@ -350,12 +350,60 @@ WantedBy=timers.target
 `
 }
 
+// renderOffsiteCheckServiceUnit builds the daily "is it still in the bucket?"
+// check.
+//
+// The hourly run records where an artifact went at the time it shipped. That is
+// intent, not presence: lifecycle rules expire objects, quotas fill, keys rotate,
+// a bucket can be deleted. Nothing re-read the bucket after the fact, so "we have
+// offsite backups" rested on a write that happened hours ago.
+func renderOffsiteCheckServiceUnit(exe, archiveDir, stateDir string) string {
+	return fmt.Sprintf(`[Unit]
+Description=pmcluster offsite check (are yesterday's artifacts still in the bucket?)
+Documentation=https://github.com/hazemarian/poor-man-cluster
+
+[Service]
+Type=oneshot
+User=root
+Environment=PMCLUSTER_BACKUP_DIR=%s
+Environment=PMCLUSTER_BACKUP_STATE=%s
+EnvironmentFile=-%s
+# Read-only against the bucket: list, compare, report. It ships nothing.
+ExecStart=%s backup-agent verify-offsite --days 2
+Nice=15
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+`, archiveDir, stateDir, backupEnvFile, exe)
+}
+
+// renderOffsiteCheckTimerUnit runs the check daily, after the first backups of
+// the day (04:20) so it inspects a settled set rather than a half-shipped one.
+func renderOffsiteCheckTimerUnit() string {
+	return `[Unit]
+Description=pmcluster offsite check (daily)
+
+[Timer]
+OnCalendar=*-*-* 04:20:00
+RandomizedDelaySec=20m
+AccuracySec=1m
+Persistent=true
+Unit=pmcluster-backup-offsite.service
+
+[Install]
+WantedBy=timers.target
+`
+}
+
 // Overridable in tests, like the daemon's equivalents.
 var (
 	backupUnitPath      = "/etc/systemd/system/pmcluster-backup.service"
 	backupTimerPath     = "/etc/systemd/system/pmcluster-backup.timer"
 	backupDrillUnitPath = "/etc/systemd/system/pmcluster-backup-drill.service"
 	backupDrillTimer    = "/etc/systemd/system/pmcluster-backup-drill.timer"
+	offsiteUnitPath     = "/etc/systemd/system/pmcluster-backup-offsite.service"
+	offsiteTimerPath    = "/etc/systemd/system/pmcluster-backup-offsite.timer"
 	backupAgentVolumeRd = defaultVolumeRoot
 	backupAgentArchive  = "/var/stack/backup"
 	backupAgentStateDir = "/var/lib/pmcluster-backup"
@@ -475,10 +523,17 @@ func ensureBackupAgentInstalled(out io.Writer) error {
 	if err := writeUnitFn(backupDrillTimer, []byte(renderBackupDrillTimerUnit()), 0o644); err != nil {
 		return fmt.Errorf("write %s: %w", backupDrillTimer, err)
 	}
+	if err := writeUnitFn(offsiteUnitPath, []byte(renderOffsiteCheckServiceUnit(exe, backupAgentArchive, backupAgentStateDir)), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", offsiteUnitPath, err)
+	}
+	if err := writeUnitFn(offsiteTimerPath, []byte(renderOffsiteCheckTimerUnit()), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", offsiteTimerPath, err)
+	}
 	for _, args := range [][]string{
 		{"daemon-reload"},
 		{"enable", "--now", "pmcluster-backup.timer"},
 		{"enable", "--now", "pmcluster-backup-drill.timer"},
+		{"enable", "--now", "pmcluster-backup-offsite.timer"},
 	} {
 		if err := systemctlFn(args...); err != nil {
 			return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
@@ -486,5 +541,6 @@ func ensureBackupAgentInstalled(out io.Writer) error {
 	}
 	fmt.Fprintf(out, "  → installed %s + %s (hourly, root oneshot)\n", filepath.Base(backupUnitPath), filepath.Base(backupTimerPath))
 	fmt.Fprintf(out, "  → installed %s + %s (weekly restore drill, Sunday 03:00)\n", filepath.Base(backupDrillUnitPath), filepath.Base(backupDrillTimer))
+	fmt.Fprintf(out, "  → installed %s + %s (daily offsite check, 04:20)\n", filepath.Base(offsiteUnitPath), filepath.Base(offsiteTimerPath))
 	return nil
 }

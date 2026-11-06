@@ -78,11 +78,13 @@ func TestEnsureBackupAgentInstalled(t *testing.T) {
 	storageNodeForTest(t, true)
 	dir := t.TempDir()
 	oldUnit, oldTimer, oldDrillUnit, oldDrillTimer := backupUnitPath, backupTimerPath, backupDrillUnitPath, backupDrillTimer
+	oldOffsiteUnit, oldOffsiteTimer := offsiteUnitPath, offsiteTimerPath
 	oldSys, oldHostOS, oldHasSys, oldWrite := systemctlFn, hostOS, hasSystemctl, writeUnitFn
 	oldState := backupAgentStateDir
 	defer func() {
 		backupUnitPath, backupTimerPath = oldUnit, oldTimer
 		backupDrillUnitPath, backupDrillTimer = oldDrillUnit, oldDrillTimer
+		offsiteUnitPath, offsiteTimerPath = oldOffsiteUnit, oldOffsiteTimer
 		systemctlFn, hostOS, hasSystemctl, writeUnitFn = oldSys, oldHostOS, oldHasSys, oldWrite
 		backupAgentStateDir = oldState
 	}()
@@ -91,6 +93,8 @@ func TestEnsureBackupAgentInstalled(t *testing.T) {
 	backupTimerPath = filepath.Join(dir, "pmcluster-backup.timer")
 	backupDrillUnitPath = filepath.Join(dir, "pmcluster-backup-drill.service")
 	backupDrillTimer = filepath.Join(dir, "pmcluster-backup-drill.timer")
+	offsiteUnitPath = filepath.Join(dir, "pmcluster-backup-offsite.service")
+	offsiteTimerPath = filepath.Join(dir, "pmcluster-backup-offsite.timer")
 	backupAgentStateDir = filepath.Join(dir, "state")
 	writeUnitFn = os.WriteFile
 	hostOS = "linux"
@@ -106,7 +110,7 @@ func TestEnsureBackupAgentInstalled(t *testing.T) {
 	if err := ensureBackupAgentInstalled(&out); err != nil {
 		t.Fatalf("ensureBackupAgentInstalled: %v", err)
 	}
-	for _, p := range []string{backupUnitPath, backupTimerPath, backupDrillUnitPath, backupDrillTimer} {
+	for _, p := range []string{backupUnitPath, backupTimerPath, backupDrillUnitPath, backupDrillTimer, offsiteUnitPath, offsiteTimerPath} {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatalf("%s not written: %v", p, err)
@@ -115,7 +119,7 @@ func TestEnsureBackupAgentInstalled(t *testing.T) {
 			t.Fatalf("%s is empty", p)
 		}
 	}
-	want := []string{"daemon-reload", "enable --now pmcluster-backup.timer", "enable --now pmcluster-backup-drill.timer"}
+	want := []string{"daemon-reload", "enable --now pmcluster-backup.timer", "enable --now pmcluster-backup-drill.timer", "enable --now pmcluster-backup-offsite.timer"}
 	if strings.Join(calls, "|") != strings.Join(want, "|") {
 		t.Fatalf("systemctl calls = %v, want %v", calls, want)
 	}
@@ -191,7 +195,7 @@ func TestEnsureBackupAgentRemovesLeftoverUnits(t *testing.T) {
 	backupTimerPath = filepath.Join(dir, "pmcluster-backup.timer")
 	backupDrillUnitPath = filepath.Join(dir, "pmcluster-backup-drill.service")
 	backupDrillTimer = filepath.Join(dir, "pmcluster-backup-drill.timer")
-	for _, p := range []string{backupUnitPath, backupTimerPath, backupDrillUnitPath, backupDrillTimer} {
+	for _, p := range []string{backupUnitPath, backupTimerPath, backupDrillUnitPath, backupDrillTimer, offsiteUnitPath, offsiteTimerPath} {
 		if err := os.WriteFile(p, []byte("[Unit]\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}

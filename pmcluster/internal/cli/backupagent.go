@@ -225,7 +225,8 @@ before retiring that node's volume-backup agent.`,
 			return ensureBackupAgentInstalled(cmd.OutOrStdout())
 		},
 	}
-	backupAgentCmd.AddCommand(backupAgentRunCmd, backupAgentDrillCmd, backupAgentDrillStatusCmd, backupAgentInstallCmd)
+	backupAgentCmd.AddCommand(backupAgentRunCmd, backupAgentDrillCmd, backupAgentDrillStatusCmd,
+		backupAgentVerifyOffsiteCmd, offsiteStatusCmd, backupAgentInstallCmd)
 	rootCmd.AddCommand(backupAgentCmd)
 }
 
