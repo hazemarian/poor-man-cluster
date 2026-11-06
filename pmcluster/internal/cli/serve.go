@@ -126,6 +126,23 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			log.Warn().Msgf(format, args...)
 		})
 
+		// Publish this node's binary version so skew is visible before an
+		// upgrade script discovers it.
+		//
+		// Started BEFORE the leadership wait, for the same reason the backup
+		// plan is: a follower manager blocks there indefinitely, so a publisher
+		// placed after that wait only ever ran on the leader — measured on a
+		// live fleet, where two of three managers never reported a version at
+		// all. Workers do start the loop too; Publish asks per tick whether this
+		// node can control the swarm and stays silent until it can.
+		if host, herr := os.Hostname(); herr == nil {
+			pub := &nodever.Publisher{
+				Docker: dc, Hostname: host, Version: buildinfo.Version, Log: log,
+				Interval: 10 * time.Minute,
+			}
+			go pub.Loop(cmd.Context())
+		}
+
 		// Leader-aware daemon: on a multi-manager cluster the daemon serves
 		// ONLY on the current Swarm leader; other managers stand by until
 		// Swarm elects them leader (failover). Standalone/local mode returns
@@ -363,18 +380,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 		}
 	}()
-
-	// Publish this node's binary version into the swarm so skew is visible
-	// before an upgrade script discovers it. Managers only: a worker cannot
-	// create a config, so it has nothing to publish to.
-	if dc != nil {
-		host, _ := os.Hostname()
-		pub := &nodever.Publisher{
-			Docker: dc, Hostname: host, Version: buildinfo.Version, Log: log,
-			Interval: 10 * time.Minute,
-		}
-		go pub.Loop(ctx)
-	}
 
 	log.Info().Str("addr", cfg.ListenAddr).Msg("pmcluster serve listening")
 	if err := server.Run(ctx, cfg.ListenAddr, handler); err != nil {
