@@ -816,5 +816,13 @@ func pruneRemoteLegs(ctx context.Context, out io.Writer, policy backups.Retentio
 			fmt.Fprintf(out, "%s retention: deleted %d, kept %d, failed %d\n",
 				t.Label, len(res.Deleted), res.Kept, len(res.Failed))
 		}
+		// The control-plane family has its own producer and its own age-out.
+		// Nothing pruned it, so it grew without bound (40 GB on the live
+		// store, on a node with 6 GB free).
+		if del, kept, cerr := backups.PruneControlPlaneArchives(ctx, t.S3, now, false); cerr != nil {
+			fmt.Fprintf(out, "%s control-plane retention skipped: %v\n", t.Label, cerr)
+		} else if del > 0 {
+			fmt.Fprintf(out, "%s control-plane retention: deleted %d, kept %d\n", t.Label, del, kept)
+		}
 	}
 }

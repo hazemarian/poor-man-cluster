@@ -492,3 +492,38 @@ func S3ObjectExists(ctx context.Context, cfg S3Config, key string) (bool, error)
 		return false, fmt.Errorf("s3 head %s: %s: %s", key, resp.Status, strings.TrimSpace(string(body)))
 	}
 }
+
+// DeleteS3Object removes one object. Used by the control-plane family's own
+// retention: those archives are written by a different producer than the stack
+// artifacts and were never pruned by anything, so they accumulated until the
+// store's volume reached 40 GB on a node with 6 GB free.
+func DeleteS3Object(ctx context.Context, cfg S3Config, key string) error {
+	if !cfg.Configured() {
+		return fmt.Errorf("s3: endpoint, bucket and keys are all required")
+	}
+	u, err := url.Parse(cfg.Endpoint)
+	if err != nil {
+		return fmt.Errorf("s3: parse endpoint: %w", err)
+	}
+	u.Path = "/" + cfg.Bucket + "/" + escapePath(key)
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
+	if err != nil {
+		return err
+	}
+	for k, v := range signV4Request(cfg, http.MethodDelete, key, nil, emptyPayloadSHA, time.Now()) {
+		req.Header[k] = v
+	}
+	resp, err := s3HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("s3 delete %s: %w", key, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return fmt.Errorf("s3 delete %s: %s: %s", key, resp.Status, strings.TrimSpace(string(body)))
+	}
+	return nil
+}

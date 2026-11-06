@@ -131,3 +131,50 @@ func deleteS3Object(ctx context.Context, cfg S3Config, key string) error {
 	}
 	return nil
 }
+
+// ControlPlaneKeep is how many control-plane archives a remote target keeps.
+// Two is enough: the newest is what a promoted leader restores, the one behind
+// it is the "the newest is corrupt" fallback — and the kit itself lives in Raft
+// configs, so these tarballs are the pre-L2 fallback, not the primary copy.
+const ControlPlaneKeep = 2
+
+// pruneControlPlaneArchives ages out pmcluster-ctlplane-* objects.
+//
+// They are written by the control-plane archiver, a different producer with a
+// different name shape than the stack artifacts, and nothing ever pruned them:
+// PruneS3 lists the "backup-" prefix only. On the live store that had grown to
+// 40 GB on a host with 6 GB free, all of it invented by a family no retention
+// rule could see.
+// PruneControlPlaneArchives is pruneControlPlaneArchives for callers outside
+// this package (the hourly agent, and a manual reclaim).
+func PruneControlPlaneArchives(ctx context.Context, cfg S3Config, now time.Time, dryRun bool) (int, int, error) {
+	return pruneControlPlaneArchives(ctx, cfg, now, dryRun)
+}
+
+func pruneControlPlaneArchives(ctx context.Context, cfg S3Config, now time.Time, dryRun bool) (deleted, kept int, err error) {
+	objs, err := listS3Objects(ctx, cfg, "pmcluster-ctlplane-")
+	if err != nil {
+		return 0, 0, err
+	}
+	names := make([]string, 0, len(objs))
+	for _, o := range objs {
+		names = append(names, o.Key)
+	}
+	// Names carry an RFC3339 timestamp, so newest-last sort is lexical.
+	sort.Strings(names)
+	if len(names) <= ControlPlaneKeep {
+		return 0, len(names), nil
+	}
+	del := names[:len(names)-ControlPlaneKeep]
+	for _, key := range del {
+		if dryRun {
+			deleted++
+			continue
+		}
+		if derr := DeleteS3Object(ctx, cfg, key); derr != nil {
+			return deleted, len(names) - deleted, derr
+		}
+		deleted++
+	}
+	return deleted, len(names) - deleted, nil
+}

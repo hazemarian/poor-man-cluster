@@ -382,14 +382,16 @@ WantedBy=multi-user.target
 `, archiveDir, stateDir, backupEnvFile, exe)
 }
 
-// renderOffsiteCheckTimerUnit runs the check daily, after the first backups of
-// the day (04:20) so it inspects a settled set rather than a half-shipped one.
+// renderOffsiteCheckTimerUnit runs the check HOURLY, twenty minutes past the
+// hour: the artifacts of the run that just happened are shipped and confirmed by
+// then, so the status file never lags a day behind the thing it describes. A
+// listing of the bucket is cheap; a stale "all present" is not.
 func renderOffsiteCheckTimerUnit() string {
 	return `[Unit]
 Description=pmcluster offsite check (daily)
 
 [Timer]
-OnCalendar=*-*-* 04:20:00
+OnCalendar=*:20:00
 RandomizedDelaySec=20m
 AccuracySec=1m
 Persistent=true
