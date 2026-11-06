@@ -73,6 +73,13 @@ func (p *Publisher) Publish(ctx context.Context) (bool, error) {
 	if p.Docker == nil || p.Hostname == "" || p.Version == "" {
 		return false, nil
 	}
+	// Asked on EVERY tick, not once at startup. A node that restarts during an
+	// upgrade reaches this code before its swarm membership is back, and a
+	// one-shot probe then decided "not a manager" for the life of the process —
+	// seen live: two of three managers never published.
+	if info, err := p.Docker.Info(ctx); err != nil || !info.SwarmControlAvailable {
+		return false, nil
+	}
 	name := Name(p.Hostname)
 	if existing, err := p.Docker.ConfigInspect(ctx, name); err == nil {
 		if existing.Labels[LabelVersion] == p.Version {
