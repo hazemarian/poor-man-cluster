@@ -431,14 +431,19 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			if exists {
 				continue
 			}
-			// The store's payload column is the encrypted-at-rest ciphertext;
-			// rebuilds can only happen when the row carries the plaintext
-			// fingerprint hash (it does) and the value was already mirrored
-			// once. If the ciphertext cannot be recovered, the operator must
-			// recreate the secret — warn, don't fail the update.
-			plain, err := deps.Cipher.Decrypt(s.Payload)
+			// ListSecrets deliberately omits the ciphertext (a list is not a
+			// value), so the payload has to be read per row. Decrypting the
+			// list projection decrypted an empty slice and reported every
+			// missing mirror as "ciphertext not recoverable" — a false alarm
+			// that also meant this repair never rebuilt a single secret.
+			row, err := deps.Store.Secret(ctx, s.Name)
 			if err != nil {
-				fmt.Fprintf(out, "  ⚠ secret %s: cannot rebuild swarm object (ciphertext not recoverable: %v)\n", s.Name, err)
+				fmt.Fprintf(out, "  ⚠ secret %s: read stored value: %v\n", s.Name, err)
+				continue
+			}
+			plain, err := deps.Cipher.Decrypt(row.Payload)
+			if err != nil {
+				fmt.Fprintf(out, "  ⚠ secret %s: cannot rebuild swarm object (ciphertext not recoverable: %v) — re-supply the value and re-mirror it: pmcluster secret heal\n", s.Name, err)
 				continue
 			}
 			if err := deps.Docker.SecretCreate(ctx, runtime.SecretSpec{

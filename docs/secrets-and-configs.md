@@ -63,6 +63,13 @@ manifest.
   without recreating the secret.
 - `pmcluster secret heal` verifies every secret decrypts with the current
   key, repairs stale hashes, and re-materializes missing swarm mirrors.
+  `cluster update` runs the same rebuild-on-missing pass over every row, so a
+  swarm object deleted by hand comes back on the next update — and a row that
+  genuinely cannot be decrypted (sealed by an older `.encryption_key`) is
+  reported there with the remedy rather than silently skipped. `secret heal
+  --dry-run` is the report to run before believing the warning: it lists each
+  row's status (ok / repaired / degraded / unrecoverable) without changing
+  anything.
 
 ## Configs
 

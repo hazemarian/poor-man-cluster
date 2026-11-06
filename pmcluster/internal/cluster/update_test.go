@@ -1290,3 +1290,43 @@ func TestUpdate_DropsWorkerFromStorageNodes(t *testing.T) {
 		t.Errorf("the removal must be reported:\n%s", out.String())
 	}
 }
+
+// A secret whose swarm mirror went missing must be rebuilt by cluster update.
+// The store's ListSecrets omits the ciphertext by design, and reading the
+// payload off that projection produced an empty slice: every repair attempt
+// decrypted nothing, warned "ciphertext not recoverable", and created nothing.
+func TestUpdate_RebuildsAMissingSecretMirror(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	f := deps.Docker.(*fakeDocker)
+
+	const name, value = "app_session_secret", "s3cr3t-value"
+	payload, err := deps.Cipher.Encrypt([]byte(value))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if _, err := deps.Store.CreateSecret(ctx, "service", "adam-world", name, payload, store.SecretHash(value)); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	target := store.SwarmSecretName(name, store.SecretHash(value))
+	if _, ok := f.secrets[target]; ok {
+		t.Fatalf("fixture already has the mirror %s", target)
+	}
+
+	var out bytes.Buffer
+	deps.Stdout = &out
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	spec, ok := f.secrets[target]
+	if !ok {
+		t.Fatalf("the missing swarm mirror was not rebuilt; update said:\n%s", out.String())
+	}
+	if got := string(spec.Data); got != value {
+		t.Errorf("mirror rebuilt with the wrong value: %q", got)
+	}
+	if strings.Contains(out.String(), "not recoverable") {
+		t.Errorf("a healthy row must not be reported unrecoverable:\n%s", out.String())
+	}
+}
