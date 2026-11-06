@@ -780,6 +780,18 @@ func shipTargetsFromEnv() func(context.Context, string) ([]string, error) {
 			if err := backups.PutS3Object(ctx, t.S3, name, archivePath); err != nil {
 				return where, fmt.Errorf("%s: %w", t.Label, err)
 			}
+			// A 2xx is not persistence. This store has answered 200 for
+			// artifacts that were gone from the bucket hours later, while the
+			// run recorded "store:..." as a destination and nothing looked
+			// again until a restore. Verifying the object by name turns "we
+			// sent it" into "it is there" at the moment it fails.
+			ok, verr := backups.S3ObjectExists(ctx, t.S3, name)
+			if verr != nil {
+				return where, fmt.Errorf("%s: upload not confirmed: %w", t.Label, verr)
+			}
+			if !ok {
+				return where, fmt.Errorf("%s: uploaded %s but the object is not in bucket %s — the target accepted the write and did not keep it", t.Label, name, t.S3.Bucket)
+			}
 			where = append(where, t.Label+":"+t.S3.Bucket+"/"+name)
 		}
 		return where, nil

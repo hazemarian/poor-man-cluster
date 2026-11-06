@@ -445,3 +445,50 @@ func ListS3Objects(ctx context.Context, cfg S3Config, prefix string) ([]S3Object
 	}
 	return out, nil
 }
+
+// S3ObjectExists answers whether the object is really in the bucket, by name.
+//
+// It exists because a 2xx is not persistence. A store answered 200 for every
+// hourly artifact — the agent recorded "store:..." in the run's destinations,
+// doctor reported the leg as healthy — and two days later a third of those
+// objects were gone from the bucket while the offsite copy was intact. Nothing
+// between the upload and the next morning ever looked again.
+//
+// Callers that ship (see shipTargetsFromEnv) use it to turn "we sent it" into
+// "it is there", so a store that accepts writes it does not keep fails at the
+// moment it happens instead of during a restore.
+func S3ObjectExists(ctx context.Context, cfg S3Config, key string) (bool, error) {
+	if !cfg.Configured() {
+		return false, fmt.Errorf("s3: endpoint, bucket and keys are all required")
+	}
+	u, err := url.Parse(cfg.Endpoint)
+	if err != nil {
+		return false, fmt.Errorf("s3: parse endpoint: %w", err)
+	}
+	u.Path = "/" + cfg.Bucket + "/" + escapePath(key)
+
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, u.String(), nil)
+	if err != nil {
+		return false, err
+	}
+	// HEAD is signed with the empty-payload hash, exactly like GET.
+	for k, v := range signV4Request(cfg, http.MethodHead, key, nil, emptyPayloadSHA, time.Now()) {
+		req.Header[k] = v
+	}
+	resp, err := s3HTTPClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("s3 head %s: %w", key, err)
+	}
+	defer resp.Body.Close()
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode <= 299:
+		return true, nil
+	case resp.StatusCode == http.StatusNotFound:
+		return false, nil
+	default:
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return false, fmt.Errorf("s3 head %s: %s: %s", key, resp.Status, strings.TrimSpace(string(body)))
+	}
+}

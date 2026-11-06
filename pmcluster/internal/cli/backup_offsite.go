@@ -33,8 +33,12 @@ type offsiteCheckRecord struct {
 	// bucket, an empty store and a lost object all look identical from the
 	// missing-name list alone.
 	Sample []string `json:"sample,omitempty"`
-	OK     bool     `json:"ok"`
-	Error  string   `json:"error,omitempty"`
+	// Objects is how many keys the target listing returned. A "missing"
+	// artifact next to a tiny number is a listing problem, not a lost backup —
+	// the distinction the first version of this check could not make.
+	Objects int    `json:"objects"`
+	OK      bool   `json:"ok"`
+	Error   string `json:"error,omitempty"`
 }
 
 // offsiteStatusFile is what `backup-agent offsite-status` reads.
@@ -94,6 +98,7 @@ restored only blindly.`,
 func init() {
 	backupAgentVerifyOffsiteCmd.Flags().Int("days", 1, "how many days of local artifacts to check")
 	backupAgentVerifyOffsiteCmd.Flags().Bool("json", false, "machine-readable output")
+	backupAgentVerifyOffsiteCmd.Flags().Bool("list-keys", false, "print every object key in each target (diagnostics)")
 }
 
 func runVerifyOffsite(cmd *cobra.Command, _ []string) error {
@@ -124,6 +129,21 @@ func runVerifyOffsite(cmd *cobra.Command, _ []string) error {
 		return nil
 	}
 
+	if listKeys, _ := cmd.Flags().GetBool("list-keys"); listKeys {
+		for _, t := range backupShipTargets() {
+			objs, lerr := backups.ListS3Objects(ctx, t.S3, "")
+			fmt.Fprintf(out, "== %s:%s (%d object(s))\n", t.Label, t.S3.Bucket, len(objs))
+			if lerr != nil {
+				fmt.Fprintf(out, "   error: %v\n", lerr)
+				continue
+			}
+			for _, o := range objs {
+				fmt.Fprintln(out, "   "+o.Key)
+			}
+		}
+		return nil
+	}
+
 	failed := false
 	var recs []offsiteCheckRecord
 	for _, t := range targets {
@@ -143,6 +163,7 @@ func runVerifyOffsite(cmd *cobra.Command, _ []string) error {
 		for _, o := range objects {
 			present[o.Key] = true
 		}
+		rec.Objects = len(objects)
 		keys := make([]string, 0, len(objects))
 		for _, o := range objects {
 			keys = append(keys, o.Key)
@@ -199,6 +220,7 @@ func runVerifyOffsite(cmd *cobra.Command, _ []string) error {
 				}
 				if len(r.Sample) > 0 {
 					fmt.Fprintf(out, "    bucket holds (newest): %s\n", strings.Join(r.Sample, ", "))
+					fmt.Fprintf(out, "    objects seen in bucket: %d\n", r.Objects)
 				}
 				for _, m := range r.NoManifest {
 					fmt.Fprintf(out, "    no manifest: %s\n", m)
