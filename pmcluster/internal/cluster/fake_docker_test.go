@@ -239,6 +239,10 @@ func (f *fakeDocker) ServiceTasks(_ context.Context, _ string) ([]runtime.Servic
 func (f *fakeDocker) ServiceLogs(_ context.Context, _ string, _ int) ([]runtime.LogLine, error) {
 	return nil, nil
 }
+func (f *fakeDocker) ContainerMounts(_ context.Context) ([]runtime.HostMount, error) {
+	return nil, nil
+}
+
 func (f *fakeDocker) ScaleService(_ context.Context, serviceID string, replicas uint64) error {
 	for name, svc := range f.services {
 		if svc.ID != serviceID && svc.Name != serviceID {

@@ -376,23 +376,32 @@ when the snapshot was taken`, read from their sidecar manifest.
 
 ## 8.1 What the plan knows, and what it refuses to archive
 
-The hourly plan lists the stacks that **exist**. `pmcluster serve` republishes it
-every 15 minutes (each node from its own view of the swarm), so a directory whose
-stack was removed becomes an *orphan*: named in the plan's `orphans` list, reported
-by the run, and **not archived**. On one production node those leftovers were 87 MB
-of an 491 MB hourly payload — volumes of stacks that no longer exist, copied hourly
-forever.
+The hourly run archives directories, and **a directory cannot know whether its stack
+still exists**. Three local answers, in order of how much they can be trusted:
 
-Two guards keep "skip" from meaning "silently stopped backing up a live stack":
+1. **The published plan.** `pmcluster serve` republishes `plan.json` every 15
+   minutes on every manager, from its own view of the swarm. Directories the plan
+   does not cover are supported by a **different signal below** if nothing else
+   confirms them.
+2. **This node's containers.** `docker ps -a` gives every container's
+   `com.docker.stack.namespace` label and its bind mounts — one API call, no swarm
+   access, no credentials. A directory a container mounts is a live stack; so is
+   one whose contents changed within 26 hours (a stack deployed since the last run,
+   or scaled to zero a minute ago — which is exactly what a restore does); so is one
+   with an artifact written in that window. This is the answer a **worker** needs:
+   `docker service ls` is refused on a worker and its policy file carries no S3
+   credentials, but its own daemon can always answer "what do I mount?".
+3. **The directory listing.** No docker access at all: archive everything.
 
-- a directory whose contents changed **after** the plan was generated is archived
-  anyway (a stack deployed since then is writing there);
-- every skipped directory is named in the run output, and `backup-agent run
-  --include-orphans` keeps them for an operator who wants the belt and braces.
+Anything left after those is an *orphan*: named in the run output, **not
+archived**. On one production node those leftovers were 87 MB of a 491 MB hourly
+payload — volumes of stacks that no longer exist, copied hourly forever.
 
-A node that cannot list services (a worker, which by role holds no stack data)
-writes no plan at all and keeps the older behaviour: derive from the volume root
-and archive everything.
+Every skipped directory is named (`warning: N directories … were NOT archived: […]`),
+and `backup-agent run --include-orphans` keeps them all for an operator who wants the
+belt and braces. Two deliberate conservatisms: a stopped container still counts as
+live (a crashed stack is not a leftover), and a directory has to be quiet for a full
+day before it can be called dead.
 
 ---
 

@@ -609,6 +609,37 @@ func (r *realClient) ServiceRestart(ctx context.Context, serviceID string) error
 	return nil
 }
 
+// ContainerMounts lists every bind mount on this node.
+//
+// One API call: the container list carries both the labels and the mount table,
+// so there is no per-container inspect and no swarm access involved — a worker
+// can answer this about itself, which is the whole point.
+func (r *realClient) ContainerMounts(ctx context.Context) ([]runtime.HostMount, error) {
+	cs, err := r.c.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("container list: %w", err)
+	}
+	out := make([]runtime.HostMount, 0, len(cs))
+	for _, c := range cs {
+		stack := c.Labels[runtime.StackNamespaceLabel]
+		for _, m := range c.Mounts {
+			// Named volumes are not how this platform stores stack data: every
+			// stateful volume is a bind mount under the volume root, which is what
+			// makes the directory tree meaningful. Anonymous/tmpfs mounts say
+			// nothing about which stack owns a directory.
+			if m.Type != "bind" || m.Source == "" {
+				continue
+			}
+			out = append(out, runtime.HostMount{
+				Source:      m.Source,
+				Destination: m.Destination,
+				Stack:       stack,
+			})
+		}
+	}
+	return out, nil
+}
+
 // ScaleService sets a replicated service's desired replica count.
 //
 // A global service is refused rather than silently left alone: there is no

@@ -17,6 +17,8 @@ import (
 // It is defined here in the docker package so it lives alongside the real
 // client and can be imported by other packages' tests.
 type fakeClient struct {
+	mounts []runtime.HostMount
+
 	pingResult runtime.Ping
 	pingErr    error
 	infoResult runtime.Info
@@ -178,6 +180,10 @@ func (f *fakeClient) ServiceLogs(_ context.Context, serviceID string, _ int) ([]
 	out := make([]runtime.LogLine, len(f.serviceLogs[svc.Name]))
 	copy(out, f.serviceLogs[svc.Name])
 	return out, nil
+}
+
+func (f *fakeClient) ContainerMounts(_ context.Context) ([]runtime.HostMount, error) {
+	return f.mounts, nil
 }
 
 func (f *fakeClient) ScaleService(_ context.Context, serviceID string, _ uint64) error {

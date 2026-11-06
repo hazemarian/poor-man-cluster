@@ -54,6 +54,16 @@ type Client interface {
 	// `docker service ps` entry) — the crash/restart trail.
 	ServiceTasks(ctx context.Context, serviceID string) ([]ServiceTask, error)
 
+	// ContainerMounts lists the bind mounts held by every container on THIS node,
+	// running or stopped.
+	//
+	// It is the one question a node without swarm access can answer about its own
+	// data: which directories under the volume root does something actually use.
+	// The backup agent uses it to decide what is live, so a worker storage node no
+	// longer archives the leftovers of removed stacks (or needs the swarm API, or
+	// an S3 credential, to find out).
+	ContainerMounts(ctx context.Context) ([]HostMount, error)
+
 	// ServiceLogs returns up to tail lines of a service's stdout/stderr,
 	// newest-last, demultiplexed with stream tags in chronological order.
 	ServiceLogs(ctx context.Context, serviceID string, tail int) ([]LogLine, error)
@@ -239,6 +249,18 @@ type Volume struct {
 	// (`o=bind, type=none`) — how pmcluster declares every stack volume. Its
 	// Device is then inside the managed volume layout by construction.
 	Bind bool
+}
+
+// HostMount is one bind mount a container on this node holds.
+type HostMount struct {
+	// Source is the host path that is mounted.
+	Source string
+	// Destination is where it appears inside the container.
+	Destination string
+	// Stack is the swarm stack the container belongs to (the
+	// com.docker.stack.namespace label), "" when the container is not
+	// stack-managed.
+	Stack string
 }
 
 // ServiceTask is one row of `docker service ps` — a task's lifecycle state.

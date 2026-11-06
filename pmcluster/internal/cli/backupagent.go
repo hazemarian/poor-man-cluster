@@ -18,6 +18,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backupagent"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 )
 
 // Defaults for a host-side run. They match the paths the platform already
@@ -103,6 +104,53 @@ var agentDrillNewest int
 // agentIncludeOrphans archives directories the plan calls orphans instead of
 // skipping them.
 var agentIncludeOrphans bool
+
+// derivePlanLocally builds a plan without the control plane, in the order a node
+// can actually trust: what its own containers use, then the directory listing.
+//
+// The container step is what a worker needs. `docker service ls` is refused on a
+// worker, and its policy file carries no S3 credentials, so it can neither read
+// the swarm nor fetch a published plan — but its own docker daemon knows which
+// stacks have containers here and which host directories they mount. That is the
+// live answer, and it needs no credential at all.
+func derivePlanLocally(ctx context.Context, root, archiveDir string) (backupagent.Plan, string) {
+	if dc, derr := docker.New(); derr == nil {
+		defer func() { _ = dc.Close() }()
+		if mounts, merr := dc.ContainerMounts(ctx); merr == nil && len(mounts) > 0 {
+			if plan, perr := backupagent.PlanFromMounts(root, mounts, recentlyArchivedStacks(archiveDir), time.Now()); perr == nil {
+				return plan, fmt.Sprintf("derived %d live stack(s) from this node's %d bind mount(s); %d director(y/ies) belong to no container",
+					len(plan.Stacks), len(mounts), len(plan.Orphans))
+			}
+		}
+	}
+	plan, _ := backupagent.PlanFromDisk(root)
+	return plan, fmt.Sprintf("derived %d stack(s) from %s (no container data on this node: every directory is archived)",
+		len(plan.Stacks), root)
+}
+
+// recentlyArchivedStacks names the stacks with an artifact written inside the
+// live window: a stack we were backing up an hour ago is not an orphan.
+func recentlyArchivedStacks(dir string) map[string]bool {
+	out := map[string]bool{}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return out
+	}
+	cutoff := time.Now().Add(-backupagent.LiveMtimeWindow)
+	for _, e := range entries {
+		if e.IsDir() || !backups.IsArtifact(e.Name()) {
+			continue
+		}
+		fi, ferr := e.Info()
+		if ferr != nil || fi.ModTime().Before(cutoff) {
+			continue
+		}
+		if art, ok := backups.ParseArtifact(e.Name()); ok && art.Stack != "" {
+			out[art.Stack] = true
+		}
+	}
+	return out
+}
 
 // applyOrphanPolicy reconciles the published plan with what is on disk.
 //
@@ -250,17 +298,14 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(ctx, agentRunDeadline)
 	defer cancel()
 
-	plan, planPath, err := loadAgentPlan(agentPlanPath, agentStateDir)
+	plan, _, err := loadAgentPlan(agentPlanPath, agentStateDir)
 	if err != nil {
-		// No published plan and no cache: derive one from the volume root. A
-		// node whose control plane is unreachable must still be backed up, and
-		// the directory layout already says what the stacks are.
-		derived, derr := backupagent.PlanFromDisk(agentVolumeRoot)
-		if derr != nil {
-			return fmt.Errorf("load plan %s: %w (and deriving one from %s failed: %v)", planPath, err, agentVolumeRoot, derr)
-		}
+		// No published plan and no cache. Both remaining derivations are local —
+		// nothing is fetched from a peer, so a node whose control plane is
+		// unreachable still backs up.
+		derived, how := derivePlanLocally(ctx, agentVolumeRoot, agentArchiveDir)
 		plan = derived
-		fmt.Fprintf(cmd.ErrOrStderr(), "note: no plan at %s — derived %d stack(s) from %s\n", err, len(plan.Stacks), agentVolumeRoot)
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: no plan at %s — %s\n", err, how)
 	} else {
 		plan = applyOrphanPolicy(plan, agentVolumeRoot, out, agentIncludeOrphans)
 	}
