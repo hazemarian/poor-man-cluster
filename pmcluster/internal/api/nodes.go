@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -90,6 +91,27 @@ func NodeStorageHandler(d runtime.Client, store interface {
 		cur := ""
 		if store != nil {
 			cur = store.SettingDefault(r.Context(), cluster.SettingStorageNodes(), "")
+		}
+
+		// Storage nodes must be MANAGERS, and the check belongs HERE, not only in the
+		// CLI: this endpoint is what the console's shield button calls, and a worker
+		// made a storage node cannot read settings or credentials — its backup agent
+		// archives and then ships nowhere.
+		if r.Method == http.MethodPost && node.Role != "manager" {
+			writeErr(w, http.StatusConflict,
+				"refusing to make "+hostname+" a storage node: storage nodes must be managers "+
+					"(they read settings, credentials and the stack list). Promote it in the swarm first: docker node promote "+hostname)
+			return
+		}
+		// Demoting below three managers leaves the swarm unable to survive one loss;
+		// the query flag is the console's explicit "I accept that".
+		if r.Method == http.MethodDelete && node.Role == "manager" {
+			if q := cluster.QuorumOf(nodes); q.Managers-1 < 3 && r.URL.Query().Get("force") != "true" {
+				writeErr(w, http.StatusConflict,
+					fmt.Sprintf("refusing to demote %s: it would leave %d manager(s). Below three, one more loss takes the swarm's quorum "+
+						"and nothing can be committed. Add a manager first, or repeat the request with ?force=true", hostname, q.Managers-1))
+				return
+			}
 		}
 
 		var merged string

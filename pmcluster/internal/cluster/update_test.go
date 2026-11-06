@@ -273,9 +273,12 @@ func TestUpdate_StorageNodeLabelsRepaired(t *testing.T) {
 	}
 	// seed's fakeDocker has no nodes; give it the two hostnames.
 	f := deps.Docker.(*fakeDocker)
+	// Storage nodes are managers (a worker cannot read the control plane), so the
+	// fixture is two managers — a worker in this list is now pruned, which
+	// TestUpdate_DropsWorkerFromStorageNodes covers.
 	f.nodes = []runtime.Node{
 		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active"},
-		{Hostname: "nextrum-sy-2", ID: "n2", Role: "worker", Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-2", ID: "n2", Role: "manager", Status: "ready", Availability: "active"},
 	}
 
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
@@ -305,7 +308,7 @@ func TestUpdate_AdoptsLabeledNodeIntoStorageNodes(t *testing.T) {
 	f := deps.Docker.(*fakeDocker)
 	f.nodes = []runtime.Node{
 		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", Labels: map[string]string{runtime.StorageNodeLabel: "true"}},
-		{Hostname: "nextrum-sy-2", ID: "n2", Role: "worker", Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-2", ID: "n2", Role: "manager", Status: "ready", Availability: "active"},
 	}
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -1243,5 +1246,47 @@ func TestApplyRecord_SurvivesAndStaysEmptyWhenNothingMoved(t *testing.T) {
 	}
 	if got := LoadApplyRecord(ctx, deps.Store); got == nil || got.Source != "reconcile" {
 		t.Fatalf("an empty apply overwrote a real one: %+v", got)
+	}
+}
+
+// A worker in storage_nodes is not a preference, it is a broken node: it cannot
+// read settings or credentials, and its backup agent ships nowhere. Roles change
+// out of band (`docker node demote`), so the reconciliation has to catch it.
+func TestUpdate_DropsWorkerFromStorageNodes(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "nextrum-sy-1,nextrum-sy-2"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-2", ID: "n2", Role: "worker", Status: "ready", Availability: "active",
+			Labels: map[string]string{runtime.StorageNodeLabel: "true"}},
+	}
+	var out bytes.Buffer
+	deps.Stdout = &out
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
+	if strings.Contains(got, "nextrum-sy-2") {
+		t.Fatalf("a worker survived in storage_nodes: %q", got)
+	}
+	if !strings.Contains(got, "nextrum-sy-1") {
+		t.Fatalf("the manager was dropped too: %q", got)
+	}
+	cleared := false
+	for _, l := range f.nodeLabels {
+		if l == runtime.StorageNodeLabel+"=" {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Errorf("the worker's storage label was not cleared: %v", f.nodeLabels)
+	}
+	if !strings.Contains(out.String(), "WORKER") {
+		t.Errorf("the removal must be reported:\n%s", out.String())
 	}
 }

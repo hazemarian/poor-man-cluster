@@ -16,6 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
@@ -119,7 +120,7 @@ Storage (optional, Path 1):
                                  adds its hostname to the manager's
                                  storage_nodes cluster setting, so round-robin
                                  placement spreads stateful stacks across this
-                                 node too (workers qualify — storage is not
+                                 node too (requires --role manager — storage is
                                  leader-only). By default the main (leader)
                                  node is the only storage node.
 
@@ -160,7 +161,7 @@ func init() {
 	joinCmd.Flags().String("verify-registry-pull", "", "after joining, best-effort 'docker pull <image>' to prove private registry credentials work (e.g. ghcr.io/your-org/app:1)")
 	joinCmd.Flags().Bool("tailscale", false, "join via a private WireGuard tailnet (advertise the tailnet IPv4 instead of the public IP)")
 	joinCmd.Flags().String("tailscale-auth-key", "", "tailnet auth key for 'tailscale up' (default: $PMCLUSTER_TAILSCALE_AUTH_KEY)")
-	joinCmd.Flags().Bool("storage-node", false, "mark this node as a storage node: add its hostname to the manager's storage_nodes setting so stateful stacks can be round-robin placed here (workers qualify)")
+	joinCmd.Flags().Bool("storage-node", false, "mark this node as a storage node: add its hostname to the manager's storage_nodes setting so stateful stacks can be round-robin placed here (requires --role manager)")
 	rootCmd.AddCommand(joinCmd)
 }
 
@@ -262,10 +263,45 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 		verifyRegistryPull(cmd.Context(), cmd.OutOrStdout(), verifyPullImage)
 	}
 
+	// A manager join is a Raft membership change: it cannot be committed without a
+	// quorum, and when one is missing the command hangs on an rpc timeout that
+	// reads like a network problem. Ask the manager we are joining (the same ssh
+	// path the storage registration uses) how healthy its manager set is, and stop
+	// with an explanation instead.
+	if role == "manager" {
+		sshHost := copyCredsFrom
+		if sshHost == "" {
+			sshHost = manager
+			if i := strings.LastIndex(sshHost, ":"); i > 0 && strings.Count(sshHost, ":") == 1 {
+				sshHost = sshHost[:i]
+			}
+		}
+		if q, qerr := managerQuorumViaSSH(cmd.Context(), sshHost); qerr == nil {
+			if why := cluster.MembershipChangeRefusal(q, "join this node as a manager"); why != "" {
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"\n⛔ %s\n\n  A manager join is a Raft membership change, so it needs a working quorum.\n"+
+						"  Until it has one, this node can only join as a WORKER (or wait).\n\n", why)
+				return fmt.Errorf("refusing to join as a manager: the target swarm has no quorum (%s)", q)
+			}
+			if w := cluster.ManagerCountWarning(q); w != "" {
+				fmt.Fprintf(cmd.ErrOrStderr(), "\n⚠ %s\n\n", w)
+			}
+		}
+	}
+
 	// Path 1 storage: when the operator flags this node as a storage node,
 	// register it on the manager so round-robin placement spreads stateful
-	// stacks across it (workers qualify — storage is not leader-only).
+	// stacks across it.
+	//
+	// Storage nodes are managers, and this is checked BEFORE the swarm is touched:
+	// a worker cannot list services, and (measured on the live worker) its backup
+	// policy file carries no S3 credentials either — it would archive and ship
+	// nowhere. The error names the two flags to change.
 	if storageNode, _ := cmd.Flags().GetBool("storage-node"); storageNode {
+		if role != "manager" {
+			return fmt.Errorf("refusing to join as a worker with --storage-node: storage nodes must be MANAGERS, because they read settings, credentials and the stack list, and a worker can do none of those (its backups would never leave the node).\n"+
+				"  re-run:  pmcluster join --role manager --token <manager join token> --manager %s --storage-node", manager)
+		}
 		// The manager's ssh host: prefer --copy-registry-creds (an explicit
 		// ssh host), else strip the :2377 port off --manager.
 		sshHost := copyCredsFrom
@@ -283,8 +319,9 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 		}
 		registerStorageNode(cmd.Context(), cmd.OutOrStdout(), sshHost, effectiveHostname)
 		// Mark the role on the node itself. The backup agent reads it before it
-		// installs: a worker that was explicitly joined as a storage node is the
-		// one worker that should be snapshotting its volume.
+		// installs: a MANAGER joined with --storage-node is the node that should be
+		// snapshotting its volume. A worker is refused above, because it can neither
+		// read the control plane nor ship an artifact anywhere.
 		if err := markStorageNodeEnv(); err != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "  (could not record the storage-node role: %v)\n", err)
 		}
@@ -585,6 +622,32 @@ func prepareJoinState(ctx context.Context, out io.Writer, cfg *config.Config) er
 // ssh (root@<sshHost>). Best-effort: any failure warns with the manual
 // command to run instead — a storage-registration problem must never fail
 // the join itself.
+// managerQuorumViaSSH asks a manager how healthy its manager set is.
+//
+// The rows are `docker node ls` lines of "role status"; counting them needs no
+// pmcluster on the remote side beyond the binary that is already there.
+func managerQuorumViaSSH(ctx context.Context, sshHost string) (cluster.Quorum, error) {
+	out, err := sshRunFn(ctx, sshHost, "docker node ls --format '{{.Role}} {{.Status}}'")
+	if err != nil {
+		return cluster.Quorum{}, err
+	}
+	var q cluster.Quorum
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 || f[0] != "manager" {
+			continue
+		}
+		q.Managers++
+		if strings.EqualFold(f[1], "ready") {
+			q.Ready++
+		}
+	}
+	if q.Managers == 0 {
+		return q, fmt.Errorf("no managers reported by %s", sshHost)
+	}
+	return q, nil
+}
+
 func registerStorageNode(ctx context.Context, out io.Writer, sshHost, nodeHostname string) {
 	// Stamp the swarm-visible storage label locally FIRST. The join already
 	// made this node a swarm member, so (as a manager) it can label itself

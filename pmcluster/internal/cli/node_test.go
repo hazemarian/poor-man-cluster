@@ -35,7 +35,7 @@ func (f *fakeNodeClient) SetNodeLabel(_ context.Context, id, key, value string) 
 func tc7NodeFixtures() []runtime.Node {
 	return []runtime.Node{
 		{ID: "node1abc", Hostname: "nxt-sw-1-m", Role: "manager", Status: "ready", Availability: "active", IsLeader: true, EngineVersion: "29.8.2"},
-		{ID: "node2xyz", Hostname: "nxt-sw-2-m", Role: "worker", Status: "ready", Availability: "active", IsLeader: false, EngineVersion: "29.8.2"},
+		{ID: "node2xyz", Hostname: "nxt-sw-2-m", Role: "manager", Status: "ready", Availability: "active", IsLeader: false, EngineVersion: "29.8.2"},
 	}
 }
 
@@ -67,8 +67,8 @@ func TestRunNodePromote_AppendsToStorageNodes(t *testing.T) {
 	defer restore()
 	fc := installFakeNodeClient(t, tc7NodeFixtures(), nil)
 
-	// Leader is already a storage node (cluster-up default); promoting the
-	// worker appends it.
+	// Leader is already a storage node (cluster-up default); promoting the other
+	// MANAGER appends it. (A worker is refused — see TestNodePromoteRefusesAWorker.)
 	st, _, err := openStore()
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -177,6 +177,11 @@ func TestRunNodePromote_LabelErrorWarns(t *testing.T) {
 func TestRunNodeDemote_RemovesFromStorageNodes(t *testing.T) {
 	_, restore := newTestCLIEnv(t)
 	defer restore()
+	// Two managers in the fixture: leaving one is refused by the "<3" guard unless
+	// the operator accepts it (the guard has its own test).
+	prevForce := nodeDemoteForce
+	nodeDemoteForce = true
+	t.Cleanup(func() { nodeDemoteForce = prevForce })
 	fc := installFakeNodeClient(t, tc7NodeFixtures(), nil)
 
 	st, _, err := openStore()
@@ -212,6 +217,11 @@ func TestRunNodeDemote_RemovesFromStorageNodes(t *testing.T) {
 func TestRunNodeDemote_NotInStorageNodes(t *testing.T) {
 	_, restore := newTestCLIEnv(t)
 	defer restore()
+	// Two managers in the fixture: leaving one trips the "<3" guard, which
+	// has its own test — here the removal mechanics are what is under test.
+	prevForce := nodeDemoteForce
+	nodeDemoteForce = true
+	t.Cleanup(func() { nodeDemoteForce = prevForce })
 	fc := installFakeNodeClient(t, tc7NodeFixtures(), nil)
 
 	// Seed storage_nodes WITHOUT the demoted host.
@@ -242,6 +252,11 @@ func TestRunNodeDemote_NotInStorageNodes(t *testing.T) {
 func TestRunNodeDemote_RefusesLeader(t *testing.T) {
 	_, restore := newTestCLIEnv(t)
 	defer restore()
+	// Two managers in the fixture: leaving one trips the "<3" guard, which
+	// has its own test — here the removal mechanics are what is under test.
+	prevForce := nodeDemoteForce
+	nodeDemoteForce = true
+	t.Cleanup(func() { nodeDemoteForce = prevForce })
 	installFakeNodeClient(t, tc7NodeFixtures(), nil)
 
 	st, _, err := openStore()
@@ -269,4 +284,79 @@ func TestRunNodeDemote_RefusesLeader(t *testing.T) {
 		t.Fatalf("storage_nodes must be unchanged, got %q", got)
 	}
 	_ = out
+}
+
+// Storage nodes are managers. `node promote` on a worker must refuse and say how
+// to do it properly, rather than putting stateful data (and its backups) on a node
+// that cannot read the control plane.
+func TestNodePromoteRefusesAWorker(t *testing.T) {
+	_, restore := newTestCLIEnv(t)
+	defer restore()
+	prevNew := dockerNewFn
+	t.Cleanup(func() { dockerNewFn = prevNew })
+	f := &fakeNodeClient{nodes: []runtime.Node{
+		{Hostname: "worker1", ID: "n2", Role: "worker", Status: "ready"},
+		{Hostname: "mgr1", ID: "n1", Role: "manager", Status: "ready", IsLeader: true},
+	}}
+	dockerNewFn = func() (runtime.Client, error) { return f, nil }
+
+	cmd, out := newNodeTestCmd(runNodePromote)
+	err := cmd.RunE(cmd, []string{"worker1"})
+	if err == nil {
+		t.Fatal("promoted a worker to a storage node")
+	}
+	for _, want := range []string{"MANAGERS", "docker node promote worker1"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal should mention %q: %v", want, err)
+		}
+	}
+	if len(f.labelCalls) != 0 {
+		t.Errorf("a refused promote must not touch the swarm: %v", f.labelCalls)
+	}
+	_ = out
+}
+
+// Three managers is the smallest count that survives a loss. Demoting below it is
+// refused unless the operator says --force, and a forced demote still says what
+// they just gave up.
+func TestNodeDemoteRefusesBelowThreeManagersUnlessForced(t *testing.T) {
+	_, restore := newTestCLIEnv(t)
+	defer restore()
+	prevNew := dockerNewFn
+	prevForce := nodeDemoteForce
+	t.Cleanup(func() { dockerNewFn = prevNew; nodeDemoteForce = prevForce })
+	f := &fakeNodeClient{nodes: []runtime.Node{
+		{Hostname: "mgr1", ID: "n1", Role: "manager", Status: "ready", IsLeader: true},
+		{Hostname: "mgr2", ID: "n2", Role: "manager", Status: "ready"},
+	}}
+	dockerNewFn = func() (runtime.Client, error) { return f, nil }
+
+	st, _, err := openStore()
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if serr := st.SetSetting(context.Background(), cluster.SettingStorageNodes(), "mgr1,mgr2"); serr != nil {
+		t.Fatalf("seed: %v", serr)
+	}
+	_ = st.Close()
+
+	cmd, out := newNodeTestCmd(runNodeDemote)
+
+	nodeDemoteForce = false
+	err = cmd.RunE(cmd, []string{"mgr2"})
+	if err == nil {
+		t.Fatal("demoted below three managers without --force")
+	}
+	if !strings.Contains(err.Error(), "three") || !strings.Contains(err.Error(), "--force") {
+		t.Errorf("the refusal should name the rule and the escape hatch: %v", err)
+	}
+
+	nodeDemoteForce = true
+	out.Reset()
+	if err := cmd.RunE(cmd, []string{"mgr2"}); err != nil {
+		t.Fatalf("--force should go through: %v", err)
+	}
+	if !strings.Contains(out.String(), "WARNING") {
+		t.Errorf("a forced demote must still warn about the loss:\n%s", out.String())
+	}
 }

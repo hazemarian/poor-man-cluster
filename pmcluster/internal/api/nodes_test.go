@@ -202,7 +202,7 @@ func tc7Nodes() []runtime.Node {
 	now := int64(1_700_000_000)
 	return []runtime.Node{
 		{ID: "node1abc", Hostname: "nxt-sw-1-m", Role: "manager", Availability: "active", Status: "ready", IsLeader: true, EngineVersion: "27.0.0", Address: "10.0.0.1:2377", CreatedAt: now, UpdatedAt: now + 60},
-		{ID: "node2xyz", Hostname: "nxt-sw-2-m", Role: "worker", Availability: "active", Status: "ready", IsLeader: false, EngineVersion: "27.0.0", CreatedAt: now + 100, UpdatedAt: now + 200},
+		{ID: "node2xyz", Hostname: "nxt-sw-2-m", Role: "manager", Availability: "active", Status: "ready", IsLeader: false, EngineVersion: "27.0.0", CreatedAt: now + 100, UpdatedAt: now + 200},
 	}
 }
 
@@ -210,10 +210,17 @@ func tc7Nodes() []runtime.Node {
 // chi.URLParam("hostname") is populated.
 func doStorageRequest(t *testing.T, h http.Handler, method, hostname string) *httptest.ResponseRecorder {
 	t.Helper()
+	return doStorageRequestQuery(t, h, method, hostname, "")
+}
+
+// doStorageRequestQuery is doStorageRequest with a query string, for the one case
+// that needs the operator's explicit acceptance (?force=true on a demote).
+func doStorageRequestQuery(t *testing.T, h http.Handler, method, hostname, query string) *httptest.ResponseRecorder {
+	t.Helper()
 	r := chi.NewRouter()
 	r.Post("/nodes/{hostname}/storage", h.ServeHTTP)
 	r.Delete("/nodes/{hostname}/storage", h.ServeHTTP)
-	req := httptest.NewRequest(method, "/nodes/"+hostname+"/storage", nil)
+	req := httptest.NewRequest(method, "/nodes/"+hostname+"/storage"+query, nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	return rec
@@ -275,7 +282,9 @@ func TestNodeStorageHandler_Demote(t *testing.T) {
 	store := newStoreFake(map[string]string{cluster.SettingStorageNodes(): "nxt-sw-1-m,nxt-sw-2-m"})
 
 	h := NodeStorageHandler(cli, store)
-	rec := doStorageRequest(t, h, http.MethodDelete, "nxt-sw-2-m")
+	// Two managers in the fixture, so leaving one needs the explicit acceptance the
+	// guard asks for (TestNodeStorageHandler_DemoteBelowThreeNeedsForce covers it).
+	rec := doStorageRequestQuery(t, h, http.MethodDelete, "nxt-sw-2-m", "?force=true")
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -362,5 +371,49 @@ func TestNodesHandler_StorageFlag(t *testing.T) {
 	}
 	if m1["storage"] != false {
 		t.Errorf("nodes[1].storage = %v, want false", m1["storage"])
+	}
+}
+
+// A worker cannot become a storage node — this is the endpoint the console's
+// shield button calls, so the rule has to hold here and not only in the CLI.
+func TestNodeStorageHandler_RefusesWorkerPromote(t *testing.T) {
+	nodes := tc7Nodes()
+	nodes[1].Role = "worker"
+	cli := &storageLabelClient{Client: &fakeclient.Client{NodeListResult: nodes}}
+	store := newStoreFake(nil)
+
+	h := NodeStorageHandler(cli, store)
+	rec := doStorageRequest(t, h, http.MethodPost, "nxt-sw-2-m")
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+	if len(cli.labelCalls) != 0 {
+		t.Errorf("a refused promote must not touch the swarm: %v", cli.labelCalls)
+	}
+	if got := store.SettingDefault(context.Background(), cluster.SettingStorageNodes(), ""); strings.Contains(got, "nxt-sw-2-m") {
+		t.Errorf("a refused promote still wrote storage_nodes=%q", got)
+	}
+	if !strings.Contains(rec.Body.String(), "managers") {
+		t.Errorf("the refusal should say why: %s", rec.Body.String())
+	}
+}
+
+// Demoting below three managers is refused unless the caller accepts it — the
+// console's confirm dialog is not enough to make someone read a warning.
+func TestNodeStorageHandler_DemoteBelowThreeNeedsForce(t *testing.T) {
+	cli := &storageLabelClient{Client: &fakeclient.Client{NodeListResult: tc7Nodes()}}
+	store := newStoreFake(map[string]string{cluster.SettingStorageNodes(): "nxt-sw-1-m,nxt-sw-2-m"})
+
+	h := NodeStorageHandler(cli, store)
+	rec := doStorageRequest(t, h, http.MethodDelete, "nxt-sw-2-m")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "three") {
+		t.Errorf("the refusal should name the rule: %s", rec.Body.String())
+	}
+	if got := store.SettingDefault(context.Background(), cluster.SettingStorageNodes(), ""); !strings.Contains(got, "nxt-sw-2-m") {
+		t.Errorf("a refused demote still wrote storage_nodes=%q", got)
 	}
 }

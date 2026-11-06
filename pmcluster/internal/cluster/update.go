@@ -742,6 +742,31 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		if raw == "" {
 			return nil
 		}
+		// A storage node must be a MANAGER. Only a manager can read the control
+		// plane — settings, credentials, the stack list — and the backup agent on a
+		// worker cannot even ship (measured: its policy file carries no S3
+		// credentials). Roles change out of band, though: `docker node demote` can
+		// drop a storage node to worker at any time, so the CLI guard is not enough.
+		// This reconciliation is what keeps the invariant true.
+		if pruned, dropped := pruneNonManagerStorageNodes(raw, nodes); len(dropped) > 0 {
+			raw = pruned
+			if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), raw); err != nil {
+				return fmt.Errorf("persist storage_nodes: %w", err)
+			}
+			for _, host := range dropped {
+				fmt.Fprintf(out, "  ⚠ %s is a WORKER — removed from storage_nodes and its storage label cleared. "+
+					"Storage nodes must be managers (they read settings, credentials and the stack list; their backup agent ships offsite). "+
+					"Move any stateful stack off it: pmcluster stack move <stack> --to <manager>\n", host)
+				for _, n := range nodes {
+					if n.Hostname == host {
+						if err := deps.Docker.SetNodeLabel(ctx, n.ID, runtime.StorageNodeLabel, ""); err != nil {
+							fmt.Fprintf(out, "  ⚠ could not clear the storage label on %s (%v)\n", host, err)
+						}
+						break
+					}
+				}
+			}
+		}
 		if leaderHost != "" && !containsStorageNode(splitStorageNodes(raw), leaderHost) {
 			raw = raw + "," + leaderHost
 			if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), raw); err != nil {
@@ -802,6 +827,14 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 				continue
 			}
 			if containsStorageNode(splitStorageNodes(raw), n.Hostname) {
+				continue
+			}
+			// The label is the intent channel, but the role is the rule: a worker
+			// cannot read the control plane, so adopting one would put stateful
+			// data (and its backups) on a node that cannot ship.
+			if n.Role != "manager" {
+				fmt.Fprintf(out, "  ⚠ %s carries the %s label but is a worker — not adopted into storage_nodes (storage nodes must be managers); clear the label with: pmcluster node demote %s\n",
+					n.Hostname, runtime.StorageNodeLabel, n.Hostname)
 				continue
 			}
 			raw = raw + "," + n.Hostname
@@ -1241,4 +1274,25 @@ func composeServices(composeYAML []byte) []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+// pruneNonManagerStorageNodes drops storage_nodes entries that are not managers.
+func pruneNonManagerStorageNodes(raw string, nodes []runtime.Node) (string, []string) {
+	role := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		role[n.Hostname] = n.Role
+	}
+	kept := make([]string, 0, len(splitStorageNodes(raw)))
+	var dropped []string
+	for _, h := range splitStorageNodes(raw) {
+		// A hostname that is not in the node list at all is a stale entry, not a
+		// role change: leave it for the removal path above to report rather than
+		// silently deleting an operator's setting here.
+		if r, ok := role[h]; ok && r != "manager" {
+			dropped = append(dropped, h)
+			continue
+		}
+		kept = append(kept, h)
+	}
+	return strings.Join(kept, ","), dropped
 }

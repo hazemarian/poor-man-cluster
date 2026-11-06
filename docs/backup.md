@@ -390,7 +390,9 @@ still exists**. Three local answers, in order of how much they can be trusted:
    or scaled to zero a minute ago — which is exactly what a restore does); so is one
    with an artifact written in that window. This is the answer a **worker** needs:
    `docker service ls` is refused on a worker and its policy file carries no S3
-   credentials, but its own daemon can always answer "what do I mount?".
+   credentials, but its own daemon can always answer "what do I mount?" — which is
+   also why the platform's rule is that **storage nodes are managers** (below): the
+   mount answer is the safety net, not the supported shape.
 3. **The directory listing.** No docker access at all: archive everything.
 
 Anything left after those is an *orphan*: named in the run output, **not

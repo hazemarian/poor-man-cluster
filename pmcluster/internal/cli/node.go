@@ -64,6 +64,8 @@ node are NOT moved automatically — run 'pmcluster stack move <stack> --to
 }
 
 func init() {
+	nodeDemoteCmd.Flags().BoolVar(&nodeDemoteForce, "force", false,
+		"accept leaving fewer than three managers (the swarm then cannot survive another loss)")
 	nodeCmd.AddCommand(nodeListCmd, nodeJoinTokenCmd, nodePromoteCmd, nodeDemoteCmd)
 	rootCmd.AddCommand(nodeCmd)
 }
@@ -220,6 +222,22 @@ func runNodePromote(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Storage means "this node keeps stateful data AND can read the control plane
+	// like every other stateful node": that requires a manager. A worker cannot
+	// list services, and (measured) its backup policy file carries no S3
+	// credentials — a storage node there would archive and then ship nowhere.
+	if node.Role != "manager" {
+		return fmt.Errorf("refusing to make %s a storage node: storage nodes must be MANAGERS (they read settings, credentials and the stack list; a worker can do none of that).\n"+
+			"  promote it in the swarm first:  docker node promote %s\n"+
+			"  then re-run:                   pmcluster node promote %s", hostname, hostname, hostname)
+	}
+	q := cluster.QuorumOf(nodes)
+	if why := cluster.MembershipChangeRefusal(q, "add a storage node"); why != "" {
+		return fmt.Errorf("%s", why)
+	}
+	if w := cluster.ManagerCountWarning(q); w != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
+	}
 	cur, err := readStorageNodes(cmd)
 	if err != nil {
 		return err
@@ -246,6 +264,10 @@ func runNodePromote(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// nodeDemoteForce lets an operator accept a manager count below three, which
+// the guard otherwise refuses.
+var nodeDemoteForce bool
+
 func runNodeDemote(cmd *cobra.Command, args []string) error {
 	hostname := args[0]
 
@@ -266,6 +288,20 @@ func runNodeDemote(cmd *cobra.Command, args []string) error {
 
 	if node.IsLeader {
 		return fmt.Errorf("refusing to demote %s: the leader must stay a storage node (the backup agent and the edge run there) — promote another node and let it take leadership first", hostname)
+	}
+	q := cluster.QuorumOf(nodes)
+	if why := cluster.MembershipChangeRefusal(q, "demote "+hostname); why != "" {
+		return fmt.Errorf("%s", why)
+	}
+	if node.Role == "manager" && q.Managers-1 < 3 {
+		if !nodeDemoteForce {
+			return fmt.Errorf("refusing to demote %s: it would leave %d manager(s). Below three, losing one node takes the swarm's quorum with it and nothing can be committed — including the change you are making.\n"+
+				"  add a manager first:  docker node promote <other>\n"+
+				"  or accept the risk:   pmcluster node demote %s --force", hostname, q.Managers-1, hostname)
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"WARNING: leaving %d manager(s). At this size the swarm cannot survive another loss — the next failure is not a degraded cluster, it is an unavailable one.\n",
+			q.Managers-1)
 	}
 
 	cur, err := readStorageNodes(cmd)

@@ -34,6 +34,19 @@
 </div>
 {{end}}
 
+{{/* Quorum is arithmetic, not policy: at one or two managers a single failure
+     leaves a cluster that can read nothing and commit nothing, and the console
+     will be gone with it. Say so while the console still works. */}}
+{{if and .InfoKnown .Info.ControlAvailable (lt .Info.SwarmManagers 3)}}
+<div class="banner warn">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{TF "cluster.quorum_small_title" .Info.SwarmManagers}}</p>
+    <p>{{T "cluster.quorum_small_body"}}</p>
+  </div>
+</div>
+{{end}}
+
 {{/* No swarm on this host is a normal state, not an error — but it is also not
      "0 nodes". The metric strip below refuses to print zeroes for it. */}}
 {{if and .InfoKnown (not .Info.ControlAvailable)}}
@@ -164,8 +177,11 @@
                         title="{{T "common.copy_hostname"}}" aria-label="{{T "common.copy_hostname"}}">{{icon "copy"}}</button>
                 {{if .Storage}}
                 <button type="button" class="icon-btn" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}" title="{{T "nodes.demote_storage"}}" aria-label="{{T "nodes.demote_storage"}}">{{icon "shield"}}</button>
-                {{else}}
+                {{else if eq .Role "manager"}}
+                {{/* storage nodes must be managers: a worker gets no button, only the reason */}}
                 <button type="button" class="icon-btn" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}" title="{{T "nodes.promote_storage"}}" aria-label="{{T "nodes.promote_storage"}}">{{icon "shield"}}</button>
+                {{else}}
+                <span class="muted" title="{{T "nodes.storage_needs_manager"}}" aria-label="{{T "nodes.storage_needs_manager"}}">{{T "nodes.storage_needs_manager_short"}}</span>
                 {{end}}
               </div>
             </td>
@@ -191,8 +207,10 @@
             <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Hostname}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
             {{if .Storage}}
             <button type="button" class="btn btn-ghost btn-sm" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}">{{icon "shield"}}<span>{{T "nodes.demote_storage"}}</span></button>
-            {{else}}
+            {{else if eq .Role "manager"}}
             <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}">{{icon "shield"}}<span>{{T "nodes.promote_storage"}}</span></button>
+            {{else}}
+            <span class="muted">{{T "nodes.storage_needs_manager"}}</span>
             {{end}}
           </span>
         </div>

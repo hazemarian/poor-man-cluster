@@ -5,6 +5,12 @@ something breaks?**
 
 The short version, which the rest of this document earns:
 
+> **Storage nodes are managers.** This is a rule, not a preference: a storage node must read
+> settings, credentials and the stack list — a worker can do none of the three, and its backup
+> agent cannot even ship (measured: no S3 credentials in its policy file). The CLI
+> (`join --storage-node`, `node promote`), the daemon's API (the console's shield button) and the
+> `cluster update` reconciliation all refuse or prune a worker in `storage_nodes`.
+>
 > Every stateful service is placed on one storage node and stays there. An agent on that node
 > snapshots the volume root every hour and writes one verified artifact per stack to two other
 > places. You can restore those artifacts ([`backup.md`](backup.md)), and you can move the whole
