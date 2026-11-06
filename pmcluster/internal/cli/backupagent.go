@@ -264,6 +264,11 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	} else {
 		plan = applyOrphanPolicy(plan, agentVolumeRoot, out, agentIncludeOrphans)
 	}
+	// The plan's own list, kept before --only-stack can narrow it: the
+	// unplanned-directory warning is about what the PLAN covers, not about what
+	// this particular run was asked for.
+	plannedNames := plan.StackNames()
+
 	node := resolveAgentNode(ctx, agentNode)
 	if node == "" {
 		node = plan.Node
@@ -378,7 +383,7 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintf(out, "run record: %s\n", p)
 	}
 	printAgentResult(out, res)
-	if unplanned := backupagent.UnplannedDirs(root, plan); len(unplanned) > 0 {
+	if unplanned := backupagent.UnplannedDirsFor(root, plannedNames); len(unplanned) > 0 {
 		verb, aux := "are", "were"
 		if len(unplanned) == 1 {
 			verb, aux = "is", "was"

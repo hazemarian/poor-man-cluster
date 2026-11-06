@@ -423,13 +423,23 @@ func (a *Agent) logf(format string, args ...any) {
 // leftover directory must not quietly enter the backup set — but they are
 // reported so an operator can delete them or add the stack back.
 func UnplannedDirs(volumeRoot string, plan Plan) []string {
+	return UnplannedDirsFor(volumeRoot, plan.StackNames())
+}
+
+// UnplannedDirsFor is UnplannedDirs against an explicit set of planned names.
+//
+// A narrowed run (`--only-stack`) must not report the plan's OTHER stacks as
+// "not in the plan and not archived": they are in the plan, they were simply not
+// asked for this time, and a warning that lists twelve live stacks trains the
+// operator to ignore the warning that matters.
+func UnplannedDirsFor(volumeRoot string, plannedNames []string) []string {
 	entries, err := os.ReadDir(volumeRoot)
 	if err != nil {
 		return nil
 	}
-	planned := make(map[string]bool, len(plan.Stacks))
-	for _, s := range plan.Stacks {
-		planned[s.Name] = true
+	planned := make(map[string]bool, len(plannedNames))
+	for _, name := range plannedNames {
+		planned[name] = true
 	}
 	var out []string
 	for _, e := range entries {
