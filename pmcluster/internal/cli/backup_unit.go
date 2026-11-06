@@ -547,6 +547,6 @@ func ensureBackupAgentInstalled(out io.Writer) error {
 	}
 	fmt.Fprintf(out, "  → installed %s + %s (hourly, root oneshot)\n", filepath.Base(backupUnitPath), filepath.Base(backupTimerPath))
 	fmt.Fprintf(out, "  → installed %s + %s (weekly restore drill, Sunday 03:00)\n", filepath.Base(backupDrillUnitPath), filepath.Base(backupDrillTimer))
-	fmt.Fprintf(out, "  → installed %s + %s (daily offsite check, 04:20)\n", filepath.Base(offsiteUnitPath), filepath.Base(offsiteTimerPath))
+	fmt.Fprintf(out, "  → installed %s + %s (hourly offsite check, twenty past the hour)\n", filepath.Base(offsiteUnitPath), filepath.Base(offsiteTimerPath))
 	return nil
 }
