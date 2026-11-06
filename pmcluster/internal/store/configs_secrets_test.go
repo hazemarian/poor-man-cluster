@@ -294,8 +294,15 @@ func TestSecretsCRUD(t *testing.T) {
 			if secrets[i].Name != w {
 				t.Errorf("secrets[%d].Name = %q, want %q", i, secrets[i].Name, w)
 			}
-			if secrets[i].Payload != nil {
-				t.Errorf("secrets[%d] leaked payload", i)
+			// The list projection has no payload field at all, so "did the list
+			// leak the ciphertext" is answered by the type; this asserts the value
+			// still comes back through the full row.
+			row, err := s.Secret(ctx, w)
+			if err != nil {
+				t.Fatalf("Secret(%s): %v", w, err)
+			}
+			if len(row.Payload) == 0 {
+				t.Errorf("Secret(%s) returned no payload", w)
 			}
 		}
 	})

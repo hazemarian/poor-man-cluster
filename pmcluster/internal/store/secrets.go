@@ -12,23 +12,37 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/errs"
 )
 
-// SecretRow is a DB-backed secret. Payload holds the AES-GCM ciphertext
-// (nonce || seal) — callers encrypt/decrypt via internal/credentials using
-// ~/.pmcluster/.encryption_key. Hash is sha256(plaintext) so the value can
-// be verified and displayed without ever being revealed.
-type SecretRow struct {
+// SecretMeta is the LIST projection of a DB-backed secret: everything an
+// operator can see without the value — scope, stack, name, hash, timestamps,
+// rotation count. Deliberately has no Payload field.
+//
+// The split is not cosmetic. Before it, ListSecrets returned a struct that
+// carried a Payload it never populated, so code that decrypted a listed row
+// compiled fine, decrypted an empty slice, and reported ErrInvalidCiphertext —
+// which the caller then read as "sealed by an older key". That exact shape
+// produced five days of false "cannot rebuild swarm object" warnings in
+// cluster update. With two types the mistake does not compile.
+type SecretMeta struct {
 	ID        int64
 	Scope     string
 	Stack     string
 	Name      string
-	Payload   []byte
 	Hash      string
 	CreatedAt int64
 	// SwarmRev is how many times the value has been rotated. Docker swarm
 	// secrets are immutable and cannot be removed while in use, so every
 	// rotation mirrors the value into a NEW swarm secret named by
-	// SwarmSecretName (content-addressed — see below).
+	// SwarmSecretName (content-addressed).
 	SwarmRev int64
+}
+
+// SecretRow is a FULL row: the metadata plus the AES-GCM ciphertext. Only
+// Store.Secret (and the update/rotate paths) can produce one.
+type SecretRow struct {
+	SecretMeta
+	// Payload holds the encrypted-at-rest ciphertext. Decrypt it with the
+	// credentials cipher whose key is DataDir/.encryption_key.
+	Payload []byte
 }
 
 // SwarmSecretName returns the Docker swarm secret name backing a DB secret.
@@ -100,7 +114,7 @@ func (s *Store) Secret(ctx context.Context, name string) (*SecretRow, error) {
 // A stack filter also matches unattached service-scope rows (stack = ”):
 // the DSL resolves secrets(name) by name only, so an unattached service
 // secret is usable by any stack and must stay visible on every stack's page.
-func (s *Store) ListSecrets(ctx context.Context, scope, stack string) ([]*SecretRow, error) {
+func (s *Store) ListSecrets(ctx context.Context, scope, stack string) ([]*SecretMeta, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, scope, stack, name, hash, created_at, swarm_rev FROM secrets
 		 WHERE (?1 = '' OR scope = ?1) AND (?2 = '' OR stack = ?2 OR (?2 != '' AND ?1 = 'service' AND stack = ''))
@@ -109,9 +123,9 @@ func (s *Store) ListSecrets(ctx context.Context, scope, stack string) ([]*Secret
 		return nil, fmt.Errorf("query secrets: %w", err)
 	}
 	defer rows.Close()
-	var out []*SecretRow
+	var out []*SecretMeta
 	for rows.Next() {
-		var r SecretRow
+		var r SecretMeta
 		if err := rows.Scan(&r.ID, &r.Scope, &r.Stack, &r.Name, &r.Hash, &r.CreatedAt, &r.SwarmRev); err != nil {
 			return nil, fmt.Errorf("scan secret: %w", err)
 		}
