@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Placement is per-stack, because the stacks differ in whether they own data.
@@ -37,11 +38,32 @@ func TestBackupPlacementUsesWorkersOnly(t *testing.T) {
 	}
 }
 
-func TestBackupPlacementFallsBackWhenNoWorkers(t *testing.T) {
+// A fleet with no non-storage node puts the store on the leader — and PINS it
+// there. Returning "" made the manifest fall back to ".LeaderNode", which
+// re-resolves on every render, so the store followed an election: it restarted
+// on a new node with an empty node-local volume and stranded everything it had
+// archived. Measured on production as a two-day hole in the bucket.
+func TestBackupPlacementPinsTheLeaderWhenNoWorkers(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "placement.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
 	f := newFakeDocker()
 	f.nodes = []runtime.Node{{Hostname: "only-m", Role: "manager", IsLeader: true}}
-	if got := BackupPlacement(context.Background(), nil, f); got != "" {
-		t.Fatalf("a manager-only fleet has no worker pool; want %q, got %q", "", got)
+	got := BackupPlacement(ctx, st, f)
+	if got != "only-m" {
+		t.Fatalf("manager-only fleet: store must be pinned to the leader, got %q", got)
+	}
+	// And it STAYS after an election: the pin is a hostname, not a role.
+	f.nodes = []runtime.Node{
+		{Hostname: "only-m", Role: "manager", IsLeader: false},
+		{Hostname: "second-m", Role: "manager", IsLeader: true},
+	}
+	if again := BackupPlacement(ctx, st, f); again != "only-m" {
+		t.Fatalf("the store followed the election: %q → %q (its data cannot follow it)", got, again)
 	}
 }
 

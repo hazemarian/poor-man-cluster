@@ -585,6 +585,27 @@ pmcluster backup-agent drill backup-<node>-<ts>-stack-<stack>.tar.gz
 
 ---
 
+## Where the in-cluster store lives, and why it never moves
+
+The SeaweedFS store that holds the in-cluster copy is **pinned to one host**, and
+the pin is a setting (`stack_pin_backup`), not a rule that gets re-evaluated:
+
+- a **non-storage node** (a worker) if the fleet has one — the store's copy is
+  meant to sit in a different failure domain from the data it archives;
+- otherwise the **leader**, chosen once and written down.
+
+It is never derived from leadership again. That distinction has teeth: the store
+keeps its data in a **node-local Docker volume**, so a service that follows an
+election restarts somewhere else with an empty volume and strands everything it
+had archived. Measured on production: the store moved off one host, the bucket
+gained a two-day hole, and every run in between had recorded `where:` as if the
+objects were there. Since v0.2.247 each upload is also confirmed against the
+bucket, so a store that accepts writes it does not keep fails the run instead of
+looking healthy.
+
+Moving the store deliberately is a data migration, not a redeploy: its volume
+has to be copied to the new host first.
+
 ## Re-reading the bucket
 
 The `where:` column records intent at ship time. `backup-agent verify-offsite

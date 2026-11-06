@@ -102,15 +102,30 @@ func BackupPlacement(ctx context.Context, st *store.Store, dc runtime.Client) st
 		}
 		var workers []string
 		for _, n := range nodes {
+			// The store belongs on a NON-storage node: its copy is the second
+			// failure domain, and a storage node already holds the data being
+			// archived.
 			if n.Role == "worker" && n.Hostname != "" {
 				workers = append(workers, n.Hostname)
 			}
 		}
-		if len(workers) == 0 {
-			return ""
+		if len(workers) > 0 {
+			sort.Strings(workers)
+			return roundRobinHost(string(StackBackup), workers)
 		}
-		sort.Strings(workers)
-		return roundRobinHost(string(StackBackup), workers)
+		// No non-storage node exists, so the store lives on the leader — and it
+		// is PINNED there. Returning "" let the manifest fall back to
+		// ".LeaderNode", which re-resolves on every render: the store then
+		// followed leadership, restarting on a new node with an empty node-local
+		// volume and stranding everything it had archived (measured: a two-day
+		// hole in the bucket after it moved off 5-m). A leader who is voted out
+		// is still the same machine; the store stays on it.
+		for _, n := range nodes {
+			if n.IsLeader && n.Hostname != "" {
+				return n.Hostname
+			}
+		}
+		return ""
 	})
 }
 
