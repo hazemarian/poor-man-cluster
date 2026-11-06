@@ -48,6 +48,19 @@
 </div>
 {{end}}
 
+{{if .Skew}}
+<div class="banner warn">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{TF "overview.version_skew_title" (len .Skew)}}</p>
+    <p>{{T "overview.version_skew_body"}}</p>
+    <ul class="b-list">
+      {{range .Skew}}<li>{{.Hostname}} — {{.Version}}</li>{{end}}
+    </ul>
+  </div>
+</div>
+{{end}}
+
 {{/* Quorum is arithmetic, not policy: at one or two managers a single failure
      leaves a cluster that can read nothing and commit nothing, and the console
      will be gone with it. Say so while the console still works. */}}

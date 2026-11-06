@@ -29,6 +29,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/mcpserver"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodever"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
@@ -362,6 +363,20 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 		}
 	}()
+
+	// Publish this node's binary version into the swarm so skew is visible
+	// before an upgrade script discovers it. Managers only: a worker cannot
+	// create a config, so it has nothing to publish to.
+	if dc != nil {
+		if info, ierr := dc.Info(ctx); ierr == nil && info.SwarmControlAvailable {
+			host, _ := os.Hostname()
+			pub := &nodever.Publisher{
+				Docker: dc, Hostname: host, Version: buildinfo.Version, Log: log,
+				Interval: 10 * time.Minute,
+			}
+			go pub.Loop(ctx)
+		}
+	}
 
 	log.Info().Str("addr", cfg.ListenAddr).Msg("pmcluster serve listening")
 	if err := server.Run(ctx, cfg.ListenAddr, handler); err != nil {

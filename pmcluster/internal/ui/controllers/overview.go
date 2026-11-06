@@ -40,6 +40,11 @@ type overviewData struct {
 	Apply      *applyModel
 	ApplyKnown bool
 
+	// Skew is the manager fleet's binary versions when any of them is not the
+	// version this console's daemon runs.
+	Skew      []versionModel
+	SkewKnown bool
+
 	InfoKnown  bool
 	NodesKnown bool
 	ErrKey     string
@@ -80,6 +85,12 @@ func (c Overview) Fragment(g *gin.Context) {
 			SwarmNodes: info.Swarm.Nodes, ControlAvailable: info.Swarm.ControlAvailable,
 		}
 	}
+	if v, errV := c.API.Versions(ctx); errV == nil {
+		d.SkewKnown = true
+		for _, e := range v.Stale {
+			d.Skew = append(d.Skew, versionModel{Hostname: e.Hostname, Version: e.Version})
+		}
+	}
 	if rec, errA := c.API.ApplyRecord(ctx); errA == nil && rec.Present {
 		d.ApplyKnown = true
 		d.Apply = &applyModel{
@@ -108,6 +119,12 @@ func (c Overview) Fragment(g *gin.Context) {
 		d.ErrKey, d.ErrRaw = "err.nodes", errN.Error()
 	}
 	c.Views.Fragment(g, "overview", d)
+}
+
+// versionModel is one manager running a different binary version.
+type versionModel struct {
+	Hostname string
+	Version  string
 }
 
 // applyModel is the last platform apply as the overview renders it.

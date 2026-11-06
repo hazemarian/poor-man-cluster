@@ -156,6 +156,14 @@ func (c *Client) ApplyRecord(ctx context.Context) (*ApplyRecord, error) {
 	return &rec, err
 }
 
+// Versions returns the binary version each manager published, and the skew
+// against the daemon's own version.
+func (c *Client) Versions(ctx context.Context) (*FleetVersions, error) {
+	var v FleetVersions
+	err := c.do(ctx, http.MethodGet, "/cluster/versions", nil, &v)
+	return &v, err
+}
+
 // Nodes returns the swarm node list.
 func (c *Client) Nodes(ctx context.Context) ([]Node, error) {
 	var body struct {

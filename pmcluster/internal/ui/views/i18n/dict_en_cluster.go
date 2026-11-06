@@ -7,6 +7,8 @@ func init() {
 		"overview.apply_warnings_title": "The last platform apply could not finish %d step(s)",
 		"overview.apply_warnings_body":  "Nothing is down, but the platform is running with less than it asked for — these are the steps that degraded and carried on:",
 		"overview.apply_warnings_when":  "recorded at %s by %s",
+		"overview.version_skew_title":   "%d manager(s) run a different pmcluster version",
+		"overview.version_skew_body":    "Each manager publishes its binary version on start and every ten minutes. Mixed versions mean a node will behave differently from the one you are reading this on — upgrade the stragglers:",
 		"overview.title":                "Cluster overview",
 		"overview.sub":                  "{0}\u00a0· Docker {1}\u00a0· {2}\u00a0· {3}",
 		"overview.sub_unknown":          "Cluster details unavailable",

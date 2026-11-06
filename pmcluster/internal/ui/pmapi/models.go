@@ -370,3 +370,17 @@ type ApplyRecord struct {
 	WarningCount int      `json:"warning_count"`
 	Line         string   `json:"line"`
 }
+
+// FleetVersions is the manager fleet's reported binary versions.
+type FleetVersions struct {
+	Reference string         `json:"reference"`
+	Nodes     []VersionEntry `json:"nodes"`
+	Stale     []VersionEntry `json:"stale"`
+	OK        bool           `json:"ok"`
+}
+
+// VersionEntry is one manager's reported version.
+type VersionEntry struct {
+	Hostname string `json:"hostname"`
+	Version  string `json:"version"`
+}
