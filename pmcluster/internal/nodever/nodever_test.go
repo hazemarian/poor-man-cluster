@@ -41,6 +41,11 @@ func (f *fakeClient) ConfigInspect(_ context.Context, name string) (runtime.Conf
 	return c, nil
 }
 
+func (f *fakeClient) ConfigRemove(_ context.Context, name string) error {
+	delete(f.configs, name)
+	return nil
+}
+
 func (f *fakeClient) ConfigCreate(_ context.Context, spec runtime.ConfigSpec) error {
 	f.creates++
 	f.configs[spec.Name] = runtime.ConfigInspectResult{Labels: spec.Labels, Data: spec.Data}

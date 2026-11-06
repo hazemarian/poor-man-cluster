@@ -85,6 +85,12 @@ func (p *Publisher) Publish(ctx context.Context) (bool, error) {
 		if existing.Labels[LabelVersion] == p.Version {
 			return false, nil
 		}
+		// Docker configs are IMMUTABLE: creating over an existing name answers
+		// AlreadyExists, which is how every upgraded node failed to publish its
+		// new version. Replacing means removing first.
+		if err := p.Docker.ConfigRemove(ctx, name); err != nil {
+			return false, fmt.Errorf("replace node version config %s: %w", name, err)
+		}
 	}
 	err := p.Docker.ConfigCreate(ctx, runtime.ConfigSpec{
 		Name: name,
@@ -113,22 +119,36 @@ func (p *Publisher) Loop(ctx context.Context) {
 		interval = 10 * time.Minute
 	}
 	var lastErr string
+	published := false
 	tick := func() {
-		if _, err := p.Publish(ctx); err != nil && err.Error() != lastErr {
-			lastErr = err.Error()
-			p.Log.Warn().Err(err).Msg("could not publish this node's binary version")
+		wrote, err := p.Publish(ctx)
+		switch {
+		case err != nil:
+			if err.Error() != lastErr {
+				lastErr = err.Error()
+				p.Log.Warn().Err(err).Msg("could not publish this node's binary version")
+			}
 			return
+		case wrote:
+			published = true
 		}
 		lastErr = ""
 	}
 	tick()
-	t := time.NewTicker(interval)
-	defer t.Stop()
+	// Until the first success, retry quickly: a node restarted by an upgrade
+	// reaches this loop before its swarm membership is back, and waiting ten
+	// minutes to say "I am on the new version" is exactly the silence that let
+	// skew go unnoticed. After that, the configured interval is plenty.
+	var delay time.Duration
 	for {
+		delay = interval
+		if !published {
+			delay = 20 * time.Second
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-time.After(delay):
 			tick()
 		}
 	}
