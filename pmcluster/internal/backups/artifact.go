@@ -290,8 +290,14 @@ func VerifyArchive(p string) (checked bool, err error) {
 		return false, err
 	}
 	if !strings.EqualFold(got, m.SHA256) {
+		// Name the artifact the manifest describes, not the temp file the fetch
+		// happened to land in: the operator needs to know which backup is bad.
+		name := m.Archive
+		if name == "" {
+			name = filepath.Base(p)
+		}
 		return true, fmt.Errorf("%w: %s is sha256 %s, the manifest recorded %s",
-			ErrChecksumMismatch, filepath.Base(p), got, m.SHA256)
+			ErrChecksumMismatch, name, got, m.SHA256)
 	}
 	return true, nil
 }
