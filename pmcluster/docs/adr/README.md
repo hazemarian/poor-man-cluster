@@ -10,6 +10,7 @@ decoration; the design docs carry the behaviour.
 | # | Decision | Status | Date | Settles |
 |---|---|---|---|---|
 | [0001](0001-engine-seam.md) | Keep Swarm behind a translation layer | accepted (layers 1–2 landed) | 2026-10-27 | Placement is expressed in platform terms in `internal/engine`; engine syntax lives only in `internal/engine/<engine>` |
+| [0002](0002-telemetry-backend.md) | Telemetry store: owned query API over parquet (DuckDB), not an owned engine | proposed | 2026-11-07 | Every statement is written by `internal/observability`; the store is replaceable and no backend dialect leaks out of its adapter |
 
 ## Status values
 
