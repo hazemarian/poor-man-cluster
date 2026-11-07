@@ -517,3 +517,17 @@ form.htmx-request [type="submit"] { pointer-events: none; }
 }
 .pipeline-step + .pipeline-step::before { content: "\2192"; color: var(--text-tertiary); margin-inline-end: var(--s-2); }
 [dir="rtl"] .pipeline-step + .pipeline-step::before { content: "\2190"; }
+
+/* A control that is not offered because the node does not qualify (a worker
+   cannot be a storage node: storage nodes read settings and credentials). It
+   reads as disabled rather than as plain muted text, so the operator can tell
+   "you may not" from "nothing here". Logical properties only, for RTL. */
+.needs-manager {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  color: var(--text-secondary);
+  cursor: default;
+  white-space: nowrap;
+}
+.needs-manager .ic-sm { opacity: .55; }
