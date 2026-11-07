@@ -149,7 +149,11 @@ func (c *Client) NodeMetricsSQL(q observability.MetricQuery) (string, error) {
 		" AND ((metric_name = 'system.cpu.utilization' AND state = 'idle')" +
 		" OR (metric_name = 'system.memory.utilization' AND state = 'used')" +
 		" OR metric_name = 'system.cpu.load_average.1m')" +
-		" GROUP BY bucket, host, metric, state ORDER BY bucket ASC LIMIT " + strconv.Itoa(observability.MaxMetricRows+1), nil
+		// Expressions, not aliases — see LogVolumeSQL: DataFusion refuses
+		// `GROUP BY bucket, host, metric, state`. Grouping by the aliases made
+		// the node CPU/memory panels read as "telemetry unavailable".
+		" GROUP BY " + bucketSQL(q.Bucket) + ", `host.name`, metric_name, state" +
+		" ORDER BY bucket ASC LIMIT " + strconv.Itoa(observability.MaxMetricRows+1), nil
 }
 
 // NodeMetrics returns bucketed per-node series. Missing buckets are simply
@@ -259,9 +263,15 @@ func (c *Client) LogVolumeSQL(q observability.MetricQuery) (string, error) {
 	if err := q.Validate(); err != nil {
 		return "", err
 	}
-	return "SELECT " + bucketSQL(q.Bucket) + " AS bucket, " + levelSQL + " AS level, COUNT(*) AS n FROM `" +
+	// GROUP BY repeats the EXPRESSIONS, never the aliases: Parseable runs
+	// DataFusion, which rejects `GROUP BY <alias>` with "Column in SELECT must
+	// be in GROUP BY or an aggregate function". Grouping by the alias silently
+	// failed the whole panel — the log volume chart showed "telemetry source
+	// unavailable" rather than an empty chart, which is how it was noticed.
+	bucket := bucketSQL(q.Bucket)
+	return "SELECT " + bucket + " AS bucket, " + levelSQL + " AS level, COUNT(*) AS n FROM `" +
 		escapeIdentifier(c.stream) + "` WHERE " + timeBounds(q.Window) +
-		" GROUP BY bucket, level ORDER BY bucket ASC LIMIT " + strconv.Itoa(observability.MaxMetricRows), nil
+		" GROUP BY " + bucket + ", " + levelSQL + " ORDER BY bucket ASC LIMIT " + strconv.Itoa(observability.MaxMetricRows), nil
 }
 
 // LogVolume returns bucketed record counts by level.

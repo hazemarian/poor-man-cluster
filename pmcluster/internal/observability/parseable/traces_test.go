@@ -29,7 +29,9 @@ func TestTracesSQLGroupsByTraceWithFilters(t *testing.T) {
 	for _, want := range []string{
 		"FROM `pmcluster-traces`",
 		"`service.name` = 'shop''web'",
-		"GROUP BY trace_id",
+		// span_trace_id, not the alias: DataFusion rejects GROUP BY <alias>
+		// and answers 400 for the whole query (see groupby_test.go).
+		"GROUP BY span_trace_id",
 		"HAVING SUM(CASE WHEN span_status_code = 2 THEN 1 ELSE 0 END) > 0",
 		"ORDER BY started DESC LIMIT 26 OFFSET 25",
 	} {
@@ -102,7 +104,9 @@ func TestLogVolumeAndTraceStatsSQLAreFixedStatements(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"date_bin(INTERVAL '60 seconds', p_timestamp) AS bucket", "FROM `pmcluster-logs`", "GROUP BY bucket, level", "regexp_like(SUBSTR(body, 1, 200)", "THEN 'error'", "THEN 'warn'"} {
+	for _, want := range []string{"date_bin(INTERVAL '60 seconds', p_timestamp) AS bucket", "FROM `pmcluster-logs`", // The EXPRESSIONS, not their aliases — grouping by `bucket, level` is
+		// what made this panel answer 400 and render as unavailable.
+		"GROUP BY date_bin(INTERVAL '60 seconds', p_timestamp), CASE WHEN", "regexp_like(SUBSTR(body, 1, 200)", "THEN 'error'", "THEN 'warn'"} {
 		if !strings.Contains(vol, want) {
 			t.Errorf("volume: missing %q in %s", want, vol)
 		}

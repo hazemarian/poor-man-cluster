@@ -25,7 +25,9 @@ func (c *Client) TracesSQL(q observability.TraceQuery) (string, error) {
 	if q.Service != "" {
 		sql += " AND `service.name` = '" + escapeLiteral(q.Service) + "'"
 	}
-	sql += " GROUP BY trace_id"
+	// The real column, not the alias: DataFusion cannot group by `trace_id`
+	// (span_trace_id AS trace_id) and answers 400 for the whole query.
+	sql += " GROUP BY span_trace_id"
 	if q.ErrorsOnly {
 		sql += " HAVING SUM(CASE WHEN span_status_code = 2 THEN 1 ELSE 0 END) > 0"
 	}

@@ -3,6 +3,31 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.253 (2026-11-07)
+
+**Three charts asked Parseable for something its engine refuses.**
+
+The console grouped by SELECT aliases (`GROUP BY bucket, level`), which Parseable
+rejects outright because it runs DataFusion:
+
+```
+Datafusion Error: Column in SELECT must be in GROUP BY or an aggregate function:
+... currently only pmcluster-logs.level, count(Int64(1))
+```
+
+The whole query answers 400, so the panel rendered "telemetry source
+unavailable" — it looked like a missing data source, not a broken statement. Three
+builders were affected: the overview's **log volume by level**, the **node CPU
+and memory** charts, and the **trace list**. All three now group by the
+expression they select, which the same engine accepts.
+
+Verified against the live cluster, one-hour window: log volume 183 rows in 0.27s,
+node metrics 729 rows in 0.23s — both previously 400s.
+
+The tests that pinned the old strings were pinning the bug; they now assert the
+expression form, and `groupby_test.go` fails any future builder that groups by an
+alias, because that form reads better and someone will reach for it again.
+
 ## v0.2.252 (2026-11-07)
 
 **The observability page stops being slow.**
