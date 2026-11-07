@@ -21,6 +21,13 @@
      ~1.17:1 against --bg-card in each theme. */
   --bg-lead: #2C3428;
 
+  /* Filled accent controls (buttons, primary actions) carry white text and a
+     dark --accent-strong fill. The FILL is 1.8-2.8:1 against the card surface,
+     which is under the 3:1 non-text guidance: the label is readable, the button
+     edge is not. The edge therefore comes from --accent, the palette's light
+     tint (>=3:1 against the card in every palette), instead of from the fill. */
+  --control-edge: var(--accent);
+
   --border-subtle: #262B22;
   --border-default: #31372B;
   --border-active: #3D4535;
@@ -65,6 +72,10 @@
 }
 
 [data-theme="light"] {
+  /* Light keeps the fill as its own edge: --accent-strong is dark against a
+     white card (>6:1 in every palette), so no separate tint is needed. */
+  --control-edge: var(--accent-strong);
+
   --bg-body: #F7F5F2;
   --bg-sidebar: #F0EDE6;
   --bg-card: #FFFFFF;

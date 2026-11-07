@@ -13,9 +13,9 @@
 .btn:active:not(:disabled) { transform: translateY(1px); }
 .btn:disabled, .btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
 .btn-primary {
-  background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; font-weight: 500;
+  background: var(--accent-strong); border-color: var(--control-edge); color: #fff; font-weight: 500;
 }
-.btn-primary:hover { background: var(--accent-strong-hover); border-color: var(--accent-strong-hover); }
+.btn-primary:hover { background: var(--accent-strong-hover); border-color: var(--control-edge); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--text-secondary); }
 .btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); border-color: transparent; }
 .btn-danger { background: transparent; border-color: var(--red-border); color: var(--red); }
