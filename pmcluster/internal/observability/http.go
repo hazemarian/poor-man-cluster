@@ -3,6 +3,7 @@ package observability
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ func (h *HTTP) Mount(r chi.Router) {
 		or.Get("/volume", h.logVolume)
 		or.Get("/traces/stats", h.traceStats)
 		or.Get("/services", h.serviceNames)
+		or.Get("/alerts", h.alerts)
 		or.Get("/traces", h.traces)
 		or.Get("/traces/{trace_id}", h.trace)
 	})
@@ -273,6 +275,45 @@ type serviceNamesDTO struct {
 	Window   windowDTO `json:"window"`
 	Services []string  `json:"services"`
 	Error    string    `json:"error,omitempty"`
+}
+
+// alertsDTO is the dedicated envelope for the alerts list. Alert definitions
+// are not windowed, so it carries a flat list rather than the evidence
+// envelope's window/rows shape.
+type alertsDTO struct {
+	Status string           `json:"status"`
+	Alerts []map[string]any `json:"alerts"`
+	Error  string           `json:"error,omitempty"`
+}
+
+// alerts lists the backend's configured alerts, bounded by a row limit. It has
+// its own envelope because the rows are alert definitions, not a time-series
+// evidence window.
+func (h *HTTP) alerts(w http.ResponseWriter, r *http.Request) {
+	limit, err := queryInt(r, "limit", MaxAlertPageSize)
+	if err != nil || limit <= 0 || limit > MaxAlertPageSize {
+		writeObservationError(w, http.StatusBadRequest, fmt.Errorf("limit must be between 1 and %d", MaxAlertPageSize))
+		return
+	}
+	q := AlertQuery{Limit: limit}
+	if err := q.Validate(); err != nil {
+		writeObservationError(w, http.StatusBadRequest, err)
+		return
+	}
+	if h.Svc == nil {
+		writeJSON(w, http.StatusOK, alertsDTO{Status: string(StatusUnavailable), Alerts: []map[string]any{}, Error: "observability source unavailable"})
+		return
+	}
+	res, err := h.Svc.Alerts(r.Context(), q)
+	if err != nil || res.Status == StatusUnavailable {
+		writeJSON(w, http.StatusOK, alertsDTO{Status: string(StatusUnavailable), Alerts: []map[string]any{}, Error: "observability source unavailable"})
+		return
+	}
+	alerts := make([]map[string]any, 0, len(res.Rows))
+	for _, row := range res.Rows {
+		alerts = append(alerts, cleanMap(map[string]any(row)))
+	}
+	writeJSON(w, http.StatusOK, alertsDTO{Status: string(res.Status), Alerts: alerts})
 }
 
 // serviceNames lists the log service identities in the window. It is a list,

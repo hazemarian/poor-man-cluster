@@ -3,6 +3,7 @@ package settings
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
@@ -69,8 +70,11 @@ var clusterSettingKeys = []string{
 // the CLI show the value actually in effect, so "unset" can never be mistaken
 // for "0"/"off"/"the loudest possible logging".
 var settingDefaults = map[string]string{
-	cluster.SettingLogLevel():    logging.DefaultLevel,
-	cluster.SettingAppLogLevel(): logging.DefaultAppLevel,
+	cluster.SettingLogLevel():                          logging.DefaultLevel,
+	cluster.SettingAppLogLevel():                       logging.DefaultAppLevel,
+	cluster.SettingObservabilityLogsRetentionDays():    strconv.Itoa(cluster.DefaultObservabilityLogsRetentionDays()),
+	cluster.SettingObservabilityMetricsRetentionDays(): strconv.Itoa(cluster.DefaultObservabilityMetricsRetentionDays()),
+	cluster.SettingObservabilityTracesRetentionDays():  strconv.Itoa(cluster.DefaultObservabilityTracesRetentionDays()),
 }
 
 // Get returns the current value of every known setting ("", or its default
@@ -119,6 +123,17 @@ func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 			normalized[k] = n
 			continue
 		}
+		if isRetentionKey(k) {
+			// Retention is a whole number of days, one or more. A zero or
+			// negative value would silently disable the retention bound that
+			// keeps a metrics-heavy cluster from growing without limit.
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil || n < 1 {
+				return nil, fmt.Errorf("%s: must be a whole number of days, 1 or more, got %q", k, v)
+			}
+			normalized[k] = strconv.Itoa(n)
+			continue
+		}
 		normalized[k] = v
 	}
 	for k, v := range normalized {
@@ -148,4 +163,12 @@ func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 // they control (`log_level` the platform, `app_log_level` the deployed apps).
 func isLevelKey(key string) bool {
 	return key == cluster.SettingLogLevel() || key == cluster.SettingAppLogLevel()
+}
+
+// isRetentionKey reports whether a setting holds a Parseable stream retention
+// in days. The three keys are validated identically as whole numbers >= 1.
+func isRetentionKey(key string) bool {
+	return key == cluster.SettingObservabilityLogsRetentionDays() ||
+		key == cluster.SettingObservabilityMetricsRetentionDays() ||
+		key == cluster.SettingObservabilityTracesRetentionDays()
 }

@@ -118,6 +118,7 @@ func newLocalObservabilityReader(ctx context.Context, st *store.Store, cipher *c
 	reader.TracesSrc = source
 	reader.Stats = source
 	reader.Names = source
+	reader.AlertsSrc = source
 	return reader, nil
 }
 

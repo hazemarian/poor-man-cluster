@@ -67,6 +67,7 @@ func instructions(opts Options, catalog []Tool) string {
 	b.WriteString("- node metrics expose " + MetricList("node") + "; container metrics expose " + MetricList("container") + ".\n")
 	b.WriteString("- system.cpu.utilization is the IDLE fraction (state=idle): CPU busy = 1 - value.\n")
 	fmt.Fprintf(&b, "- traces are aggregated: %d per page, %d spans per trace.\n", observability.MaxTracePageSize, observability.MaxTraceSpans)
+	fmt.Fprintf(&b, "- alerts (`pmc_observability_alerts`) list configured alert definitions, capped at %d, with no window.\n", observability.MaxAlertPageSize)
 	b.WriteString("- historical depth lives in Parseable, which requires its own credentials; this API cannot reach it for you.\n\n")
 
 	b.WriteString("RESOURCES carry the schemas, so prefer reading one over probing with tool calls: ")

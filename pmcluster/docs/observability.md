@@ -266,14 +266,23 @@ Retention is configured as cluster settings and applied by the provisioning job:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `observability_logs_retention_days` | 7 | days of logs |
-| `observability_metrics_retention_days` | 7 | days of metrics |
-| `observability_traces_retention_days` | 7 | days of traces |
+| `observability_logs_retention_days` | 30 | days of logs |
+| `observability_metrics_retention_days` | 14 | days of metrics |
+| `observability_traces_retention_days` | 10 | days of traces |
+
+Each value must be a whole number of days, one or more; the settings API rejects
+zero, negative and non-numeric values. The three defaults also act as the
+fallback inside the provisioning script, so a missing environment variable
+preserves the built-in policy.
 
 ```sh
 pmcluster cluster settings set observability_logs_retention_days=14
 pmcluster cluster update
 ```
+
+Because retention is applied by the one-shot provisioning job (not read from
+settings at ingest time), a change takes effect on the next `cluster update` —
+or the next provisioner run — not immediately.
 
 The retention job is best-effort: an unreachable backend never fails the
 platform deploy. Verify the policy in Parseable after changing it.
@@ -329,6 +338,42 @@ its history remains addressable.
 
 Viewers read the page. There is no write surface: nothing here can deploy,
 restart or delete anything.
+
+## API and MCP surface
+
+Every signal is exposed over the bearer-authenticated daemon API, and the same
+routes are derived into MCP tools under `/api/mcp`. All reads are bounded —
+never raw SQL — and require at least the viewer role; a stack-scoped token is
+refused.
+
+| REST route | Bounds |
+| --- | --- |
+| `GET /api/observability/logs` | window ≤ 24h, `limit` ≤ 200, `offset` ≤ 2000, allowlisted `severity`, `search` ≤ 100 runes, optional `service` and `since` |
+| `GET /api/observability/metrics/nodes` | window ≤ 24h, fixed node metric set, `bucket` duration |
+| `GET /api/observability/metrics/services` | window ≤ 24h, fixed container metric set, `bucket` duration |
+| `GET /api/observability/traces` | window ≤ 24h, `limit` ≤ 50, `offset` ≤ 1000, optional `service` and `errors_only` |
+| `GET /api/observability/traces/{trace_id}` | 32-hex trace id, window ≤ 24h, ≤ 500 spans |
+| `GET /api/observability/alerts` | `limit` ≤ 500 |
+
+Each MCP tool carries the same bounds in its input schema, so an agent cannot
+ask for an unbounded scan:
+
+| MCP tool | Signal | Bounds |
+| --- | --- | --- |
+| `pmc_observability_logs` | log search | window ≤ 24h, `limit` ≤ 200 |
+| `pmc_observability_traces` | traces by window | window ≤ 24h, `limit` ≤ 50 |
+| `pmc_observability_trace` | one trace by id | 32-hex id, ≤ 500 spans |
+| `pmc_observability_node_metrics` | node metrics (fixed set) | window ≤ 24h |
+| `pmc_observability_service_metrics` | container metrics (fixed set) | window ≤ 24h |
+| `pmc_observability_alerts` | alert list | `limit` ≤ 500 |
+
+The daemon memoises full-window reads for about ten seconds, so a burst of
+identical reads (console page fragments, an agent polling through MCP) pays
+Parseable once. Live and incremental reads bypass the cache. Measured on an
+Apple M4 dev host against a mock backend with a 5 ms response: a repeat read
+drops from ~5.6 ms (one backend round trip) to ~207 ns (cache hit). The live
+cluster's Parseable was not reachable from that host, so this is the round-trip
+floor rather than a production figure.
 
 ## Troubleshooting
 

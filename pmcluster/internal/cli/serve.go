@@ -30,6 +30,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/mcpserver"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodever"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
@@ -313,7 +314,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		if obsErr != nil {
 			log.Warn().Err(obsErr).Msg("observability telemetry source unavailable — inventory only")
 		}
-		deps.Observability = obsReader
+		// The daemon read path is memoised for 10s so a burst of identical
+		// reads (console fragments, an agent polling through MCP) pays Parseable
+		// once. Live/incremental reads bypass the cache by construction.
+		deps.Observability = observability.NewCachedReader(obsReader)
 	}
 	handler := server.New(deps)
 

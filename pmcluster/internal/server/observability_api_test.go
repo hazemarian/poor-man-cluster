@@ -39,6 +39,9 @@ func (observabilityReaderStub) TraceStats(context.Context, observability.MetricQ
 func (observabilityReaderStub) ServiceNames(context.Context, observability.Window) ([]string, error) {
 	return []string{"demo_web"}, nil
 }
+func (observabilityReaderStub) Alerts(context.Context, observability.AlertQuery) (observability.Result, error) {
+	return observability.Result{Status: observability.StatusAvailable, Rows: []observability.Row{{"name": "a"}}}, nil
+}
 
 // observabilityPaths is every documented read. The authz table walks all of
 // them, not just /logs: a new route mounted outside the viewer gate would
@@ -51,6 +54,7 @@ var observabilityPaths = []string{
 	"/api/observability/volume?range=15m",
 	"/api/observability/traces/stats?range=15m",
 	"/api/observability/services?range=15m",
+	"/api/observability/alerts?limit=50",
 	"/api/observability/traces?range=15m",
 	"/api/observability/traces/0123456789abcdef0123456789abcdef?range=15m",
 }

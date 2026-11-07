@@ -24,9 +24,12 @@ type readerFixture struct {
 	statsErr     error
 	names        []string
 	namesErr     error
+	alertsResult Result
+	alertsErr    error
 	logCalls     int
 	traceCalls   int
 	statsCalls   int
+	alertCalls   int
 }
 
 func (f *readerFixture) Status(context.Context, Window) (StatusResult, error) {
@@ -59,6 +62,10 @@ func (f *readerFixture) TraceStats(context.Context, MetricQuery) (Result, error)
 }
 func (f *readerFixture) ServiceNames(context.Context, Window) ([]string, error) {
 	return f.names, f.namesErr
+}
+func (f *readerFixture) Alerts(context.Context, AlertQuery) (Result, error) {
+	f.alertCalls++
+	return f.alertsResult, f.alertsErr
 }
 
 func observabilityRouter(f Reader, now time.Time) http.Handler {
@@ -293,6 +300,63 @@ func TestObservabilityHTTPOverviewRoutes(t *testing.T) {
 		}
 		if f.traceCalls != 0 {
 			t.Error("/traces/stats reached the single-trace handler")
+		}
+	})
+}
+
+func TestObservabilityHTTPAlerts(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+
+	t.Run("bounded list", func(t *testing.T) {
+		f := &readerFixture{alertsResult: Result{
+			Status: StatusAvailable,
+			Rows:   []Row{{"name": "disk-full", "triggered": true}},
+		}}
+		h := observabilityRouter(f, now)
+		req := httptest.NewRequest(http.MethodGet, "/observability/alerts?limit=500", nil)
+		resp := httptest.NewRecorder()
+		h.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (%s)", resp.Code, resp.Body.String())
+		}
+		body := decodeBody(t, resp)
+		if body["status"] != string(StatusAvailable) {
+			t.Fatalf("status = %v, want available", body["status"])
+		}
+		alerts, _ := body["alerts"].([]any)
+		if len(alerts) != 1 {
+			t.Fatalf("alerts = %v, want 1 entry", alerts)
+		}
+	})
+
+	t.Run("limit is bounded", func(t *testing.T) {
+		f := &readerFixture{}
+		h := observabilityRouter(f, now)
+		for _, path := range []string{"/observability/alerts?limit=0", "/observability/alerts?limit=501"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("%s status = %d, want 400", path, resp.Code)
+			}
+		}
+		if f.alertCalls != 0 {
+			t.Fatal("bounded rejection reached the source")
+		}
+	})
+
+	t.Run("unavailable is distinguishable, never a 500", func(t *testing.T) {
+		f := &readerFixture{alertsErr: ErrUnavailable}
+		h := observabilityRouter(f, now)
+		req := httptest.NewRequest(http.MethodGet, "/observability/alerts", nil)
+		resp := httptest.NewRecorder()
+		h.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.Code)
+		}
+		body := decodeBody(t, resp)
+		if body["status"] != string(StatusUnavailable) {
+			t.Fatalf("status = %v, want unavailable", body["status"])
 		}
 	})
 }

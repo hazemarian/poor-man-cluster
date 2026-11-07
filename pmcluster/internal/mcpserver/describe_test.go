@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -137,6 +138,46 @@ func mustCatalog(t *testing.T) []Tool {
 		t.Fatalf("BuildCatalog: %v", err)
 	}
 	return c
+}
+
+// TestCatalogCarriesObservabilityTools: every telemetry signal is a bounded
+// read-only MCP tool, derived from the spec rather than a second implementation.
+func TestCatalogCarriesObservabilityTools(t *testing.T) {
+	byName := map[string]Tool{}
+	for _, tool := range mustCatalog(t) {
+		byName[tool.Name] = tool
+	}
+	for _, want := range []string{
+		"pmc_observability_logs",
+		"pmc_observability_traces",
+		"pmc_observability_trace",
+		"pmc_observability_node_metrics",
+		"pmc_observability_service_metrics",
+		"pmc_observability_alerts",
+	} {
+		tool, ok := byName[want]
+		if !ok {
+			t.Errorf("missing tool %s", want)
+			continue
+		}
+		if tool.Tier != ReadOnly {
+			t.Errorf("%s tier = %v, want read", want, tool.Tier)
+		}
+	}
+	// The alerts tool must state its bound in the schema so an agent cannot ask
+	// for an unbounded scan.
+	var schema struct {
+		Properties map[string]struct {
+			Maximum *float64 `json:"maximum"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(byName["pmc_observability_alerts"].InputSchema, &schema); err != nil {
+		t.Fatalf("parse alerts schema: %v", err)
+	}
+	limit := schema.Properties["limit"]
+	if limit.Maximum == nil || *limit.Maximum != observability.MaxAlertPageSize {
+		t.Errorf("alerts limit maximum = %v, want %d", limit.Maximum, observability.MaxAlertPageSize)
+	}
 }
 
 // Instructions must arrive on the wire at initialize, not merely exist as a

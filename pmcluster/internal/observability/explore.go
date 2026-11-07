@@ -236,3 +236,31 @@ type StatsSource interface {
 	LogVolume(ctx context.Context, q MetricQuery) (Result, error)
 	TraceStats(ctx context.Context, q MetricQuery) (Result, error)
 }
+
+// MaxAlertPageSize is the largest number of alert records one read may return.
+// Alert definitions are a small, fixed set; a page is for reading, not bulk
+// export, so the cap is deliberately far below the shared row limit.
+const MaxAlertPageSize = 500
+
+// AlertQuery bounds an alert read to a row limit. Alert definitions are not
+// windowed — the backend lists configured alerts rather than a time series —
+// so the only caller-supplied parameter is the limit.
+type AlertQuery struct {
+	Limit int
+}
+
+// Validate checks the limit bound. There is no window or service filter: the
+// adapter lists the backend's own alerts and nothing else.
+func (q AlertQuery) Validate() error {
+	if q.Limit <= 0 || q.Limit > MaxAlertPageSize {
+		return fmt.Errorf("alert limit must be between 1 and %d", MaxAlertPageSize)
+	}
+	return nil
+}
+
+// AlertSource lists the backend's alerts. Rows are the backend's own alert
+// objects (name, message, state and so on) and are redacted before they leave
+// the adapter.
+type AlertSource interface {
+	Alerts(ctx context.Context, q AlertQuery) (Result, error)
+}

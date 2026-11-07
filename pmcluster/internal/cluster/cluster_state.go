@@ -64,9 +64,11 @@ const (
 	// setting existed keeps backing up.
 	settingBackupEnabled = "backup_enabled"
 
-	// OpenObserve stream retention (days). Unbounded retention is how a
-	// metrics-heavy cluster silently grows to hundreds of GB — the values
-	// render into ZO_LOGS/METRICS/TRACES_RETENTION_DAYS.
+	// Parseable stream retention (days), applied by the one-shot provision
+	// service. Unbounded retention is how a metrics-heavy cluster silently
+	// grows to hundreds of GB — the values render into
+	// LOGS/METRICS/TRACES_RETENTION_DAYS on the provision one-shot, which
+	// calls the Parseable retention API from inside the swarm network.
 	settingObservabilityLogsRetentionDays    = "observability_logs_retention_days"
 	settingObservabilityMetricsRetentionDays = "observability_metrics_retention_days"
 	settingObservabilityTracesRetentionDays  = "observability_traces_retention_days"
@@ -337,32 +339,48 @@ func LoadStorageFailover(ctx context.Context, st *store.Store) bool {
 	return st.SettingDefault(ctx, settingStorageFailover, "") == "true"
 }
 
-// defaultOORetentionDays is the OpenObserve stream retention fallback when
-// the setting is unset. Kept short: metrics are the disk hog (a histogram
-// stream can grow into tens of GB in weeks) — unbounded retention is how the
-// legacy cluster accumulated a 123G /data volume.
-const defaultOORetentionDays = 7
+// Parseable per-stream retention defaults (days). They mirror the provision
+// script's own fallback (embeds/observability-provision.sh) so a cluster whose
+// operator never touched a setting keeps today's behaviour, and a missing env
+// var at the one-shot also keeps it. The two must never drift apart.
+const (
+	defaultLogsRetentionDays    = 30
+	defaultMetricsRetentionDays = 14
+	defaultTracesRetentionDays  = 10
+)
 
-// loadObservabilityRetention returns the OpenObserve log/metric/trace retention in days.
-// Each falls back to defaultOORetentionDays when unset or unparseable.
+// DefaultObservabilityLogsRetentionDays reports the built-in log retention
+// default so the settings surface can show the value actually in effect.
+func DefaultObservabilityLogsRetentionDays() int { return defaultLogsRetentionDays }
+
+// DefaultObservabilityMetricsRetentionDays reports the built-in metric
+// retention default.
+func DefaultObservabilityMetricsRetentionDays() int { return defaultMetricsRetentionDays }
+
+// DefaultObservabilityTracesRetentionDays reports the built-in trace retention
+// default.
+func DefaultObservabilityTracesRetentionDays() int { return defaultTracesRetentionDays }
+
+// loadObservabilityRetention returns the Parseable log/metric/trace retention
+// in days. Each falls back to its per-stream default when unset or unparseable.
 func loadObservabilityRetention(ctx context.Context, st *store.Store) (logs, metrics, traces int) {
 	if st == nil {
-		return defaultOORetentionDays, defaultOORetentionDays, defaultOORetentionDays
+		return defaultLogsRetentionDays, defaultMetricsRetentionDays, defaultTracesRetentionDays
 	}
-	parse := func(key string) int {
+	parse := func(key string, def int) int {
 		v := st.SettingDefault(ctx, key, "")
 		if v == "" {
-			return defaultOORetentionDays
+			return def
 		}
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
-			return defaultOORetentionDays
+			return def
 		}
 		return n
 	}
-	return parse(settingObservabilityLogsRetentionDays),
-		parse(settingObservabilityMetricsRetentionDays),
-		parse(settingObservabilityTracesRetentionDays)
+	return parse(settingObservabilityLogsRetentionDays, defaultLogsRetentionDays),
+		parse(settingObservabilityMetricsRetentionDays, defaultMetricsRetentionDays),
+		parse(settingObservabilityTracesRetentionDays, defaultTracesRetentionDays)
 }
 
 // BackupS3 is the offsite backup destination for the volume-backup agent.

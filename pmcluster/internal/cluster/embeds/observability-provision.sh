@@ -321,9 +321,9 @@ provision_dashboard() {
 
 if wait_ready; then
     echo "observability retention:"
-    apply_retention pmcluster-logs "${LOGS_RETENTION_DAYS:-}"
-    apply_retention pmcluster-metrics "${METRICS_RETENTION_DAYS:-}"
-    apply_retention pmcluster-traces "${TRACES_RETENTION_DAYS:-}"
+    apply_retention pmcluster-logs "${LOGS_RETENTION_DAYS:-30}"
+    apply_retention pmcluster-metrics "${METRICS_RETENTION_DAYS:-14}"
+    apply_retention pmcluster-traces "${TRACES_RETENTION_DAYS:-10}"
     echo "observability dashboard:"
     provision_dashboard
     echo "observability provisioning converged"

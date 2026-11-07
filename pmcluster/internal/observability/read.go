@@ -34,6 +34,8 @@ type Reader interface {
 	LogVolume(context.Context, MetricQuery) (Result, error)
 	TraceStats(context.Context, MetricQuery) (Result, error)
 	ServiceNames(context.Context, Window) ([]string, error)
+	// Alerts lists the backend's configured alerts, bounded by a row limit.
+	Alerts(context.Context, AlertQuery) (Result, error)
 }
 
 // Status values used by the inventory comparison. Source Status remains
@@ -91,6 +93,7 @@ type ReadService struct {
 	TracesSrc TraceSource
 	Stats     StatsSource
 	Names     ServiceNameSource
+	AlertsSrc AlertSource
 	Now       func() time.Time
 	Freshness time.Duration
 }
@@ -196,6 +199,17 @@ func (s *ReadService) ServiceNames(ctx context.Context, w Window) ([]string, err
 		return nil, ErrUnavailable
 	}
 	return s.Names.ServiceNames(ctx, w)
+}
+
+// Alerts lists the backend's configured alerts, bounded by the query limit.
+func (s *ReadService) Alerts(ctx context.Context, q AlertQuery) (Result, error) {
+	if err := q.Validate(); err != nil {
+		return Result{}, err
+	}
+	if s == nil || s.AlertsSrc == nil {
+		return Unavailable(Query{Limit: MaxAlertPageSize}, s.now(), "alerts source unavailable"), ErrUnavailable
+	}
+	return s.AlertsSrc.Alerts(ctx, q)
 }
 
 // Status compares the Swarm inventory with the newest fixed node metric row.

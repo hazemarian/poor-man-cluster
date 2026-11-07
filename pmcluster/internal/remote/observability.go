@@ -179,6 +179,28 @@ func (a *Observability) Trace(ctx context.Context, w observability.Window, trace
 	return resultFromDTO(out)
 }
 
+// Alerts lists the daemon's configured alerts, bounded by the query limit.
+func (a *Observability) Alerts(ctx context.Context, q observability.AlertQuery) (observability.Result, error) {
+	if err := q.Validate(); err != nil {
+		return observability.Result{}, err
+	}
+	var out struct {
+		Status string           `json:"status"`
+		Alerts []map[string]any `json:"alerts"`
+	}
+	if err := a.c.do(ctx, http.MethodGet, "/observability/alerts?limit="+itoa(q.Limit), nil, &out); err != nil {
+		return observability.Result{}, err
+	}
+	if out.Status == string(observability.StatusUnavailable) {
+		return observability.Result{}, observability.ErrUnavailable
+	}
+	return observability.Result{
+		Status:     observability.Status(out.Status),
+		Rows:       rowsFromDTO(out.Alerts),
+		ObservedAt: time.Now().UTC(),
+	}, nil
+}
+
 func queryWindow(w observability.Window) string {
 	return "start=" + urlQueryEscape(w.Start.UTC().Format(time.RFC3339Nano)) + "&end=" + urlQueryEscape(w.End.UTC().Format(time.RFC3339Nano))
 }
@@ -283,5 +305,6 @@ var (
 	_ observability.TraceSource       = (*Telemetry)(nil)
 	_ observability.StatsSource       = (*Telemetry)(nil)
 	_ observability.ServiceNameSource = (*Telemetry)(nil)
+	_ observability.AlertSource       = (*Telemetry)(nil)
 	_ observability.Reader            = (*Telemetry)(nil)
 )

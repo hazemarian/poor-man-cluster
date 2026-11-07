@@ -156,3 +156,62 @@ func TestLocalUpdateValidatesLevels(t *testing.T) {
 		t.Errorf("app_log_level stored as %q, want warn (normalized)", v)
 	}
 }
+
+// TestLocalGetReportsRetentionDefaults: the three retention keys report the
+// per-stream default actually in effect, so "unset" is never mistaken for
+// "unbounded".
+func TestLocalGetReportsRetentionDefaults(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	got, err := NewLocal(st).Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		cluster.SettingObservabilityLogsRetentionDays():    "30",
+		cluster.SettingObservabilityMetricsRetentionDays(): "14",
+		cluster.SettingObservabilityTracesRetentionDays():  "10",
+	} {
+		if got[key] != want {
+			t.Errorf("%s = %q, want %q", key, got[key], want)
+		}
+	}
+}
+
+// TestLocalUpdateValidatesRetention: a retention value that is not a whole
+// number of days >= 1 is refused atomically with a message naming the range.
+func TestLocalUpdateValidatesRetention(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	l := NewLocal(st)
+	ctx := context.Background()
+
+	for _, bad := range []string{"0", "-1", "abc", "1.5", "  "} {
+		_, err := l.Update(ctx, Settings{cluster.SettingObservabilityLogsRetentionDays(): bad})
+		if err == nil {
+			t.Fatalf("Update with retention %q: want error, got nil", bad)
+		}
+		if !strings.Contains(err.Error(), "1 or more") {
+			t.Errorf("error %q should name the allowed range", err.Error())
+		}
+		// Atomic: nothing may be persisted for a rejected value.
+		if v := st.SettingDefault(ctx, cluster.SettingObservabilityLogsRetentionDays(), ""); v != "" {
+			t.Errorf("rejected retention %q was still written: %q", bad, v)
+		}
+	}
+
+	// A valid value is accepted and stored as the canonical number.
+	if _, err := l.Update(ctx, Settings{cluster.SettingObservabilityMetricsRetentionDays(): " 21 "}); err != nil {
+		t.Fatalf("Update with a valid retention: %v", err)
+	}
+	if v := st.SettingDefault(ctx, cluster.SettingObservabilityMetricsRetentionDays(), ""); v != "21" {
+		t.Errorf("metrics retention stored as %q, want 21", v)
+	}
+}

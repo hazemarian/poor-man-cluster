@@ -1760,6 +1760,23 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/ObservabilityEvidence"}
         "400": {$ref: "#/components/responses/BadRequest"}
+  /api/observability/alerts:
+    get:
+      summary: List configured alerts, bounded
+      operationId: observabilityAlerts
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum alerts to return. Bounded to at most 500.
+          schema: {type: integer, minimum: 1, maximum: 500, default: 500}
+      responses:
+        "200":
+          description: Bounded alert list
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ObservabilityAlerts"}
+        "400": {$ref: "#/components/responses/BadRequest"}
 
   # ---------------------------------------------------------------------------
   # Public, unauthenticated badge endpoints. GitHub's camo proxy and image
@@ -2189,7 +2206,7 @@ components:
       name: range
       in: query
       required: false
-      description: Shorthand window ("15m", "1h"). `window` is accepted as an alias. Ignored when start/end are sent.
+      description: Shorthand window ("15m", "1h", "24h"). Bounded to at most 24h; `window` is accepted as an alias. Ignored when start/end are sent.
       schema:
         type: string
   responses:
@@ -3030,5 +3047,21 @@ components:
           type: array
           items:
             type: string
+        error:
+          type: string
+    ObservabilityAlerts:
+      type: object
+      description: |
+        Bounded list of the backend's configured alerts. Not a time series, so
+        there is no window; each entry is the backend's own alert object.
+      properties:
+        status:
+          type: string
+          enum: [available, unavailable]
+        alerts:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
         error:
           type: string
