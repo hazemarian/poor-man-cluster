@@ -3,6 +3,39 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.252 (2026-11-07)
+
+**The observability page stops being slow.**
+
+Measured before: a Parseable log query costs 0.28s over a one hour window and
+2.88s over 24 hours, a metrics aggregate 0.31s against 3.27s — there are no
+rollups, so cost follows the window. The console assembled the page from
+sequential round trips, which made a 24 hour logs tab about 6.5 seconds, and
+live mode then re-read the whole window every five seconds: longer than its own
+interval, so the panel never settled.
+
+- **The two investigation queries run in parallel** — newest errors, then newest
+  of any level — instead of queueing. A failure in either still fails the whole
+  read, so one call succeeding can never mask the other.
+- **The served range defaults to `1h` explicitly**, so the selector shows a real
+  choice instead of an unselected list.
+- **Live mode is incremental.** `LogQuery` gained a `Since` bound, the Parseable
+  adapter emits a strict `p_timestamp` predicate combined with the window
+  bounds, and each log row carries its timestamp as `data-ts` so a poll asks
+  only for what arrived after the newest row on screen. The response is rows
+  only, appended into the list rather than replacing the panel, so scroll
+  position, filters and search focus survive a refresh.
+- **A hidden tab stops polling entirely**, as does a tab where the search box
+  has focus. A backgrounded console now makes no Parseable requests at all.
+- **Evidence is cached for ten seconds**, keyed by service, range, severity,
+  search and offset. Live and incremental requests bypass the cache — they are
+  fresh by definition.
+- **The button edge, in dark theme.** A primary button's fill sat at 1.8-2.8:1
+  against the card, under the 3:1 non-text guidance: the label was readable, the
+  button was not. The boundary now comes from a dedicated `--control-edge` token
+  (the palette's light tint in dark, the fill itself in light). Measured after:
+  6.77-9.78:1 in dark, 6.3-11.93:1 in light, white-on-fill unchanged.
+
 ## v0.2.251 (2026-11-07)
 
 **A way to see what belongs to nothing.**
