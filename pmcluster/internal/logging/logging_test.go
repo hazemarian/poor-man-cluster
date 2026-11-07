@@ -9,19 +9,24 @@ import (
 )
 
 func TestNormalizeAcceptsTheAlias(t *testing.T) {
-	cases := map[string]string{
-		"debug":    "debug",
-		"INFO":     "info",
-		" warning": "warn",
-		"Warning":  "warn",
-		"error":    "error",
-		"":         "",
-		"verbose":  "",
-		"info-ish": "",
+	// A slice, not a map: the leading-space case below is the point of the
+	// test, and gocritic's mapKey check reads `" warning"` in a map literal as
+	// a typo.
+	cases := []struct {
+		in, want string
+	}{
+		{"debug", "debug"},
+		{"INFO", "info"},
+		{" warning", "warn"},
+		{"Warning", "warn"},
+		{"error", "error"},
+		{"", ""},
+		{"verbose", ""},
+		{"info-ish", ""},
 	}
-	for in, want := range cases {
-		if got := Normalize(in); got != want {
-			t.Errorf("Normalize(%q) = %q, want %q", in, got, want)
+	for _, c := range cases {
+		if got := Normalize(c.in); got != c.want {
+			t.Errorf("Normalize(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
