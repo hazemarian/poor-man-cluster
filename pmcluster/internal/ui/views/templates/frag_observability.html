@@ -237,7 +237,12 @@
 {{end}}
 
 {{define "observabilitylogs"}}
-<section class="panel" id="obs-logs"{{if .Live}} hx-get="/web/observability/evidence?live=1&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}" hx-trigger="every 5s [document.activeElement.id !== 'obs-search']" hx-swap="outerHTML"{{end}}>
+<section class="panel" id="obs-logs"{{/* Live poll is incremental and panel-preserving: it asks only for rows newer
+     than the newest one on screen (data-ts) and appends them, so the operator's
+     scroll position, filters and search focus survive. It stops entirely while
+     the tab is hidden — a backgrounded console must not keep querying Parseable
+     — and while the search box has focus. */}}
+{{if .Live}} hx-get="/web/observability/evidence?live=1&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}" hx-trigger="every 5s [!document.hidden &amp;&amp; document.activeElement.id !== 'obs-search']" hx-vals='js:{since: (() => { const rows = document.querySelectorAll("#obs-logs .obs-log"); return rows.length ? (rows[rows.length - 1].dataset.ts || "") : ""; })()}' hx-target="#obs-logs .obs-logs" hx-swap="beforeend"{{end}}>
   <div class="panel-head">
     <div><h2>{{T "obs.logs_title"}}</h2><p class="sub">{{T "obs.logs_sub"}}</p></div>
     <div class="ph-actions"><div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}{{.Evidence.WindowStart}} → {{.Evidence.WindowEnd}}{{end}}</div></div>
@@ -287,14 +292,7 @@
     <p class="sub obs-note">{{T "obs.rows"}} <span class="iso" dir="ltr">{{N .Evidence.FirstRow}}–{{N .Evidence.LastRow}}</span> · {{T "obs.level_note"}}</p>
     <div class="obs-logs" role="table" aria-label="{{T "obs.logs_title"}}" tabindex="0">
       <div class="obs-log-head" role="row"><span role="columnheader">{{T "observability.col_time"}}</span><span role="columnheader">{{T "observability.col_severity"}}</span><span role="columnheader">{{T "observability.col_service"}}</span><span role="columnheader">{{T "observability.col_message"}}</span></div>
-      {{range .Evidence.Rows}}
-      <div class="obs-log" role="row">
-        <span class="obs-log-time mono iso" dir="ltr" title="{{.Timestamp}}" role="cell">{{.TimeShort}}</span>
-        <span class="obs-log-sev" role="cell"><span class="pill {{.SevClass}}">{{if .Severity}}{{.Severity}}{{else}}—{{end}}</span></span>
-        <span class="obs-log-svc mono iso" dir="ltr" role="cell" title="{{.Service}}">{{.Service}}</span>
-        <span class="obs-log-msg" role="cell">{{if .Multiline}}<details><summary><span class="mono">{{.Preview}}</span></summary><pre class="inline-pre">{{.Body}}</pre></details>{{else}}<span class="mono">{{.Body}}</span>{{end}}</span>
-      </div>
-      {{end}}
+      {{template "observabilitylogrows" .}}
     </div>
     {{if and (not .Live) (or .Evidence.HasPrev .Evidence.HasNext)}}
     <div class="obs-pager">
@@ -305,6 +303,23 @@
     {{end}}
   </div>
 </section>
+{{end}}
+
+{{/* Row-only rendering for the incremental live poll: the panel does not
+     re-render on a poll, only the rows that arrived since the newest one it
+     already holds are appended to the log list, so the operator's scroll
+     position, filters and search focus survive a refresh. data-ts is the exact
+     record timestamp the next poll sends as `since`; it is the ONLY reason the
+     attribute exists, so do not drop it when editing the row markup. */}}
+{{define "observabilitylogrows"}}
+{{range .Evidence.Rows}}
+<div class="obs-log" role="row" data-ts="{{.Timestamp}}">
+  <span class="obs-log-time mono iso" dir="ltr" title="{{.Timestamp}}" role="cell">{{.TimeShort}}</span>
+  <span class="obs-log-sev" role="cell"><span class="pill {{.SevClass}}">{{if .Severity}}{{.Severity}}{{else}}—{{end}}</span></span>
+  <span class="obs-log-svc mono iso" dir="ltr" role="cell" title="{{.Service}}">{{.Service}}</span>
+  <span class="obs-log-msg" role="cell">{{if .Multiline}}<details><summary><span class="mono">{{.Preview}}</span></summary><pre class="inline-pre">{{.Body}}</pre></details>{{else}}<span class="mono">{{.Body}}</span>{{end}}</span>
+</div>
+{{end}}
 {{end}}
 
 {{define "observabilitymetrics"}}

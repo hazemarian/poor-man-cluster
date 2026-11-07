@@ -24,6 +24,11 @@ const (
 
 	obsStacksPerPage = 8
 	obsLogPageSize   = 50
+	// obsLivePageSize caps one incremental live poll. It bounds both the
+	// response size and the per-poll growth of the prepended table; a full
+	// render (filter change, manual refresh, reload) rebuilds the table from
+	// scratch at the ordinary page size.
+	obsLivePageSize  = 100
 	obsTracePageSize = 25
 	obsTopServices   = 15
 

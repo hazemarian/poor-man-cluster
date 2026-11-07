@@ -87,6 +87,9 @@ func (a *Observability) Logs(ctx context.Context, q observability.LogQuery) (obs
 	if q.Search != "" {
 		path += "&search=" + urlQueryEscape(q.Search)
 	}
+	if q.Since != "" {
+		path += "&since=" + urlQueryEscape(q.Since)
+	}
 	var out evidenceDTO
 	if err := a.c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
 		return observability.Result{}, err

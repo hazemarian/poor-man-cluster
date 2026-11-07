@@ -123,6 +123,7 @@ func NewApp(cfg Config) (*App, error) {
 		Redactor:          observability.NewRedactor(cfg.PMAPIToken),
 		ObservabilityRate: rate.NewLimiter(10, 40),
 		ObsCache:          controllers.NewObservabilityCache(),
+		EvidenceCache:     controllers.NewEvidenceCache(),
 	}
 
 	return &App{Cfg: cfg, Store: st, API: api, Auth: auth, ctrl: ctrl}, nil

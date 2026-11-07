@@ -135,7 +135,15 @@ func (h *HTTP) logs(w http.ResponseWriter, r *http.Request) {
 		writeObservationError(w, http.StatusBadRequest, err)
 		return
 	}
-	q := LogQuery{Service: service, Window: wnd, Severity: severity, Search: CleanSearch(search), Limit: limit, Offset: offset}
+	// since is an incremental-live lower bound. It is deliberately unvalidated
+	// here: the adapter parses it and ignores an unparseable value, so nothing
+	// user-supplied is ever interpolated. Capping the length only keeps the URL
+	// bounded.
+	since := strings.TrimSpace(r.URL.Query().Get("since"))
+	if len([]rune(since)) > 64 {
+		since = ""
+	}
+	q := LogQuery{Service: service, Window: wnd, Severity: severity, Search: CleanSearch(search), Limit: limit, Offset: offset, Since: since}
 	if err := q.Validate(); err != nil {
 		writeObservationError(w, http.StatusBadRequest, err)
 		return

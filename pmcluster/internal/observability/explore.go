@@ -79,6 +79,11 @@ type LogQuery struct {
 	Search   string
 	Limit    int
 	Offset   int
+	// Since is an exclusive lower bound on the record timestamp for incremental
+	// live reads: only rows strictly newer than this value are returned. It is
+	// a raw timestamp string the adapter parses; an unparseable value is
+	// ignored, never interpolated.
+	Since string
 }
 
 // Validate checks every bound that does not depend on the daemon inventory.

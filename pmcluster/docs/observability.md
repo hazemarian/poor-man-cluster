@@ -240,6 +240,26 @@ token, then calls the authenticated native edge route through local HTTPS. The
 CLI never accepts a Parseable URL, SQL statement or backend password. Parseable
 credentials stay inside the edge service on the monitoring network.
 
+## What the console page costs
+
+A Parseable query costs time in proportion to the window it scans — there are no
+rollups, so a log page over 24 hours is roughly ten times the work of the same
+page over one hour. The console is built around that fact:
+
+- **The default window is one hour.** It is the range that answers "what is
+  happening now" at a fraction of the cost, and the selector still offers 15m,
+  6h and 24h for when you need history.
+- **The two log queries that make up an investigation run in parallel** — newest
+  errors, then newest of any level — instead of queueing, so the wait is one
+  query rather than two.
+- **Live mode is incremental.** Each poll asks only for rows newer than the
+  newest row on screen (the row's `data-ts` becomes the query's lower bound) and
+  appends them, so the panel is never re-read or re-rendered. A backgrounded tab
+  issues no requests at all, and neither does one where the search box has focus.
+- **Evidence responses are cached for about ten seconds**, keyed by service,
+  window, severity, search and offset. Live and incremental requests bypass the
+  cache — they are fresh by definition.
+
 ## Configuration
 
 Retention is configured as cluster settings and applied by the provisioning job:

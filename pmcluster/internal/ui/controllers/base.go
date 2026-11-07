@@ -59,6 +59,12 @@ type Controller struct {
 	// pass over the archive dir + store, measured at ~1.8s). Without it every
 	// fragment re-pays both, and the page multiplies that by the number of panels.
 	ObsCache *ObservabilityCache
+
+	// EvidenceCache memoises full-window log evidence reads (keyed by service,
+	// range, severity, search and offset) for ~10s, so a burst of fragments for
+	// the same filters pays Parseable once. Incremental and live requests bypass
+	// it. Nil when the console was built without one (tests).
+	EvidenceCache *EvidenceCache
 }
 
 // loadParams reads the stored overrides and the env fallbacks into the running

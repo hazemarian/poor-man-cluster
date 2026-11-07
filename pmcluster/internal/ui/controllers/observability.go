@@ -49,7 +49,11 @@ type observabilityData struct {
 	Metrics   obsMetrics
 	Dash      obsDashboard
 
-	Live         bool
+	Live bool
+	// Since is the incremental-live lower bound: when set, the evidence query
+	// returns only rows strictly newer than this timestamp, rendered as rows
+	// suitable for prepending. Empty means a full-panel read.
+	Since        string
 	Traces       obsTraces
 	TraceService string
 	TraceOffset  int
@@ -239,9 +243,15 @@ func (c Observability) Traces(g *gin.Context) {
 // Evidence renders only the logs panel for in-page filtering and paging. It
 // resolves the selected service against the full daemon inventory after the
 // /api/me probe, so a scoped token or unknown service fails closed before
-// Parseable is contacted.
+// Parseable is contacted. A request carrying a since timestamp is an
+// incremental live poll: it renders only the newer rows as table rows, which
+// the live panel prepends instead of replacing itself.
 func (c Observability) Evidence(g *gin.Context) {
 	d := c.load(g, obsTabLogs)
+	if d.Since != "" {
+		c.Views.Fragment(g, "observabilitylogrows", d)
+		return
+	}
 	c.Views.Fragment(g, "observabilitylogs", d)
 }
 
@@ -258,6 +268,7 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 	if d.Live {
 		d.Offset = 0
 	}
+	d.Since = strings.TrimSpace(g.Query("since"))
 	d.TraceService = observability.CleanSearch(g.Query("svc"))
 	d.ErrorsOnly = g.Query("errors") == "1"
 	d.TraceOffset = min(max(atoiDefault(g.Query("toffset"), 0), 0), observability.MaxTraceOffset)
@@ -531,16 +542,40 @@ func (c Observability) loadEvidence(g *gin.Context, d *observabilityData, window
 		return
 	}
 	var (
-		result observability.Result
-		err    error
+		result   observability.Result
+		err      error
+		cacheKey evidenceCacheKey
 	)
 	logs, hasLogs := c.Telemetry.(observability.LogSource)
 	switch {
 	case hasLogs && d.Tab == obsTabLogs:
-		result, err = logs.Logs(g.Request.Context(), observability.LogQuery{
-			Service: backendService, Window: window, Severity: d.Severity, Search: d.Search,
-			Limit: obsLogPageSize, Offset: d.Offset,
-		})
+		// Incremental (since) and live reads are fresh by definition and never
+		// touch the cache. A full-panel read is cacheable: a Parseable read
+		// costs 0.28s (1h) to 2.88s (24h) and a burst of fragments shares the
+		// same filters.
+		if d.Since == "" && !d.Live {
+			cacheKey = evidenceCacheKey{service: backendService, rangeVal: d.Range, severity: d.Severity, search: d.Search, offset: d.Offset}
+			if cached, ok := c.EvidenceCache.Get(cacheKey); ok {
+				result = cached
+			} else {
+				result, err = logs.Logs(g.Request.Context(), observability.LogQuery{
+					Service: backendService, Window: window, Severity: d.Severity, Search: d.Search,
+					Limit: obsLogPageSize, Offset: d.Offset,
+				})
+				if err == nil && result.Status != observability.StatusUnavailable {
+					c.EvidenceCache.Put(cacheKey, result)
+				}
+			}
+		} else {
+			limit := obsLogPageSize
+			if d.Since != "" {
+				limit = obsLivePageSize
+			}
+			result, err = logs.Logs(g.Request.Context(), observability.LogQuery{
+				Service: backendService, Window: window, Severity: d.Severity, Search: d.Search,
+				Limit: limit, Offset: d.Offset, Since: d.Since,
+			})
+		}
 	case hasLogs:
 		// An investigation reads the newest errors and the newest records of any
 		// level. A single oldest-first page would miss the incident itself, and
@@ -688,18 +723,40 @@ func shortTime(ts string) string {
 }
 
 // recentForInvestigation merges the newest error records with the newest
-// records of any level, dropping rows both queries returned.
+// records of any level, dropping rows both queries returned. The two reads are
+// issued concurrently under the request context; each Parseable read costs
+// 0.28s (1h) to 2.88s (24h) and the two are independent, so running them in
+// series doubled the tab's cost. If either read fails or reports unavailable
+// the whole merge is unavailable — a success must not mask a failure.
 func recentForInvestigation(ctx context.Context, logs observability.LogSource, service string, window observability.Window) (observability.Result, error) {
+	severities := []string{"error", ""}
+	type outcome struct {
+		res observability.Result
+		err error
+	}
+	outcomes := make([]outcome, len(severities))
+	var wg sync.WaitGroup
+	for i, severity := range severities {
+		wg.Add(1)
+		go func(i int, severity string) {
+			defer wg.Done()
+			res, err := logs.Logs(ctx, observability.LogQuery{Service: service, Window: window, Severity: severity, Limit: observability.MaxLogPageSize})
+			outcomes[i] = outcome{res: res, err: err}
+		}(i, severity)
+	}
+	wg.Wait()
+
+	// Merge in the fixed order — errors first, then any level — so the output
+	// is unchanged from the former sequential loop.
 	var merged observability.Result
 	seen := map[string]bool{}
-	for _, severity := range []string{"error", ""} {
-		res, err := logs.Logs(ctx, observability.LogQuery{Service: service, Window: window, Severity: severity, Limit: observability.MaxLogPageSize})
-		if err != nil || res.Status == observability.StatusUnavailable {
+	for _, o := range outcomes {
+		if o.err != nil || o.res.Status == observability.StatusUnavailable {
 			return observability.Result{}, errors.New("telemetry unavailable")
 		}
-		merged.Status, merged.Window, merged.ObservedAt, merged.Coverage = res.Status, res.Window, res.ObservedAt, res.Coverage
-		merged.Truncated = merged.Truncated || res.Truncated
-		for _, row := range res.Rows {
+		merged.Status, merged.Window, merged.ObservedAt, merged.Coverage = o.res.Status, o.res.Window, o.res.ObservedAt, o.res.Coverage
+		merged.Truncated = merged.Truncated || o.res.Truncated
+		for _, row := range o.res.Rows {
 			log := observability.ProjectLog(row)
 			key := log.Timestamp + "\x00" + log.Service + "\x00" + log.Body
 			if seen[key] {

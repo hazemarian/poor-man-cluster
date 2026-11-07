@@ -29,6 +29,23 @@ func timeBounds(w observability.Window) string {
 		"' AND p_timestamp <= TIMESTAMP '" + escapeLiteral(w.End.UTC().Format(time.RFC3339Nano)) + "'"
 }
 
+// parseSince parses the raw since value as a record timestamp. It returns the
+// normalized UTC form for interpolation, or ok=false when the value is empty
+// or unparseable. An unparseable since is ignored rather than interpolated, so
+// a malformed client value can never reach SQL.
+func parseSince(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999999", time.RFC3339} {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t.UTC().Format(time.RFC3339Nano), true
+		}
+	}
+	return "", false
+}
+
 // escapeLike escapes a user search term for a LIKE pattern that declares
 // backslash as its escape character, then for a SQL string literal.
 func escapeLike(value string) string {
@@ -51,6 +68,9 @@ func (c *Client) LogsPageSQL(q observability.LogQuery) (string, error) {
 	}
 	if q.Search != "" {
 		sql += " AND body ILIKE '%" + escapeLike(q.Search) + "%' ESCAPE '\\'"
+	}
+	if since, ok := parseSince(q.Since); ok {
+		sql += " AND p_timestamp > TIMESTAMP '" + escapeLiteral(since) + "'"
 	}
 	return sql + " ORDER BY p_timestamp DESC LIMIT " + strconv.Itoa(q.Limit+1) + " OFFSET " + strconv.Itoa(q.Offset), nil
 }
