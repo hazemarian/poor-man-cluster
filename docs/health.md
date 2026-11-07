@@ -101,3 +101,24 @@ pmcluster node versions       # the fleet table, stragglers named
 **Workers do not appear.** A worker cannot create a swarm config or set a node
 label, so its binary version is unknowable from the swarm. The command says so
 rather than letting a list of five managers read as a list of every node.
+
+## Services with no stack
+
+`pmcluster cluster orphans` lists swarm services that carry no stack namespace.
+They come from a half-finished `docker stack deploy`, a hand-run
+`docker service create`, or a stack removed with the docker CLI instead of the
+API — and they are invisible everywhere else: `docker stack ls` does not show
+them, `pmcluster stack list` does not know them, and the reconcile never touches
+them, so nothing scales, updates or cleans them up while their tasks keep using
+the node.
+
+```
+pmcluster cluster orphans            # report only
+pmcluster cluster orphans --remove   # delete them
+```
+
+A service that *does* carry a stack label is never a candidate, even when its
+stack is gone: that service belongs to a deploy that is still converging, and
+removing it would race the stack's own re-deploy. The command exits non-zero if
+any removal fails, so a scripted cleanup cannot pass on a partial result.
+
