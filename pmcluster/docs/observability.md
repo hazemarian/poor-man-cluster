@@ -93,7 +93,15 @@ daemon can still read its own backend; the second proves the WAN is closed.
 | Container metrics | Docker stats API | CPU, memory, network and block I/O, labelled with stack and service |
 | Node metrics | Host `/proc` and `/sys` mounted read-only | CPU utilization, memory utilization and load average |
 | Traces | OTLP from instrumented applications | Empty until an application sends spans |
-| Platform telemetry | pmcluster daemon and Traefik | Deploys, reconciles, backups and proxy spans |
+| Platform telemetry | pmcluster daemon | Deploys, reconciles and backups |
+
+Traefik contributes **no** traces: the infra stack runs with
+`--tracing.otlp=false`. The flag stays explicit next to the (retained) gRPC
+endpoint and service name so the decision is visible, and turning tracing back
+on is a one-line change; it was switched off because it emitted a span per
+proxied request for no consumer. Traefik's access log is off for the same
+reason (`--accesslog=false`) — the request path already shows up as container
+logs and metrics.
 
 Application traces and custom metrics are **opt-in**. Set
 `OTEL_EXPORTER_OTLP_ENDPOINT` to the collector service and instrument the
@@ -146,6 +154,16 @@ consent boundary that fails open is worse than a duplicated line.
 `skip_filelog` suppresses **logs only**. The container keeps reporting CPU and
 memory through Docker stats — you are opting out of log duplication, not out of
 monitoring.
+
+**Volume: `LOG_LEVEL` is injected, not requested.** Every service of every app
+stack is rendered with `LOG_LEVEL` — the manifest's `log_level`, else the
+cluster's `app_log_level` setting, else `warn`. The default is `warn` so a chatty
+app does not fill the log stream at INFO; a service that sets `LOG_LEVEL` itself
+keeps its value. The platform's own level (`log_level`, default `info`, applied
+to the daemon and the edge) is a separate setting — see
+[settings.md](../../docs/settings.md#logging-two-settings-one-env-var). A runtime
+variable is only honoured if the application reads it; the injection makes a
+conventional name available, it cannot change a library's default.
 
 **Known limit:** the Docker observer behind this path only reports a container
 that exposes at least one port. A container with no `ports:` in its manifest

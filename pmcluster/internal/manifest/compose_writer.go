@@ -9,6 +9,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/engine"
 	engineswarm "github.com/hazemarian/poor-man-cluster/pmcluster/internal/engine/swarm"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logging"
 
 	"github.com/rs/zerolog"
 
@@ -88,6 +89,17 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 
 	app := irApp{name: ir.Name, env: ir.Env, version: ir.Version}
 
+	// Every service of an app stack is given LOG_LEVEL, so a chatty app runs
+	// at the cluster's verbosity without the manifest repeating it. The value
+	// is settled once here (manifest level → app_log_level setting → warn) and
+	// only fills services that do not declare LOG_LEVEL themselves — an
+	// explicit value in the manifest always wins. Platform stacks are skipped:
+	// traefik/parseable/seaweedfs carry their own level flags.
+	logLevel := ""
+	if !ir.Platform {
+		logLevel = logging.LevelOrDefault(ir.LogLevel, logging.DefaultAppLevel)
+	}
+
 	// Explicit app-level networks (platform stacks joining traefik-net /
 	// monitoring-net) REPLACE the private overlay: platform services are
 	// reachable cross-stack by fully-qualified service DNS on the shared
@@ -107,7 +119,7 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 
 	for i := range ir.Services {
 		s := &ir.Services[i]
-		cs, err := composeServiceFromIR(s, app, privateNet, root, w.CertResolver, w.PinNode, usePrivateNet, &usesTraefikNet, &usesMonitoringNet, w.Log)
+		cs, err := composeServiceFromIR(s, app, privateNet, root, w.CertResolver, w.PinNode, logLevel, usePrivateNet, &usesTraefikNet, &usesMonitoringNet, w.Log)
 		if err != nil {
 			return nil, err
 		}
@@ -227,7 +239,7 @@ func (w ComposeWriter) Write(ctx context.Context, ir *IR) ([]byte, error) {
 func composeServiceFromIR(
 	s *IRService,
 	app irApp,
-	privateNet, volumeRoot, certResolver, pinNode string,
+	privateNet, volumeRoot, certResolver, pinNode, logLevel string,
 	usePrivateNet bool,
 	usesTraefikNet, usesMonitoringNet *bool,
 	log zerolog.Logger,
@@ -243,7 +255,7 @@ func composeServiceFromIR(
 		Image:       s.Image,
 		Command:     escapeSlice(s.Command),
 		Entrypoint:  escapeSlice(s.Entrypoint),
-		Environment: escapeMapValues(s.Env),
+		Environment: escapeMapValues(withLogLevel(s.Env, logLevel)),
 		Volumes:     escapeSlice(volumes),
 		Secrets:     s.Secrets,
 		ExtraHosts:  escapeSlice(s.ExtraHosts),
@@ -610,6 +622,31 @@ func addTraefikLabels(labels map[string]string, app irApp, serviceName string, e
 			labels["traefik.http.routers."+aliasScope+".middlewares"] = middleware
 		}
 	}
+}
+
+// logLevelEnv is the env var every app service receives. It is the
+// conventional name an application reads to set its own verbosity, so the
+// platform supplies it once per service instead of every manifest repeating
+// it.
+const logLevelEnv = "LOG_LEVEL"
+
+// withLogLevel returns env with LOG_LEVEL set to level. A service that
+// declares LOG_LEVEL itself is returned untouched: the platform provides a
+// default, it never overrides an explicit decision (the same rule CONFIG_PATH
+// follows). It copies the map so the IR keeps the manifest's env verbatim.
+func withLogLevel(env map[string]string, level string) map[string]string {
+	if level == "" {
+		return env
+	}
+	if _, set := env[logLevelEnv]; set {
+		return env
+	}
+	out := make(map[string]string, len(env)+1)
+	for k, v := range env {
+		out[k] = v
+	}
+	out[logLevelEnv] = level
+	return out
 }
 
 // escapeCompose doubles every literal `$` so the value survives docker stack

@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/rs/zerolog"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/edgeproxy"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logging"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui"
 )
 
@@ -35,7 +35,9 @@ func main() {
 
 func run() error {
 	proxyCfg := edgeproxy.FromEnv()
-	log := newLogger(proxyCfg.LogLevel)
+	// The edge shares PMCLUSTER_LOG_LEVEL with the daemon; its own LOG_LEVEL
+	// (set in the edge stack) is the fallback for standalone runs.
+	log := logging.ConfigureFromEnv(proxyCfg.LogLevel)
 	if err := edgeproxy.Validate(proxyCfg); err != nil {
 		return err
 	}
@@ -154,20 +156,4 @@ func combineProxyAndUI(proxyCfg edgeproxy.Config, app *ui.App) http.Handler {
 
 	engine.NoRoute(gin.WrapH(edgeproxy.New(proxyCfg)))
 	return engine
-}
-
-// newLogger returns a colorized zerolog console logger at the given level.
-func newLogger(level string) zerolog.Logger {
-	lvl := zerolog.InfoLevel
-	switch level {
-	case "debug":
-		lvl = zerolog.DebugLevel
-	case "warn":
-		lvl = zerolog.WarnLevel
-	case "error":
-		lvl = zerolog.ErrorLevel
-	}
-	return zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).
-		Level(lvl).
-		With().Timestamp().Logger()
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logging"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stackdrift"
@@ -97,6 +98,11 @@ type Service struct {
 	// cluster setting. Empty disables the auto-pin (see
 	// manifest.ComposeWriter.PinNode).
 	PinNode string
+	// AppLogLevel is the cluster's default LOG_LEVEL for deployed apps (the
+	// app_log_level setting). It is applied to an IR whose manifest sets no
+	// `log_level`; the writer then falls back to "warn" when this is empty
+	// too. A LOG_LEVEL the service declares itself always wins.
+	AppLogLevel string
 	// Pins resolves the storage placement for stateful services: per-stack
 	// pins (stack move) outrank the storage_nodes round-robin, which outranks
 	// PinNode. Nil keeps today's behaviour (PinNode only). Applied to the IR
@@ -263,6 +269,14 @@ func (s *Service) mkWriter(ctx context.Context, prepared map[string]string, extr
 // label so drift detection can compare the live Swarm's labels against a
 // fresh render (k8s-style: every service carries its content hash).
 func (s *Service) renderStamped(ctx context.Context, ir *manifest.IR) ([]byte, error) {
+	// The cluster's app_log_level is a default, so it is settled here — the
+	// one chokepoint every render path (deploy, sync, rollback, per-level
+	// subsets) passes through — and only for an IR the manifest left empty.
+	// Putting it on the IR rather than in the YAML keeps the writer in charge
+	// of ordering and escaping.
+	if ir.LogLevel == "" {
+		ir.LogLevel = logging.Normalize(s.AppLogLevel)
+	}
 	prepared, err := s.prepareConfigObjects(ctx, ir.Name, ir)
 	if err != nil {
 		return nil, err

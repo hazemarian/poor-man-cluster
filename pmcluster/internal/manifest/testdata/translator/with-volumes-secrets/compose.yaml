@@ -23,6 +23,7 @@ services:
         order: stop-first
         parallelism: 1
     environment:
+      LOG_LEVEL: warn
       VAULT_DEV_ROOT_TOKEN_ID: devroot
     healthcheck:
       interval: 10s

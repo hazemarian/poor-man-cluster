@@ -237,6 +237,12 @@ type RenderInput struct {
 	// Users CRUD are hidden); false keeps the password login (local runs).
 	EdgeLoginDisabled bool
 
+	// LogLevel is the `log_level` cluster setting, rendered into the platform
+	// stack's pmcluster-binary service as PMCLUSTER_LOG_LEVEL — the same env
+	// var the daemon reads, so the host process and the edge container log at
+	// the level the operator set. "" renders the default (info).
+	LogLevel string
+
 	// BackupRetentionDays is how many days the offen agent keeps archives
 	// before pruning them (mirrors the backup_retention_days setting;
 	// pmcluster prunes its own audit rows on the same window).

@@ -22,6 +22,7 @@ version: latest               # optional — image tag, defaults to "latest" (al
 registry: ghcr.io/acme        # optional — registry prefix (also ${registry})
 repo_url: https://github.com/acme/donation-campaign   # optional — metadata only
 env_file: .env                # optional — env file path (recorded; substitution is ${env:VAR})
+log_level: warn               # optional — LOG_LEVEL for every service (debug|info|warn|error)
 
 secrets:                      # optional — external Swarm secrets (must already exist)
   - donation_campaign_db_password
@@ -41,6 +42,7 @@ services:                     # required — one or more service definitions
 | `services` | yes | at least one service |
 | `version` | no | defaults to `latest` |
 | `repo_url` | no | metadata only — pmcluster never reads from git |
+| `log_level` | no | `debug`, `info`, `warn` or `error` (`warning` is accepted as an alias of `warn`, and the rendered value is always the canonical `warn`). Any other value fails validation with the allowed set named. This is the level every service in the stack receives as `LOG_LEVEL`; when omitted, the cluster's `app_log_level` setting applies, then `warn`. A service that declares `LOG_LEVEL` in its own `env:` keeps that value — see [What the translator injects](#what-the-translator-injects). |
 | `strict_backup` | no | only meaningful with `backup_before_deploy: true` |
 | `platform` | no | **reserved for pmcluster's own platform stacks** (`infra`/`edge`/`observability`/`backup`/`sso`) — stamps `io.pmcluster.platform=true` on every service, excludes the stack from the app drift loop, makes it non-deletable via the API, and is only removed by `cluster down --purge`. User deploys (`pmcluster deploy`, `POST /api/stacks`, webhooks) are **refused** this flag: `platform: true is reserved for pmcluster-managed platform stacks`. |
 | `networks` | no | additional **external** Swarm networks every service joins. When set, the auto-injected private overlay net is **skipped** (not created) — services reach each other by fully-qualified DNS on the named networks. |
@@ -332,6 +334,7 @@ You never write these by hand; pmcluster adds them:
 - **Restart policy** — `any` by default (a long-running service whose container exits cleanly — e.g. a SIGTERM during a Docker upgrade or a graceful shutdown — is marked *Complete* by Swarm and, under `on-failure`, is **never** replaced, leaving it at 0/1 until an operator force-updates it; `any` restarts it instead); `none` for `run_once` (a `run_once` service with `depends_on` gets `on-failure` with `max_attempts: 3`).
 - **Deploy** — `replicas` (an explicit `replicas: 0` — scale to zero — is rendered verbatim, not collapsed to the default of 1), `mode: global`, `placement` constraints (the storage-pin order above), and `update_config` defaults (`stop-first` for volume-holding services).
 - **`depends_on` list** — emitted for compose parity; startup ordering is enforced by the control plane (see [`depends_on`](#depends_on)) — no wrapper is injected.
+- **`LOG_LEVEL`** — every service of an app stack gets `LOG_LEVEL` in its environment, so an app that logs at INFO by default is quietened without editing each service. The value is, in order: the manifest's `log_level`, the cluster's `app_log_level` setting, then `warn`. **An explicit `LOG_LEVEL` in the service's own `env:` wins and is never overwritten** — the platform supplies a default, not a policy. The var is written into the IR's env and rendered with the rest of `environment:`, so ordering and `$`-escaping stay with the writer; the manifest YAML is never string-patched. Platform stacks (`platform: true`) are not injected — their components (Traefik, Parseable, SeaweedFS, the OTel collector) set verbosity with their own flags.
 - **`$`-escaping** — every user-derived string value (env, command, entrypoint, labels, volumes, healthcheck paths, CORS regexes) is written with literal `$` doubled to `$$`, so `docker stack deploy`'s compose interpolation cannot corrupt a literal `$` (a secret value `p@ss$word` reaches the container intact).
 
 The output is a `version: "3.9"` Compose file applied with `docker stack deploy`.

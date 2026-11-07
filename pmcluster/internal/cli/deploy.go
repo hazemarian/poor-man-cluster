@@ -158,7 +158,7 @@ func openDeploySvc(cmd *cobra.Command) (*stacks.Service, *store.Store, func(), e
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
 		return st.SetSetting(ctx, stacks.StackPinKey(stackName), node)
-	}}, Stdout: cmd.OutOrStdout(), Log: log, BackupDir: cluster.BackupRootDir()}
+	}}, Stdout: cmd.OutOrStdout(), Log: log, BackupDir: cluster.BackupRootDir(), AppLogLevel: cluster.LoadAppLogLevel(context.Background(), st)}
 	return svc, st, func() { _ = st.Close() }, nil
 }
 

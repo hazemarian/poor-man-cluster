@@ -240,7 +240,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
 		return st.SetSetting(ctx, stacks.StackPinKey(stackName), node)
-	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3}
+	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3, AppLogLevel: cluster.LoadAppLogLevel(cmd.Context(), st)}
 
 	tlsSvc := certs.NewLocal(st, cipher, dc, deployer,
 		cfg.ConfigDir(), buildinfo.Version)

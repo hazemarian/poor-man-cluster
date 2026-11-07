@@ -35,6 +35,7 @@ services:
         parallelism: 1
     environment:
       DB_PATH: /app/data/abbas.db
+      LOG_LEVEL: warn
       PORT: "8080"
     healthcheck:
       interval: 10s

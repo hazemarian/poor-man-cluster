@@ -387,7 +387,7 @@ state.
   GET `/api/services/{stack}/{service}/exec/ws` (the interactive TTY relay —
   see the terminal design in `docs/service-ops-design.md` §8).
 - `settings.HTTP{Svc settings.Service}` → GET `/api/cluster/settings` +
-  PUT `/api/cluster/settings` (29 allowlisted keys; atomic; no redeploy;
+  PUT `/api/cluster/settings` (30 allowlisted keys; atomic; no redeploy;
   secret-ish keys masked for non-admin bearers).
 - `usage.HTTP{Svc usage.Service}` → GET `/api/usage`.
 - `api.NodeStorageHandler` → POST/DELETE `/api/nodes/{hostname}/storage`
@@ -714,7 +714,10 @@ Methods: `ListUsers`, `GetByID`, `CountAdmins`, `UpdateUser`, `DeleteUser`,
   metrics; `s3.go` is the stdlib SigV4 S3 client (GET + PUT + ListObjectsV2,
   signs `x-amz-date`) used for both the store and the offsite bucket; the
   domain package is described above and the operator contract is `docs/backup.md`.
-- `logger`: zerolog setup (log_level cluster setting applied live).
+- `logger`: zerolog sinks (console + daily file + OTel) and the live re-level
+  when `log_level` is saved.  `logging`: the level vocabulary shared by the DSL,
+  the settings and both binaries (`PMCLUSTER_LOG_LEVEL`, `warning` = `warn`,
+  defaults info/warn) and the early-startup console logger.
   `buildinfo`: `Version`/`Commit`/`Date` vars (ldflags);
   `buildinfo.Resolve()` used by `--version`.
 

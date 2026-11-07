@@ -41,6 +41,8 @@ services:
         delay: 10s
         order: start-first
         parallelism: 1
+    environment:
+      LOG_LEVEL: warn
     image: nginx:latest
     networks:
     - net

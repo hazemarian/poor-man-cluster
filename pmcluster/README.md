@@ -64,7 +64,7 @@ make build         # → ./bin/pmcluster
 | `init` | Bootstrap config (flags: `--admin-name`, `--force` destructive) |
 | `serve` | Run the HTTP daemon (REST API + webhook receiver); leader-aware — serves only on the Swarm leader, standby on non-leader managers (15 s poll), standalone/local mode serves immediately |
 | `cluster up/update/down/status` | Bring the stack up (init-only), content-aware reconcile (DB source of truth, `rendered_hash`), tear down, or show status |
-| `cluster settings/get/set` | List, get, or set cluster settings (29 allowlisted keys incl. `reconcile_interval`, `log_level`; secret keys masked) |
+| `cluster settings/get/set` | List, get, or set cluster settings (30 allowlisted keys incl. `reconcile_interval`, `log_level`, `app_log_level`; secret keys masked) |
 | `setup` | Interactive wizard: collect cluster config then run cluster up/update (flags incl. `--tailscale`) |
 | `join --role worker\|manager --token … --manager <host>:2377` | Join this host to the Swarm, verify the joined role, initialise local control-plane state, and start the daemon (opt-in `--tailscale [--tailscale-auth-key]` advertises the tailnet IPv4 to the Swarm) |
 | `deploy <manifest.yaml>` | DSL-based deploy (flags: `--app`, `--repo`, `--file`, `--version`) |

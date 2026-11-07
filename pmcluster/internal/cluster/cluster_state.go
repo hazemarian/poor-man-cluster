@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logging"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -92,10 +93,19 @@ const (
 	// ("minimal"). The copies that matter are remote.
 	settingBackupKeepLocal = "backup_keep_local"
 
-	// Daemon log verbosity: "debug" | "info" | "warn" | "error". Rendered into
-	// nothing — the daemon reads it at startup AND applies it live when the
-	// console saves the cluster settings (runtime re-level via logger.SetLevel).
+	// Daemon log verbosity: "debug" | "info" | "warn" | "error". It reaches
+	// two places: the daemon reads it at startup AND applies it live when the
+	// console saves the settings (runtime re-level via logger.SetLevel), and
+	// `cluster update` renders it into the platform stack as
+	// PMCLUSTER_LOG_LEVEL so the edge container logs at the same level.
 	settingLogLevel = "log_level"
+
+	// settingAppLogLevel is the DEFAULT log level for DEPLOYED APPS, not for
+	// the platform: every service of every app stack gets LOG_LEVEL from its
+	// manifest's `log_level`, else from this, else "warn". It is deliberately
+	// a separate key from settingLogLevel — one knob would make "quiet the
+	// daemon" and "quiet my apps" the same action.
+	settingAppLogLevel = "app_log_level"
 
 	// settingReconcileInterval is how often the leader daemon runs the
 	// control-plane reconcile loop (0 disables the loop entirely).
@@ -162,6 +172,7 @@ func SettingBackupStoreOn() string                    { return settingBackupStor
 // SettingBackupKeepLocal is the node-disk retention mode.
 func SettingBackupKeepLocal() string   { return settingBackupKeepLocal }
 func SettingLogLevel() string          { return settingLogLevel }
+func SettingAppLogLevel() string       { return settingAppLogLevel }
 func SettingReconcileInterval() string { return settingReconcileInterval }
 func SettingStorageNodes() string      { return settingStorageNodes }
 func SettingStorageFailover() string   { return settingStorageFailover }
@@ -457,6 +468,29 @@ func LoadBackupCron(ctx context.Context, st *store.Store) string {
 		return defaultBackupCron
 	}
 	return v
+}
+
+// LoadLogLevel returns the platform's own log level (the log_level setting)
+// as a name the logger accepts, defaulting to info. A stored value this build
+// does not recognise degrades to the default instead of rendering a
+// PMCLUSTER_LOG_LEVEL the daemon and the edge would both have to guess at.
+func LoadLogLevel(ctx context.Context, st *store.Store) string {
+	return loadLevelSetting(ctx, st, settingLogLevel, logging.DefaultLevel)
+}
+
+// LoadAppLogLevel returns the DEFAULT log level for deployed apps (the
+// app_log_level setting), defaulting to warn. Manifests that set their own
+// `log_level` — or a service that declares LOG_LEVEL — outrank it.
+func LoadAppLogLevel(ctx context.Context, st *store.Store) string {
+	return loadLevelSetting(ctx, st, settingAppLogLevel, logging.DefaultAppLevel)
+}
+
+// loadLevelSetting reads one level-valued setting and normalizes it.
+func loadLevelSetting(ctx context.Context, st *store.Store, key, def string) string {
+	if st == nil {
+		return def
+	}
+	return logging.LevelOrDefault(st.SettingDefault(ctx, key, ""), def)
 }
 
 // requestedTLSMode derives the TLS mode the operator asked for on this run,

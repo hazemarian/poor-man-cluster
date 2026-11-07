@@ -50,12 +50,33 @@ func TestLoad_EnvOverride(t *testing.T) {
 	}
 }
 
-func TestLoad_RejectsBadLogLevel(t *testing.T) {
+// An unknown log level must not stop the daemon: internal/logging prints one
+// warning naming it and the process runs at info. Failing here would exit
+// before that warning could be written.
+func TestLoad_FallsBackOnBadLogLevel(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PMCLUSTER_LOG_LEVEL", "verbose")
 
-	if _, err := Load(""); err == nil {
-		t.Fatal("expected error for invalid log_level, got nil")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LogLevel != "info" {
+		t.Errorf("LogLevel = %q, want info (the fallback)", cfg.LogLevel)
+	}
+}
+
+// `warning` is accepted as an alias of warn everywhere the level is read.
+func TestLoad_NormalizesWarningAlias(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PMCLUSTER_LOG_LEVEL", "warning")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LogLevel != "warn" {
+		t.Errorf("LogLevel = %q, want warn", cfg.LogLevel)
 	}
 }
 

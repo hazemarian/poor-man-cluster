@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/viper"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logging"
 )
 
 // Config is the resolved runtime config; constructed via Load.
@@ -88,6 +90,7 @@ func Load(configPath string) (*Config, error) {
 	if err := v.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
+	cfg.normalizeLogLevel()
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -101,10 +104,15 @@ func (c *Config) validate() error {
 	if c.DataDir == "" {
 		return errors.New("data_dir is required")
 	}
-	switch c.LogLevel {
-	case "debug", "info", "warn", "error":
-	default:
-		return fmt.Errorf("log_level must be one of debug|info|warn|error, got %q", c.LogLevel)
-	}
 	return nil
+}
+
+// normalizeLogLevel settles a log level from any source onto the accepted
+// vocabulary. An unknown value is NOT fatal: a typo in a systemd unit or a
+// config file must leave the daemon running at info, with the shared logging
+// helper printing the one warning that names the rejected value (see
+// internal/logging.ConfigureFromEnv). Failing here would make the warning
+// unreachable — the process would exit before writing it.
+func (c *Config) normalizeLogLevel() {
+	c.LogLevel = logging.LevelOrDefault(c.LogLevel, logging.DefaultLevel)
 }

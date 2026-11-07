@@ -30,6 +30,8 @@ services:
         delay: 10s
         order: start-first
         parallelism: 1
+    environment:
+      LOG_LEVEL: warn
     healthcheck:
       interval: 10s
       retries: 5
@@ -60,6 +62,7 @@ services:
         order: stop-first
         parallelism: 1
     environment:
+      LOG_LEVEL: warn
       POSTGRES_DB: donation_campaign
       POSTGRES_USER: user
     healthcheck:
@@ -87,6 +90,8 @@ services:
         version: latest
       restart_policy:
         condition: none
+    environment:
+      LOG_LEVEL: warn
     image: ghcr.io/nextrum-sy/donation-campaign:latest
     networks:
     - net

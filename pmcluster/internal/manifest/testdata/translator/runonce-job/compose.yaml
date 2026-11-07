@@ -15,6 +15,8 @@ services:
         version: latest
       restart_policy:
         condition: none
+    environment:
+      LOG_LEVEL: warn
     image: alpine:3.19
     networks:
     - net

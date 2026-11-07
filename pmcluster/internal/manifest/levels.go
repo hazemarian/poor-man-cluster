@@ -100,6 +100,7 @@ func (ir *IR) Subset(names []string) *IR {
 		Env:          ir.Env,
 		Version:      ir.Version,
 		Platform:     ir.Platform,
+		LogLevel:     ir.LogLevel,
 		Networks:     append([]string(nil), ir.Networks...),
 		Configs:      append([]string(nil), ir.Configs...),
 		PlainVolumes: plainVolumes,

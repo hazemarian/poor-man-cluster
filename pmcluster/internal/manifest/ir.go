@@ -27,6 +27,14 @@ type IR struct {
 	// app stacks.
 	Platform bool
 
+	// LogLevel is the level the writer injects into every service's env as
+	// LOG_LEVEL (normalized: debug|info|warn|error). It comes from the
+	// manifest's `log_level`, and the caller fills it from the cluster's
+	// `app_log_level` setting when the manifest leaves it empty. Empty at
+	// render time means the writer's default (warn). Platform stacks are not
+	// injected — their components configure their own verbosity.
+	LogLevel string
+
 	// Networks are additional external swarm networks every service joins
 	// (traefik-net / monitoring-net for platform stacks).
 	Networks []string

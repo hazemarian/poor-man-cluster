@@ -53,7 +53,12 @@ services:
       - "--accesslog=false"
       - "--accesslog.format=json"
       - "--log.level=INFO"
-      - "--tracing.otlp=true"
+      # Tracing is OFF: Traefik produced a span per proxied request for no
+      # consumer, while the collector kept a trace pipeline busy. The flag
+      # stays explicit (rather than deleting the block) so the intent is
+      # visible; the grpc endpoint and serviceName stay for whoever turns it
+      # back on. Access logs are off for the same reason — see docs/observability.md.
+      - "--tracing.otlp=false"
       - "--tracing.otlp.grpc.endpoint=observability_otel-collector:4317"
       - "--tracing.otlp.grpc.insecure=true"
       - "--metrics.otlp=true"

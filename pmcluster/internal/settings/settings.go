@@ -18,7 +18,8 @@ type Settings map[string]string
 // Update persists keys only — it never redeploys; `cluster update` applies
 // them.
 type Service interface {
-	// Get returns the current value of every editable setting ("" when unset).
+	// Get returns the current value of every editable setting — its default
+	// when the platform has one, "" otherwise.
 	Get(ctx context.Context) (Settings, error)
 	// Update persists the given settings and returns the updated snapshot.
 	// Unknown keys are rejected.

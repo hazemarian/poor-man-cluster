@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logging"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/refs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
 )
@@ -47,6 +48,9 @@ func Validate(app *dsl.App) error {
 	}
 	if app.Domain == "" {
 		return fmt.Errorf("domain: required")
+	}
+	if app.LogLevel != "" && logging.Normalize(app.LogLevel) == "" {
+		return fmt.Errorf("log_level: must be one of %s, got %q (warning is an alias of warn)", logging.AllowedNames, app.LogLevel)
 	}
 	if len(app.Services) == 0 {
 		// A platform stack may render empty: the backup stack has no services on a

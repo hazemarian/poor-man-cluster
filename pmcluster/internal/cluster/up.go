@@ -381,6 +381,7 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 			KeySecretName:                  keySecret,
 			EdgeImage:                      EdgeImageFor(),
 			EdgeLoginDisabled:              loadEdgeLoginDisabled(ctx, deps.Store),
+			LogLevel:                       LoadLogLevel(ctx, deps.Store),
 			BackupRetentionDays:            LoadBackupRetentionDays(ctx, deps.Store),
 			BackupCron:                     LoadBackupCron(ctx, deps.Store),
 			LeaderNode:                     LeaderNode(ctx, deps.Docker),

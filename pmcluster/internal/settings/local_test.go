@@ -3,6 +3,7 @@ package settings
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
@@ -98,5 +99,60 @@ func TestLocalUpdateAppliesLogLevel(t *testing.T) {
 	}
 	if applied != "" {
 		t.Errorf("ApplyLogLevel triggered by non-log_level key: %q", applied)
+	}
+}
+
+// TestLocalGetReportsLogLevelDefaults: both level settings report the value
+// actually in effect, so "unset" is never mistaken for "no logging policy".
+func TestLocalGetReportsLogLevelDefaults(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	got, err := NewLocal(st).Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[cluster.SettingLogLevel()] != "info" {
+		t.Errorf("log_level = %q, want info (the daemon default)", got[cluster.SettingLogLevel()])
+	}
+	if got[cluster.SettingAppLogLevel()] != "warn" {
+		t.Errorf("app_log_level = %q, want warn (the app default)", got[cluster.SettingAppLogLevel()])
+	}
+}
+
+// TestLocalUpdateValidatesLevels: an unknown level is refused BEFORE anything
+// is written, and the warning alias is stored as the canonical name.
+func TestLocalUpdateValidatesLevels(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	l := NewLocal(st)
+	ctx := context.Background()
+
+	_, err = l.Update(ctx, Settings{
+		cluster.SettingAppLogLevel(): "verbose",
+		cluster.SettingDomain():      "example.com",
+	})
+	if err == nil {
+		t.Fatal("Update with an unknown app_log_level: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "debug|info|warn|error") {
+		t.Errorf("error %q should name the allowed set", err.Error())
+	}
+	// Atomic: the valid key in the same request must not have been written.
+	if v := st.SettingDefault(ctx, cluster.SettingDomain(), ""); v != "" {
+		t.Errorf("domain was written despite the rejected app_log_level: %q", v)
+	}
+
+	if _, err := l.Update(ctx, Settings{cluster.SettingAppLogLevel(): "Warning"}); err != nil {
+		t.Fatalf("Update with the warning alias: %v", err)
+	}
+	if v := st.SettingDefault(ctx, cluster.SettingAppLogLevel(), ""); v != "warn" {
+		t.Errorf("app_log_level stored as %q, want warn (normalized)", v)
 	}
 }

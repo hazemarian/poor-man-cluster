@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logging"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -57,16 +58,27 @@ var clusterSettingKeys = []string{
 	cluster.SettingBackupKeepLocal(),
 	cluster.SettingBackupEnabled(),
 	cluster.SettingLogLevel(),
+	cluster.SettingAppLogLevel(),
 	cluster.SettingReconcileInterval(),
 	cluster.SettingStorageNodes(),
 	cluster.SettingStorageFailover(),
 }
 
-// Get returns the current value of every known setting ("" when unset).
+// settingDefaults is what Get reports for a key the platform has a built-in
+// default for. Reporting the default (rather than "") means the console and
+// the CLI show the value actually in effect, so "unset" can never be mistaken
+// for "0"/"off"/"the loudest possible logging".
+var settingDefaults = map[string]string{
+	cluster.SettingLogLevel():    logging.DefaultLevel,
+	cluster.SettingAppLogLevel(): logging.DefaultAppLevel,
+}
+
+// Get returns the current value of every known setting ("", or its default
+// when the platform has one).
 func (l *Local) Get(ctx context.Context) (Settings, error) {
 	settings := make(Settings, len(clusterSettingKeys))
 	for _, k := range clusterSettingKeys {
-		settings[k] = l.Store.SettingDefault(ctx, k, "")
+		settings[k] = l.Store.SettingDefault(ctx, k, settingDefaults[k])
 	}
 	return settings, nil
 }
@@ -77,8 +89,8 @@ func (l *Local) Get(ctx context.Context) (Settings, error) {
 const stackPinPrefix = "stack_pin_"
 
 // Update persists the given settings and returns the updated snapshot.
-// Unknown keys are rejected atomically (nothing is written when any key is
-// unknown).
+// Unknown keys and invalid values are rejected atomically (nothing is written
+// when any key is unknown or any value is refused).
 func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 	if len(values) == 0 {
 		return nil, fmt.Errorf("settings: required")
@@ -87,7 +99,8 @@ func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 	for _, k := range clusterSettingKeys {
 		allowed[k] = true
 	}
-	for k := range values {
+	normalized := make(Settings, len(values))
+	for k, v := range values {
 		// A per-stack placement pin is written by the platform itself (first
 		// placement, and `stack move`), so it is a legitimate setting an
 		// operator must be able to inspect and clear. It cannot be enumerated
@@ -95,8 +108,20 @@ func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 		if !allowed[k] && !strings.HasPrefix(k, stackPinPrefix) {
 			return nil, fmt.Errorf("unknown setting: %s", k)
 		}
+		if isLevelKey(k) {
+			// `warning` is accepted as an alias of warn everywhere else, so
+			// accepting it here and storing the canonical name keeps one
+			// spelling in the DB and in the rendered env.
+			n := logging.Normalize(v)
+			if v != "" && n == "" {
+				return nil, fmt.Errorf("%s: must be one of %s, got %q", k, logging.AllowedNames, v)
+			}
+			normalized[k] = n
+			continue
+		}
+		normalized[k] = v
 	}
-	for k, v := range values {
+	for k, v := range normalized {
 		if err := l.Store.SetSetting(ctx, k, v); err != nil {
 			return nil, fmt.Errorf("set setting %s: %w", k, err)
 		}
@@ -116,4 +141,11 @@ func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 		}
 	}
 	return l.Get(ctx)
+}
+
+// isLevelKey reports whether a setting holds a log level. Both keys are
+// level-valued and validated identically; they differ only in whose logging
+// they control (`log_level` the platform, `app_log_level` the deployed apps).
+func isLevelKey(key string) bool {
+	return key == cluster.SettingLogLevel() || key == cluster.SettingAppLogLevel()
 }

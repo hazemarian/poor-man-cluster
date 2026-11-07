@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logging"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/refs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/pkg/dsl"
@@ -125,6 +126,11 @@ func BuildIR(ctx context.Context, app *dsl.App, res EnvResolver) (*IR, error) {
 		Version:  app.Version,
 		Platform: app.Platform,
 		Networks: app.Networks,
+		// The manifest's own level, normalized so `warning` and any casing
+		// render as the canonical name. Empty stays empty: the caller (the
+		// deploy service) supplies the cluster's app_log_level, and the writer
+		// supplies the final default.
+		LogLevel: logging.Normalize(app.LogLevel),
 		Services: make([]IRService, 0, len(app.Services)),
 	}
 

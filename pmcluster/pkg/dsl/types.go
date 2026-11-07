@@ -28,6 +28,13 @@ type App struct {
 	// leave this false.
 	Platform bool `json:"platform,omitempty"`
 
+	// LogLevel is what every service of this stack receives as the LOG_LEVEL
+	// env var: debug, info, warn or error (warning is accepted as an alias of
+	// warn). Empty means the cluster's app_log_level setting, and then the
+	// built-in default warn. The injection never overrides a LOG_LEVEL the
+	// service declares itself in `env:` — an explicit value always wins.
+	LogLevel string `json:"log_level,omitempty"`
+
 	// Networks lists additional EXTERNAL swarm networks every service in
 	// this stack joins, beyond the auto-injected private overlay (and the
 	// traefik-net/monitoring-net that exposure implies). Platform stacks use

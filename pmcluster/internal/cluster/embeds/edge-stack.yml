@@ -35,7 +35,10 @@ services:
       REQUEST_TIMEOUT: "30s"
       BAN_THRESHOLD: "20"
       BAN_DURATION: "10m"
-      LOG_LEVEL: info
+      # The cluster's log_level setting, as the env var both pmcluster
+      # binaries read (the daemon directly, the edge through the shared
+      # logging helper) so host and container agree.
+      PMCLUSTER_LOG_LEVEL: "[[ if .LogLevel ]][[.LogLevel]][[ else ]]info[[ end ]]"
       EDGE_LOGIN_DISABLED: "[[.EdgeLoginDisabled]]"
       EDGE_SSO_ENABLED: "[[.SSOEnabled]]"
       # The managed observability credential — base64(<admin user>:<password>),

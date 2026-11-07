@@ -132,6 +132,10 @@ func FromEnv() Config {
 		BannedCIDRs:    splitList(envOr("BANNED_CIDRS", "")),
 		BanThreshold:   envInt("BAN_THRESHOLD", defaultBanThreshold),
 		BanDuration:    envDur("BAN_DURATION", defaultBanDuration),
-		LogLevel:       envOr("LOG_LEVEL", "info"),
+		// LOG_LEVEL is the edge's own knob; PMCLUSTER_LOG_LEVEL is the
+		// cluster-wide one, rendered into this service from the `log_level`
+		// setting. Either can set the level, and the process logger reads the
+		// same two variables in the same order.
+		LogLevel: envOr("LOG_LEVEL", envOr("PMCLUSTER_LOG_LEVEL", "info")),
 	}
 }
