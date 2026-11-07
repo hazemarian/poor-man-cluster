@@ -3,6 +3,23 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.251 (2026-11-07)
+
+**A way to see what belongs to nothing.**
+
+- **Services that carry no stack were invisible to the whole platform.**
+  `docker stack ls` does not list them, `pmcluster stack list` does not know
+  them, and the reconcile never touches them, so nothing scaled, updated or
+  cleaned them up while their tasks kept using the node. One was sitting on the
+  cluster at `0/1`. `pmcluster cluster orphans` reports them — name,
+  running/desired, mode, image — and `--remove` deletes them.
+- **Only stack-less services are ever candidates.** A service that carries a
+  stack label is left alone even when its stack is gone: it belongs to a deploy
+  that is still converging, and removing it would race that deploy. Removal is
+  sequential and exits non-zero on any failure, so a scripted cleanup cannot pass
+  on a partial result, and a completed one-shot reads `0/1 (run-once)` rather
+  than the alarming bare `0/1`.
+
 ## v0.2.250 (2026-11-07)
 
 **Verbosity you can set, and a console worth looking at.**
