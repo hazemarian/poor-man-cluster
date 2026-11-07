@@ -3,6 +3,49 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.250 (2026-11-07)
+
+**Verbosity you can set, and a console worth looking at.**
+
+- **The daemon logged without a level.** Every debug line reached stderr and
+  nothing could be filtered, because the process never set a zerolog level. There
+  is now `log_level` (default `info`, values `debug|info|warn|error`, `warning`
+  as an alias), read at startup, re-applied live when saved, and rendered into
+  the platform stack as `PMCLUSTER_LOG_LEVEL` — the one env var both pmcluster
+  binaries read. An unknown value logs one warning naming it and runs at `info`
+  rather than refusing to start.
+- **Deployed apps log `INFO` for every request, and nothing could change that.**
+  Every service of every app stack now receives `LOG_LEVEL`, settled in order
+  from the manifest's `log_level`, the cluster's `app_log_level` setting
+  (default `warn`), then `warn`. A service that declares `LOG_LEVEL` itself keeps
+  it: the platform supplies a default, not a policy. Platform stacks are not
+  injected — their components configure their own verbosity. The value is
+  written at the IR/compose-writer boundary, never by patching the manifest.
+- **Traefik exported a span per proxied request for no consumer.** The infra
+  stack now runs with `--tracing.otlp=false`. Access logs were already off.
+- **The console ran on cold zinc surfaces with an indigo accent and a dark
+  default** — generic SaaS, unrelated to the product. Both themes are retokenised
+  to warm paper, deep green as the workhorse accent and gold as the brand
+  highlight (never body text: ~2.9:1 on paper), with the dark theme derived as a
+  warm counterpart. Light is now the default.
+- **The six-palette picker recoloured only the logo mark.** It now drives
+  `--accent`/`--accent-strong` through 12 theme × palette blocks, with green as
+  the default. Every combination was measured: the weakest is 5.78:1 for accent
+  on the body and 6.30:1 for white on a filled control.
+- **Reading the console at a glance.** The overview's lead cell carries the
+  node's headline state as a bar and tint, and status is a pill with a dot, so a
+  state is never colour alone. Tables got one treatment — sticky header,
+  right-aligned `tabular-nums` numerics, truncation paired with a title, hover
+  and selected rows — and forms got field-local errors (`aria-invalid` +
+  `aria-describedby`) on setup and the user form.
+- **"needs manager" was bare text in an actions column**, indistinguishable from
+  an empty cell. The storage refusal now carries a lock and reads as a disabled
+  control.
+- **`backup-agent prune-remote`** trims remote objects the local pruner can
+  never see — `--target store|s3|all`, `--legacy`, `--dry-run`. Retention only
+  ever ran against local archives, so 1076 legacy objects in the IONOS bucket and
+  357 in R2 were invisible to policy.
+
 ## v0.2.227 (2026-11-02)
 
 **Fixes for v0.2.226, all found by CI rather than by reading the diff.**
