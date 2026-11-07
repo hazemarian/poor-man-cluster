@@ -96,6 +96,23 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 0 0 3px var(--accent-bg);
 }
 input::placeholder, textarea::placeholder { color: var(--text-tertiary); }
+/* Disabled controls read as disabled: dimmed fill + not-allowed cursor + muted
+   text. Without this a disabled select (e.g. a role the operator may not
+   change) looked identical to a live one. */
+input:disabled, select:disabled, textarea:disabled {
+  opacity: .55; cursor: not-allowed;
+  background: var(--bg-hover); color: var(--text-tertiary);
+}
+/* Field-local validation: the failing control takes the red hairline and keeps
+   it through focus (a focus ring of the accent would overwrite the error and
+   make a broken field read as a selected one). The error text lives in the
+   field via `.field .err`, so the message sits with the input it names. */
+input.is-invalid, select.is-invalid, textarea.is-invalid {
+  border-color: var(--red);
+}
+input.is-invalid:focus, select.is-invalid:focus, textarea.is-invalid:focus {
+  border-color: var(--red); box-shadow: 0 0 0 3px var(--red-bg);
+}
 /* Payloads, paths, signatures and shell samples are Latin text and must stay LTR even
    when the document is RTL — without this the JSON punctuation lands on the wrong side
    and the raw error becomes unreadable. `isolate` keeps it from dragging surrounding
@@ -201,6 +218,10 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
   text-align: start; font-size: var(--fs-xs); letter-spacing: .015em;
   color: var(--text-secondary); background: var(--bg-sidebar); font-weight: 500; padding: var(--s-3) var(--s-6);
   border-bottom: 1px solid var(--border-default); white-space: nowrap;
+  /* Headers stay visible when a table scrolls inside a fixed-height panel
+     (log tables, long lists): the solid --bg-sidebar fill is what keeps the
+     sticky row legible over the rows scrolling beneath it. */
+  position: sticky; top: 0; z-index: 1;
 }
 .table td {
   padding: var(--s-4) var(--s-6); border-bottom: 1px solid var(--border-subtle);
@@ -209,7 +230,7 @@ table.table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 .table tbody tr:hover td { background: var(--bg-hover); }
 .table tbody tr:last-child td { border-bottom: 0; }
 .table tbody tr.is-selected td { background: var(--accent-bg); }
-.table td.num, .table th.num { font-variant-numeric: tabular-nums; }
+.table td.num, .table th.num { font-variant-numeric: tabular-nums; text-align: end; }
 /* Row actions stay at full strength. Dimming them to .35 dropped the effective
    contrast to 1.8:1 (axe, both themes) and hid the affordance from keyboard and
    touch users, who never hover; the row hover already carries the emphasis. */
@@ -392,6 +413,21 @@ body.modal-open { overflow: hidden; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .htmx-indicator { display: none; }
 .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline-block; }
+/* ---- in-flight actions ---- */
+/* htmx adds .htmx-request to the element that fired the request. While a slow
+   action (deploy, restart, backup, apply) runs, its trigger's leading icon
+   spins and the control refuses further clicks, so it reads as "working"
+   rather than a stuck button and cannot be double-submitted. When the trigger
+   is a submit button inside the owning form, the same treatment mirrors onto
+   that button. */
+.htmx-request.btn > .ic,
+form.htmx-request [type="submit"] > .ic,
+form.htmx-request .btn > .ic {
+  animation: spin .7s linear infinite;
+  transform-origin: center;
+}
+.htmx-request.btn,
+form.htmx-request [type="submit"] { pointer-events: none; }
 .secret-mask { font-family: var(--mono); letter-spacing: 2px; color: var(--text-tertiary); }
 
 /* utility */

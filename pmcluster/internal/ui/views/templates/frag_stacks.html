@@ -180,7 +180,7 @@
           </td>
           <td>
             {{if .RepoURL}}
-              <span class="mono trunc">{{.RepoURL}}</span>
+              <span class="mono trunc" title="{{.RepoURL}}">{{.RepoURL}}</span>
             {{else}}
               <span class="muted">{{T "stacks.repo_unset"}}</span>
             {{end}}
@@ -254,7 +254,7 @@
       </div>
       <div class="kv-row">
         <span class="k">{{T "stacks.col_repo"}}</span>
-        <span class="v">{{if .RepoURL}}<span class="mono trunc">{{.RepoURL}}</span>{{else}}<span class="muted">{{T "stacks.repo_unset"}}</span>{{end}}</span>
+        <span class="v">{{if .RepoURL}}<span class="mono trunc" title="{{.RepoURL}}">{{.RepoURL}}</span>{{else}}<span class="muted">{{T "stacks.repo_unset"}}</span>{{end}}</span>
       </div>
       <div class="kv-row">
         <span class="k">{{T "stacks.col_file"}}</span>

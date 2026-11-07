@@ -52,13 +52,14 @@ func Lang(c *gin.Context) i18n.Lang {
 // Localize returns the localizer for the current request.
 func Localize(c *gin.Context) *i18n.Localizer { return i18n.New(Lang(c)) }
 
-// Theme resolves the persisted theme. Dark is the default because the console
-// is an operations surface: it is used at night, next to a terminal.
+// Theme resolves the persisted theme. Light is the default because the
+// console's identity is warm paper (#F7F5F2) with deep-green primary and gold
+// accent; dark remains a first-class toggle for terminal-adjacent use.
 func Theme(c *gin.Context) string {
 	if ck, err := c.Cookie(CookieTheme); err == nil && (ck == "light" || ck == "dark") {
 		return ck
 	}
-	return "dark"
+	return "light"
 }
 
 // CrumbKey maps a console path to its navigation key, so the breadcrumb, the
@@ -152,7 +153,7 @@ func NewRenderer() (*Renderer, error) {
 		"shortImage": func(v string) string { return v },
 		"DIR":        func() string { return "ltr" },
 		"LANG":       func() string { return string(i18n.Default) },
-		"THEME":      func() string { return "dark" },
+		"THEME":      func() string { return "light" },
 		"RTL":        func() bool { return false },
 	}).ParseFS(files, "templates/*.html")
 	if err != nil {

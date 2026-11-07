@@ -28,13 +28,15 @@
   {{if .IsEdit}}<input type="hidden" name="id" value="{{.ID}}">{{end}}
   <div class="field">
     <label for="user-username">{{T "common.username"}}</label>
-    <input id="user-username" class="finput" name="username" value="{{.Username}}" autocomplete="off" required data-focus>
+    <input id="user-username" class="finput{{if eq .ErrKey "users.err_username"}} is-invalid{{end}}" name="username" value="{{.Username}}" autocomplete="off" required data-focus{{if eq .ErrKey "users.err_username"}} aria-invalid="true" aria-describedby="user-username-err"{{end}}>
+    {{if eq .ErrKey "users.err_username"}}<span class="err" id="user-username-err">{{T "users.err_username"}}</span>{{end}}
   </div>
 
   <div class="field">
     <label for="user-password">{{if .IsEdit}}{{T "users.password_new"}}{{else}}{{T "common.password"}}{{end}}</label>
-    <input id="user-password" class="finput" type="password" name="password" autocomplete="new-password"{{if not .IsEdit}} required{{end}}>
+    <input id="user-password" class="finput{{if or (eq .ErrKey "users.err_password_short") (eq .ErrKey "users.err_password_too_long")}} is-invalid{{end}}" type="password" name="password" autocomplete="new-password"{{if not .IsEdit}} required{{end}}{{if or (eq .ErrKey "users.err_password_short") (eq .ErrKey "users.err_password_too_long")}} aria-invalid="true" aria-describedby="user-password-err"{{end}}>
     <span class="hint">{{T "users.hint_password"}}{{if .IsEdit}} {{T "users.hint_password_keep"}}{{end}}</span>
+    {{if or (eq .ErrKey "users.err_password_short") (eq .ErrKey "users.err_password_too_long")}}<span class="err" id="user-password-err">{{T .ErrKey}}</span>{{end}}
   </div>
 
   <div class="field">
@@ -48,10 +50,11 @@
     </select>
     <span class="hint">{{T "users.role_locked"}}</span>
     {{else}}
-    <select id="user-role" class="selectbox" name="role">
+    <select id="user-role" class="selectbox{{if eq .ErrKey "users.err_role"}} is-invalid{{end}}" name="role"{{if eq .ErrKey "users.err_role"}} aria-invalid="true" aria-describedby="user-role-err"{{end}}>
       {{range .Roles}}<option value="{{.}}"{{if eq . $.Role}} selected{{end}}>{{if eq . "admin"}}{{T "st.admin"}}{{else if eq . "operator"}}{{T "st.operator"}}{{else if eq . "viewer"}}{{T "st.viewer"}}{{else}}{{.}}{{end}}</option>{{end}}
     </select>
     <span class="hint">{{T "users.roles_help"}}</span>
+    {{if eq .ErrKey "users.err_role"}}<span class="err" id="user-role-err">{{T "users.err_role"}}</span>{{end}}
     {{end}}
   </div>
 

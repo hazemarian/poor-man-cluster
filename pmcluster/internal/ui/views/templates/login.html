@@ -19,6 +19,8 @@
         var p = localStorage.getItem('pmc_palette');
         if (p === 'orange' || p === 'purple' || p === 'blue' || p === 'red' || p === 'green' || p === 'teal') {
           document.documentElement.dataset.palette = p;
+        } else {
+          document.documentElement.dataset.palette = 'green';
         }
       } catch (e) {}
     })();

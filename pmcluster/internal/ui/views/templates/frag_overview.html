@@ -87,7 +87,7 @@
 {{end}}
 
 <div class="stats overview-stats">
-  <div class="stat{{if or (not .InfoKnown) (not .Info.ControlAvailable)}} is-unknown{{end}}">
+  <div class="stat stat-lead{{if or (not .InfoKnown) (not .Info.ControlAvailable)}} is-unknown{{else if eq .Info.SwarmState "active"}} is-good{{else if eq .Info.SwarmState "error"}} is-bad{{else if eq .Info.SwarmState "pending"}} is-warn{{else}} is-unknown{{end}}">
     <span class="stat-l">{{icon "overview"}}{{T "cluster.state"}}</span>
     <span class="stat-v">
       {{- if and .InfoKnown .Info.ControlAvailable}}
@@ -164,7 +164,7 @@
             <th>{{T "common.role"}}</th>
             <th>{{T "common.status"}}</th>
             <th>{{T "common.availability"}}</th>
-            <th>{{T "cluster.engine"}}</th>
+            <th class="num">{{T "cluster.engine"}}</th>
             <th><span class="sr-only">{{T "common.actions"}}</span></th>
           </tr>
         </thead>

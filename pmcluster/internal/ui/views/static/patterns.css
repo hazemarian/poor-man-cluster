@@ -45,11 +45,11 @@
 
 /* ---------- log panel ---------- */
 .log {
-  background: #08090B; border: 1px solid var(--border-default); border-radius: var(--r-md);
+  background: #12140F; border: 1px solid var(--border-default); border-radius: var(--r-md);
   max-height: 380px; overflow: auto; font-family: var(--mono); font-size: var(--fs-code); line-height: var(--lh-code);
   padding: var(--s-3) 0;
 }
-[data-theme="light"] .log { background: #F7F8FA; }
+[data-theme="light"] .log { background: #F4F1EB; }
 .log .ln { display: flex; gap: var(--s-3); padding: 0 var(--s-4); direction: ltr; unicode-bidi: plaintext; }
 .log .ln .t { color: var(--text-tertiary); flex: none; font-variant-numeric: tabular-nums; }
 .log .ln .m { white-space: pre-wrap; word-break: break-word; }
@@ -176,12 +176,12 @@
 .workspace-head p { color: var(--text-tertiary); font-size: var(--fs-sm); }
 .workspace-grid { display: grid; grid-template-columns: 1fr 1.15fr; gap: var(--s-6); }
 .delivery-link { display: flex; flex-direction: column; align-items: flex-start; padding: var(--s-6); background: var(--bg-card); border: 1px solid var(--border-default); border-radius: var(--r-lg); transition: border-color var(--t), background var(--t); }
-.delivery-link:hover { border-color: var(--accent); background: var(--bg-elevated); }
-.delivery-symbol { color: var(--accent); margin-bottom: var(--s-4); }
+.delivery-link:hover { border-color: var(--gold); background: var(--bg-elevated); }
+.delivery-symbol { color: var(--gold); margin-bottom: var(--s-4); }
 .delivery-symbol .ic { width: 24px; height: 24px; }
 .delivery-link h3 { font-size: 19px; letter-spacing: -.015em; }
 .delivery-link p { font-size: var(--fs-sm); color: var(--text-secondary); max-width: 45ch; margin-top: var(--s-2); }
-.delivery-action { display: inline-flex; gap: var(--s-2); align-items: center; font-size: var(--fs-sm); font-weight: 500; color: var(--accent); padding-top: var(--s-5); margin-top: auto; }
+.delivery-action { display: inline-flex; gap: var(--s-2); align-items: center; font-size: var(--fs-sm); font-weight: 500; color: var(--gold-strong); padding-top: var(--s-5); margin-top: auto; }
 [dir="rtl"] .delivery-action .ic { transform: scaleX(-1); }
 .workspace-links { display: flex; flex-direction: column; }
 .workspace-link { display: flex; flex: 1; align-items: center; gap: var(--s-4); padding: var(--s-4); border-bottom: 1px solid var(--border-default); transition: background var(--t); }
@@ -457,3 +457,25 @@
 .obs-legend .lg.err::before { background: var(--red); }
 .obs-toperr-b .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .obs-toperr li { align-items: flex-start; }
+
+/* ---------- overview lead stat ---------- */
+/* The cluster state is the one thing an operator reads first, so it gets a
+   state-driven treatment instead of a bare metric. An inline-start bar + tinted
+   fill keyed to health (good/warn/bad), alongside the existing pill, so the
+   state is carried by colour AND shape AND text — never colour alone. The bar
+   and fill are logical (inline-start / logical colours) so RTL mirrors cleanly,
+   and the pill text keeps the state readable for colour-blind operators. */
+.overview-stats .stat-lead { position: relative; }
+.overview-stats .stat-lead::before {
+  content: ""; position: absolute; inset-block: 0; inset-inline-start: 0;
+  width: 3px; background: var(--border-active);
+}
+.overview-stats .stat-lead.is-good { background: var(--green-bg); }
+.overview-stats .stat-lead.is-good::before { background: var(--green); }
+.overview-stats .stat-lead.is-warn { background: var(--amber-bg); }
+.overview-stats .stat-lead.is-warn::before { background: var(--amber); }
+.overview-stats .stat-lead.is-bad { background: var(--red-bg); }
+.overview-stats .stat-lead.is-bad::before { background: var(--red); }
+/* Unknown keeps the neutral --bg-lead fill from .stat:first-child with a
+   neutral bar: "we don't know" must not read as "healthy". */
+.overview-stats .stat-lead.is-unknown::before { background: var(--border-active); }

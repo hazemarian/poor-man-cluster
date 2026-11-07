@@ -4,14 +4,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="color-scheme" content="dark light">
+  <meta name="color-scheme" content="light dark">
   <link rel="icon" href="/web/static/favicon.svg" type="image/svg+xml">
   <title>{{T .Crumb}} · {{T "app.title"}}</title>
   <script>
     // Theme + brand palette are applied before first paint so a light-theme
-    // operator never sees a dark flash and the brand accent never flashes the
-    // default orange. The server already set data-theme from the cookie; this
-    // covers the case where localStorage is newer than the cookie.
+    // operator never sees a dark flash and the brand accent never flashes an
+    // off-brand colour. The server already set data-theme from the cookie; this
+    // covers the case where localStorage is newer than the cookie, and defaults
+    // the palette to green (the operator identity) when nothing is stored.
     (function () {
       try {
         var t = localStorage.getItem('pmc_theme');
@@ -19,6 +20,8 @@
         var p = localStorage.getItem('pmc_palette');
         if (p === 'orange' || p === 'purple' || p === 'blue' || p === 'red' || p === 'green' || p === 'teal') {
           document.documentElement.dataset.palette = p;
+        } else {
+          document.documentElement.dataset.palette = 'green';
         }
       } catch (e) {}
     })();

@@ -268,9 +268,9 @@
           <thead>
             <tr>
               <th>{{T "deploy.col_stack"}}</th>
-              <th>{{T "common.revision"}}</th>
+              <th class="num">{{T "common.revision"}}</th>
               <th>{{T "deploy.f_repo"}}</th>
-              <th>{{T "common.updated"}}</th>
+              <th class="num">{{T "common.updated"}}</th>
               <th><span class="sr-only">{{T "common.actions"}}</span></th>
             </tr>
           </thead>
@@ -279,7 +279,7 @@
             <tr>
               <td><span class="mono">{{.Name}}</span></td>
               <td class="num">{{N0 .Revision}}</td>
-              <td>{{if .RepoURL}}<span class="mono iso trunc" dir="ltr">{{.RepoURL}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+              <td>{{if .RepoURL}}<span class="mono iso trunc" dir="ltr" title="{{.RepoURL}}">{{.RepoURL}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
               <td class="muted num">{{ts .UpdatedAt}}</td>
               <td>
                 <div class="row-actions">

@@ -1,10 +1,10 @@
 /* pmcluster console — brand: design-token colour system + combination-mark.
    Mapped verbatim from the brand spec (design-tokens.json). The palette accent
    tokens follow [data-palette] on <html>; the surface/text tokens follow
-   [data-theme]. They power the logo mark + wordmark only — the console's own
-   component tokens (--accent, --bg-card, --text-primary, ...) in base.css are
-   untouched, so the current look is preserved. This is a token refactor, not a
-   redesign. */
+   [data-theme]. They power the logo mark + wordmark (the six --brand-primary
+   hexes are the mark's own identity and stay here verbatim). A second section
+   below maps each palette onto the console's own --accent / --accent-strong
+   tokens so the picker restyles the whole surface, not just the mark. */
 
 /* ---- palette accents (--brand-primary switches between the 6 palettes) ---- */
 :root,
@@ -122,3 +122,100 @@
 .palette-opt[data-palette-choose="green"]  .swatch { background: #00E676; }
 .palette-opt[data-palette-choose="teal"]   .swatch { background: #1DE9B6; }
 .palette-label { max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- console surface accent mapping ---- */
+/* The picker is no longer decorative. Each palette drives the console's own
+   --accent (links, focus, active states, hairlines) and --accent-strong (filled
+   buttons carrying white text) for BOTH themes. Every value below clears WCAG
+   AA (>=4.5:1): the accent against the theme's body surface for text, and
+   white against --accent-strong for filled buttons. Two tokens stay as text on
+   the body; --accent-strong stays as the white-text fill, so a palette that
+   needs a dark text hue and a light text hue gets one of each.
+
+   The six --brand-primary hexes above are the MARK's identity and are
+   untouched; these are derived tones that meet contrast on paper/dark. green is
+   the operator default and re-states the exact base.css values (zero drift).
+   orange keeps the brand gold highlight; the four cool palettes re-map the gold
+   family onto their own accent so a blue console does not carry a gold CTA. */
+
+[data-theme="light"][data-palette="orange"] {
+  --accent: #A63F00; --accent-hover: #9A3A00;
+  --accent-strong: #A63F00; --accent-strong-hover: #9A3A00;
+  --accent-bg: rgba(166, 63, 0, .10); --accent-border: rgba(166, 63, 0, .26);
+}
+[data-theme="dark"][data-palette="orange"] {
+  --accent: #FF9E6B; --accent-hover: #FFAB84;
+  --accent-strong: #A63F00; --accent-strong-hover: #AC583F;
+  --accent-bg: rgba(255, 158, 107, .14); --accent-border: rgba(255, 158, 107, .30);
+}
+
+[data-theme="light"][data-palette="purple"] {
+  --accent: #5B2AA8; --accent-hover: #54269C;
+  --accent-strong: #5B2AA8; --accent-strong-hover: #54269C;
+  --accent-bg: rgba(91, 42, 168, .10); --accent-border: rgba(91, 42, 168, .26);
+  --gold: var(--accent); --gold-strong: var(--accent);
+  --gold-bg: var(--accent-bg); --gold-border: var(--accent-border);
+}
+[data-theme="dark"][data-palette="purple"] {
+  --accent: #B49AFF; --accent-hover: #BDA8FF;
+  --accent-strong: #5B2AA8; --accent-strong-hover: #6C4CAE;
+  --accent-bg: rgba(180, 154, 255, .14); --accent-border: rgba(180, 154, 255, .30);
+  --gold: var(--accent); --gold-strong: var(--accent);
+  --gold-bg: var(--accent-bg); --gold-border: var(--accent-border);
+}
+
+[data-theme="light"][data-palette="blue"] {
+  --accent: #1A5CC0; --accent-hover: #1755B3;
+  --accent-strong: #1A5CC0; --accent-strong-hover: #1755B3;
+  --accent-bg: rgba(26, 92, 192, .10); --accent-border: rgba(26, 92, 192, .26);
+  --gold: var(--accent); --gold-strong: var(--accent);
+  --gold-bg: var(--accent-bg); --gold-border: var(--accent-border);
+}
+[data-theme="dark"][data-palette="blue"] {
+  --accent: #82AFFF; --accent-hover: #95B9FF;
+  --accent-strong: #1A5CC0; --accent-strong-hover: #456DC4;
+  --accent-bg: rgba(130, 175, 255, .14); --accent-border: rgba(130, 175, 255, .30);
+  --gold: var(--accent); --gold-strong: var(--accent);
+  --gold-bg: var(--accent-bg); --gold-border: var(--accent-border);
+}
+
+[data-theme="light"][data-palette="red"] {
+  --accent: #A6192F; --accent-hover: #9A162B;
+  --accent-strong: #A6192F; --accent-strong-hover: #9A162B;
+  --accent-bg: rgba(166, 25, 47, .10); --accent-border: rgba(166, 25, 47, .26);
+  --gold: var(--accent); --gold-strong: var(--accent);
+  --gold-bg: var(--accent-bg); --gold-border: var(--accent-border);
+}
+[data-theme="dark"][data-palette="red"] {
+  --accent: #FF8A92; --accent-hover: #FF9BA1;
+  --accent-strong: #A6192F; --accent-strong-hover: #AC454E;
+  --accent-bg: rgba(255, 138, 146, .14); --accent-border: rgba(255, 138, 146, .30);
+  --gold: var(--accent); --gold-strong: var(--accent);
+  --gold-bg: var(--accent-bg); --gold-border: var(--accent-border);
+}
+
+[data-theme="light"][data-palette="green"] {
+  --accent: #1F3D2B; --accent-hover: #17301F;
+  --accent-strong: #1F3D2B; --accent-strong-hover: #17301F;
+  --accent-bg: rgba(31, 61, 43, .10); --accent-border: rgba(31, 61, 43, .26);
+}
+[data-theme="dark"][data-palette="green"] {
+  --accent: #6FBF8F; --accent-hover: #86CFA3;
+  --accent-strong: #2F6B4E; --accent-strong-hover: #3A7E5C;
+  --accent-bg: rgba(111, 191, 143, .14); --accent-border: rgba(111, 191, 143, .30);
+}
+
+[data-theme="light"][data-palette="teal"] {
+  --accent: #0D6B5C; --accent-hover: #0B6355;
+  --accent-strong: #0D6B5C; --accent-strong-hover: #0B6355;
+  --accent-bg: rgba(13, 107, 92, .10); --accent-border: rgba(13, 107, 92, .26);
+  --gold: var(--accent); --gold-strong: var(--accent);
+  --gold-bg: var(--accent-bg); --gold-border: var(--accent-border);
+}
+[data-theme="dark"][data-palette="teal"] {
+  --accent: #72DEC9; --accent-hover: #89E2CF;
+  --accent-strong: #0D6B5C; --accent-strong-hover: #42796D;
+  --accent-bg: rgba(114, 222, 201, .14); --accent-border: rgba(114, 222, 201, .30);
+  --gold: var(--accent); --gold-strong: var(--accent);
+  --gold-bg: var(--accent-bg); --gold-border: var(--accent-border);
+}

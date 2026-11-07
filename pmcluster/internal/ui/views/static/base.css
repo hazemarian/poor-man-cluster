@@ -1,50 +1,60 @@
 /* pmcluster console — base: tokens, reset, typography, shell layout.
-   Design direction v2: flat zinc surfaces, hairline separation, single indigo accent.
-   All box-direction properties are LOGICAL (inline-start/end) so the same sheet
-   renders correctly for LTR (en) and RTL (ar). */
+   Design direction v3: warm paper surfaces, hairline separation, deep green
+   (#1F3D2B) primary with gold (#B08D57) accent. Green is the workhorse
+   (links, focus, active states, filled buttons — AA against both themes);
+   gold is the brand highlight, never body text. All box-direction properties
+   are LOGICAL (inline-start/end) so the same sheet renders correctly for
+   LTR (en) and RTL (ar). */
 
 /* ---------- tokens ---------- */
 :root {
-  --bg-body: #0A0B0E;
-  --bg-sidebar: #0D0F15;
-  --bg-card: #101218;
-  --bg-elevated: #161922;
-  --bg-hover: #1A1E27;
-  --bg-tertiary: #1C2029;
+  --bg-body: #171A15;
+  --bg-sidebar: #1C2018;
+  --bg-card: #20241C;
+  --bg-elevated: #262B21;
+  --bg-hover: #2A3025;
+  --bg-tertiary: #2A3025;
   /* The lead stat cell (first cell of the overview row) carries the node's
      headline state, so its fill needs to read as one step above the card in
      BOTH themes. --bg-elevated cannot serve: it is #FFFFFF in light, identical
      to --bg-card, so the cell loses its lift. Dedicated token, measured at
      ~1.17:1 against --bg-card in each theme. */
-  --bg-lead: #1C2130;
+  --bg-lead: #2C3428;
 
-  --border-subtle: #191C23;
-  --border-default: #23272F;
-  --border-active: #2C313B;
+  --border-subtle: #262B22;
+  --border-default: #31372B;
+  --border-active: #3D4535;
   /* Form controls sit on --bg-tertiary inside a --bg-card panel, so a
      --border-default hairline vanishes against its own fill. Controls take
      this stronger hairline instead; panels keep --border-default. */
-  --border-control: #454C5A;
+  --border-control: #4A5340;
   --shadow-overlay: 0 16px 40px rgba(0, 0, 0, .55);
 
-  --text-primary: #E9EBF0;
-  --text-secondary: #A5ACBA;
-  --text-tertiary: #8A93A3;
+  --text-primary: #ECE9DE;
+  --text-secondary: #A4A796;
+  --text-tertiary: #888B7B;
 
-  --accent: #6D7CFF;
-  --accent-hover: #5A67E8;
-  /* Filled accent surfaces carry white text, and #6D7CFF only reaches 3.5:1
-     against white. --accent-strong is the same hue darkened until white text
-     clears 4.5:1; --accent stays for text, icons, hairlines and focus rings. */
-  --accent-strong: #5460DC;
-  --accent-strong-hover: #4B57D6;
-  --accent-bg: rgba(109, 124, 255, .12);
-  --accent-border: rgba(109, 124, 255, .22);
+  --accent: #6FBF8F;
+  --accent-hover: #86CFA3;
+  /* Filled accent surfaces carry white text; the dark theme needs a deeper
+     green so white still clears 4.5:1. --accent stays for text, icons,
+     hairlines and focus rings. */
+  --accent-strong: #2F6B4E;
+  --accent-strong-hover: #3A7E5C;
+  --accent-bg: rgba(111, 191, 143, .14);
+  --accent-border: rgba(111, 191, 143, .30);
 
-  --green: #3DDC97;  --green-bg: rgba(61, 220, 151, .12);  --green-border: rgba(61, 220, 151, .22);
-  --amber: #F5B945;  --amber-bg: rgba(245, 185, 69, .12);  --amber-border: rgba(245, 185, 69, .22);
-  --red:   #FB6F6F;  --red-bg:   rgba(251, 111, 111, .12); --red-border:   rgba(251, 111, 111, .22);
-  --cyan:  #49C7F0;  --cyan-bg:  rgba(73, 199, 240, .12);  --cyan-border:  rgba(73, 199, 240, .22);
+  /* Gold is the brand highlight: logo chip, the delivery call-to-action, small
+     accents. It is never body text (gold on paper is ~2.9:1). */
+  --gold: #C6A15C;
+  --gold-strong: #D5B273;
+  --gold-bg: rgba(198, 161, 92, .14);
+  --gold-border: rgba(198, 161, 92, .30);
+
+  --green: #6FBF8F;  --green-bg: rgba(111, 191, 143, .14);  --green-border: rgba(111, 191, 143, .30);
+  --amber: #D9A441;  --amber-bg: rgba(217, 164, 65, .14);   --amber-border: rgba(217, 164, 65, .30);
+  --red:   #E07B6C;  --red-bg:   rgba(224, 123, 108, .14);  --red-border:   rgba(224, 123, 108, .30);
+  --cyan:  #7FB3CF;  --cyan-bg:  rgba(127, 179, 207, .14);  --cyan-border:  rgba(127, 179, 207, .30);
 
   --r-sm: 5px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px;
   --sans: "IBM Plex Sans", "IBM Plex Sans Arabic", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -55,38 +65,43 @@
 }
 
 [data-theme="light"] {
-  --bg-body: #FBFBFC;
-  --bg-sidebar: #F5F6F8;
+  --bg-body: #F7F5F2;
+  --bg-sidebar: #F0EDE6;
   --bg-card: #FFFFFF;
   --bg-elevated: #FFFFFF;
-  --bg-hover: #F1F2F5;
-  --bg-tertiary: #F4F5F7;
+  --bg-hover: #F1EEE7;
+  --bg-tertiary: #F2EFE9;
   /* See :root — light needs a real step away from #FFFFFF, which --bg-elevated
      cannot provide here. */
-  --bg-lead: #EBEEF4;
+  --bg-lead: #EDE8DE;
 
-  --border-subtle: #EDEEF1;
-  --border-default: #E4E6EA;
-  --border-active: #D3D7DE;
-  --border-control: #B9C0CB;
-  --shadow-overlay: 0 16px 40px rgba(20, 22, 26, .14);
+  --border-subtle: #E1DED6;
+  --border-default: #DDD8CF;
+  --border-active: #D9D7D0;
+  --border-control: #B0A99A;
+  --shadow-overlay: 0 16px 40px rgba(30, 28, 22, .16);
 
-  --text-primary: #14161A;
-  --text-secondary: #5B616E;
-  --text-tertiary: #676E7C;
+  --text-primary: #26281F;
+  --text-secondary: #7A766B;
+  --text-tertiary: #8F8A7E;
 
-  --accent: #4B57D6;
-  --accent-hover: #4049B8;
-  --accent-strong: #4049B8;
-  --accent-strong-hover: #39419F;
-  --accent-bg: rgba(75, 87, 214, .1);
-  --accent-border: rgba(75, 87, 214, .24);
+  --accent: #1F3D2B;
+  --accent-hover: #17301F;
+  --accent-strong: #1F3D2B;
+  --accent-strong-hover: #17301F;
+  --accent-bg: rgba(31, 61, 43, .10);
+  --accent-border: rgba(31, 61, 43, .26);
+
+  --gold: #B08D57;
+  --gold-strong: #8F7144;
+  --gold-bg: rgba(176, 141, 87, .14);
+  --gold-border: rgba(176, 141, 87, .32);
 
   /* Semantic text clears AA on its own tint, including hovered table rows. */
-  --green: #126C48;  --green-bg: rgba(18, 108, 72, .1);   --green-border: rgba(18, 108, 72, .24);
-  --amber: #8A5A08;  --amber-bg: rgba(138, 90, 8, .1);    --amber-border: rgba(138, 90, 8, .24);
-  --red:   #B32B2B;  --red-bg:   rgba(179, 43, 43, .1);   --red-border:   rgba(179, 43, 43, .24);
-  --cyan:  #16779B;  --cyan-bg:  rgba(22, 119, 155, .1);  --cyan-border:  rgba(22, 119, 155, .24);
+  --green: #3F7A5A;  --green-bg: rgba(63, 122, 90, .12);   --green-border: rgba(63, 122, 90, .26);
+  --amber: #B9761F;  --amber-bg: rgba(185, 118, 31, .12);  --amber-border: rgba(185, 118, 31, .26);
+  --red:   #A8402F;  --red-bg:   rgba(168, 64, 47, .12);   --red-border:   rgba(168, 64, 47, .26);
+  --cyan:  #4A6B8A;  --cyan-bg:  rgba(74, 107, 138, .12);  --cyan-border:  rgba(74, 107, 138, .26);
   color-scheme: light;
 }
 

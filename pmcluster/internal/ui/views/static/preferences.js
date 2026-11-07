@@ -26,10 +26,12 @@
   });
 })();
 
-// Brand palette: six accents that recolour the logo mark + wordmark. The boot
+// Brand palette: six accents that recolour both the logo mark + wordmark and
+// the console surface accent (via [data-palette] rules in brand.css). The boot
 // script in the document head already applied the persisted palette before
 // first paint; this section owns the picker interaction and re-syncs the
-// control after a change or a reload.
+// control after a change or a reload. green is the default so a fresh operator
+// keeps the console's deep-green identity instead of booting orange.
 (function () {
   var PALETTES = ['orange', 'purple', 'blue', 'red', 'green', 'teal'];
   var KEY = 'pmc_palette';
@@ -40,7 +42,7 @@
       var p = localStorage.getItem(KEY);
       if (valid(p)) return p;
     } catch (error) {}
-    return 'orange';
+    return 'green';
   }
   function apply(p) {
     if (valid(p)) document.documentElement.dataset.palette = p;

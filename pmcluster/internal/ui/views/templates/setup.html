@@ -17,6 +17,8 @@
         var p = localStorage.getItem('pmc_palette');
         if (p === 'orange' || p === 'purple' || p === 'blue' || p === 'red' || p === 'green' || p === 'teal') {
           document.documentElement.dataset.palette = p;
+        } else {
+          document.documentElement.dataset.palette = 'green';
         }
       } catch (e) {}
     })();
@@ -48,6 +50,11 @@
     </div>
     {{else}}
     <form method="post" action="/web/setup">
+      {{/* The banner is the error summary (role=alert); the field that broke also
+           carries the message inline with aria-invalid, so the operator sees the
+           rule at the control that failed, not only in a banner. Keyed to
+           validateNewAdmin: username_required -> username, password_short and
+           password_too_long -> password, password_mismatch -> confirm. */}}
       {{if .Failure}}
       <div class="banner bad" role="alert">
         <span class="ic" aria-hidden="true">{{icon "alert"}}</span>
@@ -67,23 +74,31 @@
 
       <div class="field">
         <label for="username">{{T "common.username"}}</label>
-        <input id="username" class="finput mono" type="text" name="username" value="{{.Username}}"
+        <input id="username" class="finput mono{{if eq .Failure "auth.err.username_required"}} is-invalid{{end}}" type="text" name="username" value="{{.Username}}"
                placeholder="admin" dir="ltr"
                autocomplete="username" autocapitalize="off" spellcheck="false"
+               {{if eq .Failure "auth.err.username_required"}}aria-invalid="true" aria-describedby="username-err"{{end}}
                required autofocus>
+        {{if eq .Failure "auth.err.username_required"}}<span class="err" id="username-err">{{T "auth.err.username_required"}}</span>{{end}}
       </div>
 
       <div class="field">
         <label for="password">{{T "common.password"}}</label>
-        <input id="password" class="finput" type="password" name="password"
-               dir="ltr" autocomplete="new-password" minlength="8" required>
+        <input id="password" class="finput{{if or (eq .Failure "auth.err.password_short") (eq .Failure "auth.err.password_too_long")}} is-invalid{{end}}" type="password" name="password"
+               dir="ltr" autocomplete="new-password" minlength="8"
+               {{if or (eq .Failure "auth.err.password_short") (eq .Failure "auth.err.password_too_long")}}aria-invalid="true" aria-describedby="password-err"{{end}}
+               required>
         <span class="hint">{{T "auth.setup_password_hint"}}</span>
+        {{if or (eq .Failure "auth.err.password_short") (eq .Failure "auth.err.password_too_long")}}<span class="err" id="password-err">{{T .Failure}}</span>{{end}}
       </div>
 
       <div class="field">
         <label for="confirm">{{T "auth.setup_confirm"}}</label>
-        <input id="confirm" class="finput" type="password" name="confirm"
-               dir="ltr" autocomplete="new-password" minlength="8" required>
+        <input id="confirm" class="finput{{if eq .Failure "auth.err.password_mismatch"}} is-invalid{{end}}" type="password" name="confirm"
+               dir="ltr" autocomplete="new-password" minlength="8"
+               {{if eq .Failure "auth.err.password_mismatch"}}aria-invalid="true" aria-describedby="confirm-err"{{end}}
+               required>
+        {{if eq .Failure "auth.err.password_mismatch"}}<span class="err" id="confirm-err">{{T "auth.err.password_mismatch"}}</span>{{end}}
       </div>
 
       <button class="btn btn-primary btn-block" type="submit">{{T "auth.setup_create"}}</button>
