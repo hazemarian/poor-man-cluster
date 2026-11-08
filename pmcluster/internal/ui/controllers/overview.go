@@ -2,8 +2,11 @@ package controllers
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 )
 
 // Overview renders the app shell and the cluster overview fragment.
@@ -71,12 +74,35 @@ func (c Overview) Fragment(g *gin.Context) {
 		return
 	}
 
-	me, err := c.API.Me(ctx)
-	if err == nil {
+	// Five independent daemon reads. They used to run one after another, so the
+	// landing fragment cost five round trips (measured 1.1-1.4s against a live
+	// cluster from a ~200ms-away host) for one screen of data. They are issued
+	// together now and the fragment costs its slowest read.
+	var (
+		me       *pmapi.Me
+		err      error
+		info     *pmapi.ClusterInfo
+		errI     error
+		versions *pmapi.FleetVersions
+		errV     error
+		rec      *pmapi.ApplyRecord
+		errA     error
+		nodes    []pmapi.Node
+		errN     error
+	)
+	var wg sync.WaitGroup
+	wg.Add(5)
+	go func() { defer wg.Done(); me, err = c.API.Me(ctx) }()
+	go func() { defer wg.Done(); info, errI = c.API.ClusterInfo(ctx) }()
+	go func() { defer wg.Done(); versions, errV = c.API.Versions(ctx) }()
+	go func() { defer wg.Done(); rec, errA = c.API.ApplyRecord(ctx) }()
+	go func() { defer wg.Done(); nodes, errN = c.API.Nodes(ctx) }()
+	wg.Wait()
+
+	if err == nil && me != nil {
 		d.Me = &meModel{ID: me.ID, Name: me.Name}
 	}
-	info, errI := c.API.ClusterInfo(ctx)
-	if errI == nil {
+	if errI == nil && info != nil {
 		d.InfoKnown = true
 		d.Info = &infoModel{
 			NodeName: info.NodeName, ServerVersion: info.ServerVersion,
@@ -85,20 +111,19 @@ func (c Overview) Fragment(g *gin.Context) {
 			SwarmNodes: info.Swarm.Nodes, ControlAvailable: info.Swarm.ControlAvailable,
 		}
 	}
-	if v, errV := c.API.Versions(ctx); errV == nil {
+	if errV == nil && versions != nil {
 		d.SkewKnown = true
-		for _, e := range v.Stale {
+		for _, e := range versions.Stale {
 			d.Skew = append(d.Skew, versionModel{Hostname: e.Hostname, Version: e.Version})
 		}
 	}
-	if rec, errA := c.API.ApplyRecord(ctx); errA == nil && rec.Present {
+	if errA == nil && rec != nil && rec.Present {
 		d.ApplyKnown = true
 		d.Apply = &applyModel{
 			At: rec.At, Source: rec.Source, Version: rec.Version,
 			Line: rec.Line, Warnings: rec.Warnings,
 		}
 	}
-	nodes, errN := c.API.Nodes(ctx)
 	if errN == nil {
 		d.NodesKnown = true
 		for _, n := range nodes {

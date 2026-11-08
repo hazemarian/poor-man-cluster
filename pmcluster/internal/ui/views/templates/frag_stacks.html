@@ -186,11 +186,11 @@
             {{end}}
           </td>
           <td>{{if .SourceFile}}<span class="mono iso">{{.SourceFile}}</span>{{else}}<span class="muted">{{T "stacks.file_unset"}}</span>{{end}}</td>
-          <td>{{if .UpdatedAt}}<span class="muted">{{ts .UpdatedAt}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
+          <td>{{if .UpdatedAt}}<span class="muted num nowrap">{{ts .UpdatedAt}}</span>{{else}}<span class="muted">—</span>{{end}}</td>
           <td>
             <div class="row-actions">
               <form hx-post="/web/stacks/{{.Name}}/sync" hx-target="#view"
-                    hx-confirm="{{TF "stacks.confirm_sync" .Name}}">
+                    hx-confirm="{{TF "stacks.confirm_sync" .Name}}" hx-disabled-elt="find [type='submit']">
                 <button type="submit" class="btn btn-ghost btn-sm" title="{{T "stacks.act_redeploy"}}">
                   {{icon "play"}}<span class="sr-only">{{T "stacks.act_redeploy"}}</span>
                 </button>
@@ -206,7 +206,7 @@
                 {{icon "backups"}}<span class="sr-only">{{T "stacks.act_backups"}}</span>
               </a>
               <form hx-post="/web/stacks/{{.Name}}/remove" hx-target="#view"
-                    hx-confirm="{{TF "stacks.confirm_delete" .Name}}">
+                    hx-confirm="{{TF "stacks.confirm_delete" .Name}}" hx-disabled-elt="find [type='submit']">
                 <button type="submit" class="btn btn-danger btn-sm" title="{{T "common.delete"}}">
                   {{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span>
                 </button>
@@ -262,11 +262,11 @@
       </div>
       <div class="kv-row">
         <span class="k">{{T "common.updated"}}</span>
-        <span class="v muted">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}—{{end}}</span>
+        <span class="v muted num">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}—{{end}}</span>
       </div>
       <div class="action-bar">
         <form hx-post="/web/stacks/{{.Name}}/sync" hx-target="#view"
-              hx-confirm="{{TF "stacks.confirm_sync" .Name}}">
+              hx-confirm="{{TF "stacks.confirm_sync" .Name}}" hx-disabled-elt="find [type='submit']">
           <button type="submit" class="btn btn-sm" style="min-height:44px">
             {{icon "play"}}<span>{{T "stacks.act_redeploy"}}</span>
           </button>
@@ -280,7 +280,7 @@
           {{icon "backups"}}<span>{{T "stacks.act_backups"}}</span>
         </a>
         <form hx-post="/web/stacks/{{.Name}}/remove" hx-target="#view"
-              hx-confirm="{{TF "stacks.confirm_delete" .Name}}">
+              hx-confirm="{{TF "stacks.confirm_delete" .Name}}" hx-disabled-elt="find [type='submit']">
           <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px">
             {{icon "trash"}}<span>{{T "common.delete"}}</span>
           </button>

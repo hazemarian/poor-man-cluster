@@ -3,7 +3,7 @@
 {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
 <h2>{{T "tls.form_site_title"}}</h2>
 <p class="sub">{{T "tls.form_site_sub"}}</p>
-<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()">
+<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()" hx-disabled-elt="find [type='submit']">
   <div class="field">
     <label for="site-cert">{{T "tls.form_cert_label"}}</label>
     <textarea id="site-cert" name="cert" class="mono" dir="ltr" rows="8" required placeholder="-----BEGIN CERTIFICATE-----">{{.Cert}}</textarea>

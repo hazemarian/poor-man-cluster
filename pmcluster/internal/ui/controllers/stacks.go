@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 
@@ -404,9 +405,23 @@ func (c Stacks) stacksData(ctx context.Context, q string) stackData {
 		return d
 	}
 
-	stacks, err := c.API.ListStacks(ctx)
-	if err != nil {
-		d.ErrKey, d.ErrRaw = "err.stacks", err.Error()
+	// The stack list and the swarm service list are independent reads, and both
+	// are needed before a replica cell can be drawn. Serially they cost two
+	// round trips (measured 0.5-0.65s against a live cluster); together, one.
+	var (
+		stacks    []pmapi.Stack
+		stacksErr error
+		svcs      []pmapi.Service
+		svcsErr   error
+	)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); stacks, stacksErr = c.API.ListStacks(ctx) }()
+	go func() { defer wg.Done(); svcs, svcsErr = c.API.ListServices(ctx, "") }()
+	wg.Wait()
+
+	if stacksErr != nil {
+		d.ErrKey, d.ErrRaw = "err.stacks", stacksErr.Error()
 		return d
 	}
 	d.Known = true
@@ -437,7 +452,7 @@ func (c Stacks) stacksData(ctx context.Context, q string) stackData {
 
 	// One request covers every stack. If it fails the replica cells stay
 	// "unavailable" instead of claiming 0/0.
-	if svcs, err := c.API.ListServices(ctx, ""); err == nil {
+	if svcsErr == nil {
 		d.ServicesKnown = true
 		for _, s := range svcs {
 			// Platform services are not customer stacks: they never contribute to

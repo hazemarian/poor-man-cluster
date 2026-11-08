@@ -62,6 +62,41 @@ renders one badge with a segment per service. The console's stack page shows
 the copyable markdown (single + combined), and `pmcluster stack badge
 <stack>` prints it.
 
+## Loading states
+
+Every console request shows that it is in flight. The cues are CSS-only,
+driven by the htmx `htmx-request` class and the theme/palette tokens — no
+JavaScript, no per-request state to keep in sync:
+
+- **Page progress bar.** A 2px `--accent` bar under the topbar animates for as
+  long as any htmx request is running (`body:has(.htmx-request) .inflight`). It
+  is fixed and transparent at rest, so it can never shift the layout.
+- **Panel reload.** A panel that replaces itself (the logs panel, the traces
+  panel, the observability summary) keeps its current content and dims it under
+  a spinner overlay (`.load-overlay`, activated by `hx-indicator`). Reading the
+  old numbers while the new ones load beats a blank panel — and the operator can
+  tell the difference between "reloading" and "broken".
+- **Skeleton on first paint.** The shell carries no data, so the first fragment
+  lands after a round trip. Until then `#view` renders a page skeleton (title,
+  stat strip, panel bodies) at roughly the height of the content that is
+  coming, instead of an empty column.
+- **Busy buttons.** Every `hx-post` disables its submit control for the duration
+  of the request (`hx-disabled-elt`), so a slow action cannot be fired twice,
+  and takes a busy look (`cursor: progress`, dimmed fill, spinning leading
+  icon) rather than a dead one.
+
+The bar and the overlay wait 180–250ms before appearing: a swap that lands in
+50ms should not flash a placeholder at the operator. The rules live in the
+`loading states` section of `internal/ui/views/static/components.css`; colour
+comes from `--accent`, `--bg-card` and `--text-secondary`, so all twelve
+theme × palette combinations are covered without a rule per palette.
+
+```text
+htmx-request  →  .inflight            (page-wide bar)
+              →  .load-overlay        (the panel named by hx-indicator)
+              →  [disabled] on submit (hx-disabled-elt)
+```
+
 ## What the console does NOT cover
 
 Service-level operations beyond the whitelisted set are CLI territory —

@@ -206,7 +206,7 @@
                 <button type="button" class="icon-btn" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}" title="{{T "nodes.demote_storage"}}" aria-label="{{T "nodes.demote_storage"}}">{{icon "shield"}}</button>
                 {{else if eq .Role "manager"}}
                 {{/* storage nodes must be managers: a worker gets no button, only the reason */}}
-                <button type="button" class="icon-btn" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}" title="{{T "nodes.promote_storage"}}" aria-label="{{T "nodes.promote_storage"}}">{{icon "shield"}}</button>
+                <button type="button" class="icon-btn" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}" title="{{T "nodes.promote_storage"}}" aria-label="{{T "nodes.promote_storage"}}" hx-disabled-elt="this">{{icon "shield"}}</button>
                 {{else}}
                 <span class="needs-manager" title="{{T "nodes.storage_needs_manager"}}" aria-label="{{T "nodes.storage_needs_manager"}}"><i class="ic-sm">{{icon "lock"}}</i><span>{{T "nodes.storage_needs_manager_short"}}</span></span>
                 {{end}}
@@ -235,7 +235,7 @@
             {{if .Storage}}
             <button type="button" class="btn btn-ghost btn-sm" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}">{{icon "shield"}}<span>{{T "nodes.demote_storage"}}</span></button>
             {{else if eq .Role "manager"}}
-            <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}">{{icon "shield"}}<span>{{T "nodes.promote_storage"}}</span></button>
+            <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}" hx-disabled-elt="this">{{icon "shield"}}<span>{{T "nodes.promote_storage"}}</span></button>
             {{else}}
             <span class="needs-manager"><i class="ic-sm">{{icon "lock"}}</i><span>{{T "nodes.storage_needs_manager"}}</span></span>
             {{end}}

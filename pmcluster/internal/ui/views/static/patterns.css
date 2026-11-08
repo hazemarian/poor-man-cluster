@@ -318,14 +318,17 @@
 .obs-stack > summary::before { content: "▸"; color: var(--text-tertiary); margin-inline-end: var(--s-2); display: inline-block; }
 .obs-stack[open] > summary::before { content: "▾"; }
 .obs-stack > summary:hover { background: var(--bg-hover); }
-.obs-stack-name { font-weight: 600; flex: 1 1 auto; overflow-wrap: anywhere; }
+.obs-stack-name { font-weight: 600; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .obs-stack-meta { display: inline-flex; align-items: center; gap: var(--s-3); }
 .obs-svc-list { list-style: none; margin: 0; padding: 0 var(--s-6) var(--s-3); }
 .obs-svc {
   display: grid; grid-template-columns: minmax(0, 1fr) 90px 160px auto; align-items: center; gap: var(--s-3);
   padding: var(--s-2) 0; border-top: 1px solid var(--border-subtle);
 }
-.obs-svc-name { overflow-wrap: anywhere; font-size: var(--fs-code); }
+/* One line per service, ellipsised. A long Stack/service name used to wrap onto
+   two or three lines, which broke the row rhythm of the whole list; the full
+   value is in the cell's title. */
+.obs-svc-name { font-size: var(--fs-code); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .obs-svc-rep { text-align: end; color: var(--text-secondary); }
 
 .obs-logs { border: 1px solid var(--border-default); border-radius: var(--r-md); overflow: auto; max-height: 68vh; }
@@ -382,14 +385,14 @@
 /* Traces, waterfall and live tail */
 .obs-check { display: inline-flex; align-items: center; gap: var(--s-2); min-height: 36px; cursor: pointer; }
 .obs-live-field { flex: 0 0 auto; }
-.obs-traces { border: 1px solid var(--border-subtle); border-radius: var(--r-md); overflow: hidden; }
+.obs-traces { border: 1px solid var(--border-default); border-radius: var(--r-md); overflow: hidden; }
 .obs-trace-head, .obs-trace { display: grid; grid-template-columns: 90px minmax(0, 2fr) minmax(0, 1fr) 80px minmax(140px, 1fr); gap: var(--s-3); padding: var(--s-2) var(--s-3); align-items: center; }
 .obs-trace-head { background: var(--bg-tertiary); font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary); }
 .obs-trace { border-top: 1px solid var(--border-subtle); color: inherit; text-decoration: none; font-size: var(--fs-code); }
 .obs-trace:hover { background: var(--bg-tertiary); }
 .obs-trace.is-error { border-inline-start: 3px solid var(--red); }
 .obs-trace-root { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.obs-wf { border: 1px solid var(--border-subtle); border-radius: var(--r-md); overflow: hidden; }
+.obs-wf { border: 1px solid var(--border-default); border-radius: var(--r-md); overflow: hidden; }
 .obs-wf-row { display: grid; grid-template-columns: minmax(180px, 2fr) minmax(0, 3fr) 80px; gap: var(--s-3); padding: var(--s-2) var(--s-3); align-items: center; border-top: 1px solid var(--border-subtle); font-size: var(--fs-code); }
 .obs-wf-row:first-child { border-top: 0; }
 .obs-wf-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -397,6 +400,9 @@
 .obs-wf-track i { position: absolute; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; min-width: 2px; }
 .obs-wf-row.is-error .obs-wf-track i { background: var(--red); }
 .obs-wf-dur { text-align: end; }
+/* The span count is a number column sitting next to service text; it belongs on
+   the same edge as the duration that closes the row. */
+.obs-trace .num { text-align: end; }
 @media (max-width: 767px) {
   .obs-trace-head { display: none; }
   .obs-trace { grid-template-columns: 1fr 1fr; }
@@ -404,6 +410,10 @@
   .obs-wf-track { grid-column: 1 / -1; order: 3; }
 }
 .obs-wf-name .muted, .obs-trace-root .muted { margin-inline-start: var(--s-2); }
+
+/* The whole overview tab is one refresh unit (its button re-renders all of it),
+   so its loading overlay needs one containing block. */
+.obs-summary { position: relative; }
 
 /* Observability dashboard: KPI strip, log volume, top errors, gauges */
 .obs-bar { align-items: center; }

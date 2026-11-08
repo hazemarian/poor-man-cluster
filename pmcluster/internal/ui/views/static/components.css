@@ -168,6 +168,11 @@ select { appearance: none; padding-inline-end: 30px;
   padding: var(--s-5) var(--s-6); border-bottom: 1px solid var(--border-default);
 }
 .panel-head h2 { font-size: var(--fs-h2); font-weight: 600; }
+/* A panel's subtitle is a caption, not a second title. `<p class="sub">` had no
+   rule outside `.page-head`, so every panel subtitle rendered at body size in
+   --text-primary — the same weight of voice as the h2 above it. */
+.panel-head .sub { font-size: var(--fs-sm); color: var(--text-secondary); margin-top: var(--s-1); max-width: 72ch; }
+.panel-head .sub + .sub { margin-top: 0; }
 .panel-head .ph-actions { margin-inline-start: auto; display: flex; gap: var(--s-2); align-items: center; }
 .panel-body { padding: var(--s-6); }
 .panel-head > .ic { color: var(--text-tertiary); width: 18px; height: 18px; }
@@ -192,7 +197,13 @@ select { appearance: none; padding-inline-end: 30px;
   color: var(--text-secondary); font-weight: 500; margin-bottom: var(--s-4);
   display: flex; align-items: center; gap: var(--gap-icon);
 }
-.stat-v { display: block; font-size: var(--fs-metric); font-weight: 600; letter-spacing: -.01em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat-v { display: block; font-size: var(--fs-metric); font-weight: 600; letter-spacing: -.01em; line-height: 1.1; font-variant-numeric: tabular-nums;
+  /* One face for every metric. Cells that carry `.iso` (an LTR island for
+     "4 / 4") used to inherit the mono face while their neighbours stayed sans,
+     so one strip mixed two typefaces at 32px. `.iso` keeps its bidi isolation
+     and this rule owns the face; a value that really is an identifier marks
+     itself with `.mono` inside. */
+  font-family: var(--sans); }
 .stat-v small { font-size: var(--fs-sm); font-weight: 400; color: var(--text-secondary); margin-inline-start: var(--gap-icon); }
 .stat-v.stat-text { font-size: var(--fs-body); font-weight: 500; line-height: var(--lh-body); overflow-wrap: anywhere; }
 .stat-f { display: block; font-size: var(--fs-xs); color: var(--text-tertiary); margin-top: var(--s-3); }
@@ -413,6 +424,83 @@ body.modal-open { overflow: hidden; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .htmx-indicator { display: none; }
 .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline-block; }
+
+/* ---------- loading states ----------
+   Every htmx request renders one of three cues, all CSS, all palette tokens:
+
+     1. .inflight   a 2px bar under the topbar for ANY request, so a click that
+                    starts a page-level swap is never silent. htmx marks the
+                    element that fired the request with .htmx-request, and
+                    :has() is what lets a fixed piece of shell chrome react to
+                    it without JavaScript.
+     2. .load-overlay  a panel that reloads ITSELF (logs, traces, the summary
+                    panel) keeps its current content and dims it under a
+                    spinner, so the operator reads "reloading", not "broken".
+     3. [disabled]  a submit button inside a request is disabled by
+                    hx-disabled-elt and takes a busy look, so a slow action
+                    cannot be fired twice.
+
+   None of them occupies or frees layout space: the bar is fixed, the overlay is
+   absolute inside the panel, the spinner has a fixed 16px box. An indicator
+   appearing must never shift the page under the operator's cursor.
+
+   The 0.18-0.3s delays are deliberate: a swap that lands in 50ms should not
+   flash a skeleton at the operator. */
+
+.inflight {
+  position: fixed; inset-block-start: var(--top-w); inset-inline: 0; height: 2px;
+  z-index: 35; overflow: hidden; opacity: 0; pointer-events: none;
+  transition: opacity .12s ease .18s;
+}
+.inflight > i {
+  display: block; height: 100%; width: 40%; background: var(--accent);
+  border-radius: 0 2px 2px 0; transform: translateX(-100%);
+}
+body:has(.htmx-request) .inflight { opacity: 1; }
+body:has(.htmx-request) .inflight > i { animation: inflight 1.1s cubic-bezier(.55, .15, .45, .85) infinite; }
+[dir="rtl"] .inflight > i { border-radius: 2px 0 0 2px; animation-name: inflight-rtl; }
+@keyframes inflight { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+@keyframes inflight-rtl { from { transform: translateX(250%); } to { transform: translateX(-100%); } }
+
+/* A panel owns the overlay's containing block; the overlay itself stays out of
+   the pointer's way so a stale panel is still readable while it reloads. */
+.panel { position: relative; }
+.load-overlay {
+  position: absolute; inset: 0; z-index: 2; display: grid; place-items: center;
+  border-radius: inherit; pointer-events: none;
+  background: color-mix(in srgb, var(--bg-card) 72%, transparent);
+  opacity: 0; transition: opacity .12s ease .25s;
+}
+.load-overlay.htmx-request { display: grid; opacity: 1; }
+
+/* A slow action's own button: busy, not dead. The icon spin below still tells
+   the operator which control is working. */
+form.htmx-request [type="submit"]:disabled,
+form.htmx-request [type="submit"][aria-disabled="true"],
+.btn.htmx-request:disabled { cursor: progress; opacity: .75; }
+
+/* Skeleton placeholder: content that has not arrived yet, at the size it will
+   take. A pulse in opacity keeps the shape visible in both themes without a
+   second surface colour. */
+.skel { display: grid; gap: var(--s-3); }
+.skel-line {
+  display: block; height: 10px; border-radius: var(--r-sm);
+  background: var(--bg-tertiary); animation: skel-pulse 1.4s ease-in-out infinite;
+}
+.skel-line.short { width: 45%; }
+.skel-line.tall { height: 30px; }
+.skel-line.head { height: 16px; width: min(280px, 45%); }
+.skel-line + .skel-line { margin-top: var(--s-2); }
+@keyframes skel-pulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+/* Stand-in for the page body: header, stat strip, two panels — the shape the
+   operator is about to get, at roughly its height, so the shell does not jump
+   when the fragment lands. */
+.page-skel { min-height: 62vh; }
+.page-skel .page-head { margin-bottom: var(--s-6); }
+.page-skel .stats { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.page-skel .stat { padding: var(--s-6); }
+.page-skel .panel { margin-top: var(--s-5); }
+
 /* ---- in-flight actions ---- */
 /* htmx adds .htmx-request to the element that fired the request. While a slow
    action (deploy, restart, backup, apply) runs, its trigger's leading icon

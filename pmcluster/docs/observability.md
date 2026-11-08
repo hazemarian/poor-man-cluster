@@ -260,6 +260,52 @@ page over one hour. The console is built around that fact:
   window, severity, search and offset. Live and incremental requests bypass the
   cache — they are fresh by definition.
 
+### One wave per page, not a phase per panel
+
+Every read a page makes is independent of every other read, with two data
+dependencies that are real rather than incidental:
+
+- the evidence read must not resolve a service against an inventory that never
+  answered, so it starts when the inventory lands and fails closed on its error;
+- a node card is one inventory node plus its metric series, so metrics are
+  fetched with everything else and projected after the inventory resolves.
+
+Everything else — cluster info, nodes, backups, certificates, log volume, trace
+stats, the newest errors, node metrics, container metrics — is issued at the same
+time. The page therefore costs its slowest read, not the sum of its panels. The
+distinct-telemetry-identity read (which feeds the logs tab's service picker) is
+only issued on the logs tab; on the overview, metrics and traces tabs its answer
+was never rendered.
+
+Measured on this repository's console against a local stub that answers every
+daemon call after a fixed 250 ms — the round-trip time measured from a laptop to
+a production cluster — with five interleaved samples per build and the median
+reported. One backend wave costs 0.3–0.4 s in this harness (the fixed delay plus
+request overhead), so the "after" column is one wave per page, and the "before"
+column is the number of waves each page used to pay for:
+
+| Page / fragment | before | after |
+| --- | --- | --- |
+| `/web/overview` | 1.77 s | 0.40 s |
+| `/web/stacks` | 0.74 s | 0.30 s |
+| `/web/observability` (overview tab) | 1.10 s | 0.38 s |
+| `/web/observability?tab=logs` | 0.77 s | 0.42 s |
+| `/web/observability?tab=metrics` | 1.56 s | 0.39 s |
+| `/web/observability?tab=traces` | 1.09 s | 0.38 s |
+| `/web/observability/summary` | 1.14 s | 0.43 s |
+| `/web/observability/evidence` | 0.76 s | 0.42 s |
+| `/web/observability/traces` | 1.11 s | 0.41 s |
+
+Against the live cluster, interleaved with the same backend inside one window,
+`/web/overview` went from a 1.53 s median to 0.83 s and `/web/stacks` from 1.08 s
+to 0.55 s. Absolute numbers on a live cluster vary with the link, so compare
+builds over the same interval — never one page load against another hours later.
+
+`internal/ui/controllers/page_concurrency_test.go` pins this down: it holds every
+daemon read for a fixed time, counts the peak number in flight per family, and
+fails if a page goes back to issuing its reads one after another.
+
+
 ## Configuration
 
 Retention is configured as cluster settings and applied by the provisioning job:

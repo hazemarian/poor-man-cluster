@@ -3,7 +3,7 @@
 {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
 <h2>{{T "tls.form_host_title"}}</h2>
 <p class="sub">{{T "tls.form_host_sub"}}</p>
-<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()">
+<form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML" hx-on::after-request="if(!event.detail.failed) closeModal()" hx-disabled-elt="find [type='submit']">
   <div class="field">
     <label for="host-name">{{T "tls.form_host_label"}}</label>
     <input id="host-name" name="host" class="finput mono" dir="ltr" type="text" value="{{.Host}}" required placeholder="idlibookfair.com" autofocus>

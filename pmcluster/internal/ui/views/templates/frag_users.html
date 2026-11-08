@@ -95,7 +95,7 @@
                 <div class="row-actions">
                   <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/users/edit/{{.ID}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">{{T "common.edit"}}</button>
                   {{if .CanDelete}}
-                  <button type="button" class="btn btn-danger btn-sm" hx-post="/web/users/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "users.delete_confirm" .Username}}">{{T "common.delete"}}</button>
+                  <button type="button" class="btn btn-danger btn-sm" hx-post="/web/users/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "users.delete_confirm" .Username}}" hx-disabled-elt="this">{{T "common.delete"}}</button>
                   {{else}}
                   <button type="button" class="btn btn-danger btn-sm" disabled title="{{T .DeleteBlockKey}}">{{T "common.delete"}}</button>
                   {{end}}
@@ -124,7 +124,7 @@
           <div class="action-bar">
             <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/users/edit/{{.ID}}" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">{{T "common.edit"}}</button>
             {{if .CanDelete}}
-            <button type="button" class="btn btn-danger btn-sm" hx-post="/web/users/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "users.delete_confirm" .Username}}">{{T "common.delete"}}</button>
+            <button type="button" class="btn btn-danger btn-sm" hx-post="/web/users/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "users.delete_confirm" .Username}}" hx-disabled-elt="this">{{T "common.delete"}}</button>
             {{else}}
             <button type="button" class="btn btn-danger btn-sm" disabled title="{{T .DeleteBlockKey}}">{{T "common.delete"}}</button>
             {{end}}

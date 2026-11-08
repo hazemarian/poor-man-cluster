@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
@@ -279,28 +280,62 @@ func buildChart(points map[int64]float64, w observability.Window, bucket time.Du
 
 type nodeSeries struct{ cpu, mem, load map[int64]float64 }
 
-// loadMetrics reads the per-node (and optionally per-service) aggregates and
-// merges them into the daemon's node inventory. A missing or failing source
-// leaves the inventory cards intact without metrics.
-func (c Observability) loadMetrics(ctx context.Context, d *observabilityData, window observability.Window, withServices bool) {
-	d.Metrics.Queried = true
+// obsMetricsRead is the network half of the metrics surface: the node aggregates
+// and (when the tab shows containers) the per-service aggregates. They are two
+// independent Parseable scans of the same window, so they are taken at the same
+// time — in series they cost two scans end to end for two unrelated answers.
+type obsMetricsRead struct {
+	Queried     bool
+	Bucket      time.Duration
+	HasSource   bool
+	Nodes       observability.Result
+	NodesErr    error
+	Services    observability.Result
+	ServicesErr error
+}
+
+// readMetrics issues the node and container metric reads concurrently.
+func (c Observability) readMetrics(ctx context.Context, window observability.Window, withServices bool) obsMetricsRead {
+	r := obsMetricsRead{Queried: true, Bucket: observability.BucketFor(window)}
 	source, ok := c.Telemetry.(observability.MetricSource)
 	if !ok || source == nil {
+		return r
+	}
+	r.HasSource = true
+	q := observability.MetricQuery{Window: window, Bucket: r.Bucket}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); r.Nodes, r.NodesErr = source.NodeMetrics(ctx, q) }()
+	if withServices {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.Services, r.ServicesErr = source.ServiceMetrics(ctx, q) }()
+	}
+	wg.Wait()
+	return r
+}
+
+// applyMetrics projects a metrics read and merges it into the daemon's node
+// inventory. A missing or failing source leaves the inventory cards intact
+// without metrics. It runs after the inventory read resolves, because a card is
+// one inventory node plus its series.
+func (d *observabilityData) applyMetrics(r obsMetricsRead, window observability.Window) {
+	if !r.Queried {
+		return
+	}
+	d.Metrics.Queried = true
+	if !r.HasSource {
 		d.Metrics.Unavailable = true
 		d.mergeNodeCards(nil, window, 0)
 		return
 	}
-	bucket := observability.BucketFor(window)
-	d.Metrics.Bucket = bucket.String()
-	q := observability.MetricQuery{Window: window, Bucket: bucket}
-	res, err := source.NodeMetrics(ctx, q)
-	if err != nil || res.Status == observability.StatusUnavailable {
+	d.Metrics.Bucket = r.Bucket.String()
+	if r.NodesErr != nil || r.Nodes.Status == observability.StatusUnavailable {
 		d.Metrics.Unavailable = true
-		d.mergeNodeCards(nil, window, bucket)
+		d.mergeNodeCards(nil, window, r.Bucket)
 		return
 	}
 	series := map[string]*nodeSeries{}
-	for _, row := range res.Rows {
+	for _, row := range r.Nodes.Rows {
 		host, metric := rowString(row, "host"), rowString(row, "metric")
 		at, okT := parseBucket(rowString(row, "bucket"))
 		v, okV := toFloat(row["value"])
@@ -321,16 +356,12 @@ func (c Observability) loadMetrics(ctx context.Context, d *observabilityData, wi
 			s.load[at.Unix()] = v
 		}
 	}
-	d.mergeNodeCards(series, window, bucket)
-	if !withServices {
-		return
-	}
-	sres, err := source.ServiceMetrics(ctx, q)
-	if err != nil || sres.Status == observability.StatusUnavailable {
+	d.mergeNodeCards(series, window, r.Bucket)
+	if r.ServicesErr != nil || r.Services.Status == observability.StatusUnavailable {
 		return
 	}
 	d.Metrics.ServicesOK = true
-	d.Metrics.Services = projectServiceMetrics(sres.Rows)
+	d.Metrics.Services = projectServiceMetrics(r.Services.Rows)
 	d.Metrics.Empty = len(d.Metrics.Services) == 0 && len(series) == 0
 }
 

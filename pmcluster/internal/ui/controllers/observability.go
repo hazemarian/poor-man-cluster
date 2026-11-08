@@ -84,15 +84,28 @@ type telemetryServiceLister interface {
 	ServiceNames(context.Context, observability.Window) ([]string, error)
 }
 
-func mergeTelemetryServiceOptions(ctx context.Context, telemetry observability.Source, window observability.Window, options []observabilityServiceOption) []observabilityServiceOption {
+// telemetryServiceNames reads the distinct telemetry service identities in the
+// window, so the picker can offer services the Swarm inventory does not know
+// (for example existing Compose containers). A source that cannot list them, or
+// a failed read, contributes nothing: the inventory options still stand.
+func telemetryServiceNames(ctx context.Context, telemetry observability.Source, window observability.Window) []string {
+	if telemetry == nil {
+		return nil
+	}
 	lister, ok := telemetry.(telemetryServiceLister)
 	if !ok {
-		return options
+		return nil
 	}
 	names, err := lister.ServiceNames(ctx, window)
 	if err != nil {
-		return options
+		return nil
 	}
+	return names
+}
+
+// mergeServiceOptions folds the telemetry-only identities into the inventory
+// options and keeps the picker sorted by value.
+func mergeServiceOptions(options []observabilityServiceOption, names []string) []observabilityServiceOption {
 	seen := make(map[string]bool, len(options))
 	for _, option := range options {
 		seen[option.Value] = true
@@ -106,6 +119,13 @@ func mergeTelemetryServiceOptions(ctx context.Context, telemetry observability.S
 	}
 	sort.Slice(options, func(i, j int) bool { return options[i].Value < options[j].Value })
 	return options
+}
+
+// hasServiceOption reports whether the inventory already knows a filter value,
+// which decides whether the distinct-name read is on the critical path.
+func hasServiceOption(options []observabilityServiceOption, value string) bool {
+	_, ok := findServiceOption(options, value)
+	return ok
 }
 
 func findServiceOption(options []observabilityServiceOption, value string) (observabilityServiceOption, bool) {
@@ -332,6 +352,15 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 	// Health sources are independent, so fetch them under one bounded context.
 	// The edge has a 60-second write deadline; five sequential API timeouts can
 	// otherwise make a healthy partial page look like a hung request.
+	//
+	// The tab's own telemetry reads are issued in the SAME wave. They only
+	// looked dependent on this block because their code came after it: nothing
+	// in a log or trace read needs a node list or a certificate expiry. Two
+	// things genuinely do wait for the inventory — the evidence read, which must
+	// not resolve a service against an inventory that never answered, and the
+	// node cards, which are drawn per inventory node — so those wait on svcReady
+	// and nothing else. The page therefore costs one round trip of dependency
+	// instead of a phase per panel.
 	healthCtx, healthCancel := context.WithTimeout(ctx, 8*time.Second)
 	defer healthCancel()
 	var (
@@ -348,9 +377,17 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 		hosts       []pmapi.HostCert
 		hostsErr    error
 	)
+
+	// svcReady closes when the inventory read finishes, whatever it returned:
+	// the readers that need it fail closed on servicesErr.
+	svcReady := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(6)
-	go func() { defer wg.Done(); services, servicesErr = api.ListServices(healthCtx, "") }()
+	go func() {
+		defer wg.Done()
+		defer close(svcReady)
+		services, servicesErr = api.ListServices(healthCtx, "")
+	}()
 	go func() { defer wg.Done(); info, infoErr = api.ClusterInfo(healthCtx) }()
 	go func() { defer wg.Done(); nodes, nodesErr = api.Nodes(healthCtx) }()
 	go func() {
@@ -369,8 +406,69 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 	}()
 	go func() { defer wg.Done(); site, siteErr = api.SiteCert(healthCtx) }()
 	go func() { defer wg.Done(); hosts, hostsErr = api.ListHostCerts(healthCtx) }()
-	wg.Wait()
 
+	// The tab payload starts here, not after wg.Wait(). Each tab read owns a
+	// copy of the page model so its error key cannot race the health block's;
+	// the fields it filled are folded back once every read has landed.
+	tabD := d
+	var (
+		metricsRead  obsMetricsRead
+		dashRead     obsDashboardRead
+		names        []string
+		namesReady   = make(chan struct{})
+		hasTraceRead bool
+	)
+	var tabWG sync.WaitGroup
+	switch tab {
+	case obsTabLogs, obsTabInvestigate:
+		// The distinct telemetry identities only feed the logs tab's service
+		// picker. It is a Parseable read of its own (~0.4s), so fetching it on
+		// the overview, metrics and traces tabs was a query per fragment whose
+		// answer nothing rendered.
+		tabWG.Add(2)
+		go func() {
+			defer tabWG.Done()
+			defer close(namesReady)
+			names = telemetryServiceNames(ctx, c.Telemetry, window)
+		}()
+		go func() {
+			defer tabWG.Done()
+			<-svcReady
+			tabD.Options = serviceOptions(services)
+			// A filter the Swarm inventory does not know may still be a
+			// telemetry-only identity, so only then is the distinct-name read
+			// on the critical path.
+			if selected := strings.TrimSpace(tabD.Service); selected != "" && !hasServiceOption(tabD.Options, selected) {
+				<-namesReady
+				tabD.Options = mergeServiceOptions(tabD.Options, names)
+			}
+			c.loadEvidence(g, &tabD, window, services, servicesErr, redactor)
+		}()
+	case obsTabMetrics:
+		tabWG.Add(1)
+		go func() { defer tabWG.Done(); metricsRead = c.readMetrics(ctx, window, true) }()
+	case obsTabTraces:
+		if c.Telemetry == nil {
+			d.Traces.Unavailable = true
+		} else {
+			hasTraceRead = true
+			tabWG.Add(1)
+			go func() { defer tabWG.Done(); c.loadTraces(g, &tabD, window, redactor) }()
+		}
+	default:
+		tabWG.Add(2)
+		go func() { defer tabWG.Done(); metricsRead = c.readMetrics(ctx, window, false) }()
+		go func() {
+			defer tabWG.Done()
+			if c.Telemetry != nil {
+				dashRead = c.readDashboard(ctx, window)
+			}
+		}()
+	}
+	wg.Wait()
+	tabWG.Wait()
+
+	// ---- projections: pure CPU, after every read has landed ----
 	if servicesErr != nil {
 		d.ErrKey = "err.services"
 		d.ErrRaw = "cluster service inventory unavailable"
@@ -378,13 +476,12 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 		d.Evidence.UnavailableWhy = "inventory"
 	} else {
 		d.Health.ServicesKnown = true
-		d.Options = mergeTelemetryServiceOptions(ctx, c.Telemetry, window, serviceOptions(services))
 		projectServices(services, &d.Health)
 	}
 
 	// These are independent reads. One failed chart must retain the other
 	// daemon-derived values, with each known flag staying explicit.
-	if infoErr == nil {
+	if infoErr == nil && info != nil {
 		d.Health.HostKnown = true
 		d.Health.HostName = info.NodeName
 		d.Health.HostCPU = info.CPUs
@@ -473,27 +570,30 @@ func (c Observability) load(g *gin.Context, tab string) observabilityData {
 
 	switch tab {
 	case obsTabLogs, obsTabInvestigate:
-		c.loadEvidence(g, &d, window, services, servicesErr, redactor)
-	case obsTabMetrics:
-		c.loadMetrics(ctx, &d, window, true)
-	case obsTabTraces:
-		if c.Telemetry == nil {
-			d.Traces.Unavailable = true
-		} else {
-			c.loadTraces(g, &d, window, redactor)
+		d.Evidence = tabD.Evidence
+		if servicesErr == nil {
+			d.Options = mergeServiceOptions(tabD.Options, names)
 		}
+		if tabD.ErrKey != "" {
+			d.ErrKey = tabD.ErrKey
+		}
+	case obsTabTraces:
+		if hasTraceRead {
+			d.Traces = tabD.Traces
+			d.Evidence.WindowStart = tabD.Evidence.WindowStart
+			d.Evidence.WindowEnd = tabD.Evidence.WindowEnd
+			if tabD.ErrKey != "" {
+				d.ErrKey = tabD.ErrKey
+			}
+		}
+	case obsTabMetrics:
+		d.applyMetrics(metricsRead, window)
 	default:
 		d.Stacks, d.StackPage = groupStacks(d.Health.Services, d.Q, atoiDefault(g.Query("page"), 1))
-		var dash sync.WaitGroup
-		dash.Add(2)
-		go func() { defer dash.Done(); c.loadMetrics(ctx, &d, window, false) }()
-		go func() {
-			defer dash.Done()
-			if c.Telemetry != nil {
-				c.loadDashboard(ctx, &d, window, redactor)
-			}
-		}()
-		dash.Wait()
+		d.applyMetrics(metricsRead, window)
+		if c.Telemetry != nil {
+			d.applyDashboard(dashRead, window, redactor)
+		}
 	}
 	// Optional AI investigations are not part of this change.
 	return d

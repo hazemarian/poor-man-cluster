@@ -249,7 +249,7 @@
             <td>
               <div class="row-actions">
                 <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Domain}}" onclick="copyVal(this)" title="{{T "tls.copy_host"}}">{{icon "copy"}}<span class="sr-only">{{T "tls.copy_host"}}</span></button>
-                <form hx-post="/web/tls/remove/{{.Domain}}" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "tls.remove_confirm" .Domain}}">
+                <form hx-post="/web/tls/remove/{{.Domain}}" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "tls.remove_confirm" .Domain}}" hx-disabled-elt="find [type='submit']">
                   <button type="submit" class="btn btn-danger btn-sm" hx-disabled-elt="this">{{icon "trash"}}<span class="sr-only">{{T "tls.action_remove"}}</span></button>
                 </form>
               </div>
@@ -279,7 +279,7 @@
         <div class="kv-row"><span class="k">{{T "tls.updated_label"}}</span><span class="v muted iso" dir="ltr">{{if .Updated}}{{.Updated}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
         <div class="action-bar">
           <button type="button" class="btn btn-sm" data-copy="{{.Domain}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "tls.copy_host"}}</span></button>
-          <form hx-post="/web/tls/remove/{{.Domain}}" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "tls.remove_confirm" .Domain}}">
+          <form hx-post="/web/tls/remove/{{.Domain}}" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "tls.remove_confirm" .Domain}}" hx-disabled-elt="find [type='submit']">
             <button type="submit" class="btn btn-danger btn-sm" hx-disabled-elt="this">{{icon "trash"}}<span>{{T "tls.action_remove"}}</span></button>
           </form>
         </div>

@@ -114,7 +114,7 @@
                 {{icon "file"}}<span class="sr-only">{{T "common.edit"}}</span>
               </a>
               <form hx-post="/web/stacks/{{$.Stack}}/configs/remove/{{.Name}}" hx-target="#view"
-                    hx-confirm="{{TF "stackconfigs.confirm_config_remove" .Name}}">
+                    hx-confirm="{{TF "stackconfigs.confirm_config_remove" .Name}}" hx-disabled-elt="find [type='submit']">
                 <button type="submit" class="btn btn-danger btn-sm" title="{{T "common.delete"}}">
                   {{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span>
                 </button>
@@ -154,7 +154,7 @@
           {{icon "file"}}<span>{{T "common.edit"}}</span>
         </button>
         <form hx-post="/web/stacks/{{$.Stack}}/configs/remove/{{.Name}}" hx-target="#view"
-              hx-confirm="{{TF "stackconfigs.confirm_config_remove" .Name}}">
+              hx-confirm="{{TF "stackconfigs.confirm_config_remove" .Name}}" hx-disabled-elt="find [type='submit']">
           <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px">
             {{icon "trash"}}<span>{{T "common.delete"}}</span>
           </button>
@@ -240,7 +240,7 @@
                 {{icon "lock"}}<span class="sr-only">{{T "common.edit"}}</span>
               </a>
               <form hx-post="/web/stacks/{{$.Stack}}/secrets/remove/{{.Name}}" hx-target="#view"
-                    hx-confirm="{{TF "stackconfigs.confirm_secret_remove" .Name}}">
+                    hx-confirm="{{TF "stackconfigs.confirm_secret_remove" .Name}}" hx-disabled-elt="find [type='submit']">
                 <button type="submit" class="btn btn-danger btn-sm" title="{{T "common.delete"}}">
                   {{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span>
                 </button>
@@ -277,7 +277,7 @@
           {{icon "lock"}}<span>{{T "common.edit"}}</span>
         </button>
         <form hx-post="/web/stacks/{{$.Stack}}/secrets/remove/{{.Name}}" hx-target="#view"
-              hx-confirm="{{TF "stackconfigs.confirm_secret_remove" .Name}}">
+              hx-confirm="{{TF "stackconfigs.confirm_secret_remove" .Name}}" hx-disabled-elt="find [type='submit']">
           <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px">
             {{icon "trash"}}<span>{{T "common.delete"}}</span>
           </button>

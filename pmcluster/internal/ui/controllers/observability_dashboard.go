@@ -64,41 +64,72 @@ type obsDashboard struct {
 	TopOK     bool
 }
 
-// loadDashboard runs the overview's independent telemetry reads in parallel
+// obsDashboardRead is the network half of the overview tab: log volume, trace
+// KPIs and the newest error records. They are independent reads, taken at the
+// same time; only their projection touches the page model.
+type obsDashboardRead struct {
+	HasStats  bool
+	Bucket    time.Duration
+	Volume    observability.Result
+	VolumeErr error
+	Trace     observability.Result
+	TraceErr  error
+	HasLogs   bool
+	Logs      observability.Result
+	LogsErr   error
+}
+
+// readDashboard runs the overview's independent telemetry reads in parallel
 // under the request context. A failed read leaves only its own panel unknown.
-func (c Observability) loadDashboard(ctx context.Context, d *observabilityData, window observability.Window, redactor observability.Redactor) {
+func (c Observability) readDashboard(ctx context.Context, window observability.Window) obsDashboardRead {
+	r := obsDashboardRead{Bucket: observability.BucketFor(window)}
 	var wg sync.WaitGroup
 	if stats, ok := c.Telemetry.(observability.StatsSource); ok {
-		q := observability.MetricQuery{Window: window, Bucket: observability.BucketFor(window)}
+		r.HasStats = true
+		q := observability.MetricQuery{Window: window, Bucket: r.Bucket}
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			if res, err := stats.LogVolume(ctx, q); err == nil {
-				d.Dash.Volume = buildVolume(res.Rows, window, q.Bucket)
-			}
+			r.Volume, r.VolumeErr = stats.LogVolume(ctx, q)
 		}()
 		go func() {
 			defer wg.Done()
-			if res, err := stats.TraceStats(ctx, q); err == nil && len(res.Rows) == 1 {
-				r := res.Rows[0]
-				f := func(k string) int64 { v, _ := toFloat(r[k]); return int64(v) }
-				d.Dash.TraceKPI = obsTraceKPI{Known: true, Traces: f("traces"), ErrTraces: f("error_traces"), Spans: f("spans")}
-			}
+			r.Trace, r.TraceErr = stats.TraceStats(ctx, q)
 		}()
 	}
 	if logs, ok := c.Telemetry.(observability.LogSource); ok {
+		r.HasLogs = true
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := logs.Logs(ctx, observability.LogQuery{Window: window, Severity: "error", Limit: obsErrFetch})
-			if err != nil || res.Status == observability.StatusUnavailable {
-				return
-			}
-			d.Dash.TopOK = true
-			d.Dash.TopErrors = topErrors(redactor.Rows(res.Rows), window)
+			r.Logs, r.LogsErr = logs.Logs(ctx, observability.LogQuery{Window: window, Severity: "error", Limit: obsErrFetch})
 		}()
 	}
 	wg.Wait()
+	return r
+}
+
+// applyDashboard folds a dashboard read into the page model. It is pure CPU:
+// folding, clamping and sorting, with no backend call.
+func (d *observabilityData) applyDashboard(r obsDashboardRead, window observability.Window, redactor observability.Redactor) {
+	if r.HasStats {
+		if r.VolumeErr == nil {
+			d.Dash.Volume = buildVolume(r.Volume.Rows, window, r.Bucket)
+		}
+		if r.TraceErr == nil && len(r.Trace.Rows) == 1 {
+			row := r.Trace.Rows[0]
+			f := func(k string) int64 { v, _ := toFloat(row[k]); return int64(v) }
+			d.Dash.TraceKPI = obsTraceKPI{Known: true, Traces: f("traces"), ErrTraces: f("error_traces"), Spans: f("spans")}
+		}
+	}
+	if !r.HasLogs {
+		return
+	}
+	if r.LogsErr != nil || r.Logs.Status == observability.StatusUnavailable {
+		return
+	}
+	d.Dash.TopOK = true
+	d.Dash.TopErrors = topErrors(redactor.Rows(r.Logs.Rows), window)
 }
 
 // topErrors folds the newest error records into templates and keeps the most

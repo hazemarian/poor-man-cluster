@@ -24,7 +24,7 @@
 {{end}}
 
 <form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML"
-      hx-on::after-request="if(event.detail.failed){document.getElementById('modal-body').innerHTML=event.detail.xhr.responseText;openModal();}else{closeModal();}">
+      hx-on::after-request="if(event.detail.failed){document.getElementById('modal-body').innerHTML=event.detail.xhr.responseText;openModal();}else{closeModal();}" hx-disabled-elt="find [type='submit']">
   {{if .IsEdit}}<input type="hidden" name="id" value="{{.ID}}">{{end}}
   <div class="field">
     <label for="user-username">{{T "common.username"}}</label>

@@ -63,7 +63,7 @@
     <h2>{{T "apikeys.create_title"}}</h2>
   </div>
   <div class="panel-body">
-    <form hx-post="/web/apikeys" hx-target="#view" hx-swap="innerHTML">
+    <form hx-post="/web/apikeys" hx-target="#view" hx-swap="innerHTML" hx-disabled-elt="find [type='submit']">
       <div class="field">
         <label for="apikey-name">{{T "common.name"}}</label>
         <input id="apikey-name" class="finput" name="name" placeholder="{{T "apikeys.name_placeholder"}}" autocomplete="off" required data-focus>
@@ -120,7 +120,7 @@
               <td class="muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "apikeys.never_used"}}{{end}}</td>
               <td>
                 <div class="row-actions">
-                  <button type="button" class="btn btn-danger btn-sm" hx-post="/web/apikeys/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "apikeys.revoke_confirm" .Name}}">{{T "apikeys.revoke"}}</button>
+                  <button type="button" class="btn btn-danger btn-sm" hx-post="/web/apikeys/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "apikeys.revoke_confirm" .Name}}" hx-disabled-elt="this">{{T "apikeys.revoke"}}</button>
                 </div>
               </td>
             </tr>
@@ -141,7 +141,7 @@
           <div class="kv-row"><span class="k">{{T "common.created"}}</span><span class="v muted num">{{ts .CreatedAt}}</span></div>
           <div class="kv-row"><span class="k">{{T "apikeys.col_last_used"}}</span><span class="v muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "apikeys.never_used"}}{{end}}</span></div>
           <div class="action-bar">
-            <button type="button" class="btn btn-danger btn-sm" hx-post="/web/apikeys/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "apikeys.revoke_confirm" .Name}}">{{T "apikeys.revoke"}}</button>
+            <button type="button" class="btn btn-danger btn-sm" hx-post="/web/apikeys/remove/{{.ID}}" hx-target="#view" hx-confirm="{{TF "apikeys.revoke_confirm" .Name}}" hx-disabled-elt="this">{{T "apikeys.revoke"}}</button>
           </div>
         </div>
         {{end}}

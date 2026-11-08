@@ -5,7 +5,7 @@
     <p class="sub">{{if .Name}}<span class="mono iso" dir="ltr">{{.Name}}</span> · {{end}}{{if .RunsKnown}}{{T "backups.sub"}}{{else}}{{T "backups.sub_unknown"}}{{end}}</p>
   </div>
   <div class="ph-actions">
-    <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}">
+    <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
       <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
     </form>
     <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
@@ -41,7 +41,7 @@
     <p>{{T "backups.missed_meaning"}}</p>
   </div>
   <div class="b-actions">
-    <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}">
+    <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
       <button type="submit" class="btn btn-sm" hx-disabled-elt="this">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
     </form>
   </div>
@@ -262,7 +262,7 @@
       <h3>{{T "backups.rows_empty_title"}}</h3>
       <p>{{T "backups.rows_empty_body"}}</p>
       <div class="empty-actions">
-        <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}">
+        <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
           <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
         </form>
       </div>

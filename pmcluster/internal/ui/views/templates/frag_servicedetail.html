@@ -6,7 +6,7 @@
   </div>
   <div class="ph-actions">
     <a class="btn btn-ghost btn-sm" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true">{{icon "services"}}<span>{{T "services.detail_back"}}</span></a>
-    <form hx-post="/web/services/{{.Stack}}/{{.Service}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .FullName}}">
+    <form hx-post="/web/services/{{.Stack}}/{{.Service}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .FullName}}" hx-disabled-elt="find [type='submit']">
       <button type="submit" class="btn btn-sm" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
     </form>
     <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/{{.Tab}}" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
@@ -200,7 +200,7 @@
       <h3>{{T "services.tasks_empty_title"}}</h3>
       <p>{{T "services.tasks_empty_body"}}</p>
       <div class="empty-actions">
-        <form hx-post="/web/services/{{$.Stack}}/{{$.Service}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" $.FullName}}">
+        <form hx-post="/web/services/{{$.Stack}}/{{$.Service}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" $.FullName}}" hx-disabled-elt="find [type='submit']">
           <button type="submit" class="btn btn-primary btn-sm">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
         </form>
       </div>
@@ -216,7 +216,7 @@
   </div>
   <div class="panel-body">
     <p class="sub">{{T "services.exec_hint"}}</p>
-    <form hx-post="/web/services/{{.Stack}}/{{.Service}}/exec" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "services.exec_confirm_static"}}">
+    <form hx-post="/web/services/{{.Stack}}/{{.Service}}/exec" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "services.exec_confirm_static"}}" hx-disabled-elt="find [type='submit']">
       <div class="field">
         <label for="svc-exec-argv">{{T "services.exec_label"}}</label>
         <input id="svc-exec-argv" name="argv" class="finput mono" dir="ltr" value="{{.ExecArgv}}" placeholder="{{T "services.exec_placeholder"}}">
