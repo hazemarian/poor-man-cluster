@@ -593,3 +593,50 @@ func TestCachedReaderNilSourceAnswersUnavailable(t *testing.T) {
 		t.Fatalf("Status error = %v, want ErrUnavailable", err)
 	}
 }
+
+// A caller that derives its window from the clock — "the last hour" — never
+// repeats an absolute window, which is exactly how the console and the API ask.
+// Keying on the resolved instants made every such read a miss in production
+// while the same-window tests above passed. Assert the clock-derived case.
+func TestCachedReaderHitsForClockDerivedWindows(t *testing.T) {
+	f := &countingReader{}
+	c := NewCachedReader(f)
+
+	base := time.Date(2026, 11, 8, 1, 2, 3, 0, time.UTC)
+	reads := 0
+	c.now = func() time.Time { reads++; return base.Add(time.Duration(reads) * time.Second) }
+
+	first := Window{Start: base.Add(-time.Hour), End: base}
+	if _, err := c.Logs(context.Background(), LogQuery{Window: first, Limit: 100}); err != nil {
+		t.Fatalf("first read: %v", err)
+	}
+
+	// Same requested span, a different instant — the shape production emits.
+	second := Window{Start: base.Add(time.Second - time.Hour), End: base.Add(time.Second)}
+	if _, err := c.Logs(context.Background(), LogQuery{Window: second, Limit: 100}); err != nil {
+		t.Fatalf("second read: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&f.logs); got != 1 {
+		t.Fatalf("clock-derived reads: %d backend calls, want 1 (windows one second apart share a TTL bucket)", got)
+	}
+}
+
+// A window whose length differs must not share the entry: "last hour" and
+// "last day" over the same end instant are different questions.
+func TestCachedReaderSeparatesDifferentDurations(t *testing.T) {
+	f := &countingReader{}
+	c := NewCachedReader(f)
+	base := time.Date(2026, 11, 8, 1, 2, 3, 0, time.UTC)
+
+	for _, d := range []time.Duration{time.Hour, 24 * time.Hour} {
+		w := Window{Start: base.Add(-d), End: base}
+		if _, err := c.Logs(context.Background(), LogQuery{Window: w, Limit: 100}); err != nil {
+			t.Fatalf("read %v: %v", d, err)
+		}
+	}
+
+	if got := atomic.LoadInt32(&f.logs); got != 2 {
+		t.Fatalf("%d backend calls, want 2 (1h and 24h are different keys)", got)
+	}
+}

@@ -3,6 +3,26 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.255 (2026-11-08)
+
+**The read cache could not hit, because it was keyed on the clock.**
+
+`windowKey` used absolute `Start`/`End`, while the console and the API derive
+windows from the clock ("the last hour"). Every request therefore produced a
+different key, and the cache served only callers that were in flight at the same
+instant — which the in-flight join already covered. Measured on the leader before
+the fix: three back-to-back requests for 100 alerts took 0.655 s, 0.577 s and
+0.737 s, i.e. three upstream reads.
+
+The key is now the window *length* plus the end floored to the cache TTL, so any
+request ending inside the same 10 s bucket shares an entry. Worst-case staleness
+is the TTL that was already promised. Two tests cover it: windows one second
+apart must share an entry (they failed before this change, passing after), and
+one-hour and 24-hour windows over the same end must not.
+
+The unit tests did not catch this because they used identical `Window` values.
+Production never repeats a window.
+
 ## v0.2.254 (2026-11-08)
 
 **Alerts joined the read path, retention regained its defaults, and a burst now costs one read.**

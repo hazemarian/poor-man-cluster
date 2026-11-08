@@ -185,7 +185,23 @@ func (c *CachedReader) finish(key readCacheKey, call *cachedCall, result Result,
 	close(call.done)
 }
 
-func windowKey(w Window) (int64, int64) { return w.Start.UnixNano(), w.End.UnixNano() }
+// windowKey identifies a read by what the caller asked for, not by the instant
+// the window resolved to.
+//
+// The console and the API derive windows from the clock ("the last hour"), so
+// absolute bounds are a different key on every request and a cache keyed on them
+// can only ever serve two callers that are in flight at the same moment. The key
+// is therefore the window LENGTH plus the end floored to the TTL: every request
+// whose window ends inside the same readCacheTTL bucket shares an entry, and the
+// worst-case staleness is the TTL that was already being promised.
+func windowKey(w Window) (int64, int64) {
+	dur := w.End.Sub(w.Start)
+	to := w.End.Truncate(readCacheTTL)
+	if w.End.Before(to) { // negative-end sanity: never floor upwards
+		to = w.End
+	}
+	return int64(dur), to.UnixNano()
+}
 
 // Status is never cached: it reads live Swarm inventory plus the newest node
 // sample, both of which change outside any read window.
