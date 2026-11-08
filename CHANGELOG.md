@@ -3,6 +3,43 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.254 (2026-11-08)
+
+**Alerts joined the read path, retention regained its defaults, and a burst now costs one read.**
+
+`GET /api/observability/alerts` exposes Parseable's alert list (limit <= 500) behind
+the same bounded envelope as logs, metrics and traces. Because the edge MCP
+catalogue is derived from `openapi.yaml`, documenting the route *is* what creates
+the tool: `pmc_observability_alerts` now sits beside `pmc_observability_logs`,
+`_traces`, `_node_metrics` and `_service_metrics`, with `limit` bounded at 500 in
+the schema an agent reads.
+
+Retention was never hardcoded — `observability_logs_retention_days` (30),
+`observability_metrics_retention_days` (14) and `observability_traces_retention_days`
+(10) were already wired into the provisioner. What was wrong is the fallback: an
+unset env var made the script a no-op instead of applying the default, so a stack
+that lost its environment silently stopped enforcing retention at all. The script
+now falls back to the same numbers the settings report.
+
+The read path gained `CachedReader`: 10 s TTL, 64 entries, longest-standing entry
+evicted first, and two deliberate exemptions — `Since`-bound reads (the console's
+incremental live poll) always reach the source, and an unavailable backend is
+never memoised, so an outage recovers on the next request instead of being cached
+for ten seconds.
+
+Two bugs surfaced only because the tests counted calls rather than checking that
+output looked right:
+
+- The cache did not join concurrent misses, so a burst of identical requests paid
+  Parseable once per caller. It now coalesces in flight: one read, N waiters.
+- `decodeAlertRows` returned an empty list for a body with no recognised envelope,
+  making "no alerts" indistinguishable from "not an alert list". It now errors;
+  `{"alerts":null}` remains a legitimate empty list.
+
+107 new test cases, including an e2e that runs the real daemon, real bearer auth
+and a read-counting stub to prove two back-to-back requests produce one upstream
+read. Reverting either fix fails its test.
+
 ## v0.2.253 (2026-11-07)
 
 **Three charts asked Parseable for something its engine refuses.**
