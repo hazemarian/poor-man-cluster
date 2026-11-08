@@ -220,7 +220,7 @@ processors:
     error_mode: ignore
     traces:
       span:
-        - 'IsMatch(name, "^[A-Z]+ /v1\\\\.[0-9]+/")'
+        - 'IsMatch(name, "^[A-Z]+ /v1\\.[0-9]+/")'
 
   # Copy service.name from the resource onto metric datapoints so they are
   # queryable / groupable in Parseable (docker_stats sets resource attributes but
@@ -251,6 +251,41 @@ processors:
   resourcedetection:
     detectors: [docker, system]
     override: false
+
+  # Per-node process visibility for the console overview.
+  #
+  # Each node's DAEMON samples its own /proc and exports OTLP here (the daemon
+  # is a host process on every node; hostmetrics below can only ever read the
+  # host it runs on, and after this stack became leader-pinned that is exactly
+  # one node). The collector keeps the node-stats series out of the main
+  # metrics pipeline and writes them to a host-bound file, which the leader's
+  # daemon tails into the node_stats table. Parseable gets the same series, so
+  # the history is still queryable — but the PANEL does not depend on it, which
+  # is the point: the panel must work when telemetry is broken.
+  #
+  # Rotation is the only cleanup. The reader must NEVER truncate this file: the
+  # exporter holds it open, and truncation leaves a sparse NUL-filled middle
+  # that neither side can parse.
+  filter/nodestat_only:
+    error_mode: ignore
+    metrics:
+      include:
+        match_type: regexp
+        metric_names:
+          - ^pmcluster\.node\..*
+          - ^pmcluster\.process\..*
+
+  # The same series, dropped from the general metrics pipeline: they are
+  # ingested by metrics/nodestat below, and a second copy would double every
+  # per-process datapoint in Parseable.
+  filter/drop_nodestat:
+    error_mode: ignore
+    metrics:
+      exclude:
+        match_type: regexp
+        metric_names:
+          - ^pmcluster\.node\..*
+          - ^pmcluster\.process\..*
 
   batch:
     send_batch_size: 1000
@@ -326,6 +361,24 @@ exporters:
       X-P-Stream: "pmcluster-traces"
       X-P-Log-Source: "otel-traces"
 
+  # Node-stats JSONL. One JSON object per batch, appended; the leader's daemon
+  # tails it by byte offset + inode. `format: json` is the OTLP/JSON encoding
+  # the reader decodes — not the debug exporter's human format.
+  #
+  # The path lives under the platform data root (/var/stack) and is bind-
+  # mounted into the container at the SAME path, so the leader daemon (a host
+  # process) can read exactly what the collector wrote.
+  file/nodestat:
+    path: /var/stack/nodestat/nodestat.jsonl
+    format: json
+    flush_interval: 5s
+    # Bounded growth: 2 MiB, one file, no backups. Rotation replaces the file
+    # (new inode), which the reader detects and rebuilds from the tail.
+    rotation:
+      max_megabytes: 2
+      max_backups: 0
+      max_days: 0
+
 service:
   extensions: [health_check, docker_observer]
   telemetry:
@@ -338,8 +391,15 @@ service:
       exporters:  [otlphttp/parseable-logs]
     metrics:
       receivers:  [docker_stats, hostmetrics, otlp]
-      processors: [memory_limiter, resourcedetection, transform/metrics, batch]
+      processors: [memory_limiter, resourcedetection, transform/metrics, filter/drop_nodestat, batch]
       exporters:  [otlphttp/parseable-metrics]
+    # Node-stats: daemon samples → file (for the panel) AND Parseable (for
+    # history and alerting). The panel reads the file, so a Parseable outage
+    # never blanks it.
+    metrics/nodestat:
+      receivers:  [otlp]
+      processors: [memory_limiter, filter/nodestat_only, batch]
+      exporters:  [file/nodestat, otlphttp/parseable-metrics]
     traces:
       receivers:  [otlp]
       processors: [memory_limiter, filter/drop_docker_api_spans, batch]

@@ -189,6 +189,10 @@ func New(d Deps) http.Handler {
 			}
 		}
 		if d.Store != nil {
+			// Per-node process visibility for the overview. Store-only on
+			// purpose: it must answer when Parseable (and the collector) are
+			// down, which is exactly when an operator needs it.
+			r.Get("/node-stats", api.NodeStatsHandler(d.Store))
 			(&settings.HTTP{Svc: d.Settings}).Mount(r)
 			(&usage.HTTP{Svc: d.Usage}).Mount(r)
 		}

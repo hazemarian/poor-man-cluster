@@ -119,40 +119,41 @@ services:
         cpus: "0.2"
         memory: 64M
 
-  # One collector per node — this shape is deliberate, and it stays.
+  # ONE collector task, pinned to the leader.
   #
-  # `global` is not a default nobody trimmed; two of this process's three jobs
-  # are node-local by construction:
+  # This used to be `mode: global`. Two of the collector's three jobs are
+  # node-local by construction — docker_stats reads THIS node's docker socket,
+  # filelog tails THIS node's /var/lib/docker/containers — so a copy per node
+  # was the only way to collect container telemetry, and that is what changes
+  # here deliberately:
   #
-  #   docker_stats — reads THIS node's /var/run/docker.sock, so it can only
-  #     report the containers running beside it. Removing the local task does
-  #     not move that collection anywhere; it deletes that node's container
-  #     CPU/memory/network metrics outright.
-  #   filelog — tails THIS node's /var/lib/docker/containers/*-json.log. Same:
-  #     no other task can read those files.
-  #   otlp — the only node-agnostic job. Clients dial the service name
-  #     (`observability_otel-collector:4317`) over monitoring-net and Swarm DNS
-  #     hands them whichever task survives; every app on this cluster is
-  #     configured that way, never localhost.
+  #   1. The question the console must answer after an outage ("what process is
+  #      eating nxt-sw-4-m") could never come from container metrics or from
+  #      hostmetrics: hostmetrics only ever scrapes its OWN host. Each node's
+  #      DAEMON samples its own /proc and exports OTLP (internal/nodestat), so
+  #      per-node numbers no longer need a local collector at all.
+  #   2. Four collectors cost four reservations and four 88-102MiB RSS
+  #      baselines on a fleet of 1-vCPU / 2GB nodes — a real fraction of the box
+  #      that had just fallen over.
   #
-  # The daemon does NOT depend on the local task any more, and that is the
-  # change this comment describes. `pmcluster serve` is a systemd process on the
-  # host, outside the overlay: it cannot resolve `observability_otel-collector`
-  # (overlay DNS is not visible to a host process) and it no longer tries. It
-  # dials THIS node's swarm address on 4318, resolved from the swarm's own node
-  # record and dial-checked at startup (internal/config/selftelemetry.go), and
-  # 4318 is published with `mode: ingress` so the routing mesh answers on every
-  # node from a single task.
+  # What the single task means in practice: docker_stats and filelog describe
+  # the LEADER's containers only. Node-level CPU/memory/process data comes from
+  # every node's daemon, which is the source the 2026-11-08 post-mortem needed.
   #
-  # What ingress buys: one listener per node without one task per node. The
-  # daemon's target is the address the swarm knows this node by, so placement
-  # stops mattering — no node has to host the collector for its daemon to be
-  # observable. What it costs: when the task is on another node, the exporter's
-  # traffic crosses the mesh (one VXLAN hop) instead of a loopback write. For a
-  # control-plane daemon that is a few KiB every few seconds, and it is the price
-  # of not carrying a per-node reservation just to keep a port open.
+  # Placement is a manager CONSTRAINT (the floor: always satisfiable on a swarm
+  # that has a manager) plus a leader PREFERENCE on node.labels.pmcluster.leader.
+  # A preference, not a constraint, is the point: if no node carries the label
+  # the task still schedules on some manager instead of sitting at "no suitable
+  # node" forever. The daemon sets the label when it gains leadership and clears
+  # it when it loses it (internal/cli), and preferences are re-evaluated when the
+  # service is updated, so a leadership change moves the task on the next apply.
   #
-  # Host mode was the previous shape, and it was a trap worth naming. It
+  # The node-stats JSONL lands under /var/stack and is bind-mounted at the same
+  # path, so the leader's daemon can read exactly what this task wrote. Rotation
+  # is the only cleanup: the exporter holds the file open, and a reader that
+  # truncated it would leave a sparse NUL-filled middle.
+  #
+  # Host mode was the previous publish shape, and it was a trap worth naming. It
   # published 4318 ONLY on the node running the task, while the daemon's endpoint
   # was the constant http://127.0.0.1:4318 — a closed port on every other node.
   # The OTel SDK's default error handler logs every failed export unbounded, so
@@ -163,29 +164,29 @@ services:
   # miniature: `dial tcp 127.0.0.1:4318: connect: connection refused` on a worker
   # running no collector.
   #
+  # So 4318 stays ingress-published: the routing mesh binds it on EVERY node and
+  # forwards to the single task. The daemon dials THIS node's swarm address
+  # (config.ResolveOTLPEndpoint), never localhost and never the overlay name —
+  # a host process cannot resolve overlay DNS.
+  #
   # 4318 is still not public: it is a documented Traefik bypass, and
   # harden-host.sh DROPs it in DOCKER-USER for every non-private source. That
   # rule is what makes an ingress publish acceptable — without it, ingress would
   # put the collector on all four public interfaces, and an unauthenticated OTLP
   # receiver is an open ingestion endpoint.
   #
-  # So the luxury was never the fourth container, it was the RESERVATION
-  # (256M) and the CAP (512M) carried on every node for a process measured at
-  # 88-102MiB and 0.02-0.10 cores across all four nodes (24h peaks read from
-  # container.memory.percent / container.cpu.utilization). Trimming the
-  # reservation to the numbers below returns 160MiB of schedulable memory on
-  # every node and costs nothing observable. Dropping to three manager copies
-  # would still cost each remaining node's docker_stats and filelog collection;
-  # the daemon's own telemetry is no longer a reason to keep a copy, because the
-  # routing mesh publishes the port whether the task is local or not.
-  #
-  # Sizing rule: reserve ~the measured steady state, cap at ~3x the measured
-  # peak, and keep the collector's own memory_limiter
-  # (otel-collector-config.yml) strictly BELOW this cap so the limiter sheds
-  # load while the process still has room instead of the cgroup OOM-killing it.
+  # Sizing: reserve ~the measured steady state, cap at ~3x the measured peak, and
+  # keep the collector's own memory_limiter (otel-collector-config.yml) strictly
+  # BELOW this cap so the limiter sheds load while the process still has room
+  # instead of the cgroup OOM-killing it.
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.157.0
-    mode: global
+    # One task on the leader. NOT global: see the block above for why, and for
+    # why the leader is a preference rather than a constraint.
+    replicas: 1
+    placement: manager
+    preferences:
+      - "node.labels.pmcluster.leader==true"
     user: "0:0"
     restart: any
     restart_delay: 5s
@@ -211,6 +212,10 @@ services:
       # rather than the node's. Read-only, and nothing is written back.
       - "/proc:/hostfs/proc:ro"
       - "/sys:/hostfs/sys:ro"
+      # The node-stats file the collector's file exporter appends to. Same path
+      # inside and out, so the leader's daemon reads exactly what this task
+      # wrote. Created by Docker on first deploy.
+      - "/var/stack/nodestat:/var/stack/nodestat"
     configs:
       - config_path(pmcluster_otel_config)
     resources:

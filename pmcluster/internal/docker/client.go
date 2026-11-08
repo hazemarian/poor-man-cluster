@@ -966,15 +966,27 @@ func (r *realClient) SwarmID(ctx context.Context) (string, error) {
 
 // SetNodeLabel adds or replaces a label on a swarm node. It inspects the node
 // for its current version (optimistic concurrency) before updating the spec.
+//
+// An empty value REMOVES the key rather than storing "": every caller uses ""
+// to mean "clear this label" (demoting a storage node, losing leadership), and
+// a label that exists with an empty value still matches `node.labels.x == ""`
+// in a placement preference — the opposite of what clearing is for.
 func (r *realClient) SetNodeLabel(ctx context.Context, nodeID, key, value string) error {
 	info, _, err := r.c.NodeInspectWithRaw(ctx, nodeID)
 	if err != nil {
 		return fmt.Errorf("node inspect: %w", err)
 	}
-	if info.Spec.Labels == nil {
-		info.Spec.Labels = map[string]string{}
+	if value == "" {
+		if _, ok := info.Spec.Labels[key]; !ok {
+			return nil
+		}
+		delete(info.Spec.Labels, key)
+	} else {
+		if info.Spec.Labels == nil {
+			info.Spec.Labels = map[string]string{}
+		}
+		info.Spec.Labels[key] = value
 	}
-	info.Spec.Labels[key] = value
 	if err := r.c.NodeUpdate(ctx, nodeID, info.Version, info.Spec); err != nil {
 		return fmt.Errorf("node update: %w", err)
 	}

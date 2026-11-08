@@ -173,6 +173,16 @@ func (c *Client) Nodes(ctx context.Context) ([]Node, error) {
 	return body.Nodes, err
 }
 
+// NodeStats returns the latest per-node resource sample (GET /api/node-stats).
+// It is the overview's node-resources panel: one row per node, no history.
+func (c *Client) NodeStats(ctx context.Context) ([]NodeStat, error) {
+	var body struct {
+		NodeStats []NodeStat `json:"node_stats"`
+	}
+	err := c.do(ctx, http.MethodGet, "/node-stats", nil, &body)
+	return body.NodeStats, err
+}
+
 // PromoteNode marks a swarm node as a storage node (storage_nodes setting +
 // pmcluster.storage label) via POST /api/nodes/{hostname}/storage.
 func (c *Client) PromoteNode(ctx context.Context, hostname string) error {

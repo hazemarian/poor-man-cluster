@@ -110,6 +110,11 @@ type IRService struct {
 	// Constraints are RAW placement constraints appended verbatim.
 	Constraints []string
 
+	// Preferences are RAW swarm placement preferences appended verbatim.
+	// Unlike Constraints they are soft: they order eligible nodes, and a
+	// preference no node matches leaves the task schedulable.
+	Preferences []string
+
 	// ExtraNetworks are app-level external networks this service joins
 	// (populated from IR.Networks at translate time).
 	ExtraNetworks []string

@@ -352,6 +352,16 @@ const StackNamespaceLabel = "com.docker.stack.namespace"
 // run on storage nodes.
 const StorageNodeLabel = "pmcluster.storage"
 
+// LeaderNodeLabel is the swarm NODE label naming the node that currently holds
+// leadership. The daemon sets it on the local node when leadership is GAINED
+// and clears it when leadership is LOST, so the OTel collector's leader
+// PREFERENCE ("node.labels.pmcluster.leader==true") has something to prefer.
+//
+// It is deliberately a preference and never a constraint: a node that crashed
+// mid-transition, or a swarm whose leader just moved, must not leave the
+// collector unschedulable. The manager constraint in the stack is the floor.
+const LeaderNodeLabel = "pmcluster.leader"
+
 // NodeLabel is stamped on every deployed service and names the node the
 // service's placement constraint targets (a hostname pin, e.g. an
 // auto-resolved storage node). It is empty when the service is unconstrained

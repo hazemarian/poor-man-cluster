@@ -619,3 +619,53 @@ form.htmx-request [type="submit"] { pointer-events: none; }
   white-space: nowrap;
 }
 .needs-manager .ic-sm { opacity: .55; }
+
+/* ---------- node resources (overview) ---------- */
+/* One row per node, two capped process lists per row. The lists are the only
+   place a long process name meets a fixed column, so both the name and the
+   value get an explicit overflow rule instead of widening the table. */
+/* Six columns with two process lists inside them: without an explicit floor
+   the browser shrinks the hostname column to one character per line. The table
+   keeps a minimum width and the wrapper scrolls on a narrow viewport, which is
+   what .table-wrap already exists for. */
+.nodestat-table { min-inline-size: 760px; }
+.nodestat-table th, .nodestat-table td { padding-inline: var(--s-4); }
+.nodestat-table td { vertical-align: top; }
+.nodestat-table .node-identity { flex-wrap: wrap; }
+.nodestat-table .node-identity .mono { white-space: nowrap; }
+.nodestat-table .node-identity .node-glyph { width: 28px; height: 28px; }
+.nodestat-table td:nth-child(2), .nodestat-table td:nth-child(6) { white-space: nowrap; min-inline-size: 8ch; }
+.nodestat-table td:nth-child(3) { white-space: nowrap; min-inline-size: 16ch; }
+.nodestat-table td:nth-child(1) { min-inline-size: 18ch; }
+.nodestat-table td:nth-child(4), .nodestat-table td:nth-child(5) { min-inline-size: 16ch; }
+.nodestat-table .proc-list {
+  list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; min-inline-size: 12ch;
+}
+.nodestat-table .proc-list li {
+  display: flex; align-items: baseline; gap: var(--s-2);
+  font-size: var(--fs-xs); min-inline-size: 0;
+}
+.nodestat-table .p-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-inline-size: 18ch; color: var(--text-secondary);
+}
+.nodestat-table .p-val {
+  color: var(--text-primary); font-variant-numeric: tabular-nums;
+  margin-inline-start: auto; white-space: nowrap;
+}
+.nodestat-table small.muted { display: block; margin-block-start: 2px; font-size: var(--fs-xs); }
+.proc-inline { display: inline-flex; gap: var(--s-1); margin-inline-end: var(--s-3); }
+.proc-inline .p-name { color: var(--text-secondary); }
+
+/* Stale: greyed AND labelled. Both, never either alone — a greyed row with no
+   word reads as a rendering bug, and a label on a live row is a false alarm.
+   The label pill keeps its own opacity so it stays legible inside the dimmed
+   row (the whole point of saying it). */
+.nodestat-table tr.is-stale, .kv.is-stale { opacity: .55; }
+.nodestat-table tr.is-stale:hover { opacity: .8; }
+.nodestat-table tr.is-stale .stale-pill { opacity: 1; filter: none; }
+
+/* A live tint keeps full opacity and gains a hairline on the row's leading
+   edge. Logical property, so it sits on the right in RTL. */
+.nodestat-table tr.is-hot td:first-child { border-inline-start: 3px solid var(--amber); }
+.nodestat-table .v-warn { color: var(--amber); font-weight: 600; }

@@ -102,6 +102,7 @@ services:
 | `restart` | — | overrides `restart_policy.condition`: `any`, `on-failure`, `none` |
 | `restart_delay` | — | `restart_policy.delay` (e.g. `5s`) |
 | `constraints` | — | raw Swarm placement constraints appended after the `placement`/auto-pin rule (e.g. `- node.labels.pmcluster.storage == true`) |
+| `preferences` | — | raw Swarm placement PREFERENCES (soft), rendered as `spread:` entries — e.g. `- node.labels.pmcluster.leader==true`. A preference orders the nodes that already satisfy every constraint; it never makes a service unschedulable |
 | `ports` | — | published ports: `target` (container, required), `published`, `mode` (`ingress`/`host`). All publishing is TCP (`protocol` was removed — no service needs UDP). For single-port services prefer `expose.external` |
 | `configs` | — | Swarm config file mounts: each entry is `config_path(<name>)`. The platform resolves the path — `<config_mount_root>/<name>.yaml`, default `/etc/config/app.yaml`, `.yaml` appended only when the name has no extension — and the rendered compose references the **content-addressed** Docker config (`<name>_<sha8>`) automatically. Same syntax in app and platform DSL |
 | `extra_hosts` | — | `host:ip` entries added to `/etc/hosts` (e.g. `host.docker.internal:host-gateway`) |

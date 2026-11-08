@@ -17,7 +17,8 @@ The stack answers four questions from one place:
 On each Swarm node:
   container stdout/stderr ──► per-container filelog ─┐
   container + host metrics ──────────────────────────┤
-  application and daemon OTLP ───────────────────────┴─► OTel collector (global)
+  application and daemon OTLP ───────────────────────┴─► OTel collector (one task,
+                                                          pinned to the leader)
                                                                 │ OTLP/HTTP
                                                                 ▼
 One per cluster:                                            Parseable
@@ -31,9 +32,14 @@ One per cluster:                                            Parseable
   console ──┘           └──► /api/observability/*   (bearer + viewer role)
 ```
 
-- **One collector per node.** It is a `mode: global` service, because container
-  logs and container metrics are node-local and only that node's Docker engine
-  can see them. A central collector could not read them.
+- **One collector task, pinned to the leader.** Container logs and container
+  metrics are node-local, so a single task sees only the leader's containers;
+  that is the accepted cost of one process, one reservation and one config
+  instead of four. Per-node CPU, memory and processes do not come from the
+  collector at all — every node's daemon samples its own `/proc` and exports it
+  (see "Per-node resources" below). The task carries a `node.role == manager`
+  constraint (the schedulable floor) and a `node.labels.pmcluster.leader`
+  *preference*, which the daemon maintains on each leadership transition.
 - **One Parseable backend per cluster.** It stores logs, metrics and traces on a
   mounted volume and answers SQL. It is placed on the same storage
 round-robin every stateful stack uses, and stays there.
@@ -298,12 +304,12 @@ above came from single incarnations).
 
 ### Why 4318 is published with the routing mesh
 
-The collector is `mode: global` — a task on every node — because `filelog` and
-`docker_stats` can only read the node they run on. What the daemon needs is not a
-task beside it, but *something answering at its own address*: tasks restart, and a
-node can exist before the observability stack reaches it. `4318` is published
+The collector is one task on the leader; `filelog` and `docker_stats` therefore
+describe the leader's containers only. What every OTHER node's daemon needs is not
+a task beside it, but *something answering at its own address*: tasks restart, and
+a node can exist before the observability stack reaches it. `4318` is published
 `mode: ingress`, so the routing mesh binds the port on every node and forwards to
-whichever collector task is alive, wherever it runs.
+that single task, wherever leadership puts it.
 
 - **What it buys:** the daemon dials this node's own address and something answers
   there regardless of where the collector task is or whether the one on this node
@@ -622,6 +628,52 @@ drops from ~5.6 ms (one backend round trip) to ~207 ns (cache hit). The live
 cluster's Parseable was not reachable from that host, so this is the round-trip
 floor rather than a production figure.
 
+## Per-node resources (console overview)
+
+The overview answers one question: *what is eating this node, right now?* It is a
+separate panel from node health on purpose — node health comes from the Swarm API,
+and this comes from the control-plane database, so each survives the other's
+outage. After the 2026-11-08 incident the console showed nothing while
+`nxt-sw-4-m` sat at load 10 with the daemon at 902 MB RSS; the post-mortem took
+hours because the numbers lived only in a place nobody could read.
+
+```text
+daemon on every node ── sample /proc (loadavg, meminfo, per-pid stat/status)
+        │                 every 15s: load1/5/15, mem total/used/available,
+        │                 cores, docker reachable, top-5 by RSS and by CPU
+        │ OTLP/HTTP → this node's swarm address :4318 (ingress)
+        ▼
+collector (leader) ── filter node-stats → file exporter
+        │                                   /var/stack/nodestat/nodestat.jsonl
+        │                                   rotation: 2 MiB, no backups
+        ▼
+leader's daemon ── tail by byte offset + inode (256 KiB rebuild on rotation)
+        │           newest sample per node, malformed lines skipped and counted
+        ▼
+node_stats table ── ONE row per node, upserted in place
+        ▼
+console /web/overview ── hostname, role, load, memory, top processes, sample age
+```
+
+- **The daemon samples, not the collector.** `hostmetrics` can only read its own
+  host, and the collector is now a single leader-pinned task. A node's own daemon
+  is the only process that can describe that node. It exports over the same
+  ingress-published OTLP port applications use; it never talks to Parseable.
+- **The panel does not depend on Parseable.** The collector writes the series to a
+  host-bound JSONL file as well as to the backend, and the leader's daemon reads
+  the file. A telemetry outage can cost history; it cannot blank the panel.
+- **One row per node, forever.** `node_stats` is `hostname`-keyed and upserted.
+  The table is O(nodes); it never grows a per-sample history. Rows for nodes that
+  left the swarm are deleted; a node that merely stops reporting keeps its last
+  row and ages.
+- **Four tint rules**, computed in the controller and tested at their boundaries:
+  load average above 1.5x the node's cores, available memory under 15%, a sample
+  older than 3 minutes (greyed *and* labelled stale), and an unreachable Docker
+  engine on that node.
+- **The reader never truncates the file.** The exporter holds it open; truncating
+  produces a sparse NUL-filled middle. Rotation is the only cleanup, and the
+  reader detects it (inode change or shrink) and rebuilds from the last 256 KiB.
+
 ## Troubleshooting
 
 | Symptom | Check |
@@ -651,7 +703,10 @@ pmcluster cluster status
 - "Error rate" is the share of error log records, not failed HTTP requests.
 - Traces from different applications are not joined into a distributed trace
   unless the applications propagate trace context.
-- Host metrics cover CPU, memory and load. Disk, network and per-process views
-  are not part of this version.
+- `hostmetrics` covers CPU, memory and load for the node running the collector
+  (the leader). Disk and network are not part of this version.
+- Per-node CPU, memory and the top five processes come from each node's daemon
+  (see "Per-node resources"), not from `hostmetrics`; the top lists are capped at
+  five per axis by design.
 - Historical rows written before a collector identity change may not carry the
   current `service.name`.

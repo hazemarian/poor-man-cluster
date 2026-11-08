@@ -116,6 +116,17 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// node published, so a leadership gain cannot re-extract this node's own
 	// state. Created even when Docker is unavailable (the Kit then no-ops).
 	kit := &controlplane.Kit{Docker: dc, DataDir: cfg.DataDir, Log: log}
+
+	// Every daemon describes its OWN node: the OTel collector is a single
+	// leader-pinned task and hostmetrics can only read its own host, so the only
+	// process that can answer "what is eating this machine" is the daemon living
+	// on it. Started BEFORE the leadership wait (a standby manager and a worker
+	// both block there indefinitely) and before Docker is required (a nil client
+	// only costs the docker_up flag). It needs no store: /proc plus the OTLP
+	// endpoint is the whole dependency.
+	if endpoint != "" {
+		startNodeStatSampler(cmd.Context(), dc, log)
+	}
 	if dockerErr != nil {
 		log.Warn().Err(dockerErr).Msg("docker client init failed; /api/cluster/info disabled")
 	} else {
@@ -388,6 +399,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 			if isLeader {
 				log.Info().Msg("control loop: starting reconcile loop (leader)")
+				// Name this node as the leader BEFORE the reconcile pass: the
+				// collector's placement preference reads this label, and the
+				// stack is (re)applied by the loop.
+				if syncLeaderLabel(ctx, dc, true, log) {
+					replaceNodeStatCollector(ctx, dc, log)
+				}
 				// This node just gained leadership. Its data.db may be older
 				// than the newest Raft-replicated kit (the previous leader
 				// snapshotted credentials/settings this node never adopted), so
@@ -409,8 +426,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				loopCtx, loopCancel = context.WithCancel(ctx)
 				go reconciler.Loop(loopCtx)
 				go kit.Loop(loopCtx, controlPlaneSnapshotInterval())
+				// The collector writes its node-stats JSONL on the leader's
+				// disk; only this daemon can turn it into rows for the console.
+				go runNodeStatTailer(loopCtx, st, dc, log)
 			} else {
 				log.Info().Msg("control loop: stopped (not the swarm leader)")
+				syncLeaderLabel(ctx, dc, false, log)
 			}
 		}
 	}()

@@ -19,6 +19,27 @@ func init() {
 		"overview.nodes_empty_body":     "Check the API address and token in Settings.",
 		"overview.not_manager_body":     "This host is not a manager, so cluster metrics are unavailable. You can still manage applications, certificates, and backups.",
 
+		// Per-node resources panel (overview). Names are short because they sit
+		// in a table header; the hints carry the threshold.
+		"nodestat.title":            "Node resources",
+		"nodestat.empty_title":      "No node stats",
+		"nodestat.empty_body":       "Each node's daemon reports its own load, memory and top processes. Nothing has arrived yet — the collector may still be deploying, or the panel is waiting for the next sample.",
+		"nodestat.load":             "Load (1m)",
+		"nodestat.memory":           "Memory",
+		"nodestat.top_rss":          "Top by memory",
+		"nodestat.top_cpu":          "Top by CPU",
+		"nodestat.sample_age":       "Sample",
+		"nodestat.cores":            "cores",
+		"nodestat.free":             "free",
+		"nodestat.no_procs":         "none reported",
+		"nodestat.stale":            "stale",
+		"nodestat.overloaded":       "high load",
+		"nodestat.overloaded_hint":  "Load average is more than 1.5x this node's cores: work is already queueing.",
+		"nodestat.mem_low":          "low memory",
+		"nodestat.mem_low_hint":     "Less than 15% of memory is available; this node is close to swapping.",
+		"nodestat.docker_down":      "docker unreachable",
+		"nodestat.docker_down_hint": "This node's Docker engine did not answer its own daemon. It cannot start or stop anything.",
+
 		"cluster.state_foot":    "Current cluster status",
 		"cluster.nodes_foot":    "In this cluster",
 		"cluster.managers_foot": "Manage the cluster",

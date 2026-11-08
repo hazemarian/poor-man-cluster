@@ -516,8 +516,12 @@ func composeDeployFromIR(app irApp, s *IRService, certResolver, pinNode string, 
 		d.Labels[labelNode] = placement.Node
 	}
 	constraints = append(constraints, s.Constraints...)
-	if len(constraints) > 0 {
-		d.Placement = &composePlacement{Constraints: constraints}
+	prefs := make([]composePreference, 0, len(s.Preferences))
+	for _, p := range s.Preferences {
+		prefs = append(prefs, composePreference{Spread: p})
+	}
+	if len(constraints) > 0 || len(prefs) > 0 {
+		d.Placement = &composePlacement{Constraints: constraints, Preferences: prefs}
 	}
 
 	if s.Resources != nil {

@@ -277,6 +277,7 @@ func translateService(ctx context.Context, app *dsl.App, name string, s *dsl.Ser
 		Secrets:       s.Secrets,
 		RunOnce:       s.RunOnce,
 		Placement:     s.Placement,
+		Preferences:   s.Preferences,
 		SkipFilelog:   s.SkipFilelog,
 		DependsOn:     s.DependsOn,
 		Mode:          s.Mode,

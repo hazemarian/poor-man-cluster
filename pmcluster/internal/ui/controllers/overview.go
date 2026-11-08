@@ -1,8 +1,10 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -32,6 +34,14 @@ type overviewData struct {
 	Me    *meModel
 	Info  *infoModel
 	Nodes []nodeModel
+
+	// NodeStats is the per-node resource table: what is eating each machine,
+	// read from the control-plane DB (never from the telemetry backend). It is
+	// a separate panel from Nodes on purpose — the node list comes from the
+	// swarm API and stays correct when telemetry is broken, and this one stays
+	// correct when the swarm API is the thing timing out.
+	NodeStats      []nodeStatModel
+	NodeStatsKnown bool
 
 	// The v1 console rendered every failed call as a zero: a broken swarm query
 	// looked exactly like an empty cluster. These flags keep "we don't know"
@@ -89,14 +99,17 @@ func (c Overview) Fragment(g *gin.Context) {
 		errA     error
 		nodes    []pmapi.Node
 		errN     error
+		stat     []pmapi.NodeStat
+		errS     error
 	)
 	var wg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(6)
 	go func() { defer wg.Done(); me, err = c.API.Me(ctx) }()
 	go func() { defer wg.Done(); info, errI = c.API.ClusterInfo(ctx) }()
 	go func() { defer wg.Done(); versions, errV = c.API.Versions(ctx) }()
 	go func() { defer wg.Done(); rec, errA = c.API.ApplyRecord(ctx) }()
 	go func() { defer wg.Done(); nodes, errN = c.API.Nodes(ctx) }()
+	go func() { defer wg.Done(); stat, errS = c.API.NodeStats(ctx) }()
 	wg.Wait()
 
 	if err == nil && me != nil {
@@ -132,6 +145,14 @@ func (c Overview) Fragment(g *gin.Context) {
 				IsLeader: n.IsLeader, Availability: n.Availability, EngineVersion: n.EngineVersion,
 				Storage: n.Storage,
 			})
+		}
+	}
+
+	if errS == nil {
+		d.NodeStatsKnown = true
+		now := time.Now()
+		for _, s := range stat {
+			d.NodeStats = append(d.NodeStats, newNodeStatModel(s, now))
 		}
 	}
 
@@ -176,6 +197,118 @@ type infoModel struct {
 	SwarmManagers    int
 	SwarmNodes       int
 	ControlAvailable bool
+}
+
+// staleAfter is how old a sample may be before the panel greys it. The samplers
+// run every 15s on every node and the leader reads the file every 15s, so three
+// minutes is twelve missed ticks — an outage, not a slow pass.
+const staleAfter = 3 * time.Minute
+
+// lowMemoryPercent is the tint boundary for "this node is about to swap": less
+// than 15% of RAM still available.
+const lowMemoryPercent = 15
+
+// loadPerCore is the load1/cores ratio above which a node is tinted. 1.5 is one
+// and a half runnable processes per core: work is already queueing.
+const loadPerCore = 1.5
+
+// nodeStatModel is one rendered row: the numbers plus the four tint decisions,
+// computed here so the template holds no thresholds (and so each one is tested
+// at its boundary).
+type nodeStatModel struct {
+	Hostname string
+	Role     string
+	Cores    int
+
+	Load1  float64
+	Load5  float64
+	Load15 float64
+
+	MemTotalMB int64
+	MemUsedMB  int64
+	MemAvailMB int64
+
+	TopRSS []procModel
+	TopCPU []procModel
+
+	// AgeText is a compact "how old is this sample" string ("8s", "4m",
+	// "2h"). Stale is true past staleAfter and both greys the row and labels
+	// it — never either alone: a greyed row without a word is a broken console,
+	// and a label on a live row is a lie.
+	AgeText string
+	Stale   bool
+
+	// The three derived tint rules.
+	Overloaded bool // load1 > 1.5 x cores
+	MemLow     bool // available < 15% of total
+	DockerDown bool // the node's own engine socket did not answer
+}
+
+// procModel is one process line under the two top lists.
+type procModel struct {
+	Name  string
+	Value string // pre-formatted: "902 MB" or "37%"
+}
+
+// RowClass is the row's tint class. Staleness wins over the live tints: an old
+// reading must not look like a current alarm.
+func (n nodeStatModel) RowClass() string {
+	switch {
+	case n.Stale:
+		return "is-stale"
+	case n.Overloaded || n.MemLow || n.DockerDown:
+		return "is-hot"
+	default:
+		return ""
+	}
+}
+
+// newNodeStatModel turns one API row into the view model. now is passed in so
+// the boundary tests do not race the clock.
+func newNodeStatModel(s pmapi.NodeStat, now time.Time) nodeStatModel {
+	m := nodeStatModel{
+		Hostname: s.Hostname, Role: s.Role, Cores: s.Cores,
+		Load1: s.Load1, Load5: s.Load5, Load15: s.Load15,
+		MemTotalMB: s.MemTotalMB, MemUsedMB: s.MemUsedMB, MemAvailMB: s.MemAvailMB,
+	}
+	age := now.Unix() - s.SampleTS
+	if s.SampleTS == 0 || age < 0 {
+		// No timestamp at all is not "fresh": it is unknowable, and the panel
+		// says so rather than printing 0s.
+		m.Stale = true
+		m.AgeText = "—"
+	} else {
+		m.AgeText = ageText(time.Duration(age) * time.Second)
+		m.Stale = age > int64(staleAfter/time.Second)
+	}
+	if s.Cores > 0 {
+		m.Overloaded = s.Load1 > loadPerCore*float64(s.Cores)
+	}
+	if s.MemTotalMB > 0 {
+		m.MemLow = s.MemAvailMB*100/s.MemTotalMB < lowMemoryPercent
+	}
+	m.DockerDown = !s.DockerUp
+	for _, p := range s.TopRSS {
+		m.TopRSS = append(m.TopRSS, procModel{Name: p.Name, Value: fmt.Sprintf("%.0f MB", p.RSSMB)})
+	}
+	for _, p := range s.TopCPU {
+		m.TopCPU = append(m.TopCPU, procModel{Name: p.Name, Value: fmt.Sprintf("%.1f%%", p.CPUPct)})
+	}
+	return m
+}
+
+// ageText renders a sample age compactly: 8s, 4m, 2h, 3d.
+func ageText(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }
 
 type nodeModel struct {

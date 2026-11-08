@@ -111,6 +111,15 @@ type Service struct {
 	// from Placement.
 	Constraints []string `json:"constraints,omitempty"`
 
+	// Preferences appends RAW swarm placement preferences (soft) verbatim —
+	// e.g. "node.labels.pmcluster.leader==true". A preference never makes a
+	// service unschedulable: it only orders the nodes that already satisfy
+	// every constraint. That is why the collector is pinned with a MANAGER
+	// constraint (the floor) plus a leader preference (the tie-break), instead
+	// of a label constraint that would strand the task if no node carried the
+	// label.
+	Preferences []string `json:"preferences,omitempty"`
+
 	Command    []string `json:"command,omitempty"`
 	Entrypoint []string `json:"entrypoint,omitempty"`
 

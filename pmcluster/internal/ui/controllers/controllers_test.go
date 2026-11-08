@@ -21,6 +21,21 @@ import (
 // handler reaches the API even if (hypothetically) rendering fails.
 var ackDaemonCalls atomic.Int32
 
+// nodeStatsFixture is the /api/node-stats body the controller harness serves.
+// The default is two nodes, both already stale relative to a real clock, so a
+// fragment render exercises the live and the aged row.
+var nodeStatsFixture = `{"node_stats":[
+ {"hostname":"manager-1","role":"manager","cores":2,"load1":9.96,"load5":8.2,"load15":6.1,
+  "mem_total_mb":1839,"mem_used_mb":1639,"mem_avail_mb":200,"docker_up":true,
+  "top_rss":[{"pid":101,"name":"pmcluster","rss_mb":902,"cpu_pct":3.1},{"pid":102,"name":"dockerd","rss_mb":210,"cpu_pct":1.2}],
+  "top_cpu":[{"pid":101,"name":"pmcluster","rss_mb":902,"cpu_pct":37.5}],
+  "sample_ts":1,"updated_at":1},
+ {"hostname":"worker-1","role":"worker","cores":1,"load1":0.4,"load5":0.5,"load15":0.6,
+  "mem_total_mb":2048,"mem_used_mb":1024,"mem_avail_mb":1024,"docker_up":false,
+  "top_rss":[{"pid":7,"name":"nginx","rss_mb":40,"cpu_pct":0.2}],
+  "top_cpu":[{"pid":7,"name":"nginx","rss_mb":40,"cpu_pct":0.2}],
+  "sample_ts":1,"updated_at":1}]}`
+
 // ctrlFakeDaemon serves canned /api responses for the controllers under test.
 // Every endpoint requires the Bearer token, mirroring the daemon.
 func ctrlFakeDaemon(t *testing.T) *httptest.Server {
@@ -46,6 +61,9 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"nodes":[{"hostname":"manager-1","role":"manager","status":"ready","is_leader":true,"engine_version":"28.5","storage":true},{"hostname":"worker-1","role":"worker","status":"ready","engine_version":"28.5","storage":false}]}`)
+	})
+	mux.HandleFunc("/api/node-stats", func(w http.ResponseWriter, r *http.Request) {
+		write(w, nodeStatsFixture)
 	})
 	mux.HandleFunc("/api/nodes/manager-1/storage", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

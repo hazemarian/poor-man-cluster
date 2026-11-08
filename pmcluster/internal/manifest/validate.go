@@ -174,6 +174,15 @@ func validateService(name string, s *dsl.Service) error {
 			return fmt.Errorf("%s.placement: must be 'manager', 'worker', a node hostname, or empty (got %q)", prefix, s.Placement)
 		}
 	}
+	// Preferences are raw swarm preference expressions, e.g.
+	// "node.labels.pmcluster.leader==true". They land verbatim in the rendered
+	// Compose, so they must not be able to smuggle YAML or a second key: one
+	// "node."-anchored expression, no spaces, no commas.
+	for i, p := range s.Preferences {
+		if !strings.HasPrefix(p, "node.") || strings.ContainsAny(p, " 	,{}[]\"'") {
+			return fmt.Errorf("%s.preferences[%d]: must be a single 'node.<field>[==<value>]' expression, got %q", prefix, i, p)
+		}
+	}
 	for i, v := range s.Volumes {
 		if !strings.Contains(v, ":") {
 			return fmt.Errorf("%s.volumes[%d]: must be 'name:path' or '/host:/container', got %q", prefix, i, v)

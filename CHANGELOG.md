@@ -3,6 +3,47 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.258 (2026-11-09)
+
+**The console overview now shows, per node, what is eating that machine — and it shows it while telemetry is broken.**
+
+On 2026-11-08 `nxt-sw-4-m` went `Down` at load 9.96 with the pmcluster daemon at 902 MB RSS on a 1839 MB box.
+Nothing in the console said so: node health came from the Swarm API (which reported a healthy-looking node right
+up to the heartbeat it lost), and the numbers that would have named the culprit — per-process RSS and CPU — were
+never collected anywhere an operator could read them during the incident.
+
+The overview gained a **Node resources** panel: one row per node with load, memory, the top five processes by
+memory and by CPU, and the age of the sample.
+
+- **Each node's daemon samples its own `/proc`** (`internal/nodestat`) every 15s — load, MemTotal/Used/Available,
+  cores, Docker reachability, top-5 RSS and CPU — and exports it as OTLP metrics. `hostmetrics` can only read its
+  own host, so it could never answer this. The daemon still never talks to Parseable; routing stays the
+  collector's job.
+- **The collector is no longer `mode: global`.** It is one task with a `node.role == manager` constraint and a
+  `node.labels.pmcluster.leader` *preference*, so the task moves with leadership but still schedules when no node
+  carries the label (a constraint there would strand it at `no suitable node`). The daemon stamps the label on
+  gaining leadership and clears it on losing it. `docker_stats` and `filelog` now describe the leader's
+  containers only, which is the accepted cost of one reservation instead of four on 2 GB nodes.
+- **The node-stats pipeline writes a JSONL file** (`file` exporter, `/var/stack/nodestat/nodestat.jsonl`,
+  rotation 2 MiB / no backups) as well as Parseable. The leader's daemon tails it by byte offset + inode, rebuilds
+  from the last 256 KiB on rotation, buffers a torn trailing line, skips and counts malformed lines, and reduces
+  to the newest sample per node. It never truncates the file — the exporter holds it open, and truncation leaves
+  a sparse NUL-filled middle.
+- **`node_stats` is one row per node**, `INSERT … ON CONFLICT(hostname) DO UPDATE`. The table is O(nodes)
+  forever; a departed node's row is deleted, a silent node's row ages instead.
+- Four tint rules on the panel: load > 1.5x cores, available memory < 15%, sample older than 3 minutes (greyed
+  *and* labelled stale), Docker unreachable. Both themes, all six palettes, en/ar, RTL via logical properties.
+- `GET /api/node-stats` serves the rows from the control-plane DB, and the overview reads it in the same wave as
+  its other five reads.
+
+Tests: reader (unchanged file, torn line, rotation, shrink, malformed line, newest-wins, top-5 with ties and
+fewer than five, silent node), store (one row across 50 ticks, restart, prune), collector/stack render (pipeline,
+rotation values, manager constraint, leader preference, the node's own swarm address), the rendered panel
+(numbers, greyed stale row, empty state, tint boundaries), and an e2e that pushes a collector-shaped fixture with
+several nodes, several samples, a torn line and a rotation through the real reader, store, API and renderer. One
+fixture is the *actual* output of `otel/opentelemetry-collector-contrib:0.157.0` fed the *actual* bytes the Go
+SDK exports, so a format drift fails in a unit test instead of as an empty panel.
+
 ## v0.2.257 (2026-11-08)
 
 **A manager that GAINS leadership now adopts the newest control-plane kit instead of serving its own old database.**

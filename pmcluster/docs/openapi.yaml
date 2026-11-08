@@ -239,6 +239,41 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Node"
+  /api/node-stats:
+    get:
+      summary: Latest per-node resource sample for the console overview
+      description: |
+        One row per node, read from the control-plane database. Each row is the
+        newest sample the leader's daemon reduced from the collector's
+        node-stats JSONL: load, memory, docker reachability and the top five
+        processes by RSS and by CPU. A node that stopped reporting keeps its
+        last row (the console ages and greys it); a node that left the swarm is
+        pruned. Deliberately independent of the telemetry backend, so the panel
+        answers during a telemetry outage.
+      operationId: listNodeStats
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: One row per node
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  node_stats:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NodeStat"
+        "500":
+          description: The stored snapshot could not be read
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
   /api/stacks:
     get:
       summary: List deployed stacks
@@ -2463,6 +2498,70 @@ components:
         created_at:
           type: integer
           format: int64
+        updated_at:
+          type: integer
+          format: int64
+    NodeStatProcs:
+      type: object
+      properties:
+        pid:
+          type: integer
+        name:
+          type: string
+        rss_mb:
+          type: number
+          format: double
+        cpu_pct:
+          type: number
+          format: double
+          description: Percent of one core, measured over the sample interval.
+    NodeStat:
+      type: object
+      properties:
+        hostname:
+          type: string
+        role:
+          type: string
+          enum: [manager, worker]
+        cores:
+          type: integer
+          description: Logical CPUs; the load tint rule is load1 > 1.5 x cores.
+        load1:
+          type: number
+          format: double
+        load5:
+          type: number
+          format: double
+        load15:
+          type: number
+          format: double
+        mem_total_mb:
+          type: integer
+          format: int64
+        mem_used_mb:
+          type: integer
+          format: int64
+        mem_avail_mb:
+          type: integer
+          format: int64
+          description: MemAvailable; the tint rule is under 15 percent of total.
+        docker_up:
+          type: boolean
+          description: This node's Docker engine socket answered when it sampled.
+        top_rss:
+          type: array
+          description: At most five processes, by resident memory descending.
+          items:
+            $ref: "#/components/schemas/NodeStatProcs"
+        top_cpu:
+          type: array
+          description: At most five processes, by CPU share descending.
+          items:
+            $ref: "#/components/schemas/NodeStatProcs"
+        sample_ts:
+          type: integer
+          format: int64
+          description: Unix seconds when the node sampled itself; older than 3 minutes is stale.
         updated_at:
           type: integer
           format: int64

@@ -295,6 +295,33 @@ type renderedConfigsResponse struct {
 	Configs []RenderedConfig `json:"configs"`
 }
 
+// NodeStatProc is one process in a node's top list (GET /api/node-stats).
+type NodeStatProc struct {
+	PID    int     `json:"pid"`
+	Name   string  `json:"name"`
+	RSSMB  float64 `json:"rss_mb"`
+	CPUPct float64 `json:"cpu_pct"`
+}
+
+// NodeStat is one node's newest sample (GET /api/node-stats). One per node:
+// the daemon upserts the row, so this list never grows a history.
+type NodeStat struct {
+	Hostname   string         `json:"hostname"`
+	Role       string         `json:"role"`
+	Cores      int            `json:"cores"`
+	Load1      float64        `json:"load1"`
+	Load5      float64        `json:"load5"`
+	Load15     float64        `json:"load15"`
+	MemTotalMB int64          `json:"mem_total_mb"`
+	MemUsedMB  int64          `json:"mem_used_mb"`
+	MemAvailMB int64          `json:"mem_avail_mb"`
+	DockerUp   bool           `json:"docker_up"`
+	TopRSS     []NodeStatProc `json:"top_rss"`
+	TopCPU     []NodeStatProc `json:"top_cpu"`
+	SampleTS   int64          `json:"sample_ts"`
+	UpdatedAt  int64          `json:"updated_at"`
+}
+
 // ClusterSettings is GET/PUT /api/cluster/settings — the editable cluster
 // settings keyed by name (e.g. "volume_root", "sso_enabled", "domain").
 type ClusterSettings map[string]string

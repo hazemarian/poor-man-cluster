@@ -615,8 +615,13 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 		t.Error("logs pipeline must lead with memory_limiter, then resourcedetection + filter/skip_filelog before batch")
 	}
 
-	if !strings.Contains(body, "[memory_limiter, resourcedetection, transform/metrics, batch]") {
-		t.Error("metrics pipeline must lead with memory_limiter, then resourcedetection + transform/metrics before batch")
+	// The metrics pipeline keeps its invariant (memory_limiter first, batch
+	// last) and gained one filter: node-stats series are ingested by
+	// metrics/nodestat instead, so a second copy must not reach Parseable.
+	for _, want := range []string{"memory_limiter, resourcedetection, transform/metrics", "filter/drop_nodestat, batch]"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics pipeline must contain %q", want)
+		}
 	}
 
 	// The generic `resource` processor was deleted with the per-container

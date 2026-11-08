@@ -247,6 +247,119 @@
   {{end}}
 </div>
 
+{{/* Per-node resources: the question the 2026-11-08 post-mortem asked for
+     hours and could not answer — which process is eating THIS node. One row per
+     node, read from the control-plane DB, so the panel answers while telemetry
+     is broken. Four tint rules, all computed in the controller: load above 1.5x
+     cores, available memory under 15%, a sample older than 3 minutes (greyed AND
+     labelled), and an unreachable Docker engine. */}}
+<div class="panel" id="node-resources">
+  <div class="panel-head">
+    {{icon "cpu"}}
+    <h2>{{T "nodestat.title"}}</h2>
+    <div class="ph-actions">
+      {{if .NodeStatsKnown}}
+        <span class="pill plain">{{P (len .NodeStats) "plural.nodes"}}</span>
+      {{else}}
+        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}
+    </div>
+  </div>
+
+  {{if not .NodeStats}}
+    <div class="panel-body">
+      <div class="empty">
+        {{icon "cpu"}}
+        <h3>{{T "nodestat.empty_title"}}</h3>
+        <p>{{T "nodestat.empty_body"}}</p>
+      </div>
+    </div>
+  {{else}}
+    <div class="table-wrap only-md">
+      <table class="table nodestat-table">
+        <thead>
+          <tr>
+            <th>{{T "common.node"}}</th>
+            <th class="num">{{T "nodestat.load"}}</th>
+            <th>{{T "nodestat.memory"}}</th>
+            <th>{{T "nodestat.top_rss"}}</th>
+            <th>{{T "nodestat.top_cpu"}}</th>
+            <th class="num">{{T "nodestat.sample_age"}}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .NodeStats}}
+          <tr class="{{.RowClass}}">
+            <td>
+              <div class="node-identity">
+                <span class="node-glyph">{{icon "server"}}</span>
+                <span class="mono iso" dir="ltr">{{.Hostname}}</span>
+                {{if eq .Role "manager"}}<span class="pill plain">{{T "st.manager"}}</span>
+                {{else if eq .Role "worker"}}<span class="pill plain">{{T "st.worker"}}</span>{{end}}
+                {{if .Overloaded}}<span class="pill warn" title="{{T "nodestat.overloaded_hint"}}">{{T "nodestat.overloaded"}}</span>{{end}}
+                {{if .MemLow}}<span class="pill warn" title="{{T "nodestat.mem_low_hint"}}">{{T "nodestat.mem_low"}}</span>{{end}}
+                {{if .DockerDown}}<span class="pill bad" title="{{T "nodestat.docker_down_hint"}}">{{T "nodestat.docker_down"}}</span>{{end}}
+              </div>
+            </td>
+            <td class="num mono iso" dir="ltr">
+              <span class="{{if .Overloaded}}v-warn{{end}}">{{NF .Load1 2}}</span>
+              <small class="muted">/ {{N .Cores}} {{T "nodestat.cores"}}</small>
+            </td>
+            <td class="mono iso" dir="ltr">
+              {{N .MemUsedMB}} / {{N .MemTotalMB}} MB
+              <small class="muted">{{N .MemAvailMB}} MB {{T "nodestat.free"}}</small>
+            </td>
+            <td>
+              {{if .TopRSS}}
+              <ul class="proc-list">
+                {{range .TopRSS}}<li><span class="p-name">{{.Name}}</span><span class="p-val mono iso">{{.Value}}</span></li>{{end}}
+              </ul>
+              {{else}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
+            </td>
+            <td>
+              {{if .TopCPU}}
+              <ul class="proc-list">
+                {{range .TopCPU}}<li><span class="p-name">{{.Name}}</span><span class="p-val mono iso">{{.Value}}</span></li>{{end}}
+              </ul>
+              {{else}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
+            </td>
+            <td class="num">
+              <span class="mono iso">{{.AgeText}}</span>
+              {{if .Stale}}<span class="pill warn stale-pill"><i class="dot"></i>{{T "nodestat.stale"}}</span>{{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+
+    {{/* Phones: the same fields as key/value rows. A six-column table with two
+         process lists inside it is unreadable at 390px. */}}
+    <div class="only-sm">
+      {{range .NodeStats}}
+      <div class="kv{{if .Stale}} is-stale{{end}}">
+        <div class="kv-row">
+          <span class="k">{{T "common.node"}}</span>
+          <span class="v"><span class="mono iso" dir="ltr">{{.Hostname}}</span>
+            {{if eq .Role "manager"}}<span class="pill plain">{{T "st.manager"}}</span>{{else if eq .Role "worker"}}<span class="pill plain">{{T "st.worker"}}</span>{{end}}
+            {{if .Stale}}<span class="pill warn">{{T "nodestat.stale"}}</span>{{end}}
+          </span>
+        </div>
+        <div class="kv-row"><span class="k">{{T "nodestat.load"}}</span><span class="v mono iso" dir="ltr">{{NF .Load1 2}} / {{N .Cores}} {{T "nodestat.cores"}}</span></div>
+        <div class="kv-row"><span class="k">{{T "nodestat.memory"}}</span><span class="v mono iso" dir="ltr">{{N .MemUsedMB}} / {{N .MemTotalMB}} MB ({{N .MemAvailMB}} MB {{T "nodestat.free"}})</span></div>
+        <div class="kv-row"><span class="k">{{T "nodestat.top_rss"}}</span><span class="v">
+          {{range .TopRSS}}<span class="proc-inline"><span class="p-name">{{.Name}}</span> <span class="mono iso">{{.Value}}</span></span>{{else}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
+        </span></div>
+        <div class="kv-row"><span class="k">{{T "nodestat.top_cpu"}}</span><span class="v">
+          {{range .TopCPU}}<span class="proc-inline"><span class="p-name">{{.Name}}</span> <span class="mono iso">{{.Value}}</span></span>{{else}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
+        </span></div>
+        <div class="kv-row"><span class="k">{{T "nodestat.sample_age"}}</span><span class="v mono iso">{{.AgeText}}</span></div>
+      </div>
+      {{end}}
+    </div>
+  {{end}}
+</div>
+
 <section class="workspace" aria-labelledby="workspace-title">
   <div class="workspace-head">
     <h2 id="workspace-title">{{T "overview.workspace"}}</h2>

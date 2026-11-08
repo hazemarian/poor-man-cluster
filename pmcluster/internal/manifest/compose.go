@@ -76,7 +76,15 @@ type composeResourceSpec struct {
 }
 
 type composePlacement struct {
-	Constraints []string `json:"constraints,omitempty"`
+	Constraints []string            `json:"constraints,omitempty"`
+	Preferences []composePreference `json:"preferences,omitempty"`
+}
+
+// composePreference is one swarm placement preference. Docker Compose spells
+// every preference as a `spread` expression ("node.labels.<key>[==<value>]"),
+// which is what the DSL's raw `preferences` entries already are.
+type composePreference struct {
+	Spread string `json:"spread"`
 }
 
 type composeRestartPolicy struct {
