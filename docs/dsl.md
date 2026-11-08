@@ -384,8 +384,9 @@ services:
       aliases: [api.donations.example.org]
     env:
       PORT: "8080"
-      # the collector publishes node-local OTLP (host mode :4318) and serves
-      # gRPC :4317 / HTTP :4318 on monitoring-net as observability_otel-collector:
+      # the collector serves OTLP on monitoring-net as observability_otel-collector
+      # (gRPC :4317, HTTP :4318); :4318 is also published on the routing mesh
+      # (ingress) for the host-process daemon, which cannot resolve this name
       OTEL_EXPORTER_OTLP_ENDPOINT: http://observability_otel-collector:4318
       OTEL_SERVICE_NAME: donation-campaign-api
     healthcheck: { type: http, path: /health }

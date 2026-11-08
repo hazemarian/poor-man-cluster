@@ -62,6 +62,12 @@ node's own loopback included). An ingress
 publish would bind all four nodes for a reader that only ever needs one, and each
 of those four is another interface that must be kept closed.
 
+`4318` is the opposite case, and it is published with the routing mesh on
+purpose: every node runs a daemon that has to reach a collector, so the port has
+to exist everywhere and one task serves them all. The rules for that endpoint —
+node-local, ingress-published, never overlay DNS — are in
+[OpenTelemetry ingestion](#opentelemetry-ingestion).
+
 Because one node listens and the rest dial it, that node's host firewall must
 allow `8000` from the cluster's private range — `./harden-host.sh` does that, and
 still denies it to the WAN. Two things then need verifying, and they are not
@@ -198,17 +204,55 @@ The collector accepts OTLP on gRPC `4317` and HTTP `4318` on every node. The
 monitoring network endpoint for HTTP is
 `http://observability_otel-collector:4318`; gRPC uses the internal
 `observability_otel-collector:4317` endpoint. The Swarm stack publishes HTTP
-`4318` in host mode so the host daemon and local clients can reach it; the
-published host port and the internal gRPC port are different endpoints.
+`4318` **with `mode: ingress`**, so the routing mesh binds it on every node and
+forwards to the collector task, wherever that task runs; the internal gRPC port
+is not published at all.
 
 ```sh
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://<node>:4318
 export OTEL_SERVICE_NAME=checkout
 ```
 
-Port `4318` has no authentication. Firewall it to application networks, or send
-telemetry over the cluster's monitoring network using the collector service
-name instead of a host port.
+### The daemon's own endpoint: node-local, ingress-published, never overlay DNS
+
+This is stated once here because getting it wrong is expensive:
+
+- **The daemon ships to its own node's address, resolved from the swarm.** `pmcluster
+  serve` is a systemd process on the host, outside the overlay. It cannot resolve
+  `observability_otel-collector` — overlay DNS does not exist for a host process —
+  so it reads this node's `Status.Addr` from the swarm's own node record
+  (`internal/docker/selfaddr.go`), builds `http://<Status.Addr>:4318`, dial-checks it
+  once at startup, and uses it only if something answers. That is what the `ingress`
+  publish buys: the port exists on every node, so placement stops mattering.
+- **`127.0.0.1` is not an acceptable default.** It is correct only on the node that
+  happens to host the collector task. Everywhere else it is a closed port, and a
+  failed export is logged by the OTel SDK once per retry: on 2026-11-08 node
+  `nxt-sw-4-m` (1 vCPU) wrote 261,617 journal lines from a single daemon boot while
+  exporting to a closed `127.0.0.1:4318`; journald writes starved Docker's
+  heartbeat, the swarm marked the node Down and leadership moved off it.
+- **Never the overlay service name either** — for the daemon that is a DNS failure
+  instead of a refused connection, with the same unbounded logging behind it.
+- `otlp_endpoint` defaults to `auto` (resolve as above). An empty value disables
+  self-telemetry. Any explicit URL is used verbatim, never overridden.
+- When the address cannot be read, or nothing answers the dial, the daemon exports
+  nothing and writes **one** journal line naming the reason. A missing trace is
+  cheaper than a storm; the daemon does not re-resolve at runtime, so restart it
+  (`systemctl restart pmcluster`) after deploying the observability stack on a node
+  that booted before it.
+
+Export failures that happen later are rate-limited in both the daemon and the CLI:
+the first failure is logged with its error, then at most one summary per five
+minutes carrying the suppressed count, then one recovery line. An outage costs a
+handful of journal lines, not one per export.
+
+Port `4318` has no authentication, and it is published on every node now. Keep it
+off the WAN: `harden-host.sh` drops `4318` in the `DOCKER-USER` chain for every
+non-private source (Docker's published ports bypass ufw, so this rule — not ufw —
+is the real gate). Verify from outside the cluster with a plain TCP connect; a
+timeout is the expected answer, a completed connect is a regression.
+
+Applications inside the overlay should keep using the collector service name
+rather than a host port.
 
 `severityNumber` is the reliable level field for OTLP logs. If only
 `severityText` is sent, Parseable stores the level as unspecified.

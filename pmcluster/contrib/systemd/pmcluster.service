@@ -13,11 +13,25 @@
 # After placing the file:
 #   systemctl daemon-reload
 #   systemctl enable --now pmcluster
+#
+# Restart policy — bounded on purpose.
+#   2026-11-08: one node (1 vCPU) recorded 65 Started/Stopped pairs for this
+#   unit in a single boot while the OTel exporter was retrying a closed port.
+#   Each start repeats the daemon's startup work (Docker discovery, the
+#   control-plane check, the first telemetry export), so an unbounded
+#   Restart=always turns one broken dependency into continuous load.
+#   RestartSec=10 spaces the attempts, and the [Unit] limits above stop the
+#   loop after five starts in five minutes: the unit then stays `failed`, which
+#   is visible in `systemctl status pmcluster` and in `pmcluster node` output.
+#   After fixing the cause, re-arm it with:
+#     systemctl reset-failed pmcluster && systemctl start pmcluster
 
 [Unit]
 Description=pmcluster API Server
 After=docker.service
 Requires=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -26,7 +40,7 @@ Group=${GROUP}
 Environment=HOME=${HOME}
 ExecStart=/usr/local/bin/pmcluster serve
 Restart=always
-RestartSec=5
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target

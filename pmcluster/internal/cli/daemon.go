@@ -21,11 +21,27 @@ import (
 // pmcluster inactive — the node then has no control loop, so if it comes back
 // as (or later becomes) the Swarm leader the cluster silently stops reconciling
 // (observed live on a real cluster).
+//
+// The restart policy is deliberately bounded. `Restart=always` alone will spin
+// as fast as the process exits: one node recorded 65 starts in a single boot
+// (2026-11-08, nxt-sw-4-m), each start re-running startup work — Docker
+// discovery, the control-plane check, the first telemetry export — on a 1-vCPU
+// box that was already the one the swarm had just marked Down. RestartSec=10
+// spaces attempts out; StartLimitBurst=5 inside StartLimitIntervalSec=300 caps
+// them, after which systemd leaves the unit `failed` and says so, which is a
+// state an operator can see and act on. A crash loop is a bug to fix, not a
+// rhythm to keep; the unit must not be the loudest writer in the journal while
+// somebody is trying to read it.
 func renderSystemdUnit(pmUser, group, home, execStart string) string {
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster API Server
 After=docker.service
 BindsTo=docker.service
+# Start-rate limit: at most 5 starts per 5 minutes, then stop trying and leave
+# the unit failed (systemctl status shows the loop; 'systemctl reset-failed
+# pmcluster' re-arms it once the cause is fixed).
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -34,7 +50,7 @@ Group=%s
 Environment=HOME=%s
 ExecStart=%s
 Restart=always
-RestartSec=5
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target

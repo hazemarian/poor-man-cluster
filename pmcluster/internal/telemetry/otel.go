@@ -1,8 +1,15 @@
 // Package telemetry owns the OpenTelemetry SDK lifecycle for the
 // pmcluster daemon. Init configures TracerProvider + MeterProvider +
 // LoggerProvider against the OTLP/HTTP receiver published by the
-// observability stack on 127.0.0.1:4318 (see
-// internal/cluster/embeds/observability-stack.yml).
+// observability stack (see internal/cluster/embeds/observability-stack.yml).
+//
+// The endpoint is never hard-coded here: config.ResolveOTLPEndpoint resolves
+// this node's swarm address and dial-checks it, and a node without a reachable
+// collector gets NO exporter rather than one pointed at a closed port. Export
+// failures are rate-limited by failureReporter, because the SDK's default error
+// handler writes one journal line per failed export — unbounded, which is how a
+// single daemon boot on a 1-vCPU node produced 261,617 lines and starved the
+// container runtime's heartbeat on 2026-11-08.
 //
 // All providers are registered globally so that callers can use the
 // standard otel.Tracer / otel.Meter / global.GetLoggerProvider entry
@@ -35,8 +42,18 @@ import (
 // Options configures the SDK. Endpoint empty disables everything.
 type Options struct {
 	// Endpoint is the base URL of the OTLP/HTTP receiver, e.g.
-	// "http://127.0.0.1:4318". Empty disables self-telemetry.
+	// "http://10.7.224.15:4318" — always this node's swarm address, resolved
+	// by config.ResolveOTLPEndpoint. Empty disables self-telemetry.
 	Endpoint string
+
+	// Failures receives the rate-limited export-failure events. nil logs them
+	// through the standard logger; the daemon passes a zerolog wrapper so the
+	// lines land beside every other daemon log.
+	Failures func(FailureEvent)
+
+	// FailureInterval overrides how often a failing exporter may speak.
+	// Zero means DefaultFailureLogInterval.
+	FailureInterval time.Duration
 
 	// ServiceName is reported as resource attribute service.name.
 	// Defaults to "pmcluster".
@@ -71,6 +88,14 @@ func Init(ctx context.Context, opts Options) (Shutdown, error) {
 	if opts.ServiceNamespace == "" {
 		opts.ServiceNamespace = "control-plane"
 	}
+
+	// One global handler for every provider: the SDK calls it once per failed
+	// export, from its own goroutines, for traces, metrics and logs alike.
+	// Installing it before any exporter is built means a collector that is down
+	// from the first batch costs one line, not one line per export.
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(
+		newFailureReporter(opts.FailureInterval, time.Now, probeEndpoint(host), opts.Failures).Handle,
+	))
 
 	res, err := resource.Merge(
 		resource.Default(),

@@ -77,15 +77,25 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		log.Warn().Err(err).Msg("log sweep had issues")
 	}
 
+	// Self-telemetry endpoint: THIS node's swarm address, resolved and
+	// dial-checked at startup (config.ResolveOTLPEndpoint). A node that cannot
+	// name itself — or whose collector port does not answer — gets no exporter
+	// and one line saying why, instead of an exporter aimed at a closed port.
+	endpoint, telemetryOff := config.ResolveOTLPEndpoint(cmd.Context(), cfg.OTLPEndpoint, docker.NodeSelfAddr, nil)
+	if telemetryOff != "" {
+		log.Warn().Msg(telemetryOff)
+	}
+
 	telemetryShutdown, err := telemetry.Init(cmd.Context(), telemetry.Options{
-		Endpoint:       cfg.OTLPEndpoint,
+		Endpoint:       endpoint,
 		ServiceName:    serviceName(),
 		ServiceVersion: buildinfo.Version,
+		Failures:       telemetryFailureLogger(log),
 	})
 	if err != nil {
-		log.Warn().Err(err).Str("endpoint", cfg.OTLPEndpoint).Msg("OTel telemetry disabled")
-	} else if cfg.OTLPEndpoint != "" {
-		log.Info().Str("endpoint", cfg.OTLPEndpoint).Msg("OTel telemetry enabled")
+		log.Warn().Err(err).Str("endpoint", endpoint).Msg("OTel telemetry disabled")
+	} else if endpoint != "" {
+		log.Info().Str("endpoint", endpoint).Msg("OTel telemetry enabled")
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

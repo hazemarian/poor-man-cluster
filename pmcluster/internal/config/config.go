@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 
@@ -19,10 +20,11 @@ type Config struct {
 	DataDir    string `mapstructure:"data_dir"`
 	LogLevel   string `mapstructure:"log_level"`
 
-	// OTLPEndpoint is the base URL of the OTel Collector that
-	// pmcluster's own daemon ships traces/metrics/logs to. The
-	// observability stack publishes the OTLP/HTTP receiver on
-	// 127.0.0.1:4318 on every manager node. Empty disables self-telemetry.
+	// OTLPEndpoint is the base URL of the OTel Collector that pmcluster's own
+	// daemon ships traces/metrics/logs to. It defaults to OTLPAutoEndpoint,
+	// which resolves THIS node's swarm address at startup (see
+	// SelfTelemetryEndpoint) and never names a fixed host. Empty disables
+	// self-telemetry.
 	OTLPEndpoint string `mapstructure:"otlp_endpoint"`
 }
 
@@ -48,7 +50,7 @@ func defaultConfig() (*Config, error) {
 		ListenAddr:   "0.0.0.0:9090",
 		DataDir:      filepath.Join(home, ".pmcluster"),
 		LogLevel:     "info",
-		OTLPEndpoint: "http://127.0.0.1:4318",
+		OTLPEndpoint: OTLPAutoEndpoint,
 	}, nil
 }
 
@@ -90,6 +92,16 @@ func Load(configPath string) (*Config, error) {
 	if err := v.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
+
+	// viper's AutomaticEnv treats an EMPTY env value as "not set", so
+	// PMCLUSTER_OTLP_ENDPOINT= would quietly fall back to the "auto" default
+	// while every other spelling of empty means disabled. Collapse that
+	// difference: an empty otlp_endpoint turns self-telemetry off, whatever
+	// source it came from.
+	if val, ok := os.LookupEnv("PMCLUSTER_OTLP_ENDPOINT"); ok && strings.TrimSpace(val) == "" {
+		cfg.OTLPEndpoint = ""
+	}
+
 	cfg.normalizeLogLevel()
 	if err := cfg.validate(); err != nil {
 		return nil, err

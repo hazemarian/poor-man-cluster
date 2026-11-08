@@ -135,22 +135,49 @@ services:
   #     hands them whichever task survives; every app on this cluster is
   #     configured that way, never localhost.
   #
-  # The daemon depends on the LOCAL task specifically. `pmcluster serve` is a
-  # host process and ships its own telemetry to http://127.0.0.1:4318
-  # (config.OTLPEndpoint); that only resolves because this service publishes
-  # 4318 in host mode on every node it lands on. Take the task off a node and
-  # that node's daemon silently loses its logs/traces/metrics — seen on
-  # 2026-10-16 as `dial tcp 127.0.0.1:4318: connect: connection refused` in
-  # journalctl while the worker ran no collector.
+  # The daemon does NOT depend on the local task any more, and that is the
+  # change this comment describes. `pmcluster serve` is a systemd process on the
+  # host, outside the overlay: it cannot resolve `observability_otel-collector`
+  # (overlay DNS is not visible to a host process) and it no longer tries. It
+  # dials THIS node's swarm address on 4318, resolved from the swarm's own node
+  # record and dial-checked at startup (internal/config/selftelemetry.go), and
+  # 4318 is published with `mode: ingress` so the routing mesh answers on every
+  # node from a single task.
+  #
+  # What ingress buys: one listener per node without one task per node. The
+  # daemon's target is the address the swarm knows this node by, so placement
+  # stops mattering — no node has to host the collector for its daemon to be
+  # observable. What it costs: when the task is on another node, the exporter's
+  # traffic crosses the mesh (one VXLAN hop) instead of a loopback write. For a
+  # control-plane daemon that is a few KiB every few seconds, and it is the price
+  # of not carrying a per-node reservation just to keep a port open.
+  #
+  # Host mode was the previous shape, and it was a trap worth naming. It
+  # published 4318 ONLY on the node running the task, while the daemon's endpoint
+  # was the constant http://127.0.0.1:4318 — a closed port on every other node.
+  # The OTel SDK's default error handler logs every failed export unbounded, so
+  # on 2026-11-08 node nxt-sw-4-m (1 vCPU) wrote 261,617 journal lines from one
+  # daemon boot (238,951 / 213,808 / 196,367 / 151,609 / 71,180 from other
+  # incarnations); journald writes starved docker's heartbeat, the swarm marked
+  # the node Down and leadership moved off it. 2026-10-16 was the same failure in
+  # miniature: `dial tcp 127.0.0.1:4318: connect: connection refused` on a worker
+  # running no collector.
+  #
+  # 4318 is still not public: it is a documented Traefik bypass, and
+  # harden-host.sh DROPs it in DOCKER-USER for every non-private source. That
+  # rule is what makes an ingress publish acceptable — without it, ingress would
+  # put the collector on all four public interfaces, and an unauthenticated OTLP
+  # receiver is an open ingestion endpoint.
   #
   # So the luxury was never the fourth container, it was the RESERVATION
   # (256M) and the CAP (512M) carried on every node for a process measured at
   # 88-102MiB and 0.02-0.10 cores across all four nodes (24h peaks read from
-  # container.memory.percent / container.cpu.utilization). Dropping to three
-  # manager copies buys 89MiB on the node with the MOST free memory and costs
-  # that node's container metrics plus its daemon telemetry; trimming the
-  # reservation returns 160MiB of schedulable memory on every node and costs
-  # nothing observable.
+  # container.memory.percent / container.cpu.utilization). Trimming the
+  # reservation to the numbers below returns 160MiB of schedulable memory on
+  # every node and costs nothing observable. Dropping to three manager copies
+  # would still cost each remaining node's docker_stats and filelog collection;
+  # the daemon's own telemetry is no longer a reason to keep a copy, because the
+  # routing mesh publishes the port whether the task is local or not.
   #
   # Sizing rule: reserve ~the measured steady state, cap at ~3x the measured
   # peak, and keep the collector's own memory_limiter
@@ -170,7 +197,11 @@ services:
     expose:
       port: 4318
       external: 4318
-      mode: host
+      # ingress, not host: the routing mesh binds 4318 on EVERY node and forwards
+      # to this service's task wherever it runs, so a host-process daemon can
+      # dial its own node's swarm address and always reach a collector. See the
+      # long note above for what that buys and what it costs.
+      mode: ingress
     binds:
       - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"

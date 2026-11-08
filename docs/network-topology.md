@@ -239,7 +239,7 @@ completely replaceable by the three manual commands above.
 | 7946 | TCP/UDP | Node-to-node gossip | other swarm nodes only |
 | 4789 | UDP | Overlay networks (VXLAN) | other swarm nodes only |
 | 8333 | TCP | in-cluster SeaweedFS backup store — its S3 API is **published on the routing mesh** (`ingress`), so docker-proxy listens on 8333 on *every* node | cluster nodes only — restrict it (see below); it serves the failover restore and the store-transit mover via `127.0.0.1:8333` / `host.docker.internal:8333` |
-| 4318 | TCP | OTel collector node-local OTLP (published `host` mode) | **not** the internet — a documented Traefik bypass, closed to the WAN by `harden-host.sh` |
+| 4318 | TCP | OTel collector OTLP/HTTP (published `ingress`: bound on every node, forwarded to the collector task) | swarm nodes and their host daemons only — **not** the internet; a documented Traefik bypass, closed to the WAN by the `DOCKER-USER` rule in `harden-host.sh` |
 
 Options A/B: open 2377/7946/4789 **only to the specific peer node IPs**.
 Option D: leave them closed to the public — the tailnet carries them (but see

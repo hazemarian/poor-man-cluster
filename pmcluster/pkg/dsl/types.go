@@ -218,9 +218,11 @@ type Expose struct {
 	External int `json:"external,omitempty"`
 
 	// Mode is the swarm port publishing mode when External is set: ingress
-	// (default, swarm load-balanced) or host (published on every node with a
-	// task — the OTel collector uses host so the node-local daemon reaches
-	// 127.0.0.1:4318 on the same node).
+	// (default, swarm load-balanced: bound on EVERY node, forwarded to the
+	// service's task wherever it runs) or host (bound only on the nodes that
+	// run a task). The OTel collector publishes 4318 with ingress, because the
+	// daemon is a host process that resolves its own node's swarm address and
+	// must reach a collector from whichever node the task is absent on.
 	Mode string `json:"mode,omitempty"`
 
 	// Aliases are extra hostnames that route to the same backend. Each

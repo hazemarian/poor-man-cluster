@@ -282,11 +282,12 @@ func composeServiceFromIR(
 			cs.Ports = append(cs.Ports, cp)
 		}
 	}
-	// expose.external publishes the exposed container port to the swarm as a
-	// real host port (TCP). Mode defaults to ingress (swarm load-balanced);
-	// host publishes on every node with a task (the OTel collector's node-local
-	// 4318 for the daemon). Raw publish only — Traefik routing is separate and
-	// gated on expose.host.
+	// expose.external publishes the exposed container port to the swarm (TCP).
+	// Mode defaults to ingress: the routing mesh binds the port on every node
+	// and forwards to the service's task, which is how the OTel collector's 4318
+	// stays reachable from a daemon on a node that runs no collector. host
+	// publishes only on nodes that hold a task. Raw publish only — Traefik
+	// routing is separate and gated on expose.host.
 	if s.Expose != nil && s.Expose.External > 0 {
 		cp := composePort{
 			Target:    s.Expose.Port,

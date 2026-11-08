@@ -27,6 +27,13 @@ CLI itself: `cluster up`, `cluster update`, and `join` write
 ( re)start it. `contrib/systemd/pmcluster.service` is a reference template for
 hand-rolled setups.
 
+The rendered unit restarts the daemon at most five times in five minutes, then
+stops and leaves it `failed` (`RestartSec=10`, `StartLimitIntervalSec=300`,
+`StartLimitBurst=5`). Unbounded restart was not theoretical: a node with a
+1 vCPU wrote 65 Started/Stopped pairs in one boot while the daemon was exporting
+to a port nothing listened on. `systemctl status pmcluster` shows the loop and
+`systemctl reset-failed pmcluster` re-arms the unit once the cause is fixed.
+
 ## Quick start
 
 ```bash

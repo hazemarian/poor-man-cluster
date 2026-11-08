@@ -28,7 +28,10 @@ func TestRenderSystemdUnit(t *testing.T) {
 		"Environment=HOME=/home/pmuser",
 		"ExecStart=/usr/local/bin/pmcluster serve",
 		"Restart=always",
-		"RestartSec=5",
+		// The restart backoff: 5s let a failing daemon restart faster than the
+		// journal could drain on one node (65 starts in a boot). The bound is
+		// asserted properly in TestRenderSystemdUnit_BoundsTheRestartLoop.
+		"RestartSec=10",
 		"[Install]",
 		"WantedBy=multi-user.target",
 		"WantedBy=docker.service",
