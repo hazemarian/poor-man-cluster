@@ -256,9 +256,10 @@ applies the reference hardening in one shot:
    networking and the swarm ingress.
 2. **iptables DOCKER-USER rules** — close the ports Docker *publishes* that
    must NOT be public: 4318 (OTLP, the obvious Traefik bypass) via
-   `RESTRICTED_DOCKER_PORTS`, while the docker/overlay subnets (default
-   `172.16.0.0/12`) keep talking. The host-bound control plane 9090/2377/7946
-   is closed by the ufw catch-all in step 1 (re-allowed only from
+   `RESTRICTED_DOCKER_PORTS`, while every private source returns first —
+   loopback, `172.16.0.0/12` and the rest of RFC1918, which is what a peer's
+   request to an ingress-published port arrives as. The host-bound control plane
+   9090/2377/7946 is closed by the ufw catch-all in step 1 (re-allowed only from
    `SWARM_PEERS=<ip,…>`, exported per node with the other nodes' IPs). **If the
    in-cluster backup store is enabled, add 8333 to `RESTRICTED_DOCKER_PORTS`**
    so the store stays cluster-internal — the failover/restore paths reach it

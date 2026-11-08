@@ -46,7 +46,7 @@ services:                     # required — one or more service definitions
 | `strict_backup` | no | only meaningful with `backup_before_deploy: true` |
 | `platform` | no | **reserved for pmcluster's own platform stacks** (`infra`/`edge`/`observability`/`backup`/`sso`) — stamps `io.pmcluster.platform=true` on every service, excludes the stack from the app drift loop, makes it non-deletable via the API, and is only removed by `cluster down --purge`. User deploys (`pmcluster deploy`, `POST /api/stacks`, webhooks) are **refused** this flag: `platform: true is reserved for pmcluster-managed platform stacks`. |
 | `networks` | no | additional **external** Swarm networks every service joins. When set, the auto-injected private overlay net is **skipped** (not created) — services reach each other by fully-qualified DNS on the named networks. |
-| `volumes` | no | map of top-level named volumes declared verbatim (`name: ""` for a plain local volume, or `name: /host/path` to bind that host path) — **never** relocated under the volume root. Used by platform stacks whose volumes already exist on hosts (`seaweeddata`, `traefik_acme`, `openobserve_data`). |
+| `volumes` | no | map of top-level named volumes declared verbatim (`name: ""` for a plain local volume, or `name: /host/path` to bind that host path) — **never** relocated under the volume root. Used by platform stacks whose volumes already exist on hosts (`seaweeddata`, `traefik_acme`, `parseable_data`). |
 
 ---
 
@@ -109,8 +109,8 @@ services:
 | `user` | — | container user (`0:0`) |
 | `labels` | — | raw Swarm service labels (standard auto-injected labels always win on collision) |
 | `logging` | — | `driver` + `options` map (e.g. `json-file` with `max-size`/`max-file`) |
-| `networks` | — | per-service **external** Swarm networks joined in addition to the app-level `networks` (merged) — used when one stack splits membership (e.g. OpenObserve joins `traefik-net` + `monitoring-net` while the OTel collector joins only `monitoring-net`) |
-| `expose` | — | Traefik routing (see below). Add `external: <port>` to also publish the port to the swarm ingress as a real host port (TCP) — reachable directly, not only through Traefik |
+| `networks` | — | per-service **external** Swarm networks joined in addition to the app-level `networks` (merged) — used when one stack splits membership (e.g. the Parseable service joins `traefik-net` + `monitoring-net` while the OTel collector joins only `monitoring-net`) |
+| `expose` | — | Traefik routing (see below). Add `external: <port>` (plus `mode: ingress`/`host`) to also publish the port to the swarm — reachable directly, not only through Traefik |
 | `healthcheck` | — | shorthand or full form (see below) |
 | `update` | `1` / `10s` / `start-first` | Swarm rolling-update policy (skipped for `run_once`); volume-holding services automatically use `stop-first` |
 
@@ -207,7 +207,8 @@ expose:
                              # (target=port, published=external, TCP). Empty = only
                              # reachable through Traefik.
   mode: ingress              # optional — ingress (default) or host
-                             # (host → one port per node, e.g. node-local exporters)
+                             # (ingress → the routing mesh answers on every node;
+                             #  host → bound only where the task runs)
   aliases:                   # optional — extra hostnames → own Traefik routers
     - api.customer.com
   cors_disabled: false       # optional — opt out of the CORS middleware
@@ -216,8 +217,9 @@ expose:
 - `host` and each `alias` must look like a hostname (at least one dot). `host` is
   only required when `external` is not set: `expose` with `external` but no `host`
   publishes the raw swarm port with **no** Traefik router and no routing-network
-  membership (this is how the platform stack publishes the OTel collector's
-  node-local OTLP endpoint, and how Traefik itself binds 80/443).
+  membership (this is how Traefik itself binds 80/443, and how the platform
+  publishes the OTel collector's `4318` with `mode: ingress` — the routing mesh
+  answers on every node, which is what the host-process daemon needs).
 - Every exposed service automatically joins `traefik-net` (so Traefik can reach it) and `monitoring-net` (so OTel can scrape it).
 - `aliases` let a customer's own domain serve the same backend alongside the canonical `${domain}` host. Each alias gets its own Traefik router sharing the same backend.
 - When aliases are present, pmcluster emits a **per-app CORS middleware** whose origin regex spans the primary host and every alias (foreign domains aren't covered by the cluster-wide regex).

@@ -19,6 +19,7 @@ the [whitepaper](whitepaper.md).
 | Back up and restore: the volume, the run, retention, restore, what it guarantees | [`backup.md`](backup.md) |
 | Answer "is this platform healthy right now?" | [`health.md`](health.md) |
 | Wire up nodes, DNS, a load balancer, the firewall | [`network-topology.md`](network-topology.md) |
+| Read logs, metrics and traces, or find out where the daemon sends its own telemetry | [the observability chapter](../pmcluster/docs/observability.md) |
 | Understand the reconcile loop | [`control-loop-design.md`](control-loop-design.md) |
 | Read the security model | [`whitepaper.md`](whitepaper.md) (§13) |
 | See what was tested on real hardware (TC1–TC10) | [`test-reports/`](test-reports/README.md) |
@@ -58,7 +59,8 @@ the [whitepaper](whitepaper.md).
 
 Deeper design docs that live with the code:
 [`pmcluster/internal/ARCHITECTURE.md`](../pmcluster/internal/ARCHITECTURE.md),
-[`pmcluster/docs/`](../pmcluster/docs/) (openapi.yaml, service-ops, restore,
-console-i18n designs), and the
-[decision records](../pmcluster/docs/adr/README.md) — the choices that constrain
-the code, with what was rejected and what each one costs.
+[`pmcluster/docs/`](../pmcluster/docs/) — the observability chapter (the stack,
+the OTLP endpoints, the self-telemetry contract), the service-ops and
+console-i18n designs, and `openapi.yaml` — and the
+[decision records](../pmcluster/docs/adr/README.md), the choices that constrain
+the code with what was rejected and what each one costs.

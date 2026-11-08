@@ -34,7 +34,7 @@ One static Go binary brings a cluster up on cheap VPSes and gives you HTTPS ingr
 
 ## How it works
 
-One machine is the **manager** (runs `pmcluster` + the platform services); any number of **workers** join with one command. Traefik fronts HTTPS ingress; OpenObserve + an OTel collector give you logs/metrics/traces; a node-local agent snapshots each volume hourly and writes one verified artifact per stack.
+One machine is the **manager** (runs `pmcluster` + the platform services); any number of **workers** join with one command. Traefik fronts HTTPS ingress; Parseable + an OTel collector give you logs/metrics/traces; a node-local agent snapshots each volume hourly and writes one verified artifact per stack.
 
 ```
 Internet → Traefik (HTTPS, every manager)
@@ -51,7 +51,7 @@ The DB is the source of truth: `cluster update` re-renders platform configs, re-
 
 | Node | CPU | RAM | Notes |
 |------|-----|-----|-------|
-| Manager (leader) | 2 vCPU | 4 GB | Traefik + OpenObserve + OTel + backup agent + edge + pmcluster |
+| Manager (leader) | 2 vCPU | 4 GB | Traefik + Parseable + OTel + backup agent + edge + pmcluster |
 | Additional manager | 1 vCPU | 1 GB | Traefik (global on managers) + OTel + standby daemon |
 | Worker | 1 vCPU | 1 GB | OTel + (backup agent + stateful workloads when a storage node) |
 

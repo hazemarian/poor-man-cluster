@@ -14,7 +14,7 @@ loop.
 Poor Man's Stack is a self-hosted, single-node-friendly deployment platform
 built on **Docker Swarm**. A single Go binary called `pmcluster` is the control
 plane: it bootstraps a Swarm cluster, provisions the infrastructure services
-(Traefik, OpenObserve, OTel collector, backups), accepts application
+(Traefik, Parseable, OTel collector, backups), accepts application
 deployments through a YAML DSL, and manages TLS, secrets, configs, API keys,
 webhooks and backups — via a CLI, a REST API, and an operator console.
 
@@ -78,7 +78,7 @@ and optionally SSO via GitHub (oauth2-proxy on `https://sso.<domain>`).
                └── AES-GCM key ~/.pmcluster/.encryption_key
 
     SSO:        oauth2-proxy (sso stack, sso.<domain>) → GitHub OAuth
-    Observability: apps → OTLP :4317 → otel-collector (global) → OpenObserve
+    Observability: apps → OTLP :4317 → otel-collector (global) → Parseable
     Backups:       node agent (hourly, storage nodes) snapshot → per-stack
                    artifact → in-cluster SeaweedFS (S3 :8333) + offsite S3
 ```
@@ -761,9 +761,17 @@ wizard; a joined-but-unpromoted standby manager is recognized and skipped.
 `serve` waits for swarm leadership (15s poll; workers/standby managers idle).
 At startup — BEFORE the store opens — `ensureControlPlaneFresh` restores from
 the newest Raft-replicated `pmcluster_state_*` Docker config (key split into
-`pmcluster_state_key_*`); on promotion the leader only publishes a fresh
-snapshot (`controlplane.Kit`). Alongside the reconcile loop the leader runs
-`kit.Loop` (5-min change-detection snapshot; 500 KiB config ceiling; keeps 2).
+`pmcluster_state_key_*`). On every follower→leader transition the leadership
+goroutine runs `adoptOnLeadershipGain` → `Kit.AdoptOnLeadership`: the same
+freshness predicate, but the store is already open, so adoption stages the kit in
+`.adopt-*`, closes the handle (`store.Store.Swap`), renames `data.db` last and
+`.encryption_key` in, then reopens — and reloads `credentials.Cipher` when the key
+changed. It runs before `kit.Snapshot` and before the reconcile loop reads
+settings (`internal/cli/leader.go`, `internal/controlplane/adopt.go`). While it
+runs, `adoptionGate` answers 503 + `Retry-After: 1` for every route but
+`/health` (`internal/cli/adoptgate.go`). Alongside the reconcile loop the leader
+runs `kit.Loop` (5-min change-detection snapshot; 500 KiB config ceiling; keeps
+2). Adoption is never part of a tick.
 
 ### Upgrading the platform
 Push a `v*` tag → `release.yml` cross-compiles 4 tarballs + SHA256SUMS +

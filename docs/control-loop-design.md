@@ -107,12 +107,32 @@ credential ciphertext undecryptable.
 
 **The window in which the new leader is not yet serving.** Between the moment
 Swarm elects the node and the moment adoption finishes, the daemon answers `503`
-with `Retry-After` for everything except `/health` (`internal/cli/adoptgate.go`).
-That window is one kit extract plus one rename (plus waiting for any in-flight
-query to return), and it is
-the honest alternative to answering from the revision being replaced, which is
-the silent rollback this machinery exists to prevent. A request already in flight
-when the store closes may fail with `sql: database is closed`; retrying succeeds.
+with `Retry-After: 1` and a JSON body that says it is adopting, for every route
+except `/health` (`internal/cli/adoptgate.go`). The gate wraps the whole handler,
+so it covers the REST API, the console's fragments and the webhook receiver
+alike — anything that would read control-plane state. `/health` stays exempt
+because liveness has to answer during an adoption: a leader that looks down for
+the duration is a worse failure than the one being fixed.
+
+A caller should retry once, not page. The window is one kit extract plus one
+rename, plus any in-flight query the swap waits for; the gate's comment estimates
+a few tens of milliseconds, and it has not been timed against a live failover, so
+treat that as an order of magnitude rather than a number. A request already in
+flight when the store closes may fail with `sql: database is closed`; retrying
+succeeds. The alternative — answering from the revision being replaced — is the
+silent rollback this machinery exists to prevent.
+
+The journal names it: `control-plane data ADOPTED on leadership gain: store
+closed, data.db + .encryption_key replaced, store reopened, revision advanced`,
+with the config, the previous revision and whether the key changed. A node the
+leadership finds already current says so and touches no file.
+
+**A leadership move no longer serves stale state.** Before this, the failure was
+silent: the new leader answered `200` from its own older revision, so an API key
+created minutes earlier on the old leader returned `401` and read as a credential
+bug on a node that had, in fact, already received the newer kit through Raft. Now
+the same move is either invisible (the node was already current) or a short,
+deliberate `503` — never an answer built from the revision being replaced.
 
 Failures are contained, not fatal: an unreadable kit, a state config whose key
 config is missing, or a payload that does not extract leaves the current database

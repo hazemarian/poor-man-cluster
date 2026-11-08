@@ -89,7 +89,7 @@ manifest.
   Swarm) are snapshotted into the database by every cluster update and shown
   read-only on the **Settings** page under "Rendered cluster configs"
   (`GET /api/cluster/rendered` — **operator/admin role only**: the rendered
-  YAML embeds the OpenObserve root credentials).
+  YAML embeds the observability backend's admin credentials).
 - **`service`** — values belonging to one stack, reached from the stacks list
   via the **Config** button (page `/stacks/<name>/config`). Create forms
   prefill the `<stack>_` name prefix and record the owning stack.

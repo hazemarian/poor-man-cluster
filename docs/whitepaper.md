@@ -25,7 +25,7 @@ The platform targets a known set of node classes:
 | 1-core / 1.8 GiB worker (`nxt-sw-3-w`) | worker + backup store | a worker that also serves as a storage node |
 | small production VPSes (`nextrum-sy-1`, `nextrum-sy-2`, `wafaa`) | production | single manager + worker + single node |
 
-Two consequences follow, and both are invariants in the code. Heavy platform services must be pinned: on an all-manager swarm `node.role == manager` constrains nothing, so a JVM-class workload like OpenObserve could land on a 1-core node and starve it; `platform_node` defaults to the leader, and the backup store is pinned away from the platform and storage nodes. There is no spare capacity for a storage layer, which is why the HA story is pin + backup + restore rather than replication.
+Two consequences follow, and both are invariants in the code. Heavy platform services must be pinned: on an all-manager swarm `node.role == manager` constrains nothing, so a memory-hungry platform service could land on a 1-core node and starve it; `platform_node` defaults to the leader, and the backup store is pinned away from the platform and storage nodes. There is no spare capacity for a storage layer, which is why the HA story is pin + backup + restore rather than replication.
 
 Sources: docs/storage-and-databases.md; pmcluster/internal/cluster/cluster_state.go; pmcluster/internal/stacks/placement.go.
 
@@ -78,14 +78,14 @@ flowchart TD
         end
         subgraph SRV["served over Traefik"]
             direction TB
-            OO["OpenObserve<br/>observ.<domain>"]
+            PB["Parseable<br/>observ.<domain>"]
             AP["app stacks<br/>app.<domain>"]
         end
     end
     NET -->|"HTTPS"| LB
     LB -->|"80/443"| TR
     TR -->|"pmcluster.<domain>"| ED
-    TR -->|"observ.<domain>"| OO
+    TR -->|"observ.<domain>"| PB
     TR -->|"app.<domain>"| AP
     ED -->|"9090"| DM
     DM <-->|"2377/7946/4789"| W
@@ -94,7 +94,7 @@ flowchart TD
 
 The invariant it encodes: the only public path to the daemon runs through Traefik and the edge; nothing else on the cluster plane is reachable.
 
-By name: Swarm is the orchestrator; the daemon is the leader-only control plane; the edge (`pmcluster-edge`) is its only public proxy; Traefik fronts ingress; OpenObserve is observability; SeaweedFS is the backup store; a node-local agent takes one thin snapshot and writes one artifact per stack; SQLite holds desired state.
+By name: Swarm is the orchestrator; the daemon is the leader-only control plane; the edge (`pmcluster-edge`) is its only public proxy; Traefik fronts ingress; Parseable is the observability backend; SeaweedFS is the backup store; a node-local agent takes one thin snapshot and writes one artifact per stack; SQLite holds desired state.
 
 Sources: docs/network-topology.md; pmcluster/internal/cluster/embeds/infra-stack.yml; pmcluster/internal/cli/serve.go.
 
@@ -283,7 +283,7 @@ Sources: [docs/backup.md](backup.md); pmcluster/internal/cluster/embeds/backup-s
 
 The control plane survives the loss of its own leader through a Raft-replicated survivor kit. The leader runs `controlplane.Kit.Loop` — a 5-minute tick plus an immediate snapshot on promotion — publishing two Docker config families: `pmcluster_state_<unixnano>` (a tar.gz of `data.db`, `config.yaml`, and the `config/` tree) and `pmcluster_state_key_<unixnano>` (the `.encryption_key` bytes alone). A restore refuses a state config whose key config is missing, so key and ciphertext never share one blob. Swarm's Raft store replicates both to every manager; snapshots prune to the newest two and fail loudly above Docker's 500 KiB config ceiling.
 
-Adoption runs at exactly two call sites: at startup, before the store is opened, and **once on the follower→leader transition** (`Kit.AdoptOnLeadership`). The second one is what a live failover needs: a manager that becomes leader while running holds whatever database it last adopted, so an API key or credential created minutes earlier on the old leader answers 401 until something makes the new leader read the newest kit. Adoption closes the SQLite handle (`store.Store.Swap`), renames a staged `data.db` and `.encryption_key` into place — `data.db` last, so it is one atomic rename — writes `.state_revision`, and reopens the same handle every consumer holds; the in-memory cipher is reloaded when the key changed. The window in which the new leader is not yet serving is one extract plus one rename, and it answers 503/`Retry-After` (never a stale answer) for the duration.
+Adoption runs at exactly two call sites: at startup, before the store is opened, and **once on the follower→leader transition** (`Kit.AdoptOnLeadership`). The second one is what a live failover needs: a manager that becomes leader while running holds whatever database it last adopted, so an API key or credential created minutes earlier on the old leader answered 401 until something made the new leader read the newest kit — which is what the transition now does, before the node answers a control-plane read. Adoption closes the SQLite handle (`store.Store.Swap`), renames a staged `data.db` and `.encryption_key` into place — `data.db` last, so it is one atomic rename — writes `.state_revision`, and reopens the same handle every consumer holds; the in-memory cipher is reloaded when the key changed. The window in which the new leader is not yet serving is one extract plus one rename, and it answers `503` with `Retry-After: 1` on every route except `/health` (and never a stale answer) for the duration.
 
 What to look for: the two configs published separately, the startup restore positioned before `store.Open`, and the leadership-gain adoption that closes and reopens the store rather than writing under it.
 
@@ -330,7 +330,7 @@ One table states the trust boundary:
 | Sessions | Random persisted 32-byte secret (never the built-in default), `Secure` on HTTPS, bcrypt >72 bytes rejected | `internal/ui/` |
 | Edge | Rate limits, bans, 413 body caps | `internal/edgeproxy/` |
 | Platform flag | `platform: true` refused in user manifests, so a customer stack cannot masquerade as platform | `internal/stacks/deploy.go` |
-| OpenObserve surface | `openobserve-auto-auth` Traefik middleware injects the root-admin credential (Basic header + 30-day `auth_tokens` cookie) only after the `admin-auth`/`sso-auth` gate, and is omitted when the credential is unset — never exposed unpaired | `internal/cluster/embeds/traefik-dynamic.yml` |
+| Observability backend surface | `observability-auto-auth` Traefik middleware injects the managed admin credential (Basic header) on the `observ.<domain>` router only after the `admin-auth`/`sso-auth` gate, and is omitted when the credential is unset — never exposed unpaired | `internal/cluster/embeds/traefik-dynamic.yml` |
 
 Sources: pmcluster/internal/store/users.go; pmcluster/internal/auth/; pmcluster/internal/webhooks/; pmcluster/internal/edgeproxy/; pmcluster/internal/server/.
 

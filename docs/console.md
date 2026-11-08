@@ -46,7 +46,7 @@ model.
   credentials).
 - **Preferences** — theme plus the brand palette picker (six accent palettes,
   persisted before first paint).
-- **External** — nav links to `https://observ.<domain>` (OpenObserve) and
+- **External** — nav links to `https://observ.<domain>` (Parseable) and
   `https://traefik.<domain>/dashboard/` (Traefik dashboard).
 
 ## Status badges
@@ -64,38 +64,97 @@ the copyable markdown (single + combined), and `pmcluster stack badge
 
 ## Loading states
 
-Every console request shows that it is in flight. The cues are CSS-only,
-driven by the htmx `htmx-request` class and the theme/palette tokens — no
-JavaScript, no per-request state to keep in sync:
+A page is a shell plus fragments, and every fragment reads the daemon. Two
+consequences are visible in the console: the reads a page needs are issued at the
+same time, and the page shows that it is waiting.
+
+### One wave per page
+
+Every independent read goes out in one wave rather than one after another, so a
+page costs its slowest read instead of the sum of its panels. Two dependencies
+are real and stay explicit: the evidence read waits for the inventory it resolves
+service names against (and still fails closed on that error), and a node card is
+projected after the inventory resolves. The distinct-service-name read runs only
+on the observability logs tab, the one place its answer is rendered.
+
+Measured against the live API through a local console, cold, before and after
+that change:
+
+| page / fragment | before | after |
+| --- | --- | --- |
+| `/web/overview` | 1.09–1.29 s | 0.42–0.60 s |
+| `/web/observability` (cold) | 4.72 s | 1.83–2.43 s |
+| — `observability/evidence` | 1.50 s | 0.45–0.59 s |
+| — `observability/traces` | 1.29 s | 0.64–0.74 s |
+| `/web/stacks` | 0.50–0.65 s | 0.13–0.16 s |
+| `observability/summary` | 1.45–1.60 s | 1.45–1.60 s (unchanged) |
+
+The observability page's 4.72 s was three reads run in series — 1.88 s + 1.50 s +
+1.29 s = 4.67 s of backend work inside a page that rendered in 4.72 s, which is
+why it read as "the page is slow" rather than "one panel is slow".
+
+`summary` is the exception, and it is now the page's floor: it did not improve,
+and the observability page cannot render faster than it until that query itself
+gets cheaper. Ranges rather than single figures because a live cluster's link
+moves; compare builds inside one window, never one page load against another
+hours later. (`pmcluster/docs/observability.md` carries the complementary
+measurement — the same pages against a stub that charges every call a fixed
+250 ms, which isolates how many waves each page used to pay for.)
+
+### The cues
+
+Every cue is CSS-only, driven by the htmx `htmx-request` class and the
+theme/palette tokens — no JavaScript, no per-request state to keep in sync:
 
 - **Page progress bar.** A 2px `--accent` bar under the topbar animates for as
-  long as any htmx request is running (`body:has(.htmx-request) .inflight`). It
-  is fixed and transparent at rest, so it can never shift the layout.
-- **Panel reload.** A panel that replaces itself (the logs panel, the traces
-  panel, the observability summary) keeps its current content and dims it under
-  a spinner overlay (`.load-overlay`, activated by `hx-indicator`). Reading the
-  old numbers while the new ones load beats a blank panel — and the operator can
-  tell the difference between "reloading" and "broken".
+  long as any htmx request is running (`body:has(.htmx-request) .inflight`).
+- **Panel reload.** A panel that replaces itself keeps its current content and
+  dims it under a spinner overlay (`.load-overlay`, activated by `hx-indicator`).
+  Reading the old numbers while the new ones load beats a blank panel — and the
+  operator can tell "reloading" from "broken". Three panels carry one today: the
+  observability summary's refresh, the evidence form and the traces form.
 - **Skeleton on first paint.** The shell carries no data, so the first fragment
   lands after a round trip. Until then `#view` renders a page skeleton (title,
-  stat strip, panel bodies) at roughly the height of the content that is
-  coming, instead of an empty column.
-- **Busy buttons.** Every `hx-post` disables its submit control for the duration
-  of the request (`hx-disabled-elt`), so a slow action cannot be fired twice,
-  and takes a busy look (`cursor: progress`, dimmed fill, spinning leading
-  icon) rather than a dead one.
+  stat strip, panel bodies) instead of an empty column.
+- **Busy buttons.** A submitting control is disabled for the duration of the
+  request (`hx-disabled-elt`; 54 `hx-post` triggers and 71 declarations of it, so
+  some forms mark both the form and its buttons) and takes a busy look
+  (`cursor: progress`, dimmed fill, spinning leading icon) rather than a dead
+  one.
 
-The bar and the overlay wait 180–250ms before appearing: a swap that lands in
-50ms should not flash a placeholder at the operator. The rules live in the
-`loading states` section of `internal/ui/views/static/components.css`; colour
-comes from `--accent`, `--bg-card` and `--text-secondary`, so all twelve
-theme × palette combinations are covered without a rule per palette.
+**None of it occupies layout space.** The bar is `position: fixed`, the overlay
+is `position: absolute` inside its panel, the spinner has a fixed 16px box, and
+the skeleton reserves `min-height: 62vh` so the page body does not jump when the
+fragment lands. An indicator appearing must never move the control out from under
+the operator's cursor. The bar and the overlay also wait 180–250 ms before
+showing: a swap that lands in 50 ms should not flash a placeholder.
+
+The rules live in the `loading states` section of
+`internal/ui/views/static/components.css`; colour comes from `--accent`,
+`--bg-card` and `--text-secondary`, so all twelve theme × palette combinations
+are covered without a rule per palette.
 
 ```text
 htmx-request  →  .inflight            (page-wide bar)
               →  .load-overlay        (the panel named by hx-indicator)
               →  [disabled] on submit (hx-disabled-elt)
 ```
+
+### What was measured, and what was not
+
+The table above is wall-clock rendering of each page, before and after — the
+thing the change was for. It says nothing about the indicators.
+
+The indicators were verified only in part, and this document says so rather than
+implying a browser pass that did not happen. The hooks exist in the templates and
+the stylesheet — three `hx-indicator` targets each with a matching
+`.load-overlay`, `hx-disabled-elt` on every template that posts, the skeleton in
+the shell — and the CSS relies on `:has()`, so it needs a browser that supports
+it (current Safari, Chrome, Firefox; not an old embedded webview). What was not
+done is a browser-by-browser walk asserting that the bar appears for each kind of
+request, that the skeleton's reserved height matches the content that replaces
+it, or that an overlay clears correctly when a swap comes back as an error.
+Treat them as shipped and partly verified, not as measured.
 
 ## What the console does NOT cover
 

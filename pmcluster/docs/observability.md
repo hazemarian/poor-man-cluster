@@ -64,9 +64,10 @@ of those four is another interface that must be kept closed.
 
 `4318` is the opposite case, and it is published with the routing mesh on
 purpose: every node runs a daemon that has to reach a collector, so the port has
-to exist everywhere and one task serves them all. The rules for that endpoint —
-node-local, ingress-published, never overlay DNS — are in
-[OpenTelemetry ingestion](#opentelemetry-ingestion).
+to exist everywhere and one task serves them all. That whole subject — the
+address the daemon dials, what ingress buys and costs, and the one rule that
+keeps the port off the WAN — is
+[below](#self-telemetry-the-daemons-own-export).
 
 Because one node listens and the rest dial it, that node's host firewall must
 allow `8000` from the cluster's private range — `./harden-host.sh` does that, and
@@ -213,49 +214,188 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://<node>:4318
 export OTEL_SERVICE_NAME=checkout
 ```
 
-### The daemon's own endpoint: node-local, ingress-published, never overlay DNS
-
-This is stated once here because getting it wrong is expensive:
-
-- **The daemon ships to its own node's address, resolved from the swarm.** `pmcluster
-  serve` is a systemd process on the host, outside the overlay. It cannot resolve
-  `observability_otel-collector` — overlay DNS does not exist for a host process —
-  so it reads this node's `Status.Addr` from the swarm's own node record
-  (`internal/docker/selfaddr.go`), builds `http://<Status.Addr>:4318`, dial-checks it
-  once at startup, and uses it only if something answers. That is what the `ingress`
-  publish buys: the port exists on every node, so placement stops mattering.
-- **`127.0.0.1` is not an acceptable default.** It is correct only on the node that
-  happens to host the collector task. Everywhere else it is a closed port, and a
-  failed export is logged by the OTel SDK once per retry: on 2026-11-08 node
-  `nxt-sw-4-m` (1 vCPU) wrote 261,617 journal lines from a single daemon boot while
-  exporting to a closed `127.0.0.1:4318`; journald writes starved Docker's
-  heartbeat, the swarm marked the node Down and leadership moved off it.
-- **Never the overlay service name either** — for the daemon that is a DNS failure
-  instead of a refused connection, with the same unbounded logging behind it.
-- `otlp_endpoint` defaults to `auto` (resolve as above). An empty value disables
-  self-telemetry. Any explicit URL is used verbatim, never overridden.
-- When the address cannot be read, or nothing answers the dial, the daemon exports
-  nothing and writes **one** journal line naming the reason. A missing trace is
-  cheaper than a storm; the daemon does not re-resolve at runtime, so restart it
-  (`systemctl restart pmcluster`) after deploying the observability stack on a node
-  that booted before it.
-
-Export failures that happen later are rate-limited in both the daemon and the CLI:
-the first failure is logged with its error, then at most one summary per five
-minutes carrying the suppressed count, then one recovery line. An outage costs a
-handful of journal lines, not one per export.
-
-Port `4318` has no authentication, and it is published on every node now. Keep it
-off the WAN: `harden-host.sh` drops `4318` in the `DOCKER-USER` chain for every
-non-private source (Docker's published ports bypass ufw, so this rule — not ufw —
-is the real gate). Verify from outside the cluster with a plain TCP connect; a
-timeout is the expected answer, a completed connect is a regression.
-
-Applications inside the overlay should keep using the collector service name
-rather than a host port.
+Applications inside the overlay keep using the collector service name; only a
+host process needs the published address, and its rules are in
+[Self-telemetry](#self-telemetry-the-daemons-own-export).
 
 `severityNumber` is the reliable level field for OTLP logs. If only
 `severityText` is sent, Parseable stores the level as unspecified.
+
+## Self-telemetry: the daemon's own export
+
+`pmcluster serve` ships its own traces, metrics and logs over OTLP, and so does
+every CLI command that emits spans. It is the one exporter in the platform whose
+endpoint cannot be a service name — the daemon is a systemd process on the host,
+outside the overlay — and everything below exists because that difference was
+once paid for in journal lines instead of being understood.
+
+### What the endpoint used to be, and what it cost
+
+The endpoint was the constant `http://127.0.0.1:4318`, while the collector
+published `4318` in **host** mode — a port that exists only on a node whose
+collector task is actually serving. On a node where that task was restarting,
+unscheduled, or not yet deployed (the stack is deployed by `cluster up`, so every
+node is in that state before its first rollout), the daemon's loopback address
+had nothing behind it. The OTel SDK's default error handler writes a line for
+every failed export, with no rate limit and no recovery path.
+
+On 2026-11-08 node `nxt-sw-4-m` (1 vCPU) recorded:
+
+| writer | journal lines from one boot |
+| --- | --- |
+| the daemon | 261,617 |
+| five further incarnations (restarts and CLI children) | 238,951 · 213,808 · 196,367 · 151,609 · 71,180 |
+
+1,133,532 lines in total, and `pmcluster.service` started **65 times** in the same
+boot. On one vCPU those writes competed with Docker's own heartbeat: the swarm
+marked the node `Down`, leadership moved to `nxt-sw-5-m`, and 5-m answered **401**
+to an API key created minutes earlier on 4-m — a second, separate failure, fixed
+by adopting the control plane on leadership gain
+([control-loop-design.md](../../docs/control-loop-design.md)).
+
+That arithmetic is the design constraint, not the drama: one misaddressed
+endpoint produced O(retries) journal lines for as long as the condition lasted,
+on a box with one core. Three separate bounds now sit on that path — the
+endpoint, the log, and the restart policy.
+
+### The endpoint is this node's swarm address, or there is no exporter
+
+`otlp_endpoint` defaults to `auto`: read this node's swarm-advertised address
+(`Status.Addr`), build `http://<address>:4318`, dial it once at startup, and use
+it only if something answers (`internal/config/selftelemetry.go`,
+`internal/docker/selfaddr.go`). An explicit URL is used verbatim — that is the
+operator's decision and it is never second-guessed. An empty value disables
+self-telemetry, from any source, including a deliberately empty
+`PMCLUSTER_OTLP_ENDPOINT=`.
+
+Each of the obvious alternatives fails in its own way, which is why the list is
+worth writing down once:
+
+| Candidate | Why it is not used |
+| --- | --- |
+| `127.0.0.1:4318` (the previous default) | correct only while a collector task is serving on this node; on a node whose task is restarting or absent it is a closed port — the arithmetic above |
+| the overlay service name (`observability_otel-collector:4318`) | the name exists only inside the overlay's DNS. `serve` is a host process and has no overlay DNS, so for it this is a name-resolution failure instead of a refused connection — the same storm behind a different error |
+| an address derived from the route or the egress interface (`hostname -I`, a UDP "connect" trick, the default-route address) | yields *an* address of this host, not the address the swarm knows it by. On a node with several interfaces that is a private address nothing listens on: the same closed port, reached by a different route |
+| `docker node inspect self` on every node | the node-inspect API is manager-only; a worker answers "This node is not a swarm manager". The daemon reads `Status.Addr` from `docker info` there (the same value, from the daemon's own view of itself) and reads its own node record on a manager, where that record is what the swarm places tasks against. Both report the same address, which is why the two paths cannot disagree |
+
+`auto` never guesses an address it cannot confirm: a node that is not in a swarm,
+an empty or non-IP `Status.Addr`, a loopback or unspecified address, and an
+address that does not answer the dial all end the same way — no exporter, and
+one journal line naming the reason. A missing trace is acceptable; an exporter
+aimed at a closed port is not.
+
+Resolution happens once, at startup, and is not retried at runtime. A node that
+booted before the observability stack existed therefore stays silent until the
+daemon is restarted (`systemctl restart pmcluster`) — the alternative is
+re-probing a dead port on a timer, which is the shape of the original bug.
+
+A CLI command resolves the same way, with a five-second bound on the docker
+socket so a wedged daemon cannot delay a one-shot command. Run off-cluster — a
+laptop, a CI runner — there is no swarm address, so the command exports nothing
+and works normally. That is deliberate: `pmcluster` must run anywhere, and the
+CLI children were part of the same incident (238,951 and 213,808 of the lines
+above came from single incarnations).
+
+### Why 4318 is published with the routing mesh
+
+The collector is `mode: global` — a task on every node — because `filelog` and
+`docker_stats` can only read the node they run on. What the daemon needs is not a
+task beside it, but *something answering at its own address*: tasks restart, and a
+node can exist before the observability stack reaches it. `4318` is published
+`mode: ingress`, so the routing mesh binds the port on every node and forwards to
+whichever collector task is alive, wherever it runs.
+
+- **What it buys:** the daemon dials this node's own address and something answers
+  there regardless of where the collector task is or whether the one on this node
+  is up. Placement stops mattering, and no node has to host a collector for its
+  daemon to be observable.
+- **What it costs:** when the task that answers is on another node, the export
+  crosses the mesh — one VXLAN hop — instead of a loopback write, for a few KiB
+  every few seconds. And the port now listens on every node's public interface,
+  which is only acceptable because of the rule below.
+
+An ingress publish of an unauthenticated OTLP receiver is not a small thing to
+leave open: it would be an open ingestion endpoint on every node's public
+address.
+
+### 4318 is closed by a `DOCKER-USER` rule, never by ufw
+
+Docker-published ports are DNAT'd past `ufw`'s INPUT chain, so `ufw deny 4318` —
+which `harden-host.sh` also writes — is not what keeps this port shut, and
+`ufw status` is not evidence either way. The gate is the `DOCKER-USER` chain the
+same script installs: every private source RETURNs first (loopback, the docker
+and overlay pools, the cluster's private peer network), then `4318` and `8000`
+are DROPped for everything else.
+
+The private ranges have to be on the allow side because an ingress-published
+port is answered by whichever node currently runs the task: a peer's request
+arrives carrying the peer's own source address — not a bridge subnet, not
+loopback. Allow-listing only the docker and overlay pools (`172.16.0.0/12`) drops
+a peer that connects from, say, `10.7.x`, and Swarm's own tunnels are unaffected,
+so the cluster still reports `Ready`: the only symptom is a port that hangs from
+every node except the one whose task answered locally.
+
+Two consequences follow, and they are operational rather than theoretical:
+
+- **A rebuilt node has no rule until `harden-host.sh` runs there again.** The
+  script writes the chain to a unit that re-applies it after Docker starts, so an
+  installed node keeps the rules across reboots; a node rebuilt from a plain
+  image, or one whose Docker was reinstalled over an emptied chain, answers
+  `4318` on its public interface until it is hardened.
+- **Verify from outside the cluster.** A TCP connect from a peer proves the
+  daemon can reach a collector; it proves nothing about the WAN, because the peer
+  is on the allow side by design.
+
+### A failing export costs a bounded number of lines
+
+`internal/telemetry/failures.go` wraps the exporter's error handler: the first
+failure is logged with its error and the interval it will be quiet for, then at
+most one summary per five minutes carrying the suppressed count, then one
+recovery line when the endpoint answers a dial again. A one-hour outage therefore
+costs thirteen lines (one first, twelve summaries) plus the recovery line when it
+ends — not one per export. The daemon and the CLI wire the same reporter; each
+renders its own wording from the same three events.
+
+The reporter asks the endpoint only whether it answers a dial, not what the
+error says, deliberately: a collector that is up but rejecting payloads still
+produces a failure per export and must be summarised, not narrated.
+
+### The unit restarts at most five times in five minutes
+
+The rendered systemd unit is `Restart=always` with `RestartSec=10`,
+`StartLimitIntervalSec=300` and `StartLimitBurst=5`
+(`internal/cli/daemon.go`). After five failures inside five minutes systemd
+stops trying and leaves the unit `failed`, which is a state an operator can see
+and act on. The cost is that the daemon stays down until somebody looks — the
+right failure mode for a control plane that has already shown it cannot start,
+and the alternative to the 65 starts recorded above.
+
+`systemctl status pmcluster` shows the loop; `systemctl reset-failed pmcluster`
+re-arms the unit once the cause is fixed.
+
+### What was verified, and what was not
+
+Measured on the deployed fleet after the change: `4318` is closed from the
+internet on all four nodes (a TCP connect from outside times out), the collector
+task is `Running`, and the daemon journal shows **0** occurrences of
+`context deadline` or `connection refused` since the restart.
+
+Not measured: whether the daemon's spans and metrics actually arrive in
+Parseable. The absence of export errors is what was checked, and it is the
+question this change was about — an exporter with nowhere to send is silent, not
+broken-looking.
+
+```sh
+# from OUTSIDE the cluster: a timeout is the pass, a completed connect is the bug
+nc -z -w3 <node-public-address> 4318; echo "exit $?"
+
+# on the node: the rule that is doing the blocking (empty = unprotected)
+sudo iptables -S DOCKER-USER | grep 4318
+
+# the collector task, and whether the daemon is complaining
+docker service ps observability_otel-collector
+journalctl -u pmcluster -S "1 hour ago" | grep -c "context deadline"
+```
 
 ## Native CLI and API
 
@@ -340,10 +480,24 @@ column is the number of waves each page used to pay for:
 | `/web/observability/evidence` | 0.76 s | 0.42 s |
 | `/web/observability/traces` | 1.11 s | 0.41 s |
 
-Against the live cluster, interleaved with the same backend inside one window,
-`/web/overview` went from a 1.53 s median to 0.83 s and `/web/stacks` from 1.08 s
-to 0.55 s. Absolute numbers on a live cluster vary with the link, so compare
-builds over the same interval — never one page load against another hours later.
+Against the live cluster the numbers are different, because the harness charges
+every call the same 250 ms while production does not. The live before/after table
+— the one to quote to an operator — is in
+[console.md](../../docs/console.md#loading-states): `/web/overview`
+1.09–1.29 s → 0.42–0.60 s, `/web/stacks` 0.50–0.65 s → 0.13–0.16 s,
+`/web/observability` 4.72 s → 1.83–2.43 s.
+
+One row disagrees between the two, and the disagreement is the interesting part:
+the harness shows `summary` improving (1.14 s → 0.43 s), while on the live cluster
+it did not move at all (1.45–1.60 s before and after) and is now the page's floor.
+In the harness a panel made of several 250 ms calls gains from being issued
+together; in production that panel's wall time is dominated by one long Parseable
+scan, which no amount of concurrency removes. A per-query breakdown of `summary`
+was not taken, so how much of its time is round trips and how much is one
+expensive scan is an inference from those two measurements, not a measurement.
+
+Absolute numbers on a live cluster vary with the link, so compare builds over the
+same interval — never one page load against another hours later.
 
 `internal/ui/controllers/page_concurrency_test.go` pins this down: it holds every
 daemon read for a fixed time, counts the peak number in flight per family, and
