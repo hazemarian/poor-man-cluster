@@ -11,6 +11,7 @@ the [whitepaper](whitepaper.md).
 | Write a deploy manifest (the DSL) | [`dsl.md`](dsl.md) |
 | Hook CI up (HMAC webhooks) | [`webhook.md`](webhook.md) |
 | Store secrets / configs and reference them from env | [`secrets-and-configs.md`](secrets-and-configs.md) |
+| Register or rotate the private-registry (ghcr.io) pull credential | [`registry-credentials.md`](registry-credentials.md) |
 | Put a real cert on a customer domain / rotate the main cert | [`tls.md`](tls.md) |
 | Change a cluster setting | [`settings.md`](settings.md) |
 | Click through the UI (console pages, badges) | [`console.md`](console.md) |
@@ -43,6 +44,7 @@ the [whitepaper](whitepaper.md).
 | `dsl.md` | The manifest DSL — every top-level and service field, substitution, injection rules, a complete example |
 | `webhook.md` | Webhook sources, request format, signature, GitHub Actions + generic CI examples, troubleshooting |
 | `secrets-and-configs.md` | DB-backed secrets/configs: encryption, versioning, scopes, content-addressed swarm mirrors, `env` reference kinds, API |
+| `registry-credentials.md` | The private-registry pull credential: where it lives (encrypted store, not a manifest), `registry add/list/remove` semantics, ghcr.io token spec, `--with-registry-auth` propagation, the numbered rotation runbook, failure modes, cadence |
 | `tls.md` | ACME vs operator-supplied, in-place main-cert rotation, per-host customer-domain certs |
 | `settings.md` | The cluster-settings catalogue: every key the daemon accepts, its default, who sets it, and how a change reaches the swarm |
 | `console.md` | The operator console: every page, auth model, status badges |
