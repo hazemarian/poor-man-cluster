@@ -102,6 +102,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	storageRoot.Store("")
 
 	dc, dockerErr := docker.New()
+	// One Kit per daemon: it is the object that remembers which snapshot this
+	// node published, so a leadership gain cannot re-extract this node's own
+	// state. Created even when Docker is unavailable (the Kit then no-ops).
+	kit := &controlplane.Kit{Docker: dc, DataDir: cfg.DataDir, Log: log}
 	if dockerErr != nil {
 		log.Warn().Err(dockerErr).Msg("docker client init failed; /api/cluster/info disabled")
 	} else {
@@ -158,6 +162,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// This is the safe window: nothing has the store open yet, so replacing
 		// data.db cannot truncate it under a live sqlite connection. Best-effort:
 		// a worker, or a swarm without a readable Raft config, must still serve.
+		// The mid-run twin of this check is adoptOnLeadershipGain: a node that
+		// BECOMES leader later adopts through the open store (close, replace,
+		// reopen) on the same predicate.
 		if _, err := ensureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
 			log.Warn().Err(err).Msg("control-plane restore at startup had issues (continuing)")
 		}
@@ -167,7 +174,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 
 		// Control-plane freshness: when this node was a standby and just
-		// became leader, restore the newest control-plane snapshot if the
+		// became leader, adopt the newest control-plane snapshot if the
 		// local DB is missing or older than it. The leader snapshots the
 		// survivor kit into Raft-replicated Docker configs (L2); pre-L2
 		// clusters fall back to the tarball archive. Shared/replicated
@@ -179,8 +186,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 		// First snapshot as leader: publish the current (possibly just
 		// restored) control plane so the other managers have a fresh kit
-		// before any mutation happens.
-		if err := (&controlplane.Kit{Docker: dc, DataDir: cfg.DataDir, Log: log}).Snapshot(cmd.Context()); err != nil {
+		// before any mutation happens. Published through the same Kit the
+		// leadership loop uses, so that loop recognises this snapshot as its
+		// own and does not adopt it back.
+		if err := kit.Snapshot(cmd.Context()); err != nil {
 			log.Warn().Err(err).Msg("initial control-plane snapshot had issues")
 		}
 
@@ -321,16 +330,20 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 	handler := server.New(deps)
 
+	// The gate answers 503 while a leadership-gain adoption is swapping the
+	// store, so no request is answered from the revision being replaced.
+	gate := &adoptionGate{}
+	handler = gate.wrap(handler)
+
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Leader-only control loop: on becoming Swarm leader the daemon runs the
-	// reconcile loop (platform configs + app-stack drift + health snapshot),
-	// the control-plane Raft snapshot loop, and the control-plane freshness
-	// restore; on losing leadership the loops stop. Non-manager/standalone
-	// nodes serve without the loops.
+	// Leader-only control loop: on becoming Swarm leader the daemon adopts the
+	// newest control-plane kit (when this node is behind it), runs the reconcile
+	// loop (platform configs + app-stack drift + health snapshot) and the
+	// control-plane Raft snapshot loop; on losing leadership the loops stop.
+	// Non-manager/standalone nodes serve without the loops.
 	leadership := WatchSwarmLeadership(ctx, dc, log)
-	kit := &controlplane.Kit{Docker: dc, DataDir: cfg.DataDir, Log: log}
 	reconciler := &reconcile.Reconciler{
 		Store:         st,
 		Docker:        dc,
@@ -365,13 +378,20 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 			if isLeader {
 				log.Info().Msg("control loop: starting reconcile loop (leader)")
-				// Publish a fresh control-plane snapshot on promotion. Do NOT
-				// restore here: the local store is already open and being
-				// live-written, and Restore truncates data.db under the live
-				// sqlite connection (split-brain: the daemon serves stale
-				// page-cache rows while fresh readers see the clobbered file).
-				// Control-plane restore happens ONLY at startup, before the
-				// store is opened (see the standby block above).
+				// This node just gained leadership. Its data.db may be older
+				// than the newest Raft-replicated kit (the previous leader
+				// snapshotted credentials/settings this node never adopted), so
+				// adopt BEFORE the reconcile loop reads settings, before this
+				// node answers control-plane reads, and before publishing:
+				// adopting after a publish would overwrite the deployed state
+				// with a stale snapshot.
+				//
+				// Exactly once per transition: the leadership channel emits only
+				// on a state change, so a node that stays leader never re-runs
+				// this — a per-tick check would close and reopen the store under
+				// every request, for nothing.
+				adoptOnLeadershipGain(ctx, kit, st, cipher, cfg, gate, log)
+
 				if err := kit.Snapshot(ctx); err != nil {
 					log.Warn().Err(err).Msg("control-plane snapshot on leadership gain had issues")
 				}

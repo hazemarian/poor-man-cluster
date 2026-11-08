@@ -79,13 +79,45 @@ when a payload would exceed Docker's 500 KiB config ceiling. It is independent
 of `reconcile_interval` — a cluster with the reconcile loop disabled still keeps
 its control plane replicated. See `internal/controlplane`.
 
-**Restore is startup-only.** A promoted daemon never restores under its own
-live-opened SQLite connection (Restore truncates data.db — the daemon would
-serve stale page-cache rows while fresh readers see the clobbered file: a
-split-brain). Instead, `serve` restores from the newest `pmcluster_state_*`
-config **before the store is opened**, only when the local DB is missing or
-older than the snapshot (a current DB — e.g. on shared storage — is never
-clobbered), and repairs a missing `.encryption_key` even when the DB is
-current. On promotion the leader only *publishes* a fresh snapshot. A worker
-node or a leaderless swarm (quorum lost) degrades gracefully: snapshot/restore
-become no-ops that retry later instead of crash-looping the daemon.
+**Adoption happens at startup AND on leadership gain.** Two call sites run the
+same predicate, and they are the only two:
+
+- **Startup, before `store.Open`.** `serve` restores from the newest
+  `pmcluster_state_*` config only when the local DB is missing or older than the
+  snapshot (a current DB — e.g. on shared storage — is never clobbered), and
+  repairs a missing `.encryption_key` even when the DB is current. Nothing has
+  the store open yet, so the kit is extracted in place.
+- **On the follower→leader transition.** `Kit.AdoptOnLeadership`
+  (`internal/controlplane/adopt.go`) runs once per transition, from the
+  leadership goroutine *before* the reconcile loop reads settings/credentials and
+  before the node answers control-plane reads. A manager that becomes leader
+  while running is usually behind: the previous leader snapshotted API keys,
+  credentials and settings it never adopted.
+
+The mid-run case cannot extract in place — `data.db` is open, and writing it
+under the live SQLite connection makes the daemon serve stale page-cache rows
+while fresh readers see the new file (split-brain). Adoption therefore stages the
+kit in a `.adopt-*` directory *inside* the data dir (same filesystem, so the final
+move is an atomic `rename`), then closes the store (`store.Store.Swap`), renames
+the kit into place with `data.db` **last**, writes `.state_revision`, and reopens
+the same `*store.Store` every consumer already holds. The `.encryption_key` is
+adopted with the DB, and the in-memory `credentials.Cipher` is reloaded in place
+when the key changed — a cluster DB beside the node's old key leaves every
+credential ciphertext undecryptable.
+
+**The window in which the new leader is not yet serving.** Between the moment
+Swarm elects the node and the moment adoption finishes, the daemon answers `503`
+with `Retry-After` for everything except `/health` (`internal/cli/adoptgate.go`).
+That window is one kit extract plus one rename (plus waiting for any in-flight
+query to return), and it is
+the honest alternative to answering from the revision being replaced, which is
+the silent rollback this machinery exists to prevent. A request already in flight
+when the store closes may fail with `sql: database is closed`; retrying succeeds.
+
+Failures are contained, not fatal: an unreadable kit, a state config whose key
+config is missing, or a payload that does not extract leaves the current database
+in place, logs at ERROR with the reason, and keeps serving. A worker node or a
+leaderless swarm (quorum lost) degrades gracefully: snapshot/adoption become
+no-ops that retry on the next transition instead of crash-looping the daemon.
+Adoption is never part of a tick: a node that stays leader does not close its
+store, and a snapshot this node published itself is never adopted back.

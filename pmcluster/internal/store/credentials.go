@@ -32,7 +32,7 @@ var ErrCredentialNotFound = errs.ErrCredentialNotFound
 // Returns ErrCredentialNotFound if missing.
 func (s *Store) Credential(ctx context.Context, name string) (*ManagedCredential, error) {
 	var c ManagedCredential
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT name, kind, username, password_ciphertext, swarm_secret_name, created_at, rotated_at
 		 FROM managed_credentials WHERE name = ?`, name,
 	).Scan(&c.Name, &c.Kind, &c.Username, &c.PasswordCiphertext,
@@ -50,7 +50,7 @@ func (s *Store) Credential(ctx context.Context, name string) (*ManagedCredential
 // exists (UNIQUE collision); callers should `Credential` first to
 // implement the "preserve existing" policy on cluster up.
 func (s *Store) InsertCredential(ctx context.Context, c *ManagedCredential) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.conn().ExecContext(ctx,
 		`INSERT INTO managed_credentials
 		   (name, kind, username, password_ciphertext, swarm_secret_name, created_at, rotated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -67,7 +67,7 @@ func (s *Store) InsertCredential(ctx context.Context, c *ManagedCredential) erro
 // re-inserts the row under its new name first so a failure can never lose the
 // ciphertext. Returns ErrCredentialNotFound if the row is already gone.
 func (s *Store) DeleteCredential(ctx context.Context, name string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM managed_credentials WHERE name = ?`, name)
+	res, err := s.conn().ExecContext(ctx, `DELETE FROM managed_credentials WHERE name = ?`, name)
 	if err != nil {
 		return fmt.Errorf("delete credential %s: %w", name, err)
 	}
@@ -80,7 +80,7 @@ func (s *Store) DeleteCredential(ctx context.Context, name string) error {
 // RotateCredential replaces the ciphertext for an existing credential and
 // stamps rotated_at. Returns ErrCredentialNotFound if the row doesn't exist.
 func (s *Store) RotateCredential(ctx context.Context, name string, newCiphertext []byte) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`UPDATE managed_credentials
 		 SET password_ciphertext = ?, rotated_at = ?
 		 WHERE name = ?`,
@@ -102,7 +102,7 @@ func (s *Store) RotateCredential(ctx context.Context, name string, newCiphertext
 // UpdateCredentialUsername changes the username for an existing credential.
 // Returns ErrCredentialNotFound if the row doesn't exist.
 func (s *Store) UpdateCredentialUsername(ctx context.Context, name string, newUsername string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`UPDATE managed_credentials SET username = ? WHERE name = ?`,
 		newUsername, name,
 	)
@@ -125,7 +125,7 @@ func (s *Store) UpdateCredentialUsername(ctx context.Context, name string, newUs
 // here so the next render references the new value. Returns ErrCredentialNotFound
 // if the row doesn't exist.
 func (s *Store) UpdateCredentialSecretName(ctx context.Context, name string, swarmSecretName string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`UPDATE managed_credentials SET swarm_secret_name = ? WHERE name = ?`,
 		swarmSecretName, name,
 	)
@@ -145,7 +145,7 @@ func (s *Store) UpdateCredentialSecretName(ctx context.Context, name string, swa
 // ListCredentials returns all credentials, sorted by name. Used by
 // `pmcluster credentials list`.
 func (s *Store) ListCredentials(ctx context.Context) ([]*ManagedCredential, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT name, kind, username, password_ciphertext, swarm_secret_name, created_at, rotated_at
 		 FROM managed_credentials ORDER BY name`)
 	if err != nil {

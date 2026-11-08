@@ -14,7 +14,7 @@ var ErrSettingNotFound = errors.New("setting not found")
 // the key has never been written.
 func (s *Store) Setting(ctx context.Context, key string) (string, error) {
 	var value string
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT value FROM cluster_settings WHERE key = ?`, key).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrSettingNotFound
@@ -27,7 +27,7 @@ func (s *Store) Setting(ctx context.Context, key string) (string, error) {
 
 // SetSetting upserts a cluster_settings value.
 func (s *Store) SetSetting(ctx context.Context, key, value string) error {
-	if _, err := s.db.ExecContext(ctx,
+	if _, err := s.conn().ExecContext(ctx,
 		`INSERT INTO cluster_settings (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		key, value); err != nil {
@@ -39,7 +39,7 @@ func (s *Store) SetSetting(ctx context.Context, key, value string) error {
 // DeleteSetting removes a cluster_settings row. Absent keys are not an error —
 // the naming migration deletes old keys unconditionally so it stays idempotent.
 func (s *Store) DeleteSetting(ctx context.Context, key string) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM cluster_settings WHERE key = ?`, key); err != nil {
+	if _, err := s.conn().ExecContext(ctx, `DELETE FROM cluster_settings WHERE key = ?`, key); err != nil {
 		return fmt.Errorf("delete setting %s: %w", key, err)
 	}
 	return nil

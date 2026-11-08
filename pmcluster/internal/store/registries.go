@@ -29,7 +29,7 @@ var ErrRegistryExists = errors.New("registry already exists")
 // CreateRegistry inserts a new registry host. Errors with ErrRegistryExists
 // if the host is already configured (use UpdateRegistry to rotate creds).
 func (s *Store) CreateRegistry(ctx context.Context, r *Registry) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.conn().ExecContext(ctx,
 		`INSERT INTO registries (host, username, password_ciphertext, created_at)
 		 VALUES (?, ?, ?, ?)`,
 		r.Host, r.Username, r.PasswordCiphertext, time.Now().Unix(),
@@ -46,7 +46,7 @@ func (s *Store) CreateRegistry(ctx context.Context, r *Registry) error {
 // UpdateRegistry replaces the username + password for an existing host.
 // Returns ErrRegistryNotFound if the host isn't configured.
 func (s *Store) UpdateRegistry(ctx context.Context, r *Registry) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`UPDATE registries SET username = ?, password_ciphertext = ? WHERE host = ?`,
 		r.Username, r.PasswordCiphertext, r.Host,
 	)
@@ -66,7 +66,7 @@ func (s *Store) UpdateRegistry(ctx context.Context, r *Registry) error {
 // Registry fetches one registry by host.
 func (s *Store) Registry(ctx context.Context, host string) (*Registry, error) {
 	var r Registry
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT host, username, password_ciphertext, created_at FROM registries WHERE host = ?`, host,
 	).Scan(&r.Host, &r.Username, &r.PasswordCiphertext, &r.CreatedAt)
 	if err != nil {
@@ -80,7 +80,7 @@ func (s *Store) Registry(ctx context.Context, host string) (*Registry, error) {
 
 // ListRegistries returns all configured registries ordered by host.
 func (s *Store) ListRegistries(ctx context.Context) ([]*Registry, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT host, username, password_ciphertext, created_at FROM registries ORDER BY host`,
 	)
 	if err != nil {
@@ -100,7 +100,7 @@ func (s *Store) ListRegistries(ctx context.Context) ([]*Registry, error) {
 
 // DeleteRegistry removes a registry. Returns ErrRegistryNotFound if missing.
 func (s *Store) DeleteRegistry(ctx context.Context, host string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM registries WHERE host = ?`, host)
+	res, err := s.conn().ExecContext(ctx, `DELETE FROM registries WHERE host = ?`, host)
 	if err != nil {
 		return fmt.Errorf("delete registry: %w", err)
 	}

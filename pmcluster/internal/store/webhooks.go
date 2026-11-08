@@ -26,7 +26,7 @@ var ErrWebhookSourceNotFound = errors.New("webhook source not found")
 // CreateWebhookSource inserts a new source with its encrypted shared secret.
 // Returns ErrWebhookSourceExists if the source name is already taken.
 func (s *Store) CreateWebhookSource(ctx context.Context, source, description string, secretCiphertext []byte) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.conn().ExecContext(ctx,
 		`INSERT INTO webhook_sources (source, secret_ciphertext, description, created_at)
 		 VALUES (?, ?, ?, ?)`,
 		source, secretCiphertext, nullableString(description, description != ""), time.Now().Unix(),
@@ -47,7 +47,7 @@ var ErrWebhookSourceExists = errors.New("webhook source already exists")
 // look up the secret for HMAC verification.
 func (s *Store) WebhookSource(ctx context.Context, source string) (*WebhookSource, error) {
 	var w WebhookSource
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT source, secret_ciphertext, description, created_at, last_used_at
 		 FROM webhook_sources WHERE source = ?`, source,
 	).Scan(&w.Source, &w.SecretCiphertext, &w.Description, &w.CreatedAt, &w.LastUsedAt)
@@ -62,7 +62,7 @@ func (s *Store) WebhookSource(ctx context.Context, source string) (*WebhookSourc
 
 // ListWebhookSources returns all configured sources ordered by name.
 func (s *Store) ListWebhookSources(ctx context.Context) ([]*WebhookSource, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT source, secret_ciphertext, description, created_at, last_used_at
 		 FROM webhook_sources ORDER BY source`,
 	)
@@ -84,7 +84,7 @@ func (s *Store) ListWebhookSources(ctx context.Context) ([]*WebhookSource, error
 // DeleteWebhookSource removes a configured source. Returns ErrWebhookSourceNotFound
 // if no row matched (so the caller can surface a friendly message).
 func (s *Store) DeleteWebhookSource(ctx context.Context, source string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM webhook_sources WHERE source = ?`, source)
+	res, err := s.conn().ExecContext(ctx, `DELETE FROM webhook_sources WHERE source = ?`, source)
 	if err != nil {
 		return fmt.Errorf("delete webhook source: %w", err)
 	}
@@ -101,7 +101,7 @@ func (s *Store) DeleteWebhookSource(ctx context.Context, source string) error {
 // MarkWebhookSourceUsed updates last_used_at to now. Best-effort —
 // callers should NOT fail the webhook on this error.
 func (s *Store) MarkWebhookSourceUsed(ctx context.Context, source string) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.conn().ExecContext(ctx,
 		`UPDATE webhook_sources SET last_used_at = ? WHERE source = ?`,
 		time.Now().Unix(), source,
 	)
@@ -131,7 +131,7 @@ type WebhookDelivery struct {
 // to 0 for callers that do not set it (every outcome other than a retried
 // deploy).
 func (s *Store) RecordWebhookDelivery(ctx context.Context, d *WebhookDelivery) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.conn().ExecContext(ctx,
 		`INSERT INTO webhook_deliveries (source, status, stack_name, revision, repo_url, file, error, retries, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.Source, d.Status, d.StackName, d.Revision, d.RepoURL, d.File, d.Error, d.Retries, time.Now().Unix(),
@@ -150,7 +150,7 @@ func (s *Store) ListWebhookDeliveries(ctx context.Context, source string, limit 
 	if limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", limit)
 	}
-	rows, err := s.db.QueryContext(ctx, q, source)
+	rows, err := s.conn().QueryContext(ctx, q, source)
 	if err != nil {
 		return nil, fmt.Errorf("query webhook deliveries: %w", err)
 	}

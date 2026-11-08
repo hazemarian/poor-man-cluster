@@ -32,6 +32,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -117,10 +118,18 @@ func IsSwarmUnavailable(err error) bool {
 // configs. Create one per daemon; Snapshot must only be called on the swarm
 // leader (Raft replication is the transport), while Restore is safe on any
 // manager.
+//
+// One Kit instance per daemon is not just a convenience: it remembers the
+// newest snapshot it published, so a leadership gain cannot re-extract a
+// snapshot this node produced itself (see AdoptOnLeadership).
 type Kit struct {
 	Docker  runtime.Client
 	DataDir string
 	Log     zerolog.Logger
+
+	// mu guards published; kept private so Kit literals stay simple.
+	mu        sync.Mutex
+	published string
 }
 
 // DBPath returns the SQLite database path inside DataDir.
@@ -165,8 +174,13 @@ func (k *Kit) writeRevision(at time.Time) error {
 // Snapshot writes the current survivor kit into fresh state + key configs
 // (Raft-replicated to every manager) when the kit changed since the last
 // snapshot, then prunes old snapshots. It is a no-op when Docker is
-// unavailable, the kit is uninitialised (no data.db), or nothing changed —
-// the leader loop calls it on every tick and every promotion.
+// unavailable, the kit is uninitialised (no data.db), or nothing changed.
+//
+// Callers: the leader's periodic loop (Kit.Loop, one tick every
+// DefaultSnapshotInterval) and the leadership-gain path in `serve`, which
+// publishes once on promotion. It is NEVER called on a follower, and it never
+// restores — adoption is Restore (startup) and AdoptOnLeadership (leadership
+// gain).
 func (k *Kit) Snapshot(ctx context.Context) error {
 	if k.Docker == nil {
 		return nil // standalone/local mode: nothing to replicate to
@@ -232,6 +246,7 @@ func (k *Kit) Snapshot(ctx context.Context) error {
 		return fmt.Errorf("create control-plane key config: %w", err)
 	}
 	log.Info().Str("config", keyName).Int("bytes", len(key)).Msg("control-plane encryption key snapshotted to Raft-replicated config")
+	k.setPublishedConfig(stateName)
 
 	// This node IS the source of this snapshot, so its control plane is by
 	// definition at this revision. Without recording it, a demoted-then-promoted
@@ -287,7 +302,7 @@ func (k *Kit) maxKitMtime() (time.Time, error) {
 		}
 		if fi.IsDir() {
 			rel, _ := filepath.Rel(k.DataDir, path)
-			if rel == "logs" {
+			if rel == "logs" || strings.HasPrefix(rel, stagingPrefix) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -295,10 +310,11 @@ func (k *Kit) maxKitMtime() (time.Time, error) {
 		if !fi.Mode().IsRegular() {
 			return nil
 		}
-		// The revision marker is written by this package after every snapshot, so
-		// counting it would make the kit look perpetually newer and re-snapshot on
-		// every tick — an endless config churn loop.
-		if filepath.Base(path) == ".state_revision" {
+		// The revision marker is written by this package after every snapshot,
+		// and an adoption staging directory is written by it mid-adoption;
+		// counting either would make the kit look perpetually newer and
+		// re-snapshot on every tick — an endless config churn loop.
+		if filepath.Base(path) == ".state_revision" || strings.HasPrefix(filepath.Base(path), stagingPrefix) {
 			return nil
 		}
 		if fi.ModTime().After(max) {
@@ -347,6 +363,14 @@ func (k *Kit) readKit() ([]byte, error) {
 		if rel == ".state_revision" {
 			return nil // node-local bookkeeping, not survivor state
 		}
+		if strings.HasPrefix(rel, stagingPrefix) {
+			// An adoption's scratch directory: excluded like the marker, because
+			// a snapshot must never carry a half-extracted copy of itself.
+			if fi.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		name := filepath.ToSlash(rel)
 		switch {
 		case fi.IsDir():
@@ -382,19 +406,113 @@ func (k *Kit) readKit() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// snapshot is the newest Raft-replicated control-plane snapshot as read from
+// Docker: the data kit, its matching key config and the snapshot time.
+type snapshot struct {
+	stateConfig string
+	keyConfig   string
+	at          time.Time
+	kit         []byte
+	key         []byte
+	// keyErr is why the key config could not be read (nil when it could). It is
+	// carried rather than raised so the caller can decide: a node whose DB is
+	// current does not care, a node that must adopt cannot proceed.
+	keyErr error
+}
+
+// newestSnapshot loads the newest state config and its key config. It returns
+// ErrNoSnapshots when none exists; a transient swarm error is returned as-is
+// (IsSwarmUnavailable) for the caller to degrade on.
+func (k *Kit) newestSnapshot(ctx context.Context) (*snapshot, error) {
+	if k.Docker == nil {
+		return nil, ErrNoSnapshots // standalone/local mode: no Raft configs to read
+	}
+	newest, err := k.newest(ctx, KindState)
+	if err != nil {
+		return nil, err
+	}
+	if newest == "" {
+		return nil, ErrNoSnapshots
+	}
+	inspect, err := k.Docker.ConfigInspect(ctx, newest)
+	if err != nil {
+		return nil, fmt.Errorf("inspect newest state config %s: %w", newest, err)
+	}
+	at, err := parseSnapshotAt(inspect.Labels)
+	if err != nil {
+		return nil, fmt.Errorf("newest state config %s: %w", newest, err)
+	}
+	keyName := KeyNamePrefix + "_" + strings.TrimPrefix(newest, StateNamePrefix+"_")
+	keyInspect, keyErr := k.Docker.ConfigInspect(ctx, keyName)
+	return &snapshot{
+		stateConfig: newest,
+		keyConfig:   keyName,
+		at:          at,
+		kit:         inspect.Data,
+		key:         keyInspect.Data,
+		keyErr:      keyErr,
+	}, nil
+}
+
+// freshness is the single predicate that decides an adoption, shared by the
+// startup path (Restore) and the leadership-gain path (AdoptOnLeadership) so
+// the two can never disagree about what "current" means.
+type freshness struct {
+	need       bool
+	reason     string
+	localRev   time.Time
+	keyChanged bool
+}
+
+// freshnessOf evaluates the local control plane against a snapshot: no key, a
+// missing or older `.state_revision`, or a key that differs from the cluster's
+// all mean "adopt". The revision marker — not an mtime — is the version, because
+// every follower writes its own data.db on each reconcile pass and would
+// otherwise look newer than the snapshot forever.
+func (k *Kit) freshnessOf(s *snapshot) freshness {
+	localRev := k.readRevision()
+	localKey, localKeyErr := os.ReadFile(k.KeyPath())
+	keyExists := localKeyErr == nil
+	keyChanged := s.keyErr == nil && keyExists && !bytes.Equal(localKey, s.key)
+
+	f := freshness{localRev: localRev, keyChanged: keyChanged}
+	switch {
+	case keyChanged:
+		f.need, f.reason = true, "local encryption key differs from the cluster's"
+	case !keyExists:
+		f.need, f.reason = true, "no local encryption key"
+	case localRev.IsZero():
+		f.need, f.reason = true, "node has never synced"
+	case localRev.Before(s.at):
+		f.need, f.reason = true, "local control plane is behind"
+	default:
+		f.reason = "local control plane is at the newest snapshot"
+	}
+	return f
+}
+
 // Restore brings the control plane up to the newest snapshot when the local
 // data.db is missing or older than it, and repairs a missing encryption key
 // even when the DB is current. Returns (restored, err): restored reports
 // whether anything was written. ErrNoSnapshots is returned when no state
 // config exists — the caller falls back to the tarball archive path.
+//
+// This is the STARTUP form of the check: it writes into DataDir in place and
+// assumes nothing has the store open (serve calls it before store.Open). A
+// running daemon adopts through AdoptOnLeadership, which closes and reopens the
+// store around the same predicate.
 func (k *Kit) Restore(ctx context.Context) (bool, error) {
 	if k.Docker == nil {
 		return false, ErrNoSnapshots // standalone/local mode: no Raft configs to read
 	}
 	log := k.Log.With().Str("component", "controlplane").Logger()
 
-	newest, err := k.newest(ctx, KindState)
-	if err != nil {
+	snap, err := k.newestSnapshot(ctx)
+	switch {
+	case errors.Is(err, ErrNoSnapshots):
+		log.Debug().Msg("no control-plane state config; nothing to restore from Raft")
+		return false, ErrNoSnapshots
+	case err != nil:
 		if IsSwarmUnavailable(err) {
 			// Worker node, or the swarm is momentarily leaderless (quorum
 			// lost): the Raft kit is unreadable right now. Fall back to the
@@ -406,76 +524,40 @@ func (k *Kit) Restore(ctx context.Context) (bool, error) {
 		}
 		return false, err
 	}
-	if newest == "" {
-		log.Debug().Msg("no control-plane state config; nothing to restore from Raft")
-		return false, ErrNoSnapshots
-	}
-	inspect, err := k.Docker.ConfigInspect(ctx, newest)
-	if err != nil {
-		return false, fmt.Errorf("inspect newest state config %s: %w", newest, err)
-	}
-	at, err := parseSnapshotAt(inspect.Labels)
-	if err != nil {
-		return false, fmt.Errorf("newest state config %s: %w", newest, err)
-	}
 
 	dbPath := k.DBPath()
-
-	keyName := KeyNamePrefix + "_" + strings.TrimPrefix(newest, StateNamePrefix+"_")
-	keyInspect, keyErr := k.Docker.ConfigInspect(ctx, keyName)
-
-	// Freshness by REVISION, not by mtime. A node that writes its own data.db
-	// (every follower does, on each reconcile pass) would otherwise look "newer"
-	// than the snapshot while its content is arbitrarily old, and never restore
-	// again. A node that has never synced, is behind, or holds a DIFFERENT
-	// encryption key (so its ciphertexts are not the cluster's) takes the
-	// snapshot's kit and key together.
-	localRev := k.readRevision()
-	localKey, localKeyErr := os.ReadFile(k.KeyPath())
-	keyExists := localKeyErr == nil
-	keyDiffers := keyErr == nil && keyExists && !bytes.Equal(localKey, keyInspect.Data)
-
-	needRestore := !keyExists || localRev.IsZero() || localRev.Before(at) || keyDiffers
+	f := k.freshnessOf(snap)
 
 	switch {
-	case needRestore:
+	case f.need:
 		// Full restore. The key is mandatory: a data kit without its key is a
 		// control plane that cannot decrypt its own credentials.
-		if keyErr != nil {
-			return false, fmt.Errorf("state config %s exists but key config %s is missing — refusing to restore a ciphertext without its key (security split); investigate before promoting this node", newest, keyName)
+		if snap.keyErr != nil {
+			return false, fmt.Errorf("state config %s exists but key config %s is missing — refusing to restore a ciphertext without its key (security split); investigate before promoting this node", snap.stateConfig, snap.keyConfig)
 		}
-		reason := "local control plane is behind"
-		switch {
-		case keyDiffers:
-			reason = "local encryption key differs from the cluster's"
-		case !keyExists:
-			reason = "no local encryption key"
-		case localRev.IsZero():
-			reason = "node has never synced"
-		}
-		n, err := k.extractKit(inspect.Data, at)
+		n, err := k.extractKit(snap.kit, snap.at)
 		if err != nil {
-			return false, fmt.Errorf("restore control plane from %s: %w", newest, err)
+			return false, fmt.Errorf("restore control plane from %s: %w", snap.stateConfig, err)
 		}
 		// Adopt the cluster key unconditionally: the DB we just wrote is the
 		// cluster's, so any other key would make its ciphertexts unreadable.
-		if err := os.WriteFile(k.KeyPath(), keyInspect.Data, 0o600); err != nil {
+		if err := os.WriteFile(k.KeyPath(), snap.key, 0o600); err != nil {
 			return false, fmt.Errorf("restore control-plane encryption key: %w", err)
 		}
-		if err := os.Chtimes(k.KeyPath(), at, at); err != nil {
+		if err := os.Chtimes(k.KeyPath(), snap.at, snap.at); err != nil {
 			return false, fmt.Errorf("timestamp restored encryption key: %w", err)
 		}
-		if err := os.Chtimes(dbPath, at, at); err != nil {
+		if err := os.Chtimes(dbPath, snap.at, snap.at); err != nil {
 			return false, fmt.Errorf("timestamp restored data.db: %w", err)
 		}
-		if err := k.writeRevision(at); err != nil {
+		if err := k.writeRevision(snap.at); err != nil {
 			return false, fmt.Errorf("record restored control-plane revision: %w", err)
 		}
-		log.Info().Str("config", newest).Str("snapshot-at", at.Format(time.RFC3339Nano)).
-			Int("files", n).Str("reason", reason).Msg("control-plane data restored from Raft config")
+		log.Info().Str("config", snap.stateConfig).Str("snapshot-at", snap.at.Format(time.RFC3339Nano)).
+			Int("files", n).Str("reason", f.reason).Msg("control-plane data restored from Raft config")
 		return true, nil
 	default:
-		log.Info().Str("config", newest).Str("revision", localRev.Format(time.RFC3339Nano)).
+		log.Info().Str("config", snap.stateConfig).Str("revision", f.localRev.Format(time.RFC3339Nano)).
 			Msg("local control plane is at the newest snapshot; no restore from Raft config")
 		return false, nil
 	}
@@ -487,13 +569,19 @@ func (k *Kit) Restore(ctx context.Context) (bool, error) {
 // other kit files keep their snapshot mtimes. Entry paths are validated
 // against escaping DataDir.
 func (k *Kit) extractKit(payload []byte, at time.Time) (int, error) {
+	return k.extractKitTo(k.DataDir, payload, at)
+}
+
+// extractKitTo is extractKit into an arbitrary directory — the startup path
+// uses DataDir itself, an adoption uses a staging directory beside it.
+func (k *Kit) extractKitTo(dir string, payload []byte, at time.Time) (int, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(payload))
 	if err != nil {
 		return 0, fmt.Errorf("gzip open: %w", err)
 	}
 	defer func() { _ = gz.Close() }()
 	tr := tar.NewReader(gz)
-	base, err := filepath.Abs(k.DataDir)
+	base, err := filepath.Abs(dir)
 	if err != nil {
 		return 0, err
 	}

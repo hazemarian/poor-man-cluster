@@ -86,7 +86,7 @@ func SwarmConfigName(name, hash string) string {
 // CreateConfig inserts a new config. Returns ErrConfigExists on name clash.
 func (s *Store) CreateConfig(ctx context.Context, scope, stack, name, kind, content, version string) (int64, error) {
 	now := time.Now().Unix()
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`INSERT INTO configs (scope, stack, name, kind, content, version, hash, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		scope, stack, name, kind, content, version, ConfigHash(content), now, now,
@@ -103,7 +103,7 @@ func (s *Store) CreateConfig(ctx context.Context, scope, stack, name, kind, cont
 // Config fetches a config by name. Returns ErrConfigNotFound when missing.
 func (s *Store) Config(ctx context.Context, name string) (*ConfigRow, error) {
 	var c ConfigRow
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT id, scope, stack, name, kind, content, version, hash, created_at, updated_at, rendered_content, rendered_at, rendered_hash
 		 FROM configs WHERE name = ?`, name,
 	).Scan(&c.ID, &c.Scope, &c.Stack, &c.Name, &c.Kind, &c.Content,
@@ -131,7 +131,7 @@ func (s *Store) Config(ctx context.Context, name string) (*ConfigRow, error) {
 // the lookup fall through to shared/not-found instead.
 func (s *Store) ConfigForStack(ctx context.Context, stack, name string) (*ConfigRow, error) {
 	var c ConfigRow
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT id, scope, stack, name, kind, content, version, hash, created_at, updated_at, rendered_content, rendered_at, rendered_hash
 		 FROM configs
 		 WHERE name = ? AND scope = 'service' AND (stack = ? OR stack = '')
@@ -155,7 +155,7 @@ func (s *Store) ConfigForStack(ctx context.Context, stack, name string) (*Config
 // the DSL resolves config(name) by name only, so an unattached service config
 // is usable by any stack and must stay visible on every stack's page.
 func (s *Store) ListConfigs(ctx context.Context, scope, stack string) ([]*ConfigRow, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT id, scope, stack, name, kind, content, version, hash, created_at, updated_at, rendered_content, rendered_at, rendered_hash
 		 FROM configs
 		 WHERE (?1 = '' OR scope = ?1) AND (?2 = '' OR stack = ?2 OR (?2 != '' AND ?1 = 'service' AND stack = ''))
@@ -180,7 +180,7 @@ func (s *Store) ListConfigs(ctx context.Context, scope, stack string) ([]*Config
 // config_versions so it can be rolled back. Returns the new hash.
 // Returns ErrConfigNotFound when the config doesn't exist.
 func (s *Store) UpdateConfig(ctx context.Context, name, newContent, version string) (string, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.conn().BeginTx(ctx, nil)
 	if err != nil {
 		return "", fmt.Errorf("begin tx: %w", err)
 	}
@@ -229,14 +229,14 @@ func (s *Store) UpdateConfig(ctx context.Context, name, newContent, version stri
 // Returns ErrConfigNotFound if the config doesn't exist.
 func (s *Store) ListConfigVersions(ctx context.Context, name string) ([]*ConfigVersionRow, error) {
 	var cfgID int64
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM configs WHERE name = ?`, name).Scan(&cfgID)
+	err := s.conn().QueryRowContext(ctx, `SELECT id FROM configs WHERE name = ?`, name).Scan(&cfgID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrConfigNotFound
 		}
 		return nil, fmt.Errorf("query config: %w", err)
 	}
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT id, config_id, content, hash, created_at
 		 FROM config_versions WHERE config_id = ? ORDER BY id DESC`, cfgID)
 	if err != nil {
@@ -258,7 +258,7 @@ func (s *Store) ListConfigVersions(ctx context.Context, name string) ([]*ConfigV
 // The current value is pushed into config_versions first, so the rollback
 // itself is reversible. Returns the restored hash.
 func (s *Store) RollbackConfig(ctx context.Context, name string, versionID int64) (string, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.conn().BeginTx(ctx, nil)
 	if err != nil {
 		return "", fmt.Errorf("begin tx: %w", err)
 	}
@@ -318,7 +318,7 @@ func (s *Store) RollbackConfig(ctx context.Context, name string, versionID int64
 // from the console or CLI, without touching its content. Returns
 // ErrConfigNotFound when no row matched.
 func (s *Store) UpdateConfigStack(ctx context.Context, name, scope, stack string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`UPDATE configs SET scope = ?, stack = ? WHERE name = ?`, scope, stack, name)
 	if err != nil {
 		return fmt.Errorf("update config stack: %w", err)
@@ -336,7 +336,7 @@ func (s *Store) UpdateConfigStack(ctx context.Context, name, scope, stack string
 // DeleteConfig removes a config and its version history (CASCADE).
 // Returns ErrConfigNotFound when no row matched.
 func (s *Store) DeleteConfig(ctx context.Context, name string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM configs WHERE name = ?`, name)
+	res, err := s.conn().ExecContext(ctx, `DELETE FROM configs WHERE name = ?`, name)
 	if err != nil {
 		return fmt.Errorf("delete config: %w", err)
 	}
@@ -354,7 +354,7 @@ func (s *Store) DeleteConfig(ctx context.Context, name string) error {
 // (rendered_content + rendered_hash + rendered_at). Returns
 // ErrConfigNotFound when the config doesn't exist.
 func (s *Store) SetRendered(ctx context.Context, name, content string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`UPDATE configs SET rendered_content = ?, rendered_hash = ?, rendered_at = ? WHERE name = ?`,
 		content, ConfigHash(content), time.Now().Unix(), name)
 	if err != nil {
@@ -373,7 +373,7 @@ func (s *Store) SetRendered(ctx context.Context, name, content string) error {
 // ListRenderedConfigs returns every config that has a rendered snapshot
 // (rendered_content set), ordered by name.
 func (s *Store) ListRenderedConfigs(ctx context.Context) ([]*ConfigRow, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT id, scope, stack, name, kind, content, version, hash, created_at, updated_at, rendered_content, rendered_at, rendered_hash
 		 FROM configs WHERE rendered_content != '' ORDER BY name`)
 	if err != nil {

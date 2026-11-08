@@ -3,6 +3,40 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.257 (2026-11-08)
+
+**A manager that GAINS leadership now adopts the newest control-plane kit instead of serving its own old database.**
+
+Measured on the real cluster the same day: `nxt-sw-4-m` saturated (load ~10 on one vCPU), Docker stopped
+answering heartbeats, Swarm marked it `Down`, and leadership moved to `nxt-sw-5-m`. 5-m then answered **401**
+to an API key created minutes earlier on 4-m, because 5-m was serving its own `data.db`. The newest kit was
+already replicated to it — nothing applied it: `Kit.Restore` had exactly one caller, the startup path, which
+runs before the daemon waits for leadership. A node that becomes leader while running never re-checked.
+
+Adoption now runs the same predicate at two call sites: startup (before `store.Open`) and once per
+follower→leader transition (`Kit.AdoptOnLeadership`, from the leadership goroutine, before the reconcile loop
+reads settings and before the node answers control-plane reads). The mid-run case stages the kit in a
+`.adopt-*` directory inside the data dir and then closes the store (`store.Store.Swap`), renames the staged
+`data.db` and `.encryption_key` into place with `data.db` last — one atomic rename — writes `.state_revision`,
+and reopens the same `*store.Store` every consumer already holds. A changed key reloads `credentials.Cipher` in
+place, since a cluster DB beside the node's old key leaves every ciphertext undecryptable.
+
+- Once per transition, never per tick: a node that stays leader does not close its store; the tick path is
+  unchanged.
+- Failure is contained: an unreadable kit or a state config without its key config logs ERROR with the reason
+  and keeps serving the current database. Nothing is ever half-extracted.
+- A snapshot this node published itself is never adopted back.
+- While adopting, the daemon answers 503 + `Retry-After` for everything but `/health`, so no request is served
+  from the revision being replaced. The window is one extract plus one rename.
+- The stale comment in `controlplane/state.go` claiming the leader loop calls restore "on every tick and every
+  promotion" is corrected: no such call existed, and now the two real call sites are named.
+
+Tests assert the behaviour and the call counts: stale revision adopts and the reopened handle serves the
+adopted rows; a current revision performs zero extractions; two transitions perform exactly two checks and one
+extraction; a missing key config is refused with the DB byte-identical and an ERROR log; an unreadable kit
+leaves the DB untouched with no staging left behind; tick churn never swaps the store; a self-published
+snapshot is skipped.
+
 ## v0.2.256 (2026-11-08)
 
 **Each console page now issues its reads in one wave, and says so while it waits.**

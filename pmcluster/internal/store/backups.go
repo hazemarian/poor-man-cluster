@@ -38,7 +38,7 @@ func (s *Store) CreateBackup(ctx context.Context, stackName string, revision int
 	if revision != 0 {
 		rev = sql.NullInt64{Int64: revision, Valid: true}
 	}
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`INSERT INTO backups (stack_name, revision, status, started_at) VALUES (?, ?, 'pending', ?)`,
 		stack, rev, now,
 	)
@@ -51,7 +51,7 @@ func (s *Store) CreateBackup(ctx context.Context, stackName string, revision int
 // FinishBackup marks an in-flight backup as succeeded or failed and
 // records the resulting archive list (or error message).
 func (s *Store) FinishBackup(ctx context.Context, id int64, status, archivePaths, errorMessage string) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.conn().ExecContext(ctx,
 		`UPDATE backups
 		    SET status = ?, archive_paths = ?, error_message = ?, finished_at = ?
 		  WHERE id = ?`,
@@ -94,7 +94,7 @@ func (s *Store) RecordDiscoveredBackupArtifact(ctx context.Context, filename, ar
 	if stackName != "" {
 		stack = sql.NullString{String: stackName, Valid: true}
 	}
-	_, err := s.db.ExecContext(ctx,
+	_, err := s.conn().ExecContext(ctx,
 		`INSERT OR IGNORE INTO backups (filename, stack_name, status, archive_paths, error_message, started_at, finished_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		filename, stack, status, archivePath, note, at, at,
@@ -111,7 +111,7 @@ func (s *Store) RecordDiscoveredBackupArtifact(ctx context.Context, filename, ar
 // filename, so the filename unique index alone cannot catch them).
 func (s *Store) BackupExistsByPath(ctx context.Context, archivePath string) (bool, error) {
 	var n int
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT COUNT(1) FROM backups WHERE archive_paths LIKE '%' || ? || '%'`,
 		archivePath,
 	).Scan(&n)
@@ -124,7 +124,7 @@ func (s *Store) BackupExistsByPath(ctx context.Context, archivePath string) (boo
 // Backup fetches one backup row by id.
 func (s *Store) Backup(ctx context.Context, id int64) (*Backup, error) {
 	var b Backup
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT id, stack_name, revision, status, archive_paths, error_message, started_at, finished_at
 		   FROM backups WHERE id = ?`, id,
 	).Scan(&b.ID, &b.StackName, &b.Revision, &b.Status, &b.ArchivePaths, &b.ErrorMessage, &b.StartedAt, &b.FinishedAt)
@@ -140,7 +140,7 @@ func (s *Store) Backup(ctx context.Context, id int64) (*Backup, error) {
 // ListBackupsOlderThan returns backups whose run started strictly before the
 // given unix time, oldest first. Used by the retention prune.
 func (s *Store) ListBackupsOlderThan(ctx context.Context, before int64) ([]*Backup, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT id, stack_name, revision, status, archive_paths, error_message, started_at, finished_at
 		   FROM backups WHERE started_at < ? ORDER BY started_at ASC, id ASC`, before,
 	)
@@ -162,7 +162,7 @@ func (s *Store) ListBackupsOlderThan(ctx context.Context, before int64) ([]*Back
 // DeleteBackup removes one backup audit row. Returns ErrBackupNotFound when
 // no row matches.
 func (s *Store) DeleteBackup(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM backups WHERE id = ?`, id)
+	res, err := s.conn().ExecContext(ctx, `DELETE FROM backups WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete backup %d: %w", id, err)
 	}
@@ -182,7 +182,7 @@ func (s *Store) ListBackups(ctx context.Context, limit int) ([]*Backup, error) {
 		q += " LIMIT ?"
 		args = append(args, limit)
 	}
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := s.conn().QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query backups: %w", err)
 	}
@@ -203,7 +203,7 @@ func (s *Store) ListBackups(ctx context.Context, limit int) ([]*Backup, error) {
 // are included because they capture every stack's data; the caller renders
 // them as covering the stack.
 func (s *Store) ListBackupsForStack(ctx context.Context, stackName string) ([]*Backup, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT id, stack_name, revision, status, archive_paths, error_message, started_at, finished_at
 		   FROM backups WHERE stack_name = ? OR stack_name IS NULL ORDER BY started_at DESC, id DESC`, stackName,
 	)

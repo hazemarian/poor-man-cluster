@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 )
 
 const (
@@ -24,10 +25,20 @@ const (
 // ErrInvalidCiphertext: malformed input or GCM auth tag mismatch.
 var ErrInvalidCiphertext = errors.New("invalid or tampered ciphertext")
 
-// Cipher is safe for concurrent use after construction.
+// Cipher is safe for concurrent use, including across a Reload.
+//
+// The AEAD behind it is held in an atomic pointer because a manager that gains
+// Swarm leadership adopts the cluster's `.encryption_key` together with its
+// data.db; a Cipher still holding the pre-adoption key would fail to decrypt
+// every credential ciphertext in the database it just adopted (and would
+// encrypt new secrets under a key the rest of the fleet cannot read). Reload
+// swaps the key in place so consumers that already hold this *Cipher follow it.
 type Cipher struct {
-	gcm cipher.AEAD
+	gcm atomic.Pointer[aead]
 }
+
+// aead boxes one cipher.AEAD so it can live behind an atomic.Pointer.
+type aead struct{ gcm cipher.AEAD }
 
 // Open loads the key, creating it (mode 0600) on first use. The parent
 // directory must already exist with safe permissions.
@@ -36,6 +47,37 @@ func Open(path string) (*Cipher, error) {
 	if err != nil {
 		return nil, err
 	}
+	gcm, err := newGCM(key)
+	if err != nil {
+		return nil, err
+	}
+	c := &Cipher{}
+	c.gcm.Store(&aead{gcm: gcm})
+	return c, nil
+}
+
+// Reload re-reads the key file and swaps the AEAD in place, so a live daemon
+// picks up an adopted `.encryption_key` without a restart. It never creates a
+// missing key: the caller adopted one, so an absent file is an error worth
+// reporting rather than a fresh key that would orphan the adopted ciphertexts.
+func (c *Cipher) Reload(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read key file: %w", err)
+	}
+	if len(data) != keyBytes {
+		return fmt.Errorf("key file %s has wrong length (%d, expected %d)", path, len(data), keyBytes)
+	}
+	gcm, err := newGCM(data)
+	if err != nil {
+		return err
+	}
+	c.gcm.Store(&aead{gcm: gcm})
+	return nil
+}
+
+// newGCM derives the AES-256-GCM AEAD from a 32-byte key.
+func newGCM(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("aes new cipher: %w", err)
@@ -44,16 +86,20 @@ func Open(path string) (*Cipher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new GCM: %w", err)
 	}
-	return &Cipher{gcm: gcm}, nil
+	return gcm, nil
 }
 
 // Encrypt: nonce(12B) || gcm_seal(plaintext). Fresh nonce per call.
 func (c *Cipher) Encrypt(plaintext []byte) ([]byte, error) {
+	box := c.gcm.Load()
+	if box == nil {
+		return nil, errors.New("cipher has no key loaded")
+	}
 	nonce := make([]byte, nonceBytes)
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, fmt.Errorf("read nonce: %w", err)
 	}
-	sealed := c.gcm.Seal(nil, nonce, plaintext, nil)
+	sealed := box.gcm.Seal(nil, nonce, plaintext, nil)
 	out := make([]byte, 0, len(nonce)+len(sealed))
 	out = append(out, nonce...)
 	out = append(out, sealed...)
@@ -63,11 +109,15 @@ func (c *Cipher) Encrypt(plaintext []byte) ([]byte, error) {
 // Decrypt returns ErrInvalidCiphertext for any tamper or malformed
 // input; never panics, never leaks plaintext on auth failure.
 func (c *Cipher) Decrypt(ciphertext []byte) ([]byte, error) {
+	box := c.gcm.Load()
+	if box == nil {
+		return nil, ErrInvalidCiphertext
+	}
 	if len(ciphertext) < nonceBytes {
 		return nil, ErrInvalidCiphertext
 	}
 	nonce, sealed := ciphertext[:nonceBytes], ciphertext[nonceBytes:]
-	plain, err := c.gcm.Open(nil, nonce, sealed, nil)
+	plain, err := box.gcm.Open(nil, nonce, sealed, nil)
 	if err != nil {
 		return nil, ErrInvalidCiphertext
 	}

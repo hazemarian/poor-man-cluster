@@ -36,7 +36,7 @@ func (s *Store) SiteCert(ctx context.Context, domain string) (SiteCertRow, error
 	var r SiteCertRow
 	var sans string
 	var nb, na, created, updated int64
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT domain, cert_secret, key_secret, not_before, not_after, sans,
 		        cert_hash, key_hash, created_at, updated_at
 		   FROM site_certs WHERE domain = ?`, domain).
@@ -60,7 +60,7 @@ func (s *Store) SiteCert(ctx context.Context, domain string) (SiteCertRow, error
 // domain AND every per-host bring-your-own cert — all live in this one
 // table), sorted by domain.
 func (s *Store) ListSiteCerts(ctx context.Context) ([]SiteCertRow, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT domain, cert_secret, key_secret, not_before, not_after, sans,
 		        cert_hash, key_hash, created_at, updated_at
 		   FROM site_certs ORDER BY domain`)
@@ -95,7 +95,7 @@ func (s *Store) ListSiteCerts(ctx context.Context) ([]SiteCertRow, error) {
 // The row's CreatedAt/UpdatedAt are used as-is (the caller stamps them);
 // on update, created_at is preserved and only updated_at moves forward.
 func (s *Store) PutSiteCert(ctx context.Context, r SiteCertRow) error {
-	if _, err := s.db.ExecContext(ctx,
+	if _, err := s.conn().ExecContext(ctx,
 		`INSERT INTO site_certs (domain, cert_secret, key_secret, not_before,
 		        not_after, sans, cert_hash, key_hash, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -118,7 +118,7 @@ func (s *Store) PutSiteCert(ctx context.Context, r SiteCertRow) error {
 // DeleteSiteCert removes the stored site-cert metadata for the domain.
 // No error when nothing was stored.
 func (s *Store) DeleteSiteCert(ctx context.Context, domain string) error {
-	if _, err := s.db.ExecContext(ctx,
+	if _, err := s.conn().ExecContext(ctx,
 		`DELETE FROM site_certs WHERE domain = ?`, domain); err != nil {
 		return fmt.Errorf("delete site cert %s: %w", domain, err)
 	}

@@ -283,7 +283,9 @@ Sources: [docs/backup.md](backup.md); pmcluster/internal/cluster/embeds/backup-s
 
 The control plane survives the loss of its own leader through a Raft-replicated survivor kit. The leader runs `controlplane.Kit.Loop` — a 5-minute tick plus an immediate snapshot on promotion — publishing two Docker config families: `pmcluster_state_<unixnano>` (a tar.gz of `data.db`, `config.yaml`, and the `config/` tree) and `pmcluster_state_key_<unixnano>` (the `.encryption_key` bytes alone). A restore refuses a state config whose key config is missing, so key and ciphertext never share one blob. Swarm's Raft store replicates both to every manager; snapshots prune to the newest two and fail loudly above Docker's 500 KiB config ceiling.
 
-What to look for: the two configs published separately, and the restore positioned before the store opens.
+Adoption runs at exactly two call sites: at startup, before the store is opened, and **once on the follower→leader transition** (`Kit.AdoptOnLeadership`). The second one is what a live failover needs: a manager that becomes leader while running holds whatever database it last adopted, so an API key or credential created minutes earlier on the old leader answers 401 until something makes the new leader read the newest kit. Adoption closes the SQLite handle (`store.Store.Swap`), renames a staged `data.db` and `.encryption_key` into place — `data.db` last, so it is one atomic rename — writes `.state_revision`, and reopens the same handle every consumer holds; the in-memory cipher is reloaded when the key changed. The window in which the new leader is not yet serving is one extract plus one rename, and it answers 503/`Retry-After` (never a stale answer) for the duration.
+
+What to look for: the two configs published separately, the startup restore positioned before `store.Open`, and the leadership-gain adoption that closes and reopens the store rather than writing under it.
 
 ```mermaid
 sequenceDiagram
@@ -293,15 +295,16 @@ sequenceDiagram
     L->>RAFT: pmcluster_state_<unixnano> (data kit)
     L->>RAFT: pmcluster_state_key_<unixnano> (.encryption_key)
     RAFT-->>S: replicated to every manager
-    S->>S: restore BEFORE store.Open (startup-only)
+    S->>S: startup — restore before store.Open
+    S->>S: leadership gain — check revision, close store, rename kit, reopen
     Note over S: refuse state without its key
 ```
 
-The invariant it encodes: key and ciphertext live in separate configs and restore happens only at startup — a promoted leader publishes, never restores under its own live connection.
+The invariant it encodes: key and ciphertext live in separate configs, and adoption happens at startup and once per leadership gain — the promoted leader closes its store and replaces the pair by atomic rename, so it never writes data.db under a live connection and never serves the pre-move revision once adoption returns.
 
-Restore is startup-only because `Restore` truncates `data.db`, which under a live SQLite connection would split-brain the daemon (stale page-cache rows against a clobbered file). It runs only when the local DB is missing or older than the snapshot, and repairs a missing encryption key even when the DB is current. On a worker or a leaderless swarm it is a no-op that retries later — `IsSwarmUnavailable` recognises the stable "not a manager" / "does not have a leader" messages, so a daemon starting during a quorum outage stands by instead of crash-looping.
+`Restore` writes `data.db` in place, which under a live SQLite connection would split-brain the daemon (stale page-cache rows against a clobbered file) — that is why the startup call site runs before `store.Open` and the promotion call site goes through `store.Store.Swap` instead. Both run the same predicate: the local DB is missing or older than the snapshot, the node has never synced, or its `.encryption_key` differs from the cluster's (a missing key is repaired even when the DB is current). On a worker or a leaderless swarm adoption is a no-op that retries on the next transition — `IsSwarmUnavailable` recognises the stable "not a manager" / "does not have a leader" messages, so a daemon starting during a quorum outage stands by instead of crash-looping.
 
-Sources: pmcluster/internal/controlplane/state.go; pmcluster/internal/cli/serve.go; pmcluster/internal/cli/leader.go.
+Sources: pmcluster/internal/controlplane/state.go; pmcluster/internal/controlplane/adopt.go; pmcluster/internal/store/store.go; pmcluster/internal/cli/serve.go; pmcluster/internal/cli/leader.go.
 
 ## 12. Networking, ingress, and auth
 
@@ -367,7 +370,7 @@ hourly run, which is why each leg reports its own verdict in the run record and 
 
 **Ingress and auth.** Traefik is pinned to managers, the gate owns auth, and the console runs synthetic-admin behind it. We rejected global Traefik everywhere — routerless worker replicas caused a production 404 outage — and console-native login as default: two user databases. The cost is no per-user console RBAC in gated mode.
 
-**Control-plane correctness.** Restore is startup-only, the rendered hash is stamped only after a successful apply, and `depends_on` is enforced by the control plane. We rejected restoring under a live connection (split-brain) and shell wait-wrappers for ordering (they break baked-entrypoint and distroless images). The cost is that `rendered_yaml` is an audit artifact, never executed.
+**Control-plane correctness.** Control-plane adoption runs at startup and once per leadership gain (closing and reopening the store around an atomic rename), the rendered hash is stamped only after a successful apply, and `depends_on` is enforced by the control plane. We rejected writing data.db under a live connection (split-brain) and shell wait-wrappers for ordering (they break baked-entrypoint and distroless images). The cost is that `rendered_yaml` is an audit artifact, never executed.
 
 **Release workflow.** One tag per verified build: the tag is cut after verification completes and production rolls that single tag. We rejected tagging ahead of verification, which forces either a second tag or a rollout of a known-bad build. The cost is fewer tags per week; a green tag rolls once.
 

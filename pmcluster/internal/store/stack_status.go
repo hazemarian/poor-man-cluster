@@ -26,7 +26,7 @@ func (s *Store) SetStackStatus(ctx context.Context, st StackStatus) error {
 	if st.Services == nil {
 		svcs = []byte("{}")
 	}
-	_, err = s.db.ExecContext(ctx, `
+	_, err = s.conn().ExecContext(ctx, `
 		INSERT INTO stack_status (stack_name, status, services, updated_at)
 		VALUES (?, ?, ?, ?)
 		ON CONFLICT(stack_name) DO UPDATE SET
@@ -48,7 +48,7 @@ func (s *Store) StackStatus(ctx context.Context, stackName string) (*StackStatus
 		svcs   string
 		at     int64
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT status, services, updated_at FROM stack_status WHERE stack_name = ?`,
 		stackName,
 	).Scan(&status, &svcs, &at)
@@ -67,7 +67,7 @@ func (s *Store) StackStatus(ctx context.Context, stackName string) (*StackStatus
 
 // ListStackStatuses returns every recorded status snapshot.
 func (s *Store) ListStackStatuses(ctx context.Context) ([]*StackStatus, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT stack_name, status, services, updated_at FROM stack_status ORDER BY stack_name`)
 	if err != nil {
 		return nil, fmt.Errorf("query stack statuses: %w", err)
@@ -95,7 +95,7 @@ func (s *Store) ListStackStatuses(ctx context.Context) ([]*StackStatus, error) {
 // loop to prune rows for stacks no longer in the store). Returns ErrNotFound
 // when no snapshot exists.
 func (s *Store) DeleteStackStatus(ctx context.Context, stackName string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM stack_status WHERE stack_name = ?`, stackName)
+	res, err := s.conn().ExecContext(ctx, `DELETE FROM stack_status WHERE stack_name = ?`, stackName)
 	if err != nil {
 		return fmt.Errorf("delete stack status: %w", err)
 	}

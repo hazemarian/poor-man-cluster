@@ -85,7 +85,7 @@ func ParseStackErrors(raw string) []StackErrorEntry {
 // RecordDeploy atomically inserts the new revision and upserts the stack
 // row's current_revision pointer.
 func (s *Store) RecordDeploy(ctx context.Context, rev *StackRevision, repoURL string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.conn().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
@@ -161,7 +161,7 @@ func (s *Store) RecordDeploy(ctx context.Context, rev *StackRevision, repoURL st
 // deploy leaves the hash empty and the next Sync sees a mismatch and retries.
 // Returns ErrRevisionNotFound when no such revision exists.
 func (s *Store) SetRevisionRenderedHash(ctx context.Context, stackName string, revision int64, hash string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`UPDATE stack_revisions SET rendered_hash = ? WHERE stack_name = ? AND revision = ?`,
 		hash, stackName, revision,
 	)
@@ -178,7 +178,7 @@ func (s *Store) SetRevisionRenderedHash(ctx context.Context, stackName string, r
 // such stack exists.
 func (s *Store) Stack(ctx context.Context, name string) (*Stack, error) {
 	var st Stack
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT name, current_revision, repo_url, source_file, last_error, created_at, updated_at FROM stacks WHERE name = ?`, name,
 	).Scan(&st.Name, &st.CurrentRevision, &st.RepoURL, &st.SourceFile, &st.LastError, &st.CreatedAt, &st.UpdatedAt)
 	if err != nil {
@@ -192,7 +192,7 @@ func (s *Store) Stack(ctx context.Context, name string) (*Stack, error) {
 
 // ListStacks returns every stack row, ordered by name.
 func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT name, current_revision, repo_url, source_file, last_error, created_at, updated_at FROM stacks ORDER BY name`,
 	)
 	if err != nil {
@@ -213,7 +213,7 @@ func (s *Store) ListStacks(ctx context.Context) ([]*Stack, error) {
 // SetStackLastError records the most recent deploy/apply error for a stack
 // ("" clears it). ErrStackNotFound when the stack does not exist.
 func (s *Store) SetStackLastError(ctx context.Context, name, lastError string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`UPDATE stacks SET last_error = ?, updated_at = ? WHERE name = ?`,
 		lastError, time.Now().Unix(), name,
 	)
@@ -238,7 +238,7 @@ func (s *Store) RecordStackError(ctx context.Context, stackName string, revision
 		return time.Now().Unix(), nil
 	}
 	var raw string
-	if err := s.db.QueryRowContext(ctx, `SELECT last_error FROM stacks WHERE name = ?`, stackName).Scan(&raw); err != nil {
+	if err := s.conn().QueryRowContext(ctx, `SELECT last_error FROM stacks WHERE name = ?`, stackName).Scan(&raw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, ErrStackNotFound
 		}
@@ -263,7 +263,7 @@ func (s *Store) RecordStackError(ctx context.Context, stackName string, revision
 // last_error history column, newest first. limit <= 0 returns every kept row.
 func (s *Store) ListStackErrors(ctx context.Context, stackName string, limit int) ([]StackErrorEntry, error) {
 	var raw string
-	if err := s.db.QueryRowContext(ctx, `SELECT last_error FROM stacks WHERE name = ?`, stackName).Scan(&raw); err != nil {
+	if err := s.conn().QueryRowContext(ctx, `SELECT last_error FROM stacks WHERE name = ?`, stackName).Scan(&raw); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrStackNotFound
 		}
@@ -281,13 +281,13 @@ func (s *Store) ListStackErrors(ctx context.Context, stackName string, limit int
 // owns those rows — deleting a stack must not leave orphaned configs/secrets).
 // Returns ErrStackNotFound when no such stack exists.
 func (s *Store) DeleteStack(ctx context.Context, name string) error {
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM configs WHERE stack = ?`, name); err != nil {
+	if _, err := s.conn().ExecContext(ctx, `DELETE FROM configs WHERE stack = ?`, name); err != nil {
 		return fmt.Errorf("delete stack configs: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM secrets WHERE stack = ?`, name); err != nil {
+	if _, err := s.conn().ExecContext(ctx, `DELETE FROM secrets WHERE stack = ?`, name); err != nil {
 		return fmt.Errorf("delete stack secrets: %w", err)
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM stacks WHERE name = ?`, name)
+	res, err := s.conn().ExecContext(ctx, `DELETE FROM stacks WHERE name = ?`, name)
 	if err != nil {
 		return fmt.Errorf("delete stack %s: %w", name, err)
 	}
@@ -305,7 +305,7 @@ func (s *Store) NextFreeRevision(ctx context.Context, stackName string, candidat
 	for i := int64(0); i < maxAttempts; i++ {
 		r := candidate + i
 		var dummy int64
-		err := s.db.QueryRowContext(ctx,
+		err := s.conn().QueryRowContext(ctx,
 			`SELECT 1 FROM stack_revisions WHERE stack_name = ? AND revision = ?`,
 			stackName, r,
 		).Scan(&dummy)
@@ -323,7 +323,7 @@ func (s *Store) NextFreeRevision(ctx context.Context, stackName string, candidat
 // ErrRevisionNotFound when no such revision exists.
 func (s *Store) Revision(ctx context.Context, stackName string, revision int64) (*StackRevision, error) {
 	var r StackRevision
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT stack_name, revision, source_yaml, rendered_yaml, rendered_hash, source_file, payload_json, created_at
 		 FROM stack_revisions WHERE stack_name = ? AND revision = ?`,
 		stackName, revision,
@@ -343,13 +343,13 @@ func (s *Store) ListRevisions(ctx context.Context, stackName string, limit int) 
 	var rows *sql.Rows
 	var err error
 	if limit > 0 {
-		rows, err = s.db.QueryContext(ctx,
+		rows, err = s.conn().QueryContext(ctx,
 			`SELECT stack_name, revision, source_yaml, rendered_yaml, rendered_hash, source_file, payload_json, created_at
 			 FROM stack_revisions WHERE stack_name = ? ORDER BY revision DESC LIMIT ?`,
 			stackName, limit,
 		)
 	} else {
-		rows, err = s.db.QueryContext(ctx,
+		rows, err = s.conn().QueryContext(ctx,
 			`SELECT stack_name, revision, source_yaml, rendered_yaml, rendered_hash, source_file, payload_json, created_at
 			 FROM stack_revisions WHERE stack_name = ? ORDER BY revision DESC`,
 			stackName,

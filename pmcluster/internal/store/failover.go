@@ -26,7 +26,7 @@ func (s *Store) SetStackFailover(ctx context.Context, f StackFailover) error {
 	if f.Acked {
 		acked = 1
 	}
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := s.conn().ExecContext(ctx, `
 		INSERT INTO stack_failover (stack_name, from_node, to_node, at, acked)
 		VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(stack_name) DO UPDATE SET
@@ -47,7 +47,7 @@ func (s *Store) StackFailover(ctx context.Context, stackName string) (*StackFail
 		f     StackFailover
 		acked int
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT stack_name, from_node, to_node, at, acked FROM stack_failover WHERE stack_name = ?`,
 		stackName,
 	).Scan(&f.StackName, &f.FromNode, &f.ToNode, &f.At, &acked)
@@ -65,7 +65,7 @@ func (s *Store) StackFailover(ctx context.Context, stackName string) (*StackFail
 // accepts the app on its current node as healthy. Returns ErrNotFound when no
 // marker exists.
 func (s *Store) AckStackFailover(ctx context.Context, stackName string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`UPDATE stack_failover SET acked = 1 WHERE stack_name = ?`, stackName)
 	if err != nil {
 		return fmt.Errorf("ack stack failover: %w", err)
@@ -79,7 +79,7 @@ func (s *Store) AckStackFailover(ctx context.Context, stackName string) error {
 // ClearStackFailover removes the marker (used when a stack is moved back to its
 // original node). Returns ErrNotFound when no marker exists.
 func (s *Store) ClearStackFailover(ctx context.Context, stackName string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM stack_failover WHERE stack_name = ?`, stackName)
+	res, err := s.conn().ExecContext(ctx, `DELETE FROM stack_failover WHERE stack_name = ?`, stackName)
 	if err != nil {
 		return fmt.Errorf("clear stack failover: %w", err)
 	}
@@ -91,7 +91,7 @@ func (s *Store) ClearStackFailover(ctx context.Context, stackName string) error 
 
 // ListStackFailovers returns every recorded failover marker.
 func (s *Store) ListStackFailovers(ctx context.Context) ([]*StackFailover, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT stack_name, from_node, to_node, at, acked FROM stack_failover ORDER BY stack_name`)
 	if err != nil {
 		return nil, fmt.Errorf("query stack failovers: %w", err)

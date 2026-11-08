@@ -12,6 +12,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
@@ -198,6 +199,62 @@ func WatchSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Lo
 		}
 	}()
 	return out
+}
+
+// adoptOnLeadershipGain runs the control-plane freshness predicate once for a
+// follower→leader transition and adopts the newest Raft-replicated kit when this
+// node is behind it.
+//
+// It is the mid-run twin of the startup check in serve (ensureControlPlaneFresh):
+// the same predicate — no key, a missing or older `.state_revision`, or a
+// different encryption key — but the store is already open and serving, so
+// adoption closes the SQLite handle, renames the staged data.db and
+// .encryption_key into place, and reopens (controlplane.StoreSwapper). The
+// encryption key is adopted with the DB, so the in-memory Cipher is reloaded
+// when the key changed; otherwise every ciphertext in the freshly adopted
+// database would be undecryptable.
+//
+// Failure is contained: the Kit logs the reason and leaves the current database
+// in place, and this function keeps serving it. Exiting here would turn a stale
+// leader into no leader at all.
+func adoptOnLeadershipGain(ctx context.Context, kit *controlplane.Kit, swap controlplane.StoreSwapper, cipher *credentials.Cipher, cfg *config.Config, gate *adoptionGate, log zerolog.Logger) {
+	if kit == nil {
+		return
+	}
+	end := gate.begin()
+	adoption, err := func() (controlplane.Adoption, error) {
+		// defer, so the window closes even if the adoption panics — otherwise
+		// the node would answer 503 for the rest of its life.
+		defer end()
+		return kit.AdoptOnLeadership(ctx, swap)
+	}()
+
+	switch {
+	case err != nil:
+		log.Error().Err(err).Msg("control-plane adoption on leadership gain did not happen; continuing to serve the CURRENT database")
+		return
+	case !adoption.Adopted:
+		return
+	}
+
+	log.Info().
+		Str("config", adoption.Config).
+		Str("revision", adoption.Revision.Format(time.RFC3339Nano)).
+		Str("reason", adoption.Reason).
+		Bool("key-adopted", adoption.KeyChanged).
+		Msg("control plane adopted on gaining leadership")
+	if !adoption.KeyChanged {
+		return
+	}
+	if cipher == nil {
+		log.Error().Msg("the adopted control plane brought a different encryption key but no cipher is loaded; credentials stay unreadable until the daemon restarts")
+		return
+	}
+	if err := cipher.Reload(cfg.EncryptionKeyPath()); err != nil {
+		log.Error().Err(err).Msg("could not load the encryption key adopted with the control plane; credentials stay unreadable until the daemon restarts")
+		return
+	}
+	log.Info().Msg("reloaded the encryption key adopted with the control plane")
 }
 
 // ensureControlPlaneFresh restores the control plane on promotion. Two

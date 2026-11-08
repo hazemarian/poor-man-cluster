@@ -78,7 +78,7 @@ func SecretHash(value string) string {
 
 // CreateSecret inserts a new secret. Returns ErrSecretExists on name clash.
 func (s *Store) CreateSecret(ctx context.Context, scope, stack, name string, payload []byte, hash string) (int64, error) {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`INSERT INTO secrets (scope, stack, name, payload, hash, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		scope, stack, name, payload, hash, time.Now().Unix(),
 	)
@@ -95,7 +95,7 @@ func (s *Store) CreateSecret(ctx context.Context, scope, stack, name string, pay
 // Returns ErrSecretNotFound when missing.
 func (s *Store) Secret(ctx context.Context, name string) (*SecretRow, error) {
 	var r SecretRow
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT id, scope, stack, name, payload, hash, created_at, swarm_rev FROM secrets WHERE name = ?`, name,
 	).Scan(&r.ID, &r.Scope, &r.Stack, &r.Name, &r.Payload, &r.Hash, &r.CreatedAt, &r.SwarmRev)
 	if err != nil {
@@ -115,7 +115,7 @@ func (s *Store) Secret(ctx context.Context, name string) (*SecretRow, error) {
 // the DSL resolves secrets(name) by name only, so an unattached service
 // secret is usable by any stack and must stay visible on every stack's page.
 func (s *Store) ListSecrets(ctx context.Context, scope, stack string) ([]*SecretMeta, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT id, scope, stack, name, hash, created_at, swarm_rev FROM secrets
 		 WHERE (?1 = '' OR scope = ?1) AND (?2 = '' OR stack = ?2 OR (?2 != '' AND ?1 = 'service' AND stack = ''))
 		 ORDER BY scope, stack, name`, scope, stack)
@@ -140,7 +140,7 @@ func (s *Store) ListSecrets(ctx context.Context, scope, stack string) ([]*Secret
 // immutable in-use one. Keeps scope, stack, name and created_at.
 // Returns ErrSecretNotFound when no row matched.
 func (s *Store) UpdateSecret(ctx context.Context, name string, payload []byte, hash string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`UPDATE secrets SET payload = ?, hash = ?, swarm_rev = swarm_rev + 1 WHERE name = ?`, payload, hash, name)
 	if err != nil {
 		return fmt.Errorf("update secret: %w", err)
@@ -160,7 +160,7 @@ func (s *Store) UpdateSecret(ctx context.Context, name string, payload []byte, h
 // from the console or CLI, without touching its payload. Returns
 // ErrSecretNotFound when no row matched.
 func (s *Store) UpdateSecretStack(ctx context.Context, name, scope, stack string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`UPDATE secrets SET scope = ?, stack = ? WHERE name = ?`, scope, stack, name)
 	if err != nil {
 		return fmt.Errorf("update secret stack: %w", err)
@@ -177,7 +177,7 @@ func (s *Store) UpdateSecretStack(ctx context.Context, name, scope, stack string
 
 // DeleteSecret removes a secret. Returns ErrSecretNotFound when no row matched.
 func (s *Store) DeleteSecret(ctx context.Context, name string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM secrets WHERE name = ?`, name)
+	res, err := s.conn().ExecContext(ctx, `DELETE FROM secrets WHERE name = ?`, name)
 	if err != nil {
 		return fmt.Errorf("delete secret: %w", err)
 	}

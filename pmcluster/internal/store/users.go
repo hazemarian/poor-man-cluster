@@ -44,7 +44,7 @@ func (s *Store) CreateUserWithRole(ctx context.Context, name, tokenID, tokenHash
 	if tokenID != "" {
 		tid = sql.NullString{String: tokenID, Valid: true}
 	}
-	res, err := s.db.ExecContext(ctx,
+	res, err := s.conn().ExecContext(ctx,
 		`INSERT INTO users (name, token_id, token_hash, created_at, stack, role) VALUES (?, ?, ?, ?, ?, ?)`,
 		name, tid, tokenHash, time.Now().Unix(), firstStack(stack), role,
 	)
@@ -82,7 +82,7 @@ type UserRow struct {
 // ListUsers returns every user (id, name, created_at, last_used_at, stack)
 // ordered by name, without any token/hash material.
 func (s *Store) ListUsers(ctx context.Context) ([]UserRow, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := s.conn().QueryContext(ctx,
 		`SELECT id, name, created_at, last_used_at, stack FROM users ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
@@ -103,7 +103,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]UserRow, error) {
 // not been completed yet.
 func (s *Store) CountUsers(ctx context.Context) (int, error) {
 	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+	if err := s.conn().QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
 		return 0, fmt.Errorf("count users: %w", err)
 	}
 	return n, nil
@@ -160,7 +160,7 @@ func (s *Store) userByTokenID(ctx context.Context, tokenID, secret string) (*aut
 		u    auth.User
 		hash string
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT id, name, stack, role, token_hash FROM users WHERE token_id = ?`, tokenID,
 	).Scan(&u.ID, &u.Name, &u.Stack, &u.Role, &hash)
 	if err != nil {
@@ -184,7 +184,7 @@ func (s *Store) userByTokenID(ctx context.Context, tokenID, secret string) (*aut
 // with pre-v2 tokens.  It iterates ALL user rows and runs argon2id against
 // each until a match is found.
 func (s *Store) userByTokenLegacy(ctx context.Context, token string) (*auth.User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, stack, role, token_hash FROM users`)
+	rows, err := s.conn().QueryContext(ctx, `SELECT id, name, stack, role, token_hash FROM users`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
@@ -215,7 +215,7 @@ func (s *Store) userByTokenLegacy(ctx context.Context, token string) (*auth.User
 // UserByID returns (nil, sql.ErrNoRows) when not found.
 func (s *Store) UserByID(ctx context.Context, id int64) (*auth.User, error) {
 	var u auth.User
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, stack FROM users WHERE id = ?`, id).
+	err := s.conn().QueryRowContext(ctx, `SELECT id, name, stack FROM users WHERE id = ?`, id).
 		Scan(&u.ID, &u.Name, &u.Stack)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -230,7 +230,7 @@ func (s *Store) UserByID(ctx context.Context, id int64) (*auth.User, error) {
 // Returns ErrUserNotFound when no row matches.
 func (s *Store) UserByName(ctx context.Context, name string) (*UserRow, error) {
 	var u UserRow
-	err := s.db.QueryRowContext(ctx,
+	err := s.conn().QueryRowContext(ctx,
 		`SELECT id, name, created_at, last_used_at, stack FROM users WHERE name = ?`, name).
 		Scan(&u.ID, &u.Name, &u.CreatedAt, &u.LastUsedAt, &u.Stack)
 	if err != nil {
@@ -246,7 +246,7 @@ func (s *Store) UserByName(ctx context.Context, name string) (*UserRow, error) {
 // returned error is intentionally ignorable: last-used tracking must never
 // break authentication.
 func (s *Store) TouchUser(ctx context.Context, id int64) error {
-	if _, err := s.db.ExecContext(ctx,
+	if _, err := s.conn().ExecContext(ctx,
 		`UPDATE users SET last_used_at = ? WHERE id = ?`, time.Now().Unix(), id,
 	); err != nil {
 		return fmt.Errorf("touch user: %w", err)
@@ -257,7 +257,7 @@ func (s *Store) TouchUser(ctx context.Context, id int64) error {
 // DeleteUser removes a user row (revoking its bearer token immediately).
 // Returns ErrUserNotFound when no row matched.
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+	res, err := s.conn().ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete user: %w", err)
 	}
