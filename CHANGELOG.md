@@ -3,6 +3,31 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.256 (2026-11-08)
+
+**Each console page now issues its reads in one wave, and says so while it waits.**
+
+The observability page fetched `summary`, `evidence` and `traces` one after another:
+1.88 s + 1.50 s + 1.29 s = 4.67 s of backend work inside a page that rendered in 4.72 s
+— the page *was* its own sum. The reads are now issued together, so the page costs
+roughly its slowest read. Measured against the live API through a local console:
+
+| page / fragment | before | after |
+|---|---|---|
+| `/web/overview` | 1.09–1.29 s | **0.42–0.60 s** |
+| `/web/observability` | 4.72 s cold | **1.83–2.43 s** |
+| — `evidence` | 1.50 s | **0.45–0.59 s** |
+| — `traces` | 1.29 s | **0.64–0.74 s** |
+| `/web/stacks` | 0.50–0.65 s | **0.13–0.16 s** |
+
+`summary` (1.45–1.60 s) did not move and is now the page's floor: the observability
+page cannot render faster than it until that query does.
+
+A visible in-flight state was added so a multi-second panel is not a silent one. Note
+that the loading state is the thin part of this release: the shell carries a spinner and
+the styling, but the per-fragment indicators were verified only in part before the change
+was committed, so treat B as shipped-but-unproven rather than measured.
+
 ## v0.2.255 (2026-11-08)
 
 **The read cache could not hit, because it was keyed on the clock.**
