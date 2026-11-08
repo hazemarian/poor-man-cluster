@@ -77,6 +77,12 @@ func (c *Client) getJSON(ctx context.Context, path string) ([]observability.Row,
 
 // decodeAlertRows decodes the alerts list, tolerating both a bare array and the
 // object-wrapped forms the backend may use.
+//
+// An object that carries NONE of the known envelopes is an error, not an empty
+// list: "no alerts are configured" and "the response was not an alert list"
+// are different facts, and reporting the second as the first hides a malformed
+// or changed upstream behind a reassuring zero. A known key that is explicitly
+// null is an empty list — that is how a backend with no alerts may render.
 func decodeAlertRows(data []byte) ([]observability.Row, error) {
 	var raw any
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -89,11 +95,23 @@ func decodeAlertRows(data []byte) ([]observability.Row, error) {
 	case []any:
 		arr = v
 	case map[string]any:
+		found := false
 		for _, key := range []string{"alerts", "data", "result", "records", "rows", "items"} {
-			if candidate, ok := v[key].([]any); ok {
-				arr = candidate
+			candidate, ok := v[key]
+			if !ok {
+				continue
+			}
+			if list, ok := candidate.([]any); ok {
+				arr, found = list, true
 				break
 			}
+			if candidate == nil {
+				arr, found = []any{}, true
+				break
+			}
+		}
+		if !found {
+			return nil, errors.New("alerts response does not contain a list")
 		}
 	default:
 		return nil, errors.New("alerts response is not an object or array")

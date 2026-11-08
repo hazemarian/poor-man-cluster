@@ -369,7 +369,10 @@ ask for an unbounded scan:
 
 The daemon memoises full-window reads for about ten seconds, so a burst of
 identical reads (console page fragments, an agent polling through MCP) pays
-Parseable once. Live and incremental reads bypass the cache. Measured on an
+Parseable once. Readers that arrive while an identical read is still in flight
+join that read instead of issuing their own, and an answer that is not
+`available` is never memoised, so a backend outage heals as soon as the backend
+does. Live and incremental reads bypass the cache. Measured on an
 Apple M4 dev host against a mock backend with a 5 ms response: a repeat read
 drops from ~5.6 ms (one backend round trip) to ~207 ns (cache hit). The live
 cluster's Parseable was not reachable from that host, so this is the round-trip

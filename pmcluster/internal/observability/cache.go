@@ -37,6 +37,17 @@ type readCacheEntry struct {
 	at     time.Time
 }
 
+// cachedCall is one backend read that concurrent callers for the same key join.
+// Without it a burst — the console's page fragments and an agent polling at the
+// same time — pays the backend once per caller, because every caller misses the
+// empty cache before any of them has filled it. done is closed only after
+// result and err are set, so a joiner reads them without a lock.
+type cachedCall struct {
+	done   chan struct{}
+	result Result
+	err    error
+}
+
 // CachedReader memoises bounded full-window reads for readCacheTTL so repeated
 // identical reads pay the backend once. Incremental/live log reads (a Since
 // bound) and Status are never cached — those are fresh by definition, and a
@@ -45,9 +56,10 @@ type CachedReader struct {
 	next Reader
 	now  func() time.Time
 
-	mu      sync.Mutex
-	entries map[readCacheKey]readCacheEntry
-	order   []readCacheKey
+	mu       sync.Mutex
+	entries  map[readCacheKey]readCacheEntry
+	order    []readCacheKey
+	inflight map[readCacheKey]*cachedCall
 }
 
 // NewCachedReader wraps next with a short memoising cache. A nil next behaves
@@ -74,12 +86,8 @@ func (c *CachedReader) get(key readCacheKey) (Result, bool) {
 	return entry.result, true
 }
 
-func (c *CachedReader) put(key readCacheKey, result Result) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// putLocked stores result under key. The caller holds c.mu.
+func (c *CachedReader) putLocked(key readCacheKey, result Result) {
 	if _, exists := c.entries[key]; exists {
 		c.entries[key] = readCacheEntry{result: result, at: c.now()}
 		return
@@ -114,17 +122,67 @@ func (c *CachedReader) removeFromOrder(key readCacheKey) {
 	}
 }
 
-// cacheResult serves a cached result when one is fresh for key, else calls fn
-// and memoises an available answer.
-func (c *CachedReader) cacheResult(key readCacheKey, fn func() (Result, error)) (Result, error) {
+// cacheResult serves a fresh cached result for key, joins an in-flight read of
+// the same key, or performs the read itself and memoises an available answer.
+//
+// The in-flight join is what makes "a burst pays the backend once" true: the
+// cache alone only helps a caller that starts after the first response landed,
+// and a burst by definition starts before that.
+func (c *CachedReader) cacheResult(key readCacheKey, fn func() (Result, error)) (res Result, err error) {
+	if c == nil {
+		return fn()
+	}
 	if r, ok := c.get(key); ok {
 		return r, nil
 	}
-	r, err := fn()
-	if err == nil && r.Status == StatusAvailable {
-		c.put(key, r)
+	call, leader := c.begin(key)
+	if !leader {
+		<-call.done
+		return call.result, call.err
 	}
-	return r, err
+	// Release the joiners whatever fn does: a panic must not leave them blocked
+	// forever on a call that will never finish.
+	defer func() {
+		if p := recover(); p != nil {
+			c.finish(key, call, Result{Status: StatusUnavailable}, ErrUnavailable)
+			panic(p)
+		}
+		c.finish(key, call, res, err)
+	}()
+	return fn()
+}
+
+// begin registers an in-flight read for key, or returns the one already
+// running. The caller that gets leader=true must call finish.
+func (c *CachedReader) begin(key readCacheKey) (*cachedCall, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.inflight == nil {
+		c.inflight = make(map[readCacheKey]*cachedCall, 4)
+	}
+	if call, ok := c.inflight[key]; ok {
+		return call, false
+	}
+	call := &cachedCall{done: make(chan struct{})}
+	c.inflight[key] = call
+	return call, true
+}
+
+// finish publishes the read's outcome to every joiner and memoises it when the
+// source actually answered.
+func (c *CachedReader) finish(key readCacheKey, call *cachedCall, result Result, err error) {
+	c.mu.Lock()
+	if c.inflight[key] == call {
+		delete(c.inflight, key)
+	}
+	if err == nil && result.Status == StatusAvailable {
+		c.putLocked(key, result)
+	}
+	call.result, call.err = result, err
+	c.mu.Unlock()
+	// Closing the channel publishes result/err: a joiner's receive happens
+	// after this close, which is ordered after the writes above.
+	close(call.done)
 }
 
 func windowKey(w Window) (int64, int64) { return w.Start.UnixNano(), w.End.UnixNano() }

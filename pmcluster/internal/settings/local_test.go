@@ -215,3 +215,118 @@ func TestLocalUpdateValidatesRetention(t *testing.T) {
 		t.Errorf("metrics retention stored as %q, want 21", v)
 	}
 }
+
+// retentionKeys is the three per-stream retention settings, written out so a
+// table can walk all of them instead of testing one and hoping.
+var retentionKeys = []string{
+	cluster.SettingObservabilityLogsRetentionDays(),
+	cluster.SettingObservabilityMetricsRetentionDays(),
+	cluster.SettingObservabilityTracesRetentionDays(),
+}
+
+func newLocalTestStore(t *testing.T) (*Local, func(context.Context, string) string) {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return NewLocal(st), func(ctx context.Context, key string) string {
+		return st.SettingDefault(ctx, key, "")
+	}
+}
+
+// TestLocalRetentionAcceptsWholeDaysAndGetReportsIt: each of the three keys
+// accepts a whole number of days, stores the canonical form (whitespace and
+// leading zeros removed) and `Get` — not just the row — reports it, which is
+// what the console and the provision renderer actually read.
+func TestLocalRetentionAcceptsWholeDaysAndGetReportsIt(t *testing.T) {
+	ctx := context.Background()
+	want := map[string]string{
+		cluster.SettingObservabilityLogsRetentionDays():    "30",
+		cluster.SettingObservabilityMetricsRetentionDays(): "14",
+		cluster.SettingObservabilityTracesRetentionDays():  "10",
+	}
+
+	for _, key := range retentionKeys {
+		for _, in := range []struct{ raw, stored string }{
+			{raw: "1", stored: "1"},
+			{raw: "7", stored: "7"},
+			{raw: " 21 ", stored: "21"},
+			{raw: "365", stored: "365"},
+		} {
+			t.Run(key+"="+in.raw, func(t *testing.T) {
+				l, _ := newLocalTestStore(t)
+				updated, err := l.Update(ctx, Settings{key: in.raw})
+				if err != nil {
+					t.Fatalf("Update(%q): %v", in.raw, err)
+				}
+				if updated[key] != in.stored {
+					t.Errorf("Update returned %q, want %q", updated[key], in.stored)
+				}
+				got, err := l.Get(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got[key] != in.stored {
+					t.Errorf("Get = %q, want %q (the stored value must override the default)", got[key], in.stored)
+				}
+				// The other two streams are untouched: a per-stream setting must
+				// not bleed into its siblings.
+				for other, def := range want {
+					if other == key {
+						continue
+					}
+					if got[other] != def {
+						t.Errorf("%s = %q after setting %s, want the default %q", other, got[other], key, def)
+					}
+				}
+			})
+		}
+	}
+}
+
+// TestLocalRetentionRejectsInvalidValues: zero, negative, non-numeric and a
+// fractional day are refused for every key, with a message naming the accepted
+// range, and nothing is persisted (the rejection is atomic).
+func TestLocalRetentionRejectsInvalidValues(t *testing.T) {
+	for _, key := range retentionKeys {
+		for _, bad := range []string{"0", "-1", "-30", "abc", "1.5", "1,5", " ", "", "30d", "1e3"} {
+			t.Run(key+"="+bad, func(t *testing.T) {
+				ctx := context.Background()
+				l, stored := newLocalTestStore(t)
+				_, err := l.Update(ctx, Settings{key: bad})
+				if err == nil {
+					t.Fatalf("Update(%q) accepted an invalid retention", bad)
+				}
+				if !strings.Contains(err.Error(), "1 or more") {
+					t.Errorf("error %q must name the accepted range (1 or more days)", err)
+				}
+				if !strings.Contains(err.Error(), key) {
+					t.Errorf("error %q must name the key", err)
+				}
+				if v := stored(ctx, key); v != "" {
+					t.Errorf("rejected value %q was persisted as %q", bad, v)
+				}
+			})
+		}
+	}
+}
+
+// TestLocalRetentionRejectionIsAtomicAcrossKeys: one bad key refuses the whole
+// update, so a caller cannot half-apply a retention change.
+func TestLocalRetentionRejectionIsAtomicAcrossKeys(t *testing.T) {
+	ctx := context.Background()
+	l, stored := newLocalTestStore(t)
+
+	_, err := l.Update(ctx, Settings{
+		cluster.SettingObservabilityLogsRetentionDays():   "21",
+		cluster.SettingObservabilityTracesRetentionDays(): "0",
+	})
+	if err == nil {
+		t.Fatal("want an error for the invalid trace retention")
+	}
+	if v := stored(ctx, cluster.SettingObservabilityLogsRetentionDays()); v != "" {
+		t.Fatalf("the valid logs retention was written despite the rejected sibling: %q", v)
+	}
+}
