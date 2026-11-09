@@ -201,6 +201,17 @@ func WatchSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Lo
 	return out
 }
 
+// leaderGainSteps runs the two steps of a follower→leader transition in the
+// order that matters: a fresh registry credential first, then the reconcile
+// loop whose deploys freeze that credential into service specs.
+//
+// Extracted so the order is a tested fact rather than a comment: a test passes
+// recording fakes and asserts the mint ran exactly once, before the reconcile.
+func leaderGainSteps(ctx context.Context, mint func(context.Context), reconcile func()) {
+	mint(ctx)
+	reconcile()
+}
+
 // adoptOnLeadershipGain runs the control-plane freshness predicate once for a
 // follower→leader transition and adopts the newest Raft-replicated kit when this
 // node is behind it.

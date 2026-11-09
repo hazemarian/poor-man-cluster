@@ -203,19 +203,62 @@ Notes that matter:
 
 ## 5. Image pulls
 
-When an App is configured, the daemon logs in to GHCR with its installation
-token at startup and every 25 minutes:
+When an App is configured, the node running `pmcluster serve` mints an
+installation token and logs in to GHCR at startup, **every 25 minutes**, and
+**once immediately on gaining swarm leadership**:
 
 - user: `x-access-token`
 - password: the minted installation token (stdin, never argv)
 
-The token is reused for 50 minutes and refreshed by a single mint even under
-concurrent pulls. The login runs every 25 minutes — two logins per token
-lifetime — so docker's config never holds a credential that has already
-expired: a token minted at t=0 expires at t=60, the mint refreshes at t=50, and
-the login at t=50 writes the new one. `docker stack deploy
---with-registry-auth` then forwards the current login to workers exactly as it
-did for the stored registry credential.
+Twenty-five minutes is two logins per token lifetime: a token minted at t=0
+expires at t=60, so the next login at t=25 and the one at t=50 are both inside
+its life, with ten minutes of headroom at every tick. The leadership-gain login
+exists because a new leader would otherwise deploy with whatever credential
+happened to be on disk — possibly one minted by the previous leader an hour
+ago — and freeze that dead token into the specs the first reconcile writes. A
+failed login on leadership gain is a warning, not a blocker: the reconcile
+proceeds and the timer retries within 25 minutes.
+
+The loop is a plain goroutine inside `pmcluster serve` — no credential helper,
+no second listener, no extra port, and no certificate verification on this
+path. Every login is serialised by one mutex, so a tick and a failover can
+never write docker's config at the same time, and `DOCKER_CONFIG=/root/.docker`
+is set explicitly because under systemd `HOME` may not point where docker looks.
+
+Every successful login emits a **warning**, in the daemon journal and in the
+deploy output:
+
+```
+WRN docker logged in to ghcr.io with a GitHub App token; it expires at
+2026-11-09T19:40:12Z and is renewed every 25 minutes
+```
+
+A failed login warns with docker's own stderr (`unauthorized`, `denied:
+denied`, or a daemon-connection error) and does not abort anything.
+
+`docker stack deploy --with-registry-auth` forwards that login to workers:
+every service spec the deploy creates carries the `x-access-token` credential
+in its registry-auth object, exactly as it did for the stored registry
+credential. That is what lets a node join the service and pull the image.
+
+**The frozen-copy limitation, stated plainly.** A service spec is immutable
+after deploy. The credential `--with-registry-auth` embeds in it is a snapshot
+taken at deploy time, and it is dead 60 minutes later. The timer keeps the
+*node's* docker config fresh and keeps *future* deploys fresh; it does not and
+cannot rewrite a spec that is already running. So:
+
+- a task rescheduled onto a node that does not already have the image, more
+  than an hour after the deploy, can still fail to pull it
+  (`ImagePullBackOff`);
+- pulling that image by hand on the node works, because the timer refreshed
+  the node's `~/.docker/config.json` — that is the manual workaround;
+- re-deploying the stack re-stamps a fresh credential into the spec.
+
+The acknowledged fixes are **pre-pull** (fetch the image on every node before
+a task is scheduled there) and an **in-cluster registry mirror** (pull through
+a registry that holds the image and carries its own credential). Neither is
+implemented: `cluster up`/`update` do not pre-pull, and there is no mirror.
+This is a known gap in the design, not a supported configuration.
 
 Precedence is deliberate:
 
@@ -257,7 +300,8 @@ sentence. It never displays the key or a token.
 | `502` with "installation is gone" | app uninstalled, or `--installation-id` belongs to another app | reinstall, then `pmcluster github app set --installation-id …` |
 | `502` with "key was rejected" | wrong `.pem` for the App id, or the key was regenerated in GitHub | download the current key, `pmcluster github app set --key-file …` |
 | `502` with "lacks a required permission" | App permissions edited but not approved on the installation | GitHub → Installations → the app → approve the new permissions |
-| pulls fail an hour after a manager restart, broker still works | no daemon refresh — this is what the 40-minute loop prevents; if it is running, the App login itself is failing | daemon log: "GitHub App registry login failed"; run `pmcluster github app test` |
+| pulls fail an hour after a **deploy**, broker still works | the service spec holds the credential frozen at deploy time, and an installation token dies after an hour; a task rescheduled onto a node without the image cannot pull (§5) | re-deploy the stack (re-stamps the spec), or pull the image by hand on that node — the daemon's 25-minute login keeps the node's docker config fresh |
+| pulls fail on a node right after a deploy, broker still works | the App login itself is failing on that node, so `--with-registry-auth` forwarded a stale or missing credential | daemon log: "GitHub App registry login had issues"; run `pmcluster github app test` |
 | `image pulls work, go mod download gets 403` | token minted but the App lacks Contents: Read, or the installation does not include that repo | App permission + installation repository selection; `--probe-repo` catches it in doctor |
 
 ## 8. Rotation
@@ -287,3 +331,9 @@ sentence. It never displays the key or a token.
   shown, to the caller that asked for it.
 - **Per-call permission narrowing.** GitHub cannot do it; documenting a fake
   would be worse than documenting the ceiling.
+- **Pre-pull, and an in-cluster registry mirror.** Both are the acknowledged
+  fixes for the frozen-credential gap in §5 (a spec's credential is dead one
+  hour after deploy). Neither is implemented: no `cluster up`/`update` pre-pull
+  step, no mirror or pull-through cache. A pull helper on every node was tried
+  and removed — it solved manual pulls only, left the frozen spec untouched,
+  and cost a helper binary, a second listener and mTLS on the pull path.

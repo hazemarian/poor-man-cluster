@@ -437,7 +437,16 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				}
 				var loopCtx context.Context
 				loopCtx, loopCancel = context.WithCancel(ctx)
-				go reconciler.Loop(loopCtx)
+				// A failover must not deploy with whatever credential happened
+				// to be on disk: the first reconcile writes service specs, and
+				// --with-registry-auth freezes the credential current at deploy
+				// into each one. Mint once, BEFORE the reconcile starts. A
+				// failure is a warning, not a blocker — the deploy still gets a
+				// chance, and the 25-minute timer retries.
+				leaderGainSteps(ctx,
+					func(c context.Context) { loginOnLeadershipGain(c, st, cfg, log) },
+					func() { go reconciler.Loop(loopCtx) },
+				)
 				go kit.Loop(loopCtx, controlPlaneSnapshotInterval())
 				// The collector writes its node-stats JSONL on the leader's
 				// disk; only this daemon can turn it into rows for the console.

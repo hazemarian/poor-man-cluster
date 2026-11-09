@@ -89,6 +89,29 @@ Everything else (`apikeys`, `webhooks.Service`, `secrets`, `configs.Service`,
 `backups`, `certs.Service`, `stacks.Deployer` + `stacks.Reader`,
 `services`) has a `remote` adapter in `internal/remote`.
 
+## GHCR pull credentials
+
+`pmcluster serve` starts one goroutine that mints a GitHub App installation
+token and runs `docker login ghcr.io` at startup and every 25 minutes — two
+logins inside the token's 60-minute life, so docker's config never holds a
+credential the cache has outlived. The leadership goroutine runs the same login
+once on each follower→leader transition, before the reconcile starts, so the
+service specs written immediately after a failover carry a fresh credential. A
+failed login is a warning in both paths; neither aborts a deploy, and the timer
+retries within 25 minutes.
+
+All logins hold one mutex (they write the same `config.json`), pin
+`DOCKER_CONFIG=/root/.docker`, and warn on success with the expiry timestamp —
+the line exists so an operator can see that docker logged in to GitHub at all.
+
+There is no credential helper, no second listener and no node-certificate
+verification on the pull path; that machinery was built and removed because it
+fixed only manual pulls. The frozen-copy limitation it did not fix is real and
+documented: `--with-registry-auth` embeds the token current at deploy into each
+service spec, and that copy dies 60 minutes after the deploy, so a task
+rescheduled onto a node without the image can fail to pull. Pre-pull and an
+in-cluster mirror are the acknowledged fixes; neither exists yet.
+
 ## Leaf packages
 
 `internal/docscheck` is a test-only leaf package — no domain port, no adapter, no

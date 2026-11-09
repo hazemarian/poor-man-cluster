@@ -192,9 +192,12 @@ Spec to mint today:
 
 - **Preferred: no PAT at all — a GitHub App installation token.** GHCR accepts
   one when the App holds **Packages: Read** and is installed on the repo that
-  owns the package. The daemon mints it, uses it as
-  `docker login ghcr.io -u x-access-token --password-stdin`, and refreshes it
-  every 25 minutes. See [`github-app.md`](github-app.md). The rest of this
+  owns the package. The daemon mints it and uses it as
+  `docker login ghcr.io -u x-access-token --password-stdin` at startup, every
+  25 minutes, and once on gaining leadership, then `--with-registry-auth`
+  forwards that login into each service spec at deploy time. A spec's copy is
+  frozen at deploy and expires 60 minutes later — see
+  [`github-app.md`](github-app.md) §5 for that limitation. The rest of this
   section describes the PAT fallback, which is still fully supported.
 - **Fallback type:** personal access token (**classic**) — a fine-grained
   token with "Packages: Read" fails `docker login ghcr.io` with `denied:
@@ -441,7 +444,7 @@ Everything above still describes the fallback. With an App configured
 | Where the durable secret lives | `registries` row, AES-GCM ciphertext | `github_app` row, AES-GCM ciphertext (the private key) |
 | What docker receives | the PAT | a one-hour installation token, user `x-access-token` |
 | Delivery to workers | `--with-registry-auth` on deploy | unchanged — same deploy path, same flag |
-| Refresh | manual rotation (§6) | daemon re-login every 25 min; token reused for 50 min |
+| Refresh | manual rotation (§6) | daemon re-login every 25 min and on leadership gain (two logins per 60-min token); each *spec* keeps the credential it got at deploy, dead after 60 minutes |
 | Precedence for ghcr.io | used when no App is configured, or the App login fails | used when login succeeds; the stored row is skipped |
 | Scopes | `read:packages` on the owning account | App permission **Packages: Read**, bounded by the installation |
 | Failure signal | deploy error / ImagePullBackOff | `pmcluster doctor` check `github app`, console Test button |

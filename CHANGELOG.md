@@ -3,6 +3,50 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — Pull credentials back on the 25-minute login loop
+
+**Reverts the pull-time credential helper (`dad7c2a`) and restores the original `docker login` timer
+(25 minutes), adds a login on leadership gain, and makes every login a warning that states when the
+credential expires.**
+
+The helper authenticated a node's docker client over a second edge listener on :9443 with swarm-node
+certificate mTLS, and shipped a `docker-credential-pmcluster` binary plus `credHelpers` wiring in
+`config.json`. It solved one case — a manual `docker pull` on a node — and left the problem the operator
+actually hit untouched: `--with-registry-auth` embeds the credential current at deploy into the service
+spec, and a spec cannot be rewritten after the fact, so a task rescheduled onto a node without the image
+still fails to pull an hour later. Given that the frozen-service-spec problem remains either way, the
+extra machinery (helper binary, extra port, certificate verification, per-node config merge) bought less
+than it cost. The operator chose the simple mechanism and asked to be told when docker logs in.
+
+- **Revert:** `git revert dad7c2a` removes `internal/pullcred`, the :9443 ingress listener and its
+  `cmd/edge/cred.go`, `docker-credential-pmcluster`, `internal/cluster/dockercfg.go` (symlink +
+  `credHelpers` merge), `POST /api/github/pull-credential`, the swarm-cert rule in `harden-host.sh`,
+  and the doctor path that shelled out to the helper. `refreshGitHubAppLogins` and its call site return.
+- **Timer unchanged: every 25 minutes.** Two logins per 60-minute token lifetime (t=25 and t=50 against a
+  token that dies at t=60), so docker's config never holds a credential the token cache has outlived. The
+  original reasoning is restored at the constant's default.
+- **Login on leadership gain.** The follower→leader path mints and logs in once, after control-plane
+  adoption and **before** the reconcile starts, so the specs written immediately after a failover carry a
+  fresh credential instead of whatever the previous leader left on disk. Failure is a warning, not a
+  blocker: the reconcile proceeds and the timer retries within 25 minutes.
+- **The login is announced at WARN on every path.** `docker logged in to ghcr.io with a GitHub App token;
+  it expires at <RFC3339> and is renewed every 25 minutes` appears in the journal and in the deploy
+  output. A failed login warns with docker's stderr and does not abort the deploy.
+- **One mutex around login execs,** so the timer, a leadership gain and a deploy cannot write
+  `config.json` concurrently; `DOCKER_CONFIG=/root/.docker` is set explicitly because under systemd
+  `HOME` may not point where docker looks; the token still rides `--password-stdin`, never argv.
+- **Kept from `75d4014`:** `internal/githubapp`, the AES-GCM-encrypted app registration, the
+  HMAC-authenticated `POST /api/github/token` broker, and the `github app` doctor check. The check mints
+  through the daemon's own client against GitHub (no helper, no extra process); a test runs it with an
+  empty `PATH` to prove that.
+- **Docs state the limitation plainly.** `github-app.md` §5, `registry-credentials.md`, `health.md` and
+  the architecture note describe what runs — the timer, the leadership-gain login, the WRN line — and the
+  unchanged gap: `--with-registry-auth` freezes the credential into each service spec, that copy dies 60
+  minutes later, and nothing renews it. Pre-pull and an in-cluster registry mirror are the acknowledged
+  fixes and are not implemented.
+- **Guard test:** the inverse of the old "the timer is gone" assertion — no source, doc, OpenAPI or unit
+  render may name the removed helper, its port or its config key again.
+
 ## Unreleased — GitHub App: installation tokens for pulls and CI
 
 **The cluster can hold one GitHub App instead of a personal access token in every repository. It mints
