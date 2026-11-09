@@ -113,7 +113,10 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		case http.MethodPost:
 			write(w, `{"id":7,"scope":"service","name":"db_pass","hash":"a1b2c3"}`)
 		default:
-			write(w, `{"secrets":[{"id":6,"scope":"cluster","name":"site_cert","hash":"abc123","created_at":60}]}`)
+			// One cluster-scope row and one service-scope row, with names that
+			// cannot be confused: the stack page must never print site_cert,
+			// and Inventory → Platform must never print demo_db_pass.
+			write(w, `{"secrets":[{"id":6,"scope":"cluster","name":"site_cert","hash":"abc123","created_at":60},{"id":7,"scope":"service","stack":"demo","name":"demo_db_pass","hash":"d1e2f3","created_at":61}]}`)
 		}
 	})
 	mux.HandleFunc("/api/secrets/db_pass", func(w http.ResponseWriter, r *http.Request) {
@@ -132,8 +135,31 @@ func fakeDaemon(t *testing.T) *httptest.Server {
 		case http.MethodPost:
 			write(w, `{"id":3,"scope":"service","name":"nginx_conf","kind":"file","version":"v0.2.30","hash":"h1","created_at":70,"updated_at":70}`)
 		default:
-			write(w, `{"configs":[{"id":2,"scope":"service","name":"app_env","kind":"env","version":"v0.2.30","hash":"h2","created_at":65,"updated_at":66},{"id":9,"scope":"cluster","name":"traefik-dynamic","kind":"template","version":"v0.2.40","hash":"h9","rendered":true,"created_at":65,"updated_at":66}]}`)
+			// Two service-scope rows (one attached to demo, one shared) and one
+			// cluster-scope row. The scope split on Inventory, and the stack
+			// page's scope guard, are asserted by name against these.
+			write(w, `{"configs":[{"id":2,"scope":"service","name":"app_env","kind":"env","version":"v0.2.30","hash":"h2","created_at":65,"updated_at":66},{"id":3,"scope":"service","stack":"demo","name":"demo_app_config","kind":"file","version":"v0.2.30","hash":"h3","created_at":65,"updated_at":66},{"id":9,"scope":"cluster","name":"traefik-dynamic","kind":"template","version":"v0.2.40","hash":"h9","rendered":true,"created_at":65,"updated_at":66}]}`)
 		}
+	})
+	mux.HandleFunc("/api/configs/app_env", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/secrets/demo_db_pass", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/api/configs/app_env/stack", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"name":"app_env","scope":"service","stack":"demo"}`)
+	})
+	mux.HandleFunc("/api/secrets/demo_db_pass/stack", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"name":"demo_db_pass","scope":"service","stack":"demo"}`)
 	})
 	mux.HandleFunc("/api/configs/nginx_conf", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -410,12 +436,24 @@ func TestAllControllers(t *testing.T) {
 	// keeps them off the customer app surface.
 	assertFragment(http.MethodGet, "/web/platform", "", "Platform services", "traefik:v3")
 
-	// The inventory page shows every config and secret across scopes and
-	// stacks, with the Scope column making ownership explicit — the stack
-	// pages stay focused, this page is the "show me everything" surface.
-	assertFragment(http.MethodGet, "/web/inventory", "", "inventory",
-		"app_env", "traefik-dynamic", "site_cert",
-		"service", "cluster")
+	// Inventory is two tabs: Stacks lists the service-scope rows (its own plus
+	// the shared ones), Platform lists the cluster-scope rows. Only the active
+	// tab renders, so neither scope can be mistaken for the other.
+	b := assertFragment(http.MethodGet, "/web/inventory", "",
+		"inventory", "Stacks", "Platform",
+		"app_env", "demo_app_config", "demo_db_pass")
+	for _, leaked := range []string{"traefik-dynamic", "site_cert"} {
+		if strings.Contains(b, leaked) {
+			t.Errorf("inventory Stacks tab leaked the platform row %q", leaked)
+		}
+	}
+	b = assertFragment(http.MethodGet, "/web/inventory?tab=platform", "",
+		"traefik-dynamic", "site_cert", `hx-get="/web/settings/rendered/traefik-dynamic"`)
+	for _, leaked := range []string{"app_env", "demo_app_config", "demo_db_pass"} {
+		if strings.Contains(b, leaked) {
+			t.Errorf("inventory Platform tab leaked the stack row %q", leaked)
+		}
+	}
 
 	resp := doRequest(t, app, http.MethodPost, "/web/logout", "", jar)
 	if resp.StatusCode != http.StatusFound {
@@ -554,12 +592,17 @@ func TestSecretsAndConfigs(t *testing.T) {
 		return b
 	}
 
-	// Settings surfaces the cluster-scope configs + secrets + apply button.
-	// Secret values are masked; hashes are never listed.
+	// Settings no longer lists cluster-scope configs and secrets: they live in
+	// Inventory → Platform now, and the page links there rather than printing a
+	// second copy of the tables. Assert on the fixture names, so a list that
+	// creeps back in is unambiguous.
 	b := assertFragment(http.MethodGet, "/web/settings", "",
-		"Settings", "Cluster configs", "Cluster secrets", "site_cert",
-		"••••••••", "Apply to swarm", "Add Config", "Add Secret",
-		"traefik-dynamic", `hx-get="/web/settings/rendered/traefik-dynamic"`)
+		"Settings", "Apply to swarm", `href="/web/inventory?tab=platform"`)
+	for _, leaked := range []string{"site_cert", "traefik-dynamic", "demo_db_pass"} {
+		if strings.Contains(b, leaked) {
+			t.Errorf("settings page still lists the cluster-scope row %q", leaked)
+		}
+	}
 	if strings.Contains(b, "topsecret") || strings.Contains(b, "abc123") {
 		t.Errorf("secret value or hash leaked into the rendered page")
 	}
@@ -599,18 +642,23 @@ func TestSecretsAndConfigs(t *testing.T) {
 	assertFragment(http.MethodGet, "/web/settings/secrets/reveal/db_pass", "",
 		"Secret ·", "the-decrypted-value", "Copy value")
 
-	assertFragment(http.MethodGet, "/web/settings", "",
-		`onclick="return confirm('Reveal secret site_cert`)
-
 	assertFragment(http.MethodPost, "/web/settings/secrets/remove/db_pass", "", "Deleted secret db_pass.")
 
 	// Apply to swarm triggers a cluster update via the daemon.
 	assertFragment(http.MethodPost, "/web/settings/apply", "",
 		"Cluster update applied", "infra")
 
-	// Per-stack config & secrets page.
-	assertFragment(http.MethodGet, "/web/stacks/demo/config", "",
-		"Config &amp; secrets", "demo", "app_env")
+	// Per-stack config & secrets page: its own service-scope rows plus the
+	// shared (unattached) ones — and never a cluster-scope row. The fake daemon
+	// ignores the scope filter and returns everything, so this asserts the
+	// controller's own scope guard, not the daemon's.
+	b = assertFragment(http.MethodGet, "/web/stacks/demo/config", "",
+		"Config &amp; secrets", "demo", "app_env", "demo_db_pass")
+	for _, leaked := range []string{"traefik-dynamic", "site_cert"} {
+		if strings.Contains(b, leaked) {
+			t.Errorf("stack config page leaked the cluster-scope row %q", leaked)
+		}
+	}
 
 	assertFragment(http.MethodPost, "/web/stacks/demo/configs/add",
 		"name=demo_nginx_conf&kind=file&content=worker_processes 4;",
@@ -646,7 +694,7 @@ func TestSecretsAndConfigs(t *testing.T) {
 	// v2 confirms through htmx (hx-confirm) so the prompt survives a partial swap, and
 	// the copy names what is about to be exposed on screen.
 	assertFragment(http.MethodGet, "/web/stacks/demo/config", "",
-		`hx-confirm="Reveal the value of site_cert?`)
+		`hx-confirm="Reveal the value of demo_db_pass?`)
 
 	assertFragment(http.MethodPost, "/web/stacks/demo/secrets/remove/db_pass", "",
 		"Secret db_pass deleted.")

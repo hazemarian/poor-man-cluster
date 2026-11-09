@@ -70,7 +70,7 @@ func CrumbKey(path string) string {
 	}
 	switch seg {
 	case "overview", "stacks", "services", "platform", "deploy", "webhooks", "tls",
-		"backups", "users", "apikeys", "settings":
+		"backups", "users", "apikeys", "settings", "inventory":
 		return "nav." + seg
 	default:
 		return "nav.overview"

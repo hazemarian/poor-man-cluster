@@ -14,19 +14,18 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 )
 
-// Settings shows and edits the pmcluster API connection plus the cluster-scope
-// configs and secrets (the platform's own templates/secrets that `cluster
-// update` applies). Editing a cluster config here re-stamps it with the current
-// binary version, so the next "Apply to swarm" (or any cluster up / update)
-// re-renders the platform stacks from it.
+// Settings shows and edits the pmcluster API connection, the cluster settings
+// and the "Apply to swarm" action. The cluster-scope configs and secrets are
+// listed on Inventory → Platform now (one home for both scopes); this page only
+// links there, and keeps the create/edit form routes the inventory tab targets.
+// Editing a cluster config still re-stamps it with the current binary version,
+// so the next "Apply to swarm" (or any cluster up / update) re-renders the
+// platform stacks from it.
 //
-// Three states are load-bearing on this page and are modelled separately:
+// Two states are load-bearing on this page and are modelled separately:
 //
 //   - Configured: there is a daemon to ask. When it is false the page says so
-//     instead of showing an empty config/secret list.
-//   - ConfigsKnown / SecretsKnown: the list call answered. A failure leaves the
-//     flag false with ErrKey/ErrRaw filled, so a broken daemon never renders as
-//     "nothing configured yet".
+//     instead of pretending the platform is healthy.
 //   - ApplyDone: this console did trigger a platform update. Without it, an
 //     apply that changed nothing would be indistinguishable from no apply.
 type Settings struct{ *Controller }
@@ -36,8 +35,7 @@ type Settings struct{ *Controller }
 const tokenPlaceholder = "•••set•••"
 
 // settingsData is the page model. ErrKey/ErrRaw describe a page-level failure
-// (a failed save, a failed apply); the per-list pairs describe a failed list so
-// the two disclosures never overwrite each other.
+// (a failed save, a failed apply).
 type settingsData struct {
 	APIURL      string
 	EnvAPIURL   string
@@ -46,16 +44,6 @@ type settingsData struct {
 	Configured  bool
 	Version     string
 	User        string
-
-	ClusterConfigs []configRow
-	ConfigsKnown   bool
-	ConfigsErrKey  string
-	ConfigsErrRaw  string
-
-	ClusterSecrets []secretRow
-	SecretsKnown   bool
-	SecretsErrKey  string
-	SecretsErrRaw  string
 
 	ApplyDone    bool
 	ApplyOTel    string
@@ -551,27 +539,7 @@ func (c Settings) fill(g *gin.Context, d settingsData) settingsData {
 	if _, err := c.Store.Setting(ctx, keyToken); err == nil {
 		d.HasToken = true
 	}
-	if configured {
-		c.loadCluster(g, &d)
-	}
 	return d
-}
-
-// loadCluster loads the cluster-scope configs and secrets into d. Each list
-// keeps its own error pair: one failing call must not blank the other's rows,
-// and neither may be mistaken for "nothing configured".
-func (c Settings) loadCluster(g *gin.Context, d *settingsData) {
-	ctx := g.Request.Context()
-	if cfgs, err := c.listConfigsFor(ctx, "cluster", ""); err != nil {
-		d.ConfigsErrKey, d.ConfigsErrRaw = "settings.err_config_list", err.Error()
-	} else {
-		d.ClusterConfigs, d.ConfigsKnown = cfgs, true
-	}
-	if secs, err := c.listSecretsFor(ctx, "cluster", ""); err != nil {
-		d.SecretsErrKey, d.SecretsErrRaw = "settings.err_secret_list", err.Error()
-	} else {
-		d.ClusterSecrets, d.SecretsKnown = secs, true
-	}
 }
 
 // renderWith reloads the settings fragment carrying a confirmation message.

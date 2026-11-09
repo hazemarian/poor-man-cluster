@@ -86,19 +86,24 @@ manifest.
 
 ## Scopes: `cluster` vs `service`
 
-- **`cluster`** — the platform's own templates and secrets. These live on
-  the **Settings** page in the console. Editing a cluster config re-stamps it
-  with the current binary version, so the platform stacks render from it on
-  the next update; the **Apply to swarm** button (`POST /api/update`) runs
-  `cluster update` immediately so the change reaches the swarm side.
+- **`cluster`** — the platform's own templates and secrets. These are listed
+  on the **Inventory** page's **Platform** tab in the console, which is the
+  only page that shows both scopes at once. Settings keeps the create/edit
+  forms and the **Apply to swarm** button (`POST /api/update`) that runs
+  `cluster update` immediately so a change reaches the swarm side. Editing a
+  cluster config re-stamps it with the current binary version, so the platform
+  stacks render from it on the next update.
 - Rendered platform configs (the post-substitution YAML actually sent to the
-  Swarm) are snapshotted into the database by every cluster update and shown
-  read-only on the **Settings** page under "Rendered cluster configs"
+  Swarm) are snapshotted into the database by every cluster update and opened
+  read-only from the Inventory **Platform** tab for a rendered config
   (`GET /api/cluster/rendered` — **operator/admin role only**: the rendered
   YAML embeds the observability backend's admin credentials).
-- **`service`** — values belonging to one stack, reached from the stacks list
-  via the **Config** button (page `/stacks/<name>/config`). Create forms
-  prefill the `<stack>_` name prefix and record the owning stack.
+- **`service`** — values belonging to one stack. The **Stacks** tab of the
+  Inventory page lists them all with the owning stack, and a stack's own
+  **Config** button (page `/stacks/<name>/config`) stays the focused view for
+  that stack: it shows only that stack's service-scope rows (plus the shared,
+  unattached ones) and never a cluster-scope row. Create forms prefill the
+  `<stack>_` name prefix and record the owning stack.
 
 ## Content-addressed swarm mirrors
 

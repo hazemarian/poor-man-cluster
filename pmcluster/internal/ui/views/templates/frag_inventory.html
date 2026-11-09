@@ -1,4 +1,10 @@
 {{define "inventory"}}
+{{/* Two tabs, one page: Stacks (service-scope configs/secrets across every
+     stack) and Platform (cluster-scope ones). Each tab renders the same two
+     panels as the stack config page — same table, same pills, same buttons —
+     and only the active tab's rows are rendered, so a search or a tab switch
+     can never be mistaken for the other scope's answer. */}}
+
 {{if .ErrKey}}
 <section class="panel">
   <div class="panel-body">
@@ -8,72 +14,130 @@
       <p>{{if .ErrKey}}{{T .ErrKey}}{{else}}{{T "inventory.unknown_body"}}{{end}}</p>
       {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
       <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/inventory" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
       </div>
     </div>
   </div>
 </section>
 {{else}}
 <div class="page-head">
-  <div>
+  <div class="ph-text">
     <h1>{{T "inventory.title"}}</h1>
     <p class="sub">{{T "inventory.sub"}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/inventory" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}" aria-label="{{T "common.refresh"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
+    <button type="button" class="btn btn-ghost btn-sm"
+            hx-get="/web/inventory?tab={{.Tab}}{{if .Filtered}}&amp;q={{.Query | urlquery}}{{end}}"
+            hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
+      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
+    </button>
   </div>
 </div>
 
-<section class="panel mt-24">
+{{if .MsgKey}}
+<div class="banner {{if .MsgErr}}bad{{else}}ok{{end}}">
+  {{if .MsgErr}}{{icon "alert"}}{{else}}{{icon "check-circle"}}{{end}}
+  <div class="b-body"><p class="b-title">{{TF .MsgKey .MsgArg}}</p></div>
+</div>
+{{end}}
+
+<div class="tabs" role="tablist" aria-label="{{T "inventory.tabs_label"}}">
+  <a role="tab" class="tab{{if eq .Tab "stacks"}} is-active{{end}}"
+     aria-selected="{{if eq .Tab "stacks"}}true{{else}}false{{end}}"{{if eq .Tab "stacks"}} aria-current="page"{{end}}
+     href="/web/inventory?tab=stacks{{if .Filtered}}&amp;q={{.Query | urlquery}}{{end}}"
+     hx-get="/web/inventory?tab=stacks{{if .Filtered}}&amp;q={{.Query | urlquery}}{{end}}"
+     hx-target="#view" hx-push-url="true">{{T "inventory.tab_stacks"}}</a>
+  <a role="tab" class="tab{{if eq .Tab "platform"}} is-active{{end}}"
+     aria-selected="{{if eq .Tab "platform"}}true{{else}}false{{end}}"{{if eq .Tab "platform"}} aria-current="page"{{end}}
+     href="/web/inventory?tab=platform{{if .Filtered}}&amp;q={{.Query | urlquery}}{{end}}"
+     hx-get="/web/inventory?tab=platform{{if .Filtered}}&amp;q={{.Query | urlquery}}{{end}}"
+     hx-target="#view" hx-push-url="true">{{T "inventory.tab_platform"}}</a>
+</div>
+
+{{/* The toolbar is the stacks index's search, with the active tab carried in
+     a hidden field so typing never drops the operator back to Stacks. */}}
+<form class="toolbar" method="get" action="/web/inventory"
+      hx-get="/web/inventory" hx-target="#view" hx-push-url="true"
+      hx-trigger="submit, keyup changed delay:400ms, search">
+  <input type="hidden" name="tab" value="{{.Tab}}">
+  <div class="search">
+    {{icon "search"}}
+    <input type="search" name="q" value="{{.Query}}" placeholder="{{T "inventory.search_ph"}}"
+           aria-label="{{T "inventory.search_ph"}}">
+  </div>
+  <button type="submit" class="btn btn-sm" data-tip="{{T "common.filter"}}">{{icon "filter"}}<span>{{T "common.filter"}}</span></button>
+  {{if .Filtered}}
+  <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/inventory?tab={{.Tab}}"
+          hx-target="#view" hx-push-url="true" data-tip="{{T "inventory.clear_search"}}">
+    {{icon "close"}}<span>{{T "inventory.clear_search"}}</span>
+  </button>
+  {{end}}
+  <span class="spacer"></span>
+</form>
+
+{{if eq .Tab "platform"}}
+{{template "inventoryconfigs" .PlatformConfigs}}
+{{template "inventorysecrets" .PlatformSecrets}}
+{{else}}
+{{template "inventoryconfigs" .StackConfigs}}
+{{template "inventorysecrets" .StackSecrets}}
+{{end}}
+{{end}}
+{{end}}
+
+{{define "inventoryconfigs"}}
+<section class="panel">
   <div class="panel-head">
-    <h2>{{T "inventory.configs_title"}}</h2>
+    <h2>{{T .TitleKey}}</h2>
     <div class="ph-actions">
-      {{if .ConfigsKnown}}<span class="pill plain">{{P (len .Configs) "plural.configs"}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+      {{if .Known}}
+        {{if .Filtered}}<span class="pill plain">{{TF "inventory.showing" (N (len .Rows)) (N .Total)}}</span>
+        {{else}}<span class="pill plain">{{P (len .Rows) "plural.configs"}}</span>{{end}}
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+      <button type="button" class="btn btn-primary btn-sm"
+              hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
+        {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
+      </button>
     </div>
   </div>
 
-  {{if not .ConfigsKnown}}
+  {{if not .Known}}
   <div class="panel-body">
     <div class="empty">
       {{icon "alert"}}
       <h3>{{T "inventory.configs_unknown_title"}}</h3>
-      <p>{{if .ConfigsErrKey}}{{T .ConfigsErrKey}}{{else}}{{T "inventory.configs_unknown_body"}}{{end}}</p>
-      {{if .ConfigsErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ConfigsErrRaw}}</pre></details>{{end}}
+      <p>{{if .ErrKey}}{{T .ErrKey}}{{else}}{{T "inventory.configs_unknown_body"}}{{end}}</p>
+      {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+      </div>
     </div>
   </div>
-  {{else if not .Configs}}
-  <div class="panel-body">
-    <div class="empty">
-      {{icon "file"}}
-      <h3>{{T "inventory.configs_empty_title"}}</h3>
-      <p>{{T "inventory.configs_empty_body"}}</p>
-    </div>
-  </div>
-  {{else}}
+  {{else if .Rows}}
   <div class="table-wrap only-md">
     <table class="table">
       <thead>
         <tr>
           <th>{{T "common.name"}}</th>
-          <th>{{T "inventory.col_scope"}}</th>
-          <th>{{T "inventory.col_stack"}}</th>
-          <th>{{T "settings.config_kind"}}</th>
-          <th class="num">{{T "settings.col_version"}}</th>
-          <th>{{T "settings.col_updated"}}</th>
+          {{if .ShowStack}}<th>{{T "inventory.col_stack"}}</th>{{end}}
+          <th>{{T "configs.form_kind"}}</th>
+          <th>{{T "common.version"}}</th>
+          <th>{{T "common.updated"}}</th>
           <th>{{T "inventory.col_referenced_by"}}</th>
-          <th class="num"></th>
+          <th><span class="sr-only">{{T "common.actions"}}</span></th>
         </tr>
       </thead>
       <tbody>
-        {{range .Configs}}
+        {{range .Rows}}
         <tr>
           <td><span class="mono">{{.Name}}</span></td>
-          <td>{{if eq .Scope "cluster"}}<span class="pill plain">{{T "inventory.scope_cluster"}}</span>{{else}}<span class="pill plain">{{T "inventory.scope_service"}}</span>{{end}}</td>
+          {{if $.ShowStack}}
           <td>
             {{if eq .Scope "cluster"}}<span class="muted">{{T "common.none"}}</span>
             {{else if .Stack}}<a class="btn-link" href="/web/stacks/{{.Stack}}/config" hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.Stack}}</span></a>
             {{else}}<span class="muted iso" dir="ltr">—</span>{{end}}
           </td>
+          {{end}}
           <td>
             <span class="pill plain">
               {{- if eq .Kind "file"}}{{T "configs.kind_file"}}
@@ -82,20 +146,27 @@
               {{- else}}{{.Kind}}{{end -}}
             </span>
           </td>
-          <td class="mono num" dir="ltr">{{if .Version}}{{.Version}}{{else}}{{T "common.unknown"}}{{end}}</td>
-          <td class="muted iso" dir="ltr">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}{{ts .CreatedAt}}{{end}}</td>
+          <td><span class="mono num" dir="ltr">{{if .Version}}{{.Version}}{{else}}{{T "common.unknown"}}{{end}}</span></td>
+          <td><span class="muted">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}{{ts .CreatedAt}}{{end}}</span></td>
           <td>
             {{- if .References}}{{range .References}}<a class="btn-link" href="/web/stacks/{{.}}/config" hx-get="/web/stacks/{{.}}/config" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.}}</span></a>{{" "}}{{end}}
             {{- else}}<span class="muted">{{T "common.none"}}</span>{{end -}}
           </td>
           <td>
             <div class="row-actions">
-              <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}" aria-label="{{T "common.edit"}}">
-                {{icon "file"}}<span class="sr-only">{{T "common.edit"}}</span>
-              </button>
-              <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/inventory/retag/config/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}" aria-label="{{T "inventory.retag_title"}}">
-                {{icon "move"}}<span class="sr-only">{{T "inventory.retag_title"}}</span>
-              </button>
+              {{if eq .Scope "cluster"}}
+                {{if .Rendered}}<button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/rendered/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.rendered_title"}}" aria-label="{{T "settings.rendered"}}">{{icon "file"}}<span class="sr-only">{{T "settings.rendered"}}</span></button>{{end}}
+                <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}" aria-label="{{T "common.edit"}}">{{icon "settings"}}<span class="sr-only">{{T "common.edit"}}</span></button>
+              {{else if .Stack}}
+                <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/stacks/{{.Stack}}/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}" aria-label="{{T "common.edit"}}">{{icon "file"}}<span class="sr-only">{{T "common.edit"}}</span></button>
+              {{end}}
+              <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/inventory/retag/config/{{.Name}}?scope={{.Scope}}&amp;tab={{$.Tab}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}" aria-label="{{T "inventory.retag_title"}}">{{icon "move"}}<span class="sr-only">{{T "inventory.retag_title"}}</span></button>
+              <form hx-post="/web/inventory/remove/config/{{.Name}}" hx-target="#view"
+                    hx-confirm="{{TF "stackconfigs.confirm_config_remove" .Name}}" hx-disabled-elt="find [type='submit']">
+                <input type="hidden" name="tab" value="{{$.Tab}}">
+                <input type="hidden" name="q" value="{{$.Query}}">
+                <button type="submit" class="btn btn-danger btn-sm" data-tip="{{T "common.delete"}}" aria-label="{{T "common.delete"}}">{{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span></button>
+              </form>
             </div>
           </td>
         </tr>
@@ -105,91 +176,158 @@
   </div>
 
   <div class="only-sm">
-    {{range .Configs}}
+    {{range .Rows}}
     <div class="kv">
       <div class="kv-row"><span class="k">{{T "common.name"}}</span><span class="v mono">{{.Name}}</span></div>
-      <div class="kv-row"><span class="k">{{T "inventory.col_scope"}}</span><span class="v">{{if eq .Scope "cluster"}}{{T "inventory.scope_cluster"}}{{else}}{{T "inventory.scope_service"}}{{end}}</span></div>
-      <div class="kv-row"><span class="k">{{T "inventory.col_stack"}}</span><span class="v">{{if eq .Scope "cluster"}}{{T "common.none"}}{{else if .Stack}}<a class="btn-link" href="/web/stacks/{{.Stack}}/config" hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.Stack}}</span></a>{{else}}<span class="muted" dir="ltr">—</span>{{end}}</span></div>
-      <div class="kv-row"><span class="k">{{T "settings.config_kind"}}</span><span class="v">{{if eq .Kind "file"}}{{T "configs.kind_file"}}{{else if eq .Kind "template"}}{{T "configs.kind_template"}}{{else if eq .Kind "env"}}{{T "configs.kind_env"}}{{else}}{{.Kind}}{{end}}</span></div>
-      <div class="kv-row"><span class="k">{{T "settings.col_version"}}</span><span class="v mono num" dir="ltr">{{if .Version}}{{.Version}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
-      <div class="kv-row"><span class="k">{{T "settings.col_updated"}}</span><span class="v muted">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}{{ts .CreatedAt}}{{end}}</span></div>
+      {{if $.ShowStack}}
+      <div class="kv-row"><span class="k">{{T "inventory.col_stack"}}</span><span class="v">{{if .Stack}}<a class="btn-link" href="/web/stacks/{{.Stack}}/config" hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.Stack}}</span></a>{{else}}<span class="muted" dir="ltr">—</span>{{end}}</span></div>
+      {{end}}
+      <div class="kv-row">
+        <span class="k">{{T "configs.form_kind"}}</span>
+        <span class="v">
+          <span class="pill plain">
+            {{- if eq .Kind "file"}}{{T "configs.kind_file"}}
+            {{- else if eq .Kind "template"}}{{T "configs.kind_template"}}
+            {{- else if eq .Kind "env"}}{{T "configs.kind_env"}}
+            {{- else}}{{.Kind}}{{end -}}
+          </span>
+        </span>
+      </div>
+      <div class="kv-row"><span class="k">{{T "common.version"}}</span><span class="v mono num" dir="ltr">{{if .Version}}{{.Version}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
+      <div class="kv-row"><span class="k">{{T "common.updated"}}</span><span class="v muted">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}{{ts .CreatedAt}}{{end}}</span></div>
       <div class="action-bar">
+        {{if eq .Scope "cluster"}}
+          {{if .Rendered}}<button type="button" class="btn btn-sm" style="min-height:44px"
+                  hx-get="/web/settings/rendered/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.rendered"}}">
+            {{icon "file"}}<span>{{T "settings.rendered"}}</span>
+          </button>{{end}}
+          <button type="button" class="btn btn-sm" style="min-height:44px"
+                  hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}">
+            {{icon "settings"}}<span>{{T "common.edit"}}</span>
+          </button>
+        {{else if .Stack}}
+          <button type="button" class="btn btn-sm" style="min-height:44px"
+                  hx-get="/web/stacks/{{.Stack}}/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}">
+            {{icon "file"}}<span>{{T "common.edit"}}</span>
+          </button>
+        {{end}}
         <button type="button" class="btn btn-sm" style="min-height:44px"
-                hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}">
-          {{icon "file"}}<span>{{T "common.edit"}}</span>
-        </button>
-        <button type="button" class="btn btn-sm" style="min-height:44px"
-                hx-get="/web/inventory/retag/config/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}">
+                hx-get="/web/inventory/retag/config/{{.Name}}?scope={{.Scope}}&amp;tab={{$.Tab}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}">
           {{icon "move"}}<span>{{T "inventory.retag_title"}}</span>
         </button>
+        <form hx-post="/web/inventory/remove/config/{{.Name}}" hx-target="#view"
+              hx-confirm="{{TF "stackconfigs.confirm_config_remove" .Name}}" hx-disabled-elt="find [type='submit']">
+          <input type="hidden" name="tab" value="{{$.Tab}}">
+          <input type="hidden" name="q" value="{{$.Query}}">
+          <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px" data-tip="{{T "common.delete"}}">{{icon "trash"}}<span>{{T "common.delete"}}</span></button>
+        </form>
       </div>
     </div>
     {{end}}
   </div>
+  {{else if .Filtered}}
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "search"}}
+      <h3>{{TF "inventory.no_match_title" .Query}}</h3>
+      <p>{{T "inventory.no_match_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "inventory.clear_search"}}">{{icon "close"}}<span>{{T "inventory.clear_search"}}</span></button>
+      </div>
+    </div>
+  </div>
+  {{else}}
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "file"}}
+      <h3>{{T .EmptyTitleKey}}</h3>
+      <p>{{T .EmptyBodyKey}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-primary btn-sm"
+                hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
+          {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
+        </button>
+      </div>
+    </div>
+  </div>
   {{end}}
 </section>
+{{end}}
 
+{{define "inventorysecrets"}}
 <section class="panel mt-24">
   <div class="panel-head">
-    <h2>{{T "inventory.secrets_title"}}</h2>
+    <h2>{{T .TitleKey}}</h2>
     <div class="ph-actions">
-      {{if .SecretsKnown}}<span class="pill plain">{{P (len .Secrets) "plural.secrets"}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+      {{if .Known}}
+        {{if .Filtered}}<span class="pill plain">{{TF "inventory.showing" (N (len .Rows)) (N .Total)}}</span>
+        {{else}}<span class="pill plain">{{P (len .Rows) "plural.secrets"}}</span>{{end}}
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+      <button type="button" class="btn btn-primary btn-sm"
+              hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
+        {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
+      </button>
     </div>
   </div>
 
-  {{if not .SecretsKnown}}
+  {{if not .Known}}
   <div class="panel-body">
     <div class="empty">
       {{icon "alert"}}
       <h3>{{T "inventory.secrets_unknown_title"}}</h3>
-      <p>{{if .SecretsErrKey}}{{T .SecretsErrKey}}{{else}}{{T "inventory.secrets_unknown_body"}}{{end}}</p>
-      {{if .SecretsErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.SecretsErrRaw}}</pre></details>{{end}}
+      <p>{{if .ErrKey}}{{T .ErrKey}}{{else}}{{T "inventory.secrets_unknown_body"}}{{end}}</p>
+      {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+      </div>
     </div>
   </div>
-  {{else if not .Secrets}}
-  <div class="panel-body">
-    <div class="empty">
-      {{icon "lock"}}
-      <h3>{{T "inventory.secrets_empty_title"}}</h3>
-      <p>{{T "inventory.secrets_empty_body"}}</p>
-    </div>
-  </div>
-  {{else}}
+  {{else if .Rows}}
   <div class="table-wrap only-md">
     <table class="table">
       <thead>
         <tr>
           <th>{{T "common.name"}}</th>
-          <th>{{T "inventory.col_scope"}}</th>
-          <th>{{T "inventory.col_stack"}}</th>
-          <th>{{T "settings.col_updated"}}</th>
+          {{if .ShowStack}}<th>{{T "inventory.col_stack"}}</th>{{end}}
+          <th>{{T "common.value"}}</th>
+          <th>{{T "common.created"}}</th>
           <th>{{T "inventory.col_referenced_by"}}</th>
-          <th class="num"></th>
+          <th><span class="sr-only">{{T "common.actions"}}</span></th>
         </tr>
       </thead>
       <tbody>
-        {{range .Secrets}}
+        {{range .Rows}}
         <tr>
           <td><span class="mono">{{.Name}}</span></td>
-          <td>{{if eq .Scope "cluster"}}<span class="pill plain">{{T "inventory.scope_cluster"}}</span>{{else}}<span class="pill plain">{{T "inventory.scope_service"}}</span>{{end}}</td>
+          {{if $.ShowStack}}
           <td>
             {{if eq .Scope "cluster"}}<span class="muted">{{T "common.none"}}</span>
             {{else if .Stack}}<a class="btn-link" href="/web/stacks/{{.Stack}}/config" hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.Stack}}</span></a>
             {{else}}<span class="muted iso" dir="ltr">—</span>{{end}}
           </td>
-          <td class="muted iso" dir="ltr">{{ts .CreatedAt}}</td>
+          {{end}}
+          <td><span class="secret-mask">••••••••<span class="sr-only">{{T "stackconfigs.secret_hidden"}}</span></span></td>
+          <td><span class="muted">{{if .CreatedAt}}{{ts .CreatedAt}}{{else}}—{{end}}</span></td>
           <td>
             {{- if .References}}{{range .References}}<a class="btn-link" href="/web/stacks/{{.}}/config" hx-get="/web/stacks/{{.}}/config" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.}}</span></a>{{" "}}{{end}}
             {{- else}}<span class="muted">{{T "common.none"}}</span>{{end -}}
           </td>
           <td>
             <div class="row-actions">
-              <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.reveal"}}" aria-label="{{T "settings.reveal"}}">
-                {{icon "lock"}}<span class="sr-only">{{T "settings.reveal"}}</span>
-              </button>
-              <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}" aria-label="{{T "inventory.retag_title"}}">
-                {{icon "move"}}<span class="sr-only">{{T "inventory.retag_title"}}</span>
-              </button>
+              {{if eq .Scope "cluster"}}
+                <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" hx-confirm="{{TF "stackconfigs.confirm_reveal" .Name}}" onclick="openModal()" data-tip="{{T "settings.reveal"}}" aria-label="{{T "settings.reveal"}}">{{icon "keys"}}<span class="sr-only">{{T "settings.reveal"}}</span></button>
+                <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/secrets/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}" aria-label="{{T "common.edit"}}">{{icon "lock"}}<span class="sr-only">{{T "common.edit"}}</span></button>
+              {{else if .Stack}}
+                <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/stacks/{{.Stack}}/secrets/reveal/{{.Name}}" hx-target="#modal-body" hx-confirm="{{TF "stackconfigs.confirm_reveal" .Name}}" onclick="openModal()" data-tip="{{T "settings.reveal"}}" aria-label="{{T "settings.reveal"}}">{{icon "keys"}}<span class="sr-only">{{T "settings.reveal"}}</span></button>
+                <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/stacks/{{.Stack}}/secrets/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}" aria-label="{{T "common.edit"}}">{{icon "lock"}}<span class="sr-only">{{T "common.edit"}}</span></button>
+              {{end}}
+              <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}&amp;tab={{$.Tab}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}" aria-label="{{T "inventory.retag_title"}}">{{icon "move"}}<span class="sr-only">{{T "inventory.retag_title"}}</span></button>
+              <form hx-post="/web/inventory/remove/secret/{{.Name}}" hx-target="#view"
+                    hx-confirm="{{TF "stackconfigs.confirm_secret_remove" .Name}}" hx-disabled-elt="find [type='submit']">
+                <input type="hidden" name="tab" value="{{$.Tab}}">
+                <input type="hidden" name="q" value="{{$.Query}}">
+                <button type="submit" class="btn btn-danger btn-sm" data-tip="{{T "common.delete"}}" aria-label="{{T "common.delete"}}">{{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span></button>
+              </form>
             </div>
           </td>
         </tr>
@@ -199,26 +337,78 @@
   </div>
 
   <div class="only-sm">
-    {{range .Secrets}}
+    {{range .Rows}}
     <div class="kv">
       <div class="kv-row"><span class="k">{{T "common.name"}}</span><span class="v mono">{{.Name}}</span></div>
-      <div class="kv-row"><span class="k">{{T "inventory.col_scope"}}</span><span class="v">{{if eq .Scope "cluster"}}{{T "inventory.scope_cluster"}}{{else}}{{T "inventory.scope_service"}}{{end}}</span></div>
-      <div class="kv-row"><span class="k">{{T "inventory.col_stack"}}</span><span class="v">{{if eq .Scope "cluster"}}{{T "common.none"}}{{else if .Stack}}<a class="btn-link" href="/web/stacks/{{.Stack}}/config" hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.Stack}}</span></a>{{else}}<span class="muted" dir="ltr">—</span>{{end}}</span></div>
-      <div class="kv-row"><span class="k">{{T "settings.col_updated"}}</span><span class="v muted">{{ts .CreatedAt}}</span></div>
+      {{if $.ShowStack}}
+      <div class="kv-row"><span class="k">{{T "inventory.col_stack"}}</span><span class="v">{{if .Stack}}<a class="btn-link" href="/web/stacks/{{.Stack}}/config" hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true"><span class="mono iso">{{.Stack}}</span></a>{{else}}<span class="muted" dir="ltr">—</span>{{end}}</span></div>
+      {{end}}
+      <div class="kv-row">
+        <span class="k">{{T "common.value"}}</span>
+        <span class="v"><span class="secret-mask">••••••••<span class="sr-only">{{T "stackconfigs.secret_hidden"}}</span></span></span>
+      </div>
+      <div class="kv-row"><span class="k">{{T "common.created"}}</span><span class="v muted">{{if .CreatedAt}}{{ts .CreatedAt}}{{else}}—{{end}}</span></div>
       <div class="action-bar">
+        {{if eq .Scope "cluster"}}
+          <button type="button" class="btn btn-sm" style="min-height:44px"
+                  hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body"
+                  hx-confirm="{{TF "stackconfigs.confirm_reveal" .Name}}" onclick="openModal()" data-tip="{{T "settings.reveal"}}">
+            {{icon "keys"}}<span>{{T "settings.reveal"}}</span>
+          </button>
+          <button type="button" class="btn btn-sm" style="min-height:44px"
+                  hx-get="/web/settings/secrets/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}">
+            {{icon "lock"}}<span>{{T "common.edit"}}</span>
+          </button>
+        {{else if .Stack}}
+          <button type="button" class="btn btn-sm" style="min-height:44px"
+                  hx-get="/web/stacks/{{.Stack}}/secrets/reveal/{{.Name}}" hx-target="#modal-body"
+                  hx-confirm="{{TF "stackconfigs.confirm_reveal" .Name}}" onclick="openModal()" data-tip="{{T "settings.reveal"}}">
+            {{icon "keys"}}<span>{{T "settings.reveal"}}</span>
+          </button>
+          <button type="button" class="btn btn-sm" style="min-height:44px"
+                  hx-get="/web/stacks/{{.Stack}}/secrets/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}">
+            {{icon "lock"}}<span>{{T "common.edit"}}</span>
+          </button>
+        {{end}}
         <button type="button" class="btn btn-sm" style="min-height:44px"
-                hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.reveal"}}">
-          {{icon "lock"}}<span>{{T "settings.reveal"}}</span>
-        </button>
-        <button type="button" class="btn btn-sm" style="min-height:44px"
-                hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}">
+                hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}&amp;tab={{$.Tab}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}">
           {{icon "move"}}<span>{{T "inventory.retag_title"}}</span>
         </button>
+        <form hx-post="/web/inventory/remove/secret/{{.Name}}" hx-target="#view"
+              hx-confirm="{{TF "stackconfigs.confirm_secret_remove" .Name}}" hx-disabled-elt="find [type='submit']">
+          <input type="hidden" name="tab" value="{{$.Tab}}">
+          <input type="hidden" name="q" value="{{$.Query}}">
+          <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px" data-tip="{{T "common.delete"}}">{{icon "trash"}}<span>{{T "common.delete"}}</span></button>
+        </form>
       </div>
     </div>
     {{end}}
   </div>
+  {{else if .Filtered}}
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "search"}}
+      <h3>{{TF "inventory.no_match_title" .Query}}</h3>
+      <p>{{T "inventory.no_match_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "inventory.clear_search"}}">{{icon "close"}}<span>{{T "inventory.clear_search"}}</span></button>
+      </div>
+    </div>
+  </div>
+  {{else}}
+  <div class="panel-body">
+    <div class="empty">
+      {{icon "keys"}}
+      <h3>{{T .EmptyTitleKey}}</h3>
+      <p>{{T .EmptyBodyKey}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-primary btn-sm"
+                hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
+          {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
+        </button>
+      </div>
+    </div>
+  </div>
   {{end}}
 </section>
-{{end}}
 {{end}}

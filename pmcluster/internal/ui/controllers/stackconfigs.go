@@ -320,6 +320,12 @@ func (c StackConfigs) secretFormError(g *gin.Context, d secretFormData) {
 
 // fetch loads the stack's configs + secrets. Each source records its own
 // unknown state, so a failed call empties neither table silently.
+//
+// The daemon filters by (scope=service, stack) and also returns the shared
+// service-scope rows (stack "") any stack may reference. Cluster-scope rows
+// belong to Inventory → Platform; they are filtered out again here so a daemon
+// that ignores the scope parameter (or an older build that does) can never
+// print a platform secret on a stack page.
 func (c StackConfigs) fetch(ctx context.Context, d *stackConfigsData) {
 	cfgs, err := c.listConfigsFor(ctx, "service", d.Stack)
 	if err != nil {
@@ -328,7 +334,7 @@ func (c StackConfigs) fetch(ctx context.Context, d *stackConfigsData) {
 		}
 	} else {
 		d.ConfigsKnown = true
-		d.Configs = cfgs
+		d.Configs = serviceScopeConfigs(cfgs)
 	}
 
 	secs, err := c.listSecretsFor(ctx, "service", d.Stack)
@@ -338,8 +344,30 @@ func (c StackConfigs) fetch(ctx context.Context, d *stackConfigsData) {
 		}
 	} else {
 		d.SecretsKnown = true
-		d.Secrets = secs
+		d.Secrets = serviceScopeSecrets(secs)
 	}
+}
+
+// serviceScopeConfigs keeps only service-scope configs, preserving order.
+func serviceScopeConfigs(rows []configRow) []configRow {
+	out := make([]configRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Scope != "cluster" {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// serviceScopeSecrets is serviceScopeConfigs for secrets.
+func serviceScopeSecrets(rows []secretRow) []secretRow {
+	out := make([]secretRow, 0, len(rows))
+	for _, row := range rows {
+		if row.Scope != "cluster" {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 // requireAPI guards a handler until the pmapi connection is configured.

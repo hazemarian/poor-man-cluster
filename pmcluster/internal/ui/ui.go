@@ -316,6 +316,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	op.GET("/settings/rendered/:name", stt.RenderedGet)
 
 	op.POST("/inventory/retag", inv.Retag)
+	op.POST("/inventory/remove/:kind/:name", inv.Remove)
 
 	op.POST("/tls", tlsC.Add)
 	op.POST("/tls/site", tlsC.SetSite)

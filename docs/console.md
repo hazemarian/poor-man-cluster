@@ -40,10 +40,15 @@ model.
   the audit log (archives other nodes uploaded to the store included).
 - **Users** — manage console accounts with RBAC roles (admin > operator >
   viewer); admins only. Hidden from nav when behind SSO/admin-auth.
-- **Settings** — cluster settings ([`settings.md`](settings.md)),
-  cluster-scope configs/secrets with **Apply to swarm**, and the read-only
-  rendered platform configs (operator/admin only — they embed root
-  credentials).
+- **Inventory** — every stored config and secret in two searchable tabs:
+  **Stacks** (service-scope rows, by stack) and **Platform** (cluster-scope
+  rows). Both tabs can move a row to another scope (retag), edit or delete it,
+  and create a new one in the tab's own scope.
+- **Settings** — cluster settings ([`settings.md`](settings.md)) and the
+  **Apply to swarm** button. The cluster-scope configs and secrets are listed
+  on Inventory → Platform now; Settings keeps the create/edit forms and links
+  there. The read-only rendered platform configs open from the Platform tab
+  (operator/admin only — they embed root credentials).
 - **Preferences** — theme plus the brand palette picker (six accent palettes,
   persisted before first paint).
 - **External** — nav links to `https://observ.<domain>` (Parseable) and
