@@ -431,3 +431,40 @@ type VersionEntry struct {
 	Hostname string `json:"hostname"`
 	Version  string `json:"version"`
 }
+
+// GitHubRunner is one row of GET /api/github/runners: a runner the platform
+// manages, as the daemon observes it. State is derived (GitHub's runner list plus
+// the local container), never guessed by the console.
+type GitHubRunner struct {
+	Name         string `json:"name"`
+	Org          string `json:"org"`
+	Node         string `json:"node"`
+	ContainerID  string `json:"container_id"`
+	Mode         string `json:"mode"`
+	State        string `json:"state"`
+	RegisteredAt int64  `json:"registered_at"`
+	LastSeen     int64  `json:"last_seen"`
+	LastJobURL   string `json:"last_job_url"`
+}
+
+// GitHubRunners is the list response. Enabled travels with the rows so the panel's
+// empty state and the table cannot disagree.
+type GitHubRunners struct {
+	Enabled bool           `json:"enabled"`
+	Runners []GitHubRunner `json:"runners"`
+}
+
+// GitHubRunnerKill is the outcome of a kill or restart. A GitHub failure is not an
+// error status: the container is already gone and deregister_error names the half
+// that did not happen.
+type GitHubRunnerKill struct {
+	Name              string `json:"name"`
+	Org               string `json:"org"`
+	Node              string `json:"node"`
+	ContainerRemoved  bool   `json:"container_removed"`
+	Deregistered      bool   `json:"deregistered"`
+	DeregisterError   string `json:"deregister_error,omitempty"`
+	Held              bool   `json:"held"`
+	Registered        bool   `json:"registered,omitempty"`
+	RegistrationError string `json:"registration_error,omitempty"`
+}

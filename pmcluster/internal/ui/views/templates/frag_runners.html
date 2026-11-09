@@ -1,0 +1,252 @@
+{{define "runners"}}
+{{/* Self-hosted GitHub Actions runners.
+
+     Two jobs on one page: choose the WORKERS that may run a runner (the capacity
+     model is the list — N selected nodes = N runners), and operate the runners
+     that exist (state, kill, restart).
+
+     A manager can never be chosen. It is shown greyed with the reason rather than
+     hidden, because "why is my manager not in the list" is a question the page
+     has to answer: a build on the control plane's 1-vCPU manager marks the node
+     Down and takes the cluster API with it.
+
+     Three table states, as everywhere else in the console: rows / unknown (the
+     daemon did not answer — never rendered as "empty") / empty-but-actionable.
+     When the feature is off, the empty state points at the setting that turns it
+     on instead of pretending the list is empty. */}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1>{{T "runners.title"}}</h1>
+    <p class="sub">{{T "runners.sub"}}</p>
+  </div>
+  <div class="ph-actions">
+    <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/runners/restart-all" hx-target="#view" hx-push-url="true" hx-disabled-elt="this"
+            data-tip="{{T "runners.restart_all_tip"}}">{{icon "restore"}}<span>{{T "runners.restart_all"}}</span></button>
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
+      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
+    </button>
+  </div>
+</div>
+
+{{if .ErrKey}}
+<div class="banner bad">
+  {{icon "alert"}}
+  <div class="b-body">
+    <p class="b-title">{{T .ErrKey}}</p>
+    <p>{{T "err.banner_body"}}</p>
+    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+  </div>
+  <div class="b-actions">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+  </div>
+</div>
+{{end}}
+
+{{if .MsgKey}}<div class="msg ok">{{TF .MsgKey .MsgArg}}</div>{{end}}
+
+{{if not .Configured}}
+<div class="panel mt-24">
+  <div class="panel-body tight">
+    <div class="empty">
+      <i class="ic">{{icon "settings"}}</i>
+      <h3>{{T "err.api_not_configured"}}</h3>
+      <p>{{T "runners.not_configured_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+      </div>
+    </div>
+  </div>
+</div>
+{{else if not .Known}}
+<div class="panel mt-24">
+  <div class="panel-body tight">
+    <div class="empty">
+      <i class="ic">{{icon "alert"}}</i>
+      <h3>{{T "runners.unknown_title"}}</h3>
+      <p>{{T "runners.unknown_body"}}</p>
+      <div class="empty-actions">
+        <button type="button" class="btn btn-sm" hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+      </div>
+    </div>
+  </div>
+</div>
+{{else}}
+
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "runners.picker_title"}}</h2>
+    <div class="ph-actions">
+      {{if .Enabled}}<span class="pill good"><i class="dot"></i>{{T "runners.enabled"}}</span>
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "runners.disabled"}}</span>{{end}}
+      <span class="pill plain">{{P .Selected "plural.runner_nodes"}}</span>
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "runners.picker_sub"}}</p>
+    <p class="muted">{{TF "runners.capacity" .Memory}}</p>
+    <form hx-post="/web/runners/nodes" hx-target="#view" hx-push-url="true" hx-disabled-elt="find [type='submit']">
+      <div class="table-wrap only-md">
+        <table class="table">
+          <thead>
+            <tr>
+              <th><span class="sr-only">{{T "runners.col_select"}}</span></th>
+              <th>{{T "runners.col_node"}}</th>
+              <th>{{T "runners.col_role"}}</th>
+              <th>{{T "runners.col_node_state"}}</th>
+              <th>{{T "runners.col_memory"}}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Nodes}}
+            <tr>
+              <td>
+                <label class="check">
+                  {{if .Selectable}}
+                  <input type="checkbox" name="node" value="{{.Hostname}}"{{if .Selected}} checked{{end}}>
+                  {{else}}
+                  <input type="checkbox" disabled data-tip="{{.Reason}}">
+                  {{end}}
+                  <span class="sr-only">{{.Hostname}}</span>
+                </label>
+              </td>
+              <td><span class="mono">{{.Hostname}}</span></td>
+              <td>
+                {{if .Selectable}}<span class="pill plain">{{.Role}}</span>
+                {{else}}<span class="pill warn" data-tip="{{.Reason}}"><i class="dot"></i>{{.Role}}</span>{{end}}
+              </td>
+              <td>
+                {{if .Selected}}{{if .RunnerState}}<span class="pill {{if eq .RunnerState "idle"}}good{{else if eq .RunnerState "busy"}}warn{{else}}bad{{end}}"><i class="dot"></i>{{T (printf "runners.state_%s" .RunnerState)}}</span>
+                {{else}}<span class="muted">{{T "runners.state_none"}}</span>{{end}}
+                {{else}}<span class="muted">{{T "runners.not_selected"}}</span>{{end}}
+              </td>
+              <td class="muted num"><bdi dir="ltr">{{NF .MemAvailMB 0}}</bdi> / <bdi dir="ltr">{{NF .MemTotalMB 0}}</bdi> {{T "runners.mb"}}</td>
+            </tr>
+            {{else}}
+            <tr><td colspan="5" class="muted">{{T "runners.no_nodes"}}</td></tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      <div class="only-sm">
+        {{range .Nodes}}
+        <div class="kv">
+          <label class="check">
+            {{if .Selectable}}<input type="checkbox" name="node" value="{{.Hostname}}"{{if .Selected}} checked{{end}}>
+            {{else}}<input type="checkbox" disabled>{{end}}
+            <span class="mono">{{.Hostname}}</span>
+          </label>
+          <div class="kv-row"><span class="k">{{T "runners.col_role"}}</span><span class="v">{{.Role}}</span></div>
+          {{if .Reason}}<div class="kv-row"><span class="k">{{T "runners.col_reason"}}</span><span class="v muted">{{.Reason}}</span></div>{{end}}
+          <div class="kv-row"><span class="k">{{T "runners.col_memory"}}</span><span class="v muted num"><bdi dir="ltr">{{NF .MemAvailMB 0}}</bdi> / <bdi dir="ltr">{{NF .MemTotalMB 0}}</bdi> {{T "runners.mb"}}</span></div>
+        </div>
+        {{end}}
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" data-tip="{{T "runners.save_nodes"}}">{{icon "check"}}<span>{{T "runners.save_nodes"}}</span></button>
+        <span class="muted">{{T "runners.save_hint"}}</span>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "runners.table_title"}}</h2>
+    <div class="ph-actions">
+      {{if .Rows}}<span class="pill plain">{{P .Rows "plural.runners"}}</span>{{end}}
+    </div>
+  </div>
+
+  <div class="panel-body tight">
+    {{if not .Enabled}}
+    <div class="empty">
+      <i class="ic">{{icon "server"}}</i>
+      <h3>{{T "runners.disabled_title"}}</h3>
+      <p>{{T "runners.disabled_body"}}</p>
+      <div class="empty-actions">
+        <a class="btn btn-primary btn-sm" href="/web/settings/cluster" hx-get="/web/settings/cluster" hx-target="#view" hx-push-url="true"
+           data-tip="{{T "runners.disabled_action_tip"}}">{{icon "settings"}}<span>{{T "runners.disabled_action"}}</span></a>
+      </div>
+      <p class="muted">{{T "runners.disabled_foot"}}</p>
+    </div>
+    {{else if .Rows}}
+    <div class="table-wrap only-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "runners.col_scope"}}</th>
+            <th>{{T "common.name"}}</th>
+            <th>{{T "runners.col_node"}}</th>
+            <th>{{T "runners.col_state"}}</th>
+            <th>{{T "runners.col_mode"}}</th>
+            <th>{{T "runners.col_age"}}</th>
+            <th>{{T "runners.col_last_job"}}</th>
+            <th><span class="sr-only">{{T "common.actions"}}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Rows}}
+          <tr>
+            <td><span class="mono iso" dir="ltr">{{.Org}}</span></td>
+            <td><span class="mono iso" dir="ltr">{{.Name}}</span></td>
+            <td><span class="mono">{{.Node}}</span></td>
+            <td><span class="pill {{.StateClass}}"><i class="dot"></i>{{T (printf "runners.state_%s" .State)}}</span></td>
+            <td class="muted">{{T (printf "runners.mode_%s" .Mode)}}</td>
+            <td class="muted num"><bdi dir="ltr">{{if .RegisteredAt}}{{.Age}}{{else}}—{{end}}</bdi></td>
+            <td>
+              {{if .LastJobURL}}<a class="mono iso" dir="ltr" href="{{.LastJobURL}}" target="_blank" rel="noopener noreferrer">{{.LastJobLabel}}</a>
+              {{else}}<span class="muted">—</span>{{end}}
+            </td>
+            <td>
+              <div class="row-actions">
+                {{if .Busy}}
+                <button type="button" class="btn btn-danger btn-sm"
+                        hx-post="/web/runners/{{.Name}}/kill" hx-vals='{"confirm":"1"}' hx-target="#view" hx-push-url="true" hx-disabled-elt="this"
+                        hx-confirm="{{TF "runners.kill_busy_confirm" .Node}}">{{T "runners.kill"}}</button>
+                {{else}}
+                <button type="button" class="btn btn-ghost btn-sm"
+                        hx-post="/web/runners/{{.Name}}/kill" hx-target="#view" hx-push-url="true" hx-disabled-elt="this"
+                        data-tip="{{T "runners.kill_tip"}}">{{T "runners.kill"}}</button>
+                {{end}}
+                <button type="button" class="btn btn-ghost btn-sm"
+                        hx-post="/web/runners/{{.Name}}/restart" hx-target="#view" hx-push-url="true" hx-disabled-elt="this"
+                        data-tip="{{T "runners.restart_tip"}}">{{T "runners.restart"}}</button>
+              </div>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="only-sm">
+      {{range .Rows}}
+      <div class="kv">
+        <div class="kv-row"><span class="k">{{T "runners.col_scope"}}</span><span class="v mono iso" dir="ltr">{{.Org}}</span></div>
+        <div class="kv-row"><span class="k">{{T "common.name"}}</span><span class="v mono iso" dir="ltr">{{.Name}}</span></div>
+        <div class="kv-row"><span class="k">{{T "runners.col_node"}}</span><span class="v mono">{{.Node}}</span></div>
+        <div class="kv-row"><span class="k">{{T "runners.col_state"}}</span><span class="v"><span class="pill {{.StateClass}}"><i class="dot"></i>{{T (printf "runners.state_%s" .State)}}</span></span></div>
+        <div class="kv-row"><span class="k">{{T "runners.col_age"}}</span><span class="v muted num"><bdi dir="ltr">{{if .RegisteredAt}}{{.Age}}{{else}}—{{end}}</bdi></span></div>
+        <div class="kv-row"><span class="k">{{T "runners.col_last_job"}}</span><span class="v">{{if .LastJobURL}}<a class="mono iso" dir="ltr" href="{{.LastJobURL}}" target="_blank" rel="noopener noreferrer">{{.LastJobLabel}}</a>{{else}}<span class="muted">—</span>{{end}}</span></div>
+        <div class="action-bar">
+          <button type="button" class="btn btn-danger btn-sm" hx-post="/web/runners/{{.Name}}/kill" {{if .Busy}}hx-vals='{"confirm":"1"}' hx-confirm="{{TF "runners.kill_busy_confirm" .Node}}"{{end}} hx-target="#view" hx-push-url="true" hx-disabled-elt="this">{{T "runners.kill"}}</button>
+          <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/runners/{{.Name}}/restart" hx-target="#view" hx-push-url="true" hx-disabled-elt="this">{{T "runners.restart"}}</button>
+        </div>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <div class="empty">
+      <i class="ic">{{icon "server"}}</i>
+      <h3>{{T "runners.empty_title"}}</h3>
+      <p>{{T "runners.empty_body"}}</p>
+    </div>
+    {{end}}
+  </div>
+
+  <div class="panel-foot">
+    <span>{{T "runners.foot"}}</span>
+  </div>
+</div>
+{{end}}
+{{end}}

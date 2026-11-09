@@ -626,3 +626,30 @@ func (c *Client) ExecService(ctx context.Context, stack, service string, argv []
 func svcPath(stack, service string) string {
 	return "/services/" + url.PathEscape(stack) + "/" + url.PathEscape(service)
 }
+
+// GitHubRunners returns the runners the platform manages and the feature switch.
+func (c *Client) GitHubRunners(ctx context.Context) (*GitHubRunners, error) {
+	var out GitHubRunners
+	if err := c.do(ctx, http.MethodGet, "/github/runners", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// KillGitHubRunner removes a runner's container and de-registers it. confirm is
+// required for a busy runner (the API answers 409 without it), because that kill
+// fails the job it is running.
+func (c *Client) KillGitHubRunner(ctx context.Context, name string, confirm bool) (*GitHubRunnerKill, error) {
+	var out GitHubRunnerKill
+	body := map[string]any{"confirm": confirm}
+	err := c.do(ctx, http.MethodPost, "/github/runners/"+url.PathEscape(name)+"/kill", body, &out)
+	return &out, err
+}
+
+// RestartGitHubRunner kills a runner and registers it again in one call.
+func (c *Client) RestartGitHubRunner(ctx context.Context, name string, confirm bool) (*GitHubRunnerKill, error) {
+	var out GitHubRunnerKill
+	body := map[string]any{"confirm": confirm}
+	err := c.do(ctx, http.MethodPost, "/github/runners/"+url.PathEscape(name)+"/restart", body, &out)
+	return &out, err
+}

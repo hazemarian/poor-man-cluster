@@ -34,6 +34,7 @@ func init() {
 		"nav.backups":     "Backups",
 		"nav.users":       "Users",
 		"nav.apikeys":     "API keys",
+		"nav.runners":     "Runners",
 		"nav.settings":    "Settings",
 		"nav.observ":      "Parseable",
 		"nav.observ_hint": "Open Parseable to query logs, metrics and traces",

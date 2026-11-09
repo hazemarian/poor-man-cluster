@@ -248,6 +248,11 @@ func (a *App) Mount(engine *gin.Engine) {
 	// viewer group keeps the rendered LIST on the settings page, but not the
 	// rendered content modal.
 
+	// The runners panel is a read for any signed-in user: it is the cluster's CI
+	// state, and the node picker's save / kill / restart are operator actions.
+	rnr := controllers.Runners{Controller: a.ctrl}
+	vr.GET("/runners", rnr.Page)
+
 	tlsC := controllers.TLS{Controller: a.ctrl}
 	vr.GET("/tls", tlsC.Page)
 	vr.GET("/tls/site/new", tlsC.SiteNew)
@@ -315,6 +320,13 @@ func (a *App) Mount(engine *gin.Engine) {
 	// The GitHub App Test button mints a token, so it is a mutation guarded by
 	// the operator role (the card itself is readable by any signed-in user).
 	op.POST("/settings/github/test", stt.GitHubTest)
+	// Runner mutations live next to the settings surface they change: killing a
+	// runner fails a job and removing a node from the picker de-registers its
+	// runner, so both are operator work, not reads.
+	op.POST("/runners/nodes", rnr.SaveNodes)
+	op.POST("/runners/restart-all", rnr.RestartAll)
+	op.POST("/runners/:name/kill", rnr.Kill)
+	op.POST("/runners/:name/restart", rnr.Restart)
 	// Rendered config content is operator-only (embeds root credentials).
 	op.GET("/settings/rendered/:name", stt.RenderedGet)
 

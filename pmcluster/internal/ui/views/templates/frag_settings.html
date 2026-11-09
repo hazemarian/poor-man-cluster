@@ -169,6 +169,21 @@
 {{if .Configured}}
 <div class="panel mt-24">
   <div class="panel-head">
+    <h2>{{T "settings.runners_title"}}</h2>
+    <div class="ph-actions">
+      <a class="btn btn-ghost btn-sm" href="/web/runners"
+         hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-tip="{{T "settings.runners_open"}}">
+        {{icon "server"}}<span>{{T "settings.runners_open"}}</span>
+      </a>
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "settings.runners_body"}}</p>
+  </div>
+</div>
+
+<div class="panel mt-24">
+  <div class="panel-head">
     <h2>{{T "settings.apply_title"}}</h2>
   </div>
   <div class="panel-body">

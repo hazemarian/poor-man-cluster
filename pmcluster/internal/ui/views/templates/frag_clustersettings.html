@@ -178,16 +178,33 @@
       <span class="hint">{{T "clustersettings.runners_enabled_hint"}}</span>
       <div class="form-grid">
         <div class="field">
-          <label for="cs-runner-repos">{{T "clustersettings.runner_repos"}}</label>
-          <input id="cs-runner-repos" class="finput mono" type="text" name="github_runner_repos" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_repos"}}" placeholder="acme/app,acme/api">
-          <span class="hint">{{T "clustersettings.runner_repos_hint"}}</span>
+          <label for="cs-runner-org">{{T "clustersettings.runner_org"}}</label>
+          <input id="cs-runner-org" class="finput mono" type="text" name="github_runner_org" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_org"}}" placeholder="acme">
+          <span class="hint">{{T "clustersettings.runner_org_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="cs-runner-group">{{T "clustersettings.runner_group"}}</label>
+          <input id="cs-runner-group" class="finput mono" type="text" name="github_runner_group" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_group"}}" placeholder="pmcluster">
+          <span class="hint">{{T "clustersettings.runner_group_hint"}}</span>
         </div>
         <div class="field">
           <label for="cs-runner-memory">{{T "clustersettings.runner_memory"}}</label>
           <input id="cs-runner-memory" class="finput mono" type="text" name="github_runner_memory" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_memory"}}" placeholder="2560m">
           <span class="hint">{{T "clustersettings.runner_memory_hint"}}</span>
         </div>
+        <div class="field">
+          <label for="cs-runner-socket-path">{{T "clustersettings.runner_socket_path"}}</label>
+          <input id="cs-runner-socket-path" class="finput mono" type="text" name="github_runner_socket_path" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_socket_path"}}">
+          <span class="hint">{{T "clustersettings.runner_socket_path_hint"}}</span>
+        </div>
       </div>
+      <input type="hidden" name="github_runner_nodes" value="{{index .Settings "github_runner_nodes"}}">
+      <label class="check">
+        <input type="checkbox" name="github_runner_socket_proxy" value="true"{{if ne (index .Settings "github_runner_socket_proxy") "false"}} checked{{end}}>
+        <span>{{T "clustersettings.runner_socket_proxy"}}</span>
+      </label>
+      <span class="hint">{{T "clustersettings.runner_socket_proxy_hint"}}</span>
+      <p class="sub">{{T "clustersettings.runner_nodes_note"}}</p>
       <label class="check">
         <input type="checkbox" name="github_runner_allow_leader" value="true"{{if eq (index .Settings "github_runner_allow_leader") "true"}} checked{{end}}>
         <span>{{T "clustersettings.runner_allow_leader"}}</span>

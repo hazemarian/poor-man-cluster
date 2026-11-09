@@ -176,11 +176,16 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"value":"secret","hash":"h1"}`)
 	})
 	mux.HandleFunc("/api/cluster/settings", func(w http.ResponseWriter, r *http.Request) {
+		// The runner settings travel with the cluster settings: the Runners panel
+		// reads them from the same snapshot the settings form writes.
 		if r.Method == http.MethodPut {
-			write(w, `{"settings":{"domain":"example.test"}}`)
+			write(w, clusterSettingsFixture)
 			return
 		}
-		write(w, `{"settings":{"domain":"example.test","reconcile_interval":"60"}}`)
+		write(w, `{"settings":{"domain":"example.test","reconcile_interval":"60",
+			"github_runner_org":"acme","github_runner_group":"pmcluster",
+			"github_runner_nodes":"worker-1,worker-2","github_runner_memory":"2560m",
+			"github_runner_socket_proxy":"true"}}`)
 	})
 	mux.HandleFunc("/api/usage", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"stacks":2,"services":3,"backups":4,"last_backup_at":25}`)
@@ -204,6 +209,20 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/api/github/app/test", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"ok":true,"message":"minted a token valid until 2026-11-09T13:04:05Z; read acme/app OK"}`)
+	})
+	mux.HandleFunc("/api/github/runners", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		write(w, githubRunnersFixture)
+	})
+	mux.HandleFunc("/api/github/runners/", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		write(w, `{"name":"pmc-worker-1-org","org":"acme","node":"worker-1","container_removed":true,"deregistered":true,"held":true}`)
 	})
 	return httptest.NewServer(mux)
 }

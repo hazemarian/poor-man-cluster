@@ -41,6 +41,7 @@ func init() {
 		"nav.backups":     "النسخ الاحتياطية",
 		"nav.users":       "المستخدمون",
 		"nav.apikeys":     "مفاتيح API",
+		"nav.runners":     "المشغّلات",
 		"nav.settings":    "الإعدادات",
 		"nav.observ":      "Parseable",
 		"nav.observ_hint": "افتح Parseable لعرض السجلات والمقاييس والآثار",

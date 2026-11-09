@@ -414,7 +414,13 @@ var clusterSettingKeys = []string{
 	"observability_admin_email",
 	"traefik_admin_user",
 	"github_runners_enabled",
-	"github_runner_repos",
+	"github_runner_org",
+	"github_runner_group",
+	// Nodes are chosen by the picker on the Runners panel; the form carries the
+	// current value in a hidden field so saving the form cannot clear it.
+	"github_runner_nodes",
+	"github_runner_socket_proxy",
+	"github_runner_socket_path",
 	"github_runner_memory",
 	"github_runner_allow_leader",
 }
@@ -426,6 +432,7 @@ var clusterBoolSettings = map[string]bool{
 	"sso_enabled":                true,
 	"edge_login_disabled":        true,
 	"github_runners_enabled":     true,
+	"github_runner_socket_proxy": true,
 	"github_runner_allow_leader": true,
 }
 
