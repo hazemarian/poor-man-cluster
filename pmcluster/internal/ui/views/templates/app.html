@@ -36,7 +36,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <link rel="icon" href="/web/static/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="{{static "favicon.svg"}}" type="image/svg+xml">
   <title>{{T .Crumb}} · {{T "app.title"}}</title>
   <script>
     // Theme + brand palette are applied before first paint so a light-theme
@@ -57,13 +57,13 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/web/static/fonts.css">
-  <link rel="stylesheet" href="/web/static/base.css">
-  <link rel="stylesheet" href="/web/static/components.css">
-  <link rel="stylesheet" href="/web/static/patterns.css">
-  <link rel="stylesheet" href="/web/static/brand.css">
-  <script src="/web/static/htmx.min.js"></script>
-  <script src="/web/static/preferences.js" defer></script>
+  <link rel="stylesheet" href="{{static "fonts.css"}}">
+  <link rel="stylesheet" href="{{static "base.css"}}">
+  <link rel="stylesheet" href="{{static "components.css"}}">
+  <link rel="stylesheet" href="{{static "patterns.css"}}">
+  <link rel="stylesheet" href="{{static "brand.css"}}">
+  <script src="{{static "htmx.min.js"}}"></script>
+  <script src="{{static "preferences.js"}}" defer></script>
 </head>
 <body
   data-t-copied="{{T "common.copied"}}"

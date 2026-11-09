@@ -44,16 +44,16 @@ func TestBrandLogoInShellAndLogin(t *testing.T) {
 func assertBrandLockup(t *testing.T, where, body string) {
 	t.Helper()
 	for _, want := range []string{
-		`class="logo-lockup"`,           // the combination-mark wrapper
-		`class="logo-mark"`,             // the mark wrapper
-		`viewBox="0 0 120 120"`,         // the mark is inlined, not an <img>
-		`var(--brand-primary, #FF5722)`, // mark lines/LEDs follow the palette
-		"Poor Man's",                    // primary wordmark text
-		">Cluster</em>",                 // secondary wordmark text in the accent
-		`class="logo-sub"`,              // mono subtext wrapper
-		`href="/web/static/brand.css"`,  // the brand stylesheet is linked
-		`data-palette-picker`,           // the palette picker is present
-		`data-palette-choose="orange"`,  // all six palettes are offered
+		`class="logo-lockup"`,            // the combination-mark wrapper
+		`class="logo-mark"`,              // the mark wrapper
+		`viewBox="0 0 120 120"`,          // the mark is inlined, not an <img>
+		`var(--brand-primary, #FF5722)`,  // mark lines/LEDs follow the palette
+		"Poor Man's",                     // primary wordmark text
+		">Cluster</em>",                  // secondary wordmark text in the accent
+		`class="logo-sub"`,               // mono subtext wrapper
+		`href="/web/static/brand.css?v=`, // the brand stylesheet is linked, content-versioned
+		`data-palette-picker`,            // the palette picker is present
+		`data-palette-choose="orange"`,   // all six palettes are offered
 		`data-palette-choose="purple"`,
 		`data-palette-choose="blue"`,
 		`data-palette-choose="red"`,

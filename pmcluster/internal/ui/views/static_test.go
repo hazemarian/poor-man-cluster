@@ -21,8 +21,11 @@ func TestAppTemplateReferencesLocalHtmx(t *testing.T) {
 	if strings.Contains(s, "unpkg.com") {
 		t.Errorf("app.html still references the unpkg CDN:\n%s", s)
 	}
-	if !strings.Contains(s, `/web/static/htmx.min.js`) {
-		t.Errorf("app.html must reference the vendored /web/static/htmx.min.js")
+	if !strings.Contains(s, `static "htmx.min.js"`) {
+		t.Errorf("app.html must reference the vendored htmx.min.js through the static helper so the URL is content-versioned")
+	}
+	if u := StaticURL("htmx.min.js"); !strings.HasPrefix(u, "/web/static/htmx.min.js?v=") {
+		t.Errorf("StaticURL(htmx.min.js) = %q, want a versioned /web/static/htmx.min.js URL", u)
 	}
 }
 

@@ -3,6 +3,37 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — content-addressed console assets
+
+**A deploy can no longer leave an open console running the previous stylesheet for an hour, and a changed asset is now cached for a year, not sixty minutes.**
+
+`/web/static/*` was served with `Cache-Control: public, max-age=3600` under a constant filename. After
+v0.2.263 shipped the tooltip CSS the operator's already-open console kept the previous `components.css`
+for up to an hour: the HTML carried 26–181 `data-tip` attributes and the rules that render them were never
+fetched, so a shipped feature looked broken. The same defect hid every CSS/JS change after every deploy.
+Every asset URL now carries `?v=<hash of the bytes served>`.
+
+- **Templates link through `{{static "name"}}`, including the favicon.** All four documents (shell, login,
+  setup, terminal) were converted; a test fails if any template hardcodes `/web/static/`, so a stylesheet
+  added later cannot silently ship unversioned.
+- **The hash is of the bytes actually served.** `internal/ui/views/assets.go` hashes each embedded file and
+  rewrites `fonts.css` so its `@font-face` URLs carry the font's own version; the stylesheet's version is
+  then computed over the rewritten body. A font change busts the font URL, `fonts.css` and every page that
+  links it.
+- **Policy follows the URL.** A matching `?v=` gets `public, max-age=31536000, immutable`; an unversioned
+  or stale version gets `no-cache`. Every response carries the content's `ETag`, so revalidation is a 304.
+  A stale hash is not a 404 — the current bytes are served, with revalidation — so the cache-buster is
+  never a hard dependency.
+- **The daemon and the edge agree.** Both binaries render the same templates from the same embedded FS and
+  build the version table once at startup, so a console served by the edge and an API served by the daemon
+  emit identical URLs.
+
+Tests: a changed file changes its version and an unchanged one does not; two renders of the shell produce
+identical URLs; every `<link rel="stylesheet">`, `<script src>` and icon link in each of the four documents
+carries a version, counted rather than spot-checked; a hashed URL is immutable while a bare or stale one is
+`no-cache` and still returns 200; a conditional GET answers 304; a font change changes the `fonts.css`
+body, its version and the URL it emits; an unknown path still 404s.
+
 ## Unreleased
 
 **A service mode change no longer aborts the deploy that contains it, and the platform stops accepting

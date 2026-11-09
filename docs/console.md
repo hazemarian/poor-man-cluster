@@ -156,6 +156,34 @@ request, that the skeleton's reserved height matches the content that replaces
 it, or that an overlay clears correctly when a swap comes back as an error.
 Treat them as shipped and partly verified, not as measured.
 
+## Static assets and caching
+
+The console's stylesheets, scripts, favicon and fonts are embedded in the
+binary and served under `/web/static/`. Every URL is content-addressed: the
+templates never write a bare path, they call `{{static "components.css"}}`,
+which expands to `/web/static/components.css?v=<hash of the served bytes>`.
+
+That version is the whole cache story. A matching `?v=` is answered with
+`Cache-Control: public, max-age=31536000, immutable` — a year, no
+revalidation, safe because a changed file is a different URL. A bare URL, or
+one carrying a version this build no longer has, is answered with
+`Cache-Control: no-cache` and the current bytes: a stale hash is a cache
+buster, never a 404 and never an hour of the previous deploy's CSS. Every
+response also carries the content's `ETag`, so an ordinary revalidation is a
+304.
+
+The hash is taken over the bytes actually served, not the file on disk.
+`fonts.css` embeds `@font-face` URLs for the woff2 files; those URLs are
+rewritten with the font's own version when the assets are loaded, and the
+stylesheet's version is computed over the rewritten body. A font change
+therefore busts the font URL, the stylesheet URL and every page that links it.
+
+`internal/ui/views/assets.go` owns the table (built once at startup, so the
+daemon and the edge render identical URLs from the same embedded FS);
+`StaticHandler` in the same file owns the policy. The `static` helper is
+registered in `render.go` and is the only supported way to reference an asset —
+a test fails if any template hardcodes `/web/static/`.
+
 ## What the console does NOT cover
 
 Service-level operations beyond the whitelisted set are CLI territory —

@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark light">
   <meta name="robots" content="noindex">
-  <link rel="icon" href="/web/static/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="{{static "favicon.svg"}}" type="image/svg+xml">
   <title>{{T "terminal.title"}} · {{T "app.title"}}</title>
   <script>
     // Applied before first paint so the terminal matches the saved theme.
@@ -17,13 +17,13 @@
       } catch (e) {}
     })();
   </script>
-  <link rel="stylesheet" href="/web/static/fonts.css">
-  <link rel="stylesheet" href="/web/static/base.css">
-  <link rel="stylesheet" href="/web/static/components.css">
-  <link rel="stylesheet" href="/web/static/patterns.css">
-  <link rel="stylesheet" href="/web/static/xterm.css">
-  <script src="/web/static/xterm.min.js" defer></script>
-  <script src="/web/static/preferences.js" defer></script>
+  <link rel="stylesheet" href="{{static "fonts.css"}}">
+  <link rel="stylesheet" href="{{static "base.css"}}">
+  <link rel="stylesheet" href="{{static "components.css"}}">
+  <link rel="stylesheet" href="{{static "patterns.css"}}">
+  <link rel="stylesheet" href="{{static "xterm.css"}}">
+  <script src="{{static "xterm.min.js"}}" defer></script>
+  <script src="{{static "preferences.js"}}" defer></script>
 </head>
 <body class="terminal-body">
 <main class="terminal-doc">

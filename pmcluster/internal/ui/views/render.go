@@ -11,7 +11,6 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
-	"io/fs"
 	"net/http"
 	"strconv"
 	"strings"
@@ -94,24 +93,6 @@ func ShellBase(c *gin.Context) gin.H {
 // StaticBase is the URL prefix the console's own assets are served from.
 const StaticBase = "/web/static"
 
-// StaticHandler serves the console's own CSS, fonts and JS. htmx is vendored
-// locally (htmx.min.js) alongside the CSS/font stack so the design and the
-// SPA wiring render on any host without a CDN dependency.
-func StaticHandler() gin.HandlerFunc {
-	sub, err := fs.Sub(StaticFS, "static")
-	if err != nil {
-		panic(err)
-	}
-	server := http.FileServer(http.FS(sub))
-	return func(c *gin.Context) {
-		// FileServer resolves against the request path, so drop the mount
-		// prefix before delegating.
-		c.Request.URL.Path = strings.TrimPrefix(c.Request.URL.Path, StaticBase)
-		c.Header("Cache-Control", "public, max-age=3600")
-		server.ServeHTTP(c.Writer, c.Request)
-	}
-}
-
 // Renderer executes HTML templates from the embedded FS.
 type Renderer struct {
 	tmpl *template.Template
@@ -137,9 +118,13 @@ func NewRenderer() (*Renderer, error) {
 		// back into the app shell (login/setup/terminal are standalone docs
 		// that do not render inside the shell's base URL context).
 		"WebBase": func() string { return "/web" },
-		"T":       func(key string) string { return key },
-		"TN":      func(key string) string { return "" },
-		"TF":      func(key string, args ...any) string { return key },
+		// static returns the content-addressed URL of an embedded asset, so
+		// a stylesheet change is a URL change and no page can pin the old
+		// bytes in its HTTP cache across a deploy.
+		"static": StaticURL,
+		"T":      func(key string) string { return key },
+		"TN":     func(key string) string { return "" },
+		"TF":     func(key string, args ...any) string { return key },
 		// Numbers arrive as int, int64, uint64 or float64 depending on the
 		// data source, so every numeric helper takes any and coerces.
 		"P":  func(count any, key string, dualCase ...i18n.Case) string { return key },

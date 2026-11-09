@@ -846,7 +846,7 @@ func TestFragmentRefreshRendersAppShell(t *testing.T) {
 		// v2 links the stylesheets instead of inlining a <style> block: the shell's
 		// own CSS is proved by the link, and the asset being served is checked in
 		// TestLoginDisabled_PassThrough.
-		`href="/web/static/base.css"`, "Poor Man's", "Overview", "Stacks", "Services",
+		`href="/web/static/base.css?v=`, "Poor Man's", "Overview", "Stacks", "Services",
 		`id="view"`, "demo", "Log out",
 	} {
 		if !strings.Contains(b, want) {
@@ -1112,7 +1112,7 @@ func TestLoginDisabled_PassThrough(t *testing.T) {
 		t.Fatalf("GET /web/ = %d, want 200", resp.StatusCode)
 	}
 	b := readBody(t, resp)
-	for _, want := range []string{`href="/web/static/base.css"`, "Poor Man's", "Overview"} {
+	for _, want := range []string{`href="/web/static/base.css?v=`, "Poor Man's", "Overview"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("login-disabled /web/ missing %q", want)
 		}
@@ -1125,6 +1125,33 @@ func TestLoginDisabled_PassThrough(t *testing.T) {
 		t.Errorf("GET /web/static/base.css = %d, want 200", css.StatusCode)
 	} else if cssBody := readBody(t, css); !strings.Contains(cssBody, "--border-control") {
 		t.Errorf("served stylesheet is not the console CSS (no custom property found)")
+	}
+	// The shell links the stylesheet with a content version, and that URL must
+	// be served as immutable: this is the end-to-end form of the fix for the
+	// deploy-old-URL bug (the browser kept v0.2.262's CSS for an hour).
+	const href = `href="/web/static/base.css`
+	i := strings.Index(b, href)
+	if i < 0 {
+		t.Fatalf("login-disabled /web/ does not link base.css through the static helper")
+	}
+	rest := b[i+len(`href="`):]
+	end := strings.IndexByte(rest, '"')
+	if end < 0 {
+		t.Fatalf("unterminated base.css href in the rendered shell")
+	}
+	versionedURL := rest[:end]
+	if !strings.Contains(versionedURL, "?v=") {
+		t.Fatalf("rendered shell links base.css without a content version: %s", versionedURL)
+	}
+	versioned := doRequest(t, app, http.MethodGet, versionedURL, "", jar)
+	if versioned.StatusCode != http.StatusOK {
+		t.Errorf("GET %s = %d, want 200", versionedURL, versioned.StatusCode)
+	}
+	if cc := versioned.Header.Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+		t.Errorf("versioned stylesheet Cache-Control = %q, want an immutable policy", cc)
+	}
+	if versioned.Header.Get("ETag") == "" {
+		t.Errorf("versioned stylesheet has no ETag")
 	}
 	if strings.Contains(b, "Log out") {
 		t.Errorf("login-disabled shell must not show the Log out form")
