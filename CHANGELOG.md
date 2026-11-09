@@ -3,6 +3,50 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.260 (2026-11-09)
+
+**The control-plane kit keeps a small rollback window instead of the full history or none.**
+
+`v0.2.259` stopped the kit from carrying `stack_revisions` at all, and the operator's follow-up was
+right: a promoted leader that knows stack X is on revision 42 but has no row 42 cannot reconcile or
+roll that deploy back until someone re-deploys, and dropping `config_versions` outright would take
+`config rollback` away from the new leader. Both tables are now **windowed**, not dropped.
+
+- **`stack_revisions`: the newest 5 revisions per stack, plus the row `current_revision` points at.**
+  The pointer is not always among the newest — a rollback leaves it on an older row while the newer
+  ones stay in history — so "newest five" alone would still lose exactly the manifest a rollback needs.
+  The copy is a per-stack `ROW_NUMBER()` over `revision DESC`, then the current row added with
+  `INSERT OR IGNORE`.
+- **`config_versions`: the newest 10 versions per config name** (`ROW_NUMBER()` over version-row id
+  `DESC`, partitioned by `config_id`). Row ids are copied unchanged, so a rollback on the promoted
+  leader names the same version row it would have on the old one. Nothing is deleted from the leader:
+  these are copy policies, and a rollback further back than ten versions is a leader-side operation.
+- **Both caps live in one place** — `internal/controlplane/kitdb.go` — with a comment naming the
+  operator's numbers; the per-table reasons sit beside them and a schema test still fails when a
+  migration adds a table without a decision (`kitTables` / `excludedTables`).
+- **`store.Export` is the new primitive** (plans: `CopyAll`, `CopyNewestStackRevisions`,
+  `CopyNewestConfigVersions`); `store.ExportDB` remains a verbatim wrapper, so its tests are unchanged.
+  The statements are composed from a closed selector set and an identifier-checked table name, so a
+  plan picks a policy and cannot inject SQL. A `Keep` below 1 is rejected rather than treated as "all".
+
+Measured on a read-only copy of the live leader's `data.db` (5,357,568 bytes; 18 stacks, 548
+revisions, 19 configs, 50 config versions): the kit was **84,739 bytes (16.55 %)** with no revisions
+and the whole `config_versions` table; it is **120,033 bytes (23.44 %)** with both windows applied —
+90 revision rows (5 × 18) and 48 config-version rows. The increase is the rollback window the
+operator asked for, and it sits under the 40 % budget rather than near the 512,000-byte ceiling.
+
+Tests: 500 revisions per stack on two stacks plus 200 config versions on two configs still pack at
+**4.2 %** of the limit with exactly 5 revisions per stack and exactly 10 versions per config; the
+10,000-revision fixture packs at 3.0 % while the same fixture with every row exported is 22× the
+limit; a stack whose `current_revision` is the middle of three carries it with its rendered manifest,
+and a rolled-back stack whose `current_revision` (3) is older than the newest five (4-8) still crosses
+its current row — the case where "newest N" alone would lose exactly the live manifest — while
+`Revision()` on a row outside the window returns `ErrRevisionNotFound` (asserted by `errors.Is`); `config_versions` is capped per config name, the oldest surviving row is the tail of
+200, and the leader's own table keeps all 204 rows. Everything else keeps its previous fidelity
+assertions (token hashes, credential/webhook/registry ciphertext bytes, settings, config content,
+secret payload, site-cert metadata, failover marker, stack list), and adoption still serves the same
+control plane through the handle it already holds — now with the current revision readable.
+
 ## v0.2.259 (2026-11-09)
 
 **The control-plane kit carries the authoritative tables instead of the whole `data.db`, so Raft replication works again.**

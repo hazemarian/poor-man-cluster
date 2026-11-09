@@ -7,8 +7,10 @@
 // The survivor kit is everything a promoted node needs to serve the same
 // control plane: an export of data.db's authoritative tables (users, API keys /
 // token hashes, credential ciphertexts, settings, webhook secrets, the stack
-// list), config.yaml, and the rendered config/ tree (TLS certs, stack
-// pointers). Stack REVISIONS are deliberately not carried — see kitdb.go.
+// list) with a short rollback window on the two history tables (each stack's
+// newest five revisions plus its current one; the newest ten config versions per
+// config name), config.yaml, and the rendered config/ tree (TLS certs, stack
+// pointers). The rest of the history stays behind — see kitdb.go.
 //
 // Security split: the AES-GCM encryption key (.encryption_key) NEVER shares a
 // config blob with the ciphertext it unlocks. Two config families are kept:

@@ -266,12 +266,12 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 		res, serr := r.DeployService.Sync(ctx, st.Name)
 		switch {
 		case errors.Is(serr, store.ErrRevisionNotFound):
-			// This node holds the stack LIST but not its revision history: a
-			// promoted leader adopted a slim control-plane kit (revisions do
-			// not cross the fleet — they are re-rendered from the repo). There
-			// is nothing to re-render, and nothing is broken: do not record a
-			// stack error, do not mark the stack errored, and say so once
-			// rather than on every pass.
+			// This node holds the stack LIST but not this stack's revision:
+			// either it was deployed after the kit snapshot, or its revision
+			// fell out of the kit's five-revision window. There is nothing to
+			// re-render, and nothing is broken: do not record a stack error,
+			// do not mark the stack errored, and say so once rather than on
+			// every pass.
 			r.noteNoStoredRevision(st.Name, log)
 		case serr != nil:
 			r.handleSyncError(ctx, st.Name, st.CurrentRevision, serr, log)
@@ -354,8 +354,12 @@ func (r *Reconciler) handleSyncError(ctx context.Context, stackName string, revi
 }
 
 // noteNoStoredRevision reports a stack this node has a row for but no revision
-// of — the state of every app stack after a promoted leader adopts a slim
-// control-plane kit, because revisions do not cross the fleet.
+// of. After a promoted leader adopts the control-plane kit this is unusual: the
+// kit carries each stack's newest five revisions plus the one current_revision
+// points at, so the common case reconciles normally. It remains reachable for a
+// revision outside that window — a stack deployed after the last snapshot, or a
+// rollback target older than the window — and it must not be treated as
+// damage when it happens.
 //
 // It is deliberately NOT handleSyncError: there is no failure, so nothing is
 // recorded on the stack and its status is left to the health snapshot (which
@@ -375,7 +379,7 @@ func (r *Reconciler) noteNoStoredRevision(stackName string, log zerolog.Logger) 
 		return
 	}
 	log.Info().Str("stack", stackName).
-		Msg("reconcile — no stored revision on this node (slim control-plane kit): drift check skipped until the stack is re-deployed; the stack row, its configs and secrets are intact")
+		Msg("reconcile — no stored revision on this node (outside the kit's revision window): drift check skipped until the stack is re-deployed; the stack row, its configs and secrets are intact")
 }
 
 // logStoragePaused logs the "storage node down; pausing app sync" warning the

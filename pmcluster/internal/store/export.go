@@ -11,7 +11,7 @@ import (
 
 // ExportDB writes a NEW SQLite database at dstPath holding the same schema as
 // srcPath (all migrations applied, so the file opens through Open with nothing
-// left to run) and the rows of exactly the named tables, copied verbatim in
+// left to run) and every row of exactly the named tables, copied verbatim in
 // the order given.
 //
 // It exists for the control-plane survivor kit: the kit is Raft-replicated to
@@ -31,12 +31,79 @@ import (
 // writing during the export cannot tear the UUID/credential relationships
 // across tables.
 func ExportDB(srcPath, dstPath string, tables []string) (map[string]int64, error) {
-	if len(tables) == 0 {
+	plans := make([]CopyPlan, 0, len(tables))
+	for _, t := range tables {
+		plans = append(plans, CopyPlan{Table: t, Selector: CopyAll})
+	}
+	return Export(srcPath, dstPath, plans)
+}
+
+// Selector chooses how many rows of a table an export carries.
+type Selector int
+
+const (
+	// CopyAll copies every row of the table.
+	CopyAll Selector = iota
+	// CopyNewestStackRevisions copies the newest Keep revisions of every
+	// stack AND each stack's current_revision row. The current row is not
+	// always among the newest ones — a rollback re-points current_revision at
+	// an older revision — and the rendered manifest behind that pointer is
+	// what a promoted leader needs in order to reconcile or roll back.
+	CopyNewestStackRevisions
+	// CopyNewestConfigVersions copies the newest Keep versions of every
+	// config (highest version-row id first), so config rollback keeps a short
+	// window on a promoted leader instead of no history at all.
+	CopyNewestConfigVersions
+)
+
+// CopyPlan names one table to carry into an export, and how much of it.
+//
+// The two history selectors exist because those tables grow without bound on a
+// live cluster (one row per config edit, one per deploy) while a promoted
+// leader needs only a rollback window, not the archive. Keep is a per-group
+// cap, never a global row count: "the newest ten configs" would be one config's
+// history and nothing else.
+type CopyPlan struct {
+	Table    string
+	Selector Selector
+	// Keep is the per-group row cap for the history selectors. It is ignored
+	// by CopyAll and must be positive otherwise — a zero that quietly meant
+	// "all rows" is the failure these plans exist to prevent.
+	Keep int
+}
+
+// Export writes a NEW SQLite database at dstPath with srcPath's schema and the
+// rows selected by plans, in plan order (parents before children).
+//
+// Every statement is composed here from the closed Selector set and an
+// identifier-checked table name, so a plan chooses a policy and cannot inject
+// SQL.
+func Export(srcPath, dstPath string, plans []CopyPlan) (map[string]int64, error) {
+	if len(plans) == 0 {
 		return nil, errors.New("export DB: no tables named")
 	}
-	for _, t := range tables {
-		if !plainIdent(t) {
-			return nil, fmt.Errorf("export DB: unsafe table name %q", t)
+	for _, p := range plans {
+		if !plainIdent(p.Table) {
+			return nil, fmt.Errorf("export DB: unsafe table name %q", p.Table)
+		}
+		switch p.Selector {
+		case CopyAll:
+		case CopyNewestStackRevisions:
+			if p.Table != "stack_revisions" {
+				return nil, fmt.Errorf("export DB: newest-stack-revision cap cannot be applied to table %q", p.Table)
+			}
+			if p.Keep < 1 {
+				return nil, fmt.Errorf("export DB: newest-stack-revision cap must be positive, got %d", p.Keep)
+			}
+		case CopyNewestConfigVersions:
+			if p.Table != "config_versions" {
+				return nil, fmt.Errorf("export DB: newest-config-version cap cannot be applied to table %q", p.Table)
+			}
+			if p.Keep < 1 {
+				return nil, fmt.Errorf("export DB: newest-config-version cap must be positive, got %d", p.Keep)
+			}
+		default:
+			return nil, fmt.Errorf("export DB: unknown selector %d for table %q", p.Selector, p.Table)
 		}
 	}
 
@@ -94,21 +161,13 @@ func ExportDB(srcPath, dstPath string, tables []string) (map[string]int64, error
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	counts := make(map[string]int64, len(tables))
-	for _, t := range tables {
-		// SELECT * on both sides: the destination schema came from the same
-		// migrations as the source, so the columns line up by position. A
-		// schema mismatch fails loudly here (column count) instead of
-		// silently writing defaults.
-		res, err := tx.Exec(`INSERT INTO main.` + t + ` SELECT * FROM src.` + t)
+	counts := make(map[string]int64, len(plans))
+	for _, p := range plans {
+		n, err := copyTable(tx, p)
 		if err != nil {
-			return nil, fmt.Errorf("export DB: copy table %s: %w", t, err)
+			return nil, err
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return nil, fmt.Errorf("export DB: count rows of %s: %w", t, err)
-		}
-		counts[t] = n
+		counts[p.Table] = n
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("export DB: commit: %w", err)
@@ -126,6 +185,85 @@ func ExportDB(srcPath, dstPath string, tables []string) (map[string]int64, error
 	}
 	complete = true
 	return counts, nil
+}
+
+// copyTable runs one plan inside the export transaction and returns how many
+// rows it wrote.
+func copyTable(tx *sql.Tx, p CopyPlan) (int64, error) {
+	switch p.Selector {
+	case CopyAll:
+		// SELECT * on both sides: the destination schema came from the same
+		// migrations as the source, so the columns line up by position. A
+		// schema mismatch fails loudly here (column count) instead of
+		// silently writing defaults.
+		return execCount(tx, p.Table,
+			`INSERT INTO main.`+p.Table+` SELECT * FROM src.`+p.Table)
+
+	case CopyNewestStackRevisions:
+		// The newest Keep revisions of each stack. ROW_NUMBER is partitioned
+		// by stack so the cap is per stack, not per table.
+		newest, err := execCount(tx, p.Table, `
+			INSERT INTO main.stack_revisions
+			       (stack_name, revision, source_yaml, rendered_yaml, rendered_hash,
+			        source_file, payload_json, created_at)
+			SELECT stack_name, revision, source_yaml, rendered_yaml, rendered_hash,
+			       source_file, payload_json, created_at
+			  FROM (SELECT r.*,
+			               ROW_NUMBER() OVER (PARTITION BY r.stack_name
+			                                  ORDER BY r.revision DESC) AS rn
+			          FROM src.stack_revisions r)
+			 WHERE rn <= ?`, p.Keep)
+		if err != nil {
+			return 0, err
+		}
+		// ...plus the row current_revision points at, which is NOT always one
+		// of them: a rollback re-points the stack at an older revision while
+		// the newer rows stay in history. INSERT OR IGNORE because it usually
+		// IS one of them. A stack whose current row is missing from source
+		// (it cannot be, given the FK, but a hand-edited file could) simply
+		// contributes nothing here and the copy still succeeds.
+		current, err := execCount(tx, p.Table, `
+			INSERT OR IGNORE INTO main.stack_revisions
+			       (stack_name, revision, source_yaml, rendered_yaml, rendered_hash,
+			        source_file, payload_json, created_at)
+			SELECT r.stack_name, r.revision, r.source_yaml, r.rendered_yaml,
+			       r.rendered_hash, r.source_file, r.payload_json, r.created_at
+			  FROM src.stack_revisions r
+			  JOIN src.stacks s ON s.name = r.stack_name
+			 WHERE s.current_revision = r.revision`)
+		if err != nil {
+			return 0, err
+		}
+		return newest + current, nil
+
+	case CopyNewestConfigVersions:
+		// The newest Keep version rows of each config. Row ids are copied as
+		// they are: config rollback names a version row by id, so the ids a
+		// promoted leader offers in the console must be the leader's own.
+		return execCount(tx, p.Table, `
+			INSERT INTO main.config_versions
+			SELECT id, config_id, content, hash, created_at
+			  FROM (SELECT c.*,
+			               ROW_NUMBER() OVER (PARTITION BY c.config_id
+			                                  ORDER BY c.id DESC) AS rn
+			          FROM src.config_versions c)
+			 WHERE rn <= ?`, p.Keep)
+	}
+	return 0, fmt.Errorf("export DB: unknown selector %d for table %q", p.Selector, p.Table)
+}
+
+// execCount runs one copy statement and returns the rows it affected, naming
+// the table in any error.
+func execCount(tx *sql.Tx, table, query string, args ...any) (int64, error) {
+	res, err := tx.Exec(query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("export DB: copy table %s: %w", table, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("export DB: count rows of %s: %w", table, err)
+	}
+	return n, nil
 }
 
 // sqliteURI builds a modernc.org/sqlite DSN for a file path, escaping it so a

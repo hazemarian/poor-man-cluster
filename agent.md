@@ -774,17 +774,23 @@ runs `kit.Loop` (5-min change-detection snapshot; 500 KiB config ceiling; keeps
 2). Adoption is never part of a tick.
 
 The kit's `data.db` is an EXPORT of the authoritative tables, not the leader's
-file (`internal/controlplane/kitdb.go`, `store.ExportDB`): users, credentials,
-stacks, webhook_sources, registries, cluster_settings, configs, config_versions,
-secrets, site_certs, stack_failover. `stack_revisions`, `backups`,
-`webhook_deliveries`, `stack_status` and `node_stats` do not cross the fleet —
-revisions are re-rendered from the repo, the rest is rebuildable bookkeeping. The
-whole file hit 5.2 MB (538 KB gzipped) and every snapshot was refused, so a
-promoted leader now has the stack LIST without revision history: `stacks.Sync`
-returns an error wrapping `store.ErrRevisionNotFound`, and `reconcile` treats it
-as `skipped` (info, once per stack) rather than an error. The payload size is
-logged at info on every publish. A test holds the schema to those two table
-lists, so a new migration must be classified.
+file (`internal/controlplane/kitdb.go`, `store.Export`): users, credentials,
+stacks, webhook_sources, registries, cluster_settings, configs, secrets,
+site_certs, stack_failover — plus a short rollback window on the two unbounded
+tables: each stack's newest 5 revisions and the row its `current_revision` points
+at, and the newest 10 versions per config name. `backups`, `webhook_deliveries`,
+`stack_status` and `node_stats` do not cross the fleet; the rest of the history
+stays on the node. The whole file hit 5.2 MB (538 KB gzipped) and every snapshot
+was refused, so the caps are a size decision, not a preference: they live in one
+place in `kitdb.go` and a test packs 500 revisions / 200 versions per group and
+fails if the kit leaves its budget. A promoted leader therefore reconciles each
+stack against its current rendered manifest and can roll a deploy back inside the
+window; a revision older than it still returns `store.ErrRevisionNotFound`, which
+`reconcile` treats as `skipped` (info, once per stack) rather than an error. A
+config rollback further back than ten versions is a leader-side operation, since
+only the leader still has those rows. The payload size is logged at info on every
+publish. A test holds the schema to the table list, so a new migration must be
+classified.
 
 ### Upgrading the platform
 Push a `v*` tag → `release.yml` cross-compiles 4 tarballs + SHA256SUMS +

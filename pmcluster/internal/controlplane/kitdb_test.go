@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -283,7 +284,7 @@ func rowCount(t *testing.T, db *sql.DB, table string) int {
 	return n
 }
 
-// TestKitDB_EveryTableIsClassified holds the schema to the table lists in
+// TestKitDB_EveryTableIsClassified holds the schema to the table list in
 // kitdb.go. A migration that adds a table without a decision fails here, which
 // is the only thing standing between a future table and a promoted leader that
 // silently lacks it.
@@ -302,11 +303,11 @@ func TestKitDB_EveryTableIsClassified(t *testing.T) {
 	defer func() { _ = rows.Close() }()
 
 	included := map[string]bool{}
-	for _, name := range authoritativeTables {
-		if included[name] {
-			t.Errorf("table %q listed twice in authoritativeTables", name)
+	for _, plan := range kitTables {
+		if included[plan.Table] {
+			t.Errorf("table %q listed twice in kitTables", plan.Table)
 		}
-		included[name] = true
+		included[plan.Table] = true
 	}
 	// Created by the migration runner and by SQLite itself — never listed.
 	structural := map[string]bool{"schema_version": true, "sqlite_sequence": true}
@@ -326,7 +327,7 @@ func TestKitDB_EveryTableIsClassified(t *testing.T) {
 		}
 		if !included[name] && !structural[name] {
 			if _, ok := excludedTables[name]; !ok {
-				t.Errorf("table %q is neither in authoritativeTables nor in excludedTables — decide whether a promoted leader needs it", name)
+				t.Errorf("table %q is neither in kitTables nor in excludedTables — decide whether a promoted leader needs it", name)
 			}
 		}
 	}
@@ -339,31 +340,56 @@ func TestKitDB_EveryTableIsClassified(t *testing.T) {
 	}
 }
 
-// TestSnapshot_SlimKitFitsLimitWithTenThousandRevisions is the regression the
-// live outage asked for: the leader's database dominated by deploy history must
-// still produce a publishable kit — and the same assertion must FAIL when the
-// revision history is packed, so the test cannot pass by accident.
-func TestSnapshot_SlimKitFitsLimitWithTenThousandRevisions(t *testing.T) {
+// everyRowPlans returns the kit's table list with every history cap removed:
+// the "pack the history too" comparison the size test uses as its teeth. It is
+// built from kitTables so a table added to the kit is automatically included.
+func everyRowPlans() []store.CopyPlan {
+	plans := make([]store.CopyPlan, 0, len(kitTables))
+	for _, c := range kitTables {
+		plans = append(plans, store.CopyPlan{Table: c.Table})
+	}
+	return plans
+}
+
+// TestSnapshot_KitFitsLimitWithTenThousandRevisions is the regression the live
+// outage asked for: a leader whose database is dominated by deploy history must
+// still produce a publishable kit, with the rollback window applied rather than
+// by carrying the history or by dropping it. The same assertions must FAIL when
+// every revision is packed, so the test cannot pass by accident.
+func TestSnapshot_KitFitsLimitWithTenThousandRevisions(t *testing.T) {
 	const revisions = 10_000
 	dataDir, _ := realDataDir(t, revisions)
 
 	payload, k, _ := snapshotPayload(t, dataDir)
 	if len(payload) > MaxConfigBytes {
-		t.Fatalf("slim kit is %d bytes, over the %d-byte Docker config limit", len(payload), MaxConfigBytes)
+		t.Fatalf("kit is %d bytes, over the %d-byte Docker config limit", len(payload), MaxConfigBytes)
 	}
 	// "Comfortably under": the live kit should sit far below the ceiling, not a
 	// few bytes beneath it, or the next week of growth repeats the outage.
 	if len(payload) > MaxConfigBytes/2 {
-		t.Fatalf("slim kit is %d bytes — under the limit but not comfortably (limit %d, want <= %d)", len(payload), MaxConfigBytes, MaxConfigBytes/2)
+		t.Fatalf("kit is %d bytes — under the limit but not comfortably (limit %d, want <= %d)", len(payload), MaxConfigBytes, MaxConfigBytes/2)
 	}
-	t.Logf("slim kit with %d revisions on disk: %d bytes (%.1f%% of the limit)",
+	t.Logf("kit with %d revisions on disk: %d bytes (%.1f%% of the limit)",
 		revisions, len(payload), 100*float64(len(payload))/float64(MaxConfigBytes))
 
-	// The excluded tables are ABSENT from the packed database. This is the
-	// assertion that gives the size number its meaning: an empty payload could
-	// also have come from a packer that dropped everything.
+	// The caps are APPLIED, not the history dropped: 10,000 revisions on disk
+	// arrive as the newest kitStackRevisionCap for that stack, and each of the
+	// three single-revision stacks arrives whole (its revision is its current
+	// one).
 	db, _ := packedDB(t, payload)
-	for _, table := range []string{"stack_revisions", "backups", "webhook_deliveries", "stack_status", "node_stats"} {
+	var bulk int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM stack_revisions WHERE stack_name = 'bulk-app'`).Scan(&bulk); err != nil {
+		t.Fatalf("count bulk-app revisions: %v", err)
+	}
+	if bulk != kitStackRevisionCap {
+		t.Errorf("packed kit carries %d revisions of bulk-app, want %d (the newest %d)", bulk, kitStackRevisionCap, kitStackRevisionCap)
+	}
+	if n := rowCount(t, db, "stack_revisions"); n != 3+kitStackRevisionCap {
+		t.Errorf("packed kit carries %d stack_revisions rows, want %d (3 stacks x 1 + %d)", n, 3+kitStackRevisionCap, kitStackRevisionCap)
+	}
+
+	// Tables that must not cross the fleet at all.
+	for _, table := range []string{"backups", "webhook_deliveries", "stack_status", "node_stats"} {
 		if n := rowCount(t, db, table); n != 0 {
 			t.Errorf("packed kit carries %d row(s) of %s, which must not cross the fleet", n, table)
 		}
@@ -375,11 +401,11 @@ func TestSnapshot_SlimKitFitsLimitWithTenThousandRevisions(t *testing.T) {
 		t.Errorf("packed kit carries %d stacks, want 4", n)
 	}
 
-	// Teeth: the same database, packing revisions too, does not fit. If the
-	// export ever went back to copying everything, the assertions above would
+	// Teeth: the same database, packing every revision, does not fit. If the
+	// export ever went back to copying the history, the assertions above would
 	// still hold for a small database — this one would not.
 	withRevisions := filepath.Join(t.TempDir(), "with-revisions.db")
-	if _, err := store.ExportDB(k.DBPath(), withRevisions, append(append([]string{}, authoritativeTables...), "stack_revisions")); err != nil {
+	if _, err := store.Export(k.DBPath(), withRevisions, everyRowPlans()); err != nil {
 		t.Fatalf("export with revisions: %v", err)
 	}
 	bigKit, err := k.packKit(withRevisions)
@@ -389,7 +415,68 @@ func TestSnapshot_SlimKitFitsLimitWithTenThousandRevisions(t *testing.T) {
 	if len(bigKit) <= MaxConfigBytes {
 		t.Fatalf("the with-revisions kit is %d bytes and fits the %d-byte limit — this test would not catch the regression it exists for", len(bigKit), MaxConfigBytes)
 	}
-	t.Logf("same fixture with revisions packed: %d bytes (%.1fx the limit)", len(bigKit), float64(len(bigKit))/float64(MaxConfigBytes))
+	t.Logf("same fixture with every revision packed: %d bytes (%.1fx the limit)", len(bigKit), float64(len(bigKit))/float64(MaxConfigBytes))
+}
+
+// TestSnapshot_KitStaysSmallWithFullHistory is the size guard that stops the
+// rollback window creeping back open. A live leader accumulates history
+// forever: this fixture gives two stacks 500 revisions each and two configs 200
+// versions each, then holds the packed kit under 40 % of the ceiling AND holds
+// the caps to the operator's numbers (5 and 10). Either drifting — a bigger cap,
+// or one that quietly stops being applied — fails here.
+func TestSnapshot_KitStaysSmallWithFullHistory(t *testing.T) {
+	const revisionsPerStack = 500
+	const versionsPerConfig = 200
+
+	dataDir, st := realDataDir(t, revisionsPerStack)
+	// A SECOND stack with its own 500 revisions: the cap must be per stack, not
+	// 500 rows for whichever stack the query happened to favour.
+	seedRevisions(t, st, "bulk-two", revisionsPerStack)
+	seedConfigVersions(t, st, "traefik_dynamic", versionsPerConfig)
+	seedConfigVersions(t, st, "lms_env", versionsPerConfig)
+
+	payload, _, _ := snapshotPayload(t, dataDir)
+
+	// The budget the operator set for the caps: under 40 % of the 512,000-byte
+	// Docker ceiling, with margin for a few more stacks.
+	const budgetPct = 40
+	if len(payload) > MaxConfigBytes*budgetPct/100 {
+		t.Fatalf("kit with %d revisions/stack and %d versions/config is %d bytes (%.1f%%), over the %d%% budget (%d bytes)",
+			revisionsPerStack, versionsPerConfig, len(payload),
+			100*float64(len(payload))/float64(MaxConfigBytes), budgetPct, MaxConfigBytes*budgetPct/100)
+	}
+	t.Logf("kit with %d x %d revisions and %d x %d config versions: %d bytes (%.1f%% of the limit)",
+		2, revisionsPerStack, 2, versionsPerConfig, len(payload),
+		100*float64(len(payload))/float64(MaxConfigBytes))
+
+	db, _ := packedDB(t, payload)
+	for _, stack := range []string{"bulk-app", "bulk-two"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM stack_revisions WHERE stack_name = ?`, stack).Scan(&n); err != nil {
+			t.Fatalf("count revisions of %s: %v", stack, err)
+		}
+		// 5 is kitStackRevisionCap, spelled out on purpose: it is the
+		// operator's number, and a silent change to it is exactly what this
+		// test exists to catch.
+		if n != 5 {
+			t.Errorf("kit carries %d revisions of %s, want 5 (the newest per stack)", n, stack)
+		}
+	}
+	for _, config := range []string{"traefik_dynamic", "lms_env"} {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM config_versions v JOIN configs c ON c.id = v.config_id WHERE c.name = ?`, config).Scan(&n); err != nil {
+			t.Fatalf("count versions of %s: %v", config, err)
+		}
+		if n != 10 {
+			t.Errorf("kit carries %d versions of %s, want 10 (the newest per config name)", n, config)
+		}
+	}
+
+	// And the history is still on the leader: the caps are a copy policy, never
+	// a delete. 2 stacks x 500 + the 3 single-revision stacks.
+	if n := rowCount(t, st.DB(), "stack_revisions"); n != 2*revisionsPerStack+3 {
+		t.Errorf("leader's own stack_revisions has %d rows, want %d", n, 2*revisionsPerStack+3)
+	}
 }
 
 // TestKitDB_AuthoritativeRowsSurviveRoundTrip proves fidelity table by table:
@@ -415,13 +502,22 @@ func TestKitDB_AuthoritativeRowsSurviveRoundTrip(t *testing.T) {
 	}
 	defer func() { _ = dst.Close() }()
 
-	// Row counts per authoritative table, source vs restored.
-	for _, table := range authoritativeTables {
-		want := rowCount(t, src.DB(), table)
-		got := rowCount(t, dst.DB(), table)
-		if got != want {
-			t.Errorf("%s: %d rows restored, want %d", table, got, want)
+	// Row counts: every verbatim table arrives whole. The two history tables
+	// arrive as a rollback window, asserted with their counts below.
+	for _, plan := range kitTables {
+		if plan.Selector != store.CopyAll {
+			continue
 		}
+		want := rowCount(t, src.DB(), plan.Table)
+		got := rowCount(t, dst.DB(), plan.Table)
+		if got != want {
+			t.Errorf("%s: %d rows restored, want %d", plan.Table, got, want)
+		}
+	}
+	// config_versions: the fixture holds one version of traefik_dynamic, under
+	// the cap, so the window is the whole history here.
+	if n := rowCount(t, dst.DB(), "config_versions"); n != rowCount(t, src.DB(), "config_versions") {
+		t.Errorf("config_versions: %d restored, want %d", n, rowCount(t, src.DB(), "config_versions"))
 	}
 
 	// Users: every name, token hash, role, scope and token_id index survives.
@@ -532,20 +628,62 @@ func TestKitDB_AuthoritativeRowsSurviveRoundTrip(t *testing.T) {
 	if lms.RepoURL.String != "https://github.com/example/test2-lms.git" || lms.SourceFile != "deploy/test2-lms.yaml" {
 		t.Errorf("stack provenance lost: %+v", lms)
 	}
-	// current_revision is kept as the pointer it is; the revision row behind it
-	// is deliberately absent (asserted below).
+	// current_revision is kept as the pointer it is, and the row behind it
+	// crossed too — that row is the rendered compose reconcile and rollback
+	// need, and its fidelity is asserted here rather than assumed.
 	if lms.CurrentRevision != 1000 {
 		t.Errorf("current_revision = %d, want 1000", lms.CurrentRevision)
 	}
+	wantRev, err := src.Revision(ctx, lms.Name, lms.CurrentRevision)
+	if err != nil {
+		t.Fatalf("source revision %d: %v", lms.CurrentRevision, err)
+	}
+	gotRev, err := dst.Revision(ctx, lms.Name, lms.CurrentRevision)
+	if err != nil {
+		t.Fatalf("restored kit has the stack pointer but not the revision row behind it (%d): %v", lms.CurrentRevision, err)
+	}
+	if gotRev.RenderedYAML != wantRev.RenderedYAML || gotRev.SourceYAML != wantRev.SourceYAML {
+		t.Errorf("restored revision %d changed:\n got %+v\nwant %+v", lms.CurrentRevision, gotRev, wantRev)
+	}
+	if gotRev.RenderedHash != wantRev.RenderedHash || gotRev.SourceFile != wantRev.SourceFile {
+		t.Errorf("restored revision %d lost its hash/source file: %+v", lms.CurrentRevision, gotRev)
+	}
 }
 
-// TestKitDB_MissingRevisionIsOrdinary checks the property the operator cares
-// about downstream: a stack whose current revision row is NOT in the kit still
-// reads back as a normal stack, and asking for that revision reports
-// ErrRevisionNotFound — a missing row, not a broken database.
-func TestKitDB_MissingRevisionIsOrdinary(t *testing.T) {
+// seedConfigVersions appends n history rows to a config, the way the console
+// does (one row per edit, newest id last).
+func seedConfigVersions(t *testing.T, st *store.Store, config string, n int) {
+	t.Helper()
 	ctx := context.Background()
-	dataDir, _ := realDataDir(t, 20)
+	tx, err := st.DB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin config version seed: %v", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for i := 1; i <= n; i++ {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO config_versions (config_id, content, hash, created_at)
+			 SELECT id, ?, ?, ? FROM configs WHERE name = ?`,
+			fmt.Sprintf("# version %d of %s\n", i, config), fmt.Sprintf("hash-%d", i),
+			int64(1_790_000_000+i), config,
+		); err != nil {
+			t.Fatalf("insert config version %d of %s: %v", i, config, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit config version seed: %v", err)
+	}
+}
+
+// TestKitDB_PromotedNodeReadsCurrentRevision is the property the operator asked
+// for: the row current_revision points at crosses the fleet, so a promoted
+// leader can reconcile against the live manifest and roll the deploy back — and
+// the revisions beyond the window do not, so the failure they produce is
+// ErrRevisionNotFound, an absent row, not a broken database.
+func TestKitDB_PromotedNodeReadsCurrentRevision(t *testing.T) {
+	ctx := context.Background()
+	// 20 revisions of bulk-app on the source, one each of the other three.
+	dataDir, src := realDataDir(t, 20)
 	payload, k, _ := snapshotPayload(t, dataDir)
 
 	restored := t.TempDir()
@@ -554,29 +692,189 @@ func TestKitDB_MissingRevisionIsOrdinary(t *testing.T) {
 	}
 	st, err := store.Open(filepath.Join(restored, "data.db"))
 	if err != nil {
-		t.Fatalf("open slim DB: %v", err)
+		t.Fatalf("open promoted DB: %v", err)
 	}
 	defer func() { _ = st.Close() }()
 
-	row, err := st.Stack(ctx, "test2-lms")
+	row, err := st.Stack(ctx, "bulk-app")
 	if err != nil {
-		t.Fatalf("stack row unreadable in a slim kit: %v", err)
+		t.Fatalf("stack row unreadable in the kit: %v", err)
 	}
-	revs, err := st.ListRevisions(ctx, "test2-lms", 10)
+	if row.CurrentRevision != 20 {
+		t.Fatalf("current_revision = %d, want 20", row.CurrentRevision)
+	}
+
+	// The current revision is readable, with the rendered compose the drift
+	// check and rollback consume.
+	want, err := src.Revision(ctx, "bulk-app", 20)
 	if err != nil {
-		t.Fatalf("listing revisions of a slim kit errored: %v", err)
+		t.Fatalf("source revision 20: %v", err)
 	}
-	if len(revs) != 0 {
-		t.Fatalf("slim kit carries %d revisions for test2-lms, want 0", len(revs))
+	got, err := st.Revision(ctx, "bulk-app", 20)
+	if err != nil {
+		t.Fatalf("the kit has the stack pointer but not the revision behind it: %v", err)
 	}
-	if _, err := st.Revision(ctx, row.Name, row.CurrentRevision); err == nil {
-		t.Fatal("expected ErrRevisionNotFound for a revision that did not cross the fleet")
-	} else if !errors.Is(err, store.ErrRevisionNotFound) {
-		t.Fatalf("missing revision reported as %v, want ErrRevisionNotFound (an absent row is normal, not corruption)", err)
+	if got.RenderedYAML != want.RenderedYAML || got.SourceYAML != want.SourceYAML || got.RenderedHash != want.RenderedHash {
+		t.Errorf("current revision changed crossing the fleet:\n got %+v\nwant %+v", got, want)
 	}
-	// The rest of the control plane is unaffected by that absence.
+
+	// Ten of the twenty history rows are outside the window: asking for one is
+	// an absent row, classified as such.
+	revs, err := st.ListRevisions(ctx, "bulk-app", 0)
+	if err != nil {
+		t.Fatalf("list revisions of the promoted stack: %v", err)
+	}
+	if len(revs) != kitStackRevisionCap {
+		t.Errorf("kit carries %d revisions of bulk-app, want %d", len(revs), kitStackRevisionCap)
+	}
+	for _, r := range revs {
+		if r.Revision <= 20-kitStackRevisionCap {
+			t.Errorf("kit carries revision %d, older than the newest-%d window", r.Revision, kitStackRevisionCap)
+		}
+	}
+	if _, err := st.Revision(ctx, "bulk-app", 15); !errors.Is(err, store.ErrRevisionNotFound) {
+		t.Errorf("Revision(15) = %v, want ErrRevisionNotFound (outside the window)", err)
+	}
+
+	// The rest of the control plane is unaffected.
 	if users, err := st.CountUsers(ctx); err != nil || users != 2 {
 		t.Fatalf("CountUsers = %d, %v; want 2", users, err)
+	}
+}
+
+// TestKitDB_CurrentRevisionKeptWhenOlderThanWindow is the rollback case: a
+// stack's current_revision can point at a row that is older than the newest
+// five (a rollback re-points the pointer and leaves the newer rows in history).
+// "The newest N" is therefore not enough — the current row must be added to the
+// window explicitly, or exactly the manifest a rollback needs is the one that
+// does not cross.
+func TestKitDB_CurrentRevisionKeptWhenOlderThanWindow(t *testing.T) {
+	ctx := context.Background()
+	// Eight revisions, then a rollback: current_revision moves from 8 to 3.
+	dataDir, src := realDataDir(t, 8)
+	if _, err := src.DB().ExecContext(ctx,
+		`UPDATE stacks SET current_revision = 3 WHERE name = 'bulk-app'`); err != nil {
+		t.Fatalf("simulate rollback: %v", err)
+	}
+	// The small case from the brief, for completeness: three revisions with the
+	// current one in the MIDDLE, so a copy that took "the newest" would keep 3
+	// and drop the live one — trivially inside the cap, so it is the pointer
+	// rule being asserted, not the window size.
+	seedRevisions(t, src, "mid-current", 3)
+	if _, err := src.DB().ExecContext(ctx,
+		`UPDATE stacks SET current_revision = 2 WHERE name = 'mid-current'`); err != nil {
+		t.Fatalf("simulate mid-current stack: %v", err)
+	}
+
+	payload, k, _ := snapshotPayload(t, dataDir)
+	db, _ := packedDB(t, payload)
+
+	// Newest five (4..8) plus the current row (3).
+	const wantRows = kitStackRevisionCap + 1
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM stack_revisions WHERE stack_name = 'bulk-app'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != wantRows {
+		t.Errorf("kit carries %d revisions of the rolled-back stack, want %d (newest %d + current)", n, wantRows, kitStackRevisionCap)
+	}
+
+	want, err := src.Revision(ctx, "bulk-app", 3)
+	if err != nil {
+		t.Fatalf("source revision 3: %v", err)
+	}
+	restored := t.TempDir()
+	if _, err := k.extractKitTo(restored, payload, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(restored, "data.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	row, err := st.Stack(ctx, "bulk-app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.CurrentRevision != 3 {
+		t.Fatalf("current_revision = %d, want 3", row.CurrentRevision)
+	}
+	got, err := st.Revision(ctx, "bulk-app", row.CurrentRevision)
+	if err != nil {
+		t.Fatalf("the current revision of a rolled-back stack did not cross: %v", err)
+	}
+	if got.RenderedYAML != want.RenderedYAML {
+		t.Errorf("current revision of a rolled-back stack changed: got %q want %q", got.RenderedYAML, want.RenderedYAML)
+	}
+	// The newest row crossed too (it is inside the window), so the leader can
+	// still see what was deployed before the rollback.
+	if _, err := st.Revision(ctx, "bulk-app", 8); err != nil {
+		t.Errorf("revision 8 (inside the newest-%d window) is missing: %v", kitStackRevisionCap, err)
+	}
+	// The rows below the window and below current are gone.
+	for _, rev := range []int64{1, 2} {
+		if _, err := st.Revision(ctx, "bulk-app", rev); !errors.Is(err, store.ErrRevisionNotFound) {
+			t.Errorf("Revision(%d) = %v, want ErrRevisionNotFound", rev, err)
+		}
+	}
+
+	// Three revisions, current in the middle: all three cross (inside the cap)
+	// and the middle one — the live manifest — is readable with its content.
+	// Total: the rolled-back stack, this one, and the fixture's three
+	// single-revision stacks.
+	if n := rowCount(t, db, "stack_revisions"); n != wantRows+3+3 {
+		t.Errorf("kit carries %d stack_revisions rows, want %d (rolled-back + mid-current + 3 single-revision stacks)", n, wantRows+3+3)
+	}
+	mid, err := st.Revision(ctx, "mid-current", 2)
+	if err != nil {
+		t.Fatalf("the middle revision of a three-revision stack did not cross: %v", err)
+	}
+	if mid.RenderedYAML == "" {
+		t.Error("middle revision arrived without its rendered manifest")
+	}
+}
+
+// TestKitDB_ConfigVersionsCappedPerConfig asserts the other half of the
+// operator's window: ten versions per config NAME, not ten rows in total, and
+// nothing removed from the leader's own table.
+func TestKitDB_ConfigVersionsCappedPerConfig(t *testing.T) {
+	dataDir, src := realDataDir(t, 3)
+	seedConfigVersions(t, src, "traefik_dynamic", 200) // cluster scope
+	seedConfigVersions(t, src, "lms_env", 3)           // service scope, under the cap
+
+	payload, _, _ := snapshotPayload(t, dataDir)
+	db, _ := packedDB(t, payload)
+
+	var capped, small int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM config_versions v JOIN configs c ON c.id = v.config_id WHERE c.name = 'traefik_dynamic'`).Scan(&capped); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM config_versions v JOIN configs c ON c.id = v.config_id WHERE c.name = 'lms_env'`).Scan(&small); err != nil {
+		t.Fatal(err)
+	}
+	if capped != kitConfigVersionCap {
+		t.Errorf("kit carries %d versions of traefik_dynamic, want %d (the newest per config name)", capped, kitConfigVersionCap)
+	}
+	if small != 3 {
+		t.Errorf("kit carries %d versions of lms_env, want 3 (under the cap, so all of them)", small)
+	}
+
+	// The window is the NEWEST ten: version contents are numbered, so the
+	// oldest survivors must be the tail of the 200, not its head.
+	var oldest string
+	if err := db.QueryRow(`SELECT v.content FROM config_versions v JOIN configs c ON c.id = v.config_id
+		WHERE c.name = 'traefik_dynamic' ORDER BY v.id ASC LIMIT 1`).Scan(&oldest); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(oldest, "# version 191 of traefik_dynamic") {
+		t.Errorf("oldest kept version is %q, want version 191 (the ten newest of 200)", strings.TrimSpace(oldest))
+	}
+
+	// Nothing was destroyed locally: the leader keeps the whole table, so a
+	// rollback further back than the window is still a leader-side operation.
+	if n := rowCount(t, src.DB(), "config_versions"); n != 201+3 {
+		t.Errorf("leader's own config_versions has %d rows, want 204 — the cap must not delete from the source", n)
 	}
 }
 
@@ -747,8 +1045,9 @@ func TestAdoptOnLeadership_SlimKitServesTheSameControlPlane(t *testing.T) {
 		t.Errorf("adopted credential ciphertext changed: %x", cred.PasswordCiphertext)
 	}
 
-	// The stack LIST, intact — with no revision behind it, which must read as
-	// "no stored revision", not as damage.
+	// The stack LIST, intact — and the window of revisions behind it, including
+	// the one current_revision points at, which is what a promoted leader needs
+	// to reconcile or roll back a deploy without waiting for a re-deploy.
 	stacks, err := st.ListStacks(ctx)
 	if err != nil {
 		t.Fatalf("adopted stack list: %v", err)
@@ -763,13 +1062,20 @@ func TestAdoptOnLeadership_SlimKitServesTheSameControlPlane(t *testing.T) {
 	if row.RepoURL.String != "https://github.com/example/test2-lms.git" || row.SourceFile != "deploy/test2-lms.yaml" {
 		t.Errorf("adopted stack provenance lost: %+v", row)
 	}
-	if revs, err := st.ListRevisions(ctx, row.Name, 10); err != nil {
+	if revs, err := st.ListRevisions(ctx, row.Name, 0); err != nil {
 		t.Errorf("listing revisions of an adopted stack errored: %v", err)
-	} else if len(revs) != 0 {
-		t.Errorf("adopted %d revisions, want 0 (they do not cross the fleet)", len(revs))
+	} else if len(revs) != 1 {
+		t.Errorf("adopted %d revisions for %s, want its current one", len(revs), row.Name)
 	}
-	if _, err := st.Revision(ctx, row.Name, row.CurrentRevision); !errors.Is(err, store.ErrRevisionNotFound) {
-		t.Errorf("missing revision reported as %v, want ErrRevisionNotFound", err)
+	cur, err := st.Revision(ctx, row.Name, row.CurrentRevision)
+	if err != nil {
+		t.Fatalf("adopted stack points at revision %d but the row did not cross: %v", row.CurrentRevision, err)
+	}
+	if cur.RenderedYAML == "" || cur.RenderedHash != "hash-"+row.Name {
+		t.Errorf("adopted current revision lost its rendered manifest: %+v", cur)
+	}
+	if _, err := st.Revision(ctx, row.Name, row.CurrentRevision-1); !errors.Is(err, store.ErrRevisionNotFound) {
+		t.Errorf("a revision outside the window reported as %v, want ErrRevisionNotFound", err)
 	}
 
 	// The adopted file is a fully migrated database: the reopened handle is

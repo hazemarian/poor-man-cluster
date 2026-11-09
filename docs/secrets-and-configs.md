@@ -77,6 +77,12 @@ manifest.
   (`pmcluster config history` / `rollback`). Editing a config records the
   previous value; rolling back restores it. The console shows content,
   history, and a rollback button.
+- **A promoted leader carries the newest 10 versions per config.** The
+  survivor kit's `data.db` is windowed (see `internal/controlplane/kitdb.go`),
+  so after a failover `config history` shows the last ten edits of each config,
+  not its whole archive; the leader that recorded an older version keeps it, so
+  a rollback further back than the window is a leader-side operation. The
+  current config CONTENT always crosses, at every scope.
 
 ## Scopes: `cluster` vs `service`
 

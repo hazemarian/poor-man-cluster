@@ -41,15 +41,21 @@ the rendered `config/` tree) and `pmcluster_state_key_<ts>` (the
 
 The `data.db` there is an EXPORT of the authoritative tables (users and token
 hashes, managed credentials, the stack list, webhook sources, registries,
-settings, configs, secrets, site-cert metadata, failover markers), not the
-leader's database file. Stack revisions, backup audit rows, webhook delivery
-history, stack status and node stats are deliberately absent: the whole file had
-grown past Docker's 500 KiB config ceiling in revision payloads, so no snapshot
-was publishable and anything created since the last accepted one lived on one
-disk. A promoted leader therefore serves the same auth, settings, secrets and
-stack list, and reports "no stored revision" for a stack until it is re-deployed;
-`config_versions` is kept because service-scope config history is not in any
-repo. The full `data.db` still rides the tarball/offsite backup path.
+settings, configs, secrets, site-cert metadata, failover markers), plus a short
+rollback window on the two tables that grow without bound: each stack's newest 5
+revisions **and** the one its `current_revision` points at (not always the
+newest — a rollback leaves the pointer on an older row), and the newest 10 config
+versions per config name. The rest of that history, plus backup audit rows,
+webhook delivery history, stack status and node stats, stays behind: the whole
+file had grown past Docker's 500 KiB config ceiling in revision payloads, so no
+snapshot was publishable and anything created since the last accepted one lived
+on one disk. A promoted leader therefore serves the same auth, settings, secrets
+and stack list, reconciles each stack against its current rendered manifest
+without waiting for a re-deploy, and can roll a deploy or a config edit back
+within the window; a revision older than the window still reads as "no stored
+revision" until the stack is re-deployed, and a config rollback further back than
+ten versions is a leader-side operation. The full `data.db` still rides the
+tarball/offsite backup path.
 
 Until this drill existed, that pair was only ever exercised when a leader
 actually died. The drill restores it into a temporary directory using the same

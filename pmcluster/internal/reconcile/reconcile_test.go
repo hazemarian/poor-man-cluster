@@ -919,16 +919,17 @@ func TestRunOnce_StorageFailoverEnabledMovesToHealthyAlternate(t *testing.T) {
 	}
 }
 
-// TestRunOnce_StackWithoutRevisionIsNotAnError is the adoption case: a manager
-// that gains leadership adopts a slim control-plane kit, which carries the stack
-// ROWS but not their revisions (revisions do not cross the fleet). The pass must
-// keep serving that stack — no error recorded, no "error" badge — and must say
-// once, not on every pass, why the drift check is skipped.
+// TestRunOnce_StackWithoutRevisionIsNotAnError is the adoption case: a promoted
+// leader can hold a stack ROW without the revision its pointer names — a stack
+// deployed after the kit snapshot, or a revision older than the kit's
+// five-revision window. The pass must keep serving that stack — no error
+// recorded, no "error" badge — and must say once, not on every pass, why the
+// drift check is skipped.
 func TestRunOnce_StackWithoutRevisionIsNotAnError(t *testing.T) {
 	ctx := context.Background()
 	st := newTestStore(t)
 	// The stack row exists; its revision row does not. This is what
-	// controlplane's authoritative-table export leaves behind.
+	// controlplane's windowed export leaves behind for an older revision.
 	if _, err := st.DB().ExecContext(ctx,
 		`INSERT INTO stacks (name, current_revision, repo_url, source_file, created_at, updated_at)
 		 VALUES ('demo', 1004, 'https://github.com/example/demo.git', 'deploy/demo.yaml', 1, 1)`,
@@ -977,14 +978,14 @@ func TestRunOnce_StackWithoutRevisionIsNotAnError(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
 	notices := 0
 	for _, line := range lines {
-		if strings.Contains(line, "slim control-plane kit") {
+		if strings.Contains(line, "outside the kit's revision window") {
 			notices++
 			if !strings.Contains(line, `"level":"info"`) {
-				t.Errorf("slim-kit notice is not info level: %s", line)
+				t.Errorf("no-stored-revision notice is not info level: %s", line)
 			}
 		}
 	}
 	if notices != 1 {
-		t.Errorf("slim-kit notice logged %d times across 2 passes, want 1; log:\n%s", notices, logs.String())
+		t.Errorf("no-stored-revision notice logged %d times across 2 passes, want 1; log:\n%s", notices, logs.String())
 	}
 }

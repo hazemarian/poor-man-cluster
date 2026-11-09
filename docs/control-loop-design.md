@@ -83,23 +83,33 @@ with the reconcile loop disabled still keeps its control plane replicated. See
 
 **What crosses the fleet, and what does not.** The kit's `data.db` is not the
 leader's file: `controlplane` exports a fresh SQLite database that runs the
-migrations and copies the authoritative tables only — `users` (token hashes,
-roles, scopes), `managed_credentials`, `stacks` (name, repo, deploy file,
+migrations and copies the authoritative tables — `users` (token hashes, roles,
+scopes), `managed_credentials`, `stacks` (name, repo, deploy file,
 current-revision pointer), `webhook_sources`, `registries`, `cluster_settings`,
-`configs`, `config_versions`, `secrets`, `site_certs`, `stack_failover`.
-`stack_revisions`, `backups`, `webhook_deliveries`, `stack_status` and
-`node_stats` stay behind. The reasons are in `internal/controlplane/kitdb.go` and
-held to the schema by a test that fails when a migration adds a table without a
-decision. This was forced by measurement: the leader's `data.db` reached 5.2 MB,
-3.7 MB of it revisions, 538 KB gzipped against the 512 KB ceiling, so every
-publish was refused for days and the API keys, settings and secrets created in
-that window existed only on one disk. A promoted leader now serves identical
-auth, settings, secrets and stack LIST; a stack arrives without its revision, so
-`Sync` reports "no stored revision on this node" (telemetry status `skipped`)
-and the reconcile loop skips its drift check for that stack — once, at info —
-instead of marking it errored. Re-deploying from the repo rebuilds the history.
-`VACUUM INTO` was rejected for this: it copies everything, which is precisely
-what does not fit.
+`configs`, `secrets`, `site_certs`, `stack_failover` — plus a SHORT ROLLBACK
+WINDOW on the two tables that grow without bound: `stack_revisions` arrives as
+each stack's newest 5 revisions **and** the row `current_revision` points at
+(which is not always one of them — a rollback leaves the pointer on an older
+row), and `config_versions` as the newest 10 versions per config name, row ids
+preserved so a rollback names the same row it would on the leader. Everything
+else in those two tables, plus `backups`, `webhook_deliveries`, `stack_status`
+and `node_stats`, stays behind. The caps live in one place
+(`internal/controlplane/kitdb.go`) and are held by tests that pack 500
+revisions and 200 versions per group and fail if either the caps or the size
+budget drift.
+
+This was forced by measurement: the leader's `data.db` reached 5.2 MB, 3.7 MB
+of it revisions, 538 KB gzipped against the 512 KB ceiling, so every publish
+was refused for days and the API keys, settings and secrets created in that
+window existed only on one disk. A promoted leader now serves identical auth,
+settings, secrets and stack LIST, can reconcile each stack against its current
+rendered manifest without waiting for a re-deploy, and can roll a deploy back
+within the window. A revision outside the window still reads as "no stored
+revision on this node" (telemetry status `skipped`), handled once, at info,
+instead of marking the stack errored; a config rollback further back than ten
+versions is a leader-side operation, because only the leader holds the older
+rows. `VACUUM INTO` was rejected for this: it copies everything, which is
+precisely what does not fit.
 
 **Adoption happens at startup AND on leadership gain.** Two call sites run the
 same predicate, and they are the only two:
