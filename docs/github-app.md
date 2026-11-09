@@ -6,7 +6,7 @@ repositories and one manager:
 | Today | Replaced by |
 |---|---|
 | a personal OAuth token (`GH_PAT`) in every repo's Actions secrets, used through a global `git config insteadOf` rewrite | `POST /api/github/token` — a workflow mints a one-hour installation token per job |
-| a classic PAT with `read:packages` stored by `pmcluster registry add ghcr.io` | the same App's installation token is the GHCR password at deploy time |
+| a classic PAT with `read:packages` stored by `pmcluster registry add ghcr.io` | the same App's installation token, fetched by docker's credential helper at pull time |
 
 The App's private key lives **only** in pmcluster's encrypted control-plane
 store. The installation token derived from it is never written to `data.db`,
@@ -17,6 +17,7 @@ Sections: [1 model](#1-the-model-and-its-ceiling) ·
 [3 configure the cluster](#3-configure-the-cluster) ·
 [4 the CI broker](#4-the-ci-broker) ·
 [5 image pulls](#5-image-pulls) ·
+[5.1 the credential helper](#51-the-credential-helper-pull-time-not-a-timer) ·
 [6 doctor and the console](#6-doctor-and-the-console) ·
 [7 failure modes](#7-failure-modes) ·
 [8 rotation](#8-rotation) ·
@@ -203,33 +204,88 @@ Notes that matter:
 
 ## 5. Image pulls
 
-When an App is configured, the daemon logs in to GHCR with its installation
-token at startup and every 25 minutes:
+A ghcr.io pull authenticates with an installation token, user
+`x-access-token`. The token is fetched **when the pull happens**, by a docker
+credential helper, from a listener the cluster publishes on every node. Nothing
+durable is written: no `docker login`, no credential in
+`~/.docker/config.json`, no 25-minute refresh loop, and therefore nothing that
+can be stale.
 
-- user: `x-access-token`
-- password: the minted installation token (stdin, never argv)
+### 5.1 The credential helper: pull-time, not a timer
 
-The token is reused for 50 minutes and refreshed by a single mint even under
-concurrent pulls. The login runs every 25 minutes — two logins per token
-lifetime — so docker's config never holds a credential that has already
-expired: a token minted at t=0 expires at t=60, the mint refreshes at t=50, and
-the login at t=50 writes the new one. `docker stack deploy
---with-registry-auth` then forwards the current login to workers exactly as it
-did for the stored registry credential.
+An installation token lives about an hour. A design that logs in on a timer
+holds a credential in docker's config that expires between ticks — after a
+manager restart, a paused daemon, or an hour with no tick at all — and the
+symptom is a `401` that reads like a missing image. So the credential is
+requested per pull instead:
 
-Precedence is deliberate:
+```
+dockerd/CLI ──► docker-credential-pmcluster (host, /usr/local/bin)
+                    │  presents /var/lib/docker/swarm/certificates/swarm-node.crt
+                    ▼
+          127.0.0.1:9443  (ingress-published on EVERY node → the edge task)
+                    │  TLS + client certificate verified against the swarm root CA
+                    ▼
+          pmcluster-edge  POST /cred/v1/token  {"server":"ghcr.io"}
+                    │  Bearer (the console's own token)
+                    ▼
+          leader's daemon  POST /api/github/pull-credential
+                    │  signs the App JWT, mints the installation token
+                    ▼
+          {username: "x-access-token", secret: <token>, expires_at: …}
+```
 
-1. App configured and its login succeeds → the stored `ghcr.io` row from
-   `pmcluster registry add` is **skipped** for that daemon run, so docker's
-   config holds the fresher credential.
-2. No App, or the App login fails → the stored registry credential is replayed
-   unchanged. The existing path is never broken by a missing/broken App.
-3. Other registry hosts are untouched in both cases.
+The pieces, and why each is where it is:
 
-Nothing about the token is persisted by pmcluster. `docker login` writes it to
-Docker's own `~/.docker/config.json`, which is the mechanism
-`--with-registry-auth` already depends on; `data.db` holds only the encrypted
-App key.
+| Piece | Where | Why |
+|---|---|---|
+| `docker-credential-pmcluster` | a symlink at `/usr/local/bin` to the `pmcluster` binary (`cluster up`/`cluster update` install it; each daemon re-installs its own at startup) | docker invokes a helper by name (`docker-credential-<suffix>`); the same binary is the CLI, the daemon and the helper, dispatched on `argv[0]` |
+| `credHelpers["ghcr.io"] = "pmcluster"` | `/root/.docker/config.json`, **merged** | docker only consults a helper for a host named there. The merge preserves every other key — other registries' `auths`, another `credsStore`, proxies — and is a no-op when the entry is already correct |
+| the listener | `pmcluster-edge`, port 9443, `mode: ingress` | the routing mesh answers on `127.0.0.1:9443` on every node and forwards to the one task that can mint, so a node's helper needs no node IP, no socket and no daemon proxy. Same availability shape as the collector's 4318 |
+| the minter call | the daemon, `POST /api/github/pull-credential` | the App's private key lives in the leader's store; only the daemon can sign the JWT |
+
+**The certificate rule.** The listener accepts a client only when its TLS
+certificate is signed by this swarm's root CA **and**
+
+- `O` equals this swarm's ID (`GET /api/cluster/info` → `swarm.id`), and
+- `CN` (the node ID — not the hostname) is a current member of the swarm's
+  node list.
+
+Anything else — no certificate, a foreign CA, another swarm's certificate, a
+node that left, an expired certificate — is refused before the handler runs.
+There is no shared secret: swarm already issued every node a per-node identity,
+and a second credential would be one more thing to distribute and rotate. The
+rule lives in `pmcluster/internal/pullcred/verify.go`.
+
+**Availability.** The listener runs on the edge, which is pinned to the leader.
+A pull therefore requires the leader (and its daemon) to be reachable — the same
+dependency the OTLP collector already imposes. A node that cannot reach it fails
+the pull with the connection error on stderr rather than hanging.
+
+**What is left in docker's config.** Nothing for ghcr.io: `store` and `erase`
+are deliberate no-ops, so `docker login ghcr.io` on a node has nothing to keep.
+Every other registry is untouched.
+
+### 5.2 Verifying it
+
+```sh
+# the whole chain in one command, exactly as docker runs it
+printf 'ghcr.io\n' | /usr/local/bin/docker-credential-pmcluster get
+# → {"ServerURL":"ghcr.io","Username":"x-access-token","Secret":"…"}   (exit 0)
+
+# or, wrapped with the diagnosis
+pmcluster doctor      # the `github app` line now ends with
+                      # "docker-credential-pmcluster get ghcr.io returned a token"
+```
+
+`pmcluster doctor` runs the helper, so it proves helper → certificate →
+listener → daemon → App → GitHub. The mint alone (the console's Test button)
+proves only the key.
+
+Precedence for ghcr.io is now: the helper (App), then a stored
+`pmcluster registry add ghcr.io` credential as the fallback when no App is
+configured — the same rule as before, with the App no longer replayed by
+`docker login`.
 
 ## 6. Doctor and the console
 
@@ -242,7 +298,8 @@ App key.
 | key/id rejected by GitHub | **fail** — "the app key/id was rejected" |
 | installation gone (uninstalled, wrong app) | **fail** — "the installation is gone or not visible" |
 | `contents:read` or `packages:read` missing | **fail** — names the permission and how to grant it |
-| token minted and both probes pass | **ok** |
+| token minted, both probes pass, and the node's helper returns a token | **ok** |
+| token minted but `docker-credential-pmcluster get ghcr.io` fails | **fail** — names the helper and `pmcluster-edge` |
 
 The console's Settings page shows the app id, installation id, probe targets,
 and the granted permission map, with a warning when either required permission
@@ -257,7 +314,11 @@ sentence. It never displays the key or a token.
 | `502` with "installation is gone" | app uninstalled, or `--installation-id` belongs to another app | reinstall, then `pmcluster github app set --installation-id …` |
 | `502` with "key was rejected" | wrong `.pem` for the App id, or the key was regenerated in GitHub | download the current key, `pmcluster github app set --key-file …` |
 | `502` with "lacks a required permission" | App permissions edited but not approved on the installation | GitHub → Installations → the app → approve the new permissions |
-| pulls fail an hour after a manager restart, broker still works | no daemon refresh — this is what the 40-minute loop prevents; if it is running, the App login itself is failing | daemon log: "GitHub App registry login failed"; run `pmcluster github app test` |
+| a pull fails with `unauthorized` while `pmcluster github app test` passes | the pull path (helper → edge → daemon), not the key | `pmcluster doctor`; `docker-credential-pmcluster get ghcr.io` and read its stderr |
+| a pull fails with `connection refused` on 9443 | the edge is not running on the leader, or the port is not published | `docker service ps pmcluster_edge_pmcluster-edge`; the edge logs "credential listener disabled" with the reason |
+| a pull fails with `certificate signed by unknown authority` / `bad certificate` | the node's certificate does not chain to the swarm CA, or the listener's CA mount is missing | `openssl x509 -in /var/lib/docker/swarm/certificates/swarm-node.crt -noout -subject -issuer`; the subject must show this swarm's ID and node ID |
+| `docker-credential-pmcluster: not found` on a node | the helper was never installed there | run `pmcluster cluster update` on that node (or restart its daemon, which installs it) |
+| a pull fails an hour after a manager restart, broker still works | the old timer design; it no longer exists | if you still see this, the node's `config.json` was edited by hand — re-run `cluster update` |
 | `image pulls work, go mod download gets 403` | token minted but the App lacks Contents: Read, or the installation does not include that repo | App permission + installation repository selection; `--probe-repo` catches it in doctor |
 
 ## 8. Rotation

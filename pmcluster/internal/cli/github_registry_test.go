@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,4 +138,31 @@ func testCLIKeyPEM(t *testing.T) []byte {
 		t.Fatalf("marshal key: %v", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+}
+
+// TestTheRegistryTimerIsGone: the 25-minute refreshGitHubAppLogins loop existed
+// because a token written into docker's config goes stale after an hour. The
+// credential helper fetches a token per pull instead, so there is no login to
+// refresh — and a call site that came back would revive a timer that writes a
+// credential to disk behind the helper's back.
+//
+// This asserts the source, not a runtime property: a goroutine that is not
+// started cannot be observed, and the call site is what a future edit would
+// reintroduce.
+func TestTheRegistryTimerIsGone(t *testing.T) {
+	for _, file := range []string{"serve.go", "github_registry.go"} {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		if strings.Contains(string(src), "refreshGitHubAppLogins") {
+			t.Errorf("%s still references refreshGitHubAppLogins: the pull-time credential helper replaced the login timer", file)
+		}
+	}
+	if strings.Contains(func() string {
+		b, _ := os.ReadFile("serve.go")
+		return string(b)
+	}(), "25*time.Minute") {
+		t.Error("serve.go still has a 25-minute registry login ticker")
+	}
 }

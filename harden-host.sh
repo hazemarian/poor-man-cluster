@@ -54,8 +54,13 @@ WAN_PORTS="${WAN_PORTS:-22 80 443}"
 #          can read telemetry at 127.0.0.1:8000 on every node. It carries the
 #          admin credential, so a WAN-reachable 8000 is a cluster-wide telemetry
 #          read/write exposure.
+#   9443 = the edge's pull credential listener, published on the routing mesh so
+#          a node's docker-credential-pmcluster can reach it at 127.0.0.1:9443.
+#          It demands a swarm client certificate, but an internet-reachable port
+#          that mints GHCR tokens does not belong on the WAN: a public 9443 would
+#          let anyone probe it for certificate-policy bugs.
 # Add any other published-but-private ports here as you expose them.
-RESTRICTED_DOCKER_PORTS="${RESTRICTED_DOCKER_PORTS:-4318 8000}"
+RESTRICTED_DOCKER_PORTS="${RESTRICTED_DOCKER_PORTS:-4318 8000 9443}"
 
 # Host-bound control-plane ports that must not be WAN-reachable:
 #   9090 = pmcluster management API (bound on all interfaces, Traefik reaches

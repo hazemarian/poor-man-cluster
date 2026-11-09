@@ -131,6 +131,7 @@ func (r *realClient) Info(ctx context.Context) (runtime.Info, error) {
 		MemTotal:              i.MemTotal,
 		SwarmLocalNodeState:   string(i.Swarm.LocalNodeState),
 		SwarmControlAvailable: i.Swarm.ControlAvailable,
+		SwarmID:               swarmClusterID(i.Swarm.Cluster),
 		SwarmManagers:         i.Swarm.Managers,
 		SwarmNodes:            i.Swarm.Nodes,
 	}, nil
@@ -1159,3 +1160,13 @@ func isNotFoundString(err error) bool {
 }
 
 var errNotFound = errors.New("not found")
+
+// swarmClusterID reads the Raft cluster ID from the engine's info response. A
+// node that is not in a swarm has no Cluster, which is an empty ID — not an
+// error: `cluster up` calls Info before the swarm exists.
+func swarmClusterID(c *swarm.ClusterInfo) string {
+	if c == nil {
+		return ""
+	}
+	return c.ID
+}

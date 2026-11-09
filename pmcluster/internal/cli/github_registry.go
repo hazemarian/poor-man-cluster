@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"time"
 
 	"github.com/rs/zerolog"
 
@@ -95,40 +94,4 @@ func registryLoginTargets(regs []*store.Registry, appApplied bool) []*store.Regi
 		out = append(out, r)
 	}
 	return out
-}
-
-// refreshGitHubAppLogins keeps the GHCR login fresh. A token lives an hour, so
-// a manager that only logged in at startup would fail private pulls an hour
-// later — long before the next deploy notices.
-//
-// It is a no-op when no app is configured. Failures are logged and retried on
-// the next tick: a GitHub outage must not stop deploys that use public images
-// or a stored credential.
-func refreshGitHubAppLogins(ctx context.Context, st *store.Store, cfg *config.Config, log zerolog.Logger, every time.Duration) {
-	if every <= 0 {
-		// 25 minutes, not 40: a token minted at t=0 expires at t=60, and the
-		// mint refreshes at t=50. A 40-minute tick would log the SAME token in
-		// at t=40 (still cached) and only mint a new one at t=80 — twenty
-		// minutes after the docker config's token had already expired. Two
-		// ticks per token lifetime keeps a fresh credential in docker's config
-		// with at least 10 minutes of headroom at every tick.
-		every = 25 * time.Minute
-	}
-	ticker := time.NewTicker(every)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			configured, err := githubAppLogin(ctx, st, cfg, log)
-			if err != nil {
-				log.Warn().Err(err).Msg("GitHub App registry re-login had issues; private images may fail to pull")
-				continue
-			}
-			if configured {
-				log.Debug().Msg("GitHub App registry login refreshed")
-			}
-		}
-	}
 }

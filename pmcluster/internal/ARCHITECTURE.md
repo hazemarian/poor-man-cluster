@@ -105,6 +105,14 @@ prose, not the behaviour. `scripts/check-mermaid-render.py` covers the half that
 needs a renderer — whether a diagram is legible once GitHub fits it to its
 content column, which no amount of reading the markup will tell you.
 
+`internal/pullcred` is a leaf package (no domain port, no store access). It is
+the GHCR pull-credential protocol: the docker credential-helper wire format
+(`get`/`store`/`erase`/`list`), the swarm-node certificate rule (`O` = swarm ID,
+`CN` = node ID, chain to the swarm root CA), the mTLS listener handler, and the
+helper's client. `pmcluster-edge` serves its listener on port 9443; the
+`pmcluster` binary is the helper under a symlink; `internal/githubapp` supplies
+the token route the listener calls.
+
 `internal/refs` is a leaf package (no domain port, no adapter). It provides
 the shared `config()/config_path()/secret()/secret_path()` reference language consumed by
 `internal/manifest` (DSL env values) and `internal/cluster` (platform
