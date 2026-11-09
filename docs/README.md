@@ -47,7 +47,7 @@ the [whitepaper](whitepaper.md).
 | `dsl.md` | The manifest DSL — every top-level and service field, substitution, injection rules, a complete example |
 | `webhook.md` | Webhook sources, request format, signature, GitHub Actions + generic CI examples, troubleshooting |
 | `github-app.md` | The GitHub App: installation tokens for clone, build and CI (`POST /api/github/token`), why pulls use the stored PAT instead, the permission ceiling, the workflow snippet, rotation, failure modes, what is not built |
-| `runners.md` | Self-hosted GitHub Actions runners: the four settings, registration with an App installation token, the ephemeral lifecycle and recycle cooldown, placement, the docker-socket security model, failure handling, the doctor check |
+| `runners.md` | Self-hosted GitHub Actions runners: org-level registration into a `selected`-visibility group, one local container per selected worker, the filtered docker socket and its allow list, enable/disable as a full transition, the console panel (node picker, kill, restart), the doctor check |
 | `secrets-and-configs.md` | DB-backed secrets/configs: encryption, versioning, scopes, content-addressed swarm mirrors, `env` reference kinds, API |
 | `registry-credentials.md` | The private-registry pull credential: where it lives (encrypted store, not a manifest), `registry add/list/remove` semantics, ghcr.io token spec, `--with-registry-auth` propagation, the numbered rotation runbook, failure modes, cadence |
 | `tls.md` | ACME vs operator-supplied, in-place main-cert rotation, per-host customer-domain certs |

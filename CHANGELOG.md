@@ -3,38 +3,75 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
-## Unreleased — Self-hosted GitHub Actions runners
+## Unreleased — Self-hosted GitHub Actions runners, org level, behind a filtered docker socket
 
-**One ephemeral runner container per configured private repository, registered with the GitHub App's
-installation token.** When GitHub-hosted minutes run out, CI stops; a repo-scoped self-hosted runner
-is the cheapest way to keep it working, and doing it in the control plane rather than by hand means
-turning the feature off actually removes the containers and the registrations.
+**One ephemeral runner container per selected worker, registered at ORG level into a
+`selected`-visibility runner group, building through a socket proxy the daemon owns.**
+When GitHub-hosted minutes run out, CI stops. A repo-scoped runner per repository was
+the first sketch; the operator's hand-made org runner showed the right shape, and one
+registration serving the group's repositories is both cheaper and easier to reason
+about. The docker socket is the part that had to change: a runner that can reach
+`/var/run/docker.sock` can remove a service, demote a node or read every swarm secret,
+so the platform now exposes a filtered socket instead.
 
-- **Settings, all off by default:** `github_runners_enabled` (needs a configured App — enabling it
-  without one is refused with an error naming the App and why a PAT is not a substitute),
-  `github_runner_repos` (comma-separated `owner/name`, private only, validated on save),
-  `github_runner_memory` (default `2560m`) and `github_runner_allow_leader` (default off).
-- **Lifecycle:** each repo gets its own one-service stack. Registration mints
-  `POST /repos/{owner}/{repo}/actions/runners/registration-token` with the installation token and
-  never persists it; the container runs `EPHEMERAL=true` with labels
-  `self-hosted,linux,x64,pmcluster` and a two-minute recycle cooldown so a starting container is not
-  re-minted every pass. Removing a repo or disabling the feature removes the stack **and** calls
-  `DELETE .../runners/{id}` for the reserved `pmc-` names.
-- **Placement and safety in the rendered spec:** `node.labels.pmcluster.leader != true`,
-  `restart_policy: none`, `update_config: order: stop-first`, no host networking. Public repos are
-  refused by name — a fork PR would run on the container holding `/var/run/docker.sock`.
-- **Failures are warnings, not fatal:** a refused registration, a public repo, an unreachable
-  GitHub all warn and let the other repos converge; the warnings are merged into the last-apply
-  record so `doctor`'s `last apply` check shows them. GitHub calls use the new
-  `doToken` installation-token transport in `internal/githubapp`.
-- **Doctor gains `github runners`:** enabled state, per-repo container/registration agreement
-  (including ghosts and offline runners), and the missing `administration: write` permission that
-  would otherwise surface as a bare 403 at registration.
-- **Tests:** refusal without an App, one registration per repo with the expected name/labels/limit,
-  idempotent reconcile, removal de-registers and removes the container (counted API calls), failure
-  warns and continues, placement excludes the leader in the rendered spec, doctor per cause, and the
-  GitHub client's token/permission/404 mapping.
-- **Docs:** new `docs/runners.md`, settings catalogue rows, and the architecture note.
+- **Registration is org level.** `POST /orgs/{org}/actions/runners/registration-token`
+  with the App installation token, and the container joins a **runner group**
+  (`--runnergroup`). `github_runner_repos` is gone; `github_runner_org` and
+  `github_runner_group` (default `pmcluster`) replace it.
+- **The group is the security boundary.** The platform creates it with
+  `visibility: selected` and the org's private repositories as members, re-scopes it
+  as private repositories are added, and **refuses** an existing group visible to
+  `all` — an all-visible runner takes workflow code from any repository in the org,
+  including one an attacker can push to. Checked on every pass, not only at
+  registration.
+- **Runners are per node, not a swarm service.** `github_runner_nodes` lists the
+  WORKER hostnames allowed to run one; each node's daemon runs (or restarts) its own
+  local container and removes it when the node leaves the list. Capacity is the list:
+  N nodes = N runners. **Managers are refused**, naming why: a build on the
+  control plane's 1-vCPU manager marks the node `Down` and takes the cluster API with
+  it (which is exactly what happened on the live cluster with the telemetry loop).
+- **`internal/socketproxy`: the filtered docker socket.** An in-process reverse proxy
+  on a unix socket (`github_runner_socket_path`, default `/run/pmcluster/docker.sock`,
+  root:root 0660) that forwards an allow list and refuses everything else — 403 with
+  a JSON body naming the route, plus one rate-limited WRN line so an operator can grep
+  `socket proxy: denied` and see that a workflow tried `service rm`. Allowed:
+  containers (list/inspect/create/start/stop/restart/kill/wait/logs/remove), images
+  (list/pull/build/inspect/remove), volumes, networks, `/version`, `/info`,
+  `/events`, `/_ping`. Denied, each tested: `/services`, `/tasks`, `/nodes`,
+  `/swarm`, `/secrets`, `/configs`, `/plugins`, `/system`, `/session`, `/auth`,
+  `/exec` and `/containers/{id}/exec*`. Deny-by-default, segment-exact, no generic
+  passthrough. `github_runner_socket_proxy=false` restores the raw mount as a
+  debug-only fallback (documented as unsafe for untrusted workflows; the doctor warns).
+- **Enable/disable is a complete transition.** `github_runners_enabled` is the one
+  switch every surface reads. Enabling is refused without an App, without an org, or
+  with no node selected. Disabling removes every container the platform owns (by its
+  `pmcluster.runner` label), de-registers each name, clears the rows, and is
+  idempotent; with GitHub unreachable the containers still come off and the report
+  says the de-registration is unconfirmed, keeping the entry for the next pass.
+- **The console panel.** `/web/runners`: a **node picker** (one row per node with
+  role badge, current runner state and free memory; managers greyed out with the
+  reason on hover) writing `github_runner_nodes`, and a runner table (scope, name,
+  node, state pill, mode, age, last job) with **Kill** per row and **Restart** per row
+  plus **Restart stopped**. A busy runner's Kill is a confirmation that says it will
+  fail the running job. A killed runner is held, so no pass re-registers it.
+- **Doctor reworked.** ENABLED/DISABLED first; leftovers while disabled are a warning
+  naming `github_runners_enabled` (the half-disable failure mode); a runner on a
+  manager, a raw-socket container or an unmanaged pmc-named runner (the operator's
+  hand-made one, named and never counted healthy) are reported without failing the
+  check.
+- **Tests:** the org registration-token path (asserted, not commented), group created
+  `selected`, `all` refused, enable refused without App/org/node, idempotent reconcile,
+  disable removing N containers and making N de-registration calls then a clean no-op,
+  disable with GitHub down still removing containers, kill of an unknown runner 404,
+  busy kill 409 then acted with confirm, GitHub down during a kill still removing the
+  container, the socket proxy's deny table (every family, never reaching the upstream
+  transport), the allow table's own entries, the audit rate limit, the rendered
+  container's mounts and `DOCKER_HOST`, the panel's rows/disabled state/picker, and
+  en/ar parity.
+- **Docs:** `docs/runners.md` rewritten (org level, the group, the allow list, the
+  per-node model, the manager refusal, the audit line), settings catalogue, console
+  page list, `pmcluster/docs/openapi.yaml` (org scope, kill/restart outcome) and this
+  entry.
 
 ## Unreleased — Pulls use a read-only PAT applied at deploy; the App keeps clone, build and the broker
 

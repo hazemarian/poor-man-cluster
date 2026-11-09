@@ -332,6 +332,203 @@ paths:
                     type: boolean
                   message:
                     type: string
+  /api/github/runners:
+    get:
+      summary: The self-hosted runners this cluster manages
+      description: |
+        One entry per SELECTED WORKER when `github_runners_enabled` is on. A runner
+        is a local container on the node it is listed for, registered at ORG level
+        into a runner group — not a swarm service, so there is no placement
+        constraint to describe here.
+
+        `state` is derived, never invented: `busy`/`idle` come from GitHub's runner
+        list, `offline` means GitHub does not list the registration, `starting` a
+        container that exists but has no running process yet, `failed` three
+        consecutive registration failures, and `offline` a runner an operator killed
+        (it is held until restart). When GitHub cannot be reached the row keeps its
+        last known state and `last_seen` stops advancing, so its age is the signal
+        that the entry is stale rather than a fresh measurement.
+
+        `org` is the runner's scope: one org-level runner serves every private
+        repository the runner group selects. `container_id` is the local docker
+        container id — empty on a row describing a runner on another node.
+        `last_job_url` is the org's newest workflow run, captured when the runner
+        left `busy`, because GitHub does not attribute a job to the runner that
+        executed it.
+
+        The list is bounded at 200 rows.
+      operationId: listGitHubRunners
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The runner table and the feature switch
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  runners:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: {type: string}
+                        org: {type: string}
+                        node: {type: string}
+                        container_id: {type: string}
+                        mode: {type: string, enum: [ephemeral, persistent]}
+                        state:
+                          type: string
+                          enum: [starting, idle, busy, offline, failed]
+                        registered_at: {type: integer, format: int64}
+                        last_seen: {type: integer, format: int64}
+                        last_job_url: {type: string}
+        "500":
+          description: The runner table could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/github/runners/{name}/kill:
+    post:
+      summary: Remove a runner's container and de-register it from GitHub
+      description: |
+        Killing removes the local runner container (when this daemon owns it — a
+        runner on another node is stopped by that node's next pass, which sees the
+        hold) and calls `DELETE /orgs/{org}/actions/runners/{id}` with the App
+        installation token, then HOLDS the runner so no reconcile pass registers it
+        again — otherwise the next pass would undo the kill within a minute. The
+        hold is dropped by `.../restart` or by removing the node from
+        `github_runner_nodes`.
+
+        **Killing a `busy` runner fails the job it is running**: the container
+        is removed mid-workflow and the run is cancelled. That requires
+        `confirm: true` in the body; without it the call answers 409. This is
+        the one place where a mis-click costs a workflow run, so it is a
+        deliberate two-step.
+
+        A GitHub failure does not fail the call. The container is already gone,
+        and `deregister_error` in the 200 body names the half that did not
+        happen; the registration can be cleaned up from the GitHub UI or a
+        later kill. A container-removal failure is a 500: nothing was killed.
+      operationId: killGitHubRunner
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The runner name (the primary key of the runner table).
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm:
+                  type: boolean
+                  description: Required (true) when the runner is busy.
+      responses:
+        "200":
+          description: The kill outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubRunnerKill"
+        "400":
+          description: The body was not JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No runner with that name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The runner is busy and the body did not confirm
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: The container could not be removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/github/runners/{name}/restart:
+    post:
+      summary: Kill a runner and register it again immediately
+      description: |
+        Restart drops the kill hold and registers the runner in the same call: a
+        new org registration token, a new local container. It is not a request for
+        the next reconcile pass to notice. On a node that is not this daemon's, the
+        hold removal is what lets that node's own pass register it again.
+
+        Like kill, restarting a `busy` runner cancels its job and needs
+        `confirm: true` (409 without it). A failed registration is reported in
+        the 200 body as `registration_error`; the runner's row remains, so the
+        next reconcile retries it.
+      operationId: restartGitHubRunner
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The runner name (the primary key of the runner table).
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm:
+                  type: boolean
+                  description: Required (true) when the runner is busy.
+      responses:
+        "200":
+          description: The restart outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubRunnerKill"
+        "400":
+          description: The body was not JSON
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No runner with that name
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The runner is busy and the body did not confirm
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: The container could not be removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/github/token:
     post:
       summary: Mint a GitHub App installation token for a CI workflow
@@ -2445,6 +2642,36 @@ components:
       properties:
         error:
           type: string
+    GitHubRunnerKill:
+      type: object
+      description: |
+        What one kill/restart did. A GitHub failure is not an error status: the
+        container is already gone, and `deregister_error` names the half that did
+        not happen — the difference between "we could not do it" and "we did half of
+        it". `held` means no reconcile pass will re-register the runner until
+        `.../restart`.
+      properties:
+        name: {type: string}
+        org: {type: string}
+        node: {type: string}
+        container_removed:
+          type: boolean
+          description: This daemon removed the runner container. False for a runner on another node (its own pass stops it).
+        deregistered:
+          type: boolean
+          description: GitHub confirmed the registration was deleted.
+        deregister_error:
+          type: string
+          description: Set when the container is gone but GitHub did not confirm the de-registration.
+        held:
+          type: boolean
+          description: The runner is held — no pass re-registers it until restart.
+        registered:
+          type: boolean
+          description: Restart only — the runner was registered again.
+        registration_error:
+          type: string
+          description: Restart only — the runner was killed but not registered again, and this says why.
     Health:
       type: object
       properties:

@@ -44,6 +44,14 @@ model.
   **Stacks** (service-scope rows, by stack) and **Platform** (cluster-scope
   rows). Both tabs can move a row to another scope (retag), edit or delete it,
   and create a new one in the tab's own scope.
+- **Runners** (`/web/runners`, linked from Settings) — the self-hosted GitHub
+  Actions runners ([`runners.md`](runners.md)): a node picker (one row per node
+  with role, current runner state and free memory; managers greyed out with the
+  reason) and the runner table (scope, name, node, state, mode, age, last job)
+  with a Kill per row and Restart per row plus "Restart stopped" at panel level.
+  A busy runner's Kill asks first, in words, because it fails the running job.
+  Readable by any signed-in user; the picker's save, kill and restart are
+  operator actions.
 - **Settings** — cluster settings ([`settings.md`](settings.md)) and the
   **Apply to swarm** button. The cluster-scope configs and secrets are listed
   on Inventory → Platform now; Settings keeps the create/edit forms and links
