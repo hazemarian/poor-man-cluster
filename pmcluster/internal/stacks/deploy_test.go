@@ -1469,3 +1469,44 @@ func TestWaitLevelHealthy_MixedLevelDBPending(t *testing.T) {
 		t.Fatalf("waitLevelHealthy(db 0/1) = %v, want a timeout (db not ready)", err)
 	}
 }
+
+// TestDeploy_CallsBeforeApplyOncePerDeploy pins the registry-login hook: one
+// call per logical deploy, BEFORE the first `docker stack deploy`. A per-level
+// call would log in once per depends_on level, and a call after the first
+// deploy would leave the spec holding the previous credential.
+func TestDeploy_CallsBeforeApplyOncePerDeploy(t *testing.T) {
+	s := openTestStore(t)
+	dep := &recordingDeployer{}
+	svc := newService(s, dep)
+	ctx := context.Background()
+
+	const manifest = `
+app: hook-app
+env: production
+domain: example.com
+services:
+  db:
+    image: postgres:14-alpine
+  api:
+    image: ghcr.io/acme/app:latest
+    depends_on: [db]
+`
+	var calls, deploysBefore int
+	svc.BeforeApply = func(context.Context) {
+		calls++
+		deploysBefore = len(dep.noPruneCalls) + len(dep.calls)
+	}
+
+	if _, err := svc.Deploy(ctx, Payload{Manifest: manifest}); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("BeforeApply ran %d times for one deploy, want exactly 1", calls)
+	}
+	if deploysBefore != 0 {
+		t.Fatalf("BeforeApply ran after %d stack deploy(s); it must run before the first", deploysBefore)
+	}
+	if len(dep.noPruneCalls) != 2 {
+		t.Fatalf("per-level deploys = %d, want 2 (the hook must not be per level)", len(dep.noPruneCalls))
+	}
+}

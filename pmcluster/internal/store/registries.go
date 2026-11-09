@@ -45,10 +45,16 @@ func (s *Store) CreateRegistry(ctx context.Context, r *Registry) error {
 
 // UpdateRegistry replaces the username + password for an existing host.
 // Returns ErrRegistryNotFound if the host isn't configured.
+//
+// created_at is reset too: it is the age of the CURRENT credential, which is
+// what `pmcluster registry list` shows, what the deploy login warns about and
+// what the doctor expiry check measures. A rotation must not inherit the age
+// of the credential it replaced, or the warning would fire forever after one
+// rotation.
 func (s *Store) UpdateRegistry(ctx context.Context, r *Registry) error {
 	res, err := s.conn().ExecContext(ctx,
-		`UPDATE registries SET username = ?, password_ciphertext = ? WHERE host = ?`,
-		r.Username, r.PasswordCiphertext, r.Host,
+		`UPDATE registries SET username = ?, password_ciphertext = ?, created_at = ? WHERE host = ?`,
+		r.Username, r.PasswordCiphertext, time.Now().Unix(), r.Host,
 	)
 	if err != nil {
 		return fmt.Errorf("update registry: %w", err)

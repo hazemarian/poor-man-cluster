@@ -10,6 +10,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // doctor must be honest about what it could not measure: a host without a
@@ -173,4 +174,91 @@ func TestGitHubAppCheckDistinguishesTheCauses(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The pull credential is a read-only PAT that expires 90 days after creation.
+// doctor's job is to say so at 60 days — a warning, never a failure, because an
+// ageing credential still authenticates pulls.
+func TestRegistryCredentialWarnsAt60DaysAndNamesRotation(t *testing.T) {
+	st := doctorStore(t)
+	ctx := context.Background()
+	if err := st.CreateRegistry(ctx, &store.Registry{
+		Host: "ghcr.io", Username: "pull-bot", PasswordCiphertext: []byte("ciphertext"),
+	}); err != nil {
+		t.Fatalf("CreateRegistry: %v", err)
+	}
+	row, err := st.Registry(ctx, "ghcr.io")
+	if err != nil {
+		t.Fatalf("Registry: %v", err)
+	}
+	created := time.Unix(row.CreatedAt, 0)
+
+	check := func(now time.Time) (Check, bool) {
+		t.Helper()
+		rep, err := Run(ctx, Input{Store: st, Now: now})
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		for _, c := range rep.Checks {
+			if c.Name == "registry credential" {
+				return c, rep.OK
+			}
+		}
+		t.Fatal("Run reported no `registry credential` check")
+		return Check{}, false
+	}
+
+	if got, _ := check(created.Add(10 * 24 * time.Hour)); got.Status != StatusOK {
+		t.Errorf("10-day-old credential = %s (%s), want ok", got.Status, got.Detail)
+	}
+	fresh, _ := check(created.Add(59 * 24 * time.Hour))
+	if fresh.Status != StatusOK {
+		t.Errorf("59-day-old credential = %s, want ok", fresh.Status)
+	}
+	old, ok := check(created.Add(61 * 24 * time.Hour))
+	if old.Status != StatusWarn {
+		t.Fatalf("61-day-old credential = %s, want warn", old.Status)
+	}
+	if !ok {
+		t.Error("an ageing credential must warn, not make doctor fail")
+	}
+	for _, want := range []string{"61 days old", "expire at 90 days", "rotate with", "pmcluster registry add ghcr.io"} {
+		if !strings.Contains(old.Detail, want) {
+			t.Errorf("warning does not carry %q: %q", want, old.Detail)
+		}
+	}
+}
+
+// A cluster with no stored pull credential cannot pull private images, but
+// that is a skip with the reason and the fix — not a failure of every other
+// check.
+func TestRegistryCredentialWithoutARowIsASkip(t *testing.T) {
+	st := doctorStore(t)
+	rep, err := Run(context.Background(), Input{Store: st})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, c := range rep.Checks {
+		if c.Name != "registry credential" {
+			continue
+		}
+		if c.Status != StatusSkip {
+			t.Fatalf("missing credential = %s, want skip", c.Status)
+		}
+		if !strings.Contains(c.Detail, "pmcluster registry add ghcr.io") {
+			t.Errorf("skip does not name the fix: %q", c.Detail)
+		}
+		return
+	}
+	t.Fatal("no `registry credential` check")
+}
+
+func doctorStore(t *testing.T) *store.Store {
+	t.Helper()
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
 }

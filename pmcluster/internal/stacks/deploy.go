@@ -137,6 +137,14 @@ type Service struct {
 	// log_level is "debug". The zero value disables structured deploy
 	// logging (tests, legacy callers).
 	Log zerolog.Logger
+	// BeforeApply runs once per stack deploy, immediately before the compose
+	// is applied to the swarm. The CLI uses it to apply the stored registry
+	// credential: `docker stack deploy --with-registry-auth` freezes whatever
+	// docker holds at that moment into each service spec, so the credential
+	// must be current before the first `docker stack deploy` of the operation
+	// — once, not once per depends_on level. Nil is a no-op (tests, callers
+	// that do not manage registries).
+	BeforeApply func(ctx context.Context)
 }
 
 // Deploy runs the full deploy pipeline synchronously: parse, validate,
@@ -630,6 +638,13 @@ func (s *Service) reconcileDeploy(ctx context.Context, stackName, sourceYAML str
 // control plane, never in a rendered artifact — docker stack deploy parses
 // and ignores depends_on entirely.
 func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.IR, rendered []byte, revision int64) error {
+	// One registry login per deploy, before any `docker stack deploy
+	// --with-registry-auth` runs: the credential is frozen into every service
+	// spec the swarm writes, so the copy must be current when the FIRST level
+	// is applied. A single call here covers the multi-level path too.
+	if s.BeforeApply != nil {
+		s.BeforeApply(ctx)
+	}
 	if app.BackupBeforeDeploy {
 		backupErr := s.runPreDeployBackup(ctx, app.Name, revision)
 		if backupErr != nil && app.StrictBackup {

@@ -158,7 +158,11 @@ func openDeploySvc(cmd *cobra.Command) (*stacks.Service, *store.Store, func(), e
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
 		return st.SetSetting(ctx, stacks.StackPinKey(stackName), node)
-	}}, Stdout: cmd.OutOrStdout(), Log: log, BackupDir: cluster.BackupRootDir(), AppLogLevel: cluster.LoadAppLogLevel(context.Background(), st)}
+	}}, Stdout: cmd.OutOrStdout(), Log: log, BackupDir: cluster.BackupRootDir(), AppLogLevel: cluster.LoadAppLogLevel(context.Background(), st),
+		// Pulls use the stored read-only PAT, applied once before the first
+		// `docker stack deploy --with-registry-auth` freezes it into a spec.
+		BeforeApply: func(ctx context.Context) { loginBeforeDeploy(ctx, st, cfg, log) },
+	}
 	return svc, st, func() { _ = st.Close() }, nil
 }
 

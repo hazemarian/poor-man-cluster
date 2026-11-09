@@ -22,6 +22,7 @@ Same measurements over HTTP, for the console and anything that gates on them:
 | `control-plane kit` | **restores** the newest Raft snapshot into a temp dir, opens the DB, decrypts its secrets | the kit does not extract, does not open, misses its key config, or its key does not decrypt its ciphertext |
 | `secrets` | AES-GCM decrypt of every stored row with the current key | a row cannot be decrypted (sealed by an older key) |
 | `github app` | mints a real installation token straight from the daemon's stored key (no credential helper, no extra port), reads the configured probe repo and HEADs the probe package | key/id rejected, installation removed, or `contents:read`/`packages:read` missing. No app configured is a **skip**; a token with no probe target is a **warn** |
+| `registry credential` | the `created_at` of the stored `ghcr.io` row — the age of the pull credential, reset when `registry add` rotates it | **never fails.** Warns at 60 days: read-only PATs expire at 90, and nothing renews the credential on a timer, so this is the early warning. A missing row is a **skip** naming `registry add ghcr.io` |
 | `last apply` | the recorded `ApplyRecord` | the last apply degraded something (warnings) |
 | `restore drill` | `/var/lib/pmcluster-backup/drill/status.json` | the last drill failed, or none has ever run (warn) |
 | `offsite` | `/var/lib/pmcluster-backup/offsite/status.json` | an artifact this node shipped is not in the bucket |

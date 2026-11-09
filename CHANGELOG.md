@@ -3,7 +3,45 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
-## Unreleased — Pull credentials back on the 25-minute login loop
+## Unreleased — Pulls use a read-only PAT applied at deploy; the App keeps clone, build and the broker
+
+**Removes the 25-minute App-token refresh, the leadership-gain mint and the interval language that
+went with them.** The frozen service spec was never the timer's problem: every
+`docker stack deploy --with-registry-auth` embeds the credential current at that moment into each
+spec, and a spec is never rewritten. A one-hour installation token therefore dies inside a spec that
+outlives it, which no amount of re-logging-in can fix. A long-lived read-only PAT makes the frozen
+copy harmless, so the two concerns split: pulls use the PAT, everything else uses the App.
+
+- **Removed:** `refreshGitHubAppLogins` and its `serve.go` call site, `loginOnLeadershipGain`,
+  `leaderGainSteps`, the App-token branch of the startup replay (`registryLoginTargets`), and the
+  `WRN … renewed every 25 minutes` line. Nothing in `internal/` or `cmd/` starts a login timer; a
+  test asserts the symbols are absent.
+- **Pull credential = stored read-only PAT.** Applied once at daemon start and **once per deploy**,
+  immediately before the first `docker stack deploy --with-registry-auth`
+  (`stacks.Service.BeforeApply` → `loginBeforeDeploy`; wired in `serve`, `deploy` and `cluster
+  up/update`). A multi-level `depends_on` deploy still logs in once. Serialised by the existing
+  mutex, password on stdin, `DOCKER_CONFIG=/root/.docker`.
+- **The deploy login is the warning.** `WRN docker logged in to ghcr.io using the stored registry
+  credential (added N days ago); read-only PATs expire at 90 days — rotate with pmcluster registry
+  add` — one line per deploy.
+- **Doctor gains `registry credential`.** Warns (never fails) once the stored ghcr.io credential is
+  60 days old and names the rotation command. The age is `registries.created_at`; `registry add` now
+  resets it on rotation, so the age is the current credential's, not the first-ever row's.
+- **Kept unchanged:** `internal/githubapp`, the encrypted App registration, `POST /api/github/token`
+  and the `github app` doctor check that mints directly. New tests cover one-login-per-deploy (via
+  the hook and end-to-end through a two-level deploy), the age/rotation warning, serialisation, the
+  doctor threshold and the absence of the timer; the App broker and minting tests are untouched.
+- **Docs rewritten honestly.** `github-app.md` §5, `registry-credentials.md` §4/§5.3/§5.4/§8/§9,
+  `health.md` and the architecture note now say: pulls use the PAT and are frozen into specs, and
+  that is fine because it does not expire in practice; the App covers clone/build/broker; the real
+  risk is the 90-day expiry, surfaced by doctor from day 60. Residual: a revoked or expired PAT
+  breaks new pulls — detect it with doctor, not by waiting for a failed deploy.
+
+## Superseded (never released) — Pull credentials back on the 25-minute login loop
+
+> Superseded by the entry above: the timer, the leadership-gain mint and the App-token pull login
+> were removed in the same unreleased cycle. Kept as the record of why the pull-time helper was
+> rejected.
 
 **Reverts the pull-time credential helper (`dad7c2a`) and restores the original `docker login` timer
 (25 minutes), adds a login on leadership gain, and makes every login a warning that states when the

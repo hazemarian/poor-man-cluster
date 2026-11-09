@@ -222,6 +222,9 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 		Docker:   dc,
 		Deployer: deployer,
 		Stdout:   cmd.OutOrStdout(),
+		// Pulls use the stored read-only PAT: apply it before the first
+		// `docker stack deploy --with-registry-auth` freezes it into a spec.
+		BeforeDeploy: func(ctx context.Context) { loginBeforeDeploy(ctx, st, cfg, log) },
 	}, cluster.UpdateInput{
 		ConfigDir: cfg.ConfigDir(),
 		Version:   buildinfo.Version,
@@ -371,6 +374,9 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 		Docker:   dc,
 		Deployer: deployer,
 		Stdout:   cmd.OutOrStdout(),
+		// Pulls use the stored read-only PAT: apply it before the first
+		// `docker stack deploy --with-registry-auth` freezes it into a spec.
+		BeforeDeploy: func(ctx context.Context) { loginBeforeDeploy(ctx, st, cfg, log) },
 	}, cluster.UpdateInput{
 		ConfigDir: cfg.ConfigDir(),
 		Version:   buildinfo.Version,
@@ -548,6 +554,9 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 		Docker:   dc,
 		Deployer: deployer,
 		Stdout:   cmd.OutOrStdout(),
+		// Pulls use the stored read-only PAT: apply it before the first
+		// `docker stack deploy --with-registry-auth` freezes it into a spec.
+		BeforeDeploy: func(ctx context.Context) { loginBeforeDeploy(ctx, st, cfg, log) },
 	}, in)
 	if err != nil {
 		return err

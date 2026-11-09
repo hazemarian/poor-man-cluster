@@ -74,6 +74,9 @@ type Input struct {
 	// this process has no store/cipher to build one from, and the check skips
 	// with that reason.
 	GitHubApp GitHubAppProbe
+	// Now is the clock the credential-age check compares against. Zero means
+	// time.Now(); tests set it to age a credential without waiting 60 days.
+	Now time.Time
 }
 
 // GitHubAppProbe is the one capability the GitHub App check needs. Local
@@ -97,6 +100,7 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 	add(checkKit(ctx, in))
 	add(checkSecrets(ctx, in))
 	add(checkGitHubApp(ctx, in))
+	add(checkRegistryCredential(ctx, in))
 	add(checkLastApply(ctx, in))
 	add(checkDrill(in))
 	add(checkOffsite(in))
@@ -319,6 +323,55 @@ func checkGitHubApp(ctx context.Context, in Input) Check {
 	default:
 		return Check{"github app", StatusFail, "could not mint an installation token: " + err.Error()}
 	}
+}
+
+// pullRegistryHost is the registry whose stored credential authenticates image
+// pulls. The App covers clone/build/broker; this row is the pull credential,
+// and it is the one that expires (a read-only PAT lives 90 days).
+const pullRegistryHost = "ghcr.io"
+
+// registryCredentialWarnAge matches the CLI's deploy warning: warn at 60 days
+// so a 90-day read-only PAT has a month of deliberate rotation left.
+const registryCredentialWarnAge = 60 * 24 * time.Hour
+
+// checkRegistryCredential: is the credential that authenticates image pulls
+// approaching expiry? It warns at 60 days and never fails: an ageing
+// credential still pulls, and doctor's job is to say so before a deploy finds
+// out. The age is the row's created_at, which `registry add` writes and
+// `registry add` again resets on rotation.
+func checkRegistryCredential(ctx context.Context, in Input) Check {
+	const name = "registry credential"
+	if in.Store == nil {
+		return Check{name, StatusSkip, "no store available to read the stored registry credential"}
+	}
+	r, err := in.Store.Registry(ctx, pullRegistryHost)
+	if errors.Is(err, store.ErrRegistryNotFound) {
+		return Check{name, StatusSkip,
+			"no stored " + pullRegistryHost + " credential; private image pulls will fail at deploy (the GitHub App covers clone/build/broker, not pulls) — add a read-only PAT with `pmcluster registry add " + pullRegistryHost + "`"}
+	}
+	if err != nil {
+		return Check{name, StatusFail, "read stored credential: " + err.Error()}
+	}
+
+	now := in.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	age := now.Sub(time.Unix(r.CreatedAt, 0))
+	if age < 0 {
+		age = 0
+	}
+	days := int(age / (24 * time.Hour))
+	rotate := "`pmcluster registry add " + pullRegistryHost + " --username " + r.Username + " --password-stdin`"
+
+	if age >= registryCredentialWarnAge {
+		return Check{name, StatusWarn, fmt.Sprintf(
+			"the stored %s credential is %d days old; read-only PATs expire at 90 days — rotate with %s",
+			pullRegistryHost, days, rotate)}
+	}
+	return Check{name, StatusOK, fmt.Sprintf(
+		"stored %s credential is %d days old (warns at 60, read-only PAT expiry at 90)",
+		pullRegistryHost, days)}
 }
 
 // checkLastApply: did the last platform apply finish everything it tried?

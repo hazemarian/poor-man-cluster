@@ -92,6 +92,10 @@ type UpdateDeps struct {
 	Docker   runtime.Client
 	Deployer StackDeployer
 	Stdout   io.Writer
+	// BeforeDeploy runs once, before the first stack deploy of the run: the
+	// CLI applies the stored registry credential there so
+	// `--with-registry-auth` has something valid to freeze. Nil is a no-op.
+	BeforeDeploy func(ctx context.Context)
 }
 
 // Update re-provisions the OTel collector + Traefik dynamic configs and the
@@ -106,6 +110,9 @@ type UpdateDeps struct {
 // compose is hashed and compared against the stored rendered_hash, so an
 // unchanged stack is not redeployed (a no-op update is just a report).
 func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult, error) {
+	if deps.BeforeDeploy != nil {
+		deps.BeforeDeploy(ctx)
+	}
 	out := io.Discard
 	if deps.Stdout != nil {
 		out = deps.Stdout

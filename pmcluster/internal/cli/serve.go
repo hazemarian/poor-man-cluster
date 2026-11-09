@@ -252,10 +252,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	if err := replayRegistryLogins(cmd.Context(), st, cfg, log); err != nil {
 		log.Warn().Err(err).Msg("registry re-login had issues; private images may fail to pull")
 	}
-	// Keep the App's GHCR login fresh: an installation token expires in an hour,
-	// and a deploy after that would fail with a 401 no earlier signal announced.
-	// 25 minutes means two logins per token lifetime (see refreshGitHubAppLogins).
-	go refreshGitHubAppLogins(cmd.Context(), st, cfg, log, 25*time.Minute)
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
@@ -276,7 +272,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
 		return st.SetSetting(ctx, stacks.StackPinKey(stackName), node)
-	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3, AppLogLevel: cluster.LoadAppLogLevel(cmd.Context(), st)}
+	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3, AppLogLevel: cluster.LoadAppLogLevel(cmd.Context(), st),
+		// Pulls authenticate with the stored read-only PAT, applied once per
+		// deploy — before `--with-registry-auth` freezes it into each spec.
+		// The App covers clone/build/broker; it is not a pull credential.
+		BeforeApply: func(ctx context.Context) { loginBeforeDeploy(ctx, st, cfg, log) },
+	}
 
 	tlsSvc := certs.NewLocal(st, cipher, dc, deployer,
 		cfg.ConfigDir(), buildinfo.Version)
@@ -437,16 +438,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				}
 				var loopCtx context.Context
 				loopCtx, loopCancel = context.WithCancel(ctx)
-				// A failover must not deploy with whatever credential happened
-				// to be on disk: the first reconcile writes service specs, and
-				// --with-registry-auth freezes the credential current at deploy
-				// into each one. Mint once, BEFORE the reconcile starts. A
-				// failure is a warning, not a blocker — the deploy still gets a
-				// chance, and the 25-minute timer retries.
-				leaderGainSteps(ctx,
-					func(c context.Context) { loginOnLeadershipGain(c, st, cfg, log) },
-					func() { go reconciler.Loop(loopCtx) },
-				)
+				go reconciler.Loop(loopCtx)
 				go kit.Loop(loopCtx, controlPlaneSnapshotInterval())
 				// The collector writes its node-stats JSONL on the leader's
 				// disk; only this daemon can turn it into rows for the console.

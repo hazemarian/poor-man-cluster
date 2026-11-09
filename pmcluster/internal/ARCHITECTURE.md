@@ -91,26 +91,40 @@ Everything else (`apikeys`, `webhooks.Service`, `secrets`, `configs.Service`,
 
 ## GHCR pull credentials
 
-`pmcluster serve` starts one goroutine that mints a GitHub App installation
-token and runs `docker login ghcr.io` at startup and every 25 minutes — two
-logins inside the token's 60-minute life, so docker's config never holds a
-credential the cache has outlived. The leadership goroutine runs the same login
-once on each follower→leader transition, before the reconcile starts, so the
-service specs written immediately after a failover carry a fresh credential. A
-failed login is a warning in both paths; neither aborts a deploy, and the timer
-retries within 25 minutes.
+Pulls use the **stored registry credential** — a long-lived read-only PAT
+registered by `pmcluster registry add ghcr.io`. The daemon applies it at
+startup (`replayRegistryLogins`) and **once per deploy**, immediately before
+the first `docker stack deploy --with-registry-auth` freezes it into each
+service spec (`stacks.Service.BeforeApply` → `loginBeforeDeploy`, wired in
+`internal/cli/serve.go`, `deploy.go` and `cluster.go`). A multi-level
+`depends_on` deploy still logs in once: the hook belongs to the deploy, not to
+a level.
+
+There is no ticker and no interval. A PAT lives 90 days, so refreshing it
+every 25 minutes would be motion without benefit; the credential is applied
+when a deploy needs it and replaced when an operator rotates it. Every
+deploy-login is a WARN naming the registry, the credential's source and its
+age — the operator's early warning for the 90-day expiry. `doctor`'s `registry
+credential` check carries the same signal independently and warns from day 60,
+never failing. `registries.created_at` is reset on rotation, so the age is
+the current credential's, not the first-ever row's.
 
 All logins hold one mutex (they write the same `config.json`), pin
-`DOCKER_CONFIG=/root/.docker`, and warn on success with the expiry timestamp —
-the line exists so an operator can see that docker logged in to GitHub at all.
+`DOCKER_CONFIG=/root/.docker`, and pass the password on stdin, never argv. A
+failed login warns with docker's stderr and does not abort the deploy.
+
+The GitHub App (`internal/githubapp`) is **not** a pull credential: it mints
+one-hour installation tokens for clone, build and the Actions broker. That
+split is deliberate. `--with-registry-auth` embeds the credential current at
+deploy into each service spec and never rewrites it; an hour-long token would
+be dead long before a task is rescheduled onto a node without the image. The
+PAT outlives the spec, so the frozen copy keeps working — the residual risk is
+a revoked or expired PAT, which doctor reports rather than a timer preventing.
 
 There is no credential helper, no second listener and no node-certificate
 verification on the pull path; that machinery was built and removed because it
-fixed only manual pulls. The frozen-copy limitation it did not fix is real and
-documented: `--with-registry-auth` embeds the token current at deploy into each
-service spec, and that copy dies 60 minutes after the deploy, so a task
-rescheduled onto a node without the image can fail to pull. Pre-pull and an
-in-cluster mirror are the acknowledged fixes; neither exists yet.
+fixed only manual pulls. Pre-pull and an in-cluster mirror remain unimplemented;
+they would only matter for a PAT revoked mid-deploy.
 
 ## Leaf packages
 

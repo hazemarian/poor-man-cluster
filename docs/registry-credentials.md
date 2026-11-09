@@ -1,11 +1,13 @@
 # Registry credentials (private image pulls)
 
 pmcluster pulls its images from a private registry (ghcr.io). The credential
-that makes those pulls work lives in **pmcluster's encrypted control-plane
-store**, is replayed into Docker on the leader at daemon start, and reaches
-worker nodes through `docker stack deploy --with-registry-auth`. This document
-is the contract: what the mechanism is, what a correct credential looks like,
-and how to rotate it without ever taking the cluster's pulls down.
+that makes those pulls work is a **long-lived read-only PAT**, stored in
+pmcluster's encrypted control-plane store, applied to Docker on the leader at
+daemon start **and immediately before every deploy**, and delivered to worker
+nodes through `docker stack deploy --with-registry-auth`. This document is the
+contract: what the mechanism is, what a correct credential looks like, how its
+age is surfaced, and how to rotate it without ever taking the cluster's pulls
+down.
 
 Every behavioural claim here is traceable to the implementation; file:line
 citations are against the repo at time of writing.
@@ -20,12 +22,14 @@ Sections: [1 where the credential lives](#1-where-the-credential-lives-and-why) 
 [8 cadence](#8-rotation-cadence) ·
 [9 the GitHub App alternative](#9-the-github-app-alternative)
 
-> **The preferred credential is now a GitHub App installation token.** When one
-> is configured (`pmcluster github app set`), the daemon logs in to ghcr.io with
-> it and skips the stored `ghcr.io` row; when it is absent or its login fails,
-> the stored credential below is replayed exactly as before. Other registry
-> hosts are unaffected. The App path — and the CI token broker — is documented in
-> [`github-app.md`](github-app.md); §9 here records precisely what changes.
+> **Pulls use this stored credential, not the GitHub App.** The App covers
+> clone, build and the Actions token broker; its installation tokens live one
+> hour, and a service spec freezes its registry credential at deploy time and
+> is never rewritten. Since the frozen copy has to stay valid, the pull
+> credential is the long-lived read-only PAT below — applied at daemon start
+> and once per deploy, and *not* refreshed on a timer. The App path, and the CI
+> token broker, are documented in [`github-app.md`](github-app.md); §9 here
+> records the boundary between the two credentials.
 
 ---
 
@@ -190,19 +194,15 @@ pages accessed 2026-11-08) shape how that is spelled:
 
 Spec to mint today:
 
-- **Preferred: no PAT at all — a GitHub App installation token.** GHCR accepts
-  one when the App holds **Packages: Read** and is installed on the repo that
-  owns the package. The daemon mints it and uses it as
-  `docker login ghcr.io -u x-access-token --password-stdin` at startup, every
-  25 minutes, and once on gaining leadership, then `--with-registry-auth`
-  forwards that login into each service spec at deploy time. A spec's copy is
-  frozen at deploy and expires 60 minutes later — see
-  [`github-app.md`](github-app.md) §5 for that limitation. The rest of this
-  section describes the PAT fallback, which is still fully supported.
-- **Fallback type:** personal access token (**classic**) — a fine-grained
-  token with "Packages: Read" fails `docker login ghcr.io` with `denied:
-  denied` (fine-grained PAT support for Packages is still an open gap;
-  App installation tokens are the supported fine-grained mechanism).
+- **The pull credential is a classic PAT.** It is minted once, stored
+  encrypted, and applied at daemon start and once per deploy. A GitHub App
+  installation token is deliberately **not** used for pulls: it lives one
+  hour, and the copy `--with-registry-auth` freezes into a service spec
+  outlives it by design (see [`github-app.md`](github-app.md) §5). The App
+  covers clone, build and the Actions token broker.
+- **Type:** personal access token (**classic**) — a fine-grained token with
+  "Packages: Read" fails `docker login ghcr.io` with `denied: denied`
+  (fine-grained PAT support for Packages is still an open gap).
 - **Scopes:** `read:packages` **only**. Uncheck everything else — no `repo`,
   no `write:packages`, no `delete:packages`. A `read:packages`-only token
   cannot read source code; the puller's compromise is then bounded to
@@ -286,15 +286,37 @@ Three best-effort helpers, never fatal to the join (`pmcluster/internal/cli/join
 
 On `pmcluster serve` startup, the daemon calls
 `replayRegistryLogins(ctx, st, cfg, log)` — before serving, right after the
-store opens (`pmcluster/internal/cli/serve.go:221-223`). For every DB row it
-decrypts the stored password and re-runs
+store opens (`pmcluster/internal/cli/serve.go`). It delegates to
+`applyStoredRegistryLogins`, which decrypts every stored row and re-runs
 `docker login <host> --username <user> --password-stdin`
-(`pmcluster/internal/cli/registry_replay.go:36-51`). Purpose, from the code
-comment: *"so a manager rebuild (SQLite survived, ~/.docker/config.json gone)
-keeps pulling private images"* (`registry_replay.go:17-20`). Failures are
+(`pmcluster/internal/cli/registry_replay.go`, `github_registry.go`). Purpose,
+from the code comment: *"so a manager rebuild (SQLite survived,
+~/.docker/config.json gone) keeps pulling private images"*. Failures are
 collected per-host and surfaced as one warning — *"registry re-login had
-issues; private images may fail to pull"* — that never blocks the daemon
-(`registry_replay.go:52-54`, `serve.go:221-223`).
+issues; private images may fail to pull"* — that never blocks the daemon.
+
+### 5.4 Every deploy: the same login, applied before the spec is frozen
+
+`docker stack deploy --with-registry-auth` reads Docker's config at the moment
+it runs and copies the credential into each service spec. The daemon therefore
+applies the stored credential **once per deploy**, before the first `docker
+stack deploy` of the operation (`stacks.Service.BeforeApply` →
+`loginBeforeDeploy`, wired in `pmcluster/internal/cli/serve.go` and
+`deploy.go`; `cluster up`/`update` pass the same hook). A multi-level
+`depends_on` deploy still logs in once — the hook is per deploy, not per level.
+
+The login is serialised by the same mutex as the startup replay, pins
+`DOCKER_CONFIG=/root/.docker`, and passes the password on stdin. Success is
+announced at WARN with the credential's age:
+
+```
+WRN docker logged in to ghcr.io using the stored registry credential (added 12 days ago); read-only PATs expire at 90 days — rotate with `pmcluster registry add ghcr.io`
+```
+
+There is no interval, no ticker and no App-token mint on this path. A
+long-lived PAT does not need refreshing; the warnings exist because it *does*
+expire — 90 days after GitHub issues it. `pmcluster doctor` warns from day 60
+(§8), which is the mechanism that catches expiry before a deploy does.
 
 Consequences worth internalising:
 
@@ -393,10 +415,12 @@ unless a step says "on the worker".
    revoking the old token must not break anything any more.
 
 6. **Record:** write the new token's **expiry date** into your rotation
-   calendar / password manager entry. `pmcluster registry list` confirms the
-   host+username are registered, but its timestamp is the original creation
-   date, not the rotation date (§3, `list`), so it cannot be your expiry
-   ledger.
+   calendar / password manager entry. `pmcluster registry list` shows the
+   host+username and the age of the **current** credential: `registry add`
+   resets `created_at` on rotation, so that timestamp is the rotation date.
+   It is still not an expiry ledger — the 90 days run from GitHub's issue
+   date, not from pmcluster's registration — and `pmcluster doctor` warns
+   once it passes 60 days.
 
 Rollback if anything fails before step 5: nothing was lost — the old token is
 still valid and, if you registered a bad one by mistake, re-register by piping
@@ -422,6 +446,13 @@ un-revoked.
   mint each new token with a ~90-day expiry so GitHub's own expiry date *is*
   the deadline, and book the rotation in the calendar when you mint. A puller
   credential that lives forever is a credential nobody remembers it exists.
+- **Two independent warnings, one threshold.** The deploy login states the
+  credential's age on every deploy; `pmcluster doctor`'s `registry credential`
+  check warns once the stored credential is older than 60 days and names the
+  rotation command. Neither fails: an ageing credential still pulls, and the
+  point is to rotate before the 90-day expiry, not to discover it from a
+  failed pull. If the PAT is revoked early, doctor reports the operator's
+  only signal — there is no runtime renewal to fall back on.
 - **Rotate immediately** (same §6 runbook, step 1 = new token, and revoke the
   old one *first* only if it may be live-compromised) on any suspicion: the
   token appeared in a log/screenshot/clipboard mishap, a machine holding it
@@ -434,23 +465,26 @@ un-revoked.
   up *with* the DB or every restore lands in the "unrecoverable ciphertext"
   row of §7 (`cipher.go:1-6`).
 
-## 9. The GitHub App alternative
+## 9. The GitHub App boundary
 
-Everything above still describes the fallback. With an App configured
-(`pmcluster github app set --app-id … --key-file … --installation-id …`):
+The App does not authenticate pulls. Everything above is the pull path; the
+App handles clone, build and the CI token broker (`docs/github-app.md`):
 
-| Concern | Stored PAT (`registry add`) | App installation token |
+| Concern | Stored PAT (`registry add`) | GitHub App installation token |
 |---|---|---|
-| Where the durable secret lives | `registries` row, AES-GCM ciphertext | `github_app` row, AES-GCM ciphertext (the private key) |
-| What docker receives | the PAT | a one-hour installation token, user `x-access-token` |
-| Delivery to workers | `--with-registry-auth` on deploy | unchanged — same deploy path, same flag |
-| Refresh | manual rotation (§6) | daemon re-login every 25 min and on leadership gain (two logins per 60-min token); each *spec* keeps the credential it got at deploy, dead after 60 minutes |
-| Precedence for ghcr.io | used when no App is configured, or the App login fails | used when login succeeds; the stored row is skipped |
-| Scopes | `read:packages` on the owning account | App permission **Packages: Read**, bounded by the installation |
-| Failure signal | deploy error / ImagePullBackOff | `pmcluster doctor` check `github app`, console Test button |
+| Private image pulls | **yes** — applied at startup and once per deploy, frozen into service specs | never |
+| Clone private repos / `go mod download` / image builds | no | yes |
+| GitHub Actions token broker (`POST /api/github/token`) | no | yes |
+| Durable secret | `registries` row, AES-GCM ciphertext | `github_app` row, AES-GCM ciphertext (the private key) |
+| Lifetime | 90 days (read-only PAT) | one hour, minted on demand |
+| Failure signal | deploy WARN with age; `pmcluster doctor` `registry credential` warns from day 60 | `pmcluster doctor` `github app`; console Test button |
 
-What does **not** change: `pmcluster registry add/list/remove` keep working, a
-stored `ghcr.io` row is still replayed on startup when no App is set, and other
-registry hosts are never touched by the App path. Removing the App
-(`pmcluster github app clear`) makes the next daemon start fall back to the
-stored row.
+Why not use the installation token for pulls: a service spec keeps the
+credential it was deployed with, and a one-hour token is dead long before the
+next task is scheduled onto a fresh node. The PAT is the credential whose
+lifetime matches the spec's.
+
+What does **not** change: `pmcluster registry add/list/remove` keep working,
+other registry hosts are untouched by the App path, and removing the App
+(`pmcluster github app clear`) affects clone/build/broker only — pulls keep
+working from the stored PAT.

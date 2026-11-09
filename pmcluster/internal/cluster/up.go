@@ -155,6 +155,10 @@ type UpDeps struct {
 	Docker   runtime.Client
 	Deployer StackDeployer
 	Stdout   io.Writer
+	// BeforeDeploy runs once, before the first stack deploy of the run: the
+	// CLI applies the stored registry credential there so
+	// `--with-registry-auth` has something valid to freeze. Nil is a no-op.
+	BeforeDeploy func(ctx context.Context)
 }
 
 // Up brings the cluster up end-to-end as a sequence of named steps: preflight
@@ -168,6 +172,9 @@ type UpDeps struct {
 // openobserve-auto-auth middleware use the SAME admin credentials — no
 // provisioning API calls, no automation user, no ingestion token.
 func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
+	if deps.BeforeDeploy != nil {
+		deps.BeforeDeploy(ctx)
+	}
 
 	state, err := loadTLSSettings(ctx, deps.Store)
 	if err != nil {

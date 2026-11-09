@@ -331,6 +331,12 @@ func openGitHubApp() (*githubapp.Local, func(), error) {
 	return l, func() { _ = st.Close() }, nil
 }
 
+// newGitHubClient is the daemon/CLI API client. A package variable so tests can
+// point it at an httptest server; production never writes to it.
+var newGitHubClient = func(log *zerolog.Logger) *githubapp.Client {
+	return &githubapp.Client{Log: log}
+}
+
 // newGitHubAppLocal is the daemon-side constructor, which also wires the
 // logger. Kept next to the CLI version so both use the same defaults.
 func newGitHubAppLocal(st *store.Store, cipher *credentials.Cipher, log zerolog.Logger) *githubapp.Local {

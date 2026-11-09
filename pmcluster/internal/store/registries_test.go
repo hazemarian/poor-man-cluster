@@ -153,3 +153,35 @@ func TestDeleteRegistry_NotFound(t *testing.T) {
 		t.Errorf("err = %v, want ErrRegistryNotFound", err)
 	}
 }
+
+// TestUpdateRegistry_ResetsTheCredentialAge: created_at is the age of the
+// CURRENT credential. A rotation must reset it, or the deploy warning and the
+// doctor check would keep reporting the replaced credential's age forever.
+func TestUpdateRegistry_ResetsTheCredentialAge(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	r := &Registry{Host: "ghcr.io", Username: "old", PasswordCiphertext: []byte("old")}
+	if err := s.CreateRegistry(ctx, r); err != nil {
+		t.Fatalf("CreateRegistry: %v", err)
+	}
+	// Backdate the row to make the reset observable without sleeping.
+	if _, err := s.conn().ExecContext(ctx,
+		`UPDATE registries SET created_at = ? WHERE host = ?`, int64(1000), "ghcr.io"); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	if err := s.UpdateRegistry(ctx, &Registry{Host: "ghcr.io", Username: "new", PasswordCiphertext: []byte("new")}); err != nil {
+		t.Fatalf("UpdateRegistry: %v", err)
+	}
+	got, err := s.Registry(ctx, "ghcr.io")
+	if err != nil {
+		t.Fatalf("Registry: %v", err)
+	}
+	if got.CreatedAt <= 1000 {
+		t.Fatalf("created_at = %d after rotation, want it reset to now", got.CreatedAt)
+	}
+	if got.Username != "new" || string(got.PasswordCiphertext) != "new" {
+		t.Fatalf("rotation did not replace the credential: %+v", got)
+	}
+}
