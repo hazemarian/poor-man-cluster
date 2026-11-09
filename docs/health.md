@@ -35,9 +35,21 @@ visible without breaking a pipeline.
 `pmcluster cluster kit verify` (and the `control-plane kit` check above).
 
 The leader publishes the control plane every five minutes as two Raft-replicated
-Docker configs: `pmcluster_state_<ts>` (a tar.gz of `data.db`, `config.yaml`, the
-rendered `config/` tree) and `pmcluster_state_key_<ts>` (the
+Docker configs: `pmcluster_state_<ts>` (a tar.gz of a slim `data.db`, `config.yaml`,
+the rendered `config/` tree) and `pmcluster_state_key_<ts>` (the
 `.encryption_key` bytes alone — key and ciphertext never share a blob).
+
+The `data.db` there is an EXPORT of the authoritative tables (users and token
+hashes, managed credentials, the stack list, webhook sources, registries,
+settings, configs, secrets, site-cert metadata, failover markers), not the
+leader's database file. Stack revisions, backup audit rows, webhook delivery
+history, stack status and node stats are deliberately absent: the whole file had
+grown past Docker's 500 KiB config ceiling in revision payloads, so no snapshot
+was publishable and anything created since the last accepted one lived on one
+disk. A promoted leader therefore serves the same auth, settings, secrets and
+stack list, and reports "no stored revision" for a stack until it is re-deployed;
+`config_versions` is kept because service-scope config history is not in any
+repo. The full `data.db` still rides the tarball/offsite backup path.
 
 Until this drill existed, that pair was only ever exercised when a leader
 actually died. The drill restores it into a temporary directory using the same
@@ -45,7 +57,7 @@ extractor as the real restore, opens the restored `data.db` through the daemon's
 own store (so migrations and pragmas run exactly as they would on promotion),
 and then decrypts every stored secret with the key that came with it. It never
 touches the live data dir, so it is safe on a serving leader — and cheap: a few
-megabytes of tar into `/tmp`.
+hundred kilobytes of tar into `/tmp`.
 
 ```
 snapshot      2026-11-06T11:17:25Z (4m45s old)

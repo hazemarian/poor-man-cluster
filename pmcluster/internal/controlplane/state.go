@@ -5,9 +5,10 @@
 // (the old rsync/tarball dependency).
 //
 // The survivor kit is everything a promoted node needs to serve the same
-// control plane: data.db (users, API keys / token hashes, credential
-// ciphertexts, settings, webhook secrets, stack revisions), config.yaml, and
-// the rendered config/ tree (TLS certs, stack pointers).
+// control plane: an export of data.db's authoritative tables (users, API keys /
+// token hashes, credential ciphertexts, settings, webhook secrets, the stack
+// list), config.yaml, and the rendered config/ tree (TLS certs, stack
+// pointers). Stack REVISIONS are deliberately not carried — see kitdb.go.
 //
 // Security split: the AES-GCM encryption key (.encryption_key) NEVER shares a
 // config blob with the ciphertext it unlocks. Two config families are kept:
@@ -211,6 +212,14 @@ func (k *Kit) Snapshot(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read control-plane kit: %w", err)
 	}
+	// The payload size is logged on EVERY snapshot, before the limit check, not
+	// only in the refusal: growth towards the ceiling is what turns into an
+	// outage (538 KB against a 512 KB cap, 70 refusals in six hours, and the
+	// only trace of it was the error itself). An operator watching the info
+	// line sees the kit creep.
+	log.Info().Int("bytes", len(kit)).Int("limit-bytes", MaxConfigBytes).
+		Int("limit-pct", 100*len(kit)/MaxConfigBytes).
+		Msg("control-plane kit packed")
 	if len(kit) > MaxConfigBytes {
 		return fmt.Errorf("control-plane state payload %d bytes exceeds the %d-byte Docker config limit — the data dir has grown too large for Raft config snapshots; reduce data.db growth or rely on the tarball/offsite backup path", len(kit), MaxConfigBytes)
 	}
@@ -332,7 +341,27 @@ func (k *Kit) maxKitMtime() (time.Time, error) {
 // rendered configs + TLS certs). logs/ and .encryption_key are excluded — the
 // key lives in its own config per the security split, and logs are local
 // noise, not survivor state. Entry paths are relative to DataDir.
+//
+// data.db in the tarball is NOT the leader's file: it is an export of the
+// authoritative tables (see kitdb.go), so the kit stays inside Docker's config
+// ceiling. When the export fails the file is packed verbatim — a kit that
+// carries the whole database still beats no kit at all, and the size that is
+// always logged now makes that visible on the first publish instead of at the
+// limit.
 func (k *Kit) readKit() ([]byte, error) {
+	dbPath, cleanup, exportErr := k.exportedDBPath()
+	if exportErr != nil {
+		k.Log.Warn().Err(exportErr).Str("component", "controlplane").
+			Msg("control-plane kit database export failed; packing data.db verbatim (the kit may exceed the Docker config limit)")
+		dbPath = ""
+	}
+	defer cleanup()
+	return k.packKit(dbPath)
+}
+
+// packKit builds the kit tarball. dbPath, when non-empty, replaces data.db in
+// the archive; it is the exported subset database from exportedDBPath.
+func (k *Kit) packKit(dbPath string) ([]byte, error) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -363,6 +392,13 @@ func (k *Kit) readKit() ([]byte, error) {
 		if rel == ".state_revision" {
 			return nil // node-local bookkeeping, not survivor state
 		}
+		if closeJournal(rel) {
+			// A rollback journal or WAL sidecar describes the state of the
+			// file it was written for. Packing one beside an exported data.db
+			// would leave the promoted node with a "hot journal" that SQLite
+			// replays into a database it does not belong to.
+			return nil
+		}
 		if strings.HasPrefix(rel, stagingPrefix) {
 			// An adoption's scratch directory: excluded like the marker, because
 			// a snapshot must never carry a half-extracted copy of itself.
@@ -378,11 +414,22 @@ func (k *Kit) readKit() ([]byte, error) {
 				return err
 			}
 		case fi.Mode().IsRegular():
-			hdr := &tar.Header{Name: name, Mode: int64(fi.Mode().Perm()), Size: fi.Size(), Typeflag: tar.TypeReg, ModTime: fi.ModTime()}
+			src, size, mode := path, fi.Size(), int64(fi.Mode().Perm())
+			if rel == "data.db" && dbPath != "" {
+				// The exported database, under the name (and mtime) of the
+				// file it stands in for: restore and adoption know only
+				// "data.db".
+				info, err := os.Stat(dbPath)
+				if err != nil {
+					return err
+				}
+				src, size, mode = dbPath, info.Size(), 0o600
+			}
+			hdr := &tar.Header{Name: name, Mode: mode, Size: size, Typeflag: tar.TypeReg, ModTime: fi.ModTime()}
 			if err := tw.WriteHeader(hdr); err != nil {
 				return err
 			}
-			f, err := os.Open(path)
+			f, err := os.Open(src)
 			if err != nil {
 				return err
 			}
@@ -404,6 +451,15 @@ func (k *Kit) readKit() ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// closeJournal reports whether rel names a SQLite sidecar of data.db.
+func closeJournal(rel string) bool {
+	switch filepath.Base(rel) {
+	case "data.db-journal", "data.db-wal", "data.db-shm":
+		return true
+	}
+	return false
 }
 
 // snapshot is the newest Raft-replicated control-plane snapshot as read from

@@ -102,10 +102,11 @@ func tarEntries(t *testing.T, payload []byte) map[string][]byte {
 		var body []byte
 		if hdr.Typeflag == tar.TypeReg {
 			body = make([]byte, hdr.Size)
-			n, rerr := tr.Read(body)
-			// tar.Reader reports io.EOF once the entry's last byte is
-			// consumed; a full read with io.EOF is a success.
-			if rerr != nil && (rerr != io.EOF || n != len(body)) {
+			// io.ReadFull, not a single Read: tar.Reader.Read may return a
+			// short read with a nil error, which would hand a truncated entry
+			// to the caller as if it were complete (a real data.db sliced at
+			// 7 KB reports "database disk image is malformed").
+			if _, rerr := io.ReadFull(tr, body); rerr != nil && rerr != io.EOF {
 				t.Fatal(rerr)
 			}
 		}

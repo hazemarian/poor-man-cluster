@@ -529,8 +529,13 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 		return nil, fmt.Errorf("load latest revision: %w", err)
 	}
 	if len(revs) == 0 {
-		telemetry.RecordReconcile(ctx, stackName, telemetry.ReconcileError)
-		return nil, fmt.Errorf("stack %q has no revisions — deploy it first", stackName)
+		// No stored revision is a NORMAL state on a manager that adopted a slim
+		// control-plane kit: stack revisions do not cross the fleet (they are
+		// re-rendered from the repo), so this node has the stack row and none
+		// of its history. Say exactly that, and carry ErrRevisionNotFound so
+		// callers can tell "nothing here to sync" from "this stack is broken".
+		telemetry.RecordReconcile(ctx, stackName, telemetry.ReconcileSkipped)
+		return nil, fmt.Errorf("stack %q has no revisions on this node — deploy it from its repository to rebuild one: %w", stackName, store.ErrRevisionNotFound)
 	}
 	latest := revs[0]
 

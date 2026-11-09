@@ -3,6 +3,61 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.259 (2026-11-09)
+
+**The control-plane kit carries the authoritative tables instead of the whole `data.db`, so Raft replication works again.**
+
+Measured on the leader: `data.db` 5,218,304 bytes, the kit 538,446 bytes gzipped against Docker's
+`500 KiB` config cap — so **every publish was refused**, 70 times in six hours
+(`control-plane state payload 538446 bytes exceeds the 512000-byte Docker config limit`). No snapshot
+had been publishable for a long time, which means every API key, setting, secret and credential created
+since the last accepted one existed **only on the leader's disk**. `b60c58c` (adopt on leadership gain)
+could not help: there was no fresh snapshot to adopt, and the offsite tarball was the only copy, hours
+behind.
+
+3.7 MB of that file was `stack_revisions`. The operator's decision: **revisions do not need to cross the
+fleet** — a promoted leader re-renders them from the repo — while users, keys/tokens, credential
+ciphertexts, settings, webhook secrets and *which stacks exist* do.
+
+- **The kit's `data.db` is now an export** (`internal/controlplane/kitdb.go`, `store.ExportDB`): a fresh
+  SQLite file with the migrations applied and the rows of the authoritative tables copied in one read
+  transaction. `VACUUM INTO` was rejected — it copies everything, which is exactly what does not fit.
+- **The table list is a decision in code**, with a comment per table: in are `users`,
+  `managed_credentials`, `stacks`, `webhook_sources`, `registries`, `cluster_settings`, `configs`,
+  `config_versions`, `secrets`, `site_certs`, `stack_failover`; out are `stack_revisions` (deploy history,
+  re-rendered from the repo), `backups` (2775 audit rows; archives are re-discovered from disk),
+  `webhook_deliveries`, `stack_status` (rebuilt by the first reconcile pass) and `node_stats` (volatile).
+  `config_versions` was the genuinely ambiguous one — 258 KB live, 36 KB gzipped — and is **kept**, because
+  service-scope config history edited in the console is in no repo and dropping it would take away
+  `config rollback` on the promoted leader. Correctness beats bytes: 36 KB is not what breaks the cap.
+- **The limit check stays, and the size is now always visible**: the packed payload size is logged at info
+  on every publish (`bytes`, `limit-bytes`, `limit-pct`), so growth is observable before it becomes a
+  refusal. Above the cap the existing error path is unchanged.
+- **A promoted leader degrades cleanly without revisions.** `stacks.Sync` on a stack whose revision is
+  absent returns an error wrapping `store.ErrRevisionNotFound` instead of a bare "no revisions"; `reconcile`
+  classifies it as `skipped` (new telemetry status, so it is not counted as an error), logs once at info
+  per stack and **does not** record a stack error or mark the stack errored; `move` says to re-deploy
+  first rather than "not found". Everything else — auth, settings, secrets, configs, the stack list, badges
+  from live swarm — is unaffected. An absent revision is normal, not corruption.
+- **`data.db-journal` / `-wal` / `-shm` are excluded from the kit.** Packing a sidecar next to a *different*
+  `data.db` would give the promoted node a hot journal to replay into the exported file.
+- If the export itself fails (a `data.db` that is not a readable database), the kit falls back to packing
+  the file verbatim and warns — a kit carrying too much still beats no kit at all, and the size log makes it
+  visible immediately.
+
+Tests: a 10,000-revision database (incompressible payloads) produces a kit at **1.5 % of the limit**, while
+the same fixture packed *with* revisions is **22× the limit** — the same test fails if revisions are
+included, and asserts the excluded tables are empty in the packed file. Fidelity: every authoritative row
+survives pack→unpack with row counts plus token hashes, roles, credential/webhook/registry ciphertext
+bytes, settings, config content and kept versions, secret payload, site-cert metadata, failover marker and
+the stack list. Adoption: a manager adopting a slim kit serves the same users, keys and settings through the
+handle it already holds, lists the same stacks, and reports a missing revision as `ErrRevisionNotFound`.
+Reconcile: a stack row with no revision is left healthy, gains no error record, and is announced once, not
+per pass (verified to fail without the classification). Store: `ExportDB` copies only the named tables, the
+result opens through the daemon's store with nothing left to migrate, a non-database source is refused
+without leaving a partial file, and unsafe table names are rejected. A schema test fails when a migration
+adds a table without classifying it. Observability: the logged payload size equals the published bytes.
+
 ## v0.2.258 (2026-11-09)
 
 **The console overview now shows, per node, what is eating that machine — and it shows it while telemetry is broken.**

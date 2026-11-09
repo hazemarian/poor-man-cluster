@@ -918,3 +918,73 @@ func TestRunOnce_StorageFailoverEnabledMovesToHealthyAlternate(t *testing.T) {
 		t.Errorf("failover moves after cooldown pass = %v, want still 1", got)
 	}
 }
+
+// TestRunOnce_StackWithoutRevisionIsNotAnError is the adoption case: a manager
+// that gains leadership adopts a slim control-plane kit, which carries the stack
+// ROWS but not their revisions (revisions do not cross the fleet). The pass must
+// keep serving that stack — no error recorded, no "error" badge — and must say
+// once, not on every pass, why the drift check is skipped.
+func TestRunOnce_StackWithoutRevisionIsNotAnError(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	// The stack row exists; its revision row does not. This is what
+	// controlplane's authoritative-table export leaves behind.
+	if _, err := st.DB().ExecContext(ctx,
+		`INSERT INTO stacks (name, current_revision, repo_url, source_file, created_at, updated_at)
+		 VALUES ('demo', 1004, 'https://github.com/example/demo.git', 'deploy/demo.yaml', 1, 1)`,
+	); err != nil {
+		t.Fatalf("seed stack row: %v", err)
+	}
+
+	dep := &recordingDeployer{}
+	svc := &stacks.Service{Store: st, Deployer: dep, MkdirAll: func(string, os.FileMode) error { return nil }}
+	var logs bytes.Buffer
+	r := &Reconciler{
+		Store:         st,
+		DeployService: svc,
+		Services:      &fakeServices{svcs: []services.ServiceSummary{{Name: "demo_web", Desired: 1, Replicas: 1}}},
+		Log:           zerolog.New(&logs),
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := r.RunOnce(ctx); err != nil {
+			t.Fatalf("RunOnce %d: %v", i+1, err)
+		}
+	}
+
+	row, err := st.Stack(ctx, "demo")
+	if err != nil {
+		t.Fatalf("stack row unreadable after the pass: %v", err)
+	}
+	if row.LastError != "" {
+		t.Errorf("a stack with no stored revision gained an error record: %s", row.LastError)
+	}
+	if dep.calls != 0 {
+		t.Errorf("deployer called %d time(s) with no revision to re-render", dep.calls)
+	}
+	snap, err := st.StackStatus(ctx, "demo")
+	if err != nil {
+		t.Fatalf("no status snapshot written for the stack: %v", err)
+	}
+	if snap.Status == StatusError {
+		t.Errorf("stack status = %q; a missing revision is not a failure", snap.Status)
+	}
+	if snap.Status != StatusHealthy {
+		t.Errorf("stack status = %q, want the live service status (healthy)", snap.Status)
+	}
+
+	// The notice is emitted once per stack per process, at info, not per pass.
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	notices := 0
+	for _, line := range lines {
+		if strings.Contains(line, "slim control-plane kit") {
+			notices++
+			if !strings.Contains(line, `"level":"info"`) {
+				t.Errorf("slim-kit notice is not info level: %s", line)
+			}
+		}
+	}
+	if notices != 1 {
+		t.Errorf("slim-kit notice logged %d times across 2 passes, want 1; log:\n%s", notices, logs.String())
+	}
+}

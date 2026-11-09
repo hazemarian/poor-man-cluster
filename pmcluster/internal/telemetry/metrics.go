@@ -65,6 +65,12 @@ const (
 	// ReconcileApplied: drift (or a config/secrets() input change) was
 	// re-deployed successfully.
 	ReconcileApplied = "applied"
+	// ReconcileSkipped: there was nothing to reconcile because this node holds
+	// no stored revision for the stack. That is the normal state of a manager
+	// that adopted a slim control-plane kit (revisions do not cross the fleet;
+	// they are re-rendered from the repo on the next deploy), so it is neither
+	// an error nor an in-sync sample.
+	ReconcileSkipped = "skipped"
 	// ReconcileError: the reconcile run failed.
 	ReconcileError = "error"
 )

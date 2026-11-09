@@ -158,6 +158,10 @@ type Reconciler struct {
 	syncErrMu    sync.Mutex
 	lastSyncErrs map[string]string    // stack -> last logged/recorded error string
 	lastSyncWarn map[string]time.Time // stack -> last "still failing" heartbeat WRN
+	// Stacks already reported as having no stored revision (a slim
+	// control-plane kit adopted on promotion). Per-process, because the
+	// condition only changes when the stack is re-deployed.
+	noRevSeen map[string]bool
 
 	// Per-stack "storage node down" warning state, throttled the same way as
 	// the sync error: log on state change (first time or node changed) plus a
@@ -261,6 +265,14 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 		}
 		res, serr := r.DeployService.Sync(ctx, st.Name)
 		switch {
+		case errors.Is(serr, store.ErrRevisionNotFound):
+			// This node holds the stack LIST but not its revision history: a
+			// promoted leader adopted a slim control-plane kit (revisions do
+			// not cross the fleet — they are re-rendered from the repo). There
+			// is nothing to re-render, and nothing is broken: do not record a
+			// stack error, do not mark the stack errored, and say so once
+			// rather than on every pass.
+			r.noteNoStoredRevision(st.Name, log)
 		case serr != nil:
 			r.handleSyncError(ctx, st.Name, st.CurrentRevision, serr, log)
 		case res != nil && res.Changed:
@@ -339,6 +351,31 @@ func (r *Reconciler) handleSyncError(ctx context.Context, stackName string, revi
 		return
 	}
 	r.syncErrMu.Unlock()
+}
+
+// noteNoStoredRevision reports a stack this node has a row for but no revision
+// of — the state of every app stack after a promoted leader adopts a slim
+// control-plane kit, because revisions do not cross the fleet.
+//
+// It is deliberately NOT handleSyncError: there is no failure, so nothing is
+// recorded on the stack and its status is left to the health snapshot (which
+// reads live Swarm service state). The notice is logged once per stack per
+// process, since the condition only changes when an operator re-deploys.
+func (r *Reconciler) noteNoStoredRevision(stackName string, log zerolog.Logger) {
+	r.syncErrMu.Lock()
+	if r.noRevSeen == nil {
+		r.noRevSeen = map[string]bool{}
+	}
+	seen := r.noRevSeen[stackName]
+	r.noRevSeen[stackName] = true
+	r.syncErrMu.Unlock()
+
+	if seen {
+		log.Debug().Str("stack", stackName).Msg("reconcile — still no stored revision on this node; drift check skipped")
+		return
+	}
+	log.Info().Str("stack", stackName).
+		Msg("reconcile — no stored revision on this node (slim control-plane kit): drift check skipped until the stack is re-deployed; the stack row, its configs and secrets are intact")
 }
 
 // logStoragePaused logs the "storage node down; pausing app sync" warning the

@@ -70,14 +70,36 @@ Key properties:
 
 Alongside the reconciler, the leader runs `controlplane.Kit.Loop` (5-minute tick,
 plus an immediate snapshot on promotion). It re-publishes the failover-survivor
-kit (data.db, config.yaml, config/ tree — and the encryption key in a separate
-config) into `pmcluster_state_*` / `pmcluster_state_key_*` Docker configs, which
-Swarm's Raft store replicates to every manager. The snapshot only fires when a
-kit file changed since the newest config (deploys, settings, secret/webhook
-edits all land within one interval), prunes to the newest two, and fails loudly
-when a payload would exceed Docker's 500 KiB config ceiling. It is independent
-of `reconcile_interval` — a cluster with the reconcile loop disabled still keeps
-its control plane replicated. See `internal/controlplane`.
+kit (config.yaml, config/ tree, the encryption key in a separate config, and an
+EXPORT of `data.db`'s authoritative tables — see below) into
+`pmcluster_state_*` / `pmcluster_state_key_*` Docker configs, which Swarm's Raft
+store replicates to every manager. The snapshot only fires when a kit file
+changed since the newest config (deploys, settings, secret/webhook edits all land
+within one interval), logs the packed payload size at info on every publish,
+prunes to the newest two, and fails loudly when a payload would exceed Docker's
+500 KiB config ceiling. It is independent of `reconcile_interval` — a cluster
+with the reconcile loop disabled still keeps its control plane replicated. See
+`internal/controlplane`.
+
+**What crosses the fleet, and what does not.** The kit's `data.db` is not the
+leader's file: `controlplane` exports a fresh SQLite database that runs the
+migrations and copies the authoritative tables only — `users` (token hashes,
+roles, scopes), `managed_credentials`, `stacks` (name, repo, deploy file,
+current-revision pointer), `webhook_sources`, `registries`, `cluster_settings`,
+`configs`, `config_versions`, `secrets`, `site_certs`, `stack_failover`.
+`stack_revisions`, `backups`, `webhook_deliveries`, `stack_status` and
+`node_stats` stay behind. The reasons are in `internal/controlplane/kitdb.go` and
+held to the schema by a test that fails when a migration adds a table without a
+decision. This was forced by measurement: the leader's `data.db` reached 5.2 MB,
+3.7 MB of it revisions, 538 KB gzipped against the 512 KB ceiling, so every
+publish was refused for days and the API keys, settings and secrets created in
+that window existed only on one disk. A promoted leader now serves identical
+auth, settings, secrets and stack LIST; a stack arrives without its revision, so
+`Sync` reports "no stored revision on this node" (telemetry status `skipped`)
+and the reconcile loop skips its drift check for that stack — once, at info —
+instead of marking it errored. Re-deploying from the repo rebuilds the history.
+`VACUUM INTO` was rejected for this: it copies everything, which is precisely
+what does not fit.
 
 **Adoption happens at startup AND on leadership gain.** Two call sites run the
 same predicate, and they are the only two:

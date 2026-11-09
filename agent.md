@@ -773,6 +773,19 @@ runs, `adoptionGate` answers 503 + `Retry-After: 1` for every route but
 runs `kit.Loop` (5-min change-detection snapshot; 500 KiB config ceiling; keeps
 2). Adoption is never part of a tick.
 
+The kit's `data.db` is an EXPORT of the authoritative tables, not the leader's
+file (`internal/controlplane/kitdb.go`, `store.ExportDB`): users, credentials,
+stacks, webhook_sources, registries, cluster_settings, configs, config_versions,
+secrets, site_certs, stack_failover. `stack_revisions`, `backups`,
+`webhook_deliveries`, `stack_status` and `node_stats` do not cross the fleet —
+revisions are re-rendered from the repo, the rest is rebuildable bookkeeping. The
+whole file hit 5.2 MB (538 KB gzipped) and every snapshot was refused, so a
+promoted leader now has the stack LIST without revision history: `stacks.Sync`
+returns an error wrapping `store.ErrRevisionNotFound`, and `reconcile` treats it
+as `skipped` (info, once per stack) rather than an error. The payload size is
+logged at info on every publish. A test holds the schema to those two table
+lists, so a new migration must be classified.
+
 ### Upgrading the platform
 Push a `v*` tag → `release.yml` cross-compiles 4 tarballs + SHA256SUMS +
 builds/pushes `ghcr.io/hazemarian/pmcluster-edge:<v>` + `:latest`.
