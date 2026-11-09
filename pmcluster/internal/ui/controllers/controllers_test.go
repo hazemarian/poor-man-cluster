@@ -36,6 +36,11 @@ var nodeStatsFixture = `{"node_stats":[
   "top_cpu":[{"pid":7,"name":"nginx","rss_mb":40,"cpu_pct":0.2}],
   "sample_ts":1,"updated_at":1}]}`
 
+// applyRecordFixture is the /api/cluster/apply body the controller harness
+// serves. Default: no apply recorded, so the overview renders no banner; a test
+// that wants one assigns its own body first.
+var applyRecordFixture = `{"present":false}`
+
 // ctrlFakeDaemon serves canned /api responses for the controllers under test.
 // Every endpoint requires the Bearer token, mirroring the daemon.
 func ctrlFakeDaemon(t *testing.T) *httptest.Server {
@@ -64,6 +69,13 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/api/node-stats", func(w http.ResponseWriter, r *http.Request) {
 		write(w, nodeStatsFixture)
+	})
+	mux.HandleFunc("/api/cluster/apply", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		write(w, applyRecordFixture)
 	})
 	mux.HandleFunc("/api/nodes/manager-1/storage", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {

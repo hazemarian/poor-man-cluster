@@ -80,9 +80,13 @@ type Service struct {
 	// RunOnce → restart_policy: condition: none. For migrations.
 	RunOnce bool `json:"run_once,omitempty"`
 
-	// Mode is the swarm deploy mode: "global" runs one task on every node
-	// (used by platform agents like the OTel collector and backup); "" means
-	// replicated (the default). Mutually exclusive with Replicas.
+	// Mode is the swarm deploy mode: "global" runs one task on every node.
+	// It is reserved for pmcluster's own platform stacks (platform: true —
+	// the Traefik gateway is the one service that must run per node); a
+	// customer manifest that sets it is refused in validation, because one
+	// task per node multiplies the service's resources and collides on its
+	// published ports. "" means replicated (the default). Mutually exclusive
+	// with Replicas.
 	Mode string `json:"mode,omitempty"`
 
 	// Restart overrides the restart condition explicitly ("any",

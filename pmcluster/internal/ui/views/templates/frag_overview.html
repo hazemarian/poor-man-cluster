@@ -43,7 +43,7 @@
     <ul class="b-list">
       {{range .Apply.Warnings}}<li>{{.}}</li>{{end}}
     </ul>
-    <p class="muted">{{TF "overview.apply_warnings_when" .Apply.At .Apply.Source}}</p>
+    <p class="muted">{{TF "overview.apply_warnings_when" .Apply.AtText .Apply.Source}}</p>
   </div>
 </div>
 {{end}}

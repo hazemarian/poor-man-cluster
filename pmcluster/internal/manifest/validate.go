@@ -66,7 +66,7 @@ func Validate(app *dsl.App) error {
 		if !nameRe.MatchString(name) {
 			return fmt.Errorf("services.%s: invalid service name", name)
 		}
-		if err := validateService(name, svc); err != nil {
+		if err := validateService(name, svc, app.Platform); err != nil {
 			return err
 		}
 	}
@@ -78,13 +78,23 @@ func Validate(app *dsl.App) error {
 	return nil
 }
 
-func validateService(name string, s *dsl.Service) error {
+func validateService(name string, s *dsl.Service, platform bool) error {
 	prefix := "services." + name
 	if s.Image == "" {
 		return fmt.Errorf("%s.image: required", prefix)
 	}
 	if s.Replicas != nil && *s.Replicas < 0 {
 		return fmt.Errorf("%s.replicas: must be ≥ 0, got %d", prefix, *s.Replicas)
+	}
+	// mode: global is a platform-stack capability, not an app one. One task per
+	// node means the service's resources multiply by the node count and its
+	// published ports collide on every node that is not running the task — for
+	// no benefit an application stack can have (an app is load-balanced behind
+	// Traefik, it does not scrape the host). pmcluster's own agents (the
+	// Traefik gateway) genuinely need one task per node and carry
+	// platform: true, so the mapping stays; customer manifests do not.
+	if s.Mode == "global" && !platform {
+		return fmt.Errorf("%s.mode: mode: global is reserved for pmcluster-managed platform stacks — an application stack would run one task per node, multiplying its resources and colliding on published ports; remove mode to run a replicated service", prefix)
 	}
 	if s.RunOnce && s.Replicas != nil {
 		return fmt.Errorf("%s: replicas and run_once are mutually exclusive", prefix)

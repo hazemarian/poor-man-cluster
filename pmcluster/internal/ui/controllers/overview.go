@@ -188,6 +188,22 @@ type applyModel struct {
 // to choose between a quiet line and a banner.
 func (a *applyModel) HasWarnings() bool { return a != nil && len(a.Warnings) > 0 }
 
+// AtText renders the apply's timestamp for the banner. The API hands back the
+// stored time as RFC3339; a console line saying `2026-11-08T22:41:07.123456Z`
+// is a payload, not a reading, so it is parsed and formatted here. An
+// unparseable value falls back to the raw string rather than hiding when the
+// apply happened.
+func (a *applyModel) AtText() string {
+	if a == nil || strings.TrimSpace(a.At) == "" {
+		return "—"
+	}
+	t, err := time.Parse(time.RFC3339Nano, a.At)
+	if err != nil {
+		return a.At
+	}
+	return t.UTC().Format("2006-01-02 15:04 MST")
+}
+
 type infoModel struct {
 	NodeName         string
 	ServerVersion    string

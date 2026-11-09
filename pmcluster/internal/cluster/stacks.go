@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +26,41 @@ type dockerCLIDeployer struct {
 	envExtras []string
 	stdout    io.Writer
 	stderr    io.Writer
+
+	// run executes one docker command. Nil means the real CLI; tests set it
+	// to drive the deployer's decisions without a daemon.
+	run dockerRunner
+}
+
+// dockerRunner runs `docker <args>` (with optional stdin) and returns the
+// combined output, matching runWithOutput's contract.
+type dockerRunner func(ctx context.Context, stdin []byte, args ...string) (string, error)
+
+// docker dispatches to the injected runner or the real CLI. Every docker
+// invocation in this file goes through here so the mode reconciliation below
+// is testable without a Docker socket — the decision it makes (remove this
+// service or leave it) is what the tests pin, not the argv shape of exec.
+func (d *dockerCLIDeployer) docker(ctx context.Context, stdin []byte, args ...string) (string, error) {
+	if d.run != nil {
+		return d.run(ctx, stdin, args...)
+	}
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
+	return d.runWithOutput(cmd)
+}
+
+// notice writes an informational line to the run's output (the same stream
+// the workflow reporter and the warning sink read).
+func (d *dockerCLIDeployer) notice(format string, args ...any) {
+	w := d.stdout
+	if w == nil {
+		w = d.stderr
+	}
+	if w != nil {
+		fmt.Fprintf(w, format, args...)
+	}
 }
 
 // NewDockerCLIDeployer streams the docker process's stdout/stderr to w
@@ -77,17 +113,22 @@ func (d *dockerCLIDeployer) DeployStack(ctx context.Context, name string, compos
 // deployStack runs `docker stack deploy` for the given compose (with the
 // "update out of sequence" retry). It does NOT prune or force-update —
 // those are the caller's choice (full-stack vs ordered per-level deploys).
+//
+// Before the deploy it recreates services whose swarm mode changed (see
+// recreateModeChanges): `docker service update` cannot change a mode, and
+// leaving it to `docker stack deploy` aborts the whole stack.
 func (d *dockerCLIDeployer) deployStack(ctx context.Context, name string, composeYAML []byte) error {
+	if err := d.recreateModeChanges(ctx, name, composeYAML); err != nil {
+		return err
+	}
 	deploy := func() (string, error) {
-		cmd := exec.CommandContext(ctx, "docker", "stack", "deploy",
+		return d.docker(ctx, composeYAML, "stack", "deploy",
 			"--detach=true",
 			"--resolve-image=always",
 			"--with-registry-auth",
 			"-c", "-",
 			name,
 		)
-		cmd.Stdin = bytes.NewReader(composeYAML)
-		return d.runWithOutput(cmd)
 	}
 
 	out, err := deploy()
@@ -127,6 +168,109 @@ func (d *dockerCLIDeployer) DeployStackNoPrune(ctx context.Context, name string,
 	return d.deployStack(ctx, name, composeYAML)
 }
 
+// composeServiceMode is one rendered service's swarm mode, with the full
+// stack-prefixed name the swarm knows it by.
+type composeServiceMode struct {
+	FullName string
+	Mode     string // "global" or "replicated"
+}
+
+// renderedServiceModes lists the mode each service in composeYAML asks for.
+//
+// Only deploy.mode == global is special: everything else — no deploy block,
+// an explicit replicas count, an update_config — is a replicated service, which
+// is what Swarm reports for it. Names are sorted so a mode reconciliation
+// touches the stack in a stable order (and the tests can assert an order).
+func renderedServiceModes(stackName string, composeYAML []byte) ([]composeServiceMode, error) {
+	var doc struct {
+		Services map[string]struct {
+			Deploy *struct {
+				Mode string `json:"mode"`
+			} `json:"deploy"`
+		} `json:"services"`
+	}
+	if err := yaml.Unmarshal(composeYAML, &doc); err != nil {
+		return nil, fmt.Errorf("parse compose for %s (service modes): %w", stackName, err)
+	}
+	out := make([]composeServiceMode, 0, len(doc.Services))
+	for svc, spec := range doc.Services {
+		mode := "replicated"
+		if spec.Deploy != nil && spec.Deploy.Mode == "global" {
+			mode = "global"
+		}
+		out = append(out, composeServiceMode{FullName: stackName + "_" + svc, Mode: mode})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FullName < out[j].FullName })
+	return out, nil
+}
+
+// swarmServiceMode returns the live mode of a swarm service. ok is false when
+// the service does not exist yet (nothing to compare, the deploy creates it) or
+// when the inspect failed for any other reason: an unreadable spec is not
+// evidence of a mode change, and removing a service on a failed read would be
+// destructive.
+func (d *dockerCLIDeployer) swarmServiceMode(ctx context.Context, fullName string) (mode string, ok bool) {
+	out, err := d.docker(ctx, nil, "service", "inspect",
+		"--format", "{{if .Spec.Mode.Global}}global{{else}}replicated{{end}}",
+		fullName)
+	if err != nil {
+		return "", false
+	}
+	mode = strings.TrimSpace(out)
+	if mode != "global" && mode != "replicated" {
+		return "", false
+	}
+	return mode, true
+}
+
+// recreateModeChanges removes live stack services whose swarm mode differs from
+// the one the rendered compose asks for, so the deploy that follows recreates
+// them.
+//
+// `docker service update` cannot change a service's mode. Swarm answers
+// `Unimplemented: service mode change is not allowed`, and `docker stack
+// deploy` — which issues that same update — aborts the WHOLE stack on it. A
+// single global→replicated flip therefore left every other service of the stack
+// on its old spec, and on `cluster update` left the edge console fleet-wide on
+// the old image. A mode change is the one update Swarm cannot do in place, so
+// the service is removed and left to the deploy to recreate.
+//
+// Only a mode difference triggers this: identical modes and every non-mode
+// change keep the normal update path. A failed remove is a warning, not a fatal
+// — the deploy still runs and reports its own error if the mode really could
+// not be changed.
+func (d *dockerCLIDeployer) recreateModeChanges(ctx context.Context, stackName string, composeYAML []byte) error {
+	wanted, err := renderedServiceModes(stackName, composeYAML)
+	if err != nil {
+		return err
+	}
+	for _, svc := range wanted {
+		live, ok := d.swarmServiceMode(ctx, svc.FullName)
+		if !ok || live == svc.Mode {
+			continue
+		}
+		d.notice("  ▶ %s: mode %s → %s; removing it so the deploy recreates it\n",
+			svc.FullName, live, svc.Mode)
+		if out, rmErr := d.docker(ctx, nil, "service", "rm", svc.FullName); rmErr != nil {
+			d.notice("  ⚠ %s: mode change %s → %s could not be applied: %s — docker cannot change a service's mode in place, so this service keeps its old mode until it is removed by hand\n",
+				svc.FullName, live, svc.Mode, firstLine(out, rmErr))
+		}
+	}
+	return nil
+}
+
+// firstLine renders a failed docker call in one warning line: the CLI's output
+// when it has one (it names the actual Swarm error), the error otherwise.
+func firstLine(out string, err error) string {
+	if s := strings.TrimSpace(out); s != "" {
+		if i := strings.IndexByte(s, '\n'); i >= 0 {
+			s = s[:i]
+		}
+		return s
+	}
+	return err.Error()
+}
+
 // PruneStack implements StackDeployer — drift-prune only (no deploy, no
 // force-update). Called once after an ordered per-level deploy with the
 // full stack compose so services dropped from the manifest are removed.
@@ -142,20 +286,18 @@ func (d *dockerCLIDeployer) PruneStack(ctx context.Context, name string, compose
 // deploys (platform + app): diff the stack's live service list against the
 // compose's top-level `services:` keys and `docker service rm` the leftovers.
 func (d *dockerCLIDeployer) pruneStackServices(ctx context.Context, stackName string, composeYAML []byte) error {
-	listCmd := exec.CommandContext(ctx, "docker", "stack", "services",
+	listOut, err := d.docker(ctx, nil, "stack", "services",
 		"--format", "{{.Name}}", stackName)
-	listOut, err := d.runWithOutput(listCmd)
 	if err != nil {
 		return fmt.Errorf("docker stack services %s (prune): %s", stackName, listOut)
 	}
-	live := strings.Split(strings.TrimSpace(listOut), "\n")
-	remove, err := pruneCandidates(stackName, composeYAML, live)
+	livesvc := strings.Split(strings.TrimSpace(listOut), "\n")
+	remove, err := pruneCandidates(stackName, composeYAML, livesvc)
 	if err != nil {
 		return err
 	}
 	for _, fullName := range remove {
-		rmCmd := exec.CommandContext(ctx, "docker", "service", "rm", fullName)
-		if rmOut, rmErr := d.runWithOutput(rmCmd); rmErr != nil {
+		if rmOut, rmErr := d.docker(ctx, nil, "service", "rm", fullName); rmErr != nil {
 			return fmt.Errorf("docker service rm %s: %s", fullName, rmOut)
 		}
 	}
@@ -197,9 +339,8 @@ func pruneCandidates(stackName string, composeYAML []byte, live []string) ([]str
 // --force`; run_once jobs (which become terminal after completion) get
 // removed before stack deploy so they are re-created as fresh tasks.
 func (d *dockerCLIDeployer) forceUpdateStackServices(ctx context.Context, stackName string) error {
-	listCmd := exec.CommandContext(ctx, "docker", "stack", "services",
+	listOut, err := d.docker(ctx, nil, "stack", "services",
 		"--format", "{{.Name}}", stackName)
-	listOut, err := d.runWithOutput(listCmd)
 	if err != nil {
 		return fmt.Errorf("docker stack services %s: %s", stackName, listOut)
 	}
@@ -217,8 +358,7 @@ func (d *dockerCLIDeployer) forceUpdateStackServices(ctx context.Context, stackN
 }
 
 func (d *dockerCLIDeployer) RemoveStack(ctx context.Context, name string) error {
-	cmd := exec.CommandContext(ctx, "docker", "stack", "rm", name)
-	out, err := d.runWithOutput(cmd)
+	out, err := d.docker(ctx, nil, "stack", "rm", name)
 	if err != nil {
 		if out != "" {
 			return fmt.Errorf("docker stack rm %s: %s", name, out)
@@ -239,12 +379,11 @@ const forceUpdateRetries = 5
 const forceUpdateBackoff = 500 * time.Millisecond
 
 func (d *dockerCLIDeployer) ForceUpdateService(ctx context.Context, fullName string) error {
-	cmd := exec.CommandContext(ctx, "docker", "service", "update",
+	out, err := d.docker(ctx, nil, "service", "update",
 		"--force",
 		"--detach=true",
 		fullName,
 	)
-	out, err := d.runWithOutput(cmd)
 	if err != nil {
 
 		if strings.Contains(out, "update out of sequence") {
@@ -254,8 +393,8 @@ func (d *dockerCLIDeployer) ForceUpdateService(ctx context.Context, fullName str
 					return fmt.Errorf("docker service update --force %s: %w", fullName, ctx.Err())
 				case <-time.After(forceUpdateBackoff):
 				}
-				if retryOut, retryErr := d.runWithOutput(exec.CommandContext(ctx, "docker", "service", "update",
-					"--force", "--detach=true", fullName)); retryErr == nil {
+				if retryOut, retryErr := d.docker(ctx, nil, "service", "update",
+					"--force", "--detach=true", fullName); retryErr == nil {
 					return nil
 				} else {
 					out = retryOut
@@ -276,12 +415,11 @@ func (d *dockerCLIDeployer) ForceUpdateService(ctx context.Context, fullName str
 
 func (d *dockerCLIDeployer) PruneStaleContainers(ctx context.Context, stackName string, olderThan string) error {
 
-	listCmd := exec.CommandContext(ctx, "docker", "container", "ls", "-a",
+	listOut, err := d.docker(ctx, nil, "container", "ls", "-a",
 		"--filter", "status=exited",
 		"--filter", "name=^/"+stackName+"_",
 		"--format", "{{.ID}}",
 	)
-	listOut, err := d.runWithOutput(listCmd)
 	if err != nil {
 		return fmt.Errorf("docker container ls (stale %s): %s", stackName, listOut)
 	}
@@ -297,9 +435,8 @@ func (d *dockerCLIDeployer) PruneStaleContainers(ctx context.Context, stackName 
 			continue
 		}
 
-		inspectCmd := exec.CommandContext(ctx, "docker", "inspect",
+		finishedAt, err := d.docker(ctx, nil, "inspect",
 			"--format", "{{.State.FinishedAt}}", id)
-		finishedAt, err := d.runWithOutput(inspectCmd)
 		if err != nil {
 			continue
 		}
@@ -313,8 +450,7 @@ func (d *dockerCLIDeployer) PruneStaleContainers(ctx context.Context, stackName 
 			continue
 		}
 
-		rmCmd := exec.CommandContext(ctx, "docker", "rm", id)
-		_, _ = d.runWithOutput(rmCmd)
+		_, _ = d.docker(ctx, nil, "rm", id)
 	}
 	return nil
 }

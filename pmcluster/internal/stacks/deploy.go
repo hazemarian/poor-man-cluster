@@ -392,6 +392,13 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 	wf.Add("Interpolating and validating manifest", func(ctx context.Context) error {
 		return manifest.InterpolateValidate(app)
 	})
+	// A hostname pin is rendered as `node.hostname == <value>`; a typo produces
+	// a service that can never schedule and nothing says so at deploy time.
+	// Checked against the live swarm here, after interpolation (which is what
+	// resolves any ${var}) and before anything is recorded or applied.
+	wf.Add("Checking placement hosts against the swarm", func(ctx context.Context) error {
+		return s.validatePlacementHosts(ctx, app)
+	})
 	wf.Add("Translating to Compose (resolving configs/secrets)", func(ctx context.Context) error {
 		// Build the neutral IR first so the ordered per-level deploy can
 		// topologically sort services from depends_on and render each level

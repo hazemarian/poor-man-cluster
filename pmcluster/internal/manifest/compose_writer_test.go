@@ -512,12 +512,19 @@ func deployOf(t *testing.T, cf composeFile, svc string) *composeDeploy {
 }
 
 // TestTranslate_GlobalMode verifies mode: global renders a Swarm global
-// service — deploy mode global, restart_policy condition defaulting to
-// "any", NO replicas key, NO update_config block — plus the validation rules
-// (mode: global is mutually exclusive with replicas and run_once) and the
-// stateful auto-pin exemption (global services run on every node, never pin).
+// service — deploy mode global, restart_policy condition defaulting to "any",
+// NO replicas key, NO update_config block — plus the validation rules (mode:
+// global is mutually exclusive with replicas and run_once) and the stateful
+// auto-pin exemption (global services run on every node, never pin).
+//
+// REWRITTEN: this used to pin the mapping on an ordinary app stack. mode:
+// global is now a platform-stack capability — the Traefik gateway is the one
+// service that must run one task per node, and it carries platform: true — so
+// the rendering assertions run on a platform app and the last block pins the
+// rejection of a customer manifest that asks for it.
 func TestTranslate_GlobalMode(t *testing.T) {
 	app := baseApp()
+	app.Platform = true
 	app.Services["api"].Mode = "global"
 
 	s, cf := renderCompose(t, app, nil)
@@ -550,6 +557,7 @@ func TestTranslate_GlobalMode(t *testing.T) {
 
 	// An explicit restart override is honored on the global branch.
 	app = baseApp()
+	app.Platform = true
 	app.Services["api"].Mode = "global"
 	app.Services["api"].Restart = "on-failure"
 	s, _ = renderCompose(t, app, nil)
@@ -560,6 +568,7 @@ func TestTranslate_GlobalMode(t *testing.T) {
 	// Stateful auto-pin exemption: a global service holding a volume is NOT
 	// pinned to the platform node — it must run on every node.
 	app = baseApp()
+	app.Platform = true
 	app.Services["api"].Mode = "global"
 	app.Services["api"].Volumes = []string{"data:/data"}
 	s, _ = renderCompose(t, app, &ComposeWriter{PinNode: "node-01"})
@@ -570,16 +579,26 @@ func TestTranslate_GlobalMode(t *testing.T) {
 		t.Errorf("global service must not carry the %s pin label:\n%s", runtime.NodeLabel, s)
 	}
 
-	// Validation: mode: global is meaningless with replicas / run_once.
+	// Validation: mode: global is meaningless with replicas / run_once — on a
+	// platform stack, where the mode itself is allowed.
 	bad := baseApp()
+	bad.Platform = true
 	bad.Services["api"].Mode = "global"
 	bad.Services["api"].Replicas = ptr(2)
 	mustFail(t, bad, "replicas and mode: global are mutually exclusive")
 
 	bad = baseApp()
+	bad.Platform = true
 	bad.Services["api"].Mode = "global"
 	bad.Services["api"].RunOnce = true
 	mustFail(t, bad, "run_once and mode: global are mutually exclusive")
+
+	// A customer stack may not ask for it at all: one task per node multiplies
+	// the service's resources and collides on its published ports, and there is
+	// no application that needs it.
+	bad = baseApp()
+	bad.Services["api"].Mode = "global"
+	mustFail(t, bad, "services.api.mode: mode: global is reserved for pmcluster-managed platform stacks")
 
 	// Anything other than "global" (or empty) is rejected.
 	bad = baseApp()
@@ -1047,7 +1066,7 @@ func TestTranslate_AppNetworks(t *testing.T) {
 	app.Networks = []string{"traefik-net", "monitoring-net"}
 	app.Services = map[string]*dsl.Service{
 		"api":   {Image: "nginx:latest"},
-		"agent": {Image: "otel/opentelemetry-collector:latest", Mode: "global"},
+		"agent": {Image: "otel/opentelemetry-collector:latest"},
 	}
 	if err := Validate(app); err != nil {
 		t.Fatalf("Validate: %v", err)

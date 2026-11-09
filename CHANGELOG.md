@@ -3,6 +3,47 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased
+
+**A service mode change no longer aborts the deploy that contains it, and the platform stops accepting
+manifests that can only fail.**
+
+`docker service update` cannot change a service's mode — Swarm answers `Unimplemented: service mode change
+is not allowed` — and `docker stack deploy` issues that same update, so one `global` → `replicated` flip
+aborted the whole stack: the edge console stayed on the old image fleet-wide while every other service in
+the deploy was skipped. Three smaller lies of the same kind: the apply-warning banner printed its printf
+verbs, `mode: global` was accepted in customer manifests, and `placement: <typo>` produced a service that
+could never schedule and said nothing.
+
+- **Mode changes are applied by remove + recreate.** Before a stack deploy, every rendered service's mode
+  is compared with the running service's; where they differ the service is removed (once), logged with the
+  service name and the mode pair, and left to the deploy to recreate. Identical modes and non-mode changes
+  keep the normal update path. A failed remove is an apply warning, not a fatal — the deploy still runs.
+  This closes the follow-up recorded in v0.2.261.
+- **The apply-warning banner is formatted at render time.** `overview.apply_warnings_title` and
+  `overview.apply_warnings_when` carried `%d` / `%s` that nothing substituted, so the console read
+  `The last platform apply could not finish %d step(s)`. They now use the dictionaries' positional
+  placeholders (`{0}`, `{1}`), which keeps Arabic word order with the dictionary while the renderer
+  supplies the real count, timestamp (`2026-11-08 22:41 UTC`) and actor. `overview.version_skew_title` had
+  the same defect and is fixed with it.
+- **`mode: global` is refused in customer manifests.** One task per node multiplies a service's resources
+  and collides on its published ports, with no legitimate use in an application stack. The mapping is not
+  deleted: `infra-stack.yml` renders the Traefik gateway as `mode: global` through the same DSL, so the
+  capability stays for `platform: true` stacks and validation refuses it for everything else, naming the
+  field and the reason.
+- **`placement: <hostname>` is checked against the swarm at deploy.** A hostname pin renders
+  `node.hostname == <value>`; a typo created a service that never scheduled, silently. The deploy now
+  reads the node list and refuses with the unknown host and the known ones. Role keywords (`manager`,
+  `worker`) and an empty placement are skipped; an unreadable node list degrades to a warning instead of
+  blocking a legitimate deploy.
+
+Tests: a mode difference removes exactly once and before the deploy; an identical mode removes nothing; a
+non-mode change removes nothing; a failed remove warns and the deploy continues. Three warnings render the
+digit and no `%d`; zero warnings render no banner; the recorded-at line carries a formatted timestamp and
+the actor (English and Arabic). A customer manifest with `mode: global` is refused while a `platform: true`
+one still renders it. An unknown placement host errors and does not deploy; a known host deploys; a role
+and an empty placement pass; a node-list failure degrades.
+
 ## v0.2.262 (2026-11-09)
 
 **Storage membership stops following leadership, an empty-valued node label stops existing, and leadership can be moved on purpose.**

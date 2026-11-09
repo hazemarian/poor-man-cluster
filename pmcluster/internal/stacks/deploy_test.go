@@ -267,6 +267,7 @@ func TestDeploy_RecordsPipelineSteps(t *testing.T) {
 		"Parsing manifest (DSL)",
 		"Checking for app name conflicts",
 		"Interpolating and validating manifest",
+		"Checking placement hosts against the swarm",
 		"Translating to Compose (resolving configs/secrets)",
 		"Recording revision",
 		"Ensuring storage directories",

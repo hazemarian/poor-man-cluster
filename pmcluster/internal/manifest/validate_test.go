@@ -47,6 +47,20 @@ func TestValidate_ValidMinimal(t *testing.T) {
 	mustPass(t, baseApp())
 }
 
+// TestValidate_ModeGlobalReservedForPlatformStacks: one task per node is a
+// platform-agent capability (the Traefik gateway), not an application one. The
+// rejection names the field and the reason; the same manifest with
+// platform: true passes, because pmcluster's own embedded stacks still use it.
+func TestValidate_ModeGlobalReservedForPlatformStacks(t *testing.T) {
+	a := baseApp()
+	a.Services["api"].Mode = "global"
+	mustFail(t, a, "services.api.mode: mode: global is reserved for pmcluster-managed platform stacks")
+	mustFail(t, a, "colliding on published ports")
+
+	a.Platform = true
+	mustPass(t, a)
+}
+
 func TestValidate_AppNameLowercase(t *testing.T) {
 	a := baseApp()
 	a.Name = "MyApp"

@@ -11,10 +11,10 @@ package i18n
 
 func init() {
 	register(AR, map[string]string{
-		"overview.apply_warnings_title": "آخر تطبيق للمنصة لم يكمل %d خطوة",
+		"overview.apply_warnings_title": "آخر تطبيق للمنصة لم يكمل {0} خطوة",
 		"overview.apply_warnings_body":  "لا شيء متوقف، لكن المنصة تعمل بأقل مما طُلب منها — هذه هي الخطوات التي تراجعت واستمرت:",
-		"overview.apply_warnings_when":  "مسجّل عند %s بواسطة %s",
-		"overview.version_skew_title":   "%d مديراً يشغّل إصدار pmcluster مختلفاً",
+		"overview.apply_warnings_when":  "مسجّل عند {0} بواسطة {1}",
+		"overview.version_skew_title":   "{0} مديراً يشغّل إصدار pmcluster مختلفاً",
 		"overview.version_skew_body":    "كل مدير ينشر إصداره عند بدء التشغيل وكل عشر دقائق. اختلاف الإصدارات يعني أن عقدة ستتصرف بشكل مختلف عن التي تقرأ منها — رقِّ المتأخرة:",
 		"overview.title":                "نظرة عامة على العنقود",
 		"overview.sub":                  "{0}\u00a0· Docker {1}\u00a0· {2}\u00a0· {3}",
