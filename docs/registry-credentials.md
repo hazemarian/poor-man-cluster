@@ -20,15 +20,12 @@ Sections: [1 where the credential lives](#1-where-the-credential-lives-and-why) 
 [8 cadence](#8-rotation-cadence) ·
 [9 the GitHub App alternative](#9-the-github-app-alternative)
 
-> **The preferred credential is now a GitHub App installation token, fetched at
-> pull time.** When an App is configured (`pmcluster github app set`), ghcr.io
-> pulls go through docker's credential helper
-> `docker-credential-pmcluster`, which asks the cluster for a fresh token instead
-> of reading one from a file — nothing is stored on the node and nothing goes
-> stale. When no App is configured, the stored credential below is replayed
-> exactly as before. Other registry hosts are unaffected. The App path — the
-> helper, the certificate rule and the CI token broker — is documented in
-> [`github-app.md`](github-app.md) §5; §9 here records precisely what changes.
+> **The preferred credential is now a GitHub App installation token.** When one
+> is configured (`pmcluster github app set`), the daemon logs in to ghcr.io with
+> it and skips the stored `ghcr.io` row; when it is absent or its login fails,
+> the stored credential below is replayed exactly as before. Other registry
+> hosts are unaffected. The App path — and the CI token broker — is documented in
+> [`github-app.md`](github-app.md); §9 here records precisely what changes.
 
 ---
 
@@ -195,10 +192,10 @@ Spec to mint today:
 
 - **Preferred: no PAT at all — a GitHub App installation token.** GHCR accepts
   one when the App holds **Packages: Read** and is installed on the repo that
-  owns the package. Docker's credential helper `docker-credential-pmcluster`
-  fetches one per pull (user `x-access-token`), so no token is stored on any
-  node and none can go stale. See [`github-app.md`](github-app.md) §5. The rest
-  of this section describes the PAT fallback, which is still fully supported.
+  owns the package. The daemon mints it, uses it as
+  `docker login ghcr.io -u x-access-token --password-stdin`, and refreshes it
+  every 25 minutes. See [`github-app.md`](github-app.md). The rest of this
+  section describes the PAT fallback, which is still fully supported.
 - **Fallback type:** personal access token (**classic**) — a fine-grained
   token with "Packages: Read" fails `docker login ghcr.io` with `denied:
   denied` (fine-grained PAT support for Packages is still an open gap;
@@ -443,8 +440,8 @@ Everything above still describes the fallback. With an App configured
 |---|---|---|
 | Where the durable secret lives | `registries` row, AES-GCM ciphertext | `github_app` row, AES-GCM ciphertext (the private key) |
 | What docker receives | the PAT | a one-hour installation token, user `x-access-token` |
-| Delivery to workers | `--with-registry-auth` on deploy | each node's helper fetches its own credential; `--with-registry-auth` still works for the deploy itself |
-| Refresh | manual rotation (§6) | none needed: the helper fetches one per pull, and nothing is written to disk |
+| Delivery to workers | `--with-registry-auth` on deploy | unchanged — same deploy path, same flag |
+| Refresh | manual rotation (§6) | daemon re-login every 25 min; token reused for 50 min |
 | Precedence for ghcr.io | used when no App is configured, or the App login fails | used when login succeeds; the stored row is skipped |
 | Scopes | `read:packages` on the owning account | App permission **Packages: Read**, bounded by the installation |
 | Failure signal | deploy error / ImagePullBackOff | `pmcluster doctor` check `github app`, console Test button |
@@ -454,9 +451,3 @@ stored `ghcr.io` row is still replayed on startup when no App is set, and other
 registry hosts are never touched by the App path. Removing the App
 (`pmcluster github app clear`) makes the next daemon start fall back to the
 stored row.
-
-One consequence worth knowing: with an App configured, the helper answers for
-ghcr.io on every node, so `docker login ghcr.io` on a node no longer leaves a
-credential behind (the helper's `store` verb is a no-op by design). A node whose
-pulls need to work must be able to reach the leader — see
-[`github-app.md`](github-app.md) §5.1.

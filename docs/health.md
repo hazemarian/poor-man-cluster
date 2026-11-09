@@ -21,7 +21,7 @@ Same measurements over HTTP, for the console and anything that gates on them:
 | `version skew` | each manager's published `pmcluster_nodever_<host>` config vs this binary | a manager reports a different version |
 | `control-plane kit` | **restores** the newest Raft snapshot into a temp dir, opens the DB, decrypts its secrets | the kit does not extract, does not open, misses its key config, or its key does not decrypt its ciphertext |
 | `secrets` | AES-GCM decrypt of every stored row with the current key | a row cannot be decrypted (sealed by an older key) |
-| `github app` | mints a real installation token, reads the configured probe repo and HEADs the probe package, then runs the node's `docker-credential-pmcluster get ghcr.io` — the command docker itself runs at pull time | key/id rejected, installation removed, `contents:read`/`packages:read` missing, or the credential helper cannot fetch a token (edge not on the leader, node certificate refused). No app configured is a **skip**; a token with no probe target is a **warn** |
+| `github app` | mints a real installation token, reads the configured probe repo and HEADs the probe package | key/id rejected, installation removed, or `contents:read`/`packages:read` missing. No app configured is a **skip**; a token with no probe target is a **warn** |
 | `last apply` | the recorded `ApplyRecord` | the last apply degraded something (warnings) |
 | `restore drill` | `/var/lib/pmcluster-backup/drill/status.json` | the last drill failed, or none has ever run (warn) |
 | `offsite` | `/var/lib/pmcluster-backup/offsite/status.json` | an artifact this node shipped is not in the bucket |

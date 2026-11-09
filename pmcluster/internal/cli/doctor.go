@@ -78,15 +78,14 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	}
 
 	rep, err := doctor.Run(cmd.Context(), doctor.Input{
-		Docker:           dc,
-		Store:            st,
-		Cipher:           cipher,
-		GitHubApp:        gha,
-		CredentialHelper: credHelperProbe{},
-		DataDir:          cfg.DataDir,
-		Version:          buildinfo.Version,
-		BackupStateDir:   envOr("PMCLUSTER_BACKUP_STATE", "/var/lib/pmcluster-backup"),
-		VolumeRoot:       volumeRoot,
+		Docker:         dc,
+		Store:          st,
+		Cipher:         cipher,
+		GitHubApp:      gha,
+		DataDir:        cfg.DataDir,
+		Version:        buildinfo.Version,
+		BackupStateDir: envOr("PMCLUSTER_BACKUP_STATE", "/var/lib/pmcluster-backup"),
+		VolumeRoot:     volumeRoot,
 	})
 	if err != nil {
 		return err

@@ -244,29 +244,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		}
 		return nil
 	})
-	// The pull-time credential helper: Docker resolves
-	// `docker-credential-pmcluster` from a /usr/local/bin symlink for every
-	// ghcr.io pull, and the `credHelpers` entry in the daemon's config.json is
-	// what makes it ask. Without both, a private ghcr.io image cannot be pulled
-	// — the failure is a 401 that names the image, not the helper.
-	//
-	// A failure here is a WARNING, not an abort, and deliberately unlike the host
-	// directories above: this writes /usr/local/bin and /root, which a non-root
-	// host (a dev box running `cluster up` against its own swarm) cannot, and the
-	// cluster it is bringing up is still healthy without it — public images pull
-	// fine and `pmcluster doctor` reports the helper by name. The next
-	// `cluster update` on that node, or its daemon's startup, retries.
-	wf.Add("Installing the GHCR pull credential helper", func(ctx context.Context) error {
-		if err := ensureDockerCredentialHelper(); err != nil {
-			fmt.Fprintf(out, "  ⚠ %v\n", err)
-			return nil
-		}
-		fmt.Fprintf(out, "  ✓ %s → this binary\n", CredHelperBin)
-		fmt.Fprintf(out, "  ✓ credHelpers[%s]=%s in %s (other registries untouched)\n",
-			CredHelperHost, CredHelperSuffix, DockerConfigPath)
-		return nil
-	})
-
 	wf.Add("Syncing platform config templates into the store", func(ctx context.Context) error {
 		syncRes, err := SyncPlatformConfigs(ctx, deps.Store, in.Version)
 		if err != nil {

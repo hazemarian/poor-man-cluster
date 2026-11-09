@@ -350,19 +350,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return nil
 	})
 
-	wf.Add("Installing the GHCR pull credential helper", func(ctx context.Context) error {
-		// Same class of host mutation as the directories above: this node's
-		// /root and /usr/local/bin are a node's, not the cluster's. A node that
-		// cannot take it is a warning — every other stack in this reconcile is
-		// healthy, and the pull that needs it will say what is missing.
-		if err := ensureDockerCredentialHelper(); err != nil {
-			fmt.Fprintf(out, "  ⚠ %v\n", err)
-			return nil
-		}
-		fmt.Fprintf(out, "  ✓ credHelpers[%s] → docker-credential-%s\n", CredHelperHost, CredHelperSuffix)
-		return nil
-	})
-
 	wf.Add("Ensuring overlay networks", func(ctx context.Context) error {
 		// External overlay networks (traefik-net, monitoring-net) are created
 		// only by `cluster up`; a wiped Swarm loses them even though the store

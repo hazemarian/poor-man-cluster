@@ -252,20 +252,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	if err := replayRegistryLogins(cmd.Context(), st, cfg, log); err != nil {
 		log.Warn().Err(err).Msg("registry re-login had issues; private images may fail to pull")
 	}
-	// Install this node's pull-time credential helper: the
-	// /usr/local/bin/docker-credential-pmcluster symlink and the
-	// credHelpers["ghcr.io"] entry in the daemon's docker config. Docker resolves
-	// the helper through that entry on every ghcr.io pull, which is why there is
-	// no login to refresh and no timer (the loop this replaces wrote a token into
-	// docker's config that could only go stale).
-	// `cluster update` provisions only the node it runs on, so each daemon does
-	// its own host here; a non-root or read-only host is a warning, not a
-	// reason to refuse to serve the cluster.
-	if os.Geteuid() == 0 {
-		if err := cluster.EnsureDockerCredentialHelper(); err != nil {
-			log.Warn().Err(err).Msg("could not install the GHCR credential helper on this node; private image pulls will fail until it is installed")
-		}
-	}
+	// Keep the App's GHCR login fresh: an installation token expires in an hour,
+	// and a deploy after that would fail with a 401 no earlier signal announced.
+	// 25 minutes means two logins per token lifetime (see refreshGitHubAppLogins).
+	go refreshGitHubAppLogins(cmd.Context(), st, cfg, log, 25*time.Minute)
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 

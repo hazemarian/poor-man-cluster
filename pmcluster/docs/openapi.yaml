@@ -397,54 +397,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  /api/github/pull-credential:
-    post:
-      summary: Mint the GHCR pull credential for a node
-      description: |
-        The daemon half of the pull-time credential helper. `pmcluster-edge`
-        serves `POST /cred/v1/token` on port 9443 (published `mode: ingress`, so
-        it answers on 127.0.0.1 on every node and routes to the edge task) and
-        authenticates the caller by its Swarm node certificate — `O` must be
-        this swarm's ID and `CN` must be a current node ID. This route is what
-        the edge then calls, with its own Bearer token, because the daemon is
-        the only process holding the App's private key.
-
-        Bearer-authenticated and operator-gated, exactly like the app card: it
-        mints nothing the Test button next to it could not mint. The response
-        carries the token because that is the point; it is never logged.
-
-        Reachability: the edge runs on the leader, so a pull requires the
-        leader to be reachable — the same availability shape as the collector.
-      operationId: getPullCredential
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: A token usable as the GHCR password for x-access-token
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  username:
-                    type: string
-                  secret:
-                    type: string
-                  expires_at:
-                    type: string
-                    format: date-time
-        "502":
-          description: The app could not mint a token (key rejected, installation gone, permission missing)
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "503":
-          description: No GitHub App is configured on this daemon
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
   /api/nodes:
     get:
       summary: List swarm nodes
@@ -2686,13 +2638,6 @@ components:
     SwarmInfo:
       type: object
       properties:
-        id:
-          type: string
-          description: |
-            The Raft cluster identity. Every swarm node certificate carries it in
-            its O field, which is how the edge's credential listener decides that
-            a client certificate belongs to this swarm. Empty when the node is not
-            part of a swarm.
         state:
           type: string
         control_available:

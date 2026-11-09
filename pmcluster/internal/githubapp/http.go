@@ -18,14 +18,6 @@ type HTTP struct {
 func (h *HTTP) Mount(r chi.Router) {
 	r.Get("/github/app", h.status)
 	r.Post("/github/app/test", h.test)
-	// The pull-credential route lives here so it shares the app card's gate
-	// exactly: it mints what the Test button mints, and nothing more. It is
-	// called by the edge's node-authenticated listener, not by a browser.
-	//
-	// The path is spelled as a literal because internal/docscheck reconstructs
-	// this table from the AST and needs the literal; PullCredentialPath is the
-	// same string, and a test asserts the two agree.
-	r.Post("/github/pull-credential", h.pullCredential)
 }
 
 // status reports the app id, installation id, probe targets and the granted

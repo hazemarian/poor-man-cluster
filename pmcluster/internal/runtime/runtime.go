@@ -160,13 +160,8 @@ type Info struct {
 	MemTotal              int64
 	SwarmLocalNodeState   string
 	SwarmControlAvailable bool
-	// SwarmID is the cluster's Raft identity (Swarm.Cluster.ID). Empty on a
-	// node that is not part of a swarm. The edge's credential listener checks
-	// that a client certificate's O equals it, which is how a certificate from
-	// another swarm is refused.
-	SwarmID       string
-	SwarmManagers int
-	SwarmNodes    int
+	SwarmManagers         int
+	SwarmNodes            int
 }
 
 // NetworkSpec.Driver defaults to "overlay" if empty.

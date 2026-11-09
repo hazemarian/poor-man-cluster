@@ -63,17 +63,6 @@ func run() error {
 		return fmt.Errorf("ui: %w", err)
 	}
 
-	// The credential listener is a SECOND server on its own port, not a route
-	// on the console's mux: a swarm node certificate must not be able to reach
-	// a console handler, and the console's auth must not gate a pull. A
-	// configuration error disables it rather than taking the console down —
-	// an operator needs the console most exactly when a credential is broken —
-	// and `pmcluster doctor` reports the failure.
-	credSrv, credErr := newCredentialServer(credConfigFromEnv(uiCfg, log))
-	if credErr != nil {
-		log.Error().Err(credErr).Msg("pull credential listener disabled; image pulls from private GHCR repos will fail")
-	}
-
 	handler := combineProxyAndUI(proxyCfg, app)
 	srv := &http.Server{
 		Addr:              proxyCfg.ListenAddr,
@@ -87,15 +76,6 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if credSrv != nil {
-		go func() {
-			log.Info().Str("addr", credSrv.Addr).Msg("pmcluster-edge credential listener (TLS, swarm node certificates)")
-			if err := credSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Error().Err(err).Msg("credential listener stopped; image pulls from private GHCR repos will fail")
-			}
-		}()
-	}
-
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info().
@@ -107,7 +87,6 @@ func run() error {
 
 	select {
 	case err := <-errCh:
-		shutdownCredentialListener(credSrv)
 		_ = app.Store.Close()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
@@ -115,7 +94,6 @@ func run() error {
 		return nil
 	case <-ctx.Done():
 		_ = app.Store.Close()
-		shutdownCredentialListener(credSrv)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -124,17 +102,6 @@ func run() error {
 		log.Info().Msg("pmcluster-edge stopped")
 		return nil
 	}
-}
-
-// shutdownCredentialListener stops the credential listener with the console.
-// It is a no-op when the listener was never started.
-func shutdownCredentialListener(srv *http.Server) {
-	if srv == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = srv.Shutdown(ctx)
 }
 
 // edgeSecretDir is where pmcluster mounts the console's Swarm secrets. Docker

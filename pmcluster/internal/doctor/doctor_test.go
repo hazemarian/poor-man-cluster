@@ -2,7 +2,6 @@ package doctor
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,80 +172,5 @@ func TestGitHubAppCheckDistinguishesTheCauses(t *testing.T) {
 				t.Errorf("detail %q does not mention %q", c.Detail, tc.text)
 			}
 		})
-	}
-}
-
-// stubCredHelper answers the pull-path half without running a command.
-type stubCredHelper struct {
-	secret string
-	err    error
-	calls  int
-}
-
-func (s *stubCredHelper) GHCRToken(context.Context) (string, error) {
-	s.calls++
-	return s.secret, s.err
-}
-
-// TestGitHubAppCheckProvesThePullPath is the difference between "the key mints"
-// and "a pull works": the check must run the node's helper, and a passing check
-// must say so.
-func TestGitHubAppCheckProvesThePullPath(t *testing.T) {
-	helper := &stubCredHelper{secret: "ghs_doctor_test"}
-	c := checkGitHubApp(context.Background(), Input{
-		GitHubApp:        stubGitHubApp{detail: "minted a token; read acme/app OK", expiry: time.Now().UTC()},
-		CredentialHelper: helper,
-	})
-	if c.Status != StatusOK {
-		t.Fatalf("status = %q, want ok (%s)", c.Status, c.Detail)
-	}
-	if helper.calls != 1 {
-		t.Errorf("the credential helper ran %d times, want once — the check must exercise the pull path", helper.calls)
-	}
-	if !strings.Contains(c.Detail, "docker-credential-pmcluster get ghcr.io returned a token") {
-		t.Errorf("detail %q does not report the helper's answer", c.Detail)
-	}
-	if strings.Contains(c.Detail, "ghs_") {
-		t.Errorf("detail %q leaked the token", c.Detail)
-	}
-}
-
-// TestGitHubAppCheckFailsWhenTheHelperCannotFetch: a mint that works but a pull
-// that cannot is a failing check, and the sentence names both ends of the path.
-func TestGitHubAppCheckFailsWhenTheHelperCannotFetch(t *testing.T) {
-	c := checkGitHubApp(context.Background(), Input{
-		GitHubApp: stubGitHubApp{detail: "minted a token", expiry: time.Now().UTC()},
-		CredentialHelper: &stubCredHelper{
-			err: errors.New("reach the credential listener at https://127.0.0.1:9443: connection refused"),
-		},
-	})
-	if c.Status != StatusFail {
-		t.Fatalf("status = %q, want fail", c.Status)
-	}
-	if !strings.Contains(c.Detail, "docker-credential-pmcluster") || !strings.Contains(c.Detail, "pmcluster-edge") {
-		t.Errorf("detail %q does not name the helper and the edge", c.Detail)
-	}
-	if !strings.Contains(c.Detail, "connection refused") {
-		t.Errorf("detail %q does not carry the cause", c.Detail)
-	}
-}
-
-// TestGitHubAppCheckUnconfiguredNamesTheFixAndSkipsTheHelper: with no app there
-// is nothing to mint, so the check skips and says which command configures one —
-// it must not fail on the helper, whose failure would only restate the cause.
-func TestGitHubAppCheckUnconfiguredNamesTheFixAndSkipsTheHelper(t *testing.T) {
-	helper := &stubCredHelper{secret: "ghs_never"}
-	c := checkGitHubApp(context.Background(), Input{
-		GitHubApp:        stubGitHubApp{err: githubapp.ErrNoApp},
-		CredentialHelper: helper,
-	})
-	if c.Status != StatusSkip {
-		t.Fatalf("status = %q, want skip", c.Status)
-	}
-	if !strings.Contains(c.Detail, "pmcluster github app set") {
-		t.Errorf("detail %q does not name the command that fixes it", c.Detail)
-	}
-	if helper.calls != 0 {
-		t.Error("the credential helper ran with no app configured")
 	}
 }

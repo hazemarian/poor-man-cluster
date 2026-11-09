@@ -3,47 +3,6 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
-## Unreleased — Pull-time GHCR credentials, no login timer
-
-**A ghcr.io pull now fetches its GitHub App token when it happens, through a docker credential
-helper that authenticates with the node's own Swarm certificate. The 25-minute `docker login`
-loop is gone, and so is the stale credential it existed to paper over.**
-
-An installation token lives an hour. A timer that re-logs-in every 25 minutes held a credential in
-docker's config that expired whenever the timer did not run — a daemon restart, a paused manager, an
-hour of no ticks — and the failure was a `401` that reads like a missing image. The token is now
-requested per pull and never stored.
-
-- **`internal/pullcred`** — the protocol and the policy. The docker credential-helper contract
-  (`get`/`store`/`erase`/`list`, stdout carrying exactly one JSON object or nothing), the
-  swarm-node certificate rule, the mTLS listener handler, and the helper's client.
-- **The listener** is a second HTTP server inside `pmcluster-edge` on port 9443, published with
-  `mode: ingress` so the routing mesh answers on `127.0.0.1:9443` on EVERY node and forwards to the
-  one task that can mint — the collector's 4318 shape, so no node-IP logic and no socket. It runs on
-  its own mux: the console's auth and middleware are not in front of it, and its path is not one of
-  the console's routes (both asserted).
-- **Authentication is the certificate Swarm already issued.** A client is a node of this swarm only
-  when its certificate chains to `swarm-root-ca.crt`, its `O` is this swarm's ID (read from
-  `GET /api/cluster/info`, which now reports `swarm.id`) and its `CN` — the node ID, not the
-  hostname — is in the live node list. Missing, foreign-CA, wrong-O, unlisted and expired
-  certificates are each rejected, through a real TLS handshake in the tests. No shared secret was
-  invented.
-- **`docker-credential-pmcluster`** is the `pmcluster` binary under a `/usr/local/bin` symlink,
-  dispatched on `argv[0]` before any logging or cobra setup so nothing else can ever write to
-  stdout. It dials `https://127.0.0.1:9443` with the node certificate, 2s budget.
-- **`config.json` is merged, never rewritten.** `cluster up` and `cluster update` install the
-  symlink and add `credHelpers["ghcr.io"]="pmcluster"` atomically, preserving `auths`, `credsStore`,
-  proxies and every other key; a second run is byte-identical. Failures are apply warnings, not
-  aborts. Flows are per-node (up/update provision the node they run on; each daemon installs its own
-  at startup).
-- **Doctor grows the check that proves it**: after the App mints and probes, `doctor` runs
-  `docker-credential-pmcluster get ghcr.io` — helper → certificate → listener → daemon → GitHub in
-  one command — and fails naming the helper and the edge when it cannot.
-- **A pull now needs the leader** (the edge and its minter are pinned there), the same availability
-  shape the collector already has.
-- `POST /api/github/pull-credential` is documented in the OpenAPI spec; `harden-host.sh` restricts
-  9443 like 4318/8000.
-
 ## Unreleased — GitHub App: installation tokens for pulls and CI
 
 **The cluster can hold one GitHub App instead of a personal access token in every repository. It mints

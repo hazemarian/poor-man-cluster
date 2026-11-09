@@ -74,21 +74,6 @@ type Input struct {
 	// this process has no store/cipher to build one from, and the check skips
 	// with that reason.
 	GitHubApp GitHubAppProbe
-	// CredentialHelper runs the node's docker-credential-pmcluster. Optional;
-	// nil means this process cannot run a host command, and the check reports
-	// that it did not verify the pull path. It is what makes the GitHub App
-	// check end at "a pull would work" instead of "the key mints".
-	CredentialHelper CredentialHelperProbe
-}
-
-// CredentialHelperProbe is the one capability the pull-path half of the GitHub
-// App check needs: ask the node's helper for a GHCR token exactly as docker
-// would. A command-line implementation lives in internal/cli; a test substitutes
-// a stub.
-type CredentialHelperProbe interface {
-	// GHCRToken runs `docker-credential-pmcluster get ghcr.io` and returns the
-	// secret it printed (never logged). Errors carry the helper's stderr.
-	GHCRToken(ctx context.Context) (secret string, err error)
 }
 
 // GitHubAppProbe is the one capability the GitHub App check needs. Local
@@ -310,21 +295,19 @@ func checkGitHubApp(ctx context.Context, in Input) Check {
 		return Check{"github app", StatusSkip, "no store/cipher available to read the app registration"}
 	}
 	detail, expires, err := in.GitHubApp.Diagnose(ctx)
-
-	var check Check
 	switch {
 	case err == nil:
-		check = Check{"github app", StatusOK, detail}
+		return Check{"github app", StatusOK, detail}
+	case errors.Is(err, githubapp.ErrNoApp):
+		return Check{"github app", StatusSkip,
+			"no GitHub App configured (public images and a stored registry credential still work); configure one with `pmcluster github app set`"}
 	case errors.Is(err, githubapp.ErrNoProbeTarget):
 		when := "an installation token was minted"
 		if !expires.IsZero() {
 			when = "an installation token was minted, valid until " + expires.UTC().Format(time.RFC3339)
 		}
-		check = Check{"github app", StatusWarn,
+		return Check{"github app", StatusWarn,
 			when + ", but no probe target is configured — set --probe-repo and --probe-package so read access is actually proven"}
-	case errors.Is(err, githubapp.ErrNoApp):
-		return Check{"github app", StatusSkip,
-			"no GitHub App configured (public images and a stored registry credential still work); configure one with `pmcluster github app set`"}
 	case errors.Is(err, githubapp.ErrBadKey):
 		return Check{"github app", StatusFail, "the app key/id was rejected: " + err.Error()}
 	case errors.Is(err, githubapp.ErrInstallationNotFound):
@@ -336,23 +319,6 @@ func checkGitHubApp(ctx context.Context, in Input) Check {
 	default:
 		return Check{"github app", StatusFail, "could not mint an installation token: " + err.Error()}
 	}
-
-	// The mint proves the key and the installation. It does not prove the path a
-	// pull actually takes: the node's credential helper → the edge's
-	// certificate-checked listener → the daemon route → the App. One command
-	// exercises all of it, and it is the command docker itself runs, so a green
-	// check here means a pull from a private GHCR repo works.
-	if in.CredentialHelper == nil {
-		return check
-	}
-	if _, herr := in.CredentialHelper.GHCRToken(ctx); herr != nil {
-		check.Status = StatusFail
-		check.Detail = "docker-credential-pmcluster could not fetch a token: " + herr.Error() +
-			" — a pull needs " + cluster.CredHelperBin + " installed on this node and pmcluster-edge running on the leader"
-		return check
-	}
-	check.Detail += "; docker-credential-pmcluster get " + cluster.CredHelperHost + " returned a token"
-	return check
 }
 
 // checkLastApply: did the last platform apply finish everything it tried?

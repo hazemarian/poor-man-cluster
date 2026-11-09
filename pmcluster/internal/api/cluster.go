@@ -25,10 +25,6 @@ func ClusterInfoHandler(d runtime.Client) http.HandlerFunc {
 			"cpus":           info.NCPU,
 			"memory_bytes":   info.MemTotal,
 			"swarm": map[string]any{
-				// The Raft cluster identity — the O a swarm node certificate
-				// carries. The edge's credential listener reads it here to decide
-				// which swarm a client certificate must belong to.
-				"id":                info.SwarmID,
 				"state":             info.SwarmLocalNodeState,
 				"control_available": info.SwarmControlAvailable,
 				"managers":          info.SwarmManagers,

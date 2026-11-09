@@ -22,21 +22,6 @@ services:
     image: [[.EdgeImage]]
     replicas: 1
     placement: "[[ if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
-    # The pull-time credential listener. Published with mode: ingress so the
-    # routing mesh answers on 127.0.0.1:9443 on EVERY node and forwards to this
-    # one task — the same shape as the collector's 4318, and the reason a node's
-    # docker-credential-pmcluster needs no node-IP logic: it dials its own
-    # loopback and reaches whichever node runs the edge.
-    #
-    # It is a Traefik bypass by construction (Traefik knows nothing about this
-    # port), so harden-host.sh DROPs 9443 in DOCKER-USER for every non-private
-    # source. Even on the private side, nothing is served without a client
-    # certificate: TLS requires one signed by the swarm root CA, whose O must be
-    # this swarm's ID and whose CN must be a current node (internal/pullcred).
-    expose:
-      port: 9443
-      external: 9443
-      mode: ingress
     env:
       LISTEN_ADDR: ":8042"
       UPSTREAM: "http://host.docker.internal:9090"
@@ -55,13 +40,6 @@ services:
       # logging helper) so host and container agree.
       PMCLUSTER_LOG_LEVEL: "[[ if .LogLevel ]][[.LogLevel]][[ else ]]info[[ end ]]"
       EDGE_LOGIN_DISABLED: "[[.EdgeLoginDisabled]]"
-      # The credential listener: ":9443" on the published port, and the swarm
-      # root CA bind-mounted from this node. The listener asks the daemon for
-      # this swarm's ID rather than having it rendered into the stack: a swarm ID
-      # in the compose would change the rendered bytes (and force a redeploy) on
-      # a swarm re-init, and the daemon is the authority for it anyway.
-      PMCLUSTER_CRED_LISTEN: ":9443"
-      PMCLUSTER_CRED_CLIENT_CA: "/etc/pmcluster/swarm/swarm-root-ca.crt"
       EDGE_SSO_ENABLED: "[[.SSOEnabled]]"
       # The managed observability credential — base64(<admin user>:<password>),
       # the same value the observability router's injection middleware sends.
@@ -73,11 +51,6 @@ services:
       [[- if not .EdgeLoginDisabled]]
       - "pmui-data:/data"
       [[- end]]
-    binds:
-      # The swarm root CA, read-only. Docker writes it on every node that joins
-      # (manager or worker), so this source exists wherever the task lands — a
-      # bind whose source is missing is rejected at task creation, not at use.
-      - "/var/lib/docker/swarm/certificates/swarm-root-ca.crt:/etc/pmcluster/swarm/swarm-root-ca.crt:ro"
     secrets:
       - edge_admin_password
       - edge_ui_secret

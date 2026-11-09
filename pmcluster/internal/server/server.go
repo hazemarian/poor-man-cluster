@@ -256,9 +256,6 @@ func New(d Deps) http.Handler {
 		if d.GitHubApp != nil {
 			// Reading the registration is operator work: the card names the
 			// installation and its grants, and the Test button mints a token.
-			// The pull-credential route (what the edge's node-authenticated
-			// listener asks for a GHCR password at pull time) is mounted by the
-			// same call, so it cannot drift to a different gate.
 			r.With(auth.RequireRole(auth.RoleOperator)).Group(func(or chi.Router) {
 				(&githubapp.HTTP{App: d.GitHubApp}).Mount(or)
 			})
