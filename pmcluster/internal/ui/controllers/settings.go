@@ -413,14 +413,20 @@ var clusterSettingKeys = []string{
 	"domain",
 	"observability_admin_email",
 	"traefik_admin_user",
+	"github_runners_enabled",
+	"github_runner_repos",
+	"github_runner_memory",
+	"github_runner_allow_leader",
 }
 
 // clusterBoolSettings are the allowlisted settings that are flags rather than
 // strings, so the form and the save agree on what a cleared checkbox means.
 var clusterBoolSettings = map[string]bool{
-	"backup_enabled":      true,
-	"sso_enabled":         true,
-	"edge_login_disabled": true,
+	"backup_enabled":             true,
+	"sso_enabled":                true,
+	"edge_login_disabled":        true,
+	"github_runners_enabled":     true,
+	"github_runner_allow_leader": true,
 }
 
 type clusterSettingsData struct {

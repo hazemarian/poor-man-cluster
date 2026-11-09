@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"text/tabwriter"
 
 	"github.com/rs/zerolog"
@@ -13,6 +14,8 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/doctor"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -28,6 +31,8 @@ assumptions, one line per check:
   control-plane kit  does the newest Raft snapshot actually RESTORE — extracted
                      into a temp dir, opened, and its secrets decrypted
   secrets            does every stored secret decrypt with the current key
+  github app         can the cluster mint an installation token, and does it grant what it needs
+  github runners     are the self-hosted runners registered, running, and permitted
   last apply         did the last platform apply finish what it attempted
   restore drill      when a backup artifact was last really restored
   offsite            are this node's shipped artifacts still in the bucket
@@ -73,8 +78,24 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	// the cipher. Missing either skips the check with that reason instead of
 	// reporting a healthy app nobody inspected.
 	var gha doctor.GitHubAppProbe
+	var runnerProbe doctor.RunnerProbe
+	var app *githubapp.Local
 	if st != nil && cipher != nil {
-		gha = newGitHubAppLocal(st, cipher, zerolog.Nop())
+		app = newGitHubAppLocal(st, cipher, zerolog.Nop())
+		gha = app
+	}
+	// The runner check reads settings, the live service labels and GitHub's
+	// runner list. It needs a docker client to see the clusters' containers and
+	// the store for the settings; without both it is skipped, not guessed.
+	if st != nil && app != nil {
+		host, _ := os.Hostname()
+		runnerProbe = &runners.Manager{
+			Store:   st,
+			GitHub:  app,
+			Cluster: dc,
+			Node:    host,
+			Log:     zerolog.Nop(),
+		}
 	}
 
 	rep, err := doctor.Run(cmd.Context(), doctor.Input{
@@ -82,6 +103,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		Store:          st,
 		Cipher:         cipher,
 		GitHubApp:      gha,
+		GitHubRunners:  runnerProbe,
 		DataDir:        cfg.DataDir,
 		Version:        buildinfo.Version,
 		BackupStateDir: envOr("PMCLUSTER_BACKUP_STATE", "/var/lib/pmcluster-backup"),

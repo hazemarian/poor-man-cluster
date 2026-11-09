@@ -3,6 +3,39 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — Self-hosted GitHub Actions runners
+
+**One ephemeral runner container per configured private repository, registered with the GitHub App's
+installation token.** When GitHub-hosted minutes run out, CI stops; a repo-scoped self-hosted runner
+is the cheapest way to keep it working, and doing it in the control plane rather than by hand means
+turning the feature off actually removes the containers and the registrations.
+
+- **Settings, all off by default:** `github_runners_enabled` (needs a configured App — enabling it
+  without one is refused with an error naming the App and why a PAT is not a substitute),
+  `github_runner_repos` (comma-separated `owner/name`, private only, validated on save),
+  `github_runner_memory` (default `2560m`) and `github_runner_allow_leader` (default off).
+- **Lifecycle:** each repo gets its own one-service stack. Registration mints
+  `POST /repos/{owner}/{repo}/actions/runners/registration-token` with the installation token and
+  never persists it; the container runs `EPHEMERAL=true` with labels
+  `self-hosted,linux,x64,pmcluster` and a two-minute recycle cooldown so a starting container is not
+  re-minted every pass. Removing a repo or disabling the feature removes the stack **and** calls
+  `DELETE .../runners/{id}` for the reserved `pmc-` names.
+- **Placement and safety in the rendered spec:** `node.labels.pmcluster.leader != true`,
+  `restart_policy: none`, `update_config: order: stop-first`, no host networking. Public repos are
+  refused by name — a fork PR would run on the container holding `/var/run/docker.sock`.
+- **Failures are warnings, not fatal:** a refused registration, a public repo, an unreachable
+  GitHub all warn and let the other repos converge; the warnings are merged into the last-apply
+  record so `doctor`'s `last apply` check shows them. GitHub calls use the new
+  `doToken` installation-token transport in `internal/githubapp`.
+- **Doctor gains `github runners`:** enabled state, per-repo container/registration agreement
+  (including ghosts and offline runners), and the missing `administration: write` permission that
+  would otherwise surface as a bare 403 at registration.
+- **Tests:** refusal without an App, one registration per repo with the expected name/labels/limit,
+  idempotent reconcile, removal de-registers and removes the container (counted API calls), failure
+  warns and continues, placement excludes the leader in the rendered spec, doctor per cause, and the
+  GitHub client's token/permission/404 mapping.
+- **Docs:** new `docs/runners.md`, settings catalogue rows, and the architecture note.
+
 ## Unreleased — Pulls use a read-only PAT applied at deploy; the App keeps clone, build and the broker
 
 **Removes the 25-minute App-token refresh, the leadership-gain mint and the interval language that

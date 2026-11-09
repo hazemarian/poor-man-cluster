@@ -33,6 +33,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodever"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/server"
@@ -376,11 +377,26 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// control-plane Raft snapshot loop; on losing leadership the loops stop.
 	// Non-manager/standalone nodes serve without the loops.
 	leadership := WatchSwarmLeadership(ctx, dc, log)
+	hostname, _ := os.Hostname()
+	runnerMgr := &runners.Manager{
+		Store:    st,
+		Deployer: deployer,
+		Cluster:  dc,
+		Node:     hostname,
+		Log:      log.With().Str("component", "runners").Logger(),
+	}
+	if deps.GitHubApp != nil {
+		// The manager registers and de-registers runners with the same cached
+		// installation token the broker and the console use; no PAT and no
+		// second credential exist for this feature.
+		runnerMgr.GitHub = deps.GitHubApp
+	}
 	reconciler := &reconcile.Reconciler{
 		Store:         st,
 		Docker:        dc,
 		DeployService: deploySvc,
 		Services:      &services.Local{Docker: dc},
+		Runners:       runnerMgr,
 		Update: func(ctx context.Context, deps cluster.UpdateDeps, in cluster.UpdateInput) (*cluster.UpdateResult, error) {
 			if cipher == nil {
 				return nil, fmt.Errorf("encryption key unavailable; cannot reconcile platform stacks")

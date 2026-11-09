@@ -45,6 +45,10 @@ bearers). Console: the **Settings** page.
 | `observability_logs_retention_days` / `observability_metrics_retention_days` / `observability_traces_retention_days` | `7` each | operator | per-stream retention in the observability backend (unbounded retention is how a cluster silently grows to hundreds of GB) |
 | `log_level` | `info` | operator | **the platform's own** verbosity: `debug`, `info`, `warn` or `error` (`warning` is an alias of `warn`). Applied live when saved, read at daemon startup, and rendered into the platform stack as `PMCLUSTER_LOG_LEVEL` — the env var the daemon and the edge both read. `debug` adds the full rendered compose per deploy level; `info` logs every deploy step with the service names |
 | `app_log_level` | `warn` | operator | **the default for deployed apps**, not the platform: every service of every app stack gets `LOG_LEVEL` = its manifest's `log_level`, else this, else `warn`. Same four values and the same `warning` alias. It never overrides a `LOG_LEVEL` a service declares in its own `env:`; it reaches running stacks on their next deploy or sync (see [dsl.md](dsl.md#what-the-translator-injects)) |
+| `github_runners_enabled` | `false` | operator | whether the platform manages [self-hosted GitHub Actions runners](runners.md). **Refused without a configured GitHub App** (runners register with an installation token); disabling is never gated and removes every runner container and registration |
+| `github_runner_repos` | unset | operator | comma-separated `owner/name` repositories that get a runner. **Private repositories only** — a public repo's fork PRs would run on a container holding the host's docker socket. Invalid entries are refused when saved, not silently dropped |
+| `github_runner_memory` | `2560m` | operator | memory limit per runner container (a Docker quantity). `2560m` is the value that completed a `govulncheck` run; `1500m` was OOM-killed mid-job |
+| `github_runner_allow_leader` | `false` | operator | lift the default placement constraint (`node.labels.pmcluster.leader != true`). Only for a single-node cluster |
 
 ## Logging: two settings, one env var
 

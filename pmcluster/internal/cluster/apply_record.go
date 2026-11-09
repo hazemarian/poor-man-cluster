@@ -105,3 +105,59 @@ func SaveApplyRecord(ctx context.Context, st *store.Store, rec ApplyRecord) erro
 	}
 	return st.SetSetting(ctx, lastApplySettingKey, string(b))
 }
+
+// maxApplyWarnings bounds the record. An unattended loop that fails every pass
+// on the same five repos would otherwise grow the row without limit; the record
+// exists to be read, and the first failures are the ones worth reading.
+const maxApplyWarnings = 20
+
+// AppendApplyWarnings merges warnings raised OUTSIDE the platform apply
+// pipeline into the last apply record.
+//
+// The runner lifecycle is a reconcile pass of its own (it deploys one-service
+// stacks imperatively, not through the content-hash pipeline), but its failures
+// have the same problem the pipeline's do: they happen in the daemon's journal,
+// unattended, and the operator's next `cluster update` would report a clean run.
+// Recording them here means `pmcluster doctor`'s "last apply" check names them.
+//
+// Warnings are deduplicated by string so a repo failing every pass does not
+// append the same sentence sixty times an hour. A record created only for
+// warnings is legitimate — ApplyRecord.Empty() counts warnings as content.
+func AppendApplyWarnings(ctx context.Context, st *store.Store, source, version string, warnings []string) error {
+	if st == nil || len(warnings) == 0 {
+		return nil
+	}
+	rec := ApplyRecord{At: time.Now(), Source: source, Version: version}
+	if prev := LoadApplyRecord(ctx, st); prev != nil {
+		rec = *prev
+	}
+	seen := make(map[string]bool, len(rec.Warnings))
+	for _, w := range rec.Warnings {
+		seen[w] = true
+	}
+	changed := false
+	for _, w := range warnings {
+		if w == "" || seen[w] {
+			continue
+		}
+		seen[w] = true
+		rec.Warnings = append(rec.Warnings, w)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	if len(rec.Warnings) > maxApplyWarnings {
+		rec.Warnings = rec.Warnings[:maxApplyWarnings]
+	}
+	// The record's timestamp is when it was last written: a warning-only run
+	// is a state change as far as the operator is concerned.
+	rec.At = time.Now()
+	if source != "" {
+		rec.Source = source
+	}
+	if version != "" {
+		rec.Version = version
+	}
+	return SaveApplyRecord(ctx, st, rec)
+}

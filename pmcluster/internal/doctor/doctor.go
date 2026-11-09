@@ -24,6 +24,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodever"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -74,9 +75,21 @@ type Input struct {
 	// this process has no store/cipher to build one from, and the check skips
 	// with that reason.
 	GitHubApp GitHubAppProbe
+	// GitHubRunners inspects the self-hosted runner lifecycle. Optional; nil
+	// means this process has no runner manager to ask, and the check skips
+	// with that reason.
+	GitHubRunners RunnerProbe
 	// Now is the clock the credential-age check compares against. Zero means
 	// time.Now(); tests set it to age a credential without waiting 60 days.
 	Now time.Time
+}
+
+// RunnerProbe is the one capability the github runners check needs. The
+// runners.Manager implements it; a test substitutes a stub.
+type RunnerProbe interface {
+	// Inspect reads the settings, the container labels and the live GitHub
+	// registrations without changing anything.
+	Inspect(ctx context.Context) (runners.Report, error)
 }
 
 // GitHubAppProbe is the one capability the GitHub App check needs. Local
@@ -100,6 +113,7 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 	add(checkKit(ctx, in))
 	add(checkSecrets(ctx, in))
 	add(checkGitHubApp(ctx, in))
+	add(checkGitHubRunners(ctx, in))
 	add(checkRegistryCredential(ctx, in))
 	add(checkLastApply(ctx, in))
 	add(checkDrill(in))
@@ -372,6 +386,70 @@ func checkRegistryCredential(ctx context.Context, in Input) Check {
 	return Check{name, StatusOK, fmt.Sprintf(
 		"stored %s credential is %d days old (warns at 60, read-only PAT expiry at 90)",
 		pullRegistryHost, days)}
+}
+
+// checkGitHubRunners: does the self-hosted runner lifecycle agree with reality?
+//
+// It answers four things that have four different fixes:
+//
+//   - disabled → fine, a platform that does not need CI self-hosting;
+//   - enabled with no App → the credential the feature depends on is gone;
+//   - enabled with the App missing administration:write → registration will
+//     fail with a bare 403; naming it here is the point of the check;
+//   - a repo whose container and GitHub registration disagree → one of them
+//     was removed by hand, and a runner that is registered but not running is a
+//     ghost that will never pick up a job.
+func checkGitHubRunners(ctx context.Context, in Input) Check {
+	const name = "github runners"
+	if in.GitHubRunners == nil {
+		return Check{name, StatusSkip, "no runner manager available to inspect (needs a store)"}
+	}
+	rep, err := in.GitHubRunners.Inspect(ctx)
+	if err != nil {
+		return Check{name, StatusFail, "could not inspect runners: " + err.Error()}
+	}
+	if !rep.Enabled {
+		return Check{name, StatusOK, "disabled (github_runners_enabled=false, nothing is deployed)"}
+	}
+	if !rep.AppConfigured {
+		return Check{name, StatusFail,
+			"github_runners_enabled is on but no GitHub App is configured — runners register with an App installation token; configure one with `pmcluster github app set` (or turn the feature off)"}
+	}
+	if rep.MissingPermission != "" {
+		return Check{name, StatusFail,
+			"the App is missing " + rep.MissingPermission + " — grant Repository → Administration: Read & write in the App's settings, then approve the new permission on the installation; registration returns 403 until then"}
+	}
+	if len(rep.Repos) == 0 {
+		return Check{name, StatusWarn,
+			"github_runners_enabled is on but github_runner_repos is empty — no runner will be registered"}
+	}
+
+	var problems, healthy []string
+	for _, rr := range rep.Repos {
+		switch {
+		case rr.Error != "":
+			problems = append(problems, rr.Repo+": "+rr.Error)
+		case rr.Failures >= 3:
+			problems = append(problems, fmt.Sprintf("%s: failed %d consecutive reconcile pass(es): %s", rr.Repo, rr.Failures, rr.LastError))
+		case !rr.ContainerRunning && rr.Registered:
+			problems = append(problems, rr.Repo+": registered but no container is running (the reconcile will recreate it)")
+		case rr.ContainerRunning && !rr.Registered:
+			problems = append(problems, rr.Repo+": container is running but GitHub does not list "+rr.RunnerName)
+		case len(rr.Offline) > 0:
+			problems = append(problems, rr.Repo+": offline or stale registration(s) "+strings.Join(rr.Offline, ", "))
+		default:
+			healthy = append(healthy, rr.Repo)
+		}
+	}
+	if len(problems) > 0 {
+		detail := strings.Join(problems, "; ")
+		if len(healthy) > 0 {
+			detail += fmt.Sprintf(" (%d repo(s) healthy)", len(healthy))
+		}
+		return Check{name, StatusWarn, detail}
+	}
+	return Check{name, StatusOK,
+		fmt.Sprintf("%d runner(s) registered and running (ephemeral, one job each)", len(healthy))}
 }
 
 // checkLastApply: did the last platform apply finish everything it tried?

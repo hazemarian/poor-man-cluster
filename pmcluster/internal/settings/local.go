@@ -8,6 +8,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logging"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -63,6 +64,10 @@ var clusterSettingKeys = []string{
 	cluster.SettingReconcileInterval(),
 	cluster.SettingStorageNodes(),
 	cluster.SettingStorageFailover(),
+	cluster.SettingGitHubRunnersEnabled(),
+	cluster.SettingGitHubRunnerRepos(),
+	cluster.SettingGitHubRunnerMemory(),
+	cluster.SettingGitHubRunnerAllowLeader(),
 }
 
 // settingDefaults is what Get reports for a key the platform has a built-in
@@ -75,6 +80,10 @@ var settingDefaults = map[string]string{
 	cluster.SettingObservabilityLogsRetentionDays():    strconv.Itoa(cluster.DefaultObservabilityLogsRetentionDays()),
 	cluster.SettingObservabilityMetricsRetentionDays(): strconv.Itoa(cluster.DefaultObservabilityMetricsRetentionDays()),
 	cluster.SettingObservabilityTracesRetentionDays():  strconv.Itoa(cluster.DefaultObservabilityTracesRetentionDays()),
+	// A feature that mounts /var/run/docker.sock is never on by default.
+	cluster.SettingGitHubRunnersEnabled():    "false",
+	cluster.SettingGitHubRunnerMemory():      cluster.DefaultGitHubRunnerMemory,
+	cluster.SettingGitHubRunnerAllowLeader(): "false",
 }
 
 // Get returns the current value of every known setting ("", or its default
@@ -134,6 +143,14 @@ func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 			normalized[k] = strconv.Itoa(n)
 			continue
 		}
+		if isGitHubRunnerKey(k) {
+			n, err := l.normalizeRunnerSetting(ctx, k, v)
+			if err != nil {
+				return nil, err
+			}
+			normalized[k] = n
+			continue
+		}
 		normalized[k] = v
 	}
 	for k, v := range normalized {
@@ -171,4 +188,82 @@ func isRetentionKey(key string) bool {
 	return key == cluster.SettingObservabilityLogsRetentionDays() ||
 		key == cluster.SettingObservabilityMetricsRetentionDays() ||
 		key == cluster.SettingObservabilityTracesRetentionDays()
+}
+
+// isGitHubRunnerKey reports whether a setting belongs to the self-hosted
+// runner surface.
+func isGitHubRunnerKey(key string) bool {
+	switch key {
+	case cluster.SettingGitHubRunnersEnabled(),
+		cluster.SettingGitHubRunnerRepos(),
+		cluster.SettingGitHubRunnerMemory(),
+		cluster.SettingGitHubRunnerAllowLeader():
+		return true
+	}
+	return false
+}
+
+// normalizeRunnerSetting validates and canonicalises one runner setting.
+//
+// The enabled flag is gated on the App registration HERE, in the store-backed
+// adapter every surface goes through (CLI, REST, console), so no caller can
+// turn the feature on without the credential it depends on. The dependency is
+// real, not stylistic: a runner registers with a repo-scoped, one-hour App
+// installation token. A personal access token could do the same job only by
+// holding administration:write on every repository — a long-lived credential
+// far wider than the token this platform mints — so it is refused by name
+// rather than accepted as a quieter substitute.
+func (l *Local) normalizeRunnerSetting(ctx context.Context, key, value string) (string, error) {
+	switch key {
+	case cluster.SettingGitHubRunnersEnabled():
+		on, err := parseBoolSetting(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		if on && !l.githubAppConfigured(ctx) {
+			return "", fmt.Errorf("%s requires a configured GitHub App: self-hosted runners register with an App installation token (`pmcluster github app set --app-id … --key-file …`). A personal access token is not an acceptable substitute — it would need administration:write on every repository, a long-lived credential with a far wider blast radius than the hour-long installation token the App mints", key)
+		}
+		return strconv.FormatBool(on), nil
+	case cluster.SettingGitHubRunnerRepos():
+		return runners.NormalizeRepos(value)
+	case cluster.SettingGitHubRunnerMemory():
+		// Empty means "use the platform default" (2560m), matching every other
+		// setting whose empty value is a built-in default.
+		if strings.TrimSpace(value) == "" {
+			return "", nil
+		}
+		if err := runners.ValidateMemory(value); err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		return strings.TrimSpace(value), nil
+	case cluster.SettingGitHubRunnerAllowLeader():
+		on, err := parseBoolSetting(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		return strconv.FormatBool(on), nil
+	}
+	return value, nil
+}
+
+// githubAppConfigured reports whether an App registration exists. A nil store
+// is "not configured": without the store there is no credential to read.
+func (l *Local) githubAppConfigured(ctx context.Context) bool {
+	if l.Store == nil {
+		return false
+	}
+	_, err := l.Store.GitHubApp(ctx)
+	return err == nil
+}
+
+// parseBoolSetting accepts the spellings a bool setting arrives in: an empty
+// value (a cleared checkbox), the words, and 1/0 from a script.
+func parseBoolSetting(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "false", "0", "no", "off":
+		return false, nil
+	case "true", "1", "yes", "on":
+		return true, nil
+	}
+	return false, fmt.Errorf("must be true or false, got %q", v)
 }

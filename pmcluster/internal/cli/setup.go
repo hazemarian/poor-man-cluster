@@ -15,6 +15,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -87,6 +88,10 @@ func init() {
 	setupCmd.Flags().Bool("storage-failover", true, "enable automatic storage failover (moves stateful stacks off a failed storage node); requires offsite S3 backups")
 	setupCmd.Flags().String("storage-mode", "loop", "how the snapshot-capable app-data volume is backed: loop (a file, no operator action needed), lvm (a block device) or none")
 	setupCmd.Flags().String("storage-size", "auto", "backing-file size for the app-data volume (auto = half of free space, clamped to 8 GiB..128 GiB)")
+	setupCmd.Flags().Bool("github-runners-enabled", false, "enable self-hosted GitHub Actions runners (requires a configured GitHub App)")
+	setupCmd.Flags().String("github-runner-repos", "", "comma-separated owner/name repositories that get a runner (private only; default: $PMCLUSTER_GITHUB_RUNNER_REPOS)")
+	setupCmd.Flags().String("github-runner-memory", "", "memory limit per runner container (default 2560m)")
+	setupCmd.Flags().Bool("github-runner-allow-leader", false, "allow runner containers on the leader (single-node clusters only; default: off the leader)")
 	setupCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
 
 	setupCmd.Flags().String("swarm-advertise-addr", "", "advertise address passed to `docker swarm init` on a first node (default: auto-detected node IP)")
@@ -140,6 +145,14 @@ type setupAnswers struct {
 	// the control loop moves stateful stacks to a healthy storage node and
 	// restores the latest offsite backup. Requires S3 offsite backups.
 	StorageFailover bool
+
+	// Self-hosted GitHub Actions runners. Off unless the operator turns it on,
+	// and refused without a configured GitHub App — see
+	// settings.normalizeRunnerSetting for why a PAT is not a substitute.
+	GitHubRunnersEnabled    bool
+	GitHubRunnerRepos       string
+	GitHubRunnerMemory      string
+	GitHubRunnerAllowLeader bool
 
 	// NodeHostname is the name this node joins the Swarm under. It is applied
 	// with hostnamectl before the cluster comes up so the Swarm records the
@@ -281,6 +294,23 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 			a.SSOCookieExpire = ask(r, out, "Session cookie lifetime (e.g. 1h)", st.SettingDefault(ctx, cluster.SettingSSOCookieExpire(), "1h"))
 		}
 		a.EdgeLoginEnabled = askYesNo(r, out, "Keep edge console password login?", false)
+		// Runners are the CI answer to exhausted GitHub-hosted minutes. The
+		// prompt states the two things that make it a decision rather than a
+		// default: private repos only, and the host docker socket.
+		a.GitHubRunnersEnabled = askYesNo(r, out,
+			"Enable self-hosted GitHub Actions runners? (private repos only; the runner can use the host's docker socket)",
+			st.SettingDefault(ctx, cluster.SettingGitHubRunnersEnabled(), "") == "true")
+		if a.GitHubRunnersEnabled {
+			fmt.Fprintln(out, "  Runners are registered with the GitHub App's installation token, so the App must")
+			fmt.Fprintln(out, "  already be configured (`pmcluster github app set`). Only private repositories.")
+			a.GitHubRunnerRepos = ask(r, out, "Repositories that get a runner, comma-separated (owner/name)",
+				st.SettingDefault(ctx, cluster.SettingGitHubRunnerRepos(), ""))
+			a.GitHubRunnerMemory = ask(r, out, "Memory limit per runner",
+				cluster.LoadGitHubRunnerMemory(ctx, st))
+			a.GitHubRunnerAllowLeader = askYesNo(r, out,
+				"Allow runners on the leader? (only on a single-node cluster)",
+				st.SettingDefault(ctx, cluster.SettingGitHubRunnerAllowLeader(), "") == "true")
+		}
 		a.VolumeRoot = ask(r, out, "Container volume root dir", st.SettingDefault(ctx, cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot))
 		a.BackupEnabled = askYesNo(r, out, "Enable backups? (snapshot every stack, hourly by default)", true)
 		if !a.BackupEnabled {
@@ -356,6 +386,20 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.StorageFailover = storageFailoverEnabled(a.StorageFailover, a.BackupS3Endpoint, a.BackupS3Bucket)
 		a.StorageMode, _ = cmd.Flags().GetString("storage-mode")
 		a.StorageSize, _ = cmd.Flags().GetString("storage-size")
+		a.GitHubRunnersEnabled, _ = cmd.Flags().GetBool("github-runners-enabled")
+		a.GitHubRunnerRepos, _ = cmd.Flags().GetString("github-runner-repos")
+		a.GitHubRunnerMemory, _ = cmd.Flags().GetString("github-runner-memory")
+		a.GitHubRunnerAllowLeader, _ = cmd.Flags().GetBool("github-runner-allow-leader")
+		if !cmd.Flags().Changed("github-runners-enabled") {
+			if v := os.Getenv("PMCLUSTER_GITHUB_RUNNERS_ENABLED"); v != "" {
+				a.GitHubRunnersEnabled = envBool(v)
+			}
+		}
+		if !cmd.Flags().Changed("github-runner-repos") {
+			if v := os.Getenv("PMCLUSTER_GITHUB_RUNNER_REPOS"); v != "" {
+				a.GitHubRunnerRepos = v
+			}
+		}
 		if v := os.Getenv("PMCLUSTER_STORAGE_MODE"); v != "" && !cmd.Flags().Changed("storage-mode") {
 			a.StorageMode = v
 		}
@@ -450,6 +494,9 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	if a.ACMEEmail == "" && (a.CertPath == "" || a.KeyPath == "") {
 		return fmt.Errorf("TLS mode required: either --acme-email or --cert/--key")
 	}
+	if err := validateRunnerSetup(ctx, st, a, out); err != nil {
+		return err
+	}
 
 	// Apply the operator's chosen hostname before the cluster comes up. The
 	// Swarm records the hostname at join/init time and the leader-aware
@@ -514,6 +561,34 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 
 	fmt.Fprintln(out, "Fresh install — running `pmcluster cluster up` with the new settings.")
 	return runUp(cmd, cfg, in)
+}
+
+// validateRunnerSetup enforces the runner feature's dependency at setup time,
+// the same way the settings surface does: a runner registers with a GitHub App
+// installation token, and a personal access token is not accepted instead
+// (it would need administration:write on every repo). Erring here rather than
+// persisting an enabled-but-inert flag means the wizard cannot leave the
+// operator with a feature that will silently never register anything.
+func validateRunnerSetup(ctx context.Context, st *store.Store, a setupAnswers, out io.Writer) error {
+	if !a.GitHubRunnersEnabled {
+		return nil
+	}
+	if _, err := st.GitHubApp(ctx); err != nil {
+		return fmt.Errorf("self-hosted runners require a configured GitHub App: they register with an App installation token (`pmcluster github app set --app-id … --key-file …`). A personal access token is not an acceptable substitute — it would need administration:write on every repository, a long-lived credential with a far wider blast radius than the hour-long App token")
+	}
+	repos, err := runners.NormalizeRepos(a.GitHubRunnerRepos)
+	if err != nil {
+		return fmt.Errorf("github-runner-repos: %w", err)
+	}
+	if repos == "" {
+		fmt.Fprintln(out, "  ⚠ runners are enabled with no repositories — nothing will be registered until github_runner_repos lists one")
+	}
+	if a.GitHubRunnerMemory != "" {
+		if err := runners.ValidateMemory(a.GitHubRunnerMemory); err != nil {
+			return fmt.Errorf("github-runner-memory: %w", err)
+		}
+	}
+	return nil
 }
 
 // storageSpecFromSetup turns the wizard's answers into a provisioning spec.
@@ -581,6 +656,9 @@ func persistSetupSecretsOnly(ctx context.Context, st *store.Store, a setupAnswer
 		cluster.SettingBackupStoreOn():                     a.BackupStoreOn,
 		cluster.SettingStorageFailover():                   boolSetting(a.StorageFailover),
 	}
+	for k, v := range runnerSettings(a) {
+		setting[k] = v
+	}
 	for k, v := range setting {
 		if err := st.SetSetting(ctx, k, v); err != nil {
 			return fmt.Errorf("save setting %s: %w", k, err)
@@ -617,6 +695,9 @@ func persistSetup(ctx context.Context, st *store.Store, a setupAnswers) error {
 		cluster.SettingBackupStoreOn():                     a.BackupStoreOn,
 		cluster.SettingStorageFailover():                   boolSetting(a.StorageFailover),
 	}
+	for k, v := range runnerSettings(a) {
+		setting[k] = v
+	}
 	for k, v := range setting {
 		if err := st.SetSetting(ctx, k, v); err != nil {
 			return fmt.Errorf("save setting %s: %w", k, err)
@@ -644,6 +725,25 @@ func boolSetting(b bool) string {
 		return "true"
 	}
 	return ""
+}
+
+// runnerSettings renders the wizard's runner answers into the four settings
+// rows, with the repo list normalised (trimmed, deduped, order preserved).
+// Renderer errors are impossible here — validateRunnerSetup already rejected
+// anything malformed — so a bad list would only be reached by a caller that
+// skipped validation, and then persisting the raw value is no worse than
+// dropping it.
+func runnerSettings(a setupAnswers) map[string]string {
+	repos := a.GitHubRunnerRepos
+	if n, err := runners.NormalizeRepos(repos); err == nil {
+		repos = n
+	}
+	return map[string]string{
+		cluster.SettingGitHubRunnersEnabled():    boolSetting(a.GitHubRunnersEnabled),
+		cluster.SettingGitHubRunnerRepos():       repos,
+		cluster.SettingGitHubRunnerMemory():      strings.TrimSpace(a.GitHubRunnerMemory),
+		cluster.SettingGitHubRunnerAllowLeader(): boolSetting(a.GitHubRunnerAllowLeader),
+	}
 }
 
 // storageFailoverEnabled gates automatic storage failover on a configured

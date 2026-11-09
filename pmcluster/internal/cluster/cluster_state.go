@@ -130,6 +130,32 @@ const (
 	// `cluster settings set storage_failover=true`.
 	settingStorageFailover = "storage_failover"
 
+	// settingGitHubRunnersEnabled is the master switch for the platform's
+	// self-hosted GitHub Actions runners. Off by default: a runner container
+	// needs /var/run/docker.sock, which is root-equivalent on the host, so it
+	// is never something the platform turns on for an operator.
+	settingGitHubRunnersEnabled = "github_runners_enabled"
+
+	// settingGitHubRunnerRepos is the comma-separated list of repositories
+	// (owner/name) that get a runner. Comma-separated — not a repeated flag —
+	// so the console's single text field and `cluster settings set` carry the
+	// same shape. Only private repositories are accepted: a runner is
+	// registered with a repo-scoped registration token, and a public repo's
+	// fork PRs would then run arbitrary code on a host-mounted docker socket.
+	settingGitHubRunnerRepos = "github_runner_repos"
+
+	// settingGitHubRunnerMemory caps each runner container. 2560m is the
+	// value proven on real hardware: at 1500m govulncheck OOM-killed the
+	// runner mid-job, at 2560m it completed. A "m"/"g" suffix is a Docker
+	// memory quantity (2560m ≈ 2.5 GiB).
+	settingGitHubRunnerMemory = "github_runner_memory"
+
+	// settingGitHubRunnerAllowLeader lifts the default placement constraint
+	// (node.labels.pmcluster.leader != true). Runners build images and
+	// compete with the control plane for CPU, so they stay off the leader
+	// unless the operator says otherwise — a single-node cluster has to.
+	settingGitHubRunnerAllowLeader = "github_runner_allow_leader"
+
 	// settingSwarmID records the live Swarm cluster ID (Raft cluster identity)
 	// so `cluster update` can detect a wiped + re-initialised Swarm. Deliberately
 	// NOT in the settings allowlist — it is written directly via SetSetting and
@@ -178,6 +204,50 @@ func SettingAppLogLevel() string       { return settingAppLogLevel }
 func SettingReconcileInterval() string { return settingReconcileInterval }
 func SettingStorageNodes() string      { return settingStorageNodes }
 func SettingStorageFailover() string   { return settingStorageFailover }
+
+// The self-hosted runner settings, exposed for the setup wizard and the
+// runner reconcile loop (which read them through the store directly).
+func SettingGitHubRunnersEnabled() string    { return settingGitHubRunnersEnabled }
+func SettingGitHubRunnerRepos() string       { return settingGitHubRunnerRepos }
+func SettingGitHubRunnerMemory() string      { return settingGitHubRunnerMemory }
+func SettingGitHubRunnerAllowLeader() string { return settingGitHubRunnerAllowLeader }
+
+// DefaultGitHubRunnerMemory is the runner memory limit when
+// github_runner_memory is unset. 2560m is what completed a govulncheck run on
+// real hardware after 1500m was OOM-killed; lowering it is how a CI job dies
+// halfway with a runner that looks healthy from the outside.
+const DefaultGitHubRunnerMemory = "2560m"
+
+// LoadGitHubRunnersEnabled reports whether the platform manages self-hosted
+// runners (github_runners_enabled=true). Absent means off.
+func LoadGitHubRunnersEnabled(ctx context.Context, st *store.Store) bool {
+	if st == nil {
+		return false
+	}
+	return st.SettingDefault(ctx, settingGitHubRunnersEnabled, "") == "true"
+}
+
+// LoadGitHubRunnerMemory returns the persisted runner memory limit, falling
+// back to DefaultGitHubRunnerMemory when unset or blank. The value reaches
+// Docker verbatim, so it is left as the operator wrote it.
+func LoadGitHubRunnerMemory(ctx context.Context, st *store.Store) string {
+	if st == nil {
+		return DefaultGitHubRunnerMemory
+	}
+	if v := strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerMemory, "")); v != "" {
+		return v
+	}
+	return DefaultGitHubRunnerMemory
+}
+
+// LoadGitHubRunnerAllowLeader reports whether runners may be placed on the
+// leader (github_runner_allow_leader=true). Absent means no.
+func LoadGitHubRunnerAllowLeader(ctx context.Context, st *store.Store) bool {
+	if st == nil {
+		return false
+	}
+	return st.SettingDefault(ctx, settingGitHubRunnerAllowLeader, "") == "true"
+}
 
 // ClusterInstalled reports whether this store already holds a live cluster.
 func ClusterInstalled(ctx context.Context, st *store.Store) bool {

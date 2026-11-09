@@ -126,6 +126,45 @@ verification on the pull path; that machinery was built and removed because it
 fixed only manual pulls. Pre-pull and an in-cluster mirror remain unimplemented;
 they would only matter for a PAT revoked mid-deploy.
 
+## Self-hosted GitHub Actions runners
+
+`internal/runners` owns one ephemeral Actions runner container per configured
+private repository (`github_runners_enabled`, off by default). The reconcile
+loop calls `Manager.Reconcile` on every pass — its own pass, not a
+content-hashed platform stack, because the spec embeds a single-use,
+hour-lived registration token: hashing it would change on every render and a
+stale token would be redeployed.
+
+- **Registration** mints a repo-scoped token through `internal/githubapp`
+  (`POST /repos/{owner}/{repo}/actions/runners/registration-token`) with the
+  same cached installation token the broker uses. Nothing is persisted: the
+  token is written into a rendered compose and handed to the container.
+- **Desired vs actual** is discovered from service labels
+  (`pmcluster.runner=true`, `pmcluster.runner.repo=<owner/name>`), so a
+  container started by an earlier daemon is visible without trusting a table.
+  A settings row (`github_runners_state`) records the runner name and
+  registration time, which is what teardown needs once the container is gone.
+- **Teardown** removes the stack and de-registers every runner with the
+  reserved `pmc-` prefix for that repo (`DELETE .../runners/{id}`). It is
+  retried: a failed de-registration keeps the booking entry.
+- **Failures are warnings.** A refused token, a public repo, an unreachable
+  GitHub are per-repo warnings appended to the last-apply record, so one broken
+  repo never stops the rest and `doctor`'s `last apply` check still names them.
+- **Placement** is in the rendered spec (`node.labels.pmcluster.leader != true`
+  unless the operator lifts it), not a runbook: a runner builds images and
+  competes with the control plane. `restart_policy: none` keeps an ephemeral
+  runner off a spent token, `update_config: order: stop-first` prevents two
+  containers registering the same name.
+- **The security model is the docker socket.** A runner mounts
+  `/var/run/docker.sock`, so a workflow on it is root on that host. Hence:
+  private repositories only (a public repo's fork PR would run arbitrary code
+  there), an explicit `self-hosted,linux,x64,pmcluster` label set, the reserved
+  name prefix, and a feature that is off by default.
+
+`doctor`'s `github runners` check reports the enabled state, per-repo
+container/registration agreement (ghosts, offline runners), and the missing
+`administration: write` permission that would otherwise appear as a bare 403.
+
 ## Leaf packages
 
 `internal/docscheck` is a test-only leaf package — no domain port, no adapter, no

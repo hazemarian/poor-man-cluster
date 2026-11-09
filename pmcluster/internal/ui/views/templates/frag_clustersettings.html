@@ -165,6 +165,38 @@
     </div>
   </div>
 
+  <div class="panel">
+    <div class="panel-head">
+      <h2>{{T "clustersettings.sect_runners"}}</h2>
+    </div>
+    <div class="panel-body">
+      <p class="sub">{{T "clustersettings.sect_runners_sub"}}</p>
+      <label class="check">
+        <input type="checkbox" name="github_runners_enabled" value="true"{{if eq (index .Settings "github_runners_enabled") "true"}} checked{{end}}>
+        <span>{{T "clustersettings.runners_enabled"}}</span>
+      </label>
+      <span class="hint">{{T "clustersettings.runners_enabled_hint"}}</span>
+      <div class="form-grid">
+        <div class="field">
+          <label for="cs-runner-repos">{{T "clustersettings.runner_repos"}}</label>
+          <input id="cs-runner-repos" class="finput mono" type="text" name="github_runner_repos" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_repos"}}" placeholder="acme/app,acme/api">
+          <span class="hint">{{T "clustersettings.runner_repos_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="cs-runner-memory">{{T "clustersettings.runner_memory"}}</label>
+          <input id="cs-runner-memory" class="finput mono" type="text" name="github_runner_memory" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_memory"}}" placeholder="2560m">
+          <span class="hint">{{T "clustersettings.runner_memory_hint"}}</span>
+        </div>
+      </div>
+      <label class="check">
+        <input type="checkbox" name="github_runner_allow_leader" value="true"{{if eq (index .Settings "github_runner_allow_leader") "true"}} checked{{end}}>
+        <span>{{T "clustersettings.runner_allow_leader"}}</span>
+      </label>
+      <span class="hint">{{T "clustersettings.runner_allow_leader_hint"}}</span>
+      <p class="sub">{{T "clustersettings.runners_security"}}</p>
+    </div>
+  </div>
+
   <div class="form-actions">
     <button type="submit" class="btn btn-primary" data-tip="{{T "clustersettings.save"}}">{{icon "check"}}<span>{{T "clustersettings.save"}}</span></button>
   </div>

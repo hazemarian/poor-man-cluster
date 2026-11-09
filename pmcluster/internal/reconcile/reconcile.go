@@ -37,6 +37,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
@@ -169,6 +170,10 @@ type Reconciler struct {
 	pauseWarnMu   sync.Mutex
 	lastPauseNode map[string]string    // stack -> last logged down node
 	lastPauseWarn map[string]time.Time // stack -> last heartbeat WRN
+	// Runners reconciles the self-hosted GitHub Actions runner lifecycle
+	// (github_runners_enabled). Nil disables the pass entirely — the doctor
+	// check and the settings surface still work, nothing is deployed.
+	Runners *runners.Manager
 }
 
 // failoverCooldown is the minimum interval between automatic storage
@@ -279,6 +284,38 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 			log.Info().Str("stack", st.Name).Int64("revision", res.Revision).Msg("reconcile — app stack drifted, synced (new revision)")
 		default:
 			log.Debug().Str("stack", st.Name).Msg("reconcile — app stack converged (rendered hash unchanged, no-op)")
+		}
+	}
+
+	// (b2) self-hosted GitHub Actions runners. Its own pass because the
+	// registration token in a runner's spec is single-use and hour-lived: it
+	// cannot live in a content-hashed platform config (the hash would change
+	// every render, and a stale token would be redeployed). The manager gates
+	// itself on github_runners_enabled — and it also CLEANS UP when the
+	// setting is off, which is why this pass runs unconditionally.
+	if r.Runners != nil {
+		runres, rerr := r.Runners.Reconcile(ctx)
+		if len(runres.Registered) > 0 || len(runres.Removed) > 0 {
+			log.Info().
+				Strs("registered", runres.Registered).
+				Strs("removed", runres.Removed).
+				Msg("reconcile — runner lifecycle applied")
+		}
+		for _, w := range runres.Warnings {
+			log.Warn().Str("warning", w).Msg("reconcile — runner lifecycle warning")
+		}
+		if rerr != nil {
+			log.Error().Err(rerr).Msg("reconcile — runner lifecycle pass failed")
+			if firstErr == nil {
+				firstErr = rerr
+			}
+		}
+		// A runner failure is not fatal to the cluster, but it must not be
+		// invisible: record it where doctor's "last apply" check reads it.
+		if data := r.Store; data != nil && len(runres.Warnings) > 0 {
+			if err := cluster.AppendApplyWarnings(ctx, data, "reconcile", "", runres.Warnings); err != nil {
+				log.Warn().Err(err).Msg("reconcile — record runner warnings failed")
+			}
 		}
 	}
 

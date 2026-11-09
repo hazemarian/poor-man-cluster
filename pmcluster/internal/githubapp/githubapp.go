@@ -326,6 +326,23 @@ func (c *Client) Permissions(ctx context.Context, app *App) (*Permissions, error
 // do performs one authenticated API call. The JWT is never included in an
 // error: auth errors carry the status and GitHub's message only.
 func (c *Client) do(ctx context.Context, method, path, jwt string, payload []byte) (body []byte, status int, err error) {
+	return c.doAuth(ctx, method, path, "Bearer "+jwt, payload)
+}
+
+// doToken performs one API call authenticated with an installation token
+// (rather than the app JWT). Runner registration and registry-adjacent reads
+// are the installation-token surface: they are scoped to the installation's
+// repositories, which is exactly what a per-repo runner needs.
+func (c *Client) doToken(ctx context.Context, method, path, token string, payload []byte) (body []byte, status int, err error) {
+	if token == "" {
+		return nil, 0, fmt.Errorf("%s %s: empty installation token", method, path)
+	}
+	return c.doAuth(ctx, method, path, "Bearer "+token, payload)
+}
+
+// doAuth performs one authenticated API call. The credential is never included
+// in an error: auth errors carry the status and GitHub's message only.
+func (c *Client) doAuth(ctx context.Context, method, path, auth string, payload []byte) (body []byte, status int, err error) {
 	var rdr io.Reader
 	if payload != nil {
 		rdr = bytes.NewReader(payload)
@@ -336,7 +353,7 @@ func (c *Client) do(ctx context.Context, method, path, jwt string, payload []byt
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Authorization", auth)
 	if payload != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
