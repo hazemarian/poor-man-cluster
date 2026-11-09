@@ -1,0 +1,510 @@
+// Package socketproxy is the platform's own filter in front of the host's
+// Docker socket.
+//
+// Why it exists: a GitHub Actions runner has to build images, and building
+// through the daemon means talking to `/var/run/docker.sock` — which is root on
+// the host, and (on a manager) the whole swarm. Mounting the raw socket into a
+// runner turns "a workflow can run a build" into "a workflow can run anything":
+// `docker service rm`, `docker node demote`, `docker secret inspect`, `docker
+// exec` into any container. Handing a runner a socket that only forwards what a
+// build needs turns those into a 403 instead of a policy.
+//
+// What this is NOT: a security boundary. The proxy still fronts a root daemon,
+// and the routes it allows (create/start/remove containers, pull images, mount
+// host paths through a container spec) are already enough to escalate on the
+// node. It is blast-radius control: it removes the one-command swarm-wide
+// actions and the read of every swarm secret. A runner placed on a manager node
+// defeats even that, which is why placement keeps it off the leader.
+//
+// The allow table is deny-by-default and segment-exact: a request that is not
+// matched by a rule is refused, and there is no generic passthrough. Audit lines
+// (WRN, rate-limited) are how an operator discovers that a workflow tried
+// `service rm` — grep the journal for "socket proxy: denied".
+package socketproxy
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
+)
+
+// Defaults. The listener is a unix socket under /run (tmpfs, recreated on every
+// boot), owned root:root with group read-write so a container can be given the
+// socket through a bind mount without world-write.
+const (
+	DefaultSocketPath   = "/run/pmcluster/docker.sock"
+	DefaultUpstreamPath = "/var/run/docker.sock"
+	DefaultSocketMode   = 0o660
+	DefaultDirMode      = 0o755
+)
+
+// audit tuning: the first auditBurst denials in a window are logged one by one
+// (enough to see what a workflow tried), and the rest collapse into one summary
+// line per window so a retry loop cannot flood the journal.
+const (
+	auditBurst    = 8
+	auditInterval = time.Minute
+)
+
+// Rule is one allowed route. Method is an HTTP verb (or "*"). Pattern is a path
+// with segment wildcards: `{id}` matches exactly one segment, `**` matches one
+// or more trailing segments (used only for image names, which contain slashes).
+type Rule struct {
+	Method  string
+	Pattern string
+	Why     string
+}
+
+// AllowTable is the whole allow list. Everything not in it is refused. Each
+// entry exists because an image build needs it; adding one is a security
+// decision, not a convenience.
+var AllowTable = []Rule{
+	// Liveness and identity. The docker client reads these on every command.
+	{Method: "GET", Pattern: "/_ping", Why: "docker client handshake"},
+	{Method: "HEAD", Pattern: "/_ping", Why: "docker client handshake"},
+	{Method: "GET", Pattern: "/version", Why: "API negotiation"},
+	{Method: "GET", Pattern: "/info", Why: "buildx checks the daemon's drivers and limits"},
+	{Method: "GET", Pattern: "/events", Why: "docker build/run wait on container events"},
+
+	// Containers: a build runs a builder container and a `docker run` step needs
+	// the same lifecycle. No exec, no attach, no privileged helper path.
+	{Method: "GET", Pattern: "/containers/json", Why: "list containers (buildx looks for a running builder)"},
+	{Method: "POST", Pattern: "/containers/create", Why: "create the builder / a job container"},
+	{Method: "GET", Pattern: "/containers/{id}/json", Why: "inspect a container"},
+	{Method: "POST", Pattern: "/containers/{id}/start", Why: "start it"},
+	{Method: "POST", Pattern: "/containers/{id}/stop", Why: "stop it"},
+	{Method: "POST", Pattern: "/containers/{id}/restart", Why: "restart it"},
+	{Method: "POST", Pattern: "/containers/{id}/kill", Why: "kill a hung job"},
+	{Method: "POST", Pattern: "/containers/{id}/wait", Why: "wait for it to finish"},
+	{Method: "GET", Pattern: "/containers/{id}/logs", Why: "read a job container's output"},
+	{Method: "DELETE", Pattern: "/containers/{id}", Why: "remove it"},
+
+	// Images: pull, build, inspect, tag, remove.
+	{Method: "GET", Pattern: "/images/json", Why: "list images"},
+	{Method: "POST", Pattern: "/images/create", Why: "pull"},
+	{Method: "POST", Pattern: "/build", Why: "build"},
+	{Method: "GET", Pattern: "/images/{id}/json", Why: "inspect by id"},
+	{Method: "GET", Pattern: "/images/**/json", Why: "inspect by name (the name contains slashes)"},
+	{Method: "DELETE", Pattern: "/images/{id}", Why: "remove by id"},
+	{Method: "DELETE", Pattern: "/images/**", Why: "remove by name"},
+
+	// Volumes and networks: a build may mount a cache volume and needs a
+	// network to build into.
+	{Method: "GET", Pattern: "/volumes", Why: "list volumes"},
+	{Method: "POST", Pattern: "/volumes/create", Why: "create a cache volume"},
+	{Method: "GET", Pattern: "/volumes/{name}", Why: "inspect a volume"},
+	{Method: "DELETE", Pattern: "/volumes/{name}", Why: "remove a volume"},
+	{Method: "GET", Pattern: "/networks", Why: "list networks"},
+	{Method: "POST", Pattern: "/networks/create", Why: "create a build network"},
+	{Method: "GET", Pattern: "/networks/{id}", Why: "inspect a network"},
+	{Method: "DELETE", Pattern: "/networks/{id}", Why: "remove a network"},
+}
+
+// DeniedFamily names an API section that must never be reachable from a
+// workflow. It is classification only — the refusal comes from the table above
+// not matching — but it is what makes the audit line actionable ("a workflow
+// tried to remove a service" reads differently from "a workflow hit a typo").
+type DeniedFamily struct {
+	Prefix string
+	Reason string
+}
+
+// DeniedFamilies is the hard-deny list, checked to label a refusal. Every one of
+// these is a single command away from controlling the node or the swarm.
+var DeniedFamilies = []DeniedFamily{
+	{Prefix: "/services", Reason: "swarm services: `service rm` would delete the platform's own workloads"},
+	{Prefix: "/tasks", Reason: "swarm tasks: inspect/kill any container in the swarm"},
+	{Prefix: "/nodes", Reason: "swarm nodes: `node demote`/`node rm` takes the cluster down"},
+	{Prefix: "/swarm", Reason: "swarm control: join/leave/rotate the cluster"},
+	{Prefix: "/secrets", Reason: "swarm secrets: read every stored credential"},
+	{Prefix: "/configs", Reason: "swarm configs: read every stored config"},
+	{Prefix: "/plugins", Reason: "plugins: install a privileged plugin"},
+	{Prefix: "/system", Reason: "system: daemon-level operations"},
+	{Prefix: "/session", Reason: "session: API session control"},
+	{Prefix: "/auth", Reason: "auth: registry credential handling"},
+	{Prefix: "/exec", Reason: "exec: a shell in any container is root on the host"},
+}
+
+// Config builds a Proxy.
+type Config struct {
+	// SocketPath is the unix socket the proxy listens on.
+	SocketPath string
+	// UpstreamPath is the real Docker socket it forwards to.
+	UpstreamPath string
+	Log          zerolog.Logger
+	// Transport overrides the upstream round-tripper (tests count calls).
+	Transport http.RoundTripper
+}
+
+// Proxy is the filtering reverse proxy. It owns one unix listener.
+type Proxy struct {
+	SocketPath   string
+	UpstreamPath string
+	Log          zerolog.Logger
+	Transport    http.RoundTripper
+
+	// now is swappable so the audit window can be tested without sleeping.
+	now func() time.Time
+
+	mu          sync.Mutex
+	ln          net.Listener
+	srv         *http.Server
+	windowStart time.Time
+	windowTotal int
+	logged      int
+	suppressed  int
+	deniedTotal int64
+}
+
+// New builds a Proxy with defaults filled in.
+func New(cfg Config) *Proxy {
+	p := &Proxy{
+		SocketPath:   cfg.SocketPath,
+		UpstreamPath: cfg.UpstreamPath,
+		Log:          cfg.Log,
+		Transport:    cfg.Transport,
+		now:          time.Now,
+	}
+	if p.SocketPath == "" {
+		p.SocketPath = DefaultSocketPath
+	}
+	if p.UpstreamPath == "" {
+		p.UpstreamPath = DefaultUpstreamPath
+	}
+	if p.Transport == nil {
+		p.Transport = unixTransport(p.UpstreamPath)
+	}
+	return p
+}
+
+// unixTransport dials the real daemon socket. A fresh transport per Proxy keeps
+// the daemon's own client (which has its own connection pool) untouched: the
+// proxy never proxies the platform's traffic, only a runner's.
+func unixTransport(path string) http.RoundTripper {
+	return &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", path)
+		},
+		MaxIdleConns:          8,
+		IdleConnTimeout:       30 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
+}
+
+// Start binds the listener. A stale socket file from a previous run is removed
+// first: bind fails on an existing path, and the failure reads like a
+// permissions problem rather than a leftover.
+func (p *Proxy) Start(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ln != nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(p.SocketPath), DefaultDirMode); err != nil {
+		return fmt.Errorf("socket proxy: create %s: %w", filepath.Dir(p.SocketPath), err)
+	}
+	if err := os.Remove(p.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("socket proxy: remove stale socket %s: %w", p.SocketPath, err)
+	}
+	ln, err := net.Listen("unix", p.SocketPath)
+	if err != nil {
+		return fmt.Errorf("socket proxy: listen on %s: %w", p.SocketPath, err)
+	}
+	if err := os.Chmod(p.SocketPath, DefaultSocketMode); err != nil {
+		_ = ln.Close()
+		_ = os.Remove(p.SocketPath)
+		return fmt.Errorf("socket proxy: chmod %s: %w", p.SocketPath, err)
+	}
+	p.ln = ln
+	p.srv = &http.Server{
+		Handler:           p,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func(srv *http.Server, ln net.Listener) {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			// A listener that dies must be visible; the supervisor restarts it
+			// on its next tick.
+			p.Log.Error().Err(err).Str("socket", p.SocketPath).Msg("socket proxy: listener stopped")
+		}
+	}(p.srv, ln)
+	p.Log.Info().Str("socket", p.SocketPath).Str("upstream", p.UpstreamPath).
+		Int("allowed_routes", len(AllowTable)).Msg("socket proxy: listening for runner docker requests")
+	return nil
+}
+
+// Stop shuts the listener down and removes the socket file, so a disabled
+// feature leaves nothing behind for a container to mount.
+func (p *Proxy) Stop() error {
+	p.mu.Lock()
+	srv, ln := p.srv, p.ln
+	p.srv, p.ln = nil, nil
+	p.mu.Unlock()
+
+	var firstErr error
+	if srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := srv.Shutdown(ctx); err != nil {
+			firstErr = err
+		}
+		cancel()
+	}
+	if ln != nil {
+		if err := ln.Close(); err != nil && !errors.Is(err, net.ErrClosed) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if err := os.Remove(p.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil {
+		firstErr = err
+	}
+	return firstErr
+}
+
+// Running reports whether a listener is bound.
+func (p *Proxy) Running() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.ln != nil
+}
+
+// DeniedTotal is the count of refused requests since construction (the doctor
+// and the tests read it).
+func (p *Proxy) DeniedTotal() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.deniedTotal
+}
+
+// ServeHTTP refuses anything the table does not match and forwards the rest to
+// the real daemon.
+func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	allowed, family, reason := Check(r.Method, r.URL.Path)
+	if !allowed {
+		p.auditDenial(r, family, reason)
+		writeRefusal(w, r, family)
+		return
+	}
+	out := r.Clone(r.Context())
+	out.URL.Scheme = "http"
+	out.URL.Host = "docker"
+	out.RequestURI = ""
+	out.Header = r.Header.Clone()
+	resp, err := p.Transport.RoundTrip(out)
+	if err != nil {
+		p.Log.Warn().Err(err).Str("method", r.Method).Str("path", r.URL.Path).
+			Msg("socket proxy: upstream docker request failed")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "socket proxy: the docker daemon did not answer: " + err.Error()})
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	// Streaming is the point: a build's output and an image pull are chunked
+	// streams, so the body is copied, never buffered.
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// Check reports whether method+path is allowed, and when it is not, which denied
+// family it belongs to and why that family is refused.
+func Check(method, path string) (allowed bool, family, reason string) {
+	method = strings.ToUpper(method)
+	segs := segments(path)
+	for _, rule := range AllowTable {
+		if rule.Method != "*" && rule.Method != method {
+			// HEAD is a GET without a body everywhere the daemon supports it.
+			if method != http.MethodHead || rule.Method != http.MethodGet {
+				continue
+			}
+		}
+		if matchPattern(rule.Pattern, segs) {
+			return true, "", ""
+		}
+	}
+	for _, d := range DeniedFamilies {
+		if matchPrefix(d.Prefix, segs) {
+			return false, d.Prefix, d.Reason
+		}
+	}
+	return false, "", "route is not in the socket proxy's allow table"
+}
+
+// segments splits a Docker API path into its segments, dropping the version
+// prefix (`/v1.43/containers/json` and `/containers/json` are the same route).
+// The prefix is dropped for MATCHING only; the request is forwarded untouched.
+func segments(path string) []string {
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return nil
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) > 0 && isVersionSegment(parts[0]) {
+		parts = parts[1:]
+	}
+	return parts
+}
+
+// isVersionSegment recognizes `v1.24` / `v1` — the API version a docker client
+// prepends to every path.
+func isVersionSegment(s string) bool {
+	if len(s) < 2 || s[0] != 'v' || s[1] < '0' || s[1] > '9' {
+		return false
+	}
+	for _, r := range s[1:] {
+		if (r < '0' || r > '9') && r != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// matchPattern matches a segment list against a rule pattern. `{id}` matches
+// exactly one non-empty segment; `**` matches one or more trailing segments and
+// is only used for image names.
+func matchPattern(pattern string, segs []string) bool {
+	want := segments(pattern)
+	for i, w := range want {
+		if w == "**" {
+			return len(segs) > i
+		}
+		if i >= len(segs) {
+			return false
+		}
+		if w == "{id}" {
+			if segs[i] == "" {
+				return false
+			}
+			continue
+		}
+		if segs[i] != w {
+			return false
+		}
+	}
+	return len(segs) == len(want)
+}
+
+func matchPrefix(prefix string, segs []string) bool {
+	want := segments(prefix)
+	if len(segs) < len(want) {
+		return false
+	}
+	for i, w := range want {
+		if segs[i] != w {
+			return false
+		}
+	}
+	return true
+}
+
+// writeRefusal answers 403 with a body that names the route, because the docker
+// client shows it verbatim in a workflow log.
+func writeRefusal(w http.ResponseWriter, r *http.Request, family string) {
+	msg := "socket proxy: " + r.Method + " " + r.URL.Path + " is not allowed"
+	if family != "" {
+		msg += " (" + family + " is blocked: a workflow must not be able to reach it)"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"message": msg,
+		"route":   r.Method + " " + r.URL.Path,
+	})
+}
+
+// auditDenial logs a refused request: the method, the path and the family, with
+// the burst/window rate limit described above. The summary line carries the
+// count of the lines it replaced.
+func (p *Proxy) auditDenial(r *http.Request, family, reason string) {
+	now := p.now()
+	p.mu.Lock()
+	p.deniedTotal++
+	if p.windowStart.IsZero() || now.Sub(p.windowStart) >= auditInterval {
+		// Close the previous window with its suppressed count before starting
+		// a new one.
+		suppressed := p.suppressed
+		p.windowStart = now
+		p.windowTotal, p.logged, p.suppressed = 0, 0, 0
+		p.mu.Unlock()
+		if suppressed > 0 {
+			p.Log.Warn().Int("suppressed", suppressed).Dur("window", auditInterval).
+				Msg("socket proxy: denied requests suppressed; a workflow kept probing routes it may not use")
+		}
+		p.mu.Lock()
+	}
+	p.windowTotal++
+	if p.logged < auditBurst {
+		p.logged++
+		p.mu.Unlock()
+		ev := p.Log.Warn().Str("method", r.Method).Str("path", r.URL.Path)
+		if family != "" {
+			ev = ev.Str("family", family)
+		}
+		if reason != "" {
+			ev = ev.Str("reason", reason)
+		}
+		ev.Msg("socket proxy: denied a workflow's docker request")
+		return
+	}
+	p.suppressed++
+	p.mu.Unlock()
+}
+
+// Supervise runs the listener for as long as ctx lives: it starts it when the
+// feature is enabled, stops it when it is disabled, and re-creates a listener
+// that died. Every failure is a WRN, never a fatal error — a broken proxy must
+// not take the daemon down, it must be visible.
+func Supervise(ctx context.Context, p *Proxy, enabled func(context.Context) bool, every time.Duration) {
+	if every <= 0 {
+		every = 15 * time.Second
+	}
+	tick := func() {
+		want := enabled(ctx)
+		switch {
+		case want && !p.Running():
+			if _, err := os.Stat(p.UpstreamPath); err != nil {
+				p.Log.Warn().Err(err).Str("upstream", p.UpstreamPath).
+					Msg("socket proxy: no docker socket to front; runners cannot build until it appears")
+				return
+			}
+			if err := p.Start(ctx); err != nil {
+				p.Log.Warn().Err(err).Msg("socket proxy: could not start; runners will not be registered")
+			}
+		case !want && p.Running():
+			if err := p.Stop(); err != nil {
+				p.Log.Warn().Err(err).Msg("socket proxy: could not stop cleanly")
+				return
+			}
+			p.Log.Info().Msg("socket proxy: stopped (runners disabled)")
+		}
+	}
+	tick()
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			if err := p.Stop(); err != nil {
+				p.Log.Warn().Err(err).Msg("socket proxy: could not stop on shutdown")
+			}
+			return
+		case <-t.C:
+			tick()
+		}
+	}
+}
