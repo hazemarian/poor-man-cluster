@@ -354,12 +354,15 @@ const StorageNodeLabel = "pmcluster.storage"
 
 // LeaderNodeLabel is the swarm NODE label naming the node that currently holds
 // leadership. The daemon sets it on the local node when leadership is GAINED
-// and clears it when leadership is LOST, so the OTel collector's leader
-// PREFERENCE ("node.labels.pmcluster.leader==true") has something to prefer.
+// (and re-asserts it every leader tick), and clears it when leadership is LOST,
+// so the OTel collector's CONSTRAINT ("node.labels.pmcluster.leader==true") has
+// exactly one matching node -- the one whose disk holds the node-stats file.
 //
-// It is deliberately a preference and never a constraint: a node that crashed
-// mid-transition, or a swarm whose leader just moved, must not leave the
-// collector unschedulable. The manager constraint in the stack is the floor.
+// It is a CONSTRAINT, not a preference: a preference orders eligible nodes and
+// leaves a running task where it is, which is how the collector ended up writing
+// its JSONL on a node the leader's daemon never reads. The price of a constraint
+// is that the label must exist -- `cluster up` claims it for the current leader
+// and `cluster update` refuses to deploy the observability stack without it.
 const LeaderNodeLabel = "pmcluster.leader"
 
 // NodeLabel is stamped on every deployed service and names the node the

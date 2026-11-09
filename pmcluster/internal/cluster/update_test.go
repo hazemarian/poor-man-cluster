@@ -277,7 +277,8 @@ func TestUpdate_StorageNodeLabelsRepaired(t *testing.T) {
 	// fixture is two managers — a worker in this list is now pruned, which
 	// TestUpdate_DropsWorkerFromStorageNodes covers.
 	f.nodes = []runtime.Node{
-		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
 		{Hostname: "nextrum-sy-2", ID: "n2", Role: "manager", Status: "ready", Availability: "active"},
 	}
 
@@ -307,8 +308,10 @@ func TestUpdate_AdoptsLabeledNodeIntoStorageNodes(t *testing.T) {
 	}
 	f := deps.Docker.(*fakeDocker)
 	f.nodes = []runtime.Node{
-		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", Labels: map[string]string{runtime.StorageNodeLabel: "true"}},
-		{Hostname: "nextrum-sy-2", ID: "n2", Role: "manager", Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active",
+			Labels: map[string]string{runtime.StorageNodeLabel: "true"}},
+		{Hostname: "nextrum-sy-2", ID: "n2", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
 	}
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -1026,7 +1029,8 @@ func TestUpdate_AddsLeaderToStorageNodes(t *testing.T) {
 	}
 	f := deps.Docker.(*fakeDocker)
 	f.nodes = []runtime.Node{
-		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true},
+		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
 		{Hostname: "nextrum-sy-2", ID: "n2", Role: "worker", Status: "ready", Availability: "active"},
 	}
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
@@ -1056,7 +1060,8 @@ func TestUpdate_DemotesFormerLeader(t *testing.T) {
 	f := deps.Docker.(*fakeDocker)
 	f.nodes = []runtime.Node{
 		{Hostname: "node-a", ID: "na", Role: "manager", Status: "ready", Availability: "active"},
-		{Hostname: "node-b", ID: "nb", Role: "manager", Status: "ready", Availability: "active", IsLeader: true},
+		{Hostname: "node-b", ID: "nb", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
 	}
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
@@ -1260,7 +1265,8 @@ func TestUpdate_DropsWorkerFromStorageNodes(t *testing.T) {
 	}
 	f := deps.Docker.(*fakeDocker)
 	f.nodes = []runtime.Node{
-		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
 		{Hostname: "nextrum-sy-2", ID: "n2", Role: "worker", Status: "ready", Availability: "active",
 			Labels: map[string]string{runtime.StorageNodeLabel: "true"}},
 	}

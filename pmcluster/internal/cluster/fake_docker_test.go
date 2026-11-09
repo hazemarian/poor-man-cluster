@@ -46,6 +46,9 @@ type fakeDocker struct {
 	// Label tracking — appended to on each SetNodeLabel call.
 	nodeLabels []string
 
+	// Service restarts — appended to on each ServiceRestart call.
+	restartedServices []string
+
 	// Injected error overrides for specific operations.
 	networkExistsErr error
 	networkCreateErr error
@@ -258,7 +261,12 @@ func (f *fakeDocker) ScaleService(_ context.Context, serviceID string, replicas 
 	return nil
 }
 
-func (f *fakeDocker) ServiceRestart(_ context.Context, _ string) error { return nil }
+// ServiceRestart records the service, so a test can tell whether a placement
+// change actually forced the running task.
+func (f *fakeDocker) ServiceRestart(_ context.Context, id string) error {
+	f.restartedServices = append(f.restartedServices, id)
+	return nil
+}
 func (f *fakeDocker) ServiceExec(_ context.Context, _ string, _ []string) (*runtime.ExecResult, error) {
 	return nil, nil
 }
@@ -344,8 +352,24 @@ func (f *fakeDocker) ConfigInspect(_ context.Context, name string) (runtime.Conf
 
 func (f *fakeDocker) NodeList(_ context.Context) ([]runtime.Node, error) { return f.nodes, nil }
 
-func (f *fakeDocker) SetNodeLabel(_ context.Context, _, key, value string) error {
+// SetNodeLabel records the call AND applies it to the node, the way the real
+// adapter does: a caller that writes a label and then lists nodes must see it
+// (e.g. the leader-label claim followed by the deploy guard's read).
+func (f *fakeDocker) SetNodeLabel(_ context.Context, id, key, value string) error {
 	f.nodeLabels = append(f.nodeLabels, key+"="+value)
+	for i := range f.nodes {
+		if f.nodes[i].ID != id {
+			continue
+		}
+		if f.nodes[i].Labels == nil {
+			f.nodes[i].Labels = map[string]string{}
+		}
+		if value == "" {
+			delete(f.nodes[i].Labels, key)
+			continue
+		}
+		f.nodes[i].Labels[key] = value
+	}
 	return nil
 }
 func (f *fakeDocker) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {

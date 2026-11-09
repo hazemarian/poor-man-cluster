@@ -47,10 +47,12 @@ func renderNodeStatStack(t *testing.T) ndCollectorDoc {
 	return doc
 }
 
-// TestOTelCollectorIsSingleTaskPinnedToTheLeader pins the shape change: the
-// collector is no longer `global`. It is one task on a manager, with the leader
-// as a PREFERENCE — never a constraint, because a constraint on a label no node
-// carries strands the task at "no suitable node".
+// TestOTelCollectorIsSingleTaskPinnedToTheLeader pins the shape: the collector is
+// no longer `global`. It is one task on a manager, with the leader as a HARD
+// CONSTRAINT — never a preference. A preference only orders the nodes that
+// already satisfy every constraint and leaves a running task where it is, which is
+// how the collector stayed on a former leader and the node-stats panel stayed
+// empty (measured on the fleet: 5-m carried pmcluster.leader, the task sat on 4-m).
 func TestOTelCollectorIsSingleTaskPinnedToTheLeader(t *testing.T) {
 	doc := renderNodeStatStack(t)
 	svc, ok := doc.Services["otel-collector"]
@@ -65,31 +67,32 @@ func TestOTelCollectorIsSingleTaskPinnedToTheLeader(t *testing.T) {
 		t.Fatalf("otel-collector replicas = %v, want exactly 1", svc.Deploy.Replicas)
 	}
 
-	var haveManager bool
+	const leaderConstraint = "node.labels." + "pmcluster.leader==true"
+	var haveManager, haveLeader bool
 	for _, c := range svc.Deploy.Placement.Constraints {
-		if c == "node.role == manager" {
+		switch c {
+		case "node.role == manager":
 			haveManager = true
-		}
-		// The floor must never depend on the leader label: that is what the
-		// preference is for, and a constraint here would strand the task
-		// whenever the label is missing (fresh cluster, failed transition).
-		if strings.Contains(c, "pmcluster.leader") {
-			t.Errorf("placement constraint %q names the leader label; that must be a preference, not a constraint", c)
+		case leaderConstraint:
+			haveLeader = true
 		}
 	}
 	if !haveManager {
-		t.Fatalf("otel-collector constraints = %v, want node.role == manager as the schedulable floor",
+		t.Fatalf("otel-collector constraints = %v, want node.role == manager as the floor",
 			svc.Deploy.Placement.Constraints)
 	}
-
-	var haveLeaderPref bool
-	for _, p := range svc.Deploy.Placement.Preferences {
-		if p.Spread == "node.labels.pmcluster.leader==true" {
-			haveLeaderPref = true
-		}
+	if !haveLeader {
+		t.Fatalf("otel-collector constraints = %v, want the leader as a CONSTRAINT (%s): a preference "+
+			"does not move a running task", svc.Deploy.Placement.Constraints, leaderConstraint)
 	}
-	if !haveLeaderPref {
-		t.Fatalf("otel-collector preferences = %+v, want node.labels.pmcluster.leader==true", svc.Deploy.Placement.Preferences)
+
+	// And the label must not ALSO be a preference: the two together would let the
+	// scheduler keep a task on a node the constraint no longer selects, which is
+	// the bug this pins.
+	for _, p := range svc.Deploy.Placement.Preferences {
+		if strings.Contains(p.Spread, "pmcluster.leader") {
+			t.Errorf("otel-collector still has a preference on the leader label (%q); it must be a constraint only", p.Spread)
+		}
 	}
 }
 

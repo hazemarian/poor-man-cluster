@@ -400,8 +400,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			if isLeader {
 				log.Info().Msg("control loop: starting reconcile loop (leader)")
 				// Name this node as the leader BEFORE the reconcile pass: the
-				// collector's placement preference reads this label, and the
-				// stack is (re)applied by the loop.
+				// collector's placement CONSTRAINT reads this label, so a
+				// missing label means an unschedulable collector, not a
+				// slightly misplaced one. This also covers a daemon that starts
+				// while already holding leadership — the watch emits its
+				// initial state, so this runs on that first pass too.
 				if syncLeaderLabel(ctx, dc, true, log) {
 					replaceNodeStatCollector(ctx, dc, log)
 				}
@@ -429,6 +432,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				// The collector writes its node-stats JSONL on the leader's
 				// disk; only this daemon can turn it into rows for the console.
 				go runNodeStatTailer(loopCtx, st, dc, log)
+				// Keep the label true for as long as this node is leader. One
+				// write per election is not enough now that placement is a
+				// constraint: a write that failed during the election leaves the
+				// collector with no matching node at all.
+				go keepLeaderLabel(loopCtx, dc, log)
 			} else {
 				log.Info().Msg("control loop: stopped (not the swarm leader)")
 				syncLeaderLabel(ctx, dc, false, log)

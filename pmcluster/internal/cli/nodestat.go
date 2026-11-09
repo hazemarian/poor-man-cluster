@@ -132,8 +132,9 @@ func localRole(ctx context.Context, dc runtime.Client) string {
 
 // runNodeStatTailer reads the collector's file and keeps node_stats current.
 //
-// It is leader-only: `docker stack deploy` places the collector on a manager,
-// and only the leader's daemon is the one the console talks to.
+// It is leader-only: the collector is pinned to node.labels.pmcluster.leader by a
+// hard constraint, so the file exists on the leader's disk and only the leader's
+// daemon is the one the console talks to.
 func runNodeStatTailer(ctx context.Context, st *store.Store, dc runtime.Client, log zerolog.Logger) {
 	if st == nil {
 		return
@@ -215,17 +216,26 @@ func pruneNodeStats(ctx context.Context, st *store.Store, dc runtime.Client, log
 	}
 }
 
-// syncLeaderLabel stamps or clears pmcluster.leader on THIS node and reports
+// syncLeaderLabel makes pmcluster.leader authoritative on THIS node — stamped
+// ("true") when this node is leader, cleared ("") when it is not — and reports
 // whether it CHANGED anything.
 //
-// Called on every leadership transition (gain → "true", loss → ""). The label is
-// what the collector's placement PREFERENCE names; without it the preference
-// matches nothing and the task stays wherever the scheduler put it — schedulable,
-// which is the point, but not on the node whose disk holds the node-stats file.
+// It is called on every leadership transition AND on every leader tick
+// (keepLeaderLabel below), and it also clears the label from any OTHER node that
+// still carries it when this node is leader. Both halves matter now that the
+// collector's placement is a hard CONSTRAINT on this label:
 //
-// Best-effort by design: a failed label write is logged and the daemon carries
-// on serving. The return value exists so the caller forces exactly ONE service
-// restart per real transition instead of on every daemon restart.
+//   - exactly one node must match, or the scheduler may place the collector on a
+//     stale former leader whose disk nobody reads (the label outliving a failed
+//     clear is the same failure as never setting it);
+//   - the label must exist, because a constraint has no schedulable floor to fall
+//     back to. A single write per election would leave the collector at 0/1 after
+//     one Docker API hiccup until the next election.
+//
+// Best-effort per write: one failure is logged and the tick retries, since
+// refusing to serve over a label is worse than a collector that is briefly
+// unschedulable. The return value exists so the caller forces exactly ONE service
+// restart per real transition instead of on every tick.
 func syncLeaderLabel(ctx context.Context, dc runtime.Client, leader bool, log zerolog.Logger) bool {
 	if dc == nil {
 		return false
@@ -240,23 +250,62 @@ func syncLeaderLabel(ctx context.Context, dc runtime.Client, leader bool, log ze
 	if leader {
 		want = "true"
 	}
+	changed := false
 	for _, n := range nodes {
-		if n.Hostname != host {
+		if n.Hostname == host {
+			if cur, ok := n.Labels[runtime.LeaderNodeLabel]; ok && cur == want {
+				continue // already correct: no API write on every tick
+			}
+			if err := dc.SetNodeLabel(ctx, n.ID, runtime.LeaderNodeLabel, want); err != nil {
+				log.Warn().Err(err).Str("node", host).Bool("leader", leader).
+					Msg("leadership label: update failed")
+				continue
+			}
+			log.Info().Str("node", host).Bool("leader", leader).
+				Str("label", runtime.LeaderNodeLabel).Msg("leadership label updated")
+			changed = true
 			continue
 		}
-		if cur, ok := n.Labels[runtime.LeaderNodeLabel]; ok && cur == want {
-			return false // already correct: no API write on every restart
+		// Not this node. While this node is leader, a label left on another node
+		// is stale by definition (a clear that never landed, or a node that left
+		// and rejoined) and would give the collector's constraint a second match.
+		if leader && n.Labels[runtime.LeaderNodeLabel] == "true" {
+			if err := dc.SetNodeLabel(ctx, n.ID, runtime.LeaderNodeLabel, ""); err != nil {
+				log.Warn().Err(err).Str("node", n.Hostname).
+					Msg("leadership label: cannot clear a stale label")
+				continue
+			}
+			log.Info().Str("node", n.Hostname).Str("label", runtime.LeaderNodeLabel).
+				Msg("leadership label cleared from a node that is not the leader")
+			changed = true
 		}
-		if err := dc.SetNodeLabel(ctx, n.ID, runtime.LeaderNodeLabel, want); err != nil {
-			log.Warn().Err(err).Str("node", host).Bool("leader", leader).
-				Msg("leadership label: update failed")
-			return false
-		}
-		log.Info().Str("node", host).Bool("leader", leader).
-			Str("label", runtime.LeaderNodeLabel).Msg("leadership label updated")
-		return true
 	}
-	return false
+	return changed
+}
+
+// leaderLabelReassertInterval paces keepLeaderLabel. A var so tests can drive the
+// loop without waiting half a minute.
+var leaderLabelReassertInterval = 30 * time.Second
+
+// keepLeaderLabel re-asserts pmcluster.leader=true for as long as this node holds
+// leadership, and stops when the caller's context ends (leadership lost, daemon
+// stopping). The label is a precondition of the collector's placement, so it is
+// maintained like one: a missed write is repaired on the next tick instead of
+// waiting for an election that may never come.
+func keepLeaderLabel(ctx context.Context, dc runtime.Client, log zerolog.Logger) {
+	if dc == nil {
+		return
+	}
+	t := time.NewTicker(leaderLabelReassertInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			syncLeaderLabel(ctx, dc, true, log)
+		}
+	}
 }
 
 // nodeStatCollectorService is the collector's Swarm service name
@@ -267,13 +316,13 @@ const nodeStatCollectorService = "observability_otel-collector"
 // replaceNodeStatCollector forces the collector task to be scheduled again after
 // the leadership label moved.
 //
-// A placement PREFERENCE is evaluated when a task is created, not continuously:
-// a running task stays where it is until the service is updated or restarted. So
-// a leadership change alone would leave the collector on the old leader while the
-// node-stats file it writes sits on a node whose daemon no longer reads it. One
-// force-update per leadership transition closes that gap; it is best-effort
-// because on a first boot the stack may not be deployed yet (the reconcile pass
-// deploys it with the label already in place).
+// Placement is only evaluated when a task is CREATED: a running task stays where
+// it is until the service is updated or restarted, even when the constraint that
+// selected its node no longer matches. So a leadership change alone would leave
+// the collector on the old leader while the node-stats file it writes sits on a
+// node whose daemon no longer reads it. One force-update per real label change
+// closes that gap; it is best-effort because on a first boot the stack may not be
+// deployed yet (the reconcile pass deploys it with the label already in place).
 func replaceNodeStatCollector(ctx context.Context, dc runtime.Client, log zerolog.Logger) {
 	if dc == nil {
 		return

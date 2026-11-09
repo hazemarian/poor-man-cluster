@@ -600,6 +600,10 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		forceAll := in.Force || swarmChanged
 		var redeploy []stackName
 		reasons := map[stackName]string{}
+		// prevRender is the last render pmcluster stored for each stack. The
+		// collector's placement is compared against it after a deploy: a
+		// constraint change rewrites the spec but does not move a running task.
+		prevRender := map[stackName][]byte{}
 		order := []stackName{StackObservability, StackInfra, StackEdge, StackBackup}
 		if sso.Enabled {
 			order = append(order, StackSSO)
@@ -610,6 +614,9 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			row, err := deps.Store.Config(ctx, cfgName)
 			if err != nil && !errors.Is(err, errs.ErrConfigNotFound) {
 				return fmt.Errorf("read rendered hash for %s: %w", cfgName, err)
+			}
+			if row != nil {
+				prevRender[s] = []byte(row.RenderedContent)
 			}
 			switch {
 			case forceAll:
@@ -639,8 +646,19 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		redeployed := map[string]bool{}
 		for _, s := range redeploy {
 			fmt.Fprintf(out, "  ▶ %s %s → re-deploying\n", string(s), reasons[s])
+			if s == StackObservability {
+				// The collector is pinned to pmcluster.leader with a hard
+				// constraint. Deploying without a labelled node would leave it
+				// at 0/1 with no task logs, so the condition is named here.
+				if err := RequireLeaderLabel(ctx, deps.Docker); err != nil {
+					return err
+				}
+			}
 			if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
 				return err
+			}
+			if s == StackObservability {
+				forceCollectorIfPlacementChanged(ctx, out, deps.Docker, prevRender[s], rendered[string(s)+"-stack"])
 			}
 			res.StacksDeployed = append(res.StacksDeployed, string(s))
 			if s == StackEdge {

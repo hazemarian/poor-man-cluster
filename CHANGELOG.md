@@ -3,6 +3,18 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.261 (2026-11-09)
+
+**The OTel collector follows the leader by constraint, not by preference, so the node-stats panel stops reporting an empty fleet.**
+
+The collector writes `/var/stack/nodestat/nodestat.jsonl` to its OWN host disk and the leader's daemon tails that path locally. Its placement was a manager constraint plus a `node.labels.pmcluster.leader` *preference* — and a preference is a tiebreaker, not a pin. Measured on the fleet: `nxt-sw-5-m` carried `pmcluster.leader=true`, the collector task sat on `nxt-sw-4-m` and stayed there across `docker service update --force`, so the JSONL was written on a node nobody reads and `GET /api/node-stats` answered `{"node_stats":[]}` with no error anywhere.
+
+- **The leader label is a CONSTRAINT** (`node.labels.pmcluster.leader==true`, alongside `node.role == manager`) and the preference is gone. The rendered stack is asserted to carry the constraint and no preference on that label.
+- **The label is now an invariant, not a best-effort hint.** The daemon stamps it on leadership gain (including a daemon that starts while already leading — the leadership watch emits its initial state, so the first pass asserts it), re-asserts it every 30 s while it leads, clears it on loss, and clears a stale copy from any other node that still carries it (two matches would let the scheduler pick the former leader). Only the leader manages another node's copy.
+- **Deploying without the label is refused, loudly.** `cluster update` returns `no node carries pmcluster.leader=true — the leader must claim it before the collector can be pinned` before it deploys the observability stack, instead of leaving a service at 0/1 with no task logs. `cluster up` CLAIMS the label for the current leader first, because the daemon that maintains it is installed and started after that command. `pmcluster doctor` gained a `leader label` check: fail when nothing carries it, warn on a stale/duplicate/mismatched carrier.
+- **A placement change now moves the running task.** `docker stack deploy` rewrites the service spec but leaves a healthy task where it is, so the reconcile pass compares the collector's stored placement with the fresh render and force-updates `observability_otel-collector` when constraints or preferences differ (and stays silent when they do not).
+- Known follow-up, unchanged by this release: `docker service update` cannot change a service's MODE (`global` → `replicated` is `Unimplemented: service mode change is not allowed`), which aborted a whole `cluster update`; a mode change still needs remove + recreate.
+
 ## v0.2.260 (2026-11-09)
 
 **The control-plane kit keeps a small rollback window instead of the full history or none.**

@@ -38,8 +38,15 @@ One per cluster:                                            Parseable
   instead of four. Per-node CPU, memory and processes do not come from the
   collector at all — every node's daemon samples its own `/proc` and exports it
   (see "Per-node resources" below). The task carries a `node.role == manager`
-  constraint (the schedulable floor) and a `node.labels.pmcluster.leader`
-  *preference*, which the daemon maintains on each leadership transition.
+  constraint and a **hard** `node.labels.pmcluster.leader==true` constraint, so
+  it runs on the leader and nowhere else. The daemon maintains that label as an
+  invariant — stamped on leadership gain, re-asserted every leader tick, cleared
+  on loss, and cleared from any other node still carrying it — and both
+  `cluster up` and `cluster update` treat it as a precondition: `cluster up`
+  claims it for the current leader, and `cluster update` refuses to deploy this
+  stack when no node carries it (`pmcluster doctor` reports the same condition).
+  A constraint alone would not move a running task, so when a render changes the
+  collector's placement the reconcile pass force-updates the service.
 - **One Parseable backend per cluster.** It stores logs, metrics and traces on a
   mounted volume and answers SQL. It is placed on the same storage
 round-robin every stateful stack uses, and stays there.

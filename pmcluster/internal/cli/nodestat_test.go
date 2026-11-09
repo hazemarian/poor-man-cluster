@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -90,11 +91,97 @@ func TestSyncLeaderLabel_GainSetsClearsAndSkipsNoops(t *testing.T) {
 		t.Fatalf("label calls = %v, want one clear on self", dc.labelCalls)
 	}
 
-	// Never touches another node: the label names the leader, not every manager.
+	// Never touches another node while that node carries no label: the label names
+	// the leader, not every manager. (A STALE label on another node is cleared —
+	// see the next test — because two matches make the collector's constraint
+	// ambiguous.)
 	for _, c := range dc.labelCalls {
 		if c[:4] != "self" {
 			t.Fatalf("label call %q targeted a node other than self", c)
 		}
+	}
+}
+
+// TestSyncLeaderLabel_StartupOnLeaderReasserts: a daemon that STARTS while it
+// already holds leadership must still assert the label. WatchSwarmLeadership
+// emits its initial state, so the first control-loop pass runs the same gain path;
+// this drives that call directly — the label is absent (a failed write before the
+// restart, a hand-removed label) and must be written.
+func TestSyncLeaderLabel_StartupOnLeaderReasserts(t *testing.T) {
+	dc := &statClient{nodes: []runtime.Node{
+		{ID: "self", Hostname: "self", Role: "manager", IsLeader: true},
+	}}
+	if !syncLeaderLabel(context.Background(), dc, true, zerolog.Nop()) {
+		t.Fatal("a leader starting without the label reported no change; the collector would be unschedulable")
+	}
+	if len(dc.labelCalls) != 1 || dc.labelCalls[0] != "self:"+runtime.LeaderNodeLabel+":true" {
+		t.Fatalf("label calls = %v, want the label stamped on self", dc.labelCalls)
+	}
+}
+
+// TestSyncLeaderLabel_ClearsStaleLabelOnAnotherNode: the clear on losing
+// leadership is best-effort, so a former leader can keep the label. When the new
+// leader asserts its own, it must also clear the stale copy — otherwise the
+// collector's constraint matches two nodes and the scheduler may pick the one whose
+// disk the leader's daemon never reads.
+func TestSyncLeaderLabel_ClearsStaleLabelOnAnotherNode(t *testing.T) {
+	dc := &statClient{nodes: []runtime.Node{
+		{ID: "self", Hostname: "self", Role: "manager", IsLeader: true,
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
+		{ID: "old", Hostname: "nxt-sw-4-m", Role: "manager",
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
+	}}
+	if !syncLeaderLabel(context.Background(), dc, true, zerolog.Nop()) {
+		t.Fatal("a stale label on another node was not cleared")
+	}
+	if len(dc.labelCalls) != 1 || dc.labelCalls[0] != "old:"+runtime.LeaderNodeLabel+":" {
+		t.Fatalf("label calls = %v, want exactly the stale label cleared on old", dc.labelCalls)
+	}
+
+	// A follower must not police other nodes: the leader owns that decision. Its
+	// own (absent) label is written as a clear; the leader's label is left alone.
+	dc2 := &statClient{nodes: []runtime.Node{
+		{ID: "self", Hostname: "self", Role: "manager"},
+		{ID: "leader", Hostname: "nxt-sw-5-m", Role: "manager", IsLeader: true,
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
+	}}
+	syncLeaderLabel(context.Background(), dc2, false, zerolog.Nop())
+	for _, c := range dc2.labelCalls {
+		if c != "self:"+runtime.LeaderNodeLabel+":" {
+			t.Fatalf("a follower wrote %q — only the leader manages other nodes' labels", c)
+		}
+	}
+}
+
+// TestKeepLeaderLabel_ReassertsWhileLeader: one write per election is not enough
+// once the label is a hard constraint — a write that failed during the election
+// leaves the collector with no matching node. The loop retries until leadership
+// ends and then stops.
+func TestKeepLeaderLabel_ReassertsWhileLeader(t *testing.T) {
+	prev := leaderLabelReassertInterval
+	leaderLabelReassertInterval = 5 * time.Millisecond
+	defer func() { leaderLabelReassertInterval = prev }()
+
+	dc := &statClient{nodes: []runtime.Node{
+		{ID: "self", Hostname: "self", Role: "manager", IsLeader: true},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { keepLeaderLabel(ctx, dc, zerolog.Nop()); close(done) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(dc.labelCalls) == 0 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if len(dc.labelCalls) == 0 {
+		cancel()
+		t.Fatal("the re-assert loop never wrote the label")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the re-assert loop did not stop when leadership ended")
 	}
 }
 

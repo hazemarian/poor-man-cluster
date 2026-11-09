@@ -140,13 +140,21 @@ services:
   # the LEADER's containers only. Node-level CPU/memory/process data comes from
   # every node's daemon, which is the source the 2026-11-08 post-mortem needed.
   #
-  # Placement is a manager CONSTRAINT (the floor: always satisfiable on a swarm
-  # that has a manager) plus a leader PREFERENCE on node.labels.pmcluster.leader.
-  # A preference, not a constraint, is the point: if no node carries the label
-  # the task still schedules on some manager instead of sitting at "no suitable
-  # node" forever. The daemon sets the label when it gains leadership and clears
-  # it when it loses it (internal/cli), and preferences are re-evaluated when the
-  # service is updated, so a leadership change moves the task on the next apply.
+  # Placement is the manager CONSTRAINT (one of every service's floor) plus a
+  # HARD constraint on node.labels.pmcluster.leader. A preference was tried first
+  # and it does not work: a preference only orders the nodes that already satisfy
+  # every constraint, and the scheduler keeps a RUNNING task where it is, so the
+  # collector stayed on a former leader (measured: 5-m carried the label, the task
+  # sat on 4-m, and GET /api/node-stats answered {"node_stats":[]} forever because
+  # the JSONL was written on a disk the leader's daemon does not read).
+  #
+  # The daemon maintains the label as an INVARIANT: stamped on leadership gain,
+  # re-asserted on every leader tick (a constraint has no schedulable floor to
+  # fall back to), cleared on loss. `cluster update` refuses to deploy this stack
+  # when no node carries the label, naming the condition, rather than leaving a
+  # service at 0/1. And because `docker stack deploy` rewrites the spec without
+  # moving a running task, the reconcile pass force-updates the collector when its
+  # rendered placement changed.
   #
   # The node-stats JSONL lands under /var/stack and is bind-mounted at the same
   # path, so the leader's daemon can read exactly what this task wrote. Rotation
@@ -182,10 +190,10 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.157.0
     # One task on the leader. NOT global: see the block above for why, and for
-    # why the leader is a preference rather than a constraint.
+    # why the leader is a hard constraint rather than a preference.
     replicas: 1
     placement: manager
-    preferences:
+    constraints:
       - "node.labels.pmcluster.leader==true"
     user: "0:0"
     restart: any

@@ -77,6 +77,7 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 	add := func(c Check) { rep.Checks = append(rep.Checks, c) }
 
 	add(checkSwarm(ctx, in))
+	add(checkLeaderLabel(ctx, in))
 	add(checkSkew(ctx, in))
 	add(checkKit(ctx, in))
 	add(checkSecrets(ctx, in))
@@ -118,6 +119,50 @@ func checkSwarm(ctx context.Context, in Input) Check {
 		return Check{"swarm", StatusWarn, w}
 	}
 	return Check{"swarm", StatusOK, fmt.Sprintf("%d/%d manager(s) ready, quorum %d", q.Ready, q.Managers, q.Required())}
+}
+
+// checkLeaderLabel: does exactly the current leader carry pmcluster.leader=true?
+//
+// The collector is pinned to that label by a hard placement CONSTRAINT, so the
+// label is not cosmetic: when no node carries it the collector cannot schedule at
+// all (cluster update refuses to deploy in that state), and when a node other than
+// the leader carries it the collector writes the node-stats JSONL onto a disk the
+// leader's daemon never reads — an empty panel with no error anywhere.
+func checkLeaderLabel(ctx context.Context, in Input) Check {
+	if in.Docker == nil {
+		return Check{"leader label", StatusSkip, "no docker client"}
+	}
+	nodes, err := in.Docker.NodeList(ctx)
+	if err != nil {
+		return Check{"leader label", StatusFail, "node list: " + err.Error()}
+	}
+	if len(nodes) == 0 {
+		return Check{"leader label", StatusSkip, "the node list is empty: no swarm inventory to read the label from"}
+	}
+	var carriers []string
+	leader := ""
+	for _, n := range nodes {
+		if n.Labels[runtime.LeaderNodeLabel] == "true" && n.Hostname != "" {
+			carriers = append(carriers, n.Hostname)
+		}
+		if n.IsLeader && n.Hostname != "" {
+			leader = n.Hostname
+		}
+	}
+	switch {
+	case len(carriers) == 0:
+		return Check{"leader label", StatusFail,
+			cluster.NoLeaderLabelCondition + " (nothing pins the collector, so no task can start)"}
+	case len(carriers) > 1:
+		return Check{"leader label", StatusWarn,
+			fmt.Sprintf("%d nodes carry %s=true (%s) — the collector's constraint matches all of them",
+				len(carriers), runtime.LeaderNodeLabel, strings.Join(carriers, ", "))}
+	case leader != "" && carriers[0] != leader:
+		return Check{"leader label", StatusWarn,
+			fmt.Sprintf("%s=true is on %s, but the swarm leader is %s — the collector writes its node-stats file where the leader's daemon does not read it",
+				runtime.LeaderNodeLabel, carriers[0], leader)}
+	}
+	return Check{"leader label", StatusOK, fmt.Sprintf("%s=%s=true", carriers[0], runtime.LeaderNodeLabel)}
 }
 
 // checkSkew: does every reporting manager run this binary?
