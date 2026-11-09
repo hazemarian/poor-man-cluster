@@ -367,9 +367,11 @@ exporters:
   #
   # The path lives under the platform data root (/var/stack) and is bind-
   # mounted into the container at the SAME path, so the leader daemon (a host
-  # process) can read exactly what the collector wrote.
+  # process) can read exactly what the collector wrote. The directory comes from
+  # cluster.NodeStatHostDir — the same constant the bind mount and the host
+  # mkdir use — so the exporter cannot write outside the mounted directory.
   file/nodestat:
-    path: /var/stack/nodestat/nodestat.jsonl
+    path: [[ .NodeStatDir ]]/nodestat.jsonl
     format: json
     flush_interval: 5s
     # Bounded growth: 2 MiB, one file, no backups. Rotation replaces the file

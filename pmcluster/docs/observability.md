@@ -681,6 +681,20 @@ console /web/overview ── hostname, role, load, memory, top processes, sample
   load average above 1.5x the node's cores, available memory under 15%, a sample
   older than 3 minutes (greyed *and* labelled stale), and an unreachable Docker
   engine on that node.
+- **The directory is provisioned by the platform, not by Docker.** The collector
+  bind-mounts `/var/stack/nodestat` from the host, and Swarm rejects a task whose
+  bind source is missing (`bind source path does not exist:
+  /var/stack/nodestat`) — the task never runs, the service sits at 0/1 and no
+  container log exists to explain it. `cluster up` and `cluster update` therefore
+  create every host directory the platform stacks bind-mount before the stack is
+  deployed, idempotently, and `cluster update` reports a path it cannot create
+  (read-only filesystem, permissions) as an apply warning instead of aborting a
+  reconcile. The path itself is one constant (`cluster.NodeStatHostDir`) that the
+  bind mount, the collector's file exporter and the mkdir all read, so they
+  cannot drift. The collector's other bind sources need no help: its docker
+  socket, `/var/lib/docker/containers`, `/etc/localtime`, `/proc` and `/sys` are
+  Docker's or the kernel's, and Parseable's data/staging dirs are named volumes
+  the deploy pipeline creates under the volume root.
 - **The reader never truncates the file.** The exporter holds it open; truncating
   produces a sparse NUL-filled middle. Rotation is the only cleanup, and the
   reader detects it (inode change or shrink) and rebuilds from the last 256 KiB.
@@ -691,6 +705,7 @@ console /web/overview ── hostname, role, load, memory, top processes, sample
 | --- | --- |
 | Page shows no telemetry | `docker service ps observability_parseable` and `docker service ps observability_otel-collector` |
 | No node metrics | collector task is running on that node and has host metrics access |
+| Collector `Rejected`: `bind source path does not exist: /var/stack/nodestat` | `ls -ld /var/stack/nodestat` on the leader; run `cluster update` (or `cluster up` on a fresh node) — the platform creates it, and a warning names the path when it cannot |
 | A node has no row in Node resources | `journalctl -u pmcluster \| grep -i self-telemetry` — an endpoint that fails the dial check is disabled at startup, and the leader's wildcard swarm address is expected to resolve to loopback |
 | No container logs | container uses the `json-file` driver; check `docker info` |
 | Logs duplicated | application sends OTLP logs **and** stdout; set `skip_filelog: true` |

@@ -158,6 +158,14 @@ type RenderInput struct {
 	// Each node keeps its own copy — see docs/storage-and-databases.md.
 	BackupDir string
 
+	// NodeStatDir is the host directory the OTel collector appends the
+	// node-stats JSONL to and bind-mounts at the same path. It is templated
+	// into the observability stack and the collector config from
+	// cluster.NodeStatHostDir — the same constant `cluster up` / `cluster
+	// update` mkdir before the stack is deployed — so the mount, the exporter
+	// path and the mkdir cannot drift. Empty defaults to NodeStatHostDir.
+	NodeStatDir string
+
 	// HostCerts lists the per-host (bring-your-own) certificates recorded in
 	// the DB. RenderTraefikDynamic appends each one's versioned Swarm secret
 	// names to the dynamic config's tls.certificates so Traefik serves them
@@ -493,6 +501,10 @@ func LoadComposeFile(name stackName, in RenderInput) ([]byte, error) {
 	if name == StackEdge && in.EdgeImage == "" {
 		in.EdgeImage = EdgeImageFor()
 	}
+	// Same for the node-stats host directory: the bind mount and the mkdir
+	// must read one value, so a caller that leaves it empty gets the platform
+	// constant rather than an empty bind source.
+	in = withHostPaths(in)
 	body, err := readConfigFile(fname, in)
 	if err != nil {
 		return nil, err
@@ -616,11 +628,23 @@ func RenderObservabilityProvisionScript(in RenderInput) ([]byte, error) {
 // (`secret(oo_basic_auth)` in the embedded template) rather than a bespoke
 // placeholder.
 func RenderOTelCollectorConfig(in RenderInput) ([]byte, error) {
+	in = withHostPaths(in)
 	body, err := readConfigFile("otel-collector-config.yml", in)
 	if err != nil {
 		return nil, err
 	}
-	rendered, err := refs.ReplaceRefs(context.Background(), body, &otelRefResolver{render: in})
+	// The file exporter's directory comes from the same constant the stack's
+	// bind mount and the host mkdir use ([[ .NodeStatDir ]]), so the collector
+	// can only ever write inside the directory that is mounted.
+	tmpl, err := template.New("otel-collector-config").Delims("[[", "]]").Parse(body)
+	if err != nil {
+		return nil, fmt.Errorf("parse otel-collector-config.yml template: %w", err)
+	}
+	var expanded bytes.Buffer
+	if err := tmpl.Execute(&expanded, in); err != nil {
+		return nil, fmt.Errorf("execute otel-collector-config.yml template: %w", err)
+	}
+	rendered, err := refs.ReplaceRefs(context.Background(), expanded.String(), &otelRefResolver{render: in})
 	if err != nil {
 		return nil, fmt.Errorf("render otel collector config: %w", err)
 	}

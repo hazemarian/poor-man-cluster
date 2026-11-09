@@ -23,6 +23,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -38,15 +39,16 @@ const (
 	// delay a read, and a read must never trigger a sample.
 	nodeStatTailInterval = 15 * time.Second
 
-	// nodeStatDefaultPath is where the collector's file exporter writes, and
-	// where the stack bind-mounts it. Kept as a constant (not derived from the
-	// volume root) because the bind is a fixed host path in the stack file.
-	nodeStatDefaultPath = "/var/stack/nodestat/nodestat.jsonl"
-
 	// nodeStatPathEnv overrides the path for tests and for a host whose
 	// /var/stack lives elsewhere.
 	nodeStatPathEnv = "PMCLUSTER_NODESTAT_PATH"
 )
+
+// nodeStatDefaultPath is where the collector's file exporter writes, and where
+// the stack bind-mounts it. Derived from cluster.NodeStatHostDir — the same
+// constant `cluster up` / `cluster update` mkdir and the stack renders — so the
+// reader cannot look somewhere the mount does not cover.
+var nodeStatDefaultPath = cluster.NodeStatFilePath()
 
 // nodeStatFilePath returns the collector's JSONL path.
 func nodeStatFilePath() string {

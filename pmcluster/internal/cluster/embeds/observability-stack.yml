@@ -222,8 +222,11 @@ services:
       - "/sys:/hostfs/sys:ro"
       # The node-stats file the collector's file exporter appends to. Same path
       # inside and out, so the leader's daemon reads exactly what this task
-      # wrote. Created by Docker on first deploy.
-      - "/var/stack/nodestat:/var/stack/nodestat"
+      # wrote. The host directory is created by `cluster up` / `cluster update`
+      # (cluster.NodeStatHostDir) BEFORE this stack is deployed: Docker rejects
+      # a bind whose source is missing, and "bind source path does not exist:
+      # /var/stack/nodestat" is how the collector sat at 0/1 on four nodes.
+      - "[[ .NodeStatDir ]]:[[ .NodeStatDir ]]"
     configs:
       - config_path(pmcluster_otel_config)
     resources:

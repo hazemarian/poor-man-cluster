@@ -19,6 +19,9 @@ func newUpDeps(t *testing.T) (UpDeps, *fakeDocker, *recordingDeployer) {
 	t.Helper()
 	dir := t.TempDir()
 	ensureStorageDirs = func(string) error { return nil }
+	// The host-directory step is the same kind of host mutation: keep it
+	// out of the real filesystem (the real helper is covered by hostpaths_test).
+	ensurePlatformHostDirs = func() error { return nil }
 
 	s, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {

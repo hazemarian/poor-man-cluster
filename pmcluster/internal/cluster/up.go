@@ -229,6 +229,21 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 		fmt.Fprintf(out, "  ✓ %s ready\n", backupRootDir())
 		return nil
 	})
+	// Bind sources the platform's own stacks mount from the node must exist
+	// BEFORE the stack that mounts them is deployed: Swarm rejects the task
+	// with `bind source path does not exist` and leaves the service at 0/1 with
+	// no task logs. This is fatal on a fresh install on purpose — there is no
+	// healthy cluster to preserve, and deploying anyway would fail later at the
+	// health wait with a message that names the service, not the path.
+	wf.Add("Ensuring platform host directories ("+NodeStatHostDir+")", func(ctx context.Context) error {
+		if err := ensurePlatformHostDirs(); err != nil {
+			return err
+		}
+		for _, dir := range platformHostDirs() {
+			fmt.Fprintf(out, "  ✓ %s ready\n", dir)
+		}
+		return nil
+	})
 	wf.Add("Syncing platform config templates into the store", func(ctx context.Context) error {
 		syncRes, err := SyncPlatformConfigs(ctx, deps.Store, in.Version)
 		if err != nil {

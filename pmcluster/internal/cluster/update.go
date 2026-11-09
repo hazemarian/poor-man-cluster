@@ -331,6 +331,25 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		return verifyVolumeRootMounted(render.VolumeRoot)
 	})
 
+	wf.Add("Ensuring platform host directories (bind sources)", func(ctx context.Context) error {
+		// The same class of failure as the storage roots above: a bind mount
+		// whose host source does not exist is rejected by Swarm at task
+		// creation (`bind source path does not exist: /var/stack/nodestat`),
+		// which is how the collector sat at 0/1 on nodes that had never run the
+		// node-stats code. A path the platform cannot create is a WARNING here,
+		// not a fatal: every other stack in this reconcile is healthy and
+		// aborting the run would leave them unrepaired. The warning names the
+		// path and the reason, and reaches the apply record through the sink.
+		if err := ensurePlatformHostDirs(); err != nil {
+			fmt.Fprintf(out, "  ⚠ %v\n", err)
+			return nil
+		}
+		for _, dir := range platformHostDirs() {
+			fmt.Fprintf(out, "  ✓ %s ready\n", dir)
+		}
+		return nil
+	})
+
 	wf.Add("Ensuring overlay networks", func(ctx context.Context) error {
 		// External overlay networks (traefik-net, monitoring-net) are created
 		// only by `cluster up`; a wiped Swarm loses them even though the store

@@ -44,6 +44,19 @@ the actor (English and Arabic). A customer manifest with `mode: global` is refus
 one still renders it. An unknown placement host errors and does not deploy; a known host deploys; a role
 and an empty placement pass; a node-list failure degrades.
 
+## Unreleased — platform bind-mount host directories
+
+**The platform creates the host directories its own stacks bind-mount, so a missing path can no longer reject a task.**
+
+The OTel collector bind-mounts `/var/stack/nodestat` from the host (it appends the node-stats JSONL there and the leader's daemon tails it). On nodes that had never run the node-stats code the directory did not exist, and Swarm refused the task outright — `Rejected  invalid mount config for type "bind": bind source path does not exist: /var/stack/nodestat` — leaving the collector at 0/1 with no container log to explain it. The operator created the directory by hand on four hosts. Provisioning a host path a platform stack mounts is the platform's job.
+
+- **`cluster up` and `cluster update` create them, before the stack is deployed.** `internal/cluster/hostpaths.go` walks the platform's bind sources (`ensureHostDir` per path, `os.MkdirAll` of the parent chain), idempotent and a no-op for an existing directory — an operator's mode is never rewritten. `cluster up` fails on the step (a fresh install has no healthy cluster to preserve and the message names the path before anything is deployed); `cluster update` prints a `⚠` line naming the path and the reason and carries on, so one uncreatable path cannot abort an otherwise healthy reconcile. The warning reaches the apply record through the existing sink.
+- **The path is one constant, not three literals.** `cluster.NodeStatHostDir` feeds the observability stack's bind mount and the collector config's file-exporter path (`[[ .NodeStatDir ]]`, defaulted in `LoadComposeFile`/`RenderOTelCollectorConfig`) and the `mkdir`; the daemon's reader (`internal/cli/nodestat.go`) now derives its default from `cluster.NodeStatFilePath()` too. A test asserts the rendered bind source equals the directory the helper is given, and that the exporter path is inside it.
+- **No role check.** The directory is created on whichever node runs the command. It is harmless where nothing mounts it, and the leader's daemon is what reconciles, so the node that needs the path is the node that runs the mkdir.
+- **The rest of the observability stack's bind sources need no help**, and this was audited: `/var/lib/docker/containers` and `/var/run/docker.sock` are Docker's own, `/etc/localtime`, `/proc` and `/sys` are stock Linux, and Parseable's data/staging dirs are named volumes the deploy pipeline already creates under the volume root. `/var/stack/nodestat` was the only one in this class.
+
+Tests: the helper creates a missing directory and is a silent no-op (mode preserved) on an existing one; it names the path and carries the reason when the parent is unwritable (`permission denied`) and refuses a regular file where a directory is needed; `ensureHostDirs` reports every failure. `Up` calls it exactly once and before the observability stack is deployed, and fails naming the path when it cannot; `Update` calls it once, reports the directory as ready, and turns the same failure into an apply-recorded warning with no error return. The rendered bind source, the helper's list and the exporter path are asserted to be one value.
+
 ## v0.2.262 (2026-11-09)
 
 **Storage membership stops following leadership, an empty-valued node label stops existing, and leadership can be moved on purpose.**
