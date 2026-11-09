@@ -57,7 +57,7 @@ func nodestatRow(t *testing.T, table, host string) string {
 	return table[rowStart : idx+rowEnd]
 }
 
-var procRowRe = regexp.MustCompile(`(?s)<li class="proc-row.*?</li>`)
+var procRowRe = regexp.MustCompile(`<li class="proc-row">.*?</li>`)
 
 // TestNodestatProcRowsSeparateNameAndValue: the panel rendered `parseable439
 // MB` — a name span and a value span with nothing between them. Every rendered

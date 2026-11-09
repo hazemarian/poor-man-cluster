@@ -668,7 +668,7 @@ form.htmx-request [type="submit"] { pointer-events: none; }
   max-inline-size: 20ch; color: var(--text-secondary);
 }
 /* A real separator, not just a gap: at --fs-xs two spans read as one word. */
-.nodestat-table .p-sep { color: var(--text-tertiary); }
+.nodestat-table .p-sep { color: var(--text-secondary); }
 .nodestat-table .p-val {
   color: var(--text-primary); font-variant-numeric: tabular-nums;
   text-align: end; white-space: nowrap;

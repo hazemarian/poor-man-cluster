@@ -666,6 +666,10 @@ console /web/overview ── hostname, role, load, memory, top processes, sample
   host, and the collector is now a single leader-pinned task. A node's own daemon
   is the only process that can describe that node. It exports over the same
   ingress-published OTLP port applications use; it never talks to Parseable.
+  **The leader exports too** — the file exporter is a sink, not a loop, so there
+  is nothing for the leader to avoid by staying silent. A swarm that records the
+  leader's own address as `0.0.0.0` is dialled on loopback, which is where the
+  co-located collector's published 4318 answers.
 - **The panel does not depend on Parseable.** The collector writes the series to a
   host-bound JSONL file as well as to the backend, and the leader's daemon reads
   the file. A telemetry outage can cost history; it cannot blank the panel.
@@ -687,6 +691,7 @@ console /web/overview ── hostname, role, load, memory, top processes, sample
 | --- | --- |
 | Page shows no telemetry | `docker service ps observability_parseable` and `docker service ps observability_otel-collector` |
 | No node metrics | collector task is running on that node and has host metrics access |
+| A node has no row in Node resources | `journalctl -u pmcluster \| grep -i self-telemetry` — an endpoint that fails the dial check is disabled at startup, and the leader's wildcard swarm address is expected to resolve to loopback |
 | No container logs | container uses the `json-file` driver; check `docker info` |
 | Logs duplicated | application sends OTLP logs **and** stdout; set `skip_filelog: true` |
 | No traces | the application is instrumented and points at the collector's OTLP endpoint |

@@ -302,22 +302,22 @@
               </div>
             </td>
             <td class="num nodestat-load">
-              <span class="{{if .Overloaded}}v-warn{{end}}">{{NF .Load1 2}}</span>
-              <small class="muted">/ {{N .Cores}} {{T "nodestat.cores"}}</small>
+              <span class="{{if .Overloaded}}v-warn{{end}}"><bdi dir="ltr">{{NF .Load1 2}}</bdi></span>
+              <small class="muted"><bdi dir="ltr">/ {{N .Cores}}</bdi> {{T "nodestat.cores"}}</small>
             </td>
             <td class="nodestat-mem">
-              <span class="num mono iso" dir="ltr">{{N .MemUsedMB}} / {{N .MemTotalMB}} MB</span>
-              <small class="muted"><span class="mem-sep" aria-hidden="true">·</span>{{N .MemAvailMB}} MB {{T "nodestat.free"}}</small>
+              <span class="num mono iso"><bdi dir="ltr">{{N .MemUsedMB}} / {{N .MemTotalMB}} MB</bdi></span>
+              <small class="muted"><span class="mem-sep" aria-hidden="true">·</span><bdi dir="ltr">{{N .MemAvailMB}} MB</bdi> {{T "nodestat.free"}}</small>
             </td>
             <td class="nodestat-procs">
               <ul class="proc-list is-fixed">
-                {{if .TopRSS}}{{range .TopRSSSlots}}{{if .Name}}<li class="proc-row"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="p-val num mono iso" dir="ltr">{{.Value}}</span></li>{{else}}<li class="proc-row is-empty" aria-hidden="true"><span class="p-name">&nbsp;</span><span class="p-sep" aria-hidden="true">·</span><span class="p-val num">&nbsp;</span></li>{{end}}{{end}}
+                {{if .TopRSS}}{{range .TopRSSSlots}}{{if .Name}}<li class="proc-row"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="p-val num mono iso"><bdi dir="ltr">{{.Value}}</bdi></span></li>{{else}}<li class="proc-row is-empty" aria-hidden="true"><span class="p-name">&nbsp;</span></li>{{end}}{{end}}
                 {{else}}<li class="proc-row is-none"><span class="muted">{{T "nodestat.no_procs"}}</span></li><li class="proc-row is-empty" aria-hidden="true"></li><li class="proc-row is-empty" aria-hidden="true"></li>{{end}}
               </ul>
             </td>
             <td class="nodestat-procs">
               <ul class="proc-list is-fixed">
-                {{if .TopCPU}}{{range .TopCPUSlots}}{{if .Name}}<li class="proc-row"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="p-val num mono iso" dir="ltr">{{.Value}}</span></li>{{else}}<li class="proc-row is-empty" aria-hidden="true"><span class="p-name">&nbsp;</span><span class="p-sep" aria-hidden="true">·</span><span class="p-val num">&nbsp;</span></li>{{end}}{{end}}
+                {{if .TopCPU}}{{range .TopCPUSlots}}{{if .Name}}<li class="proc-row"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="p-val num mono iso"><bdi dir="ltr">{{.Value}}</bdi></span></li>{{else}}<li class="proc-row is-empty" aria-hidden="true"><span class="p-name">&nbsp;</span></li>{{end}}{{end}}
                 {{else}}<li class="proc-row is-none"><span class="muted">{{T "nodestat.no_procs"}}</span></li><li class="proc-row is-empty" aria-hidden="true"></li><li class="proc-row is-empty" aria-hidden="true"></li>{{end}}
               </ul>
             </td>
@@ -346,10 +346,10 @@
         <div class="kv-row"><span class="k">{{T "nodestat.load"}}</span><span class="v num mono iso" dir="ltr">{{NF .Load1 2}} / {{N .Cores}} {{T "nodestat.cores"}}</span></div>
         <div class="kv-row"><span class="k">{{T "nodestat.memory"}}</span><span class="v num mono iso" dir="ltr">{{N .MemUsedMB}} / {{N .MemTotalMB}} MB <span class="mem-sep" aria-hidden="true">·</span> {{N .MemAvailMB}} MB {{T "nodestat.free"}}</span></div>
         <div class="kv-row"><span class="k">{{T "nodestat.top_rss"}}</span><span class="v">
-          {{range .TopRSSSlots}}{{if .Name}}<span class="proc-inline"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="num mono iso" dir="ltr">{{.Value}}</span></span>{{end}}{{end}}{{if not .TopRSS}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
+          {{range .TopRSSSlots}}{{if .Name}}<span class="proc-inline"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="num mono iso"><bdi dir="ltr">{{.Value}}</bdi></span></span>{{end}}{{end}}{{if not .TopRSS}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
         </span></div>
         <div class="kv-row"><span class="k">{{T "nodestat.top_cpu"}}</span><span class="v">
-          {{range .TopCPUSlots}}{{if .Name}}<span class="proc-inline"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="num mono iso" dir="ltr">{{.Value}}</span></span>{{end}}{{end}}{{if not .TopCPU}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
+          {{range .TopCPUSlots}}{{if .Name}}<span class="proc-inline"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="num mono iso"><bdi dir="ltr">{{.Value}}</bdi></span></span>{{end}}{{end}}{{if not .TopCPU}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
         </span></div>
         <div class="kv-row"><span class="k">{{T "nodestat.sample_age"}}</span><span class="v mono iso">{{.AgeText}}</span></div>
       </div>
