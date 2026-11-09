@@ -312,6 +312,9 @@ func (a *App) Mount(engine *gin.Engine) {
 	op.POST("/settings/secrets/edit", stt.EditSecret)
 	op.POST("/settings/secrets/remove/:name", stt.RemoveSecret)
 	op.GET("/settings/secrets/reveal/:name", stt.RevealSecret)
+	// The GitHub App Test button mints a token, so it is a mutation guarded by
+	// the operator role (the card itself is readable by any signed-in user).
+	op.POST("/settings/github/test", stt.GitHubTest)
 	// Rendered config content is operator-only (embeds root credentials).
 	op.GET("/settings/rendered/:name", stt.RenderedGet)
 

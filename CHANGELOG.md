@@ -3,6 +3,56 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — GitHub App: installation tokens for pulls and CI
+
+**The cluster can hold one GitHub App instead of a personal access token in every repository. It mints
+one-hour installation tokens, uses them as the GHCR pull credential, and serves them to GitHub Actions
+from a per-repo HMAC-authenticated endpoint — so a workflow can delete `secrets.GH_PAT`.**
+
+Nine repos carried a personal OAuth token through a global `git config insteadOf` rewrite. When it
+expired, `go mod download` broke in all of them at once, silently. A GitHub App installation token is
+short-lived (one hour), minted on demand, scoped by the App's own permissions, and revoked by
+uninstalling the app — none of which is true of a personal token copied into nine secret stores.
+
+- **`internal/githubapp`** signs a 9-minute RS256 JWT (`iat` now−30s, `exp` now+9m), lists
+  installations, mints installation tokens, and reads the granted permission set from `GET /app`.
+  Errors wrap four sentinels — bad key, installation removed, token rejected, insufficient permission —
+  so the console and `doctor` name the cause instead of surfacing a 403 later.
+- **One minted token per installation, refreshed at 50 minutes.** The cache is mutex-guarded across the
+  HTTP call: ten concurrent pulls mint one token (asserted with a counting fake server). A failed mint
+  is not cached, so the next caller retries rather than inheriting the failure for an hour.
+- **Storage:** `github_app` (singleton; app id, installation id, AES-GCM private key, probe targets) and
+  `github_broker_secrets` (one AES-GCM HMAC secret per repo). Both are in the control-plane kit, so a
+  promoted leader can still pull images and serve CI. The derived token is never written to `data.db`
+  or a rendered config; a test reads the DB file and asserts the token does not appear in it.
+- **Pulls:** when an app is configured the daemon runs `docker login ghcr.io -u x-access-token
+  --password-stdin` with the installation token at startup and every 25 minutes, and skips the stored
+  `ghcr.io` row. No app, or a failed app login, falls back to the existing `pmcluster registry`
+  credential unchanged; other hosts are untouched. `--with-registry-auth` forwards the login to workers
+  exactly as before.
+- **CI broker:** `POST /api/github/token`, authenticated by a per-repo HMAC secret (the webhook
+  receiver's `sha256=<hex>` over timestamp+body scheme, 5-minute skew) — deliberately **not** the daemon
+  bearer token, which would put control-plane credentials in every repo. Rate-limited per repo; every
+  auth failure is one 401. Response is `{token, expires_at}`. Installation tokens cannot be narrowed,
+  so the App's granted permissions are the documented ceiling and are reported in the console.
+- **CLI:** `pmcluster github app set|show|clear|test`, `pmcluster github broker add|rotate|list|remove`.
+  The key is never displayed; broker secrets are printed exactly once.
+- **Console:** a Settings card shows the app id, installation id, probe targets and the granted
+  permission map, warns when `contents:read` or `packages:read` is missing, and has a Test button that
+  mints and probes. It never displays a token.
+- **`pmcluster doctor`:** a `github app` check mints a token and reads a repo / HEADs a package.
+  No app is a skip, not a failure; a rejected key, a removed installation and a missing permission are
+  distinct failures; a token with no probe target is a warning.
+- **Docs:** `docs/github-app.md` (manual app creation, permission table, the exact workflow snippet,
+  rotation, failure modes), plus updates to `registry-credentials.md`, `health.md`,
+  `secrets-and-configs.md`, and `openapi.yaml` for the three new routes.
+
+Tests cover JWT claims/signature verification, permission ranking, error mapping for 401/403/404, the
+one-mint-under-ten-callers guarantee, refresh timing, log redaction (token, JWT and PEM body absent from
+captured output), broker auth/429/502 paths, store round-trips, registry fallback selection, the doctor
+message matrix, and the DB-holds-no-token assertion. No test reaches github.com: every API call goes to
+an `httptest` server.
+
 ## Unreleased — content-addressed console assets
 
 **A deploy can no longer leave an open console running the previous stylesheet for an hour, and a changed asset is now cached for a year, not sixty minutes.**

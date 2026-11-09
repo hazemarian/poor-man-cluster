@@ -10,6 +10,7 @@ the [whitepaper](whitepaper.md).
 |---|---|
 | Write a deploy manifest (the DSL) | [`dsl.md`](dsl.md) |
 | Hook CI up (HMAC webhooks) | [`webhook.md`](webhook.md) |
+| Replace `GH_PAT` in CI and pull private images with a GitHub App | [`github-app.md`](github-app.md) |
 | Store secrets / configs and reference them from env | [`secrets-and-configs.md`](secrets-and-configs.md) |
 | Register or rotate the private-registry (ghcr.io) pull credential | [`registry-credentials.md`](registry-credentials.md) |
 | Put a real cert on a customer domain / rotate the main cert | [`tls.md`](tls.md) |
@@ -30,7 +31,7 @@ the [whitepaper](whitepaper.md).
 
 **Operator (run a cluster):** `dsl.md` → `secrets-and-configs.md` →
 `storage-and-databases.md` → `backup.md` → `health.md` → `network-topology.md` →
-`webhook.md`.
+`webhook.md` → `github-app.md`.
 
 **New contributor / auditor:** [`whitepaper.md`](whitepaper.md) →
 `control-loop-design.md` → `agent.md` (the codebase map, repo root).
@@ -44,6 +45,7 @@ the [whitepaper](whitepaper.md).
 |---|---|
 | `dsl.md` | The manifest DSL — every top-level and service field, substitution, injection rules, a complete example |
 | `webhook.md` | Webhook sources, request format, signature, GitHub Actions + generic CI examples, troubleshooting |
+| `github-app.md` | The GitHub App: installation tokens for GHCR pulls and for CI (`POST /api/github/token`), the permission ceiling, the workflow snippet, rotation, failure modes, what is not built |
 | `secrets-and-configs.md` | DB-backed secrets/configs: encryption, versioning, scopes, content-addressed swarm mirrors, `env` reference kinds, API |
 | `registry-credentials.md` | The private-registry pull credential: where it lives (encrypted store, not a manifest), `registry add/list/remove` semantics, ghcr.io token spec, `--with-registry-auth` propagation, the numbered rotation runbook, failure modes, cadence |
 | `tls.md` | ACME vs operator-supplied, in-place main-cert rotation, per-host customer-domain certs |

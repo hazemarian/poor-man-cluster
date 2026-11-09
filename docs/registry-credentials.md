@@ -17,7 +17,15 @@ Sections: [1 where the credential lives](#1-where-the-credential-lives-and-why) 
 [5 how it reaches workers](#5-how-the-credential-reaches-workers) ·
 [6 rotation runbook](#6-rotation-runbook) ·
 [7 failure modes](#7-failure-modes) ·
-[8 cadence](#8-rotation-cadence)
+[8 cadence](#8-rotation-cadence) ·
+[9 the GitHub App alternative](#9-the-github-app-alternative)
+
+> **The preferred credential is now a GitHub App installation token.** When one
+> is configured (`pmcluster github app set`), the daemon logs in to ghcr.io with
+> it and skips the stored `ghcr.io` row; when it is absent or its login fails,
+> the stored credential below is replayed exactly as before. Other registry
+> hosts are unaffected. The App path — and the CI token broker — is documented in
+> [`github-app.md`](github-app.md); §9 here records precisely what changes.
 
 ---
 
@@ -182,9 +190,16 @@ pages accessed 2026-11-08) shape how that is spelled:
 
 Spec to mint today:
 
-- **Type:** personal access token (**classic**) — until GitHub ships
-  fine-grained support for Packages, a fine-grained token with "Packages:
-  Read" will fail `docker login ghcr.io` with `denied: denied`.
+- **Preferred: no PAT at all — a GitHub App installation token.** GHCR accepts
+  one when the App holds **Packages: Read** and is installed on the repo that
+  owns the package. The daemon mints it, uses it as
+  `docker login ghcr.io -u x-access-token --password-stdin`, and refreshes it
+  every 25 minutes. See [`github-app.md`](github-app.md). The rest of this
+  section describes the PAT fallback, which is still fully supported.
+- **Fallback type:** personal access token (**classic**) — a fine-grained
+  token with "Packages: Read" fails `docker login ghcr.io` with `denied:
+  denied` (fine-grained PAT support for Packages is still an open gap;
+  App installation tokens are the supported fine-grained mechanism).
 - **Scopes:** `read:packages` **only**. Uncheck everything else — no `repo`,
   no `write:packages`, no `delete:packages`. A `read:packages`-only token
   cannot read source code; the puller's compromise is then bounded to
@@ -415,3 +430,24 @@ un-revoked.
   row is AES-GCM-encrypted, but `~/.pmcluster/.encryption_key` must be backed
   up *with* the DB or every restore lands in the "unrecoverable ciphertext"
   row of §7 (`cipher.go:1-6`).
+
+## 9. The GitHub App alternative
+
+Everything above still describes the fallback. With an App configured
+(`pmcluster github app set --app-id … --key-file … --installation-id …`):
+
+| Concern | Stored PAT (`registry add`) | App installation token |
+|---|---|---|
+| Where the durable secret lives | `registries` row, AES-GCM ciphertext | `github_app` row, AES-GCM ciphertext (the private key) |
+| What docker receives | the PAT | a one-hour installation token, user `x-access-token` |
+| Delivery to workers | `--with-registry-auth` on deploy | unchanged — same deploy path, same flag |
+| Refresh | manual rotation (§6) | daemon re-login every 25 min; token reused for 50 min |
+| Precedence for ghcr.io | used when no App is configured, or the App login fails | used when login succeeds; the stored row is skipped |
+| Scopes | `read:packages` on the owning account | App permission **Packages: Read**, bounded by the installation |
+| Failure signal | deploy error / ImagePullBackOff | `pmcluster doctor` check `github app`, console Test button |
+
+What does **not** change: `pmcluster registry add/list/remove` keep working, a
+stored `ghcr.io` row is still replayed on startup when no App is set, and other
+registry hosts are never touched by the App path. Removing the App
+(`pmcluster github app clear`) makes the next daemon start fall back to the
+stored row.

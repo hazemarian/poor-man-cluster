@@ -197,6 +197,14 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/update", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"changed":false,"message":"no changes"}`)
 	})
+	mux.HandleFunc("/api/github/app", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"configured":true,"app_id":4242,"installation_id":7,
+			"probe_repo":"acme/app","probe_package":"acme/app:latest","slug":"pmcluster",
+			"permissions":{"contents":"read","packages":"read","metadata":"read"},"warning":""}`)
+	})
+	mux.HandleFunc("/api/github/app/test", func(w http.ResponseWriter, r *http.Request) {
+		write(w, `{"ok":true,"message":"minted a token valid until 2026-11-09T13:04:05Z; read acme/app OK"}`)
+	})
 	return httptest.NewServer(mux)
 }
 
@@ -286,6 +294,7 @@ func (h *ctrlHarness) mountAPIKeys() {
 func (h *ctrlHarness) mountSettings() {
 	h.engine.GET("/web/settings", (Settings{Controller: h.ctrl}).Page)
 	h.engine.GET("/web/settings/rendered/:name", (Settings{Controller: h.ctrl}).RenderedGet)
+	h.engine.POST("/web/settings/github/test", (Settings{Controller: h.ctrl}).GitHubTest)
 }
 func (h *ctrlHarness) mountWebhooks() {
 	h.engine.GET("/web/webhooks", (Webhooks{Controller: h.ctrl}).Page)

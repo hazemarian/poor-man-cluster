@@ -28,6 +28,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/mcpserver"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -121,6 +122,16 @@ type Deps struct {
 	// routes. Tool calls re-enter this router in-process, so the handlers and
 	// their middleware are shared rather than duplicated.
 	MCP *MCPOptions
+
+	// GitHubApp backs the console-facing app status/Test routes under
+	// /api/github/app. Optional; when nil those routes are omitted and the
+	// doctor check skips with a reason.
+	GitHubApp *githubapp.Local
+
+	// GitHubBroker serves POST /api/github/token for GitHub Actions. It is
+	// mounted OUTSIDE the Bearer subtree (HMAC is its auth) and omitted when
+	// nil.
+	GitHubBroker *githubapp.Broker
 }
 
 // MCPOptions tunes the MCP sub-route.
@@ -170,6 +181,13 @@ func New(d Deps) http.Handler {
 		}).Mount(r)
 	}
 
+	// The Actions token broker is HMAC-authenticated, so it must live OUTSIDE
+	// the Bearer-protected /api subtree — a workflow has no bearer token, and
+	// giving it one would put cluster-admin credentials in every repo.
+	if d.GitHubBroker != nil {
+		d.GitHubBroker.Mount(r)
+	}
+
 	r.Route("/api", func(r chi.Router) {
 		r.Use(auth.Bearer(d.Lookup))
 		// Per-stack token scoping: after the token resolves to a user,
@@ -185,7 +203,7 @@ func New(d Deps) http.Handler {
 			r.Post("/cluster/leader/{hostname}", api.ClusterLeaderHandler(d.Docker))
 			r.Get("/cluster/apply", api.ApplyRecordHandler(d.Store))
 			r.Get("/cluster/versions", api.VersionsHandler(d.Docker))
-			r.Get("/doctor", api.DoctorHandler(d.Docker, d.Store, d.Cipher))
+			r.Get("/doctor", api.DoctorHandler(d.Docker, d.Store, d.Cipher, d.GitHubApp))
 			r.Get("/nodes", api.NodesHandler(d.Docker, d.Store))
 			if d.Store != nil {
 				r.Post("/nodes/{hostname}/storage", api.NodeStorageHandler(d.Docker, d.Store))
@@ -234,6 +252,13 @@ func New(d Deps) http.Handler {
 		}
 		if d.Secrets != nil {
 			(&secrets.HTTP{Svc: d.Secrets}).Mount(r)
+		}
+		if d.GitHubApp != nil {
+			// Reading the registration is operator work: the card names the
+			// installation and its grants, and the Test button mints a token.
+			r.With(auth.RequireRole(auth.RoleOperator)).Group(func(or chi.Router) {
+				(&githubapp.HTTP{App: d.GitHubApp}).Mount(or)
+			})
 		}
 		if d.Configs != nil {
 			(&configs.HTTP{Svc: d.Configs}).Mount(r)

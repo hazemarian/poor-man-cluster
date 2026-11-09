@@ -11,6 +11,7 @@ package doctor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodever"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -68,6 +70,18 @@ type Input struct {
 	BackupStateDir string
 	// VolumeRoot is where stack data lives, for the free-space check.
 	VolumeRoot string
+	// GitHubApp mints and probes an installation token. Optional; nil means
+	// this process has no store/cipher to build one from, and the check skips
+	// with that reason.
+	GitHubApp GitHubAppProbe
+}
+
+// GitHubAppProbe is the one capability the GitHub App check needs. Local
+// implements it; a test can substitute a stub without a network.
+type GitHubAppProbe interface {
+	// Diagnose mints a token and asserts the configured repo read / package
+	// HEAD. Errors wrap the githubapp sentinels.
+	Diagnose(ctx context.Context) (detail string, expiresAt time.Time, err error)
 }
 
 // Run executes every check. An error is returned only when the report itself
@@ -82,6 +96,7 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 	add(checkSkew(ctx, in))
 	add(checkKit(ctx, in))
 	add(checkSecrets(ctx, in))
+	add(checkGitHubApp(ctx, in))
 	add(checkLastApply(ctx, in))
 	add(checkDrill(in))
 	add(checkOffsite(in))
@@ -261,6 +276,49 @@ func checkSecrets(ctx context.Context, in Input) Check {
 			fmt.Sprintf("%d of %d secret(s) do not decrypt: %s — re-supply with `pmcluster secret edit`", len(broken), len(rows), strings.Join(broken, ", "))}
 	}
 	return Check{"secrets", StatusOK, fmt.Sprintf("%d secret(s) decrypt", len(rows))}
+}
+
+// checkGitHubApp: can the cluster mint an installation token, and does that
+// installation actually grant what the cluster needs?
+//
+// It answers four distinct things because they have four distinct fixes:
+//
+//   - no app configured → skip (a cluster pulling only public images is fine);
+//   - the key/id is rejected → the App id and the .pem do not belong together;
+//   - the installation is gone → reinstall the app on the org;
+//   - a permission is missing → edit the App, then approve the new permissions
+//     on the installation. GitHub does not apply App permission edits until the
+//     installation approves them, which is why this check reads the granted set
+//     instead of trusting the App's settings page.
+func checkGitHubApp(ctx context.Context, in Input) Check {
+	if in.GitHubApp == nil {
+		return Check{"github app", StatusSkip, "no store/cipher available to read the app registration"}
+	}
+	detail, expires, err := in.GitHubApp.Diagnose(ctx)
+	switch {
+	case err == nil:
+		return Check{"github app", StatusOK, detail}
+	case errors.Is(err, githubapp.ErrNoApp):
+		return Check{"github app", StatusSkip,
+			"no GitHub App configured (public images and a stored registry credential still work); configure one with `pmcluster github app set`"}
+	case errors.Is(err, githubapp.ErrNoProbeTarget):
+		when := "an installation token was minted"
+		if !expires.IsZero() {
+			when = "an installation token was minted, valid until " + expires.UTC().Format(time.RFC3339)
+		}
+		return Check{"github app", StatusWarn,
+			when + ", but no probe target is configured — set --probe-repo and --probe-package so read access is actually proven"}
+	case errors.Is(err, githubapp.ErrBadKey):
+		return Check{"github app", StatusFail, "the app key/id was rejected: " + err.Error()}
+	case errors.Is(err, githubapp.ErrInstallationNotFound):
+		return Check{"github app", StatusFail, "the installation is gone or not visible: " + err.Error()}
+	case errors.Is(err, githubapp.ErrInsufficientPermission):
+		return Check{"github app", StatusFail, "insufficient permission: " + err.Error()}
+	case errors.Is(err, githubapp.ErrTokenRejected):
+		return Check{"github app", StatusFail, "the minted token was rejected: " + err.Error()}
+	default:
+		return Check{"github app", StatusFail, "could not mint an installation token: " + err.Error()}
+	}
 }
 
 // checkLastApply: did the last platform apply finish everything it tried?

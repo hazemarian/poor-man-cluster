@@ -409,6 +409,22 @@ func (c *Client) DeleteAPIKey(ctx context.Context, id int64) error {
 	return c.do(ctx, http.MethodDelete, fmt.Sprintf("/api_keys/%d", id), nil, nil)
 }
 
+// GitHubAppStatus returns the daemon's GitHub App registration (never the key)
+// and the permissions GitHub granted the installation.
+func (c *Client) GitHubAppStatus(ctx context.Context) (*GitHubAppStatus, error) {
+	var out GitHubAppStatus
+	err := c.do(ctx, http.MethodGet, "/github/app", nil, &out)
+	return &out, err
+}
+
+// TestGitHubApp asks the daemon to mint a token and probe the configured
+// repo/package. A failed probe is a normal answer (OK=false), not an error.
+func (c *Client) TestGitHubApp(ctx context.Context) (*GitHubAppTest, error) {
+	var out GitHubAppTest
+	err := c.do(ctx, http.MethodPost, "/github/app/test", nil, &out)
+	return &out, err
+}
+
 // ListSecrets returns the stored secrets matching scope and stack (empty
 // values match everything). Payload is never returned.
 func (c *Client) ListSecrets(ctx context.Context, scope, stack string) ([]Secret, error) {

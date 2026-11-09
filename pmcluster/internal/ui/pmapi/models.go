@@ -233,6 +233,26 @@ type APIKeyCreated struct {
 	Token string `json:"token"`
 }
 
+// GitHubAppStatus is GET /api/github/app. The private key and installation
+// tokens never appear here — only ids and the granted permission map.
+type GitHubAppStatus struct {
+	Configured     bool              `json:"configured"`
+	AppID          int64             `json:"app_id"`
+	InstallationID int64             `json:"installation_id"`
+	ProbeRepo      string            `json:"probe_repo"`
+	ProbePackage   string            `json:"probe_package"`
+	Slug           string            `json:"slug"`
+	Permissions    map[string]string `json:"permissions"`
+	Warning        string            `json:"warning"`
+}
+
+// GitHubAppTest is POST /api/github/app/test. A probe that fails is a normal
+// answer with OK=false and the cause in Message.
+type GitHubAppTest struct {
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+}
+
 // Secret is one row of GET /api/secrets. Payload is never returned — only the
 // content hash is exposed for verification.
 type Secret struct {

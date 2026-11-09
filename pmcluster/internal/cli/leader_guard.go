@@ -62,12 +62,16 @@ var topLevelScopes = map[string]commandScope{
 	// store, and a follower's store is a stale copy. Answering "the platform is
 	// healthy" from a node that cannot see the platform is the one wrong answer
 	// this command must never give.
-	"doctor":        scopeLeader,
-	"backup":        scopeLeader,
-	"config":        scopeLeader,
-	"creds":         scopeLeader,
-	"credentials":   scopeLeader,
-	"deploy":        scopeLeader,
+	"doctor":      scopeLeader,
+	"backup":      scopeLeader,
+	"config":      scopeLeader,
+	"creds":       scopeLeader,
+	"credentials": scopeLeader,
+	"deploy":      scopeLeader,
+	// github stores the App registration and the per-repo broker secrets in
+	// the control-plane DB, and `github app test` mints against that
+	// registration. A follower's copy is stale, so this is cluster state.
+	"github":        scopeLeader,
 	"logs":          scopeLeader,
 	"node":          scopeLeader,
 	"observability": scopeLeader,

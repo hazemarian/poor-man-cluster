@@ -18,11 +18,26 @@ import (
 // so a manager rebuild (SQLite survived, ~/.docker/config.json gone)
 // keeps pulling private images. Best-effort: failures are logged, never
 // block the daemon.
+//
+// A configured GitHub App takes precedence for ghcr.io: its installation token
+// is the fresher credential, and the stored ghcr.io row is kept only as the
+// fallback for when the app is absent or its login fails.
 func replayRegistryLogins(ctx context.Context, st *store.Store, cfg *config.Config, log zerolog.Logger) error {
+	appApplied, appErr := githubAppLogin(ctx, st, cfg, log)
+	if appErr != nil {
+		log.Warn().Err(appErr).Msg("GitHub App registry login failed; falling back to the stored registry credential")
+	}
+	if appApplied && appErr != nil {
+		// The app is configured but its login did not land: do not skip the
+		// stored credential, or ghcr.io ends up with no working login at all.
+		appApplied = false
+	}
+
 	regs, err := st.ListRegistries(ctx)
 	if err != nil {
 		return fmt.Errorf("list registries: %w", err)
 	}
+	regs = registryLoginTargets(regs, appApplied)
 	if len(regs) == 0 {
 		return nil
 	}

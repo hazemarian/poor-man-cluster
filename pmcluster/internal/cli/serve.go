@@ -26,6 +26,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/mcpserver"
@@ -251,6 +252,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	if err := replayRegistryLogins(cmd.Context(), st, cfg, log); err != nil {
 		log.Warn().Err(err).Msg("registry re-login had issues; private images may fail to pull")
 	}
+	// Keep the App's GHCR login fresh: an installation token expires in an hour,
+	// and a deploy after that would fail with a 401 no earlier signal announced.
+	// 25 minutes means two logins per token lifetime (see refreshGitHubAppLogins).
+	go refreshGitHubAppLogins(cmd.Context(), st, cfg, log, 25*time.Minute)
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
@@ -336,6 +341,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 	if cipher != nil {
 		deps.Secrets = secrets.NewLocal(st, cipher)
+		// The GitHub App is one encrypted registration in the store; both the
+		// console card and the Actions broker share the same cached minter, so
+		// ten parallel pulls mint one token.
+		deps.GitHubApp = newGitHubAppLocal(st, cipher, log)
+		deps.GitHubBroker = &githubapp.Broker{Secrets: deps.GitHubApp, Minter: deps.GitHubApp, Log: &log}
 		// Observability reads the backend through the published loopback
 		// endpoint with the managed credential. A missing credential leaves the
 		// reader with Swarm inventory only, so the console still reports node

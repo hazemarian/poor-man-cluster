@@ -16,7 +16,7 @@ import (
 // The daemon already holds the store, the cipher and the docker client, so this
 // is the same measurement `pmcluster doctor` makes — reachable from the console
 // and from anything that wants to gate on platform health.
-func DoctorHandler(dc runtime.Client, st *store.Store, cipher *credentials.Cipher) http.HandlerFunc {
+func DoctorHandler(dc runtime.Client, st *store.Store, cipher *credentials.Cipher, gha doctor.GitHubAppProbe) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		volumeRoot := "/var/stack/data"
 		if st != nil {
@@ -26,6 +26,7 @@ func DoctorHandler(dc runtime.Client, st *store.Store, cipher *credentials.Ciphe
 			Docker:         dc,
 			Store:          st,
 			Cipher:         cipher,
+			GitHubApp:      gha,
 			Version:        buildinfo.Version,
 			BackupStateDir: "/var/lib/pmcluster-backup",
 			VolumeRoot:     volumeRoot,

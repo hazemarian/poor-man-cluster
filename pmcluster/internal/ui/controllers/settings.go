@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"sort"
@@ -55,6 +56,20 @@ type settingsData struct {
 	// CanEditCluster gates the cluster-settings link: the route is admin-only,
 	// and a card that leads to a 403 is worse than no card.
 	CanEditCluster bool
+
+	// GitHub App card. Only ids and the granted permission map travel here;
+	// the key and the installation tokens never leave the daemon.
+	GitHubConfigured     bool
+	GitHubAppID          int64
+	GitHubInstallationID int64
+	GitHubRepo           string
+	GitHubPackage        string
+	GitHubPermissions    []githubPermission
+	GitHubWarning        string
+	GitHubErr            string
+	GitHubTestSet        bool
+	GitHubTestOK         bool
+	GitHubTestMsg        string
 
 	ErrKey  string
 	ErrRaw  string
@@ -522,8 +537,86 @@ func (c Settings) secretFormError(g *gin.Context, d secretFormData) {
 	c.secretForm(g, d)
 }
 
-// fill completes the page model with the connection state and the
-// cluster-scope configs and secrets, keeping any message the caller already set.
+// githubPermission is one row of the App's granted permission map, prepared for
+// the template: the two permissions the cluster needs are marked when missing
+// so the card can call them out without the template carrying the rules.
+type githubPermission struct {
+	Name    string
+	Level   string
+	Missing bool
+}
+
+// fillGitHubApp loads the App registration into the card. A failure is carried
+// in GitHubErr (with the raw reply available in the details disclosure) rather
+// than failing the whole page: the daemon connection is still worth showing.
+func (c *Settings) fillGitHubApp(ctx context.Context, d *settingsData) {
+	if !d.Configured {
+		return
+	}
+	st, err := c.API.GitHubAppStatus(ctx)
+	if err != nil {
+		d.GitHubErr = err.Error()
+		return
+	}
+	d.GitHubConfigured = st.Configured
+	d.GitHubAppID = st.AppID
+	d.GitHubInstallationID = st.InstallationID
+	d.GitHubRepo = st.ProbeRepo
+	d.GitHubPackage = st.ProbePackage
+	d.GitHubWarning = st.Warning
+	required := map[string]bool{"contents": true, "packages": true}
+	names := make([]string, 0, len(st.Permissions))
+	for name := range st.Permissions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		level := st.Permissions[name]
+		d.GitHubPermissions = append(d.GitHubPermissions, githubPermission{
+			Name:  name,
+			Level: level,
+			// An absent required permission is the case the card exists for:
+			// GitHub reports only granted keys, so an absence is the signal.
+			Missing: required[name] && permLevel(level) < 1,
+		})
+	}
+}
+
+// permLevel ranks a GitHub permission value the same way the daemon does.
+func permLevel(level string) int {
+	switch strings.ToLower(level) {
+	case "read":
+		return 1
+	case "write":
+		return 2
+	case "admin":
+		return 3
+	}
+	return 0
+}
+
+// GitHubTest runs the daemon's mint-and-probe on the operator's behalf and
+// re-renders the card with the sentence it returned.
+func (c Settings) GitHubTest(g *gin.Context) {
+	d := settingsData{}
+	if c.apiRefused(g, &d) {
+		c.Views.Fragment(g, "settings", c.fill(g, d))
+		return
+	}
+	res, err := c.API.TestGitHubApp(g.Request.Context())
+	d.GitHubTestSet = true
+	if err != nil {
+		d.fail("settings.github_err_test", err.Error())
+	} else {
+		d.GitHubTestOK = res.OK
+		d.GitHubTestMsg = res.Message
+	}
+	c.Views.Fragment(g, "settings", c.fill(g, d))
+}
+
+// fill completes the page model with the connection state, the GitHub App
+// registration and the cluster-scope pointers, keeping any message the caller
+// already set.
 func (c Settings) fill(g *gin.Context, d settingsData) settingsData {
 	ctx := g.Request.Context()
 	apiURL, _, configured := c.loadParams(ctx)
@@ -539,6 +632,7 @@ func (c Settings) fill(g *gin.Context, d settingsData) settingsData {
 	if _, err := c.Store.Setting(ctx, keyToken); err == nil {
 		d.HasToken = true
 	}
+	c.fillGitHubApp(ctx, &d)
 	return d
 }
 

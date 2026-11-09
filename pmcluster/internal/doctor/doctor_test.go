@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
@@ -124,5 +125,52 @@ func TestNodeLabelsIsOKWhenEveryLabelHasAValue(t *testing.T) {
 	}}})
 	if c.Status != StatusOK {
 		t.Fatalf("status = %q, want ok (%s)", c.Status, c.Detail)
+	}
+}
+
+// stubGitHubApp answers the GitHub App check without a network.
+type stubGitHubApp struct {
+	detail string
+	expiry time.Time
+	err    error
+}
+
+func (s stubGitHubApp) Diagnose(context.Context) (string, time.Time, error) {
+	return s.detail, s.expiry, s.err
+}
+
+// The GitHub App check must distinguish the four causes: no app is a skip (not
+// a failure), while a rejected key, a removed installation and a missing
+// permission are failures with different sentences.
+func TestGitHubAppCheckDistinguishesTheCauses(t *testing.T) {
+	now := time.Now().UTC()
+	cases := []struct {
+		name   string
+		in     Input
+		status Status
+		text   string
+	}{
+		{"no probe wired", Input{}, StatusSkip, "no store/cipher"},
+		{"no app", Input{GitHubApp: stubGitHubApp{err: githubapp.ErrNoApp}}, StatusSkip, "no GitHub App configured"},
+		{"ok", Input{GitHubApp: stubGitHubApp{detail: "minted a token; read acme/app OK", expiry: now}}, StatusOK, "acme/app"},
+		{"no probe target", Input{GitHubApp: stubGitHubApp{err: githubapp.ErrNoProbeTarget, expiry: now}}, StatusWarn, "no probe target"},
+		{"key rejected", Input{GitHubApp: stubGitHubApp{err: githubapp.ErrBadKey}}, StatusFail, "key/id was rejected"},
+		{"installation removed", Input{GitHubApp: stubGitHubApp{err: githubapp.ErrInstallationNotFound}}, StatusFail, "installation is gone"},
+		{"insufficient permission", Input{GitHubApp: stubGitHubApp{err: githubapp.ErrInsufficientPermission}}, StatusFail, "insufficient permission"},
+		{"token rejected", Input{GitHubApp: stubGitHubApp{err: githubapp.ErrTokenRejected}}, StatusFail, "token was rejected"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := checkGitHubApp(context.Background(), tc.in)
+			if c.Name != "github app" {
+				t.Errorf("check name = %q", c.Name)
+			}
+			if c.Status != tc.status {
+				t.Errorf("status = %q, want %q (%s)", c.Status, tc.status, c.Detail)
+			}
+			if !strings.Contains(c.Detail, tc.text) {
+				t.Errorf("detail %q does not mention %q", c.Detail, tc.text)
+			}
+		})
 	}
 }

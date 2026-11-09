@@ -89,6 +89,68 @@
   </div>
 </div>
 
+<div class="panel mt-24">
+  <div class="panel-head">
+    <h2>{{T "settings.github_title"}}</h2>
+    <div class="ph-actions">
+      {{if .GitHubConfigured}}
+      <button type="button" class="btn btn-ghost btn-sm"
+              hx-post="/web/settings/github/test" hx-target="#view" hx-push-url="true" hx-disabled-elt="this"
+              data-tip="{{T "settings.github_test"}}">{{icon "refresh"}}<span>{{T "settings.github_test"}}</span></button>
+      {{end}}
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "settings.github_sub"}}</p>
+    {{if .GitHubErr}}
+    <div class="banner bad">
+      {{icon "alert"}}
+      <div class="b-body">
+        <p class="b-title">{{T "settings.github_err_read"}}</p>
+        <details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.GitHubErr}}</pre></details>
+      </div>
+    </div>
+    {{else if not .Configured}}
+    <p class="muted">{{T "settings.github_no_daemon"}}</p>
+    {{else if not .GitHubConfigured}}
+    <p class="muted">{{T "settings.github_none"}}</p>
+    {{else}}
+    <div class="kv">
+      <div class="kv-row"><span class="k">{{T "settings.github_app_id"}}</span><span class="v mono num" dir="ltr">{{.GitHubAppID}}</span></div>
+      <div class="kv-row"><span class="k">{{T "settings.github_installation"}}</span><span class="v mono num" dir="ltr">{{if .GitHubInstallationID}}{{.GitHubInstallationID}}{{else}}{{T "settings.github_installation_none"}}{{end}}</span></div>
+      <div class="kv-row"><span class="k">{{T "settings.github_probe_repo"}}</span><span class="v mono iso" dir="ltr">{{if .GitHubRepo}}{{.GitHubRepo}}{{else}}—{{end}}</span></div>
+      <div class="kv-row"><span class="k">{{T "settings.github_probe_package"}}</span><span class="v mono iso" dir="ltr">{{if .GitHubPackage}}{{.GitHubPackage}}{{else}}—{{end}}</span></div>
+    </div>
+    {{if .GitHubWarning}}
+    <div class="banner warn">
+      {{icon "alert"}}
+      <div class="b-body">
+        <p class="b-title">{{T "settings.github_warning_title"}}</p>
+        <p>{{.GitHubWarning}}</p>
+      </div>
+    </div>
+    {{end}}
+    <p class="sub">{{T "settings.github_perms_title"}}</p>
+    {{if .GitHubPermissions}}
+    <div class="kv">
+      {{range .GitHubPermissions}}
+      <div class="kv-row">
+        <span class="k mono iso" dir="ltr">{{.Name}}</span>
+        <span class="v">{{if .Missing}}<span class="pill warn"><i class="dot"></i>{{T "settings.github_missing"}}</span>{{else}}<span class="mono iso" dir="ltr">{{.Level}}</span>{{end}}</span>
+      </div>
+      {{end}}
+    </div>
+    {{else}}
+    <p class="muted">{{T "settings.github_perms_unknown"}}</p>
+    {{end}}
+    {{end}}
+    {{if .GitHubTestSet}}
+      {{if .GitHubTestOK}}<div class="msg ok">{{.GitHubTestMsg}}</div>{{else}}<div class="msg err">{{.GitHubTestMsg}}</div>{{end}}
+    {{end}}
+    <p class="muted">{{T "settings.github_foot"}}</p>
+  </div>
+</div>
+
 {{if .CanEditCluster}}
 <div class="panel mt-24">
   <div class="panel-head">

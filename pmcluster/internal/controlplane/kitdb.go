@@ -95,6 +95,14 @@ const (
 //     the last offsite backup". Small, and it is the only record of an unacked
 //     degraded state; losing it would leave the new leader silently claiming
 //     data is current.
+//   - github_app — the App id, installation id and AES-GCM private key the
+//     cluster mints installation tokens with. A promoted leader that lost it
+//     could not log in to GHCR (private pulls stop) and could not serve the
+//     Actions token broker, while every workflow that deleted its PAT now has
+//     no other credential.
+//   - github_broker_secrets — the per-repo HMAC secrets those workflows hold.
+//     Same argument: they are generated here and cannot be reconstructed, and
+//     a promoted leader that forgot them would 401 every CI job at once.
 //
 // The zero Selector is CopyAll: a table is copied verbatim unless it says
 // otherwise, so adding an authoritative table is one line here.
@@ -113,6 +121,8 @@ var kitTables = []store.CopyPlan{
 	{Table: "secrets"},
 	{Table: "site_certs"},
 	{Table: "stack_failover"},
+	{Table: "github_app"},
+	{Table: "github_broker_secrets"},
 }
 
 // excludedTables names every table that stays OUT of the kit entirely, and why.

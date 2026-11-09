@@ -262,6 +262,141 @@ paths:
                         name: {type: string}
                         status: {type: string, enum: [ok, warn, fail, skip]}
                         detail: {type: string}
+  /api/github/app:
+    get:
+      summary: The configured GitHub App and its granted permissions
+      description: |
+        Reports the app id and installation id (never the private key) and the
+        permission set GitHub has granted to the installation. The App's own
+        permissions are the ceiling: installation tokens cannot be narrowed per
+        caller, so a missing `contents:read` or `packages:read` is surfaced here
+        instead of appearing later as a 403 on a pull or a clone.
+      operationId: getGitHubApp
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The app registration state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configured:
+                    type: boolean
+                  app_id:
+                    type: integer
+                    format: int64
+                  installation_id:
+                    type: integer
+                    format: int64
+                  probe_repo:
+                    type: string
+                  probe_package:
+                    type: string
+                  slug:
+                    type: string
+                  permissions:
+                    type: object
+                    additionalProperties:
+                      type: string
+                  warning:
+                    type: string
+        "500":
+          description: The registration could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/github/app/test:
+    post:
+      summary: Mint an installation token and probe the configured repo/package
+      description: |
+        The console's Test button. Mints a token and, when probe_repo /
+        probe_package are configured, reads that repository (contents:read) and
+        HEADs that GHCR manifest (packages:read). A failed test is a 200 with
+        `ok: false`: it is an answer with a cause, not a server fault. The
+        token itself is never returned here.
+      operationId: testGitHubApp
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The test outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+  /api/github/token:
+    post:
+      summary: Mint a GitHub App installation token for a CI workflow
+      description: |
+        Authenticated by a per-repository HMAC shared secret, NOT the bearer
+        token: a workflow has no business holding cluster-admin credentials.
+
+        Headers:
+
+          X-Pmcluster-Repo: owner/name
+          X-Pmcluster-Timestamp: <unix seconds>
+          X-Pmcluster-Signature: sha256=<hex HMAC-SHA256 of timestamp + body>
+
+        Requests older than 5 minutes are refused. The response token is valid
+        for about an hour and carries every permission the App installation was
+        granted — this endpoint cannot narrow them. Rate-limited per repository.
+      operationId: mintGitHubToken
+      security: []
+      parameters:
+        - name: X-Pmcluster-Repo
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Pmcluster-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Pmcluster-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A minted installation token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                  expires_at:
+                    type: string
+                    format: date-time
+        "401":
+          description: Missing or invalid signature, stale timestamp, or unknown repository
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Too many mints for this repository
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: The app could not mint a token (key rejected, installation gone, permission missing)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/nodes:
     get:
       summary: List swarm nodes

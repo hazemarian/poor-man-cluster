@@ -71,6 +71,12 @@ manifest.
   row's status (ok / repaired / degraded / unrecoverable) without changing
   anything.
 
+One credential is deliberately **not** in this secrets surface: the GitHub App
+private key (`github_app` table) is encrypted with the same cipher but is never
+revealed or exported, and the installation tokens minted from it are held in
+memory only — see [`github-app.md`](github-app.md). A Swarm secret is the wrong
+container for a one-hour token: every rotation would rewrite the service.
+
 ## Configs
 
 - Stored in plain text with a full **version history**

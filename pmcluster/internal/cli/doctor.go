@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"text/tabwriter"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
@@ -68,10 +69,19 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		volumeRoot = st.SettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), "/var/stack/data")
 	}
 
+	// The GitHub App check needs both the store (encrypted registration) and
+	// the cipher. Missing either skips the check with that reason instead of
+	// reporting a healthy app nobody inspected.
+	var gha doctor.GitHubAppProbe
+	if st != nil && cipher != nil {
+		gha = newGitHubAppLocal(st, cipher, zerolog.Nop())
+	}
+
 	rep, err := doctor.Run(cmd.Context(), doctor.Input{
 		Docker:         dc,
 		Store:          st,
 		Cipher:         cipher,
+		GitHubApp:      gha,
 		DataDir:        cfg.DataDir,
 		Version:        buildinfo.Version,
 		BackupStateDir: envOr("PMCLUSTER_BACKUP_STATE", "/var/lib/pmcluster-backup"),
