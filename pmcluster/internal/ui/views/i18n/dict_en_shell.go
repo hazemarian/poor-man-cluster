@@ -171,7 +171,7 @@ func init() {
 
 		// swarm / cluster vocabulary
 		"cluster.state":              "Cluster status",
-		"cluster.quorum_small_title": "%d manager(s): this cluster cannot survive a loss",
+		"cluster.quorum_small_title": "{0} manager(s): this cluster cannot survive a loss",
 		"cluster.quorum_small_body":  "Quorum needs more than half of the managers. At this size one node failing takes the whole control plane with it — the console, deploys and backups. Three managers is the smallest safe count.",
 		"cluster.quorum":             "Quorum {0}/{1}",
 		"cluster.nodes":              "Nodes",

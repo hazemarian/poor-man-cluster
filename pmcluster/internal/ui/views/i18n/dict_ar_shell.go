@@ -176,7 +176,7 @@ func init() {
 
 		// swarm / cluster vocabulary
 		"cluster.state":              "حالة العنقود",
-		"cluster.quorum_small_title": "%d مديراً: هذا العنقود لا يتحمل فقدان عقدة",
+		"cluster.quorum_small_title": "{0} مديراً: هذا العنقود لا يتحمل فقدان عقدة",
 		"cluster.quorum_small_body":  "النصاب يحتاج أكثر من نصف المدراء. بهذا العدد يعطّل فقدان عقدة واحدة لوحة التحكم بالكامل — مع النشر والنسخ الاحتياطي. ثلاثة مدراء هو أصغر عدد آمن.",
 		"cluster.quorum":             "النصاب {0}/{1}",
 		"cluster.nodes":              "العقد",
