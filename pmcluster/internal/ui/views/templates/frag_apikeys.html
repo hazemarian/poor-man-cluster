@@ -11,7 +11,7 @@
     <p class="sub">{{T "apikeys.sub"}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
       {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
     </button>
   </div>
@@ -26,7 +26,7 @@
     {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
   </div>
   <div class="b-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
   </div>
 </div>
 {{end}}
@@ -46,7 +46,7 @@
     <p>{{T "apikeys.token_body"}}</p>
     <div class="input-group">
       <input id="apikey-token" class="finput mono iso" dir="ltr" readonly value="{{.Token}}">
-      <button type="button" class="btn" data-copy="{{.Token}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "apikeys.copy_token"}}</span></button>
+      <button type="button" class="btn" data-copy="{{.Token}}" onclick="copyVal(this)" data-tip="{{T "apikeys.copy_token"}}">{{icon "copy"}}<span>{{T "apikeys.copy_token"}}</span></button>
     </div>
     <div class="kv">
       <div class="kv-row"><span class="k">{{T "apikeys.token_prefix"}}</span><span class="v mono iso" dir="ltr">{{.TokenPrefix}}…</span></div>
@@ -70,7 +70,7 @@
         <span class="hint">{{T "apikeys.create_sub"}}</span>
       </div>
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary">{{icon "plus"}}<span>{{T "apikeys.create_action"}}</span></button>
+        <button type="submit" class="btn btn-primary" data-tip="{{T "apikeys.create_action"}}">{{icon "plus"}}<span>{{T "apikeys.create_action"}}</span></button>
       </div>
     </form>
   </div>
@@ -92,7 +92,7 @@
       <h3>{{T "err.api_not_configured"}}</h3>
       <p>{{T "apikeys.not_configured_body"}}</p>
       <div class="empty-actions">
-        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
       </div>
     </div>
     {{else if .Known}}
@@ -114,7 +114,7 @@
               <td><span class="mono">{{.Name}}</span>{{if .JustCreated}} <span class="pill accent">{{T "apikeys.just_created"}}</span>{{end}}</td>
               <td>
                 {{if .Prefix}}<span class="mono iso" dir="ltr">{{.Prefix}}…</span>
-                {{else}}<span class="secret-mask" title="{{T "apikeys.token_gone_hint"}}">••••••••</span> <span class="muted">{{T "apikeys.token_gone"}}</span>{{end}}
+                {{else}}<span class="secret-mask" data-tip="{{T "apikeys.token_gone_hint"}}">••••••••</span> <span class="muted">{{T "apikeys.token_gone"}}</span>{{end}}
               </td>
               <td class="muted num">{{ts .CreatedAt}}</td>
               <td class="muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "apikeys.never_used"}}{{end}}</td>
@@ -162,7 +162,7 @@
       <h3>{{T "apikeys.unknown_title"}}</h3>
       <p>{{T "apikeys.unknown_body"}}</p>
       <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
       </div>
     </div>
     {{end}}

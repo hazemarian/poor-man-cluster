@@ -15,10 +15,10 @@
     <p class="sub">{{if .APIReady}}{{T "deploy.sub"}}{{else}}{{T "deploy.sub_not_configured"}}{{end}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
       {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
     </button>
-    <a class="btn btn-ghost btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
+    <a class="btn btn-ghost btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-tip="{{T "deploy.open_stacks"}}">
       {{icon "stacks"}}<span>{{T "deploy.open_stacks"}}</span>
     </a>
   </div>
@@ -40,9 +40,9 @@
   </div>
   <div class="b-actions">
     {{if eq .ErrKey "err.api_not_configured"}}
-    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
     {{else}}
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
     {{end}}
   </div>
 </div>
@@ -58,8 +58,8 @@
     <p>{{T "deploy.result_hint"}}</p>
   </div>
   <div class="b-actions">
-    <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Result.Stack}}" hx-get="/web/stacks/{{.Result.Stack}}" hx-target="#view" hx-push-url="true">{{icon "stacks"}}<span>{{T "deploy.open_stack"}}</span></a>
-    <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Result.Stack}}/revisions/{{.Result.Revision}}" hx-get="/web/stacks/{{.Result.Stack}}/revisions/{{.Result.Revision}}" hx-target="#view" hx-push-url="true">{{icon "file"}}<span>{{T "deploy.view_revision"}}</span></a>
+    <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Result.Stack}}" hx-get="/web/stacks/{{.Result.Stack}}" hx-target="#view" hx-push-url="true" data-tip="{{T "deploy.open_stack"}}">{{icon "stacks"}}<span>{{T "deploy.open_stack"}}</span></a>
+    <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Result.Stack}}/revisions/{{.Result.Revision}}" hx-get="/web/stacks/{{.Result.Stack}}/revisions/{{.Result.Revision}}" hx-target="#view" hx-push-url="true" data-tip="{{T "deploy.view_revision"}}">{{icon "file"}}<span>{{T "deploy.view_revision"}}</span></a>
   </div>
 </div>
 {{end}}
@@ -150,7 +150,7 @@
         </div>
       </div>
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary" hx-confirm="{{if .Form.AppName}}{{TF "deploy.confirm_named" .Form.AppName}}{{else}}{{T "deploy.confirm_new"}}{{end}}">
+        <button type="submit" class="btn btn-primary" hx-confirm="{{if .Form.AppName}}{{TF "deploy.confirm_named" .Form.AppName}}{{else}}{{T "deploy.confirm_new"}}{{end}}" data-tip="{{if .Form.AppName}}{{TF "deploy.submit_named" .Form.AppName}}{{else}}{{T "deploy.submit"}}{{end}}">
           {{icon "deploy"}}<span>{{if .Form.AppName}}{{TF "deploy.submit_named" .Form.AppName}}{{else}}{{T "deploy.submit"}}{{end}}</span>
         </button>
         <span class="hint">{{T "deploy.submit_hint"}}</span>
@@ -175,7 +175,7 @@
     </div>
     <pre dir="ltr">{{.Request}}</pre>
     <div class="row mt-16">
-      <button type="button" class="btn btn-sm" data-copy="{{.Request}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
+      <button type="button" class="btn btn-sm" data-copy="{{.Request}}" onclick="copyVal(this)" data-tip="{{T "common.copy"}}">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
     </div>
   </div>
   {{else}}
@@ -258,7 +258,7 @@
       <h3>{{T "err.api_not_configured"}}</h3>
       <p>{{T "deploy.stacks_unknown_body"}}</p>
       <div class="empty-actions">
-        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
       </div>
     </div>
     {{else if .StacksKnown}}
@@ -283,8 +283,8 @@
               <td class="muted num">{{ts .UpdatedAt}}</td>
               <td>
                 <div class="row-actions">
-                  <a class="btn btn-sm" href="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-get="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-target="#view" hx-push-url="true">{{icon "deploy"}}<span>{{T "deploy.row_deploy"}}</span></a>
-                  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Name}}" onclick="copyVal(this)" title="{{T "deploy.copy_name"}}">{{icon "copy"}}<span class="sr-only">{{T "deploy.copy_name"}}</span></button>
+                  <a class="btn btn-sm" href="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-get="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-target="#view" hx-push-url="true" data-tip="{{T "deploy.row_deploy"}}">{{icon "deploy"}}<span>{{T "deploy.row_deploy"}}</span></a>
+                  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Name}}" onclick="copyVal(this)" data-tip="{{T "deploy.copy_name"}}" aria-label="{{T "deploy.copy_name"}}">{{icon "copy"}}<span class="sr-only">{{T "deploy.copy_name"}}</span></button>
                   <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Name}}" hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">{{T "deploy.open_stack"}}</a>
                 </div>
               </td>
@@ -302,9 +302,9 @@
           <div class="kv-row"><span class="k">{{T "deploy.f_repo"}}</span><span class="v">{{if .RepoURL}}<span class="mono iso" dir="ltr">{{.RepoURL}}</span>{{else}}<span class="muted">—</span>{{end}}</span></div>
           <div class="kv-row"><span class="k">{{T "common.updated"}}</span><span class="v muted num">{{ts .UpdatedAt}}</span></div>
           <div class="action-bar">
-            <a class="btn btn-primary btn-sm" href="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-get="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-target="#view" hx-push-url="true">{{icon "deploy"}}<span>{{T "deploy.row_deploy"}}</span></a>
+            <a class="btn btn-primary btn-sm" href="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-get="/web/deploy?app={{.Name}}{{if .RepoURL}}&repo={{.RepoURL}}{{end}}" hx-target="#view" hx-push-url="true" data-tip="{{T "deploy.row_deploy"}}">{{icon "deploy"}}<span>{{T "deploy.row_deploy"}}</span></a>
             <a class="btn btn-sm" href="/web/stacks/{{.Name}}" hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">{{T "deploy.open_stack"}}</a>
-            <button type="button" class="btn btn-sm" data-copy="{{.Name}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
+            <button type="button" class="btn btn-sm" data-copy="{{.Name}}" onclick="copyVal(this)" data-tip="{{T "common.copy"}}">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
           </div>
         </div>
         {{end}}
@@ -325,7 +325,7 @@
       <h3>{{T "deploy.stacks_unknown_title"}}</h3>
       <p>{{T "deploy.stacks_unknown_body"}}</p>
       <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
       </div>
     </div>
     {{end}}

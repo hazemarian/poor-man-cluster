@@ -12,7 +12,7 @@
     <p class="sub">{{T "clustersettings.sub"}}</p>
   </div>
   <div class="ph-actions">
-    <a class="btn btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "settings.title"}}</span></a>
+    <a class="btn btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "settings.title"}}">{{icon "settings"}}<span>{{T "settings.title"}}</span></a>
   </div>
 </div>
 
@@ -31,7 +31,7 @@
       <h3>{{T "clustersettings.empty_title"}}</h3>
       <p>{{T "clustersettings.empty_body"}}</p>
       <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/settings/cluster" hx-get="/web/settings/cluster" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
+        <a class="btn btn-sm" href="/web/settings/cluster" hx-get="/web/settings/cluster" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
       </div>
     </div>
   </div>
@@ -166,7 +166,7 @@
   </div>
 
   <div class="form-actions">
-    <button type="submit" class="btn btn-primary">{{icon "check"}}<span>{{T "clustersettings.save"}}</span></button>
+    <button type="submit" class="btn btn-primary" data-tip="{{T "clustersettings.save"}}">{{icon "check"}}<span>{{T "clustersettings.save"}}</span></button>
   </div>
 </form>
 

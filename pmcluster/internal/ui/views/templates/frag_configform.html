@@ -54,7 +54,7 @@
   </div>
 
   <div class="form-actions">
-    <button type="submit" class="btn btn-primary">{{icon "check"}}<span>{{if .IsEdit}}{{T "configs.form_save_version"}}{{else}}{{T "configs.form_create"}}{{end}}</span></button>
+    <button type="submit" class="btn btn-primary" data-tip="{{if .IsEdit}}{{T "configs.form_save_version"}}{{else}}{{T "configs.form_create"}}{{end}}">{{icon "check"}}<span>{{if .IsEdit}}{{T "configs.form_save_version"}}{{else}}{{T "configs.form_create"}}{{end}}</span></button>
     <button type="button" class="btn" onclick="closeModal()">{{T "common.cancel"}}</button>
   </div>
 </form>
@@ -82,9 +82,7 @@
         <td class="iso muted">{{ts .CreatedAt}}</td>
         <td>
           <div class="row-actions">
-            <button type="button" class="btn btn-ghost btn-sm" title="{{T "configs.form_restore"}}"
-                    hx-post="{{if $.Stack}}/web/stacks/{{$.Stack}}/configs/rollback/{{$.Name}}/{{.ID}}{{else}}/web/settings/configs/rollback/{{$.Name}}/{{.ID}}{{end}}"
-                    hx-target="#view" hx-confirm="{{TF "configs.restore_confirm" $.Name .ID}}" hx-disabled-elt="this">
+            <button type="button" class="btn btn-ghost btn-sm" hx-post="{{if $.Stack}}/web/stacks/{{$.Stack}}/configs/rollback/{{$.Name}}/{{.ID}}{{else}}/web/settings/configs/rollback/{{$.Name}}/{{.ID}}{{end}}" hx-target="#view" hx-confirm="{{TF "configs.restore_confirm" $.Name .ID}}" hx-disabled-elt="this" data-tip="{{T "configs.form_restore"}}" aria-label="{{T "configs.form_restore"}}">
               {{icon "rollback"}}<span class="sr-only">{{T "configs.form_restore"}}</span>
             </button>
           </div>
@@ -104,7 +102,7 @@
   <div class="form-actions">
     <button type="button" class="btn btn-danger"
             hx-post="{{if $.Stack}}/web/stacks/{{$.Stack}}/configs/rollback/{{$.Name}}/{{.ID}}{{else}}/web/settings/configs/rollback/{{$.Name}}/{{.ID}}{{end}}"
-            hx-target="#view" hx-confirm="{{TF "configs.restore_confirm" $.Name .ID}}" hx-disabled-elt="this">
+            hx-target="#view" hx-confirm="{{TF "configs.restore_confirm" $.Name .ID}}" hx-disabled-elt="this" data-tip="{{T "configs.form_restore"}}">
       {{icon "rollback"}}<span>{{T "configs.form_restore"}}</span>
     </button>
   </div>

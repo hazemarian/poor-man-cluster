@@ -15,7 +15,7 @@
     <p class="sub">{{T "settings.sub"}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
   </div>
 </div>
 
@@ -83,7 +83,7 @@
         <span>{{T "settings.api_token_clear"}}</span>
       </label>
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary">{{icon "check"}}<span>{{T "settings.save"}}</span></button>
+        <button type="submit" class="btn btn-primary" data-tip="{{T "settings.save"}}">{{icon "check"}}<span>{{T "settings.save"}}</span></button>
       </div>
     </form>
   </div>
@@ -94,7 +94,7 @@
   <div class="panel-head">
     <h2>{{T "settings.cluster_card_title"}}</h2>
     <div class="ph-actions">
-      <a class="btn btn-primary btn-sm" href="/web/settings/cluster" hx-get="/web/settings/cluster" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "settings.cluster_card_action"}}</span></a>
+      <a class="btn btn-primary btn-sm" href="/web/settings/cluster" hx-get="/web/settings/cluster" hx-target="#view" hx-push-url="true" data-tip="{{T "settings.cluster_card_action"}}">{{icon "settings"}}<span>{{T "settings.cluster_card_action"}}</span></a>
     </div>
   </div>
   <div class="panel-body">
@@ -120,7 +120,7 @@
     {{end}}
     <div class="action-bar">
       <button type="button" class="btn btn-primary"
-              hx-post="/web/settings/apply" hx-target="#view" hx-push-url="true" hx-disabled-elt="this">
+              hx-post="/web/settings/apply" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" data-tip="{{T "settings.apply_action"}}">
         {{icon "restore"}}<span>{{T "settings.apply_action"}}</span>
       </button>
       <span class="muted">{{T "settings.apply_hint"}}</span>
@@ -132,8 +132,8 @@
   <div class="panel-head">
     <h2>{{T "settings.configs_title"}}</h2>
     <div class="ph-actions">
-      <button type="button" class="btn btn-sm" hx-get="/web/settings/configs/new" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.add_config"}}</span></button>
-        <button type="button" class="btn btn-sm" hx-get="/web/settings/configs/for-stack" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.for_stack"}}</span></button>
+      <button type="button" class="btn btn-sm" hx-get="/web/settings/configs/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.add_config"}}">{{icon "plus"}}<span>{{T "settings.add_config"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/settings/configs/for-stack" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.for_stack"}}">{{icon "plus"}}<span>{{T "settings.for_stack"}}</span></button>
     </div>
   </div>
   <div class="panel-body">
@@ -145,8 +145,8 @@
         <p>{{if .ConfigsErrKey}}{{T .ConfigsErrKey}}{{else}}{{T "settings.configs_unknown_body"}}{{end}}</p>
         {{if .ConfigsErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ConfigsErrRaw}}</pre></details>{{end}}
         <div class="empty-actions">
-          <button type="button" class="btn btn-sm" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-          <button type="button" class="btn btn-sm" onclick="closeModal();document.getElementById('settings-api-url').focus()">{{icon "settings"}}<span>{{T "settings.api_url"}}</span></button>
+          <button type="button" class="btn btn-sm" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+          <button type="button" class="btn btn-sm" onclick="closeModal();document.getElementById('settings-api-url').focus()" data-tip="{{T "settings.api_url"}}">{{icon "settings"}}<span>{{T "settings.api_url"}}</span></button>
         </div>
       </div>
     {{else if .ClusterConfigs}}
@@ -170,10 +170,9 @@
               <td class="muted iso" dir="ltr">{{ts .UpdatedAt}}</td>
               <td>
                 <div class="row-actions">
-                  {{if .Rendered}}<button type="button" class="btn btn-ghost btn-sm" title="{{T "settings.rendered_title"}}" hx-get="/web/settings/rendered/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "file"}}<span class="sr-only">{{T "settings.rendered"}}</span></button>{{end}}
-                  <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "settings"}}<span class="sr-only">{{T "common.edit"}}</span></button>
-                  <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/settings/configs/remove/{{.Name}}"
-                          hx-confirm="{{TF "settings.delete_config_confirm" .Name}}" hx-target="#view" hx-disabled-elt="this">{{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span></button>
+                  {{if .Rendered}}<button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/rendered/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.rendered_title"}}" aria-label="{{T "settings.rendered"}}">{{icon "file"}}<span class="sr-only">{{T "settings.rendered"}}</span></button>{{end}}
+                  <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}" aria-label="{{T "common.edit"}}">{{icon "settings"}}<span class="sr-only">{{T "common.edit"}}</span></button>
+                  <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/settings/configs/remove/{{.Name}}" hx-confirm="{{TF "settings.delete_config_confirm" .Name}}" hx-target="#view" hx-disabled-elt="this" data-tip="{{T "common.delete"}}" aria-label="{{T "common.delete"}}">{{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span></button>
                 </div>
               </td>
             </tr>
@@ -190,10 +189,10 @@
           <div class="kv-row"><span class="k">{{T "settings.col_updated"}}</span><span class="v muted iso" dir="ltr">{{ts .UpdatedAt}}</span></div>
         </div>
         <div class="action-bar">
-          {{if .Rendered}}<button type="button" class="btn btn-sm" hx-get="/web/settings/rendered/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "file"}}<span>{{T "settings.rendered"}}</span></button>{{end}}
-          <button type="button" class="btn btn-sm" hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "settings"}}<span>{{T "common.edit"}}</span></button>
+          {{if .Rendered}}<button type="button" class="btn btn-sm" hx-get="/web/settings/rendered/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.rendered"}}">{{icon "file"}}<span>{{T "settings.rendered"}}</span></button>{{end}}
+          <button type="button" class="btn btn-sm" hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}">{{icon "settings"}}<span>{{T "common.edit"}}</span></button>
           <button type="button" class="btn btn-danger btn-sm" hx-post="/web/settings/configs/remove/{{.Name}}"
-                  hx-confirm="{{TF "settings.delete_config_confirm" .Name}}" hx-target="#view" hx-disabled-elt="this">{{icon "trash"}}<span>{{T "common.delete"}}</span></button>
+                  hx-confirm="{{TF "settings.delete_config_confirm" .Name}}" hx-target="#view" hx-disabled-elt="this" data-tip="{{T "common.delete"}}">{{icon "trash"}}<span>{{T "common.delete"}}</span></button>
         </div>
         {{end}}
       </div>
@@ -203,7 +202,7 @@
         <h3>{{T "settings.configs_empty_title"}}</h3>
         <p>{{T "settings.configs_empty_body"}}</p>
         <div class="empty-actions">
-          <button type="button" class="btn btn-primary btn-sm" hx-get="/web/settings/configs/new" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.add_config"}}</span></button>
+          <button type="button" class="btn btn-primary btn-sm" hx-get="/web/settings/configs/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.add_config"}}">{{icon "plus"}}<span>{{T "settings.add_config"}}</span></button>
         </div>
       </div>
     {{end}}
@@ -214,8 +213,8 @@
   <div class="panel-head">
     <h2>{{T "settings.secrets_title"}}</h2>
     <div class="ph-actions">
-      <button type="button" class="btn btn-sm" hx-get="/web/settings/secrets/new" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.add_secret"}}</span></button>
-      <button type="button" class="btn btn-sm" hx-get="/web/settings/secrets/for-stack" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.for_stack"}}</span></button>
+      <button type="button" class="btn btn-sm" hx-get="/web/settings/secrets/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.add_secret"}}">{{icon "plus"}}<span>{{T "settings.add_secret"}}</span></button>
+      <button type="button" class="btn btn-sm" hx-get="/web/settings/secrets/for-stack" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.for_stack"}}">{{icon "plus"}}<span>{{T "settings.for_stack"}}</span></button>
     </div>
   </div>
   <div class="panel-body">
@@ -227,7 +226,7 @@
         <p>{{if .SecretsErrKey}}{{T .SecretsErrKey}}{{else}}{{T "settings.secrets_unknown_body"}}{{end}}</p>
         {{if .SecretsErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.SecretsErrRaw}}</pre></details>{{end}}
         <div class="empty-actions">
-          <button type="button" class="btn btn-sm" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+          <button type="button" class="btn btn-sm" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
         </div>
       </div>
     {{else if .ClusterSecrets}}
@@ -249,13 +248,9 @@
               <td class="muted iso" dir="ltr">{{ts .CreatedAt}}</td>
               <td>
                 <div class="row-actions">
-                  <button type="button" class="btn btn-ghost btn-sm" title="{{T "settings.reveal"}}"
-                          hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body"
-                          hx-on::after-request="if(!event.detail.failed)openModal()"
-                          onclick="return confirm('{{TF "settings.reveal_confirm" .Name}}')">{{icon "lock"}}<span class="sr-only">{{T "settings.reveal"}}</span></button>
-                  <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/secrets/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "settings"}}<span class="sr-only">{{T "common.edit"}}</span></button>
-                  <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/settings/secrets/remove/{{.Name}}"
-                          hx-confirm="{{TF "settings.delete_secret_confirm" .Name}}" hx-target="#view" hx-disabled-elt="this">{{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span></button>
+                  <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" hx-on::after-request="if(!event.detail.failed)openModal()" onclick="return confirm('{{TF "settings.reveal_confirm" .Name}}')" data-tip="{{T "settings.reveal"}}" aria-label="{{T "settings.reveal"}}">{{icon "lock"}}<span class="sr-only">{{T "settings.reveal"}}</span></button>
+                  <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/secrets/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}" aria-label="{{T "common.edit"}}">{{icon "settings"}}<span class="sr-only">{{T "common.edit"}}</span></button>
+                  <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/settings/secrets/remove/{{.Name}}" hx-confirm="{{TF "settings.delete_secret_confirm" .Name}}" hx-target="#view" hx-disabled-elt="this" data-tip="{{T "common.delete"}}" aria-label="{{T "common.delete"}}">{{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span></button>
                 </div>
               </td>
             </tr>
@@ -274,10 +269,10 @@
           <button type="button" class="btn btn-sm"
                   hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body"
                   hx-on::after-request="if(!event.detail.failed)openModal()"
-                  onclick="return confirm('{{TF "settings.reveal_confirm" .Name}}')">{{icon "lock"}}<span>{{T "settings.reveal"}}</span></button>
-          <button type="button" class="btn btn-sm" hx-get="/web/settings/secrets/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()">{{icon "settings"}}<span>{{T "common.edit"}}</span></button>
+                  onclick="return confirm('{{TF "settings.reveal_confirm" .Name}}')" data-tip="{{T "settings.reveal"}}">{{icon "lock"}}<span>{{T "settings.reveal"}}</span></button>
+          <button type="button" class="btn btn-sm" hx-get="/web/settings/secrets/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}">{{icon "settings"}}<span>{{T "common.edit"}}</span></button>
           <button type="button" class="btn btn-danger btn-sm" hx-post="/web/settings/secrets/remove/{{.Name}}"
-                  hx-confirm="{{TF "settings.delete_secret_confirm" .Name}}" hx-target="#view" hx-disabled-elt="this">{{icon "trash"}}<span>{{T "common.delete"}}</span></button>
+                  hx-confirm="{{TF "settings.delete_secret_confirm" .Name}}" hx-target="#view" hx-disabled-elt="this" data-tip="{{T "common.delete"}}">{{icon "trash"}}<span>{{T "common.delete"}}</span></button>
         </div>
         {{end}}
       </div>
@@ -287,7 +282,7 @@
         <h3>{{T "settings.secrets_empty_title"}}</h3>
         <p>{{T "settings.secrets_empty_body"}}</p>
         <div class="empty-actions">
-          <button type="button" class="btn btn-primary btn-sm" hx-get="/web/settings/secrets/new" hx-target="#modal-body" onclick="openModal()">{{icon "plus"}}<span>{{T "settings.add_secret"}}</span></button>
+          <button type="button" class="btn btn-primary btn-sm" hx-get="/web/settings/secrets/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.add_secret"}}">{{icon "plus"}}<span>{{T "settings.add_secret"}}</span></button>
         </div>
       </div>
     {{end}}

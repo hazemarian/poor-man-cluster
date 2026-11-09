@@ -21,11 +21,11 @@
     </p>
   </div>
   <div class="ph-actions">
-    <a class="btn btn-ghost btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">{{icon "stacks"}}<span>{{T "stack.back_all"}}</span></a>
+    <a class="btn btn-ghost btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-tip="{{T "stack.back_all"}}">{{icon "stacks"}}<span>{{T "stack.back_all"}}</span></a>
     {{if .Detail}}
       <form hx-post="/web/stacks/{{.Detail.Stack.Name}}/sync" hx-target="#view" hx-swap="innerHTML"
             hx-confirm="{{TF "stacks.confirm_sync" .Detail.Stack.Name}}" hx-disabled-elt="find [type='submit']">
-        <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this">
+        <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this" data-tip="{{T "stacks.act_redeploy"}}">
           {{icon "play"}}<span>{{T "stacks.act_redeploy"}}</span>
         </button>
       </form>
@@ -33,21 +33,21 @@
             hx-confirm="{{T "stack.move_confirm"}}" hx-disabled-elt="find [type='submit']">
         <input type="text" name="target" placeholder="node hostname" class="input input-sm" required
                dir="ltr" aria-label="{{T "stack.action_move"}}">
-        <button type="submit" class="btn btn-ghost btn-sm" hx-disabled-elt="this">
+        <button type="submit" class="btn btn-ghost btn-sm" hx-disabled-elt="this" data-tip="{{T "stack.action_move"}}">
           {{icon "move"}}<span>{{T "stack.action_move"}}</span>
         </button>
       </form>
       <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Detail.Stack.Name}}/config"
-         hx-get="/web/stacks/{{.Detail.Stack.Name}}/config" hx-target="#view" hx-push-url="true">
+         hx-get="/web/stacks/{{.Detail.Stack.Name}}/config" hx-target="#view" hx-push-url="true" data-tip="{{T "stacks.act_config"}}">
         {{icon "file"}}<span>{{T "stacks.act_config"}}</span>
       </a>
       <a class="btn btn-ghost btn-sm" href="/web/backups"
-         hx-get="/web/backups" hx-target="#view" hx-push-url="true">
+         hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "stacks.act_backups"}}">
         {{icon "backups"}}<span>{{T "stacks.act_backups"}}</span>
       </a>
       <form hx-post="/web/stacks/{{.Detail.Stack.Name}}/remove" hx-target="#view" hx-swap="innerHTML"
             hx-confirm="{{TF "stacks.confirm_delete" .Detail.Stack.Name}}" hx-disabled-elt="find [type='submit']">
-        <button type="submit" class="btn btn-danger btn-sm">
+        <button type="submit" class="btn btn-danger btn-sm" data-tip="{{T "common.delete"}}">
           {{icon "trash"}}<span>{{T "common.delete"}}</span>
         </button>
       </form>
@@ -63,7 +63,7 @@
     {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
   </div>
   <div class="b-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+    <button type="button" class="btn btn-sm" hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
   </div>
 </div>
 {{end}}
@@ -82,13 +82,13 @@
     <form hx-post="/web/stacks/{{.Detail.Stack.Name}}/move" hx-target="#view" hx-swap="innerHTML"
           hx-confirm="{{T "stack.move_confirm"}}" hx-disabled-elt="find [type='submit']">
       <input type="hidden" name="target" value="{{.Detail.Stack.Failover.FromNode}}">
-      <button type="submit" class="btn btn-sm" hx-disabled-elt="this">
+      <button type="submit" class="btn btn-sm" hx-disabled-elt="this" data-tip="{{TF "stack.failover_move_back" .Detail.Stack.Failover.FromNode}}">
         {{icon "move"}}<span>{{TF "stack.failover_move_back" .Detail.Stack.Failover.FromNode}}</span>
       </button>
     </form>
     <form hx-post="/web/stacks/{{.Detail.Stack.Name}}/ack" hx-target="#view" hx-swap="innerHTML"
           hx-confirm="{{T "stack.failover_ack_confirm"}}" hx-disabled-elt="find [type='submit']">
-      <button type="submit" class="btn btn-ghost btn-sm" hx-disabled-elt="this">
+      <button type="submit" class="btn btn-ghost btn-sm" hx-disabled-elt="this" data-tip="{{T "stack.failover_ack"}}">
         {{icon "check"}}<span>{{T "stack.failover_ack"}}</span>
       </button>
     </form>
@@ -103,8 +103,7 @@
       <span class="k">{{icon "globe"}}{{T "stack.badge"}}</span>
       <span class="v">
         <code class="mono" dir="ltr" style="word-break:break-all">{{.Badge}}</code>
-        <button type="button" class="btn btn-ghost btn-sm" title="{{T "common.copy"}}"
-                data-copy="{{.Badge}}" onclick="copyVal(this)">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>
+        <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Badge}}" onclick="copyVal(this)" data-tip="{{T "common.copy"}}" aria-label="{{T "common.copy"}}">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>
       </span>
     </div>
     {{if .BadgeServices}}
@@ -112,8 +111,7 @@
       <span class="k">{{icon "globe"}}{{T "stack.badge_services"}}</span>
       <span class="v">
         <code class="mono" dir="ltr" style="word-break:break-all">{{.BadgeServices}}</code>
-        <button type="button" class="btn btn-ghost btn-sm" title="{{T "common.copy"}}"
-                data-copy="{{.BadgeServices}}" onclick="copyVal(this)">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>
+        <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.BadgeServices}}" onclick="copyVal(this)" data-tip="{{T "common.copy"}}" aria-label="{{T "common.copy"}}">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>
       </span>
     </div>
     {{end}}
@@ -207,10 +205,10 @@
             <td class="muted iso" dir="ltr">{{ts .Updated}}</td>
             <td>
               <div class="row-actions">
-                <a class="btn btn-ghost btn-sm" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true" title="{{T "services.action_tasks"}}">{{icon "server"}}<span class="sr-only">{{T "services.action_tasks"}}</span></a>
-                <a class="btn btn-ghost btn-sm" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true" title="{{T "services.action_logs"}}">{{icon "terminal"}}<span class="sr-only">{{T "services.action_logs"}}</span></a>
-                <a class="btn btn-ghost btn-sm" href="/web/stacks/{{$.Detail.Stack.Name}}/terminal?service={{.ServiceName}}" title="{{T "services.action_terminal"}}">{{icon "console"}}<span class="sr-only">{{T "services.action_terminal"}}</span></a>
-                <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .Name}}" hx-disabled-elt="this" title="{{T "services.action_restart"}}">{{icon "refresh"}}<span class="sr-only">{{T "services.action_restart"}}</span></button>
+                <a class="btn btn-ghost btn-sm" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true" data-tip="{{T "services.action_tasks"}}" aria-label="{{T "services.action_tasks"}}">{{icon "server"}}<span class="sr-only">{{T "services.action_tasks"}}</span></a>
+                <a class="btn btn-ghost btn-sm" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true" data-tip="{{T "services.action_logs"}}" aria-label="{{T "services.action_logs"}}">{{icon "terminal"}}<span class="sr-only">{{T "services.action_logs"}}</span></a>
+                <a class="btn btn-ghost btn-sm" href="/web/stacks/{{$.Detail.Stack.Name}}/terminal?service={{.ServiceName}}" data-tip="{{T "services.action_terminal"}}" aria-label="{{T "services.action_terminal"}}">{{icon "console"}}<span class="sr-only">{{T "services.action_terminal"}}</span></a>
+                <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .Name}}" hx-disabled-elt="this" data-tip="{{T "services.action_restart"}}" aria-label="{{T "services.action_restart"}}">{{icon "refresh"}}<span class="sr-only">{{T "services.action_restart"}}</span></button>
               </div>
             </td>
           </tr>
@@ -232,10 +230,10 @@
         <div class="kv-row"><span class="k">{{T "services.col_updated"}}</span><span class="v muted iso" dir="ltr">{{ts .Updated}}</span></div>
         <div class="kv-row"><span class="k">{{T "common.actions"}}</span><span class="v">
           <div class="row-actions">
-            <a class="btn btn-ghost" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true">{{icon "server"}}<span>{{T "services.action_tasks"}}</span></a>
-            <a class="btn btn-ghost" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true">{{icon "terminal"}}<span>{{T "services.action_logs"}}</span></a>
-            <a class="btn btn-ghost" href="/web/stacks/{{$.Detail.Stack.Name}}/terminal?service={{.ServiceName}}">{{icon "console"}}<span>{{T "services.action_terminal"}}</span></a>
-            <button type="button" class="btn btn-ghost" hx-post="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .Name}}" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
+            <a class="btn btn-ghost" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true" data-tip="{{T "services.action_tasks"}}">{{icon "server"}}<span>{{T "services.action_tasks"}}</span></a>
+            <a class="btn btn-ghost" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true" data-tip="{{T "services.action_logs"}}">{{icon "terminal"}}<span>{{T "services.action_logs"}}</span></a>
+            <a class="btn btn-ghost" href="/web/stacks/{{$.Detail.Stack.Name}}/terminal?service={{.ServiceName}}" data-tip="{{T "services.action_terminal"}}">{{icon "console"}}<span>{{T "services.action_terminal"}}</span></a>
+            <button type="button" class="btn btn-ghost" hx-post="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .Name}}" hx-disabled-elt="this" data-tip="{{T "services.action_restart"}}">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
           </div>
         </span></div>
       </div>
@@ -356,16 +354,14 @@
           </div>
           <div class="rev-when">{{TF "stack.rev_when" (ts .CreatedAt)}}</div>
           <div class="rev-actions">
-            <button type="button" class="btn btn-ghost btn-sm" style="min-width:44px;min-height:44px" title="{{T "stack.view_manifest"}}"
-                    hx-get="/web/stacks/{{$.Detail.Stack.Name}}/revisions/{{.Revision}}"
-                    hx-target="#modal-body" onclick="openModal()">
+            <button type="button" class="btn btn-ghost btn-sm" style="min-width:44px;min-height:44px" hx-get="/web/stacks/{{$.Detail.Stack.Name}}/revisions/{{.Revision}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "stack.view_manifest"}}" aria-label="{{T "stack.view_manifest"}}">
               {{icon "file"}}<span class="sr-only">{{T "stack.view_manifest"}}</span>
             </button>
             {{if not .Current}}
             <form hx-post="/web/stacks/{{$.Detail.Stack.Name}}/rollback" hx-target="#view" hx-swap="innerHTML"
                   hx-confirm="{{TF "stack.confirm_rollback" $.Detail.Stack.Name .Revision}}" hx-disabled-elt="find [type='submit']">
               <input type="hidden" name="revision" value="{{.Revision}}">
-              <button type="submit" class="btn btn-ghost btn-sm" style="min-width:44px;min-height:44px" title="{{T "stack.rollback"}}">
+              <button type="submit" class="btn btn-ghost btn-sm" style="min-width:44px;min-height:44px" data-tip="{{T "stack.rollback"}}" aria-label="{{T "stack.rollback"}}">
                 {{icon "rollback"}}<span class="sr-only">{{T "stack.rollback"}}</span>
               </button>
             </form>
@@ -383,7 +379,7 @@
         <div class="empty-actions">
           <form hx-post="/web/stacks/{{.Detail.Stack.Name}}/sync" hx-target="#view" hx-swap="innerHTML"
                 hx-confirm="{{TF "stacks.confirm_sync" .Detail.Stack.Name}}" hx-disabled-elt="find [type='submit']">
-            <button type="submit" class="btn btn-sm">
+            <button type="submit" class="btn btn-sm" data-tip="{{T "stacks.act_redeploy"}}">
               {{icon "play"}}<span>{{T "stacks.act_redeploy"}}</span>
             </button>
           </form>
@@ -401,10 +397,10 @@
       <p>{{if .ErrKey}}{{T .ErrKey}}{{else}}{{T "stack.unknown_body"}}{{end}}</p>
       {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
       <div class="empty-actions">
-        <a class="btn btn-ghost btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
+        <a class="btn btn-ghost btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-tip="{{T "stack.back_all"}}">
           {{icon "stacks"}}<span>{{T "stack.back_all"}}</span>
         </a>
-        <button type="button" class="btn btn-sm" hx-get="/web/stacks/{{.Name}}" hx-target="#view">
+        <button type="button" class="btn btn-sm" hx-get="/web/stacks/{{.Name}}" hx-target="#view" data-tip="{{T "common.retry"}}">
           {{icon "refresh"}}<span>{{T "common.retry"}}</span>
         </button>
       </div>

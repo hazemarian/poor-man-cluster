@@ -14,7 +14,7 @@
     <p class="sub">{{if .Known}}{{T "usage.sub"}}{{else}}{{T "usage.sub_unknown"}}{{end}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
+    <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-tip="{{T "err.retry_hint"}}" aria-label="{{T "common.refresh"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
   </div>
 </div>
 
@@ -26,7 +26,7 @@
     {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>{{end}}
   </div>
   <div class="b-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+    <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
   </div>
 </div>
 {{else if not .Known}}
@@ -37,7 +37,7 @@
       <h3>{{T "usage.unknown_title"}}</h3>
       <p>{{T "usage.unknown_body"}}</p>
       <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
       </div>
     </div>
   </div>
@@ -115,7 +115,7 @@
       <h3>{{T "usage.empty_title"}}</h3>
       <p>{{T "usage.empty_body"}}</p>
       <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+        <a class="btn btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
       </div>
     </div>
     {{end}}

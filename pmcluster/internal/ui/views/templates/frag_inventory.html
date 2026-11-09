@@ -8,7 +8,7 @@
       <p>{{if .ErrKey}}{{T .ErrKey}}{{else}}{{T "inventory.unknown_body"}}{{end}}</p>
       {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
       <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/inventory" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/inventory" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
       </div>
     </div>
   </div>
@@ -20,7 +20,7 @@
     <p class="sub">{{T "inventory.sub"}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/inventory" hx-target="#view" hx-push-url="true" title="{{T "common.refresh"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/inventory" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}" aria-label="{{T "common.refresh"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
   </div>
 </div>
 
@@ -90,12 +90,10 @@
           </td>
           <td>
             <div class="row-actions">
-              <button type="button" class="btn btn-ghost btn-sm" title="{{T "common.edit"}}"
-                      hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
+              <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}" aria-label="{{T "common.edit"}}">
                 {{icon "file"}}<span class="sr-only">{{T "common.edit"}}</span>
               </button>
-              <button type="button" class="btn btn-ghost btn-sm" title="{{T "inventory.retag_title"}}"
-                      hx-get="/web/inventory/retag/config/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()">
+              <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/inventory/retag/config/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}" aria-label="{{T "inventory.retag_title"}}">
                 {{icon "move"}}<span class="sr-only">{{T "inventory.retag_title"}}</span>
               </button>
             </div>
@@ -117,11 +115,11 @@
       <div class="kv-row"><span class="k">{{T "settings.col_updated"}}</span><span class="v muted">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}{{ts .CreatedAt}}{{end}}</span></div>
       <div class="action-bar">
         <button type="button" class="btn btn-sm" style="min-height:44px"
-                hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
+                hx-get="/web/settings/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}">
           {{icon "file"}}<span>{{T "common.edit"}}</span>
         </button>
         <button type="button" class="btn btn-sm" style="min-height:44px"
-                hx-get="/web/inventory/retag/config/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()">
+                hx-get="/web/inventory/retag/config/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}">
           {{icon "move"}}<span>{{T "inventory.retag_title"}}</span>
         </button>
       </div>
@@ -186,12 +184,10 @@
           </td>
           <td>
             <div class="row-actions">
-              <button type="button" class="btn btn-ghost btn-sm" title="{{T "settings.reveal"}}"
-                      hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
+              <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.reveal"}}" aria-label="{{T "settings.reveal"}}">
                 {{icon "lock"}}<span class="sr-only">{{T "settings.reveal"}}</span>
               </button>
-              <button type="button" class="btn btn-ghost btn-sm" title="{{T "inventory.retag_title"}}"
-                      hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()">
+              <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}" aria-label="{{T "inventory.retag_title"}}">
                 {{icon "move"}}<span class="sr-only">{{T "inventory.retag_title"}}</span>
               </button>
             </div>
@@ -211,11 +207,11 @@
       <div class="kv-row"><span class="k">{{T "settings.col_updated"}}</span><span class="v muted">{{ts .CreatedAt}}</span></div>
       <div class="action-bar">
         <button type="button" class="btn btn-sm" style="min-height:44px"
-                hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" onclick="openModal()">
+                hx-get="/web/settings/secrets/reveal/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "settings.reveal"}}">
           {{icon "lock"}}<span>{{T "settings.reveal"}}</span>
         </button>
         <button type="button" class="btn btn-sm" style="min-height:44px"
-                hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()">
+                hx-get="/web/inventory/retag/secret/{{.Name}}?scope={{.Scope}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "inventory.retag_title"}}">
           {{icon "move"}}<span>{{T "inventory.retag_title"}}</span>
         </button>
       </div>

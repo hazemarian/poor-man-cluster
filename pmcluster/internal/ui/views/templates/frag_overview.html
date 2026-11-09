@@ -8,10 +8,10 @@
     </p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/overview" hx-target="#view" hx-push-url="true">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
       {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
     </button>
-    <a class="btn btn-primary" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">
+    <a class="btn btn-primary" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.deploy"}}">
       {{icon "deploy"}}<span>{{T "nav.deploy"}}</span>
     </a>
   </div>
@@ -173,10 +173,10 @@
           <tr>
             <td>
               <div class="node-identity">
-                <span class="node-glyph">{{icon "server"}}</span>
+                <span class="node-glyph" data-tip="{{T "common.node"}}">{{icon "server"}}</span>
                 <span class="mono iso" dir="ltr">{{.Hostname}}</span>
-                {{if .IsLeader}} <span class="pill accent">{{T "st.leader"}}</span>{{end}}
-                {{if .Storage}} <span class="pill plain">{{T "st.storage"}}</span>{{end}}
+                {{if .IsLeader}} <span class="pill accent" data-tip="{{T "st.leader_tip"}}">{{T "st.leader"}}</span>{{end}}
+                {{if .Storage}} <span class="pill plain" data-tip="{{T "st.storage_tip"}}">{{T "st.storage"}}</span>{{end}}
               </div>
             </td>
             <td>
@@ -200,15 +200,17 @@
             <td class="mono iso num" dir="ltr">{{.EngineVersion}}</td>
             <td>
               <div class="row-actions">
-                <button type="button" class="icon-btn" data-copy="{{.Hostname}}" onclick="copyVal(this)"
-                        title="{{T "common.copy_hostname"}}" aria-label="{{T "common.copy_hostname"}}">{{icon "copy"}}</button>
+                <button type="button" class="icon-btn" data-copy="{{.Hostname}}" onclick="copyVal(this)" data-tip="{{T "common.copy_hostname"}}" aria-label="{{T "common.copy_hostname"}}">{{icon "copy"}}</button>
                 {{if .Storage}}
-                <button type="button" class="icon-btn" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}" title="{{T "nodes.demote_storage"}}" aria-label="{{T "nodes.demote_storage"}}">{{icon "shield"}}</button>
+                <button type="button" class="icon-btn" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}" data-tip="{{T "nodes.demote_storage"}}" aria-label="{{T "nodes.demote_storage"}}">{{icon "shield"}}</button>
                 {{else if eq .Role "manager"}}
                 {{/* storage nodes must be managers: a worker gets no button, only the reason */}}
-                <button type="button" class="icon-btn" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}" title="{{T "nodes.promote_storage"}}" aria-label="{{T "nodes.promote_storage"}}" hx-disabled-elt="this">{{icon "shield"}}</button>
+                <button type="button" class="icon-btn" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}" data-tip="{{T "nodes.promote_storage"}}" aria-label="{{T "nodes.promote_storage"}}" hx-disabled-elt="this">{{icon "shield"}}</button>
                 {{else}}
-                <span class="needs-manager" title="{{T "nodes.storage_needs_manager"}}" aria-label="{{T "nodes.storage_needs_manager"}}"><i class="ic-sm">{{icon "lock"}}</i><span>{{T "nodes.storage_needs_manager_short"}}</span></span>
+                {{/* A disabled control fires no hover events, so the tooltip and the
+                     focus stop live on the wrapper. The glyph is the whole control:
+                     the sentence is the tooltip, not a label that widens the cell. */}}
+                <span class="needs-manager" data-tip="{{T "nodes.storage_needs_manager"}}" aria-label="{{T "nodes.storage_needs_manager"}}" role="button" aria-disabled="true" tabindex="0">{{icon "lock"}}</span>
                 {{end}}
               </div>
             </td>
@@ -223,7 +225,7 @@
     <div class="only-sm">
       {{range .Nodes}}
       <div class="kv">
-        <div class="kv-row"><span class="k">{{T "common.node"}}</span><span class="v"><span class="mono iso" dir="ltr">{{.Hostname}}</span>{{if .IsLeader}} <span class="pill accent">{{T "st.leader"}}</span>{{end}}{{if .Storage}} <span class="pill plain">{{T "st.storage"}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "common.node"}}</span><span class="v"><span class="mono iso" dir="ltr">{{.Hostname}}</span>{{if .IsLeader}} <span class="pill accent" data-tip="{{T "st.leader_tip"}}">{{T "st.leader"}}</span>{{end}}{{if .Storage}} <span class="pill plain" data-tip="{{T "st.storage_tip"}}">{{T "st.storage"}}</span>{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "common.role"}}</span><span class="v">{{if eq .Role "manager"}}{{T "st.manager"}}{{else if eq .Role "worker"}}{{T "st.worker"}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "common.status"}}</span><span class="v">{{if eq .Status "ready"}}<span class="pill good"><i class="dot"></i>{{T "st.ready"}}</span>{{else if eq .Status "down"}}<span class="pill bad"><i class="dot"></i>{{T "st.down"}}</span>{{else}}{{T "common.unknown"}}{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "common.availability"}}</span><span class="v">{{if eq .Availability "active"}}{{T "st.avail_active"}}{{else if eq .Availability "pause"}}{{T "st.avail_pause"}}{{else if eq .Availability "drain"}}{{T "st.avail_drain"}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
@@ -231,13 +233,14 @@
         <div class="kv-row">
           <span class="k">{{T "common.actions"}}</span>
           <span class="v">
-            <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Hostname}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
+            <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Hostname}}" onclick="copyVal(this)" data-tip="{{T "common.copy"}}">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
             {{if .Storage}}
-            <button type="button" class="btn btn-ghost btn-sm" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}">{{icon "shield"}}<span>{{T "nodes.demote_storage"}}</span></button>
+            <button type="button" class="btn btn-ghost btn-sm" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}" data-tip="{{T "nodes.demote_storage"}}">{{icon "shield"}}<span>{{T "nodes.demote_storage"}}</span></button>
             {{else if eq .Role "manager"}}
-            <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}" hx-disabled-elt="this">{{icon "shield"}}<span>{{T "nodes.promote_storage"}}</span></button>
+            <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}" hx-disabled-elt="this" data-tip="{{T "nodes.promote_storage"}}">{{icon "shield"}}<span>{{T "nodes.promote_storage"}}</span></button>
             {{else}}
-            <span class="needs-manager"><i class="ic-sm">{{icon "lock"}}</i><span>{{T "nodes.storage_needs_manager"}}</span></span>
+            {{/* Same reason as the table: the glyph carries it, the wrapper is focusable. */}}
+            <span class="needs-manager" data-tip="{{T "nodes.storage_needs_manager"}}" aria-label="{{T "nodes.storage_needs_manager"}}" role="button" aria-disabled="true" tabindex="0">{{icon "lock"}}</span>
             {{end}}
           </span>
         </div>
@@ -296,9 +299,9 @@
                 {{if eq .Role "manager"}}<span class="pill plain role-pill">{{T "st.manager"}}</span>
                 {{else if eq .Role "worker"}}<span class="pill plain role-pill">{{T "st.worker"}}</span>
                 {{else}}<span class="pill plain role-pill">{{T "common.unknown"}}</span>{{end}}
-                {{if .Overloaded}}<span class="pill warn" title="{{T "nodestat.overloaded_hint"}}">{{T "nodestat.overloaded"}}</span>{{end}}
-                {{if .MemLow}}<span class="pill warn" title="{{T "nodestat.mem_low_hint"}}">{{T "nodestat.mem_low"}}</span>{{end}}
-                {{if .DockerDown}}<span class="pill bad" title="{{T "nodestat.docker_down_hint"}}">{{T "nodestat.docker_down"}}</span>{{end}}
+                {{if .Overloaded}}<span class="pill warn" data-tip="{{T "nodestat.overloaded_hint"}}">{{T "nodestat.overloaded"}}</span>{{end}}
+                {{if .MemLow}}<span class="pill warn" data-tip="{{T "nodestat.mem_low_hint"}}">{{T "nodestat.mem_low"}}</span>{{end}}
+                {{if .DockerDown}}<span class="pill bad" data-tip="{{T "nodestat.docker_down_hint"}}">{{T "nodestat.docker_down"}}</span>{{end}}
               </div>
             </td>
             <td class="num nodestat-load">
@@ -365,24 +368,24 @@
   </div>
   <div class="workspace-grid">
     <a class="delivery-link" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true">
-      <span class="delivery-symbol" aria-hidden="true">{{icon "terminal"}}</span>
+      <span class="delivery-symbol" aria-hidden="true" data-tip="{{T "nav.deploy"}}">{{icon "terminal"}}</span>
       <h3>{{T "overview.delivery_title"}}</h3>
       <p>{{T "overview.delivery_body"}}</p>
       <span class="delivery-action">{{T "nav.deploy"}}{{icon "chevron"}}</span>
     </a>
     <div class="workspace-links">
       <a class="workspace-link" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
-        <span class="workspace-icon">{{icon "stacks"}}</span>
+        <span class="workspace-icon" data-tip="{{T "nav.stacks"}}">{{icon "stacks"}}</span>
         <span><strong>{{T "nav.stacks"}}</strong><small>{{T "overview.stacks_hint"}}</small></span>
         <span class="flip">{{icon "chevron"}}</span>
       </a>
       <a class="workspace-link" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true">
-        <span class="workspace-icon">{{icon "services"}}</span>
+        <span class="workspace-icon" data-tip="{{T "nav.services"}}">{{icon "services"}}</span>
         <span><strong>{{T "nav.services"}}</strong><small>{{T "overview.services_hint"}}</small></span>
         <span class="flip">{{icon "chevron"}}</span>
       </a>
       <a class="workspace-link" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true">
-        <span class="workspace-icon">{{icon "backups"}}</span>
+        <span class="workspace-icon" data-tip="{{T "nav.backups"}}">{{icon "backups"}}</span>
         <span><strong>{{T "nav.backups"}}</strong><small>{{T "overview.backups_hint"}}</small></span>
         <span class="flip">{{icon "chevron"}}</span>
       </a>

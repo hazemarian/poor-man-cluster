@@ -16,7 +16,7 @@
 {{else if .Content}}
 <pre>{{.Content}}</pre>
 <div class="form-actions">
-  <button type="button" class="btn btn-primary" data-copy="{{.Content}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "settings.rendered_copy"}}</span></button>
+  <button type="button" class="btn btn-primary" data-copy="{{.Content}}" onclick="copyVal(this)" data-tip="{{T "settings.rendered_copy"}}">{{icon "copy"}}<span>{{T "settings.rendered_copy"}}</span></button>
   <button type="button" class="btn" onclick="closeModal()">{{T "common.close"}}</button>
 </div>
 {{else}}

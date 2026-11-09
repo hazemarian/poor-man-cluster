@@ -11,7 +11,7 @@
     <p class="sub">{{T "backupbrowse.sub"}}</p>
   </div>
   <div class="ph-actions">
-    <a class="btn btn-sm" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true">{{icon "backups"}}<span>{{T "nav.backups"}}</span></a>
+    <a class="btn btn-sm" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.backups"}}">{{icon "backups"}}<span>{{T "nav.backups"}}</span></a>
   </div>
 </div>
 
@@ -23,7 +23,7 @@
     {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>{{end}}
   </div>
   <div class="b-actions">
-    <a class="btn btn-sm" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true">{{icon "backups"}}<span>{{T "backupbrowse.back"}}</span></a>
+    <a class="btn btn-sm" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "backupbrowse.back"}}">{{icon "backups"}}<span>{{T "backupbrowse.back"}}</span></a>
   </div>
 </div>
 {{else}}
@@ -138,7 +138,7 @@
         </div>
       </div>
       <div class="action-bar">
-        <button type="submit" class="btn btn-primary btn-restore" hx-confirm="{{TF "backupbrowse.restore_confirm" (N0 .ID) (printf "%s/%s" .DestRoot .Run.StackName)}}">{{icon "restore"}}<span>{{T "backupbrowse.restore_action"}}</span></button>
+        <button type="submit" class="btn btn-primary btn-restore" hx-confirm="{{TF "backupbrowse.restore_confirm" (N0 .ID) (printf "%s/%s" .DestRoot .Run.StackName)}}" data-tip="{{T "backupbrowse.restore_action"}}">{{icon "restore"}}<span>{{T "backupbrowse.restore_action"}}</span></button>
       </div>
     </form>
     {{else}}
@@ -156,7 +156,7 @@
       <h3>{{T "backupbrowse.unknown_title"}}</h3>
       <p>{{T "backupbrowse.unknown_body"}}</p>
       <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/backups/{{.ID}}/files" hx-get="/web/backups/{{.ID}}/files" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
+        <a class="btn btn-sm" href="/web/backups/{{.ID}}/files" hx-get="/web/backups/{{.ID}}/files" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
       </div>
     </div>
   </div>

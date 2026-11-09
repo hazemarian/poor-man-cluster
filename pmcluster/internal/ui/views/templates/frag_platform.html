@@ -5,7 +5,7 @@
     <p class="sub">{{if .Known}}{{T "platform.sub"}}{{else}}{{T "platform.sub_unknown"}}{{end}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/platform" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
+    <button type="button" class="btn btn-sm" hx-get="/web/platform" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" data-tip="{{T "err.retry_hint"}}" aria-label="{{T "common.retry"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
   </div>
 </div>
 
@@ -17,7 +17,7 @@
     {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
   </div>
   <div class="b-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/platform" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+    <button type="button" class="btn btn-sm" hx-get="/web/platform" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
   </div>
 </div>
 {{end}}
@@ -55,7 +55,7 @@
       <h3>{{T "platform.unknown_title"}}</h3>
       <p>{{T "platform.unknown_body"}}</p>
       <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/platform" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/platform" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
       </div>
     </div>
     {{else if .Services}}
@@ -98,9 +98,9 @@
             <td>
               {{if .Routable}}
               <div class="row-actions">
-                <a class="btn btn-ghost btn-sm" href="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true" title="{{T "services.action_tasks"}}">{{icon "server"}}<span class="sr-only">{{T "services.action_tasks"}}</span></a>
-                <a class="btn btn-ghost btn-sm" href="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true" title="{{T "services.action_logs"}}">{{icon "terminal"}}<span class="sr-only">{{T "services.action_logs"}}</span></a>
-                <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Stack}}/terminal?service={{.ServiceName}}" title="{{T "services.action_terminal"}}">{{icon "console"}}<span class="sr-only">{{T "services.action_terminal"}}</span></a>
+                <a class="btn btn-ghost btn-sm" href="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true" data-tip="{{T "services.action_tasks"}}" aria-label="{{T "services.action_tasks"}}">{{icon "server"}}<span class="sr-only">{{T "services.action_tasks"}}</span></a>
+                <a class="btn btn-ghost btn-sm" href="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true" data-tip="{{T "services.action_logs"}}" aria-label="{{T "services.action_logs"}}">{{icon "terminal"}}<span class="sr-only">{{T "services.action_logs"}}</span></a>
+                <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Stack}}/terminal?service={{.ServiceName}}" data-tip="{{T "services.action_terminal"}}" aria-label="{{T "services.action_terminal"}}">{{icon "console"}}<span class="sr-only">{{T "services.action_terminal"}}</span></a>
               </div>
               {{else}}
               <span class="muted">{{T "services.no_stack"}}</span>
@@ -127,9 +127,9 @@
         <div class="kv-row"><span class="k">{{T "common.actions"}}</span><span class="v">
           {{if .Routable}}
           <div class="row-actions">
-            <a class="btn btn-ghost" href="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true">{{icon "server"}}<span>{{T "services.action_tasks"}}</span></a>
-            <a class="btn btn-ghost" href="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true">{{icon "terminal"}}<span>{{T "services.action_logs"}}</span></a>
-            <a class="btn btn-ghost" href="/web/stacks/{{.Stack}}/terminal?service={{.ServiceName}}">{{icon "console"}}<span>{{T "services.action_terminal"}}</span></a>
+            <a class="btn btn-ghost" href="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true" data-tip="{{T "services.action_tasks"}}">{{icon "server"}}<span>{{T "services.action_tasks"}}</span></a>
+            <a class="btn btn-ghost" href="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-get="/web/services/{{.Stack}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true" data-tip="{{T "services.action_logs"}}">{{icon "terminal"}}<span>{{T "services.action_logs"}}</span></a>
+            <a class="btn btn-ghost" href="/web/stacks/{{.Stack}}/terminal?service={{.ServiceName}}" data-tip="{{T "services.action_terminal"}}">{{icon "console"}}<span>{{T "services.action_terminal"}}</span></a>
           </div>
           {{else}}
           <span class="muted">{{T "services.no_stack"}}</span>

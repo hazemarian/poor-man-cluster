@@ -76,42 +76,42 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-head">
       {{template "logo"}}
-      <button class="icon-btn sidebar-close" type="button" data-drawer-close aria-label="{{T "nav.close"}}" title="{{T "nav.close"}}">{{icon "close"}}</button>
+      <button class="icon-btn sidebar-close" type="button" data-drawer-close aria-label="{{T "nav.close"}}" data-tip="{{T "nav.close"}}">{{icon "close"}}</button>
     </div>
 
     <nav class="nav" aria-label="{{T "nav.menu"}}">
       <p class="nav-label" id="nav-cluster">{{T "nav.group.cluster"}}</p>
-      <a class="nav-item" href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
-      <a class="nav-item" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
-      <a class="nav-item" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
-      <a class="nav-item" href="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" data-nav="observability">{{icon "chart"}}<span>{{T "nav.observability"}}</span></a>
-      <a class="nav-item" href="/web/platform" hx-get="/web/platform" hx-target="#view" hx-push-url="true" data-nav="platform">{{icon "overview"}}<span>{{T "nav.platform"}}</span></a>
-      <a class="nav-item" href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage">{{icon "overview"}}<span>{{T "nav.usage"}}</span></a>
-      <a class="nav-item" href="/web/inventory" hx-get="/web/inventory" hx-target="#view" hx-push-url="true" data-nav="inventory">{{icon "file"}}<span>{{T "nav.inventory"}}</span></a>
+      <a class="nav-item" href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview" data-tip="{{T "nav.overview"}}">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
+      <a class="nav-item" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks" data-tip="{{T "nav.stacks"}}">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
+      <a class="nav-item" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services" data-tip="{{T "nav.services"}}">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
+      <a class="nav-item" href="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" data-nav="observability" data-tip="{{T "nav.observability"}}">{{icon "chart"}}<span>{{T "nav.observability"}}</span></a>
+      <a class="nav-item" href="/web/platform" hx-get="/web/platform" hx-target="#view" hx-push-url="true" data-nav="platform" data-tip="{{T "nav.platform"}}">{{icon "overview"}}<span>{{T "nav.platform"}}</span></a>
+      <a class="nav-item" href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage" data-tip="{{T "nav.usage"}}">{{icon "overview"}}<span>{{T "nav.usage"}}</span></a>
+      <a class="nav-item" href="/web/inventory" hx-get="/web/inventory" hx-target="#view" hx-push-url="true" data-nav="inventory" data-tip="{{T "nav.inventory"}}">{{icon "file"}}<span>{{T "nav.inventory"}}</span></a>
 
       <p class="nav-label" id="nav-delivery">{{T "nav.group.delivery"}}</p>
-      <a class="nav-item" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
-      <a class="nav-item" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-nav="webhooks">{{icon "webhooks"}}<span>{{T "nav.webhooks"}}</span></a>
+      <a class="nav-item" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy" data-tip="{{T "nav.deploy"}}">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
+      <a class="nav-item" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-nav="webhooks" data-tip="{{T "nav.webhooks"}}">{{icon "webhooks"}}<span>{{T "nav.webhooks"}}</span></a>
 
       <p class="nav-label" id="nav-trust">{{T "nav.group.trust"}}</p>
-      <a class="nav-item" href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
-      <a class="nav-item" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-nav="backups">{{icon "backups"}}<span>{{T "nav.backups"}}</span></a>
+      <a class="nav-item" href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls" data-tip="{{T "nav.tls"}}">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
+      <a class="nav-item" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-nav="backups" data-tip="{{T "nav.backups"}}">{{icon "backups"}}<span>{{T "nav.backups"}}</span></a>
 
       {{if eq .User.Role "admin"}}
       <p class="nav-label" id="nav-access">{{T "nav.group.access"}}</p>
       {{if not .LoginDisabled}}
-      <a class="nav-item" href="/web/users" hx-get="/web/users" hx-target="#view" hx-push-url="true" data-nav="users">{{icon "users"}}<span>{{T "nav.users"}}</span></a>
+      <a class="nav-item" href="/web/users" hx-get="/web/users" hx-target="#view" hx-push-url="true" data-nav="users" data-tip="{{T "nav.users"}}">{{icon "users"}}<span>{{T "nav.users"}}</span></a>
       {{end}}
-      <a class="nav-item" href="/web/apikeys" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-nav="apikeys">{{icon "keys"}}<span>{{T "nav.apikeys"}}</span></a>
+      <a class="nav-item" href="/web/apikeys" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-nav="apikeys" data-tip="{{T "nav.apikeys"}}">{{icon "keys"}}<span>{{T "nav.apikeys"}}</span></a>
       {{end}}
 
       <p class="nav-label" id="nav-system">{{T "nav.group.system"}}</p>
-      <a class="nav-item" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-nav="settings">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+      <a class="nav-item" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-nav="settings" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
 
       {{if .Domain}}
       <p class="nav-label">{{T "nav.group.external"}}</p>
-      <a class="nav-item" href="https://observ.{{.Domain}}/sso-bridge" target="_blank" rel="noopener" title="{{T "nav.observ_hint"}}">{{icon "external"}}<span>{{T "nav.observ"}}</span></a>
-      <a class="nav-item" href="https://traefik.{{.Domain}}/dashboard/" target="_blank" rel="noopener">{{icon "external"}}<span>{{T "nav.traefik"}}</span></a>
+      <a class="nav-item" href="https://observ.{{.Domain}}/sso-bridge" target="_blank" rel="noopener" data-tip="{{T "nav.observ_hint"}}">{{icon "external"}}<span>{{T "nav.observ"}}</span></a>
+      <a class="nav-item" href="https://traefik.{{.Domain}}/dashboard/" target="_blank" rel="noopener" data-tip="{{T "nav.traefik"}}">{{icon "external"}}<span>{{T "nav.traefik"}}</span></a>
       {{end}}
     </nav>
 
@@ -120,7 +120,7 @@
       <div class="foot-row">
         <span class="who" lang="en" dir="ltr"><span class="avatar">{{printf "%.1s" .User.Username}}</span><span class="who-name">@{{.User.Username}}</span></span>
         <form method="post" action="/web/logout">
-          <button class="btn btn-ghost btn-sm" type="submit" aria-label="{{T "nav.logout"}}" title="{{T "nav.logout"}}">{{icon "logout"}}<span>{{T "nav.logout"}}</span></button>
+          <button class="btn btn-ghost btn-sm" type="submit" aria-label="{{T "nav.logout"}}" data-tip="{{T "nav.logout"}}">{{icon "logout"}}<span>{{T "nav.logout"}}</span></button>
         </form>
       </div>
       {{else if .SSOEnabled}}
@@ -130,7 +130,7 @@
          this host through the sso-* routers), which redirects back to the
          gate's sign-in page. */}}
       <div class="foot-row">
-        <a class="btn btn-ghost btn-sm" href="/oauth2/sign_out" aria-label="{{T "nav.logout"}}" title="{{T "nav.logout"}}">{{icon "logout"}}<span>{{T "nav.logout"}}</span></a>
+        <a class="btn btn-ghost btn-sm" href="/oauth2/sign_out" aria-label="{{T "nav.logout"}}" data-tip="{{T "nav.logout"}}">{{icon "logout"}}<span>{{T "nav.logout"}}</span></a>
       </div>
       {{end}}
     </div>
@@ -140,7 +140,7 @@
 
   <div class="main">
     <header class="topbar">
-      <button class="icon-btn only-sm" type="button" data-drawer-open aria-label="{{T "nav.menu"}}">{{icon "menu"}}</button>
+      <button class="icon-btn only-sm" type="button" data-drawer-open aria-label="{{T "nav.menu"}}" data-tip="{{T "nav.menu"}}">{{icon "menu"}}</button>
       <nav class="crumbs" aria-label="{{T "nav.overview"}}">
         <span>{{T "app.title"}}</span>
         <span class="sep" aria-hidden="true">{{icon "chevron"}}</span>
@@ -164,18 +164,18 @@
 <div class="inflight" aria-hidden="true"><i></i></div>
 
 <nav class="tabbar" aria-label="{{T "nav.menu"}}">
-  <a href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
-  <a href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
-  <a href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
-  <a href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
-  <a href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
-  <a href="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" data-nav="observability">{{icon "chart"}}<span>{{T "nav.observability"}}</span></a>
-  <a href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage">{{icon "overview"}}<span>{{T "nav.usage"}}</span></a>
+  <a href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview" data-tip="{{T "nav.overview"}}">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
+  <a href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks" data-tip="{{T "nav.stacks"}}">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
+  <a href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy" data-tip="{{T "nav.deploy"}}">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
+  <a href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls" data-tip="{{T "nav.tls"}}">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
+  <a href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services" data-tip="{{T "nav.services"}}">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
+  <a href="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" data-nav="observability" data-tip="{{T "nav.observability"}}">{{icon "chart"}}<span>{{T "nav.observability"}}</span></a>
+  <a href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage" data-tip="{{T "nav.usage"}}">{{icon "overview"}}<span>{{T "nav.usage"}}</span></a>
 </nav>
 
 <div class="modal-backdrop" id="modal" hidden onclick="if(event.target===this)closeModal()">
   <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
-    <button class="modal-close" type="button" onclick="closeModal()" aria-label="{{T "common.close"}}">{{icon "close"}}</button>
+    <button class="modal-close" type="button" onclick="closeModal()" aria-label="{{T "common.close"}}" data-tip="{{T "common.close"}}">{{icon "close"}}</button>
     <div id="modal-body"></div>
   </div>
 </div>

@@ -52,7 +52,7 @@
   <h3>{{T "revision.source"}}</h3>
   <span class="spacer"></span>
   {{if .Source}}
-  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Source}}" onclick="copyVal(this)">
+  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Source}}" onclick="copyVal(this)" data-tip="{{T "common.copy"}}">
     {{icon "copy"}}<span>{{T "common.copy"}}</span>
   </button>
   {{end}}
@@ -67,7 +67,7 @@
   <h3>{{T "revision.rendered"}}</h3>
   <span class="spacer"></span>
   {{if .Rendered}}
-  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Rendered}}" onclick="copyVal(this)">
+  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Rendered}}" onclick="copyVal(this)" data-tip="{{T "common.copy"}}">
     {{icon "copy"}}<span>{{T "common.copy"}}</span>
   </button>
   {{end}}

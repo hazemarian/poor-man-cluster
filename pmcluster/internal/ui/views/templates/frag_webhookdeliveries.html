@@ -11,8 +11,8 @@
     <p class="sub">{{if .DeliveriesKnown}}{{T "webhookdeliveries.sub"}}{{else}}{{T "webhookdeliveries.sub_unknown"}}{{end}}</p>
   </div>
   <div class="ph-actions">
-    <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">{{icon "webhooks"}}<span>{{T "nav.webhooks"}}</span></a>
-    <a class="btn btn-sm" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></a>
+    <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.webhooks"}}">{{icon "webhooks"}}<span>{{T "nav.webhooks"}}</span></a>
+    <a class="btn btn-sm" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></a>
   </div>
 </div>
 
@@ -24,7 +24,7 @@
     {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>{{end}}
   </div>
   <div class="b-actions">
-    <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">{{icon "webhooks"}}<span>{{T "webhooks.title"}}</span></a>
+    <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "webhooks.title"}}">{{icon "webhooks"}}<span>{{T "webhooks.title"}}</span></a>
   </div>
 </div>
 {{else if not .DeliveriesKnown}}
@@ -35,7 +35,7 @@
       <h3>{{T "webhookdeliveries.unknown_title"}}</h3>
       <p>{{T "webhookdeliveries.unknown_body"}}</p>
       <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
+        <a class="btn btn-sm" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
       </div>
     </div>
   </div>
@@ -96,7 +96,7 @@
       <h3>{{T "webhookdeliveries.empty_title"}}</h3>
       <p>{{T "webhookdeliveries.empty_body"}}</p>
       <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">{{icon "webhooks"}}<span>{{T "webhooks.secret_endpoint"}}</span></a>
+        <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "webhooks.secret_endpoint"}}">{{icon "webhooks"}}<span>{{T "webhooks.secret_endpoint"}}</span></a>
       </div>
     </div>
     {{end}}

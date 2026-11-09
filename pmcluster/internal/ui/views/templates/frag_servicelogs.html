@@ -15,7 +15,7 @@
   <h3>{{T "services.logs_unknown_title"}}</h3>
   <p>{{T "services.logs_unknown_body"}}</p>
   <div class="empty-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+    <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
   </div>
 </div>
 {{else}}

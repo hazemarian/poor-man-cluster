@@ -14,11 +14,11 @@
   </div>
   <div class="ph-actions">
     <button type="button" class="btn btn-ghost btn-sm"
-            hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true">
+            hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
       {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
     </button>
     <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Stack}}"
-       hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true">
+       hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.back"}}">
       {{icon "chevron"}}<span>{{T "common.back"}}</span>
     </a>
   </div>
@@ -34,7 +34,7 @@
   </div>
   <div class="b-actions">
     <button type="button" class="btn btn-ghost btn-sm"
-            hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true">
+            hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">
       {{icon "refresh"}}<span>{{T "common.retry"}}</span>
     </button>
   </div>
@@ -60,7 +60,7 @@
         <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
       {{end}}
       <button type="button" class="btn btn-primary btn-sm"
-              hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" onclick="openModal()">
+              hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "configs.form_new"}}">
         {{icon "plus"}}<span>{{T "configs.form_new"}}</span>
       </button>
     </div>
@@ -74,7 +74,7 @@
       <p>{{T "stackconfigs.configs_unknown_body"}}</p>
       <div class="empty-actions">
         <button type="button" class="btn btn-sm"
-                hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true">
+                hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">
           {{icon "refresh"}}<span>{{T "common.retry"}}</span>
         </button>
       </div>
@@ -108,14 +108,12 @@
           <td><span class="muted">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}{{ts .CreatedAt}}{{end}}</span></td>
           <td>
             <div class="row-actions">
-              <a class="btn btn-ghost btn-sm" href="/web/stacks/{{$.Stack}}/configs/edit/{{.Name}}"
-                 hx-get="/web/stacks/{{$.Stack}}/configs/edit/{{.Name}}" hx-target="#modal-body"
-                 onclick="openModal()" title="{{T "common.edit"}}">
+              <a class="btn btn-ghost btn-sm" href="/web/stacks/{{$.Stack}}/configs/edit/{{.Name}}" hx-get="/web/stacks/{{$.Stack}}/configs/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}" aria-label="{{T "common.edit"}}">
                 {{icon "file"}}<span class="sr-only">{{T "common.edit"}}</span>
               </a>
               <form hx-post="/web/stacks/{{$.Stack}}/configs/remove/{{.Name}}" hx-target="#view"
                     hx-confirm="{{TF "stackconfigs.confirm_config_remove" .Name}}" hx-disabled-elt="find [type='submit']">
-                <button type="submit" class="btn btn-danger btn-sm" title="{{T "common.delete"}}">
+                <button type="submit" class="btn btn-danger btn-sm" data-tip="{{T "common.delete"}}" aria-label="{{T "common.delete"}}">
                   {{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span>
                 </button>
               </form>
@@ -150,12 +148,12 @@
       <div class="action-bar">
         <button type="button" class="btn btn-sm" style="min-height:44px"
                 hx-get="/web/stacks/{{$.Stack}}/configs/edit/{{.Name}}" hx-target="#modal-body"
-                onclick="openModal()">
+                onclick="openModal()" data-tip="{{T "common.edit"}}">
           {{icon "file"}}<span>{{T "common.edit"}}</span>
         </button>
         <form hx-post="/web/stacks/{{$.Stack}}/configs/remove/{{.Name}}" hx-target="#view"
               hx-confirm="{{TF "stackconfigs.confirm_config_remove" .Name}}" hx-disabled-elt="find [type='submit']">
-          <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px">
+          <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px" data-tip="{{T "common.delete"}}">
             {{icon "trash"}}<span>{{T "common.delete"}}</span>
           </button>
         </form>
@@ -171,7 +169,7 @@
       <p>{{T "stackconfigs.configs_empty_body"}}</p>
       <div class="empty-actions">
         <button type="button" class="btn btn-primary btn-sm"
-                hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" onclick="openModal()">
+                hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "configs.form_new"}}">
           {{icon "plus"}}<span>{{T "configs.form_new"}}</span>
         </button>
       </div>
@@ -190,7 +188,7 @@
         <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
       {{end}}
       <button type="button" class="btn btn-primary btn-sm"
-              hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" onclick="openModal()">
+              hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "stackconfigs.form_new_secret"}}">
         {{icon "plus"}}<span>{{T "stackconfigs.form_new_secret"}}</span>
       </button>
     </div>
@@ -204,7 +202,7 @@
       <p>{{T "stackconfigs.secrets_unknown_body"}}</p>
       <div class="empty-actions">
         <button type="button" class="btn btn-sm"
-                hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true">
+                hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">
           {{icon "refresh"}}<span>{{T "common.retry"}}</span>
         </button>
       </div>
@@ -229,19 +227,15 @@
           <td><span class="muted">{{if .CreatedAt}}{{ts .CreatedAt}}{{else}}—{{end}}</span></td>
           <td>
             <div class="row-actions">
-              <button type="button" class="btn btn-ghost btn-sm" title="{{T "stackconfigs.reveal"}}"
-                      hx-get="/web/stacks/{{$.Stack}}/secrets/reveal/{{.Name}}" hx-target="#modal-body"
-                      hx-confirm="{{TF "stackconfigs.confirm_reveal" .Name}}" onclick="openModal()">
+              <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/stacks/{{$.Stack}}/secrets/reveal/{{.Name}}" hx-target="#modal-body" hx-confirm="{{TF "stackconfigs.confirm_reveal" .Name}}" onclick="openModal()" data-tip="{{T "stackconfigs.reveal"}}" aria-label="{{T "stackconfigs.reveal"}}">
                 {{icon "keys"}}<span class="sr-only">{{T "stackconfigs.reveal"}}</span>
               </button>
-              <a class="btn btn-ghost btn-sm" href="/web/stacks/{{$.Stack}}/secrets/edit/{{.Name}}"
-                 hx-get="/web/stacks/{{$.Stack}}/secrets/edit/{{.Name}}" hx-target="#modal-body"
-                 onclick="openModal()" title="{{T "common.edit"}}">
+              <a class="btn btn-ghost btn-sm" href="/web/stacks/{{$.Stack}}/secrets/edit/{{.Name}}" hx-get="/web/stacks/{{$.Stack}}/secrets/edit/{{.Name}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "common.edit"}}" aria-label="{{T "common.edit"}}">
                 {{icon "lock"}}<span class="sr-only">{{T "common.edit"}}</span>
               </a>
               <form hx-post="/web/stacks/{{$.Stack}}/secrets/remove/{{.Name}}" hx-target="#view"
                     hx-confirm="{{TF "stackconfigs.confirm_secret_remove" .Name}}" hx-disabled-elt="find [type='submit']">
-                <button type="submit" class="btn btn-danger btn-sm" title="{{T "common.delete"}}">
+                <button type="submit" class="btn btn-danger btn-sm" data-tip="{{T "common.delete"}}" aria-label="{{T "common.delete"}}">
                   {{icon "trash"}}<span class="sr-only">{{T "common.delete"}}</span>
                 </button>
               </form>
@@ -268,17 +262,17 @@
       <div class="action-bar">
         <button type="button" class="btn btn-sm" style="min-height:44px"
                 hx-get="/web/stacks/{{$.Stack}}/secrets/reveal/{{.Name}}" hx-target="#modal-body"
-                hx-confirm="{{TF "stackconfigs.confirm_reveal" .Name}}" onclick="openModal()">
+                hx-confirm="{{TF "stackconfigs.confirm_reveal" .Name}}" onclick="openModal()" data-tip="{{T "stackconfigs.reveal"}}">
           {{icon "keys"}}<span>{{T "stackconfigs.reveal"}}</span>
         </button>
         <button type="button" class="btn btn-sm" style="min-height:44px"
                 hx-get="/web/stacks/{{$.Stack}}/secrets/edit/{{.Name}}" hx-target="#modal-body"
-                onclick="openModal()">
+                onclick="openModal()" data-tip="{{T "common.edit"}}">
           {{icon "lock"}}<span>{{T "common.edit"}}</span>
         </button>
         <form hx-post="/web/stacks/{{$.Stack}}/secrets/remove/{{.Name}}" hx-target="#view"
               hx-confirm="{{TF "stackconfigs.confirm_secret_remove" .Name}}" hx-disabled-elt="find [type='submit']">
-          <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px">
+          <button type="submit" class="btn btn-danger btn-sm" style="min-height:44px" data-tip="{{T "common.delete"}}">
             {{icon "trash"}}<span>{{T "common.delete"}}</span>
           </button>
         </form>
@@ -294,7 +288,7 @@
       <p>{{T "stackconfigs.secrets_empty_body"}}</p>
       <div class="empty-actions">
         <button type="button" class="btn btn-primary btn-sm"
-                hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" onclick="openModal()">
+                hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "stackconfigs.form_new_secret"}}">
           {{icon "plus"}}<span>{{T "stackconfigs.form_new_secret"}}</span>
         </button>
       </div>

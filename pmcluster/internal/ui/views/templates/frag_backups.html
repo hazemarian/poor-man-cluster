@@ -6,9 +6,9 @@
   </div>
   <div class="ph-actions">
     <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
-      <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
+      <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this" data-tip="{{T "backups.action_now"}}">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
     </form>
-    <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
+    <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "err.retry_hint"}}" aria-label="{{T "common.refresh"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
   </div>
 </div>
 
@@ -20,7 +20,7 @@
     {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
   </div>
   <div class="b-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+    <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
   </div>
 </div>
 {{else if .Error}}
@@ -42,7 +42,7 @@
   </div>
   <div class="b-actions">
     <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
-      <button type="submit" class="btn btn-sm" hx-disabled-elt="this">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
+      <button type="submit" class="btn btn-sm" hx-disabled-elt="this" data-tip="{{T "backups.action_now"}}">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
     </form>
   </div>
 </div>
@@ -109,7 +109,7 @@
       <h3>{{T "backups.rows_unknown_title"}}</h3>
       <p>{{T "backups.rows_unknown_body"}}</p>
       <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
       </div>
     </div>
     {{else if .Coverage}}
@@ -141,7 +141,7 @@
             </td>
             <td>
               <div class="row-actions">
-                <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Stack}}" hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true">{{icon "stacks"}}<span class="sr-only">{{T "backups.stack_link"}}</span></a>
+                <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Stack}}" hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true" data-tip="{{T "backups.stack_link"}}" aria-label="{{T "backups.stack_link"}}">{{icon "stacks"}}<span class="sr-only">{{T "backups.stack_link"}}</span></a>
               </div>
             </td>
           </tr>
@@ -158,7 +158,7 @@
         <div class="kv-row"><span class="k">{{T "backups.coverage_col_last"}}</span><span class="v num">{{if .HasLast}}{{N0 .LastRevision}}{{else}}{{T "backups.age_unknown"}}{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "backups.coverage_col_at"}}</span><span class="v">{{if .HasLastAt}}{{ts .LastAt}} <span class="muted">{{TF "backups.stats_last_verified_foot" (N .AgeDays)}}</span>{{else}}<span class="muted">{{T "backups.age_unknown"}}</span>{{end}}</span></div>
         <div class="action-bar">
-          <a class="btn btn-sm" href="/web/stacks/{{.Stack}}" hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true">{{icon "stacks"}}<span>{{T "backups.stack_link"}}</span></a>
+          <a class="btn btn-sm" href="/web/stacks/{{.Stack}}" hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true" data-tip="{{T "backups.stack_link"}}">{{icon "stacks"}}<span>{{T "backups.stack_link"}}</span></a>
         </div>
       </div>
       {{end}}
@@ -169,7 +169,7 @@
       <h3>{{T "backups.coverage_empty_title"}}</h3>
       <p>{{T "backups.coverage_empty_body"}}</p>
       <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
+        <a class="btn btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.stacks"}}">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
       </div>
     </div>
     {{end}}
@@ -192,7 +192,7 @@
       <h3>{{T "backups.rows_unknown_title"}}</h3>
       <p>{{T "backups.rows_unknown_body"}}</p>
       <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
       </div>
     </div>
     {{else if $runs}}
@@ -229,8 +229,8 @@
             <td class="num">{{N .Archives}}</td>
             <td>
               <div class="row-actions">
-                {{if .Archives}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.ArchivePaths}}" onclick="copyVal(this)" title="{{T "backups.archives_copy"}}">{{icon "copy"}}<span class="sr-only">{{T "backups.archives_copy"}}</span></button>{{end}}
-                <a class="btn btn-ghost btn-sm" href="/web/backups/{{.ID}}/files" hx-get="/web/backups/{{.ID}}/files" hx-target="#view" hx-push-url="true" title="{{T "backups.action_browse"}}">{{icon "file"}}<span class="sr-only">{{T "backups.action_browse"}}</span></a>
+                {{if .Archives}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.ArchivePaths}}" onclick="copyVal(this)" data-tip="{{T "backups.archives_copy"}}" aria-label="{{T "backups.archives_copy"}}">{{icon "copy"}}<span class="sr-only">{{T "backups.archives_copy"}}</span></button>{{end}}
+                <a class="btn btn-ghost btn-sm" href="/web/backups/{{.ID}}/files" hx-get="/web/backups/{{.ID}}/files" hx-target="#view" hx-push-url="true" data-tip="{{T "backups.action_browse"}}" aria-label="{{T "backups.action_browse"}}">{{icon "file"}}<span class="sr-only">{{T "backups.action_browse"}}</span></a>
               </div>
             </td>
           </tr>
@@ -250,8 +250,8 @@
         <div class="kv-row"><span class="k">{{T "backups.col_archives"}}</span><span class="v">{{if .Archives}}{{TF "backups.archive_count" (N .Archives)}}{{else}}{{T "backups.no_archives"}}{{end}}</span></div>
         {{if .RunError}}<div class="kv-row"><span class="k">{{T "backups.raw_error"}}</span><span class="v"><pre>{{.RunError}}</pre></span></div>{{end}}
         <div class="action-bar">
-          {{if .Archives}}<button type="button" class="btn btn-sm" data-copy="{{.ArchivePaths}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "backups.archives_copy"}}</span></button>{{end}}
-          <a class="btn btn-sm" href="/web/backups/{{.ID}}/files" hx-get="/web/backups/{{.ID}}/files" hx-target="#view" hx-push-url="true">{{icon "file"}}<span>{{T "backups.action_browse"}}</span></a>
+          {{if .Archives}}<button type="button" class="btn btn-sm" data-copy="{{.ArchivePaths}}" onclick="copyVal(this)" data-tip="{{T "backups.archives_copy"}}">{{icon "copy"}}<span>{{T "backups.archives_copy"}}</span></button>{{end}}
+          <a class="btn btn-sm" href="/web/backups/{{.ID}}/files" hx-get="/web/backups/{{.ID}}/files" hx-target="#view" hx-push-url="true" data-tip="{{T "backups.action_browse"}}">{{icon "file"}}<span>{{T "backups.action_browse"}}</span></a>
         </div>
       </div>
       {{end}}
@@ -263,7 +263,7 @@
       <p>{{T "backups.rows_empty_body"}}</p>
       <div class="empty-actions">
         <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
-          <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
+          <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this" data-tip="{{T "backups.action_now"}}">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
         </form>
       </div>
     </div>

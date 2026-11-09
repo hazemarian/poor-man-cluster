@@ -5,7 +5,7 @@
     <p class="sub">{{T "observability.sub"}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability?tab={{.Tab}}&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true" hx-disabled-elt="this">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability?tab={{.Tab}}&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" data-tip="{{T "common.refresh"}}">
       {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
     </button>
   </div>
@@ -144,7 +144,7 @@
     <div class="panel-head">
       <h2>{{T "observability.nodes_title"}}</h2>
       <div class="ph-actions">
-        <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability/summary?range={{.Range}}" hx-target="#observability-summary" hx-swap="outerHTML" hx-indicator="#observability-summary .load-overlay" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+        <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability/summary?range={{.Range}}" hx-target="#observability-summary" hx-swap="outerHTML" hx-indicator="#observability-summary .load-overlay" hx-disabled-elt="this" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
       </div>
     </div>
     <div class="panel-body">
@@ -194,7 +194,7 @@
               <span class="obs-svc-name mono iso" dir="ltr" title="{{.Service}}{{if .Platform}} · {{T "nav.platform"}}{{end}}">{{.Service}}{{if .Platform}} <span class="pill plain">{{T "nav.platform"}}</span>{{end}}</span>
               <span class="obs-svc-rep num iso" dir="ltr">{{N .Replicas}} / {{if .DesiredKnown}}{{N .Desired}}{{else}}?{{end}}</span>
               <span class="obs-svc-state">{{if .Job}}<span class="pill plain">{{T "observability.job_unknown"}}</span>{{else if eq .Status "inactive"}}<span class="pill plain">{{T "st.inactive"}}</span>{{else if .Completed}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>{{else if .Ready}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{else}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>{{end}}</span>
-              <span class="obs-svc-act"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=logs&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-get="/web/observability?tab=logs&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-target="#view" hx-push-url="true">{{icon "overview"}}<span>{{T "obs.view_logs"}}</span></a></span>
+              <span class="obs-svc-act"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=logs&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-get="/web/observability?tab=logs&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-target="#view" hx-push-url="true" data-tip="{{T "obs.view_logs"}}">{{icon "overview"}}<span>{{T "obs.view_logs"}}</span></a></span>
             </li>
             {{end}}
           </ul>

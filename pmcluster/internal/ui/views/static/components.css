@@ -43,6 +43,99 @@
 .sidebar-close .ic { width: 20px; height: 20px; }
 .sidebar-close:hover { border-color: var(--text-tertiary); }
 
+/* ---------- tooltips ----------
+   One mechanism for every icon in the console: the text lives in data-tip and
+   is painted by the element's own ::after, so there is no title= attribute, no
+   JS and no per-control markup. Hover and keyboard focus raise the SAME box.
+
+   The tooltip is `position: fixed` and anchored to its trigger (CSS anchor
+   positioning). That is not decoration: this console has two scroll
+   containers — .table-wrap and .nav — and an absolutely positioned tooltip
+   inside `overflow: auto` is clipped at the scrollport edge. The action and
+   icon columns are flush against that edge, which is exactly where the
+   clipped case used to live. A fixed box anchored to the trigger is outside
+   the scroller's clip, so it stays visible; `anchor-scope` keeps every
+   trigger's `--tip` name local to itself, so one rule serves every element.
+
+   The three @position-try rules are the viewport guard: a tooltip near the
+   top flips below its trigger (--tip-below), one near the inline edge grows
+   inwards (--tip-start), and the combination covers a corner. Alignment uses
+   logical properties only, so the RTL layout needs no second rule, and the
+   box is `max-inline-size` + wrapping, because these are sentences. */
+[data-tip] { position: relative; anchor-name: --tip; anchor-scope: --tip; }
+[data-tip]::after {
+  content: attr(data-tip);
+  position: fixed;
+  position-anchor: --tip;
+  inset-block-end: anchor(top);
+  inset-inline-end: anchor(right);
+  margin-block-end: 7px;
+  z-index: 95;
+  inline-size: max-content;
+  max-inline-size: 22rem;
+  padding: 7px 10px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-overlay);
+  font-family: var(--sans);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  line-height: var(--lh-snug);
+  letter-spacing: normal;
+  text-align: start;
+  text-transform: none;
+  text-wrap: pretty;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  /* never eat the pointer (or the click) the tooltip is explaining */
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--t), visibility 0s linear .15s;
+  position-try-fallbacks: --tip-below, --tip-start, --tip-below-start;
+}
+@position-try --tip-below {
+  inset-block-end: auto;
+  inset-block-start: anchor(bottom);
+  margin-block-end: 0;
+  margin-block-start: 7px;
+}
+@position-try --tip-start {
+  inset-inline-end: auto;
+  inset-inline-start: anchor(left);
+}
+@position-try --tip-below-start {
+  inset-block-end: auto;
+  inset-block-start: anchor(bottom);
+  margin-block-end: 0;
+  margin-block-start: 7px;
+  inset-inline-end: auto;
+  inset-inline-start: anchor(left);
+}
+/* A 300ms delay on hover: crossing a row of icon buttons must not strobe six
+   tooltips. Focus shows at once — a keyboard user asked for it on purpose,
+   and :focus-within covers a wrapper around a disabled control (hover events
+   never reach a disabled button, but its wrapper is still hovered). */
+[data-tip]:hover::after { opacity: 1; visibility: visible; transition-delay: .3s, .3s; }
+[data-tip]:focus-visible::after,
+[data-tip]:focus-within::after { opacity: 1; visibility: visible; transition-delay: 0s, 0s; }
+
+/* Older engines (no anchor positioning) keep the tooltip, positioned the old
+   way: same box, but inside a scroller it can be clipped at the edge. Better
+   a clipped tooltip than none. */
+@supports not (position-anchor: --tip) {
+  [data-tip]::after {
+    position: absolute;
+    inset-block-start: auto;
+    inset-block-end: calc(100% + 7px);
+    inset-inline-start: auto;
+    inset-inline-end: 0;
+    margin-block-end: 0;
+  }
+}
+
 /* Shared language and appearance actions stay together on every page. */
 .preferences { display: flex; align-items: center; gap: var(--s-2); }
 .preference-control {
@@ -606,19 +699,31 @@ form.htmx-request [type="submit"] { pointer-events: none; }
 .pipeline-step + .pipeline-step::before { content: "\2192"; color: var(--text-tertiary); margin-inline-end: var(--s-2); }
 [dir="rtl"] .pipeline-step + .pipeline-step::before { content: "\2190"; }
 
+/* A wrapper around a DISABLED control. Pointer events never reach a disabled
+   button in several engines, so the tooltip (and the hover that raises it) lives
+   on the span; pointer-events:none on the control is what lets the wrapper hear
+   the pointer at all. */
+.tip-wrap { display: inline-flex; }
+.tip-wrap > :disabled { pointer-events: none; }
+
 /* A control that is not offered because the node does not qualify (a worker
-   cannot be a storage node: storage nodes read settings and credentials). It
-   reads as disabled rather than as plain muted text, so the operator can tell
-   "you may not" from "nothing here". Logical properties only, for RTL. */
+   cannot be a storage node: the backup agent reads cluster settings a worker
+   may not). The glyph IS the control now — it keeps the action column's width
+   — and the reason lives in its tooltip, because the inline sentence used to
+   widen the cell and shout every time the table rendered. Muted colour plus
+   aria-disabled (set in the template) is what says "you may not" rather than
+   "nothing here". Logical properties only, for RTL. */
 .needs-manager {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--s-1);
-  color: var(--text-secondary);
-  cursor: default;
-  white-space: nowrap;
+  display: inline-grid;
+  place-items: center;
+  inline-size: var(--control-h);
+  block-size: var(--control-h);
+  border-radius: var(--r-md);
+  color: var(--text-tertiary);
+  cursor: not-allowed;
 }
-.needs-manager .ic-sm { opacity: .55; }
+.needs-manager .ic { opacity: .55; }
+.needs-manager:hover, .needs-manager:focus-visible { background: var(--bg-hover); color: var(--text-secondary); }
 
 /* ---------- node resources (overview) ---------- */
 /* One row per node, two capped process lists per row. The lists are the only

@@ -5,11 +5,11 @@
     <p class="sub">{{TF "services.detail_sub" .FullName}}</p>
   </div>
   <div class="ph-actions">
-    <a class="btn btn-ghost btn-sm" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true">{{icon "services"}}<span>{{T "services.detail_back"}}</span></a>
+    <a class="btn btn-ghost btn-sm" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-tip="{{T "services.detail_back"}}">{{icon "services"}}<span>{{T "services.detail_back"}}</span></a>
     <form hx-post="/web/services/{{.Stack}}/{{.Service}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .FullName}}" hx-disabled-elt="find [type='submit']">
-      <button type="submit" class="btn btn-sm" hx-disabled-elt="this">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
+      <button type="submit" class="btn btn-sm" hx-disabled-elt="this" data-tip="{{T "services.action_restart"}}">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
     </form>
-    <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/{{.Tab}}" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
+    <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/{{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "err.retry_hint"}}" aria-label="{{T "common.retry"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
   </div>
 </div>
 
@@ -21,7 +21,7 @@
     {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
   </div>
   <div class="b-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/{{.Tab}}" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+    <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/{{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
   </div>
 </div>
 {{end}}
@@ -91,11 +91,11 @@
       {{/* Auto-refresh toggle. The label names the state it switches to, and
            the button lives in the panel head — outside the region the poll
            replaces — so its state survives every swap. */}}
-      <button type="button" class="btn btn-ghost btn-sm log-poll" data-poll-target="logs-body" data-poll-trigger="every 10s" aria-pressed="false" onclick="togglePoll(this)" title="{{T "services.logs_poll_hint"}}">
+      <button type="button" class="btn btn-ghost btn-sm log-poll" data-poll-target="logs-body" data-poll-trigger="every 10s" aria-pressed="false" onclick="togglePoll(this)" data-tip="{{T "services.logs_poll_hint"}}">
         {{icon "refresh"}}<span class="when-live">{{T "services.logs_pause"}}</span><span class="when-paused">{{T "services.logs_resume"}}</span>
       </button>
-      {{if .LogText}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.LogText}}" onclick="copyVal(this)" title="{{T "common.copy"}}">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>{{end}}
-      <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true" title="{{T "err.retry_hint"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
+      {{if .LogText}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.LogText}}" onclick="copyVal(this)" data-tip="{{T "common.copy"}}" aria-label="{{T "common.copy"}}">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>{{end}}
+      <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true" data-tip="{{T "err.retry_hint"}}" aria-label="{{T "common.retry"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
     </div>
   </div>
   <div class="panel-body">
@@ -124,7 +124,7 @@
       <h3>{{T "services.tasks_unknown_title"}}</h3>
       <p>{{T "services.tasks_unknown_body"}}</p>
       <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/tasks" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/tasks" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
       </div>
     </div>
     {{else if .Tasks}}
@@ -154,7 +154,7 @@
             <td class="muted iso" dir="ltr">{{ts .Started}}</td>
             <td>
               <div class="row-actions">
-                <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.TaskID}}" onclick="copyVal(this)" title="{{T "common.copy"}}">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>
+                <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.TaskID}}" onclick="copyVal(this)" data-tip="{{T "common.copy"}}" aria-label="{{T "common.copy"}}">{{icon "copy"}}<span class="sr-only">{{T "common.copy"}}</span></button>
               </div>
             </td>
           </tr>
@@ -189,7 +189,7 @@
         </span></div>
         {{end}}
         <div class="action-bar">
-          <button type="button" class="btn btn-sm" data-copy="{{.TaskID}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
+          <button type="button" class="btn btn-sm" data-copy="{{.TaskID}}" onclick="copyVal(this)" data-tip="{{T "common.copy"}}">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
         </div>
       </div>
       {{end}}
@@ -201,7 +201,7 @@
       <p>{{T "services.tasks_empty_body"}}</p>
       <div class="empty-actions">
         <form hx-post="/web/services/{{$.Stack}}/{{$.Service}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" $.FullName}}" hx-disabled-elt="find [type='submit']">
-          <button type="submit" class="btn btn-primary btn-sm">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
+          <button type="submit" class="btn btn-primary btn-sm" data-tip="{{T "services.action_restart"}}">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
         </form>
       </div>
     </div>
@@ -222,7 +222,7 @@
         <input id="svc-exec-argv" name="argv" class="finput mono" dir="ltr" value="{{.ExecArgv}}" placeholder="{{T "services.exec_placeholder"}}">
       </div>
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary" hx-disabled-elt="this">{{icon "play"}}<span>{{T "services.exec_submit"}}</span></button>
+        <button type="submit" class="btn btn-primary" hx-disabled-elt="this" data-tip="{{T "services.exec_submit"}}">{{icon "play"}}<span>{{T "services.exec_submit"}}</span></button>
       </div>
     </form>
   </div>

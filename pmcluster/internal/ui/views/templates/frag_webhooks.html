@@ -13,10 +13,10 @@
     <p class="sub">{{if .Configured}}{{T "webhooks.sub"}}{{else}}{{T "webhooks.not_configured_body"}}{{end}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
       {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
     </button>
-    <button type="button" class="btn btn-primary btn-sm" data-focus onclick="document.getElementById('wh-source').focus()">
+    <button type="button" class="btn btn-primary btn-sm" data-focus onclick="document.getElementById('wh-source').focus()" data-tip="{{T "webhooks.add_title"}}">
       {{icon "plus"}}<span>{{T "webhooks.add_title"}}</span>
     </button>
   </div>
@@ -42,9 +42,9 @@
   </div>
   <div class="b-actions">
     {{if eq .ErrKey "err.api_not_configured"}}
-    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
     {{else}}
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
     {{end}}
   </div>
 </div>
@@ -61,7 +61,7 @@
     <p>{{T "webhooks.secret_body"}}</p>
     <div class="input-group">
       <input id="wh-secret" class="finput mono iso" dir="ltr" readonly value="{{.Secret}}">
-      <button type="button" class="btn" data-copy="{{.Secret}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "webhooks.secret_copy"}}</span></button>
+      <button type="button" class="btn" data-copy="{{.Secret}}" onclick="copyVal(this)" data-tip="{{T "webhooks.secret_copy"}}">{{icon "copy"}}<span>{{T "webhooks.secret_copy"}}</span></button>
     </div>
     <div class="kv">
       <div class="kv-row"><span class="k">{{T "webhooks.col_source"}}</span><span class="v mono">{{.SecretSource}}</span></div>
@@ -127,7 +127,7 @@
       <h3>{{T "err.api_not_configured"}}</h3>
       <p>{{T "webhooks.not_configured_body"}}</p>
       <div class="empty-actions">
-        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
       </div>
     </div>
     {{else if .Known}}
@@ -152,11 +152,11 @@
               <td class="muted num">{{ts .CreatedAt}}</td>
               <td>
                 <div class="row-actions">
-                  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Source}}" onclick="copyVal(this)" title="{{T "webhooks.copy_source"}}">{{icon "copy"}}<span class="sr-only">{{T "webhooks.copy_source"}}</span></button>
-                  {{if .Endpoint}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Endpoint}}" onclick="copyVal(this)" title="{{T "webhooks.copy_endpoint"}}">{{icon "external"}}<span class="sr-only">{{T "webhooks.copy_endpoint"}}</span></button>{{end}}
-                  <a class="btn btn-ghost btn-sm" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true" title="{{T "webhooks.act_history"}}">{{icon "clock"}}<span class="sr-only">{{T "webhooks.act_history"}}</span></a>
+                  <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Source}}" onclick="copyVal(this)" data-tip="{{T "webhooks.copy_source"}}" aria-label="{{T "webhooks.copy_source"}}">{{icon "copy"}}<span class="sr-only">{{T "webhooks.copy_source"}}</span></button>
+                  {{if .Endpoint}}<button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Endpoint}}" onclick="copyVal(this)" data-tip="{{T "webhooks.copy_endpoint"}}" aria-label="{{T "webhooks.copy_endpoint"}}">{{icon "external"}}<span class="sr-only">{{T "webhooks.copy_endpoint"}}</span></button>{{end}}
+                  <a class="btn btn-ghost btn-sm" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true" data-tip="{{T "webhooks.act_history"}}" aria-label="{{T "webhooks.act_history"}}">{{icon "clock"}}<span class="sr-only">{{T "webhooks.act_history"}}</span></a>
                   <form hx-post="/web/webhooks/remove/{{.Source}}" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "webhooks.revoke_confirm" .Source}}" hx-disabled-elt="find [type='submit']">
-                    <button type="submit" class="btn btn-danger btn-sm">{{icon "trash"}}<span>{{T "webhooks.revoke"}}</span></button>
+                    <button type="submit" class="btn btn-danger btn-sm" data-tip="{{T "webhooks.revoke"}}">{{icon "trash"}}<span>{{T "webhooks.revoke"}}</span></button>
                   </form>
                 </div>
               </td>
@@ -174,10 +174,10 @@
           <div class="kv-row"><span class="k">{{T "webhooks.col_last"}}</span><span class="v muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "webhooks.never_used"}}{{end}}</span></div>
           <div class="kv-row"><span class="k">{{T "common.created"}}</span><span class="v muted num">{{ts .CreatedAt}}</span></div>
           <div class="action-bar">
-            <button type="button" class="btn btn-sm" data-copy="{{.Source}}" onclick="copyVal(this)">{{icon "copy"}}<span>{{T "webhooks.copy_source"}}</span></button>
-            {{if .Endpoint}}<button type="button" class="btn btn-sm" data-copy="{{.Endpoint}}" onclick="copyVal(this)">{{icon "external"}}<span>{{T "webhooks.copy_endpoint"}}</span></button>{{end}}
+            <button type="button" class="btn btn-sm" data-copy="{{.Source}}" onclick="copyVal(this)" data-tip="{{T "webhooks.copy_source"}}">{{icon "copy"}}<span>{{T "webhooks.copy_source"}}</span></button>
+            {{if .Endpoint}}<button type="button" class="btn btn-sm" data-copy="{{.Endpoint}}" onclick="copyVal(this)" data-tip="{{T "webhooks.copy_endpoint"}}">{{icon "external"}}<span>{{T "webhooks.copy_endpoint"}}</span></button>{{end}}
             <form hx-post="/web/webhooks/remove/{{.Source}}" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "webhooks.revoke_confirm" .Source}}" hx-disabled-elt="find [type='submit']">
-              <button type="submit" class="btn btn-danger btn-sm">{{icon "trash"}}<span>{{T "webhooks.revoke"}}</span></button>
+              <button type="submit" class="btn btn-danger btn-sm" data-tip="{{T "webhooks.revoke"}}">{{icon "trash"}}<span>{{T "webhooks.revoke"}}</span></button>
             </form>
           </div>
         </div>
@@ -189,7 +189,7 @@
         <h3>{{T "webhooks.empty_title"}}</h3>
         <p>{{T "webhooks.empty_body"}}</p>
         <div class="empty-actions">
-          <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('wh-source').focus()">{{icon "plus"}}<span>{{T "webhooks.empty_action"}}</span></button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('wh-source').focus()" data-tip="{{T "webhooks.empty_action"}}">{{icon "plus"}}<span>{{T "webhooks.empty_action"}}</span></button>
         </div>
       </div>
       {{end}}
@@ -199,7 +199,7 @@
       <h3>{{T "webhooks.unknown_title"}}</h3>
       <p>{{T "webhooks.unknown_body"}}</p>
       <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+        <button type="button" class="btn btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
       </div>
     </div>
     {{end}}
@@ -230,7 +230,7 @@
         </div>
       </div>
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary">{{icon "plus"}}<span>{{T "webhooks.create_action"}}</span></button>
+        <button type="submit" class="btn btn-primary" data-tip="{{T "webhooks.create_action"}}">{{icon "plus"}}<span>{{T "webhooks.create_action"}}</span></button>
         <span class="hint">{{T "webhooks.create_missing"}}</span>
       </div>
     </form>
