@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -89,7 +90,10 @@ func init() {
 	setupCmd.Flags().String("storage-mode", "loop", "how the snapshot-capable app-data volume is backed: loop (a file, no operator action needed), lvm (a block device) or none")
 	setupCmd.Flags().String("storage-size", "auto", "backing-file size for the app-data volume (auto = half of free space, clamped to 8 GiB..128 GiB)")
 	setupCmd.Flags().Bool("github-runners-enabled", false, "enable self-hosted GitHub Actions runners (requires a configured GitHub App)")
-	setupCmd.Flags().String("github-runner-repos", "", "comma-separated owner/name repositories that get a runner (private only; default: $PMCLUSTER_GITHUB_RUNNER_REPOS)")
+	setupCmd.Flags().String("github-runner-org", "", "GitHub organisation whose runner group the runner registers into (default: $PMCLUSTER_GITHUB_RUNNER_ORG)")
+	setupCmd.Flags().String("github-runner-group", cluster.DefaultGitHubRunnerGroup, "org runner group the runner joins (created with visibility 'selected' when absent; never 'all')")
+	setupCmd.Flags().String("github-runner-nodes", "", "comma-separated WORKER hostnames that may run a runner; managers are refused (default: $PMCLUSTER_GITHUB_RUNNER_NODES)")
+	setupCmd.Flags().Bool("github-runner-socket-proxy", true, "route a runner's docker access through the daemon's filtered socket instead of /var/run/docker.sock")
 	setupCmd.Flags().String("github-runner-memory", "", "memory limit per runner container (default 2560m)")
 	setupCmd.Flags().Bool("github-runner-allow-leader", false, "allow runner containers on the leader (single-node clusters only; default: off the leader)")
 	setupCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
@@ -150,7 +154,10 @@ type setupAnswers struct {
 	// and refused without a configured GitHub App — see
 	// settings.normalizeRunnerSetting for why a PAT is not a substitute.
 	GitHubRunnersEnabled    bool
-	GitHubRunnerRepos       string
+	GitHubRunnerOrg         string
+	GitHubRunnerGroup       string
+	GitHubRunnerNodes       string
+	GitHubRunnerSocketProxy bool
 	GitHubRunnerMemory      string
 	GitHubRunnerAllowLeader bool
 
@@ -295,20 +302,29 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		}
 		a.EdgeLoginEnabled = askYesNo(r, out, "Keep edge console password login?", false)
 		// Runners are the CI answer to exhausted GitHub-hosted minutes. The
-		// prompt states the two things that make it a decision rather than a
-		// default: private repos only, and the host docker socket.
+		// prompt states the three things that make it a decision rather than a
+		// default: one container per selected WORKER, an org-level registration
+		// scoped by a runner group, and the filtered docker socket.
 		a.GitHubRunnersEnabled = askYesNo(r, out,
-			"Enable self-hosted GitHub Actions runners? (private repos only; the runner can use the host's docker socket)",
+			"Enable self-hosted GitHub Actions runners? (one container per selected worker; skippable)",
 			st.SettingDefault(ctx, cluster.SettingGitHubRunnersEnabled(), "") == "true")
 		if a.GitHubRunnersEnabled {
-			fmt.Fprintln(out, "  Runners are registered with the GitHub App's installation token, so the App must")
-			fmt.Fprintln(out, "  already be configured (`pmcluster github app set`). Only private repositories.")
-			a.GitHubRunnerRepos = ask(r, out, "Repositories that get a runner, comma-separated (owner/name)",
-				st.SettingDefault(ctx, cluster.SettingGitHubRunnerRepos(), ""))
+			fmt.Fprintln(out, "  Runners register at ORG level with the GitHub App's installation token, so the App must")
+			fmt.Fprintln(out, "  already be configured (`pmcluster github app set`) and hold Organization →")
+			fmt.Fprintln(out, "  Administration: Read & write.")
+			a.GitHubRunnerOrg = ask(r, out, "GitHub organisation for the runner",
+				cluster.LoadGitHubRunnerOrg(ctx, st))
+			a.GitHubRunnerGroup = ask(r, out, "Runner group (created with visibility 'selected')",
+				cluster.LoadGitHubRunnerGroup(ctx, st))
+			a.GitHubRunnerNodes = ask(r, out, "WORKER hostnames that may run a runner, comma-separated (managers are refused)",
+				cluster.LoadGitHubRunnerNodes(ctx, st))
+			a.GitHubRunnerSocketProxy = askYesNo(r, out,
+				"Route the runner's docker access through the filtered socket? (say no only to debug a build)",
+				cluster.LoadGitHubRunnerSocketProxy(ctx, st))
 			a.GitHubRunnerMemory = ask(r, out, "Memory limit per runner",
 				cluster.LoadGitHubRunnerMemory(ctx, st))
 			a.GitHubRunnerAllowLeader = askYesNo(r, out,
-				"Allow runners on the leader? (only on a single-node cluster)",
+				"Allow a runner container on the leader? (only on a single-node cluster)",
 				st.SettingDefault(ctx, cluster.SettingGitHubRunnerAllowLeader(), "") == "true")
 		}
 		a.VolumeRoot = ask(r, out, "Container volume root dir", st.SettingDefault(ctx, cluster.SettingVolumeRoot(), manifest.DefaultVolumeRoot))
@@ -387,7 +403,10 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.StorageMode, _ = cmd.Flags().GetString("storage-mode")
 		a.StorageSize, _ = cmd.Flags().GetString("storage-size")
 		a.GitHubRunnersEnabled, _ = cmd.Flags().GetBool("github-runners-enabled")
-		a.GitHubRunnerRepos, _ = cmd.Flags().GetString("github-runner-repos")
+		a.GitHubRunnerOrg, _ = cmd.Flags().GetString("github-runner-org")
+		a.GitHubRunnerGroup, _ = cmd.Flags().GetString("github-runner-group")
+		a.GitHubRunnerNodes, _ = cmd.Flags().GetString("github-runner-nodes")
+		a.GitHubRunnerSocketProxy, _ = cmd.Flags().GetBool("github-runner-socket-proxy")
 		a.GitHubRunnerMemory, _ = cmd.Flags().GetString("github-runner-memory")
 		a.GitHubRunnerAllowLeader, _ = cmd.Flags().GetBool("github-runner-allow-leader")
 		if !cmd.Flags().Changed("github-runners-enabled") {
@@ -395,9 +414,19 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 				a.GitHubRunnersEnabled = envBool(v)
 			}
 		}
-		if !cmd.Flags().Changed("github-runner-repos") {
-			if v := os.Getenv("PMCLUSTER_GITHUB_RUNNER_REPOS"); v != "" {
-				a.GitHubRunnerRepos = v
+		if !cmd.Flags().Changed("github-runner-org") {
+			if v := os.Getenv("PMCLUSTER_GITHUB_RUNNER_ORG"); v != "" {
+				a.GitHubRunnerOrg = v
+			}
+		}
+		if !cmd.Flags().Changed("github-runner-nodes") {
+			if v := os.Getenv("PMCLUSTER_GITHUB_RUNNER_NODES"); v != "" {
+				a.GitHubRunnerNodes = v
+			}
+		}
+		if !cmd.Flags().Changed("github-runner-socket-proxy") {
+			if v := os.Getenv("PMCLUSTER_GITHUB_RUNNER_SOCKET_PROXY"); v != "" {
+				a.GitHubRunnerSocketProxy = envBool(v)
 			}
 		}
 		if v := os.Getenv("PMCLUSTER_STORAGE_MODE"); v != "" && !cmd.Flags().Changed("storage-mode") {
@@ -576,12 +605,14 @@ func validateRunnerSetup(ctx context.Context, st *store.Store, a setupAnswers, o
 	if _, err := st.GitHubApp(ctx); err != nil {
 		return fmt.Errorf("self-hosted runners require a configured GitHub App: they register with an App installation token (`pmcluster github app set --app-id … --key-file …`). A personal access token is not an acceptable substitute — it would need administration:write on every repository, a long-lived credential with a far wider blast radius than the hour-long App token")
 	}
-	repos, err := runners.NormalizeRepos(a.GitHubRunnerRepos)
-	if err != nil {
-		return fmt.Errorf("github-runner-repos: %w", err)
+	if _, err := runners.NormalizeOrg(a.GitHubRunnerOrg); err != nil {
+		return fmt.Errorf("github-runner-org: %w", err)
 	}
-	if repos == "" {
-		fmt.Fprintln(out, "  ⚠ runners are enabled with no repositories — nothing will be registered until github_runner_repos lists one")
+	if _, err := runners.NormalizeGroup(a.GitHubRunnerGroup); err != nil {
+		return fmt.Errorf("github-runner-group: %w", err)
+	}
+	if _, err := runners.NormalizeNodes(a.GitHubRunnerNodes); err != nil {
+		return fmt.Errorf("github-runner-nodes: %w", err)
 	}
 	if a.GitHubRunnerMemory != "" {
 		if err := runners.ValidateMemory(a.GitHubRunnerMemory); err != nil {
@@ -734,13 +765,15 @@ func boolSetting(b bool) string {
 // skipped validation, and then persisting the raw value is no worse than
 // dropping it.
 func runnerSettings(a setupAnswers) map[string]string {
-	repos := a.GitHubRunnerRepos
-	if n, err := runners.NormalizeRepos(repos); err == nil {
-		repos = n
-	}
+	org, _ := runners.NormalizeOrg(a.GitHubRunnerOrg)
+	group, _ := runners.NormalizeGroup(a.GitHubRunnerGroup)
+	nodes, _ := runners.NormalizeNodes(a.GitHubRunnerNodes)
 	return map[string]string{
 		cluster.SettingGitHubRunnersEnabled():    boolSetting(a.GitHubRunnersEnabled),
-		cluster.SettingGitHubRunnerRepos():       repos,
+		cluster.SettingGitHubRunnerOrg():         org,
+		cluster.SettingGitHubRunnerGroup():       group,
+		cluster.SettingGitHubRunnerNodes():       nodes,
+		cluster.SettingGitHubRunnerSocketProxy(): strconv.FormatBool(a.GitHubRunnerSocketProxy),
 		cluster.SettingGitHubRunnerMemory():      strings.TrimSpace(a.GitHubRunnerMemory),
 		cluster.SettingGitHubRunnerAllowLeader(): boolSetting(a.GitHubRunnerAllowLeader),
 	}

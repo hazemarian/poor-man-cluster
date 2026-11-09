@@ -1,0 +1,148 @@
+package runners
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os/exec"
+	"strings"
+)
+
+// Container is one local docker container as the runner lifecycle sees it. It is
+// deliberately small: the name (the identity the platform owns), whether it is
+// running, and its bind mounts (which is how the doctor proves a runner is not
+// holding the host's raw socket).
+type Container struct {
+	ID     string
+	Name   string
+	Image  string
+	State  string // running | exited | created | dead
+	Binds  []string
+	Labels map[string]string
+}
+
+// Running reports whether the container has a live process.
+func (c Container) Running() bool { return strings.EqualFold(c.State, "running") }
+
+// HasRawSocketMount reports whether the container binds the host's docker socket
+// at /var/run/docker.sock — the exposure the socket proxy exists to remove.
+func (c Container) HasRawSocketMount() bool {
+	for _, b := range c.Binds {
+		if strings.HasPrefix(b, "/var/run/docker.sock:") && strings.Contains(b, ":/var/run/docker.sock") {
+			return true
+		}
+	}
+	return false
+}
+
+// LocalDocker is the node-local container surface the lifecycle needs. The
+// production implementation shells out to the docker CLI (the platform already
+// does for stack deploy, login and service ps); tests substitute a fake that
+// records argv, which is the strongest assertion available for "the runner got
+// exactly these mounts and no others".
+type LocalDocker interface {
+	// Run creates and starts a detached container: argv is Spec.Argv().
+	Run(ctx context.Context, argv []string) error
+	// Remove force-removes a container by name. Idempotent: a missing container
+	// is success.
+	Remove(ctx context.Context, name string) error
+	// Inspect returns one container. ok=false means it does not exist.
+	Inspect(ctx context.Context, name string) (Container, bool, error)
+}
+
+// CLIDocker implements LocalDocker by running the docker binary. Every call is
+// bounded by the caller's context; no shell is involved, so a registration token
+// in an environment argument is never re-interpreted.
+type CLIDocker struct {
+	// Bin is the docker binary (default "docker").
+	Bin string
+	// Exec runs the binary and returns its combined output. Nil uses
+	// exec.CommandContext. Tests replace it to assert the argv.
+	Exec func(ctx context.Context, bin string, args ...string) ([]byte, error)
+}
+
+func (d *CLIDocker) bin() string {
+	if d.Bin != "" {
+		return d.Bin
+	}
+	return "docker"
+}
+
+func (d *CLIDocker) exec(ctx context.Context, args ...string) ([]byte, error) {
+	if d.Exec != nil {
+		return d.Exec(ctx, d.bin(), args...)
+	}
+	out, err := exec.CommandContext(ctx, d.bin(), args...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+// Run executes `docker run -d …` with the argv the Spec built.
+func (d *CLIDocker) Run(ctx context.Context, argv []string) error {
+	if len(argv) == 0 {
+		return fmt.Errorf("docker run: empty argument vector")
+	}
+	_, err := d.exec(ctx, argv...)
+	return err
+}
+
+// Remove executes `docker rm -f <name>`. A container that is already gone is
+// success: teardown must be idempotent.
+func (d *CLIDocker) Remove(ctx context.Context, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("docker rm: empty container name")
+	}
+	if _, err := d.exec(ctx, "rm", "-f", name); err != nil {
+		if strings.Contains(err.Error(), "No such container") || strings.Contains(err.Error(), "no such container") {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// Inspect executes `docker inspect` and decodes the fields the lifecycle needs.
+func (d *CLIDocker) Inspect(ctx context.Context, name string) (Container, bool, error) {
+	if strings.TrimSpace(name) == "" {
+		return Container{}, false, fmt.Errorf("docker inspect: empty container name")
+	}
+	out, err := d.exec(ctx, "inspect", name)
+	if err != nil {
+		if strings.Contains(err.Error(), "No such object") || strings.Contains(err.Error(), "no such object") ||
+			strings.Contains(err.Error(), "No such container") {
+			return Container{}, false, nil
+		}
+		return Container{}, false, err
+	}
+	var raw []struct {
+		ID     string `json:"Id"`
+		Name   string `json:"Name"`
+		Image  string `json:"Image"`
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+		HostConfig struct {
+			Binds []string `json:"Binds"`
+		} `json:"HostConfig"`
+		State struct {
+			Status string `json:"Status"`
+		} `json:"State"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return Container{}, false, fmt.Errorf("decode docker inspect %s: %w", name, err)
+	}
+	if len(raw) == 0 {
+		return Container{}, false, nil
+	}
+	c := raw[0]
+	return Container{
+		ID:     c.ID,
+		Name:   strings.TrimPrefix(c.Name, "/"),
+		Image:  c.Image,
+		State:  c.State.Status,
+		Binds:  c.HostConfig.Binds,
+		Labels: c.Config.Labels,
+	}, true, nil
+}

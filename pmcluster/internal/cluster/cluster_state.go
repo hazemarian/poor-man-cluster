@@ -136,13 +136,41 @@ const (
 	// is never something the platform turns on for an operator.
 	settingGitHubRunnersEnabled = "github_runners_enabled"
 
-	// settingGitHubRunnerRepos is the comma-separated list of repositories
-	// (owner/name) that get a runner. Comma-separated — not a repeated flag —
-	// so the console's single text field and `cluster settings set` carry the
-	// same shape. Only private repositories are accepted: a runner is
-	// registered with a repo-scoped registration token, and a public repo's
-	// fork PRs would then run arbitrary code on a host-mounted docker socket.
-	settingGitHubRunnerRepos = "github_runner_repos"
+	// settingGitHubRunnerOrg is the GitHub organisation whose runner group this
+	// platform registers one runner into. Org-level (not per-repo) because one
+	// registration serves every repository the group selects instead of one
+	// registration per repository. It is also the scope the group's visibility
+	// is checked against — see settingGitHubRunnerGroup.
+	settingGitHubRunnerOrg = "github_runner_org"
+
+	// settingGitHubRunnerGroup is the org runner group the runner joins
+	// (`--runnergroup`). A group is the only scope knob GitHub offers an
+	// org-level runner, and its visibility decides which repositories may
+	// schedule onto it. The platform creates it when absent with visibility
+	// "selected" and refuses "all": an all-visible runner executes workflow
+	// code from ANY repository in the organisation, including one an attacker
+	// can push to — on a container holding the host's docker socket.
+	settingGitHubRunnerGroup = "github_runner_group"
+
+	// settingGitHubRunnerNodes is the comma-separated list of worker hostnames
+	// allowed to run a runner. A runner is a LOCAL container on the node that is
+	// listed for it, not a swarm service, so the list is the capacity model:
+	// N nodes = N runners. Managers (and the leader in particular) are refused —
+	// a build on the control plane's 1-vCPU manager marks the node Down and takes
+	// the cluster's API with it.
+	settingGitHubRunnerNodes = "github_runner_nodes"
+
+	// settingGitHubRunnerSocketProxy makes runners talk to the platform's own
+	// filtered docker socket (internal/socketproxy) instead of the host's real
+	// one. Default true. The raw-socket fallback exists for debugging a build
+	// against a daemon the filter does not cover; it is unsafe for any workflow
+	// the operator does not control.
+	settingGitHubRunnerSocketProxy = "github_runner_socket_proxy"
+
+	// settingGitHubRunnerSocketPath is where the filtered socket lives on every
+	// node. A unix socket, root:root 0660, bind-mounted read-write into the
+	// runner: no host port, no overlay exposure.
+	settingGitHubRunnerSocketPath = "github_runner_socket_path"
 
 	// settingGitHubRunnerMemory caps each runner container. 2560m is the
 	// value proven on real hardware: at 1500m govulncheck OOM-killed the
@@ -208,15 +236,80 @@ func SettingStorageFailover() string   { return settingStorageFailover }
 // The self-hosted runner settings, exposed for the setup wizard and the
 // runner reconcile loop (which read them through the store directly).
 func SettingGitHubRunnersEnabled() string    { return settingGitHubRunnersEnabled }
-func SettingGitHubRunnerRepos() string       { return settingGitHubRunnerRepos }
+func SettingGitHubRunnerOrg() string         { return settingGitHubRunnerOrg }
+func SettingGitHubRunnerGroup() string       { return settingGitHubRunnerGroup }
+func SettingGitHubRunnerNodes() string       { return settingGitHubRunnerNodes }
+func SettingGitHubRunnerSocketProxy() string { return settingGitHubRunnerSocketProxy }
+func SettingGitHubRunnerSocketPath() string  { return settingGitHubRunnerSocketPath }
 func SettingGitHubRunnerMemory() string      { return settingGitHubRunnerMemory }
 func SettingGitHubRunnerAllowLeader() string { return settingGitHubRunnerAllowLeader }
+
+// DefaultGitHubRunnerSocketPath is where internal/socketproxy listens on every
+// node. /run is tmpfs: the socket cannot outlive a reboot, which is the desired
+// lifecycle for a credential-like path.
+const DefaultGitHubRunnerSocketPath = "/run/pmcluster/docker.sock"
+
+// LoadGitHubRunnerNodes returns the persisted node list verbatim (the caller
+// parses it; keeping the raw string preserves the operator's order).
+func LoadGitHubRunnerNodes(ctx context.Context, st *store.Store) string {
+	if st == nil {
+		return ""
+	}
+	return strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerNodes, ""))
+}
+
+// LoadGitHubRunnerSocketProxy reports whether runners use the filtered socket
+// (github_runner_socket_proxy). Unset means ON: the raw socket is the debug
+// fallback, not the default.
+func LoadGitHubRunnerSocketProxy(ctx context.Context, st *store.Store) bool {
+	if st == nil {
+		return true
+	}
+	return strings.ToLower(strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerSocketProxy, "true"))) != "false"
+}
+
+// LoadGitHubRunnerSocketPath returns the filtered socket path, defaulting to
+// DefaultGitHubRunnerSocketPath.
+func LoadGitHubRunnerSocketPath(ctx context.Context, st *store.Store) string {
+	if st == nil {
+		return DefaultGitHubRunnerSocketPath
+	}
+	if v := strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerSocketPath, "")); v != "" {
+		return v
+	}
+	return DefaultGitHubRunnerSocketPath
+}
 
 // DefaultGitHubRunnerMemory is the runner memory limit when
 // github_runner_memory is unset. 2560m is what completed a govulncheck run on
 // real hardware after 1500m was OOM-killed; lowering it is how a CI job dies
 // halfway with a runner that looks healthy from the outside.
 const DefaultGitHubRunnerMemory = "2560m"
+
+// DefaultGitHubRunnerGroup is the runner group the platform creates when
+// github_runner_group is unset. Named after the platform so an operator can see
+// at a glance which group its runners live in.
+const DefaultGitHubRunnerGroup = "pmcluster"
+
+// LoadGitHubRunnerGroup returns the persisted runner group, falling back to
+// DefaultGitHubRunnerGroup when unset or blank.
+func LoadGitHubRunnerGroup(ctx context.Context, st *store.Store) string {
+	if st == nil {
+		return DefaultGitHubRunnerGroup
+	}
+	if v := strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerGroup, "")); v != "" {
+		return v
+	}
+	return DefaultGitHubRunnerGroup
+}
+
+// LoadGitHubRunnerOrg returns the persisted organisation, trimmed, or "".
+func LoadGitHubRunnerOrg(ctx context.Context, st *store.Store) string {
+	if st == nil {
+		return ""
+	}
+	return strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerOrg, ""))
+}
 
 // LoadGitHubRunnersEnabled reports whether the platform manages self-hosted
 // runners (github_runners_enabled=true). Absent means off.

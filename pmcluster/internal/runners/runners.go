@@ -1,9 +1,13 @@
 // Package runners manages the platform's self-hosted GitHub Actions runners:
-// one ephemeral runner container per configured private repository, registered
-// with a GitHub App installation token, reconciled by the control loop.
+// ONE ephemeral runner container per node, registered at ORG level into a
+// GitHub runner group, reconciled by the control loop.
 //
-// Why the platform owns this at all: the org's GitHub-hosted minutes run out,
-// and a repo-scoped self-hosted runner is the cheapest way to keep CI working.
+// Why org-level and not per-repo: one registration serves every repository the
+// runner group selects, so a new repository does not need a new runner (and a
+// removed one does not need a runner torn down). Org-level registration is also
+// what the operator's hand-built runner already does, so the platform's view and
+// reality line up.
+//
 // Why it is a first-class feature instead of a hand-run `docker run`: a runner
 // left behind after the setting is turned off keeps polling GitHub and keeps
 // holding a host-mounted docker socket (root-equivalent), which is exactly the
@@ -12,21 +16,29 @@
 // Three invariants this package enforces, each because breaking it is a
 // security or cost incident rather than a bug:
 //
-//  1. Only PRIVATE repositories. A registration token is scoped to one repo,
-//     and a public repository's fork PRs would run arbitrary workflow code on a
-//     container with /var/run/docker.sock mounted. The reconcile refuses a
-//     public repo instead of registering it.
+//  1. The runner group's visibility is `selected`, NEVER `all`. A runner in an
+//     all-visible group executes workflow code from any repository in the
+//     organisation, including one an attacker can push to — on a container that
+//     has the host's docker socket. The group is created `selected` and an
+//     existing `all` group is refused by name.
 //  2. No host networking. The runner reaches GitHub over the stack's own
 //     bridge network; nothing on the host's network namespace is exposed.
 //  3. Placement off the leader by default. Runners build images and compete
 //     with the control plane for CPU; the constraint is in the rendered spec,
 //     not a convention. A single-node cluster sets github_runner_allow_leader.
 //
-// Lifecycle is "ensure one running container per repo": each container runs
-// with --ephemeral (one job, then exit). When it exits, the next reconcile mints
-// a fresh registration token and redeploys the one-service stack, because a
-// registration token is single-use and an hour-lived — it cannot be baked into
-// a long-running service spec.
+// Lifecycle is "one running container": it runs with --ephemeral (one job, then
+// exit). When it exits, the next reconcile mints a fresh registration token and
+// redeploys the one-service stack, because a registration token is single-use
+// and an hour-lived — it cannot be baked into a long-running service spec.
+//
+// The feature switch is the ONLY thing that decides whether a runner exists.
+// Every surface (setup wizard, `cluster settings`, console, doctor, reconcile)
+// reads github_runners_enabled; nothing derives its own opinion. Turning it off
+// tears down: containers removed by their `pmcluster.runner` label, registrations
+// deleted by the name on that label (or the one in the bookkeeping), rows
+// cleared. It is idempotent, and a GitHub outage does not stop the containers
+// from coming off the node.
 package runners
 
 import (
@@ -35,7 +47,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -43,11 +54,12 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
-// DefaultImage is the runner image. It reads REPO_URL / RUNNER_TOKEN /
-// RUNNER_NAME / LABELS / EPHEMERAL from the environment, which is the contract
-// the rendered stack relies on. Overridable per cluster only by changing this
-// constant — deliberately not a setting: an arbitrary image here would run with
-// the host's docker socket, so it is not an operator-editable knob.
+// DefaultImage is the runner image. It reads ORG_NAME / RUNNER_GROUP /
+// RUNNER_TOKEN / RUNNER_NAME / LABELS / EPHEMERAL from the environment, which is
+// the contract the rendered stack relies on. Overridable per cluster only by
+// changing this constant — deliberately not a setting: an arbitrary image here
+// would run with the host's docker socket, so it is not an operator-editable
+// knob.
 const DefaultImage = "myoung34/github-runner:latest"
 
 // Labels the runner registers with. self-hosted and linux come from GitHub;
@@ -56,32 +68,45 @@ const DefaultImage = "myoung34/github-runner:latest"
 const Labels = "self-hosted,linux,x64,pmcluster"
 
 // RunnerNamePrefix marks every runner this platform registers. The prefix is
-// reserved: de-registration removes the platform's runners in a repo by
-// matching it, so a hand-made runner named pmc-* would be removed too.
+// reserved: it is how a stray platform runner is recognised (and reported) in
+// the org's runner list.
 const RunnerNamePrefix = "pmc-"
 
-// StackNamePrefix names each repo's one-service stack. One stack per repo (not
-// one stack with N services) so removing a repo removes exactly its runner and
-// leaves the others' tasks alone.
+// StackNamePrefix names the runner container. Kept for the legacy prefix check
+// only: a container named with it is one this platform used to create.
 const StackNamePrefix = "pmcluster-runner-"
 
-// Service labels the reconcile uses to discover what exists. They are the
-// "actual" half of desired-vs-actual: no table needs to be trusted for the
-// containers, only for the de-registration bookkeeping.
+// Service labels the reconcile uses to discover what exists — and, just as
+// importantly, to know what the platform OWNS: teardown removes only services
+// carrying LabelRunner=true, never a container someone started by hand.
 const (
 	LabelRunner = "pmcluster.runner"
-	LabelRepo   = "pmcluster.runner.repo"
+	LabelOrg    = "pmcluster.runner.org"
 	LabelName   = "pmcluster.runner.name"
 )
 
 // Config is one reconcile's view of the runner settings.
 type Config struct {
-	Enabled     bool
-	Repos       []string
+	Enabled bool
+	// Org is the GitHub organisation the runner registers into.
+	Org string
+	// Group is the org runner group the runner joins.
+	Group string
+	// Nodes are the hostnames allowed to run a runner, in the order the
+	// operator picked them. Empty with Enabled=true is a refusal: a feature
+	// that is on but runs nowhere is the "half-enabled" state this setting
+	// exists to make impossible.
+	Nodes []string
+	// SocketProxy makes runners talk to the platform's filtered docker socket
+	// instead of the host's real one. Default true; the raw mount is a
+	// debugging fallback and is documented as unsafe for untrusted workflows.
+	SocketProxy bool
+	// SocketPath is the filtered socket the runner mounts.
+	SocketPath  string
 	Memory      string
 	AllowLeader bool
-	// Node is the platform node the daemon runs on; it is the stable half of
-	// the runner name (pmc-<node>-<repo-short>).
+	// Node is THIS daemon's hostname: the node that decides whether it runs a
+	// runner, and the stable half of the runner name (pmc-<node>-org).
 	Node string
 	// Image overrides DefaultImage (tests, or a future per-cluster pin).
 	Image string
@@ -89,79 +114,139 @@ type Config struct {
 
 // LoadConfig reads the runner settings from the store.
 func LoadConfig(ctx context.Context, st *store.Store, node string) Config {
-	cfg := Config{
+	return Config{
 		Enabled:     cluster.LoadGitHubRunnersEnabled(ctx, st),
-		Repos:       ParseRepos(settingValue(ctx, st, cluster.SettingGitHubRunnerRepos())),
+		Org:         cluster.LoadGitHubRunnerOrg(ctx, st),
+		Group:       cluster.LoadGitHubRunnerGroup(ctx, st),
+		Nodes:       ParseNodes(cluster.LoadGitHubRunnerNodes(ctx, st)),
+		SocketProxy: cluster.LoadGitHubRunnerSocketProxy(ctx, st),
+		SocketPath:  cluster.LoadGitHubRunnerSocketPath(ctx, st),
 		Memory:      cluster.LoadGitHubRunnerMemory(ctx, st),
 		AllowLeader: cluster.LoadGitHubRunnerAllowLeader(ctx, st),
 		Node:        node,
 		Image:       DefaultImage,
 	}
-	return cfg
 }
 
-func settingValue(ctx context.Context, st *store.Store, key string) string {
-	if st == nil {
-		return ""
+// WatchesNode reports whether this daemon's node is one of the selected runner
+// nodes (compared case-insensitively: Swarm hostnames are lowercased, an
+// operator's list need not be).
+func (c Config) WatchesNode() bool {
+	for _, n := range c.Nodes {
+		if strings.EqualFold(strings.TrimSpace(n), strings.TrimSpace(c.Node)) {
+			return true
+		}
 	}
-	return st.SettingDefault(ctx, key, "")
+	return false
 }
 
-// ParseRepos splits the comma-separated github_runner_repos value into a
-// deduped, order-preserving list. Comma-separated is the chosen shape (not a
-// repeated flag) because the same string is the console's single text field,
-// the `cluster settings set` value, and the setup wizard's answer.
-func ParseRepos(raw string) []string {
+// ParseNodes splits the comma-separated github_runner_nodes value into a
+// deduped, order-preserving list of hostnames.
+func ParseNodes(raw string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, part := range strings.Split(raw, ",") {
 		part = strings.TrimSpace(part)
-		if part == "" || seen[part] {
+		if part == "" {
 			continue
 		}
-		seen[part] = true
+		key := strings.ToLower(part)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		out = append(out, part)
 	}
 	return out
 }
 
-// NormalizeRepos validates every entry and returns the canonical
-// comma-separated form (trimmed, deduped, order preserved). An invalid entry
-// fails the whole value: silently dropping a typo would leave a repo the
-// operator believes has a runner with none, and nothing would say so.
-func NormalizeRepos(raw string) (string, error) {
-	repos := ParseRepos(raw)
-	for _, r := range repos {
-		if err := ValidateRepo(r); err != nil {
-			return "", err
-		}
-	}
-	return strings.Join(repos, ","), nil
-}
+var reHostname = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,252}[A-Za-z0-9])?$`)
 
-var reRepoPart = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-
-// ValidateRepo accepts only owner/name. The value ends up in API paths and in
-// a stack name, so a path-like or spaced value is refused rather than escaped.
-func ValidateRepo(repo string) error {
-	parts := strings.Split(repo, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return fmt.Errorf("repository must be owner/name, got %q", repo)
+// ValidateNodes checks every entry as a hostname and refuses an empty list. The
+// role check (no managers, no leader) needs the live node list, so it happens in
+// the reconcile and in the console's picker; this is the shape check every
+// surface can make.
+func ValidateNodes(raw string) error {
+	nodes := ParseNodes(raw)
+	if len(nodes) == 0 {
+		return fmt.Errorf("github_runner_nodes is required when runners are enabled: list the worker hostnames that may run one (a runner is a local container on the node it is listed for)")
 	}
-	for _, p := range parts {
-		if p == "." || p == ".." || !reRepoPart.MatchString(p) {
-			return fmt.Errorf("repository %q is not a valid owner/name (letters, digits, '.', '_' and '-' only)", repo)
+	for _, n := range nodes {
+		if !reHostname.MatchString(n) {
+			return fmt.Errorf("%q is not a hostname", n)
 		}
 	}
 	return nil
 }
 
-var reMemory = regexp.MustCompile(`(?i)^[0-9]+(\.[0-9]+)?[bkmg]?$`)
+// NormalizeNodes returns the canonical comma-separated form (trimmed, deduped,
+// order preserved). An invalid entry fails the whole value: silently dropping a
+// typo would leave a node the operator believes runs a runner with none.
+func NormalizeNodes(raw string) (string, error) {
+	if err := ValidateNodes(raw); err != nil {
+		return "", err
+	}
+	return strings.Join(ParseNodes(raw), ","), nil
+}
+
+var reOrg = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
+
+// ValidateOrg accepts a GitHub organisation login: letters, digits and single
+// hyphens, not starting or ending with one (GitHub's own rule). The value ends
+// up in API paths and in the group's name, so a path-like or spaced value is
+// refused rather than escaped.
+func ValidateOrg(org string) error {
+	if strings.TrimSpace(org) == "" {
+		return fmt.Errorf("github_runner_org is required: an org-level runner registers into an organisation (e.g. acme)")
+	}
+	if !reOrg.MatchString(org) {
+		return fmt.Errorf("organisation %q is not a valid GitHub org login (letters, digits and inner '-' only)", org)
+	}
+	return nil
+}
+
+var reGroup = regexp.MustCompile(`^[A-Za-z0-9._ -]{1,64}$`)
+
+// ValidateGroup accepts a runner group name. GitHub allows letters, digits,
+// spaces, '.', '_' and '-' up to 64 characters; anything else is refused here
+// rather than by the API hours later.
+func ValidateGroup(group string) error {
+	if strings.TrimSpace(group) == "" {
+		return fmt.Errorf("github_runner_group must not be blank (default: %s)", cluster.DefaultGitHubRunnerGroup)
+	}
+	if !reGroup.MatchString(group) {
+		return fmt.Errorf("runner group %q is not a valid GitHub group name (letters, digits, space, '.', '_' and '-', at most 64 characters)", group)
+	}
+	return nil
+}
+
+// NormalizeOrg trims and validates an organisation.
+func NormalizeOrg(raw string) (string, error) {
+	org := strings.TrimSpace(raw)
+	if err := ValidateOrg(org); err != nil {
+		return "", err
+	}
+	return org, nil
+}
+
+// NormalizeGroup trims and validates a runner group; blank means the default.
+func NormalizeGroup(raw string) (string, error) {
+	group := strings.TrimSpace(raw)
+	if group == "" {
+		group = cluster.DefaultGitHubRunnerGroup
+	}
+	if err := ValidateGroup(group); err != nil {
+		return "", err
+	}
+	return group, nil
+}
 
 // ValidateMemory accepts a Docker memory quantity: a positive number with an
 // optional b/k/m/g suffix ("2560m", "3g", "1073741824"). Docker's own parser
 // rejects anything else at deploy time, hours after the setting was saved, so
 // the setting surface refuses it up front.
+var reMemory = regexp.MustCompile(`(?i)^[0-9]+(\.[0-9]+)?[bkmg]?$`)
+
 func ValidateMemory(v string) error {
 	s := strings.TrimSpace(v)
 	if s == "" {
@@ -177,48 +262,41 @@ func ValidateMemory(v string) error {
 	return nil
 }
 
-// RepoShort is the repo's stable, filesystem/stack-safe short name:
-// owner-name-<6 hex>. The hash keeps two repos whose owners differ only in
-// characters that sanitize to '-' from colliding.
-func RepoShort(repo string) string {
-	slug := strings.ToLower(repo)
-	slug = strings.ReplaceAll(slug, "/", "-")
-	slug = strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
-			return r
-		default:
-			return '-'
-		}
-	}, slug)
-	slug = strings.Trim(slug, "-._")
-	sum := sha256.Sum256([]byte(repo))
+// NodeShort is a node hostname's filesystem/stack-safe form, with a short hash
+// so two hostnames that sanitize to the same string stay distinct stacks.
+func NodeShort(node string) string {
+	slug := sanitizeName(node)
 	if slug == "" {
-		slug = "repo"
+		slug = "node"
 	}
+	sum := sha256.Sum256([]byte(node))
 	short := slug + "-" + hex.EncodeToString(sum[:])[:6]
-	if len(short) > 48 {
-		short = short[:48]
+	if len(short) > 40 {
+		short = short[:40]
 	}
 	return short
 }
 
-// RunnerName is the GitHub-visible runner name: pmc-<node>-<repo-short>,
-// capped at GitHub's 64-character runner-name limit.
-func RunnerName(node, repo string) string {
-	node = strings.TrimSpace(node)
-	if node == "" {
-		node = "node"
+// RunnerName is the GitHub-visible runner name: pmc-<node>-org, capped at
+// GitHub's 64-character runner-name limit. The -org suffix says the scope, so a
+// runner in the org's list is unambiguous next to a hand-made one.
+func RunnerName(node string) string {
+	slug := sanitizeName(strings.TrimSpace(node))
+	if slug == "" {
+		slug = "node"
 	}
-	name := RunnerNamePrefix + sanitizeName(node) + "-" + RepoShort(repo)
+	if len(slug) > 52 {
+		slug = slug[:52]
+	}
+	name := RunnerNamePrefix + slug + "-org"
 	if len(name) > 64 {
 		name = name[:64]
 	}
 	return name
 }
 
-// StackName is the one-service Swarm stack for a repo.
-func StackName(repo string) string { return StackNamePrefix + RepoShort(repo) }
+// StackName is the one-service Swarm stack that runs this node's runner.
+func StackName(node string) string { return StackNamePrefix + NodeShort(node) }
 
 // sanitizeName lowercases a hostname into the runner-name-safe alphabet.
 func sanitizeName(s string) string {
@@ -233,12 +311,4 @@ func sanitizeName(s string) string {
 		}
 	}, strings.TrimSpace(s))
 	return strings.Trim(out, "-")
-}
-
-// SortRepos returns the repo list in a deterministic order for logs, reports
-// and the rendered plan.
-func SortRepos(repos []string) []string {
-	out := append([]string(nil), repos...)
-	sort.Strings(out)
-	return out
 }

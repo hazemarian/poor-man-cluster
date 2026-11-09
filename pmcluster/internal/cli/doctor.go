@@ -84,17 +84,18 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		app = newGitHubAppLocal(st, cipher, zerolog.Nop())
 		gha = app
 	}
-	// The runner check reads settings, the live service labels and GitHub's
-	// runner list. It needs a docker client to see the clusters' containers and
-	// the store for the settings; without both it is skipped, not guessed.
+	// The runner check reads settings, this node's runner container and GitHub's
+	// org runner list. It needs the store for the settings and the docker CLI for
+	// the container; without both it is skipped, not guessed.
 	if st != nil && app != nil {
 		host, _ := os.Hostname()
 		runnerProbe = &runners.Manager{
-			Store:   st,
-			GitHub:  app,
-			Cluster: dc,
-			Node:    host,
-			Log:     zerolog.Nop(),
+			Store:  st,
+			GitHub: app,
+			Docker: &runners.CLIDocker{},
+			Nodes:  dc,
+			Node:   host,
+			Log:    zerolog.Nop(),
 		}
 	}
 

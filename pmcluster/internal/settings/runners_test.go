@@ -20,17 +20,27 @@ func newRunnerSettingsStore(t *testing.T) *store.Store {
 	return st
 }
 
+func withApp(t *testing.T, st *store.Store) {
+	t.Helper()
+	if err := st.SetGitHubApp(context.Background(), &store.GitHubApp{
+		AppID: 1, InstallationID: 2, PrivateKeyCiphertext: []byte("not-decrypted-here"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The feature depends on an App installation token. Enabling it without the App
 // is refused by name, and the refusal says why a PAT is not a substitute — an
 // operator who reads the error must not reach for the credential that would
-// need administration:write on every repo.
+// need administration:write on the whole organisation.
 func TestEnablingRunnersWithoutAnAppIsRefused(t *testing.T) {
 	st := newRunnerSettingsStore(t)
 	l := NewLocal(st)
 
 	_, err := l.Update(context.Background(), Settings{
 		cluster.SettingGitHubRunnersEnabled(): "true",
-		cluster.SettingGitHubRunnerRepos():    "acme/api",
+		cluster.SettingGitHubRunnerOrg():      "acme",
+		cluster.SettingGitHubRunnerNodes():    "worker-1",
 	})
 	if err == nil {
 		t.Fatal("enabling runners without a GitHub App was accepted")
@@ -51,18 +61,50 @@ func TestEnablingRunnersWithoutAnAppIsRefused(t *testing.T) {
 	}
 }
 
-func TestEnablingRunnersWithAnAppIsAccepted(t *testing.T) {
+// An enabled feature with nowhere to register is a half-enabled state, and the
+// refusal names the key to fill in rather than failing later at reconcile time.
+func TestEnablingRunnersWithoutAnOrgIsRefused(t *testing.T) {
 	st := newRunnerSettingsStore(t)
+	withApp(t, st)
+	_, err := NewLocal(st).Update(context.Background(), Settings{
+		cluster.SettingGitHubRunnersEnabled(): "true",
+		cluster.SettingGitHubRunnerNodes():    "worker-1",
+	})
+	if err == nil {
+		t.Fatal("enabling runners with no organisation was accepted")
+	}
+	if !strings.Contains(err.Error(), cluster.SettingGitHubRunnerOrg()) {
+		t.Fatalf("error %q does not name %s", err, cluster.SettingGitHubRunnerOrg())
+	}
+}
+
+// An enabled feature with no selected node would run nowhere; the picker is the
+// fix, and the error says so.
+func TestEnablingRunnersWithoutANodeIsRefused(t *testing.T) {
+	st := newRunnerSettingsStore(t)
+	withApp(t, st)
+	_, err := NewLocal(st).Update(context.Background(), Settings{
+		cluster.SettingGitHubRunnersEnabled(): "true",
+		cluster.SettingGitHubRunnerOrg():      "acme",
+	})
+	if err == nil {
+		t.Fatal("enabling runners with no selected node was accepted")
+	}
+	if !strings.Contains(err.Error(), cluster.SettingGitHubRunnerNodes()) {
+		t.Fatalf("error %q does not name %s", err, cluster.SettingGitHubRunnerNodes())
+	}
+}
+
+func TestEnablingRunnersWithAppOrgAndNodesIsAccepted(t *testing.T) {
+	st := newRunnerSettingsStore(t)
+	withApp(t, st)
 	l := NewLocal(st)
 	ctx := context.Background()
-	if err := st.SetGitHubApp(ctx, &store.GitHubApp{
-		AppID: 1, InstallationID: 2, PrivateKeyCiphertext: []byte("not-decrypted-here"),
-	}); err != nil {
-		t.Fatal(err)
-	}
 	got, err := l.Update(ctx, Settings{
 		cluster.SettingGitHubRunnersEnabled(): "true",
-		cluster.SettingGitHubRunnerRepos():    " acme/api , acme/web ,acme/api ",
+		cluster.SettingGitHubRunnerOrg():      " acme ",
+		cluster.SettingGitHubRunnerGroup():    " pmcluster ",
+		cluster.SettingGitHubRunnerNodes():    " worker-2 , worker-1 ,worker-2 ",
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -70,13 +112,41 @@ func TestEnablingRunnersWithAnAppIsAccepted(t *testing.T) {
 	if got[cluster.SettingGitHubRunnersEnabled()] != "true" {
 		t.Fatalf("enabled = %q", got[cluster.SettingGitHubRunnersEnabled()])
 	}
-	if got[cluster.SettingGitHubRunnerRepos()] != "acme/api,acme/web" {
-		t.Fatalf("repos = %q, want the normalised comma-separated list", got[cluster.SettingGitHubRunnerRepos()])
+	if got[cluster.SettingGitHubRunnerOrg()] != "acme" {
+		t.Fatalf("org = %q", got[cluster.SettingGitHubRunnerOrg()])
+	}
+	if got[cluster.SettingGitHubRunnerGroup()] != "pmcluster" {
+		t.Fatalf("group = %q", got[cluster.SettingGitHubRunnerGroup()])
+	}
+	// Ordering is the operator's: the picker writes the list in the order shown,
+	// and the setting keeps it (deduped).
+	if got[cluster.SettingGitHubRunnerNodes()] != "worker-2,worker-1" {
+		t.Fatalf("nodes = %q, want the normalised, order-preserving list", got[cluster.SettingGitHubRunnerNodes()])
+	}
+}
+
+// Clearing the org while the feature is on is the same half-enabled state as
+// enabling without one, so it is refused even though the flag itself is not in
+// the update.
+func TestClearingTheOrgWhileEnabledIsRefused(t *testing.T) {
+	st := newRunnerSettingsStore(t)
+	withApp(t, st)
+	l := NewLocal(st)
+	ctx := context.Background()
+	if _, err := l.Update(ctx, Settings{
+		cluster.SettingGitHubRunnersEnabled(): "true",
+		cluster.SettingGitHubRunnerOrg():      "acme",
+		cluster.SettingGitHubRunnerNodes():    "worker-1",
+	}); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if _, err := l.Update(ctx, Settings{cluster.SettingGitHubRunnerOrg(): ""}); err == nil {
+		t.Fatal("clearing github_runner_org while runners are enabled was accepted")
 	}
 }
 
 // Turning the feature OFF must never be gated: an operator clearing the App has
-// to be able to stop the runners (and with them the docker-socket exposure).
+// to be able to stop the runners (and with them the docker access).
 func TestDisablingRunnersNeedsNoApp(t *testing.T) {
 	st := newRunnerSettingsStore(t)
 	l := NewLocal(st)
@@ -91,22 +161,27 @@ func TestDisablingRunnersNeedsNoApp(t *testing.T) {
 	}
 }
 
-func TestRunnerReposAndMemoryAreValidated(t *testing.T) {
+func TestRunnerValuesAreValidated(t *testing.T) {
 	st := newRunnerSettingsStore(t)
 	l := NewLocal(st)
 	ctx := context.Background()
 
-	if _, err := l.Update(ctx, Settings{cluster.SettingGitHubRunnerRepos(): "acme"}); err == nil {
-		t.Error("a repo without an owner was accepted")
+	bad := []struct {
+		key, value string
+		why        string
+	}{
+		{cluster.SettingGitHubRunnerOrg(), "acme/api", "a repo path is not an organisation"},
+		{cluster.SettingGitHubRunnerOrg(), "-acme", "a leading hyphen is not a GitHub login"},
+		{cluster.SettingGitHubRunnerGroup(), "a/b", "a slash is not valid in a group name"},
+		{cluster.SettingGitHubRunnerNodes(), "worker 1", "a space is not a hostname"},
+		{cluster.SettingGitHubRunnerSocketPath(), "relative/docker.sock", "the socket path must be absolute"},
+		{cluster.SettingGitHubRunnerMemory(), "lots", "a non-quantity memory limit"},
+		{cluster.SettingGitHubRunnerMemory(), "0", "a zero memory limit"},
 	}
-	if _, err := l.Update(ctx, Settings{cluster.SettingGitHubRunnerRepos(): "acme/../etc"}); err == nil {
-		t.Error("a path-traversing repo was accepted")
-	}
-	if _, err := l.Update(ctx, Settings{cluster.SettingGitHubRunnerMemory(): "lots"}); err == nil {
-		t.Error("a non-quantity memory limit was accepted")
-	}
-	if _, err := l.Update(ctx, Settings{cluster.SettingGitHubRunnerMemory(): "0"}); err == nil {
-		t.Error("a zero memory limit was accepted")
+	for _, c := range bad {
+		if _, err := l.Update(ctx, Settings{c.key: c.value}); err == nil {
+			t.Errorf("%s=%q was accepted (%s)", c.key, c.value, c.why)
+		}
 	}
 	got, err := l.Update(ctx, Settings{cluster.SettingGitHubRunnerMemory(): "4g"})
 	if err != nil {
@@ -126,7 +201,17 @@ func TestRunnerSettingDefaultsAreReported(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got[cluster.SettingGitHubRunnersEnabled()] != "false" {
-		t.Errorf("enabled default = %q, want false (a docker-socket feature is never on for you)", got[cluster.SettingGitHubRunnersEnabled()])
+		t.Errorf("enabled default = %q, want false (a docker-access feature is never on for you)", got[cluster.SettingGitHubRunnersEnabled()])
+	}
+	if got[cluster.SettingGitHubRunnerGroup()] != cluster.DefaultGitHubRunnerGroup {
+		t.Errorf("group default = %q, want %q", got[cluster.SettingGitHubRunnerGroup()], cluster.DefaultGitHubRunnerGroup)
+	}
+	// The filtered socket is the default: the raw mount is the debug fallback.
+	if got[cluster.SettingGitHubRunnerSocketProxy()] != "true" {
+		t.Errorf("socket proxy default = %q, want true", got[cluster.SettingGitHubRunnerSocketProxy()])
+	}
+	if got[cluster.SettingGitHubRunnerSocketPath()] != cluster.DefaultGitHubRunnerSocketPath {
+		t.Errorf("socket path default = %q, want %q", got[cluster.SettingGitHubRunnerSocketPath()], cluster.DefaultGitHubRunnerSocketPath)
 	}
 	if got[cluster.SettingGitHubRunnerMemory()] != cluster.DefaultGitHubRunnerMemory {
 		t.Errorf("memory default = %q, want %q", got[cluster.SettingGitHubRunnerMemory()], cluster.DefaultGitHubRunnerMemory)

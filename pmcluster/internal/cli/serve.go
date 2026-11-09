@@ -39,6 +39,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/server"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/settings"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/socketproxy"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
@@ -361,6 +362,24 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// once. Live/incremental reads bypass the cache by construction.
 		deps.Observability = observability.NewCachedReader(obsReader)
 	}
+	// The runner manager is built before the HTTP handler: the console's
+	// Runners panel calls this same manager through /api/github/runners, and a
+	// second instance would keep a second copy of the kill holds.
+	hostname, _ := os.Hostname()
+	runnerMgr := &runners.Manager{
+		Store:  st,
+		Docker: &runners.CLIDocker{},
+		Nodes:  dc,
+		Node:   hostname,
+		Log:    log.With().Str("component", "runners").Logger(),
+	}
+	if deps.GitHubApp != nil {
+		// The manager registers and de-registers runners with the same cached
+		// installation token the broker and the console use; no PAT and no
+		// second credential exist for this feature.
+		runnerMgr.GitHub = deps.GitHubApp
+	}
+	deps.GitHubRunners = runnerMgr
 	handler := server.New(deps)
 
 	// The gate answers 503 while a leadership-gain adoption is swapping the
@@ -377,26 +396,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// control-plane Raft snapshot loop; on losing leadership the loops stop.
 	// Non-manager/standalone nodes serve without the loops.
 	leadership := WatchSwarmLeadership(ctx, dc, log)
-	hostname, _ := os.Hostname()
-	runnerMgr := &runners.Manager{
-		Store:    st,
-		Deployer: deployer,
-		Cluster:  dc,
-		Node:     hostname,
-		Log:      log.With().Str("component", "runners").Logger(),
-	}
-	if deps.GitHubApp != nil {
-		// The manager registers and de-registers runners with the same cached
-		// installation token the broker and the console use; no PAT and no
-		// second credential exist for this feature.
-		runnerMgr.GitHub = deps.GitHubApp
-	}
 	reconciler := &reconcile.Reconciler{
 		Store:         st,
 		Docker:        dc,
 		DeployService: deploySvc,
 		Services:      &services.Local{Docker: dc},
-		Runners:       runnerMgr,
 		Update: func(ctx context.Context, deps cluster.UpdateDeps, in cluster.UpdateInput) (*cluster.UpdateResult, error) {
 			if cipher == nil {
 				return nil, fmt.Errorf("encryption key unavailable; cannot reconcile platform stacks")
@@ -470,6 +474,17 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 		}
 	}()
+
+	// Runners are a PER-NODE feature: each daemon decides for itself whether its
+	// hostname is in github_runner_nodes, so this loop runs on every node rather
+	// than inside the leader-only reconcile (which would leave a selected worker
+	// waiting for the leader to act on a container it cannot reach).
+	go runRunnerLoop(ctx, runnerMgr, st, log)
+	// The filtered docker socket listens on EVERY node with a docker socket,
+	// unconditionally: it is inert when nothing mounts it, costs one goroutine,
+	// and having it present everywhere means a runner enabled on a node can never
+	// find no socket because that daemon predates the setting.
+	go superviseSocketProxy(ctx, st, log)
 
 	log.Info().Str("addr", cfg.ListenAddr).Msg("pmcluster serve listening")
 	if err := server.Run(ctx, cfg.ListenAddr, handler); err != nil {
@@ -633,5 +648,120 @@ func mcpAllowOps() map[string]bool {
 		return all
 	default:
 		return mcpserver.DefaultAllowedOps
+	}
+}
+
+// runRunnerLoop is the per-node runner reconcile. It runs on EVERY daemon, not
+// only the leader: the runner is a local container, so only the node itself can
+// create, restart or remove it. A node that is not in github_runner_nodes does
+// the teardown half and nothing else.
+func runRunnerLoop(ctx context.Context, mgr *runners.Manager, st *store.Store, log zerolog.Logger) {
+	every := time.Duration(reconcileIntervalSeconds(ctx, st)) * time.Second
+	if every <= 0 {
+		every = time.Minute
+	}
+	tick := func() {
+		res, err := mgr.Reconcile(ctx)
+		if len(res.Registered) > 0 || len(res.Removed) > 0 {
+			log.Info().Strs("registered", res.Registered).Strs("removed", res.Removed).
+				Msg("runners — this node's runner reconciled")
+		}
+		for _, w := range res.Warnings {
+			log.Warn().Str("warning", w).Msg("runners — warning")
+		}
+		if err != nil {
+			// A refusal is the expected outcome of an enabled-but-incomplete
+			// configuration; the settings surface refuses it first, so reaching
+			// here means the stored settings drifted.
+			log.Warn().Err(err).Msg("runners — this node's runner pass refused")
+			if st != nil {
+				if aerr := cluster.AppendApplyWarnings(ctx, st, "runners", "", []string{err.Error()}); aerr != nil {
+					log.Debug().Err(aerr).Msg("runners — could not record the refusal")
+				}
+			}
+			return
+		}
+		if st != nil && len(res.Warnings) > 0 {
+			if aerr := cluster.AppendApplyWarnings(ctx, st, "runners", "", res.Warnings); aerr != nil {
+				log.Debug().Err(aerr).Msg("runners — could not record the warning")
+			}
+		}
+	}
+	tick()
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			tick()
+		}
+	}
+}
+
+// superviseSocketProxy keeps the filtered docker socket listening on this node.
+//
+// It runs unconditionally: the listener is inert unless a runner container mounts
+// it, and having it present on every node removes the "runner enabled on a node
+// whose daemon predates the setting" failure. The socket path comes from the
+// store, so a changed path is picked up without a restart.
+func superviseSocketProxy(ctx context.Context, st *store.Store, log zerolog.Logger) {
+	var p *socketproxy.Proxy
+	path := ""
+	stop := func() {
+		if p != nil {
+			if err := p.Stop(); err != nil {
+				log.Warn().Err(err).Msg("socket proxy: could not stop cleanly")
+			}
+			p = nil
+		}
+	}
+	missingUpstream := false
+	tick := func() {
+		want := cluster.LoadGitHubRunnerSocketPath(ctx, st)
+		if p != nil && want == path {
+			return
+		}
+		// No docker socket, no proxy: binding a listener that cannot forward
+		// would turn every runner build into a 502 with no explanation.
+		if _, err := os.Stat(socketproxy.DefaultUpstreamPath); err != nil {
+			if !missingUpstream {
+				missingUpstream = true
+				log.Debug().Str("upstream", socketproxy.DefaultUpstreamPath).
+					Msg("socket proxy: no docker socket on this node; not listening")
+			}
+			return
+		}
+		missingUpstream = false
+		stop()
+		path = want
+		p = socketproxy.New(socketproxy.Config{
+			SocketPath: want,
+			Log:        log.With().Str("component", "socketproxy").Logger(),
+		})
+		if err := p.Start(ctx); err != nil {
+			// A listener that cannot bind is a WARN, never a fatal: the daemon is
+			// still the API, and the doctor reports runners as unable to build.
+			log.Warn().Err(err).Str("socket", want).Msg("socket proxy: not listening; runners on this node will not be registered")
+			p = nil
+			if st != nil {
+				if aerr := cluster.AppendApplyWarnings(ctx, st, "runners", "", []string{"socket proxy: " + err.Error()}); aerr != nil {
+					log.Debug().Err(aerr).Msg("socket proxy: could not record the warning")
+				}
+			}
+		}
+	}
+	tick()
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			stop()
+			return
+		case <-t.C:
+			tick()
+		}
 	}
 }

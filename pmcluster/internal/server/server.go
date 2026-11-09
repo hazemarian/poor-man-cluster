@@ -31,6 +31,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/mcpserver"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/secrets"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
@@ -127,6 +128,11 @@ type Deps struct {
 	// /api/github/app. Optional; when nil those routes are omitted and the
 	// doctor check skips with a reason.
 	GitHubApp *githubapp.Local
+
+	// GitHubRunners backs the console's runner list and its kill/restart
+	// actions under /api/github/runners. Optional; when nil the routes are
+	// omitted (a process without a docker client cannot act on a runner).
+	GitHubRunners *runners.Manager
 
 	// GitHubBroker serves POST /api/github/token for GitHub Actions. It is
 	// mounted OUTSIDE the Bearer subtree (HMAC is its auth) and omitted when
@@ -258,6 +264,13 @@ func New(d Deps) http.Handler {
 			// installation and its grants, and the Test button mints a token.
 			r.With(auth.RequireRole(auth.RoleOperator)).Group(func(or chi.Router) {
 				(&githubapp.HTTP{App: d.GitHubApp}).Mount(or)
+			})
+		}
+		if d.GitHubRunners != nil {
+			// Killing a runner cancels a job and removes a container, so it is
+			// operator work like the app card next to it.
+			r.With(auth.RequireRole(auth.RoleOperator)).Group(func(or chi.Router) {
+				(&runners.HTTP{Mgr: d.GitHubRunners}).Mount(or)
 			})
 		}
 		if d.Configs != nil {

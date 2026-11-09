@@ -65,7 +65,11 @@ var clusterSettingKeys = []string{
 	cluster.SettingStorageNodes(),
 	cluster.SettingStorageFailover(),
 	cluster.SettingGitHubRunnersEnabled(),
-	cluster.SettingGitHubRunnerRepos(),
+	cluster.SettingGitHubRunnerOrg(),
+	cluster.SettingGitHubRunnerGroup(),
+	cluster.SettingGitHubRunnerNodes(),
+	cluster.SettingGitHubRunnerSocketProxy(),
+	cluster.SettingGitHubRunnerSocketPath(),
 	cluster.SettingGitHubRunnerMemory(),
 	cluster.SettingGitHubRunnerAllowLeader(),
 }
@@ -80,8 +84,11 @@ var settingDefaults = map[string]string{
 	cluster.SettingObservabilityLogsRetentionDays():    strconv.Itoa(cluster.DefaultObservabilityLogsRetentionDays()),
 	cluster.SettingObservabilityMetricsRetentionDays(): strconv.Itoa(cluster.DefaultObservabilityMetricsRetentionDays()),
 	cluster.SettingObservabilityTracesRetentionDays():  strconv.Itoa(cluster.DefaultObservabilityTracesRetentionDays()),
-	// A feature that mounts /var/run/docker.sock is never on by default.
+	// A feature that fronts the host's docker socket is never on by default.
 	cluster.SettingGitHubRunnersEnabled():    "false",
+	cluster.SettingGitHubRunnerGroup():       cluster.DefaultGitHubRunnerGroup,
+	cluster.SettingGitHubRunnerSocketProxy(): "true",
+	cluster.SettingGitHubRunnerSocketPath():  cluster.DefaultGitHubRunnerSocketPath,
 	cluster.SettingGitHubRunnerMemory():      cluster.DefaultGitHubRunnerMemory,
 	cluster.SettingGitHubRunnerAllowLeader(): "false",
 }
@@ -153,6 +160,11 @@ func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 		}
 		normalized[k] = v
 	}
+	// Cross-field check: an ENABLED feature needs an App, an org and at least one
+	// node, however the update was split across calls.
+	if err := l.validateRunnerEnablement(ctx, normalized); err != nil {
+		return nil, err
+	}
 	for k, v := range normalized {
 		if err := l.Store.SetSetting(ctx, k, v); err != nil {
 			return nil, fmt.Errorf("set setting %s: %w", k, err)
@@ -195,7 +207,11 @@ func isRetentionKey(key string) bool {
 func isGitHubRunnerKey(key string) bool {
 	switch key {
 	case cluster.SettingGitHubRunnersEnabled(),
-		cluster.SettingGitHubRunnerRepos(),
+		cluster.SettingGitHubRunnerOrg(),
+		cluster.SettingGitHubRunnerGroup(),
+		cluster.SettingGitHubRunnerNodes(),
+		cluster.SettingGitHubRunnerSocketProxy(),
+		cluster.SettingGitHubRunnerSocketPath(),
 		cluster.SettingGitHubRunnerMemory(),
 		cluster.SettingGitHubRunnerAllowLeader():
 		return true
@@ -206,13 +222,16 @@ func isGitHubRunnerKey(key string) bool {
 // normalizeRunnerSetting validates and canonicalises one runner setting.
 //
 // The enabled flag is gated on the App registration HERE, in the store-backed
-// adapter every surface goes through (CLI, REST, console), so no caller can
-// turn the feature on without the credential it depends on. The dependency is
-// real, not stylistic: a runner registers with a repo-scoped, one-hour App
-// installation token. A personal access token could do the same job only by
-// holding administration:write on every repository — a long-lived credential
-// far wider than the token this platform mints — so it is refused by name
-// rather than accepted as a quieter substitute.
+// adapter every surface goes through (CLI, REST, console), so no caller can turn
+// the feature on without the credential it depends on. The org/node requirements
+// are checked once the whole update is normalised (validateRunnerEnablement),
+// because they may arrive in the same request or already be stored.
+//
+// The dependency is real, not stylistic: a runner registers with an org-scoped,
+// one-hour App installation token. A personal access token could do the same job
+// only by holding administration:write on the whole organisation — a long-lived
+// credential far wider than the token this platform mints — so it is refused by
+// name rather than accepted as a quieter substitute.
 func (l *Local) normalizeRunnerSetting(ctx context.Context, key, value string) (string, error) {
 	switch key {
 	case cluster.SettingGitHubRunnersEnabled():
@@ -221,11 +240,50 @@ func (l *Local) normalizeRunnerSetting(ctx context.Context, key, value string) (
 			return "", fmt.Errorf("%s: %w", key, err)
 		}
 		if on && !l.githubAppConfigured(ctx) {
-			return "", fmt.Errorf("%s requires a configured GitHub App: self-hosted runners register with an App installation token (`pmcluster github app set --app-id … --key-file …`). A personal access token is not an acceptable substitute — it would need administration:write on every repository, a long-lived credential with a far wider blast radius than the hour-long installation token the App mints", key)
+			return "", fmt.Errorf("%s requires a configured GitHub App: self-hosted runners register with an App installation token (`pmcluster github app set --app-id … --key-file …`). A personal access token is not an acceptable substitute — it would need administration:write on the whole organisation, a long-lived credential with a far wider blast radius than the hour-long installation token the App mints", key)
 		}
 		return strconv.FormatBool(on), nil
-	case cluster.SettingGitHubRunnerRepos():
-		return runners.NormalizeRepos(value)
+	case cluster.SettingGitHubRunnerOrg():
+		if strings.TrimSpace(value) == "" {
+			// Clearing the org is allowed only while the feature is off; the
+			// pairing check refuses the combination with enabled=true.
+			return "", nil
+		}
+		org, err := runners.NormalizeOrg(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		return org, nil
+	case cluster.SettingGitHubRunnerGroup():
+		group, err := runners.NormalizeGroup(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		return group, nil
+	case cluster.SettingGitHubRunnerNodes():
+		if strings.TrimSpace(value) == "" {
+			return "", nil
+		}
+		nodes, err := runners.NormalizeNodes(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		return nodes, nil
+	case cluster.SettingGitHubRunnerSocketProxy():
+		on, err := parseBoolSetting(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		return strconv.FormatBool(on), nil
+	case cluster.SettingGitHubRunnerSocketPath():
+		path := strings.TrimSpace(value)
+		if path == "" {
+			return "", nil
+		}
+		if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, " 	\r\n") {
+			return "", fmt.Errorf("%s must be an absolute path, got %q", key, value)
+		}
+		return path, nil
 	case cluster.SettingGitHubRunnerMemory():
 		// Empty means "use the platform default" (2560m), matching every other
 		// setting whose empty value is a built-in default.
@@ -244,6 +302,35 @@ func (l *Local) normalizeRunnerSetting(ctx context.Context, key, value string) (
 		return strconv.FormatBool(on), nil
 	}
 	return value, nil
+}
+
+// validateRunnerEnablement refuses an ENABLED feature that cannot work: no App,
+// no organisation, or no selected node. It runs on the normalised update with the
+// stored values filling any key the request did not send, so "enable" and "clear
+// the org" are both caught whichever order they arrive in.
+func (l *Local) validateRunnerEnablement(ctx context.Context, normalized Settings) error {
+	effective := func(key string) string {
+		if v, ok := normalized[key]; ok {
+			return v
+		}
+		if l.Store == nil {
+			return ""
+		}
+		return l.Store.SettingDefault(ctx, key, settingDefaults[key])
+	}
+	if !strings.EqualFold(strings.TrimSpace(effective(cluster.SettingGitHubRunnersEnabled())), "true") {
+		return nil
+	}
+	if !l.githubAppConfigured(ctx) {
+		return fmt.Errorf("%s requires a configured GitHub App: runners register with an installation token (`pmcluster github app set --app-id … --key-file …`)", cluster.SettingGitHubRunnersEnabled())
+	}
+	if strings.TrimSpace(effective(cluster.SettingGitHubRunnerOrg())) == "" {
+		return fmt.Errorf("%s is enabled but %s is empty: an org-level runner registers into an organisation, so set github_runner_org (for example acme) or turn the feature off", cluster.SettingGitHubRunnersEnabled(), cluster.SettingGitHubRunnerOrg())
+	}
+	if strings.TrimSpace(effective(cluster.SettingGitHubRunnerNodes())) == "" {
+		return fmt.Errorf("%s is enabled but %s is empty: a runner is a local container on a worker, so select at least one worker node (the Runners panel has a node picker) or turn the feature off", cluster.SettingGitHubRunnersEnabled(), cluster.SettingGitHubRunnerNodes())
+	}
+	return nil
 }
 
 // githubAppConfigured reports whether an App registration exists. A nil store

@@ -145,6 +145,11 @@ var excludedTables = map[string]string{
 	"stack_status": "reconcile bookkeeping (status badge cache); rebuilt on the first pass after promotion",
 	// Volatile per-node sampling from the collector.
 	"node_stats": "per-node resource samples; volatile local telemetry, repopulated by the collector",
+	// The runner panel's current-state rows, written by the node that owns each
+	// runner. A promoted leader observes its own node and rebuilds its row on the
+	// first pass; carrying another node's row would describe a container this
+	// node cannot see and cannot remove.
+	"github_runners": "per-node runner observations; each node writes its own row and rebuilds it on the next pass",
 }
 
 // exportedDBPath writes the authoritative subset of this node's data.db into a

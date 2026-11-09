@@ -390,15 +390,19 @@ func checkRegistryCredential(ctx context.Context, in Input) Check {
 
 // checkGitHubRunners: does the self-hosted runner lifecycle agree with reality?
 //
-// It answers four things that have four different fixes:
+// It answers, in this order, because each answer has a different fix:
 //
-//   - disabled → fine, a platform that does not need CI self-hosting;
-//   - enabled with no App → the credential the feature depends on is gone;
-//   - enabled with the App missing administration:write → registration will
-//     fail with a bare 403; naming it here is the point of the check;
-//   - a repo whose container and GitHub registration disagree → one of them
-//     was removed by hand, and a runner that is registered but not running is a
-//     ghost that will never pick up a job.
+//   - ENABLED or DISABLED, first and plainly;
+//   - enabled with no App / no org / no node → the feature cannot work;
+//   - enabled with the App missing administration:write → registration will fail
+//     with a bare 403; naming it here is the point of the check;
+//   - a selected node whose container and GitHub registration disagree → one of
+//     them was removed by hand, and a registered-but-not-running runner is a ghost
+//     that never picks up a job;
+//   - DISABLED with something left behind → the failure mode of a half-disable:
+//     a container or a registration that outlived the switch;
+//   - a pmc-named runner GitHub knows that the platform does not manage (the
+//     operator's hand-made one) → named, not counted as healthy.
 func checkGitHubRunners(ctx context.Context, in Input) Check {
 	const name = "github runners"
 	if in.GitHubRunners == nil {
@@ -409,47 +413,83 @@ func checkGitHubRunners(ctx context.Context, in Input) Check {
 		return Check{name, StatusFail, "could not inspect runners: " + err.Error()}
 	}
 	if !rep.Enabled {
-		return Check{name, StatusOK, "disabled (github_runners_enabled=false, nothing is deployed)"}
+		if len(rep.Leftovers) == 0 {
+			return Check{name, StatusOK, "disabled (github_runners_enabled=false, nothing is deployed)"}
+		}
+		return Check{name, StatusWarn,
+			"disabled (github_runners_enabled=false) but leftovers remain: " + strings.Join(rep.Leftovers, "; ") +
+				" — run a reconcile pass to finish the teardown, then check again"}
+	}
+	head := "enabled (org " + rep.Org + ", group " + rep.Group + ")"
+	if rep.Org == "" || len(rep.Nodes) == 0 {
+		return Check{name, StatusFail, head + ": " + strings.Join(rep.Warnings, "; ") +
+			" — the reconcile refuses to start a runner it cannot register or place"}
 	}
 	if !rep.AppConfigured {
-		return Check{name, StatusFail,
-			"github_runners_enabled is on but no GitHub App is configured — runners register with an App installation token; configure one with `pmcluster github app set` (or turn the feature off)"}
+		return Check{name, StatusFail, head +
+			": no GitHub App is configured — runners register with an App installation token; configure one with `pmcluster github app set` (or turn the feature off)"}
 	}
 	if rep.MissingPermission != "" {
-		return Check{name, StatusFail,
-			"the App is missing " + rep.MissingPermission + " — grant Repository → Administration: Read & write in the App's settings, then approve the new permission on the installation; registration returns 403 until then"}
-	}
-	if len(rep.Repos) == 0 {
-		return Check{name, StatusWarn,
-			"github_runners_enabled is on but github_runner_repos is empty — no runner will be registered"}
+		return Check{name, StatusFail, head + ": the App is missing " + rep.MissingPermission +
+			" — grant Organization → Administration: Read & write in the App's settings, then approve the new permission on the installation; registration returns 403 until then"}
 	}
 
 	var problems, healthy []string
-	for _, rr := range rep.Repos {
+	for _, n := range rep.Nodes {
+		label := n.Node
+		if n.Role != "" {
+			label += " (" + n.Role + ")"
+		}
 		switch {
-		case rr.Error != "":
-			problems = append(problems, rr.Repo+": "+rr.Error)
-		case rr.Failures >= 3:
-			problems = append(problems, fmt.Sprintf("%s: failed %d consecutive reconcile pass(es): %s", rr.Repo, rr.Failures, rr.LastError))
-		case !rr.ContainerRunning && rr.Registered:
-			problems = append(problems, rr.Repo+": registered but no container is running (the reconcile will recreate it)")
-		case rr.ContainerRunning && !rr.Registered:
-			problems = append(problems, rr.Repo+": container is running but GitHub does not list "+rr.RunnerName)
-		case len(rr.Offline) > 0:
-			problems = append(problems, rr.Repo+": offline or stale registration(s) "+strings.Join(rr.Offline, ", "))
+		case n.Error != "":
+			problems = append(problems, label+": "+n.Error)
+		case n.Failures >= 3:
+			problems = append(problems, fmt.Sprintf("%s: failed %d consecutive reconcile pass(es): %s", label, n.Failures, n.LastError))
+		case strings.EqualFold(n.Role, "manager") || strings.EqualFold(n.Role, "leader"):
+			problems = append(problems, label+": a runner is selected on a manager node — a build there marks the node Down and takes the cluster API with it")
+		case !n.ContainerRunning && n.Registered:
+			problems = append(problems, label+": registered but no container is running (the reconcile will recreate it)")
+		case n.ContainerRunning && !n.Registered:
+			problems = append(problems, label+": container is running but GitHub does not list "+n.RunnerName)
+		case len(n.Offline) > 0:
+			problems = append(problems, label+": offline or stale registration(s) "+strings.Join(n.Offline, ", "))
+		case n.RawSocket:
+			problems = append(problems, label+": the container mounts /var/run/docker.sock directly — the socket proxy (github_runner_socket_proxy=true) is what keeps a workflow off the swarm API")
 		default:
-			healthy = append(healthy, rr.Repo)
+			healthy = append(healthy, label)
 		}
 	}
-	if len(problems) > 0 {
-		detail := strings.Join(problems, "; ")
-		if len(healthy) > 0 {
-			detail += fmt.Sprintf(" (%d repo(s) healthy)", len(healthy))
+	var unmanaged []string
+	for _, u := range rep.Unmanaged {
+		note := u.Name
+		if u.SocketKnown && u.RawSocket {
+			note += " (mounts /var/run/docker.sock)"
+		} else if !u.SocketKnown {
+			note += " (not on this node, mounts unknown)"
 		}
-		return Check{name, StatusWarn, detail}
+		unmanaged = append(unmanaged, note)
+	}
+	if len(problems) > 0 || len(unmanaged) > 0 {
+		var parts []string
+		if len(problems) > 0 {
+			parts = append(parts, strings.Join(problems, "; "))
+			if len(healthy) > 0 {
+				parts = append(parts, fmt.Sprintf("(%d node(s) healthy)", len(healthy)))
+			}
+		}
+		if len(unmanaged) > 0 {
+			parts = append(parts, "unmanaged runner(s) in the org, not managed by this platform: "+
+				strings.Join(unmanaged, ", ")+" — they are not covered by the socket proxy and are never counted as healthy")
+		}
+		return Check{name, StatusWarn, head + ": " + strings.Join(parts, " | ")}
+	}
+	access := "socket proxy"
+	if len(rep.Nodes) > 0 && rep.Nodes[0].DockerAccess == "raw socket" {
+		access = "raw docker socket (debug fallback)"
 	}
 	return Check{name, StatusOK,
-		fmt.Sprintf("%d runner(s) registered and running (ephemeral, one job each)", len(healthy))}
+		fmt.Sprintf("%s: %d runner(s) registered and running on %d selected node(s), docker access via %s",
+			head, len(healthy), len(rep.Nodes), access)}
 }
 
 // checkLastApply: did the last platform apply finish everything it tried?
