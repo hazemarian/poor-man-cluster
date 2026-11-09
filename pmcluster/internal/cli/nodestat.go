@@ -70,21 +70,7 @@ func startNodeStatSampler(ctx context.Context, dc runtime.Client, log zerolog.Lo
 		t := time.NewTicker(nodeStatSampleInterval)
 		defer t.Stop()
 		for {
-			smp, err := s.Collect(time.Now())
-			if err != nil {
-				// A partial /proc (a racing exit, a restricted mount) must not
-				// stop the loop: the next tick usually reads everything.
-				log.Warn().Err(err).Msg("node stat sample incomplete")
-			}
-			// The engine socket is the fourth tint rule: a node whose Docker
-			// does not answer cannot start or stop anything, however healthy
-			// its kernel looks.
-			if dc != nil {
-				if _, err := dc.Info(ctx); err != nil {
-					smp.DockerUp = 0
-				}
-			}
-			nodestat.Publish(ctx, smp)
+			nodeStatTick(ctx, dc, s, log)
 			select {
 			case <-ctx.Done():
 				return
@@ -92,6 +78,29 @@ func startNodeStatSampler(ctx context.Context, dc runtime.Client, log zerolog.Lo
 			}
 		}
 	}()
+}
+
+// nodeStatTick is one sample → export cycle, split out of the loop so a test can
+// drive exactly one tick. It has NO leadership condition: the collector's
+// /var/stack/nodestat file is written by a pipeline that ends in a `file`
+// exporter, so there is no loop for the leader to avoid by staying silent.
+// Suppressing the leader's own sample was the bug that left the leader without
+// a row in the Node resources panel.
+func nodeStatTick(ctx context.Context, dc runtime.Client, s *nodestat.Sampler, log zerolog.Logger) {
+	smp, err := s.Collect(time.Now())
+	if err != nil {
+		// A partial /proc (a racing exit, a restricted mount) must not stop
+		// the loop: the next tick usually reads everything.
+		log.Warn().Err(err).Msg("node stat sample incomplete")
+	}
+	// The engine socket is the fourth tint rule: a node whose Docker does not
+	// answer cannot start or stop anything, however healthy its kernel looks.
+	if dc != nil {
+		if _, err := dc.Info(ctx); err != nil {
+			smp.DockerUp = 0
+		}
+	}
+	nodestat.Publish(ctx, smp)
 }
 
 // localHostname prefers the swarm's name for this node over a short hostname:

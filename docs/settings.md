@@ -28,7 +28,7 @@ bearers). Console: the **Settings** page.
 | Key | Default | Who sets it | What it controls |
 |---|---|---|---|
 | `volume_root` | `/var/stack/data` | setup wizard (`--volume-root`) / operator | the host root every container volume is forced under |
-| `storage_nodes` | leader's hostname (auto-seeded) | operator, `join --storage-node`, `node promote/demote` | comma-separated storage node hostnames; stateful stacks round-robin across them; the current leader is always re-added, a former leader is removed, and labeled-but-unlisted managers are adopted. **Entries must be managers**: a worker is pruned on the next `cluster update` (it cannot read settings, credentials or the stack list, so its backup agent would archive and ship nowhere) |
+| `storage_nodes` | leader's hostname (seeded once at bring-up) | operator, `join --storage-node`, `node promote/demote` | comma-separated storage node hostnames; stateful stacks round-robin across them, labeled-but-unlisted managers are adopted, and **the current leader is always re-added** (the edge and its local backup agent run there). Losing leadership removes nothing: a former leader stays a storage node, and membership is otherwise the operator's decision. **Entries must be managers**: a worker is pruned on the next `cluster update` (it cannot read settings, credentials or the stack list, so its backup agent would archive and ship nowhere) |
 | `storage_failover` | `false` | setup prompt (only when offsite S3 is configured) / operator | automatic storage failover in the control loop (requires `backup_s3_*`; refuses to enable without it) |
 | `backup_enabled` | `true` | operator | master switch. The timer keeps firing; the agent asks the control plane and exits without freezing when this is off |
 | `backup_cron` | `0 * * * *` (hourly) | operator | when a run is due (5-field cron; `*`, numbers and comma lists only). Evaluated by the daemon, not by the unit file |
@@ -75,7 +75,6 @@ logs one warning line naming the rejected value and runs at `info`.
 | Key | Managed by | Why |
 |---|---|---|
 | `tls_mode` / `tls_cert_path` / `tls_key_path` / `tls_acme_email` | the setup wizard / `cluster up --acme-email\|--cert\|--key`; switching modes needs `--force-tls-mode` | TLS lifecycle is a bring-up concern, not a runtime setting |
-| `storage_leader` | written by `cluster update` | remembers which hostname was promoted because it held leadership |
 | `stack_pin_<stack>` | written only by `stack move` | outranks the `storage_nodes` round-robin |
 | `swarm_id` | written by `cluster update` | wipe detection |
 

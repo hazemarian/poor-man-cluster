@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,4 +90,39 @@ type workerInfo struct{ runtime.Client }
 
 func (w workerInfo) Info(context.Context) (runtime.Info, error) {
 	return runtime.Info{SwarmControlAvailable: false}, nil
+}
+
+// nodeListDocker answers NodeList only; every other call panics via the nil
+// embedded interface, which is what a check that reaches past its remit should
+// do loudly.
+type nodeListDocker struct {
+	runtime.Client
+	nodes []runtime.Node
+}
+
+func (d nodeListDocker) NodeList(context.Context) ([]runtime.Node, error) { return d.nodes, nil }
+
+// An empty-valued pmcluster.* label is not "no label": the key is still there,
+// so anything matching on presence reads the node as labelled. That is how
+// nxt-sw-3-w carried `pmcluster.storage: ""` and still looked like storage.
+func TestNodeLabelsReportsAnEmptyValuedLabel(t *testing.T) {
+	c := checkNodeLabels(context.Background(), Input{Docker: nodeListDocker{nodes: []runtime.Node{
+		{Hostname: "nxt-sw-3-w", Role: "worker", Labels: map[string]string{runtime.StorageNodeLabel: ""}},
+		{Hostname: "nxt-sw-4-m", Role: "manager", Labels: map[string]string{runtime.StorageNodeLabel: "true"}},
+	}}})
+	if c.Status != StatusWarn {
+		t.Fatalf("status = %q, want warn (%s)", c.Status, c.Detail)
+	}
+	if !strings.Contains(c.Detail, "nxt-sw-3-w") || !strings.Contains(c.Detail, runtime.StorageNodeLabel) {
+		t.Fatalf("detail must name the node and the label, got %q", c.Detail)
+	}
+}
+
+func TestNodeLabelsIsOKWhenEveryLabelHasAValue(t *testing.T) {
+	c := checkNodeLabels(context.Background(), Input{Docker: nodeListDocker{nodes: []runtime.Node{
+		{Hostname: "nxt-sw-4-m", Role: "manager", Labels: map[string]string{runtime.StorageNodeLabel: "true"}},
+	}}})
+	if c.Status != StatusOK {
+		t.Fatalf("status = %q, want ok (%s)", c.Status, c.Detail)
+	}
 }

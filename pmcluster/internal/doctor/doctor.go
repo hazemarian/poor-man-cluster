@@ -78,6 +78,7 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 
 	add(checkSwarm(ctx, in))
 	add(checkLeaderLabel(ctx, in))
+	add(checkNodeLabels(ctx, in))
 	add(checkSkew(ctx, in))
 	add(checkKit(ctx, in))
 	add(checkSecrets(ctx, in))
@@ -163,6 +164,32 @@ func checkLeaderLabel(ctx context.Context, in Input) Check {
 				runtime.LeaderNodeLabel, carriers[0], leader)}
 	}
 	return Check{"leader label", StatusOK, fmt.Sprintf("%s=%s=true", carriers[0], runtime.LeaderNodeLabel)}
+}
+
+// checkNodeLabels: does any pmcluster.* node label carry an empty value?
+//
+// An empty-valued label is not "no label": the key is still there, so anything
+// matching on the key's presence reads the node as labelled. That is how a
+// worker came to hold `pmcluster.storage: ""` and look like a storage node while
+// every value comparison said otherwise. SetNodeLabel removes the key when the
+// value is empty; this check reports the labels that were written before that
+// (or by hand) so they get cleared instead of silently matching.
+func checkNodeLabels(ctx context.Context, in Input) Check {
+	if in.Docker == nil {
+		return Check{"node labels", StatusSkip, "no docker client"}
+	}
+	nodes, err := in.Docker.NodeList(ctx)
+	if err != nil {
+		return Check{"node labels", StatusSkip, "cannot read the node list from this node (a worker cannot): " + err.Error()}
+	}
+	empty := cluster.EmptyNodeLabels(nodes)
+	if len(empty) > 0 {
+		return Check{"node labels", StatusWarn,
+			fmt.Sprintf("%d pmcluster label(s) carry an empty value: %s — the key is still present, so anything matching on presence reads it as set. "+
+				"Clear them: docker node update --label-rm <key> <node>",
+				len(empty), strings.Join(empty, ", "))}
+	}
+	return Check{"node labels", StatusOK, fmt.Sprintf("%d node(s) carry no empty-valued pmcluster label", len(nodes))}
 }
 
 // checkSkew: does every reporting manager run this binary?

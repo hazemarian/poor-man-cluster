@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -298,4 +301,89 @@ func TestNodeStatFilePath_EnvOverride(t *testing.T) {
 	if got := nodeStatFilePath(); got != nodeStatDefaultPath {
 		t.Fatalf("path = %q, want the /var/stack default", got)
 	}
+}
+
+// writeProcTree lays out the minimum /proc a sampler needs. The cli test lives
+// outside the nodestat package, so it cannot borrow that package's fixture
+// helper; the bytes are the same shape a Linux node produces.
+func writeProcTree(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		"proc/loadavg": "1.25 1.10 0.90 2/200 4242\n",
+		"proc/meminfo": "MemTotal:        1883124 kB\nMemAvailable:     204800 kB\n",
+		"proc/cpuinfo": "processor	: 0\nmodel name	: Xeon\n\nprocessor	: 1\nmodel name	: Xeon\n",
+		// comm holds a space on purpose: the sampler's field counting must
+		// survive it on the leader's own daemon too.
+		"proc/4242/stat":   "4242 (pmcluster serve) S 1 4242 4242 0 -1 4194560 100 0 0 0 250 50 0 0 20 0 1 0 100 0 0\n",
+		"proc/4242/status": "Name:	pmcluster\nVmRSS:	   932104 kB\n",
+	}
+	for name, body := range files {
+		p := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", p, err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	return root
+}
+
+// TestNodeStatSamplerExportsOnLeader: a daemon that IS the leader still emits
+// its own sample. The leader is the node running the collector, and the
+// collector's node-stats pipeline ends in a `file` exporter — there is no loop
+// to avoid, so silence is pure loss: the panel rendered three rows for four
+// nodes. This drives one tick with a client that reports this node as Leader
+// and asserts the exported gauge reaches a real MeterProvider, which is the
+// behaviour a reintroduced "don't export to yourself" branch would break.
+func TestNodeStatSamplerExportsOnLeader(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	prev := otel.GetMeterProvider()
+	otel.SetMeterProvider(mp)
+	t.Cleanup(func() { otel.SetMeterProvider(prev) })
+
+	// The swarm view of this host: manager, and the current leader.
+	dc := &statClient{nodes: []runtime.Node{
+		{ID: "self", Hostname: "self", Role: "manager", IsLeader: true},
+		{ID: "peer", Hostname: "nxt-sw-4-m", Role: "manager"},
+	}}
+	s := nodestat.NewSampler(writeProcTree(t), "self", "manager")
+	ctx := context.Background()
+	nodeStatTick(ctx, dc, s, zerolog.Nop())
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("collect exported metrics: %v", err)
+	}
+	load, host := findGauge(rm, nodestat.MetricLoad1)
+	if !load {
+		t.Fatal("a leader daemon exported no pmcluster.node.load.1: its sample was skipped")
+	}
+	if host != "self" {
+		t.Fatalf("exported host.name = %q, want %q", host, "self")
+	}
+	if found, _ := findGauge(rm, nodestat.MetricProcessRSS); !found {
+		t.Fatal("a leader daemon exported no process series: its top list was skipped")
+	}
+}
+
+// findGauge looks for one metric in a collected batch and returns whether it
+// has at least one datapoint plus that datapoint's host.name.
+func findGauge(rm metricdata.ResourceMetrics, name string) (bool, string) {
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != name {
+				continue
+			}
+			g, ok := m.Data.(metricdata.Gauge[float64])
+			if !ok || len(g.DataPoints) == 0 {
+				return false, ""
+			}
+			host, _ := g.DataPoints[0].Attributes.Value("host.name")
+			return true, host.AsString()
+		}
+	}
+	return false, ""
 }

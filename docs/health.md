@@ -17,6 +17,7 @@ Same measurements over HTTP, for the console and anything that gates on them:
 | Check | Measured how | Fails when |
 |---|---|---|
 | `swarm` | `docker node ls`, then the quorum arithmetic (`internal/cluster/quorum.go`) | quorum is already lost, or the manager count cannot survive one more loss |
+| `node labels` | every node's `pmcluster.*` node labels | a label carries an empty value: the key is present, so anything matching on presence (`node.labels.pmcluster.storage`) reads the node as labelled (warn) |
 | `version skew` | each manager's published `pmcluster_nodever_<host>` config vs this binary | a manager reports a different version |
 | `control-plane kit` | **restores** the newest Raft snapshot into a temp dir, opens the DB, decrypts its secrets | the kit does not extract, does not open, misses its key config, or its key does not decrypt its ciphertext |
 | `secrets` | AES-GCM decrypt of every stored row with the current key | a row cannot be decrypted (sealed by an older key) |

@@ -292,36 +292,34 @@
           <tr class="{{.RowClass}}">
             <td>
               <div class="node-identity">
-                <span class="node-glyph">{{icon "server"}}</span>
-                <span class="mono iso" dir="ltr">{{.Hostname}}</span>
-                {{if eq .Role "manager"}}<span class="pill plain">{{T "st.manager"}}</span>
-                {{else if eq .Role "worker"}}<span class="pill plain">{{T "st.worker"}}</span>{{end}}
+                <span class="mono iso node-name" dir="ltr">{{.Hostname}}</span>
+                {{if eq .Role "manager"}}<span class="pill plain role-pill">{{T "st.manager"}}</span>
+                {{else if eq .Role "worker"}}<span class="pill plain role-pill">{{T "st.worker"}}</span>
+                {{else}}<span class="pill plain role-pill">{{T "common.unknown"}}</span>{{end}}
                 {{if .Overloaded}}<span class="pill warn" title="{{T "nodestat.overloaded_hint"}}">{{T "nodestat.overloaded"}}</span>{{end}}
                 {{if .MemLow}}<span class="pill warn" title="{{T "nodestat.mem_low_hint"}}">{{T "nodestat.mem_low"}}</span>{{end}}
                 {{if .DockerDown}}<span class="pill bad" title="{{T "nodestat.docker_down_hint"}}">{{T "nodestat.docker_down"}}</span>{{end}}
               </div>
             </td>
-            <td class="num mono iso" dir="ltr">
+            <td class="num nodestat-load">
               <span class="{{if .Overloaded}}v-warn{{end}}">{{NF .Load1 2}}</span>
               <small class="muted">/ {{N .Cores}} {{T "nodestat.cores"}}</small>
             </td>
-            <td class="mono iso" dir="ltr">
-              {{N .MemUsedMB}} / {{N .MemTotalMB}} MB
-              <small class="muted">{{N .MemAvailMB}} MB {{T "nodestat.free"}}</small>
+            <td class="nodestat-mem">
+              <span class="num mono iso" dir="ltr">{{N .MemUsedMB}} / {{N .MemTotalMB}} MB</span>
+              <small class="muted"><span class="mem-sep" aria-hidden="true">·</span>{{N .MemAvailMB}} MB {{T "nodestat.free"}}</small>
             </td>
-            <td>
-              {{if .TopRSS}}
-              <ul class="proc-list">
-                {{range .TopRSS}}<li><span class="p-name">{{.Name}}</span><span class="p-val mono iso">{{.Value}}</span></li>{{end}}
+            <td class="nodestat-procs">
+              <ul class="proc-list is-fixed">
+                {{if .TopRSS}}{{range .TopRSSSlots}}{{if .Name}}<li class="proc-row"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="p-val num mono iso" dir="ltr">{{.Value}}</span></li>{{else}}<li class="proc-row is-empty" aria-hidden="true"><span class="p-name">&nbsp;</span><span class="p-sep" aria-hidden="true">·</span><span class="p-val num">&nbsp;</span></li>{{end}}{{end}}
+                {{else}}<li class="proc-row is-none"><span class="muted">{{T "nodestat.no_procs"}}</span></li><li class="proc-row is-empty" aria-hidden="true"></li><li class="proc-row is-empty" aria-hidden="true"></li>{{end}}
               </ul>
-              {{else}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
             </td>
-            <td>
-              {{if .TopCPU}}
-              <ul class="proc-list">
-                {{range .TopCPU}}<li><span class="p-name">{{.Name}}</span><span class="p-val mono iso">{{.Value}}</span></li>{{end}}
+            <td class="nodestat-procs">
+              <ul class="proc-list is-fixed">
+                {{if .TopCPU}}{{range .TopCPUSlots}}{{if .Name}}<li class="proc-row"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="p-val num mono iso" dir="ltr">{{.Value}}</span></li>{{else}}<li class="proc-row is-empty" aria-hidden="true"><span class="p-name">&nbsp;</span><span class="p-sep" aria-hidden="true">·</span><span class="p-val num">&nbsp;</span></li>{{end}}{{end}}
+                {{else}}<li class="proc-row is-none"><span class="muted">{{T "nodestat.no_procs"}}</span></li><li class="proc-row is-empty" aria-hidden="true"></li><li class="proc-row is-empty" aria-hidden="true"></li>{{end}}
               </ul>
-              {{else}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
             </td>
             <td class="num">
               <span class="mono iso">{{.AgeText}}</span>
@@ -341,17 +339,17 @@
         <div class="kv-row">
           <span class="k">{{T "common.node"}}</span>
           <span class="v"><span class="mono iso" dir="ltr">{{.Hostname}}</span>
-            {{if eq .Role "manager"}}<span class="pill plain">{{T "st.manager"}}</span>{{else if eq .Role "worker"}}<span class="pill plain">{{T "st.worker"}}</span>{{end}}
+            <span class="pill plain role-pill">{{if eq .Role "manager"}}{{T "st.manager"}}{{else if eq .Role "worker"}}{{T "st.worker"}}{{else}}{{T "common.unknown"}}{{end}}</span>
             {{if .Stale}}<span class="pill warn">{{T "nodestat.stale"}}</span>{{end}}
           </span>
         </div>
-        <div class="kv-row"><span class="k">{{T "nodestat.load"}}</span><span class="v mono iso" dir="ltr">{{NF .Load1 2}} / {{N .Cores}} {{T "nodestat.cores"}}</span></div>
-        <div class="kv-row"><span class="k">{{T "nodestat.memory"}}</span><span class="v mono iso" dir="ltr">{{N .MemUsedMB}} / {{N .MemTotalMB}} MB ({{N .MemAvailMB}} MB {{T "nodestat.free"}})</span></div>
+        <div class="kv-row"><span class="k">{{T "nodestat.load"}}</span><span class="v num mono iso" dir="ltr">{{NF .Load1 2}} / {{N .Cores}} {{T "nodestat.cores"}}</span></div>
+        <div class="kv-row"><span class="k">{{T "nodestat.memory"}}</span><span class="v num mono iso" dir="ltr">{{N .MemUsedMB}} / {{N .MemTotalMB}} MB <span class="mem-sep" aria-hidden="true">·</span> {{N .MemAvailMB}} MB {{T "nodestat.free"}}</span></div>
         <div class="kv-row"><span class="k">{{T "nodestat.top_rss"}}</span><span class="v">
-          {{range .TopRSS}}<span class="proc-inline"><span class="p-name">{{.Name}}</span> <span class="mono iso">{{.Value}}</span></span>{{else}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
+          {{range .TopRSSSlots}}{{if .Name}}<span class="proc-inline"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="num mono iso" dir="ltr">{{.Value}}</span></span>{{end}}{{end}}{{if not .TopRSS}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
         </span></div>
         <div class="kv-row"><span class="k">{{T "nodestat.top_cpu"}}</span><span class="v">
-          {{range .TopCPU}}<span class="proc-inline"><span class="p-name">{{.Name}}</span> <span class="mono iso">{{.Value}}</span></span>{{else}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
+          {{range .TopCPUSlots}}{{if .Name}}<span class="proc-inline"><span class="p-name">{{.Name}}</span><span class="p-sep" aria-hidden="true">·</span><span class="num mono iso" dir="ltr">{{.Value}}</span></span>{{end}}{{end}}{{if not .TopCPU}}<span class="muted">{{T "nodestat.no_procs"}}</span>{{end}}
         </span></div>
         <div class="kv-row"><span class="k">{{T "nodestat.sample_age"}}</span><span class="v mono iso">{{.AgeText}}</span></div>
       </div>

@@ -3,6 +3,44 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.262 (2026-11-09)
+
+**Storage membership stops following leadership, an empty-valued node label stops existing, and leadership can be moved on purpose.**
+
+Tonight's incident had two halves. Leadership moved from `nxt-sw-4-m` to `nxt-sw-5-m`; `cluster update`
+then reported *"the former leader nxt-sw-4-m is no longer a storage node"* and *"the leader nxt-sw-5-m
+must be a storage node … added to storage_nodes"*, rewriting the operator's `storage_nodes` set. The
+backup agent silently left one node and appeared on another. Separately, `nxt-sw-3-w` carried
+`pmcluster.storage: ""` — a key that exists with no value, which any presence test reads as a storage
+node.
+
+- **Storage membership no longer follows leadership — but the leader invariant stays.** The reconcile step
+  still re-adds the current leader to `storage_nodes` (the edge and its local backup agent run there), and a
+  worker is still pruned (it cannot read settings, credentials or the stack list). What is gone is the
+  OTHER direction: a node that loses leadership is no longer removed from `storage_nodes` or stripped of its
+  label — a manager that stops leading is still a manager, and an election is not consent to move the
+  backup agent. The `storage_leader` cursor that drove the removal is gone.
+- **No empty-valued labels.** `SetNodeLabel` with an empty value removes the key (it already did; a test
+  now pins it, and the docker adapter is exercised through a mock daemon). Reads compare the value —
+  `cluster.IsStorageNode` — instead of testing the key's presence, so a stale `pmcluster.storage: ""`
+  cannot make a worker look like storage.
+- **`pmcluster doctor` reports empty-valued `pmcluster.*` labels** (`node labels`, warn): the key's
+  presence is the bug, so the fix is to clear it (`docker node update --label-rm`).
+- **`pmcluster cluster leader <node>`** (and `POST /api/cluster/leader/{hostname}`) moves leadership
+  deliberately: it demotes the current leader, lets the survivors elect, promotes the old leader back,
+  repeats until the target wins (bounded to three elections and 25 s), and reports the leader that
+  actually won. It refuses a non-manager target, refuses when the temporary demotion would leave fewer
+  than three managers, and refuses without quorum — the same refusals `node promote/demote` already use.
+  This is how failover behaviour is tested without taking a node down; nothing automatic calls it.
+
+Tests: the leader is added to `storage_nodes` when missing; a manager that loses leadership is kept
+(the regression — byte-identical set, no label cleared); a worker is still pruned; an apply that changes
+nothing leaves the set untouched; an empty label write removes the key and a no-op clear writes nothing;
+`SetNodeRole` demotes and re-promotes through the Docker node spec; doctor names the empty-valued label;
+`cluster leader` refuses a worker, refuses below three managers, refuses without quorum, and reports the
+new leader (CLI, API handler and library). `openapi.yaml` documents the route with its own
+`LeaderMoveResult` schema.
+
 ## v0.2.261 (2026-11-09)
 
 **The OTel collector follows the leader by constraint, not by preference, so the node-stats panel stops reporting an empty fleet.**

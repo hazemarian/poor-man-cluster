@@ -3,6 +3,8 @@ package controllers
 import (
 	"fmt"
 	"net/http"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -231,6 +233,11 @@ type nodeStatModel struct {
 	TopRSS []procModel
 	TopCPU []procModel
 
+	// The rendered window. The full lists stay in TopRSS/TopCPU (up to
+	// procDataLimit) so truncation is a render decision, never data loss.
+	TopRSSSlots []procModel
+	TopCPUSlots []procModel
+
 	// AgeText is a compact "how old is this sample" string ("8s", "4m",
 	// "2h"). Stale is true past staleAfter and both greys the row and labels
 	// it — never either alone: a greyed row without a word is a broken console,
@@ -245,9 +252,76 @@ type nodeStatModel struct {
 }
 
 // procModel is one process line under the two top lists.
+//
+// Processes that share a name are ONE row: RSS and CPU are summed, because the
+// operator's question is "what is eating this node", and two `parseable` rows
+// (439 MB + 231 MB) read as a rendering bug until you find the PIDs. Count
+// says how many processes the row stands for, so the sum is never a mystery.
 type procModel struct {
 	Name  string
 	Value string // pre-formatted: "902 MB" or "37%"
+	Count int    // processes folded into this row; 0 on a padding slot
+}
+
+// procDataLimit is how many aggregated rows the model keeps (the sampler's own
+// top-5 cap) and procPreviewLimit is how many the panel renders. Three lines
+// per column keep a row short enough to scan; the data still holds five so the
+// "2 more" note is truthful.
+const (
+	procDataLimit    = 5
+	procPreviewLimit = 3
+)
+
+// unnamedProc stands in for a process whose comm is empty. It is a glyph, not
+// prose: a blank name must not merge unrelated processes into one row.
+const unnamedProc = "?"
+
+// aggregateProcs folds processes with the same name into one row, sums the
+// axis value and re-ranks by that sum. Order is stable on ties so the list does
+// not flicker between samples.
+func aggregateProcs(procs []pmapi.NodeStatProc, value func(pmapi.NodeStatProc) float64, format func(float64) string) []procModel {
+	type bucket struct {
+		sum   float64
+		count int
+	}
+	byName := make(map[string]*bucket, len(procs))
+	order := make([]string, 0, len(procs))
+	for _, p := range procs {
+		name := strings.TrimSpace(p.Name)
+		if name == "" {
+			name = unnamedProc
+		}
+		b, seen := byName[name]
+		if !seen {
+			b = &bucket{}
+			byName[name] = b
+			order = append(order, name)
+		}
+		b.sum += value(p)
+		b.count++
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return byName[order[i]].sum > byName[order[j]].sum
+	})
+	if len(order) > procDataLimit {
+		order = order[:procDataLimit]
+	}
+	out := make([]procModel, 0, len(order))
+	for _, name := range order {
+		b := byName[name]
+		out = append(out, procModel{Name: name, Value: format(b.sum), Count: b.count})
+	}
+	return out
+}
+
+// procSlots is the fixed-height window the template renders: always
+// procPreviewLimit entries, padded with empty rows (Name == ""). A node with
+// one process and a node with five therefore lay out the same number of lines,
+// so the table does not judder as samples arrive.
+func procSlots(rows []procModel) []procModel {
+	slots := make([]procModel, procPreviewLimit)
+	copy(slots, rows)
+	return slots
 }
 
 // RowClass is the row's tint class. Staleness wins over the live tints: an old
@@ -288,12 +362,14 @@ func newNodeStatModel(s pmapi.NodeStat, now time.Time) nodeStatModel {
 		m.MemLow = s.MemAvailMB*100/s.MemTotalMB < lowMemoryPercent
 	}
 	m.DockerDown = !s.DockerUp
-	for _, p := range s.TopRSS {
-		m.TopRSS = append(m.TopRSS, procModel{Name: p.Name, Value: fmt.Sprintf("%.0f MB", p.RSSMB)})
-	}
-	for _, p := range s.TopCPU {
-		m.TopCPU = append(m.TopCPU, procModel{Name: p.Name, Value: fmt.Sprintf("%.1f%%", p.CPUPct)})
-	}
+	m.TopRSS = aggregateProcs(s.TopRSS,
+		func(p pmapi.NodeStatProc) float64 { return p.RSSMB },
+		func(v float64) string { return fmt.Sprintf("%.0f MB", v) })
+	m.TopCPU = aggregateProcs(s.TopCPU,
+		func(p pmapi.NodeStatProc) float64 { return p.CPUPct },
+		func(v float64) string { return fmt.Sprintf("%.1f%%", v) })
+	m.TopRSSSlots = procSlots(m.TopRSS)
+	m.TopCPUSlots = procSlots(m.TopCPU)
 	return m
 }
 

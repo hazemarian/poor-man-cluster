@@ -136,6 +136,8 @@ func (f *fakeClient) NodeList(_ context.Context) ([]runtime.Node, error) { retur
 
 func (f *fakeClient) SetNodeLabel(_ context.Context, _, _, _ string) error { return nil }
 
+func (f *fakeClient) SetNodeRole(_ context.Context, _, _ string) error { return nil }
+
 func (f *fakeClient) ServiceList(_ context.Context) ([]runtime.Service, error) {
 	out := make([]runtime.Service, 0, len(f.services))
 	for _, s := range f.services {

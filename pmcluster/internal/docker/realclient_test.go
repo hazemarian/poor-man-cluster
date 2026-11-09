@@ -37,11 +37,21 @@ type mockDaemon struct {
 	// execAttachRaw, when non-nil, makes the /exec/<id>/start endpoint write
 	// these raw bytes (TTY mode, no stdcopy framing) then half-close.
 	execAttachRaw []byte
+	// nodeUpdates records each POST /nodes/<id>/update: the spec the client
+	// asked the daemon to store, and the version it based the update on.
+	nodeUpdates []nodeUpdateRecord
 	// events are streamed (newline-delimited JSON) by the /events endpoint.
 	events []events.Message
 	// holdEvents keeps the /events response open (blocking on the request
 	// context) after streaming, simulating a live daemon feed.
 	holdEvents bool
+}
+
+// nodeUpdateRecord is one node role/label update the client sent.
+type nodeUpdateRecord struct {
+	id      string
+	version string
+	spec    swarm.NodeSpec
 }
 
 func newMockDaemon() *mockDaemon {
@@ -118,6 +128,46 @@ func (m *mockDaemon) handler() http.Handler {
 			defer m.mu.Unlock()
 			if err := json.NewEncoder(w).Encode(m.nodes); err != nil {
 				http.Error(w, err.Error(), 500)
+			}
+		})
+		inner.HandleFunc("/nodes/", func(w http.ResponseWriter, r *http.Request) {
+			parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/nodes/"), "/")
+			id := parts[0]
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			switch {
+			case len(parts) == 1 && r.Method == http.MethodGet:
+				for _, n := range m.nodes {
+					if n.ID != id {
+						continue
+					}
+					raw, _ := json.Marshal(n)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write(raw)
+					return
+				}
+				http.Error(w, `{"message":"node not found"}`, http.StatusNotFound)
+			case len(parts) == 2 && parts[1] == "update" && r.Method == http.MethodPost:
+				var spec swarm.NodeSpec
+				if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				m.nodeUpdates = append(m.nodeUpdates, nodeUpdateRecord{
+					id:      id,
+					version: r.URL.Query().Get("version"),
+					spec:    spec,
+				})
+				// Apply it, the way a real daemon does — a client that reads the
+				// node back after writing must see its own update.
+				for i := range m.nodes {
+					if m.nodes[i].ID == id {
+						m.nodes[i].Spec = spec
+					}
+				}
+				w.WriteHeader(http.StatusOK)
+			default:
+				http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
 			}
 		})
 		inner.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
@@ -772,5 +822,102 @@ func TestEventFromMessage(t *testing.T) {
 	empty := eventFromMessage(events.Message{Type: events.ContainerEventType, Action: events.ActionDie})
 	if empty.Stack != "" || empty.Service != "" || empty.NodeID != "" || empty.Timestamp != 0 {
 		t.Errorf("nil attributes should map to empty fields, got %+v", empty)
+	}
+}
+
+// An empty label value REMOVES the key. Storing "" instead leaves
+// `pmcluster.storage: ""` on the node, and a key that is present is what made a
+// worker read as a storage node to anything matching on presence.
+func TestRealClient_SetNodeLabelEmptyValueRemovesTheKey(t *testing.T) {
+	m := newMockDaemon()
+	m.nodes = []swarm.Node{{
+		ID:   "node-1",
+		Meta: swarm.Meta{Version: swarm.Version{Index: 12}},
+		Spec: swarm.NodeSpec{Annotations: swarm.Annotations{Labels: map[string]string{
+			runtime.StorageNodeLabel: "true",
+			"keep.me":                "1",
+		}}},
+	}}
+	rc := realClientFromServer(t, m)
+	ctx := context.Background()
+
+	if err := rc.SetNodeLabel(ctx, "node-1", runtime.StorageNodeLabel, ""); err != nil {
+		t.Fatalf("SetNodeLabel: %v", err)
+	}
+	if len(m.nodeUpdates) != 1 {
+		t.Fatalf("expected one node update, got %d", len(m.nodeUpdates))
+	}
+	up := m.nodeUpdates[0]
+	if _, present := up.spec.Labels[runtime.StorageNodeLabel]; present {
+		t.Fatalf("an empty value must REMOVE the key, the spec still carries %v", up.spec.Labels)
+	}
+	if up.spec.Labels["keep.me"] != "1" {
+		t.Errorf("unrelated labels must survive, got %v", up.spec.Labels)
+	}
+	if up.version != "12" {
+		t.Errorf("update version = %q, want 12 (optimistic concurrency)", up.version)
+	}
+
+	// Clearing a key that is not there is a no-op: no second API write.
+	if err := rc.SetNodeLabel(ctx, "node-1", runtime.StorageNodeLabel, ""); err != nil {
+		t.Fatalf("second SetNodeLabel: %v", err)
+	}
+	if len(m.nodeUpdates) != 1 {
+		t.Fatalf("clearing an absent label must not write, updates = %d", len(m.nodeUpdates))
+	}
+}
+
+// A non-empty value is stored as-is, so the promote path still works.
+func TestRealClient_SetNodeLabelStoresANonEmptyValue(t *testing.T) {
+	m := newMockDaemon()
+	m.nodes = []swarm.Node{{ID: "node-1", Meta: swarm.Meta{Version: swarm.Version{Index: 3}}}}
+	rc := realClientFromServer(t, m)
+
+	if err := rc.SetNodeLabel(context.Background(), "node-1", runtime.StorageNodeLabel, "true"); err != nil {
+		t.Fatalf("SetNodeLabel: %v", err)
+	}
+	if len(m.nodeUpdates) != 1 || m.nodeUpdates[0].spec.Labels[runtime.StorageNodeLabel] != "true" {
+		t.Fatalf("label was not stamped: %+v", m.nodeUpdates)
+	}
+}
+
+func TestRealClient_SetNodeRoleUpdatesTheNodeSpec(t *testing.T) {
+	m := newMockDaemon()
+	m.nodes = []swarm.Node{{
+		ID:   "node-2",
+		Meta: swarm.Meta{Version: swarm.Version{Index: 4}},
+		Spec: swarm.NodeSpec{Role: swarm.NodeRoleManager},
+	}}
+	rc := realClientFromServer(t, m)
+	ctx := context.Background()
+
+	if err := rc.SetNodeRole(ctx, "node-2", "worker"); err != nil {
+		t.Fatalf("SetNodeRole(worker): %v", err)
+	}
+	if len(m.nodeUpdates) != 1 || m.nodeUpdates[0].spec.Role != swarm.NodeRoleWorker {
+		t.Fatalf("role was not demoted: %+v", m.nodeUpdates)
+	}
+
+	// Changing to the role it already has is a no-op.
+	if err := rc.SetNodeRole(ctx, "node-2", "worker"); err != nil {
+		t.Fatalf("SetNodeRole(worker, again): %v", err)
+	}
+	if len(m.nodeUpdates) != 1 {
+		t.Fatalf("a no-op role change wrote the node: %+v", m.nodeUpdates)
+	}
+
+	// An unknown role is refused before the API is touched.
+	if err := rc.SetNodeRole(ctx, "node-2", "king"); err == nil {
+		t.Fatal("expected an error for an unknown role")
+	}
+	if len(m.nodeUpdates) != 1 {
+		t.Fatalf("an invalid role must not write the node: %+v", m.nodeUpdates)
+	}
+
+	if err := rc.SetNodeRole(ctx, "node-2", "manager"); err != nil {
+		t.Fatalf("SetNodeRole(manager): %v", err)
+	}
+	if len(m.nodeUpdates) != 2 || m.nodeUpdates[1].spec.Role != swarm.NodeRoleManager {
+		t.Fatalf("role was not promoted back: %+v", m.nodeUpdates)
 	}
 }

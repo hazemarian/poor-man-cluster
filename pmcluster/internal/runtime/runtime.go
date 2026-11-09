@@ -44,8 +44,17 @@ type Client interface {
 	SwarmID(ctx context.Context) (string, error)
 
 	// SetNodeLabel adds or replaces a label on a swarm node (used to mark
-	// storage nodes so the backup agent can be constrained to them).
+	// storage nodes so the backup agent can be constrained to them). An empty
+	// value REMOVES the key: a label present with an empty value is not "no
+	// label", it is a label that tests like `node.labels.x == ""` still match.
 	SetNodeLabel(ctx context.Context, nodeID, key, value string) error
+
+	// SetNodeRole makes a node a manager or a worker. It is the membership
+	// primitive a leadership move needs: Swarm has no leadership-transfer API,
+	// so the only supported way to force a different Raft leader is to take the
+	// current leader's manager role away and let the remaining managers elect
+	// one of themselves.
+	SetNodeRole(ctx context.Context, nodeID, role string) error
 
 	// ServiceInspect returns a read-only view of one service by name or ID.
 	ServiceInspect(ctx context.Context, name string) (ServiceInspectResult, error)
@@ -356,12 +365,12 @@ const StorageNodeLabel = "pmcluster.storage"
 // leadership. The daemon sets it on the local node when leadership is GAINED
 // (and re-asserts it every leader tick), and clears it when leadership is LOST,
 // so the OTel collector's CONSTRAINT ("node.labels.pmcluster.leader==true") has
-// exactly one matching node -- the one whose disk holds the node-stats file.
+// exactly one matching node — the one whose disk holds the node-stats file.
 //
 // It is a CONSTRAINT, not a preference: a preference orders eligible nodes and
 // leaves a running task where it is, which is how the collector ended up writing
 // its JSONL on a node the leader's daemon never reads. The price of a constraint
-// is that the label must exist -- `cluster up` claims it for the current leader
+// is that the label must exist — `cluster up` claims it for the current leader
 // and `cluster update` refuses to deploy the observability stack without it.
 const LeaderNodeLabel = "pmcluster.leader"
 

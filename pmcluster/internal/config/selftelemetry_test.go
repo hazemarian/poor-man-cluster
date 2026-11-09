@@ -118,11 +118,13 @@ func TestResolveOTLPEndpoint_UnreachableCollectorDisables(t *testing.T) {
 	}
 }
 
-// TestResolveOTLPEndpoint_RejectsUnusableSwarmAddresses: only an address a peer
-// could dial is acceptable. Loopback here would recreate the exact bug (a
-// daemon exporting to a port that only exists on one node).
+// TestResolveOTLPEndpoint_RejectsUnusableSwarmAddresses: a PEER address is what
+// the resolver needs, so loopback, a non-IP and an empty value are refused —
+// exporting to a port that only exists on one node is the 2026-11-08 bug.
+// (0.0.0.0 is not in this list on purpose: it is handled by the leader case
+// below, because it means "this host", not "some unreachable peer".)
 func TestResolveOTLPEndpoint_RejectsUnusableSwarmAddresses(t *testing.T) {
-	for _, addr := range []string{"127.0.0.1", "::1", "0.0.0.0", "not-an-ip", " "} {
+	for _, addr := range []string{"127.0.0.1", "::1", "not-an-ip", " "} {
 		ep, reason := ResolveOTLPEndpoint(context.Background(), OTLPAutoEndpoint,
 			stubAddr(addr, nil), okDial(nil))
 		if ep != "" {
@@ -131,6 +133,45 @@ func TestResolveOTLPEndpoint_RejectsUnusableSwarmAddresses(t *testing.T) {
 		if reason == "" {
 			t.Errorf("addr %q: disabled without a reason", addr)
 		}
+	}
+}
+
+// TestResolveOTLPEndpoint_LeaderWildcardAddressExportsOnLoopback is the fix for
+// the missing leader row in the Node resources panel. A Swarm leader can record
+// ITSELF as 0.0.0.0; the collector is pinned to that same node and publishes
+// 4318 on the host, so loopback is a working destination. The old code treated
+// the wildcard like an unusable peer address and disabled self-telemetry for
+// the one node whose sample the panel cannot afford to lose.
+func TestResolveOTLPEndpoint_LeaderWildcardAddressExportsOnLoopback(t *testing.T) {
+	for _, addr := range []string{"0.0.0.0", "::"} {
+		var dialed string
+		ep, reason := ResolveOTLPEndpoint(context.Background(), OTLPAutoEndpoint,
+			stubAddr(addr, nil), okDial(&dialed))
+		if reason != "" {
+			t.Fatalf("swarm address %q: telemetry disabled: %s", addr, reason)
+		}
+		if want := "http://127.0.0.1:4318"; ep != want {
+			t.Errorf("swarm address %q: endpoint = %q, want %q", addr, ep, want)
+		}
+		if dialed != "127.0.0.1:4318" {
+			t.Errorf("swarm address %q: dial-check target = %q, want 127.0.0.1:4318", addr, dialed)
+		}
+	}
+}
+
+// TestResolveOTLPEndpoint_WildcardStillNeedsAnAnswer: the wildcard is only
+// accepted because the collector answers on loopback. When it does not, the
+// exporter is still refused — the leader gets its row from a live collector,
+// never from an exporter aimed at a closed port.
+func TestResolveOTLPEndpoint_WildcardStillNeedsAnAnswer(t *testing.T) {
+	ep, reason := ResolveOTLPEndpoint(context.Background(), OTLPAutoEndpoint,
+		stubAddr("0.0.0.0", nil),
+		func(context.Context, string) error { return errors.New("connect: connection refused") })
+	if ep != "" {
+		t.Fatalf("endpoint = %q, want disabled when nothing answers on loopback", ep)
+	}
+	if !strings.Contains(reason, "127.0.0.1:4318") {
+		t.Errorf("reason = %q, want it to name the probed loopback address", reason)
 	}
 }
 

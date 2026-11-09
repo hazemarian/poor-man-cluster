@@ -751,9 +751,13 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		if err != nil {
 			return fmt.Errorf("list swarm nodes: %w", err)
 		}
-		// The leader runs the edge (console/API/webhooks) and must therefore be
+		// The leader runs the edge (console/API/webhooks) and MUST therefore be
 		// a storage node: otherwise a manual `backup create` finds no local
-		// offen agent. Re-add it when the setting omits it.
+		// offen agent. That invariant is one-directional. Losing leadership is
+		// NOT a reason to leave storage_nodes — a manager that stops leading is
+		// still a manager, and an election is not consent to move the backup
+		// agent (tonight's incident: leadership moved from nxt-sw-4-m to
+		// nxt-sw-5-m and the apply removed the former leader).
 		leaderHost := ""
 		for _, n := range nodes {
 			if n.IsLeader {
@@ -777,7 +781,9 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// worker cannot even ship (measured: its policy file carries no S3
 		// credentials). Roles change out of band, though: `docker node demote` can
 		// drop a storage node to worker at any time, so the CLI guard is not enough.
-		// This reconciliation is what keeps the invariant true.
+		// This reconciliation is what keeps the invariant true. It is a ROLE rule:
+		// a manager that stops leading is still a manager, and stays a storage
+		// node until the operator says otherwise.
 		if pruned, dropped := pruneNonManagerStorageNodes(raw, nodes); len(dropped) > 0 {
 			raw = pruned
 			if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), raw); err != nil {
@@ -804,37 +810,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			}
 			fmt.Fprintf(out, "  ⚠ the leader %s must be a storage node (the backup agent runs there) — added to storage_nodes (the next reconcile re-deploys the backup stack)\n", leaderHost)
 		}
-		// Storage follows leadership: the new leader was added above, so the
-		// PREVIOUS leader (no longer leading) stops being a storage node.
-		prev := deps.Store.SettingDefault(ctx, storageLeaderKey, "")
-		if leaderHost != "" {
-			if prev != "" && prev != leaderHost && containsStorageNode(splitStorageNodes(raw), prev) {
-				kept := make([]string, 0, len(splitStorageNodes(raw)))
-				for _, h := range splitStorageNodes(raw) {
-					if h != prev {
-						kept = append(kept, h)
-					}
-				}
-				raw = strings.Join(kept, ",")
-				if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), raw); err != nil {
-					return fmt.Errorf("persist storage_nodes: %w", err)
-				}
-				for _, n := range nodes {
-					if n.Hostname == prev {
-						if err := deps.Docker.SetNodeLabel(ctx, n.ID, runtime.StorageNodeLabel, ""); err != nil {
-							fmt.Fprintf(out, "  ⚠ could not clear the storage label on the former leader %s (%v)\n", prev, err)
-						}
-						break
-					}
-				}
-				fmt.Fprintf(out, "  ⚠ leadership moved to %s — the former leader %s is no longer a storage node\n", leaderHost, prev)
-			}
-			if prev != leaderHost {
-				if err := deps.Store.SetSetting(ctx, storageLeaderKey, leaderHost); err != nil {
-					return fmt.Errorf("persist storage_leader: %w", err)
-				}
-			}
-		}
 		for _, want := range splitStorageNodes(raw) {
 			for _, n := range nodes {
 				if n.Hostname == want {
@@ -853,7 +828,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// clears the label (and the setting); a raw setting edit is re-adopted
 		// on the next update because the label wins.
 		for _, n := range nodes {
-			if n.Labels[runtime.StorageNodeLabel] != "true" {
+			if !IsStorageNode(n) {
 				continue
 			}
 			if containsStorageNode(splitStorageNodes(raw), n.Hostname) {
@@ -1116,12 +1091,6 @@ func RenderClusterConfigs(ctx context.Context, deps UpdateDeps, in UpdateInput) 
 	}
 	return out, nil
 }
-
-// storageLeaderKey remembers which hostname was promoted to a storage node
-// because it held leadership, so that a later failover can demote the former
-// leader (the leader is always a storage node; a failed leader returns to a
-// plain node).
-const storageLeaderKey = "storage_leader"
 
 // containsStorageNode reports whether host is already in the storage-node list.
 func containsStorageNode(hosts []string, host string) bool {

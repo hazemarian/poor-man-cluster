@@ -25,6 +25,11 @@ const OTLPPort = 4318
 // than a few seconds.
 const selfTelemetryDialTimeout = 2 * time.Second
 
+// loopbackAddress is the dial target for a node whose swarm record is the
+// wildcard address (0.0.0.0 / ::): the value means "this host", and the only
+// address that is certainly this host is loopback.
+const loopbackAddress = "127.0.0.1"
+
 // SwarmAddrFunc reports this node's swarm-advertised address (node.Status.Addr).
 // The daemon passes internal/docker.NodeSelfAddr; tests pass a stub.
 type SwarmAddrFunc func(ctx context.Context) (string, error)
@@ -38,7 +43,10 @@ type DialFunc func(ctx context.Context, addr string) error
 //
 //   - ""              → disabled ("" and no reason): the operator turned it off.
 //   - "auto" (default)→ this node's swarm address, dial-checked; disabled with
-//     a reason when the address cannot be read or nothing answers there.
+//     a reason when the address cannot be read or nothing answers there. A
+//     wildcard address (0.0.0.0 / ::) — which is what a swarm records for the
+//     node holding leadership on this fleet — is dialled on loopback instead,
+//     because that is the one address that certainly names this host.
 //   - anything else   → used verbatim. An explicit endpoint is the operator's
 //     decision and is never second-guessed.
 //
@@ -89,7 +97,17 @@ func ResolveOTLPEndpoint(ctx context.Context, configured string, swarmAddr Swarm
 	if perr != nil {
 		return "", fmt.Sprintf("self-telemetry disabled: swarm node address %q is not an IP address", addr)
 	}
-	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
+	if ip.IsUnspecified() {
+		// 0.0.0.0 / :: is not an address a PEER can dial, but it is a value a
+		// swarm records for the node itself and it means "this host". The
+		// collector is one task pinned to the leader, so on the leader loopback
+		// IS where its published 4318 answers — and refusing the wildcard was
+		// the leader-only skip that cost nxt-sw-5-m its own row in the Node
+		// resources panel: every other node exported, the leader had no
+		// exporter at all. The dial check below still refuses a node where
+		// nothing listens, so this cannot bring back the 2026-11-08 storm.
+		addr = loopbackAddress
+	} else if ip.IsLoopback() || ip.IsMulticast() {
 		return "", fmt.Sprintf("self-telemetry disabled: swarm node address %q is not routable from a peer", addr)
 	}
 

@@ -129,6 +129,47 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ClusterInfo"
+  /api/cluster/leader/{hostname}:
+    post:
+      summary: Force Swarm leadership onto a manager
+      description: |
+        Moves the Raft election onto `hostname` by demoting the current leader
+        for the duration of the election and promoting it back afterwards. Swarm
+        has no leadership-transfer API; this is the supported way to move
+        leadership without taking a node down, for testing failover behaviour.
+
+        Storage membership is not what this endpoint is for. The leader invariant still holds —
+        if the node that wins is missing from `storage_nodes`, the next apply adds it — and
+        nothing is removed for losing leadership: the nodes that were storage before the move
+        still are.
+
+        Refused (409) when the target is not a manager, when forcing the
+        election would leave fewer than three managers, or when the swarm has no
+        quorum. The response reports the leader the swarm actually elected.
+      operationId: moveLeader
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: hostname
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Leadership moved (or the target already led)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeaderMoveResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Refused — not a manager, fewer than three managers, or no quorum
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/cluster/apply:
     get:
       summary: Last platform apply, including the steps that degraded
@@ -2996,6 +3037,17 @@ components:
           type: array
           items:
             type: string
+    LeaderMoveResult:
+      type: object
+      properties:
+        leader:
+          type: string
+        previous:
+          type: string
+        elections:
+          type: integer
+        changed:
+          type: boolean
     StorageNodeResult:
       type: object
       properties:

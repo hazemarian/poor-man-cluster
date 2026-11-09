@@ -234,7 +234,7 @@ flowchart TD
 
 The invariant it encodes: one deterministic order decides where stateful data lands, so a move is an explicit act, not a scheduler whim.
 
-The storage-node model makes that order meaningful. `cluster up` seeds the leader's hostname into `storage_nodes`, and every `cluster update` re-adds the current leader — the leader is always a storage node. Workers qualify too: `pmcluster join --storage-node` stamps the swarm-visible `pmcluster.storage` label on the joiner, and the leader's next update adopts labeled-but-unlisted nodes. Storage follows leadership: a manager that loses leadership leaves `storage_nodes` and loses its label; the promoted leader is added. Every deployed service carries an `io.pmcluster.node` label naming its data home, visible in the console and `service ps`.
+The storage-node model makes that order meaningful. `cluster up` seeds the leader's hostname into `storage_nodes`, and `cluster update` re-adds the current leader if it is missing — the leader is always a storage node, because the edge and its local backup agent run there. That coupling is one-directional: losing leadership removes nothing, so a manager that stops leading stays a storage node until the operator demotes it. Workers qualify too: `pmcluster join --storage-node` stamps the swarm-visible `pmcluster.storage` label on the joiner, and the leader's next update adopts labeled-but-unlisted managers. Every deployed service carries an `io.pmcluster.node` label naming its data home, visible in the console and `service ps`.
 
 Sources: pmcluster/internal/stacks/placement.go; pmcluster/internal/cluster/cluster_state.go; docs/storage-and-databases.md; pmcluster/internal/cli/serve.go (volume-repair loop).
 
@@ -360,7 +360,7 @@ schedule being right. The cost of doing it in the agent is that an external endp
 hourly run, which is why each leg reports its own verdict in the run record and discovery records
 `offsite-missing` rather than assuming a local artifact implies a complete run.
 
-**Storage-node model.** Stateful stacks need a home that follows leadership, so the leader is always a storage node, workers optionally so, and storage follows leadership. We rejected a fixed anchor, which could strand the backup agent and console on an ex-leader. The cost is that expanding `storage_nodes` re-pins only future deploys.
+**Storage-node model.** The leader is always a storage node — the edge and its local backup agent run there, so `cluster up` seeds it and `cluster update` re-adds it when it is missing. The coupling is deliberately one-directional: losing leadership removes nothing, so a manager that stops leading keeps its storage role and label until the operator demotes it. We rejected storage-follows-leadership in both directions: an election then rewrote the operator's set, silently taking the backup agent off one node and putting it on another — Raft re-electing someone is not consent to move data. We also rejected a fixed anchor, which could strand the backup agent and console on an ex-leader that no longer serves. The cost is that expanding `storage_nodes` re-pins only future deploys.
 
 **HA story.** We chose Path 1 — pin + backup + restore — over block replication. We rejected LINSTOR/DRBD9 for the footprint in section 2 and because a replicated device still needs the backup pipeline. The cost is a minutes-scale restore window on node loss.
 

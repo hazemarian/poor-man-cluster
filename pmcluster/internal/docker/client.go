@@ -993,6 +993,38 @@ func (r *realClient) SetNodeLabel(ctx context.Context, nodeID, key, value string
 	return nil
 }
 
+// SetNodeRole promotes a node to manager or demotes it to worker. It inspects
+// the node for its current version (optimistic concurrency) first, and is a
+// no-op when the node already has the requested role.
+//
+// Swarm exposes no leadership-transfer API, so this is the only primitive that
+// can force a new Raft leader: demote the leader, let the survivors elect one,
+// then promote it back. `cluster leader` sequences exactly that, and refuses
+// when the manager count cannot absorb the temporary demotion.
+func (r *realClient) SetNodeRole(ctx context.Context, nodeID, role string) error {
+	var want swarm.NodeRole
+	switch role {
+	case "manager":
+		want = swarm.NodeRoleManager
+	case "worker":
+		want = swarm.NodeRoleWorker
+	default:
+		return fmt.Errorf("node role %q: must be \"manager\" or \"worker\"", role)
+	}
+	info, _, err := r.c.NodeInspectWithRaw(ctx, nodeID)
+	if err != nil {
+		return fmt.Errorf("node inspect: %w", err)
+	}
+	if info.Spec.Role == want {
+		return nil
+	}
+	info.Spec.Role = want
+	if err := r.c.NodeUpdate(ctx, nodeID, info.Version, info.Spec); err != nil {
+		return fmt.Errorf("node update: %w", err)
+	}
+	return nil
+}
+
 func (r *realClient) SecretList(ctx context.Context, labelKey, labelValue string) ([]string, error) {
 	opts := swarm.SecretListOptions{}
 	if labelKey != "" {

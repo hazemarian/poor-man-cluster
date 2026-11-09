@@ -20,6 +20,10 @@ type fakeNodeClient struct {
 	nodes      []runtime.Node
 	labelCalls []string // "<id>:<key>:<value>"
 	labelErr   error
+	roleCalls  []string // "<id>:<role>"
+	// electedBy, when set, becomes the leader as soon as the current leader is
+	// demoted — the election `cluster leader` has to observe.
+	electedBy string
 }
 
 func (f *fakeNodeClient) Close() error { return nil }
@@ -29,6 +33,27 @@ func (f *fakeNodeClient) NodeList(context.Context) ([]runtime.Node, error) { ret
 func (f *fakeNodeClient) SetNodeLabel(_ context.Context, id, key, value string) error {
 	f.labelCalls = append(f.labelCalls, id+":"+key+":"+value)
 	return f.labelErr
+}
+
+func (f *fakeNodeClient) SetNodeRole(_ context.Context, id, role string) error {
+	f.roleCalls = append(f.roleCalls, id+":"+role)
+	for i := range f.nodes {
+		if f.nodes[i].ID != id {
+			continue
+		}
+		f.nodes[i].Role = role
+		if role != "manager" {
+			f.nodes[i].IsLeader = false
+		}
+	}
+	if role == "worker" && f.electedBy != "" {
+		for i := range f.nodes {
+			if f.nodes[i].Hostname == f.electedBy && f.nodes[i].Role == "manager" {
+				f.nodes[i].IsLeader = true
+			}
+		}
+	}
+	return nil
 }
 
 // tc7NodeFixtures returns the two-node swarm used across the tests.

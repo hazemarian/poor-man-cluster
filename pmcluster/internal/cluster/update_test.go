@@ -1018,9 +1018,58 @@ func TestUpdate_ForceRedeploysAllStacks(t *testing.T) {
 	}
 }
 
-// TestUpdate_AddsLeaderToStorageNodes verifies the BUG-024 policy: the leader
-// must be a storage node (the backup agent and the edge run there), so an
+// TestUpdate_StorageSetSurvivesLeadershipChange is the regression for the
+// incident: leadership moved from nxt-sw-4-m to nxt-sw-5-m and the apply
+// rewrote storage_nodes (removing the former leader, adding the new one), which
+// silently took the backup agent off one node and put it on another.
+//
+// Storage membership is the operator's setting. A manager that loses leadership
+// is still a manager, so it stays a storage node until the operator demotes it,
+// and the set must come out of the reconcile byte-identical.
+func TestUpdate_StorageSetSurvivesLeadershipChange(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	const before = "node-a,node-b"
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), before); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	// A pre-fix cluster still carries the cursor it used to demote the former
+	// leader. It must not drive anything any more.
+	if err := deps.Store.SetSetting(ctx, "storage_leader", "node-a"); err != nil {
+		t.Fatalf("SetSetting storage_leader: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		// node-a led until tonight; it is still a manager and still storage.
+		{Hostname: "node-a", ID: "na", Role: "manager", Status: "ready", Availability: "active"},
+		{Hostname: "node-b", ID: "nb", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
+	}
+	var out bytes.Buffer
+	deps.Stdout = &out
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got := deps.Store.SettingDefault(ctx, SettingStorageNodes(), ""); got != before {
+		t.Fatalf("storage_nodes = %q, want %q byte-identical — a leadership change is not consent to rewrite it (output:\n%s)", got, before, out.String())
+	}
+	for _, l := range f.nodeLabels {
+		if l == runtime.StorageNodeLabel+"=" {
+			t.Fatalf("the former leader's storage label was cleared: %v (output:\n%s)", f.nodeLabels, out.String())
+		}
+	}
+	// Both managers are storage nodes, so both are labelled.
+	if len(f.nodeLabels) != 2 {
+		t.Fatalf("expected both storage nodes to be labelled, got %v", f.nodeLabels)
+	}
+}
+
+// TestUpdate_AddsLeaderToStorageNodes pins the one-directional invariant: the
+// leader must be a storage node (the backup agent and the edge run there), so an
 // update that finds storage_nodes without the leader re-adds it and labels it.
+// The OTHER direction — losing leadership — removes nothing; that is
+// TestUpdate_StorageSetSurvivesLeadershipChange.
 func TestUpdate_AddsLeaderToStorageNodes(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 	ctx := context.Background()
@@ -1031,8 +1080,11 @@ func TestUpdate_AddsLeaderToStorageNodes(t *testing.T) {
 	f.nodes = []runtime.Node{
 		{Hostname: "nextrum-sy-1", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
 			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
-		{Hostname: "nextrum-sy-2", ID: "n2", Role: "worker", Status: "ready", Availability: "active"},
+		{Hostname: "nextrum-sy-2", ID: "n2", Role: "manager", Status: "ready", Availability: "active"},
 	}
+	var out bytes.Buffer
+	deps.Stdout = &out
+
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -1040,22 +1092,61 @@ func TestUpdate_AddsLeaderToStorageNodes(t *testing.T) {
 	if !strings.Contains(got, "nextrum-sy-1") {
 		t.Fatalf("the leader must be added to storage_nodes, got %q", got)
 	}
+	if !strings.Contains(got, "nextrum-sy-2") {
+		t.Fatalf("the operator's existing entry was dropped: %q", got)
+	}
 	if len(f.nodeLabels) != 2 {
 		t.Fatalf("expected the label for both storage nodes, got %v", f.nodeLabels)
 	}
+	if !strings.Contains(out.String(), "must be a storage node") {
+		t.Fatalf("the apply must say why the leader was added, output:\n%s", out.String())
+	}
 }
 
-// TestUpdate_DemotesFormerLeader verifies that storage follows leadership: when
-// leadership moves, the new leader is a storage node and the FORMER leader stops
-// being one (its storage label is cleared).
-func TestUpdate_DemotesFormerLeader(t *testing.T) {
+// The leader is already in storage_nodes and still leads: nothing about the set
+// changes, and no warning is printed for a non-event.
+func TestUpdate_LeaderAlreadyAStorageNodeChangesNothing(t *testing.T) {
 	deps, cfgDir := seedUpdateState(t)
 	ctx := context.Background()
-	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "node-a,node-b"); err != nil {
+	const before = "node-a,node-b"
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), before); err != nil {
 		t.Fatalf("SetSetting storage_nodes: %v", err)
 	}
-	if err := deps.Store.SetSetting(ctx, storageLeaderKey, "node-a"); err != nil {
-		t.Fatalf("SetSetting storage_leader: %v", err)
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "node-a", ID: "na", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
+		{Hostname: "node-b", ID: "nb", Role: "manager", Status: "ready", Availability: "active"},
+	}
+	var out bytes.Buffer
+	deps.Stdout = &out
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got := deps.Store.SettingDefault(ctx, SettingStorageNodes(), ""); got != before {
+		t.Fatalf("storage_nodes changed on a no-op apply: %q, want %q", got, before)
+	}
+	if len(f.nodeLabels) != 2 {
+		t.Fatalf("expected both storage nodes to be labelled, got %v", f.nodeLabels)
+	}
+	for _, l := range f.nodeLabels {
+		if l != runtime.StorageNodeLabel+"=true" {
+			t.Fatalf("a no-op apply must only stamp =true, saw %q in %v", l, f.nodeLabels)
+		}
+	}
+	if strings.Contains(out.String(), "added to storage_nodes") {
+		t.Fatalf("a no-op must not report an add, output:\n%s", out.String())
+	}
+}
+
+// Leadership moves onto a manager that was not a storage node: the new leader is
+// added (invariant 1), and the FORMER leader stays (the bug being fixed).
+func TestUpdate_NewLeaderAddedAndFormerLeaderKept(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "node-a"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
 	}
 	f := deps.Docker.(*fakeDocker)
 	f.nodes = []runtime.Node{
@@ -1063,25 +1154,19 @@ func TestUpdate_DemotesFormerLeader(t *testing.T) {
 		{Hostname: "node-b", ID: "nb", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
 			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
 	}
+
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 	got := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
-	if strings.Contains(got, "node-a") {
-		t.Fatalf("the former leader must be demoted, storage_nodes = %q", got)
+	if !containsStorageNode(splitStorageNodes(got), "node-a") {
+		t.Fatalf("the former leader was removed from storage_nodes: %q", got)
 	}
-	if !strings.Contains(got, "node-b") {
-		t.Fatalf("the new leader must stay a storage node, storage_nodes = %q", got)
+	if !containsStorageNode(splitStorageNodes(got), "node-b") {
+		t.Fatalf("the new leader was not added to storage_nodes: %q", got)
 	}
-	joined := strings.Join(f.nodeLabels, ",")
-	if !strings.Contains(joined, runtime.StorageNodeLabel+"=true") {
-		t.Fatalf("the new leader must be labeled, calls = %v", f.nodeLabels)
-	}
-	if !strings.Contains(joined, runtime.StorageNodeLabel+"=") {
-		t.Fatalf("the former leader's label must be cleared, calls = %v", f.nodeLabels)
-	}
-	if leader := deps.Store.SettingDefault(ctx, storageLeaderKey, ""); leader != "node-b" {
-		t.Fatalf("storage_leader = %q, want node-b", leader)
+	if len(f.nodeLabels) != 2 {
+		t.Fatalf("both storage nodes must be labelled, got %v", f.nodeLabels)
 	}
 }
 

@@ -45,6 +45,11 @@ type fakeDocker struct {
 
 	// Label tracking — appended to on each SetNodeLabel call.
 	nodeLabels []string
+	// Role changes — appended to on each SetNodeRole call ("<id>:<role>").
+	nodeRoles []string
+	// onSetNodeRole, when set, replaces the default "apply the role to the
+	// fixture" behaviour; tests use it to simulate the election a demotion causes.
+	onSetNodeRole func(*fakeDocker, string, string)
 
 	// Service restarts — appended to on each ServiceRestart call.
 	restartedServices []string
@@ -374,6 +379,28 @@ func (f *fakeDocker) SetNodeLabel(_ context.Context, id, key, value string) erro
 }
 func (f *fakeDocker) JoinTokens(_ context.Context) (runtime.JoinTokens, error) {
 	return runtime.JoinTokens{}, nil
+}
+
+// SetNodeRole records the role change and applies it to the fixture, so a test
+// that demotes a manager sees a worker on the next NodeList. onSetNodeRole
+// replaces that behaviour when the test needs to simulate what the swarm does —
+// e.g. electing a new leader the moment the old one is demoted.
+func (f *fakeDocker) SetNodeRole(_ context.Context, nodeID, role string) error {
+	f.nodeRoles = append(f.nodeRoles, nodeID+":"+role)
+	if f.onSetNodeRole != nil {
+		f.onSetNodeRole(f, nodeID, role)
+		return nil
+	}
+	for i := range f.nodes {
+		if f.nodes[i].ID != nodeID {
+			continue
+		}
+		f.nodes[i].Role = role
+		if role != "manager" {
+			f.nodes[i].IsLeader = false
+		}
+	}
+	return nil
 }
 
 // SwarmID reports the Swarm cluster ID (the Raft cluster identity). "" when

@@ -93,9 +93,14 @@ var nodeLocalSubcommands = map[string]map[string]bool{
 // bootstrapClusterSubcommands are the `cluster` subcommands that must work
 // anywhere: they bring a cluster into existence, tear it down without a store,
 // or repair a node that cannot reach the control plane.
+//
+// `leader` belongs here because it does not read cluster state: it changes swarm
+// membership, which any manager may do, and the operation that moves leadership
+// AWAY from the current leader cannot by definition require running on it.
 var bootstrapClusterSubcommands = map[string]bool{
-	"up":    true, // creates the swarm and elects the first leader
-	"reset": true, // the escape hatch for a node that cannot reach the control plane
+	"up":     true, // creates the swarm and elects the first leader
+	"reset":  true, // the escape hatch for a node that cannot reach the control plane
+	"leader": true, // move leadership deliberately; needs a manager, not the leader
 }
 
 // detectSelf is a seam for tests; production reads the local docker socket.

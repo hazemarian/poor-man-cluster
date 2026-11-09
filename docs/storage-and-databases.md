@@ -80,9 +80,11 @@ Each does **two** things, and the second is the one that gets missed:
 2. stamps the `pmcluster.storage=true` Swarm node label — this is what the **backup agent**
    matches on, so backups only run where application data actually lives.
 
-The leader is always a storage node: `cluster up` seeds it, and the list self-maintains — the
-current leader is re-added, a former leader removed, and a node carrying the label but missing
-from the setting is adopted on the next `cluster update`.
+The leader must be a storage node: `cluster up` seeds it at bring-up and `cluster update` re-adds it if a
+later edit drops it, because the edge and its local backup agent run there. The coupling is
+one-directional — losing leadership removes nothing. A former leader is still a manager, so it keeps its
+storage role and label until the operator demotes it; a node carrying the label but missing from the
+setting is adopted on the next `cluster update`.
 
 ### 2.2 At deploy time, the platform resolves placement
 

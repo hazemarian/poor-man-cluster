@@ -630,32 +630,56 @@ form.htmx-request [type="submit"] { pointer-events: none; }
    what .table-wrap already exists for. */
 .nodestat-table { min-inline-size: 760px; }
 .nodestat-table th, .nodestat-table td { padding-inline: var(--s-4); }
-.nodestat-table td { vertical-align: top; }
-.nodestat-table .node-identity { flex-wrap: wrap; }
+.nodestat-table td { vertical-align: top; padding-block: var(--s-3); }
+.nodestat-table .node-identity { flex-wrap: wrap; align-items: center; }
 .nodestat-table .node-identity .mono { white-space: nowrap; }
-.nodestat-table .node-identity .node-glyph { width: 28px; height: 28px; }
+.nodestat-table .role-pill { flex: none; }
 .nodestat-table td:nth-child(2), .nodestat-table td:nth-child(6) { white-space: nowrap; min-inline-size: 8ch; }
-.nodestat-table td:nth-child(3) { white-space: nowrap; min-inline-size: 16ch; }
-.nodestat-table td:nth-child(1) { min-inline-size: 18ch; }
-.nodestat-table td:nth-child(4), .nodestat-table td:nth-child(5) { min-inline-size: 16ch; }
-.nodestat-table .proc-list {
-  list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; min-inline-size: 12ch;
+.nodestat-table td:nth-child(1) { min-inline-size: 16ch; }
+.nodestat-table td:nth-child(3) { min-inline-size: 17ch; }
+.nodestat-table td:nth-child(4), .nodestat-table td:nth-child(5) { min-inline-size: 18ch; }
+
+/* Numbers sit on a shared axis: tabular figures (base.css .num) plus an
+   end-aligned column, so 439, 252 and 231 stack instead of drifting with the
+   digit widths. The memory pair does the same, and the "free" line gets a
+   separator so it cannot read as part of "3,828 MB". */
+.nodestat-table .nodestat-load, .nodestat-table .nodestat-mem { text-align: end; }
+.nodestat-table .nodestat-mem > span,
+.nodestat-table .nodestat-mem > small {
+  display: block; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.nodestat-table .proc-list li {
-  display: flex; align-items: baseline; gap: var(--s-2);
-  font-size: var(--fs-xs); min-inline-size: 0;
+.nodestat-table .mem-sep { color: var(--text-tertiary); margin-inline-end: var(--s-1); }
+
+/* Three fixed rows per list. A node with one process and a node with five
+   occupy the exact same height, so a sample arriving does not move every row
+   below it. 1.5em is a tight line for a 12px list: five rows used to make a
+   ~180px row on their own. */
+.nodestat-table .proc-list {
+  list-style: none; margin: 0; padding: 0; display: grid;
+  grid-template-rows: repeat(3, 1.5em); min-inline-size: 17ch;
+}
+.nodestat-table .proc-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto 7ch;
+  align-items: baseline; column-gap: var(--s-2);
+  font-size: var(--fs-xs); line-height: 1.5em; min-inline-size: 0;
 }
 .nodestat-table .p-name {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  max-inline-size: 18ch; color: var(--text-secondary);
+  max-inline-size: 20ch; color: var(--text-secondary);
 }
+/* A real separator, not just a gap: at --fs-xs two spans read as one word. */
+.nodestat-table .p-sep { color: var(--text-tertiary); }
 .nodestat-table .p-val {
   color: var(--text-primary); font-variant-numeric: tabular-nums;
-  margin-inline-start: auto; white-space: nowrap;
+  text-align: end; white-space: nowrap;
 }
 .nodestat-table small.muted { display: block; margin-block-start: 2px; font-size: var(--fs-xs); }
-.proc-inline { display: inline-flex; gap: var(--s-1); margin-inline-end: var(--s-3); }
+.proc-inline {
+  display: inline-flex; align-items: baseline; gap: var(--s-1);
+  margin-inline-end: var(--s-3);
+}
 .proc-inline .p-name { color: var(--text-secondary); }
+.proc-inline .p-sep { color: var(--text-tertiary); }
 
 /* Stale: greyed AND labelled. Both, never either alone — a greyed row with no
    word reads as a rendering bug, and a label on a live row is a false alarm.

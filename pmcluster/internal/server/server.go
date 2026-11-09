@@ -179,6 +179,10 @@ func New(d Deps) http.Handler {
 		r.Get("/me", api.Me)
 		if d.Docker != nil {
 			r.Get("/cluster/info", api.ClusterInfoHandler(d.Docker))
+			// Forcing a Swarm election (the CLI's `cluster leader`): a testing
+			// affordance for failover, refused unless the node is a manager and
+			// the manager set can absorb the temporary demotion.
+			r.Post("/cluster/leader/{hostname}", api.ClusterLeaderHandler(d.Docker))
 			r.Get("/cluster/apply", api.ApplyRecordHandler(d.Store))
 			r.Get("/cluster/versions", api.VersionsHandler(d.Docker))
 			r.Get("/doctor", api.DoctorHandler(d.Docker, d.Store, d.Cipher))
