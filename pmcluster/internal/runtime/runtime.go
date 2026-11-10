@@ -162,6 +162,19 @@ type Info struct {
 	SwarmControlAvailable bool
 	SwarmManagers         int
 	SwarmNodes            int
+	// SwarmClusterID is the swarm's (Raft) cluster ID. It is the organisation
+	// every node certificate carries, which is what the swarm-TLS verifier
+	// compares a client certificate against. Empty on a worker: only a manager
+	// reads the cluster block.
+	SwarmClusterID string
+	// SwarmNodeAddr is THIS node's swarm data-path (overlay) address. The runner
+	// assignment listener binds it, so the port is never a public host port.
+	SwarmNodeAddr string
+	// SwarmRemoteManagers are the manager addresses Swarm itself uses, as
+	// host:port (the control-plane port). A worker uses their hosts as the
+	// candidates for the assignment fetch — the addresses are known to every
+	// node and need no DNS, no published port and no firewall change.
+	SwarmRemoteManagers []string
 }
 
 // NetworkSpec.Driver defaults to "overlay" if empty.

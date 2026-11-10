@@ -39,7 +39,6 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/server"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/settings"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/socketproxy"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
@@ -114,7 +113,40 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	var storageRoot atomic.Value
 	storageRoot.Store("")
 
+	// Per-node loop handles, started inside the Docker branch below and used
+	// again after the leadership wait (a promoted worker must stop its loopback
+	// API before the leader API binds the same port).
+	var (
+		socketPath   *socketPathSource
+		localAPIStop func()
+		localAPIDone <-chan struct{}
+	)
+
 	dc, dockerErr := docker.New()
+	// The store is resolved LATE: a standby must not open a stale database, and on
+	// promotion the restored control plane has to be what gets opened. The
+	// per-node loops below take this handle, so they can start before the
+	// leadership wait without pre-empting that ordering.
+	served := &lateStore{}
+	hostname, _ := os.Hostname()
+	// worker decides which runner path this node takes: a swarm WORKER cannot read
+	// cluster settings (Docker configs are manager-only), so it learns its runner
+	// decision from the leader instead. Cheap and best-effort: any doubt (no
+	// docker, no swarm) keeps the settings-based path.
+	worker := dockerErr == nil && isSwarmWorker(cmd.Context(), dc)
+	// standby says this node is not the leader right now (a worker, or a follower
+	// manager), so its API must answer on loopback only until it is elected. A
+	// standby that bound all interfaces would be a second, stale control plane.
+	standby := false
+	if dockerErr == nil {
+		if worker {
+			standby = true
+		} else {
+			leader, found, err := isSwarmLeader(cmd.Context(), dc, hostname)
+			standby = isStandby(worker, leader, found, err)
+		}
+	}
+
 	// One Kit per daemon: it is the object that remembers which snapshot this
 	// node published, so a leadership gain cannot re-extract this node's own
 	// state. Created even when Docker is unavailable (the Kit then no-ops).
@@ -172,6 +204,46 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			go pub.Loop(cmd.Context())
 		}
 
+		// The per-node runner machinery and the filtered docker socket start HERE,
+		// before the leadership wait — the same pattern as the backup plan and the
+		// version publisher above, and for the same measured reason: a WORKER
+		// blocks in that wait forever, so every loop placed after it only ever ran
+		// on the leader. That is exactly why the runner feature of v0.2.267 was
+		// inert: the only nodes allowed to host a runner are the ones that never
+		// got past the wait.
+		//
+		//   - the socket proxy needs only the local docker socket and a path, so it
+		//     binds now on every node;
+		//   - a WORKER runs runners.Agent against the leader's assignment (its
+		//     settings are unreadable here, see internal/runners/assignment.go);
+		//   - a manager keeps the store-based reconcile, which starts as soon as
+		//     the store and the App exist (further down) — it cannot start before
+		//     them, and a standby manager is refused as a runner host anyway.
+		socketPath = &socketPathSource{Store: served.get}
+		startPerNodeLoops(cmd.Context(), perNodeDeps{
+			Worker:     worker,
+			Hostname:   hostname,
+			Container:  &runners.CLIDocker{},
+			Assignment: assignmentClientFor(dc, worker),
+			StatePath:  agentStatePath(cfg.DataDir),
+			SocketPath: socketPath,
+			Log:        log,
+		})
+
+		// A STANDBY node (a worker, or a follower manager) serves its API on
+		// LOOPBACK only. It answers nothing cluster-wide — but the runner loop
+		// needs a local surface, and doctor / `/health` must work on every node
+		// instead of failing because the daemon never bound at all. The leader
+		// keeps binding what the operator configured (all interfaces), below.
+		if standby {
+			localAPIStop, localAPIDone = startWorkerAPI(cmd.Context(), dc, apiAddr(cfg.ListenAddr, true), log)
+			defer func() {
+				if localAPIStop != nil {
+					localAPIStop()
+				}
+			}()
+		}
+
 		// Leader-aware daemon: on a multi-manager cluster the daemon serves
 		// ONLY on the current Swarm leader; other managers stand by until
 		// Swarm elects them leader (failover). Standalone/local mode returns
@@ -195,6 +267,16 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 		if err := waitForSwarmLeadership(cmd.Context(), dc, log); err != nil {
 			return fmt.Errorf("standby: %w", err)
+		}
+
+		// This node now leads (or Docker went away and it serves standalone). If
+		// it was a WORKER, its loopback API has to come down before the leader API
+		// binds the same port; waiting on the channel means the listener is really
+		// closed, not merely asked to close.
+		if localAPIStop != nil {
+			localAPIStop()
+			<-localAPIDone
+			localAPIStop = nil
 		}
 
 		// Control-plane freshness: when this node was a standby and just
@@ -242,6 +324,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("open store: %w", err)
 	}
 	defer func() { _ = st.Close() }()
+	// Now the per-node loops can see the settings they were started without.
+	served.set(st)
 	storageRoot.Store(localVolumeRoot(cmd.Context(), st))
 
 	// The persisted log_level cluster setting overrides the config-file
@@ -365,7 +449,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// The runner manager is built before the HTTP handler: the console's
 	// Runners panel calls this same manager through /api/github/runners, and a
 	// second instance would keep a second copy of the kill holds.
-	hostname, _ := os.Hostname()
 	runnerMgr := &runners.Manager{
 		Store:  st,
 		Docker: &runners.CLIDocker{},
@@ -380,6 +463,25 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		runnerMgr.GitHub = deps.GitHubApp
 	}
 	deps.GitHubRunners = runnerMgr
+
+	// Runners are a PER-NODE feature and the settings-based half starts here, the
+	// moment its inputs exist (store, cipher, App). It used to live BELOW the
+	// leadership watcher, which is why it only ever ran on the leader; a leader is
+	// refused as a runner host, so it was a loop that could never do anything. A
+	// WORKER does not run this at all: it has no readable settings and applies the
+	// leader's assignment instead (started before the leadership wait, above).
+	if !worker {
+		go runRunnerLoop(cmd.Context(), runnerMgr, st, log, nil)
+	}
+
+	// The runner ASSIGNMENT endpoint: the one thing this daemon serves to other
+	// nodes, on its own mTLS listener, and only while it leads.
+	//
+	// SCOPE: this middleware is mounted on THIS route and on nothing else. Not on
+	// /api/*, not on /metrics, not on the console. A compromised worker must not
+	// gain a second readable endpoint, and a later change that mounts swarmtls
+	// anywhere else is a deliberate widening of the cluster's attack surface —
+	// review it as one.
 	handler := server.New(deps)
 
 	// The gate answers 503 while a leadership-gain adoption is swapping the
@@ -389,6 +491,28 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// The runner ASSIGNMENT endpoint: the one thing this daemon serves to other
+	// nodes, on its own mTLS listener bound to this node's swarm data-path
+	// address. It starts only here — after the leadership wait returned, so this
+	// node is the leader, and after the store opened, because the answer is
+	// resolved from cluster settings.
+	//
+	// SCOPE: swarmtls is mounted on THIS route and on nothing else. Not on
+	// /api/*, not on /metrics, not on the console. A compromised worker must not
+	// gain a second readable endpoint, and a later change that mounts it anywhere
+	// else is a deliberate widening of the cluster's attack surface — review it
+	// as one.
+	if !worker {
+		startAssignmentListener(ctx, assignmentListenerOptions{
+			Store:      st,
+			Hostname:   hostname,
+			Docker:     dc,
+			GitHub:     runnerMgr.GitHub,
+			Deregister: runnerMgr.DeregisterName,
+			Log:        log,
+		})
+	}
 
 	// Leader-only control loop: on becoming Swarm leader the daemon adopts the
 	// newest control-plane kit (when this node is behind it), runs the reconcile
@@ -475,19 +599,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 	}()
 
-	// Runners are a PER-NODE feature: each daemon decides for itself whether its
-	// hostname is in github_runner_nodes, so this loop runs on every node rather
-	// than inside the leader-only reconcile (which would leave a selected worker
-	// waiting for the leader to act on a container it cannot reach).
-	go runRunnerLoop(ctx, runnerMgr, st, log)
-	// The filtered docker socket listens on EVERY node with a docker socket,
-	// unconditionally: it is inert when nothing mounts it, costs one goroutine,
-	// and having it present everywhere means a runner enabled on a node can never
-	// find no socket because that daemon predates the setting.
-	go superviseSocketProxy(ctx, st, log)
-
-	log.Info().Str("addr", cfg.ListenAddr).Msg("pmcluster serve listening")
-	if err := server.Run(ctx, cfg.ListenAddr, handler); err != nil {
+	// The leader binds what the operator configured (all interfaces by default:
+	// the edge container reaches it through host.docker.internal, and Traefik
+	// routes pmcluster.<domain> here). apiAddr states the rule in one place and
+	// leaves the value untouched for a non-worker.
+	listenAddr := apiAddr(cfg.ListenAddr, false)
+	log.Info().Str("addr", listenAddr).Msg("pmcluster serve listening")
+	if err := server.Run(ctx, listenAddr, handler); err != nil {
 		return fmt.Errorf("server: %w", err)
 	}
 	log.Info().Msg("pmcluster serve stopped cleanly")
@@ -651,16 +769,23 @@ func mcpAllowOps() map[string]bool {
 	}
 }
 
-// runRunnerLoop is the per-node runner reconcile. It runs on EVERY daemon, not
-// only the leader: the runner is a local container, so only the node itself can
-// create, restart or remove it. A node that is not in github_runner_nodes does
-// the teardown half and nothing else.
-func runRunnerLoop(ctx context.Context, mgr *runners.Manager, st *store.Store, log zerolog.Logger) {
+// runRunnerLoop is the per-node runner reconcile for a node whose decision comes
+// from cluster SETTINGS (a manager or a standalone box). It runs on every such
+// daemon, not only the leader: the runner is a local container, so only the node
+// itself can create, restart or remove it. A node that is not in
+// github_runner_nodes does the teardown half and nothing else.
+//
+// onPass, when set, is called after every pass (a test hook; production passes
+// nil).
+func runRunnerLoop(ctx context.Context, mgr *runners.Manager, st *store.Store, log zerolog.Logger, onPass func()) {
 	every := time.Duration(reconcileIntervalSeconds(ctx, st)) * time.Second
 	if every <= 0 {
 		every = time.Minute
 	}
 	tick := func() {
+		if onPass != nil {
+			onPass()
+		}
 		res, err := mgr.Reconcile(ctx)
 		if len(res.Registered) > 0 || len(res.Removed) > 0 {
 			log.Info().Strs("registered", res.Registered).Strs("removed", res.Removed).
@@ -693,72 +818,6 @@ func runRunnerLoop(ctx context.Context, mgr *runners.Manager, st *store.Store, l
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-t.C:
-			tick()
-		}
-	}
-}
-
-// superviseSocketProxy keeps the filtered docker socket listening on this node.
-//
-// It runs unconditionally: the listener is inert unless a runner container mounts
-// it, and having it present on every node removes the "runner enabled on a node
-// whose daemon predates the setting" failure. The socket path comes from the
-// store, so a changed path is picked up without a restart.
-func superviseSocketProxy(ctx context.Context, st *store.Store, log zerolog.Logger) {
-	var p *socketproxy.Proxy
-	path := ""
-	stop := func() {
-		if p != nil {
-			if err := p.Stop(); err != nil {
-				log.Warn().Err(err).Msg("socket proxy: could not stop cleanly")
-			}
-			p = nil
-		}
-	}
-	missingUpstream := false
-	tick := func() {
-		want := cluster.LoadGitHubRunnerSocketPath(ctx, st)
-		if p != nil && want == path {
-			return
-		}
-		// No docker socket, no proxy: binding a listener that cannot forward
-		// would turn every runner build into a 502 with no explanation.
-		if _, err := os.Stat(socketproxy.DefaultUpstreamPath); err != nil {
-			if !missingUpstream {
-				missingUpstream = true
-				log.Debug().Str("upstream", socketproxy.DefaultUpstreamPath).
-					Msg("socket proxy: no docker socket on this node; not listening")
-			}
-			return
-		}
-		missingUpstream = false
-		stop()
-		path = want
-		p = socketproxy.New(socketproxy.Config{
-			SocketPath: want,
-			Log:        log.With().Str("component", "socketproxy").Logger(),
-		})
-		if err := p.Start(ctx); err != nil {
-			// A listener that cannot bind is a WARN, never a fatal: the daemon is
-			// still the API, and the doctor reports runners as unable to build.
-			log.Warn().Err(err).Str("socket", want).Msg("socket proxy: not listening; runners on this node will not be registered")
-			p = nil
-			if st != nil {
-				if aerr := cluster.AppendApplyWarnings(ctx, st, "runners", "", []string{"socket proxy: " + err.Error()}); aerr != nil {
-					log.Debug().Err(aerr).Msg("socket proxy: could not record the warning")
-				}
-			}
-		}
-	}
-	tick()
-	t := time.NewTicker(30 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			stop()
 			return
 		case <-t.C:
 			tick()

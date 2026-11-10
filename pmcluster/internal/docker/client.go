@@ -122,7 +122,7 @@ func (r *realClient) Info(ctx context.Context) (runtime.Info, error) {
 	if err != nil {
 		return runtime.Info{}, fmt.Errorf("docker info: %w", err)
 	}
-	return runtime.Info{
+	info := runtime.Info{
 		Name:                  i.Name,
 		ServerVersion:         i.ServerVersion,
 		OperatingSystem:       i.OperatingSystem,
@@ -133,7 +133,19 @@ func (r *realClient) Info(ctx context.Context) (runtime.Info, error) {
 		SwarmControlAvailable: i.Swarm.ControlAvailable,
 		SwarmManagers:         i.Swarm.Managers,
 		SwarmNodes:            i.Swarm.Nodes,
-	}, nil
+		SwarmNodeAddr:         i.Swarm.NodeAddr,
+	}
+	// Cluster is nil on a node that is not a manager (a worker has no cluster
+	// block), which is exactly the node that needs the rest of this struct.
+	if i.Swarm.Cluster != nil {
+		info.SwarmClusterID = i.Swarm.Cluster.ID
+	}
+	for _, m := range i.Swarm.RemoteManagers {
+		if m.Addr != "" {
+			info.SwarmRemoteManagers = append(info.SwarmRemoteManagers, m.Addr)
+		}
+	}
+	return info, nil
 }
 
 func (r *realClient) NetworkExists(ctx context.Context, name string) (bool, error) {

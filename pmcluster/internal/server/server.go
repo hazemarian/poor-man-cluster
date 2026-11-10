@@ -194,99 +194,113 @@ func New(d Deps) http.Handler {
 		d.GitHubBroker.Mount(r)
 	}
 
-	r.Route("/api", func(r chi.Router) {
-		r.Use(auth.Bearer(d.Lookup))
-		// Per-stack token scoping: after the token resolves to a user,
-		// refuse everything outside that stack when the user's token is
-		// stack-scoped (no-op for unscoped tokens).
-		r.Use(stackScopeGuard)
-		r.Get("/me", api.Me)
-		if d.Docker != nil {
-			r.Get("/cluster/info", api.ClusterInfoHandler(d.Docker))
-			// Forcing a Swarm election (the CLI's `cluster leader`): a testing
-			// affordance for failover, refused unless the node is a manager and
-			// the manager set can absorb the temporary demotion.
-			r.Post("/cluster/leader/{hostname}", api.ClusterLeaderHandler(d.Docker))
-			r.Get("/cluster/apply", api.ApplyRecordHandler(d.Store))
-			r.Get("/cluster/versions", api.VersionsHandler(d.Docker))
-			r.Get("/doctor", api.DoctorHandler(d.Docker, d.Store, d.Cipher, d.GitHubApp))
-			r.Get("/nodes", api.NodesHandler(d.Docker, d.Store))
-			if d.Store != nil {
-				r.Post("/nodes/{hostname}/storage", api.NodeStorageHandler(d.Docker, d.Store))
-				r.Delete("/nodes/{hostname}/storage", api.NodeStorageHandler(d.Docker, d.Store))
-			}
+	// The Bearer /api subtree exists only where a token can be resolved. A
+	// daemon that serves WITHOUT a store (a swarm WORKER, which has no current
+	// control plane and must never seed an empty one) has no tokens to check, so
+	// it answers /health locally and nothing else: /api would be an
+	// unauthenticated surface otherwise, and auth.Bearer(nil) would panic on the
+	// first request.
+	if d.Lookup == nil {
+		if d.MCP != nil {
+			r.Handle("/api/mcp", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "mcp unavailable: this node has no control plane", http.StatusServiceUnavailable)
+			}))
 		}
-		if d.Store != nil {
-			// Per-node process visibility for the overview. Store-only on
-			// purpose: it must answer when Parseable (and the collector) are
-			// down, which is exactly when an operator needs it.
-			r.Get("/node-stats", api.NodeStatsHandler(d.Store))
-			(&settings.HTTP{Svc: d.Settings}).Mount(r)
-			(&usage.HTTP{Svc: d.Usage}).Mount(r)
-		}
-		if d.Store != nil && d.DeployService != nil {
-			(&stacks.HTTP{
-				Deploy:  d.DeployService,
-				Read:    stacks.Local{Store: d.Store},
-				Backups: d.Backups,
-			}).Mount(r)
-		}
-		if d.Backups != nil {
-			bh := &backups.HTTP{Svc: d.Backups}
-			if d.Store != nil {
-				bh.VolumeRoot = func(ctx context.Context) string {
-					return d.Store.SettingDefault(ctx, cluster.SettingVolumeRoot(), "")
+	} else {
+		r.Route("/api", func(r chi.Router) {
+			r.Use(auth.Bearer(d.Lookup))
+			// Per-stack token scoping: after the token resolves to a user,
+			// refuse everything outside that stack when the user's token is
+			// stack-scoped (no-op for unscoped tokens).
+			r.Use(stackScopeGuard)
+			r.Get("/me", api.Me)
+			if d.Docker != nil {
+				r.Get("/cluster/info", api.ClusterInfoHandler(d.Docker))
+				// Forcing a Swarm election (the CLI's `cluster leader`): a testing
+				// affordance for failover, refused unless the node is a manager and
+				// the manager set can absorb the temporary demotion.
+				r.Post("/cluster/leader/{hostname}", api.ClusterLeaderHandler(d.Docker))
+				r.Get("/cluster/apply", api.ApplyRecordHandler(d.Store))
+				r.Get("/cluster/versions", api.VersionsHandler(d.Docker))
+				r.Get("/doctor", api.DoctorHandler(d.Docker, d.Store, d.Cipher, d.GitHubApp))
+				r.Get("/nodes", api.NodesHandler(d.Docker, d.Store))
+				if d.Store != nil {
+					r.Post("/nodes/{hostname}/storage", api.NodeStorageHandler(d.Docker, d.Store))
+					r.Delete("/nodes/{hostname}/storage", api.NodeStorageHandler(d.Docker, d.Store))
 				}
 			}
-			bh.Mount(r)
-			bh.MountStackScoped(r)
-		}
-		if d.HostCerts != nil {
-			d.HostCerts.MountHosts(r)
-		}
-		if d.SiteCert != nil {
-			d.SiteCert.MountSite(r)
-		}
-		if d.Update != nil {
-			d.Update.Mount(r)
-		}
-		if d.Webhooks != nil {
-			(&webhooks.HTTP{Svc: d.Webhooks}).Mount(r)
-		}
-		if d.APIKeys != nil {
-			(&apikeys.HTTP{Svc: d.APIKeys}).Mount(r)
-		}
-		if d.Secrets != nil {
-			(&secrets.HTTP{Svc: d.Secrets}).Mount(r)
-		}
-		if d.GitHubApp != nil {
-			// Reading the registration is operator work: the card names the
-			// installation and its grants, and the Test button mints a token.
-			r.With(auth.RequireRole(auth.RoleOperator)).Group(func(or chi.Router) {
-				(&githubapp.HTTP{App: d.GitHubApp}).Mount(or)
-			})
-		}
-		if d.GitHubRunners != nil {
-			// Killing a runner cancels a job and removes a container, so it is
-			// operator work like the app card next to it.
-			r.With(auth.RequireRole(auth.RoleOperator)).Group(func(or chi.Router) {
-				(&runners.HTTP{Mgr: d.GitHubRunners}).Mount(or)
-			})
-		}
-		if d.Configs != nil {
-			(&configs.HTTP{Svc: d.Configs}).Mount(r)
-		}
-		if d.Services != nil {
-			(&services.HTTP{Svc: d.Services}).Mount(r)
-		}
-		if d.Observability != nil {
-			r.With(auth.RequireRole(auth.RoleViewer)).Group(func(or chi.Router) {
-				(&observability.HTTP{Svc: d.Observability}).Mount(or)
-			})
-		}
-	})
+			if d.Store != nil {
+				// Per-node process visibility for the overview. Store-only on
+				// purpose: it must answer when Parseable (and the collector) are
+				// down, which is exactly when an operator needs it.
+				r.Get("/node-stats", api.NodeStatsHandler(d.Store))
+				(&settings.HTTP{Svc: d.Settings}).Mount(r)
+				(&usage.HTTP{Svc: d.Usage}).Mount(r)
+			}
+			if d.Store != nil && d.DeployService != nil {
+				(&stacks.HTTP{
+					Deploy:  d.DeployService,
+					Read:    stacks.Local{Store: d.Store},
+					Backups: d.Backups,
+				}).Mount(r)
+			}
+			if d.Backups != nil {
+				bh := &backups.HTTP{Svc: d.Backups}
+				if d.Store != nil {
+					bh.VolumeRoot = func(ctx context.Context) string {
+						return d.Store.SettingDefault(ctx, cluster.SettingVolumeRoot(), "")
+					}
+				}
+				bh.Mount(r)
+				bh.MountStackScoped(r)
+			}
+			if d.HostCerts != nil {
+				d.HostCerts.MountHosts(r)
+			}
+			if d.SiteCert != nil {
+				d.SiteCert.MountSite(r)
+			}
+			if d.Update != nil {
+				d.Update.Mount(r)
+			}
+			if d.Webhooks != nil {
+				(&webhooks.HTTP{Svc: d.Webhooks}).Mount(r)
+			}
+			if d.APIKeys != nil {
+				(&apikeys.HTTP{Svc: d.APIKeys}).Mount(r)
+			}
+			if d.Secrets != nil {
+				(&secrets.HTTP{Svc: d.Secrets}).Mount(r)
+			}
+			if d.GitHubApp != nil {
+				// Reading the registration is operator work: the card names the
+				// installation and its grants, and the Test button mints a token.
+				r.With(auth.RequireRole(auth.RoleOperator)).Group(func(or chi.Router) {
+					(&githubapp.HTTP{App: d.GitHubApp}).Mount(or)
+				})
+			}
+			if d.GitHubRunners != nil {
+				// Killing a runner cancels a job and removes a container, so it is
+				// operator work like the app card next to it.
+				r.With(auth.RequireRole(auth.RoleOperator)).Group(func(or chi.Router) {
+					(&runners.HTTP{Mgr: d.GitHubRunners}).Mount(or)
+				})
+			}
+			if d.Configs != nil {
+				(&configs.HTTP{Svc: d.Configs}).Mount(r)
+			}
+			if d.Services != nil {
+				(&services.HTTP{Svc: d.Services}).Mount(r)
+			}
+			if d.Observability != nil {
+				r.With(auth.RequireRole(auth.RoleViewer)).Group(func(or chi.Router) {
+					(&observability.HTTP{Svc: d.Observability}).Mount(or)
+				})
+			}
+		})
+	}
 
-	if d.MCP != nil {
+	if d.MCP != nil && d.Lookup != nil {
 		// The catalog is derived from the embedded OpenAPI document, which
 		// internal/docscheck keeps in step with these handlers. A broken spec
 		// therefore fails the build, not the daemon; if construction still
