@@ -41,7 +41,6 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/settings"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/usage"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/webhooks"
 )
@@ -79,34 +78,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		log.Warn().Err(err).Msg("log sweep had issues")
 	}
 
-	// Self-telemetry endpoint: THIS node's swarm address, resolved and
-	// dial-checked at startup (config.ResolveOTLPEndpoint). A node that cannot
-	// name itself — or whose collector port does not answer — gets no exporter
-	// and one line saying why, instead of an exporter aimed at a closed port.
-	endpoint, telemetryOff := config.ResolveOTLPEndpoint(cmd.Context(), cfg.OTLPEndpoint, docker.NodeSelfAddr, nil)
-	if telemetryOff != "" {
-		log.Warn().Msg(telemetryOff)
-	}
-
-	telemetryShutdown, err := telemetry.Init(cmd.Context(), telemetry.Options{
-		Endpoint:       endpoint,
-		ServiceName:    serviceName(),
-		ServiceVersion: buildinfo.Version,
-		Failures:       telemetryFailureLogger(log),
-	})
-	if err != nil {
-		log.Warn().Err(err).Str("endpoint", endpoint).Msg("OTel telemetry disabled")
-	} else if endpoint != "" {
-		log.Info().Str("endpoint", endpoint).Msg("OTel telemetry enabled")
-	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := telemetryShutdown(ctx); err != nil {
-			log.Warn().Err(err).Msg("telemetry shutdown had issues")
-		}
-	}()
-
 	// storageRoot is published once the local store is open (leader path).
 	// Before that the volume repair still handles stack volumes, which carry
 	// their host directory on the volume itself and need no root.
@@ -129,6 +100,19 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// leadership wait without pre-empting that ordering.
 	served := &lateStore{}
 	hostname, _ := os.Hostname()
+
+	// Self-telemetry is SUPERVISED, not decided once at startup. The collector
+	// can be rescheduled long after this daemon boots, and a node that gave up
+	// while it was away used to stay dark until someone restarted it — measured
+	// on a live worker whose exporter was disabled at boot and never
+	// reconsidered, leaving a five-node cluster showing one row in the console.
+	// Started here (docker client in hand) and still well before the leadership
+	// wait, so a standby manager and a worker both keep reporting.
+	telemetryCtl := newTelemetrySupervisor(log, func() {
+		startNodeStatSampler(cmd.Context(), dc, log)
+	})
+	go telemetryCtl.Loop(cmd.Context(), cfg.OTLPEndpoint, docker.NodeSelfAddr)
+	defer telemetryCtl.stop(context.Background())
 	// worker decides which runner path this node takes: a swarm WORKER cannot read
 	// cluster settings (Docker configs are manager-only), so it learns its runner
 	// decision from the leader instead. Cheap and best-effort: any doubt (no
@@ -159,9 +143,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// both block there indefinitely) and before Docker is required (a nil client
 	// only costs the docker_up flag). It needs no store: /proc plus the OTLP
 	// endpoint is the whole dependency.
-	if endpoint != "" {
-		startNodeStatSampler(cmd.Context(), dc, log)
-	}
 	if dockerErr != nil {
 		log.Warn().Err(dockerErr).Msg("docker client init failed; /api/cluster/info disabled")
 	} else {
