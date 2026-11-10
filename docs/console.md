@@ -52,10 +52,23 @@ model.
   A busy runner's Kill asks first, in words, because it fails the running job.
   Readable by any signed-in user; the picker's save, kill and restart are
   operator actions.
-- **Settings** — cluster settings ([`settings.md`](settings.md)) and the
-  **Apply to swarm** button. The cluster-scope configs and secrets are listed
-  on Inventory → Platform now; Settings keeps the create/edit forms and links
-  there. The read-only rendered platform configs open from the Platform tab
+- **Settings** (`/web/settings`; the same page answers at `/web/settings/cluster`)
+  — six groups, each with a heading, a one-line purpose and the prerequisites it
+  needs before its fields ([`settings.md`](settings.md#the-console-settings-page)):
+  **Connection** (this console's API URL and token state), **GitHub App**
+  (registration, granted permissions, the key form and the last probe in one
+  group), **Identity and sign-in**, **CI runners** (the enable switch first, then
+  the org, runner group, memory and socket fields, a one-click **Pick worker
+  nodes** link to `/web/runners`, and the App permission registration needs
+  stated by its GitHub path), **Backups** (schedule and retention; the store and
+  offsite bucket are daemon-environment settings) and **Advanced** (volume root,
+  log level, admin e-mail and the rendered platform configs, collapsed).
+  Identity/CI runners/Backups/Advanced are one form with one sticky save bar that
+  reports dirty/clean and what a save covers; nothing autosaves. A save only
+  stores — **Apply to swarm** is what re-renders the platform stacks. A refused
+  save renders the daemon's message as the banner body and marks the group (and
+  the field) that message names. Cluster-scope configs and secrets stay on
+  Inventory → Platform; the rendered platform configs open from there
   (operator/admin only — they embed root credentials).
 - **Preferences** — theme plus the brand palette picker (six accent palettes,
   persisted before first paint).

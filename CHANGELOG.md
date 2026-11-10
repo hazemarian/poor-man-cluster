@@ -3,6 +3,41 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — the console's Settings page states its prerequisites
+
+**Three settings failures in one evening were all the same failure: the page made
+an operator discover a prerequisite by hitting it.** A runner switch turned on
+with no org (the save was refused), a node picker nobody could find (it lives on
+`/web/runners`, reachable only through a panel button), and a GitHub permission
+that looked granted but covered repository endpoints instead of the organisation
+(the App needed *Organization → Self-hosted runners: Read & write*). The refusal
+on top of that answered "The cluster settings could not be saved" with the reason
+folded into a "Show details" disclosure.
+
+- **Six groups instead of a wall of panels**: Connection, GitHub App, Identity and
+  sign-in, CI runners, Backups, Advanced. Each has a heading, one line of purpose,
+  and one line naming what it needs, above its fields.
+- **CI runners puts the enable switch first**, then the org, runner group, memory,
+  socket proxy/path and allow-leader — and links the node picker in one click from
+  the heading, with a read-only summary (enabled, selected workers, one pill per
+  runner) so "where do I choose the nodes" has an answer on the page.
+- **The permission is named in place**: Organization → Self-hosted runners:
+  Read & write, not Administration, and a permission change needs a re-minted
+  installation token.
+- **Errors land where they happened**: the daemon's message is the banner body,
+  the group it names is marked, and the field it names carries the sentence. Known
+  messages map to `github_runner_org`, `github_runner_nodes` and
+  `backup_retention_days`; anything about permissions marks the GitHub App group;
+  anything else keeps its raw text with no target invented.
+- **One sticky save bar** for the four daemon-stored groups, reporting dirty/clean
+  and what a save covers. No autosave. A successful save re-renders with a
+  dismissible confirmation that names the group(s) that changed.
+- **The GitHub App status and its form are one group**, and a page with no App (or
+  with an unreachable daemon) says so instead of rendering empty fields a save
+  could blank.
+- `/web/settings/cluster` renders the same page, so old links (including the
+  Runners empty state) land on the new layout.
+
 ## Unreleased — Runners actually run on workers, fed by an mTLS assignment channel
 
 **The self-hosted runner feature was inert on every node it was allowed to use.** A

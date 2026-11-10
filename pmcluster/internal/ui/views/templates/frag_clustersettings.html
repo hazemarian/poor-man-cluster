@@ -1,150 +1,288 @@
-{{define "clustersettings"}}
-{{/* The daemon's editable cluster settings.
+{{define "clustersettings"}}{{template "settings" .}}{{end}}
+{{/*
+  The daemon-stored cluster settings — Identity, CI runners, Backups, Advanced.
 
-     These are the values the daemon writes into the stack files it generates, so
-     the page is a form rather than a settings dump: each field names what the
-     value changes. Saving stores the values; the swarm picks them up when the
-     cluster stack is updated from the Settings page, which the note at the end
-     says in as many words. */}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "clustersettings.title"}}</h1>
-    <p class="sub">{{T "clustersettings.sub"}}</p>
+  These four are ONE form and ONE write (/api/cluster/settings), so they share…
+  one sticky save bar at the bottom, and the bar states whether anything is dirty
+  and what it will save. There is no autosave: a half-typed domain must never
+  reach a node's stack file because a field lost focus.
+
+  Each section states WHAT IT NEEDS in one line, above its fields. The three
+  failures that motivated this layout were all prerequisites discovered by
+  failing: runners enabled with no org, no worker picked, and a GitHub App
+  permission that covered the wrong endpoints. A page that states its
+  prerequisites cannot surprise anyone with them.
+
+  A refused save marks its section (`is-flagged`) and its field (`is-invalid`),
+  and the daemon's sentence is rendered in full at the top of the page.
+*/}}
+
+{{define "clustersettings_form"}}
+{{if .CanEditCluster}}
+  {{if not .ClusterKnown}}
+  <div class="panel mt-24" id="sect-cluster-unknown">
+    <div class="panel-body">
+      <div class="empty">
+        {{icon "layers-off"}}
+        <h3>{{T "settings.err_cluster_read"}}</h3>
+        <p>{{T "settings.cluster_unknown_body"}}</p>
+        {{if .ClusterErr}}<p class="mono iso err" dir="ltr">{{.ClusterErr}}</p>{{end}}
+        <div class="empty-actions">
+          <a class="btn btn-sm" href="{{.SelfPath}}" hx-get="{{.SelfPath}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
+        </div>
+      </div>
+    </div>
   </div>
-  <div class="ph-actions">
-    <a class="btn btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "settings.title"}}">{{icon "settings"}}<span>{{T "settings.title"}}</span></a>
+  {{else}}
+  <form class="form mt-24" id="cluster-settings-form" hx-post="/web/settings/cluster" hx-target="#view" hx-push-url="true" hx-disabled-elt="find [type='submit']" data-save-form>
+    {{template "sec_identity" .}}
+    {{template "sec_runners" .}}
+    {{template "sec_backups" .}}
+    {{template "sec_advanced" .}}
+    {{template "sec_savebar" .}}
+  </form>
+  {{end}}
+{{end}}
+{{end}}
+
+{{/* ---------- Identity and sign-in ---------- */}}
+{{define "sec_identity"}}
+<div class="panel{{if eq .ErrSection "identity"}} is-flagged{{end}}" id="sect-identity">
+  <div class="panel-head">
+    <h2>{{T "clustersettings.sect_identity"}}</h2>
+    {{if eq .ErrSection "identity"}}<span class="pill bad"><i class="dot"></i>{{T "settings.err_flagged"}}</span>{{end}}
   </div>
-</div>
-
-{{if .ErrKey}}
-<div class="msg err">{{T .ErrKey}}</div>
-{{end}}
-{{if .MsgKey}}
-<div class="msg ok">{{T .MsgKey}}</div>
-{{end}}
-
-{{if not .Settings}}
-<div class="panel">
   <div class="panel-body">
-    <div class="empty">
-      {{icon "layers-off"}}
-      <h3>{{T "clustersettings.empty_title"}}</h3>
-      <p>{{T "clustersettings.empty_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/settings/cluster" hx-get="/web/settings/cluster" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
+    <p class="sub">{{T "clustersettings.sect_identity_sub"}}</p>
+    <p class="req">{{icon "info"}}<span>{{T "clustersettings.sect_identity_needs"}}</span></p>
+
+    <div class="form-grid">
+      <div class="field">
+        <label for="cs-domain">{{T "clustersettings.domain"}}</label>
+        <input id="cs-domain" class="finput mono" type="text" name="domain" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "domain"}}">
+        <span class="hint">{{T "clustersettings.domain_hint"}}</span>
+      </div>
+    </div>
+
+    <label class="check">
+      <input type="checkbox" name="sso_enabled" value="true"{{if eq (index .Settings "sso_enabled") "true"}} checked{{end}}>
+      <span>{{T "clustersettings.sso_enabled"}}</span>
+    </label>
+    <span class="hint">{{T "clustersettings.sso_enabled_hint"}}</span>
+
+    <div class="form-grid mt-16">
+      <div class="field">
+        <label for="cs-sso-provider">{{T "clustersettings.sso_provider"}}</label>
+        <input id="cs-sso-provider" class="finput mono" type="text" name="sso_provider" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_provider"}}">
+        <span class="hint">{{T "clustersettings.sso_provider_hint"}}</span>
+      </div>
+      <div class="field">
+        <label for="cs-sso-client-id">{{T "clustersettings.sso_client_id"}}</label>
+        <input id="cs-sso-client-id" class="finput mono" type="text" name="sso_client_id" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_client_id"}}">
+        <span class="hint">{{T "clustersettings.sso_client_id_hint"}}</span>
+      </div>
+      <div class="field">
+        <label for="cs-sso-secret">{{T "clustersettings.sso_client_secret"}}</label>
+        <input id="cs-sso-secret" class="finput mono" type="password" name="sso_client_secret" dir="ltr" autocomplete="new-password" spellcheck="false"
+               placeholder="{{if .HasClientSecret}}{{T "clustersettings.sso_secret_set"}}{{else}}{{T "clustersettings.sso_secret_none"}}{{end}}">
+        <span class="hint">{{T "clustersettings.sso_secret_hint"}}</span>
+      </div>
+      <div class="field">
+        <label for="cs-sso-cookie">{{T "clustersettings.sso_cookie_expire"}}</label>
+        <input id="cs-sso-cookie" class="finput mono" type="text" name="sso_cookie_expire" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_cookie_expire"}}">
+        <span class="hint">{{T "clustersettings.sso_cookie_expire_hint"}}</span>
+      </div>
+      <div class="field">
+        <label for="cs-sso-org">{{T "clustersettings.sso_github_org"}}</label>
+        <input id="cs-sso-org" class="finput mono" type="text" name="sso_github_org" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_github_org"}}">
+        <span class="hint">{{T "clustersettings.sso_github_org_hint"}}</span>
+      </div>
+      <div class="field">
+        <label for="cs-sso-repos">{{T "clustersettings.sso_github_repos"}}</label>
+        <input id="cs-sso-repos" class="finput mono" type="text" name="sso_github_repos" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_github_repos"}}">
+        <span class="hint">{{T "clustersettings.sso_github_repos_hint"}}</span>
+      </div>
+    </div>
+
+    <label class="check">
+      <input type="checkbox" name="edge_login_disabled" value="true"{{if eq (index .Settings "edge_login_disabled") "true"}} checked{{end}}>
+      <span>{{T "clustersettings.edge_login_disabled"}}</span>
+    </label>
+    <span class="hint">{{T "clustersettings.edge_login_disabled_hint"}}</span>
+
+    <div class="form-grid mt-16">
+      <div class="field">
+        <label for="cs-traefik-user">{{T "clustersettings.traefik_admin_user"}}</label>
+        <input id="cs-traefik-user" class="finput mono" type="text" name="traefik_admin_user" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "traefik_admin_user"}}">
+        <span class="hint">{{T "clustersettings.traefik_admin_user_hint"}}</span>
       </div>
     </div>
   </div>
 </div>
-{{else}}
-<form class="form" hx-post="/web/settings/cluster" hx-target="#view" hx-push-url="true" hx-disabled-elt="find [type='submit']">
+{{end}}
 
-  <div class="panel">
-    <div class="panel-head">
-      <h2>{{T "clustersettings.sect_core"}}</h2>
+{{/* ---------- CI runners ---------- */}}
+{{define "sec_runners"}}
+<div class="panel{{if eq .ErrSection "runners"}} is-flagged{{end}}" id="sect-runners">
+  <div class="panel-head">
+    <h2>{{T "clustersettings.sect_runners"}}</h2>
+    {{if eq .ErrSection "runners"}}<span class="pill bad"><i class="dot"></i>{{T "settings.err_flagged"}}</span>{{end}}
+    <div class="ph-actions">
+      <a class="btn btn-sm" href="/web/runners" hx-get="/web/runners" hx-target="#view" hx-push-url="true"
+         data-tip="{{T "settings.runners_pick_tip"}}">{{icon "server"}}<span>{{T "settings.runners_pick"}}</span></a>
     </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "clustersettings.sect_runners_sub"}}</p>
+    <p class="req">{{icon "info"}}<span>{{T "clustersettings.sect_runners_needs"}}</span></p>
+
+    {{if eq .ErrSection "runners"}}<p class="err" data-section-error>{{T "settings.err_flagged_body"}}</p>{{end}}
+
+    {{/* The permission, named exactly, in the section that depends on it: a
+         runner is registered at ORG level, which Administration does not cover. */}}
+    <div class="callout" data-permission-note>
+      <p class="callout-title">{{icon "shield"}}<span>{{T "clustersettings.runners_perm_title"}}</span></p>
+      <p>{{T "clustersettings.runners_perm_body"}}</p>
+      <p class="muted mono iso" dir="ltr">{{T "clustersettings.runners_perm_where"}}</p>
+    </div>
+
+    {{/* The switch comes first: it is the thing an operator comes here to flip,
+         and every field below it only matters once it is on. */}}
+    <label class="check check-switch">
+      <input type="checkbox" name="github_runners_enabled" value="true"{{if eq (index .Settings "github_runners_enabled") "true"}} checked{{end}}>
+      <span>{{T "clustersettings.runners_enabled"}}</span>
+    </label>
+    <span class="hint">{{T "clustersettings.runners_enabled_hint"}}</span>
+
+    <div class="form-grid mt-16">
+      <div class="field">
+        <label for="cs-runner-org">{{T "clustersettings.runner_org"}}</label>
+        <input id="cs-runner-org" class="finput mono{{if eq .ErrField "cs-runner-org"}} is-invalid{{end}}" type="text" name="github_runner_org" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_org"}}" placeholder="acme"{{if eq .ErrField "cs-runner-org"}} aria-invalid="true" aria-describedby="cs-runner-org-err"{{end}}>
+        <span class="hint">{{T "clustersettings.runner_org_hint"}}</span>
+        <span class="hint req-hint">{{T "clustersettings.runner_org_required"}}</span>
+        {{if eq .ErrField "cs-runner-org"}}<span class="err" id="cs-runner-org-err">{{T .ErrFieldKey}}</span>{{end}}
+      </div>
+      <div class="field">
+        <label for="cs-runner-group">{{T "clustersettings.runner_group"}}</label>
+        <input id="cs-runner-group" class="finput mono" type="text" name="github_runner_group" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_group"}}" placeholder="pmcluster">
+        <span class="hint">{{T "clustersettings.runner_group_hint"}}</span>
+      </div>
+      <div class="field">
+        <label for="cs-runner-memory">{{T "clustersettings.runner_memory"}}</label>
+        <input id="cs-runner-memory" class="finput mono" type="text" name="github_runner_memory" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_memory"}}" placeholder="2560m">
+        <span class="hint">{{T "clustersettings.runner_memory_hint"}}</span>
+      </div>
+      <div class="field">
+        <label for="cs-runner-socket-path">{{T "clustersettings.runner_socket_path"}}</label>
+        <input id="cs-runner-socket-path" class="finput mono" type="text" name="github_runner_socket_path" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_socket_path"}}">
+        <span class="hint">{{T "clustersettings.runner_socket_path_hint"}}</span>
+      </div>
+    </div>
+
+    <label class="check">
+      <input type="checkbox" name="github_runner_socket_proxy" value="true"{{if ne (index .Settings "github_runner_socket_proxy") "false"}} checked{{end}}>
+      <span>{{T "clustersettings.runner_socket_proxy"}}</span>
+    </label>
+    <span class="hint">{{T "clustersettings.runner_socket_proxy_hint"}}</span>
+
+    <label class="check mt-16">
+      <input type="checkbox" name="github_runner_allow_leader" value="true"{{if eq (index .Settings "github_runner_allow_leader") "true"}} checked{{end}}>
+      <span>{{T "clustersettings.runner_allow_leader"}}</span>
+    </label>
+    <span class="hint">{{T "clustersettings.runner_allow_leader_hint"}}</span>
+
+    {{/* Node selection is not a form field: it is a picker with each node's role
+         and free memory beside it, on its own page. The form carries the current
+         value in a hidden field so saving cannot clear a choice made there. */}}
+    <input type="hidden" name="github_runner_nodes" value="{{index .Settings "github_runner_nodes"}}">
+
+    <div class="subhead" id="cs-runner-nodes">
+      <h3>{{T "settings.runners_summary_title"}}</h3>
+      <p class="sub">{{T "clustersettings.runner_nodes_note"}}</p>
+    </div>
+    {{if eq .ErrField "cs-runner-nodes"}}<p class="err" data-section-error>{{T .ErrFieldKey}}</p>{{end}}
+    {{if not .RunnersKnown}}
+    <p class="muted">{{T "settings.runners_summary_unknown"}}</p>
+    {{else if not .RunnersEnabled}}
+    <p class="muted">{{T "settings.runners_summary_off"}}</p>
+    {{else}}
+    <p class="muted">
+      {{T "settings.runners_summary_nodes"}}
+      {{if .RunnerSelectedNodes}}<span class="mono iso" dir="ltr">{{range $i, $n := .RunnerSelectedNodes}}{{if $i}}, {{end}}{{$n}}{{end}}</span>{{else}}{{T "settings.runners_summary_none"}}{{end}}
+    </p>
+    {{if .RunnerRows}}
+    <div class="pills">
+      {{range .RunnerRows}}
+      <span class="pill {{.StateClass}}{{if .Busy}} is-busy{{end}}" data-runner="{{.Name}}"><i class="dot"></i>{{.Name}}<span class="muted"> · {{.Node}} · {{.State}}</span></span>
+      {{end}}
+    </div>
+    {{end}}
+    {{end}}
+    <a class="btn btn-sm mt-16" href="/web/runners" hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-tip="{{T "settings.runners_pick_tip"}}">{{icon "server"}}<span>{{T "settings.runners_pick"}}</span></a>
+
+    <details class="details mt-16">
+      <summary>{{T "clustersettings.runners_security_title"}}</summary>
+      <p>{{T "clustersettings.runners_security"}}</p>
+    </details>
+  </div>
+</div>
+{{end}}
+
+{{/* ---------- Backups ---------- */}}
+{{define "sec_backups"}}
+<div class="panel{{if eq .ErrSection "backups"}} is-flagged{{end}}" id="sect-backups">
+  <div class="panel-head">
+    <h2>{{T "clustersettings.sect_backup"}}</h2>
+    {{if eq .ErrSection "backups"}}<span class="pill bad"><i class="dot"></i>{{T "settings.err_flagged"}}</span>{{end}}
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "clustersettings.sect_backups_needs"}}</p>
+    <p class="req">{{icon "info"}}<span>{{T "clustersettings.backup_store_body"}}</span></p>
+
+    {{if eq .ErrSection "backups"}}<p class="err" data-section-error>{{T "settings.err_flagged_body"}}</p>{{end}}
+
+    <label class="check">
+      <input type="checkbox" name="backup_enabled" value="true"{{if ne (index .Settings "backup_enabled") "false"}} checked{{end}}>
+      <span>{{T "clustersettings.backup_enabled"}}</span>
+    </label>
+    <span class="hint">{{T "clustersettings.backup_enabled_hint"}}</span>
+
+    <div class="form-grid mt-16">
+      <div class="field">
+        <label for="cs-backup-cron">{{T "clustersettings.backup_cron"}}</label>
+        <input id="cs-backup-cron" class="finput mono" type="text" name="backup_cron" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "backup_cron"}}" placeholder="0 * * * *">
+        <span class="hint">{{T "clustersettings.backup_cron_hint"}}</span>
+      </div>
+      <div class="field">
+        <label for="cs-retention-days">{{T "clustersettings.backup_retention_days"}}</label>
+        <input id="cs-retention-days" class="finput mono{{if eq .ErrField "cs-retention-days"}} is-invalid{{end}}" type="number" min="1" step="1" name="backup_retention_days" dir="ltr" value="{{index .Settings "backup_retention_days"}}" placeholder="3"{{if eq .ErrField "cs-retention-days"}} aria-invalid="true" aria-describedby="cs-retention-days-err"{{end}}>
+        <span class="hint">{{T "clustersettings.backup_retention_days_hint"}}</span>
+        {{if eq .ErrField "cs-retention-days"}}<span class="err" id="cs-retention-days-err">{{T .ErrFieldKey}}</span>{{end}}
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{/* ---------- Advanced: paths, levels, and the configs as rendered ---------- */}}
+{{define "sec_advanced"}}
+<div class="panel{{if eq .ErrSection "advanced"}} is-flagged{{end}}" id="sect-advanced">
+  <details class="details panel-details"{{if eq .ErrSection "advanced"}} open{{end}}>
+    <summary class="panel-head">
+      <h2>{{T "clustersettings.sect_advanced"}}</h2>
+      {{if eq .ErrSection "advanced"}}<span class="pill bad"><i class="dot"></i>{{T "settings.err_flagged"}}</span>{{end}}
+    </summary>
     <div class="panel-body">
-      <p class="sub">{{T "clustersettings.sect_core_sub"}}</p>
+      <p class="sub">{{T "clustersettings.sect_advanced_sub"}}</p>
+      <p class="req">{{icon "info"}}<span>{{T "clustersettings.sect_advanced_needs"}}</span></p>
+
+      {{if eq .ErrSection "advanced"}}<p class="err" data-section-error>{{T "settings.err_flagged_body"}}</p>{{end}}
+
       <div class="form-grid">
         <div class="field">
           <label for="cs-volume-root">{{T "clustersettings.volume_root"}}</label>
           <input id="cs-volume-root" class="finput mono" type="text" name="volume_root" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "volume_root"}}">
           <span class="hint">{{T "clustersettings.volume_root_hint"}}</span>
-        </div>
-        <div class="field">
-          <label for="cs-domain">{{T "clustersettings.domain"}}</label>
-          <input id="cs-domain" class="finput mono" type="text" name="domain" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "domain"}}">
-          <span class="hint">{{T "clustersettings.domain_hint"}}</span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="panel">
-    <div class="panel-head">
-      <h2>{{T "clustersettings.sect_backup"}}</h2>
-    </div>
-    <div class="panel-body">
-      <label class="check">
-        <input type="checkbox" name="backup_enabled" value="true"{{if ne (index .Settings "backup_enabled") "false"}} checked{{end}}>
-        <span>{{T "clustersettings.backup_enabled"}}</span>
-      </label>
-      <span class="hint">{{T "clustersettings.backup_enabled_hint"}}</span>
-      <label class="field">
-        <span>{{T "clustersettings.backup_cron"}}</span>
-        <input type="text" name="backup_cron" value="{{index .Settings "backup_cron"}}" placeholder="0 * * * *">
-      </label>
-      <span class="hint">{{T "clustersettings.backup_cron_hint"}}</span>
-      <label class="field">
-        <span>{{T "clustersettings.backup_retention_days"}}</span>
-        <input type="number" min="1" step="1" name="backup_retention_days" value="{{index .Settings "backup_retention_days"}}" placeholder="3">
-      </label>
-      <span class="hint">{{T "clustersettings.backup_retention_days_hint"}}</span>
-    </div>
-  </div>
-
-  <div class="panel">
-    <div class="panel-head">
-      <h2>{{T "clustersettings.sect_sso"}}</h2>
-    </div>
-    <div class="panel-body">
-      <p class="sub">{{T "clustersettings.sect_sso_sub"}}</p>
-      <label class="check">
-        <input type="checkbox" name="sso_enabled" value="true"{{if eq (index .Settings "sso_enabled") "true"}} checked{{end}}>
-        <span>{{T "clustersettings.sso_enabled"}}</span>
-      </label>
-      <span class="hint">{{T "clustersettings.sso_enabled_hint"}}</span>
-      <div class="form-grid">
-        <div class="field">
-          <label for="cs-sso-provider">{{T "clustersettings.sso_provider"}}</label>
-          <input id="cs-sso-provider" class="finput mono" type="text" name="sso_provider" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_provider"}}">
-          <span class="hint">{{T "clustersettings.sso_provider_hint"}}</span>
-        </div>
-        <div class="field">
-          <label for="cs-sso-client-id">{{T "clustersettings.sso_client_id"}}</label>
-          <input id="cs-sso-client-id" class="finput mono" type="text" name="sso_client_id" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_client_id"}}">
-          <span class="hint">{{T "clustersettings.sso_client_id_hint"}}</span>
-        </div>
-        <div class="field">
-          <label for="cs-sso-secret">{{T "clustersettings.sso_client_secret"}}</label>
-          <input id="cs-sso-secret" class="finput mono" type="password" name="sso_client_secret" dir="ltr" autocomplete="new-password" spellcheck="false"
-                 placeholder="{{if .HasClientSecret}}{{T "clustersettings.sso_secret_set"}}{{else}}{{T "clustersettings.sso_secret_none"}}{{end}}">
-          <span class="hint">{{T "clustersettings.sso_secret_hint"}}</span>
-        </div>
-        <div class="field">
-          <label for="cs-sso-org">{{T "clustersettings.sso_github_org"}}</label>
-          <input id="cs-sso-org" class="finput mono" type="text" name="sso_github_org" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_github_org"}}">
-          <span class="hint">{{T "clustersettings.sso_github_org_hint"}}</span>
-        </div>
-        <div class="field">
-          <label for="cs-sso-repos">{{T "clustersettings.sso_github_repos"}}</label>
-          <input id="cs-sso-repos" class="finput mono" type="text" name="sso_github_repos" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_github_repos"}}">
-          <span class="hint">{{T "clustersettings.sso_github_repos_hint"}}</span>
-        </div>
-        <div class="field">
-          <label for="cs-sso-cookie">{{T "clustersettings.sso_cookie_expire"}}</label>
-          <input id="cs-sso-cookie" class="finput mono" type="text" name="sso_cookie_expire" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "sso_cookie_expire"}}">
-          <span class="hint">{{T "clustersettings.sso_cookie_expire_hint"}}</span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="panel">
-    <div class="panel-head">
-      <h2>{{T "clustersettings.sect_edge"}}</h2>
-    </div>
-    <div class="panel-body">
-      <label class="check">
-        <input type="checkbox" name="edge_login_disabled" value="true"{{if eq (index .Settings "edge_login_disabled") "true"}} checked{{end}}>
-        <span>{{T "clustersettings.edge_login_disabled"}}</span>
-      </label>
-      <span class="hint">{{T "clustersettings.edge_login_disabled_hint"}}</span>
-      <div class="form-grid">
-        <div class="field">
-          <label for="cs-traefik-user">{{T "clustersettings.traefik_admin_user"}}</label>
-          <input id="cs-traefik-user" class="finput mono" type="text" name="traefik_admin_user" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "traefik_admin_user"}}">
-          <span class="hint">{{T "clustersettings.traefik_admin_user_hint"}}</span>
         </div>
         <div class="field">
           <label for="cs-observability-email">{{T "clustersettings.observability_admin_email"}}</label>
@@ -162,63 +300,37 @@
           <span class="hint">{{T "clustersettings.log_level_hint"}}</span>
         </div>
       </div>
-    </div>
-  </div>
 
-  <div class="panel">
-    <div class="panel-head">
-      <h2>{{T "clustersettings.sect_runners"}}</h2>
-    </div>
-    <div class="panel-body">
-      <p class="sub">{{T "clustersettings.sect_runners_sub"}}</p>
-      <label class="check">
-        <input type="checkbox" name="github_runners_enabled" value="true"{{if eq (index .Settings "github_runners_enabled") "true"}} checked{{end}}>
-        <span>{{T "clustersettings.runners_enabled"}}</span>
-      </label>
-      <span class="hint">{{T "clustersettings.runners_enabled_hint"}}</span>
-      <div class="form-grid">
-        <div class="field">
-          <label for="cs-runner-org">{{T "clustersettings.runner_org"}}</label>
-          <input id="cs-runner-org" class="finput mono" type="text" name="github_runner_org" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_org"}}" placeholder="acme">
-          <span class="hint">{{T "clustersettings.runner_org_hint"}}</span>
-        </div>
-        <div class="field">
-          <label for="cs-runner-group">{{T "clustersettings.runner_group"}}</label>
-          <input id="cs-runner-group" class="finput mono" type="text" name="github_runner_group" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_group"}}" placeholder="pmcluster">
-          <span class="hint">{{T "clustersettings.runner_group_hint"}}</span>
-        </div>
-        <div class="field">
-          <label for="cs-runner-memory">{{T "clustersettings.runner_memory"}}</label>
-          <input id="cs-runner-memory" class="finput mono" type="text" name="github_runner_memory" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_memory"}}" placeholder="2560m">
-          <span class="hint">{{T "clustersettings.runner_memory_hint"}}</span>
-        </div>
-        <div class="field">
-          <label for="cs-runner-socket-path">{{T "clustersettings.runner_socket_path"}}</label>
-          <input id="cs-runner-socket-path" class="finput mono" type="text" name="github_runner_socket_path" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_socket_path"}}">
-          <span class="hint">{{T "clustersettings.runner_socket_path_hint"}}</span>
-        </div>
+      <div class="subhead">
+        <h3>{{T "settings.cluster_configs"}}</h3>
+        <p class="sub">{{T "settings.configs_moved"}} {{T "settings.secrets_moved"}}</p>
       </div>
-      <input type="hidden" name="github_runner_nodes" value="{{index .Settings "github_runner_nodes"}}">
-      <label class="check">
-        <input type="checkbox" name="github_runner_socket_proxy" value="true"{{if ne (index .Settings "github_runner_socket_proxy") "false"}} checked{{end}}>
-        <span>{{T "clustersettings.runner_socket_proxy"}}</span>
-      </label>
-      <span class="hint">{{T "clustersettings.runner_socket_proxy_hint"}}</span>
-      <p class="sub">{{T "clustersettings.runner_nodes_note"}}</p>
-      <label class="check">
-        <input type="checkbox" name="github_runner_allow_leader" value="true"{{if eq (index .Settings "github_runner_allow_leader") "true"}} checked{{end}}>
-        <span>{{T "clustersettings.runner_allow_leader"}}</span>
-      </label>
-      <span class="hint">{{T "clustersettings.runner_allow_leader_hint"}}</span>
-      <p class="sub">{{T "clustersettings.runners_security"}}</p>
+      <a class="btn btn-sm" href="/web/inventory?tab=platform" hx-get="/web/inventory?tab=platform" hx-target="#view" hx-push-url="true" data-tip="{{T "settings.open_inventory"}}">{{icon "file"}}<span>{{T "settings.open_inventory"}}</span></a>
+
+      <p class="label mt-16">{{T "settings.adv_rendered_title"}}</p>
+      <p class="sub">{{T "settings.adv_rendered_sub"}}</p>
+      {{if not .RenderedKnown}}
+      <p class="muted">{{T "settings.rendered_unknown"}}</p>
+      {{else if not .Rendered}}
+      <p class="muted">{{T "settings.rendered_empty"}}</p>
+      {{else if eq (len .Rendered) 1}}
+      <p class="muted">{{T "settings.rendered_one"}}</p>
+      {{else}}
+      <p class="muted">{{T "settings.rendered_many"}}</p>
+      {{end}}
     </div>
-  </div>
-
-  <div class="form-actions">
-    <button type="submit" class="btn btn-primary" data-tip="{{T "clustersettings.save"}}">{{icon "check"}}<span>{{T "clustersettings.save"}}</span></button>
-  </div>
-</form>
-
-<p class="sub">{{T "clustersettings.foot"}}</p>
+  </details>
+</div>
 {{end}}
+
+{{/* ---------- the one save bar ---------- */}}
+{{define "sec_savebar"}}
+<div class="savebar" data-savebar data-save-state="clean">
+  <div class="savebar-text">
+    <span class="savebar-state" data-state-clean>{{icon "check"}}<span>{{T "settings.bar_clean"}}</span></span>
+    <span class="savebar-state" data-state-dirty>{{icon "alert"}}<span>{{T "settings.bar_dirty"}}</span></span>
+    <p class="savebar-scope">{{T "settings.bar_scope"}}</p>
+  </div>
+  <button type="submit" class="btn btn-primary" data-tip="{{T "clustersettings.save"}}">{{icon "check"}}<span>{{T "clustersettings.save"}}</span></button>
+</div>
 {{end}}

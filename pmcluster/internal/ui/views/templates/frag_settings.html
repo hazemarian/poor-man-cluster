@@ -4,10 +4,29 @@
   through that daemon, and read/create the cluster-scope configs and secrets the
   daemon holds.
 
-  Layout order follows that job order. Every list has the same three states:
-  rows / unknown (the daemon did not answer — never rendered as "empty") /
-  empty-but-actionable. Raw upstream text always sits inside a <details>
-  disclosure, never in place of the human sentence.
+  Redesigned as SIX GROUPS, because the old page was a wall of panels in which a
+  switch, the field it depends on, and the panel that actually chose its value
+  were three different scroll positions apart. Each group now carries a heading,
+  one line of purpose, and one line naming what it needs — so a prerequisite is
+  read before the save that fails on it, not after.
+
+    Connection      how this console reaches the daemon (console-local)
+    GitHub App      the App registration, its permissions, and its form, together
+    Identity        domain + who may sign in           (daemon-stored)
+    CI runners      the switch first, then its fields  (daemon-stored)
+    Backups         schedule + retention               (daemon-stored)
+    Advanced        paths, levels, rendered configs — collapsed, because nobody
+                    needs them to decide anything about runners or SSO
+
+  Identity/CI runners/Backups/Advanced are ONE form with ONE sticky save bar at
+  the bottom (they are one write to /api/cluster/settings), defined in
+  frag_clustersettings.html and included below. Connection and the GitHub App post
+  to different endpoints with different credentials, so they keep their own submit
+  inside their own group rather than pretending to be part of that write.
+
+  Errors are stated where they happened: a refused save puts the daemon's own
+  sentence in the banner body (never behind "Show details"), marks the section the
+  message names, and marks the field when the message names one.
 */}}
 <div class="page-head">
   <div class="ph-text">
@@ -15,55 +34,109 @@
     <p class="sub">{{T "settings.sub"}}</p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
+    <button type="button" class="btn btn-ghost btn-sm" hx-get="{{.SelfPath}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
   </div>
 </div>
 
+{{/* A refusal is shown as the daemon wrote it. The banner body IS the message;
+     a disclosure is not a place to hide the reason a save failed. */}}
 {{if .ErrKey}}
-<div class="banner bad">
+<div class="banner bad" data-err-section="{{.ErrSection}}">
   {{icon "alert"}}
   <div class="b-body">
     <p class="b-title">{{T .ErrKey}}</p>
-    <p>{{T "err.banner_body"}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
+    {{if .ErrRaw}}
+    <p class="b-lead">{{T "settings.err_body_lead"}}</p>
+    <p class="b-raw mono iso" dir="ltr">{{.ErrRaw}}</p>
+    {{end}}
+    {{if .ErrPermission}}<p>{{T "settings.err_permission_hint"}}</p>{{end}}
+    {{if .ErrSection}}<p><a href="#sect-{{.ErrSection}}" hx-boost="false">{{T "settings.err_jump"}}: {{T .ErrSectionTitle}}</a></p>{{end}}
   </div>
 </div>
 {{end}}
 
-{{if .MsgKey}}{{if .MsgArg2}}<div class="msg ok">{{TF .MsgKey .MsgArg .MsgArg2}}</div>{{else if .MsgArg}}<div class="msg ok">{{TF .MsgKey .MsgArg}}</div>{{else}}<div class="msg ok">{{T .MsgKey}}</div>{{end}}{{end}}
+{{if .MsgKey}}
+<div class="msg ok" data-msg>
+  <span>{{if .MsgArg2}}{{TF .MsgKey .MsgArg .MsgArg2}}{{else if .MsgArg}}{{TF .MsgKey .MsgArg}}{{else}}{{T .MsgKey}}{{end}}{{range .SavedSections}} <span class="pill good">{{T .}}</span>{{end}}</span>
+  <button type="button" class="msg-x" data-dismiss aria-label="{{T "settings.dismiss"}}" data-tip="{{T "settings.dismiss"}}">{{icon "close"}}</button>
+</div>
+{{end}}
 
-<div class="stats">
-  <div class="stat">
-    <div class="stat-l">{{icon "server"}}<span>{{T "settings.conn_state"}}</span></div>
-    <div class="stat-v">
-      {{if .Configured}}<span class="pill good"><i class="dot"></i>{{T "settings.conn_ok"}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{T "settings.conn_missing"}}</span>{{end}}
-    </div>
-    {{if not .Configured}}<div class="stat-f">{{T "settings.conn_missing_body"}}</div>{{end}}
-  </div>
-  <div class="stat">
-    <div class="stat-l">{{icon "external"}}<span>{{T "settings.api_url"}}</span></div>
-    <div class="stat-v mono iso trunc" dir="ltr" title="{{.APIURL}}">{{if .APIURL}}{{.APIURL}}{{else}}{{T "common.unavailable"}}{{end}}</div>
-    <div class="stat-f">{{if .EnvAPIURL}}{{TF "settings.api_url_hint" .EnvAPIURL}}{{else}}{{T "settings.api_url_hint_none"}}{{end}}</div>
-  </div>
-  <div class="stat">
-    <div class="stat-l">{{icon "lock"}}<span>{{T "settings.api_token"}}</span></div>
-    <div class="stat-v">{{if .HasToken}}<span class="mono secret-mask">{{T "settings.config_masked"}}</span>{{else}}{{T "common.none"}}{{end}}</div>
-    <div class="stat-f">{{if .HasEnvToken}}{{T "settings.api_token_env"}}{{else if .HasToken}}{{T "settings.api_token_set"}}{{else}}{{T "settings.api_token_none"}}{{end}}</div>
-  </div>
-  <div class="stat">
-    <div class="stat-l">{{icon "info"}}<span>{{T "settings.about_version"}}</span></div>
-    <div class="stat-v mono iso" dir="ltr">{{.Version}}</div>
-    <div class="stat-f">{{if .User}}{{TF "settings.about_signed" .User}}{{end}}</div>
+{{if not .Configured}}
+<div class="banner warn">
+  {{icon "info"}}
+  <div class="b-body">
+    <p class="b-title">{{T "settings.offline_notice_title"}}</p>
+    <p>{{T "settings.offline_notice_body"}}</p>
   </div>
 </div>
+{{end}}
 
-<div class="panel mt-24">
+{{template "sec_connection" .}}
+{{template "sec_github" .}}
+{{template "clustersettings_form" .}}
+{{/* Saving stores values; it does not deploy. The platform stacks are re-rendered
+     from them by an explicit apply, so the action stays on the page next to the
+     form it applies — a settings page whose effect needs an undocumented second
+     step is how an operator ends up believing a save did nothing. */}}
+{{if .CanEditCluster}}
+<div class="panel mt-24" id="sect-apply">
   <div class="panel-head">
-    <h2>{{T "settings.daemon_title"}}</h2>
+    <h2>{{T "settings.apply_title"}}</h2>
   </div>
   <div class="panel-body">
-    <p class="sub">{{T "settings.daemon_sub"}}</p>
-    <form class="form" hx-post="/web/settings" hx-target="#view" hx-push-url="true" hx-disabled-elt="find [type='submit']">
+    <p class="sub">{{T "settings.apply_sub"}}</p>
+    {{if .ApplyDone}}
+    <div class="msg ok">{{TF "settings.apply_summary" .ApplyOTel .ApplyTraefik .ApplyCert .ApplyEdge .ApplyStacks}}</div>
+    {{end}}
+    <div class="action-bar">
+      <button type="button" class="btn btn-primary"
+              hx-post="/web/settings/apply" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" data-tip="{{T "settings.apply_action"}}">
+        {{icon "restore"}}<span>{{T "settings.apply_action"}}</span>
+      </button>
+      <span class="muted">{{T "settings.apply_hint"}}</span>
+    </div>
+  </div>
+</div>
+{{end}}
+
+<p class="sub">{{T "clustersettings.foot"}}</p>
+{{end}}
+
+{{/* ---------- Connection: the one group that is console-local ---------- */}}
+{{define "sec_connection"}}
+<div class="panel" id="sect-connection">
+  <div class="panel-head">
+    <h2>{{T "settings.sec_connection"}}</h2>
+    <div class="ph-actions">
+      {{if .Configured}}<span class="pill good"><i class="dot"></i>{{T "settings.conn_ok"}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{T "settings.conn_missing"}}</span>{{end}}
+    </div>
+  </div>
+  <div class="panel-body">
+    <p class="sub">{{T "settings.sec_connection_sub"}}</p>
+    <p class="req">{{icon "info"}}<span>{{T "settings.sec_connection_needs"}}</span></p>
+
+    <div class="kv">
+      <div class="kv-row">
+        <span class="k">{{T "settings.api_url"}}</span>
+        <span class="v mono iso trunc" dir="ltr" title="{{.APIURL}}">{{if .APIURL}}{{.APIURL}}{{else}}{{T "common.unavailable"}}{{end}}</span>
+      </div>
+      <div class="kv-row">
+        <span class="k">{{T "settings.api_token"}}</span>
+        <span class="v">
+          {{if .HasToken}}<span class="mono secret-mask">{{T "settings.config_masked"}}</span>{{else}}{{T "common.none"}}{{end}}
+          <span class="muted">· {{if .HasEnvToken}}{{T "settings.api_token_env"}}{{else if .HasToken}}{{T "settings.api_token_set"}}{{else}}{{T "settings.api_token_none"}}{{end}}</span>
+        </span>
+      </div>
+      {{if .Configured}}
+      <div class="kv-row">
+        <span class="k">{{T "settings.about_version"}}</span>
+        <span class="v mono iso" dir="ltr">{{.Version}}{{if .User}} <span class="muted">· {{TF "settings.about_signed" .User}}</span>{{end}}</span>
+      </div>
+      {{end}}
+    </div>
+
+    <form class="form mt-16" hx-post="/web/settings" hx-target="#view" hx-push-url="true" hx-disabled-elt="find [type='submit']">
       <div class="form-grid">
         <div class="field">
           <label for="settings-api-url">{{T "settings.api_url"}}</label>
@@ -83,15 +156,19 @@
         <span>{{T "settings.api_token_clear"}}</span>
       </label>
       <div class="form-actions">
-        <button type="submit" class="btn btn-primary" data-tip="{{T "settings.save"}}">{{icon "check"}}<span>{{T "settings.save"}}</span></button>
+        <button type="submit" class="btn btn-primary" data-tip="{{T "settings.save_connection"}}">{{icon "check"}}<span>{{T "settings.save_connection"}}</span></button>
       </div>
     </form>
   </div>
 </div>
+{{end}}
 
-<div class="panel mt-24">
+{{/* ---------- GitHub App: status AND the form that changes it, one group ---------- */}}
+{{define "sec_github"}}
+<div class="panel{{if eq .ErrSection "github"}} is-flagged{{end}}" id="sect-github">
   <div class="panel-head">
     <h2>{{T "settings.github_title"}}</h2>
+    {{if eq .ErrSection "github"}}<span class="pill bad"><i class="dot"></i>{{T "settings.err_flagged"}}</span>{{end}}
     <div class="ph-actions">
       {{if .GitHubConfigured}}
       <button type="button" class="btn btn-ghost btn-sm"
@@ -102,12 +179,19 @@
   </div>
   <div class="panel-body">
     <p class="sub">{{T "settings.github_sub"}}</p>
+    <p class="req">{{icon "info"}}<span>{{T "settings.sec_github_needs"}}</span></p>
+
+    {{if eq .ErrSection "github"}}
+    <p class="err" data-section-error>{{T "settings.err_flagged_body"}}</p>
+    {{end}}
+
     {{if .GitHubErr}}
     <div class="banner bad">
       {{icon "alert"}}
       <div class="b-body">
         <p class="b-title">{{T "settings.github_err_read"}}</p>
-        <details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.GitHubErr}}</pre></details>
+        <p class="b-raw mono iso" dir="ltr">{{.GitHubErr}}</p>
+        <p>{{T "settings.err_permission_hint"}}</p>
       </div>
     </div>
     {{else if not .Configured}}
@@ -115,6 +199,7 @@
     {{else if not .GitHubConfigured}}
     <p class="muted">{{T "settings.github_none"}}</p>
     {{else}}
+    <p class="label">{{T "settings.github_status_title"}}</p>
     <div class="kv">
       <div class="kv-row"><span class="k">{{T "settings.github_app_id"}}</span><span class="v mono num" dir="ltr">{{.GitHubAppID}}</span></div>
       <div class="kv-row"><span class="k">{{T "settings.github_installation"}}</span><span class="v mono num" dir="ltr">{{if .GitHubInstallationID}}{{.GitHubInstallationID}}{{else}}{{T "settings.github_installation_none"}}{{end}}</span></div>
@@ -143,7 +228,7 @@
       </div>
     </div>
     {{end}}
-    <p class="sub">{{T "settings.github_perms_title"}}</p>
+    <p class="label">{{T "settings.github_perms_title"}}</p>
     {{if .GitHubPermissions}}
     <div class="kv">
       {{range .GitHubPermissions}}
@@ -157,58 +242,64 @@
     <p class="muted">{{T "settings.github_perms_unknown"}}</p>
     {{end}}
     {{end}}
+
     {{if .GitHubTestSet}}
       {{if .GitHubTestOK}}<div class="msg ok">{{.GitHubTestMsg}}</div>{{else}}<div class="msg err">{{.GitHubTestMsg}}</div>{{end}}
     {{end}}
+
     {{if .CanEditGitHub}}
-    <details class="details mt-16">
-      <summary>{{T "settings.github_form_title"}}</summary>
+    <div class="subhead">
+      <h3>{{T "settings.github_form_title"}}</h3>
       <p class="sub">{{T "settings.github_form_sub"}}</p>
-      {{/* multipart only on this form: it is the one form on the page that can
-           carry a file, and a page-wide enctype would change every other one. */}}
-      <form class="form" method="post" action="/web/settings/github/app" enctype="multipart/form-data" autocomplete="off">
-        <div class="form-grid">
-          <div class="field">
-            <label for="gh-app-id">{{T "settings.github_app_id"}}</label>
-            <input id="gh-app-id" class="finput mono num" type="text" inputmode="numeric" name="app_id" dir="ltr" value="{{if .GitHubAppID}}{{.GitHubAppID}}{{end}}">
-          </div>
-          <div class="field">
-            <label for="gh-installation-id">{{T "settings.github_installation"}}</label>
-            <input id="gh-installation-id" class="finput mono num" type="text" inputmode="numeric" name="installation_id" dir="ltr" value="{{if .GitHubInstallationID}}{{.GitHubInstallationID}}{{end}}">
-            <span class="hint">{{T "settings.github_installation_hint"}}</span>
-          </div>
-          <div class="field">
-            <label for="gh-probe-repo">{{T "settings.github_probe_repo"}}</label>
-            <input id="gh-probe-repo" class="finput mono" type="text" name="probe_repo" dir="ltr" value="{{.GitHubRepo}}">
-          </div>
-          <div class="field">
-            <label for="gh-probe-package">{{T "settings.github_probe_package"}}</label>
-            <input id="gh-probe-package" class="finput mono" type="text" name="probe_package" dir="ltr" value="{{.GitHubPackage}}">
-          </div>
+    </div>
+    {{/* multipart only on this form: it is the one form on the page that can
+         carry a file, and a page-wide enctype would change every other one. */}}
+    <form class="form" method="post" action="/web/settings/github/app" enctype="multipart/form-data" autocomplete="off">
+      <div class="form-grid">
+        <div class="field">
+          <label for="gh-app-id">{{T "settings.github_app_id"}}</label>
+          <input id="gh-app-id" class="finput mono num" type="text" inputmode="numeric" name="app_id" dir="ltr" value="{{if .GitHubAppID}}{{.GitHubAppID}}{{end}}">
         </div>
         <div class="field">
-          <label for="gh-key-pem">{{T "settings.github_key"}}</label>
-          <textarea id="gh-key-pem" class="finput mono" name="private_key_pem" rows="6" dir="ltr" spellcheck="false" autocomplete="off" placeholder="{{T "settings.github_key_placeholder"}}"></textarea>
-          <span class="hint">{{T "settings.github_key_hint"}}</span>
+          <label for="gh-installation-id">{{T "settings.github_installation"}}</label>
+          <input id="gh-installation-id" class="finput mono num" type="text" inputmode="numeric" name="installation_id" dir="ltr" value="{{if .GitHubInstallationID}}{{.GitHubInstallationID}}{{end}}">
+          <span class="hint">{{T "settings.github_installation_hint"}}</span>
         </div>
         <div class="field">
-          <label for="gh-key-file">{{T "settings.github_key_file"}}</label>
-          <input id="gh-key-file" type="file" name="private_key_file" accept=".pem,application/x-pem-file,text/plain">
-          <span class="hint">{{T "settings.github_key_file_hint"}}</span>
+          <label for="gh-probe-repo">{{T "settings.github_probe_repo"}}</label>
+          <input id="gh-probe-repo" class="finput mono" type="text" name="probe_repo" dir="ltr" value="{{.GitHubRepo}}">
         </div>
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary" data-tip="{{if .GitHubConfigured}}{{T "settings.github_rotate"}}{{else}}{{T "settings.github_save"}}{{end}}">
-            {{icon "check"}}<span>{{if .GitHubConfigured}}{{T "settings.github_rotate"}}{{else}}{{T "settings.github_save"}}{{end}}</span>
-          </button>
+        <div class="field">
+          <label for="gh-probe-package">{{T "settings.github_probe_package"}}</label>
+          <input id="gh-probe-package" class="finput mono" type="text" name="probe_package" dir="ltr" value="{{.GitHubPackage}}">
         </div>
-      </form>
-      {{if .GitHubConfigured}}
-      <p class="muted">{{T "settings.github_rotate_warning"}}</p>
-      {{end}}
-    </details>
+      </div>
+      <div class="field">
+        <label for="gh-key-pem">{{T "settings.github_key"}}</label>
+        <textarea id="gh-key-pem" class="finput mono" name="private_key_pem" rows="6" dir="ltr" spellcheck="false" autocomplete="off" placeholder="{{T "settings.github_key_placeholder"}}"></textarea>
+        <span class="hint">{{T "settings.github_key_hint"}}</span>
+      </div>
+      <div class="field">
+        <label for="gh-key-file">{{T "settings.github_key_file"}}</label>
+        <input id="gh-key-file" type="file" name="private_key_file" accept=".pem,application/x-pem-file,text/plain">
+        <span class="hint">{{T "settings.github_key_file_hint"}}</span>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" data-tip="{{if .GitHubConfigured}}{{T "settings.github_rotate"}}{{else}}{{T "settings.github_save"}}{{end}}">
+          {{icon "check"}}<span>{{if .GitHubConfigured}}{{T "settings.github_rotate"}}{{else}}{{T "settings.github_save"}}{{end}}</span>
+        </button>
+      </div>
+    </form>
+    {{if .GitHubConfigured}}
+    <p class="muted">{{T "settings.github_rotate_warning"}}</p>
     {{end}}
+    {{end}}
+
     {{if .GitHubSetSet}}
-    <div class="msg ok">{{T "settings.github_saved"}}</div>
+    <div class="msg ok" data-msg>
+      <span>{{T "settings.github_saved"}}</span>
+      <button type="button" class="msg-x" data-dismiss aria-label="{{T "settings.dismiss"}}" data-tip="{{T "settings.dismiss"}}">{{icon "close"}}</button>
+    </div>
     <div class="kv">
       <div class="kv-row"><span class="k">{{T "settings.github_app_id"}}</span><span class="v mono num" dir="ltr">{{.GitHubSetAppID}}</span></div>
       <div class="kv-row"><span class="k">{{T "settings.github_installation"}}</span><span class="v mono num" dir="ltr">{{.GitHubSetInstallation}}</span></div>
@@ -221,88 +312,9 @@
     <p class="muted mono iso" dir="ltr">{{.GitHubSetProbeDetail}}</p>
     {{if .GitHubSetRotated}}<div class="banner warn">{{icon "alert"}}<div class="b-body"><p>{{T "settings.github_rotate_done"}}</p></div></div>{{end}}
     {{end}}
+
     <p class="muted">{{T "settings.github_foot"}}</p>
   </div>
 </div>
-
-{{if .CanEditCluster}}
-<div class="panel mt-24">
-  <div class="panel-head">
-    <h2>{{T "settings.cluster_card_title"}}</h2>
-    <div class="ph-actions">
-      <a class="btn btn-primary btn-sm" href="/web/settings/cluster" hx-get="/web/settings/cluster" hx-target="#view" hx-push-url="true" data-tip="{{T "settings.cluster_card_action"}}">{{icon "settings"}}<span>{{T "settings.cluster_card_action"}}</span></a>
-    </div>
-  </div>
-  <div class="panel-body">
-    <p class="sub">{{T "settings.cluster_card_body"}}</p>
-    <p class="muted">{{T "settings.cluster_card_foot"}}</p>
-  </div>
-</div>
 {{end}}
 
-{{if .Configured}}
-<div class="panel mt-24">
-  <div class="panel-head">
-    <h2>{{T "settings.runners_title"}}</h2>
-    <div class="ph-actions">
-      <a class="btn btn-ghost btn-sm" href="/web/runners"
-         hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-tip="{{T "settings.runners_open"}}">
-        {{icon "server"}}<span>{{T "settings.runners_open"}}</span>
-      </a>
-    </div>
-  </div>
-  <div class="panel-body">
-    <p class="sub">{{T "settings.runners_body"}}</p>
-  </div>
-</div>
-
-<div class="panel mt-24">
-  <div class="panel-head">
-    <h2>{{T "settings.apply_title"}}</h2>
-  </div>
-  <div class="panel-body">
-    <p class="sub">{{T "settings.apply_sub"}}</p>
-    {{if .ApplyDone}}
-    <div class="msg ok">{{TF "settings.apply_summary" .ApplyOTel .ApplyTraefik .ApplyCert .ApplyEdge .ApplyStacks}}</div>
-    {{end}}
-    <div class="action-bar">
-      <button type="button" class="btn btn-primary"
-              hx-post="/web/settings/apply" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" data-tip="{{T "settings.apply_action"}}">
-        {{icon "restore"}}<span>{{T "settings.apply_action"}}</span>
-      </button>
-      <span class="muted">{{T "settings.apply_hint"}}</span>
-    </div>
-  </div>
-</div>
-
-<div class="panel mt-24">
-  <div class="panel-head">
-    <h2>{{T "settings.configs_title"}}</h2>
-    <div class="ph-actions">
-      <a class="btn btn-ghost btn-sm" href="/web/inventory?tab=platform"
-         hx-get="/web/inventory?tab=platform" hx-target="#view" hx-push-url="true" data-tip="{{T "settings.open_inventory"}}">
-        {{icon "file"}}<span>{{T "settings.open_inventory"}}</span>
-      </a>
-    </div>
-  </div>
-  <div class="panel-body">
-    <p class="sub">{{T "settings.configs_moved"}}</p>
-  </div>
-</div>
-
-<div class="panel mt-24">
-  <div class="panel-head">
-    <h2>{{T "settings.secrets_title"}}</h2>
-    <div class="ph-actions">
-      <a class="btn btn-ghost btn-sm" href="/web/inventory?tab=platform"
-         hx-get="/web/inventory?tab=platform" hx-target="#view" hx-push-url="true" data-tip="{{T "settings.open_inventory"}}">
-        {{icon "lock"}}<span>{{T "settings.open_inventory"}}</span>
-      </a>
-    </div>
-  </div>
-  <div class="panel-body">
-    <p class="sub">{{T "settings.secrets_moved"}}</p>
-  </div>
-</div>
-{{end}}
-{{end}}

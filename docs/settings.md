@@ -25,6 +25,63 @@ way to see a value, and it says so when it masks.
 REST: `GET/PUT /api/cluster/settings` (secret-ish values masked for non-admin
 bearers). Console: the **Settings** page.
 
+## The console Settings page
+
+The page (`/web/settings`, also reachable at `/web/settings/cluster`) is six
+groups. Each one carries a heading, one line of purpose, and one line naming what
+it needs — a prerequisite read before the save that fails on it, not after:
+
+| Group | What is in it | What it needs |
+|---|---|---|
+| **Connection** | this console's API URL and token state | nothing on the cluster: it is stored in the console's own store |
+| **GitHub App** | app id, installation id, key fingerprint, the set/rotate form, probe targets, last probe and its age, granted permissions | the App installed on the organisation (Contents and Packages: Read) |
+| **Identity and sign-in** | domain, SSO provider/client/org/repos/session, the edge login switch, the Traefik admin user | a provider the daemon knows plus a client id and secret |
+| **CI runners** | the enable switch **first**, then org, runner group, memory, socket proxy and path, allow-leader, and a read-only summary of what is registered | a configured GitHub App, `github_runner_org`, and at least one worker selected on the Runners page |
+| **Backups** | schedule and retention | a backup store; the bucket and its credentials are daemon-environment settings, not page fields |
+| **Advanced** | volume root, log level, admin e-mail, and the rendered platform configs (collapsed) | the admin role |
+
+Identity, CI runners, Backups and Advanced are **one form** with **one sticky
+save bar** that says whether anything is dirty and what a save covers. There is
+no autosave. Saving stores the values; **Apply to swarm** is what re-renders the
+platform stacks from them.
+
+### Where node selection lives
+
+`github_runner_nodes` is not a field on this page: it is a picker, one row per
+node with its role, current runner state and free memory. The picker lives on
+**`/web/runners`**, one click from the CI runners heading (**Pick worker nodes**)
+and again under its summary. The settings form carries the current value in a
+hidden field, so saving it cannot clear a choice made on the picker page. The CI
+runners group shows the resulting selection and one state pill per runner; it
+never renders the picker itself.
+
+### When a save is refused
+
+The daemon's message is the banner **body** on the page — never a title with the
+reason behind a "Show details" disclosure — and the group whose fields the
+message names is marked, along with the field when it names one:
+
+| Message names | Marked |
+|---|---|
+| `github_runner_org` | CI runners group + the Organisation field |
+| `github_runner_nodes` | CI runners group + its worker-selection summary (with the link to the picker) |
+| `backup_retention_days` | Backups group + the retention field |
+| anything about permissions, `403`, or "self-hosted runners" | GitHub App group, plus the permission the App needs and the note that a permission change needs a re-minted installation token |
+
+Any other message keeps the raw text in the banner body with no target invented
+for it: a wrong guess about which field was meant is worse than none.
+
+### The permission runner registration needs
+
+Registering a runner is an **organisation** operation, so the App needs
+**Organization → Self-hosted runners: Read & write**. That is not
+**Administration**, which only covers repository-level endpoints, and it is not a
+repository permission. GitHub mints an installation token from the App's current
+permissions, so changing the permission on GitHub does nothing until the token is
+re-minted: rotate the key in the GitHub App group (or re-install the App), then
+run **Test connection**. The CI runners group states all of that in place, next to
+the switch it constrains.
+
 | Key | Default | Who sets it | What it controls |
 |---|---|---|---|
 | `volume_root` | `/var/stack/data` | setup wizard (`--volume-root`) / operator | the host root every container volume is forced under |

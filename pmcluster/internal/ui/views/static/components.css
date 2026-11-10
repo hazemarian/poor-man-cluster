@@ -798,3 +798,107 @@ form.htmx-request [type="submit"] { pointer-events: none; }
    edge. Logical property, so it sits on the right in RTL. */
 .nodestat-table tr.is-hot td:first-child { border-inline-start: 3px solid var(--amber); }
 .nodestat-table .v-warn { color: var(--amber); font-weight: 600; }
+
+/* ---------- settings: grouped sections, stated prerequisites, one save bar ----------
+   The settings page is six groups of fields, and three of the failures that
+   motivated the layout were prerequisites discovered by failing. Everything
+   below exists to say a thing before it is needed: `.req` is the one-line
+   "what this section needs", `.is-flagged` is the section a refused save
+   names, and `.savebar` is the single place that states dirty/clean. */
+
+/* A section the daemon's refusal names. Border only: the pill in the head and
+   the message at the top carry the meaning, so the colour is a locator. */
+.panel.is-flagged { border-color: var(--red-border); }
+
+/* A sub-heading inside a panel body (the GitHub form, the runner summary).
+   h3, not h2: it belongs to the section's h2, it does not compete with it. */
+.subhead { margin: var(--s-5) 0 var(--s-3); }
+.subhead h3 { font-size: var(--fs-sm); font-weight: 600; }
+.subhead .sub { font-size: var(--fs-xs); color: var(--text-tertiary); margin-top: var(--s-1); max-width: 72ch; }
+
+/* "What this section needs", one line, above its fields. */
+.req {
+  display: flex; gap: var(--s-2); align-items: flex-start;
+  font-size: var(--fs-xs); color: var(--text-tertiary);
+  margin-bottom: var(--s-4); max-width: 78ch;
+}
+.req .ic { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+/* A dependency on another switch, sitting next to the field it constrains —
+   italic and tertiary so it reads as a condition, not as a second hint. */
+.field .hint.req-hint { font-style: italic; }
+
+/* A permission/setup note: neutral, not an alarm. It states a requirement the
+   operator will otherwise meet as a 403. */
+.callout {
+  border: 1px solid var(--border-default); background: var(--bg-tertiary);
+  border-radius: var(--r-md); padding: var(--s-3) var(--s-4);
+  font-size: var(--fs-xs); color: var(--text-secondary); margin-bottom: var(--s-4);
+}
+.callout-title {
+  display: flex; gap: var(--s-2); align-items: center;
+  color: var(--text-primary); font-weight: 600; margin-bottom: var(--s-2);
+}
+.callout-title .ic { width: 15px; height: 15px; }
+.callout .muted { margin-top: var(--s-2); }
+
+/* Per-runner state, one pill each. */
+.pills { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-2); }
+.pills .pill { font-family: var(--mono); font-size: var(--fs-code); }
+
+/* The daemon's own words, as the banner body. `pre-wrap` keeps a multi-line
+   refusal readable and `anywhere` stops a long setting name from widening the
+   page. Never a disclosure: the reason a save failed is the point of the box. */
+.banner .b-raw {
+  font-family: var(--mono); font-size: var(--fs-code); color: var(--text-primary);
+  background: var(--bg-tertiary); border: 1px solid var(--border-default);
+  border-radius: var(--r-sm); padding: var(--s-2) var(--s-3);
+  margin: var(--s-1) 0 var(--s-2); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.banner .b-lead { margin-top: var(--s-1); }
+
+/* A confirmation that can be dismissed: the operator who read it should not
+   have to wait for a reload to get the page's rhythm back. */
+.msg[data-msg] { display: flex; align-items: center; gap: var(--s-3); }
+.msg-x {
+  margin-inline-start: auto; flex: none; display: inline-flex; align-items: center;
+  background: transparent; border: 0; color: inherit; cursor: pointer;
+  padding: 2px; border-radius: var(--r-sm); opacity: .8;
+}
+.msg-x:hover { background: var(--bg-hover); opacity: 1; }
+.msg-x .ic { width: 14px; height: 14px; }
+
+/* Advanced is a <details> whose summary IS the panel head, so a collapsed
+   section still looks like a section and not like a stray disclosure row. */
+details.panel-details > summary { list-style: none; cursor: pointer; }
+details.panel-details > summary::-webkit-details-marker { display: none; }
+details.panel-details > summary::before {
+  content: "▸"; font-size: 10px; color: var(--text-tertiary);
+  transition: transform var(--t); flex: none;
+}
+details.panel-details[open] > summary::before { transform: rotate(90deg); }
+details.panel-details[open] > summary { border-bottom: 1px solid var(--border-default); }
+
+/* ---------- the one save bar ---------- */
+.savebar {
+  position: sticky; inset-block-end: var(--s-4); z-index: 20;
+  display: flex; align-items: center; gap: var(--s-4);
+  margin-top: var(--s-5); padding: var(--s-3) var(--s-4);
+  background: var(--bg-card); border: 1px solid var(--border-default);
+  border-radius: var(--r-lg); box-shadow: var(--shadow-overlay);
+}
+.savebar[data-save-state="dirty"] { border-color: var(--amber-border); }
+.savebar-text { min-width: 0; }
+.savebar-state { display: none; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); font-weight: 500; }
+.savebar-state .ic { width: 15px; height: 15px; }
+[data-save-state="clean"] [data-state-clean] { display: inline-flex; color: var(--text-secondary); }
+[data-save-state="dirty"] [data-state-dirty] { display: inline-flex; color: var(--amber); }
+.savebar-scope { font-size: var(--fs-xs); color: var(--text-tertiary); margin-top: 2px; }
+.savebar .btn { margin-inline-start: auto; flex: none; }
+@media (max-width: 767px) {
+  /* Sits above the mobile tab bar rather than behind it. */
+  .savebar {
+    inset-block-end: 56px; margin-inline: -16px; border-radius: 0;
+    border-inline: 0; flex-wrap: wrap;
+  }
+  .savebar .btn { margin-inline-start: 0; flex: 1; min-height: 44px; }
+}

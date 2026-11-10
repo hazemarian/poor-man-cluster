@@ -36,6 +36,12 @@ var githubSetCalls githubSetRecorder
 // first-time form (labels, empty prefills) can be rendered. Tests restore it.
 var githubAppUnconfigured atomic.Bool
 
+// clusterSaveRefusal, when set, makes PUT /api/cluster/settings answer 400 with
+// this sentence — the daemon's own words for an impossible runner config. The
+// console has to render it, so the test needs the daemon's shapes, not a
+// stylised "invalid settings" string.
+var clusterSaveRefusal string
+
 func (g *githubSetRecorder) record(body map[string]any, proto string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -218,6 +224,11 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 		// The runner settings travel with the cluster settings: the Runners panel
 		// reads them from the same snapshot the settings form writes.
 		if r.Method == http.MethodPut {
+			if clusterSaveRefusal != "" {
+				w.WriteHeader(http.StatusBadRequest)
+				write(w, fmt.Sprintf(`{"error":%q}`, clusterSaveRefusal))
+				return
+			}
 			write(w, clusterSettingsFixture)
 			return
 		}

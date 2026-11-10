@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	pmsettings "github.com/hazemarian/poor-man-cluster/pmcluster/internal/settings"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
@@ -99,6 +100,47 @@ type settingsData struct {
 	GitHubSetKeyUploaded  bool
 	GitHubSetProbeOK      bool
 	GitHubSetProbeDetail  string
+
+	// SelfPath is the page the console is on ("/web/settings" or
+	// "/web/settings/cluster"): both render this page, and a refresh button has
+	// to land back on the one the operator used.
+	SelfPath string
+
+	// ---- the daemon's stored cluster settings ----
+	//
+	// Settings is the masked map the form renders; ClusterKnown says whether the
+	// daemon answered (a section that could not be read must say so, never render
+	// empty fields that a save would then write back as blanks).
+	Settings        map[string]string
+	HasClientSecret bool
+	ClusterKnown    bool
+	ClusterErr      string
+
+	// The runners summary. Read-only: the picker that actually chooses the
+	// workers lives on /web/runners, one click from the section heading.
+	RunnersKnown        bool
+	RunnersEnabled      bool
+	RunnerRows          []runnerRow
+	RunnerSelectedNodes []string
+	RunnersErr          string
+
+	// Rendered platform configs, shown in Advanced.
+	Rendered      []pmapi.RenderedConfig
+	RenderedKnown bool
+	RenderedErr   string
+
+	// Where a refused cluster save points. ErrSection is a section id
+	// (identity/runners/backups/advanced/github), ErrField the control id the
+	// daemon's message names, ErrFieldKey the sentence to print under it.
+	// ErrPermission marks a refusal that reads as a permissions problem.
+	ErrSection      string
+	ErrSectionTitle string
+	ErrField        string
+	ErrFieldKey     string
+	ErrPermission   bool
+	// SavedSections names the sections a successful save actually changed, as
+	// translation keys, in page order.
+	SavedSections []string
 
 	ErrKey  string
 	ErrRaw  string
@@ -465,12 +507,98 @@ var clusterBoolSettings = map[string]bool{
 	"github_runner_allow_leader": true,
 }
 
-type clusterSettingsData struct {
-	Settings        map[string]string
-	HasClientSecret bool
-	ErrKey          string
-	ErrRaw          string
-	MsgKey          string
+// ---------- the cluster form: which section a key belongs to ----------
+//
+// One write to /api/cluster/settings, four visible sections in the page. These
+// two maps are the only place that knowledge lives, so a refusal, a
+// confirmation, and the form itself cannot disagree about where a key sits.
+
+// clusterSectionTitles maps a section id to its heading key. The same key is
+// the section's pill in a confirmation, so "Changed: CI runners" names the
+// section the operator just edited.
+var clusterSectionTitles = map[string]string{
+	"identity": "clustersettings.sect_identity",
+	"runners":  "clustersettings.sect_runners",
+	"backups":  "clustersettings.sect_backup",
+	"advanced": "clustersettings.sect_advanced",
+	"github":   "settings.github_title",
+}
+
+// clusterSectionOf names the section a setting is edited in.
+func clusterSectionOf(key string) string {
+	switch {
+	case key == "github_runners_enabled" || strings.HasPrefix(key, "github_runner_"):
+		return "runners"
+	case strings.HasPrefix(key, "backup_"):
+		return "backups"
+	case key == "volume_root", key == "log_level", key == "observability_admin_email":
+		return "advanced"
+	default:
+		// sso_*, domain, edge_login_disabled, traefik_admin_user
+		return "identity"
+	}
+}
+
+// clusterSettingDefault is what the daemon means by an absent key. Without it a
+// diff of two maps would report every defaulted flag as changed on every save,
+// and a confirmation that always says "CI runners changed" is noise.
+func clusterSettingDefault(key string) string {
+	switch key {
+	case "backup_enabled", "github_runner_socket_proxy":
+		return "true"
+	}
+	return ""
+}
+
+// changedClusterSections compares what the daemon held with what was just
+// written, and names the sections that actually differ, in page order.
+func changedClusterSections(before, after map[string]string) []string {
+	if before == nil {
+		return nil
+	}
+	changed := map[string]bool{}
+	for _, k := range clusterSettingKeys {
+		old, ok := before[k]
+		if !ok {
+			old = clusterSettingDefault(k)
+		}
+		if old != after[k] {
+			changed[clusterSectionOf(k)] = true
+		}
+	}
+	var out []string
+	for _, id := range []string{"identity", "runners", "backups", "advanced"} {
+		if changed[id] {
+			out = append(out, clusterSectionTitles[id])
+		}
+	}
+	return out
+}
+
+// clusterFailureTarget reads one refusal. The daemon names the setting it
+// refused in prose ("github_runners_enabled is enabled but github_runner_org is
+// empty: …"), so the mapping is on the setting names the message carries — and a
+// message about permissions marks the GitHub App section, because that is the
+// section whose App holds them.
+//
+// Order matters: a message can name a setting AND a permission ("… org runner:
+// permission denied"); the field is the more useful anchor, so the setting names
+// are checked first.
+func clusterFailureTarget(raw string) (section, field, fieldKey string, permission bool) {
+	l := strings.ToLower(raw)
+	switch {
+	case strings.Contains(l, "github_runner_org"):
+		return "runners", "cs-runner-org", "clustersettings.err_org_required", false
+	case strings.Contains(l, "github_runner_nodes"):
+		return "runners", "cs-runner-nodes", "clustersettings.err_nodes_required", false
+	case strings.Contains(l, "backup_retention_days"):
+		return "backups", "cs-retention-days", "settings.err_backup_retention", false
+	}
+	if strings.Contains(l, "permission") || strings.Contains(l, "forbidden") || strings.Contains(l, "403") ||
+		strings.Contains(l, "self-hosted runners") {
+		return "github", "", "", true
+	}
+	return "", "", "", false
 }
 
 // maskClusterSettings masks secret-ish values (sso_client_secret) in the
@@ -489,35 +617,37 @@ func maskClusterSettings(settings map[string]string) (map[string]string, bool) {
 	return out, settings["sso_client_secret"] != ""
 }
 
-// ClusterSettingsPage renders the editable cluster settings form (admin-only).
+// ClusterSettingsPage renders the settings page with the cluster sections on it
+// (admin-only). It is the same page /web/settings renders — the sections simply
+// do not appear for a role that cannot save them.
 func (c Settings) ClusterSettingsPage(g *gin.Context) {
-	d := clusterSettingsData{}
-	if _, _, configured := c.loadParams(g.Request.Context()); !configured {
+	d := c.fill(g, settingsData{})
+	if !d.Configured {
 		d.ErrKey = "err.api_not_configured"
-		c.Views.Fragment(g, "clustersettings", d)
-		return
 	}
-	settings, err := c.API.ClusterSettings(g.Request.Context())
-	if err != nil {
-		d.ErrKey, d.ErrRaw = "settings.err_cluster_read", err.Error()
-		c.Views.Fragment(g, "clustersettings", d)
-		return
-	}
-	d.Settings, d.HasClientSecret = maskClusterSettings(settings)
-	c.Views.Fragment(g, "clustersettings", d)
+	c.Views.Fragment(g, "settings", d)
 }
 
 // ClusterSettingsSave persists the edited cluster settings (admin-only). The
-// changes are stored but NOT applied — `cluster update` (Apply to swarm)
-// applies them.
+// changes are stored but NOT applied — "Apply to swarm" re-renders the platform
+// stacks from them.
+//
+// A refusal is rendered where it happened: the daemon's sentence goes in the
+// banner body, the section it names is flagged, and the field it names is marked
+// invalid with the sentence under it. The old page put the reason behind a
+// "Show details" disclosure and left the operator to guess which of fifteen
+// fields was meant.
 func (c Settings) ClusterSettingsSave(g *gin.Context) {
 	ctx := g.Request.Context()
-	d := clusterSettingsData{}
+	d := settingsData{}
 	if _, _, configured := c.loadParams(ctx); !configured {
 		d.ErrKey = "err.api_not_configured"
-		c.Views.Fragment(g, "clustersettings", d)
+		c.Views.Fragment(g, "settings", c.fill(g, d))
 		return
 	}
+	// What the daemon holds now, so the confirmation can name what changed
+	// instead of saying "saved" and leaving the operator to diff two screens.
+	before, _ := c.API.ClusterSettings(ctx)
 
 	settings := make(map[string]string, len(clusterSettingKeys))
 	for _, k := range clusterSettingKeys {
@@ -541,8 +671,11 @@ func (c Settings) ClusterSettingsSave(g *gin.Context) {
 	if v := strings.TrimSpace(settings["backup_retention_days"]); v != "" {
 		if n, err := strconv.Atoi(v); err != nil || n < 1 {
 			d.ErrKey, d.ErrRaw = "settings.err_backup_retention", v
+			d.ErrSection, d.ErrSectionTitle = "backups", clusterSectionTitles["backups"]
+			d.ErrField, d.ErrFieldKey = "cs-retention-days", "settings.err_backup_retention"
 			d.Settings, d.HasClientSecret = maskClusterSettings(settings)
-			c.Views.Fragment(g, "clustersettings", d)
+			d.ClusterKnown = true
+			c.Views.Fragment(g, "settings", c.fill(g, d))
 			return
 		}
 	}
@@ -555,12 +688,20 @@ func (c Settings) ClusterSettingsSave(g *gin.Context) {
 	updated, err := c.API.UpdateClusterSettings(ctx, settings)
 	if err != nil {
 		d.ErrKey, d.ErrRaw = "settings.err_cluster_save", err.Error()
+		d.ErrSection, d.ErrField, d.ErrFieldKey, d.ErrPermission = clusterFailureTarget(err.Error())
+		d.ErrSectionTitle = clusterSectionTitles[d.ErrSection]
 		d.Settings, d.HasClientSecret = maskClusterSettings(settings)
+		d.ClusterKnown = true
 	} else {
 		d.Settings, d.HasClientSecret = maskClusterSettings(updated)
-		d.MsgKey = "settings.msg_cluster_saved"
+		d.ClusterKnown = true
+		if changed := changedClusterSections(before, settings); len(changed) > 0 {
+			d.MsgKey, d.SavedSections = "settings.msg_cluster_saved_changed", changed
+		} else {
+			d.MsgKey = "settings.msg_cluster_saved_none"
+		}
 	}
-	c.Views.Fragment(g, "clustersettings", d)
+	c.Views.Fragment(g, "settings", c.fill(g, d))
 }
 
 // configFormError keeps the modal open with the form fragment on a
@@ -870,8 +1011,59 @@ func (c Settings) fill(g *gin.Context, d settingsData) settingsData {
 	if _, err := c.Store.Setting(ctx, keyToken); err == nil {
 		d.HasToken = true
 	}
+	if p := g.Request.URL.Path; p != "" {
+		d.SelfPath = p
+	}
 	c.fillGitHubApp(ctx, &d)
+	// The cluster sections are admin-only (the save route is). For a role that
+	// cannot save them they are not rendered at all — a form that 403s is worse
+	// than no form — so their reads are skipped too.
+	if d.CanEditCluster {
+		c.fillCluster(ctx, &d)
+	}
 	return d
+}
+
+// fillCluster loads the daemon-stored settings the cluster sections render,
+// plus the two read-only summaries that belong beside them.
+//
+// Each failure is carried in its own field rather than failing the page: the
+// connection and the GitHub App are still worth showing when the cluster
+// settings call fails, and a section whose read failed must say so instead of
+// rendering empty fields that the next save would write back as blanks.
+func (c Settings) fillCluster(ctx context.Context, d *settingsData) {
+	// An echoed map means the caller already set one (a refused save renders the
+	// operator's own input, not what the store still holds): re-reading would
+	// silently undo what they typed.
+	if d.Settings == nil {
+		settings, err := c.API.ClusterSettings(ctx)
+		if err != nil {
+			d.ClusterErr = err.Error()
+			return
+		}
+		d.Settings, d.HasClientSecret = maskClusterSettings(settings)
+	}
+	d.ClusterKnown = true
+	d.RunnerSelectedNodes = runners.ParseNodes(d.Settings["github_runner_nodes"])
+	d.RunnersEnabled = d.Settings["github_runners_enabled"] == "true"
+
+	if view, err := c.API.GitHubRunners(ctx); err != nil {
+		d.RunnersErr = err.Error()
+	} else {
+		d.RunnersKnown = true
+		if !d.RunnersEnabled {
+			// The switch is the authority; the runner view reports what exists,
+			// and a stale container must not make a disabled feature look on.
+			d.RunnersEnabled = view.Enabled
+		}
+		d.RunnerRows = buildRunnerRows(view.Runners)
+	}
+
+	if rc, err := c.API.ListRenderedConfigs(ctx); err != nil {
+		d.RenderedErr = err.Error()
+	} else {
+		d.RenderedKnown, d.Rendered = true, rc
+	}
 }
 
 // renderWith reloads the settings fragment carrying a confirmation message.
