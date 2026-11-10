@@ -2,10 +2,10 @@ package cli
 
 import (
 	"context"
-	"sync"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
