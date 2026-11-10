@@ -216,7 +216,14 @@ func (c *Client) RunnerGroups(ctx context.Context, bearer, org string) ([]Runner
 	case http.StatusUnauthorized:
 		return nil, fmt.Errorf("%w: the installation token was refused while listing runner groups for org %s", ErrTokenRejected, org)
 	case http.StatusForbidden:
-		return nil, fmt.Errorf("%w: no administration:write for org %s, so its runner groups cannot be read", ErrInsufficientPermission, org)
+		// A 403 here is NOT necessarily a missing permission: GitHub answers
+		// 403 for an installation that is not org-wide, for a policy that
+		// blocks runner groups, and for a token minted before the permission
+		// was approved. Name the likely causes AND carry GitHub's own text,
+		// because guessing "no administration:write" sent an operator to
+		// check a permission that was already granted.
+		return nil, fmt.Errorf("%w: GitHub refused runner groups for org %s (403). The App needs Organization → Administration: Read & write AND the installation must be approved by an org owner; a token minted before the approval keeps the old scopes until it is re-minted. GitHub said: %s",
+			ErrInsufficientPermission, org, httpErrorText(http.StatusForbidden, body))
 	case http.StatusNotFound:
 		return nil, fmt.Errorf("%w: org %s is not visible to the installation", ErrInstallationNotFound, org)
 	default:
