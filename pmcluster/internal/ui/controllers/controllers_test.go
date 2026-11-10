@@ -1,12 +1,16 @@
 package controllers
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -15,6 +19,37 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/views"
 )
+
+// githubSetCalls records the last POST /api/github/app the fake daemon received,
+// so the controller tests can assert what the console forwarded (the key body and
+// the browser's X-Forwarded-Proto) without re-reading the request in the handler.
+type githubSetRecorder struct {
+	mu    sync.Mutex
+	body  map[string]any
+	proto string
+	posts int
+}
+
+var githubSetCalls githubSetRecorder
+
+func (g *githubSetRecorder) record(body map[string]any, proto string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.body, g.proto = body, proto
+	g.posts++
+}
+
+func (g *githubSetRecorder) last() (map[string]any, string, int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.body, g.proto, g.posts
+}
+
+func (g *githubSetRecorder) reset() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.body, g.proto, g.posts = nil, "", 0
+}
 
 // ackDaemonCalls counts POSTs the fake daemon received on
 // /api/stacks/demo/ack, so the AckFailover controller test can prove the
@@ -203,9 +238,30 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"changed":false,"message":"no changes"}`)
 	})
 	mux.HandleFunc("/api/github/app", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"configured":true,"app_id":4242,"installation_id":7,
-			"probe_repo":"acme/app","probe_package":"acme/app:latest","slug":"pmcluster",
-			"permissions":{"contents":"read","packages":"read","metadata":"read"},"warning":""}`)
+		if !auth(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodPost {
+			// The set/rotate route: record what the console sent so a test can
+			// assert the key and the forwarded scheme, then answer the way the
+			// daemon does.
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			githubSetCalls.record(body, r.Header.Get("X-Forwarded-Proto"))
+			write(w, `{"app_id":4242,"installation_id":7,"key_fingerprint":"SHA256:aa:bb:cc",`+
+				`"probe":{"ok":true,"detail":"minted a token valid until 2026-11-10T13:04:05Z; read acme/app OK"}}`)
+			return
+		}
+		// The registration card. The probe timestamp is relative to now so the
+		// panel renders an age instead of a fixed date.
+		probeAt := time.Now().Add(-2 * time.Minute).Unix()
+		write(w, fmt.Sprintf(`{"configured":true,"app_id":4242,"installation_id":7,`+
+			`"probe_repo":"acme/app","probe_package":"acme/app:latest","slug":"pmcluster",`+
+			`"permissions":{"contents":"read","packages":"read","metadata":"read"},"warning":"",`+
+			`"key_fingerprint":"SHA256:11:22:33","last_probe_ok":true,`+
+			`"last_probe_detail":"minted a token valid until 2026-11-09T13:04:05Z; read acme/app OK",`+
+			`"last_probe_at":%d}`, probeAt))
 	})
 	mux.HandleFunc("/api/github/app/test", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"ok":true,"message":"minted a token valid until 2026-11-09T13:04:05Z; read acme/app OK"}`)
@@ -236,6 +292,7 @@ type ctrlHarness struct {
 
 func newCtrlHarness(t *testing.T) *ctrlHarness {
 	t.Helper()
+	githubSetCalls.reset()
 	daemon := ctrlFakeDaemon(t)
 	t.Cleanup(daemon.Close)
 
@@ -314,6 +371,7 @@ func (h *ctrlHarness) mountSettings() {
 	h.engine.GET("/web/settings", (Settings{Controller: h.ctrl}).Page)
 	h.engine.GET("/web/settings/rendered/:name", (Settings{Controller: h.ctrl}).RenderedGet)
 	h.engine.POST("/web/settings/github/test", (Settings{Controller: h.ctrl}).GitHubTest)
+	h.engine.POST("/web/settings/github/app", (Settings{Controller: h.ctrl}).GitHubAppSet)
 }
 func (h *ctrlHarness) mountWebhooks() {
 	h.engine.GET("/web/webhooks", (Webhooks{Controller: h.ctrl}).Page)

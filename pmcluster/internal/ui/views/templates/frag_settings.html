@@ -120,7 +120,20 @@
       <div class="kv-row"><span class="k">{{T "settings.github_installation"}}</span><span class="v mono num" dir="ltr">{{if .GitHubInstallationID}}{{.GitHubInstallationID}}{{else}}{{T "settings.github_installation_none"}}{{end}}</span></div>
       <div class="kv-row"><span class="k">{{T "settings.github_probe_repo"}}</span><span class="v mono iso" dir="ltr">{{if .GitHubRepo}}{{.GitHubRepo}}{{else}}—{{end}}</span></div>
       <div class="kv-row"><span class="k">{{T "settings.github_probe_package"}}</span><span class="v mono iso" dir="ltr">{{if .GitHubPackage}}{{.GitHubPackage}}{{else}}—{{end}}</span></div>
+      <div class="kv-row"><span class="k">{{T "settings.github_key_fingerprint"}}</span><span class="v mono iso" dir="ltr">{{if .GitHubKeyFingerprint}}{{.GitHubKeyFingerprint}}{{else}}—{{end}}</span></div>
+      <div class="kv-row">
+        <span class="k">{{T "settings.github_probe_last"}}</span>
+        <span class="v">
+          {{if not .GitHubProbeKnown}}{{T "settings.github_probe_never"}}
+          {{else if .GitHubProbeOK}}<span class="pill good"><i class="dot"></i>{{T "settings.github_probe_ok"}}</span>
+          {{else}}<span class="pill warn"><i class="dot"></i>{{T "settings.github_probe_none"}}</span>{{end}}
+          {{if .GitHubProbeAgeKey}}<span class="muted">· {{if .GitHubProbeAgeArg}}{{TF .GitHubProbeAgeKey .GitHubProbeAgeArg}}{{else}}{{T .GitHubProbeAgeKey}}{{end}}</span>{{end}}
+        </span>
+      </div>
     </div>
+    {{if .GitHubProbeDetail}}
+    <p class="muted mono iso" dir="ltr">{{.GitHubProbeDetail}}</p>
+    {{end}}
     {{if .GitHubWarning}}
     <div class="banner warn">
       {{icon "alert"}}
@@ -146,6 +159,67 @@
     {{end}}
     {{if .GitHubTestSet}}
       {{if .GitHubTestOK}}<div class="msg ok">{{.GitHubTestMsg}}</div>{{else}}<div class="msg err">{{.GitHubTestMsg}}</div>{{end}}
+    {{end}}
+    {{if .CanEditGitHub}}
+    <details class="details mt-16">
+      <summary>{{T "settings.github_form_title"}}</summary>
+      <p class="sub">{{T "settings.github_form_sub"}}</p>
+      {{/* multipart only on this form: it is the one form on the page that can
+           carry a file, and a page-wide enctype would change every other one. */}}
+      <form class="form" method="post" action="/web/settings/github/app" enctype="multipart/form-data" autocomplete="off">
+        <div class="form-grid">
+          <div class="field">
+            <label for="gh-app-id">{{T "settings.github_app_id"}}</label>
+            <input id="gh-app-id" class="finput mono num" type="text" inputmode="numeric" name="app_id" dir="ltr" value="{{if .GitHubAppID}}{{.GitHubAppID}}{{end}}">
+          </div>
+          <div class="field">
+            <label for="gh-installation-id">{{T "settings.github_installation"}}</label>
+            <input id="gh-installation-id" class="finput mono num" type="text" inputmode="numeric" name="installation_id" dir="ltr" value="{{if .GitHubInstallationID}}{{.GitHubInstallationID}}{{end}}">
+            <span class="hint">{{T "settings.github_installation_hint"}}</span>
+          </div>
+          <div class="field">
+            <label for="gh-probe-repo">{{T "settings.github_probe_repo"}}</label>
+            <input id="gh-probe-repo" class="finput mono" type="text" name="probe_repo" dir="ltr" value="{{.GitHubRepo}}">
+          </div>
+          <div class="field">
+            <label for="gh-probe-package">{{T "settings.github_probe_package"}}</label>
+            <input id="gh-probe-package" class="finput mono" type="text" name="probe_package" dir="ltr" value="{{.GitHubPackage}}">
+          </div>
+        </div>
+        <div class="field">
+          <label for="gh-key-pem">{{T "settings.github_key"}}</label>
+          <textarea id="gh-key-pem" class="finput mono" name="private_key_pem" rows="6" dir="ltr" spellcheck="false" autocomplete="off" placeholder="{{T "settings.github_key_placeholder"}}"></textarea>
+          <span class="hint">{{T "settings.github_key_hint"}}</span>
+        </div>
+        <div class="field">
+          <label for="gh-key-file">{{T "settings.github_key_file"}}</label>
+          <input id="gh-key-file" type="file" name="private_key_file" accept=".pem,application/x-pem-file,text/plain">
+          <span class="hint">{{T "settings.github_key_file_hint"}}</span>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary" data-tip="{{if .GitHubConfigured}}{{T "settings.github_rotate"}}{{else}}{{T "settings.github_save"}}{{end}}">
+            {{icon "check"}}<span>{{if .GitHubConfigured}}{{T "settings.github_rotate"}}{{else}}{{T "settings.github_save"}}{{end}}</span>
+          </button>
+        </div>
+      </form>
+      {{if .GitHubConfigured}}
+      <p class="muted">{{T "settings.github_rotate_warning"}}</p>
+      {{end}}
+    </details>
+    {{end}}
+    {{if .GitHubSetSet}}
+    <div class="msg ok">{{T "settings.github_saved"}}</div>
+    <div class="kv">
+      <div class="kv-row"><span class="k">{{T "settings.github_app_id"}}</span><span class="v mono num" dir="ltr">{{.GitHubSetAppID}}</span></div>
+      <div class="kv-row"><span class="k">{{T "settings.github_installation"}}</span><span class="v mono num" dir="ltr">{{.GitHubSetInstallation}}</span></div>
+      <div class="kv-row"><span class="k">{{T "settings.github_key_fingerprint"}}</span><span class="v mono iso" dir="ltr">{{.GitHubSetFingerprint}}</span></div>
+      <div class="kv-row">
+        <span class="k">{{T "settings.github_probe_last"}}</span>
+        <span class="v">{{if .GitHubSetProbeOK}}<span class="pill good"><i class="dot"></i>{{T "settings.github_probe_ok"}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{T "settings.github_probe_none"}}</span>{{end}}</span>
+      </div>
+    </div>
+    <p class="muted mono iso" dir="ltr">{{.GitHubSetProbeDetail}}</p>
+    {{if .GitHubSetRotated}}<div class="banner warn">{{icon "alert"}}<div class="b-body"><p>{{T "settings.github_rotate_done"}}</p></div></div>{{end}}
     {{end}}
     <p class="muted">{{T "settings.github_foot"}}</p>
   </div>

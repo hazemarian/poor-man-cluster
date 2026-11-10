@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -28,10 +29,22 @@ type rsaKey struct{ key *rsa.PrivateKey }
 
 // parseRSAKey accepts PKCS#1 ("RSA PRIVATE KEY") and PKCS#8 ("PRIVATE KEY")
 // PEM blocks, which are the two shapes GitHub hands out.
+//
+// Errors name the position and the block TYPE, never the bytes: a rejected key
+// ends up in a console banner and in the daemon log, and neither may carry key
+// material.
 func parseRSAKey(pemBytes []byte) (*rsaKey, error) {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
 		return nil, errors.New("no PEM block found (expected the .pem downloaded from the GitHub App settings)")
+	}
+	switch block.Type {
+	case "RSA PRIVATE KEY", "PRIVATE KEY":
+	default:
+		// e.g. "ENCRYPTED PRIVATE KEY" (a passphrase-protected export) or a
+		// certificate pasted by mistake. Naming the line is enough to find it.
+		return nil, fmt.Errorf("line %d: unsupported block type %q (expected RSA PRIVATE KEY or PRIVATE KEY)",
+			pemBlockLine(pemBytes, block.Type), block.Type)
 	}
 	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
 		return &rsaKey{key: key}, nil
@@ -45,6 +58,17 @@ func parseRSAKey(pemBytes []byte) (*rsaKey, error) {
 		return nil, fmt.Errorf("private key is %T, not RSA", parsed)
 	}
 	return &rsaKey{key: key}, nil
+}
+
+// pemBlockLine reports the 1-based line the block's BEGIN marker sits on, so a
+// "unsupported block type" error points at something the operator can see in
+// their editor without the message quoting the file.
+func pemBlockLine(pemBytes []byte, blockType string) int {
+	idx := strings.Index(string(pemBytes), "-----BEGIN "+blockType+"-----")
+	if idx < 0 {
+		return 0
+	}
+	return strings.Count(string(pemBytes[:idx]), "\n") + 1
 }
 
 // signJWT builds a GitHub App JWT: RS256 over the standard header and the

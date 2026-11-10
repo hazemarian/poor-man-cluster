@@ -288,3 +288,10 @@ func CurrentUser(c *gin.Context) *store.User {
 	u, _ := v.(*store.User)
 	return u
 }
+
+// WithUser attaches u to the request the way Require does after a successful
+// session check. It exists so fragments can be rendered in tests and tools
+// without inventing a cookie, and keeps the context key private.
+func WithUser(c *gin.Context, u *store.User) {
+	c.Set(ctxUserKey, u)
+}

@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,8 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
@@ -96,6 +99,11 @@ func init() {
 	setupCmd.Flags().Bool("github-runner-socket-proxy", true, "route a runner's docker access through the daemon's filtered socket instead of /var/run/docker.sock")
 	setupCmd.Flags().String("github-runner-memory", "", "memory limit per runner container (default 2560m)")
 	setupCmd.Flags().Bool("github-runner-allow-leader", false, "allow runner containers on the leader (single-node clusters only; default: off the leader)")
+	// The App itself is optional here: skipping it is a supported answer, and
+	// the message printed when the flags are absent says where to finish later.
+	setupCmd.Flags().String("github-app-id", "", "GitHub App id to store during setup (optional; can be done later from the console)")
+	setupCmd.Flags().String("github-app-key-file", "", "path to the GitHub App private key .pem (optional; requires --github-app-id)")
+	setupCmd.Flags().String("github-installation-id", "", "GitHub App installation id (optional; required with --github-app-id)")
 	setupCmd.Flags().String("hostname", "", "hostname this node joins the Swarm under (default: current OS hostname)")
 
 	setupCmd.Flags().String("swarm-advertise-addr", "", "advertise address passed to `docker swarm init` on a first node (default: auto-detected node IP)")
@@ -160,6 +168,14 @@ type setupAnswers struct {
 	GitHubRunnerSocketProxy bool
 	GitHubRunnerMemory      string
 	GitHubRunnerAllowLeader bool
+
+	// The GitHub App itself, optional at setup time. All three empty means the
+	// operator skipped it, and the console (or `pmcluster github app set`) can
+	// do it later. Given, it goes through the same validate-by-minting path the
+	// console uses, so setup cannot store a key that does not work.
+	GitHubAppID          string
+	GitHubAppKeyFile     string
+	GitHubInstallationID string
 
 	// NodeHostname is the name this node joins the Swarm under. It is applied
 	// with hostnamectl before the cluster comes up so the Swarm records the
@@ -409,6 +425,10 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.GitHubRunnerSocketProxy, _ = cmd.Flags().GetBool("github-runner-socket-proxy")
 		a.GitHubRunnerMemory, _ = cmd.Flags().GetString("github-runner-memory")
 		a.GitHubRunnerAllowLeader, _ = cmd.Flags().GetBool("github-runner-allow-leader")
+		// Optional GitHub App registration; empty strings mean "skipped".
+		a.GitHubAppID, _ = cmd.Flags().GetString("github-app-id")
+		a.GitHubAppKeyFile, _ = cmd.Flags().GetString("github-app-key-file")
+		a.GitHubInstallationID, _ = cmd.Flags().GetString("github-installation-id")
 		if !cmd.Flags().Changed("github-runners-enabled") {
 			if v := os.Getenv("PMCLUSTER_GITHUB_RUNNERS_ENABLED"); v != "" {
 				a.GitHubRunnersEnabled = envBool(v)
@@ -527,6 +547,13 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Optional GitHub App registration. It runs the same validate-by-minting path
+	// the console's set/rotate form uses, so setup cannot leave a key behind that
+	// does not work; the flags are never required.
+	if err := configureGitHubAppFromSetup(ctx, st, cfg, a, out); err != nil {
+		return err
+	}
+
 	// Apply the operator's chosen hostname before the cluster comes up. The
 	// Swarm records the hostname at join/init time and the leader-aware
 	// daemon matches os.Hostname() against the node list, so getting the name
@@ -590,6 +617,87 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 
 	fmt.Fprintln(out, "Fresh install — running `pmcluster cluster up` with the new settings.")
 	return runUp(cmd, cfg, in)
+}
+
+// configureGitHubAppFromSetup stores the App registration when the optional
+// flags were passed, and says where to finish when they were not.
+//
+// Validation is githubapp.Local.Apply's: parse the PEM, sign a JWT, mint an
+// installation token for the installation, probe, and only then persist. Setup
+// therefore cannot leave a key that mints nothing behind, and skipping the whole
+// thing is a supported answer — a cluster on public images needs no App.
+func configureGitHubAppFromSetup(ctx context.Context, st *store.Store, cfg *config.Config, a setupAnswers, out io.Writer) error {
+	if a.GitHubAppID == "" && a.GitHubAppKeyFile == "" && a.GitHubInstallationID == "" {
+		fmt.Fprintln(out, "GitHub App: skipped. It can be configured later from the console")
+		fmt.Fprintln(out, "  (Settings → GitHub App → \"Set or rotate the App key\"), or with `pmcluster github app set`.")
+		return nil
+	}
+	appID, err := parseSetupID("--github-app-id", a.GitHubAppID)
+	if err != nil {
+		return err
+	}
+	installationID, err := parseSetupID("--github-installation-id", a.GitHubInstallationID)
+	if err != nil {
+		return err
+	}
+	if appID <= 0 {
+		return errors.New("--github-app-id is required when any GitHub App flag is given")
+	}
+	if installationID <= 0 {
+		return errors.New("--github-installation-id is required with --github-app-id: the registration is validated by minting an installation token for it, and without one there is nothing to prove")
+	}
+	if a.GitHubAppKeyFile == "" {
+		return errors.New("--github-app-key-file is required with --github-app-id")
+	}
+	keyPEM, err := os.ReadFile(a.GitHubAppKeyFile)
+	if err != nil {
+		return fmt.Errorf("read --github-app-key-file: %w", err)
+	}
+	if len(keyPEM) > maxSetupKeyBytes {
+		return fmt.Errorf("--github-app-key-file is %d bytes, larger than %d KiB, which is not a PEM", len(keyPEM), maxSetupKeyBytes>>10)
+	}
+
+	cipher, err := credentials.Open(cfg.EncryptionKeyPath())
+	if err != nil {
+		return fmt.Errorf("open encryption key: %w", err)
+	}
+	l := &githubapp.Local{Store: st, Cipher: cipher, Client: &githubapp.Client{}}
+	res, err := l.Apply(ctx, githubapp.SetRequest{
+		AppID:          appID,
+		InstallationID: installationID,
+		PrivateKeyPEM:  keyPEM,
+	})
+	if err != nil {
+		return fmt.Errorf("github app: %w\n  Fix the ids/key and re-run, or drop these flags and configure the App later from the console", err)
+	}
+
+	fmt.Fprintf(out, "GitHub App %d stored (installation %d), key %s.\n", res.AppID, res.InstallationID, res.KeyFingerprint)
+	if res.Probe.OK {
+		fmt.Fprintf(out, "  Probe: %s\n", res.Probe.Detail)
+	} else {
+		fmt.Fprintf(out, "  Probe: %s\n", res.Probe.Detail)
+		fmt.Fprintln(out, "  Add --probe-repo / --probe-package later (console or `pmcluster github app set`) so doctor can prove read access.")
+	}
+	fmt.Fprintln(out, "  The private key is encrypted in data.db and is never displayed again.")
+	return nil
+}
+
+// maxSetupKeyBytes is the ceiling for a key read from --github-app-key-file: a
+// 4096-bit RSA PEM is under 4 KiB, so anything past this is not a key.
+const maxSetupKeyBytes = 64 << 10
+
+// parseSetupID reads a numeric setup flag. Empty is 0 (absent); anything
+// unparseable is named rather than silently ignored.
+func parseSetupID(flag, raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number, got %q", flag, raw)
+	}
+	return v, nil
 }
 
 // validateRunnerSetup enforces the runner feature's dependency at setup time,

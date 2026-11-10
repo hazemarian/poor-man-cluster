@@ -302,12 +302,107 @@ paths:
                       type: string
                   warning:
                     type: string
+                  key_fingerprint:
+                    type: string
+                  last_probe_ok:
+                    type: boolean
+                  last_probe_detail:
+                    type: string
+                  last_probe_at:
+                    type: integer
+                    format: int64
         "500":
           description: The registration could not be read
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+    post:
+      summary: Store or rotate the GitHub App registration (operator)
+      description: |
+        Sets the app id, the installation id, the private key and the probe
+        targets — everything the CLI's `pmcluster github app set` writes, from
+        the console. Operator role only: a viewer gets 403.
+
+        Validation runs in this order and **nothing is written until the last
+        step succeeds**: parse the PEM (PKCS#1 or PKCS#8, RSA only), sign an app
+        JWT, exchange it for an installation token for the NEW installation id,
+        then run the probe. A wrong app id, a wrong key, a dead installation or a
+        failed probe therefore leaves the previous registration working.
+
+        Partial update is the normal case: an omitted/zero `app_id` or
+        `installation_id` keeps the stored value, and an empty `private_key_pem`
+        keeps the stored key, so rotating means editing one field. Absent
+        `probe_repo`/`probe_package` also keep the stored targets; an explicit
+        empty string clears them. A request that supplies no key while none is
+        stored is a 400 naming the missing key.
+
+        The private key never comes back — not masked, not truncated. The answer
+        carries a fingerprint instead (SHA-256 over the public half, first 128
+        bits, `SHA256:ab:cd:…`) which is stable for one key and different for
+        another.
+
+        The private key must not cross cleartext: a request that is neither on
+        TLS, nor carries `X-Forwarded-Proto: https` (what the edge sets), nor
+        comes from loopback is refused with 400 `insecure_transport`.
+      operationId: setGitHubApp
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                app_id:
+                  type: integer
+                  format: int64
+                installation_id:
+                  type: integer
+                  format: int64
+                private_key_pem:
+                  type: string
+                  description: The .pem; omit or send "" to keep the stored key.
+                probe_repo:
+                  type: string
+                probe_package:
+                  type: string
+      responses:
+        "200":
+          description: The stored registration (fingerprint, never the key) and the probe outcome
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  app_id:
+                    type: integer
+                    format: int64
+                  installation_id:
+                    type: integer
+                    format: int64
+                  key_fingerprint:
+                    type: string
+                  probe:
+                    type: object
+                    properties:
+                      ok:
+                        type: boolean
+                      detail:
+                        type: string
+        "400":
+          description: |
+            The change was refused and nothing was written: a malformed or
+            non-RSA key, a missing key with none stored, an installation that
+            cannot mint, a failed probe, or a cleartext non-loopback request
+            (`code: insecure_transport`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: The bearer is not an operator
   /api/github/app/test:
     post:
       summary: Mint an installation token and probe the configured repo/package

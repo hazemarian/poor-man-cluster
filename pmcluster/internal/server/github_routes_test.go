@@ -9,9 +9,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -81,5 +85,65 @@ func TestRoutes_GitHubTokenBrokerIsOutsideBearer(t *testing.T) {
 	_ = me.Body.Close()
 	if me.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("/api/me status = %d, want 401", me.StatusCode)
+	}
+}
+
+// newServerGitHubApp builds a Local on a throwaway store: enough for the route
+// guard tests, which never reach GitHub.
+func newServerGitHubApp(t *testing.T) *githubapp.Local {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "data.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	cipher, err := credentials.Open(filepath.Join(dir, ".encryption_key"))
+	if err != nil {
+		t.Fatalf("open cipher: %v", err)
+	}
+	return &githubapp.Local{Store: st, Cipher: cipher, Client: &githubapp.Client{}}
+}
+
+// Setting the App registration writes a private key, so the route is operator
+// work: a viewer bearer must be refused by the role middleware before the
+// handler ever parses a body.
+func TestRoutes_GitHubAppSetIsOperatorOnly(t *testing.T) {
+	l := newServerGitHubApp(t)
+	srv := httptest.NewServer(New(Deps{
+		Lookup: &fakeLookup{users: map[string]*auth.User{
+			"viewer-tok": {ID: 1, Name: "viewer", Role: auth.RoleViewer},
+			"op-tok":     {ID: 2, Name: "operator", Role: auth.RoleOperator},
+		}},
+		GitHubApp: l,
+	}))
+	t.Cleanup(srv.Close)
+
+	post := func(token, body string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/github/app", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if code := post("viewer-tok", `{}`); code != http.StatusForbidden {
+		t.Errorf("viewer POST = %d, want 403", code)
+	}
+	// The operator reaches the handler, which refuses the empty body with 400 —
+	// a different answer, which is what proves the 403 was the role gate.
+	if code := post("op-tok", `{}`); code != http.StatusBadRequest {
+		t.Errorf("operator POST = %d, want 400 from the handler", code)
+	}
+	if _, err := l.Store.GitHubApp(context.Background()); err == nil {
+		t.Error("a refused request stored a registration")
 	}
 }

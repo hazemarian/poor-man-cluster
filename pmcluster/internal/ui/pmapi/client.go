@@ -95,6 +95,14 @@ func (c *Client) token() string { return c.Token() }
 // do performs a JSON request against /api{path}, decoding a 2xx body into out.
 // Non-2xx responses (and transport errors) return a *Error.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	return c.doWithHeaders(ctx, method, path, in, out, nil)
+}
+
+// doWithHeaders is do plus request headers. It exists for the GitHub App
+// registration route, which forwards the browser's X-Forwarded-Proto so the
+// daemon's cleartext guard can see that the key crossed TLS at the edge even
+// though this call itself is loopback HTTP.
+func (c *Client) doWithHeaders(ctx context.Context, method, path string, in, out any, headers map[string]string) error {
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
@@ -113,6 +121,9 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	req.Header.Set("Accept", "application/json")
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 
 	resp, err := c.http.Do(req)
@@ -423,6 +434,25 @@ func (c *Client) TestGitHubApp(ctx context.Context) (*GitHubAppTest, error) {
 	var out GitHubAppTest
 	err := c.do(ctx, http.MethodPost, "/github/app/test", nil, &out)
 	return &out, err
+}
+
+// SetGitHubApp stores or rotates the App registration. The daemon validates by
+// minting before it writes, so a non-2xx answer means nothing was changed.
+//
+// forwardedProto is the scheme the BROWSER used ("https" or ""), forwarded as
+// X-Forwarded-Proto: the daemon refuses a private key that arrives over
+// cleartext from a non-loopback caller, and this call is loopback HTTP even when
+// the operator is on HTTPS at the edge.
+func (c *Client) SetGitHubApp(ctx context.Context, in GitHubAppSet, forwardedProto string) (*GitHubAppSetResult, error) {
+	headers := map[string]string{}
+	if forwardedProto != "" {
+		headers["X-Forwarded-Proto"] = forwardedProto
+	}
+	var out GitHubAppSetResult
+	if err := c.doWithHeaders(ctx, http.MethodPost, "/github/app", in, &out, headers); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // ListSecrets returns the stored secrets matching scope and stack (empty

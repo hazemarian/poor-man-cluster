@@ -20,8 +20,19 @@ type GitHubApp struct {
 	PrivateKeyCiphertext []byte
 	ProbeRepo            string
 	ProbePackage         string
-	CreatedAt            int64
-	UpdatedAt            int64
+	// KeyFingerprint identifies the stored key without revealing it (SHA-256 of
+	// the public half, `ssh-keygen -lf` shape). Empty on a row written before
+	// the column existed; the daemon recomputes it from the key when it reads
+	// one of those.
+	KeyFingerprint string
+	// LastProbe* record the last registration change or Test that minted a token
+	// and read the configured targets. LastProbeAt is Unix seconds; 0 means the
+	// pairing has never been proven since this column existed.
+	LastProbeOK     bool
+	LastProbeDetail string
+	LastProbeAt     int64
+	CreatedAt       int64
+	UpdatedAt       int64
 }
 
 // ErrGitHubAppNotConfigured is returned when no app credentials are stored.
@@ -31,9 +42,13 @@ var ErrGitHubAppNotConfigured = errors.New("github app not configured")
 func (s *Store) GitHubApp(ctx context.Context) (*GitHubApp, error) {
 	var a GitHubApp
 	err := s.conn().QueryRowContext(ctx,
-		`SELECT app_id, installation_id, private_key_ciphertext, probe_repo, probe_package, created_at, updated_at
+		`SELECT app_id, installation_id, private_key_ciphertext, probe_repo, probe_package,
+		        key_fingerprint, last_probe_ok, last_probe_detail, last_probe_at,
+		        created_at, updated_at
 		   FROM github_app WHERE id = 1`,
-	).Scan(&a.AppID, &a.InstallationID, &a.PrivateKeyCiphertext, &a.ProbeRepo, &a.ProbePackage, &a.CreatedAt, &a.UpdatedAt)
+	).Scan(&a.AppID, &a.InstallationID, &a.PrivateKeyCiphertext, &a.ProbeRepo, &a.ProbePackage,
+		&a.KeyFingerprint, &a.LastProbeOK, &a.LastProbeDetail, &a.LastProbeAt,
+		&a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrGitHubAppNotConfigured
@@ -47,16 +62,23 @@ func (s *Store) GitHubApp(ctx context.Context) (*GitHubApp, error) {
 func (s *Store) SetGitHubApp(ctx context.Context, a *GitHubApp) error {
 	now := time.Now().Unix()
 	_, err := s.conn().ExecContext(ctx,
-		`INSERT INTO github_app (id, app_id, installation_id, private_key_ciphertext, probe_repo, probe_package, created_at, updated_at)
-		 VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO github_app (id, app_id, installation_id, private_key_ciphertext, probe_repo, probe_package,
+		                         key_fingerprint, last_probe_ok, last_probe_detail, last_probe_at,
+		                         created_at, updated_at)
+		 VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   app_id = excluded.app_id,
 		   installation_id = excluded.installation_id,
 		   private_key_ciphertext = excluded.private_key_ciphertext,
 		   probe_repo = excluded.probe_repo,
 		   probe_package = excluded.probe_package,
+		   key_fingerprint = excluded.key_fingerprint,
+		   last_probe_ok = excluded.last_probe_ok,
+		   last_probe_detail = excluded.last_probe_detail,
+		   last_probe_at = excluded.last_probe_at,
 		   updated_at = excluded.updated_at`,
-		a.AppID, a.InstallationID, a.PrivateKeyCiphertext, a.ProbeRepo, a.ProbePackage, now, now,
+		a.AppID, a.InstallationID, a.PrivateKeyCiphertext, a.ProbeRepo, a.ProbePackage,
+		a.KeyFingerprint, a.LastProbeOK, a.LastProbeDetail, a.LastProbeAt, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("set github app: %w", err)

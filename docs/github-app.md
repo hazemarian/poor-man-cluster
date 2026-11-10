@@ -111,6 +111,69 @@ not app state):
 pmcluster github app clear
 ```
 
+### 3.1 From the console (no SSH)
+
+`Settings → GitHub App → Set or rotate the App key` carries all three values:
+**app id**, **installation id** and the **private key**, as either a pasted
+`.pem` or a file upload (64 KiB max), plus the probe repo and package. App id,
+installation id and both probe fields are prefilled from the stored
+registration, so a rotation is one field, not four.
+
+The submit goes to `POST /web/settings/github/app`, which calls
+`POST /api/github/app` on the daemon. Both run the **same** validation as the
+CLI, in this order:
+
+1. parse the PEM — PKCS#1 or PKCS#8, RSA only (an encrypted key or a certificate
+   is refused by name and line);
+2. sign an app JWT and exchange it for an installation token for the
+   installation id in the request;
+3. read the probe repo (`contents:read`) and HEAD the probe package
+   (`packages:read`), when configured;
+4. only then encrypt and store the key, and record the probe outcome.
+
+Nothing is written before step 3 succeeds, so a typo in the installation id, a
+key from another App, or an installation that cannot mint leaves the working
+registration untouched — the previous key keeps minting.
+
+**Partial update is the normal case.** An empty key field keeps the stored key;
+an omitted `app_id`/`installation_id` keeps the stored one; omitted probe fields
+keep the stored targets. Changing only the installation id still mints for the
+*new* id before storing it. Asking for a registration with no key while no key
+is stored is a 400 that names the missing key.
+
+The page shows, before and after the save: app id, installation id, **key
+fingerprint** (`SHA256:ab:cd:…`, SHA-256 over the public half — stable for one
+key, different for another), the last probe result and how long ago it ran. The
+submit label reads **Rotate key** when an App already exists and **Save** when it
+does not, and a rotation states that **the previous key stops working
+immediately**.
+
+**Transport guard.** A private key is never accepted over cleartext: the daemon
+refuses the request (400, `code: insecure_transport`) unless it arrived on TLS,
+carried `X-Forwarded-Proto: https` (what the edge sets), or came from loopback.
+The console applies the same rule to the browser hop first, because its own call
+to the daemon is loopback HTTP — it forwards the browser's scheme in
+`X-Forwarded-Proto`, so the daemon can tell "TLS at the edge" from "plain HTTP to
+the leader".
+
+**Nothing logs the key.** No middleware in the daemon request path buffers or
+prints request bodies (the router adds request-id, status-span, rate-limit,
+recoverer and timeout middleware only; the `otelhttp` wrapper records method,
+route and status). The set route logs one audit line per attempt with the ids,
+the fingerprint and the probe outcome, and refusals log a sanitised error — a
+PEM header and everything after it is cut before anything is written.
+
+The CLI equivalent, including the `pmcluster setup` flags:
+
+```bash
+pmcluster setup --domain example.com --acme-email me@example.com \
+  --github-app-id 123456 --github-app-key-file ~/pmcluster-app.pem \
+  --github-installation-id 789
+```
+
+The three App flags are optional; without them setup prints that the App can be
+configured later from the console.
+
 ## 4. The CI broker
 
 ### 4.1 Create one secret per repo
@@ -269,9 +332,11 @@ login` writes it to Docker's own `~/.docker/config.json`, the file
 | token minted and both probes pass | **ok** |
 
 The console's Settings page shows the app id, installation id, probe targets,
-and the granted permission map, with a warning when either required permission
-is missing, plus a **Test** button that runs the same probe and reports the
-sentence. It never displays the key or a token.
+the key's fingerprint, the last probe result and its age, and the granted
+permission map, with a warning when either required permission is missing, plus a
+**Test** button that runs the same probe and reports the sentence. It never
+displays the key or a token. The same panel carries the set/rotate form (§3.1);
+the submit is operator-only and refused over cleartext.
 
 ## 7. Failure modes
 
@@ -292,9 +357,14 @@ sentence. It never displays the key or a token.
 - **Broker secrets** are the durable CI credential. Rotate on suspicion or on
   a schedule with `pmcluster github broker rotate <owner/repo>`; the old secret
   stops working immediately and the workflow keeps its repo-secret name.
-- **The App private key** rotates rarely: generate a new key in GitHub, run
+- **The App private key** rotates rarely: generate a new key in GitHub, then
+  either use **Settings → GitHub App → Set or rotate the App key** in the console
+  (paste or upload the new `.pem`, leave the ids prefilled) or run
   `pmcluster github app set --app-id … --key-file new.pem`, verify with
-  `pmcluster github app test`, then delete the old key in GitHub.
+  `pmcluster github app test`, then delete the old key in GitHub. The console
+  path mints a token with the new key before storing it, so a wrong file changes
+  nothing; on success the previous key stops working immediately. The panel shows
+  the fingerprint before and after, which is how you confirm the rotation landed.
 - **The Actions PATs** can be deleted once every repo's workflow uses the
   broker and `pmcluster github app test` passes. The **read-only pull PAT
   stays** — it is the image-pull credential (§5), rotated on its own 90-day

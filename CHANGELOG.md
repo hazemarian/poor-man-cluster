@@ -3,6 +3,61 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — The GitHub App key is set and rotated from the console
+
+**App id, installation id and the private key are edited in the console's GitHub
+panel instead of over SSH.** Until now the only way to set the key was
+`pmcluster github app set --key-file`, so a rotation meant logging into the
+leader. The panel now carries all three values and validates them exactly the way
+the CLI does before it writes anything.
+
+- **`POST /api/github/app`** (operator role; a viewer gets 403) takes app id,
+  installation id, the `.pem` (optional once one is stored), probe repo and probe
+  package. Validation order is parse the PEM (PKCS#1 or PKCS#8, RSA only) → sign
+  an app JWT → exchange it for an installation token for the **new** installation
+  id → run the probe. Nothing is persisted before the mint succeeds, so a wrong
+  key, a dead installation or a failed probe leaves the working registration
+  intact; the previous key keeps minting.
+- **One write path, not two.** The validation lives in `githubapp.Local.Apply`
+  and its last step is `Local.Save` — the function `pmcluster github app set` has
+  always used — so encryption, the fingerprint and the minter invalidation cannot
+  drift between CLI, setup and console.
+- **Partial update.** An empty key keeps the stored key; omitted ids keep the
+  stored ids; omitted probe fields keep the stored targets. An installation-only
+  change still mints for the new installation before storing it, and a
+  registration with no key while none is stored is a 400 naming the missing key.
+- **No key material in the answer or the log.** The response carries
+  `{app_id, installation_id, key_fingerprint, probe:{ok, detail}}` — a SHA-256
+  fingerprint of the key's public half, never the key (not even masked). Parse
+  errors name the PEM line and block type (`line 3: unsupported block type
+  "ENCRYPTED PRIVATE KEY"`), never the content; the route's one audit line drops
+  everything from a PEM header on. Verified that no middleware in the request path
+  buffers or prints request bodies.
+- **Transport guard.** A private key is refused (400, `code:
+  insecure_transport`) unless it arrived over TLS, carried
+  `X-Forwarded-Proto: https` (the header the console already uses for the session
+  cookie), or came from loopback. The console applies the same rule to the
+  browser hop first and forwards the browser's scheme.
+- **The panel** shows the fingerprint, the last probe result and its age before
+  the form, prefills app id / installation id / probe targets, accepts a pasted
+  `.pem` or a file upload (64 KiB max, `enctype="multipart/form-data"` on that
+  form only), labels the submit **Save** or **Rotate key**, and states after a
+  rotation that the previous key stops working immediately.
+- **`pmcluster setup`** gains optional `--github-app-id`, `--github-app-key-file`
+  and `--github-installation-id`, validated by the same `Apply`; without them it
+  prints that the App can be configured later from the console.
+- **Schema:** migration `0029_github_app_console.sql` adds `key_fingerprint` and
+  the `last_probe_*` columns; `GET /api/github/app` reports them and
+  `docs/openapi.yaml` documents the new route.
+- **Tests:** a set persists and returns a stable-per-key/different-per-key
+  fingerprint; installation-only change keeps the fingerprint and the ciphertext;
+  installation-only with no stored key is 400; a bad installation leaves app id,
+  installation id and key intact and the old key still mints; a malformed PEM is
+  400 with no key material in the response or a captured log buffer; viewer 403;
+  cleartext non-loopback 400 (and `X-Forwarded-Proto: https` accepted); oversized
+  body/upload 400; the form prefills; the panel renders the fingerprint and probe
+  age; en/ar parity.
+
 ## Unreleased — Self-hosted GitHub Actions runners, org level, behind a filtered docker socket
 
 **One ephemeral runner container per selected worker, registered at ORG level into a

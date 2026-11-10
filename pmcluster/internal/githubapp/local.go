@@ -71,6 +71,10 @@ var _ TokenSource = (*Local)(nil)
 
 // Save encrypts and stores the app registration. An empty privateKeyPEM keeps
 // the existing key (rotation of ids/probe targets without re-uploading the key).
+//
+// This is the ONE write path: the CLI's `github app set`, the console's set and
+// rotate route and `pmcluster setup` all end here, so the encryption, the
+// fingerprint and the minter invalidation cannot drift between them.
 func (l *Local) Save(ctx context.Context, appID, installationID int64, privateKeyPEM []byte, probeRepo, probePackage string) error {
 	if appID <= 0 {
 		return fmt.Errorf("%w: app id must be positive", ErrBadKey)
@@ -78,23 +82,26 @@ func (l *Local) Save(ctx context.Context, appID, installationID int64, privateKe
 	if installationID < 0 {
 		return fmt.Errorf("%w: installation id cannot be negative", ErrInstallationNotFound)
 	}
+	existing, err := l.Store.GitHubApp(ctx)
+	if err != nil && !errors.Is(err, store.ErrGitHubAppNotConfigured) {
+		return err
+	}
 	if len(privateKeyPEM) > 0 {
 		if _, err := NewApp(appID, privateKeyPEM); err != nil {
 			return err
 		}
 	} else {
-		existing, err := l.Store.GitHubApp(ctx)
-		if err != nil {
-			if errors.Is(err, store.ErrGitHubAppNotConfigured) {
-				return fmt.Errorf("%w: --key-file is required for the first configuration", ErrBadKey)
-			}
-			return err
+		if existing == nil {
+			return fmt.Errorf("%w: --key-file is required for the first configuration", ErrBadKey)
 		}
-		plain, err := l.decryptKey(existing)
+		privateKeyPEM, err = l.decryptKey(existing)
 		if err != nil {
 			return err
 		}
-		privateKeyPEM = plain
+	}
+	fingerprint, err := Fingerprint(privateKeyPEM)
+	if err != nil {
+		return err
 	}
 	ciphertext, err := l.Cipher.Encrypt(privateKeyPEM)
 	if err != nil {
@@ -106,6 +113,15 @@ func (l *Local) Save(ctx context.Context, appID, installationID int64, privateKe
 		PrivateKeyCiphertext: ciphertext,
 		ProbeRepo:            strings.TrimSpace(probeRepo),
 		ProbePackage:         strings.TrimSpace(probePackage),
+		KeyFingerprint:       fingerprint,
+	}
+	// The last probe stays attached to the targets it was made against: a save
+	// that moves the probe elsewhere must not show the old result as if it
+	// described the new target.
+	if existing != nil && existing.ProbeRepo == row.ProbeRepo && existing.ProbePackage == row.ProbePackage {
+		row.LastProbeOK = existing.LastProbeOK
+		row.LastProbeDetail = existing.LastProbeDetail
+		row.LastProbeAt = existing.LastProbeAt
 	}
 	if err := l.Store.SetGitHubApp(ctx, row); err != nil {
 		return err
@@ -113,6 +129,20 @@ func (l *Local) Save(ctx context.Context, appID, installationID int64, privateKe
 	// A changed registration must not serve the old installation's token.
 	l.invalidate()
 	return nil
+}
+
+// RecordProbe stores the outcome of the last mint-and-probe so the console can
+// show what was proven and when. Failure to record it is reported to the
+// caller but never undoes a registration that already validated.
+func (l *Local) RecordProbe(ctx context.Context, ok bool, detail string) error {
+	row, err := l.Store.GitHubApp(ctx)
+	if err != nil {
+		return err
+	}
+	row.LastProbeOK = ok
+	row.LastProbeDetail = strings.TrimSpace(detail)
+	row.LastProbeAt = time.Now().Unix()
+	return l.Store.SetGitHubApp(ctx, row)
 }
 
 // Clear removes the app registration. Broker secrets are left alone on purpose:
@@ -289,6 +319,15 @@ type Status struct {
 	// Warning names a missing permission or an unreadable permission set. Empty
 	// means the app reports both permissions the cluster needs.
 	Warning string `json:"warning"`
+	// KeyFingerprint identifies the installed private key without carrying it:
+	// the console shows it before an operator overwrites the key, and compares
+	// it afterwards to say whether the key actually changed.
+	KeyFingerprint string `json:"key_fingerprint"`
+	// LastProbe* are the outcome and time of the last mint-and-probe (a
+	// console save or the Test button). LastProbeAt is Unix seconds, 0 = never.
+	LastProbeOK     bool   `json:"last_probe_ok"`
+	LastProbeDetail string `json:"last_probe_detail"`
+	LastProbeAt     int64  `json:"last_probe_at"`
 }
 
 // Status reads the registration and asks GitHub for the granted permissions.
@@ -303,17 +342,28 @@ func (l *Local) Status(ctx context.Context) (*Status, error) {
 		return nil, err
 	}
 	st := &Status{
-		Configured:     true,
-		AppID:          row.AppID,
-		InstallationID: row.InstallationID,
-		ProbeRepo:      row.ProbeRepo,
-		ProbePackage:   row.ProbePackage,
-		Permissions:    map[string]string{},
+		Configured:      true,
+		AppID:           row.AppID,
+		InstallationID:  row.InstallationID,
+		ProbeRepo:       row.ProbeRepo,
+		ProbePackage:    row.ProbePackage,
+		Permissions:     map[string]string{},
+		LastProbeOK:     row.LastProbeOK,
+		LastProbeDetail: row.LastProbeDetail,
+		LastProbeAt:     row.LastProbeAt,
 	}
 	plain, err := l.decryptKey(row)
 	if err != nil {
 		st.Warning = err.Error()
 		return st, nil
+	}
+	// A row written before the fingerprint column existed (or by a hand-edited
+	// database) still gets one: it is derived from the key, not stored state.
+	st.KeyFingerprint = row.KeyFingerprint
+	if st.KeyFingerprint == "" {
+		if fp, ferr := Fingerprint(plain); ferr == nil {
+			st.KeyFingerprint = fp
+		}
 	}
 	app, err := NewApp(row.AppID, plain)
 	if err != nil {
@@ -342,17 +392,26 @@ type TestResult struct {
 }
 
 // Test mints a token and runs the same probes doctor uses, collapsing the
-// outcome into a sentence the card can show.
+// outcome into a sentence the card can show. The outcome is recorded so the
+// console can say when the pairing was last proven.
 func (l *Local) Test(ctx context.Context) TestResult {
 	detail, expires, err := l.Diagnose(ctx)
-	if err != nil {
-		if errors.Is(err, ErrNoProbeTarget) {
-			return TestResult{OK: true, ExpiresAt: expires,
-				Message: "Minted an installation token. Set a probe repo/package (`pmcluster github app set --probe-repo … --probe-package …`) to also prove read access."}
-		}
-		return TestResult{OK: false, Message: err.Error()}
+	var res TestResult
+	switch {
+	case errors.Is(err, ErrNoProbeTarget):
+		res = TestResult{OK: true, ExpiresAt: expires,
+			Message: "Minted an installation token. Set a probe repo/package (`pmcluster github app set --probe-repo … --probe-package …`) to also prove read access."}
+	case err != nil:
+		res = TestResult{OK: false, Message: err.Error()}
+	default:
+		res = TestResult{OK: true, Message: detail, ExpiresAt: expires}
 	}
-	return TestResult{OK: true, Message: detail, ExpiresAt: expires}
+	// ok=false for "no probe target": the mint worked, the read did not happen,
+	// and the card's age line must not claim a read that never ran.
+	if recErr := l.RecordProbe(ctx, err == nil, res.Message); recErr != nil {
+		_ = recErr // a bookkeeping failure must not fail the answer
+	}
+	return res
 }
 
 // Diagnose mints a token and asserts what it can:

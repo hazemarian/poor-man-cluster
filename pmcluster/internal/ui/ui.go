@@ -320,6 +320,9 @@ func (a *App) Mount(engine *gin.Engine) {
 	// The GitHub App Test button mints a token, so it is a mutation guarded by
 	// the operator role (the card itself is readable by any signed-in user).
 	op.POST("/settings/github/test", stt.GitHubTest)
+	// Storing or rotating the App private key is a credential write: operator
+	// only, and the controller refuses a cleartext browser hop on top of that.
+	op.POST("/settings/github/app", stt.GitHubAppSet)
 	// Runner mutations live next to the settings surface they change: killing a
 	// runner fails a job and removing a node from the picker de-registers its
 	// runner, so both are operator work, not reads.

@@ -1,17 +1,24 @@
 package controllers
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	pmsettings "github.com/hazemarian/poor-man-cluster/pmcluster/internal/settings"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 )
 
@@ -56,6 +63,9 @@ type settingsData struct {
 	// CanEditCluster gates the cluster-settings link: the route is admin-only,
 	// and a card that leads to a 403 is worse than no card.
 	CanEditCluster bool
+	// CanEditGitHub gates the set/rotate form. The route behind it is
+	// operator-level, so a viewer sees the card without a form that would 403.
+	CanEditGitHub bool
 
 	// GitHub App card. Only ids and the granted permission map travel here;
 	// the key and the installation tokens never leave the daemon.
@@ -70,6 +80,25 @@ type settingsData struct {
 	GitHubTestSet        bool
 	GitHubTestOK         bool
 	GitHubTestMsg        string
+	// What is installed right now, shown beside the set/rotate form so an
+	// operator can see the key they are about to replace: the fingerprint (never
+	// the key) and the last probe, with its age.
+	GitHubKeyFingerprint string
+	GitHubProbeKnown     bool
+	GitHubProbeOK        bool
+	GitHubProbeDetail    string
+	GitHubProbeAt        int64
+	GitHubProbeAgeKey    string
+	GitHubProbeAgeArg    string
+	// The outcome of a set/rotate submit, rendered directly under the form.
+	GitHubSetSet          bool
+	GitHubSetAppID        int64
+	GitHubSetInstallation int64
+	GitHubSetFingerprint  string
+	GitHubSetRotated      bool
+	GitHubSetKeyUploaded  bool
+	GitHubSetProbeOK      bool
+	GitHubSetProbeDetail  string
 
 	ErrKey  string
 	ErrRaw  string
@@ -577,6 +606,12 @@ func (c *Settings) fillGitHubApp(ctx context.Context, d *settingsData) {
 	d.GitHubRepo = st.ProbeRepo
 	d.GitHubPackage = st.ProbePackage
 	d.GitHubWarning = st.Warning
+	d.GitHubKeyFingerprint = st.KeyFingerprint
+	d.GitHubProbeAt = st.LastProbeAt
+	d.GitHubProbeKnown = st.LastProbeAt > 0
+	d.GitHubProbeOK = st.LastProbeOK
+	d.GitHubProbeDetail = st.LastProbeDetail
+	d.GitHubProbeAgeKey, d.GitHubProbeAgeArg = probeAge(time.Now(), st.LastProbeAt)
 	required := map[string]bool{"contents": true, "packages": true}
 	names := make([]string, 0, len(st.Permissions))
 	for name := range st.Permissions {
@@ -627,6 +662,189 @@ func (c Settings) GitHubTest(g *gin.Context) {
 	c.Views.Fragment(g, "settings", c.fill(g, d))
 }
 
+// GitHubAppSet stores or rotates the App registration (app id, installation id,
+// private key, probe targets) on the operator's behalf.
+//
+// Two guards run before the key is parsed:
+//   - the route lives in the operator group (a viewer never reaches this);
+//   - the browser leg must be TLS or loopback. This handler is the only place a
+//     private key crosses from a browser, so the console refuses a cleartext
+//     submit here even though its own call to the daemon is loopback HTTP. The
+//     daemon enforces the same rule independently for direct API callers.
+//
+// Nothing is written unless the daemon minted an installation token for the new
+// ids with the new key, so a typo in the installation id leaves the working
+// registration alone.
+func (c Settings) GitHubAppSet(g *gin.Context) {
+	ctx := g.Request.Context()
+	d := settingsData{}
+	if c.apiRefused(g, &d) {
+		c.Views.Fragment(g, "settings", c.fill(g, d))
+		return
+	}
+	if !secureBrowserRequest(g.Request) {
+		c.githubFormRefused(g, d, "settings.github_err_cleartext", "")
+		return
+	}
+
+	appID, err := numericForm(g, "app_id")
+	if err != nil {
+		c.githubFormRefused(g, d, "settings.github_err_bad_id", err.Error())
+		return
+	}
+	installationID, err := numericForm(g, "installation_id")
+	if err != nil {
+		c.githubFormRefused(g, d, "settings.github_err_bad_id", err.Error())
+		return
+	}
+
+	keyPEM, err := uploadedKey(g)
+	if err != nil {
+		c.githubFormRefused(g, d, "settings.github_err_key", err.Error())
+		return
+	}
+
+	probeRepo := strings.TrimSpace(g.PostForm("probe_repo"))
+	probePackage := strings.TrimSpace(g.PostForm("probe_package"))
+
+	// What is installed before this submit, so the answer can say whether the
+	// key actually changed.
+	var previousFingerprint string
+	if st, serr := c.API.GitHubAppStatus(ctx); serr == nil {
+		previousFingerprint = st.KeyFingerprint
+	}
+
+	proto := ""
+	if middleware.IsSecureRequest(g.Request) {
+		proto = "https"
+	}
+	res, err := c.API.SetGitHubApp(ctx, pmapi.GitHubAppSet{
+		AppID:          appID,
+		InstallationID: installationID,
+		PrivateKeyPEM:  string(keyPEM),
+		ProbeRepo:      &probeRepo,
+		ProbePackage:   &probePackage,
+	}, proto)
+	if err != nil {
+		c.githubFormRefused(g, d, "settings.github_err_set", err.Error())
+		return
+	}
+
+	d.GitHubSetSet = true
+	d.GitHubSetAppID = res.AppID
+	d.GitHubSetInstallation = res.InstallationID
+	d.GitHubSetFingerprint = res.KeyFingerprint
+	d.GitHubSetKeyUploaded = len(keyPEM) > 0
+	d.GitHubSetRotated = res.KeyFingerprint != "" && res.KeyFingerprint != previousFingerprint
+	d.GitHubSetProbeOK = res.Probe.OK
+	d.GitHubSetProbeDetail = res.Probe.Detail
+
+	c.Views.Fragment(g, "settings", c.fill(g, d))
+}
+
+// githubFormRefused renders the settings fragment with a failure banner and a
+// 400: the form was rejected, and a caller (or a test) should see that in the
+// status as well as on the page.
+func (c Settings) githubFormRefused(g *gin.Context, d settingsData, key, raw string) {
+	d.fail(key, raw)
+	g.Status(http.StatusBadRequest)
+	c.Views.Fragment(g, "settings", c.fill(g, d))
+}
+
+// maxGitHubKeyUpload bounds the .pem the console will read. GitHub's download is
+// under 3 KiB and a 4096-bit RSA key under 4 KiB, so 64 KiB is generous for a key
+// and still refuses a mis-selected file before it is buffered.
+const maxGitHubKeyUpload = 64 << 10
+
+// maxGitHubFormBytes is the whole multipart body: the key plus the other five
+// fields and the boundary chrome. Kept just above the key cap so the request is
+// refused at the socket rather than after buffering a file.
+const maxGitHubFormBytes = maxGitHubKeyUpload + 8<<10
+
+// uploadedKey reads the private key from either input: the file upload wins when
+// both are filled (the operator picked a file on purpose), otherwise the pasted
+// textarea. An empty result means "keep the stored key".
+func uploadedKey(g *gin.Context) ([]byte, error) {
+	g.Request.Body = http.MaxBytesReader(g.Writer, g.Request.Body, maxGitHubFormBytes)
+	if err := g.Request.ParseMultipartForm(maxGitHubFormBytes); err != nil && !errors.Is(err, http.ErrNotMultipart) {
+		return nil, fmt.Errorf("read the form: %w", err)
+	}
+	file, _, err := g.Request.FormFile("private_key_file")
+	switch {
+	case err == nil:
+		defer func() { _ = file.Close() }()
+		data, rerr := io.ReadAll(io.LimitReader(file, maxGitHubKeyUpload+1))
+		if rerr != nil {
+			return nil, fmt.Errorf("read the uploaded key: %w", rerr)
+		}
+		if len(data) > maxGitHubKeyUpload {
+			return nil, fmt.Errorf("the uploaded key is larger than %d KiB, which is not a PEM", maxGitHubKeyUpload>>10)
+		}
+		if len(bytes.TrimSpace(data)) == 0 {
+			return nil, errors.New("the uploaded file is empty")
+		}
+		return data, nil
+	case errors.Is(err, http.ErrMissingFile):
+		// No file chosen: fall through to the textarea.
+	default:
+		return nil, fmt.Errorf("read the uploaded key: %w", err)
+	}
+	pasted := g.PostForm("private_key_pem")
+	if len(pasted) > maxGitHubKeyUpload {
+		return nil, fmt.Errorf("the pasted key is larger than %d KiB, which is not a PEM", maxGitHubKeyUpload>>10)
+	}
+	return []byte(pasted), nil
+}
+
+// numericForm reads an id field. Empty is 0 ("keep what is stored"); anything
+// unparseable is named rather than silently treated as absent.
+func numericForm(g *gin.Context, field string) (int64, error) {
+	raw := strings.TrimSpace(g.PostForm(field))
+	if raw == "" {
+		return 0, nil
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number, got %q", field, raw)
+	}
+	return v, nil
+}
+
+// secureBrowserRequest reports whether the browser reached this console over
+// TLS, or from this host. The daemon's registration route refuses a private key
+// on a cleartext non-loopback hop; this is the same test applied to the leg the
+// browser actually used.
+func secureBrowserRequest(r *http.Request) bool {
+	if middleware.IsSecureRequest(r) {
+		return true
+	}
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// probeAge turns a probe timestamp into a translation key plus its argument, so
+// the card can say "3 min ago" without the template doing date arithmetic.
+func probeAge(now time.Time, at int64) (key, arg string) {
+	if at <= 0 {
+		return "", ""
+	}
+	age := now.Sub(time.Unix(at, 0))
+	switch {
+	case age < time.Minute:
+		return "settings.github_probe_just_now", ""
+	case age < time.Hour:
+		return "settings.github_probe_age_min", strconv.Itoa(int(age / time.Minute))
+	case age < 24*time.Hour:
+		return "settings.github_probe_age_hour", strconv.Itoa(int(age / time.Hour))
+	default:
+		return "settings.github_probe_age_day", strconv.Itoa(int(age / (24 * time.Hour)))
+	}
+}
+
 // fill completes the page model with the connection state, the GitHub App
 // registration and the cluster-scope pointers, keeping any message the caller
 // already set.
@@ -639,8 +857,15 @@ func (c Settings) fill(g *gin.Context, d settingsData) settingsData {
 	d.Configured = configured
 	d.Version = c.Version
 	d.User = username(g)
-	if u := middleware.CurrentUser(g); u != nil && u.Role == store.RoleAdmin {
-		d.CanEditCluster = true
+	if u := middleware.CurrentUser(g); u != nil {
+		if u.Role == store.RoleAdmin {
+			d.CanEditCluster = true
+		}
+		// operator or admin: the daemon gates the registration write at operator
+		// level, so the form is offered to exactly the roles the route accepts.
+		if u.Role == store.RoleAdmin || u.Role == store.RoleOperator {
+			d.CanEditGitHub = true
+		}
 	}
 	if _, err := c.Store.Setting(ctx, keyToken); err == nil {
 		d.HasToken = true

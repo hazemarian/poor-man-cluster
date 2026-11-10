@@ -234,16 +234,21 @@ type APIKeyCreated struct {
 }
 
 // GitHubAppStatus is GET /api/github/app. The private key and installation
-// tokens never appear here — only ids and the granted permission map.
+// tokens never appear here — only ids, a fingerprint of the key, the last probe
+// outcome and the granted permission map.
 type GitHubAppStatus struct {
-	Configured     bool              `json:"configured"`
-	AppID          int64             `json:"app_id"`
-	InstallationID int64             `json:"installation_id"`
-	ProbeRepo      string            `json:"probe_repo"`
-	ProbePackage   string            `json:"probe_package"`
-	Slug           string            `json:"slug"`
-	Permissions    map[string]string `json:"permissions"`
-	Warning        string            `json:"warning"`
+	Configured      bool              `json:"configured"`
+	AppID           int64             `json:"app_id"`
+	InstallationID  int64             `json:"installation_id"`
+	ProbeRepo       string            `json:"probe_repo"`
+	ProbePackage    string            `json:"probe_package"`
+	Slug            string            `json:"slug"`
+	Permissions     map[string]string `json:"permissions"`
+	Warning         string            `json:"warning"`
+	KeyFingerprint  string            `json:"key_fingerprint"`
+	LastProbeOK     bool              `json:"last_probe_ok"`
+	LastProbeDetail string            `json:"last_probe_detail"`
+	LastProbeAt     int64             `json:"last_probe_at"`
 }
 
 // GitHubAppTest is POST /api/github/app/test. A probe that fails is a normal
@@ -251,6 +256,33 @@ type GitHubAppStatus struct {
 type GitHubAppTest struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message"`
+}
+
+// GitHubAppSet is POST /api/github/app. Zero ids and an empty key mean "keep
+// what is stored"; a nil probe field keeps the stored target, an empty string
+// clears it.
+type GitHubAppSet struct {
+	AppID          int64   `json:"app_id,omitempty"`
+	InstallationID int64   `json:"installation_id,omitempty"`
+	PrivateKeyPEM  string  `json:"private_key_pem,omitempty"`
+	ProbeRepo      *string `json:"probe_repo,omitempty"`
+	ProbePackage   *string `json:"probe_package,omitempty"`
+}
+
+// GitHubAppSetResult is what the daemon answers with: the ids, the fingerprint
+// of the key it stored (never the key) and what the probe proved.
+type GitHubAppSetResult struct {
+	AppID          int64          `json:"app_id"`
+	InstallationID int64          `json:"installation_id"`
+	KeyFingerprint string         `json:"key_fingerprint"`
+	Probe          GitHubAppProbe `json:"probe"`
+}
+
+// GitHubAppProbe is the probe half of a set result. OK=false with a detail that
+// says "no probe target configured" means the token minted but no read ran.
+type GitHubAppProbe struct {
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail"`
 }
 
 // Secret is one row of GET /api/secrets. Payload is never returned — only the

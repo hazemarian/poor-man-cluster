@@ -68,6 +68,10 @@ var (
 	// permissions do not include what the caller needed (usually contents:read
 	// or packages:read).
 	ErrInsufficientPermission = errors.New("github app lacks a required permission")
+	// ErrKeyRequired means a registration change arrived without a key while no
+	// key is stored: there is nothing to validate the app identity with, and
+	// storing ids alone would leave the console claiming a working app.
+	ErrKeyRequired = errors.New("github app private key required")
 )
 
 // App is a validated app identity: an app id plus its parsed RSA private key.
