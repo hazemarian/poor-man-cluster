@@ -109,6 +109,31 @@ func TestControllers_SettingsGitHubShowsFingerprintAndProbeAge(t *testing.T) {
 	}
 }
 
+func TestControllers_SettingsGitHubFirstTimeFormSaysSave(t *testing.T) {
+	githubAppUnconfigured.Store(true)
+	t.Cleanup(func() { githubAppUnconfigured.Store(false) })
+	h := settingsAsOperator(t, store.RoleOperator)
+
+	rr := h.get(t, "/web/settings")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /web/settings = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, ">Save<") {
+		t.Error("with no App stored the submit does not read Save")
+	}
+	if strings.Contains(body, "Rotate key") {
+		t.Error("the rotate label and warning are shown before any key exists")
+	}
+	// Empty ids must not be rendered as "0".
+	if strings.Contains(body, `value="0"`) {
+		t.Error("an unset id is prefilled as 0")
+	}
+	if !strings.Contains(body, `name="private_key_file"`) {
+		t.Error("the first-time form has no upload input")
+	}
+}
+
 func TestControllers_SettingsGitHubViewerGetsNoForm(t *testing.T) {
 	h := settingsAsOperator(t, store.RoleViewer)
 

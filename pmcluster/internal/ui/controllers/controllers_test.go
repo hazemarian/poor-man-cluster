@@ -32,6 +32,10 @@ type githubSetRecorder struct {
 
 var githubSetCalls githubSetRecorder
 
+// githubAppUnconfigured makes the fake daemon report "no App stored", so the
+// first-time form (labels, empty prefills) can be rendered. Tests restore it.
+var githubAppUnconfigured atomic.Bool
+
 func (g *githubSetRecorder) record(body map[string]any, proto string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -256,6 +260,12 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 		// The registration card. The probe timestamp is relative to now so the
 		// panel renders an age instead of a fixed date.
 		probeAt := time.Now().Add(-2 * time.Minute).Unix()
+		if githubAppUnconfigured.Load() {
+			write(w, `{"configured":false,"app_id":0,"installation_id":0,"probe_repo":"",`+
+				`"probe_package":"","slug":"","permissions":{},"warning":"",`+
+				`"key_fingerprint":"","last_probe_ok":false,"last_probe_detail":"","last_probe_at":0}`)
+			return
+		}
 		write(w, fmt.Sprintf(`{"configured":true,"app_id":4242,"installation_id":7,`+
 			`"probe_repo":"acme/app","probe_package":"acme/app:latest","slug":"pmcluster",`+
 			`"permissions":{"contents":"read","packages":"read","metadata":"read"},"warning":"",`+
