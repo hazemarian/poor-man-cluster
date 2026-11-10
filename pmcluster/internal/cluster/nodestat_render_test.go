@@ -129,7 +129,10 @@ func TestOTelCollectorHasTheNodeStatPipeline(t *testing.T) {
 		"path: /var/stack/nodestat/nodestat.jsonl",
 		"format: json",
 		"max_megabytes: 2",
-		"max_backups: 0",
+		// One backup, not zero: with 0 the exporter renames the rolled file and
+		// never deletes it, which grew a live leader's directory to 722 MiB
+		// across 372 files while the reader tailed only the newest.
+		"max_backups: 1",
 		"metrics/nodestat:",
 		"exporters:  [file/nodestat, otlphttp/parseable-metrics]",
 		"filter/nodestat_only:",
