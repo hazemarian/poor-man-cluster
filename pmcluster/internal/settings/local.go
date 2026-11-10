@@ -72,6 +72,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingGitHubRunnerSocketPath(),
 	cluster.SettingGitHubRunnerMemory(),
 	cluster.SettingGitHubRunnerAllowLeader(),
+	cluster.SettingGitHubRunnerAssignmentInterval(),
 }
 
 // settingDefaults is what Get reports for a key the platform has a built-in
@@ -85,12 +86,13 @@ var settingDefaults = map[string]string{
 	cluster.SettingObservabilityMetricsRetentionDays(): strconv.Itoa(cluster.DefaultObservabilityMetricsRetentionDays()),
 	cluster.SettingObservabilityTracesRetentionDays():  strconv.Itoa(cluster.DefaultObservabilityTracesRetentionDays()),
 	// A feature that fronts the host's docker socket is never on by default.
-	cluster.SettingGitHubRunnersEnabled():    "false",
-	cluster.SettingGitHubRunnerGroup():       cluster.DefaultGitHubRunnerGroup,
-	cluster.SettingGitHubRunnerSocketProxy(): "true",
-	cluster.SettingGitHubRunnerSocketPath():  cluster.DefaultGitHubRunnerSocketPath,
-	cluster.SettingGitHubRunnerMemory():      cluster.DefaultGitHubRunnerMemory,
-	cluster.SettingGitHubRunnerAllowLeader(): "false",
+	cluster.SettingGitHubRunnersEnabled():           "false",
+	cluster.SettingGitHubRunnerGroup():              cluster.DefaultGitHubRunnerGroup,
+	cluster.SettingGitHubRunnerSocketProxy():        "true",
+	cluster.SettingGitHubRunnerSocketPath():         cluster.DefaultGitHubRunnerSocketPath,
+	cluster.SettingGitHubRunnerMemory():             cluster.DefaultGitHubRunnerMemory,
+	cluster.SettingGitHubRunnerAllowLeader():        "false",
+	cluster.SettingGitHubRunnerAssignmentInterval(): strconv.Itoa(cluster.DefaultGitHubRunnerAssignmentIntervalSeconds),
 }
 
 // Get returns the current value of every known setting ("", or its default
@@ -213,7 +215,8 @@ func isGitHubRunnerKey(key string) bool {
 		cluster.SettingGitHubRunnerSocketProxy(),
 		cluster.SettingGitHubRunnerSocketPath(),
 		cluster.SettingGitHubRunnerMemory(),
-		cluster.SettingGitHubRunnerAllowLeader():
+		cluster.SettingGitHubRunnerAllowLeader(),
+		cluster.SettingGitHubRunnerAssignmentInterval():
 		return true
 	}
 	return false
@@ -300,6 +303,23 @@ func (l *Local) normalizeRunnerSetting(ctx context.Context, key, value string) (
 			return "", fmt.Errorf("%s: %w", key, err)
 		}
 		return strconv.FormatBool(on), nil
+	case cluster.SettingGitHubRunnerAssignmentInterval():
+		raw := strings.TrimSpace(value)
+		if raw == "" {
+			return "", nil
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			return "", fmt.Errorf("%s: must be a whole number of seconds, got %q", key, value)
+		}
+		// The floor is not cosmetic: a per-node poll is one request to this
+		// leader, and each enabled answer mints a GitHub registration token and
+		// verifies the runner group's visibility. Ten seconds is the fastest an
+		// operator may make a fleet ask.
+		if n < 10 || n > 3600 {
+			return "", fmt.Errorf("%s: must be between 10 and 3600 seconds, got %d", key, n)
+		}
+		return strconv.Itoa(n), nil
 	}
 	return value, nil
 }

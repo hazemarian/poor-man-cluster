@@ -105,6 +105,10 @@ type Config struct {
 	SocketPath  string
 	Memory      string
 	AllowLeader bool
+	// IntervalSeconds is how often a node re-reads its assignment, in seconds.
+	// It is part of the config because the leader resolves it and sends it to
+	// the node — a worker cannot read the setting it comes from.
+	IntervalSeconds int
 	// Node is THIS daemon's hostname: the node that decides whether it runs a
 	// runner, and the stable half of the runner name (pmc-<node>-org).
 	Node string
@@ -115,16 +119,17 @@ type Config struct {
 // LoadConfig reads the runner settings from the store.
 func LoadConfig(ctx context.Context, st *store.Store, node string) Config {
 	return Config{
-		Enabled:     cluster.LoadGitHubRunnersEnabled(ctx, st),
-		Org:         cluster.LoadGitHubRunnerOrg(ctx, st),
-		Group:       cluster.LoadGitHubRunnerGroup(ctx, st),
-		Nodes:       ParseNodes(cluster.LoadGitHubRunnerNodes(ctx, st)),
-		SocketProxy: cluster.LoadGitHubRunnerSocketProxy(ctx, st),
-		SocketPath:  cluster.LoadGitHubRunnerSocketPath(ctx, st),
-		Memory:      cluster.LoadGitHubRunnerMemory(ctx, st),
-		AllowLeader: cluster.LoadGitHubRunnerAllowLeader(ctx, st),
-		Node:        node,
-		Image:       DefaultImage,
+		Enabled:         cluster.LoadGitHubRunnersEnabled(ctx, st),
+		Org:             cluster.LoadGitHubRunnerOrg(ctx, st),
+		Group:           cluster.LoadGitHubRunnerGroup(ctx, st),
+		Nodes:           ParseNodes(cluster.LoadGitHubRunnerNodes(ctx, st)),
+		SocketProxy:     cluster.LoadGitHubRunnerSocketProxy(ctx, st),
+		SocketPath:      cluster.LoadGitHubRunnerSocketPath(ctx, st),
+		Memory:          cluster.LoadGitHubRunnerMemory(ctx, st),
+		AllowLeader:     cluster.LoadGitHubRunnerAllowLeader(ctx, st),
+		IntervalSeconds: cluster.LoadGitHubRunnerAssignmentInterval(ctx, st),
+		Node:            node,
+		Image:           DefaultImage,
 	}
 }
 

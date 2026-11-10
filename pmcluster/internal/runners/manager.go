@@ -235,18 +235,9 @@ func (m *Manager) checkNodeRole(ctx context.Context) error {
 		// is not a reason to start a runner on an unknown node.
 		return fmt.Errorf("read the node list to verify runner placement: %w", err)
 	}
-	cfg := LoadConfig(ctx, m.Store, m.Node)
-	for _, sel := range cfg.Nodes {
-		for _, n := range nodes {
-			if !strings.EqualFold(n.Hostname, sel) {
-				continue
-			}
-			if strings.EqualFold(n.Role, "manager") || n.IsLeader || strings.EqualFold(n.Hostname, m.Node) && n.IsLeader {
-				return fmt.Errorf("%w: %q is a %s node", ErrManagerNode, n.Hostname, roleWord(n))
-			}
-		}
-	}
-	return nil
+	// One implementation, shared with the assignment resolver the leader serves
+	// to workers: a placement this refuses is refused there too.
+	return CheckPlacement(LoadConfig(ctx, m.Store, m.Node), nodes)
 }
 
 func roleWord(n runtime.Node) string {
@@ -262,20 +253,8 @@ func roleWord(n runtime.Node) string {
 // ensureGroup verifies (and creates or re-scopes) the org runner group. A
 // visibility that is not `selected` comes back as a refusal naming the reason.
 func (m *Manager) ensureGroup(ctx context.Context, cfg Config) error {
-	if m.GitHub == nil {
-		return ErrNoApp
-	}
-	g, err := m.GitHub.EnsureRunnerGroup(ctx, cfg.Org, cfg.Group)
-	if err != nil {
-		if errors.Is(err, githubapp.ErrRunnerGroupVisibility) {
-			return fmt.Errorf("refusing to run a runner in org %s: runner group %q is visible to the whole organisation, so workflow code from ANY repository — including one an attacker can push to — would run on a container that can reach a docker daemon (root-equivalent on the host). Set the group's visibility to 'selected' in the org's Actions settings; the platform creates it that way and never flips it", cfg.Org, cfg.Group)
-		}
-		m.Log.Warn().Err(err).Str("org", cfg.Org).Str("group", cfg.Group).
-			Msg("runners — could not verify the runner group; not registering this pass")
-		return fmt.Errorf("verify runner group %q in org %s: %w", cfg.Group, cfg.Org, err)
-	}
-	if g.Visibility != "" && g.Visibility != githubapp.GroupVisibilitySelected {
-		return fmt.Errorf("refusing to run a runner in org %s: runner group %q reported visibility %q", cfg.Org, cfg.Group, g.Visibility)
+	if err := ensureGroupSelected(ctx, m.GitHub, cfg.Org, cfg.Group); err != nil {
+		return err
 	}
 	return nil
 }
@@ -392,6 +371,17 @@ func (m *Manager) teardown(ctx context.Context, org, name string, res *Result) b
 		}
 	}
 	return clean
+}
+
+// DeregisterName removes one registration by name in the given organisation.
+//
+// It exists for the assignment endpoint: a node the leader no longer assigns must
+// have its registration removed, and the WORKER cannot do it (it has no App
+// installation — giving each worker one would be a far wider credential than this
+// feature needs). Only the exact name the platform derives for that node is ever
+// touched, so the operator's hand-made runner is never a candidate.
+func (m *Manager) DeregisterName(ctx context.Context, org, name string) error {
+	return m.deleteRunnerByName(ctx, org, name)
 }
 
 // deleteRunnerByName removes exactly one registration. An empty match is success

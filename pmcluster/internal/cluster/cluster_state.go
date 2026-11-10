@@ -184,6 +184,13 @@ const (
 	// unless the operator says otherwise — a single-node cluster has to.
 	settingGitHubRunnerAllowLeader = "github_runner_allow_leader"
 
+	// settingGitHubRunnerAssignmentInterval is how often a node re-reads its
+	// runner assignment from the leader, in seconds. It travels to the node
+	// inside the assignment itself: a worker cannot read cluster settings
+	// (configs are manager-only), so the leader sends the interval it is
+	// configured with.
+	settingGitHubRunnerAssignmentInterval = "github_runner_assignment_interval"
+
 	// settingSwarmID records the live Swarm cluster ID (Raft cluster identity)
 	// so `cluster update` can detect a wiped + re-initialised Swarm. Deliberately
 	// NOT in the settings allowlist — it is written directly via SetSetting and
@@ -243,6 +250,9 @@ func SettingGitHubRunnerSocketProxy() string { return settingGitHubRunnerSocketP
 func SettingGitHubRunnerSocketPath() string  { return settingGitHubRunnerSocketPath }
 func SettingGitHubRunnerMemory() string      { return settingGitHubRunnerMemory }
 func SettingGitHubRunnerAllowLeader() string { return settingGitHubRunnerAllowLeader }
+func SettingGitHubRunnerAssignmentInterval() string {
+	return settingGitHubRunnerAssignmentInterval
+}
 
 // DefaultGitHubRunnerSocketPath is where internal/socketproxy listens on every
 // node. /run is tmpfs: the socket cannot outlive a reboot, which is the desired
@@ -340,6 +350,38 @@ func LoadGitHubRunnerAllowLeader(ctx context.Context, st *store.Store) bool {
 		return false
 	}
 	return st.SettingDefault(ctx, settingGitHubRunnerAllowLeader, "") == "true"
+}
+
+// DefaultGitHubRunnerAssignmentIntervalSeconds is how often a node re-reads its
+// runner assignment when the setting is unset. One minute is fast enough that an
+// operator's change lands while they are still looking at the console, and slow
+// enough that a fleet of workers costs the leader one request a minute each.
+const DefaultGitHubRunnerAssignmentIntervalSeconds = 60
+
+// LoadGitHubRunnerAssignmentInterval returns the poll interval in seconds,
+// clamped to [10, 3600]: below ten would hammer the leader's GitHub quota, and an
+// hour is the point at which a stale assignment is worse than no poll at all. A
+// value that does not parse falls back to the default rather than to zero — a
+// typo must not turn the poll off.
+func LoadGitHubRunnerAssignmentInterval(ctx context.Context, st *store.Store) int {
+	raw := ""
+	if st != nil {
+		raw = strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerAssignmentInterval, ""))
+	}
+	if raw == "" {
+		return DefaultGitHubRunnerAssignmentIntervalSeconds
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return DefaultGitHubRunnerAssignmentIntervalSeconds
+	}
+	if n < 10 {
+		return 10
+	}
+	if n > 3600 {
+		return 3600
+	}
+	return n
 }
 
 // ClusterInstalled reports whether this store already holds a live cluster.
