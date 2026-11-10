@@ -254,7 +254,13 @@ func TestObservabilityPageOverlapsHealthAndTabReads(t *testing.T) {
 		t.Fatalf("peak simultaneous reads across both families = %d, want >= 7 (health and tab read in separate waves)", peak)
 	}
 	// One wave is max(api, telemetry) plus render; two waves would be ~2x.
-	if elapsed > 3*delay {
+	// The peak assertion above is the structural one; this is the coarse guard
+	// against the old two-wave shape, so it carries an explicit render budget
+	// instead of pretending a template render costs nothing. Without it the
+	// test flakes on a loaded CI box at 3*delay (60ms reads → 180ms budget,
+	// observed 181ms with the page correctly in one wave).
+	const renderBudget = 150 * time.Millisecond
+	if elapsed > 3*delay+renderBudget {
 		t.Fatalf("page took %v with %v reads in two families: looks like two waves", elapsed, delay)
 	}
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"sync"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,10 +26,36 @@ import (
 // (with a failure mode), Info and SetNodeLabel are the only methods it needs.
 type statClient struct {
 	runtime.Client
-	nodes      []runtime.Node
-	nodeErr    error
+	nodes   []runtime.Node
+	nodeErr error
+
+	// mu guards the call logs: the re-assert loop appends from its own
+	// goroutine while the test reads, which the race detector rightly
+	// flags. A test that reads these without the accessors below is a bug.
+	mu         sync.Mutex
 	labelCalls []string
 	restarts   []string
+}
+
+// labelSnapshot returns a copy of the recorded label writes.
+func (c *statClient) labelSnapshot() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.labelCalls...)
+}
+
+// restartSnapshot returns a copy of the recorded service restarts.
+func (c *statClient) restartSnapshot() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.restarts...)
+}
+
+// clearLabels resets the log between phases of a test.
+func (c *statClient) clearLabels() {
+	c.mu.Lock()
+	c.labelCalls = nil
+	c.mu.Unlock()
 }
 
 func (c *statClient) NodeList(context.Context) ([]runtime.Node, error) {
@@ -40,12 +67,16 @@ func (c *statClient) Info(context.Context) (runtime.Info, error) {
 }
 
 func (c *statClient) SetNodeLabel(_ context.Context, id, key, value string) error {
+	c.mu.Lock()
 	c.labelCalls = append(c.labelCalls, id+":"+key+":"+value)
+	c.mu.Unlock()
 	return nil
 }
 
 func (c *statClient) ServiceRestart(_ context.Context, id string) error {
+	c.mu.Lock()
 	c.restarts = append(c.restarts, id)
+	c.mu.Unlock()
 	return nil
 }
 
@@ -72,33 +103,33 @@ func TestSyncLeaderLabel_GainSetsClearsAndSkipsNoops(t *testing.T) {
 	if !syncLeaderLabel(context.Background(), dc, true, zerolog.Nop()) {
 		t.Fatal("gaining leadership reported no change; the collector would not be re-placed")
 	}
-	if len(dc.labelCalls) != 1 || dc.labelCalls[0] != "self:"+runtime.LeaderNodeLabel+":true" {
-		t.Fatalf("label calls = %v, want one true on self", dc.labelCalls)
+	if calls := dc.labelSnapshot(); len(calls) != 1 || calls[0] != "self:"+runtime.LeaderNodeLabel+":true" {
+		t.Fatalf("label calls = %v, want one true on self", calls)
 	}
 
 	// Already labelled: a restart must not rewrite the node spec.
 	dc.nodes[0].Labels = map[string]string{runtime.LeaderNodeLabel: "true"}
-	dc.labelCalls = nil
+	dc.clearLabels()
 	if syncLeaderLabel(context.Background(), dc, true, zerolog.Nop()) {
 		t.Fatal("a second gain reported a change; the collector would restart on every daemon restart")
 	}
-	if len(dc.labelCalls) != 0 {
-		t.Fatalf("label calls = %v, want none when already set", dc.labelCalls)
+	if calls := dc.labelSnapshot(); len(calls) != 0 {
+		t.Fatalf("label calls = %v, want none when already set", calls)
 	}
 
 	// Leadership lost: cleared (an empty value removes the key in the adapter).
 	if !syncLeaderLabel(context.Background(), dc, false, zerolog.Nop()) {
 		t.Fatal("losing leadership reported no change")
 	}
-	if len(dc.labelCalls) != 1 || dc.labelCalls[0] != "self:"+runtime.LeaderNodeLabel+":" {
-		t.Fatalf("label calls = %v, want one clear on self", dc.labelCalls)
+	if calls := dc.labelSnapshot(); len(calls) != 1 || calls[0] != "self:"+runtime.LeaderNodeLabel+":" {
+		t.Fatalf("label calls = %v, want one clear on self", calls)
 	}
 
 	// Never touches another node while that node carries no label: the label names
 	// the leader, not every manager. (A STALE label on another node is cleared —
 	// see the next test — because two matches make the collector's constraint
 	// ambiguous.)
-	for _, c := range dc.labelCalls {
+	for _, c := range dc.labelSnapshot() {
 		if c[:4] != "self" {
 			t.Fatalf("label call %q targeted a node other than self", c)
 		}
@@ -117,8 +148,8 @@ func TestSyncLeaderLabel_StartupOnLeaderReasserts(t *testing.T) {
 	if !syncLeaderLabel(context.Background(), dc, true, zerolog.Nop()) {
 		t.Fatal("a leader starting without the label reported no change; the collector would be unschedulable")
 	}
-	if len(dc.labelCalls) != 1 || dc.labelCalls[0] != "self:"+runtime.LeaderNodeLabel+":true" {
-		t.Fatalf("label calls = %v, want the label stamped on self", dc.labelCalls)
+	if calls := dc.labelSnapshot(); len(calls) != 1 || calls[0] != "self:"+runtime.LeaderNodeLabel+":true" {
+		t.Fatalf("label calls = %v, want the label stamped on self", calls)
 	}
 }
 
@@ -137,8 +168,8 @@ func TestSyncLeaderLabel_ClearsStaleLabelOnAnotherNode(t *testing.T) {
 	if !syncLeaderLabel(context.Background(), dc, true, zerolog.Nop()) {
 		t.Fatal("a stale label on another node was not cleared")
 	}
-	if len(dc.labelCalls) != 1 || dc.labelCalls[0] != "old:"+runtime.LeaderNodeLabel+":" {
-		t.Fatalf("label calls = %v, want exactly the stale label cleared on old", dc.labelCalls)
+	if calls := dc.labelSnapshot(); len(calls) != 1 || calls[0] != "old:"+runtime.LeaderNodeLabel+":" {
+		t.Fatalf("label calls = %v, want exactly the stale label cleared on old", calls)
 	}
 
 	// A follower must not police other nodes: the leader owns that decision. Its
@@ -149,7 +180,7 @@ func TestSyncLeaderLabel_ClearsStaleLabelOnAnotherNode(t *testing.T) {
 			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
 	}}
 	syncLeaderLabel(context.Background(), dc2, false, zerolog.Nop())
-	for _, c := range dc2.labelCalls {
+	for _, c := range dc2.labelSnapshot() {
 		if c != "self:"+runtime.LeaderNodeLabel+":" {
 			t.Fatalf("a follower wrote %q — only the leader manages other nodes' labels", c)
 		}
@@ -173,10 +204,10 @@ func TestKeepLeaderLabel_ReassertsWhileLeader(t *testing.T) {
 	go func() { keepLeaderLabel(ctx, dc, zerolog.Nop()); close(done) }()
 
 	deadline := time.Now().Add(2 * time.Second)
-	for len(dc.labelCalls) == 0 && time.Now().Before(deadline) {
+	for len(dc.labelSnapshot()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
 	}
-	if len(dc.labelCalls) == 0 {
+	if len(dc.labelSnapshot()) == 0 {
 		cancel()
 		t.Fatal("the re-assert loop never wrote the label")
 	}
@@ -201,8 +232,8 @@ func TestReplaceNodeStatCollector_ForcesOneRestart(t *testing.T) {
 	dc := &statClient{nodes: []runtime.Node{{ID: "self", Hostname: "self", Role: "manager"}}}
 	dc.nodes[0].Labels = map[string]string{}
 	replaceNodeStatCollector(context.Background(), dc, zerolog.Nop())
-	if len(dc.restarts) != 1 || dc.restarts[0] != "observability_otel-collector" {
-		t.Fatalf("restarts = %v, want exactly the collector service", dc.restarts)
+	if restarts := dc.restartSnapshot(); len(restarts) != 1 || restarts[0] != "observability_otel-collector" {
+		t.Fatalf("restarts = %v, want exactly the collector service", restarts)
 	}
 	// Nil client is a no-op, never a panic: standalone mode has no collector.
 	replaceNodeStatCollector(context.Background(), nil, zerolog.Nop())
