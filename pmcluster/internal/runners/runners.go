@@ -60,7 +60,10 @@ import (
 // changing this constant — deliberately not a setting: an arbitrary image here
 // would run with the host's docker socket, so it is not an operator-editable
 // knob.
-const DefaultImage = "myoung34/github-runner:latest"
+// Pinned, not `latest`: a runner image that changes under a rebooted node is a
+// CI platform whose behaviour differs between hosts. 2.338.2 is the Actions
+// runner version GitHub's own hosted runners reported at the time of writing.
+const DefaultImage = "myoung34/github-runner:2.338.2-ubuntu-jammy"
 
 // Labels the runner registers with. self-hosted and linux come from GitHub;
 // x64 and pmcluster are what a workflow selects on (`runs-on: [self-hosted,

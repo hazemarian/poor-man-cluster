@@ -77,6 +77,12 @@ func (s Spec) Argv() ([]string, error) {
 		// Ephemeral by contract (EPHEMERAL=true): the container exits after one
 		// job, and the reconcile creates a fresh one with a fresh token.
 		"--restart", "no",
+		// RUNNER_SCOPE is what makes ORG_NAME mean "the organisation" rather
+		// than "a field nobody read": without it the image validates this as a
+		// REPOSITORY runner, finds no REPO_URL, and exits 1 with
+		// "Invalid configuration provided for url" — a crash loop that looks
+		// like a platform failure and says nothing about the missing variable.
+		"-e", "RUNNER_SCOPE=org",
 		"-e", "ORG_NAME=" + s.Org,
 		"-e", "RUNNER_GROUP=" + group,
 		"-e", "RUNNER_TOKEN=" + s.Token,

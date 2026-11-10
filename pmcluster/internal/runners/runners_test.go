@@ -627,3 +627,22 @@ func TestSelectedNodeLeavingTheListTearsDownItsOwnRunner(t *testing.T) {
 		t.Fatalf("deleted = %v, want this node's registration", h.github.deleted)
 	}
 }
+
+// TestArgvDeclaresTheRunnerScope: the image validates ORG_NAME only when
+// RUNNER_SCOPE says "org". Without it a live runner exited 1 with
+// "Invalid configuration provided for url" and the reconcile restarted it —
+// a crash loop whose only symptom was a container that never stayed up.
+func TestArgvDeclaresTheRunnerScope(t *testing.T) {
+	s := Spec{Org: "acme", Token: "tok", RunnerName: "pmc-node-org", SocketProxy: true}
+	args, err := s.Argv()
+	if err != nil {
+		t.Fatalf("Argv: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "RUNNER_SCOPE=org") {
+		t.Fatalf("args lack RUNNER_SCOPE=org, so the image treats this as a repo runner: %v", args)
+	}
+	if strings.Contains(joined, "latest") {
+		t.Fatalf("the runner image is not pinned: %v", args)
+	}
+}
