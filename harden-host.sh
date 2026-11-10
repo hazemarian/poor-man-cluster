@@ -60,8 +60,14 @@ RESTRICTED_DOCKER_PORTS="${RESTRICTED_DOCKER_PORTS:-4318 8000}"
 # Host-bound control-plane ports that must not be WAN-reachable:
 #   9090 = pmcluster management API (bound on all interfaces, Traefik reaches
 #          it over the docker gateway so we only block the public side)
+#   9092 = pmcluster's NODE-TO-NODE port: the runner assignment endpoint, served
+#          by the leader over the swarm's own mutual TLS and bound to the node's
+#          swarm data-path (overlay) address. It is never published, never on
+#          0.0.0.0, and only another node's swarm certificate can read it — but
+#          the port is on this list as the third lock, so a future change that
+#          widens the bind cannot widen it to the WAN by accident.
 #   2377 = Docker Swarm manager/join  7946 = Swarm gossip
-RESTRICTED_HOST_PORTS="${RESTRICTED_HOST_PORTS:-9090 2377 7946}"
+RESTRICTED_HOST_PORTS="${RESTRICTED_HOST_PORTS:-9090 9092 2377 7946}"
 
 # Comma-separated peer IPs allowed to reach the swarm control plane
 # (add manager/worker nodes in a multi-node swarm; single-node → leave empty).
@@ -119,7 +125,7 @@ apply_firewall() {
     done
   fi
   # Then deny everything else for these ports (still reachable from the docker
-  # subnets + peers above, blocked from the WAN). Numbers 9090/4318/2377/7946.
+  # subnets + peers above, blocked from the WAN). Numbers 9090/9092/4318/2377/7946.
   # Swarm control plane + VXLAN. MUST be added BEFORE the deny block below:
   # ufw is first-match-wins, so a blanket deny appended first shadows every
   # later allow — the rules look right in `ufw status` and block anyway.
@@ -135,6 +141,7 @@ apply_firewall() {
   done
 
   ufw deny 9090/tcp  >/dev/null   # pmcluster API       — no WAN
+  ufw deny 9092/tcp  >/dev/null   # runner assignment (swarm mTLS, node-to-node) — no WAN
   ufw deny 4318/tcp  >/dev/null   # OTLP (host path)    — no WAN
   ufw deny 8000/tcp  >/dev/null   # Parseable API       — no WAN (belt; the DOCKER-USER rule is the real gate)
   ufw deny 2377/tcp  >/dev/null   # Swarm manager       — no WAN

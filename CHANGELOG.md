@@ -3,6 +3,43 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — Runners actually run on workers, fed by an mTLS assignment channel
+
+**The self-hosted runner feature was inert on every node it was allowed to use.** A
+worker's daemon blocked in `waitForSwarmLeadership` forever, and everything after that
+call — including the runner loop and the socket proxy — only ever ran on the leader,
+which is refused as a runner host by design. Measured before the fix on `nxt-sw-6-w`
+and `nxt-sw-3-w`: `curl 127.0.0.1:9090/health` returned nothing at all and
+`/run/pmcluster/` did not exist.
+
+- **The per-node loops start BEFORE the leadership wait**, the pattern the backup plan
+  and the version publisher already document. The filtered docker socket binds on
+  every node with a docker socket, and a worker's runner loop starts there too.
+- **A worker serves its API on loopback** (`127.0.0.1:9090`), never off-host: it is
+  standing by, it has no cluster state, and it opens no store — but `/health` answers
+  and `pmcluster doctor` works on every node instead of refusing.
+- **The runner decision is resolved on the leader and pulled by the node**
+  (`GET /api/github/runners/assignment`), because a worker cannot read cluster
+  settings at all: Docker configs are a manager-only read. The leader applies the same
+  rules as the reconcile (feature switch, org, node list, manager/leader refusal,
+  `selected` group) and sends the resolved spec only.
+- **Authentication is the certificate Swarm already issued**, checked by a new
+  `internal/auth/swarmtls` middleware on its own listener: chain to the swarm CA,
+  `O` == this cluster's swarm ID, `CN` == a live node ID (so `docker node rm` is the
+  revocation path), not expired. Identity comes from the certificate only; `?node=` is
+  ignored. The middleware is mounted on that one route and nothing else.
+- **Transport is the leader's swarm data-path address**, read from `docker info`, with
+  `127.0.0.1:9092` as the fallback. Port 9092 is bound to the node's overlay address,
+  never published, and added to `harden-host.sh`'s restricted list (private subnets
+  only, denied from the WAN). The overlay service name and an ingress publish were
+  measured as unusable for a host-process listener and are documented as such.
+- **A worker's runner is started from the assignment** with the filtered socket and
+  no raw mount; de-registration stays on the leader, which is the only side holding
+  the GitHub App. `github_runner_assignment_interval` (default 60s) sets the poll.
+- **`pmcluster doctor` on a worker** now answers the node-local subset — daemon
+  listening, socket proxy present, assignment age and source, local runner state,
+  disk — and prints a skipped line naming each cluster question it will not answer.
+
 ## Unreleased — The GitHub App key is set and rotated from the console
 
 **App id, installation id and the private key are edited in the console's GitHub

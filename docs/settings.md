@@ -53,6 +53,7 @@ bearers). Console: the **Settings** page.
 | `github_runner_socket_path` | `/run/pmcluster/docker.sock` | operator | where the filtered socket listens on every node; the runner bind-mounts it. Never a host port, never the overlay |
 | `github_runner_memory` | `2560m` | operator | memory limit per runner container (a Docker quantity). `2560m` is the value that completed a `govulncheck` run; `1500m` was OOM-killed mid-job |
 | `github_runner_allow_leader` | `false` | operator | allow a runner on a single-node cluster, where the only node is the leader |
+| `github_runner_assignment_interval` | `60` | operator | seconds between a node's polls of the leader for its [runner assignment](runners.md#how-a-worker-learns-what-to-run-the-assignment-channel). Clamped to 10–3600; it is sent to the node inside every answer because a worker cannot read cluster settings |
 
 ## Logging: two settings, one env var
 
