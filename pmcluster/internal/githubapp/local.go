@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -504,6 +505,15 @@ func (l *Local) probePackage(ctx context.Context, token, pkg string) error {
 	if base == "" {
 		base = DefaultRegistryBase
 	}
+	// A ref without a tag defaults to :latest, which private ghcr packages
+	// routinely do not have (builds push the commit sha and a dated tag).
+	// Ask for the real tags first and probe the newest one, so the commonest
+	// misconfiguration stops looking like a permission problem.
+	if !strings.Contains(pkg, ":") {
+		if tags, ok := l.packageTags(ctx, token, name); ok {
+			ref = tags[0]
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead,
 		strings.TrimRight(base, "/")+"/v2/"+name+"/manifests/"+ref, nil)
 	if err != nil {
@@ -520,7 +530,17 @@ func (l *Local) probePackage(ctx context.Context, token, pkg string) error {
 	case http.StatusOK:
 		return nil
 	case http.StatusUnauthorized:
-		return fmt.Errorf("%w: GHCR refused the installation token for %s", ErrTokenRejected, pkg)
+		// GHCR answers 401 both when the token lacks access AND when the
+		// package does not exist at all (registries deliberately do not
+		// reveal which). Ask for the tag list: a 200 means the name is
+		// real and only the tag was wrong, which is the commonest mistake
+		// by far (a ref copied from a Dockerfile that says :latest).
+		if tags, ok := l.packageTags(ctx, token, name); ok {
+			return fmt.Errorf("%w: %s exists, but it has no tag %q — its tags are: %s",
+				ErrNoProbeTarget, name, ref, strings.Join(tags, ", "))
+		}
+		return fmt.Errorf("%w: GHCR answered 401 for %s. That is either the App lacking packages:read on it, or the package not existing — GHCR does not distinguish. Check the exact name and tag, e.g. ghcr.io/owner/name:tag (no extra path segments, and :latest only if the build pushes it)",
+			ErrTokenRejected, pkg)
 	case http.StatusForbidden:
 		return fmt.Errorf("%w: no packages:read for %s — grant the App Packages: Read and approve it on the installation", ErrInsufficientPermission, pkg)
 	case http.StatusNotFound:
@@ -528,6 +548,47 @@ func (l *Local) probePackage(ctx context.Context, token, pkg string) error {
 	default:
 		return fmt.Errorf("package probe %s: GHCR returned HTTP %d", pkg, resp.StatusCode)
 	}
+}
+
+// packageTags lists up to a handful of tags for a package, newest-looking
+// first, so a wrong tag can be answered with the real ones instead of a
+// generic refusal. It is best-effort: any failure reports false and the
+// caller keeps its own error.
+func (l *Local) packageTags(ctx context.Context, token, name string) ([]string, bool) {
+	base := l.RegistryBase
+	if base == "" {
+		base = DefaultRegistryBase
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		strings.TrimRight(base, "/")+"/v2/"+name+"/tags/list", nil)
+	if err != nil {
+		return nil, false
+	}
+	req.SetBasicAuth("x-access-token", token)
+	resp, err := l.Client.httpClient().Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	var body struct {
+		Tags []string `json:"tags"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 256<<10)).Decode(&body); err != nil {
+		return nil, false
+	}
+	if len(body.Tags) == 0 {
+		return nil, false
+	}
+	tags := append([]string(nil), body.Tags...)
+	sort.Sort(sort.Reverse(sort.StringSlice(tags)))
+	const max = 5
+	if len(tags) > max {
+		tags = tags[:max]
+	}
+	return tags, true
 }
 
 // validateRepo accepts only "owner/name": the broker secret key and the probe

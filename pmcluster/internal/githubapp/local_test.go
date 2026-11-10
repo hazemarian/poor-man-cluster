@@ -244,3 +244,68 @@ func TestLocal_TokenIsNeverPersisted(t *testing.T) {
 		t.Error("the private key was stored in plaintext")
 	}
 }
+
+// TestProbePackage_WrongTagNamesTheRealTags: GHCR answers 401 for a tag that
+// does not exist, exactly as it does for a token without access, so the probe
+// used to report "the token was refused" for what is almost always a typo in
+// the reference. A 200 on the tag list proves the package exists, which turns
+// that ambiguity into "it has no tag X — its tags are …".
+func TestProbePackage_WrongTagNamesTheRealTags(t *testing.T) {
+	l, _, _ := newLocal(t)
+	ctx := context.Background()
+
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/manifests/latest"):
+			w.WriteHeader(http.StatusUnauthorized)
+		case strings.HasSuffix(r.URL.Path, "/tags/list"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"name":"acme/app","tags":["v1","v20261109-abc1234","v0","v2","v3","v4"]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(reg.Close)
+	l.RegistryBase = reg.URL
+
+	err := l.probePackage(ctx, "ghs_test", "acme/app:latest")
+	if !errors.Is(err, ErrNoProbeTarget) {
+		t.Fatalf("err = %v, want ErrNoProbeTarget (a wrong tag is not an auth failure)", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `no tag "latest"`) {
+		t.Errorf("message = %q, want it to name the missing tag", msg)
+	}
+	for _, want := range []string{"v20261109-abc1234", "v4"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message = %q, want it to list the real tag %s", msg, want)
+		}
+	}
+	if strings.Contains(msg, "v0") {
+		t.Errorf("message = %q, want at most five tags so the error stays readable", msg)
+	}
+}
+
+// TestProbePackage_401WithoutTagsKeepsTheAmbiguityHonest: when the tag list is
+// refused too, the probe must not claim to know which of the two causes it is.
+func TestProbePackage_401WithoutTagsKeepsTheAmbiguityHonest(t *testing.T) {
+	l, _, _ := newLocal(t)
+	ctx := context.Background()
+
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(reg.Close)
+	l.RegistryBase = reg.URL
+
+	err := l.probePackage(ctx, "ghs_test", "acme/nope:v1")
+	if !errors.Is(err, ErrTokenRejected) {
+		t.Fatalf("err = %v, want ErrTokenRejected", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{"401", "does not distinguish", "packages:read"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message = %q, want it to contain %q", msg, want)
+		}
+	}
+}
