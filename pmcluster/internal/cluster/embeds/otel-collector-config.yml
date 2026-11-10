@@ -374,11 +374,17 @@ exporters:
     path: [[ .NodeStatDir ]]/nodestat.jsonl
     format: json
     flush_interval: 5s
-    # Bounded growth: 2 MiB, one file, no backups. Rotation replaces the file
-    # (new inode), which the reader detects and rebuilds from the tail.
+    # Bounded growth: 2 MiB with ONE backup. Rotation replaces the file (new
+    # inode), which the reader detects and rebuilds from the tail.
+    #
+    # max_backups MUST be >= 1: with 0 the exporter renames the rolled file to
+    # nodestat-<timestamp>-size.jsonl and never deletes it, so a live leader grew
+    # this directory to 722 MiB across 372 files while the reader only ever
+    # tailed the newest. One backup keeps rotation bounded and still leaves the
+    # previous file readable if the process dies mid-rename.
     rotation:
       max_megabytes: 2
-      max_backups: 0
+      max_backups: 1
       max_days: 0
 
 service:
