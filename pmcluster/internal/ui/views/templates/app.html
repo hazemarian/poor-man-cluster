@@ -92,6 +92,9 @@
       <p class="nav-label" id="nav-delivery">{{T "nav.group.delivery"}}</p>
       <a class="nav-item" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy" data-tip="{{T "nav.deploy"}}">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
       <a class="nav-item" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-nav="webhooks" data-tip="{{T "nav.webhooks"}}">{{icon "webhooks"}}<span>{{T "nav.webhooks"}}</span></a>
+      {{/* CI runners: the page and its dictionaries existed, but nothing in the
+           shell linked to it, so the only way in was typing the URL. */}}
+      <a class="nav-item" href="/web/runners" hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-nav="runners" data-tip="{{T "nav.runners"}}">{{icon "server"}}<span>{{T "nav.runners"}}</span></a>
 
       <p class="nav-label" id="nav-trust">{{T "nav.group.trust"}}</p>
       <a class="nav-item" href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls" data-tip="{{T "nav.tls"}}">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
