@@ -164,6 +164,28 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 		return res, err
 	}
 
+	// 0. Held by an operator: the leader recorded a kill from the console and
+	//    sent it here, because the leader can only remove containers on its own
+	//    node. Remove ours and stay quiet until the hold is cleared by Restart —
+	//    a held node that keeps recreating the runner makes the button a lie.
+	if as.Held {
+		if exists {
+			if err := a.Docker.Remove(ctx, name); err != nil {
+				rec.Container, rec.LastError = "present", err.Error()
+				a.save(rec)
+				return res, fmt.Errorf("remove held runner container %s: %w", name, err)
+			}
+			res.Removed = append(res.Removed, name)
+			a.Log.Info().Str("runner", name).Str("reason", as.Reason).
+				Msg("runners — removed this node's runner container (held by an operator)")
+		}
+		rec.Container = "held"
+		rec.RegisteredAt = 0
+		rec.LastError = ""
+		a.save(rec)
+		return res, nil
+	}
+
 	// 1. Disabled (or not selected): the container comes off this node. The
 	//    registration is the leader's to remove — it told this node to stop, so
 	//    it knows the name is no longer wanted.

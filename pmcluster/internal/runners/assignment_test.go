@@ -115,8 +115,11 @@ func TestResolveAssignmentMatchesTheReconcileRules(t *testing.T) {
 // assignmentKeys is the exact response schema. The test asserts equality, so a
 // later field cannot be added without this list changing — which is the point:
 // nothing else may travel over this channel.
+// The exact key set the endpoint may answer with. "held" is the operator's
+// console kill carried to the node — a decision, not a credential, so it belongs
+// here; anything secret or settings-shaped does not.
 var assignmentKeys = []string{
-	"enabled", "group", "interval_seconds", "issued_at", "labels", "memory",
+	"enabled", "group", "held", "interval_seconds", "issued_at", "labels", "memory",
 	"mode", "node", "org", "reason", "registration_token",
 	"registration_token_expires_at", "socket_path", "socket_proxy",
 }
@@ -526,5 +529,58 @@ func TestAssignmentConfigKeepsTheMountDecision(t *testing.T) {
 	raw := Assignment{Node: "w1", Enabled: true, Org: "acme", SocketProxy: false}
 	if raw.Config("w1").SocketProxy {
 		t.Fatal("a raw-socket assignment must not be silently filtered")
+	}
+}
+
+// TestAgentRemovesARunnerHeldByAnOperator: a kill from the console runs on the
+// leader, which cannot remove a container on a worker. The hold travels in the
+// assignment, and the node acts on it — otherwise the button reports success
+// while the node recreates the runner seconds later.
+func TestAgentRemovesARunnerHeldByAnOperator(t *testing.T) {
+	docker := newFakeDocker()
+	dir := t.TempDir()
+	agent := &Agent{
+		Node:      "nxt-sw-6-w",
+		Docker:    docker,
+		StatePath: dir + "/runner_assignment.json",
+		Log:       zerolog.Nop(),
+	}
+	// First pass: the node is running the runner normally.
+	live := Assignment{
+		Node: "nxt-sw-6-w", Enabled: true, Org: "acme", Group: "pmcluster",
+		SocketProxy: true, SocketPath: "/run/pmcluster/docker.sock",
+		Memory: "2560m", Mode: ModeEphemeral, Labels: Labels,
+		Reason: "selected as a runner node", RegistrationToken: "reg-token",
+	}
+	if _, err := agent.Apply(context.Background(), live); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	runCalls := len(docker.runCalls)
+
+	// Second pass: an operator killed it on the leader.
+	held := live
+	held.Held = true
+	held.Reason = "stopped by an operator from the console"
+	res, err := agent.Apply(context.Background(), held)
+	if err != nil {
+		t.Fatalf("held apply: %v", err)
+	}
+	if len(docker.runCalls) != runCalls {
+		t.Fatalf("a held runner was started again: run calls %d -> %d", runCalls, len(docker.runCalls))
+	}
+	if len(res.Removed) != 1 {
+		t.Fatalf("removed = %v, want the held container removed", res.Removed)
+	}
+	rec, ok := agent.Record()
+	if !ok || rec.Container != "held" {
+		t.Fatalf("record = %+v ok=%v, want container=held", rec, ok)
+	}
+
+	// Third pass: the hold is the same answer repeated, and stays quiet.
+	if _, err := agent.Apply(context.Background(), held); err != nil {
+		t.Fatalf("repeat held apply: %v", err)
+	}
+	if len(docker.runCalls) != runCalls {
+		t.Fatalf("a held runner was restarted on a later pass")
 	}
 }

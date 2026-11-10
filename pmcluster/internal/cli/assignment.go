@@ -64,7 +64,10 @@ type assignmentListenerOptions struct {
 	GitHub   runners.GitHub
 	// Deregister removes a registration named after a node the leader stopped.
 	Deregister func(ctx context.Context, org, name string) error
-	Log        zerolog.Logger
+	// Held reports an operator stop recorded on this leader. The node cannot
+	// read that roster, so the decision travels in the assignment.
+	Held func(runnerName string) bool
+	Log  zerolog.Logger
 
 	// Test seams: override the bind address and the swarm CA/cert paths.
 	Addr     string
@@ -129,6 +132,7 @@ func startAssignmentListener(ctx context.Context, o assignmentListenerOptions) {
 		Nodes:      o.Docker,
 		GitHub:     o.GitHub,
 		Deregister: o.Deregister,
+		Held:       o.Held,
 		Log:        log,
 	}
 	verifier := &swarmtls.Verifier{

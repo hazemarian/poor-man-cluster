@@ -510,7 +510,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			Docker:     dc,
 			GitHub:     runnerMgr.GitHub,
 			Deregister: runnerMgr.DeregisterName,
-			Log:        log,
+			Held: func(name string) bool {
+				return runnerMgr.HeldName(ctx, name)
+			},
+			Log: log,
 		})
 	}
 

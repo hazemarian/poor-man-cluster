@@ -209,6 +209,19 @@ func (m *Manager) Kill(ctx context.Context, name string, confirmBusy bool) (Kill
 	return out, nil
 }
 
+// HeldName reports whether an operator stopped this runner from the console.
+//
+// The roster lives in the leader's store, and a worker cannot read it — so the
+// leader resolves this into the assignment instead of expecting the node to
+// know. Without that hop a kill for a remote node was recorded and never
+// delivered, and the node recreated the runner on its next pass.
+func (m *Manager) HeldName(ctx context.Context, name string) bool {
+	if m == nil || m.Store == nil {
+		return false
+	}
+	return loadState(ctx, m.Store).held(name)
+}
+
 // findRunner resolves a runner by name from the live view first (GitHub's state
 // is what makes a busy kill confirmable), then from the local row cache. A name
 // that neither knows is a 404.

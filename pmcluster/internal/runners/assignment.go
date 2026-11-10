@@ -82,6 +82,12 @@ type Assignment struct {
 	// Reason explains a disabled answer ("the feature is off", "this node is
 	// not selected"). It is for the node's log, never for a decision.
 	Reason string `json:"reason"`
+	// Held is an OPERATOR STOP that must cross the node boundary. The console's
+	// Kill runs on the leader, which can only remove a container on its own
+	// node: a kill for a remote node was recorded here and nowhere else, so the
+	// node restarted the runner seconds later — the button appeared to work and
+	// changed nothing. Carrying the flag in the assignment makes the node act.
+	Held bool `json:"held"`
 	// RegistrationToken is the single-use, hour-lived org registration token the
 	// container registers with. Empty when the assignment is disabled.
 	RegistrationToken string `json:"registration_token"`
@@ -218,6 +224,9 @@ type AssignmentService struct {
 	// leader de-registers for a node it no longer assigns, because a worker has
 	// no App installation and must not be given one.
 	Deregister func(ctx context.Context, org, name string) error
+	// Held reports whether an operator stopped this runner from the console.
+	// Optional: nil means no roster is available and nothing is ever held.
+	Held func(runnerName string) bool
 	// Interval is how long a disabled node's registration is left alone between
 	// re-checks (default assignmentDeregisterInterval).
 	Interval time.Duration
@@ -305,6 +314,14 @@ func (s *AssignmentService) resolve(ctx context.Context, node string) (Assignmen
 	}
 	if s.GitHub == nil {
 		return a, fmt.Errorf("%w: this leader has no GitHub App, so no runner can register", ErrNoApp)
+	}
+	// An operator stop wins over everything below it: no group check, no token,
+	// no registration. The node removes any container it still has and stays
+	// quiet until the panel's Restart clears the hold.
+	if s.Held != nil && s.Held(RunnerName(node)) {
+		a.Held = true
+		a.Reason = "stopped by an operator from the console — Restart it from the Runners panel to clear"
+		return a, nil
 	}
 	// The group is verified on every enabled answer, never only at
 	// registration: a visibility flipped to `all` in the GitHub UI must stop the
