@@ -62,6 +62,12 @@ var topLevelScopes = map[string]commandScope{
 	// store, and a follower's store is a stale copy. Answering "the platform is
 	// healthy" from a node that cannot see the platform is the one wrong answer
 	// this command must never give.
+	//
+	// It is EXEMPT from the refusal below (see enforceScope): a worker answers the
+	// node-local subset instead — daemon, socket proxy, runner assignment, local
+	// runner, disk — and prints one line naming each cluster question it did not
+	// answer. Refusing outright is what left an operator unable to ask a worker
+	// why its runner never started.
 	"doctor":      scopeLeader,
 	"backup":      scopeLeader,
 	"config":      scopeLeader,
@@ -149,6 +155,14 @@ func enforceScope(cmd *cobra.Command) error {
 		return nil
 	}
 	if scopeOf(cmd) != scopeLeader {
+		return nil
+	}
+	// `doctor` decides for itself: on a non-leader it answers the node-local
+	// subset (daemon, socket proxy, runner assignment, local runner, disk) and
+	// names what it will not answer. It never reads the local store there, so the
+	// refusal this guard exists to enforce — no cluster state from a stale copy —
+	// still holds.
+	if cmd.Name() == "doctor" {
 		return nil
 	}
 

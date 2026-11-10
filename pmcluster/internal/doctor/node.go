@@ -1,0 +1,240 @@
+package doctor
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
+)
+
+// The node-local report.
+//
+// A WORKER used to get no doctor at all: the command is leader-scoped because the
+// secrets, the last-apply record and the config index come from the local store,
+// and refusing is right for those. But "the cluster's secrets do not decrypt
+// here" is not the same as "nothing can be measured here", and the operator was
+// left with no way to ask a worker why its runner never started — which is
+// exactly the question that stayed unanswered for a whole release.
+//
+// So the worker gets an honest subset: what THIS machine can answer, plus one line
+// naming each thing it cannot (and where to ask instead). Nothing here reads the
+// store, so it cannot answer from a stale copy.
+
+// NodeInput is everything the node-local checks read.
+type NodeInput struct {
+	// Hostname is this node's swarm hostname.
+	Hostname string
+	// ListenAddr is the address the daemon API binds on this node.
+	ListenAddr string
+	// SocketPath is the filtered docker socket path this node intends to serve.
+	SocketPath string
+	// StatePath is where the runner agent records the assignment it applied.
+	StatePath string
+	// VolumeRoot is where stack data lives (free-space check).
+	VolumeRoot string
+	// Docker is the local container runtime (runner container state).
+	Docker runners.LocalDocker
+	// Health probes one URL and returns (status, error). Nil uses a 2s HTTP GET.
+	Health func(ctx context.Context, url string) (int, error)
+	// Now is the clock (tests).
+	Now time.Time
+}
+
+// RunNodeLocal produces the worker's report: four measurements it can make, the
+// free-space check every node can make, and a skipped line per cluster question
+// that only the leader can answer.
+func RunNodeLocal(ctx context.Context, in NodeInput) *Report {
+	rep := &Report{At: time.Now().UTC()}
+	add := func(c Check) { rep.Checks = append(rep.Checks, c) }
+
+	add(checkLocalDaemon(ctx, in))
+	add(checkLocalSocketProxy(in))
+	add(checkLocalAssignment(in))
+	add(checkLocalRunner(ctx, in))
+	add(checkDisk(Input{VolumeRoot: in.VolumeRoot}))
+	add(checkSwarmNodeLocal(ctx, in))
+	add(Check{
+		Name:   "cluster state",
+		Status: StatusSkip,
+		Detail: "not answered here: secrets, settings, stacks, the last apply and the control-plane kit are only current on the leader. Run `pmcluster doctor` on the leader, or from your own machine with --api-url",
+	})
+
+	rep.OK = true
+	for _, c := range rep.Checks {
+		if c.Status == StatusFail {
+			rep.OK = false
+		}
+	}
+	return rep
+}
+
+// checkLocalDaemon answers "is this node's daemon listening?". It is the check
+// that would have caught the whole v0.2.267 defect in one line: a worker's daemon
+// stood by without ever binding, so nothing listened on 9090 at all.
+func checkLocalDaemon(ctx context.Context, in NodeInput) Check {
+	addr := in.ListenAddr
+	if strings.TrimSpace(addr) == "" {
+		addr = "127.0.0.1:9090"
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return Check{"daemon", StatusWarn, "listen address is not host:port: " + addr}
+	}
+	// A worker binds loopback, so the probe is loopback whatever the configured
+	// host was; probing 0.0.0.0 would be a dial to the unspecified address.
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	url := "http://" + net.JoinHostPort(host, port) + "/health"
+
+	health := in.Health
+	if health == nil {
+		health = func(ctx context.Context, url string) (int, error) {
+			c, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(c, http.MethodGet, url, nil)
+			if err != nil {
+				return 0, err
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return 0, err
+			}
+			defer func() { _ = resp.Body.Close() }()
+			return resp.StatusCode, nil
+		}
+	}
+	code, err := health(ctx, url)
+	switch {
+	case err != nil:
+		return Check{"daemon", StatusFail, fmt.Sprintf("nothing listening at %s (%v) — `systemctl status pmcluster`", url, err)}
+	case code >= 500:
+		return Check{"daemon", StatusFail, fmt.Sprintf("%s answered %d", url, code)}
+	case code != http.StatusOK:
+		return Check{"daemon", StatusWarn, fmt.Sprintf("%s answered %d", url, code)}
+	}
+	return Check{"daemon", StatusOK, "answering /health at " + url}
+}
+
+// checkLocalSocketProxy answers "is the filtered docker socket there?", which is
+// the difference between a runner that can build and one that fails every job.
+func checkLocalSocketProxy(in NodeInput) Check {
+	path := strings.TrimSpace(in.SocketPath)
+	// The assignment, when there is one, is the authority: it is the path the
+	// container is actually built to mount.
+	if in.StatePath != "" {
+		if rec, ok := readAgentRecord(in.StatePath); ok && strings.TrimSpace(rec.SocketPath) != "" {
+			path = rec.SocketPath
+		}
+	}
+	if path == "" {
+		path = "/run/pmcluster/docker.sock"
+	}
+	info, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		return Check{"socket proxy", StatusWarn, path + " is absent — a runner on this node would fail every build (the runner assignment carries the path to use)"}
+	case err != nil:
+		return Check{"socket proxy", StatusWarn, path + ": " + err.Error()}
+	case info.Mode()&os.ModeSocket == 0:
+		return Check{"socket proxy", StatusWarn, path + " exists but is not a socket"}
+	}
+	upstream := "/var/run/docker.sock"
+	if _, err := os.Stat(upstream); err != nil {
+		return Check{"socket proxy", StatusWarn, fmt.Sprintf("listening on %s but %s (upstream) is missing", path, upstream)}
+	}
+	return Check{"socket proxy", StatusOK, "listening on " + path}
+}
+
+// checkLocalAssignment answers "when did this node last learn what to run, and
+// from where?" — the question a worker could not answer at all before.
+func checkLocalAssignment(in NodeInput) Check {
+	if strings.TrimSpace(in.StatePath) == "" {
+		return Check{"runner assignment", StatusSkip, "no state path on this node"}
+	}
+	rec, ok := readAgentRecord(in.StatePath)
+	if !ok {
+		return Check{"runner assignment", StatusSkip, "never fetched (no " + filepath.Base(in.StatePath) + "): this node has not applied a runner assignment yet — check the daemon log for the swarm-certificate warning"}
+	}
+	now := in.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	age := "unknown age"
+	if rec.FetchedAt > 0 {
+		age = time.Since(time.Unix(rec.FetchedAt, 0)).Round(time.Second).String() + " ago"
+	}
+	source := rec.Source
+	if source == "" {
+		source = "unknown source"
+	}
+	detail := fmt.Sprintf("fetched %s from %s: enabled=%t", age, source, rec.Enabled)
+	if rec.Enabled {
+		detail += fmt.Sprintf(", org=%s, runner=%s", orDash(rec.Org), orDash(rec.RunnerName))
+	}
+	if rec.LastError != "" {
+		return Check{"runner assignment", StatusWarn, detail + "; last apply error: " + rec.LastError}
+	}
+	// An assignment older than ~3 polls means the leader stopped answering.
+	if rec.FetchedAt > 0 && now.Sub(time.Unix(rec.FetchedAt, 0)) > 5*time.Minute {
+		return Check{"runner assignment", StatusWarn, detail + " (stale: the leader has not answered for a while)"}
+	}
+	return Check{"runner assignment", StatusOK, detail}
+}
+
+// checkLocalRunner reports this node's own runner container.
+func checkLocalRunner(ctx context.Context, in NodeInput) Check {
+	if in.Docker == nil {
+		return Check{"local runner", StatusSkip, "no docker client on this node"}
+	}
+	name := runners.RunnerName(in.Hostname)
+	c, ok, err := in.Docker.Inspect(ctx, name)
+	switch {
+	case err != nil:
+		return Check{"local runner", StatusWarn, fmt.Sprintf("could not inspect %s: %v", name, err)}
+	case !ok:
+		return Check{"local runner", StatusOK, "no runner container on this node (" + name + ")"}
+	case c.Running():
+		exposure := "filtered socket"
+		if c.HasRawSocketMount() {
+			exposure = "RAW /var/run/docker.sock — the socket proxy is bypassed"
+			return Check{"local runner", StatusWarn, fmt.Sprintf("%s is running with the %s", name, exposure)}
+		}
+		return Check{"local runner", StatusOK, fmt.Sprintf("%s is running with the %s", name, exposure)}
+	}
+	return Check{"local runner", StatusWarn, fmt.Sprintf("%s exists but is not running (state %q)", name, c.State)}
+}
+
+// checkSwarmNodeLocal reports what a worker can see of the swarm: its own state,
+// never the manager set (which is a manager-only call).
+func checkSwarmNodeLocal(_ context.Context, _ NodeInput) Check {
+	return Check{
+		Name:   "swarm",
+		Status: StatusSkip,
+		Detail: "this node is standing by: the node list and quorum are manager-only calls, so they are answered on the leader",
+	}
+}
+
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "-"
+	}
+	return s
+}
+
+// readAgentRecord reads the runner agent's state file. It is written 0600 by the
+// daemon and read by hand here — corrupt or absent is "never fetched", never an
+// error that hides the rest of the report.
+func readAgentRecord(path string) (runners.AgentRecord, bool) {
+	var rec runners.AgentRecord
+	if err := readJSON(path, &rec); err != nil {
+		return runners.AgentRecord{}, false
+	}
+	return rec, true
+}

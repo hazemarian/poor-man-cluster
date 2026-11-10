@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -38,6 +39,19 @@ assumptions, one line per check:
   offsite            are this node's shipped artifacts still in the bucket
   disk               headroom on the volume root
 
+On a node that is NOT the leader (a worker, or a follower manager) the same
+command answers the NODE-LOCAL subset instead, because cluster state is only
+current on the leader and this command will not read a stale copy:
+
+  daemon             is this node's daemon listening (its /health)
+  socket proxy       is the filtered docker socket present
+  runner assignment  when this node last read its runner assignment, and from where
+  local runner       this node's runner container, and the docker exposure it has
+  disk               headroom on the volume root
+
+Every cluster question it cannot answer is printed as a skipped line with the
+reason, so the report is never mistaken for a clean bill of health.
+
 Exit status is non-zero when any check fails, so it can gate a deploy or run
 from cron. Nothing here writes: the kit drill extracts to a temporary
 directory, the offsite check only lists, and the rest are reads.`,
@@ -58,10 +72,35 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		defer func() { _ = c.Close() }()
 	}
 
+	// A node that is demonstrably NOT the leader answers the node-local subset:
+	// what this machine can measure, plus one skipped line per cluster question it
+	// cannot. Refusing outright left an operator with no way to ask a WORKER why
+	// its runner never started.
+	if nodeLocalOnly(cmd.Context()) {
+		host, _ := os.Hostname()
+		socketPath := cluster.DefaultGitHubRunnerSocketPath
+		if p := envOr("PMCLUSTER_RUNNER_SOCKET", ""); p != "" {
+			socketPath = p
+		}
+		rep := doctor.RunNodeLocal(cmd.Context(), doctor.NodeInput{
+			Hostname:   host,
+			ListenAddr: cfg.ListenAddr,
+			SocketPath: socketPath,
+			StatePath:  agentStatePath(cfg.DataDir),
+			VolumeRoot: envOr("PMCLUSTER_VOLUME_ROOT", "/var/stack/data"),
+			Docker:     &runners.CLIDocker{},
+		})
+		printReport(cmd, rep)
+		if !rep.OK {
+			return fmt.Errorf("doctor found failing checks on this node")
+		}
+		return nil
+	}
+
 	var st *store.Store
 	if s, _, err := openStore(); err == nil {
 		st = s
-		defer func() { _ = st.Close() }()
+		defer func() { _ = s.Close() }()
 	}
 
 	var cipher *credentials.Cipher
@@ -118,26 +157,52 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		b, _ := json.MarshalIndent(rep, "", "  ")
 		fmt.Fprintln(cmd.OutOrStdout(), string(b))
 	} else {
-		w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-		for _, c := range rep.Checks {
-			mark := "✓"
-			switch c.Status {
-			case doctor.StatusFail:
-				mark = "✖"
-			case doctor.StatusWarn:
-				mark = "⚠"
-			case doctor.StatusSkip:
-				mark = "·"
-			}
-			fmt.Fprintf(w, "%s %s\t%s\n", mark, c.Name, c.Detail)
-		}
-		if err := w.Flush(); err != nil {
-			return err
-		}
+		printReport(cmd, rep)
 	}
 
 	if !rep.OK {
 		return fmt.Errorf("doctor found failing checks")
 	}
 	return nil
+}
+
+// printReport renders one report as the familiar check table.
+func printReport(cmd *cobra.Command, rep *doctor.Report) {
+	asJSON, _ := cmd.Flags().GetBool("json")
+	if asJSON {
+		b, _ := json.MarshalIndent(rep, "", "  ")
+		fmt.Fprintln(cmd.OutOrStdout(), string(b))
+		return
+	}
+	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	for _, c := range rep.Checks {
+		mark := "✓"
+		switch c.Status {
+		case doctor.StatusFail:
+			mark = "✖"
+		case doctor.StatusWarn:
+			mark = "⚠"
+		case doctor.StatusSkip:
+			mark = "·"
+		}
+		fmt.Fprintf(w, "%s %s	%s\n", mark, c.Name, c.Detail)
+	}
+	_ = w.Flush()
+}
+
+// nodeLocalOnly reports whether this node must answer the node-local doctor
+// subset instead of the cluster report. It is deliberately conservative: only a
+// node that PROVES it is a swarm member without leadership qualifies, so an
+// unreachable Docker or a standalone box keeps the full report it always had.
+func nodeLocalOnly(ctx context.Context) bool {
+	if apiURL != "" {
+		// Remote mode: the CLI is pointed at a daemon that is the leader (or at
+		// the edge in front of it), so the full report is the right answer.
+		return false
+	}
+	self, err := detectSelf(ctx)
+	if err != nil {
+		return false
+	}
+	return self.SwarmActive && !self.IsLeader
 }
