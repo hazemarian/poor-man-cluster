@@ -327,7 +327,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		if a.GitHubRunnersEnabled {
 			fmt.Fprintln(out, "  Runners register at ORG level with the GitHub App's installation token, so the App must")
 			fmt.Fprintln(out, "  already be configured (`pmcluster github app set`) and hold Organization →")
-			fmt.Fprintln(out, "  Administration: Read & write.")
+			fmt.Fprintln(out, "  Self-hosted runners: Read & write (Organization permissions).")
 			a.GitHubRunnerOrg = ask(r, out, "GitHub organisation for the runner",
 				cluster.LoadGitHubRunnerOrg(ctx, st))
 			a.GitHubRunnerGroup = ask(r, out, "Runner group (created with visibility 'selected')",

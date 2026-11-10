@@ -9,13 +9,20 @@ import (
 )
 
 // RequiredPermission is the App permission runner registration needs.
-// `administration` at `write` on the ORGANISATION is what
-// POST /orgs/{org}/actions/runners/registration-token requires; read is not
-// enough, and the failure GitHub returns for a missing permission is a bare 403
-// ("Resource not accessible by integration") that names neither the permission
-// nor the fix — which is why the doctor reports this before a registration is
-// ever attempted.
-const RequiredPermission = "administration:write"
+//
+// It is NOT `administration`. Organization-level runner endpoints — the runner
+// list, the runner groups, the registration token — require
+// `organization_self_hosted_runners` at `write`; `administration` only covers
+// the repository-level equivalents. An App can hold
+// `administration: write` AND `organization_administration: write` and still be
+// refused here, which is exactly what happened on a live cluster: the
+// diagnostic blamed a permission that was already granted and sent the operator
+// looking in the wrong place for an evening.
+//
+// GitHub's failure body is a bare 403 ("Resource not accessible by
+// integration") naming neither the permission nor the fix, which is why the
+// doctor reports this before a registration is ever attempted.
+const RequiredPermission = "organization_self_hosted_runners:write"
 
 // Report is the doctor's view: enabled or not, per selected node whether the
 // container and the GitHub registration agree, and — when the feature is off —

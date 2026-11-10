@@ -423,3 +423,55 @@ ENABLED/DISABLED first:
 - There is no runner assignment for a manager. A manager is refused as a runner host,
   so its assignment would always be "off", and a second code path for the same
   decision is a second place for it to drift.
+
+## App permissions: the exact one, because the obvious answer is wrong
+
+Runner registration is an **organisation** operation, and GitHub splits the
+permission by level:
+
+| endpoint | permission | level |
+|---|---|---|
+| `POST /orgs/{org}/actions/runners/registration-token` | `organization_self_hosted_runners: write` | Organization |
+| `GET|DELETE /orgs/{org}/actions/runners` | `organization_self_hosted_runners: write` | Organization |
+| `GET|POST /orgs/{org}/actions/runner-groups` | `organization_self_hosted_runners: write` | Organization |
+| `POST /repos/{owner}/{repo}/actions/runners/registration-token` | `administration: write` | Repository |
+
+So **Organization → Self-hosted runners: Read & write** is what this feature
+needs. `Administration` covers only the repository-level endpoints. An App can
+hold `administration: write` *and* `organization_administration: write` and still
+be refused at every organisation runner endpoint — that is not a hypothetical,
+it is how this feature first failed on a live cluster, with the platform blaming
+the permission that was already granted.
+
+Three steps, all required, and skipping the third looks exactly like a bug:
+
+1. App settings → Permissions → **Organization permissions → Self-hosted
+   runners → Read & write** → Save.
+2. Accept the new permissions on the installation
+   (`github.com/organizations/<org>/settings/installations`). Until an org owner
+   approves, the installation keeps its old scopes.
+3. **Re-mint the installation token.** Tokens are cached for their lifetime (up
+   to an hour), so a daemon that minted one before the approval keeps using the
+   old scopes and keeps reporting the old failure. `systemctl restart pmcluster`
+   on the leader forces a new mint; otherwise wait for expiry.
+
+`pmcluster doctor` reports the missing permission by name before a registration
+is ever attempted, because GitHub's own error does not: a 403 body is the bare
+string `Resource not accessible by integration`, naming neither the permission
+nor the fix. Where GitHub does supply it, the response carries
+`X-Accepted-GitHub-Permissions` for the endpoint — that header, not a guess, is
+the authority on what is missing.
+
+## Troubleshooting: the failures this feature actually produced
+
+Each of these cost real time on a live cluster. They are listed with the message
+you see, because the message is what you will be staring at.
+
+| what you see | what it means | fix |
+|---|---|---|
+| `github_runners_enabled is enabled but github_runner_org is empty` | the org is the registration scope; without it there is nothing to register into | set `github_runner_org=<org>` |
+| `GitHub refused runner groups for org X (403) … Resource not accessible by integration` | the App is missing `organization_self_hosted_runners` (or has not been approved, or the token predates the grant) | the three steps above |
+| `package ghcr.io/owner/repo/api:latest — GHCR answered 401 …` | GHCR answers 401 both for "no access" **and** for "no such package", deliberately, so it cannot be used to enumerate private packages | check the real name: `ghcr.io/<owner>/<repo>:<tag>`, no extra path segments. The probe now lists the package's actual tags when the name is right and the tag is wrong |
+| `assignment refused … context deadline exceeded` for `:9092` on every manager | the leader is listening but the node cannot reach the port: `ufw` allows the swarm ports, not this one | `ufw allow from 10.0.0.0/8 to any port 9092 proto tcp` on every node (the harden script lists it in `RESTRICTED_HOST_PORTS`; rules created before the port existed must be re-applied) |
+| runner state stuck at `starting`, no container on the node | the assignment never arrived, so the node never had a spec to act on | check the node's journal for `assignment read from the leader`, then the leader's log for the refusal reason |
+| a node's `docker inspect` shows `/var/run/docker.sock` | `github_runner_socket_proxy=false`, or the container predates the feature | set it back to `true` and let the reconcile replace the container |

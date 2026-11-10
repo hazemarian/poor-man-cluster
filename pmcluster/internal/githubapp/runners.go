@@ -123,7 +123,7 @@ func (c *Client) OrgRegistrationToken(ctx context.Context, bearer, org string) (
 	case http.StatusUnauthorized:
 		return "", fmt.Errorf("%w: the installation token was refused while minting a runner registration token for org %s", ErrTokenRejected, org)
 	case http.StatusForbidden:
-		return "", fmt.Errorf("%w: no administration:write for org %s — grant the App Organization → Administration: Read & write, then approve it on the installation", ErrInsufficientPermission, org)
+		return "", fmt.Errorf("%w: no organization_self_hosted_runners:write for org %s — grant the App Organization → Self-hosted runners: Read & write, then approve it on the installation", ErrInsufficientPermission, org)
 	case http.StatusNotFound:
 		return "", fmt.Errorf("%w: org %s is not visible to the installation", ErrInstallationNotFound, org)
 	default:
@@ -156,7 +156,7 @@ func (c *Client) OrgRunners(ctx context.Context, bearer, org string) ([]Runner, 
 	case http.StatusUnauthorized:
 		return nil, fmt.Errorf("%w: the installation token was refused while listing runners for org %s", ErrTokenRejected, org)
 	case http.StatusForbidden:
-		return nil, fmt.Errorf("%w: no administration:write for org %s — grant the App Organization → Administration: Read & write and approve it on the installation", ErrInsufficientPermission, org)
+		return nil, fmt.Errorf("%w: no organization_self_hosted_runners:write for org %s — grant the App Organization → Self-hosted runners: Read & write and approve it on the installation", ErrInsufficientPermission, org)
 	case http.StatusNotFound:
 		return nil, fmt.Errorf("%w: org %s is not visible to the installation", ErrInstallationNotFound, org)
 	default:
@@ -195,7 +195,7 @@ func (c *Client) DeleteOrgRunner(ctx context.Context, bearer, org string, id int
 	case http.StatusUnauthorized:
 		return fmt.Errorf("%w: the installation token was refused while deleting runner %d from org %s", ErrTokenRejected, id, org)
 	case http.StatusForbidden:
-		return fmt.Errorf("%w: no administration:write for org %s, so runner %d cannot be de-registered", ErrInsufficientPermission, org, id)
+		return fmt.Errorf("%w: no organization_self_hosted_runners:write for org %s, so runner %d cannot be de-registered", ErrInsufficientPermission, org, id)
 	default:
 		return fmt.Errorf("delete runner %d from org %s: %s", id, org, httpErrorText(status, body))
 	}
@@ -222,7 +222,7 @@ func (c *Client) RunnerGroups(ctx context.Context, bearer, org string) ([]Runner
 		// was approved. Name the likely causes AND carry GitHub's own text,
 		// because guessing "no administration:write" sent an operator to
 		// check a permission that was already granted.
-		return nil, fmt.Errorf("%w: GitHub refused runner groups for org %s (403). The App needs Organization → Administration: Read & write AND the installation must be approved by an org owner; a token minted before the approval keeps the old scopes until it is re-minted. GitHub said: %s",
+		return nil, fmt.Errorf("%w: GitHub refused runner groups for org %s (403). The App needs Organization → Self-hosted runners: Read & write (Administration covers repository-level endpoints only) AND the installation must be approved by an org owner; a token minted before the approval keeps the old scopes until it is re-minted. GitHub said: %s",
 			ErrInsufficientPermission, org, httpErrorText(http.StatusForbidden, body))
 	case http.StatusNotFound:
 		return nil, fmt.Errorf("%w: org %s is not visible to the installation", ErrInstallationNotFound, org)
@@ -271,7 +271,7 @@ func (c *Client) CreateRunnerGroup(ctx context.Context, bearer, org, name string
 	case http.StatusUnauthorized:
 		return RunnerGroup{}, fmt.Errorf("%w: the installation token was refused while creating runner group %q in %s", ErrTokenRejected, name, org)
 	case http.StatusForbidden:
-		return RunnerGroup{}, fmt.Errorf("%w: no administration:write for org %s, so runner group %q cannot be created", ErrInsufficientPermission, org, name)
+		return RunnerGroup{}, fmt.Errorf("%w: no organization_self_hosted_runners:write for org %s, so runner group %q cannot be created", ErrInsufficientPermission, org, name)
 	default:
 		return RunnerGroup{}, fmt.Errorf("create runner group %q in org %s: %s", name, org, httpErrorText(status, body))
 	}
@@ -311,7 +311,7 @@ func (c *Client) SetGroupRepositories(ctx context.Context, bearer, org string, g
 	case http.StatusUnauthorized:
 		return fmt.Errorf("%w: the installation token was refused while updating runner group %d in %s", ErrTokenRejected, groupID, org)
 	case http.StatusForbidden:
-		return fmt.Errorf("%w: no administration:write for org %s, so runner group %d cannot be updated", ErrInsufficientPermission, org, groupID)
+		return fmt.Errorf("%w: no organization_self_hosted_runners:write for org %s, so runner group %d cannot be updated", ErrInsufficientPermission, org, groupID)
 	default:
 		return fmt.Errorf("update runner group %d in org %s: %s", groupID, org, httpErrorText(status, body))
 	}

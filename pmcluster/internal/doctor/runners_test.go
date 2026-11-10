@@ -99,7 +99,7 @@ func TestGitHubRunnersCheckFailsWithoutASelectedNode(t *testing.T) {
 	}
 }
 
-func TestGitHubRunnersCheckFailsOnMissingAdministrationWrite(t *testing.T) {
+func TestGitHubRunnersCheckFailsOnMissingSelfHostedRunnersWrite(t *testing.T) {
 	c := runRunnerCheck(t, stubRunners{rep: runners.Report{
 		Enabled:           true,
 		AppConfigured:     true,
@@ -111,7 +111,7 @@ func TestGitHubRunnersCheckFailsOnMissingAdministrationWrite(t *testing.T) {
 	if c.Status != StatusFail {
 		t.Fatalf("status = %s, want fail", c.Status)
 	}
-	for _, want := range []string{"administration:write", "Administration: Read & write", "Organization"} {
+	for _, want := range []string{"organization_self_hosted_runners:write", "Self-hosted runners", "Organization"} {
 		if !strings.Contains(c.Detail, want) {
 			t.Errorf("detail %q does not mention %q", c.Detail, want)
 		}

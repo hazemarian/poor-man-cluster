@@ -60,7 +60,12 @@ func TestOrgRegistrationTokenUsesTheOrgEndpoint(t *testing.T) {
 	}
 }
 
-func TestOrgRegistrationTokenNamesAdministrationWriteOnForbidden(t *testing.T) {
+// GitHub names neither the permission nor the level in a 403 body ("Resource
+// not accessible by integration"), and the answer is NOT the one an operator
+// expects: organization-level runner endpoints need Self-hosted runners, while
+// Administration only covers repository-level endpoints. Getting this wrong
+// sends someone to grant a permission that is already granted.
+func TestOrgRegistrationTokenNamesSelfHostedRunnersOnForbidden(t *testing.T) {
 	c := runnerTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"message":"Resource not accessible by integration"}`))
@@ -69,8 +74,11 @@ func TestOrgRegistrationTokenNamesAdministrationWriteOnForbidden(t *testing.T) {
 	if !errors.Is(err, ErrInsufficientPermission) {
 		t.Fatalf("err = %v, want ErrInsufficientPermission", err)
 	}
-	if !strings.Contains(err.Error(), "administration:write") {
-		t.Fatalf("err = %q, want it to name administration:write (GitHub names neither)", err)
+	if !strings.Contains(err.Error(), "organization_self_hosted_runners:write") {
+		t.Fatalf("err = %q, want it to name organization_self_hosted_runners:write (GitHub names neither)", err)
+	}
+	if !strings.Contains(err.Error(), "Self-hosted runners") {
+		t.Fatalf("err = %q, want it to name the Self-hosted runners permission", err)
 	}
 	if !strings.Contains(err.Error(), "Organization") {
 		t.Fatalf("err = %q, want it to name the ORGANIZATION permission level", err)

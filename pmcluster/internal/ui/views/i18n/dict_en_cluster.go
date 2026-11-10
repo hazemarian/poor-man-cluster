@@ -143,7 +143,7 @@ func init() {
 		"clustersettings.log_level":                      "Log level",
 		"clustersettings.log_level_hint":                 "How much the daemon writes to its log file and Parseable. debug adds the full rendered compose per deploy level; info logs every deploy step with the service names.",
 		"clustersettings.sect_runners":                   "Self-hosted CI runners",
-		"clustersettings.sect_runners_sub":               "The platform can run one GitHub Actions runner container per private repository — the answer to exhausted GitHub-hosted minutes. Runners are registered with the GitHub App's installation token and need the App's Administration: Read & write permission.",
+		"clustersettings.sect_runners_sub":               "The platform can run one GitHub Actions runner container per private repository — the answer to exhausted GitHub-hosted minutes. Runners are registered with the GitHub App's installation token and need the App's Organization → Self-hosted runners: Read & write permission. Administration alone covers repository-level endpoints only.",
 		"clustersettings.runners_enabled":                "Run self-hosted runners",
 		"clustersettings.runners_enabled_hint":           "Off by default. Turning it on requires a configured GitHub App; the reconcile stops and removes every runner when it is turned off again.",
 		"clustersettings.runner_org":                     "Organisation",

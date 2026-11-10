@@ -58,6 +58,48 @@ The broker deliberately does **not** accept the daemon bearer token. A bearer
 token is full control-plane access; putting one in every repo would recreate
 the problem this feature removes, with a larger blast radius.
 
+## 1.1 Permissions the platform actually uses
+
+Set these on the App (Settings → Permissions). Nothing here is optional: each
+row is a code path, not a preference.
+
+| Permission | Level | Access | What it is for |
+|---|---|---|---|
+| `Contents` | Repository | **Read** | clone private repos in CI, and mint the broker token workflows use for cross-repo fetches |
+| `Packages` | Repository | **Read** | pull images from GHCR — the registry probe, and the pull credential when a PAT is not used |
+| `Self-hosted runners` | **Organization** | **Read & write** | register/list/remove organisation runners and their runner groups (see [runners.md](runners.md)) |
+| `Metadata` | Repository | Read | granted automatically; GitHub requires it on every App |
+
+Explicitly **not** needed — the two most common wrong guesses:
+
+| Permission | Why it is the wrong answer |
+|---|---|
+| `Administration` (Organization) | does not cover Actions runner endpoints. An App holding `administration: write` and `organization_administration: write` is still refused at `POST /orgs/{org}/actions/runners/registration-token` |
+| `Administration` (Repository) | only needed for **repository**-level runners, which this platform does not use — runners register org-wide into a group |
+
+### After changing a permission: three steps, all of them
+
+1. Save the permission on the App.
+2. **Accept it on the installation.** Until an owner approves, the installation
+   keeps its previous scopes: `github.com/organizations/<org>/settings/installations`.
+3. **Re-mint the installation token.** Tokens are cached until expiry (up to an
+   hour), so a daemon that minted one before the approval keeps failing with the
+   old scopes. `systemctl restart pmcluster` on the leader, or wait it out.
+
+Skipping step 3 is indistinguishable from a bug: the permission is visibly
+granted in GitHub and the platform keeps reporting it missing.
+
+### Reading the error GitHub gives you
+
+A missing permission returns `403` with the body
+`{"message":"Resource not accessible by integration"}` — naming neither the
+permission nor the level. Two things help more than guessing:
+
+- the response header **`X-Accepted-GitHub-Permissions`** lists what the endpoint
+  requires (e.g. `organization_self_hosted_runners=write`);
+- `pmcluster doctor` checks the permissions this platform depends on and names
+  the missing one by its API key.
+
 ## 2. Create the app manually
 
 pmcluster does not create the App. Do this once, in GitHub:

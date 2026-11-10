@@ -431,7 +431,7 @@ func checkGitHubRunners(ctx context.Context, in Input) Check {
 	}
 	if rep.MissingPermission != "" {
 		return Check{name, StatusFail, head + ": the App is missing " + rep.MissingPermission +
-			" — grant Organization → Administration: Read & write in the App's settings, then approve the new permission on the installation; registration returns 403 until then"}
+			" — grant Organization → Self-hosted runners: Read & write in the App's settings, then approve the new permission on the installation; registration returns 403 until then"}
 	}
 
 	var problems, healthy []string
