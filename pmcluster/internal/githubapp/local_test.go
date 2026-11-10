@@ -309,3 +309,26 @@ func TestProbePackage_401WithoutTagsKeepsTheAmbiguityHonest(t *testing.T) {
 		}
 	}
 }
+
+// TestProbePackage_AcceptsAFullImageReference: an operator pastes what docker
+// shows them (ghcr.io/owner/name:tag), not the bare owner/name the registry
+// API wants, and the difference used to 401 like a missing package.
+func TestProbePackage_AcceptsAFullImageReference(t *testing.T) {
+	l, _, _ := newLocal(t)
+	ctx := context.Background()
+
+	var gotPath string
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(reg.Close)
+	l.RegistryBase = reg.URL
+
+	if err := l.probePackage(ctx, "ghs_test", "ghcr.io/acme/app:v1"); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if gotPath != "/v2/acme/app/manifests/v1" {
+		t.Fatalf("path = %q, want /v2/acme/app/manifests/v1 (the host must be stripped)", gotPath)
+	}
+}

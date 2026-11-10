@@ -494,6 +494,13 @@ func (l *Local) probeRepo(ctx context.Context, token, repo string) error {
 // basic auth (user x-access-token), which is exactly how `docker login` uses
 // it. pkg is "owner/name:tag" (tag defaults to latest).
 func (l *Local) probePackage(ctx context.Context, token, pkg string) error {
+	// Accept a full image reference as well as the bare owner/name form: the
+	// registry base is fixed (ghcr.io), so a pasted "ghcr.io/owner/name:tag"
+	// would otherwise be requested as /v2/ghcr.io/owner/name and 401 like a
+	// missing package. Strip the scheme and the host before splitting.
+	pkg = strings.TrimPrefix(strings.TrimPrefix(pkg, "https://"), "http://")
+	pkg = strings.TrimPrefix(pkg, "ghcr.io/")
+	pkg = strings.TrimSuffix(pkg, "@") // a trailing digest separator is a typo, not a ref
 	name, ref := pkg, "latest"
 	if i := strings.LastIndex(pkg, ":"); i > strings.LastIndex(pkg, "/") {
 		name, ref = pkg[:i], pkg[i+1:]
