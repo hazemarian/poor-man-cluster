@@ -36,6 +36,8 @@ func RenderedConfigs() []RenderedConfig {
 		{Logical: "pmcluster_otel_config", SnapshotKey: "otel-collector-config", Render: RenderOTelCollectorConfig},
 		{Logical: "pmcluster_traefik_dynamic", SnapshotKey: "traefik-dynamic", Render: RenderTraefikDynamic},
 		{Logical: "pmcluster_observability_provision", SnapshotKey: "observability-provision", Render: RenderObservabilityProvisionScript},
+		{Logical: "pmcluster_sso_signin", SnapshotKey: "sso-signin", Render: RenderSSOSignIn},
+		{Logical: "pmcluster_sso_error", SnapshotKey: "sso-error", Render: RenderSSOError},
 	}
 }
 
@@ -69,6 +71,10 @@ func EnsureRenderedConfigs(ctx context.Context, d runtime.Client, render *Render
 			render.TraefikConfigName = name
 		case "pmcluster_observability_provision":
 			render.ObservabilityProvisionConfigName = name
+		case "pmcluster_sso_signin":
+			render.SSOSignInConfigName = name
+		case "pmcluster_sso_error":
+			render.SSOErrorConfigName = name
 		}
 	}
 	return outcomes, nil
@@ -97,5 +103,7 @@ func renderedConfigs() []RenderedConfig {
 		{Logical: "pmcluster_otel_config", SnapshotKey: "otel-collector-config", Render: RenderOTelCollectorConfig},
 		{Logical: "pmcluster_traefik_dynamic", SnapshotKey: "traefik-dynamic", Render: RenderTraefikDynamic},
 		{Logical: "pmcluster_observability_provision", SnapshotKey: "observability-provision", Render: RenderObservabilityProvisionScript},
+		{Logical: "pmcluster_sso_signin", SnapshotKey: "sso-signin", Render: RenderSSOSignIn},
+		{Logical: "pmcluster_sso_error", SnapshotKey: "sso-error", Render: RenderSSOError},
 	}
 }

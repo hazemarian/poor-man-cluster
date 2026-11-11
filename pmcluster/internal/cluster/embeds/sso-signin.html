@@ -1,0 +1,48 @@
+{{define "sign_in.html"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Sign in · pmcluster</title>
+<style>/*FONTS*/
+  :root{--bg:#f6f5ed;--panel:#fffefa;--fg:#20372c;--dim:#586c60;--accent:#285f45;--accent-fg:#fffefa;--fill:rgba(32,55,44,.07);--ring:rgba(32,55,44,.1);--shadow:0 24px 60px rgba(22,40,31,.10)}
+  @media (prefers-color-scheme:dark){:root{--bg:#151a18;--panel:#202724;--fg:#ecf2ed;--dim:#b5c4b9;--accent:#84d6a1;--accent-fg:#10221a;--fill:rgba(236,242,237,.07);--ring:rgba(236,242,237,.1);--shadow:0 24px 60px rgba(0,0,0,.4)}}
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%}
+  body{min-height:100vh;display:grid;place-items:center;padding:24px;background:var(--bg);color:var(--fg);font:16px/1.5 "Instrument Sans","IBM Plex Sans Arabic",system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+  .card{width:min(420px,100%);padding:40px 32px 32px;border-radius:24px;background:var(--panel);box-shadow:0 0 0 1px var(--ring),var(--shadow);text-align:center;animation:rise .5s cubic-bezier(.22,.8,.24,1) both}
+  .mark{width:64px;height:64px;margin:0 auto 20px;display:block}
+  .mark .e{stroke:#b7bfcb}.mark .r{stroke:var(--accent)}.mark .n{fill:#232730}
+  @media (prefers-color-scheme:dark){.mark .e{stroke:#7b8590}.mark .n{fill:#0e1311}}
+  h1{margin:0 0 8px;font-family:"Bricolage Grotesque Variable","Instrument Sans",system-ui,sans-serif;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:-.02em}
+  p{margin:0;color:var(--dim)}
+  .ar{margin-top:6px;font-size:14px}
+  form{margin:28px 0 0}
+  .btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:50px;padding:0 20px;border:0;border-radius:14px;background:var(--accent);color:var(--accent-fg);font:inherit;font-weight:600;cursor:pointer;text-decoration:none;transition:transform .14s ease,filter .14s ease}
+  .btn:hover{filter:brightness(1.06)}.btn:active{transform:scale(.98)}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  .btn svg{width:20px;height:20px;fill:currentColor;flex:none}
+  .btn.quiet{background:var(--fill);color:var(--fg)}
+  .meta{margin-top:20px;font-size:13px;color:var(--dim);overflow-wrap:anywhere}
+  .foot{margin-top:24px;font-size:12px;color:var(--dim)}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion:reduce){.card{animation:none}.btn{transition:none}}
+</style>
+</head>
+<body>
+<main class="card">
+  <svg class="mark" viewBox="0 0 120 120" fill="none" aria-hidden="true"><g transform="translate(60 60) scale(1.15) translate(-60 -57)"><path class="e" d="M60 26 L96 88 L24 88 Z" stroke-width="5" stroke-linejoin="round"/><path class="r" d="M60 26 L96 88 L24 88 Z" pathLength="100" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="22 78" stroke-dashoffset="-39"/><circle class="n" cx="60" cy="26" r="12"/><circle class="n" cx="96" cy="88" r="12"/><circle class="n" cx="24" cy="88" r="12"/></g></svg>
+  <h1>Sign in to pmcluster</h1>
+  <p>Use your GitHub account to continue.</p>
+  <p class="ar" dir="rtl" lang="ar">سجّل الدخول عبر حسابك على GitHub للمتابعة.</p>
+  <form method="GET" action="{{.ProxyPrefix}}/start">
+    <input type="hidden" name="rd" value="{{.Redirect}}">
+    <button type="submit" class="btn"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg><span>Continue with {{.ProviderName}}</span></button>
+  </form>
+  {{if .SignInMessage}}<p class="meta">{{.SignInMessage}}</p>{{end}}
+  <p class="foot">{{.Footer}}</p>
+</main>
+</body>
+</html>
+{{end}}

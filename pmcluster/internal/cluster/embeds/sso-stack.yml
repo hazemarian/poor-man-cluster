@@ -42,6 +42,9 @@ services:
       OAUTH2_PROXY_WHITELIST_DOMAINS: ".[[.Domain]]"
       OAUTH2_PROXY_REDIRECT_URL: "https://sso.[[.Domain]]/oauth2/callback"
       OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "false"
+      # Branded sign-in / error pages (embeds/sso-signin.html, sso-error.html),
+      # mounted below as Swarm configs.
+      OAUTH2_PROXY_CUSTOM_TEMPLATES_DIR: "/etc/oauth2-templates"
       # Emit the authenticated identity as X-Auth-Request-* response headers on
       # /oauth2/auth. Traefik's forwardAuth copies the headers it is told about
       # (authResponseHeaders) from that RESPONSE onto the upstream request, so
@@ -83,5 +86,8 @@ services:
       limits:
         cpus: "0.25"
         memory: 128M
+    configs:
+      - config_path(pmcluster_sso_signin)
+      - config_path(pmcluster_sso_error)
     secrets:
       - sso_cookie_secret
