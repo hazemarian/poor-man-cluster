@@ -29,6 +29,25 @@
 </div>
 {{end}}
 
+{{/* The navigation skeleton: a shaped stand-in (title, four stats, a list panel) shown after a short delay while the next page loads. */}}
+{{define "viewskeleton"}}
+<div class="page-skel is-nav" aria-hidden="true">
+  <div class="page-head"><div class="ph-text skel"><span class="skel-line title"></span><span class="skel-line short"></span></div></div>
+  <div class="stats">
+    <div class="stat"><span class="skel-line short"></span><span class="skel-line tall"></span></div>
+    <div class="stat"><span class="skel-line short"></span><span class="skel-line tall"></span></div>
+    <div class="stat"><span class="skel-line short"></span><span class="skel-line tall"></span></div>
+    <div class="stat"><span class="skel-line short"></span><span class="skel-line tall"></span></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><span class="skel-line head"></span></div>
+    <div class="panel-body skel skel-rows">
+      <span class="skel-line row"></span><span class="skel-line row w80"></span><span class="skel-line row"></span><span class="skel-line row w65"></span><span class="skel-line row w80"></span>
+    </div>
+  </div>
+</div>
+{{end}}
+
 {{define "app"}}
 <!doctype html>
 <html class="console" lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}">
@@ -84,14 +103,16 @@
       <button class="icon-btn sidebar-close" type="button" data-drawer-close aria-label="{{T "nav.close"}}" data-tip="{{T "nav.close"}}">{{icon "close"}}</button>
     </div>
 
+    <button class="drawer-search only-sm" type="button" data-cmdk-open data-drawer-close aria-haspopup="dialog" data-tip="{{T "nav.jump"}}">{{icon "search"}}<span>{{T "nav.jump"}}</span></button>
+
     <nav class="nav" aria-label="{{T "nav.menu"}}">
       <p class="nav-label" id="nav-cluster">{{T "nav.group.cluster"}}</p>
       <a class="nav-item" href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview" data-tip="{{T "nav.overview"}}">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
       <a class="nav-item" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks" data-tip="{{T "nav.stacks"}}">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
       <a class="nav-item" href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services" data-tip="{{T "nav.services"}}">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
       <a class="nav-item" href="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" data-nav="observability" data-tip="{{T "nav.observability"}}">{{icon "chart"}}<span>{{T "nav.observability"}}</span></a>
-      <a class="nav-item" href="/web/platform" hx-get="/web/platform" hx-target="#view" hx-push-url="true" data-nav="platform" data-tip="{{T "nav.platform"}}">{{icon "overview"}}<span>{{T "nav.platform"}}</span></a>
-      <a class="nav-item" href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage" data-tip="{{T "nav.usage"}}">{{icon "overview"}}<span>{{T "nav.usage"}}</span></a>
+      <a class="nav-item" href="/web/platform" hx-get="/web/platform" hx-target="#view" hx-push-url="true" data-nav="platform" data-tip="{{T "nav.platform"}}">{{icon "cpu"}}<span>{{T "nav.platform"}}</span></a>
+      <a class="nav-item" href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage" data-tip="{{T "nav.usage"}}">{{icon "gauge"}}<span>{{T "nav.usage"}}</span></a>
       <a class="nav-item" href="/web/inventory" hx-get="/web/inventory" hx-target="#view" hx-push-url="true" data-nav="inventory" data-tip="{{T "nav.inventory"}}">{{icon "file"}}<span>{{T "nav.inventory"}}</span></a>
 
       <p class="nav-label" id="nav-delivery">{{T "nav.group.delivery"}}</p>
@@ -100,18 +121,22 @@
       {{/* CI runners: the page and its dictionaries existed, but nothing in the
            shell linked to it, so the only way in was typing the URL. */}}
       <a class="nav-item" href="/web/runners" hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-nav="runners" data-tip="{{T "nav.runners"}}">{{icon "server"}}<span>{{T "nav.runners"}}</span></a>
-      <a class="nav-item" href="/web/ci" hx-get="/web/ci" hx-target="#view" hx-push-url="true" data-nav="ci" data-tip="{{T "nav.ci"}}">{{icon "deploy"}}<span>{{T "nav.ci"}}</span></a>
+      <a class="nav-item" href="/web/ci" hx-get="/web/ci" hx-target="#view" hx-push-url="true" data-nav="ci" data-tip="{{T "nav.ci"}}">{{icon "ci"}}<span>{{T "nav.ci"}}</span></a>
 
-      <p class="nav-label" id="nav-trust">{{T "nav.group.trust"}}</p>
+      <div class="nav-group" data-nav-group="trust">
+      <button type="button" class="nav-label nav-toggle" id="nav-trust" aria-expanded="false" data-tip="{{T "nav.group.trust"}}">{{T "nav.group.trust"}}{{icon "chevron-down"}}</button>
       <a class="nav-item" href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls" data-tip="{{T "nav.tls"}}">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
       <a class="nav-item" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-nav="backups" data-tip="{{T "nav.backups"}}">{{icon "backups"}}<span>{{T "nav.backups"}}</span></a>
+      </div>
 
       {{if eq .User.Role "admin"}}
-      <p class="nav-label" id="nav-access">{{T "nav.group.access"}}</p>
+      <div class="nav-group" data-nav-group="access">
+      <button type="button" class="nav-label nav-toggle" id="nav-access" aria-expanded="false" data-tip="{{T "nav.group.access"}}">{{T "nav.group.access"}}{{icon "chevron-down"}}</button>
       {{if not .LoginDisabled}}
       <a class="nav-item" href="/web/users" hx-get="/web/users" hx-target="#view" hx-push-url="true" data-nav="users" data-tip="{{T "nav.users"}}">{{icon "users"}}<span>{{T "nav.users"}}</span></a>
       {{end}}
       <a class="nav-item" href="/web/apikeys" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-nav="apikeys" data-tip="{{T "nav.apikeys"}}">{{icon "keys"}}<span>{{T "nav.apikeys"}}</span></a>
+      </div>
       {{end}}
 
       <p class="nav-label" id="nav-system">{{T "nav.group.system"}}</p>
@@ -129,7 +154,7 @@
       <div class="foot-row">
         <span class="who" lang="en" dir="ltr"><span class="avatar">{{printf "%.1s" .User.Username}}</span><span class="who-name">@{{.User.Username}}</span></span>
         <form method="post" action="/web/logout">
-          <button class="btn btn-ghost btn-sm" type="submit" aria-label="{{T "nav.logout"}}" data-tip="{{T "nav.logout"}}">{{icon "logout"}}<span>{{T "nav.logout"}}</span></button>
+          <button class="icon-btn" type="submit" aria-label="{{T "nav.logout"}}" data-tip="{{T "nav.logout"}}">{{icon "logout"}}</button>
         </form>
       </div>
       {{else if .SSOEnabled}}
@@ -149,12 +174,14 @@
 
   <div class="main">
     <header class="topbar">
-      <button class="icon-btn only-sm" type="button" data-drawer-open aria-label="{{T "nav.menu"}}" data-tip="{{T "nav.menu"}}">{{icon "menu"}}</button>
+      <a class="topbar-mark only-sm" href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" aria-label="{{T "nav.overview"}}" data-tip="{{T "nav.overview"}}"><span class="logo-mark" aria-hidden="true">{{template "logo-mark"}}</span></a>
+      <span class="topbar-brand only-sm" dir="ltr">Poor Man's <em>Cluster</em></span>
       <nav class="crumbs" aria-label="{{T "nav.overview"}}">
-        <span>{{T "app.title"}}</span>
-        <span class="sep" aria-hidden="true">{{icon "chevron"}}</span>
         <strong id="crumb-now">{{T .Crumb}}</strong>
       </nav>
+      <button class="cmdk-trigger" type="button" data-cmdk-open aria-haspopup="dialog" aria-label="{{T "nav.jump"}}" data-tip="{{T "nav.jump"}}">
+        {{icon "search"}}<span class="cmdk-label">{{T "nav.jump"}}</span><kbd class="cmdk-kbd" dir="ltr">Ctrl K</kbd>
+      </button>
       <div class="topbar-end">
         {{template "preferences" .Path}}
       </div>
@@ -170,15 +197,25 @@
      with .htmx-request; this is fixed shell chrome, so :has() on the body is
      what turns it on — no per-trigger attribute, no JavaScript. It is fixed and
      transparent at rest, so it can never move the layout when it appears. */}}
-<div class="inflight" aria-hidden="true"><i></i></div>
+<template id="view-skel">{{template "viewskeleton"}}</template>
+
 
 <nav class="tabbar" aria-label="{{T "nav.menu"}}">
   <a href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview" data-tip="{{T "nav.overview"}}">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
   <a href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks" data-tip="{{T "nav.stacks"}}">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
   <a href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services" data-tip="{{T "nav.services"}}">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
   <a href="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" data-nav="observability" data-tip="{{T "nav.observability"}}">{{icon "chart"}}<span>{{T "nav.observability"}}</span></a>
+  <a class="tabbar-current is-active" href="#" hidden aria-current="page" onclick="return false"><span></span></a>
   <button type="button" data-drawer-open aria-label="{{T "nav.menu"}}" data-tip="{{T "nav.menu"}}">{{icon "menu"}}<span>{{T "nav.menu"}}</span></button>
 </nav>
+
+<div class="cmdk" id="cmdk" hidden role="dialog" aria-modal="true" aria-label="{{T "nav.jump"}}">
+  <div class="cmdk-panel">
+    <div class="cmdk-input">{{icon "search"}}<input id="cmdk-q" type="text" autocomplete="off" spellcheck="false" placeholder="{{T "nav.jump"}}" aria-label="{{T "nav.jump"}}" role="combobox" aria-expanded="true" aria-controls="cmdk-list"></div>
+    <ul class="cmdk-list" id="cmdk-list" role="listbox"></ul>
+    <p class="cmdk-empty" id="cmdk-empty" hidden>{{T "nav.jump_none"}}</p>
+  </div>
+</div>
 
 <div class="modal-backdrop" id="modal" hidden onclick="if(event.target===this)closeModal()">
   <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
@@ -199,6 +236,7 @@
     el.setAttribute('role', 'status');
     el.textContent = msg;
     document.body.appendChild(el);
+    setTimeout(function () { el.classList.add('is-out'); }, 2300);
     setTimeout(function () { el.remove(); }, 2600);
   }
 
@@ -312,6 +350,90 @@
     if (e.target.closest('[data-drawer-close]')) closeDrawer();
   });
 
+  /* the menu is a bottom sheet on phones: drag its header down to dismiss */
+  (function () {
+    var head = document.querySelector('.sidebar-head'), sb = document.getElementById('sidebar'), y0 = null;
+    if (!head || !sb) return;
+    head.addEventListener('touchstart', function (e) { y0 = e.touches[0].clientY; sb.style.transition = 'none'; }, { passive: true });
+    head.addEventListener('touchmove', function (e) {
+      if (y0 === null) return;
+      sb.style.transform = 'translateY(' + Math.max(0, e.touches[0].clientY - y0) + 'px)';
+    }, { passive: true });
+    head.addEventListener('touchend', function (e) {
+      if (y0 === null) return;
+      var dy = e.changedTouches[0].clientY - y0; y0 = null;
+      sb.style.transition = ''; sb.style.transform = '';
+      if (dy > 70) closeDrawer();
+    });
+  })();
+
+  /* pull the dock up to open the menu sheet (the mirror of dragging its header down) */
+  (function () {
+    var dock = document.querySelector('.tabbar'), p0 = null;
+    if (!dock) return;
+    dock.addEventListener('touchstart', function (e) { p0 = { x: e.touches[0].clientX, y: e.touches[0].clientY }; }, { passive: true });
+    dock.addEventListener('touchend', function (e) {
+      if (!p0) return;
+      var dx = e.changedTouches[0].clientX - p0.x, dy = e.changedTouches[0].clientY - p0.y; p0 = null;
+      if (dy < -36 && Math.abs(dy) > Math.abs(dx) * 1.2) openDrawer();
+    }, { passive: true });
+    dock.addEventListener('touchcancel', function () { p0 = null; }, { passive: true });
+  })();
+
+  /* ---- command palette: jump to any console page ----
+     Built from the sidebar's own links at open time, so it can never list a page
+     the nav does not (role-gated entries included). */
+  (function () {
+    var box = document.getElementById('cmdk'), q = document.getElementById('cmdk-q'),
+        list = document.getElementById('cmdk-list'), empty = document.getElementById('cmdk-empty');
+    if (!box || !q) return;
+    var items = [], sel = 0, prev = null;
+    function collect() {
+      items = [];
+      document.querySelectorAll('#sidebar .nav-item').forEach(function (a) {
+        var label = (a.querySelector('span') || a).textContent.trim();
+        var grp = a.closest('.nav-group');
+        var head = grp ? grp.querySelector('.nav-label') : null;
+        if (!head) { var p = a; while ((p = p.previousElementSibling)) { if (p.classList.contains('nav-label')) { head = p; break; } } }
+        items.push({ label: label, group: head ? head.textContent.trim() : '', el: a, ext: a.target === '_blank' });
+      });
+    }
+    function render() {
+      var term = q.value.trim().toLowerCase();
+      var shown = items.filter(function (i) { return !term || (i.label + ' ' + i.group).toLowerCase().indexOf(term) >= 0; });
+      list.textContent = '';
+      shown.forEach(function (i, n) {
+        var li = document.createElement('li');
+        li.setAttribute('role', 'option');
+        li.className = 'cmdk-item' + (n === sel ? ' is-sel' : '');
+        var a = document.createElement('span'); a.className = 'cmdk-item-label'; a.textContent = i.label;
+        var g = document.createElement('span'); g.className = 'cmdk-item-group'; g.textContent = i.group;
+        li.appendChild(a); li.appendChild(g);
+        li.addEventListener('mousemove', function () { sel = n; mark(); });
+        li.addEventListener('click', function () { go(i); });
+        li._item = i; list.appendChild(li);
+      });
+      empty.hidden = shown.length > 0;
+    }
+    function mark() { Array.prototype.forEach.call(list.children, function (li, n) { li.classList.toggle('is-sel', n === sel); if (n === sel) li.scrollIntoView({ block: 'nearest' }); }); }
+    function go(i) { close(); if (i.ext) window.open(i.el.href, '_blank', 'noopener'); else i.el.click(); }
+    function open() { collect(); sel = 0; q.value = ''; render(); prev = document.activeElement; box.hidden = false; q.focus(); }
+    function close() { box.hidden = true; if (prev && prev.focus) prev.focus(); }
+    q.addEventListener('input', function () { sel = 0; render(); });
+    q.addEventListener('keydown', function (e) {
+      var n = list.children.length;
+      if (e.key === 'ArrowDown') { e.preventDefault(); if (n) { sel = (sel + 1) % n; mark(); } }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); if (n) { sel = (sel - 1 + n) % n; mark(); } }
+      else if (e.key === 'Enter') { e.preventDefault(); var li = list.children[sel]; if (li) go(li._item); }
+      else if (e.key === 'Escape') { e.preventDefault(); close(); }
+    });
+    box.addEventListener('click', function (e) { if (e.target === box) close(); });
+    document.addEventListener('click', function (e) { if (e.target.closest('[data-cmdk-open]')) open(); });
+    document.addEventListener('keydown', function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); box.hidden ? open() : close(); }
+    });
+  })();
+
   /* ---- active navigation ----
      Fragments are swapped by htmx, so the shell cannot re-render its own
      active state server-side on every navigation. Keep it synced here. */
@@ -330,8 +452,144 @@
       if (crumb) crumb.textContent = label.textContent;
       document.title = label.textContent + ' · {{T "app.title"}}';
     }
+    // Phone header: the page name in the bar would repeat the big h1 right under it, so it only appears once the h1 has scrolled away.
+    (function () {
+      var bar = document.querySelector('.topbar'), h1 = document.querySelector('#view h1');
+      if (!bar) return;
+      if (window.__h1io) { window.__h1io.disconnect(); window.__h1io = null; }
+      if (!h1 || !('IntersectionObserver' in window)) { bar.classList.remove('title-away'); bar.classList.toggle('no-h1', !h1); return; }
+      bar.classList.remove('no-h1');
+      window.__h1io = new IntersectionObserver(function (en) {
+        bar.classList.toggle('title-away', !en[0].isIntersecting && en[0].boundingClientRect.top < 0);
+      }, { rootMargin: '-64px 0px 0px 0px' });
+      window.__h1io.observe(h1);
+    })();
+    // Phone dock: a page that is not one of the four pinned destinations borrows a slot, so the bar always
+    // shows where you are; it goes away again as soon as you are back on a pinned page.
+    var dock = document.querySelector('.tabbar'), cur = dock && dock.querySelector('.tabbar-current');
+    if (cur) {
+      var pinned = dock.querySelector('a[data-nav].is-active'), src = document.querySelector('.sidebar .nav-item.is-active');
+      if (!pinned && src && src.querySelector('svg') && src.querySelector('span')) {
+        cur.replaceChildren(src.querySelector('svg').cloneNode(true), src.querySelector('span').cloneNode(true));
+        cur.hidden = false; dock.classList.add('has-current');
+      } else { cur.hidden = true; dock.classList.remove('has-current'); }
+    }
+    document.querySelectorAll('.nav-group').forEach(function (g) {
+      if (g.querySelector('.is-active')) setGroup(g, true);
+    });
     closeDrawer();
   }
+  function setGroup(g, open) {
+    g.classList.toggle('is-open', open);
+    var b = g.querySelector('.nav-toggle');
+    if (b) b.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('.nav-toggle');
+    if (t) setGroup(t.parentNode, !t.parentNode.classList.contains('is-open'));
+  });
+  /* Refresh keeps your place: scroll position, typed filters and open sections survive the content swap. */
+  var keep = null;
+  document.addEventListener('htmx:beforeRequest', function (e) {
+    var el = e.detail && e.detail.elt, view = document.getElementById('view');
+    if (!el || !el.classList || !el.classList.contains('btn-refresh') || !view) return;
+    keep = {
+      y: window.scrollY, h: view.offsetHeight,
+      fields: Array.prototype.map.call(view.querySelectorAll('input, select, textarea'), function (f) {
+        return { key: f.id || f.name || '', type: f.type, value: f.value, checked: f.checked };
+      }),
+      open: Array.prototype.map.call(view.querySelectorAll('details'), function (d) { return d.open; })
+    };
+    view.style.minHeight = keep.h + 'px';
+  });
+  function restoreKept(view) {
+    if (!keep) return;
+    var k = keep; keep = null;
+    var seen = {};
+    view.querySelectorAll('input, select, textarea').forEach(function (f) {
+      var key = f.id || f.name || ''; if (!key || f.type === 'hidden' || f.type === 'file' || f.type === 'password') return;
+      var saved = k.fields.filter(function (s) { return s.key === key && s.type === f.type; })[seen[key] = (seen[key] || 0)];
+      seen[key]++;
+      if (!saved) return;
+      if (f.type === 'checkbox' || f.type === 'radio') { if (f.checked !== saved.checked) f.checked = saved.checked; }
+      else if (f.value !== saved.value && !f.disabled) { f.value = saved.value; f.dispatchEvent(new Event('input', { bubbles: true })); }
+    });
+    view.querySelectorAll('details').forEach(function (d, i) { if (k.open[i] !== undefined) d.open = k.open[i]; });
+    window.scrollTo(0, k.y);
+    requestAnimationFrame(function () { view.style.minHeight = ''; window.scrollTo(0, k.y); });
+  }
+  document.addEventListener('htmx:responseError', function () { var v = document.getElementById('view'); if (v) v.style.minHeight = ''; keep = null; });
+  /* Navigation loading: if the next page takes more than a beat, the old page gives way to a shaped, shimmering skeleton
+     (a fast response never flashes it). Refreshes update in place and never show it. */
+  var skel = { timer: null, prev: null, on: false };
+  function skelClear() { clearTimeout(skel.timer); skel.timer = null; }
+  function skelRestore() {
+    var v = document.getElementById('view');
+    if (skel.on && v && skel.prev !== null) v.innerHTML = skel.prev;
+    skel.on = false; skel.prev = null; if (v) v.removeAttribute('aria-busy');
+  }
+  document.addEventListener('htmx:beforeRequest', function (e) {
+    var d = e.detail || {}, v = document.getElementById('view'), el = d.elt;
+    if (!v || d.target !== v || !el || (el.classList && el.classList.contains('btn-refresh'))) return;
+    if (!d.requestConfig || String(d.requestConfig.verb).toLowerCase() !== 'get' || v.querySelector('.page-skel')) return;
+    skelClear();
+    skel.timer = setTimeout(function () {
+      var t = document.getElementById('view-skel'); if (!t) return;
+      skel.prev = v.innerHTML; skel.on = true;
+      v.innerHTML = ''; v.appendChild(t.content.cloneNode(true)); v.setAttribute('aria-busy', 'true');
+      window.scrollTo(0, 0);
+    }, 160);
+  });
+  document.addEventListener('htmx:afterRequest', function (e) { if (e.detail && e.detail.target === document.getElementById('view')) { skelClear(); skel.on = false; skel.prev = null; var v = document.getElementById('view'); if (v) v.removeAttribute('aria-busy'); } });
+  ['htmx:sendError', 'htmx:timeout', 'htmx:abort'].forEach(function (n) { document.addEventListener(n, function () { skelClear(); skelRestore(); }); });
+  // history snapshots must hold the real page, never the skeleton
+  document.addEventListener('htmx:beforeHistorySave', function () { if (skel.on) skelRestore(); });
+
+  /* Refresh updates in place: the new page is diffed against the one on screen and only what differs is touched,
+     so nothing flashes and focus, scroll, typed text and open sections stay exactly as they are. */
+  function morphKids(from, to) {
+    var f = from.firstChild, t = to.firstChild;
+    while (t) {
+      var nt = t.nextSibling;
+      if (!f) { from.appendChild(t); }
+      else if (f.nodeType === 3 && t.nodeType === 3) { if (f.nodeValue !== t.nodeValue) f.nodeValue = t.nodeValue; f = f.nextSibling; }
+      else if (f.nodeType === 1 && t.nodeType === 1 && f.tagName === t.tagName && (f.id || '') === (t.id || '')) { morphEl(f, t); f = f.nextSibling; }
+      else { var nf = f.nextSibling; from.replaceChild(t, f); f = nf; }
+      t = nt;
+    }
+    while (f) { var nx = f.nextSibling; from.removeChild(f); f = nx; }
+  }
+  function morphEl(a, b) {
+    var tag = a.tagName;
+    Array.prototype.slice.call(b.attributes).forEach(function (at) {
+      if ((tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') && (at.name === 'value' || at.name === 'checked')) return;
+      if (tag === 'DETAILS' && at.name === 'open') return;
+      if (at.name === 'class' && a.classList.contains('htmx-request')) { var c = at.value.split(/\s+/).concat('htmx-request').join(' '); if (a.getAttribute('class') !== c) a.setAttribute('class', c); return; }
+      if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+    });
+    Array.prototype.slice.call(a.attributes).forEach(function (at) {
+      if (b.hasAttribute(at.name)) return;
+      if (tag === 'DETAILS' && at.name === 'open') return;
+      if ((tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') && (at.name === 'value' || at.name === 'checked')) return;
+      if (at.name === 'class' || at.name === 'disabled' || at.name === 'aria-busy') { if (at.name !== 'class') a.removeAttribute(at.name); return; }
+      a.removeAttribute(at.name);
+    });
+    if (tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'SCRIPT') return;
+    if (tag === 'INPUT') return;
+    morphKids(a, b);
+  }
+  document.addEventListener('htmx:beforeSwap', function (e) {
+    var cfg = e.detail && e.detail.requestConfig, el = cfg && cfg.elt, view = document.getElementById('view');
+    if (!el || !el.classList || !el.classList.contains('btn-refresh') || !view || e.detail.target !== view) return;
+    if (e.detail.xhr.status !== 200 || !e.detail.serverResponse) return;
+    var doc = new DOMParser().parseFromString('<body>' + e.detail.serverResponse + '</body>', 'text/html');
+    e.detail.shouldSwap = false;
+    keep = null; view.style.minHeight = '';
+    morphKids(view, doc.body);
+    if (window.htmx) htmx.process(view);
+    view.dispatchEvent(new CustomEvent('htmx:afterSettle', { bubbles: true }));
+    syncNav(location.pathname);
+  });
   document.addEventListener('htmx:afterSwap', function (e) {
     // openModal() refuses to open an empty dialog, so an onclick=openModal() that fires ahead of its
     // htmx request is a no-op the first time. Open (and focus) once the content has actually landed;
@@ -339,6 +597,7 @@
     if (e.target && e.target.id === 'modal-body') { openModal(); return; }
     if (e.target && e.target.id === 'view') {
       syncNav(location.pathname);
+      restoreKept(e.target);
       e.target.querySelectorAll('[data-focus]').forEach(function (el) { el.focus(); });
       // The stack inspector renders below the index (the operator keeps the
       // list and the open stack on the same page). Bring it into view so a

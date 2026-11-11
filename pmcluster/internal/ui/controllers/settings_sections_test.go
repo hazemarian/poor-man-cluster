@@ -51,7 +51,7 @@ func TestControllers_SettingsSectionsStateHeadingAndPurpose(t *testing.T) {
 		{"sect-connection", "Connection", "How this console reaches the daemon"},
 		{"sect-github", "GitHub App", "installation tokens minted on demand"},
 		{"sect-identity", "Identity and sign-in", "The domain the cluster answers on"},
-		{"sect-runners", "Self-hosted CI runners", "one GitHub Actions runner container per selected worker node"},
+		{"sect-runners", "Self-Hosted CI Runners", "one GitHub Actions runner container per selected worker node"},
 		{"sect-backups", "Backups", "Needs a backup store"},
 		{"sect-advanced", "Advanced", "Paths and levels that rarely change"},
 	} {
@@ -218,7 +218,7 @@ func TestControllers_SettingsShowsTheRunnersSummary(t *testing.T) {
 	h := settingsPageAs(t, store.RoleAdmin)
 	body := h.get(t, "/web/settings/cluster").Body.String()
 
-	if !strings.Contains(body, "What is registered now") {
+	if !strings.Contains(body, "What Is Registered Now") {
 		t.Fatal("the runners section has no summary")
 	}
 	if !strings.Contains(body, "worker-1, worker-2") {
@@ -242,7 +242,7 @@ func TestControllers_SettingsSaveNamesTheChangedSections(t *testing.T) {
 	if !strings.Contains(body, "Settings saved. Changed:") {
 		t.Fatalf("a successful save says nothing about what changed")
 	}
-	if !strings.Contains(body, `<span class="pill good">Self-hosted CI runners</span>`) {
+	if !strings.Contains(body, `<span class="pill good">Self-Hosted CI Runners</span>`) {
 		t.Error("the confirmation does not name the CI runners section")
 	}
 	if !strings.Contains(body, `data-dismiss`) {

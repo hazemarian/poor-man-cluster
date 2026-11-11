@@ -205,7 +205,7 @@
 
 {{define "services_sub"}}{{if .Known}}{{T "services.sub"}}{{else}}{{T "services.sub_unknown"}}{{end}}{{end}}
 
-{{define "services_actions"}}<a class="btn btn-ghost btn-sm" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.deploy"}}">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>{{end}}
+{{define "services_actions"}}<a class="btn btn-primary btn-sm" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.deploy"}}">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>{{end}}
 
 {{define "services_action2"}}<a class="btn btn-primary btn-sm" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "services.empty_action"}}">{{icon "deploy"}}<span>{{T "services.empty_action"}}</span></a>{{end}}
 

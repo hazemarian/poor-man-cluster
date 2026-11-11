@@ -231,7 +231,7 @@ func init() {
 		"configs.restore_confirm":   "إرجاع {0} إلى الإصدار {1}؟ يُحفظ المتن الحالي كإصدار، فلا يُفقد شيء.",
 		"configs.restore_hint":      "ينشئ التراجع إصدارًا جديدًا.",
 		"configs.versions_empty":    "لا توجد إصدارات سابقة بعد. يسجّل أول حفظ الإصدار 1.",
-		"configs.meta":              "النطاق {0}\u00a0· النوع {1}",
+		"configs.meta":              "النطاق {0}\u2002·\u2002النوع {1}",
 		"configs.meta_stack":        "الحزمة {0}",
 		"configs.kind_file":         "file — متن حرفي",
 		"configs.kind_template":     "template — قالب Go مع متغيّرات",

@@ -44,7 +44,7 @@
      anything else (or none) for the plain Refresh a page header carries. */}}
 {{define "refreshbtn"}}
 {{$l := "common.refresh"}}{{if eq .Label "retry"}}{{$l = "common.retry"}}{{end}}
-<button type="button" class="btn btn-ghost btn-sm" hx-get="{{.URL}}" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" data-tip="{{T $l}}">{{icon "refresh"}}<span>{{T $l}}</span></button>
+<button type="button" class="btn btn-ghost btn-sm{{if ne .Label "retry"}} btn-refresh{{end}}" hx-get="{{.URL}}" hx-target="#view" hx-disabled-elt="this" data-tip="{{T $l}}">{{icon "refresh"}}<span>{{T $l}}</span></button>
 {{end}}
 
 {{/* The one empty state: optional icon, title, a sentence, optional action, then an optional extra block (error details) below it.

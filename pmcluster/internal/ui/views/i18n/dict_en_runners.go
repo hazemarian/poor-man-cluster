@@ -14,7 +14,7 @@ func init() {
 		"runners.enabled":  "enabled",
 		"runners.disabled": "disabled",
 
-		"runners.picker_title":   "Which workers may run a runner",
+		"runners.picker_title":   "Which Workers May Run a Runner",
 		"runners.picker_sub":     "Each selected worker runs one ephemeral runner container and registers it in the org's runner group. Managers are not selectable: they run the control plane, and a build there marks the node Down.",
 		"runners.capacity":       "Capacity is the list: one runner per selected node. Each node is capped at {0} unless its row carries its own cap — a shared cap fits one machine and is permission to OOM the next. The memory column is that node's available memory right now.",
 		"runners.col_select":     "Select",
@@ -33,7 +33,7 @@ func init() {
 		"runners.save_nodes":     "Save selection",
 		"runners.save_hint":      "Adding a node starts a runner there on the next reconcile; removing one stops and de-registers it. A cap above 70 % of a node's RAM is refused — leave the field blank to use the cluster default.",
 
-		"runners.table_title":  "Runners on the cluster",
+		"runners.table_title":  "Runners on the Cluster",
 		"runners.col_scope":    "Scope",
 		"runners.col_state":    "State",
 		"runners.col_mode":     "Mode",

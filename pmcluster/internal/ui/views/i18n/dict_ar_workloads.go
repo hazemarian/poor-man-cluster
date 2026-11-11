@@ -27,7 +27,7 @@ func init() {
 	register(AR, map[string]string{
 		// ---- stacks list -----------------------------------------------------
 		"stacks.title":           "الحزم",
-		"stacks.sub":             "{0}\u00a0· أحدث تغيير {1}",
+		"stacks.sub":             "{0}\u2002·\u2002أحدث تغيير {1}",
 		"stacks.sub_unknown":     "قائمة الحزم غير متاحة — لم تستجب واجهة API للعنقود",
 		"stacks.list_title":      "الحزم المُطلقة",
 		"stacks.search_ph":       "اكتب اسمًا أو مراجعة أو مستودعًا للتصفية",

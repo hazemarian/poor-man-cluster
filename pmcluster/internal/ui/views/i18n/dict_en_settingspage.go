@@ -38,7 +38,7 @@ func init() {
 		"settings.err_permission_hint":       "This reads as a permission failure: the App needs Organization → Self-hosted runners: Read & write, and a permission change only reaches the daemon once the installation token is re-minted — rotate the key in the GitHub App section, or re-install the App, then run Test connection.",
 
 		// ---------- runners summary (read-only; the picker lives on /web/runners) ----------
-		"settings.runners_summary_title":   "What is registered now",
+		"settings.runners_summary_title":   "What Is Registered Now",
 		"settings.runners_summary_off":     "Off — no runner container exists and none is registered at GitHub.",
 		"settings.runners_summary_nodes":   "Selected workers:",
 		"settings.runners_summary_none":    "no worker selected yet.",
@@ -62,7 +62,7 @@ func init() {
 // clustersettings.* namespace owns live next to the form that uses them).
 func init() {
 	register(EN, map[string]string{
-		"clustersettings.sect_identity":       "Identity and sign-in",
+		"clustersettings.sect_identity":       "Identity and Sign-In",
 		"clustersettings.sect_identity_sub":   "The domain the cluster answers on, and who is allowed to sign in.",
 		"clustersettings.sect_identity_needs": "Needs a provider the daemon knows plus a client id and secret from it; with single sign-on off, the built-in password form stays in charge.",
 		"clustersettings.sect_advanced":       "Advanced",

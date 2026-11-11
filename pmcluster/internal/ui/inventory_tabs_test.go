@@ -172,8 +172,8 @@ func TestSettingsLinksInventoryAndKeepsForms(t *testing.T) {
 
 	// The create/edit forms the Platform tab targets keep working.
 	forms := map[string][]string{
-		"/web/settings/configs/new":             {"Add config", "/web/settings/configs/add"},
-		"/web/settings/secrets/new":             {"Add secret", "/web/settings/secrets/add"},
+		"/web/settings/configs/new":             {"Add Config", "/web/settings/configs/add"},
+		"/web/settings/secrets/new":             {"Add Secret", "/web/settings/secrets/add"},
 		"/web/settings/configs/edit/nginx_conf": {`Edit config`, "/web/settings/configs/edit"},
 		"/web/settings/secrets/edit/db_pass":    {`Edit secret`, "/web/settings/secrets/edit"},
 	}

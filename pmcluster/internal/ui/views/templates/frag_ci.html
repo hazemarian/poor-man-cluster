@@ -31,7 +31,7 @@
 <div class="panel">
   {{if .Rows}}
   <div class="panel-body tight">
-    <div class="table-wrap">
+    <div class="table-wrap only-md">
       <table class="table">
         <thead>
           <tr>
@@ -62,6 +62,24 @@
           {{end}}
         </tbody>
       </table>
+    </div>
+
+    {{/* Phones: one card per repository. Six columns do not fit 390px, and the Detail
+         column (why it failed, plus the link to the run) was the one scrolled away. */}}
+    <div class="only-sm ci-cards">
+      {{range .Rows}}
+      <article class="ci-card{{if eq .State "failed"}} is-failed{{end}}">
+        <div class="ci-card-top">
+          <span class="mono ci-repo">{{.Repo}}</span>
+          <span class="pill {{.Class}}"><i class="dot"></i>{{T (printf "ci.state_%s" .State)}}</span>{{if .Inferred}}<span class="muted" data-tip="{{T "ci.inferred_tip"}}">*</span>{{end}}
+        </div>
+        <div class="ci-card-meta muted">
+          <span>{{.Workflow}}</span>{{if .SHA}}<span class="mono">{{.SHA}}</span>{{end}}<span class="num">{{.Age}}</span>
+        </div>
+        {{if .Detail}}<p class="ci-card-detail">{{.Detail}}</p>{{end}}
+        {{if .URL}}<a class="btn btn-sm ci-open" href="{{.URL}}" target="_blank" rel="noopener" data-tip="{{T "ci.open"}}">{{icon "external"}}<span>{{T "ci.open"}}</span></a>{{end}}
+      </article>
+      {{end}}
     </div>
   </div>
   {{else}}

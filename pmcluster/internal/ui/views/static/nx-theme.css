@@ -913,51 +913,660 @@ html:root:root #sect-advanced > details.panel-details { width: 100%; max-width: 
   html:root:root .only-sm .stack-card-actions .btn { min-width: 0; white-space: normal; text-align: center; }
 }
 
-/* Console chrome: a steady navigation rail and a light contextual toolbar. */
-html:root:root .sidebar {
-  background: var(--nx-panel);
-  border-inline-end: 1px solid color-mix(in srgb, var(--nx-fg) 9%, transparent);
-  box-shadow: none;
-}
-html:root:root[data-theme="dark"] .sidebar,
-html:root:root[dir="rtl"] .sidebar,
-html:root:root[data-theme="dark"][dir="rtl"] .sidebar { box-shadow: none; }
-html:root:root .sidebar-head {
-  height: 76px; padding-inline: 20px;
-  border-bottom: 1px solid color-mix(in srgb, var(--nx-fg) 8%, transparent);
-}
-html:root:root .sidebar .logo-mark { box-shadow: none; }
-html:root:root .nav { gap: 2px; padding: 20px 12px; }
-html:root:root .nav-label { padding: 20px 12px 8px; color: var(--nx-dim); font-size: 10px; letter-spacing: .1em; }
-html:root:root .nav-label:first-child { padding-top: 0; }
-html:root:root .nav-item { min-height: 37px; gap: 12px; border-radius: 8px; padding-inline: 12px; }
-html:root:root .nav-item .ic { width: 17px; height: 17px; }
-html:root:root .nav-item.is-active { color: var(--text-primary); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-html:root:root .nav-item.is-active::before { content: ""; position: absolute; inset-inline-start: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--accent); }
-html:root:root .sidebar-foot { padding: 14px 12px; border-top: 1px solid color-mix(in srgb, var(--nx-fg) 8%, transparent); }
-html:root:root .foot-row { min-height: 42px; padding: 0 4px; }
-html:root:root .who-name { color: var(--text-primary); font-weight: 600; }
-html:root:root .sidebar-foot .btn { color: var(--nx-dim); }
-html:root:root .topbar {
-  height: 76px; background: var(--bg-body); box-shadow: none; clip-path: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--nx-fg) 8%, transparent);
-  padding-inline: 40px;
-}
+/* Console chrome v2: quiet header controls, collapsible lower nav groups, a
+   one-line account row. Nav hover/active rules are deliberately untouched. */
+html:root:root .topbar { border-bottom: 0; box-shadow: none; }
 html:root:root[data-theme="dark"] .topbar { box-shadow: none; }
-html:root:root .crumbs { gap: 12px; font-size: 13px; }
-html:root:root .crumbs strong { font-size: 14px; font-weight: 600; }
-html:root:root .topbar-end .preferences { gap: 4px; padding: 4px; border: 1px solid color-mix(in srgb, var(--nx-fg) 8%, transparent); border-radius: 12px; }
-html:root:root .topbar-end .preference-control { background: transparent; }
-html:root:root .topbar-end .preference-control:hover { background: var(--fill); }
+html:root:root .topbar-end .preferences { gap: 2px; }
+html:root:root .topbar .preference-control { width: 34px; min-height: 34px; padding: 0; justify-content: center; background: transparent; border-radius: 10px; color: var(--nx-dim); }
+html:root:root .topbar .preference-control:hover { background: var(--fill); color: var(--text-primary); }
+html:root:root .topbar .preference-control > span:not([class]),
+html:root:root .topbar .preference-control > span > span:not(.sr-only),
+html:root:root .topbar .palette-label { display: none; }
+html:root:root .topbar .preference-control .ic { width: 17px; height: 17px; }
+html:root:root .nav-label { color: var(--nx-dim); }
+html:root:root .nav-toggle {
+  display: flex; align-items: center; justify-content: space-between; width: 100%;
+  background: transparent; border: 0; text-align: start; cursor: pointer; font-family: inherit;
+}
+html:root:root .nav-toggle:hover { color: var(--text-primary); }
+html:root:root .nav-toggle .ic { width: 13px; height: 13px; transition: rotate .15s; }
+html:root:root .nav-group.is-open .nav-toggle .ic { rotate: 180deg; }
+html:root:root .nav-group { display: flex; flex-direction: column; gap: 3px; }
+@media (min-width: 1024px), (max-width: 767px) {
+  html:root:root .nav-group:not(.is-open) > .nav-item { display: none; }
+}
 @media (min-width: 768px) and (max-width: 1023px) {
-  html:root:root .sidebar-head { padding-inline: 0; }
-  html:root:root .nav { padding-inline: 8px; }
-  html:root:root .nav-item { padding-inline: 0; }
-  html:root:root .topbar { padding-inline: 20px; }
+  html:root:root .nav-toggle { display: none; }
+}
+html:root:root .sidebar-foot .foot-row { gap: 10px; padding: 4px 4px 4px 8px; }
+html:root:root .sidebar-foot .foot-row .icon-btn { color: var(--nx-dim); }
+html:root:root .nav-group > .nav-toggle:first-child { padding-top: 20px; }
+
+/* Mobile refinement: roomier drawer, ghost menu button, clean 2x2 stat grid,
+   full-width page actions. Group labels get one rhythm everywhere. */
+html:root:root .nav-group > .nav-toggle:first-child { padding-top: 24px; padding-bottom: 8px; }
+@media (max-width: 767px) {
+  html:root:root .sidebar { width: min(86vw, 320px); }
+  html:root:root .scrim { background: rgba(0, 0, 0, .42); backdrop-filter: blur(2px); }
+  html:root:root .sidebar-head { height: 64px; }
+  html:root:root .sidebar-head .sidebar-close { margin-inline-start: auto; }
+  html:root:root .nav { padding: 8px 12px 16px; }
+  html:root:root .nav-label { padding: 22px 12px 8px; }
+  html:root:root .nav-label:first-child { padding-top: 12px; }
+  html:root:root .sidebar-foot { padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid color-mix(in srgb, var(--nx-fg) 8%, transparent); }
+  html:root:root .topbar { height: 56px; padding-inline: 8px 10px; }
+  html:root:root .topbar .icon-btn.only-sm { width: 40px; height: 40px; background: transparent; border-radius: 10px; color: var(--text-primary); }
+  html:root:root .topbar .icon-btn.only-sm:active { background: var(--fill-2); }
+  html:root:root .topbar .crumbs > span:first-child, html:root:root .topbar .crumbs .sep { display: none; }
+  html:root:root .topbar .crumbs strong { font-size: 15px; }
+  html:root:root .topbar .preference-control { width: 40px; min-height: 40px; }
+  html:root:root .page-head h1 { font-size: 26px; }
+  html:root:root .page-head .ph-actions { justify-content: stretch; }
+  html:root:root .page-head .ph-actions > .btn,
+  html:root:root .page-head .ph-actions > form { flex: 1 1 0; }
+  html:root:root .page-head .ph-actions > form .btn { width: 100%; }
+  html:root:root .page-head .ph-actions > .btn { justify-content: center; min-height: 44px; }
+  html:root:root .stats { gap: 1px; background: color-mix(in srgb, var(--nx-fg) 8%, transparent); overflow: hidden; border-radius: var(--r-card); }
+  html:root:root .stats > .stat, html:root:root .stats > .stat + .stat, html:root:root[dir="rtl"] .stats > .stat + .stat,
+  html:root:root .stats > .stat:first-child { box-shadow: none; border: 0; border-radius: 0; background: var(--nx-panel); }
 }
 @media (max-width: 767px) {
-  html:root:root .sidebar-head { height: 72px; padding-inline: 16px 12px; }
-  html:root:root .nav-item { min-height: 44px; }
-  html:root:root .topbar { height: 64px; padding-inline: 12px; }
-  html:root:root .topbar-end .preferences { padding: 2px; }
+  html:root:root .page-head .ph-actions { align-self: stretch; flex-wrap: nowrap; }
+  html:root:root .nav-group > .nav-toggle:first-child { padding: 16px 12px 8px; }
+}
+
+/* An empty state's footnote sits below its action with real air between them. */
+html:root:root .empty .empty-actions + :is(p, .muted, details, .code-wrap) { margin-top: 22px; }
+html:root:root .empty .empty-actions + p { line-height: 1.55; }
+/* A panel footnote wraps; it must never run off as one clipped line. */
+html:root:root .panel-foot { flex-wrap: wrap; }
+html:root:root .panel-foot > span:not(.spacer) { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+
+/* Flow rhythm inside panels. Templates stacked prose directly on a table, kv
+   list or code block and relied on a hand-added mt-* to separate them; where it
+   was forgotten the text touched its container. The gap belongs to the pair. */
+html:root:root :is(.panel-body, .panel-pad, .callout, details.panel-details > div) > :is(p, .muted, .hint, h3, h4) + :is(.kv, pre, .code-wrap, .table-wrap, table, .stats, .grid, .cards, form, .seg, .tabs, details, .field, .form-grid),
+html:root:root :is(.panel-body, .panel-pad, details.panel-details > div) > :is(.kv, pre, .code-wrap, .table-wrap, table, .stats, form, details) + :is(p, .muted, .hint) {
+  margin-top: 16px;
+}
+html:root:root .panel-body > :is(p, .muted) + :is(p, .muted) { margin-top: 8px; }
+
+/* Node cards: the header owns the only rule. The old per-metric top divider was
+   written for a single column; in the side-by-side grid it drew a second line
+   over the second column, right under the header's. */
+html:root:root .obs-series { gap: 20px 28px; padding-top: 16px; }
+html:root:root .obs-series > div, html:root:root .obs-series > div:last-child { padding: 0; box-shadow: none; }
+html:root:root .obs-series > div + div { box-shadow: none; }
+
+/* ---- Stack detail refinement ---- */
+/* Panels: the body sits close under its head; the head already carries the air. */
+html:root:root .panel > .panel-head + .panel-body { padding-top: 8px; }
+/* Badge card: icon clear of its label, code and copy button on one line, hint set apart. */
+html:root:root .card > .card-inner > .kv-row .k .ic { margin-inline-end: 8px; vertical-align: -3px; }
+html:root:root .card > .card-inner > .kv-row .v { display: flex; align-items: center; gap: 8px; min-width: 0; }
+html:root:root .card > .card-inner > .kv-row .v > code { flex: 1 1 auto; min-width: 0; }
+html:root:root .card > .card-inner > .kv-row .v > .btn { flex: none; }
+html:root:root .card > .card-inner > .sub { margin: 16px 4px 0; max-width: none; line-height: 1.55; font-size: 14px; color: var(--nx-dim); }
+html:root:root .card { margin-bottom: 24px; }
+/* Move: one joined control instead of a loose input among the buttons. */
+html:root:root .stack-move { gap: 0; background: var(--fill); border-radius: var(--r-control); padding: 0; }
+html:root:root .stack-move .input { width: 150px; background: transparent; border: 0; box-shadow: none; border-radius: var(--r-control) 0 0 var(--r-control); }
+html:root:root .stack-move .btn { border-radius: 0 var(--r-control) var(--r-control) 0; background: transparent; }
+html:root:root .stack-move .btn:hover { background: var(--fill-2); }
+/* Revision rows: fixed action slots so dates and icons line up whether or not a row can roll back. */
+html:root:root .rev-actions { display: grid; grid-template-columns: 44px 44px; min-width: 0; justify-content: end; }
+html:root:root .rev-actions > * { grid-row: 1; }
+html:root:root .rev-actions > form { grid-column: 2; }
+html:root:root .rev-actions > button:first-child { grid-column: 1; }
+html:root:root .rev-when { white-space: nowrap; }
+html:root:root .rev-main .pill { flex: none; white-space: nowrap; }
+html:root:root .rev-list + .sub, html:root:root .panel-body > .kv ~ .sub { max-width: none; }
+@media (max-width: 767px) {
+  html:root:root .page-head .ph-actions { flex-wrap: wrap; }
+  html:root:root .page-head .ph-actions > .btn, html:root:root .page-head .ph-actions > form { flex: 1 1 auto; }
+  html:root:root .stack-move { flex: 1 1 100%; width: 100%; order: 5; }
+  html:root:root .stack-move .input { flex: 1 1 auto; width: auto; min-width: 0; }
+  html:root:root .rev { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main act" "when act"; row-gap: 2px; align-items: center; }
+  html:root:root .rev-main { grid-area: main; flex-wrap: wrap; }
+  html:root:root .rev-when { grid-area: when; }
+  html:root:root .rev-actions { grid-area: act; }
+}
+/* A toolbar with many actions takes its own row under the title, left-aligned with the content. */
+html:root:root .page-head .ph-actions:has(.stack-move) { flex: 1 1 100%; justify-content: flex-start; }
+@media (max-width: 767px) {
+  html:root:root .page-head .ph-actions:has(.stack-move) { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+  html:root:root .page-head .ph-actions:has(.stack-move) > * { min-width: 0; width: 100%; }
+  html:root:root .page-head .ph-actions:has(.stack-move) .btn { width: 100%; justify-content: center; min-height: 44px; }
+  html:root:root .page-head .ph-actions:has(.stack-move) > form:last-child { grid-column: 1 / -1; order: -2; }
+  html:root:root .page-head .ph-actions:has(.stack-move) > .stack-move { grid-column: 1 / -1; order: -1; }
+  html:root:root .page-head .ph-actions:has(.stack-move) .stack-move .btn { width: auto; }
+}
+/* Revision rows: compact with a mouse. The 44px target is a touch size; it stays for coarse pointers. */
+@media (pointer: fine) {
+  html:root:root .rev { padding-block: 5px; }
+  html:root:root .rev-actions { grid-template-columns: 34px 34px; }
+  html:root:root .rev-actions .btn { min-width: 34px !important; min-height: 34px !important; width: 34px; height: 34px; padding: 0; }
+}
+
+/* ============ Topbar v3: page name · jump-to · cluster pulse · quiet prefs ============ */
+html:root:root .topbar { height: 64px; padding-inline: 28px 24px; gap: 16px; background: var(--bg-body); }
+html:root:root .topbar .crumbs { flex: 1 1 0; min-width: 0; }
+html:root:root .topbar .crumbs strong { font-size: 15px; font-weight: 600; letter-spacing: -.005em; }
+html:root:root .topbar-end { flex: 1 1 0; min-width: 0; justify-content: flex-end; gap: 10px; margin-inline-start: 0; }
+
+/* Jump-to: a search-shaped field that opens the command palette. */
+html:root:root .cmdk-trigger {
+  flex: 0 1 380px; min-width: 0; height: 38px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 12px;
+  border: 0; border-radius: 10px; background: var(--fill); color: var(--nx-dim); font: inherit; font-size: 14px; cursor: pointer; text-align: start;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease;
+}
+html:root:root .cmdk-trigger:hover { background: var(--fill-2); color: var(--text-primary); }
+html:root:root .cmdk-trigger .ic { width: 16px; height: 16px; flex: none; }
+html:root:root .cmdk-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html:root:root .cmdk-kbd {
+  flex: none; font: 600 11px/1 var(--mono); padding: 5px 7px; border-radius: 6px; color: var(--nx-dim);
+  background: color-mix(in srgb, var(--nx-fg) 8%, transparent);
+}
+
+/* Cluster pulse: one glance at whether the swarm is healthy. */
+
+/* The palette itself. */
+html:root:root .cmdk { position: fixed; inset: 0; z-index: 92; background: rgba(0, 0, 0, .42); backdrop-filter: blur(2px); display: flex; justify-content: center; align-items: flex-start; padding: 14vh 16px 16px; }
+html:root:root .cmdk[hidden] { display: none; }
+html:root:root .cmdk-panel { width: min(560px, 100%); max-height: 70vh; display: flex; flex-direction: column; overflow: hidden; border-radius: 16px; background: var(--nx-panel); box-shadow: 0 0 0 1px color-mix(in srgb, var(--nx-fg) 8%, transparent), 0 24px 60px rgba(0, 0, 0, .35); }
+html:root:root .cmdk-input { display: flex; align-items: center; gap: 12px; padding: 0 18px; height: 56px; flex: none; box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--nx-fg) 8%, transparent); color: var(--nx-dim); }
+html:root:root .cmdk-input .ic { width: 18px; height: 18px; flex: none; }
+html:root:root .cmdk-input input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: var(--text-primary); font: inherit; font-size: 16px; }
+html:root:root .cmdk-list { list-style: none; margin: 0; padding: 8px; overflow-y: auto; }
+html:root:root .cmdk-item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; min-height: 42px; border-radius: 10px; cursor: pointer; font-size: 14.5px; }
+html:root:root .cmdk-item.is-sel { background: var(--accent-bg); color: var(--accent); }
+html:root:root .cmdk-item-group { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--nx-dim); }
+html:root:root .cmdk-empty { margin: 0; padding: 28px 18px; text-align: center; color: var(--nx-dim); font-size: 14px; }
+
+@media (max-width: 1023px) {
+  html:root:root .topbar { padding-inline: 20px; }
+  html:root:root .cmdk-kbd { display: none; }
+}
+@media (max-width: 767px) {
+  html:root:root .topbar { height: 56px; padding-inline: 8px 10px; gap: 4px; }
+  html:root:root .cmdk-trigger { flex: none; width: 40px; height: 40px; padding: 0; justify-content: center; background: transparent; }
+  html:root:root .cmdk-label, html:root:root .cmdk-kbd { display: none; }
+  html:root:root .topbar-end { flex: none; gap: 2px; }
+  html:root:root .cmdk { padding-top: 8vh; }
+}
+html:root:root .cmdk .cmdk-input input#cmdk-q { background: transparent; border: 0; box-shadow: none; outline: 0; padding: 0; border-radius: 0; min-height: 0; height: 100%; }
+html:root:root .cmdk .cmdk-input input#cmdk-q:focus, html:root:root .cmdk .cmdk-input input#cmdk-q:focus-visible { background: transparent; box-shadow: none; outline: 0; }
+
+/* A programmatic-focus target (tabindex="-1": the skip-link destination, the modal shell) is not a control;
+   ringing the whole page or dialog is noise. Real controls keep their focus ring. */
+html:root:root :is(#main-content, .modal, .cmdk-panel, [tabindex="-1"]):focus,
+html:root:root :is(#main-content, .modal, .cmdk-panel, [tabindex="-1"]):focus-visible { outline: 0; }
+
+/* Focus on the jump-to trigger is a fill, not a ring. */
+html:root:root :is(.cmdk-trigger):focus-visible { outline: 0; box-shadow: none; background: var(--fill-2); color: var(--text-primary); }
+
+/* ============ QA pass: tablet header, narrow tab bar, touch targets ============ */
+/* Header: on narrower widths the right cluster keeps its size and the middle gives way,
+   so the pill can never run under the language button. */
+@media (min-width: 768px) and (max-width: 1023px) {
+  html:root:root .topbar-end { flex: 0 0 auto; }
+  html:root:root .topbar .crumbs { flex: 1 1 0; }
+  html:root:root .cmdk-trigger { flex: 0 1 320px; min-width: 120px; }
+}
+@media (max-width: 767px) {
+  html:root:root .topbar-end { flex: 0 0 auto; }
+  html:root:root .topbar .crumbs { flex: 1 1 0; min-width: 0; overflow: hidden; }
+  html:root:root .topbar .crumbs strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+}
+/* Tab bar: a label that does not fit ends in an ellipsis instead of being cut on both sides. */
+html:root:root .tabbar a, html:root:root .tabbar button { text-overflow: ellipsis; padding-inline: 2px; }
+@media (max-width: 360px) {
+  html:root:root .tabbar { inset-inline: 6px; padding: 4px; gap: 0; }
+  html:root:root .tabbar a, html:root:root .tabbar button { font-size: 9px; letter-spacing: -.01em; padding-inline: 0; }
+  html:root:root .tabbar a > span, html:root:root .tabbar button > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+/* Touch: every control is at least 44px. Fine pointers keep the compact sizes. */
+@media (pointer: coarse) {
+  html:root:root :is(.btn, .btn-sm, .icon-btn, .preference-control, .cmdk-trigger, .sidebar-close, .code-copy, .seg a, .seg button, .obs-tabs a) { min-height: 44px; }
+  html:root:root :is(.icon-btn, .preference-control, .sidebar-close, .code-copy) { min-width: 44px; }
+  html:root:root .topbar .preference-control { width: 44px; }
+  html:root:root .check { min-height: 44px; align-items: center; }
+  html:root:root details.details > summary, html:root:root details > summary.btn-link { min-height: 44px; display: inline-flex; align-items: center; }
+}
+@media (pointer: coarse) and (max-width: 767px) {
+  html:root:root .topbar .icon-btn.only-sm, html:root:root .cmdk-trigger { width: 44px; height: 44px; }
+  html:root:root .topbar .preference-control { min-height: 44px; }
+}
+@media (pointer: coarse) {
+  html:root:root .btn { min-width: 44px; }
+  html:root:root .topbar .preference-control { min-height: 44px; }
+  html:root:root .sidebar-head .sidebar-close { width: 44px; height: 44px; }
+}
+@media (pointer: coarse) { html:root:root .row-actions .btn-sm:has(> .sr-only) { min-width: 44px; width: 44px; } }
+
+/* ───────────── RTL node-stats table: one alignment edge, name·value rows that stay together ───────────── */
+html[dir="rtl"]:root:root .nodestat-table th,
+html[dir="rtl"]:root:root .nodestat-table td,
+html[dir="rtl"]:root:root .nodestat-table .nodestat-load,
+html[dir="rtl"]:root:root .nodestat-table .nodestat-mem { text-align: start; }
+html[dir="rtl"]:root:root .nodestat-table .proc-list { inline-size: max-content; min-inline-size: 0; }
+html[dir="rtl"]:root:root .nodestat-table .proc-row { direction: ltr; grid-template-columns: 9ch auto 7ch; justify-content: start; }
+html[dir="rtl"]:root:root .nodestat-table .p-val { text-align: start; }
+html[dir="rtl"]:root:root .nodestat-table .mem-sep { display: none; }
+html[dir="rtl"]:root:root .nodestat-table .nodestat-load > small,
+html[dir="rtl"]:root:root .nodestat-table .nodestat-mem > small { margin-block-start: 2px; }
+
+/* ───────────── Observability service health: inset rounded groups, fixed columns so every pill and count lines up ───────────── */
+html:root:root .obs-stacks { padding: 4px 12px 12px; display: grid; gap: 2px; }
+html:root:root .obs-stack { border-top: 0; }
+html:root:root .obs-stack > summary { padding: 10px 16px; border-radius: var(--r-control); }
+html:root:root .obs-stack[open] > summary { background: color-mix(in srgb, var(--nx-fg) 5%, transparent); }
+html:root:root .obs-stack-meta { gap: 14px; }
+html:root:root .obs-svc-list { padding: 4px 16px 10px 38px; }
+html:root:root[dir="rtl"] .obs-svc-list { padding: 4px 38px 10px 16px; }
+html:root:root .obs-svc { border-top: 0; padding: 7px 0; grid-template-columns: minmax(0, 1fr) 56px 200px 92px; column-gap: 16px; }
+html:root:root .obs-svc-rep { color: var(--nx-dim); }
+html:root:root .obs-svc-state { justify-self: start; }
+html:root:root .obs-svc-act { margin-inline-end: -10px; }
+html:root:root .obs-svc-act .btn { white-space: nowrap; }
+@media (max-width: 767px) {
+  html:root:root .obs-stacks { padding-inline: 8px; }
+  html:root:root .obs-svc-list, html:root:root[dir="rtl"] .obs-svc-list { padding: 2px 12px 8px; }
+  html:root:root .obs-svc { grid-template-columns: minmax(0, 1fr) auto; }
+}
+
+/* Row action clusters: right-aligned in their cell so rows with fewer buttons keep the delete (and move) icon in the same column;
+   the destructive icon stays quiet until hover instead of a tinted tile on every row. */
+html:root:root .table td:has(> .row-actions) { text-align: end; white-space: nowrap; }
+html:root:root .table .row-actions { display: flex; justify-content: flex-end; }
+html:root:root .table .row-actions .btn-danger { background: transparent; }
+html:root:root .table .row-actions .btn-danger:hover { background: var(--red-bg); }
+
+html:root:root .cap-effective { margin-top: 6px; font-size: var(--fs-xs); }
+
+/* ============ Phone chrome v2: brand mark header, Material-style dock, card-like drawer ============ */
+@media (max-width: 767px) {
+  /* header: brand mark · page name · jump · cluster pulse. Language/theme/palette live in the drawer. */
+  html:root:root .topbar-mark { display: inline-grid; place-items: center; width: 44px; height: 44px; flex: none; border-radius: 12px; }
+  html:root:root .topbar-mark .logo-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; }
+  html:root:root .topbar-mark .logo-mark svg { width: 100%; height: 100%; }
+  html:root:root .topbar-mark:active { background: var(--fill-2); }
+  html:root:root .topbar-end .preferences { display: none; }
+
+  /* dock: flush bottom sheet; the active destination is an icon pill with a bold label under it */
+  html:root:root .tabbar {
+    inset-inline: 0; inset-block-end: 0; padding: 8px 6px calc(8px + env(safe-area-inset-bottom, 0px)); gap: 0;
+    border-radius: 22px 22px 0 0; background: var(--nx-panel); box-shadow: 0 -8px 28px rgba(0, 0, 0, .14);
+  }
+  html:root:root .tabbar a, html:root:root .tabbar button {
+    min-height: 56px; padding: 0 0 2px; gap: 4px; border-radius: 0; background: transparent !important;
+    font-size: 11px; font-weight: 500; color: var(--nx-dim); justify-content: flex-start;
+  }
+  html:root:root .tabbar .ic { box-sizing: border-box; width: 56px; height: 30px; padding: 5px 16px; border-radius: 15px; transition: background var(--t-fast) ease; }
+  html:root:root .tabbar a.is-active { color: var(--accent); font-weight: 700; }
+  html:root:root .tabbar a.is-active .ic { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  html:root:root .tabbar a:active .ic, html:root:root .tabbar button:active .ic { background: var(--fill-2); }
+  html:root:root .content, html:root:root .main { padding-bottom: calc(100px + env(safe-area-inset-bottom, 0px)); }
+  html:root:root .savebar { inset-block-end: calc(92px + env(safe-area-inset-bottom, 0px)); }
+
+  /* drawer: rounded sheet, roomier rows, preferences as tiles at the bottom */
+  html:root:root .sidebar { border-radius: 0 24px 24px 0; width: min(86vw, 340px); }
+  html:root:root[dir="rtl"] .sidebar { border-radius: 24px 0 0 24px; }
+  html:root:root .sidebar .nav-item { min-height: 48px; border-radius: 14px; font-size: 15px; }
+}
+@media (min-width: 768px) { html:root:root .topbar-mark { display: none; } }
+
+/* ============ Phone chrome v3: floating pill dock (active = icon + label), menu as a bottom sheet ============ */
+@media (max-width: 767px) {
+  html:root:root .tabbar {
+    inset-inline: 14px; inset-block-end: calc(12px + env(safe-area-inset-bottom, 0px));
+    display: flex; align-items: center; justify-content: space-between; gap: 4px;
+    padding: 6px; border-radius: 28px; background: var(--nx-panel);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--nx-fg) 6%, transparent), 0 12px 32px rgba(0, 0, 0, .22);
+  }
+  html:root:root .tabbar a, html:root:root .tabbar button {
+    flex: 1 1 0; flex-direction: row; gap: 8px; min-height: 48px; min-width: 0; padding: 0 12px;
+    border-radius: 22px; justify-content: center; color: var(--nx-dim); font-size: 14px; font-weight: 600;
+    transition: flex-grow var(--t-fast) ease, background var(--t-fast) ease, color var(--t-fast) ease;
+  }
+  html:root:root .tabbar a > span, html:root:root .tabbar button > span { display: none; }
+  html:root:root .tabbar a.is-active { flex: 0 0 auto; padding: 0 18px 0 14px; color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent) !important; }
+  html:root:root .tabbar a.is-active > span { display: inline; max-width: none; overflow: visible; }
+  html:root:root .tabbar .ic { width: 22px; height: 22px; padding: 0; border-radius: 0; background: none !important; }
+  html:root:root .tabbar a:active:not(.is-active), html:root:root .tabbar button:active { background: var(--fill-2) !important; }
+  html:root:root .content, html:root:root .main { padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px)); }
+  html:root:root .savebar { inset-block-end: calc(92px + env(safe-area-inset-bottom, 0px)); }
+
+  /* bottom sheet */
+  html:root:root .sidebar, html:root:root[dir="rtl"] .sidebar {
+    top: auto; bottom: 0; inset-inline: 0; width: 100%; max-width: none; height: auto; max-height: 82dvh;
+    border-radius: 28px 28px 0 0; transform: translateY(105%); box-shadow: 0 -12px 40px rgba(0, 0, 0, .28);
+    transition: transform .28s cubic-bezier(.2, .8, .2, 1);
+  }
+  html:root:root body.nav-open .sidebar, html:root:root .sidebar.is-open, html:root:root[dir="rtl"] .sidebar.is-open { transform: none; }
+  html:root:root .sidebar::before {
+    content: ""; position: absolute; top: 8px; left: 50%; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px;
+    background: color-mix(in srgb, var(--nx-fg) 22%, transparent); pointer-events: none;
+  }
+  html:root:root .sidebar-head { height: 72px; padding-top: 12px; flex: none; touch-action: none; }
+  html:root:root .sidebar .nav { overflow-y: auto; overscroll-behavior: contain; padding-bottom: 8px; }
+  html:root:root .sidebar-foot { flex: none; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+}
+@media (max-width: 767px) { html:root:root .topbar-mark[data-tip]::after, html:root:root .topbar-mark[data-tip]::before { content: none; } }
+
+/* Phone v3.1: language + theme back in the header, search moves into the menu sheet */
+@media (max-width: 767px) {
+  html:root:root .topbar-end .preferences { display: flex; }
+  html:root:root .topbar .cmdk-trigger { display: none; }
+  html:root:root .drawer-search {
+    display: flex; align-items: center; gap: 12px; width: calc(100% - 24px); margin: 0 12px 6px; min-height: 48px; padding: 0 16px;
+    border: 0; border-radius: 14px; background: var(--fill); color: var(--nx-dim); font: inherit; font-size: 15px; text-align: start; cursor: pointer;
+  }
+  html:root:root .drawer-search .ic { width: 18px; height: 18px; flex: none; }
+  html:root:root .drawer-search:active { background: var(--fill-2); }
+}
+@media (min-width: 768px) { html:root:root .drawer-search { display: none; } }
+@media (max-width: 767px) {
+  html:root:root .sidebar-head { justify-content: center; padding-inline: 16px; }
+  html:root:root .sidebar-head .sidebar-close, html:root:root .sidebar-head .logo-mark { display: none; }
+  html:root:root .sidebar-head .brand, html:root:root .sidebar-head .logo-lockup { justify-content: center; text-align: center; width: 100%; }
+  html:root:root .sidebar-head .logo-word { align-items: center; text-align: center; }
+}
+@media (max-width: 767px) { html:root:root .sidebar-head .logo-sub { display: none; } }
+@media (max-width: 767px) {
+  html:root:root .sidebar-foot { border-top: 0; }
+  html:root:root .sidebar-foot:not(:has(.foot-row)) { display: none; }
+  html:root:root .sidebar .nav { padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+}
+
+/* ============ Phone menu v4: a touch launcher, not a sidebar. Sections of big tiles, one thumb-sized target each ============ */
+@media (max-width: 767px) {
+  html:root:root .sidebar { max-height: 86dvh; }
+  html:root:root .sidebar .nav {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-content: start;
+    padding: 4px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+  html:root:root .sidebar .nav-group { display: contents; }
+  /* section titles span the row and are plain labels (every section is open) */
+  html:root:root .sidebar .nav-label, html:root:root .sidebar .nav-group > .nav-toggle:first-child {
+    grid-column: 1 / -1; width: auto; margin: 10px 2px -2px; padding: 0; font-size: 12px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--nx-dim); pointer-events: none;
+  }
+  html:root:root .sidebar .nav-toggle .ic { display: none; }
+  html:root:root .sidebar .nav-group:not(.is-open) > .nav-item { display: flex; }
+  html:root:root .sidebar .nav-item {
+    flex-direction: column; justify-content: center; align-items: center; gap: 8px; min-height: 88px; padding: 12px 6px;
+    border-radius: 20px; background: var(--fill); text-align: center; font-size: 13px; font-weight: 600; line-height: 1.2;
+  }
+  html:root:root .sidebar .nav-item .ic { width: 26px; height: 26px; color: var(--nx-dim); }
+  html:root:root .sidebar .nav-item > span { max-width: 100%; overflow-wrap: anywhere; }
+  html:root:root .sidebar .nav-item.is-active { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+  html:root:root .sidebar .nav-item.is-active .ic { color: var(--accent); }
+  html:root:root .sidebar .nav-item:active { background: var(--fill-2); transform: scale(.97); }
+  html:root:root .sidebar .nav-item { transition: transform .12s ease, background var(--t-fast) ease; }
+  html:root:root .sidebar .nav-item .ext, html:root:root .sidebar .nav-item[target="_blank"]::after { display: none; }
+  html:root:root .drawer-search { margin-bottom: 4px; }
+}
+
+/* Refresh sits at the right edge of the page actions on phones (primary action first). */
+@media (max-width: 767px) {
+  html:root:root .page-head .ph-actions { justify-content: flex-end; }
+  html:root:root .page-head .ph-actions > .btn-refresh { order: 99; flex: 0 0 auto; padding-inline: 14px 10px; }
+}
+
+/* Phone menu v4.1: tighter tiles, four per row, rows fill their width (a lone last tile stretches instead of leaving a hole) */
+@media (max-width: 767px) {
+  html:root:root .sidebar .nav { display: flex; flex-direction: row; flex-wrap: wrap; align-content: flex-start; gap: 8px; padding: 2px 14px calc(16px + env(safe-area-inset-bottom, 0px)); }
+  html:root:root .sidebar .nav-item { flex: 1 1 calc(25% - 8px); min-width: 0; min-height: 64px; font-size: 12px; padding: 10px 2px; gap: 5px; border-radius: 16px; }
+  html:root:root .sidebar .nav-item .ic { width: 24px; height: 24px; }
+  html:root:root .sidebar .nav-item > span { overflow-wrap: normal; word-break: normal; }
+  html:root:root .sidebar .nav-label, html:root:root .sidebar .nav-group > .nav-toggle:first-child { flex: 0 0 100%; margin: 8px 4px -2px; }
+  html:root:root .sidebar .nav > .nav-label:first-child { margin-top: 2px; }
+  html:root:root .sidebar-head { height: 52px; padding-top: 18px; }
+  html:root:root .drawer-search { min-height: 44px; margin-bottom: 8px; }
+  /* one-tile sections (Access, System) fold into the row above */
+  html:root:root .sidebar #nav-access, html:root:root .sidebar #nav-system { display: none; }
+}
+@media (max-width: 340px) { html:root:root .sidebar .nav-item { flex-basis: calc(33.333% - 8px); } }
+
+/* Page-header buttons read as buttons: tonal fill instead of bare text on the page background. */
+html:root:root .ph-actions > .btn-ghost, html:root:root .ph-actions > form > .btn-ghost { background: var(--fill); color: var(--text-primary); border-radius: 12px; }
+html:root:root .ph-actions > .btn-ghost:hover, html:root:root .ph-actions > form > .btn-ghost:hover { background: var(--fill-2); }
+html:root:root .ph-actions > .btn-ghost .ic { color: var(--nx-dim); }
+@media (max-width: 767px) {
+  html:root:root .page-head .ph-actions > .btn-refresh { padding-inline: 16px; }
+  /* the dock borrows the last pinned slot for a page that is not pinned (set by syncNav) */
+  html:root:root .tabbar.has-current > a[data-nav="observability"] { display: none; }
+}
+html:root:root .tabbar .tabbar-current[hidden] { display: none; }
+
+/* CI board on phones: one card per repository */
+.ci-cards { display: none; }
+@media (max-width: 767px) {
+  html:root:root .ci-cards { display: grid; gap: 8px; padding: 12px; }
+  html:root:root .ci-card { display: grid; gap: 8px; padding: 14px 16px; border-radius: 16px; background: var(--fill); }
+  html:root:root .ci-card.is-failed { background: color-mix(in srgb, var(--red, #c0392b) 9%, var(--fill)); }
+  html:root:root .ci-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+  html:root:root .ci-repo { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  html:root:root .ci-card-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 13px; }
+  html:root:root .ci-card-meta > span + span::before { content: "·"; margin-inline-end: 10px; color: var(--nx-dim); }
+  html:root:root .ci-card-detail { margin: 0; font-size: 14px; line-height: 1.45; color: var(--text-primary); overflow-wrap: anywhere; }
+  html:root:root .ci-open { justify-content: center; width: 100%; min-height: 44px; background: var(--fill-2); }
+  html:root:root .ci-open .ic { width: 16px; height: 16px; }
+  html:root:root .panel-body.tight:has(.ci-cards) { padding: 0; }
+}
+@media (max-width: 767px) { html:root:root .ci-open > span { display: inline-block; } html:root:root .ci-open > span::first-letter { text-transform: uppercase; } }
+
+/* Runners node picker on phones: the same table (one set of form inputs), laid out as one card per node */
+@media (max-width: 767px) {
+  html:root:root .node-pick, html:root:root .node-pick tbody { display: block; min-inline-size: 0; width: 100%; }
+  html:root:root .node-pick thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  html:root:root .node-pick tbody { display: grid; gap: 8px; padding: 4px 0 0; }
+  html:root:root .node-pick tr { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 10px; row-gap: 10px; padding: 12px 14px; border-radius: 16px; background: var(--fill); border: 0; }
+  html:root:root .node-pick td { display: block; padding: 0; border: 0; min-width: 0; background: transparent; white-space: normal; text-align: start; }
+  html:root:root .node-pick .pick-sel { grid-column: 1; grid-row: 1; }
+  html:root:root .node-pick .pick-name { grid-column: 2; grid-row: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  html:root:root .node-pick .pick-role { grid-column: 3; grid-row: 1; }
+  html:root:root .node-pick .pick-state { grid-column: 1 / -1; grid-row: 2; }
+  html:root:root .node-pick .pick-mem { grid-column: 1 / -1; grid-row: 3; display: flex; justify-content: space-between; gap: 12px; align-items: baseline; font-size: 14px; }
+  html:root:root .node-pick .pick-cap { grid-column: 1 / -1; grid-row: 4; }
+  html:root:root .node-pick .pick-mem::before, html:root:root .node-pick .pick-cap::before { content: attr(data-label); display: block; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--nx-dim); }
+  html:root:root .node-pick .pick-cap::before { margin-bottom: 6px; }
+  html:root:root .node-pick .pick-cap .finput { width: 100%; }
+  html:root:root .node-pick tr:has(.pick-state:empty) .pick-state { display: none; }
+}
+@media (max-width: 767px) {
+  html:root:root .node-pick .pick-mem { display: block; font-size: 14px; }
+  html:root:root .node-pick .pick-mem::before { margin-bottom: 4px; }
+  html:root:root .node-pick .pick-sel .check { justify-content: flex-start; min-width: 0; padding: 0; margin: 0; }
+  html:root:root .node-pick .pick-cap .finput { display: block; width: 100%; max-width: none; box-sizing: border-box; }
+}
+@media (max-width: 767px) {
+  html:root:root .node-pick td.pick-cap input.finput { width: 100% !important; max-width: 100% !important; margin: 0 !important; }
+  html:root:root .node-pick td.pick-sel, html:root:root .node-pick td.pick-sel * { margin-inline: 0 !important; }
+  html:root:root .node-pick td.pick-sel .check { padding: 0 !important; width: 24px; }
+}
+@media (max-width: 767px) { html:root:root .node-pick td, html:root:root .node-pick tbody td { padding: 0 !important; } }
+
+/* Phone card lists sitting directly in a panel: inset from the panel edge with a gap between cards (they used to touch the edges and each other) */
+@media (max-width: 767px) {
+  html:root:root .panel > .only-sm, html:root:root .panel-body.tight > .only-sm { display: grid; gap: 8px; padding: 12px; }
+  html:root:root .panel > .only-sm > .kv, html:root:root .panel-body.tight > .only-sm > .kv { margin: 0; border-radius: 16px; border-top: 0; padding: 12px 16px; }
+  html:root:root .panel > .only-sm > .kv + .kv, html:root:root .panel-body.tight > .only-sm > .kv + .kv { border-top: 0; }
+  html:root:root .panel > .only-sm > .node-card, html:root:root .panel-body.tight > .only-sm > .node-card { border-radius: 16px; margin: 0; }
+}
+
+/* Phone header: no page name while the page's own big title is on screen (it appears when that title scrolls away) */
+@media (max-width: 767px) {
+  html:root:root .topbar .crumbs { opacity: 0; transition: opacity .15s ease; }
+  html:root:root .topbar.title-away .crumbs, html:root:root .topbar.no-h1 .crumbs { opacity: 1; }
+}
+@media (max-width: 767px) {
+  html:root:root .kv .kv-row:has(+ .row-actions), html:root:root .kv .kv-row:has(+ .node-card-actions) { border-bottom: 0; }
+  html:root:root .only-sm .row-actions { border-top: 0; }
+}
+@media (max-width: 767px) {
+  html:root:root .kv .kv-row:has(+ .action-bar) { border-bottom: 0; }
+  html:root:root .kv .action-bar { border-top: 0; padding-top: 8px; margin-top: 0; }
+}
+
+/* Phone header v2: brand wordmark while the page's own title is on screen, page name once it scrolls away */
+@media (max-width: 767px) {
+  html:root:root .topbar .crumbs { opacity: 1; display: none; }
+  html:root:root .topbar.title-away .crumbs, html:root:root .topbar.no-h1 .crumbs { display: block; }
+  html:root:root .topbar .topbar-brand { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; font-size: 16px; letter-spacing: -.01em; color: var(--text-primary); }
+  html:root:root .topbar .topbar-brand em { font-style: normal; color: var(--accent); }
+  html:root:root .topbar.title-away .topbar-brand, html:root:root .topbar.no-h1 .topbar-brand { display: none; }
+}
+@media (min-width: 768px) { html:root:root .topbar .topbar-brand { display: none; } }
+/* the wordmark is always Latin (dir=ltr), so in RTL it must hug the brand mark on the right instead of the start of its own box */
+html[dir="rtl"]:root:root .topbar .topbar-brand { text-align: right; }
+
+/* ============ Loading: shimmer skeleton for navigation, quieter bar ============ */
+html:root:root .skel-line {
+  background: linear-gradient(100deg, var(--fill) 30%, var(--fill-2) 50%, var(--fill) 70%) 0 0 / 220% 100%;
+  animation: skel-sweep 1.5s ease-in-out infinite; opacity: 1; border-radius: 8px;
+}
+[dir="rtl"] html:root:root .skel-line, html:root:root[dir="rtl"] .skel-line { animation-direction: reverse; }
+@keyframes skel-sweep { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+html:root:root .skel-line.title { height: 30px; width: min(260px, 55%); border-radius: 10px; }
+html:root:root .skel-line.row { height: 44px; border-radius: 12px; width: 100%; }
+html:root:root .skel-line.row.w80 { width: 80%; }
+html:root:root .skel-line.row.w65 { width: 65%; }
+html:root:root .page-skel.is-nav { min-height: 0; animation: skel-in .18s ease both; }
+html:root:root .page-skel.is-nav .skel-rows { gap: 10px; }
+html:root:root .page-skel.is-nav .stat .skel-line.tall { height: 28px; width: 55%; }
+@keyframes skel-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { html:root:root .skel-line { animation: none; } html:root:root .page-skel.is-nav { animation: none; } }
+html:root:root .page-skel.is-nav .page-head, html:root:root .page-skel.is-nav .ph-text { width: 100%; min-width: 0; }
+html:root:root .page-skel.is-nav .skel-line.short { width: 45%; }
+
+/* ============ The app mark IS the loading indicator: while a request is in flight (anything but the quiet polls) the pulse runs
+   round the triangle and each node swells as it passes. At rest it is the static mark. ============ */
+html:root:root .logo-mark .lm-run { stroke-dasharray: 22 78; stroke-dashoffset: -39; }
+html:root:root .logo-mark .lm-n { transform-box: fill-box; transform-origin: center; }
+html:root:root body:has(.htmx-request:not(#logs-body)) .logo-mark .lm-run { animation: lm-run 1.35s linear .18s infinite; }
+html:root:root body:has(.htmx-request:not(#logs-body)) .logo-mark .lm-n { animation: lm-beat 1.35s ease-in-out .18s infinite; }
+html:root:root body:has(.htmx-request:not(#logs-body)) .logo-mark .lm-n2 { animation-delay: .63s; }
+html:root:root body:has(.htmx-request:not(#logs-body)) .logo-mark .lm-n3 { animation-delay: 1.08s; }
+@keyframes lm-run { from { stroke-dashoffset: -39; } to { stroke-dashoffset: -139; } }
+@keyframes lm-beat { 0%, 100% { transform: scale(1); fill: #232730; } 18% { transform: scale(1.28); fill: var(--brand-primary, #FF5722); } 42% { transform: scale(1); fill: #232730; } }
+@media (prefers-reduced-motion: reduce) { html:root:root .logo-mark .lm-run, html:root:root .logo-mark .lm-n { animation: none !important; } }
+
+/* Desktop/tablet: same rule as phones, the bar repeats the page name only once the page's own heading has scrolled away */
+@media (min-width: 768px) {
+  html:root:root .topbar .crumbs { opacity: 0; transition: opacity .15s ease; }
+  html:root:root .topbar.title-away .crumbs, html:root:root .topbar.no-h1 .crumbs { opacity: 1; }
+}
+
+/* ============ Motion & feel ============
+   One easing, three durations (--t-fast/base/slow). Transform and opacity only, plus colour fills.
+   Everything that moves is inside no-preference; reduced-motion users get the end state at once. */
+@keyframes nx-slide-up { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes nx-flash-out { to { opacity: 0; transform: translateY(8px); } }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Page arrival: header first, then each block a beat behind the one above. */
+  html:root:root .content #view > :nth-child(2) { animation-delay: 40ms; }
+  html:root:root .content #view > :nth-child(3) { animation-delay: 80ms; }
+  html:root:root .content #view > :nth-child(4) { animation-delay: 120ms; }
+  html:root:root .content #view > :nth-child(n+5) { animation-delay: 160ms; }
+  /* Refreshes morph in place and keep the DOM, so this only plays on real navigation. Stats tick in as a row. */
+  html:root:root .content #view .stats > .stat { animation: nx-rise var(--t-slow) var(--ease) both; }
+  html:root:root .content #view .stats > .stat:nth-child(2) { animation-delay: 50ms; }
+  html:root:root .content #view .stats > .stat:nth-child(3) { animation-delay: 100ms; }
+  html:root:root .content #view .stats > .stat:nth-child(n+4) { animation-delay: 150ms; }
+
+  /* Press feedback: every control gives a little under the finger/cursor. */
+  html:root:root :is(.btn, .icon-btn, .preference-control, .cmdk-trigger, .seg a, .seg button, .obs-tabs a, .drawer-search, .code-copy) {
+    transition: background var(--t-fast) ease, color var(--t-fast) ease, transform var(--t-fast) var(--ease), box-shadow var(--t-base) var(--ease), opacity var(--t-fast) ease;
+  }
+  html:root:root :is(.icon-btn, .preference-control, .cmdk-trigger, .seg a, .seg button, .obs-tabs a, .drawer-search, .code-copy):active { transform: scale(.96); }
+  html:root:root .btn-primary:hover:not(:disabled) { transform: translateY(-1px); }
+  html:root:root .btn-primary:active:not(:disabled) { transform: translateY(0) scale(.97); }
+  html:root:root .tabbar a, html:root:root .tabbar button { transition: color var(--t-fast) ease, transform var(--t-fast) var(--ease); }
+  html:root:root .tabbar a:active, html:root:root .tabbar button:active { transform: scale(.94); }
+  html:root:root .sidebar .nav-item:active { transform: scale(.98); }
+
+  /* Surfaces: rows, tiles and fields change fill smoothly instead of snapping. */
+  html:root:root .table tbody tr td { transition: background var(--t-fast) ease; }
+  html:root:root .row-actions { transition: opacity var(--t-fast) ease; }
+  html:root:root :is(input, select, textarea, .finput, .selectbox) { transition: background var(--t-fast) ease, box-shadow var(--t-fast) ease, color var(--t-fast) ease; }
+  html:root:root :is(.pill, .tag, .badge-ext) { transition: background var(--t-base) ease, color var(--t-base) ease; }
+  html:root:root .dd-chev { transition: transform var(--t-base) var(--ease); }
+  html:root:root :is(.ci-card, .node-pick tbody tr) { transition: background var(--t-fast) ease, transform var(--t-fast) var(--ease); }
+  html:root:root .ci-card:active { transform: scale(.985); }
+
+  /* Disclosure: details content eases in rather than appearing. */
+  html:root:root details[open] > :not(summary) { animation: nx-rise var(--t-base) var(--ease) both; }
+  html:root:root details > summary .ic, html:root:root details > summary::after { transition: transform var(--t-base) var(--ease); }
+
+  /* Overlays: the palette and the phone menu sheet get the same arrival as dialogs. */
+  html:root:root .cmdk:not([hidden]) { animation: nx-fade var(--t-fast) ease both; }
+  html:root:root .cmdk:not([hidden]) .cmdk-panel { animation: nx-pop var(--t-base) var(--ease) both; }
+  html:root:root .cmdk-item { transition: background var(--t-fast) ease, color var(--t-fast) ease; }
+  html:root:root .scrim { transition: opacity var(--t-base) ease; }
+  html:root:root .modal-backdrop:not([hidden]) { animation: nx-fade var(--t-fast) ease both; }
+
+  /* Toasts rise in and settle out. */
+  html:root:root .flash { animation: nx-slide-up var(--t-base) var(--ease) both; }
+  html:root:root .flash.is-out { animation: nx-flash-out var(--t-base) ease forwards; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html:root:root .flash.is-out { display: none; }
+}
+
+/* ============ Phone: tap-outside closes the menu; dock items grow into each other ============ */
+@media (max-width: 767px) {
+  /* The scrim only ever showed for body.nav-open, which nothing sets any more (the sheet uses .is-open). */
+  html:root:root .scrim {
+    display: block !important; opacity: 0; visibility: hidden; pointer-events: none; z-index: 55;
+    transition: opacity var(--t-base) ease, visibility 0s linear var(--t-base);
+  }
+  html:root:root body:has(.sidebar.is-open) .scrim { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity var(--t-base) ease; }
+
+  /* Dock: every item is a flex-basis-0 share of the bar, the current one simply owns a bigger share.
+     Moving the current page animates flex-grow, so the new pill swells while the old one is squeezed away. */
+  html:root:root .tabbar a, html:root:root .tabbar button { flex: 1 1 0; position: relative; overflow: hidden; }
+  html:root:root .tabbar a.is-active { flex: 4 1 0; min-width: max-content; padding: 0 20px 0 16px; gap: 10px; }
+  html:root:root .tabbar a > span, html:root:root .tabbar button > span {
+    display: inline-block; max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap; text-overflow: clip; margin-inline-start: -10px;
+  }
+  html:root:root .tabbar a.is-active > span { max-width: 100%; opacity: 1; margin-inline-start: 0; }
+  html:root:root .tabbar a, html:root:root .tabbar button, html:root:root .tabbar a > span, html:root:root .tabbar .ic {
+    transition-property: flex-grow, background-color, color, max-width, opacity, margin, transform;
+    transition-duration: .42s, .25s, .25s, .3s, .2s, .3s, .2s;
+    transition-timing-function: cubic-bezier(.32, 1.18, .42, 1), ease, ease, var(--ease), ease, var(--ease), var(--ease);
+  }
+  html:root:root .tabbar a > span { transition-delay: 0s, 0s, 0s, 0s, 0s, 0s, 0s; }
+  html:root:root .tabbar a.is-active > span { transition-delay: 0s, 0s, 0s, 0s, .08s, 0s, 0s; }
+  html:root:root .tabbar a.is-active .ic { transform: scale(1.06); }
+  /* a page that isn't pinned borrows a slot: it grows in rather than popping */
+  html:root:root .tabbar .tabbar-current:not([hidden]) { animation: dock-in .4s cubic-bezier(.32, 1.18, .42, 1) both; }
+  @keyframes dock-in { from { flex-grow: .01; opacity: 0; } }
+}
+/* .main wraps .content and both used to reserve dock room, so the gap under the last block was doubled (136px). */
+@media (max-width: 767px) {
+  html:root:root .main { padding-bottom: 0; }
+  html:root:root .content { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+}
+@media (max-width: 767px) and (prefers-reduced-motion: reduce) {
+  html:root:root .tabbar a, html:root:root .tabbar button, html:root:root .tabbar a > span, html:root:root .tabbar .ic, html:root:root .scrim { transition: none; }
+  html:root:root .tabbar .tabbar-current:not([hidden]) { animation: none; }
+}
+
+/* Segmented control: the current choice is a raised thumb (solid surface + soft shadow + accent label) so it reads
+   at a glance in both themes; the old accent tint on a grey track was too close to the track itself. */
+html:root:root .seg .is-active, html:root:root .seg [aria-current] {
+  background: var(--nx-panel); color: var(--accent); font-weight: 700;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--nx-fg) 9%, transparent), 0 2px 6px rgba(22, 40, 31, .14);
+}
+html:root:root[data-theme="dark"] .seg { background: color-mix(in srgb, #000 28%, var(--nx-panel)); }
+html:root:root[data-theme="dark"] .seg .is-active, html:root:root[data-theme="dark"] .seg [aria-current] {
+  background: color-mix(in srgb, var(--nx-fg) 15%, var(--nx-panel));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--nx-fg) 12%, transparent), 0 2px 8px rgba(0, 0, 0, .45);
+}
+@media (prefers-reduced-motion: no-preference) {
+  html:root:root .seg a, html:root:root .seg button { transition: background var(--t-base) var(--ease), color var(--t-fast) ease, box-shadow var(--t-base) var(--ease); }
 }

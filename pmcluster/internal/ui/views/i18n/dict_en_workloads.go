@@ -8,9 +8,9 @@ func init() {
 	register(EN, map[string]string{
 		// ---- stacks list -----------------------------------------------------
 		"stacks.title":           "Stacks",
-		"stacks.sub":             "{0}\u00a0· newest change {1}",
+		"stacks.sub":             "{0}\u2002·\u2002newest change {1}",
 		"stacks.sub_unknown":     "Stack list unavailable — the cluster API did not answer",
-		"stacks.list_title":      "Deployed stacks",
+		"stacks.list_title":      "Deployed Stacks",
 		"stacks.search_ph":       "Filter by name, revision or repository",
 		"stacks.clear_filter":    "Clear filter",
 		"stacks.showing":         "Showing {0} of {1}",
@@ -47,13 +47,13 @@ func init() {
 
 		// ---- one stack's inspector ------------------------------------------
 		"stack.sync_hint":       "Redeploying re-applies the newest manifest from the daemon; a new revision appears only when that manifest changed.",
-		"stack.backup_title":    "Last backup",
+		"stack.backup_title":    "Last Backup",
 		"stack.backup_started":  "Started",
 		"stack.backup_finished": "Finished",
 		"stack.backup_none":     "This stack has no recorded backup yet.",
 		"stack.backup_hint":     "Backup history lives on the",
 
-		"stack.revisions_title": "Revision history",
+		"stack.revisions_title": "Revision History",
 		"stack.rev_current":     "Current",
 		"stack.rev_when":        "created {0}",
 		"stack.view_manifest":   "Manifests",
@@ -61,8 +61,8 @@ func init() {
 
 		// The stack page's services section: replica health + logs/tasks.
 		"stack.back_all":               "All stacks",
-		"stack.about_title":            "About this stack",
-		"stack.services_title":         "Services in this stack",
+		"stack.about_title":            "About This Stack",
+		"stack.services_title":         "Services in This Stack",
 		"stack.services_hint":          "Replica health straight from the swarm; tasks, logs and one-shot commands open per service.",
 		"stack.services_none_title":    "No services",
 		"stack.services_none_body":     "The swarm is not running any service for this stack. Redeploying re-applies the manifest and schedules them.",
@@ -70,7 +70,7 @@ func init() {
 		"stack.services_unknown_body":  "The cluster API did not return this stack's services, so replica health is unknown rather than empty.",
 		"stack.deploy_failed":          "Deploy failed",
 		"stack.deploy_failed_hint":     "The last deployment did not finish cleanly. Check the deploy logs (log_level=debug shows each level's compose) and the service tasks, then deploy again.",
-		"stack.error_history":          "Deploy error history",
+		"stack.error_history":          "Deploy Error History",
 		"stack.badge":                  "Status badge",
 		"stack.badge_services":         "Services badge",
 		"stack.badge_hint":             "Paste this markdown into any GitHub README to show the stack's live status (healthy / in progress / degraded / error). The badge endpoint is public and reflects the latest deployment outcome.",
@@ -95,7 +95,7 @@ func init() {
 		"stack.move_confirm":     "Move this stack? Its volumes are backed up, restored on the target node, and a new placement revision is recorded.",
 
 		// ---- storage failover banner ----------------------------------------
-		"stack.failover_title":       "Storage failover — possible data loss",
+		"stack.failover_title":       "Storage Failover — Possible Data Loss",
 		"stack.failover_body":        "This stack was moved off failed storage node {0} and restored on {1} from the latest backup. Changes made after that backup are not recovered. Repair {0} and move it back, or acknowledge to mark the stack officially healthy on {1}.",
 		"stack.failover_move_back":   "Move back to {0}",
 		"stack.failover_ack":         "Acknowledge & mark healthy",
@@ -106,11 +106,11 @@ func init() {
 		// ---- one revision's manifests ---------------------------------------
 		"revision.title":    "Revision {0} · {1}",
 		"revision.sub":      "Recorded {0}",
-		"revision.source":   "Source manifest",
-		"revision.rendered": "Rendered manifest",
+		"revision.source":   "Source Manifest",
+		"revision.rendered": "Rendered Manifest",
 
 		// ---- a stack's configs + secrets ------------------------------------
-		"stackconfigs.title": "Config & secrets · {0}",
+		"stackconfigs.title": "Config & Secrets · {0}",
 		"stackconfigs.sub":   "Service-scope configs and secrets for this stack, referenced from its manifest as config_path(name) and secret_path(name). Values are stored encrypted, and secrets are never rendered back into this page.",
 
 		"stackconfigs.configs_title":   "Configs",

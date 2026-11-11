@@ -17,7 +17,7 @@ func init() {
 		"overview.version_skew_title":   "{0} مديراً يشغّل إصدار pmcluster مختلفاً",
 		"overview.version_skew_body":    "كل مدير ينشر إصداره عند بدء التشغيل وكل عشر دقائق. اختلاف الإصدارات يعني أن عقدة ستتصرف بشكل مختلف عن التي تقرأ منها — رقِّ المتأخرة:",
 		"overview.title":                "نظرة عامة على العنقود",
-		"overview.sub":                  "{0}\u00a0· Docker {1}\u00a0· {2}\u00a0· {3}",
+		"overview.sub":                  "{0}\u2002·\u2002Docker {1}\u2002·\u2002{2}\u2002·\u2002{3}",
 		"overview.sub_unknown":          "تفاصيل العنقود غير متاحة",
 		"overview.nodes_title":          "العقد",
 		"overview.nodes_unknown_title":  "قائمة العقد غير متاحة",

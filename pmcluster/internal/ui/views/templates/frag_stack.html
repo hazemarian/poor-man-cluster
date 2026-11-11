@@ -298,20 +298,6 @@
 
 {{define "stack_actions"}}<a class="btn btn-ghost btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-tip="{{T "stack.back_all"}}">{{icon "stacks"}}<span>{{T "stack.back_all"}}</span></a>
     {{if .Detail}}
-      <form hx-post="/web/stacks/{{.Detail.Stack.Name}}/sync" hx-target="#view" hx-swap="innerHTML"
-            hx-confirm="{{TF "stacks.confirm_sync" .Detail.Stack.Name}}" hx-disabled-elt="find [type='submit']">
-        <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this" data-tip="{{T "stacks.act_redeploy"}}">
-          {{icon "play"}}<span>{{T "stacks.act_redeploy"}}</span>
-        </button>
-      </form>
-      <form class="stack-move" hx-post="/web/stacks/{{.Detail.Stack.Name}}/move" hx-target="#view" hx-swap="innerHTML"
-            hx-confirm="{{T "stack.move_confirm"}}" hx-disabled-elt="find [type='submit']">
-        <input type="text" name="target" placeholder="node hostname" class="input input-sm" required
-               dir="ltr" aria-label="{{T "stack.action_move"}}">
-        <button type="submit" class="btn btn-ghost btn-sm" hx-disabled-elt="this" data-tip="{{T "stack.action_move"}}">
-          {{icon "move"}}<span>{{T "stack.action_move"}}</span>
-        </button>
-      </form>
       <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Detail.Stack.Name}}/config"
          hx-get="/web/stacks/{{.Detail.Stack.Name}}/config" hx-target="#view" hx-push-url="true" data-tip="{{T "stacks.act_config"}}">
         {{icon "file"}}<span>{{T "stacks.act_config"}}</span>
@@ -320,10 +306,24 @@
          hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "stacks.act_backups"}}">
         {{icon "backups"}}<span>{{T "stacks.act_backups"}}</span>
       </a>
+      <form class="stack-move" hx-post="/web/stacks/{{.Detail.Stack.Name}}/move" hx-target="#view" hx-swap="innerHTML"
+            hx-confirm="{{T "stack.move_confirm"}}" hx-disabled-elt="find [type='submit']">
+        <input type="text" name="target" placeholder="node hostname" class="input input-sm" required
+               dir="ltr" aria-label="{{T "stack.action_move"}}">
+        <button type="submit" class="btn btn-ghost btn-sm" hx-disabled-elt="this" data-tip="{{T "stack.action_move"}}">
+          {{icon "move"}}<span>{{T "stack.action_move"}}</span>
+        </button>
+      </form>
       <form hx-post="/web/stacks/{{.Detail.Stack.Name}}/remove" hx-target="#view" hx-swap="innerHTML"
             hx-confirm="{{TF "stacks.confirm_delete" .Detail.Stack.Name}}" hx-disabled-elt="find [type='submit']">
         <button type="submit" class="btn btn-danger btn-sm" data-tip="{{T "common.delete"}}">
           {{icon "trash"}}<span>{{T "common.delete"}}</span>
+        </button>
+      </form>
+      <form hx-post="/web/stacks/{{.Detail.Stack.Name}}/sync" hx-target="#view" hx-swap="innerHTML"
+            hx-confirm="{{TF "stacks.confirm_sync" .Detail.Stack.Name}}" hx-disabled-elt="find [type='submit']">
+        <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this" data-tip="{{T "stacks.act_redeploy"}}">
+          {{icon "play"}}<span>{{T "stacks.act_redeploy"}}</span>
         </button>
       </form>
     {{end}}{{end}}

@@ -521,7 +521,7 @@ func TestControllers_Services(t *testing.T) {
 	// keeps platform services in a clearly separated section of their own.
 	rr := h.get(t, "/web/services")
 	body := rr.Body.String()
-	if !strings.Contains(body, "Platform services") {
+	if !strings.Contains(body, "Platform Services") {
 		t.Errorf("GET /web/services missing the separated platform section; got:\n%s", body)
 	}
 
