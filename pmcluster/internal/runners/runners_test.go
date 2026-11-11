@@ -731,3 +731,32 @@ func TestAFailingRunnerIsNotCalledBetweenJobs(t *testing.T) {
 		t.Fatalf("state = %q, want %q", rows[0].State, StateFailed)
 	}
 }
+
+// TestInspectDoesNotCallAnEphemeralGapOffline is the regression for "3-w is always
+// offline" / "6-w is offline or stale registration" appearing on a healthy fleet.
+//
+// Runners here are EPHEMERAL: the container exits 0 after each job and the reconcile
+// builds another, so for that minute GitHub reports "offline". Measured on the live
+// worker: container "Up 15 seconds" and the log saying "Running job" while `doctor`
+// reported the runner as offline.
+//
+// From another node the container state is unobservable, and an unobservable gap
+// must stay silent — the same rule the container checks follow.
+func TestInspectDoesNotCallAnEphemeralGapOffline(t *testing.T) {
+	h := newHarness(t, harnessOpts{enabled: true, org: "acme", nodes: "worker-1"})
+	h.mgr.Node = "worker-2" // a leader: worker-1's containers are not observable here
+	h.github.runners = map[string][]githubapp.Runner{
+		"acme": {{ID: 1, Name: RunnerName("worker-1"), Status: "offline"}},
+	}
+
+	rep, err := h.mgr.Inspect(h.ctx)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if len(rep.Nodes) != 1 {
+		t.Fatalf("nodes = %d, want 1", len(rep.Nodes))
+	}
+	if len(rep.Nodes[0].Offline) != 0 {
+		t.Fatalf("an unobservable ephemeral gap was reported as offline: %v", rep.Nodes[0].Offline)
+	}
+}

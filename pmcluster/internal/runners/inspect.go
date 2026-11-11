@@ -200,7 +200,18 @@ func (m *Manager) Inspect(ctx context.Context) (Report, error) {
 		}
 		if r, ok := remote[name]; ok {
 			nr.Registered = true
-			if !strings.EqualFold(r.status, "online") {
+			// "offline" is NOT a fault for this platform's runners: they are
+			// EPHEMERAL, so the container exits 0 after each job, the reconcile
+			// builds a new one, and GitHub reports the gap as offline. Measured on a
+			// healthy worker: container "Up 15 seconds", log "Running job", while
+			// doctor said "offline or stale registration".
+			//
+			// Only report it when the container was OBSERVED not running (this daemon
+			// runs on that node). From anywhere else the state is unobservable, and an
+			// unobservable gap must stay silent — the same rule the container checks
+			// follow, and the reason a warning that fires on every healthy node is a
+			// warning nobody reads.
+			if !strings.EqualFold(r.status, "online") && nr.ContainerKnown && !nr.ContainerRunning {
 				nr.Offline = append(nr.Offline, name)
 			}
 		}
