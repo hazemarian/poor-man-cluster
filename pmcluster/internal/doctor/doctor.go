@@ -451,9 +451,12 @@ func checkGitHubRunners(ctx context.Context, in Input) Check {
 			problems = append(problems, fmt.Sprintf("%s: failed %d consecutive reconcile pass(es): %s", label, n.Failures, n.LastError))
 		case strings.EqualFold(n.Role, "manager") || strings.EqualFold(n.Role, "leader"):
 			problems = append(problems, label+": a runner is selected on a manager node — a build there marks the node Down and takes the cluster API with it")
-		case !n.ContainerRunning && n.Registered:
+		// ContainerKnown guards both container cases: from the leader a worker's
+		// containers cannot be inspected, and claiming "no container" about a
+		// node you cannot see is how an operator learns to ignore doctor.
+		case n.ContainerKnown && !n.ContainerRunning && n.Registered:
 			problems = append(problems, label+": registered but no container is running (the reconcile will recreate it)")
-		case n.ContainerRunning && !n.Registered:
+		case n.ContainerKnown && n.ContainerRunning && !n.Registered:
 			problems = append(problems, label+": container is running but GitHub does not list "+n.RunnerName)
 		case len(n.Offline) > 0:
 			problems = append(problems, label+": offline or stale registration(s) "+strings.Join(n.Offline, ", "))

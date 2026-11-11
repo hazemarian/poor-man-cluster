@@ -126,7 +126,7 @@ func TestGitHubRunnersCheckHealthy(t *testing.T) {
 		Group:         "pmcluster",
 		Nodes: []runners.NodeReport{{
 			Node: "worker-1", Role: "worker",
-			RunnerName: "pmc-worker-1-org", ContainerRunning: true, Registered: true,
+			RunnerName: "pmc-worker-1-org", ContainerRunning: true, ContainerKnown: true, Registered: true,
 			DockerAccess: "socket proxy",
 		}},
 	}})
@@ -149,7 +149,9 @@ func TestGitHubRunnersCheckNamesOfflineAndGhostRunners(t *testing.T) {
 		Nodes: []runners.NodeReport{
 			{Node: "worker-1", Role: "worker", RunnerName: "pmc-worker-1-org", ContainerRunning: true, Registered: true,
 				Offline: []string{"pmc-worker-1-org"}},
-			{Node: "worker-2", Role: "worker", RunnerName: "pmc-worker-2-org", Registered: false, ContainerRunning: true},
+			// ContainerKnown: this daemon looked at its own node and found the
+			// container running while GitHub has no such registration.
+			{Node: "worker-2", Role: "worker", RunnerName: "pmc-worker-2-org", Registered: false, ContainerRunning: true, ContainerKnown: true},
 			{Node: "worker-3", Role: "worker", RunnerName: "pmc-worker-3-org", Failures: 4, LastError: "403"},
 		},
 	}})
@@ -235,5 +237,32 @@ func TestGitHubRunnersCheckInspectErrorFails(t *testing.T) {
 	c := runRunnerCheck(t, stubRunners{err: context.DeadlineExceeded})
 	if c.Status != StatusFail {
 		t.Fatalf("status = %s, want fail", c.Status)
+	}
+}
+
+// TestGitHubRunnersCheckDoesNotInventProblemsForRemoteNodes is the regression for
+// a fleet-wide false positive: ContainerRunning is only observable on the node
+// the daemon runs on, so from the leader every worker carried the zero value and
+// doctor printed "registered but no container is running" for a perfectly healthy
+// runner. An unknown container state must stay silent — the worker's own doctor
+// is the one that can see it.
+func TestGitHubRunnersCheckDoesNotInventProblemsForRemoteNodes(t *testing.T) {
+	c := runRunnerCheck(t, stubRunners{rep: runners.Report{
+		Enabled:       true,
+		AppConfigured: true,
+		Org:           "acme",
+		Group:         "pmcluster",
+		Nodes: []runners.NodeReport{{
+			Node: "worker-1", Role: "worker",
+			RunnerName: "pmc-worker-1-org",
+			Registered: true, // GitHub sees it…
+			// …and we cannot see its container from here: no ContainerKnown.
+		}},
+	}})
+	if c.Status != StatusOK {
+		t.Fatalf("status = %s, want ok — an unobservable container is not a fault: %s", c.Status, c.Detail)
+	}
+	if strings.Contains(c.Detail, "no container") {
+		t.Fatalf("detail invents a missing container: %q", c.Detail)
 	}
 }

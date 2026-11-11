@@ -67,9 +67,16 @@ type NodeReport struct {
 	Role     string `json:"role,omitempty"`
 	Selected bool   `json:"selected"`
 	// ContainerRunning is this node's local runner container.
-	ContainerRunning bool   `json:"container_running"`
-	Registered       bool   `json:"registered"`
-	RunnerName       string `json:"runner_name"`
+	ContainerRunning bool `json:"container_running"`
+	// ContainerKnown says whether ContainerRunning was actually observed. Only
+	// the daemon that RUNS on the node can inspect its containers, so from the
+	// leader every other node's value is unknown — not false. Without this the
+	// two were indistinguishable, and `doctor` reported "registered but no
+	// container is running" for every healthy worker on the fleet, because
+	// false-means-unknown was read as false-means-absent.
+	ContainerKnown bool   `json:"container_known"`
+	Registered     bool   `json:"registered"`
+	RunnerName     string `json:"runner_name"`
 	// DockerAccess is "socket proxy" or "raw socket": the exposure a job gets.
 	DockerAccess string `json:"docker_access,omitempty"`
 	// RawSocket is true when the local container binds /var/run/docker.sock.
@@ -153,6 +160,7 @@ func (m *Manager) Inspect(ctx context.Context) (Report, error) {
 			if c, ok, err := m.inspect(ctx, name); err != nil {
 				nr.Error = err.Error()
 			} else if ok {
+				nr.ContainerKnown = true
 				nr.ContainerRunning = c.Running()
 				nr.RawSocket = c.HasRawSocketMount()
 				if nr.RawSocket {
