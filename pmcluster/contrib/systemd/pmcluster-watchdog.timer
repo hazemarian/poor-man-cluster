@@ -1,0 +1,25 @@
+# Every-minute schedule for the pmcluster health watchdog.
+#
+# Installed by `pmcluster cluster update` (every node), which enables it and
+# starts it. The matching service runs ONE probe; see pmcluster-watchdog.service
+# for what it will and will not restart.
+#
+# 60 s, not 10 s: the decision needs three consecutive failures, and probing
+# faster would only make a wedged node write more journal lines. 90 s after boot
+# is long enough for a slow daemon to bind and short enough that a node which
+# boots wedged is fixed with no login.
+#
+# Persistent is deliberately NOT set: a run missed while the node was down is
+# meaningless — the thing being probed was down too.
+
+[Unit]
+Description=pmcluster health watchdog (every minute)
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=pmcluster-watchdog.service
+
+[Install]
+WantedBy=timers.target

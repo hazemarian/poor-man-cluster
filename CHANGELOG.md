@@ -3,6 +3,73 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — a saturated node recovers itself
+
+**Three failures, one theme: the platform could be taken down by load and then needed a
+human with a login to come back.** On 2026-11-10 a CI build OOM-killed `nxt-sw-1-m` and
+`nxt-sw-3-w`; both went `Down` with `sshd` dead, so nothing could be restarted remotely and
+the cluster ran two-of-three managers for hours. `3-w` has 1839 MB of RAM and had been
+given a runner with a `2560m` cap — a limit larger than the machine, which is permission to
+OOM the host. The three changes below are the three halves of that: detect a wedged daemon
+and restart it in place, bound what the control plane itself may consume, and refuse a
+runner that cannot fit.
+
+- **A health watchdog on every node.** `pmcluster-watchdog.timer` runs `pmcluster
+  health-watch` every 60 s: a 5 s `GET http://127.0.0.1:9090/health`. It restarts the
+  `pmcluster` unit only when the unit is `active`, the probe has failed **3** consecutive
+  times, the unit has been up **> 5 min**, and the last restart was **> 10 min** ago, and it
+  writes one journal line naming the count. The counter lives in
+  `~/.pmcluster/watchdog.json`, so the restart it triggers does not reset it. Installed by
+  `cluster up` / `cluster update`; `contrib/systemd/pmcluster-watchdog.{service,timer}` is
+  the reference. See [`docs/health.md`](docs/health.md#a-wedged-daemon-restarts-itself).
+- **`docs/health.md`** documents what the watchdog will *not* restart — an inactive or
+  failed unit, a blip, an upgrade's fresh unit, or more than once per ten minutes — because
+  each of those is a loop waiting to happen.
+
+## Unreleased — the documentation catches up with the runners, and setup can set every knob
+
+**Every change below shipped with prose that described the system before it.** Reading the
+docs end to end against the code found five kinds of stale claim, each of which sends an
+operator to the wrong fix: `internal/ARCHITECTURE.md` still described a runner per *private
+repository* (repo-scoped token, a stack per runner, `pmcluster.runner.repo` labels) when the
+build is one org-level runner per *worker node* with an mTLS assignment channel; `runners.md`
+named *Organization → Administration: Read & write* in one section and Self-hosted runners in
+another; it documented `myoung34/github-runner:latest` after the image was pinned and
+`RUNNER_SCOPE=org` declared; `registry-credentials.md` said `registry list`'s timestamp never
+moves after the store began resetting `created_at` on rotation; and the observability chapter
+still said the self-telemetry endpoint is decided once at startup and the node-stats file
+rotates with no backups — the two behaviours that were just fixed.
+
+- **`docs/health.md` gained the chapter the panel needed**: why a node can be missing from
+  Node resources (the exporter is re-probed every minute, the sampler starts on the first
+  success), what each probe outcome does, and why the node-stats file is `2 MiB / 1 backup`
+  (722 MiB across 372 files on a live leader with `max_backups: 0`). It also says plainly that
+  this is not a `doctor` check, and names the two commands that are.
+- **`pmcluster/docs/observability.md`** no longer claims resolution is startup-only, and its
+  diagram and troubleshooting table carry the bounded rotation.
+- **`docs/runners.md`** has one permission answer (Self-hosted runners, at the org level), the
+  pinned image and `RUNNER_SCOPE=org` with the exit-1 it prevents, the assignment's `held`
+  flag (a console Kill now reaches the owning node), and the setup flags.
+- **`pmcluster/internal/ARCHITECTURE.md`** describes the runner machinery as built: per-node
+  loops before the leadership wait, the 9092 mTLS listener bound to the swarm data-path
+  address, identity from the node certificate only, the resolved-spec reply, the pinned
+  container, and `github_runners_state` as bookkeeping.
+- **`docs/settings.md`** states where each runner knob is set — including that
+  `github_runner_assignment_interval` has no console field — and that the settings surface
+  refuses an out-of-range interval instead of clamping it.
+- **Setup mode can set the two remaining knobs**: `--github-runner-socket-path` and
+  `--github-runner-assignment-interval`, validated before they are persisted (setup writes
+  settings directly, so the settings allowlist cannot catch a bad value). `setup --help` now
+  lists the runner and App blocks, and says what the runner gate refuses.
+- **Setup evaluates the App before the runner gate**, so one invocation can pass
+  `--github-app-id/--github-installation-id/--github-app-key-file` *and*
+  `--github-runners-enabled`. Previously that combination was refused with "runners require a
+  configured GitHub App" — about the App it had not stored yet.
+- **README** gains one paragraph: install → App → runners → first CI job, with the two
+  three-step caveats (permission approval, then a re-minted token; a worker, not a manager).
+- The console's own CI-runners purpose line said "one runner per private repository"; it now
+  says one per selected worker node, in both locales.
+
 ## Unreleased — the console's Settings page states its prerequisites
 
 **Three settings failures in one evening were all the same failure: the page made

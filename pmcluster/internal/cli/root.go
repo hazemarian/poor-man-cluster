@@ -83,6 +83,8 @@ func init() {
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(clusterCmd)
+	// Hidden: run by pmcluster-watchdog.timer, never by an operator.
+	rootCmd.AddCommand(healthWatchCmd)
 }
 
 // Execute runs the root command. main() exits non-zero on error.

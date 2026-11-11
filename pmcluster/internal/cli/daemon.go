@@ -61,6 +61,104 @@ WantedBy=docker.service
 // daemonUnitPath is the systemd unit location. Overridable in tests.
 var daemonUnitPath = "/etc/systemd/system/pmcluster.service"
 
+// watchdogUnitPaths returns the watchdog's two unit files. They live NEXT TO the
+// daemon unit, so a test (or a host with a non-standard unit directory) keeps
+// both in one place and nothing writes to /etc that was not asked to.
+func watchdogUnitPaths() (service, timer string) {
+	dir := filepath.Dir(daemonUnitPath)
+	return filepath.Join(dir, "pmcluster-watchdog.service"),
+		filepath.Join(dir, "pmcluster-watchdog.timer")
+}
+
+// renderWatchdogService builds pmcluster-watchdog.service: one oneshot run of
+// the hidden health-watch subcommand, driven by the timer below.
+//
+// Root, because the one thing it does is `systemctl restart pmcluster`. The
+// probe URL, the unit name and the state file are all passed explicitly: the
+// watchdog must not need to read the operator's config (it runs as root, and a
+// root process guessing at another user's data dir is how the wrong state file
+// gets written).
+//
+// No After=/BindsTo=docker.service, unlike the daemon unit: a wedge is often
+// caused by exactly the thing a dependency ordering would wait for.
+func renderWatchdogService(execStart, statePath, probeURL string) string {
+	return fmt.Sprintf(`[Unit]
+Description=pmcluster health watchdog (restarts a wedged daemon)
+# A watchdog that is rate-limited by systemd is a watchdog that stops watching:
+# ten starts per five minutes is above the one-per-ten-minutes floor the
+# command enforces, so this limit only ever catches a stuck unit.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=%s health-watch --state-file %s --probe-url %s --unit pmcluster
+# A probe is 5s and a restart is bounded by systemd; the ceiling exists so a
+# hung systemctl cannot stack timer runs on top of each other.
+TimeoutStartSec=120
+# The control plane's own monitor yields to the workload it is watching.
+Nice=5
+`, execStart, statePath, probeURL)
+}
+
+// renderWatchdogTimer builds pmcluster-watchdog.timer: every 60 seconds, with
+// the first run a minute and a half after boot (long enough for a slow daemon to
+// bind, short enough that a node which boots wedged is fixed without a login).
+func renderWatchdogTimer() string {
+	return `[Unit]
+Description=pmcluster health watchdog (every minute)
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=pmcluster-watchdog.service
+
+[Install]
+WantedBy=timers.target
+`
+}
+
+// installWatchdog writes and enables the watchdog units for this node's data
+// dir. A failure is a warning, never fatal: the daemon is already running by the
+// time this is called, and refusing to finish an update because a timer could
+// not be enabled would trade a degraded node for a broken one.
+func installWatchdog(out io.Writer, exe, dataDir string) {
+	servicePath, timerPath := watchdogUnitPaths()
+	statePath := filepath.Join(dataDir, watchdogStateFile)
+	units := []struct {
+		path string
+		body string
+	}{
+		{servicePath, renderWatchdogService(exe, statePath, defaultWatchdogProbeURL)},
+		{timerPath, renderWatchdogTimer()},
+	}
+	changed := false
+	for _, u := range units {
+		existing, _ := os.ReadFile(u.path)
+		if string(existing) == u.body {
+			continue
+		}
+		if err := writeUnitFn(u.path, []byte(u.body), 0o644); err != nil {
+			fmt.Fprintf(out, "  ⚠ health watchdog not installed: %v\n", err)
+			return
+		}
+		changed = true
+	}
+	if changed {
+		fmt.Fprintf(out, "→ installed health watchdog units %s, %s\n", servicePath, timerPath)
+	}
+	for _, args := range [][]string{{"daemon-reload"}, {"enable", "pmcluster-watchdog.timer"}, {"restart", "pmcluster-watchdog.timer"}} {
+		if err := systemctlFn(args...); err != nil {
+			fmt.Fprintf(out, "  ⚠ health watchdog may not run: systemctl %s: %v\n", strings.Join(args, " "), err)
+			return
+		}
+	}
+	fmt.Fprintf(out, "→ health watchdog active (probes %s every 60 s; restarts the unit after %d consecutive failures)\n",
+		defaultWatchdogProbeURL, WatchdogFailuresBeforeRestart)
+}
+
 // rootDataDir is where the daemon's state lives when it was initialised under
 // root (see ensureDaemonRunning's SUDO_USER fallback). Overridable in tests.
 var rootDataDir = "/root/.pmcluster"
@@ -190,6 +288,12 @@ func ensureDaemonRunning(out io.Writer) error {
 		return fmt.Errorf("systemctl restart pmcluster: %w", err)
 	}
 	fmt.Fprintln(out, "→ pmcluster daemon started via systemd (pmcluster serve)")
+
+	// The watchdog goes in directly after the daemon, on every node (worker as
+	// well as manager: a wedged worker daemon is just as unreachable). It is the
+	// only actor that can restart a daemon that is alive and no longer
+	// answering — see internal/cli/watchdog.go for the bounds on that.
+	installWatchdog(out, exe, filepath.Join(home, ".pmcluster"))
 
 	// The snapshot agent is installed only when the operator opts this node in.
 	//

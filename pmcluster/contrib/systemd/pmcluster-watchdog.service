@@ -1,0 +1,60 @@
+# Reference template for the pmcluster health watchdog (one run).
+#
+# This unit is INSTALLED BY THE CLI, not by hand:
+#   pmcluster cluster update        # every node, next to pmcluster.service
+# which renders it with this node's binary path, probe URL and state file, and
+# enables pmcluster-watchdog.timer next to it.
+#
+# If you prefer to write it yourself, copy this file to
+# /etc/systemd/system/pmcluster-watchdog.service and replace:
+#   /usr/local/bin/pmcluster              — path to the binary
+#   /home/pmuser/.pmcluster/watchdog.json — the data dir of the user that owns
+#                                            ~/.pmcluster (root's is /root/.pmcluster)
+#
+# What it is for: systemd's Restart=always covers a daemon that EXITS. It does
+# nothing for a daemon that is still `active (running)` and no longer answering,
+# which is the state a wedged loop or a nearly-OOM machine produces. This probe
+# is the only thing on the node that can bring that daemon back without a login.
+#
+# What it will NOT do (each bound is deliberate):
+#   - restart a unit that is not `active`  (failed/inactive is systemd's state
+#     machine or an operator's `systemctl stop`, not a wedge);
+#   - restart after one or two failed probes (a blip, not a wedge);
+#   - restart a unit that entered `active` less than 5 minutes ago (an upgrade,
+#     a manual restart, or this watchdog's own last action);
+#   - restart more than once per 10 minutes.
+# The consecutive-failure count lives in the state file below, so a restart does
+# not reset it to zero and turn the watchdog into a restart loop.
+#
+# After placing the file:
+#   systemctl daemon-reload
+#   systemctl enable --now pmcluster-watchdog.timer
+#
+# Check it with:
+#   systemctl list-timers pmcluster-watchdog.timer
+#   journalctl -u pmcluster-watchdog --since -1h     # one line per restart
+
+[Unit]
+Description=pmcluster health watchdog (restarts a wedged daemon)
+# Deliberately NO After=docker.service / BindsTo=docker.service: a wedge is
+# often caused by the very dependency an ordering would wait for, and the
+# watchdog must be able to act while docker is restarting.
+# A watchdog that systemd rate-limits is a watchdog that stops watching. Ten
+# starts per five minutes sits above the command's own one-per-ten-minutes
+# floor, so this limit only ever catches a genuinely stuck unit.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=oneshot
+# Root: the one thing this does is `systemctl restart pmcluster`.
+User=root
+ExecStart=/usr/local/bin/pmcluster health-watch \
+  --state-file /home/pmuser/.pmcluster/watchdog.json \
+  --probe-url http://127.0.0.1:9090/health \
+  --unit pmcluster
+# The probe has a 5 s timeout and a restart is bounded by systemd; this ceiling
+# exists so a hung `systemctl` cannot stack timer runs on top of each other.
+TimeoutStartSec=120
+# The control plane's monitor yields to the workload it is watching.
+Nice=5

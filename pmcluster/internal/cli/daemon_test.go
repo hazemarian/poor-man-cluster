@@ -184,9 +184,9 @@ func TestEnsureDaemonRunning_FallsBackToRootDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var wrote []byte
+	var wrote = map[string][]byte{}
 	writeUnitFn = func(path string, data []byte, mode os.FileMode) error {
-		wrote = data
+		wrote[path] = data
 		return nil
 	}
 
@@ -197,8 +197,9 @@ func TestEnsureDaemonRunning_FallsBackToRootDataDir(t *testing.T) {
 	if err := ensureDaemonRunning(&out); err != nil {
 		t.Fatalf("ensureDaemonRunning: %v", err)
 	}
-	if !bytes.Contains(wrote, []byte("User=root")) {
-		t.Errorf("unit must run as root when only /root/.pmcluster holds state:\n%s", wrote)
+	unit := wrote[daemonUnitPath]
+	if !bytes.Contains(unit, []byte("User=root")) {
+		t.Errorf("unit must run as root when only /root/.pmcluster holds state:\n%s", unit)
 	}
 }
 

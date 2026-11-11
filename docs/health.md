@@ -123,6 +123,75 @@ pmcluster node versions       # the fleet table, stragglers named
 label, so its binary version is unknowable from the swarm. The command says so
 rather than letting a list of five managers read as a list of every node.
 
+## A node with no row in Node resources
+
+The console's node panel is fed by each node's **own** daemon over OTLP, through the
+leader's collector, into `/var/stack/nodestat/nodestat.jsonl`. A node missing from
+the table is therefore a telemetry question, not a swarm one — and it is the
+question this section exists to answer, because the panel looked broken while four
+daemons had simply given up.
+
+**The endpoint is supervised, not decided at boot.** `pmcluster serve` resolves
+self-telemetry (`otlp_endpoint: auto` → this node's swarm address, dial-checked)
+every **minute** and reconciles the exporter with the answer:
+
+| The probe says | What the daemon does |
+|---|---|
+| an endpoint answers, none was running | starts the exporter, logs `OTel telemetry enabled` with the URL |
+| the same endpoint still answers | nothing (no restart, no reconnect) |
+| a *different* endpoint answers | shuts the old exporter down first, then starts the new one, so one node never exports under two addresses |
+| nothing answers any more | stops the exporter, logs `self-telemetry disabled` **once** with the reason |
+| still nothing, still disabled | one DEBUG line per probe (`self-telemetry still unavailable`), never a WARN per minute |
+
+The node-stat sampler starts **once, on the first successful probe**, and never stops
+afterwards: a sampler with no exporter would do work nobody reads. Its own sampling
+is unconditional by node (the leader included) because the collector's file exporter
+is a sink, not a loop.
+
+Before this, the decision was taken once at startup. A node that booted while the
+collector was being rescheduled disabled its exporter permanently and stayed dark
+until someone restarted the daemon — measured on a live worker whose journal still
+said `self-telemetry disabled: nothing answers at http://10.7.224.10:4318
+(connection refused)` six hours after that port had started answering `200`. The
+five-node cluster showed one row.
+
+```sh
+journalctl -u pmcluster | grep -i "self-telemetry\|OTel telemetry"
+docker service ps observability_otel-collector     # is the collector itself running
+ss -ltnp | grep 4318                               # does this node answer the OTLP port
+```
+
+A node whose probe never succeeds is not a `doctor` failure, and `doctor` does not
+check it: `doctor` answers "is this node's daemon, socket, assignment, runner and
+disk healthy", and a missing exporter is a *panel* symptom with a *telemetry* cause.
+Those three commands are the check.
+
+### The node-stats file is bounded on purpose
+
+The collector writes that JSONL file through a `file` exporter with
+`rotation: {max_megabytes: 2, max_backups: 1}`. Both numbers are load-bearing:
+
+- `max_backups` **must be ≥ 1**. At `0` the exporter renames the rolled file to
+  `nodestat-<timestamp>-size.jsonl` and never deletes it, while the reader keeps
+  tailing only the newest file. A live leader grew that directory to **722 MiB
+  across 372 files** before anyone looked, and nothing was broken enough to notice:
+  the panel worked the whole time.
+- A sample is a few hundred bytes, so 2 MiB is thousands of them: a rotation is
+  infrequent, and when it happens the reader detects the new inode (or a shrink)
+  and rebuilds from the **last 256 KiB** — enough for every node to contribute at
+  least one sample — rather than insisting on an offset that no longer means
+  anything. It never truncates the file: the exporter holds it open, and truncating
+  produces a sparse NUL-filled middle that neither side can parse.
+
+```sh
+du -sh /var/stack/nodestat && ls /var/stack/nodestat | wc -l
+# expected: a few MiB, one or two files
+```
+
+A directory that keeps growing points at an exporter config older than this one still
+being deployed: `pmcluster cluster update` re-renders the collector config, and the
+platform prints a warning naming the path when it cannot create it.
+
 ## Services with no stack
 
 `pmcluster cluster orphans` lists swarm services that carry no stack namespace.
@@ -143,3 +212,72 @@ stack is gone: that service belongs to a deploy that is still converging, and
 removing it would race the stack's own re-deploy. The command exits non-zero if
 any removal fails, so a scripted cleanup cannot pass on a partial result.
 
+
+## A wedged daemon restarts itself
+
+`systemd`'s `Restart=always` covers a process that **exits**. It does nothing for
+one that is still `active (running)` and no longer answering — a control loop
+stuck on a lock, or a daemon that survived an OOM event by swapping instead of
+dying. That state is the one that left two nodes unreachable on 2026-11-10: both
+were OOM-killed by a CI build, `sshd` died with them, and with no login there was
+no way to restart anything. A restart needing a human is not a restart.
+
+So every node runs one more timer, installed next to the daemon unit by
+`pmcluster cluster up` / `cluster update`:
+
+```sh
+systemctl list-timers pmcluster-watchdog.timer
+journalctl -u pmcluster-watchdog.service --since -6h   # one line per restart
+cat ~/.pmcluster/watchdog.json                          # the counter
+```
+
+`pmcluster-watchdog.timer` fires every 60 s (first run 90 s after boot, so a slow
+daemon can bind). It runs `pmcluster health-watch`, a hidden subcommand that
+`GET`s `http://127.0.0.1:9090/health` with a 5 s timeout. It is hidden because it
+is not an operator command: there is nothing to configure and nothing to decide.
+
+**The restart happens only when all four bounds hold.** Each one exists because
+the alternative is a machine that restarts its own control plane in a loop:
+
+| Bound | Value | Why it is not optional |
+|---|---|---|
+| unit is `active` | — | an `inactive` or `failed` unit is systemd's state machine or an operator's `systemctl stop`; restarting it would make a deliberate stop a fight, and after `StartLimitBurst` the unit is `failed` on purpose |
+| consecutive failed probes | **3** (~3 min) | one miss is a GC pause or a busy CPU during a build; three is a minute of silence a healthy daemon cannot produce |
+| unit age | **> 5 min** since `ActiveEnterTimestamp` | a daemon that entered `active` a minute ago is an upgrade, a manual restart, or this watchdog's own last action, not a wedge |
+| time since last restart | **> 10 min** | a daemon that cannot answer ten minutes after a restart is not fixed by another restart, and one restart per minute makes the journal unusable exactly when it is being read |
+
+A restart writes **one** line naming the count:
+
+```
+2026-11-11T03:41:07Z pmcluster-watchdog: restarted the unit after 3 consecutive failed /health probes (last restart never)
+```
+
+**The counter is a file, not memory.** `~/.pmcluster/watchdog.json`
+(`{"failures":3,"last_restart":…}`) belongs to the data dir precisely so the
+restart it triggers does not reset it to zero — a counter in `/run` or in the
+process would give you one restart per minute forever. It is written 0600 via a
+rename, and a corrupt or missing file reads as `failures: 0`: the worst case is
+one extra minute of silence, never a crash loop.
+
+What the watchdog will **not** do, on purpose:
+
+- **Restart a unit that is not active.** See the table; `systemctl stop pmcluster`
+  stays stopped, and `failed` after a crash loop stays `failed` for a human.
+- **Restart on one or two failures.** Including the loopback path being briefly
+  unavailable during an upgrade: the probe answers again, the counter resets, and
+  the recovery line says how many it had.
+- **Restart a unit younger than five minutes.** This is the upgrade guard.
+- **Restart more than once per ten minutes.**
+- **Restart anything but the unit.** It is not a container supervisor and does not
+  touch runners, stacks or Docker.
+- **Probe anything but loopback.** `serve` binds `0.0.0.0`; the probe is always
+  `127.0.0.1:<port>` (a configured `[::]` becomes `::1`), so a firewall change on
+  the node's public address can never make the daemon look wedged.
+
+A non-2xx answer counts as a failure. `/health` is unauthenticated and exempt from
+the adoption gate, so anything but 2xx means something *other than this daemon*
+holds the port — a proxy, a stale listener — and that is worth the same restart.
+
+The units are `contrib/systemd/pmcluster-watchdog.{service,timer}` (reference) and
+the CLI writes them on every `cluster update`; an install failure is a warning, not
+a failed update, because the daemon has already been started by that point.
