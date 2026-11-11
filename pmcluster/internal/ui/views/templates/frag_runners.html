@@ -121,7 +121,7 @@
                 {{else}}<span class="pill warn" data-tip="{{.Reason}}"><i class="dot"></i>{{.Role}}</span>{{end}}
               </td>
               <td>
-                {{if .Selected}}{{if .RunnerState}}<span class="pill {{if eq .RunnerState "idle"}}good{{else if eq .RunnerState "busy"}}warn{{else}}bad{{end}}"><i class="dot"></i>{{T (printf "runners.state_%s" .RunnerState)}}</span>
+                {{if .Selected}}{{if .RunnerState}}<span class="pill {{if eq .RunnerState "idle"}}good{{else if eq .RunnerState "busy"}}warn{{else if eq .RunnerState "between_jobs"}}plain{{else}}bad{{end}}"><i class="dot"></i>{{T (printf "runners.state_%s" .RunnerState)}}</span>
                 {{else}}<span class="muted">{{T "runners.state_none"}}</span>{{end}}
                 {{else}}<span class="muted">{{T "runners.not_selected"}}</span>{{end}}
                 {{/* The refusal, in the picker's own row: it names this node's RAM

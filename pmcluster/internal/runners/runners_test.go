@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -676,5 +677,57 @@ func TestRestartOnAnotherNodeClearsTheHoldAndNamesTheOwner(t *testing.T) {
 	// The hold is what the console exists to clear; it must not survive.
 	if h.mgr.HeldName(h.ctx, RunnerName("worker-1")) {
 		t.Fatal("the hold survived the restart")
+	}
+}
+
+// TestEphemeralRunnerBetweenJobsIsNotOffline: an ephemeral runner exits 0 when its
+// job finishes and the reconcile starts another. Between those two moments there is
+// no container — which the state machine can only call "offline", the word an
+// operator reads as "my CI is broken". Measured on the live fleet: a healthy worker
+// showed offline for the minute between two builds.
+func TestEphemeralRunnerBetweenJobsIsNotOffline(t *testing.T) {
+	h := newHarness(t, harnessOpts{enabled: true, org: "acme", nodes: "worker-1"})
+	h.mgr.Node = "worker-2" // the row belongs to another node: no container visible
+
+	// It has run before — RegisteredAt is set when a container last started with a
+	// fresh token — which is what makes "between jobs" true rather than "never
+	// started".
+	st := loadState(h.ctx, h.mgr.Store)
+	st.Runners[RunnerName("worker-1")] = RunnerState{
+		Name: RunnerName("worker-1"), Org: "acme",
+		RegisteredAt: h.mgr.now().Add(-10 * time.Minute).Unix(),
+	}
+	if err := saveState(h.ctx, h.mgr.Store, st); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+
+	rows, err := h.mgr.Runners(h.ctx)
+	if err != nil {
+		t.Fatalf("Runners: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if rows[0].State != StateBetweenJobs {
+		t.Fatalf("state = %q, want %q (a selected ephemeral runner with no container is between jobs)", rows[0].State, StateBetweenJobs)
+	}
+}
+
+// …but a runner that keeps failing is NOT "between jobs": deriveRunnerState has
+// already said failed, and that must survive.
+func TestAFailingRunnerIsNotCalledBetweenJobs(t *testing.T) {
+	h := newHarness(t, harnessOpts{enabled: true, org: "acme", nodes: "worker-1"})
+	h.mgr.Node = "worker-2"
+	st := loadState(h.ctx, h.mgr.Store)
+	st.Runners[RunnerName("worker-1")] = RunnerState{Failures: 4, LastError: "boom"}
+	if err := saveState(h.ctx, h.mgr.Store, st); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	rows, err := h.mgr.Runners(h.ctx)
+	if err != nil {
+		t.Fatalf("Runners: %v", err)
+	}
+	if rows[0].State != StateFailed {
+		t.Fatalf("state = %q, want %q", rows[0].State, StateFailed)
 	}
 }

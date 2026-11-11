@@ -27,6 +27,13 @@ const (
 	StateFailed   = "failed"
 )
 
+// StateBetweenJobs is the normal state of an EPHEMERAL runner that has no
+// container at this instant: the container exits 0 when its one job finishes and
+// the next reconcile starts another. Calling that "offline" is a lie that costs
+// trust — measured on the live fleet, where a perfectly healthy worker showed
+// offline for the minute between two builds, and looked like the runner was down.
+const StateBetweenJobs = "between_jobs"
+
 // ModeEphemeral is the only mode the platform creates: one job, then exit.
 const ModeEphemeral = "ephemeral"
 
@@ -142,6 +149,21 @@ func (m *Manager) Runners(ctx context.Context) ([]store.GitHubRunner, error) {
 			now:          now,
 			cooldown:     m.cooldown(),
 		})
+		// An ephemeral runner between jobs has no container and no registration,
+		// which deriveRunnerState can only call "offline". Nothing is wrong: the
+		// node is selected, the feature is on, the operator has not held it, and
+		// the cap fits. Say that instead of the word that reads as a fault.
+		// "Between jobs" is only true of a runner that HAS run: RegisteredAt is
+		// set when a container last started with a fresh token. A node that has
+		// never registered has no jobs to be between, so it keeps `offline` and the
+		// operator sees that something has not started yet.
+		//
+		// A FAILED runner keeps its state too: deriveRunnerState returns StateFailed,
+		// not StateOffline, so this mapping cannot hide a real fault.
+		if row.Mode == ModeEphemeral && row.State == StateOffline &&
+			row.Reason == "" && !state.held(name) && row.RegisteredAt > 0 {
+			row.State = StateBetweenJobs
+		}
 		if remoteOK {
 			row.LastSeen = now.Unix()
 		}

@@ -445,6 +445,9 @@ func stateClass(state string) string {
 		return "good"
 	case runners.StateBusy, runners.StateStarting:
 		return "warn"
+	case runners.StateBetweenJobs:
+		// Not a fault: an ephemeral runner has no container between jobs.
+		return "plain"
 	default: // offline, failed
 		return "bad"
 	}

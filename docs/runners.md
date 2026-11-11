@@ -401,7 +401,15 @@ host networking.
   the node's available memory. Managers are greyed out with the reason on hover.
   Saving writes `github_runner_nodes` in the page's order.
 - **Table** — scope (org), name, node, state pill (`idle`/`busy`/`starting`/
-  `offline`/`failed`), mode, age, last job.
+  `between_jobs`/`offline`/`failed`), mode, age, last job.
+
+  `between_jobs` exists because the other word lied: runners are **ephemeral** — the
+  container exits `0` when its one job finishes and the reconcile starts another, so
+  between two builds there is no container and the state machine can only say
+  `offline`. An operator reads that as "my CI is broken". It is reported instead as
+  `between jobs`, and a runner that is genuinely failing still shows `failed`
+  (`deriveRunnerState` returns that before the mapping), so the friendlier word never
+  hides a fault.
 - **Kill** per row removes the container and the registration, and holds the runner
   so no pass re-registers it. The hold is **persisted on the leader and sent to the
   owning node in its next assignment** (`held: true`), so a kill for a runner on
