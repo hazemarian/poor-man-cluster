@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -138,4 +139,30 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// TestControllers_PickerRendersExactlyOneInputPerNode is the regression for a
+// selection that could be added to but never removed: the node list was rendered
+// twice (a .only-md table and a .only-sm kv block) and BOTH carried
+// <input name="node" value="…">. A hidden input still submits, so un-ticking the
+// box an operator could see left the hidden copy ticked and Save re-sent it.
+func TestControllers_PickerRendersExactlyOneInputPerNode(t *testing.T) {
+	h := newCtrlHarness(t)
+	h.mountRunners()
+	body := h.get(t, "/web/runners").Body.String()
+
+	// Whatever the fixture's nodes are, each may be a form control once.
+	re := regexp.MustCompile(`name="node" value="([^"]+)"`)
+	seen := map[string]int{}
+	for _, m := range re.FindAllStringSubmatch(body, -1) {
+		seen[m[1]]++
+	}
+	if len(seen) == 0 {
+		t.Fatal("the picker renders no node checkboxes at all")
+	}
+	for node, n := range seen {
+		if n != 1 {
+			t.Errorf("node %s is a form control %d times, want exactly 1 (a duplicate submits even when hidden)", node, n)
+		}
+	}
 }
