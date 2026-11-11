@@ -90,10 +90,29 @@ var AllowTable = []Rule{
 	{Method: "GET", Pattern: "/containers/{id}/logs", Why: "read a job container's output"},
 	{Method: "DELETE", Pattern: "/containers/{id}", Why: "remove it"},
 
-	// Images: pull, build, inspect, tag, remove.
+	// Registry authentication. `docker login` calls POST /auth, which stores a
+	// credential in the DAEMON's config — it grants no host capability, and the
+	// alternative (a mounted config file) would give every job on this node the
+	// same token. Scoped by whatever credential the workflow supplies.
+	{Method: "POST", Pattern: "/auth", Why: "docker login: a job must authenticate to push"},
+
+	// Images: pull, build, inspect, tag, push, remove.
 	{Method: "GET", Pattern: "/images/json", Why: "list images"},
 	{Method: "POST", Pattern: "/images/create", Why: "pull"},
 	{Method: "POST", Pattern: "/build", Why: "build"},
+	// `**` because an image name contains slashes (ghcr.io/acme/app:1.0) — the
+	// {name} placeholder matches one segment and silently refused every real
+	// reference, which is indistinguishable from the route being banned.
+	{Method: "POST", Pattern: "/images/{name}/tag", Why: "tag by short name"},
+	{Method: "POST", Pattern: "/images/**/tag", Why: "tag a registry-qualified name"},
+	// Push is a supply-chain action, and it is here deliberately: a CI job whose
+	// whole purpose is publishing an image cannot work without it. What bounds it
+	// is the credential the job authenticated with — a repo's GITHUB_TOKEN can
+	// only write that repo's packages, so a compromised workflow cannot publish
+	// over another repo's image. It cannot reach the platform's own workloads
+	// either: /services, /nodes and /swarm stay refused below.
+	{Method: "POST", Pattern: "/images/{name}/push", Why: "publish by short name"},
+	{Method: "POST", Pattern: "/images/**/push", Why: "publish a registry-qualified name"},
 	{Method: "GET", Pattern: "/images/{id}/json", Why: "inspect by id"},
 	{Method: "GET", Pattern: "/images/**/json", Why: "inspect by name (the name contains slashes)"},
 	{Method: "DELETE", Pattern: "/images/{id}", Why: "remove by id"},
@@ -325,6 +344,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // family it belongs to and why that family is refused.
 func Check(method, path string) (allowed bool, family, reason string) {
 	method = strings.ToUpper(method)
+	// A traversal segment defeats the allow table: the `**` wildcards that match
+	// a registry-qualified image name also match "x/../../services/foo", and the
+	// DAEMON resolves the dots after we have already said yes. Refuse them here,
+	// before any pattern is consulted — this is the difference between a narrow
+	// allow list and a wide one with a hole in it.
+	for _, seg := range strings.Split(strings.SplitN(path, "?", 2)[0], "/") {
+		if seg == ".." || seg == "." {
+			return false, "traversal", "path contains a traversal segment, which the allow table cannot match safely"
+		}
+	}
 	segs := segments(path)
 	for _, rule := range AllowTable {
 		if rule.Method != "*" && rule.Method != method {

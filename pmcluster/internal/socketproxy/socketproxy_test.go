@@ -94,7 +94,10 @@ func TestEveryDeniedFamilyIsRefusedAndNeverForwarded(t *testing.T) {
 		{http.MethodPost, "/v1.43/plugins/pull"},
 		{http.MethodPost, "/v1.43/system/df"},
 		{http.MethodPost, "/v1.43/session"},
-		{http.MethodPost, "/v1.43/auth"},
+		// /auth deliberately moved to the ALLOW list: docker login is how a job
+		// authenticates to push, and it grants no host capability. /services and
+		// /nodes above are what keep a pushed image from touching the platform.
+
 		{http.MethodPost, "/v1.43/containers/abc/exec"},
 		{http.MethodPost, "/v1.43/exec/xyz/start"},
 		{http.MethodGet, "/v1.43/exec/xyz/json"},
@@ -126,7 +129,10 @@ func TestUnlistedRoutesAreRefused(t *testing.T) {
 		{http.MethodPost, "/v1.43/containers/abc/attach"},
 		{http.MethodPost, "/v1.43/containers/abc/copy"},
 		{http.MethodGet, "/v1.43/nope"},
-		{http.MethodPost, "/v1.43/images/nginx/push"},
+		// /images/nginx/push moved to the allow table: publishing is what a CI
+		// job is for. The traversal guard below is what keeps that from being a
+		// way back into /services.
+		{http.MethodPost, "/v1.43/images/x/../../services/pmcluster_edge"},
 	} {
 		p, tr := newTestProxy(t)
 		if rec := serve(p, c.method, c.path, ""); rec.Code != http.StatusForbidden {
@@ -324,4 +330,38 @@ func TestSuperviseStartsAndStopsWithTheSwitch(t *testing.T) {
 		t.Fatalf("the socket file survived the stop (%v)", err)
 	}
 	cancel()
+}
+
+// TestWorkflowCanAuthenticateTagAndPush: a CI job exists to publish an image, so
+// docker login (POST /auth), tagging and pushing must pass while the swarm
+// surfaces stay refused. Measured on a live runner: every registry login failed
+// with "POST /v1.43/auth is not allowed", which made the whole self-hosted
+// migration look like a buildx problem.
+func TestWorkflowCanAuthenticateTagAndPush(t *testing.T) {
+	for _, c := range []struct{ method, path string }{
+		{http.MethodPost, "/v1.43/auth"},
+		{http.MethodPost, "/v1.43/build"},
+		{http.MethodPost, "/v1.43/images/ghcr.io/acme/app:1.0/tag"},
+		{http.MethodPost, "/v1.43/images/ghcr.io/acme/app:1.0/push"},
+	} {
+		p, tr := newTestProxy(t)
+		rec := serve(p, c.method, c.path, `{}`)
+		if rec.Code == http.StatusForbidden {
+			t.Errorf("%s %s refused, want allowed for a publishing workflow: %s", c.method, c.path, rec.Body.String())
+			continue
+		}
+		if tr.count() == 0 {
+			t.Errorf("%s %s never reached the daemon", c.method, c.path)
+		}
+	}
+	// And the platform surfaces stay closed to the same caller.
+	for _, c := range []struct{ method, path string }{
+		{http.MethodPost, "/v1.43/services/pmcluster_edge/update"},
+		{http.MethodPost, "/v1.43/images/x/../../services/pmcluster_edge"},
+	} {
+		p, tr := newTestProxy(t)
+		if rec := serve(p, c.method, c.path, `{}`); rec.Code != http.StatusForbidden || tr.count() != 0 {
+			t.Errorf("%s %s = %d (reached=%d), want 403 and no upstream call", c.method, c.path, rec.Code, tr.count())
+		}
+	}
 }
