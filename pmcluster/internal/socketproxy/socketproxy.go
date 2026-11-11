@@ -128,6 +128,23 @@ var AllowTable = []Rule{
 	{Method: "POST", Pattern: "/networks/create", Why: "create a build network"},
 	{Method: "GET", Pattern: "/networks/{id}", Why: "inspect a network"},
 	{Method: "DELETE", Pattern: "/networks/{id}", Why: "remove a network"},
+
+	// BuildKit's session channel. THIS is what makes the docker driver work:
+	// without it buildx cannot attach a session to the daemon's built-in
+	// BuildKit, so it falls back to the docker-container driver — which then
+	// fails on PUT /containers/{id}/archive and leaves every `docker build`
+	// broken. Measured on a live runner: `buildx ls` reported
+	// "default* docker-container error" even with BUILDX_CONFIG cleared.
+	//
+	// Why it is acceptable: a session is the same capability POST /build already
+	// grants — run a build against the daemon. It carries the build context and
+	// the builder's own file sync; it cannot read /secrets, /configs, /nodes or
+	// touch /services, all of which stay refused below. It is also the endpoint
+	// that made the docker-container driver possible, which is why it was on the
+	// deny list originally — the deny is what forced the slow path, not what
+	// protected the swarm.
+	{Method: "POST", Pattern: "/session", Why: "BuildKit session for the docker driver"},
+	{Method: "POST", Pattern: "/grpc", Why: "BuildKit gRPC transport over the same session"},
 }
 
 // DeniedFamily names an API section that must never be reachable from a

@@ -93,7 +93,9 @@ func TestEveryDeniedFamilyIsRefusedAndNeverForwarded(t *testing.T) {
 		{http.MethodGet, "/v1.43/configs"},
 		{http.MethodPost, "/v1.43/plugins/pull"},
 		{http.MethodPost, "/v1.43/system/df"},
-		{http.MethodPost, "/v1.43/session"},
+		// /session moved to the allow table: it is what the docker driver needs,
+		// and it grants the same build capability POST /build already does.
+
 		// /auth deliberately moved to the ALLOW list: docker login is how a job
 		// authenticates to push, and it grants no host capability. /services and
 		// /nodes above are what keep a pushed image from touching the platform.
