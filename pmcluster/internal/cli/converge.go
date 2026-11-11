@@ -12,7 +12,8 @@ import (
 // stopUnitDropIn is where the memory bounds live. A drop-in is merged by systemd
 // and cannot clobber ExecStart/User, so converging it from inside the daemon is
 // safe on any node regardless of how it was installed.
-const stopUnitDropIn = "/etc/systemd/system/pmcluster.service.d/memory.conf"
+// Overridable in tests, like daemonUnitPath.
+var stopUnitDropIn = "/etc/systemd/system/pmcluster.service.d/memory.conf"
 
 // convergeSystemd keeps this node's systemd protection in step with the binary
 // that is actually running.
@@ -56,23 +57,18 @@ func convergeSystemd(logf func(string, ...any)) {
 		return
 	}
 
-	if mem := memoryLimitsFor(hostMemTotalMiB()); mem.TotalMiB > 0 {
-		path := stopUnitDropIn
-		want := fmt.Sprintf("# Managed by pmcluster: a limit larger than the host is not a limit.\n[Service]\nMemoryHigh=%dM\nMemoryMax=%dM\nOOMScoreAdjust=-500\n",
-			mem.HighMiB, mem.MaxMiB)
-		existing, err := os.ReadFile(path)
-		if err != nil || string(existing) != want {
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
-				if err := os.WriteFile(path, []byte(want), 0o644); err != nil {
-					logf("systemd convergence: cannot write %s: %v", path, err)
-				} else {
-					logf("memory bounds written for this host (MemoryHigh=%dM, MemoryMax=%dM of %d MiB) — they apply on the next restart",
-						mem.HighMiB, mem.MaxMiB, mem.TotalMiB)
-					if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
-						logf("systemd convergence: daemon-reload failed: %v", err)
-					}
-				}
-			}
+	mem := memoryLimitsFor(hostMemTotalMiB())
+	if changed, err := writeMemoryDropIn(mem); err != nil {
+		logf("systemd convergence: cannot write %s: %v", stopUnitDropIn, err)
+	} else if changed {
+		if mem.TotalMiB > 0 {
+			logf("memory bounds written for this host (MemoryHigh=%dM, MemoryMax=%dM of %d MiB) — they apply on the next restart",
+				mem.HighMiB, mem.MaxMiB, mem.TotalMiB)
+		} else {
+			logf("memory bounds: this host's MemTotal could not be read, so only OOMScoreAdjust was written")
+		}
+		if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+			logf("systemd convergence: daemon-reload failed: %v", err)
 		}
 	}
 
@@ -86,4 +82,46 @@ func convergeSystemd(logf func(string, ...any)) {
 	if err := exec.Command("systemctl", "enable", "--now", "pmcluster-watchdog.timer").Run(); err != nil {
 		logf("systemd convergence: could not enable the watchdog timer: %v", err)
 	}
+}
+
+// writeMemoryDropIn writes the memory bounds and reports whether the file changed.
+//
+// The drop-in is the ONLY place these numbers live. They used to be rendered into
+// the main unit as well, which is how a node ends up with two answers to "what is
+// the limit?" — the unit's and the drop-in's, with the drop-in winning only
+// because systemd loads it later. One owner, and it is the one that is recomputed
+// from /proc/meminfo on every start, so a resized host is picked up without anyone
+// remembering to re-render the unit.
+//
+// OOMScoreAdjust is written even when MemTotal is unreadable: -500 does not depend
+// on knowing the host's size, and the ordering is worth having either way.
+func writeMemoryDropIn(mem MemoryLimits) (bool, error) {
+	var want string
+	if mem.TotalMiB > 0 {
+		want = fmt.Sprintf(`# Managed by pmcluster — do not edit: rewritten on every daemon start.
+# 60%% / 70%% of this host's %d MiB. A limit larger than the host is not a limit:
+# on a 1839 MB node a 2560m runner cap was permission to OOM the host and take it
+# Down with sshd.
+[Service]
+MemoryHigh=%dM
+MemoryMax=%dM
+# Prefer the WORKLOAD over the control plane when the kernel picks a victim.
+OOMScoreAdjust=-500
+`, mem.TotalMiB, mem.HighMiB, mem.MaxMiB)
+	} else {
+		want = `# Managed by pmcluster — do not edit: rewritten on every daemon start.
+# This host's MemTotal could not be read, so no memory limit is written; a guessed
+# one could exceed the host. The OOM ordering does not depend on the host's size.
+[Service]
+OOMScoreAdjust=-500
+`
+	}
+	existing, err := os.ReadFile(stopUnitDropIn)
+	if err == nil && string(existing) == want {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(stopUnitDropIn), 0o755); err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(stopUnitDropIn, []byte(want), 0o644)
 }

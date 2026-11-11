@@ -285,9 +285,21 @@ a failed update, because the daemon has already been started by that point.
 
 ## Memory boundaries: a limit larger than the host is not a limit
 
-The daemon unit carries two cgroup limits, and both are **computed from this
-host's `MemTotal` at install time** — `pmcluster cluster update` reads
-`/proc/meminfo` and writes the numbers:
+Two cgroup limits are **computed from this host's `MemTotal`**, and they live in
+exactly one file — the drop-in
+`/etc/systemd/system/pmcluster.service.d/memory.conf`. The daemon rewrites it on
+every start (`install`/`join`/`cluster up`/`cluster update` write it too, but the
+start-up convergence is what makes an upgrade self-healing):
+
+```
+/proc/meminfo → 60 % / 70 % → memory.conf → systemctl daemon-reload → applies on the next restart
+```
+
+The main unit carries **no** memory directives. It used to, and that is how a node
+ends up with two answers to "what is the limit?" — the unit's and the drop-in's,
+with the drop-in winning only because systemd loads it later. One owner, and it is
+the one recomputed on every start, so a resized host is picked up without anyone
+remembering to re-render the unit.
 
 | Setting | Value | What it does |
 |---|---|---|
@@ -316,7 +328,9 @@ outright; these bounds are the other half, for the process that must survive.
 
 **What happens when `MemTotal` cannot be read:** no limit is written at all and
 `cluster update` says so —
-`⚠ could not read this host's MemTotal: no MemoryHigh/MemoryMax written`. A
+`⚠ could not read this host's MemTotal: no MemoryHigh/MemoryMax written` (the
+drop-in is still written, with `OOMScoreAdjust` only — that part does not depend on
+the host's size). A
 default would be a constant that could exceed a small host, which is the failure
 this section exists to prevent. `OOMScoreAdjust=-500` is still written: it does
 not depend on knowing the size.

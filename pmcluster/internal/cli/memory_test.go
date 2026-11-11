@@ -52,32 +52,40 @@ func TestMemoryLimitsFor_UnknownRAMWritesNothing(t *testing.T) {
 	if l := memoryLimitsFor(0); l.TotalMiB != 0 || l.HighMiB != 0 || l.MaxMiB != 0 {
 		t.Fatalf("memoryLimitsFor(0) = %+v, want the zero value", l)
 	}
-	// And the unit must carry no limit at all — a default here would be a
-	// constant that could exceed a small host.
-	svc := unitSections(t, renderSystemdUnit("pmuser", "docker", "/home/pmuser", "/bin/pmcluster serve", MemoryLimits{}))["Service"]
-	if _, set := svc["MemoryMax"]; set {
-		t.Errorf("unknown RAM rendered MemoryMax=%q; a guessed limit is what this exists to prevent", svc["MemoryMax"])
-	}
-	if _, set := svc["MemoryHigh"]; set {
-		t.Errorf("unknown RAM rendered MemoryHigh=%q", svc["MemoryHigh"])
-	}
-	// -500 is still right: it does not depend on knowing the host's size.
-	if svc["OOMScoreAdjust"] != "-500" {
-		t.Errorf("OOMScoreAdjust = %q, want -500 even when RAM is unknown", svc["OOMScoreAdjust"])
+	// The MAIN unit carries no memory directives at all, ever: they belong to the
+	// drop-in, which is recomputed on every start. Two owners meant two answers.
+	svc := unitSections(t, renderSystemdUnit("pmuser", "docker", "/home/pmuser", "/bin/pmcluster serve"))["Service"]
+	for _, key := range []string{"MemoryMax", "MemoryHigh", "OOMScoreAdjust"} {
+		if v, set := svc[key]; set {
+			t.Errorf("the unit still carries %s=%q; the drop-in is the only owner", key, v)
+		}
 	}
 }
 
-// TestRenderSystemdUnit_MemoryBoundariesAreOnTheHost: the rendered unit carries
-// what was computed, and the values are below the host total.
-func TestRenderSystemdUnit_MemoryBoundariesAreOnTheHost(t *testing.T) {
-	const total = int64(3852)
-	mem := memoryLimitsFor(total)
-	svc := unitSections(t, renderSystemdUnit("pmuser", "docker", "/home/pmuser", "/bin/pmcluster serve", mem))["Service"]
+// TestMemoryDropIn_IsTheOnlyOwner: the bounds are written to the drop-in, are
+// derived from the host, and a second identical write is a no-op — otherwise every
+// start would trigger a daemon-reload for nothing.
+func TestMemoryDropIn_IsTheOnlyOwner(t *testing.T) {
+	old := stopUnitDropIn
+	t.Cleanup(func() { stopUnitDropIn = old })
+	stopUnitDropIn = filepath.Join(t.TempDir(), "memory.conf")
 
+	mem := memoryLimitsFor(3852)
+	changed, err := writeMemoryDropIn(mem)
+	if err != nil {
+		t.Fatalf("writeMemoryDropIn: %v", err)
+	}
+	if !changed {
+		t.Error("the first write reported no change")
+	}
+	body, err := os.ReadFile(stopUnitDropIn)
+	if err != nil {
+		t.Fatalf("read drop-in: %v", err)
+	}
+	svc := unitSections(t, string(body))["Service"]
 	parse := func(key string) int64 {
 		t.Helper()
-		raw := strings.TrimSuffix(svc[key], "M")
-		n, err := strconv.ParseInt(raw, 10, 64)
+		n, err := strconv.ParseInt(strings.TrimSuffix(svc[key], "M"), 10, 64)
 		if err != nil {
 			t.Fatalf("%s=%q is not a MiB quantity: %v", key, svc[key], err)
 		}
@@ -87,16 +95,24 @@ func TestRenderSystemdUnit_MemoryBoundariesAreOnTheHost(t *testing.T) {
 	if high >= max {
 		t.Errorf("MemoryHigh %dM >= MemoryMax %dM", high, max)
 	}
-	if max >= total {
-		t.Errorf("MemoryMax %dM >= host total %d MiB: that is not a limit", max, total)
+	if max >= mem.TotalMiB {
+		t.Errorf("MemoryMax %dM >= host total %d MiB: that is not a limit", max, mem.TotalMiB)
 	}
 	if svc["OOMScoreAdjust"] != "-500" {
 		t.Errorf("OOMScoreAdjust = %q, want -500: the kernel must prefer the workload", svc["OOMScoreAdjust"])
 	}
-	// Nothing may be hardcoded: 3852 MiB must produce different numbers from 1839.
-	other := unitSections(t, renderSystemdUnit("pmuser", "docker", "/home/pmuser", "/bin/pmcluster serve", memoryLimitsFor(1839)))["Service"]
-	if other["MemoryMax"] == svc["MemoryMax"] {
-		t.Errorf("MemoryMax is the same on 1839 and 3852 MiB hosts (%s): it is hardcoded", svc["MemoryMax"])
+
+	// Hardcoded values would give a 1839 MiB host the same numbers.
+	if memoryLimitsFor(1839).MaxMiB == mem.MaxMiB {
+		t.Errorf("MemoryMax is the same on 1839 and 3852 MiB hosts (%d): it is hardcoded", mem.MaxMiB)
+	}
+
+	changed, err = writeMemoryDropIn(mem)
+	if err != nil {
+		t.Fatalf("second writeMemoryDropIn: %v", err)
+	}
+	if changed {
+		t.Error("an unchanged host reported a change, which would daemon-reload on every start")
 	}
 }
 
@@ -117,6 +133,7 @@ func TestEnsureDaemonRunning_WritesTheHostsMemoryBounds(t *testing.T) {
 
 	dir := t.TempDir()
 	daemonUnitPath = filepath.Join(dir, "pmcluster.service")
+	stopUnitDropIn = filepath.Join(dir, "memory.conf")
 	var out bytes.Buffer
 	if err := ensureDaemonRunning(&out); err != nil {
 		t.Fatalf("ensureDaemonRunning: %v", err)
@@ -125,9 +142,16 @@ func TestEnsureDaemonRunning_WritesTheHostsMemoryBounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read unit: %v", err)
 	}
+	if strings.Contains(string(unit), "MemoryMax=") {
+		t.Errorf("the install wrote a limit into the main unit as well as the drop-in:\n%s", unit)
+	}
+	dropIn, err := os.ReadFile(stopUnitDropIn)
+	if err != nil {
+		t.Fatalf("the installer did not write %s: %v", stopUnitDropIn, err)
+	}
 	for _, want := range []string{"MemoryHigh=1103M", "MemoryMax=1287M", "OOMScoreAdjust=-500"} {
-		if !strings.Contains(string(unit), want) {
-			t.Errorf("unit missing %q:\n%s", want, unit)
+		if !strings.Contains(string(dropIn), want) {
+			t.Errorf("drop-in missing %q:\n%s", want, dropIn)
 		}
 	}
 	if !strings.Contains(out.String(), "1103M") || !strings.Contains(out.String(), "1839 MiB") {
@@ -150,7 +174,9 @@ func TestEnsureDaemonRunning_UnknownRAMWarns(t *testing.T) {
 	hostMemTotalMiB = func() int64 { return 0 }
 	t.Setenv("PMCLUSTER_USER", "testuser")
 
-	daemonUnitPath = filepath.Join(t.TempDir(), "pmcluster.service")
+	dirU := t.TempDir()
+	daemonUnitPath = filepath.Join(dirU, "pmcluster.service")
+	stopUnitDropIn = filepath.Join(dirU, "memory.conf")
 	var out bytes.Buffer
 	if err := ensureDaemonRunning(&out); err != nil {
 		t.Fatalf("ensureDaemonRunning: %v", err)
@@ -160,7 +186,17 @@ func TestEnsureDaemonRunning_UnknownRAMWarns(t *testing.T) {
 		t.Fatalf("read unit: %v", err)
 	}
 	if strings.Contains(string(unit), "MemoryMax=") {
-		t.Errorf("unknown RAM still wrote a limit:\n%s", unit)
+		t.Errorf("unknown RAM still wrote a limit into the unit:\n%s", unit)
+	}
+	dropIn, derr := os.ReadFile(stopUnitDropIn)
+	if derr != nil {
+		t.Fatalf("read drop-in: %v", derr)
+	}
+	if strings.Contains(string(dropIn), "MemoryMax=") {
+		t.Errorf("unknown RAM wrote a guessed limit into the drop-in:\n%s", dropIn)
+	}
+	if !strings.Contains(string(dropIn), "OOMScoreAdjust=-500") {
+		t.Errorf("unknown RAM dropped the OOM ordering too; -500 does not need MemTotal:\n%s", dropIn)
 	}
 	if !strings.Contains(out.String(), "could not read this host's MemTotal") {
 		t.Errorf("unknown RAM did not warn:\n%s", out.String())

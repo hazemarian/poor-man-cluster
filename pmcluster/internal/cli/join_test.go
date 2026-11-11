@@ -15,7 +15,7 @@ import (
 )
 
 func TestRenderSystemdUnit(t *testing.T) {
-	unit := renderSystemdUnit("pmuser", "docker", "/home/pmuser", "/usr/local/bin/pmcluster serve", memoryLimitsFor(2048))
+	unit := renderSystemdUnit("pmuser", "docker", "/home/pmuser", "/usr/local/bin/pmcluster serve")
 	for _, want := range []string{
 		"[Unit]",
 		"Description=pmcluster API Server",

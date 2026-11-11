@@ -90,24 +90,6 @@ var hostMemTotalMiB = func() int64 {
 	return 0
 }
 
-// memoryLines renders the [Service] memory boundaries. Unknown RAM renders an
-// explanatory comment and no limit — never a default.
-func memoryLines(mem MemoryLimits) string {
-	if mem.TotalMiB <= 0 {
-		return "# MemoryHigh/MemoryMax not set: this host's MemTotal could not be read at install\n" +
-			"# time, and a guessed limit could exceed the host (see docs/health.md).\n" +
-			"OOMScoreAdjust=-500\n"
-	}
-	return fmt.Sprintf(`# Memory boundaries: 60%% / 70%% of this host's %d MiB, computed at install time.
-# A limit larger than the host is not a limit — on a 1839 MB node a 2560m runner
-# cap was permission to OOM the host and take it Down with sshd.
-MemoryHigh=%dM
-MemoryMax=%dM
-# Prefer the WORKLOAD over the control plane when the kernel picks a victim.
-OOMScoreAdjust=-500
-`, mem.TotalMiB, mem.HighMiB, mem.MaxMiB)
-}
-
 // renderSystemdUnit builds the pmcluster systemd unit file. The daemon is
 // managed by the CLI (cluster up/update, join) — install.sh never writes it.
 //
@@ -129,7 +111,11 @@ OOMScoreAdjust=-500
 // state an operator can see and act on. A crash loop is a bug to fix, not a
 // rhythm to keep; the unit must not be the loudest writer in the journal while
 // somebody is trying to read it.
-func renderSystemdUnit(pmUser, group, home, execStart string, mem MemoryLimits) string {
+// renderSystemdUnit writes the unit WITHOUT memory bounds: they live in
+// pmcluster.service.d/memory.conf, owned by the daemon's own convergence, because
+// that file is recomputed from /proc/meminfo on every start. Two owners meant two
+// answers to "what is the limit?" (see writeMemoryDropIn).
+func renderSystemdUnit(pmUser, group, home, execStart string) string {
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster API Server
 After=docker.service
@@ -148,11 +134,11 @@ Environment=HOME=%s
 ExecStart=%s
 Restart=always
 RestartSec=10
-%s
+
 [Install]
 WantedBy=multi-user.target
 WantedBy=docker.service
-`, pmUser, group, home, execStart, memoryLines(mem))
+`, pmUser, group, home, execStart)
 }
 
 // daemonUnitPath is the systemd unit location. Overridable in tests.
@@ -365,7 +351,7 @@ func ensureDaemonRunning(out io.Writer) error {
 		return fmt.Errorf("resolve binary path for unit: %w", err)
 	}
 
-	unit := renderSystemdUnit(pmUser, group, home, daemonExecStart(exe), memoryLimitsFor(hostMemTotalMiB()))
+	unit := renderSystemdUnit(pmUser, group, home, daemonExecStart(exe))
 
 	// Write the unit only when missing or changed (operator edits win).
 	existing, _ := os.ReadFile(daemonUnitPath)
@@ -374,13 +360,23 @@ func ensureDaemonRunning(out io.Writer) error {
 			return fmt.Errorf("write %s: %w", daemonUnitPath, err)
 		}
 		fmt.Fprintf(out, "→ installed systemd unit %s (user %s, group %s)\n", daemonUnitPath, pmUser, group)
-		mem := memoryLimitsFor(hostMemTotalMiB())
-		if mem.TotalMiB > 0 {
-			fmt.Fprintf(out, "  memory bounds: MemoryHigh=%dM, MemoryMax=%dM (%d%%/%d%% of this host's %d MiB)\n",
-				mem.HighMiB, mem.MaxMiB, memoryHighPercent, memoryMaxPercent, mem.TotalMiB)
-		} else {
-			fmt.Fprintf(out, "  ⚠ could not read this host's MemTotal: no MemoryHigh/MemoryMax written (a guessed limit could exceed the host)\n")
+	}
+
+	// The memory bounds go in a drop-in, which is also what the daemon rewrites on
+	// every start. Writing them here as well is what made a fresh install and an
+	// upgrade disagree about the same number.
+	mem := memoryLimitsFor(hostMemTotalMiB())
+	if changed, err := writeMemoryDropIn(mem); err != nil {
+		fmt.Fprintf(out, "  ⚠ could not write %s: %v\n", stopUnitDropIn, err)
+	} else if mem.TotalMiB > 0 {
+		note := ""
+		if changed {
+			note = " (updated)"
 		}
+		fmt.Fprintf(out, "  memory bounds: MemoryHigh=%dM, MemoryMax=%dM (%d%%/%d%% of this host's %d MiB)%s\n",
+			mem.HighMiB, mem.MaxMiB, memoryHighPercent, memoryMaxPercent, mem.TotalMiB, note)
+	} else {
+		fmt.Fprintf(out, "  ⚠ could not read this host's MemTotal: no MemoryHigh/MemoryMax written (a guessed limit could exceed the host)\n")
 	}
 
 	for _, args := range [][]string{{"daemon-reload"}, {"enable", "pmcluster"}} {
