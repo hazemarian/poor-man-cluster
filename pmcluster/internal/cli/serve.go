@@ -168,6 +168,14 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			log.Warn().Msgf(format, args...)
 		})
 
+		// Converge this node's systemd protection with the binary that is now
+		// running: an upgrade swaps the binary and restarts the service, so a
+		// node that never runs `cluster up` otherwise keeps the unit it was
+		// installed with — measured after the watchdog shipped, where the leader
+		// had memory bounds and an active watchdog timer and the OOM-killed
+		// worker had neither.
+		go convergeSystemd(func(f string, a ...any) { log.Info().Msgf(f, a...) })
+
 		// Publish this node's binary version so skew is visible before an
 		// upgrade script discovers it.
 		//
