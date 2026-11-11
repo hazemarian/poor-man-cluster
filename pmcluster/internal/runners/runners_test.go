@@ -40,8 +40,11 @@ func TestArgvMountsTheFilteredSocketAndNoneOther(t *testing.T) {
 	if !strings.Contains(joined, "DOCKER_HOST=unix:///run/pmcluster/docker.sock") {
 		t.Fatalf("argv has no DOCKER_HOST pointing at the filtered socket: %s", joined)
 	}
-	if !strings.Contains(joined, "-v /run/pmcluster/docker.sock:/run/pmcluster/docker.sock") {
-		t.Fatalf("argv does not mount the filtered socket: %s", joined)
+	// The DIRECTORY is mounted, not the socket: a file bind-mount pins an inode
+	// the daemon replaces on every restart, which left running runners unable to
+	// reach docker after an upgrade.
+	if !strings.Contains(joined, "-v /run/pmcluster:/run/pmcluster") {
+		t.Fatalf("argv does not mount the filtered socket's directory: %s", joined)
 	}
 	for _, want := range []string{
 		"ORG_NAME=acme",

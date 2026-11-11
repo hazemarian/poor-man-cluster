@@ -415,8 +415,8 @@ func TestAgentAppliesEnabledAssignment(t *testing.T) {
 		t.Fatalf("the worker's runner mounts the RAW socket: %s", argv)
 	}
 	if !strings.Contains(argv, "DOCKER_HOST=unix:///run/pmcluster/docker.sock") ||
-		!strings.Contains(argv, "-v /run/pmcluster/docker.sock:/run/pmcluster/docker.sock") {
-		t.Fatalf("the worker's runner does not mount the filtered socket: %s", argv)
+		!strings.Contains(argv, "-v /run/pmcluster:/run/pmcluster") {
+		t.Fatalf("the worker's runner does not mount the filtered socket's directory: %s", argv)
 	}
 	if !strings.Contains(argv, "RUNNER_TOKEN=reg-token") || !strings.Contains(argv, "RUNNER_NAME=pmc-nxt-sw-6-w-org") {
 		t.Fatalf("argv = %s", argv)

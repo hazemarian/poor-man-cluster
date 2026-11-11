@@ -2,6 +2,7 @@ package runners
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -92,16 +93,27 @@ func (s Spec) Argv() ([]string, error) {
 		"-e", "DISABLE_AUTO_UPDATE=true",
 		"-e", "RUNNER_WORKDIR=/_work",
 	}
+	// Neutralise the image's pre-created docker-container builder so `docker
+	// build` uses the daemon's own BuildKit. See EnvFixups.
+	for _, kv := range s.EnvFixups() {
+		args = append(args, "-e", kv)
+	}
 	if s.SocketProxy {
 		path := s.SocketPath
 		if strings.TrimSpace(path) == "" {
 			path = "/run/pmcluster/docker.sock"
 		}
-		// Same path inside and out: DOCKER_HOST can then be a plain unix path
-		// that also appears in the docs and in `docker inspect`.
+		// Mount the DIRECTORY, not the socket file. The daemon recreates the
+		// socket on every restart and a file bind-mount pins the OLD inode, so a
+		// running runner loses the daemon the moment pmcluster restarts —
+		// measured on a live runner: "Cannot connect to the Docker daemon at
+		// unix:///run/pmcluster/docker.sock" after an upgrade, with the socket
+		// present on the host. Same path inside and out keeps DOCKER_HOST a plain
+		// unix path that also reads correctly in `docker inspect`.
+		dir := filepath.Dir(path)
 		args = append(args,
 			"-e", "DOCKER_HOST=unix://"+path,
-			"-v", path+":"+path,
+			"-v", dir+":"+dir,
 		)
 	} else {
 		args = append(args,
@@ -111,6 +123,23 @@ func (s Spec) Argv() ([]string, error) {
 	}
 	args = append(args, image)
 	return args, nil
+}
+
+// EnvFixups are environment variables that correct a property of the RUNNER
+// IMAGE which breaks builds on this platform, and which no workflow should have
+// to work around.
+//
+// The image (myoung34/github-runner) ships a pre-created buildx builder named
+// "default" using the **docker-container** driver. Every plain `docker build`
+// therefore delegates to a BuildKit container, which the filtered socket cannot
+// populate (PUT /containers/{id}/archive) nor exec into — measured on a live
+// runner: `buildx ls` showed default* docker-container with STATUS error, and
+// `buildx create --driver docker` is impossible because that driver is a
+// singleton. Pointing BUILDX_CONFIG at a per-container empty directory makes the
+// CLI use the daemon's own BuildKit (the docker driver) instead, which is what
+// every workflow expects and what the proxy allows.
+func (s Spec) EnvFixups() []string {
+	return []string{"BUILDX_CONFIG=/tmp/pmcluster-buildx"}
 }
 
 // UsesRawSocket reports whether the spec mounts the host's docker socket.
