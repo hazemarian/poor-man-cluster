@@ -61,6 +61,9 @@ type killJSON struct {
 	Held              bool   `json:"held"`
 	Registered        bool   `json:"registered"`
 	RegistrationError string `json:"registration_error"`
+	// Registration says where a re-creation will happen when the runner lives on
+	// another node (a worker rebuilds its own container; the leader cannot).
+	Registration string `json:"registration"`
 }
 
 func toKillJSON(out KillOutcome) killJSON { return killJSON(out) }

@@ -266,3 +266,48 @@ func TestGitHubRunnersCheckDoesNotInventProblemsForRemoteNodes(t *testing.T) {
 		t.Fatalf("detail invents a missing container: %q", c.Detail)
 	}
 }
+
+// TestGitHubRunnersCheckDoesNotCallRegistrationRunning: "registered and running" is
+// a claim about containers. This daemon only sees containers on its own node, so
+// from the leader the old wording said "2 runner(s) registered and running" about a
+// node with no container at all — while the runner was still pulling its image, or
+// never started. The detail must state what was observed.
+func TestGitHubRunnersCheckDoesNotCallRegistrationRunning(t *testing.T) {
+	c := runRunnerCheck(t, stubRunners{rep: runners.Report{
+		Enabled:       true,
+		AppConfigured: true,
+		Org:           "acme",
+		Group:         "pmcluster",
+		Nodes: []runners.NodeReport{{
+			Node: "worker-1", Role: "worker", RunnerName: "pmc-worker-1-org",
+			Registered: true,
+			// ContainerKnown=false: this daemon cannot see worker-1's containers.
+		}},
+	}})
+	if c.Status != StatusOK {
+		t.Fatalf("status = %s, want ok: %s", c.Status, c.Detail)
+	}
+	if strings.Contains(c.Detail, "registered and running") {
+		t.Fatalf("the detail claims a container it cannot see: %q", c.Detail)
+	}
+	if !strings.Contains(c.Detail, "none confirmed running") {
+		t.Fatalf("the detail does not say the container is unconfirmed: %q", c.Detail)
+	}
+}
+
+// …and when the container WAS observed running, the strong claim is correct.
+func TestGitHubRunnersCheckSaysRunningWhenItSawIt(t *testing.T) {
+	c := runRunnerCheck(t, stubRunners{rep: runners.Report{
+		Enabled:       true,
+		AppConfigured: true,
+		Org:           "acme",
+		Group:         "pmcluster",
+		Nodes: []runners.NodeReport{{
+			Node: "worker-1", Role: "worker", RunnerName: "pmc-worker-1-org",
+			Registered: true, ContainerKnown: true, ContainerRunning: true,
+		}},
+	}})
+	if !strings.Contains(c.Detail, "registered and running") {
+		t.Fatalf("an observed container is not reported as running: %q", c.Detail)
+	}
+}

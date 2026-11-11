@@ -649,3 +649,32 @@ func TestArgvDeclaresTheRunnerScope(t *testing.T) {
 		t.Fatalf("the runner image is not pinned: %v", args)
 	}
 }
+
+// TestRestartOnAnotherNodeClearsTheHoldAndNamesTheOwner is the regression for a
+// restart that behaved like a failure: the leader cannot recreate a worker's
+// container, so the old code fell through to its own selection check and answered
+// "node <leader> is not in github_runner_nodes" — naming the wrong machine, after
+// having already deregistered the runner.
+func TestRestartOnAnotherNodeClearsTheHoldAndNamesTheOwner(t *testing.T) {
+	h := newHarness(t, harnessOpts{enabled: true, org: "acme", nodes: "worker-1"})
+	// The manager here runs on worker-2: a different node from the runner's.
+	h.mgr.Node = "worker-2"
+
+	out, err := h.mgr.Restart(h.ctx, RunnerName("worker-1"), false)
+	if err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	if out.RegistrationError != "" {
+		t.Fatalf("a restart of another node's runner reported an error: %q", out.RegistrationError)
+	}
+	if !strings.Contains(out.Registration, "worker-1") {
+		t.Fatalf("the answer does not name the owning node: %q", out.Registration)
+	}
+	if strings.Contains(out.Registration, "worker-2") {
+		t.Fatalf("the answer names THIS node instead of the runner's: %q", out.Registration)
+	}
+	// The hold is what the console exists to clear; it must not survive.
+	if h.mgr.HeldName(h.ctx, RunnerName("worker-1")) {
+		t.Fatal("the hold survived the restart")
+	}
+}

@@ -500,8 +500,29 @@ func checkGitHubRunners(ctx context.Context, in Input) Check {
 	if len(rep.Nodes) > 0 && rep.Nodes[0].DockerAccess == "raw socket" {
 		access = "raw docker socket (debug fallback)"
 	}
-	detail := fmt.Sprintf("%s: %d runner(s) registered and running on %d selected node(s), docker access via %s",
-		head, len(healthy), len(rep.Nodes), access)
+	// "registered and running" is a claim about containers, and this daemon can
+	// only see containers on the node it runs on. Counting registration as
+	// running is how doctor said "2 runner(s) registered and running" about a node
+	// with no container at all — the mirror of the false "no container" warning it
+	// used to print. Say what was observed, and say what was not.
+	confirmed := 0
+	for _, n := range rep.Nodes {
+		if n.ContainerKnown && n.ContainerRunning {
+			confirmed++
+		}
+	}
+	var detail string
+	switch {
+	case confirmed == len(rep.Nodes):
+		detail = fmt.Sprintf("%s: %d runner(s) registered and running on %d selected node(s), docker access via %s",
+			head, confirmed, len(rep.Nodes), access)
+	case confirmed == 0:
+		detail = fmt.Sprintf("%s: %d runner(s) registered on %d selected node(s); none confirmed running here — a node's containers are only observable on that node itself — docker access via %s",
+			head, len(healthy), len(rep.Nodes), access)
+	default:
+		detail = fmt.Sprintf("%s: %d runner(s) registered on %d selected node(s), %d confirmed running from this node (the rest are observable only on their own node), docker access via %s",
+			head, len(healthy), len(rep.Nodes), confirmed, access)
+	}
 	// Name the caps that are NOT the cluster default. A per-node override is the
 	// whole point of the setting, so doctor states the number the node actually
 	// runs with instead of the default every node would otherwise imply.

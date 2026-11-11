@@ -51,6 +51,9 @@ type KillOutcome struct {
 	Registered       bool   `json:"registered,omitempty"`
 	// RegistrationError names the half that did not happen on a restart.
 	RegistrationError string `json:"registration_error,omitempty"`
+	// Registration explains where the re-creation will happen when the runner is
+	// not on this node — a worker rebuilds its own container, not the leader.
+	Registration string `json:"registration,omitempty"`
 }
 
 // Runners returns the console rows: one per selected node when the feature is
@@ -268,6 +271,16 @@ func (m *Manager) Restart(ctx context.Context, name string, confirmBusy bool) (K
 	state.dropHold(name)
 	if err := saveState(ctx, m.Store, state); err != nil {
 		return out, fmt.Errorf("save runner hold: %w", err)
+	}
+	// A runner on ANOTHER node cannot be re-created from here: the container lives
+	// there, and this daemon can only inspect and create containers for m.Node.
+	// The hold is already dropped above, so the owning node's agent will rebuild it
+	// on its next assignment. Reporting m.Node's own selection state instead —
+	// "node nxt-sw-5-m is not in github_runner_nodes" — names the wrong machine and
+	// reads like a failure of the restart.
+	if out.Node != "" && !strings.EqualFold(out.Node, m.Node) {
+		out.Registration = "the hold is cleared; " + out.Node + " will recreate its runner on the next assignment"
+		return out, nil
 	}
 	switch {
 	case cfg.Enabled && !cfg.WatchesNode():
