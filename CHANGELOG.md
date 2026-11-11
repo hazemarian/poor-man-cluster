@@ -3,6 +3,30 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — a per-node runner cap, and the memory bounds get one owner
+
+- **`github_runner_node_memory` — a runner cap per node.** `github_runner_memory` was one
+  number for a fleet of different machines, so it fit the node it was tuned on and was
+  permission to OOM the rest: `2560m` is 66 % of a 3852 MB worker and 139 % of a 1839 MB
+  one. Overrides are `host=cap,host=cap`; the default still applies to every node without
+  one. Resolved in a single function (`Config.CapFor`) and carried **resolved** in the
+  assignment, because a worker cannot read settings at all.
+- **The memory bounds have exactly one owner.** `MemoryHigh`/`MemoryMax`/`OOMScoreAdjust`
+  were rendered into the main unit at install *and* written to
+  `pmcluster.service.d/memory.conf` by start-up convergence. Both were correct and they
+  could disagree; the drop-in won only because systemd loads it later. The unit no longer
+  carries them, `renderSystemdUnit` no longer takes them as an argument, and one helper
+  writes the drop-in for both paths.
+- **`doctor` no longer invents a missing container for a node it cannot see.**
+  `ContainerKnown` distinguishes "not observed" from "not there"; the leader printed
+  "registered but no container is running" for every healthy worker, because the zero
+  value of `ContainerRunning` was read as absence.
+- **The socket proxy splices BuildKit's session.** `/session` and `/grpc` are allowed and
+  hijacked rather than forwarded — an h2c stream does not survive an HTTP/1.1 round trip,
+  and the failure named nothing (`frame too large … looked like an HTTP/1.1 header`). A
+  traversal segment (`.` / `..`) is refused before the allow table is consulted, because
+  the `**` wildcards would otherwise match `x/../../services/…`.
+
 ## Unreleased — a saturated node recovers itself
 
 **Three failures, one theme: the platform could be taken down by load and then needed a

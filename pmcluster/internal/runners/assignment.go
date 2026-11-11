@@ -173,12 +173,16 @@ func ResolveAssignment(cfg Config, nodes []runtime.Node, node string) (Assignmen
 	// selected" for a node that IS selected.
 	cfg.Node = node
 	a := Assignment{
-		Node:            node,
-		Org:             cfg.Org,
-		Group:           cfg.Group,
-		SocketProxy:     cfg.SocketProxy,
-		SocketPath:      cfg.SocketPath,
-		Memory:          cfg.Memory,
+		Node:        node,
+		Org:         cfg.Org,
+		Group:       cfg.Group,
+		SocketProxy: cfg.SocketProxy,
+		SocketPath:  cfg.SocketPath,
+		// The cap travels RESOLVED FOR THIS NODE: a worker cannot read
+		// github_runner_node_memory (configs are manager-only), so if the
+		// leader sent the cluster default the node would start the container
+		// with a cap the leader had just refused.
+		Memory:          cfg.CapFor(node),
 		Mode:            ModeEphemeral,
 		Labels:          Labels,
 		IntervalSeconds: cfg.IntervalSeconds,

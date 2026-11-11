@@ -161,8 +161,9 @@ func (m *Manager) Reconcile(ctx context.Context) (Result, error) {
 			// normally gets this from the leader's assignment (it reads no
 			// settings); this is the same rule for the node whose own store is
 			// current — the leader with github_runner_allow_leader, and the
-			// single-node cluster.
-			if refused, rerr := m.memoryRefusal(ctx, m.Node, cfg.Memory); refused {
+			// single-node cluster. The cap is the one resolved for THIS node,
+			// so an override applies here exactly as it does on the assignment.
+			if refused, rerr := m.memoryRefusal(ctx, m.Node, cfg.CapFor(m.Node)); refused {
 				refusal = fmt.Errorf("refused: %w", rerr)
 			}
 		}
@@ -332,7 +333,7 @@ func (m *Manager) ensure(ctx context.Context, cfg Config, c Container, exists bo
 		Group:       cfg.Group,
 		RunnerName:  name,
 		Image:       cfg.Image,
-		Memory:      cfg.Memory,
+		Memory:      cfg.CapFor(cfg.Node),
 		Token:       token,
 		SocketProxy: cfg.SocketProxy,
 		SocketPath:  cfg.SocketPath,
@@ -352,7 +353,7 @@ func (m *Manager) ensure(ctx context.Context, cfg Config, c Container, exists bo
 		mesh = "raw docker socket (debug fallback)"
 	}
 	m.Log.Info().Str("org", cfg.Org).Str("runner", name).Str("group", cfg.Group).
-		Str("memory", cfg.Memory).Str("docker_access", mesh).
+		Str("memory", cfg.CapFor(cfg.Node)).Str("docker_access", mesh).
 		Msg("runners — registered a runner on this node")
 }
 

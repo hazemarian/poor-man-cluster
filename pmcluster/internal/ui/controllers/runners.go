@@ -83,6 +83,18 @@ type runnerNode struct {
 	RunnerState string
 	MemTotalMB  int64
 	MemAvailMB  int64
+
+	// CapOverride is this node's github_runner_node_memory entry, as stored
+	// (empty: the node uses the cluster default, which the input shows as its
+	// placeholder).
+	CapOverride string
+	// Cap is the EFFECTIVE cap for this node: the override when there is one,
+	// else the cluster default. It is what the row states, so an operator never
+	// has to decide which of "value or placeholder" a runner is running with.
+	Cap string
+	// RefusedReason is why nothing is running on a selected node — the
+	// memory-fit refusal, naming the node's RAM and the cap it was given.
+	RefusedReason string
 }
 
 type runnersData struct {
@@ -95,8 +107,10 @@ type runnersData struct {
 	MsgKey string
 	MsgArg string
 
-	Org    string
-	Group  string
+	Org   string
+	Group string
+	// Memory is the CLUSTER-WIDE default cap (github_runner_memory); a node
+	// with a per-node override shows its own cap in its row.
 	Memory string
 
 	Rows  []runnerRow
@@ -113,8 +127,16 @@ func (c Runners) Page(g *gin.Context) {
 	c.render(g, runnersData{})
 }
 
-// SaveNodes writes the picker's selection to github_runner_nodes, in the node
-// list's order so the stored value does not reshuffle between saves.
+// nodeMemoryFieldPrefix names one picker row's memory input:
+// `node_memory_<hostname>`. The hostname is in the field name (not a positional
+// index) so a row cannot be shifted onto another node by reordering the markup,
+// and an unknown host is refused rather than written.
+const nodeMemoryFieldPrefix = "node_memory_"
+
+// SaveNodes writes the picker's selection to github_runner_nodes and the
+// per-row caps to github_runner_node_memory, in one submit — the two settings
+// are one decision ("where does a runner run, and how big is it there"), and
+// saving one without the other would leave a cap that describes nothing.
 func (c Runners) SaveNodes(g *gin.Context) {
 	d := runnersData{}
 	if c.apiRefused(g, &d) {
@@ -145,8 +167,15 @@ func (c Runners) SaveNodes(g *gin.Context) {
 		}
 		kept = append(kept, n.Hostname)
 	}
+	overrides, errKey, errRaw := c.nodeMemoryOverrides(g, nodes)
+	if errKey != "" {
+		d.fail(errKey, errRaw)
+		c.render(g, d)
+		return
+	}
 	if _, err := c.API.UpdateClusterSettings(g.Request.Context(), map[string]string{
-		"github_runner_nodes": strings.Join(kept, ","),
+		"github_runner_nodes":       strings.Join(kept, ","),
+		"github_runner_node_memory": runners.FormatNodeMemory(overrides),
 	}); err != nil {
 		d.fail("runners.err_save", err.Error())
 		c.render(g, d)
@@ -158,6 +187,47 @@ func (c Runners) SaveNodes(g *gin.Context) {
 		d.MsgKey, d.MsgArg = "runners.msg_saved", strings.Join(kept, ", ")
 	}
 	c.render(g, d)
+}
+
+// nodeMemoryOverrides reads every `node_memory_<host>` field from the same
+// submit. A blank value means "no override" (the cluster default applies), which
+// is how an operator removes one; an unknown host, a manager, or a quantity the
+// rest of the platform would refuse is an error naming the field, not a value
+// silently dropped.
+func (c Runners) nodeMemoryOverrides(g *gin.Context, nodes []pmapi.Node) (map[string]string, string, string) {
+	if err := g.Request.ParseForm(); err != nil {
+		return nil, "runners.err_memory", err.Error()
+	}
+	byHost := make(map[string]pmapi.Node, len(nodes))
+	for _, n := range nodes {
+		byHost[strings.ToLower(n.Hostname)] = n
+	}
+	overrides := map[string]string{}
+	for field, values := range g.Request.PostForm {
+		if !strings.HasPrefix(field, nodeMemoryFieldPrefix) {
+			continue
+		}
+		host := strings.TrimSpace(strings.TrimPrefix(field, nodeMemoryFieldPrefix))
+		raw := ""
+		if len(values) > 0 {
+			raw = strings.TrimSpace(values[len(values)-1])
+		}
+		if raw == "" {
+			continue
+		}
+		node, ok := byHost[strings.ToLower(host)]
+		if !ok {
+			return nil, "runners.err_unknown_node", host
+		}
+		if ok, reason := runners.RolesOf(runtimeNode(node)); !ok {
+			return nil, "runners.err_manager", reason
+		}
+		if err := runners.ValidateMemory(raw); err != nil {
+			return nil, "runners.err_memory", fmt.Sprintf("%s: %v", node.Hostname, err)
+		}
+		overrides[node.Hostname] = raw
+	}
+	return overrides, "", ""
 }
 
 // Kill removes one runner's container and its registration. A busy runner needs
@@ -269,7 +339,14 @@ func (c Runners) render(g *gin.Context, d runnersData) {
 	}
 	d.Org = settings["github_runner_org"]
 	d.Group = settings["github_runner_group"]
-	d.Memory = settings["github_runner_memory"]
+	// One settings view for the whole panel: the effective cap of every row is
+	// resolved by the same function the leader uses on the assignment, so the
+	// number the picker shows is the number the container will get.
+	capCfg := runners.Config{
+		Memory:     settings["github_runner_memory"],
+		NodeMemory: runners.ParseNodeMemory(settings["github_runner_node_memory"]),
+	}
+	d.Memory = capCfg.DefaultCap()
 	selected := map[string]bool{}
 	for _, n := range runners.ParseNodes(settings["github_runner_nodes"]) {
 		selected[strings.ToLower(n)] = true
@@ -309,8 +386,12 @@ func (c Runners) render(g *gin.Context, d runnersData) {
 		mem[strings.ToLower(s.Hostname)] = s
 	}
 	stateByNode := map[string]string{}
+	reasonByNode := map[string]string{}
 	for _, r := range d.Rows {
 		stateByNode[strings.ToLower(r.Node)] = r.State
+		if r.Reason != "" {
+			reasonByNode[strings.ToLower(r.Node)] = r.Reason
+		}
 	}
 	sort.Slice(nodes, func(i, j int) bool {
 		if nodes[i].Role != nodes[j].Role {
@@ -321,15 +402,19 @@ func (c Runners) render(g *gin.Context, d runnersData) {
 	for _, n := range nodes {
 		ok, reason := runners.RolesOf(runtimeNode(n))
 		st := mem[strings.ToLower(n.Hostname)]
+		key := strings.ToLower(n.Hostname)
 		d.Nodes = append(d.Nodes, runnerNode{
-			Hostname:    n.Hostname,
-			Role:        roleLabel(n),
-			Reason:      reason,
-			Selectable:  ok,
-			Selected:    selected[strings.ToLower(n.Hostname)],
-			RunnerState: stateByNode[strings.ToLower(n.Hostname)],
-			MemTotalMB:  st.MemTotalMB,
-			MemAvailMB:  st.MemAvailMB,
+			Hostname:      n.Hostname,
+			Role:          roleLabel(n),
+			Reason:        reason,
+			Selectable:    ok,
+			Selected:      selected[key],
+			RunnerState:   stateByNode[key],
+			MemTotalMB:    st.MemTotalMB,
+			MemAvailMB:    st.MemAvailMB,
+			CapOverride:   capCfg.NodeMemory[key],
+			Cap:           capCfg.CapFor(n.Hostname),
+			RefusedReason: reasonByNode[key],
 		})
 	}
 	c.Views.Fragment(g, "runners", d)

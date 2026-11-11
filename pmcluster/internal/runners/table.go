@@ -101,8 +101,9 @@ func (m *Manager) Runners(ctx context.Context) ([]store.GitHubRunner, error) {
 		// A node whose RAM cannot hold the configured cap is refused before
 		// anything is started, so its row says so instead of looking idle. State
 		// stays `offline` — it is the truth about the container — and Reason is
-		// what makes the row actionable.
-		if refused, rerr := m.memoryRefusal(ctx, node, cfg.Memory); refused {
+		// what makes the row actionable. The cap is resolved for THIS node, so
+		// a refused row names the override the operator actually set.
+		if refused, rerr := m.memoryRefusal(ctx, node, cfg.CapFor(node)); refused {
 			row.State = StateOffline
 			row.Reason = rerr.Error()
 			row.ContainerID = ""

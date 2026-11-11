@@ -176,7 +176,24 @@ const (
 	// value proven on real hardware: at 1500m govulncheck OOM-killed the
 	// runner mid-job, at 2560m it completed. A "m"/"g" suffix is a Docker
 	// memory quantity (2560m ≈ 2.5 GiB).
+	//
+	// It is the CLUSTER-WIDE DEFAULT. A worker whose RAM cannot host that cap
+	// says so with an override instead (settingGitHubRunnerNodeMemory): one
+	// shared cap fits one node and is permission to OOM the other.
 	settingGitHubRunnerMemory = "github_runner_memory"
+
+	// settingGitHubRunnerNodeMemory overrides the memory cap for individual
+	// runner nodes: `host=cap,host=cap` (e.g. nxt-sw-3-w=1200m,
+	// nxt-sw-6-w=2560m). A node with no entry keeps
+	// settingGitHubRunnerMemory, so the setting is additive: an operator only
+	// writes the nodes that differ.
+	//
+	// Why it exists: measured on the live fleet, one 2560m cap was applied to
+	// nxt-sw-3-w (1839 MB) and nxt-sw-6-w (3852 MB). The cap fits one and is
+	// 139 % of the other, so the memory-fit rule refused 3-w — correctly, but
+	// with no way to say "1200m there, 2560m here". A refusal that cannot be
+	// fixed per node is an idle worker, not a boundary.
+	settingGitHubRunnerNodeMemory = "github_runner_node_memory"
 
 	// settingGitHubRunnerAllowLeader lifts the default placement constraint
 	// (node.labels.pmcluster.leader != true). Runners build images and
@@ -249,6 +266,7 @@ func SettingGitHubRunnerNodes() string       { return settingGitHubRunnerNodes }
 func SettingGitHubRunnerSocketProxy() string { return settingGitHubRunnerSocketProxy }
 func SettingGitHubRunnerSocketPath() string  { return settingGitHubRunnerSocketPath }
 func SettingGitHubRunnerMemory() string      { return settingGitHubRunnerMemory }
+func SettingGitHubRunnerNodeMemory() string  { return settingGitHubRunnerNodeMemory }
 func SettingGitHubRunnerAllowLeader() string { return settingGitHubRunnerAllowLeader }
 func SettingGitHubRunnerAssignmentInterval() string {
 	return settingGitHubRunnerAssignmentInterval
@@ -341,6 +359,17 @@ func LoadGitHubRunnerMemory(ctx context.Context, st *store.Store) string {
 		return v
 	}
 	return DefaultGitHubRunnerMemory
+}
+
+// LoadGitHubRunnerNodeMemory returns the persisted per-node memory overrides
+// verbatim (`host=cap,host=cap`). The caller parses it (runners.ParseNodeMemory)
+// and resolves one node's cap with runners.Config.CapFor; an empty value means
+// "every node uses github_runner_memory".
+func LoadGitHubRunnerNodeMemory(ctx context.Context, st *store.Store) string {
+	if st == nil {
+		return ""
+	}
+	return strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerNodeMemory, ""))
 }
 
 // LoadGitHubRunnerAllowLeader reports whether runners may be placed on the

@@ -52,12 +52,15 @@ answers into the store settings:
     later.
   - Self-hosted GitHub Actions runners (off by default): --github-runners-enabled,
     --github-runner-org, --github-runner-group, --github-runner-nodes,
-    --github-runner-socket-proxy, --github-runner-socket-path,
-    --github-runner-memory, --github-runner-allow-leader,
-    --github-runner-assignment-interval. Enabling is REFUSED unless an App is
-    stored (flags above or an earlier run), an organisation is named and at
-    least one WORKER hostname is listed; the error names what is missing, and
-    how to supply it. Managers are refused as runner hosts.
+    --github-runner-node-memory, --github-runner-socket-proxy,
+    --github-runner-socket-path, --github-runner-memory,
+    --github-runner-allow-leader, --github-runner-assignment-interval. Enabling
+    is REFUSED unless an App is stored (flags above or an earlier run), an
+    organisation is named and at least one WORKER hostname is listed; the error
+    names what is missing, and how to supply it. Managers are refused as runner
+    hosts. --github-runner-node-memory overrides the cap per worker
+    (host=cap,host=cap: nxt-sw-3-w=1200m,nxt-sw-6-w=2560m) and the plain
+    --github-runner-memory stays the default for every node without one.
 
 The OpenObserve admin email is derived automatically (admin@<domain>) — it is
 hidden behind the admin-auth / SSO gate, so there is no prompt for it.
@@ -119,6 +122,7 @@ func init() {
 	setupCmd.Flags().Bool("github-runner-socket-proxy", true, "route a runner's docker access through the daemon's filtered socket instead of /var/run/docker.sock")
 	setupCmd.Flags().String("github-runner-socket-path", "", "where the filtered docker socket lives on every node (default "+cluster.DefaultGitHubRunnerSocketPath+")")
 	setupCmd.Flags().String("github-runner-memory", "", "memory limit per runner container (default 2560m)")
+	setupCmd.Flags().String("github-runner-node-memory", "", "per-node memory cap overrides, host=cap,host=cap (e.g. nxt-sw-3-w=1200m,nxt-sw-6-w=2560m); a node without one uses --github-runner-memory (default: $PMCLUSTER_GITHUB_RUNNER_NODE_MEMORY)")
 	setupCmd.Flags().Bool("github-runner-allow-leader", false, "allow runner containers on the leader (single-node clusters only; default: off the leader)")
 	setupCmd.Flags().String("github-runner-assignment-interval", "", "seconds between a node's polls of the leader for its runner assignment, 10-3600 (default 60)")
 	// The App itself is optional here: skipping it is a supported answer, and
@@ -190,6 +194,7 @@ type setupAnswers struct {
 	GitHubRunnerSocketProxy bool
 	GitHubRunnerSocketPath  string
 	GitHubRunnerMemory      string
+	GitHubRunnerNodeMemory  string
 	GitHubRunnerAllowLeader bool
 	// GitHubRunnerAssignmentInterval is a string here (not int) so "unset"
 	// stays distinguishable from an explicit value: empty means "leave the
@@ -372,6 +377,8 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 				strconv.Itoa(cluster.LoadGitHubRunnerAssignmentInterval(ctx, st)))
 			a.GitHubRunnerMemory = ask(r, out, "Memory limit per runner",
 				cluster.LoadGitHubRunnerMemory(ctx, st))
+			a.GitHubRunnerNodeMemory = ask(r, out, "Per-node memory caps, host=cap,host=cap (blank: every node uses the limit above)",
+				cluster.LoadGitHubRunnerNodeMemory(ctx, st))
 			a.GitHubRunnerAllowLeader = askYesNo(r, out,
 				"Allow a runner container on the leader? (only on a single-node cluster)",
 				st.SettingDefault(ctx, cluster.SettingGitHubRunnerAllowLeader(), "") == "true")
@@ -458,6 +465,7 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.GitHubRunnerSocketProxy, _ = cmd.Flags().GetBool("github-runner-socket-proxy")
 		a.GitHubRunnerSocketPath, _ = cmd.Flags().GetString("github-runner-socket-path")
 		a.GitHubRunnerMemory, _ = cmd.Flags().GetString("github-runner-memory")
+		a.GitHubRunnerNodeMemory, _ = cmd.Flags().GetString("github-runner-node-memory")
 		a.GitHubRunnerAllowLeader, _ = cmd.Flags().GetBool("github-runner-allow-leader")
 		a.GitHubRunnerAssignmentInterval, _ = cmd.Flags().GetString("github-runner-assignment-interval")
 		// Optional GitHub App registration; empty strings mean "skipped".
@@ -477,6 +485,11 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		if !cmd.Flags().Changed("github-runner-nodes") {
 			if v := os.Getenv("PMCLUSTER_GITHUB_RUNNER_NODES"); v != "" {
 				a.GitHubRunnerNodes = v
+			}
+		}
+		if !cmd.Flags().Changed("github-runner-node-memory") {
+			if v := os.Getenv("PMCLUSTER_GITHUB_RUNNER_NODE_MEMORY"); v != "" {
+				a.GitHubRunnerNodeMemory = v
 			}
 		}
 		if !cmd.Flags().Changed("github-runner-socket-proxy") {
@@ -786,6 +799,18 @@ func validateRunnerSetup(ctx context.Context, st *store.Store, a setupAnswers, o
 			return fmt.Errorf("github-runner-memory: %w", err)
 		}
 	}
+	// The per-node overrides are validated here for the same reason the socket
+	// path and interval are: setup writes settings DIRECTLY (it does not go
+	// through the settings surface's allowlist), so a bad quantity would
+	// otherwise be persisted and read back as the cluster default forever.
+	// A node named here but not in --github-runner-nodes is NOT refused: a node
+	// may be temporarily deselected, and the override is kept for when it
+	// returns (doctor reports it as stale).
+	if v := strings.TrimSpace(a.GitHubRunnerNodeMemory); v != "" {
+		if _, err := runners.NormalizeNodeMemory(v); err != nil {
+			return fmt.Errorf("github-runner-node-memory: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -937,11 +962,13 @@ func runnerSettings(a setupAnswers) map[string]string {
 	org, _ := runners.NormalizeOrg(a.GitHubRunnerOrg)
 	group, _ := runners.NormalizeGroup(a.GitHubRunnerGroup)
 	nodes, _ := runners.NormalizeNodes(a.GitHubRunnerNodes)
+	nodeMemory, _ := runners.NormalizeNodeMemory(strings.TrimSpace(a.GitHubRunnerNodeMemory))
 	return map[string]string{
 		cluster.SettingGitHubRunnersEnabled():           boolSetting(a.GitHubRunnersEnabled),
 		cluster.SettingGitHubRunnerOrg():                org,
 		cluster.SettingGitHubRunnerGroup():              group,
 		cluster.SettingGitHubRunnerNodes():              nodes,
+		cluster.SettingGitHubRunnerNodeMemory():         nodeMemory,
 		cluster.SettingGitHubRunnerSocketProxy():        strconv.FormatBool(a.GitHubRunnerSocketProxy),
 		cluster.SettingGitHubRunnerSocketPath():         strings.TrimSpace(a.GitHubRunnerSocketPath),
 		cluster.SettingGitHubRunnerMemory():             strings.TrimSpace(a.GitHubRunnerMemory),

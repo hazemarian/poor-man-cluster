@@ -19,7 +19,8 @@ PAT](#why-the-app-not-a-pat) below.
 | `github_runner_nodes` | unset | comma-separated **worker** hostnames that may run a runner — one container each. Managers are refused |
 | `github_runner_socket_proxy` | `true` | route the runner's docker access through the daemon's filtered socket |
 | `github_runner_socket_path` | `/run/pmcluster/docker.sock` | where that socket listens on every node |
-| `github_runner_memory` | `2560m` | per-container memory limit (a Docker quantity: `2560m`, `3g`). `2560m` completed a `govulncheck` run on real hardware; at `1500m` the runner was OOM-killed mid-job. A cap above **70 %** of the target node's RAM is **refused** — see [A runner that cannot fit the node](#a-runner-that-cannot-fit-the-node) |
+| `github_runner_memory` | `2560m` | the DEFAULT per-container memory limit (a Docker quantity: `2560m`, `3g`). `2560m` completed a `govulncheck` run on real hardware; at `1500m` the runner was OOM-killed mid-job. A cap above **70 %** of the target node's RAM is **refused** — see [A runner that cannot fit the node](#a-runner-that-cannot-fit-the-node) |
+| `github_runner_node_memory` | unset | per-node overrides, `host=cap,host=cap`. A named worker uses its own cap; every other node keeps the default. Resolved in exactly one place (`Config.CapFor`), so the assignment payload, the memory-fit refusal, `doctor` and the console row cannot disagree |
 | `github_runner_allow_leader` | `false` | allow a runner on a single-node cluster, where the only node is the leader |
 | `github_runner_assignment_interval` | `60` | seconds between a node's polls of the leader for its runner assignment. The settings surface **refuses** anything outside 10–3600 (a stored value that no longer parses is read as the default, and a stored number outside the range is clamped, so a bad row cannot turn the poll off or hammer the leader); below ten would spend the leader's GitHub quota, above an hour leaves an assignment stale. The leader sends the value inside every answer, because a worker cannot read the setting itself |
 
@@ -328,6 +329,35 @@ prevent a build — it silently forces the `docker-container` driver, which then
 on the archive route above. `buildx create --driver docker` cannot repair it
 either; that driver is a singleton.
 
+### …and why those two routes are *spliced*, not forwarded
+
+Allowing `/session` in the table was necessary and not sufficient. BuildKit's
+session is an **HTTP/2 (h2c) bidirectional stream**: the client sends the request
+and then speaks h2 to the same connection, in both directions at once. The proxy is
+an HTTP/1.1 round-trip forwarder, which can authorise the route and cannot carry the
+traffic — so the build fails before its first step with
+
+```
+Unavailable: error reading server preface: http2: failed reading the frame payload:
+frame too large, note that the frame header looked like an HTTP/1.1 header
+```
+
+Stream routes are therefore **hijacked and spliced** (`Proxy.serveStream`): the
+request head is replayed verbatim to the daemon socket, then bytes flow both ways
+until either side closes. The allow check still runs first, so only `/session` and
+`/grpc` can take that path. A writer that cannot be hijacked gets a `501` naming
+the reason rather than a `403` — "not allowed" would send an operator to the wrong
+place.
+
+### The traversal guard
+
+`**` wildcards in the allow table (`/images/**/push`) also match
+`x/../../services/pmcluster_edge`, and the **daemon** resolves the dots *after* the
+proxy has said yes. `Check` refuses any `.` or `..` path segment before a pattern is
+consulted. Without it a narrow allow list is a wide one with a hole in it — this was
+found by a test, not in production, and only because the wildcard was added the same
+day.
+
 What is still not arranged is a **containerised** builder: a `docker-container`
 builder needs the docker socket inside the builder container plus `--privileged`,
 which would bypass the filter by nesting a daemon. A workflow that creates one
@@ -402,7 +432,28 @@ That is not hypothetical. On 2026-11-10:
 | `nxt-sw-1-m` | — | — | OOM-killed in the same night; `Down` for hours while the cluster ran two of three managers |
 
 So a runner whose cap exceeds **70 % of the node's total RAM** is **refused** —
-not started, not registered, no registration token minted. The refusal names both
+not started, not registered, no registration token minted.
+
+### One cap per node, not one cap per fleet
+
+The rule above judges a node against **its own** cap, and until recently there was
+only one cap for everybody (`github_runner_memory`). That is a single number for a
+fleet of different machines: it fits the node it was tuned on and is permission to
+OOM the rest.
+
+```
+                              default 2560m        with an override
+nxt-sw-6-w   3852 MiB   2560m =  66 %  allowed     —  (uses the default)
+nxt-sw-3-w   1839 MiB   2560m = 139 %  REFUSED     1200m = 65 %  allowed
+```
+
+`github_runner_node_memory` closes that: `host=cap,host=cap`. An entry is resolved
+in exactly one function, `Config.CapFor`, and every surface reads it from there —
+the assignment the leader sends a worker (which carries the **resolved** cap, since
+a worker cannot read settings at all), the memory-fit check on both sides,
+`doctor`, and the console row. A malformed entry is dropped at read time (falling
+back to the default) and refused at write time, so a hand-edited store degrades to
+"works, with the wrong cap" rather than `docker run --memory=abc` failing at deploy. The refusal names both
 numbers and the fix:
 
 ```

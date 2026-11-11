@@ -47,6 +47,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -105,8 +106,15 @@ type Config struct {
 	// debugging fallback and is documented as unsafe for untrusted workflows.
 	SocketProxy bool
 	// SocketPath is the filtered socket the runner mounts.
-	SocketPath  string
-	Memory      string
+	SocketPath string
+	// Memory is the CLUSTER-WIDE default cap (github_runner_memory). Read it
+	// through CapFor for a node: a node with an entry in NodeMemory gets that
+	// value instead.
+	Memory string
+	// NodeMemory is the per-node override map (github_runner_node_memory,
+	// `host=cap,host=cap`), keys lowercased. Empty means every node uses
+	// Memory.
+	NodeMemory  map[string]string
 	AllowLeader bool
 	// IntervalSeconds is how often a node re-reads its assignment, in seconds.
 	// It is part of the config because the leader resolves it and sends it to
@@ -129,12 +137,61 @@ func LoadConfig(ctx context.Context, st *store.Store, node string) Config {
 		SocketProxy:     cluster.LoadGitHubRunnerSocketProxy(ctx, st),
 		SocketPath:      cluster.LoadGitHubRunnerSocketPath(ctx, st),
 		Memory:          cluster.LoadGitHubRunnerMemory(ctx, st),
+		NodeMemory:      ParseNodeMemory(cluster.LoadGitHubRunnerNodeMemory(ctx, st)),
 		AllowLeader:     cluster.LoadGitHubRunnerAllowLeader(ctx, st),
 		IntervalSeconds: cluster.LoadGitHubRunnerAssignmentInterval(ctx, st),
 		Node:            node,
 		Image:           DefaultImage,
 	}
 }
+
+// CapFor resolves the memory cap for one node: its github_runner_node_memory
+// override when there is one, else the cluster-wide github_runner_memory.
+//
+// This is the ONLY way to read a cap. A shared cap is one number for a fleet of
+// different machines, so it fits the node it was tuned on and is permission to
+// OOM the rest: on the live fleet it let 2560m onto a 1839 MB worker while the
+// 3852 MB one ran happily. Every surface that reads a cap — the assignment the
+// leader sends, the memory-fit check on both sides, doctor, the console row —
+// resolves it here, so an override cannot be honoured in one place and ignored
+// in another.
+//
+// A node name matches case-insensitively (Swarm lowercases hostnames; an
+// operator's value need not). An override that is not a Docker quantity falls
+// back to the default: the settings surface refuses such a value, so reaching
+// that state means a hand-edited store, and a broken override must not become a
+// `docker run --memory` the daemon rejects hours later instead of a runner that
+// starts.
+func (c Config) CapFor(node string) string {
+	def := c.DefaultCap()
+	key := strings.ToLower(strings.TrimSpace(node))
+	if key == "" || len(c.NodeMemory) == 0 {
+		return def
+	}
+	override, ok := c.NodeMemory[key]
+	if !ok {
+		return def
+	}
+	override = strings.TrimSpace(override)
+	if override == "" || ValidateMemory(override) != nil {
+		return def
+	}
+	return override
+}
+
+// DefaultCap is the cluster-wide cap (github_runner_memory, else the platform
+// default): what a node without an override gets, and what the console shows as
+// a picker row's placeholder.
+func (c Config) DefaultCap() string {
+	if def := strings.TrimSpace(c.Memory); def != "" {
+		return def
+	}
+	return cluster.DefaultGitHubRunnerMemory
+}
+
+// CapFor is the free-function form of Config.CapFor, for call sites that name
+// the node and the settings view separately.
+func CapFor(node string, cfg Config) string { return cfg.CapFor(node) }
 
 // WatchesNode reports whether this daemon's node is one of the selected runner
 // nodes (compared case-insensitively: Swarm hostnames are lowercased, an
@@ -195,6 +252,147 @@ func NormalizeNodes(raw string) (string, error) {
 		return "", err
 	}
 	return strings.Join(ParseNodes(raw), ","), nil
+}
+
+// --- per-node memory overrides -----------------------------------------------
+//
+// github_runner_node_memory is `host=cap,host=cap` (nxt-sw-3-w=1200m,
+// nxt-sw-6-w=2560m). It is the per-node half of github_runner_memory, which
+// stays the default for every node without an entry — so the value is additive:
+// an operator writes only the nodes that differ from the cluster default.
+//
+// The shapes below mirror ParseNodes / ValidateNodes / NormalizeNodes on
+// purpose: both settings are comma-separated lists an operator edits by hand and
+// the console writes, so they should behave identically (trim, dedupe, last
+// wins, order preserved) and differ only in what one entry looks like.
+
+// nodeMemoryPair is one `host=cap` entry, kept as a slice (not a map) so the
+// operator's order survives a normalise round-trip: the stored value should not
+// reshuffle every time it is saved.
+type nodeMemoryPair struct {
+	Host string
+	Cap  string
+}
+
+// parseNodeMemoryPairs splits the raw value into entries, trimming whitespace,
+// dropping empty entries, and letting the LAST occurrence of a host win (a
+// repeated host is an edit, not an error — the same rule ParseNodes applies).
+func parseNodeMemoryPairs(raw string) []nodeMemoryPair {
+	var out []nodeMemoryPair
+	index := map[string]int{}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		host, cap, ok := strings.Cut(part, "=")
+		host = strings.TrimSpace(host)
+		if !ok || host == "" {
+			// Keep the malformed entry so validation can name it; Parse keeps
+			// it under its raw text so it cannot silently vanish.
+			out = append(out, nodeMemoryPair{Host: part})
+			continue
+		}
+		cap = strings.TrimSpace(cap)
+		key := strings.ToLower(host)
+		if i, seen := index[key]; seen {
+			out[i].Cap = cap
+			continue
+		}
+		index[key] = len(out)
+		out = append(out, nodeMemoryPair{Host: host, Cap: cap})
+	}
+	return out
+}
+
+// ParseNodeMemory splits github_runner_node_memory into a lowercased
+// hostname -> memory quantity map. It is the read path (Config.CapFor); a
+// malformed entry is dropped here and refused by ValidateNodeMemory on the way
+// in, so a hand-edited store degrades to the cluster default instead of
+// producing a `docker run --memory` that the daemon rejects at deploy time.
+func ParseNodeMemory(raw string) map[string]string {
+	out := map[string]string{}
+	for _, p := range parseNodeMemoryPairs(raw) {
+		if err := validateNodeMemoryPair(p); err != nil {
+			continue
+		}
+		out[strings.ToLower(p.Host)] = p.Cap
+	}
+	return out
+}
+
+// FormatNodeMemory renders overrides as the canonical comma-separated value,
+// sorted by hostname so two saves of the same set produce the same string (the
+// console builds a map from its form fields, which carries no order).
+func FormatNodeMemory(overrides map[string]string) string {
+	if len(overrides) == 0 {
+		return ""
+	}
+	hosts := make([]string, 0, len(overrides))
+	for host := range overrides {
+		hosts = append(hosts, strings.ToLower(strings.TrimSpace(host)))
+	}
+	sort.Strings(hosts)
+	pairs := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		cap := strings.TrimSpace(overrides[host])
+		if host == "" || cap == "" {
+			continue
+		}
+		pairs = append(pairs, host+"="+cap)
+	}
+	return strings.Join(pairs, ",")
+}
+
+func validateNodeMemoryPair(p nodeMemoryPair) error {
+	if p.Cap == "" && p.Host == "" {
+		return fmt.Errorf("empty entry")
+	}
+	if p.Cap == "" {
+		switch {
+		case strings.HasPrefix(p.Host, "="):
+			return fmt.Errorf("%q names no host (host=memory, e.g. nxt-sw-3-w=1200m)", p.Host)
+		case !strings.Contains(p.Host, "="):
+			return fmt.Errorf("%q is not host=memory (e.g. nxt-sw-3-w=1200m)", p.Host)
+		}
+		return fmt.Errorf("%q names a host but no memory quantity", p.Host)
+	}
+	if !reHostname.MatchString(p.Host) {
+		return fmt.Errorf("%q is not a hostname", p.Host)
+	}
+	if err := ValidateMemory(p.Cap); err != nil {
+		return fmt.Errorf("%s: %w", p.Host, err)
+	}
+	return nil
+}
+
+// ValidateNodeMemory checks every entry as host=quantity, where the quantity is
+// the same set ValidateMemory accepts for github_runner_memory (so `1g` and a
+// bare byte count are legal here because they are legal there). An empty value
+// is valid: it means "no overrides".
+func ValidateNodeMemory(raw string) error {
+	for _, p := range parseNodeMemoryPairs(raw) {
+		if err := validateNodeMemoryPair(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// NormalizeNodeMemory returns the canonical comma-separated form (trimmed,
+// deduped with the last value winning, order of first appearance preserved).
+// An invalid entry fails the whole value: dropping a typo would silently leave a
+// node on a cap the operator did not choose.
+func NormalizeNodeMemory(raw string) (string, error) {
+	if err := ValidateNodeMemory(raw); err != nil {
+		return "", err
+	}
+	pairs := parseNodeMemoryPairs(raw)
+	out := make([]string, 0, len(pairs))
+	for _, p := range pairs {
+		out = append(out, strings.ToLower(p.Host)+"="+p.Cap)
+	}
+	return strings.Join(out, ","), nil
 }
 
 var reOrg = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
@@ -263,6 +461,10 @@ func ValidateMemory(v string) error {
 	if !reMemory.MatchString(s) {
 		return fmt.Errorf("memory limit %q is not a Docker quantity (a positive number with an optional b/k/m/g suffix, e.g. 2560m)", v)
 	}
+	// A bare number is BYTES, which is Docker's own reading of `--memory 1200`.
+	// That is deliberate and older than this feature (TestValidation pins it), so
+	// it is not changed here — but note the footgun it leaves: "1200" is a 1.2 KB
+	// cap, and the fit check treats anything under 1 MiB as "no cap stated".
 	num := strings.TrimRight(s, "bkmgBKMGH")
 	if n, err := strconv.ParseFloat(strings.TrimSpace(num), 64); err != nil || n <= 0 {
 		return fmt.Errorf("memory limit %q must be greater than zero", v)

@@ -124,7 +124,27 @@ pmcluster node versions       # the fleet table, stragglers named
 label, so its binary version is unknowable from the swarm. The command says so
 rather than letting a list of five managers read as a list of every node.
 
-## A node with no row in Node resources
+### What `doctor` can and cannot see
+
+`doctor` inspects a runner container only for the node the daemon **runs on**. From
+the leader, every other node's container state is *unknown*, not *absent* — and the
+two were once the same value.
+
+`NodeReport.ContainerKnown` records whether the inspect actually happened, and the
+container checks require it:
+
+| ContainerKnown | ContainerRunning | Registered | `doctor` says |
+|---|---|---|---|
+| true | false | true | "registered but no container is running" — a real fault |
+| true | true | false | "container is running but GitHub does not list it" — a ghost |
+| **false** | — | — | **nothing**: the worker's own `doctor` is the one that can see it |
+
+Before that field existed, the leader printed "registered but no container is
+running" for every healthy worker, because the zero value of `ContainerRunning` was
+read as "there is no container". A warning that fires on every node is a warning
+nobody reads, which is worse than silence.
+
+### A node with no row in Node resources
 
 The console's node panel is fed by each node's **own** daemon over OTLP, through the
 leader's collector, into `/var/stack/nodestat/nodestat.jsonl`. A node missing from

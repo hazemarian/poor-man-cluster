@@ -193,8 +193,11 @@
 
     {{/* Node selection is not a form field: it is a picker with each node's role
          and free memory beside it, on its own page. The form carries the current
-         value in a hidden field so saving cannot clear a choice made there. */}}
+         value in a hidden field so saving cannot clear a choice made there.
+         The per-node memory caps are written by the SAME picker (one submit
+         writes both keys), so they ride along the same way. */}}
     <input type="hidden" name="github_runner_nodes" value="{{index .Settings "github_runner_nodes"}}">
+    <input type="hidden" name="github_runner_node_memory" value="{{index .Settings "github_runner_node_memory"}}">
 
     <div class="subhead" id="cs-runner-nodes">
       <h3>{{T "settings.runners_summary_title"}}</h3>

@@ -71,6 +71,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingGitHubRunnerSocketProxy(),
 	cluster.SettingGitHubRunnerSocketPath(),
 	cluster.SettingGitHubRunnerMemory(),
+	cluster.SettingGitHubRunnerNodeMemory(),
 	cluster.SettingGitHubRunnerAllowLeader(),
 	cluster.SettingGitHubRunnerAssignmentInterval(),
 }
@@ -215,6 +216,7 @@ func isGitHubRunnerKey(key string) bool {
 		cluster.SettingGitHubRunnerSocketProxy(),
 		cluster.SettingGitHubRunnerSocketPath(),
 		cluster.SettingGitHubRunnerMemory(),
+		cluster.SettingGitHubRunnerNodeMemory(),
 		cluster.SettingGitHubRunnerAllowLeader(),
 		cluster.SettingGitHubRunnerAssignmentInterval():
 		return true
@@ -297,6 +299,18 @@ func (l *Local) normalizeRunnerSetting(ctx context.Context, key, value string) (
 			return "", fmt.Errorf("%s: %w", key, err)
 		}
 		return strings.TrimSpace(value), nil
+	case cluster.SettingGitHubRunnerNodeMemory():
+		// Empty means "no override anywhere": every node uses
+		// github_runner_memory. Anything else must be host=quantity pairs
+		// whose quantity is one the rest of the platform already accepts.
+		if strings.TrimSpace(value) == "" {
+			return "", nil
+		}
+		normalized, err := runners.NormalizeNodeMemory(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		return normalized, nil
 	case cluster.SettingGitHubRunnerAllowLeader():
 		on, err := parseBoolSetting(value)
 		if err != nil {

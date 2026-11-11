@@ -490,6 +490,9 @@ var clusterSettingKeys = []string{
 	// Nodes are chosen by the picker on the Runners panel; the form carries the
 	// current value in a hidden field so saving the form cannot clear it.
 	"github_runner_nodes",
+	// Per-node memory caps are written by the same picker (it saves both keys in
+	// one submit), so this form carries it the same way and never edits it.
+	"github_runner_node_memory",
 	"github_runner_socket_proxy",
 	"github_runner_socket_path",
 	"github_runner_memory",
@@ -590,6 +593,8 @@ func clusterFailureTarget(raw string) (section, field, fieldKey string, permissi
 	case strings.Contains(l, "github_runner_org"):
 		return "runners", "cs-runner-org", "clustersettings.err_org_required", false
 	case strings.Contains(l, "github_runner_nodes"):
+		return "runners", "cs-runner-nodes", "clustersettings.err_nodes_required", false
+	case strings.Contains(l, "github_runner_node_memory"):
 		return "runners", "cs-runner-nodes", "clustersettings.err_nodes_required", false
 	case strings.Contains(l, "backup_retention_days"):
 		return "backups", "cs-retention-days", "settings.err_backup_retention", false

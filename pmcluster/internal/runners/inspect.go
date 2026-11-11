@@ -3,6 +3,7 @@ package runners
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
@@ -49,6 +50,16 @@ type Report struct {
 	Unmanaged []RunnerNote `json:"unmanaged,omitempty"`
 	// Warnings are failures Inspect could not attribute to one node.
 	Warnings []string `json:"warnings,omitempty"`
+	// DefaultMemory is the cluster-wide github_runner_memory, carried so a
+	// reader can tell a per-node override from the default without the
+	// settings snapshot.
+	DefaultMemory string `json:"default_memory,omitempty"`
+	// StaleMemoryNodes are hosts named by github_runner_node_memory that are
+	// not in github_runner_nodes. They are KEPT (a node may be temporarily
+	// deselected, and its cap should be waiting when it comes back) but the
+	// doctor names them, because an override for a node that runs nothing is
+	// usually a rename the operator has not finished.
+	StaleMemoryNodes []string `json:"stale_memory_nodes,omitempty"`
 }
 
 // RunnerNote is one runner GitHub reports that the platform does not own.
@@ -92,6 +103,11 @@ type NodeReport struct {
 	// this node, and the reason names both numbers.
 	Refused bool   `json:"refused,omitempty"`
 	Reason  string `json:"reason,omitempty"`
+	// Cap is the memory cap resolved FOR THIS NODE: its
+	// github_runner_node_memory override when one exists, else the cluster
+	// default. The doctor and the console report this, so an override is
+	// visible without reading the setting.
+	Cap string `json:"cap,omitempty"`
 }
 
 // Inspect reads the runner state without changing anything. When the feature is
@@ -100,8 +116,22 @@ type NodeReport struct {
 // evidence a half-disable leaves.
 func (m *Manager) Inspect(ctx context.Context) (Report, error) {
 	cfg := LoadConfig(ctx, m.Store, m.Node)
-	rep := Report{Enabled: cfg.Enabled, Org: cfg.Org, Group: cfg.Group}
+	rep := Report{Enabled: cfg.Enabled, Org: cfg.Org, Group: cfg.Group, DefaultMemory: cfg.DefaultCap()}
 	state := loadState(ctx, m.Store)
+
+	// An override for a host that is not in github_runner_nodes caps nothing.
+	// It is kept (the node may come back) and named here so a stale rename does
+	// not hide behind a setting that looks configured.
+	selected := map[string]bool{}
+	for _, n := range cfg.Nodes {
+		selected[strings.ToLower(strings.TrimSpace(n))] = true
+	}
+	for host := range cfg.NodeMemory {
+		if !selected[host] {
+			rep.StaleMemoryNodes = append(rep.StaleMemoryNodes, host)
+		}
+	}
+	sort.Strings(rep.StaleMemoryNodes)
 
 	if !cfg.Enabled {
 		rep.Leftovers = m.localLeftovers(ctx, state)
@@ -143,8 +173,8 @@ func (m *Manager) Inspect(ctx context.Context) (Report, error) {
 	for _, node := range cfg.Nodes {
 		name := RunnerName(node)
 		expected[name] = true
-		nr := NodeReport{Node: node, Selected: true, RunnerName: name, Role: roles[strings.ToLower(node)]}
-		if refused, rerr := m.memoryRefusal(ctx, node, cfg.Memory); refused {
+		nr := NodeReport{Node: node, Selected: true, RunnerName: name, Role: roles[strings.ToLower(node)], Cap: cfg.CapFor(node)}
+		if refused, rerr := m.memoryRefusal(ctx, node, nr.Cap); refused {
 			// A refusal is the first thing an operator needs to see about this
 			// node: no container will start, and the reason names both numbers.
 			nr.Refused, nr.Reason = true, rerr.Error()

@@ -99,6 +99,7 @@
               <th>{{T "runners.col_role"}}</th>
               <th>{{T "runners.col_node_state"}}</th>
               <th>{{T "runners.col_memory"}}</th>
+              <th>{{T "runners.col_cap"}}</th>
             </tr>
           </thead>
           <tbody>
@@ -123,11 +124,25 @@
                 {{if .Selected}}{{if .RunnerState}}<span class="pill {{if eq .RunnerState "idle"}}good{{else if eq .RunnerState "busy"}}warn{{else}}bad{{end}}"><i class="dot"></i>{{T (printf "runners.state_%s" .RunnerState)}}</span>
                 {{else}}<span class="muted">{{T "runners.state_none"}}</span>{{end}}
                 {{else}}<span class="muted">{{T "runners.not_selected"}}</span>{{end}}
+                {{/* The refusal, in the picker's own row: it names this node's RAM
+                     and the cap it was given, which is the pair an operator needs
+                     to decide whether to lower the cap or pick another node. */}}
+                {{if .RefusedReason}}<div class="muted" dir="auto">{{.RefusedReason}}</div>{{end}}
               </td>
               <td class="muted num"><bdi dir="ltr">{{NF .MemAvailMB 0}}</bdi> / <bdi dir="ltr">{{NF .MemTotalMB 0}}</bdi> {{T "runners.mb"}}</td>
+              <td>
+                {{/* One input per node, named after the hostname so a reordered
+                     row cannot move a cap onto another node. Blank = no override,
+                     and the placeholder is the cluster default it would get. */}}
+                <input class="finput mono" type="text" dir="ltr" autocomplete="off" spellcheck="false"
+                       name="node_memory_{{.Hostname}}" value="{{.CapOverride}}" placeholder="{{$.Memory}}"
+                       {{if not .Selectable}}disabled{{end}}
+                       aria-label="{{TF "runners.cap_aria" .Hostname}}">
+                <div class="muted">{{T "runners.effective_cap"}} <bdi dir="ltr">{{.Cap}}</bdi></div>
+              </td>
             </tr>
             {{else}}
-            <tr><td colspan="5" class="muted">{{T "runners.no_nodes"}}</td></tr>
+            <tr><td colspan="6" class="muted">{{T "runners.no_nodes"}}</td></tr>
             {{end}}
           </tbody>
         </table>

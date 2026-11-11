@@ -466,6 +466,12 @@ func checkGitHubRunners(ctx context.Context, in Input) Check {
 			healthy = append(healthy, label)
 		}
 	}
+	// An override for a host nobody selected is kept (the node may come back)
+	// but it is not silently inert either: it is usually a half-finished rename.
+	for _, host := range rep.StaleMemoryNodes {
+		problems = append(problems, "github_runner_node_memory sets a cap for "+host+
+			", which is not in github_runner_nodes — the override is kept but caps nothing (a node may be temporarily deselected, so it is not removed)")
+	}
 	var unmanaged []string
 	for _, u := range rep.Unmanaged {
 		note := u.Name
@@ -494,9 +500,21 @@ func checkGitHubRunners(ctx context.Context, in Input) Check {
 	if len(rep.Nodes) > 0 && rep.Nodes[0].DockerAccess == "raw socket" {
 		access = "raw docker socket (debug fallback)"
 	}
-	return Check{name, StatusOK,
-		fmt.Sprintf("%s: %d runner(s) registered and running on %d selected node(s), docker access via %s",
-			head, len(healthy), len(rep.Nodes), access)}
+	detail := fmt.Sprintf("%s: %d runner(s) registered and running on %d selected node(s), docker access via %s",
+		head, len(healthy), len(rep.Nodes), access)
+	// Name the caps that are NOT the cluster default. A per-node override is the
+	// whole point of the setting, so doctor states the number the node actually
+	// runs with instead of the default every node would otherwise imply.
+	var caps []string
+	for _, n := range rep.Nodes {
+		if n.Cap != "" && n.Cap != rep.DefaultMemory {
+			caps = append(caps, n.Node+"="+n.Cap)
+		}
+	}
+	if len(caps) > 0 {
+		detail += "; per-node caps " + strings.Join(caps, ", ") + " (default " + orDash(rep.DefaultMemory) + ")"
+	}
+	return Check{name, StatusOK, detail}
 }
 
 // checkLastApply: did the last platform apply finish everything it tried?
