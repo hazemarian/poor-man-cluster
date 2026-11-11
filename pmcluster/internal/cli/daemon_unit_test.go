@@ -62,7 +62,7 @@ func unitSeconds(t *testing.T, key, raw string) time.Duration {
 // than one attempt per 30 seconds on average, so a permanent failure settles into
 // `failed` instead of a loop.
 func TestRenderSystemdUnit_BoundsTheRestartLoop(t *testing.T) {
-	unit := renderSystemdUnit("pmuser", "docker", "/home/pmuser", "/usr/local/bin/pmcluster serve")
+	unit := renderSystemdUnit("pmuser", "docker", "/home/pmuser", "/usr/local/bin/pmcluster serve", memoryLimitsFor(2048))
 	sec := unitSections(t, unit)
 
 	svc, ok := sec["Service"]

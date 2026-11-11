@@ -9,6 +9,11 @@
 #   ${USER}  — the unix user that owns ~/.pmcluster
 #   ${GROUP} — docker group on your distro (usually "docker")
 #   ${HOME}  — home directory of ${USER}
+#   ${MEM_HIGH} / ${MEM_MAX} — 60 % and 70 % of THIS host's MemTotal in MiB, e.g.
+#                on a 1839 MiB node: 1103 and 1287. Compute them, do not copy
+#                them: a limit larger than the host is not a limit, it is
+#                permission to OOM the host. (`pmcluster cluster update` writes
+#                the real numbers; see docs/health.md.)
 #
 # After placing the file:
 #   systemctl daemon-reload
@@ -41,6 +46,25 @@ Environment=HOME=${HOME}
 ExecStart=/usr/local/bin/pmcluster serve
 Restart=always
 RestartSec=10
+
+# Memory boundaries for the CONTROL PLANE. Both are computed from this host's
+# MemTotal at install time and must stay below it — the arithmetic:
+#
+#   MemTotal        1839 MiB   (nxt-sw-3-w, the node that died)
+#   MemoryHigh      60 %  → 1103 MiB   throttle: reclaim + slow down, no kill
+#   MemoryMax       70 %  → 1287 MiB   hard ceiling: the cgroup cannot exceed it
+#
+# A limit larger than the host is not a limit. On that same node a runner was
+# granted a 2560m cap — 139 % of the machine — and the first CI build that used
+# it took the node (and its sshd) Down. MemoryHigh is the throttle, MemoryMax is
+# the wall, and the 10-point gap is the room the daemon needs to notice one and
+# act before it hits the other.
+MemoryHigh=${MEM_HIGH}M
+MemoryMax=${MEM_MAX}M
+# When the kernel has to pick a victim, prefer the WORKLOAD over the control
+# plane: a build, a runner container or the collector can be replaced; a dead
+# manager cannot be restarted without a login (and on 2026-11-10 there was none).
+OOMScoreAdjust=-500
 
 [Install]
 WantedBy=multi-user.target

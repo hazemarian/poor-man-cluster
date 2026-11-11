@@ -75,6 +75,20 @@ services:
       "traefik.swarm.network": "traefik-net"
     # Capped so a runaway backend is killed inside its own cgroup instead of
     # starving the host into losing its Swarm heartbeat.
+    #
+    # The 320 MiB cap here is the OTHER half of the memory boundaries, and it is
+    # verified rather than assumed: the daemon unit carries MemoryMax at 70 % of
+    # the host with OOMScoreAdjust=-500, so when the kernel has to choose between
+    # the control plane and this task it chooses this task. A cap is what makes
+    # that choice cheap — one cgroup dies instead of the host losing sshd with it
+    # (2026-11-10, two nodes).
+    #
+    # There is no oom_score_adj key here and adding one would break the deploy:
+    # `docker stack config` rejects it ("additional property 'oom_score_adj' is
+    # not allowed") because a Swarm service spec has no such field. The ordering
+    # is bought from the daemon side instead (OOMScoreAdjust=-500 in
+    # contrib/systemd/pmcluster.service): the workload sits at 0, the control
+    # plane below it, which is the same arithmetic with the only knob Swarm has.
     resources:
       reservations:
         cpus: "0.1"

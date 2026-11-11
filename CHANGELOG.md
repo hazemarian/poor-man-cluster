@@ -25,6 +25,14 @@ runner that cannot fit.
 - **`docs/health.md`** documents what the watchdog will *not* restart — an inactive or
   failed unit, a blip, an upgrade's fresh unit, or more than once per ten minutes — because
   each of those is a loop waiting to happen.
+- **The control plane has memory boundaries sized from the host.** The daemon unit gets
+  `MemoryHigh` at **60 %** and `MemoryMax` at **70 %** of `/proc/meminfo`'s `MemTotal`
+  (1839 MiB → 1103M/1287M), computed by `cluster update`, plus `OOMScoreAdjust=-500` so the
+  kernel picks the workload. Unreadable `MemTotal` writes no limit and says so — a fixed
+  number is a limit on a big host and permission to OOM on a small one. The collector's
+  320 MiB cap and its 240 MiB `memory_limiter` are verified and documented; a Swarm service
+  has no `oom_score_adj` field (`docker stack config` rejects it), so the ordering comes
+  from the daemon's side.
 
 ## Unreleased — the documentation catches up with the runners, and setup can set every knob
 
@@ -50,6 +58,12 @@ rotates with no backups — the two behaviours that were just fixed.
 - **`docs/runners.md`** has one permission answer (Self-hosted runners, at the org level), the
   pinned image and `RUNNER_SCOPE=org` with the exit-1 it prevents, the assignment's `held`
   flag (a console Kill now reaches the owning node), and the setup flags.
+- **The socket chapter follows the filter as built**: `/auth`, the tag/push image routes,
+  `DELETE /images/**`, `/session` and `/grpc` are in the allow table (with what bounds
+  each), the traversal guard is stated, the runner mounts the socket's **directory** rather
+  than the file (a file mount pinned the inode the daemon replaces on restart), and the
+  buildx section explains `BUILDX_CONFIG` and why denying `/session` forced the
+  `docker-container` driver onto a route the filter refuses.
 - **`pmcluster/internal/ARCHITECTURE.md`** describes the runner machinery as built: per-node
   loops before the leadership wait, the 9092 mTLS listener bound to the swarm data-path
   address, identity from the node certificate only, the resolved-spec reply, the pinned

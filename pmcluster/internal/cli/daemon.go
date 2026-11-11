@@ -8,8 +8,105 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
+
+// The control plane's own memory boundaries.
+//
+// A limit that exceeds the host is not a limit: it is permission for the kernel
+// to OOM-kill something else and call it enforcement. On 2026-11-10 a runner was
+// allowed a 2560m cap on a 1839 MB node — the same arithmetic error — and the
+// node died. The daemon's numbers are therefore COMPUTED from this host's
+// MemTotal at install time, never written as constants.
+//
+// 60 % / 70 %: MemoryHigh is a throttle (the cgroup is reclaimed and slowed, the
+// daemon is not killed), MemoryMax is the hard ceiling. The 10-point gap is the
+// room the daemon needs to notice MemoryHigh and act — finish a write, return a
+// 503 — instead of being killed the instant it crosses one line.
+const (
+	memoryHighPercent = 60
+	memoryMaxPercent  = 70
+)
+
+// MemoryLimits are the cgroup bounds written into the daemon unit, with the
+// total they were derived from (kept for the arithmetic in the log line and in
+// tests). A zero TotalMiB means the host's RAM could not be read: nothing is
+// written, because a guessed limit is exactly the failure this prevents.
+type MemoryLimits struct {
+	TotalMiB int64
+	HighMiB  int64
+	MaxMiB   int64
+}
+
+// memoryLimitsFor computes the boundaries from a host's total RAM in MiB.
+//
+// Rounded DOWN, and clamped so that High < Max < Total even on a tiny host: a
+// Max equal to the host would let the cgroup consume everything the kernel needs
+// to keep the SSH session alive, which is the state the two dead nodes were in.
+func memoryLimitsFor(totalMiB int64) MemoryLimits {
+	if totalMiB <= 0 {
+		return MemoryLimits{}
+	}
+	l := MemoryLimits{TotalMiB: totalMiB}
+	l.HighMiB = totalMiB * memoryHighPercent / 100
+	l.MaxMiB = totalMiB * memoryMaxPercent / 100
+	if l.MaxMiB >= totalMiB {
+		l.MaxMiB = totalMiB - 1
+	}
+	if l.HighMiB >= l.MaxMiB {
+		l.HighMiB = l.MaxMiB - (l.MaxMiB / 7) // keep High below Max on a small host
+	}
+	if l.HighMiB < 1 {
+		l.HighMiB = 1
+	}
+	if l.MaxMiB < 2 {
+		l.MaxMiB = 2
+	}
+	return l
+}
+
+// hostMemTotalMiB reads this host's total RAM, in MiB. Overridable in tests.
+//
+// /proc/meminfo, not `docker info`: the daemon's own cgroup boundary is a
+// property of the machine it runs on, and Docker's number is what the ENGINE
+// was told, which on a VM can be different.
+var hostMemTotalMiB = func() int64 {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "MemTotal:" {
+			continue
+		}
+		kb, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil || kb <= 0 {
+			return 0
+		}
+		return kb / 1024
+	}
+	return 0
+}
+
+// memoryLines renders the [Service] memory boundaries. Unknown RAM renders an
+// explanatory comment and no limit — never a default.
+func memoryLines(mem MemoryLimits) string {
+	if mem.TotalMiB <= 0 {
+		return "# MemoryHigh/MemoryMax not set: this host's MemTotal could not be read at install\n" +
+			"# time, and a guessed limit could exceed the host (see docs/health.md).\n" +
+			"OOMScoreAdjust=-500\n"
+	}
+	return fmt.Sprintf(`# Memory boundaries: 60%% / 70%% of this host's %d MiB, computed at install time.
+# A limit larger than the host is not a limit — on a 1839 MB node a 2560m runner
+# cap was permission to OOM the host and take it Down with sshd.
+MemoryHigh=%dM
+MemoryMax=%dM
+# Prefer the WORKLOAD over the control plane when the kernel picks a victim.
+OOMScoreAdjust=-500
+`, mem.TotalMiB, mem.HighMiB, mem.MaxMiB)
+}
 
 // renderSystemdUnit builds the pmcluster systemd unit file. The daemon is
 // managed by the CLI (cluster up/update, join) — install.sh never writes it.
@@ -32,7 +129,7 @@ import (
 // state an operator can see and act on. A crash loop is a bug to fix, not a
 // rhythm to keep; the unit must not be the loudest writer in the journal while
 // somebody is trying to read it.
-func renderSystemdUnit(pmUser, group, home, execStart string) string {
+func renderSystemdUnit(pmUser, group, home, execStart string, mem MemoryLimits) string {
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster API Server
 After=docker.service
@@ -51,11 +148,11 @@ Environment=HOME=%s
 ExecStart=%s
 Restart=always
 RestartSec=10
-
+%s
 [Install]
 WantedBy=multi-user.target
 WantedBy=docker.service
-`, pmUser, group, home, execStart)
+`, pmUser, group, home, execStart, memoryLines(mem))
 }
 
 // daemonUnitPath is the systemd unit location. Overridable in tests.
@@ -268,7 +365,7 @@ func ensureDaemonRunning(out io.Writer) error {
 		return fmt.Errorf("resolve binary path for unit: %w", err)
 	}
 
-	unit := renderSystemdUnit(pmUser, group, home, daemonExecStart(exe))
+	unit := renderSystemdUnit(pmUser, group, home, daemonExecStart(exe), memoryLimitsFor(hostMemTotalMiB()))
 
 	// Write the unit only when missing or changed (operator edits win).
 	existing, _ := os.ReadFile(daemonUnitPath)
@@ -277,6 +374,13 @@ func ensureDaemonRunning(out io.Writer) error {
 			return fmt.Errorf("write %s: %w", daemonUnitPath, err)
 		}
 		fmt.Fprintf(out, "→ installed systemd unit %s (user %s, group %s)\n", daemonUnitPath, pmUser, group)
+		mem := memoryLimitsFor(hostMemTotalMiB())
+		if mem.TotalMiB > 0 {
+			fmt.Fprintf(out, "  memory bounds: MemoryHigh=%dM, MemoryMax=%dM (%d%%/%d%% of this host's %d MiB)\n",
+				mem.HighMiB, mem.MaxMiB, memoryHighPercent, memoryMaxPercent, mem.TotalMiB)
+		} else {
+			fmt.Fprintf(out, "  ⚠ could not read this host's MemTotal: no MemoryHigh/MemoryMax written (a guessed limit could exceed the host)\n")
+		}
 	}
 
 	for _, args := range [][]string{{"daemon-reload"}, {"enable", "pmcluster"}} {

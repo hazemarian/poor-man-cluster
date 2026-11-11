@@ -281,3 +281,56 @@ holds the port — a proxy, a stale listener — and that is worth the same rest
 The units are `contrib/systemd/pmcluster-watchdog.{service,timer}` (reference) and
 the CLI writes them on every `cluster update`; an install failure is a warning, not
 a failed update, because the daemon has already been started by that point.
+
+## Memory boundaries: a limit larger than the host is not a limit
+
+The daemon unit carries two cgroup limits, and both are **computed from this
+host's `MemTotal` at install time** — `pmcluster cluster update` reads
+`/proc/meminfo` and writes the numbers:
+
+| Setting | Value | What it does |
+|---|---|---|
+| `MemoryHigh` | **60 %** of `MemTotal` | throttle: the cgroup is reclaimed and slowed, the process is **not** killed |
+| `MemoryMax` | **70 %** of `MemTotal` | hard ceiling: the cgroup cannot exceed it |
+| `OOMScoreAdjust` | **-500** | when the kernel must pick a victim, it prefers the workload over the control plane |
+
+The arithmetic, on the node that died:
+
+```
+MemTotal        1839 MiB   (nxt-sw-3-w)
+MemoryHigh      60 %  → 1103 MiB
+MemoryMax       70 %  → 1287 MiB
+```
+
+The 10-point gap is deliberate: it is the room the daemon needs to notice
+`MemoryHigh` and act (finish a write, answer 503) before it reaches the wall.
+
+**Why the percentages, not constants.** A fixed `MemoryMax=3G` is a limit on a
+4 GB box and permission to OOM on a 2 GB one. That is not a hypothetical: the
+same node was allowed a runner with `github_runner_memory=2560m` — **139 % of its
+RAM** — and the first CI build that used it took the node, and its `sshd`, `Down`.
+A limit that exceeds the host does not limit anything; it just tells the kernel
+which accounting to do afterwards. `docs/runners.md` now refuses that assignment
+outright; these bounds are the other half, for the process that must survive.
+
+**What happens when `MemTotal` cannot be read:** no limit is written at all and
+`cluster update` says so —
+`⚠ could not read this host's MemTotal: no MemoryHigh/MemoryMax written`. A
+default would be a constant that could exceed a small host, which is the failure
+this section exists to prevent. `OOMScoreAdjust=-500` is still written: it does
+not depend on knowing the size.
+
+Check the live values:
+
+```sh
+systemctl show pmcluster -p MemoryHigh -p MemoryMax -p OOMScoreAdjust
+systemd-cgtop -1 /system.slice/pmcluster.service   # current resident vs the ceiling
+```
+
+The collector has the same shape of bound, one level down: its stack carries a
+hard **320 MiB** cap (`observability-stack.yml`) with the collector's own
+`memory_limiter` at 240 MiB — strictly below the cap, so the limiter sheds load
+while the process still has room instead of the cgroup killing it. Swarm services
+have no `oom_score_adj` field (`docker stack config` rejects it), so the ordering
+between the daemon and its tasks is bought from the daemon's side: the control
+plane drops to -500, the tasks stay at 0, and the kernel picks the task.
