@@ -42,6 +42,22 @@ answers into the store settings:
     --sso-client-id, --sso-client-secret, --sso-github-org,
     --sso-github-repos, --sso-cookie-expire)
   - Edge console login (EDGE_LOGIN_DISABLED)
+  - The app-data volume: --storage-mode (loop|lvm|none) and --storage-size
+  - Backups: --backup-enabled, --backup-retention-days, the in-cluster store
+    (--backup-store-on) and the offsite S3/R2 destination (--backup-s3-*)
+  - GitHub App (optional): --github-app-id, --github-installation-id and
+    --github-app-key-file. The key is validated by minting an installation
+    token before it is stored; skipping it is a supported answer, and the
+    console (Settings -> GitHub App) or 'pmcluster github app set' can add it
+    later.
+  - Self-hosted GitHub Actions runners (off by default): --github-runners-enabled,
+    --github-runner-org, --github-runner-group, --github-runner-nodes,
+    --github-runner-socket-proxy, --github-runner-socket-path,
+    --github-runner-memory, --github-runner-allow-leader,
+    --github-runner-assignment-interval. Enabling is REFUSED unless an App is
+    stored (flags above or an earlier run), an organisation is named and at
+    least one WORKER hostname is listed; the error names what is missing, and
+    how to supply it. Managers are refused as runner hosts.
 
 The OpenObserve admin email is derived automatically (admin@<domain>) — it is
 hidden behind the admin-auth / SSO gate, so there is no prompt for it.
@@ -79,7 +95,7 @@ func init() {
 	setupCmd.Flags().Bool("edge-login-enabled", false, "keep the edge console password login (default: disabled behind SSO/admin-auth; default: $PMCLUSTER_EDGE_LOGIN_ENABLED)")
 	setupCmd.Flags().String("volume-root", "", "host dir every container volume is forced under (default /var/stack/data)")
 	setupCmd.Flags().Bool("backup-enabled", true, "enable the backup pipeline (the agent asks the control plane before every run)")
-	setupCmd.Flags().String("backup-retention-days", "", "how many days backups are kept before pruning (default 15)")
+	setupCmd.Flags().String("backup-retention-days", "", "how many days backups are kept before pruning (default 3)")
 	setupCmd.Flags().String("oo-logs-retention-days", "", "Parseable log retention in days (default 30)")
 	setupCmd.Flags().String("oo-metrics-retention-days", "", "Parseable metric retention in days (default 14)")
 	setupCmd.Flags().String("oo-traces-retention-days", "", "Parseable trace retention in days (default 10)")
@@ -92,13 +108,19 @@ func init() {
 	setupCmd.Flags().Bool("storage-failover", true, "enable automatic storage failover (moves stateful stacks off a failed storage node); requires offsite S3 backups")
 	setupCmd.Flags().String("storage-mode", "loop", "how the snapshot-capable app-data volume is backed: loop (a file, no operator action needed), lvm (a block device) or none")
 	setupCmd.Flags().String("storage-size", "auto", "backing-file size for the app-data volume (auto = half of free space, clamped to 8 GiB..128 GiB)")
+	// The runner block. Every question below is also a flag, so the wizard can
+	// be skipped entirely; the socket path and the poll interval are asked as
+	// well, because both are host facts a fresh install may want to state once
+	// instead of discovering a later `settings set`.
 	setupCmd.Flags().Bool("github-runners-enabled", false, "enable self-hosted GitHub Actions runners (requires a configured GitHub App)")
 	setupCmd.Flags().String("github-runner-org", "", "GitHub organisation whose runner group the runner registers into (default: $PMCLUSTER_GITHUB_RUNNER_ORG)")
 	setupCmd.Flags().String("github-runner-group", cluster.DefaultGitHubRunnerGroup, "org runner group the runner joins (created with visibility 'selected' when absent; never 'all')")
 	setupCmd.Flags().String("github-runner-nodes", "", "comma-separated WORKER hostnames that may run a runner; managers are refused (default: $PMCLUSTER_GITHUB_RUNNER_NODES)")
 	setupCmd.Flags().Bool("github-runner-socket-proxy", true, "route a runner's docker access through the daemon's filtered socket instead of /var/run/docker.sock")
+	setupCmd.Flags().String("github-runner-socket-path", "", "where the filtered docker socket lives on every node (default "+cluster.DefaultGitHubRunnerSocketPath+")")
 	setupCmd.Flags().String("github-runner-memory", "", "memory limit per runner container (default 2560m)")
 	setupCmd.Flags().Bool("github-runner-allow-leader", false, "allow runner containers on the leader (single-node clusters only; default: off the leader)")
+	setupCmd.Flags().String("github-runner-assignment-interval", "", "seconds between a node's polls of the leader for its runner assignment, 10-3600 (default 60)")
 	// The App itself is optional here: skipping it is a supported answer, and
 	// the message printed when the flags are absent says where to finish later.
 	setupCmd.Flags().String("github-app-id", "", "GitHub App id to store during setup (optional; can be done later from the console)")
@@ -166,8 +188,13 @@ type setupAnswers struct {
 	GitHubRunnerGroup       string
 	GitHubRunnerNodes       string
 	GitHubRunnerSocketProxy bool
+	GitHubRunnerSocketPath  string
 	GitHubRunnerMemory      string
 	GitHubRunnerAllowLeader bool
+	// GitHubRunnerAssignmentInterval is a string here (not int) so "unset"
+	// stays distinguishable from an explicit value: empty means "leave the
+	// stored value / the platform default alone".
+	GitHubRunnerAssignmentInterval string
 
 	// The GitHub App itself, optional at setup time. All three empty means the
 	// operator skipped it, and the console (or `pmcluster github app set`) can
@@ -337,6 +364,12 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 			a.GitHubRunnerSocketProxy = askYesNo(r, out,
 				"Route the runner's docker access through the filtered socket? (say no only to debug a build)",
 				cluster.LoadGitHubRunnerSocketProxy(ctx, st))
+			// The path is the proxy's address, so it is asked next to the
+			// proxy question. A fresh install can accept both defaults.
+			a.GitHubRunnerSocketPath = ask(r, out, "Filtered docker socket path on every node",
+				cluster.LoadGitHubRunnerSocketPath(ctx, st))
+			a.GitHubRunnerAssignmentInterval = ask(r, out, "Seconds between assignment polls (10-3600)",
+				strconv.Itoa(cluster.LoadGitHubRunnerAssignmentInterval(ctx, st)))
 			a.GitHubRunnerMemory = ask(r, out, "Memory limit per runner",
 				cluster.LoadGitHubRunnerMemory(ctx, st))
 			a.GitHubRunnerAllowLeader = askYesNo(r, out,
@@ -423,8 +456,10 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.GitHubRunnerGroup, _ = cmd.Flags().GetString("github-runner-group")
 		a.GitHubRunnerNodes, _ = cmd.Flags().GetString("github-runner-nodes")
 		a.GitHubRunnerSocketProxy, _ = cmd.Flags().GetBool("github-runner-socket-proxy")
+		a.GitHubRunnerSocketPath, _ = cmd.Flags().GetString("github-runner-socket-path")
 		a.GitHubRunnerMemory, _ = cmd.Flags().GetString("github-runner-memory")
 		a.GitHubRunnerAllowLeader, _ = cmd.Flags().GetBool("github-runner-allow-leader")
+		a.GitHubRunnerAssignmentInterval, _ = cmd.Flags().GetString("github-runner-assignment-interval")
 		// Optional GitHub App registration; empty strings mean "skipped".
 		a.GitHubAppID, _ = cmd.Flags().GetString("github-app-id")
 		a.GitHubAppKeyFile, _ = cmd.Flags().GetString("github-app-key-file")
@@ -543,14 +578,20 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	if a.ACMEEmail == "" && (a.CertPath == "" || a.KeyPath == "") {
 		return fmt.Errorf("TLS mode required: either --acme-email or --cert/--key")
 	}
-	if err := validateRunnerSetup(ctx, st, a, out); err != nil {
-		return err
-	}
-
+	// The App is stored BEFORE the runner gate is evaluated, so one invocation
+	// can pass `--github-app-id … --github-installation-id … --github-app-key-file
+	// …` and `--github-runners-enabled` together. The gate still refuses an
+	// enabled feature with no App — it now refuses only when the App really is
+	// absent from the store, rather than whenever it was configured in this same
+	// run.
+	//
 	// Optional GitHub App registration. It runs the same validate-by-minting path
 	// the console's set/rotate form uses, so setup cannot leave a key behind that
 	// does not work; the flags are never required.
 	if err := configureGitHubAppFromSetup(ctx, st, cfg, a, out); err != nil {
+		return err
+	}
+	if err := validateRunnerSetup(ctx, st, a, out); err != nil {
 		return err
 	}
 
@@ -722,6 +763,24 @@ func validateRunnerSetup(ctx context.Context, st *store.Store, a setupAnswers, o
 	if _, err := runners.NormalizeNodes(a.GitHubRunnerNodes); err != nil {
 		return fmt.Errorf("github-runner-nodes: %w", err)
 	}
+	// The socket path and the poll interval are validated HERE rather than left
+	// to the settings surface: setup writes settings directly (it does not go
+	// through that surface's Update allowlist), so an invalid value would
+	// otherwise be persisted and read back by the loader forever.
+	if p := strings.TrimSpace(a.GitHubRunnerSocketPath); p != "" {
+		if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, " 	\r\n") {
+			return fmt.Errorf("github-runner-socket-path must be an absolute path with no whitespace, got %q (default %s)", p, cluster.DefaultGitHubRunnerSocketPath)
+		}
+	}
+	if iv := strings.TrimSpace(a.GitHubRunnerAssignmentInterval); iv != "" {
+		n, err := strconv.Atoi(iv)
+		if err != nil {
+			return fmt.Errorf("github-runner-assignment-interval must be a whole number of seconds, got %q", iv)
+		}
+		if n < 10 || n > 3600 {
+			return fmt.Errorf("github-runner-assignment-interval must be between 10 and 3600 seconds, got %d: below ten spends the leader's GitHub quota, above an hour leaves a change stale", n)
+		}
+	}
 	if a.GitHubRunnerMemory != "" {
 		if err := runners.ValidateMemory(a.GitHubRunnerMemory); err != nil {
 			return fmt.Errorf("github-runner-memory: %w", err)
@@ -866,8 +925,10 @@ func boolSetting(b bool) string {
 	return ""
 }
 
-// runnerSettings renders the wizard's runner answers into the four settings
-// rows, with the repo list normalised (trimmed, deduped, order preserved).
+// runnerSettings renders the wizard's runner answers into the settings rows,
+// with the node list normalised (trimmed, deduped, order preserved). The socket
+// path and poll interval are passed through trimmed: empty means "unset", and
+// the loaders then report the platform's default rather than a zero value.
 // Renderer errors are impossible here — validateRunnerSetup already rejected
 // anything malformed — so a bad list would only be reached by a caller that
 // skipped validation, and then persisting the raw value is no worse than
@@ -877,13 +938,15 @@ func runnerSettings(a setupAnswers) map[string]string {
 	group, _ := runners.NormalizeGroup(a.GitHubRunnerGroup)
 	nodes, _ := runners.NormalizeNodes(a.GitHubRunnerNodes)
 	return map[string]string{
-		cluster.SettingGitHubRunnersEnabled():    boolSetting(a.GitHubRunnersEnabled),
-		cluster.SettingGitHubRunnerOrg():         org,
-		cluster.SettingGitHubRunnerGroup():       group,
-		cluster.SettingGitHubRunnerNodes():       nodes,
-		cluster.SettingGitHubRunnerSocketProxy(): strconv.FormatBool(a.GitHubRunnerSocketProxy),
-		cluster.SettingGitHubRunnerMemory():      strings.TrimSpace(a.GitHubRunnerMemory),
-		cluster.SettingGitHubRunnerAllowLeader(): boolSetting(a.GitHubRunnerAllowLeader),
+		cluster.SettingGitHubRunnersEnabled():           boolSetting(a.GitHubRunnersEnabled),
+		cluster.SettingGitHubRunnerOrg():                org,
+		cluster.SettingGitHubRunnerGroup():              group,
+		cluster.SettingGitHubRunnerNodes():              nodes,
+		cluster.SettingGitHubRunnerSocketProxy():        strconv.FormatBool(a.GitHubRunnerSocketProxy),
+		cluster.SettingGitHubRunnerSocketPath():         strings.TrimSpace(a.GitHubRunnerSocketPath),
+		cluster.SettingGitHubRunnerMemory():             strings.TrimSpace(a.GitHubRunnerMemory),
+		cluster.SettingGitHubRunnerAllowLeader():        boolSetting(a.GitHubRunnerAllowLeader),
+		cluster.SettingGitHubRunnerAssignmentInterval(): strings.TrimSpace(a.GitHubRunnerAssignmentInterval),
 	}
 }
 

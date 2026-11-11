@@ -21,7 +21,7 @@ PAT](#why-the-app-not-a-pat) below.
 | `github_runner_socket_path` | `/run/pmcluster/docker.sock` | where that socket listens on every node |
 | `github_runner_memory` | `2560m` | per-container memory limit (a Docker quantity: `2560m`, `3g`). `2560m` completed a `govulncheck` run on real hardware; at `1500m` the runner was OOM-killed mid-job |
 | `github_runner_allow_leader` | `false` | allow a runner on a single-node cluster, where the only node is the leader |
-| `github_runner_assignment_interval` | `60` | seconds between a node's polls of the leader for its runner assignment. Clamped to 10–3600; below ten would spend the leader's GitHub quota, above an hour leaves an assignment stale. The leader sends the value inside every answer, because a worker cannot read the setting itself |
+| `github_runner_assignment_interval` | `60` | seconds between a node's polls of the leader for its runner assignment. The settings surface **refuses** anything outside 10–3600 (a stored value that no longer parses is read as the default, and a stored number outside the range is clamped, so a bad row cannot turn the poll off or hammer the leader); below ten would spend the leader's GitHub quota, above an hour leaves an assignment stale. The leader sends the value inside every answer, because a worker cannot read the setting itself |
 
 ```bash
 pmcluster cluster settings set \
@@ -31,6 +31,24 @@ pmcluster cluster settings set \
   github_runner_nodes=worker-1,worker-2 \
   github_runner_memory=2560m
 ```
+
+The same values are accepted from a fresh install, so a cluster can be brought up
+with CI already wired instead of remembering a later `settings set`:
+
+```bash
+pmcluster setup \
+  --github-app-id 123456 --github-installation-id 7890 --github-app-key-file ./app.pem \
+  --github-runners-enabled --github-runner-org acme --github-runner-nodes worker-1,worker-2
+```
+
+The remaining runner flags are `--github-runner-group`,
+`--github-runner-socket-proxy`, `--github-runner-socket-path`,
+`--github-runner-memory`, `--github-runner-allow-leader` and
+`--github-runner-assignment-interval`. Setup **refuses** to enable runners
+without a stored App, an org, and at least one worker hostname, and its error
+names what is missing and how to supply it. The App flags may be passed in the
+**same** invocation: the App is stored before the runner gate is evaluated, so one
+command brings up a cluster with CI ready.
 
 The reconcile loop picks the settings up on its next pass (60 s default). No
 `cluster update` is needed: a runner is not a platform config.
@@ -97,7 +115,7 @@ The answer is the resolved spec, not a settings dump:
 {"node":"nxt-sw-6-w","enabled":true,"org":"acme","group":"pmcluster",
  "socket_proxy":true,"socket_path":"/run/pmcluster/docker.sock","memory":"2560m",
  "mode":"ephemeral","labels":"self-hosted,linux,x64,pmcluster",
- "interval_seconds":60,"reason":"selected as a runner node",
+ "interval_seconds":60,"reason":"selected as a runner node","held":false,
  "registration_token":"…","registration_token_expires_at":1700003600,
  "issued_at":1700000000}
 ```
@@ -106,6 +124,14 @@ The answer is the resolved spec, not a settings dump:
 org-scoped, and it exists because an ephemeral runner cannot be created without one.
 Nothing else credential-shaped travels with it — no App key, no PAT, no cluster
 setting, no secret.
+
+`held` is the operator stop crossing the node boundary. The console's **Kill** runs
+on the leader, which can only remove a container on its own node: a kill for a
+runner living elsewhere used to be recorded on the leader and nowhere else, so the
+owning node started it again seconds later and the button appeared to work while
+changing nothing. The hold is persisted with the runner's bookkeeping and sent in
+every answer for that node; a held node removes its container, mints no token and
+stays quiet until **Restart** clears the hold.
 
 ### Transport: the leader's swarm address, not the console
 
@@ -234,24 +260,32 @@ So the daemon listens on a **filtered socket** and the runner gets that instead:
 - It listens on a unix socket (`github_runner_socket_path`, default
   `/run/pmcluster/docker.sock`, root:root 0660) and forwards to the real socket.
   No host port, no overlay exposure.
-- The runner mounts that socket and gets
+- The runner mounts that socket's **directory** (`/run/pmcluster`) and gets
   `DOCKER_HOST=unix:///run/pmcluster/docker.sock`. It never sees
-  `/var/run/docker.sock`.
+  `/var/run/docker.sock`. The directory, not the file, because the daemon
+  recreates the socket on every restart and a file bind-mount pins the old inode:
+  a runner that was mid-job across an upgrade lost the daemon with `Cannot connect
+  to the Docker daemon at unix:///run/pmcluster/docker.sock` while the socket was
+  present on the host.
 
 The allow list is deny-by-default and segment-exact — a route that is not in the
 table is refused, and there is no generic passthrough:
 
-| Allowed | |
-|---|---|
-| `GET` | `/_ping`, `/version`, `/info`, `/events`, `/containers/json`, `/images/json`, `/volumes`, `/volumes/{name}`, `/networks`, `/networks/{id}`, `/containers/{id}/json`, `/containers/{id}/logs`, `/images/{id}/json`, `/images/**/json` |
-| `POST` | `/containers/create`, `/containers/{id}/start`, `/stop`, `/restart`, `/kill`, `/wait`, `/images/create`, `/build`, `/volumes/create`, `/networks/create` |
-| `DELETE` | `/containers/{id}`, `/images/{id}`, `/images/**`, `/volumes/{name}`, `/networks/{id}` |
+| Allowed | | |
+|---|---|---|
+| `GET` / `HEAD` | `/_ping`, `/version`, `/info`, `/events`, `/containers/json`, `/images/json`, `/volumes`, `/volumes/{name}`, `/networks`, `/networks/{id}`, `/containers/{id}/json`, `/containers/{id}/logs`, `/images/{id}/json`, `/images/**/json` | the client's handshake and every read |
+| `POST` | `/containers/create`, `/containers/{id}/start`, `/stop`, `/restart`, `/kill`, `/wait`, `/images/create`, `/build`, `/volumes/create`, `/networks/create` | a build and the `docker run` step around it |
+| `POST` | `/auth`, `/images/{name}/tag`, `/images/**/tag`, `/images/{name}/push`, `/images/**/push` | `docker login`, retag, publish — bounded by the credential the job authenticated with |
+| `POST` | `/session`, `/grpc` | BuildKit's session channel — how buildx attaches to the daemon's own BuildKit (see [buildx](#buildx)) |
+| `DELETE` | `/containers/{id}`, `/images/{id}`, `/images/**`, `/volumes/{name}`, `/networks/{id}` | |
 
 Blocked outright, each one tested: `/services`, `/tasks`, `/nodes`, `/swarm`,
-`/secrets`, `/configs`, `/plugins`, `/system`, `/session`, `/auth`, `/exec`, and
-`exec` inside a container (`/containers/{id}/exec*`). A workflow cannot remove a
-service, demote a node, read a swarm secret, or shell into another container —
-those are impossible rather than discouraged.
+`/secrets`, `/configs`, `/plugins`, `/system`, `/exec`, and `exec` inside a
+container (`/containers/{id}/exec*`). A workflow cannot remove a service, demote a
+node, read a swarm secret, or shell into another container — those are impossible
+rather than discouraged. A path containing `.` or `..` is refused before any
+pattern is consulted, because the `**` wildcards that match a registry-qualified
+image name would otherwise match `x/../../services/…` too.
 
 Every refusal is a `403` naming the route, and the daemon logs the attempt:
 
@@ -265,10 +299,12 @@ The log is rate-limited (the first few per minute one by one, then one summary l
 with the suppressed count) so a retry loop cannot flood the journal.
 
 **This is blast-radius control, not a security boundary.** The socket still fronts
-a root daemon, and the routes that are allowed (create a container, pull an image,
-bind-mount a host path) are already enough to escalate on that node. Two rules
-follow: a runner on a **manager** defeats the whole exercise, and a workflow from a
-repository you do not trust should not run on a runner at all.
+a root daemon, and the routes that are allowed (create a container, pull or push an
+image, bind-mount a host path) are already enough to escalate on that node. Two
+rules follow: a runner on a **manager** defeats the whole exercise, and a workflow
+from a repository you do not trust should not run on a runner at all. A push is
+bounded by the credential the job supplied — a repository's `GITHUB_TOKEN` can only
+write that repository's packages — which is why publishing is allowed at all.
 
 `github_runner_socket_proxy=false` mounts the raw socket instead. It exists to debug
 a build against something the filter does not cover (an unfamiliar buildx flow, a
@@ -277,12 +313,26 @@ daemon version the table does not match). It is unsupported for untrusted code, 
 
 ### buildx
 
-`docker buildx build` with the **docker driver** works through `DOCKER_HOST`: it
-talks to the daemon's `/build` API, which the filter allows. A containerised
-`docker-container` builder needs the socket inside the builder container plus
-`--privileged`, which this feature deliberately does not arrange — the filter would
-be bypassed by the nested daemon. If a workflow needs that driver, it needs a
-self-hosted runner the operator runs and trusts, not this one.
+The image this platform runs ships a **pre-created buildx builder named `default`
+using the `docker-container` driver**, so a plain `docker build` delegates to a
+BuildKit *container* — which the filtered socket can neither populate
+(`PUT /containers/{id}/archive`) nor exec into. The result is a build that fails
+inside buildx, with an error that names none of this.
+
+So the container sets `BUILDX_CONFIG=/tmp/pmcluster-buildx` (an empty directory of
+its own, `Spec.EnvFixups`), which neutralises that builder and makes the CLI fall
+back to the daemon's **built-in** BuildKit through `DOCKER_HOST`. `POST /session`
+and `POST /grpc` are on the allow list for the same reason: the docker driver
+attaches a session to the daemon's BuildKit over them, and denying them does not
+prevent a build — it silently forces the `docker-container` driver, which then dies
+on the archive route above. `buildx create --driver docker` cannot repair it
+either; that driver is a singleton.
+
+What is still not arranged is a **containerised** builder: a `docker-container`
+builder needs the docker socket inside the builder container plus `--privileged`,
+which would bypass the filter by nesting a daemon. A workflow that creates one
+explicitly will fail here; plain `docker build` and `docker buildx build` against
+the daemon's own driver are the supported path.
 
 ## Lifecycle
 
@@ -291,7 +341,8 @@ self-hosted runner the operator runs and trusts, not this one.
    `all`-visible group and any selected manager.
 2. **Register.** The LEADER mints the org registration token (it is the only side
    that holds the App) and puts it in the node's assignment; the node starts a local
-   container with `ORG_NAME`, `RUNNER_GROUP`, `EPHEMERAL=true`, labels
+   container from the pinned image with `RUNNER_SCOPE=org`, `ORG_NAME`,
+   `RUNNER_GROUP`, `EPHEMERAL=true`, labels
    `self-hosted,linux,x64,pmcluster`, the memory limit and the filtered socket. The
    token is single-use, lives one hour, and is **never persisted** — not on the
    node's disk, not in a log.
@@ -322,8 +373,11 @@ host networking.
 - **Table** — scope (org), name, node, state pill (`idle`/`busy`/`starting`/
   `offline`/`failed`), mode, age, last job.
 - **Kill** per row removes the container and the registration, and holds the runner
-  so no pass re-registers it. On a `busy` runner the button asks first, in words:
-  killing it removes the container mid-workflow and fails that job.
+  so no pass re-registers it. The hold is **persisted on the leader and sent to the
+  owning node in its next assignment** (`held: true`), so a kill for a runner on
+  another node takes effect there within one poll instead of being recorded where it
+  cannot act. On a `busy` runner the button asks first, in words: killing it removes
+  the container mid-workflow and fails that job.
 - **Restart** re-registers the runner immediately; **Restart stopped** does that for
   every stopped row.
 
@@ -335,17 +389,20 @@ on its next pass.
 
 ## Why the App, not a PAT
 
-A registration token must be minted with `administration: write` on the
-**organisation**. The App already mints one-hour installation tokens for clone,
+An **org** registration token is minted with `organization_self_hosted_runners: write`
+on the **organisation**. The App already mints one-hour installation tokens for clone,
 build and the [token broker](github-app.md); using the same installation for runner
 registration means no long-lived credential exists anywhere in the feature. A
-personal access token could do the same job only by holding `administration: write`
-on the whole org — a wider, longer-lived credential — so it is refused by name rather
-than accepted as a quieter substitute.
+personal access token could only do the same job as a long-lived credential with
+that scope on the whole org — or, for a repository-level token, with
+`administration: write` on every repository — so it is refused by name rather than
+accepted as a quieter substitute.
 
-The permission this feature adds is **Organization → Administration: Read & write**.
+The permission this feature adds is **Organization → Self-hosted runners: Read &
+write** — not Administration, which covers only the repository-level endpoints.
 Grant it in the App's settings, then approve it on the installation; until then
 registration returns a bare `403` and `pmcluster doctor` names the permission.
+The exact endpoint-to-permission table is at the end of this chapter.
 
 Reading the "last job" column additionally needs **Actions: read**; without it the
 column stays empty and nothing else is affected.
@@ -354,7 +411,7 @@ column stays empty and nothing else is affected.
 
 | What happened | What the platform does |
 |---|---|
-| registration token refused (`403`) | warning naming `administration:write` and the org level; the failure count is recorded for the doctor |
+| registration token refused (`403`) | warning naming `organization_self_hosted_runners:write` at the organisation level; the failure count is recorded for the doctor |
 | the group is visible to the whole org | refusal naming the docker risk; no container is started |
 | a selected node is a manager | refusal naming the node and why (a build marks it Down) |
 | GitHub is unreachable | teardown still removes the container and reports the de-registration as unconfirmed; a registering node warns and retries next pass |
@@ -395,7 +452,7 @@ ENABLED/DISABLED first:
   a row) → `warn` naming `github_runners_enabled`, because leftovers are the failure
   mode of a half-disable;
 - **enabled with no App, no org, or no node** → `fail`, naming the key;
-- **App missing `administration:write`** → `fail`, naming the exact permission;
+- **App missing `organization_self_hosted_runners:write`** → `fail`, naming the exact permission;
 - **per selected node** → `warn` when registered-but-not-running, running-but-not-
   registered, offline, failing repeatedly, on a manager, or mounting the raw socket;
 - **unmanaged runners** → a pmc-named runner GitHub knows that the platform does not
@@ -405,8 +462,13 @@ ENABLED/DISABLED first:
 
 ## What is not built
 
-- The runner image is `myoung34/github-runner:latest`, a constant rather than a
-  setting: an arbitrary image here would run with access to a docker daemon.
+- The runner image is pinned (`myoung34/github-runner:2.338.2-ubuntu-jammy`,
+  `internal/runners.DefaultImage`) rather than a setting: an arbitrary image here
+  would run with access to a docker daemon, and `latest` would let an upstream
+  push change what runs on the host. The container is started with
+  `RUNNER_SCOPE=org`; without it the image validates itself as a **repository**
+  runner, finds no `REPO_URL` and exits 1 with *"Invalid configuration provided
+  for url"* — a crash loop that names nothing relevant.
 - One runner per node; a node cannot run two, and a runner cannot be pinned to a
   block device or a cgroup beyond the memory cap.
 - The socket proxy's allow table is code, not a setting. Widening it is a security

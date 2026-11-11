@@ -128,42 +128,73 @@ they would only matter for a PAT revoked mid-deploy.
 
 ## Self-hosted GitHub Actions runners
 
-`internal/runners` owns one ephemeral Actions runner container per configured
-private repository (`github_runners_enabled`, off by default). The reconcile
-loop calls `Manager.Reconcile` on every pass — its own pass, not a
-content-hashed platform stack, because the spec embeds a single-use,
-hour-lived registration token: hashing it would change on every render and a
-stale token would be redeployed.
+`internal/runners` owns **one ephemeral, org-registered Actions runner container per
+selected WORKER node** (`github_runners_enabled`, off by default). The capacity model
+is the node list: N selected workers = N runners (`pmc-<node>-org`).
 
-- **Registration** mints a repo-scoped token through `internal/githubapp`
-  (`POST /repos/{owner}/{repo}/actions/runners/registration-token`) with the
-  same cached installation token the broker uses. Nothing is persisted: the
-  token is written into a rendered compose and handed to the container.
-- **Desired vs actual** is discovered from service labels
-  (`pmcluster.runner=true`, `pmcluster.runner.repo=<owner/name>`), so a
-  container started by an earlier daemon is visible without trusting a table.
-  A settings row (`github_runners_state`) records the runner name and
-  registration time, which is what teardown needs once the container is gone.
-- **Teardown** removes the stack and de-registers every runner with the
-  reserved `pmc-` prefix for that repo (`DELETE .../runners/{id}`). It is
-  retried: a failed de-registration keeps the booking entry.
-- **Failures are warnings.** A refused token, a public repo, an unreachable
-  GitHub are per-repo warnings appended to the last-apply record, so one broken
-  repo never stops the rest and `doctor`'s `last apply` check still names them.
-- **Placement** is in the rendered spec (`node.labels.pmcluster.leader != true`
-  unless the operator lifts it), not a runbook: a runner builds images and
-  competes with the control plane. `restart_policy: none` keeps an ephemeral
-  runner off a spent token, `update_config: order: stop-first` prevents two
-  containers registering the same name.
-- **The security model is the docker socket.** A runner mounts
-  `/var/run/docker.sock`, so a workflow on it is root on that host. Hence:
-  private repositories only (a public repo's fork PR would run arbitrary code
-  there), an explicit `self-hosted,linux,x64,pmcluster` label set, the reserved
-  name prefix, and a feature that is off by default.
+**It runs per node, not as a swarm service.** There is no stack and no placement
+constraint. `startPerNodeLoops` (called from `serve.go` *before* the leadership wait,
+because a worker blocks there forever) starts the filtered docker socket and the
+node's runner half:
 
-`doctor`'s `github runners` check reports the enabled state, per-repo
-container/registration agreement (ghosts, offline runners), and the missing
-`administration: write` permission that would otherwise appear as a bare 403.
+- a **worker** cannot read cluster settings at all (Docker configs are a manager-only
+  read), so it runs `runners.Agent` against the assignment it pulls from the leader;
+- a **manager** keeps the store-based `Manager.Reconcile`, which applies the same
+  rules to its own node and is refused as a runner host anyway (`github_runner_allow_leader`
+  exists for a single-node cluster).
+
+**The assignment channel** (`internal/runners/assignment.go`, served by
+`internal/cli/assignment.go`) is the leader's answer to "what should THIS node run":
+
+- `GET /api/github/runners/assignment` on the leader's **swarm data-path address,
+  port 9092** — a listener of its own, never `0.0.0.0`, never a published host port.
+- Authenticated by **mutual TLS with the swarm node certificate**
+  (`internal/auth/swarmtls`): chain to the swarm CA, `O` = this swarm's ID, `CN` = a
+  node ID in the live node list (that is the revocation path), not expired. The
+  middleware is mounted on this route **and nothing else** — not on `/api/*`, not on
+  `/metrics`, not on the console — so a compromised worker gains no second readable
+  endpoint. `?node=` is ignored: identity comes from the certificate only.
+- The leader resolves the same decision the reconcile makes (switch, org, node list,
+  manager/leader refusal, `selected` group visibility) and sends the **resolved
+  spec**: org, group, socket path/proxy, memory, labels, poll interval, a `reason`,
+  an operator `held` flag, and one single-use, one-hour **registration token**. No
+  App key, no PAT, no setting, no secret. A refusal is a 409 with the reason.
+- The **hold** crosses here because the console's Kill runs on the leader, which can
+  only remove containers on its own node. The hold is persisted in the node's
+  bookkeeping and sent in every answer; a held node removes its container and stays
+  quiet until Restart clears it.
+
+**The container** (`container.go`) comes from the pinned `DefaultImage`
+(`myoung34/github-runner:2.338.2-ubuntu-jammy`, a constant rather than a setting),
+with `RUNNER_SCOPE=org` — without it the image validates itself as a *repository*
+runner, finds no `REPO_URL` and exits 1 with "Invalid configuration provided for
+url" — plus `ORG_NAME`, `RUNNER_GROUP`, `RUNNER_NAME`, `LABELS=self-hosted,linux,x64,pmcluster`,
+`EPHEMERAL=true`, a memory cap (default `2560m`; `1500m` was OOM-killed mid-job) and
+`--restart no`. Desired-vs-actual is discovered by container **name** and the labels
+`pmcluster.runner`, `pmcluster.runner.org`, `pmcluster.runner.name`, so the platform
+only ever touches containers it owns.
+
+**Bookkeeping** is the settings row `github_runners_state` (JSON, keyed by runner
+name): registration time (the recycle cooldown), consecutive failures, and the
+operator holds. It is what teardown needs once a container is gone, and it is why a
+failed de-registration is retried instead of forgotten. The registration token is
+never persisted.
+
+**The security model is the docker socket.** The runner bind-mounts the daemon's
+filtered socket directory (`internal/socketproxy`, `github_runner_socket_path`,
+deny-by-default allow table) instead of `/var/run/docker.sock`; the directory rather
+than the file, because the daemon replaces the socket on every restart. The image's
+pre-created `docker-container` buildx builder is neutralised with
+`BUILDX_CONFIG=/tmp/pmcluster-buildx` so builds use the daemon's own BuildKit;
+`github_runner_socket_proxy=false` is the documented debug fallback and gives the
+runner root on its node. Hence: workers only, `selected` group visibility only, off
+by default.
+
+`doctor`'s `github runners` check reports the enabled state, per-node
+container/registration agreement (ghosts, offline runners, raw sockets), and the
+missing `organization_self_hosted_runners: write` permission that would otherwise
+appear as a bare 403. On a worker it answers the node-local subset (daemon, socket
+proxy, last assignment fetched, local runner, disk) instead of refusing.
 
 ## Leaf packages
 

@@ -274,12 +274,14 @@ endpoint, the log, and the restart policy.
 ### The endpoint is this node's swarm address, or there is no exporter
 
 `otlp_endpoint` defaults to `auto`: read this node's swarm-advertised address
-(`Status.Addr`), build `http://<address>:4318`, dial it once at startup, and use
-it only if something answers (`internal/config/selftelemetry.go`,
-`internal/docker/selfaddr.go`). An explicit URL is used verbatim — that is the
-operator's decision and it is never second-guessed. An empty value disables
-self-telemetry, from any source, including a deliberately empty
-`PMCLUSTER_OTLP_ENDPOINT=`.
+(`Status.Addr`), build `http://<address>:4318`, dial it, and use it only if
+something answers (`internal/config/selftelemetry.go`,
+`internal/docker/selfaddr.go`). That dial is repeated every minute — see
+*resolution is supervised* below — so a collector that appears after this node
+booted is picked up without a restart.
+An explicit URL is used verbatim — that is the operator's decision and it is never
+second-guessed. An empty value disables self-telemetry, from any source, including a
+deliberately empty `PMCLUSTER_OTLP_ENDPOINT=`.
 
 Each of the obvious alternatives fails in its own way, which is why the list is
 worth writing down once:
@@ -297,10 +299,26 @@ address that does not answer the dial all end the same way — no exporter, and
 one journal line naming the reason. A missing trace is acceptable; an exporter
 aimed at a closed port is not.
 
-Resolution happens once, at startup, and is not retried at runtime. A node that
-booted before the observability stack existed therefore stays silent until the
-daemon is restarted (`systemctl restart pmcluster`) — the alternative is
-re-probing a dead port on a timer, which is the shape of the original bug.
+Resolution is **supervised, not decided once**. A startup-only decision was the
+shape of the original bug in a second disguise: a node that booted while the
+collector was being rescheduled disabled its exporter permanently, and nothing
+re-checked — measured on a live worker whose journal still said `self-telemetry
+disabled: nothing answers at http://10.7.224.10:4318 (connection refused)` six
+hours after that port had started answering `200`. The console then showed one
+node in a five-node cluster, which reads as a broken panel rather than as four
+daemons that opted out at boot.
+
+So the daemon re-probes **every minute** (`internal/cli/telemetry_supervisor.go`)
+and reconciles the exporter with the answer: start it when something answers,
+leave it alone while the same endpoint answers, shut the old one down and start a
+new one when the address changes (one node never exports under two addresses),
+and stop it when the answer goes away. A failed probe is one DEBUG line while the
+state does not change and one WARN at the transition — never a line per minute.
+The node-stat sampler starts on the **first** successful probe, because a sampler
+whose export goes nowhere does work nobody reads.
+
+The cost is one dial a minute per node. The alternative — a five-node panel with
+one row, fixed by restarting four daemons by hand — is what that dial buys.
 
 A CLI command resolves the same way, with a five-second bound on the docker
 socket so a wedged daemon cannot delay a one-shot command. Run off-cluster — a
@@ -652,7 +670,7 @@ daemon on every node ── sample /proc (loadavg, meminfo, per-pid stat/status)
         ▼
 collector (leader) ── filter node-stats → file exporter
         │                                   /var/stack/nodestat/nodestat.jsonl
-        │                                   rotation: 2 MiB, no backups
+        │                                   rotation: 2 MiB, one backup
         ▼
 leader's daemon ── tail by byte offset + inode (256 KiB rebuild on rotation)
         │           newest sample per node, malformed lines skipped and counted
@@ -706,7 +724,8 @@ console /web/overview ── hostname, role, load, memory, top processes, sample
 | Page shows no telemetry | `docker service ps observability_parseable` and `docker service ps observability_otel-collector` |
 | No node metrics | collector task is running on that node and has host metrics access |
 | Collector `Rejected`: `bind source path does not exist: /var/stack/nodestat` | `ls -ld /var/stack/nodestat` on the leader; run `cluster update` (or `cluster up` on a fresh node) — the platform creates it, and a warning names the path when it cannot |
-| A node has no row in Node resources | `journalctl -u pmcluster \| grep -i self-telemetry` — an endpoint that fails the dial check is disabled at startup, and the leader's wildcard swarm address is expected to resolve to loopback |
+| A node has no row in Node resources | `journalctl -u pmcluster \| grep -i self-telemetry` — the exporter is re-probed every minute, so a node recovers on its own when the collector comes back; a persistent `nothing answers at …:4318` is the collector, not the daemon. The leader's wildcard swarm address is expected to resolve to loopback |
+| `/var/stack/nodestat` grows without bound | the exporter is running with `max_backups: 0` (a rolled file is renamed and never deleted — 722 MiB / 372 files was measured on a live leader). `cluster update` re-renders the collector config to `max_megabytes: 2, max_backups: 1` |
 | No container logs | container uses the `json-file` driver; check `docker info` |
 | Logs duplicated | application sends OTLP logs **and** stdout; set `skip_filelog: true` |
 | No traces | the application is instrumented and points at the collector's OTLP endpoint |

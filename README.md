@@ -145,6 +145,43 @@ Get the token on the manager: `docker swarm join-token worker`. Add `--storage-n
 
 Open between manager ↔ workers: `2377/tcp`, `7946/tcp+udp`, `4789/udp`.
 
+## What a fresh install gets you (CI included)
+
+One install command, then a cluster that can run its own CI:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hazemarian/poor-man-cluster/main/install.sh | bash
+pmcluster init
+pmcluster setup --domain example.com --acme-email ops@example.com \
+  --github-app-id 123456 --github-installation-id 7890 --github-app-key-file ./app.pem \
+  --github-runners-enabled --github-runner-org acme --github-runner-nodes worker-1
+```
+
+That single `setup` registers the GitHub App **and** enables runners — the App is
+stored before the runner gate is evaluated, so it does not have to be two runs. From
+there: the App mints installation tokens for clone, build and the Actions token
+broker; each selected worker runs one ephemeral runner container; and a workflow with
+`runs-on: [self-hosted, linux, x64, pmcluster]` picks it up. Two caveats decide whether
+that first CI job runs at all, and neither is visible in the CLI's output:
+
+- **The App's permission is three steps, not one.** Runner registration needs
+  *Organization → Self-hosted runners: Read & write* (not Administration, which covers
+  repository endpoints only). Grant it on the App, **approve** it on the installation,
+  then **re-mint the token** — `systemctl restart pmcluster` on the leader — because
+  GitHub mints an installation token from whatever the App had at mint time. Skipping
+  the third step looks exactly like a bug: the permission is visibly granted and every
+  registration still returns a bare `403`.
+- **A runner needs a worker, not a manager.** Managers are refused as runner hosts
+  (`--github-runner-nodes` lists worker hostnames only): a build on the control plane's
+  1-vCPU manager competes with the API and marks the node `Down`. A single-node cluster
+  has no worker — that is what `--github-runner-allow-leader` is for, and it is the
+  only reason it exists.
+
+The full contract — group visibility, the filtered docker socket, the mTLS channel a
+worker pulls its assignment from, and the failure modes with the messages they
+produce — is in [`docs/runners.md`](docs/runners.md) and
+[`docs/github-app.md`](docs/github-app.md).
+
 ## Daily-use cheat sheet
 
 | Task | Command |

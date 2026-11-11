@@ -51,7 +51,7 @@ func TestControllers_SettingsSectionsStateHeadingAndPurpose(t *testing.T) {
 		{"sect-connection", "Connection", "How this console reaches the daemon"},
 		{"sect-github", "GitHub App", "installation tokens minted on demand"},
 		{"sect-identity", "Identity and sign-in", "The domain the cluster answers on"},
-		{"sect-runners", "Self-hosted CI runners", "one GitHub Actions runner container per private repository"},
+		{"sect-runners", "Self-hosted CI runners", "one GitHub Actions runner container per selected worker node"},
 		{"sect-backups", "Backups", "Needs a backup store"},
 		{"sect-advanced", "Advanced", "Paths and levels that rarely change"},
 	} {

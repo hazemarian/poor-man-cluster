@@ -11,7 +11,7 @@ import (
 )
 
 // OTLPAutoEndpoint is the default value of otlp_endpoint. It does not name an
-// address; it asks the process to resolve THIS node's own address at startup
+// address; it asks the process to resolve THIS node's own address on every probe
 // (see ResolveOTLPEndpoint). Empty string still means "disabled".
 const OTLPAutoEndpoint = "auto"
 
@@ -20,9 +20,10 @@ const OTLPAutoEndpoint = "auto"
 // on it (internal/cluster/embeds/observability-stack.yml).
 const OTLPPort = 4318
 
-// selfTelemetryDialTimeout bounds the startup reachability check. It runs once,
-// before the daemon serves, so a dead endpoint must not delay startup by more
-// than a few seconds.
+// selfTelemetryDialTimeout bounds ONE dial of the reachability check. The daemon
+// re-probes every minute (internal/cli/telemetry_supervisor.go), so the timeout
+// must stay small: a dead endpoint must neither stall the probe loop nor delay
+// startup by more than a few seconds.
 const selfTelemetryDialTimeout = 2 * time.Second
 
 // loopbackAddress is the dial target for a node whose swarm record is the

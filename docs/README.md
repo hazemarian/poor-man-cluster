@@ -47,14 +47,14 @@ the [whitepaper](whitepaper.md).
 | `dsl.md` | The manifest DSL — every top-level and service field, substitution, injection rules, a complete example |
 | `webhook.md` | Webhook sources, request format, signature, GitHub Actions + generic CI examples, troubleshooting |
 | `github-app.md` | The GitHub App: installation tokens for clone, build and CI (`POST /api/github/token`), why pulls use the stored PAT instead, the permission ceiling, the workflow snippet, rotation, failure modes, what is not built |
-| `runners.md` | Self-hosted GitHub Actions runners: org-level registration into a `selected`-visibility group, one local container per selected worker, the filtered docker socket and its allow list, enable/disable as a full transition, the console panel (node picker, kill, restart), the doctor check |
+| `runners.md` | Self-hosted GitHub Actions runners: org-level registration into a `selected`-visibility group, one local container per selected worker, the mTLS assignment channel a worker pulls its spec from, the filtered docker socket and its allow list, enable/disable as a full transition, the console panel (node picker, kill, restart), the setup flags, the doctor check |
 | `secrets-and-configs.md` | DB-backed secrets/configs: encryption, versioning, scopes, content-addressed swarm mirrors, `env` reference kinds, API |
 | `registry-credentials.md` | The private-registry pull credential: where it lives (encrypted store, not a manifest), `registry add/list/remove` semantics, ghcr.io token spec, `--with-registry-auth` propagation, the numbered rotation runbook, failure modes, cadence |
 | `tls.md` | ACME vs operator-supplied, in-place main-cert rotation, per-host customer-domain certs |
 | `settings.md` | The cluster-settings catalogue: every key the daemon accepts, its default, who sets it, and how a change reaches the swarm |
 | `console.md` | The operator console: every page, auth model, status badges |
 | `storage-and-databases.md` | Storage nodes and auto-placement, the Path 1 decision, storage matrix, DB strategies, moving/failing over a stack — backups live in `backup.md` |
-| `health.md` | `pmcluster doctor`: every health check, what it measures and what it cannot see — the control-plane kit drill, the offsite re-read, version skew across managers |
+| `health.md` | `pmcluster doctor`: every health check, what it measures and what it cannot see — the control-plane kit drill, the offsite re-read, version skew across managers, and why a node can be missing from Node resources (the supervised self-telemetry probe, the bounded node-stats file) |
 | `backup.md` | **The** backup chapter: the snapshot-capable volume and its repair, the hourly run (no freeze, and why), what an artifact is, what "verified" means per engine, the three destinations, retention, discovery, restore, the failure modes seen in production, what is not built, and the open questions |
 | `network-topology.md` | Traffic planes, topology options, firewall reference, DNS routing |
 | `control-loop-design.md` | The reconcile loop as built — passes, drift signals, outage pause, Raft snapshot |

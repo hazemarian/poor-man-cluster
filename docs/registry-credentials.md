@@ -145,11 +145,12 @@ now Y)` on overwrite (`registry.go:105,110`).
 Reads the store and prints `HOST / USERNAME / CONFIGURED` — **never** a
 password, plaintext or ciphertext (`registry.go:134-137`; the column header
 says "CONFIGURED" because the value printed is the row's `created_at`, RFC3339).
-Caveat inherited from the store layer: `UpdateRegistry` only touches
-`username, password_ciphertext` (`pmcluster/internal/store/registries.go:48-53`),
-so the timestamp stays at the **first** time that host was added — it does not
-show when you last rotated. Keep the token's real expiry somewhere else
-(§6 step 6); the list lies by omission about freshness.
+That timestamp is the **current** credential's: `UpdateRegistry` resets
+`created_at` on every rotation (`pmcluster/internal/store/registries.go:48-58`),
+which is what makes it the same age the deploy WARN states and doctor's 60-day
+warning measures. It is a registration date, not an expiry — the 90 days run
+from GitHub's issue date, so keep the token's real expiry somewhere else
+(§6 step 6).
 
 ### `pmcluster registry remove <host>` (`registry.go:142-163`)
 

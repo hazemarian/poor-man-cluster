@@ -50,14 +50,20 @@ model.
   reason) and the runner table (scope, name, node, state, mode, age, last job)
   with a Kill per row and Restart per row plus "Restart stopped" at panel level.
   A busy runner's Kill asks first, in words, because it fails the running job.
+  The kill's hold is persisted and travels to the owning node in its next
+  runner assignment, so a kill on another node takes effect there instead of
+  being recorded where it cannot act.
   Readable by any signed-in user; the picker's save, kill and restart are
   operator actions.
 - **Settings** (`/web/settings`; the same page answers at `/web/settings/cluster`)
   — six groups, each with a heading, a one-line purpose and the prerequisites it
   needs before its fields ([`settings.md`](settings.md#the-console-settings-page)):
   **Connection** (this console's API URL and token state), **GitHub App**
-  (registration, granted permissions, the key form and the last probe in one
-  group), **Identity and sign-in**, **CI runners** (the enable switch first, then
+  (registration, granted permissions, and one form that sets or rotates the
+  **app id**, the **installation id** and the **private key** — pasted into a
+  textarea or uploaded as a `.pem` — with the stored key's fingerprint, the probe
+  targets and the last probe with its age), **Identity and sign-in**,
+  **CI runners** (the enable switch first, then
   the org, runner group, memory and socket fields, a one-click **Pick worker
   nodes** link to `/web/runners`, and the App permission registration needs
   stated by its GitHub path), **Backups** (schedule and retention; the store and

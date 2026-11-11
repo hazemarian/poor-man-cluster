@@ -11,7 +11,7 @@ Every pmcluster deployment has two distinct networks that people mix up:
 | Plane | Purpose | Who talks on it | Encryption |
 |---|---|---|---|
 | **Public** (internet) | Browsers → Traefik (80/443); DNS resolution | Users / CI / your domains | TLS (HTTPS) |
-| **Cluster** (node↔node) | Swarm Raft (2377), gossip (7946), overlay VXLAN (4789), daemon API (9090), optional storage/backup ports | The swarm nodes only | Raft/gossip TLS + overlay encryption |
+| **Cluster** (node↔node) | Swarm Raft (2377), gossip (7946), overlay VXLAN (4789), daemon API (9090), runner assignment (9092, mutual TLS), optional storage/backup ports | The swarm nodes only | Raft/gossip TLS + overlay encryption |
 
 **Key rule:** the *public* plane only ever reaches the node(s) that run
 Traefik. The *cluster* plane must only be reachable between your own nodes —
@@ -235,6 +235,7 @@ completely replaceable by the three manual commands above.
 | 22 | TCP | SSH (operator) | your admin IPs only |
 | 80, 443 | TCP | Traefik — every public domain (published `ingress`, reachable on every node, forwarded to a manager's Traefik task) | the internet |
 | 9090 | TCP | pmcluster daemon API | the edge container (docker bridge) + your IPs; **not** the internet |
+| 9092 | TCP | runner assignment endpoint — the leader's swarm data-path address, mutual TLS with the node certificate ([`runners.md`](runners.md)). Every worker polls it once per `github_runner_assignment_interval`; the manager serves it only while it leads | other swarm nodes only; **not** the internet |
 | 2377 | TCP | Swarm cluster management (Raft) | other swarm nodes only |
 | 7946 | TCP/UDP | Node-to-node gossip | other swarm nodes only |
 | 4789 | UDP | Overlay networks (VXLAN) | other swarm nodes only |

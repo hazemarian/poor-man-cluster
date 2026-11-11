@@ -161,7 +161,7 @@ func init() {
 		"clustersettings.log_level":                      "مستوى السجلات",
 		"clustersettings.log_level_hint":                 "كم يكتب الخادم في ملف سجلاته وفي Parseable. يضيف debug ملف compose المُقدَّم الكامل لكل مستوى نشر؛ بينما يسجّل info كل خطوة نشر مع أسماء الخدمات.",
 		"clustersettings.sect_runners":                   "مشغّلات CI مستضافة ذاتيًا",
-		"clustersettings.sect_runners_sub":               "يمكن للمنصّة تشغيل حاوية مشغّل GitHub Actions واحدة لكل مستودع خاص — البديل عندما تنفد دقائق GitHub المستضافة. تُسجَّل المشغّلات برمز تثبيت تطبيق GitHub وتحتاج صلاحية Self-hosted runners: Read & write على مستوى المؤسسة في التطبيق.",
+		"clustersettings.sect_runners_sub":               "يمكن للمنصّة تشغيل حاوية مشغّل GitHub Actions واحدة لكل عقدة عاملة مختارة — البديل عندما تنفد دقائق GitHub المستضافة. تُسجَّل المشغّلات على مستوى المؤسسة برمز تثبيت تطبيق GitHub وتحتاج صلاحية Self-hosted runners: Read & write على مستوى المؤسسة في التطبيق.",
 		"clustersettings.runners_enabled":                "تشغيل المشغّلات المستضافة ذاتيًا",
 		"clustersettings.runners_enabled_hint":           "معطّلة افتراضيًا. تشغيلها يتطلب تطبيق GitHub مهيّأً؛ وعند إطفائها توقف حلقة المطابقة كل مشغّل وتزيله.",
 		"clustersettings.runner_org":                     "المؤسسة",

@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
@@ -111,6 +113,93 @@ func TestStorageFailoverEnabled(t *testing.T) {
 		if got := storageFailoverEnabled(c.requested, c.s3Endpoint, c.s3Bucket); got != c.want {
 			t.Errorf("%s: storageFailoverEnabled(%v, %q, %q) = %v, want %v",
 				c.name, c.requested, c.s3Endpoint, c.s3Bucket, got, c.want)
+		}
+	}
+}
+
+// withSetupApp stores a bare App row. The runner gate only asks whether an App
+// EXISTS (the key it validates is proven by githubapp.Local.Apply, which needs a
+// real PEM and a network), so this is enough to reach the runner checks.
+func withSetupApp(t *testing.T, st *store.Store) {
+	t.Helper()
+	if err := st.SetGitHubApp(context.Background(), &store.GitHubApp{
+		AppID: 1, InstallationID: 2, PrivateKeyCiphertext: []byte("not-decrypted-here"),
+	}); err != nil {
+		t.Fatalf("SetGitHubApp: %v", err)
+	}
+}
+
+// TestRunnerSettingsPersistSocketPathAndInterval: the socket path and the poll
+// interval are runner settings a fresh install must be able to state once. They
+// are persisted by the same path the other runner answers take (the wizard's
+// direct write, not the settings allowlist), so nothing else would catch a
+// dropped key.
+func TestRunnerSettingsPersistSocketPathAndInterval(t *testing.T) {
+	st := newSetupTestStore(t)
+	ctx := context.Background()
+
+	a := setupAnswers{
+		GitHubRunnerSocketPath:         "/run/pmcluster/docker.sock",
+		GitHubRunnerAssignmentInterval: "30",
+		GitHubRunnerOrg:                "acme",
+		GitHubRunnerNodes:              "worker-1",
+		GitHubRunnerGroup:              "pmcluster",
+		GitHubRunnerSocketProxy:        true,
+	}
+	if err := persistSetupSecretsOnly(ctx, st, a); err != nil {
+		t.Fatalf("persistSetupSecretsOnly: %v", err)
+	}
+	if got := st.SettingDefault(ctx, cluster.SettingGitHubRunnerSocketPath(), ""); got != a.GitHubRunnerSocketPath {
+		t.Errorf("github_runner_socket_path = %q, want %q", got, a.GitHubRunnerSocketPath)
+	}
+	if got := st.SettingDefault(ctx, cluster.SettingGitHubRunnerAssignmentInterval(), ""); got != "30" {
+		t.Errorf("github_runner_assignment_interval = %q, want 30", got)
+	}
+}
+
+// TestValidateRunnerSetupRefusesBadSocketPathAndInterval: setup writes settings
+// directly, so it cannot rely on the settings surface to reject a relative
+// socket path or a poll interval that would hammer the leader.
+func TestValidateRunnerSetupRefusesBadSocketPathAndInterval(t *testing.T) {
+	cases := []struct {
+		name string
+		a    setupAnswers
+		want string
+	}{
+		{
+			name: "relative socket path",
+			a: setupAnswers{
+				GitHubRunnersEnabled: true, GitHubRunnerOrg: "acme",
+				GitHubRunnerNodes: "worker-1", GitHubRunnerGroup: "pmcluster",
+				GitHubRunnerSocketPath: "docker.sock",
+			},
+			want: "github-runner-socket-path must be an absolute path",
+		},
+		{
+			name: "interval below the floor",
+			a: setupAnswers{
+				GitHubRunnersEnabled: true, GitHubRunnerOrg: "acme",
+				GitHubRunnerNodes: "worker-1", GitHubRunnerGroup: "pmcluster",
+				GitHubRunnerAssignmentInterval: "5",
+			},
+			want: "between 10 and 3600",
+		},
+		{
+			name: "interval that is not a number",
+			a: setupAnswers{
+				GitHubRunnersEnabled: true, GitHubRunnerOrg: "acme",
+				GitHubRunnerNodes: "worker-1", GitHubRunnerGroup: "pmcluster",
+				GitHubRunnerAssignmentInterval: "a minute",
+			},
+			want: "whole number of seconds",
+		},
+	}
+	for _, c := range cases {
+		st := newSetupTestStore(t)
+		withSetupApp(t, st)
+		err := validateRunnerSetup(context.Background(), st, c.a, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: validateRunnerSetup = %v, want an error containing %q", c.name, err, c.want)
 		}
 	}
 }
