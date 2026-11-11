@@ -683,3 +683,17 @@ func (c *Client) RestartGitHubRunner(ctx context.Context, name string, confirm b
 	err := c.do(ctx, http.MethodPost, "/github/runners/"+url.PathEscape(name)+"/restart", body, &out)
 	return &out, err
 }
+
+// CIRuns is GET /api/ci/runs — every repository's latest workflow run.
+//
+// Cheap by construction: the daemon caches the answer (60 s for the run list, 5 min
+// for the failing step), so opening this page repeatedly is not a burst of API
+// calls. The response says when the data was read, so the panel can show its age
+// rather than implying it is live.
+func (c *Client) CIRuns(ctx context.Context) (*CISnapshot, error) {
+	var out CISnapshot
+	if err := c.do(ctx, http.MethodGet, "/ci/runs", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

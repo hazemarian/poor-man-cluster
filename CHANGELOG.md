@@ -3,6 +3,20 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — the console can answer "what is my CI doing"
+
+- **A CI board at `/web/ci`.** One row per repository: newest workflow run, state,
+  commit, age, and — for a failure — the job and step that broke. Counts at the top
+  (queued · running · failed) and the age of the data, so the page never implies it is
+  live.
+- **Read on demand through the App's existing `actions: read`.** No webhook
+  subscription and no background poller: the run list is one call per repo cached for
+  60 s, the repo list 10 min, and the failing-step lookup 5 min and capped at five
+  failures. Three page opens inside the TTL are one API call per repo.
+- **It refuses to flatter itself.** A repo the App cannot read is a row saying
+  `not readable`, never a missing row; `superseded` is labelled inference because
+  GitHub does not report who cancelled a run.
+
 ## Unreleased — a per-node runner cap, and the memory bounds get one owner
 
 - **`github_runner_node_memory` — a runner cap per node.** `github_runner_memory` was one

@@ -427,6 +427,80 @@ paths:
                     type: boolean
                   message:
                     type: string
+  /api/ci/runs:
+    get:
+      summary: Every repository's latest workflow run
+      description: |
+        The CI board's data. One row per repository the App installation can see —
+        GitHub's own answer to "which repos does this platform build", so a new repo
+        appears without a settings change — carrying its newest workflow run.
+
+        **Read on demand, cached in the daemon.** The run list is one call per repo
+        with `per_page=1`, cached for **60 s**; the repository list for **10 min** (it
+        changes when a repo is created, not when a build finishes); the failing-step
+        lookup — a second call, only for failures — for **5 min** and capped at the
+        five most recent failures, because a completed run's failing step never
+        changes. Three page opens inside the TTL are one API call per repo. There is
+        no webhook subscription and no background poller: nothing is spent on a board
+        nobody is looking at.
+
+        `state` is not a field: derive it from `status`/`conclusion` in this order —
+        `unreadable` (the App cannot read this repo), no `id` (never ran), `failure`,
+        `in_progress`, queued, `cancelled`, `success`. A repo the App cannot read is
+        returned as a row with `unreadable` set, never omitted: hiding it would make
+        absent information look like a green build.
+
+        `superseded_by` is **inference, not a GitHub field**: it is set when a
+        cancelled run has a newer run of the same workflow, which is the commonest
+        cause and not the only one — GitHub does not report who cancelled a run. An
+        operator cancelling from the console and a script dispatching a competing run
+        look identical to this API.
+
+        `fetched_at` is when the DATA was read, not when it was served; `cached`
+        says the answer came from the TTL cache. The array is ordered newest activity
+        first. `error` is set when the repo list refresh failed and the last good
+        rows are being served.
+      operationId: listCIRuns
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: The board, with its counts and the age of the data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer, format: int64 }
+                        repo: { type: string }
+                        workflow: { type: string }
+                        event: { type: string }
+                        status: { type: string, enum: [queued, in_progress, completed] }
+                        conclusion: { type: string }
+                        head_sha: { type: string }
+                        branch: { type: string }
+                        html_url: { type: string }
+                        updated_at: { type: string, format: date-time }
+                        failed_job: { type: string }
+                        failed_step: { type: string }
+                        superseded_by: { type: integer, format: int64 }
+                        unreadable: { type: string }
+                  queued: { type: integer }
+                  running: { type: integer }
+                  failed: { type: integer }
+                  fetched_at: { type: string, format: date-time }
+                  cached: { type: boolean }
+                  error: { type: string }
+        "401":
+          description: Missing or invalid bearer token
+        "501":
+          description: This daemon has no GitHub App, so there is no board
+
   /api/github/runners:
     get:
       summary: The self-hosted runners this cluster manages

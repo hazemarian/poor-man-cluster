@@ -109,6 +109,20 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/cluster/info", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"node_name":"mgr","server_version":"28","os":"linux","arch":"amd64","cpus":8,"memory_bytes":8589934592,"swarm":{"state":"active","control_available":true,"managers":1,"nodes":2}}`)
 	})
+	// The CI board: one row of each shape the panel has to render, including the
+	// two that exist to stop it lying — an unreadable repo and a cancelled run that
+	// a newer one replaced.
+	mux.HandleFunc("/api/ci/runs", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		write(w, `{"queued":1,"running":0,"failed":1,"fetched_at":"2026-11-11T04:00:00Z","cached":true,"runs":[
+			{"id":11,"repo":"acme/api","workflow":"CI","status":"completed","conclusion":"failure","head_sha":"abc1234def","branch":"main","html_url":"https://github.com/acme/api/actions/runs/11","updated_at":"2026-11-11T03:59:00Z","failed_job":"deploy","failed_step":"Deploy stack"},
+			{"id":12,"repo":"acme/web","workflow":"CI","status":"queued","conclusion":"","head_sha":"def5678abc","updated_at":"2026-11-11T03:58:00Z"},
+			{"id":13,"repo":"acme/db","workflow":"CI","status":"completed","conclusion":"cancelled","head_sha":"111aaa222","updated_at":"2026-11-11T03:57:00Z","superseded_by":14},
+			{"repo":"acme/secret","unreadable":"not readable with this App's permissions","updated_at":"2026-11-11T00:00:00Z"}]}`)
+	})
 	mux.HandleFunc("/api/nodes", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"nodes":[{"hostname":"manager-1","role":"manager","status":"ready","is_leader":true,"engine_version":"28.5","storage":true},{"hostname":"worker-1","role":"worker","status":"ready","engine_version":"28.5","storage":false}]}`)
 	})

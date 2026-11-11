@@ -253,6 +253,10 @@ func (a *App) Mount(engine *gin.Engine) {
 	rnr := controllers.Runners{Controller: a.ctrl}
 	vr.GET("/runners", rnr.Page)
 
+	// The CI board is a READ of what GitHub says about every repo's latest run:
+	// any signed-in user may look, and nothing here acts on a run.
+	vr.GET("/ci", controllers.CI{Controller: a.ctrl}.Page)
+
 	tlsC := controllers.TLS{Controller: a.ctrl}
 	vr.GET("/tls", tlsC.Page)
 	vr.GET("/tls/site/new", tlsC.SiteNew)

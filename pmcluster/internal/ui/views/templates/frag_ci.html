@@ -1,0 +1,81 @@
+{{define "ci"}}
+{{/* The CI board: one row per repository, newest activity first.
+
+     It exists because a queue you cannot see is indistinguishable from a broken
+     pipeline: with two ephemeral runners and ten repos, every failure needed a trip
+     to github.com to learn which step broke, and a cancelled run looked identical
+     whether a newer commit had replaced it, an operator stopped it, or a script
+     dispatched a competing one.
+
+     Nothing here acts on a run. Cancelling, re-running and dispatching belong to git
+     and GitHub; a console button would then have to explain which of three triggers
+     caused what. */}}
+<div class="panel">
+  <div class="panel-head">
+    <div>
+      <h2>{{T "ci.title"}}</h2>
+      <p class="sub">{{T "ci.sub"}}</p>
+    </div>
+  </div>
+
+  {{if .NotConfigured}}
+  <div class="empty">
+    <p>{{T "ci.not_configured"}}</p>
+    <p class="muted">{{T "ci.not_configured_hint"}}</p>
+  </div>
+  {{else}}
+  <div class="stats">
+    <div class="stat"><span class="k">{{T "ci.queued"}}</span><span class="v num">{{.Queued}}</span></div>
+    <div class="stat"><span class="k">{{T "ci.running"}}</span><span class="v num">{{.Running}}</span></div>
+    <div class="stat"><span class="k">{{T "ci.failed"}}</span><span class="v num">{{.Failed}}</span></div>
+    <div class="stat">
+      <span class="k">{{T "ci.read"}}</span>
+      <span class="v">{{if .FetchedAge}}{{.FetchedAge}}{{else}}—{{end}}{{if .Cached}} <span class="muted">({{T "ci.cached"}})</span>{{end}}</span>
+    </div>
+  </div>
+
+  {{if .ErrKey}}
+  <div class="banner err">
+    <strong>{{T .ErrKey}}</strong>
+    {{if .ErrRaw}}<div class="muted mono">{{.ErrRaw}}</div>{{end}}
+  </div>
+  {{end}}
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>{{T "ci.col_repo"}}</th>
+          <th>{{T "ci.col_state"}}</th>
+          <th>{{T "ci.col_workflow"}}</th>
+          <th>{{T "ci.col_sha"}}</th>
+          <th>{{T "ci.col_updated"}}</th>
+          <th>{{T "ci.col_detail"}}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Rows}}
+        <tr>
+          <td class="mono">{{.Repo}}</td>
+          <td>
+            <span class="pill {{.Class}}"><i class="dot"></i>{{T (printf "ci.state_%s" .State)}}</span>
+            {{if .Inferred}}<span class="muted" data-tip="{{T "ci.inferred_tip"}}">*</span>{{end}}
+          </td>
+          <td>{{.Workflow}}</td>
+          <td class="mono">{{.SHA}}</td>
+          <td class="muted num">{{.Age}}</td>
+          <td class="muted">
+            {{if .Detail}}{{.Detail}}{{else}}—{{end}}
+            {{if .URL}}<a class="link" href="{{.URL}}" target="_blank" rel="noopener">{{T "ci.open"}}</a>{{end}}
+          </td>
+        </tr>
+        {{else}}
+        <tr><td colspan="6" class="muted">{{T "ci.no_rows"}}</td></tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  <p class="cap">{{T "ci.footnote"}}</p>
+  {{end}}
+</div>
+{{end}}

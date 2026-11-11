@@ -20,6 +20,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/certs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ci"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
@@ -457,6 +458,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		runnerMgr.GitHub = deps.GitHubApp
 	}
 	deps.GitHubRunners = runnerMgr
+
+	// The CI board reads Actions with the SAME installation token the runner
+	// feature uses — no second credential, no webhook, no poller. It is built here
+	// so an operator can answer "what is my CI doing" from the console instead of
+	// opening ten repository pages; when there is no App there is no board, and the
+	// panel says so rather than showing an empty table that reads as "all green".
+	if deps.GitHubApp != nil && deps.GitHubApp.Client != nil {
+		deps.CIBoard = &ci.Board{Src: &ci.Live{App: deps.GitHubApp, Client: deps.GitHubApp.Client}}
+	}
 
 	// Runners are a PER-NODE feature and the settings-based half starts here, the
 	// moment its inputs exist (store, cipher, App). It used to live BELOW the

@@ -1,5 +1,7 @@
 package pmapi
 
+import "time"
+
 // Me is GET /api/me — the authenticated daemon user.
 type Me struct {
 	ID   int64  `json:"id"`
@@ -502,4 +504,37 @@ type GitHubRunnerKill struct {
 	Held              bool   `json:"held"`
 	Registered        bool   `json:"registered,omitempty"`
 	RegistrationError string `json:"registration_error,omitempty"`
+}
+
+// CIRun is one repository's latest workflow run, as GET /api/ci/runs reports it.
+// It mirrors githubapp.WorkflowRun on purpose: the console model is a projection of
+// the wire shape, so a new field is a deliberate addition rather than an accident.
+type CIRun struct {
+	ID           int64     `json:"id"`
+	Repo         string    `json:"repo"`
+	Workflow     string    `json:"workflow"`
+	Event        string    `json:"event"`
+	Status       string    `json:"status"`
+	Conclusion   string    `json:"conclusion"`
+	HeadSHA      string    `json:"head_sha"`
+	Branch       string    `json:"branch"`
+	URL          string    `json:"html_url"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	FailedJob    string    `json:"failed_job,omitempty"`
+	FailedStep   string    `json:"failed_step,omitempty"`
+	SupersededBy int64     `json:"superseded_by,omitempty"`
+	Unreadable   string    `json:"unreadable,omitempty"`
+}
+
+// CISnapshot is GET /api/ci/runs: the rows plus the counts the header shows.
+// FetchedAt is when the DATA was read, not when it was served — a cached snapshot
+// says how stale it is instead of pretending to be live.
+type CISnapshot struct {
+	Runs      []CIRun   `json:"runs"`
+	Queued    int       `json:"queued"`
+	Running   int       `json:"running"`
+	Failed    int       `json:"failed"`
+	FetchedAt time.Time `json:"fetched_at"`
+	Cached    bool      `json:"cached"`
+	Error     string    `json:"error,omitempty"`
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/certs"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ci"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/configs"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
@@ -133,6 +134,12 @@ type Deps struct {
 	// actions under /api/github/runners. Optional; when nil the routes are
 	// omitted (a process without a docker client cannot act on a runner).
 	GitHubRunners *runners.Manager
+
+	// CIBoard serves GET /api/ci/runs: what every repo's latest workflow run is
+	// doing. Read-only and cached inside the board, so a console page that polls
+	// it costs one GitHub call per repo per minute at most. Optional; nil omits
+	// the route and the console panel says why.
+	CIBoard *ci.Board
 
 	// GitHubBroker serves POST /api/github/token for GitHub Actions. It is
 	// mounted OUTSIDE the Bearer subtree (HMAC is its auth) and omitted when
@@ -284,6 +291,13 @@ func New(d Deps) http.Handler {
 				// operator work like the app card next to it.
 				r.With(auth.RequireRole(auth.RoleOperator)).Group(func(or chi.Router) {
 					(&runners.HTTP{Mgr: d.GitHubRunners}).Mount(or)
+				})
+			}
+			if d.CIBoard != nil {
+				// A read of CI state, like the runner list next to it: any operator
+				// token may look, nobody may change anything through it.
+				r.With(auth.RequireRole(auth.RoleOperator)).Group(func(or chi.Router) {
+					(&ci.HTTP{Board: d.CIBoard}).Mount(or)
 				})
 			}
 			if d.Configs != nil {

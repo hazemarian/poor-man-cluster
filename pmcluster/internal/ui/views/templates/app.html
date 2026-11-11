@@ -96,6 +96,7 @@
       {{/* CI runners: the page and its dictionaries existed, but nothing in the
            shell linked to it, so the only way in was typing the URL. */}}
       <a class="nav-item" href="/web/runners" hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-nav="runners" data-tip="{{T "nav.runners"}}">{{icon "server"}}<span>{{T "nav.runners"}}</span></a>
+      <a class="nav-item" href="/web/ci" hx-get="/web/ci" hx-target="#view" hx-push-url="true" data-nav="ci" data-tip="{{T "nav.ci"}}">{{icon "deploy"}}<span>{{T "nav.ci"}}</span></a>
 
       <p class="nav-label" id="nav-trust">{{T "nav.group.trust"}}</p>
       <a class="nav-item" href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls" data-tip="{{T "nav.tls"}}">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>

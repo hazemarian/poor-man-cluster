@@ -8,6 +8,38 @@ The console is a web UI (gin + HTMX) served by **`pmcluster-edge`** on the
 https://pmcluster.<your-domain>          # the console (/web/* routes)
 ```
 
+## CI board (`/web/ci`)
+
+One row per repository: its newest workflow run, newest activity first, with the
+counts at the top (`N queued · M running · K failed`) and the age of the data.
+
+It exists because a queue you cannot see is indistinguishable from a broken
+pipeline. With two ephemeral runners serving ten repositories, every failure meant a
+trip to github.com to learn which step broke, and a cancelled run looked identical
+whether a newer commit had replaced it, an operator had stopped it, or a script had
+dispatched a competing run.
+
+```text
+read      GET /api/ci/runs → GitHub Actions through the App's existing actions:read
+cached    runs 60 s · repo list 10 min · failing step 5 min (capped at 5 failures)
+polls     nothing. No webhook subscription, no background loop: the call happens
+          when the page is opened, and the cache is what keeps that cheap
+```
+
+Three rules the panel follows, each with a test behind it:
+
+- **A repo the App cannot read is a row, not a gap.** `not readable` with the
+  reason. Hiding it would make absent information look like a green build.
+- **A cancelled run says why only as inference.** `superseded` means a newer run of
+  the same workflow exists — which is the commonest cause and not the only one.
+  GitHub does not report who cancelled a run; the asterisk and the footnote say so.
+- **A failing run names the step.** The board makes the second call (cached longer,
+  capped) because "red" without a step is the thing that sent you to github.com.
+
+Nothing on the board acts on a run: cancelling, re-running and dispatching belong to
+git and GitHub, and a console button would then have to explain which of three
+triggers caused what.
+
 Authentication: the Traefik `admin-auth` (htpasswd) or `sso-auth`
 (forwardAuth) gate owns access — when gated, the console's own login page is
 disabled (`EDGE_LOGIN_DISABLED=true`) and it runs as a synthetic admin
