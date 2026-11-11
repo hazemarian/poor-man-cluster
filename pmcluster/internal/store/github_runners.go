@@ -37,6 +37,11 @@ type GitHubRunner struct {
 	// LastJobURL is the org's newest workflow run, captured when the runner left
 	// "busy". Nullable in the schema; "" means never observed.
 	LastJobURL string
+	// Reason explains the row's state when it is not derivable from the container
+	// and GitHub — today only a memory refusal ("1839 MB; a 2560m runner can OOM
+	// this node"). Computed on every read, never persisted: it is a measurement,
+	// and a stored copy could outlive the settings that produced it.
+	Reason string
 }
 
 // ErrGitHubRunnerNotFound is returned by GitHubRunner for an unknown name.

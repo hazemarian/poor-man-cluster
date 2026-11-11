@@ -60,6 +60,9 @@ type runnerRow struct {
 
 	LastJobURL   string
 	LastJobLabel string
+	// Reason is why this row is in its state when that is not GitHub's news —
+	// a memory refusal names the node's RAM and the cap.
+	Reason string
 
 	// Age is how long ago the runner was registered ("12m", "3h", "2d").
 	Age string
@@ -340,7 +343,7 @@ func buildRunnerRows(in []pmapi.GitHubRunner) []runnerRow {
 			Name: r.Name, Org: r.Org, Node: r.Node, Mode: r.Mode,
 			State: r.State, StateClass: stateClass(r.State),
 			RegisteredAt: r.RegisteredAt, LastSeen: r.LastSeen,
-			ContainerID: r.ContainerID, LastJobURL: r.LastJobURL,
+			ContainerID: r.ContainerID, LastJobURL: r.LastJobURL, Reason: r.Reason,
 			LastJobLabel: lastJobLabel(r.LastJobURL),
 			Age:          ageLabel(r.RegisteredAt),
 			Busy:         r.State == runners.StateBusy,

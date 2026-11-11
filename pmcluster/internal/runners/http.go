@@ -34,6 +34,9 @@ type runnerJSON struct {
 	RegisteredAt int64  `json:"registered_at"`
 	LastSeen     int64  `json:"last_seen"`
 	LastJobURL   string `json:"last_job_url"`
+	// Reason is why the row is in this state. Always present (empty when there is
+	// nothing to explain), so the schema does not change shape per row.
+	Reason string `json:"reason"`
 }
 
 // runnersJSON is the list response. enabled travels with the list because the
@@ -92,6 +95,7 @@ func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {
 			RegisteredAt: row.RegisteredAt,
 			LastSeen:     row.LastSeen,
 			LastJobURL:   row.LastJobURL,
+			Reason:       row.Reason,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

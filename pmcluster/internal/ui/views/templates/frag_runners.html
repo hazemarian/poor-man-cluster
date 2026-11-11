@@ -190,7 +190,10 @@
             <td><span class="mono iso" dir="ltr">{{.Org}}</span></td>
             <td><span class="mono iso" dir="ltr">{{.Name}}</span></td>
             <td><span class="mono">{{.Node}}</span></td>
-            <td><span class="pill {{.StateClass}}"><i class="dot"></i>{{T (printf "runners.state_%s" .State)}}</span></td>
+            <td>
+              <span class="pill {{.StateClass}}"><i class="dot"></i>{{T (printf "runners.state_%s" .State)}}</span>
+              {{if .Reason}}<div class="muted" dir="auto">{{.Reason}}</div>{{end}}
+            </td>
             <td class="muted">{{T (printf "runners.mode_%s" .Mode)}}</td>
             <td class="muted num"><bdi dir="ltr">{{if .RegisteredAt}}{{.Age}}{{else}}—{{end}}</bdi></td>
             <td>
@@ -226,6 +229,7 @@
         <div class="kv-row"><span class="k">{{T "common.name"}}</span><span class="v mono iso" dir="ltr">{{.Name}}</span></div>
         <div class="kv-row"><span class="k">{{T "runners.col_node"}}</span><span class="v mono">{{.Node}}</span></div>
         <div class="kv-row"><span class="k">{{T "runners.col_state"}}</span><span class="v"><span class="pill {{.StateClass}}"><i class="dot"></i>{{T (printf "runners.state_%s" .State)}}</span></span></div>
+        {{if .Reason}}<div class="kv-row"><span class="k">{{T "runners.col_reason"}}</span><span class="v muted">{{.Reason}}</span></div>{{end}}
         <div class="kv-row"><span class="k">{{T "runners.col_age"}}</span><span class="v muted num"><bdi dir="ltr">{{if .RegisteredAt}}{{.Age}}{{else}}—{{end}}</bdi></span></div>
         <div class="kv-row"><span class="k">{{T "runners.col_last_job"}}</span><span class="v">{{if .LastJobURL}}<a class="mono iso" dir="ltr" href="{{.LastJobURL}}" target="_blank" rel="noopener noreferrer">{{.LastJobLabel}}</a>{{else}}<span class="muted">—</span>{{end}}</span></div>
         <div class="action-bar">

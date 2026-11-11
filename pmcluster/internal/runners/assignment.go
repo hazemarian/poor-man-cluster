@@ -88,6 +88,12 @@ type Assignment struct {
 	// node restarted the runner seconds later — the button appeared to work and
 	// changed nothing. Carrying the flag in the assignment makes the node act.
 	Held bool `json:"held"`
+	// Refused is a DISABLED answer with a reason that is an arithmetic refusal,
+	// not a setting: this node cannot host a runner with the configured memory
+	// cap. It is separate from Enabled=false so the node's log, its doctor and
+	// the console row can say "refused" — which is an operator action — instead
+	// of "not selected", which is not.
+	Refused bool `json:"refused"`
 	// RegistrationToken is the single-use, hour-lived org registration token the
 	// container registers with. Empty when the assignment is disabled.
 	RegistrationToken string `json:"registration_token"`
@@ -227,6 +233,10 @@ type AssignmentService struct {
 	// Held reports whether an operator stopped this runner from the console.
 	// Optional: nil means no roster is available and nothing is ever held.
 	Held func(runnerName string) bool
+	// NodeMemory returns a node's total RAM in MiB (known=false when there is no
+	// recent sample). Optional: nil skips the size check, which is what a leader
+	// without a store does. See internal/runners/memory.go.
+	NodeMemory func(ctx context.Context, node string) (mib int64, known bool)
 	// Interval is how long a disabled node's registration is left alone between
 	// re-checks (default assignmentDeregisterInterval).
 	Interval time.Duration
@@ -235,6 +245,9 @@ type AssignmentService struct {
 
 	mu        sync.Mutex
 	lastSweep map[string]time.Time
+	// unknownRAM records nodes already told that their RAM is unknown, so the
+	// note appears once per leader process instead of once per poll.
+	unknownRAM map[string]bool
 }
 
 func (s *AssignmentService) now() time.Time {
@@ -323,6 +336,18 @@ func (s *AssignmentService) resolve(ctx context.Context, node string) (Assignmen
 		a.Reason = "stopped by an operator from the console — Restart it from the Runners panel to clear"
 		return a, nil
 	}
+	// Then the arithmetic: a cap that claims more than this node can survive is
+	// not started at all. Checked here, on EVERY pass and after the hold, so a
+	// settings change is re-evaluated rather than remembered — and checked before
+	// a token is minted, because a token for a runner that must not run is a
+	// registration GitHub would list as offline forever.
+	if refused, reason := s.memoryRefusal(ctx, node, a.Memory); refused {
+		a.Enabled = false
+		a.Refused = true
+		a.Reason = reason
+		s.sweepRegistration(ctx, node, cfg.Org)
+		return a, nil
+	}
 	// The group is verified on every enabled answer, never only at
 	// registration: a visibility flipped to `all` in the GitHub UI must stop the
 	// runner on its next poll, not at some later re-registration.
@@ -368,6 +393,42 @@ func (s *AssignmentService) sweepRegistration(ctx context.Context, node, org str
 	}
 	s.Log.Info().Str("runner", name).Str("org", org).
 		Msg("runners — de-registered a runner on a node the leader stopped")
+}
+
+// memoryRefusal applies the size rule to one node's answer.
+//
+// Two asymmetries, both deliberate:
+//   - an UNWIRED lookup (nil NodeMemory) skips the check entirely: the rule needs
+//     a node's RAM, and a leader with no store has none — refusing here would make
+//     a wiring gap look like a refusal;
+//   - UNKNOWN RAM allows the runner and logs ONCE per node per process. A node
+//     whose telemetry has not arrived must still be able to run CI; the note is
+//     what stops that from being silent.
+func (s *AssignmentService) memoryRefusal(ctx context.Context, node, memory string) (bool, string) {
+	if s.NodeMemory == nil {
+		return false, ""
+	}
+	mib, known := s.NodeMemory(ctx, node)
+	err := CheckMemoryFit(node, mib, known, memory)
+	if err != nil {
+		s.Log.Warn().Err(err).Str("node", node).Str("memory", memory).
+			Msg("runners — refused: this node cannot host a runner with that memory cap")
+		return true, fmt.Sprintf("refused: %v", err)
+	}
+	if !known {
+		s.mu.Lock()
+		if s.unknownRAM == nil {
+			s.unknownRAM = map[string]bool{}
+		}
+		first := !s.unknownRAM[node]
+		s.unknownRAM[node] = true
+		s.mu.Unlock()
+		if first {
+			s.Log.Info().Str("node", node).Str("memory", memory).
+				Msg("runners — node RAM unknown (no recent node-stats sample): allowing the runner, memory cap NOT checked")
+		}
+	}
+	return false, ""
 }
 
 // ensureGroupSelected refuses a group whose visibility is not `selected`. It is

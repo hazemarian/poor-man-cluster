@@ -19,7 +19,7 @@ PAT](#why-the-app-not-a-pat) below.
 | `github_runner_nodes` | unset | comma-separated **worker** hostnames that may run a runner — one container each. Managers are refused |
 | `github_runner_socket_proxy` | `true` | route the runner's docker access through the daemon's filtered socket |
 | `github_runner_socket_path` | `/run/pmcluster/docker.sock` | where that socket listens on every node |
-| `github_runner_memory` | `2560m` | per-container memory limit (a Docker quantity: `2560m`, `3g`). `2560m` completed a `govulncheck` run on real hardware; at `1500m` the runner was OOM-killed mid-job |
+| `github_runner_memory` | `2560m` | per-container memory limit (a Docker quantity: `2560m`, `3g`). `2560m` completed a `govulncheck` run on real hardware; at `1500m` the runner was OOM-killed mid-job. A cap above **70 %** of the target node's RAM is **refused** — see [A runner that cannot fit the node](#a-runner-that-cannot-fit-the-node) |
 | `github_runner_allow_leader` | `false` | allow a runner on a single-node cluster, where the only node is the leader |
 | `github_runner_assignment_interval` | `60` | seconds between a node's polls of the leader for its runner assignment. The settings surface **refuses** anything outside 10–3600 (a stored value that no longer parses is read as the default, and a stored number outside the range is clamped, so a bad row cannot turn the poll off or hammer the leader); below ten would spend the leader's GitHub quota, above an hour leaves an assignment stale. The leader sends the value inside every answer, because a worker cannot read the setting itself |
 
@@ -386,6 +386,73 @@ operator role), so a kill from curl and a kill from the panel are one code path.
 A kill on a runner that lives on another node cannot remove that container from
 here; it de-registers it and holds the name, and the owning node stops the container
 on its next pass.
+
+## A runner that cannot fit the node
+
+A memory cap larger than the machine is not a cap. Docker enforces `--memory` per
+cgroup, so `2560m` on a node with 1839 MB of RAM is accepted, started, and then
+the **host** runs out — because the cgroup's "limit" exceeds the resource it is
+supposed to bound.
+
+That is not hypothetical. On 2026-11-10:
+
+| Node | RAM | Cap it was given | What happened |
+|---|---|---|---|
+| `nxt-sw-3-w` | 1839 MB | `2560m` (**139 %** of the host) | the first CI build OOM-killed the node; `sshd` died with it, so nothing could be restarted remotely |
+| `nxt-sw-1-m` | — | — | OOM-killed in the same night; `Down` for hours while the cluster ran two of three managers |
+
+So a runner whose cap exceeds **70 % of the node's total RAM** is **refused** —
+not started, not registered, no registration token minted. The refusal names both
+numbers and the fix:
+
+```
+refused: nxt-sw-3-w has 1839 MB; a 2560m runner can OOM this node and take it down
+— lower github_runner_memory or pick a bigger node
+```
+
+The arithmetic, for the two sizes that matter here:
+
+| Node RAM | Ceiling (70 %) | `2560m` | Verdict |
+|---|---|---|---|
+| 1839 MB | 1287 MB | 139 % of the node | **refused** |
+| 3852 MB | 2696 MB | 66 % of the node | allowed |
+
+**Why 70 % and not 60 %.** 60 % of 3852 MB is 2311 MB, which would refuse the
+platform's own default (`2560m`) on a healthy 4 GB worker — a boundary that stops
+CI everywhere is an outage, not a guard. 70 % refuses the case that killed the
+node (139 %) and keeps the documented default working (66 %), and it is the same
+ceiling the control plane gives itself (`MemoryMax`, see
+[`health.md`](health.md#memory-boundaries-a-limit-larger-than-the-host-is-not-a-limit)).
+
+**Where the check lives.** Wherever the decision is *resolved*, so it cannot be
+outlived by a settings change:
+
+- the **leader** applies it when it resolves a node's assignment, before it mints
+  a registration token (`internal/runners/memory.go`, `CheckMemoryFit`);
+- the **node** records the refusal it was sent, logs it once at WARN, and removes
+  any container it still has;
+- **`pmcluster doctor`** reports it on the leader (naming the node, its RAM and the
+  cap) and on the node itself — a worker has no store, so it compares the cap in
+  its applied assignment against its own `/proc/meminfo` (`runner memory` check);
+- the **console** runner row stays `offline` and shows the reason under the state
+  pill.
+
+It is re-evaluated on **every pass**, which cuts both ways: raising
+`github_runner_memory` refuses a node that was running, and lowering it releases
+one on the next poll — no `cluster update`, no restart.
+
+**Unknown RAM is not a refusal.** The leader reads a worker's RAM from the
+node-stats rows (the swarm node list carries no memory), and a node whose
+telemetry has not arrived — or a cluster where it was never enabled — has none. A
+missing measurement allows the runner and logs **once** per node:
+
+```
+runners — node RAM unknown (no recent node-stats sample): allowing the runner, memory cap NOT checked
+```
+
+A sample older than an hour counts as unknown too: a node that stopped reporting
+is not a node whose size is known. The alternative — refusing on missing data —
+would turn a monitoring gap into a fleet-wide CI outage.
 
 ## Why the App, not a PAT
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"text/tabwriter"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
@@ -89,6 +90,9 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 			StatePath:  agentStatePath(cfg.DataDir),
 			VolumeRoot: envOr("PMCLUSTER_VOLUME_ROOT", "/var/stack/data"),
 			Docker:     &runners.CLIDocker{},
+			// This machine's RAM, so the runner's cap is checked against the node
+			// that would have to survive it. Unknown (0) skips the check.
+			MemTotalMiB: hostMemTotalMiB(),
 		})
 		printReport(cmd, rep)
 		if !rep.OK {
@@ -134,7 +138,10 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 			Docker: &runners.CLIDocker{},
 			Nodes:  dc,
 			Node:   host,
-			Log:    zerolog.Nop(),
+			NodeMemory: func(ctx context.Context, node string) (int64, bool) {
+				return runners.NodeMemoryMiB(ctx, st, node, time.Now())
+			},
+			Log: zerolog.Nop(),
 		}
 	}
 

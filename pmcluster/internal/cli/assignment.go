@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -133,7 +134,13 @@ func startAssignmentListener(ctx context.Context, o assignmentListenerOptions) {
 		GitHub:     o.GitHub,
 		Deregister: o.Deregister,
 		Held:       o.Held,
-		Log:        log,
+		// A worker's RAM exists only in this leader's node-stats rows (the swarm
+		// node list carries none), so the size check is resolved here, on the side
+		// that decides. Unknown RAM allows the runner — see runners.CheckMemoryFit.
+		NodeMemory: func(ctx context.Context, node string) (int64, bool) {
+			return runners.NodeMemoryMiB(ctx, o.Store, node, time.Now())
+		},
+		Log: log,
 	}
 	verifier := &swarmtls.Verifier{
 		CA:    pool,

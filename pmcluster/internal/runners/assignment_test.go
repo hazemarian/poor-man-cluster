@@ -116,11 +116,12 @@ func TestResolveAssignmentMatchesTheReconcileRules(t *testing.T) {
 // later field cannot be added without this list changing — which is the point:
 // nothing else may travel over this channel.
 // The exact key set the endpoint may answer with. "held" is the operator's
-// console kill carried to the node — a decision, not a credential, so it belongs
-// here; anything secret or settings-shaped does not.
+// console kill carried to the node and "refused" is the memory-size refusal —
+// both decisions, not credentials, so they belong here; anything secret or
+// settings-shaped does not.
 var assignmentKeys = []string{
 	"enabled", "group", "held", "interval_seconds", "issued_at", "labels", "memory",
-	"mode", "node", "org", "reason", "registration_token",
+	"mode", "node", "org", "reason", "refused", "registration_token",
 	"registration_token_expires_at", "socket_path", "socket_proxy",
 }
 

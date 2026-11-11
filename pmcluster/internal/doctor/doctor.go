@@ -443,6 +443,10 @@ func checkGitHubRunners(ctx context.Context, in Input) Check {
 		switch {
 		case n.Error != "":
 			problems = append(problems, label+": "+n.Error)
+		case n.Refused:
+			// The reason names the node's RAM and the cap; nothing else needs to
+			// be said, and saying "offline" instead would hide an operator action.
+			problems = append(problems, label+": "+n.Reason)
 		case n.Failures >= 3:
 			problems = append(problems, fmt.Sprintf("%s: failed %d consecutive reconcile pass(es): %s", label, n.Failures, n.LastError))
 		case strings.EqualFold(n.Role, "manager") || strings.EqualFold(n.Role, "leader"):

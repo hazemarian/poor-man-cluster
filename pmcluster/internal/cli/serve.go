@@ -435,7 +435,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		Docker: &runners.CLIDocker{},
 		Nodes:  dc,
 		Node:   hostname,
-		Log:    log.With().Str("component", "runners").Logger(),
+		// The console row and the reconcile use the same size rule the
+		// assignment resolver applies, so a refused node's row can say why.
+		NodeMemory: func(ctx context.Context, node string) (int64, bool) {
+			return runners.NodeMemoryMiB(ctx, st, node, time.Now())
+		},
+		Log: log.With().Str("component", "runners").Logger(),
 	}
 	if deps.GitHubApp != nil {
 		// The manager registers and de-registers runners with the same cached

@@ -42,6 +42,10 @@ type NodeInput struct {
 	Docker runners.LocalDocker
 	// Health probes one URL and returns (status, error). Nil uses a 2s HTTP GET.
 	Health func(ctx context.Context, url string) (int, error)
+	// MemTotalMiB is this machine's total RAM, so the runner's memory cap can be
+	// compared against the machine that would have to survive it. 0 means unknown
+	// (the check is then skipped, never guessed).
+	MemTotalMiB int64
 	// Now is the clock (tests).
 	Now time.Time
 }
@@ -57,6 +61,7 @@ func RunNodeLocal(ctx context.Context, in NodeInput) *Report {
 	add(checkLocalSocketProxy(in))
 	add(checkLocalAssignment(in))
 	add(checkLocalRunner(ctx, in))
+	add(checkLocalRunnerMemory(in))
 	add(checkDisk(Input{VolumeRoot: in.VolumeRoot}))
 	add(checkSwarmNodeLocal(ctx, in))
 	add(Check{
@@ -209,6 +214,28 @@ func checkLocalRunner(ctx context.Context, in NodeInput) Check {
 		return Check{"local runner", StatusOK, fmt.Sprintf("%s is running with the %s", name, exposure)}
 	}
 	return Check{"local runner", StatusWarn, fmt.Sprintf("%s exists but is not running (state %q)", name, c.State)}
+}
+
+// checkLocalRunnerMemory answers the question that would have saved nxt-sw-3-w:
+// does this node's configured runner cap fit THIS machine?
+//
+// A worker has no store, so the cap comes from the assignment it last applied
+// (AgentRecord.Memory) and the size from its own /proc/meminfo. That is the only
+// place this comparison can be made on the node that would be OOM-killed, and a
+// refusal is a FAIL: the runner will not start, and the reason names both numbers.
+func checkLocalRunnerMemory(in NodeInput) Check {
+	rec, ok := readAgentRecord(in.StatePath)
+	if !ok || strings.TrimSpace(rec.Memory) == "" {
+		return Check{"runner memory", StatusSkip, "no runner memory cap recorded on this node yet (no assignment applied)"}
+	}
+	if in.MemTotalMiB <= 0 {
+		return Check{"runner memory", StatusSkip, "could not read this node's MemTotal, so the cap cannot be checked against it"}
+	}
+	if err := runners.CheckMemoryFit(in.Hostname, in.MemTotalMiB, true, rec.Memory); err != nil {
+		return Check{"runner memory", StatusFail, err.Error()}
+	}
+	return Check{"runner memory", StatusOK,
+		fmt.Sprintf("a %s cap fits this node's %d MB (max %d%%)", rec.Memory, in.MemTotalMiB, runners.MemoryCeilingPercent)}
 }
 
 // checkSwarmNodeLocal reports what a worker can see of the swarm: its own state,

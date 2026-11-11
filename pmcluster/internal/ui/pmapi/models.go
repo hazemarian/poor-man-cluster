@@ -477,6 +477,9 @@ type GitHubRunner struct {
 	RegisteredAt int64  `json:"registered_at"`
 	LastSeen     int64  `json:"last_seen"`
 	LastJobURL   string `json:"last_job_url"`
+	// Reason explains a row that is offline for a reason other than GitHub
+	// saying so — today: the memory cap does not fit the node.
+	Reason string `json:"reason"`
 }
 
 // GitHubRunners is the list response. Enabled travels with the rows so the panel's

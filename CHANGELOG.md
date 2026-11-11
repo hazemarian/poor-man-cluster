@@ -33,6 +33,16 @@ runner that cannot fit.
   320 MiB cap and its 240 MiB `memory_limiter` are verified and documented; a Swarm service
   has no `oom_score_adj` field (`docker stack config` rejects it), so the ordering comes
   from the daemon's side.
+- **A runner that cannot fit the node is refused.** A cap above **70 %** of the target
+  node's RAM is not started and not registered: `nxt-sw-3-w has 1839 MB; a 2560m runner
+  (139 %) can OOM this node and take it down — lower github_runner_memory or pick a bigger
+  node`. 3852 MB allows the same 2560m (66 %). The rule is applied where the assignment is
+  resolved (leader, before a token is minted), re-evaluated every pass, and shown in the
+  console row (`offline` + reason) and in `doctor` on both the leader and the node — the
+  worker compares its applied cap against its own `MemTotal`. **Unknown RAM allows and logs
+  once**, because a missing telemetry sample must not stop CI. 70 % rather than 60 % is
+  deliberate: 60 % of 3852 MB is 2311 MB, which would refuse the platform's own default on
+  a healthy 4 GB worker.
 
 ## Unreleased — the documentation catches up with the runners, and setup can set every knob
 

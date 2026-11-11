@@ -61,17 +61,25 @@ func (a *Agent) cooldown() time.Duration {
 // AgentRecord is what this node last applied — the doctor's view on a worker,
 // and the reason a restart re-applies the same decision without re-registering.
 type AgentRecord struct {
-	Node         string `json:"node"`
-	Enabled      bool   `json:"enabled"`
-	Org          string `json:"org"`
-	Group        string `json:"group"`
-	RunnerName   string `json:"runner_name"`
-	SocketPath   string `json:"socket_path"`
-	SocketProxy  bool   `json:"socket_proxy"`
-	Container    string `json:"container"`
-	RegisteredAt int64  `json:"registered_at,omitempty"`
-	AppliedAt    int64  `json:"applied_at"`
-	LastError    string `json:"last_error,omitempty"`
+	Node        string `json:"node"`
+	Enabled     bool   `json:"enabled"`
+	Org         string `json:"org"`
+	Group       string `json:"group"`
+	RunnerName  string `json:"runner_name"`
+	SocketPath  string `json:"socket_path"`
+	SocketProxy bool   `json:"socket_proxy"`
+	Container   string `json:"container"`
+	// Memory is the cap this node last applied (or was refused for). It is what
+	// `pmcluster doctor` compares against THIS machine's RAM on a worker, which
+	// has no store and cannot ask the leader.
+	Memory string `json:"memory,omitempty"`
+	// Refused/RefusedReason are the leader's size refusal, recorded so a worker's
+	// own doctor can report it without a second channel.
+	Refused       bool   `json:"refused,omitempty"`
+	RefusedReason string `json:"refused_reason,omitempty"`
+	RegisteredAt  int64  `json:"registered_at,omitempty"`
+	AppliedAt     int64  `json:"applied_at"`
+	LastError     string `json:"last_error,omitempty"`
 	// FetchedAt and Source are when and where this node last READ its
 	// assignment. They are what `pmcluster doctor` reports on a worker, because
 	// "did this node ever reach the leader" is otherwise unanswerable there.
@@ -150,7 +158,11 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 		Group:       as.Group,
 		SocketPath:  as.SocketPath,
 		SocketProxy: as.SocketProxy,
+		Memory:      as.Memory,
 		AppliedAt:   a.now().Unix(),
+	}
+	if as.Refused {
+		rec.Refused, rec.RefusedReason = true, as.Reason
 	}
 	if prev, ok := a.Record(); ok {
 		rec.RegisteredAt = prev.RegisteredAt
@@ -183,6 +195,27 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 		rec.RegisteredAt = 0
 		rec.LastError = ""
 		a.save(rec)
+		return res, nil
+	}
+
+	// 1b. Refused on arithmetic: this node cannot hold the configured cap. Said
+	//    at WARN with the reason the leader sent (both numbers), because the fix
+	//    is an operator's and a silent no-runner looks like a broken feature.
+	if as.Refused {
+		if exists {
+			if err := a.Docker.Remove(ctx, name); err != nil {
+				rec.Container, rec.LastError = "present", err.Error()
+				a.save(rec)
+				return res, fmt.Errorf("remove refused runner container %s: %w", name, err)
+			}
+			res.Removed = append(res.Removed, name)
+		}
+		rec.Container = "refused"
+		rec.RegisteredAt = 0
+		rec.LastError = ""
+		a.save(rec)
+		a.Log.Warn().Str("runner", name).Str("reason", as.Reason).
+			Msg("runners — NOT starting this node's runner: the configured memory cap does not fit this node")
 		return res, nil
 	}
 

@@ -99,6 +99,12 @@ type Manager struct {
 	// Node is this daemon's hostname: the node that decides whether it runs a
 	// runner, and the stable half of the runner name.
 	Node string
+
+	// NodeMemory returns a node's total RAM in MiB (known=false without a recent
+	// sample). Optional: nil means the size check cannot be made here, and the
+	// reconcile then relies on the leader's assignment refusal — the two use the
+	// same rule (CheckMemoryFit), so neither can be stricter than the other.
+	NodeMemory func(ctx context.Context, node string) (mib int64, known bool)
 }
 
 const defaultRecycleCooldown = 2 * time.Minute
