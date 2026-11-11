@@ -351,3 +351,26 @@ func TestAgentRefusalIsRecordedAndLogged(t *testing.T) {
 		t.Errorf("the refusal was not logged:\n%s", logs.String())
 	}
 }
+
+// TestReconcile_RefusesTheSameRule: on a node whose own store is current (the
+// single-node cluster, or the leader with github_runner_allow_leader) there is no
+// assignment hop, so the reconcile applies the rule itself — the same function,
+// so the two paths cannot disagree.
+func TestReconcile_RefusesTheSameRule(t *testing.T) {
+	h := newHarness(t, harnessOpts{enabled: true, org: "acme", nodes: "worker-1", node: "worker-1"})
+	h.mgr.NodeMemory = func(_ context.Context, _ string) (int64, bool) { return 1839, true }
+
+	_, err := h.mgr.Reconcile(h.ctx)
+	if err == nil {
+		t.Fatal("Reconcile started an oversized runner on a 1839 MB node")
+	}
+	if !errors.Is(err, ErrRunnerMemory) {
+		t.Errorf("err = %v, want it to wrap ErrRunnerMemory so the doctor can classify it", err)
+	}
+	if len(h.docker.runCalls) != 0 {
+		t.Fatalf("a container was started despite the refusal: %v", h.docker.runCalls)
+	}
+	if len(h.github.tokens) != 0 {
+		t.Errorf("a registration token was minted for a refused runner: %v", h.github.tokens)
+	}
+}

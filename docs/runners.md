@@ -428,7 +428,10 @@ ceiling the control plane gives itself (`MemoryMax`, see
 outlived by a settings change:
 
 - the **leader** applies it when it resolves a node's assignment, before it mints
-  a registration token (`internal/runners/memory.go`, `CheckMemoryFit`);
+  a registration token (`internal/runners/memory.go`, `CheckMemoryFit`) — and a
+  node whose own store is current (single-node cluster, or the leader with
+  `github_runner_allow_leader`) applies the same function in its reconcile, so
+  the two paths cannot disagree;
 - the **node** records the refusal it was sent, logs it once at WARN, and removes
   any container it still has;
 - **`pmcluster doctor`** reports it on the leader (naming the node, its RAM and the

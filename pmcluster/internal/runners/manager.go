@@ -157,6 +157,16 @@ func (m *Manager) Reconcile(ctx context.Context) (Result, error) {
 			}
 		}
 		if refusal == nil && cfg.WatchesNode() {
+			// The size rule, on the node that would run the container. A worker
+			// normally gets this from the leader's assignment (it reads no
+			// settings); this is the same rule for the node whose own store is
+			// current — the leader with github_runner_allow_leader, and the
+			// single-node cluster.
+			if refused, rerr := m.memoryRefusal(ctx, m.Node, cfg.Memory); refused {
+				refusal = fmt.Errorf("refused: %w", rerr)
+			}
+		}
+		if refusal == nil && cfg.WatchesNode() {
 			// The group is verified before a container is allowed to exist, and
 			// on every pass: a visibility flipped to `all` on the GitHub side
 			// must stop this runner, not wait for the next re-registration.

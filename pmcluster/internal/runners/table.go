@@ -102,9 +102,9 @@ func (m *Manager) Runners(ctx context.Context) ([]store.GitHubRunner, error) {
 		// anything is started, so its row says so instead of looking idle. State
 		// stays `offline` — it is the truth about the container — and Reason is
 		// what makes the row actionable.
-		if refused, reason := m.memoryRefusal(ctx, node, cfg.Memory); refused {
+		if refused, rerr := m.memoryRefusal(ctx, node, cfg.Memory); refused {
 			row.State = StateOffline
-			row.Reason = reason
+			row.Reason = rerr.Error()
 			row.ContainerID = ""
 			out = append(out, row)
 			continue

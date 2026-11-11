@@ -137,10 +137,10 @@ func (m *Manager) Inspect(ctx context.Context) (Report, error) {
 		name := RunnerName(node)
 		expected[name] = true
 		nr := NodeReport{Node: node, Selected: true, RunnerName: name, Role: roles[strings.ToLower(node)]}
-		if refused, reason := m.memoryRefusal(ctx, node, cfg.Memory); refused {
+		if refused, rerr := m.memoryRefusal(ctx, node, cfg.Memory); refused {
 			// A refusal is the first thing an operator needs to see about this
 			// node: no container will start, and the reason names both numbers.
-			nr.Refused, nr.Reason = true, reason
+			nr.Refused, nr.Reason = true, rerr.Error()
 			rep.Nodes = append(rep.Nodes, nr)
 			continue
 		}
@@ -223,15 +223,15 @@ func (m *Manager) localLeftovers(ctx context.Context, state State) []string {
 //
 // nil NodeMemory (a manager built without a store) or unknown RAM allows: the rule
 // refuses on arithmetic, never on missing information.
-func (m *Manager) memoryRefusal(ctx context.Context, node, memory string) (bool, string) {
+func (m *Manager) memoryRefusal(ctx context.Context, node, memory string) (bool, error) {
 	if m.NodeMemory == nil {
-		return false, ""
+		return false, nil
 	}
 	mib, known := m.NodeMemory(ctx, node)
 	if err := CheckMemoryFit(node, mib, known, memory); err != nil {
-		return true, err.Error()
+		return true, err
 	}
-	return false, ""
+	return false, nil
 }
 
 // nodeRoles maps lowercased hostname -> role for the selected nodes.
