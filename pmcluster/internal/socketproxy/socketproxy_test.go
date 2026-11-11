@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -151,6 +152,12 @@ func TestUnlistedRoutesAreRefused(t *testing.T) {
 // un-documented verb is not.
 func TestAllowTableIsReachableExactlyAsWritten(t *testing.T) {
 	for _, rule := range AllowTable {
+		// Stream routes (/session, /grpc) cannot be forwarded by a RoundTrip and
+		// a ResponseRecorder cannot be hijacked, so they are covered by
+		// TestStreamRouteIsSplicedToTheDaemon instead.
+		if strings.HasSuffix(rule.Pattern, "/session") || strings.HasSuffix(rule.Pattern, "/grpc") {
+			continue
+		}
 		path := strings.ReplaceAll(rule.Pattern, "{id}", "abc123")
 		if strings.Contains(path, "**") {
 			path = strings.ReplaceAll(path, "**", "ghcr.io/acme/api:latest")
@@ -365,5 +372,93 @@ func TestWorkflowCanAuthenticateTagAndPush(t *testing.T) {
 		if rec := serve(p, c.method, c.path, `{}`); rec.Code != http.StatusForbidden || tr.count() != 0 {
 			t.Errorf("%s %s = %d (reached=%d), want 403 and no upstream call", c.method, c.path, rec.Code, tr.count())
 		}
+	}
+}
+
+// TestStreamRouteIsSplicedToTheDaemon is the regression for BuildKit's session:
+// an HTTP round-trip proxy forwards the request but cannot carry the h2c stream
+// that follows it, which surfaced as "error reading server preface: http2:
+// frame too large ... looked like an HTTP/1.1 header" and broke every build on a
+// self-hosted runner.
+func TestStreamRouteIsSplicedToTheDaemon(t *testing.T) {
+	// A short directory: macOS caps a unix socket path at ~104 bytes and
+	// t.TempDir() is far longer than that ("bind: invalid argument").
+	dir, err := os.MkdirTemp("/tmp", "sp")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	upstreamPath := filepath.Join(dir, "d.sock")
+	proxyPath := filepath.Join(dir, "p.sock")
+
+	up, err := net.Listen("unix", upstreamPath)
+	if err != nil {
+		t.Fatalf("listen upstream: %v", err)
+	}
+	defer func() { _ = up.Close() }()
+
+	// A daemon stand-in: read the request head, then echo one line back and
+	// mirror whatever else arrives. That is enough to prove bidirectional flow.
+	go func() {
+		c, err := up.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = c.Close() }()
+		buf := make([]byte, 0, 1024)
+		tmp := make([]byte, 256)
+		for {
+			n, err := c.Read(tmp)
+			if n > 0 {
+				buf = append(buf, tmp[:n]...)
+				if bytes.Contains(buf, []byte("\r\n\r\n")) {
+					break
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+		_, _ = c.Write([]byte("echo-after-head\n"))
+		_, _ = io.Copy(c, c) // mirrors anything else back
+	}()
+
+	log := zerolog.Nop()
+	p := New(Config{SocketPath: proxyPath, UpstreamPath: upstreamPath, Log: log})
+	if err := p.Start(context.Background()); err != nil {
+		t.Fatalf("start proxy: %v", err)
+	}
+	defer func() { _ = p.Stop() }()
+
+	cl, err := net.Dial("unix", proxyPath)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer func() { _ = cl.Close() }()
+
+	_, err = cl.Write([]byte("POST /session HTTP/1.1\r\nHost: docker\r\nUpgrade: h2c\r\nConnection: Upgrade, HTTP2-Settings\r\n\r\n"))
+	if err != nil {
+		t.Fatalf("write head: %v", err)
+	}
+	_ = cl.SetReadDeadline(time.Now().Add(5 * time.Second))
+	got := make([]byte, len("echo-after-head\n"))
+	if _, err := io.ReadFull(cl, got); err != nil {
+		t.Fatalf("no bytes came back through the splice: %v", err)
+	}
+	if string(got) != "echo-after-head\n" {
+		t.Fatalf("got %q", got)
+	}
+
+	// And the stream is still open in both directions: another write must reach
+	// the daemon, which mirrors it back.
+	if _, err := cl.Write([]byte("payload-after-head\n")); err != nil {
+		t.Fatalf("write after head: %v", err)
+	}
+	mirror := make([]byte, len("payload-after-head\n"))
+	if _, err := io.ReadFull(cl, mirror); err != nil {
+		t.Fatalf("splice is not bidirectional: %v", err)
+	}
+	if string(mirror) != "payload-after-head\n" {
+		t.Fatalf("mirror = %q", mirror)
 	}
 }

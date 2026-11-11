@@ -23,6 +23,7 @@
 package socketproxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -331,6 +332,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeRefusal(w, r, family)
 		return
 	}
+	// BuildKit's session is an h2c bidirectional stream: it cannot be carried by
+	// a RoundTrip, which is HTTP/1.1 and request/response shaped. Those routes
+	// are spliced instead — after the allow check, so the decision is the same
+	// one every other request gets.
+	if isStreamRoute(r) {
+		p.serveStream(w, r)
+		return
+	}
 	out := r.Clone(r.Context())
 	out.URL.Scheme = "http"
 	out.URL.Host = "docker"
@@ -553,4 +562,79 @@ func Supervise(ctx context.Context, p *Proxy, enabled func(context.Context) bool
 			tick()
 		}
 	}
+}
+
+// isStreamRoute reports whether this request has to be spliced rather than
+// forwarded. BuildKit's /session and /grpc are HTTP/2 (h2c) streams: buildx
+// sends the request, then speaks HTTP/2 over the same connection, so anything
+// that reads a body and writes a separate response breaks it — measured as
+// "error reading server preface: http2: frame too large ... looked like an
+// HTTP/1.1 header".
+func isStreamRoute(r *http.Request) bool {
+	if strings.EqualFold(r.Header.Get("Upgrade"), "h2c") {
+		return true
+	}
+	// Strip the API version prefix, if any (/v1.43/session).
+	p := r.URL.Path
+	if i := strings.Index(p[1:], "/"); i >= 0 && strings.HasPrefix(p[1:], "v1.") {
+		p = p[i+1:]
+	}
+	p = strings.TrimSuffix(p, "/")
+	return strings.HasSuffix(p, "/session") || strings.HasSuffix(p, "/grpc")
+}
+
+// serveStream hijacks the client connection and splices it to the daemon socket.
+//
+// The allow check has already run, so this cannot be used to reach a denied
+// route: only /session and /grpc land here. What the splice preserves is the
+// part an HTTP proxy cannot express — bytes flowing in both directions at once.
+func (p *Proxy) serveStream(w http.ResponseWriter, r *http.Request) {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		// Not a refusal: the route IS allowed, this writer just cannot carry a
+		// stream (httptest.ResponseRecorder, or a server behind an HTTP/2
+		// front-end). Saying "not allowed" here would send an operator to the
+		// wrong place, which is the failure mode this whole package exists to
+		// avoid.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotImplemented)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"message": "socket proxy: this connection cannot be upgraded to a stream (BuildKit session needs a hijackable writer)",
+			"route":   r.Method + " " + r.URL.Path,
+		})
+		return
+	}
+	conn, bufrw, err := hj.Hijack()
+	if err != nil {
+		p.Log.Warn().Err(err).Msg("socket proxy: cannot hijack the connection for a stream route")
+		return
+	}
+	defer func() { _ = conn.Close() }()
+
+	up, err := net.DialTimeout("unix", p.UpstreamPath, 5*time.Second)
+	if err != nil {
+		p.Log.Warn().Err(err).Str("path", r.URL.Path).Msg("socket proxy: cannot reach the daemon socket for a stream route")
+		return
+	}
+	defer func() { _ = up.Close() }()
+
+	// Replay the request head verbatim. The Host header is not part of
+	// r.Header, so it is written explicitly; an upgrade request has no body to
+	// copy — the bytes after the head ARE the stream.
+	var head bytes.Buffer
+	fmt.Fprintf(&head, "%s %s HTTP/1.1\r\n", r.Method, r.URL.RequestURI())
+	fmt.Fprintf(&head, "Host: %s\r\n", "docker")
+	if err := r.Header.Write(&head); err != nil {
+		return
+	}
+	head.WriteString("\r\n")
+	if _, err := up.Write(head.Bytes()); err != nil {
+		return
+	}
+
+	// Anything the client already sent past the head is sitting in bufrw.
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(up, bufrw); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(conn, up); done <- struct{}{} }()
+	<-done
 }
