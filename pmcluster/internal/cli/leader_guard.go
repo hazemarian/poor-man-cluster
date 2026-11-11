@@ -48,6 +48,11 @@ var topLevelScopes = map[string]commandScope{
 	// cluster-wide answer and gating it on leadership would make a worker
 	// unable to provision its own disk.
 	"storage": scopeNode,
+	// health-watch probes THIS machine's daemon and restarts THIS machine's
+	// unit. It is the one command that MUST work on a worker with no cluster
+	// state: a wedged worker daemon is exactly what it exists for, and gating
+	// it on leadership would leave the node nobody can log into unwatched.
+	"health-watch": scopeNode,
 
 	// Bootstrap and lifecycle.
 	"init":    scopeBootstrap,
