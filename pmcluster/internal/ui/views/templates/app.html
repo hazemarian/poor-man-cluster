@@ -62,12 +62,16 @@
   <link rel="stylesheet" href="{{static "components.css"}}">
   <link rel="stylesheet" href="{{static "patterns.css"}}">
   <link rel="stylesheet" href="{{static "brand.css"}}">
+  <link rel="stylesheet" href="{{static "nx-fonts.css"}}">
+  <link rel="stylesheet" href="{{static "nx-theme.css"}}">
   <script src="{{static "htmx.min.js"}}"></script>
   <script src="{{static "preferences.js"}}" defer></script>
   <script src="{{static "settings-dirty.js"}}" defer></script>
+  <script src="{{static "nx-ui.js"}}" defer></script>
 </head>
 <body
   data-t-copied="{{T "common.copied"}}"
+  data-t-copy="{{T "common.copy"}}"
   data-t-copyfail="{{T "err.copy_failed"}}"
   data-t-loading="{{T "common.loading"}}">
 {{template "icons" .}}
@@ -171,11 +175,9 @@
 <nav class="tabbar" aria-label="{{T "nav.menu"}}">
   <a href="/web/overview" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-nav="overview" data-tip="{{T "nav.overview"}}">{{icon "overview"}}<span>{{T "nav.overview"}}</span></a>
   <a href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks" data-tip="{{T "nav.stacks"}}">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
-  <a href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-nav="deploy" data-tip="{{T "nav.deploy"}}">{{icon "deploy"}}<span>{{T "nav.deploy"}}</span></a>
-  <a href="/web/tls" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-nav="tls" data-tip="{{T "nav.tls"}}">{{icon "tls"}}<span>{{T "nav.tls"}}</span></a>
   <a href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services" data-tip="{{T "nav.services"}}">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
   <a href="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" data-nav="observability" data-tip="{{T "nav.observability"}}">{{icon "chart"}}<span>{{T "nav.observability"}}</span></a>
-  <a href="/web/usage" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-nav="usage" data-tip="{{T "nav.usage"}}">{{icon "overview"}}<span>{{T "nav.usage"}}</span></a>
+  <button type="button" data-drawer-open aria-label="{{T "nav.menu"}}" data-tip="{{T "nav.menu"}}">{{icon "menu"}}<span>{{T "nav.menu"}}</span></button>
 </nav>
 
 <div class="modal-backdrop" id="modal" hidden onclick="if(event.target===this)closeModal()">
@@ -265,6 +267,8 @@
   function openModal() {
     var m = document.getElementById('modal');
     if (!m) return;
+    var body = document.getElementById('modal-body');
+    if (body && !body.firstElementChild) return;
     if (m.hidden) lastFocus = document.activeElement;
     m.hidden = false;
     document.body.classList.add('modal-open');
@@ -329,10 +333,10 @@
     closeDrawer();
   }
   document.addEventListener('htmx:afterSwap', function (e) {
-    // A modal body that swaps in after openModal() already ran (an
-    // onclick=openModal() firing ahead of its htmx request) gets focus once
-    // its content has actually landed.
-    if (e.target && e.target.id === 'modal-body') { focusModal(); return; }
+    // openModal() refuses to open an empty dialog, so an onclick=openModal() that fires ahead of its
+    // htmx request is a no-op the first time. Open (and focus) once the content has actually landed;
+    // openModal() is idempotent when the dialog is already showing.
+    if (e.target && e.target.id === 'modal-body') { openModal(); return; }
     if (e.target && e.target.id === 'view') {
       syncNav(location.pathname);
       e.target.querySelectorAll('[data-focus]').forEach(function (el) { el.focus(); });

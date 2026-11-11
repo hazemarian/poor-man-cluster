@@ -9,117 +9,28 @@
 
      The console has no dry-run endpoint, so the review zone is the literal
      request body: what this page posts is what the daemon receives. */}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "deploy.title"}}</h1>
-    <p class="sub">{{if .APIReady}}{{T "deploy.sub"}}{{else}}{{T "deploy.sub_not_configured"}}{{end}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
-      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
-    </button>
-    <a class="btn btn-ghost btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-tip="{{T "deploy.open_stacks"}}">
-      {{icon "stacks"}}<span>{{T "deploy.open_stacks"}}</span>
-    </a>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "deploy.title") "Sub" (partial "deploy_sub" .) "Refresh" "/web/deploy" "Actions" (partial "deploy_actions" .))}}
 
 {{if .ErrKey}}
-<div class="banner bad">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T .ErrKey}}</p>
-    {{if eq .ErrKey "err.api_not_configured"}}
-    <p>{{T "deploy.stacks_unknown_body"}}</p>
-    {{else}}
-    <p>{{T "err.banner_body"}}</p>
-    {{end}}
-    {{if .ErrRaw}}
-    <details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>
-    {{end}}
-  </div>
-  <div class="b-actions">
-    {{if eq .ErrKey "err.api_not_configured"}}
-    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
-    {{else}}
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-    {{end}}
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/deploy" "Unconfigured" "deploy.stacks_unknown_body")}}
 {{end}}
 
 {{if .Result}}
-<div class="banner ok">
-  {{icon "check-circle"}}
-  <div class="b-body">
-    <p class="b-title">{{T "deploy.result_title"}}</p>
-    <p>{{TF "deploy.result_body" .Result.Stack .Result.Revision}}</p>
-    {{if .Result.Changed}}<p>{{T "deploy.result_changed"}}</p>{{end}}
-    <p>{{T "deploy.result_hint"}}</p>
-  </div>
-  <div class="b-actions">
-    <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Result.Stack}}" hx-get="/web/stacks/{{.Result.Stack}}" hx-target="#view" hx-push-url="true" data-tip="{{T "deploy.open_stack"}}">{{icon "stacks"}}<span>{{T "deploy.open_stack"}}</span></a>
-    <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Result.Stack}}/revisions/{{.Result.Revision}}" hx-get="/web/stacks/{{.Result.Stack}}/revisions/{{.Result.Revision}}" hx-target="#view" hx-push-url="true" data-tip="{{T "deploy.view_revision"}}">{{icon "file"}}<span>{{T "deploy.view_revision"}}</span></a>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (T "deploy.result_title") "Body" (TF "deploy.result_body" .Result.Stack .Result.Revision) "Extra" (partial "deploy_result_extra" .) "Action" (partial "deploy_result_actions" .))}}
 {{end}}
 
 <div class="stats">
-  <div class="stat">
-    <div class="stat-l">{{icon "deploy"}}{{T "deploy.st_target"}}</div>
-    {{if .Form.AppName}}
-    <div class="stat-v"><span class="mono">{{.Form.AppName}}</span></div>
-    <div class="stat-f">{{T "deploy.st_target_foot"}}</div>
-    {{else}}
-    <div class="stat-v muted">{{T "deploy.no_target"}}</div>
-    <div class="stat-f">{{T "deploy.st_named_foot"}}</div>
-    {{end}}
-  </div>
+  {{template "stat" (dict "Icon" "deploy" "Label" (T "deploy.st_target") "Inner" (partial "deploy_sinner1" .))}}
 
-  <div class="stat{{if or (not .TargetNamed) (not .TargetKnown)}} is-unknown{{end}}">
-    <div class="stat-l">{{icon "clock"}}{{T "deploy.st_revision"}}</div>
-    {{if and .TargetKnown (not .Target)}}
-    <div class="stat-v muted">{{T "deploy.st_revision_new"}}</div>
-    <div class="stat-f">{{T "deploy.st_revision_new_foot"}}</div>
-    {{else if .Target}}
-    <div class="stat-v num">{{N0 .Target.Revision}}</div>
-    <div class="stat-f">{{T "deploy.st_revision_foot"}}</div>
-    {{else}}
-    <div class="stat-v">—</div>
-    <div class="stat-f">{{T "deploy.st_unknown_foot"}}</div>
-    {{end}}
-  </div>
+  {{template "stat" (dict "Class" (partial "deploy_scls2" .) "Icon" "clock" "Label" (T "deploy.st_revision") "Inner" (partial "deploy_sinner2" .))}}
 
-  <div class="stat{{if or (not .TargetKnown) (not .Target)}} is-unknown{{end}}">
-    <div class="stat-l">{{icon "refresh"}}{{T "deploy.st_updated"}}</div>
-    {{if .Target}}
-    <div class="stat-v stat-text num"><bdi>{{ts .Target.UpdatedAt}}</bdi></div>
-    <div class="stat-f">{{T "deploy.st_updated_foot"}}</div>
-    {{else}}
-    <div class="stat-v">—</div>
-    <div class="stat-f">{{T "deploy.st_unknown_foot"}}</div>
-    {{end}}
-  </div>
+  {{template "stat" (dict "Class" (partial "deploy_scls3" .) "Icon" "refresh" "Label" (T "deploy.st_updated") "Inner" (partial "deploy_sinner3" .))}}
 
-  <div class="stat{{if not .StacksKnown}} is-unknown{{end}}">
-    <div class="stat-l">{{icon "stacks"}}{{T "deploy.st_stacks"}}</div>
-    {{if .StacksKnown}}
-    <div class="stat-v num">{{P .StacksCount "plural.stacks"}}</div>
-    <div class="stat-f">{{T "deploy.st_stacks_foot"}}</div>
-    {{else}}
-    <div class="stat-v">—</div>
-    <div class="stat-f">{{T "deploy.st_unknown_foot"}}</div>
-    {{end}}
-  </div>
+  {{template "stat" (dict "Class" (partial "deploy_scls4" .) "Icon" "stacks" "Label" (T "deploy.st_stacks") "Inner" (partial "deploy_sinner4" .))}}
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "deploy.form_title"}}</h2>
-    <div class="ph-actions">
-      <span class="mono iso" dir="ltr">POST /api/stacks</span>
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "deploy.form_title") "Actions" (partial "deploy_pactions" .))}}
   <div class="panel-body">
     <form hx-post="/web/deploy" hx-target="#view" hx-swap="innerHTML" hx-disabled-elt="find [type='submit']">
       <div class="form-grid form-grid-2">
@@ -160,12 +71,7 @@
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "deploy.preview_title"}}</h2>
-    <div class="ph-actions">
-      <span class="pill plain mono" dir="ltr">JSON</span>
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "deploy.preview_title") "Actions" (partial "deploy_pactions2" .))}}
   {{if .Form.Manifest}}
   <div class="panel-body">
     <p class="muted">{{T "deploy.preview_sub"}}</p>
@@ -180,22 +86,13 @@
   </div>
   {{else}}
   <div class="panel-body tight">
-    <div class="empty">
-      <i class="ic">{{icon "file"}}</i>
-      <h3>{{T "deploy.preview_empty_title"}}</h3>
-      <p>{{T "deploy.preview_empty_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('dp-manifest').focus()">{{T "deploy.preview_goto"}}</button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "file" "Title" (T "deploy.preview_empty_title") "Body" (T "deploy.preview_empty_body") "Action" (partial "deploy_action2" .))}}
   </div>
   {{end}}
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "deploy.pipeline_title"}}</h2>
-  </div>
+  {{template "panelhead" (dict "Title" (T "deploy.pipeline_title"))}}
   <div class="panel-body">
     <p class="muted">{{T "deploy.pipeline_sub"}}</p>
     <div class="phases">
@@ -240,27 +137,11 @@
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "deploy.stacks_title"}}</h2>
-    <div class="ph-actions">
-      {{if .StacksKnown}}
-      <span class="pill plain num">{{P .StacksCount "plural.stacks"}}</span>
-      {{else}}
-      <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
-      {{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "deploy.stacks_title") "Actions" (partial "deploy_pactions3" .))}}
 
   <div class="panel-body tight">
     {{if not .APIReady}}
-    <div class="empty">
-      <i class="ic">{{icon "settings"}}</i>
-      <h3>{{T "err.api_not_configured"}}</h3>
-      <p>{{T "deploy.stacks_unknown_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "settings" "Title" (T "err.api_not_configured") "Body" (T "deploy.stacks_unknown_body") "Settings" true)}}
     {{else if .StacksKnown}}
       {{if .Stacks}}
       <div class="table-wrap only-md">
@@ -310,24 +191,10 @@
         {{end}}
       </div>
       {{else}}
-      <div class="empty">
-        <i class="ic">{{icon "stacks"}}</i>
-        <h3>{{T "deploy.stacks_empty_title"}}</h3>
-        <p>{{T "deploy.stacks_empty_body"}}</p>
-        <div class="empty-actions">
-          <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('dp-manifest').focus()">{{T "deploy.preview_goto"}}</button>
-        </div>
-      </div>
+      {{template "empty" (dict "Icon" "stacks" "Title" (T "deploy.stacks_empty_title") "Body" (T "deploy.stacks_empty_body") "Action" (partial "deploy_action3" .))}}
       {{end}}
     {{else}}
-    <div class="empty">
-      <i class="ic">{{icon "alert"}}</i>
-      <h3>{{T "deploy.stacks_unknown_title"}}</h3>
-      <p>{{T "deploy.stacks_unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "alert" "Title" (T "deploy.stacks_unknown_title") "Body" (T "deploy.stacks_unknown_body") "Retry" "/web/deploy")}}
     {{end}}
   </div>
 
@@ -336,3 +203,69 @@
   </div>
 </div>
 {{end}}
+
+{{define "deploy_result_extra"}}{{if .Result.Changed}}<p>{{T "deploy.result_changed"}}</p>{{end}}<p>{{T "deploy.result_hint"}}</p>{{end}}
+
+{{define "deploy_result_actions"}}<a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Result.Stack}}" hx-get="/web/stacks/{{.Result.Stack}}" hx-target="#view" hx-push-url="true" data-tip="{{T "deploy.open_stack"}}">{{icon "stacks"}}<span>{{T "deploy.open_stack"}}</span></a>
+<a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Result.Stack}}/revisions/{{.Result.Revision}}" hx-get="/web/stacks/{{.Result.Stack}}/revisions/{{.Result.Revision}}" hx-target="#view" hx-push-url="true" data-tip="{{T "deploy.view_revision"}}">{{icon "file"}}<span>{{T "deploy.view_revision"}}</span></a>{{end}}
+
+{{define "deploy_sub"}}{{if .APIReady}}{{T "deploy.sub"}}{{else}}{{T "deploy.sub_not_configured"}}{{end}}{{end}}
+
+{{define "deploy_actions"}}<a class="btn btn-ghost btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-tip="{{T "deploy.open_stacks"}}">
+      {{icon "stacks"}}<span>{{T "deploy.open_stacks"}}</span>
+    </a>{{end}}
+
+{{define "deploy_action2"}}<button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('dp-manifest').focus()">{{T "deploy.preview_goto"}}</button>{{end}}
+
+{{define "deploy_action3"}}<button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('dp-manifest').focus()">{{T "deploy.preview_goto"}}</button>{{end}}
+
+{{define "deploy_pactions"}}<span class="mono iso" dir="ltr">POST /api/stacks</span>{{end}}
+
+{{define "deploy_pactions2"}}<span class="pill plain mono" dir="ltr">JSON</span>{{end}}
+
+{{define "deploy_pactions3"}}{{if .StacksKnown}}
+      <span class="pill plain num">{{P .StacksCount "plural.stacks"}}</span>
+      {{else}}
+      <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}{{end}}
+
+{{define "deploy_sinner1"}}{{if .Form.AppName}}
+    <div class="stat-v"><span class="mono">{{.Form.AppName}}</span></div>
+    <div class="stat-f">{{T "deploy.st_target_foot"}}</div>
+    {{else}}
+    <div class="stat-v muted">{{T "deploy.no_target"}}</div>
+    <div class="stat-f">{{T "deploy.st_named_foot"}}</div>
+    {{end}}{{end}}
+
+{{define "deploy_scls2"}} {{if or (not .TargetNamed) (not .TargetKnown)}} is-unknown{{end}}{{end}}
+
+{{define "deploy_sinner2"}}{{if and .TargetKnown (not .Target)}}
+    <div class="stat-v muted">{{T "deploy.st_revision_new"}}</div>
+    <div class="stat-f">{{T "deploy.st_revision_new_foot"}}</div>
+    {{else if .Target}}
+    <div class="stat-v num">{{N0 .Target.Revision}}</div>
+    <div class="stat-f">{{T "deploy.st_revision_foot"}}</div>
+    {{else}}
+    <div class="stat-v">—</div>
+    <div class="stat-f">{{T "deploy.st_unknown_foot"}}</div>
+    {{end}}{{end}}
+
+{{define "deploy_scls3"}} {{if or (not .TargetKnown) (not .Target)}} is-unknown{{end}}{{end}}
+
+{{define "deploy_sinner3"}}{{if .Target}}
+    <div class="stat-v stat-text num"><bdi>{{ts .Target.UpdatedAt}}</bdi></div>
+    <div class="stat-f">{{T "deploy.st_updated_foot"}}</div>
+    {{else}}
+    <div class="stat-v">—</div>
+    <div class="stat-f">{{T "deploy.st_unknown_foot"}}</div>
+    {{end}}{{end}}
+
+{{define "deploy_scls4"}} {{if not .StacksKnown}} is-unknown{{end}}{{end}}
+
+{{define "deploy_sinner4"}}{{if .StacksKnown}}
+    <div class="stat-v num">{{P .StacksCount "plural.stacks"}}</div>
+    <div class="stat-f">{{T "deploy.st_stacks_foot"}}</div>
+    {{else}}
+    <div class="stat-v">—</div>
+    <div class="stat-f">{{T "deploy.st_unknown_foot"}}</div>
+    {{end}}{{end}}

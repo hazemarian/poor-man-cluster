@@ -1,121 +1,40 @@
 {{define "tls"}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "nav.tls"}}</h1>
-    <p class="sub">{{if .SiteKnown}}{{T "tls.sub"}}{{else}}{{T "tls.sub_unknown"}}{{end}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-primary btn-sm" hx-get="/web/tls/hosts/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.host_add"}}">{{icon "plus"}}<span>{{T "tls.host_add"}}</span></button>
-    <button type="button" class="btn btn-sm" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-tip="{{T "err.retry_hint"}}" aria-label="{{T "common.refresh"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "nav.tls") "Sub" (partial "tls_sub" .) "Refresh" "/web/tls" "Actions" (partial "tls_actions" .))}}
 
 {{if .ErrKey}}
-<div class="banner bad">
-  <div class="b-body">
-    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
-    <p>{{T "err.banner_body"}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-  <div class="b-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/tls")}}
 {{end}}
 
 {{if .MsgKey}}
-<div class="msg ok">{{TF .MsgKey .MsgA}}</div>
+{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (TF .MsgKey .MsgA))}}
 {{end}}
 
 {{if .SiteExpired}}
-<div class="banner bad">
-  <div class="b-body">
-    <div class="b-title">{{icon "alert"}}<span>{{TF "tls.site_expired" .Site.Domain (N .Site.AbsDays)}}</span></div>
-    <p>{{T "tls.expiry_meaning"}}</p>
-  </div>
-  <div class="b-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/tls/site/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.site_action"}}">{{icon "lock"}}<span>{{T "tls.site_action"}}</span></button>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" (TF "tls.site_expired" .Site.Domain (N .Site.AbsDays)) "Body" (T "tls.expiry_meaning") "Action" (partial "tls_site_action" .))}}
 {{else if .SiteExpiring}}
-<div class="banner warn">
-  <div class="b-body">
-    <div class="b-title">{{icon "clock"}}<span>{{TF "tls.site_expiring" .Site.Domain (N .Site.DaysLeft)}}</span></div>
-    <p>{{T "tls.expiry_meaning"}}</p>
-  </div>
-  <div class="b-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/tls/site/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.site_action"}}">{{icon "lock"}}<span>{{T "tls.site_action"}}</span></button>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "warn" "Icon" "clock" "Title" (TF "tls.site_expiring" .Site.Domain (N .Site.DaysLeft)) "Body" (T "tls.expiry_meaning") "Action" (partial "tls_site_action" .))}}
 {{end}}
 
 {{if .Uncovered}}
-<div class="banner warn">
-  <div class="b-body">
-    <div class="b-title">{{icon "alert"}}<span>{{TF "tls.uncovered_warn" (N .Uncovered)}}</span></div>
-    <p>{{T "tls.chain_foot"}}</p>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "warn" "Icon" "alert" "Title" (TF "tls.uncovered_warn" (N .Uncovered)) "Body" (T "tls.chain_foot"))}}
 {{end}}
 
 <div class="stats">
-  <div class="stat{{if not .StatsKnown}} is-unknown{{end}}">
-    <div class="stat-l">{{T "tls.stats_total"}}</div>
-    <div class="stat-v">{{if .SiteKnown}}{{N .Count}}{{else}}{{T "common.unavailable"}}{{end}}</div>
-    <div class="stat-f">{{if .SiteKnown}}{{T "tls.stats_total_foot"}}{{end}}</div>
-  </div>
-  <div class="stat{{if not .StatsKnown}} is-unknown{{end}}">
-    <div class="stat-l">{{TF "tls.stats_expiring" (N .WarnDays)}}</div>
-    <div class="stat-v">{{if .SiteKnown}}{{N .Expiring}}{{else}}{{T "common.unavailable"}}{{end}}</div>
-    <div class="stat-f">{{if .SiteKnown}}{{T "tls.stats_expiring_foot"}}{{end}}</div>
-  </div>
-  <div class="stat{{if not .StatsKnown}} is-unknown{{end}}">
-    <div class="stat-l">{{T "tls.stats_expired"}}</div>
-    <div class="stat-v">{{if .SiteKnown}}{{N .Expired}}{{else}}{{T "common.unavailable"}}{{end}}</div>
-    <div class="stat-f">{{if .SiteKnown}}{{T "tls.stats_expired_foot"}}{{end}}</div>
-  </div>
-  <div class="stat is-unknown">
-    <div class="stat-l">{{T "tls.stats_chain"}}</div>
-    <div class="stat-v">{{T "tls.chain_pill"}}</div>
-    <div class="stat-f">{{T "tls.stats_chain_foot"}}</div>
-  </div>
+  {{template "stat" (dict "Class" (partial "tls_cls" .) "Label" (T "tls.stats_total") "Value" (partial "tls_value" .) "Foot" (partial "tls_foot" .))}}
+  {{template "stat" (dict "Class" (partial "tls_cls2" .) "Label" (TF "tls.stats_expiring" (N .WarnDays)) "Value" (partial "tls_value2" .) "Foot" (partial "tls_foot2" .))}}
+  {{template "stat" (dict "Class" (partial "tls_cls3" .) "Label" (T "tls.stats_expired") "Value" (partial "tls_value3" .) "Foot" (partial "tls_foot3" .))}}
+  {{template "stat" (dict "Class" (partial "tls_cls4" .) "Label" (T "tls.stats_chain") "Value" (T "tls.chain_pill") "Foot" (T "tls.stats_chain_foot"))}}
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "tls.main_title"}}</h2>
-    <div class="ph-actions">
-      {{if .SiteKnown}}
-        {{if .Site}}
-        <span class="pill {{if .Site.Expired}}bad{{else if .Site.Expiring}}warn{{else}}good{{end}}"><i class="dot"></i>{{if .Site.ExpiresKnown}}{{TF "tls.days_left" (N .Site.DaysLeft)}}{{else}}{{T "tls.expiry_unknown"}}{{end}}</span>
-        {{end}}
-      {{else}}
-      <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
-      {{end}}
-      <button type="button" class="btn btn-sm" hx-get="/web/tls/site/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.site_action"}}">{{icon "lock"}}<span>{{T "tls.site_action"}}</span></button>
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "tls.main_title") "Actions" (partial "tls_pactions" .))}}
   <div class="panel-body">
     <p class="sub">{{T "tls.main_sub"}}</p>
 
     {{if not .SiteKnown}}
-    <div class="empty">
-      {{icon "layers-off"}}
-      <h3>{{T "tls.site_unknown"}}</h3>
-      <p>{{T "tls.site_unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "layers-off" "Title" (T "tls.site_unknown") "Body" (T "tls.site_unknown_body") "Retry" "/web/tls" "Label" "retry")}}
     {{else if not .Site}}
-    <div class="empty">
-      {{icon "lock"}}
-      <h3>{{T "tls.site_empty_title"}}</h3>
-      <p>{{T "tls.site_empty_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-primary btn-sm" hx-get="/web/tls/site/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.site_action"}}">{{icon "lock"}}<span>{{T "tls.site_action"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "lock" "Title" (T "tls.site_empty_title") "Body" (T "tls.site_empty_body") "Action" (partial "tls_action2" .))}}
     {{else}}
     <div class="kv">
       <div class="kv-row">
@@ -143,10 +62,7 @@
         <span class="v">
           <span class="pill warn"><i class="dot"></i>{{T "tls.chain_pill"}}</span>
           <span class="muted">{{T "tls.chain_unreported"}}</span>
-          <details class="details">
-            <summary>{{T "tls.chain_label"}}</summary>
-            <p class="muted">{{T "tls.chain_hint"}}</p>
-          </details>
+          <p class="kv-note">{{T "tls.chain_hint"}}</p>
         </span>
       </div>
       <div class="kv-row">
@@ -156,8 +72,8 @@
       <div class="kv-row">
         <span class="k">{{T "tls.sans_label"}}</span>
         <span class="v">
-          {{TF "tls.sans_count" (N .Site.SANCount)}}
-          {{if .Site.SANList}}<details class="details"><summary>{{T "tls.sans_label"}}</summary><p class="mono iso" dir="ltr">{{.Site.SANList}}</p></details>{{end}}
+          <span>{{P .Site.SANCount "plural.sans"}}</span>
+          {{if .Site.SANList}}<span class="mono iso muted" dir="ltr">{{.Site.SANList}}</span>{{end}}
         </span>
       </div>
       <div class="kv-row">
@@ -181,26 +97,12 @@
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "tls.hosts_title"}}</h2>
-    <div class="ph-actions">
-      {{if .HostsKnown}}<span class="pill plain"><i class="dot"></i>{{P (len .Hosts) "plural.certificates"}}</span>
-      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
-      <button type="button" class="btn btn-sm" hx-get="/web/tls/hosts/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.host_add"}}">{{icon "plus"}}<span>{{T "tls.host_add"}}</span></button>
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "tls.hosts_title") "Actions" (partial "tls_pactions2" .))}}
   <div class="panel-body">
     <p class="sub">{{T "tls.hosts_sub"}}</p>
 
     {{if not .HostsKnown}}
-    <div class="empty">
-      {{icon "layers-off"}}
-      <h3>{{T "tls.hosts_unknown"}}</h3>
-      <p>{{T "tls.hosts_unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/tls" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "layers-off" "Title" (T "tls.hosts_unknown") "Body" (T "tls.hosts_unknown_body") "Retry" "/web/tls" "Label" "retry")}}
     {{else if .Hosts}}
     <div class="table-wrap only-md">
       <table class="table">
@@ -230,8 +132,7 @@
               {{end}}
             </td>
             <td>
-              <span class="pill warn"><i class="dot"></i>{{T "tls.chain_pill"}}</span>
-              <div class="muted">{{T "tls.chain_unreported"}}</div>
+              <span class="pill warn" data-tip="{{T "tls.chain_unreported"}}"><i class="dot"></i>{{T "tls.chain_pill"}}</span>
             </td>
             <td>
               {{if .SANCount}}
@@ -242,8 +143,7 @@
               {{end}}
             </td>
             <td>
-              {{TF "tls.sans_count" (N .SANCount)}}
-              {{if .SANList}}<details class="details"><summary>{{T "tls.sans_label"}}</summary><p class="mono iso" dir="ltr">{{.SANList}}</p></details>{{end}}
+              {{if .SANList}}<span class="mono iso" dir="ltr" title="{{P .SANCount "plural.sans"}}">{{.SANList}}</span>{{else}}<span class="muted">{{P .SANCount "plural.sans"}}</span>{{end}}
             </td>
             <td class="muted iso" dir="ltr">{{if .Updated}}{{.Updated}}{{else}}{{T "common.unknown"}}{{end}}</td>
             <td>
@@ -275,7 +175,7 @@
           {{if .SANCount}}{{if .CoversHost}}<span class="pill good"><i class="dot"></i>{{T "tls.covers_yes"}}</span>{{else}}<span class="pill bad"><i class="dot"></i>{{T "tls.covers_no"}}</span>{{end}}
           {{else}}<span class="pill plain"><i class="dot"></i>{{T "tls.covers_unknown"}}</span>{{end}}
         </span></div>
-        <div class="kv-row"><span class="k">{{T "tls.sans_label"}}</span><span class="v">{{TF "tls.sans_count" (N .SANCount)}}{{if .SANList}} <span class="muted mono iso" dir="ltr">{{.SANList}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "tls.sans_label"}}</span><span class="v">{{P .SANCount "plural.sans"}}{{if .SANList}} <span class="muted mono iso" dir="ltr">{{.SANList}}</span>{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "tls.updated_label"}}</span><span class="v muted iso" dir="ltr">{{if .Updated}}{{.Updated}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
         <div class="action-bar">
           <button type="button" class="btn btn-sm" data-copy="{{.Domain}}" onclick="copyVal(this)" data-tip="{{T "tls.copy_host"}}">{{icon "copy"}}<span>{{T "tls.copy_host"}}</span></button>
@@ -287,23 +187,53 @@
       {{end}}
     </div>
     {{else}}
-    <div class="empty">
-      {{icon "inbox"}}
-      <h3>{{T "tls.hosts_empty_title"}}</h3>
-      <p>{{T "tls.hosts_empty_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-primary btn-sm" hx-get="/web/tls/hosts/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.host_add"}}">{{icon "plus"}}<span>{{T "tls.host_add"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "inbox" "Title" (T "tls.hosts_empty_title") "Body" (T "tls.hosts_empty_body") "Action" (partial "tls_action3" .))}}
     {{end}}
   </div>
 </div>
 
-<div class="banner info">
-  <div class="b-body">
-    <div class="b-title">{{icon "info"}}<span>{{T "tls.expiry_meaning"}}</span></div>
-    <p>{{T "tls.chain_foot"}}</p>
-    <p class="muted">{{T "tls.chain_hint"}}</p>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "info" "Icon" "info" "Title" (T "tls.expiry_meaning") "Body" (T "tls.chain_foot") "Muted" (T "tls.chain_hint"))}}
 {{end}}
+
+{{define "tls_site_action"}}<button type="button" class="btn btn-ghost btn-sm" hx-get="/web/tls/site/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.site_action"}}">{{icon "lock"}}<span>{{T "tls.site_action"}}</span></button>{{end}}
+
+{{define "tls_sub"}}{{if .SiteKnown}}{{T "tls.sub"}}{{else}}{{T "tls.sub_unknown"}}{{end}}{{end}}
+
+{{define "tls_actions"}}<button type="button" class="btn btn-primary btn-sm" hx-get="/web/tls/hosts/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.host_add"}}">{{icon "plus"}}<span>{{T "tls.host_add"}}</span></button>{{end}}
+
+{{define "tls_action2"}}<button type="button" class="btn btn-primary btn-sm" hx-get="/web/tls/site/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.site_action"}}">{{icon "lock"}}<span>{{T "tls.site_action"}}</span></button>{{end}}
+
+{{define "tls_action3"}}<button type="button" class="btn btn-primary btn-sm" hx-get="/web/tls/hosts/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.host_add"}}">{{icon "plus"}}<span>{{T "tls.host_add"}}</span></button>{{end}}
+
+{{define "tls_pactions"}}{{if .SiteKnown}}
+        {{if .Site}}
+        <span class="pill {{if .Site.Expired}}bad{{else if .Site.Expiring}}warn{{else}}good{{end}}"><i class="dot"></i>{{if .Site.ExpiresKnown}}{{TF "tls.days_left" (N .Site.DaysLeft)}}{{else}}{{T "tls.expiry_unknown"}}{{end}}</span>
+        {{end}}
+      {{else}}
+      <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}
+      <button type="button" class="btn btn-sm" hx-get="/web/tls/site/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.site_action"}}">{{icon "lock"}}<span>{{T "tls.site_action"}}</span></button>{{end}}
+
+{{define "tls_pactions2"}}{{if .HostsKnown}}<span class="pill plain"><i class="dot"></i>{{P (len .Hosts) "plural.certificates"}}</span>
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+      <button type="button" class="btn btn-sm" hx-get="/web/tls/hosts/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "tls.host_add"}}">{{icon "plus"}}<span>{{T "tls.host_add"}}</span></button>{{end}}
+
+{{define "tls_cls"}}{{if not .StatsKnown}} is-unknown{{end}}{{end}}
+
+{{define "tls_value"}}{{if .SiteKnown}}{{N .Count}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "tls_foot"}}{{if .SiteKnown}}{{T "tls.stats_total_foot"}}{{end}}{{end}}
+
+{{define "tls_cls2"}}{{if not .StatsKnown}} is-unknown{{end}}{{end}}
+
+{{define "tls_value2"}}{{if .SiteKnown}}{{N .Expiring}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "tls_foot2"}}{{if .SiteKnown}}{{T "tls.stats_expiring_foot"}}{{end}}{{end}}
+
+{{define "tls_cls3"}}{{if not .StatsKnown}} is-unknown{{end}}{{end}}
+
+{{define "tls_value3"}}{{if .SiteKnown}}{{N .Expired}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "tls_foot3"}}{{if .SiteKnown}}{{T "tls.stats_expired_foot"}}{{end}}{{end}}
+
+{{define "tls_cls4"}}is-unknown{{end}}

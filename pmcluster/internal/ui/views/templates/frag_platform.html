@@ -1,63 +1,22 @@
 {{define "platform"}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "nav.platform"}}</h1>
-    <p class="sub">{{if .Known}}{{T "platform.sub"}}{{else}}{{T "platform.sub_unknown"}}{{end}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/platform" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" data-tip="{{T "err.retry_hint"}}" aria-label="{{T "common.retry"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.retry"}}</span></button>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "nav.platform") "Sub" (partial "platform_sub" .) "Refresh" "/web/platform")}}
 
 {{if .ErrKey}}
-<div class="banner bad">
-  <div class="b-body">
-    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
-    <p>{{T "err.banner_body"}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-  <div class="b-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/platform" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/platform")}}
 {{end}}
 
 <div class="stats">
-  <div class="stat{{if not .Known}} is-unknown{{end}}">
-    <div class="stat-l">{{T "platform.stats_total"}}</div>
-    <div class="stat-v">{{if .Known}}{{N .Count}}{{else}}{{T "common.unavailable"}}{{end}}</div>
-    <div class="stat-f">{{if .Known}}{{P (len .Services) "plural.services"}}{{end}}</div>
-  </div>
-  <div class="stat{{if not .Known}} is-unknown{{end}}">
-    <div class="stat-l">{{T "platform.stats_stacks"}}</div>
-    <div class="stat-v">{{if .Known}}{{N .Stacks}}{{else}}{{T "common.unavailable"}}{{end}}</div>
-    <div class="stat-f">{{if .Known}}{{T "services.stats_stacks_foot"}}{{end}}</div>
-  </div>
+  {{template "stat" (dict "Class" (partial "platform_cls" .) "Label" (T "platform.stats_total") "Value" (partial "platform_value" .) "Foot" (partial "platform_foot" .))}}
+  {{template "stat" (dict "Class" (partial "platform_cls2" .) "Label" (T "platform.stats_stacks") "Value" (partial "platform_value2" .) "Foot" (partial "platform_foot2" .))}}
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "platform.title"}}</h2>
-    <div class="ph-actions">
-      {{if .Known}}
-      <span class="pill plain"><i class="dot"></i>{{P (len .Services) "plural.services"}}</span>
-      {{else}}
-      <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
-      {{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "platform.title") "Actions" (partial "platform_pactions" .))}}
   <div class="panel-body">
     <p class="sub">{{T "platform.foot_replicas"}}</p>
 
     {{if not .Known}}
-    <div class="empty">
-      {{icon "layers-off"}}
-      <h3>{{T "platform.unknown_title"}}</h3>
-      <p>{{T "platform.unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/platform" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "layers-off" "Title" (T "platform.unknown_title") "Body" (T "platform.unknown_body") "Retry" "/web/platform" "Label" "retry")}}
     {{else if .Services}}
     <div class="table-wrap only-md">
       <table class="table">
@@ -65,7 +24,7 @@
           <tr>
             <th>{{T "services.col_service"}}</th>
             <th>{{T "services.col_stack"}}</th>
-            <th class="num">{{T "services.col_replicas"}}</th>
+            <th class="col-reps">{{T "services.col_replicas"}}</th>
             <th>{{T "services.col_mode"}}</th>
             <th>{{T "services.col_node"}}</th>
             <th>{{T "services.col_updated"}}</th>
@@ -84,13 +43,12 @@
               {{if .Image}}<div class="muted trunc" title="{{.Image}}">{{shortImage .Image}}</div>{{end}}
             </td>
             <td>{{if .Stack}}<span class="mono" dir="ltr">{{.Stack}}</span>{{else}}<span class="muted">{{T "services.no_stack"}}</span>{{end}}</td>
-            <td class="num">
-              <span class="num">{{N .Replicas}} / {{N .Desired}}</span>
-              {{if .PausedUpdate}}<span class="pill bad"><i class="dot"></i>{{T "st.update_paused"}}</span>
-              {{else if .Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}}</span>
-              {{else if .Complete}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>
-              {{else if .Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>
-              {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{end}}
+            <td class="col-reps">
+              {{if .PausedUpdate}}<span class="pill bad"><i class="dot"></i>{{T "st.update_paused"}} {{N .Replicas}}/{{N .Desired}}</span>
+              {{else if .Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}} {{N .Replicas}}/{{N .Desired}}</span>
+              {{else if .Complete}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}} {{N .Replicas}}/{{N .Desired}}</span>
+              {{else if .Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}} {{N .Replicas}}/{{N .Desired}}</span>
+              {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}} {{N .Replicas}}/{{N .Desired}}</span>{{end}}
             </td>
             <td>{{if .Mode}}<span class="mono iso" dir="ltr">{{.Mode}}</span>{{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}</td>
             <td>{{if .Node}}<span class="mono iso" dir="ltr">{{.Node}}</span>{{else if .RunningNode}}<span class="mono iso muted" dir="ltr">{{.RunningNode}}</span>{{else}}<span class="muted">—</span>{{end}}{{if and .Node .RunningNode (ne .Node .RunningNode)}}<div class="muted mono iso" dir="ltr">{{T "services.running_on"}} {{.RunningNode}}</div>{{end}}</td>
@@ -116,11 +74,11 @@
       <div class="kv">
         <div class="kv-row"><span class="k">{{T "services.col_service"}}</span><span class="v mono iso" dir="ltr">{{.ServiceName}}</span></div>
         <div class="kv-row"><span class="k">{{T "services.col_stack"}}</span><span class="v">{{if .Stack}}<span class="mono" dir="ltr">{{.Stack}}</span>{{else}}<span class="muted">{{T "services.no_stack"}}</span>{{end}}</span></div>
-        <div class="kv-row"><span class="k">{{T "services.col_replicas"}}</span><span class="v"><span class="num">{{N .Replicas}} / {{N .Desired}}</span>
-          {{if .Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}}</span>
-          {{else if .Complete}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>
-          {{else if .Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>
-          {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{end}}</span></div>
+        <div class="kv-row"><span class="k">{{T "services.col_replicas"}}</span><span class="v">
+          {{if .Paused}}<span class="pill plain"><i class="dot"></i>{{T "st.inactive"}} {{N .Replicas}}/{{N .Desired}}</span>
+          {{else if .Complete}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}} {{N .Replicas}}/{{N .Desired}}</span>
+          {{else if .Short}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}} {{N .Replicas}}/{{N .Desired}}</span>
+          {{else}}<span class="pill good"><i class="dot"></i>{{T "st.running"}} {{N .Replicas}}/{{N .Desired}}</span>{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "services.col_mode"}}</span><span class="v">{{if .Mode}}<span class="mono iso" dir="ltr">{{.Mode}}</span>{{else}}<span class="muted">{{T "common.unknown"}}</span>{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "services.col_node"}}</span><span class="v">{{if .Node}}<span class="mono iso" dir="ltr">{{.Node}}</span>{{else if .RunningNode}}<span class="mono iso muted" dir="ltr">{{.RunningNode}}</span>{{else}}<span class="muted">—</span>{{end}}</span></div>{{if and .Node .RunningNode (ne .Node .RunningNode)}}<div class="kv-row"><span class="k">{{T "services.running_on"}}</span><span class="v"><span class="mono iso" dir="ltr">{{.RunningNode}}</span></span></div>{{end}}
         <div class="kv-row"><span class="k">{{T "services.col_updated"}}</span><span class="v muted iso" dir="ltr">{{ts .Updated}}</span></div>
@@ -139,12 +97,28 @@
       {{end}}
     </div>
     {{else}}
-    <div class="empty">
-      {{icon "inbox"}}
-      <h3>{{T "platform.empty_title"}}</h3>
-      <p>{{T "platform.empty_body"}}</p>
-    </div>
+    {{template "empty" (dict "Icon" "inbox" "Title" (T "platform.empty_title") "Body" (T "platform.empty_body"))}}
     {{end}}
   </div>
 </div>
 {{end}}
+
+{{define "platform_sub"}}{{if .Known}}{{T "platform.sub"}}{{else}}{{T "platform.sub_unknown"}}{{end}}{{end}}
+
+{{define "platform_pactions"}}{{if .Known}}
+      <span class="pill plain"><i class="dot"></i>{{P (len .Services) "plural.services"}}</span>
+      {{else}}
+      <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}{{end}}
+
+{{define "platform_cls"}}{{if not .Known}} is-unknown{{end}}{{end}}
+
+{{define "platform_value"}}{{if .Known}}{{N .Count}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "platform_foot"}}{{if .Known}}{{P (len .Services) "plural.services"}}{{end}}{{end}}
+
+{{define "platform_cls2"}}{{if not .Known}} is-unknown{{end}}{{end}}
+
+{{define "platform_value2"}}{{if .Known}}{{N .Stacks}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "platform_foot2"}}{{if .Known}}{{T "services.stats_stacks_foot"}}{{end}}{{end}}

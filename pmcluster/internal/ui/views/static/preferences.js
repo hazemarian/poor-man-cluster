@@ -100,3 +100,16 @@
   apply(stored());
   sync();
 })();
+
+// Observability tabs swap only the content below the bar, so the bar itself has to follow the
+// click: highlight the chosen tab and tell the range filter which tab it belongs to.
+function nxObsTab(a) {
+  var bar = a.closest('.obs-bar');
+  if (!bar) return;
+  bar.querySelectorAll('.obs-tabs a').forEach(function (t) { t.classList.remove('is-active'); t.removeAttribute('aria-current'); });
+  a.classList.add('is-active'); a.setAttribute('aria-current', 'page');
+  var tab = new URL(a.getAttribute('hx-get'), location.origin).searchParams.get('tab');
+  bar.dataset.tab = tab;
+  var input = bar.querySelector('#obs-tab-input');
+  if (input) input.value = tab;
+}

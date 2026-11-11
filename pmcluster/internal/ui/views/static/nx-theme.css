@@ -1,0 +1,963 @@
+/* pmcluster console — the Nextrum design language, shared with nx-master.
+   Loaded after every other sheet. It does not restyle component by component: it remaps this
+   console's tokens onto nx-master's (same colours, radii, shadows, type, motion) so every existing
+   component inherits the look, then overrides the few places where a component hard-codes a border,
+   a radius or a colour.
+
+   The rules nx-master follows, and this file keeps:
+     - structure comes from tone and soft shadow, not 1px outlines (--line is transparent)
+     - a resting control is a --fill well; hover is --fill-2
+     - radii: 12 controls, 14 menus, 18 cards, 22 dialogs, 8 tags, 999 pills
+     - headings in Bricolage Grotesque, UI in Instrument Sans, Noto Kufi for Arabic headings
+     - one accent (green), no palette picker
+     - motion is transform/opacity only and switched off under prefers-reduced-motion.
+   Selectors use :root repeated so they win over base.css / brand.css without !important. */
+
+/* ───────────── tokens (nx-master values) ───────────── */
+html:root:root:root:root {
+  /* nx light */
+  --nx-bg: #f6f5ed; --nx-panel: #fffefa; --nx-fg: #20372c; --nx-dim: #586c60;
+  --nx-accent: #285f45; --nx-accent-fg: #fffefa;
+  --nx-ok: #286a49; --nx-warn: #805b17; --nx-err: #a43a34; --nx-info: #3b6a8a;
+  --nx-container: color-mix(in srgb, #20372c 6%, transparent);
+  --nx-shadow-1: 0 1px 2px rgba(22, 40, 31, .06), 0 8px 24px rgba(22, 40, 31, .06);
+  --nx-shadow-2: 0 2px 6px rgba(22, 40, 31, .10), 0 20px 48px rgba(22, 40, 31, .18);
+  color-scheme: light;
+}
+html:root:root:root:root[data-theme="dark"] {
+  --nx-bg: #151a18; --nx-panel: #202724; --nx-fg: #ecf2ed; --nx-dim: #b5c4b9;
+  --nx-accent: #84d6a1; --nx-accent-fg: #10221a;
+  --nx-ok: #87d8a3; --nx-warn: #f0c578; --nx-err: #ff9c93; --nx-info: #8fc0e0;
+  --nx-container: #1b2220;
+  --nx-shadow-1: 0 1px 2px rgba(0, 0, 0, .35), 0 8px 24px rgba(0, 0, 0, .28);
+  --nx-shadow-2: 0 2px 6px rgba(0, 0, 0, .45), 0 20px 48px rgba(0, 0, 0, .5);
+  color-scheme: dark;
+}
+
+/* Remap this console's tokens. Everything that already says var(--bg-card) etc. follows. */
+html:root:root:root:root {
+  --bg-body: var(--nx-bg);
+  --bg-sidebar: var(--nx-panel);
+  --bg-card: var(--nx-panel);
+  --bg-elevated: var(--nx-panel);
+  --bg-lead: var(--nx-container);
+  --fill: color-mix(in srgb, var(--nx-fg) 6%, transparent);
+  --fill-2: color-mix(in srgb, var(--nx-fg) 11%, transparent);
+  --bg-tertiary: color-mix(in srgb, var(--nx-fg) 6%, var(--nx-panel));
+  --bg-hover: color-mix(in srgb, var(--nx-fg) 8%, var(--nx-panel));
+  --container: var(--nx-container);
+
+  /* nx draws no outlines: the hairlines vanish and tone + shadow carry the structure. */
+  --border-subtle: transparent;
+  --border-default: transparent;
+  --border-active: transparent;
+  --border-control: transparent;
+  --control-edge: transparent;
+
+  --text-primary: var(--nx-fg);
+  --text-secondary: var(--nx-dim);
+  --text-tertiary: var(--nx-dim);
+
+  --accent: var(--nx-accent);
+  --accent-hover: color-mix(in srgb, var(--nx-accent) 86%, #000);
+  --accent-strong: var(--nx-accent);
+  --accent-strong-hover: color-mix(in srgb, var(--nx-accent) 86%, #000);
+  --accent-fg: var(--nx-accent-fg);
+  --accent-bg: color-mix(in srgb, var(--nx-accent) 14%, transparent);
+  --accent-border: color-mix(in srgb, var(--nx-accent) 32%, transparent);
+
+  /* There is no gold in nx-master: the brand highlight is the accent. */
+  --gold: var(--nx-accent); --gold-strong: var(--nx-accent);
+  --gold-bg: var(--accent-bg); --gold-border: var(--accent-border);
+
+  --green: var(--nx-ok);   --green-bg: color-mix(in srgb, var(--nx-ok) 14%, transparent);   --green-border: color-mix(in srgb, var(--nx-ok) 34%, transparent);
+  --amber: var(--nx-warn); --amber-bg: color-mix(in srgb, var(--nx-warn) 14%, transparent); --amber-border: color-mix(in srgb, var(--nx-warn) 34%, transparent);
+  --red:   var(--nx-err);  --red-bg:   color-mix(in srgb, var(--nx-err) 13%, transparent);  --red-border:   color-mix(in srgb, var(--nx-err) 34%, transparent);
+  --cyan:  var(--nx-info); --cyan-bg:  color-mix(in srgb, var(--nx-info) 14%, transparent); --cyan-border:  color-mix(in srgb, var(--nx-info) 34%, transparent);
+
+  --shadow-1: var(--nx-shadow-1);
+  --shadow-2: var(--nx-shadow-2);
+  --shadow-overlay: var(--nx-shadow-2);
+
+  /* radii: tags 8, controls 12, menus 14, cards 18, dialogs 22 */
+  --r-sm: 8px; --r-md: 12px; --r-lg: 18px; --r-xl: 22px;
+  --r-control: 12px; --r-menu: 14px; --r-card: 18px; --r-dialog: 22px;
+
+  --sans: "Instrument Sans", "IBM Plex Sans Arabic", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --display: "Bricolage Grotesque Variable", "Instrument Sans", system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --fs-body: 15px;
+
+  --ease: cubic-bezier(.22, .8, .24, 1);
+  --t-fast: .14s; --t-base: .24s; --t-slow: .42s;
+  --t: .16s var(--ease);
+
+  /* one brand colour: the logo and any palette-aware rule follow the accent */
+  --brand-primary: var(--nx-accent);
+}
+html:root:root:root:root[dir="rtl"] { --display: "Bricolage Grotesque Variable", "Noto Kufi Arabic Variable", "IBM Plex Sans Arabic", system-ui, sans-serif; }
+
+/* ───────────── base ───────────── */
+html:root:root body { font-size: 15px; background: var(--bg-body); color: var(--text-primary); }
+html:root:root :is(h1, h2, h3, h4, .page-head h1, .panel-head h2, .empty h3, .modal h2) {
+  font-family: var(--display); font-weight: 600; letter-spacing: -.02em;
+}
+html:root:root h1 { font-size: 1.875rem; line-height: 1.15; letter-spacing: -.015em; }
+html:root:root[dir="rtl"] :is(h1, h2, h3) { letter-spacing: 0; line-height: 1.4; }
+html:root:root :focus-visible { outline: 1.5px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; }
+html:root:root { caret-color: var(--accent); accent-color: var(--accent); scrollbar-color: color-mix(in srgb, var(--nx-fg) 25%, transparent) transparent; scrollbar-width: thin; }
+html:root:root ::selection { background: color-mix(in srgb, var(--accent) 26%, transparent); color: var(--text-primary); }
+html:root:root ::placeholder { color: var(--nx-dim); opacity: 1; }
+html:root:root *::-webkit-scrollbar { width: 11px; height: 11px; }
+html:root:root *::-webkit-scrollbar-track { background: transparent; }
+html:root:root *::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--nx-fg) 22%, transparent); border-radius: 99px; border: 3px solid transparent; background-clip: content-box; }
+html:root:root a:not([class]) { text-underline-offset: .22em; text-decoration-thickness: .055em; }
+html:root:root hr { border-top-color: color-mix(in srgb, var(--nx-fg) 8%, transparent); }
+
+/* ───────────── shell: surfaces, not outlines ───────────── */
+html:root:root .sidebar {
+  background: var(--nx-panel); border-inline-end: 0;
+  box-shadow: 1px 0 0 transparent, 6px 0 24px rgba(22, 40, 31, .05);
+}
+html:root:root[data-theme="dark"] .sidebar { box-shadow: 6px 0 24px rgba(0, 0, 0, .25); }
+html:root:root .sidebar-head { border-bottom: 0; height: 72px; }
+html:root:root .sidebar-foot { border-top: 0; }
+html:root:root .topbar {
+  height: 72px; background: var(--nx-panel); backdrop-filter: none; border-bottom: 0;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--nx-fg) 5%, transparent), 0 6px 24px rgba(22, 40, 31, .05);
+}
+html:root:root[data-theme="dark"] .topbar { box-shadow: 0 6px 24px rgba(0, 0, 0, .3); }
+html:root:root .topbar-context { border-inline-end: 0; }
+html:root:root .nav-label { letter-spacing: .08em; font-weight: 600; font-size: 11px; }
+html:root:root .nav-item { border-radius: var(--r-control); min-height: 40px; font-size: 14px; font-weight: 500; }
+html:root:root .nav-item:hover { background: var(--fill); }
+html:root:root .nav-item.is-active { background: var(--accent-bg); color: var(--accent); box-shadow: none; font-weight: 600; }
+html:root:root .nav-item.is-active .ic { color: var(--accent); }
+html:root:root .who .avatar { border: 0; background: var(--fill-2); border-radius: 50%; color: var(--text-primary); width: 30px; height: 30px; font-weight: 600; }
+html:root:root .mark { border: 0; border-radius: 12px; background: var(--nx-accent); color: var(--nx-accent-fg); width: 38px; height: 38px; }
+html:root:root .tabbar { background: var(--nx-panel); border-block-start: 0; box-shadow: 0 -6px 24px rgba(22, 40, 31, .07); }
+html:root:root .crumbs strong { font-weight: 600; }
+html:root:root .content { max-width: 1400px; }
+html:root:root .page-head { padding-bottom: 0; margin-bottom: 22px; }
+html:root:root .page-head .sub { color: var(--nx-dim); line-height: 1.55; font-size: 15px; }
+
+/* the brand palette picker is gone: nx-master has one accent */
+html:root:root :is(.palette, [data-palette-toggle], [data-palette-choose]) { display: none; }
+
+/* ───────────── buttons ───────────── */
+html:root:root .btn {
+  min-height: 38px; padding: 7px 14px; border: 0; border-radius: var(--r-control);
+  background: var(--fill); color: var(--text-primary); font-weight: 600; font-size: 13.5px;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease, transform var(--t-fast) var(--ease), box-shadow var(--t-base) var(--ease);
+}
+html:root:root .btn:hover { background: var(--fill-2); }
+html:root:root .btn:active:not(:disabled) { transform: translateY(1px) scale(.97); }
+html:root:root .btn-primary { background: var(--accent); color: var(--accent-fg); border: 0; }
+html:root:root .btn-primary:hover { background: color-mix(in srgb, var(--accent) 86%, #000); }
+html:root:root[data-theme="dark"] .btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, #fff); }
+html:root:root .btn-ghost { background: transparent; color: var(--nx-dim); }
+html:root:root .btn-ghost:hover { background: var(--fill); color: var(--text-primary); }
+html:root:root .btn-danger { background: var(--red-bg); color: var(--red); border: 0; }
+html:root:root .btn-danger:hover { background: color-mix(in srgb, var(--nx-err) 22%, transparent); }
+html:root:root .btn-sm { min-height: 34px; padding: 4px 14px; border-radius: 11px; font-size: 13.5px; line-height: 1.2; gap: 8px; }
+html:root:root .btn-link { background: none; color: var(--accent); }
+html:root:root .icon-btn, html:root:root .theme-toggle { border: 0; border-radius: var(--r-control); background: var(--fill); color: var(--text-primary); }
+html:root:root .icon-btn:hover, html:root:root .theme-toggle:hover { background: var(--fill-2); }
+html:root:root :is(.preferences > *, .preferences .btn, .preferences a, .preferences button) { border: 0; border-radius: var(--r-control); background: var(--fill); }
+html:root:root :is(.preferences a, .preferences button):hover { background: var(--fill-2); }
+html:root:root :disabled, html:root:root [aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+
+/* ───────────── forms ───────────── */
+html:root:root :is(input:not([type=checkbox]):not([type=radio]), select, textarea) {
+  min-height: 40px; border: 0; border-radius: var(--r-control); background: var(--fill); color: var(--text-primary);
+  box-shadow: none; transition: background var(--t-fast) ease, box-shadow var(--t-fast) ease;
+}
+html:root:root :is(input:not([type=checkbox]):not([type=radio]), select, textarea):hover { background: var(--fill-2); }
+html:root:root :is(input:not([type=checkbox]):not([type=radio]), select, textarea):focus {
+  background: var(--fill); outline: 3px solid var(--accent); outline-offset: 2px; box-shadow: none;
+}
+html:root:root :is(input, select, textarea).is-invalid { box-shadow: inset 0 0 0 2px var(--nx-err); }
+html:root:root :is(input, select, textarea):disabled { background: var(--fill); color: var(--nx-dim); }
+html:root:root .field > label { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+html:root:root .field .hint { color: var(--nx-dim); }
+
+/* ───────────── surfaces ───────────── */
+html:root:root :is(.panel, .stats, .callout, details.panel-details, .auth-card, .modal, .drawer, .doc) {
+  background: var(--nx-panel); border: 0; border-radius: var(--r-card); box-shadow: var(--shadow-1);
+}
+html:root:root :is(.modal, .drawer) { box-shadow: var(--shadow-2); }
+html:root:root .modal { border-radius: var(--r-dialog); }
+html:root:root :is(.panel-head, .panel-foot, .drawer-head, .drawer-foot) { border: 0; }
+html:root:root .panel-foot { border-top: 0; box-shadow: inset 0 1px 0 color-mix(in srgb, var(--nx-fg) 6%, transparent); }
+html:root:root .stat { border: 0; }
+html:root:root .stats > .stat + .stat { box-shadow: inset 1px 0 0 color-mix(in srgb, var(--nx-fg) 7%, transparent); }
+html:root:root[dir="rtl"] .stats > .stat + .stat { box-shadow: inset -1px 0 0 color-mix(in srgb, var(--nx-fg) 7%, transparent); }
+html:root:root .stat-v { font-family: var(--display); font-weight: 600; letter-spacing: -.02em; }
+html:root:root .stat-l { font-weight: 600; }
+html:root:root .stat:first-child { background: var(--container); }
+html:root:root .kv-row { border: 0; }
+html:root:root :is(.divider) { background: color-mix(in srgb, var(--nx-fg) 8%, transparent); border: 0; height: 1px; }
+
+/* ───────────── tables: small tracked column labels, no rules ───────────── */
+html:root:root .table th {
+  background: transparent; border: 0; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--nx-dim); padding-block: 10px;
+}
+html:root:root[dir="rtl"] .table th { text-transform: none; letter-spacing: 0; }
+html:root:root .table td { border-bottom: 1px solid color-mix(in srgb, var(--nx-fg) 6%, transparent); }
+html:root:root .table tbody tr:last-child td { border-bottom: 0; }
+html:root:root .table tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+html:root:root .table tbody tr.is-selected td { background: var(--accent-bg); }
+html:root:root .table-wrap { border-radius: var(--r-card); }
+
+/* ───────────── tags, pills, banners ───────────── */
+html:root:root :is(.pill, .tag, .badge-ext, .count, .pills .pill) { border-radius: 8px; border: 0; font-weight: 600; font-size: 12px; }
+html:root:root .pill { background: var(--fill); color: var(--nx-dim); }
+html:root:root .pill.good { background: var(--green-bg); color: var(--green); }
+html:root:root .pill.warn { background: var(--amber-bg); color: var(--amber); }
+html:root:root .pill.bad  { background: var(--red-bg);   color: var(--red); }
+html:root:root .pill.info { background: var(--cyan-bg);  color: var(--cyan); }
+html:root:root .pill.accent { background: var(--accent-bg); color: var(--accent); }
+html:root:root .pill.plain { background: var(--fill); }
+html:root:root :is(.banner, .flash, .msg) { border-radius: var(--r-control); border: 0; box-shadow: none; }
+html:root:root .banner.bad, html:root:root .flash.err, html:root:root .msg.err { background: var(--red-bg); }
+html:root:root .banner.warn, html:root:root .msg.warn { background: var(--amber-bg); }
+html:root:root .banner.ok, html:root:root .flash.ok, html:root:root .msg.ok { background: var(--green-bg); }
+html:root:root .seg { border: 0; background: var(--fill); border-radius: var(--r-control); padding: 3px; gap: 2px; }
+html:root:root .seg a, html:root:root .seg button { border: 0; border-radius: 9px; }
+html:root:root .seg a + a, html:root:root .seg button + button { border: 0; }
+html:root:root .seg .is-active { background: var(--nx-panel); color: var(--text-primary); box-shadow: var(--shadow-1); }
+html:root:root .tabs { border-bottom: 0; box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--nx-fg) 8%, transparent); }
+html:root:root .tab { font-weight: 600; }
+html:root:root .tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
+html:root:root .empty > .ic { border-radius: 14px; background: var(--fill); }
+html:root:root code, html:root:root kbd { background: var(--fill); border: 0; border-radius: 6px; }
+html:root:root .log, html:root:root pre { border: 0; border-radius: var(--r-control); background: var(--container); }
+html:root:root [data-tip]::after { border: 0; border-radius: var(--r-menu); box-shadow: var(--shadow-2); }
+html:root:root dialog, html:root:root .modal-backdrop + .modal { border: 0; border-radius: var(--r-dialog); box-shadow: var(--shadow-2); }
+html:root:root dialog::backdrop { background: rgba(14, 24, 19, .45); }
+html:root:root .bar { background: var(--fill); border-radius: 99px; }
+
+/* ───────────── auth pages ───────────── */
+html:root:root .auth-card { border-radius: var(--r-card); }
+html:root:root .auth-story h1, html:root:root .auth-heading h2 { font-family: var(--display); }
+
+/* ───────────── motion (nx-master's set; transform/opacity only) ───────────── */
+@keyframes nx-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: no-preference) {
+  html:root:root .content #view > *, html:root:root .auth-card { animation: nx-rise var(--t-slow) var(--ease) both; }
+  html:root:root :is(.stats, .panel) { transition: box-shadow var(--t-base) var(--ease); }
+  html:root:root .nav-item { transition: background var(--t-fast) ease, color var(--t-fast) ease; }
+  html:root:root .theme-toggle .ic { transition: transform var(--t-slow) var(--ease); }
+  html:root:root .theme-toggle:hover .ic { transform: rotate(18deg); }
+}
+
+/* nx-master page headers are bare: title and intro on the page, no card around them. */
+html:root:root .page-head.overview-head { background: transparent; border: 0; box-shadow: none; padding: 0; border-radius: 0; margin-bottom: 22px; }
+@media (max-width: 767px) { html:root:root .page-head.overview-head { padding: 0; } }
+
+/* The logo mark sits on a light tile (nx-master's brand mark is a tile too), so the dark cube
+   stays legible in both themes. */
+html:root:root .logo-mark { background: #eef2e8; border-radius: 12px; padding: 5px; box-shadow: var(--shadow-1); }
+html:root:root .logo-name em { color: var(--accent); }
+
+/* Sidebar + top bar read as one L-shaped surface: same tone, the top bar sits above the sidebar's
+   shadow (so there is no seam at the corner) and its own shadow is clipped to its width. */
+html:root:root .sidebar { position: sticky; z-index: 10; box-shadow: 6px 0 24px rgba(22, 40, 31, .05); }
+html:root:root[dir="rtl"] .sidebar { box-shadow: -6px 0 24px rgba(22, 40, 31, .05); }
+html:root:root[data-theme="dark"] .sidebar { box-shadow: 6px 0 24px rgba(0, 0, 0, .25); }
+html:root:root[data-theme="dark"][dir="rtl"] .sidebar { box-shadow: -6px 0 24px rgba(0, 0, 0, .25); }
+html:root:root .topbar { z-index: 20; clip-path: inset(0 0 -40px 0); }
+html:root:root .sidebar-head { height: 72px; padding-inline: 20px; }
+html:root:root .sidebar-head, html:root:root .topbar { box-sizing: border-box; }
+@media (max-width: 767px) { html:root:root .sidebar { z-index: 60; } html:root:root .topbar { clip-path: none; } }
+
+/* ───────────── sign-in / setup: the split layout draws with hairlines, which are gone ───────────── */
+/* The form side is flat on the page; only the standalone (setup) card is a lifted surface. */
+html:root:root .login-doc .auth-card { background: transparent; box-shadow: none; border-radius: 0; }
+html:root:root .auth-card form { background: transparent; border: 0; box-shadow: none; }
+html:root:root :is(.auth-card:not(.login-doc .auth-card)) form { padding: var(--s-6); }
+html:root:root .auth-intro {
+  border-inline-end: 0; background-color: var(--nx-panel);
+  background-image: radial-gradient(color-mix(in srgb, var(--nx-fg) 14%, transparent) .8px, transparent .8px);
+  box-shadow: 6px 0 24px rgba(22, 40, 31, .05);
+}
+html:root:root[dir="rtl"] .auth-intro { box-shadow: -6px 0 24px rgba(22, 40, 31, .05); }
+html:root:root[data-theme="dark"] .auth-intro { box-shadow: 6px 0 24px rgba(0, 0, 0, .25); }
+html:root:root .auth-story h1 { font-family: var(--display); letter-spacing: -.03em; }
+html:root:root .auth-lock { border: 0; background: var(--fill); border-radius: 14px; color: var(--accent); }
+html:root:root .login-doc input { background: var(--fill); }
+html:root:root .login-doc .auth-foot { border-top: 0; box-shadow: inset 0 1px 0 color-mix(in srgb, var(--nx-fg) 8%, transparent); }
+/* the cluster drawing: wires and devices were stroked with the (now transparent) hairline colour */
+html:root:root .cluster-wire { stroke: color-mix(in srgb, var(--nx-fg) 28%, transparent); stroke-width: 1.5; }
+html:root:root .cluster-device { fill: var(--nx-bg); stroke: color-mix(in srgb, var(--nx-fg) 35%, transparent); stroke-width: 1.5; }
+html:root:root .cluster-slot { stroke: color-mix(in srgb, var(--nx-fg) 50%, transparent); }
+@media (max-width: 900px) { html:root:root .auth-intro { box-shadow: 0 6px 24px rgba(22, 40, 31, .06); } }
+
+/* Segmented tabs: the active segment is an accent tint, not a second panel (a panel-on-panel chip
+   with a shadow was muddy in dark mode). Radii nest: 14 outer, 10 inner, 4px between. */
+html:root:root .seg { padding: 4px; gap: 2px; border-radius: 14px; background: var(--fill); box-shadow: none; }
+html:root:root .seg a, html:root:root .seg button { border-radius: 10px; color: var(--nx-dim); font-weight: 600; background: transparent; box-shadow: none; }
+html:root:root .seg a:hover, html:root:root .seg button:hover { background: var(--fill); color: var(--text-primary); }
+html:root:root .seg .is-active, html:root:root .seg [aria-current] {
+  background: var(--accent-bg); color: var(--accent); box-shadow: none;
+}
+
+/* CI board: stats sit inside a panel, so they are a tinted well, not a second lifted card. */
+html:root:root .ci-body > * + * { margin-top: var(--s-5); }
+html:root:root .ci-body .stats { box-shadow: none; background: var(--container); margin-bottom: 0; }
+html:root:root .ci-body .stat:first-child { background: transparent; }
+html:root:root .ci-body .banner > .muted { margin-top: 4px; overflow-wrap: anywhere; }
+html:root:root .ci-body .table th:first-child, html:root:root .ci-body .table td:first-child { padding-inline-start: 0; }
+html:root:root .ci-body .table th, html:root:root .ci-body .table td { padding-inline: var(--s-3); }
+html:root:root .panel-foot { color: var(--nx-dim); line-height: 1.5; }
+html:root:root .panel > .panel-foot { padding: var(--s-4) var(--s-6); }
+
+/* Switching a tab swaps #obs-main only; the entrance animation is for page loads, so it does not
+   replay for the bar and content on every tab change. */
+html:root:root #obs-main { animation: none; }
+/* Range filter only applies to overview and metrics. The bar stays mounted across tab switches,
+   so this follows data-tab instead of being rendered conditionally. */
+html:root:root .obs-bar:is([data-tab="logs"], [data-tab="traces"]) .obs-filters { display: none; }
+/* `.panel + .panel` adds a top margin that pushed the second card of a side-by-side pair down. */
+html:root:root .obs-dash > .panel { margin-top: 0; align-self: stretch; }
+
+/* ───────────── icon + text rows: icon and label share one flex row, centred on the first line ───────────── */
+html:root:root :is(.b-title, .callout-title, .callout > :is(p, div):has(> .ic:first-child), .banner > :is(p, div):has(> .ic:first-child)) {
+  display: flex; align-items: flex-start; gap: var(--s-2);
+}
+html:root:root :is(.b-title, .callout-title, .callout > :is(p, div), .banner > :is(p, div)) > .ic:first-child { flex: none; width: 16px; height: 16px; margin-top: .22em; }
+html:root:root .banner { align-items: center; padding: 14px var(--s-5); line-height: 1.5; }
+html:root:root .banner .b-body { margin-top: 0; }
+html:root:root .banner .b-actions { align-self: center; }
+html:root:root .callout { padding: var(--s-4) var(--s-5); line-height: 1.55; font-size: var(--fs-sm); display: grid; gap: var(--s-2); }
+html:root:root .callout > * { margin: 0; }
+html:root:root .callout .muted { margin-top: 0; }
+/* buttons: icon and label centred on one line, same icon size everywhere */
+html:root:root :is(.btn, .icon-btn) { display: inline-flex; align-items: center; justify-content: center; gap: 8px; line-height: 1; }
+html:root:root :is(.btn, .icon-btn) > .ic { width: 16px; height: 16px; flex: none; margin: 0; }
+html:root:root .btn-sm > .ic { width: 16px; height: 16px; stroke-width: 1.9; }
+/* The drawer's open/close buttons only exist below 768px; the flex rule above must not revive them. */
+@media (min-width: 768px) { html:root:root :is(.icon-btn.only-sm, .sidebar .sidebar-close) { display: none; } }
+@media (max-width: 767px) { html:root:root .icon-btn.only-sm { display: inline-grid; } }
+
+/* ───────────── site-native dropdowns (nx-ui.js) ───────────── */
+.dd { position: relative; display: block; width: 100%; max-width: 100%; vertical-align: middle; }
+.dd-native, html:root:root select[data-dd] { position: absolute !important; inset: 0; width: 100% !important; height: 100% !important; opacity: 0; pointer-events: none; }
+html:root:root .dd .dd-btn {
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
+  min-height: 40px; padding: 0 10px 0 14px; border: 0; border-radius: var(--r-control);
+  background: var(--fill); color: var(--text-primary); font: inherit; font-size: 14px; font-weight: 500; text-align: start; cursor: pointer;
+  transition: background var(--t-fast) ease, box-shadow var(--t-fast) ease;
+}
+html:root:root[dir="rtl"] .dd .dd-btn { padding: 0 14px 0 10px; }
+html:root:root .dd .dd-btn:hover { background: var(--fill-2); }
+html:root:root .dd.open .dd-btn { background: var(--fill-2); box-shadow: none; }
+html:root:root .dd .dd-btn:focus-visible { outline: 0; box-shadow: none; background: var(--fill-2); }
+html:root:root .dd .dd-btn:disabled { opacity: .5; cursor: not-allowed; }
+.dd-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd.is-empty .dd-label { color: var(--nx-dim); }
+.dd-chev { width: 15px; height: 15px; flex: none; color: var(--nx-dim); transition: transform .16s ease; }
+.dd.open .dd-chev { transform: rotate(180deg); }
+.obs-bar .dd, .obs-filters .dd { width: auto; min-width: 150px; }
+.dd-menu {
+  position: fixed; z-index: 1000; margin: 0; padding: 6px; list-style: none; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--nx-panel); border: 0; border-radius: var(--r-menu); box-shadow: var(--nx-shadow-2);
+  animation: dd-in .1s ease-out;
+}
+@keyframes dd-in { from { opacity: 0; transform: translateY(-3px); } }
+.dd-opt { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 10px; color: var(--text-primary); font-size: 14px; line-height: 1.3; cursor: pointer; }
+.dd-opt.active { background: var(--accent-bg); }
+.dd-opt[aria-selected="true"] { font-weight: 600; }
+.dd-opt[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+.dd-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-hint { color: var(--nx-dim); font-size: 12px; white-space: nowrap; }
+.dd-check { width: 15px; height: 15px; flex: none; color: var(--accent); }
+.dd-group { padding: 8px 10px 4px; color: var(--nx-dim); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+html:root:root .dd-menu.is-sheet { left: 0 !important; right: 0 !important; top: auto !important; bottom: 0 !important; width: auto; max-height: 62vh !important; min-width: 0 !important; border-radius: var(--r-dialog) var(--r-dialog) 0 0; padding: 8px 8px calc(10px + env(safe-area-inset-bottom)); }
+html:root:root .dd-menu.is-sheet::before { content: ""; display: block; width: 36px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--nx-fg) 22%, transparent); margin: 2px auto 8px; }
+html:root:root .dd-menu.is-sheet .dd-opt { min-height: 48px; padding: 0 16px; font-size: 16px; }
+/* a menu opened from inside a modal lives in the same layer */
+.modal-backdrop ~ .dd-menu, #modal .dd-menu { z-index: 1100; }
+
+/* ───────────── site-native confirmation dialog ───────────── */
+dialog.nx-confirm {
+  width: min(420px, calc(100vw - 32px)); padding: 24px 24px 20px; border: 0; border-radius: var(--r-dialog);
+  background: var(--nx-panel); color: var(--text-primary); box-shadow: var(--nx-shadow-2), 0 30px 80px rgba(0, 0, 0, .3);
+  animation: nx-pop .18s cubic-bezier(.2, .8, .2, 1);
+}
+dialog.nx-confirm::backdrop { background: rgba(8, 14, 11, .55); backdrop-filter: blur(3px); animation: nx-fade .15s ease; }
+.nx-confirm p { margin: 0 0 22px; font-size: 16px; line-height: 1.55; }
+.nx-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.nx-confirm-actions .btn { min-height: 44px; padding: 0 20px; font-size: 14.5px; }
+html:root:root .nx-confirm-actions .btn-primary.danger { background: #b4342b; color: #fff; }
+html:root:root .nx-confirm-actions .btn-primary.danger:hover { background: #9c2a22; }
+html:root:root[data-theme="dark"] .nx-confirm-actions .btn-primary.danger { background: #c9453b; }
+html:root:root[data-theme="dark"] .nx-confirm-actions .btn-primary.danger:hover { background: #b73b32; }
+@keyframes nx-pop { from { opacity: 0; transform: translateY(8px) scale(.97); } }
+@keyframes nx-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { dialog.nx-confirm, dialog.nx-confirm::backdrop, .dd-menu { animation: none; } }
+
+/* ───────────── modal (htmx-loaded dialogs) ───────────── */
+html:root:root .modal-backdrop { background: rgba(8, 14, 11, .55); backdrop-filter: blur(3px); }
+html:root:root .modal { width: min(560px, 100%); padding: 28px 28px 24px; }
+html:root:root .modal-close { border: 0; background: var(--fill); border-radius: 10px; width: 36px; height: 36px; top: 16px; inset-inline-end: 16px; }
+html:root:root .modal-close:hover { background: var(--fill-2); }
+html:root:root #modal-body > h2 { padding-inline-end: 44px; font-size: 22px; margin: 0 0 6px; }
+html:root:root #modal-body > .sub { color: var(--nx-dim); font-size: 14px; line-height: 1.55; margin: 0 0 22px; }
+html:root:root #modal-body form > * + * { margin-top: 18px; }
+html:root:root #modal-body .field { display: grid; gap: 7px; }
+html:root:root #modal-body .field > label { margin: 0; }
+html:root:root #modal-body .field .hint { font-size: 12.5px; line-height: 1.5; margin: 0; }
+html:root:root #modal-body .form-actions, html:root:root #modal-body .modal-actions { display: flex; gap: 8px; justify-content: flex-end; padding-top: 6px; }
+html:root:root #modal-body .form-actions .btn, html:root:root #modal-body .modal-actions .btn { min-height: 42px; padding-inline: 18px; }
+@media (prefers-reduced-motion: no-preference) {
+  html:root:root .modal-backdrop:not([hidden]) .modal { animation: nx-pop .2s cubic-bezier(.2, .8, .2, 1); }
+}
+/* the wrapper inherits the select's own classes (selectbox, finput...): it is only a positioning box */
+html:root:root .dd { padding: 0; margin: 0; background: none; border: 0; box-shadow: none; min-height: 0; }
+
+/* A button beside a field is the field's height: a 32px button next to a 40px input looked undersized. */
+html:root:root .toolbar { align-items: center; }
+html:root:root .toolbar > :is(.btn, .btn-sm), html:root:root :is(form, .input-group, .obs-bar, .obs-filters):has(> input, > .search, > .field, > .dd) > :is(.btn, .btn-sm) { min-height: 40px; padding-inline: 16px; font-size: 13.5px; border-radius: var(--r-control); }
+html:root:root .toolbar > .btn-ghost { padding-inline: 12px; }
+
+/* Stat strips: separate cards in a grid (nx-master's .cards), not one slab cut by dividers with a
+   differently tinted first cell. Label small and dim, value large, footnote quiet. */
+html:root:root .stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px;
+  background: transparent; box-shadow: none; border-radius: 0; overflow: visible;
+}
+html:root:root .stats > .stat, html:root:root .stats > .stat + .stat, html:root:root[dir="rtl"] .stats > .stat + .stat {
+  background: var(--nx-panel); border-radius: var(--r-card); box-shadow: var(--nx-shadow-1);
+  padding: 18px 20px; min-width: 0;
+}
+html:root:root .stats > .stat:first-child { background: var(--nx-panel); }
+html:root:root .stat-l { font-size: 12px; font-weight: 600; letter-spacing: .04em; color: var(--nx-dim); margin-bottom: 10px; text-transform: uppercase; }
+html:root:root[dir="rtl"] .stat-l { text-transform: none; letter-spacing: 0; font-size: 13px; }
+html:root:root .stat-v { font-size: 28px; line-height: 1.15; }
+html:root:root .stat-v.stat-text, html:root:root .stat.is-unknown .stat-v { font-family: var(--sans); font-size: 15px; font-weight: 600; color: var(--nx-dim); line-height: 1.4; }
+html:root:root .stat-f { margin-top: 8px; font-size: 12.5px; color: var(--nx-dim); line-height: 1.45; }
+html:root:root .stat.is-bad .stat-v { color: var(--red); }
+/* inside a panel the strip is a tinted well of cards, one level down */
+html:root:root .ci-body .stats { background: transparent; }
+html:root:root .ci-body .stats > .stat { background: var(--container); box-shadow: none; }
+
+/* Stat strips, second pass: the separate dark cards looked heavy and shouted (uppercase labels, halo
+   shadows). A strip is now ONE panel, identical in surface to every other panel on the page, with
+   quiet cells: sentence-case label, value, footnote. No dividers, no tinted first cell. */
+html:root:root .stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0;
+  background: var(--nx-panel); box-shadow: var(--nx-shadow-1); border-radius: var(--r-card); overflow: hidden;
+}
+html:root:root .stats > .stat, html:root:root .stats > .stat + .stat, html:root:root[dir="rtl"] .stats > .stat + .stat,
+html:root:root .stats > .stat:first-child {
+  background: transparent; box-shadow: none; border-radius: 0; padding: 22px 24px;
+}
+html:root:root .stat-l { font-size: 13px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--nx-dim); margin-bottom: 8px; }
+html:root:root[dir="rtl"] .stat-l { font-size: 13.5px; }
+html:root:root .stat-v { font-size: 26px; font-weight: 600; letter-spacing: -.02em; color: var(--text-primary); }
+html:root:root .stat-v.stat-text, html:root:root .stat.is-unknown .stat-v { font-size: 15px; font-weight: 500; color: var(--nx-dim); letter-spacing: 0; }
+html:root:root .stat-f { margin-top: 6px; font-size: 12.5px; color: var(--nx-dim); }
+html:root:root .ci-body .stats { background: var(--container); box-shadow: none; }
+html:root:root .ci-body .stats > .stat { background: transparent; }
+
+/* stat strip: cells in one panel, separated by a soft solid divider (no gradients anywhere) */
+html:root:root .stats > .stat + .stat { box-shadow: inset 1px 0 0 color-mix(in srgb, var(--nx-fg) 9%, transparent); }
+html:root:root[dir="rtl"] .stats > .stat + .stat { box-shadow: inset -1px 0 0 color-mix(in srgb, var(--nx-fg) 9%, transparent); }
+
+/* Banner icons: the 16px / 1.5-stroke glyph looked thin and floated above the title's centre line.
+   18px with a 2px stroke, centred on the first line of text. */
+html:root:root :is(.banner, .callout) :is(.b-title, .callout-title) > .ic:first-child,
+html:root:root :is(.banner, .callout) > :is(p, div):has(> .ic:first-child) > .ic:first-child { width: 18px; height: 18px; stroke-width: 2; margin-top: 1.5px; }
+html:root:root .banner .b-title { font-size: 14px; line-height: 21px; font-weight: 600; }
+
+/* "Show details" disclosure: a proper small control, a real chevron, a contained code well. */
+html:root:root details.details { display: block; width: min(560px, 100%); margin: var(--s-3) auto 0; }
+html:root:root details.details > summary {
+  display: flex; width: fit-content; margin-inline: auto; align-items: center; gap: 6px;
+  min-height: 32px; padding: 0 12px 0 10px; border-radius: 10px; background: var(--fill);
+  color: var(--nx-dim); font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease;
+}
+html:root:root[dir="rtl"] details.details > summary { padding: 0 10px 0 12px; }
+html:root:root details.details > summary:hover { background: var(--fill-2); color: var(--text-primary); }
+html:root:root details.details > summary:focus-visible { outline: 0; box-shadow: none; background: var(--fill-2); color: var(--text-primary); }
+html:root:root details.details > summary::before {
+  content: ""; width: 7px; height: 7px; font-size: 0; border: solid currentColor; border-width: 0 2px 2px 0;
+  transform: translateY(-1.5px) rotate(45deg); transition: transform var(--t-fast) ease;
+}
+html:root:root details.details[open] > summary::before { transform: translateY(1px) rotate(-135deg); }
+html:root:root details.details pre {
+  margin: 10px 0 0; padding: 12px 14px; text-align: start; border-radius: var(--r-control);
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: 12.5px; line-height: 1.55;
+  background: var(--container);
+}
+html:root:root .empty details.details + :is(.btn, .empty-actions, a, button) { margin-top: var(--s-5); }
+html:root:root .empty > * + .btn, html:root:root .empty > * + .empty-actions { margin-top: var(--s-4); }
+
+/* ───────────── tooltips: the single floating .nx-tip (nx-ui.js); the old ::after boxes are retired ───────────── */
+html:root:root [data-tip]::after { content: none; display: none; }
+.nx-tip {
+  position: fixed; z-index: 1200; pointer-events: none; max-width: 260px; padding: 6px 10px; border-radius: 9px;
+  background: #1b2420; color: #f1f5f2; font: 500 12.5px/1.35 var(--sans); box-shadow: 0 6px 20px rgba(0, 0, 0, .28);
+  opacity: 0; transform: translateY(2px); transition: opacity .1s ease, transform .1s ease; overflow-wrap: anywhere;
+}
+.nx-tip.on { opacity: 1; transform: none; }
+html:root:root[data-theme="dark"] .nx-tip { background: #e9efea; color: #14201a; box-shadow: 0 6px 20px rgba(0, 0, 0, .5); }
+@media (prefers-reduced-motion: reduce) { .nx-tip { transition: none; transform: none; } }
+
+/* ───────────── banners that carry detail: icon on the first line, disclosure left-aligned ───────────── */
+html:root:root .banner > .ic:first-child { align-self: center; width: 24px; height: 24px; stroke-width: 1.9; margin-top: 0; flex: none; }
+html:root:root .banner:has(details[open]) > .ic:first-child { align-self: flex-start; margin-top: -1px; }
+html:root:root .banner .b-body { flex: 1; min-width: 0; }
+html:root:root .banner .b-body > .b-title { margin: 0; }
+html:root:root .banner .b-body > p:not(.b-title) { margin: 2px 0 0; color: var(--nx-dim); }
+html:root:root .banner .b-actions, html:root:root .banner > .btn { margin-inline-start: auto; align-self: center; flex: none; }
+html:root:root .banner:has(.b-body details[open]) .b-actions { align-self: flex-start; }
+html:root:root .banner details.details { width: 100%; margin: 10px 0 0; }
+html:root:root .banner details.details > summary { margin-inline: 0; }
+html:root:root .banner details.details pre { max-width: 100%; background: color-mix(in srgb, var(--nx-fg) 7%, transparent); }
+html:root:root .banner .b-raw { background: color-mix(in srgb, var(--nx-fg) 7%, transparent); border: 0; border-radius: var(--r-control); padding: 10px 12px; margin: 8px 0 0; }
+
+/* ───────────── settings: a connection panel that reads as one thing ───────────── */
+html:root:root .panel-body > .sub { font-size: 14px; line-height: 1.55; color: var(--nx-dim); margin: 0 0 12px; max-width: 70ch; }
+html:root:root .panel-body > .req { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 18px; padding: 10px 12px; border-radius: var(--r-control); background: var(--fill); color: var(--nx-dim); font-size: 12.5px; line-height: 1.5; }
+html:root:root .panel-body > .req .ic { width: 15px; height: 15px; margin-top: 1px; color: var(--nx-dim); }
+html:root:root .kv { background: var(--container); border-radius: var(--r-control); padding: 4px 16px; margin-bottom: 8px; }
+html:root:root .kv-row { padding: 11px 0; gap: 16px; align-items: baseline; border-bottom: 1px solid color-mix(in srgb, var(--nx-fg) 7%, transparent); }
+html:root:root .kv-row:last-child { border-bottom: 0; }
+html:root:root .kv-row .k { min-width: 140px; color: var(--nx-dim); font-size: 13px; font-weight: 500; }
+html:root:root .kv-row .v { font-size: 13.5px; color: var(--text-primary); }
+html:root:root .kv-row .v.mono { font-size: 13px; }
+html:root:root .kv-row .v .muted { color: var(--nx-dim); }
+html:root:root .panel-body .form.mt-16 { margin-top: 22px; padding-top: 22px; box-shadow: inset 0 1px 0 color-mix(in srgb, var(--nx-fg) 8%, transparent); }
+html:root:root .form-grid { gap: 16px 20px; }
+html:root:root .field .hint { font-size: 12.5px; color: var(--nx-dim); line-height: 1.5; }
+html:root:root .check { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+html:root:root .form-actions { padding-top: 4px; }
+
+/* Title-less banner (requirement notes): the sentence is the content, full width, regular weight. */
+html:root:root .banner .b-body > p.b-solo { margin: 0; color: var(--nx-fg); }
+html:root:root .panel-body > .banner { max-width: none; margin: 0 0 var(--s-4); }
+html:root:root .banner.info { background: var(--fill, color-mix(in srgb, var(--nx-fg) 6%, transparent)); }
+html:root:root .banner.info .ic, html:root:root .banner.info .b-title { color: var(--nx-dim); }
+html:root:root .banner:not(:has(.b-title)) { padding-block: 12px; }
+html:root:root .banner:not(:has(.b-title)) > .ic:first-child { width: 20px; height: 20px; }
+html:root:root .banner .b-body > p.b-solo { font-size: var(--fs-sm); }
+
+/* ───────────── checkboxes and radios: drawn, not the browser's boxed native control ───────────── */
+html:root:root :is(input[type=checkbox], input[type=radio]) {
+  appearance: none; -webkit-appearance: none; flex: none; position: relative; cursor: pointer;
+  width: 20px; height: 20px; margin: 0; padding: 0; border: 0; background: var(--fill-2);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--nx-fg) 28%, transparent);
+  transition: background-color .15s, box-shadow .15s;
+}
+html:root:root input[type=checkbox] { border-radius: 6px; }
+html:root:root input[type=radio] { border-radius: 50%; }
+html:root:root :is(input[type=checkbox], input[type=radio]):hover { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--nx-fg) 45%, transparent); }
+html:root:root :is(input[type=checkbox], input[type=radio]):checked { background: var(--accent); box-shadow: none; }
+html:root:root input[type=checkbox]:checked::after {
+  content: ""; position: absolute; inset: 0; background: var(--accent-fg);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.5 10.5l3 3 6-7'/%3E%3C/svg%3E") center / 100% no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5.5 10.5l3 3 6-7'/%3E%3C/svg%3E") center / 100% no-repeat;
+}
+html:root:root input[type=radio]:checked::after { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: var(--accent-fg); }
+html:root:root :is(input[type=checkbox], input[type=radio]):focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; }
+html:root:root :is(input[type=checkbox], input[type=radio]):disabled { opacity: .45; cursor: not-allowed; }
+
+/* ───────────── code blocks: copy button in the corner ───────────── */
+html:root:root .code-wrap { position: relative; }
+html:root:root .code-wrap > pre { margin: 0; padding-inline-end: 48px; }
+html:root:root .code-copy {
+  position: absolute; top: 8px; inset-inline-end: 8px; display: inline-grid; place-items: center;
+  width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--r-control); cursor: pointer;
+  background: transparent; color: var(--nx-dim); opacity: .75; transition: background-color .15s, color .15s, opacity .15s;
+}
+html:root:root .code-copy .ic { width: 16px; height: 16px; }
+html:root:root .code-wrap:hover .code-copy, html:root:root .code-copy:focus-visible, html:root:root .code-copy.done { opacity: 1; }
+html:root:root .code-copy:hover { background: var(--fill-2); color: var(--nx-fg); }
+html:root:root .code-copy.done { color: var(--accent); }
+
+/* ───────────── form actions sit at the end of the row; file picker matches the other fields ───────────── */
+html:root:root .form-actions { justify-content: flex-end; }
+html:root:root .form-actions .spacer { margin-inline-start: 0; margin-inline-end: auto; }
+html:root:root input[type=file] {
+  display: block; width: 100%; box-sizing: border-box; height: 44px; padding: 6px 12px 6px 6px; border: 0; border-radius: var(--r-control);
+  background: var(--fill); color: var(--nx-dim); font: inherit; font-size: 14px; cursor: pointer; line-height: 32px;
+  overflow: hidden; text-overflow: ellipsis; transition: background-color .15s;
+}
+html:root:root input[type=file]:hover { background: var(--fill-2); }
+html:root:root input[type=file]::file-selector-button {
+  height: 32px; margin: 0 12px 0 0; padding: 0 14px; line-height: 32px; vertical-align: top; border: 0; border-radius: var(--r-control);
+  background: var(--fill-2); color: var(--nx-fg); font: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer;
+  margin-inline-end: 12px; transition: background-color .15s;
+}
+html:root:root input[type=file]:hover::file-selector-button { background: color-mix(in srgb, var(--nx-fg) 16%, transparent); }
+
+/* ───────────── quick-link rows (overview workspace): rounded rows with a soft hover, no hairlines ───────────── */
+html:root:root .workspace-links { gap: 4px; }
+html:root:root .workspace-link { border: 0; border-radius: var(--r-control); padding: 12px 14px; }
+html:root:root .workspace-link:first-child { border-top: 0; }
+html:root:root .workspace-link:hover, html:root:root .workspace-link:focus-visible { background: var(--fill-2); }
+html:root:root .workspace-link { transition: background-color .15s; }
+
+/* A hint inside an action row reads at the start, the buttons stay at the end. */
+html:root:root .form-actions > :is(.hint, .muted, .sub) { order: -1; margin-inline-end: auto; text-align: start; font-size: 13.5px; color: var(--nx-dim); }
+html:root:root .form-actions { flex-wrap: wrap; row-gap: 10px; }
+
+/* Keyboard focus on list-like controls reads as the same soft fill as hover, not a ring. */
+html:root:root :is(.nav-item, .btn-ghost, .icon-btn, .tab, .seg a, .workspace-link, .preference-control, .menu-item):focus-visible { outline: 0; background: var(--fill-2); }
+html:root:root .nav-item.is-active:focus-visible { background: var(--accent-bg); }
+
+/* A pre inside a details block (error text) is left-aligned code even when the parent is centred. */
+html:root:root .code-wrap > pre { text-align: start; }
+html:root:root details.details .code-wrap { margin-top: 10px; }
+html:root:root details.details .code-wrap > pre { margin: 0; }
+
+/* Empty states: message, then the action, then the technical detail as a quiet disclosure underneath. */
+html:root:root .empty > details.details { width: 100%; max-width: 560px; margin: 18px auto 0; text-align: start; }
+html:root:root .empty > details.details > summary { margin-inline: auto; background: transparent; color: var(--nx-dim); }
+html:root:root .empty > details.details > summary:hover { background: var(--fill-2); }
+html:root:root .empty > details.details[open] > summary { margin-bottom: 0; }
+html:root:root .empty .code-wrap > pre { text-align: start; font-size: 12.5px; }
+html:root:root .empty .empty-actions { margin-top: 18px; }
+html:root:root .empty-actions .btn-ghost { background: var(--fill-2); color: var(--nx-fg); }
+html:root:root .empty-actions .btn-ghost:hover { background: color-mix(in srgb, var(--nx-fg) 16%, transparent); }
+html:root:root .empty > details.details > summary { font-size: 13px; }
+
+/* Page head: title block takes its own line when many actions are present; actions wrap and stay compact. */
+html:root:root .page-head { flex-wrap: wrap; align-items: flex-start; row-gap: 14px; }
+html:root:root .page-head .ph-text { flex: 1 1 280px; min-width: 0; }
+html:root:root .page-head .ph-actions { flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+html:root:root .page-head .ph-actions form { margin: 0; display: inline-flex; }
+html:root:root .stack-move { display: inline-flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+html:root:root .stack-move .input { width: 170px; min-height: 34px; height: 34px; }
+html:root:root .page-head h1 .mono { font-size: inherit; font-weight: inherit; }
+
+/* Revision history: aligned action slots, softer current row, hint set apart from the list. */
+html:root:root .rev { border-radius: var(--r-control); padding-inline: 12px; gap: 12px; }
+html:root:root .rev.is-current { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+html:root:root .rev-main { display: flex; align-items: center; gap: 10px; }
+html:root:root .rev-actions { min-width: 96px; justify-content: flex-end; }
+html:root:root .rev-actions form { margin: 0; }
+html:root:root .rev-list + .sub { margin: 16px 0 0; }
+/* Tables: identifiers never break mid-word; the wrapper scrolls instead. */
+html:root:root .table td.mono, html:root:root .table td .mono, html:root:root .table td.nowrap { white-space: nowrap; word-break: normal; overflow-wrap: normal; }
+html:root:root .table th { white-space: nowrap; }
+html:root:root .table td .mono.trunc { display: inline-block; max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+
+/* Observability service rows: the state pill ("One-shot · outcome unknown") is wider than its old fixed track and ran under the Logs button. */
+html:root:root .obs-svc { grid-template-columns: minmax(0, 1fr) 72px minmax(150px, max-content) max-content; column-gap: 16px; }
+html:root:root .obs-svc-state .pill { white-space: nowrap; }
+html:root:root .obs-svc-act { justify-self: end; }
+@media (max-width: 767px) { html:root:root .obs-svc { grid-template-columns: minmax(0, 1fr) auto; } }
+html:root:root .row-actions { display: inline-flex; gap: 2px; justify-content: flex-end; flex-wrap: nowrap; }
+html:root:root .row-actions form { margin: 0; display: inline-flex; }
+html:root:root .row-actions .btn-sm:has(> .sr-only) { min-width: 36px; width: 36px; padding-inline: 0; }
+html:root:root .row-actions { gap: 6px; }
+html:root:root .table td .mono.trunc { max-width: 200px; }
+html:root:root .table :is(th, td) { padding-inline: 12px; }
+html:root:root .table :is(th, td):first-child { padding-inline-start: 24px; }
+html:root:root .table :is(th, td):last-child { padding-inline-end: 16px; }
+html:root:root .cell-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+html:root:root .overview-stats .stat-lead::before { content: none; display: none; }
+html:root:root .table :is(th, td).col-reps { text-align: start; white-space: nowrap; }
+html:root:root .col-reps .reps-n { display: inline-block; min-width: 3.2em; margin-inline-end: 8px; }
+/* Row hover: neutral and quiet (no green wash), rounded at the row ends so it doesn't read as a hard slab. */
+html:root:root .table tbody tr:hover td { background: color-mix(in srgb, var(--nx-fg) 3.5%, transparent); }
+html:root:root .table tbody tr:hover td:first-child { border-start-start-radius: 12px; border-end-start-radius: 12px; }
+html:root:root .table tbody tr:hover td:last-child { border-start-end-radius: 12px; border-end-end-radius: 12px; }
+html:root:root .table { border-collapse: separate; border-spacing: 0; }
+/* KPI strip with a variable number of tiles: wrap, and let the last row stretch instead of leaving one orphan tile. */
+html:root:root .stats.obs-kpis { display: flex; flex-wrap: wrap; }
+html:root:root .stats.obs-kpis > .stat { flex: 1 1 150px; }
+/* Error rows: tint instead of a coloured edge stripe (which also nudged the row's text sideways). */
+html:root:root .obs-trace.is-error { border-inline-start: 0; background: color-mix(in srgb, var(--red) 6%, transparent); }
+html:root:root .nodestat-table tr.is-hot td:first-child { border-inline-start: 0; }
+html:root:root .nodestat-table tr.is-hot td { background: color-mix(in srgb, var(--amber) 6%, transparent); }
+/* Text-field focus: a thin, softer ring (the 3px solid one read as a heavy green frame). */
+html:root:root :is(input:not([type=checkbox]):not([type=radio]), select, textarea):focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 0;
+}
+html:root:root .dd-menu.is-combo { max-width: calc(100vw - 16px); }
+html:root:root .dd-menu.is-combo .dd-opt { font-size: 13.5px; }
+/* Tab bars scroll sideways on narrow screens; that made overflow-y compute to auto, and the active underline's
+   1-2px overhang then drew a tiny vertical scrollbar (stray up/down arrows at the right end). */
+html:root:root .tabs { overflow-y: hidden; scrollbar-width: none; }
+html:root:root .tabs::-webkit-scrollbar { display: none; }
+/* Scrollbars everywhere: thin pill, no arrow buttons.
+   scrollbar-width is not inherited, so setting it on <html> alone left every inner scroller (panels, menus, code
+   blocks) on the browser's thick default with arrows. Chromium/Safari ignore ::-webkit-scrollbar (and its button
+   rule) whenever the standard properties are set, so those engines get the webkit pseudo-elements only and
+   Firefox gets the standard ones. */
+html:root:root * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--nx-fg) 25%, transparent) transparent; }
+@supports selector(::-webkit-scrollbar) {
+  html:root:root, html:root:root * { scrollbar-width: auto; scrollbar-color: auto; }
+  html:root:root *::-webkit-scrollbar { width: 11px; height: 11px; background: transparent; }
+  html:root:root *::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+  html:root:root *::-webkit-scrollbar-corner { background: transparent; }
+}
+/* Node health: each node is its own inset card, and its metrics are divided, so three columns of
+   stacked charts don't read as one undifferentiated field. */
+html:root:root .obs-nodes { gap: 16px; }
+html:root:root .obs-node { background: var(--fill); border: 0; border-radius: var(--r-card); padding: 18px 20px 20px; }
+html:root:root .obs-node header { padding-bottom: 14px; margin-bottom: 4px; box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--nx-fg) 8%, transparent); }
+html:root:root .obs-series { gap: 0; }
+html:root:root .obs-series > div { padding: 14px 0; gap: 4px; }
+html:root:root .obs-series > div + div { box-shadow: inset 0 1px 0 color-mix(in srgb, var(--nx-fg) 7%, transparent); }
+html:root:root .obs-series > div:last-child { padding-bottom: 0; }
+html:root:root .obs-node > p { margin: 8px 0 0; }
+/* The chart footnote sat right under the node cards; give it room and keep it on the cards' left edge. */
+html:root:root .panel-body > .obs-note { margin: 18px 0 0; padding-inline: 4px; }
+html:root:root .obs-node > p { margin: 10px 0 0; line-height: 1.5; }
+/* Overview KPI strip: up to four tiles per row, the last row stretching to fill it. 1px gaps over a tinted container draw the
+   dividers between rows as well as columns (inset side lines only ever separated tiles within a row). */
+html:root:root .stats.obs-kpis {
+  display: flex; flex-wrap: wrap; gap: 1px; overflow: hidden; border-radius: var(--r-card);
+  background: color-mix(in srgb, var(--nx-fg) 9%, var(--nx-panel));
+}
+html:root:root .stats.obs-kpis > .stat, html:root:root .stats.obs-kpis > .stat + .stat, html:root:root[dir="rtl"] .stats.obs-kpis > .stat + .stat {
+  flex: 1 1 250px; border-radius: 0; box-shadow: none; background: var(--nx-panel); padding: 18px 22px;
+}
+/* Language / theme toggles: compact pills (touch screens keep the 44px target). */
+html:root:root .preferences { gap: 6px; }
+html:root:root .preference-control { min-height: 32px; padding: 0 11px; font-size: 13px; gap: 6px; border: 0; border-radius: 10px; background: var(--fill); }
+html:root:root .preference-control .ic { width: 15px; height: 15px; }
+@media (pointer: coarse) { html:root:root .preference-control { min-height: 44px; padding-inline: 14px; } }
+
+/* Key/value rows: inline values (pills, text, copy button) sit on one baseline with real gaps; notes wrap beneath. */
+html:root:root .kv-row .v { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
+html:root:root .kv-row .v > .btn { margin-inline-start: -4px; }
+html:root:root .kv-row .v .kv-note { flex-basis: 100%; margin: 2px 0 0; color: var(--nx-dim); font-size: 13px; line-height: 1.5; max-width: none; }
+html:root:root .kv-row .v.iso, html:root:root .kv-row .v.mono { display: block; }
+/* An expander that lives in a panel or table cell is left-aligned and full width; the centred 560px form is for empty states and banners. */
+html:root:root .panel-body > details.details, html:root:root td details.details { width: 100%; margin: 14px 0 0; }
+html:root:root td details.details { margin-top: 6px; }
+html:root:root .panel-body > details.details > summary, html:root:root td details.details > summary { margin-inline: 0; }
+html:root:root .panel-body > details.details[open] > summary { margin-bottom: 10px; }
+html:root:root .panel-body > details.details > p.muted { margin: 4px 4px 0; max-width: 70ch; line-height: 1.5; }
+html:root:root .kv-row .v { flex: 1 1 0; }
+/* Grid-built "tables" (container resources, logs) take the real table header look: no full-bleed grey band. */
+html:root:root :is(.obs-res-head, .obs-log-head) {
+  background: transparent; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--nx-dim);
+}
+html:root[dir="rtl"]:root :is(.obs-res-head, .obs-log-head) { text-transform: none; letter-spacing: 0; font-size: 13px; }
+html:root:root .obs-res-head { padding-block: 14px 8px; }
+html:root:root .obs-res-row { padding-block: 14px; }
+html:root:root .obs-res-row:hover { background: color-mix(in srgb, var(--nx-fg) 3.5%, transparent); }
+
+/* ---- Settings page rhythm ----
+   Every settings panel body is one vertical stack with a single gap, so a note
+   can never sit flush against the button or table above it. */
+html:root:root .panel[id^="sect-"] > .panel-head + .panel-body { padding-top: 4px; }
+html:root:root .panel[id^="sect-"] > .panel-body { display: flex; flex-direction: column; gap: 16px; }
+html:root:root .panel[id^="sect-"] > .panel-body > * { margin-block: 0; }
+html:root:root .panel[id^="sect-"] > .panel-body > .sub { max-width: 80ch; }
+html:root:root .panel[id^="sect-"] .label { margin: 8px 0 -8px; font-size: 12.5px; color: var(--nx-dim); }
+html:root:root .panel[id^="sect-"] .subhead { margin-top: 12px; padding-top: 20px; box-shadow: inset 0 1px 0 color-mix(in srgb, var(--nx-fg) 8%, transparent); }
+html:root:root .panel[id^="sect-"] .subhead h3 { margin: 0 0 4px; }
+html:root:root .panel[id^="sect-"] .subhead .sub { margin: 0; max-width: 80ch; }
+html:root:root .panel[id^="sect-"] .form { display: flex; flex-direction: column; gap: 18px; }
+html:root:root .panel[id^="sect-"] .form.mt-16 { margin-top: 4px; }
+html:root:root .panel[id^="sect-"] .field { display: flex; flex-direction: column; gap: 6px; }
+html:root:root .panel[id^="sect-"] .form-grid { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); align-items: start; }
+html:root:root .panel[id^="sect-"] .form-actions { padding-top: 0; }
+html:root:root .panel[id^="sect-"] .check { align-items: flex-start; line-height: 1.5; }
+html:root:root .panel[id^="sect-"] .check input { margin-top: 3px; flex: none; }
+html:root:root .panel[id^="sect-"] .kv + p.muted.mono { margin-top: -4px; }
+html:root:root .panel[id^="sect-"] .panel-body > p.muted { max-width: 80ch; line-height: 1.55; font-size: 13.5px; }
+html:root:root #sect-apply .action-bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+html:root:root .panel[id^="sect-"] .field { margin: 0; }
+html:root:root .panel[id^="sect-"] .form-grid > .field { margin: 0; }
+/* checkbox + its explanation: the hint belongs to the box above it */
+html:root:root .panel[id^="sect-"] > .panel-body > .hint { font-size: 12.5px; line-height: 1.5; color: var(--nx-dim); max-width: 80ch; margin: -10px 0 0; padding-inline-start: 30px; }
+html:root:root .panel[id^="sect-"] > .panel-body > .check.mt-16 { margin-top: 0; }
+html:root:root .panel[id^="sect-"] .form-grid.mt-16 { margin-top: 4px; }
+html:root:root .panel[id^="sect-"] > .panel-body > .check + .form-grid, html:root:root .panel[id^="sect-"] > .panel-body > .hint + .form-grid { margin-top: 8px; }
+html:root:root .panel[id^="sect-"] .pills { display: flex; flex-wrap: wrap; gap: 8px; }
+html:root:root .panel[id^="sect-"] .form-grid { gap: 26px 20px; }
+/* Advanced: a collapsed panel whose summary reads as a normal panel head */
+html:root:root #sect-advanced > details.panel-details { background: none; border: 0; box-shadow: none; border-radius: 0; padding: 0; margin: 0; }
+html:root:root #sect-advanced > details > summary.panel-head { display: flex; flex-direction: row-reverse; justify-content: space-between; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 20px 24px; margin: 0; border-radius: var(--r-panel, 16px); background: none; color: var(--text-primary); font-size: 16px; list-style: none; }
+html:root:root #sect-advanced > details > summary.panel-head:hover { background: var(--fill); }
+html:root:root #sect-advanced > details > summary.panel-head h2 { margin: 0; font-size: inherit; font-weight: 600; color: inherit; }
+html:root:root #sect-advanced > details > summary.panel-head::before { color: var(--nx-dim); }
+html:root:root #sect-advanced .panel-body { display: flex; flex-direction: column; gap: 16px; padding-top: 4px; }
+html:root:root #view > p.sub:last-child { margin: 20px 4px 0; font-size: 13px; color: var(--nx-dim); max-width: 80ch; }
+html:root:root #sect-advanced > details > summary.panel-head { max-width: none; box-sizing: border-box; margin-inline: 0; inline-size: 100%; }
+html:root:root #sect-advanced > details.panel-details { width: 100%; max-width: none; }
+/* mobile: the sidebar is an off-canvas drawer; the desktop sticky/shadow rules above must not apply */
+@media (max-width: 767px) {
+  html:root:root .sidebar { position: fixed; transform: translateX(-100%); box-shadow: none; }
+  html:root:root[dir="rtl"] .sidebar { transform: translateX(100%); }
+  html:root:root body.nav-open .sidebar, html:root:root .sidebar.is-open { transform: none; box-shadow: var(--shadow-overlay); }
+}
+/* mobile: these containers stack in a column, so flex-basis would become a height */
+@media (max-width: 767px) {
+  html:root:root .ph-text { flex: 0 0 auto; }
+  html:root:root .ph-actions { justify-content: flex-start; }
+  html:root:root .kv-row .v { flex: 0 0 auto; min-width: 0; }
+  html:root:root .kv-row .v.trunc { max-width: 100%; }
+}
+/* ---- mobile dock: four destinations + Menu, a floating rounded bar ---- */
+@media (max-width: 767px) {
+  html:root:root .tabbar {
+    inset-inline: 12px; inset-block-end: calc(10px + env(safe-area-inset-bottom, 0px));
+    padding: 6px; gap: 2px; border-radius: 22px; background: var(--nx-panel);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--nx-fg) 7%, transparent), 0 10px 30px rgba(0, 0, 0, .28);
+  }
+  html:root:root .tabbar a, html:root:root .tabbar button {
+    min-height: 52px; padding: 7px 2px; gap: 3px; border-radius: 16px; font-size: 11px; font-weight: 600; line-height: 1.1;
+    color: var(--nx-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; justify-content: center;
+    transition: background var(--t-fast) ease, color var(--t-fast) ease;
+  }
+  html:root:root .tabbar a.is-active { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  html:root:root .tabbar a:active, html:root:root .tabbar button:active { background: var(--fill-2); }
+  html:root:root .tabbar .ic { width: 21px; height: 21px; }
+  html:root:root .tabbar [data-tip]::after, html:root:root .tabbar [data-tip]::before { content: none; }
+  html:root:root .page-head .ph-text { flex: 0 0 auto; }
+  html:root:root .content, html:root:root .main { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+}
+@media (max-width: 767px) {
+  html:root:root .tabbar a, html:root:root .tabbar button { font-size: 10.5px; font-weight: 500; letter-spacing: 0; padding-inline: 0; text-overflow: clip; }
+  html:root:root .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; }
+  html:root:root .stats > .stat { padding: 16px; min-width: 0; }
+  html:root:root .stats > .stat .stat-sub, html:root:root .stats > .stat p { font-size: 12px; line-height: 1.4; }
+}
+/* mobile key/value rows: label left, value right, instead of a tall stack */
+@media (max-width: 767px) {
+  html:root:root .kv-row { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 16px; padding-block: 10px; }
+  html:root:root .kv-row .k { flex: 0 0 34%; max-width: 34%; min-width: 0; }
+  html:root:root .kv-row .v { flex: 1 1 0; min-width: 0; justify-content: flex-end; text-align: end; }
+  html:root:root .kv-row .v.trunc { max-width: none; white-space: normal; overflow-wrap: anywhere; }
+  html:root:root .kv-row .kv-note { text-align: end; }
+  html:root:root .only-sm > .row-actions, html:root:root .only-sm .row-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 12px; }
+}
+@media (max-width: 767px) {
+  html:root:root .only-sm .row-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding-top: 12px; }
+  html:root:root .only-sm .row-actions form { display: contents; }
+  html:root:root .only-sm .row-actions .btn { width: 100%; justify-content: center; background: var(--fill); }
+  html:root:root .only-sm .row-actions .btn-danger { background: color-mix(in srgb, var(--bad, #e5484d) 14%, transparent); }
+  html:root:root .only-sm .row-actions .btn:only-child { grid-column: 1 / -1; }
+}
+@media (max-width: 767px) {
+  /* the sticky save/primary bar must clear the floating dock */
+  html:root:root .action-bar { inset-block-end: calc(84px + env(safe-area-inset-bottom, 0px)); margin-inline: 0; border-radius: 16px; background: var(--nx-panel); border-top: 0; }
+  /* per-row action sets are not page-level actions: keep them in the card, as an equal grid */
+  html:root:root .only-sm .action-bar { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 12px 0 0; margin: 12px 0 0; background: none; border-radius: 0; box-shadow: inset 0 1px 0 color-mix(in srgb, var(--nx-fg) 7%, transparent); }
+  html:root:root .only-sm .action-bar form { display: contents; }
+  html:root:root .only-sm .action-bar .btn { width: 100%; justify-content: center; background: var(--fill); }
+  html:root:root .only-sm .action-bar .btn-danger { background: color-mix(in srgb, var(--bad, #e5484d) 14%, transparent); }
+}
+@media (max-width: 767px) {
+  html:root:root .kv-row .k.mono { flex: 1 1 auto; max-width: 70%; overflow-wrap: anywhere; }
+  html:root:root .kv-row .k.mono + .v { flex: 0 0 auto; }
+}
+/* mobile: no scrollbars at all (page, drawer, tab strips); touch scrolling is unaffected */
+@media (max-width: 767px), (pointer: coarse) {
+  html:root:root, html:root:root * { scrollbar-width: none; -ms-overflow-style: none; }
+  html:root:root *::-webkit-scrollbar, html:root:root::-webkit-scrollbar { width: 0; height: 0; display: none; }
+}
+/* mobile save bar: a compact floating card that sits just above the dock */
+@media (max-width: 767px) {
+  html:root:root .savebar {
+    inset-block-end: calc(88px + env(safe-area-inset-bottom, 0px)); margin-inline: 0; margin-top: 16px;
+    flex-wrap: nowrap; gap: 12px; padding: 10px 10px 10px 16px; border: 0; border-radius: 18px;
+    background: var(--nx-panel); box-shadow: 0 0 0 1px color-mix(in srgb, var(--nx-fg) 7%, transparent), 0 10px 30px rgba(0, 0, 0, .28);
+  }
+  html:root:root .savebar[data-save-state="dirty"] { box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber, #e5a23c) 55%, transparent), 0 10px 30px rgba(0, 0, 0, .28); }
+  html:root:root .savebar-text { flex: 1 1 auto; }
+  html:root:root .savebar-scope { display: none; }
+  html:root:root .savebar .btn { flex: none; margin-inline-start: auto; min-height: 40px; padding-inline: 16px; }
+  /* keep the end of the form clear of both floating layers */
+  html:root:root #cluster-settings-form { padding-bottom: 8px; }
+}
+/* drawer header: brand left, a small quiet close button right */
+@media (max-width: 767px) {
+  html:root:root .sidebar-head { justify-content: space-between; gap: 12px; padding-inline: 16px 12px; }
+  html:root:root .sidebar-head .brand { min-width: 0; }
+  html:root:root .sidebar .sidebar-close {
+    flex: none; margin-inline-start: auto; width: 36px; height: 36px; min-width: 0; min-height: 0; padding: 0;
+    display: inline-grid; place-items: center; border: 0; border-radius: 12px; background: transparent; color: var(--nx-dim);
+  }
+  html:root:root .sidebar .sidebar-close:hover, html:root:root .sidebar .sidebar-close:active { background: var(--fill); color: var(--text-primary); }
+  html:root:root .sidebar .sidebar-close .ic { width: 18px; height: 18px; }
+}
+@media (max-width: 767px) {
+  html:root:root body:has(.sidebar.is-open) .tabbar, html:root:root body.nav-open .tabbar { visibility: hidden; opacity: 0; }
+}
+
+/* Give each node a clear identity before its details on small screens. */
+@media (max-width: 767px) {
+  html:root:root .panel > .only-sm > .node-card { padding: 16px; }
+  html:root:root .node-card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid color-mix(in srgb, var(--nx-fg) 9%, transparent); }
+  html:root:root .node-card-head strong { min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+  html:root:root .node-card-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+  html:root:root .node-card .kv-row { padding-block: 8px; }
+  html:root:root .node-card-actions { margin-top: 4px; }
+}
+@media (max-width: 767px) {
+  html:root:root .only-sm .node-card-actions { display: flex; flex-wrap: wrap; }
+  html:root:root .only-sm .node-card-actions .btn { flex: 1 1 max-content; width: auto; }
+}
+
+@media (max-width: 767px) {
+  html:root:root .panel > .only-sm > .stack-card { padding: 16px; }
+  html:root:root .stack-card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid color-mix(in srgb, var(--nx-fg) 9%, transparent); }
+  html:root:root .stack-card-name { min-width: 0; overflow-wrap: anywhere; font-size: 14px; font-weight: 700; }
+  html:root:root .stack-card-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+  html:root:root .stack-card .kv-row { padding-block: 8px; }
+  html:root:root .stack-card .kv-row .v .trunc { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  html:root:root .only-sm .stack-card-actions { margin-top: 0; box-shadow: none; }
+  html:root:root .only-sm .stack-card-actions .btn { min-width: 0; white-space: normal; text-align: center; }
+}
+
+/* Console chrome: a steady navigation rail and a light contextual toolbar. */
+html:root:root .sidebar {
+  background: var(--nx-panel);
+  border-inline-end: 1px solid color-mix(in srgb, var(--nx-fg) 9%, transparent);
+  box-shadow: none;
+}
+html:root:root[data-theme="dark"] .sidebar,
+html:root:root[dir="rtl"] .sidebar,
+html:root:root[data-theme="dark"][dir="rtl"] .sidebar { box-shadow: none; }
+html:root:root .sidebar-head {
+  height: 76px; padding-inline: 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--nx-fg) 8%, transparent);
+}
+html:root:root .sidebar .logo-mark { box-shadow: none; }
+html:root:root .nav { gap: 2px; padding: 20px 12px; }
+html:root:root .nav-label { padding: 20px 12px 8px; color: var(--nx-dim); font-size: 10px; letter-spacing: .1em; }
+html:root:root .nav-label:first-child { padding-top: 0; }
+html:root:root .nav-item { min-height: 37px; gap: 12px; border-radius: 8px; padding-inline: 12px; }
+html:root:root .nav-item .ic { width: 17px; height: 17px; }
+html:root:root .nav-item.is-active { color: var(--text-primary); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+html:root:root .nav-item.is-active::before { content: ""; position: absolute; inset-inline-start: 0; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: var(--accent); }
+html:root:root .sidebar-foot { padding: 14px 12px; border-top: 1px solid color-mix(in srgb, var(--nx-fg) 8%, transparent); }
+html:root:root .foot-row { min-height: 42px; padding: 0 4px; }
+html:root:root .who-name { color: var(--text-primary); font-weight: 600; }
+html:root:root .sidebar-foot .btn { color: var(--nx-dim); }
+html:root:root .topbar {
+  height: 76px; background: var(--bg-body); box-shadow: none; clip-path: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--nx-fg) 8%, transparent);
+  padding-inline: 40px;
+}
+html:root:root[data-theme="dark"] .topbar { box-shadow: none; }
+html:root:root .crumbs { gap: 12px; font-size: 13px; }
+html:root:root .crumbs strong { font-size: 14px; font-weight: 600; }
+html:root:root .topbar-end .preferences { gap: 4px; padding: 4px; border: 1px solid color-mix(in srgb, var(--nx-fg) 8%, transparent); border-radius: 12px; }
+html:root:root .topbar-end .preference-control { background: transparent; }
+html:root:root .topbar-end .preference-control:hover { background: var(--fill); }
+@media (min-width: 768px) and (max-width: 1023px) {
+  html:root:root .sidebar-head { padding-inline: 0; }
+  html:root:root .nav { padding-inline: 8px; }
+  html:root:root .nav-item { padding-inline: 0; }
+  html:root:root .topbar { padding-inline: 20px; }
+}
+@media (max-width: 767px) {
+  html:root:root .sidebar-head { height: 72px; padding-inline: 16px 12px; }
+  html:root:root .nav-item { min-height: 44px; }
+  html:root:root .topbar { height: 64px; padding-inline: 12px; }
+  html:root:root .topbar-end .preferences { padding: 2px; }
+}

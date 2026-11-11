@@ -1,117 +1,37 @@
 {{define "backups"}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "nav.backups"}}</h1>
-    <p class="sub">{{if .Name}}<span class="mono iso" dir="ltr">{{.Name}}</span> · {{end}}{{if .RunsKnown}}{{T "backups.sub"}}{{else}}{{T "backups.sub_unknown"}}{{end}}</p>
-  </div>
-  <div class="ph-actions">
-    <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
-      <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this" data-tip="{{T "backups.action_now"}}">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
-    </form>
-    <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "err.retry_hint"}}" aria-label="{{T "common.refresh"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "nav.backups") "Sub" (partial "backups_sub" .) "Refresh" "/web/backups" "Actions" (partial "backups_actions" .))}}
 
 {{if .ErrKey}}
-<div class="banner bad">
-  <div class="b-body">
-    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
-    <p>{{T "err.banner_body"}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-  <div class="b-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/backups")}}
 {{else if .Error}}
-<div class="banner bad">
-  <div class="b-body">
-    <div class="b-title">{{icon "alert"}}<span>{{T "err.upstream"}}</span></div>
-    <details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.Error}}</pre></details>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" (T "err.upstream") "Raw" .Error)}}
 {{else if .MsgKey}}
-<div class="msg ok">{{T .MsgKey}}</div>
+{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (T .MsgKey))}}
 {{end}}
 
 {{if .AtRisk}}
-<div class="banner warn">
-  <div class="b-body">
-    <div class="b-title">{{icon "alert"}}<span>{{TF "backups.risk_banner" (N .AtRisk)}}</span></div>
-    <p>{{T "backups.missed_meaning"}}</p>
-  </div>
-  <div class="b-actions">
-    <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
-      <button type="submit" class="btn btn-sm" hx-disabled-elt="this" data-tip="{{T "backups.action_now"}}">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
-    </form>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "warn" "Icon" "alert" "Title" (TF "backups.risk_banner" (N .AtRisk)) "Body" (T "backups.missed_meaning") "Action" (partial "backups_runnow" .))}}
 {{end}}
 
 <div class="stats">
-  <div class="stat{{if not .RunsKnown}} is-unknown{{end}}">
-    <div class="stat-l">{{T "backups.stats_last_verified"}}</div>
-    <div class="stat-v">
-      {{if not .RunsKnown}}{{T "common.unavailable"}}
-      {{else if .HasLastVerified}}{{TF "backups.stats_last_verified_foot" (N .LastVerifiedDays)}}
-      {{else}}{{T "backups.coverage_none"}}{{end}}
-    </div>
-    <div class="stat-f">{{if .RunsKnown}}{{if not .HasLastVerified}}{{T "backups.stats_last_verified_none"}}{{end}}{{end}}</div>
-  </div>
-  <div class="stat is-unknown">
-    <div class="stat-l">{{T "backups.stats_schedule"}}</div>
-    <div class="stat-v">{{T "backups.stats_schedule_value"}}</div>
-    <div class="stat-f">{{T "backups.stats_schedule_foot"}}</div>
-  </div>
-  <div class="stat is-unknown">
-    <div class="stat-l">{{T "backups.stats_size"}}</div>
-    <div class="stat-v">{{T "backups.stats_size_value"}}</div>
-    <div class="stat-f">{{T "backups.stats_size_foot"}}</div>
-  </div>
-  <div class="stat">
-    <div class="stat-l">{{T "backups.stats_retention"}}</div>
-    <div class="stat-v">{{TF "backups.stats_retention_value" (N .Limit)}}</div>
-    <div class="stat-f">{{T "backups.stats_retention_foot"}}</div>
-  </div>
-  <div class="stat{{if not .CoverageKnown}} is-unknown{{end}}">
-    <div class="stat-l">{{T "backups.stats_at_risk"}}</div>
-    <div class="stat-v">{{if .CoverageKnown}}{{N .AtRisk}}{{else}}{{T "common.unavailable"}}{{end}}</div>
-    <div class="stat-f">{{if .CoverageKnown}}{{T "backups.stats_at_risk_foot"}}{{end}}</div>
-  </div>
+  {{template "stat" (dict "Class" (partial "backups_cls" .) "Label" (T "backups.stats_last_verified") "Value" (partial "backups_value" .) "Foot" (partial "backups_foot" .))}}
+  {{template "stat" (dict "Class" (partial "backups_cls2" .) "Label" (T "backups.stats_schedule") "Value" (T "backups.stats_schedule_value") "Foot" (T "backups.stats_schedule_foot"))}}
+  {{template "stat" (dict "Class" (partial "backups_cls3" .) "Label" (T "backups.stats_size") "Value" (T "backups.stats_size_value") "Foot" (T "backups.stats_size_foot"))}}
+  {{template "stat" (dict "Label" (T "backups.stats_retention") "Value" (TF "backups.stats_retention_value" (N .Limit)) "Foot" (T "backups.stats_retention_foot"))}}
+  {{template "stat" (dict "Class" (partial "backups_cls4" .) "Label" (T "backups.stats_at_risk") "Value" (partial "backups_value2" .) "Foot" (partial "backups_foot2" .))}}
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "backups.coverage_title"}}</h2>
-    <div class="ph-actions">
-      {{if .CoverageKnown}}
-      <span class="pill {{if .AtRisk}}warn{{else}}good{{end}}"><i class="dot"></i>{{TF "backups.coverage_truncated" (N .Checked)}}</span>
-      {{else}}
-      <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
-      {{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "backups.coverage_title") "Actions" (partial "backups_pactions" .))}}
   <div class="panel-body">
     <p class="sub">{{T "backups.coverage_sub"}}</p>
 
     {{if .CoveragePartial}}
-    <div class="banner warn">
-      <div class="b-body">
-        <div class="b-title">{{icon "alert"}}<span>{{T "backups.coverage_warn"}}</span></div>
-        {{if .Unchecked}}<p>{{TF "backups.coverage_truncated" (N .Checked)}}</p>{{end}}
-      </div>
-    </div>
+    {{template "banner" (dict "Tone" "warn" "Icon" "alert" "Title" (T "backups.coverage_warn") "Body" (and .Unchecked (TF "backups.coverage_truncated" (N .Checked))))}}
     {{end}}
 
     {{if not .CoverageKnown}}
-    <div class="empty">
-      {{icon "layers-off"}}
-      <h3>{{T "backups.rows_unknown_title"}}</h3>
-      <p>{{T "backups.rows_unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "layers-off" "Title" (T "backups.rows_unknown_title") "Body" (T "backups.rows_unknown_body") "Retry" "/web/backups" "Label" "retry")}}
     {{else if .Coverage}}
     <div class="table-wrap only-md">
       <table class="table">
@@ -164,37 +84,17 @@
       {{end}}
     </div>
     {{else}}
-    <div class="empty">
-      {{icon "inbox"}}
-      <h3>{{T "backups.coverage_empty_title"}}</h3>
-      <p>{{T "backups.coverage_empty_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.stacks"}}">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "inbox" "Title" (T "backups.coverage_empty_title") "Body" (T "backups.coverage_empty_body") "Action" (partial "backups_action2" .))}}
     {{end}}
   </div>
 </div>
 
 {{$runs := .Runs}}{{if and (not $runs) .Backups}}{{$runs = .Backups}}{{end}}
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "backups.title_runs"}}</h2>
-    <div class="ph-actions">
-      {{if or .RunsKnown $runs}}<span class="pill plain"><i class="dot"></i>{{P (len $runs) "plural.backups"}}</span>
-      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "backups.title_runs") "Actions" (partial "backups_pactions2" .))}}
   <div class="panel-body">
     {{if not (or .RunsKnown $runs)}}
-    <div class="empty">
-      {{icon "layers-off"}}
-      <h3>{{T "backups.rows_unknown_title"}}</h3>
-      <p>{{T "backups.rows_unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "layers-off" "Title" (T "backups.rows_unknown_title") "Body" (T "backups.rows_unknown_body") "Retry" "/web/backups" "Label" "retry")}}
     {{else if $runs}}
     <div class="table-wrap only-md">
       <table class="table">
@@ -257,16 +157,7 @@
       {{end}}
     </div>
     {{else}}
-    <div class="empty">
-      {{icon "inbox"}}
-      <h3>{{T "backups.rows_empty_title"}}</h3>
-      <p>{{T "backups.rows_empty_body"}}</p>
-      <div class="empty-actions">
-        <form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
-          <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this" data-tip="{{T "backups.action_now"}}">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
-        </form>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "inbox" "Title" (T "backups.rows_empty_title") "Body" (T "backups.rows_empty_body") "Action" (partial "backups_action3" .))}}
     {{end}}
 
     <details class="details">
@@ -282,11 +173,48 @@
   </div>
 </div>
 
-<div class="banner info">
-  <div class="b-body">
-    <div class="b-title">{{icon "restore"}}<span>{{T "backups.action_restore"}}</span></div>
-    <p>{{T "backups.restore_unavailable"}}</p>
-    <p class="muted">{{T "backups.archives_label"}} — {{T "backups.col_archives"}}</p>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "info" "Icon" "restore" "Title" (T "backups.action_restore") "Body" (T "backups.restore_unavailable") "Muted" (printf "%s — %s" (T "backups.archives_label") (T "backups.col_archives")))}}
 {{end}}
+
+{{define "backups_runnow"}}<form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
+  <button type="submit" class="btn btn-sm" hx-disabled-elt="this" data-tip="{{T "backups.action_now"}}">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
+</form>{{end}}
+
+{{define "backups_sub"}}{{if .Name}}<span class="mono iso" dir="ltr">{{.Name}}</span> · {{end}}{{if .RunsKnown}}{{T "backups.sub"}}{{else}}{{T "backups.sub_unknown"}}{{end}}{{end}}
+
+{{define "backups_actions"}}<form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
+      <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this" data-tip="{{T "backups.action_now"}}">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
+    </form>{{end}}
+
+{{define "backups_action2"}}<a class="btn btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.stacks"}}">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>{{end}}
+
+{{define "backups_action3"}}<form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
+          <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this" data-tip="{{T "backups.action_now"}}">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
+        </form>{{end}}
+
+{{define "backups_pactions"}}{{if .CoverageKnown}}
+      <span class="pill {{if .AtRisk}}warn{{else}}good{{end}}"><i class="dot"></i>{{TF "backups.coverage_truncated" (N .Checked)}}</span>
+      {{else}}
+      <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}{{end}}
+
+{{define "backups_pactions2"}}{{$runs := .Runs}}{{if and (not $runs) .Backups}}{{$runs = .Backups}}{{end}}{{if or .RunsKnown $runs}}<span class="pill plain"><i class="dot"></i>{{P (len $runs) "plural.backups"}}</span>
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}{{end}}
+
+{{define "backups_cls"}}{{if not .RunsKnown}} is-unknown{{end}}{{end}}
+
+{{define "backups_value"}}{{if not .RunsKnown}}{{T "common.unavailable"}}
+      {{else if .HasLastVerified}}{{TF "backups.stats_last_verified_foot" (N .LastVerifiedDays)}}
+      {{else}}{{T "backups.coverage_none"}}{{end}}{{end}}
+
+{{define "backups_foot"}}{{if .RunsKnown}}{{if not .HasLastVerified}}{{T "backups.stats_last_verified_none"}}{{end}}{{end}}{{end}}
+
+{{define "backups_cls2"}}is-unknown{{end}}
+
+{{define "backups_cls3"}}is-unknown{{end}}
+
+{{define "backups_cls4"}}{{if not .CoverageKnown}} is-unknown{{end}}{{end}}
+
+{{define "backups_value2"}}{{if .CoverageKnown}}{{N .AtRisk}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "backups_foot2"}}{{if .CoverageKnown}}{{T "backups.stats_at_risk_foot"}}{{end}}{{end}}

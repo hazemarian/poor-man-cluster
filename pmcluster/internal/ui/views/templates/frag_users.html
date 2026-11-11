@@ -6,62 +6,25 @@
      Lock-out safety: delete on your own row and on the last admin is rendered
      disabled with the reason in its title, and the controller refuses the same two
      cases server-side. */}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "users.title"}}</h1>
-    <p class="sub">{{T "users.sub"}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/users" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
-      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
-    </button>
-    {{if not .Disabled}}
-    <button type="button" class="btn btn-primary btn-sm" hx-get="/web/users/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "users.new"}}">
-      {{icon "plus"}}<span>{{T "users.new"}}</span>
-    </button>
-    {{end}}
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "users.title") "Sub" (T "users.sub") "Refresh" "/web/users" "Actions" (partial "users_actions" .))}}
 
 {{/* A failed store read is one sentence plus the raw payload, folded away. */}}
 {{if .ErrKey}}
-<div class="banner bad">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T .ErrKey}}</p>
-    <p>{{T "err.banner_body"}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-  <div class="b-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/users" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/users")}}
 {{end}}
 
 {{/* Login bypass is a configuration state, not a failure: the accounts exist,
      they are simply not consulted while it is on. */}}
 {{if .Disabled}}
-<div class="banner warn">
-  {{icon "lock"}}
-  <div class="b-body">
-    <p class="b-title">{{T "users.login_disabled"}}</p>
-    <p>{{T "users.login_disabled_body"}}</p>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "warn" "Icon" "lock" "Title" (T "users.login_disabled") "Body" (T "users.login_disabled_body"))}}
 {{end}}
 
 {{if .MsgKey}}
-<div class="msg ok">{{TF .MsgKey .MsgArg .MsgArg2}}</div>
+{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (TF .MsgKey .MsgArg .MsgArg2))}}
 {{end}}
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "users.accounts"}}</h2>
-    <div class="ph-actions">
-      {{if .Known}}<span class="pill plain">{{P .Count "plural.accounts"}}</span>
-      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "users.accounts") "Actions" (partial "users_pactions" .))}}
 
   <div class="panel-body tight">
     {{if .Known}}
@@ -136,28 +99,10 @@
         {{end}}
       </div>
       {{else}}
-      <div class="empty">
-        <i class="ic">{{icon "users"}}</i>
-        <h3>{{T "users.empty_title"}}</h3>
-        <p>{{T "users.empty_body"}}</p>
-        <div class="empty-actions">
-          {{if not .Disabled}}
-          <button type="button" class="btn btn-primary btn-sm" hx-get="/web/users/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()">{{T "users.new"}}</button>
-          {{else}}
-          <a class="btn btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{T "nav.settings"}}</a>
-          {{end}}
-        </div>
-      </div>
+      {{template "empty" (dict "Icon" "users" "Title" (T "users.empty_title") "Body" (T "users.empty_body") "Settings" true)}}
       {{end}}
     {{else}}
-    <div class="empty">
-      <i class="ic">{{icon "alert"}}</i>
-      <h3>{{T "users.unknown_title"}}</h3>
-      <p>{{T "users.unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/users" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "alert" "Title" (T "users.unknown_title") "Body" (T "users.unknown_body") "Retry" "/web/users")}}
     {{end}}
   </div>
 
@@ -166,3 +111,12 @@
   </div>
 </div>
 {{end}}
+
+{{define "users_actions"}}{{if not .Disabled}}
+    <button type="button" class="btn btn-primary btn-sm" hx-get="/web/users/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "users.new"}}">
+      {{icon "plus"}}<span>{{T "users.new"}}</span>
+    </button>
+    {{end}}{{end}}
+
+{{define "users_pactions"}}{{if .Known}}<span class="pill plain">{{P .Count "plural.accounts"}}</span>
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}{{end}}

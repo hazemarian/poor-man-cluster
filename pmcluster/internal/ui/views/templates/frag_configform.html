@@ -8,10 +8,10 @@
 <p class="sub">{{if .IsEdit}}{{T "configs.form_sub_edit"}}{{else}}{{T "configs.form_sub_new"}}{{end}}</p>
 
 {{if .ErrKey}}
-<div class="msg err">{{T .ErrKey}}</div>
+{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" (T .ErrKey))}}
 {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
 {{else if .Error}}
-<div class="msg err">{{.Error}}</div>
+{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" .Error)}}
 {{end}}
 
 <form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML"

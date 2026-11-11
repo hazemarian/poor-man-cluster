@@ -8,57 +8,21 @@
 
      Configs and secrets carry the same columns, so both tables are drawn by
      "usage_group" below; only the headings and the rows differ. */}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "nav.usage"}}</h1>
-    <p class="sub">{{if .Known}}{{T "usage.sub"}}{{else}}{{T "usage.sub_unknown"}}{{end}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-tip="{{T "err.retry_hint"}}" aria-label="{{T "common.refresh"}}">{{icon "refresh"}}<span class="sr-only">{{T "common.refresh"}}</span></button>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "nav.usage") "Sub" (partial "usage_sub" .) "Refresh" "/web/usage")}}
 
 {{if .ErrKey}}
-<div class="banner bad">
-  <div class="b-body">
-    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
-    <p>{{if eq .ErrKey "err.api_not_configured"}}{{T "settings.conn_missing_body"}}{{else}}{{T "err.banner_body"}}{{end}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-  <div class="b-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/usage")}}
 {{else if not .Known}}
 <div class="panel">
   <div class="panel-body">
-    <div class="empty">
-      {{icon "layers-off"}}
-      <h3>{{T "usage.unknown_title"}}</h3>
-      <p>{{T "usage.unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/usage" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "layers-off" "Title" (T "usage.unknown_title") "Body" (T "usage.unknown_body") "Retry" "/web/usage" "Label" "retry")}}
   </div>
 </div>
 {{else}}
 <div class="stats">
-  <div class="stat">
-    <div class="stat-l">{{T "usage.stat_configs"}}</div>
-    <div class="stat-v num">{{N .Configs.Total}}</div>
-    <div class="stat-f">{{TF "usage.stat_unused_foot" (N .Configs.Unused)}}</div>
-  </div>
-  <div class="stat">
-    <div class="stat-l">{{T "usage.stat_secrets"}}</div>
-    <div class="stat-v num">{{N .Secrets.Total}}</div>
-    <div class="stat-f">{{TF "usage.stat_unused_foot" (N .Secrets.Unused)}}</div>
-  </div>
-  <div class="stat">
-    <div class="stat-l">{{T "usage.stat_unused"}}</div>
-    <div class="stat-v num">{{N .Unused}}</div>
-    <div class="stat-f">{{T "usage.stat_unused_body"}}</div>
-  </div>
+  {{template "stat" (dict "Label" (T "usage.stat_configs") "Value" (N .Configs.Total) "ValueClass" "num" "Foot" (TF "usage.stat_unused_foot" (N .Configs.Unused)))}}
+  {{template "stat" (dict "Label" (T "usage.stat_secrets") "Value" (N .Secrets.Total) "ValueClass" "num" "Foot" (TF "usage.stat_unused_foot" (N .Secrets.Unused)))}}
+  {{template "stat" (dict "Label" (T "usage.stat_unused") "Value" (N .Unused) "ValueClass" "num" "Foot" (T "usage.stat_unused_body"))}}
 </div>
 
 {{template "usage_group" .Configs}}
@@ -70,13 +34,7 @@
 
 {{define "usage_group"}}
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T .TitleKey}}</h2>
-    <div class="ph-actions">
-      {{if .Rows}}<span class="pill plain"><i class="dot"></i>{{if eq .TitleKey "usage.configs_title"}}{{P (len .Rows) "plural.configs"}}{{else}}{{P (len .Rows) "plural.secrets"}}{{end}}</span>
-      {{else}}<span class="pill plain"><i class="dot"></i>{{T "common.none"}}</span>{{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T .TitleKey) "Actions" (partial "usage_pactions" .))}}
   <div class="panel-body">
     <p class="sub">{{T .SubKey}}</p>
     {{if .Rows}}
@@ -110,15 +68,15 @@
       {{end}}
     </div>
     {{else}}
-    <div class="empty">
-      {{icon "inbox"}}
-      <h3>{{T "usage.empty_title"}}</h3>
-      <p>{{T "usage.empty_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "inbox" "Title" (T "usage.empty_title") "Body" (T "usage.empty_body") "Action" (partial "usage_action" .))}}
     {{end}}
   </div>
 </div>
 {{end}}
+
+{{define "usage_sub"}}{{if .Known}}{{T "usage.sub"}}{{else}}{{T "usage.sub_unknown"}}{{end}}{{end}}
+
+{{define "usage_action"}}<a class="btn btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>{{end}}
+
+{{define "usage_pactions"}}{{if .Rows}}<span class="pill plain"><i class="dot"></i>{{if eq .TitleKey "usage.configs_title"}}{{P (len .Rows) "plural.configs"}}{{else}}{{P (len .Rows) "plural.secrets"}}{{end}}</span>
+      {{else}}<span class="pill plain"><i class="dot"></i>{{T "common.none"}}</span>{{end}}{{end}}

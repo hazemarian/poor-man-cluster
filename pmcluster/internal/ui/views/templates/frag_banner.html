@@ -1,0 +1,116 @@
+{{/* The one banner. Every notice in the console renders through here, so tone, icon column,
+     title/body rhythm, the details disclosure and the action button cannot drift page to page.
+
+     Keys: Tone (bad|warn|ok|info), Icon, Title, Body (optional sentence), Extra (optional HTML block
+     under the body, from {{partial "name" .}}), Muted (optional dim footnote), Raw (optional technical
+     detail behind "Show details"), then at most one action: Action (HTML from partial), Settings
+     (bool) or Retry (URL); Dismiss (bool) adds a close button. Role sets role= for auth pages,
+     Class adds a class. */}}
+{{define "banner"}}
+<div class="banner {{.Tone}}{{if .Class}} {{.Class}}{{end}}"{{if .Role}} role="{{.Role}}"{{end}}>
+  {{icon .Icon}}
+  <div class="b-body">
+    {{if .Title}}<p class="b-title">{{.Title}}</p>{{end}}
+    {{if .Body}}<p{{if not .Title}} class="b-solo"{{end}}>{{.Body}}</p>{{end}}
+    {{.Extra}}
+    {{if .Muted}}<p class="muted">{{.Muted}}</p>{{end}}
+    {{if .Raw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.Raw}}</pre></details>{{end}}
+  </div>
+  {{if or .Action .Retry .Settings .Dismiss}}
+  <div class="b-actions">
+    {{if .Action}}{{.Action}}
+    {{else if .Settings}}
+    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+    {{else if .Retry}}
+    {{template "refreshbtn" (dict "URL" .Retry "Label" "retry")}}
+    {{end}}
+    {{if .Dismiss}}<button type="button" class="btn btn-ghost btn-sm" data-dismiss onclick="this.closest('.banner').remove()" data-tip="{{T "common.dismiss"}}" aria-label="{{T "common.dismiss"}}">{{icon "close"}}<span class="sr-only">{{T "common.dismiss"}}</span></button>{{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{/* A failed read of the cluster API. Key is the i18n error key; an unconfigured API points at
+     Settings (where the fix is), anything else offers Retry against the page's own URL. Body
+     overrides the default sentence; Unconfigured is an i18n key for a page-specific sentence when the API is not set up. */}}
+{{define "errbanner"}}
+{{$body := .Body}}
+{{if not $body}}{{if eq .Key "err.api_not_configured"}}{{$body = T "settings.conn_missing_body"}}{{if .Unconfigured}}{{$body = T .Unconfigured}}{{end}}{{else}}{{$body = T "err.banner_body"}}{{end}}{{end}}
+{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" (T .Key) "Body" $body "Raw" .Raw "Class" .Class "Action" .Action
+  "Settings" (and (not .Action) (eq .Key "err.api_not_configured")) "Retry" .Retry)}}
+{{end}}
+
+{{/* The one Refresh/Retry button: reloads URL into the view. Label "retry" for failure surfaces,
+     anything else (or none) for the plain Refresh a page header carries. */}}
+{{define "refreshbtn"}}
+{{$l := "common.refresh"}}{{if eq .Label "retry"}}{{$l = "common.retry"}}{{end}}
+<button type="button" class="btn btn-ghost btn-sm" hx-get="{{.URL}}" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" data-tip="{{T $l}}">{{icon "refresh"}}<span>{{T $l}}</span></button>
+{{end}}
+
+{{/* The one empty state: optional icon, title, a sentence, optional action, then an optional extra block (error details) below it.
+     Keys: Icon (optional), Title, Body (translated strings), Extra (HTML from partial, under the
+     body), Settings (bool: primary "Settings" button), Retry (URL: Refresh button, Label "retry"
+     to word it Retry) or Action (HTML from partial), Foot (dim footnote), Class. */}}
+{{define "empty"}}
+<div class="empty{{if .Class}} {{.Class}}{{end}}">
+  {{if .Icon}}{{icon .Icon}}{{end}}
+  <h3>{{.Title}}</h3>
+  {{if .Body}}<p>{{.Body}}</p>{{end}}
+  {{if or .Settings .Retry .Action}}
+  <div class="empty-actions">
+    {{if .Action}}{{.Action}}
+    {{else if .Settings}}<a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
+    {{else}}{{template "refreshbtn" (dict "URL" .Retry "Label" .Label)}}{{end}}
+  </div>
+  {{end}}
+  {{.Extra}}
+  {{if .Foot}}<p class="muted">{{.Foot}}</p>{{end}}
+</div>
+{{end}}
+
+{{/* The one page header: title, subtitle, then the page's actions. Keys: Title, Sub (translated, or HTML from partial), TitleClass/TitleDir (for identifier titles),
+     Refresh (optional URL: leading Refresh button), Actions (optional HTML from partial, placed
+     after Refresh). */}}
+{{define "pagehead"}}
+<div class="page-head">
+  <div class="ph-text">
+    <h1{{if .TitleClass}} class="{{.TitleClass}}"{{end}}{{if .TitleDir}} dir="{{.TitleDir}}"{{end}}>{{.Title}}</h1>
+    {{if .Sub}}<p class="sub">{{.Sub}}</p>{{end}}
+  </div>
+  {{if or .Refresh .Actions}}
+  <div class="ph-actions">
+    {{if .Refresh}}{{template "refreshbtn" (dict "URL" .Refresh)}}{{end}}
+    {{.Actions}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{/* The one card header: title (h2), optional subtitle, optional right-hand block (pills, buttons).
+     Keys: Title, Sub (translated or HTML), Icon, Actions (HTML from partial; ActionsClass/ActionsHidden
+     style it), Flagged (bool: "needs attention" pill beside the title), ID (id on the title), Class. */}}
+{{define "panelhead"}}
+<div class="panel-head{{if .Class}} {{.Class}}{{end}}">
+  {{if .Icon}}{{icon .Icon}}{{end}}
+  {{if .Sub}}<div><h2{{if .ID}} id="{{.ID}}"{{end}}>{{.Title}}</h2><p class="sub">{{.Sub}}</p></div>{{else}}<h2{{if .ID}} id="{{.ID}}"{{end}}>{{.Title}}</h2>{{end}}
+  {{if .Flagged}}<span class="pill bad"><i class="dot"></i>{{T "settings.err_flagged"}}</span>{{end}}
+  {{if .Actions}}<div class="ph-actions{{if .ActionsClass}} {{.ActionsClass}}{{end}}"{{if .ActionsHidden}} aria-hidden="true"{{end}}>{{.Actions}}</div>{{end}}
+</div>
+{{end}}
+
+{{/* The one stat tile of a stats strip: label (with optional icon), a big value and a footnote.
+     Keys: Label, Value, Foot (translated strings or HTML from partial), Icon, ValueClass (e.g.
+     "num", "stat-text", "iso"), Inner (HTML from partial replacing value+foot when they
+     branch on state), Class (extra state classes: is-unknown, is-bad, stat-lead...). */}}
+{{define "stat"}}
+<div class="stat{{if .Class}} {{.Class}}{{end}}">
+  <div class="stat-l">{{if .Icon}}{{icon .Icon}}{{end}}{{.Label}}</div>
+  {{if .Inner}}{{.Inner}}{{else}}
+  <div class="stat-v{{if .ValueClass}} {{.ValueClass}}{{end}}"{{if .ValueDir}} dir="{{.ValueDir}}"{{end}}>{{.Value}}</div>
+  {{if .Foot}}<div class="stat-f">{{.Foot}}</div>{{end}}
+  {{end}}
+</div>
+{{end}}
+
+{{/* A requirement note under a section's subtitle: an info banner with just a sentence. */}}
+{{define "reqnote"}}{{template "banner" (dict "Tone" "info" "Icon" "info" "Body" .)}}{{end}}

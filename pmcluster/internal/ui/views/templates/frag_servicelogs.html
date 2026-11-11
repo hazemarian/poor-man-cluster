@@ -10,16 +10,9 @@
      differently: "unknown" means the daemon did not report, "no output" means it
      did and there was nothing to show. */}}
 {{if not .LogsKnown}}
-<div class="empty">
-  {{icon "layers-off"}}
-  <h3>{{T "services.logs_unknown_title"}}</h3>
-  <p>{{T "services.logs_unknown_body"}}</p>
-  <div class="empty-actions">
-    <button type="button" class="btn btn-sm" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-  </div>
-</div>
+{{template "empty" (dict "Icon" "layers-off" "Title" (T "services.logs_unknown_title") "Body" (T "services.logs_unknown_body") "Retry" (printf "/web/services/%s/%s/logs" .Stack .Service) "Label" "retry")}}
 {{else}}
-{{if .ExecEmpty}}<div class="msg">{{T "services.exec_no_output"}}</div>{{end}}
+{{if .ExecEmpty}}{{template "banner" (dict "Tone" "info" "Icon" "info" "Title" (T "services.exec_no_output"))}}{{end}}
 <div class="log-toolbar">
   <span class="muted">{{TF "services.logs_foot" .TailCount}}</span>
 </div>

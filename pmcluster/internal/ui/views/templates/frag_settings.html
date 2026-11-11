@@ -28,48 +28,20 @@
   sentence in the banner body (never behind "Show details"), marks the section the
   message names, and marks the field when the message names one.
 */}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "settings.title"}}</h1>
-    <p class="sub">{{T "settings.sub"}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="{{.SelfPath}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "settings.title") "Sub" (T "settings.sub") "Refresh" (printf "%s" .SelfPath))}}
 
 {{/* A refusal is shown as the daemon wrote it. The banner body IS the message;
      a disclosure is not a place to hide the reason a save failed. */}}
 {{if .ErrKey}}
-<div class="banner bad" data-err-section="{{.ErrSection}}">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T .ErrKey}}</p>
-    {{if .ErrRaw}}
-    <p class="b-lead">{{T "settings.err_body_lead"}}</p>
-    <p class="b-raw mono iso" dir="ltr">{{.ErrRaw}}</p>
-    {{end}}
-    {{if .ErrPermission}}<p>{{T "settings.err_permission_hint"}}</p>{{end}}
-    {{if .ErrSection}}<p><a href="#sect-{{.ErrSection}}" hx-boost="false">{{T "settings.err_jump"}}: {{T .ErrSectionTitle}}</a></p>{{end}}
-  </div>
-</div>
+{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" (T .ErrKey) "Extra" (partial "settings_err_extra" .))}}
 {{end}}
 
 {{if .MsgKey}}
-<div class="msg ok" data-msg>
-  <span>{{if .MsgArg2}}{{TF .MsgKey .MsgArg .MsgArg2}}{{else if .MsgArg}}{{TF .MsgKey .MsgArg}}{{else}}{{T .MsgKey}}{{end}}{{range .SavedSections}} <span class="pill good">{{T .}}</span>{{end}}</span>
-  <button type="button" class="msg-x" data-dismiss aria-label="{{T "settings.dismiss"}}" data-tip="{{T "settings.dismiss"}}">{{icon "close"}}</button>
-</div>
+{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (partial "settings_saved_title" .) "Dismiss" true)}}
 {{end}}
 
 {{if not .Configured}}
-<div class="banner warn">
-  {{icon "info"}}
-  <div class="b-body">
-    <p class="b-title">{{T "settings.offline_notice_title"}}</p>
-    <p>{{T "settings.offline_notice_body"}}</p>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "warn" "Icon" "info" "Title" (T "settings.offline_notice_title") "Body" (T "settings.offline_notice_body"))}}
 {{end}}
 
 {{template "sec_connection" .}}
@@ -81,13 +53,11 @@
      step is how an operator ends up believing a save did nothing. */}}
 {{if .CanEditCluster}}
 <div class="panel mt-24" id="sect-apply">
-  <div class="panel-head">
-    <h2>{{T "settings.apply_title"}}</h2>
-  </div>
+  {{template "panelhead" (dict "Title" (T "settings.apply_title"))}}
   <div class="panel-body">
     <p class="sub">{{T "settings.apply_sub"}}</p>
     {{if .ApplyDone}}
-    <div class="msg ok">{{TF "settings.apply_summary" .ApplyOTel .ApplyTraefik .ApplyCert .ApplyEdge .ApplyStacks}}</div>
+    {{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (TF "settings.apply_summary" .ApplyOTel .ApplyTraefik .ApplyCert .ApplyEdge .ApplyStacks))}}
     {{end}}
     <div class="action-bar">
       <button type="button" class="btn btn-primary"
@@ -106,15 +76,10 @@
 {{/* ---------- Connection: the one group that is console-local ---------- */}}
 {{define "sec_connection"}}
 <div class="panel" id="sect-connection">
-  <div class="panel-head">
-    <h2>{{T "settings.sec_connection"}}</h2>
-    <div class="ph-actions">
-      {{if .Configured}}<span class="pill good"><i class="dot"></i>{{T "settings.conn_ok"}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{T "settings.conn_missing"}}</span>{{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "settings.sec_connection") "Actions" (partial "settings_pactions" .))}}
   <div class="panel-body">
     <p class="sub">{{T "settings.sec_connection_sub"}}</p>
-    <p class="req">{{icon "info"}}<span>{{T "settings.sec_connection_needs"}}</span></p>
+    {{template "reqnote" (T "settings.sec_connection_needs")}}
 
     <div class="kv">
       <div class="kv-row">
@@ -166,34 +131,17 @@
 {{/* ---------- GitHub App: status AND the form that changes it, one group ---------- */}}
 {{define "sec_github"}}
 <div class="panel{{if eq .ErrSection "github"}} is-flagged{{end}}" id="sect-github">
-  <div class="panel-head">
-    <h2>{{T "settings.github_title"}}</h2>
-    {{if eq .ErrSection "github"}}<span class="pill bad"><i class="dot"></i>{{T "settings.err_flagged"}}</span>{{end}}
-    <div class="ph-actions">
-      {{if .GitHubConfigured}}
-      <button type="button" class="btn btn-ghost btn-sm"
-              hx-post="/web/settings/github/test" hx-target="#view" hx-push-url="true" hx-disabled-elt="this"
-              data-tip="{{T "settings.github_test"}}">{{icon "refresh"}}<span>{{T "settings.github_test"}}</span></button>
-      {{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "settings.github_title") "Flagged" (eq .ErrSection "github") "Actions" (partial "settings_github_actions" .))}}
   <div class="panel-body">
     <p class="sub">{{T "settings.github_sub"}}</p>
-    <p class="req">{{icon "info"}}<span>{{T "settings.sec_github_needs"}}</span></p>
+    {{template "reqnote" (T "settings.sec_github_needs")}}
 
     {{if eq .ErrSection "github"}}
     <p class="err" data-section-error>{{T "settings.err_flagged_body"}}</p>
     {{end}}
 
     {{if .GitHubErr}}
-    <div class="banner bad">
-      {{icon "alert"}}
-      <div class="b-body">
-        <p class="b-title">{{T "settings.github_err_read"}}</p>
-        <p class="b-raw mono iso" dir="ltr">{{.GitHubErr}}</p>
-        <p>{{T "settings.err_permission_hint"}}</p>
-      </div>
-    </div>
+    {{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" (T "settings.github_err_read") "Extra" (partial "settings_github_err" .))}}
     {{else if not .Configured}}
     <p class="muted">{{T "settings.github_no_daemon"}}</p>
     {{else if not .GitHubConfigured}}
@@ -220,13 +168,7 @@
     <p class="muted mono iso" dir="ltr">{{.GitHubProbeDetail}}</p>
     {{end}}
     {{if .GitHubWarning}}
-    <div class="banner warn">
-      {{icon "alert"}}
-      <div class="b-body">
-        <p class="b-title">{{T "settings.github_warning_title"}}</p>
-        <p>{{.GitHubWarning}}</p>
-      </div>
-    </div>
+    {{template "banner" (dict "Tone" "warn" "Icon" "alert" "Title" (T "settings.github_warning_title") "Body" .GitHubWarning)}}
     {{end}}
     <p class="label">{{T "settings.github_perms_title"}}</p>
     {{if .GitHubPermissions}}
@@ -244,7 +186,7 @@
     {{end}}
 
     {{if .GitHubTestSet}}
-      {{if .GitHubTestOK}}<div class="msg ok">{{.GitHubTestMsg}}</div>{{else}}<div class="msg err">{{.GitHubTestMsg}}</div>{{end}}
+      {{if .GitHubTestOK}}{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" .GitHubTestMsg)}}{{else}}{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" .GitHubTestMsg)}}{{end}}
     {{end}}
 
     {{if .CanEditGitHub}}
@@ -296,10 +238,7 @@
     {{end}}
 
     {{if .GitHubSetSet}}
-    <div class="msg ok" data-msg>
-      <span>{{T "settings.github_saved"}}</span>
-      <button type="button" class="msg-x" data-dismiss aria-label="{{T "settings.dismiss"}}" data-tip="{{T "settings.dismiss"}}">{{icon "close"}}</button>
-    </div>
+    {{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (T "settings.github_saved") "Dismiss" true)}}
     <div class="kv">
       <div class="kv-row"><span class="k">{{T "settings.github_app_id"}}</span><span class="v mono num" dir="ltr">{{.GitHubSetAppID}}</span></div>
       <div class="kv-row"><span class="k">{{T "settings.github_installation"}}</span><span class="v mono num" dir="ltr">{{.GitHubSetInstallation}}</span></div>
@@ -310,7 +249,7 @@
       </div>
     </div>
     <p class="muted mono iso" dir="ltr">{{.GitHubSetProbeDetail}}</p>
-    {{if .GitHubSetRotated}}<div class="banner warn">{{icon "alert"}}<div class="b-body"><p>{{T "settings.github_rotate_done"}}</p></div></div>{{end}}
+    {{if .GitHubSetRotated}}{{template "banner" (dict "Tone" "warn" "Icon" "alert" "Title" (T "settings.github_rotate_done"))}}{{end}}
     {{end}}
 
     <p class="muted">{{T "settings.github_foot"}}</p>
@@ -318,3 +257,22 @@
 </div>
 {{end}}
 
+{{define "settings_err_extra"}}{{if .ErrRaw}}
+<p class="b-lead">{{T "settings.err_body_lead"}}</p>
+<p class="b-raw mono iso" dir="ltr">{{.ErrRaw}}</p>
+{{end}}
+{{if .ErrPermission}}<p>{{T "settings.err_permission_hint"}}</p>{{end}}
+{{if .ErrSection}}<p><a href="#sect-{{.ErrSection}}" hx-boost="false">{{T "settings.err_jump"}}: {{T .ErrSectionTitle}}</a></p>{{end}}{{end}}
+
+{{define "settings_github_err"}}<p class="b-raw mono iso" dir="ltr">{{.GitHubErr}}</p>
+<p>{{T "settings.err_permission_hint"}}</p>{{end}}
+
+{{define "settings_pactions"}}{{if .Configured}}<span class="pill good"><i class="dot"></i>{{T "settings.conn_ok"}}</span>{{else}}<span class="pill warn"><i class="dot"></i>{{T "settings.conn_missing"}}</span>{{end}}{{end}}
+
+{{define "settings_github_actions"}}{{if .GitHubConfigured}}
+      <button type="button" class="btn btn-ghost btn-sm"
+              hx-post="/web/settings/github/test" hx-target="#view" hx-push-url="true" hx-disabled-elt="this"
+              data-tip="{{T "settings.github_test"}}">{{icon "refresh"}}<span>{{T "settings.github_test"}}</span></button>
+      {{end}}{{end}}
+
+{{define "settings_saved_title"}}{{if .MsgArg2}}{{TF .MsgKey .MsgArg .MsgArg2}}{{else if .MsgArg}}{{TF .MsgKey .MsgArg}}{{else}}{{T .MsgKey}}{{end}}{{range .SavedSections}} <span class="pill good">{{T .}}</span>{{end}}{{end}}

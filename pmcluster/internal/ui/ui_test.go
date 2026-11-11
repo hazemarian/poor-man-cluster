@@ -410,7 +410,7 @@ func TestAllControllers(t *testing.T) {
 	// The stack detail is its own page: the head carries the stack name and the
 	// page shows the stack's services (replica health), its last backup and its
 	// revision history.
-	assertFragment(http.MethodGet, "/web/stacks/demo", "", `dir="ltr">demo<`, "Services in this stack", "web", "2 / 2", "Last backup", "succeeded", "Revision history", "Deploy failed", "docker stack deploy (depends_on level 1): boom")
+	assertFragment(http.MethodGet, "/web/stacks/demo", "", `dir="ltr">demo<`, "Services in this stack", "web", "Running 2/2", "Last backup", "succeeded", "Revision history", "Deploy failed", "docker stack deploy (depends_on level 1): boom")
 	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source manifest")
 	// The per-stack backups route hands the operator to the backups page, which owns
 	// listing and filtering them, instead of the stacks controller building another
@@ -805,9 +805,8 @@ func TestServicesUI(t *testing.T) {
 	if !strings.Contains(s, "Platform services") {
 		t.Errorf("services list missing the platform section; got: %s", s)
 	}
-	// v2 writes replica pairs spaced ("2 / 2") so the two numbers stay legible in mono
-	// and never read as one figure.
-	if !strings.Contains(s, "demo") || !strings.Contains(s, "2 / 2") {
+	// The replica pair lives inside the status pill ("Running 2/2"), as on the stacks list.
+	if !strings.Contains(s, "demo") || !strings.Contains(s, "2/2") {
 		t.Errorf("services list missing stack/replica info; got: %s", s)
 	}
 	// regression: a service whose local image is >30 days old renders the stale

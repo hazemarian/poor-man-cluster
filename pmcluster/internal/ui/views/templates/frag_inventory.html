@@ -8,37 +8,14 @@
 {{if .ErrKey}}
 <section class="panel">
   <div class="panel-body">
-    <div class="empty">
-      {{icon "alert"}}
-      <h3>{{T "inventory.unknown_title"}}</h3>
-      <p>{{if .ErrKey}}{{T .ErrKey}}{{else}}{{T "inventory.unknown_body"}}{{end}}</p>
-      {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "alert" "Title" (T "inventory.unknown_title") "Body" (partial "inventory_body" .) "Extra" (partial "inventory_extra" .) "Retry" (printf "/web/inventory?tab=%s" .Tab))}}
   </div>
 </section>
 {{else}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "inventory.title"}}</h1>
-    <p class="sub">{{T "inventory.sub"}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm"
-            hx-get="/web/inventory?tab={{.Tab}}{{if .Filtered}}&amp;q={{.Query | urlquery}}{{end}}"
-            hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
-      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
-    </button>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "inventory.title") "Sub" (T "inventory.sub") "Actions" (partial "inventory_actions" .))}}
 
 {{if .MsgKey}}
-<div class="banner {{if .MsgErr}}bad{{else}}ok{{end}}">
-  {{if .MsgErr}}{{icon "alert"}}{{else}}{{icon "check-circle"}}{{end}}
-  <div class="b-body"><p class="b-title">{{TF .MsgKey .MsgArg}}</p></div>
-</div>
+{{template "banner" (dict "Tone" (or (and .MsgErr "bad") "ok") "Icon" (or (and .MsgErr "alert") "check-circle") "Title" (TF .MsgKey .MsgArg))}}
 {{end}}
 
 <div class="tabs" role="tablist" aria-label="{{T "inventory.tabs_label"}}">
@@ -87,31 +64,11 @@
 
 {{define "inventoryconfigs"}}
 <section class="panel">
-  <div class="panel-head">
-    <h2>{{T .TitleKey}}</h2>
-    <div class="ph-actions">
-      {{if .Known}}
-        {{if .Filtered}}<span class="pill plain">{{TF "inventory.showing" (N (len .Rows)) (N .Total)}}</span>
-        {{else}}<span class="pill plain">{{P (len .Rows) "plural.configs"}}</span>{{end}}
-      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
-      <button type="button" class="btn btn-primary btn-sm"
-              hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
-        {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
-      </button>
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T .TitleKey) "Actions" (partial "inventory_pactions" .))}}
 
   {{if not .Known}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "alert"}}
-      <h3>{{T "inventory.configs_unknown_title"}}</h3>
-      <p>{{if .ErrKey}}{{T .ErrKey}}{{else}}{{T "inventory.configs_unknown_body"}}{{end}}</p>
-      {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "alert" "Title" (T "inventory.configs_unknown_title") "Body" (partial "inventory_body2" .) "Extra" (partial "inventory_extra2" .) "Retry" (printf "/web/inventory?tab=%s" .Tab) "Label" "retry")}}
   </div>
   {{else if .Rows}}
   <div class="table-wrap only-md">
@@ -227,28 +184,11 @@
   </div>
   {{else if .Filtered}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "search"}}
-      <h3>{{TF "inventory.no_match_title" .Query}}</h3>
-      <p>{{T "inventory.no_match_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "inventory.clear_search"}}">{{icon "close"}}<span>{{T "inventory.clear_search"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "search" "Title" (TF "inventory.no_match_title" .Query) "Body" (T "inventory.no_match_body") "Action" (partial "inventory_action2" .))}}
   </div>
   {{else}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "file"}}
-      <h3>{{T .EmptyTitleKey}}</h3>
-      <p>{{T .EmptyBodyKey}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-primary btn-sm"
-                hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
-          {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
-        </button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "file" "Title" (T .EmptyTitleKey) "Body" (T .EmptyBodyKey) "Action" (partial "inventory_action3" .))}}
   </div>
   {{end}}
 </section>
@@ -256,31 +196,11 @@
 
 {{define "inventorysecrets"}}
 <section class="panel mt-24">
-  <div class="panel-head">
-    <h2>{{T .TitleKey}}</h2>
-    <div class="ph-actions">
-      {{if .Known}}
-        {{if .Filtered}}<span class="pill plain">{{TF "inventory.showing" (N (len .Rows)) (N .Total)}}</span>
-        {{else}}<span class="pill plain">{{P (len .Rows) "plural.secrets"}}</span>{{end}}
-      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
-      <button type="button" class="btn btn-primary btn-sm"
-              hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
-        {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
-      </button>
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T .TitleKey) "Actions" (partial "inventory_pactions2" .))}}
 
   {{if not .Known}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "alert"}}
-      <h3>{{T "inventory.secrets_unknown_title"}}</h3>
-      <p>{{if .ErrKey}}{{T .ErrKey}}{{else}}{{T "inventory.secrets_unknown_body"}}{{end}}</p>
-      {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "alert" "Title" (T "inventory.secrets_unknown_title") "Body" (partial "inventory_body3" .) "Extra" (partial "inventory_extra3" .) "Retry" (printf "/web/inventory?tab=%s" .Tab) "Label" "retry")}}
   </div>
   {{else if .Rows}}
   <div class="table-wrap only-md">
@@ -386,29 +306,59 @@
   </div>
   {{else if .Filtered}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "search"}}
-      <h3>{{TF "inventory.no_match_title" .Query}}</h3>
-      <p>{{T "inventory.no_match_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "inventory.clear_search"}}">{{icon "close"}}<span>{{T "inventory.clear_search"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "search" "Title" (TF "inventory.no_match_title" .Query) "Body" (T "inventory.no_match_body") "Action" (partial "inventory_action4" .))}}
   </div>
   {{else}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "keys"}}
-      <h3>{{T .EmptyTitleKey}}</h3>
-      <p>{{T .EmptyBodyKey}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-primary btn-sm"
-                hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
-          {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
-        </button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "keys" "Title" (T .EmptyTitleKey) "Body" (T .EmptyBodyKey) "Action" (partial "inventory_action5" .))}}
   </div>
   {{end}}
 </section>
 {{end}}
+
+{{define "inventory_actions"}}{{$u := printf "/web/inventory?tab=%s" .Tab}}{{if .Filtered}}{{$u = printf "%s&q=%s" $u (urlquery .Query)}}{{end}}
+    {{template "refreshbtn" (dict "URL" $u)}}{{end}}
+
+{{define "inventory_body"}}{{if .ErrKey}}{{T .ErrKey}}{{else}}{{T "inventory.unknown_body"}}{{end}}{{end}}
+
+{{define "inventory_extra"}}{{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}{{end}}
+
+{{define "inventory_body2"}}{{if .ErrKey}}{{T .ErrKey}}{{else}}{{T "inventory.configs_unknown_body"}}{{end}}{{end}}
+
+{{define "inventory_extra2"}}{{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}{{end}}
+
+{{define "inventory_action2"}}<button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "inventory.clear_search"}}">{{icon "close"}}<span>{{T "inventory.clear_search"}}</span></button>{{end}}
+
+{{define "inventory_action3"}}<button type="button" class="btn btn-primary btn-sm"
+                hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
+          {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
+        </button>{{end}}
+
+{{define "inventory_body3"}}{{if .ErrKey}}{{T .ErrKey}}{{else}}{{T "inventory.secrets_unknown_body"}}{{end}}{{end}}
+
+{{define "inventory_extra3"}}{{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}{{end}}
+
+{{define "inventory_action4"}}<button type="button" class="btn btn-sm" hx-get="/web/inventory?tab={{.Tab}}" hx-target="#view" hx-push-url="true" data-tip="{{T "inventory.clear_search"}}">{{icon "close"}}<span>{{T "inventory.clear_search"}}</span></button>{{end}}
+
+{{define "inventory_action5"}}<button type="button" class="btn btn-primary btn-sm"
+                hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
+          {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
+        </button>{{end}}
+
+{{define "inventory_pactions"}}{{if .Known}}
+        {{if .Filtered}}<span class="pill plain">{{TF "inventory.showing" (N (len .Rows)) (N .Total)}}</span>
+        {{else}}<span class="pill plain">{{P (len .Rows) "plural.configs"}}</span>{{end}}
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+      <button type="button" class="btn btn-primary btn-sm"
+              hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
+        {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
+      </button>{{end}}
+
+{{define "inventory_pactions2"}}{{if .Known}}
+        {{if .Filtered}}<span class="pill plain">{{TF "inventory.showing" (N (len .Rows)) (N .Total)}}</span>
+        {{else}}<span class="pill plain">{{P (len .Rows) "plural.secrets"}}</span>{{end}}
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
+      <button type="button" class="btn btn-primary btn-sm"
+              hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
+        {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
+      </button>{{end}}

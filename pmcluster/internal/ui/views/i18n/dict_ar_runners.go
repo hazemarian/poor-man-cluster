@@ -107,4 +107,9 @@ func init() {
 		TwoNom: "مشغّلان", TwoObl: "مشغّلين",
 		Few: "{n} مشغّلات", Many: "{n} مشغّلًا", Other: "{n} مشغّل",
 	})
+	registerPlural(AR, "plural.sans", PluralForms{
+		Zero: "لا أسماء", One: "اسم واحد",
+		TwoNom: "اسمان", TwoObl: "اسمين",
+		Few: "{n} أسماء", Many: "{n} اسمًا", Other: "{n} اسم",
+	})
 }

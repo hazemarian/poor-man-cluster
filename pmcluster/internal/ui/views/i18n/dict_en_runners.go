@@ -103,4 +103,5 @@ func init() {
 
 	registerPlural(EN, "plural.runner_nodes", PluralForms{One: "{n} node selected", Other: "{n} nodes selected"})
 	registerPlural(EN, "plural.runners", PluralForms{One: "{n} runner", Other: "{n} runners"})
+	registerPlural(EN, "plural.sans", PluralForms{One: "{n} name", Other: "{n} names"})
 }

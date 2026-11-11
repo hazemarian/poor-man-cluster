@@ -7,78 +7,22 @@
      masked value and the plaintext only appears in the modal after an explicit,
      confirmed reveal. */}}
 
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{TF "stackconfigs.title" .Stack}}</h1>
-    <p class="sub">{{T "stackconfigs.sub"}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm"
-            hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
-      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
-    </button>
-    <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Stack}}"
-       hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.back"}}">
-      {{icon "chevron"}}<span>{{T "common.back"}}</span>
-    </a>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (TF "stackconfigs.title" .Stack) "Sub" (T "stackconfigs.sub") "Refresh" (printf "/web/stacks/%s/config" .Stack) "Actions" (partial "stackconfigs_actions" .))}}
 
 {{if .ErrKey}}
-<div class="banner bad">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T .ErrKey}}</p>
-    <p>{{T "err.banner_body"}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-  <div class="b-actions">
-    <button type="button" class="btn btn-ghost btn-sm"
-            hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">
-      {{icon "refresh"}}<span>{{T "common.retry"}}</span>
-    </button>
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" (printf "/web/stacks/%s/config" .Stack))}}
 {{end}}
 
 {{if .MsgKey}}
-<div class="banner ok">
-  {{icon "check-circle"}}
-  <div class="b-body">
-    <p class="b-title">{{TF .MsgKey .MsgArg0 .MsgArg1}}</p>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (TF .MsgKey .MsgArg0 .MsgArg1))}}
 {{end}}
 
 <section class="panel">
-  <div class="panel-head">
-    <h2>{{T "stackconfigs.configs_title"}}</h2>
-    <div class="ph-actions">
-      {{if .ConfigsKnown}}
-        <span class="pill plain">{{P (len .Configs) "plural.configs"}}</span>
-      {{else}}
-        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
-      {{end}}
-      <button type="button" class="btn btn-primary btn-sm"
-              hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "configs.form_new"}}">
-        {{icon "plus"}}<span>{{T "configs.form_new"}}</span>
-      </button>
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "stackconfigs.configs_title") "Actions" (partial "stackconfigs_pactions" .))}}
 
   {{if not .ConfigsKnown}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "alert"}}
-      <h3>{{T "stackconfigs.configs_unknown_title"}}</h3>
-      <p>{{T "stackconfigs.configs_unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm"
-                hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">
-          {{icon "refresh"}}<span>{{T "common.retry"}}</span>
-        </button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "alert" "Title" (T "stackconfigs.configs_unknown_title") "Body" (T "stackconfigs.configs_unknown_body") "Retry" (printf "/web/stacks/%s/config" .Stack) "Label" "retry")}}
   </div>
   {{else if .Configs}}
   <div class="table-wrap only-md">
@@ -163,50 +107,17 @@
   </div>
   {{else}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "file"}}
-      <h3>{{T "stackconfigs.configs_empty_title"}}</h3>
-      <p>{{T "stackconfigs.configs_empty_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-primary btn-sm"
-                hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "configs.form_new"}}">
-          {{icon "plus"}}<span>{{T "configs.form_new"}}</span>
-        </button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "file" "Title" (T "stackconfigs.configs_empty_title") "Body" (T "stackconfigs.configs_empty_body") "Action" (partial "stackconfigs_action2" .))}}
   </div>
   {{end}}
 </section>
 
 <section class="panel mt-24">
-  <div class="panel-head">
-    <h2>{{T "stackconfigs.secrets_title"}}</h2>
-    <div class="ph-actions">
-      {{if .SecretsKnown}}
-        <span class="pill plain">{{P (len .Secrets) "plural.secrets"}}</span>
-      {{else}}
-        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
-      {{end}}
-      <button type="button" class="btn btn-primary btn-sm"
-              hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "stackconfigs.form_new_secret"}}">
-        {{icon "plus"}}<span>{{T "stackconfigs.form_new_secret"}}</span>
-      </button>
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "stackconfigs.secrets_title") "Actions" (partial "stackconfigs_pactions2" .))}}
 
   {{if not .SecretsKnown}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "alert"}}
-      <h3>{{T "stackconfigs.secrets_unknown_title"}}</h3>
-      <p>{{T "stackconfigs.secrets_unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm"
-                hx-get="/web/stacks/{{.Stack}}/config" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">
-          {{icon "refresh"}}<span>{{T "common.retry"}}</span>
-        </button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "alert" "Title" (T "stackconfigs.secrets_unknown_title") "Body" (T "stackconfigs.secrets_unknown_body") "Retry" (printf "/web/stacks/%s/config" .Stack) "Label" "retry")}}
   </div>
   {{else if .Secrets}}
   <div class="table-wrap only-md">
@@ -282,18 +193,43 @@
   </div>
   {{else}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "keys"}}
-      <h3>{{T "stackconfigs.secrets_empty_title"}}</h3>
-      <p>{{T "stackconfigs.secrets_empty_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-primary btn-sm"
-                hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "stackconfigs.form_new_secret"}}">
-          {{icon "plus"}}<span>{{T "stackconfigs.form_new_secret"}}</span>
-        </button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "keys" "Title" (T "stackconfigs.secrets_empty_title") "Body" (T "stackconfigs.secrets_empty_body") "Action" (partial "stackconfigs_action3" .))}}
   </div>
   {{end}}
 </section>
 {{end}}
+
+{{define "stackconfigs_actions"}}<a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Stack}}"
+       hx-get="/web/stacks/{{.Stack}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.back"}}">
+      {{icon "chevron"}}<span>{{T "common.back"}}</span>
+    </a>{{end}}
+
+{{define "stackconfigs_action2"}}<button type="button" class="btn btn-primary btn-sm"
+                hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "configs.form_new"}}">
+          {{icon "plus"}}<span>{{T "configs.form_new"}}</span>
+        </button>{{end}}
+
+{{define "stackconfigs_action3"}}<button type="button" class="btn btn-primary btn-sm"
+                hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "stackconfigs.form_new_secret"}}">
+          {{icon "plus"}}<span>{{T "stackconfigs.form_new_secret"}}</span>
+        </button>{{end}}
+
+{{define "stackconfigs_pactions"}}{{if .ConfigsKnown}}
+        <span class="pill plain">{{P (len .Configs) "plural.configs"}}</span>
+      {{else}}
+        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}
+      <button type="button" class="btn btn-primary btn-sm"
+              hx-get="/web/stacks/{{.Stack}}/configs/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "configs.form_new"}}">
+        {{icon "plus"}}<span>{{T "configs.form_new"}}</span>
+      </button>{{end}}
+
+{{define "stackconfigs_pactions2"}}{{if .SecretsKnown}}
+        <span class="pill plain">{{P (len .Secrets) "plural.secrets"}}</span>
+      {{else}}
+        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}
+      <button type="button" class="btn btn-primary btn-sm"
+              hx-get="/web/stacks/{{.Stack}}/secrets/new" hx-target="#modal-body" onclick="openModal()" data-tip="{{T "stackconfigs.form_new_secret"}}">
+        {{icon "plus"}}<span>{{T "stackconfigs.form_new_secret"}}</span>
+      </button>{{end}}

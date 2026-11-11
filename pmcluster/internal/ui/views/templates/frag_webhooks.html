@@ -7,56 +7,20 @@
      exists in exactly one response, so it gets its own panel with the copy
      control and the endpoint it is meant for — and it is simply absent on every
      later render. */}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "webhooks.title"}}</h1>
-    <p class="sub">{{if .Configured}}{{T "webhooks.sub"}}{{else}}{{T "webhooks.not_configured_body"}}{{end}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
-      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
-    </button>
-    <button type="button" class="btn btn-primary btn-sm" data-focus onclick="document.getElementById('wh-source').focus()" data-tip="{{T "webhooks.add_title"}}">
-      {{icon "plus"}}<span>{{T "webhooks.add_title"}}</span>
-    </button>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "webhooks.title") "Sub" (partial "webhooks_sub" .) "Refresh" "/web/webhooks" "Actions" (partial "webhooks_actions" .))}}
 
 {{if .MsgKey}}
-<div class="msg ok">{{TF .MsgKey .MsgArg}}</div>
+{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (TF .MsgKey .MsgArg))}}
 {{end}}
 
 {{if .ErrKey}}
-<div class="banner bad">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T .ErrKey}}</p>
-    {{if eq .ErrKey "err.api_not_configured"}}
-    <p>{{T "webhooks.not_configured_body"}}</p>
-    {{else}}
-    <p>{{T "err.banner_body"}}</p>
-    {{end}}
-    {{if .ErrRaw}}
-    <details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>
-    {{end}}
-  </div>
-  <div class="b-actions">
-    {{if eq .ErrKey "err.api_not_configured"}}
-    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
-    {{else}}
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-    {{end}}
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/webhooks" "Unconfigured" "webhooks.not_configured_body")}}
 {{end}}
 
 {{/* The one and only render that carries the secret. */}}
 {{if .Secret}}
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{TF "webhooks.secret_title" .SecretSource}}</h2>
-    <div class="ph-actions"><span class="pill warn"><i class="dot"></i>{{T "webhooks.secret_pill"}}</span></div>
-  </div>
+  {{template "panelhead" (dict "Title" (TF "webhooks.secret_title" .SecretSource) "Actions" (partial "webhooks_pactions" .))}}
   <div class="panel-body">
     <p>{{T "webhooks.secret_body"}}</p>
     <div class="input-group">
@@ -76,60 +40,21 @@
 {{end}}
 
 <div class="stats">
-  <div class="stat{{if not .Known}} is-unknown{{end}}">
-    <div class="stat-l">{{icon "webhooks"}}{{T "webhooks.st_sources"}}</div>
-    {{if .Known}}
-    <div class="stat-v num">{{P .Count "plural.sources"}}</div>
-    <div class="stat-f">{{T "webhooks.st_sources_foot"}}</div>
-    {{else}}
-    <div class="stat-v">—</div>
-    <div class="stat-f">{{T "webhooks.st_unknown_foot"}}</div>
-    {{end}}
-  </div>
+  {{template "stat" (dict "Class" (partial "webhooks_scls1" .) "Icon" "webhooks" "Label" (T "webhooks.st_sources") "Inner" (partial "webhooks_sinner1" .))}}
 
-  <div class="stat{{if not .DomainKnown}} is-unknown{{end}}">
-    <div class="stat-l">{{icon "external"}}{{T "webhooks.st_endpoint"}}</div>
-    {{if .DomainKnown}}
-    <div class="stat-v"><span class="mono iso" dir="ltr">{{.Base}}/webhook/</span></div>
-    <div class="stat-f">{{T "webhooks.st_endpoint_foot"}}</div>
-    {{else}}
-    <div class="stat-v">—</div>
-    <div class="stat-f">{{T "webhooks.st_endpoint_unknown_foot"}}</div>
-    {{end}}
-  </div>
+  {{template "stat" (dict "Class" (partial "webhooks_scls2" .) "Icon" "external" "Label" (T "webhooks.st_endpoint") "Inner" (partial "webhooks_sinner2" .))}}
 
-  <div class="stat">
-    <div class="stat-l">{{icon "lock"}}{{T "webhooks.d_sig"}}</div>
-    <div class="stat-v"><span class="mono iso" dir="ltr">X-Pmcluster-Signature</span></div>
-    <div class="stat-f">{{T "webhooks.st_sig_foot"}}</div>
-  </div>
+  {{template "stat" (dict "Icon" "lock" "Label" (T "webhooks.d_sig") "Value" (partial "webhooks_value" .) "Foot" (T "webhooks.st_sig_foot"))}}
 
-  <div class="stat">
-    <div class="stat-l">{{icon "clock"}}{{T "webhooks.d_skew"}}</div>
-    <div class="stat-v num">{{T "webhooks.d_skew_v"}}</div>
-    <div class="stat-f">{{T "webhooks.st_skew_foot"}}</div>
-  </div>
+  {{template "stat" (dict "Icon" "clock" "Label" (T "webhooks.d_skew") "Value" (T "webhooks.d_skew_v") "ValueClass" "num" "Foot" (T "webhooks.st_skew_foot"))}}
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "webhooks.keys_title"}}</h2>
-    <div class="ph-actions">
-      {{if .Known}}<span class="pill plain">{{P .Count "plural.sources"}}</span>
-      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "webhooks.keys_title") "Actions" (partial "webhooks_pactions2" .))}}
 
   <div class="panel-body tight">
     {{if not .Configured}}
-    <div class="empty">
-      <i class="ic">{{icon "settings"}}</i>
-      <h3>{{T "err.api_not_configured"}}</h3>
-      <p>{{T "webhooks.not_configured_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "settings" "Title" (T "err.api_not_configured") "Body" (T "webhooks.not_configured_body") "Settings" true)}}
     {{else if .Known}}
       {{if .Sources}}
       <div class="table-wrap only-md">
@@ -184,24 +109,10 @@
         {{end}}
       </div>
       {{else}}
-      <div class="empty">
-        <i class="ic">{{icon "webhooks"}}</i>
-        <h3>{{T "webhooks.empty_title"}}</h3>
-        <p>{{T "webhooks.empty_body"}}</p>
-        <div class="empty-actions">
-          <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('wh-source').focus()" data-tip="{{T "webhooks.empty_action"}}">{{icon "plus"}}<span>{{T "webhooks.empty_action"}}</span></button>
-        </div>
-      </div>
+      {{template "empty" (dict "Icon" "webhooks" "Title" (T "webhooks.empty_title") "Body" (T "webhooks.empty_body") "Action" (partial "webhooks_action2" .))}}
       {{end}}
     {{else}}
-    <div class="empty">
-      <i class="ic">{{icon "alert"}}</i>
-      <h3>{{T "webhooks.unknown_title"}}</h3>
-      <p>{{T "webhooks.unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "alert" "Title" (T "webhooks.unknown_title") "Body" (T "webhooks.unknown_body") "Retry" "/web/webhooks")}}
     {{end}}
   </div>
 
@@ -211,9 +122,7 @@
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "webhooks.add_title"}}</h2>
-  </div>
+  {{template "panelhead" (dict "Title" (T "webhooks.add_title"))}}
   <div class="panel-body">
     <p class="muted">{{T "webhooks.add_sub"}}</p>
     <form hx-post="/web/webhooks" hx-target="#view" hx-swap="innerHTML" hx-disabled-elt="find [type='submit']">
@@ -238,9 +147,7 @@
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "webhooks.delivery_title"}}</h2>
-  </div>
+  {{template "panelhead" (dict "Title" (T "webhooks.delivery_title"))}}
   <div class="panel-body">
     <p class="muted">{{T "webhooks.delivery_sub"}}</p>
     <div class="kv">
@@ -264,3 +171,38 @@ curl -fsS -X POST "$WEBHOOK_URL" \
   </div>
 </div>
 {{end}}
+
+{{define "webhooks_sub"}}{{if .Configured}}{{T "webhooks.sub"}}{{else}}{{T "webhooks.not_configured_body"}}{{end}}{{end}}
+
+{{define "webhooks_actions"}}<button type="button" class="btn btn-primary btn-sm" data-focus onclick="document.getElementById('wh-source').focus()" data-tip="{{T "webhooks.add_title"}}">
+      {{icon "plus"}}<span>{{T "webhooks.add_title"}}</span>
+    </button>{{end}}
+
+{{define "webhooks_action2"}}<button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('wh-source').focus()" data-tip="{{T "webhooks.empty_action"}}">{{icon "plus"}}<span>{{T "webhooks.empty_action"}}</span></button>{{end}}
+
+{{define "webhooks_pactions"}}<span class="pill warn"><i class="dot"></i>{{T "webhooks.secret_pill"}}</span>{{end}}
+
+{{define "webhooks_pactions2"}}{{if .Known}}<span class="pill plain">{{P .Count "plural.sources"}}</span>
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}{{end}}
+
+{{define "webhooks_value"}}<span class="mono iso" dir="ltr">X-Pmcluster-Signature</span>{{end}}
+
+{{define "webhooks_scls1"}} {{if not .Known}} is-unknown{{end}}{{end}}
+
+{{define "webhooks_sinner1"}}{{if .Known}}
+    <div class="stat-v num">{{P .Count "plural.sources"}}</div>
+    <div class="stat-f">{{T "webhooks.st_sources_foot"}}</div>
+    {{else}}
+    <div class="stat-v">—</div>
+    <div class="stat-f">{{T "webhooks.st_unknown_foot"}}</div>
+    {{end}}{{end}}
+
+{{define "webhooks_scls2"}} {{if not .DomainKnown}} is-unknown{{end}}{{end}}
+
+{{define "webhooks_sinner2"}}{{if .DomainKnown}}
+    <div class="stat-v"><span class="mono iso" dir="ltr">{{.Base}}/webhook/</span></div>
+    <div class="stat-f">{{T "webhooks.st_endpoint_foot"}}</div>
+    {{else}}
+    <div class="stat-v">—</div>
+    <div class="stat-f">{{T "webhooks.st_endpoint_unknown_foot"}}</div>
+    {{end}}{{end}}

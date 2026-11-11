@@ -30,6 +30,8 @@
   <link rel="stylesheet" href="{{static "components.css"}}">
   <link rel="stylesheet" href="{{static "patterns.css"}}">
   <link rel="stylesheet" href="{{static "brand.css"}}">
+  <link rel="stylesheet" href="{{static "nx-fonts.css"}}">
+  <link rel="stylesheet" href="{{static "nx-theme.css"}}">
   <script src="{{static "preferences.js"}}" defer></script>
 </head>
 <body>
@@ -65,11 +67,7 @@
       {{if .Failure}}
       {{/* One sentence, no blame, and the same wording for a wrong username as
            for a wrong password so the form never confirms an account exists. */}}
-      <div class="banner bad" role="alert">
-        <div class="b-body">
-          <p class="b-title">{{if .Detail}}{{TF .Failure .Detail}}{{else}}{{T .Failure}}{{end}}</p>
-        </div>
-      </div>
+      {{template "banner" (dict "Tone" "bad" "Icon" "alert" "Role" "alert" "Title" (or (and .Detail (TF .Failure .Detail)) (T .Failure)))}}
       {{end}}
 
       <div class="field">

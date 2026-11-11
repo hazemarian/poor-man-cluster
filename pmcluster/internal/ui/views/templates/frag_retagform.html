@@ -9,7 +9,7 @@
 <p class="sub">{{T "inventory.retag_sub"}}</p>
 
 {{if .Error}}
-<div class="msg err">{{.Error}}</div>
+{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" .Error)}}
 {{end}}
 
 <form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML"
