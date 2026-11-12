@@ -37,6 +37,10 @@ type mockDaemon struct {
 	// execAttachRaw, when non-nil, makes the /exec/<id>/start endpoint write
 	// these raw bytes (TTY mode, no stdcopy framing) then half-close.
 	execAttachRaw []byte
+	// refuseNodeUpdates makes the first N node updates fail the way Swarm does when
+	// another writer won the race: `update out of sequence`. A client that retries
+	// properly re-inspects (getting a fresh version) and succeeds.
+	refuseNodeUpdates int
 	// nodeUpdates records each POST /nodes/<id>/update: the spec the client
 	// asked the daemon to store, and the version it based the update on.
 	nodeUpdates []nodeUpdateRecord
@@ -158,6 +162,20 @@ func (m *mockDaemon) handler() http.Handler {
 					version: r.URL.Query().Get("version"),
 					spec:    spec,
 				})
+				if m.refuseNodeUpdates > 0 {
+					m.refuseNodeUpdates--
+					// The real daemon bumps the node version on every accepted update,
+					// so a retry with the version it read BEFORE the loss must fail too
+					// — only a re-inspect can succeed. Bumping here is what makes the
+					// test prove the retry re-reads instead of replaying stale state.
+					for i := range m.nodes {
+						if m.nodes[i].ID == id {
+							m.nodes[i].Version.Index++
+						}
+					}
+					http.Error(w, `{"message":"rpc error: code = Unknown desc = update out of sequence"}`, http.StatusInternalServerError)
+					return
+				}
 				// Apply it, the way a real daemon does — a client that reads the
 				// node back after writing must see its own update.
 				for i := range m.nodes {
@@ -919,5 +937,53 @@ func TestRealClient_SetNodeRoleUpdatesTheNodeSpec(t *testing.T) {
 	}
 	if len(m.nodeUpdates) != 2 || m.nodeUpdates[1].spec.Role != swarm.NodeRoleManager {
 		t.Fatalf("role was not promoted back: %+v", m.nodeUpdates)
+	}
+}
+
+// TestRealClient_SetNodeLabelRetriesAfterALostRace is the regression for a live
+// warning that left the platform "running with less than it asked for":
+//
+//	could not label storage node nxt-sw-4-m (node update: rpc error: code = Unknown
+//	desc = update out of sequence)
+//
+// Swarm refuses an update whose version is stale. Losing that race is not a bad label,
+// it is someone else winning first, and the fix is to re-read and write again. The mock
+// bumps the node version on the refusal, exactly as the daemon does, so a replay with
+// the old version fails too — only a real re-inspect can succeed.
+func TestRealClient_SetNodeLabelRetriesAfterALostRace(t *testing.T) {
+	m := newMockDaemon()
+	m.nodes = []swarm.Node{{
+		ID:   "node-1",
+		Meta: swarm.Meta{Version: swarm.Version{Index: 4}},
+		Spec: swarm.NodeSpec{},
+	}}
+	m.refuseNodeUpdates = 1
+	rc := realClientFromServer(t, m)
+
+	if err := rc.SetNodeLabel(context.Background(), "node-1", runtime.StorageNodeLabel, "true"); err != nil {
+		t.Fatalf("SetNodeLabel after a lost race: %v", err)
+	}
+	if len(m.nodeUpdates) != 2 {
+		t.Fatalf("node updates = %d, want 2 (the refused attempt and the retry)", len(m.nodeUpdates))
+	}
+	if m.nodeUpdates[0].version == m.nodeUpdates[1].version {
+		t.Fatalf("both attempts used version %q — the retry replayed stale state instead of re-inspecting",
+			m.nodeUpdates[0].version)
+	}
+	if got := m.nodeUpdates[1].spec.Labels[runtime.StorageNodeLabel]; got != "true" {
+		t.Fatalf("the retried update did not carry the label, got %q", got)
+	}
+}
+
+// A real error must surface at once: retrying a permission failure three times just
+// makes the same mistake slower.
+func TestRealClient_SetNodeLabelDoesNotRetryRealErrors(t *testing.T) {
+	m := newMockDaemon()
+	m.nodes = []swarm.Node{{ID: "node-1", Meta: swarm.Meta{Version: swarm.Version{Index: 1}}}}
+	rc := realClientFromServer(t, m)
+
+	// An unknown node is a genuine failure, not a race.
+	if err := rc.SetNodeLabel(context.Background(), "node-absent", runtime.StorageNodeLabel, "true"); err == nil {
+		t.Fatal("labelling a node that does not exist succeeded")
 	}
 }
