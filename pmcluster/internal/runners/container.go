@@ -175,6 +175,10 @@ func (s Spec) EnvFixups() []string {
 // The doctor and the tests use it to state the exposure explicitly.
 func (s Spec) UsesRawSocket() bool { return !s.SocketProxy && !s.DinD }
 
+// DefaultDinDImage is pinned like every other image this platform runs: a node
+// must not silently change daemon version under a job written against another.
+const DefaultDinDImage = "docker:27-dind"
+
 // DinDName is the privileged docker:dind container that hosts this runner's own
 // daemon. It is removed together with the runner, so nothing it created survives.
 func (s Spec) DinDName() string { return s.RunnerName + "-dind" }
@@ -196,7 +200,11 @@ func (s Spec) DinDArgv() ([]string, error) {
 	if !s.DinD {
 		return nil, fmt.Errorf("dind argv requested for %s, which is not a dind runner", s.RunnerName)
 	}
-	image := s.Image
+	// The dind container runs a DAEMON, not a runner: it must never inherit
+	// Spec.Image, which is the runner image. That mistake shipped once and cost a
+	// deploy — the privileged container booted a runner with no token, exited
+	// immediately, and the failure read as "the dind daemon never answered".
+	image := DefaultDinDImage
 	if strings.TrimSpace(s.DinDImage) != "" {
 		image = s.DinDImage
 	}

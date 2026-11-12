@@ -46,6 +46,16 @@ func TestDinDArgvGivesTheJobItsOwnDaemon(t *testing.T) {
 	if strings.Contains(joined, "/var/run/docker.sock:") {
 		t.Fatalf("the host socket is bind-mounted into the dind container:\n%s", joined)
 	}
+	// The daemon container must not run the RUNNER image. Not hypothetical: the first
+	// version fell back to Spec.Image, so the privileged container booted a runner
+	// with no token, exited at once, and the reconcile reported "the dind daemon in
+	// <name> never answered".
+	if got := argv[len(argv)-1]; got != DefaultDinDImage {
+		t.Fatalf("the dind container runs %q, want %q", got, DefaultDinDImage)
+	}
+	if strings.Contains(joined, DefaultImage) {
+		t.Fatalf("the dind container is running the runner image:\n%s", joined)
+	}
 }
 
 // TestDinDRunnerUsesItsOwnSocketNotTheHosts is the security assertion: the runner
