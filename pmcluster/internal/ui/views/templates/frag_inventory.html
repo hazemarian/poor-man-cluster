@@ -23,18 +23,18 @@
      aria-selected="{{if eq .Tab "stacks"}}true{{else}}false{{end}}"{{if eq .Tab "stacks"}} aria-current="page"{{end}}
      href="/web/inventory?tab=stacks{{if .Filtered}}&amp;q={{.Query | urlquery}}{{end}}"
      hx-get="/web/inventory?tab=stacks{{if .Filtered}}&amp;q={{.Query | urlquery}}{{end}}"
-     hx-target="#view" hx-push-url="true">{{T "inventory.tab_stacks"}}</a>
+     hx-target="#view" hx-push-url="true" data-morph>{{T "inventory.tab_stacks"}}</a>
   <a role="tab" class="tab{{if eq .Tab "platform"}} is-active{{end}}"
      aria-selected="{{if eq .Tab "platform"}}true{{else}}false{{end}}"{{if eq .Tab "platform"}} aria-current="page"{{end}}
      href="/web/inventory?tab=platform{{if .Filtered}}&amp;q={{.Query | urlquery}}{{end}}"
      hx-get="/web/inventory?tab=platform{{if .Filtered}}&amp;q={{.Query | urlquery}}{{end}}"
-     hx-target="#view" hx-push-url="true">{{T "inventory.tab_platform"}}</a>
+     hx-target="#view" hx-push-url="true" data-morph>{{T "inventory.tab_platform"}}</a>
 </div>
 
 {{/* The toolbar is the stacks index's search, with the active tab carried in
      a hidden field so typing never drops the operator back to Stacks. */}}
 <form class="toolbar" method="get" action="/web/inventory"
-      hx-get="/web/inventory" hx-target="#view" hx-push-url="true"
+      hx-get="/web/inventory" hx-target="#view" hx-push-url="true" data-morph
       hx-trigger="submit, keyup changed delay:400ms, search">
   <input type="hidden" name="tab" value="{{.Tab}}">
   <div class="search">
@@ -349,16 +349,18 @@
         {{if .Filtered}}<span class="pill plain">{{TF "inventory.showing" (N (len .Rows)) (N .Total)}}</span>
         {{else}}<span class="pill plain">{{P (len .Rows) "plural.configs"}}</span>{{end}}
       {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
-      <button type="button" class="btn btn-primary btn-sm"
+      {{/* An empty, unfiltered list already offers the same button in its empty state; don't show it twice. */}}
+      {{if or (not .Known) .Rows .Filtered}}<button type="button" class="btn btn-primary btn-sm"
               hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
         {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
-      </button>{{end}}
+      </button>{{end}}{{end}}
 
 {{define "inventory_pactions2"}}{{if .Known}}
         {{if .Filtered}}<span class="pill plain">{{TF "inventory.showing" (N (len .Rows)) (N .Total)}}</span>
         {{else}}<span class="pill plain">{{P (len .Rows) "plural.secrets"}}</span>{{end}}
       {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
-      <button type="button" class="btn btn-primary btn-sm"
+      {{/* An empty, unfiltered list already offers the same button in its empty state; don't show it twice. */}}
+      {{if or (not .Known) .Rows .Filtered}}<button type="button" class="btn btn-primary btn-sm"
               hx-get="{{.CreateURL}}" hx-target="#modal-body" onclick="openModal()" data-tip="{{T .CreateTipKey}}">
         {{icon "plus"}}<span>{{T .CreateTipKey}}</span>
-      </button>{{end}}
+      </button>{{end}}{{end}}

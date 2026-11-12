@@ -110,10 +110,11 @@ func NewRenderer() (*Renderer, error) {
 	// text/template validates function names while parsing, not while
 	// executing.
 	t, err := template.New("ui").Funcs(template.FuncMap{
-		"ts":   formatTime,
-		"tb":   toBytes,
-		"sp":   statusPill,
-		"icon": icon,
+		"ts":      formatTime,
+		"tsRange": formatRange,
+		"tb":      toBytes,
+		"sp":      statusPill,
+		"icon":    icon,
 		// dict builds a map for {{template "banner" (dict "Tone" "bad" ...)}}: a
 		// template takes one argument, so shared components take a keyed bag.
 		"dict": dict,
@@ -238,7 +239,13 @@ func shortImage(v string) string {
 // fragment URL) and ShellData is set, it renders the app shell with the
 // fragment embedded in #view so navigation styles survive a refresh.
 func (r *Renderer) Fragment(c *gin.Context, name string, data any) {
-	if r.ShellData != nil && c.GetHeader("HX-Request") == "" {
+	// The same URL answers two ways (fragment for htmx, whole page otherwise), so caches must key on the
+	// request kind, and revalidate: otherwise Back can show a stored fragment with no stylesheet.
+	c.Header("Vary", "HX-Request, HX-History-Restore-Request")
+	c.Header("Cache-Control", "no-cache")
+	// htmx's history restore (Back/Forward after its snapshot expired) also sends HX-Request but swaps the
+	// response in as the whole page, so it needs the shell, not a fragment.
+	if r.ShellData != nil && (c.GetHeader("HX-Request") == "" || c.GetHeader("HX-History-Restore-Request") == "true") {
 		var buf bytes.Buffer
 		if err := r.withRequest(c).ExecuteTemplate(&buf, name, data); err != nil {
 			http.Error(c.Writer, "template error: "+err.Error(), http.StatusInternalServerError)
@@ -350,4 +357,20 @@ func dict(kv ...any) (map[string]any, error) {
 		m[k] = kv[i+1]
 	}
 	return m, nil
+}
+
+// formatRange renders an RFC 3339 window as "2026-11-12 · 20:04 – 21:04 UTC" (same day) or
+// "2026-11-12 20:04 – 2026-11-13 02:00 UTC". It falls back to the raw strings if either
+// end does not parse, so a changed API format never blanks the header.
+func formatRange(start, end string) string {
+	a, errA := time.Parse(time.RFC3339, start)
+	b, errB := time.Parse(time.RFC3339, end)
+	if errA != nil || errB != nil {
+		return start + " – " + end
+	}
+	a, b = a.UTC(), b.UTC()
+	if a.Format("2006-01-02") == b.Format("2006-01-02") {
+		return a.Format("2006-01-02") + " · " + a.Format("15:04") + " – " + b.Format("15:04") + " UTC"
+	}
+	return a.Format("2006-01-02 15:04") + " – " + b.Format("2006-01-02 15:04") + " UTC"
 }

@@ -9,8 +9,8 @@
   :root{--bg:#f6f5ed;--panel:#fffefa;--fg:#20372c;--dim:#586c60;--accent:#285f45;--accent-fg:#fffefa;--fill:rgba(32,55,44,.07);--ring:rgba(32,55,44,.1);--shadow:0 24px 60px rgba(22,40,31,.10)}
   @media (prefers-color-scheme:dark){:root{--bg:#151a18;--panel:#202724;--fg:#ecf2ed;--dim:#b5c4b9;--accent:#84d6a1;--accent-fg:#10221a;--fill:rgba(236,242,237,.07);--ring:rgba(236,242,237,.1);--shadow:0 24px 60px rgba(0,0,0,.4)}}
   *{box-sizing:border-box}
-  html,body{margin:0;min-height:100%}
-  body{min-height:100vh;display:grid;place-items:center;padding:24px;background:var(--bg);color:var(--fg);font:16px/1.5 "Instrument Sans","IBM Plex Sans Arabic",system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+  html,body{margin:0}
+  body{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:24px;background:var(--bg);color:var(--fg);font:16px/1.5 "Instrument Sans","IBM Plex Sans Arabic",system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
   .card{width:min(420px,100%);padding:40px 32px 32px;border-radius:24px;background:var(--panel);box-shadow:0 0 0 1px var(--ring),var(--shadow);text-align:center;animation:rise .5s cubic-bezier(.22,.8,.24,1) both}
   .mark{width:64px;height:64px;margin:0 auto 20px;display:block}
   .mark .e{stroke:#b7bfcb}.mark .r{stroke:var(--accent)}.mark .n{fill:#232730}
