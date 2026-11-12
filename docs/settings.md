@@ -85,7 +85,7 @@ the switch it constrains.
 | Key | Default | Who sets it | What it controls |
 |---|---|---|---|
 | `volume_root` | `/var/stack/data` | setup wizard (`--volume-root`) / operator | the host root every container volume is forced under |
-| `storage_nodes` | leader's hostname (seeded once at bring-up) | operator, `join --storage-node`, `node promote/demote` | comma-separated storage node hostnames; stateful stacks round-robin across them, labeled-but-unlisted managers are adopted, and **the current leader is always re-added** (the edge and its local backup agent run there). Losing leadership removes nothing: a former leader stays a storage node, and membership is otherwise the operator's decision. **Entries must be managers**: a worker is pruned on the next `cluster update` (it cannot read settings, credentials or the stack list, so its backup agent would archive and ship nowhere) |
+| `storage_nodes` | leader's hostname (seeded once at bring-up) | operator, `join --storage-node`, `node promote/demote` | comma-separated storage node hostnames; stateful stacks round-robin across them, labeled-but-unlisted managers are adopted, and **the current leader is always re-added** (the edge and its local backup agent run there). Losing leadership removes nothing: a former leader stays a storage node, and membership is otherwise the operator's decision. **Entries must be managers**: a worker is pruned on the next `cluster update` (it cannot read settings, credentials or the stack list, so its backup agent would archive and ship nowhere) | **The node provisions itself**: the console toggle only writes this setting, and the node named here creates its data volume at daemon start when the volume root is empty (a node whose volume root already holds data is refused and says so).
 | `storage_failover` | `false` | setup prompt (only when offsite S3 is configured) / operator | automatic storage failover in the control loop (requires `backup_s3_*`; refuses to enable without it) |
 | `backup_enabled` | `true` | operator | master switch. The timer keeps firing; the agent asks the control plane and exits without freezing when this is off |
 | `backup_cron` | `0 * * * *` (hourly) | operator | when a run is due (5-field cron; `*`, numbers and comma lists only). Evaluated by the daemon, not by the unit file |
@@ -154,3 +154,31 @@ logs one warning line naming the rejected value and runs at `info`.
 2. The next `cluster update` (or the console's **Apply to swarm** button,
    `POST /api/update`) re-renders the affected platform configs and
    re-deploys what changed.
+
+## Promoting a node to storage from the console
+
+The console's storage toggle (`POST /web/nodes/<hostname>/storage`) sets the intent: the
+hostname goes into `storage_nodes` and the node is labelled. It does not provision
+anything itself, and it cannot — provisioning is local work (loop file, LVM, mkfs,
+mounts), so only the node can do it.
+
+The node converges the intent on its own, at daemon start:
+
+```
+1  is this hostname in storage_nodes?          no  → nothing happens
+2  is /var/stack/data provisioned and ours?     yes → nothing to do, silently
+3  does /var/stack/data hold any entries?       yes → REFUSE, and say so in the journal
+4  otherwise                                        → provision (loop mode), then say so
+```
+
+Same rule as the memory drop-in and the docker dependency: a setting is intent, and the
+node the intent names makes it true.
+
+The consequence worth internalising: a promotion on a node with no free space, or with
+data already in the volume root, leaves a node that is *listed* as storage and cannot
+host a stateful stack. The journal says which of the two happened; the console's
+checkbox cannot.
+
+If it refused because the volume root holds data, move the data and run
+`pmcluster storage provision` by hand once — that command does the same work and offers
+`--dry-run`, which the automatic path deliberately does not.

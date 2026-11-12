@@ -193,6 +193,24 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 		go convergeSystemd(func(f string, a ...any) { log.Info().Msgf(f, a...) }, sock, cfg.DataDir)
 
+		// The console's storage toggle sets INTENT; provisioning is local work (loop
+		// file, LVM, mkfs, mounts), so the node that the intent names has to do it —
+		// and its daemon is root there. Asynchronous because it takes minutes and must
+		// never delay serving; best effort because a node that cannot provision must
+		// still run.
+		go func() {
+			st, err := store.Open(cfg.DBPath())
+			if err != nil {
+				return // no store on this node: not a manager, cannot hold storage either
+			}
+			defer func() { _ = st.Close() }()
+			host, herr := os.Hostname()
+			if herr != nil {
+				return
+			}
+			convergeStorage(cmd.Context(), st, host, func(f string, a ...any) { log.Info().Msgf(f, a...) })
+		}()
+
 		// Publish this node's binary version so skew is visible before an
 		// upgrade script discovers it.
 		//
