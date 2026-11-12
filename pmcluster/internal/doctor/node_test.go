@@ -217,3 +217,8 @@ func (f fakeRunnerDocker) ExecIn(context.Context, string, ...string) ([]byte, er
 
 // RemoveVolume satisfies runners.LocalDocker for the same reason.
 func (f fakeRunnerDocker) RemoveVolume(context.Context, string) error { return nil }
+
+// VolumeSizes: this fake models a node with no cache volumes unless a test sets them.
+func (d fakeRunnerDocker) VolumeSizes(_ context.Context, prefix string) ([]runners.VolumeSize, error) {
+	return nil, nil
+}

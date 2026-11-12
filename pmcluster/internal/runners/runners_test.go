@@ -113,10 +113,12 @@ func TestValidation(t *testing.T) {
 // ---- fakes -----------------------------------------------------------------
 
 type fakeDocker struct {
-	containers map[string]Container
-	runCalls   [][]string
-	removed    []string
-	runErr     error
+	// volumeSizes is what docker reports for this node's volumes.
+	volumeSizes map[string]int64
+	containers  map[string]Container
+	runCalls    [][]string
+	removed     []string
+	runErr      error
 	// DinD lifecycle assertions
 	execCalls      [][]string
 	execErr        error
@@ -793,4 +795,15 @@ func wantPairRemoved(t *testing.T, removed []string, name string) {
 	if !hasDinD {
 		t.Fatalf("removed %v, want the dind container %s-dind as well", removed, name)
 	}
+}
+
+// VolumeSizes reports the volumes the fake was given sizes for.
+func (d *fakeDocker) VolumeSizes(_ context.Context, prefix string) ([]VolumeSize, error) {
+	var out []VolumeSize
+	for name, n := range d.volumeSizes {
+		if strings.HasPrefix(name, prefix) {
+			out = append(out, VolumeSize{Name: name, Bytes: n})
+		}
+	}
+	return out, nil
 }

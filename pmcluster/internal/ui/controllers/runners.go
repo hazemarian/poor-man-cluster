@@ -60,6 +60,12 @@ type runnerRow struct {
 
 	LastJobURL   string
 	LastJobLabel string
+	// CacheWarnings are this node's caches over their ceiling, as the daemon
+	// measured them. Empty for a node that is not this daemon's own.
+	CacheWarnings []string
+	// CacheTotal is every cache on this node added up, so one row can say what the
+	// node is holding without four numbers.
+	CacheTotal string
 	// Reason is why this row is in its state when that is not GitHub's news —
 	// a memory refusal names the node's RAM and the cap.
 	Reason string
@@ -120,6 +126,14 @@ type runnersData struct {
 
 	Rows  []runnerRow
 	Nodes []runnerNode
+	// CacheWarnings are the runner caches on any selected node that have passed
+	// their ceiling. Rendered as a loud banner at the top of the page: these volumes
+	// are the only thing the platform never removes, so a full disk is otherwise
+	// discovered by a job that has nothing to do with the cache.
+	CacheWarnings []string
+	// CacheWarningText is the same list joined into one sentence for the banner, which
+	// takes a single Body.
+	CacheWarningText string
 	// Selected is how many nodes are chosen (the capacity model: N nodes = N
 	// runners).
 	Selected int
@@ -408,6 +422,16 @@ func (c Runners) render(g *gin.Context, d runnersData) {
 	for _, s := range stats {
 		mem[strings.ToLower(s.Hostname)] = s
 	}
+	for _, r := range d.Rows {
+		if r.Node != "" && len(r.CacheWarnings) > 0 {
+			for _, w := range r.CacheWarnings {
+				d.CacheWarnings = append(d.CacheWarnings, r.Node+": "+w)
+			}
+		}
+	}
+	if len(d.CacheWarnings) > 0 {
+		d.CacheWarningText = strings.Join(d.CacheWarnings, " · ")
+	}
 	stateByNode := map[string]string{}
 	reasonByNode := map[string]string{}
 	for _, r := range d.Rows {
@@ -458,9 +482,11 @@ func buildRunnerRows(in []pmapi.GitHubRunner) []runnerRow {
 			State: r.State, StateClass: stateClass(r.State),
 			RegisteredAt: r.RegisteredAt, LastSeen: r.LastSeen,
 			ContainerID: r.ContainerID, LastJobURL: r.LastJobURL, Reason: r.Reason,
-			LastJobLabel: lastJobLabel(r.LastJobURL),
-			Age:          ageLabel(r.RegisteredAt),
-			Busy:         r.State == runners.StateBusy,
+			LastJobLabel:  lastJobLabel(r.LastJobURL),
+			Age:           ageLabel(r.RegisteredAt),
+			Busy:          r.State == runners.StateBusy,
+			CacheWarnings: r.CacheWarnings,
+			CacheTotal:    r.CacheTotal,
 		}
 		out = append(out, row)
 	}

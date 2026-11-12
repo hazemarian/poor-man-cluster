@@ -50,6 +50,7 @@ func (f *fakeFetcher) Calls() int {
 
 // fakeLocalDocker is the node-local container runtime.
 type fakeLocalDocker struct {
+	volumeSizes    map[string]int64
 	mu             sync.Mutex
 	containers     map[string]runners.Container
 	runCalls       [][]string
@@ -480,4 +481,15 @@ func (c *countingFetcher) Count() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.n
+}
+
+// VolumeSizes: this fake models a node with no cache volumes unless a test sets them.
+func (d *fakeLocalDocker) VolumeSizes(_ context.Context, prefix string) ([]runners.VolumeSize, error) {
+	var out []runners.VolumeSize
+	for name, n := range d.volumeSizes {
+		if strings.HasPrefix(name, prefix) {
+			out = append(out, runners.VolumeSize{Name: name, Bytes: n})
+		}
+	}
+	return out, nil
 }

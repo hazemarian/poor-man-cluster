@@ -60,6 +60,7 @@ func RunNodeLocal(ctx context.Context, in NodeInput) *Report {
 	add(checkLocalAssignment(in))
 	add(checkLocalRunner(ctx, in))
 	add(checkLocalRunnerMemory(in))
+	add(checkRunnerCaches(ctx, in))
 	add(checkDisk(Input{VolumeRoot: in.VolumeRoot}))
 	add(checkSwarmNodeLocal(ctx, in))
 	add(Check{
@@ -232,4 +233,40 @@ func readAgentRecord(path string) (runners.AgentRecord, bool) {
 		return runners.AgentRecord{}, false
 	}
 	return rec, true
+}
+
+// checkRunnerCaches reports the runner's persistent caches against their ceilings.
+//
+// It reads the numbers from docker itself, on this node, because that is where they are:
+// `docker volume inspect` has no size field and a host `du` would have to know where
+// docker put the volumes. The check only applies where a runner actually exists — the
+// volumes are created with the first job, so "no caches" on a node with no runner is not
+// a finding.
+//
+// WARN, not error: a full cache is a node about to run out of disk, not a cluster that is
+// down. It is the only warning available before a job fails with "no space left on
+// device" somewhere unrelated to the cache.
+func checkRunnerCaches(ctx context.Context, in NodeInput) Check {
+	if in.Docker == nil {
+		return Check{"runner caches", StatusSkip, "no local container runtime"}
+	}
+	name := runners.RunnerName(in.Hostname)
+	if _, ok, err := in.Docker.Inspect(ctx, name); err != nil || !ok {
+		if _, dok, _ := in.Docker.Inspect(ctx, name+"-dind"); err != nil || !dok {
+			return Check{"runner caches", StatusSkip, "no runner container on this node"}
+		}
+	}
+	usage, err := runners.ReadCacheUsage(ctx, in.Docker, name)
+	if err != nil {
+		return Check{"runner caches", StatusWarn, "could not measure the runner caches: " + err.Error()}
+	}
+	if warn := runners.CacheWarnings(usage); len(warn) > 0 {
+		return Check{"runner caches", StatusWarn, strings.Join(warn, "; ")}
+	}
+	parts := make([]string, 0, len(usage))
+	for _, c := range usage {
+		parts = append(parts, c.Name+" "+runners.HumanBytes(c.Bytes))
+	}
+	return Check{"runner caches", StatusOK,
+		strings.Join(parts, " · ") + " · total " + runners.HumanBytes(runners.TotalCacheBytes(usage))}
 }

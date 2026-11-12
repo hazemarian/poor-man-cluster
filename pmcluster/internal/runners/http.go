@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -37,6 +38,16 @@ type runnerJSON struct {
 	// Reason is why the row is in this state. Always present (empty when there is
 	// nothing to explain), so the schema does not change shape per row.
 	Reason string `json:"reason"`
+	// Caches is this runner's persistent cache volumes and their sizes, measured by
+	// the daemon ON ITS NODE. Empty for a runner on another node: nobody here can
+	// measure it, and "unknown" must not render as "empty".
+	Caches []CacheUsage `json:"caches,omitempty"`
+	// CacheTotal is every cache on that node added up, formatted for a table cell.
+	CacheTotal string `json:"cache_total,omitempty"`
+	// CacheWarnings are the caches that have passed their ceiling. The console shows
+	// them as a banner and in the row, because these volumes are the one thing the
+	// platform never removes and a full disk surfaces first in an unrelated job.
+	CacheWarnings []string `json:"cache_warnings,omitempty"`
 }
 
 // runnersJSON is the list response. enabled travels with the list because the
@@ -86,9 +97,25 @@ func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "read runners: " + err.Error()})
 		return
 	}
+	// Measure this daemon's own caches ONCE, then attach them to the rows that live
+	// here. Only the daemon on the node can measure its volumes, so a runner on
+	// another node reports nothing rather than zero — "not observable from here" and
+	// "empty" are different facts and the console renders them differently.
+	var cacheUsage []CacheUsage
+	var cacheTotal string
+	var cacheWarn []string
+	if h.Mgr.Docker != nil {
+		if u, cerr := ReadCacheUsage(r.Context(), h.Mgr.Docker, RunnerName(h.Mgr.Node)); cerr == nil {
+			cacheUsage, cacheTotal = u, HumanBytes(TotalCacheBytes(u))
+			cacheWarn = CacheWarnings(u)
+		} else {
+			cacheWarn = []string{"could not measure this node's runner caches: " + cerr.Error()}
+		}
+	}
 	out := runnersJSON{Enabled: h.Mgr.Enabled(r.Context()), Runners: make([]runnerJSON, 0, len(rows))}
 	for _, row := range rows {
-		out.Runners = append(out.Runners, runnerJSON{
+		local := strings.EqualFold(row.Node, h.Mgr.Node)
+		item := runnerJSON{
 			Name:         row.Name,
 			Org:          row.Org,
 			Node:         row.Node,
@@ -99,7 +126,11 @@ func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {
 			LastSeen:     row.LastSeen,
 			LastJobURL:   row.LastJobURL,
 			Reason:       row.Reason,
-		})
+		}
+		if local {
+			item.Caches, item.CacheTotal, item.CacheWarnings = cacheUsage, cacheTotal, cacheWarn
+		}
+		out.Runners = append(out.Runners, item)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

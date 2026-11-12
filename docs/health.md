@@ -410,3 +410,14 @@ while the process still has room instead of the cgroup killing it. Swarm service
 have no `oom_score_adj` field (`docker stack config` rejects it), so the ordering
 between the daemon and its tasks is bought from the daemon's side: the control
 plane drops to -500, the tasks stay at 0, and the kernel picks the task.
+
+## What `doctor` reports about runner caches
+
+`runner caches` is a per-node check on the volumes a job keeps between runs — the Go
+module cache, the npm store and the inner daemon's `/var/lib/docker`. It reads sizes from
+`docker system df -v`, because that is the only place they exist.
+
+It is a WARN when a cache passes its ceiling and OK otherwise, and it is skipped when the
+node runs no runner: the volumes are created with the first job, so their absence on a node
+that runs nothing is not a finding. If docker cannot measure them, the check says that
+rather than reporting zero — a number nobody measured is worse than an admission.

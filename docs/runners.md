@@ -359,6 +359,25 @@ stay**, which is the whole point, and the build cache is capped at 10 GB so a re
 that builds something large every hour cannot fill the node. Named volumes are left
 alone — a job may deliberately keep one for its next run.
 
+**They are measured, and they warn.** `docker volume inspect` has no size field, so the
+platform reads `docker system df -v` — the daemon's own accounting — and compares each
+cache with its ceiling:
+
+| Cache | Warns above |
+| --- | --- |
+| `go` | 5 GiB |
+| `npm` | 5 GiB |
+| `dind-data` | 20 GiB (it also holds images, and the build cache inside it is already capped at 10 GB) |
+
+Two places say so, both loud: the runners page carries a banner naming the volume and both
+numbers, and `doctor` reports it per node as a WARN — not an error, because a full cache is
+a node about to run out of disk, not a cluster that is down. That banner is the only
+warning this platform can give before a job fails with `no space left on device` in a
+repository that has nothing to do with the cache.
+
+The numbers come from the daemon **on the node**, so a runner listed on another node
+reports no sizes at all rather than zeros: unobservable and empty are different facts.
+
 **These three volumes are never removed by teardown**, and that is a deliberate
 exception to "the job leaves nothing behind": they hold no state a job can read, only
 caches it can invalidate.

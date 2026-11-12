@@ -103,6 +103,17 @@ type NodeReport struct {
 	// this node, and the reason names both numbers.
 	Refused bool   `json:"refused,omitempty"`
 	Reason  string `json:"reason,omitempty"`
+	// Caches are this node's persistent cache volumes and their sizes. Only the
+	// daemon that runs on the node can measure them, so this is empty for every other
+	// node — like ContainerKnown, absent means "not observable from here", not "zero".
+	//
+	// They are here because these volumes are the one thing the platform never
+	// removes: without a measurement the first sign of a problem is a full disk in an
+	// unrelated job.
+	Caches []CacheUsage `json:"caches,omitempty"`
+	// CacheWarnings are the caches that have passed their ceiling, in words an operator
+	// can act on. The console renders them as a banner and doctor repeats them.
+	CacheWarnings []string `json:"cache_warnings,omitempty"`
 	// Cap is the memory cap resolved FOR THIS NODE: its
 	// github_runner_node_memory override when one exists, else the cluster
 	// default. The doctor and the console report this, so an override is
@@ -187,6 +198,14 @@ func (m *Manager) Inspect(ctx context.Context) (Report, error) {
 		}
 		if strings.EqualFold(node, m.Node) {
 			nr.DockerAccess = dockerAccess
+			if usage, cerr := ReadCacheUsage(ctx, m.Docker, RunnerName(node)); cerr == nil {
+				nr.Caches = usage
+				nr.CacheWarnings = CacheWarnings(usage)
+			} else {
+				// A measurement that failed is reported, not silently zeroed: "the caches
+				// are empty" and "nobody could look" must not look the same.
+				nr.CacheWarnings = []string{"could not measure this node's runner caches: " + cerr.Error()}
+			}
 			if c, ok, err := m.inspect(ctx, name); err != nil {
 				nr.Error = err.Error()
 			} else if ok {
