@@ -89,7 +89,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// again after the leadership wait (a promoted worker must stop its loopback
 	// API before the leader API binds the same port).
 	var (
-		socketPath   *socketPathSource
 		localAPIStop func()
 		localAPIDone <-chan struct{}
 	)
@@ -252,21 +251,17 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// inert: the only nodes allowed to host a runner are the ones that never
 		// got past the wait.
 		//
-		//   - the socket proxy needs only the local docker socket and a path, so it
-		//     binds now on every node;
 		//   - a WORKER runs runners.Agent against the leader's assignment (its
 		//     settings are unreadable here, see internal/runners/assignment.go);
 		//   - a manager keeps the store-based reconcile, which starts as soon as
 		//     the store and the App exist (further down) — it cannot start before
 		//     them, and a standby manager is refused as a runner host anyway.
-		socketPath = &socketPathSource{Store: served.get}
 		startPerNodeLoops(cmd.Context(), perNodeDeps{
 			Worker:     worker,
 			Hostname:   hostname,
 			Container:  &runners.CLIDocker{},
 			Assignment: assignmentClientFor(dc, worker),
 			StatePath:  agentStatePath(cfg.DataDir),
-			SocketPath: socketPath,
 			Log:        log,
 		})
 

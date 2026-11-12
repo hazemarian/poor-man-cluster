@@ -35,8 +35,7 @@ func TestResolveAssignmentMatchesTheReconcileRules(t *testing.T) {
 	}
 	base := Config{
 		Enabled: true, Org: "acme", Group: "pmcluster",
-		Nodes: []string{"worker-1"}, SocketProxy: true,
-		SocketPath: "/run/pmcluster/docker.sock", Memory: "2560m",
+		Nodes: []string{"worker-1"}, Memory: "2560m",
 	}
 
 	t.Run("selected worker", func(t *testing.T) {
@@ -46,9 +45,6 @@ func TestResolveAssignmentMatchesTheReconcileRules(t *testing.T) {
 		}
 		if !a.Enabled || a.Org != "acme" || a.Mode != ModeEphemeral || a.Labels != Labels {
 			t.Fatalf("assignment = %+v", a)
-		}
-		if a.SocketPath != "/run/pmcluster/docker.sock" || !a.SocketProxy {
-			t.Fatalf("socket decision lost: %+v", a)
 		}
 		if !strings.Contains(a.Reason, "selected") {
 			t.Fatalf("reason should say why it is enabled: %q", a.Reason)
@@ -119,14 +115,14 @@ func TestResolveAssignmentMatchesTheReconcileRules(t *testing.T) {
 // console kill carried to the node and "refused" is the memory-size refusal —
 // both decisions, not credentials, so they belong here; anything secret or
 // settings-shaped does not.
+// assignmentKeys is the whole contract between the leader and a worker, pinned key by
+// key. There is no docker-access key in it: a job always gets a daemon of its own, so
+// there is nothing for the leader to decide and nothing for the worker to obey.
 var assignmentKeys = []string{
-	// dind: the leader decides whether a job gets its own daemon, and the worker is
-	// told — it is part of the documented contract this test pins.
-	"dind",
 	"enabled",
 	"group", "held", "interval_seconds", "issued_at", "labels", "memory",
 	"mode", "node", "node_docker_restart", "org", "reason", "refused", "registration_token",
-	"registration_token_expires_at", "socket_path", "socket_proxy",
+	"registration_token_expires_at",
 }
 
 func newAssignmentService(gh GitHub, nodes []runtime.Node, cfg Config, drained *[]string) *AssignmentService {
@@ -154,8 +150,7 @@ func requestFor(node swarmtls.Node, target string) *http.Request {
 
 func TestAssignmentEndpointRefusalsAndAnswer(t *testing.T) {
 	workers := []runtime.Node{{ID: "id-w1", Hostname: "worker-1", Role: "worker"}}
-	enabled := Config{Enabled: true, Org: "acme", Group: "pmcluster", Nodes: []string{"worker-1"},
-		SocketProxy: true, SocketPath: "/run/pmcluster/docker.sock", Memory: "2560m", IntervalSeconds: 60}
+	enabled := Config{Enabled: true, Org: "acme", Group: "pmcluster", Nodes: []string{"worker-1"}, Memory: "2560m", IntervalSeconds: 60}
 
 	t.Run("refuses a caller with no identity", func(t *testing.T) {
 		svc := newAssignmentService(newFakeGitHub(), workers, enabled, nil)
@@ -304,8 +299,7 @@ func TestAssignmentOverRealMTLS(t *testing.T) {
 		{ID: workerNodeID, Hostname: "nxt-sw-6-w", Role: "worker"},
 		{ID: "manager-node-id", Hostname: "nxt-sw-5-m", Role: "manager", IsLeader: true},
 	}
-	cfg := Config{Enabled: true, Org: "acme", Group: "pmcluster", Nodes: []string{"nxt-sw-6-w"},
-		SocketProxy: true, SocketPath: "/run/pmcluster/docker.sock", Memory: "2560m", IntervalSeconds: 60}
+	cfg := Config{Enabled: true, Org: "acme", Group: "pmcluster", Nodes: []string{"nxt-sw-6-w"}, Memory: "2560m", IntervalSeconds: 60}
 
 	svc := &AssignmentService{
 		Config: func(context.Context) Config { return cfg },
@@ -401,7 +395,6 @@ func TestAgentAppliesEnabledAssignment(t *testing.T) {
 	}
 	a := Assignment{
 		Node: "nxt-sw-6-w", Enabled: true, Org: "acme", Group: "pmcluster",
-		SocketProxy: true, SocketPath: "/run/pmcluster/docker.sock",
 		Memory: "2560m", Mode: ModeEphemeral, Labels: Labels,
 		Reason: "selected as a runner node", RegistrationToken: "reg-token",
 	}
@@ -412,16 +405,26 @@ func TestAgentAppliesEnabledAssignment(t *testing.T) {
 	if len(res.Registered) != 1 || res.Registered[0] != "acme" {
 		t.Fatalf("registered = %v", res.Registered)
 	}
-	if len(docker.runCalls) != 1 {
-		t.Fatalf("docker run calls = %d, want 1", len(docker.runCalls))
+	// Two containers now: the daemon, then the runner. The job's docker access is
+	// not optional, so every start is a dind start.
+	if len(docker.runCalls) != 2 {
+		t.Fatalf("docker run calls = %d, want 2 (daemon + runner)", len(docker.runCalls))
 	}
-	argv := strings.Join(docker.runCalls[0], " ")
-	if strings.Contains(argv, "/var/run/docker.sock") {
-		t.Fatalf("the worker's runner mounts the RAW socket: %s", argv)
+	argv := strings.Join(docker.runCalls[len(docker.runCalls)-1], " ")
+	// The path in DOCKER_HOST is the runner's own daemon, reached through a volume.
+	// What must not appear is a MOUNT of any host socket — the old filtered proxy's
+	// directory or the host's raw socket.
+	if strings.Contains(argv, "-v /var/run/docker.sock") || strings.Contains(argv, "/run/pmcluster") {
+		t.Fatalf("the worker's runner mounts a host socket: %s", argv)
 	}
-	if !strings.Contains(argv, "DOCKER_HOST=unix:///run/pmcluster/docker.sock") ||
-		!strings.Contains(argv, "-v /run/pmcluster:/run/pmcluster") {
-		t.Fatalf("the worker's runner does not mount the filtered socket's directory: %s", argv)
+	if !strings.Contains(argv, "-v pmc-nxt-sw-6-w-org-docker:/var/run") {
+		t.Fatalf("the worker's runner does not share its daemon's socket: %s", argv)
+	}
+	// And the caches are mounted, or every job would re-download its dependencies.
+	for _, want := range []string{"-cache-go:/go-cache", "-cache-npm:/npm-cache", "GOMODCACHE=/go-cache/mod", "npm_config_cache=/npm-cache/npm"} {
+		if !strings.Contains(argv, want) {
+			t.Fatalf("the runner does not mount its caches (%s missing): %s", want, argv)
+		}
 	}
 	if !strings.Contains(argv, "RUNNER_TOKEN=reg-token") || !strings.Contains(argv, "RUNNER_NAME=pmc-nxt-sw-6-w-org") {
 		t.Fatalf("argv = %s", argv)
@@ -448,8 +451,8 @@ func TestAgentAppliesEnabledAssignment(t *testing.T) {
 	if _, err := agent.Apply(context.Background(), a); err != nil {
 		t.Fatalf("second Apply: %v", err)
 	}
-	if len(docker.runCalls) != 1 {
-		t.Fatalf("docker run calls = %d after a second pass, want 1", len(docker.runCalls))
+	if len(docker.runCalls) != 2 {
+		t.Fatalf("docker run calls = %d after a second pass, want 2 (a second pass registers nothing new)", len(docker.runCalls))
 	}
 }
 
@@ -459,8 +462,7 @@ func TestAgentStopsOnDisabledAssignment(t *testing.T) {
 	dir := t.TempDir()
 	agent := &Agent{Node: "nxt-sw-6-w", Docker: docker, StatePath: dir + "/runner_assignment.json", Log: zerolog.Nop()}
 	if _, err := agent.Apply(context.Background(), Assignment{
-		Node: "nxt-sw-6-w", Enabled: true, Org: "acme", Group: "pmcluster",
-		SocketProxy: true, SocketPath: "/run/pmcluster/docker.sock", Memory: "2560m",
+		Node: "nxt-sw-6-w", Enabled: true, Org: "acme", Group: "pmcluster", Memory: "2560m",
 		RegistrationToken: "reg-token",
 	}); err != nil {
 		t.Fatalf("Apply enabled: %v", err)
@@ -493,8 +495,7 @@ func TestAgentEnabledWithoutTokenFailsLoudly(t *testing.T) {
 	docker := newFakeDocker()
 	agent := &Agent{Node: "w1", Docker: docker, Log: zerolog.Nop()}
 	_, err := agent.Apply(context.Background(), Assignment{
-		Node: "w1", Enabled: true, Org: "acme", Group: "pmcluster", SocketProxy: true,
-		SocketPath: "/run/pmcluster/docker.sock", Memory: "2560m",
+		Node: "w1", Enabled: true, Org: "acme", Group: "pmcluster", Memory: "2560m",
 	})
 	if err == nil || !strings.Contains(err.Error(), "registration token") {
 		t.Fatalf("err = %v, want a missing-token refusal", err)
@@ -521,19 +522,26 @@ func TestAssignmentIntervalIsClamped(t *testing.T) {
 	}
 }
 
-// TestAssignmentConfigKeepsTheMountDecision: the spec the container is built from
-// comes from the assignment, so a raw-socket answer stays raw and a filtered one
-// stays filtered.
-func TestAssignmentConfigKeepsTheMountDecision(t *testing.T) {
-	a := Assignment{Node: "w1", Enabled: true, Org: "acme", Group: "g", SocketProxy: true,
-		SocketPath: "/run/pmcluster/docker.sock", Memory: "1g"}
+// TestAssignmentConfigCarriesNoDockerDecision: the spec is built from the assignment,
+// and there is exactly one way for a job to reach docker now — a daemon of its own. A
+// field that let a worker choose a socket would be a knob with one honest position.
+func TestAssignmentConfigCarriesNoDockerDecision(t *testing.T) {
+	a := Assignment{Node: "w1", Enabled: true, Org: "acme", Group: "g", Memory: "1g"}
 	cfg := a.Config("w1")
-	if !cfg.SocketProxy || cfg.SocketPath != "/run/pmcluster/docker.sock" || cfg.Memory != "1g" {
+	if cfg.Memory != "1g" || cfg.Org != "acme" || !cfg.Enabled {
 		t.Fatalf("config = %+v", cfg)
 	}
-	raw := Assignment{Node: "w1", Enabled: true, Org: "acme", SocketProxy: false}
-	if raw.Config("w1").SocketProxy {
-		t.Fatal("a raw-socket assignment must not be silently filtered")
+	spec := Spec{Org: cfg.Org, RunnerName: "pmc-w1-acme", Memory: cfg.Memory, Token: "t"}
+	argv, err := spec.Argv()
+	if err != nil {
+		t.Fatalf("Argv: %v", err)
+	}
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, spec.DinDVolume()+":/var/run") {
+		t.Fatalf("the runner does not mount its daemon's socket volume: %v", argv)
+	}
+	if strings.Contains(joined, "/var/run/docker.sock:/var/run/docker.sock") {
+		t.Fatalf("the host docker socket is mounted: %v", argv)
 	}
 }
 
@@ -553,7 +561,6 @@ func TestAgentRemovesARunnerHeldByAnOperator(t *testing.T) {
 	// First pass: the node is running the runner normally.
 	live := Assignment{
 		Node: "nxt-sw-6-w", Enabled: true, Org: "acme", Group: "pmcluster",
-		SocketProxy: true, SocketPath: "/run/pmcluster/docker.sock",
 		Memory: "2560m", Mode: ModeEphemeral, Labels: Labels,
 		Reason: "selected as a runner node", RegistrationToken: "reg-token",
 	}
@@ -608,20 +615,21 @@ func TestCheckPlacementHonoursAllowLeader(t *testing.T) {
 	}
 
 	// On: the leader is allowed.
-	on := Config{Nodes: []string{"nxt-sw-5-m"}, AllowLeader: true}
+	on := Config{Nodes: []string{"nxt-sw-5-m"}, AllowManagers: true}
 	if err := CheckPlacement(on, nodes); err != nil {
 		t.Fatalf("with allow-leader on, the leader was still refused: %v", err)
 	}
 
-	// On does NOT mean "any manager": a non-leader manager stays refused, because the
-	// switch is about the leader and saying otherwise would widen it silently.
-	other := Config{Nodes: []string{"nxt-sw-1-m"}, AllowLeader: true}
-	if err := CheckPlacement(other, nodes); !errors.Is(err, ErrManagerNode) {
-		t.Fatalf("allow-leader let a non-leader manager through: %v", err)
+	// On covers EVERY manager, not only the leader. Keying it to the leader was the
+	// bug the operator reported: the console offered the switch, and the other
+	// managers stayed unselectable for a reason no one could see.
+	other := Config{Nodes: []string{"nxt-sw-1-m"}, AllowManagers: true}
+	if err := CheckPlacement(other, nodes); err != nil {
+		t.Fatalf("allow-managers refused a non-leader manager: %v", err)
 	}
 
 	// A worker is unaffected either way.
-	worker := Config{Nodes: []string{"nxt-sw-6-w"}, AllowLeader: true}
+	worker := Config{Nodes: []string{"nxt-sw-6-w"}, AllowManagers: true}
 	if err := CheckPlacement(worker, nodes); err != nil {
 		t.Fatalf("a worker was refused: %v", err)
 	}
@@ -636,7 +644,7 @@ func TestRolesOfTellsAllowedFromRefused(t *testing.T) {
 	if ok {
 		t.Fatal("the leader was selectable with allow-leader off")
 	}
-	if !strings.Contains(note, "Allow runners on the leader") {
+	if !strings.Contains(note, "Allow runners on managers") {
 		t.Fatalf("the refusal does not name the switch that lifts it: %q", note)
 	}
 
@@ -644,7 +652,7 @@ func TestRolesOfTellsAllowedFromRefused(t *testing.T) {
 	if !ok {
 		t.Fatal("the leader was refused with allow-leader on")
 	}
-	if !strings.Contains(note, "competes with the control plane") {
+	if !strings.Contains(note, "competes with the API") {
 		t.Fatalf("the allowed leader carries no caution: %q", note)
 	}
 

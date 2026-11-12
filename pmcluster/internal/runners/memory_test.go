@@ -183,8 +183,7 @@ func memoryService(cfg *Config, gh GitHub, ram int64, known bool, logs *strings.
 // is re-evaluated on the next pass — which is what makes it survive a settings
 // change.
 func TestResolveAssignment_RefusesAnOversizedRunner(t *testing.T) {
-	cfg := Config{Enabled: true, Org: "acme", Group: "pmcluster", Nodes: []string{"worker-1"},
-		SocketProxy: true, SocketPath: "/run/pmcluster/docker.sock", Memory: "2560m", IntervalSeconds: 60}
+	cfg := Config{Enabled: true, Org: "acme", Group: "pmcluster", Nodes: []string{"worker-1"}, Memory: "2560m", IntervalSeconds: 60}
 	gh := newFakeGitHub()
 	svc := memoryService(&cfg, gh, 1839, true, nil)
 
@@ -232,8 +231,7 @@ func TestResolveAssignment_RefusesAnOversizedRunner(t *testing.T) {
 // TestResolveAssignment_UnknownRAMAllowsAndLogsOnce: a node with no telemetry
 // still runs CI; the gap is one log line, not a refusal repeated every poll.
 func TestResolveAssignment_UnknownRAMAllowsAndLogsOnce(t *testing.T) {
-	cfg := Config{Enabled: true, Org: "acme", Group: "pmcluster", Nodes: []string{"worker-1"},
-		SocketProxy: true, SocketPath: "/run/pmcluster/docker.sock", Memory: "2560m", IntervalSeconds: 60}
+	cfg := Config{Enabled: true, Org: "acme", Group: "pmcluster", Nodes: []string{"worker-1"}, Memory: "2560m", IntervalSeconds: 60}
 	gh := newFakeGitHub()
 	var logs strings.Builder
 	svc := memoryService(&cfg, gh, 0, false, &logs)

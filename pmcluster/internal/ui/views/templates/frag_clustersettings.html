@@ -152,20 +152,18 @@
       </div>
     </div>
 
-    {{/* The switch that replaced the socket fields. Runners get a docker daemon of
-         their own inside a privileged container; asking an operator to choose a socket
-         path described an arrangement that no longer exists. */}}
-    <label class="check mt-16">
-      <input type="checkbox" name="github_runner_dind" value="true"{{if ne (index .Settings "github_runner_dind") "false"}} checked{{end}}>
-      <span>{{T "clustersettings.runner_dind"}}</span>
-    </label>
-    <span class="hint">{{T "clustersettings.runner_dind_hint"}}</span>
+    {{/* A statement, not a switch: how a job reaches docker is not an operator's
+         choice any more, and a checkbox that can only ever be on is a lie with a
+         control attached. */}}
+    <div class="field mt-16">
+      <span class="hint">{{T "clustersettings.runner_dind_hint"}}</span>
+    </div>
 
     <label class="check mt-16">
-      <input type="checkbox" name="github_runner_allow_leader" value="true"{{if eq (index .Settings "github_runner_allow_leader") "true"}} checked{{end}}>
-      <span>{{T "clustersettings.runner_allow_leader"}}</span>
+      <input type="checkbox" name="github_runner_allow_managers" value="true"{{if eq (index .Settings "github_runner_allow_managers") "true"}} checked{{end}}>
+      <span>{{T "clustersettings.runner_allow_managers"}}</span>
     </label>
-    <span class="hint">{{T "clustersettings.runner_allow_leader_hint"}}</span>
+    <span class="hint">{{T "clustersettings.runner_allow_managers_hint"}}</span>
 
     {{/* Node selection is not a form field: it is a picker with each node's role
          and free memory beside it, on its own page. The form carries the current

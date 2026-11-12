@@ -13,10 +13,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/socketproxy"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -54,48 +52,9 @@ func (l *lateStore) set(st *store.Store) {
 	l.mu.Unlock()
 }
 
-func (l *lateStore) get() *store.Store {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return l.st
-}
-
-// socketPathSource answers "where does the filtered docker socket live on this
-// node?" from the only source this node has: the store on a manager, the leader's
-// assignment on a worker. Falls back to the platform default, which is what the
-// daemon binds before anything has been read.
-type socketPathSource struct {
-	Store func() *store.Store
-
-	mu         sync.RWMutex
-	assignment string
-}
-
-func (s *socketPathSource) setAssignment(path string) {
-	s.mu.Lock()
-	s.assignment = path
-	s.mu.Unlock()
-}
-
-func (s *socketPathSource) Path(ctx context.Context) string {
-	if s.Store != nil {
-		if st := s.Store(); st != nil {
-			return cluster.LoadGitHubRunnerSocketPath(ctx, st)
-		}
-	}
-	s.mu.RLock()
-	p := s.assignment
-	s.mu.RUnlock()
-	if strings.TrimSpace(p) != "" {
-		return p
-	}
-	return cluster.DefaultGitHubRunnerSocketPath
-}
-
-// assignmentFetcher is this node's half of the assignment channel. The production
-// implementation is *runners.Client; a test substitutes one that answers without a
-// leader, which is the only way to assert "the loop ran before leadership was
-// resolved" without a sleep.
+// assignmentFetcher is what a worker uses to ask the leader for its runner
+// assignment. It runs before leadership is resolved, which is the only way to assert
+// "the loop ran before leadership was resolved" without a sleep.
 type assignmentFetcher interface {
 	Fetch(ctx context.Context) (runners.Assignment, string, error)
 }
@@ -114,21 +73,15 @@ type perNodeDeps struct {
 	Assignment assignmentFetcher
 	// StatePath is where the worker records the applied assignment (0600).
 	StatePath string
-	// SocketPath answers the filtered-socket path (shared with the supervisor).
-	SocketPath *socketPathSource
 	// Interval overrides the first poll interval (tests); the leader's answer
 	// replaces it after the first fetch.
 	Interval time.Duration
-	// UpstreamPath overrides the real docker socket the proxy fronts (tests).
-	UpstreamPath string
 
 	Log zerolog.Logger
 }
 
 // perNodeLoops is the handle the caller (and the tests) can watch.
 type perNodeLoops struct {
-	// Proxy is the filtered docker socket listener.
-	Proxy *socketproxy.Proxy
 	// FirstAssignment is closed after the worker's first assignment pass, so a
 	// test can assert on what it did without sleeping.
 	FirstAssignment chan struct{}
@@ -139,30 +92,13 @@ type perNodeLoops struct {
 // Fetches reports how many assignments were successfully fetched.
 func (l *perNodeLoops) Fetches() int64 { return l.assignmentFetches.Load() }
 
-// startPerNodeLoops starts the socket proxy and the runner machinery. The proxy's
-// first bind happens SYNCHRONOUSLY (it is local and fast, and a test asserts the
-// socket exists before leadership is resolved); the runner half runs in its own
-// goroutine and reports its first pass on FirstAssignment.
+// startPerNodeLoops starts the runner machinery. A worker's assignment loop runs in its
+// own goroutine and reports its first pass on FirstAssignment.
+//
+// There is no docker socket to start any more: each job gets a daemon of its own inside
+// a privileged container, so this node never needs to publish a socket for anyone.
 func startPerNodeLoops(ctx context.Context, d perNodeDeps) *perNodeLoops {
-	lp := &perNodeLoops{
-		Proxy: socketproxy.New(socketproxy.Config{
-			SocketPath:   socketPathOrDefault(d.SocketPath, ctx),
-			UpstreamPath: d.UpstreamPath,
-			Log:          d.Log.With().Str("component", "socketproxy").Logger(),
-		}),
-		FirstAssignment: make(chan struct{}),
-	}
-
-	// The filtered socket is present on EVERY node with a docker socket,
-	// unconditionally: it is inert when nothing mounts it, costs one goroutine,
-	// and having it everywhere means a runner enabled on a node can never find
-	// no socket because that daemon predates the setting.
-	//
-	// The first bind is synchronous so the socket exists before this function
-	// returns — the runner loop reads it immediately, and a test can assert it
-	// without sleeping.
-	lp.bindProxy(ctx, d)
-	go lp.superviseProxy(ctx, d)
+	lp := &perNodeLoops{FirstAssignment: make(chan struct{})}
 
 	if d.Worker {
 		if d.Assignment == nil {
@@ -174,90 +110,6 @@ func startPerNodeLoops(ctx context.Context, d perNodeDeps) *perNodeLoops {
 	return lp
 }
 
-// bindProxy binds the filtered socket when this node has a docker socket to
-// front. A node without one is not an error: binding a listener that cannot
-// forward would turn every runner build into a 502 with no explanation.
-func (lp *perNodeLoops) bindProxy(ctx context.Context, d perNodeDeps) {
-	if _, err := os.Stat(lp.Proxy.UpstreamPath); err != nil {
-		lp.Proxy.Log.Debug().Str("upstream", lp.Proxy.UpstreamPath).
-			Msg("socket proxy: no docker socket on this node; not listening")
-		return
-	}
-	if err := lp.Proxy.Start(ctx); err != nil {
-		// A listener that cannot bind is a WARN, never a fatal: the daemon is
-		// still the API, and the assignment keeps this node from registering a
-		// runner it could not serve.
-		lp.Proxy.Log.Warn().Err(err).Msg("socket proxy: not listening; runners on this node will not be registered")
-	}
-}
-
-// superviseProxy keeps the listener on the path this node currently wants. The
-// path is a setting on a manager and the leader's assignment on a worker, so it
-// can change without a daemon restart.
-func (lp *perNodeLoops) superviseProxy(ctx context.Context, d perNodeDeps) {
-	want := ""
-	if d.SocketPath != nil {
-		want = d.SocketPath.Path(ctx)
-	}
-	if want != "" {
-		lp.rebind(ctx, d, want)
-	}
-	t := time.NewTicker(30 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			if err := lp.Proxy.Stop(); err != nil {
-				lp.Proxy.Log.Warn().Err(err).Msg("socket proxy: could not stop cleanly")
-			}
-			return
-		case <-t.C:
-			if d.SocketPath == nil {
-				continue
-			}
-			if p := d.SocketPath.Path(ctx); p != want {
-				lp.rebind(ctx, d, p)
-				want = p
-			}
-		}
-	}
-}
-
-// rebind moves the listener to path (the socket proxy path changed).
-func (lp *perNodeLoops) rebind(ctx context.Context, d perNodeDeps, path string) {
-	if !lp.Proxy.Running() {
-		if _, err := os.Stat(lp.Proxy.UpstreamPath); err == nil {
-			lp.Proxy.SocketPath = path
-			if err := lp.Proxy.Start(ctx); err != nil {
-				lp.Proxy.Log.Warn().Err(err).Str("socket", path).Msg("socket proxy: not listening; runners on this node will not be registered")
-			}
-		}
-		return
-	}
-	if lp.Proxy.SocketPath == path {
-		return
-	}
-	if err := lp.Proxy.Stop(); err != nil {
-		lp.Proxy.Log.Warn().Err(err).Msg("socket proxy: could not stop cleanly")
-	}
-	lp.Proxy.SocketPath = path
-	if err := lp.Proxy.Start(ctx); err != nil {
-		lp.Proxy.Log.Warn().Err(err).Str("socket", path).Msg("socket proxy: not listening; runners on this node will not be registered")
-	}
-}
-
-func socketPathOrDefault(src *socketPathSource, ctx context.Context) string {
-	if src == nil {
-		return cluster.DefaultGitHubRunnerSocketPath
-	}
-	return src.Path(ctx)
-}
-
-// runAssignmentAgent is the worker's half: poll the leader, apply the answer.
-//
-// A failure keeps the LAST applied state and logs one bounded WRN — a leader
-// mid-failover must not tear a running runner down, and must not fill the journal
-// either.
 func (lp *perNodeLoops) runAssignmentAgent(ctx context.Context, d perNodeDeps) {
 	log := d.Log.With().Str("component", "runners").Logger()
 	agent := &runners.Agent{
@@ -302,9 +154,6 @@ func (lp *perNodeLoops) runAssignmentAgent(ctx context.Context, d perNodeDeps) {
 			log.Info().Str("source", source).Str("node", d.Hostname).
 				Msg("runners — runner assignment read from the leader over the swarm's mutual TLS channel")
 			sourceLogged = true
-		}
-		if d.SocketPath != nil {
-			d.SocketPath.setAssignment(a.SocketPath)
 		}
 		lp.assignmentFetches.Add(1)
 		agent.RecordFetch(source, time.Now())
@@ -486,7 +335,7 @@ func managerHosts(ctx context.Context, dc runtime.Client) ([]string, error) {
 
 // agentStatePath is where a worker records the assignment it applied. The dir is
 // the daemon's data dir (0700), the file is 0600: it names the node, the org and
-// the socket path, which is nobody else's business on a shared host.
+// the runner assignment, which is written 0600 because it carries a registration token.
 func agentStatePath(dataDir string) string {
 	if strings.TrimSpace(dataDir) == "" {
 		return ""

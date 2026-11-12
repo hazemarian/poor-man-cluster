@@ -246,133 +246,7 @@ Consequences worth knowing:
 - **The leader is a manager**, so it is refused too. `github_runner_allow_leader`
   exists only for a single-node cluster, where there is nothing else to select.
 
-## The docker socket: the legacy path (dind off)
-
-> **This section describes the fallback.** Since v0.2.292 a runner gets a docker daemon
-> of its own — see [DinD](#dind-a-docker-daemon-per-job-default). The filtered socket
-> below is what a node uses when `github_runner_dind` is turned off, and it is kept
-> because it is the narrowest surface this platform can offer a workflow. It supports
-> `docker build` and very little else: `docker compose`, testcontainers, exec and
-> attached streams are refused route by route. Do not build a workflow against it unless
-> you specifically want that narrowness.
-
-A runner has to build images, which means talking to a docker daemon. The host's
-`/var/run/docker.sock` is root on that node **and**, on a manager, the whole swarm.
-Mounting it into a workflow means `docker service rm`, `docker node demote`,
-`docker secret inspect` and `docker exec` are one command away.
-
-So the daemon listens on a **filtered socket** and the runner gets that instead:
-
-- `internal/socketproxy` runs inside the pmcluster daemon, on **every node with a
-  docker socket**, unconditionally. It is inert when nothing mounts it, costs one
-  goroutine, and starts and stops with the daemon.
-- It listens on a unix socket (`github_runner_socket_path`, default
-  `/run/pmcluster/docker.sock`, root:root 0660) and forwards to the real socket.
-  No host port, no overlay exposure.
-- The runner mounts that socket's **directory** (`/run/pmcluster`) and gets
-  `DOCKER_HOST=unix:///run/pmcluster/docker.sock`. It never sees
-  `/var/run/docker.sock`. The directory, not the file, because the daemon
-  recreates the socket on every restart and a file bind-mount pins the old inode:
-  a runner that was mid-job across an upgrade lost the daemon with `Cannot connect
-  to the Docker daemon at unix:///run/pmcluster/docker.sock` while the socket was
-  present on the host.
-
-The allow list is deny-by-default and segment-exact — a route that is not in the
-table is refused, and there is no generic passthrough:
-
-| Allowed | | |
-|---|---|---|
-| `GET` / `HEAD` | `/_ping`, `/version`, `/info`, `/events`, `/containers/json`, `/images/json`, `/volumes`, `/volumes/{name}`, `/networks`, `/networks/{id}`, `/containers/{id}/json`, `/containers/{id}/logs`, `/images/{id}/json`, `/images/**/json` | the client's handshake and every read |
-| `POST` | `/containers/create`, `/containers/{id}/start`, `/stop`, `/restart`, `/kill`, `/wait`, `/images/create`, `/build`, `/volumes/create`, `/networks/create` | a build and the `docker run` step around it |
-| `POST` | `/auth`, `/images/{name}/tag`, `/images/**/tag`, `/images/{name}/push`, `/images/**/push` | `docker login`, retag, publish — bounded by the credential the job authenticated with |
-| `POST` | `/session`, `/grpc` | BuildKit's session channel — how buildx attaches to the daemon's own BuildKit (see [buildx](#buildx)) |
-| `DELETE` | `/containers/{id}`, `/images/{id}`, `/images/**`, `/volumes/{name}`, `/networks/{id}` | |
-
-Blocked outright, each one tested: `/services`, `/tasks`, `/nodes`, `/swarm`,
-`/secrets`, `/configs`, `/plugins`, `/system`, `/exec`, and `exec` inside a
-container (`/containers/{id}/exec*`). A workflow cannot remove a service, demote a
-node, read a swarm secret, or shell into another container — those are impossible
-rather than discouraged. A path containing `.` or `..` is refused before any
-pattern is consulted, because the `**` wildcards that match a registry-qualified
-image name would otherwise match `x/../../services/…` too.
-
-Every refusal is a `403` naming the route, and the daemon logs the attempt:
-
-```bash
-journalctl -u pmcluster | grep "socket proxy: denied"
-# WRN socket proxy: denied a workflow's docker request method=POST path=/v1.43/services/pmcluster_edge
-#     family=/services reason="swarm services: `service rm` would delete the platform's own workloads"
-```
-
-The log is rate-limited (the first few per minute one by one, then one summary line
-with the suppressed count) so a retry loop cannot flood the journal.
-
-**This is blast-radius control, not a security boundary.** The socket still fronts
-a root daemon, and the routes that are allowed (create a container, pull or push an
-image, bind-mount a host path) are already enough to escalate on that node. Two
-rules follow: a runner on a **manager** defeats the whole exercise, and a workflow
-from a repository you do not trust should not run on a runner at all. A push is
-bounded by the credential the job supplied — a repository's `GITHUB_TOKEN` can only
-write that repository's packages — which is why publishing is allowed at all.
-
-`github_runner_socket_proxy=false` mounts the raw socket instead. It exists to debug
-a build against something the filter does not cover (an unfamiliar buildx flow, a
-daemon version the table does not match). It is unsupported for untrusted code, and
-`pmcluster doctor` warns when it is on.
-
-### buildx
-
-The image this platform runs ships a **pre-created buildx builder named `default`
-using the `docker-container` driver**, so a plain `docker build` delegates to a
-BuildKit *container* — which the filtered socket can neither populate
-(`PUT /containers/{id}/archive`) nor exec into. The result is a build that fails
-inside buildx, with an error that names none of this.
-
-So the container sets `BUILDX_CONFIG=/tmp/pmcluster-buildx` (an empty directory of
-its own, `Spec.EnvFixups`), which neutralises that builder and makes the CLI fall
-back to the daemon's **built-in** BuildKit through `DOCKER_HOST`. `POST /session`
-and `POST /grpc` are on the allow list for the same reason: the docker driver
-attaches a session to the daemon's BuildKit over them, and denying them does not
-prevent a build — it silently forces the `docker-container` driver, which then dies
-on the archive route above. `buildx create --driver docker` cannot repair it
-either; that driver is a singleton.
-
-### …and why those two routes are *spliced*, not forwarded
-
-Allowing `/session` in the table was necessary and not sufficient. BuildKit's
-session is an **HTTP/2 (h2c) bidirectional stream**: the client sends the request
-and then speaks h2 to the same connection, in both directions at once. The proxy is
-an HTTP/1.1 round-trip forwarder, which can authorise the route and cannot carry the
-traffic — so the build fails before its first step with
-
-```
-Unavailable: error reading server preface: http2: failed reading the frame payload:
-frame too large, note that the frame header looked like an HTTP/1.1 header
-```
-
-Stream routes are therefore **hijacked and spliced** (`Proxy.serveStream`): the
-request head is replayed verbatim to the daemon socket, then bytes flow both ways
-until either side closes. The allow check still runs first, so only `/session` and
-`/grpc` can take that path. A writer that cannot be hijacked gets a `501` naming
-the reason rather than a `403` — "not allowed" would send an operator to the wrong
-place.
-
-### The traversal guard
-
-`**` wildcards in the allow table (`/images/**/push`) also match
-`x/../../services/pmcluster_edge`, and the **daemon** resolves the dots *after* the
-proxy has said yes. `Check` refuses any `.` or `..` path segment before a pattern is
-consulted. Without it a narrow allow list is a wide one with a hole in it — this was
-found by a test, not in production, and only because the wildcard was added the same
-day.
-
-What is still not arranged is a **containerised** builder: a `docker-container`
-builder needs the docker socket inside the builder container plus `--privileged`,
-which would bypass the filter by nesting a daemon. A workflow that creates one
-explicitly will fail here; plain `docker build` and `docker buildx build` against
-the daemon's own driver are the supported path.
-
-## DinD: a docker daemon per job (default)
+## How a job reaches docker: its own daemon
 
 The filtered socket only ever supported `docker build`. Everything else a normal CI
 job does was refused route by route — `docker compose up` (networks, volumes, exec,
@@ -388,8 +262,9 @@ for reasons that are not obvious:
 - **the default bridge's address works but is not a contract.** It changes when the
   container is recreated, and it is shared with every other container on the node.
 
-So a runner can instead get a daemon of its own (`github_runner_dind`, default
-`true`):
+So a runner does not talk to this node's docker at all. Every job gets a daemon of its
+own, and there is no setting to change that — the filtered socket and the raw-socket
+fallback were deleted with the code that served them:
 
 ```
 docker:dind (privileged, --memory <cap>)      ← its own dockerd, its own /var/lib/docker
@@ -404,13 +279,18 @@ name are enough.
 
 What it does **not** do: touch the host. `/var/run/docker.sock` is never mounted, so
 the swarm, the platform's own services and other jobs' containers stay out of reach.
+`docker inspect` on a job container shows no host socket, and `doctor` no longer reports
+one: a node without a published socket is a normal node.
 The price is `--privileged` on that one container, which is why it must hold nothing
 else — see [A runner that cannot fit the node](#a-runner-that-cannot-fit-the-node).
 
-**Teardown removes all three.** The runner container, the dind container and the
-socket volume. A surviving volume is a node that fills up one job at a time with
-images and build caches nobody will ever use again. `docker network rm` has no
-`--force`, so anything that removes a network detaches its endpoints first.
+**Teardown removes the runner, the daemon and the socket volume.** `docker network rm`
+has no `--force`, so anything that removes a network detaches its endpoints first.
+
+**Three volumes survive, and they are the point.** See
+[Caches that outlive the job](#caches-that-outlive-the-job) below: without them every
+job would pay the download cost of its dependencies again, which on this fleet was most
+of the difference between a three-minute job and an eight-minute one.
 
 **It also closes a hole the memory work left open.** A cap on the runner container
 bounded the runner and nothing else: the daemon created build and test containers as
@@ -418,6 +298,48 @@ its *siblings*, outside that cgroup, so a `docker build` could still OOM the hos
 1839 MB node died repeatedly despite a 1200m cap. With DinD every container the job
 creates lives inside the capped container, and one number finally bounds the whole
 tree.
+
+## Caches that outlive the job
+
+Everything about a runner is ephemeral except the caches, because re-downloading
+dependencies on every run is the single biggest cost a self-hosted runner pays. Three
+volumes per runner persist:
+
+| Volume | Mounted at | What it holds |
+| --- | --- | --- |
+| `<runner>-dind-data` | `/var/lib/docker` in the dind container | image layers and the build cache |
+| `<runner>-cache-go` | `/go-cache` in the runner | `GOMODCACHE` (module downloads) and `GOCACHE` (compiled packages) |
+| `<runner>-cache-npm` | `/npm-cache` in the runner | npm, yarn and pnpm stores |
+
+`<runner>` is `pmc-<node>-org`, so the cache belongs to the node: two runners on two
+nodes never share one.
+
+The environment is set by the platform, not by the workflow — a repository does not have
+to know these exist:
+
+```
+GOMODCACHE=/go-cache/mod     GOCACHE=/go-cache/build      GOTOOLCHAIN=local
+npm_config_cache=/npm-cache/npm    YARN_CACHE_FOLDER=/npm-cache/yarn
+PNPM_HOME=/npm-cache/pnpm          PNPM_STORE_DIR=/npm-cache/pnpm-store
+```
+
+**The daemon's data directory survives, so it must start clean.** A persistent
+`/var/lib/docker` is what makes layer reuse work, and it is also what would accumulate
+every stopped container from every job. Before the runner starts, the platform runs:
+
+```
+docker container prune -f     docker image prune -f
+docker volume prune -f        docker builder prune -f --keep-storage 10GB
+```
+
+Containers, dangling images and anonymous volumes go; **images and the build cache
+stay**, which is the whole point, and the build cache is capped at 10 GB so a repository
+that builds something large every hour cannot fill the node. Named volumes are left
+alone — a job may deliberately keep one for its next run.
+
+**These three volumes are never removed by teardown**, and that is a deliberate
+exception to "the job leaves nothing behind": they hold no state a job can read, only
+caches it can invalidate.
 
 ### The failures this produced, so they are not rediscovered
 

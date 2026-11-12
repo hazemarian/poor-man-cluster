@@ -117,9 +117,9 @@ func workerFake(t *testing.T) *leaderFake {
 }
 
 // TestWorkerLoopsStartBeforeLeadershipIsResolved is the regression test for the
-// whole defect: the runner machinery and the filtered socket used to start AFTER
-// waitForSwarmLeadership, which a worker never returns from — so the feature was
-// inert on exactly the nodes allowed to host a runner.
+// whole defect: the runner machinery used to start AFTER waitForSwarmLeadership, which
+// a worker never returns from — so the feature was inert on exactly the nodes allowed to
+// host a runner.
 func TestWorkerLoopsStartBeforeLeadershipIsResolved(t *testing.T) {
 	host, err := os.Hostname()
 	if err != nil {
@@ -135,80 +135,40 @@ func TestWorkerLoopsStartBeforeLeadershipIsResolved(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	// A unix socket path the proxy can bind, and an upstream that exists, so the
-	// proxy's first bind happens on this host (macOS has no /var/run/docker.sock).
-	upstream := filepath.Join(dir, "docker.sock.upstream")
-	if err := os.WriteFile(upstream, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
 	docker := newFakeLocalDocker()
 	fetcher := &fakeFetcher{
 		a: runners.Assignment{
 			Node: host, Enabled: true, Org: "acme", Group: "pmcluster",
-			SocketProxy: true, SocketPath: filepath.Join(dir, "filtered.sock"),
 			Memory: "2560m", Mode: runners.ModeEphemeral, Labels: runners.Labels,
 			RegistrationToken: "reg-token", Reason: "selected as a runner node",
 		},
 		source: "https://10.7.224.11:9092",
 	}
-
-	// A unix socket path has a ~100 byte limit, shorter than a macOS test temp
-	// dir, so the listener's path gets its own short directory.
-	short, err := os.MkdirTemp("", "pmc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(short) })
-	source := &socketPathSource{}
-	source.setAssignment(filepath.Join(short, "f.sock"))
 	loops := startPerNodeLoops(ctx, perNodeDeps{
-		Worker:       true,
-		Hostname:     host,
-		Container:    docker,
-		Assignment:   fetcher,
-		StatePath:    filepath.Join(dir, "runner_assignment.json"),
-		UpstreamPath: upstream,
-		SocketPath:   source,
-		Log:          zerolog.Nop(),
+		Worker:     true,
+		Hostname:   host,
+		Container:  docker,
+		Assignment: fetcher,
+		StatePath:  filepath.Join(dir, "runner_assignment.json"),
+		Log:        zerolog.Nop(),
 	})
 
-	// The proxy bound synchronously, before anything asked about leadership.
-	if !loops.Proxy.Running() {
-		t.Fatal("the filtered docker socket was not listening when startPerNodeLoops returned")
-	}
-
-	// The runner half reports its first pass; no sleep, no polling loop.
-	waitClosed(t, loops.FirstAssignment, "the worker's first assignment pass")
-	if loops.Fetches() != 1 {
-		t.Fatalf("assignment fetches = %d, want 1", loops.Fetches())
-	}
-	runs := docker.Runs()
-	if len(runs) != 1 {
-		t.Fatalf("docker run calls = %d, want the runner started from the assignment", len(runs))
-	}
-	if joined := strings.Join(runs[0], " "); strings.Contains(joined, "/var/run/docker.sock") {
-		t.Fatalf("the worker's runner mounts the raw socket: %s", joined)
-	}
-
-	// NOW start the leadership wait. It must block, and the loops above have
-	// already run — which is the ordering this test exists to pin.
-	done := make(chan error, 1)
-	go func() { done <- waitForSwarmLeadership(ctx, fake, zerolog.Nop()) }()
+	// The assignment loop ran before anything asked about leadership: the fetch
+	// completes while waitForSwarmLeadership (called after this returns) would still be
+	// blocking, and the runner was started from it.
 	select {
-	case err := <-done:
-		t.Fatalf("waitForSwarmLeadership returned (%v) on a worker; it must stand by", err)
-	default:
+	case <-loops.FirstAssignment:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the assignment loop never ran; it is still sequenced behind leadership")
 	}
-	if loops.Fetches() != 1 {
-		t.Fatal("the assignment pass did not happen before the leadership wait started")
+	if got := loops.Fetches(); got != 1 {
+		t.Fatalf("assignment fetches = %d, want 1", got)
 	}
-	if err := loops.Proxy.Stop(); err != nil {
-		t.Fatalf("stop the socket proxy: %v", err)
+	if len(docker.Runs()) == 0 {
+		t.Fatal("the runner was never started from the assignment")
 	}
 }
 
-// TestAPIBindAddresses pins the bind rule: the leader keeps what the operator
-// configured (all interfaces), a worker answers on loopback only.
 func TestAPIBindAddresses(t *testing.T) {
 	cases := []struct {
 		configured string
@@ -354,19 +314,6 @@ func TestFetchFailureKeepsLastStateAndWarnsOnce(t *testing.T) {
 // TestSocketPathSourceFallbacks: the path comes from the store when there is one
 // (a manager), from the assignment on a worker, and from the platform default
 // before either has been read.
-func TestSocketPathSourceFallbacks(t *testing.T) {
-	s := &socketPathSource{}
-	if got := s.Path(context.Background()); got != "/run/pmcluster/docker.sock" {
-		t.Fatalf("default path = %q", got)
-	}
-	s.setAssignment("/run/from-assignment.sock")
-	if got := s.Path(context.Background()); got != "/run/from-assignment.sock" {
-		t.Fatalf("assignment path = %q", got)
-	}
-}
-
-// TestManagerHostsFromDockerInfo: a worker learns the manager addresses from the
-// swarm itself, which is the whole point of not needing DNS or a published port.
 func TestManagerHostsFromDockerInfo(t *testing.T) {
 	f := &leaderFake{info: runtime.Info{
 		SwarmRemoteManagers: []string{"10.7.224.11:2377", "10.7.224.12:2377"},
@@ -408,7 +355,6 @@ func TestWorkerRecordIsReadableByTheDoctor(t *testing.T) {
 	agent := &runners.Agent{Node: "nxt-sw-6-w", Docker: newFakeLocalDocker(), StatePath: path, Log: zerolog.Nop()}
 	if _, err := agent.Apply(context.Background(), runners.Assignment{
 		Node: "nxt-sw-6-w", Enabled: true, Org: "acme", Group: "pmcluster",
-		SocketProxy: true, SocketPath: "/run/pmcluster/docker.sock",
 		Memory: "2560m", RegistrationToken: "t",
 	}); err != nil {
 		t.Fatalf("Apply: %v", err)

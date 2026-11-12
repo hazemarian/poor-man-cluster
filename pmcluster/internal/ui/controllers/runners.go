@@ -78,7 +78,7 @@ type runnerNode struct {
 	Reason     string
 	Selectable bool
 	// Caution is set on a row that MAY be chosen but carries a cost — the leader with
-	// `github_runner_allow_leader` on, where a job competes with the control plane.
+	// `github_runner_allow_managers` on, where a job competes with the control plane.
 	// Rendered as a warning pill rather than a disabled row, because "allowed and
 	// contended" and "not allowed" are different facts.
 	Caution  string
@@ -127,17 +127,19 @@ type runnersData struct {
 
 func (d *runnersData) fail(key, raw string) { d.ErrKey, d.ErrRaw = key, raw }
 
-// allowLeader reports whether the operator lifted the leader placement rule.
+// allowManagers reports whether the operator lifted the manager placement rule.
 //
 // The picker has to agree with the daemon about this, or the console offers a checkbox
 // the server refuses (or hides one it would accept). Same question, same setting, read
-// here as well as in the daemon.
-func (c Runners) allowLeader(ctx context.Context) bool {
+// here as well as in the daemon — and it covers EVERY manager, not only the leader,
+// because keying it to the leader alone left the other managers unselectable for no
+// reason an operator could see.
+func (c Runners) allowManagers(ctx context.Context) bool {
 	s, err := c.API.ClusterSettings(ctx)
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(s["github_runner_allow_leader"]), "true")
+	return strings.EqualFold(strings.TrimSpace(s["github_runner_allow_managers"]), "true")
 }
 
 // Page renders the panel: the picker, then the table.
@@ -161,7 +163,7 @@ func (c Runners) SaveNodes(g *gin.Context) {
 		c.render(g, d)
 		return
 	}
-	allowLeader := c.allowLeader(g.Request.Context())
+	allowManagers := c.allowManagers(g.Request.Context())
 	chosen := map[string]bool{}
 	for _, n := range g.PostFormArray("node") {
 		chosen[strings.ToLower(strings.TrimSpace(n))] = true
@@ -181,7 +183,7 @@ func (c Runners) SaveNodes(g *gin.Context) {
 		if !chosen[strings.ToLower(n.Hostname)] {
 			continue
 		}
-		if ok, reason := runners.RolesOf(runtimeNode(n), allowLeader); !ok {
+		if ok, reason := runners.RolesOf(runtimeNode(n), allowManagers); !ok {
 			d.fail("runners.err_manager", reason)
 			c.render(g, d)
 			return
@@ -240,7 +242,7 @@ func (c Runners) nodeMemoryOverrides(g *gin.Context, nodes []pmapi.Node) (map[st
 		if !ok {
 			return nil, "runners.err_unknown_node", host
 		}
-		if ok, reason := runners.RolesOf(runtimeNode(node), c.allowLeader(g.Request.Context())); !ok {
+		if ok, reason := runners.RolesOf(runtimeNode(node), c.allowManagers(g.Request.Context())); !ok {
 			return nil, "runners.err_manager", reason
 		}
 		if err := runners.ValidateMemory(raw); err != nil {
@@ -421,7 +423,7 @@ func (c Runners) render(g *gin.Context, d runnersData) {
 		return nodes[i].Hostname < nodes[j].Hostname
 	})
 	for _, n := range nodes {
-		ok, reason := runners.RolesOf(runtimeNode(n), c.allowLeader(g.Request.Context()))
+		ok, reason := runners.RolesOf(runtimeNode(n), c.allowManagers(g.Request.Context()))
 		// A selectable row can still carry a caution: "allowed, and here is the cost".
 		caution := ""
 		if ok {

@@ -27,8 +27,6 @@ func perNodeConfig() Config {
 		Nodes:           []string{smallHost, bigHost},
 		Memory:          "2560m", // the fleet default: right for bigHost, fatal on smallHost
 		NodeMemory:      map[string]string{smallHost: "1200m"},
-		SocketProxy:     true,
-		SocketPath:      "/run/pmcluster/docker.sock",
 		IntervalSeconds: 60,
 	}
 }

@@ -70,12 +70,9 @@ var clusterSettingKeys = []string{
 	cluster.SettingGitHubRunnerGroup(),
 	cluster.SettingGitHubRunnerNodes(),
 	cluster.SettingNodeDockerRestart(),
-	cluster.SettingGitHubRunnerSocketProxy(),
-	cluster.SettingGitHubRunnerDinD(),
-	cluster.SettingGitHubRunnerSocketPath(),
 	cluster.SettingGitHubRunnerMemory(),
 	cluster.SettingGitHubRunnerNodeMemory(),
-	cluster.SettingGitHubRunnerAllowLeader(),
+	cluster.SettingGitHubRunnerAllowManagers(),
 	cluster.SettingGitHubRunnerAssignmentInterval(),
 }
 
@@ -93,11 +90,8 @@ var settingDefaults = map[string]string{
 	cluster.SettingGitHubRunnersEnabled():           "false",
 	cluster.SettingGitHubRunnerGroup():              cluster.DefaultGitHubRunnerGroup,
 	cluster.SettingNodeDockerRestart():              "false",
-	cluster.SettingGitHubRunnerSocketProxy():        "true",
-	cluster.SettingGitHubRunnerDinD():               "true",
-	cluster.SettingGitHubRunnerSocketPath():         cluster.DefaultGitHubRunnerSocketPath,
 	cluster.SettingGitHubRunnerMemory():             cluster.DefaultGitHubRunnerMemory,
-	cluster.SettingGitHubRunnerAllowLeader():        "false",
+	cluster.SettingGitHubRunnerAllowManagers():      "false",
 	cluster.SettingGitHubRunnerAssignmentInterval(): strconv.Itoa(cluster.DefaultGitHubRunnerAssignmentIntervalSeconds),
 }
 
@@ -218,11 +212,9 @@ func isGitHubRunnerKey(key string) bool {
 		cluster.SettingGitHubRunnerOrg(),
 		cluster.SettingGitHubRunnerGroup(),
 		cluster.SettingGitHubRunnerNodes(),
-		cluster.SettingGitHubRunnerSocketProxy(),
-		cluster.SettingGitHubRunnerSocketPath(),
 		cluster.SettingGitHubRunnerMemory(),
 		cluster.SettingGitHubRunnerNodeMemory(),
-		cluster.SettingGitHubRunnerAllowLeader(),
+		cluster.SettingGitHubRunnerAllowManagers(),
 		cluster.SettingGitHubRunnerAssignmentInterval():
 		return true
 	}
@@ -294,27 +286,6 @@ func (l *Local) normalizeRunnerSetting(ctx context.Context, key, value string) (
 			return "", fmt.Errorf("%s: %w", key, err)
 		}
 		return strconv.FormatBool(on), nil
-	case cluster.SettingGitHubRunnerDinD():
-		on, err := parseBoolSetting(value)
-		if err != nil {
-			return "", fmt.Errorf("%s: %w", key, err)
-		}
-		return strconv.FormatBool(on), nil
-	case cluster.SettingGitHubRunnerSocketProxy():
-		on, err := parseBoolSetting(value)
-		if err != nil {
-			return "", fmt.Errorf("%s: %w", key, err)
-		}
-		return strconv.FormatBool(on), nil
-	case cluster.SettingGitHubRunnerSocketPath():
-		path := strings.TrimSpace(value)
-		if path == "" {
-			return "", nil
-		}
-		if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, " 	\r\n") {
-			return "", fmt.Errorf("%s must be an absolute path, got %q", key, value)
-		}
-		return path, nil
 	case cluster.SettingGitHubRunnerMemory():
 		// Empty means "use the platform default" (2560m), matching every other
 		// setting whose empty value is a built-in default.

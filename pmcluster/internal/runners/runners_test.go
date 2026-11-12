@@ -21,70 +21,38 @@ import (
 
 // TestArgvMountsTheFilteredSocketAndNoneOther is the whole point of the socket
 // proxy: the runner must not be able to reach /var/run/docker.sock.
-func TestArgvMountsTheFilteredSocketAndNoneOther(t *testing.T) {
-	argv, err := Spec{
-		Org:         "acme",
-		Group:       "pmcluster",
-		RunnerName:  "pmc-worker-1-org",
-		Memory:      "2560m",
-		Token:       "reg-token",
-		SocketProxy: true,
-		SocketPath:  "/run/pmcluster/docker.sock",
-	}.Argv()
-	if err != nil {
-		t.Fatalf("Argv: %v", err)
-	}
-	joined := strings.Join(argv, " ")
-	if strings.Contains(joined, "/var/run/docker.sock") {
-		t.Fatalf("argv mounts the host socket: %s", joined)
-	}
-	if !strings.Contains(joined, "DOCKER_HOST=unix:///run/pmcluster/docker.sock") {
-		t.Fatalf("argv has no DOCKER_HOST pointing at the filtered socket: %s", joined)
-	}
-	// The DIRECTORY is mounted, not the socket: a file bind-mount pins an inode
-	// the daemon replaces on every restart, which left running runners unable to
-	// reach docker after an upgrade.
-	if !strings.Contains(joined, "-v /run/pmcluster:/run/pmcluster") {
-		t.Fatalf("argv does not mount the filtered socket's directory: %s", joined)
-	}
-	for _, want := range []string{
-		"ORG_NAME=acme",
-		"RUNNER_GROUP=pmcluster",
-		"RUNNER_TOKEN=reg-token",
-		"RUNNER_NAME=pmc-worker-1-org",
-		"LABELS=" + Labels,
-		"EPHEMERAL=true",
-		"--memory 2560m",
-		"--restart no",
-		"--label " + LabelRunner + "=true",
-		"--label " + LabelOrg + "=acme",
-		"--label " + LabelName + "=pmc-worker-1-org",
-	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("argv is missing %q: %s", want, joined)
-		}
-	}
-	if strings.Contains(joined, "REPO_URL") {
-		t.Errorf("argv is repo-scoped (REPO_URL): the registration must be org level: %s", joined)
-	}
-	if argv[len(argv)-1] != DefaultImage {
-		t.Errorf("argv ends with %q, want the image", argv[len(argv)-1])
-	}
-}
-
-// The raw mount still exists as a documented debug fallback — but it has to be
-// asked for, and the spec says so.
-func TestArgvDebugFallbackMountsTheRawSocket(t *testing.T) {
-	argv, err := Spec{Org: "acme", RunnerName: "pmc-worker-1-org", Token: "t", SocketProxy: false}.Argv()
+func TestArgvMountsThePrivateSocketAndNoneOther(t *testing.T) {
+	argv, err := Spec{Org: "acme", RunnerName: "pmc-worker-1-org", Token: "reg-token"}.Argv()
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(argv, " ")
-	if !strings.Contains(joined, "/var/run/docker.sock:/var/run/docker.sock") {
-		t.Fatalf("the debug fallback does not mount the raw socket: %s", joined)
+	// DOCKER_HOST=unix:///var/run/docker.sock is correct — that path lives INSIDE the
+	// runner and is served by its own daemon. What must never appear is the mount of
+	// the host's socket, which is the same string with a colon in it. Matching on the
+	// bare path is what made this test pass while the host socket was mounted.
+	if strings.Contains(joined, "/var/run/docker.sock:/var/run/docker.sock") {
+		t.Fatalf("argv mounts the host socket:\n%s", joined)
 	}
-	if !(Spec{Org: "acme", RunnerName: "n", Token: "t", SocketProxy: false}).UsesRawSocket() {
-		t.Fatal("Spec.UsesRawSocket does not report the raw mount")
+	if !strings.Contains(joined, "-v pmc-worker-1-org-docker:/var/run") {
+		t.Fatalf("argv does not share the private daemon's socket volume:\n%s", joined)
+	}
+}
+
+// TestArgvNeverMountsTheHostSocket replaces the old "debug fallback" test. The raw
+// mount, the filtered proxy and the switch between them were all removed together: a
+// job gets a daemon of its own and never this node's.
+func TestArgvNeverMountsTheHostSocket(t *testing.T) {
+	argv, err := Spec{Org: "acme", RunnerName: "pmc-worker-1-org", Token: "t"}.Argv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(argv, " ")
+	if strings.Contains(joined, "/var/run/docker.sock:/var/run/docker.sock") {
+		t.Fatalf("the host socket is mounted: %s", joined)
+	}
+	if !strings.Contains(joined, "pmc-worker-1-org-docker:/var/run") {
+		t.Fatalf("the runner does not mount its own daemon's socket: %s", joined)
 	}
 }
 
@@ -282,13 +250,13 @@ type harness struct {
 }
 
 type harnessOpts struct {
-	node     string
-	enabled  bool
-	org      string
-	group    string
-	nodes    string
-	proxy    bool
-	managerN bool
+	node          string
+	enabled       bool
+	org           string
+	group         string
+	nodes         string
+	managerN      bool
+	allowManagers bool
 }
 
 func newHarness(t *testing.T, o harnessOpts) *harness {
@@ -312,10 +280,11 @@ func newHarness(t *testing.T, o harnessOpts) *harness {
 		cluster.SettingGitHubRunnerNodes():    o.nodes,
 		cluster.SettingGitHubRunnerMemory():   "2560m",
 	}
-	if o.enabled {
-		// The settings adapter refuses enabled-without-App; the harness writes
-		// the store directly to be able to test the reconcile's own refusal.
-		settings[cluster.SettingGitHubRunnerSocketProxy()] = fmt.Sprintf("%t", o.proxy)
+	if o.enabled && o.allowManagers {
+		// Written straight to the store: the settings adapter refuses
+		// enabled-without-App, and this harness exists to test the reconcile's own
+		// refusal rather than the adapter's.
+		settings[cluster.SettingGitHubRunnerAllowManagers()] = "true"
 	}
 	for k, v := range settings {
 		if err := st.SetSetting(ctx, k, v); err != nil {
@@ -644,7 +613,7 @@ func TestSelectedNodeLeavingTheListTearsDownItsOwnRunner(t *testing.T) {
 // "Invalid configuration provided for url" and the reconcile restarted it —
 // a crash loop whose only symptom was a container that never stayed up.
 func TestArgvDeclaresTheRunnerScope(t *testing.T) {
-	s := Spec{Org: "acme", Token: "tok", RunnerName: "pmc-node-org", SocketProxy: true}
+	s := Spec{Org: "acme", Token: "tok", RunnerName: "pmc-node-org"}
 	args, err := s.Argv()
 	if err != nil {
 		t.Fatalf("Argv: %v", err)

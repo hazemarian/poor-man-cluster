@@ -120,7 +120,6 @@ func init() {
 	setupCmd.Flags().String("github-runner-group", cluster.DefaultGitHubRunnerGroup, "org runner group the runner joins (created with visibility 'selected' when absent; never 'all')")
 	setupCmd.Flags().String("github-runner-nodes", "", "comma-separated WORKER hostnames that may run a runner; managers are refused (default: $PMCLUSTER_GITHUB_RUNNER_NODES)")
 	setupCmd.Flags().Bool("github-runner-socket-proxy", true, "route a runner's docker access through the daemon's filtered socket instead of /var/run/docker.sock")
-	setupCmd.Flags().String("github-runner-socket-path", "", "where the filtered docker socket lives on every node (default "+cluster.DefaultGitHubRunnerSocketPath+")")
 	setupCmd.Flags().String("github-runner-memory", "", "memory limit per runner container (default 2560m)")
 	setupCmd.Flags().String("github-runner-node-memory", "", "per-node memory cap overrides, host=cap,host=cap (e.g. nxt-sw-3-w=1200m,nxt-sw-6-w=2560m); a node without one uses --github-runner-memory (default: $PMCLUSTER_GITHUB_RUNNER_NODE_MEMORY)")
 	setupCmd.Flags().Bool("github-runner-allow-leader", false, "allow runner containers on the leader (single-node clusters only; default: off the leader)")
@@ -191,8 +190,6 @@ type setupAnswers struct {
 	GitHubRunnerOrg         string
 	GitHubRunnerGroup       string
 	GitHubRunnerNodes       string
-	GitHubRunnerSocketProxy bool
-	GitHubRunnerSocketPath  string
 	GitHubRunnerMemory      string
 	GitHubRunnerNodeMemory  string
 	GitHubRunnerAllowLeader bool
@@ -366,13 +363,6 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 				cluster.LoadGitHubRunnerGroup(ctx, st))
 			a.GitHubRunnerNodes = ask(r, out, "WORKER hostnames that may run a runner, comma-separated (managers are refused)",
 				cluster.LoadGitHubRunnerNodes(ctx, st))
-			a.GitHubRunnerSocketProxy = askYesNo(r, out,
-				"Route the runner's docker access through the filtered socket? (say no only to debug a build)",
-				cluster.LoadGitHubRunnerSocketProxy(ctx, st))
-			// The path is the proxy's address, so it is asked next to the
-			// proxy question. A fresh install can accept both defaults.
-			a.GitHubRunnerSocketPath = ask(r, out, "Filtered docker socket path on every node",
-				cluster.LoadGitHubRunnerSocketPath(ctx, st))
 			a.GitHubRunnerAssignmentInterval = ask(r, out, "Seconds between assignment polls (10-3600)",
 				strconv.Itoa(cluster.LoadGitHubRunnerAssignmentInterval(ctx, st)))
 			a.GitHubRunnerMemory = ask(r, out, "Memory limit per runner",
@@ -462,8 +452,6 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		a.GitHubRunnerOrg, _ = cmd.Flags().GetString("github-runner-org")
 		a.GitHubRunnerGroup, _ = cmd.Flags().GetString("github-runner-group")
 		a.GitHubRunnerNodes, _ = cmd.Flags().GetString("github-runner-nodes")
-		a.GitHubRunnerSocketProxy, _ = cmd.Flags().GetBool("github-runner-socket-proxy")
-		a.GitHubRunnerSocketPath, _ = cmd.Flags().GetString("github-runner-socket-path")
 		a.GitHubRunnerMemory, _ = cmd.Flags().GetString("github-runner-memory")
 		a.GitHubRunnerNodeMemory, _ = cmd.Flags().GetString("github-runner-node-memory")
 		a.GitHubRunnerAllowLeader, _ = cmd.Flags().GetBool("github-runner-allow-leader")
@@ -490,11 +478,6 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 		if !cmd.Flags().Changed("github-runner-node-memory") {
 			if v := os.Getenv("PMCLUSTER_GITHUB_RUNNER_NODE_MEMORY"); v != "" {
 				a.GitHubRunnerNodeMemory = v
-			}
-		}
-		if !cmd.Flags().Changed("github-runner-socket-proxy") {
-			if v := os.Getenv("PMCLUSTER_GITHUB_RUNNER_SOCKET_PROXY"); v != "" {
-				a.GitHubRunnerSocketProxy = envBool(v)
 			}
 		}
 		if v := os.Getenv("PMCLUSTER_STORAGE_MODE"); v != "" && !cmd.Flags().Changed("storage-mode") {
@@ -780,11 +763,6 @@ func validateRunnerSetup(ctx context.Context, st *store.Store, a setupAnswers, o
 	// to the settings surface: setup writes settings directly (it does not go
 	// through that surface's Update allowlist), so an invalid value would
 	// otherwise be persisted and read back by the loader forever.
-	if p := strings.TrimSpace(a.GitHubRunnerSocketPath); p != "" {
-		if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, " 	\r\n") {
-			return fmt.Errorf("github-runner-socket-path must be an absolute path with no whitespace, got %q (default %s)", p, cluster.DefaultGitHubRunnerSocketPath)
-		}
-	}
 	if iv := strings.TrimSpace(a.GitHubRunnerAssignmentInterval); iv != "" {
 		n, err := strconv.Atoi(iv)
 		if err != nil {
@@ -969,8 +947,6 @@ func runnerSettings(a setupAnswers) map[string]string {
 		cluster.SettingGitHubRunnerGroup():              group,
 		cluster.SettingGitHubRunnerNodes():              nodes,
 		cluster.SettingGitHubRunnerNodeMemory():         nodeMemory,
-		cluster.SettingGitHubRunnerSocketProxy():        strconv.FormatBool(a.GitHubRunnerSocketProxy),
-		cluster.SettingGitHubRunnerSocketPath():         strings.TrimSpace(a.GitHubRunnerSocketPath),
 		cluster.SettingGitHubRunnerMemory():             strings.TrimSpace(a.GitHubRunnerMemory),
 		cluster.SettingGitHubRunnerAllowLeader():        boolSetting(a.GitHubRunnerAllowLeader),
 		cluster.SettingGitHubRunnerAssignmentInterval(): strings.TrimSpace(a.GitHubRunnerAssignmentInterval),

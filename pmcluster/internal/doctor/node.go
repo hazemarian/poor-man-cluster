@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -58,7 +57,6 @@ func RunNodeLocal(ctx context.Context, in NodeInput) *Report {
 	add := func(c Check) { rep.Checks = append(rep.Checks, c) }
 
 	add(checkLocalDaemon(ctx, in))
-	add(checkLocalSocketProxy(in))
 	add(checkLocalAssignment(in))
 	add(checkLocalRunner(ctx, in))
 	add(checkLocalRunnerMemory(in))
@@ -125,36 +123,6 @@ func checkLocalDaemon(ctx context.Context, in NodeInput) Check {
 		return Check{"daemon", StatusWarn, fmt.Sprintf("%s answered %d", url, code)}
 	}
 	return Check{"daemon", StatusOK, "answering /health at " + url}
-}
-
-// checkLocalSocketProxy answers "is the filtered docker socket there?", which is
-// the difference between a runner that can build and one that fails every job.
-func checkLocalSocketProxy(in NodeInput) Check {
-	path := strings.TrimSpace(in.SocketPath)
-	// The assignment, when there is one, is the authority: it is the path the
-	// container is actually built to mount.
-	if in.StatePath != "" {
-		if rec, ok := readAgentRecord(in.StatePath); ok && strings.TrimSpace(rec.SocketPath) != "" {
-			path = rec.SocketPath
-		}
-	}
-	if path == "" {
-		path = "/run/pmcluster/docker.sock"
-	}
-	info, err := os.Stat(path)
-	switch {
-	case os.IsNotExist(err):
-		return Check{"socket proxy", StatusWarn, path + " is absent — a runner on this node would fail every build (the runner assignment carries the path to use)"}
-	case err != nil:
-		return Check{"socket proxy", StatusWarn, path + ": " + err.Error()}
-	case info.Mode()&os.ModeSocket == 0:
-		return Check{"socket proxy", StatusWarn, path + " exists but is not a socket"}
-	}
-	upstream := "/var/run/docker.sock"
-	if _, err := os.Stat(upstream); err != nil {
-		return Check{"socket proxy", StatusWarn, fmt.Sprintf("listening on %s but %s (upstream) is missing", path, upstream)}
-	}
-	return Check{"socket proxy", StatusOK, "listening on " + path}
 }
 
 // checkLocalAssignment answers "when did this node last learn what to run, and

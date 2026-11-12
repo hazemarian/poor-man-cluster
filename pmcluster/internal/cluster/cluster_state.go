@@ -155,26 +155,11 @@ const (
 	// settingGitHubRunnerNodes is the comma-separated list of worker hostnames
 	// allowed to run a runner. A runner is a LOCAL container on the node that is
 	// listed for it, not a swarm service, so the list is the capacity model:
-	// N nodes = N runners. Managers (and the leader in particular) are refused —
-	// a build on the control plane's 1-vCPU manager marks the node Down and takes
-	// the cluster's API with it.
+	// N nodes = N runners. Managers are refused by default — a build competes with
+	// the API and the reconcile loop for the same CPU — unless
+	// github_runner_allow_managers is on, which is the switch the console's picker
+	// reads too.
 	settingGitHubRunnerNodes = "github_runner_nodes"
-
-	// settingGitHubRunnerSocketProxy is LEGACY. Runners get a daemon of their own
-	// (github_runner_dind) because the filtered socket only ever supported
-	// `docker build`; this key now matters solely for a node with dind turned off.
-	//
-	// settingGitHubRunnerSocketProxy makes runners talk to the platform's own
-	// filtered docker socket (internal/socketproxy) instead of the host's real
-	// one. Default true. The raw-socket fallback exists for debugging a build
-	// against a daemon the filter does not cover; it is unsafe for any workflow
-	// the operator does not control.
-	settingGitHubRunnerSocketProxy = "github_runner_socket_proxy"
-
-	// settingGitHubRunnerSocketPath is where the filtered socket lives on every
-	// node. A unix socket, root:root 0660, bind-mounted read-write into the
-	// runner: no host port, no overlay exposure.
-	settingGitHubRunnerSocketPath = "github_runner_socket_path"
 
 	// settingGitHubRunnerMemory caps each runner container. 2560m is the
 	// value proven on real hardware: at 1500m govulncheck OOM-killed the
@@ -199,10 +184,19 @@ const (
 	// fixed per node is an idle worker, not a boundary.
 	settingGitHubRunnerNodeMemory = "github_runner_node_memory"
 
-	// settingGitHubRunnerAllowLeader lifts the default placement constraint
-	// (node.labels.pmcluster.leader != true). Runners build images and
-	// compete with the control plane for CPU, so they stay off the leader
-	// unless the operator says otherwise — a single-node cluster has to.
+	// settingGitHubRunnerAllowManagers lifts the default placement constraint
+	// (node.labels.pmcluster.manager != true). Runners build images and compete
+	// with the control plane for CPU, so they stay off EVERY manager unless the
+	// operator says otherwise — a single-node cluster has to, and so does anyone
+	// who would rather use a manager than buy another box.
+	//
+	// It is about managers, not only the leader: the leader is merely the manager
+	// that happens to hold that role this hour, and a setting that covered it alone
+	// made the other managers unselectable for no reason an operator could see.
+	settingGitHubRunnerAllowManagers = "github_runner_allow_managers"
+
+	// settingGitHubRunnerAllowLeader is the OLD name for the same decision, read as
+	// a fallback so a cluster that already set it keeps its choice.
 	settingGitHubRunnerAllowLeader = "github_runner_allow_leader"
 
 	// settingGitHubRunnerAssignmentInterval is how often a node re-reads its
@@ -263,28 +257,14 @@ func SettingStorageFailover() string   { return settingStorageFailover }
 
 // The self-hosted runner settings, exposed for the setup wizard and the
 // runner reconcile loop (which read them through the store directly).
-func SettingGitHubRunnersEnabled() string    { return settingGitHubRunnersEnabled }
-func SettingGitHubRunnerOrg() string         { return settingGitHubRunnerOrg }
-func SettingGitHubRunnerGroup() string       { return settingGitHubRunnerGroup }
-func SettingGitHubRunnerNodes() string       { return settingGitHubRunnerNodes }
-func SettingGitHubRunnerSocketProxy() string { return settingGitHubRunnerSocketProxy }
+func SettingGitHubRunnersEnabled() string { return settingGitHubRunnersEnabled }
+func SettingGitHubRunnerOrg() string      { return settingGitHubRunnerOrg }
+func SettingGitHubRunnerGroup() string    { return settingGitHubRunnerGroup }
+func SettingGitHubRunnerNodes() string    { return settingGitHubRunnerNodes }
 
-// settingGitHubRunnerDinD gives each job a docker daemon of its own, inside a
-// privileged sibling container that is removed when the job ends, instead of the
-// platform's filtered socket.
-//
-// It exists because the filtered socket only ever supported `docker build`: a job
-// that runs `docker compose`, testcontainers or anything needing exec, networks or
-// volumes was blocked route by route. DinD hands the job a real daemon and keeps
-// the host out of it.
-// The two keys below live in a block, not as standalone `const X = "…"` lines:
-// internal/docscheck extracts documented keys with a regex anchored on a line that
-// STARTS with `setting`, and a `const` prefix makes the key invisible — so the docs
-// page and the code disagree while both look right. Keeping the shape uniform is what
-// makes that check meaningful.
+// The node watchdog, in its own const block: docscheck reads keys out of
+// `const ( … )` blocks, and a bare `const settingX = "…"` is invisible to it.
 const (
-	settingGitHubRunnerDinD = "github_runner_dind"
-
 	// settingNodeDockerRestart lets the node's root watchdog restart docker.service
 	// when the daemon stops answering.
 	//
@@ -322,21 +302,11 @@ func LoadNodeDockerRestart(ctx context.Context, st *store.Store) bool {
 	return strings.ToLower(strings.TrimSpace(st.SettingDefault(ctx, settingNodeDockerRestart, "false"))) == "true"
 }
 
-// SettingGitHubRunnerDinD is the setting key.
-func SettingGitHubRunnerDinD() string { return settingGitHubRunnerDinD }
+func SettingGitHubRunnerMemory() string        { return settingGitHubRunnerMemory }
+func SettingGitHubRunnerNodeMemory() string    { return settingGitHubRunnerNodeMemory }
+func SettingGitHubRunnerAllowManagers() string { return settingGitHubRunnerAllowManagers }
 
-// LoadGitHubRunnerDinD reports whether runners get their own daemon.
-// Default true: the socket proxy remains available for operators who want the
-// narrow, filtered surface, but it is no longer the default a workflow meets.
-func LoadGitHubRunnerDinD(ctx context.Context, st *store.Store) bool {
-	if st == nil {
-		return true
-	}
-	return strings.ToLower(strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerDinD, "true"))) != "false"
-}
-func SettingGitHubRunnerSocketPath() string  { return settingGitHubRunnerSocketPath }
-func SettingGitHubRunnerMemory() string      { return settingGitHubRunnerMemory }
-func SettingGitHubRunnerNodeMemory() string  { return settingGitHubRunnerNodeMemory }
+// SettingGitHubRunnerAllowLeader is kept only so the loader can migrate the old key.
 func SettingGitHubRunnerAllowLeader() string { return settingGitHubRunnerAllowLeader }
 func SettingGitHubRunnerAssignmentInterval() string {
 	return settingGitHubRunnerAssignmentInterval
@@ -354,28 +324,6 @@ func LoadGitHubRunnerNodes(ctx context.Context, st *store.Store) string {
 		return ""
 	}
 	return strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerNodes, ""))
-}
-
-// LoadGitHubRunnerSocketProxy reports whether runners use the filtered socket
-// (github_runner_socket_proxy). Unset means ON: the raw socket is the debug
-// fallback, not the default.
-func LoadGitHubRunnerSocketProxy(ctx context.Context, st *store.Store) bool {
-	if st == nil {
-		return true
-	}
-	return strings.ToLower(strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerSocketProxy, "true"))) != "false"
-}
-
-// LoadGitHubRunnerSocketPath returns the filtered socket path, defaulting to
-// DefaultGitHubRunnerSocketPath.
-func LoadGitHubRunnerSocketPath(ctx context.Context, st *store.Store) string {
-	if st == nil {
-		return DefaultGitHubRunnerSocketPath
-	}
-	if v := strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerSocketPath, "")); v != "" {
-		return v
-	}
-	return DefaultGitHubRunnerSocketPath
 }
 
 // DefaultGitHubRunnerMemory is the runner memory limit when
@@ -442,13 +390,20 @@ func LoadGitHubRunnerNodeMemory(ctx context.Context, st *store.Store) string {
 	return strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerNodeMemory, ""))
 }
 
-// LoadGitHubRunnerAllowLeader reports whether runners may be placed on the
-// leader (github_runner_allow_leader=true). Absent means no.
-func LoadGitHubRunnerAllowLeader(ctx context.Context, st *store.Store) bool {
+// LoadGitHubRunnerAllowManagers reports whether runners may be placed on a MANAGER,
+// including the leader (github_runner_allow_managers=true). Absent means no.
+//
+// The old key is honoured when the new one is unset, so widening the switch from "the
+// leader" to "any manager" does not silently take the permission away from a cluster
+// that had already granted it.
+func LoadGitHubRunnerAllowManagers(ctx context.Context, st *store.Store) bool {
 	if st == nil {
 		return false
 	}
-	return st.SettingDefault(ctx, settingGitHubRunnerAllowLeader, "") == "true"
+	if v := strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerAllowManagers, "")); v != "" {
+		return v == "true"
+	}
+	return strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerAllowLeader, "")) == "true"
 }
 
 // DefaultGitHubRunnerAssignmentIntervalSeconds is how often a node re-reads its

@@ -493,25 +493,21 @@ var clusterSettingKeys = []string{
 	// Per-node memory caps are written by the same picker (it saves both keys in
 	// one submit), so this form carries it the same way and never edits it.
 	"github_runner_node_memory",
-	// The docker socket keys are deliberately NOT here any more. Runners get a daemon
-	// of their own (DinD), so a form field that says "filtered socket" both misdescribes
-	// what happens and invites an operator to set something that changes nothing. The
-	// keys still exist and are still honoured for a node running with dind off; they are
-	// just not something a panel should be offering as a choice.
-	"github_runner_dind",
+	// There is no docker-access switch here, and there is no socket key. A job always
+	// gets a daemon of its own (see docs/runners.md); a panel that offers a choice would
+	// be describing an arrangement the platform no longer has.
 	"github_runner_memory",
-	"github_runner_allow_leader",
+	"github_runner_allow_managers",
 }
 
 // clusterBoolSettings are the allowlisted settings that are flags rather than
 // strings, so the form and the save agree on what a cleared checkbox means.
 var clusterBoolSettings = map[string]bool{
-	"backup_enabled":             true,
-	"sso_enabled":                true,
-	"edge_login_disabled":        true,
-	"github_runners_enabled":     true,
-	"github_runner_dind":         true,
-	"github_runner_allow_leader": true,
+	"backup_enabled":               true,
+	"sso_enabled":                  true,
+	"edge_login_disabled":          true,
+	"github_runners_enabled":       true,
+	"github_runner_allow_managers": true,
 }
 
 // ---------- the cluster form: which section a key belongs to ----------

@@ -186,7 +186,7 @@ func (m *Manager) Inspect(ctx context.Context) (Report, error) {
 			nr.LastError = e.LastError
 		}
 		if strings.EqualFold(node, m.Node) {
-			nr.DockerAccess = m.dockerAccess(cfg)
+			nr.DockerAccess = dockerAccess
 			if c, ok, err := m.inspect(ctx, name); err != nil {
 				nr.Error = err.Error()
 			} else if ok {
@@ -300,13 +300,10 @@ func (m *Manager) nodeRoles(ctx context.Context, rep *Report) map[string]string 
 	return out
 }
 
-// dockerAccess is the exposure a local runner has.
-func (m *Manager) dockerAccess(cfg Config) string {
-	if cfg.SocketProxy {
-		return "socket proxy"
-	}
-	return "raw socket"
-}
+// dockerAccess states the exposure a local runner has. There is exactly one answer now:
+// a job gets a private daemon and never the host's socket, so this is a statement of fact
+// rather than a branch over settings.
+const dockerAccess = "dind (private daemon, its own /var/lib/docker, removed with the job)"
 
 // levelRank orders GitHub permission levels the way the App's granted set is
 // reported: absent < read < write < admin.
@@ -322,23 +319,25 @@ func levelRank(level string) int {
 	return 0
 }
 
-// RolesOf is a small helper the console's node picker uses to render a node's
-// eligibility. It returns (isWorker, reason).
 // RolesOf answers "may this node be picked, and why not" for the console's picker.
 //
-// allowLeader mirrors `github_runner_allow_leader`. When it is on, the leader becomes
-// selectable and the returned string becomes a CAUTION rather than a refusal — the
-// picker renders it as a warning pill instead of a disabled row, because "allowed but
+// allowManagers mirrors `github_runner_allow_managers`. When it is on every manager is
+// selectable and the returned string becomes a CAUTION rather than a refusal — the picker
+// renders that as a warning pill instead of a disabled row, because "allowed but
 // contended" and "not allowed" are different facts and an operator needs to see which.
-func RolesOf(n runtime.Node, allowLeader bool) (bool, string) {
+//
+// It covers MANAGERS, not just the leader. Keying the rule to the leader alone made every
+// other manager permanently unselectable, which reads as a broken picker rather than as a
+// policy: the leader is only the manager that happens to hold the role this hour.
+func RolesOf(n runtime.Node, allowManagers bool) (bool, string) {
+	if !isManagerNode(n) {
+		return true, ""
+	}
+	if !allowManagers {
+		return false, "a manager runs the control plane — turn on \"Allow runners on managers\" to pick it anyway"
+	}
 	if n.IsLeader {
-		if allowLeader {
-			return true, "the leader — a heavy job competes with the control plane for CPU and memory"
-		}
-		return false, "the swarm leader is the control plane — turn on \"Allow runners on the leader\" to pick it anyway"
+		return true, "the leader — a heavy job competes with the API and the reconcile loop for CPU and memory"
 	}
-	if strings.EqualFold(n.Role, "manager") {
-		return false, "another manager holds the control plane — pick a worker, or allow the leader explicitly"
-	}
-	return true, ""
+	return true, "a manager — a heavy job competes with the control plane for CPU and memory"
 }

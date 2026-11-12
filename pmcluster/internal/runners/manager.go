@@ -330,15 +330,12 @@ func (m *Manager) ensure(ctx context.Context, cfg Config, c Container, exists bo
 		return
 	}
 	spec := Spec{
-		Org:         cfg.Org,
-		Group:       cfg.Group,
-		RunnerName:  name,
-		Image:       cfg.Image,
-		Memory:      cfg.CapFor(cfg.Node),
-		Token:       token,
-		SocketProxy: cfg.SocketProxy,
-		SocketPath:  cfg.SocketPath,
-		DinD:        cfg.DinD,
+		Org:        cfg.Org,
+		Group:      cfg.Group,
+		RunnerName: name,
+		Image:      cfg.Image,
+		Memory:     cfg.CapFor(cfg.Node),
+		Token:      token,
 	}
 	if _, err := spec.Argv(); err != nil {
 		m.warn(res, cfg.Org, name, fmt.Errorf("render runner for %s: %w", cfg.Org, err), state)
@@ -350,13 +347,7 @@ func (m *Manager) ensure(ctx context.Context, cfg Config, c Container, exists bo
 	}
 	state.Runners[name] = RunnerState{Name: name, Org: cfg.Org, RegisteredAt: m.now().Unix()}
 	res.Registered = append(res.Registered, cfg.Org)
-	mesh := "socket proxy"
-	switch {
-	case cfg.DinD:
-		mesh = "dind (private daemon, removed with the job)"
-	case !cfg.SocketProxy:
-		mesh = "raw docker socket (debug fallback)"
-	}
+	mesh := dockerAccess
 	m.Log.Info().Str("org", cfg.Org).Str("runner", name).Str("group", cfg.Group).
 		Str("memory", cfg.CapFor(cfg.Node)).Str("docker_access", mesh).
 		Msg("runners — registered a runner on this node")
