@@ -137,6 +137,7 @@ func (lp *perNodeLoops) runAssignmentAgent(ctx context.Context, d perNodeDeps) {
 	intervals.set(interval)
 
 	var sourceLogged bool
+	var lastReport time.Time
 	tick := func() {
 		// FirstAssignment means "the first pass finished", whatever it found — a
 		// watcher waiting on it must not hang because the leader was unreachable.
@@ -174,6 +175,16 @@ func (lp *perNodeLoops) runAssignmentAgent(ctx context.Context, d perNodeDeps) {
 			sourceLogged = true
 		}
 		lp.assignmentFetches.Add(1)
+		// Report this node's cache sizes so the console (served by the LEADER) can
+		// warn about a runner it cannot measure itself. Every ten minutes: the numbers
+		// change slowly and `docker system df` walks the volumes on the daemon.
+		if r, ok := d.Assignment.(assignmentReporter); ok && time.Since(lastReport) > 10*time.Minute {
+			if usage, cerr := runners.ReadCacheUsage(ctx, d.Container, runners.RunnerName(d.Hostname)); cerr == nil {
+				if rerr := r.ReportCaches(ctx, usage); rerr == nil {
+					lastReport = time.Now()
+				}
+			}
+		}
 		agent.RecordFetch(source, time.Now())
 		res, applyErr := agent.Apply(ctx, a)
 		if applyErr != nil {
@@ -359,4 +370,11 @@ func agentStatePath(dataDir string) string {
 		return ""
 	}
 	return dataDir + string(os.PathSeparator) + "runner_assignment.json"
+}
+
+// assignmentReporter is the optional half of the assignment client: a node that can
+// measure its caches reports them on the channel it already uses. Optional so a test can
+// wire a fetcher without one.
+type assignmentReporter interface {
+	ReportCaches(ctx context.Context, caches []runners.CacheUsage) error
 }

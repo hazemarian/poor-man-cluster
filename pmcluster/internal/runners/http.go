@@ -127,8 +127,17 @@ func (h *HTTP) list(w http.ResponseWriter, r *http.Request) {
 			LastJobURL:   row.LastJobURL,
 			Reason:       row.Reason,
 		}
-		if local {
+		switch {
+		case local:
 			item.Caches, item.CacheTotal, item.CacheWarnings = cacheUsage, cacheTotal, cacheWarn
+		case h.Mgr.CacheReports != nil:
+			// Measured on the node itself and reported over the assignment channel: the
+			// leader cannot read another machine's volumes.
+			if rep, fresh := h.Mgr.CacheReports.Get(row.Node); fresh && len(rep.Caches) > 0 {
+				item.Caches = rep.Caches
+				item.CacheTotal = HumanBytes(TotalCacheBytes(rep.Caches))
+				item.CacheWarnings = CacheWarnings(rep.Caches)
+			}
 		}
 		out.Runners = append(out.Runners, item)
 	}

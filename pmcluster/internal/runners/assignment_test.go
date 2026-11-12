@@ -161,14 +161,49 @@ func TestAssignmentEndpointRefusalsAndAnswer(t *testing.T) {
 		}
 	})
 
-	t.Run("refuses a non-GET", func(t *testing.T) {
+	t.Run("accepts a cache report from an identified node", func(t *testing.T) {
+		// POST is the one write on this channel: a node reporting how big its own caches
+		// are, because the leader cannot measure another machine's volumes and the console
+		// that shows them is served by the leader.
 		svc := newAssignmentService(newFakeGitHub(), workers, enabled, nil)
+		svc.CacheReports = NewCacheReports()
 		rec := httptest.NewRecorder()
-		post := httptest.NewRequest(http.MethodPost, AssignmentPath, nil)
+		body := `{"caches":[{"name":"go","volume":"pmc-worker-1-org-cache-go","bytes":7000000000,"limit":5368709120}]}`
+		post := httptest.NewRequest(http.MethodPost, AssignmentPath, strings.NewReader(body))
 		post = post.WithContext(swarmtls.ContextWithNode(post.Context(), swarmtls.Node{ID: "id-w1", Hostname: "worker-1"}))
 		svc.ServeHTTP(rec, post)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+		}
+		rep, ok := svc.CacheReports.Get("worker-1")
+		if !ok || len(rep.Caches) != 1 || rep.Caches[0].Bytes != 7000000000 {
+			t.Fatalf("the report was not recorded: %+v ok=%v", rep, ok)
+		}
+		// And it carries the warning the console will render.
+		if w := CacheWarnings(rep.Caches); len(w) != 1 || !strings.Contains(w[0], "go") {
+			t.Fatalf("the recorded report produces no warning: %v", w)
+		}
+	})
+
+	t.Run("refuses a cache report with no identity", func(t *testing.T) {
+		svc := newAssignmentService(newFakeGitHub(), workers, enabled, nil)
+		svc.CacheReports = NewCacheReports()
+		rec := httptest.NewRecorder()
+		post := httptest.NewRequest(http.MethodPost, AssignmentPath, strings.NewReader(`{"caches":[]}`))
+		svc.ServeHTTP(rec, post)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403 — a node must prove which node it is", rec.Code)
+		}
+	})
+
+	t.Run("refuses a DELETE", func(t *testing.T) {
+		svc := newAssignmentService(newFakeGitHub(), workers, enabled, nil)
+		rec := httptest.NewRecorder()
+		del := httptest.NewRequest(http.MethodDelete, AssignmentPath, nil)
+		del = del.WithContext(swarmtls.ContextWithNode(del.Context(), swarmtls.Node{ID: "id-w1", Hostname: "worker-1"}))
+		svc.ServeHTTP(rec, del)
 		if rec.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("status = %d, want 405 (the channel is read-only)", rec.Code)
+			t.Fatalf("status = %d, want 405", rec.Code)
 		}
 	})
 

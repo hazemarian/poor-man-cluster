@@ -1,6 +1,7 @@
 package runners
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/json"
@@ -108,9 +109,11 @@ func (c *Client) candidates(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// Fetch resolves the swarm credential, tries every candidate, and returns the
-// assignment plus the base URL that answered.
-func (c *Client) Fetch(ctx context.Context) (Assignment, string, error) {
+// transport resolves this node's certificate, the leader's CA and the candidate
+// addresses, and returns a client bound to them. Both the assignment fetch and the cache
+// report use it: two copies of this would drift, and the one that drifted would be the
+// report nobody notices is broken.
+func (c *Client) transport(ctx context.Context) (*http.Client, []string, error) {
 	certFile, keyFile := c.CertFile, c.KeyFile
 	if certFile == "" {
 		certFile = swarmtls.FirstFile(swarmtls.NodeCertPaths)
@@ -119,15 +122,15 @@ func (c *Client) Fetch(ctx context.Context) (Assignment, string, error) {
 		keyFile = swarmtls.FirstFile(swarmtls.NodeKeyPaths)
 	}
 	if certFile == "" || keyFile == "" {
-		return Assignment{}, "", ErrNoSwarmCertificate
+		return nil, nil, ErrNoSwarmCertificate
 	}
 	pool, _, err := swarmtls.LoadCA(c.CAPaths...)
 	if err != nil {
-		return Assignment{}, "", fmt.Errorf("%w (%v)", ErrNoSwarmCertificate, err)
+		return nil, nil, fmt.Errorf("%w (%v)", ErrNoSwarmCertificate, err)
 	}
 	swarmID, err := certSwarmID(certFile)
 	if err != nil {
-		return Assignment{}, "", fmt.Errorf("read this node's swarm certificate: %w", err)
+		return nil, nil, fmt.Errorf("read this node's swarm certificate: %w", err)
 	}
 	tlsCfg, err := swarmtls.ClientTLS(swarmtls.ClientConfig{
 		CertFile: certFile,
@@ -138,12 +141,12 @@ func (c *Client) Fetch(ctx context.Context) (Assignment, string, error) {
 		SwarmID: swarmID,
 	})
 	if err != nil {
-		return Assignment{}, "", fmt.Errorf("%w: %v", ErrNoSwarmCertificate, err)
+		return nil, nil, fmt.Errorf("%w: %v", ErrNoSwarmCertificate, err)
 	}
 
 	bases, err := c.candidates(ctx)
 	if err != nil {
-		return Assignment{}, "", err
+		return nil, nil, err
 	}
 	client := c.HTTP
 	if client == nil {
@@ -157,6 +160,16 @@ func (c *Client) Fetch(ctx context.Context) (Assignment, string, error) {
 		}
 	}
 
+	return client, bases, nil
+}
+
+// Fetch resolves the swarm credential, tries every candidate, and returns the
+// assignment plus the base URL that answered.
+func (c *Client) Fetch(ctx context.Context) (Assignment, string, error) {
+	client, bases, err := c.transport(ctx)
+	if err != nil {
+		return Assignment{}, "", err
+	}
 	var errs []string
 	for _, base := range bases {
 		a, err := c.get(ctx, client, base)
@@ -257,3 +270,60 @@ func certSwarmID(path string) (string, error) {
 		return "", fmt.Errorf("certificate in %s carries no swarm organisation", path)
 	}
 }
+
+// ReportCaches sends this node's cache measurements to the leader, on the same mTLS
+// channel, the same path and the same candidate walk as the assignment fetch.
+//
+// It exists because the console is served by the leader and the volumes belong to this
+// node: nobody else can run `docker system df` against this daemon, and a worker's own API
+// is loopback-only. Reporting is best-effort — a leader that does not record reports
+// answers 501, and that must never disturb the runner loop.
+func (c *Client) ReportCaches(ctx context.Context, caches []CacheUsage) error {
+	body, err := json.Marshal(map[string]any{"caches": caches})
+	if err != nil {
+		return err
+	}
+	client, bases, err := c.transport(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []string
+	for _, base := range bases {
+		if perr := c.post(ctx, client, base, body); perr == nil {
+			return nil
+		} else {
+			errs = append(errs, fmt.Sprintf("%s: %v", base, perr))
+		}
+	}
+	if len(errs) == 0 {
+		return errors.New("no candidate address for the leader")
+	}
+	return fmt.Errorf("could not report cache sizes (%s)", strings.Join(errs, "; "))
+}
+
+// post performs one POST against one candidate.
+func (c *Client) post(ctx context.Context, client *http.Client, base string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+AssignmentPath, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	if resp.StatusCode == http.StatusNotImplemented {
+		// A leader that does not record reports is not a failure to report: say so
+		// once, quietly, and stop trying on this pass.
+		return errNotRecorded
+	}
+	return fmt.Errorf("%s: %s", resp.Status, apiErrorText(out))
+}
+
+// errNotRecorded means the leader accepted the connection and declined the feature.
+var errNotRecorded = errors.New("this leader does not record cache reports")

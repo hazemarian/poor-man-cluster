@@ -485,6 +485,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// The runner manager is built before the HTTP handler: the console's
 	// Runners panel calls this same manager through /api/github/runners, and a
 	// second instance would keep a second copy of the kill holds.
+	// One sink, two users: the assignment listener writes what nodes report, the
+	// manager reads it for the console. The console is served by the LEADER and the
+	// volumes belong to the node that runs the runner, so without this the page could
+	// only ever warn about a runner living on the leader itself.
+	cacheReports := runners.NewCacheReports()
 	runnerMgr := &runners.Manager{
 		Store:  st,
 		Docker: &runners.CLIDocker{},
@@ -503,6 +508,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// second credential exist for this feature.
 		runnerMgr.GitHub = deps.GitHubApp
 	}
+	runnerMgr.CacheReports = cacheReports
 	deps.GitHubRunners = runnerMgr
 
 	// The CI board reads Actions with the SAME installation token the runner
@@ -555,11 +561,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// as one.
 	if !worker {
 		startAssignmentListener(ctx, assignmentListenerOptions{
-			Store:      st,
-			Hostname:   hostname,
-			Docker:     dc,
-			GitHub:     runnerMgr.GitHub,
-			Deregister: runnerMgr.DeregisterName,
+			Store:        st,
+			Hostname:     hostname,
+			CacheReports: cacheReports,
+			Docker:       dc,
+			GitHub:       runnerMgr.GitHub,
+			Deregister:   runnerMgr.DeregisterName,
 			Held: func(name string) bool {
 				return runnerMgr.HeldName(ctx, name)
 			},

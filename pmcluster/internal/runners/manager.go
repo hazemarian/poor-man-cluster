@@ -81,6 +81,10 @@ type Result struct {
 // whether it is selected (see Config.WatchesNode).
 type Manager struct {
 	Store *store.Store
+	// CacheReports is what other nodes reported about their own caches, written by the
+	// assignment service and read here for the console. A runner on THIS node is
+	// measured directly; this covers every other one.
+	CacheReports *CacheReports
 	// GitHub is nil when no App is configured; the feature then refuses.
 	GitHub GitHub
 	// Docker is the local container runtime.

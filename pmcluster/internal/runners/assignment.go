@@ -2,8 +2,10 @@ package runners
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -242,6 +244,10 @@ func ResolveAssignment(cfg Config, nodes []runtime.Node, node string) (Assignmen
 // the node is taken from the request's TLS identity (see internal/auth/swarmtls),
 // never from the query string.
 type AssignmentService struct {
+	// CacheReports is where a node's cache measurement lands, so a console served by
+	// the leader can show it for a runner that lives on another machine. Nil means the
+	// leader does not record them, and it says so instead of pretending.
+	CacheReports *CacheReports
 	// Config reads the current runner settings on THIS node (the leader).
 	Config func(ctx context.Context) Config
 	// Nodes reads the live swarm node list.
@@ -295,8 +301,19 @@ func (s *AssignmentService) interval() time.Duration {
 // ignoring it means the endpoint has exactly one identity source and no branch
 // that could later be "helpfully" widened.
 func (s *AssignmentService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// POST is one thing only: the node reporting how big its runner caches are. The
+	// leader cannot measure another machine's volumes — `docker system df` answers for
+	// the daemon it is run against, and a worker's API is loopback-only — so the node
+	// that CAN measure sends the numbers on the channel it already opens every minute.
+	//
+	// It is not a second purpose for the endpoint, it is the only way the console can
+	// show a cache warning for a runner that lives anywhere but the leader.
+	if r.Method == http.MethodPost {
+		s.reportCaches(w, r)
+		return
+	}
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed: the assignment channel is read-only"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed: GET reads the assignment, POST reports cache sizes"})
 		return
 	}
 	ident, ok := swarmtls.FromContext(r.Context())
@@ -471,4 +488,36 @@ func ensureGroupSelected(ctx context.Context, gh GitHub, org, group string) erro
 		return fmt.Errorf("refusing to run a runner in org %s: runner group %q reported visibility %q", org, group, g.Visibility)
 	}
 	return nil
+}
+
+// reportCaches accepts a node's cache measurement and keeps the last one per node.
+func (s *AssignmentService) reportCaches(w http.ResponseWriter, r *http.Request) {
+	ident, ok := swarmtls.FromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden", "reason": "no authenticated swarm node"})
+		return
+	}
+	node := strings.TrimSpace(ident.Hostname)
+	if node == "" {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden", "reason": "certificate is not a live swarm node"})
+		return
+	}
+	var body struct {
+		Caches []CacheUsage `json:"caches"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "decode: " + err.Error()})
+		return
+	}
+	if s.CacheReports == nil {
+		// Nothing is stored, and the node is told so rather than left believing it
+		// reported successfully.
+		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "this leader does not record cache reports"})
+		return
+	}
+	// No timestamp from here: the sink stamps the report with ITS clock, so the age the
+	// console checks and the age the report carries can never come from two different
+	// clocks (which is exactly what a test with a fixed service clock exposed).
+	s.CacheReports.Put(node, CacheReport{Caches: body.Caches})
+	writeJSON(w, http.StatusOK, map[string]any{"node": node, "caches": len(body.Caches)})
 }

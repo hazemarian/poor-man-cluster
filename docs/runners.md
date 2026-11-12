@@ -378,6 +378,19 @@ repository that has nothing to do with the cache.
 The numbers come from the daemon **on the node**, so a runner listed on another node
 reports no sizes at all rather than zeros: unobservable and empty are different facts.
 
+**How the numbers reach the console.** The page is served by the leader, and the volumes
+belong to the node that runs the runner, so the two are usually different machines:
+`docker system df` answers only for the daemon it is run against, and a worker's own API is
+loopback-only. So the node reports what it measured on the channel it already opens every
+minute — a `POST` to the assignment endpoint, authenticated by the same swarm certificate.
+The leader keeps the last report per node **in memory**, with a 15-minute life: the worker
+measures every ten minutes, so silence means the node stopped talking, and a leader that
+just took over says "not measured yet" rather than serving numbers from a leader that no
+longer exists.
+
+That is the only write on that channel; `GET` still reads an assignment and `PUT`/`DELETE`
+are refused.
+
 **These three volumes are never removed by teardown**, and that is a deliberate
 exception to "the job leaves nothing behind": they hold no state a job can read, only
 caches it can invalidate.

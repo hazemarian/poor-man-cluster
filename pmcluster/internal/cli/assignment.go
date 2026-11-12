@@ -67,6 +67,9 @@ type assignmentListenerOptions struct {
 	Hostname string
 	Docker   runtime.Client
 	GitHub   runners.GitHub
+	// CacheReports collects what nodes report about their own cache volumes. Shared
+	// with the runner manager so the console can show a runner on another machine.
+	CacheReports *runners.CacheReports
 	// Deregister removes a registration named after a node the leader stopped.
 	Deregister func(ctx context.Context, org, name string) error
 	// Held reports an operator stop recorded on this leader. The node cannot
@@ -131,6 +134,9 @@ func startAssignmentListener(ctx context.Context, o assignmentListenerOptions) {
 	}
 
 	svc := &runners.AssignmentService{
+		// The same sink the console reads: a node reports its cache sizes here, and
+		// the leader shows them for a runner that lives on that node.
+		CacheReports: o.CacheReports,
 		Config: func(ctx context.Context) runners.Config {
 			return runners.LoadConfig(ctx, o.Store, o.Hostname)
 		},
