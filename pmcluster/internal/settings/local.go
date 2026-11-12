@@ -68,6 +68,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingGitHubRunnerOrg(),
 	cluster.SettingGitHubRunnerGroup(),
 	cluster.SettingGitHubRunnerNodes(),
+	cluster.SettingNodeDockerRestart(),
 	cluster.SettingGitHubRunnerSocketProxy(),
 	cluster.SettingGitHubRunnerDinD(),
 	cluster.SettingGitHubRunnerSocketPath(),
@@ -90,6 +91,7 @@ var settingDefaults = map[string]string{
 	// A feature that fronts the host's docker socket is never on by default.
 	cluster.SettingGitHubRunnersEnabled():           "false",
 	cluster.SettingGitHubRunnerGroup():              cluster.DefaultGitHubRunnerGroup,
+	cluster.SettingNodeDockerRestart():              "false",
 	cluster.SettingGitHubRunnerSocketProxy():        "true",
 	cluster.SettingGitHubRunnerDinD():               "true",
 	cluster.SettingGitHubRunnerSocketPath():         cluster.DefaultGitHubRunnerSocketPath,
@@ -276,6 +278,12 @@ func (l *Local) normalizeRunnerSetting(ctx context.Context, key, value string) (
 			return "", fmt.Errorf("%s: %w", key, err)
 		}
 		return nodes, nil
+	case cluster.SettingNodeDockerRestart():
+		on, err := parseBoolSetting(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		return strconv.FormatBool(on), nil
 	case cluster.SettingGitHubRunnerDinD():
 		on, err := parseBoolSetting(value)
 		if err != nil {

@@ -336,12 +336,31 @@ func restartUnit(ctx context.Context, unit string) error {
 	return nil
 }
 
+// resetFailedUnit clears systemd's start-limit state for a unit it has given up on.
+//
+// This is the half that matters for a KILLED dockerd: an OOM kill that repeats in
+// quick succession trips StartLimitBurst, after which systemd refuses to try again
+// and leaves the unit `failed`. `systemctl restart` is then a no-op with an error
+// nobody reads, and the node sits there looking recoverable. reset-failed re-arms it.
+func resetFailedUnit(ctx context.Context, unit string) error {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, "systemctl", "reset-failed", unit).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("systemctl reset-failed %s: %w (%s)", unit, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // watchdogFlags are the hidden command's inputs. The unit sets both explicitly,
 // so a root-run timer neither reads nor depends on the operator's config file.
 var (
 	watchdogStatePath string
 	watchdogProbeURL  string
 	watchdogUnit      string
+	// watchdogDockerSocket is empty by default: watching docker is a deliberate
+	// choice because its remedy restarts every container on the node.
+	watchdogDockerSocket string
 )
 
 var healthWatchCmd = &cobra.Command{
@@ -395,6 +414,22 @@ update'. Hidden because it is not an operator command.`,
 			Restart:    func(ctx context.Context) error { return restartUnit(ctx, unit) },
 			Out:        cmd.OutOrStdout(),
 		})
+		// The docker check runs SECOND and its failure never hides the daemon verdict:
+		// the node can have a healthy control plane and a dead dockerd, which is
+		// exactly the state that took nxt-sw-3-w out of the cluster for hours.
+		if watchdogDockerSocket != "" {
+			dockerState := filepath.Join(filepath.Dir(statePath), dockerWatchStateFile)
+			_, derr := watchDockerOnce(ctx, dockerState, dockerWatchDeps{
+				Probe:       func(ctx context.Context) error { return probeDockerSocket(ctx, watchdogDockerSocket) },
+				UnitActive:  func(ctx context.Context) (bool, error) { return unitActiveNow(ctx, "docker") },
+				Restart:     func(ctx context.Context) error { return restartUnit(ctx, "docker") },
+				ResetFailed: func(ctx context.Context) error { return resetFailedUnit(ctx, "docker") },
+				Out:         cmd.OutOrStdout(),
+			})
+			if derr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "docker-watch: %v\n", derr)
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -411,6 +446,9 @@ func init() {
 		"path to the watchdog state file (default <data_dir>/"+watchdogStateFile+")")
 	healthWatchCmd.Flags().StringVar(&watchdogProbeURL, "probe-url", defaultWatchdogProbeURL,
 		"URL probed with a "+WatchdogProbeTimeout.String()+" timeout")
+	healthWatchCmd.Flags().StringVar(&watchdogDockerSocket, "docker-socket", "",
+		"also watch this docker socket and restart docker.service when it stops answering "+
+			"(empty = disabled; the daemon cannot restart dockerd itself)")
 	healthWatchCmd.Flags().StringVar(&watchdogUnit, "unit", "pmcluster",
 		"systemd unit to probe and restart")
 }

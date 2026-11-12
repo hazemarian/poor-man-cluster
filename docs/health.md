@@ -124,7 +124,48 @@ pmcluster node versions       # the fleet table, stragglers named
 label, so its binary version is unknowable from the swarm. The command says so
 rather than letting a list of five managers read as a list of every node.
 
-### What `doctor` can and cannot see
+### Watching docker: the one thing the daemon cannot do for itself
+
+`pmcluster` can restart itself. It cannot restart `dockerd` — docker is outside its
+control loop, and on a node whose docker has died the daemon is either dead too or
+serving requests it cannot fulfil. On 2026-11-12 `nxt-sw-3-w` went Down in exactly
+that state: ports 2377/7946 closed, sshd accepting TCP but never completing a
+handshake, the kernel still answering ping. Nothing on the node was watching dockerd,
+and the swarm reported a node that stayed Down until a human power-cycled it.
+
+The existing `pmcluster-watchdog.timer` is the right owner: it is root, it runs every
+minute, and it does not need the daemon to be healthy to do its work. It now runs a
+**second check** when `node_docker_restart` is enabled:
+
+```
+every 60s   GET /_ping over the docker unix socket, 5s timeout
+3 failures  → restart docker.service
+            → if systemd says the unit is `failed` (StartLimitBurst reached),
+              `systemctl reset-failed` FIRST — otherwise `restart` is refused and
+              the node looks recoverable while nothing is retried
+after       → probe again. If it still does not answer, say so: "this node needs an
+              operator". Do not report a recovery that did not happen.
+30 min      floor between restarts — three times the daemon-restart floor, because
+            the blast radius is three times larger
+```
+
+**Why it ships off.** The remedy stops every container on that node: a running CI job,
+the platform services scheduled there, its storage. That is the correct trade on a node
+whose docker is already dead, and a terrible surprise on one whose docker is merely
+busy. So the default is `false` and the remedy only ever runs because an operator asked
+for it — an upgrade will not turn it on.
+
+**Why the probe is a socket call, not `docker info`.** The timer runs as root with no
+operator environment: no `DOCKER_HOST`, no guarantee that a `docker` binary is on
+`PATH` for the workload. `GET /_ping` over the socket path it is given has no such
+dependencies.
+
+**What it still cannot do.** It cannot recover a node that is out of memory: if the
+kernel is killing processes, the timer is not running either. It cannot reboot a
+machine, and it will not fight systemd beyond one `reset-failed` per 30 minutes. Those
+cases still need a provider-level action, which is stated rather than papered over.
+
+## What `doctor` can and cannot see
 
 `doctor` inspects a runner container only for the node the daemon **runs on**. From
 the leader, every other node's container state is *unknown*, not *absent* — and the

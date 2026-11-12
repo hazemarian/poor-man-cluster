@@ -171,6 +171,19 @@ func watchdogUnitPaths() (service, timer string) {
 // No After=/BindsTo=docker.service, unlike the daemon unit: a wedge is often
 // caused by exactly the thing a dependency ordering would wait for.
 func renderWatchdogService(execStart, statePath, probeURL string) string {
+	return renderWatchdogServiceWithDocker(execStart, statePath, probeURL, "")
+}
+
+// renderWatchdogServiceWithDocker adds the docker check when dockerSocket is set.
+//
+// It is separate from the /health probe because the two watch different processes
+// with different remedies, and because restarting docker stops every container on the
+// node — an operator turns that on deliberately, never by upgrading.
+func renderWatchdogServiceWithDocker(execStart, statePath, probeURL, dockerSocket string) string {
+	dockerFlag := ""
+	if s := strings.TrimSpace(dockerSocket); s != "" {
+		dockerFlag = " --docker-socket " + s
+	}
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster health watchdog (restarts a wedged daemon)
 # A watchdog that is rate-limited by systemd is a watchdog that stops watching:
@@ -182,13 +195,13 @@ StartLimitBurst=10
 [Service]
 Type=oneshot
 User=root
-ExecStart=%s health-watch --state-file %s --probe-url %s --unit pmcluster
+ExecStart=%s health-watch --state-file %s --probe-url %s --unit pmcluster%s
 # A probe is 5s and a restart is bounded by systemd; the ceiling exists so a
 # hung systemctl cannot stack timer runs on top of each other.
 TimeoutStartSec=120
 # The control plane's own monitor yields to the workload it is watching.
 Nice=5
-`, execStart, statePath, probeURL)
+`, execStart, statePath, probeURL, dockerFlag)
 }
 
 // renderWatchdogTimer builds pmcluster-watchdog.timer: every 60 seconds, with
@@ -213,14 +226,14 @@ WantedBy=timers.target
 // dir. A failure is a warning, never fatal: the daemon is already running by the
 // time this is called, and refusing to finish an update because a timer could
 // not be enabled would trade a degraded node for a broken one.
-func installWatchdog(out io.Writer, exe, dataDir string) {
+func installWatchdog(out io.Writer, exe, dataDir, dockerSocket string) {
 	servicePath, timerPath := watchdogUnitPaths()
 	statePath := filepath.Join(dataDir, watchdogStateFile)
 	units := []struct {
 		path string
 		body string
 	}{
-		{servicePath, renderWatchdogService(exe, statePath, defaultWatchdogProbeURL)},
+		{servicePath, renderWatchdogServiceWithDocker(exe, statePath, defaultWatchdogProbeURL, dockerSocket)},
 		{timerPath, renderWatchdogTimer()},
 	}
 	changed := false
@@ -399,7 +412,11 @@ func ensureDaemonRunning(out io.Writer) error {
 	// well as manager: a wedged worker daemon is just as unreachable). It is the
 	// only actor that can restart a daemon that is alive and no longer
 	// answering — see internal/cli/watchdog.go for the bounds on that.
-	installWatchdog(out, exe, filepath.Join(home, ".pmcluster"))
+	// Empty on purpose: `install` runs before any store exists, so the docker check
+	// stays off here and is turned on by the daemon's own convergence, which can read
+	// the setting. A fresh node must never start restarting its own docker because of
+	// a default.
+	installWatchdog(out, exe, filepath.Join(home, ".pmcluster"), "")
 
 	// The snapshot agent is installed only when the operator opts this node in.
 	//

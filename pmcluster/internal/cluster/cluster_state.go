@@ -273,7 +273,37 @@ func SettingGitHubRunnerSocketProxy() string { return settingGitHubRunnerSocketP
 // that runs `docker compose`, testcontainers or anything needing exec, networks or
 // volumes was blocked route by route. DinD hands the job a real daemon and keeps
 // the host out of it.
-const settingGitHubRunnerDinD = "github_runner_dind"
+// The two keys below live in a block, not as standalone `const X = "…"` lines:
+// internal/docscheck extracts documented keys with a regex anchored on a line that
+// STARTS with `setting`, and a `const` prefix makes the key invisible — so the docs
+// page and the code disagree while both look right. Keeping the shape uniform is what
+// makes that check meaningful.
+const (
+	settingGitHubRunnerDinD = "github_runner_dind"
+
+	// settingNodeDockerRestart lets the node's root watchdog restart docker.service
+	// when the daemon stops answering.
+	//
+	// The pmcluster daemon can restart itself but never dockerd — dockerd is outside its
+	// control loop — so this is the only mechanism that recovers a node whose docker died
+	// under it. On 2026-11-12 nxt-sw-3-w sat Down for hours in exactly that state.
+	//
+	// Default false, deliberately: the remedy stops every container on the node,
+	// including a running CI job and the platform services scheduled there. An operator
+	// turns it on knowing that; an upgrade never turns it on for them.
+	settingNodeDockerRestart = "node_docker_restart"
+)
+
+// SettingNodeDockerRestart is the setting key.
+func SettingNodeDockerRestart() string { return settingNodeDockerRestart }
+
+// LoadNodeDockerRestart reports whether the watchdog may restart docker.
+func LoadNodeDockerRestart(ctx context.Context, st *store.Store) bool {
+	if st == nil {
+		return false
+	}
+	return strings.ToLower(strings.TrimSpace(st.SettingDefault(ctx, settingNodeDockerRestart, "false"))) == "true"
+}
 
 // SettingGitHubRunnerDinD is the setting key.
 func SettingGitHubRunnerDinD() string { return settingGitHubRunnerDinD }

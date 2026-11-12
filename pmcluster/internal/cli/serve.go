@@ -175,7 +175,21 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// installed with — measured after the watchdog shipped, where the leader
 		// had memory bounds and an active watchdog timer and the OOM-killed
 		// worker had neither.
-		go convergeSystemd(func(f string, a ...any) { log.Info().Msgf(f, a...) })
+		// The docker socket reaches the watchdog only when the operator enabled it:
+		// its remedy restarts every container on this node. The store is opened
+		// briefly here, following the same guarded pattern as the volume-root lookup
+		// below: before `pmcluster init` there is no data.db, and creating one just to
+		// read a default would defeat the init guard.
+		sock := ""
+		if _, statErr := os.Stat(cfg.DBPath()); statErr == nil {
+			if st, err := store.Open(cfg.DBPath()); err == nil {
+				if cluster.LoadNodeDockerRestart(cmd.Context(), st) {
+					sock = defaultDockerSocket
+				}
+				_ = st.Close()
+			}
+		}
+		go convergeSystemd(func(f string, a ...any) { log.Info().Msgf(f, a...) }, sock)
 
 		// Publish this node's binary version so skew is visible before an
 		// upgrade script discovers it.
