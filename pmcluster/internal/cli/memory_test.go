@@ -223,3 +223,51 @@ func TestHostMemTotalMiB_ReadsProcMeminfo(t *testing.T) {
 		t.Errorf("TotalMiB = %d, want 3846", lim.TotalMiB)
 	}
 }
+
+// TestDependencyDropInCancelsBindsTo is the regression for a silent node outage:
+// a unit rendered before v0.2.290 carries BindsTo=docker.service, an upgrade does
+// not re-render it, and systemd ignores Restart= for a stop a dependency caused —
+// so `systemctl restart docker` left the node agent dead and every docker call in
+// a CI job blocking forever (nxt-sw-6-w, 2026-11-12, a 4h20m hung job).
+//
+// The override must do BOTH things: cancel the inherited BindsTo (an empty
+// assignment is how a drop-in resets a list) and add PartOf, which is the only
+// directive that propagates a restart rather than just a stop.
+func TestDependencyDropInCancelsBindsTo(t *testing.T) {
+	old := dependencyDropIn
+	t.Cleanup(func() { dependencyDropIn = old })
+	dependencyDropIn = filepath.Join(t.TempDir(), "docker-dependency.conf")
+
+	changed, err := writeDependencyDropIn()
+	if err != nil {
+		t.Fatalf("writeDependencyDropIn: %v", err)
+	}
+	if !changed {
+		t.Fatal("first write reported no change")
+	}
+	body, err := os.ReadFile(dependencyDropIn)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	got := string(body)
+	for _, want := range []string{"[Unit]", "BindsTo=", "PartOf=docker.service"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("drop-in is missing %q:\n%s", want, got)
+		}
+	}
+	// A drop-in that set PartOf but forgot to cancel BindsTo would still be stopped
+	// by the inherited directive, which is the half-fix this test exists to prevent.
+	if !strings.Contains(got, "\nBindsTo=\n") {
+		t.Fatalf("BindsTo is not cancelled with an empty assignment:\n%s", got)
+	}
+
+	// Idempotent: the daemon rewrites this on every start and must not churn
+	// daemon-reload when nothing changed.
+	again, err := writeDependencyDropIn()
+	if err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	if again {
+		t.Fatal("second write reported a change; the file is not stable")
+	}
+}

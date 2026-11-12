@@ -58,15 +58,32 @@ func convergeSystemd(logf func(string, ...any)) {
 	}
 
 	mem := memoryLimitsFor(hostMemTotalMiB())
-	if changed, err := writeMemoryDropIn(mem); err != nil {
+	memChanged, err := writeMemoryDropIn(mem)
+	if err != nil {
 		logf("systemd convergence: cannot write %s: %v", stopUnitDropIn, err)
-	} else if changed {
+	} else if memChanged {
 		if mem.TotalMiB > 0 {
 			logf("memory bounds written for this host (MemoryHigh=%dM, MemoryMax=%dM of %d MiB) — they apply on the next restart",
 				mem.HighMiB, mem.MaxMiB, mem.TotalMiB)
 		} else {
 			logf("memory bounds: this host's MemTotal could not be read, so only OOMScoreAdjust was written")
 		}
+	}
+
+	// The dependency override is separate from the memory bounds because it fixes a
+	// different fault: a unit that is old enough to have BindsTo. Same rule as the
+	// memory drop-in — the daemon owns it, and it is rewritten from scratch each start.
+	reload := false
+	if changed, err := writeDependencyDropIn(); err != nil {
+		logf("systemd convergence: cannot write %s: %v", dependencyDropIn, err)
+	} else if changed {
+		logf("docker dependency written (PartOf=docker.service, BindsTo cancelled) — a docker restart now restarts this agent")
+		reload = true
+	}
+	if memChanged {
+		reload = true
+	}
+	if reload {
 		if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
 			logf("systemd convergence: daemon-reload failed: %v", err)
 		}
@@ -82,6 +99,44 @@ func convergeSystemd(logf func(string, ...any)) {
 	if err := exec.Command("systemctl", "enable", "--now", "pmcluster-watchdog.timer").Run(); err != nil {
 		logf("systemd convergence: could not enable the watchdog timer: %v", err)
 	}
+}
+
+// dependencyDropIn overrides the unit's dependency on docker.
+//
+// The main unit is rendered once at install/join and an upgrade never re-renders
+// it, so a node built before v0.2.290 keeps BindsTo=docker.service forever — the
+// binary is new, the unit is old. A drop-in is merged by systemd and CAN reset an
+// inherited directive: an empty assignment clears the list it was set in.
+//
+// Why it matters, measured on nxt-sw-6-w (2026-11-12): `systemctl restart docker`
+// stopped pmcluster and systemd left it inactive — Restart=always is not honored
+// for a stop a dependency caused. pmcluster owns /run/pmcluster/docker.sock, so
+// while it is down every docker call in a runner job blocks instead of failing, the
+// job hangs, and the single ephemeral runner stays pinned for hours while the
+// console shows "queued" and nothing runs. PartOf propagates the restart.
+var dependencyDropIn = "/etc/systemd/system/pmcluster.service.d/docker-dependency.conf"
+
+// writeDependencyDropIn writes the dependency override and reports whether the
+// file changed.
+func writeDependencyDropIn() (bool, error) {
+	const want = `# Managed by pmcluster — do not edit: rewritten on every daemon start.
+# PartOf propagates a RESTART of docker to this unit; BindsTo does not — systemd
+# stops a bound unit and ignores Restart= for that stop, which leaves the node
+# agent dead and every docker call inside a CI job blocking forever.
+# The empty BindsTo= cancels the value inherited from a unit rendered before
+# v0.2.290: an upgrade replaces the binary but never re-renders the unit.
+[Unit]
+BindsTo=
+PartOf=docker.service
+`
+	existing, err := os.ReadFile(dependencyDropIn)
+	if err == nil && string(existing) == want {
+		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dependencyDropIn), 0o755); err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(dependencyDropIn, []byte(want), 0o644)
 }
 
 // writeMemoryDropIn writes the memory bounds and reports whether the file changed.
