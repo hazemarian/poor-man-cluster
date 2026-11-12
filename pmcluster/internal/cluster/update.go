@@ -672,14 +672,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		redeployed := map[string]bool{}
 		for _, s := range redeploy {
 			fmt.Fprintf(out, "  ▶ %s %s → re-deploying\n", string(s), reasons[s])
-			if s == StackObservability {
-				// The collector is pinned to pmcluster.leader with a hard
-				// constraint. Deploying without a labelled node would leave it
-				// at 0/1 with no task logs, so the condition is named here.
-				if err := RequireLeaderLabel(ctx, deps.Docker); err != nil {
-					return err
-				}
-			}
 			if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
 				return err
 			}

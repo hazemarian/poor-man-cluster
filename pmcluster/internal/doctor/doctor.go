@@ -107,7 +107,7 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 	add := func(c Check) { rep.Checks = append(rep.Checks, c) }
 
 	add(checkSwarm(ctx, in))
-	add(checkLeaderLabel(ctx, in))
+	add(checkCollectorPlacement(ctx, in))
 	add(checkNodeLabels(ctx, in))
 	add(checkSkew(ctx, in))
 	add(checkKit(ctx, in))
@@ -155,48 +155,57 @@ func checkSwarm(ctx context.Context, in Input) Check {
 	return Check{"swarm", StatusOK, fmt.Sprintf("%d/%d manager(s) ready, quorum %d", q.Ready, q.Managers, q.Required())}
 }
 
-// checkLeaderLabel: does exactly the current leader carry pmcluster.leader=true?
+// checkCollectorPlacement answers "is the OTel collector still where the platform says
+// it should be".
 //
-// The collector is pinned to that label by a hard placement CONSTRAINT, so the
-// label is not cosmetic: when no node carries it the collector cannot schedule at
-// all (cluster update refuses to deploy in that state), and when a node other than
-// the leader carries it the collector writes the node-stats JSONL onto a disk the
-// leader's daemon never reads — an empty panel with no error anywhere.
-func checkLeaderLabel(ctx context.Context, in Input) Check {
+// The collector follows the LEADER by name — the same mechanism as the edge. That makes
+// the failure mode specific and checkable: after a leadership change, a stack that was not
+// re-rendered keeps naming the OLD leader, Swarm keeps the task there, and the new leader's
+// daemon finds nothing on its own socket. Nothing errors; the panels just go quiet.
+//
+// So the check compares the running service's rendered placement with the live leader by
+// name, and names both when they disagree.
+// observabilityCollectorService is the collector's Swarm service name, the one
+// service whose placement the platform renders onto the leader.
+const observabilityCollectorService = "observability_otel-collector"
+
+func checkCollectorPlacement(ctx context.Context, in Input) Check {
+	const name = "collector placement"
 	if in.Docker == nil {
-		return Check{"leader label", StatusSkip, "no docker client"}
+		return Check{name, StatusSkip, "no docker client"}
 	}
 	nodes, err := in.Docker.NodeList(ctx)
 	if err != nil {
-		return Check{"leader label", StatusFail, "node list: " + err.Error()}
+		return Check{name, StatusFail, "node list: " + err.Error()}
 	}
-	if len(nodes) == 0 {
-		return Check{"leader label", StatusSkip, "the node list is empty: no swarm inventory to read the label from"}
-	}
-	var carriers []string
 	leader := ""
 	for _, n := range nodes {
-		if n.Labels[runtime.LeaderNodeLabel] == "true" && n.Hostname != "" {
-			carriers = append(carriers, n.Hostname)
-		}
 		if n.IsLeader && n.Hostname != "" {
 			leader = n.Hostname
 		}
 	}
-	switch {
-	case len(carriers) == 0:
-		return Check{"leader label", StatusFail,
-			cluster.NoLeaderLabelCondition + " (nothing pins the collector, so no task can start)"}
-	case len(carriers) > 1:
-		return Check{"leader label", StatusWarn,
-			fmt.Sprintf("%d nodes carry %s=true (%s) — the collector's constraint matches all of them",
-				len(carriers), runtime.LeaderNodeLabel, strings.Join(carriers, ", "))}
-	case leader != "" && carriers[0] != leader:
-		return Check{"leader label", StatusWarn,
-			fmt.Sprintf("%s=true is on %s, but the swarm leader is %s — the collector writes its node-stats file where the leader's daemon does not read it",
-				runtime.LeaderNodeLabel, carriers[0], leader)}
+	svc, err := in.Docker.ServiceInspect(ctx, observabilityCollectorService)
+	if err != nil {
+		// Not deployed (a cluster without observability) is not a fault.
+		return Check{name, StatusSkip, "the observability stack is not deployed"}
 	}
-	return Check{"leader label", StatusOK, fmt.Sprintf("%s=%s=true", carriers[0], runtime.LeaderNodeLabel)}
+	pinned := ""
+	for _, c := range svc.Constraints {
+		if v, ok := strings.CutPrefix(strings.ReplaceAll(c, " ", ""), "node.hostname=="); ok {
+			pinned = v
+		}
+	}
+	switch {
+	case leader == "":
+		return Check{name, StatusWarn, "no leader is elected, so there is nothing to compare the collector's placement with"}
+	case pinned == "":
+		return Check{name, StatusWarn,
+			fmt.Sprintf("%s carries no hostname constraint — it can run on any manager; run `pmcluster cluster update` to render it onto the leader (%s)", svc.Name, leader)}
+	case pinned != leader:
+		return Check{name, StatusWarn,
+			fmt.Sprintf("%s is pinned to %s, but the leader is %s — the stack was not re-rendered after leadership moved; run `pmcluster cluster update`", svc.Name, pinned, leader)}
+	}
+	return Check{name, StatusOK, fmt.Sprintf("%s is on the leader (%s)", svc.Name, leader)}
 }
 
 // checkNodeLabels: does any pmcluster.* node label carry an empty value?

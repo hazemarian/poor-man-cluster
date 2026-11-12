@@ -67,31 +67,26 @@ func TestOTelCollectorIsSingleTaskPinnedToTheLeader(t *testing.T) {
 		t.Fatalf("otel-collector replicas = %v, want exactly 1", svc.Deploy.Replicas)
 	}
 
-	const leaderConstraint = "node.labels." + "pmcluster.leader==true"
-	var haveManager, haveLeader bool
+	// Placement is a NAME now, not the leader label: a label constraint floats with
+	// leadership and leaves the task at 0/1 when the label moves without a redeploy.
+	var pinned string
 	for _, c := range svc.Deploy.Placement.Constraints {
-		switch c {
-		case "node.role == manager":
-			haveManager = true
-		case leaderConstraint:
-			haveLeader = true
+		if strings.Contains(c, "pmcluster.leader") {
+			t.Fatalf("otel-collector is still placed by the leader LABEL (%q): that floats", c)
+		}
+		if v, ok := strings.CutPrefix(strings.ReplaceAll(c, " ", ""), "node.hostname=="); ok {
+			pinned = v
 		}
 	}
-	if !haveManager {
-		t.Fatalf("otel-collector constraints = %v, want node.role == manager as the floor",
+	if pinned == "" {
+		t.Fatalf("otel-collector constraints = %v, want it pinned to the leader by hostname",
 			svc.Deploy.Placement.Constraints)
 	}
-	if !haveLeader {
-		t.Fatalf("otel-collector constraints = %v, want the leader as a CONSTRAINT (%s): a preference "+
-			"does not move a running task", svc.Deploy.Placement.Constraints, leaderConstraint)
-	}
-
-	// And the label must not ALSO be a preference: the two together would let the
-	// scheduler keep a task on a node the constraint no longer selects, which is
-	// the bug this pins.
+	// And no preference on the label either: a preference beside a name would let the
+	// scheduler keep a task on a node the name no longer selects.
 	for _, p := range svc.Deploy.Placement.Preferences {
 		if strings.Contains(p.Spread, "pmcluster.leader") {
-			t.Errorf("otel-collector still has a preference on the leader label (%q); it must be a constraint only", p.Spread)
+			t.Errorf("otel-collector still has a preference on the leader label (%q)", p.Spread)
 		}
 	}
 }

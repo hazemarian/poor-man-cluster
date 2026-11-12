@@ -248,6 +248,12 @@ type ServiceInspectResult struct {
 	Name   string
 	Image  string
 	Labels map[string]string
+	// Constraints are the service's placement constraints, verbatim from the
+	// task template (`node.hostname == x`, `node.labels.y == z`). The doctor reads
+	// them to answer "is this service still where the platform says it should be",
+	// which is the question a rendered placement creates and a label constraint
+	// used to hide.
+	Constraints []string
 	// Mounts are the service's task-template mounts. A daemon uses them to
 	// make sure the host directories a service binds exist locally before the
 	// Swarm tries to start its task (a missing bind source is a hard failure).

@@ -462,6 +462,10 @@ func (r *realClient) ServiceInspect(ctx context.Context, name string) (runtime.S
 		labels = map[string]string{}
 	}
 	image := ""
+	var constraints []string
+	if pl := svc.Spec.TaskTemplate.Placement; pl != nil {
+		constraints = append(constraints, pl.Constraints...)
+	}
 	var mounts []runtime.Mount
 	if c := svc.Spec.TaskTemplate.ContainerSpec; c != nil {
 		image = c.Image
@@ -470,11 +474,12 @@ func (r *realClient) ServiceInspect(ctx context.Context, name string) (runtime.S
 		}
 	}
 	return runtime.ServiceInspectResult{
-		ID:     svc.ID,
-		Name:   svc.Spec.Name,
-		Image:  image,
-		Labels: labels,
-		Mounts: mounts,
+		ID:          svc.ID,
+		Name:        svc.Spec.Name,
+		Image:       image,
+		Labels:      labels,
+		Mounts:      mounts,
+		Constraints: constraints,
 	}, nil
 }
 

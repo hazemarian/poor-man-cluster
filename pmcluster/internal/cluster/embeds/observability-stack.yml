@@ -206,9 +206,14 @@ services:
     # One task on the leader. NOT global: see the block above for why, and for
     # why the leader is a hard constraint rather than a preference.
     replicas: 1
-    placement: manager
-    constraints:
-      - "node.labels.pmcluster.leader==true"
+    # Follows the LEADER by name — the same mechanism the edge, the SSO stack and the
+    # backup stack use. It used to be `placement: manager` plus a hard constraint on
+    # node.labels.pmcluster.leader, which floated: the constraint says "wherever that
+    # label happens to be", so when leadership moved without a redeploy the task sat at
+    # 0/1 and the only symptom was an empty node-stats panel. A name cannot float: the
+    # render knows who leads, `checkPlacementHosts` refuses a name the swarm does not
+    # have, and a changed name forces the running task (forceCollectorIfPlacementChanged).
+    placement: "[[ if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
     user: "0:0"
     restart: any
     restart_delay: 5s

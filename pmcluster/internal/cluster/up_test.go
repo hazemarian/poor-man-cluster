@@ -261,12 +261,15 @@ func TestUp_DefaultStorageNodeIsLeader(t *testing.T) {
 	if got != "nextrum-sy-1" {
 		t.Errorf("default storage_nodes = %q, want the leader hostname nextrum-sy-1", got)
 	}
-	if len(f.nodeLabels) != 2 ||
-		f.nodeLabels[0] != runtime.StorageNodeLabel+"=true" ||
-		f.nodeLabels[1] != runtime.LeaderNodeLabel+"=true" {
-		t.Errorf("expected the default storage node labelled %s=true and the leader labelled %s=true, got %v",
-			runtime.StorageNodeLabel, runtime.LeaderNodeLabel, f.nodeLabels)
+	// `cluster up` no longer stamps pmcluster.leader: the collector is placed by the
+	// leader's NAME at render time, so the label had no reader left. The storage label
+	// is still written because placement of storage is a label by design.
+	if len(f.nodeLabels) != 1 ||
+		f.nodeLabels[0] != runtime.StorageNodeLabel+"=true" {
+		t.Errorf("expected only the default storage node labelled %s=true, got %v",
+			runtime.StorageNodeLabel, f.nodeLabels)
 	}
+
 }
 
 // TestUp_BackupRendersGlobalWhenStorageNodeDefaulted asserts the storage node

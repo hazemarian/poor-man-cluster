@@ -219,6 +219,23 @@ five-node cluster showed one row.
 
 ```sh
 journalctl -u pmcluster | grep -i "self-telemetry\|OTel telemetry"
+**Where the collector runs, and why the check names two nodes.** The collector follows the
+**leader by name** — the same mechanism the edge, the SSO stack and the backup stack use —
+not by a label constraint. A constraint says "wherever `pmcluster.leader=true` happens to
+be", which floats: when leadership moves and nothing re-renders, the task stays on the old
+node, the new leader's daemon finds nothing on its own socket, and the only symptom is
+quiet panels. A rendered hostname cannot float, and `checkPlacementHosts` refuses one the
+swarm does not have.
+
+`doctor` therefore compares the running service's constraint with the current leader and
+names both when they disagree:
+
+```
+collector placement  observability_otel-collector is pinned to nxt-sw-1-m, but the leader
+                     is nxt-sw-5-m — the stack was not re-rendered after leadership moved;
+                     run `pmcluster cluster update`
+```
+
 docker service ps observability_otel-collector     # is the collector itself running
 ss -ltnp | grep 4318                               # does this node answer the OTLP port
 ```

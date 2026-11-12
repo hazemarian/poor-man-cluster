@@ -287,16 +287,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	// claimed it yet and the collector would be unschedulable from the first
 	// deploy. Claim it here for the current leader; the daemon re-asserts the
 	// same value on every leader tick.
-	wf.Add("Claiming the leader label ("+runtime.LeaderNodeLabel+"=true)", func(ctx context.Context) error {
-		node, err := ClaimLeaderLabel(ctx, deps.Docker)
-		if err != nil {
-			return err
-		}
-		if node != "" {
-			fmt.Fprintf(out, "  ✓ %s carries %s=true\n", node, runtime.LeaderNodeLabel)
-		}
-		return nil
-	})
 	// Default the platform node (the leader) BEFORE the platform stacks are
 	// Platform placement is per-stack, not one global node: the observability
 	// stack follows the storage round-robin (Parseable holds a host-path store),
@@ -489,14 +479,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	wf.Add("Deploying stacks (infra → edge → observability → backup)", func(ctx context.Context) error {
 		stacks := platformStacks(sso.Enabled)
 		for _, s := range stacks {
-			if s == StackObservability {
-				// Belt to the claim step's braces: the collector's constraint
-				// matches nothing without the label, and a 0/1 service explains
-				// itself far worse than this sentence does.
-				if err := RequireLeaderLabel(ctx, deps.Docker); err != nil {
-					return err
-				}
-			}
 			if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
 				return err
 			}
