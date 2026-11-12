@@ -8,10 +8,8 @@
     </p>
   </div>
   <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/overview" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
-      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
-    </button>
-    <a class="btn btn-primary" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.deploy"}}">
+    {{template "refreshbtn" (dict "URL" "/web/overview")}}
+    <a class="btn btn-primary btn-sm" href="/web/deploy" hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.deploy"}}">
       {{icon "deploy"}}<span>{{T "nav.deploy"}}</span>
     </a>
   </div>
@@ -21,139 +19,50 @@
      v1 printed the raw error — quotes, braces and internal CLI commands — as the
      first thing an operator read. */}}
 {{if .ErrKey}}
-<div class="banner bad">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T .ErrKey}}</p>
-    <p>{{T "err.banner_body"}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-  <div class="b-actions">
-    <a class="btn btn-ghost btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{T "nav.settings"}}</a>
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/overview")}}
 {{end}}
 
 {{if and .ApplyKnown .Apply.HasWarnings}}
-<div class="banner warn">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{TF "overview.apply_warnings_title" (len .Apply.Warnings)}}</p>
-    <p>{{T "overview.apply_warnings_body"}}</p>
-    <ul class="b-list">
-      {{range .Apply.Warnings}}<li>{{.}}</li>{{end}}
-    </ul>
-    <p class="muted">{{TF "overview.apply_warnings_when" .Apply.AtText .Apply.Source}}</p>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "warn" "Icon" "alert" "Title" (TF "overview.apply_warnings_title" (len .Apply.Warnings)) "Body" (T "overview.apply_warnings_body") "Extra" (partial "overview_apply_list" .) "Muted" (TF "overview.apply_warnings_when" .Apply.AtText .Apply.Source))}}
 {{end}}
 
 {{if .Skew}}
-<div class="banner warn">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{TF "overview.version_skew_title" (len .Skew)}}</p>
-    <p>{{T "overview.version_skew_body"}}</p>
-    <ul class="b-list">
-      {{range .Skew}}<li>{{.Hostname}} — {{.Version}}</li>{{end}}
-    </ul>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "warn" "Icon" "alert" "Title" (TF "overview.version_skew_title" (len .Skew)) "Body" (T "overview.version_skew_body") "Extra" (partial "overview_skew_list" .))}}
 {{end}}
 
 {{/* Quorum is arithmetic, not policy: at one or two managers a single failure
      leaves a cluster that can read nothing and commit nothing, and the console
      will be gone with it. Say so while the console still works. */}}
 {{if and .InfoKnown .Info.ControlAvailable (lt .Info.SwarmManagers 3)}}
-<div class="banner warn">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{TF "cluster.quorum_small_title" .Info.SwarmManagers}}</p>
-    <p>{{T "cluster.quorum_small_body"}}</p>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "warn" "Icon" "alert" "Title" (TF "cluster.quorum_small_title" .Info.SwarmManagers) "Body" (T "cluster.quorum_small_body"))}}
 {{end}}
 
 {{/* No swarm on this host is a normal state, not an error — but it is also not
      "0 nodes". The metric strip below refuses to print zeroes for it. */}}
 {{if and .InfoKnown (not .Info.ControlAvailable)}}
-<div class="banner warn">
-  {{icon "info"}}
-  <div class="b-body">
-    <p class="b-title">{{T "err.not_manager"}}</p>
-    <p>{{T "overview.not_manager_body"}}</p>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "warn" "Icon" "info" "Title" (T "err.not_manager") "Body" (T "overview.not_manager_body"))}}
 {{end}}
 
 <div class="stats overview-stats">
-  <div class="stat stat-lead{{if or (not .InfoKnown) (not .Info.ControlAvailable)}} is-unknown{{else if eq .Info.SwarmState "active"}} is-good{{else if eq .Info.SwarmState "error"}} is-bad{{else if eq .Info.SwarmState "pending"}} is-warn{{else}} is-unknown{{end}}">
-    <span class="stat-l">{{icon "overview"}}{{T "cluster.state"}}</span>
-    <span class="stat-v">
-      {{- if and .InfoKnown .Info.ControlAvailable}}
-        {{if eq .Info.SwarmState "active"}}<span class="pill good"><i class="dot"></i>{{T "st.active"}}</span>
-        {{else if eq .Info.SwarmState "pending"}}<span class="pill warn"><i class="dot"></i>{{T "st.pending"}}</span>
-        {{else if eq .Info.SwarmState "error"}}<span class="pill bad"><i class="dot"></i>{{T "st.error"}}</span>
-        {{else}}<span class="pill plain"><i class="dot"></i><span class="mono">{{.Info.SwarmState}}</span></span>{{end}}
-      {{- else}}{{T "common.unavailable"}}{{end}}
-    </span>
-    <span class="stat-f">{{T "cluster.state_foot"}}</span>
-  </div>
-  <div class="stat{{if or (not .InfoKnown) (not .Info.ControlAvailable)}} is-unknown{{end}}">
-    <span class="stat-l">{{icon "server"}}{{T "cluster.nodes"}}</span>
-    <span class="stat-v">{{if and .InfoKnown .Info.ControlAvailable}}{{N .Info.SwarmNodes}}{{else}}{{T "common.unavailable"}}{{end}}</span>
-    <span class="stat-f">{{T "cluster.nodes_foot"}}</span>
-  </div>
-  <div class="stat{{if or (not .InfoKnown) (not .Info.ControlAvailable)}} is-unknown{{end}}">
-    <span class="stat-l">{{icon "services"}}{{T "cluster.managers"}}</span>
-    <span class="stat-v">{{if and .InfoKnown .Info.ControlAvailable}}{{N .Info.SwarmManagers}}{{else}}{{T "common.unavailable"}}{{end}}</span>
-    <span class="stat-f">{{T "cluster.managers_foot"}}</span>
-  </div>
-  <div class="stat{{if not .InfoKnown}} is-unknown{{end}}">
-    <span class="stat-l">{{icon "cpu"}}{{T "cluster.cpus"}}</span>
-    <span class="stat-v">{{if .InfoKnown}}{{N .Info.CPUs}}{{else}}{{T "common.unavailable"}}{{end}}</span>
-    <span class="stat-f">{{T "cluster.host_cores"}}</span>
-  </div>
-  <div class="stat{{if not .InfoKnown}} is-unknown{{end}}">
-    <span class="stat-l">{{icon "db"}}{{T "cluster.memory"}}</span>
-    <span class="stat-v">{{if .InfoKnown}}{{tb .Info.MemoryBytes}}{{else}}{{T "common.unavailable"}}{{end}}</span>
-    <span class="stat-f">{{T "cluster.memory_foot"}}</span>
-  </div>
+  {{template "stat" (dict "Class" (partial "overview_cls" .) "Icon" "overview" "Label" (T "cluster.state") "Value" (partial "overview_value" .) "Foot" (T "cluster.state_foot"))}}
+  {{template "stat" (dict "Class" (partial "overview_cls2" .) "Icon" "server" "Label" (T "cluster.nodes") "Value" (partial "overview_value2" .) "Foot" (T "cluster.nodes_foot"))}}
+  {{template "stat" (dict "Class" (partial "overview_cls3" .) "Icon" "services" "Label" (T "cluster.managers") "Value" (partial "overview_value3" .) "Foot" (T "cluster.managers_foot"))}}
+  {{template "stat" (dict "Class" (partial "overview_cls4" .) "Icon" "cpu" "Label" (T "cluster.cpus") "Value" (partial "overview_value4" .) "Foot" (T "cluster.host_cores"))}}
+  {{template "stat" (dict "Class" (partial "overview_cls5" .) "Icon" "db" "Label" (T "cluster.memory") "Value" (partial "overview_value5" .) "Foot" (T "cluster.memory_foot"))}}
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    {{icon "server"}}
-    <h2>{{T "overview.nodes_title"}}</h2>
-    <div class="ph-actions">
-      {{if .NodesKnown}}
-        <span class="pill plain">{{P (len .Nodes) "plural.nodes"}}</span>
-      {{else}}
-        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
-      {{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Icon" "server" "Title" (T "overview.nodes_title") "Actions" (partial "overview_server_pills" .))}}
 
   {{if not .NodesKnown}}
     {{/* Same table, honest content: we did not get an answer, so there is no
          answer to show. */}}
     <div class="panel-body">
-      <div class="empty">
-        {{icon "inbox"}}
-        <h3>{{T "overview.nodes_unknown_title"}}</h3>
-        <p>{{T "overview.nodes_unknown_body"}}</p>
-      </div>
+      {{template "empty" (dict "Icon" "inbox" "Title" (T "overview.nodes_unknown_title") "Body" (T "overview.nodes_unknown_body"))}}
     </div>
   {{else if not .Nodes}}
     <div class="panel-body">
-      <div class="empty">
-        {{icon "server"}}
-        <h3>{{T "overview.nodes_empty_title"}}</h3>
-        <p>{{T "overview.nodes_empty_body"}}</p>
-        <div class="empty-actions">
-          <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true">{{T "nav.settings"}}</a>
-        </div>
-      </div>
+      {{template "empty" (dict "Icon" "server" "Title" (T "overview.nodes_empty_title") "Body" (T "overview.nodes_empty_body") "Settings" true)}}
     </div>
   {{else}}
     <div class="table-wrap only-md">
@@ -224,15 +133,13 @@
          is unreadable however it is styled. */}}
     <div class="only-sm">
       {{range .Nodes}}
-      <div class="kv">
-        <div class="kv-row"><span class="k">{{T "common.node"}}</span><span class="v"><span class="mono iso" dir="ltr">{{.Hostname}}</span>{{if .IsLeader}} <span class="pill accent" data-tip="{{T "st.leader_tip"}}">{{T "st.leader"}}</span>{{end}}{{if .Storage}} <span class="pill plain" data-tip="{{T "st.storage_tip"}}">{{T "st.storage"}}</span>{{end}}</span></div>
+      <div class="kv node-card">
+        <div class="node-card-head"><strong class="mono iso" dir="ltr">{{.Hostname}}</strong><div class="node-card-badges">{{if .IsLeader}}<span class="pill accent" data-tip="{{T "st.leader_tip"}}">{{T "st.leader"}}</span>{{end}}{{if .Storage}}<span class="pill plain" data-tip="{{T "st.storage_tip"}}">{{T "st.storage"}}</span>{{end}}</div></div>
         <div class="kv-row"><span class="k">{{T "common.role"}}</span><span class="v">{{if eq .Role "manager"}}{{T "st.manager"}}{{else if eq .Role "worker"}}{{T "st.worker"}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "common.status"}}</span><span class="v">{{if eq .Status "ready"}}<span class="pill good"><i class="dot"></i>{{T "st.ready"}}</span>{{else if eq .Status "down"}}<span class="pill bad"><i class="dot"></i>{{T "st.down"}}</span>{{else}}{{T "common.unknown"}}{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "common.availability"}}</span><span class="v">{{if eq .Availability "active"}}{{T "st.avail_active"}}{{else if eq .Availability "pause"}}{{T "st.avail_pause"}}{{else if eq .Availability "drain"}}{{T "st.avail_drain"}}{{else}}{{T "common.unknown"}}{{end}}</span></div>
         <div class="kv-row"><span class="k">{{T "cluster.engine"}}</span><span class="v mono iso" dir="ltr">{{.EngineVersion}}</span></div>
-        <div class="kv-row">
-          <span class="k">{{T "common.actions"}}</span>
-          <span class="v">
+        <div class="node-card-actions row-actions">
             <button type="button" class="btn btn-ghost btn-sm" data-copy="{{.Hostname}}" onclick="copyVal(this)" data-tip="{{T "common.copy"}}">{{icon "copy"}}<span>{{T "common.copy"}}</span></button>
             {{if .Storage}}
             <button type="button" class="btn btn-ghost btn-sm" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}" data-tip="{{T "nodes.demote_storage"}}">{{icon "shield"}}<span>{{T "nodes.demote_storage"}}</span></button>
@@ -242,7 +149,6 @@
             {{/* Same reason as the table: the glyph carries it, the wrapper is focusable. */}}
             <span class="needs-manager" data-tip="{{T "nodes.storage_needs_manager"}}" aria-label="{{T "nodes.storage_needs_manager"}}" role="button" aria-disabled="true" tabindex="0">{{icon "lock"}}</span>
             {{end}}
-          </span>
         </div>
       </div>
       {{end}}
@@ -257,25 +163,11 @@
      cores, available memory under 15%, a sample older than 3 minutes (greyed AND
      labelled), and an unreachable Docker engine. */}}
 <div class="panel" id="node-resources">
-  <div class="panel-head">
-    {{icon "cpu"}}
-    <h2>{{T "nodestat.title"}}</h2>
-    <div class="ph-actions">
-      {{if .NodeStatsKnown}}
-        <span class="pill plain">{{P (len .NodeStats) "plural.nodes"}}</span>
-      {{else}}
-        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
-      {{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Icon" "cpu" "Title" (T "nodestat.title") "Actions" (partial "overview_cpu_pills" .))}}
 
   {{if not .NodeStats}}
     <div class="panel-body">
-      <div class="empty">
-        {{icon "cpu"}}
-        <h3>{{T "nodestat.empty_title"}}</h3>
-        <p>{{T "nodestat.empty_body"}}</p>
-      </div>
+      {{template "empty" (dict "Icon" "cpu" "Title" (T "nodestat.empty_title") "Body" (T "nodestat.empty_body"))}}
     </div>
   {{else}}
     <div class="table-wrap only-md">
@@ -393,3 +285,44 @@
   </div>
 </section>
 {{end}}
+
+{{define "overview_apply_list"}}<ul class="b-list">{{range .Apply.Warnings}}<li>{{.}}</li>{{end}}</ul>{{end}}
+
+{{define "overview_skew_list"}}<ul class="b-list">{{range .Skew}}<li>{{.Hostname}} — {{.Version}}</li>{{end}}</ul>{{end}}
+
+{{define "overview_server_pills"}}{{if .NodesKnown}}
+        <span class="pill plain">{{P (len .Nodes) "plural.nodes"}}</span>
+      {{else}}
+        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}{{end}}
+
+{{define "overview_cpu_pills"}}{{if .NodeStatsKnown}}
+        <span class="pill plain">{{P (len .NodeStats) "plural.nodes"}}</span>
+      {{else}}
+        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}{{end}}
+
+{{define "overview_cls"}}stat-lead{{if or (not .InfoKnown) (not .Info.ControlAvailable)}} is-unknown{{else if eq .Info.SwarmState "active"}} is-good{{else if eq .Info.SwarmState "error"}} is-bad{{else if eq .Info.SwarmState "pending"}} is-warn{{else}} is-unknown{{end}}{{end}}
+
+{{define "overview_value"}}{{- if and .InfoKnown .Info.ControlAvailable}}
+        {{if eq .Info.SwarmState "active"}}<span class="pill good"><i class="dot"></i>{{T "st.active"}}</span>
+        {{else if eq .Info.SwarmState "pending"}}<span class="pill warn"><i class="dot"></i>{{T "st.pending"}}</span>
+        {{else if eq .Info.SwarmState "error"}}<span class="pill bad"><i class="dot"></i>{{T "st.error"}}</span>
+        {{else}}<span class="pill plain"><i class="dot"></i><span class="mono">{{.Info.SwarmState}}</span></span>{{end}}
+      {{- else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "overview_cls2"}}{{if or (not .InfoKnown) (not .Info.ControlAvailable)}} is-unknown{{end}}{{end}}
+
+{{define "overview_value2"}}{{if and .InfoKnown .Info.ControlAvailable}}{{N .Info.SwarmNodes}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "overview_cls3"}}{{if or (not .InfoKnown) (not .Info.ControlAvailable)}} is-unknown{{end}}{{end}}
+
+{{define "overview_value3"}}{{if and .InfoKnown .Info.ControlAvailable}}{{N .Info.SwarmManagers}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "overview_cls4"}}{{if not .InfoKnown}} is-unknown{{end}}{{end}}
+
+{{define "overview_value4"}}{{if .InfoKnown}}{{N .Info.CPUs}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "overview_cls5"}}{{if not .InfoKnown}} is-unknown{{end}}{{end}}
+
+{{define "overview_value5"}}{{if .InfoKnown}}{{tb .Info.MemoryBytes}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}

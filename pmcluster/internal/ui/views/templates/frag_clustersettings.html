@@ -22,15 +22,7 @@
   {{if not .ClusterKnown}}
   <div class="panel mt-24" id="sect-cluster-unknown">
     <div class="panel-body">
-      <div class="empty">
-        {{icon "layers-off"}}
-        <h3>{{T "settings.err_cluster_read"}}</h3>
-        <p>{{T "settings.cluster_unknown_body"}}</p>
-        {{if .ClusterErr}}<p class="mono iso err" dir="ltr">{{.ClusterErr}}</p>{{end}}
-        <div class="empty-actions">
-          <a class="btn btn-sm" href="{{.SelfPath}}" hx-get="{{.SelfPath}}" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
-        </div>
-      </div>
+      {{template "empty" (dict "Icon" "layers-off" "Title" (T "settings.err_cluster_read") "Body" (T "settings.cluster_unknown_body") "Extra" (partial "clustersettings_extra" .) "Retry" (printf "%s" .SelfPath) "Label" "retry")}}
     </div>
   </div>
   {{else}}
@@ -48,13 +40,10 @@
 {{/* ---------- Identity and sign-in ---------- */}}
 {{define "sec_identity"}}
 <div class="panel{{if eq .ErrSection "identity"}} is-flagged{{end}}" id="sect-identity">
-  <div class="panel-head">
-    <h2>{{T "clustersettings.sect_identity"}}</h2>
-    {{if eq .ErrSection "identity"}}<span class="pill bad"><i class="dot"></i>{{T "settings.err_flagged"}}</span>{{end}}
-  </div>
+  {{template "panelhead" (dict "Title" (T "clustersettings.sect_identity") "Flagged" (eq .ErrSection "identity"))}}
   <div class="panel-body">
     <p class="sub">{{T "clustersettings.sect_identity_sub"}}</p>
-    <p class="req">{{icon "info"}}<span>{{T "clustersettings.sect_identity_needs"}}</span></p>
+    {{template "reqnote" (T "clustersettings.sect_identity_needs")}}
 
     <div class="form-grid">
       <div class="field">
@@ -124,27 +113,16 @@
 {{/* ---------- CI runners ---------- */}}
 {{define "sec_runners"}}
 <div class="panel{{if eq .ErrSection "runners"}} is-flagged{{end}}" id="sect-runners">
-  <div class="panel-head">
-    <h2>{{T "clustersettings.sect_runners"}}</h2>
-    {{if eq .ErrSection "runners"}}<span class="pill bad"><i class="dot"></i>{{T "settings.err_flagged"}}</span>{{end}}
-    <div class="ph-actions">
-      <a class="btn btn-sm" href="/web/runners" hx-get="/web/runners" hx-target="#view" hx-push-url="true"
-         data-tip="{{T "settings.runners_pick_tip"}}">{{icon "server"}}<span>{{T "settings.runners_pick"}}</span></a>
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "clustersettings.sect_runners") "Flagged" (eq .ErrSection "runners") "Actions" (partial "clustersettings_runnerspick" .))}}
   <div class="panel-body">
     <p class="sub">{{T "clustersettings.sect_runners_sub"}}</p>
-    <p class="req">{{icon "info"}}<span>{{T "clustersettings.sect_runners_needs"}}</span></p>
+    {{template "reqnote" (T "clustersettings.sect_runners_needs")}}
 
     {{if eq .ErrSection "runners"}}<p class="err" data-section-error>{{T "settings.err_flagged_body"}}</p>{{end}}
 
     {{/* The permission, named exactly, in the section that depends on it: a
          runner is registered at ORG level, which Administration does not cover. */}}
-    <div class="callout" data-permission-note>
-      <p class="callout-title">{{icon "shield"}}<span>{{T "clustersettings.runners_perm_title"}}</span></p>
-      <p>{{T "clustersettings.runners_perm_body"}}</p>
-      <p class="muted mono iso" dir="ltr">{{T "clustersettings.runners_perm_where"}}</p>
-    </div>
+    {{template "banner" (dict "Tone" "info" "Icon" "shield" "Title" (T "clustersettings.runners_perm_title") "Body" (T "clustersettings.runners_perm_body") "Muted" (T "clustersettings.runners_perm_where"))}}
 
     {{/* The switch comes first: it is the thing an operator comes here to flip,
          and every field below it only matters once it is on. */}}
@@ -234,13 +212,10 @@
 {{/* ---------- Backups ---------- */}}
 {{define "sec_backups"}}
 <div class="panel{{if eq .ErrSection "backups"}} is-flagged{{end}}" id="sect-backups">
-  <div class="panel-head">
-    <h2>{{T "clustersettings.sect_backup"}}</h2>
-    {{if eq .ErrSection "backups"}}<span class="pill bad"><i class="dot"></i>{{T "settings.err_flagged"}}</span>{{end}}
-  </div>
+  {{template "panelhead" (dict "Title" (T "clustersettings.sect_backup") "Flagged" (eq .ErrSection "backups"))}}
   <div class="panel-body">
     <p class="sub">{{T "clustersettings.sect_backups_needs"}}</p>
-    <p class="req">{{icon "info"}}<span>{{T "clustersettings.backup_store_body"}}</span></p>
+    {{template "reqnote" (T "clustersettings.backup_store_body")}}
 
     {{if eq .ErrSection "backups"}}<p class="err" data-section-error>{{T "settings.err_flagged_body"}}</p>{{end}}
 
@@ -277,7 +252,7 @@
     </summary>
     <div class="panel-body">
       <p class="sub">{{T "clustersettings.sect_advanced_sub"}}</p>
-      <p class="req">{{icon "info"}}<span>{{T "clustersettings.sect_advanced_needs"}}</span></p>
+      {{template "reqnote" (T "clustersettings.sect_advanced_needs")}}
 
       {{if eq .ErrSection "advanced"}}<p class="err" data-section-error>{{T "settings.err_flagged_body"}}</p>{{end}}
 
@@ -337,3 +312,8 @@
   <button type="submit" class="btn btn-primary" data-tip="{{T "clustersettings.save"}}">{{icon "check"}}<span>{{T "clustersettings.save"}}</span></button>
 </div>
 {{end}}
+
+{{define "clustersettings_extra"}}{{if .ClusterErr}}<p class="mono iso err" dir="ltr">{{.ClusterErr}}</p>{{end}}{{end}}
+
+{{define "clustersettings_runnerspick"}}<a class="btn btn-sm" href="/web/runners" hx-get="/web/runners" hx-target="#view" hx-push-url="true"
+         data-tip="{{T "settings.runners_pick_tip"}}">{{icon "server"}}<span>{{T "settings.runners_pick"}}</span></a>{{end}}

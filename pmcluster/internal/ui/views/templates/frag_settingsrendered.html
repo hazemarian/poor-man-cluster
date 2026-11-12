@@ -8,7 +8,7 @@
 <p class="sub">{{T "settings.rendered_sub"}}</p>
 
 {{if .ErrKey}}
-<div class="msg err">{{T .ErrKey}}</div>
+{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" (T .ErrKey))}}
 {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
 <div class="form-actions">
   <button type="button" class="btn" onclick="closeModal()">{{T "common.close"}}</button>
@@ -20,13 +20,8 @@
   <button type="button" class="btn" onclick="closeModal()">{{T "common.close"}}</button>
 </div>
 {{else}}
-<div class="empty">
-  <div class="ic">{{icon "file"}}</div>
-  <h3>{{T "settings.err_rendered_missing"}}</h3>
-  <p>{{T "settings.err_rendered_not_found"}}</p>
-  <div class="empty-actions">
-    <button type="button" class="btn" onclick="closeModal()">{{T "common.close"}}</button>
-  </div>
-</div>
+{{template "empty" (dict "Icon" "file" "Title" (T "settings.err_rendered_missing") "Body" (T "settings.err_rendered_not_found") "Action" (partial "settingsrendered_close" .))}}
 {{end}}
 {{end}}
+
+{{define "settingsrendered_close"}}<button type="button" class="btn" onclick="closeModal()">{{T "common.close"}}</button>{{end}}

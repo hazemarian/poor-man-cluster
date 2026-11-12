@@ -28,6 +28,8 @@
   <link rel="stylesheet" href="{{static "components.css"}}">
   <link rel="stylesheet" href="{{static "patterns.css"}}">
   <link rel="stylesheet" href="{{static "brand.css"}}">
+  <link rel="stylesheet" href="{{static "nx-fonts.css"}}">
+  <link rel="stylesheet" href="{{static "nx-theme.css"}}">
   <script src="{{static "preferences.js"}}" defer></script>
 </head>
 <body>
@@ -41,13 +43,7 @@
     <p class="auth-sub">{{T "auth.setup_brand"}}</p>
 
     {{if .Done}}
-    <div class="banner ok" role="status" aria-live="polite">
-      <span class="ic" aria-hidden="true">{{icon "check-circle"}}</span>
-      <div class="b-body">
-        <p class="b-title">{{T "auth.setup_done"}}</p>
-        <p>{{T "auth.setup_done_note"}}</p>
-      </div>
-    </div>
+    {{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Role" "status" "Title" (T "auth.setup_done") "Body" (T "auth.setup_done_note"))}}
     {{else}}
     <form method="post" action="/web/setup">
       {{/* The banner is the error summary (role=alert); the field that broke also
@@ -56,12 +52,7 @@
            validateNewAdmin: username_required -> username, password_short and
            password_too_long -> password, password_mismatch -> confirm. */}}
       {{if .Failure}}
-      <div class="banner bad" role="alert">
-        <span class="ic" aria-hidden="true">{{icon "alert"}}</span>
-        <div class="b-body">
-          <p class="b-title">{{if .Detail}}{{TF .Failure .Detail}}{{else}}{{T .Failure}}{{end}}</p>
-        </div>
-      </div>
+      {{template "banner" (dict "Tone" "bad" "Icon" "alert" "Role" "alert" "Title" (or (and .Detail (TF .Failure .Detail)) (T .Failure)))}}
       {{end}}
 
       <p class="hint mt-0">{{T "auth.setup_intro"}}</p>

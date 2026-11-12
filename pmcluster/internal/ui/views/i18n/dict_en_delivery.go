@@ -11,7 +11,7 @@ package i18n
 func init() {
 	register(EN, map[string]string{
 		// --- Deploy: header ---------------------------------------------------
-		"deploy.title":              "Deploy a stack",
+		"deploy.title":              "Deploy a Stack",
 		"deploy.sub":                "Post a manifest to the cluster API. The daemon rewrites the stack and stores a new revision.",
 		"deploy.sub_not_configured": "The cluster API is not configured yet, so nothing can be submitted from this page.",
 		"deploy.open_stacks":        "Open stacks",
@@ -52,7 +52,7 @@ func init() {
 		"deploy.submit_hint":     "Sent as JSON to the daemon. Nothing is written until the daemon answers.",
 
 		// --- Deploy: result ---------------------------------------------------
-		"deploy.result_title":   "Deploy accepted",
+		"deploy.result_title":   "Deploy Accepted",
 		"deploy.result_body":    "Deployed {0} as revision {1}.",
 		"deploy.result_changed": "The daemon reported a new revision for this stack.",
 		"deploy.result_hint":    "Task convergence appears under Services once the daemon finishes rolling the stack out.",
@@ -60,7 +60,7 @@ func init() {
 		"deploy.view_revision":  "View revision",
 
 		// --- Deploy: request preview -----------------------------------------
-		"deploy.preview_title":       "Request body",
+		"deploy.preview_title":       "Request Body",
 		"deploy.preview_sub":         "Exactly what this page sends to the daemon, before you submit it.",
 		"deploy.preview_endpoint":    "Endpoint",
 		"deploy.preview_method":      "Method",
@@ -70,7 +70,7 @@ func init() {
 		"deploy.preview_goto":        "Go to the manifest form",
 
 		// --- Deploy: what the daemon does ------------------------------------
-		"deploy.pipeline_title":      "What the daemon does",
+		"deploy.pipeline_title":      "What the Daemon Does",
 		"deploy.pipeline_sub":        "One request runs five stages. A failure stops the run and leaves the stored revision untouched.",
 		"deploy.step_parse":          "Parse the manifest",
 		"deploy.step_parse_note":     "The DSL is read as YAML and checked for structure.",
@@ -124,7 +124,7 @@ func init() {
 		"webhooks.secret_usage":            "CI signs every delivery with this secret; the daemon refuses anything that does not match.",
 
 		// --- Webhooks: delivery contract -------------------------------------
-		"webhooks.delivery_title": "Signing a delivery",
+		"webhooks.delivery_title": "Signing a Delivery",
 		"webhooks.delivery_sub":   "The receiver is the only machine way in: it verifies the signature against the source's secret before it reads the manifest.",
 		"webhooks.d_method":       "Method",
 		"webhooks.d_path":         "Path",
@@ -138,7 +138,7 @@ func init() {
 		"webhooks.d_snippet":      "Signing it in CI",
 
 		// --- Webhooks: add a source ------------------------------------------
-		"webhooks.add_title":      "Add a source",
+		"webhooks.add_title":      "Add a Source",
 		"webhooks.add_sub":        "A source is a name your CI signs with. The daemon generates the shared secret and shows it once, here.",
 		"webhooks.f_source":       "Source",
 		"webhooks.ph_source":      "github-actions",
@@ -180,7 +180,7 @@ func init() {
 		"webhookdeliveries.title":               "Deliveries for {0}",
 		"webhookdeliveries.sub":                 "Attempts the receiver recorded, newest first.",
 		"webhookdeliveries.sub_unknown":         "The delivery log could not be read, so this history is unknown rather than empty.",
-		"webhookdeliveries.hist_title":          "Delivery attempts",
+		"webhookdeliveries.hist_title":          "Delivery Attempts",
 		"webhookdeliveries.foot":                "The most recent {0} attempts are listed.",
 		"webhookdeliveries.col_when":            "When",
 		"webhookdeliveries.col_status":          "Result",

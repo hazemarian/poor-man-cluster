@@ -14,73 +14,30 @@
      daemon did not answer — never rendered as "empty") / empty-but-actionable.
      When the feature is off, the empty state points at the setting that turns it
      on instead of pretending the list is empty. */}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "runners.title"}}</h1>
-    <p class="sub">{{T "runners.sub"}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/runners/restart-all" hx-target="#view" hx-push-url="true" hx-disabled-elt="this"
-            data-tip="{{T "runners.restart_all_tip"}}">{{icon "restore"}}<span>{{T "runners.restart_all"}}</span></button>
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
-      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
-    </button>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "runners.title") "Sub" (T "runners.sub") "Actions" (partial "runners_actions" .))}}
 
 {{if .ErrKey}}
-<div class="banner bad">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T .ErrKey}}</p>
-    <p>{{T "err.banner_body"}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-  <div class="b-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/runners")}}
 {{end}}
 
-{{if .MsgKey}}<div class="msg ok">{{TF .MsgKey .MsgArg}}</div>{{end}}
+{{if .MsgKey}}{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (TF .MsgKey .MsgArg))}}{{end}}
 
 {{if not .Configured}}
 <div class="panel mt-24">
   <div class="panel-body tight">
-    <div class="empty">
-      <i class="ic">{{icon "settings"}}</i>
-      <h3>{{T "err.api_not_configured"}}</h3>
-      <p>{{T "runners.not_configured_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "settings" "Title" (T "err.api_not_configured") "Body" (T "runners.not_configured_body") "Settings" true)}}
   </div>
 </div>
 {{else if not .Known}}
 <div class="panel mt-24">
   <div class="panel-body tight">
-    <div class="empty">
-      <i class="ic">{{icon "alert"}}</i>
-      <h3>{{T "runners.unknown_title"}}</h3>
-      <p>{{T "runners.unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/runners" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "alert" "Title" (T "runners.unknown_title") "Body" (T "runners.unknown_body") "Retry" "/web/runners")}}
   </div>
 </div>
 {{else}}
 
 <div class="panel mt-24">
-  <div class="panel-head">
-    <h2>{{T "runners.picker_title"}}</h2>
-    <div class="ph-actions">
-      {{if .Enabled}}<span class="pill good"><i class="dot"></i>{{T "runners.enabled"}}</span>
-      {{else}}<span class="pill warn"><i class="dot"></i>{{T "runners.disabled"}}</span>{{end}}
-      <span class="pill plain">{{P .Selected "plural.runner_nodes"}}</span>
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "runners.picker_title") "Actions" (partial "runners_pactions" .))}}
   <div class="panel-body">
     <p class="sub">{{T "runners.picker_sub"}}</p>
     <p class="muted">{{TF "runners.capacity" .Memory}}</p>
@@ -91,7 +48,7 @@
            overridden at save time by the hidden copy that was still ticked: the
            node selection could be added to but never removed. */}}
       <div class="table-wrap">
-        <table class="table">
+        <table class="table node-pick">
           <thead>
             <tr>
               <th><span class="sr-only">{{T "runners.col_select"}}</span></th>
@@ -105,7 +62,7 @@
           <tbody>
             {{range .Nodes}}
             <tr>
-              <td>
+              <td class="pick-sel">
                 <label class="check">
                   {{if .Selectable}}
                   <input type="checkbox" name="node" value="{{.Hostname}}"{{if .Selected}} checked{{end}}>
@@ -115,12 +72,12 @@
                   <span class="sr-only">{{.Hostname}}</span>
                 </label>
               </td>
-              <td><span class="mono">{{.Hostname}}</span></td>
-              <td>
+              <td class="pick-name"><span class="mono">{{.Hostname}}</span></td>
+              <td class="pick-role" data-label="{{T "runners.col_role"}}">
                 {{if .Selectable}}<span class="pill plain">{{.Role}}</span>
                 {{else}}<span class="pill warn" data-tip="{{.Reason}}"><i class="dot"></i>{{.Role}}</span>{{end}}
               </td>
-              <td>
+              <td class="pick-state" data-label="{{T "runners.col_node_state"}}">
                 {{if .Selected}}{{if .RunnerState}}<span class="pill {{if eq .RunnerState "idle"}}good{{else if eq .RunnerState "busy"}}warn{{else if eq .RunnerState "between_jobs"}}plain{{else}}bad{{end}}"><i class="dot"></i>{{T (printf "runners.state_%s" .RunnerState)}}</span>
                 {{else}}<span class="muted">{{T "runners.state_none"}}</span>{{end}}
                 {{else}}<span class="muted">{{T "runners.not_selected"}}</span>{{end}}
@@ -129,8 +86,8 @@
                      to decide whether to lower the cap or pick another node. */}}
                 {{if .RefusedReason}}<div class="muted" dir="auto">{{.RefusedReason}}</div>{{end}}
               </td>
-              <td class="muted num"><bdi dir="ltr">{{NF .MemAvailMB 0}}</bdi> / <bdi dir="ltr">{{NF .MemTotalMB 0}}</bdi> {{T "runners.mb"}}</td>
-              <td>
+              <td data-label="{{T "runners.col_memory"}}" class="pick-mem muted num"><bdi dir="ltr">{{NF .MemAvailMB 0}}</bdi> / <bdi dir="ltr">{{NF .MemTotalMB 0}}</bdi> {{T "runners.mb"}}</td>
+              <td class="pick-cap" data-label="{{T "runners.col_cap"}}">
                 {{/* One input per node, named after the hostname so a reordered
                      row cannot move a cap onto another node. Blank = no override,
                      and the placeholder is the cluster default it would get. */}}
@@ -138,7 +95,7 @@
                        name="node_memory_{{.Hostname}}" value="{{.CapOverride}}" placeholder="{{$.Memory}}"
                        {{if not .Selectable}}disabled{{end}}
                        aria-label="{{TF "runners.cap_aria" .Hostname}}">
-                <div class="muted">{{T "runners.effective_cap"}} <bdi dir="ltr">{{.Cap}}</bdi></div>
+                {{if and .CapOverride (ne .CapOverride .Cap)}}<div class="muted cap-effective">{{T "runners.effective_cap"}} <bdi dir="ltr">{{.Cap}}</bdi></div>{{end}}
               </td>
             </tr>
             {{else}}
@@ -162,25 +119,11 @@
 </div>
 
 <div class="panel mt-24">
-  <div class="panel-head">
-    <h2>{{T "runners.table_title"}}</h2>
-    <div class="ph-actions">
-      {{if .Rows}}<span class="pill plain">{{P .Rows "plural.runners"}}</span>{{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "runners.table_title") "Actions" (partial "runners_pactions2" .))}}
 
   <div class="panel-body tight">
     {{if not .Enabled}}
-    <div class="empty">
-      <i class="ic">{{icon "server"}}</i>
-      <h3>{{T "runners.disabled_title"}}</h3>
-      <p>{{T "runners.disabled_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-primary btn-sm" href="/web/settings/cluster" hx-get="/web/settings/cluster" hx-target="#view" hx-push-url="true"
-           data-tip="{{T "runners.disabled_action_tip"}}">{{icon "settings"}}<span>{{T "runners.disabled_action"}}</span></a>
-      </div>
-      <p class="muted">{{T "runners.disabled_foot"}}</p>
-    </div>
+    {{template "empty" (dict "Icon" "server" "Title" (T "runners.disabled_title") "Body" (T "runners.disabled_body") "Action" (partial "runners_action2" .) "Foot" (T "runners.disabled_foot"))}}
     {{else if .Rows}}
     <div class="table-wrap only-md">
       <table class="table">
@@ -252,11 +195,7 @@
       {{end}}
     </div>
     {{else}}
-    <div class="empty">
-      <i class="ic">{{icon "server"}}</i>
-      <h3>{{T "runners.empty_title"}}</h3>
-      <p>{{T "runners.empty_body"}}</p>
-    </div>
+    {{template "empty" (dict "Icon" "server" "Title" (T "runners.empty_title") "Body" (T "runners.empty_body"))}}
     {{end}}
   </div>
 
@@ -266,3 +205,16 @@
 </div>
 {{end}}
 {{end}}
+
+{{define "runners_actions"}}<button type="button" class="btn btn-ghost btn-sm" hx-post="/web/runners/restart-all" hx-target="#view" hx-push-url="true" hx-disabled-elt="this"
+            data-tip="{{T "runners.restart_all_tip"}}">{{icon "restore"}}<span>{{T "runners.restart_all"}}</span></button>
+    {{template "refreshbtn" (dict "URL" "/web/runners")}}{{end}}
+
+{{define "runners_action2"}}<a class="btn btn-primary btn-sm" href="/web/settings/cluster" hx-get="/web/settings/cluster" hx-target="#view" hx-push-url="true"
+           data-tip="{{T "runners.disabled_action_tip"}}">{{icon "settings"}}<span>{{T "runners.disabled_action"}}</span></a>{{end}}
+
+{{define "runners_pactions"}}{{if .Enabled}}<span class="pill good"><i class="dot"></i>{{T "runners.enabled"}}</span>
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "runners.disabled"}}</span>{{end}}
+      <span class="pill plain">{{P .Selected "plural.runner_nodes"}}</span>{{end}}
+
+{{define "runners_pactions2"}}{{if .Rows}}<span class="pill plain">{{P (len .Rows) "plural.runners"}}</span>{{end}}{{end}}

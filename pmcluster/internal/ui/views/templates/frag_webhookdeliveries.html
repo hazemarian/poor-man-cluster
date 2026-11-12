@@ -5,50 +5,19 @@
      kept apart: attempts, "the receiver has logged nothing" (which is not the
      same as the source being wrong), and a failed read, which leaves the history
      unknown — never empty. */}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{TF "webhookdeliveries.title" .Source}}</h1>
-    <p class="sub">{{if .DeliveriesKnown}}{{T "webhookdeliveries.sub"}}{{else}}{{T "webhookdeliveries.sub_unknown"}}{{end}}</p>
-  </div>
-  <div class="ph-actions">
-    <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.webhooks"}}">{{icon "webhooks"}}<span>{{T "nav.webhooks"}}</span></a>
-    <a class="btn btn-sm" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></a>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (TF "webhookdeliveries.title" .Source) "Sub" (partial "webhookdeliveries_sub" .) "Actions" (partial "webhookdeliveries_actions" .))}}
 
 {{if .ErrKey}}
-<div class="banner bad">
-  <div class="b-body">
-    <div class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></div>
-    <p>{{if eq .ErrKey "err.api_not_configured"}}{{T "settings.conn_missing_body"}}{{else}}{{T "err.banner_body"}}{{end}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre dir="ltr">{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-  <div class="b-actions">
-    <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "webhooks.title"}}">{{icon "webhooks"}}<span>{{T "webhooks.title"}}</span></a>
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Action" (partial "webhookdeliveries_back" .))}}
 {{else if not .DeliveriesKnown}}
 <div class="panel">
   <div class="panel-body">
-    <div class="empty">
-      {{icon "layers-off"}}
-      <h3>{{T "webhookdeliveries.unknown_title"}}</h3>
-      <p>{{T "webhookdeliveries.unknown_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/webhooks/{{.Source}}/deliveries" hx-get="/web/webhooks/{{.Source}}/deliveries" hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">{{icon "refresh"}}<span>{{T "common.retry"}}</span></a>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "layers-off" "Title" (T "webhookdeliveries.unknown_title") "Body" (T "webhookdeliveries.unknown_body") "Retry" (printf "/web/webhooks/%s/deliveries" .Source) "Label" "retry")}}
   </div>
 </div>
 {{else}}
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "webhookdeliveries.hist_title"}}</h2>
-    <div class="ph-actions">
-      {{if .Deliveries}}<span class="pill plain"><i class="dot"></i>{{P (len .Deliveries) "plural.webhooks"}}</span>
-      {{else}}<span class="pill plain"><i class="dot"></i>{{T "common.none"}}</span>{{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "webhookdeliveries.hist_title") "Actions" (partial "webhookdeliveries_pactions" .))}}
   <div class="panel-body">
     <p class="sub">{{TF "webhookdeliveries.foot" (N .DeliveryLimit)}}</p>
     {{if .Deliveries}}
@@ -91,16 +60,21 @@
       {{end}}
     </div>
     {{else}}
-    <div class="empty">
-      {{icon "inbox"}}
-      <h3>{{T "webhookdeliveries.empty_title"}}</h3>
-      <p>{{T "webhookdeliveries.empty_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "webhooks.secret_endpoint"}}">{{icon "webhooks"}}<span>{{T "webhooks.secret_endpoint"}}</span></a>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "inbox" "Title" (T "webhookdeliveries.empty_title") "Body" (T "webhookdeliveries.empty_body") "Action" (partial "webhookdeliveries_action2" .))}}
     {{end}}
   </div>
 </div>
 {{end}}
 {{end}}
+
+{{define "webhookdeliveries_back"}}<a class="btn btn-ghost btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "webhooks.title"}}">{{icon "webhooks"}}<span>{{T "webhooks.title"}}</span></a>{{end}}
+
+{{define "webhookdeliveries_sub"}}{{if .DeliveriesKnown}}{{T "webhookdeliveries.sub"}}{{else}}{{T "webhookdeliveries.sub_unknown"}}{{end}}{{end}}
+
+{{define "webhookdeliveries_actions"}}<a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.webhooks"}}">{{icon "webhooks"}}<span>{{T "nav.webhooks"}}</span></a>
+    {{template "refreshbtn" (dict "URL" (printf "/web/webhooks/%s/deliveries" .Source))}}{{end}}
+
+{{define "webhookdeliveries_action2"}}<a class="btn btn-sm" href="/web/webhooks" hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "webhooks.secret_endpoint"}}">{{icon "webhooks"}}<span>{{T "webhooks.secret_endpoint"}}</span></a>{{end}}
+
+{{define "webhookdeliveries_pactions"}}{{if .Deliveries}}<span class="pill plain"><i class="dot"></i>{{P (len .Deliveries) "plural.webhooks"}}</span>
+      {{else}}<span class="pill plain"><i class="dot"></i>{{T "common.none"}}</span>{{end}}{{end}}

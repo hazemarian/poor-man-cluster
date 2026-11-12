@@ -192,6 +192,12 @@ type RenderInput struct {
 	// name and `docker stack deploy` fails with "config not found".
 	ObservabilityProvisionConfigName string
 
+	// SSOSignInConfigName / SSOErrorConfigName are the versioned Docker config
+	// names for the branded oauth2-proxy sign-in and error pages. Resolved from
+	// `config_path(pmcluster_sso_signin)` / `config_path(pmcluster_sso_error)`.
+	SSOSignInConfigName string
+	SSOErrorConfigName  string
+
 	// CertSecretName is the versioned Swarm secret name for the TLS
 	// certificate (e.g. cert_v001). Resolved from `secrets(cert)`.
 	CertSecretName string
@@ -376,6 +382,8 @@ var configNameAliases = map[string]func(RenderInput) string{
 	"pmcluster_otel_config":             func(r RenderInput) string { return r.OTelConfigName },
 	"pmcluster_traefik_dynamic":         func(r RenderInput) string { return r.TraefikConfigName },
 	"pmcluster_observability_provision": func(r RenderInput) string { return r.ObservabilityProvisionConfigName },
+	"pmcluster_sso_signin":              func(r RenderInput) string { return r.SSOSignInConfigName },
+	"pmcluster_sso_error":               func(r RenderInput) string { return r.SSOErrorConfigName },
 }
 
 // secretNameAliases maps a logical secrets() name to the RenderInput field
@@ -388,7 +396,7 @@ var secretNameAliases = map[string]func(RenderInput) string{
 func (r *renderRefResolver) ResolveConfig(_ context.Context, _ string, name string) (string, error) {
 	fn, ok := configNameAliases[name]
 	if !ok {
-		return "", fmt.Errorf("resolve config(%s): no such platform config (known: pmcluster_otel_config, pmcluster_traefik_dynamic, pmcluster_observability_provision)", name)
+		return "", fmt.Errorf("resolve config(%s): no such platform config (known: pmcluster_otel_config, pmcluster_traefik_dynamic, pmcluster_observability_provision, pmcluster_sso_signin, pmcluster_sso_error)", name)
 	}
 	return fn(r.render), nil
 }
@@ -443,6 +451,10 @@ func (r *renderRefResolver) ResolveConfigPath(_ context.Context, _ string, name 
 		return "/etc/otel-collector-config.yaml", nil
 	case "pmcluster_observability_provision":
 		return "/etc/pmcluster/observability-provision.sh", nil
+	case "pmcluster_sso_signin":
+		return SSOTemplatesDir + "/sign_in.html", nil
+	case "pmcluster_sso_error":
+		return SSOTemplatesDir + "/error.html", nil
 	default:
 		return refs.DefaultConfigMountPath(name), nil
 	}
@@ -600,6 +612,44 @@ func (r *otelRefResolver) ResolveSecretValue(_ context.Context, name string) (st
 		return "", fmt.Errorf("otel collector config: secret(observability_basic_auth): observability admin basic auth is not set")
 	}
 	return r.render.ObservabilityBasicAuth, nil
+}
+
+// SSOTemplatesDir is where oauth2-proxy looks for its custom page templates
+// (OAUTH2_PROXY_CUSTOM_TEMPLATES_DIR); sign_in.html and error.html are mounted
+// into it as Swarm configs.
+const SSOTemplatesDir = "/etc/oauth2-templates"
+
+// RenderSSOSignIn / RenderSSOError return the branded oauth2-proxy pages. They
+// are static: oauth2-proxy fills in its own variables ({{.ProxyPrefix}},
+// {{.Redirect}}...) at request time, so nothing is substituted here.
+func RenderSSOSignIn(in RenderInput) ([]byte, error) { return renderSSOPage("sso-signin.html", in) }
+
+func RenderSSOError(in RenderInput) ([]byte, error) { return renderSSOPage("sso-error.html", in) }
+
+// ssoFonts are the console's own faces, inlined into the pages: a visitor at
+// the sign-in screen is not signed in yet, so /web/static is not reachable.
+var ssoFonts = []struct{ family, file, weight string }{
+	{"Bricolage Grotesque Variable", "bricolage-grotesque-latin-wght-normal.woff2", "200 800"},
+	{"Instrument Sans", "instrument-sans-latin-400-normal.woff2", "400"},
+	{"Instrument Sans", "instrument-sans-latin-600-normal.woff2", "600"},
+	{"IBM Plex Sans Arabic", "ibm-plex-sans-arabic-400-arabic.woff2", "400"},
+}
+
+func renderSSOPage(name string, in RenderInput) ([]byte, error) {
+	body, err := readConfigFile(name, in)
+	if err != nil {
+		return nil, err
+	}
+	var css strings.Builder
+	for _, f := range ssoFonts {
+		data, err := fs.ReadFile(embeddedStacks, embeddedDir+"/sso-fonts/"+f.file)
+		if err != nil {
+			return nil, fmt.Errorf("read sso font %s: %w", f.file, err)
+		}
+		fmt.Fprintf(&css, "@font-face{font-family:'%s';font-weight:%s;font-display:swap;src:url(data:font/woff2;base64,%s) format('woff2')}",
+			f.family, f.weight, base64.StdEncoding.EncodeToString(data))
+	}
+	return []byte(strings.Replace(body, "/*FONTS*/", css.String(), 1)), nil
 }
 
 // RenderOTelCollectorConfig fills in the OpenObserve `Authorization: Basic <b64>`

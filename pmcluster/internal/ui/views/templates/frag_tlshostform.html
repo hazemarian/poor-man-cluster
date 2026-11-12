@@ -1,5 +1,5 @@
 {{define "tlshostform"}}
-{{if .ErrKey}}<div class="msg err">{{T .ErrKey}}</div>{{end}}
+{{if .ErrKey}}{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" (T .ErrKey))}}{{end}}
 {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
 <h2>{{T "tls.form_host_title"}}</h2>
 <p class="sub">{{T "tls.form_host_sub"}}</p>

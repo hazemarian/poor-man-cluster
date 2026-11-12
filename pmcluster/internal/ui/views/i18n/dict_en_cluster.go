@@ -9,8 +9,8 @@ func init() {
 		"overview.apply_warnings_when":  "recorded at {0} by {1}",
 		"overview.version_skew_title":   "{0} manager(s) run a different pmcluster version",
 		"overview.version_skew_body":    "Each manager publishes its binary version on start and every ten minutes. Mixed versions mean a node will behave differently from the one you are reading this on — upgrade the stragglers:",
-		"overview.title":                "Cluster overview",
-		"overview.sub":                  "{0}\u00a0· Docker {1}\u00a0· {2}\u00a0· {3}",
+		"overview.title":                "Cluster Overview",
+		"overview.sub":                  "{0}\u2002·\u2002Docker {1}\u2002·\u2002{2}\u2002·\u2002{3}",
 		"overview.sub_unknown":          "Cluster details unavailable",
 		"overview.nodes_title":          "Nodes",
 		"overview.nodes_unknown_title":  "Node list unavailable",
@@ -21,7 +21,7 @@ func init() {
 
 		// Per-node resources panel (overview). Names are short because they sit
 		// in a table header; the hints carry the threshold.
-		"nodestat.title":            "Node resources",
+		"nodestat.title":            "Node Resources",
 		"nodestat.empty_title":      "No node stats",
 		"nodestat.empty_body":       "Each node's daemon reports its own load, memory and top processes. Nothing has arrived yet — the collector may still be deploying, or the panel is waiting for the next sample.",
 		"nodestat.load":             "Load (1m)",
@@ -98,7 +98,7 @@ func init() {
 		"usage.foot": "Computed from the latest rendered compose of every stack. A stack that has never been deployed has no rendered compose, so the references it would make are not counted.",
 
 		"err.usage":                                      "Could not read the config and secret usage graph",
-		"clustersettings.title":                          "Cluster settings",
+		"clustersettings.title":                          "Cluster Settings",
 		"clustersettings.sub":                            "Settings the daemon stores for every node. A save is applied by each node on its next refresh.",
 		"clustersettings.empty_title":                    "No settings to edit",
 		"clustersettings.empty_body":                     "The daemon reported none of the editable settings. Nothing was changed.",
@@ -142,7 +142,7 @@ func init() {
 		"clustersettings.observability_admin_email_hint": "Address the daemon uses for its own notices.",
 		"clustersettings.log_level":                      "Log level",
 		"clustersettings.log_level_hint":                 "How much the daemon writes to its log file and Parseable. debug adds the full rendered compose per deploy level; info logs every deploy step with the service names.",
-		"clustersettings.sect_runners":                   "Self-hosted CI runners",
+		"clustersettings.sect_runners":                   "Self-Hosted CI Runners",
 		"clustersettings.sect_runners_sub":               "The platform can run one GitHub Actions runner container per selected worker node — the answer to exhausted GitHub-hosted minutes. Runners register at organisation level with the GitHub App's installation token and need the App's Organization → Self-hosted runners: Read & write permission. Administration alone covers repository-level endpoints only.",
 		"clustersettings.runners_enabled":                "Run self-hosted runners",
 		"clustersettings.runners_enabled_hint":           "Off by default. Turning it on requires a configured GitHub App; the reconcile stops and removes every runner when it is turned off again.",

@@ -60,9 +60,9 @@ func TestRenderedShellVersionsEveryAsset(t *testing.T) {
 		wantJS    int
 		wantIcon  int
 	}{
-		{"app", ShellBase(reqCtx), 9, 5, 3, 1},
-		{"login", gin.H{}, 7, 5, 1, 1},
-		{"setup", gin.H{}, 7, 5, 1, 1},
+		{"app", ShellBase(reqCtx), 12, 7, 4, 1},
+		{"login", gin.H{}, 9, 7, 1, 1},
+		{"setup", gin.H{}, 9, 7, 1, 1},
 		{"terminal", gin.H{"Stack": "demo", "Service": "web", "Version": "1"}, 8, 5, 2, 1},
 	}
 

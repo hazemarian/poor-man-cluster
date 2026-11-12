@@ -10,72 +10,84 @@
      Nothing here acts on a run. Cancelling, re-running and dispatching belong to git
      and GitHub; a console button would then have to explain which of three triggers
      caused what. */}}
-<div class="panel">
-  <div class="panel-head">
-    <div>
-      <h2>{{T "ci.title"}}</h2>
-      <p class="sub">{{T "ci.sub"}}</p>
-    </div>
-  </div>
+{{template "pagehead" (dict "Title" (T "ci.title") "Sub" (T "ci.sub") "Refresh" "/web/ci")}}
 
-  {{if .NotConfigured}}
-  <div class="empty">
-    <p>{{T "ci.not_configured"}}</p>
-    <p class="muted">{{T "ci.not_configured_hint"}}</p>
+{{if .NotConfigured}}
+<div class="panel">
+  {{template "empty" (dict "Icon" "settings" "Title" (T "ci.not_configured") "Foot" (T "ci.not_configured_hint") "Settings" true)}}
+</div>
+{{else}}
+{{if .ErrKey}}
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/ci")}}
+{{end}}
+
+<div class="stats">
+  {{template "stat" (dict "Label" (T "ci.queued") "Value" (.Queued) "ValueClass" "num")}}
+  {{template "stat" (dict "Label" (T "ci.running") "Value" (.Running) "ValueClass" "num")}}
+  {{template "stat" (dict "Label" (T "ci.failed") "Value" (.Failed) "ValueClass" "num")}}
+  {{template "stat" (dict "Label" (T "ci.read") "Value" (partial "ci_value" .) "ValueClass" "stat-text")}}
+</div>
+
+<div class="panel">
+  {{if .Rows}}
+  <div class="panel-body tight">
+    <div class="table-wrap only-md">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "ci.col_repo"}}</th>
+            <th>{{T "ci.col_state"}}</th>
+            <th>{{T "ci.col_workflow"}}</th>
+            <th>{{T "ci.col_sha"}}</th>
+            <th>{{T "ci.col_updated"}}</th>
+            <th>{{T "ci.col_detail"}}</th>
+          </tr>
+        </thead>
+        <tbody>
+        {{range .Rows}}
+          <tr>
+            <td class="mono">{{.Repo}}</td>
+            <td>
+              <span class="pill {{.Class}}"><i class="dot"></i>{{T (printf "ci.state_%s" .State)}}</span>
+              {{if .Inferred}}<span class="muted" data-tip="{{T "ci.inferred_tip"}}">*</span>{{end}}
+            </td>
+            <td>{{.Workflow}}</td>
+            <td class="mono">{{.SHA}}</td>
+            <td class="muted num">{{.Age}}</td>
+            <td class="muted">
+              {{if .Detail}}{{.Detail}}{{else}}—{{end}}
+              {{if .URL}}<a class="link" href="{{.URL}}" target="_blank" rel="noopener">{{T "ci.open"}}</a>{{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+
+    {{/* Phones: one card per repository. Six columns do not fit 390px, and the Detail
+         column (why it failed, plus the link to the run) was the one scrolled away. */}}
+    <div class="only-sm ci-cards">
+      {{range .Rows}}
+      <article class="ci-card{{if eq .State "failed"}} is-failed{{end}}">
+        <div class="ci-card-top">
+          <span class="mono ci-repo">{{.Repo}}</span>
+          <span class="pill {{.Class}}"><i class="dot"></i>{{T (printf "ci.state_%s" .State)}}</span>{{if .Inferred}}<span class="muted" data-tip="{{T "ci.inferred_tip"}}">*</span>{{end}}
+        </div>
+        <div class="ci-card-meta muted">
+          <span>{{.Workflow}}</span>{{if .SHA}}<span class="mono">{{.SHA}}</span>{{end}}<span class="num">{{.Age}}</span>
+        </div>
+        {{if .Detail}}<p class="ci-card-detail">{{.Detail}}</p>{{end}}
+        {{if .URL}}<a class="btn btn-sm ci-open" href="{{.URL}}" target="_blank" rel="noopener" data-tip="{{T "ci.open"}}">{{icon "external"}}<span>{{T "ci.open"}}</span></a>{{end}}
+      </article>
+      {{end}}
+    </div>
   </div>
   {{else}}
-  <div class="stats">
-    <div class="stat"><span class="k">{{T "ci.queued"}}</span><span class="v num">{{.Queued}}</span></div>
-    <div class="stat"><span class="k">{{T "ci.running"}}</span><span class="v num">{{.Running}}</span></div>
-    <div class="stat"><span class="k">{{T "ci.failed"}}</span><span class="v num">{{.Failed}}</span></div>
-    <div class="stat">
-      <span class="k">{{T "ci.read"}}</span>
-      <span class="v">{{if .FetchedAge}}{{.FetchedAge}}{{else}}—{{end}}{{if .Cached}} <span class="muted">({{T "ci.cached"}})</span>{{end}}</span>
-    </div>
-  </div>
-
-  {{if .ErrKey}}
-  <div class="banner err">
-    <strong>{{T .ErrKey}}</strong>
-    {{if .ErrRaw}}<div class="muted mono">{{.ErrRaw}}</div>{{end}}
-  </div>
+  {{template "empty" (dict "Icon" "inbox" "Title" (T "ci.no_rows"))}}
   {{end}}
-
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>{{T "ci.col_repo"}}</th>
-          <th>{{T "ci.col_state"}}</th>
-          <th>{{T "ci.col_workflow"}}</th>
-          <th>{{T "ci.col_sha"}}</th>
-          <th>{{T "ci.col_updated"}}</th>
-          <th>{{T "ci.col_detail"}}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Rows}}
-        <tr>
-          <td class="mono">{{.Repo}}</td>
-          <td>
-            <span class="pill {{.Class}}"><i class="dot"></i>{{T (printf "ci.state_%s" .State)}}</span>
-            {{if .Inferred}}<span class="muted" data-tip="{{T "ci.inferred_tip"}}">*</span>{{end}}
-          </td>
-          <td>{{.Workflow}}</td>
-          <td class="mono">{{.SHA}}</td>
-          <td class="muted num">{{.Age}}</td>
-          <td class="muted">
-            {{if .Detail}}{{.Detail}}{{else}}—{{end}}
-            {{if .URL}}<a class="link" href="{{.URL}}" target="_blank" rel="noopener">{{T "ci.open"}}</a>{{end}}
-          </td>
-        </tr>
-        {{else}}
-        <tr><td colspan="6" class="muted">{{T "ci.no_rows"}}</td></tr>
-        {{end}}
-      </tbody>
-    </table>
-  </div>
-  <p class="cap">{{T "ci.footnote"}}</p>
-  {{end}}
+  <p class="panel-foot">{{T "ci.footnote"}}</p>
 </div>
 {{end}}
+{{end}}
+
+{{define "ci_value"}}{{if .FetchedAge}}{{.FetchedAge}}{{else}}—{{end}}{{if .Cached}} <span class="muted">({{T "ci.cached"}})</span>{{end}}{{end}}

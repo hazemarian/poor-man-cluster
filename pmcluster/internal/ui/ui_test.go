@@ -324,7 +324,7 @@ func TestBootstrap_Setup_Login_Overview(t *testing.T) {
 		t.Fatalf("GET /overview = %d, want 200", resp.StatusCode)
 	}
 	b := readBody(t, resp)
-	for _, want := range []string{"manager-1", "Cluster overview", "8"} {
+	for _, want := range []string{"manager-1", "Cluster Overview", "8"} {
 		if !strings.Contains(b, want) {
 			t.Errorf("overview missing %q", want)
 		}
@@ -400,7 +400,7 @@ func TestAllControllers(t *testing.T) {
 	login()
 
 	assertFragment(http.MethodGet, "/web/", "", "Poor Man's", "Overview", "Log out")
-	assertFragment(http.MethodGet, "/web/overview", "", "manager-1", "Cluster overview")
+	assertFragment(http.MethodGet, "/web/overview", "", "manager-1", "Cluster Overview")
 
 	assertFragment(http.MethodGet, "/web/stacks", "", "Stacks", "demo", "3")
 	// The demo stack's only deficit is a completed run-once migration job
@@ -410,8 +410,8 @@ func TestAllControllers(t *testing.T) {
 	// The stack detail is its own page: the head carries the stack name and the
 	// page shows the stack's services (replica health), its last backup and its
 	// revision history.
-	assertFragment(http.MethodGet, "/web/stacks/demo", "", `dir="ltr">demo<`, "Services in this stack", "web", "2 / 2", "Last backup", "succeeded", "Revision history", "Deploy failed", "docker stack deploy (depends_on level 1): boom")
-	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source manifest")
+	assertFragment(http.MethodGet, "/web/stacks/demo", "", `dir="ltr">demo<`, "Services in This Stack", "web", "Running 2/2", "Last Backup", "succeeded", "Revision History", "Deploy failed", "docker stack deploy (depends_on level 1): boom")
+	assertFragment(http.MethodGet, "/web/stacks/demo/revisions/3", "", "Revision 3 · demo", "Source Manifest")
 	// The per-stack backups route hands the operator to the backups page, which owns
 	// listing and filtering them, instead of the stacks controller building another
 	// page's model. A redirect is the contract, so assert it rather than a rendered list.
@@ -434,7 +434,7 @@ func TestAllControllers(t *testing.T) {
 
 	// The platform page lists the platform-managed services (ingress here) and
 	// keeps them off the customer app surface.
-	assertFragment(http.MethodGet, "/web/platform", "", "Platform services", "traefik:v3")
+	assertFragment(http.MethodGet, "/web/platform", "", "Platform Services", "traefik:v3")
 
 	// Inventory is two tabs: Stacks lists the service-scope rows (its own plus
 	// the shared ones), Platform lists the cluster-scope rows. Only the active
@@ -609,7 +609,7 @@ func TestSecretsAndConfigs(t *testing.T) {
 
 	// Rendered configs view: the post-substitution YAML shown read-only.
 	assertFragment(http.MethodGet, "/web/settings/rendered/traefik-dynamic", "",
-		"Rendered config", "traefik-dynamic", "tls:", "certificates: []")
+		"Rendered Config", "traefik-dynamic", "tls:", "certificates: []")
 
 	// Cluster config lifecycle — create/edit/rollback via modals.
 	assertFragment(http.MethodPost, "/web/settings/configs/add",
@@ -617,7 +617,7 @@ func TestSecretsAndConfigs(t *testing.T) {
 		"Config nginx_conf created")
 
 	assertFragment(http.MethodGet, "/web/settings/configs/edit/nginx_conf", "",
-		"Edit config", "worker_processes 4;", "Version history", "h0",
+		"Edit config", "worker_processes 4;", "Version History", "h0",
 		"/web/settings/configs/rollback/nginx_conf/2")
 
 	assertFragment(http.MethodPost, "/web/settings/configs/edit",
@@ -653,7 +653,7 @@ func TestSecretsAndConfigs(t *testing.T) {
 	// ignores the scope filter and returns everything, so this asserts the
 	// controller's own scope guard, not the daemon's.
 	b = assertFragment(http.MethodGet, "/web/stacks/demo/config", "",
-		"Config &amp; secrets", "demo", "app_env", "demo_db_pass")
+		"Config &amp; Secrets", "demo", "app_env", "demo_db_pass")
 	for _, leaked := range []string{"traefik-dynamic", "site_cert"} {
 		if strings.Contains(b, leaked) {
 			t.Errorf("stack config page leaked the cluster-scope row %q", leaked)
@@ -689,7 +689,7 @@ func TestSecretsAndConfigs(t *testing.T) {
 		"the-decrypted-value")
 
 	assertFragment(http.MethodGet, "/web/stacks/demo/secrets/new", "",
-		"Add secret", "/web/stacks/demo/secrets/add")
+		"Add Secret", "/web/stacks/demo/secrets/add")
 
 	// v2 confirms through htmx (hx-confirm) so the prompt survives a partial swap, and
 	// the copy names what is about to be exposed on screen.
@@ -718,7 +718,7 @@ func TestTLSMainAndHosts(t *testing.T) {
 		// v2 states the remaining life as a number of days instead of a vague
 		// "expires soon", so the operator can judge the urgency.
 		"Main certificate", "nextrum-sy.com", "days left",
-		"Per-host certificates", "idlebbookfair.com",
+		"Per-Host Certificates", "idlebbookfair.com",
 		"Upload / renew", "Add certificate",
 	} {
 		if !strings.Contains(b, want) {
@@ -731,7 +731,7 @@ func TestTLSMainAndHosts(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /tls/site/new = %d, want 200; body: %s", resp.StatusCode, b)
 	}
-	for _, want := range []string{"Upload / renew main certificate", `hx-post="/web/tls/site"`, `name="cert"`, `name="key"`} {
+	for _, want := range []string{"Upload / Renew Main Certificate", `hx-post="/web/tls/site"`, `name="cert"`, `name="key"`} {
 		if !strings.Contains(b, want) {
 			t.Errorf("tls site form missing %q; got: %s", want, b)
 		}
@@ -742,7 +742,7 @@ func TestTLSMainAndHosts(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /tls/hosts/new = %d, want 200; body: %s", resp.StatusCode, b)
 	}
-	for _, want := range []string{"Add a per-host certificate", `hx-post="/web/tls"`, `name="host"`} {
+	for _, want := range []string{"Add a Per-Host Certificate", `hx-post="/web/tls"`, `name="host"`} {
 		if !strings.Contains(b, want) {
 			t.Errorf("tls host form missing %q; got: %s", want, b)
 		}
@@ -797,17 +797,16 @@ func TestServicesUI(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	s := string(body)
 	// demo_web is a customer app service (main table); infra_traefik is a
-	// platform service and is kept in the separated "Platform services" section
+	// platform service and is kept in the separated "Platform Services" section
 	// as its unqualified name/image.
 	if !strings.Contains(s, "demo_web") || !strings.Contains(s, "traefik:v3") {
 		t.Errorf("services list missing rows; got: %s", s)
 	}
-	if !strings.Contains(s, "Platform services") {
+	if !strings.Contains(s, "Platform Services") {
 		t.Errorf("services list missing the platform section; got: %s", s)
 	}
-	// v2 writes replica pairs spaced ("2 / 2") so the two numbers stay legible in mono
-	// and never read as one figure.
-	if !strings.Contains(s, "demo") || !strings.Contains(s, "2 / 2") {
+	// The replica pair lives inside the status pill ("Running 2/2"), as on the stacks list.
+	if !strings.Contains(s, "demo") || !strings.Contains(s, "2/2") {
 		t.Errorf("services list missing stack/replica info; got: %s", s)
 	}
 	// regression: a service whose local image is >30 days old renders the stale

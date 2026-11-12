@@ -521,11 +521,8 @@ body.modal-open { overflow: hidden; }
 /* ---------- loading states ----------
    Every htmx request renders one of three cues, all CSS, all palette tokens:
 
-     1. .inflight   a 2px bar under the topbar for ANY request, so a click that
-                    starts a page-level swap is never silent. htmx marks the
-                    element that fired the request with .htmx-request, and
-                    :has() is what lets a fixed piece of shell chrome react to
-                    it without JavaScript.
+     1. the app logo   animates while any request is in flight (nx-theme.css);
+                    :has() lets fixed shell chrome react without JavaScript.
      2. .load-overlay  a panel that reloads ITSELF (logs, traces, the summary
                     panel) keeps its current content and dims it under a
                     spinner, so the operator reads "reloading", not "broken".
@@ -533,27 +530,12 @@ body.modal-open { overflow: hidden; }
                     hx-disabled-elt and takes a busy look, so a slow action
                     cannot be fired twice.
 
-   None of them occupies or frees layout space: the bar is fixed, the overlay is
+   None of them occupies or frees layout space: the overlay is
    absolute inside the panel, the spinner has a fixed 16px box. An indicator
    appearing must never shift the page under the operator's cursor.
 
    The 0.18-0.3s delays are deliberate: a swap that lands in 50ms should not
    flash a skeleton at the operator. */
-
-.inflight {
-  position: fixed; inset-block-start: var(--top-w); inset-inline: 0; height: 2px;
-  z-index: 35; overflow: hidden; opacity: 0; pointer-events: none;
-  transition: opacity .12s ease .18s;
-}
-.inflight > i {
-  display: block; height: 100%; width: 40%; background: var(--accent);
-  border-radius: 0 2px 2px 0; transform: translateX(-100%);
-}
-body:has(.htmx-request) .inflight { opacity: 1; }
-body:has(.htmx-request) .inflight > i { animation: inflight 1.1s cubic-bezier(.55, .15, .45, .85) infinite; }
-[dir="rtl"] .inflight > i { border-radius: 2px 0 0 2px; animation-name: inflight-rtl; }
-@keyframes inflight { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
-@keyframes inflight-rtl { from { transform: translateX(250%); } to { transform: translateX(-100%); } }
 
 /* A panel owns the overlay's containing block; the overlay itself stays out of
    the pointer's way so a stale panel is still readable while it reloads. */

@@ -154,7 +154,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	})
 	// Console assets are public: the sign-in screen needs the stylesheet and
 	// the font stack before a session exists.
-	engine.GET(views.StaticBase+"/*filepath", views.StaticHandler())
+	engine.GET(views.StaticBase+"/*filepath", middleware.Gzip(), views.StaticHandler())
 	// Language switch. Public, so it also works from the sign-in screen, and
 	// the target is constrained to the console to avoid an open redirect.
 	engine.GET(WebBase+"/lang/:code", func(c *gin.Context) {
@@ -180,6 +180,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	engine.GET("/sso-bridge", (controllers.ObservBridge{Controller: a.ctrl}).Page)
 
 	g := engine.Group(WebBase)
+	g.Use(middleware.Gzip()) // console responses only: Mount shares the engine with the edge proxy
 	g.Use(a.ctrl.Auth.Require())
 
 	// ---- viewer: read-only console (all GET page/fragment/list routes) ----

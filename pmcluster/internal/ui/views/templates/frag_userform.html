@@ -6,21 +6,9 @@
 <p class="sub">{{T .SubKey}}</p>
 
 {{if .ErrKey}}
-<div class="banner bad">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T .ErrKey}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw)}}
 {{else if .Error}}
-<div class="banner bad">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T "users.err_save"}}</p>
-    <details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.Error}}</pre></details>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" (T "users.err_save") "Raw" .Error)}}
 {{end}}
 
 <form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML"

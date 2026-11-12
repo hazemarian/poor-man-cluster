@@ -5,92 +5,21 @@
      same time. Every action answers with this whole page, so the table never
      disappears under the operator's hands. */}}
 
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "stacks.title"}}</h1>
-    <p class="sub">
-      {{- if .Known -}}
-        {{- if .Filtered -}}
-          {{TF "stacks.showing" (P .Count "plural.stacks") (P .Total "plural.stacks")}}
-        {{- else -}}
-          {{TF "stacks.sub" (P .Total "plural.stacks") (ts .LastUpdated)}}
-        {{- end -}}
-      {{- else -}}
-        {{T "stacks.sub_unknown"}}
-      {{- end -}}
-    </p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm"
-            hx-get="/web/stacks{{if .Filtered}}?q={{.Query | urlquery}}{{end}}"
-            hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
-      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
-    </button>
-    <a class="btn btn-primary btn-sm" href="/web/deploy"
-       hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.deploy"}}">
-      {{icon "deploy"}}<span>{{T "nav.deploy"}}</span>
-    </a>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "stacks.title") "Sub" (partial "stacks_sub" .) "Actions" (partial "stacks_actions" .))}}
 
 {{if .ErrKey}}
-<div class="banner bad">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T .ErrKey}}</p>
-    <p>{{T "err.banner_body"}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-  <div class="b-actions">
-    <a class="btn btn-ghost btn-sm" href="/web/settings"
-       hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">
-      {{icon "settings"}}<span>{{T "nav.settings"}}</span>
-    </a>
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/stacks")}}
 {{end}}
 
 {{if .MsgKey}}
-<div class="banner ok">
-  {{icon "check-circle"}}
-  <div class="b-body">
-    <p class="b-title">{{TF .MsgKey .MsgArg0 .MsgArg1 .MsgArg2}}</p>
-  </div>
-  <div class="b-actions">
-    <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.banner').remove()" data-tip="{{T "common.dismiss"}}" aria-label="{{T "common.dismiss"}}">
-      {{icon "close"}}<span class="sr-only">{{T "common.dismiss"}}</span>
-    </button>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (TF .MsgKey .MsgArg0 .MsgArg1 .MsgArg2) "Dismiss" true)}}
 {{end}}
 
 <div class="stats">
-  <div class="stat{{if not .Known}} is-unknown{{end}}">
-    <span class="stat-l">{{T "stacks.stat_stacks"}}</span>
-    <span class="stat-v">{{if .Known}}{{.Total}}{{else}}{{T "common.unavailable"}}{{end}}</span>
-    <span class="stat-f">{{T "stacks.stat_stacks_f"}}</span>
-  </div>
-  <div class="stat{{if not .ServicesKnown}} is-unknown{{end}}">
-    <span class="stat-l">{{T "stacks.stat_replicas"}}</span>
-    <span class="stat-v">
-      {{- if .ServicesKnown -}}
-        {{N .TotalRunning}}<span class="muted"> / {{N .TotalDesired}}</span>
-      {{- else -}}
-        {{T "common.unavailable"}}
-      {{- end -}}
-    </span>
-    <span class="stat-f">{{T "stacks.stat_replicas_f"}}</span>
-  </div>
-  <div class="stat{{if not .Known}} is-unknown{{end}}">
-    <span class="stat-l">{{T "stacks.stat_git"}}</span>
-    <span class="stat-v">{{if .Known}}{{.RepoCount}}{{else}}{{T "common.unavailable"}}{{end}}</span>
-    <span class="stat-f">{{T "stacks.stat_git_f"}}</span>
-  </div>
-  <div class="stat{{if not .Known}} is-unknown{{end}}">
-    <span class="stat-l">{{T "stacks.stat_changed"}}</span>
-    <span class="stat-v stat-text">{{if and .Known .LastUpdated}}<bdi>{{ts .LastUpdated}}</bdi>{{else}}{{T "common.never"}}{{end}}</span>
-    <span class="stat-f">{{T "stacks.stat_changed_f"}}</span>
-  </div>
+  {{template "stat" (dict "Class" (partial "stacks_cls" .) "Label" (T "stacks.stat_stacks") "Value" (partial "stacks_value" .) "Foot" (T "stacks.stat_stacks_f"))}}
+  {{template "stat" (dict "Class" (partial "stacks_cls2" .) "Label" (T "stacks.stat_replicas") "Value" (partial "stacks_value2" .) "Foot" (T "stacks.stat_replicas_f"))}}
+  {{template "stat" (dict "Class" (partial "stacks_cls3" .) "Label" (T "stacks.stat_git") "Value" (partial "stacks_value3" .) "Foot" (T "stacks.stat_git_f"))}}
+  {{template "stat" (dict "Class" (partial "stacks_cls4" .) "Label" (T "stacks.stat_changed") "Value" (partial "stacks_value4" .) "ValueClass" "stat-text" "Foot" (T "stacks.stat_changed_f"))}}
 </div>
 
 <form class="toolbar" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
@@ -105,40 +34,14 @@
     {{icon "close"}}<span>{{T "stacks.clear_filter"}}</span>
   </a>
   {{end}}
-  <span class="spacer"></span>
-  {{if .Known}}<span class="pill plain">{{P .Total "plural.stacks"}}</span>{{end}}
 </form>
 
 <section class="panel">
-  <div class="panel-head">
-    <h2>{{T "stacks.list_title"}}</h2>
-    <div class="ph-actions">
-      {{if .Known}}
-        <span class="pill plain">{{P .Count "plural.stacks"}}</span>
-      {{else}}
-        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
-      {{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "stacks.list_title") "Actions" (partial "stacks_pactions" .))}}
 
   {{if not .Known}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "alert"}}
-      <h3>{{T "stacks.unknown_title"}}</h3>
-      <p>{{T "stacks.unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm"
-                hx-get="/web/stacks{{if .Filtered}}?q={{.Query | urlquery}}{{end}}"
-                hx-target="#view" hx-push-url="true" data-tip="{{T "common.retry"}}">
-          {{icon "refresh"}}<span>{{T "common.retry"}}</span>
-        </button>
-        <a class="btn btn-ghost btn-sm" href="/web/settings"
-           hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">
-          {{icon "settings"}}<span>{{T "nav.settings"}}</span>
-        </a>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "alert" "Title" (T "stacks.unknown_title") "Body" (T "stacks.unknown_body") "Action" (partial "stacks_action2" .))}}
   </div>
   {{else if .Count}}
   <div class="table-wrap only-md">
@@ -158,11 +61,13 @@
         {{range .Stacks}}
         <tr>
           <td>
-            <a class="btn-link" href="/web/stacks/{{.Name}}"
-               hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">
-              <span class="mono">{{.Name}}</span>
-            </a>
-            {{if .LastError}}<span class="pill bad" title="{{.LastError}}"><i class="dot"></i>{{T "st.deploy_failed"}}</span>{{end}}
+            <div class="cell-stack">
+              <a class="btn-link" href="/web/stacks/{{.Name}}"
+                 hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">
+                <span class="mono">{{.Name}}</span>
+              </a>
+              {{if .LastError}}<span class="pill bad" title="{{.LastError}}"><i class="dot"></i>{{T "st.deploy_failed"}}</span>{{end}}
+            </div>
           </td>
           <td><span class="mono num" dir="ltr">{{N0 .CurrentRevision}}</span></td>
           <td>
@@ -217,24 +122,12 @@
 
   <div class="only-sm">
     {{range .Stacks}}
-    <div class="kv">
-      <div class="kv-row">
-        <span class="k">{{T "common.name"}}</span>
-        <span class="v">
-          <a class="btn-link" href="/web/stacks/{{.Name}}"
-             hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true">
-            <span class="mono">{{.Name}}</span>
-          </a>
+    <div class="kv stack-card">
+      <div class="stack-card-head">
+        <a class="btn-link stack-card-name" href="/web/stacks/{{.Name}}" hx-get="/web/stacks/{{.Name}}" hx-target="#view" hx-push-url="true"><span class="mono">{{.Name}}</span></a>
+        <div class="stack-card-badges">
           {{if .LastError}}<span class="pill bad" title="{{.LastError}}"><i class="dot"></i>{{T "st.deploy_failed"}}</span>{{end}}
-        </span>
-      </div>
-      <div class="kv-row">
-        <span class="k">{{T "common.revision"}}</span>
-        <span class="v mono num" dir="ltr">{{N0 .CurrentRevision}}</span>
-      </div>
-      <div class="kv-row">
-        <span class="k">{{T "common.status"}}</span>
-        <span class="v">
+
           {{if $.ServicesKnown}}
             {{if eq .State "none"}}
               <span class="pill plain">{{T "stacks.state_none"}}</span>
@@ -246,7 +139,11 @@
           {{else}}
             <span class="pill plain">{{T "common.unavailable"}}</span>
           {{end}}
-        </span>
+        </div>
+      </div>
+      <div class="kv-row">
+        <span class="k">{{T "common.revision"}}</span>
+        <span class="v mono num" dir="ltr">{{N0 .CurrentRevision}}</span>
       </div>
       <div class="kv-row">
         <span class="k">{{T "stacks.col_repo"}}</span>
@@ -254,13 +151,13 @@
       </div>
       <div class="kv-row">
         <span class="k">{{T "stacks.col_file"}}</span>
-        <span class="v">{{if .SourceFile}}<span class="mono iso">{{.SourceFile}}</span>{{else}}<span class="muted">{{T "stacks.file_unset"}}</span>{{end}}</span>
+        <span class="v">{{if .SourceFile}}<span class="mono iso trunc" title="{{.SourceFile}}">{{.SourceFile}}</span>{{else}}<span class="muted">{{T "stacks.file_unset"}}</span>{{end}}</span>
       </div>
       <div class="kv-row">
         <span class="k">{{T "common.updated"}}</span>
         <span class="v muted num">{{if .UpdatedAt}}{{ts .UpdatedAt}}{{else}}—{{end}}</span>
       </div>
-      <div class="action-bar">
+      <div class="action-bar stack-card-actions">
         <form hx-post="/web/stacks/{{.Name}}/sync" hx-target="#view"
               hx-confirm="{{TF "stacks.confirm_sync" .Name}}" hx-disabled-elt="find [type='submit']">
           <button type="submit" class="btn btn-sm" style="min-height:44px" data-tip="{{T "stacks.act_redeploy"}}">
@@ -287,35 +184,75 @@
   </div>
   {{else if .Filtered}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "search"}}
-      <h3>{{TF "stacks.no_match_title" .Query}}</h3>
-      <p>{{T "stacks.no_match_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
-          {{T "stacks.clear_filter"}}
-        </a>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "search" "Title" (TF "stacks.no_match_title" .Query) "Body" (T "stacks.no_match_body") "Action" (partial "stacks_action3" .))}}
   </div>
   {{else}}
   <div class="panel-body">
-    <div class="empty">
-      {{icon "stacks"}}
-      <h3>{{T "stacks.empty_title"}}</h3>
-      <p>{{T "stacks.empty_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-primary btn-sm" href="/web/deploy"
+    {{template "empty" (dict "Icon" "stacks" "Title" (T "stacks.empty_title") "Body" (T "stacks.empty_body") "Action" (partial "stacks_action4" .))}}
+  </div>
+  {{end}}
+</section>
+{{end}}
+
+{{define "stacks_sub"}}{{- if .Known -}}
+        {{- if .Filtered -}}
+          {{TF "stacks.showing" (P .Count "plural.stacks") (P .Total "plural.stacks")}}
+        {{- else -}}
+          {{TF "stacks.sub" (P .Total "plural.stacks") (ts .LastUpdated)}}
+        {{- end -}}
+      {{- else -}}
+        {{T "stacks.sub_unknown"}}
+      {{- end -}}{{end}}
+
+{{define "stacks_actions"}}{{$u := "/web/stacks"}}{{if .Filtered}}{{$u = printf "/web/stacks?q=%s" (urlquery .Query)}}{{end}}
+    {{template "refreshbtn" (dict "URL" $u)}}
+    <a class="btn btn-primary btn-sm" href="/web/deploy"
+       hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.deploy"}}">
+      {{icon "deploy"}}<span>{{T "nav.deploy"}}</span>
+    </a>{{end}}
+
+{{define "stacks_action2"}}{{$u := "/web/stacks"}}{{if .Filtered}}{{$u = printf "/web/stacks?q=%s" (urlquery .Query)}}{{end}}
+        {{template "refreshbtn" (dict "URL" $u "Label" "retry")}}
+        <a class="btn btn-ghost btn-sm" href="/web/settings"
+           hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">
+          {{icon "settings"}}<span>{{T "nav.settings"}}</span>
+        </a>{{end}}
+
+{{define "stacks_action3"}}<a class="btn btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
+          {{T "stacks.clear_filter"}}
+        </a>{{end}}
+
+{{define "stacks_action4"}}<a class="btn btn-primary btn-sm" href="/web/deploy"
            hx-get="/web/deploy" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.deploy"}}">
           {{icon "deploy"}}<span>{{T "nav.deploy"}}</span>
         </a>
         <a class="btn btn-ghost btn-sm" href="/web/webhooks"
            hx-get="/web/webhooks" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.webhooks"}}">
           {{icon "webhooks"}}<span>{{T "nav.webhooks"}}</span>
-        </a>
-      </div>
-    </div>
-  </div>
-  {{end}}
-</section>
-{{end}}
+        </a>{{end}}
+
+{{define "stacks_pactions"}}{{if .Known}}
+        <span class="pill plain">{{P .Count "plural.stacks"}}</span>
+      {{else}}
+        <span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>
+      {{end}}{{end}}
+
+{{define "stacks_cls"}}{{if not .Known}} is-unknown{{end}}{{end}}
+
+{{define "stacks_value"}}{{if .Known}}{{.Total}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "stacks_cls2"}}{{if not .ServicesKnown}} is-unknown{{end}}{{end}}
+
+{{define "stacks_value2"}}{{- if .ServicesKnown -}}
+        {{N .TotalRunning}}<span class="muted"> / {{N .TotalDesired}}</span>
+      {{- else -}}
+        {{T "common.unavailable"}}
+      {{- end -}}{{end}}
+
+{{define "stacks_cls3"}}{{if not .Known}} is-unknown{{end}}{{end}}
+
+{{define "stacks_value3"}}{{if .Known}}{{.RepoCount}}{{else}}{{T "common.unavailable"}}{{end}}{{end}}
+
+{{define "stacks_cls4"}}{{if not .Known}} is-unknown{{end}}{{end}}
+
+{{define "stacks_value4"}}{{if and .Known .LastUpdated}}<bdi>{{ts .LastUpdated}}</bdi>{{else}}{{T "common.never"}}{{end}}{{end}}

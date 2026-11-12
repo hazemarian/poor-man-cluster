@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -10,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	htmltemplate "html/template"
 	"math/big"
 	"path/filepath"
 	"regexp"
@@ -435,12 +437,26 @@ func TestLoadComposeFile_SSOStack(t *testing.T) {
 		SSOGitHubOrg:    "nextrum-s",
 		SSOGitHubRepos:  "nextrum-s/donation-campaign,nextrum-s/donation-campaign-frontend",
 		SSOCookieExpire: "1h",
+
+		SSOSignInConfigName: "pmcluster_sso_signin_ab12cd34",
+		SSOErrorConfigName:  "pmcluster_sso_error_ab12cd34",
 	}
 	data, err := LoadComposeFile(StackSSO, in)
 	if err != nil {
 		t.Fatalf("LoadComposeFile(StackSSO): %v", err)
 	}
 	body := string(data)
+
+	// The branded pages are mounted from their versioned configs.
+	for _, want := range []string{
+		"OAUTH2_PROXY_CUSTOM_TEMPLATES_DIR",
+		"pmcluster_sso_signin_ab12cd34", "/etc/oauth2-templates/sign_in.html",
+		"pmcluster_sso_error_ab12cd34", "/etc/oauth2-templates/error.html",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("sso stack missing %q:\n%s", want, body)
+		}
+	}
 
 	// The DSL pipeline renders env and labels as YAML maps (values may be
 	// wrapped or quoted by the marshaler), so assert on the parsed structure.
@@ -767,7 +783,7 @@ func TestEveryRenderedConfigHasANameAlias(t *testing.T) {
 			continue
 		}
 		// The alias must actually yield the versioned name when it is known.
-		got := fn(RenderInput{OTelConfigName: "X", TraefikConfigName: "X", ObservabilityProvisionConfigName: "X"})
+		got := fn(RenderInput{OTelConfigName: "X", TraefikConfigName: "X", ObservabilityProvisionConfigName: "X", SSOSignInConfigName: "X", SSOErrorConfigName: "X"})
 		if got == "" {
 			t.Errorf("configNameAliases[%q] returned empty for a RenderInput with every name set "+
 				"(a stack rendered before EnsureRenderedConfigs would silently reference an unversioned config)",
@@ -2065,6 +2081,38 @@ func TestBackupStackNoLongerShipsThePerVolumeArchiver(t *testing.T) {
 	for _, want := range []string{"control-plane-backup", "BACKUP_CRON_EXPRESSION"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("backup stack lost %q:\n%s", want, body)
+		}
+	}
+}
+
+// TestSSOPagesParseAsOAuth2ProxyTemplates guards the two branded pages: each must
+// parse as a Go html/template that defines the name oauth2-proxy looks up, and
+// execute against the variables oauth2-proxy supplies.
+func TestSSOPagesParseAsOAuth2ProxyTemplates(t *testing.T) {
+	cases := []struct {
+		render func(RenderInput) ([]byte, error)
+		name   string
+		data   map[string]any
+		want   string
+	}{
+		{RenderSSOSignIn, "sign_in.html", map[string]any{"ProxyPrefix": "/oauth2", "Redirect": "/x", "ProviderName": "GitHub", "SignInMessage": "", "Footer": ""}, `action="/oauth2/start"`},
+		{RenderSSOError, "error.html", map[string]any{"ProxyPrefix": "/oauth2", "Redirect": "/", "Title": "Permission Denied", "Message": "no", "StatusCode": 403, "RequestID": "r1"}, "Permission Denied"},
+	}
+	for _, c := range cases {
+		b, err := c.render(RenderInput{})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		tpl, err := htmltemplate.New("").Parse(string(b))
+		if err != nil {
+			t.Fatalf("%s does not parse: %v", c.name, err)
+		}
+		var out bytes.Buffer
+		if err := tpl.ExecuteTemplate(&out, c.name, c.data); err != nil {
+			t.Fatalf("%s does not execute: %v", c.name, err)
+		}
+		if !strings.Contains(out.String(), c.want) {
+			t.Errorf("%s missing %q", c.name, c.want)
 		}
 	}
 }

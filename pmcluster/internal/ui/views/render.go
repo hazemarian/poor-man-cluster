@@ -114,6 +114,12 @@ func NewRenderer() (*Renderer, error) {
 		"tb":   toBytes,
 		"sp":   statusPill,
 		"icon": icon,
+		// dict builds a map for {{template "banner" (dict "Tone" "bad" ...)}}: a
+		// template takes one argument, so shared components take a keyed bag.
+		"dict": dict,
+		// partial renders a named template to HTML so a shared component can take a
+		// caller-supplied block (a banner's list, a card's actions). Rebound per request.
+		"partial": func(name string, data any) (template.HTML, error) { return "", nil },
 		// WebBase is the console mount prefix; templates use it for links
 		// back into the app shell (login/setup/terminal are standalone docs
 		// that do not render inside the shell's base URL context).
@@ -160,6 +166,13 @@ func (r *Renderer) withRequest(c *gin.Context) *template.Template {
 	}
 	l := Localize(c)
 	return t.Funcs(template.FuncMap{
+		"partial": func(name string, data any) (template.HTML, error) {
+			var b strings.Builder
+			if err := t.ExecuteTemplate(&b, name, data); err != nil {
+				return "", err
+			}
+			return template.HTML(b.String()), nil
+		},
 		"T":  l.T,
 		"TN": l.TN,
 		"TF": l.TF,
@@ -321,4 +334,20 @@ func compactNum(n int64, one func(float64) string, plain func(int64) string) str
 		return one(float64(n)/1e3) + "k"
 	}
 	return plain(n)
+}
+
+// dict pairs up its arguments into a map for shared template components.
+func dict(kv ...any) (map[string]any, error) {
+	if len(kv)%2 != 0 {
+		return nil, fmt.Errorf("dict: odd number of arguments")
+	}
+	m := make(map[string]any, len(kv)/2)
+	for i := 0; i < len(kv); i += 2 {
+		k, ok := kv[i].(string)
+		if !ok {
+			return nil, fmt.Errorf("dict: key %v is not a string", kv[i])
+		}
+		m[k] = kv[i+1]
+	}
+	return m, nil
 }

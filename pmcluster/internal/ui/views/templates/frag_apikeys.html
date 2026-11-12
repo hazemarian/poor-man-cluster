@@ -5,43 +5,20 @@
 
      A token is shown exactly once, in the panel right after creation, and only as a
      prefix anywhere else: the daemon stores a hash, so no page can re-display it. */}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "apikeys.title"}}</h1>
-    <p class="sub">{{T "apikeys.sub"}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">
-      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
-    </button>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "apikeys.title") "Sub" (T "apikeys.sub") "Refresh" "/web/apikeys")}}
 
 {{if .ErrKey}}
-<div class="banner bad">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T .ErrKey}}</p>
-    <p>{{T "err.banner_body"}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-  <div class="b-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/apikeys")}}
 {{end}}
 
 {{if .MsgKey}}
-<div class="msg ok">{{TF .MsgKey .MsgArg}}</div>
+{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (TF .MsgKey .MsgArg))}}
 {{end}}
 
 {{/* The one and only moment the full token exists in the console. */}}
 {{if .Token}}
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{TF "apikeys.token_title" .TokenName}}</h2>
-    <div class="ph-actions"><span class="pill warn"><i class="dot"></i>{{T "apikeys.once_only"}}</span></div>
-  </div>
+  {{template "panelhead" (dict "Title" (TF "apikeys.token_title" .TokenName) "Actions" (partial "apikeys_pactions" .))}}
   <div class="panel-body">
     <p>{{T "apikeys.token_body"}}</p>
     <div class="input-group">
@@ -59,9 +36,7 @@
 {{end}}
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "apikeys.create_title"}}</h2>
-  </div>
+  {{template "panelhead" (dict "Title" (T "apikeys.create_title"))}}
   <div class="panel-body">
     <form hx-post="/web/apikeys" hx-target="#view" hx-swap="innerHTML" hx-disabled-elt="find [type='submit']">
       <div class="field">
@@ -77,24 +52,11 @@
 </div>
 
 <div class="panel">
-  <div class="panel-head">
-    <h2>{{T "apikeys.keys_title"}}</h2>
-    <div class="ph-actions">
-      {{if .Known}}<span class="pill plain">{{P .Count "plural.api_keys"}}</span>
-      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}
-    </div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "apikeys.keys_title") "Actions" (partial "apikeys_pactions2" .))}}
 
   <div class="panel-body tight">
     {{if not .Configured}}
-    <div class="empty">
-      <i class="ic">{{icon "settings"}}</i>
-      <h3>{{T "err.api_not_configured"}}</h3>
-      <p>{{T "apikeys.not_configured_body"}}</p>
-      <div class="empty-actions">
-        <a class="btn btn-primary btn-sm" href="/web/settings" hx-get="/web/settings" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.settings"}}">{{icon "settings"}}<span>{{T "nav.settings"}}</span></a>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "settings" "Title" (T "err.api_not_configured") "Body" (T "apikeys.not_configured_body") "Settings" true)}}
     {{else if .Known}}
       {{if .Keys}}
       <div class="table-wrap only-md">
@@ -147,24 +109,10 @@
         {{end}}
       </div>
       {{else}}
-      <div class="empty">
-        <i class="ic">{{icon "keys"}}</i>
-        <h3>{{T "apikeys.empty_title"}}</h3>
-        <p>{{T "apikeys.empty_body"}}</p>
-        <div class="empty-actions">
-          <button type="button" class="btn btn-primary btn-sm" data-focus onclick="document.getElementById('apikey-name').focus()">{{T "apikeys.new"}}</button>
-        </div>
-      </div>
+      {{template "empty" (dict "Icon" "keys" "Title" (T "apikeys.empty_title") "Body" (T "apikeys.empty_body") "Action" (partial "apikeys_action" .))}}
       {{end}}
     {{else}}
-    <div class="empty">
-      <i class="ic">{{icon "alert"}}</i>
-      <h3>{{T "apikeys.unknown_title"}}</h3>
-      <p>{{T "apikeys.unknown_body"}}</p>
-      <div class="empty-actions">
-        <button type="button" class="btn btn-sm" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-      </div>
-    </div>
+    {{template "empty" (dict "Icon" "alert" "Title" (T "apikeys.unknown_title") "Body" (T "apikeys.unknown_body") "Retry" "/web/apikeys")}}
     {{end}}
   </div>
 
@@ -173,3 +121,10 @@
   </div>
 </div>
 {{end}}
+
+{{define "apikeys_action"}}<button type="button" class="btn btn-primary btn-sm" data-focus onclick="document.getElementById('apikey-name').focus()">{{T "apikeys.new"}}</button>{{end}}
+
+{{define "apikeys_pactions"}}<span class="pill warn"><i class="dot"></i>{{T "apikeys.once_only"}}</span>{{end}}
+
+{{define "apikeys_pactions2"}}{{if .Known}}<span class="pill plain">{{P .Count "plural.api_keys"}}</span>
+      {{else}}<span class="pill warn"><i class="dot"></i>{{T "common.unavailable"}}</span>{{end}}{{end}}

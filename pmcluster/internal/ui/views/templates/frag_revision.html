@@ -11,31 +11,16 @@
 </div>
 
 {{if .ErrKey}}
-<div class="banner bad mt-24">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T .ErrKey}}</p>
-    <p>{{T "err.banner_body"}}</p>
-    {{if .ErrRaw}}<details class="details"><summary>{{T "err.show_details"}}</summary><pre>{{.ErrRaw}}</pre></details>{{end}}
-  </div>
-</div>
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Class" "mt-24")}}
 {{else}}
 <p class="sub">{{TF "revision.sub" (ts .Created)}}</p>
 
 {{if .Error}}
-<div class="banner bad mt-24">
-  {{icon "alert"}}
-  <div class="b-body">
-    <p class="b-title">{{T "stack.deploy_failed"}}</p>
-    <p class="muted">{{.Error}}</p>
-  </div>
-</div>
+{{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" (T "stack.deploy_failed") "Muted" .Error "Class" "mt-24")}}
 {{end}}
 
 <div class="panel mt-24">
-  <div class="panel-head">
-    <h2>{{T "revision.pipeline"}}</h2>
-  </div>
+  {{template "panelhead" (dict "Title" (T "revision.pipeline"))}}
   <div class="panel-body">
     {{if .Steps}}
     <ol class="pipeline">

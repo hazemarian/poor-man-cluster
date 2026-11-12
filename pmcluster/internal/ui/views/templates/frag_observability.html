@@ -1,35 +1,15 @@
 {{define "observability"}}
-<div class="page-head">
-  <div class="ph-text">
-    <h1>{{T "nav.observability"}}</h1>
-    <p class="sub">{{T "observability.sub"}}</p>
-  </div>
-  <div class="ph-actions">
-    <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability?tab={{.Tab}}&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true" hx-disabled-elt="this" data-tip="{{T "common.refresh"}}">
-      {{icon "refresh"}}<span>{{T "common.refresh"}}</span>
-    </button>
-  </div>
-</div>
+{{template "pagehead" (dict "Title" (T "nav.observability") "Sub" (T "observability.sub") "Actions" (partial "observability_actions" .))}}
 
-{{if .ErrKey}}
-<div class="banner {{if eq .ErrKey "observability.invalid_service"}}warn{{else}}bad{{end}}">
-  <div class="b-body">
-    <p class="b-title">{{icon "alert"}}<span>{{T .ErrKey}}</span></p>
-    <p>{{T "observability.banner_body"}}</p>
-  </div>
-</div>
-{{end}}
-
-<div class="obs-bar">
+<div class="obs-bar" data-tab="{{.Tab}}">
   <nav class="seg obs-tabs" aria-label="{{T "obs.tabs_label"}}">
-    <a href="/web/observability?tab=overview&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "overview"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_overview"}}</a>
-    <a href="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "logs"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_logs"}}</a>
-    <a href="/web/observability?tab=metrics&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=metrics&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "metrics"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_metrics"}}</a>
-    <a href="/web/observability?tab=traces&amp;range={{.Range}}" hx-get="/web/observability?tab=traces&amp;range={{.Range}}" hx-target="#view" hx-push-url="true"{{if eq .Tab "traces"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_traces"}}</a>
+    <a href="/web/observability?tab=overview&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;service={{urlquery .Service}}" hx-include="#observability-range" hx-target="#obs-main" hx-select="#obs-main" hx-swap="outerHTML" hx-push-url="true" hx-on::before-request="nxObsTab(this)"{{if eq .Tab "overview"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_overview"}}</a>
+    <a href="/web/observability?tab=logs&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=logs&amp;service={{urlquery .Service}}" hx-include="#observability-range" hx-target="#obs-main" hx-select="#obs-main" hx-swap="outerHTML" hx-push-url="true" hx-on::before-request="nxObsTab(this)"{{if eq .Tab "logs"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_logs"}}</a>
+    <a href="/web/observability?tab=metrics&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-get="/web/observability?tab=metrics&amp;service={{urlquery .Service}}" hx-include="#observability-range" hx-target="#obs-main" hx-select="#obs-main" hx-swap="outerHTML" hx-push-url="true" hx-on::before-request="nxObsTab(this)"{{if eq .Tab "metrics"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_metrics"}}</a>
+    <a href="/web/observability?tab=traces&amp;range={{.Range}}" hx-get="/web/observability?tab=traces" hx-include="#observability-range" hx-target="#obs-main" hx-select="#obs-main" hx-swap="outerHTML" hx-push-url="true" hx-on::before-request="nxObsTab(this)"{{if eq .Tab "traces"}} class="is-active" aria-current="page"{{end}}>{{T "obs.tab_traces"}}</a>
   </nav>
-  {{if and (ne .Tab "logs") (ne .Tab "traces")}}
-  <form class="obs-filters" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, change from:select">
-    <input type="hidden" name="tab" value="{{.Tab}}">
+  <form class="obs-filters" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#obs-main" hx-select="#obs-main" hx-swap="outerHTML" hx-push-url="true" hx-trigger="submit, change from:select">
+    <input type="hidden" name="tab" value="{{.Tab}}" id="obs-tab-input">
     <div class="field">
       <label class="sr-only" for="observability-range">{{T "observability.filter_range"}}</label>
       <select id="observability-range" name="range" class="finput">
@@ -38,13 +18,17 @@
     </div>
     <noscript><button type="submit" class="btn btn-primary">{{T "observability.apply_filters"}}</button></noscript>
   </form>
-  {{end}}
 </div>
 
+<div id="obs-main">
+{{if .ErrKey}}
+{{template "banner" (dict "Tone" (or (and (eq .ErrKey "observability.invalid_service") "warn") "bad") "Icon" "alert" "Title" (T .ErrKey) "Body" (T "observability.banner_body"))}}
+{{end}}
 {{if eq .Tab "logs"}}{{template "observabilitylogs" .}}
 {{else if eq .Tab "metrics"}}{{template "observabilitymetrics" .}}
 {{else if eq .Tab "traces"}}{{template "observabilitytraces" .}}
 {{else}}{{template "observabilityoverview" .}}{{end}}
+</div>
 
 {{end}}
 
@@ -54,56 +38,22 @@
 <div id="observability-summary" class="obs-summary">
   <div class="load-overlay" aria-hidden="true"><span class="spinner"></span></div>
   <div class="stats obs-kpis">
-    {{if .Health.NodesKnown}}<div class="stat">
-      <div class="stat-l">{{T "observability.nodes_ready"}}</div>
-      <div class="stat-v iso" dir="ltr">{{N .Health.NodesReady}} / {{N .Health.NodesTotal}}</div>
-      <div class="stat-f">{{T "observability.nodes_foot"}}</div>
-    </div>{{end}}
-    {{if and .Health.ServicesKnown .Health.ServicesDesiredKnown}}<div class="stat">
-      <div class="stat-l">{{T "observability.services_ready"}}</div>
-      <div class="stat-v iso" dir="ltr">{{N .Health.ServicesReady}} / {{N .Health.ServicesTotal}}</div>
-      <div class="stat-f">{{T "observability.services_foot"}}</div>
-    </div>{{end}}
-    {{if .Dash.Volume.Known}}<div class="stat">
-      <div class="stat-l">{{T "obs.kpi_logs"}}</div>
-      <div class="stat-v iso" dir="ltr">{{compact .Dash.Volume.Total}}</div>
-      <div class="stat-f">{{T "obs.kpi_logs_foot"}}</div>
-    </div>
-    <div class="stat{{if gt .Dash.Volume.Errors 0}} is-bad{{end}}">
-      <div class="stat-l">{{T "obs.kpi_errors"}}</div>
-      <div class="stat-v iso" dir="ltr">{{if .Dash.Volume.Total}}{{.Dash.Volume.ErrPctText}}{{else}}—{{end}}</div>
-      <div class="stat-f"><bdi class="iso" dir="ltr">{{compact .Dash.Volume.Errors}}</bdi> {{T "obs.kpi_errors_foot"}}</div>
-    </div>{{end}}
-    {{if .Dash.TraceKPI.Known}}<div class="stat{{if gt .Dash.TraceKPI.ErrTraces 0}} is-bad{{end}}">
-      <div class="stat-l">{{T "obs.tab_traces"}}</div>
-      <div class="stat-v iso" dir="ltr">{{N .Dash.TraceKPI.Traces}}</div>
-      <div class="stat-f">{{if .Dash.TraceKPI.ErrTraces}}<bdi class="iso" dir="ltr">{{N .Dash.TraceKPI.ErrTraces}}</bdi> {{T "obs.kpi_traces_err"}}{{else}}{{T "obs.kpi_traces_ok"}}{{end}}</div>
-    </div>{{end}}
-    {{if .Health.DeficitKnown}}<div class="stat">
-      <div class="stat-l">{{T "observability.replica_deficit"}}</div>
-      <div class="stat-v">{{N .Health.ReplicaDeficit}}</div>
-      <div class="stat-f">{{T "observability.replica_deficit_foot"}}</div>
-    </div>{{end}}
-    {{if .Health.BackupsKnown}}<div class="stat">
-      <div class="stat-l">{{T "observability.backup_age"}}</div>
-      <div class="stat-v">{{if .Health.BackupHasVerified}}{{N .Health.BackupAgeDays}} {{T "observability.days"}}{{else}}{{T "observability.no_verified_backup"}}{{end}}</div>
-      <div class="stat-f">{{T "observability.backup_age_foot"}}</div>
-    </div>{{end}}
-    {{if .Health.TLSKnown}}<div class="stat">
-      <div class="stat-l">{{T "observability.tls_expiry"}}</div>
-      <div class="stat-v">{{if not .Health.TLSHasCertificate}}{{T "observability.no_certificate"}}{{else if .Health.TLSExpired}}<span class="pill bad">{{T "observability.expired"}}</span>{{else}}{{N .Health.TLSDays}} {{T "observability.days"}}{{end}}</div>
-      <div class="stat-f">{{T "observability.tls_expiry_foot"}}{{if .Health.TLSPartial}} · {{T "observability.partial"}}{{end}}</div>
-    </div>{{end}}
+    {{if .Health.NodesKnown}}{{template "stat" (dict "Label" (T "observability.nodes_ready") "Value" (partial "observability_value" .) "ValueClass" "iso" "ValueDir" "ltr" "Foot" (T "observability.nodes_foot"))}}{{end}}
+    {{if and .Health.ServicesKnown .Health.ServicesDesiredKnown}}{{template "stat" (dict "Label" (T "observability.services_ready") "Value" (partial "observability_value2" .) "ValueClass" "iso" "ValueDir" "ltr" "Foot" (T "observability.services_foot"))}}{{end}}
+    {{if .Dash.Volume.Known}}{{template "stat" (dict "Label" (T "obs.kpi_logs") "Value" (compact .Dash.Volume.Total) "ValueClass" "iso" "ValueDir" "ltr" "Foot" (T "obs.kpi_logs_foot"))}}
+    {{template "stat" (dict "Class" (partial "observability_cls" .) "Label" (T "obs.kpi_errors") "Value" (partial "observability_value3" .) "ValueClass" "iso" "ValueDir" "ltr" "Foot" (partial "observability_foot" .))}}{{end}}
+    {{if .Dash.TraceKPI.Known}}{{template "stat" (dict "Class" (partial "observability_cls2" .) "Label" (T "obs.tab_traces") "Value" (N .Dash.TraceKPI.Traces) "ValueClass" "iso" "ValueDir" "ltr" "Foot" (partial "observability_foot2" .))}}{{end}}
+    {{if .Health.DeficitKnown}}{{template "stat" (dict "Label" (T "observability.replica_deficit") "Value" (N .Health.ReplicaDeficit) "Foot" (T "observability.replica_deficit_foot"))}}{{end}}
+    {{if .Health.BackupsKnown}}{{template "stat" (dict "Label" (T "observability.backup_age") "Value" (partial "observability_value4" .) "Foot" (T "observability.backup_age_foot"))}}{{end}}
+    {{if .Health.TLSKnown}}{{template "stat" (dict "Label" (T "observability.tls_expiry") "Value" (partial "observability_value5" .) "Foot" (partial "observability_foot3" .))}}{{end}}
   </div>
 
   <div class="obs-dash">
     <section class="panel">
-      <div class="panel-head"><div><h2>{{T "obs.volume_title"}}</h2><p class="sub">{{T "obs.volume_sub"}} {{T "obs.volume_scale"}}</p></div>
-        <div class="ph-actions obs-legend" aria-hidden="true"><span class="lg info">{{T "obs.level_info"}}</span><span class="lg warn">{{T "obs.level_warn"}}</span><span class="lg err">{{T "obs.level_error"}}</span></div>
-      </div>
+      {{template "panelhead" (dict "Title" (T "obs.volume_title") "Sub" (printf "%s %s" (T "obs.volume_sub") (T "obs.volume_scale")) "Actions" (partial "observability_legend" .) "ActionsClass" "obs-legend" "ActionsHidden" true)}}
       <div class="panel-body">
-        {{if not .Dash.Volume.Known}}<div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "obs.metrics_unavailable"}}</p></div>
-        {{else if not .Dash.Volume.Bars}}<div class="empty"><h3>{{T "observability.evidence_empty_title"}}</h3><p>{{T "observability.evidence_empty_body"}}</p></div>
+        {{if not .Dash.Volume.Known}}{{template "empty" (dict "Title" (T "observability.telemetry_unavailable") "Body" (T "obs.metrics_unavailable"))}}
+        {{else if not .Dash.Volume.Bars}}{{template "empty" (dict "Title" (T "observability.evidence_empty_title") "Body" (T "observability.evidence_empty_body"))}}
         {{else}}
         <div class="obs-volume" dir="ltr">
           <span class="obs-vmax mono">{{.Dash.Volume.MaxText}}</span>
@@ -122,12 +72,10 @@
     </section>
 
     <section class="panel">
-      <div class="panel-head"><div><h2>{{T "obs.top_errors"}}</h2><p class="sub">{{T "obs.top_errors_sub"}}</p></div>
-        <div class="ph-actions"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=logs&amp;severity=error&amp;range={{.Range}}" hx-get="/web/observability?tab=logs&amp;severity=error&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.view_logs"}}</a></div>
-      </div>
+      {{template "panelhead" (dict "Title" (T "obs.top_errors") "Sub" (T "obs.top_errors_sub") "Actions" (partial "observability_pactions" .))}}
       <div class="panel-body tight">
-        {{if not .Dash.TopOK}}<div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3></div>
-        {{else if not .Dash.TopErrors}}<div class="empty obs-allgood"><h3>{{T "obs.no_errors"}}</h3><p>{{T "obs.no_errors_body"}}</p></div>
+        {{if not .Dash.TopOK}}{{template "empty" (dict "Title" (T "observability.telemetry_unavailable"))}}
+        {{else if not .Dash.TopErrors}}{{template "empty" (dict "Title" (T "obs.no_errors") "Body" (T "obs.no_errors_body") "Class" "obs-allgood")}}
         {{else}}
         <ol class="obs-toperr">
           {{range .Dash.TopErrors}}
@@ -141,17 +89,12 @@
   </div>
 
   <section class="panel">
-    <div class="panel-head">
-      <h2>{{T "observability.nodes_title"}}</h2>
-      <div class="ph-actions">
-        <button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability/summary?range={{.Range}}" hx-target="#observability-summary" hx-swap="outerHTML" hx-indicator="#observability-summary .load-overlay" hx-disabled-elt="this" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>
-      </div>
-    </div>
+    {{template "panelhead" (dict "Title" (T "observability.nodes_title") "Actions" (partial "observability_pactions2" .))}}
     <div class="panel-body">
       {{if and (not .Health.NodesKnown) (not .NodeCards)}}
-      <div class="empty"><h3>{{T "observability.nodes_unknown_title"}}</h3><p>{{T "observability.nodes_unknown_body"}}</p></div>
+      {{template "empty" (dict "Title" (T "observability.nodes_unknown_title") "Body" (T "observability.nodes_unknown_body"))}}
       {{else if not .NodeCards}}
-      <div class="empty"><h3>{{T "observability.nodes_empty_title"}}</h3><p>{{T "observability.nodes_empty_body"}}</p></div>
+      {{template "empty" (dict "Title" (T "observability.nodes_empty_title") "Body" (T "observability.nodes_empty_body"))}}
       {{else}}
       {{if .Metrics.Unavailable}}<p class="sub">{{T "obs.metrics_unavailable"}}</p>{{end}}
       <div class="obs-nodes">
@@ -163,20 +106,11 @@
   </section>
 
   <section class="panel">
-    <div class="panel-head">
-      <div><h2>{{T "observability.services_title"}}</h2><p class="sub">{{T "observability.services_sub"}}</p></div>
-      <div class="ph-actions">
-        <form class="obs-search" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, keyup changed delay:400ms from:#obs-q">
-          <input type="hidden" name="tab" value="overview"><input type="hidden" name="range" value="{{.Range}}">
-          <label class="sr-only" for="obs-q">{{T "obs.search_services"}}</label>
-          <input id="obs-q" class="finput" type="search" name="q" value="{{.Q}}" maxlength="100" placeholder="{{T "obs.search_services"}}" autocomplete="off">
-        </form>
-      </div>
-    </div>
+    {{template "panelhead" (dict "Title" (T "observability.services_title") "Sub" (T "observability.services_sub") "Actions" (partial "observability_pactions3" .))}}
     <div class="panel-body tight">
-      {{if not .Health.ServicesKnown}}<div class="empty"><h3>{{T "observability.services_unknown_title"}}</h3><p>{{T "observability.services_unknown_body"}}</p></div>
-      {{else if not .Health.Services}}<div class="empty"><h3>{{T "observability.services_empty_title"}}</h3><p>{{T "observability.services_empty_body"}}</p></div>
-      {{else if not .Stacks}}<div class="empty"><h3>{{T "obs.no_match"}}</h3></div>
+      {{if not .Health.ServicesKnown}}{{template "empty" (dict "Title" (T "observability.services_unknown_title") "Body" (T "observability.services_unknown_body"))}}
+      {{else if not .Health.Services}}{{template "empty" (dict "Title" (T "observability.services_empty_title") "Body" (T "observability.services_empty_body"))}}
+      {{else if not .Stacks}}{{template "empty" (dict "Title" (T "obs.no_match"))}}
       {{else}}
       <div class="obs-stacks">
         {{range .Stacks}}
@@ -245,10 +179,7 @@
      — and while the search box has focus. */}}
 {{if .Live}} hx-get="/web/observability/evidence?live=1&amp;service={{urlquery .Service}}&amp;range={{.Range}}&amp;severity={{.Severity}}&amp;search={{urlquery .Search}}" hx-trigger="every 5s [!document.hidden &amp;&amp; document.activeElement.id !== 'obs-search']" hx-vals='js:{since: (() => { const rows = document.querySelectorAll("#obs-logs .obs-log"); return rows.length ? (rows[rows.length - 1].dataset.ts || "") : ""; })()}' hx-target="#obs-logs .obs-logs" hx-swap="beforeend"{{end}}>
   <div class="load-overlay" aria-hidden="true"><span class="spinner"></span></div>
-  <div class="panel-head">
-    <div><h2>{{T "obs.logs_title"}}</h2><p class="sub">{{T "obs.logs_sub"}}</p></div>
-    <div class="ph-actions"><div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}{{.Evidence.WindowStart}} → {{.Evidence.WindowEnd}}{{end}}</div></div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "obs.logs_title") "Sub" (T "obs.logs_sub") "Actions" (partial "observability_pactions4" .))}}
   <div class="panel-body">
     <form class="obs-logform" method="get" action="/web/observability" hx-get="/web/observability/evidence" hx-target="#obs-logs" hx-swap="outerHTML" hx-indicator="#obs-logs .load-overlay" hx-trigger="submit, change from:select, change from:#obs-live, keyup changed delay:500ms from:#obs-search">
       <input type="hidden" name="tab" value="logs">
@@ -284,12 +215,11 @@
       </div>
       <noscript><button type="submit" class="btn btn-primary">{{T "observability.load_evidence"}}</button></noscript>
     </form>
-    {{if .Live}}<p class="sub obs-note"><span class="pill good"><i class="dot"></i>{{T "obs.live_on"}}</span> {{T "obs.live_note"}}</p>{{end}}
 
     {{if .Evidence.Unavailable}}
-    <div class="empty"><h3>{{if eq .Evidence.UnavailableWhy "scope"}}{{T "observability.scope_unavailable"}}{{else if eq .Evidence.UnavailableWhy "service"}}{{T "observability.invalid_service"}}{{else if eq .Evidence.UnavailableWhy "range"}}{{T "observability.invalid_range"}}{{else if eq .Evidence.UnavailableWhy "api"}}{{T "err.api_not_configured"}}{{else}}{{T "observability.telemetry_unavailable"}}{{end}}</h3><p>{{T "observability.evidence_unavailable_body"}}</p></div>
+    {{template "empty" (dict "Title" (partial "observability_title" .) "Body" (T "observability.evidence_unavailable_body"))}}
     {{else if .Evidence.Empty}}
-    <div class="empty"><h3>{{T "observability.evidence_empty_title"}}</h3><p>{{T "observability.evidence_empty_body"}}</p></div>
+    {{template "empty" (dict "Title" (T "observability.evidence_empty_title") "Body" (T "observability.evidence_empty_body"))}}
     {{else if .Evidence.Known}}
     <p class="sub obs-note">{{T "obs.rows"}} <span class="iso" dir="ltr">{{N .Evidence.FirstRow}}–{{N .Evidence.LastRow}}</span> · {{T "obs.level_note"}}</p>
     <div class="obs-logs" role="table" aria-label="{{T "obs.logs_title"}}" tabindex="0">
@@ -326,12 +256,12 @@
 
 {{define "observabilitymetrics"}}
 <section class="panel">
-  <div class="panel-head"><div><h2>{{T "obs.nodes_resources"}}</h2><p class="sub">{{T "obs.nodes_resources_sub"}}</p></div></div>
+  {{template "panelhead" (dict "Title" (T "obs.nodes_resources") "Sub" (T "obs.nodes_resources_sub"))}}
   <div class="panel-body">
     {{if .Metrics.Unavailable}}
-    <div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "obs.metrics_unavailable"}}</p></div>
+    {{template "empty" (dict "Title" (T "observability.telemetry_unavailable") "Body" (T "obs.metrics_unavailable"))}}
     {{else if not .NodeCards}}
-    <div class="empty"><h3>{{T "observability.nodes_empty_title"}}</h3><p>{{T "observability.nodes_empty_body"}}</p></div>
+    {{template "empty" (dict "Title" (T "observability.nodes_empty_title") "Body" (T "observability.nodes_empty_body"))}}
     {{else}}
     <div class="obs-nodes obs-nodes-wide">
       {{range .NodeCards}}{{template "obsnodecard" .}}{{end}}
@@ -342,12 +272,12 @@
 </section>
 
 <section class="panel">
-  <div class="panel-head"><div><h2>{{T "obs.containers_title"}}</h2><p class="sub">{{T "obs.containers_sub"}}</p></div></div>
+  {{template "panelhead" (dict "Title" (T "obs.containers_title") "Sub" (T "obs.containers_sub"))}}
   <div class="panel-body tight">
     {{if not .Metrics.ServicesOK}}
-    <div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "obs.metrics_unavailable"}}</p></div>
+    {{template "empty" (dict "Title" (T "observability.telemetry_unavailable") "Body" (T "obs.metrics_unavailable"))}}
     {{else if not .Metrics.Services}}
-    <div class="empty"><h3>{{T "obs.no_container_metrics"}}</h3></div>
+    {{template "empty" (dict "Title" (T "obs.no_container_metrics"))}}
     {{else}}
     <div class="obs-res" role="table" aria-label="{{T "obs.containers_title"}}">
       <div class="obs-res-head" role="row"><span role="columnheader">{{T "observability.col_service"}}</span><span role="columnheader">{{T "obs.col_cpu"}}</span><span role="columnheader">{{T "obs.col_mem"}}</span></div>
@@ -368,13 +298,10 @@
 <section class="panel" id="obs-traces">
   <div class="load-overlay" aria-hidden="true"><span class="spinner"></span></div>
   {{if .Traces.Detail}}
-  <div class="panel-head">
-    <div><h2>{{T "obs.traces_title"}} <span class="mono iso" dir="ltr">{{.Traces.TraceID}}</span></h2></div>
-    <div class="ph-actions"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=traces&amp;range={{.Range}}" hx-get="/web/observability/traces?range={{.Range}}" hx-target="#obs-traces" hx-swap="outerHTML">{{T "obs.trace_back"}}</a></div>
-  </div>
+  {{template "panelhead" (dict "Title" (partial "observability_trace_title" .) "Actions" (partial "observability_trace_back" .))}}
   <div class="panel-body">
-    {{if .Traces.Unavailable}}<div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "observability.evidence_unavailable_body"}}</p></div>
-    {{else if .Traces.NotFound}}<div class="empty"><h3>{{T "obs.trace_notfound"}}</h3></div>
+    {{if .Traces.Unavailable}}{{template "empty" (dict "Title" (T "observability.telemetry_unavailable") "Body" (T "observability.evidence_unavailable_body"))}}
+    {{else if .Traces.NotFound}}{{template "empty" (dict "Title" (T "obs.trace_notfound"))}}
     {{else}}
     <p class="sub obs-note">{{T "obs.trace_total"}} <bdi class="iso" dir="ltr">{{.Traces.TotalText}}</bdi> · <bdi class="iso" dir="ltr">{{N .Traces.SpanCount}}</bdi> {{T "obs.trace_spans_label"}}{{if .Traces.ErrorCount}} · <span class="pill bad">{{N .Traces.ErrorCount}} {{T "obs.trace_errors_label"}}</span>{{end}}{{if .Traces.Truncated}} · {{T "obs.trace_truncated"}}{{end}}</p>
     <div class="obs-wf" role="table" aria-label="{{T "obs.traces_title"}}">
@@ -389,10 +316,7 @@
     {{end}}
   </div>
   {{else}}
-  <div class="panel-head">
-    <div><h2>{{T "obs.traces_title"}}</h2><p class="sub">{{T "obs.traces_sub"}}</p></div>
-    <div class="ph-actions"><div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}{{.Evidence.WindowStart}} → {{.Evidence.WindowEnd}}{{end}}</div></div>
-  </div>
+  {{template "panelhead" (dict "Title" (T "obs.traces_title") "Sub" (T "obs.traces_sub") "Actions" (partial "observability_pactions5" .))}}
   <div class="panel-body">
     <form class="obs-logform" method="get" action="/web/observability" hx-get="/web/observability/traces" hx-target="#obs-traces" hx-swap="outerHTML" hx-indicator="#obs-traces .load-overlay" hx-trigger="submit, change from:select, change from:#obs-errors, keyup changed delay:500ms from:#obs-tsvc">
       <input type="hidden" name="tab" value="traces">
@@ -411,13 +335,13 @@
       </div>
       <noscript><button type="submit" class="btn btn-primary">{{T "observability.apply_filters"}}</button></noscript>
     </form>
-    {{if .Traces.Unavailable}}<div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "observability.evidence_unavailable_body"}}</p></div>
+    {{if .Traces.Unavailable}}{{template "empty" (dict "Title" (T "observability.telemetry_unavailable") "Body" (T "observability.evidence_unavailable_body"))}}
     {{/* Not queried: the request failed before the tab's own read (a scope or
          inventory failure). Without this branch the panel drew an empty table
          under a "Rows 0–0" line, which reads as "no traces" — the one thing we
          do not know. */}}
-    {{else if not .Traces.Queried}}<div class="empty"><h3>{{T "observability.telemetry_unavailable"}}</h3><p>{{T "observability.evidence_unavailable_body"}}</p></div>
-    {{else if .Traces.Empty}}<div class="empty"><h3>{{T "obs.traces_none_title"}}</h3><p>{{T "obs.traces_none_body"}}</p></div>
+    {{else if not .Traces.Queried}}{{template "empty" (dict "Title" (T "observability.telemetry_unavailable") "Body" (T "observability.evidence_unavailable_body"))}}
+    {{else if .Traces.Empty}}{{template "empty" (dict "Title" (T "obs.traces_none_title") "Body" (T "obs.traces_none_body"))}}
     {{else}}
     <p class="sub obs-note">{{T "obs.rows"}} <span class="iso" dir="ltr">{{N .Traces.FirstRow}}–{{N .Traces.LastRow}}</span></p>
     <div class="obs-traces" role="table" aria-label="{{T "obs.traces_title"}}">
@@ -443,3 +367,49 @@
   {{end}}
 </section>
 {{end}}
+
+{{define "observability_actions"}}<button type="button" class="btn btn-ghost btn-sm btn-refresh" hx-get="/web/observability?tab={{.Tab}}&amp;service={{urlquery .Service}}&amp;range={{.Range}}" hx-target="#view" hx-disabled-elt="this" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>{{end}}
+
+{{define "observability_title"}}{{if eq .Evidence.UnavailableWhy "scope"}}{{T "observability.scope_unavailable"}}{{else if eq .Evidence.UnavailableWhy "service"}}{{T "observability.invalid_service"}}{{else if eq .Evidence.UnavailableWhy "range"}}{{T "observability.invalid_range"}}{{else if eq .Evidence.UnavailableWhy "api"}}{{T "err.api_not_configured"}}{{else}}{{T "observability.telemetry_unavailable"}}{{end}}{{end}}
+
+{{define "observability_pactions"}}<a class="btn btn-ghost btn-sm" href="/web/observability?tab=logs&amp;severity=error&amp;range={{.Range}}" hx-get="/web/observability?tab=logs&amp;severity=error&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.view_logs"}}</a>{{end}}
+
+{{define "observability_pactions2"}}<button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability/summary?range={{.Range}}" hx-target="#observability-summary" hx-swap="outerHTML" hx-indicator="#observability-summary .load-overlay" hx-disabled-elt="this" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>{{end}}
+
+{{define "observability_pactions3"}}<form class="obs-search" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, keyup changed delay:400ms from:#obs-q">
+          <input type="hidden" name="tab" value="overview"><input type="hidden" name="range" value="{{.Range}}">
+          <label class="sr-only" for="obs-q">{{T "obs.search_services"}}</label>
+          <input id="obs-q" class="finput" type="search" name="q" value="{{.Q}}" maxlength="100" placeholder="{{T "obs.search_services"}}" autocomplete="off">
+        </form>{{end}}
+
+{{define "observability_pactions4"}}{{if .Live}}<span class="pill good" data-tip="{{T "obs.live_note"}}"><i class="dot"></i>{{T "obs.live_on"}}</span>{{end}}{{template "observability_window" .}}{{end}}
+
+{{define "observability_pactions5"}}{{template "observability_window" .}}{{end}}
+
+{{define "observability_legend"}}<span class="lg info">{{T "obs.level_info"}}</span><span class="lg warn">{{T "obs.level_warn"}}</span><span class="lg err">{{T "obs.level_error"}}</span>{{end}}
+
+{{define "observability_trace_title"}}{{T "obs.traces_title"}} <span class="mono iso" dir="ltr">{{.Traces.TraceID}}</span>{{end}}
+
+{{define "observability_trace_back"}}<a class="btn btn-ghost btn-sm" href="/web/observability?tab=traces&amp;range={{.Range}}" hx-get="/web/observability/traces?range={{.Range}}" hx-target="#obs-traces" hx-swap="outerHTML">{{T "obs.trace_back"}}</a>{{end}}
+
+{{define "observability_value"}}{{N .Health.NodesReady}} / {{N .Health.NodesTotal}}{{end}}
+
+{{define "observability_value2"}}{{N .Health.ServicesReady}} / {{N .Health.ServicesTotal}}{{end}}
+
+{{define "observability_cls"}}{{if gt .Dash.Volume.Errors 0}} is-bad{{end}}{{end}}
+
+{{define "observability_value3"}}{{if .Dash.Volume.Total}}{{.Dash.Volume.ErrPctText}}{{else}}—{{end}}{{end}}
+
+{{define "observability_foot"}}<bdi class="iso" dir="ltr">{{compact .Dash.Volume.Errors}}</bdi> {{T "obs.kpi_errors_foot"}}{{end}}
+
+{{define "observability_cls2"}}{{if gt .Dash.TraceKPI.ErrTraces 0}} is-bad{{end}}{{end}}
+
+{{define "observability_foot2"}}{{if .Dash.TraceKPI.ErrTraces}}<bdi class="iso" dir="ltr">{{N .Dash.TraceKPI.ErrTraces}}</bdi> {{T "obs.kpi_traces_err"}}{{else}}{{T "obs.kpi_traces_ok"}}{{end}}{{end}}
+
+{{define "observability_value4"}}{{if .Health.BackupHasVerified}}{{N .Health.BackupAgeDays}} {{T "observability.days"}}{{else}}{{T "observability.no_verified_backup"}}{{end}}{{end}}
+
+{{define "observability_value5"}}{{if not .Health.TLSHasCertificate}}{{T "observability.no_certificate"}}{{else if .Health.TLSExpired}}<span class="pill bad">{{T "observability.expired"}}</span>{{else}}{{N .Health.TLSDays}} {{T "observability.days"}}{{end}}{{end}}
+
+{{define "observability_foot3"}}{{T "observability.tls_expiry_foot"}}{{if .Health.TLSPartial}} · {{T "observability.partial"}}{{end}}{{end}}
+
+{{define "observability_window"}}<div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}{{.Evidence.WindowStart}} → {{.Evidence.WindowEnd}}{{end}}</div>{{end}}
