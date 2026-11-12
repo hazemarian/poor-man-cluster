@@ -298,6 +298,7 @@ func (a *App) Mount(engine *gin.Engine) {
 
 	nd := controllers.Nodes{Controller: a.ctrl}
 	op.POST("/nodes/:hostname/storage", nd.Promote)
+	op.POST("/nodes/:hostname/adopt", nd.Adopt)
 	op.DELETE("/nodes/:hostname/storage", nd.Demote)
 
 	op.POST("/stacks/:name/configs/add", scc.AddConfig)

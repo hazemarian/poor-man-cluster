@@ -115,6 +115,10 @@
                 {{else if eq .Role "manager"}}
                 {{/* storage nodes must be managers: a worker gets no button, only the reason */}}
                 <button type="button" class="icon-btn" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}" data-tip="{{T "nodes.promote_storage"}}" aria-label="{{T "nodes.promote_storage"}}" hx-disabled-elt="this">{{icon "shield"}}</button>
+                {{/* Adoption is a different promise: it copies data and the node is
+                     DRAINED while it does. Its own control, its own confirm, so nobody
+                     triggers a data migration by clicking "storage". */}}
+                <button type="button" class="icon-btn" hx-post="/web/nodes/{{.Hostname}}/adopt" hx-target="#view" hx-confirm="{{T "nodes.adopt_confirm"}}" data-tip="{{T "nodes.adopt_tip"}}" aria-label="{{T "nodes.adopt_storage"}}" hx-disabled-elt="this">{{icon "move"}}</button>
                 {{else}}
                 {{/* A disabled control fires no hover events, so the tooltip and the
                      focus stop live on the wrapper. The glyph is the whole control:
@@ -145,6 +149,7 @@
             <button type="button" class="btn btn-ghost btn-sm" hx-delete="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.demote_confirm"}}" data-tip="{{T "nodes.demote_storage"}}">{{icon "shield"}}<span>{{T "nodes.demote_storage"}}</span></button>
             {{else if eq .Role "manager"}}
             <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/nodes/{{.Hostname}}/storage" hx-target="#view" hx-confirm="{{T "nodes.promote_confirm"}}" hx-disabled-elt="this" data-tip="{{T "nodes.promote_storage"}}">{{icon "shield"}}<span>{{T "nodes.promote_storage"}}</span></button>
+            <button type="button" class="btn btn-ghost btn-sm" hx-post="/web/nodes/{{.Hostname}}/adopt" hx-target="#view" hx-confirm="{{T "nodes.adopt_confirm"}}" hx-disabled-elt="this" data-tip="{{T "nodes.adopt_tip"}}">{{icon "move"}}<span>{{T "nodes.adopt_storage"}}</span></button>
             {{else}}
             {{/* Same reason as the table: the glyph carries it, the wrapper is focusable. */}}
             <span class="needs-manager" data-tip="{{T "nodes.storage_needs_manager"}}" aria-label="{{T "nodes.storage_needs_manager"}}" role="button" aria-disabled="true" tabindex="0">{{icon "lock"}}</span>

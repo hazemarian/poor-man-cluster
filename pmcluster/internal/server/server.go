@@ -234,6 +234,10 @@ func New(d Deps) http.Handler {
 				if d.Store != nil {
 					r.Post("/nodes/{hostname}/storage", api.NodeStorageHandler(d.Docker, d.Store))
 					r.Delete("/nodes/{hostname}/storage", api.NodeStorageHandler(d.Docker, d.Store))
+					// Adoption is separate from promotion: it copies data and briefly stops
+					// the node's stacks, so it is its own explicit request.
+					r.Post("/nodes/{hostname}/storage/adopt", api.NodeStorageAdoptHandler(d.Docker, d.Store))
+					r.Delete("/nodes/{hostname}/storage/adopt", api.NodeStorageAdoptHandler(d.Docker, d.Store))
 				}
 			}
 			if d.Store != nil {

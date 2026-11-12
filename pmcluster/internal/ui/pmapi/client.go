@@ -200,6 +200,13 @@ func (c *Client) PromoteNode(ctx context.Context, hostname string) error {
 	return c.do(ctx, http.MethodPost, "/nodes/"+url.PathEscape(hostname)+"/storage", nil, nil)
 }
 
+// AdoptNode asks the node to build a snapshot volume around data it already holds:
+// drain, copy, verify, switch the mount, activate again. Separate from PromoteNode
+// because it stops the node's stacks while it copies.
+func (c *Client) AdoptNode(ctx context.Context, hostname string) error {
+	return c.do(ctx, http.MethodPost, "/nodes/"+url.PathEscape(hostname)+"/storage/adopt", nil, nil)
+}
+
 // DemoteNode clears a swarm node's storage-node role via
 // DELETE /api/nodes/{hostname}/storage.
 func (c *Client) DemoteNode(ctx context.Context, hostname string) error {

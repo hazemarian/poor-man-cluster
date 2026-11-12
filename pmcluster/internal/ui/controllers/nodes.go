@@ -27,6 +27,23 @@ func (c Nodes) Promote(g *gin.Context) {
 	c.overviewFragment(g)
 }
 
+// Adopt asks a node that already holds stack data to build a snapshot-capable volume
+// around it. The confirm the console shows is the only warning an operator gets that the
+// node drains while it copies, which is why this is its own action and not a side effect
+// of Promote.
+func (c Nodes) Adopt(g *gin.Context) {
+	hostname := g.Param("hostname")
+	if hostname == "" {
+		g.Status(http.StatusBadRequest)
+		return
+	}
+	if err := c.API.AdoptNode(g.Request.Context(), hostname); err != nil {
+		g.Status(http.StatusBadGateway)
+		return
+	}
+	c.overviewFragment(g)
+}
+
 // Demote removes a swarm node's storage role (storage_nodes setting + label
 // clear) via the daemon, then re-renders the overview fragment.
 func (c Nodes) Demote(g *gin.Context) {

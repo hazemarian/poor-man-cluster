@@ -294,6 +294,19 @@ const (
 	settingNodeDockerRestart = "node_docker_restart"
 )
 
+// settingStorageAdoptNodes lists nodes an operator asked the platform to ADOPT:
+// build a snapshot-capable volume around data that is already there, and switch the
+// mount, without a rebuild.
+//
+// It is a separate marker from storage_nodes on purpose. Adding a hostname to
+// storage_nodes is safe and reversible; adopting COPIES DATA and briefly stops the
+// node's stacks (drain → copy → activate), so it must be an explicit, one-shot request
+// that the node clears when it is done — never a side effect of promoting a node.
+const settingStorageAdoptNodes = "storage_adopt_nodes"
+
+// SettingStorageAdoptNodes is the setting key.
+func SettingStorageAdoptNodes() string { return settingStorageAdoptNodes }
+
 // SettingNodeDockerRestart is the setting key.
 func SettingNodeDockerRestart() string { return settingNodeDockerRestart }
 

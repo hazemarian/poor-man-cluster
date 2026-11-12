@@ -180,6 +180,22 @@ data already in the volume root, leaves a node that is *listed* as storage and c
 host a stateful stack. The journal says which of the two happened; the console's
 checkbox cannot.
 
-If it refused because the volume root holds data, move the data and run
-`pmcluster storage provision` by hand once — that command does the same work and offers
-`--dry-run`, which the automatic path deliberately does not.
+If it refused because the volume root holds data, that node needs **adoption**, not
+provisioning. The console has its own control for it — *Adopt existing data* next to the
+storage toggle — which says in its confirm text what the other button does not: the node
+**drains** (its stacks stop), the data is copied onto a new snapshot volume and verified,
+the mount is switched, and the node is activated again. Afterwards the previous tree is
+kept at `<volume-root>.pre-migration-<timestamp>` until you delete it.
+
+Adoption is deliberately not automatic and not implied by promoting a node:
+
+```
+storage_nodes        "this node may hold stateful stacks"        safe, reversible
+storage_adopt_nodes  "copy this node's data onto a volume, now"  stops the node, moves data
+```
+
+The marker is one-shot: the node clears it when the work is done, or immediately when the
+volume root is empty or the volume is already provisioned, so a stale request cannot sit
+in the settings pretending a migration is pending. The CLI equivalent is the documented
+procedure — `docker node update --availability drain`, `pmcluster storage migrate`,
+`--availability active` — and the console simply performs it for you.

@@ -63,6 +63,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingAppLogLevel(),
 	cluster.SettingReconcileInterval(),
 	cluster.SettingStorageNodes(),
+	cluster.SettingStorageAdoptNodes(),
 	cluster.SettingStorageFailover(),
 	cluster.SettingGitHubRunnersEnabled(),
 	cluster.SettingGitHubRunnerOrg(),
@@ -269,6 +270,15 @@ func (l *Local) normalizeRunnerSetting(ctx context.Context, key, value string) (
 			return "", fmt.Errorf("%s: %w", key, err)
 		}
 		return group, nil
+	case cluster.SettingStorageAdoptNodes():
+		if strings.TrimSpace(value) == "" {
+			return "", nil
+		}
+		nodes, err := runners.NormalizeNodes(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		return nodes, nil
 	case cluster.SettingGitHubRunnerNodes():
 		if strings.TrimSpace(value) == "" {
 			return "", nil

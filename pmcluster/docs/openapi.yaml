@@ -2614,6 +2614,63 @@ paths:
                 $ref: "#/components/schemas/StorageNodeResult"
         "404":
           $ref: "#/components/responses/NotFound"
+  /api/nodes/{hostname}/storage/adopt:
+    post:
+      summary: Adopt a node that already holds stack data
+      description: |
+        Asks the node to build a snapshot-capable volume around the data that is
+        already in `/var/stack/data`: it **drains itself** (its stacks stop), copies
+        the tree onto the new volume, verifies the copy by file count and byte total,
+        switches the mount, and activates again. The previous tree is preserved at
+        `<volume-root>.pre-migration-<timestamp>`.
+
+        Separate from `POST /api/nodes/{hostname}/storage` on purpose: promoting a node
+        is safe and reversible, adopting one copies data and stops its stacks for the
+        duration. The request is one-shot — the node clears the marker when it is done,
+        or immediately when the volume root is empty or the volume is already
+        provisioned.
+      operationId: adoptStorageNode
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: hostname
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Adoption queued; the node performs it on its next convergence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageAdoptResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The node is not a manager, so it cannot hold a storage volume
+    delete:
+      summary: Cancel a pending adoption
+      description: Removes the node from `storage_adopt_nodes`. A node that is already
+        copying is not interrupted; the marker only schedules work.
+      operationId: cancelStorageNodeAdoption
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: hostname
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Adoption marker cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageAdoptResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /api/stacks/{name}/ack:
     post:
       summary: Acknowledge an open failover marker
@@ -3579,6 +3636,24 @@ components:
           type: integer
         changed:
           type: boolean
+    StorageAdoptResult:
+      type: object
+      description: |
+        What the daemon recorded when an adoption was queued or cancelled. The work
+        itself happens on the node: it drains itself, copies the data, verifies it,
+        switches the mount and activates again.
+      properties:
+        node:
+          type: string
+        queued:
+          type: boolean
+          description: true when the request was to adopt, false when it cleared a marker
+        adopting:
+          type: string
+          description: the full adoption list after this request
+        next:
+          type: string
+          description: what happens next, in the operator's terms
     StorageNodeResult:
       type: object
       properties:

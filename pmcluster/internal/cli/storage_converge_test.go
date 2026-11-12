@@ -127,3 +127,97 @@ func TestStorageConvergenceReportsAFailedProvision(t *testing.T) {
 		t.Fatalf("a failed provision was not reported as a storage problem:\n%s", h.out.String())
 	}
 }
+
+// storageStoreWithMarkers sets both the storage list and the adoption marker.
+func storageStoreWithMarkers(t *testing.T, nodes, adopt string) *store.Store {
+	t.Helper()
+	st := storageStoreWithNodes(t, nodes)
+	if err := st.SetSetting(context.Background(), cluster.SettingStorageAdoptNodes(), adopt); err != nil {
+		t.Fatalf("SetSetting(adopt): %v", err)
+	}
+	return st
+}
+
+// adoptHarness records the drain → migrate → activate sequence.
+type adoptHarness struct {
+	avail      []string
+	drainErr   error
+	migrated   int
+	migrateErr error
+}
+
+func (a *adoptHarness) install(t *testing.T) {
+	t.Helper()
+	oa, om := nodeAvailabilityFn, storageMigrateFn
+	t.Cleanup(func() { nodeAvailabilityFn, storageMigrateFn = oa, om })
+	nodeAvailabilityFn = func(_ context.Context, node, want string) error {
+		a.avail = append(a.avail, want)
+		if want == "drain" && a.drainErr != nil {
+			return a.drainErr
+		}
+		return nil
+	}
+	storageMigrateFn = func(context.Context, storage.Spec) (storage.Result, error) {
+		a.migrated++
+		return storage.Result{Copied: 7, CopyBytes: 979000, PreviousTree: "/var/stack/data.pre-migration-x"}, a.migrateErr
+	}
+}
+
+// An adoption marker is what turns "refuse" into "drain, copy, activate" — and the
+// node clears the marker afterwards so it never adopts twice.
+func TestStorageConvergenceAdoptsOnlyWhenAsked(t *testing.T) {
+	h := &storageHarness{state: storage.State{Root: storage.DefaultVolumeRoot, Entries: 2}}
+	h.install(t)
+	a := &adoptHarness{}
+	a.install(t)
+	st := storageStoreWithMarkers(t, "nxt-sw-4-m", "nxt-sw-4-m")
+
+	convergeStorage(context.Background(), st, "nxt-sw-4-m", h.logf)
+
+	if a.migrated != 1 {
+		t.Fatalf("migrated %d time(s), want 1", a.migrated)
+	}
+	if strings.Join(a.avail, ",") != "drain,active" {
+		t.Fatalf("availability sequence = %v, want drain then active", a.avail)
+	}
+	left := st.SettingDefault(context.Background(), cluster.SettingStorageAdoptNodes(), "")
+	if left != "" {
+		t.Fatalf("adoption marker = %q after a successful adoption, want cleared", left)
+	}
+	if !strings.Contains(h.out.String(), "ADOPTING") {
+		t.Fatalf("the journal does not announce the drain: %s", h.out.String())
+	}
+}
+
+// A failed drain means nothing was copied and nothing was stopped.
+func TestStorageConvergenceRefusesAdoptionWhenItCannotDrain(t *testing.T) {
+	h := &storageHarness{state: storage.State{Root: storage.DefaultVolumeRoot, Entries: 2}}
+	h.install(t)
+	a := &adoptHarness{drainErr: errors.New("node not found")}
+	a.install(t)
+	st := storageStoreWithMarkers(t, "nxt-sw-4-m", "nxt-sw-4-m")
+	convergeStorage(context.Background(), st, "nxt-sw-4-m", h.logf)
+	if a.migrated != 0 {
+		t.Fatal("copied data under a running node")
+	}
+	if !strings.Contains(h.out.String(), "refused") {
+		t.Fatalf("the refusal was not reported: %s", h.out.String())
+	}
+}
+
+// A failed migration must still re-activate the node: leaving it drained is worse than
+// the failed copy, because nothing else will notice.
+func TestStorageConvergenceReactivatesAfterAFailedMigration(t *testing.T) {
+	h := &storageHarness{state: storage.State{Root: storage.DefaultVolumeRoot, Entries: 2}}
+	h.install(t)
+	a := &adoptHarness{migrateErr: errors.New("no space left on device")}
+	a.install(t)
+	st := storageStoreWithMarkers(t, "nxt-sw-4-m", "nxt-sw-4-m")
+	convergeStorage(context.Background(), st, "nxt-sw-4-m", h.logf)
+	if strings.Join(a.avail, ",") != "drain,active" {
+		t.Fatalf("availability sequence = %v, want drain then active even on failure", a.avail)
+	}
+	if !strings.Contains(h.out.String(), "FAILED") {
+		t.Fatalf("the failure was not reported: %s", h.out.String())
+	}
+}
