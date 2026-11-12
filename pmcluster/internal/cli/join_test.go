@@ -14,13 +14,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// TestRenderSystemdUnit pins the dependency semantics that a silent outage cost:
+// BindsTo=docker.service stops pmcluster when docker restarts and never brings it
+// back, and pmcluster owns the runner's docker socket — so every job on that node
+// hangs instead of failing. PartOf propagates the restart.
 func TestRenderSystemdUnit(t *testing.T) {
 	unit := renderSystemdUnit("pmuser", "docker", "/home/pmuser", "/usr/local/bin/pmcluster serve")
 	for _, want := range []string{
 		"[Unit]",
 		"Description=pmcluster API Server",
 		"After=docker.service",
-		"BindsTo=docker.service",
+		// PartOf, not BindsTo: a restart of docker must restart pmcluster, and
+		// BindsTo leaves it dead (measured on nxt-sw-6-w, 2026-11-12).
+		"PartOf=docker.service",
 		"[Service]",
 		"Type=simple",
 		"User=pmuser",

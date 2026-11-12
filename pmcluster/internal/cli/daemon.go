@@ -93,13 +93,19 @@ var hostMemTotalMiB = func() int64 {
 // renderSystemdUnit builds the pmcluster systemd unit file. The daemon is
 // managed by the CLI (cluster up/update, join) — install.sh never writes it.
 //
-// BindsTo=docker.service (not Requires=) propagates a *stop* of docker to
-// pmcluster, and `WantedBy=docker.service` propagates a *start*: systemd pulls
-// the unit in whenever docker.service starts. Without the WantedBy (BindsTo
-// alone, v0.2.167) `systemctl stop docker` + `systemctl start docker` left
-// pmcluster inactive — the node then has no control loop, so if it comes back
-// as (or later becomes) the Swarm leader the cluster silently stops reconciling
-// (observed live on a real cluster).
+// PartOf=docker.service (not BindsTo=, not Requires=) is what propagates both a
+// *stop* and a *restart* of docker to pmcluster. BindsTo was tried with
+// WantedBy=docker.service and it is not enough: measured on a live node
+// (2026-11-12, nxt-sw-6-w) `systemctl restart docker` stopped pmcluster and
+// systemd left it `inactive (dead)` — Restart=always is not honored for a stop
+// that a dependency caused, and the WantedBy pull-in does not fire on the start
+// half of a restart.
+//
+// That failure is silent and expensive: pmcluster owns /run/pmcluster/docker.sock,
+// so with it down every `docker` call in a runner job blocks forever, jobs hang
+// instead of failing, and the single ephemeral runner is pinned for hours while
+// the console shows "queued" and nothing runs. A node-level dependency must not
+// be able to take the node's control loop away without a trace.
 //
 // The restart policy is deliberately bounded. `Restart=always` alone will spin
 // as fast as the process exits: one node recorded 65 starts in a single boot
@@ -119,7 +125,7 @@ func renderSystemdUnit(pmUser, group, home, execStart string) string {
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster API Server
 After=docker.service
-BindsTo=docker.service
+PartOf=docker.service
 # Start-rate limit: at most 5 starts per 5 minutes, then stop trying and leave
 # the unit failed (systemctl status shows the loop; 'systemctl reset-failed
 # pmcluster' re-arms it once the cause is fixed).
