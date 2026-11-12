@@ -207,3 +207,12 @@ func TestRunNodeLocalRawSocketIsAWarning(t *testing.T) {
 		t.Fatalf("local runner check = %+v", c)
 	}
 }
+
+// ExecIn satisfies runners.LocalDocker: the doctor never probes a dind daemon, so
+// this answers as if one were ready.
+func (f fakeRunnerDocker) ExecIn(context.Context, string, ...string) ([]byte, error) {
+	return []byte("ok"), nil
+}
+
+// RemoveVolume satisfies runners.LocalDocker for the same reason.
+func (f fakeRunnerDocker) RemoveVolume(context.Context, string) error { return nil }

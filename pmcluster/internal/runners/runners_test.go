@@ -149,6 +149,11 @@ type fakeDocker struct {
 	runCalls   [][]string
 	removed    []string
 	runErr     error
+	// DinD lifecycle assertions
+	execCalls      [][]string
+	execErr        error
+	volumesRemoved []string
+	volumeErr      error
 }
 
 func newFakeDocker() *fakeDocker { return &fakeDocker{containers: map[string]Container{}} }
@@ -353,8 +358,10 @@ func TestSelectedNodeRunsOneRunnerAndRegistersAtOrgLevel(t *testing.T) {
 	if len(res.Warnings) != 0 {
 		t.Fatalf("warnings = %v", res.Warnings)
 	}
-	if len(h.docker.runCalls) != 1 {
-		t.Fatalf("docker run called %d times, want exactly one runner on this node", len(h.docker.runCalls))
+	// A dind runner is two containers (the daemon and the runner), so counting run
+	// calls conflates "one runner" with "one container". Count runners by name.
+	if n := countRunners(h.docker.runCalls, "pmc-worker-1-org"); n != 1 {
+		t.Fatalf("%d runner container(s) started, want exactly one on this node (%d run call(s))", n, len(h.docker.runCalls))
 	}
 	if len(h.github.tokens) != 1 || h.github.tokens[0] != "acme" {
 		t.Fatalf("registration tokens = %v, want one minted for the ORG", h.github.tokens)
@@ -378,8 +385,8 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	if len(h.github.tokens) != 1 {
 		t.Fatalf("two passes minted %d registration tokens, want 1 (a running runner is not re-registered)", len(h.github.tokens))
 	}
-	if len(h.docker.runCalls) != 1 {
-		t.Fatalf("two passes ran %d containers, want 1", len(h.docker.runCalls))
+	if n := countRunners(h.docker.runCalls, "pmc-worker-1-org"); n != 1 {
+		t.Fatalf("two passes started %d runner containers, want 1 (a running runner is not replaced)", n)
 	}
 }
 
@@ -483,9 +490,7 @@ func TestDisableRemovesTheContainerAndDeregistersThenGoesQuiet(t *testing.T) {
 	if len(res.Warnings) != 0 {
 		t.Fatalf("warnings = %v", res.Warnings)
 	}
-	if len(h.docker.removed) != 1 || h.docker.removed[0] != "pmc-worker-1-org" {
-		t.Fatalf("removed containers = %v, want the runner", h.docker.removed)
-	}
+	wantPairRemoved(t, h.docker.removed, "pmc-worker-1-org")
 	if len(h.github.deleted) != 1 || h.github.deleted[0] != fmt.Sprintf("acme#%d", id) {
 		t.Fatalf("de-registered = %v, want one call", h.github.deleted)
 	}
@@ -519,9 +524,7 @@ func TestDisableWithGitHubDownStillRemovesTheContainer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a GitHub outage must not fail the disable: %v", err)
 	}
-	if len(h.docker.removed) != 1 {
-		t.Fatalf("the container was not removed while GitHub was down: %v", h.docker.removed)
-	}
+	wantPairRemoved(t, h.docker.removed, "pmc-worker-1-org")
 	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "de-register") {
 		t.Fatalf("warnings = %v, want one naming the unconfirmed de-registration", res.Warnings)
 	}
@@ -624,9 +627,7 @@ func TestSelectedNodeLeavingTheListTearsDownItsOwnRunner(t *testing.T) {
 	if _, err := h.mgr.Reconcile(h.ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(h.docker.removed) != 1 || h.docker.removed[0] != RunnerName("worker-1") {
-		t.Fatalf("removed = %v, want this node's container", h.docker.removed)
-	}
+	wantPairRemoved(t, h.docker.removed, RunnerName("worker-1"))
 	if len(h.github.deleted) != 1 || h.github.deleted[0] != "acme#"+itoa(id) {
 		t.Fatalf("deleted = %v, want this node's registration", h.github.deleted)
 	}
@@ -758,5 +759,63 @@ func TestInspectDoesNotCallAnEphemeralGapOffline(t *testing.T) {
 	}
 	if len(rep.Nodes[0].Offline) != 0 {
 		t.Fatalf("an unobservable ephemeral gap was reported as offline: %v", rep.Nodes[0].Offline)
+	}
+}
+
+// ExecIn answers the DinD readiness probe. The fake reports "ready" immediately
+// unless the test says otherwise, so the lifecycle can be asserted without sleeping.
+func (f *fakeDocker) ExecIn(_ context.Context, name string, cmd ...string) ([]byte, error) {
+	f.execCalls = append(f.execCalls, append([]string{name}, cmd...))
+	if f.execErr != nil {
+		return nil, f.execErr
+	}
+	return []byte("ok"), nil
+}
+
+// RemoveVolume records the volume teardown. A DinD runner must remove its socket
+// volume, otherwise every job leaves images and build caches behind on the node.
+func (f *fakeDocker) RemoveVolume(_ context.Context, name string) error {
+	f.volumesRemoved = append(f.volumesRemoved, name)
+	if f.volumeErr != nil {
+		return f.volumeErr
+	}
+	return nil
+}
+
+// countRunners counts how many `docker run` calls create a container with this exact
+// --name. A dind runner registers two containers, and only one of them is the runner.
+func countRunners(calls [][]string, name string) int {
+	n := 0
+	for _, argv := range calls {
+		for i, a := range argv {
+			if a == "--name" && i+1 < len(argv) && argv[i+1] == name {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// wantPairRemoved asserts that a teardown removed BOTH halves of a runner: the
+// runner container and the dind container that gives it a docker API. Asserting an
+// exact list broke the moment runners became a pair, and the pair is the contract:
+// a teardown that removes only one half either leaves a privileged daemon behind or
+// deletes a daemon whose runner is still running.
+func wantPairRemoved(t *testing.T, removed []string, name string) {
+	t.Helper()
+	var hasRunner, hasDinD bool
+	for _, r := range removed {
+		switch r {
+		case name:
+			hasRunner = true
+		case name + "-dind":
+			hasDinD = true
+		}
+	}
+	if !hasRunner {
+		t.Fatalf("removed %v, want the runner container %s", removed, name)
+	}
+	if !hasDinD {
+		t.Fatalf("removed %v, want the dind container %s-dind as well", removed, name)
 	}
 }

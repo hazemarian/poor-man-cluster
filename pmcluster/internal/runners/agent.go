@@ -68,7 +68,12 @@ type AgentRecord struct {
 	RunnerName  string `json:"runner_name"`
 	SocketPath  string `json:"socket_path"`
 	SocketProxy bool   `json:"socket_proxy"`
-	Container   string `json:"container"`
+	// DinD: the job gets a docker daemon of its own inside a privileged sibling
+	// container, instead of the platform's filtered socket. It is the mode that
+	// makes ordinary CI work (`docker compose`, testcontainers, exec), and it is
+	// carried in the assignment so a worker never decides it for itself.
+	DinD      bool   `json:"dind"`
+	Container string `json:"container"`
 	// Memory is the cap this node last applied (or was refused for). It is what
 	// `pmcluster doctor` compares against THIS machine's RAM on a worker, which
 	// has no store and cannot ask the leader.
@@ -181,12 +186,16 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 	//    node. Remove ours and stay quiet until the hold is cleared by Restart —
 	//    a held node that keeps recreating the runner makes the button a lie.
 	if as.Held {
+		// StopRunner runs even when the runner container is already gone: "the runner
+		// is absent" says nothing about its dind container, and a job that crashed
+		// leaves a privileged daemon behind. A Kill button that leaves that running
+		// is a button that did not do what it says.
+		if err := StopRunner(ctx, a.Docker, name); err != nil {
+			rec.Container, rec.LastError = "present", err.Error()
+			a.save(rec)
+			return res, fmt.Errorf("remove held runner container %s: %w", name, err)
+		}
 		if exists {
-			if err := a.Docker.Remove(ctx, name); err != nil {
-				rec.Container, rec.LastError = "present", err.Error()
-				a.save(rec)
-				return res, fmt.Errorf("remove held runner container %s: %w", name, err)
-			}
 			res.Removed = append(res.Removed, name)
 			a.Log.Info().Str("runner", name).Str("reason", as.Reason).
 				Msg("runners — removed this node's runner container (held by an operator)")
@@ -203,7 +212,7 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 	//    is an operator's and a silent no-runner looks like a broken feature.
 	if as.Refused {
 		if exists {
-			if err := a.Docker.Remove(ctx, name); err != nil {
+			if err := StopRunner(ctx, a.Docker, name); err != nil {
 				rec.Container, rec.LastError = "present", err.Error()
 				a.save(rec)
 				return res, fmt.Errorf("remove refused runner container %s: %w", name, err)
@@ -224,7 +233,7 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 	//    it knows the name is no longer wanted.
 	if !as.Enabled {
 		if exists {
-			if err := a.Docker.Remove(ctx, name); err != nil {
+			if err := StopRunner(ctx, a.Docker, name); err != nil {
 				rec.Container, rec.LastError = "present", err.Error()
 				a.save(rec)
 				return res, fmt.Errorf("remove runner container %s: %w", name, err)
@@ -265,7 +274,7 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 				Msg("runners — container is not running yet and was registered recently; leaving it alone")
 			return res, nil
 		}
-		if err := a.Docker.Remove(ctx, name); err != nil {
+		if err := StopRunner(ctx, a.Docker, name); err != nil {
 			rec.Container, rec.LastError = "exited", err.Error()
 			a.save(rec)
 			return res, fmt.Errorf("remove the finished runner container %s: %w", name, err)
@@ -282,7 +291,7 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 		return res, err
 	}
 
-	argv, err := Spec{
+	spec := Spec{
 		Org:         as.Org,
 		Group:       as.Group,
 		RunnerName:  name,
@@ -291,13 +300,14 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 		Token:       as.RegistrationToken,
 		SocketProxy: as.SocketProxy,
 		SocketPath:  as.SocketPath,
-	}.Argv()
-	if err != nil {
+		DinD:        as.DinD,
+	}
+	if _, err := spec.Argv(); err != nil {
 		rec.Container, rec.LastError = "absent", err.Error()
 		a.save(rec)
 		return res, fmt.Errorf("render the runner for org %s: %w", as.Org, err)
 	}
-	if err := a.Docker.Run(ctx, argv); err != nil {
+	if err := StartRunner(ctx, a.Docker, spec); err != nil {
 		rec.Container, rec.LastError = "absent", err.Error()
 		a.save(rec)
 		return res, fmt.Errorf("start the runner container for org %s: %w", as.Org, err)
@@ -308,7 +318,10 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 	a.save(rec)
 	res.Registered = append(res.Registered, as.Org)
 	mount := "socket proxy"
-	if !as.SocketProxy {
+	switch {
+	case as.DinD:
+		mount = "dind (private daemon, removed with the job)"
+	case !as.SocketProxy:
 		mount = "raw docker socket (debug fallback)"
 	}
 	a.Log.Info().Str("org", as.Org).Str("runner", name).Str("group", as.Group).

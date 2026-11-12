@@ -129,6 +129,19 @@ var AllowTable = []Rule{
 	{Method: "POST", Pattern: "/networks/create", Why: "create a build network"},
 	{Method: "GET", Pattern: "/networks/{id}", Why: "inspect a network"},
 	{Method: "DELETE", Pattern: "/networks/{id}", Why: "remove a network"},
+	// attach/detach a container from a user-defined network. Without these a job
+	// cannot put ITSELF on the network it just created, so the only way to reach a
+	// database it starts is the default bridge's address — which changes on every
+	// recreate and shares a subnet with every other container on the node. With
+	// them a job gets what any compose file takes for granted: a network name and
+	// DNS by service name.
+	//
+	// The marginal reach is small next to what is already allowed: create is
+	// permitted, so a job can already start a container on any network it names.
+	// These two let it attach an EXISTING one — its own runner — which is the
+	// point. Still denied: services, nodes, exec, secrets, swarm.
+	{Method: "POST", Pattern: "/networks/{id}/connect", Why: "put this job's container on its own network"},
+	{Method: "POST", Pattern: "/networks/{id}/disconnect", Why: "detach it again when the job ends"},
 
 	// BuildKit's session channel. THIS is what makes the docker driver work:
 	// without it buildx cannot attach a session to the daemon's built-in
@@ -286,7 +299,6 @@ func (p *Proxy) Start(ctx context.Context) error {
 func (p *Proxy) Stop() error {
 	p.mu.Lock()
 	srv, ln := p.srv, p.ln
-	p.srv, p.ln = nil, nil
 	p.mu.Unlock()
 
 	var firstErr error
@@ -305,6 +317,14 @@ func (p *Proxy) Stop() error {
 	if err := os.Remove(p.SocketPath); err != nil && !errors.Is(err, os.ErrNotExist) && firstErr == nil {
 		firstErr = err
 	}
+	// "Stopped" is published LAST, after the socket file is gone. Running() reads
+	// p.ln, so clearing it first made the transition observable while the file was
+	// still on disk: anything that stats the path saw a socket that belonged to a
+	// listener which no longer existed. Caught as a flaky test ("the socket file
+	// survived the stop"), which is the cheap way to learn it.
+	p.mu.Lock()
+	p.srv, p.ln = nil, nil
+	p.mu.Unlock()
 	return firstErr
 }
 

@@ -201,14 +201,19 @@ func (m *Manager) Kill(ctx context.Context, name string, confirmBusy bool) (Kill
 
 	out := KillOutcome{Name: name, Org: row.Org, Node: row.Node}
 	if m.Docker != nil {
-		if _, exists, ierr := m.Docker.Inspect(ctx, name); ierr == nil && exists {
-			if rerr := m.Docker.Remove(ctx, name); rerr != nil {
-				// Nothing was killed: the container is still running, so this is
-				// the one failure that is a 500.
-				return out, fmt.Errorf("remove the runner container %s: %w", name, rerr)
-			}
-			out.ContainerRemoved = true
+		// A dind runner is a PAIR — the runner container plus the privileged daemon
+		// that gives it a docker API. Removing only the one named after the runner
+		// would leave that daemon running and holding the socket volume, which is the
+		// opposite of what a Kill button promises. Either container counts as
+		// "something was removed".
+		_, runnerExists, _ := m.Docker.Inspect(ctx, name)
+		_, dindExists, _ := m.Docker.Inspect(ctx, name+"-dind")
+		if rerr := StopRunner(ctx, m.Docker, name); rerr != nil {
+			// Nothing was killed: something is still running, so this is the one
+			// failure that is a 500.
+			return out, fmt.Errorf("remove the runner container %s: %w", name, rerr)
 		}
+		out.ContainerRemoved = runnerExists || dindExists
 	}
 
 	if m.GitHub == nil {

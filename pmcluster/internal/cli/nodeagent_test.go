@@ -50,10 +50,11 @@ func (f *fakeFetcher) Calls() int {
 
 // fakeLocalDocker is the node-local container runtime.
 type fakeLocalDocker struct {
-	mu         sync.Mutex
-	containers map[string]runners.Container
-	runCalls   [][]string
-	removed    []string
+	mu             sync.Mutex
+	containers     map[string]runners.Container
+	runCalls       [][]string
+	removed        []string
+	volumesRemoved []string
 }
 
 func newFakeLocalDocker() *fakeLocalDocker {
@@ -424,4 +425,17 @@ func TestWorkerRecordIsReadableByTheDoctor(t *testing.T) {
 	if rec.Source == "" || rec.FetchedAt == 0 || rec.Container != "running" || rec.Org != "acme" {
 		t.Fatalf("record = %+v", rec)
 	}
+}
+
+// ExecIn satisfies runners.LocalDocker: these tests exercise the reconcile, not the
+// dind readiness gate.
+func (f *fakeLocalDocker) ExecIn(context.Context, string, ...string) ([]byte, error) {
+	return []byte("ok"), nil
+}
+
+// RemoveVolume satisfies runners.LocalDocker and records the call, so a teardown
+// that forgets the socket volume is visible.
+func (f *fakeLocalDocker) RemoveVolume(_ context.Context, name string) error {
+	f.volumesRemoved = append(f.volumesRemoved, name)
+	return nil
 }

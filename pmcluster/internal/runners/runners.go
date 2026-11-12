@@ -107,6 +107,10 @@ type Config struct {
 	SocketProxy bool
 	// SocketPath is the filtered socket the runner mounts.
 	SocketPath string
+	// DinD gives the job its own docker daemon inside a privileged sibling
+	// container: a real, unfiltered API, removed with the job. It is the mode that
+	// makes `docker compose` and testcontainers work at all.
+	DinD bool
 	// Memory is the CLUSTER-WIDE default cap (github_runner_memory). Read it
 	// through CapFor for a node: a node with an entry in NodeMemory gets that
 	// value instead.
@@ -135,6 +139,7 @@ func LoadConfig(ctx context.Context, st *store.Store, node string) Config {
 		Group:           cluster.LoadGitHubRunnerGroup(ctx, st),
 		Nodes:           ParseNodes(cluster.LoadGitHubRunnerNodes(ctx, st)),
 		SocketProxy:     cluster.LoadGitHubRunnerSocketProxy(ctx, st),
+		DinD:            cluster.LoadGitHubRunnerDinD(ctx, st),
 		SocketPath:      cluster.LoadGitHubRunnerSocketPath(ctx, st),
 		Memory:          cluster.LoadGitHubRunnerMemory(ctx, st),
 		NodeMemory:      ParseNodeMemory(cluster.LoadGitHubRunnerNodeMemory(ctx, st)),

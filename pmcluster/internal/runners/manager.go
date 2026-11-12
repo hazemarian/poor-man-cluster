@@ -310,7 +310,7 @@ func (m *Manager) ensure(ctx context.Context, cfg Config, c Container, exists bo
 		}
 		// A finished ephemeral runner is removed before its replacement: the
 		// name is unique per node, and `docker run` refuses a duplicate name.
-		if err := m.Docker.Remove(ctx, name); err != nil {
+		if err := StopRunner(ctx, m.Docker, name); err != nil {
 			m.warn(res, cfg.Org, name, fmt.Errorf("remove the finished runner container %s: %w", name, err), state)
 			return
 		}
@@ -328,7 +328,7 @@ func (m *Manager) ensure(ctx context.Context, cfg Config, c Container, exists bo
 		m.warn(res, cfg.Org, name, fmt.Errorf("mint a registration token for org %s: %w", cfg.Org, err), state)
 		return
 	}
-	argv, err := Spec{
+	spec := Spec{
 		Org:         cfg.Org,
 		Group:       cfg.Group,
 		RunnerName:  name,
@@ -337,19 +337,23 @@ func (m *Manager) ensure(ctx context.Context, cfg Config, c Container, exists bo
 		Token:       token,
 		SocketProxy: cfg.SocketProxy,
 		SocketPath:  cfg.SocketPath,
-	}.Argv()
-	if err != nil {
+		DinD:        cfg.DinD,
+	}
+	if _, err := spec.Argv(); err != nil {
 		m.warn(res, cfg.Org, name, fmt.Errorf("render runner for %s: %w", cfg.Org, err), state)
 		return
 	}
-	if err := m.Docker.Run(ctx, argv); err != nil {
+	if err := StartRunner(ctx, m.Docker, spec); err != nil {
 		m.warn(res, cfg.Org, name, fmt.Errorf("start the runner container for %s: %w", cfg.Org, err), state)
 		return
 	}
 	state.Runners[name] = RunnerState{Name: name, Org: cfg.Org, RegisteredAt: m.now().Unix()}
 	res.Registered = append(res.Registered, cfg.Org)
 	mesh := "socket proxy"
-	if !cfg.SocketProxy {
+	switch {
+	case cfg.DinD:
+		mesh = "dind (private daemon, removed with the job)"
+	case !cfg.SocketProxy:
 		mesh = "raw docker socket (debug fallback)"
 	}
 	m.Log.Info().Str("org", cfg.Org).Str("runner", name).Str("group", cfg.Group).
@@ -378,7 +382,7 @@ func (m *Manager) teardown(ctx context.Context, org, name string, res *Result) b
 			clean = false
 			res.Warnings = append(res.Warnings, fmt.Sprintf("inspect runner container %s: %v", name, err))
 		} else if exists {
-			if err := m.Docker.Remove(ctx, name); err != nil {
+			if err := StopRunner(ctx, m.Docker, name); err != nil {
 				clean = false
 				res.Warnings = append(res.Warnings, fmt.Sprintf("remove runner container %s: %v", name, err))
 			} else {

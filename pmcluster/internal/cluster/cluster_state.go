@@ -264,6 +264,29 @@ func SettingGitHubRunnerOrg() string         { return settingGitHubRunnerOrg }
 func SettingGitHubRunnerGroup() string       { return settingGitHubRunnerGroup }
 func SettingGitHubRunnerNodes() string       { return settingGitHubRunnerNodes }
 func SettingGitHubRunnerSocketProxy() string { return settingGitHubRunnerSocketProxy }
+
+// settingGitHubRunnerDinD gives each job a docker daemon of its own, inside a
+// privileged sibling container that is removed when the job ends, instead of the
+// platform's filtered socket.
+//
+// It exists because the filtered socket only ever supported `docker build`: a job
+// that runs `docker compose`, testcontainers or anything needing exec, networks or
+// volumes was blocked route by route. DinD hands the job a real daemon and keeps
+// the host out of it.
+const settingGitHubRunnerDinD = "github_runner_dind"
+
+// SettingGitHubRunnerDinD is the setting key.
+func SettingGitHubRunnerDinD() string { return settingGitHubRunnerDinD }
+
+// LoadGitHubRunnerDinD reports whether runners get their own daemon.
+// Default true: the socket proxy remains available for operators who want the
+// narrow, filtered surface, but it is no longer the default a workflow meets.
+func LoadGitHubRunnerDinD(ctx context.Context, st *store.Store) bool {
+	if st == nil {
+		return true
+	}
+	return strings.ToLower(strings.TrimSpace(st.SettingDefault(ctx, settingGitHubRunnerDinD, "true"))) != "false"
+}
 func SettingGitHubRunnerSocketPath() string  { return settingGitHubRunnerSocketPath }
 func SettingGitHubRunnerMemory() string      { return settingGitHubRunnerMemory }
 func SettingGitHubRunnerNodeMemory() string  { return settingGitHubRunnerNodeMemory }

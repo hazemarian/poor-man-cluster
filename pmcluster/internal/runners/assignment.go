@@ -73,9 +73,14 @@ type Assignment struct {
 	// socket at SocketPath, false is the documented raw-socket debug fallback.
 	SocketProxy bool   `json:"socket_proxy"`
 	SocketPath  string `json:"socket_path"`
-	Memory      string `json:"memory"`
-	Mode        string `json:"mode"`
-	Labels      string `json:"labels"`
+	// DinD asks the node for a private docker daemon instead of either socket.
+	// It travels in this document because the decision is the operator's, made once
+	// on the leader: a worker that chose for itself would make "what does a job
+	// get?" depend on which machine picked up the job.
+	DinD   bool   `json:"dind"`
+	Memory string `json:"memory"`
+	Mode   string `json:"mode"`
+	Labels string `json:"labels"`
 	// IntervalSeconds is how long the node should wait before asking again. It
 	// travels in the response because the setting it comes from is manager-only.
 	IntervalSeconds int `json:"interval_seconds"`
@@ -177,6 +182,7 @@ func ResolveAssignment(cfg Config, nodes []runtime.Node, node string) (Assignmen
 		Org:         cfg.Org,
 		Group:       cfg.Group,
 		SocketProxy: cfg.SocketProxy,
+		DinD:        cfg.DinD,
 		SocketPath:  cfg.SocketPath,
 		// The cap travels RESOLVED FOR THIS NODE: a worker cannot read
 		// github_runner_node_memory (configs are manager-only), so if the

@@ -19,13 +19,32 @@ type Spec struct {
 	Group      string
 	RunnerName string
 	Image      string
-	Memory     string
-	Token      string
+	// DinDImage overrides the docker:dind image. Pinned like every other image so
+	// a node cannot silently change daemon version under a job.
+	DinDImage string
+	Memory    string
+	Token     string
 	// SocketProxy mounts the platform's filtered docker socket and points
 	// DOCKER_HOST at it. False is the documented debug fallback that mounts the
 	// host's raw socket instead.
 	SocketProxy bool
 	SocketPath  string
+	// DinD runs the job against a docker daemon of its OWN, inside a privileged
+	// sibling container, sharing only a volume that holds the inner socket.
+	//
+	// This is the mode that makes CI ordinary: the job gets a real, unfiltered
+	// docker API, so `docker compose up`, testcontainers, exec, networks and
+	// volumes all work — none of which the filtered socket supports. The host
+	// socket is never mounted, so a job still cannot touch the node's daemon, the
+	// swarm, or another job's containers.
+	//
+	// It also closes a hole the memory work left open: the runner's cap bounded the
+	// runner CONTAINER, while the daemon created build and test containers as its
+	// SIBLINGS, outside that cgroup — so a `docker build` could still OOM the host
+	// (measured: a 1839 MB node died repeatedly regardless of the 1200m cap). With
+	// DinD every container the job creates lives INSIDE the capped container, so
+	// one number finally bounds the whole tree.
+	DinD bool
 }
 
 // ContainerName is the local docker container name: the GitHub runner name, so
@@ -98,7 +117,17 @@ func (s Spec) Argv() ([]string, error) {
 	for _, kv := range s.EnvFixups() {
 		args = append(args, "-e", kv)
 	}
-	if s.SocketProxy {
+	switch {
+	case s.DinD:
+		// The runner shares the DinD container's socket volume: a real docker API
+		// with nothing of the host in it. The host socket is NOT mounted, so the
+		// swarm, the platform's own services and other jobs' containers stay out of
+		// reach, and every container the job starts dies with this volume.
+		args = append(args,
+			"-e", "DOCKER_HOST=unix:///var/run/docker.sock",
+			"-v", s.DinDVolume()+":/var/run",
+		)
+	case s.SocketProxy:
 		path := s.SocketPath
 		if strings.TrimSpace(path) == "" {
 			path = "/run/pmcluster/docker.sock"
@@ -115,7 +144,7 @@ func (s Spec) Argv() ([]string, error) {
 			"-e", "DOCKER_HOST=unix://"+path,
 			"-v", dir+":"+dir,
 		)
-	} else {
+	default:
 		args = append(args,
 			"-e", "DOCKER_HOST=unix:///var/run/docker.sock",
 			"-v", "/var/run/docker.sock:/var/run/docker.sock",
@@ -144,4 +173,54 @@ func (s Spec) EnvFixups() []string {
 
 // UsesRawSocket reports whether the spec mounts the host's docker socket.
 // The doctor and the tests use it to state the exposure explicitly.
-func (s Spec) UsesRawSocket() bool { return !s.SocketProxy }
+func (s Spec) UsesRawSocket() bool { return !s.SocketProxy && !s.DinD }
+
+// DinDName is the privileged docker:dind container that hosts this runner's own
+// daemon. It is removed together with the runner, so nothing it created survives.
+func (s Spec) DinDName() string { return s.RunnerName + "-dind" }
+
+// DinDVolume is the volume holding the inner daemon's socket, shared by the two
+// containers and by nothing else. A volume rather than a bind mount: the socket
+// must live somewhere the HOST filesystem does not own, and it must disappear with
+// the job instead of lingering in /var/lib/docker/volumes forever.
+func (s Spec) DinDVolume() string { return s.RunnerName + "-docker" }
+
+// DinDArgv is the argument vector for the privileged docker:dind container that
+// gives the job its own daemon.
+//
+// DOCKER_TLS_CERTDIR is emptied deliberately: with TLS on, the image boots dockerd
+// with certificates and the client needs them, which is a second thing to plumb
+// through a CI workflow that never asked for any of this. The socket is reachable
+// only through a volume mounted into the runner container beside it.
+func (s Spec) DinDArgv() ([]string, error) {
+	if !s.DinD {
+		return nil, fmt.Errorf("dind argv requested for %s, which is not a dind runner", s.RunnerName)
+	}
+	image := s.Image
+	if strings.TrimSpace(s.DinDImage) != "" {
+		image = s.DinDImage
+	}
+	args := []string{
+		"run", "-d",
+		"--name", s.DinDName(),
+		// The labels are how the reconcile finds a leftover to remove. Without them
+		// a crashed job leaves an orphan daemon holding disk and a port.
+		"--label", LabelRunner + "=true",
+		"--label", LabelName + "=" + s.RunnerName,
+		"--label", "pmcluster.dind=true",
+		// DinD needs a privileged container: it creates network namespaces,
+		// mounts filesystems and talks to the kernel for every container the job
+		// starts. That is the cost of a real docker API, and it is why this
+		// container must hold nothing else.
+		"--privileged",
+		"-e", "DOCKER_TLS_CERTDIR=",
+		"-v", s.DinDVolume() + ":/var/run",
+	}
+	if mem := strings.TrimSpace(s.Memory); mem != "" {
+		// Bounds the WHOLE tree: dockerd, the runner's containers, builds and test
+		// databases are all inside this cgroup.
+		args = append(args, "--memory", mem)
+	}
+	args = append(args, image)
+	return args, nil
+}

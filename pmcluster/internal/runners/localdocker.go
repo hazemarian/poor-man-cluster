@@ -48,6 +48,16 @@ type LocalDocker interface {
 	Remove(ctx context.Context, name string) error
 	// Inspect returns one container. ok=false means it does not exist.
 	Inspect(ctx context.Context, name string) (Container, bool, error)
+	// Exec runs a command inside a running container and returns its output. Used
+	// only to ask the inner daemon whether it is ready yet: a DinD container is
+	// "running" long before its dockerd accepts connections, and starting the
+	// runner into a socket that is not listening is a job that fails for reasons
+	// nobody can see from the workflow.
+	ExecIn(ctx context.Context, name string, cmd ...string) ([]byte, error)
+	// RemoveVolume removes a named volume. Idempotent, like Remove: a volume that
+	// is already gone is success, and a DinD teardown that fails on "no such
+	// volume" would leave a runner that can never be cleaned up.
+	RemoveVolume(ctx context.Context, name string) error
 }
 
 // CLIDocker implements LocalDocker by running the docker binary. Every call is
@@ -98,6 +108,36 @@ func (d *CLIDocker) Remove(ctx context.Context, name string) error {
 		if strings.Contains(err.Error(), "No such container") || strings.Contains(err.Error(), "no such container") {
 			return nil
 		}
+		return err
+	}
+	return nil
+}
+
+// ExecIn executes `docker exec <name> <cmd…>`. Named ExecIn because CLIDocker
+// already has an Exec field: the injection hook the tests use to record argv.
+func (d *CLIDocker) ExecIn(ctx context.Context, name string, cmd ...string) ([]byte, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, fmt.Errorf("docker exec: empty container name")
+	}
+	if len(cmd) == 0 {
+		return nil, fmt.Errorf("docker exec %s: empty command", name)
+	}
+	return d.exec(ctx, append([]string{"exec", name}, cmd...)...)
+}
+
+// RemoveVolume executes `docker volume rm <name>`, treating a missing volume as
+// success for the same reason Remove does.
+func (d *CLIDocker) RemoveVolume(ctx context.Context, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("docker volume rm: empty volume name")
+	}
+	if _, err := d.exec(ctx, "volume", "rm", name); err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "no such volume") || strings.Contains(msg, "No such volume") {
+			return nil
+		}
+		// "volume is in use" means a container still holds it: teardown removes the
+		// containers first, so this is a real ordering bug and must be visible.
 		return err
 	}
 	return nil

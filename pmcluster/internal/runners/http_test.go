@@ -80,9 +80,7 @@ func TestBusyKillNeedsConfirm(t *testing.T) {
 	if !out.ContainerRemoved || !out.Deregistered || !out.Held {
 		t.Fatalf("outcome = %+v, want container removed, deregistered and held", out)
 	}
-	if len(h.docker.removed) != 1 {
-		t.Fatalf("removed = %v, want the container", h.docker.removed)
-	}
+	wantPairRemoved(t, h.docker.removed, "pmc-worker-1-org")
 	if len(h.github.deleted) != 1 || h.github.deleted[0] != "acme#"+itoa(id) {
 		t.Fatalf("deleted = %v, want one de-registration", h.github.deleted)
 	}
@@ -126,9 +124,7 @@ func TestKillWithGitHubUnreachableStillRemovesTheContainer(t *testing.T) {
 	if out.DeregisterError == "" {
 		t.Fatalf("outcome = %+v, want deregister_error naming the failure", out)
 	}
-	if len(h.docker.removed) != 1 {
-		t.Fatalf("removed = %v, want the container", h.docker.removed)
-	}
+	wantPairRemoved(t, h.docker.removed, "pmc-worker-1-org")
 }
 
 func TestRestartRegistersTheRunnerAgain(t *testing.T) {

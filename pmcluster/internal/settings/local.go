@@ -69,6 +69,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingGitHubRunnerGroup(),
 	cluster.SettingGitHubRunnerNodes(),
 	cluster.SettingGitHubRunnerSocketProxy(),
+	cluster.SettingGitHubRunnerDinD(),
 	cluster.SettingGitHubRunnerSocketPath(),
 	cluster.SettingGitHubRunnerMemory(),
 	cluster.SettingGitHubRunnerNodeMemory(),
@@ -90,6 +91,7 @@ var settingDefaults = map[string]string{
 	cluster.SettingGitHubRunnersEnabled():           "false",
 	cluster.SettingGitHubRunnerGroup():              cluster.DefaultGitHubRunnerGroup,
 	cluster.SettingGitHubRunnerSocketProxy():        "true",
+	cluster.SettingGitHubRunnerDinD():               "true",
 	cluster.SettingGitHubRunnerSocketPath():         cluster.DefaultGitHubRunnerSocketPath,
 	cluster.SettingGitHubRunnerMemory():             cluster.DefaultGitHubRunnerMemory,
 	cluster.SettingGitHubRunnerAllowLeader():        "false",
@@ -274,6 +276,12 @@ func (l *Local) normalizeRunnerSetting(ctx context.Context, key, value string) (
 			return "", fmt.Errorf("%s: %w", key, err)
 		}
 		return nodes, nil
+	case cluster.SettingGitHubRunnerDinD():
+		on, err := parseBoolSetting(value)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", key, err)
+		}
+		return strconv.FormatBool(on), nil
 	case cluster.SettingGitHubRunnerSocketProxy():
 		on, err := parseBoolSetting(value)
 		if err != nil {

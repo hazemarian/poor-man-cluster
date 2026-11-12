@@ -462,3 +462,29 @@ func TestStreamRouteIsSplicedToTheDaemon(t *testing.T) {
 		t.Fatalf("mirror = %q", mirror)
 	}
 }
+
+// TestAJobCanPutItselfOnItsOwnNetwork pins the two routes that make a service name
+// usable from CI. Without them a job can create a network and still not reach what
+// it puts there, so the workflow falls back to the default bridge's address: an IP
+// that changes on every recreate, on a subnet shared with every other container.
+func TestAJobCanPutItselfOnItsOwnNetwork(t *testing.T) {
+	for _, tc := range []struct{ method, path string }{
+		{"POST", "/v1.43/networks/ci-net/connect"},
+		{"POST", "/v1.43/networks/ci-net/disconnect"},
+		{"POST", "/v1.43/networks/create"},
+		{"DELETE", "/v1.43/networks/ci-net"},
+	} {
+		if allowed, _, why := Check(tc.method, tc.path); !allowed {
+			t.Fatalf("%s %s refused (%s) — a job cannot join the network it created", tc.method, tc.path, why)
+		}
+	}
+	// The traversal guard has to win over the wildcard, as everywhere else: a path
+	// that escapes /networks must never be carried by the new pattern.
+	if allowed, _, _ := Check("POST", "/v1.43/networks/x/../../services/pmcluster_edge"); allowed {
+		t.Fatal("a traversal path matched the network routes")
+	}
+	// And the surfaces that stay closed stay closed.
+	if allowed, _, _ := Check("POST", "/v1.43/services/pmcluster_edge/update"); allowed {
+		t.Fatal("services became reachable through the network work")
+	}
+}
