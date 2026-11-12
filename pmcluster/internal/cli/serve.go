@@ -208,7 +208,23 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			if herr != nil {
 				return
 			}
-			convergeStorage(cmd.Context(), st, host, func(f string, a ...any) { log.Info().Msgf(f, a...) })
+			logf := func(f string, a ...any) { log.Info().Msgf(f, a...) }
+			// Once at start, then periodically. Start-only was wrong for the console:
+			// an operator flips the toggle and expects the node to act, but the node's
+			// intent was read before the click and nothing would happen until the next
+			// restart — the toggle would look broken for hours. The check is cheap
+			// (findmnt + one readdir) and only provisions when the answer changed.
+			convergeStorage(cmd.Context(), st, host, logf)
+			tick := time.NewTicker(2 * time.Minute)
+			defer tick.Stop()
+			for {
+				select {
+				case <-cmd.Context().Done():
+					return
+				case <-tick.C:
+					convergeStorage(cmd.Context(), st, host, logf)
+				}
+			}
 		}()
 
 		// Publish this node's binary version so skew is visible before an

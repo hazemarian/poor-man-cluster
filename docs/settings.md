@@ -162,7 +162,8 @@ hostname goes into `storage_nodes` and the node is labelled. It does not provisi
 anything itself, and it cannot — provisioning is local work (loop file, LVM, mkfs,
 mounts), so only the node can do it.
 
-The node converges the intent on its own, at daemon start:
+The node converges the intent on its own — at daemon start and then every two minutes,
+so a toggle an operator just flipped takes effect without waiting for a restart:
 
 ```
 1  is this hostname in storage_nodes?          no  → nothing happens
